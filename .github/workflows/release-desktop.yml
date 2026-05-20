@@ -119,12 +119,26 @@ jobs:
         working-directory: chan/web
         run: npm ci
 
+      # Cache the encoded BGE-small bundle (63 MB) so the fetch-
+      # models step below skips on warm cache. Same shape as
+      # release.yml; key is content-derived from the fetcher
+      # source + DEFAULT_MODEL constant site.
+      - name: Cache BGE-small bundle
+        id: cache-bge-bundle
+        uses: actions/cache@v4
+        with:
+          path: chan/crates/chan-server/resources/models.tar.zst
+          key: bge-bundle-${{ hashFiles('chan/crates/fetch-models/**', 'chan/crates/chan-drive/src/index/config.rs') }}
+
       # Pre-fetch the BGE-small embedding model so chan-server's
       # rust-embed bakes it into the sidecar chan binary. Adds
       # ~140 MB to the artifact but matches release.yml's chan
       # CLI behaviour: end users get hybrid search with no
-      # network round-trip on first launch.
-      - name: Pre-fetch embedded model
+      # network round-trip on first launch. Skipped on cache hit
+      # (bundle restored); on cache miss, fetch-models re-
+      # downloads + re-encodes from scratch.
+      - if: steps.cache-bge-bundle.outputs.cache-hit != 'true'
+        name: Pre-fetch embedded model
         working-directory: chan
         run: cargo run --release -p fetch-models
 

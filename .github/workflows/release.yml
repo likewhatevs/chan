@@ -148,6 +148,20 @@ jobs:
       - run: npm run build
         working-directory: chan/web
 
+      # Cache the encoded BGE-small bundle (63 MB) so the
+      # fetch-models step below skips the HuggingFace download +
+      # zstd-19 re-encode on warm cache. Key is content-derived
+      # from the fetcher source + the DEFAULT_MODEL constant
+      # site, so any model upgrade or fetcher change invalidates
+      # automatically. Path matches the bundle's canonical
+      # location; rust-embed picks it up at link time.
+      - name: Cache BGE-small bundle
+        id: cache-bge-bundle
+        uses: actions/cache@v4
+        with:
+          path: chan/crates/chan-server/resources/models.tar.zst
+          key: bge-bundle-${{ hashFiles('chan/crates/fetch-models/**', 'chan/crates/chan-drive/src/index/config.rs') }}
+
       # Pre-fetch the default embedding model so chan-server's
       # rust-embed bundles it into the release binary. Adds ~140
       # MB to every artifact but means end users get hybrid search
@@ -156,10 +170,13 @@ jobs:
       # host arch (no --target), since fetch-models is just a
       # downloader; the per-target cross-compile below picks up
       # the populated `crates/chan-server/resources/models/` dir
-      # at link time. Idempotent: re-running with the model
-      # already cached locally is a fast no-op.
-      - run: cargo run --release -p fetch-models
+      # at link time. Skipped on cache hit (bundle restored from
+      # cache); on cache miss, fetch-models re-downloads + re-
+      # encodes from scratch.
+      - if: steps.cache-bge-bundle.outputs.cache-hit != 'true'
+        name: Pre-fetch embedded model
         working-directory: chan
+        run: cargo run --release -p fetch-models
 
       - run: cargo build --release --target ${{ matrix.target }} -p chan
         working-directory: chan
