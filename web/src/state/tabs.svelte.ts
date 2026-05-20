@@ -343,6 +343,13 @@ export type TerminalRichPromptState = {
   /// `open` was already true. Mirrors the find-bar `focusNonce`
   /// pattern at line 95.
   focusNonce?: number;
+  /// `fullstack-a-24`: collapse the prompt to a minimal-height bar
+  /// (just enough room for the placeholder / first line + the
+  /// control row) so the chat / survey bubbles above gain
+  /// vertical real estate. Sticks across close → re-open within
+  /// the same session via the serialized payload. Default
+  /// expanded (`undefined` reads as `false`).
+  collapsed?: boolean;
 };
 
 export type Tab = FileTab | TerminalTab | GraphTab | BrowserTab;
@@ -2662,6 +2669,10 @@ type SerTab = {
   rph?: number;
   rpo?: 1;
   rpm?: "w" | "s";
+  /// `fullstack-a-24`: rich-prompt collapsed flag. `1` when the
+  /// user collapsed the prompt to its minimal-height bar; absent
+  /// otherwise. Sticks across close → re-open within a session.
+  rpc?: 1;
   /// Terminal watcher path + unread bit. Session-scoped like the
   /// terminal id; the server owns the real watcher lifecycle.
   twp?: string;
@@ -2798,6 +2809,7 @@ function serializeTab(
               : {}),
             ...(t.richPrompt.open ? { rpo: 1 as const } : {}),
             ...(t.richPrompt.mode === "source" ? { rpm: "s" as const } : {}),
+            ...(t.richPrompt.collapsed ? { rpc: 1 as const } : {}),
           }
         : {}),
       ...(opts.terminalSessions && t.watcher
@@ -3305,11 +3317,21 @@ function richPromptFromSer(
   fallback?: SerTab,
 ): TerminalRichPromptState | undefined {
   const src =
-    tab?.rpb !== undefined || tab?.rph !== undefined || tab?.rpo || tab?.rpm
+    tab?.rpb !== undefined ||
+    tab?.rph !== undefined ||
+    tab?.rpo ||
+    tab?.rpm ||
+    tab?.rpc
       ? tab
       : fallback;
   if (!src) return undefined;
-  if (src.rpb === undefined && src.rph === undefined && !src.rpo && !src.rpm) {
+  if (
+    src.rpb === undefined &&
+    src.rph === undefined &&
+    !src.rpo &&
+    !src.rpm &&
+    !src.rpc
+  ) {
     return undefined;
   }
   return {
@@ -3320,6 +3342,12 @@ function richPromptFromSer(
         : undefined,
     open: src.rpo === 1,
     mode: src.rpm === "s" ? "source" : "wysiwyg",
+    // `fullstack-a-24`: only emit the collapsed flag when the user
+    // actually collapsed the prompt. Absence reads as expanded, the
+    // default. Keeps the round-tripped object shape minimal so
+    // existing exact-shape assertions don't regress on the extra
+    // field.
+    ...(src.rpc === 1 ? { collapsed: true } : {}),
   };
 }
 

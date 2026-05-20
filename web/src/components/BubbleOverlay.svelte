@@ -474,9 +474,15 @@
   .bubble {
     align-self: flex-end;
     width: min(520px, 100%);
-    padding: 9px;
+    padding: 10px 12px;
     border: 1px solid var(--border);
-    border-radius: 6px;
+    /* `fullstack-a-24`: round the chat / survey bubbles to match
+       the rich-prompt's floating-pill redesign. The previous 6 px
+       read as square cards adjacent to a square prompt; with the
+       prompt now at 14 px and floating with margin, the bubbles
+       want a matching softer corner (12 px) so the column of
+       floating chips reads as one design language. */
+    border-radius: 12px;
     background: color-mix(in srgb, var(--bg-card) 88%, transparent);
     color: var(--text);
     box-shadow: 0 8px 24px rgba(0, 0, 0, 0.22);

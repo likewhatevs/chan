@@ -220,11 +220,17 @@ describe("TerminalRichPrompt", () => {
   });
 
   test("mode toggle stores source/render state on the terminal prompt", async () => {
+    // `fullstack-a-24`: the style toolbar's mode-toggle button
+    // (aria-label="show rendered" / "show source") is the surface
+    // the test clicks. Toolbar default flipped to off in -a-24, so
+    // explicitly open it here — this test is exercising the mode-
+    // toggle, not the toolbar's default visibility.
     const prompt: TerminalRichPromptState = {
       buffer: "draft",
       heightPx: 320,
       open: true,
       mode: "source",
+      styleToolbarOpen: true,
     };
     const { target } = await renderPrompt(prompt);
 
@@ -235,17 +241,21 @@ describe("TerminalRichPrompt", () => {
   });
 
   test("mounted terminal prompts keep draft and submit state isolated", async () => {
+    // Same `styleToolbarOpen: true` rationale as the mode-toggle
+    // test above — `fullstack-a-24` default-off the toolbar.
     const first: TerminalRichPromptState = {
       buffer: "first draft",
       heightPx: 260,
       open: true,
       mode: "source",
+      styleToolbarOpen: true,
     };
     const second: TerminalRichPromptState = {
       buffer: "second draft",
       heightPx: 360,
       open: true,
       mode: "source",
+      styleToolbarOpen: true,
     };
     const a = await renderPrompt(first);
     const b = await renderPrompt(second);

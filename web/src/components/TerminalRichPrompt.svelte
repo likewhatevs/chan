@@ -1,6 +1,6 @@
 <script lang="ts">
   import { tick } from "svelte";
-  import { Bot, Code2, FilePlus, FolderSearch, GripHorizontal, Pilcrow, Send, Type, X } from "lucide-svelte";
+  import { Bot, ChevronDown, ChevronUp, Code2, FilePlus, FolderSearch, GripHorizontal, Pilcrow, Send, Type, X } from "lucide-svelte";
   import Source from "../editor/Source.svelte";
   import Wysiwyg from "../editor/Wysiwyg.svelte";
   import StyleToolbar from "./StyleToolbar.svelte";
@@ -91,7 +91,19 @@
   }
 
   function toolbarOpen(): boolean {
-    return prompt.styleToolbarOpen !== false;
+    // `fullstack-a-24`: default-off. The toolbar is opt-in now and
+    // mounts INSIDE the prompt bubble (above the editor body) when
+    // toggled on. Previously it was default-on and sat outside the
+    // bubble. `undefined` reads as off; explicit `true` opens it.
+    return prompt.styleToolbarOpen === true;
+  }
+
+  function collapsed(): boolean {
+    return prompt.collapsed === true;
+  }
+
+  function toggleCollapsed(): void {
+    prompt.collapsed = !collapsed();
   }
 
   function toggleMode(): void {
@@ -278,8 +290,9 @@
 
 <div
   class="rich-prompt"
+  class:collapsed={collapsed()}
   bind:this={rootEl}
-  style:height={`${prompt.heightPx ?? 320}px`}
+  style:height={collapsed() ? null : `${prompt.heightPx ?? 320}px`}
   role="dialog"
   tabindex="-1"
   aria-label="rich terminal prompt"
@@ -336,6 +349,25 @@
     <button type="button" class="icon-btn" onclick={submit} title="Send prompt" aria-label="Send prompt">
       <Send size={16} strokeWidth={1.75} aria-hidden="true" />
     </button>
+    <!-- `fullstack-a-24`: collapse/expand the prompt to a minimal
+         bar so chat / survey bubbles above get more vertical room.
+         Distinct from Close (dismiss); collapse keeps the prompt
+         attached, just smaller. Chevron orientation flips with the
+         state — down to collapse-toward-bottom, up to expand. -->
+    <button
+      type="button"
+      class="icon-btn"
+      onclick={toggleCollapsed}
+      title={collapsed() ? "Expand prompt" : "Collapse prompt"}
+      aria-label={collapsed() ? "Expand prompt" : "Collapse prompt"}
+      aria-pressed={collapsed()}
+    >
+      {#if collapsed()}
+        <ChevronUp size={16} strokeWidth={1.75} aria-hidden="true" />
+      {:else}
+        <ChevronDown size={16} strokeWidth={1.75} aria-hidden="true" />
+      {/if}
+    </button>
     <button type="button" class="icon-btn" onclick={onClose} title="Close" aria-label="Close">
       <X size={16} strokeWidth={1.75} aria-hidden="true" />
     </button>
@@ -369,6 +401,18 @@
         />
       {/if}
     {/key}
+    <!-- `fullstack-a-24`: placeholder hint when the buffer is empty.
+         CSS overlay rather than a CodeMirror placeholder extension
+         to avoid threading a `placeholder` prop through both
+         editor components for this single in-prompt use. The
+         editor still owns interaction; pointer-events: none on
+         the overlay keeps clicks reaching the underlying
+         contenteditable. -->
+    {#if prompt.buffer === ""}
+      <div class="prompt-placeholder" aria-hidden="true">
+        Write a multi-line command and Cmd+Enter
+      </div>
+    {/if}
   </div>
   {#if menu}
     <div class="ctx" style:left={`${menu.x}px`} style:top={`${menu.y}px`}>
@@ -416,20 +460,50 @@
 </div>
 
 <style>
+  /* `fullstack-a-24`: floating-pill redesign. Previously the prompt
+     was a rectangle flush against the bottom edge (full-bleed
+     left/right/bottom, square corners, border on the top edge only).
+     @@Alex's spec: rounded corners on all sides, visible terminal
+     underneath, inset margins on every edge. The border-radius reads
+     as a chip rather than a header bar; the floating-shadow on all
+     sides replaces the prior single top-edge shadow that hinted
+     attached-to-bottom.
+
+     Collapsed state (`.rich-prompt.collapsed`): clamps the prompt to
+     min-height = the header row only; the composer-editor + watcher
+     row + spawn-dialog block all hide. The user keeps the prompt
+     attached (chevron expands) but reclaims vertical room for the
+     bubbles above. */
   .rich-prompt {
     position: absolute;
-    left: 0;
-    right: 0;
-    bottom: 0;
+    left: 12px;
+    right: 12px;
+    bottom: 12px;
     min-height: 150px;
-    max-height: calc(100% - 36px);
+    max-height: calc(100% - 48px);
     z-index: 20;
     display: flex;
     flex-direction: column;
     background: var(--bg);
     color: var(--text);
-    border-top: 1px solid var(--border);
-    box-shadow: 0 -10px 24px rgba(0, 0, 0, 0.32);
+    border: 1px solid var(--border);
+    border-radius: 14px;
+    box-shadow: 0 10px 30px rgba(0, 0, 0, 0.32);
+    overflow: hidden;
+  }
+  .rich-prompt.collapsed {
+    min-height: 0;
+    height: auto;
+  }
+  .rich-prompt.collapsed .watcher-row,
+  .rich-prompt.collapsed .composer-editor {
+    display: none;
+  }
+  .rich-prompt.collapsed header {
+    border-bottom: 0;
+  }
+  .rich-prompt.collapsed .resize-handle {
+    display: none;
   }
   .resize-handle {
     position: absolute;
@@ -519,7 +593,25 @@
     flex: 1;
     min-height: 0;
     display: flex;
+    position: relative;
     --editor-top-pad: 16px;
+  }
+  /* `fullstack-a-24`: empty-buffer placeholder. Sits over the
+     CM6 contenteditable at the same baseline the first line
+     would occupy; `pointer-events: none` so the editor still
+     receives clicks. Hidden via Svelte conditional render once
+     the user types the first character. */
+  .prompt-placeholder {
+    position: absolute;
+    top: var(--editor-top-pad, 16px);
+    left: 1rem;
+    right: 1rem;
+    pointer-events: none;
+    color: var(--text-secondary);
+    font-size: var(--chan-editor-body-size, 16px);
+    font-family: var(--chan-editor-body-family, inherit);
+    line-height: 1.5;
+    user-select: none;
   }
   /* `fullstack-a-8`: easeOutBack bubble-pop matching every other
      right-click surface (HamburgerMenu, TerminalTab / GraphPanel
