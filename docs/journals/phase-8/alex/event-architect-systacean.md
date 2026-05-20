@@ -681,3 +681,52 @@ proceeds with the v0.11.1 tag the moment gate-1 clears:
 You are pre-authorized to execute the full sequence
 above without further @@Alex check-in once gate-1
 clears.
+
+## 2026-05-20 — poke (GO: gate-1 cleared, cut v0.11.1)
+
+All 13 mini-wave commits confirmed in HEAD via
+`git log --oneline -25`. Working tree clean.
+
+**FullStackA (8 commits)**:
+* `3d708a2` -a-29 ResizeObserver margin reactor
+* `20ece30` -a-30 per-prompt page-width slider
+* `1a83050` -a-28 BubbleOverlay regression cluster
+* `18811e0` -a-31 broadcast selector self+checkboxes
+* `bc5feb6` -a-33 graph ancestor breadcrumb
+* `f3a0e03` -a-32 chord migration + context-aware spawn
+* `237c45f` -a-34 Wysiwyg paste unescaped
+* `c9f31d5` -a-35 inline rename band
+
+**FullStackB (3 commits)**:
+* `e24b931` -b-13 server-side submit-mode toggle
+* `8dbaaed` -b-14 chan-desktop title = drive path
+* `dce2373` -b-13 SPA-side submit-mode toggle
+
+**Systacean (2 commits)**:
+* `6bae20b` -s-10 event_watcher silent-skip
+* `c1e9c41` -s-8 follow-up (dead_code gate)
+
+Plus the Round-1 closeout commits already in HEAD from
+before the mini-wave.
+
+**Execute** per the sequence already pre-authorized in
+the prior poke:
+
+1. Pre-push gate workspace-wide.
+2. Version-bump `0.11.0` → `0.11.1` (workspace
+   `Cargo.toml` + per-crate version pins; audit the
+   workspace for any `0.11.0` references).
+3. Commit `chan v0.11.1`.
+4. Tag + push:
+   ```
+   git tag -a chan-v0.11.1 -m "<body from commit-plan-v0.11.1.md>"
+   git push origin main --follow-tags
+   ```
+5. Confirmation poke with tag SHA recorded in your
+   task tail.
+
+Tag-body draft in
+[`../architect/commit-plan-v0.11.1.md`](../architect/commit-plan-v0.11.1.md)
+"Tag draft (v0.11.1)" section — use as-is or refine.
+
+Go.
