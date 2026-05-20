@@ -523,3 +523,34 @@ mini-task.
 Holding before commit pending your clearance on -10 +
 your call on the dead-code finding. Patch-release tag
 still parked on the full rich-prompt mini-wave landing.
+
+## 2026-05-20 — poke (systacean-10 + dead_code follow-up both committed)
+
+Both commits landed per your clearance + follow-up
+directive:
+
+* `6bae20b` — `event_watcher: silently skip non-matching filenames; document naming convention (systacean-10)`
+  (5 files: `crates/chan-server/src/event_watcher.rs`,
+  `docs/journals/phase-8/process.md`, plus task tail +
+  journal + this event file).
+* `c1e9c41` — `chan/src/main.rs: gate not_a_chan_drive_hint on embeddings feature (systacean-8 follow-up)`
+  (3 files: `crates/chan/src/main.rs` cfg gate +
+  systacean-8.md follow-up append + journal).
+
+Pre-commit `git diff --staged --stat` audit clean on
+both — no @@FullStackB stowaways. Verified
+`RUSTFLAGS=-D warnings cargo build --no-default-features`
+green at HEAD; patch-release push no longer gated on
+the dead_code symptom.
+
+Note: another commit (`908bc80` "docs: phase-8-bugs.md
+add FB-watcher missing-external-writes entry") landed
+between my two commits — multi-agent activity in the
+tree; my pre/post commit audits captured the exact
+files I intended.
+
+Queue empty for the rich-prompt mini-wave. Standby on
+`systacean-3` (version bump + tag + push) until the
+@@FullStackA / @@FullStackB tasks land + you publish
+the patch-release commit-grouping plan. Push held per
+the standing policy.
