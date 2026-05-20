@@ -326,3 +326,251 @@ checklist): no-op.
 Ready for `agent-recycle`. Round-2 deliverables wait for
 post-recycle fan-out under the updated -13 / -14 / -15 /
 -16 numbering noted in the architect inbound.
+
+## 2026-05-20 — Round-2 rich-prompt mini-wave boot (fullstack-b-13)
+
+Fresh session after the recycle. Bootstrapped per
+`docs/agents/bootstrap.md`. Read contact card + skill guides,
+phase-8 process, request, my journal, the new task file, and
+all inbound/outbound events.
+
+Task in queue: `fullstack-b-13` — shell/agent submit-mode
+toggle + survey-reply echo consumer. Part of the rich-prompt
+mini-wave dispatched 2026-05-20 by @@Architect; paired with
+@@FullStackA's `fullstack-a-28` (BubbleOverlay regression).
+
+### Grounding turned up one finding worth flagging
+
+The task body assumed the survey-reply `poke<Enter>` emission
+is SPA-side ("the SPA emits a literal 'poke' string + Enter
+into the PTY"). Grep across `web/src/` + `crates/` says it's
+**server-side**: `crates/chan-server/src/terminal_sessions.rs:502`
+in `dispatch_agent_event` writes `b"poke\n"` unconditionally
+when the fsnotify ingest path parses a new reply file. The
+SPA only writes the reply file via `api.writeTerminalEventReply`;
+the chan-server fsnotify ingest path is what emits the PTY
+bytes.
+
+Implications: the per-prompt toggle has to reach the server
+somehow. Three options sketched (per-session config field
++ HTTP route, SPA-intercepts-via-WS-frame, full SPA-side
+emission relocation) with footprint + trade-offs and my
+recommendation (Option 1, smallest delta) at the tail of
+[`fullstack-b-13.md`](fullstack-b-13.md). Poke fired to
+@@Architect for the architecture call.
+
+### Permission event fired to @@Alex (chord-encoding probe)
+
+The agent-submit chord byte sequence is the front-loaded
+design call per the task body. I'd prefer not to guess; the
+toggle's whole purpose is "send bytes the agent treats as
+submit," so the wrong constant nullifies the fix.
+
+Asked @@Alex to settle it one of two ways:
+* Option 1: type once in their own Claude Code session +
+  TTY-fd byte injection (fiddly).
+* Option 2: authorise me to spin a throwaway chan test
+  server and poke candidates via the browser devtools
+  console.
+
+Either form of approval works.
+
+### Coordination touchpoints found via `git status`
+
+* `tabs.svelte.ts` + `BubbleOverlay.svelte` carry unstaged
+  @@FullStackA `-a-28` work (the `dbi?: string[]` SerTab
+  field + `dismissedIds` state wiring + the bubble overlay
+  rendering pass). My eventual `rpsm?: "s" | "a"` add to
+  SerTab is ADDITIVE and in a separate region of the same
+  file, but per the user's explicit coordination directive
+  on the paired -a-28/-b-13 work I am NOT racing them on
+  `tabs.svelte.ts`. Will land my SerTab + state-type adds
+  after @@FullStackA commits, or with explicit @@Architect
+  go-ahead.
+* `event_watcher.rs` + `process.md` carry unstaged @@Systacean
+  `-10` work (watcher event-filename regex filter at the
+  fsnotify ingest path). Adjacent to but not overlapping
+  with my server-side touchpoint (`terminal_sessions.rs::dispatch_agent_event`).
+  Will stay clear of `event_watcher.rs` entirely.
+
+### Status: paused
+
+Three external dependencies all blocking substantive work:
+
+1. @@Alex — chord-encoding probe result (permission event).
+2. @@Architect — Option 1 / 2 / 3 architecture choice (poke).
+3. @@FullStackA — `-a-28` commit lands on `tabs.svelte.ts`,
+   freeing me to add `rpsm?` SerTab field + state-type
+   field without racing.
+
+Holding. Auto Mode default would be "scaffold what's safe,"
+but the user's "coordinate well before you edit the same
+file" directive on the paired -a-28/-b-13 wave is the
+governing instruction. Will resume on @@Architect's reply
+or @@Alex's chord answer (whichever lands first).
+
+## 2026-05-20 — Chord probe done (chord pinned)
+
+@@Alex approved Option 2 (throwaway chan server + WS-frame
+injection) via @@Architect transcription. Ran the probe live.
+
+**Setup**: throwaway drive at `/tmp/chan-test-phase8-rpsm`,
+debug binary `./target/debug/chan serve`, Chrome MCP open at
+the launch URL. Installed a `WebSocket.prototype.send`
+interceptor to capture the live WS handle into
+`window.__capturedWs__` and a `window.__chordProbe__(bytes)`
+helper that fires `{type:"input", data:bytes}` frames.
+Spawned a terminal via Cmd+Alt+T (web-Mac chord).
+
+### Claude Code v2.1.145
+
+| Bytes              | Effect                                       |
+|--------------------|----------------------------------------------|
+| `probe1`           | Lands as draft text.                         |
+| `\x1b[27;9;13~`    | **Submits.** "probe1 acknowledged."          |
+| `\n` (LF)          | Multi-line newline in draft (status flips to "ctrl+g to edit in Vim"). |
+
+**Chord**: `\x1b[27;9;13~` — xterm modifyOtherKeys "Cmd+Enter."
+
+### Codex v0.130.0
+
+| Bytes              | Effect                                       |
+|--------------------|----------------------------------------------|
+| `\n` (LF)          | Silent. Even at the trust-prompt.            |
+| `\r` (CR)          | Trust-prompt confirms; main-prompt submits.  |
+| `probeC1`          | Lands as draft text.                         |
+| `\x1b[27;9;13~`    | No effect. probeC1 stays in draft.           |
+| `\r` (post-chord)  | Submits the draft; codex runs tools.         |
+
+**Chord**: `\r` — divergent from Claude Code.
+
+### Decision
+
+Single-chord ship with Claude Code's `\x1b[27;9;13~` per
+@@Alex's "if codex fails it's fine, just want the signal"
+directive. Codex's `\r` chord documented as future work for
+a per-agent encoding map (Round-3 polish or later mini-wave).
+Gemini probe skipped per @@Alex's bandwidth allowance.
+
+Constant to ship:
+```ts
+// fullstack-b-13: Claude Code v2.1.145 accepts this byte
+// sequence as the "submit" chord (xterm modifyOtherKeys CSI
+// for Cmd+Enter). codex v0.130.0 accepts `\r` instead; the
+// divergence is documented in fullstack-b-13.md. Single-
+// chord ship per @@Alex 2026-05-20.
+const AGENT_SUBMIT_CHORD = "\x1b[27;9;13~";
+```
+
+### Teardown footprint
+
+* `kill <pid>` on `./target/debug/chan serve`; exit 144
+  (SIGTERM expected).
+* `rm -rf /tmp/chan-test-phase8-rpsm` — throwaway drive
+  removed.
+* `./target/debug/chan remove /private/tmp/chan-test-phase8-rpsm`
+  — registry entry unregistered.
+* Chrome MCP tab closed via `tabs_close_mcp`.
+
+No persistent side effects. Test-server-workflow audit-trail
+shape per `feedback-test-server-workflow`.
+
+### Status
+
+Chord constant in hand. Still parked on two external
+dependencies:
+* @@Architect's architecture call (Options 1 / 2 / 3 for the
+  server-side echo path).
+* @@FullStackA's `tabs.svelte.ts` settling (now -a-28 +
+  -a-29 + -a-30 all in flight on that file).
+
+Holding for whichever lands first.
+
+## 2026-05-20 — `-b-13` server-side + `-b-14` both landed (commit-ready)
+
+@@Architect chose Option 1 for -b-13 architecture (per-session
+config field + thin HTTP route). @@Alex queued -b-14 (chan-
+desktop title format) alongside. Both shipped in this session.
+
+### -b-13 server-side slice
+
+* `SubmitMode { Shell, Agent }` enum, default Shell. `submit_chord()`
+  returns `b"\n"` for Shell, `b"\x1b[27;9;13~"` for Agent.
+* `Session.agent_mode: AtomicBool` (default false), with
+  `submit_mode()` / `set_submit_mode()` accessors.
+* `Registry::set_submit_mode(session_id, mode) -> bool` for the
+  SPA-driven flip. Mirrors `set_watcher`'s shape.
+* `dispatch_agent_event` branches on the session's mode. Shell
+  mode is byte-for-byte today's behaviour (`b"poke\n"`); Agent
+  emits `b"poke\x1b[27;9;13~"`.
+* New route `PUT /api/terminal/:session/submit-mode`, mirroring
+  `set_terminal_watcher` (tunnel-public gate, JSON body,
+  204/400/404).
+* Four new tests pin: chord constants + default, registry
+  setter, end-to-end PTY delivery in Agent mode (proves the
+  `\n` shape is gone, the chord landed), route 204/400/404.
+
+Pre-push gate green at workspace level (fmt + clippy
+`--workspace -D warnings` + test --workspace + no-default-
+features build). chan-server suite 198 → 202.
+
+SPA side intentionally NOT in this slice — `tabs.svelte.ts`
+still carries unstaged @@FullStackA -a-28/-29/-30 work per
+`git status`. The new server-side API surface is reachable;
+SPA-side commit follows once @@FullStackA settles.
+
+### -b-14 slice
+
+* `drive_title(key)` simplified to `key.to_string()` (no
+  basename derivation, no `chan drive: ` prefix).
+* Tunneled-drive title dropped prefix to `"{tenant} ·
+  {drive}"`.
+* New test `drive_title_is_the_path_verbatim`. LRU restore
+  path from -b-1 verified: title is derived live from `key`,
+  not stored in `WindowConfig`, so restored windows
+  automatically pick up the new shape.
+
+chan-desktop suite 19 → 20.
+
+### Status
+
+Both slices commit-ready. Holding for @@Architect commit
+clearance. Push held for the patch-release commit-grouping
+cut.
+
+## 2026-05-20 — three commits landed (mini-wave queue empty)
+
+@@Architect cleared both -b-13 server-side and -b-14;
+@@FullStackA's -a-28/-29/-30 committed (`1a83050`,
+`20ece30`, `3d708a2`) so `tabs.svelte.ts` reached HEAD.
+SPA-side -b-13 was then unblocked and landed.
+
+Three clean commits on my lane:
+
+| SHA       | Subject                                                  |
+|-----------|----------------------------------------------------------|
+| `e24b931` | chan-server: per-session shell/agent submit-mode toggle + dispatch_agent_event chord branch (fullstack-b-13 server-side) |
+| `8dbaaed` | chan-desktop: window title = drive path verbatim (fullstack-b-14) |
+| `dce2373` | Rich prompt: shell/agent submit-mode toolbar toggle + SerTab roundtrip + agent-chord submit path (fullstack-b-13 SPA-side) |
+
+Pre-commit `git diff --staged --stat` ran on each, post-commit
+`git show --stat HEAD` verified — no stowaways from
+@@FullStackA / @@Systacean concurrent work.
+
+### Mini-wave verification snapshot
+
+| Surface      | State                                                 |
+|--------------|-------------------------------------------------------|
+| chan-server  | 198 → 202 tests (+4 covering chord constants, registry setter, PTY dispatch + chord echo + legacy poke\n absence, route 204/400/404 branches). `workspace test` green. `clippy --workspace -D warnings` clean. `cargo build --no-default-features` clean. `fmt --check` clean. |
+| chan-desktop | 19 → 20 tests (+1 covering the title format). |
+| SPA          | svelte-check 0/0; vitest 514 → 522 (+8 covering SerTab rpsm round-trip and the encodeForAgentSubmit helper); npm build clean (pre-existing chunk-size warnings only). |
+
+### Queue status
+
+Mini-wave queue empty. Standby until next wave. Note —
+codex's `\r` chord divergence parked for Round-3 Track 5
+per @@Alex 2026-05-20. @@WebtestB's lane-B walkthrough
+against a live Claude Code session is the user-visible
+verification gate for -b-13 (per the task body).
+
+Push held for the patch-release commit-grouping cut.

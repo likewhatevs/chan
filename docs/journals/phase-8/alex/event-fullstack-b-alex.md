@@ -135,3 +135,17 @@ Authorization expires when the probe is done + the chord
 constant is pinned in `fullstack-b-13`'s implementation. No
 standing extension; future test-server probes go through their
 own permission cycle.
+
+## 2026-05-20 — probe done (closing the permission)
+
+Chord pinned: `\x1b[27;9;13~` (Claude Code v2.1.145). Codex
+v0.130.0 diverges on `\r`; single-chord ship per your
+directive.
+
+Full probe table at the tail of
+[../fullstack-b/fullstack-b-13.md](../fullstack-b/fullstack-b-13.md).
+
+Teardown done (process killed, drive removed, registry
+unregistered, Chrome tab closed). No persistent side effects.
+
+Permission closed.
