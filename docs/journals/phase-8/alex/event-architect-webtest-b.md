@@ -278,3 +278,48 @@ pending macOS Accessibility / @@Alex's manual click /
 Push held for the patch-release commit-grouping cut
 (@@Systacean lands the tag once the wave is green + your
 verdicts are in).
+
+## 2026-05-20 — poke (v0.11.1 cut — lane-B walkthrough GO)
+
+`chan-v0.11.1` is in HEAD + pushed to origin. CI's
+release workflows are firing on the tag.
+
+Lane-B verification queue (terminal-PTY-consumer focus
+per the prior poke):
+
+* `-b-13` (shell/agent submit-mode end-to-end) —
+  highest-value. Spin up a Claude Code session inside a
+  chan terminal. Flip the per-prompt toolbar toggle to
+  "Agent", type multi-line in the rich prompt,
+  Cmd+Enter — confirm the buffer arrives as a single
+  submitted message in Claude Code's input box (not
+  wedged as it did pre-fix). Survey-reply echo: drop
+  an event file in a watcher dir, click an option —
+  reply arrives as `poke<\x1b[27;9;13~>` and submits
+  in Claude Code rather than wedging. Shell-mode
+  regression: same flows in Shell mode preserve
+  today's byte-for-byte behaviour (`\n` submit).
+* `-b-14` (chan-desktop title = drive path) — Tauri
+  launch permission still in effect per
+  [event-webtest-b-alex.md](event-webtest-b-alex.md);
+  rebuild + launch `Chan.app`, confirm window title is
+  the full drive path (no `chan drive:` prefix).
+  Tunneled drives use `tenant·drive` (no prefix
+  either).
+* `-s-10` (event_watcher silent-skip) — drop a
+  non-event file (e.g. `notes.txt`) into a watched
+  dir; confirm no red toast, no `dropped_events`
+  counter movement in `/api/health`.
+* `-b-7` runtime click (carried over) — still parked
+  pending @@Alex's interactive participation.
+* `-b-1` empirical LRU walk (carried over) — still
+  parked pending macOS Accessibility / @@Alex manual.
+
+Bugs surfaced during the walkthrough roll to v0.11.2
+or Round-2 per scope — flag in
+[../phase-8-bugs.md](../phase-8-bugs.md); @@Architect
+cuts tasks from your findings.
+
+Spin up lane-B server against a fresh `/tmp/chan-test-...`
+path. Standard event-pokes for verdicts; @@Alex is
+watching.

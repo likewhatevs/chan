@@ -764,3 +764,67 @@ begins, surface Track 5 explicitly to @@Alex
 ("revisiting the codex divergence from -b-13") as
 part of the Round-3 status snapshot — that's the
 "remind me later" mechanism @@Alex asked for.
+
+## 2026-05-20 — v0.11.1 cut + pushed
+
+`chan-v0.11.1` is out. First proper GitHub Release
+since the Round-1 closeout. Unsigned matrix; signed-
+DMG north star with real keys stays Round-2 work.
+
+### Tag artifact
+
+* Version-bump commit: `2c6680b` (`chan v0.11.1`).
+* Annotated tag: `chan-v0.11.1` (body from
+  [`commit-plan-v0.11.1.md`](commit-plan-v0.11.1.md)'s
+  "Tag draft (v0.11.1)" section, used verbatim).
+* Push state: `main` matches `origin/main`. CI fires
+  on the `chan-v*` tag per `release.yml` +
+  `release-desktop.yml`.
+* Closeout poke from @@Systacean recorded at the tail
+  of [`../systacean/journal.md`](../systacean/journal.md);
+  the `systacean-3` re-activation closes.
+
+### Mini-wave commits in the release set (13)
+
+| Subject                                                                                     | Commit          | Owner          |
+|---------------------------------------------------------------------------------------------|-----------------|----------------|
+| Rich prompt: ResizeObserver-driven margin reactor (fullstack-a-29)                          | `3d708a2`       | @@FullStackA   |
+| Rich prompt: per-prompt page-width slider + cross-tile decoupling (fullstack-a-30)          | `20ece30`       | @@FullStackA   |
+| BubbleOverlay: explicit dismiss + dismissedIds + Loading flicker fix (fullstack-a-28)       | `1a83050`       | @@FullStackA   |
+| Terminal broadcast selector polish (fullstack-a-31)                                         | `18811e0`       | @@FullStackA   |
+| Graph: ancestor breadcrumb in inspector + drop explicit "from here" buttons (fullstack-a-33) | `bc5feb6`       | @@FullStackA   |
+| Chord migration + context-aware spawn + surface unification (fullstack-a-32)                | `f3a0e03`       | @@FullStackA   |
+| Wysiwyg: paste markdown unescaped via turndown identity escape (fullstack-a-34)             | `237c45f`       | @@FullStackA   |
+| File editor: inline rename band above page-width cap (fullstack-a-35)                       | `c9f31d5`       | @@FullStackA   |
+| chan-server: per-session shell/agent submit-mode toggle (fullstack-b-13 server)             | `e24b931`       | @@FullStackB   |
+| chan-desktop: window title = drive path verbatim (fullstack-b-14)                           | `8dbaaed`       | @@FullStackB   |
+| Rich prompt: shell/agent submit-mode toolbar toggle + agent-chord submit (fullstack-b-13 SPA) | `dce2373`     | @@FullStackB   |
+| event_watcher: silently skip non-matching filenames (systacean-10)                          | `6bae20b`       | @@Systacean    |
+| chan/src/main.rs: gate not_a_chan_drive_hint on embeddings feature (systacean-8 follow-up)  | `c1e9c41`       | @@Systacean    |
+
+### Post-release path
+
+* @@CI's `release.yml` + `release-desktop.yml` trigger
+  automatically on the `chan-v*` tag. Unsigned matrix
+  produces the binaries for dogfood.
+* @@WebtestA + @@WebtestB walk the cut binary per
+  their respective verification queues (already in
+  their inbound channels).
+* Bugs surfaced in walkthroughs slip to v0.11.2 OR
+  fold into Round-2 if substantive.
+* Round-2 broader fan-out resumes per
+  [`round-2-plan.md`](round-2-plan.md) — open
+  decisions at the head of that plan (item-6 hosting,
+  item-7 bundled-chan layout, item-3 PIN hash,
+  manual home, sequencing confirmation) still need
+  @@Alex's confirmation.
+
+### What this release is NOT
+
+* The signed-DMG north star. That's Round-2 close +
+  exercises the real Apple Developer ID keys per the
+  `ci-3` brief.
+* A scope-creep gate for new bugs. New bug entries
+  slip to v0.11.2 or roll into Round 2.
+* A public-flip trigger. Repo stays private through
+  Round 2.

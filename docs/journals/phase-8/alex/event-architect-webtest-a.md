@@ -172,6 +172,77 @@ Standing permission from
 covers the `chan remove` + `rm -rf` actions through
 Round-1 close.
 
+## 2026-05-20 — poke (v0.11.1 cut — lane-A walkthrough GO)
+
+`chan-v0.11.1` is in HEAD + pushed to origin. CI's
+`release.yml` is firing on the tag.
+
+Time to walk your lane-A queue against the cut binary
+(rebuild locally if you want to walk before CI's matrix
+finishes; the binary content is the same).
+
+Verification queue (per prior poke + the mini-wave
+commits in the v0.11.1 set):
+
+* `-a-28` (BubbleOverlay regression cluster) —
+  fixtures at `docs/journals/phase-8/rich-prompt/events/`.
+  Walk: survey reply still dismisses; pre-flight + poke
+  with sibling reply dismiss; explicit close button on
+  every bubble type; no flicker across two watcher poll
+  cycles.
+* `-a-29` (collapse dead-space) — collapse the rich
+  prompt, terminal grows downward to fill; expand
+  restores; drag-resize unchanged.
+* `-a-30` (per-prompt page-width) — tile two panes,
+  narrow the editor's page width in one, observe the
+  rich prompt in the other is unaffected; right-click
+  the rich-prompt textbox surfaces the slider.
+* `-a-31` (broadcast selector) — current tab in the
+  list marked "(self)" at top, checkboxes per row
+  (no umbrella rocker), container label "broadcast
+  input on/off".
+* `-a-32` (chord migration + context-aware spawns) —
+  Cmd+O / Cmd+P / Cmd+Shift+M spawn correctly with
+  focus-context (cwd = focused doc parent / terminal
+  cwd / drive root); old Cmd+K 1/2/3/4/p no longer
+  fire; carousel slide 1 + pane hamburger +
+  empty-pane right-click show identical first-class
+  items.
+* `-a-33` (graph from-here default + ancestor breadcrumb)
+  — opening graph defaults to from-here mode rooted at
+  spawn context; parent inspector renders ancestor
+  chain back to drive root; clicking an ancestor
+  re-scopes correctly; old explicit "from here"
+  button gone.
+* `-a-34` (Wysiwyg paste unescaped) — copy
+  `*bold* and **strong**` from Xcode (or any plain-text
+  source); paste into Wysiwyg; renders as formatted
+  markdown (not escaped literal).
+* `-a-35` (file rename band) — right-click a file tab
+  → Rename File; header band appears above the editor
+  with the path pre-filled; Enter commits the rename
+  through `Drive::rename_with_link_rewrite`; tab
+  label + file tree update; Esc cancels cleanly.
+* `-b-7` runtime click verification (carried over
+  from prior recycle) — chan-desktop external links
+  open in the OS default browser. Permission still
+  parked on @@Alex's interactive participation.
+
+Bugs surfaced during the walkthrough roll to v0.11.2 or
+Round-2 per scope — flag them in
+[../phase-8-bugs.md](../phase-8-bugs.md) with dispatch
+direction; @@Architect cuts tasks from your finding.
+
+Spin up a fresh lane-A test server against any
+throwaway drive (the seeded chan-source drive from the
+prior session is gone at recycle; pick a fresh
+`/tmp/chan-test-...` path). The chan-source seed is a
+good test bed for the graph ancestor navigation in
+-a-33 since it has a deep directory tree.
+
+@@Alex is watching for early verdicts; fire pokes as
+each task verifies cleanly OR as repros surface.
+
 ## 2026-05-20 — poke (rich-prompt mini-wave verification queue)
 
 @@Alex is firing up all six agents to cut a patch release
