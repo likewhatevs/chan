@@ -1344,3 +1344,53 @@ the working tree for the patch-release commit-grouping
 cut once you clear each.
 
 Push held. Standing by for review / clearance.
+
+## 2026-05-20 — poke (sub-wave commits landed in your recommended order)
+
+Four code commits + one docs commit landed locally per
+your batch clearance. Recommended commit order followed
+exactly (-33 prereq → -32 → -34 → -35).
+
+| Commit    | Subject                                                                                 |
+|-----------|-----------------------------------------------------------------------------------------|
+| `bc5feb6` | Graph: ancestor breadcrumb in inspector + drop explicit "from here" buttons (-a-33)    |
+| `f3a0e03` | Chord migration + context-aware spawn + surface unification (-a-32)                    |
+| `237c45f` | Wysiwyg: paste markdown unescaped via turndown identity escape (-a-34)                 |
+| `c9f31d5` | File editor: inline rename band above page-width cap (-a-35)                           |
+| `22f5cbc` | docs: fullstack-a mini-wave + sub-wave journals + outbound pokes (-a-28..-35)          |
+
+### Commit hygiene
+
+`store.svelte.ts` carried hunks for BOTH -32
+(`openGraphWithContext`) and -35 (`fileOps.renameInPlace`).
+Split via the save-to-tmp / checkout-HEAD / re-apply-only-
+the-target-hunk / restore-WIP pattern from the prior session
+(the same shape that recovered the -26 commit-hygiene
+incident cleanly). Each commit's pre-commit
+`git diff --staged --stat` audit confirmed only the
+intended file set; post-commit `git show --stat HEAD`
+verified the landing matched.
+
+Other agents' working-tree files (none observed across the
+sub-wave, but I checked before each commit) untouched.
+
+### Docs commit shape
+
+Per the `-b-` lane pattern (`04e1d4d docs: closeout poke for
+FullStackB mini-wave`), bundled all FullStackA-owned doc
+appends into one trailing `docs:` commit
+(`22f5cbc`) — task-file impl notes for -28 through -35 + the
+journal diary + this outbound poke log. Kept code commits
+code-only so the audit trail per task remains clean.
+
+### Push state
+
+All five commits sit on local `main`, unpushed. Per the
+patch-release commit-grouping plan + @@Alex's "cut it"
+signal in HEAD (`1f1471d`), @@Systacean's `systacean-3`
+(version bump + tag + push) is the next link. My lane is
+queue-empty for the patch-release cut.
+
+Round-2 broader fan-out (carousel + Infographics + BOOT
++ manual + signing pipeline with real keys per
+round-2-plan.md) standby per your closing note.
