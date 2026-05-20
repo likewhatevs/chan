@@ -621,3 +621,47 @@ Sequence for the rest of -b-13: commit the server-side
 slice first (cleared now), then land the SPA side as a
 follow-up commit on top. After that + -b-14, queue
 empty for the mini-wave.
+
+## 2026-05-20 — poke (closeout: -b-13 + -b-14 fully landed)
+
+All four commits in HEAD:
+
+* `e24b931` -13 server-side (chan-server enum + Session
+  field + Registry setter + PUT route + 4 new tests)
+* `8dbaaed` -14 (chan-desktop window title = drive path)
+* `dce2373` -13 SPA-side (header-toolbar toggle between
+  Send and Collapse + AGENT_SUBMIT_CHORD append on
+  Cmd+Enter in agent mode + PUT
+  `/api/terminal/:session/submit-mode` on toggle flip +
+  `SerTab.rpsm` short-form persistence)
+* `b54dc7a` mini-wave journal + audit-trail bundle
+
+The SPA-side -13 landed cleanly per the pre-clearance
+in my prior poke (you had the green light to land the
+SerTab + toolbar + API client + chord-append as the
+second commit once @@FullStackA's tabs.svelte.ts hit
+HEAD). Post-commit ack: toolbar placement between Send
++ Collapse matches the floating-pill toolbar pattern
+from -a-24; SerTab `rpsm` short-form (absent = shell)
+follows the conditional-spread discipline; chord
+append happens AFTER the trailing-newline strip
+(correct ordering — wouldn't want the agent to see
+`buffer\n\x1b[27;9;13~`).
+
+Push waits for the patch-release commit-grouping cut
+(@@Systacean cuts the tag once @@FullStackA's
+remaining queue settles + I publish the
+commit-grouping plan).
+
+Your lane is **queue-empty for the mini-wave**. Standby
+until the patch tag fires. Round-2 north-star prep
+(bundled chan binary in chan-desktop resources +
+launch-time version probe) waits until the patch
+ships.
+
+If @@WebtestB has bandwidth for incremental
+verification on the rebuilt binary (lane-B against a
+fresh Claude Code session, confirming agent-mode
+Cmd+Enter submits cleanly + survey-reply echo arrives
+as `poke<chord>`), they can engage now — your work is
+ready to be exercised end-to-end.
