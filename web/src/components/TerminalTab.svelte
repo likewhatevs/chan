@@ -142,11 +142,27 @@
     if (!a) return { x: 0, y: 0 };
     return { x: Math.round(a.left), y: Math.round(a.bottom + 4) };
   });
-  const broadcastTargets = $derived(allTerminalTabs().filter((candidate) => candidate.id !== tab.id));
+  // `fullstack-a-31`: self appears at the top of the broadcast
+  // target list with a "self" marker. Checking the self row sets
+  // `broadcastEnabled` (this tab joins the broadcast group);
+  // other rows route to `setTerminalBroadcastTarget`. The
+  // umbrella "Broadcast Input On/Off" button is gone — the self
+  // row is the only knob that controls THIS tab's participation.
+  const broadcastTargets = $derived(
+    allTerminalTabs().sort((a, b) => {
+      if (a.id === tab.id) return -1;
+      if (b.id === tab.id) return 1;
+      return 0;
+    }),
+  );
   const selectedBroadcastTargets = $derived(new Set(terminalBroadcastMemberIds(tab)));
+  // `fullstack-a-31`: "Select All" walks every row INCLUDING self
+  // so the bulk action stays consistent with the per-row UI.
   const allBroadcastTargetsSelected = $derived(
     broadcastTargets.length > 0 &&
-      broadcastTargets.every((target) => selectedBroadcastTargets.has(target.id)),
+      broadcastTargets.every((target) =>
+        target.id === tab.id ? tab.broadcastEnabled : selectedBroadcastTargets.has(target.id),
+      ),
   );
   const mcpEnvOn = $derived(terminalMcpEnvEnabled(tab));
   const watcherPath = $derived(tab.watcher?.path ?? null);
@@ -884,10 +900,6 @@
     closeTabMenu();
   }
 
-  function toggleBroadcast(): void {
-    setTerminalBroadcastEnabled(tab, !tab.broadcastEnabled);
-  }
-
   function focusTerminalTab(tabId: string): void {
     for (const node of Object.values(layout.nodes)) {
       if (node.kind !== "leaf") continue;
@@ -924,7 +936,11 @@
   function toggleAllBroadcastTargets(): void {
     const select = !allBroadcastTargetsSelected;
     for (const target of broadcastTargets) {
-      setTerminalBroadcastTarget(tab, target.id, select);
+      if (target.id === tab.id) {
+        setTerminalBroadcastEnabled(tab, select);
+      } else {
+        setTerminalBroadcastTarget(tab, target.id, select);
+      }
     }
   }
 
@@ -1120,15 +1136,19 @@
           <span class="mbtn-label">Show MCP env in terminal</span>
         </button>
         <div class="msep" role="separator"></div>
-        <button class="mbtn" class:on={tab.broadcastEnabled} onclick={toggleBroadcast}>
+        <!-- `fullstack-a-31`: per-tab broadcast selector. Drops the
+             umbrella "Broadcast Input On/Off" rocker — the per-row
+             checkboxes are the only controls. Self appears at the
+             top of the list with a "self" marker; checking self
+             enrolls this tab in the broadcast group. The container
+             label below names the surface so the menu reads
+             "broadcast input on/off" as @@Alex spelled it. -->
+        <div class="broadcast-section-label">
           <span class="mbtn-icon">
             <Radio size={16} strokeWidth={1.75} aria-hidden="true" />
           </span>
-          <span class="mbtn-label">
-            {tab.broadcastEnabled ? "Broadcast Input On" : "Broadcast Input Off"}
-          </span>
-          <span class="mbtn-chord"></span>
-        </button>
+          <span>broadcast input on/off</span>
+        </div>
         <button class="mbtn" onclick={toggleAllBroadcastTargets}>
           <span class="mbtn-icon"></span>
           <span class="mbtn-label">
@@ -1136,30 +1156,37 @@
           </span>
           <span class="mbtn-chord"></span>
         </button>
-        {#if broadcastTargets.length === 0}
-          <div class="empty-targets">No other terminal tabs</div>
-        {:else}
-          {#each broadcastTargets as target (target.id)}
-            <label class="target-row">
-              <span class="target-check">
-                <input
-                  type="checkbox"
-                  checked={selectedBroadcastTargets.has(target.id)}
-                  onchange={(e) =>
-                    setTerminalBroadcastTarget(
-                      tab,
-                      target.id,
-                      (e.currentTarget as HTMLInputElement).checked,
-                    )}
-                />
-                {#if selectedBroadcastTargets.has(target.id)}
-                  <Check size={13} strokeWidth={2} aria-hidden="true" />
-                {/if}
-              </span>
-              <span class="target-name">{terminalTabName(target)}</span>
-            </label>
-          {/each}
-        {/if}
+        {#each broadcastTargets as target (target.id)}
+          {@const isSelf = target.id === tab.id}
+          {@const isChecked = isSelf
+            ? tab.broadcastEnabled
+            : selectedBroadcastTargets.has(target.id)}
+          <label class="target-row">
+            <span class="target-check">
+              <input
+                type="checkbox"
+                checked={isChecked}
+                onchange={(e) => {
+                  const next = (e.currentTarget as HTMLInputElement).checked;
+                  if (isSelf) {
+                    setTerminalBroadcastEnabled(tab, next);
+                  } else {
+                    setTerminalBroadcastTarget(tab, target.id, next);
+                  }
+                }}
+              />
+              {#if isChecked}
+                <Check size={13} strokeWidth={2} aria-hidden="true" />
+              {/if}
+            </span>
+            <span class="target-name">
+              {terminalTabName(target)}
+              {#if isSelf}
+                <span class="target-self">(self)</span>
+              {/if}
+            </span>
+          </label>
+        {/each}
       </div>
     </div>
   {/if}
@@ -1474,9 +1501,28 @@
     background: var(--separator, var(--border));
     margin: 4px 2px;
   }
-  .empty-targets {
-    padding: 7px 8px;
+  /* `fullstack-a-31`: section label above the broadcast row list.
+     Same icon row + secondary text shape as other menu sections;
+     the label is informational, not interactive. */
+  .broadcast-section-label {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 6px 8px 4px;
     color: var(--text-secondary);
+    font-size: 12px;
+    font-weight: 600;
+    text-transform: lowercase;
+    letter-spacing: 0.02em;
+  }
+  .broadcast-section-label .mbtn-icon {
+    color: var(--text-secondary);
+  }
+  .target-self {
+    margin-left: 4px;
+    color: var(--text-secondary);
+    font-size: 11px;
+    font-style: italic;
   }
   .target-row {
     display: flex;
