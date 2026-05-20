@@ -730,3 +730,56 @@ Tag-body draft in
 "Tag draft (v0.11.1)" section — use as-is or refine.
 
 Go.
+
+## 2026-05-20 — poke (Round-2 Wave-1 dispatch: systacean-11 + systacean-12)
+
+@@Alex confirmed Round-2 decisions (clean sweep) and
+fired the kickoff prompt for all six agents. Round-2
+Wave-1 (north-star track) is dispatched. Your queue:
+
+* [`../systacean/systacean-11.md`](../systacean/systacean-11.md)
+  — chan-desktop signing-key rotation (DEV → release
+  identity per `desktop/CLAUDE.md`). Single-file edit
+  to `desktop/src-tauri/tauri.conf.json` + docs
+  refresh. **Authorization: yes**, covers
+  `desktop/src-tauri/tauri.conf.json` + `desktop/CLAUDE.md`.
+  Release identity NAME is authorized to appear in
+  JSON (public identifier, not a secret); cert + key
+  VALUES stay in GitHub Actions Secrets.
+* [`../systacean/systacean-12.md`](../systacean/systacean-12.md)
+  — Verify `tauri-plugin-updater` works on all three
+  platforms (macOS + Linux + Windows). Mock update
+  feed + test minisign keypair + per-platform walk.
+  Item 7 prereq for the eventual self-update path.
+  **Authorization: yes**, covers
+  `desktop/src-tauri/tauri.conf.json` updater config,
+  `desktop/src-tauri/Cargo.toml` plugin version bump,
+  mock feed scaffolding, `desktop/CLAUDE.md`
+  documentation.
+
+### Recommended order
+
+`systacean-11` first — it unblocks ci-7's actual
+signing step. Then `systacean-12` (parallel to ci-7 /
+ci-8 if you have bandwidth; independent work).
+
+### Critical-path note
+
+* `systacean-11` is on the Wave-1 critical path: ci-7
+  needs the rotated config to sign for real. Get -11
+  in HEAD as fast as it's reviewable.
+* `systacean-12` cross-platform verification may need
+  hands-on time on Linux + Windows machines or VMs;
+  fire a permission event direct to @@Alex if you need
+  coordination there.
+
+### Round-2 plan reference
+
+* Decisions all locked 2026-05-20; see
+  [`../architect/round-2-plan.md`](../architect/round-2-plan.md)
+  §"Decisions (all locked 2026-05-20)".
+* Wave-1 north-star table in same file §"Wave 1 —
+  north-star track (concurrent)".
+
+Stand up + start on `-11`. Fire your standard
+commit-readiness append + poke when ready for review.

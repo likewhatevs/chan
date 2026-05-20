@@ -357,3 +357,56 @@ that's still out-of-band.
 Standby; I'll cut a follow-up `ci-N` if the patch tag
 needs CI-side preparation. Otherwise idle until the
 broader Round-2 fan-out resumes after the patch ships.
+
+## 2026-05-20 — poke (Round-2 Wave-1 dispatch: ci-7 + ci-8)
+
+@@Alex confirmed Round-2 decisions (clean sweep on the
+4-topic survey) and fired the kickoff prompt for all six
+agents. Round-2 Wave-1 (north-star track) is dispatched.
+Your queue:
+
+* [`../ci/ci-7.md`](../ci/ci-7.md) — Tag-triggered
+  signed + notarized chan-desktop workflow YAML
+  consuming the six signing/notarization secrets per
+  the `ci-3` brief. **Authorization: yes**, covers
+  edits to `.github/workflows/release-desktop.yml` +
+  possibly `.github/workflows/release.yml`. Secret
+  NAMES authorized in YAML; secret VALUES never appear
+  in journals / chat / commits per the secrets-boundary
+  memory.
+* [`../ci/ci-8.md`](../ci/ci-8.md) — DMG-on-tag
+  dry-run with real Apple Developer ID keys. Fires a
+  test pre-release tag (e.g. `chan-v0.11.99-dryrun.1`),
+  produces a notarized DMG, verifies on a second Mac.
+  **Authorization: yes**, covers firing the test tag +
+  capturing artifacts + workflow YAML tweaks if needed.
+
+### Recommended order
+
+`ci-7` first (workflow YAML). After it lands + secrets
+are populated + `systacean-11` (signing-key rotation)
+is in HEAD, fire `ci-8` (dry-run with real keys).
+
+### Critical-path dependencies
+
+* **@@Alex completes cert checklist** (out-of-band per
+  ci-3 brief) — required before secrets can be
+  populated.
+* **@@Alex populates the six secrets** into GitHub
+  Actions Secrets (out-of-band; the secrets-boundary
+  memory keeps VALUES away from architect / agent
+  view).
+* **`systacean-11`** rotates `tauri.conf.json` from DEV
+  to release identity — Wave-1 sibling task. Sequence:
+  -11 lands → ci-7 lands → ci-8 fires.
+
+### Round-2 plan reference
+
+* Decisions all locked 2026-05-20; see
+  [`../architect/round-2-plan.md`](../architect/round-2-plan.md)
+  §"Decisions (all locked 2026-05-20)".
+* Wave-1 north-star table in same file §"Wave 1 —
+  north-star track (concurrent)".
+
+Stand up + start on ci-7. Fire your standard
+commit-readiness append + poke when ready for review.

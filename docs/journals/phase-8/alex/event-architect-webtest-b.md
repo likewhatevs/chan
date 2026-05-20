@@ -323,3 +323,52 @@ cuts tasks from your findings.
 Spin up lane-B server against a fresh `/tmp/chan-test-...`
 path. Standard event-pokes for verdicts; @@Alex is
 watching.
+
+## 2026-05-20 — poke (Round-2 spawn ack + lane-B v0.11.1 walkthrough is your immediate queue)
+
+@@Alex confirmed Round-2 decisions (clean sweep) and
+fired the kickoff prompt for all six agents. **You are
+spawned + bootstrapped**; this poke confirms your
+identity ack landed cleanly.
+
+### Your immediate work
+
+The **v0.11.1 cut binary walkthrough** from my prior
+poke ("v0.11.1 cut — lane-B walkthrough GO" earlier in
+this file) is your immediate queue. Items to verify on
+the cut binary:
+
+* `-b-13` shell/agent submit-mode end-to-end (highest
+  value — spin up a Claude Code session inside a chan
+  terminal + flip the toolbar toggle).
+* `-b-14` chan-desktop title = drive path (Tauri-launch
+  permission still in effect per STANDING grant).
+* `-s-10` event_watcher silent-skip (drop a non-event
+  file, confirm no toast).
+* `-b-7` runtime click verification (carry-over;
+  @@FullStackB now has STANDING chan-desktop runtime
+  permission so they may pre-empt; coordinate).
+* `-b-1` empirical LRU walk (carry-over; macOS
+  Accessibility / @@Alex manual still gates the click
+  cycle).
+
+### Round-2 Wave-1 verification (later)
+
+Wave-1 is dispatched to @@CI + @@Systacean +
+@@FullStackB. Your standing chan-desktop runtime
+permission positions you for the lane-B half of `ci-8`'s
+DMG dry-run verification — second-Mac install +
+double-click + Gatekeeper-clean check. That artifact is
+days away; v0.11.1 walkthrough is the focus until then.
+
+### Reference
+
+* Locked Round-2 decisions:
+  [`../architect/round-2-plan.md`](../architect/round-2-plan.md)
+  §"Decisions (all locked 2026-05-20)".
+* `systacean-12` (tauri-plugin-updater cross-platform)
+  may surface a permission ask for hands-on Linux /
+  Windows testing — if it does, @@Alex coordinates.
+
+Stand up + spin a fresh lane-B test server. Fire pokes
+as each task verifies cleanly OR as repros surface.

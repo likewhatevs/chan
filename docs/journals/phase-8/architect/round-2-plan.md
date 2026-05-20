@@ -26,32 +26,41 @@ Source material: [`../../phase-7/next-phase-backlog.md`](../../phase-7/next-phas
 items 1-7 (item 8 → Round 3; item 9 already done as
 `fullstack-b-6` in Round 1).
 
-## Decisions @@Alex needs to confirm before fan-out
+## Decisions (all locked 2026-05-20)
 
-1. **Sequencing**: items 7 + ci-7 stay coupled at the top
-   (DMG north star). Then item 6 (website + manual +
+Status: all six gates cleared. Round-2 fan-out unblocked.
+
+1. **Sequencing — LOCKED**: items 7 + ci-7 stay coupled at
+   the top (DMG north star). Then item 6 (website + manual +
    first-launch UX + CI). Then items 1 + 4 (carousel +
    Infographics, coupled). Then 2 (BOOT). Then 3
-   (screensaver). Then 5 (config audit). Confirm or
-   redirect.
-2. **Item-6 hosting**: GitHub Pages vs Cloudflare-fronted
-   vs alternative for `chan.app` apex. Backlog leans GitHub
-   Pages; the apex-domain TLS question is the open piece.
-3. **Item-7 bundled-chan storage layout** inside the Tauri
-   bundle. Backlog flags it as a phase-8 investigation.
-4. **Item-3 PIN hash**: backlog recommends SHA-256 (over
-   @@Alex's earlier "md5 or something like that"). Confirm.
-5. **Documentation home for item 6 manual**: `docs/manual/`
-   (markdown source in main repo).
-6. **First-release version**: ~~at end of Round 2, what
-   version do we tag? v0.12.0 (semver bump from v0.11.0)
-   or v1.0 (signal "first proper release")? Either is
-   defensible.~~ **DECIDED 2026-05-20**: **v0.12.0**.
-   @@Alex's framing: "needs way more testing" — v0.12.0
-   positions this as a working release for friend-
+   (screensaver). Then 5 (config audit).
+2. **Item-6 hosting — LOCKED**: GitHub Pages with custom
+   domain. Static markdown source lives in the chan repo
+   (`docs/manual/` per decision 5); apex-domain TLS via
+   Pages' built-in cert provisioning. No external infra
+   dependency beyond GitHub.
+3. **Item-7 bundled-chan storage layout — LOCKED**:
+   PATH-first with bundled fallback + version match. At
+   launch chan-desktop probes `which chan`, checks
+   `chan --version` against the bundled version; matches use
+   PATH, anything else falls through to bundled. Power users
+   who run their own chan build override naturally; broken /
+   stale PATH installs don't brick the app.
+4. **Item-3 PIN hash — LOCKED**: SHA-256 with per-install
+   salt. Over @@Alex's earlier "md5 or something" framing
+   — SHA-256 is the modern minimum and Argon2's slowness
+   isn't needed for a local-only screensaver PIN.
+5. **Manual home — LOCKED**: `docs/manual/` (markdown source
+   in main repo). Symmetric with `docs/journals/` and
+   `docs/release/`; rendered by the website pipeline (item
+   6) at `chan.app/manual/`.
+6. **First-release version — LOCKED**: **v0.12.0** at
+   Round-2 close. @@Alex's framing: "needs way more testing"
+   — v0.12.0 positions this as a working release for friend-
    feedback, not the polished v1.0 launch. Round 3's
-   open-source flip + polish wave still targets v1.0 as
-   the public-stable version.
+   open-source flip + polish wave still targets v1.0 as the
+   public-stable version.
 
 ## North-star through-line
 

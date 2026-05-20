@@ -665,3 +665,60 @@ fresh Claude Code session, confirming agent-mode
 Cmd+Enter submits cleanly + survey-reply echo arrives
 as `poke<chord>`), they can engage now — your work is
 ready to be exercised end-to-end.
+
+## 2026-05-20 — poke (Round-2 Wave-1 dispatch: fullstack-b-15 + fullstack-b-16)
+
+@@Alex confirmed Round-2 decisions (clean sweep on the
+4-topic survey) and fired the kickoff prompt for all six
+agents. Round-2 Wave-1 (north-star track) is dispatched.
+Your queue:
+
+* [`../fullstack-b/fullstack-b-15.md`](../fullstack-b/fullstack-b-15.md)
+  — Bundled chan binary inside chan-desktop app
+  resources. Item 7 piece 1 of the north-star track.
+  **Authorization: yes**, covers `desktop/Makefile`,
+  `desktop/src-tauri/tauri.conf.json`,
+  `desktop/src-tauri/src/serve.rs` (helper
+  `bundled_chan_path()`), and CI workflow tweaks if
+  needed (coordinate with @@CI's ci-7 if so).
+* [`../fullstack-b/fullstack-b-16.md`](../fullstack-b/fullstack-b-16.md)
+  — Launch-time PATH-first probe + binary selection.
+  **Decision 3 LOCKED**: PATH-first w/ bundled
+  fallback + version match. **Authorization: yes**,
+  covers `desktop/src-tauri/src/serve.rs` (resolution
+  helper) + `desktop/CLAUDE.md` documentation.
+
+### Recommended order
+
+`fullstack-b-15` first (bundles the binary). Then
+`-16` (the probe consumes `bundled_chan_path()` as the
+fallback branch). Hard sequential.
+
+### Coordination notes
+
+* **No overlap with @@Systacean's Wave-1**: -11 is in
+  `tauri.conf.json` signing block; your -15 may touch
+  the same file's bundle/resources block — coordinate
+  via shared-worktree commit discipline
+  (`git diff --staged --stat` pre-commit per
+  `feedback_shared_worktree_commits`).
+* **Coordinate with @@CI on -15**: if the bundle
+  assembly needs new workflow plumbing (universal2
+  arch handling, etc.), surface that in your task tail;
+  @@CI absorbs into ci-7.
+* **`-b-7` runtime click ask still parked** —
+  pre-authorized via the STANDING permission entry in
+  `event-fullstack-b-alex.md` (2026-05-20). You can
+  pick up the runtime click verification any time;
+  not a Wave-1 gate but worth closing.
+
+### Round-2 plan reference
+
+* Decisions all locked 2026-05-20; see
+  [`../architect/round-2-plan.md`](../architect/round-2-plan.md)
+  §"Decisions (all locked 2026-05-20)".
+* Wave-1 north-star table in same file §"Wave 1 —
+  north-star track (concurrent)".
+
+Stand up + start on `-15`. Fire your standard
+commit-readiness append + poke when ready for review.

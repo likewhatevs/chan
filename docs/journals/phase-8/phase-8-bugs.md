@@ -363,6 +363,24 @@
   - assumption to verify at task-cut: the page-width slider already exists in the markdown editor's right-click menu (per @@Alex's framing "add the slider … as well"). If it doesn't, the editor-side wire-up is part of the task scope
   - dispatched for Round-2 wave-2 against @@FullStackA (rich-prompt + editor lane); task cut at Round-2 fan-out. Couples with the rich-prompt session evolution work in [`architect/rich-prompt-session-evolution.md`](architect/rich-prompt-session-evolution.md) since both extend the rich-prompt surface in the same band of work
 
+- Rich prompt submit-mode doesn't survive page reload (server-side state desync)
+  - flagged 2026-05-20 by @@Alex dogfooding v0.11.1: toggle the rich-prompt toolbar to Agent mode, reload the page, the toolbar reads "Agent" (SPA-side `SerTab.rpsm` persisted correctly per `fullstack-b-13` SPA-side) but the survey-reply echo + Cmd+Enter dispatch revert to Shell-mode `poke\n` chord. Two-half state desync between SPA-restored UI + server-side dispatch
+  - root cause hypothesis: `Session.agent_mode: AtomicBool` (server-side, in `crates/chan-server/src/terminal_sessions.rs`) is set by the `PUT /api/terminal/:session/submit-mode` endpoint when the user clicks the toolbar toggle. Reload path: the SPA reconstitutes `TerminalRichPromptState.submitMode` from SerTab on remount, but does NOT replay the PUT to re-sync the server-side `agent_mode` field. If the session id changes across the reload (or chan-server restarts), the new server-side `agent_mode` defaults to false (Shell). SPA UI says Agent; server emits Shell chord
+  - want: on rich-prompt state restore from SerTab, if `submitMode === "agent"`, queue a follow-up `api.setTerminalSubmitMode(sessionId, "agent")` call after the session is reachable. Single-file SPA-side fix likely in `tabs.svelte.ts` reconstitution path or `TerminalRichPrompt.svelte`'s mount effect
+  - alternative shape (deeper): persist `Session.agent_mode` server-side across server restarts (per-drive config, similar to watcher attach state). More work; probably not needed if the SPA-side re-sync covers the reload case
+  - dispatched for Round-2 wave-2 (or later) against @@FullStackB (the lane that owns `-b-13`'s submit-mode wire); task cut at Round-2 fan-out
+- chan-desktop missing browser-style zoom (Cmd + / - / 0)
+  - flagged 2026-05-20 by @@Alex: the desktop-native shell (Chan.app via Tauri) doesn't respond to the standard browser zoom chords. Cmd++ (zoom in), Cmd+- (zoom out), Cmd+0 (reset to 100 %) all no-op in the chan-desktop webview; the same chords work in a regular Chrome/Safari tab against the chan SPA
+  - root cause hypothesis: Tauri 2's webview doesn't bind the OS zoom chords by default. The `core:webview:allow-set-webview-zoom` capability is already granted (enabled during `fullstack-b-7` for the opener IPC plumbing) so the underlying API is reachable; just need explicit accelerator bindings in chan-desktop
+  - want, three chords + persistence:
+    1. **Cmd+=** (and Cmd++, since Shift+= produces +): zoom in by 10 % (or some sensible step; match Chrome's behavior — 10 % steps)
+    2. **Cmd+-**: zoom out by 10 %, with a floor (e.g. 25 % or whatever Tauri's webview accepts)
+    3. **Cmd+0**: reset to 100 %
+    4. **Persistence**: last zoom level survives `Chan.app` relaunch, persisted per-window. Composes with the `fullstack-b-1` LRU window-config (add a `zoom_level: f64` field to `WindowConfig`)
+  - implementation shape: bind the chords in chan-desktop's accelerator config (likely `desktop/src-tauri/src/main.rs` or wherever existing shortcut bindings live, e.g. the `KEY_BRIDGE_JS` adjacency). Each handler calls `webview.set_zoom(new_level)` and writes the new level into the live `WindowConfig` for the LRU pickup. Tauri 2 API surface: `tauri::WebviewWindow::set_zoom(scale_factor: f64)`
+  - cross-platform: macOS chord is `Cmd`, Linux/Windows is `Ctrl`. Bind both via Tauri's `accelerator!` macro (or whichever pattern existing shortcuts use)
+  - dispatched for Round-2 wave-2 (or later) against @@FullStackB (chan-desktop lane); task cut at Round-2 fan-out. Independent of Wave-1 north-star work
+
 ## Round 2 — needs deeper change
 
 - Large markdown files block the editor with a spinner while loading

@@ -288,3 +288,54 @@ your verdicts are in).
 
 Round-2 broader fan-out (carousel, Infographics, BOOT,
 manual, signing, etc.) parks until the patch ships.
+
+## 2026-05-20 — poke (Round-2 spawn ack + lane-A v0.11.1 walkthrough is your immediate queue)
+
+@@Alex confirmed Round-2 decisions (clean sweep) and
+fired the kickoff prompt for all six agents. **You are
+spawned + bootstrapped**; this poke confirms your
+identity ack landed cleanly.
+
+### Your immediate work
+
+The **v0.11.1 cut binary walkthrough** from my prior
+poke ("v0.11.1 cut — lane-A walkthrough GO" earlier in
+this file) is your immediate queue. Items to verify on
+the cut binary:
+
+* `-a-28` BubbleOverlay regression cluster
+* `-a-29` collapse dead-space
+* `-a-30` per-prompt page-width
+* `-a-31` broadcast selector
+* `-a-32` chord migration + context-aware spawns
+* `-a-33` graph from-here default + ancestor breadcrumb
+* `-a-34` Wysiwyg paste unescaped
+* `-a-35` file rename band
+* `-b-7` runtime click verification (carry-over;
+  @@FullStackB now has STANDING chan-desktop runtime
+  permission so they may pre-empt this; coordinate via
+  event channel if so)
+
+Smoke-test fixtures for `-a-28` live at
+`docs/journals/phase-8/rich-prompt/events/`.
+
+### Round-2 Wave-1 verification (later)
+
+Wave-1 is dispatched to @@CI + @@Systacean +
+@@FullStackB (signed-DMG pipeline + bundled chan
+binary). Once `ci-8` produces the first dry-run DMG +
+`fullstack-b-15` / `-16` produce the bundled chan
+launch path, lane-A verification engages — but those
+artifacts are days away. v0.11.1 walkthrough is the
+focus until then.
+
+### Reference
+
+* Locked Round-2 decisions:
+  [`../architect/round-2-plan.md`](../architect/round-2-plan.md)
+  §"Decisions (all locked 2026-05-20)".
+
+Stand up + spin a fresh lane-A test server against
+any throwaway drive (the chan-source seed is the right
+test bed for `-a-33` ancestor navigation). Fire pokes
+as each task verifies cleanly OR as repros surface.

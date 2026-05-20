@@ -1,0 +1,1 @@
+{"id":"arch-round2-kickoff-1","type":"survey-reply","from":"@@Alex","to":"@@Architect","answers":[],"scope_grant":"one-shot"}

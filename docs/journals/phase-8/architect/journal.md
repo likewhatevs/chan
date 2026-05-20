@@ -828,3 +828,76 @@ DMG north star with real keys stays Round-2 work.
   slip to v0.11.2 or roll into Round 2.
 * A public-flip trigger. Repo stays private through
   Round 2.
+
+## 2026-05-20 — Round-2 decisions locked (fan-out unblocked)
+
+Surveyed @@Alex on the 5 open decisions at the head of
+[`round-2-plan.md`](round-2-plan.md). Clean sweep on the
+architect-recommended option for each. All six Round-2
+gates are now closed:
+
+| # | Decision                        | Locked                                                                  |
+|---|---------------------------------|-------------------------------------------------------------------------|
+| 1 | Sequencing                      | 7 + ci-7 → 6 → 1+4 → 2 → 3 → 5 (recommended order)                      |
+| 2 | Item-6 hosting (chan.app)       | GitHub Pages with custom domain                                          |
+| 3 | Item-7 bundled-chan layout      | PATH-first w/ bundled fallback + version match                          |
+| 4 | Item-3 PIN hash                 | SHA-256 + per-install salt                                              |
+| 5 | Manual home                     | `docs/manual/` (rendered by item-6 website pipeline)                    |
+| 6 | First-release version           | v0.12.0 (locked earlier 2026-05-20)                                      |
+
+`round-2-plan.md` head updated to reflect the locked
+state (the "Decisions @@Alex needs to confirm" header
+became "Decisions (all locked 2026-05-20)" with each
+item carrying its lock rationale).
+
+### What unblocks
+
+Round-2 Wave 1 (north-star track) is dispatchable. Task
+slots per round-2-plan §"Wave 1":
+* `ci-N` workflow YAML consuming the six secrets (@@CI).
+* `systacean-N` chan-desktop signing-key rotation
+  (@@Systacean).
+* `fullstack-b-N` bundled chan binary in chan-desktop
+  resources (@@FullStackB).
+* `fullstack-b-N+1` launch-time version probe + binary
+  selection per the LOCKED PATH-first shape (@@FullStackB).
+* `ci-N+1` DMG-on-tag dry-run with real keys (@@CI).
+* `systacean-N+1` verify `tauri-plugin-updater` works on
+  all three platforms (@@Systacean).
+
+Numbering gets assigned at fan-out per the "highest
+committed `<agent>-N` + 1" rule in round-2-plan §
+"Numbering note".
+
+### What stays out-of-band
+
+* @@Alex completes the cert checklist from the `ci-3`
+  brief (Apple Developer ID + Windows code-signing if
+  scope reaches Windows).
+* Six secrets populated into GitHub Actions Secrets
+  (architect directs @@CI on NAMES; @@Alex populates
+  VALUES manually per the secrets-boundary memory).
+
+### Sequencing of dispatch vs sessions
+
+Patch-release walkthroughs (@@WebtestA, @@WebtestB on
+v0.11.1) are still in flight. Two reasonable shapes for
+the Round-2 fan-out timing:
+
+1. **Spawn Round-2 sessions now**, let webtest verdicts
+   on v0.11.1 land in parallel (they're independent of
+   Round-2 code work; their outputs feed v0.11.2 / fold
+   into Round-2 only if they touch the same surface).
+2. **Wait for walkthrough verdicts** before fan-out, so
+   Round 2 starts with a clean known-good baseline.
+
+Recommending option 1 — verdicts on v0.11.1 don't gate
+Round-2 task definitions, and parallel session work is
+the normal architect-side mode. Option 2 only matters if
+the walkthroughs surface a v0.11.1 regression that needs
+folding into Wave 1 (unlikely; the mini-wave was
+narrowly scoped).
+
+Standby for @@Alex to spawn fresh agent sessions via the
+bootstrap prompt; I'll cut Wave-1 task files at fan-out
+time.

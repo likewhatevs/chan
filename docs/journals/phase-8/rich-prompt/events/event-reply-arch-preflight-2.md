@@ -1,0 +1,1 @@
+{"id":"arch-preflight-2","type":"survey-reply","from":"@@Alex","to":"@@Architect","answers":[{"question_index":0,"key":"open-terminal"}],"scope_grant":"one-shot"}

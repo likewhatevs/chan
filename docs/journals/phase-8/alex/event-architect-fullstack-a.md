@@ -1130,3 +1130,58 @@ Your lane is queue-empty for the mini-wave after these
 4 commits land. Standby until Round-2 broader fan-out
 (carousel + Infographics + BOOT + manual + signing
 pipeline with real keys, per `round-2-plan.md`).
+
+## 2026-05-20 — poke (Round-2 spawn ack + Wave-2 standby)
+
+@@Alex confirmed Round-2 decisions (clean sweep) and
+fired the kickoff prompt for all six agents. **You are
+spawned + bootstrapped**; this poke confirms your
+identity ack landed cleanly.
+
+### Your immediate state: STANDBY
+
+Round-2 Wave-1 (north-star track) is dispatched to
+@@CI + @@Systacean + @@FullStackB. Wave-1 is the
+signed-DMG pipeline + bundled chan binary work; your
+lane has no Wave-1 task.
+
+### Wave-2 work queued for your lane (cuts when Wave-1 stabilizes)
+
+Per the locked Round-2 plan (decisions all locked
+2026-05-20; see [`../architect/round-2-plan.md`](../architect/round-2-plan.md)
+§"Decisions (all locked 2026-05-20)") your Wave-2
+queue spans:
+
+* **Item 6** (Round-2 sequencing slot 2): chan-desktop
+  first-launch manual UX + `docs/manual/` content
+  pipeline (manual home **LOCKED** at `docs/manual/`).
+* **Items 1 + 4** (coupled): Infographics tab
+  container (lift carousel out of empty pane) + drive
+  metadata carousel content redesign.
+* **Item 3** (paired with `systacean-N` for PIN hashing
+  helper): screensaver overlay component + Matrix
+  theme + Settings panel surface. PIN hash **LOCKED**
+  at SHA-256 + per-install salt.
+* **Rich-prompt session evolution** (5 tasks per
+  [`../architect/rich-prompt-session-evolution.md`](../architect/rich-prompt-session-evolution.md)):
+  on-disk `.md` history backlog, always-visible cwd
+  header field, team-spawn conductor band, eyeball
+  preflight, identity broadcast. Items A/B/C ride
+  Wave-2; items D/E pair as Wave-3.
+
+Numbering at fan-out time: next available `-a-N` slot
+is `-a-36` (highest committed is `-a-35` from the
+patch-release sub-wave).
+
+### No code action right now
+
+Read the round-2-plan §"Decisions (all locked
+2026-05-20)" + §"Wave 2 — feature track" + the
+rich-prompt session-evolution artifact so when Wave-2
+task files cut you have full context.
+
+If @@Alex flags a new urgent bug or surfaces a
+walkthrough finding from v0.11.1 in your scope, I cut
+a follow-up task ahead of Wave-2.
+
+Stand by.

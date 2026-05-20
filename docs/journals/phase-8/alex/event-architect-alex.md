@@ -321,3 +321,138 @@ unaffected by this recycle:
   @@WebtestB can start incremental verification on the
   rebuilt binary now if they have bandwidth (B's
   -b-13 server + SPA + -b-14 are landed + exercisable).
+
+## 2026-05-20 — poke (Round-2 decisions locked; fan-out unblocked)
+
+Clean sweep on the 4-topic survey covering the 5 open
+Round-2 decisions. All architect-recommended options
+approved. Decision table mirrored to the decisions log
+in [`../architect/journal.md`](../architect/journal.md);
+plan head at [`../architect/round-2-plan.md`](../architect/round-2-plan.md)
+updated from "Decisions @@Alex needs to confirm" →
+"Decisions (all locked 2026-05-20)" with each item
+carrying its lock rationale.
+
+| # | Decision                  | Locked                                              |
+|---|---------------------------|-----------------------------------------------------|
+| 1 | Sequencing                | 7+ci-7 → 6 → 1+4 → 2 → 3 → 5                        |
+| 2 | Item-6 hosting            | GitHub Pages with custom domain                     |
+| 3 | Item-7 bundled-chan layout| PATH-first w/ bundled fallback + version match     |
+| 4 | Item-3 PIN hash           | SHA-256 + per-install salt                          |
+| 5 | Manual home               | `docs/manual/`                                      |
+| 6 | First-release version     | v0.12.0 (locked earlier 2026-05-20)                 |
+
+### What's next on my end
+
+When you spawn fresh Round-2 sessions for the six
+working agents (bootstrap prompt at
+[`../../../agents/bootstrap.md`](../../../agents/bootstrap.md)),
+I cut Wave-1 task files for:
+
+* @@CI — workflow YAML consuming the six secrets;
+  DMG-on-tag dry-run with real keys.
+* @@Systacean — chan-desktop signing-key rotation;
+  tauri-plugin-updater cross-platform verification.
+* @@FullStackB — bundled chan binary in chan-desktop
+  resources; launch-time version probe (PATH-first per
+  decision 3).
+
+Plus the parallel rich-prompt session-evolution stack
+(history backlog, cwd preflight, team conductor) per
+[`rich-prompt-session-evolution.md`](../architect/rich-prompt-session-evolution.md)
+slots into Wave-2 alongside items 1+4.
+
+### What stays out-of-band on your end
+
+* Apple Developer ID cert checklist from `ci-3` brief.
+* Six signing secrets populated into GitHub Actions
+  Secrets (NAMES directed by architect; VALUES
+  populated by you per the secrets-boundary memory).
+
+### Sequencing recommendation: fan out now in parallel
+### with webtest walkthroughs
+
+@@WebtestA + @@WebtestB are walking the v0.11.1 cut
+binary against their respective verification queues.
+Recommend NOT blocking Round-2 fan-out on those
+verdicts — they're independent of Round-2 code work,
+and any v0.11.1 regression they surface either folds
+into v0.11.2 (separate cut) or into Round-2's same
+surface (cheap to absorb). Spawn fresh sessions for
+the six working agents at your convenience; I'm ready
+to cut Wave-1 task files the moment they bootstrap.
+
+## 2026-05-20 — poke (Round-2 Wave-1 fanned out)
+
+All six agents spawned per your kickoff prompt
+(identity-confirmation beat included). Wave-1
+north-star track dispatched. Standby agents
+acknowledged + read in.
+
+### Wave-1 task files cut
+
+| Task            | Owner        | Scope                                                              |
+|-----------------|--------------|--------------------------------------------------------------------|
+| [`ci-7`](../ci/ci-7.md)                          | @@CI         | Tag-triggered signed + notarized chan-desktop workflow YAML        |
+| [`ci-8`](../ci/ci-8.md)                          | @@CI         | DMG-on-tag dry-run with real Apple Developer ID keys               |
+| [`systacean-11`](../systacean/systacean-11.md)   | @@Systacean  | chan-desktop signing-key rotation (DEV → release identity)    |
+| [`systacean-12`](../systacean/systacean-12.md)   | @@Systacean  | Verify `tauri-plugin-updater` on macOS + Linux + Windows           |
+| [`fullstack-b-15`](../fullstack-b/fullstack-b-15.md) | @@FullStackB | Bundled chan binary inside chan-desktop app resources          |
+| [`fullstack-b-16`](../fullstack-b/fullstack-b-16.md) | @@FullStackB | Launch-time PATH-first probe + binary selection (decision 3)   |
+
+Each carries `Authorization: yes` framing for shared
+infra (workflow YAML, `tauri.conf.json`,
+`desktop/Makefile`, `desktop/CLAUDE.md`). Secret VALUES
+stay behind the boundary per the secrets-boundary
+memory.
+
+### Critical-path sequence
+
+```
+@@Alex completes ci-3 cert checklist (out-of-band)
+                  ↓
+@@Alex populates 6 secrets in GH Actions Secrets (out-of-band)
+                  ↓
+systacean-11 (rotate tauri.conf.json)  ci-7 (workflow YAML)  fullstack-b-15 (bundle chan)
+                  ↓ (parallel-able)                                                ↓
+                  ci-8 (dry-run with real keys)              fullstack-b-16 (probe logic)
+                  ↓
+              First notarized DMG → second-Mac verification (@@WebtestB)
+```
+
+`systacean-12` (tauri-plugin-updater verify) runs
+parallel to the critical path; needed before v0.12.0
+ships but not on the same dependency chain.
+
+### Standby lanes
+
+* **@@FullStackA**: Wave-2 work queued (carousel +
+  Infographics + manual UX + rich-prompt session
+  evolution). No immediate task. Reading-in on the
+  locked decisions + the session-evolution artifact.
+* **@@WebtestA**: v0.11.1 lane-A walkthrough is the
+  immediate queue (carry-over from the GO poke earlier
+  in event-architect-webtest-a.md).
+* **@@WebtestB**: v0.11.1 lane-B walkthrough is the
+  immediate queue (including `-b-13` end-to-end with
+  Claude Code in a chan terminal, which exercises the
+  patch-release north star).
+
+### What's owed to you
+
+* **Apple Developer ID cert checklist** (ci-3 brief):
+  6 steps. Outputs the six secrets that `ci-7`
+  consumes.
+* **GitHub Actions Secrets population**: NAMES are
+  authorized in workflow YAML by architect; you
+  populate VALUES manually.
+* **Optional**: green-light a test pre-release tag
+  name when `ci-8` is ready to fire (recommend
+  `chan-v0.11.99-dryrun.1` or similar to avoid
+  colliding with the eventual v0.12.0 cut).
+
+### My state
+
+Standing by for inbound pokes from the six agents +
+any new bugs / scope shifts you flag. Will route
+commit clearances + task follow-ups as they come.
