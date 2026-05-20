@@ -272,6 +272,13 @@
   - flagged 2026-05-20 by @@WebtestB during a proactive lane-B walk: attaching the watcher to an absolute outside-drive path succeeds (post `fullstack-b-3` + `systacean-5`), but reading events from that path errors with `watch read failed: io error: No such file or directory (os error 2)`. The read path enforces drive-sandbox resolution; absolute outside-drive paths fail the sandbox lookup
   - want: read path applies the same in-drive-vs-outside-drive split as the attach path's resolver
   - dispatched as `systacean-9`
+- File rename UX: parity with terminal rename, input box positioned above the page-width-constrained content
+  - flagged 2026-05-20 by @@Alex (feature, "next build"): chan already supports inline rename on terminal tabs; want the same affordance for file tabs / file rows. Verbatim ask: "same way we can rename terminal, we should be able to rename files.. place the input box above the page width"
+  - read of the ask:
+    1. Mirror the terminal rename UX shape — same trigger (double-click on tab? right-click → rename?), same inline input box pattern, same commit-on-Enter / cancel-on-Esc semantics. Whatever the terminal rename does today, the file rename should match.
+    2. Input box positioned ABOVE the page-width-constrained content column. The editor's content respects the `--chan-page-max-width` cap (per `fullstack-a-30`); the rename input lives in a header band above that column, not constrained by the cap.
+  - backend dependency: needs a filesystem rename operation through `chan-drive` (atomic + path-sandbox-safe). Verify at task-start whether `Drive::rename` exists today; if not, a small chan-drive + chan-server route addition is in scope. The atomic-write contract guarantees rollback safety on partial failure.
+  - dispatched as `fullstack-a-35` — rides the patch release
 - Wysiwyg paste: pasted markdown gets its special characters escaped (`*` → `\*`, etc.)
   - flagged 2026-05-20 by @@Alex: "when i copy pure markdown from xcode and paste on notes, it shows correctly.. when i paste on chan, it escapes the bolds and so on.. * -> \*"
   - context: macOS Notes accepts the pasted markdown as-is and renders bold / italic / etc. correctly. Chan's Wysiwyg paste handler escapes the markdown special characters, turning `*bold*` into the literal string `\*bold\*` instead of rendering the bold

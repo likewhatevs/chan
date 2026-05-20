@@ -924,3 +924,36 @@ editor concern (paste handler). Small task; rides the
 patch release.
 
 Updated queue: -28, -29, -30, -31, -32, -33, -34.
+
+## 2026-05-20 — poke (queue addition: -35 file rename UX parity with terminal)
+
+@@Alex 2026-05-20: "same way we can rename terminal, we
+should be able to rename files.. place the input box
+above the page width". Cut as
+[../fullstack-a/fullstack-a-35.md](../fullstack-a/fullstack-a-35.md).
+
+Two pieces — mirror the terminal rename UX (same trigger,
+inline input, commit/cancel semantics); position the
+rename input ABOVE the page-width-capped content column
+(it's a header band, not constrained by `--chan-page-max-width`
+from -a-30).
+
+Backend dependency: needs a chan-drive rename op. Check
+at task-start whether `Drive::rename` exists; if not, add
+alongside the existing atomic write surface per CLAUDE.md's
+boundary contract.
+
+**Authorization on shared infra**: chan-drive op (if
+needed) + new chan-server route (likely `PUT
+/api/files/rename` or similar). **Authorization: yes**,
+covers `crates/chan-drive/src/` rename addition + the
+chan-server route. Proceed without further @@Alex
+confirmation. @@Systacean review welcome on the chan-drive
+seam if the op is net-new but not a hard gate.
+
+Updated queue: -28, -29, -30, -31, -32, -33, -34, -35.
+
+Mini-wave is getting wider; if your context is filling up
+or you'd prefer to land in two waves to keep the queue
+tractable, flag it + we can carve off -34 / -35 to a
+second sub-wave after the patch ships.
