@@ -350,6 +350,113 @@ pub async fn api_delete_terminal(
     }
 }
 
+/// systacean-9: shape returned by `GET /api/terminal/:session/watcher/events`.
+/// One entry per event-file in the session's `watcher_dir`, with raw
+/// content so the SPA's existing `parseWatcherEvent` still does the
+/// JSON validation. Server doesn't try to know the WatcherEvent
+/// shape — keeps the parser in one place.
+#[derive(Debug, Serialize)]
+struct WatcherEventEntry {
+    path: String,
+    content: String,
+}
+
+/// systacean-9: list event files in the active watcher's directory.
+/// Replaces the prior SPA pattern of `api.list(dir) + api.read(path)`
+/// per file: that composition routed through `/api/files` which
+/// applies the drive-sandbox path-resolution rules, so absolute
+/// outside-drive watcher paths surfaced as ENOENT. The new endpoint
+/// reads the watcher's `dir` directly via `std::fs::read_dir` +
+/// `read_to_string`, bypassing the drive sandbox.
+///
+/// Security: the watcher attach (`/api/terminal/:session/watcher`) is
+/// settings-gated. Once a session has a `watcher_dir` set, the read
+/// endpoint trusts it — same trust boundary as the existing
+/// `event-reply` endpoint, which writes to the same `dir`.
+pub async fn api_terminal_watcher_events(
+    State(state): State<Arc<AppState>>,
+    AxumPath(session): AxumPath<String>,
+) -> Response {
+    if state.tunnel_public {
+        return err_tunnel_public_locked();
+    }
+    let Some(dir) = state.terminal_sessions.watcher_dir(&session) else {
+        return (
+            StatusCode::CONFLICT,
+            "terminal watcher is not attached".to_string(),
+        )
+            .into_response();
+    };
+    match list_watcher_events(&dir) {
+        Ok(entries) => Json(entries).into_response(),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("failed to read watcher events: {e}"),
+        )
+            .into_response(),
+    }
+}
+
+fn list_watcher_events(dir: &Path) -> std::io::Result<Vec<WatcherEventEntry>> {
+    let mut paths: Vec<PathBuf> = Vec::new();
+    for entry in std::fs::read_dir(dir)? {
+        let entry = entry?;
+        let ft = entry.file_type()?;
+        if !ft.is_file() {
+            continue;
+        }
+        let name = entry.file_name();
+        let Some(name_str) = name.to_str() else {
+            continue;
+        };
+        if !is_watcher_event_filename(name_str) {
+            continue;
+        }
+        paths.push(entry.path());
+    }
+    // Sort for deterministic order. Matches the SPA's prior
+    // `localeCompare` sort so re-reads stay stable.
+    paths.sort();
+    let mut out = Vec::with_capacity(paths.len());
+    for path in paths {
+        let content = match std::fs::read_to_string(&path) {
+            Ok(c) => c,
+            Err(_) => continue, // best-effort, mirror SPA's `try{}catch{}`
+        };
+        out.push(WatcherEventEntry {
+            path: path.display().to_string(),
+            content,
+        });
+    }
+    Ok(out)
+}
+
+/// systacean-9: match the SPA's prior filename regex
+/// (`^(event|pre-flight)-.+\.(md|json)$`) so the server-side filter
+/// agrees with what the frontend used to do. Hidden files (leading
+/// dot) are skipped to mirror the `event_watcher::ingest_once` rule.
+fn is_watcher_event_filename(name: &str) -> bool {
+    if name.starts_with('.') {
+        return false;
+    }
+    let stem = if let Some(rest) = name.strip_prefix("event-") {
+        rest
+    } else if let Some(rest) = name.strip_prefix("pre-flight-") {
+        rest
+    } else {
+        return false;
+    };
+    let Some(dot_idx) = stem.rfind('.') else {
+        return false;
+    };
+    if dot_idx == 0 {
+        // No characters between the prefix and the extension dot.
+        return false;
+    }
+    let ext = &stem[dot_idx + 1..];
+    matches!(ext, "md" | "json")
+}
+
 pub async fn api_terminal_event_reply(
     State(state): State<Arc<AppState>>,
     AxumPath(session): AxumPath<String>,
@@ -855,6 +962,73 @@ mod tests {
 
         assert!(resolve_terminal_cwd(tmp.path(), Some("../outside")).is_err());
         assert!(resolve_terminal_cwd(tmp.path(), Some("notes/today.md")).is_err());
+    }
+
+    #[test]
+    fn is_watcher_event_filename_matches_spa_regex() {
+        // systacean-9: the server-side filter has to agree with what
+        // the SPA used to do (regex `^(event|pre-flight)-.+\.(md|json)$`).
+        // Pin the agreement so a future refactor on either side
+        // doesn't quietly drift.
+        assert!(is_watcher_event_filename("event-1.json"));
+        assert!(is_watcher_event_filename("event-survey.md"));
+        assert!(is_watcher_event_filename("pre-flight-abc.md"));
+        assert!(is_watcher_event_filename("pre-flight-x.json"));
+        // Empty stem between prefix and extension is rejected.
+        assert!(!is_watcher_event_filename("event-.md"));
+        assert!(!is_watcher_event_filename("pre-flight-.json"));
+        // Wrong extension.
+        assert!(!is_watcher_event_filename("event-1.txt"));
+        // No matching prefix.
+        assert!(!is_watcher_event_filename("notes-x.md"));
+        assert!(!is_watcher_event_filename("survey.json"));
+        // Hidden file: skipped to match `event_watcher::ingest_once`.
+        assert!(!is_watcher_event_filename(".event-1.json"));
+        // No extension at all.
+        assert!(!is_watcher_event_filename("event-1"));
+    }
+
+    #[test]
+    fn list_watcher_events_reads_outside_drive_dir() {
+        // systacean-9: pin the happy path for the outside-drive
+        // watcher read. The endpoint's whole point is that an
+        // absolute outside-drive `watcher_dir` (the case lane-B's
+        // walkthrough surfaced as broken) lists + reads its event
+        // files without routing through the drive sandbox.
+        let outside = tempfile::tempdir().expect("outside-drive temp");
+        fs::write(
+            outside.path().join("event-1.json"),
+            r#"{"id":"e1","type":"poke","from":"@@A","to":"@@B"}"#,
+        )
+        .expect("write event-1");
+        fs::write(
+            outside.path().join("pre-flight-abc.md"),
+            r#"{"id":"pf-abc","type":"pre-flight","from":"@@Auth","to":"@@Host"}"#,
+        )
+        .expect("write pre-flight");
+        // Non-event files + hidden tmp must be filtered out.
+        fs::write(outside.path().join("notes.md"), b"unrelated").expect("write notes");
+        fs::write(outside.path().join(".event-1.tmp"), b"in-flight").expect("write tmp");
+        fs::create_dir_all(outside.path().join("subdir")).expect("create subdir");
+        fs::write(outside.path().join("subdir/event-nested.json"), b"{}").expect("write nested");
+
+        let entries = list_watcher_events(outside.path()).expect("list");
+        let names: Vec<String> = entries
+            .iter()
+            .map(|e| {
+                std::path::Path::new(&e.path)
+                    .file_name()
+                    .unwrap()
+                    .to_string_lossy()
+                    .into_owned()
+            })
+            .collect();
+        // Sorted, top-level only, event-shaped only.
+        assert_eq!(names, vec!["event-1.json", "pre-flight-abc.md"]);
+        // Contents are passed through verbatim for the SPA's
+        // `parseWatcherEvent` to validate.
+        assert!(entries[0].content.contains("\"id\":\"e1\""));
+        assert!(entries[1].content.contains("\"type\":\"pre-flight\""));
     }
 
     #[test]

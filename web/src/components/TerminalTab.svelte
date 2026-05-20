@@ -716,9 +716,10 @@
 
   async function refreshWatcherEvents(): Promise<void> {
     if (!tab.watcher) return;
+    if (!tab.terminalSessionId) return;
     tab.watcher.loading = true;
     try {
-      const events = await readWatcherEvents(tab.watcher.path);
+      const events = await readWatcherEvents(tab.terminalSessionId);
       const prior = new Set(tab.watcher.seenIds);
       const ids = events.map((event) => event.id);
       const hasNew = ids.some((id) => !prior.has(id));

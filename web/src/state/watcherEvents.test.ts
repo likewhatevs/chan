@@ -113,43 +113,35 @@ describe("watcher event helpers", () => {
     });
   });
 
-  test("reads pre-flight event files emitted by chan-server", async () => {
-    vi.spyOn(api, "list").mockResolvedValue([
+  test("reads pre-flight event files via the watcher-events endpoint", async () => {
+    // systacean-9: `readWatcherEvents` now hits the dedicated
+    // `/api/terminal/:session/watcher/events` endpoint instead of
+    // composing `api.list` + `api.read` against the drive-sandboxed
+    // `/api/files`. The server pre-filters event-shaped filenames
+    // and returns raw `{path, content}` pairs; the client still
+    // parses each via `parseWatcherEvent`.
+    vi.spyOn(api, "terminalWatcherEvents").mockResolvedValue([
       {
-        path: "events/pre-flight-f90ed024a46dc89a.md",
-        is_dir: false,
-        mtime: 1,
-        size: 130,
-      },
-      {
-        path: "events/not-an-event.md",
-        is_dir: false,
-        mtime: 1,
-        size: 2,
+        path: "/tmp/chan-watch-wave3-outside/pre-flight-f90ed024a46dc89a.md",
+        content: JSON.stringify({
+          id: "pre-flight-f90ed024a46dc89a",
+          type: "pre-flight",
+          from: "@@AuthNeeded",
+          to: "HostA",
+          note: "please log in",
+        }),
       },
     ]);
-    vi.spyOn(api, "read").mockImplementation(async (path) => ({
-      path,
-      content: JSON.stringify({
-        id: "pre-flight-f90ed024a46dc89a",
-        type: "pre-flight",
-        from: "@@AuthNeeded",
-        to: "HostA",
-        note: "please log in",
-      }),
-      mtime: 1,
-    }));
 
-    const events = await readWatcherEvents("events");
+    const events = await readWatcherEvents("term_session_xyz");
 
     expect(events).toHaveLength(1);
     expect(events[0]).toMatchObject({
       id: "pre-flight-f90ed024a46dc89a",
       type: "pre-flight",
-      path: "events/pre-flight-f90ed024a46dc89a.md",
+      path: "/tmp/chan-watch-wave3-outside/pre-flight-f90ed024a46dc89a.md",
       note: "please log in",
     });
-    expect(api.read).toHaveBeenCalledWith("events/pre-flight-f90ed024a46dc89a.md");
-    expect(api.read).not.toHaveBeenCalledWith("events/not-an-event.md");
+    expect(api.terminalWatcherEvents).toHaveBeenCalledWith("term_session_xyz");
   });
 });

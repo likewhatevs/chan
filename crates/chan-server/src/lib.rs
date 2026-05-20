@@ -56,7 +56,8 @@ use routes::{
     api_post_attachment, api_post_contacts_import, api_put_session, api_read_file, api_report_file,
     api_report_prefix, api_resolve_link, api_restart_terminal, api_search_content,
     api_search_files, api_set_terminal_watcher, api_storage_reset, api_terminal_event_reply,
-    api_terminal_ws, api_unset_terminal_watcher, api_write_file, ws_upgrade,
+    api_terminal_watcher_events, api_terminal_ws, api_unset_terminal_watcher, api_write_file,
+    ws_upgrade,
 };
 #[cfg(feature = "embeddings")]
 use routes::{
@@ -862,6 +863,10 @@ fn router(state: Arc<AppState>) -> Router {
         .route(
             "/api/terminal/:session/watcher",
             post(api_set_terminal_watcher).delete(api_unset_terminal_watcher),
+        )
+        .route(
+            "/api/terminal/:session/watcher/events",
+            get(api_terminal_watcher_events),
         )
         .route(
             "/api/terminal/:session/event-reply",

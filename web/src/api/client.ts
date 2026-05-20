@@ -402,6 +402,18 @@ export const api = {
       `/api/terminal/${encodeURIComponent(sessionId)}/event-reply`,
       body,
     ),
+  /// systacean-9: list the event files in the session's
+  /// attached watcher directory. Returns raw `{path, content}`
+  /// pairs; the caller parses each via `parseWatcherEvent` from
+  /// state/watcherEvents. Replaces the prior `api.list(dir) +
+  /// api.read(path)` composition, which routed through the
+  /// drive-sandboxed `/api/files` and ENOENT-ed on absolute
+  /// outside-drive watcher paths.
+  terminalWatcherEvents: (sessionId: string) =>
+    req<Array<{ path: string; content: string }>>(
+      "GET",
+      `/api/terminal/${encodeURIComponent(sessionId)}/watcher/events`,
+    ),
   spawnTerminal: (body: TerminalSpawnRequest) =>
     req<TerminalSpawnResponse>("POST", "/api/terminals", body),
   restartTerminal: (sessionId: string, body?: TerminalRestartRequest) =>
