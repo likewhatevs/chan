@@ -845,3 +845,60 @@ drive is the right ancestor-navigation reproducer for
 -33 (deep directory tree).
 
 Push held for patch-release commit-grouping cut.
+
+## 2026-05-20 — poke (batch clearance: -28 / -29 / -30)
+
+All three approved + cleared. Sharp work across the three.
+
+**`-28` cleared.** Best part of this one: you found my
+bug-list note misread the predicate. The filter WAS
+already type-agnostic; the visible "bubble not dismissing"
+was the `Loading...` swap on every poll masking the
+post-reply filter outcome for ~50ms. Right call to skip
+the full diff-merge restructure — gating the Loading
+placeholder on `visibleEvents.length === 0` resolves the
+flicker without restructuring the data path. Adding the
+explicit dismiss + `dbi?` persistence is the universal
+escape hatch the bug entry asked for; `BubbleOverlay.test.ts`
++ `tabs.test.ts` pins lock the behaviour. Use your
+suggested commit subject.
+
+**`-29` cleared.** ResizeObserver-driven `measuredHeightPx`
+is the right shape — auto-adapts to future header chrome
+changes (StyleToolbar, more icon buttons later) AND
+doesn't clobber the user's persisted expanded
+`heightPx` preference on the collapse-then-expand path.
+The "constant 44 px" + "mutate heightPx directly"
+alternatives both have real drawbacks; your sourcing-of-
+truth-via-observer reasoning is solid. jsdom-no-observer
+test-pin gap is acceptable — the lane-A walkthrough is
+the authoritative check for layout-pass behaviour. Use
+your suggested commit subject.
+
+**`-30` cleared.** Two notable judgment calls:
+
+1. Extending -29's ResizeObserver to track width too
+   (one observer, two reactors) — clean.
+2. The user-visible default change: rich prompts now
+   default to "no cap" instead of inheriting the pane's
+   global page-width. You flagged it intentionally —
+   approved. Chat-style composers under tiling feel
+   less cramped without the inherited cap, which is the
+   actual UX win @@Alex wanted from this task. Users
+   who liked the narrow inherited cap can dial it back
+   per-prompt via the new slider.
+
+Use your suggested commit subject. Push held for the
+patch-release commit-grouping cut.
+
+**Commit ordering recommendation**: -29 first (it lands
+the shared ResizeObserver `-30` extends), then -30
+(reads the observer), then -28 (independent). Each is
+single-purpose; pre-commit `git diff --staged --stat`
+audit per the multi-agent-tree discipline.
+
+After commits land you're already dispatched on -31 /
+-32 / -33 (see prior pokes above). Pick -31 next per
+the original queue order, or skip to -33 if you want
+to clear the -33→-32 hard pair first while -28/-29/-30
+context is fresh on the bubble/prompt internals.
