@@ -46,7 +46,11 @@ describe("fullstack-62: Pane Mode → Hybrid NAV user-facing rename", () => {
 
   test("PaneModeHelp.svelte title + aria-label use Hybrid NAV", () => {
     expect(paneModeHelp).toContain('aria-label="Hybrid NAV help"');
-    expect(paneModeHelp).toContain(">Hybrid NAV<");
+    // `fullstack-a-19` extended the title to include the entry chord
+    // (`(Cmd+.)`) so the cheatsheet's header doubles as a docs-side
+    // pin of the entry binding. Still asserts the Hybrid NAV brand,
+    // just with the chord suffix.
+    expect(paneModeHelp).toContain(">Hybrid NAV (Cmd+.)<");
   });
 
   test("PaneModeHelp.svelte renders no user-facing 'Pane Mode' string", () => {

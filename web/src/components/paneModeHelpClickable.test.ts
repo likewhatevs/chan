@@ -30,8 +30,8 @@ describe("fullstack-63: PaneModeHelp key-caps are clickable buttons", () => {
   });
 
   test("data carries the dispatch key for every clickable spawn / move / split cap", () => {
-    // Spawn keys (1-4 + p / s) exit Pane Mode on commit; focus-move
-    // arrows + split (/, \\) + WASD swap keep Pane Mode open. The
+    // Spawn keys (1-4 + p + f) exit Hybrid NAV on commit; focus-move
+    // arrows + split (/, \\) + WASD swap keep Hybrid NAV open. The
     // mapping lives in PaneModeHelp's `groups` data; spot-check the
     // key fields the spec calls out.
     expect(paneModeHelp).toContain('key: "ArrowUp"');

@@ -54,10 +54,11 @@
           caps: [
             { label: "W", key: "w" },
             { label: "A", key: "a" },
-            // Uppercase `S` here because lowercase `s` is the
-            // Search-overlay shortcut (per `fullstack-42`); only
-            // Shift+s keeps the WASD swap-down meaning.
-            { label: "S", key: "S" },
+            // `fullstack-74` reunified `s` / `S` onto swap-down — Search
+            // moved to `f` (see Spawn section), so the case-split
+            // workaround the comment used to defend is gone. Cap dispatch
+            // can match the W / A / D lowercase-key pattern again.
+            { label: "S", key: "s" },
             { label: "D", key: "d" },
           ],
           action: "Swap tile with neighbour",
@@ -170,7 +171,7 @@
 </script>
 
 <div class="pane-mode-help" aria-label="Hybrid NAV help" role="dialog">
-  <div class="title">Hybrid NAV</div>
+  <div class="title">Hybrid NAV (Cmd+.)</div>
   <div class="grid">
     {#each groups as g (g.title)}
       <section class="group">

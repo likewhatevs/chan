@@ -106,20 +106,23 @@ In-app keybindings (Cmd = Ctrl on Linux / Windows):
   Previous tab            Alt+Shift+[
   Jump to tab N           Ctrl+Alt+1..9
 
-Pane Mode (Cmd+K), keys are unprefixed:
+Hybrid NAV (Cmd+.), keys are unprefixed:
 
   Arrows                  Move focus
   W A S D                 Swap with neighbour
   1 / 2 / 3 / 4           Spawn Terminal / Files / Graph / New file
   t                       Spawn Terminal (mnemonic alias for 1)
-  s                       Search overlay
+  p                       Rich prompt (focused pane's terminal)
+  f                       Search overlay
   h                       Help (this list, in-app overlay)
   /                       Split focused pane right
   \\                       Split focused pane down
+  < / >                   Toggle right- / left-side file browser dock
   [ ] - =                 Resize focused pane (Shift = larger nudge)
   0                       Equalize siblings
   x                       Close all tabs in focused pane
-  k                       Close (kill) focused pane
+  Backspace               Close (kill) focused pane
+  Tab                     Flip Hybrid
   Enter                   Commit draft
   Esc                     Discard draft
 
