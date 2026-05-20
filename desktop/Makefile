@@ -152,8 +152,8 @@ notarize-prereqs:
 app-signed: sign-prereqs chan-bin
 	cd src-tauri && cargo tauri build --bundles app
 	@echo ""
-	@echo "signed .app: src-tauri/target/release/bundle/macos/Chan.app"
-	@echo "verify: codesign -dv --verbose=2 src-tauri/target/release/bundle/macos/Chan.app"
+	@echo "signed .app: $(CHAN_REPO)/target/release/bundle/macos/Chan.app"
+	@echo "verify: codesign -dv --verbose=2 $(CHAN_REPO)/target/release/bundle/macos/Chan.app"
 
 # Sign + notarize + staple + bundle a .dmg. Tauri's CLI handles the
 # notary roundtrip automatically when APPLE_ID + APPLE_PASSWORD +
@@ -162,6 +162,6 @@ app-notarized: sign-prereqs notarize-prereqs chan-bin
 	cd src-tauri && cargo tauri build --bundles app,dmg
 	@echo ""
 	@echo "notarized artifacts:"
-	@ls -1 src-tauri/target/release/bundle/dmg/*.dmg 2>/dev/null || true
+	@ls -1 $(CHAN_REPO)/target/release/bundle/dmg/*.dmg 2>/dev/null || true
 	@echo "verify: spctl -a -t open --context context:primary-signature -v \\"
-	@echo "          src-tauri/target/release/bundle/macos/Chan.app"
+	@echo "          $(CHAN_REPO)/target/release/bundle/macos/Chan.app"
