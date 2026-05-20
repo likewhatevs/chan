@@ -60,6 +60,11 @@
   import { terminalWsPath } from "../terminal/session";
   import { handleTerminalMetaKey } from "../terminal/keymap";
   import { injectShowMcpEnvCommand } from "../terminal/mcpEnv";
+  import {
+    clampScrollbackMb,
+    scrollbackLinesFromMb,
+    SCROLLBACK_MB_DEFAULT,
+  } from "../terminal/scrollback";
   import { uiConfirm } from "../state/confirm.svelte";
   import { clampMenu } from "./menuClamp";
   import {
@@ -107,6 +112,12 @@
   let fit: FitAddon | null = null;
   let search: SearchAddon | null = null;
   let serialize: SerializeAddon | null = null;
+  // `fullstack-b-11`: scrollback line cap captured at construction
+  // time from the persisted MB budget so xterm.js gets a stable
+  // number. Held on the component so the "copy scrollback" actions
+  // can serialize the same window that's actually in memory rather
+  // than the pre-fix 20k constant.
+  let scrollbackLines = scrollbackLinesFromMb(SCROLLBACK_MB_DEFAULT);
   let ws: WebSocket | null = null;
   let resizeObserver: ResizeObserver | null = null;
   let status = $state<"closed" | "connecting" | "connected" | "exited">("closed");
@@ -293,6 +304,13 @@
 
   function start(): void {
     if (!host || term) return;
+    // `fullstack-b-11`: scrollback honors the Settings MB budget.
+    // Read once here so a settings change after spawn doesn't reach
+    // through and resize the existing xterm.js buffer; the hint copy
+    // under the slider names this spawn-time-only contract.
+    scrollbackLines = scrollbackLinesFromMb(
+      clampScrollbackMb(drive.info?.preferences?.terminal?.scrollback_mb),
+    );
     // `fullstack-b-2`: lineHeight bumped from 1.0 to 1.2 so
     // multi-row ASCII glyphs (e.g. the Claude Code splash cube,
     // figlet output, nethack tiles) render with the row separation
@@ -308,7 +326,7 @@
       fontSize: 13,
       lineHeight: 1.2,
       macOptionIsMeta: true,
-      scrollback: 20_000,
+      scrollback: scrollbackLines,
       tabStopWidth: 8,
       theme: terminalTheme(),
     });
@@ -575,7 +593,7 @@
 
   async function copyScrollback(): Promise<void> {
     closeTabMenu();
-    const text = serialize?.serialize({ scrollback: 20_000 }) ?? "";
+    const text = serialize?.serialize({ scrollback: scrollbackLines }) ?? "";
     if (!text) return;
     await navigator.clipboard?.writeText(text);
     term?.focus();
@@ -583,7 +601,10 @@
 
   async function copySelectionOrScrollback(): Promise<void> {
     closeTabMenu();
-    const text = term?.getSelection() || serialize?.serialize({ scrollback: 20_000 }) || "";
+    const text =
+      term?.getSelection() ||
+      serialize?.serialize({ scrollback: scrollbackLines }) ||
+      "";
     if (!text) return;
     await navigator.clipboard?.writeText(text);
     term?.focus();

@@ -33,7 +33,26 @@
   } from "../state/pageWidth.svelte";
   import { DATE_FORMATS } from "../editor/dateFormats";
   import { editorToolsPrefs } from "../state/editorTools.svelte";
+  import {
+    clampScrollbackMb,
+    SCROLLBACK_MB_DEFAULT,
+    SCROLLBACK_MB_MAX,
+    SCROLLBACK_MB_MIN,
+  } from "../terminal/scrollback";
   import OverlayShell from "./OverlayShell.svelte";
+
+  // `fullstack-b-11`: TERM dropdown options. Known terminfo entries
+  // most users either want by default or fall back to from a custom
+  // environment; the "Custom..." escape hatch toggles a free-text
+  // input for exotic values (alacritty-direct, kitty, vt100, etc.).
+  const KNOWN_TERM_VALUES = [
+    "xterm-256color",
+    "xterm",
+    "tmux-256color",
+    "screen-256color",
+  ] as const;
+  const DEFAULT_TERM = "xterm-256color";
+  const CUSTOM_TERM_SENTINEL = "__custom__";
 
   function doToggleOverlayMaximized(): void {
     setOverlayMaximized(!overlayMaximized.on);
@@ -92,7 +111,65 @@
     if (p.line_spacing !== "compact" && p.line_spacing !== "standard") {
       p.line_spacing = "standard";
     }
+    // `fullstack-b-11`: older servers ship the `terminal` subtree
+    // without scrollback / TERM. Snap to the defaults here so the
+    // dirty() comparison after a server refetch doesn't trigger an
+    // autosave loop.
+    if (p.terminal) {
+      p.terminal.scrollback_mb = clampScrollbackMb(p.terminal.scrollback_mb);
+      const term = (p.terminal.default_term ?? "").trim();
+      p.terminal.default_term = term.length > 0 ? term : DEFAULT_TERM;
+    }
     return p;
+  }
+
+  // `fullstack-b-11`: derived view of the Terminal section so the UI
+  // bindings read concrete numbers / strings instead of nullables.
+  // The dropdown shape collapses to "custom" when the persisted value
+  // isn't one of the four shipped terminfo entries.
+  const scrollbackMb = $derived(
+    clampScrollbackMb(editing?.terminal?.scrollback_mb),
+  );
+  const currentTerm = $derived(
+    (editing?.terminal?.default_term ?? DEFAULT_TERM).trim() || DEFAULT_TERM,
+  );
+  const isKnownTerm = $derived(
+    (KNOWN_TERM_VALUES as readonly string[]).includes(currentTerm),
+  );
+  // `bind:value` on the select wants a plain accessor; we keep the
+  // sentinel branch flat to avoid an extra binding state slot.
+  const termSelectValue = $derived(
+    isKnownTerm ? currentTerm : CUSTOM_TERM_SENTINEL,
+  );
+
+  function setScrollbackMb(raw: number): void {
+    if (!editing) return;
+    // Range input emits strings via the bind:value coercion; the
+    // clamp helper guards against an over-eager browser that hands
+    // back a value outside the rendered min/max.
+    editing.terminal = {
+      ...editing.terminal,
+      scrollback_mb: clampScrollbackMb(raw),
+    };
+  }
+
+  function setTermSelection(next: string): void {
+    if (!editing) return;
+    if (next === CUSTOM_TERM_SENTINEL) {
+      // Switching to custom keeps the existing string (whatever the
+      // server last persisted) so the textbox isn't blanked out the
+      // moment the user opens it; if the existing value is already
+      // a known entry, swap to an empty string so the input prompts.
+      const seed = isKnownTerm ? "" : currentTerm;
+      editing.terminal = { ...editing.terminal, default_term: seed };
+      return;
+    }
+    editing.terminal = { ...editing.terminal, default_term: next };
+  }
+
+  function setCustomTerm(raw: string): void {
+    if (!editing) return;
+    editing.terminal = { ...editing.terminal, default_term: raw };
   }
 
   function clone(p: Preferences): Preferences {
@@ -534,6 +611,95 @@
     </section>
     </div>
 
+    <!-- `fullstack-b-11`: per-terminal scrollback budget (MB) and
+         default TERM env var. Settings apply to NEWLY spawned
+         terminals; existing terminals keep their current values
+         until the session restarts. The hint text under each
+         control names this contract explicitly so users don't
+         expect retroactive resize. -->
+    <section class="terminal-section">
+      <h3>Terminal</h3>
+      <p class="hint">
+        Applies to terminals spawned after this setting changes.
+        Existing terminals keep their current scrollback and
+        <code>TERM</code> value until the chan session restarts.
+      </p>
+
+      <div class="terminal-field">
+        <label class="terminal-label" for="terminal-scrollback-mb">
+          <span>Scrollback (MB)</span>
+        </label>
+        <div class="terminal-control scrollback-control">
+          <input
+            id="terminal-scrollback-mb"
+            type="range"
+            min={SCROLLBACK_MB_MIN}
+            max={SCROLLBACK_MB_MAX}
+            step="5"
+            value={scrollbackMb}
+            oninput={(e) => setScrollbackMb(Number((e.currentTarget as HTMLInputElement).value))}
+            aria-describedby="terminal-scrollback-hint"
+          />
+          <input
+            class="scrollback-number"
+            type="number"
+            min={SCROLLBACK_MB_MIN}
+            max={SCROLLBACK_MB_MAX}
+            step="1"
+            value={scrollbackMb}
+            oninput={(e) => setScrollbackMb(Number((e.currentTarget as HTMLInputElement).value))}
+            aria-label="Scrollback buffer in megabytes"
+          />
+          <span class="terminal-unit">MB</span>
+        </div>
+        <p id="terminal-scrollback-hint" class="hint sub-hint">
+          Per-terminal cap on the in-memory scrollback buffer.
+          Default {SCROLLBACK_MB_DEFAULT} MB; range
+          {SCROLLBACK_MB_MIN}-{SCROLLBACK_MB_MAX} MB. Higher caps
+          let agent-driven terminals retain more redraw history at
+          the cost of more browser memory per open tab.
+        </p>
+      </div>
+
+      <div class="terminal-field">
+        <label class="terminal-label" for="terminal-default-term">
+          <span>Default TERM</span>
+        </label>
+        <div class="terminal-control">
+          <select
+            id="terminal-default-term"
+            class="family"
+            value={termSelectValue}
+            onchange={(e) =>
+              setTermSelection((e.currentTarget as HTMLSelectElement).value)}
+          >
+            {#each KNOWN_TERM_VALUES as value (value)}
+              <option {value}>{value}</option>
+            {/each}
+            <option value={CUSTOM_TERM_SENTINEL}>Custom...</option>
+          </select>
+        </div>
+        {#if termSelectValue === CUSTOM_TERM_SENTINEL}
+          <div class="terminal-control">
+            <input
+              type="text"
+              class="custom-term"
+              placeholder="alacritty-direct"
+              value={currentTerm}
+              oninput={(e) =>
+                setCustomTerm((e.currentTarget as HTMLInputElement).value)}
+              aria-label="Custom TERM value"
+            />
+          </div>
+        {/if}
+        <p class="hint sub-hint">
+          Sets <code>TERM</code> on newly spawned shells. Pick one
+          of the common terminfo entries or supply a custom value
+          if your environment expects something exotic.
+        </p>
+      </div>
+    </section>
+
     <!-- `fullstack-a-21`: opt-in to Hybrid search (BM25 + dense
          vectors via BGE-small). The model is no longer bundled in
          the default binary (`systacean-6` cargo feature gate); the
@@ -843,6 +1009,55 @@
   }
   @media (prefers-reduced-motion: reduce) {
     .spinner { animation: none; border-top-color: var(--border); }
+  }
+  /* `fullstack-b-11`: Terminal section layout. The generic
+     `label { display: grid }` rule above forces a two-column grid;
+     undo it for the terminal-label so the field label sits flush
+     above its control row, and let the range + number input share
+     a single inline row. */
+  .terminal-section { gap: 0.75rem; }
+  .terminal-field {
+    display: flex;
+    flex-direction: column;
+    gap: 0.35rem;
+  }
+  .terminal-field + .terminal-field { margin-top: 0.5rem; }
+  .terminal-label {
+    display: block;
+    grid-template-columns: none;
+    font-size: 14px;
+    color: var(--text-secondary);
+  }
+  .terminal-control {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    width: 100%;
+  }
+  .terminal-control select,
+  .terminal-control input[type="text"] {
+    width: auto;
+    min-width: 16em;
+  }
+  .scrollback-control input[type="range"] {
+    flex: 1;
+    width: auto;
+    padding: 0;
+    border: 0;
+    background: transparent;
+  }
+  .scrollback-control .scrollback-number {
+    width: 5em;
+    text-align: right;
+  }
+  .terminal-unit {
+    color: var(--text-secondary);
+    font-size: 13px;
+    min-width: 1.8em;
+  }
+  .terminal-field .sub-hint {
+    margin: 0;
+    font-size: 11.5px;
   }
   /* Tab-bar autosave indicator. Sits between the title and the
      actions strip. Empty when idle (no extra padding). */

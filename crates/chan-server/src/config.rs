@@ -58,6 +58,19 @@ pub struct TerminalConfig {
     pub session_cap: usize,
     #[serde(default = "default_terminal_ring_bytes")]
     pub ring_bytes: usize,
+    /// Per-terminal scrollback budget in MB. Consumed by the SPA at
+    /// xterm.js construction time to compute the scrollback line cap;
+    /// the server only persists + range-clamps the value. Spawn-time-
+    /// only: existing terminals keep their current scrollback until
+    /// the session restarts.
+    #[serde(default = "default_terminal_scrollback_mb")]
+    pub scrollback_mb: u32,
+    /// Default TERM value handed to newly-spawned PTYs. The SPA
+    /// surfaces a dropdown of common values plus a free-text "Custom"
+    /// path for exotic terminfo entries. Spawn-time-only: existing
+    /// terminals keep their original TERM until restart.
+    #[serde(default = "default_terminal_default_term")]
+    pub default_term: String,
 }
 
 impl Default for TerminalConfig {
@@ -66,6 +79,8 @@ impl Default for TerminalConfig {
             idle_timeout_secs: default_terminal_idle_timeout_secs(),
             session_cap: default_terminal_session_cap(),
             ring_bytes: default_terminal_ring_bytes(),
+            scrollback_mb: default_terminal_scrollback_mb(),
+            default_term: default_terminal_default_term(),
         }
     }
 }
@@ -81,6 +96,19 @@ fn default_terminal_session_cap() -> usize {
 fn default_terminal_ring_bytes() -> usize {
     1 << 20
 }
+
+fn default_terminal_scrollback_mb() -> u32 {
+    50
+}
+
+fn default_terminal_default_term() -> String {
+    "xterm-256color".into()
+}
+
+/// Inclusive bounds the Settings UI exposes for the scrollback slider.
+/// Mirrored in `web/src/state/terminalPrefs.ts`; keep in lockstep.
+pub const TERMINAL_SCROLLBACK_MB_MIN: u32 = 10;
+pub const TERMINAL_SCROLLBACK_MB_MAX: u32 = 500;
 
 impl Default for ServerConfig {
     fn default() -> Self {
@@ -158,6 +186,8 @@ mod tests {
                 idle_timeout_secs: 60,
                 session_cap: 4,
                 ring_bytes: 4096,
+                scrollback_mb: 100,
+                default_term: "tmux-256color".into(),
             },
         };
         cfg.save_to(&p).unwrap();
@@ -199,6 +229,33 @@ mod tests {
         std::fs::write(&p, "[search]\naggression = \"turbo\"\n").unwrap();
         let err = ServerConfig::load_from(&p).unwrap_err();
         assert!(err.to_string().contains("turbo"));
+    }
+
+    #[test]
+    fn terminal_config_defaults_scrollback_and_term() {
+        let cfg = TerminalConfig::default();
+        assert_eq!(cfg.scrollback_mb, 50);
+        assert_eq!(cfg.default_term, "xterm-256color");
+    }
+
+    #[test]
+    fn terminal_config_legacy_file_fills_new_fields() {
+        // Pre-fullstack-b-11 server.toml didn't carry scrollback_mb
+        // or default_term. Serde's per-field defaults must fill them
+        // so an upgrade doesn't trip the deserializer.
+        let tmp = TempDir::new().unwrap();
+        let p = tmp.path().join("server.toml");
+        std::fs::write(
+            &p,
+            "[terminal]\nidle_timeout_secs = 600\nsession_cap = 8\nring_bytes = 4096\n",
+        )
+        .unwrap();
+        let cfg = ServerConfig::load_from(&p).unwrap();
+        assert_eq!(cfg.terminal.idle_timeout_secs, 600);
+        assert_eq!(cfg.terminal.session_cap, 8);
+        assert_eq!(cfg.terminal.ring_bytes, 4096);
+        assert_eq!(cfg.terminal.scrollback_mb, 50);
+        assert_eq!(cfg.terminal.default_term, "xterm-256color");
     }
 
     #[test]

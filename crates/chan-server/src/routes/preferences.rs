@@ -15,7 +15,7 @@ use axum::Json;
 use chan_drive::SearchAggression;
 use serde::{Deserialize, Serialize};
 
-use crate::config::TerminalConfig;
+use crate::config::{TerminalConfig, TERMINAL_SCROLLBACK_MB_MAX, TERMINAL_SCROLLBACK_MB_MIN};
 use crate::error::{err, Error};
 use crate::preferences::BubbleOverlayMode;
 use crate::state::AppState;
@@ -236,15 +236,37 @@ fn apply_preferences(state: &AppState, view: PreferencesView) -> Result<(), Erro
 }
 
 fn sanitize_terminal_config(mut cfg: TerminalConfig) -> TerminalConfig {
+    let defaults = TerminalConfig::default();
     if cfg.idle_timeout_secs == 0 {
-        cfg.idle_timeout_secs = TerminalConfig::default().idle_timeout_secs;
+        cfg.idle_timeout_secs = defaults.idle_timeout_secs;
     }
     if cfg.session_cap == 0 {
-        cfg.session_cap = TerminalConfig::default().session_cap;
+        cfg.session_cap = defaults.session_cap;
     }
     if cfg.ring_bytes == 0 {
-        cfg.ring_bytes = TerminalConfig::default().ring_bytes;
+        cfg.ring_bytes = defaults.ring_bytes;
     }
+    // `fullstack-b-11`: scrollback clamps to the Settings slider
+    // bounds. A literal 0 (legacy / cleared field) snaps to the
+    // default so an over-eager wipe can't strand new terminals with
+    // an empty scrollback; any other out-of-range value clamps to
+    // the nearest slider edge.
+    if cfg.scrollback_mb == 0 {
+        cfg.scrollback_mb = defaults.scrollback_mb;
+    } else {
+        cfg.scrollback_mb = cfg
+            .scrollback_mb
+            .clamp(TERMINAL_SCROLLBACK_MB_MIN, TERMINAL_SCROLLBACK_MB_MAX);
+    }
+    // Trim accidental whitespace from a free-text TERM entry; empty
+    // string falls back to the default so an over-eager Settings
+    // edit can't strand new terminals without a TERM env var.
+    let trimmed = cfg.default_term.trim();
+    cfg.default_term = if trimmed.is_empty() {
+        defaults.default_term
+    } else {
+        trimmed.to_string()
+    };
     cfg
 }
 
@@ -272,6 +294,40 @@ mod tests {
         let view = preferences_view(&state);
         let json = serde_json::to_value(view).expect("serialize");
         assert!(json.get("assistant").is_none());
+    }
+
+    #[test]
+    fn sanitize_terminal_config_clamps_scrollback_and_trims_term() {
+        let zeroed = sanitize_terminal_config(TerminalConfig {
+            idle_timeout_secs: 0,
+            session_cap: 0,
+            ring_bytes: 0,
+            scrollback_mb: 0,
+            default_term: "  ".into(),
+        });
+        assert_eq!(zeroed, TerminalConfig::default());
+
+        let too_high = sanitize_terminal_config(TerminalConfig {
+            scrollback_mb: 9_999,
+            default_term: "  xterm  ".into(),
+            ..TerminalConfig::default()
+        });
+        assert_eq!(too_high.scrollback_mb, TERMINAL_SCROLLBACK_MB_MAX);
+        assert_eq!(too_high.default_term, "xterm");
+
+        let too_low = sanitize_terminal_config(TerminalConfig {
+            scrollback_mb: 1,
+            ..TerminalConfig::default()
+        });
+        assert_eq!(too_low.scrollback_mb, TERMINAL_SCROLLBACK_MB_MIN);
+
+        let in_range = sanitize_terminal_config(TerminalConfig {
+            scrollback_mb: 75,
+            default_term: "tmux-256color".into(),
+            ..TerminalConfig::default()
+        });
+        assert_eq!(in_range.scrollback_mb, 75);
+        assert_eq!(in_range.default_term, "tmux-256color");
     }
 
     #[test]

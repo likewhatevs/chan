@@ -569,7 +569,12 @@ impl Session {
             #[cfg(windows)]
             cmd.env("USERPROFILE", home);
         }
-        cmd.env("TERM", "xterm-256color");
+        // `fullstack-b-11`: spawn-time TERM comes from settings. The
+        // value lives in `TerminalConfig::default_term`; the SPA can
+        // override the default via the Settings panel, and the change
+        // takes effect on newly-spawned terminals (existing PTYs keep
+        // whatever TERM they were started with).
+        cmd.env("TERM", config.terminal.default_term.as_str());
         cmd.env("COLORTERM", "truecolor");
         cmd.env("CLICOLOR", "1");
         cmd.env("CLICOLOR_FORCE", "1");
@@ -1280,6 +1285,7 @@ mod tests {
                 idle_timeout_secs: idle,
                 session_cap: cap,
                 ring_bytes,
+                ..TerminalConfig::default()
             },
         }
     }
@@ -1705,6 +1711,36 @@ mod tests {
         assert!(registry.clear_watcher(&id));
         assert!(registry.watcher_dir(&id).is_none());
         registry.close(&id, CloseReason::Explicit);
+    }
+
+    #[tokio::test]
+    async fn spawn_uses_configured_default_term() {
+        // `fullstack-b-11`: TERM env var on the spawned shell honors
+        // `TerminalConfig::default_term`. A bare `printf "$TERM"`
+        // command exits immediately so the captured tail of output
+        // contains the env value we set, not interactive shell noise.
+        let mut config = test_config(4096, 4, 60);
+        config.terminal.default_term = "tmux-256color".into();
+        let registry = Arc::new(Registry::new(config));
+        let mut handle = registry
+            .create(CreateOptions {
+                size: test_size(),
+                tab_name: None,
+                window_id: None,
+                mcp_env: false,
+                cwd: None,
+                command: Some("printf 'TERM=<%s>\\n' \"$TERM\"".into()),
+                env: Default::default(),
+                preflight: None,
+            })
+            .unwrap();
+
+        let out = collect_until(&mut handle, "TERM=<tmux-256color>", Duration::from_secs(5)).await;
+        assert!(
+            out.contains("TERM=<tmux-256color>"),
+            "PTY did not echo configured TERM: {out:?}"
+        );
+        registry.close(handle.id(), CloseReason::Explicit);
     }
 
     #[tokio::test]

@@ -73,6 +73,16 @@ export type TerminalPreferences = {
   idle_timeout_secs: number;
   session_cap: number;
   ring_bytes: number;
+  /// Per-terminal scrollback budget in MB (`fullstack-b-11`). Consumed
+  /// at xterm.js construction time; spawn-time only (existing
+  /// terminals keep their current scrollback until the session
+  /// restarts). Server clamps to [10, 500]; default 50.
+  scrollback_mb?: number;
+  /// Default TERM env var on the spawned PTY (`fullstack-b-11`).
+  /// Optional on the wire so older servers (no field) deserialize
+  /// cleanly; the SPA treats `undefined` as the default
+  /// `xterm-256color`.
+  default_term?: string;
 };
 
 export type BubbleOverlayMode = "stack" | "tray";
