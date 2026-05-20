@@ -272,6 +272,14 @@
   - flagged 2026-05-20 by @@WebtestB during a proactive lane-B walk: attaching the watcher to an absolute outside-drive path succeeds (post `fullstack-b-3` + `systacean-5`), but reading events from that path errors with `watch read failed: io error: No such file or directory (os error 2)`. The read path enforces drive-sandbox resolution; absolute outside-drive paths fail the sandbox lookup
   - want: read path applies the same in-drive-vs-outside-drive split as the attach path's resolver
   - dispatched as `systacean-9`
+- Wysiwyg paste: pasted markdown gets its special characters escaped (`*` → `\*`, etc.)
+  - flagged 2026-05-20 by @@Alex: "when i copy pure markdown from xcode and paste on notes, it shows correctly.. when i paste on chan, it escapes the bolds and so on.. * -> \*"
+  - context: macOS Notes accepts the pasted markdown as-is and renders bold / italic / etc. correctly. Chan's Wysiwyg paste handler escapes the markdown special characters, turning `*bold*` into the literal string `\*bold\*` instead of rendering the bold
+  - root cause hypothesis: the Wysiwyg paste handler treats pasted text as "user-typed plain text" and applies the same escape-special-chars rule that keystroke input uses (to prevent unintended formatting when the user types a literal `*`). The intent differs by source: keystroke = literal character; paste = probably markdown source
+  - fix direction: detect markdown-shaped pasted content (presence of paired `*..*` / `**..**` / `_.._` / `#..` heading lines / `- ` list items / etc.) and skip the escape pass for those pastes. Plain text without markdown markers continues to escape as today
+  - alternative shape (simpler): always paste-as-markdown (no escape on the paste path); the source-mode toggle from -a-26 already lets the user switch to source view if they want to see / edit the raw escaped form
+  - implementer picks the smarter detection or the simpler always-paste-as-markdown rule. Audit Wysiwyg's existing paste extension first (likely in `web/src/editor/Wysiwyg.svelte` or a CodeMirror extension config) before designing
+  - dispatched as `fullstack-a-34` — rides the patch release
 - chan-desktop Tauri window title: shows "chan drive: <name>", should be "<path>" instead
   - flagged 2026-05-20 by @@Alex: "note for next build, the tauri title: 'chan drive: <name>' should be <path> instead". The current chan-desktop window title is formed as `chan drive: <drive-name>` (e.g. "chan drive: chan"); @@Alex wants the title to be the full drive path instead (e.g. `/Users/fiorix/dev/github.com/fiorix/chan`)
   - read of the ask: replace the entire title string with the path — no "chan drive:" prefix. If implementer disagrees on dropping the prefix (e.g. for menubar discoverability), surface a scope question; otherwise default to path-only

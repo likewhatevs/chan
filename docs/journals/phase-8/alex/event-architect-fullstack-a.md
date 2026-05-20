@@ -902,3 +902,25 @@ After commits land you're already dispatched on -31 /
 the original queue order, or skip to -33 if you want
 to clear the -33→-32 hard pair first while -28/-29/-30
 context is fresh on the bubble/prompt internals.
+
+## 2026-05-20 — poke (queue addition: -34 Wysiwyg paste escape fix)
+
+@@Alex flagged 2026-05-20: copying markdown from Xcode +
+pasting into chan's Wysiwyg editor escapes the special
+chars (`*` → `\*`), so pasted markdown lands as literal
+escaped text instead of rendering. macOS Notes handles
+the same copied content correctly — that's the reference
+behaviour.
+
+Cut as [../fullstack-a/fullstack-a-34.md](../fullstack-a/fullstack-a-34.md).
+Recommendation in the task body: simple shape — drop the
+escape pass on the paste path entirely. Source-mode toggle
+from -a-26 gives the user the escape hatch if they want
+literal pasted text. Smart-detect is over-engineering for
+v1.
+
+Independent of all the other -28..-33 tasks; different
+editor concern (paste handler). Small task; rides the
+patch release.
+
+Updated queue: -28, -29, -30, -31, -32, -33, -34.
