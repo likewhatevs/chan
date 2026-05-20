@@ -765,3 +765,23 @@ Push held for the patch-release commit-grouping cut
 Wave-2 / wave-3 broader Round-2 fan-out (carousel,
 Infographics, BOOT, manual, signing, etc.) parks until
 this mini-wave + the patch release ship.
+
+## 2026-05-20 — poke (queue addition: fullstack-a-31, terminal broadcast selector polish)
+
+@@Alex flagged a small UX polish on the terminal's
+broadcast-input selector. Cut as
+[../fullstack-a/fullstack-a-31.md](../fullstack-a/fullstack-a-31.md).
+Three small changes:
+
+* Include the current tab in the selectable list, marked
+  "self" (icon or separator-above-others — your call).
+* Replace the on/off toggle rocker with a checkbox per
+  row.
+* Label the container "broadcast input on/off".
+
+Independent of -28/-29/-30 — different UI surface, separate
+commit. Slot anywhere in your wave order. Likely lives in
+the terminal tab's hamburger menu or a sibling overlay; grep
+`broadcastTerminalInput` to find the selector file.
+
+Updated queue: -28, -29, -30, -31 (any commit order).

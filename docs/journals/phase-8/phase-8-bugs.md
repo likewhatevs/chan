@@ -272,6 +272,14 @@
   - flagged 2026-05-20 by @@WebtestB during a proactive lane-B walk: attaching the watcher to an absolute outside-drive path succeeds (post `fullstack-b-3` + `systacean-5`), but reading events from that path errors with `watch read failed: io error: No such file or directory (os error 2)`. The read path enforces drive-sandbox resolution; absolute outside-drive paths fail the sandbox lookup
   - want: read path applies the same in-drive-vs-outside-drive split as the attach path's resolver
   - dispatched as `systacean-9`
+- Terminal broadcast selector: missing self entry + confusing on/off toggle shape
+  - flagged 2026-05-20 by @@Alex: the terminal's broadcast-input selector (the UI that picks which terminal tabs receive the broadcast forwarded by `broadcastTerminalInput`) does not list the current tab itself in the selectable list. Also the current on/off toggle UI for the per-tab broadcast state is confusing
+  - want, three parts:
+    1. **Include self in the list**: the current tab appears in the broadcast-target list alongside the others. Mark it as "self" with an icon OR place it above the others with a separator (implementer's call; both shapes are acceptable)
+    2. **Checkbox shape, not toggle**: drop the on/off rocker UI; use a plain checkbox per row instead
+    3. **Label**: "broadcast input on/off" (keep the label text @@Alex named) — applied to whatever container UI hosts the per-tab checkboxes
+  - small UX polish; ride the rich-prompt mini-wave so it gets into the patch release
+  - dispatched as `fullstack-a-31`
 - Survey-reply echoes to the terminal as `poke<Enter>`; breaks agents that need `poke<Cmd+Enter>`
   - flagged 2026-05-20 by @@Alex during the broadcast smoke test follow-up: clicking a reply option on the survey bubble correctly writes `event-reply-<id>.md` AND also echoes the reply into the underlying terminal's PTY. The echo shape is literally the string `poke` followed by Enter (newline). For a shell, Enter submits the line — fine. For an agent running in the terminal (Claude Code / codex / gemini), Enter inserts a newline into the agent's input draft; only Cmd+Enter submits the message. Result: the literal word `poke` ends up wedged in the agent's input draft, never submitted
   - @@Alex's verbatim ask: "poke<cmd+enter> not poke<enter>"
