@@ -273,9 +273,46 @@
     void fileOps.duplicateFile(tab.path);
   }
 
+  // `fullstack-a-35`: inline-rename header band. Replaces the
+  // modal-driven rename (`fileOps.rename`) with the terminal
+  // tab's "trigger from the right-click menu, commit inline"
+  // shape. The band sits above the editor's page-width-capped
+  // content (no `--chan-page-max-width` constraint), Enter commits,
+  // Esc cancels.
+  let renameActive = $state(false);
+  let renameDraft = $state("");
+  let renameInputEl: HTMLInputElement | undefined = $state();
   function doRename(): void {
     closeTabMenu();
-    void fileOps.rename(tab.path, false);
+    renameDraft = tab.path;
+    renameActive = true;
+    // Focus + select-all after the band mounts so the user can
+    // type a replacement immediately. tick() (microtask) is
+    // sufficient — the input mounts synchronously in the same
+    // Svelte tick that flips `renameActive`.
+    queueMicrotask(() => {
+      renameInputEl?.focus();
+      renameInputEl?.select();
+    });
+  }
+  function cancelRename(): void {
+    renameActive = false;
+    renameDraft = "";
+  }
+  async function commitRename(): Promise<void> {
+    const next = renameDraft.trim();
+    renameActive = false;
+    if (!next || next === tab.path) return;
+    await fileOps.renameInPlace(tab.path, next, false);
+  }
+  function onRenameKeydown(e: KeyboardEvent): void {
+    if (e.key === "Enter") {
+      e.preventDefault();
+      void commitRename();
+    } else if (e.key === "Escape") {
+      e.preventDefault();
+      cancelRename();
+    }
   }
 
   /// True for tabs that have a structured render mode alongside
@@ -715,6 +752,31 @@
     </div>
   {/if}
 
+  {#if renameActive}
+    <!-- `fullstack-a-35`: inline rename band. Sits above the
+         editor body, outside the `--chan-page-max-width` cap so
+         the input spans the whole pane width. Triggered from the
+         tab right-click menu's Rename row (`doRename`); Enter
+         commits via the same chan-drive rename + link-rewrite
+         pass the modal-driven path uses; Esc cancels without
+         filesystem side effects. -->
+    <div class="rename-band" role="group" aria-label="rename file">
+      <span class="rename-label">Rename</span>
+      <input
+        bind:this={renameInputEl}
+        bind:value={renameDraft}
+        class="rename-input"
+        type="text"
+        spellcheck="false"
+        autocomplete="off"
+        autocorrect="off"
+        autocapitalize="off"
+        onkeydown={onRenameKeydown}
+        onblur={cancelRename}
+        aria-label="new file path"
+      />
+    </div>
+  {/if}
   {#if tab.fileMissing}
     <div class="editor-toolbar missing-toolbar">
       <span>File moved or deleted</span>
@@ -1091,6 +1153,41 @@
   .missing-toolbar {
     color: var(--text-primary);
     font-weight: 600;
+  }
+  /* `fullstack-a-35`: inline-rename header band. Sits above the
+     editor body, full pane width (no page-width cap). Hosts a
+     label + monospaced input; Enter commits, Esc cancels. */
+  .rename-band {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 6px 10px;
+    background: var(--bg-card);
+    border-bottom: 1px solid var(--border);
+    font-size: 13px;
+    width: 100%;
+  }
+  .rename-label {
+    flex-shrink: 0;
+    color: var(--text-secondary);
+    font-weight: 600;
+    letter-spacing: 0.02em;
+  }
+  .rename-input {
+    flex: 1;
+    min-width: 0;
+    padding: 4px 8px;
+    background: var(--bg);
+    color: var(--text);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 13px;
+  }
+  .rename-input:focus {
+    outline: none;
+    border-color: var(--link);
+    box-shadow: 0 0 0 1px var(--link);
   }
   .placeholder {
     flex: 1;

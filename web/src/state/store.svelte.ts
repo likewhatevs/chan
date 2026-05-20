@@ -2460,6 +2460,18 @@ export const fileOps = {
   async moveTo(from: string, to: string): Promise<void> {
     await performMove(from, to);
   },
+  /// `fullstack-a-35`: inline-rename entry point for the
+  /// FileEditorTab's header-band UX. Same `performMove` machinery
+  /// (overwrite confirm, link rewrite, tab rekey, watcher
+  /// suppression) as `rename` above; just bypasses the modal so the
+  /// header band can drive the input directly. Preserves the source
+  /// extension when `next` lacks one — matches `fileOps.rename`.
+  async renameInPlace(path: string, next: string, isDir = false): Promise<void> {
+    const trimmed = next.trim();
+    if (!trimmed || trimmed === path) return;
+    const target = isDir ? trimmed : preserveExtension(path, trimmed);
+    await performMove(path, target);
+  },
   /// Delete a file (or directory) from the drive.
   ///
   /// Closes any open tabs pointing at the deleted path (or paths
