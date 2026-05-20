@@ -195,11 +195,82 @@ This redesign is medium-large. Decomposes naturally:
 | 4    | Remote outbound flow: `[new] → [remote] → [outbound]` + retry/backoff config + drives-list integration | @@FullStackB + @@Systacean (tunnel-client wiring) |
 | 5    | Remote inbound flow: `[new] → [remote] → [inbound]` + host+port config + drives-list integration | @@FullStackB + @@Systacean (chan-serve listener config) |
 | 6    | Config dialog (same shape as creation, per-type parameterized) — refactor so step 1's create-dialog is reusable for step 4 + 5 | @@FullStackB |
+| 7    | Quit-confirm gate when drives are booted (intercept OS quit, confirm + shutdown all booted drives + exit). See "Quit-confirm gate" section below. | @@FullStackB |
 
 Steps 1-3 land before 4-6 since they don't depend on
 the tunnel-client + listener config work. 4 + 5 land
 in either order (independent paths). 6 is a refactor
 that consolidates the dialog used in 1 / 4 / 5.
+
+## Quit-confirm gate when drives are booted (added 2026-05-20)
+
+@@Alex 2026-05-20: "if we click to close chan desktop when
+there's at least 1 drive booted, we should ask the user to
+close confirm (we close all windows and turn off the drive)
+so we shutdown".
+
+### Behaviour
+
+* Trigger: user hits the OS quit affordance (Cmd+Q on
+  macOS, the X on the launcher window, application-menu
+  Quit) while at least one drive is in the "booted"
+  state (per the drives-list column from the main
+  redesign).
+* Block the quit, show a confirmation dialog:
+  > "Quit chan? One booted drive will be shut down."
+  > (or "N booted drives will be shut down" if > 1)
+  > [Cancel] [Quit + shutdown]
+* If 0 drives are booted, quit immediately (no
+  confirmation needed — nothing to shut down).
+* On confirm:
+  * Close every drive window in turn.
+  * Stop each booted drive's underlying mechanism:
+    * Local drive → kill the `chan serve` child process.
+    * Remote outbound → close the `chan-tunnel-client`
+      connection.
+    * Remote inbound → stop the local listener.
+  * Once all booted drives are off, the chan-desktop
+    process itself exits cleanly.
+
+### Why this matters
+
+Today (and on the post-redesign launcher) closing
+chan-desktop while drives are booted is a silent
+operation — the underlying `chan serve` processes may
+stay alive as background daemons, the user has no
+signal that their drives are still running, and the
+windows-open counter from the redesign would lie
+across a quit-relaunch cycle. The confirmation +
+explicit shutdown contract eliminates the
+"chan-desktop closed but `chan serve` still running"
+zombie state.
+
+### Coupling with the redesign steps
+
+Lands as **step 7** in the decomposition table (post
+forget-drive UX, after the drives-list table redesign
++ Boot rename). Builds on steps 2 (windows-open
+column tracking) + 4 / 5 (boot/shutdown semantics for
+each drive type).
+
+### Open questions
+
+* **Quit-without-shutdown escape hatch?** Some users
+  may want to leave drives running (e.g. expose an
+  inbound drive overnight while the launcher is closed).
+  Options: never offer (always shut down on quit), add
+  a third button "Quit, leave drives running" (with a
+  warning), or a Settings toggle "drives stay running
+  when chan-desktop quits" (default off). Implementer
+  picks at task-cut; the conservative default is
+  "always shut down on quit."
+* **Crash / hard-kill case**: if chan-desktop dies
+  without going through the quit-confirm gate, the
+  child `chan serve` processes are orphaned. Probably
+  a Round-3 hardening item — the launcher could
+  inherit-and-reattach orphaned `chan serve` processes
+  on next launch by matching against the drives-list
+  config. Out of scope for this redesign.
 
 ## Open questions for @@Alex when this revives
 
