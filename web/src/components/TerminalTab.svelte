@@ -172,7 +172,24 @@
     queueFit();
     setTerminalActivity(tab, false);
     sendFocusState();
-    queueMicrotask(() => term?.focus());
+    queueMicrotask(() => {
+      // `fullstack-a-17`: when the rich prompt is open it owns the
+      // keyboard. Cmd+K p on a pane without a terminal spawns one and
+      // opens the rich prompt in the same Svelte tick; without this
+      // gate, xterm's mount-time focus races past the rich prompt's
+      // focus effect and steals the caret. Bump `focusNonce` so the
+      // rich prompt's open-effect re-runs and lands the caret on the
+      // editor — covers both the Cmd+K p race AND the user returning
+      // to a pane whose rich prompt was already open (no focusNonce
+      // bump would otherwise fire there).
+      if (tab.richPrompt?.open) {
+        if (tab.richPrompt) {
+          tab.richPrompt.focusNonce = (tab.richPrompt.focusNonce ?? 0) + 1;
+        }
+        return;
+      }
+      term?.focus();
+    });
   });
 
   $effect(() => {
