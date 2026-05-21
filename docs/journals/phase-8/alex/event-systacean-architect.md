@@ -1467,3 +1467,118 @@ Suggested commit subject: `chan-drive: gate 3 lock-contract tests on Unix (systa
 Per the architect's "obvious-call carry-on authorized" + "either smoke branch works" clauses, taking the bundled `-18-smoke` path.
 
 Standing by for `26247086815` Windows half → `-20` commit + push + re-dispatch.
+
+## 2026-05-21 — scope poke (-20 bundled smoke surfaced ONE new Windows failure — chan-drive report watcher timing)
+
+Per my prior discipline-acked commitment ("if it surfaces yet another failure, escalate instead of iterate"). The bundled smoke [`26247985860`](https://github.com/fiorix/chan/actions/runs/26247985860) shows one NEW failure on Windows — NOT BGE-related, NOT lock-related.
+
+### Verdict
+
+| Job | Outcome | Notes |
+|---|---|---|
+| rustfmt | ✓ 20s | |
+| web | ✓ 2m28s | |
+| build (no default features) | ✓ 1m39s | |
+| ubuntu cargo test | ✓ 2m47s | 28 BGE tests skipped via fu#4; clean |
+| windows clippy + cargo test | **X 21m8s** | Clippy ✓; cargo test failed on ONE chan-drive integration test |
+
+### The 1 new Windows failure
+
+```
+chan-drive/tests/report.rs:119
+test watcher_keeps_report_current ... FAILED
+report missed b.md
+```
+
+### Cause (read from the test body)
+
+`watcher_keeps_report_current` does:
+1. `drive.write_text("a.md", ...)` (warmup).
+2. `let _handle = drive.watch(cb);` (attach watcher).
+3. `drive.write_text("b.md", ...)` (the watched event).
+4. `wait_for(|| collector.len() >= 1, 5s)` — assertion **PASSES** (watcher fired).
+5. `std::thread::sleep(700ms)` — fixed sleep for report-writer debounce.
+6. `drive.report()` then `assert!(names.contains(b.md))` — **PANICS** here on Windows.
+
+The watcher itself works (step 4 passed). The fixed 700ms sleep at step 5 isn't long enough for the report-writer thread to debounce + flush on Windows. The notify-crate event timing differs from Unix `inotify` / `kqueue`.
+
+### Not BGE-related; not lock-related
+
+This is a 4th separate Windows-only issue, parallel to:
+1. `result_large_err` (closed by `-17`).
+2. BGE-test panics (closed by `-18` + follow-ups).
+3. Lock contract gap (closed by `-20`).
+4. **THIS: chan-drive watcher / report-writer timing on Windows** (new).
+
+### Test binary execution stopped here
+
+cargo test runs binaries sequentially + aborts on first failure. The chronology on Windows:
+
+```
+chan-server lib              ✓ 58 passed       (fu#4 BGE gates)
+chan-llm or chan-report      ✓ 33 passed
+tunnel_e2e                   ✓ 7 passed
+chan-drive lib               ✓ 381 passed + 16 ignored  (-18 + -20 gates)
+chan-drive contacts_import   ✓ 7 passed + 1 ignored
+chan-drive file_types        ✓ 0 passed + 1 ignored
+chan-drive links_normalized  ✓ 2 passed
+chan-drive progress_events   ✓ 8 passed
+chan-drive remove_cleanup    ✓ 1 passed + 2 ignored
+chan-drive report            X 3 passed + 1 failed   ← NEW
+                                                    ← cargo aborted
+chan-drive smoke              (not reached — was gated by -18 fu#2; would pass)
+[no further binaries; chan-server has no integration tests]
+```
+
+So cargo's abort masks at most one more test (`chan-drive/tests/smoke.rs`) which is already gated. No more whack-a-mole expected after this one.
+
+### Three routing options
+
+**Option A — quick gate via `#[cfg(unix)]`** (same shape as `-20`):
+
+Mechanical gate-unblocker. Test stays in the codebase, runs on Unix where it works, skipped on Windows where the timing breaks. Bug-list Round-3 entry tracks the underlying gap. Single-test gate; 5-line audit comment per `-20`'s pattern.
+
+Diff: ~10 lines (`#[cfg(unix)]` + comment block above the test).
+
+**Option B — fix the test's timing pattern** (real cross-platform fix):
+
+Replace `std::thread::sleep(Duration::from_millis(700))` with a `wait_for(|| <report contains b.md>, Duration::from_secs(5))` poll loop. The `wait_for` helper is already used in the test (line 110-112 for the watcher event). Polling instead of fixed-sleep makes the test cross-platform-correct on slow Windows runners.
+
+This is a real fix — the test was always timing-fragile, just happened to work on Unix because the report-writer debounce is fast there. On Windows the file-system event latency + thread-scheduling jitter pushes the debounce past 700ms.
+
+Diff: ~3 lines (replace one sleep with a wait_for poll).
+
+**Option C — root-cause the report-writer debounce timing**:
+
+Audit `ReportState::on_event` + its writer thread; check whether the 500ms `FLUSH_DEBOUNCE` constant (per `chan-drive/src/report.rs:28`) is too aggressive on Windows. Possibly add a platform-conditional bump.
+
+Diff: depends on findings. Bigger blast radius than B.
+
+### Recommendation
+
+**Option B** for this iteration. The fix is small (3 lines) AND it's a genuine test-quality improvement (replacing a fixed sleep with a poll is just better). Cross-platform correctness without scope expansion.
+
+**A** is the conservative fallback if you'd rather keep the test logic untouched. Same mechanical pattern as `-20`.
+
+**C** is out-of-scope for the gate-unblocker sweep; could surface as a Round-3 polish item if the wait_for poll reveals genuine Windows-watcher slowness even with a generous timeout.
+
+### Plan if you pick B
+
+1. Edit `chan-drive/tests/report.rs::watcher_keeps_report_current` lines 114-119 to replace the sleep with a wait_for poll on the `b.md` presence in the report.
+2. Local gate green (the test passes today on macOS; just confirming the polled version doesn't regress).
+3. Push fastforward to `systacean-18-smoke` + re-dispatch.
+4. Expected: Windows fully green on next dispatch. Per-PR ci.yml gate structurally fully green.
+
+### Plan if you pick A
+
+Same shape as `-20`: `#[cfg(unix)]` + 5-line audit comment block + bug-list Round-3 entry ("chan-drive watcher / report-writer timing reliability on Windows"). 
+
+### What I'm NOT doing
+
+Not iterating silently. Same discipline as the prior scope poke (chan-server). Waiting for routing before applying any fix.
+
+### Sequencing if both B+ -19 land
+
+`-19` (C2 graceful BM25 fallback) is still next on my queue after this gets routed. `-19` reverts the 28 BGE `#[ignore]` gates but doesn't touch the report-watcher test (separate issue). `-16` (chan-report file-class buckets) sits behind both.
+
+Standing by for routing on this new failure.
