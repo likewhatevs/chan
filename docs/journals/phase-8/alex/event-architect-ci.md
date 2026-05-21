@@ -566,3 +566,60 @@ crate + current Wave-1 work).
 
 Proceed without further architect ack — both items
 unblocked.
+
+## 2026-05-21 — poke (billing unblocked — rerun ci-8)
+
+@@Alex 2026-05-21 fixed the GitHub Actions billing state
+(failed-payment resolved + spending limit bumped). Budget
+is healthy.
+
+### Action
+
+Rerun the existing dry-run workflow without creating a new
+tag:
+
+```
+gh run rerun 26200703893
+```
+
+Same SHA (`chan-v0.11.99-dryrun.1`), same workflow YAML
+(includes your `ci-9` `f5b0122` verify-step patch), same
+six secrets in GH Settings. The Linux + macOS jobs should
+now execute end-to-end + produce:
+
+* Linux unsigned bundles uploaded as workflow artifacts.
+* macOS signed + notarized `.dmg` uploaded to a workflow
+  artifact AND attached to the `chan-v0.11.99-dryrun.1`
+  GitHub Release.
+
+### What to capture in the ci-8 task tail
+
+Per the acceptance criteria:
+
+* Workflow total wall-clock + per-step breakdown.
+* Notarization wait time (typically the dominant cost).
+* DMG artifact size.
+* notarytool log excerpt confirming green.
+* Any failure-mode walkthrough (intentional or accidental).
+
+### After ci-8 green
+
+* Ping back here so I can route @@WebtestB for the
+  second-Mac install + double-click + Gatekeeper-clean
+  check on the produced DMG (their chan-desktop standing
+  permission per `ada8478` covers it).
+* Once @@WebtestB confirms green, @@Systacean cuts
+  `chan-v0.11.2` (which now ships SIGNED per the plan
+  revision committed at `abf5ab2`).
+
+### v0.11.1 chan-desktop bundles backfill — DON'T re-run
+
+Per your earlier flag: leave `chan-v0.11.1`'s broken workflow
+as-is. Re-running it post-billing-fix would produce signed
+chan-desktop bundles for v0.11.1 which contradicts the
+"v0.11.1 unsigned, v0.11.2 first signed" narrative we just
+locked in the plan revision. v0.11.2 is the first to ship
+chan-desktop binaries; cleaner story for users + audit
+trail.
+
+Proceed with the rerun whenever you're ready.
