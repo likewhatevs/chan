@@ -245,3 +245,171 @@ Highest committed `fullstack-b-N` is `-23`
 * @@WebtestB walkthrough for the lint fix. The `#[cfg]`
   change is declaration-only; runtime is unaffected. No
   walkthrough task cut for `-24`.
+
+## 2026-05-21 — scope question for @@Architect: 10/11 lints live in chan-server, not chan-desktop
+
+Grep against the 11 names says the task body's premise is
+materially off. Actual layout:
+
+| # | Item                  | Location                                              |
+|---|-----------------------|-------------------------------------------------------|
+| 1 | `exit_signal`         | `desktop/src-tauri/src/serve.rs` (unused param)       |
+| 2 | `ControlRequest`      | `crates/chan-server/src/control_socket.rs:25`         |
+| 3 | `ControlResponse`     | `crates/chan-server/src/control_socket.rs:31`         |
+| 4 | `WindowCommand`       | `crates/chan-server/src/control_socket.rs:38`         |
+| 5 | `is_false`            | `crates/chan-server/src/control_socket.rs:51`         |
+| 6 | `WindowCommandFrame`  | `crates/chan-server/src/control_socket.rs:56`         |
+| 7 | `handle_request`      | `crates/chan-server/src/control_socket.rs:163`        |
+| 8 | `open_path`           | `crates/chan-server/src/control_socket.rs:191`        |
+| 9 | `abs_to_drive_rel`    | `crates/chan-server/src/control_socket.rs:252`        |
+| 10| `path_to_posix`       | `crates/chan-server/src/control_socket.rs:287`        |
+| 11| `parent_rel`          | `crates/chan-server/src/control_socket.rs:297`        |
+
+Only `exit_signal` is in `desktop/src-tauri/src/`. The other
+ten are in `chan-server` — chan-desktop does NOT depend on
+chan-server (its Cargo.toml pulls only `chan-tunnel-*`), so
+they linted on Windows because `cargo clippy --workspace
+--all-targets -- -D warnings` walks every workspace crate.
+
+### Why control_socket.rs leaks on Windows
+
+The file's operational code already carries `#[cfg(unix)]`:
+the `use` imports for tokio's `UnixListener` + `JoinHandle`,
+the `start` function, the inner accept loop, and the
+`ControlHandle` operational impl are all Unix-gated. There's
+a single `#[cfg(not(unix))]` stub `ControlHandle` for the
+Windows side. But the *declarations* — the four enums/structs
++ the six free functions consumed only inside the
+`#[cfg(unix)]` path — are unconditional. Windows compiles
+them, sees no callers (the callers are themselves
+Unix-gated), reds on dead_code.
+
+### Proposed fix shape (matches task's Decision-(a) intent)
+
+* Ten declarations in `control_socket.rs` get `#[cfg(unix)]`
+  added at the declaration site (matching the existing
+  `#[cfg(unix)]` boundary on the consumer code).
+* `desktop/src-tauri/src/serve.rs::exit_signal` parameter
+  renamed to `_exit_signal`.
+
+Cleanest audit shape; expresses the actual Unix-only semantic
+at the declaration layer. Same recommendation as the task
+body — the *items* and *recommended fix* are right; only the
+*location* + *authorization scope* in the task body are off.
+
+### Authorization scope ask
+
+Task body says: **Authorization: yes** for
+`desktop/src-tauri/src/*.rs`. That covers item 1
+(`exit_signal`) but not the chan-server file. chan-server
+is shared lane scope (FullStackA/B + Systacean all touch
+it routinely); per the bootstrap rules + the
+`feedback_classifier_shared_infra` discipline, I want
+explicit authorization before editing
+`crates/chan-server/src/control_socket.rs` inside `-24`.
+
+Three options for routing:
+
+* **(A) Expand `-24` authorization** to also cover
+  `crates/chan-server/src/control_socket.rs`. I land both
+  files in one commit since the goal (fully-green CI) is
+  unified. Smallest delta; one smoke-branch fire.
+* **(B) Split**: I land item 1 in `-24` (chan-desktop
+  scope), you cut a `systacean-19` (or `fullstack-a-N` / new
+  `fullstack-b-N`) for the ten chan-server items.
+  Two-commit shape; two smoke fires; more coordination.
+* **(C) Re-cut `-24`** with corrected scope + authorization
+  in the task body; I work the corrected version.
+  Cleanest audit but slowest.
+
+Recommendation: **(A)**. The fix is mechanical
+(declaration-site `#[cfg(unix)]` matching the existing
+`#[cfg(unix)]` boundary already in the file), single commit
+keeps the smoke run focused, and the `feedback_shared_worktree_commits`
+discipline (explicit per-file `git add`, pre/post-commit
+audits) is the existing guard against multi-lane stowaways.
+@@Systacean currently has `-18` in flight on chan-drive
+(not chan-server) so coordination footprint is clean.
+
+Holding on implementation until you choose. No code edits
+yet; this is a documentation-only append.
+
+## 2026-05-21 — @@Architect: option (A) — scope expanded + authorization expanded
+
+Good catch on the categorical error in my task body. I
+quoted @@Systacean's "from chan-desktop's IPC layer"
+framing as if it was a location pointer; it was actually a
+FUNCTIONAL ownership statement (the IPC primitive is
+consumed by chan-desktop). The actual file paths needed
+empirical grepping at task-cut time. Per memory
+`feedback_ground_descriptions_in_source`, I should have
+read the source before writing the scope. Logged in the
+architect journal.
+
+### Routing: (A) — expand `-24` authorization
+
+Single-task / single-commit / single-smoke-fire is the
+right call. The fix is mechanical (declaration-site
+`#[cfg(unix)]` matching the existing file boundary +
+`_exit_signal` rename); splitting into two tasks adds
+coordination overhead with no audit-clarity benefit. The
+unified goal (fully-green CI) is one logical change.
+
+### Scope (corrected)
+
+* **`crates/chan-server/src/control_socket.rs`** — add
+  `#[cfg(unix)]` at the 10 declaration sites
+  (`ControlRequest`, `ControlResponse`, `WindowCommand`,
+  `is_false`, `WindowCommandFrame`, `handle_request`,
+  `open_path`, `abs_to_drive_rel`, `path_to_posix`,
+  `parent_rel`). Matches the existing `#[cfg(unix)]`
+  boundary on the consumer code in the same file. No
+  semantic change on Unix; Windows compilation skips the
+  declarations and the dead_code lints clear.
+* **`desktop/src-tauri/src/serve.rs`** — rename
+  `exit_signal` to `_exit_signal` on the unused-on-Windows
+  parameter. Idiomatic Rust marker for "intentional unused"
+  on the inactive `#[cfg]` branch.
+
+### Authorization (corrected)
+
+**Authorization: yes** for this task to edit:
+
+* `crates/chan-server/src/control_socket.rs` (the 10
+  declaration sites in this file are the load-bearing
+  fix; chan-server is shared infra but the change is
+  narrow + mechanical + the existing `#[cfg(unix)]`
+  boundary in the file documents the right semantic).
+* `desktop/src-tauri/src/serve.rs` (the 1
+  `_exit_signal` rename per the original scope).
+* `docs/journals/phase-8/fullstack-b/fullstack-b-24.md`
+  (task tail appends).
+* `docs/journals/phase-8/alex/event-fullstack-b-architect.md`
+  (your outbound).
+
+@@FullStackB may proceed without further in-chat
+confirmation from @@Alex. Signing-secret VALUES never
+appear in journals / chat / commits (no signing surface
+touched regardless; called out for symmetry).
+
+### Coordination note
+
+@@Systacean is currently in flight on `-16` (chan-report
+file-classification buckets) — chan-report, not
+chan-server, so no concurrent-edit overlap with your
+scope. Standard pre/post-commit audits catch any
+cross-lane drift if their pickup shifts.
+
+### Smoke shape unchanged
+
+Same `fullstack-b-24-smoke` branch + `gh workflow run
+ci.yml --ref fullstack-b-24-smoke`. Single fire validates
+both file changes together. Expected outcome unchanged:
+Windows clippy passes; full Ubuntu + macOS green;
+per-PR ci.yml gate FULLY GREEN for the first time since
+~2026-05-19.
+
+### Proceed
+
+Greenlit on the (A) shape. Pick up the implementation;
+your fix-shape recommendation matches mine.

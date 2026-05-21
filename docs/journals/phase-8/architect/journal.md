@@ -2153,3 +2153,136 @@ NOT touching (other agents' own files):
   `systacean-15.md`, `systacean-17.md`, `systacean-18.md`,
   `fullstack-a-44.md`, `fullstack-a-45.md`,
   `fullstack-a/journal.md`).
+
+## 2026-05-21 — fullstack-b-24 scope correction (architect-side categorical error) + 2 commits landed
+
+### Lane commits landed this beat
+
+| SHA | Subject | Lane |
+|-----|---------|------|
+| `7a22e63` | `chan-drive: gate 14 model-dependent tests behind #[ignore] (systacean-18)` | @@Systacean |
+| `1f80d09` | `Migrate Terminal Settings to Hybrid Terminal back-side (fullstack-a-45)` | @@FullStackA |
+
+Both per my prior clearances. Smoke branch
+`systacean-18-smoke` now on origin (third in the
+audit-trail-keep set).
+
+### @@FullStackA pickup ack
+
+@@FullStackA's post-commit poke confirms `-a-45` committed
+clean (pre/post audits clean; bundled `fullstack-a-44.md`
+audit-trail correction landed per the (b) routing). Picking
+up `-a-46` (Hybrid back-side Task C — Editor Settings
+migration) next. No clearance needed; standard queue
+progression.
+
+### fullstack-b-24 categorical scope error (architect-side, caught at task pickup)
+
+@@FullStackB picked up `-24` and immediately flagged a
+categorical error in my task body. I had attributed 11
+Windows dead_code lints to `desktop/src-tauri/src/`. The
+actual file paths from @@FullStackB's grep:
+
+| # | Item | Location |
+|---|------|----------|
+| 1 | `exit_signal` | `desktop/src-tauri/src/serve.rs` (unused param) |
+| 2-11 | `ControlRequest`, `ControlResponse`, `WindowCommand`, `is_false`, `WindowCommandFrame`, `handle_request`, `open_path`, `abs_to_drive_rel`, `path_to_posix`, `parent_rel` | `crates/chan-server/src/control_socket.rs` |
+
+Only ONE of the 11 is in chan-desktop. The other ten are
+in `crates/chan-server/src/control_socket.rs` — a
+Unix-only IPC primitive whose operational code is
+`#[cfg(unix)]` but whose DECLARATIONS leak to Windows
+compilation. chan-desktop doesn't depend on chan-server
+(it pulls only `chan-tunnel-*`); they linted on Windows
+because `cargo clippy --workspace --all-targets` walks
+every workspace crate.
+
+### Root cause of my error
+
+I quoted @@Systacean's framing "from chan-desktop's IPC
+layer" as if it pointed to a location. It was actually a
+FUNCTIONAL ownership statement: the IPC primitive is
+consumed BY chan-desktop, but IMPLEMENTED in chan-server.
+Per the `feedback_ground_descriptions_in_source` memory
+rule, I should have grepped the source at task-cut time
+instead of paraphrasing the upstream framing.
+
+The lane attribution (@@FullStackB) was still correct —
+they're the natural owner of fixes affecting the IPC
+boundary they consume. Only the path scope + authorization
+were wrong.
+
+### Routing: option (A) — scope expansion
+
+@@FullStackB proposed three options:
+
+* (A) Expand `-24` authorization to also cover
+  `crates/chan-server/src/control_socket.rs`. Single
+  commit; single smoke fire.
+* (B) Split: chan-desktop in `-24`, new task for
+  chan-server. Two commits; two smoke fires.
+* (C) Re-cut `-24` with corrected scope. Cleanest
+  audit but slowest.
+
+Picked (A). The fix is mechanical (10 declaration-site
+`#[cfg(unix)]` matching the existing `#[cfg(unix)]`
+boundary already in `control_socket.rs` + 1
+`_exit_signal` rename); single commit keeps the unified
+"fully-green CI" goal in one logical change. @@Systacean
+in flight on `-16` (chan-report, not chan-server) means
+no concurrent-edit overlap.
+
+Architect-side appends landed:
+
+* `fullstack-b-24.md` tail: scope expanded + authorization
+  expanded + routing rationale. Task file now standalone-
+  readable for future audits.
+* `event-architect-fullstack-b.md`: ack of scope catch
+  + greenlight on (A).
+
+### Lesson reinforced (not new — memory rule was already there)
+
+`feedback_ground_descriptions_in_source` already said:
+"Don't invent crate/module capability descriptions from
+name + intuition. Read README/design.md/lib.rs first."
+The case extends naturally to: don't take peer-agent
+FUNCTIONAL framing as LOCATION info without empirical
+grep. The shape rule stays as-is; this is reinforcement,
+not a new memory entry.
+
+### Lane state at end of round
+
+| Lane | State |
+|------|-------|
+| @@Systacean | `-18` committed (`7a22e63`); expect `-16` pickup (file-class buckets, feature work) |
+| @@CI | Idle; queue-empty until wave-3 Linux-binaries |
+| @@FullStackA | `-a-45` committed (`1f80d09`); expect `-a-46` (Editor migration) commit-readiness poke |
+| @@FullStackB | `-24` scope-corrected + greenlit; expect implementation + smoke + commit-readiness poke |
+| @@WebtestA | Standing by; reactive lane |
+| @@WebtestB | Standing by; reactive lane |
+
+Three smoke branches now on origin (`ci-12-smoke` +
+`systacean-17-smoke` + `systacean-18-smoke`); a fourth
+(`fullstack-b-24-smoke`) lands when @@FullStackB pushes.
+All prune with the `chan-v0.11.99-dryrun.{1..4}` tag
+cleanup beat.
+
+### What I'm committing this round
+
+| File | Reason |
+|------|--------|
+| `architect/journal.md` | This entry |
+| `alex/event-architect-fullstack-b.md` | -24 scope-correction routing (option A) |
+| `fullstack-b/fullstack-b-24.md` | Scope expansion + corrected authorization appended to task body |
+
+NOT touching (other agents' own files):
+
+* `crates/chan-drive/src/{drive,indexer}.rs` (committed
+  in `7a22e63`).
+* `web/src/components/{HybridTerminalConfig.*, SettingsPanel.*}`
+  (committed in `1f80d09`).
+* All `event-<agent>-architect.md` files (agents' own
+  outbounds).
+* All task-file appends (`ci-12.md`, `ci/journal.md`,
+  `systacean-15.md`, `systacean-17.md`,
+  `fullstack-a-45.md`).

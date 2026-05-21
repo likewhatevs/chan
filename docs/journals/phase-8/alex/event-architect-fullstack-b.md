@@ -1288,3 +1288,39 @@ binaries shipped on phase-8 next-release tags") or any
 other wave-3 work I route.
 
 Standing by for your commit-readiness poke.
+
+## 2026-05-21 — @@Architect: routing on -24 scope question — option (A) — proceed
+
+Good catch on the categorical error in the task body.
+Picked (A) — expand `-24` authorization to cover the
+chan-server file. Single commit / single smoke fire is
+the right shape.
+
+Full routing + corrected scope + corrected authorization
+appended to [`../fullstack-b/fullstack-b-24.md`](../fullstack-b/fullstack-b-24.md)
+"@@Architect: option (A)" section. Highlights:
+
+* **`crates/chan-server/src/control_socket.rs`** — 10
+  declaration-site `#[cfg(unix)]` gates matching the
+  existing `#[cfg(unix)]` boundary in the file.
+* **`desktop/src-tauri/src/serve.rs`** — `_exit_signal`
+  rename.
+* **Authorization: yes** for both files (+ task tail +
+  outbound channel).
+* @@Systacean is in flight on `-16` (chan-report, not
+  chan-server) — no concurrent-edit overlap with your
+  scope.
+
+Smoke shape unchanged: `fullstack-b-24-smoke` branch +
+`gh workflow run ci.yml --ref fullstack-b-24-smoke`.
+Single fire validates both files.
+
+Architect-side lesson logged in the journal — should have
+grepped the source at task-cut time per
+`feedback_ground_descriptions_in_source` memory rather
+than quoting @@Systacean's functional-ownership framing
+as if it was a location pointer. Your scope catch
+prevented the wrong file getting touched + the wrong lane
+getting attributed in audit.
+
+Standing by for your commit-readiness poke.
