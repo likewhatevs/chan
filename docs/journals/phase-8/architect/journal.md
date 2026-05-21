@@ -2031,3 +2031,125 @@ NOT touching (other agents' own files):
 * All task-file appends (`ci-12.md`, `ci/journal.md`,
   `systacean-15.md`, `webtest-a-3.md`).
 * No code touched.
+
+## 2026-05-21 — clearance round 3 (-18 + -a-45) + cut fullstack-b-24 (final gate-unblocker)
+
+### Lane commit landed this beat
+
+| SHA | Subject | Lane |
+|-----|---------|------|
+| `c9fb768` | `docs: webtest-a-3 task close-out marker (-a-43 + -b-23 walks)` | @@WebtestA |
+
+Clean per Option A routing. @@WebtestA used `git commit
+<path> -m "..."` path-limit (bypassing the shared index)
++ post-commit `git show --stat HEAD` audit. No stowaways.
+
+### Two commit-readiness pokes cleared this round
+
+**@@Systacean -18** (chan-drive tests skip on missing BGE
+model): chose (a1) `#[ignore]` over my recommended (a2)
+`#[cfg(feature = "embed-model")]` for a legitimate reason
+— chan-drive doesn't declare `embed-model` (that feature
+lives in chan-server controlling rust-embed); adding a
+no-op flag purely for test gating would conflate
+semantics. Task body explicitly allowed the fallback;
+their reasoning matches. Empirical 14-test list from the
+`systacean-17-smoke` panic trace (not my line-number
+callout) — three architect-listed tests not in the panic
+list excluded, three empirical adds included. `cargo test
+-p chan-drive`: `411 passed; 0 failed; 16 ignored`; `--
+--ignored` runs all 16 cleanly on the workstation. No
+coverage loss.
+
+Smoke decision: option 1 (push to `systacean-18-smoke`
+branch + `gh workflow run ci.yml`). Same pattern as `-17`.
+Smoke joins the audit-trail-keep set alongside
+`ci-12-smoke` + `systacean-17-smoke`.
+
+**@@FullStackA -a-45** (migrate Terminal Settings from
+SettingsPanel.svelte to HybridTerminalConfig.svelte):
+clean migration; 88-line Terminal section shed; full
+Terminal config moved; existing wiring test repurposed
+as regression guard. vitest 606/606 (+6 net). Three
+flagged deviations all accepted:
+
+1. Last-writer-wins save race — narrow window; single-user
+   app; over-engineering to enforce optimistic concurrency.
+2. `hybrid-terminal-*` id namespacing — defensive; trivial
+   cost; don't revert.
+3. Two parallel save-status indicators — each surface
+   reports its own debounce; per-surface is the right
+   grain.
+
+(b) audit-trail correction for the a8e991a incident
+bundled into the same commit — `fullstack-a-44.md`
+append rides with `-a-45` per @@FullStackA's "your call"
+ask. Single commit closes both the new feature work AND
+the prior incident documentation. Closes the (b) loop
+cleanly.
+
+### Third gate-unblocker cut: fullstack-b-24
+
+@@Systacean's `systacean-17-smoke` run surfaced 11
+Windows-only chan-desktop dead_code lints (10 dead_code +
+1 unused_variable on `exit_signal`). All from
+`desktop/src-tauri/src/`; @@Systacean's read is that the
+items are declared at module scope but only used through
+`#[cfg(target_os = ...)]` paths that exclude Windows;
+declarations visible to all targets; Windows can't see
+them being used; clippy flags them.
+
+Cut [`../fullstack-b/fullstack-b-24.md`](../fullstack-b/fullstack-b-24.md)
+for @@FullStackB (chan-desktop lane). Fix shape (a) —
+per-item `#[cfg]` at declarations. Smoke shape:
+`fullstack-b-24-smoke` branch + `gh workflow run ci.yml`,
+authorized. Pre-commit discipline reminder included
+explicitly per the a8e991a aftermath (their first commit
+beat post-recycle; want the discipline applied
+proactively).
+
+### After all three gate-unblockers land
+
+Per-PR ci.yml gate goes **fully green for the first time
+since ~2026-05-19** (the full ~15-commit unverified
+window). That's the Round-3 readiness signal: the gate
+becomes load-bearing again, catching regressions
+reliably. Three smoke branches accumulate in the audit-
+trail-keep set; all prune with the
+`chan-v0.11.99-dryrun.{1..4}` tag cleanup beat.
+
+### Lane state at end of round
+
+| Lane | State |
+|------|-------|
+| @@Systacean | `-18` cleared; expect commit + smoke + `-16` pickup (file-class buckets, feature work) |
+| @@CI | Idle; queue-empty until wave-3 Linux-binaries dispatch |
+| @@FullStackA | `-a-45` cleared with (b) bundle; expect commit + `-a-46` pickup (Hybrid back-side Task C — Editor Settings migration) |
+| @@FullStackB | `-24` dispatched (Windows dead_code; gate-unblocker); pickup on read of `event-architect-fullstack-b.md` |
+| @@WebtestA | Close-out marker committed (`c9fb768`); reactive lane standing by |
+| @@WebtestB | Lesson absorbed; standing by; queue-empty |
+
+### What I'm committing this round
+
+| File | Reason |
+|------|--------|
+| `architect/journal.md` | This entry |
+| `alex/event-architect-systacean.md` | -18 clearance + a1 accepted + smoke option 1 + routing on Windows dead_code finding |
+| `alex/event-architect-fullstack-a.md` | -a-45 clearance + 3 deviations accepted + (b) bundle confirmed |
+| `alex/event-architect-fullstack-b.md` | -24 dispatch poke |
+| `fullstack-b/fullstack-b-24.md` | NEW task (Windows chan-desktop dead_code) |
+
+NOT touching (other agents' own files):
+
+* `crates/chan-drive/src/{drive,indexer}.rs` —
+  @@Systacean's `-18` code.
+* `web/src/components/{HybridTerminalConfig.svelte,
+  HybridTerminalConfig.test.ts, SettingsPanel.svelte,
+  SettingsPanel.terminal.test.ts}` — @@FullStackA's
+  `-a-45` code.
+* All `event-<agent>-architect.md` files (agents' own
+  outbounds; they commit with their work).
+* All task-file appends (`ci-12.md`, `ci/journal.md`,
+  `systacean-15.md`, `systacean-17.md`, `systacean-18.md`,
+  `fullstack-a-44.md`, `fullstack-a-45.md`,
+  `fullstack-a/journal.md`).

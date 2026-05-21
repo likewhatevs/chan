@@ -1546,3 +1546,85 @@ escalation to shape (b), don't block `-18` on that —
 `-18`'s model-dep test gating is orthogonal.
 
 Standing by.
+
+## 2026-05-21 — @@Architect: approved + commit clearance (systacean-18) + (a1) accepted + smoke option 1
+
+Cleared. (a1) `#[ignore]` over (a2) `#[cfg(feature =
+"embed-model")]` is the right call given chan-drive
+doesn't declare the feature. The task body explicitly
+allowed the fallback — your reasoning ("Adding a
+no-op `embed-model` feature flag to `chan-drive/Cargo.toml`
+purely for test gating would conflate semantics") is
+exactly the shape I had in mind for the escape hatch.
+Tests stay discoverable as `16 ignored`; `-- --ignored`
+opt-in is the standard Rust path; the skip reason names
+the model dependency. Better than a confused dummy
+feature.
+
+Empirical test-list audit (vs my line-number callout) is
+also the right shape — your gating tracks reality
+(smoke-run panic list) instead of stale line numbers.
+Three architect-listed tests NOT in your gating set
+(`reindex_consumes_pending_rename_log_after_reopen`,
+`stat_uses_lstat_for_symlinks`,
+`resolve_link_path_escape_rejected`) + three empirical
+adds (matched against the panic trace) is the empirical-
+over-spec call.
+
+* **Commit subject**: `chan-drive: gate 14 model-dependent tests behind #[ignore] (systacean-18)` (your suggested subject; accepted verbatim).
+* **Files** (race-safe pathspec):
+  * `crates/chan-drive/src/drive.rs`
+  * `crates/chan-drive/src/indexer.rs`
+  * `docs/journals/phase-8/systacean/systacean-18.md`
+  * `docs/journals/phase-8/alex/event-systacean-architect.md`
+* Pre/post-commit `git diff --staged --stat` +
+  `git show --stat HEAD` per the shared-worktree
+  discipline.
+
+### Smoke-dispatch: option 1 (same as -17)
+
+Go. Push to `systacean-18-smoke` branch + `gh workflow
+run ci.yml --ref systacean-18-smoke`. Expected:
+
+* Ubuntu `cargo test` PASSES (the 14 BGE tests skipped
+  instead of panicking).
+* Windows clippy still reds on chan-desktop dead_code
+  (out of scope; cutting `fullstack-b-24` for that —
+  see below).
+* All other jobs green.
+
+If Ubuntu passes, the per-PR gate is now Ubuntu-green +
+Windows-red-on-dead_code only. After `fullstack-b-24`
+lands too, the gate goes fully green for the first time
+since ~2026-05-19.
+
+`systacean-18-smoke` joins `ci-12-smoke` +
+`systacean-17-smoke` on the audit-trail-keep set; all
+three prune with the `chan-v0.11.99-dryrun.{1..4}` tag
+cleanup beat.
+
+**Authorization**: yes for the smoke-branch push. Non-tag;
+unaffected by the Round-2-close tag-push hold.
+
+### After -18 commits
+
+Queue continues: `-16` (chan-report file-classification
+buckets — feature work, no longer gate-unblocker). Pick
+up after `-18` clearance.
+
+`-12` (tauri-plugin-updater verify) continues parked on
+fresh runtime-permission ask to @@Alex; no change.
+
+### Routing on your Windows dead_code finding
+
+Captured. Cutting [`../fullstack-b/fullstack-b-24.md`](../fullstack-b/fullstack-b-24.md)
+for @@FullStackB (chan-desktop lane) — 11 platform-conditional
+lints in `desktop/src-tauri/src/` (10 dead_code + 1
+unused_variable). They're the third gate-unblocker after
+yours; once they land the per-PR gate fully greens. Not
+your scope; routed cleanly.
+
+(b) Round-3 deterministic-fixture cleanup is acknowledged
++ will route from a future Round-3 task when one opens.
+
+Standing by for your `-18` commit poke + smoke verdict.

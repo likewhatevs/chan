@@ -1212,3 +1212,79 @@ chan-desktop runtime permission survives recycle. No further
 tasks in your queue right now; the recycled architect will
 route per Item 6 Linux-binary wiring + BOOT chan-desktop side
 as wave-3 dispatches.
+
+## 2026-05-21 — poke (fullstack-b-24: Windows chan-desktop dead_code lints — final gate-unblocker)
+
+Cut [`../fullstack-b/fullstack-b-24.md`](../fullstack-b/fullstack-b-24.md).
+Routed to your lane after @@Systacean's `systacean-17-smoke`
+run ([26235956637](https://github.com/fiorix/chan/actions/runs/26235956637))
+cleared `result_large_err` on Windows and proceeded to red
+on 11 dead_code / unused_variable lints in
+`desktop/src-tauri/src/`.
+
+### Why this is the third gate-unblocker
+
+After `ci-12` (GTK install — landed), `systacean-17`
+(Windows result_large_err — landed), and `systacean-18`
+(BGE model-dep tests — in flight), the ONLY remaining CI
+red is these 11 chan-desktop lints. After `-24` lands,
+the per-PR ci.yml gate goes **fully green for the first
+time since ~2026-05-19**.
+
+### Fix shape
+
+Per-item `#[cfg(target_os = ...)]` gating at the
+declaration sites (the 11 items are platform-conditional;
+their callers are gated on macOS/Linux, declarations
+visible to all targets, Windows can't see them being used,
+clippy flags them). Recommended over `#[allow(dead_code)]`
+because it expresses the actual semantic as a build-level
+invariant.
+
+11 lints total: 10 dead_code + 1 unused_variable
+(`exit_signal`, rename to `_exit_signal` is the idiomatic
+fix).
+
+### Smoke shape
+
+Same as `-17` / `-18`: push to `fullstack-b-24-smoke`
+branch + `gh workflow run ci.yml --ref fullstack-b-24-smoke`.
+Authorized.
+
+Empirical Windows verification is canonical (local cross-
+compile from macOS is likely blocked by C-deps per
+@@Systacean's `-17` note; CI smoke is the gate).
+
+### Shared-infra authorization
+
+**Authorization: yes** for this task to edit
+`desktop/src-tauri/src/*.rs`. Non-tag smoke-branch push
+authorized. Standing chan-desktop runtime permission still
+applies if you want a 60-second runtime smoke on macOS
+after the `#[cfg]` change (declaration-only change; should
+not affect runtime, but cheap to verify).
+
+### Pre-commit discipline reminder
+
+The a8e991a cross-agent commit-hygiene incident routed
+lessons to @@WebtestB's channel and my journal. Same
+discipline applies to your first post-recycle commit:
+
+* `git add` explicit per-path; never `-A` / `.` in the
+  shared multi-agent tree.
+* Pre-commit `git diff --staged --stat` → walk the file
+  list; non-mine → `git restore --staged`.
+* Post-commit `git show --stat HEAD` → confirm scope.
+* `git commit --only <paths>` is the path-limited variant
+  (@@WebtestA uses it cleanly; bypasses the shared index
+  entirely).
+
+### Sequencing
+
+`-24` is your only dispatched task. After it commits +
+smokes green, you're queue-empty again until wave-3
+Linux-binaries dispatch (per `phase-8-bugs.md` "Linux
+binaries shipped on phase-8 next-release tags") or any
+other wave-3 work I route.
+
+Standing by for your commit-readiness poke.
