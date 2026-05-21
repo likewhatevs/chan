@@ -2760,3 +2760,131 @@ is also ready to start standalone right now if
 you'd rather defer the chan-reports decision
 entirely — that's option (C) from my scope
 question.
+
+## 2026-05-21 — poke (fullstack-a-48 ready for review — option B landed)
+
+`-a-48` ready for review per your option (B)
+routing. Six-file change: SPA + chan-server
+wiring. No chan-drive touched.
+
+### What landed
+
+**chan-server**:
+
+* `crates/chan-server/src/config.rs` — new
+  `ReportsConfig { enabled: bool }` struct;
+  `ServerConfig.reports` field with
+  `#[serde(default)]` so older `server.toml`
+  files round-trip cleanly. Default `true`.
+* `crates/chan-server/src/routes/preferences.rs`
+  — `PreferencesView.reports: ReportsConfig`
+  field; `preferences_view()` populates from
+  `server.reports.clone()`;
+  `apply_preferences()` writes
+  `server.reports = view.reports`.
+
+**SPA**:
+
+* `web/src/api/types.ts` — new
+  `ReportsPreferences { enabled: boolean }`
+  type; `Preferences.reports?` optional (so
+  older servers that don't yet emit the field
+  don't trip the TS type contract).
+* `web/src/components/HybridFileBrowserConfig.svelte`
+  populated from the `-a-43` stub with three
+  toggles:
+  - Semantic search (migrated verbatim from
+    SettingsPanel `-a-21`; full state machine,
+    polling, BuildInfo guard, formatModelSize).
+  - Multi-model picker placeholder (disabled
+    `<select>` with default
+    `BAAI/bge-small-en-v1.5`; Round-3 Track 2
+    populates).
+  - chan-reports toggle (NEW; writes
+    `editing.reports.enabled`; persists via
+    the merge-against-current-server PATCH
+    shape from `-a-45`/`-a-46`).
+* `web/src/components/HybridFileBrowserConfig.test.ts`
+  (new) — 11 wiring pins + 4 negative pins on
+  SettingsPanel.
+* `web/src/components/SettingsPanel.svelte` —
+  Semantic-search section + state machine +
+  helpers + type imports + CSS scope all
+  removed. After `-a-48` the overlay is the
+  About section + GlobalConfig autosave
+  plumbing only.
+
+### Default ON: the option B contract
+
+Today: chan-report runs unconditionally. Option
+B default ON behaviourally matches that — no
+toggle-lie risk. When backend gating lands
+(follow-up task), default flips to OFF per the
+round-2-plan §"Pre-flight feature toggles"
+opt-in spec.
+
+### Help text under chan-reports
+
+The toggle hint explicitly says backend gating
++ the destructive-on-disable modal land in a
+follow-up. Users don't expect "OFF" to stop the
+indexing yet.
+
+### Gate
+
+* vitest **637 / 637** (+15 net).
+* svelte-check 0 errors / 0 warnings across
+  3989 files. CSS sweep cleared 14 warnings
+  surfaced after markup removal.
+* npm build clean.
+* cargo fmt --check clean.
+* cargo clippy --all-targets -- -D warnings
+  clean.
+* cargo test -p chan-server: 205 / 205 pass.
+
+### Follow-up task scope captured
+
+Per your routing's "When you fire the (B) commit,
+append to `-a-48`'s tail a 'follow-up needed'
+note flagging..." instruction, the follow-up
+scope is documented at
+[`../fullstack-a/fullstack-a-48.md`](../fullstack-a/fullstack-a-48.md)
+"Follow-up needed (per @@Architect's routing)":
+
+* Backend gating in 4 chan-server route files.
+* chan-drive indexer-pass flag.
+* Destructive-on-disable confirmation modal.
+* Default flip ON → OFF.
+
+Probably crosses lanes to @@Systacean for the
+chan-drive piece.
+
+### Suggested commit subject
+
+```
+Migrate Search/Indexing/Reports settings to Hybrid FB back-side (fullstack-a-48 option B)
+```
+
+Single commit. SPA toggles + Rust ServerConfig
+field + PreferencesView round-trip + tests are
+all part of the same option B landing.
+
+### Files for `git add` (per-path discipline)
+
+* `crates/chan-server/src/config.rs`
+* `crates/chan-server/src/routes/preferences.rs`
+* `web/src/api/types.ts`
+* `web/src/components/HybridFileBrowserConfig.svelte`
+* `web/src/components/HybridFileBrowserConfig.test.ts`
+* `web/src/components/SettingsPanel.svelte`
+* `docs/journals/phase-8/fullstack-a/fullstack-a-48.md`
+* `docs/journals/phase-8/fullstack-a/journal.md`
+* `docs/journals/phase-8/alex/event-fullstack-a-architect.md`
+
+Push held — multi-agent tree commit
+discipline. Standing by for clearance. Once
+`-a-48` lands, queue behind is `-a-53` (theme
+architecture correction + bundled custom-TERM
+PARTIAL fix) → `-a-54` (flip UX redesign) →
+`-a-49..52` (graph overhaul) → `-a-42`
+(About).

@@ -253,3 +253,191 @@ Holding `-a-48` here until you route. Cleared
 through `-a-47` (`dd586fc`) committed; queue
 behind `-a-48` is `-a-42` (gates on A+B+C+F
 landing).
+
+## 2026-05-21 — ready for review (option B landed)
+
+Six-file change. SPA + chan-server wiring; no
+chan-drive touched.
+
+### Architecture
+
+Option (B) as routed by @@Architect at
+[`event-architect-fullstack-a.md`](../alex/event-architect-fullstack-a.md)
+"2026-05-21 — @@Architect: routing on -a-48
+scope question". The SPA toggle UI lands now;
+backend gating + default-flip-to-OFF +
+destructive-on-disable modal land in a
+follow-up task.
+
+### chan-reports wire-up (option B)
+
+* `crates/chan-server/src/config.rs`: new
+  `ReportsConfig { enabled: bool }` struct;
+  `ServerConfig.reports: ReportsConfig` field
+  with `#[serde(default)]` so older
+  `server.toml` files round-trip cleanly.
+  Default `true` (matches today's
+  unconditional chan-report behaviour).
+* `crates/chan-server/src/routes/preferences.rs`:
+  `PreferencesView.reports: ReportsConfig`
+  field; `preferences_view()` reads from
+  `server.reports.clone()`; `apply_preferences()`
+  writes `server.reports = view.reports`.
+* `web/src/api/types.ts`: new
+  `ReportsPreferences { enabled: boolean }`
+  type; `Preferences.reports?:
+  ReportsPreferences` optional field (so older
+  servers that don't ship the field don't trip
+  the type contract).
+
+### HybridFileBrowserConfig — three toggles
+
+* **Semantic search**: migrated verbatim from
+  SettingsPanel `-a-21`. Full state machine
+  (`semanticState` + `semanticDownloading` +
+  `semanticEnabling` + `semanticError` + 3-second
+  polling timer), `semanticToggle` /
+  `loadSemanticState` / `stopSemanticPoll`
+  helpers, `formatModelSize` formatter,
+  `BuildInfo` feature-flag guard. Stateful POSTs
+  against the chan-server (`api.semanticEnable` /
+  `Download` / `Disable` / `State`) — not a
+  Preferences-stored value, so the dirty/save
+  pipeline doesn't touch it.
+* **Multi-model picker**: placeholder
+  `<select disabled>` slot with the default
+  `BAAI/bge-small-en-v1.5` option. Round-3
+  Track 2 lands the model registry + the
+  picker functionality on top.
+* **chan-reports**: NEW toggle. Writes
+  `editing.reports.enabled`; persists via the
+  merge-against-current-server PATCH pattern
+  (re-fetches GlobalConfig before overlaying
+  just the `reports` field). Default ON
+  matches the option (B) wire default. Help
+  text flags that backend gating + the
+  destructive-on-disable modal land in a
+  follow-up task.
+
+### SettingsPanel trim
+
+After `-a-48` SettingsPanel is reduced to the
+About section + the GlobalConfig autosave
+plumbing. Removed:
+
+* Semantic-search markup (~65 lines).
+* `let semanticState/Downloading/Enabling/Error/
+  PollTimer` state.
+* `loadSemanticState` / `stopSemanticPoll` /
+  `semanticToggle` / `formatModelSize` helpers.
+* `SemanticState` type import.
+* `onDestroy` import (no longer needed; nothing
+  to clean up).
+* CSS sweep: `.hint`, `.hint code`, `.hint.err`,
+  `.theme-opt` (chip + variants),
+  `.semantic-toggle` (chip + disabled
+  variants), `.semantic-info`, `.spinner` +
+  `@keyframes spin`, `label` + `label > span`,
+  `input` + `input:focus`. All went unused
+  after the section migrated.
+
+### Tests
+
+`HybridFileBrowserConfig.test.ts` (new) — 11
+wiring pins + 4 negative pins against
+SettingsPanel:
+
+* Wiring: warning copy, semantic state machine
+  carries over, feature-flag guard, toggle
+  disable-during-progress, formatModelSize,
+  multi-model picker placeholder shape,
+  chan-reports binding, normalizeReports
+  default-ON backfill, save merges only
+  `reports` field, dirty scoped to the
+  `reports.enabled` field, polling cleanup on
+  destroy.
+* Negative: SemanticState type import gone,
+  semantic helpers gone, semantic state
+  variables gone, section header gone.
+
+### Gate
+
+* vitest **637 / 637** (+15 net from `-a-47`'s
+  622).
+* svelte-check 0 errors / 0 warnings across
+  3989 files. CSS sweep cleared 14 warnings
+  that surfaced after the markup removal.
+* npm build clean.
+* cargo fmt --check clean.
+* cargo clippy --all-targets -- -D warnings
+  clean.
+* cargo test -p chan-server: 205 / 205 pass.
+
+### Decisions
+
+* **Default ON for `reports.enabled`** — option
+  (B) routing's call; matches today's
+  unconditional behaviour. The default flips
+  to OFF when the backend gating ships.
+* **`reports` field optional on the TS side**
+  (`Preferences.reports?`) — old servers that
+  don't yet emit the field don't trip the
+  type contract. Backfill in
+  `normalizeReports` handles the load path.
+* **Help text under chan-reports toggle**
+  explicitly calls out that the toggle is
+  wire-only today + backend gating + modal
+  ships in the follow-up. Users see "Enable
+  chan-reports indexing" with a sub-hint
+  that flips to "OFF default once gating
+  lands". Avoids the toggle-lie surface
+  area the architect's option (B) call
+  carefully sidesteps.
+
+### Follow-up needed (per @@Architect's routing)
+
+When this lands, the next task should cover:
+
+* Backend gating in 4 chan-server route files
+  (`inspector`, `graph`, `report`, `storage`)
+  — return 404 / empty when `reports.enabled
+  == false`.
+* chan-drive indexer pass flag — skip the
+  per-drive chan-report indexing pass when
+  the toggle is OFF.
+* Destructive-on-disable confirmation modal —
+  per round-2-plan §"Pre-flight feature
+  toggles" lines 211-220; "OFF drops the
+  per-drive report data" requires a UI/CLI
+  confirmation gate.
+* Default flip ON → OFF once gating lands —
+  matches the "opt-in feature" framing from
+  the round-2-plan.
+
+Probably crosses lanes to @@Systacean for the
+chan-drive indexer pass flag piece.
+
+### Suggested commit subject
+
+```
+Migrate Search/Indexing/Reports settings to Hybrid FB back-side (fullstack-a-48 option B)
+```
+
+Single commit. SPA toggles + Rust ServerConfig
+field + PreferencesView round-trip + tests are
+all part of the same option (B) landing.
+
+### Files for `git add` (per-path discipline)
+
+* `crates/chan-server/src/config.rs`
+* `crates/chan-server/src/routes/preferences.rs`
+* `web/src/api/types.ts`
+* `web/src/components/HybridFileBrowserConfig.svelte`
+* `web/src/components/HybridFileBrowserConfig.test.ts`
+* `web/src/components/SettingsPanel.svelte`
+* `docs/journals/phase-8/fullstack-a/fullstack-a-48.md`
+* `docs/journals/phase-8/fullstack-a/journal.md`
+* `docs/journals/phase-8/alex/event-fullstack-a-architect.md`
+
+Push held — multi-agent tree commit
+discipline. Standing by for clearance.

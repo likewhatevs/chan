@@ -735,3 +735,99 @@ readiness; standing by. Queue waiting: `-a-48`
 (Task F — Search/Indexing/Reports + chan-reports
 toggle restore), then `-a-49..52` (graph
 overhaul) + `-a-42` (About).
+
+## 2026-05-21 — -a-47 committed; -a-48 (option B) ready for review
+
+`-a-47` cleared + committed as `dd586fc Drop
+front/back independent theme; single per-Hybrid
+value (fullstack-a-47)` with both deviations
+accepted. 6 files, no stowaways.
+
+@@Architect routed my `-a-48` scope question via
+[`event-architect-fullstack-a.md`](../alex/event-architect-fullstack-a.md)
+"2026-05-21 — @@Architect: routing on -a-48
+scope question — option (B) + PARTIAL fold into
+-a-53": option B selected. PARTIAL fix from
+WebtestA's webtest-a-4 walk (HybridTerminalConfig
+custom-TERM input rendering) folded into `-a-53`
+rather than a standalone task.
+
+### -a-48 complete (Hybrid back-side Task F option B)
+
+Six-file change: SPA + chan-server wiring. No
+chan-drive touched.
+
+* `crates/chan-server/src/config.rs` — new
+  `ReportsConfig { enabled: bool }`;
+  `ServerConfig.reports` field with default ON.
+* `crates/chan-server/src/routes/preferences.rs`
+  — `PreferencesView.reports` field round-trips
+  through `/api/config`.
+* `web/src/api/types.ts` — new
+  `ReportsPreferences { enabled: boolean }`;
+  `Preferences.reports?` optional (back-compat).
+* `web/src/components/HybridFileBrowserConfig.svelte`
+  populated from stub with 3 toggles:
+  - **Semantic search** migrated verbatim from
+    SettingsPanel `-a-21` (state machine,
+    polling, BuildInfo guard, formatModelSize).
+  - **Multi-model picker** placeholder slot
+    (disabled `<select>` with the default
+    `BAAI/bge-small-en-v1.5`; Round-3 Track 2
+    populates).
+  - **chan-reports** toggle (new). Writes
+    `editing.reports.enabled`; persists via the
+    merge-against-current-server PATCH from
+    `-a-45`/`-a-46`. Default ON. Help text
+    flags backend gating is a follow-up task.
+* `web/src/components/HybridFileBrowserConfig.test.ts`
+  — 11 wiring pins + 4 negative pins.
+* `web/src/components/SettingsPanel.svelte` —
+  Semantic-search section, state machine,
+  helpers, type imports, `onDestroy` import,
+  and ~13 stale CSS rules all removed. After
+  `-a-48`, SettingsPanel is the About section
+  + GlobalConfig autosave plumbing only.
+
+### Default ON
+
+Option B's call: today's behaviour is
+unconditional chan-report; the toggle defaults
+to ON behaviourally matching that. When the
+backend gating + destructive-on-disable modal
+land (follow-up task), the default flips to OFF
+per the round-2-plan §"Pre-flight feature
+toggles" opt-in spec.
+
+### Gate
+
+* vitest **637 / 637** (+15 net from -a-47's
+  622; 11 wiring + 4 negative pins).
+* svelte-check 0 errors / 0 warnings across
+  3989 files. CSS sweep cleared 14 warnings.
+* npm build clean.
+* cargo fmt --check clean.
+* cargo clippy --all-targets -- -D warnings
+  clean.
+* cargo test -p chan-server: 205 / 205 pass.
+
+### Follow-up needed
+
+When `-a-48` lands, the next task should cover:
+- Backend gating across 4 chan-server route files
+  (`inspector` / `graph` / `report` / `storage`).
+- chan-drive indexer-pass flag for the
+  reports-off case.
+- Destructive-on-disable confirmation modal.
+- Default flip ON → OFF.
+
+Probably crosses lanes to @@Systacean for the
+chan-drive indexer-pass flag piece.
+
+Impl note + commit subject at
+[fullstack-a-48.md](fullstack-a-48.md). Outbound
+poke fired; standing by. Queue waiting: `-a-53`
+(theme architecture correction + bundled
+custom-TERM PARTIAL fix) → `-a-54` (flip UX
+redesign) → `-a-49..52` (graph overhaul) →
+`-a-42` (About).

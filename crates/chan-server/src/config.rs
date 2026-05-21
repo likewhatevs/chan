@@ -34,6 +34,37 @@ pub struct ServerConfig {
     pub search: SearchConfig,
     #[serde(default)]
     pub terminal: TerminalConfig,
+    #[serde(default)]
+    pub reports: ReportsConfig,
+}
+
+/// `fullstack-a-48` Task F: per-server chan-reports toggle.
+/// Round-tripped through `/api/config` so the SPA's Hybrid FB
+/// back-side toggle has somewhere to store its state. Option (B)
+/// landing: the field round-trips today; backend gating across
+/// the four chan-server routes (`inspector`, `graph`, `report`,
+/// `storage`), the chan-drive indexer-pass flag, and the
+/// destructive-on-disable confirmation modal are a follow-up
+/// task. Default ON preserves today's unconditional
+/// chan-report behaviour while the toggle UI lands; the default
+/// flips to OFF once the backend gating ships (per the
+/// round-2-plan §"Pre-flight feature toggles" spec).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ReportsConfig {
+    #[serde(default = "default_reports_enabled")]
+    pub enabled: bool,
+}
+
+impl Default for ReportsConfig {
+    fn default() -> Self {
+        Self {
+            enabled: default_reports_enabled(),
+        }
+    }
+}
+
+fn default_reports_enabled() -> bool {
+    true
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -116,6 +147,7 @@ impl Default for ServerConfig {
             attachments_dir: default_attachments_dir(),
             search: SearchConfig::default(),
             terminal: TerminalConfig::default(),
+            reports: ReportsConfig::default(),
         }
     }
 }
@@ -189,6 +221,7 @@ mod tests {
                 scrollback_mb: 100,
                 default_term: "tmux-256color".into(),
             },
+            reports: ReportsConfig { enabled: false },
         };
         cfg.save_to(&p).unwrap();
         let loaded = ServerConfig::load_from(&p).unwrap();

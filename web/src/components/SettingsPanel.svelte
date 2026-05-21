@@ -8,13 +8,12 @@
   //
   // Auto-saves on change (500 ms debounce).
 
-  import { onDestroy, onMount } from "svelte";
+  import { onMount } from "svelte";
   import { api } from "../api/client";
   import type {
     BuildInfo,
     GlobalConfig,
     Preferences,
-    SemanticState,
   } from "../api/types";
   import { Maximize2, Minimize2, X } from "lucide-svelte";
   import {
@@ -32,13 +31,19 @@
   // (scrollback MB + default TERM, originally `fullstack-b-11`) out
   // of this overlay into `HybridTerminalConfig.svelte`.
   //
-  // `fullstack-a-46` (Task C) moves the Editor settings
+  // `fullstack-a-46` (Task C) moved the Editor settings
   // (Editor theme, Appearance, Layout / line spacing, Date pills /
   // date format, On save / strip trailing whitespace) out of this
-  // overlay into `HybridEditorConfig.svelte`. The relevant
-  // imports, derived view helpers, $effects, and CSS scope all
-  // live in that component now; this overlay no longer touches
-  // the editor preference fields directly.
+  // overlay into `HybridEditorConfig.svelte`.
+  //
+  // `fullstack-a-48` (Task F option B) moves the Semantic search
+  // section out of this overlay into `HybridFileBrowserConfig.svelte`
+  // alongside the new chan-reports toggle + the future multi-model
+  // picker placeholder. After `-a-48`, this overlay is reduced to
+  // the About section + the GlobalConfig autosave plumbing; the
+  // Settings-shaped surface for editor preferences (-a-53 will
+  // revert Appearance) and FB preferences (this task) lives in
+  // the Hybrid back-side surfaces.
 
   function doToggleOverlayMaximized(): void {
     setOverlayMaximized(!overlayMaximized.on);
@@ -224,109 +229,20 @@
     }
   }
 
-  /// `fullstack-a-21` semantic-search opt-in. Snapshot of the
-  /// server's `systacean-7` state plus a downloading flag the UI
-  /// owns (we don't store it server-side; it lives in the
-  /// in-flight POST). Error sticks until the next user action.
-  let semanticState = $state<SemanticState | null>(null);
-  let semanticDownloading = $state(false);
-  let semanticEnabling = $state(false);
-  let semanticError = $state<string | null>(null);
-  /// Polling handle used during downloads. The download endpoint
-  /// is synchronous in v1 (no per-byte progress events), so we
-  /// poll `/api/index/semantic/state` every few seconds during
-  /// the wait to detect the `model_present` transition out-of-band
-  /// from the awaited POST. Cleared on success / failure / unmount.
-  let semanticPollTimer: ReturnType<typeof setInterval> | null = null;
-  const SEMANTIC_POLL_INTERVAL_MS = 3000;
-
-  async function loadSemanticState(): Promise<void> {
-    try {
-      semanticState = await api.semanticState();
-    } catch {
-      // Older servers without the endpoint surface as a no-op; the
-      // section just renders the "not available" placeholder.
-      semanticState = null;
-    }
-  }
-
-  function stopSemanticPoll(): void {
-    if (semanticPollTimer !== null) {
-      clearInterval(semanticPollTimer);
-      semanticPollTimer = null;
-    }
-  }
-
-  async function semanticToggle(next: boolean): Promise<void> {
-    if (!semanticState) return;
-    semanticError = null;
-    if (next) {
-      if (semanticState.model_present) {
-        // Model already on disk — just enable. No download wait.
-        semanticEnabling = true;
-        try {
-          semanticState = await api.semanticEnable();
-        } catch (err) {
-          semanticError = (err as Error).message;
-        } finally {
-          semanticEnabling = false;
-        }
-        return;
-      }
-      // First-time download. Kick off the synchronous POST and
-      // start polling state in parallel so the spinner reflects
-      // the model_present transition even before the POST returns.
-      semanticDownloading = true;
-      stopSemanticPoll();
-      semanticPollTimer = setInterval(() => {
-        void loadSemanticState();
-      }, SEMANTIC_POLL_INTERVAL_MS);
-      try {
-        semanticState = await api.semanticDownload();
-        stopSemanticPoll();
-        // Server returns the post-download state; auto-enable on
-        // top so the toggle lands ON rather than leaving the user
-        // a second click on a freshly-downloaded model.
-        semanticEnabling = true;
-        try {
-          semanticState = await api.semanticEnable();
-        } finally {
-          semanticEnabling = false;
-        }
-      } catch (err) {
-        stopSemanticPoll();
-        semanticError = (err as Error).message;
-        // Refresh state so the toggle reflects whatever the server
-        // ended up with (the download may have partially landed).
-        await loadSemanticState();
-      } finally {
-        semanticDownloading = false;
-      }
-    } else {
-      try {
-        semanticState = await api.semanticDisable();
-      } catch (err) {
-        semanticError = (err as Error).message;
-      }
-    }
-  }
-
-  function formatModelSize(bytes: number | null): string {
-    if (bytes === null || bytes <= 0) return "size unknown";
-    const mb = bytes / (1024 * 1024);
-    return `${mb.toFixed(1)} MB`;
-  }
+  // `fullstack-a-48` (Task F option B) moved the Semantic-search
+  // state machine + helpers into `HybridFileBrowserConfig.svelte`.
+  // The semantic-search state (semanticState, semanticDownloading,
+  // semanticEnabling, semanticError, polling timer), the
+  // semanticToggle / loadSemanticState helpers, formatModelSize,
+  // and the SemanticState import all live there now. This overlay
+  // keeps only the GlobalConfig autosave plumbing + the About
+  // section.
 
   onMount(() => {
     // Make sure we have the latest server state when the tab opens.
     void refreshDrive();
     void loadGlobalConfig();
     void loadBuildInfo();
-    void loadSemanticState();
-  });
-
-  onDestroy(() => {
-    stopSemanticPoll();
   });
 </script>
 
@@ -384,71 +300,14 @@
          `HybridEditorConfig.svelte` now. -->
 
 
-    <!-- `fullstack-a-21`: opt-in to Hybrid search (BM25 + dense
-         vectors via BGE-small). The model is no longer bundled in
-         the default binary (`systacean-6` cargo feature gate); the
-         user downloads it on demand from this row. v1 uses a
-         spinner + polling pattern rather than a per-byte progress
-         bar because hf-hub doesn't expose progress callbacks
-         (per @@Systacean's `systacean-7` constraint); the
-         downloading endpoint is synchronous and the UI polls
-         `/state` in parallel to surface the model_present
-         transition. -->
-    <section>
-      <h3>Semantic search</h3>
-      {#if buildInfo && !buildInfo.features.embeddings}
-        <p class="hint">
-          Semantic search isn't compiled into this binary. Rebuild
-          with <code>--features embed-model</code> (or install a
-          chan release that includes it) to enable Hybrid search.
-        </p>
-      {:else if semanticState === null}
-        <p class="hint muted">Loading semantic-search state…</p>
-      {:else}
-        <p class="hint">
-          Hybrid search blends BM25 keyword scoring with dense-vector
-          similarity from
-          <code>{semanticState.model_name}</code>
-          ({formatModelSize(semanticState.model_size_bytes)}). The
-          model file is shared across drives.
-        </p>
-        <label class="theme-opt semantic-toggle" class:on={semanticState.semantic_enabled}>
-          <input
-            type="checkbox"
-            checked={semanticState.semantic_enabled}
-            disabled={semanticDownloading || semanticEnabling}
-            onchange={(e) =>
-              void semanticToggle((e.currentTarget as HTMLInputElement).checked)}
-          />
-          <span>
-            Enable semantic search (Hybrid mode)
-          </span>
-        </label>
-        {#if semanticDownloading}
-          <p class="hint muted">
-            <span class="spinner" aria-hidden="true"></span>
-            Downloading model… this may take a few minutes.
-          </p>
-        {:else if semanticEnabling}
-          <p class="hint muted">Enabling…</p>
-        {/if}
-        <div class="grid semantic-info">
-          <span class="k">Active</span>
-          <span class="v">
-            {#if semanticState.mode === "hybrid"}
-              <span class="ok">Hybrid (BM25 + semantic)</span>
-            {:else}
-              <span class="muted">BM25</span>
-            {/if}
-          </span>
-          <span class="k">Stored at</span>
-          <span class="v mono" title="Shared across drives">{semanticState.model_path}</span>
-        </div>
-        {#if semanticError}
-          <p class="hint err" role="alert">{semanticError}</p>
-        {/if}
-      {/if}
-    </section>
+    <!-- `fullstack-a-48` (Task F option B) removed the Semantic
+         search section. Its UI + state machine live in
+         `HybridFileBrowserConfig.svelte` now (alongside the new
+         chan-reports toggle + the Round-3 multi-model picker
+         placeholder). Semantic-search state isn't a Preferences
+         field — its enable/disable POSTs against the chan-server
+         directly — so nothing in the GlobalConfig autosave path
+         changes. -->
 
     <section class="about">
       <h3>About</h3>
@@ -578,28 +437,12 @@
     text-transform: uppercase;
     letter-spacing: 0.05em;
   }
-  label {
-    display: grid;
-    grid-template-columns: 7em 1fr;
-    align-items: center;
-    gap: 0.5rem;
-    font-size: 15px;
-  }
-  label > span { color: var(--text-secondary); }
-  /* `fullstack-a-46`: `select` rule dropped — no select element
-     remains in this overlay after the Date pills migration. */
-  input {
-    background: var(--bg-card);
-    color: var(--text);
-    border: 1px solid var(--border);
-    border-radius: 4px;
-    padding: 4px 7px;
-    font: inherit;
-    font-size: 15px;
-    outline: none;
-    width: 100%;
-  }
-  input:focus { border-color: var(--link); }
+  /* `fullstack-a-48` (Task F option B): the generic `label`,
+     `label > span`, `input`, `input:focus` rules went unused
+     after the Semantic search section migrated to
+     `HybridFileBrowserConfig.svelte`. No form controls remain in
+     this overlay — only the About <div class="grid"> read-only
+     view. Dropped to keep svelte-check clean. */
   .grid {
     display: grid;
     grid-template-columns: 7em 1fr;
@@ -610,89 +453,14 @@
   .grid .v { color: var(--text); }
   .mono { font-family: ui-monospace, monospace; }
   .muted { color: var(--text-secondary); font-style: italic; }
-  .hint {
-    color: var(--text-secondary);
-    font-size: 11.5px;
-    margin: 0 0 0.5rem 0;
-  }
-  .hint code {
-    font-family: ui-monospace, monospace;
-    font-size: 13px;
-    background: var(--bg-card);
-    padding: 0 4px;
-    border-radius: 3px;
-  }
-  /* `.theme-opt` chip shape is reused by the semantic-search
-     toggle (`<label class="theme-opt semantic-toggle">` at line
-     415); the Editor / Layout / Date pills usages migrated to
-     `HybridEditorConfig.svelte` with `-a-46`. The undo of the
-     generic `label { display: grid }` and `input { width: 100% }`
-     rules stays here because the semantic toggle still depends
-     on it. */
-  .theme-opt {
-    display: inline-flex;
-    align-items: center;
-    gap: 6px;
-    padding: 4px 10px;
-    border: 1px solid var(--btn-border);
-    border-radius: 4px;
-    background: var(--btn-bg);
-    cursor: pointer;
-    font-size: 14px;
-  }
-  /* `fullstack-a-46`: `.theme-opt input[type="radio"]` rule
-     dropped — semantic-toggle is the only remaining `.theme-opt`
-     consumer here, and it's a checkbox. The checkbox-specific
-     reset is just below in `.semantic-toggle input[type="checkbox"]`. */
-  .theme-opt > span { color: var(--text); }
-  .theme-opt:hover { border-color: var(--btn-hover); }
-  .theme-opt.on {
-    border-color: var(--link);
-    background: var(--hover-bg);
-  }
   .v .ok { color: var(--accent); }
-  .hint.err { color: #d33; }
-  /* `fullstack-a-21`: re-use the theme-opt chip shape for the
-     semantic-search toggle so it visually matches the rest of
-     the Settings chips. The checkbox is a distinct input shape
-     (vs the radios theme-opt was built for), so a few resets
-     undo the generic `input { width: 100% }` rule above. */
-  .semantic-toggle {
-    margin-bottom: 0.5rem;
-  }
-  .semantic-toggle input[type="checkbox"] {
-    width: auto;
-    margin: 0;
-    padding: 0;
-    border: 0;
-    background: transparent;
-  }
-  .semantic-toggle input[type="checkbox"]:disabled,
-  .semantic-toggle:has(input[type="checkbox"]:disabled) {
-    cursor: not-allowed;
-    opacity: 0.7;
-  }
-  .semantic-info {
-    margin-top: 0.5rem;
-    font-size: 13px;
-  }
-  .spinner {
-    display: inline-block;
-    width: 0.85em;
-    height: 0.85em;
-    margin-right: 0.25em;
-    vertical-align: -0.1em;
-    border: 2px solid var(--border);
-    border-top-color: var(--link);
-    border-radius: 50%;
-    animation: spin 0.9s linear infinite;
-  }
-  @keyframes spin {
-    to { transform: rotate(360deg); }
-  }
-  @media (prefers-reduced-motion: reduce) {
-    .spinner { animation: none; border-top-color: var(--border); }
-  }
+  /* `fullstack-a-48` (Task F option B) swept the semantic-search
+     CSS scope (`.theme-opt` chips + `.semantic-toggle` checkbox
+     reset + `.semantic-info` info grid + `.spinner` download
+     indicator + `.hint` / `.hint code` / `.hint.err` paragraph
+     styles) — all migrated to `HybridFileBrowserConfig.svelte`
+     alongside the section markup. The About section keeps
+     `.grid`, `.mono`, `.muted`, `.v .ok`. */
   /* Tab-bar autosave indicator. Sits between the title and the
      actions strip. Empty when idle (no extra padding). */
   .save-status { font-size: 14px; min-width: 60px; text-align: right; }
