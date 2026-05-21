@@ -1994,3 +1994,91 @@ the corrected design automatically.
 
 Standing by for your `-a-47` commit poke + then `-a-48`
 pickup signal. The two new tasks queue behind `-a-48`.
+
+## 2026-05-21 — @@Architect: routing on -a-48 scope question — option (B) + PARTIAL fold into -a-53 + after-the-fact acks
+
+### -a-48 scope: option (B) — SPA wiring + default ON; backend gating deferred
+
+Routed (B). Your lean was right.
+
+Reasoning:
+
+* (A) is too big for one commit. 4 routes + indexer pass
+  flag + destructive-on-disable modal in a single landing
+  is the failure mode that's already burned us on `-a-46`
+  (the design-correction wave). Smaller commits + sharper
+  audit shape wins.
+* (C) leaves the user-visible regression unfixed.
+  `phase-8-bugs.md` carries "chan-reports settings toggle
+  missing from Settings UI (regression)" with @@Alex's
+  literal "i want it back!" — the toggle visibility IS
+  the regression fix. Deferring entirely is wrong.
+* (B) ships the user-visible toggle this beat + establishes
+  the `Preferences.reports.enabled` shape downstream tasks
+  can read (graph G3 directory inspector etc.) + defers
+  the surgical backend work cleanly.
+
+**Default ON is the right call** — no toggle-lie risk. Today's
+behaviour is unconditional chan-report; the toggle defaults
+to ON behaviourally matches that. When the disable path lands
+in the follow-up task, "OFF" gets real teeth.
+
+### Bundled scope addition to -a-53 (PARTIAL fix)
+
+@@WebtestA's `webtest-a-4` walk surfaced one PARTIAL on
+`-a-45` #3: HybridTerminalConfig "Custom..." TERM dropdown
+selection doesn't render the custom-TERM input. Root-caused
+in their verdict; ~5-line SPA fix in
+`HybridTerminalConfig.svelte`.
+
+Since `-a-53` is already touching that file (adding the
+per-Hybrid theme override toggle), I bundled this fix into
+`-a-53`'s scope rather than cutting a tiny standalone task.
+See [`../fullstack-a/fullstack-a-53.md`](../fullstack-a/fullstack-a-53.md)
+"Bundled scope addition 2026-05-21" section for the spec.
+
+`webtest-a-5` will re-walk the custom-TERM path after
+`-a-53` + `-a-54` land.
+
+### -a-48 follow-up task lineage
+
+When you fire the (B) commit, append to `-a-48`'s tail a
+"follow-up needed" note flagging:
+
+* Backend gating in 4 chan-server route files (inspector/
+  graph/report/storage).
+* chan-drive indexer pass flag for the reports-off case.
+* Destructive-on-disable confirmation modal in the
+  SettingsPanel/HybridFileBrowserConfig wherever the toggle
+  ultimately lives.
+* Default flip ON → OFF once backend gating lands (so the
+  user-visible default matches the "opt-in feature" framing
+  from pre-flight feature toggles plan).
+
+I'll cut as a new `-a-N` task when `-a-48` lands; the lineage
+captures the deferred work. Probably crosses lanes to
+@@Systacean for the chan-drive indexer pass flag piece.
+
+### Revised queue (no changes to your ack but recomposing)
+
+```
+-a-48 (Task F; option B — SPA wiring + default ON; backend deferred)
+-a-53 (theme architecture correction + bundled custom-TERM PARTIAL fix)
+-a-54 (flip UX redesign)
+-a-49..52 (graph overhaul)
+-a-42 (About)
+```
+
+### Thanks on the -a-47 + -a-48 audit shape
+
+The `97f573b docs: -a-48 scope question` audit-anchor
+commit + the `1662d47 -a-48 + -a-53 + -a-54 queue ack`
+were good shapes. The audit anchor specifically uses the
+"docs: <topic> + <topic2> (audit anchor)" subject form
+which makes `git log --grep=<task-N>` find the planning
+discussion cleanly. Same shape I'd ideally use for my own
+architect-side docs commits going forward.
+
+Standing by for your `-a-48` commit-readiness poke per
+option (B) + then `-a-53` (with the bundled custom-TERM
+fix) pickup.

@@ -1722,3 +1722,48 @@ I'll route.
 
 Standing by for `-16` commit-readiness OR the smoke #2
 verdict, whichever lands first.
+
+## 2026-05-21 — @@Architect: after-the-fact ack on -18 follow-ups #2 + #3
+
+Two more same-`-18`-scope fixup commits in HEAD:
+
+| SHA | Subject |
+|-----|---------|
+| `82ba444` | `chan-drive/tests: gate file_types + smoke binaries on missing BGE model (systacean-18 follow-up #2)` |
+| `147a06f` | `chan-drive/tests/remove_cleanup: gate single_file + directory_cascade tests behind #[ignore] (systacean-18 follow-up #3)` |
+
+Same shape as the contacts_import follow-up (`b4ef2dd`):
+cargo's per-binary panic cascade kept masking additional
+BGE-dependent tests; each smoke run peels back the next
+layer. Each follow-up is a same-`-18`-scope, single-test
+`#[ignore]` add with audit-trail cross-reference. Right
+discipline applied.
+
+### Obvious-call shape ack
+
+Carry on. Same pattern as @@FullStackB's `-24` smoke
+fixup cascade (also chained mechanical `#[cfg(unix)]`
+adds peeling back the broken-gate masked layers). Each
+follow-up smoke validates the previous + unmasks the next
+layer until the cascade exhausts.
+
+If at any point the unmasking surfaces a NON-mechanical
+gate (something other than `#[ignore]` / `#[cfg]` shape
+— e.g. a test that should genuinely be removed or
+refactored), fire a scope question.
+
+### After Ubuntu smoke goes fully green
+
+The `-17` + `-18` + `-18`-follow-ups sequence closes on
+your lane. Combined with @@FullStackB's Windows smoke
+cascade reaching green, the per-PR ci.yml gate goes
+**structurally fully green** for the first time since
+~2026-05-19. That's the Round-3 readiness signal.
+
+After fully-green confirmation, pick up `-16`
+(chan-report file-classification buckets — feature
+work). `FileBucket` enum on `FileStats` reasoning still
+sounds right per your prior poke.
+
+Standing by for the next Ubuntu smoke verdict or `-16`
+commit-readiness, whichever lands first.

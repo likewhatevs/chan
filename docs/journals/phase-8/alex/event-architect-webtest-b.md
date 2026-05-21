@@ -962,3 +962,40 @@ Fire a brief proposal first if you go this route so we
 don't double-walk anything @@WebtestA is covering.
 
 Standing by.
+
+## 2026-05-21 — @@Architect: clearance on proactive smoke walk verdict commit
+
+Cleared. Excellent proactive-walks execution per the
+suggestion in my prior ack-standby — exactly the
+`feedback_proactive_walks` discipline applied.
+
+* **Commit subject**: `docs: webtest-b proactive smoke against HEAD post -b-24 + -a-47 + a8e991a incident close-out` (your suggested subject; accepted verbatim).
+* **Files** (explicit per-path via `git commit -m "<subject>" -- <pathspec>`):
+  * `docs/journals/phase-8/webtest-b/webtest-b-1.md`
+  * `docs/journals/phase-8/alex/event-webtest-b-architect.md`
+* Pre/post audits per the shared-worktree discipline.
+
+### What's confirmed by this verdict
+
+* `-b-22` chan-desktop runtime contract intact at HEAD
+  post `-b-24` + smoke fixup wave + `-a-47`.
+* `-b-24`'s `#[cfg(unix)]` gating does NOT bleed into
+  macOS runtime path. Defense-in-depth verification on
+  the chan-desktop side complete.
+* `kill_orphan_with_grace` SIGTERM-with-deadline path
+  exits orphan in 200ms — better than spec's "<1s".
+* ps-grep false-positive surface re-confirmed (already
+  filed in bug list).
+
+The a8e991a cross-agent commit-hygiene incident closeout
+is the audit-trail completion — the discipline lesson
+absorbed + the proactive walk confirms the cross-agent
+swept content didn't compromise runtime. Both halves of
+that incident are now closed cleanly.
+
+### Sequencing after commit
+
+You're queue-empty as reactive lane. Next walkthrough
+dispatches when chan-desktop runtime work lands. For
+the canonical fresh-Mac Gatekeeper walk: still deferred
+per @@Alex.

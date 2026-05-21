@@ -2697,3 +2697,152 @@ explicitly confirmed, raise the flag explicitly to
 | `webtest-a/webtest-a-4.md` | design-context note for the walk |
 | `fullstack-a/fullstack-a-53.md` | NEW task (theme architecture correction) |
 | `fullstack-a/fullstack-a-54.md` | NEW task (flip UX redesign) |
+
+## 2026-05-21 — clearance round 6 — 8 lane commits acked + -a-48 routed (option B) + PARTIAL folded into -a-53
+
+### Lane commits landed this beat (8)
+
+| SHA | Subject | Lane |
+|-----|---------|------|
+| `f796345` | `chan: gate Unix-only ControlResponse enum on Windows (fullstack-b-24 smoke #2 fixup)` | @@FullStackB |
+| `dd586fc` | `Drop front/back independent theme; single per-Hybrid value (fullstack-a-47)` | @@FullStackA |
+| `82ba444` | `chan-drive/tests: gate file_types + smoke binaries on missing BGE model (systacean-18 follow-up #2)` | @@Systacean |
+| `97f573b` | `docs: -a-48 scope question for chan-reports backend gating + -a-47 commit marker (fullstack-a-48 audit anchor)` | @@FullStackA |
+| `68e1cbc` | `chan: gate Deserialize import on Windows (fullstack-b-24 smoke #3 fixup)` | @@FullStackB |
+| `147a06f` | `chan-drive/tests/remove_cleanup: gate single_file + directory_cascade tests behind #[ignore] (systacean-18 follow-up #3)` | @@Systacean |
+| `06afe3f` | `docs: webtest-a-4 — Hybrid back-side wave + drag walkthrough (17/18 HOLD, 1 PARTIAL on -a-45 custom TERM)` | @@WebtestA |
+| `b01b310` | `chan-server: gate Unix-only fs_graph test helpers on Windows (fullstack-b-24 smoke #4 fixup)` | @@FullStackB |
+| `1662d47` | `docs: -a-48 + -a-53 + -a-54 queue ack to @@Architect (fullstack-a)` | @@FullStackA |
+
+(9 commits actually, including the queue-ack. Listed above.)
+
+Both @@FullStackB and @@Systacean continued their iterative
+mechanical-fixup cascade pattern — same-task-scope fixup
+commits unmasking the next layer of Windows clippy /
+Ubuntu cargo test items that the broken pre-`ci-12`-and-`-17`
+gate had been hiding.
+
+### -a-48 scope question — option (B) routed
+
+@@FullStackA picked up `-a-48` (Task F — Search/Indexing/
+Reports migration to FB back + chan-reports toggle
+restore) and hit a scope question on first audit. The
+chan-reports toggle was specced in the round-2-plan
+pre-flight feature toggles but **never landed in v1**;
+NO Preferences shape, NO chan-server gating, NO chan-drive
+indexer pass flag.
+
+Three options:
+
+* **(A)** Full -a-48: SPA + chan-server route gating in 4
+  files + chan-drive indexer pass flag + destructive-on-
+  disable modal, all in one commit. Big.
+* **(B)** SPA wiring + default ON; backend gating deferred
+  (their lean).
+* **(C)** Defer chan-reports entirely; ship semantic-search
+  migration only.
+
+**Routed (B).** Reasoning:
+
+* (A) is too big — same shape that burned us on `-a-46`
+  (the design-correction wave). Smaller commits + sharper
+  audit shape wins.
+* (C) leaves the user-visible regression unfixed
+  (`phase-8-bugs.md` "chan-reports settings toggle missing
+  from Settings UI (regression)" + @@Alex's "i want it
+  back!"). Toggle visibility IS the regression fix.
+* (B) ships visible progress this beat + establishes the
+  `Preferences.reports.enabled` shape downstream tasks
+  read + defers the surgical backend work cleanly.
+
+**Default ON is the right call** — no toggle-lie risk;
+matches today's unconditional chan-report; when disable
+path lands in follow-up, "OFF" gets real teeth.
+
+After `-a-48` lands, cut a new `-a-N` follow-up task
+covering the 4-route chan-server gating + chan-drive
+indexer pass flag + destructive-on-disable modal +
+default flip ON→OFF. Likely crosses lanes to
+@@Systacean for the chan-drive indexer pass flag piece.
+
+### webtest-a-4 PARTIAL bundled into -a-53
+
+@@WebtestA's verdict (17/18 HOLD; 1 PARTIAL on `-a-45`
+#3) root-caused the HybridTerminalConfig custom-TERM
+dropdown rendering bug to lines 104 + 86-88. ~5-line
+SPA fix.
+
+Bundled into `-a-53`'s scope rather than a tiny
+standalone task — `-a-53` is already touching
+`HybridTerminalConfig.svelte` for the per-Hybrid theme
+override toggle; folding the custom-TERM fix into the
+same commit keeps the queue compact. Task body updated
+with the "Bundled scope addition 2026-05-21" section.
+
+`webtest-a-5` walks the corrected custom-TERM behavior
+after `-a-53` + `-a-54` land (alongside `-a-47` + `-a-48`
+which haven't been walked yet).
+
+### Five lane acks issued this beat
+
+| Lane | Ack shape |
+|------|-----------|
+| @@FullStackA | Routing on -a-48 scope question (option B) + custom-TERM PARTIAL folded into -a-53 + thanks on the audit-anchor commit shape |
+| @@WebtestA | After-the-fact ack on verdict commit + PARTIAL routing noted + webtest-a-5 planned |
+| @@WebtestB | Clearance for proactive smoke walk verdict bundle commit (their commit-readiness ask honored) |
+| @@FullStackB | After-the-fact ack on smoke #2 + #3 + #4 fixups; obvious-call shape carry-on; smoke #5 expected |
+| @@Systacean | After-the-fact ack on -18 follow-ups #2 + #3; obvious-call shape carry-on; Ubuntu smoke expected |
+
+### Iterative mechanical-fixup pattern recognized
+
+Both @@FullStackB and @@Systacean are in identical
+iteration patterns:
+
+1. Smoke run reveals next layer of dead_code (chan-server)
+   or BGE-model-panic (chan-drive) items the broken
+   pre-`ci-12`-and-`-17` gate had been masking.
+2. Apply mechanical `#[cfg(unix)]` or `#[ignore]` fixup
+   at the unmasked sites.
+3. Commit as same-task-scope fixup (`-24 smoke #N fixup`
+   or `-18 follow-up #N`).
+4. Re-smoke; goto 1.
+
+Both lanes are applying it cleanly with audit shape +
+no scope drift. The cascade can't go forever — finite
+item count — so it terminates naturally. Acks issued;
+carry-on authorized.
+
+### Lane state at end of round
+
+| Lane | State |
+|------|-------|
+| @@Systacean | 2 more `-18` follow-ups in HEAD; expect Ubuntu smoke green + `-16` pickup |
+| @@CI | Idle; queue-empty |
+| @@FullStackA | `-a-47` committed + `-a-48` scope routed (option B); expect `-a-48` commit + `-a-53` (with custom-TERM PARTIAL fix bundled) pickup |
+| @@FullStackB | 4 smoke fixups in HEAD; expect smoke #5 verdict or next layer fix |
+| @@WebtestA | `-a-4` verdict committed; queue-empty until `-a-48` + `-a-53` + `-a-54` land for `webtest-a-5` |
+| @@WebtestB | Proactive smoke verdict cleared; expect commit + then queue-empty |
+
+### Smoke-branch state on origin
+
+* `ci-12-smoke` (idle)
+* `systacean-17-smoke` (idle)
+* `systacean-18-smoke` (3 fastforward pushes; expect
+  smoke green next run)
+* `fullstack-b-24-smoke` (4 fastforward pushes; expect
+  smoke #5 next)
+
+All prune with the `chan-v0.11.99-dryrun.{1..4}` tag
+cleanup beat.
+
+### What I'm committing this round
+
+| File | Reason |
+|------|--------|
+| `architect/journal.md` | This entry |
+| `alex/event-architect-fullstack-a.md` | -a-48 option B routing + PARTIAL fold + thanks |
+| `alex/event-architect-webtest-a.md` | -a-4 verdict ack + PARTIAL routing note |
+| `alex/event-architect-webtest-b.md` | proactive smoke verdict clearance |
+| `alex/event-architect-fullstack-b.md` | smoke #2/#3/#4 after-the-fact ack |
+| `alex/event-architect-systacean.md` | -18 follow-up #2/#3 after-the-fact ack |
+| `fullstack-a/fullstack-a-53.md` | Bundled scope addition (custom-TERM PARTIAL fix) |

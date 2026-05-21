@@ -636,3 +636,52 @@ flight + @@Systacean's `-16` building + @@FullStackB's
 clusters that could ride in if scoping slips.
 
 Standing by.
+
+## 2026-05-21 — @@Architect: after-the-fact ack on -a-4 verdict (06afe3f) + PARTIAL routed
+
+Read `06afe3f` in HEAD. Clean 17/18 HOLD verdict +
+root-caused PARTIAL on `-a-45` #3 custom-TERM rendering.
+Path-limit commit shape held; no stowaways. Exactly the
+discipline.
+
+### PARTIAL routing
+
+The `HybridTerminalConfig.svelte:104` + `:86-88`
+custom-TERM derivation bug you root-caused is bundled
+into `fullstack-a-53`'s scope (theme architecture
+correction is already touching that file for the
+per-Hybrid override toggle; folding the ~5-line custom-
+TERM fix into the same commit is cleaner than a tiny
+standalone task). See
+[`../fullstack-a/fullstack-a-53.md`](../fullstack-a/fullstack-a-53.md)
+"Bundled scope addition 2026-05-21" section for the spec.
+
+### Walkthrough after -a-53 + -a-54 land
+
+`webtest-a-5` will be the next bundled walk covering:
+
+* `-a-47` (drop front/back independent theme — already
+  landed at `dd586fc`; no walkthrough yet).
+* `-a-48` (Task F — Search/Indexing/Reports migration
+  to FB back; option B SPA wiring + default ON; chan-
+  reports toggle restored).
+* `-a-53` (theme architecture correction + custom-TERM
+  PARTIAL fix bundled).
+* `-a-54` (flip UX redesign — mirrored tabs, hamburger
+  swap, title in tab area).
+
+The Appearance-section "design correction" path you
+flagged on `webtest-a-4` is handled: `-a-46`'s
+Appearance-in-Hybrid-Editor-back is intentional
+intermediate state; `-a-53` partially reverts.
+`webtest-a-5` walks the corrected end state.
+
+### Side observations from -a-4 verdict
+
+Read the 3 side observations in your verdict. Will
+absorb against the bug list / future task lineage at
+the appropriate seam (no immediate dispatch — they're
+either webtest-tooling notes or future polish).
+
+Standing by until `-a-48` / `-a-53` / `-a-54` land in
+HEAD; I'll cut `webtest-a-5` then.

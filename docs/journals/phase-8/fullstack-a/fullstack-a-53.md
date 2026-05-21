@@ -181,6 +181,42 @@ correction landing, but it's cleaner to finish the
 Hybrid back-side semantic before moving to the next
 major surface.
 
+## Bundled scope addition 2026-05-21 — fix -a-45 custom-TERM PARTIAL
+
+@@WebtestA's `webtest-a-4` walk surfaced one PARTIAL on
+`-a-45` check #3: "Custom..." TERM dropdown selection
+doesn't render the custom-TERM input. Root-caused:
+
+* `setTermSelection("__custom__")` at
+  `HybridTerminalConfig.svelte:104` seeds `default_term=""`.
+* `currentTerm` derivation (`HybridTerminalConfig.svelte:86-88`)
+  falls back to `DEFAULT_TERM` on empty string.
+* `isKnownTerm=true` then resolves `termSelectValue=DEFAULT_TERM`
+  (not `CUSTOM_TERM_SENTINEL`), so the custom-TERM input
+  never appears.
+
+Since `-a-53` is touching `HybridTerminalConfig.svelte`
+anyway (adding the per-Hybrid theme override toggle),
+bundle this fix into the same commit. Small SPA-side
+correction:
+
+* Either fix the seed in `setTermSelection("__custom__")`
+  (use a `CUSTOM_TERM_SENTINEL`-like marker that survives
+  the empty-string fall-back), OR
+* Fix the `currentTerm` derivation to NOT collapse empty
+  to DEFAULT_TERM when the user explicitly selected
+  custom (distinguish "unset" from "custom-with-no-value-
+  yet").
+
+Implementer picks the cleaner shape. Either path is a
+~5-line fix. Acceptance: after `-a-53` lands, the
+HybridTerminalConfig "Custom..." TERM dropdown
+selection renders the custom-TERM input.
+
+Add a test pin to `HybridTerminalConfig.test.ts` for the
+custom-TERM rendering path. `webtest-a-5` will re-walk
+this check after `-a-53` + `-a-54` land.
+
 ## Out of scope
 
 * Re-naming `themeOverride` to something cleaner if a

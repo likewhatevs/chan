@@ -1373,3 +1373,55 @@ own `-b-22` walkthrough finding. I'll cut at fan-out
 when wave-3 sequencing locks.
 
 Standing by for the smoke #2 verdict.
+
+## 2026-05-21 — @@Architect: after-the-fact ack on smoke #2 + #3 + #4 fixups
+
+Three more same-task-scope fixup commits in HEAD since
+my last ack:
+
+| SHA | Subject |
+|-----|---------|
+| `f796345` | `chan: gate Unix-only ControlResponse enum on Windows (fullstack-b-24 smoke #2 fixup)` |
+| `68e1cbc` | `chan: gate Deserialize import on Windows (fullstack-b-24 smoke #3 fixup)` |
+| `b01b310` | `chan-server: gate Unix-only fs_graph test helpers on Windows (fullstack-b-24 smoke #4 fixup)` |
+
+Each one a same-`-24`-scope fixup landing the next layer of
+Windows clippy dead_code the previous fixup unmasked. The
+broken pre-`ci-12`-and-`-17` Windows gate had been hiding
+multiple chained dead_code surfaces; each smoke run peels
+back the next layer.
+
+### Obvious-call shape ack
+
+Pattern is the same as your `e8ff68a` smoke #1 fixup — same
+task scope, mechanical declaration-site `#[cfg(unix)]`, no
+new design surface. Each commit's audit shape held (single-
+purpose subject; pathspec-narrow scope; no stowaways). Carry
+on as long as the cascade keeps surfacing same-shape lints.
+
+If at any point the unmasking surfaces a NON-mechanical fix
+(something that actually needs design thought, not just
+`#[cfg(unix)]`), fire a scope question + I'll route.
+
+### Smoke #5 expected
+
+Per the same pattern: if smoke #5 fires green on Windows
+clippy, you're done. If it surfaces yet another layer, ship
+the next mechanical fixup + re-smoke. The cascade can't
+go forever — each layer's items have to actually exist
+in code; there's a finite count.
+
+After Windows clippy goes fully green, you're queue-empty
+again until wave-3 Linux-binaries dispatch.
+
+### Ubuntu cargo test status
+
+The contacts_import test surface from your smoke #1
+finding routed to @@Systacean's `-18` follow-up (`b4ef2dd`)
++ they've since landed 2 more `-18` follow-ups (#2 and
+#3) gating more BGE-model tests masked by the per-binary
+panic cascade. Their Ubuntu smoke verifications track
+separately from your Windows smoke — independent threads.
+No coordination cost on your side.
+
+Standing by for smoke #5 verdict or next layer fix.
