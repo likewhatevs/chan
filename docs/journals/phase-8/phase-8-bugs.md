@@ -591,6 +591,43 @@
   - severity: paper-cut UX (not blocking work; just visual clutter); v0.11.2 patch candidate if the patch wave gets cut (bumps scope from 5/6 → 6/7)
   - dispatched for v0.11.2 patch (if cut) OR Round-2 wave-2 against @@FullStackA
 
+- Rich-prompt cursor renders OVER the default placeholder message
+  - flagged 2026-05-21 by @@Alex (screenshot): when the rich prompt opens with an empty buffer + the default placeholder "Write a multi-line command and Cmd+Enter" visible (from `-a-24`), the CodeMirror I-beam cursor renders on TOP of the placeholder text (visible overlap on the leading "W" of "Write")
+  - severity: small UX paper-cut; @@Alex's framing: "annoying bug we need to fix early next round" — explicitly NOT v0.11.2 scope, queued for Round-2 wave-2 early
+  - root cause hypothesis: the placeholder overlay landed in `-a-24` uses `position: absolute` + `pointer-events: none` over the composer; the CodeMirror cursor element renders at column 0 + its own z-index puts it ABOVE the placeholder layer. Both painted at the same coordinate → visible overlap
+  - fix-direction options:
+    1. **`caret-color: transparent` while placeholder visible** (recommended) — empty-buffer state has nothing for the cursor to anchor on; making the caret invisible until the user starts typing is the standard browser placeholder pattern (`<input type="text" placeholder="...">` does this natively). One-line CSS rule conditioning on the placeholder-active state.
+    2. **Lower placeholder z-index** so the cursor stays visible — opposite shape. Less natural; the cursor visible against placeholder text reads as "two things at once" which is confusing.
+    3. **Hide the cursor element via display: none** on the empty-buffer + placeholder-shown state — more invasive than `caret-color: transparent` since CM6's selectionLayer expects the cursor element to be reachable; transparent caret is cleaner.
+  - recommendation: option 1 (`caret-color: transparent`). Toggles off the moment the user types (placeholder dismissed → CSS rule no longer matches → caret-color reverts to theme token).
+  - lane: @@FullStackA (rich prompt + placeholder CSS owner; same lane that landed `-a-24` + the v0.11.2 mini-wave)
+  - dispatched for Round-2 wave-2 against @@FullStackA. Cut as a small task at fan-out; could fold with another small rich-prompt polish task if anything similar accumulates by then
+
+- Hybrid hamburger menu missing Search entry
+  - flagged 2026-05-21 by @@Alex (screenshot): the Hybrid pane hamburger shows Terminal / File Browser / Rich Prompt / Graph / Enter Hybrid NAV / Focus border colour. Search is missing — even though it's not a Hybrid SURFACE (per @@Alex's A.3 answer, search stays out-of-Hybrid as a global overlay), it should be reachable as a SPAWN entry from the hamburger alongside the four content-tab spawns
+  - root cause: `-a-32`'s surface unification covered the four content-tab spawns (Terminal / FB / RichPrompt / Graph) across carousel slide 1 + pane hamburger + empty-pane right-click. Search overlay wasn't included in that set because it's a different surface category (overlay, not tab). The omission shows up in the hamburger
+  - want: add a "Search" entry to the hamburger menu (between Graph and the Enter Hybrid NAV / palette separator). Click triggers the search overlay (same action as `Cmd+K F` from `-a-6` / `Cmd+. F` via Hybrid NAV). Chord hint on the row reads `Cmd+K F` (or whichever chord is canonical). Icon = magnifying-glass / `Search` lucide
+  - consistency check at task-cut: same Search entry should ALSO appear on carousel slide 1 + empty-pane right-click menu per the `-a-32` unification — confirm whether @@Alex wants Search on those too OR just the hamburger. Recommend all three for consistency
+  - lane: @@FullStackA (Pane.svelte hamburger + carousel + empty-pane right-click)
+  - dispatched for Round-2 wave-2 against @@FullStackA. Small task; could fold with other hamburger / carousel polish at fan-out
+
+- Add orange focus border colour after blue
+  - flagged 2026-05-21 by @@Alex: focus-border palette today shows blue (selected) / green / pink. Want orange added AFTER blue (so palette order becomes blue / orange / green / pink)
+  - small CSS + state addition. Orange colour value picks at task-cut (recommend matching the warm-accent token already used elsewhere in chan's theme — e.g., the yellow → warm-orange band from `-a-2`'s notification flash colour change; or a fresh CSS variable like `--focus-border-orange: #ff8c42` or similar)
+  - persistence: the focus-border colour preference already round-trips via the existing pane-config / SerTab persistence; just add `"orange"` as a new accepted variant
+  - lane: @@FullStackA (Pane.svelte palette + theme CSS)
+  - dispatched for Round-2 wave-2 against @@FullStackA. Trivial; could fold with the Search-in-hamburger task above
+
+- Unwanted black bar between terminal-host and rich prompt
+  - flagged 2026-05-21 by @@Alex (screenshot): a solid black horizontal band paints between the bottom of the terminal output area and the top of the rich-prompt floating-pill in chan-desktop. Visible against the dark theme; not part of the intended `-a-24` floating-pill visual design
+  - root cause hypothesis: leftover from `-a-4`'s dynamic `.terminal-host` margin-bottom (`heightPx + 12px`) painting at the wrong layer. The 12 px gap was supposed to be empty space the terminal area's background colour leaks through, not a separate painted band. Possible causes:
+    1. The reserved-space element has `background: black` literally set somewhere instead of `transparent` / inheriting the pane bg.
+    2. `-a-29`'s ResizeObserver-driven `measuredHeightPx` field is rendering a sibling spacer element that has the wrong bg colour.
+    3. A separator border between `.terminal-host` and `.rich-prompt` was added intentionally somewhere but should have been `transparent` or omitted.
+  - want: black band gone. If the spacer element is needed structurally (for the dynamic margin-recompute path), set its `background: transparent` so the pane bg paints through. If the spacer isn't needed (the margin alone reserves the space), delete it entirely
+  - lane: @@FullStackA (rich-prompt + terminal-host layout in `TerminalRichPrompt.svelte` / `TerminalTab.svelte`)
+  - dispatched for Round-2 wave-2 against @@FullStackA. Investigation + small CSS fix. v0.11.2 candidate IF root cause turns out to be a one-line CSS variable fix; otherwise defer to wave-2
+
 ## Round 2 — needs deeper change
 
 - Large markdown files block the editor with a spinner while loading

@@ -284,3 +284,73 @@ the top of this artifact; locked.
 * A commitment that all 5 items land in Round 2. If @@Alex
   defers items D + E (multi-agent flow) to Round 3, the
   rich-prompt evolution (A + B + C) stands alone cleanly.
+
+## 2026-05-21 — Item A (history backlog) animation spec from @@Alex
+
+@@Alex 2026-05-21 added a specific UX shape for item A
+(rich-prompt history backlog):
+
+> when we implement the rich prompt history feature later,
+> i want to make the following: the rich prompt text area
+> will use the same flip effect but here a horizontal flip
+> every time the user press cmd+enter.. and it'll come back
+> with an empty prompt.. we will have a button that flips
+> the same area into the history list of prompts
+
+### Locked animation behaviour
+
+* **On Cmd+Enter submit**: rich-prompt text area performs a
+  **horizontal flip** (Y-axis flip; visual side-swap matching
+  the `-a-22` Hybrid pane half-flip aesthetic, but rotated
+  90° — horizontal axis swap instead of pane flip). Comes
+  back with an EMPTY prompt + caret ready. The submitted
+  buffer disappears from the composer + lands in the
+  on-disk history (per the locked decision: on-disk `.md`
+  per drive under `.chan/rich-prompt-history/<tab>/`).
+* **History toggle button**: new button on the rich-prompt
+  toolbar (next to Send / Collapse / shell-vs-agent toggle
+  from `-b-13` / page-width slider from `-a-30`). Click
+  flips the SAME area into the history list of prompts
+  (chronological, newest at top). Click again flips back
+  to the composer.
+
+### Animation primitives to reuse
+
+* `-a-22` pane-flip animation (Y-axis rotate 0° → 90° → 0°
+  with mid-point content swap during invisible edge-on
+  moment). Item A's submit-flip is the SAME primitive
+  applied to the rich-prompt area instead of a pane —
+  axis rotated 90° (horizontal instead of vertical).
+* `prefers-reduced-motion: reduce` honored (mirror
+  `-a-22`'s respect for the user preference).
+
+### Why this shape works
+
+* **Submit-flip provides explicit visual feedback** that the
+  buffer was captured + the user can keep typing immediately
+  (vs the current "buffer clears with no animation" which
+  reads as ambiguous — did the submit happen?).
+* **Same-area history view** preserves the screen real
+  estate; no popover / drawer / modal disrupts the composer's
+  spatial position.
+* **Composable with the shell-vs-agent toggle from `-b-13`**
+  + the page-width slider from `-a-30` + the collapse
+  chevron from `-a-24`. The toolbar gains one more icon
+  button; layout stays consistent.
+
+### Sequencing notes
+
+Item A (history backlog with this animation spec) lands as
+part of Round-2 wave-2 per the original plan. The flip
+animation primitive from `-a-22` is already in HEAD
+(committed as `6ed7ebb`); item A reuses it without new
+animation infrastructure.
+
+### Task-spec update
+
+When item A's task file cuts at fan-out (`-a-N` slot;
+provisionally `-a-42` post-v0.11.2's `-a-36..-41` set),
+include this animation spec in the acceptance criteria.
+History-list flip-back button placement next to the
+existing toolbar buttons (Send / Collapse / submit-mode
+toggle / page-width slider).
