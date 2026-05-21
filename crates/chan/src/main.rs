@@ -52,7 +52,9 @@ use chan_server::{
 };
 use clap::{CommandFactory, Parser, Subcommand, ValueEnum};
 use clap_complete::Shell;
-use serde::{Deserialize, Serialize};
+#[cfg(unix)]
+use serde::Deserialize;
+use serde::Serialize;
 
 mod update;
 
