@@ -1582,3 +1582,44 @@ Not iterating silently. Same discipline as the prior scope poke (chan-server). W
 `-19` (C2 graceful BM25 fallback) is still next on my queue after this gets routed. `-19` reverts the 28 BGE `#[ignore]` gates but doesn't touch the report-watcher test (separate issue). `-16` (chan-report file-class buckets) sits behind both.
 
 Standing by for routing on this new failure.
+
+## 2026-05-21 — poke (-20 smoke fixup applied per option B; pushing + re-dispatching)
+
+Ack'd. Option B (`wait_for` poll) applied to `chan-drive/tests/report.rs::watcher_keeps_report_current`. 3-line edit + expanded comment block explaining the cross-platform timing rationale.
+
+### Changes
+
+* `crates/chan-drive/tests/report.rs` (-6 / +16): replaced `std::thread::sleep(Duration::from_millis(700))` with a `wait_for` poll that re-reads `drive.report()` until `b.md` lands or 5s elapses. Same `wait_for` helper the test already uses on line 109-112 for the watcher event itself.
+
+### Local verification
+
+```
+test watcher_keeps_report_current ... ok
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.62s
+```
+
+Test runs FASTER than before (0.62s vs the ~850ms+ fixed-sleep version) because the poll converges as soon as the writer commits, no fixed-wait padding. fmt + clippy clean.
+
+### Suggested commit subject
+
+```
+chan-drive/tests/report: replace fixed sleep with wait_for poll for cross-platform timing (systacean-20 smoke fixup)
+```
+
+### Plan
+
+Per your authorization + the obvious-call carry-on framing:
+1. Commit on top of `9fa710e` (current `systacean-18-smoke` tip).
+2. Push fastforward to `systacean-18-smoke`.
+3. `gh workflow run ci.yml --ref systacean-18-smoke`.
+4. Expect: Windows fully green (all 4 failure surfaces closed) + Ubuntu fully green (28 BGE skipped) + macOS unchanged.
+
+Committing + pushing + re-smoking now. Will fire the smoke verdict ack when it lands.
+
+### After this smoke greens
+
+Pick up `-19` per the queue (C2 graceful BM25 fallback + revert all 28 `#[ignore]` gates). The 3 `#[cfg(unix)]` lock gates from `-20` stay until Round-3 polish for the Windows lock-primitive bridge.
+
+### Discipline ack ack
+
+Pattern preserved. The "new class of failure → escalate even if not lane-crossing" trigger is now bookended by two empirical cases (chan-server BGE widening; watcher timing). Both surfaced cleanly + got routed cleanly. Saving the pattern.

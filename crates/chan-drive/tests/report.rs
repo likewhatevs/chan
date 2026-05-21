@@ -111,12 +111,23 @@ fn watcher_keeps_report_current() {
         "watcher did not fire for new file"
     );
 
-    // Allow the report writer thread to debounce + flush.
-    std::thread::sleep(Duration::from_millis(700));
-
-    let after = drive.report().unwrap();
-    let names: Vec<_> = after.files.iter().map(|f| f.path.clone()).collect();
-    assert!(names.iter().any(|n| n == "b.md"), "report missed b.md");
+    // Poll the report until b.md lands, instead of a fixed-window
+    // sleep. The report writer's debounce (500ms in
+    // chan-drive/src/report.rs) plus the per-platform filesystem-
+    // event latency can push the flush past any single short sleep;
+    // on a slow Windows runner that drifts well over 700ms. Polling
+    // with a generous upper bound is cross-platform-correct and
+    // converges as fast as the writer commits.
+    let saw_b = wait_for(
+        || {
+            drive
+                .report()
+                .map(|r| r.files.iter().any(|f| f.path == "b.md"))
+                .unwrap_or(false)
+        },
+        Duration::from_secs(5),
+    );
+    assert!(saw_b, "report missed b.md within 5s");
 
     // JSONL is now persisted at the advertised path.
     let path = drive.report_jsonl_path().unwrap();

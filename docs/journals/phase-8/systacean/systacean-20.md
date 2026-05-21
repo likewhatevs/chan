@@ -303,3 +303,66 @@ Per the architect's prior authorization framing + the explicit "either smoke bra
 3. `-12` parked.
 
 Holding for `-18` fu#4 smoke completion → push `-20` → re-dispatch.
+
+## 2026-05-21 — smoke fixup: report::watcher_keeps_report_current cross-platform timing
+
+`-20` bundled smoke [`26247985860`](https://github.com/fiorix/chan/actions/runs/26247985860) verified Ubuntu green + closed the lock + dead_code reds on Windows clippy. Surfaced 1 NEW Windows failure in `chan-drive/tests/report.rs::watcher_keeps_report_current` (not BGE-related, not lock-related — 4th separate Windows failure class).
+
+Architect routed **option B** (real cross-platform fix: replace fixed sleep with `wait_for` poll). See [`../alex/event-architect-systacean.md`](../alex/event-architect-systacean.md) "routing on -20 smoke scope poke — option B (wait_for poll, real cross-platform fix)".
+
+### Change
+
+Replaced:
+
+```rust
+// Allow the report writer thread to debounce + flush.
+std::thread::sleep(Duration::from_millis(700));
+
+let after = drive.report().unwrap();
+let names: Vec<_> = after.files.iter().map(|f| f.path.clone()).collect();
+assert!(names.iter().any(|n| n == "b.md"), "report missed b.md");
+```
+
+With a polled wait_for + per-iteration `drive.report()` reading, with a 5s upper bound. Same `wait_for` helper the test already uses for the watcher event at line 109-112. Comment block updated to explain WHY (report-writer debounce + cross-platform filesystem-event latency).
+
+### Local verification
+
+```
+test watcher_keeps_report_current ... ok
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.62s
+```
+
+(Test runs FASTER than before since the poll converges as soon as the writer commits, instead of waiting the fixed 700ms unconditionally.)
+
+### Pre-push gate
+
+`cargo fmt --check` clean. `cargo clippy --all-targets -- -D warnings` clean. No other tests touched.
+
+### Suggested commit subject
+
+```
+chan-drive/tests/report: replace fixed sleep with wait_for poll for cross-platform timing (systacean-20 smoke fixup)
+```
+
+### Files
+
+```
+crates/chan-drive/tests/report.rs                 -6  +16
+docs/journals/phase-8/systacean/systacean-20.md   (this append)
+docs/journals/phase-8/alex/event-systacean-architect.md  (outbound poke)
+```
+
+3 paths total. Foreign files in dirty tree stay un-staged.
+
+### Smoke re-dispatch
+
+Fastforward to `systacean-18-smoke` (append; no force) + `gh workflow run ci.yml`. Expected verdict on the re-fire:
+
+* **Windows fully green** — all 4 Windows failure surfaces now closed (`result_large_err` cleared by `-17`; BGE panics by `-18`+followups; lock contract by `-20`; watcher timing by this fixup).
+* **Ubuntu fully green** — confirmed by the prior smoke (28 BGE tests skipped).
+* **macOS fully green** — unchanged.
+* **Round-3 readiness signal**: per-PR ci.yml gate structurally fully green for the first time since ~2026-05-19 on all 3 platforms.
+
+If a 5th failure surfaces (unlikely; cargo's prior abort masked at most `chan-drive/tests/smoke.rs` which is already gated by `-18` fu#2), same discipline — escalate via scope poke rather than iterate.
+
+Obvious-call shortcut taken per the architect's authorization framing.
