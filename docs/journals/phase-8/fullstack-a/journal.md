@@ -593,3 +593,87 @@ readiness; standing by. Queue waiting: `-a-46`
 (Task F — Search / Indexing / Reports settings
 migration + chan-reports toggle restore), then
 `-a-49..52` (graph overhaul) + `-a-42` (About).
+
+## 2026-05-21 — -a-45 committed; -a-46 ready for review
+
+`-a-45` cleared with all 3 deviations accepted +
+the (b) audit-trail bundle confirmed. Committed
+cleanly as `1f80d09 Migrate Terminal Settings to
+Hybrid Terminal back-side (fullstack-a-45)`. Pre-
+commit `git diff --staged --stat` matched the
+cleared path list exactly (8 files); post-commit
+`git show --stat HEAD` confirmed no stowaways
+(the dirty-worktree work from other lanes —
+chan-drive / ci-12 / systacean-15/17/18 /
+webtest-a / webtest-b channels — all stayed
+unstaged). The pre-commit audit lesson from the
+`-a-44` incident applied cleanly this beat.
+
+### -a-46 complete (Hybrid back-side Task C)
+
+Three-file change. SPA-only.
+
+* `web/src/components/HybridEditorConfig.svelte`
+  populated from a stub with 5 sections (Editor
+  theme, Appearance, Layout, Date pills, On save).
+  Self-contained editing / dirty / autosave
+  lifecycle scoped to the editor-related slice.
+  Two side-effects carried over from
+  SettingsPanel (live-apply data-editor-theme,
+  sync editorToolsPrefs).
+* `web/src/components/HybridEditorConfig.test.ts`
+  (new) — 11 wiring pins + 4 negative pins
+  against SettingsPanel (regression guard).
+* `web/src/components/SettingsPanel.svelte` —
+  5 sections (~140 lines), the two side-effects,
+  3 imports, the normalize-editor branches, and
+  the related CSS scope all removed. `.theme-opt`
+  stays for the semantic-search toggle.
+
+### Save / dirty discipline
+
+Same merge-against-current-server save pattern
+as `-a-45`: fetch latest GlobalConfig on save,
+overlay only the editor-related fields, PATCH.
+The dirty comparator is explicit-field-by-field
+(editor_theme, theme, line_spacing,
+date_format, strip_trailing_whitespace_on_save)
+rather than whole-object so SettingsPanel-owned
+edits elsewhere don't fire spurious editor
+PATCHes.
+
+### Gate
+
+* vitest **621 / 621** (+15 net from -a-45's
+  606; 11 wiring + 4 negative pins).
+* svelte-check 0 errors / 0 warnings across
+  3988 files. CSS sweep dropped the now-unused
+  `.section-row`, `.theme-row`, `select`
+  combined-rule, and `.theme-opt
+  input[type="radio"]` reset from
+  SettingsPanel.
+* npm build clean.
+* Rust gate not re-run (no Rust touched).
+
+### Decisions flagged
+
+* Appearance included in the migration per the
+  task body's "Theme (per-Hybrid, surviving the
+  per-Hybrid override from `-b-5`)". Alternative
+  read possible (Appearance stays in
+  SettingsPanel as a global UI setting); flag
+  if wrong.
+* `.strip-toggle` renamed from
+  `.semantic-toggle` in the new component (the
+  legacy name didn't fit the On save toggle).
+* Defensive name attribute namespacing
+  (`hybrid-editor-*` / `hybrid-appearance` /
+  `hybrid-line-spacing`).
+
+Impl note + suggested commit subject at the tail
+of [fullstack-a-46.md](fullstack-a-46.md).
+Outbound poke fired to @@Architect with Commit
+readiness; standing by. Queue waiting: `-a-47`
+(Task E — front/back theme collapse), `-a-48`
+(Task F — Search/Indexing/Reports), then
+`-a-49..52` (graph overhaul) + `-a-42` (About).

@@ -12,9 +12,7 @@
   import { api } from "../api/client";
   import type {
     BuildInfo,
-    EditorTheme,
     GlobalConfig,
-    LineSpacing,
     Preferences,
     SemanticState,
   } from "../api/types";
@@ -22,26 +20,25 @@
   import {
     refreshDrive,
     settingsOverlay,
-    setThemeChoice,
-    type ThemeChoice,
-    ui,
     drive,
   } from "../state/store.svelte";
   import {
     overlayMaximized,
     setOverlayMaximized,
   } from "../state/pageWidth.svelte";
-  import { DATE_FORMATS } from "../editor/dateFormats";
-  import { editorToolsPrefs } from "../state/editorTools.svelte";
   import OverlayShell from "./OverlayShell.svelte";
 
   // `fullstack-a-45` (Task B) moved the Terminal section
   // (scrollback MB + default TERM, originally `fullstack-b-11`) out
-  // of this overlay into the Hybrid Terminal back-side mount
-  // (`HybridTerminalConfig.svelte`). The TERM-dropdown constants,
-  // scrollback clamps, derived view helpers, and per-field
-  // setters all live there now; this overlay no longer touches
-  // the `preferences.terminal` subtree.
+  // of this overlay into `HybridTerminalConfig.svelte`.
+  //
+  // `fullstack-a-46` (Task C) moves the Editor settings
+  // (Editor theme, Appearance, Layout / line spacing, Date pills /
+  // date format, On save / strip trailing whitespace) out of this
+  // overlay into `HybridEditorConfig.svelte`. The relevant
+  // imports, derived view helpers, $effects, and CSS scope all
+  // live in that component now; this overlay no longer touches
+  // the editor preference fields directly.
 
   function doToggleOverlayMaximized(): void {
     setOverlayMaximized(!overlayMaximized.on);
@@ -80,30 +77,20 @@
     if (!info) return;
     if (!editing) {
       editing = normalizePrefs(clone(info.preferences));
-      // Migrate dead format ids (e.g. the retired "short" no-year
-      // variant) to the catalog's default so the <select> below
-      // doesn't render a blank option. The settings auto-save will
-      // persist the corrected value on the next dirty edit, or the
-      // user can re-pick explicitly.
-      const knownIds = new Set(DATE_FORMATS.map((f) => f.id));
-      if (!knownIds.has(editing.date_format as never)) {
-        editing.date_format = DATE_FORMATS[0]!.id;
-      }
     }
   });
 
   /// Fill in optional preference fields older servers may omit.
   /// Applied to BOTH editing and globalConfig so dirty() doesn't
-  /// see a permanent diff and trigger an autosave loop. The
-  /// `terminal` subtree is no longer normalized here — `-a-45`
-  /// moved that to `HybridTerminalConfig.svelte`; this overlay
-  /// passes the subtree through untouched as part of the
-  /// GlobalConfig round-trip.
+  /// see a permanent diff and trigger an autosave loop.
+  /// `-a-45` moved Terminal normalization to
+  /// `HybridTerminalConfig.svelte`; `-a-46` moved Editor
+  /// normalization (line_spacing / date_format defaults) to
+  /// `HybridEditorConfig.svelte`. This overlay passes both
+  /// subtrees through untouched as part of the GlobalConfig
+  /// round-trip; only the semantic-search and about sections
+  /// remain.
   function normalizePrefs(p: Preferences): Preferences {
-    if (p.line_spacing === "tight") p.line_spacing = "compact";
-    if (p.line_spacing !== "compact" && p.line_spacing !== "standard") {
-      p.line_spacing = "standard";
-    }
     return p;
   }
 
@@ -221,31 +208,12 @@
     scheduleSave();
   });
 
-  // Live-apply the editor-theme attribute on every change so the
-  // editor in the background re-skins instantly, without waiting
-  // for the 500 ms autosave + server round-trip. The App.svelte
-  // post-save $effect later reapplies from the authoritative
-  // drive.info; both paths produce the same DOM attribute.
-  $effect(() => {
-    if (!editing) return;
-    document.documentElement.setAttribute(
-      "data-editor-theme",
-      editing.editor_theme,
-    );
-  });
-
-  // `fullstack-a-25`: keep the local editor-tools snapshot in sync
-  // with the in-flight `editing.strip_trailing_whitespace_on_save`
-  // value so save() (which checks editorToolsPrefs before stripping)
-  // sees the new value the moment the user toggles in Settings,
-  // without waiting for the autosave PATCH + the next /api/config
-  // round-trip to refresh the snapshot. The autosave still
-  // persists the value to the server in the background.
-  $effect(() => {
-    if (!editing) return;
-    editorToolsPrefs.stripTrailingWhitespaceOnSave =
-      editing.strip_trailing_whitespace_on_save;
-  });
+  // `fullstack-a-46` Task C moved the editor-theme attribute and
+  // editorToolsPrefs side-effects into `HybridEditorConfig.svelte`
+  // alongside the matching editor settings. SettingsPanel only
+  // owns semantic-search + about now, neither of which needs
+  // the editor-theme DOM attribute or the strip-trailing
+  // editor-tools snapshot.
 
   async function loadBuildInfo(): Promise<void> {
     try {
@@ -404,153 +372,17 @@
   <div class="placeholder">loading settings…</div>
 {:else}
   <div class="settings">
-    <div class="section-row">
-    <section>
-      <h3>Editor theme</h3>
-      <p class="hint">
-        Style of the markdown editor only — typography, headings,
-        code blocks, links, tables.
-      </p>
-      <div class="theme-row" role="radiogroup" aria-label="Editor theme">
-        {#each [
-          { value: "github", label: "GitHub" },
-          { value: "google_docs", label: "Google Docs" },
-          { value: "word", label: "Microsoft Word" },
-        ] as opt (opt.value)}
-          <label
-            class="theme-opt"
-            class:on={editing.editor_theme === opt.value}
-          >
-            <input
-              type="radio"
-              name="editor-theme"
-              value={opt.value}
-              checked={editing.editor_theme === opt.value}
-              onchange={() => {
-                editing!.editor_theme = opt.value as EditorTheme;
-              }}
-            />
-            <span>{opt.label}</span>
-          </label>
-        {/each}
-      </div>
-    </section>
-
-    <section>
-      <h3>Appearance</h3>
-      <p class="hint">
-        Per-device only; lives in browser storage. "System" follows
-        your OS appearance setting live.
-      </p>
-      <div class="theme-row" role="radiogroup" aria-label="Appearance">
-        {#each [
-          { value: "system", label: "System" },
-          { value: "light", label: "Light" },
-          { value: "dark", label: "Dark" },
-        ] as opt (opt.value)}
-          <label class="theme-opt" class:on={ui.themeChoice === opt.value}>
-            <input
-              type="radio"
-              name="theme"
-              value={opt.value}
-              checked={ui.themeChoice === opt.value}
-              onchange={() => {
-                const v = opt.value as ThemeChoice;
-                setThemeChoice(v);
-                // Keep the autosave form in sync; otherwise the next
-                // PATCH (any dirty edit, or a pending autosave) ships
-                // `editing.theme` stale and reverts the choice.
-                if (editing) editing.theme = v;
-                if (globalConfig) globalConfig.preferences.theme = v;
-              }}
-            />
-            <span>{opt.label}</span>
-          </label>
-        {/each}
-      </div>
-    </section>
-    </div>
-
-    <div class="section-row">
-    <section>
-      <h3>Layout</h3>
-      <p class="hint">
-        Standard is the default reading density; compact tightens paragraph
-        and list spacing while keeping the editor readable.
-      </p>
-      <!-- Reuses .theme-row / .theme-opt pill styles so this radio
-           visually matches the Theme picker above. -->
-      <div class="theme-row" role="radiogroup" aria-label="Line spacing">
-        {#each [
-          { value: "standard", label: "Standard" },
-          { value: "compact", label: "Compact" },
-        ] as opt (opt.value)}
-          <label class="theme-opt" class:on={editing.line_spacing === opt.value}>
-            <input
-              type="radio"
-              name="line-spacing"
-              value={opt.value}
-              checked={editing.line_spacing === opt.value}
-              onchange={() => {
-                editing!.line_spacing = opt.value as LineSpacing;
-              }}
-            />
-            <span>{opt.label}</span>
-          </label>
-        {/each}
-      </div>
-    </section>
-
-    <section>
-      <h3>Date pills</h3>
-      <p class="hint">
-        Format used by <code>@today</code> and pre-selected in the
-        <code>@date</code> picker. The editor still detects every
-        format on this list when reading a file or watching you
-        type, so old documents keep auto-pilling regardless of
-        which one is the default here.
-      </p>
-      <label class="font-row">
-        <span>Default</span>
-        <select class="family" bind:value={editing.date_format}>
-          {#each DATE_FORMATS as f (f.id)}
-            <option value={f.id}>{f.label}</option>
-          {/each}
-        </select>
-      </label>
-    </section>
-
-    <!-- `fullstack-a-25`: trailing-whitespace toggle moved from
-         the editor's right-click / hamburger menu (where it was
-         a checkbox `Run automatically on save / auto-save`) to
-         Settings, where editor preferences belong. Binding goes
-         through `editing.strip_trailing_whitespace_on_save`
-         (autosave handles persistence) + a sibling $effect that
-         keeps `editorToolsPrefs.stripTrailingWhitespaceOnSave`
-         in sync so save() sees the new value immediately. -->
-    <section>
-      <h3>On save</h3>
-      <p class="hint">
-        Strip trailing whitespace from each line when the file is
-        saved. Affects every editable text buffer (.md, .txt, source
-        files). The one-shot "Remove trailing whitespace" action in
-        the editor menu still works for manual cleanup.
-      </p>
-      <label class="theme-opt semantic-toggle" class:on={editing.strip_trailing_whitespace_on_save}>
-        <input
-          type="checkbox"
-          bind:checked={editing.strip_trailing_whitespace_on_save}
-        />
-        <span>Strip trailing whitespace on save</span>
-      </label>
-    </section>
-    </div>
-
     <!-- `fullstack-a-45` (Task B) removed the Terminal section
          (scrollback MB + default TERM) — its UI lives in the
          Hybrid Terminal back now (`HybridTerminalConfig.svelte`).
          Terminal preferences still round-trip through the same
-         GlobalConfig PATCH; only the mounting point changed. -->
+         GlobalConfig PATCH; only the mounting point changed.
+
+         `fullstack-a-46` (Task C) removed the Editor sections
+         (Editor theme, Appearance, Layout, Date pills, On save)
+         for the same reason — they live in
+         `HybridEditorConfig.svelte` now. -->
+
 
     <!-- `fullstack-a-21`: opt-in to Hybrid search (BM25 + dense
          vectors via BGE-small). The model is no longer bundled in
@@ -733,22 +565,11 @@
     border-bottom: 1px solid var(--border);
   }
   section:last-of-type { border-bottom: 0; }
-  /* Two-column section pairing (Editor theme + Appearance, Layout +
-     Date pills). Each child section keeps its own header + content
-     stack but loses its individual bottom border: the wrapper carries
-     the divider for the whole row. */
-  .section-row {
-    display: grid;
-    grid-template-columns: 1fr 1fr;
-    gap: 1.2rem;
-    padding-bottom: 1rem;
-    border-bottom: 1px solid var(--border);
-  }
-  .section-row > section {
-    padding-bottom: 0;
-    border-bottom: 0;
-    min-width: 0;
-  }
+  /* `fullstack-a-46` removed the two-column .section-row layout
+     that paired (Editor theme + Appearance) and (Layout + Date
+     pills). Both pairs migrated to `HybridEditorConfig.svelte`;
+     the remaining sections (Semantic search, About) stack
+     single-column. */
   h3 {
     margin: 0;
     font-size: 15px;
@@ -765,7 +586,9 @@
     font-size: 15px;
   }
   label > span { color: var(--text-secondary); }
-  input, select {
+  /* `fullstack-a-46`: `select` rule dropped — no select element
+     remains in this overlay after the Date pills migration. */
+  input {
     background: var(--bg-card);
     color: var(--text);
     border: 1px solid var(--border);
@@ -776,7 +599,7 @@
     outline: none;
     width: 100%;
   }
-  input:focus, select:focus { border-color: var(--link); }
+  input:focus { border-color: var(--link); }
   .grid {
     display: grid;
     grid-template-columns: 7em 1fr;
@@ -799,12 +622,13 @@
     padding: 0 4px;
     border-radius: 3px;
   }
-  /* Theme picker: three radios laid out as segmented chips.
-     The generic `label { display: grid }` and `input { width: 100% }`
-     rules above target every form control in this tab; we have to
-     undo both for the chips so the radio sits inline with its label
-     inside one bordered box. */
-  .theme-row { display: flex; gap: 4px; }
+  /* `.theme-opt` chip shape is reused by the semantic-search
+     toggle (`<label class="theme-opt semantic-toggle">` at line
+     415); the Editor / Layout / Date pills usages migrated to
+     `HybridEditorConfig.svelte` with `-a-46`. The undo of the
+     generic `label { display: grid }` and `input { width: 100% }`
+     rules stays here because the semantic toggle still depends
+     on it. */
   .theme-opt {
     display: inline-flex;
     align-items: center;
@@ -816,13 +640,10 @@
     cursor: pointer;
     font-size: 14px;
   }
-  .theme-opt input[type="radio"] {
-    width: auto;
-    margin: 0;
-    padding: 0;
-    border: 0;
-    background: transparent;
-  }
+  /* `fullstack-a-46`: `.theme-opt input[type="radio"]` rule
+     dropped — semantic-toggle is the only remaining `.theme-opt`
+     consumer here, and it's a checkbox. The checkbox-specific
+     reset is just below in `.semantic-toggle input[type="checkbox"]`. */
   .theme-opt > span { color: var(--text); }
   .theme-opt:hover { border-color: var(--btn-hover); }
   .theme-opt.on {
@@ -878,9 +699,4 @@
   .save-status .ok { color: var(--accent); }
   .save-status .err { color: #d33; }
   .save-status .muted { color: var(--text-secondary); }
-  @media (max-width: 760px) {
-    .section-row {
-      grid-template-columns: 1fr;
-    }
-  }
 </style>

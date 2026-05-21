@@ -2325,3 +2325,157 @@ my behaviour this beat.
 
 Push held — multi-agent tree commit discipline.
 Standing by for clearance.
+
+## 2026-05-21 — poke (fullstack-a-45 committed)
+
+`-a-45` committed at `1f80d09` per your clearance.
+Subject `Migrate Terminal Settings to Hybrid
+Terminal back-side (fullstack-a-45)` verbatim.
+
+Single commit; 8 files (4 code + 4 docs including
+the bundled `fullstack-a-44.md` audit-trail
+correction per the (b) routing). Pre-stage audit
+`git diff --staged --stat` matched the cleared
+path list exactly. Post-commit
+`git show --stat HEAD` confirmed:
+
+* 967 insertions / 271 deletions across 8 files.
+* New file `web/src/components/HybridTerminalConfig.test.ts`.
+* No stowaways. The dirty-worktree files from
+  other lanes (chan-drive / chan-server /
+  systacean-15/17/18 / ci-12 / webtest-a /
+  webtest-b channels) stayed unstaged.
+
+The pre-commit audit lesson applied cleanly
+this beat; the discipline catches the same
+class of incident that landed `-a-44` under
+`a8e991a`.
+
+Push held per protocol.
+
+Picking up `-a-46` (Hybrid back-side Task C —
+Editor Settings migration) next per your
+sequencing. The migration shape mirrors
+`-a-45`'s pattern (target component:
+`HybridEditorConfig.svelte` stub from -a-43;
+source: relevant Editor section of
+`SettingsPanel.svelte`).
+
+## 2026-05-21 — poke (fullstack-a-46 ready for review)
+
+`-a-46` ready for review. Three-file change.
+SPA-only; no Rust touched. Same self-contained /
+merge-against-current-server save shape as
+`-a-45`, scoped to the editor-related preference
+slice (five fields).
+
+### What landed
+
+`HybridEditorConfig.svelte` populated from the
+`-a-43` stub with the five Editor sections:
+
+* Editor theme (`editing.editor_theme`).
+* Appearance (`ui.themeChoice` + `editing.theme`).
+* Layout / line spacing
+  (`editing.line_spacing`).
+* Date pills / date format
+  (`editing.date_format`).
+* On save / strip trailing whitespace
+  (`editing.strip_trailing_whitespace_on_save`).
+
+Two side-effects carried over from SettingsPanel:
+
+* Live-apply `data-editor-theme` on the document
+  root so the editor re-skins instantly without
+  waiting for the autosave round-trip.
+* Sync `editorToolsPrefs.stripTrailingWhitespaceOnSave`
+  from the editing field so the editor's save()
+  reads the new value immediately.
+
+Dirty comparator scoped to the five editor-related
+fields; the whole-object compare would trigger
+spurious PATCHes from non-editor edits owned by
+SettingsPanel (semantic-search, etc.).
+
+`SettingsPanel.svelte` trimmed:
+
+* 5 section blocks (~140 lines) + two
+  `<div class="section-row">` wrappers
+  removed.
+* 6 editor-only imports gone (`EditorTheme`,
+  `LineSpacing`, `setThemeChoice`,
+  `ThemeChoice`, `DATE_FORMATS`,
+  `editorToolsPrefs`).
+* 2 $effects (data-editor-theme +
+  editorToolsPrefs sync) gone.
+* `normalizePrefs(p)` reduced to a pass-through.
+* CSS sweep: `.section-row`,
+  `.section-row > section`, `.theme-row`,
+  `.theme-opt input[type="radio"]`, the
+  `select` combined rule, and the 760 px
+  `.section-row` @media query all removed.
+  `.theme-opt` stays because semantic-search
+  still uses it via `.semantic-toggle`.
+
+`HybridEditorConfig.test.ts` (new): 11 wiring
+pins + 4 negative pins against
+SettingsPanel (regression guard).
+
+### Appearance inclusion
+
+Read the task body's "Theme (per-Hybrid,
+surviving the per-Hybrid override from `-b-5`)"
+as "the global Appearance theme moves to the
+Hybrid Editor back; the per-Hybrid override at
+`pane.theme` survives unchanged." Flag if the
+intended read was different (e.g. Appearance
+stays in SettingsPanel as a global UI setting).
+If so, the section + `setThemeChoice` import +
+3 Appearance tests can revert via a small
+follow-up.
+
+### Gate
+
+* vitest **621 / 621** (+15 net from `-a-45`'s
+  606; 11 wiring + 4 negative pins).
+* svelte-check 0 errors / 0 warnings across
+  3988 files. The CSS sweep cleared 3
+  warnings that surfaced after the markup
+  removal (unused `select`, `select:focus`,
+  `.theme-opt input[type="radio"]`).
+* npm build clean.
+* Rust gate not re-run (no Rust touched).
+
+### Decisions flagged
+
+* Appearance moved with the wave (call out
+  above).
+* `.strip-toggle` rename — local; class was
+  applied to On save in SettingsPanel under a
+  semantically-mismatched name.
+* `hybrid-editor-*` / `hybrid-appearance` /
+  `hybrid-line-spacing` name attributes —
+  defensive against radio-name collisions.
+
+### Suggested commit subject
+
+```
+Migrate Editor Settings to Hybrid Editor back-side (fullstack-a-46)
+```
+
+Single commit. Imports + side-effects + markup +
+CSS + tests are tightly coupled around the same
+move.
+
+### Files for `git add` (per-path discipline)
+
+* `web/src/components/HybridEditorConfig.svelte`
+* `web/src/components/HybridEditorConfig.test.ts`
+* `web/src/components/SettingsPanel.svelte`
+* `docs/journals/phase-8/fullstack-a/fullstack-a-46.md`
+* `docs/journals/phase-8/fullstack-a/journal.md`
+* `docs/journals/phase-8/alex/event-fullstack-a-architect.md`
+  (this append)
+
+Push held — multi-agent tree commit discipline.
+Standing by for clearance.

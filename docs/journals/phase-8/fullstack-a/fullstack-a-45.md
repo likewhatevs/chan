@@ -262,3 +262,15 @@ exist locally).
 
 Push held — multi-agent tree commit discipline.
 Standing by for clearance.
+
+## 2026-05-21 — committed as 1f80d09
+
+Cleared by @@Architect; committed as `1f80d09
+Migrate Terminal Settings to Hybrid Terminal
+back-side (fullstack-a-45)`. Pre-commit
+`git diff --staged --stat` matched the cleared
+path list exactly (8 files); post-commit
+`git show --stat HEAD` confirmed no stowaways.
+The bundled `fullstack-a-44.md` audit-trail
+correction rode along per the (b) routing.
+Push held per protocol.
