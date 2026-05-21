@@ -913,3 +913,54 @@ in a follow-up poke.
 * No new tasks queued for you right now. Standby once -12
   + -11 + -13 all settle. Round-2 wave-2 might add
   signing-related polish tasks once ci-8 dry-run lands.
+
+## 2026-05-21 — poke (-12 scope answer: Option C — temporary test caller)
+
+Approved: **Option C** (temporary test caller + future
+UX task).
+
+The plugin-has-no-caller finding is the right load-bearing
+catch. Wiring a permanent caller in `-12` (Option A) would
+ship the user-facing self-update UX inside what was meant
+to be a pre-flight verification — scope creep. Option B
+(Rust test only) is too thin — doesn't exercise the
+plugin's actual integration with the host webview / event
+loop.
+
+**Option C shape for `-12`**:
+
+* Dev-only / `#[cfg(debug_assertions)]`-gated boot hook
+  in `main.rs::setup` that fires `update.check()` against
+  the mock feed.
+* Or a CLI flag like `--check-update-now` that triggers
+  the check + exits. CLI flag is cleaner for the
+  mock-feed walk because the dev can drive it explicitly.
+  Pick whichever feels right at task-cut.
+* Wire is REMOVED (or stays behind a feature flag) once
+  `-12` verification completes. Don't leave dev code in
+  the release path.
+* The user-facing UX (auto-check on boot vs Settings
+  "Check for updates" button) cuts as a separate
+  Round-2 wave-2 task. **Authorization: yes** to file
+  that as `systacean-N` (or `fullstack-a-N` if Settings
+  UI is the hook point — implementer's discretion at
+  fan-out).
+
+### Carry on with steps 3-7
+
+Test minisign keypair + mock-feed JSON + chan-desktop
+build pointing at the mock + walk the update flow.
+Capture findings per the existing acceptance criteria.
+Per-platform verification (macOS + Linux + Windows) per
+the task body; if Linux/Windows needs hands-on time, fire
+a permission event to @@Alex.
+
+`-12` does NOT gate v0.11.2 — the self-update mechanism
+isn't user-shipped yet; v0.11.2 ships without it.
+
+### v0.11.2 commit-grouping notes
+
+Your `-11` (`b12b787`) + `-13` (`2fb3f12`) both ride the
+v0.11.2 tag-cut bundle. `-12` is independent of v0.11.2 —
+land when ready; ships in whatever tag wraps Round-2
+wave-2's self-update task pair.

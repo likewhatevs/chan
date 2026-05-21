@@ -1198,6 +1198,74 @@ Push held until @@Systacean cuts the v0.11.2 tag (planned
 after the 9 task commits + pre-landed Wave-1 work all
 land green).
 
+## 2026-05-21 — poke (batch clearance: -a-36 / -a-37 / -a-38 / -a-39 / -a-40 / -a-41)
+
+All six v0.11.2 tasks approved + cleared. Excellent
+throughput — six tasks in one session, all with gate-green
+verification + composition notes. Per-task highlights:
+
+* **`-a-36` cleared**: `web/src/api/desktop.ts` runtime seam
+  + Pane.svelte handler rewire + 11 vitest pins is the right
+  shape. IPC name contract (`reload_window` / `open_devtools`)
+  matches `-b-17`. Web-build fallback is on Reload =
+  `window.location.reload()` + Inspector = `notify(...)`
+  with the discoverable hint. Use your suggested subject.
+* **`-a-37` cleared**: load-bearing root-cause read on the
+  watcher → SPA → editor pipeline. Debounced recovery check
+  in `tabs.svelte.ts::scheduleMissingFileCheck` at 150 ms +
+  the dirty-buffer branch (probe existence only, don't
+  clobber typing) + the suggest-reopen lookup is exactly
+  the three-piece fix the bug entry asked for. Trust the
+  150 ms debounce window for v0.11.2 + tune if @@Alex's
+  repro persists. Use your suggested subject.
+* **`-a-38` cleared**: notification surface taxonomy
+  (transient vs persistent) is the right structural move.
+  Spinner gating on timing-data presence is exactly the v1
+  fix. Use your suggested subject.
+* **`-a-39` cleared**: FB tab state polish — SerTab field
+  audit verdict (no `fbe` rename of existing `be`) is the
+  right call when the existing shape already covered the
+  acceptance. Spawn-new chord behaviour fix lands cleanly.
+  Use your suggested subject.
+* **`-a-40` cleared**: Wysiwyg outline-style dotted markers
+  via the orderedMarkerLabel walker + widget. CSS counters
+  alternative would have been simpler but the widget shape
+  composes with markdown source roundtrips better
+  (preserves `.cm-formatting-list-ol` selectors that other
+  extensions key off). Implementer's call accepted. Use
+  your suggested subject.
+* **`-a-41` cleared**: source-mode list keymap stripping.
+  Correct boundary — drop the markdown-language extension's
+  list bits from source mode without affecting the wysiwyg
+  pipeline. Use your suggested subject.
+
+### Commit order
+
+Per the standard shared-worktree commit discipline. Each
+task is a standalone commit; intermix-safe order:
+
+1. `-a-36` (Tab Reload + Inspector SPA dispatch)
+2. `-a-37` (File moved or deleted false-positive)
+3. `-a-38` (Notification surface polish)
+4. `-a-39` (FB tab state polish)
+5. `-a-40` (Wysiwyg outline-style dotted markers)
+6. `-a-41` (Source-mode list keymap)
+
+Pre-commit `git diff --staged --stat` audit per
+`feedback_shared_worktree_commits` — other lanes have
+substantial uncommitted work too (chan-desktop crate from
+@@FullStackB's -17/-18/-19; possibly journals from
+@@WebtestA/B). Per-file `git add` only.
+
+Push waits until @@Systacean cuts `chan-v0.11.2` per
+[`../architect/commit-plan-v0.11.2.md`](../architect/commit-plan-v0.11.2.md).
+
+### After all 6 commit
+
+Your lane is queue-empty for v0.11.2. Standby for v0.11.2
+walkthrough verdicts from @@WebtestA/B + any commit-time
+issues across the shared-worktree commit dance.
+
 ## 2026-05-20 — poke (Round-2 spawn ack + Wave-2 standby)
 
 @@Alex confirmed Round-2 decisions (clean sweep) and

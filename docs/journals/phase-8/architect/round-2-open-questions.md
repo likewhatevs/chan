@@ -274,6 +274,13 @@ Script includes:
 
 Awaiting @@Alex's run + a one-line confirmation `gh secret list` shows all six names → status flips to ANSWERED + @@CI's `ci-8` unblocks for the dry-run.
 
+**Update from @@Alex 2026-05-21**:
+
+> 2. done! it worked (this was incredible, I ran and it
+> worked on first try, perfeccc; thank you and team!)
+
+**Status**: ANSWERED. Script ran clean on first try; all six secrets populated in GitHub Actions Secrets. `ci-8` DMG dry-run is now unblocked. Transcribed to [`../alex/event-ci-alex.md`](../alex/event-ci-alex.md) so @@CI picks up the green light on next inbound poll.
+
 ---
 
 ### B.3 — systacean-13: optional local smoke test

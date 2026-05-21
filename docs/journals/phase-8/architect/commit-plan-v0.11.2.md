@@ -258,7 +258,73 @@ should produce a coherent picture in one bootstrap walk.
 * A scope-creep gate. Bugs surfaced during v0.11.2
   walkthroughs slip to v0.11.3 (separate cut) OR roll into
   Round-2 wave-2.
-* A signed-DMG release. v0.11.2 is unsigned per the existing
-  v0.11.1 release shape. The signed-DMG north star ships at
-  v0.12.0 once the ci-8 dry-run validates the full
-  sign+notarize pipeline against real keys.
+
+## 2026-05-21 — Plan revision: v0.11.2 SHIPS SIGNED
+
+@@CI flagged (their 2026-05-21 routing poke) that with
+`ci-7` + the six GH Secrets + `systacean-11 / -13` all in
+HEAD, the `chan-v0.11.2` tag will AUTO-FIRE the signed
+macOS pipeline. Plan's original "v0.11.2 ships unsigned;
+v0.12.0 is the first signed release" framing is no longer
+accurate.
+
+@@Architect 2026-05-21 approved option **(c)** from @@CI's
+routing options: fire `ci-8` dry-run BEFORE `chan-v0.11.2`
+tag cuts. Validates the sign+notarize+staple pipeline
+against real keys on a pre-release test tag
+(`chan-v0.11.99-dryrun.1` default) first, then the real
+v0.11.2 tag cuts signed with pre-flight confidence.
+
+### What this changes
+
+* **v0.11.2 is the first signed release** in practice
+  (not v0.12.0 as the original plan stated).
+* **ci-8 dry-run** is now a HARD GATE before the v0.11.2
+  tag cuts (not "fires after v0.11.2" as the original
+  plan stated).
+* **ci-9 patch task cut** to fix the verify-step
+  regression `systacean-13` introduced (DMG-only stapling
+  per Apple's canonical flow). ci-9 → ci-8 → v0.11.2
+  tag is the new sequence.
+
+### Updated critical-path sequencing
+
+```
+ci-9 (verify-step patch) lands
+              ↓
+ci-8 dry-run fires (chan-v0.11.99-dryrun.1) via tag push
+              ↓ (if green: signed DMG produced, second-Mac
+                 verified by @@WebtestB)
+9 v0.11.2 task commits + pre-landed Wave-1 work all in HEAD
+              ↓
+@@Alex "cut it" signal
+              ↓
+@@Systacean cuts chan-v0.11.2 tag (signed pipeline AUTO-FIRES)
+              ↓
+v0.11.2 GitHub Release with signed + notarized DMG
+              ↓
+Session recycle (all 6 + architect)
+              ↓
+Round-2 wave-2 (Hybrid back-side + rich-prompt session evo +
+walkthrough findings from v0.11.2 dogfooding)
+```
+
+### What v0.12.0 becomes
+
+With v0.11.2 already signed, v0.12.0 is now "the first
+Round-2-feature-track release" — bundles Hybrid back-side
+refactor + rich-prompt session evolution + carousel +
+Infographics + manual + BOOT + signed Linux/Windows once
+those signing lanes open. Not a "first signed" milestone
+anymore. v0.12.0's purpose carries forward unchanged
+otherwise.
+
+### v0.11.2 commit set updated
+
+Added to the set:
+* `ci-9` (verify-step patch) — rides v0.11.2.
+
+The pre-landed Wave-1 work that rides the tag bundle is
+unchanged otherwise. Total commit count for the patch
+now: ~10 new (9 task commits + ci-9) + ~6 pre-landed +
+docs commits = **~20-22 commits in the v0.11.2 set**.

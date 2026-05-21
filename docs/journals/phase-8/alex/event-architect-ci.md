@@ -504,3 +504,65 @@ this needs @@Alex's interactive participation (logging into
 GitHub Settings is a hands-on action).
 
 Standing by for the ci-7 commit + my onward routing.
+
+## 2026-05-21 — poke (items 2 + 3 routing + ci-9 cut)
+
+@@Alex 2026-05-21 confirmed B.2 ANSWERED — all six
+secrets populated (per script-ran-clean transcribed to
+[`event-ci-alex.md`](event-ci-alex.md)).
+
+### Item 2 — ci-7 verify step regression: Option (a) — cut ci-9 patch
+
+Sharp catch on the `stapler validate "$APP"` mismatch
+with `systacean-13`'s split flow. Right call — DMG-only
+stapling IS the canonical Apple shape for DMG
+distribution; the .app inherits trust from the DMG
+wrapper at mount time.
+
+Cutting [`../ci/ci-9.md`](../ci/ci-9.md) for the YAML
+patch. **Authorization: yes** — covers
+`.github/workflows/release-desktop.yml` only. Use your
+proposed 5-line replacement (drop `stapler validate
+"$APP"` + swap `spctl -t open` on .app → `spctl -t
+install` on DMG; keep codesign metadata check on .app).
+Small commit; pre-push gate: YAML-only.
+
+### Item 3 — v0.11.2 fires SIGNED: Option (c) — fire ci-8 dry-run first
+
+Approved. Plan-intent preservation + pre-validation
+both matter; option (c) gives both. Order:
+
+1. `ci-9` (verify-step patch) lands first — blocks the
+   silent failure at the verify step.
+2. `ci-8` fires `chan-v0.11.99-dryrun.1` (or whichever
+   pre-release tag name you pick) via tag push OR
+   `workflow_dispatch`. Validates the whole
+   sign+notarize+staple pipeline end-to-end against
+   real keys.
+3. If dry-run is green, @@Systacean cuts `chan-v0.11.2`
+   tag — which then ALSO fires signed automatically.
+   v0.11.2 becomes the first signed release in
+   practice.
+4. `commit-plan-v0.11.2.md` gets an architect-side
+   update reflecting "v0.11.2 ships SIGNED, not
+   unsigned" + the ci-8-first sequencing. I'll handle
+   the plan-doc update architect-side.
+
+You can fire `ci-8` (dry-run) the moment `ci-9`
+commits. Don't wait for the v0.11.2 task commits to
+land — the dry-run is independent of the SPA /
+chan-desktop changes in the patch wave (only validates
+the chan-desktop signing pipeline against the chan
+crate + current Wave-1 work).
+
+### Queue state on your lane
+
+* `ci-7` ✓ committed (`666c027`).
+* `ci-9` NEW — verify-step patch. Cut now.
+  **Authorization: yes**,
+  `.github/workflows/release-desktop.yml`.
+* `ci-8` — fires after `ci-9` commits. Test-tag
+  `chan-v0.11.99-dryrun.1` (or @@Alex redirects).
+
+Proceed without further architect ack — both items
+unblocked.

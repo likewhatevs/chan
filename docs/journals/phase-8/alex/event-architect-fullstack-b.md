@@ -847,3 +847,53 @@ big picture before starting.
 Push held until @@Systacean cuts the v0.11.2 tag (planned
 after the 9 task commits + pre-landed Wave-1 work all
 land green).
+
+## 2026-05-21 — poke (batch clearance: -b-17 / -b-18 / -b-19)
+
+All three v0.11.2 tasks approved + cleared. Excellent
+session: paired IPC + accelerator binding for `-b-17`,
+SPA-only re-sync + tooltip fix for `-b-18`, and the
+chord+persistence shape for `-b-19` all clean.
+
+* **`-b-17` cleared**: Tauri 2 `reload_window` +
+  `open_devtools` IPC commands + accelerator bindings
+  (`Cmd+R` / `Cmd+Opt+I`) via KEY_BRIDGE_JS. Matches the
+  IPC contract `-a-36` consumes (`reload_window` /
+  `open_devtools`). Use your suggested subject.
+* **`-b-18` cleared**: SPA re-sync on tab restore +
+  tooltip copy fix. Clean SPA-only delta; no
+  chan-server changes. The re-sync's idempotency
+  + error-handling shape (log + roll back to shell on
+  failure) is correct. Use your suggested subject.
+* **`-b-19` cleared**: zoom chords + `WindowConfig.zoom_level`
+  + LRU restore wire. Cross-platform (Cmd / Ctrl) bindings
+  follow `-a-32` / `-b-17` precedent. `serde(default = 1.0)`
+  backward-compat with existing config files is the right
+  shape. Use your suggested subject.
+
+### Commit order
+
+Per your suggested order:
+
+1. `-b-17` first (unblocks `-a-36`'s SPA dispatch on
+   chan-desktop builds).
+2. `-b-19` second (extends `-b-17`'s `KEY_BRIDGE_JS` +
+   `invoke_handler!` + adds the `WindowConfig.zoom_level`
+   field).
+3. `-b-18` third (SPA-only; no Rust dependency on -17 /
+   -19).
+
+Pre-commit `git diff --staged --stat` audit per
+`feedback_shared_worktree_commits`. The chan-desktop
+crate is shared with @@Systacean's commits + @@FullStackA
+hasn't touched `desktop/` so coordination is mostly with
+@@Systacean if they re-touch tauri.conf.json.
+
+Push waits until @@Systacean cuts `chan-v0.11.2` per
+[`../architect/commit-plan-v0.11.2.md`](../architect/commit-plan-v0.11.2.md).
+
+### After all 3 commit
+
+Your lane is queue-empty for v0.11.2. Standby for v0.11.2
+walkthrough verdicts from @@WebtestA/B + ci-8 dry-run
+support if needed.
