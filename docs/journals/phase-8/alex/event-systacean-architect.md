@@ -1300,3 +1300,79 @@ Total set: **19 tests** (14 lib + 5 integration). Closed (this time).
 Push to `systacean-18-smoke` (append) + `gh workflow run ci.yml --ref systacean-18-smoke`. If this run shows Ubuntu fully green, the gate-unblocker work on my lane is structurally complete. If it surfaces yet another failure, I'll fire a scope poke instead of iterating — at that point the iteration cost is high enough that we should reconsider strategy (e.g., programmatic skip via `resolve_model` check, or a code-level fix in chan-drive's write_file to handle missing model gracefully).
 
 Taking the obvious-call shortcut again — same shape as follow-ups #1 + #2 — unless you'd rather route this differently.
+
+## 2026-05-21 — scope poke (-18 follow-up #3 smoke surfaced 9 more failures — NEW LANE: chan-server)
+
+Per my prior commitment ("if it still surfaces yet another failure on the next iteration, I'll fire a scope poke instead of iterating"). Stopping autonomous gating; escalating for routing.
+
+### Follow-up #3 smoke verdict
+
+Run [`26241095946`](https://github.com/fiorix/chan/actions/runs/26241095946). Ubuntu cargo test: `195 passed; 9 failed`. The 9 failures are ALL in **chan-server lib** (`crates/chan-server/src/...`), not chan-drive — a NEW lane that wasn't in the original `-18` task body.
+
+All 9 panic with the same BGE-not-downloaded error:
+
+```
+indexer::tests::apply_watch_change_indexes_regular_file        (indexer.rs:958)
+indexer::tests::apply_watch_change_special_clears_prior_index_entry  (indexer.rs:1075)
+indexer::tests::create_event_admits_new_indexable_file_into_bm25    (indexer.rs:985)
+routes::graph::tests::link_to_directory_does_not_synthesize_ghost_file_node  (graph.rs:1401)
+routes::graph::tests::link_to_non_markdown_disk_file_resolves_to_real_file   (graph.rs:1314)
+routes::graph::tests::merged_graph_layers_emit_filesystem_media_and_language_nodes  (graph.rs:1474)
+routes::inspector::tests::inspector_payload_covers_drive_directory_text_and_binary  (inspector.rs:281)
+routes::search::tests::indexing_state_endpoint_requires_auth  (search.rs:544)
+routes::search::tests::indexing_state_endpoint_returns_dir_nodes  (search.rs:544)
+```
+
+Pattern (verified in chan-server src): every failing test calls `drive.index_file(...).unwrap()` directly OR via `apply_watch_change` (a chan-server helper that wraps `drive.index_file(path)?`).
+
+### Empirical complete set across the workspace
+
+Total gate-blocking tests after each follow-up:
+
+| Crate         | Tests | Already gated | Awaiting decision |
+|---------------|-------|---------------|-------------------|
+| chan-drive lib (`src/`) | 14 | 14 (`-18` initial commit) | 0 |
+| chan-drive integration (`tests/`) | 5 | 5 (follow-ups #1 + #2 + #3) | 0 |
+| chan-server lib (`src/`) | 9 | 0 | **9** |
+| **Total** | **28** | 19 | 9 |
+
+### Three routing options
+
+**Option A — fold chan-server gating into `-18`** (recommended):
+
+Same root cause; same `#[ignore]` shape; same fix pattern. The original `-18` task body was chan-drive-scoped because @@CI's ci-12 audit only had visibility into chan-drive at the time. Now the gate-unblocker reach is wider, but the structural fix is identical. Lowest coordination cost: I extend `-18` with one more follow-up commit (`#4`) covering the 9 chan-server tests, fire commit-ready poke, smoke verifies green.
+
+Estimated diff: 9 `#[ignore]` lines (`chan-server/src/{indexer.rs,routes/graph.rs,routes/inspector.rs,routes/search.rs}`). Same shape as the chan-drive gates.
+
+**Option B — cut a new task `systacean-19`** for the chan-server gating:
+
+Cleaner task-spec separation (each crate gets its own gate-unblocker task). Higher coordination cost (new task file, new architect dispatch, separate clearance round). Audit trail is cleaner in retrospect.
+
+**Option C — pivot to a different gating strategy**:
+
+The whack-a-mole has revealed that the BGE-not-downloaded failure mode is structural to the chan-drive `write_file` path. Every test that exercises the indexer transitively hits it. Two structural fixes worth considering:
+
+- **C1: Programmatic skip via `resolve_model` check.** Add a `requires_embed_model!()` macro / helper that calls `chan_drive::index::embeddings::resolve_model(DEFAULT_MODEL)` at test entry; if it returns `ModelNotDownloaded`, the test exits early with a log line. Tests can then be `#[test]` only — no per-test `#[ignore]` attribute. Coverage opt-out is detected at runtime instead of declared.
+- **C2: Code-level fix in chan-drive's `write_file`.** When the embed step fails with `ModelNotDownloaded`, log + skip the vector commit but STILL commit BM25. The user gets a degraded "BM25-only" mode rather than a hard failure. This is actually a product improvement: today a default-build install without the model has BROKEN indexing; the fix gives BM25-only fallback. Same shape as the `embed-model` feature-off case but at runtime.
+
+C1 is a test-infra change (~30 LoC test helper, then strip the `#[ignore]` from all 19+9=28 tests). C2 is a chan-drive `write_file` change (~10 LoC; error-discriminating early-return) that benefits real users too.
+
+Both C1 + C2 close the gate WITHOUT iterative whack-a-mole because they handle the missing-model case at the source.
+
+### Recommendation
+
+Short-term: **Option A** (fold into `-18`). Lowest cost; gets the gate green today.
+
+Medium-term flag: **Option C2** is worth a separate task. It's not just "make tests pass" — it improves the default-build install experience. A user who installs the default chan binary (no `embed-model` feature, no model downloaded) today gets the indexing path failing on first write. With C2, BM25 search works out of the box; semantic search is the upgrade path via `chan index download-model`. Aligns with the architectural decisions from `systacean-6` / `-7` (BGE bundle opt-in).
+
+### Also: Windows clippy update
+
+Follow-up #3 smoke's Windows clippy reds: **2 new dead_code lints** (`function node`, `function node_path_kind` in `crates/chan-server/src/routes/fs_graph.rs:927+932`) — NEW since the prior smoke. The 11 chan-desktop dead_code lints I flagged in `-17`'s smoke are GONE (`fullstack-b-24` `c0600e0` cleared them). These 2 new ones are in chan-server's `fs_graph.rs` tests, which is more my lane — flagging in case you want to bundle them into the broader gate-unblocker sweep (they'd block Windows clippy independent of the chan-server BGE gating).
+
+### Standing by
+
+Holding all further commits until you route option A/B/C. The follow-up #3 commit (`147a06f`) is already on main + on `systacean-18-smoke`; that part is settled. Pause is on the chan-server gating decision.
+
+Same `#[ignore]` shape rationale as before applies if you pick A or B. Same "make obvious call" framing for the gating-only path; the chan-server failure scope is wider but the fix shape is identical, so it could still be obvious-call territory if you want to authorize that.
+
+If C1 or C2 — I'll need a sub-task with a clear acceptance criterion (especially C2 which is a real product change touching the indexing path).
