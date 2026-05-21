@@ -1,0 +1,10 @@
+# Local preview tools that might land in this dir (npx serve etc).
+node_modules/
+
+# macOS Finder cruft.
+.DS_Store
+
+# Any future build output. Site has no build step today, but reserve
+# the path in case a renderer is added later.
+dist/
+build/
