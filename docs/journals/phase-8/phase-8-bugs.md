@@ -628,6 +628,22 @@
   - lane: @@FullStackA (rich-prompt + terminal-host layout in `TerminalRichPrompt.svelte` / `TerminalTab.svelte`)
   - dispatched for Round-2 wave-2 against @@FullStackA. Investigation + small CSS fix. v0.11.2 candidate IF root cause turns out to be a one-line CSS variable fix; otherwise defer to wave-2
 
+- Terminal columns don't widen after pane / window resize (PTY stays at old cols)
+  - flagged 2026-05-21 by @@Alex (screenshot): after resizing the chan window with multiple terminal panes laid out, agent output in most terminal panes renders very narrow — single-word-per-line wrapping that doesn't match the actual visible terminal width. The terminals appear to retain their pre-resize column count instead of expanding to the new pane width
+  - root cause hypothesis: missing or unreliable SIGWINCH propagation on resize:
+    a) **ResizeObserver miss**: the per-terminal ResizeObserver doesn't fire on the window-resize / pane-resize transition (or fires but is debounced past the visible-flicker window)
+    b) **xterm.js fit-addon call missing**: even if the observer fires, `fitAddon.fit()` isn't called → xterm's internal cols/rows stay stale → PTY doesn't get SIGWINCH → agent's view of `$COLUMNS` is wrong
+    c) **PTY resize call missing**: SPA may call `fit()` correctly but not propagate the new cols/rows to chan-server's `Session::resize` (which forwards SIGWINCH to the child process). The agent's PTY believes it's still at old cols
+    d) **Race with the broadcast/multi-tab layout**: if the pane-resize happens during a layout transition (e.g., flipping Hybrid, splitting panes, the Round-1 work in `-b-2`'s lineHeight + scrollback changes), the resize event may be lost
+  - want: every terminal pane sees correct cols/rows after any resize (window resize, pane drag, Hybrid flip, layout change). Agent output in the PTY reflows to the new width on the same frame as the visible terminal does
+  - first investigation steps:
+    1. Repro: open 4+ terminals in a tiled layout (similar to the screenshot's 6-pane setup), let an agent fill them with output, then resize the window. Observe whether subsequent agent output narrows / stays narrow.
+    2. DevTools (post-v0.11.2 `-a-36` + `-b-17` unlock): inspect xterm.js's internal `term.cols` / `term.rows` before + after resize. If the values don't update, ResizeObserver / `fit()` is the bug.
+    3. Server-side: log `Session::resize` calls from chan-server. If the SPA-side fit updates but the resize doesn't flow to the server, the PTY's view stays stale.
+  - lane: @@FullStackB (terminal + PTY + chan-server `Session::resize` plumbing — same lane that owns `-b-2` terminal cluster work + `-b-11` scrollback/TERM settings + `-b-13` submit-mode)
+  - severity: paper-cut + multi-occurrence; affects daily-driver flow when working with many agents in tiled layouts. NOT v0.11.2 candidate (patch wave is about to cut + this needs investigation time)
+  - dispatched for Round-2 wave-2 against @@FullStackB
+
 ## Round 2 — needs deeper change
 
 - Large markdown files block the editor with a spinner while loading
