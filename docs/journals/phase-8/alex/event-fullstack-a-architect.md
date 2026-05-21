@@ -3034,3 +3034,149 @@ task's "back-side CONTENT before reshaping
 the back-side CHROME" sequencing) →
 `-a-49..52` (graph overhaul) → `-a-42`
 (About).
+
+## 2026-05-21 — poke (fullstack-a-53 committed + fullstack-a-54 ready for review)
+
+`-a-53` committed at `8c65296 Hybrid back-side
+theme architecture correction + custom-TERM
+fix (fullstack-a-53)` per your clearance. 10
+files, no stowaways, pre/post audits matched.
+
+`-a-54` ready for review. Two-file change.
+SPA-only; no Rust touched. Mostly CSS +
+template surgery in `Pane.svelte` as the task
+body sketched — the back-side dispatch
+behaviour layer doesn't change.
+
+### What landed
+
+`Pane.svelte`:
+
+* The `{#if !pane.showingBack}` wrapper around
+  the `.tabs` div is gone. Tab strip renders
+  in BOTH front + back states. New
+  `class:flipped={pane.showingBack}` flag.
+* `hybridFamilyName` derived in the script:
+  switches on `active?.kind` → "Hybrid
+  Terminal" / "Hybrid Editor" / "Hybrid Graph"
+  / "Hybrid File Browser" / "Hybrid".
+* The `.dead-zone` slot hosts a new
+  `<span class="hybrid-title">` element when
+  `pane.showingBack === true`. The title is
+  un-mirrored (it's the user's read-anchor
+  for "which back-side surface is this?";
+  the tabs themselves do the mirroring).
+
+CSS rules (under existing style block):
+
+* `.tabs.flipped .tab { transform:
+  scaleX(-1); }` — each tab's whole content
+  mirrors. Click events still hit-test
+  through the transform (modern browsers
+  honor visual position).
+* `.tabs.flipped .actions { order: -1;
+  margin-left: 0; margin-right: auto; }` —
+  hamburger swaps to the LEFT end of the
+  tab strip. Same DOM element, different
+  flex slot.
+* `.tabs.flipped .dead-zone { justify-content:
+  center; align-items: center; display: flex;
+  cursor: default; }` — the dead-zone slot
+  becomes the title host; the drag-to-NAV
+  cursor reverts to default (no
+  drag-to-rearrange semantic on the back).
+* `.hybrid-title { font-size: 13px;
+  font-weight: 600; color: var(--text-
+  secondary); pointer-events: none;
+  text-transform: uppercase; }`.
+
+`Pane.test.ts`:
+
+* Two `-a-43` "tab strip is hidden on back"
+  pins rewritten to assert the `-a-54`
+  contract (tab strip present + `.flipped`
+  class + family-name title visible).
+* New `describe("Pane flip UX redesign
+  (fullstack-a-54)")` block with 3 pins:
+  - hybridFamilyName derives "Hybrid Editor"
+    for a file front tab.
+  - Front-state pane does NOT carry the
+    `.flipped` class + has no `.hybrid-title`.
+  - Pane source carries the load-bearing CSS
+    rules (`scaleX(-1)` + `order: -1`).
+
+### Decisions / shape rationale
+
+* **Family-name title in dead-zone slot**
+  (NOT replacing tabs OR absolute overlay).
+  The dead-zone is the natural empty space
+  between the rightmost tab + the hamburger;
+  on the back it's the cleanest host for
+  the title without competing with tabs for
+  layout. Absolute overlay alternative
+  considered + rejected (risks competing
+  with tab click-targets + visual clutter).
+* **Flex order swap** for hamburger (not DOM
+  reshuffle). Cleaner; the HamburgerMenu's
+  anchor "just works" since it positions
+  relative to DOM, not source order.
+* **Un-mirrored title**. Tabs mirror for the
+  viewed-from-behind semantic; the title is
+  the user's read-anchor — mirroring it
+  would defeat its purpose. Flag if @@Alex
+  wants the title mirrored too.
+* **Dead-zone cursor reset on flip**. The
+  drag-to-NAV affordance from `-a-44`
+  doesn't apply on the back. Handlers still
+  wire up (no behavior change to be safe);
+  the cursor visual just reverts to default
+  so users don't expect rearrangement to
+  trigger from this surface. A stricter
+  handler-side gate (no-op when
+  `pane.showingBack`) would be a small
+  polish follow-up.
+* **Click-through verification**: `scaleX(-1)`
+  doesn't break click hit-testing in modern
+  browsers. The existing `onmousedown`
+  handlers on `.tab` elements fire the same
+  way on mirrored tabs. Manual visual check
+  across Tauri / Chrome recommended per the
+  task body's "Manual visual check across
+  Hybrid types" note.
+
+### Gate
+
+* vitest **646 / 646** (+3 net from `-a-53`'s
+  643).
+* svelte-check 0 errors / 0 warnings across
+  3990 files.
+* npm build clean.
+* Rust gate not re-run (no Rust touched).
+
+### Suggested commit subject
+
+```
+Hybrid flip UX: preserve tab strip + mirror tabs + swap hamburger + family-name title (fullstack-a-54)
+```
+
+Single commit. Template + CSS + tests are
+tightly coupled.
+
+### Files for `git add` (per-path discipline)
+
+* `web/src/components/Pane.svelte`
+* `web/src/components/Pane.test.ts`
+* `docs/journals/phase-8/fullstack-a/fullstack-a-53.md`
+  (`-a-53` "committed as 8c65296" trailing
+  append; bundled per the established
+  pattern)
+* `docs/journals/phase-8/fullstack-a/fullstack-a-54.md`
+* `docs/journals/phase-8/fullstack-a/journal.md`
+* `docs/journals/phase-8/alex/event-fullstack-a-architect.md`
+  (this append)
+
+Push held — multi-agent tree commit
+discipline. Standing by for clearance. After
+`-a-54` lands, queue is `-a-49..52` (graph
+overhaul first sub-wave) → `-a-42` (About;
+A+B+C+F all in HEAD).

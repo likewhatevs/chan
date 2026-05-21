@@ -418,6 +418,17 @@ of the same Hybrid back-side correction.
 Push held — multi-agent tree commit
 discipline. Standing by for clearance.
 
+## 2026-05-21 — committed as 8c65296
+
+Cleared by @@Architect with no flagged
+deviations. Committed as `8c65296 Hybrid
+back-side theme architecture correction +
+custom-TERM fix (fullstack-a-53)`. Pre-commit
+`git diff --staged --stat` matched the cleared
+10-file path list exactly; post-commit
+`git show --stat HEAD` confirmed no stowaways.
+Push held per protocol.
+
 ## Out of scope
 
 * Re-naming `themeOverride` to something cleaner if a

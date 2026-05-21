@@ -95,6 +95,27 @@
 
   const active = $derived(pane.tabs.find((t) => t.id === pane.activeTabId) ?? null);
 
+  /// `fullstack-a-54`: family-name title shown inside the tab strip
+  /// when this pane is flipped. Drives which `HybridXConfig` body is
+  /// mounted below + which label users see inside the tab area so
+  /// they can identify the back-side surface without reading the
+  /// (mirrored) tabs.
+  const hybridFamilyName = $derived.by(() => {
+    if (!active) return "Hybrid";
+    switch (active.kind) {
+      case "terminal":
+        return "Hybrid Terminal";
+      case "file":
+        return "Hybrid Editor";
+      case "graph":
+        return "Hybrid Graph";
+      case "browser":
+        return "Hybrid File Browser";
+      default:
+        return "Hybrid";
+    }
+  });
+
   /// Per-row is_dir lookup for the active tree, keyed by path. Drives
   /// the File-Browser tab title which needs to render "the parent
   /// dir of the selected file" or "the selected directory" — and
@@ -892,17 +913,22 @@
   role="region"
   aria-label="editor pane"
 >
-  <!-- `fullstack-a-43`: tab strip is hidden when the pane is
-       flipped to its back-side configuration view. The back is a
-       single config surface scoped to the active front-tab type;
-       no tab navigation is meaningful there. Flip back to the
-       front via the `Cmd+. Tab` chord (or `Cmd+. f` / `Cmd+. b` /
-       etc to reach a specific front tab kind). -->
-  {#if !pane.showingBack}
+  <!-- `fullstack-a-43`: tab strip was hidden when flipped to the
+       back-side configuration view.
+       `fullstack-a-54` keeps the tab strip visible on the back
+       side per @@Alex's design correction — tabs render mirrored
+       (`scaleX(-1)`), hamburger swaps to the opposite end via
+       `order: -1`, and the family-name title ("Hybrid Terminal" /
+       "Hybrid Editor" / "Hybrid Graph" / "Hybrid File Browser")
+       lives inside the dead-zone slot. Tabs stay clickable —
+       clicking a mirrored tab swaps the active front-tab + the
+       back-side dispatch follows. Flip back via the `Cmd+. Tab`
+       chord or the hamburger Flip entry. -->
   <!-- svelte-ignore a11y_interactive_supports_focus -->
   <div
     class="tabs"
     class:drop-active={dropActive}
+    class:flipped={pane.showingBack}
     role="tablist"
     ondragover={onDragOver}
     ondragleave={onDragLeave}
@@ -1059,7 +1085,17 @@
       aria-hidden="true"
       onmousedown={onDeadZoneMouseDown}
       ondblclick={onDeadZoneDblClick}
-    ></div>
+    >
+      <!-- `fullstack-a-54`: family-name title rendered inside the
+           tab strip when flipped. NOT mirrored (the title reads
+           normally so users can identify which back-side config
+           they're looking at). Sits in the dead-zone slot so it
+           naturally occupies the empty stretch between the last
+           tab and the hamburger. -->
+      {#if pane.showingBack}
+        <span class="hybrid-title">{hybridFamilyName}</span>
+      {/if}
+    </div>
     <div class="actions">
       <!-- `fullstack-a-27`: the per-Hybrid theme toggle button used
            to live here as standalone chrome (`fullstack-59`); @@Alex
@@ -1186,7 +1222,6 @@
       </HamburgerMenu>
     </div>
   </div>
-  {/if}
 
   <div
     class="editor-wrap"
@@ -1445,6 +1480,36 @@
   }
   .tabs.drop-active {
     box-shadow: inset 0 0 0 2px var(--pane-focus);
+  }
+  /* `fullstack-a-54` flipped chrome:
+     * Tabs mirror via `scaleX(-1)` so their text reads as if
+       viewed from behind. Click events still hit-test through
+       the transform (modern browsers honor visual position).
+     * The .actions container (hamburger) jumps to the left via
+       `order: -1` so it visually mirrors its front-state right-
+       end placement.
+     * The .dead-zone slot hosts the family-name title overlay
+       (rendered un-mirrored so users can read it normally to
+       identify which back-side surface this is). */
+  .tabs.flipped .tab { transform: scaleX(-1); }
+  .tabs.flipped .actions {
+    order: -1;
+    margin-left: 0;
+    margin-right: auto;
+  }
+  .tabs.flipped .dead-zone {
+    cursor: default;
+    justify-content: center;
+    align-items: center;
+    display: flex;
+  }
+  .hybrid-title {
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--text-secondary);
+    letter-spacing: 0.02em;
+    pointer-events: none;
+    text-transform: uppercase;
   }
   .tab[draggable="true"] { -webkit-user-drag: element; }
   /* Vertical bar between tabs that shows where a drop will land. */

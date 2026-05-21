@@ -277,8 +277,15 @@ describe("Pane back-side configuration view (fullstack-a-43)", () => {
     expect(
       target.querySelector('[aria-label="Hybrid Terminal configuration"]'),
     ).not.toBeNull();
-    // Tab strip is hidden on the back side.
-    expect(target.querySelector(".tabs")).toBeNull();
+    // `fullstack-a-54`: tab strip stays visible on the back side
+    // (mirrored via the .flipped class). The family-name title
+    // "Hybrid Terminal" lives inside the dead-zone slot.
+    const tabs = target.querySelector(".tabs");
+    expect(tabs).not.toBeNull();
+    expect(tabs!.classList.contains("flipped")).toBe(true);
+    expect(target.querySelector(".hybrid-title")?.textContent).toBe(
+      "Hybrid Terminal",
+    );
   }, 15000);
 
   test("renders HybridEditorConfig when active front tab is a file", async () => {
@@ -338,7 +345,7 @@ describe("Pane back-side configuration view (fullstack-a-43)", () => {
     ).not.toBeNull();
   }, 15000);
 
-  test("front-tab content does not render while showingBack=true", async () => {
+  test("front-tab content does not render while showingBack=true (fullstack-a-43 + -a-54)", async () => {
     const front = terminalTab({ id: "front-term" });
     const pane: LeafNode = {
       kind: "leaf",
@@ -350,10 +357,76 @@ describe("Pane back-side configuration view (fullstack-a-43)", () => {
     };
     const target = await renderPane(pane, { paneMode: false });
 
-    // Tab strip suppressed; back-side wrapper visible.
-    expect(target.querySelector(".tabs")).toBeNull();
+    // `fullstack-a-54`: tab strip stays visible on the back side
+    // (was hidden under -a-43). The back-side wrapper still
+    // renders BELOW the tab strip.
+    const tabs = target.querySelector(".tabs");
+    expect(tabs).not.toBeNull();
+    expect(tabs!.classList.contains("flipped")).toBe(true);
     expect(target.querySelector(".back-side")).not.toBeNull();
   }, 15000);
+});
+
+describe("Pane flip UX redesign (fullstack-a-54)", () => {
+  test("hybridFamilyName derives 'Hybrid Editor' for a file front tab", async () => {
+    const front = {
+      kind: "file" as const,
+      fileKind: "document" as const,
+      id: "front-file",
+      path: "notes/a.md",
+      content: "",
+      saved: "",
+      savedMtime: null,
+      mode: "wysiwyg" as const,
+      loading: false,
+      error: null,
+      fileMissing: null,
+      inspectorOpen: false,
+      outlineOpen: false,
+      repoRoot: null,
+      readMode: false,
+      fsWritable: true,
+      styleToolbarOpen: false,
+      syntaxHighlight: true,
+      highlightTrailingWhitespace: false,
+      codeBlocksCollapsed: false,
+    };
+    const pane: LeafNode = {
+      kind: "leaf",
+      id: "pane-fly-editor",
+      tabs: [front],
+      activeTabId: front.id,
+      back: {},
+      showingBack: true,
+    };
+    const target = await renderPane(pane, { paneMode: false });
+    expect(target.querySelector(".hybrid-title")?.textContent).toBe(
+      "Hybrid Editor",
+    );
+  }, 15000);
+
+  test("front-state pane does not carry the .flipped class", async () => {
+    const front = terminalTab({ id: "front-term" });
+    const pane: LeafNode = {
+      kind: "leaf",
+      id: "pane-front-no-flip",
+      tabs: [front],
+      activeTabId: front.id,
+    };
+    const target = await renderPane(pane, { paneMode: false });
+    const tabs = target.querySelector(".tabs");
+    expect(tabs).not.toBeNull();
+    expect(tabs!.classList.contains("flipped")).toBe(false);
+    expect(target.querySelector(".hybrid-title")).toBeNull();
+  }, 15000);
+
+  test("Pane source carries the -a-54 flip CSS (scaleX + order swap)", () => {
+    // Pin the load-bearing CSS rules so a future refactor can't
+    // silently drop the mirror or the hamburger swap without
+    // tripping the test.
+    expect(paneSource).toMatch(/\.tabs\.flipped \.tab \{ transform: scaleX\(-1\); \}/);
+    expect(paneSource).toMatch(/\.tabs\.flipped \.actions \{[\s\S]*?order: -1/);
+  });
 });
 
 describe("Pane Hybrid NAV transaction mode (fullstack-a-44)", () => {

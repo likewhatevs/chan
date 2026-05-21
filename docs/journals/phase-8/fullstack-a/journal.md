@@ -928,3 +928,83 @@ Outbound poke fired; standing by. Queue
 waiting: `-a-54` (flip UX redesign — needs
 `-a-53` first) → `-a-49..52` (graph overhaul)
 → `-a-42` (About).
+
+## 2026-05-21 — -a-53 committed; -a-54 ready for review
+
+`-a-53` cleared + committed as `8c65296 Hybrid
+back-side theme architecture correction +
+custom-TERM fix (fullstack-a-53)`. 10 files,
+no stowaways, pre/post audits matched.
+
+### -a-54 complete (Hybrid flip UX redesign)
+
+Two-file change. SPA-only; no Rust touched.
+
+`Pane.svelte` reshape:
+
+* Tab strip rendered always (was hidden when
+  `pane.showingBack=true` under `-a-43`).
+  New `class:flipped={pane.showingBack}` flag.
+* `hybridFamilyName` derived from
+  `active?.kind`: "Hybrid Terminal" / "Hybrid
+  Editor" / "Hybrid Graph" / "Hybrid File
+  Browser" / "Hybrid".
+* Family-name title element hosted inside the
+  `.dead-zone` slot when flipped (un-mirrored,
+  pointer-events: none).
+* CSS rules: `.tabs.flipped .tab { transform:
+  scaleX(-1) }` mirrors tabs; `.tabs.flipped
+  .actions { order: -1 }` swaps hamburger to
+  the left; `.tabs.flipped .dead-zone` becomes
+  the title host with `display: flex;
+  justify-content: center`.
+
+`Pane.test.ts` updates:
+
+* Two `-a-43` "tab strip hidden on back"
+  pins rewritten to assert the new `-a-54`
+  contract (tab strip present + `.flipped`
+  class + `.hybrid-title` in dead-zone).
+* New `describe("Pane flip UX redesign
+  (fullstack-a-54)")` block with 3 pins.
+
+### Design decisions
+
+* **Title in dead-zone slot** vs absolute
+  overlay. Dead-zone is the natural empty
+  space between rightmost tab + hamburger.
+  Overlay risked competing with tab
+  click-targets.
+* **Order swap** for hamburger (`order: -1`)
+  rather than DOM reshuffle. Flex slot swap
+  keeps the same `<HamburgerMenu>` instance;
+  its anchor "just works" since the menu
+  positions relative to DOM, not source
+  order.
+* **Title not mirrored**. While tabs mirror
+  for the viewed-from-behind semantic, the
+  title is the user's read-anchor. Flag if
+  @@Alex wants the title mirrored too.
+* **Dead-zone cursor reset to default** when
+  flipped — the drag-to-NAV affordance from
+  `-a-44` doesn't make sense from the back.
+  Handlers still wire (no behavior change),
+  just no longer visually advertised. A
+  stricter handler-side gate (no-op on
+  `showingBack`) is a small polish follow-up.
+
+### Gate
+
+* vitest **646 / 646** (+3 net from `-a-53`'s
+  643).
+* svelte-check 0 errors / 0 warnings across
+  3990 files.
+* npm build clean.
+* Rust gate not re-run (no Rust touched).
+
+Impl note + commit subject at
+[fullstack-a-54.md](fullstack-a-54.md).
+Outbound poke fired; standing by. Queue
+waiting: `-a-49..52` (graph overhaul first
+sub-wave) → `-a-42` (About; A+B+C+F all in
+HEAD post -a-53).
