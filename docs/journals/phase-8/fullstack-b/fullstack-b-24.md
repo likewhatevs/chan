@@ -610,3 +610,51 @@ chan-server + chan-desktop: smoke #1 fixup — gate orphaned Unix-only imports +
 3. Re-fire `gh workflow run ci.yml --ref fullstack-b-24-smoke`.
 4. Confirm Windows clippy green.
 5. (Ubuntu test failure stays as the systacean-18 gap; not -24's gate.)
+
+## 2026-05-21 — smoke run #2 (`26239515413`): one more downstream Windows error
+
+Smoke #2 cleared the three secondary chan-server / chan-desktop
+errors but Windows clippy then surfaced one more:
+
+```
+error: enum `ControlResponse` is never used
+  --> crates\chan\src\main.rs:1628:6
+```
+
+The chan CLI binary has its own `ControlRequest` + `ControlResponse`
+client-side types (distinct from chan-server's). `ControlRequest`
+remains used on both platforms (the `cmd_open` builder + the
+non-unix `send_control_request` stub takes it as a parameter).
+`ControlResponse` is only deserialized inside the unix variant of
+`send_control_request`; the non-unix variant `anyhow::bail!`s out
+without reading a response. Dead on Windows.
+
+### Fix
+
+* **`crates/chan/src/main.rs`** — `#[cfg(unix)]` prepended to
+  `enum ControlResponse` (line 1628). Single attribute, same
+  shape as the chan-server fixes.
+
+### Local Windows cross-compile attempt
+
+Tried `cargo clippy --target x86_64-pc-windows-msvc -p chan
+--all-targets -- -D warnings` to validate before re-firing.
+Blocked by `ring`'s C dep — `assert.h not found` because Windows
+MSVC headers aren't available on macOS. Exactly the blocker
+@@Systacean's `-17` note flagged for `onig_sys`; same
+class of issue for `ring`. CI smoke remains the canonical
+validation path.
+
+### Suggested commit subject
+
+```
+chan: gate Unix-only ControlResponse enum on Windows (fullstack-b-24 smoke #2 fixup)
+```
+
+### Next
+
+1. Commit on main.
+2. Fast-forward push `fullstack-b-24-smoke`.
+3. Re-fire workflow.
+4. Confirm Windows clippy green (or surface the next layer if more
+   dead-code is hiding).

@@ -1623,6 +1623,7 @@ enum ControlRequest {
     OpenPath { window_id: String, path: PathBuf },
 }
 
+#[cfg(unix)]
 #[derive(Deserialize)]
 #[serde(tag = "status", rename_all = "snake_case")]
 enum ControlResponse {
