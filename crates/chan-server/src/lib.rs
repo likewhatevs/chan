@@ -53,8 +53,8 @@ use routes::{
     api_headings, api_health, api_index_rebuild, api_index_status, api_indexing_state,
     api_inspector, api_language_graph, api_link_targets, api_links, api_list_files,
     api_list_sessions, api_move, api_patch_config, api_patch_drive, api_patch_server_config,
-    api_post_attachment, api_post_contacts_import, api_put_session, api_read_file, api_report_file,
-    api_report_prefix, api_resolve_link, api_restart_terminal, api_search_content,
+    api_post_attachment, api_post_contacts_import, api_put_session, api_read_file, api_report_dir,
+    api_report_file, api_report_prefix, api_resolve_link, api_restart_terminal, api_search_content,
     api_search_files, api_set_terminal_submit_mode, api_set_terminal_watcher, api_storage_reset,
     api_terminal_event_reply, api_terminal_watcher_events, api_terminal_ws,
     api_unset_terminal_watcher, api_write_file, ws_upgrade,
@@ -817,6 +817,7 @@ fn router(state: Arc<AppState>) -> Router {
         .route("/api/backlinks/*path", get(api_backlinks))
         .route("/api/report/file", get(api_report_file))
         .route("/api/report/prefix", get(api_report_prefix))
+        .route("/api/report/dir", get(api_report_dir))
         .route("/api/server/config", get(api_get_server_config))
         .route("/api/config", get(api_get_config))
         .route("/api/build-info", get(api_build_info))

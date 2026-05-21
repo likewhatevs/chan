@@ -156,6 +156,275 @@ fn gitignore_filters_during_scan_and_update() {
 }
 
 #[test]
+fn dir_report_root_matches_all_scope() {
+    // The maintained cache at the empty-string key must agree
+    // with the O(N) snapshot(All) path on every aggregate field.
+    // This is the cache's load-bearing invariant — any drift
+    // here means the dir endpoint reports different numbers than
+    // the existing prefix endpoint for the same set of files.
+    let d = tempdir().unwrap();
+    write(d.path(), "main.rs", "fn main() {}\n");
+    write(d.path(), "lib.rs", "pub fn x() {}\n");
+    write(d.path(), "notes.md", "# h\n\ntext.\n");
+    write(d.path(), "src/util.rs", "pub fn u() {}\n");
+
+    let idx = Index::scan(&ReportOptions::new(d.path())).unwrap();
+    let params = CocomoParams::default();
+    let dir_root = idx.dir_report("", &params).expect("root dir tracked");
+    let all = idx.snapshot(&Scope::All, &params);
+
+    assert_eq!(dir_root.totals, all.totals);
+    assert_eq!(dir_root.by_language, all.by_language);
+    // CocomoSummary is f64-fielded; compare effort_person_months as
+    // the load-bearing output (the rest derives from it deterministically).
+    assert_eq!(
+        dir_root.cocomo.effort_person_months,
+        all.cocomo.effort_person_months
+    );
+    assert!(
+        dir_root.files.is_empty(),
+        "dir_report does not enumerate files; consumers use Scope::Prefix for that"
+    );
+}
+
+#[test]
+fn dir_report_subdir_matches_prefix_scope() {
+    // A subdirectory's cached aggregate must equal Scope::Prefix
+    // for the same path. Tests the typical inspector use case:
+    // "what's in crates/chan-drive/?".
+    let d = tempdir().unwrap();
+    write(d.path(), "src/main.rs", "fn main() {}\n");
+    write(d.path(), "src/lib.rs", "pub fn x() {}\n");
+    write(d.path(), "src/util/helper.rs", "pub fn h() {}\n");
+    write(d.path(), "README.md", "# h\n");
+
+    let idx = Index::scan(&ReportOptions::new(d.path())).unwrap();
+    let params = CocomoParams::default();
+
+    let dir = idx.dir_report("src", &params).expect("src tracked");
+    let prefix = idx.snapshot(&Scope::Prefix("src".into()), &params);
+
+    assert_eq!(dir.totals, prefix.totals);
+    assert_eq!(dir.by_language, prefix.by_language);
+    assert_eq!(
+        dir.cocomo.effort_person_months,
+        prefix.cocomo.effort_person_months
+    );
+    assert_eq!(dir.totals.files, 3, "all three .rs files counted");
+}
+
+#[test]
+fn dir_report_handles_trailing_and_leading_slashes() {
+    // Path normalization: "src", "src/", "/src", "/src/" all map
+    // to the same cache key. Common in HTTP query strings; we
+    // strip slashes rather than refuse the request.
+    let d = tempdir().unwrap();
+    write(d.path(), "src/lib.rs", "pub fn x() {}\n");
+    let idx = Index::scan(&ReportOptions::new(d.path())).unwrap();
+    let params = CocomoParams::default();
+
+    let plain = idx.dir_report("src", &params).expect("plain");
+    let trailing = idx.dir_report("src/", &params).expect("trailing");
+    let leading = idx.dir_report("/src", &params).expect("leading");
+    let both = idx.dir_report("/src/", &params).expect("both");
+
+    // All four should agree on totals; generated_at differs per
+    // call so we compare the meaningful fields only.
+    assert_eq!(plain.totals, trailing.totals);
+    assert_eq!(plain.totals, leading.totals);
+    assert_eq!(plain.totals, both.totals);
+}
+
+#[test]
+fn dir_report_missing_dir_is_none() {
+    // A directory with no tracked files (gitignored target/,
+    // misspelled path, or genuinely absent) yields None. Lets
+    // chan-server return 404 cleanly instead of synthesizing an
+    // empty roll-up that looks like a real dir.
+    let d = tempdir().unwrap();
+    write(d.path(), "src/lib.rs", "fn x() {}\n");
+    let idx = Index::scan(&ReportOptions::new(d.path())).unwrap();
+    assert!(idx
+        .dir_report("does/not/exist", &CocomoParams::default())
+        .is_none());
+}
+
+#[test]
+fn dir_report_root_aggregates_multiple_languages() {
+    // Per-language sub-rollup must surface all languages present
+    // and reproduce the sort order (desc by bytes / files,
+    // asc by name).
+    let d = tempdir().unwrap();
+    write(d.path(), "a.rs", "fn a() {}\nfn b() {}\nfn c() {}\n");
+    write(d.path(), "b.py", "def x():\n    pass\n");
+    write(d.path(), "c.md", "# h\n");
+
+    let idx = Index::scan(&ReportOptions::new(d.path())).unwrap();
+    let r = idx.dir_report("", &CocomoParams::default()).unwrap();
+    let names: Vec<&str> = r.by_language.iter().map(|l| l.name.as_str()).collect();
+    assert!(names.contains(&"Rust"));
+    assert!(names.contains(&"Python"));
+    assert!(names.contains(&"Markdown"));
+    // Total file count across languages == totals.files.
+    let total_files: u64 = r.by_language.iter().map(|l| l.files).sum();
+    assert_eq!(total_files, r.totals.files);
+}
+
+#[test]
+fn incremental_insert_updates_ancestor_chain() {
+    // The cache must absorb a fresh insert without a full rescan;
+    // every ancestor dir picks up the new stats.
+    let d = tempdir().unwrap();
+    let mut idx = Index::scan(&ReportOptions::new(d.path())).unwrap();
+    assert!(idx.dir_report("", &CocomoParams::default()).is_none());
+
+    write(d.path(), "a/b/c.rs", "fn x() {}\n");
+    assert_eq!(idx.update("a/b/c.rs").unwrap(), UpdateOutcome::Inserted);
+
+    let p = CocomoParams::default();
+    // Root, a/, a/b/ all see the file.
+    let root = idx.dir_report("", &p).expect("root tracks file");
+    let a = idx.dir_report("a", &p).expect("a tracks file");
+    let ab = idx.dir_report("a/b", &p).expect("a/b tracks file");
+    assert_eq!(root.totals.files, 1);
+    assert_eq!(a.totals.files, 1);
+    assert_eq!(ab.totals.files, 1);
+    // The file's own path is NOT a directory key.
+    assert!(idx.dir_report("a/b/c.rs", &p).is_none());
+}
+
+#[test]
+fn incremental_remove_clears_ancestor_chain_when_last_file_leaves() {
+    // After the last file under a directory leaves, the dir
+    // entry is dropped — the cache mirrors "dirs that currently
+    // contain tracked files". This prevents stale rows from
+    // surfacing as ghost directories.
+    let d = tempdir().unwrap();
+    write(d.path(), "a/b/c.rs", "fn x() {}\n");
+    let mut idx = Index::scan(&ReportOptions::new(d.path())).unwrap();
+    let p = CocomoParams::default();
+    assert!(idx.dir_report("a/b", &p).is_some());
+
+    fs::remove_file(d.path().join("a/b/c.rs")).unwrap();
+    assert_eq!(idx.update("a/b/c.rs").unwrap(), UpdateOutcome::Removed);
+
+    assert!(idx.dir_report("a/b", &p).is_none());
+    assert!(idx.dir_report("a", &p).is_none());
+    assert!(idx.dir_report("", &p).is_none());
+}
+
+#[test]
+fn incremental_update_applies_delta_to_ancestors() {
+    // Modifying an existing file applies the *delta* against the
+    // ancestor chain, not a re-add. Confirms the subtract-then-add
+    // shape inside Index::update.
+    let d = tempdir().unwrap();
+    write(d.path(), "src/lib.rs", "fn x() {}\n");
+    let mut idx = Index::scan(&ReportOptions::new(d.path())).unwrap();
+    let p = CocomoParams::default();
+
+    let before = idx.dir_report("src", &p).unwrap();
+    assert_eq!(before.totals.files, 1);
+
+    write(d.path(), "src/lib.rs", "fn x() {}\nfn y() {}\nfn z() {}\n");
+    assert_eq!(idx.update("src/lib.rs").unwrap(), UpdateOutcome::Updated);
+
+    let after = idx.dir_report("src", &p).unwrap();
+    assert_eq!(after.totals.files, 1, "still one file, just bigger");
+    assert!(
+        after.totals.code > before.totals.code,
+        "code total reflects the larger file"
+    );
+    assert!(
+        after.totals.bytes > before.totals.bytes,
+        "bytes total reflects the larger file"
+    );
+}
+
+#[test]
+fn incremental_update_unchanged_does_not_drift_ancestors() {
+    // An Unchanged update must not touch the cache at all — drift
+    // here would compound over a session of no-op writes.
+    let d = tempdir().unwrap();
+    write(d.path(), "src/lib.rs", "fn x() {}\n");
+    let mut idx = Index::scan(&ReportOptions::new(d.path())).unwrap();
+    let p = CocomoParams::default();
+    let before = idx.dir_report("src", &p).unwrap();
+
+    assert_eq!(idx.update("src/lib.rs").unwrap(), UpdateOutcome::Unchanged);
+    let after = idx.dir_report("src", &p).unwrap();
+    assert_eq!(before.totals, after.totals);
+    assert_eq!(before.by_language, after.by_language);
+}
+
+#[test]
+fn rename_moves_stats_between_ancestor_chains() {
+    // A rename across directories must subtract from the old
+    // ancestor chain AND add to the new one. Catches the bug
+    // where Index::rename only ran update(to) without unwinding
+    // from's contribution.
+    let d = tempdir().unwrap();
+    write(d.path(), "old/a.rs", "fn a() {}\n");
+    let mut idx = Index::scan(&ReportOptions::new(d.path())).unwrap();
+    let p = CocomoParams::default();
+    assert!(idx.dir_report("old", &p).is_some());
+    assert!(idx.dir_report("new", &p).is_none());
+
+    write(d.path(), "new/a.rs", "fn a() {}\n");
+    fs::remove_file(d.path().join("old/a.rs")).unwrap();
+    let out = idx.rename("old/a.rs", "new/a.rs").unwrap();
+    assert!(matches!(
+        out,
+        UpdateOutcome::Inserted | UpdateOutcome::Updated
+    ));
+
+    assert!(idx.dir_report("old", &p).is_none(), "old dir empty");
+    let new = idx.dir_report("new", &p).expect("new dir populated");
+    assert_eq!(new.totals.files, 1);
+    // Root sees the file too, unchanged from before the rename.
+    assert_eq!(idx.dir_report("", &p).unwrap().totals.files, 1);
+}
+
+#[test]
+fn deep_directory_chain_propagates() {
+    // Five-level-deep file: every ancestor from root down to the
+    // immediate parent reports the same single-file stats.
+    let d = tempdir().unwrap();
+    write(d.path(), "a/b/c/d/e/file.rs", "fn x() {}\n");
+    let idx = Index::scan(&ReportOptions::new(d.path())).unwrap();
+    let p = CocomoParams::default();
+    for dir in ["", "a", "a/b", "a/b/c", "a/b/c/d", "a/b/c/d/e"] {
+        let r = idx
+            .dir_report(dir, &p)
+            .unwrap_or_else(|| panic!("expected dir {dir} tracked"));
+        assert_eq!(r.totals.files, 1, "dir {dir} sees the file");
+        assert!(r.totals.code >= 1, "dir {dir} has code total");
+    }
+}
+
+#[test]
+fn dir_report_survives_jsonl_roundtrip() {
+    // load_jsonl must rebuild the dirs cache from the file rows —
+    // we don't persist the cache. Round-trip equality on totals
+    // is the load-bearing check.
+    let d = tempdir().unwrap();
+    write(d.path(), "src/a.rs", "fn a() {}\n");
+    write(d.path(), "src/sub/b.py", "def b():\n    pass\n");
+    let idx = Index::scan(&ReportOptions::new(d.path())).unwrap();
+    let p = CocomoParams::default();
+    let before = idx.dir_report("src", &p).unwrap();
+
+    let mut buf = Vec::new();
+    idx.write_jsonl(&mut buf, &Scope::All, &p).unwrap();
+
+    let opts = ReportOptions::new(d.path());
+    let reloaded = Index::load_jsonl(Cursor::new(buf), &opts).unwrap();
+    let after = reloaded.dir_report("src", &p).unwrap();
+    assert_eq!(before.totals, after.totals);
+    assert_eq!(before.by_language, after.by_language);
+}
+
+#[test]
 fn schema_mismatch_is_reported() {
     let d = tempdir().unwrap();
     let opts = ReportOptions::new(d.path());

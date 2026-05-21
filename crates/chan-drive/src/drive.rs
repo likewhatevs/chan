@@ -2214,6 +2214,24 @@ impl Drive {
             .snapshot(&ReportScope::Files(paths.to_vec())))
     }
 
+    /// O(1) lookup of the maintained per-directory aggregation
+    /// cache. `dir` is drive-relative POSIX with no leading
+    /// slash; trailing slashes are stripped. Empty string maps
+    /// to the drive root.
+    ///
+    /// Returns `Ok(None)` when no tracked file lives at or under
+    /// the requested directory (so callers can serve a clean 404
+    /// instead of an empty roll-up that looks indistinguishable
+    /// from "real but empty"). The returned `Report` carries
+    /// `totals`, `by_language`, and `cocomo` from the cache;
+    /// `files` is left empty (dir queries do not enumerate
+    /// per-file rows). Mirrors the shape `report_for_prefix`
+    /// returns so chan-server can use the same response type for
+    /// both endpoints.
+    pub fn report_for_dir(&self, dir: &str) -> Result<Option<Report>> {
+        Ok(self.report_state()?.dir_snapshot(dir))
+    }
+
     /// Path to the persisted JSONL form of the report on disk.
     /// chan-drive's writer thread keeps this file in sync with
     /// the in-memory index via debounced atomic writes.

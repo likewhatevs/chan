@@ -45,7 +45,7 @@ pub use inspector::api_inspector;
 pub use preferences::{
     api_get_config, api_get_server_config, api_patch_config, api_patch_server_config,
 };
-pub use report::{api_report_file, api_report_prefix};
+pub use report::{api_report_dir, api_report_file, api_report_prefix};
 pub use search::{
     api_index_rebuild, api_index_status, api_indexing_state, api_search_content, api_search_files,
 };

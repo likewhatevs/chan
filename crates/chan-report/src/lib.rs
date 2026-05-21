@@ -83,10 +83,41 @@ pub enum UpdateOutcome {
 
 /// In-memory per-file state plus the cached accept-filter. Single
 /// owner per drive; chan-drive wraps this in its own lock.
+///
+/// `dirs` is a maintained per-directory aggregation index: every
+/// file's stats contribute to each of its ancestor directories all
+/// the way to the drive root (key `""`). Entries are dropped when
+/// the last file under them is removed so the map matches "dirs
+/// that currently contain tracked files". Reads are O(1) via
+/// `Index::dir_report`; writes pay an O(depth) ancestor walk per
+/// `update` / `remove` / `rename`. The on-disk JSONL format never
+/// serializes this index; `load_jsonl` rebuilds it from the file
+/// rows.
 pub struct Index {
     root: PathBuf,
     files: HashMap<String, FileStats>,
+    dirs: HashMap<String, DirEntry>,
     filter: Filter,
+}
+
+/// Internal per-directory aggregate. Mirrors `Totals` plus a
+/// per-language sub-rollup so a directory inspector can render
+/// "Rust 60%, Python 30%, TypeScript 10%" alongside totals
+/// without scanning the file map.
+///
+/// The per-language sub-rollup is a `HashMap` keyed by language
+/// name (matching `FileStats::language`) for O(1) deltas; the
+/// `dir_report` snapshot path converts it into the same sorted
+/// `Vec<LanguageStats>` shape the whole-tree roll-up returns.
+#[derive(Default)]
+struct DirEntry {
+    files: u64,
+    bytes: u64,
+    code: u64,
+    comments: u64,
+    blanks: u64,
+    complexity: u64,
+    by_language: HashMap<String, LanguageStats>,
 }
 
 impl Index {
@@ -101,11 +132,14 @@ impl Index {
                 files.insert(rel, fs);
             }
         }
-        Ok(Self {
+        let mut idx = Self {
             root: opts.root.clone(),
             filter: Filter::build(opts)?,
             files,
-        })
+            dirs: HashMap::new(),
+        };
+        idx.rebuild_dirs();
+        Ok(idx)
     }
 
     /// Re-count `rel` from disk and reconcile against the index.
@@ -120,25 +154,28 @@ impl Index {
     ///     not hold a row for it.
     pub fn update(&mut self, rel: &str) -> Result<UpdateOutcome, ChanReportError> {
         if !self.filter.accepts(rel) {
-            return Ok(if self.files.remove(rel).is_some() {
+            return Ok(if self.remove_file_row(rel).is_some() {
                 UpdateOutcome::Removed
             } else {
                 UpdateOutcome::Skipped
             });
         }
         match count::count_file_impl(&self.root, rel)? {
-            Some(new_stats) => match self.files.get(rel) {
-                Some(old) if old == &new_stats => Ok(UpdateOutcome::Unchanged),
-                Some(_) => {
+            Some(new_stats) => match self.files.get(rel).cloned() {
+                Some(old) if old == new_stats => Ok(UpdateOutcome::Unchanged),
+                Some(old) => {
+                    self.remove_file_from_dirs(rel, &old);
+                    self.apply_file_to_dirs(rel, &new_stats);
                     self.files.insert(rel.to_string(), new_stats);
                     Ok(UpdateOutcome::Updated)
                 }
                 None => {
+                    self.apply_file_to_dirs(rel, &new_stats);
                     self.files.insert(rel.to_string(), new_stats);
                     Ok(UpdateOutcome::Inserted)
                 }
             },
-            None => Ok(if self.files.remove(rel).is_some() {
+            None => Ok(if self.remove_file_row(rel).is_some() {
                 UpdateOutcome::Removed
             } else {
                 UpdateOutcome::Skipped
@@ -149,7 +186,7 @@ impl Index {
     /// Drop a row unconditionally. `Removed` when a row existed,
     /// `Unchanged` otherwise. Does not touch disk.
     pub fn remove(&mut self, rel: &str) -> UpdateOutcome {
-        if self.files.remove(rel).is_some() {
+        if self.remove_file_row(rel).is_some() {
             UpdateOutcome::Removed
         } else {
             UpdateOutcome::Unchanged
@@ -161,7 +198,7 @@ impl Index {
     /// callers infer "something happened" from this being
     /// non-`Unchanged` or from a prior row existing at `from`.
     pub fn rename(&mut self, from: &str, to: &str) -> Result<UpdateOutcome, ChanReportError> {
-        let removed = self.files.remove(from).is_some();
+        let removed = self.remove_file_row(from).is_some();
         let out = self.update(to)?;
         // If we removed something at `from` but the destination
         // ended up `Unchanged` / `Skipped`, force at least
@@ -265,12 +302,203 @@ impl Index {
         for f in files {
             map.insert(f.path.clone(), f);
         }
-        Ok(Self {
+        let mut idx = Self {
             root: opts.root.clone(),
             filter: Filter::build(opts)?,
             files: map,
+            dirs: HashMap::new(),
+        };
+        idx.rebuild_dirs();
+        Ok(idx)
+    }
+
+    /// Read-side O(1) lookup of the maintained per-directory
+    /// aggregation. `dir` is a drive-relative POSIX directory path
+    /// with no leading slash; trailing slashes are stripped. The
+    /// empty string maps to the drive root (every tracked file
+    /// contributes to it).
+    ///
+    /// Returns `None` when no tracked file lives at or under the
+    /// requested directory. The returned `Report` carries the
+    /// directory's `totals`, `by_language` (sorted descending by
+    /// bytes / files / name, identical to the whole-tree
+    /// roll-up's order), and a `cocomo` computed from the
+    /// directory's `code` total. `files` is left empty: dir
+    /// queries do not enumerate per-file rows because directory
+    /// inspectors only render the summary.
+    pub fn dir_report(&self, dir: &str, params: &CocomoParams) -> Option<Report> {
+        let key = normalize_dir(dir);
+        let entry = self.dirs.get(&key)?;
+        let totals = Totals {
+            files: entry.files,
+            bytes: entry.bytes,
+            code: entry.code,
+            comments: entry.comments,
+            blanks: entry.blanks,
+            complexity: entry.complexity,
+        };
+        let mut by_language: Vec<LanguageStats> = entry.by_language.values().cloned().collect();
+        sort_by_language(&mut by_language);
+        let cocomo = cocomo::compute(totals.code, params);
+        Some(Report {
+            meta: ReportMeta {
+                root: self.root.display().to_string(),
+                generated_at: Utc::now().to_rfc3339(),
+                schema: summary::SCHEMA_VERSION,
+            },
+            totals,
+            by_language,
+            files: Vec::new(),
+            cocomo,
         })
     }
+
+    // ---- internal helpers for the per-directory aggregation cache ----
+
+    /// Remove a file row AND subtract its stats from every
+    /// ancestor directory in the cache. Returns the row that was
+    /// removed (if any) so callers can detect the no-op case.
+    fn remove_file_row(&mut self, rel: &str) -> Option<FileStats> {
+        let stats = self.files.remove(rel)?;
+        self.remove_file_from_dirs(rel, &stats);
+        Some(stats)
+    }
+
+    /// Add `stats` to every ancestor directory of `rel`,
+    /// including the drive root (key `""`). Per-language
+    /// sub-rollup is created on first touch.
+    fn apply_file_to_dirs(&mut self, rel: &str, stats: &FileStats) {
+        for anc in ancestor_dirs(rel) {
+            let entry = self.dirs.entry(anc).or_default();
+            entry.files += 1;
+            entry.bytes += stats.bytes;
+            entry.code += stats.code;
+            entry.comments += stats.comments;
+            entry.blanks += stats.blanks;
+            entry.complexity += stats.complexity;
+            let lang = entry
+                .by_language
+                .entry(stats.language.clone())
+                .or_insert_with(|| LanguageStats {
+                    name: stats.language.clone(),
+                    ..Default::default()
+                });
+            lang.files += 1;
+            lang.bytes += stats.bytes;
+            lang.code += stats.code;
+            lang.comments += stats.comments;
+            lang.blanks += stats.blanks;
+            lang.complexity += stats.complexity;
+        }
+    }
+
+    /// Subtract `stats` from every ancestor directory of `rel`.
+    /// Empty per-language entries get removed; empty directory
+    /// entries (last file gone) get dropped from the map so the
+    /// cache matches "dirs with tracked files".
+    ///
+    /// `saturating_sub` everywhere defends against the impossible
+    /// case where we underflow (would indicate a bookkeeping
+    /// bug). The cache is internal state; we refuse to panic on
+    /// drift, the next full rescan corrects it.
+    fn remove_file_from_dirs(&mut self, rel: &str, stats: &FileStats) {
+        for anc in ancestor_dirs(rel) {
+            let drop_entry = {
+                let Some(entry) = self.dirs.get_mut(&anc) else {
+                    continue;
+                };
+                entry.files = entry.files.saturating_sub(1);
+                entry.bytes = entry.bytes.saturating_sub(stats.bytes);
+                entry.code = entry.code.saturating_sub(stats.code);
+                entry.comments = entry.comments.saturating_sub(stats.comments);
+                entry.blanks = entry.blanks.saturating_sub(stats.blanks);
+                entry.complexity = entry.complexity.saturating_sub(stats.complexity);
+                let drop_lang = if let Some(lang) = entry.by_language.get_mut(&stats.language) {
+                    lang.files = lang.files.saturating_sub(1);
+                    lang.bytes = lang.bytes.saturating_sub(stats.bytes);
+                    lang.code = lang.code.saturating_sub(stats.code);
+                    lang.comments = lang.comments.saturating_sub(stats.comments);
+                    lang.blanks = lang.blanks.saturating_sub(stats.blanks);
+                    lang.complexity = lang.complexity.saturating_sub(stats.complexity);
+                    lang.files == 0
+                } else {
+                    false
+                };
+                if drop_lang {
+                    entry.by_language.remove(&stats.language);
+                }
+                entry.files == 0
+            };
+            if drop_entry {
+                self.dirs.remove(&anc);
+            }
+        }
+    }
+
+    /// Rebuild the dirs cache from the file map. Used by `scan`
+    /// and `load_jsonl` to seed the cache after the file rows are
+    /// in place. Costs one full pass over `files`; that's the
+    /// price for not persisting the cache to disk.
+    fn rebuild_dirs(&mut self) {
+        self.dirs.clear();
+        let rows: Vec<(String, FileStats)> = self
+            .files
+            .iter()
+            .map(|(k, v)| (k.clone(), v.clone()))
+            .collect();
+        for (rel, stats) in rows {
+            self.apply_file_to_dirs(&rel, &stats);
+        }
+    }
+}
+
+/// Yield every ancestor directory of a drive-relative POSIX path,
+/// from the drive root (`""`) down to the immediate parent. The
+/// file's own path is NOT included; aggregation is about what
+/// directories *contain* the file.
+///
+/// Examples:
+///   - `"a/b/c.rs"` -> `["", "a", "a/b"]`
+///   - `"top.rs"`   -> `[""]`
+///   - `""`         -> `[]` (defensive: no file lives at the root key)
+fn ancestor_dirs(rel: &str) -> Vec<String> {
+    if rel.is_empty() {
+        return Vec::new();
+    }
+    let mut out = vec![String::new()];
+    let parts: Vec<&str> = rel.split('/').collect();
+    if parts.len() <= 1 {
+        return out;
+    }
+    let mut acc = String::new();
+    for part in &parts[..parts.len() - 1] {
+        if !acc.is_empty() {
+            acc.push('/');
+        }
+        acc.push_str(part);
+        out.push(acc.clone());
+    }
+    out
+}
+
+/// Normalize a caller-supplied directory query string into the
+/// cache key. Strips trailing slashes; `""` and `"/"` both mean
+/// the drive root. Leading slashes are stripped too so callers
+/// can pass either `"src"` or `"/src"`.
+fn normalize_dir(dir: &str) -> String {
+    dir.trim_matches('/').to_string()
+}
+
+/// Shared ordering for the `by_language` array: desc by bytes,
+/// then desc by file count, then asc by name. Identical to the
+/// global roll-up so dir + global responses sort consistently.
+fn sort_by_language(by_language: &mut [LanguageStats]) {
+    by_language.sort_by(|a, b| {
+        b.bytes
+            .cmp(&a.bytes)
+            .then_with(|| b.files.cmp(&a.files))
+            .then_with(|| a.name.cmp(&b.name))
+    });
 }
 
 /// One-shot helper for the common "scan once, get a report" flow.
@@ -313,11 +541,6 @@ fn roll_up(files: &[FileStats]) -> (Vec<LanguageStats>, Totals) {
         totals.complexity += f.complexity;
     }
     let mut by_language: Vec<LanguageStats> = by_lang.into_values().collect();
-    by_language.sort_by(|a, b| {
-        b.bytes
-            .cmp(&a.bytes)
-            .then_with(|| b.files.cmp(&a.files))
-            .then_with(|| a.name.cmp(&b.name))
-    });
+    sort_by_language(&mut by_language);
     (by_language, totals)
 }

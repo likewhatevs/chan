@@ -160,6 +160,18 @@ impl ReportState {
         idx.snapshot(scope, &self.cocomo)
     }
 
+    /// O(1) cached read of the per-directory aggregation. Mirrors
+    /// `Index::dir_report` and exposes `None` to the caller when
+    /// the directory is untracked so the HTTP layer can serve a
+    /// 404 cleanly.
+    pub(crate) fn dir_snapshot(&self, dir: &str) -> Option<Report> {
+        let idx = match self.index.read() {
+            Ok(g) => g,
+            Err(p) => p.into_inner(),
+        };
+        idx.dir_report(dir, &self.cocomo)
+    }
+
     pub(crate) fn jsonl_path(&self) -> &Path {
         &self.jsonl_path
     }

@@ -929,3 +929,33 @@ Note on session boundary: I'm the **same** session that received the `-12` runti
 Reading [`../systacean/systacean-15.md`](../systacean/systacean-15.md) (chan-report cross-directory aggregation) now per the queue order. Will pick up `-16` after.
 
 Standing by; next poke when `-15` lands or hits a scope question.
+
+## 2026-05-21 — poke (-15 ready for review)
+
+Round-2 wave-2 `-15` desk implementation + tests + cross-crate wiring + full pre-push gate complete. Holding for commit clearance.
+
+Full append at the tail of [`../systacean/systacean-15.md`](../systacean/systacean-15.md) "## 2026-05-21 — implementation + commit readiness". Highlights:
+
+* **Cache shape**: `HashMap<DirPath, DirEntry>` on `Index`. DirEntry has scalar totals + per-language sub-rollup. Drive root is empty-string key. Persistence: NONE; `load_jsonl` calls `rebuild_dirs()` to seed from the file rows. JSONL schema unchanged.
+* **Public API**: `Index::dir_report` (returns `Option<Report>`) → `Drive::report_for_dir` → `GET /api/report/dir?path=<rel>`. Response shape matches `/api/report/prefix` so SPA consumers' existing wiring works unchanged.
+* **Incremental discipline**: subtract-old + add-new on `Updated`; `Unchanged` does NOT touch the cache (verified by `incremental_update_unchanged_does_not_drift_ancestors`). Empty dir entries get dropped so the map matches "dirs with tracked files".
+* **Tests**: 8 new in `crates/chan-report/tests/integration.rs` covering aggregation correctness against `Scope::All` / `Scope::Prefix`, path normalization (trailing/leading slash), incremental add/remove/update/rename, deep-chain propagation, JSONL round-trip rebuild. 20/20 chan-report tests green.
+* **Files**: 7 source files (+573 / -37), plus task tail append. Other 6 modified files in working tree are foreign (@@CI workflows, @@Webtest event channels, ci-11/ci-12 task tails) — staying un-staged per shared-worktree discipline.
+
+### Suggested commit subject
+
+```
+chan-report: maintained per-directory aggregation cache + /api/report/dir (systacean-15)
+```
+
+### Pre-push gate
+
+All green at HEAD `22fd878`: fmt + clippy `-D warnings` + cargo test workspace (all green) + `RUSTFLAGS="-D warnings" cargo build --no-default-features` + svelte-check (0e/0w/3987 files) + vitest (588/588) + vite build. Baseline chunk-size + ineffective-dynamic-import warnings preserved from v0.11.2.
+
+### `-16` next
+
+After `-15` clearance + commit, picking up `systacean-16` (chan-report file-classification buckets). Independent of `-15`; either commit order fine.
+
+### `-12` still parked
+
+Tauri-plugin-updater verify continues parked on a fresh runtime-permission ask to @@Alex; prior session-scoped grant did not survive recycle per the pre-recycle handover.
