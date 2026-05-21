@@ -190,11 +190,18 @@
   /// Pick the synchronous language extension for the current path +
   /// syntaxHighlight prop. Returns `key` alongside so $effect can
   /// dedupe when nothing meaningful changed.
+  ///
+  /// `addKeymap: false` keeps source mode as a raw editor:
+  /// `@codemirror/lang-markdown` defaults to wiring `Enter` to
+  /// `insertNewlineContinueMarkup` (auto-continue lists + quotes).
+  /// Wysiwyg lives in a separate component with its own
+  /// `chanMarkdown()` (also addKeymap=false), so this only affects
+  /// source mode.
   function pickInitialLanguage(): { extension: Extension; key: string } {
     if (!syntaxHighlight) return { extension: [], key: "off" };
     const ext = extOf(path);
     if (ext === "md" || ext === "txt") {
-      return { extension: markdown(), key: "markdown" };
+      return { extension: markdown({ addKeymap: false }), key: "markdown" };
     }
     return { extension: [], key: ext ? `pending:${ext}` : "plain" };
   }
@@ -225,7 +232,7 @@
     const ext = extOf(path);
     if (!ext) return { extension: [], key: "plain" };
     if (ext === "md" || ext === "txt") {
-      return { extension: markdown(), key: "markdown" };
+      return { extension: markdown({ addKeymap: false }), key: "markdown" };
     }
     const desc = codeLanguages.find((l) => l.extensions?.includes(ext));
     if (!desc) return { extension: [], key: `unknown:${ext}` };
