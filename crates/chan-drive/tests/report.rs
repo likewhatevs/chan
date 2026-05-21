@@ -4,12 +4,20 @@
 // ~/.chan; the per-drive state path is keyed off the tempdir
 // root, so multiple test runs don't collide.
 
+// Arc/Mutex/Duration/Instant/WatchCallback/WatchEvent are consumed
+// only by the `#[cfg(unix)]`-gated watcher_keeps_report_current
+// test + its helpers below (systacean-20 smoke #2 fixup; Windows
+// watcher → ReportFanOut gap). Gate the imports on the same
+// predicate so Windows clippy doesn't flag them as `unused_imports`.
+#[cfg(unix)]
 use std::sync::{Arc, Mutex};
+#[cfg(unix)]
 use std::time::{Duration, Instant};
 
 use std::fs;
 use std::path::Path;
 
+#[cfg(unix)]
 use chan_drive::watch::{WatchCallback, WatchEvent};
 use chan_drive::{Library, ReportScope};
 use tempfile::TempDir;
@@ -22,8 +30,16 @@ fn put(root: &Path, rel: &str, content: &str) {
     fs::write(p, content).unwrap();
 }
 
+// Test helpers below are consumed only by watcher_keeps_report_current,
+// which is `#[cfg(unix)]`-gated per systacean-20 smoke #2 fixup
+// (Windows watcher → ReportFanOut delivery gap). Gate the helpers
+// on the same predicate so Windows clippy doesn't flag them as
+// `dead_code`. Revert this gate when the underlying Windows fanout
+// is fixed + the test goes cross-platform again.
+#[cfg(unix)]
 struct Collector(Mutex<Vec<WatchEvent>>);
 
+#[cfg(unix)]
 impl Collector {
     fn new() -> Arc<Self> {
         Arc::new(Self(Mutex::new(Vec::new())))
@@ -33,12 +49,14 @@ impl Collector {
     }
 }
 
+#[cfg(unix)]
 impl WatchCallback for Collector {
     fn on_event(&self, ev: WatchEvent) {
         self.0.lock().unwrap().push(ev);
     }
 }
 
+#[cfg(unix)]
 fn wait_for<F: Fn() -> bool>(predicate: F, timeout: Duration) -> bool {
     let start = Instant::now();
     while start.elapsed() < timeout {
