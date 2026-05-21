@@ -4235,3 +4235,107 @@ complete.
 | `alex/event-architect-ci.md` | ci-13 commit clearance + 3 question answers |
 | `alex/event-architect-systacean.md` | -19 commit clearance + smoke-branch authorized |
 | `alex/event-architect-fullstack-a.md` | -a-49 commit clearance |
+
+## 2026-05-21 — SECOND cross-agent commit-hygiene incident (5685be4) — same routing as a8e991a; meta-discipline saved (systacean-19 audit anchor)
+
+### Incident shape
+
+@@FullStackA's `5685be4` commit (subject:
+`fullstack-a-49`) swept up ALL 13 files of
+@@Systacean's `-19` work via the inter-command race
+window between `git add` + audit + `git commit`.
+Same shape as a8e991a (WebtestB sweeping FullStackA's
+`-a-44`) but with roles REVERSED — this time
+@@FullStackA is the sweeping lane, @@Systacean the
+swept.
+
+Both lanes correctly flagged the incident independently:
+
+* `cc3a888` — @@FullStackA's self-flag with detailed
+  process-lesson on the inter-command race window +
+  proposed meta-fix (single-bash-invocation chained
+  with `&&`).
+* `88a084c` — @@Systacean's symmetric flag with
+  three options analysis (A audit-trail / B
+  soft-reset+split / C — was already cancelled).
+
+### Routing — option (b) + (c) same as a8e991a
+
+Both lanes converged on option A/b (audit-trail
+correction). Same architect call:
+
+* **(a) history rewrite — DECLINED**. The chain has
+  `cc3a888` + `88a084c` referencing `5685be4`
+  directly. Plus push hasn't happened but standard
+  multi-agent destructive-op concern.
+* **(b) audit-trail correction — GO**. Both task
+  files (`fullstack-a-49.md` + `systacean-19.md`)
+  get the "landed under 5685be4 cross-agent commit"
+  append.
+* **(c) architect-side grep-anchor — DOING IT**.
+  This commit's subject mentions `systacean-19` so
+  `git log --grep=systacean-19` finds it. Same shape
+  as the a8e991a follow-up architect commit.
+
+### Meta-discipline saved as memory
+
+@@FullStackA's process-lesson in `cc3a888` is the
+right meta-fix for this class of incident:
+
+> Collapse audit + commit into ONE bash invocation:
+> ```bash
+> git add <paths> && git diff --staged --stat && \
+>   git commit -m "..." && git show --stat HEAD
+> ```
+
+Saved as `feedback-atomic-audit-commit` memory entry.
+Cross-references `feedback-shared-worktree-commits`
+(still valid; this new entry is the race-window-
+specific tightening).
+
+The architect-side cost of multi-lane simultaneous
+clearance is real: each cleared lane competes for the
+staging area in the next clearance round. Going
+forward I'll either:
+
+* Stagger clearance rounds (only one lane at a time
+  when multiple are commit-ready), OR
+* Trust the new atomic-audit-commit discipline
+  applied across all lanes.
+
+Option 2 is cheaper; the discipline is the right
+primitive. The first incident (a8e991a) cost wasn't
+sufficient signal to drive the meta-fix; the SECOND
+(5685be4) is. Pattern: process-fix lands AFTER the
+second repeat, not the first.
+
+### Other state this beat
+
+* `ci-13-smoke` (run `26253981385`) completed
+  **SUCCESS** at 11m19s. @@CI's Windows-drop is
+  empirically validated on the smoke branch.
+  Acceptance criterion met.
+* `ci-13-smoke-v2` (`26254608202`) IN PROGRESS at
+  2m+. @@CI likely added the macOS-latest matrix
+  entry per the (a) routing acceptance + re-smoking.
+* `ci-13` code commit not yet on main (still
+  modified in worktree). @@CI will commit shortly.
+
+### Lane state at end of round
+
+| Lane | State |
+|------|-------|
+| @@Systacean | -19 incident routed; audit-trail append pending; smoke proceeds when fired |
+| @@CI | ci-13 smoke v1 SUCCESS; v2 IN PROGRESS; expect commit + smoke green |
+| @@FullStackA | -a-49 incident self-flagged + routed; audit-trail append pending; pick up -a-50 next |
+| @@FullStackB | DONE; idle |
+| @@WebtestA | Idle |
+| @@WebtestB | DONE; idle |
+
+### What I'm committing this round (with systacean-19 grep-anchor in subject)
+
+| File | Reason |
+|------|--------|
+| `architect/journal.md` | This entry |
+| `alex/event-architect-fullstack-a.md` | incident routing for -a-49 sweeper side |
+| `alex/event-architect-systacean.md` | incident routing for -19 swept side |
