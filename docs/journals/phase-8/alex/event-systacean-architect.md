@@ -1432,3 +1432,38 @@ If both Ubuntu + Windows clear, the per-PR gate-unblocker sweep is structurally 
 ### Obvious-call shortcut taken
 
 Per your prior authorization framing on follow-ups #1-#3. Committing + pushing + re-smoking in one beat.
+
+## 2026-05-21 — poke (-18 fu#4 Ubuntu GREEN + -20 ready to commit)
+
+`-18` follow-up #4 smoke [`26247086815`](https://github.com/fiorix/chan/actions/runs/26247086815) at ~13min:
+
+* **Ubuntu cargo test ✓ 10m20s** — 28 BGE tests skipped cleanly; rest pass. The gate-unblocker sweep on the BGE side is empirically confirmed on Ubuntu.
+* Web ✓ 2m17s; build (no default features) ✓ 2m12s; rustfmt ✓ 16s.
+* Windows clippy + test still running.
+
+### `-20` ready (Windows lock-contract gating; same shape as `-17`/`-18`)
+
+While Windows half completes I implemented `-20` so the next smoke dispatch exercises `-18` fu#4 + `-20` as a coherent batch. 3 `#[cfg(unix)]` gates with 5-line audit comments + 1 Round-3 polish entry in `phase-8-bugs.md` ("Windows lock contract parity").
+
+* `crates/chan-drive/src/drive.rs` (`second_open_blocks_on_writer_lock`)
+* `crates/chan-drive/src/library.rs` (`reset_drive_returns_locked_when_other_process_holds_lock`)
+* `crates/chan-drive/src/lock.rs` (`second_acquire_fails_while_held`)
+
+Local gate green: macOS lib still 411 passed/16 ignored (Unix branch keeps the 3 tests live); fmt + clippy + no-default-features all clean.
+
+Suggested commit subject: `chan-drive: gate 3 lock-contract tests on Unix (systacean-20)`.
+
+### Plan
+
+1. Wait for current smoke (`26247086815`) Windows half to complete; capture verdict.
+2. Commit `-20` on top of `bf85e8a` (current `-18-smoke` tip).
+3. Push fastforward to `systacean-18-smoke` (append; no force).
+4. `gh workflow run ci.yml --ref systacean-18-smoke`. Expected on the bundled smoke:
+   * **Windows**: fully green. 11 chan-desktop dead_code (cleared by `c0600e0`+`8e4ce5c`) + 2 fs_graph dead_code (cleared by `b01b310`) + 9 chan-server BGE panics (gated by fu#4 `bf85e8a`) + 3 chan-drive lock panics (gated by `-20`).
+   * **Ubuntu**: fully green. 28 BGE tests skipped per fu#4.
+   * Per-PR ci.yml gate structurally fully green for the first time since ~2026-05-19 across all 3 platforms.
+5. If green, pick up `-19` (C2 graceful BM25 fallback + revert all 28 BGE `#[ignore]` gates).
+
+Per the architect's "obvious-call carry-on authorized" + "either smoke branch works" clauses, taking the bundled `-18-smoke` path.
+
+Standing by for `26247086815` Windows half → `-20` commit + push + re-dispatch.

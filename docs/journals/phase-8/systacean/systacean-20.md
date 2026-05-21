@@ -224,3 +224,82 @@ or its own smoke branch; @@Systacean picks.
 * A regression. The Windows test failures are pre-existing
   for the same reason `-17` + `-18` were pre-existing —
   the broken pre-`ci-12`-and-`-17` gate hid them.
+
+## 2026-05-21 — implementation + commit readiness
+
+Shape (ii) `#[cfg(unix)]` applied per the architect's routing. 3 chan-drive lock-contract tests gated with audit comments cross-referencing `systacean-20` + `phase-8-bugs.md`'s new "Windows lock contract parity" Round-3 entry.
+
+### Changes
+
+| File                                       | + | - | Test |
+|--------------------------------------------|---|---|------|
+| `crates/chan-drive/src/drive.rs`           | +7 | 0 | `second_open_blocks_on_writer_lock` |
+| `crates/chan-drive/src/library.rs`         | +6 | 0 | `reset_drive_returns_locked_when_other_process_holds_lock` |
+| `crates/chan-drive/src/lock.rs`            | +6 | 0 | `second_acquire_fails_while_held` |
+| `docs/journals/phase-8/phase-8-bugs.md`    | +9 | 0 | Round-3 polish entry for Windows lock parity |
+| **Total** | **+28** | 0 | 3 tests + 1 bug-list entry |
+
+Each gated test gets a 5-line `// systacean-20: gated on Unix because Windows lock primitive doesn't surface DriveLocked the same way flock does. Real cross-platform fix tracked in phase-8-bugs.md "Windows lock contract parity"; revert this gate when the LockFileEx-backed bridge in lock.rs lands.` comment block above `#[cfg(unix)] #[test]`.
+
+### Bug-list entry
+
+Round-3 polish entry under "Round 2 — needs deeper change" (last section in `phase-8-bugs.md`). Captures:
+- Empirical: the 3 failing tests + the `lock.rs` flock-vs-Windows gap.
+- State: 3 tests gated `#[cfg(unix)]` by `-20`; real fix deferred.
+- Want: Windows-specific bridge via `LockFileEx` (or `OpenOptions::share_mode` via `winapi`/`windows-sys`). After it lands, revert the 3 gates.
+- Non-blocking justification: chan-desktop is macOS-only at v0.11.2; Windows CLI runtime falls back to platform fs behavior (likely EACCES) — a different user-visible error than Unix, but no panic.
+- Lane: @@Systacean (chan-drive owns the lock primitive).
+- Status: NOT YET DISPATCHED — Round-3 polish/hardening candidate.
+
+### Local verification
+
+* macOS native (Unix branch active): `cargo test -p chan-drive --lib` → `411 passed; 0 failed; 16 ignored` (unchanged from pre-`-20`; the 3 gated tests still run on Unix where `flock` works).
+* `cargo fmt --check` clean.
+* `cargo clippy --all-targets -- -D warnings` clean.
+* `RUSTFLAGS="-D warnings" cargo build --no-default-features` green.
+
+### Suggested commit subject
+
+```
+chan-drive: gate 3 lock-contract tests on Unix (systacean-20)
+```
+
+### Files for commit
+
+```
+crates/chan-drive/src/drive.rs                   +7  / 0
+crates/chan-drive/src/library.rs                 +6  / 0
+crates/chan-drive/src/lock.rs                    +6  / 0
+docs/journals/phase-8/phase-8-bugs.md            +9  / 0
+docs/journals/phase-8/systacean/systacean-20.md  (this append)
+docs/journals/phase-8/alex/event-systacean-architect.md (outbound poke)
+```
+
+6 paths total. Foreign files in dirty tree stay un-staged.
+
+### Smoke re-dispatch
+
+Per the architect's invitation: fastforwarding to the existing `systacean-18-smoke` branch (lower overhead than its own smoke branch — the gate-unblocker sweep lands as a coherent batch). The `-18` follow-up #4 smoke `26247086815` is already running on the prior tip; my `-20` commit on top means the NEXT `gh workflow run ci.yml --ref systacean-18-smoke` will exercise BOTH:
+
+* `-18` follow-up #4 (chan-server BGE gates + 2 `fs_graph.rs` `#[cfg(unix)]` from `b01b310`).
+* `-20` (3 chan-drive lock tests `#[cfg(unix)]`).
+
+Expected smoke verdict on the next dispatch:
+
+* Windows clippy + cargo test **fully green**: the prior 11 chan-desktop `dead_code` lints cleared by `fullstack-b-24`'s `c0600e0` + `8e4ce5c`; the 2 `fs_graph.rs` `dead_code` lints cleared by `b01b310`; the 9 chan-server BGE panics gated by follow-up #4; the 3 chan-drive lock panics gated by this `-20`.
+* Ubuntu cargo test **fully green**: 28 BGE tests skipped per follow-up #4.
+* macOS + others green.
+
+If both clear, the per-PR ci.yml gate is structurally fully green for the first time since ~2026-05-19 across ALL three platforms.
+
+### Obvious-call shortcut taken
+
+Per the architect's prior authorization framing + the explicit "either smoke branch works" + "obvious-call carry-on authorized" clauses in the routing. Committing + pushing + re-smoking in one beat after `-18` follow-up #4 smoke (current) completes.
+
+### After `-20` smoke green
+
+1. Pick up `systacean-19` (C2 graceful BM25 fallback + revert all 28 BGE `#[ignore]` gates).
+2. `-16` after `-19` if bandwidth.
+3. `-12` parked.
+
+Holding for `-18` fu#4 smoke completion → push `-20` → re-dispatch.

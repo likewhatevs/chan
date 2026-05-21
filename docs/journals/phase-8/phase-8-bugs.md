@@ -804,3 +804,12 @@
   - lane: @@CI primary; @@Systacean possibly if matrix shape needs cargo-target additions
   - architecture caveat (added 2026-05-21 by @@Alex): real release matrix needs BOTH aarch64 AND x86_64 Linux binaries. Today `release-desktop.yml` builds x86_64-only on Linux (per `ci-7` audit trail). aarch64 Linux is a forward-looking matrix expansion (Round-2 wave-3 or Round-3 polish depending on scope). Local dev validation via sdme + lima-vm is aarch64-only; CI on `ubuntu-latest` is x86_64. See memory `reference-local-linux-via-sdme.md` for the local-validation invocation shape.
   - NOT YET DISPATCHED — Round-2 wave-3 candidate; lands ahead of v0.12.0 cut
+
+- Windows lock contract parity — chan-drive lock primitive doesn't surface `DriveLocked` on Windows
+  - surfaced 2026-05-21 by @@FullStackB during `-24` smoke #6 verdict + routed in `systacean-20`
+  - 3 chan-drive test-contract assertions fail on `windows-latest` because `lock.rs`'s Unix-flock primitive returns a different `ChanError` variant (or no error at all) on Windows: `drive::tests::second_open_blocks_on_writer_lock`, `library::tests::reset_drive_returns_locked_when_other_process_holds_lock`, `lock::tests::second_acquire_fails_while_held`
+  - state today: 3 tests gated `#[cfg(unix)]` by `systacean-20` to unblock the per-PR CI gate. Real cross-platform fix deferred
+  - want (Round-3 polish): Windows-specific bridge in `lock.rs` using `LockFileEx` (or `OpenOptions::share_mode` via `winapi` / `windows-sys` crate) to surface `ChanError::DriveLocked` consistently on the Windows target. After it lands, revert the 3 `#[cfg(unix)]` gates from `systacean-20`
+  - non-blocking today: chan-desktop ships macOS-only at v0.11.2; Windows chan-desktop isn't a real-user surface yet. The chan CLI's runtime locking on Windows falls back to whatever Windows-fs does (likely EACCES on the open) which surfaces as a different user-facing error than the Unix path — functional gap, not a panic
+  - lane: @@Systacean (chan-drive owns the lock primitive)
+  - NOT YET DISPATCHED — Round-3 polish/hardening candidate; lands when Windows becomes a real-user chan-desktop release surface
