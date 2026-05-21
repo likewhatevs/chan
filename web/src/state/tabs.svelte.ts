@@ -603,16 +603,19 @@ function nextTerminalTitle(): string {
 /// currently-active front tab. `pane.tabs` / `pane.activeTabId`
 /// always describe the FRONT side; `showingBack` toggles whether the
 /// pane renders the front content tabs or the back configuration
-/// surface. `flipHybrid()` no longer swaps tab collections; it only
-/// toggles `showingBack` and swaps the per-side theme override
-/// (which Task E will collapse to a single per-Hybrid value).
+/// surface. `flipHybrid()` only toggles `showingBack`; under
+/// `-a-47` the per-side theme split is gone — both sides of a
+/// Hybrid share `pane.theme` (the per-Hybrid theme override from
+/// `-b-5` now lives at one slot, not two).
 export type HybridTheme = "dark" | "light";
 
 export type HybridSide = {
-  /// Per-side theme override. `undefined` means "follow global".
-  /// Task E will drop the front/back split entirely — both sides
-  /// of a Hybrid will share a single per-Hybrid theme.
-  theme?: HybridTheme;
+  /// Marker type for "this pane has been flipped at least once"
+  /// (i.e., it's a Hybrid). Empty body under `-a-47`: the
+  /// `theme` slot collapsed into `pane.theme`. Kept as a typed
+  /// `back?: HybridSide` marker so `pane.back !== undefined`
+  /// still discriminates "Hybrid vs never-flipped" for menu
+  /// gating in `Pane.svelte`.
 };
 
 export type Pane = {
@@ -1818,13 +1821,10 @@ function cloneNode(src: Node): Node {
     tabs: src.tabs.map((tab) => cloneTab(tab)),
     activeTabId: src.activeTabId,
     ...(src.theme ? { theme: src.theme } : {}),
-    ...(src.back
-      ? {
-          back: {
-            ...(src.back.theme ? { theme: src.back.theme } : {}),
-          },
-        }
-      : {}),
+    // `-a-47`: HybridSide is an empty marker after the theme
+    // collapse. Preserve "back has been materialised" by cloning
+    // an empty object; pane.back !== undefined still discriminates.
+    ...(src.back ? { back: {} } : {}),
     ...(src.showingBack ? { showingBack: true } : {}),
   };
 }
@@ -2430,41 +2430,26 @@ export function setActivePane(paneId: string): void {
 /// pane between its front (content tabs) and its back (per-surface
 /// configuration view). Under `-a-43` the back is no longer a
 /// content collection — `pane.tabs` always stays the front's tab
-/// list; this function only toggles `showingBack` and (for now)
-/// swaps the per-side theme override that `-b-5` introduced.
-/// Task E will collapse the front/back theme split to a single
-/// per-Hybrid value; until then the swap preserves existing
-/// behaviour for users who have set per-side themes.
+/// list. Under `-a-47` the per-side theme override collapsed to a
+/// single per-Hybrid value (`pane.theme`); this function now only
+/// toggles `showingBack`. The hamburger Theme entry from `-a-27`
+/// keeps writing to `pane.theme` directly.
 export function flipHybrid(paneId: string): void {
   const node = activeLayout().nodes[paneId];
   if (!node || node.kind !== "leaf") return;
   if (!node.back) {
-    // Lazy init: back inherits an inverted theme so a default-dark
-    // chan shows a light back on first flip and vice-versa. The
-    // back-side state has shrunk to just the theme slot; tab
-    // collection is gone (`-a-43`).
-    node.back = { theme: inverseTheme(node.theme) };
+    // Lazy init: materialise an empty back marker so subsequent
+    // `pane.back !== undefined` checks read this pane as a
+    // Hybrid (gates the hamburger Theme / Flip entries). The
+    // marker is empty under `-a-47`; pane.theme owns the
+    // single per-Hybrid theme.
+    node.back = {};
   }
-  const back = node.back;
-  const tmpTheme = node.theme;
-  node.theme = back.theme;
-  back.theme = tmpTheme;
   node.showingBack = !node.showingBack;
   // `fullstack-a-22`: orientation-change flip cue (Y-axis rotation)
   // distinct from the structural wobble used for split / close /
-  // swap. Animation unchanged under `-a-43`; only the destination
-  // semantics changed.
+  // swap.
   requestPaneFlip(node.id);
-}
-
-/// `null` / `undefined` (no override → follow global) inverts to
-/// the canonical "looks like the opposite of the system default"
-/// choice. We pick `light` as the inverse of "no override" because
-/// the chan default is dark; that gives the user a visible flip
-/// even when neither side has an explicit theme set. Once the user
-/// picks an override explicitly, future flips just preserve it.
-function inverseTheme(theme: HybridTheme | undefined): HybridTheme {
-  return theme === "light" ? "dark" : "light";
 }
 
 export function setMode(tab: Tab, mode: Mode): void {
@@ -2867,22 +2852,32 @@ type SerLeaf = {
   f?: 1;
   wc?: SerFocusColor;
   pc?: SerFocusColor;
-  /// `fullstack-48` original, `fullstack-a-43` revisited: per-pane
-  /// Hybrid back-side state. The `bt` slot (back-side tabs) was
-  /// removed in `-a-43` — the back is no longer a content
-  /// collection. Wire-compat: `bt` from older sessions is parsed
-  /// and discarded on rehydrate (see `deserializeNode`).
-  /// `ht`: per-Hybrid front-side theme override.
-  /// `hb`: per-Hybrid back-side theme override (Task E will
-  /// collapse this to a single per-Hybrid value).
+  /// `fullstack-48` original, revisited in `-a-43` + `-a-47`:
+  /// per-pane Hybrid back-side state. The `bt` slot (back-side
+  /// tabs) was removed in `-a-43` — the back is no longer a
+  /// content collection. The `hb` slot (back-side theme override)
+  /// was removed in `-a-47` — pane.theme is the single per-Hybrid
+  /// theme. Wire-compat: `bt` and `hb` from older sessions are
+  /// parsed and discarded on rehydrate; the front-side `ht` wins
+  /// per the `-a-47` migration spec ("pick the front-side value as
+  /// the canonical one"). Set `sb?: true` to remember the pane is
+  /// currently flipped to the back configuration view, and
+  /// `bm?: true` to flag a Hybrid that's been materialised (the
+  /// presence of pane.back marker).
+  /// `ht`: per-Hybrid theme override.
   /// `sb`: `1` when the pane is currently flipped to its back
   /// configuration view.
+  /// `bm`: `1` when the pane has been flipped at least once.
+  /// Replaces `-a-43`'s "hb implies materialised" signal, now
+  /// that hb is gone.
   ht?: SerHybridTheme;
-  hb?: SerHybridTheme;
   sb?: 1;
-  /// Legacy: pre-`-a-43` back-side tabs. Ignored on rehydrate
-  /// to keep wire compat with older URL hashes / session blobs.
+  bm?: 1;
+  /// Legacy: pre-`-a-43` back-side tabs. Pre-`-a-47`
+  /// back-side theme override. Both ignored on rehydrate to
+  /// keep wire compat with older URL hashes / session blobs.
   bt?: SerTab[];
+  hb?: SerHybridTheme;
 };
 type SerSplit = {
   k: "s";
@@ -3074,12 +3069,13 @@ function serializeNode(
     // URL hash + per-window session round-trip the flip-aware
     // layout. Empty / never-flipped panes emit nothing extra so
     // the hash stays as short as before for the common case.
-    if (n.back?.theme) {
-      const bk = serializeHybridTheme(n.back.theme);
-      if (bk) out.hb = bk;
-    }
+    // `-a-47`: `hb` (back-side theme override) no longer emitted;
+    // `bm` (back-materialised marker) takes over from "hb implies
+    // materialised" so a Hybrid pane with no per-side theme still
+    // serializes its Hybrid-ness.
     const ht = serializeHybridTheme(n.theme);
     if (ht) out.ht = ht;
+    if (n.back !== undefined) out.bm = 1;
     if (n.showingBack) out.sb = 1;
     return out;
   }
@@ -3330,17 +3326,21 @@ export async function restoreLayout(
       }
       // If no tab was marked active but there are tabs, focus the first.
       if (!p.activeTabId && p.tabs.length > 0) p.activeTabId = p.tabs[0]!.id;
-      // `fullstack-a-43`: back-side is no longer a tab collection.
-      // Old sessions with `bt` (back-side tabs) are accepted on
-      // the wire for backwards compat but their tab contents are
-      // discarded; only the per-side theme override and the flip
-      // flag survive into the new model.
-      if (node.hb) {
-        p.back = { theme: node.hb === "d" ? "dark" : "light" };
-      } else if (node.bt && node.bt.length > 0) {
-        // Legacy session blob that had back-side tabs but no
-        // back-side theme override — materialise an empty back so
-        // `showingBack` round-trips into the new config-view model.
+      // Back-side is no longer a tab collection (`-a-43`); its
+      // theme override is no longer separate from the front
+      // (`-a-47`). The new wire signal is `bm` (back-materialised
+      // marker). Legacy `bt` / `hb` are accepted but discarded:
+      // `bt` tabs drop, `hb` theme drops (the front-side `ht`
+      // wins per the `-a-47` migration spec). A legacy session
+      // that carried `bt` or `hb` implies the pane WAS a Hybrid
+      // (had been flipped at least once) — materialise the
+      // empty back marker so `pane.back !== undefined` stays
+      // accurate for menu gating after restore.
+      if (
+        node.bm ||
+        node.hb ||
+        (node.bt && node.bt.length > 0)
+      ) {
         p.back = {};
       }
       if (node.ht) p.theme = node.ht === "d" ? "dark" : "light";

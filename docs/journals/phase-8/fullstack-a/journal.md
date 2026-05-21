@@ -677,3 +677,61 @@ readiness; standing by. Queue waiting: `-a-47`
 (Task E — front/back theme collapse), `-a-48`
 (Task F — Search/Indexing/Reports), then
 `-a-49..52` (graph overhaul) + `-a-42` (About).
+
+## 2026-05-21 — -a-46 committed; -a-47 ready for review
+
+`-a-46` cleared + committed as `5166223 Migrate
+Editor Settings to Hybrid Editor back-side
+(fullstack-a-46)` with all 3 deviations
+accepted. Pre/post audits matched the cleared
+path list (7 files; small deviation: bundled
+`fullstack-a-45.md`'s dangling "committed as"
+trailing append to avoid leaving it dangling
+across sessions).
+
+### -a-47 complete (Hybrid back-side Task E)
+
+Two-file change. State-only (chan-server
+unaffected — Preferences shape is unchanged).
+No Rust touched.
+
+* `web/src/state/tabs.svelte.ts` — `HybridSide`
+  collapsed to `{}` empty marker; `flipHybrid`
+  drops the theme-swap dance; `inverseTheme`
+  deleted; serialization stops emitting `hb`
+  and starts emitting a new `bm` (back-
+  materialised marker); deserialization
+  accepts legacy `hb` / `bt` as Hybrid signals
+  but drops their payload contents.
+* `web/src/state/tabs.test.ts` — 3 existing
+  Hybrid-flip tests rewritten to the new
+  contract (no theme swap on flip; serialize
+  emits `bm` + omits `hb`); 1 new test for the
+  legacy `hb` migration shape (`ht` wins,
+  `hb` ignored, back marker materialised).
+
+### Design decision
+
+The migration spec says "pick the front-side
+value as the canonical one." For users who only
+ever changed theme on the front, no change. For
+users who set different themes on each side,
+front wins; back-side preference is lost.
+Acceptable per the task body's explicit call-
+out.
+
+### Gate
+
+* vitest **622 / 622** (+1 net).
+* svelte-check 0 errors / 0 warnings across
+  3989 files.
+* npm build clean.
+* Rust gate not re-run (no Rust touched).
+
+Impl note + suggested commit subject at the tail
+of [fullstack-a-47.md](fullstack-a-47.md).
+Outbound poke fired to @@Architect with Commit
+readiness; standing by. Queue waiting: `-a-48`
+(Task F — Search/Indexing/Reports + chan-reports
+toggle restore), then `-a-49..52` (graph
+overhaul) + `-a-42` (About).

@@ -2479,3 +2479,155 @@ move.
 
 Push held — multi-agent tree commit discipline.
 Standing by for clearance.
+
+## 2026-05-21 — poke (fullstack-a-46 committed)
+
+`-a-46` committed at `5166223` per your clearance.
+Subject `Migrate Editor Settings to Hybrid Editor
+back-side (fullstack-a-46)` verbatim.
+
+Single commit; 7 files (3 code + 3 docs + the
+small deviation: I bundled `fullstack-a-45.md`'s
+dangling "committed as 1f80d09" trailing append
+to avoid leaving it uncommitted across sessions
+— same shared-worktree-discipline reasoning that
+prompted the `-a-44` audit-trail correction
+bundle).
+
+Pre-stage audit `git diff --staged --stat`
+matched the staged set exactly. Post-commit
+`git show --stat HEAD` confirmed:
+
+* 1063 insertions / 239 deletions across 7
+  files.
+* New file `web/src/components/HybridEditorConfig.test.ts`.
+* No stowaways. The dirty worktree files from
+  other lanes stayed unstaged.
+
+Picking up `-a-47` (Hybrid back-side Task E —
+drop front/back independent theme; simplify
+`-b-5`'s per-Hybrid theme override to a single
+per-Hybrid value) next per your sequencing.
+Reading the task body now.
+
+## 2026-05-21 — poke (fullstack-a-47 ready for review)
+
+`-a-47` ready for review. Two-file change.
+State-only; no Rust touched.
+
+### What landed
+
+`web/src/state/tabs.svelte.ts`:
+
+* `HybridSide` collapsed to an empty marker
+  type (`{}`). The `theme?` slot is gone; the
+  per-Hybrid theme is now solely
+  `pane.theme` (the single per-Hybrid value
+  from `-b-5`'s original split — front-side
+  was already named that).
+* `flipHybrid` simplified: drops the
+  theme-swap dance. Lazy-init still
+  materialises `pane.back = {}` on first
+  flip so the `pane.back !== undefined`
+  discriminator in `Pane.svelte` still
+  gates the hamburger Theme / Flip entries
+  correctly.
+* `inverseTheme` helper deleted (no longer
+  called).
+* Serialization: `hb` (back-side theme
+  override) no longer emitted. New `bm`
+  (back-materialised marker) added — without
+  it, a Hybrid pane with no per-side theme
+  override would round-trip into a non-
+  Hybrid pane, losing menu gating.
+* Deserialization: legacy `hb` and `bt`
+  payloads accepted on the wire; their
+  contents (tab list / back theme) dropped.
+  Both signals imply the pane WAS a Hybrid
+  → materialise `pane.back = {}`. The
+  `-a-47` migration spec ("pick the front-
+  side value as the canonical one") means
+  `ht` (front theme) wins; `hb` is ignored.
+
+`Pane.svelte` is UNCHANGED — the existing
+`pane.back !== undefined` gate and
+`togglePaneTheme` (which writes to
+`pane.theme`) both still work with the
+collapsed shape.
+
+### Tests
+
+3 existing tests in `describe("Hybrid flip
+(...)")` rewritten to the new contract:
+
+* "first flip materialises back marker;
+  pane.theme is preserved" (was
+  "...lazy-initializes back with inverted
+  theme...").
+* "flipping back round-trips showingBack;
+  pane.theme is single + stable" (was
+  "...showingBack + theme...").
+* "serialize / restore round-trips theme +
+  showingBack + back marker" (asserts `bm:
+  1` emitted, `hb` not emitted).
+
+1 NEW test:
+
+* "legacy `hb` payload is accepted on
+  rehydrate and dropped" — pins the
+  migration shape.
+
+### Gate
+
+* vitest **622 / 622** (+1 net: +1 new
+  legacy test; 3 existing rewritten in
+  place; the flip-bus test +
+  no-op-on-bad-id test unchanged).
+* svelte-check 0 errors / 0 warnings
+  across 3989 files.
+* npm build clean.
+* Rust gate not re-run.
+
+### Decisions flagged
+
+* **`bm` (back-materialised) marker added**
+  to the wire format. Required so a Hybrid
+  with no per-side theme can round-trip.
+  Alternative: drop the back-discriminator
+  entirely (treat every pane as potentially
+  Hybrid; hamburger Theme/Flip entries
+  always show). Cleaner type but un-flipped
+  panes would advertise back-side ops, which
+  is a small UX papercut. Going with `bm`;
+  flag if the wrong call.
+* **Front-side wins on legacy migration**.
+  Matches the task body's spec verbatim.
+  Alternative: use `sb` to pick the
+  visible-side theme. More user-aware but
+  more implementation. Going with task-spec
+  default.
+
+### Suggested commit subject
+
+```
+Drop front/back independent theme; single per-Hybrid value (fullstack-a-47)
+```
+
+Single commit. State shape + flip impl + ser/
+deser + tests are all part of the same
+collapse.
+
+### Files for `git add` (per-path discipline)
+
+* `web/src/state/tabs.svelte.ts`
+* `web/src/state/tabs.test.ts`
+* `docs/journals/phase-8/fullstack-a/fullstack-a-46.md`
+  (`-a-46` "committed as 5166223" trailing
+  append; uncommitted from the prior beat)
+* `docs/journals/phase-8/fullstack-a/fullstack-a-47.md`
+* `docs/journals/phase-8/fullstack-a/journal.md`
+* `docs/journals/phase-8/alex/event-fullstack-a-architect.md`
+  (this append)
+
+Push held — multi-agent tree commit
+discipline. Standing by for clearance.
