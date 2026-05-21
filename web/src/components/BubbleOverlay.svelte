@@ -321,11 +321,31 @@
     return event.type === "pre-flight" ? 1 : visibleQuestions(event).length;
   }
 
+  /// Resolve a positive epoch-ms start time from the event, or
+  /// null when no timing data is present. The shape today: an
+  /// event-emitter may pack a `started_at` epoch into `event.topic`
+  /// (numeric string) or embed a 10+ digit timestamp inside
+  /// `event.id`. Architect / Alex pre-flight events today carry
+  /// neither — we surface them without a timer instead of pretending
+  /// to count from t=0.
+  function preFlightStartMs(event: WatcherEvent): number | null {
+    const fromTopic = Number(event.topic);
+    if (Number.isFinite(fromTopic) && fromTopic > 0) return fromTopic;
+    const fromId = event.id.match(/\d{10,}/)?.[0];
+    if (fromId) {
+      const n = Number(fromId);
+      if (Number.isFinite(n) && n > 0) return n;
+    }
+    return null;
+  }
+
+  function hasPreFlightTiming(event: WatcherEvent): boolean {
+    return preFlightStartMs(event) !== null;
+  }
+
   function elapsedLabel(event: WatcherEvent): string {
-    const started = Number(event.topic);
-    const base = Number.isFinite(started) && started > 0 ? started : event.id.match(/\d{10,}/)?.[0];
-    const startMs = typeof base === "number" ? base : Number(base);
-    const elapsed = Number.isFinite(startMs) && startMs > 0 ? Math.max(0, now - startMs) : 0;
+    const startMs = preFlightStartMs(event);
+    const elapsed = startMs !== null ? Math.max(0, now - startMs) : 0;
     const seconds = Math.floor(elapsed / 1000);
     const mins = Math.floor(seconds / 60);
     const rem = seconds % 60;
@@ -333,6 +353,7 @@
   }
 
   function preFlightTimedOut(event: WatcherEvent): boolean {
+    if (!hasPreFlightTiming(event)) return false;
     const [m, s] = elapsedLabel(event).split(":").map(Number);
     return (m ?? 0) * 60 + (s ?? 0) >= 300;
   }
@@ -407,7 +428,7 @@
                     {/each}
                   </div>
                 {/if}
-                {#if event.type === "pre-flight"}
+                {#if event.type === "pre-flight" && hasPreFlightTiming(event)}
                   <div class="preflight-status" class:timeout={preFlightTimedOut(event)}>
                     {#if preFlightTimedOut(event)}
                       <span>Spawn idle</span>

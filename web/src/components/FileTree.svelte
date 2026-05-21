@@ -45,8 +45,8 @@
     persistTreeExpanded,
     tree,
     treeExpanded,
-    ui,
   } from "../state/store.svelte";
+  import { notify } from "../state/notify.svelte";
 
   // `fullstack-a-10`: full filesystem path for a tree entry,
   // for the row hover tooltip. Falls back to the drive-relative
@@ -386,9 +386,9 @@
   async function copyPath(path: string): Promise<void> {
     try {
       await navigator.clipboard?.writeText(path);
-      ui.status = "Copied path";
+      notify("Copied path");
     } catch (err) {
-      ui.status = `copy failed: ${(err as Error).message}`;
+      notify(`copy failed: ${(err as Error).message}`);
     } finally {
       clearTreeLoadingForPath(path);
     }

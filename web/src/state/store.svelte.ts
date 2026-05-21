@@ -121,6 +121,15 @@ function effectiveTheme(choice: ThemeChoice): "light" | "dark" {
 
 export const ui = $state<{
   status: string | null;
+  /// Notification kind drives the auto-dismiss policy. Transient
+  /// statuses (action confirmations: "Copied path", "Saved", short
+  /// notify() pings) clear themselves after a short window;
+  /// persistent statuses (in-flight ops: "Moving…", errors) stay
+  /// until overwritten or explicitly cleared. Direct
+  /// `ui.status = ...` writes default to persistent; transient
+  /// writes go through `setTransientStatus` (or `notify()` which
+  /// routes through that helper).
+  statusKind: "transient" | "persistent" | null;
   /// Used to nudge tabs to reload on external changes.
   lastWatch: number;
   ws: WsStatus;
@@ -137,6 +146,7 @@ export const ui = $state<{
   authMissing: boolean;
 }>({
   status: null,
+  statusKind: null,
   lastWatch: 0,
   ws: "connecting",
   themeChoice: "system",
@@ -144,9 +154,41 @@ export const ui = $state<{
   authMissing: false,
 });
 
-// Route leaf-module notify() calls to the shared status line.
-setNotifyHandler((msg) => {
+const TRANSIENT_STATUS_DEFAULT_MS = 3000;
+let transientStatusTimer: ReturnType<typeof setTimeout> | null = null;
+
+/// Set an auto-dismissing status pill. Used for action
+/// confirmations (Copied, Saved, etc.) — anything where the user
+/// doesn't need to dismiss it manually. Re-entry cancels the
+/// prior timer so the latest message wins.
+export function setTransientStatus(
+  msg: string,
+  ms: number = TRANSIENT_STATUS_DEFAULT_MS,
+): void {
+  if (transientStatusTimer !== null) {
+    clearTimeout(transientStatusTimer);
+    transientStatusTimer = null;
+  }
   ui.status = msg;
+  ui.statusKind = "transient";
+  transientStatusTimer = setTimeout(() => {
+    transientStatusTimer = null;
+    // Only clear if the message hasn't been overwritten by a newer
+    // status during the window. A direct `ui.status = ...`
+    // (persistent) write stomps our transient mid-flight and we
+    // leave it alone.
+    if (ui.status === msg && ui.statusKind === "transient") {
+      ui.status = null;
+      ui.statusKind = null;
+    }
+  }, ms);
+}
+
+// Route leaf-module notify() calls through the transient writer
+// so short action-confirmation pings auto-dismiss instead of
+// piling up on the status bar.
+setNotifyHandler((msg) => {
+  setTransientStatus(msg);
 });
 
 /** Apply the resolved theme to the DOM. Idempotent; safe to call
@@ -373,7 +415,7 @@ async function handleWindowCommand(raw: unknown): Promise<void> {
   if (!frame || frame.window_id !== sessionWindowId()) return;
   if (frame.command === "open_file" && typeof frame.path === "string") {
     await openInActivePane(frame.path);
-    ui.status = `opened ${frame.path}`;
+    setTransientStatus(`opened ${frame.path}`);
     return;
   }
   if (frame.command === "open_browser" && typeof frame.path === "string") {
@@ -384,7 +426,9 @@ async function handleWindowCommand(raw: unknown): Promise<void> {
         inspectorOpen: true,
       });
     }
-    ui.status = frame.select ? `selected ${frame.select}` : `opened ${frame.path || "/"}`;
+    setTransientStatus(
+      frame.select ? `selected ${frame.select}` : `opened ${frame.path || "/"}`,
+    );
     scheduleSessionSave();
   }
 }

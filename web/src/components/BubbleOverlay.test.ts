@@ -623,4 +623,54 @@ describe("BubbleOverlay", () => {
       { question_index: 0, key: "open-terminal" },
     ]);
   });
+
+  test("pre-flight bubble suppresses spinner + label when no timing data is present (fullstack-a-38)", async () => {
+    const watcher: TerminalWatcherState = {
+      path: "events",
+      seenIds: ["pf-no-timing"],
+      unread: false,
+      events: [
+        {
+          id: "pf-no-timing", // no 10+ digit timestamp embedded
+          type: "pre-flight",
+          from: "@@Architect",
+          to: "@@Alex",
+          path: "events/event-pf-no-timing.md",
+          note: "Reply dismisses pre-flight bubble",
+          session: "spawn_session",
+        },
+      ],
+    };
+    const { target } = await renderOverlay(watcher);
+
+    expect(target.textContent).toContain("Reply dismisses pre-flight bubble");
+    expect(target.querySelector(".preflight-status")).toBeNull();
+    expect(target.textContent).not.toMatch(/\b0:00\b/);
+  });
+
+  test("pre-flight bubble renders spinner + elapsed when topic carries a start timestamp (fullstack-a-38)", async () => {
+    const startMs = Date.now() - 12_000; // 12 s ago
+    const watcher: TerminalWatcherState = {
+      path: "events",
+      seenIds: ["pf-with-timing"],
+      unread: false,
+      events: [
+        {
+          id: "pf-with-timing",
+          type: "pre-flight",
+          from: "@@Architect",
+          to: "@@Alex",
+          path: "events/event-pf-with-timing.md",
+          topic: String(startMs),
+          note: "Has timing",
+          session: "spawn_session",
+        },
+      ],
+    };
+    const { target } = await renderOverlay(watcher);
+
+    const status = target.querySelector(".preflight-status");
+    expect(status).not.toBeNull();
+    expect(status?.textContent ?? "").toMatch(/0:\d{2}/);
+  });
 });
