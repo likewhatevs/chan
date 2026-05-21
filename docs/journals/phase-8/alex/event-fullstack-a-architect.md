@@ -2159,3 +2159,169 @@ Standing down. Not picking up `-a-45` until you ack
 the incident + decide on (a) / (b) / (c). The Hybrid
 back-side Tasks B/C/E/F queue is intact; I'll pick
 up `-a-45` the moment you ack.
+
+## 2026-05-21 — poke (fullstack-a-45 ready for review)
+
+Incident routing acked: (a) declined, (b) GO,
+(c) you handled via `3baaa6d`'s subject. Audit-trail
+correction appended to `fullstack-a-44.md` tail.
+Picked up `-a-45` (Hybrid back-side Task B — Terminal
+Settings migration) per your greenlight.
+
+`fullstack-a-45` ready for review. Four-file change.
+SPA-only; no Rust touched.
+
+### Architecture
+
+Self-contained `HybridTerminalConfig.svelte` with its
+own editing / dirty / autosave lifecycle scoped to the
+`preferences.terminal` subtree. Settings storage shape
+unchanged — both surfaces still PATCH the same
+`GlobalConfig.preferences.terminal`.
+
+**Merge-against-current-server save**: on save, the
+new component fetches the latest `GlobalConfig` from
+the server first, then PATCHes a payload that
+overlays ONLY the terminal subtree onto whatever the
+server currently holds. This means a parallel
+SettingsPanel save (theme / editor / date) can NOT
+be clobbered by a HybridTerminalConfig save, and vice
+versa. The dirty comparator is similarly scoped, so
+non-terminal edits in SettingsPanel never trigger a
+spurious Hybrid save.
+
+Alternative considered + rejected: extract a shared
+`preferencesEdit.svelte.ts` module holding the
+editing state for both surfaces. Cleaner but
+substantially larger refactor; the
+merge-against-server pattern lands the same race
+guarantee with a much smaller blast radius.
+
+### Files
+
+`HybridTerminalConfig.svelte` populated from the
+-a-43 stub:
+
+* Imports `clampScrollbackMb` / `SCROLLBACK_MB_*`
+  from `terminal/scrollback`, `drive` from
+  `state/store.svelte`, `api` from `api/client`.
+* TERM constants carried over
+  (`KNOWN_TERM_VALUES`, `DEFAULT_TERM`,
+  `CUSTOM_TERM_SENTINEL`).
+* Local `editing: Preferences | null` synced from
+  `drive.info` via $effect when no local edit
+  pending.
+* `normalizeTerminal(p)` scoped to the terminal
+  subtree (the rest of `normalizePrefs` stays in
+  SettingsPanel).
+* Derived: `scrollbackMb`, `currentTerm`,
+  `isKnownTerm`, `termSelectValue`.
+* Setters: `setScrollbackMb`, `setTermSelection`,
+  `setCustomTerm`.
+* Dirty / autosave: `terminalDirty()`,
+  `scheduleSave()`, `save()` (with the merge-
+  against-server fetch), `terminalSnapshot()`.
+  Save status surfaced in the header band.
+* Warning copy: "These settings apply to ALL
+  terminals, not just this one." matches the
+  round-2-plan Hybrid back-side scope note.
+* Control ids re-namespaced
+  `terminal-*` → `hybrid-terminal-*` so the
+  legacy SettingsPanel ids don't collide if both
+  surfaces are mounted.
+
+`SettingsPanel.svelte` trimmed:
+
+* Removed: TERM constants, scrollback imports,
+  derived view (scrollbackMb / currentTerm /
+  isKnownTerm / termSelectValue), setters
+  (setScrollbackMb / setTermSelection /
+  setCustomTerm), Terminal section markup
+  (88 lines), Terminal CSS scope.
+* `normalizePrefs` stripped of the terminal
+  branch (doc comment updated to point at
+  `-a-45`).
+* GlobalConfig round-trip path otherwise
+  unchanged.
+
+`SettingsPanel.terminal.test.ts` repurposed:
+from 7 wiring pins to 5 negative pins — a
+regression guard that the Terminal section
+is GONE (header / control ids / TERM
+constants / scrollback imports / normalize
+terminal branch).
+
+`HybridTerminalConfig.test.ts` (new): 8 pins
+covering warning copy, scrollback wiring,
+TERM dropdown, custom-TERM rendering, save
+merge-against-server, normalize backfills,
+dirty scope.
+
+### Gate
+
+* vitest **606 / 606** (+6 net from -a-44's
+  600 baseline: +8 new, +5 repurposed, -7 old
+  pins).
+* svelte-check 0 errors / 0 warnings across
+  3987 files.
+* npm build clean.
+* Rust gate not re-run (no Rust touched).
+
+### Decisions flagged
+
+* **merge-against-current-server save** is
+  last-writer-wins; atomic on the server.
+  Worst race case: the second save's
+  `api.config()` fetch loses to a
+  third-party update between the first save's
+  PATCH and the second save's fetch. Flag if
+  a stricter contract is wanted.
+* **`hybrid-terminal-*` id namespacing**
+  changed from `terminal-*` to avoid
+  duplicate-id risk. Optional; could revert
+  if the collision risk is theoretical
+  (SettingsPanel is now empty of terminal
+  controls).
+* **Two parallel save-status indicators**
+  (one per surface). Arguably correct since
+  each reports its own debounce; flag if a
+  single indicator was wanted.
+
+### Suggested commit subject
+
+```
+Migrate Terminal Settings to Hybrid Terminal back-side (fullstack-a-45)
+```
+
+Single commit. The four files are tightly
+coupled around the same move; intermediate
+states would not compile (SettingsPanel
+imports `setScrollbackMb` etc. that no
+longer exist locally).
+
+### Files for `git add` (per-path discipline)
+
+* `web/src/components/HybridTerminalConfig.svelte`
+* `web/src/components/HybridTerminalConfig.test.ts`
+* `web/src/components/SettingsPanel.svelte`
+* `web/src/components/SettingsPanel.terminal.test.ts`
+* `docs/journals/phase-8/fullstack-a/fullstack-a-44.md`
+  (audit-trail correction append per your
+  routing — bundled here per your "your call"
+  note).
+* `docs/journals/phase-8/fullstack-a/fullstack-a-45.md`
+* `docs/journals/phase-8/fullstack-a/journal.md`
+* `docs/journals/phase-8/alex/event-fullstack-a-architect.md`
+  (this append).
+
+### Pre-commit audit lesson applied
+
+Will run `git diff --staged --stat` against this
+exact path list before `git commit`; any
+stowaway from a peer lane gets `git restore
+--staged`'d. Memory `feedback_shared_worktree_commits`
++ the `-a-44` incident are both load-bearing on
+my behaviour this beat.
+
+Push held — multi-agent tree commit discipline.
+Standing by for clearance.

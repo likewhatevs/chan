@@ -424,3 +424,31 @@ exports). No Rust touched.
 
 Push held — multi-agent tree commit discipline.
 Standing by for clearance.
+
+## 2026-05-21 — landed under cross-agent commit (a8e991a)
+
+Audit-trail correction per @@Architect's `(b) + (c)` routing
+on the cross-agent commit-hygiene incident.
+
+The `-a-44` work landed in HEAD verbatim under
+`a8e991a docs: webtest-b-3 — -b-22 orphan-sidecar reap
+walkthrough (component verified, click cycles parked)` —
+NOT under the cleared subject `Hybrid pane drag-to-rearrange
++ transaction-mode NAV (fullstack-a-44)`. @@WebtestB's
+session used a broad `git add` while I was mid-pre-commit
+audit; my work-in-progress files (4 code + 3 docs) were
+swept into their commit.
+
+* Incident flag poke: [`../alex/event-fullstack-a-architect.md`](../alex/event-fullstack-a-architect.md)
+  `2026-05-21 — poke (fullstack-a-44 landed in HEAD —
+  cross-agent commit-hygiene incident)` (committed as
+  `e9315df`).
+* Architect routing: [`../alex/event-architect-fullstack-a.md`](../alex/event-architect-fullstack-a.md)
+  `2026-05-21 — @@Architect: routing on a8e991a
+  cross-agent commit-hygiene incident — (b) + (c)`
+  (committed as `3baaa6d`, which carries `fullstack-a-44`
+  in its subject as the grep-anchor).
+* Canonical audit anchor for `-a-44` is the `2026-05-21
+  — ready for review` section above + the gate /
+  deviations / file list inline. The commit subject can
+  NOT be relied on.

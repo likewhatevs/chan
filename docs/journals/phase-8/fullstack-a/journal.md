@@ -497,3 +497,99 @@ readiness; standing by for review + commit
 routing. Queue waiting: `-a-45..-48` (Hybrid
 back-side Tasks B/C/E/F) → `-a-49..52` (graph
 overhaul first sub-wave) → `-a-42` (About).
+
+## 2026-05-21 — -a-44 incident routed; -a-45 ready for review
+
+`-a-44` cleared with all 3 deviations accepted. On
+commit I caught a cross-agent commit-hygiene
+incident at pre-commit audit: @@WebtestB's session
+used a broad `git add` and swept my work-in-progress
+files into their `a8e991a docs: webtest-b-3 …`
+commit. Net: `-a-44` work is in HEAD verbatim under
+the wrong commit subject. Flagged to @@Architect
+via [`../alex/event-fullstack-a-architect.md`](../alex/event-fullstack-a-architect.md)
+incident poke (`e9315df`); architect routed
+(b) audit-trail correction + (c) architect-side
+grep-anchor commit (`3baaa6d`). Audit-trail
+correction appended to
+[`fullstack-a-44.md`](fullstack-a-44.md) tail.
+
+### -a-45 complete (Hybrid back-side Task B)
+
+Four-file change. SPA-only.
+
+* `web/src/components/HybridTerminalConfig.svelte`
+  — populated from a stub to the full Terminal
+  settings surface. Self-contained component
+  with its own editing / dirty / autosave
+  lifecycle scoped to the
+  `preferences.terminal` subtree.
+* `web/src/components/HybridTerminalConfig.test.ts`
+  (new) — 8 pins covering warning copy,
+  scrollback wiring, TERM dropdown shape,
+  custom-TERM rendering, save merge-against-
+  server pattern, normalize backfills, dirty
+  scope.
+* `web/src/components/SettingsPanel.svelte` —
+  Terminal section markup (88 lines), TERM
+  constants, scrollback imports, derived view
+  helpers, setters, and CSS scope all removed.
+  `normalizePrefs` trimmed to non-terminal
+  branches. GlobalConfig round-trip path
+  unchanged.
+* `web/src/components/SettingsPanel.terminal.test.ts`
+  — repurposed from wiring pins to a regression
+  guard that the Terminal section is GONE
+  (header / control ids / TERM constants /
+  scrollback imports / normalize terminal
+  branch).
+
+### Save-race contract
+
+The architecturally interesting bit: rather than
+extract a shared `preferencesEdit.svelte.ts`
+module (cleaner but big refactor; touches the
+entire SettingsPanel save lifecycle), I kept
+each surface self-contained and used a
+**merge-against-current-server** save shape.
+HybridTerminalConfig re-fetches the current
+`GlobalConfig` on save before PATCHing, so an
+in-flight SettingsPanel save (theme / editor /
+date) can't be clobbered, and vice versa. The
+dirty comparator is also scoped to the
+terminal subtree so SettingsPanel-owned edits
+elsewhere don't trigger spurious Hybrid
+Terminal autosaves.
+
+### Gate
+
+* vitest **606 / 606** (+6 net: +8
+  HybridTerminalConfig + 5 negative pins on
+  SettingsPanel - 7 old wiring pins).
+* svelte-check 0 errors / 0 warnings across
+  3987 files.
+* npm build clean.
+* Rust gate not re-run (no Rust touched).
+
+### Decisions flagged
+
+* `hybrid-terminal-*` id namespacing (changed
+  from `terminal-*` to avoid duplicate-id risk
+  when both surfaces are mounted at once).
+* Two parallel save-status indicators (one
+  per surface) — arguably correct since each
+  reports its own debounce. Flag if a single
+  indicator was wanted.
+* merge-against-current-server pattern is
+  last-writer-wins; atomic on the server side;
+  flag if a stricter contract was wanted.
+
+Impl note + suggested commit subject at the tail
+of [fullstack-a-45.md](fullstack-a-45.md).
+Outbound poke fired to @@Architect with Commit
+readiness; standing by. Queue waiting: `-a-46`
+(Task C — Editor Settings migration), `-a-47`
+(Task E — front/back theme collapse), `-a-48`
+(Task F — Search / Indexing / Reports settings
+migration + chan-reports toggle restore), then
+`-a-49..52` (graph overhaul) + `-a-42` (About).
