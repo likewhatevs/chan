@@ -255,6 +255,162 @@ to the same dispatch the front-side tab strip uses.
 * A re-architecture of the flip behaviour. Just removing
   the misplaced family-name title.
 
+## 2026-05-21 — ready for review
+
+Two-file change. SPA-only; no Rust touched. Three
+load-bearing pieces.
+
+### Architecture
+
+**1. Family-name title removed from tab strip**:
+
+* `Pane.svelte`: dropped the `hybridFamilyName` derived
+  helper (was the script-side feeder for the title).
+* Dropped the `<span class="hybrid-title">` element from
+  the `.dead-zone` slot — the dead-zone goes back to
+  pure spacer.
+* Removed the `.hybrid-title` CSS class + the
+  `.tabs.flipped .dead-zone { display: flex; justify-
+  content: center; ... }` centering rules.
+* Back-side config view's own family-name title (the
+  one in `HybridXConfig.svelte`'s `<h2>` per `-a-43`'s
+  stub) is unchanged. That's the canonical surface.
+
+**2. Right-align tabs when flipped**:
+
+* `.tabs.flipped` gains `flex-direction: row-reverse`.
+* `.tabs.flipped .actions` order swapped from `-1` to
+  `1`. Under row-reverse, the highest order ends up
+  visually first (LEFT edge).
+* Layout result (left-to-right visually):
+  `[≡ hamburger] [dead-zone fills slack] [tabN ... tab0]`.
+  Tabs flow from the right edge; tab0 is rightmost.
+
+**3. Fix click-on-mirrored-tab handler (webtest-a-5
+PARTIAL on -a-54 check #6)**:
+
+* Root-caused: `-a-54` applied `transform: scaleX(-1)`
+  to the whole `.tab` element. The transform broke
+  click routing on the back-side per @@WebtestA's
+  empirical verification (DOM ref click + programmatic
+  `tab.click()` + full pointer-event sequence all
+  failed to swap active).
+* Fix: move the mirror to per-CHILD selectors
+  (`.tab-icon` + `.path` + `.dirty` + `.broadcast-
+  marker` + `.marker`). Each visual child mirrors via
+  `transform: scaleX(-1); display: inline-block;` —
+  this preserves "viewed from behind" semantics while
+  keeping the `.tab` element's own bounding box in
+  natural coordinates so its click target lives where
+  the browser expects.
+* The close button (`<button class="close">×</button>`)
+  is NOT mirrored — `×` is a standard close affordance
+  and mirroring it makes it look reversed.
+
+### Files
+
+`web/src/components/Pane.svelte`:
+
+* Script: `hybridFamilyName` derived removed.
+* Template: `<span class="hybrid-title">` removed from
+  the `.dead-zone` slot.
+* CSS: `.hybrid-title` rule removed; `.tabs.flipped
+  .dead-zone` centering removed (kept the
+  `cursor: default` reset); the
+  `.tabs.flipped .tab { transform: scaleX(-1) }`
+  whole-element transform removed; `.tabs.flipped`
+  gains `flex-direction: row-reverse`;
+  `.tabs.flipped .actions` order flipped `-1` → `1`;
+  per-child mirror rules added for
+  `.tab-icon`/`.path`/`.dirty`/`.broadcast-marker`/`.marker`.
+
+`web/src/components/Pane.test.ts`:
+
+* Existing `-a-54` "Hybrid X title in tab area" pin
+  inverted into a regression guard: assert
+  `.hybrid-title` IS null in the flipped state, and
+  the back-side config view IS rendered.
+* `-a-54` raw-source CSS guard rewritten:
+  - Pin per-child mirror selectors instead of the
+    whole-tab transform.
+  - Pin `flex-direction: row-reverse` on
+    `.tabs.flipped`.
+  - Pin `.tabs.flipped .actions { order: 1 }`.
+  - Old whole-tab transform + old `order: -1`
+    rejected via `not.toMatch` so a future revert
+    trips the guard.
+* New click-swap pin: dispatches `mousedown` on a
+  flipped-state tab; asserts `pane.activeTabId`
+  swaps. The handler bound to `.tab`'s `onmousedown`
+  is now reachable via the natural click path.
+  Verified locally; webtest-a-N empirically re-walks
+  via Chrome MCP.
+
+### Gate
+
+* vitest **647 / 647** (+1 net from `-a-54`'s 646;
+  one pin rewritten in place, one new click-swap
+  pin added).
+* svelte-check 0 errors / 0 warnings across
+  3990 files.
+* npm build clean.
+* Rust gate not re-run (no Rust touched).
+
+### Decisions
+
+* **Per-child mirror** vs other fixes (single
+  wrapper span + `display: contents`,
+  `pointer-events: auto` reset, `dir="rtl"` on tabs):
+  per-child is the cleanest. Wrapper + `display:
+  contents` breaks transforms (transforms require a
+  box). `pointer-events: auto` doesn't address the
+  underlying issue (the .tab IS the click target;
+  resetting pointer-events on children just adds
+  noise). `dir="rtl"` doesn't visually flip characters
+  the way @@Alex's "viewed from behind" framing
+  needs.
+* **Close button NOT mirrored**: keeps the
+  universally-readable `×` upright. Flag if @@Alex
+  wants it mirrored too.
+* **Counter-mirror NOT applied to hamburger icon**:
+  the hamburger icon is symmetric horizontally
+  (three stacked lines); mirroring/unmirroring is
+  visually identical, so the position swap alone is
+  enough.
+
+### Manual verification recommendation
+
+`webtest-a-N` walk-through on the next dispatch will
+re-walk the click path via Chrome MCP. Local vitest
+covers the handler binding (mousedown swaps active);
+the empirical-browser side will confirm the click
+path works through the modern browser's hit-testing
++ Tauri webview.
+
+### Suggested commit subject
+
+```
+Hybrid flip UX: remove tab-strip title + right-align tabs + fix mirrored-tab click (fullstack-a-55)
+```
+
+Single commit. Three pieces are tightly coupled
+chrome surgery on the same `.tabs.flipped` rule
+set.
+
+### Files for `git add` (per-path discipline)
+
+* `web/src/components/Pane.svelte`
+* `web/src/components/Pane.test.ts`
+* `docs/journals/phase-8/fullstack-a/fullstack-a-54.md`
+  (`-a-54` "committed as 714ec48" trailing append;
+  bundled per the established pattern)
+* `docs/journals/phase-8/fullstack-a/fullstack-a-55.md`
+* `docs/journals/phase-8/fullstack-a/journal.md`
+* `docs/journals/phase-8/alex/event-fullstack-a-architect.md`
+
+Push held — multi-agent tree commit discipline.
+Standing by for clearance.
+
 ## Architect-side lesson logged
 
 My `-a-54` task body's interpretation of "inside the tab

@@ -278,14 +278,14 @@ describe("Pane back-side configuration view (fullstack-a-43)", () => {
       target.querySelector('[aria-label="Hybrid Terminal configuration"]'),
     ).not.toBeNull();
     // `fullstack-a-54`: tab strip stays visible on the back side
-    // (mirrored via the .flipped class). The family-name title
-    // "Hybrid Terminal" lives inside the dead-zone slot.
+    // (mirrored via the .flipped class).
+    // `fullstack-a-55`: the family-name title was removed from
+    // the tab strip — the back-side config component owns its
+    // own title at the top of its content area.
     const tabs = target.querySelector(".tabs");
     expect(tabs).not.toBeNull();
     expect(tabs!.classList.contains("flipped")).toBe(true);
-    expect(target.querySelector(".hybrid-title")?.textContent).toBe(
-      "Hybrid Terminal",
-    );
+    expect(target.querySelector(".hybrid-title")).toBeNull();
   }, 15000);
 
   test("renders HybridEditorConfig when active front tab is a file", async () => {
@@ -367,8 +367,8 @@ describe("Pane back-side configuration view (fullstack-a-43)", () => {
   }, 15000);
 });
 
-describe("Pane flip UX redesign (fullstack-a-54)", () => {
-  test("hybridFamilyName derives 'Hybrid Editor' for a file front tab", async () => {
+describe("Pane flip UX redesign (fullstack-a-54 + fullstack-a-55)", () => {
+  test("family-name title is NOT rendered in the tab strip (-a-55)", async () => {
     const front = {
       kind: "file" as const,
       fileKind: "document" as const,
@@ -400,9 +400,13 @@ describe("Pane flip UX redesign (fullstack-a-54)", () => {
       showingBack: true,
     };
     const target = await renderPane(pane, { paneMode: false });
-    expect(target.querySelector(".hybrid-title")?.textContent).toBe(
-      "Hybrid Editor",
-    );
+    // `-a-55` regression guard: the back-side config component
+    // owns its own title; the tab-strip slot is empty.
+    expect(target.querySelector(".hybrid-title")).toBeNull();
+    // The back-side config view IS still rendered.
+    expect(
+      target.querySelector('[aria-label="Hybrid Editor configuration"]'),
+    ).not.toBeNull();
   }, 15000);
 
   test("front-state pane does not carry the .flipped class", async () => {
@@ -420,13 +424,57 @@ describe("Pane flip UX redesign (fullstack-a-54)", () => {
     expect(target.querySelector(".hybrid-title")).toBeNull();
   }, 15000);
 
-  test("Pane source carries the -a-54 flip CSS (scaleX + order swap)", () => {
-    // Pin the load-bearing CSS rules so a future refactor can't
-    // silently drop the mirror or the hamburger swap without
-    // tripping the test.
-    expect(paneSource).toMatch(/\.tabs\.flipped \.tab \{ transform: scaleX\(-1\); \}/);
-    expect(paneSource).toMatch(/\.tabs\.flipped \.actions \{[\s\S]*?order: -1/);
+  test("Pane source carries the -a-55 flip CSS (per-child scaleX + row-reverse)", () => {
+    // `-a-54` applied the transform to the whole `.tab`, which
+    // broke click routing (webtest-a-5 check #6 PARTIAL). `-a-55`
+    // moves the transform to per-child selectors so the `.tab`
+    // element's click target stays in natural coordinates.
+    expect(paneSource).toMatch(
+      /\.tabs\.flipped \.tab \.tab-icon[\s\S]*?\.tabs\.flipped \.tab \.path[\s\S]*?transform: scaleX\(-1\)/,
+    );
+    // Old whole-tab transform regression guard.
+    expect(paneSource).not.toMatch(
+      /\.tabs\.flipped \.tab \{ transform: scaleX\(-1\); \}/,
+    );
+    // `-a-55` right-alignment: row-reverse on flipped + order: 1
+    // on actions puts hamburger leftmost + tabs flowing from the
+    // right edge per @@Alex's "tabs aligned to the right" framing.
+    expect(paneSource).toMatch(
+      /\.tabs\.flipped \{[\s\S]*?flex-direction: row-reverse/,
+    );
+    expect(paneSource).toMatch(/\.tabs\.flipped \.actions \{[\s\S]*?order: 1/);
+    // Old order: -1 swap regression guard (was -a-54's shape).
+    expect(paneSource).not.toMatch(/\.tabs\.flipped \.actions \{[\s\S]*?order: -1/);
   });
+
+  test("clicking a tab from the flipped state still swaps active (-a-55)", async () => {
+    const t1 = terminalTab({ id: "front-t1", title: "T1" });
+    const t2 = terminalTab({ id: "front-t2", title: "T2" });
+    const pane: LeafNode = {
+      kind: "leaf",
+      id: "pane-flip-click",
+      tabs: [t1, t2],
+      activeTabId: t1.id,
+      back: {},
+      showingBack: true,
+    };
+    const target = await renderPane(pane, { paneMode: false });
+
+    // The second tab is inactive at start.
+    const tabs = target.querySelectorAll<HTMLElement>(".tabs .tab");
+    expect(tabs.length).toBe(2);
+    const t2El = tabs[1]!;
+    expect(t2El.classList.contains("active")).toBe(false);
+
+    // Fire mousedown — the active-tab swap path lives there
+    // (the click handler is bookkeeping; the actual write to
+    // `pane.activeTabId` is in onmousedown).
+    t2El.dispatchEvent(new MouseEvent("mousedown", { bubbles: true }));
+    await tick();
+
+    // Active-tab swap visible via the live pane state.
+    expect(pane.activeTabId).toBe(t2.id);
+  }, 15000);
 });
 
 describe("Pane Hybrid NAV transaction mode (fullstack-a-44)", () => {

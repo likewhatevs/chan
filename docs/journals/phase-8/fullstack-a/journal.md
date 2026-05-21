@@ -1008,3 +1008,93 @@ Outbound poke fired; standing by. Queue
 waiting: `-a-49..52` (graph overhaul first
 sub-wave) → `-a-42` (About; A+B+C+F all in
 HEAD post -a-53).
+
+## 2026-05-21 — -a-54 committed; -a-55 ready for review
+
+`-a-54` cleared with all 5 shape decisions
+accepted + committed as `714ec48 Hybrid flip
+UX: preserve tab strip + mirror tabs + swap
+hamburger + family-name title (fullstack-a-54)`.
+6 files, no stowaways.
+
+Architect cut `-a-55` to correct two design
+issues @@Alex flagged post-`-a-54` ship + one
+PARTIAL @@WebtestA's `webtest-a-5` walk
+surfaced:
+
+1. Remove family-name title from tab strip
+   (architect-side misinterpretation of @@Alex's
+   "tab area" framing; the title belongs in the
+   back-side config view body, not the chrome).
+2. Right-align tabs in flipped state (@@Alex
+   2026-05-21: "tabs must be aligned to the
+   right.. because we flipped").
+3. Fix click-on-mirrored-tab swap (webtest-a-5
+   check #6 PARTIAL).
+
+### -a-55 complete
+
+Two-file change. SPA-only.
+
+**`Pane.svelte`**:
+
+* Script: `hybridFamilyName` derived removed.
+* Template: `<span class="hybrid-title">`
+  removed from `.dead-zone` slot.
+* CSS:
+  - `.hybrid-title` rule + flex-centering of
+    `.tabs.flipped .dead-zone` removed.
+  - Whole-element transform on
+    `.tabs.flipped .tab` removed; replaced with
+    per-child `transform: scaleX(-1)` on
+    `.tab-icon` + `.path` + `.dirty` +
+    `.broadcast-marker` + `.marker`. Click
+    target stays in natural coordinates → fixes
+    PARTIAL #6.
+  - `flex-direction: row-reverse` on
+    `.tabs.flipped` + actions order swapped
+    `-1` → `1`. Layout: `[≡] [slack] [tabN ...
+    tab0]`.
+  - Close button NOT mirrored (universally-
+    readable `×` stays upright).
+
+**`Pane.test.ts`**:
+
+* Existing `-a-54` "title in tab area" pin
+  inverted into a regression guard (`.hybrid-
+  title` IS null + back-side config view IS
+  rendered).
+* `-a-54` raw-source CSS guard rewritten:
+  pin per-child mirror selectors + row-reverse
+  + actions order: 1; reject the old
+  whole-tab transform + old order: -1.
+* New click-swap pin: dispatches `mousedown`
+  on a flipped-state tab; asserts
+  `pane.activeTabId` swaps to the clicked
+  tab's id.
+
+### Architect-side lesson context
+
+The architect's poke called out their own
+misinterpretation of @@Alex's framing — "tab
+area" was read as "tab strip chrome" but
+@@Alex meant the back-side config view body
+(which already had the title from `-a-43`'s
+stubs). My `-a-54` implementation faithfully
+followed the spec; the correction is on the
+chrome side. No fault on the implementation
+lane.
+
+### Gate
+
+* vitest **647 / 647** (+1 net).
+* svelte-check 0 errors / 0 warnings across
+  3990 files.
+* npm build clean.
+* Rust gate not re-run (no Rust touched).
+
+Impl note + suggested commit subject at
+[fullstack-a-55.md](fullstack-a-55.md).
+Outbound poke fired; standing by. Queue
+waiting: `-a-49..52` (graph overhaul) →
+`-a-42` (About).

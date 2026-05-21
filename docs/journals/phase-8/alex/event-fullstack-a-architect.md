@@ -3180,3 +3180,135 @@ discipline. Standing by for clearance. After
 `-a-54` lands, queue is `-a-49..52` (graph
 overhaul first sub-wave) → `-a-42` (About;
 A+B+C+F all in HEAD).
+
+## 2026-05-21 — poke (fullstack-a-54 committed + fullstack-a-55 ready for review)
+
+`-a-54` committed at `714ec48 Hybrid flip UX:
+preserve tab strip + mirror tabs + swap
+hamburger + family-name title (fullstack-a-54)`
+per your clearance. 6 files, no stowaways.
+
+`-a-55` ready for review. Two-file change.
+SPA-only; no Rust touched. Three pieces:
+
+### 1. Family-name title removed from tab strip
+
+Per your design-correction routing:
+
+* `hybridFamilyName` derived dropped from
+  `Pane.svelte`.
+* `<span class="hybrid-title">` element gone
+  from the `.dead-zone` slot.
+* `.hybrid-title` CSS + the
+  `.tabs.flipped .dead-zone { display: flex;
+  justify-content: center; ... }` centering
+  both removed (dead-zone reverts to pure
+  spacer with the `cursor: default` reset
+  retained).
+* `HybridXConfig.svelte` components keep
+  their own title at the top of their
+  content area (per `-a-43`'s stubs) — that's
+  the canonical surface.
+
+### 2. Right-align tabs when flipped
+
+* `.tabs.flipped` gains `flex-direction: row-
+  reverse`.
+* `.tabs.flipped .actions` order flipped
+  `-1` → `1`. Under row-reverse, the highest
+  order ends up visually first (LEFT edge).
+* Layout in flipped state, left-to-right:
+  `[≡ hamburger] [dead-zone fills slack]
+  [tabN ... tab1 tab0]`. Tabs flow from the
+  right edge; tab0 is rightmost.
+
+### 3. Fix click-on-mirrored-tab swap (PARTIAL fix)
+
+`webtest-a-5` check #6 PARTIAL: clicking a
+mirrored tab on the back side didn't swap
+active. Root cause: the `-a-54` whole-tab
+`transform: scaleX(-1)` broke click routing
+in Tauri / Chrome's hit-testing path.
+
+Fix: move the transform to per-child selectors
+(`.tab-icon` + `.path` + `.dirty` +
+`.broadcast-marker` + `.marker`). Each visual
+child mirrors via `transform: scaleX(-1);
+display: inline-block;` — the `.tab` element
+itself stays un-transformed, so its bounding
+box lives in natural coordinates and the
+`onmousedown` handler (which writes
+`pane.activeTabId`) fires through the click
+path.
+
+Verified locally via Vitest pin
+(dispatchEvent mousedown on a flipped tab →
+`pane.activeTabId` updates). Empirical Chrome
+MCP verification recommended on the next
+`webtest-a-N` walk.
+
+### Close button NOT mirrored
+
+`<button class="close">×</button>` stays
+upright. The `×` is a universally-readable
+close affordance; mirroring it reverses the
+visual + confuses the user. Flag if @@Alex
+wants it mirrored too.
+
+### Tests
+
+`Pane.test.ts`:
+
+* The `-a-54` "Hybrid X title in tab area"
+  pin inverted into a regression guard:
+  asserts `.hybrid-title` is null in flipped
+  state + back-side config view IS rendered.
+* The `-a-54` raw-source CSS guard rewritten:
+  pins per-child mirror selectors +
+  `flex-direction: row-reverse` +
+  `.tabs.flipped .actions { order: 1 }`. The
+  old whole-tab transform + old `order: -1`
+  are both rejected via `not.toMatch` so a
+  revert trips the guard.
+* New click-swap pin: dispatches mousedown on
+  a flipped-state tab; asserts
+  `pane.activeTabId` swaps.
+
+### Gate
+
+* vitest **647 / 647** (+1 net from `-a-54`'s
+  646; one pin rewritten in place, one new
+  click-swap pin added).
+* svelte-check 0 errors / 0 warnings across
+  3990 files.
+* npm build clean.
+* Rust gate not re-run (no Rust touched).
+
+### Suggested commit subject
+
+```
+Hybrid flip UX: remove tab-strip title + right-align tabs + fix mirrored-tab click (fullstack-a-55)
+```
+
+Single commit. Three pieces are tightly
+coupled chrome surgery on the same
+`.tabs.flipped` rule set.
+
+### Files for `git add` (per-path discipline)
+
+* `web/src/components/Pane.svelte`
+* `web/src/components/Pane.test.ts`
+* `docs/journals/phase-8/fullstack-a/fullstack-a-54.md`
+  (`-a-54` "committed as 714ec48" trailing
+  append; bundled per the established
+  pattern)
+* `docs/journals/phase-8/fullstack-a/fullstack-a-55.md`
+* `docs/journals/phase-8/fullstack-a/journal.md`
+* `docs/journals/phase-8/alex/event-fullstack-a-architect.md`
+  (this append)
+
+Push held — multi-agent tree commit
+discipline. Standing by for clearance.
+After `-a-55` lands, queue is `-a-49..52`
+(graph overhaul first sub-wave) → `-a-42`
+(About).

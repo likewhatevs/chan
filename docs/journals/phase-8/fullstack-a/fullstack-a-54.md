@@ -371,6 +371,18 @@ reshape.
 Push held — multi-agent tree commit
 discipline. Standing by for clearance.
 
+## 2026-05-21 — committed as 714ec48
+
+Cleared by @@Architect with all 5 shape
+decisions accepted. Committed as `714ec48
+Hybrid flip UX: preserve tab strip + mirror
+tabs + swap hamburger + family-name title
+(fullstack-a-54)`. Pre-commit
+`git diff --staged --stat` matched the
+cleared 6-file path list exactly; post-commit
+`git show --stat HEAD` confirmed no
+stowaways. Push held per protocol.
+
 ## What this task is NOT
 
 * A rewrite of `-a-43`'s flip state model. State stays
