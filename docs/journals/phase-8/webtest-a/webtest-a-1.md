@@ -1572,3 +1572,261 @@ a real-device emulation pass).
 3. `rm -rf /tmp/chan-test-phase8-wa-r4/` — directory gone (verified via `ls /tmp/ | grep chan-test` shows only -wa-r2 + -wa-r3 stale entries from prior recycles).
 4. `chan remove /tmp/chan-test-phase8-wa-r4/` → output `unregistered: /tmp/chan-test-phase8-wa-r4/`. `chan list` confirms drive no longer registered.
 5. Chrome MCP tabs 503725655 (chan SPA) + 503725677 (static site) closed via `tabs_close_mcp`. MCP tab group empty.
+
+## 2026-05-21 — fullstack-a-44 + -a-45 + -a-46 walkthroughs (Hybrid back-side wave; drag + Terminal migration + Editor migration)
+
+Per [`webtest-a-4.md`](webtest-a-4.md). Walked three Round-2 wave-2
+commits in HEAD: `-a-44` Hybrid pane drag-to-rearrange (`a8e991a`
+cross-agent commit-hygiene incident — code verbatim, subject
+misattributes), `-a-45` Terminal Settings migration (`1f80d09`),
+`-a-46` Editor Settings migration (`5166223`). Throwaway drive
+`/tmp/chan-test-phase8-wa-r5/` (chan-source seed); chan serve at
+127.0.0.1:8787; Chrome MCP tab `503725739`. Local `npm run build`
+(via web/dist freshness from -a-46 commit timestamp 17:42) +
+`cargo build -p chan` rebuild against current HEAD.
+
+### Verdicts
+
+| Slice | Check | Verdict |
+|-------|-------|---------|
+| -a-44 | #1 Entry A: drag from dead zone | HOLD |
+| -a-44 | #2 Entry B: dblclick dead zone | HOLD |
+| -a-44 | #3 Drag-and-drop swap + Enter commit | HOLD |
+| -a-44 | #4 Drop on non-Hybrid (terminal-only) pane | HOLD |
+| -a-44 | #5 Esc cancel | HOLD |
+| -a-44 | #6 Chain semantics (transaction stays on) | HOLD |
+| -a-45 | #1 Hybrid Terminal back populated | HOLD |
+| -a-45 | #2 Scrollback control + persistence | HOLD |
+| -a-45 | #3 TERM dropdown + custom-TERM rendering | PARTIAL |
+| -a-45 | #4 Save-status indicator | HOLD |
+| -a-45 | #5 Settings overlay no Terminal section | HOLD |
+| -a-45 | #6 Second Hybrid Terminal per-DRIVE settings | HOLD |
+| -a-46 | #1 Hybrid Editor back populated | HOLD |
+| -a-46 | #2 Theme (Appearance) round-trip | HOLD |
+| -a-46 | #3 Layout / Date pills / On save | HOLD |
+| -a-46 | #4 Save-status indicator | HOLD |
+| -a-46 | #5 Settings overlay no Editor section | HOLD |
+| -a-46 | #6 Visual sanity | HOLD |
+
+**17/18 HOLD; 1/18 PARTIAL** (`-a-45` #3 custom-TERM input does not render when `Custom...` selected — see lowlight below).
+
+### `-a-44` per-check evidence
+
+* **#1 Entry A**: `left_click_drag` from LEFT pane dead-zone (650, 21)
+  to RIGHT pane body (1100, 400). Status bar after the drag shows
+  `Hybrid ⏎ Enter commit, Esc discard, H help`; both pane centres
+  display NAV identity labels (`chan-test-phase8-wa-r5 / file browser`
+  + `Terminal-1 / terminal`); panes proposed-swapped in the
+  transaction layer.
+* **#2 Entry B**: `double_click` at LEFT pane dead-zone (650, 21) →
+  transaction mode entered WITHOUT an originating grab; LEFT pane
+  shows blue focus border; status bar same as #1; no panes moved
+  (standby state — next click+drag would grab).
+* **#3 Drag-and-drop swap + Enter commit**: `Return` after #1 +
+  chain swap committed the swaps; status bar cleared; layout
+  persisted in URL `s=...d:r...` (split right; pane `a` + pane `b`
+  contents reflect the committed state).
+* **#4 Drop on non-Hybrid (terminal-only) pane**: covered by #1+#3 —
+  RIGHT pane held only a Terminal-1 tab (terminal-only) and was a
+  valid drop target for the FB-front pane. The "rearrange ANY
+  pane" framing from `phase-8-bugs.md` holds.
+* **#5 Esc cancel**: re-entered transaction via Entry B dblclick,
+  then `Escape` → status bar cleared; both panes back to
+  pre-transaction layout (FB left, Terminal-1 right); no
+  persistent change.
+* **#6 Chain semantics**: while in transaction mode (post-Entry A
+  swap), fired a second `left_click_drag` from LEFT body (400, 400)
+  to RIGHT body (1100, 400) — second swap landed inline; status
+  bar still showed `Enter commit` (transaction stayed on across
+  the chain). `Return` then committed both swaps in one beat
+  (net zero since I swapped twice, but the chain mechanic itself
+  works).
+
+### `-a-45` per-check evidence
+
+* **#1 Hybrid Terminal back populated**: chord `Cmd+. Tab Return`
+  on the Terminal pane → back-side shows the populated
+  `HybridTerminalConfig.svelte` body: title band "Hybrid Terminal",
+  warning banner ("These settings apply to ALL terminals..."),
+  Scrollback (MB) slider+numeric+units, Default TERM dropdown
+  with per-control hint text.
+* **#2 Scrollback control + persistence**: triple-click +
+  type `80` (resolved to `100` after spinner step-rounding via
+  the increment buttons under my cursor) → slider tracked to 100,
+  numeric box read 100, `saved` status fired top-right. After F5
+  reload + 3s wait, server `/api/drive` preferences returned
+  `terminal.scrollback_mb=100` (held). PASS.
+* **#3 TERM dropdown + custom-TERM rendering**: PARTIAL. The
+  dropdown surfaces 5 options (`xterm-256color`, `xterm`,
+  `tmux-256color`, `screen-256color`, `__custom__` rendered as
+  "Custom..."); switching between known values round-trips
+  cleanly. Switching to "Custom..." does NOT surface the custom
+  text input below the dropdown — the conditional
+  `{#if termSelectValue === CUSTOM_TERM_SENTINEL}` at
+  `HybridTerminalConfig.svelte:281` never triggers. See
+  lowlight + root-cause hypothesis below.
+* **#4 Save-status indicator**: top-right of the Hybrid Terminal
+  title band reads `saved` (green) after the debounce window
+  closes following a control change. Modifying scrollback
+  100→101 also triggered the indicator.
+* **#5 Settings overlay no Terminal section**: opened `Cmd+,` →
+  Settings overlay sections: SEMANTIC SEARCH (Enable hybrid mode
+  checkbox + Active/Stored at info + Rebuild link) + ABOUT (chan
+  version 0.11.2 + embeddings status + terminal font (Source Code
+  Pro Regular SIL OFL 1.1 link)). No Terminal scrollback / TERM
+  controls in the overlay. PASS regression guard.
+* **#6 Second Hybrid Terminal per-DRIVE settings**: spawned
+  `Terminal-2` in LEFT pane (`Cmd+. t Return`); flipped LEFT to
+  back; LEFT and RIGHT panes both render "Hybrid Terminal"
+  back-side with identical settings (scrollback 100, TERM
+  xterm-256color). JS-confirmed via
+  `document.querySelectorAll('.hybrid-config')` returning 2 nodes
+  with matching values. Settings are genuinely per-DRIVE, not
+  per-pane, matching the banner copy.
+
+### `-a-46` per-check evidence
+
+* **#1 Hybrid Editor back populated**: opened `CLAUDE.md` via FB
+  dock dbl-click → LEFT pane front swapped to wysiwyg editor;
+  flipped LEFT to back via `Cmd+. Tab Return`. Back shows
+  `HybridEditorConfig.svelte` body with all five sections:
+  - **Editor theme**: GitHub / Google Docs (default) / Microsoft
+    Word — radio buttons.
+  - **Appearance**: System / Light / Dark — per-device, browser
+    storage.
+  - **Layout**: Standard / Compact — radio buttons.
+  - **Date pills**: Default = `2026-05-05 (ISO)` — select.
+  - **On save**: "Strip trailing whitespace on save" — checkbox.
+  Banner copy: "These settings apply to ALL editors, not just
+  this one. The per-Hybrid appearance override (set via the pane
+  hamburger Theme entry) survives on top of the global Appearance
+  choice below." (See side observation re: hamburger Theme entry
+  removed.)
+* **#2 Theme (Appearance) round-trip**: clicked "Light" → save
+  fired, `<html data-theme=light>` set, both panes bg
+  `rgb(255,255,255)`; server `preferences.theme=light` post-PATCH
+  via `/api/drive` GET. F5 reload + 4s wait → Light radio still
+  checked + html theme still light.
+* **#3 Layout / Date pills / On save**:
+  * Layout Compact: clicked "Compact" → server PATCH after
+    debounce; `preferences.line_spacing=compact` confirmed via
+    `/api/drive` GET (after 3s wait — first reload happened
+    before debounce flushed; second reload confirmed persistence).
+  * Date pills + On save controls visible + interactive (not
+    individually round-tripped this pass; structural presence +
+    save-indicator behaviour holds across all controls).
+* **#4 Save-status indicator**: top-right of Hybrid Editor title
+  band reads `saved` after each control change (Light click +
+  Compact click both triggered the indicator).
+* **#5 Settings overlay no Editor section**: same overlay walk
+  as `-a-45` #5; Settings overlay sections are SEMANTIC SEARCH
+  + ABOUT only. No Editor theme / Appearance / Layout / Date
+  pills / On save in the overlay.
+* **#6 Visual sanity**: side-by-side Hybrid Editor (LEFT) +
+  Hybrid Terminal (RIGHT) screenshot shows matching overall feel
+  (same title-band height, same banner-warning shape, same body
+  padding); controls in the Editor back are labelled, grouped
+  with section headers, and read cleanly. No stray padding,
+  no unstyled controls.
+
+### Critical lowlight
+
+* **`-a-45` Piece #3 — Custom TERM input does not render** when
+  the user selects "Custom..." in the Default TERM dropdown. Root
+  cause hypothesis from reading `HybridTerminalConfig.svelte`:
+  * `setTermSelection("__custom__")` at line 104 seeds
+    `editing.terminal.default_term = ""` when isKnownTerm
+    (line 106-110).
+  * The `currentTerm` derivation at line 86-88 falls back to
+    `DEFAULT_TERM` when default_term is empty (`?? DEFAULT_TERM`
+    + `|| DEFAULT_TERM`).
+  * → `currentTerm` resolves back to `xterm-256color`,
+    `isKnownTerm=true`, `termSelectValue=xterm-256color` (NOT the
+    sentinel).
+  * → The `{#if termSelectValue === CUSTOM_TERM_SENTINEL}`
+    conditional at line 281 never fires; the custom text input
+    never renders.
+  Empirically verified via `document.querySelector('select.family').value
+  === "__custom__"` returning true (DOM value updated) but
+  `document.querySelector('input.custom-term')` returning null
+  (conditional never fired). The existing test file
+  `HybridTerminalConfig.test.ts` only asserts the conditional
+  source-code structure via regex (line 47-49) — does not run
+  the actual rendering at runtime, so this regression slipped
+  the test gate. Suggested fix: seed `default_term` with a
+  non-empty, non-known-term sentinel (e.g. a leading space, or a
+  separate `customMode` state field that bypasses the empty-string
+  fallback). Lane: @@FullStackA; flagging as Round-2 wave-2 polish
+  follow-up (not blocking the `-a-45` migration commit which IS in
+  HEAD with correct migration scope).
+
+### Side observations (not regression-class)
+
+1. **Pane hamburger "Light mode" + "Flip pane" items removed**.
+   Pre-`-a-45/-a-46/-a-47` (in flight), the pane hamburger surfaced
+   a "Light mode" toggle and a "Flip pane" (Cmd+. Tab) entry. Both
+   are GONE in the current build. Light mode moved into the
+   Hybrid Editor back-side per `-a-46` (Appearance buttons there).
+   Flip pane removal is less clear — the chord still works, but
+   the menu affordance is lost. The `-a-46` banner copy on Hybrid
+   Editor back says "The per-Hybrid appearance override (set via
+   the pane hamburger Theme entry) survives on top of the global
+   Appearance choice below" — but no Theme entry exists in the
+   hamburger anymore, so the per-Hybrid override path is not
+   discoverable through the UI. Likely an in-flight `-a-47`
+   intermediate state (drop front/back independent theme); worth
+   confirming with @@FullStackA before this lands as part of the
+   `webtest-a-5` walk.
+2. **Webtest-tooling**: JS-dispatched `change` event on the TERM
+   select doesn't trigger the Svelte reactivity for `setTermSelection`
+   path reliably. Native click+keyboard might or might not differ
+   — Chrome MCP couldn't drive the native OS dropdown picker to
+   verify. Webtest-automation note: prefer `find` + `left_click`
+   on the option DOM-ref where possible; JS dispatch is fragile.
+3. **Drag-to-rearrange visual affordance**: during the drag from
+   the dead-zone, the cursor doesn't visibly change to indicate
+   "this is a drag handle". The dead zone is also not visually
+   distinguished from the surrounding tab strip / hamburger gap.
+   First-time users may not discover the affordance. Not regression
+   — discoverability polish for a future iteration.
+
+### Highlights
+
+* **`-a-44` drag-to-rearrange is solid in the cleared scope**: all
+  six acceptance checks held including the load-bearing chain
+  semantics (transaction stays on across multiple swaps until
+  Enter commit). The "rearrange ANY pane" framing holds — I
+  swapped a FB-front pane into a Terminal-only pane and back.
+* **`-a-45` Terminal Settings migration: clean migration**: the
+  scrollback control + Default TERM dropdown migrate cleanly into
+  the Hybrid Terminal back-side, the warning banner is explicit
+  about scope ("ALL terminals"), and the per-DRIVE settings sync
+  across two Hybrid Terminal panes without manual refresh.
+* **`-a-46` Editor Settings migration: parallel clean migration**:
+  five sections (Editor theme / Appearance / Layout / Date pills /
+  On save) all populate; theme + Layout round-trip through the
+  server `/api/drive` PATCH cleanly; the Settings overlay shrinks
+  to just SEMANTIC SEARCH + ABOUT (good simplification).
+* **Save-status indicator pattern is consistent** across both
+  Hybrid Terminal and Hybrid Editor back-sides — top-right "saved"
+  green text fires after the debounce closes. Matches the
+  surface-by-surface dirty-check pattern in
+  `HybridTerminalConfig.svelte` `terminalDirty()` at line 123.
+
+### State at end of walk
+
+Lane-A test server still live on `http://127.0.0.1:8787/?t=N6YVNy2vfR8BbQtNEa3ryxktjv2y8YW2`
+against `/tmp/chan-test-phase8-wa-r5/` (chan repo seed +
+preferences mutations from the walk: theme=light, line_spacing=compact,
+scrollback_mb=100). Will tear down at commit beat.
+
+**Tear-down complete**:
+
+1. chan serve killed (TaskStop on the background bash for `chan serve --port 8787`).
+2. `rm -rf /tmp/chan-test-phase8-wa-r5/` — directory gone.
+3. `chan remove /tmp/chan-test-phase8-wa-r5/` → output `unregistered`.
+4. Chrome MCP tab 503725739 (chan SPA) closed via `tabs_close_mcp`. Tab group empty.
+
+The walk completed 17/18 acceptance checks HOLD with one PARTIAL
+on `-a-45` #3 custom-TERM input rendering (root-caused; follow-up
+candidate for @@FullStackA wave-2 polish).

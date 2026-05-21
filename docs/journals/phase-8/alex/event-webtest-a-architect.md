@@ -667,3 +667,198 @@ work.
 `-a-44` (drag-to-rearrange) is the next likely walkthrough
 when @@FullStackA commits it. Hybrid back-side wave Tasks
 B/C/E/F + graph overhaul wave land after this. Standing by.
+
+## 2026-05-21 — poke (webtest-a-3 verdict committed; webtest-a-3.md task-close still uncommitted)
+
+Committed at `56e6692` per your clearance (`docs: webtest-a-3
+— -a-43 Hybrid back-side + -b-23 web-marketing walkthroughs
+(8/8 HOLD)`). Path-limited `git commit` to bypass the shared
+index — caught and recovered from a `event-fullstack-b-architect.md`
+stowaway on the first attempt (auto-rode in via the shared
+staging area; reset --soft + restore --staged + re-commit with
+explicit per-path discipline got the scope back to exactly 2
+files). Final commit:
+
+| File | Lines added |
+|------|-------------|
+| `docs/journals/phase-8/webtest-a/webtest-a-1.md` | 175 |
+| `docs/journals/phase-8/alex/event-webtest-a-architect.md` | 142 |
+
+### Surfacing: `webtest-a-3.md` task-close append also pending
+
+My walk also appended a `## 2026-05-21 — walkthrough complete
+(8/8 HOLD)` close-out section to
+[`../webtest-a/webtest-a-3.md`](../webtest-a/webtest-a-3.md)
+as a task-file marker (per the pattern from
+`webtest-a-2.md`). That file wasn't in your commit-clearance
+per-path list, so it's sitting modified in the working tree.
+
+Your call:
+
+* **Option A**: clear `webtest-a-3.md` for a separate follow-up
+  commit (`docs: webtest-a-3 task close-out marker`) — keeps
+  the audit trail tidy where every task file has its own
+  closure heading.
+* **Option B**: fold into a later batch commit when another
+  webtest-a-N lands.
+* **Option C**: rebase / amend `56e6692` to include it (not
+  recommended; @@Alex's "don't amend; create new commits"
+  discipline applies in the multi-agent tree).
+
+No urgency from my side — pick A or B, default to whatever's
+cleanest for your commit-plan.
+
+Standing by for `-a-44` (or later) walkthrough dispatch.
+
+## 2026-05-21 — poke (webtest-a-3 close-out committed; path-limit discipline held)
+
+Routed Option A per your clearance. Committed at `c9fb768`:
+`docs: webtest-a-3 task close-out marker (-a-43 + -b-23
+walks)`. Single file, 34 insertions:
+
+| File | Lines |
+|------|-------|
+| `docs/journals/phase-8/webtest-a/webtest-a-3.md` | 34 |
+
+Path-limit pattern (`git commit <path> -m "..."`) again — same
+shape that recovered from the `event-fullstack-b-architect.md`
+stowaway on the v0.11.2 verdict commit. The bypass-the-index
+approach holds cleanly in the multi-agent tree; no stowaways
+this round. Post-commit `git show --stat HEAD` confirmed scope.
+
+Acknowledged the `a8e991a` cross-agent commit-hygiene
+incident referenced in your routing. The symmetric reminder
+landed — `git add` explicit per-path + pre/post stat checks
++ path-limit on `git commit` is the right shape for this
+working tree. Carrying that discipline forward.
+
+My audit trail for the webtest-a-3 wave now:
+
+* `56e6692` — verdict (`webtest-a-1.md` append + my
+  outbound channel poke bundle).
+* `c9fb768` — task close-out marker (`webtest-a-3.md`).
+
+Standing by for the next walkthrough dispatch. Most likely
+`-a-44` (drag-to-rearrange) once @@FullStackA commits it, or
+a bundled `webtest-a-4` covering Hybrid back-side wave Tasks
+B/C/E/F per your sequencing note.
+
+## 2026-05-21 — poke (webtest-a-4: 17/18 HOLD, 1 PARTIAL; -a-45 custom-TERM lowlight + 3 side observations)
+
+Walked
+[`../webtest-a/webtest-a-4.md`](../webtest-a/webtest-a-4.md)
+on HEAD `f796345` (post-fullstack-b-24 Windows fixup wave).
+Throwaway drive `/tmp/chan-test-phase8-wa-r5/` (chan-source
+seed); chan serve on 127.0.0.1:8787; Chrome MCP tab
+`503725739`. Verdict + per-check evidence appended to
+[`../webtest-a/webtest-a-1.md`](../webtest-a/webtest-a-1.md)
+under `## 2026-05-21 — fullstack-a-44 + -a-45 + -a-46
+walkthroughs (Hybrid back-side wave; drag + Terminal
+migration + Editor migration)`.
+
+### Verdicts
+
+| Slice | Verdict |
+|-------|---------|
+| `-a-44` drag-to-rearrange | 6/6 HOLD |
+| `-a-45` Terminal Settings migration | 5/6 HOLD, 1 PARTIAL |
+| `-a-46` Editor Settings migration | 6/6 HOLD |
+
+**Overall**: 17/18 HOLD, 1/18 PARTIAL on `-a-45` #3 custom-TERM
+input rendering (root-caused; not blocking the migration).
+
+### Highlights
+
+* **`-a-44` drag-to-rearrange holds across all six acceptance
+  checks** including the load-bearing chain semantics
+  (transaction stays on across multiple swaps until Enter
+  commits). Both entries (drag-from-dead-zone + dblclick-
+  dead-zone) work; Esc cleanly cancels with no persistent
+  side effects; the "rearrange ANY pane" framing holds via
+  FB-front-into-terminal-only drop swap.
+* **`-a-45` + `-a-46` settings migrations are clean**: both
+  back-sides populate cleanly; the Settings overlay (`Cmd+,`)
+  shrinks to just SEMANTIC SEARCH + ABOUT after both
+  migrations (good simplification); per-DRIVE settings sync
+  across multiple Hybrid panes (verified via two Hybrid
+  Terminal panes side-by-side); save-status indicator pattern
+  is consistent across both back-sides.
+
+### Lowlight (PARTIAL → follow-up candidate)
+
+* **`-a-45` #3 Custom TERM input does not render** when the
+  "Custom..." option is selected in the Default TERM dropdown.
+  Root cause: `setTermSelection("__custom__")` at
+  `HybridTerminalConfig.svelte:104` seeds `default_term=""`,
+  but the `currentTerm` derivation (`line 86-88`) falls back
+  to `DEFAULT_TERM` on empty, so `isKnownTerm=true` resolves
+  `termSelectValue=DEFAULT_TERM` (not `CUSTOM_TERM_SENTINEL`).
+  → The `{#if termSelectValue === CUSTOM_TERM_SENTINEL}` at
+  line 281 never fires. The existing test file
+  (`HybridTerminalConfig.test.ts:45-49`) only asserts the
+  conditional via source-code regex, not via runtime render,
+  so the gate didn't catch it. Suggested fix: seed the custom
+  path with a non-empty, non-known sentinel value (or add a
+  separate `customMode` state field) that bypasses the
+  empty-string fallback in the derivation. **Not blocking
+  the `-a-45` migration commit** which IS in HEAD with the
+  correct migration scope; this is wave-2 polish for
+  @@FullStackA.
+
+### Side observations (not regression-class; tooling/polish notes)
+
+1. **Pane hamburger lost "Light mode" + "Flip pane" entries**.
+   Pre-`-a-45/-a-46/-a-47`, the pane hamburger surfaced both
+   items. Both are GONE in the current build. Light mode
+   moved into the Hybrid Editor back-side per `-a-46`
+   (Appearance buttons). Flip pane removal is less clear —
+   the `Cmd+. Tab` chord still works, but the menu affordance
+   is lost. The `-a-46` Hybrid Editor back banner copy says
+   "The per-Hybrid appearance override (set via the pane
+   hamburger Theme entry) survives on top of the global
+   Appearance choice below" — but no Theme entry exists in
+   the hamburger anymore, so the per-Hybrid override path is
+   not discoverable through the UI. Likely an in-flight
+   `-a-47` intermediate state — worth confirming with
+   @@FullStackA before this lands as part of the future
+   `webtest-a-5` walk. Flag for design alignment.
+2. **Webtest-tooling**: JS-dispatched `change` events on the
+   TERM select don't trigger Svelte reactivity for the
+   `setTermSelection` code path reliably. Native click on the
+   DOM-ref via `find` + `left_click` was also unreliable in
+   surfacing the native OS dropdown picker through Chrome MCP
+   headless mode. Future webtest automation should prefer
+   `find` + `left_click` on the option DOM-ref where
+   possible; flag for the webtest skill guide.
+3. **Drag-to-rearrange dead-zone affordance**: the dead zone
+   (top-bar space between last tab and hamburger) is not
+   visually distinguished from the surrounding tab strip /
+   hamburger gap. First-time users may not discover the
+   drag affordance. Cursor doesn't change to indicate
+   "drag handle" either. Discoverability polish for a future
+   iteration; not blocking.
+
+### Suggested commit shape
+
+Path-limited per the discipline that landed `webtest-a-3`
+cleanly:
+
+* **Commit subject**: `docs: webtest-a-4 — Hybrid back-side
+  wave + drag walkthrough (17/18 HOLD, 1 PARTIAL on -a-45
+  custom TERM)`.
+* **Files** (explicit per-path):
+  * `docs/journals/phase-8/webtest-a/webtest-a-1.md` (verdict
+    append).
+  * `docs/journals/phase-8/alex/event-webtest-a-architect.md`
+    (this poke + the prior `c9fb768` close-out poke + my
+    standing-by poke, all unshipped).
+* Path-limited `git commit <path1> <path2> -m "..."` to
+  bypass the shared index. Post-commit
+  `git show --stat HEAD` confirm scope.
+
+The `webtest-a-4.md` task close-out marker also has a new
+"walkthrough complete (17/18 HOLD)" append. Your call on
+Option A (separate commit per the `-3` shape) or fold into
+this beat — flagging here for your decision.
+
+Standing by.
