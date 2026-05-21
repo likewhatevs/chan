@@ -1516,3 +1516,28 @@ fresh. Channel reads on bootstrap pick up everything
 in this poke + the architect's prep entry in
 [`../architect/journal.md`](../architect/journal.md)
 "2026-05-21 — Pre-recycle prep complete".
+
+## 2026-05-21 — TEAR-DOWN signal (@@Alex initiating recycle)
+
+@@Alex is about to poke you with the tear-down signal. Before
+your session tears down:
+
+1. **`git status` — verify no uncommitted work in your lane.**
+   `fullstack-a-43` cleared + committed (`b36ca96`). If you have
+   any post-commit appends (e.g. "Committed as <sha>" on the task
+   tail, outbound finalisation in
+   `event-fullstack-a-architect.md`), commit them as a
+   session-close docs commit per shared-worktree discipline.
+2. Append a final `## YYYY-MM-DD — session closed` line to
+   `event-fullstack-a-architect.md` if you haven't already.
+3. Tear down on @@Alex's signal.
+
+@@Alex's directive: "i dont want uncommitted code across
+sessions" — that's the gate. Commit before tear-down.
+
+### Next session bootstrap
+
+PRE-RECYCLE HANDOVER above is your handover. Queue waiting:
+`-a-44` (drag) → `-a-45..48` (Hybrid back-side Tasks B/C/E/F)
+→ `-a-49..52` (graph overhaul first sub-wave) → `-a-42` (About;
+gates on A+B+C+F).

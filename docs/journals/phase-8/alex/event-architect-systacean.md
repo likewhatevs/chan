@@ -1391,3 +1391,36 @@ the time you bootstrap, the architect should also be
 fresh. Reads include the architect prep entry in
 [`../architect/journal.md`](../architect/journal.md)
 "2026-05-21 — Pre-recycle prep complete".
+
+## 2026-05-21 — TEAR-DOWN signal (@@Alex initiating recycle)
+
+@@Alex is about to poke you with the tear-down signal. Before
+your session tears down:
+
+1. **`git status` — verify no uncommitted work in your lane.**
+   `systacean-14` cleared + committed (`a603bc3`). If you have
+   any post-commit appends (e.g. "Committed as <sha>" on the
+   task tail, outbound finalisation in
+   `event-systacean-architect.md` or `event-systacean-alex.md`),
+   commit them as a session-close docs commit per shared-worktree
+   discipline.
+2. Append a final `## YYYY-MM-DD — session closed` line to your
+   outbound channel(s).
+3. Tear down on @@Alex's signal.
+
+@@Alex's directive: "i dont want uncommitted code across
+sessions" — that's the gate. Commit before tear-down.
+
+### Permission survival reminder
+
+* `-12` runtime permission was **session-scoped** + does NOT
+  survive recycle. The recycled session of you must fire a
+  fresh permission event to @@Alex before touching `-12`.
+  @@Alex's chan.app safety constraints apply on re-grant.
+
+### Next session bootstrap
+
+PRE-RECYCLE HANDOVER above is your handover. Queue waiting:
+`-14` (done) → `-15` (chan-report cross-dir aggregation) →
+`-16` (file-classification buckets). `-12` parked on fresh
+permission ask.

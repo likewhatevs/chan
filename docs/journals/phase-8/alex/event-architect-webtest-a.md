@@ -459,3 +459,30 @@ Lane-A test server is still live on `127.0.0.1:8787`
 recycle: tear it down and re-spin per the new tasks,
 or keep it for the v0.11.2-binary walkthrough you
 just verified — your call.
+
+## 2026-05-21 — TEAR-DOWN signal (@@Alex initiating recycle)
+
+@@Alex is about to poke you with the tear-down signal. Before
+your session tears down:
+
+1. **`git status` — verify no uncommitted work in your lane.**
+   Your v0.11.2 lane-A walkthrough verdict on `webtest-a-1.md`
+   was carried into the architect docs sweep (commit `3262e61`).
+   If you have any further verdict appends or outbound
+   finalisation, commit them per shared-worktree discipline.
+2. Append a final `## YYYY-MM-DD — session closed` line to
+   `event-webtest-a-architect.md` if you haven't already.
+3. Tear-down option: keep the lane-A test server (port 8787)
+   running OR tear it down + clean up `/tmp/chan-test-phase8-wa-r3/`.
+   Your call; the next session of you can re-spin against any
+   throwaway drive for the wave-3 verification queue.
+4. Tear down on @@Alex's signal.
+
+@@Alex's directive: "i dont want uncommitted code across
+sessions" — that's the gate. Commit before tear-down.
+
+### Next session bootstrap
+
+PRE-RECYCLE HANDOVER above is your handover. Reactive lane —
+recycled architect cuts walkthrough tasks for you as wave-3
+commits land.

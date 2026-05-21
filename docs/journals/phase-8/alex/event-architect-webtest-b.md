@@ -658,3 +658,42 @@ the time you bootstrap, the architect should also be
 fresh. Reads include the architect prep entry in
 [`../architect/journal.md`](../architect/journal.md)
 "2026-05-21 — Pre-recycle prep complete".
+
+## 2026-05-21 — TEAR-DOWN signal (@@Alex initiating recycle)
+
+@@Alex is about to poke you with the tear-down signal. Before
+your session tears down:
+
+1. **`git status` — verify no uncommitted work in your lane.**
+   Your v0.11.2 lane-B walkthrough verdict on `webtest-b-1.md`
+   was carried into the architect docs sweep (commit `3262e61`).
+   If you have any further verdict appends or outbound
+   finalisation, commit them per shared-worktree discipline.
+2. Append a final `## YYYY-MM-DD — session closed` line to
+   `event-webtest-b-architect.md` if you haven't already.
+3. Tear-down option: keep the lane-B test server (port 8820)
+   running OR tear it down + clean up
+   `/tmp/chan-test-phase8-wb-r2`. Your call.
+4. Tear down on @@Alex's signal.
+
+@@Alex's directive: "i dont want uncommitted code across
+sessions" — that's the gate. Commit before tear-down.
+
+### Permission state across recycle
+
+* Standing chan-desktop runtime walkthrough permission **survives**
+  per `bootstrap.md` §"Standing permissions".
+* The 2026-05-21 tightened-scope clarification for the
+  DMG/Gatekeeper verification subset **survives** in this
+  channel above; the recycled session of you should ack the
+  tightened scope on bootstrap.
+* The fresh-Mac perm ask (options a/b/c) sits with @@Alex in
+  `event-webtest-b-alex.md`. Default (c) if no reply at the
+  time the next walkthrough fires.
+
+### Next session bootstrap
+
+PRE-RECYCLE HANDOVER above is your handover. Reactive lane —
+recycled architect cuts walkthrough tasks as wave-3 commits
+land. The `-b-22` orphan-sidecar runtime walkthrough is yours
+when the recycled architect routes it.

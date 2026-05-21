@@ -798,3 +798,38 @@ systacean-3 task acceptance criteria all met for the v0.11.2 cut; tail of [`syst
 ### Next
 
 Architect notification poke fires next on [`event-systacean-architect.md`](../alex/event-systacean-architect.md). Standing by for the workflow run to complete + post-tag verification routing.
+
+## 2026-05-21 — pre-flight rich-prompt/watcher session — systacean-14 landed + recycle handover
+
+This session bootstrapped from @@Alex's "you are $CHAN_TAB_NAME" prompt for a pre-flight check of the rich-prompt/watcher; test pokes ended, work resumed on architect-dispatched wave-2 tasks. One task committed; close-out per recycle protocol below.
+
+### What landed
+
+* **`systacean-14`** — committed at `a603bc3` (`chan-server: instrument event-watcher ingest path + SPA detach-on-409 reconcile`). Three files: `event_watcher.rs` (tracing at every ingest decision point + 3 regression tests pinning burst / same-name overwrite / `/tmp` symlink), `TerminalTab.svelte` (`refreshWatcherEvents` catches 409/404/"not attached" via the existing `watcherDetached()` helper to clear the stale pill), `systacean-14.md` (full diagnostic write-up).
+* @@WebtestB's wedge **not reproducible** from a fresh `chan serve` (50-event burst, /tmp symlink, same-filename overwrite all dispatch clean). The instrumentation now makes any recurrence in-place-diagnosable under `RUST_LOG=chan_server::event_watcher=debug`. Architect accepted the non-reproducibility verdict + the `Modify(Metadata)` tracing-without-counter-bump choice (avoids re-introducing the systacean-5 toast spam).
+* Test server torn down: `chan serve` process killed, `/tmp/chan-test-systacean-14` + `/tmp/chan-test-s14-watch` removed, drive `chan-test-systacean-14` unregistered.
+
+### What the next session inherits
+
+Architect's pre-recycle handover sits at the tail of [`../alex/event-architect-systacean.md`](../alex/event-architect-systacean.md) "## 2026-05-21 — PRE-RECYCLE HANDOVER (read on bootstrap)". Queue:
+
+1. **`systacean-15`** — chan-report cross-directory aggregation (prereq for graph G3). Desk-read this session: chan-report's `Index::snapshot(&Scope::Prefix(...))` + chan-drive's `Drive::report_for_prefix` + chan-server's `GET /api/report/prefix?path=<rel>` already expose per-directory rollups on demand (O(N) iteration of the in-memory HashMap). The task asks for an O(1) maintained directory-rollup cache — `HashMap<DirPath, DirStats>` updated incrementally on file add/remove/edit, walked via ancestor-chain on each delta. Architect explicitly authorised the cache shape ("`HashMap<DirPath, AggregatedStats>` is the simple answer"). Persistence is optional for v1.
+2. **`systacean-16`** — chan-report file-classification buckets (markdown / source / binary / media) for graph G6/G7/G8. Independent of `-15`; either commit order fine.
+3. **`systacean-12`** (parked) — tauri-plugin-updater verify. Prior session's runtime permission was time-scoped to "@@Alex's chan.app alive RIGHT NOW"; architect's pre-recycle handover says treat it as expired. Fire a fresh permission event to @@Alex if/when picked up. Parks behind `-15` + `-16` per the architect.
+
+### Pickup notes for `-15`
+
+* The existing `Scope::Prefix` path is the **fallback**, not the deliverable. The deliverable is a maintained per-directory rollup index on `Index` (`dirs: HashMap<String, DirStats>`).
+* DirStats fields mirror `LanguageStats` (files / bytes / code / comments / blanks / complexity) plus a per-language sub-rollup so the directory inspector can show "Rust 60%, Python 30%, TypeScript 10%" alongside totals.
+* On `Index::scan`: bulk-build by iterating files and applying each file's stats to every ancestor dir in the chain (split rel by '/').
+* On `Index::update` / `Index::remove` / `Index::rename`: compute the delta vs old stats; walk the ancestor chain applying the delta. Empty-string key represents the drive root; every file has the root as an ancestor.
+* Wire `Drive::report_for_dir(dir: &str)` to look up the precomputed DirStats; chan-server can either add `GET /api/report/dir?path=<dir>` or modify the existing prefix route to take the fast path when path is an exact directory.
+* Tests in `crates/chan-report/tests/integration.rs` — fixture tree + scan + add + remove + rename + nested-dir edge cases.
+
+### Pre-push gate baseline (post-`-14` commit)
+
+fmt + clippy `-D warnings` + workspace test (all green) + `cargo build --no-default-features` + svelte-check (0 errors / 0 warnings, 3987 files) + vitest (588/588) + vite build.
+
+### Outbound owed
+
+Last poke on [`../alex/event-systacean-architect.md`](../alex/event-systacean-architect.md) is "## 2026-05-21 — poke (-14 committed; -12 status + -15/-16 pickup)". No follow-up owed to architect at recycle time.

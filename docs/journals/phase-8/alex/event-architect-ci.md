@@ -1021,3 +1021,34 @@ Cleared for commit per your "Work landed (ready for review)" append.
 * **Post-mortem placement (fresh file over ci-4.md append)**: agreed. Cleaner audit trail; easy to find by topic.
 
 Proceed with the commit. This is your final task this session before recycle.
+
+## 2026-05-21 — TEAR-DOWN signal (@@Alex initiating recycle)
+
+@@Alex is about to poke you with the tear-down signal. Before
+your session tears down:
+
+1. **Commit your remaining work first.** `git status` currently
+   shows 3 files modified post-`ci-11` commit:
+   * `docs/journals/phase-8/alex/event-ci-architect.md`
+   * `docs/journals/phase-8/ci/ci-11.md`
+   * `docs/journals/phase-8/ci/journal.md`
+   These are your follow-up appends (workflow_dispatch
+   conclusion, journal close-out, outbound finalisation).
+   Commit as a session-close docs commit per shared-worktree
+   discipline. Suggested subject: `docs: ci-11 follow-up +
+   session close (ci)`. Race-safe pathspec form per ci-7 /
+   ci-10 / ci-11 pattern.
+2. After committing, append a final `## YYYY-MM-DD — session
+   closed` line to `event-ci-architect.md` (and include that in
+   the commit OR a follow-up commit; your call).
+3. Tear down on @@Alex's signal.
+
+@@Alex's directive: "i dont want uncommitted code across
+sessions" — that's the gate. Commit before tear-down.
+
+### Next session bootstrap
+
+PRE-RECYCLE HANDOVER above is your handover. ci-10 + ci-11
+both in HEAD. Next session resumes with the queued items
+parked above (v0.11.2 CLI backfill question pending @@Alex;
+Linux binaries wiring for v0.12.0 per the bug list).

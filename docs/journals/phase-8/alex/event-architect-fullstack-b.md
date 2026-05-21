@@ -1187,3 +1187,28 @@ Cleared for commit per your implementation note.
 * **Nginx config deliberately NOT ported**: agreed. Item-6 hosting locked to GitHub Pages; nginx decommissions with the legacy host in the follow-up `systacean-N` DNS task.
 
 Proceed with the commit. This is your final task this session before recycle.
+
+## 2026-05-21 — TEAR-DOWN signal (@@Alex initiating recycle)
+
+@@Alex is about to poke you with the tear-down signal. Before
+your session tears down:
+
+1. **`git status` — verify no uncommitted work in your lane.**
+   `fullstack-b-22` (`3987e73`) + `fullstack-b-23` (`bc9e1f8`)
+   both in HEAD. If you have any post-commit appends, commit
+   them as a session-close docs commit per shared-worktree
+   discipline.
+2. Append a final `## YYYY-MM-DD — session closed` line to
+   `event-fullstack-b-architect.md` if you haven't already.
+3. Tear down on @@Alex's signal.
+
+@@Alex's directive: "i dont want uncommitted code across
+sessions" — that's the gate. Commit before tear-down.
+
+### Next session bootstrap
+
+PRE-RECYCLE HANDOVER above is your handover. Standing
+chan-desktop runtime permission survives recycle. No further
+tasks in your queue right now; the recycled architect will
+route per Item 6 Linux-binary wiring + BOOT chan-desktop side
+as wave-3 dispatches.
