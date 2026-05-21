@@ -216,6 +216,12 @@ export type FileTab = {
 export type FileMissingState = {
   path: string;
   fragment: string | null;
+  /// Best guess at where the file moved to, populated by the
+  /// missing-file suggest-reopen lookup. Set when a basename
+  /// search returns a unique match at a different path; null
+  /// when the lookup ran and found 0 or 2+ candidates (ambiguous
+  /// — let the user use Find).
+  suggestedPath?: string | null;
 };
 
 export type TerminalTab = {
@@ -3508,6 +3514,120 @@ export function markTabFileMissing(tabId: string): void {
   const found = findFileTabById(tabId);
   if (!found) return;
   markFileMissing(found.tab);
+  void runSuggestReopenLookup(tabId, found.tab.path);
+}
+
+/// Debounced watcher-event reaction for "Removed" / "Renamed"
+/// frames on an open file's path. Atomic-write patterns (temp +
+/// rename) make the file vanish for a few milliseconds before
+/// reappearing under the same name; chan's own self-write
+/// dedupe usually suppresses the echo but races still leak
+/// through, and external editors that don't go through
+/// chan-server bypass the dedupe entirely. Delay the missing-
+/// check long enough for the path to come back if it's going
+/// to, then resolve via a path stat.
+const pendingMissingChecks = new Map<string, ReturnType<typeof setTimeout>>();
+const MISSING_CHECK_DEBOUNCE_MS = 150;
+
+export function scheduleMissingFileCheck(tabId: string, path: string): void {
+  const prior = pendingMissingChecks.get(tabId);
+  if (prior !== undefined) clearTimeout(prior);
+  const timer = setTimeout(() => {
+    pendingMissingChecks.delete(tabId);
+    void resolveMissingFileCheck(tabId, path);
+  }, MISSING_CHECK_DEBOUNCE_MS);
+  pendingMissingChecks.set(tabId, timer);
+}
+
+/// Cancel any pending missing-file check for `tabId`. Called
+/// when a subsequent watcher frame (e.g. a "Created" that
+/// follows a temp + rename "Removed") confirms the file is
+/// back; the check would resolve the same way but cancelling
+/// avoids the extra read.
+export function cancelMissingFileCheck(tabId: string): void {
+  const prior = pendingMissingChecks.get(tabId);
+  if (prior === undefined) return;
+  clearTimeout(prior);
+  pendingMissingChecks.delete(tabId);
+}
+
+async function resolveMissingFileCheck(
+  tabId: string,
+  path: string,
+): Promise<void> {
+  const found = findFileTabById(tabId);
+  if (!found) return;
+  // Watcher event was for a stale path that the tab no longer
+  // points at (rename rekey happened in between). Drop.
+  if (found.tab.path !== path) return;
+  const tab = found.tab;
+  if (tab.content !== tab.saved) {
+    // Buffer is dirty. Don't clobber the user's in-flight
+    // typing; just probe existence and clear / set fileMissing.
+    try {
+      await api.read(path);
+      tab.fileMissing = null;
+      tab.error = null;
+    } catch (e) {
+      if (isMissingFileError(e)) markTabFileMissing(tabId);
+      // Other errors (network etc.) leave the tab as-is.
+    }
+    return;
+  }
+  // Clean buffer — full reload is safe. loadTabContent fires
+  // markFileMissing on a genuine 404 in its catch branch.
+  await loadTabContent(found.paneId, tabId, path);
+  if (tab.fileMissing) {
+    void runSuggestReopenLookup(tabId, path);
+  }
+}
+
+/// Best-effort "did the file just move?" lookup. Runs after a
+/// genuine missing-file detection. Searches the drive by
+/// basename + filters to exact basename matches at a path
+/// different from the original; only surfaces a suggestion
+/// when there's a unique candidate. Ambiguous results leave
+/// `suggestedPath` null so the user is steered to Find.
+async function runSuggestReopenLookup(
+  tabId: string,
+  path: string,
+): Promise<void> {
+  const basename = path.split("/").pop();
+  if (!basename) return;
+  let candidates: string[] = [];
+  try {
+    const hits = await api.search(basename, 5);
+    candidates = hits
+      .map((h) => h.path)
+      .filter((p) => p !== path && p.split("/").pop() === basename);
+  } catch {
+    // Search failure is non-blocking; missing-file UX is still
+    // usable without the suggestion.
+    return;
+  }
+  const found = findFileTabById(tabId);
+  if (!found || !found.tab.fileMissing) return;
+  if (found.tab.path !== path) return;
+  found.tab.fileMissing.suggestedPath =
+    candidates.length === 1 ? candidates[0] : null;
+}
+
+/// Try to reload the missing file at its ORIGINAL path. Used
+/// by the missing-file panel's Re-open button. Returns true
+/// when the load succeeded (the panel goes away in that
+/// branch); false when the file is still gone (caller falls
+/// through to FB navigation so the user can manually pick the
+/// moved file).
+export async function attemptInPlaceReopen(
+  tabId: string,
+): Promise<boolean> {
+  const found = findFileTabById(tabId);
+  if (!found) return false;
+  const path = found.tab.path;
+  found.tab.loading = true;
+  await loadTabContent(found.paneId, tabId, path);
+  const after = findFileTabById(tabId);
+  return after !== null && after.tab.fileMissing === null;
 }
 
 export function beginMissingFileReopen(tabId: string): void {

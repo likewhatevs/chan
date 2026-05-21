@@ -19,10 +19,11 @@ import {
   activeLayout,
   closeTab,
   hasBrowserTab,
+  cancelMissingFileCheck,
   hasGraphTab,
   layout,
-  markTabFileMissing,
   openBrowserInActivePane,
+  scheduleMissingFileCheck,
   openGraphInActivePane,
   openInActivePane,
   restoreLayout,
@@ -338,9 +339,19 @@ export function onWatchEvent(e: unknown): void {
         (inner?.kind === "Removed" || inner?.kind === "Renamed") &&
         p === inner.path
       ) {
-        markTabFileMissing(tabId);
+        // Atomic-write patterns (temp + rename) make the file
+        // vanish for a few ms before reappearing under the same
+        // name; chan-server's self-write dedupe usually suppresses
+        // the echo but races leak through, and external editors
+        // skip the dedupe entirely. Debounce the missing check so
+        // the panel doesn't flash for files that come right back.
+        scheduleMissingFileCheck(tabId, p);
         continue;
       }
+      // A Created / Modified frame after a missing-check was
+      // scheduled means the file is back; cancel the pending
+      // check + refresh content directly.
+      cancelMissingFileCheck(tabId);
       void refreshTabFromDisk(tabId);
     }
   }

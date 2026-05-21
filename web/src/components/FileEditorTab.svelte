@@ -52,6 +52,7 @@
   import { clampMenu } from "./menuClamp";
   import {
     layout,
+    attemptInPlaceReopen,
     beginMissingFileReopen,
     canReopenClosedTab,
     closeOtherTabsInPane,
@@ -423,11 +424,25 @@
     searchPanel.open = true;
   }
 
-  function doReopenMissing(): void {
+  async function doReopenMissing(): Promise<void> {
+    // First try to restore the SAME file at its original path —
+    // covers the false-positive case where the panel surfaced
+    // briefly because of an atomic-write race that's since
+    // resolved. If the file is genuinely gone, fall through to
+    // the FB-navigation flow so the user can pick the moved file
+    // manually.
+    if (await attemptInPlaceReopen(tab.id)) return;
     const parent = parentPath(tab.path);
     beginMissingFileReopen(tab.id);
     revealPathInBrowser(parent || tab.path, { inspectorOpen: true });
     ui.status = "Choose the moved file in Files to re-open this tab";
+  }
+
+  function doReopenAtSuggested(): void {
+    const suggested = tab.fileMissing?.suggestedPath;
+    if (!suggested) return;
+    beginMissingFileReopen(tab.id);
+    void openInActivePane(suggested);
   }
 
   function doFindMissing(): void {
@@ -793,7 +808,23 @@
       <div class="missing-file-state">
         <div class="missing-title">File moved or deleted</div>
         <div class="missing-path">{tab.fileMissing.path}</div>
+        {#if tab.fileMissing.suggestedPath}
+          <div class="missing-suggest">
+            Looks like it moved to
+            <code>{tab.fileMissing.suggestedPath}</code>
+          </div>
+        {/if}
         <div class="missing-actions">
+          {#if tab.fileMissing.suggestedPath}
+            <button
+              type="button"
+              class="suggest-reopen"
+              onclick={doReopenAtSuggested}
+            >
+              <Folder size={15} strokeWidth={1.75} aria-hidden="true" />
+              <span>Re-open there</span>
+            </button>
+          {/if}
           <button type="button" onclick={doReopenMissing}>
             <Folder size={15} strokeWidth={1.75} aria-hidden="true" />
             <span>Re-open</span>
@@ -1225,6 +1256,17 @@
     font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
     font-size: 12px;
   }
+  .missing-suggest {
+    max-width: min(42rem, 90%);
+    overflow-wrap: anywhere;
+    font-size: 13px;
+    color: var(--text-secondary);
+  }
+  .missing-suggest code {
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 12px;
+    color: var(--text-primary);
+  }
   .missing-actions {
     display: flex;
     flex-wrap: wrap;
@@ -1246,6 +1288,14 @@
   }
   .missing-actions button:hover {
     background: var(--bg-hover, var(--bg-card));
+  }
+  .missing-actions button.suggest-reopen {
+    border-color: var(--link);
+    background: var(--link);
+    color: var(--bg-card);
+  }
+  .missing-actions button.suggest-reopen:hover {
+    filter: brightness(1.08);
   }
   /* Row that holds the editor + (optional) inspector. The Inspector
      component renders a ResizeHandle as its previous sibling so
