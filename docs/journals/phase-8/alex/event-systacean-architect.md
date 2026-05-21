@@ -1146,3 +1146,48 @@ Go ahead and authorize the smoke branch (like `-17`)? Or fold into the regular p
 Task's "Optional follow-up note": shape (b) deterministic-fixture / mock-embedder is Round-3 cleanup territory. With (b), the affected tests could exercise chunking + embedding-orchestration without the real BGE model on disk. Out of scope here; flagged so you can route to a future Round-3 task when one opens.
 
 Holding.
+
+## 2026-05-21 — poke (-18 committed + smoke verdict + 1 follow-up gating)
+
+`-18` committed as `7a22e63`; smoke [`26237942440`](https://github.com/fiorix/chan/actions/runs/26237942440) ran 10m wall-clock.
+
+### Verdict
+
+* Lib tests `411 passed; 0 failed; 16 ignored` — exactly the gating target. ✓
+* Clippy ubuntu PASSES. ✓
+* No-default-features build green. ✓
+* Web check + test + build green. ✓
+* Windows clippy STILL reds on the chan-desktop `dead_code` (out of scope; `fullstack-b-24`). ✓ (expected)
+
+### One additional test surfaced
+
+`crates/chan-drive/tests/contacts_import.rs:274` `removing_contact_frontmatter_demotes_node_back_to_file` panicked with the same BGE-model failure. NOT in the architect's original line-number callout NOR in my empirical `-17`-smoke list — was masked by the lib-test panic cascade on `-17`-smoke (cargo's per-binary panic flow).
+
+Audit of the other integration binaries (`file_types`, `links_normalized`, `progress_events`, `remove_cleanup`, `smoke`) under the same smoke: all passed. `reindex(None)` calls in those binaries don't trigger the same embed path as the failing `index_file("people/x.md")` call in this test.
+
+### Follow-up gating applied (same shape; separate commit)
+
+Per the `-s-8`-follow-up precedent, gating the contacts_import test as a separate commit on top of `-18`. Same `#[ignore = "..."]` shape; cross-references this surfacing in the skip reason for the audit trail.
+
+Suggested follow-up subject:
+
+```
+chan-drive/tests/contacts_import: gate removing_contact_frontmatter test behind #[ignore] (systacean-18 follow-up)
+```
+
+Single-file diff: `crates/chan-drive/tests/contacts_import.rs` +1 line. Plus appends to task tail + this channel.
+
+### Local re-verification
+
+After the follow-up gating: contacts_import binary now shows `7 passed; 0 failed; 1 ignored`. Workspace test totals unchanged elsewhere. `cargo test -- --ignored` on this workstation passes the contacts_import test along with the 14 lib tests; no coverage loss.
+
+### Ask
+
+1. Commit clearance on the follow-up (`chan-drive/tests/contacts_import: gate removing_contact_frontmatter test behind #[ignore] (systacean-18 follow-up)`).
+2. Push the commit to `systacean-18-smoke` (append; no force-push) + re-dispatch `gh workflow run ci.yml`. Expected: Ubuntu fully green; Windows still on dead_code (unchanged).
+
+If you want, treat this as my "make obvious call" lane decision (same scope as `-18`, same fix shape, finishes the gate-unblocker work) and authorize me to commit + re-dispatch in one beat. Or push back if you'd rather route the contacts_import gating as its own task — the work is reversible either way.
+
+### After the follow-up smoke comes back green
+
+Pick up `-16` (chan-report file-classification buckets — feature work). Already desk-prepped; planning a separate `FileBucket` enum on `FileStats` rather than re-using chan-drive's `FileClass` (different semantics: graph-color vs IO-contract). Will fire a scope poke if I find the implementation extends chan-report's "which files we track" boundary.

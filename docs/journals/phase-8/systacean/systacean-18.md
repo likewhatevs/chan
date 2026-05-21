@@ -379,3 +379,59 @@ report).
 
 Holding for @@Architect commit clearance + smoke-dispatch
 decision (push to branch OR fold into main push).
+
+## 2026-05-21 — committed as 7a22e63 + smoke surfaced 1 follow-up
+
+`-18` cleared + committed cleanly on `7a22e63`. Smoke
+[`26237942440`](https://github.com/fiorix/chan/actions/runs/26237942440)
+fired. Verdict:
+
+| Job                              | Outcome    | Notes                                                              |
+|----------------------------------|------------|--------------------------------------------------------------------|
+| rustfmt                          | ✓ 19s      | Clean.                                                             |
+| web (check + test + build)       | ✓ 2m21s    | Clean.                                                             |
+| build (no default features)      | ✓ 7m29s    | Clean.                                                             |
+| clippy + test (ubuntu-latest)    | X 9m34s    | **Clippy PASSES**; chan-drive lib tests `411 passed; 16 ignored` — exactly the gating target. ONE additional test failed in the `contacts_import` integration binary (`removing_contact_frontmatter_demotes_node_back_to_file` at `tests/contacts_import.rs:296`), same BGE-model panic. Hidden by the lib-test panic cascade on `systacean-17-smoke`. |
+| clippy + test (windows-latest)   | X 10m3s    | Still reds on chan-desktop `dead_code` (out of scope; routed to `fullstack-b-24`). |
+
+### Follow-up gating (same shape, separate commit)
+
+`tests/contacts_import.rs:274` `removing_contact_frontmatter_demotes_node_back_to_file` gated with the same `#[ignore = "..."]` shape; +2 lines on the test file.
+
+Why the lib-test smoke didn't catch this:
+
+* `cargo test` runs each test binary independently.
+* On `systacean-17-smoke`, the lib test binary panicked first (14 lib tests failed); cargo continued to other binaries. The contacts_import binary's panic in this same `removing_contact_frontmatter...` test ALSO fired then, but the lib panics dominated the log + diagnosis.
+* After `-18` gated the 14 lib tests cleanly on `systacean-18-smoke`, the contacts_import binary's panic surfaced as the lone visible red.
+
+Audit of the OTHER integration test binaries (`file_types.rs`, `links_normalized.rs`, `progress_events.rs`, `remove_cleanup.rs`, `smoke.rs`) under the same Ubuntu smoke run: ALL passed. The only model-dependent integration test failure was the one in `contacts_import.rs`. `reindex(None)` calls in the other binaries don't trigger the same embed path (presumably the test data avoids the chunking+embed-on-write combination that this specific test exercises via `index_file`).
+
+Per the `-s-8` follow-up precedent, landing the contacts_import gating as a separate commit on top of `-18` rather than amending. Same `(systacean-18 follow-up)` subject suffix.
+
+### Follow-up commit shape
+
+Suggested subject:
+
+```
+chan-drive/tests/contacts_import: gate removing_contact_frontmatter test behind #[ignore] (systacean-18 follow-up)
+```
+
+Files:
+
+| File                                                    | +    | -  |
+|---------------------------------------------------------|------|----|
+| crates/chan-drive/tests/contacts_import.rs              | +1   | 0  |
+
+Plus this append. Single-purpose follow-up.
+
+### Workspace verification
+
+After follow-up gating, default `cargo test` shows the contacts_import binary as `7 passed; 0 failed; 1 ignored`. Workspace-wide test counts unchanged elsewhere. `cargo test -- --ignored` on this workstation passes the contacts_import test along with the 14 lib tests; no coverage loss.
+
+### Smoke re-dispatch ask
+
+Same as `-18`: push the follow-up commit to `systacean-18-smoke` (force-push not needed; append) + re-dispatch `gh workflow run ci.yml`. Expected: Ubuntu fully green (`cargo test --all-targets` passes all binaries). Windows still reds on chan-desktop dead_code (still routed to `fullstack-b-24`).
+
+If the re-dispatched smoke comes back green on Ubuntu, the per-PR CI gate is now Ubuntu-green + Windows-red-only-on-dead_code — exactly the state the architect's plan converges on after `fullstack-b-24` lands too.
+
+Holding for clearance on the follow-up commit + smoke re-dispatch.
