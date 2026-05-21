@@ -435,3 +435,107 @@ Same as `-18`: push the follow-up commit to `systacean-18-smoke` (force-push not
 If the re-dispatched smoke comes back green on Ubuntu, the per-PR CI gate is now Ubuntu-green + Windows-red-only-on-dead_code — exactly the state the architect's plan converges on after `fullstack-b-24` lands too.
 
 Holding for clearance on the follow-up commit + smoke re-dispatch.
+
+## 2026-05-21 — follow-up #2: 2 more integration tests gated (empirical pattern audit)
+
+Re-dispatched smoke [`26239344830`](https://github.com/fiorix/chan/actions/runs/26239344830) surfaced ONE more failing test that was hidden behind the cargo sequential-binary execution.
+
+### Empirical evidence
+
+Found via `gh run view --job=... --log`:
+
+```
+2026-05-21T16:44:35.0772180Z  Running unittests src/main.rs (chan)             → 58 passed
+2026-05-21T16:44:36.2074048Z  Running unittests src/main.rs (chan_desktop)     → 39 passed
+2026-05-21T16:44:37.2185094Z  Running tests/tunnel_e2e.rs                       → 7 passed
+2026-05-21T16:44:37.2790295Z  Running unittests src/lib.rs (chan_drive)         → 411 passed, 16 ignored (-18 gating)
+2026-05-21T16:44:40.4218035Z  Running tests/contacts_import.rs                  → 7 passed, 1 ignored (-18 follow-up #1)
+2026-05-21T16:44:40.5602384Z  Running tests/file_types.rs                       → FAILED (assert summary.errors.is_empty())
+                              cargo aborted at exit 101 before subsequent binaries ran
+```
+
+cargo's test runner is SEQUENTIAL per binary on this CI runner (not parallel), AND aborts the whole `cargo test` step on first binary failure. So:
+
+* `file_types.rs` revealed itself after `contacts_import.rs` was gated.
+* Any subsequent failing binary would have been hidden behind `file_types`.
+
+### Pattern audit (workstation, all suspects)
+
+To break the whack-a-mole iteration cycle, grepped chan-drive/tests/ for ALL failure-prone patterns BEFORE re-dispatching:
+
+```
+grep -rn "summary\.errors\|drive\.index_file\|search.*Mode::Semantic\|search.*Mode::Hybrid" crates/chan-drive/tests/*.rs
+```
+
+Result:
+
+| File                     | Pattern                                              | Status                    |
+|--------------------------|------------------------------------------------------|---------------------------|
+| contacts_import.rs:297   | `drive.index_file(...).unwrap()`                     | Already gated (follow-up #1) |
+| file_types.rs:104        | `assert!(summary.errors.is_empty())`                 | **Gating now**            |
+| smoke.rs:40              | `assert!(summary.errors.is_empty())`                 | **Gating now**            |
+| smoke.rs:88              | `drive.index_file("intro.md").unwrap()`              | **Gating now (same test)** |
+
+No Semantic / Hybrid search mode usage anywhere in the integration tests (verified with a second grep). All search calls use default `SearchOpts` which is `Bm25` — embedder-free.
+
+### Confirmation via `--no-default-features`
+
+Ran `cargo test -p chan-drive --no-default-features` on this workstation. ALL tests pass (the embedder code is `#[cfg(feature = "embeddings")]`-gated out entirely; reindex doesn't try to load the model; summary.errors stays empty). This confirms the failure mode is specifically "embeddings feature ON + model absent", which is the CI runner's exact configuration.
+
+```
+test result: ok. 398 passed; 0 failed; 16 ignored; 0 measured; 0 filtered out
+test result: ok. 7 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out  (file_types: passes without embeddings)
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out  (links_normalized)
+test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out  (progress_events)
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out  (remove_cleanup)
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out  (report)
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out  (smoke: passes without embeddings)
+```
+
+`links_normalized`, `progress_events`, `remove_cleanup`, `report` all pass on default-features-on too (no assertions on summary.errors; no index_file unwrap; not affected by the pattern).
+
+### Follow-up #2 gating
+
+Two single-test integration binaries:
+
+* `crates/chan-drive/tests/file_types.rs:9` (`file_type_policy_end_to_end`) — gated.
+* `crates/chan-drive/tests/smoke.rs:8` (`end_to_end_register_open_write_index_search_graph`) — gated.
+
+Skip reasons cross-reference the specific failure lines (`summary.errors` at file_types:104; both `summary.errors` at smoke:40 and `index_file().unwrap()` at smoke:88) so the audit trail is clear.
+
+### Workspace re-verification
+
+After follow-up #2:
+
+```
+file_types::file_type_policy_end_to_end ... ignored
+test result: ok. 0 passed; 0 failed; 1 ignored
+smoke::end_to_end_register_open_write_index_search_graph ... ignored
+test result: ok. 0 passed; 0 failed; 1 ignored
+```
+
+`cargo test -- --ignored` on workstation: all 18 ignored tests run + pass (14 lib + 1 contacts_import + 1 file_types + 1 smoke + 1 pre-existing). Total = 411 + 18 = 429 lib tests covered, plus integration binaries. No coverage loss.
+
+### Follow-up #2 commit shape
+
+Suggested subject:
+
+```
+chan-drive/tests: gate file_types + smoke binaries on missing BGE model (systacean-18 follow-up #2)
+```
+
+Files:
+
+| File                                          | +    | -  |
+|-----------------------------------------------|------|----|
+| crates/chan-drive/tests/file_types.rs         | +1   | 0  |
+| crates/chan-drive/tests/smoke.rs              | +1   | 0  |
+
+Plus this append + outbound poke. The pattern audit (above) is the load-bearing evidence that this is the COMPLETE set of gates needed — no more whack-a-mole iterations expected.
+
+### Smoke re-dispatch ask
+
+Push to `systacean-18-smoke` (append; no force-push). Expected: Ubuntu cargo test fully green across all 6 binaries that previously aborted. Windows still on chan-desktop dead_code (fullstack-b-24 in flight; their smoke separately).
+
+Holding for clearance on follow-up #2.

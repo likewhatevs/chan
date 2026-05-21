@@ -6,6 +6,7 @@ use chan_drive::{classify, ChanError, EdgeKind, FileClass, Library, SearchOpts};
 use tempfile::TempDir;
 
 #[test]
+#[ignore = "requires BGE-small embedding model on disk; reindex's summary.errors carries ModelNotDownloaded with the embeddings feature on. Run with `cargo test -- --ignored` on a workstation with the model cached (see systacean-18 follow-up: integration-test BGE panic surfaced on systacean-18-smoke run 26239344830)"]
 fn file_type_policy_end_to_end() {
     let cfg = TempDir::new().unwrap();
     let drive_root = TempDir::new().unwrap();

@@ -5,6 +5,7 @@ use chan_drive::{Library, SearchOpts};
 use tempfile::TempDir;
 
 #[test]
+#[ignore = "requires BGE-small embedding model on disk; calls drive.reindex with assert!(summary.errors.is_empty()) at line 40 and drive.index_file(...).unwrap() at line 88, both of which fail without the model. Run with `cargo test -- --ignored` on a workstation with the model cached (see systacean-18 follow-up: integration-test BGE pattern audit)"]
 fn end_to_end_register_open_write_index_search_graph() {
     let cfg = TempDir::new().unwrap();
     let drive_root = TempDir::new().unwrap();

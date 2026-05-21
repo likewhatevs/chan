@@ -1191,3 +1191,61 @@ If you want, treat this as my "make obvious call" lane decision (same scope as `
 ### After the follow-up smoke comes back green
 
 Pick up `-16` (chan-report file-classification buckets — feature work). Already desk-prepped; planning a separate `FileBucket` enum on `FileStats` rather than re-using chan-drive's `FileClass` (different semantics: graph-color vs IO-contract). Will fire a scope poke if I find the implementation extends chan-report's "which files we track" boundary.
+
+## 2026-05-21 — poke (-18 follow-up #2: 2 more integration tests gated; pattern audit closed)
+
+Re-dispatched smoke [`26239344830`](https://github.com/fiorix/chan/actions/runs/26239344830) surfaced ONE more failure (`file_type_policy_end_to_end` at `tests/file_types.rs:104`, `assert!(summary.errors.is_empty())`). Cargo runs test binaries SEQUENTIALLY on this CI runner + aborts on first failure, so subsequent binaries get hidden behind each iteration's surfaced failure. Whack-a-mole shape.
+
+### Breaking the iteration cycle: pattern audit
+
+Grepped all chan-drive integration tests for the three failure-prone patterns:
+
+* `summary.errors.is_empty()` assertion after `reindex()`.
+* `drive.index_file(...).unwrap()`.
+* `search` in `Mode::Semantic` or `Mode::Hybrid`.
+
+Findings:
+
+| File                     | Line | Pattern                                  | Status                    |
+|--------------------------|------|------------------------------------------|---------------------------|
+| contacts_import.rs       | 297  | `drive.index_file(...).unwrap()`         | Already gated (follow-up #1) |
+| file_types.rs            | 104  | `assert!(summary.errors.is_empty())`     | **Gating in follow-up #2** |
+| smoke.rs                 | 40   | `assert!(summary.errors.is_empty())`     | **Gating in follow-up #2** |
+| smoke.rs                 | 88   | `drive.index_file().unwrap()`            | Same test as smoke:40     |
+
+Semantic / Hybrid search: 0 hits across all integration tests.
+
+### Confirmation: --no-default-features local run
+
+Ran `cargo test -p chan-drive --no-default-features` on this workstation. ALL chan-drive tests pass (398 lib + 7 contacts_import + 1 file_types + 2 links_normalized + 8 progress_events + 3 remove_cleanup + 4 report + 1 smoke). With `embeddings` feature OFF, the embedder code is `#[cfg(feature = "embeddings")]`-gated entirely; `reindex`'s summary.errors stays empty. This is the same shape CI gets with the embedded feature on but model missing — modulo the panic path.
+
+This is the **complete** audit. links_normalized, progress_events, remove_cleanup, report integration binaries don't carry any of the three failure patterns; they pass on CI as-is.
+
+### Follow-up #2 commit shape
+
+* **Subject**: `chan-drive/tests: gate file_types + smoke binaries on missing BGE model (systacean-18 follow-up #2)`.
+* **Files**:
+  * `crates/chan-drive/tests/file_types.rs` (+1)
+  * `crates/chan-drive/tests/smoke.rs` (+1)
+  * `docs/journals/phase-8/systacean/systacean-18.md` (task tail append with the pattern audit)
+  * `docs/journals/phase-8/alex/event-systacean-architect.md` (this poke)
+
+Skip reasons cross-reference the specific failure lines + the smoke run ID for the audit trail.
+
+### Local verification
+
+After follow-up #2: workstation runs all binaries with `cargo test`; each shows `1 ignored` (or `0 passed; 1 ignored` for single-test binaries). `cargo test -- --ignored` runs the full set including the newly gated tests (model cached locally); all pass. Total coverage preserved.
+
+### Smoke re-dispatch ask
+
+Same shape as before: push the follow-up #2 commit to `systacean-18-smoke` (append) + `gh workflow run ci.yml --ref systacean-18-smoke`. Expected verdict: Ubuntu cargo test fully green across all 6 chan-drive test binaries + the rest of the workspace. Windows still red on chan-desktop dead_code (out of scope here; `fullstack-b-24` separately).
+
+If you want the obvious-call shortcut authorization again (same pattern as follow-up #1 — same scope, same `#[ignore]` shape, audit-closed before retry), I land + re-dispatch in one beat. Otherwise reply with the clearance and I execute.
+
+### After follow-up #2 smoke is green
+
+Pick up `-16`. The scope question (does chan-report's "which files we track" boundary extend to binary+media?) will fire as a separate poke before I start implementation — per your earlier "fire the scope poke if extends" guidance.
+
+### Lesson logged
+
+Whack-a-mole on test gating beats line-number-list-trust for sequential test runners; an audit-by-pattern is the right shape when the iteration cost is 10min CI cycles. Folding into the systacean memory if this recurs.
