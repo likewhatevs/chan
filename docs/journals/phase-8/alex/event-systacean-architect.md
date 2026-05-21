@@ -1893,3 +1893,78 @@ Per the prior obvious-call shortcut pattern: I'd push the commit on main + fastf
 Pick up `-16` (chan-report file-classification buckets). Scope question still TBD on whether chan-report's "which files we track" boundary extends to binary+media (fire scope poke before implementation).
 
 Holding for clearance + smoke-branch authorization.
+
+## 2026-05-21 — INCIDENT: -19 work swallowed into FullStackA's -a-49 commit (5685be4); audit-trail misattribution
+
+Cross-agent commit-hygiene incident discovered during the cleared `-19` commit attempt. Per the systacean-4 pattern + cross-agent staleness discipline: stopping autonomous action, escalating immediately.
+
+### Sequence of events
+
+1. Acked your `-19` clearance + smoke-branch authorization.
+2. Local pre-push gate green for `-19` (all 28 reverts + C2 fix + 2 unit tests).
+3. Wrote `-19`'s task tail + outbound poke.
+4. `git add` 13 paths (the 11 source files + task tail + outbound poke).
+5. `git diff --staged --stat` audit — discovered **5 stowaway FullStackA files** already in the index (`event-fullstack-a-architect.md`, `fullstack-a-49.md`, `fullstack-a/journal.md`, `web/src/components/GraphCanvas.svelte`, `web/src/components/GraphCanvas.test.ts`). 18 total staged.
+6. `git restore --staged <5 stowaways>` to clean my commit.
+7. `git diff --staged --stat` again — **empty**. All my files appeared to vanish from staging.
+8. Investigation: `git log --oneline -3` shows `5685be4 Graph layout: filesystem-hierarchy as backbone (fullstack-a-49)` AT TOP. `git show 5685be4 --stat` confirms 18 files in that commit — including ALL 13 of my `-19` paths.
+
+### Root cause (verified)
+
+FullStackA's `git commit -m "Graph layout: filesystem-hierarchy as backbone (fullstack-a-49)"` fired CONCURRENTLY with my workflow. Their commit swept the staging area at-that-moment, which included my 13 staged paths AS WELL AS their 5 paths. My subsequent `git restore --staged` ran AGAINST AN EMPTY index (because their commit had already taken everything).
+
+End state: commit `5685be4` is attributed solely to `fullstack-a-49` but contains the full `-19` work mixed in. The work itself is correct + functional (it's identical to what would have landed in a separate -19 commit); only the audit trail is broken.
+
+### Current local-only state
+
+* `5685be4` (the swallow) is on `main` LOCALLY but **NOT pushed to origin**.
+* `316fc00 ci-13 smoke: add macos-latest to ci.yml matrix per architect's clearance` is on top of `5685be4` (also local-only).
+* `git log origin/main..HEAD` shows the unpushed chain: `316fc00` → `5685be4` → `68fa407` → `d74f447` → ...
+
+So we still have local options before the push.
+
+### Two routing options
+
+**Option A — accept the audit-trail incident; correct via task-file appends**.
+
+The work itself is correct + functional. The commit subject is just misattributed. Add corrective audit notes:
+- To my `systacean-19.md` task tail: "Committed inside `5685be4` (subject reads `fullstack-a-49`); attribution incident; content matches the `-19` task acceptance criteria; smoke verification proceeds per the plan."
+- To `fullstack-a-49.md` task tail (cross-lane append): same.
+- Optionally to the architect journal as a phase-8 audit anchor.
+
+Pros: zero destructive ops. Smoke / push can proceed immediately. The work is RIGHT; only the commit subject is misleading.
+
+Cons: future readers of `git log` will see "fullstack-a-49" and not know systacean-19's C2 fix is in there. The git-blame trail for `chan-drive/src/index/facade.rs` will attribute the C2 fix to fullstack-a-49.
+
+**Option B — soft-reset + split into proper commits**.
+
+`git reset --soft HEAD~2` undoes `316fc00` + `5685be4`, putting all 18 files back in staging. Then:
+1. Stage just my 13 `-19` paths + commit with proper subject.
+2. Stage just FullStackA's 5 `-a-49` paths + commit with their proper subject.
+3. Re-apply CI's `316fc00` on top (cherry-pick or re-create).
+
+Pros: clean audit trail; git-blame is correct.
+
+Cons: cross-lane destructive op. Touches FullStackA's commit (now needs to be remade with their subject). Touches CI's commit (needs cherry-pick or recreate). Doable but requires coordination + risks losing context if anyone in those lanes is mid-action.
+
+### Recommendation
+
+**Option A** is the lower-risk path. The functional work is correct; the audit-trail incident is documentable via task-file appends.
+
+Option B is correct in spirit (proper attribution per commit) but trips on the multi-agent constraint where `5685be4` already has cross-lane implications + `316fc00` sits on top from a third lane.
+
+### NOT acting unilaterally
+
+Per cross-agent-staleness + commit-hygiene discipline. The systacean-4 lesson was "verify, then poke peer, then escalate". I've verified. Stopping before any destructive action. Holding for your routing.
+
+### Smoke verification
+
+`-19`'s smoke verification (Ubuntu cargo test fully green; the 28 reverted tests run + pass) is still useful + can proceed regardless of which option. The smoke validates the C2 fix itself; not affected by the attribution incident.
+
+If option A: I'll add the corrective audit appends (3 task files) + commit those + push fastforward to `systacean-19-smoke` (the C2 work is already in `5685be4` so the smoke branch just needs HEAD).
+
+If option B: hold the smoke until the split is complete.
+
+### Holding
+
+No commits + no pushes until you route. Will fire smoke + audit-append work the moment you call A or B.
