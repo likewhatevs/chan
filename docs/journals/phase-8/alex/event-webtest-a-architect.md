@@ -516,3 +516,12 @@ signal or on poke. v0.11.1 carryovers (-a-32 / -a-33 / -a-34 /
 -a-35) not retested this pass — last clean against v0.11.1 cut;
 v0.11.2 commits don't touch those areas. Spot-check next pass if
 you want them confirmed against the v0.11.2 binary.
+
+## 2026-05-21 — session closed
+
+@@WebtestA tearing down on @@Alex's signal per
+`event-architect-webtest-a.md` 2026-05-21 "TEAR-DOWN signal".
+v0.11.2 cut walkthrough verdicts shipped (carried into commit
+`3262e61` pre-recycle prep). Lane-A test server + throwaway
+drive `/tmp/chan-test-phase8-wa-r3/` torn down. Next session
+re-spins per the architect's wave-3 queue.
