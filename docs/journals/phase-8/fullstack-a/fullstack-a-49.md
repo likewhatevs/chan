@@ -386,3 +386,95 @@ transform.
 
 Push held — multi-agent tree commit discipline.
 Standing by for clearance.
+
+## 2026-05-21 — committed as 5685be4 (CROSS-AGENT INCIDENT)
+
+Cleared by @@Architect with all decisions accepted.
+Committed as `5685be4 Graph layout: filesystem-
+hierarchy as backbone (fullstack-a-49)`.
+
+### Cross-agent commit-hygiene incident — peer-staged stowaways
+
+**Pre-commit `git diff --staged --stat`** showed exactly
+5 files (the cleared set minus `fullstack-a-55.md` which
+was already in HEAD via `8be1bfc`):
+
+```
+docs/journals/phase-8/alex/event-fullstack-a-architect.md   | 156 ++
+docs/journals/phase-8/fullstack-a/fullstack-a-49.md         | 187 ++
+docs/journals/phase-8/fullstack-a/journal.md                |  98 ++
+web/src/components/GraphCanvas.svelte                       | 119 ++
+web/src/components/GraphCanvas.test.ts                      | 111 ++
+5 files changed, 669 insertions(+), 2 deletions(-)
+```
+
+**Post-commit `git show --stat HEAD`** shows **18 files**
+— a 13-file delta swept in between my audit and my
+commit. The stowaway set is @@Systacean's `-19` work:
+
+* `crates/chan-drive/src/drive.rs`
+* `crates/chan-drive/src/index/facade.rs`
+* `crates/chan-drive/src/indexer.rs`
+* `crates/chan-drive/tests/contacts_import.rs`
+* `crates/chan-drive/tests/file_types.rs`
+* `crates/chan-drive/tests/remove_cleanup.rs`
+* `crates/chan-drive/tests/smoke.rs`
+* `crates/chan-server/src/indexer.rs`
+* `crates/chan-server/src/routes/graph.rs`
+* `crates/chan-server/src/routes/inspector.rs`
+* `crates/chan-server/src/routes/search.rs`
+* `docs/journals/phase-8/alex/event-systacean-architect.md`
+* `docs/journals/phase-8/systacean/systacean-19.md`
+
+### Root cause
+
+Multi-agent staging race. The architect's clearance
+round 17 cleared three lanes simultaneously (`ci-13` +
+`systacean-19` + `fullstack-a-49`). Between my
+`git diff --staged --stat` audit and my `git commit`,
+@@Systacean's session ran `git add <-19 files>` which
+expanded the staged set silently. My explicit per-path
+`git add` was clean; the race expanded the index after
+my audit.
+
+### Net state
+
+* `-a-49` code + docs landed in HEAD verbatim (the 5
+  files I explicitly added are byte-identical to my
+  staged set).
+* `-19` work ALSO landed in HEAD verbatim — under a
+  commit subject that doesn't reflect its content.
+  Same regression shape as `a8e991a` `-a-44` incident
+  but in reverse: this time I'm the lane whose commit
+  swept up the peer's work.
+
+### Process lesson
+
+The `feedback_shared_worktree_commits` memory rule's
+"pre-commit `git diff --staged --stat` + post-commit
+`git show --stat HEAD`" works as designed — the
+discrepancy IS the incident signal. The gap is that
+the discipline doesn't atomicize the audit + commit
+into one shell line; the harness's bash boundary lets
+other lanes add to the index between them.
+
+**Fix for future commits**: collapse the audit + commit
+into ONE bash invocation:
+`git add <paths> && git diff --staged --stat && git commit -m "..." && git show --stat HEAD`.
+Single bash line, no inter-command race window.
+
+### Routing to @@Architect
+
+Same options as the `-a-44` incident:
+(a) history rewrite (declined last time; same risk
+profile here — `-19` is on top of `-a-49` so a
+rewrite would touch both commits).
+(b) audit-trail correction (this append + symmetric
+append in @@Systacean's `-19` task tail).
+(c) follow-up empty commit naming `systacean-19`.
+
+I lean (b) + (c): audit-trail correction here + a
+small follow-up empty commit with the `systacean-19`
+grep anchor. Architect calls.
+
+Standing by.

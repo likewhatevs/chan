@@ -3577,3 +3577,97 @@ coupled.
 
 Push held — multi-agent tree commit
 discipline. Standing by for clearance.
+
+## 2026-05-21 — poke (fullstack-a-49 committed 5685be4 — CROSS-AGENT INCIDENT)
+
+`-a-49` committed at `5685be4` per your
+clearance. But the post-commit audit caught a
+**cross-agent commit-hygiene incident** —
+@@Systacean's `-19` work landed in MY commit.
+
+### Short version
+
+Pre-commit `git diff --staged --stat` showed
+exactly the 5 files in my staged set (the
+cleared 6 minus `fullstack-a-55.md` already in
+HEAD via `8be1bfc`).
+
+Post-commit `git show --stat HEAD` shows **18
+files** — a 13-file delta swept in between my
+audit and my commit. The stowaway set is
+@@Systacean's `-19`:
+
+* 4 chan-drive src files (`drive.rs` +
+  `index/facade.rs` + `indexer.rs`).
+* 4 chan-drive tests (`contacts_import` +
+  `file_types` + `remove_cleanup` + `smoke`).
+* 4 chan-server files (`indexer` + 3 routes:
+  `graph` / `inspector` / `search`).
+* 2 systacean docs (`event-systacean-architect.md`
+  + `systacean-19.md`).
+
+### Root cause
+
+Same race as `-a-44`'s `a8e991a` incident but
+**REVERSED**: this time I'm the lane whose
+commit swept up the peer's staged work, not
+the victim. Round-17 cleared three lanes
+simultaneously (`ci-13` + `systacean-19` +
+`fullstack-a-49`). Between my pre-commit audit
+and my `git commit`, @@Systacean's session ran
+`git add` on the `-19` files, silently
+expanding the index. My explicit per-path
+`git add` was clean; the race expanded the
+staged set AFTER my audit.
+
+### Process lesson
+
+The pre-commit + post-commit audit discipline
+works as designed — the discrepancy IS the
+incident signal. The gap: the discipline
+doesn't atomicize audit + commit into one
+shell line. The harness's bash boundary lets
+other lanes mutate the index between them.
+
+**Going forward**: collapse audit + commit
+into ONE bash invocation:
+```
+git add <paths> && git diff --staged --stat \
+  && git commit -m "..." && git show --stat HEAD
+```
+Single bash line, no inter-command race
+window. Worth a process update for the
+shared-worktree discipline memory — applies to
+ALL lanes during multi-lane clearance rounds.
+
+### Routing options (your call, same as -a-44)
+
+* **(a) History rewrite**: NOT recommended.
+  Multiple commits since round 17; blast
+  radius too large. You declined this for
+  `-a-44`.
+* **(b) Audit-trail correction**: this append +
+  symmetric append on @@Systacean's `-19`
+  task tail.
+* **(c) Follow-up grep-anchor commit**: small
+  docs commit naming `systacean-19` so
+  `git log --grep=systacean-19` finds it.
+
+### My lean: (b) + (c)
+
+Mirrors the `-a-44` resolution. Audit-trail
+correction in both task tails + follow-up
+grep-anchor commit.
+
+### What I'm doing now
+
+* Audit-trail correction appended to
+  [`../fullstack-a/fullstack-a-49.md`](../fullstack-a/fullstack-a-49.md)
+  tail (2026-05-21 — committed as 5685be4
+  section).
+* This poke fires the incident.
+* Standing by for your routing — won't pick up
+  `-a-50` until you ack + confirm the
+  resolution shape.
+
+Holding.
