@@ -160,3 +160,19 @@ dialog, indexing chart, CLI scriptability) on a freshly
 built `chan-v0.11.2`-equivalent binary — those surfaces
 need no permission ask.
 
+## 2026-05-21 — DEFERRED (transcribed by @@Architect)
+
+@@Alex 2026-05-21 (chat, post-recycle): "ahhh hold on, i
+will only test the chan.app at the very very end".
+
+The canonical fresh-Mac Gatekeeper-clean walkthrough is
+deferred entirely. None of (a)/(b)/(c) fires. @@Alex
+personally walks chan.app at the v0.12.0 cut (Round-2
+close) / late Round-3 endpoint.
+
+Don't fire this perm ask again for chan-v0.11.2 or any
+subsequent dryrun / signed-DMG cut unless @@Alex
+explicitly flags it. Standing chan-desktop runtime
+permission against throwaway drives is unaffected and
+remains in force.
+

@@ -1052,3 +1052,137 @@ PRE-RECYCLE HANDOVER above is your handover. ci-10 + ci-11
 both in HEAD. Next session resumes with the queued items
 parked above (v0.11.2 CLI backfill question pending @@Alex;
 Linux binaries wiring for v0.12.0 per the bug list).
+
+## 2026-05-21 — v0.11.2 CLI binary backfill: DECLINED by @@Alex
+
+Resolution on the queued question (PRE-RECYCLE HANDOVER §
+"Deferred to @@Alex").
+
+@@Alex 2026-05-21 (chat, post-recycle): "let's not backfill,
+focus on the future and next version, leave the past
+release alone".
+
+The `workflow_dispatch` against the existing `chan-v0.11.2`
+tag to add CLI binaries to the existing GH Release is NOT
+happening. v0.11.2's GitHub Release stays as shipped
+(DMG-only). No follow-up `ci-N` task cuts for backfill.
+
+### What carries forward
+
+* **Linux binaries unification on v0.12.0** stays in
+  [`../phase-8-bugs.md`](../phase-8-bugs.md) as a
+  Round-2 wave-3 candidate ("Linux binaries shipped on
+  phase-8 next-release tags"). On the next `chan-v*` tag
+  (v0.12.0), the GH Release page should carry chan CLI
+  (.deb / .rpm / .tar.gz) AND chan-desktop (.deb /
+  .AppImage) downloadables alongside the macOS DMG.
+* **`release.yml` matrix audit** (confirm Linux targets
+  present + producing artifacts) + the
+  **`release-desktop.yml` release-job extension** (wire
+  Linux workflow artifacts into the upload-to-release
+  step) both fold into the v0.12.0 wave-3 work. Likely
+  1-2 ci-N tasks; I'll cut at fan-out.
+* No signing for Linux yet — unsigned for the v0.12.0
+  dogfood lap per the bug-list entry.
+
+### Heads-up — ci-12 candidate from your glib-sys finding
+
+Your pre-recycle final append on
+[`event-ci-architect.md`](event-ci-architect.md) flagged the
+ci.yml glib-sys workspace gap (test-linux clippy dies on
+missing gtk dev headers; gate has been red since ~2026-05-19,
+~15 commits' worth of unverified main). I'll cut `ci-12` for
+that as soon as I have a clean shape — it touches shared
+infra (`.github/workflows/ci.yml`), so I'll include explicit
+`Authorization: yes` framing in the dispatch poke for the
+auto-classifier.
+
+Two open questions to think through before fan-out:
+
+1. **Fix location** — add the gtk dev install step to the
+   `test-linux` job in `ci.yml`, OR introduce a feature
+   gate / cargo profile that skips the gtk-dependent crate
+   on `cargo clippy --workspace`? The former is the
+   defensible-test shape; the latter trades coverage for
+   speed.
+2. **Backfill the missed verifications** — once the gate is
+   green again, what posture on the ~15 already-landed
+   commits? My read: rely on the next chan-v* tag's CI
+   fire as the validation lap (faster than re-running CI
+   per-commit), unless you flag a specific commit as
+   suspect.
+
+Stand by; I'll cut the task once your fresh session is up
+and flags pickup, or sooner if I converge on a position
+solo. Recycle continuity unchanged — I'm here now.
+
+## 2026-05-21 — poke (ci-12: workspace-wide GTK deps in CI test jobs)
+
+Cut [`../ci/ci-12.md`](../ci/ci-12.md). Both open questions
+above resolved by @@Alex 2026-05-21 (chat):
+
+* **Fix shape**: option (a) — install gtk dev across the
+  affected `cargo clippy` / `cargo test` jobs. @@Alex's
+  framing: "install gtk dev as you recommend". Heavier
+  than your (b) exclude-from-workspace tilt but preserves
+  per-PR coverage of `desktop/src-tauri`. Matches
+  `release-desktop.yml` lines 114-123 GTK install shape.
+* **Backfill**: lean on the next `chan-v*` tag's CI fire
+  as the validation lap; no per-commit replay. @@Alex's
+  framing: "whatever is cheaper". Documented in the
+  ci-12 post-mortem note.
+
+**Authorization: yes**, this task covers edits to
+`.github/workflows/ci.yml` + `.github/workflows/release.yml`
++ optionally `release-desktop.yml` (only if you choose to
+consolidate the GTK list; recommended NOT in this task to
+keep scope tight) + a post-mortem artifact under
+`docs/journals/phase-8/ci/`. @@CI may proceed without
+further in-chat confirmation from @@Alex.
+
+### Local validation capability (new — read on bootstrap)
+
+@@Alex surfaced new local-Linux capability via lima-vm +
+sdme containers (aarch64). Optional fast-loop validation
+before pushing the CI patch:
+
+```
+limactl shell default sudo sdme fs ls
+limactl shell default sudo sdme chan-build-ubuntu -r ubuntu
+limactl shell default sudo sdme start chan-build-ubuntu
+limactl shell default sudo sdme exec chan-build-ubuntu /bin/sh -c \
+  'apt update && apt install -y libwebkit2gtk-4.1-dev \
+   libayatana-appindicator3-dev librsvg2-dev libsoup-3.0-dev \
+   patchelf libglib2.0-dev && cd /path/to/chan && \
+   cargo clippy --all-targets'
+```
+
+If `sdme exec` chokes on pty, fall back to:
+`limactl shell default sudo systemd-run --machine=<name>
+--pipe -- <cmd>`. File transfer: `limactl shell default
+sudo sdme cp <local-path> <name>:<path>`.
+
+**Architecture caveat**: lima containers are aarch64; CI
+ubuntu-latest is x86_64. Local pass means "apt packages
+exist + clippy compiles on aarch64". x86_64-specific
+issues (none expected for this fix) still need real CI
+verification. The `workflow_dispatch` smoke against ci.yml
+is the canonical empirical gate.
+
+Local validation is OPTIONAL — your call. Use if it
+shortens iteration. Skip if you just want to ship the
+YAML patch + smoke-dispatch validate it directly.
+
+### Sequencing
+
+ci-12 is your top dispatch on respawn. ci.yml has been red
+since ~2026-05-19; unblocking the gate is high value.
+After ci-12 lands and the gate is green:
+
+* Linux binaries on v0.12.0 (per the bug list "Linux
+  binaries shipped on phase-8 next-release tags") is the
+  next candidate work for your lane. I'll cut at fan-out
+  time when wave-3 sequencing locks; it spans the
+  `release.yml` matrix audit + the `release-desktop.yml`
+  release-job extension for Linux artifacts.
+* Standing by for your ci-12 commit-readiness poke.

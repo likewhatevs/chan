@@ -779,4 +779,5 @@
   - Linux binaries are unsigned (no equivalent of Apple Developer ID for the dogfood / public-flip window); Linux signing options exist but are NOT in scope for v0.12.0
   - couples with: `ci-11` (release.yml trigger fix, already cleared); a new `ci-N` task to wire the Linux artifact path into `release-desktop.yml`'s release-job; possible matrix audit in `release.yml` to confirm Linux targets are present
   - lane: @@CI primary; @@Systacean possibly if matrix shape needs cargo-target additions
+  - architecture caveat (added 2026-05-21 by @@Alex): real release matrix needs BOTH aarch64 AND x86_64 Linux binaries. Today `release-desktop.yml` builds x86_64-only on Linux (per `ci-7` audit trail). aarch64 Linux is a forward-looking matrix expansion (Round-2 wave-3 or Round-3 polish depending on scope). Local dev validation via sdme + lima-vm is aarch64-only; CI on `ubuntu-latest` is x86_64. See memory `reference-local-linux-via-sdme.md` for the local-validation invocation shape.
   - NOT YET DISPATCHED — Round-2 wave-3 candidate; lands ahead of v0.12.0 cut

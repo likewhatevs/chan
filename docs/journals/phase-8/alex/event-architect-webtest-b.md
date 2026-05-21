@@ -697,3 +697,72 @@ PRE-RECYCLE HANDOVER above is your handover. Reactive lane —
 recycled architect cuts walkthrough tasks as wave-3 commits
 land. The `-b-22` orphan-sidecar runtime walkthrough is yours
 when the recycled architect routes it.
+
+## 2026-05-21 — fresh-Mac Gatekeeper perm ask: DEFERRED by @@Alex
+
+Resolution on the (a)/(b)/(c) perm ask in
+[`event-webtest-b-alex.md`](event-webtest-b-alex.md)
+"permission (canonical fresh-Mac Gatekeeper walk for
+chan-v0.11.2 DMG)".
+
+@@Alex 2026-05-21 (chat, post-recycle): "i will only test the
+chan.app at the very very end". The canonical fresh-Mac
+Gatekeeper-clean walkthrough is deferred entirely; @@Alex
+personally walks chan.app at the v0.12.0 cut endpoint
+(Round-2 close) / late Round-3. No agent-side fresh-Mac walk
+needed in the interim.
+
+### What this means for your lane
+
+* **Do not fire the fresh-Mac perm ask again** for chan-v0.11.2
+  (or any subsequent dryrun / signed-DMG cut) unless @@Alex
+  explicitly flags it. The default-(c) auto-pick from the
+  earlier framing is also off — there is no walk to do at all
+  on the canonical-fresh-Mac axis.
+* **Standing chan-desktop runtime permission against throwaway
+  drives still applies.** Click cycles, drive open / close,
+  LRU restore, lock-takeover dialog walks, orphan-sidecar
+  reap behaviour — all in scope, all under the existing
+  tightened-scope clarification (no `/Applications/Chan.app`
+  writes; PID capture not triage; no system-path `xattr`
+  writes).
+* **The keychain-independent signals capture** (spctl + stapler
+  + codesign + syspolicyd) on a custom sandbox path that
+  @@WebtestB owns end-to-end is still in scope under the
+  standing perm — that's strictly throwaway-drive shape and
+  doesn't need fresh-Mac semantics. If a future DMG cut wants
+  that lap walked again, dispatch routes it as a normal task.
+
+### Your next dispatch
+
+`-b-22` orphan-sidecar reap + drive-lock-takeover UX
+walkthrough (HEAD `3987e73`). Task cut as `webtest-b-3.md`
+when I prep it; queue forward unchanged from the pre-recycle
+handover.
+
+Standing by.
+
+## 2026-05-21 — poke (webtest-b-3: -b-22 orphan-sidecar reap walkthrough)
+
+Cut [`../webtest-b/webtest-b-3.md`](../webtest-b/webtest-b-3.md)
+for the `-b-22` runtime walkthrough (HEAD `3987e73`).
+Throwaway-drive shape entirely — your standing chan-desktop
+runtime perm covers it; no fresh-Mac perm ask fires for this
+task (deferred per @@Alex above).
+
+Four acceptance subsections:
+
+* Prevention half — graceful exit reaps sidecars
+  (SIGTERM/window-close path).
+* Prevention half — ungraceful exit reaps sidecars
+  (`kill -9` path; defense-in-depth via process group).
+* Recovery half — lock-takeover dialog (force orphan
+  survival; confirm dialog + auto-kill + toast).
+* Negative case — non-chan PID holding the port; confirm
+  chan-desktop refuses takeover + surfaces error.
+
+Verdict goes to `webtest-b-1.md` as a fresh dated append;
+poke me on `event-webtest-b-architect.md` when done.
+
+`-b-23` chan.app static-site walk routes to @@WebtestA via
+`webtest-a-3.md`; not in your queue.

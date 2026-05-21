@@ -1447,3 +1447,227 @@ their cleared work → poke back). Route follow-ups as
 each lane progresses through their queue.
 
 No active decisions blocked on me at recycle time.
+
+## 2026-05-21 — fresh @@Architect up + two parked decisions resolved
+
+Recycled @@Architect session bootstrapped from the
+`bootstrap.md` Architect block. Read chain: architect.md
++ skill guide → process.md + request.md → this journal
+(handover entry above is the load-bearing pickup) →
+planning artifacts (round-2-plan, round-3-plan,
+graph-overhaul-plan, watcher-vs-journal-shape, rich-
+prompt-session-evolution, phase-9-desktop-native-vision,
+commit-plan-v0.11.2) → phase-8-bugs.md (95+ entries) →
+inbound channels for all six working agents → outbound
+own log → git status + git log --oneline -20 + tag list.
+
+### Working tree at bootstrap
+
+* HEAD `22fd878`; 13 commits ahead of origin/main (push
+  held per Round-2-close discipline).
+* 2 modified files in the worktree, both webtest channels:
+  fresh post-recycle ack-pokes from @@WebtestA + @@WebtestB.
+  Those are the recycled lanes' own writes; not mine to
+  commit.
+* Tags through `chan-v0.11.2` shipped; the four dryrun
+  tags remain on remote (parked cleanup behind v0.11.2).
+
+### Pre-recycle handover calibration
+
+Two lanes self-committed past where I'd marked them
+"committable" in the handover:
+
+* @@FullStackB committed BOTH `-b-22` (`3987e73`) AND
+  `-b-23` (`bc9e1f8`) before tear-down — handover said
+  only `-b-22` cleared. Lane is currently queue-empty.
+* @@Systacean committed `-14` (`a603bc3`) and started
+  picking up `-15` (chan-report cross-dir aggregation)
+  before tear-down — handover had `-14` committable.
+
+Neither is a problem; the pre-recycle write happened
+before the tear-down signal landed, so the lanes
+naturally caught up. Calibration note: when prepping
+recycle, write handover entries closer to the actual
+tear-down beat so they reflect HEAD at recycle, not
+HEAD at handover-write time.
+
+### Decisions resolved (@@Alex chat, post-recycle)
+
+| # | Decision                            | Resolution                                                                  |
+|---|-------------------------------------|-----------------------------------------------------------------------------|
+| 1 | @@WebtestB fresh-Mac Gatekeeper walk | **Deferred entirely.** @@Alex walks chan.app personally at very end (v0.12.0 cut / late Round-3). No agent-side fresh-Mac walk fires in the interim. |
+| 2 | v0.11.2 CLI binary backfill          | **Declined.** v0.11.2 stays as shipped (DMG-only). Linux + CLI unification lands on v0.12.0 wave-3 per the existing bug-list entry.  |
+
+#### Decision 1 fine print
+
+@@Alex's first chat reply was "1. granted" without picking
+(a)/(b)/(c). I AskUserQuestion'd to disambiguate; @@Alex
+picked (a) (pause + iTerm resume), then immediately walked
+it back with "ahhh hold on, i will only test the chan.app
+at the very very end". Net effect: NO walk fires from any
+agent on the canonical fresh-Mac axis.
+
+Calibration: when @@Alex's first reply doesn't fully
+disambiguate a 3-option survey, the AskUserQuestion
+follow-up was the right move — surfaced the actual
+preference (deferral entirely) within one round-trip.
+
+#### Decision 2 fine print
+
+The forward-looking Linux binaries item already lives in
+[`../phase-8-bugs.md`](../phase-8-bugs.md) ("Linux
+binaries shipped on phase-8 next-release tags") as a
+wave-3 candidate. No work is lost — just landing on the
+next tag, not retro on this one.
+
+### Propagation
+
+* `event-webtest-b-alex.md` — transcribed deferral.
+* `event-architect-webtest-b.md` — relayed "do not fire
+  fresh-Mac perm ask again; standing throwaway-drive
+  perm unaffected".
+* `event-architect-ci.md` — relayed "no v0.11.2 backfill;
+  Linux unification stays on v0.12.0 wave-3"; included
+  heads-up on `ci-12` (glib-sys gap) candidate.
+
+### @@CI's pre-recycle glib-sys finding
+
+@@CI's final pre-recycle append flagged `.github/workflows/
+ci.yml`'s `test-linux` clippy step dying on missing gtk
+dev headers (glib-sys). Gate has been broken since
+~2026-05-19 (~15 commits of unverified main). Provisional
+`ci-12` shape: gtk dev install step in `test-linux`, OR
+feature-gate the gtk-dependent crate out of the `cargo
+clippy --workspace` set. Cut as a task with shared-infra
+`Authorization: yes` framing on the @@CI respawn.
+
+Topology of unverified commits: I'll lean on the next
+chan-v* tag's CI fire as the validation lap rather than
+re-running per-commit, unless @@Alex flags a specific
+suspect.
+
+### Lane state on architect session-start
+
+| Lane         | State                                                                |
+|--------------|----------------------------------------------------------------------|
+| @@FullStackA | Not yet respawned; queue starts at `-a-44` (drag-to-rearrange)       |
+| @@FullStackB | Not yet respawned; queue-empty post-`-b-23`; fan out from wave-3 list |
+| @@Systacean  | Not yet respawned; queue starts at `-15` (chan-report cross-dir agg) |
+| @@CI         | Not yet respawned; queue starts at `ci-12` (glib-sys gap) on cut     |
+| @@WebtestA   | Respawned + standing by; reactive lane needs walkthrough dispatch    |
+| @@WebtestB   | Respawned + standing by; `-b-22` walkthrough next (`webtest-b-3.md`) |
+
+### My immediate next actions (in order)
+
+1. Cut `webtest-b-3.md` for the `-b-22` orphan-sidecar reap
+   runtime walkthrough (HEAD `3987e73`). @@WebtestB is up;
+   they expect this dispatch per their bootstrap poke.
+2. Cut `webtest-a-3.md` for the wave-3 cleared-work walks
+   (`-a-43` Hybrid back-side refactor, `-b-23` web-marketing
+   static site). @@WebtestA is up; reactive lane.
+3. Cut `ci-12.md` for the glib-sys gap in `.github/workflows/
+   ci.yml` with shared-infra `Authorization: yes` framing.
+   This unblocks the ci.yml gate which has been broken since
+   ~2026-05-19.
+4. Watch for respawn pokes from @@FullStackA, @@FullStackB,
+   @@Systacean, @@CI. Route follow-ups as their bootstrap
+   completes + their first pickup poke lands.
+
+## 2026-05-21 — new local-Linux capability (lima-vm + sdme) + 3-task dispatch fan-out
+
+### Capability surfaced by @@Alex
+
+@@Alex 2026-05-21 surfaced an existing operational
+capability for local Linux testing that we hadn't been
+exercising from the agent side: lima-vm "default" + sdme
+containers (Ubuntu, Fedora, others). Pattern captured at
+memory `reference-local-linux-via-sdme.md` so future
+sessions inherit. Invocation shape from agents:
+`limactl shell default sudo sdme <args>` (the `sdme` alias
+only resolves in @@Alex's interactive shell). Architecture
+caveat: containers are aarch64 (Apple Silicon host); CI
+on `ubuntu-latest` is x86_64. Local pass means "apt
+packages exist + clippy compiles"; x86_64-specific issues
+still need real CI.
+
+Implications:
+
+* @@CI can fast-loop validate Linux-touching workflow
+  patches locally before pushing — useful for ci-12's
+  apt-install validation.
+* @@Systacean can run Linux-only dev validation locally
+  (e.g., reproduce a Linux-only test failure, validate a
+  dependency change against multiple distros) without
+  having to push and wait for CI.
+* The Linux-binaries v0.12.0 work has a sharper
+  architecture story now: aarch64 Linux release builds
+  are forward-looking (no current matrix entry); CI
+  ubuntu-latest stays the x86_64 lane. Annotated the
+  phase-8-bugs.md entry accordingly.
+
+@@Alex's caveat on UI testing: chan-desktop UI runtime
+walkthroughs on Linux still ride @@Alex's external
+Linux machine with Wayland; no display server in the
+default sdme containers. The webtest lanes' chan-desktop
+runtime perm is unaffected (those walks are macOS-side).
+
+### Dispatch fan-out: 3 tasks cut
+
+* [`../ci/ci-12.md`](../ci/ci-12.md) — workspace-wide
+  GTK deps in CI test jobs. Unblocks the ci.yml gate
+  broken since ~2026-05-19. Shape (a) — apt-install
+  GTK across affected ubuntu jobs (mirrors
+  release-desktop.yml lines 114-123). Backfill: lean
+  on next chan-v* tag's CI fire. Shared-infra
+  Authorization: yes framing inline. Local validation
+  via sdme noted as optional fast-loop.
+* [`../webtest-b/webtest-b-3.md`](../webtest-b/webtest-b-3.md)
+  — `-b-22` orphan-sidecar reap + drive-lock-takeover
+  UX walkthrough (HEAD `3987e73`). Throwaway-drive
+  shape; standing chan-desktop runtime perm covers it.
+  Four acceptance subsections (prevention graceful,
+  prevention ungraceful, recovery dialog, negative case).
+* [`../webtest-a/webtest-a-3.md`](../webtest-a/webtest-a-3.md)
+  — `-a-43` Hybrid back-side architecture refactor (HEAD
+  `b36ca96`) + `-b-23` web-marketing static site (HEAD
+  `bc9e1f8`) walkthroughs. Six SPA acceptance checks for
+  `-a-43`; four static-site checks for `-b-23`.
+
+### Outbound pokes fired
+
+* `event-architect-ci.md` — ci-12 cut + decisions
+  resolution + local sdme capability + sequencing note.
+* `event-architect-webtest-a.md` — webtest-a-3 cut.
+* `event-architect-webtest-b.md` — webtest-b-3 cut.
+
+@@WebtestA + @@WebtestB are already respawned; they'll
+pick up on next poll. @@CI bootstraps into the ci-12
+dispatch directly.
+
+### Working tree state at end of this round
+
+Uncommitted (bundled for the dispatch fan-out commit):
+
+* `architect/journal.md` — this entry + the prior
+  session-start entry.
+* `ci/ci-12.md` (NEW).
+* `webtest-a/webtest-a-3.md` (NEW).
+* `webtest-b/webtest-b-3.md` (NEW).
+* `phase-8-bugs.md` — aarch64/x86_64 caveat annotation
+  on the Linux binaries entry.
+* `alex/event-architect-ci.md` — ci-12 dispatch poke.
+* `alex/event-architect-webtest-a.md` — walkthrough
+  dispatch poke.
+* `alex/event-architect-webtest-b.md` — perm-ask
+  deferral relay + walkthrough dispatch poke.
+* `alex/event-webtest-b-alex.md` — perm-ask deferral
+  transcription.
+* `alex/event-webtest-a-architect.md` (recycled lane's
+  own respawn poke — NOT my write; leaving uncommitted).
+* `alex/event-webtest-b-architect.md` (same — recycled
+  lane's own respawn poke; leaving uncommitted).
+
+Committing the architect-owned files as a single
+"dispatch fan-out" docs commit. The two webtest channel
+appends stay uncommitted; the recycled lanes commit
+their own writes on their next batch.

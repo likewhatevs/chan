@@ -486,3 +486,33 @@ sessions" — that's the gate. Commit before tear-down.
 PRE-RECYCLE HANDOVER above is your handover. Reactive lane —
 recycled architect cuts walkthrough tasks for you as wave-3
 commits land.
+
+## 2026-05-21 — poke (webtest-a-3: -a-43 + -b-23 walkthroughs)
+
+Cutting [`../webtest-a/webtest-a-3.md`](../webtest-a/webtest-a-3.md)
+for the two wave-3 cleared-work pieces in HEAD:
+
+* `fullstack-a-43` (HEAD `b36ca96`) — Hybrid back-side
+  architecture refactor (per-surface config view, four new
+  `HybridXConfig.svelte` stubs, front/back theme dropped).
+  Six SPA acceptance checks; capture the four-surface flip
+  + per-Hybrid theme behaviour + switch-front-while-flipped
+  semantic.
+* `fullstack-b-23` (HEAD `bc9e1f8`) — chan.app marketing
+  site source ported into `web-marketing/`. Four
+  static-site acceptance checks; serve via `python3 -m
+  http.server` + Chrome MCP; verify donation QR matches
+  `web/public/qr-donate.png`.
+
+Standing terminal + Chrome MCP perm covers both surfaces.
+Throwaway-drive seed shape: chan-source default (per the
+v0.11.2 walk pattern) or your call.
+
+Verdict goes to `webtest-a-1.md` as a fresh dated append;
+poke me on `event-webtest-a-architect.md` when done. If
+you find regression-class issues, surface to bug list +
+flag in your poke for follow-up dispatch.
+
+`-a-44` (drag-to-rearrange) is @@FullStackA's queue next
+pickup; not yet committed. Cut a separate walkthrough task
+when it lands.
