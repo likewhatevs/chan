@@ -122,3 +122,72 @@ re-sync logic + a string update).
 ## Open questions
 
 (populated as you investigate)
+
+## 2026-05-21 — implementation note
+
+Two SPA-only fixes, no chan-server or Tauri changes.
+
+### A — Submit-mode re-sync on tab restore
+
+* **`web/src/state/tabs.svelte.ts`** — inside the `if (kind === "t")`
+  branch of the restore loop, after `richPromptFromSer(...)`
+  resolves, fire `api.setTerminalSubmitMode(terminalSessionId,
+  "agent")` when BOTH a `terminalSessionId` is present AND
+  `richPrompt?.submitMode === "agent"`. Fire-and-forget with a
+  `console.warn` on rejection so a stale session (404) or 5xx
+  doesn't break the restore. Skipped entirely when the persisted
+  mode is shell (server's default) or when no session id has
+  attached yet (PUT would 404 unconditionally pre-attach).
+
+### B — Shell-mode tooltip copy fix
+
+* **`web/src/components/TerminalRichPrompt.svelte`** line 481:
+  shell-mode tooltip changed from
+  `"Submit mode: shell (Cmd+Enter sends a trailing newline)"`
+  to
+  `"Submit mode: shell (default; Cmd+Enter submits the buffer
+  verbatim)"`. The agent-mode tooltip stayed as-is (its copy is
+  already accurate — chord IS appended).
+
+### Tests landed (vitest 555 → 558)
+
+| Test                                                                | Pinned contract                                                           |
+|---------------------------------------------------------------------|---------------------------------------------------------------------------|
+| `re-syncs server-side submit-mode on tab restore`                   | Spy on `api.setTerminalSubmitMode` → on restore of an agent-mode tab, the PUT fires with `("term_rpsm_restore", "agent")`. |
+| `skips submit-mode resync on tab restore when mode is shell`        | Server's default is shell; an explicit re-sync would be noise. PUT must NOT fire when persisted mode is shell. |
+| `skips submit-mode resync when no terminalSessionId is present`     | Pre-attach tabs (no session id) would have the PUT 404 unconditionally; skip until attach. |
+
+### Acceptance criteria — verification
+
+| Criterion                                                                            | State                                                                                              |
+|--------------------------------------------------------------------------------------|----------------------------------------------------------------------------------------------------|
+| Re-sync PUT fires after deserialize when `submitMode === "agent"`                    | Landed in the restore loop's `if (kind === "t")` branch.                                            |
+| Idempotent (safe if server already has the right mode)                               | PUT semantics on the server (per `-b-13`) — sending "agent" when server is already "agent" is a no-op 204. |
+| Vitest pin: tab restore with `rpsm: "a"` → `setTerminalSubmitMode("agent")` fires    | Landed (test A above).                                                                              |
+| Shell-mode tooltip removes the misleading "(sends a trailing newline)"               | Replaced with accurate copy: `"shell (default; Cmd+Enter submits the buffer verbatim)"`.            |
+| Agent-mode tooltip unchanged                                                         | Yes — chord-append behavior accurately described already.                                            |
+| Pre-push gate                                                                         | Svelte-check (3980 files / 0 errors) + vitest (555 → 558) green. Rust unchanged.                    |
+
+### Coordination footprint
+
+* SPA-only — no chan-server, no Tauri.
+* No file overlap with `-b-17` or `-b-19`.
+* The companion **survey-reply broadcast** bug (filed
+  2026-05-20 — three implementation options unresolved) is NOT
+  in this task's scope per the task body's explicit framing.
+  That one needs a design decision and stays for Round-2
+  Wave-2.
+
+### Suggested commit subject
+
+```
+Rich prompt: re-sync submit-mode on tab restore + tooltip copy fix (fullstack-b-18)
+```
+
+Touches:
+* `web/src/state/tabs.svelte.ts`
+* `web/src/state/tabs.test.ts`
+* `web/src/components/TerminalRichPrompt.svelte`
+
+Holding for @@Architect commit clearance. Push waits until the
+v0.11.2 commit-grouping cut.

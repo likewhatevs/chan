@@ -3159,6 +3159,24 @@ export async function restoreLayout(
                 ? true
                 : undefined;
           const richPrompt = richPromptFromSer(sertab, savedTerm);
+          // `fullstack-b-18`: SerTab.rpsm persists the rich-prompt
+          // submit-mode SPA-side, but the server-side `Session.agent_mode`
+          // defaults to false on every spawn / chan-server restart. A
+          // restored "agent" tab looks fine in the toolbar but the
+          // server emits the shell chord. Re-sync the server immediately
+          // after restore so the visible state matches reality. Fire-
+          // and-forget: a 404 (stale session id) or 5xx is logged and
+          // the user can re-toggle via the toolbar to retry.
+          if (terminalSessionId && richPrompt?.submitMode === "agent") {
+            void api
+              .setTerminalSubmitMode(terminalSessionId, "agent")
+              .catch((err) => {
+                console.warn(
+                  "[chan] submit-mode resync on restore failed",
+                  err,
+                );
+              });
+          }
           const tab: TerminalTab = {
             kind: "terminal",
             id: id("term"),

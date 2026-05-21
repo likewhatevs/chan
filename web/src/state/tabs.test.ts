@@ -1477,6 +1477,89 @@ describe("terminal session serialization", () => {
     expect(tab.richPrompt?.submitMode).toBe("agent");
   });
 
+  test("re-syncs server-side submit-mode on tab restore (fullstack-b-18)", async () => {
+    // chan-server's `Session.agent_mode` defaults to false on every
+    // PTY spawn / server restart. A restored "agent" tab would look
+    // correct in the toolbar but emit the shell chord. The restore
+    // path must re-fire `setTerminalSubmitMode` so the server picks
+    // up the persisted SPA-side preference.
+    const setMode = vi
+      .spyOn(api, "setTerminalSubmitMode")
+      .mockResolvedValue(undefined);
+
+    resetLayout([
+      terminalTab({
+        terminalSessionId: "term_rpsm_restore",
+        richPrompt: {
+          buffer: "agent-mode resume",
+          heightPx: 200,
+          open: true,
+          mode: "wysiwyg",
+          submitMode: "agent",
+        },
+      }),
+    ]);
+
+    const sessionSnapshot = serializeLayout({ terminalSessions: true });
+    await restoreLayout(sessionSnapshot!);
+
+    expect(setMode).toHaveBeenCalledWith("term_rpsm_restore", "agent");
+  });
+
+  test("skips submit-mode resync on tab restore when mode is shell (fullstack-b-18)", async () => {
+    // Shell is the server-side default; an explicit re-sync would
+    // just be noise. Only fire the PUT when the persisted state is
+    // "agent" (the only mode that drifts from server's spawn-time
+    // default).
+    const setMode = vi
+      .spyOn(api, "setTerminalSubmitMode")
+      .mockResolvedValue(undefined);
+
+    resetLayout([
+      terminalTab({
+        terminalSessionId: "term_shell_restore",
+        richPrompt: {
+          buffer: "shell prompt",
+          heightPx: 200,
+          open: true,
+          mode: "wysiwyg",
+          submitMode: "shell",
+        },
+      }),
+    ]);
+
+    const sessionSnapshot = serializeLayout({ terminalSessions: true });
+    await restoreLayout(sessionSnapshot!);
+
+    expect(setMode).not.toHaveBeenCalled();
+  });
+
+  test("skips submit-mode resync when no terminalSessionId is present (fullstack-b-18)", async () => {
+    // Pre-attach tabs carry no server-side session id; the PUT would
+    // 404 unconditionally. Skip until the session attaches (the next
+    // toggleSubmitMode call propagates manually).
+    const setMode = vi
+      .spyOn(api, "setTerminalSubmitMode")
+      .mockResolvedValue(undefined);
+
+    resetLayout([
+      terminalTab({
+        richPrompt: {
+          buffer: "no session yet",
+          heightPx: 200,
+          open: true,
+          mode: "wysiwyg",
+          submitMode: "agent",
+        },
+      }),
+    ]);
+
+    const sessionSnapshot = serializeLayout({ terminalSessions: true });
+    await restoreLayout(sessionSnapshot!);
+
+    expect(setMode).not.toHaveBeenCalled();
+  });
+
   test("omits rpsm from SerTab when submitMode is shell or absent (fullstack-b-13)", async () => {
     // Shell is the default; omitting the field keeps the persisted
     // shape compact and lets a future per-agent encoding map land

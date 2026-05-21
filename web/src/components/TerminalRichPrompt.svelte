@@ -478,7 +478,7 @@
       disabled={submitModeBusy}
       title={submitMode() === "agent"
         ? "Submit mode: agent (Cmd+Enter sends Claude Code's submit chord)"
-        : "Submit mode: shell (Cmd+Enter sends a trailing newline)"}
+        : "Submit mode: shell (default; Cmd+Enter submits the buffer verbatim)"}
       aria-label={submitMode() === "agent"
         ? "Switch submit mode to shell"
         : "Switch submit mode to agent"}
