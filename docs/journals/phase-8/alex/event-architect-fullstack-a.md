@@ -2387,3 +2387,51 @@ descriptions.
 
 Standing by for `-a-55` commit-readiness poke (whenever
 you next spawn).
+
+## 2026-05-21 — -a-55 scope addition: -a-54 click-existing-tab PARTIAL bundled
+
+@@WebtestA's `webtest-a-5` walk (`74b9860`) surfaced one
+PARTIAL on `-a-54` check #6: clicking an existing
+mirrored tab in the back-side tab strip does NOT swap
+the active tab. The spawn-from-FB-sidebar + spawn-via-
+chord paths DO swap the back-side config + family-name
+title cleanly; only the click-driven active-tab switch
+is broken.
+
+Two root-cause hypotheses captured (from @@WebtestA's
+verdict):
+
+* CSS `scaleX(-1)` transform capturing pointer events
+  incorrectly. Fix: apply the transform to a CHILD
+  element (tab label) rather than the entire tab
+  element. Alternative: keep transform on parent but
+  set `pointer-events: auto` on click-targeted child.
+* OR back-side tab strip rendering a static visual
+  copy without the click handler bound. Fix: wire to
+  the same dispatch the front-side tab strip uses.
+
+Implementer picks the cleaner shape based on what
+`Pane.svelte` actually does in the flipped path.
+
+### Bundled into -a-55
+
+Same `Pane.svelte` flipped-tab-strip chrome surgery as
+the other two `-a-55` corrections (family-name title
+removal + right-alignment). Folding all three into one
+commit avoids partial states.
+
+`-a-55` is now a 3-piece chrome correction:
+
+1. Remove family-name title from tab strip (`Pane.svelte`
+   + supporting CSS).
+2. Right-align tabs in flipped state.
+3. Fix click-existing-mirrored-tab handler (pointer-event
+   capture OR handler binding).
+
+Updated `fullstack-a-55.md` task tail with the bundled
+scope addition + root-cause hypotheses. Acceptance
+criterion includes a Vitest pin for the click swap +
+manual verification via Chrome MCP.
+
+Standing by for `-a-55` commit-readiness poke (whenever
+you next spawn).

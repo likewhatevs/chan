@@ -3625,3 +3625,76 @@ re-interpretation. Acceptable but not free.
 | `alex/event-architect-fullstack-a.md` | -a-55 dispatch poke + lesson logged |
 | `webtest-a/webtest-a-5.md` | design-correction context appended to -a-54 walk section |
 | `fullstack-a/fullstack-a-55.md` | NEW task (tab-strip title removal + right-alignment) |
+
+## 2026-05-21 — webtest-a-5 verdict landed + PARTIAL bundled into -a-55 + all lanes idle
+
+### Lane commit landed this beat
+
+| SHA | Subject | Lane |
+|-----|---------|------|
+| `74b9860` | `docs: webtest-a-5 — Hybrid back-side correction wave + design follow-ups walkthrough (19/20 HOLD + 1 N/A + 1 PARTIAL on -a-54 click-existing-tab; -a-45 custom-TERM PARTIAL re-verified HOLD)` | @@WebtestA |
+
+@@WebtestA delivered the bundled correction-wave walk
+cleanly. Two specific wins captured:
+
+* `-a-45` custom-TERM PARTIAL from `webtest-a-4`
+  re-verified as HOLD — `-a-53`'s bundled fix worked
+  end-to-end.
+* `-a-48` user-flagged chan-reports regression FIXED
+  empirically. The "i want it back!" loop closes.
+
+### New PARTIAL: -a-54 check #6 — click-existing-mirrored-tab
+
+Bundled into `-a-55`'s scope. Same `Pane.svelte`
+flipped-tab-strip surgery surface as the other two
+`-a-55` corrections (family-name title removal +
+right-alignment). Folding all three into one commit
+avoids partial states.
+
+`-a-55` is now a 3-piece chrome correction. Updated
+[`../fullstack-a/fullstack-a-55.md`](../fullstack-a/fullstack-a-55.md)
+task tail with the scope addition + root-cause
+hypotheses + acceptance criterion.
+
+### close-out marker routed Option A
+
+`-3` pattern. Separate follow-up commit. @@WebtestA can
+land it on next spawn alongside any next walkthrough
+dispatch.
+
+### Side observation absorbed
+
+The hamburger-no-longer-has-"Light mode"/"Flip pane"/
+"Theme" observation is the intended end state per
+`-a-53`'s theme architecture correction (theme only via
+back-side override). Not a regression; absorbed as
+expected behavior.
+
+### All lanes idling
+
+@@Alex 2026-05-21: "they all idling now". Confirmed:
+
+| Lane | State |
+|------|-------|
+| @@Systacean | `-20` smoke option B routing in their inbound; no source mods yet; will pick up on next spawn |
+| @@CI | Idle; queue-empty |
+| @@FullStackA | `-a-55` (with bundled scope: title removal + right-align + click-handler fix); idle until next spawn |
+| @@FullStackB | DONE post `-24` |
+| @@WebtestA | `webtest-a-5` verdict committed; close-out marker pending; idle until next spawn |
+| @@WebtestB | DONE; idle |
+
+This is a natural pause point in the round — the
+Hybrid back-side correction wave validated; the
+gate-unblocker cascade structurally exhausted (waiting
+on @@Systacean's smoke option B + then `-19` for the
+final close). Next active work happens when @@Alex
+spawns the lanes.
+
+### What I'm committing this round
+
+| File | Reason |
+|------|--------|
+| `architect/journal.md` | This entry |
+| `alex/event-architect-webtest-a.md` | -a-5 verdict ack + PARTIAL routing + close-out Option A |
+| `alex/event-architect-fullstack-a.md` | -a-55 scope addition (click-existing-tab PARTIAL bundled) |
+| `fullstack-a/fullstack-a-55.md` | Scope addition for the PARTIAL fix |

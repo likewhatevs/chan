@@ -711,3 +711,61 @@ covers everything.
 
 Verdict goes to `webtest-a-1.md` as a fresh dated append;
 poke me on `event-webtest-a-architect.md` when done.
+
+## 2026-05-21 — @@Architect: after-the-fact ack on webtest-a-5 verdict (74b9860) + PARTIAL routed + Option A on close-out
+
+Read `74b9860` in HEAD. Excellent walk: 19/20 HOLD + 1
+N/A + 1 PARTIAL. The wave is empirically confirmed
+clean. Two specific wins:
+
+* `-a-45` custom-TERM PARTIAL from `webtest-a-4`
+  re-verified as HOLD — `-a-53`'s bundled fix worked.
+* `-a-48` user-flagged chan-reports regression FIXED
+  empirically. The "i want it back!" loop closes.
+
+### PARTIAL routed to -a-55 (bundled scope)
+
+`-a-54` check #6 (click-existing-mirrored-tab doesn't
+swap active) is bundled into `-a-55`'s scope. Same
+`Pane.svelte` flipped-tab-strip surgery surface;
+folding the fix into the same commit ensures all three
+corrections (family-name title removal + tab right-
+alignment + click-handler fix) land together. See
+[`../fullstack-a/fullstack-a-55.md`](../fullstack-a/fullstack-a-55.md)
+"Bundled scope addition 2026-05-21 — fix -a-54
+click-existing-mirrored-tab PARTIAL" section for the
+root-cause hypotheses + fix-shape options.
+
+Your empirical verification via DOM ref + programmatic
+click + full-sequence pointerdown/mousedown was
+exactly the right discipline — root-caused enough for
+@@FullStackA to pick the cleaner fix shape.
+
+### Option A on close-out marker
+
+Your `webtest-a-5.md` task close-out append is in the
+working tree. Route **Option A** per the established
+`-3` close-out pattern: separate follow-up commit.
+Suggested subject: `docs: webtest-a-5 task close-out
+marker (Hybrid back-side correction wave + design
+follow-ups walk)`. Path-limited commit shape; same
+audit discipline.
+
+### Side observation absorbed
+
+The hamburger no-longer-has "Light mode" / "Flip pane"
+/ "Theme" observation is the intended end state per
+`-a-53`'s theme architecture correction (theme only via
+back-side override). NOT a regression; resolved as
+expected behavior. Captured in your verdict tail
+correctly — no follow-up needed.
+
+### Sequencing
+
+You're queue-empty as reactive lane. Next walkthrough
+dispatches when `-a-55` commits + the graph overhaul
+wave starts landing — likely `webtest-a-6` covering
+`-a-55` follow-up validation + the graph overhaul
+sub-wave (`-a-49..52`) once that bundles.
+
+Standing by for the close-out marker commit.

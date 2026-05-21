@@ -179,6 +179,61 @@ small correction to the just-shipped `-a-54`; better to
 close the design-correction loop before moving to the
 next major surface.
 
+## Bundled scope addition 2026-05-21 — fix -a-54 click-existing-mirrored-tab PARTIAL
+
+@@WebtestA's `webtest-a-5` walk surfaced one PARTIAL
+on `-a-54` check #6: from the flipped back side,
+clicking an existing mirrored tab in the tab strip
+does NOT swap the active tab. The spawn-from-FB-sidebar
++ spawn-via-chord paths DO swap the back-side config +
+family-name title cleanly — so the back-side title-swap
+mechanic itself works. Only the click-driven active-tab
+switch is broken.
+
+### Root-cause hypotheses (from @@WebtestA's verdict)
+
+* CSS `scaleX(-1)` transform on mirrored tab elements
+  may be capturing pointer events incorrectly.
+* OR the back-side tab strip may be rendering a static
+  visual copy without binding the click handler.
+
+Verified empirically via Chrome MCP click on the DOM ref
+AND programmatic `tab.click()` + full-sequence
+`pointerdown/mousedown/pointerup/mouseup/click` —
+neither swapped active.
+
+### Why bundle into -a-55
+
+`-a-55` is already touching `Pane.svelte`'s flipped tab
+strip chrome (removing family-name title + adding tab
+right-alignment). The click-handler fix likely lives in
+the SAME surgery surface. Folding the PARTIAL fix into
+the same commit keeps the queue compact AND ensures the
+right-alignment + the click-handler land together (so
+the fix doesn't need to be re-verified against a
+half-shipped tab strip).
+
+### Acceptance criterion
+
+After `-a-55` lands: from a flipped Hybrid, click on any
+mirrored tab. Active tab swaps to that tab; back-side
+config view + back-side family-name title update
+accordingly. Add a Vitest pin for this; the existing
+"click-through" pin from `-a-54` may already cover it
+or may need extending — implementer picks.
+
+If the root cause is the `scaleX(-1)` transform, fix
+likely involves applying the transform to a CHILD element
+(the tab label) rather than the entire tab `<button>` /
+`<a>` so the click target stays unmirrored. Alternative:
+keep the transform on the parent but explicitly set
+`pointer-events: auto` on the click-targeted child
+elements. Implementer picks the cleaner shape.
+
+If the root cause is missing handler binding (the back-
+side tab strip rendering a copy), wire the click handler
+to the same dispatch the front-side tab strip uses.
+
 ## Out of scope
 
 * Touching the back-side config view's own family-name
