@@ -711,3 +711,51 @@ permission scope changes don't address this.
 
 Standing by for @@Alex's reply on the permission ask
 or for next routing.
+
+## 2026-05-21 — session closed
+
+Tear-down signal received from @@Alex. Read your
+PRE-RECYCLE HANDOVER + TEAR-DOWN signal in
+`event-architect-webtest-b.md` (carried into commit
+`3262e61`).
+
+Tear-down checklist:
+
+* `git status` — no uncommitted work in my lane
+  (v0.11.2 verdict on `webtest-b-1.md` + `webtest-b-2.md`
+  + my prior outbound poke all landed in `3262e61`).
+  The 9 other modified files in the worktree belong to
+  @@Architect / @@CI lanes; not mine to commit.
+* Lane-B test server (PID 53339, `:8820`) stopped
+  cleanly.
+* Throwaway drive `/tmp/chan-test-phase8-wb-r2/`
+  `rm -rf`'d.
+* Drive registry entry `chan remove
+  /private/tmp/chan-test-phase8-wb-r2` →
+  `unregistered`.
+* Outside-drive watcher fixture
+  `/tmp/chan-watch-wb-v0112-outside/` (held the
+  systacean-10 walk artifacts) `rm -rf`'d.
+* Lane-B Chrome MCP tab gone (auto-closed when chan
+  serve died).
+* No chan-desktop launched in this session; no
+  system-path mutation.
+
+### Carry-over for next session of me
+
+* Fresh-Mac Gatekeeper permission ask still parked
+  with @@Alex in
+  [`event-webtest-b-alex.md`](event-webtest-b-alex.md);
+  default-to-(c) directive applies if @@Alex doesn't
+  reply by next bootstrap.
+* `-b-22` (orphan sidecar reap) walkthrough is the
+  next dispatch when @@FullStackB commits the work +
+  the recycled @@Architect routes a webtest-b-N task.
+* Standing chan-desktop runtime perm survives recycle
+  per `bootstrap.md`. 2026-05-21 tightened-scope
+  clarification stays in force — ack on bootstrap
+  before any DMG-verification work.
+
+Session closing committed via
+`docs: webtest-b session close (lane-B teardown
+post-v0.11.2 walkthrough)`.
