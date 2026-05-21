@@ -4408,3 +4408,74 @@ rustfmt cleanup follows in next re-fire iteration.
 | `architect/journal.md` | This entry |
 | `alex/event-architect-ci.md` | ci-13 commit ack + label-confusion reconciled + rustfmt routed to Systacean |
 | `alex/event-architect-systacean.md` | rustfmt fixup authorization + -19 audit-anchor ack |
+
+## 2026-05-21 — -a-50 cleared (missed in prior sweep; lane caught it on resweep)
+
+@@FullStackA's `-a-50` commit-readiness poke was
+sitting in the worktree (modified
+`event-fullstack-a-architect.md`) since the prior
+beat. I missed it in the most recent sweep because I
+was focused on ci-13 + systacean-19 reconciliation +
+didn't sweep ALL inbound channels comprehensively.
+
+@@FullStackA's resweep discipline caught it: their
+own resweep-status poke at their terminal explicitly
+noted "no new architect dispatch for my lane.
+They've been on ci-13 + systacean-19 reconciliation
+(076b2cf, b017d3d, a5d2dc1, 75b0953). My -a-50
+outbound poke sits in the modified
+event-fullstack-a-architect.md in the working tree."
+
+@@Alex relayed this — clear signal to clear `-a-50`.
+
+### -a-50 cleared
+
+G3 directory inspector with chan-reports aggregated
+stats. Clean composition with `systacean-15`'s cache
++ `-a-33`'s helpers + `-a-48`'s toggle. 5 decisions
+all sensible (api.reportDir > walk; kind="folder"
+match; 404→empty-state hint; inline DIR chip;
+rescopeFromHere reuse). vitest 668/668; workspace
+gate green.
+
+**Atomic-audit-commit discipline cited** in their
+commit-readiness — first lane to do so explicitly
+after the memory rule landed. Pattern confirmation.
+
+### Architect-side lesson logged
+
+Pattern: when working multi-lane clearance rounds,
+sweep ALL inbound channels (not just the lanes
+recently active) before declaring "nothing
+actionable." The recent reconciliation work on ci-13
++ systacean-19 narrowed my attention; I missed a
+queue-empty signal on @@FullStackA's lane that
+turned out to have a ready commit-readiness.
+
+Failure mode: peer agents stalling waiting on
+architect attention they don't realize they need
+to ask for again. @@FullStackA's resweep
+discipline protected against this — saved by their
+process, not by mine.
+
+Going forward: at every sweep, walk ALL six lane
+inbound channels (architect-{ci,fullstack-a,
+fullstack-b,systacean,webtest-a,webtest-b}) even
+if I think no actionable update is expected. Cheap
+to look; expensive to miss.
+
+### Lane state
+
+| Lane | State |
+|------|-------|
+| @@Systacean | -19-smoke at ~15m+ in progress; rustfmt fixup routed |
+| @@CI | ci-13 in HEAD; idle |
+| @@FullStackA | -a-50 cleared; expect commit + -a-51 pickup |
+| Others | Idle |
+
+### What I'm committing this round
+
+| File | Reason |
+|------|--------|
+| `architect/journal.md` | This entry + lesson |
+| `alex/event-architect-fullstack-a.md` | -a-50 commit clearance |
