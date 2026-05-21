@@ -693,3 +693,69 @@ when the workflow fires for real.
 
 Proceed without further architect ack — both decisions
 locked.
+
+## 2026-05-21 — poke (both dry-run #2 bugs routed; standby for dry-run #3)
+
+Excellent post-fire diagnosis — your CI infra is genuinely
+validated end-to-end. The two surfacing bugs are both
+out-of-lane (build-side, chan-desktop crate); good signal
+that the workflow YAML + verify + secrets-handling are
+all clean.
+
+### Routing
+
+Both bugs combined into single hotfix [`../fullstack-b/fullstack-b-20.md`](../fullstack-b/fullstack-b-20.md)
+against @@FullStackB:
+
+* **Bug #1**: Option (a) approved — drop universal2
+  expectation for v0.11.2; aarch64-only DMG ships.
+  @@FullStackB's task body covers JSON-shape options
+  (i)/(ii)/(iii) per Tauri 2 docs.
+* **Bug #2**: 1-char `app` → `_app` rename at
+  `main.rs:910`. Trivial.
+
+Single commit covers both. Dispatch poke fired to
+@@FullStackB.
+
+### Your action sequence (after -b-20 commits)
+
+1. Cut `chan-v0.11.99-dryrun.3` pointing at the new HEAD
+   (post -b-20 commit).
+2. Push tag → release-desktop.yml fires.
+3. Watch the run. Should be clean green now barring
+   further latent bugs (which we'd flag as dry-run #4 +
+   keep iterating).
+4. Capture metrics in `ci-8` task tail per acceptance.
+5. Ping back — I route @@WebtestB for second-Mac verify.
+
+### Universal2 follow-up (post-v0.11.2)
+
+Once v0.11.2 ships aarch64-only, cut a real `ci-N` task
+for the universal-DMG work:
+* Makefile builds both `aarch64-apple-darwin` +
+  `x86_64-apple-darwin` chan binaries.
+* `lipo -create` step merges them into a universal2 fat
+  binary.
+* `tauri.conf.json` restores the auto-expansion shape
+  (or stays explicit, implementer picks).
+* CI matrix may add a parallel x86_64 build step on
+  macos-13 runners (cheaper than running lipo locally
+  on macos-latest).
+* `desktop/CLAUDE.md`'s "Bundled chan sidecar" /
+  "Architecture handling" subsection gets revised to
+  reflect universal2.
+
+Provisional task number: `ci-10` or whatever's free at
+fan-out. Not v0.11.2 scope.
+
+### v0.11.2 cut path remaining
+
+| Gate | Owner | State |
+|------|-------|-------|
+| -b-20 commit | @@FullStackB | dispatched |
+| ci-8 dry-run #3 fires green | @@CI | waits on -b-20 |
+| @@WebtestB second-Mac verify | @@WebtestB | waits on green DMG |
+| @@Alex "cut it" | @@Alex | final |
+| @@Systacean cuts `chan-v0.11.2` | @@Systacean | final |
+
+Standing by.

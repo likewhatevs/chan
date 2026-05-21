@@ -897,3 +897,63 @@ Push waits until @@Systacean cuts `chan-v0.11.2` per
 Your lane is queue-empty for v0.11.2. Standby for v0.11.2
 walkthrough verdicts from @@WebtestA/B + ci-8 dry-run
 support if needed.
+
+## 2026-05-21 — poke (v0.11.2 hotfix: fullstack-b-20)
+
+@@CI's `ci-8` dry-run #2 (`chan-v0.11.99-dryrun.2` run
+`26207525095`) executed end-to-end (16m22s; ci-4 `^2` fix
+worked + ci-7 + ci-9 verify steps green) but BOTH jobs
+failed on real build-side regressions. Both block the
+v0.11.2 tag-cut. Both are in your lane.
+
+Cut [`../fullstack-b/fullstack-b-20.md`](../fullstack-b/fullstack-b-20.md)
+— single task covering both:
+
+### Bug #1 — macOS externalBin per-target mismatch
+
+`tauri.conf.json`'s `bundle.externalBin = ["binaries/chan"]`
+auto-expands to BOTH `chan-aarch64-apple-darwin` AND
+`chan-x86_64-apple-darwin` (universal2 expectation); the
+Makefile stages only the host triple. Fix: **Option (a)**
+— scope to host triple only; aarch64-only DMG for v0.11.2;
+defer full universal2 work (Makefile + lipo + CI x86_64
+matrix entry) to a post-v0.11.2 `ci-N` follow-up.
+Implementer picks JSON-shape (i)/(ii)/(iii) per Tauri 2's
+per-target override docs.
+
+### Bug #2 — Ubuntu Rust unused-variable
+
+`desktop/src-tauri/src/main.rs:910` —
+`app.run(move |app, event| {` shadows outer `app` with
+unused inner; Ubuntu's strict-warnings flag fails. 1-char
+rename: `app` → `_app`. Likely a regression from `-b-17`
+(`9f68b11`) or `-b-19` (`59f5688`) closure body additions
+that left the param unused.
+
+### Verification
+
+Run BOTH locally before committing:
+
+* `cargo tauri build` on chan-desktop (host-triple bundle
+  should now succeed).
+* `RUSTFLAGS=-D warnings cargo build -p chan-desktop
+  --release` (matches Ubuntu's strict mode that surfaced
+  bug #2).
+
+### Authorization
+
+**Authorization: yes** on
+`desktop/src-tauri/tauri.conf.json` +
+`desktop/src-tauri/src/main.rs` + `desktop/CLAUDE.md`
+doc-append for the temporary aarch64-only shape.
+
+### After -b-20 commits
+
+@@CI cuts `chan-v0.11.99-dryrun.3` pointing at the new
+HEAD + re-fires. If green → @@WebtestB second-Mac verify
+→ @@Alex "cut it" → @@Systacean cuts `chan-v0.11.2`.
+
+Hotfix priority — single commit suffices. Push waits
+until v0.11.2 tag-cut. Standard shared-worktree commit
+discipline (`git diff --staged --stat` audit before
+commit).
