@@ -923,10 +923,12 @@ mod tests {
         resp.nodes.iter().find(|n| n.id == id).map(|n| n.kind)
     }
 
+    #[cfg(unix)]
     fn node<'a>(resp: &'a FsGraphResponse, id: &str) -> Option<&'a NodeView> {
         resp.nodes.iter().find(|n| n.id == id)
     }
 
+    #[cfg(unix)]
     fn node_path_kind(resp: &FsGraphResponse, id: &str) -> Option<chan_drive::PathKind> {
         node(resp, id).and_then(|n| n.path_class.as_ref().map(|class| class.kind))
     }
