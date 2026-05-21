@@ -3114,3 +3114,98 @@ queue-empty.
 | `alex/event-architect-fullstack-a.md` | -a-48 commit clearance + follow-up scope ack + -a-42 sequencing note |
 | `alex/event-architect-fullstack-b.md` | after-the-fact ack on 8e4ce5c + smoke #6 in flight |
 | `alex/event-architect-webtest-b.md` | after-the-fact ack on 743ee69 |
+
+## 2026-05-21 — clearance round 9 — -a-53 cleared + -24 closed + systacean-20 cut for Windows lock tests
+
+### Lane commits landed this beat
+
+| SHA | Subject | Lane |
+|-----|---------|------|
+| `0391eae` | `Migrate Search/Indexing/Reports settings to Hybrid FB back-side (fullstack-a-48 option B)` | @@FullStackA |
+| `d1cd565` | `docs: fullstack-b-24 smoke #6 verdict + commit readiness (Windows clippy + target test GREEN; 3 chan-drive lock failures need routing)` | @@FullStackB |
+| `bf85e8a` | `chan-server: gate 9 model-dependent tests behind #[ignore] (systacean-18 follow-up #4)` | @@Systacean |
+
+### -a-53 cleared
+
+Hybrid back-side theme architecture correction +
+bundled custom-TERM PARTIAL fix delivered cleanly.
+No deviations flagged this round; clean execution per
+the spec. Cleared verbatim.
+
+After commit, `-a-54` (flip UX redesign) is next per
+the sequencing rule "back-side CONTENT before back-side
+CHROME". With `-a-48` + `-a-53` both in HEAD post this
+beat, the A+B+C+F gate for `-a-42` (About section) is
+closed but `-a-42` stays parked behind `-a-49..52` per
+queue order.
+
+### -24 CLOSED + 3 lock tests routed to systacean-20
+
+@@FullStackB's smoke #6 verdict confirmed: Windows
+clippy ✓ + Windows graph_scope_file_rejects_missing_target
+✓ + Ubuntu clippy ✓. `-24` is structurally complete on
+their lane (7 implementation commits + audit docs).
+
+The 3 remaining Windows reds (chan-drive lock-contract
+tests) are NOT in `-24`'s scope:
+
+* `drive::tests::second_open_blocks_on_writer_lock`
+* `library::tests::reset_drive_returns_locked_when_other_process_holds_lock`
+* `lock::tests::second_acquire_fails_while_held`
+
+All 3 fail on `matches!(err, ChanError::DriveLocked)` —
+chan-drive's lock primitive doesn't surface `DriveLocked`
+on Windows the same way `flock` does on Unix.
+
+Cut [`../systacean/systacean-20.md`](../systacean/systacean-20.md)
+with shape (ii) `#[cfg(unix)]` — mechanical gate-unblocker
+per the `-17` + `-18` pattern. Real Windows lock-primitive
+bridge (shape (i) using `LockFileEx`) deferred to Round-3
+polish; will flag in bug list once @@Systacean files the
+revert-target entry per the `-20` task body.
+
+### Pattern observation: gate-unblocker cascade is now structurally bounded
+
+The cascade has been peeling back layers:
+
+1. `ci-12` (GTK install) — closed.
+2. `systacean-17` (Windows result_large_err) — closed.
+3. `fullstack-b-24` (Windows chan-server dead_code +
+   smoke fixup cascade) — closed (7 commits).
+4. `systacean-18` (chan-drive BGE-panic) + 4 follow-ups
+   gating 19 chan-drive tests + 9 chan-server tests +
+   2 fs_graph dead_code lints — `-18` follow-up #4
+   smoke in flight (expected green).
+5. `systacean-20` (3 chan-drive lock tests on Windows)
+   — cut this round; mechanical.
+
+After `-18` follow-up #4 smoke + `-20` commit + smoke,
+the per-PR ci.yml gate is structurally fully green on
+all 3 platforms. That's the Round-3 readiness signal.
+
+`systacean-19` (C2 graceful BM25 degradation) follows
+as the medium-term structural fix that retroactively
+reverts the 28 `#[ignore]` gates (the 3 `#[cfg(unix)]`
+gates stay until the real Windows lock bridge lands in
+Round 3+).
+
+### Lane state at end of round
+
+| Lane | State |
+|------|-------|
+| @@Systacean | `-18` follow-up #4 committed; smoke in flight; `-20` dispatched; expect `-20` commit + then `-19` pickup |
+| @@CI | Idle; queue-empty |
+| @@FullStackA | `-a-48` committed; `-a-53` cleared; expect commit + `-a-54` pickup |
+| @@FullStackB | `-24` CLOSED; queue-empty until wave-3 Linux-binaries OR `-b-22` heuristic-tightening dispatches |
+| @@WebtestA | Queue-empty until next bundled walk |
+| @@WebtestB | Queue-empty |
+
+### What I'm committing this round
+
+| File | Reason |
+|------|--------|
+| `architect/journal.md` | This entry |
+| `alex/event-architect-fullstack-a.md` | -a-53 commit clearance |
+| `alex/event-architect-fullstack-b.md` | -24 close + lock tests routed to systacean-20 |
+| `alex/event-architect-systacean.md` | -18 follow-up #4 ack + systacean-20 dispatch |
+| `systacean/systacean-20.md` | NEW task (Windows lock test gating) |

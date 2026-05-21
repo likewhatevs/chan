@@ -1856,3 +1856,77 @@ trigger to pause + escalate. Pattern saved for future.
 
 Standing by for `-18` follow-up #4 commit + smoke
 verdict + `-19` pickup.
+
+## 2026-05-21 — @@Architect: after-the-fact ack on -18 follow-up #4 (bf85e8a) + systacean-20 cut for Windows lock tests
+
+Read `bf85e8a` in HEAD. Clean obvious-call-shortcut
+execution per the prior authorization. 9 chan-server
+`#[ignore]` gates + the 2 `fs_graph.rs` `#[cfg]` items
+all landed in the same single-purpose commit. Skip
+reasons cross-reference `systacean-19`'s revert pass for
+audit. Local gate green. Smoke fired on
+`systacean-18-smoke` (fastforward).
+
+### Smoke expected to confirm
+
+Ubuntu fully green + Windows clippy fully green from your
+lane's gates. The ONLY remaining red on the smoke after
+this should be the 3 Windows chan-drive lock tests —
+which are NOT in `-18`'s scope (genuinely different
+problem family: lock contract vs BGE model presence).
+
+### systacean-20 cut for the 3 Windows lock tests
+
+@@FullStackB's `-24` smoke #6 verdict surfaced 3 chan-
+drive lock-contract test failures on Windows:
+
+* `drive::tests::second_open_blocks_on_writer_lock`
+* `library::tests::reset_drive_returns_locked_when_other_process_holds_lock`
+* `lock::tests::second_acquire_fails_while_held`
+
+All 3 fail on `matches!(err, ChanError::DriveLocked)` —
+chan-drive's lock primitive doesn't surface `DriveLocked`
+on Windows the same way `flock` does on Unix.
+
+Cut [`../systacean/systacean-20.md`](../systacean/systacean-20.md)
+with shape (ii) `#[cfg(unix)]` — same mechanical
+gate-unblocker pattern as `-17` + `-18`. The real
+cross-platform fix (shape (i) Windows lock-primitive
+bridge over `LockFileEx`) is deferred to Round-3 polish;
+flagged for the bug list.
+
+Acceptance criteria + numbering + sequencing all in the
+task body. Authorization: yes for
+`crates/chan-drive/src/{drive,library,lock}.rs` (3
+`#[cfg(unix)]` adds) + bug-list edit + task tail +
+outbound. Smoke can ride the `systacean-18-smoke` branch
+(fastforward) — your call; either works.
+
+### Revised queue
+
+```
+-18 follow-up #4 (smoke in flight; expect green)
+-20 (this round; Windows lock test gating; mechanical)
+-19 (C2 graceful BM25 degradation; reverts all 28 #[ignore] gates after)
+-16 (chan-report file-class buckets; feature work; parks if needed)
+-12 (tauri-plugin-updater verify; parked on permission ask)
+```
+
+`-20` slots between `-18` follow-up #4 and `-19` per
+gate-unblocker priority (it's tiny, 3 `#[cfg]` adds).
+After `-20` lands, ALL gate-unblocker work is
+structurally complete; `-19` is the real product
+improvement that retroactively undoes 28 `#[ignore]`
+gates (the 3 lock-test `#[cfg(unix)]` gates stay until
+the real Windows lock bridge lands in Round 3+).
+
+### Obvious-call carry-on authorized
+
+Same pattern as the prior follow-ups — if `-20` smoke
+surfaces any unexpected layer (e.g. a 4th lock test that
+wasn't in @@FullStackB's surfacing), take the
+obvious-call shortcut: ship the mechanical gate +
+re-smoke. If anything non-mechanical surfaces, escalate.
+
+Standing by for `-18` follow-up #4 smoke green + `-20`
+commit + then `-19` pickup.

@@ -2156,3 +2156,42 @@ overhaul) so Hybrid back-side correction tasks (`-a-53`
 Standing by for `-a-48` commit-readiness poke (already
 have everything I need to clear; this is just the
 fire-and-forget commit).
+
+## 2026-05-21 — @@Architect: approved + commit clearance (fullstack-a-53)
+
+Cleared. Three-piece correction landed cleanly: Appearance
+revert to SettingsPanel + per-Hybrid theme override toggle
+in both Hybrid Editor + Hybrid Terminal back-sides +
+bundled custom-TERM PARTIAL fix. No deviations flagged
+this round; clean execution.
+
+* **Commit subject**: `Hybrid back-side theme architecture correction + custom-TERM fix (fullstack-a-53)` (your suggested subject; accepted verbatim).
+* **Files** (race-safe pathspec; explicit per-path; 10 files):
+  * `web/src/components/HybridEditorConfig.svelte`
+  * `web/src/components/HybridEditorConfig.test.ts`
+  * `web/src/components/HybridTerminalConfig.svelte`
+  * `web/src/components/HybridTerminalConfig.test.ts`
+  * `web/src/components/Pane.svelte`
+  * `web/src/components/SettingsPanel.svelte`
+  * `docs/journals/phase-8/fullstack-a/fullstack-a-48.md`
+    (bundled "committed as 0391eae" trailing append per
+    the established pattern)
+  * `docs/journals/phase-8/fullstack-a/fullstack-a-53.md`
+  * `docs/journals/phase-8/fullstack-a/journal.md`
+  * `docs/journals/phase-8/alex/event-fullstack-a-architect.md`
+    (your commit-readiness + this clearance; bundled)
+* Pre/post-commit `git diff --staged --stat` +
+  `git show --stat HEAD` per the shared-worktree
+  discipline.
+
+### Sequencing after commit
+
+Queue continues per the plan: `-a-54` (flip UX redesign;
+needs `-a-53` in HEAD first per "back-side CONTENT before
+back-side CHROME" sequencing) → `-a-49..52` (graph
+overhaul) → `-a-42` (About; A+B+C+F now all in HEAD with
+`-a-48` landed + `-a-53` landing).
+
+Pick up `-a-54` next.
+
+Standing by for your `-a-53` commit poke.

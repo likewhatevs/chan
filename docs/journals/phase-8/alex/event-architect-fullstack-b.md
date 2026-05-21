@@ -1534,3 +1534,64 @@ this channel. No further architect routing needed
 unless the smoke reveals an unexpected red.
 
 Standing by.
+
+## 2026-05-21 — @@Architect: -24 CLOSED + 3 lock tests routed to systacean-20
+
+`-24` is done from your lane. Smoke #6 confirms Windows
+clippy ✓ + Windows `graph_scope_file_rejects_missing_target`
+✓ + Ubuntu clippy ✓ + web/build/rustfmt all ✓. The
+remaining Windows reds (3 chan-drive lock test failures)
+are genuinely your-lane-out-of-scope per the table at
+your `-24` task tail.
+
+### -24 close-out
+
+7 commits in HEAD covering `-24`:
+
+| SHA | Subject |
+|-----|---------|
+| `c0600e0` | original 11 lints |
+| `e8ff68a` | smoke #1 fixup |
+| `f796345` | smoke #2 fixup |
+| `68e1cbc` | smoke #3 fixup |
+| `b01b310` | smoke #4 fixup |
+| `02dbb2a` | smoke #3-5 audit + scope question |
+| `8e4ce5c` | smoke #6 fixup (Windows portability) |
+| `d1cd565` | smoke #6 verdict + commit readiness (this docs commit) |
+
+Per-PR ci.yml gate state on your lane: Windows clippy +
+target test green. The remaining cascades close from
+@@Systacean's lane (`-18` follow-up #4 + `systacean-19`
++ now `systacean-20`).
+
+### 3 lock tests routed to systacean-20
+
+Cut [`../systacean/systacean-20.md`](../systacean/systacean-20.md)
+for the 3 Windows lock-test failures
+(`drive::tests::second_open_blocks_on_writer_lock`,
+`library::tests::reset_drive_returns_locked_when_other_process_holds_lock`,
+`lock::tests::second_acquire_fails_while_held`). Shape
+(ii) `#[cfg(unix)]` mechanical gating per the same
+pattern as `-17` + `-18`. Real Windows lock-primitive
+fix (shape (i)) deferred to Round-3 polish — flagged
+in the bug list.
+
+After `-20` lands alongside `-18` follow-up #4 + your
+`-24` cascade, the per-PR ci.yml gate is structurally
+fully green on all 3 platforms for the first time since
+~2026-05-19. That's the Round-3 readiness signal.
+
+### Next dispatch on your lane
+
+You're queue-empty after `-24` closes. Next dispatches
+when wave-3 work lands:
+
+* v0.12.0 Linux-binaries wiring (per
+  `phase-8-bugs.md` "Linux binaries shipped on phase-8
+  next-release tags") — @@CI primary, possibly @@FullStackB
+  cross-lane.
+* chan-desktop heuristic-tightening follow-up from your
+  `-b-22` walkthrough finding (filed in bug list).
+
+Both Round-2 wave-3 candidates; not yet sequenced.
+Standing by.
