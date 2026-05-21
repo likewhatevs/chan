@@ -278,3 +278,33 @@ Lane-B footprint is now clean. Fresh Round-2 session can
 boot into a clean state. Final teardown poke filed at
 [`../alex/event-webtest-b-architect.md`](../alex/event-webtest-b-architect.md).
 
+## 2026-05-20 — v0.11.1 lane-B walkthrough (Round-2 session)
+
+Bootstrapped fresh post-recycle. Standing chan-desktop
+runtime perm inherited via bootstrap doc per
+`docs/agents/bootstrap.md` "Standing permissions" table.
+Walked the lane-B v0.11.1 verification queue routed in
+the prior architect poke. Full audit at
+[`webtest-b-1.md`](webtest-b-1.md) under the `2026-05-20
+— v0.11.1 cut walkthrough (Round-2 session)` heading.
+Headlines:
+
+* `fullstack-b-13` — VERIFIED end-to-end. Toolbar
+  toggle + API + SPA chord + server-side chord all
+  exercised against live Claude Code v2.1.145 in the
+  chan terminal.
+* `fullstack-b-14` — source-level VERIFIED; empirical
+  Tauri click PARKED on same blocker as -b-1.
+* `systacean-10` — VERIFIED. Three non-event filenames
+  silently skipped, control case (malformed JSON in
+  event-prefixed file) bumped counter as expected.
+
+Two side observations flagged for @@Architect triage:
+the watcher-ingest-wedge mid-session (potential new
+bug) + the shell-mode tooltip-copy nit (low priority
+polish). Poke fired at
+[`../alex/event-webtest-b-architect.md`](../alex/event-webtest-b-architect.md).
+
+Lane-B serve still up on `127.0.0.1:8820`. Standing by
+for next routing or Round-2 Wave-1 work.
+

@@ -286,3 +286,17 @@ Smoke test from @@Alex tracked in `round-2-open-questions.md` B.3; runs independ
 Cause: classic multi-agent rebase per the [shared worktree commits](../../../../.claude/projects/-Users-fiorix-dev-github-com-fiorix-chan/memory/feedback_shared_worktree_commits.md) memory. Another agent (likely architect during the `01b103d` v0.11.2 dispatch assembly) did `git reset --hard HEAD~N` past my commit + re-committed their own work; my commit wasn't cherry-picked back in.
 
 Re-committing with the same content + the same commit subject. New SHA expected — recorded in the next append. No content drift between `01f10d3` and the re-commit; the working-tree files are identical to what was in the original commit's tree.
+
+## 2026-05-21 — re-committed as 2fb3f12
+
+Same content, same subject:
+
+```
+desktop/Makefile: notarytool keychain-profile path for local make app-notarized (systacean-13)
+```
+
+5 files (desktop/Makefile +97/-16, desktop/CLAUDE.md +76, systacean-13.md +288, journal.md +115, event-systacean-architect.md +95), +655/-16 total. Pre/post-commit audits clean. The re-commit's audit append is bigger than the original (+288 vs +266 for the task file alone) because the orphaning narrative + re-commit entry rode the commit.
+
+Push held per Round-2 / v0.11.2 policy.
+
+Smoke test tracking unchanged: still parked in `round-2-open-questions.md` B.3.

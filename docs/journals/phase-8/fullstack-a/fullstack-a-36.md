@@ -112,3 +112,116 @@ the rest of the v0.11.2 wave's investigation work.
 ## Open questions
 
 (populated as you investigate)
+
+## 2026-05-21 — ready for review
+
+### What landed
+
+Three files. SPA dispatcher + helper module + tests.
+
+* **`web/src/api/desktop.ts`** (new) — small runtime-seam
+  module: `isTauriDesktop()` boolean, generic
+  `tauriInvoke(cmd, args)` resolver, plus the two
+  feature-specific helpers `reloadWindow()` +
+  `openWebInspector()`. The IPC names match the contract
+  `-b-17` exposes (`reload_window`, `open_devtools`); when
+  `-b-17` lands the wire is hot. Both helpers fall back
+  gracefully when the IPC call throws (reload → web reload;
+  inspector → false so the caller can toast a hint).
+* **`web/src/components/Pane.svelte`** — pane context-menu
+  handlers rewired:
+  * `doReloadPane()` now calls `reloadWindow()` instead of
+    the old `refreshTree()`. The FB tree-refresh primitive
+    lives on for its other callers (5 other call sites in
+    `store.svelte.ts` + `App.svelte`); this menu is now the
+    "reload the whole window" path the user expects.
+  * `doToggleInspector()` → `doOpenInspector()`. Calls
+    `openWebInspector()` on desktop; falls through to
+    `notify(...)` with a clear message on web ("Use the
+    browser's built-in inspector…").
+  * Menu label "Toggle Web Inspector" → "Open Inspector".
+  * Icon swap `PanelRight` → `Bug` (lucide's DevTools-y
+    icon — matches the new semantic).
+  * Stale imports dropped: `PanelRight`, `refreshTree`,
+    `openBrowserInActivePane` (the in-app side-pane fall-
+    through is gone; the side-pane has its own affordances
+    elsewhere).
+* **`web/src/api/desktop.test.ts`** (new) — 11 pins
+  covering: runtime detection (3 cases), `tauriInvoke`
+  dispatch + throw-when-no-Tauri (2), reloadWindow on web
+  (1) + on desktop (1) + IPC-fail fallback (1),
+  openWebInspector on web (1) + on desktop (1) + IPC-fail
+  return-false (1). Uses `Object.defineProperty(window,
+  "location", ...)` to swap the whole location object
+  rather than patching `reload` directly — jsdom's
+  `window.location.reload` is non-configurable.
+* **`web/src/components/Pane.test.ts`** — single label-pin
+  update on the existing "loaded pane right-click keeps
+  reload and inspector menu" test:
+  `["Reload", "Toggle Web Inspector"]` → `["Reload", "Open
+  Inspector"]`.
+
+### IPC contract assumed (matches `-b-17` task spec)
+
+| Helper              | IPC command       | Args     |
+|---------------------|-------------------|----------|
+| `reloadWindow()`    | `reload_window`   | (none)   |
+| `openWebInspector()`| `open_devtools`   | (none)   |
+
+If `-b-17` lands different names at commit time, single-
+file change in `web/src/api/desktop.ts`. Will coordinate
+via a follow-up poke if names shift.
+
+### Web-build behaviour
+
+* Reload → `window.location.reload()` (full browser tab
+  reload — semantically identical to what Chrome's
+  right-click Reload would do).
+* Open Inspector → `notify("Use the browser's built-in
+  inspector (Right-click → Inspect Element)")`. Menu entry
+  stays visible so the user gets a discoverable answer
+  instead of a no-op (option B from the spec; chose toast
+  over hide so the user learns where to find the browser
+  inspector).
+
+### Composition
+
+* `-b-17`'s `Cmd+R` + `Cmd+Opt+I` accelerator bindings
+  bypass the SPA entirely (KEY_BRIDGE_JS calls the IPCs
+  directly). My SPA dispatch is the right-click-menu path;
+  the chord path lands the same actions through a different
+  route. No conflict — both surfaces converge on the same
+  IPC commands.
+* The pane context menu (right-click empty area of the tab
+  strip) is the surface the user reached for in the bug
+  report. The per-tab right-click menu (`tabMenu`) is a
+  different overlay opened via `openTabMenu` and was not
+  touched.
+
+### Suggested commit subject
+
+```
+Tab right-click Reload + Open Inspector: SPA dispatch via Tauri IPC (fullstack-a-36)
+```
+
+### Gate
+
+* vitest **555 / 555** (+11 new in
+  `src/api/desktop.test.ts`).
+* svelte-check 0 errors / 0 warnings across 3980 files.
+* npm build clean.
+
+No Rust touched (SPA-only change). Cross-lane: -b-17 still
+in flight; my dispatch is safe to commit ahead of -b-17 —
+on chan-desktop the IPC will throw "command not found"
+until -b-17 lands, and my fallback to `window.location.reload()`
+fires; once `-b-17` is in HEAD + the desktop binary is
+rebuilt, the dispatch routes through the Tauri IPC and
+DevTools opens.
+
+Moving on to `-a-37` (file moved/deleted false-positive)
+next per the recommended priority order. DevTools won't
+be live in my local web build (no chan-desktop in my
+loop), but the SPA-side investigation doesn't need
+DevTools — the watcher / self-writes layer is grep-able
+from source.

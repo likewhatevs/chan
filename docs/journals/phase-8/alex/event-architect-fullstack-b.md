@@ -957,3 +957,71 @@ Hotfix priority — single commit suffices. Push waits
 until v0.11.2 tag-cut. Standard shared-worktree commit
 discipline (`git diff --staged --stat` audit before
 commit).
+
+## 2026-05-21 — poke (-b-21: codesign bundled chan sidecar for notarization)
+
+**Routed by @@Alex (via assistant) outside the regular
+@@Architect session** for Round-2-close speed. Recording
+here so @@Architect picks it up on next bootstrap.
+
+ci-8 dry-run #3 ran on `chan-v0.11.99-dryrun.3` (HEAD
+`2c9ff0e`, post -b-20). Linux green (first ever).
+macOS notarization fast-rejected (~20s, submission
+`7f327f46-8c5a-430d-80fb-95d174109d50`).
+
+`xcrun notarytool log` (@@Alex ran locally with the
+`chan` Keychain profile newly set up via
+`docs/release/setup-notarytool-keychain.sh`) returned
+three errors, ALL on
+`Chan.app/Contents/MacOS/chan` (the bundled sidecar):
+
+1. Not signed with a valid Developer ID certificate.
+2. Signature does not include a secure timestamp.
+3. Hardened runtime not enabled.
+
+### Root cause
+
+`-b-20` switched chan sidecar plumbing from
+`bundle.externalBin` to `bundle.macOS.files`. Tauri's
+signing pass walks `externalBin` entries but NOT
+`bundle.macOS.files` payloads. The cargo-built
+`target/release/chan` carries an ad-hoc signature
+(passes `codesign --verify` but isn't Developer ID +
+runtime + timestamp). `-b-20`'s local verify was a
+false-pass for this reason.
+
+### Routing
+
+Cut [`../fullstack-b/fullstack-b-21.md`](../fullstack-b/fullstack-b-21.md)
+against @@FullStackB. Three fix options sketched in
+the task body:
+
+* **Option C** (recommended first try): switch to
+  `bundle.macOS.externalBin` per-platform key. Empirical
+  test required — `-b-20` ruled out only the top-level
+  externalBin's triple-append behaviour; per-platform
+  may differ.
+* **Option A** (fallback): add `codesign --options=runtime
+  --timestamp` step in chan-bin Makefile recipe. Most
+  targeted; preserves -b-20's `bundle.macOS.files` shape.
+* **Option B** (less preferred): post-bundle re-sign +
+  deep re-sign in app-notarized recipe. Fragile.
+
+### After -b-21 commits
+
+@@CI cuts `chan-v0.11.99-dryrun.4` against new HEAD →
+notarization should accept → @@WebtestB second-Mac
+verify → @@Alex "cut it" → @@Systacean cuts
+`chan-v0.11.2`.
+
+Hotfix priority — single commit suffices.
+
+### Provenance
+
+This poke + the -b-21 task file were written by @@Alex
+via assistant outside the regular @@Architect session.
+@@Architect will see both on next bootstrap (step 8: read
+inbound + outbound events; new task file appears as
+untracked in `git status`). No standing @@Architect
+behaviour is implied — this is a one-shot routing for
+Round-2-close momentum.

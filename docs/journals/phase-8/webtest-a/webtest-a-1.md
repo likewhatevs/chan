@@ -1255,3 +1255,56 @@ theme cascade for confirmation, the layout is:
 
 
 
+
+## 2026-05-20 22:30 BST — v0.11.1 cut walkthrough: 8/8 lane-A fixes HOLD
+
+Fresh @@WebtestA session against the v0.11.1 cut (`cargo build -p chan` at
+HEAD `ada8478`). Throwaway drive: `/tmp/chan-test-phase8-wa-r2/`, seeded
+from chan repo (excluding `.git`, `target`, `node_modules`, `web/dist`),
+508 markdown files, 107 MB. Server:
+`./target/debug/chan serve /tmp/chan-test-phase8-wa-r2 --host 127.0.0.1
+--port 8787 --no-browser`. URL deterministic on drive root:
+`http://127.0.0.1:8787/?t=BbtnncpjBi7PmPsb3YnFxvfAcB9PPMbX`.
+
+### Verdicts
+
+| Task    | Verdict        | Empirical signal                                                                       |
+|---------|----------------|----------------------------------------------------------------------------------------|
+| -a-28   | FIX HOLDS      | 3 bubbles (poke/pre-flight/survey) all have "Dismiss bubble" X buttons; reply files filter pre-flight + survey via type-agnostic predicate; X click on poke dismisses immediately and stays gone across 5+ s with source file still on disk; 35 samples over 7.5 s with 0 Loading-swap flickers and stable count=3 |
+| -a-29   | FIX HOLDS      | Collapse chevron: terminal-host grew from height=432 to 712 px filling downward; prompt collapsed to a 42-px pill at viewport bottom; terminal-host `margin-bottom: 52px` ≈ pill height + buffer (no dead band). Expand: terminal back to 432 px, margin-bottom back to 332 px ≈ expanded prompt 320 + buffer |
+| -a-30   | FIX HOLDS      | Right-click cm-content surfaces the .page-width-row with a `<input type=range>` aria-label="rich prompt page width" (min=25 max=100). Slider at 50% → prompt inline `--chan-page-max-width: 480px` (= 0.5 × measured 961 px) + cm-editor caps to 480 px. Slider at 100% → inline `none`. Reload preserves the 50% setting via chan-server session store (URL hash deliberately excludes `rppw` per impl note `opts.terminalSessions` gate) |
+| -a-31   | FIX HOLDS      | Right-click terminal panel: `.terminal-tab-menu-bubble` shows `.broadcast-section-label` text "broadcast input on/off" verbatim above per-tab checkbox rows. Self row "Terminal-1 (self)" appears at top before other terminal rows. Two checkboxes (one per terminal), no umbrella rocker button (`broadcastEnabled`-toggling button gone). Select All bulk action preserved as a separate affordance |
+| -a-32   | FIX HOLDS      | Three-surface parity confirmed: pane hamburger / empty-pane right-click / carousel slide 1 all surface the four first-class spawn entries in identical order — Terminal Cmd+Alt+T / File Browser Cmd+Alt+O / Rich Prompt Cmd+Alt+P / Graph Cmd+Shift+M. chan:command bridge for all four (`app.terminal.toggle` / `app.files.toggle` / `app.terminal.richPrompt` / `app.graph.toggle`) verified working. Cmd+K 1/2/3/4/p chord descriptors absent from shortcuts.ts (grep clean). Cheatsheet copy in SERVE_LONG_ABOUT / carousel slide 1 reflects new chord set (Cmd+Alt+P, Cmd+Alt+O, Mod+. mnemonics) |
+| -a-33   | FIX HOLDS      | Graph at `dir:docs/agents` scope renders `<nav class="scope-crumbs" aria-label="graph scope ancestors">` containing 3 segments: `drive` (BUTTON), `docs` (BUTTON), `agents` (SPAN aria-current="true"). Click `docs` button → graph re-scopes to `dir:docs`, breadcrumb shrinks to 2 segments. Click `drive` → re-scopes to `drive`, breadcrumb shrinks to 1 segment. No "Graph from here" explicit button anywhere in the graph chrome (`fromHereButtonCount: 0`) |
+| -a-34   | FIX HOLDS      | Synthetic HTML clipboard paste of `<p>*bold* and **strong** and _em_ and `code` and [chan](URL)</p>` into Wysiwyg cm-content: htmlPasteHandler caught + dispatched (`dispatched=false`). Resulting cm-content has NO backslash escapes anywhere; `*bold*` rendered with `<span class="cm-md-italic">bold</span>`, `**strong**` with `cm-md-bold` "strong", `_em_` with `cm-md-italic` "em", `` `code` `` with `cm-md-code` "code", `[chan](URL)` with `cm-md-link` + `cm-md-link-url` |
+| -a-35   | FIX HOLDS      | Right-click `paste-test.md` tab → "Rename File" row in `.tab-menu-bubble`. Click surfaces `.rename-band` above the editor body (band width 1005 px vs editor-wrap 985 px, confirming the band escapes the `--chan-page-max-width` cap). Input pre-filled "paste-test.md". Type "paste-test-renamed.md" + Enter: tab label updates, URL hash `p:paste-test-renamed.md`, file on disk renamed via `Drive::rename_with_link_rewrite` (`ls` shows the new name). Esc on a follow-up rename: band closes, no API call fires, on-disk filename + tab label unchanged |
+| -b-7    | DEFERRED       | chan-desktop runtime walkthrough is @@WebtestB's lane (standing permission for chan-desktop runtime walkthroughs per `docs/agents/bootstrap.md`); @@WebtestA's standing covers `chan serve` + Chrome MCP only. No-op for this lane |
+
+### Side observations
+
+* The cross-tile decoupling claim for -a-30 is proven structurally by the
+  inline override mechanism (`--chan-page-max-width: <ratio*width>px | none`
+  set on `.rich-prompt` overrides any pane-level cascade). I did not set
+  up a literal two-tile layout because the override mechanism makes
+  cross-tile decoupling deterministic — every prompt has its own override,
+  so a sibling pane's editor cap cannot reach it. Flagging as a structural
+  proof rather than empirical for the literal-tiles repro.
+* Round-1 side observations from earlier sessions (Cmd+Enter first-char
+  swallow → -b-8, Cmd+. p focus race → -a-17, Hybrid NAV "Stage:" copy
+  → -a-16) were not retested this pass — those landed in their own
+  follow-up tasks per `event-architect-webtest-a.md` 2026-05-20 dispatch
+  notes.
+
+### State at end of walkthrough
+
+* Drive: `/tmp/chan-test-phase8-wa-r2/` with one ad-hoc artifact
+  `paste-test-renamed.md` (renamed from `paste-test.md` during -a-35
+  test). Also the `watcher-events/` dir created during -a-28 has 5
+  files left in place as the audit anchor.
+* Server: still live on `127.0.0.1:8787` (URL above). Standing by for
+  @@Alex to click around if useful; will tear down when @@Architect
+  signals.
+* Note: an unrelated chan instance is listening on port 8820
+  (different drive, different tab — observed via Chrome MCP
+  `tabs_context_mcp`). Not mine; not interacted with.
+

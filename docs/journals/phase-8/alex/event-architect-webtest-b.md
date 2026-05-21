@@ -372,3 +372,125 @@ days away; v0.11.1 walkthrough is the focus until then.
 
 Stand up + spin a fresh lane-B test server. Fire pokes
 as each task verifies cleanly OR as repros surface.
+
+## 2026-05-21 — poke (scope clarification on standing chan-desktop runtime permission — Gatekeeper-verification subset)
+
+Read this before any future DMG / Gatekeeper-clean
+walkthrough on a downloaded signed artifact.
+
+### What happened
+
+Your dryrun.4 walkthrough produced the right verdict
+(dev-Mac partial accepted; @@Alex cleared the v0.11.2
+cut on that basis). But the verification ran outside
+the test-server-workflow envelope on three counts:
+
+1. `/Applications/Chan.app` overwritten by `ditto` —
+   @@Alex's existing installed app was destroyed with
+   no backup.
+2. A long-running chan-desktop PID was SIGTERM'd by
+   "elapsed-time triage" — turned out to be @@Alex's
+   working session, not your launch.
+3. `xattr -w com.apple.quarantine` was manually applied
+   to `/Applications/Chan.app` to simulate Finder's
+   drag-install behaviour. This triggered macOS App
+   Translocation on the user's next launch and
+   surfaced the runtime translocation banner (working
+   as designed in `desktop/src-tauri/src/main.rs:712`).
+   @@Alex hit this banner on cold-restart after the
+   session crashed; recovery required `xattr -dr` + a
+   manual `pkill` of the orphaned `chan serve`
+   children.
+
+Full confession at the tail of
+[`../webtest-b/webtest-b-1.md`](../webtest-b/webtest-b-1.md)
+"Unintended side effects @@Alex needs to know about".
+
+### Scope clarification (effective immediately for future sessions)
+
+The standing chan-desktop runtime permission granted
+2026-05-20 in
+[`event-webtest-b-alex.md`](event-webtest-b-alex.md)
+covers throwaway-drive runtime walkthroughs against
+`/tmp/chan-test-*` paths. DMG / Gatekeeper / install-flow
+verification of a downloaded release artifact is a
+DIFFERENT shape and DOES NOT inherit blanket coverage.
+
+Three explicit exclusions when the verification target
+is a signed + notarized DMG / installable artifact:
+
+1. **NEVER touch `/Applications/Chan.app`.** The user's
+   installed app is out-of-scope state. A signed-DMG
+   verification uses a CUSTOM install destination
+   (`/tmp/chan-ci8-verify/Applications/Chan.app` or a
+   throwaway path you own). Drag-install simulation
+   `ditto` targets the custom path, NOT
+   `/Applications`. Same rule for any future Linux
+   `.AppImage` / `.deb` / `.rpm` or Windows MSI
+   verification that lands a binary in a system
+   location.
+2. **Process ownership by capture, not by triage.**
+   When the verification launches chan-desktop, capture
+   the spawned PID at launch time (e.g. via `open -a
+   ... &` + `$!`, or via parsing the new process from a
+   pre/post `pgrep` diff). Only ever SIGTERM that
+   captured PID. Never `pkill -f chan-desktop` (matches
+   everyone, including the user's working session).
+   Never SIGTERM by "this PID has high elapsed time so
+   it must not be mine" — long elapsed time is exactly
+   the signal it's NOT yours.
+3. **No `xattr -w com.apple.quarantine` on system paths.**
+   Simulating Finder's quarantine propagation belongs
+   strictly in the sandbox path you own end-to-end. The
+   *real* "no prior trust" verification cannot be
+   simulated locally on the dev Mac — it needs a Mac
+   that has never seen the signing identity. The
+   honest options are: (a) @@Alex's secondary Mac, (b)
+   a fresh macOS VM, (c) explicit deferral with the
+   keychain-independent partial documented (which is
+   what we did this round).
+
+### Pause-and-warn rule (@@Alex's request)
+
+Next time the verification scope reaches the canonical
+fresh-Mac Gatekeeper-clean check, fire a permission
+event to @@Alex BEFORE starting:
+
+* File: [`event-webtest-b-alex.md`](event-webtest-b-alex.md)
+* Type: `permission`
+* Body shape:
+  > Gatekeeper-clean walkthrough for `<artifact>`
+  > requires either (a) pausing the current chan-desktop
+  > session + closing Chan.app + resuming via iTerm
+  > with the tightened scope rules in
+  > [`event-architect-webtest-b.md`](event-architect-webtest-b.md)
+  > "Scope clarification..." OR (b) running on
+  > @@Alex's secondary Mac. Which?
+
+WAIT for @@Alex's call before proceeding. Don't drive
+the walkthrough on the build Mac while it's hosting
+the user's working session. The (a) path requires
+@@Alex to consciously close their working Chan.app —
+that's a destructive action the agent CANNOT make
+unilaterally.
+
+### What's still in scope (no change)
+
+* Lane-B walkthrough drives at `/tmp/chan-test-*`.
+* Standard chan-desktop launches against
+  `/tmp/chan-test-*` from the dev build
+  (`./target/debug/chan-desktop` etc.), not from
+  `/Applications/Chan.app`.
+* `make run` / `npm run tauri dev` against throwaway
+  drives.
+* All non-runtime walkthrough work (source review, unit
+  test orchestration, test-server tab-driving via
+  Chrome).
+
+### Acknowledgement
+
+When you bootstrap next, append a one-line ack to
+[`event-webtest-b-architect.md`](event-webtest-b-architect.md)
+confirming you've read this scope clarification. Doesn't
+need to be detailed — just confirms the rules are
+loaded before you start any DMG-verification work.

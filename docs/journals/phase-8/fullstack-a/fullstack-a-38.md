@@ -104,3 +104,140 @@ Two pieces:
 ## Open questions
 
 (populated as you investigate)
+
+## 2026-05-21 — ready for review
+
+### A — Pre-flight bubble spinner gating
+
+Picked option 1 per the spec recommendation: suppress the
+spinner + label entirely when no timing data is present.
+Root-caused in `BubbleOverlay.svelte::elapsedLabel`: it
+derives `startMs` from either `event.topic` (numeric string)
+OR a 10+ digit timestamp inside `event.id`. When neither
+yields a positive number the label falls through to `0:00`
+and the existing `preFlightTimedOut` check returns false
+(0 < 300 s), so the spinner branch fires forever. The
+architect-fired pre-flight events @@Alex saw
+(`event-arch-preflight-2.md` etc.) carry only
+`topic`/`note`/`from`/`to`/`id`/`type` — no timing data —
+so they hit the bug verbatim.
+
+Fix:
+
+* New `preFlightStartMs(event): number | null` helper.
+  Returns the resolved start time OR null when none was
+  embedded. Centralises the topic/id derivation in one
+  place.
+* New `hasPreFlightTiming(event): boolean` predicate
+  wrapping the above.
+* `elapsedLabel` now reads through the helper (no
+  behavioural change for events WITH timing).
+* `preFlightTimedOut` short-circuits to false when no
+  timing data is present (the "Spawn idle" branch can't
+  fire without a clock to measure against).
+* The `{#if event.type === "pre-flight"}` block in the
+  bubble template now also checks `hasPreFlightTiming(event)`
+  so the whole `.preflight-status` div (spinner + label OR
+  Spawn-idle text) hides when there's no clock.
+
+Events WITH timing data (any future emitter that packs
+`started_at` epoch into `topic` or embeds a timestamp in
+`id`) still get the spinner + tick chrome unchanged.
+
+### B — Status-bar transient notification auto-dismiss
+
+Audit verdict on the status taxonomy:
+
+| Surface                              | Verdict     |
+|--------------------------------------|-------------|
+| `notify(msg)` (10+ call sites)       | TRANSIENT — short action feedback |
+| "Copied path" / "copy failed" (FileTree) | TRANSIENT — action confirmation/error |
+| `opened X` / `selected X` (window_command) | TRANSIENT — navigation confirmation |
+| "Moving…" (in-flight rename)         | PERSISTENT — cleared on op end |
+| `restore failed:` / `bootstrap failed:` | PERSISTENT — load-time errors |
+| Per-action error tails (`rename failed:` etc.) | left as-is for follow-up; obvious TRANSIENT candidates but lower-priority migration |
+
+Fix:
+
+* Extended `ui` state with `statusKind: "transient" |
+  "persistent" | null`. Explicit in the data model per
+  the spec.
+* New `setTransientStatus(msg, ms = 3000)` exported helper
+  in `store.svelte.ts`. Writes both fields, schedules a
+  self-cancelling timer; re-entry cancels the prior timer
+  so the latest message wins. The timer's clear check is
+  identity-guarded: `if (ui.status === msg && statusKind ===
+  "transient")` — a persistent write that lands during
+  the window is NOT clobbered by the late timer fire.
+* `setNotifyHandler` rewired to route ALL `notify(msg)`
+  calls through `setTransientStatus`. Every `notify()`
+  caller gets auto-dismiss without per-callsite change.
+* `FileTree.svelte::copyPath` migrated: `ui.status = "Copied
+  path"` → `notify("Copied path")`. Pairs with the error
+  branch (`notify("copy failed: ...")`).
+* `store.svelte.ts::handleWindowCommand` migrated:
+  `ui.status = "opened ..."` / `"selected ..."` →
+  `setTransientStatus(...)`.
+
+Direct `ui.status = ...` writes default to persistent
+(`statusKind` stays whatever it was — typically null on
+first write). This is the conservative path: existing 30+
+direct writers keep their existing semantics, only the
+opt-in callers flip to transient.
+
+### Test pins
+
+* **NEW `web/src/state/transientStatus.test.ts`** — 5 pins:
+  default-3s clear, latest-wins on re-entry,
+  persistent-mid-flight isn't clobbered, custom ms arg,
+  `notify()` routes through transient.
+* **BubbleOverlay.test.ts** — 2 new pins: pre-flight
+  without timing renders no `.preflight-status` div + no
+  `0:00` text; pre-flight with timing (topic = epoch ms)
+  renders the `.preflight-status` div with a M:SS label.
+
+### Files touched
+
+| File                                              | Change                                                                  |
+|---------------------------------------------------|-------------------------------------------------------------------------|
+| `web/src/state/store.svelte.ts`                   | `ui.statusKind` field + `setTransientStatus` helper + notify handler rewired; window_command status writes migrated |
+| `web/src/state/notify.svelte.ts`                  | (no change — handler signature unchanged; routing flipped in store)     |
+| `web/src/components/BubbleOverlay.svelte`         | `preFlightStartMs` / `hasPreFlightTiming` helpers; spinner block gated  |
+| `web/src/components/FileTree.svelte`              | Copy-path / copy-failed migrated to `notify()`; `ui` import dropped     |
+| `web/src/state/transientStatus.test.ts`           | NEW — 5 pins on the auto-dismiss + notify routing                       |
+| `web/src/components/BubbleOverlay.test.ts`        | 2 new pins on the spinner gating                                        |
+
+### Suggested commit subject
+
+```
+Notification surface: pre-flight spinner gating + transient status auto-dismiss (fullstack-a-38)
+```
+
+Single commit. The two pieces share the
+"transient-vs-persistent taxonomy" framing and would split
+awkwardly: the spinner-gate piece references the same idea
+(notifications without timing data shouldn't pretend to
+have it; transient notifications shouldn't pretend to be
+persistent).
+
+### Gate
+
+* vitest **575 / 575** (+7 net: 5 in
+  `transientStatus.test.ts`, 2 in `BubbleOverlay.test.ts`).
+* svelte-check 0 errors / 0 warnings across 3982 files.
+* npm build clean.
+
+### Composition
+
+* `-a-37` already in the working tree — its `FileMissingState`
+  change is in `tabs.svelte.ts`; unrelated to this task.
+* `-a-36` ditto, in `api/desktop.ts` + `Pane.svelte`.
+* Round-2 follow-up candidate: migrate the remaining
+  one-shot action error writes (rename / create / delete /
+  duplicate failed) to `notify()`. Out of scope for v0.11.2
+  per spec discipline; flagging here for any future polish
+  pass.
+
+Picking up `-a-39` (FB tab state polish: expand-persistence
+across tab switch + spawn-new chord always creates new tab)
+next. Independent of -38; can land in any order.

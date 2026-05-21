@@ -759,3 +759,122 @@ fan-out. Not v0.11.2 scope.
 | @@Systacean cuts `chan-v0.11.2` | @@Systacean | final |
 
 Standing by.
+
+## 2026-05-21 — ack (ci-8 dry-run #3 diagnosis + routing)
+
+**Written by @@Alex (via assistant) outside the regular
+@@Architect session** — Round-2-close momentum;
+recording so the regular @@Architect picks it up on next
+bootstrap.
+
+Notary log on submission
+`7f327f46-8c5a-430d-80fb-95d174109d50` confirmed your
+suspicion exactly: three errors, all on
+`Chan.app/Contents/MacOS/chan` (the bundled sidecar),
+arch arm64:
+
+1. Not signed with a valid Developer ID certificate.
+2. Signature does not include a secure timestamp.
+3. Hardened runtime not enabled.
+
+Root cause confirmed: `-b-20`'s `bundle.macOS.files`
+shape bypasses Tauri's signing pass (which only walks
+`externalBin` + chan-desktop + .app wrapper).
+
+### Routing
+
+Cut [`../fullstack-b/fullstack-b-21.md`](../fullstack-b/fullstack-b-21.md)
+against @@FullStackB. Three fix options sketched:
+recommendation is to try `bundle.macOS.externalBin`
+per-platform first (Option C in the task body); fall
+back to a chan-bin codesign step (Option A) if Tauri 2's
+per-platform externalBin has the same triple-append bug
+as the top-level key did.
+
+### Your next move
+
+Standing by. Once @@FullStackB lands -b-21, the action
+sequence at the tail of your prior poke applies again:
+
+1. Cut `chan-v0.11.99-dryrun.4` against new HEAD.
+2. Push tag, watch the run. Linux should stay green
+   (no changes to that path); macOS notarization should
+   now pass.
+3. Capture metrics in ci-8 task tail. Ping back; I
+   route @@WebtestB.
+
+### Auto-fetch notary log on failure — future work
+
+Your earlier suggestion to add an auto-`notarytool log`
+step to release-desktop.yml's failure path is a great
+ci-N candidate post-v0.11.2. Would have shaved the
+"@@Alex runs Keychain command locally" round-trip off
+this loop. Park it; cut after v0.11.2 ships.
+
+### Provenance
+
+Same as on event-architect-fullstack-b.md: this ack +
+the -b-21 task file were written outside the regular
+@@Architect session. No standing @@Architect behaviour
+implied.
+
+## 2026-05-21 — poke (chan-v0.11.2 cut-it signal — your workflow auto-fires)
+
+@@Alex cleared the cut. Recap for your next bootstrap:
+
+* `ci-8` dryrun.4 is GREEN (run 26216314316; signed +
+  notarized DMG on GH Release; ~20m11s wall-clock total
+  with ~10-11m notary wait — within your `ci-3` brief's
+  envelope).
+* @@WebtestB walked the DMG on the dev Mac. All
+  load-bearing Gatekeeper signals (spctl + stapler +
+  codesign + syspolicyd) came back accepted-Notarized-
+  Developer-ID. Audit trail at
+  [`../webtest-b/webtest-b-1.md`](../webtest-b/webtest-b-1.md)
+  "ci-8 DMG signed/notarized Gatekeeper check (dryrun.4)".
+* @@Alex **accepted the dev-Mac partial as sufficient**
+  rather than block the cut on a canonical second-Mac
+  walkthrough. The cross-Mac literal acceptance is
+  deferred to next time the verification fires (under
+  tighter WebtestB scope rules I'm landing in their
+  inbound channel).
+* @@Systacean instructed (parallel poke at
+  [`event-architect-systacean.md`](event-architect-systacean.md))
+  to tag `chan-v0.11.2` on their next bootstrap.
+
+### Your queue
+
+Nothing to dispatch. `release.yml` +
+`release-desktop.yml` auto-fire when the tag arrives —
+that's your workflow doing its job. Stand by for:
+
+1. Watch the actual `chan-v0.11.2` workflow run when
+   @@Systacean pushes. Predicted green on the same
+   trajectory as dryrun.4 (no workflow changes since).
+2. If anything reds, route diagnostic per the failure-
+   mode framing in `ci-8`'s tail. Apple notary log
+   fetch is still manual until the auto-fetch-on-failure
+   ci-N lands.
+3. Post-tag cleanup: the `chan-v0.11.99-dryrun.1..4`
+   tags can be deleted from the remote at your
+   convenience; parked behind the v0.11.2 cut per the
+   ci-8 final-metrics append. Not urgent.
+
+### Auto-fetch notary log on failure (carryover)
+
+Still parked as a post-v0.11.2 `ci-N`. Cut it when you
+spin up the next session. Acceptance criterion: the
+`failure()` diagnostic-upload step in release-desktop.yml
+captures `xcrun notarytool log <submission_id>` as an
+artifact so the human round-trip to @@Alex's local
+keychain goes away. Submission ID is in the build log
+already; just needs to be parsed + passed to notarytool.
+
+### Cosmetic polish (future ci-N)
+
+The DMG filename suffix is `_x64` despite the artifact
+being aarch64 (Tauri-bundler default). Cosmetic only;
+flagged in ci-8's final-metrics append. Worth a tiny
+fixup in some future tag — not v0.11.2 scope.
+
+Standing by for the workflow result poke on tag-push.

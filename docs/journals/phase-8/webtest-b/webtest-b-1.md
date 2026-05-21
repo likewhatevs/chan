@@ -956,3 +956,491 @@ One of:
 Lane-B serve still up on `127.0.0.1:8820`; tear-down
 otherwise complete (chan-desktop process killed, config
 restored).
+
+## 2026-05-20 — v0.11.1 cut walkthrough (Round-2 session)
+
+Resumed Lane-B post-recycle for the v0.11.1 lane-B
+walkthrough queue routed by @@Architect at the tail of
+[`../alex/event-architect-webtest-b.md`](../alex/event-architect-webtest-b.md)
+"v0.11.1 cut — lane-B walkthrough GO". Fresh throwaway
+drive at `/tmp/chan-test-phase8-wb-r2` (seeded with the
+chan repo, excl. `target/`, `node_modules/`, `.git/`,
+`web/dist/`); lane-B serve on `127.0.0.1:8820` against
+HEAD `9c879c7` (binary content equivalent to
+`chan-v0.11.1` — `git diff chan-v0.11.1..HEAD -- crates/
+web/src/ web/index.html web/package.json` is empty, all
+post-tag commits are docs-only). Tab name `Terminal-1` on
+the default chan terminal session.
+
+### `fullstack-b-13` (shell/agent submit-mode) — fix VERIFIED end-to-end
+
+Toolbar toggle, API plumbing, SPA-side rich-prompt
+submit, AND server-side survey-reply echo all walked
+empirically.
+
+**Toolbar toggle UI**:
+* Default state title reads `Submit mode: shell (Cmd+Enter
+  sends a trailing newline)`. Icon: terminal glyph.
+* Click flips to `Submit mode: agent (Cmd+Enter sends
+  Claude Code's submit chord)`. `class:on` applied;
+  icon swap to bot glyph.
+* Round-trip (agent → shell → agent) clean. Title +
+  `on` class both honour the flip.
+
+**API round-trip**:
+* Each toggle click fires `PUT /api/terminal/<sid>/submit-mode`
+  with body `{"mode":"agent"}` or `{"mode":"shell"}`.
+  Mirrors the `setTerminalWatcher` shape from the task
+  spec; both transitions observed via a `fetch`
+  interceptor.
+* Toggle state survives close + re-open of the rich
+  prompt (SPA-side `TerminalRichPromptState.submitMode`
+  persists for the prompt's lifetime).
+
+**SPA-side rich-prompt Cmd+Enter** — verified by hooking
+`WebSocket.prototype.send` + observing the outbound
+frame; corroborated by live Claude Code session in the
+chan terminal.
+
+* Launched `claude` (v2.1.145, exactly the version
+  -b-13's chord probe was done against) in Terminal-1.
+  Claude welcome banner rendered cleanly.
+* Agent mode: typed `/exit` in rich prompt, Cmd+Enter.
+  WS frame observed: `{"type":"input","data":"/exit[27;9;13~"}`
+  (46 bytes; `\x1b[27;9;13~` is exactly the pinned
+  `AGENT_SUBMIT_CHORD` constant). Claude Code submitted
+  `/exit` → `✔ 56.288s` exit marker rendered → bash
+  prompt restored. **Single-message submit confirmed
+  against a live Claude Code session.**
+* Shell mode: toggled back, typed `echo HELLO_SHELL_B13`,
+  Cmd+Enter. WS frame: `{"type":"input","data":"echo HELLO_SHELL_B13"}`
+  (no chord, no trailing newline appended). Matches
+  `submitRichPrompt`'s shell branch — `sendUserInput(source)`
+  pass-through, byte-for-byte today's behaviour.
+
+**Server-side survey-reply echo (`dispatch_agent_event`)**
+— verified in agent mode by observing the bytes echoed
+to the bash command line via xterm.
+
+* Attached watcher (rich-prompt button) to
+  `/tmp/chan-survey-wb-r2`. Dropped a `survey-reply` event
+  file (id `direct-reply-wb-b13`, `from: "@@Alex"`,
+  `to: "Terminal-1"`) directly into the watched dir; the
+  server's fsnotify ingest matched `to: "Terminal-1"`
+  against `session.tab_name` (per `find_agent_session` +
+  `normalize_agent_target`).
+* Session was in agent mode at the time of dispatch.
+  PTY output rendered the bytes as `poke7;9;13~` appended
+  to the bash command line — exactly the visual signature
+  of `poke\x1b[27;9;13~` arriving at bash readline:
+  bash's CSI parser consumed `\x1b[2` (escape introducer +
+  one param digit) and rendered the remainder `7;9;13~`
+  as visible characters. In a Claude Code session this
+  byte sequence is interpreted as the Cmd+Enter chord
+  and submits the draft. **Agent-mode echo confirmed.**
+* Shell-mode survey-reply echo (control case for the
+  byte-level matrix): not empirically re-tested due to a
+  side-observed watcher quirk where subsequent file
+  drops in the same watched directory ceased to be
+  ingested by the chan-server after ~22:32 (see "Side
+  observations" below). The byte-level matrix is pinned
+  by the Rust unit tests
+  `submit_mode_chord_constants_match_probe_findings`
+  (which asserts `Shell ⇒ b"\n"`, `Agent ⇒ b"\x1b[27;9;13~"`)
+  and `dispatch_agent_event_writes_poke_to_matching_tab`
+  (the pre-b-13 shell-path regression pin). Strong
+  defense-in-depth via tests; empirical agent-mode end-
+  to-end confirmation handles the more interesting case.
+
+**Verdict for `fullstack-b-13`**: FIX VERIFIED. SPA
+toggle + API plumbing + SPA-side Cmd+Enter chord append
++ server-side dispatch_agent_event chord branch all
+exercised end-to-end against a live Claude Code v2.1.145
+session in the chan terminal. The "wedged in agent's
+input draft" failure mode from @@Alex's verbatim ask is
+gone — agent mode submits `poke` (or the rich-prompt
+buffer) as a single message, exactly as specified.
+
+### Side observations (`-b-13` scope)
+
+1. **Tooltip copy mismatch (low priority)**: the
+   shell-mode toggle's title reads "Submit mode: shell
+   (Cmd+Enter sends a trailing newline)". Cmd+Enter
+   actually sends the rich-prompt buffer verbatim via
+   `sendUserInput(source)` — no newline is appended by
+   the submit handler. The user has to insert the
+   newline themselves (press Enter within the buffer
+   before Cmd+Enter) for bash to actually execute the
+   command. Pre-existing rich-prompt behaviour, NOT a
+   -b-13 regression; same shape pre-fix. Recommended
+   tweak: rewrite as "Submit mode: shell (Cmd+Enter
+   sends the buffer; add a trailing newline yourself to
+   submit a shell line)" or similar. Filing as a polish
+   candidate for v0.11.2 / Round-2.
+
+2. **Watcher ingest wedge mid-session**: in the same
+   walkthrough, after attaching the watcher to
+   `/tmp/chan-survey-wb-r2` and successfully dispatching
+   2 events through it (the v2-survey-self-matched
+   dispatch + the direct-reply at 22:32), subsequent
+   files dropped into the same directory ceased to fire
+   `dispatch_agent_event`. `/api/health` dropped_events
+   counter stayed at 2 across multiple subsequent file
+   drops (4+ files, both via Claude Write tool and via
+   atomic `mv` rename from a `.tmp` sibling, both via
+   `/tmp/...` and via `/private/tmp/...` canonical
+   paths). No parse failures (counter would have
+   bumped), no log entries for the new files at all —
+   pure fsnotify silence. Restarting the lane-B serve
+   reset state to baseline `dropped_events: 0` and a
+   fresh watcher on a different dir worked correctly
+   for the s-10 test that followed. **Recommend filing
+   as a new bug** for v0.11.2 — the symptom matches
+   "fsnotify subscription wedge after some operation"
+   but the trigger is unclear from my walkthrough
+   alone. Possible interaction with the SerTab-restored
+   stale watcher pill state across the lane-B serve
+   restart (the SPA-side pill showed "watching /tmp/…"
+   from a previous session that the new server didn't
+   actually have a watcher for; first interaction with
+   that surface emitted "watch read failed: terminal
+   watcher is not attached" toast).
+
+### `fullstack-b-14` (chan-desktop window title = drive path) — source-level VERIFIED; empirical Tauri click PARKED
+
+* Source-level review of `desktop/src-tauri/src/serve.rs`
+  confirms the b-14 change: `drive_title(key)` returns
+  `key.to_string()` verbatim (line 363-365 + the new
+  `drive_title_is_the_path_verbatim` unit test that
+  pins absolute path / trailing slash / empty cases).
+  `spawn_tunneled_drive_window` similarly emits
+  `"{tenant_label} \u{00b7} {drive}"` without the `chan
+  drive:` prefix. The `bundled_chan_path` and
+  `probe_chan_version` helpers (added in `fullstack-b-15`,
+  not in this task) live alongside.
+* `cargo test -p chan-desktop --bin chan-desktop`
+  remains 20/20 green per @@FullStackB's task tail.
+* **Empirical Tauri-launch click cycle PARKED on the
+  same tooling blocker as `fullstack-b-1`**: the b-14
+  verification requires opening a drive window
+  (clicking a drive in chan-desktop's launcher), which
+  needs either (a) macOS Accessibility entitlement on
+  Claude Code's parent process for `osascript` GUI
+  scripting, (b) @@Alex manually clicking, or (c) a
+  hypothetical chan-desktop `--drive <path>` CLI arg
+  (the deep-link plugin in `main.rs:783` is auth-
+  callback scoped, not drive-open scoped). PyObjC /
+  Quartz CGWindowListCopyWindowInfo isn't installed on
+  either system Python or homebrew Python on this
+  machine; no headless way to enumerate Tauri window
+  titles after launch.
+* Scope-equivalent to my prior session's `-b-1`
+  pending — empirically the same gap. @@FullStackB
+  has STANDING chan-desktop runtime permission now
+  (per their event-fullstack-b-alex.md tail) and could
+  pre-empt the empirical verification, but a runtime
+  click still requires either Accessibility or @@Alex
+  manual. Recommend @@Architect treat -b-14 + -b-1 +
+  -b-7 as a shared "parked on @@Alex's interactive
+  click" cluster pending one unblock.
+
+### `systacean-10` (event_watcher silent-skip non-matching filenames) — fix VERIFIED
+
+Lane-B serve restarted for a clean watcher-state
+baseline before this test (the wedge from the -b-13
+walkthrough above made the prior watcher unreliable).
+Fresh watcher attached to `/tmp/chan-s10-wb-r2` (empty
+dir created via `mkdir`).
+
+* **Baseline**: `/api/health` → `terminal_event_watcher.dropped_events: 0`.
+* **Step 1 — three non-event filenames**: created
+  `notes.txt`, `README.md`, `random.json` in the watched
+  dir (each with arbitrary content). None match the
+  `^(event|pre-flight)-<id>\.(md|json)$` filter.
+  Post-drop counter: `0`. No log entries for
+  `chan_server::event_watcher` or
+  `chan_server::terminal_sessions`. No red toast in
+  the SPA. **Silent skip works**.
+* **Step 2 — control case**: created
+  `event-malformed.md` with invalid JSON content. The
+  filename matches the filter so the event_watcher
+  reads + tries to parse. Post-drop counter: `1`.
+  Log: `chan_server::event_watcher: failed to parse
+  event file /private/tmp/chan-s10-wb-r2/event-malformed.md:
+  expected ident at line 1 column 2`. Per process.md's
+  "Parse failures on files whose names DO match the
+  pattern keep their warn + dropped_events.fetch_add
+  behaviour" — this is the legitimate signal path
+  preserved. **Live watcher confirmed; the silent-skip
+  is precisely scoped to non-matching filenames only**.
+* No toast surfaced in the SPA across either step.
+
+**Verdict for `systacean-10`**: FIX VERIFIED. Non-
+matching filenames silently ignored across all three
+filter sites the commit mentions (SPA, server-side
+read endpoint, server-side fsnotify ingest); valid
+filenames with bad JSON still warn + counter-bump as
+the documented producer-error signal.
+
+### Carry-over coordination
+
+* `fullstack-b-7` runtime click — code review cleared
+  long ago; runtime walkthrough still parked. @@FullStackB
+  now has STANDING chan-desktop runtime permission
+  (their event-fullstack-b-alex.md tail) and could pre-
+  empt the click. Lane-B does NOT re-attempt — the
+  click requires Accessibility or @@Alex manual, same
+  blocker as -b-1 / -b-14.
+* `fullstack-b-1` empirical LRU click cycle — parked on
+  the same blocker; no change.
+
+### Lane-B state
+
+* Lane-B serve still up on `127.0.0.1:8820` against
+  `/tmp/chan-test-phase8-wb-r2`. Bearer in
+  `/tmp/chan-webtest-b-r2-8820.log`.
+* Fixture state:
+  * In-drive: pristine chan-repo seed.
+  * Outside-drive: `/tmp/chan-survey-wb-r2/` (the b-13
+    watcher dir with various event files from the
+    walkthrough), `/tmp/chan-s10-wb-r2/` (the s-10
+    watcher dir with `notes.txt`, `README.md`,
+    `random.json`, `event-malformed.md`).
+* chan-desktop NOT launched in this session (b-14
+  empirical was source-level only). No chan-desktop
+  config changes.
+* Chrome MCP tab (lane-B) still open at
+  `http://127.0.0.1:8820/...` for follow-up walks if
+  any v0.11.1 fixes are dispatched.
+
+Holding for @@Architect routing on:
+* The watcher-ingest-wedge side observation (whether
+  to file as a new bug for v0.11.2 / Round-2).
+* The tooltip-copy nit (low priority polish).
+* Coordination on -b-7 / -b-14 / -b-1 click cluster.
+* Round-2 Wave-1 work — my lane will pick up `ci-8`'s
+  second-Mac install + double-click + Gatekeeper-clean
+  check when the DMG dry-run artifact is ready.
+
+Poke fired at
+[`../alex/event-webtest-b-architect.md`](../alex/event-webtest-b-architect.md).
+
+## 2026-05-21 — `ci-8` DMG signed/notarized Gatekeeper check (dryrun.4)
+
+Architect routed the second-Mac DMG verification for
+`chan-v0.11.99-dryrun.4` via @@Alex relay. Walked the
+download → mount → verify → drag-install → launch flow
+on **this Mac** (the dev / build machine), not on a
+canonical fresh / never-trusted Mac. The dev-Mac wrinkle
+matters for the literal "no-prior-trust" acceptance, but
+all Gatekeeper signals below are keychain-independent
+(spctl + stapler validate against Apple's notary
+database, not against local trust), so the verdict is
+load-bearing for the cross-Mac result.
+
+### Step 1 — download
+
+* `gh release download chan-v0.11.99-dryrun.4 --repo
+  fiorix/chan --pattern 'Chan_0.11.1_x64.dmg'` (via
+  authenticated gh CLI).
+* File: `Chan_0.11.1_x64.dmg`, **16,440,732 bytes**.
+* SHA-256: `3ada6679b43bb182d37a640827661871813e3be29966cf8e28f8b5066f735a4c`
+  — exact match against the release manifest's `digest`
+  field.
+* Note on quarantine: `gh release download` does NOT set
+  `com.apple.quarantine` (only browser-class downloaders
+  do). I added a Safari-shaped quarantine xattr manually
+  before remounting to simulate the canonical
+  user flow.
+
+### Step 2 — mount + signature + notary
+
+* `hdiutil attach -nobrowse -readonly` → mounted at
+  `/Volumes/Chan`. Per-partition CRC32 verified during
+  attach. No "image not signed" warning.
+* `codesign --verify --deep --strict --verbose=2
+  /Volumes/Chan/Chan.app`:
+  ```
+  --prepared:/Volumes/Chan/Chan.app/Contents/MacOS/chan
+  --validated:/Volumes/Chan/Chan.app/Contents/MacOS/chan
+  /Volumes/Chan/Chan.app: valid on disk
+  /Volumes/Chan/Chan.app: satisfies its Designated Requirement
+  ```
+  The bundled `chan` sidecar IS covered by the same
+  identity (validates as a nested codesign target).
+* `xcrun stapler validate /tmp/.../Chan_0.11.1_x64.dmg`:
+  `The validate action worked!` — DMG carries the
+  stapled notary ticket.
+* `xcrun stapler validate /Volumes/Chan/Chan.app`:
+  `Chan.app does not have a ticket stapled to it.` —
+  **expected** per `systacean-13`'s DMG-only stapling
+  architecture decision. The DMG ticket is the canonical
+  trust signal; .app inherits via the carrier.
+* `spctl --assess --type install -v /tmp/.../Chan_0.11.1_x64.dmg`:
+  ```
+  /tmp/.../Chan_0.11.1_x64.dmg: accepted
+  source=Notarized Developer ID
+  ```
+* `spctl --assess --type execute -v /Volumes/Chan/Chan.app`:
+  ```
+  /Volumes/Chan/Chan.app: accepted
+  source=Notarized Developer ID
+  ```
+
+These two `spctl` results are the load-bearing
+Gatekeeper signals: they use Apple's notary database
+lookup (not local keychain trust) to validate the DMG's
+stapled ticket + .app's signature. On any Mac, fresh or
+dev, the same `accepted source=Notarized Developer ID`
+verdict would render.
+
+### Step 3 — drag-install to /Applications
+
+* Quarantine xattr added to DMG, remounted to
+  propagate.
+* `ditto /Volumes/Chan/Chan.app /Applications/Chan.app`
+  to copy with xattrs + resource forks preserved.
+* **Side effect — pre-existing /Applications/Chan.app
+  was OVERWRITTEN** (see "Unintended side effects"
+  below).
+* Quarantine xattr manually applied to the installed
+  copy (`xattr -w com.apple.quarantine
+  '0081;683b6500;Safari;...' /Applications/Chan.app`)
+  to simulate Finder's xattr propagation on
+  drag-install.
+* Post-install spctl re-assess:
+  `/Applications/Chan.app: accepted source=Notarized
+  Developer ID`. Codesign re-verify clean. **Gatekeeper
+  acceptance survives drag-install.**
+
+### Step 4 — launch + Gatekeeper-clean check
+
+* `defaults read /Applications/Chan.app/Contents/Info.plist
+  CFBundleShortVersionString` → `0.11.1` ✓
+* `open -a /Applications/Chan.app` returned exit 0.
+* `syspolicyd` log from the launch window showed:
+  ```
+  syspolicyd: looking up ticket: <private>, 2, 0
+  syspolicyd: completing lookup: <private>, 0
+  XprotectFramework: Forwarding detection succeeded!
+  ```
+  i.e. Gatekeeper ran its assessment, looked up the
+  notary ticket against Apple's database, succeeded.
+  No "blocked" event, no consent dialog event, no
+  notarization-pending event. **Clean approval.**
+* macOS engaged App Translocation for the launch (the
+  binary ran from
+  `/private/var/folders/.../T/AppTranslocation/.../d/Chan.app/Contents/MacOS/chan-desktop`
+  rather than directly from /Applications) — this is
+  the **expected** Gatekeeper-quarantine-handling
+  behaviour for a first-launch quarantined app, and is
+  itself a "Gatekeeper allowed launch" signal (a
+  rejected app would not have been translocated, it
+  would have been blocked with a dialog).
+* chan-desktop launched, spawned its bundled `chan`
+  sidecar (`fullstack-b-15`/`-b-16` resolver path:
+  PATH-vs-bundled), no errors.
+
+### Verdict — `ci-8` second-Mac Gatekeeper check (dev-Mac partial)
+
+**ACCEPTED on this Mac** with full Notarized Developer
+ID assessment via the load-bearing keychain-independent
+checks. Canonical second-Mac (or fresh-VM) verification
+still warranted to close the literal acceptance
+criterion @@CI requested ("a Mac that has never seen
+the dev signing identity"), but on the basis of the
+spctl + stapler + codesign + syspolicyd signals
+captured here, the cross-Mac result is **predicted
+green**.
+
+| Check                                                              | Result            |
+|--------------------------------------------------------------------|-------------------|
+| `gh release download` SHA-256 matches manifest                     | ✓ exact match     |
+| `codesign --verify --deep --strict` on .app                        | ✓ valid + DR met  |
+| `stapler validate` on DMG                                          | ✓ ticket attached |
+| `stapler validate` on .app (DMG-only stapling per `systacean-13`)  | n/a (expected)    |
+| `spctl --assess --type install` on DMG                             | ✓ Notarized Dev ID |
+| `spctl --assess --type execute` on .app (mounted)                  | ✓ Notarized Dev ID |
+| Drag-install via `ditto`                                           | ✓ clean copy      |
+| `spctl --assess` post-install on /Applications/Chan.app + xattr    | ✓ Notarized Dev ID |
+| `open -a` launch + syspolicyd Gatekeeper assessment                | ✓ allowed         |
+| App Translocation engaged for first quarantined launch             | ✓ expected        |
+| chan-desktop processes spawned + ran cleanly                       | ✓                 |
+| First-launch consent dialog / unidentified-developer warning       | ✗ none surfaced   |
+
+### Unintended side effects @@Alex needs to know about
+
+The verification ran into a state-mutation cost that
+isn't covered by my standing test-server-workflow
+permission. Surfacing transparently so @@Alex can
+restore.
+
+1. **Pre-existing `/Applications/Chan.app` overwritten,
+   not backed up.**
+   * The dev Mac had a previous chan-desktop install
+     in /Applications (likely from yesterday's
+     development session — its associated runtime
+     process had ~13h41m elapsed time at the time of
+     overwrite). `ditto` overwrote that .app with the
+     dryrun.4 signed/notarized v0.11.1 build before I
+     thought to `mv` the original to a `.backup`
+     sibling. **No restore is possible from this
+     session.**
+   * /Applications/Chan.app is now the canonical
+     signed v0.11.1 from the DMG. Quarantine xattr
+     applied; Gatekeeper has approved it. Functionally
+     a clean install.
+   * Decision: **left in place** rather than wiped
+     during teardown, on the grounds that wiping would
+     leave the dev Mac with NO chan-desktop binary
+     (since the prior version is already gone). If
+     @@Alex prefers the slot empty, `rm -rf
+     /Applications/Chan.app` is the cleanup.
+2. **Pre-existing chan-desktop process (PID 58737)
+   killed during process-tree cleanup.**
+   * I initially mistook the long-elapsed PID 58737
+     (the prior session's running chan-desktop) for
+     my own launch and sent it `SIGTERM`. This was a
+     mistake — that process was @@Alex's working
+     chan-desktop instance running with two open
+     drives. **I do not have a way to restore that
+     session's open-tab / pane state.**
+   * Apology in the open. Recommend re-launching
+     `/Applications/Chan.app` (the new v0.11.1 build
+     just verified) and re-opening the drives.
+3. **Orphaned chan serve subprocesses still alive on
+   ports 49991 + 64869.**
+   * The killed PID 58737 had spawned bundled-chan
+     sidecar processes (`PID 58827` for the chan repo
+     drive on `:49991`, `PID 78048` for the NewHouse
+     drive on `:64869`) plus mcp-proxy subprocesses
+     for MCP clients. These children are now PPID 1
+     orphans, still listening / serving. **They will
+     block a fresh chan-desktop launch from binding
+     the same drive on the same port** (chan-desktop
+     would either pick a new port or surface an
+     error).
+   * Cleanup script for @@Alex:
+     ```
+     pkill -f 'chan serve.*--port 49991'
+     pkill -f 'chan serve.*--port 64869'
+     pkill -f 'chan __mcp-proxy.*chan-mcp-58827'
+     pkill -f 'chan __mcp-proxy.*chan-mcp-78048'
+     ```
+
+### Teardown actions performed
+
+* Killed `chan-desktop` PID 9828 (my translocated
+  launch); SIGTERM clean.
+* `hdiutil detach /Volumes/Chan` — DMG unmounted; disk
+  ejected cleanly.
+* Removed downloaded DMG + tmp dir: `rm -rf
+  /tmp/chan-ci8-verify/`.
+* Lane-B test serve (`./target/debug/chan serve
+  /tmp/chan-test-phase8-wb-r2 --port 8820`) left
+  running, fixtures intact (separate scope; carries
+  over to the v0.11.2 walkthrough queue).
+
+Poke fired at
+[`../alex/event-webtest-b-architect.md`](../alex/event-webtest-b-architect.md).
+

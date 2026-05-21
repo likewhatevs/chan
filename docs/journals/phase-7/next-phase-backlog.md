@@ -683,6 +683,24 @@ phases.
     apex-domain support).
 * Decommission the VPS once DNS is verified +
   the new site is serving for a soak period.
+* **Donation QR placement** (added 2026-05-21):
+  the same donation QR shipped in the
+  in-app About section
+  (`web/public/qr-donate.png`, see
+  [`../phase-8/fullstack-a/fullstack-a-42.md`](../phase-8/fullstack-a/fullstack-a-42.md))
+  also lands somewhere on chan.app —
+  candidate placements: footer "support the
+  project" block; a small Support page
+  linked from the nav; inline on the
+  download page next to the install
+  instructions. Implementer picks at task-
+  cut. Same asset on both surfaces (in-app
+  + website); if the QR ever rotates, both
+  surfaces need refresh — flag at fan-out.
+  Copy tone matches @@Alex's voice (not
+  marketing): "If Chan is a daily driver
+  for you, scan to send a tip. Optional;
+  the project is free either way."
 
 ### 6.2 Documentation manual (`docs/manual`)
 

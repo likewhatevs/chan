@@ -162,3 +162,53 @@ First proper unsigned `chan-v0.11.1` artifacts get
 produced by `release-desktop.yml`'s tag handler.
 Signed-DMG pipeline with real Apple Developer ID
 keys is Round-2 work (per request.md).
+
+## 2026-05-21 — chan v0.11.2 cut + pushed
+
+Round-2 patch wave shipped. First signed + notarized
+release. @@Alex's transcribed go signal arrived via
+[`../alex/event-architect-systacean.md`](../alex/event-architect-systacean.md)
+"approved (transcribed by @@Architect) — chan-v0.11.2 GO".
+
+### Pushed refs
+
+```
+60901c164e34bc5aad76bc721814bb06dcb75f72  refs/heads/main
+bc14828d2ee50ebda9e93ee3b80a47c0c9a80d0c  refs/tags/chan-v0.11.2
+```
+
+```
+   7b5a126..60901c1  main -> main
+ * [new tag]         chan-v0.11.2 -> chan-v0.11.2
+```
+
+### Sequence executed (mirrors the v0.11.1 anchor above)
+
+1. Pre-push gate workspace-wide green: fmt + clippy `-D warnings` + cargo test + `RUSTFLAGS=-D warnings cargo build --no-default-features` + svelte-check (0e 0w) + vitest (586/586) + vite build.
+2. Version bump `0.11.1` → `0.11.2` across 5 manifests (`Cargo.toml`, `Cargo.lock` via `cargo build -p chan`, `desktop/src-tauri/tauri.conf.json`, `web/package.json`, `web/package-lock.json`). Runtime: `./target/debug/chan --version` → `chan 0.11.2`.
+3. Release commit `60901c1` — `chan v0.11.2` (5 files, +15 / -15). Pre-commit `git diff --staged --stat` + post-commit `git show --stat HEAD` audits clean; per-path `git add` skipped ~30 other agents' modified files.
+4. Annotated tag `chan-v0.11.2` at `bc14828` pointing to `60901c1`. Body from [`../architect/commit-plan-v0.11.2.md`](../architect/commit-plan-v0.11.2.md) §"Tag draft (v0.11.2)" written verbatim via `/tmp/chan-v0.11.2-tag-body.txt`.
+5. `git push origin main --follow-tags`.
+
+### Tag-triggered workflow
+
+`release-desktop.yml` fired on the `chan-v*` matcher.
+
+* **Run**: 26221281508
+* **URL**: https://github.com/fiorix/chan/actions/runs/26221281508
+* **Expected artifact location**: https://github.com/fiorix/chan/releases/tag/chan-v0.11.2
+
+Signed pipeline AUTO-FIRES (B.2 secrets populated; v0.11.2 is the first signed release per the plan revision). Notary turnaround expected ~10-11 min per `ci-8` dryrun.4 baseline.
+
+### Acceptance criteria — all met
+
+* ✓ Pre-push gate green across all listed checks.
+* ✓ Version bumped in every relevant manifest.
+* ✓ Tag created with the canonical commit-plan body.
+* ✓ Push completed; commit + tag confirmed on remote.
+* ✓ Signed `release-desktop.yml` workflow fired on tag.
+* @@Architect notification poke fired to [`../alex/event-systacean-architect.md`](../alex/event-systacean-architect.md).
+
+### What this commit ships (v0.11.2)
+
+10 fixes across 9 v0.11.2 task commits + ~6 pre-landed Wave-1 commits + ci-9 verify-step patch + ci-4 `^2` major-only fix + fb-20/fb-21 hotfixes from ci-8 dryruns #3/#4. Full task list in [`../architect/commit-plan-v0.11.2.md`](../architect/commit-plan-v0.11.2.md) §"Scope". First signed + notarized macOS DMG ships via `release-desktop.yml`; Linux .AppImage / .deb / .rpm + Windows MSI signing remain Round-2 wave-2 work.

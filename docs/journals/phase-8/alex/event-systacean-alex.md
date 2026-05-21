@@ -71,3 +71,39 @@ Plus the new "Apple Developer ID signing" section in `desktop/CLAUDE.md` per the
 ### Proceed
 
 @@Systacean lands the JSON rotation commit on the next inbound poll. Commit subject per the task body's pattern + commit-readiness append at the tail of [`../systacean/systacean-11.md`](../systacean/systacean-11.md).
+
+## 2026-05-21 — permission (systacean-12: tauri-plugin-updater dry-run on macOS)
+
+`-12` steps 3-4 done (test minisign keypair + mock-feed JSON + Tauri config-override all scaffolded under `/tmp/chan-updater-test/`). Architect approved Option C (temporary test caller via `--check-update-now` CLI flag in `main.rs`); now need runtime time on this workstation for the actual dry-run.
+
+### What I need to do
+
+1. Add a `#[cfg(debug_assertions)]`-gated `--check-update-now` CLI handler to `desktop/src-tauri/src/main.rs` (~30 LOC; calls `update.check()` against the override-configured endpoint, logs the result). Removed (or feature-flag-gated) after verify completes.
+2. Start a background `python3 -m http.server 8765 --directory /tmp/chan-updater-test/` (serves `latest.json` + `fake-bundle.tar.gz` + signature).
+3. `cargo tauri dev --config /tmp/chan-updater-test/override.json -- --check-update-now` from `desktop/src-tauri/`. The override redirects `plugins.updater.endpoints` to `http://127.0.0.1:8765/latest.json` + replaces the pubkey with the throwaway test pubkey. Canonical `tauri.conf.json` NOT modified.
+4. Observe + capture log lines: check() detects update 0.99.0, download URL hits the http.server, signature-verify pass, apply-step attempts (fake bundle WILL fail apply — boundary of pre-flight verification per the task spec).
+5. Iterate the three failure modes: invalid signature, corrupted download, version downgrade attempt.
+
+### Why I need permission
+
+* **Runtime launch of chan-desktop** via `cargo tauri dev` — interactive Tauri window opens; not covered by @@Systacean's standing permissions today (unlike @@FullStackB / @@WebtestB who got standing grants on 2026-05-20).
+* **Background http.server on port 8765** — small footprint but a foreground-running localhost process; teardown via kill.
+* **Temporary edit to `desktop/src-tauri/src/main.rs`** — the file is in concurrent-agent modified state per `git status`; pre/post-commit audit + `git commit -- <pathspec>` race-safe form is the plan. Edit is reverted (or kept behind a debug-build feature flag) after verify completes.
+
+### Duration
+
+~30 min wall-clock. The check + download + verify pathway is fast (sub-second per Tauri's plugin internals). Most of the time is the iteration on the three failure-mode variants + capturing log lines for the findings writeup.
+
+### Teardown
+
+* `kill` the python3 http.server background job.
+* `rm -rf /tmp/chan-updater-test/` (removes test keypair, mock manifest, fake bundle, override file).
+* Revert OR feature-gate the test-caller edit in `desktop/src-tauri/src/main.rs` — commit decision per @@Architect's review.
+
+### Linux + Windows verify
+
+NOT in this permission. The cross-platform verify per the task body's "Verified on Linux + Windows via VM or @@Alex's secondary machines (coordinate on which environments are available)" needs a separate ask once macOS is green. Fire that when ready.
+
+### Approval shape
+
+Append a `## 2026-05-21 — approved` (or "approved-with-caveats" / "denied") section below. Or in-chat is fine if you'd rather just say "go" and Architect transcribes.

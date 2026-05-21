@@ -106,3 +106,111 @@ plumbing), and the FB-spawn helper in `store.svelte.ts`
 ## Open questions
 
 (populated as you investigate)
+
+## 2026-05-21 — ready for review
+
+### Piece A — FB expand-state persistence
+
+**Audit verdict**: the bug entry's hypothesis "Persistence
+to SerTab was never wired" is incorrect. `be?: string[]` on
+SerTab has existed since `fullstack-64` and round-trips
+`BrowserTab.expanded` faithfully. Proof: the existing
+`fullstack-58` round-trip test at `tabs.test.ts:457`
+("round-trips per-tab BrowserTab view state") asserts
+`expanded` survives serialize→restore for a multi-tab
+session. That test passes today.
+
+Additionally, `FileBrowserSurface.svelte` lines 101-150
+implement a snapshot-on-deactivate / restore-on-activate
+mechanism: when a tab activates, `restoreFromTab` writes
+`tab.expanded` into the module-level `treeExpanded.map`;
+on deactivate, `snapshotIntoTab` captures the live map
+back into `tab.expanded`. A continuous tracker effect
+(line 142) keeps `tab.expanded` in sync with the singleton
+on every map mutation. All three layers (data model +
+in-session snapshot/restore + continuous tracking) are
+present.
+
+I did NOT rename `be` to `fbe`. Doing so would break wire
+compatibility with already-persisted sessions (existing
+SerTabs encode the field as `be`); a no-op rename costs
+more than it earns.
+
+If @@Alex still observes lost expand-state on the v0.11.2
+walkthrough — i.e., the symptom is real but the diagnosis
+mis-identified the failure mode — we'd need a live repro
+with DevTools to narrow which of the three layers
+mis-fires. Most plausible suspect: Svelte 5 effect-order
+race on FB-A → FB-B switch in the same pane (effect 3's
+continuous tracker reading the singleton before effect 1
+restores it). Doesn't reproduce in unit tests.
+Architect's call on whether to file a follow-up tracker
+if the symptom persists.
+
+### Piece B — FB spawn always creates a new tab
+
+**Root-caused.** `openBrowser()` in `store.svelte.ts:1663`
+falls through to `focusExistingBrowserTab() ??
+openBrowserInActivePane()`. The spawn-chord path
+`spawnBrowserFromContext` in `App.svelte:304` called
+`openBrowser()` → focus-existing wins whenever an FB tab
+already exists anywhere in the layout.
+
+Fix: keep `openBrowser` for the `revealPathInBrowser` flow
+(which legitimately wants focus-existing for "reveal this
+file in the FB"), but route the chord path directly to
+`openBrowserInActivePane` (always-new).
+
+Two related fixes:
+
+1. **Title numbering.** `openBrowserInActivePane` now picks
+   a title via `nextBrowserTitle()` — same shape as
+   `nextTerminalTitle`. First tab = `Files`, then `Files 2`,
+   `Files 3`, … . Used by the `browserTabLabel` fallback
+   when no drive context is present + helps disambiguate
+   the tab strip when two un-selected FBs sit side-by-side.
+2. **Select threading.** `openBrowserInActivePane` accepts
+   `{ select?: string | null }`. When set, the new tab
+   gets `selected: <path>` directly. This avoids the prior
+   pattern (prime `browserSelection` via `revealAndSelect`
+   THEN spawn) which was racing with `restoreFromTab`'s
+   mount-time wipe (`browserSelection.path = source.selected
+   ?? null`). The chord path still calls `revealAndSelect`
+   to prime expansion of parent dirs but threads the leaf
+   path directly into the new tab.
+
+### Files touched
+
+| File                            | Change                                                                              |
+|---------------------------------|-------------------------------------------------------------------------------------|
+| `web/src/state/tabs.svelte.ts`  | `openBrowserInActivePane({ select })` + `nextBrowserTitle` helper                   |
+| `web/src/App.svelte`            | `spawnBrowserFromContext` bypasses `openBrowser` → directly calls `openBrowserInActivePane({ select })`; import reordered |
+| `web/src/state/tabs.test.ts`    | 3 new pins: enumerated titles, select threading, no-select default                  |
+
+### Suggested commit subject
+
+```
+File browser: chord spawn always creates new tab + enumerated titles + select threading (fullstack-a-39)
+```
+
+Note the deviation from the task spec on piece A: no new
+SerTab field, no rename of `be`. The journal section above
+documents the audit verdict + the no-change rationale.
+
+### Gate
+
+* vitest **578 / 578** (+3 net in `tabs.test.ts` for the
+  new spawn behaviour).
+* svelte-check 0 errors / 0 warnings across 3982 files.
+* npm build clean.
+
+### Composition
+
+* `-a-32`'s `resolveSpawnContext()` is the upstream context-
+  resolution helper used by `spawnBrowserFromContext`.
+  Unchanged.
+* `-a-36` / `-a-37` / `-a-38` in working tree but
+  independent.
+
+Picking up `-a-40` (Wysiwyg outline-style dotted numbering)
+next.

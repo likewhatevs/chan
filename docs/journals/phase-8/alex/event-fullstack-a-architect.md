@@ -1345,6 +1345,342 @@ cut once you clear each.
 
 Push held. Standing by for review / clearance.
 
+## 2026-05-21 — poke (fullstack-a-36 ready for review)
+
+Picked up the v0.11.2 mini-wave dispatch, starting with
+`-a-36` per the recommended order (DEV META-BLOCKER pair
+with `-b-17`).
+
+`fullstack-a-36` ready for review. Four files. New
+`web/src/api/desktop.ts` runtime-seam module
+(`isTauriDesktop` + generic `tauriInvoke` + the two
+feature helpers `reloadWindow` / `openWebInspector`),
+`Pane.svelte` rewires the two pane-context-menu entries
+to call those helpers (Reload → window reload; Toggle Web
+Inspector renamed to Open Inspector + icon swap PanelRight
+→ Bug + drops the in-app inspector-pane fall-through),
+plus 11 new test pins in `desktop.test.ts` and a label
+update in `Pane.test.ts`.
+
+IPC names match `-b-17`'s locked contract verbatim
+(`reload_window`, `open_devtools`). Dispatch is safe to
+commit ahead of `-b-17` — until `-b-17` lands, the IPC
+will fail-and-fallback (reload → `window.location.reload`;
+inspector → toast hint). Once `-b-17` is in HEAD + the
+desktop binary rebuilds, the wire is hot.
+
+Web-build behaviour: Reload calls
+`window.location.reload()`; Open Inspector surfaces
+`notify("Use the browser's built-in inspector (Right-click
+→ Inspect Element)")` — chose toast-with-hint over
+hide-the-entry so the user gets a discoverable answer.
+
+Gate green: vitest 555/555 (+11), svelte-check 0/0 across
+3980 files, npm build clean.
+
+See [../fullstack-a/fullstack-a-36.md](../fullstack-a/fullstack-a-36.md)
+for the full impl note + suggested commit subject.
+
+Push held for the v0.11.2 commit-grouping cut. Moving on
+to `-a-37` (file moved/deleted false-positive) next while
+you review. DevTools isn't strictly needed for the SPA-
+side investigation — watcher + self-writes seams are
+grep-able from source.
+
+## 2026-05-21 — poke (fullstack-a-37 ready for review)
+
+`fullstack-a-37` ready for review. Root-caused on the SPA
+seam: `onWatchEvent` in `store.svelte.ts` was firing
+`markTabFileMissing` IMMEDIATELY on the first
+`Removed`/`Renamed` frame for an open file's path. Atomic-
+write patterns (temp+rename) make the inode briefly vanish;
+chan-server's 1500 ms self-write dedupe (`self_writes.rs`)
+catches most echoes but races leak through, and external
+editors (Xcode / VS Code) skip the dedupe entirely. The
+SPA had no recovery debounce → panel surfaced on every
+leak.
+
+Three-piece fix per the task spec:
+
+1. **Debounced recovery check.** New
+   `scheduleMissingFileCheck` (150 ms debounce) replaces
+   immediate `markTabFileMissing` on the watcher path. On
+   timer fire, re-stats the path. If file is back, no
+   panel. If gone, NOW mark missing. Dirty buffer is
+   protected — existence probe only, no clobber. Pending
+   checks cancel on a non-missing frame (Created/Modified
+   confirms the file is back without waiting).
+2. **In-place Re-open.** New `attemptInPlaceReopen` —
+   `doReopenMissing` tries to reload the original path
+   first; on success panel goes away. On 404, falls through
+   to the existing FB-navigation flow for manual pick.
+   Handles both false-positive lingering AND genuinely-
+   moved cases.
+3. **Find-suggest inline UX.** Extended `FileMissingState`
+   with `suggestedPath?`. `runSuggestReopenLookup` runs
+   after every confirmed `markFileMissing`; basename search
+   filtered to exact matches at a different path; only
+   populates `suggestedPath` when there's a unique
+   candidate. New "Re-open there" primary button +
+   "Looks like it moved to <code>" inline hint
+   conditional on the field.
+
+Gate green: vitest 568/568 (+10 new in
+`src/state/missingFileRecovery.test.ts` covering debounced
+recovery + dirty-buffer guard + suggest-uniqueness + in-
+place reopen success/fail), svelte-check 0/0 across 3981
+files, build clean.
+
+See [../fullstack-a/fullstack-a-37.md](../fullstack-a/fullstack-a-37.md)
+for the full root-cause writeup + suggested commit
+subject.
+
+Note on the test infrastructure: Svelte 5 `$state` proxies
+don't reflect mutations onto raw object references
+captured BEFORE the put-into-layout step. New tests use a
+`readTab(id)` helper that reads through the proxy for
+post-mutation assertions. Adds a useful pattern for future
+state-mutation tests.
+
+Push held for the v0.11.2 commit-grouping cut. Moving on
+to `-a-38` (notification surface polish: spinner 0:00
+gating + Copied path auto-dismiss) next.
+
+## 2026-05-21 — poke (fullstack-a-38 ready for review)
+
+`fullstack-a-38` ready for review. Two-piece task; both
+landed in one cohesive commit.
+
+**Pre-flight spinner gating.** Root-caused in
+`BubbleOverlay.svelte::elapsedLabel` — startMs derives from
+either `event.topic` (numeric) or a 10+-digit timestamp in
+`event.id`; when neither yields a positive number the label
+falls through to `0:00` and the spinner branch fires
+forever. Architect-fired pre-flight events carry no timing
+field, so the bug was 100% repro on @@Alex's dogfood.
+Picked option 1: extracted `preFlightStartMs` /
+`hasPreFlightTiming` helpers, gated the `.preflight-status`
+div on `hasPreFlightTiming(event)`. Events WITH timing
+(future emitters that pack `started_at` into topic/id)
+still render the spinner + tick unchanged.
+
+**Transient status taxonomy.** Added `ui.statusKind:
+"transient" | "persistent" | null` (explicit in the data
+model per spec). New `setTransientStatus(msg, ms = 3000)`
+helper schedules a self-cancelling timer with identity-
+guarded clear (persistent writes that land mid-window are
+NOT clobbered). `setNotifyHandler` rewired so every
+`notify(msg)` caller gets auto-dismiss for free. Migrated
+"Copied path" + "copy failed" in FileTree to `notify()`;
+migrated `opened X` / `selected X` window_command writes
+to `setTransientStatus`. Direct `ui.status = ...` writes
+stay persistent (conservative: 30+ existing call sites
+unchanged). Audit verdict for follow-up: per-action error
+tails (rename / create / delete / duplicate failed) are
+obvious transient candidates; left as-is for v0.11.2
+discipline + future polish pass.
+
+Gate green: vitest 575/575 (+7 — 5 in
+`transientStatus.test.ts`, 2 in `BubbleOverlay.test.ts`),
+svelte-check 0/0 across 3982 files, build clean.
+
+See [../fullstack-a/fullstack-a-38.md](../fullstack-a/fullstack-a-38.md)
+for the full audit table + suggested commit subject +
+composition notes.
+
+Push held. Moving on to `-a-39` (FB tab state polish)
+next. Three of six done; -a-39/-40/-41 remaining and all
+independent.
+
+## 2026-05-21 — poke (fullstack-a-39 ready for review — DEVIATES from spec on piece A)
+
+`fullstack-a-39` ready for review with a deliberate
+deviation on piece A. Flagging up front:
+
+**Piece A — FB expand-state persistence — AUDIT VERDICT, NO CODE CHANGE.**
+
+The bug entry's hypothesis ("Persistence to SerTab was
+never wired") is incorrect. `be?: string[]` on SerTab has
+existed since `fullstack-64` (pre-phase-8) and round-trips
+`BrowserTab.expanded` faithfully — proof: the existing
+`fullstack-58` test at `tabs.test.ts:457` asserts
+`expanded` survives serialize→restore for a multi-tab
+session, and it passes. Plus `FileBrowserSurface.svelte`
+has all three layers wired (data model + snapshot-on-
+deactivate / restore-on-activate + continuous tracker).
+The architect's suggested fix (add `fbe?` field) would
+duplicate `be`. The suggested rename `be → fbe` would
+break wire compat with already-persisted sessions.
+
+So: didn't add `fbe`. If @@Alex still observes lost
+expand-state on the v0.11.2 walkthrough, the symptom is
+real but the bug entry's root-cause diagnosis was wrong;
+most plausible alternate suspect is a Svelte 5 effect-
+order race on FB-A → FB-B switch in the same pane
+(effect 3 reads singleton before effect 1 restores it).
+Doesn't reproduce in unit tests; needs DevTools repro.
+Flagging this for your call on whether to file a separate
+tracker.
+
+**Piece B — FB spawn always new — FIXED.**
+
+`spawnBrowserFromContext` in `App.svelte` was routing
+through `openBrowser()` which falls through to
+`focusExistingBrowserTab()`. Bypassed to call
+`openBrowserInActivePane()` directly (always-new). Plus:
+
+* `openBrowserInActivePane` now accepts `{ select?: string |
+  null }` so the chord can thread the focused context's
+  path into the new tab's `selected` field directly,
+  sidestepping the `restoreFromTab` mount-wipe race.
+* `nextBrowserTitle()` helper assigns enumerated titles —
+  `Files`, `Files 2`, `Files 3`, … — same shape as
+  `nextTerminalTitle`. Used as the `browserTabLabel`
+  fallback + disambiguates the tab strip for unselected
+  FB tabs.
+
+Gate green: vitest 578/578 (+3 new in tabs.test.ts for the
+spawn behaviour), svelte-check 0/0 across 3982 files,
+build clean.
+
+See [../fullstack-a/fullstack-a-39.md](../fullstack-a/fullstack-a-39.md)
+for the audit-verdict writeup + suggested commit subject.
+
+Push held. Moving on to `-a-40` (Wysiwyg outline-style
+dotted numbering) next. Four of six done; -40 / -41 to go.
+
+## 2026-05-21 — poke (fullstack-a-40 + fullstack-a-41 ready for review — v0.11.2 wave complete on my lane)
+
+Both landed in this session.
+
+**`-a-40` ready** — outline-style dotted markers in the
+wysiwyg. **Spec adjustment**: the spec recommended pure CSS
+counters + `::marker` declarations assuming nested `<ol><li>`
+HTML; chan's wysiwyg renders list markers as SOURCE TEXT
+inside `.cm-md-list-line` siblings, so CSS counters can't
+replace them. Implemented the right CM6 idiom instead:
+`Decoration.replace` widget over the `ListMark` range,
+rendering the dotted chain via a recursive walk of the
+`OrderedList` lezer tree. Source markdown unchanged — pure
+display recompute. New `orderedMarkerLabel(prefix, index)`
+pure helper exposed for test-pinning. Comment header at the
+top of `blocks.ts` refreshed (the "OrderedList: no marker
+replacement" line was stale post-fix). 3 vitest pins on the
+label function; full integration verification falls to the
+lane-A walkthrough.
+
+**`-a-41` ready** — source-mode list-keymap intervention
+stripped. Root-caused in one read: `@codemirror/lang-markdown`'s
+`markdown(config)` defaults `addKeymap: true`, which wires
+`{ key: "Enter", run: insertNewlineContinueMarkup }` at high
+precedence. Wysiwyg uses `chanMarkdown()` which already sets
+`addKeymap: false`; source mode (`Source.svelte`) was using
+the built-in `markdown()` without the override. One-line fix:
+both `markdown()` call sites in `Source.svelte` now pass
+`{ addKeymap: false }`. 5 new vitest pins in
+`sourceModeListKeymap.test.ts` — including a sanity-check
+pin that PROVES the bug exists with the default config (so
+a future lang-markdown semantics-change surfaces here).
+
+### v0.11.2 wave state on my lane
+
+All six tasks (-a-36 / -a-37 / -a-38 / -a-39 / -a-40 /
+-a-41) ready for review. Six standalone commits queued in
+the working tree.
+
+| Task   | Subject (suggested)                                                                                  | Gate            |
+|--------|------------------------------------------------------------------------------------------------------|-----------------|
+| -a-36  | Tab right-click Reload + Open Inspector: SPA dispatch via Tauri IPC                                  | vitest 555/555  |
+| -a-37  | Missing-file panel: debounced recovery check + in-place Re-open + suggest-reopen UX                  | vitest 568/568  |
+| -a-38  | Notification surface: pre-flight spinner gating + transient status auto-dismiss                       | vitest 575/575  |
+| -a-39  | File browser: chord spawn always creates new tab + enumerated titles + select threading              | vitest 578/578  |
+| -a-40  | Wysiwyg: outline-style dotted ordered-list markers                                                    | vitest 581/581  |
+| -a-41  | Source mode: disable lang-markdown auto-list continuation keymap                                      | vitest 586/586  |
+
+Final gate clean: vitest 586/586, svelte-check 0/0 across
+3983 files, npm build clean.
+
+### Spec deviations to flag
+
+* **`-a-39` piece A**: did NOT add `fbe?` SerTab field. The
+  bug entry's "Persistence to SerTab was never wired" was
+  incorrect — `be` has existed since `fullstack-64` with
+  full round-trip + snapshot/restore + continuous tracker.
+  If @@Alex still sees lost expand-state on the v0.11.2
+  walkthrough, the symptom is real but the diagnosis was
+  wrong; suspect Svelte 5 effect-order race that doesn't
+  reproduce in unit tests. Your call on filing a follow-up.
+* **`-a-40` shape**: CM6 widget instead of pure CSS counters.
+  See -a-40 journal for the rationale.
+
+Push held for the v0.11.2 commit-grouping cut. Standing
+down on the queue. Awaiting batch clearance + commit
+order recommendation.
+
+## 2026-05-21 — poke (v0.11.2 wave commits landed in your recommended order)
+
+All six v0.11.2 commits landed locally in your recommended
+order. Per-file `git add` discipline throughout; pre-commit
+`git diff --staged --stat` audit caught a stowaway at the
+start of -a-37 and recovered cleanly.
+
+| Commit    | Subject                                                                                                       |
+|-----------|---------------------------------------------------------------------------------------------------------------|
+| `9f68b11` | Tab right-click Reload + Open Inspector: SPA dispatch via Tauri IPC (fullstack-a-36)                          |
+| `6f1850a` | Missing-file panel: debounced recovery check + in-place Re-open + suggest-reopen UX (fullstack-a-37)          |
+| `a03ecad` | Notification surface: pre-flight spinner gating + transient status auto-dismiss (fullstack-a-38)              |
+| `de4d4fd` | File browser: chord spawn always creates new tab + enumerated titles + select threading (fullstack-a-39)      |
+| `72bff66` | Wysiwyg: outline-style dotted ordered-list markers (fullstack-a-40)                                            |
+| `5c9acca` | Source mode: disable lang-markdown auto-list continuation keymap (fullstack-a-41)                              |
+
+Commits interleaved with @@FullStackB's `-b-17` / `-b-19` and
+@@CI's `ci-9` (which landed between mine in real time). Each
+of mine cleared its own pre-commit audit; no cross-lane
+contamination.
+
+### Commit hygiene incidents
+
+* **-a-37 stowaway catch.** First staging round picked up
+  pre-staged @@FullStackB `-b-17` work (`desktop/src-tauri/*`
+  + an outbound journal). Caught by `git diff --staged --stat`
+  before commit; recovered via `git restore --staged
+  <stowaway-files>` + re-audit. The
+  `feedback_shared_worktree_commits` discipline worked exactly
+  as designed.
+* **Shared-file split**: `tabs.svelte.ts` carried hunks for
+  both -a-37 (FileMissingState + scheduleMissingFileCheck +
+  attemptInPlaceReopen + runSuggestReopenLookup) and -a-39
+  (openBrowserInActivePane + nextBrowserTitle). Same for
+  `store.svelte.ts` (-a-37 watcher rewire + -a-38 statusKind /
+  setTransientStatus) and `tabs.test.ts` (my -a-39 pins +
+  @@FullStackB's -b-18 pins). Split via the
+  save-snapshot / checkout-HEAD / re-apply-target-hunk /
+  restore-snapshot pattern from the prior session — each
+  commit landed single-purpose.
+
+### Verification
+
+* My 67 test pins across the wave (across
+  `api/desktop.test.ts` + `missingFileRecovery.test.ts` +
+  `transientStatus.test.ts` + `BubbleOverlay.test.ts` +
+  `Pane.test.ts` + `blocks.test.ts` +
+  `sourceModeListKeymap.test.ts`) all pass against the
+  committed HEAD.
+* Full pre-push gate was green before commits (vitest
+  586/586 + svelte-check 0/0 across 3983 files + npm build
+  clean).
+* Working tree post-commits: clean for my files; leftover
+  `tabs.svelte.ts` + `tabs.test.ts` + `TerminalRichPrompt.svelte`
+  diffs are @@FullStackB's pending -b-18 work (untouched).
+
+### Push state
+
+Local `main` ahead of `origin/main` by the v0.11.2 batch.
+Push held per protocol until @@Systacean cuts `chan-v0.11.2`
+per the commit-plan. My lane is queue-empty for v0.11.2;
+standing by for walkthrough verdicts from @@WebtestA/B + any
+commit-time issues across the shared-worktree dance.
+
 ## 2026-05-20 — poke (sub-wave commits landed in your recommended order)
 
 Four code commits + one docs commit landed locally per

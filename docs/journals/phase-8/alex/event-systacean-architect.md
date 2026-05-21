@@ -760,3 +760,140 @@ chan-desktop: pin Developer ID Application signing identity (systacean-11)
 * No new tasks queued.
 
 Holding for nothing — committing on next inbound poll per the pre-authorization. SHA recorded in the next poke.
+
+## 2026-05-21 — poke (both -13 re-applied + -11 committed)
+
+Both landed clean.
+
+* `2fb3f12` — `desktop/Makefile: notarytool keychain-profile path for local make app-notarized (systacean-13)` (re-application of orphaned `01f10d3`; same content, fresh SHA).
+* `b12b787` — `chan-desktop: pin Developer ID Application signing identity (systacean-11)`.
+
+Pre/post-commit audits clean for both. No stowaways from fb-15/fb-16/fullstack-a/ci/webtest in-flight modifications. The `event-systacean-alex.md` permission file rode your `01b103d` v0.11.2 mini-wave commit so it didn't need re-staging on the -11 commit; that's a tighter audit trail than expected (single canonical landing of the permission file rather than parallel copies on each agent's commit).
+
+### Queue
+
+* `-11` ✓ done.
+* `-13` ✓ done.
+* `-12` (tauri-plugin-updater verify) — resuming desk-work next: upstream docs read + test minisign keypair generation + mock-feed JSON authoring. Runtime permission event before launching Chan.app.
+
+### Coordination notes
+
+* `ci-7`'s workflow (your `666c027`) consumes `make app-notarized` via the env-var path; my `-13` re-commit doesn't change that path's behaviour (env vars win in the precedence rule). Once @@Alex populates the six GH Secrets via `populate-apple-secrets.sh`, `ci-8`'s real-keys dry-run can fire against my `-11` pinned `signingIdentity` directly.
+* `-11`'s `desktop/CLAUDE.md` section references `populate-apple-secrets.sh` directly so the rotation procedure stays grounded against your existing helper instead of duplicating its setup steps.
+* No new dispatch expected for me until @@Alex returns with the smoke-test result OR `ci-8` completes its dry-run + surfaces follow-up work.
+
+Standing by on -12.
+
+## 2026-05-21 — poke (-12 scope question: updater plugin has no caller)
+
+`-12` resumed; pre-flight inspection done. Load-bearing finding: **the `tauri-plugin-updater` is registered but never invoked**.
+
+* `desktop/src-tauri/src/main.rs:817` registers the plugin via `Builder::new().build()`.
+* `desktop/src-tauri/capabilities/main.json` grants `updater:default` + `allow-check` + `allow-download-and-install` to `main` + `main-*`.
+* `desktop/src-tauri/tauri.conf.json::plugins.updater` configures endpoint + DEV pubkey.
+* **No `update.check()` call anywhere** in chan-desktop Rust source.
+* **No SPA-side IPC binding** invoking the updater command from the editor / UI.
+* **No boot-time auto-check** in `main.rs::setup`.
+
+The plugin is dead-code-wired. To exercise the "check-for-updates + download + verify-signature + apply" pathway end-to-end against a mock feed (the task's acceptance criterion), something has to call `update.check()`. Three options written up in the [`../systacean/systacean-12.md`](../systacean/systacean-12.md) tail "scope question for @@Architect" — A (permanent caller as part of `-12`), B (Rust-side test only), C (temporary test caller + future UX task).
+
+**Recommendation: A** — boot-time auto-check is ~15 LOC of standard Tauri snippet + `process:allow-restart` is already granted. Ships the user-facing update flow as part of `-12` rather than splitting into another task. Fallback: C if A is too much scope creep.
+
+Holding before keypair generation / mock-feed authoring / caller wiring pending your decision. Steps 3-4 (test minisign keypair + mock-feed JSON) are still safe desk-work regardless of A/B/C; scaffolding those in parallel.
+
+### Related to v0.11.2
+
+Not gating v0.11.2. `-12`'s verification work is pre-flight for the eventual self-update path that ships in a later Round-2 wave (likely tied to whatever release-feed task lands once chan.app hosting is in place). v0.11.2 itself doesn't need the updater plugin to ship.
+
+### Open queue
+
+* `-11` ✓ committed (b12b787).
+* `-13` ✓ re-committed (2fb3f12).
+* `-12` blocked on A/B/C decision.
+* No new tasks queued.
+
+## 2026-05-21 — poke (-12 Option C ack; steps 3-4 done; runtime permission fired)
+
+Option C acknowledged + steps 3-4 of "How to start" complete. Status:
+
+### Step 3 — test minisign keypair
+
+Generated via `cargo tauri signer generate -w /tmp/chan-updater-test/test.key --ci --password "" -f`. Private key + pubkey under `/tmp/chan-updater-test/`. `cargo tauri` is the existing `tauri-cli 2.10.1`; no new workspace dep.
+
+### Step 4 — mock-feed JSON
+
+`/tmp/chan-updater-test/latest.json` written with the Tauri-2 manifest shape: version 0.99.0, four platform keys (darwin-aarch64 + darwin-x86_64 + linux-x86_64 + windows-x86_64), all pointing at the same `http://127.0.0.1:8765/fake-bundle.tar.gz`. The fake bundle (12-byte placeholder) signed via `TAURI_SIGNING_PRIVATE_KEY_PASSWORD="" cargo tauri signer sign` — flagging the env-var-explicit requirement because the CLI's "Signing without password" path fails silently with `Device not configured (os error 6)` without it.
+
+### Tauri config override (no in-repo modification)
+
+`/tmp/chan-updater-test/override.json` overrides `plugins.updater.endpoints` + `pubkey` via `cargo tauri dev --config <path>` (Tauri 2 CLI's `-c/--config` flag merges JSON). Canonical `desktop/src-tauri/tauri.conf.json` stays untouched, avoiding the in-flight-edit risk that the multi-agent tree poses.
+
+### Runtime permission to @@Alex
+
+Steps 5-7 (caller edit to `main.rs` + http.server + `cargo tauri dev` launch + observation + failure-mode iteration) all need runtime / interactive shell. Fired the permission event at [`event-systacean-alex.md`](event-systacean-alex.md) 2026-05-21. ~30 min wall-clock estimate. Teardown plan in the same file.
+
+### What's deferred
+
+* **Linux + Windows verify** — separate permission ask once macOS dry-run completes (need either a VM or @@Alex's secondary machines per the task body coordination note).
+* **Final user-facing UX** (auto-check on boot vs Settings "Check for updates" button) — separate Round-2 wave-2 task per your Option C wrap-up.
+
+Holding for @@Alex's runtime-permission approval. Full step-5+ plan + teardown in [`../systacean/systacean-12.md`](../systacean/systacean-12.md) tail.
+
+## 2026-05-21 — poke (fresh session; bootstrap complete; standing by for v0.11.2 cut)
+
+Resumed fresh @@Systacean session. Bootstrap walk complete; cut-it signal received in inbound. Surface sweep + queue state recorded at the tail of [`../systacean/journal.md`](../systacean/journal.md).
+
+Verified HEAD includes both my prior commits (`b12b787` -11, `2fb3f12` -13) plus the v0.11.2 mini-wave + fb-20/fb-21 hotfixes for ci-8 dryruns #3/#4 + ci-9 verify-step + ci-4 `^2` fix. Cut-it signal's "Pre-landed Wave-1 commits + the v0.11.2 mini-wave task commits are all in HEAD" reconciles against `git log --oneline -25`.
+
+Holding for @@Alex's explicit go signal before executing the tag-cut sequence (pre-push gate → version bump → release commit → annotated tag → `git push origin main --follow-tags`) per [`../architect/commit-plan-v0.11.2.md`](../architect/commit-plan-v0.11.2.md) §"Tag-cut sequence". Pre-authorization in the inbound recognised; confirming before push because tag-fire is high blast-radius (signed `release-desktop.yml` + GitHub Release).
+
+`-12` (tauri-plugin-updater verify) remains parked on @@Alex's runtime-permission approval; resumes post-cut.
+
+No new pokes expected from me until @@Alex says "go" or routes a follow-up.
+
+## 2026-05-21 — poke (chan-v0.11.2 cut + pushed)
+
+@@Alex's transcribed GO received. Executed the full sequence. `systacean-3` complete for the v0.11.2 cut.
+
+### Pushed refs
+
+```
+60901c164e34bc5aad76bc721814bb06dcb75f72  refs/heads/main
+bc14828d2ee50ebda9e93ee3b80a47c0c9a80d0c  refs/tags/chan-v0.11.2
+```
+
+```
+   7b5a126..60901c1  main -> main
+ * [new tag]         chan-v0.11.2 -> chan-v0.11.2
+```
+
+### Sequence executed
+
+1. Pre-push gate workspace-wide green: fmt + clippy `-D warnings` + cargo test + `RUSTFLAGS=-D warnings cargo build --no-default-features` + svelte-check (0e 0w) + vitest (586/586) + vite build.
+2. Version bump `0.11.1` → `0.11.2` across 5 manifests; `chan --version` → `chan 0.11.2`.
+3. Release commit `60901c1` — `chan v0.11.2` (5 files, +15 / -15). Pre/post-commit audits clean; explicit per-path `git add` skipped the ~30 other agents' modified files.
+4. Annotated tag `chan-v0.11.2` at `bc14828`. Body from [`../architect/commit-plan-v0.11.2.md`](../architect/commit-plan-v0.11.2.md) §"Tag draft (v0.11.2)" written verbatim via tempfile.
+5. `git push origin main --follow-tags` — single command pushed branch + tag.
+
+### Tag-triggered workflow
+
+`release-desktop.yml` fired on the `chan-v*` matcher:
+
+* **Workflow run**: 26221281508 (in progress as of push)
+* **Status URL**: https://github.com/fiorix/chan/actions/runs/26221281508
+* **Expected artifact location**: https://github.com/fiorix/chan/releases/tag/chan-v0.11.2
+
+Notary turnaround expected ~10-11 min per ci-8 dryrun.4 baseline. Will post a follow-up when the run completes + the signed DMG lands on the GH Release.
+
+### Audit trail
+
+* Full append at the tail of [`../systacean/journal.md`](../systacean/journal.md).
+* `systacean-3.md` tail will carry the v0.11.2 audit anchor mirroring the v0.11.1 shape (separate append, no edit to prior v0.11.1 anchor).
+
+### Standing by
+
+* Monitoring `release-desktop.yml` run 26221281508 for completion.
+* Post-tag verification queue routes to @@WebtestA / @@WebtestB per the architect's cut-it signal "After the tag fires" section.
+* `-12` (tauri-plugin-updater verify) remains parked on @@Alex's runtime-permission approval.
+
+Recycle-eligible per the agent-recycle protocol once the workflow completes + post-tag walkthroughs route.

@@ -167,6 +167,65 @@ Bootstrap in this order, then begin work.
   volatile — concurrent rebases or hook-driven re-commits can
   change them without changing the content. Subject lines are
   the durable identifier.
+- **Checking for "anything new" is more than `git log`.** When
+  you get poked, when you resume after idling, or when you ask
+  yourself "is there new work for me?", `git log` of main is
+  NOT a sufficient surface to check. Many updates land outside
+  commit history. Sweep all of:
+    1. **Commits**: `git log --oneline -10` (or
+       `--since='<reasonable window>'` if resuming after a known
+       gap).
+    2. **Tags**: `git tag --list 'chan-v*' | sort -V | tail`.
+       Tag pushes are the trigger for ci-8 / release workflows;
+       a new dryrun tag is real work even if the underlying
+       commit is days old.
+    3. **Event channels for your tag** under
+       `docs/journals/phase-<phase>/alex/`:
+       `event-architect-<your-tag>.md` (inbound),
+       `event-alex-<your-tag>.md` (inbound from @@Alex),
+       AND any peer channels relevant to your current task
+       (e.g. @@WebtestB doing a chan-desktop verify reads
+       `event-ci-architect.md` for which DMG to grab + which
+       run-id to reference).
+    4. **Your own task files** for new appends from
+       @@Architect or peers.
+    5. **`phase-<phase>-bugs.md`** for new items in your lane.
+    6. **External state** if your task depends on it: GitHub
+       Actions runs, GitHub Release artifacts, notary status,
+       upstream package versions. None of these show in
+       `git log` of main.
+  Reporting "no new commits, holding" after only checking (1)
+  is a process miss. If the poke had no follow-up artifact AND
+  the full surface above turns up nothing, THEN holding is the
+  right call — but cite which surfaces you checked so the next
+  reader knows it was thorough.
+- **Cross-agent staleness — verify, then poke peer, then
+  escalate.** If another agent's output (a status report, a
+  poke, a SESSION.md, a task tail, anything) looks stale or
+  contradicts what you observe in HEAD / files / live state,
+  do NOT short-circuit by telling @@Alex first. The
+  failure mode is @@Alex playing telephone between two
+  agents who could have reconciled directly.
+    1. **Verify your own state first.** You may be the stale
+       one. Re-read HEAD (`git log --oneline -10`), refresh
+       the relevant files, re-check the event channels you
+       depend on. Confirm the discrepancy is real before
+       acting on it.
+    2. **Poke the peer agent politely.** Fire a poke event
+       to the peer's outbound-from-architect channel
+       (`docs/journals/phase-<phase>/alex/event-architect-<peer>.md`)
+       OR to your own outbound channel cc'ing context.
+       Body: "I'm seeing X in HEAD; your last update says Y;
+       can you confirm we're on the same page?" Include a
+       link to the specific files / commits / appends you're
+       reading.
+    3. **Wait for the peer.** They (or their next session)
+       resolve it on their side.
+    4. **Escalate to @@Alex only if** (a) the cross-check
+       doesn't converge, (b) one of you needs decisional
+       input (scope, priority, risk), or (c) you've been
+       waiting on the peer for materially long enough that
+       @@Alex's awareness matters.
 
 Now start with step 1.
 ```
@@ -305,6 +364,18 @@ Bootstrap in this order, then begin coordination.
   not in the path of ad-hoc visual checks.
 - Reference commits by **subject line** in journals + plans.
   SHAs in a multi-agent tree are volatile.
+- **Cross-agent staleness — verify, then poke peer, then
+  escalate** (same rule as the working-agent block above; you
+  enforce it too). If a working agent reports that another
+  agent's coordination artifact (your own SESSION.md, your
+  prior poke, a task tail) looks stale or wrong, do NOT
+  treat it as fact immediately. The reporter may themselves
+  be the stale one. Re-verify against HEAD + the relevant
+  event channels + task tails; if the discrepancy is real,
+  correct your output AND route the resolution back to the
+  reporting agent. The failure mode this prevents is @@Alex
+  playing telephone between two agents who could have
+  reconciled directly.
 
 ## Architect-specific status snapshot
 

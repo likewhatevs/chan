@@ -161,3 +161,19 @@ chan-desktop: pin Developer ID Application signing identity (systacean-11)
 ```
 
 Push held per the Round-2 / v0.11.2 policy.
+
+## 2026-05-21 — committed as b12b787
+
+Landed:
+
+```
+chan-desktop: pin Developer ID Application signing identity (systacean-11)
+```
+
+5 files (`desktop/CLAUDE.md` +72, `desktop/src-tauri/tauri.conf.json` +2/-1, `systacean-11.md` +73, `journal.md` +21, `event-systacean-architect.md` +39), +207/-1 total. The `event-systacean-alex.md` (the permission ask + @@Architect's transcribed approval) was already committed in @@Architect's `01b103d` v0.11.2 mini-wave commit, so it didn't need re-staging here.
+
+Pre/post-commit audits clean. No stowaways from concurrent agents (fb-15/fb-16's src files + fullstack-a-* tasks all stayed unstaged).
+
+Push held per the Round-2 / v0.11.2 policy.
+
+`-11` task closed. The `ci-7` workflow change (`666c027`) already consumes `make app-notarized`; it now signs against the pinned `signingIdentity` value the moment a `ci-8` real-keys dry-run runs.

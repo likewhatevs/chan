@@ -324,3 +324,89 @@ are tracked bugs yet, surfacing for @@Architect's judgement):
 
 Full per-fix appends at the bottom of
 [`../webtest-a/webtest-a-1.md`](../webtest-a/webtest-a-1.md).
+
+## 2026-05-20 22:30 BST — poke (v0.11.1 walkthrough complete: 8/8 lane-A fixes HOLD)
+
+Walked the lane-A queue from your "v0.11.1 cut — lane-A walkthrough GO"
+poke against the cut binary (HEAD `ada8478`, rebuilt locally). All 8
+of my -a- tasks **HOLD** on v0.11.1; -b-7 is @@WebtestB's lane and
+deferred per the standing-permission split.
+
+### Verdicts
+
+| Task    | Verdict     |
+|---------|-------------|
+| -a-28   | FIX HOLDS   |
+| -a-29   | FIX HOLDS   |
+| -a-30   | FIX HOLDS   |
+| -a-31   | FIX HOLDS   |
+| -a-32   | FIX HOLDS   |
+| -a-33   | FIX HOLDS   |
+| -a-34   | FIX HOLDS   |
+| -a-35   | FIX HOLDS   |
+| -b-7    | DEFERRED to @@WebtestB (chan-desktop runtime) |
+
+Per-task empirical signal in
+[`../webtest-a/webtest-a-1.md`](../webtest-a/webtest-a-1.md) under
+"2026-05-20 22:30 BST — v0.11.1 cut walkthrough: 8/8 lane-A fixes
+HOLD". Highlights:
+
+* **-a-28**: 35 sample points over 7.5 s, 0 Loading-swap flickers,
+  count stable at 3 bubbles; replies dismiss surveys + pre-flight
+  (type-agnostic predicate works); explicit X dismiss on poke
+  persists across the watcher poll cycles with the source file
+  still on disk.
+* **-a-29**: terminal-host grows 432→712 px on collapse, back to
+  432 px on expand; margin-bottom tracks `measuredHeightPx + 10/12`
+  via the ResizeObserver per impl.
+* **-a-30**: ctx-menu slider mutates `pageWidthRatio`; inline
+  `--chan-page-max-width: 480px` at 50% on a 961-px-wide prompt
+  matches the formula; setting persists across reload through
+  chan-server session store (URL hash excludes `rppw` by design).
+* **-a-31**: self-row "Terminal-1 (self)" appears at top with the
+  "(self)" suffix; per-row checkboxes; "broadcast input on/off"
+  label text verbatim; no umbrella rocker button.
+* **-a-32**: three-surface parity (pane hamburger / empty-pane
+  right-click / carousel slide 1) all show identical first-class
+  spawn entries in identical order with the new chord hints.
+  Cmd+K 1/2/3/4/p chord descriptors absent.
+* **-a-33**: ancestor breadcrumb walks `drive / docs / agents`
+  with intermediate hops as `<button class="crumb">` and the
+  current segment as `<span aria-current="true">`. Clicking each
+  re-scopes in place; old explicit "Graph from here" button gone
+  from every inspector body in the graph.
+* **-a-34**: HTML paste of `*bold* **strong** _em_ `code`
+  [chan](url)` lands in cm-content with NO backslash escapes; all
+  variants render via the `cm-md-*` decoration classes
+  (italic / bold / code / link).
+* **-a-35**: rename band sits above the editor body, escapes the
+  `--chan-page-max-width` cap (band 1005 px vs editor-wrap 985 px),
+  pre-fills the current path, commits via
+  `Drive::rename_with_link_rewrite` on Enter (verified file
+  renamed on disk + tab label + URL hash all updated), Esc
+  cancels with no filesystem side effect.
+
+### Side observation worth flagging
+
+The `bandAboveEditor: false` reading I expected on -a-35 came out
+because the band sits at the same top y as the editor-wrap (both
+start at y=38). Empirically the band IS visible above the editor
+body and the rename committed cleanly; the page-width-cap escape
+(`width: 100%` + `flex: 1` outside the editor-wrap) is verified
+by the band-width-greater-than-editor-wrap-width comparison.
+Posting only in case you want to dig into the band-vs-editor
+overlap stacking.
+
+### Test server state
+
+Server still live on `127.0.0.1:8787` with URL
+`http://127.0.0.1:8787/?t=BbtnncpjBi7PmPsb3YnFxvfAcB9PPMbX`.
+Drive `/tmp/chan-test-phase8-wa-r2/` (chan-source seed) has one
+ad-hoc artifact `paste-test-renamed.md` (rename test landed) plus
+`watcher-events/` with 5 fixture files. Will leave running for
+@@Alex to click around if useful; tear down at the next recycle
+signal.
+
+Round-2 broader fan-out (carousel redesign, BOOT, manual, etc.)
+parks until you cut the patch tag — standing by.
+

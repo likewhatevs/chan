@@ -975,3 +975,267 @@ Full section added to
 revisited" (between the metadata import/export scope sketch
 and the Wave-2 dispatch table). Cross-references this journal
 entry as the decisions-log anchor.
+
+## 2026-05-21 — v0.11.2 cut cleared + WebtestB scope tightening + 2 bugs filed
+
+@@Alex resumed from a crashed session. Only @@WebtestB
++ @@Architect up. Three decisions landed in one turn:
+v0.11.2 cleared to cut, WebtestB standing perm
+tightened for Gatekeeper-verification subset, two new
+bugs filed from the dryrun.4 walkthrough fallout.
+
+### Recovery context (for the audit trail)
+
+@@WebtestB's `ci-8` dryrun.4 Gatekeeper-clean walkthrough
+on the dev Mac (see [`../alex/event-webtest-b-architect.md`](../alex/event-webtest-b-architect.md)
+"ci-8 dryrun.4 Gatekeeper verify — ACCEPTED on dev Mac")
+produced the right verdict but three state-mutations
+that weren't in scope:
+
+1. `/Applications/Chan.app` overwritten by `ditto` (no
+   `.backup` sibling first).
+2. @@Alex's working chan-desktop PID 58737 SIGTERM'd by
+   mistake ("elapsed-time triage" misidentified it as
+   the agent's own launch).
+3. `xattr -w com.apple.quarantine` manually applied to
+   `/Applications/Chan.app` to "simulate Finder
+   drag-install" — triggered App Translocation on
+   @@Alex's next launch + surfaced the runtime
+   translocation banner.
+
+@@Alex's recovery: `pkill chan` + `kill -9 <PIDs>` on
+the orphan `chan serve` children, `xattr -dr
+com.apple.quarantine /Applications/Chan.app`, relaunch.
+The `pkill` + `kill -9` dance is opaque enough that
+regular users would be stranded — promoted to a bug
+entry (see below).
+
+### v0.11.2 cut cleared
+
+@@Alex chose option 3 (accept dev-Mac partial; defer
+canonical fresh-Mac check). Reasoning: the
+keychain-independent signals (spctl + stapler + codesign
++ syspolicyd) are strong enough to predict cross-Mac
+green; the literal acceptance-criterion fresh-Mac walk
+is deferred to next time the verification fires under
+tightened scope rules.
+
+Cut-it signal landed in
+[`../alex/event-architect-systacean.md`](../alex/event-architect-systacean.md)
+"chan-v0.11.2 cut-it signal" — @@Systacean tags on next
+bootstrap. @@CI's workflow auto-fires (signed pipeline);
+no immediate dispatch needed
+([`../alex/event-architect-ci.md`](../alex/event-architect-ci.md)
+"workflow auto-fires" poke landed in parallel).
+
+### WebtestB scope tightening (perm clarification, not revocation)
+
+Three explicit exclusions added to the standing
+chan-desktop runtime permission for the Gatekeeper-
+verification subset (full text in
+[`../alex/event-architect-webtest-b.md`](../alex/event-architect-webtest-b.md)
+"Scope clarification..."):
+
+1. **Never touch `/Applications/Chan.app`.** Custom
+   install destinations only (`/tmp/chan-ci8-verify/...`
+   or @@Alex's secondary Mac / fresh VM).
+2. **Process ownership by capture, not triage.** Capture
+   the launched PID at spawn; only SIGTERM that PID.
+   No `pkill -f chan-desktop`. No "high elapsed time
+   so it must not be mine" inference.
+3. **No `xattr -w com.apple.quarantine` on system
+   paths.** Real fresh-Mac verification can't be
+   simulated locally; honest options are secondary Mac,
+   fresh VM, or documented partial-acceptance.
+
+Plus a pause-and-warn rule from @@Alex: next time the
+verification scope reaches the canonical fresh-Mac
+Gatekeeper-clean check, @@WebtestB fires a permission
+event to @@Alex BEFORE starting + waits for the choice
+between (a) pausing the working session + resuming via
+iTerm and (b) running on the secondary Mac. The
+@@Alex-closes-their-working-app step is destructive and
+cannot be made unilaterally by the agent.
+
+Throwaway-drive runtime walkthroughs are unaffected;
+this is a perm SUBSET clarification for the DMG-install
+shape only.
+
+### Two new bugs filed in `phase-8-bugs.md`
+
+Both Round-2 wave-2 candidates (NOT v0.11.2 — patch wave
+is closing, both need investigation time):
+
+1. **chan-desktop leaves bundled `chan serve` sidecars
+   orphaned after parent dies; new desktop launches
+   can't bind the same drive.** @@FullStackB lane (with
+   possible @@Systacean cross-pollination if chan-drive
+   needs a lock-takeover protocol primitive). Want:
+   prevention (sidecar reap on chan-desktop exit via
+   process group + Drop handler — defense in depth) +
+   recovery UX (lock-takeover dialog with auto-kill of
+   confirmed-orphan chan sidecar + user toast). REGRESSION-
+   class severity; surfaces every time chan-desktop is
+   killed ungracefully, which @@Alex just demonstrated
+   happens.
+2. **Terminal watcher silently stops dispatching events
+   mid-session (ingest wedge).** @@Systacean lane (same
+   ingest plumbing as `systacean-9` + `systacean-10`).
+   @@WebtestB observed it during the `-b-13` walkthrough;
+   serve restart cleared it but the SerTab pill stayed
+   "active" on a serve with no watcher attached, then
+   first interaction surfaced `terminal watcher is not
+   attached`. Want: diagnose the wedge (ingest channel
+   saturation? task panic?) + SerTab state reconciliation
+   on serve restart. Silent-failure UX bug.
+
+### Lane state after this turn
+
+| Agent          | State                                                              |
+|----------------|--------------------------------------------------------------------|
+| @@Architect    | This session.                                                      |
+| @@WebtestB     | Up; chan-desktop runtime perm tightened; v0.11.2 walkthrough next  |
+| @@Systacean    | Not spawned; cut-it poke waiting on next bootstrap                 |
+| @@CI           | Not spawned; workflow auto-fires on tag; ack-poke landed           |
+| @@FullStackA   | Not spawned; Round-2 wave-2 queue waiting                          |
+| @@FullStackB   | Not spawned; new orphan-sidecar bug + Round-2 wave-2 queue waiting |
+| @@WebtestA     | Not spawned; v0.11.1 + v0.11.2 walkthrough queue waiting           |
+
+@@Alex spawns @@Systacean next to cut the tag. The other
+five agents land at the session-recycle point post-tag.
+
+### What's owed to @@Alex (none load-bearing)
+
+* I'll route the post-tag walkthrough queue to @@WebtestA
+  + @@WebtestB when the v0.11.2 GH Release artifacts
+  land. The tightened WebtestB scope rules apply to any
+  DMG-install walk in that queue.
+* Cleanup of `chan-v0.11.99-dryrun.{1..4}` tags from the
+  remote — parked behind the v0.11.2 cut, not urgent.
+
+## 2026-05-21 — Hybrid back-side decisions extended: Search → FB-back, About section build-out, donation QR
+
+@@Alex locked two previously-open round-2-plan questions
++ requested a fresh task for the freed Settings-overlay
+space.
+
+### Open question #2 — LOCKED
+
+"Where does Hybrid File Browser back land in v1?" Previously
+recommended placeholder for v1; @@Alex's call 2026-05-21 is
+to make the FB back the **Search / Indexing settings surface**.
+Drive-level search settings (semantic search toggle from
+`-a-21`; future multi-model picker from Round-3 Track 2)
+migrate out of `SettingsPanel.svelte` into
+`HybridFileBrowserConfig.svelte`. Rationale Alex's framing:
+config-lives-next-to-the-affected-surface — FB is where
+indexed content surfaces + where search results land users.
+Added to the round-2-plan implementation breakdown as **Task
+F — Search settings migration to Hybrid FB back**.
+
+### Open question #3 — CLOSED by #2's lock
+
+"Does the search overlay become a Hybrid surface?" Closed:
+overlay (`Cmd+K F`) stays a global overlay; settings
+(toggles + model picker) move to FB-back per #2. Two surfaces
+disambiguated — overlay = global query UI; settings = FB-back
+config. No further design churn.
+
+### New task — Settings About section build-out + donation QR
+
+Cut as [`../fullstack-a/fullstack-a-42.md`](../fullstack-a/fullstack-a-42.md)
+(also added as **Task G** in the round-2-plan implementation
+breakdown). Background: with Tasks A-F shedding ~70% of
+`SettingsPanel.svelte` to the Hybrid back-sides, the freed
+space gets repurposed as a proper About section:
+
+* chan version (preserve current wire from `-b-12`).
+* chan paths — drive root + embedded stores + config path
+  (surfaced authoritatively from chan-server, NOT
+  client-guessed).
+* GitHub repo link — copy + open-in-browser.
+* **Donation QR** — `web/public/qr-donate.png`
+  pre-committed by @@Architect alongside the task file
+  (61 KB; black-on-white 2D code). Short copy in @@Alex's
+  voice ("If Chan is a daily driver for you, scan to send
+  a tip. Optional; the project is free either way.")
+* Existing attribution preserved (Source Code Pro OFL
+  from `-b-12`; future markmap MIT when it lands).
+
+Sequenced AFTER Tasks A + B + C + F land in HEAD — this
+task's prereq is the Settings page actually being trimmed.
+
+### Backlog item 6 — companion website QR
+
+Updated [`next-phase-backlog.md`](../../phase-7/next-phase-backlog.md)
+§6.1 "Website migration (chan.app)" — added a "Donation QR
+placement" bullet so the chan.app migration work picks up
+the same QR asset for the marketing site (footer Support
+block, inline on the download page, or a Support page —
+implementer picks at fan-out). Same asset on both surfaces;
+flag QR rotation as a dual-touch surface.
+
+### Asset under version control
+
+`web/public/qr-donate.png` (61 KB) committed alongside the
+task file. Reference path from the SPA: `/qr-donate.png`
+(Vite + chan-server static-asset pipeline both serve
+`web/public/` at root).
+
+### Cut-it sequencing reminder
+
+This work is Round-2 wave-2; doesn't touch the v0.11.2 cut
+in flight with @@Systacean. v0.11.2 ships first; Hybrid
+wave-2 fan-out happens at session-recycle after the cut.
+
+## 2026-05-21 — Phase-9 vision captured (forward-look; not phase-8 scope)
+
+@@Alex shared the directional intent for phase-9 in
+session 2026-05-21: a new @@Architect lane focused on
+desktop-native cross-platform (macOS, Linux, Windows)
+with native keybindings + native chan-binary integration.
+Full vision captured at
+[`phase-9-desktop-native-vision.md`](phase-9-desktop-native-vision.md)
+so it survives session recycle; saved to memory as
+`project_phase_9_desktop_native_vision.md` for cross-
+session inheritance.
+
+### Headline shape (one-paragraph TL;DR for any architect on bootstrap)
+
+Boundary between desktop-native and chan moves to the
+DRIVE level at the NETWORK layer — `chan-tunnel-proto`
+generalizes to local-fork / attached-outbound /
+attached-inbound modes. Desktop-native is always a
+network consumer; never the filesystem authority. Three
+big open questions for @@Alex to lock before phase 9
+opens: embed-vs-separate chan binary (architect leans
+embed-by-default + keep separate for CLI), default Chan
+drive lifecycle ("delete the Chan drive = factory
+reset"), cross-version protocol stability commitment.
+
+### Why this is captured now, not at phase-9 open
+
+Phase 9 is months out; @@Alex's session-context is
+freshest now. Capturing while the framing is precise
+prevents drift. The vision doc also gives future-
+@@Architect (and any spawn of the eventual desktop-
+native architect) a single starting reference.
+
+### Carryovers from phase-8 that touch phase-9
+
+* `fullstack-b-15 / -16` (PATH-first probe + bundled
+  fallback) — if phase 9 picks embed-by-default, this
+  code path REPURPOSES into the bidirectional-discovery
+  surface (find running desktop-native; attach as inbound
+  drive). Not a rewrite.
+* Orphan-sidecar bug (`phase-8-bugs.md`, filed today) —
+  potentially obsoleted by embed-by-default. Don't sink
+  heavy investigation into the takeover-UX piece; ship
+  minimum fix for v0.12.x.
+
+### Phase-8 close discipline preserved
+
+Phase 8 finishes per existing plan: v0.11.2 cut → Round-2
+wave-2 (Hybrid back-side + the new Task F + Task G About)
+→ Round-3 public flip + multi-model picker + polish wave.
+Phase 9 opens after Round 3 lands.

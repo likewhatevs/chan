@@ -900,6 +900,31 @@ Substantial. Likely 3-5 tasks across `-a-N` slots:
   to be SINGLE per-Hybrid value (no front/back split). Update
   `-a-27` hamburger theme toggle to flip the single value.
   Documentation / test updates.
+* **Task F — Search settings migration to Hybrid FB back**
+  (@@FullStackA, ADDED 2026-05-21 per @@Alex's lock on open
+  question #2 below): move drive-level search settings out of
+  `SettingsPanel.svelte` (semantic search toggle from `-a-21`;
+  future multi-model picker from Round-3 Track 2) into
+  `HybridFileBrowserConfig.svelte`. The FB back-side stops
+  being a "reserved for future use" placeholder and becomes
+  the Search / Indexing configuration surface — UX rationale:
+  FB is where users see their indexed content + where search
+  results land them, so config-lives-next-to-the-affected-
+  surface holds. Settings storage shape unchanged (same
+  `Preferences` fields). Search OVERLAY (`Cmd+K F` global
+  spawn) stays out-of-Hybrid; only the search SETTINGS move.
+* **Task G — Settings About section build-out + donation QR**
+  (@@FullStackA, ADDED 2026-05-21; task file
+  [`../fullstack-a/fullstack-a-42.md`](../fullstack-a/fullstack-a-42.md)):
+  after Tasks A + B + C + F land (Settings overlay is
+  trimmed), build the remaining About section into the
+  canonical "where Chan lives + how to reach the project"
+  surface: chan version (preserve), chan paths (drive root +
+  embedded stores + config), GitHub repo link, donation QR
+  (`web/public/qr-donate.png`, committed alongside the task
+  file), existing attribution (Source Code Pro OFL from
+  `-b-12`). Companion website QR placement is backlog item 6
+  (separate lane).
 
 #### Open questions for @@Alex (survey at scoping time)
 
@@ -908,18 +933,23 @@ Substantial. Likely 3-5 tasks across `-a-N` slots:
    current terminal" — settings are PER-TYPE (one terminal
    config back applies to every terminal in this Hybrid),
    not PER-TAB. Confirmed.
-2. **Where does Hybrid File Browser back land in v1**: empty
-   placeholder ("reserved for future use" message), or a
-   minimal first config (e.g., default watcher-scope mode
-   per `-b-6`)? Recommend placeholder for v1; add config
-   later if affordances emerge.
-3. **Hybrid Search back**: search overlay isn't a Hybrid
-   surface today (it's a global overlay, spawn via `Cmd+K F`).
-   Does it ever become one? @@Alex's spec lists 4 (5 with
-   markmap if/when it lands as a tab type) Hybrid surfaces +
-   the search overlay separately. Recommend: search overlay
-   stays out-of-Hybrid for now; revisit only if it earns the
-   per-Hybrid scope.
+2. **Where does Hybrid File Browser back land in v1**:
+   **LOCKED 2026-05-21 by @@Alex** — FB back-side becomes
+   the **Search / Indexing settings surface**. Drive-level
+   search settings (semantic search toggle from `-a-21`,
+   future multi-model picker) migrate out of
+   `SettingsPanel.svelte` into `HybridFileBrowserConfig.svelte`.
+   Implementation: Task F (added to the breakdown above).
+   Rationale: FB is where users see indexed content + where
+   search results land them; config sits next to the affected
+   surface. This also unlocks the Settings overlay trim that
+   Task G (About section build-out) depends on.
+3. **Hybrid Search back**: **CLOSED 2026-05-21 by @@Alex** —
+   the search OVERLAY (`Cmd+K F`) stays a global overlay, NOT
+   a Hybrid surface; the search SETTINGS move to the FB back
+   per question #2's lock. Two surfaces with the same "search"
+   word disambiguated: overlay = global query UI; settings =
+   FB-back config. No further design churn on this axis.
 4. **Sequencing within Round-2**: Wave 2 or Wave 3? This is
    a major SPA architecture change; pairing with the
    rich-prompt session-evolution wave 2 might be too much

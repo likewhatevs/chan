@@ -701,3 +701,100 @@ Procedural takeaway: pre-commit `git diff --staged --stat` + post-commit `git sh
 6 files. Same per-file `git add` discipline as always; pre/post-commit audits.
 
 Push held per the v0.11.2 / Round-2 policy.
+
+## 2026-05-21 — both -13 (re-applied) + -11 committed
+
+* `2fb3f12` — `desktop/Makefile: notarytool keychain-profile path for local make app-notarized (systacean-13)` (re-application of the orphaned `01f10d3`).
+* `b12b787` — `chan-desktop: pin Developer ID Application signing identity (systacean-11)`.
+
+Both pre/post-commit audits clean. The `event-systacean-alex.md` permission-ask + transcribed approval rode @@Architect's `01b103d` v0.11.2 mini-wave commit, so it was already tracked at the time -11 staged.
+
+Round-2 Wave-1 systacean queue update:
+
+* `-11` ✓ committed (`b12b787`)
+* `-12` (tauri-plugin-updater verify) — resuming desk-work; runtime permission event before launching Chan.app
+* `-13` ✓ re-committed (`2fb3f12`)
+* `-13` smoke test on @@Alex's plate per `round-2-open-questions.md` B.3
+
+`-11` unblocks `ci-8`'s real-keys dry-run on the JSON side (the workflow's `make app-notarized` step now signs against the pinned `signingIdentity`). The other gate is @@Alex populating the six GH Secrets via `populate-apple-secrets.sh` per `round-2-open-questions.md` B.2.
+
+## 2026-05-21 — fresh session; bootstrap complete; standing by for v0.11.2 cut
+
+Resumed fresh @@Systacean session. Bootstrap walk complete: contact card + skills, process.md, request.md, my journal, task files (`-11` / `-12` / `-13` plus the prior history), inbound + outbound event channels, [`../architect/commit-plan-v0.11.2.md`](../architect/commit-plan-v0.11.2.md), `git status`, `git log`, tag list.
+
+### Surface sweep ("anything new")
+
+* **HEAD**: `08eb845` (docs: fullstack-b-21 commit poke + ci-8 dry-run #4 unblock signal). My prior `b12b787` (-11) + `2fb3f12` (-13) confirmed in HEAD.
+* **Tags**: `chan-v0.11.99-dryrun.4` is the most recent; run 26216314316 produced a signed + notarized DMG on GH Release (~20m11s wall-clock).
+* **Inbound** ([`event-architect-systacean.md`](../alex/event-architect-systacean.md)): cut-it signal for `chan-v0.11.2` appended 2026-05-21 (working-tree, uncommitted). Lists the gate-clearance recap (ci-8 dryrun.4 green + @@WebtestB dev-Mac Gatekeeper verify + @@Alex accept-the-partial decision) + the tag-cut sequence carrying from the commit-plan.
+* **Permissions** ([`event-systacean-alex.md`](../alex/event-systacean-alex.md)): `-12` runtime-permission ask fired 2026-05-21 for the macOS dry-run launch; no approval recorded.
+* **External state**: ci-8 GH Actions run 26216314316 cited in the cut-it signal; not independently re-fetched (webtest-b verification + architect's verbatim claim is the gating evidence per the cross-agent staleness rule).
+
+### Queue
+
+* `systacean-11` ✓ committed (`b12b787`).
+* `systacean-13` ✓ re-committed (`2fb3f12`).
+* `systacean-12` (tauri-plugin-updater verify) — parked on @@Alex's runtime-permission approval; resumes post-v0.11.2 cut.
+* `systacean-3` (re-activated for v0.11.2) — pre-authorized per the cut-it signal; holding for @@Alex's "go" before executing the tag-cut sequence.
+
+### Next action
+
+Cut `chan-v0.11.2` against current HEAD per [`commit-plan-v0.11.2.md`](../architect/commit-plan-v0.11.2.md) §"Tag-cut sequence": pre-push gate → version bump (5 manifests) → release commit `chan v0.11.2` → annotated tag with the pre-written body → `git push origin main --follow-tags`. High blast-radius (tag fires signed `release-desktop.yml` against real Apple Developer ID keys + creates a GitHub Release); confirming with @@Alex before executing.
+
+## 2026-05-21 — chan v0.11.2 cut + pushed
+
+@@Architect transcribed @@Alex's in-session "go, cut v0.11.2" approval to [`event-architect-systacean.md`](../alex/event-architect-systacean.md). Executed the full sequence.
+
+### Pre-push gate (workspace-wide)
+
+* `cargo fmt --check` → OK.
+* `cargo clippy --all-targets -- -D warnings` → clean.
+* `cargo test` (workspace) → all green, no failures.
+* `RUSTFLAGS=-D warnings cargo build --no-default-features` → green (the `-s-8` follow-up `c1e9c41` still unblocks this case).
+* `cd web && npm run check` → 0 errors, 0 warnings (3983 files).
+* `cd web && npm run build` → green; existing chunk-size + ineffective-dynamic-import warnings preserved from v0.11.1 baseline.
+* `cd web && npm test -- --run` → 586/586 passed (58 files).
+
+### Version bump (5 manifests)
+
+`0.11.1` → `0.11.2` across `Cargo.toml`, `Cargo.lock` (refreshed via `cargo build -p chan`), `desktop/src-tauri/tauri.conf.json`, `web/package.json`, `web/package-lock.json`. Runtime confirmation: `./target/debug/chan --version` → `chan 0.11.2`.
+
+### Release commit `60901c1` — `chan v0.11.2`
+
+5 files, +15 / -15. Pre-commit `git diff --staged --stat` audit clean; `git add` per-path discipline (Cargo.toml, Cargo.lock, desktop/src-tauri/tauri.conf.json, web/package.json, web/package-lock.json) skipped the ~30 other modified files belonging to other agents' uncommitted work. Post-commit `git show --stat HEAD` audit clean.
+
+### Annotated tag
+
+`chan-v0.11.2` at `bc14828`. Body from [`commit-plan-v0.11.2.md`](../architect/commit-plan-v0.11.2.md) §"Tag draft (v0.11.2)" written verbatim via `/tmp/chan-v0.11.2-tag-body.txt` (Apple's blessed `git tag -a -F <tempfile>` pattern; same v0.11.1 lesson on heredoc + single-quote escaping).
+
+### Push
+
+```
+git push origin main --follow-tags
+```
+
+Result:
+
+```
+   7b5a126..60901c1  main -> main
+ * [new tag]         chan-v0.11.2 -> chan-v0.11.2
+```
+
+Remote `ls-remote` confirms:
+
+```
+60901c164e34bc5aad76bc721814bb06dcb75f72  refs/heads/main
+bc14828d2ee50ebda9e93ee3b80a47c0c9a80d0c  refs/tags/chan-v0.11.2
+```
+
+### Tag-triggered workflow
+
+`release-desktop.yml` fired automatically: run `26221281508` in progress as of push. Notary turnaround expected ~10-11 min per dryrun.4. GH Release artifact appears on https://github.com/fiorix/chan/releases/tag/chan-v0.11.2 when the workflow completes.
+
+### Audit anchor
+
+systacean-3 task acceptance criteria all met for the v0.11.2 cut; tail of [`systacean-3.md`](systacean-3.md) carries the v0.11.1 audit anchor + this v0.11.2 entry mirrors the same shape.
+
+### Next
+
+Architect notification poke fires next on [`event-systacean-architect.md`](../alex/event-systacean-architect.md). Standing by for the workflow run to complete + post-tag verification routing.

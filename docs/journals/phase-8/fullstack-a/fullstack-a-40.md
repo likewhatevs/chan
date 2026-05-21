@@ -110,3 +110,100 @@ render-time convention.
 ## Open questions
 
 (populated as you investigate)
+
+## 2026-05-21 — ready for review
+
+### Spec adjustment: CM6 widget, not pure CSS counters
+
+The spec recommended pure CSS counters + `::marker` declarations,
+assuming chan's wysiwyg renders ordered lists as HTML `<ol><li>`.
+It doesn't — chan's wysiwyg is CodeMirror 6, and ordered-list
+markers are SOURCE TEXT inside `.cm-md-list-line` siblings (each
+line is a separate DOM row; no nested `<ol>` semantics). Pure
+CSS counters can't replace text content; `::marker` only works
+on real list items.
+
+The right CM6 idiom is a `Decoration.replace` Widget over the
+`ListMark` range. Source stays standard markdown; the rendered
+line shows the dotted chain.
+
+### What landed
+
+* `web/src/editor/decorations/blocks.ts`:
+  * `OrderedMarkerWidget` — `WidgetType` rendering a span with
+    class `cm-md-ol-marker` containing the dotted label.
+  * `orderedMarkerLabel(prefix, index)` — exported pure helper
+    that joins ancestor indices with the new index and adds a
+    trailing dot. Test-pinnable independent of the widget
+    wiring.
+  * `ancestorOrderedList(node)` — predicate used to skip the
+    decoration pass on nested OLs (the outer pass owns the
+    chain so the nested handler doesn't double-decorate).
+  * `decorateOrderedList(ctx, ol, prefix)` — walks every
+    `ListItem` direct child, replaces its `ListMark` range
+    with the widget at the computed dotted label, recurses
+    into nested `OrderedList`s with the extended prefix.
+  * `handleOrderedList` now invokes `decorateOrderedList` for
+    top-level OLs; early-returns from the recursive case (the
+    `ancestorOrderedList(ctx.node.node)` guard).
+  * Header comment at the top of the file updated — the
+    "OrderedList: no marker replacement" line was stale once
+    the widget pass landed.
+* `web/src/editor/Wysiwyg.svelte`:
+  * Scoped CSS for `.cm-md-ol-marker` — inherits the line's
+    text colour + font, `font-variant-numeric: tabular-nums`
+    so the digits align across rows when several markers stack
+    visually. Same theme-token shape as the existing
+    `.cm-md-bullet` styling.
+* `web/src/editor/decorations/blocks.test.ts`:
+  * 3 new pins on `orderedMarkerLabel`: top-level segments,
+    nested concatenation, deep nesting.
+
+### Source portability
+
+Source markdown is unchanged. A doc with `1. a\n   1. b\n   1.
+c\n2. d`:
+
+| Display (chan wysiwyg) | Source (preserved verbatim)           |
+|------------------------|----------------------------------------|
+| `1. a`                 | `1. a`                                 |
+| `1.1. b`               | `   1. b`                              |
+| `1.2. c`               | `   1. c`                              |
+| `2. d`                 | `2. d`                                 |
+
+External markdown renderers (GitHub, Obsidian, anything reading
+the `.md` directly) see the standard form and render with their
+own counter semantics. The dotted display is chan-specific.
+
+### Source-mode unchanged
+
+Source mode reads the raw doc — the widget only fires in the
+wysiwyg rendering pipeline. Verified by reading the layer: the
+decoration pass runs inside the wysiwyg's CM6 view plugin
+stack; source-mode mounts a different editor without these
+decorations.
+
+### Suggested commit subject
+
+```
+Wysiwyg: outline-style dotted ordered-list markers (fullstack-a-40)
+```
+
+Single commit. The widget + walker + CSS + comment refresh +
+tests are tightly coupled.
+
+### Gate
+
+* vitest **581 / 581** (+3 in `blocks.test.ts` for
+  `orderedMarkerLabel`).
+* svelte-check 0 errors / 0 warnings across 3982 files.
+* npm build clean.
+
+### Composition
+
+* Composes with `-a-41` (source-mode list intervention) —
+  this task lives in the wysiwyg pipeline, `-a-41` lives in
+  the source-mode CM6 extension stack. No overlap.
+
+Picking up `-a-41` (source-mode list intervention) next —
+final task in the v0.11.2 wave on my lane.
