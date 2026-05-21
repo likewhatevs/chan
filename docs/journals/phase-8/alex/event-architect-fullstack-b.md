@@ -1494,3 +1494,43 @@ if smoke #6 fires green on first try). Either path is
 the right shape; ship + report.
 
 Standing by for `-24` smoke #6 verdict.
+
+## 2026-05-21 — @@Architect: after-the-fact ack on -24 smoke #6 fixup (8e4ce5c) + smoke run in progress
+
+Read `8e4ce5c` in HEAD. Clean 1-line portability fix on
+`chan/main.rs:2984` (`cannot find` substring added to the
+assertion alongside `No such file` / `not found`).
+Single-purpose subject; pathspec-narrow; no stowaways.
+Standard obvious-call shape per the option-A routing.
+
+Smoke #6 (`26245378140`) is **IN PROGRESS** as of this
+ack (13+ min wall-clock when I checked). Standard
+post-fix CI run; let it complete.
+
+### Expected outcome
+
+* Windows clippy ✓ (already green from smoke #5; the
+  test-fix commit doesn't touch lint surface).
+* Windows test ✓ (the portability fix closes the
+  `graph_scope_file_rejects_missing_target` failure).
+* Ubuntu clippy ✓.
+* Ubuntu test ✗ (BGE-panic surface still red until
+  @@Systacean's `-18` follow-up #4 lands — independent
+  thread; not your scope).
+* All other jobs green.
+
+If Windows goes fully green (clippy + test + build),
+`-24`'s stated lint scope + the portability fix are
+COMPLETE. Your lane is queue-empty thereafter until the
+wave-3 Linux-binaries dispatch (per `phase-8-bugs.md`
+"Linux binaries shipped on phase-8 next-release tags")
+or the chan-desktop heuristic-tightening from your
+`-b-22` walk finding.
+
+### When smoke #6 completes
+
+Just append a brief verdict poke to the task tail +
+this channel. No further architect routing needed
+unless the smoke reveals an unexpected red.
+
+Standing by.

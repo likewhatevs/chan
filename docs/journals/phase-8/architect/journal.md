@@ -3024,3 +3024,93 @@ chasing the wrong fix.
 | `alex/event-architect-systacean.md` | option A + systacean-19 cut for C2 |
 | `alex/event-architect-fullstack-b.md` | -24 smoke #6 option A fold-in |
 | `systacean/systacean-19.md` | NEW task (C2 graceful degradation) |
+
+## 2026-05-21 — clearance round 8 — -a-48 cleared + 2 lane commits acked
+
+### Lane commits landed since last beat
+
+| SHA | Subject | Lane |
+|-----|---------|------|
+| `743ee69` | `docs: webtest-b proactive smoke against HEAD post -b-24 + -a-47 + a8e991a incident close-out` | @@WebtestB |
+| `8e4ce5c` | `chan: portability fix for graph_scope_file_rejects_missing_target Windows assertion (fullstack-b-24 smoke #6 fixup)` | @@FullStackB |
+
+### -a-48 option B cleared
+
+@@FullStackA delivered option B execution cleanly:
+
+* `Preferences.reports.enabled` field added to
+  chan-server's PATCH/GET shape (both `ServerConfig`
+  + TS types).
+* `HybridFileBrowserConfig` populated from `-a-43`
+  stub with three toggles (Semantic search migrated
+  from SettingsPanel; multi-model picker placeholder;
+  chan-reports NEW).
+* SettingsPanel substantially trimmed (Semantic-search
+  section + state machine + helpers + CSS scope all
+  removed). Post-`-a-48` the overlay is the About
+  section + GlobalConfig autosave plumbing only.
+* vitest 637/637 (+15 net); cargo + clippy + svelte-
+  check all green.
+* Follow-up scope captured in `-a-48`'s tail (backend
+  gating in 4 chan-server route files + chan-drive
+  indexer-pass flag + destructive-on-disable modal +
+  default flip ON → OFF).
+
+Cleared verbatim. Shared-infra authorization flagged
+inline for the chan-server edits (narrow
+`reports.enabled` field addition + PATCH serde
+round-trip). After commit, queue continues with `-a-53`
+(theme architecture correction + bundled custom-TERM
+PARTIAL fix) per the post-design-correction plan.
+
+### Important sequencing note: -a-42 gate now closed
+
+With `-a-48` cleared (and committable now), the "A+B+C+F
+all in HEAD" gate for `-a-42` (About section build-out)
+is closed. `-a-42` is now technically unblocked. BUT the
+queue order keeps it parked after `-a-49..52` (graph
+overhaul) so the Hybrid back-side correction tasks
+(`-a-53` + `-a-54`) and the graph wave land first.
+Don't pull `-a-42` forward unless I re-sequence.
+
+### @@FullStackB smoke #6 in flight
+
+`8e4ce5c` (Windows test portability fix per option-A
+routing) committed; pushed to `fullstack-b-24-smoke`;
+workflow run `26245378140` is **IN PROGRESS** (~13+ min
+wall-clock when checked). Standard post-fix smoke;
+passive wait on CI.
+
+Expected outcome on smoke #6 green:
+
+* Windows clippy ✓ + Windows test ✓ (test fix closes
+  the assertion gap).
+* Ubuntu clippy ✓.
+* Ubuntu test STILL ✗ on BGE-panic surface until
+  @@Systacean's `-18` follow-up #4 lands (independent
+  thread).
+
+If smoke #6 reds on Windows test for any unexpected
+reason, @@FullStackB will iterate per the established
+pattern. After smoke #6 green, their `-24` lane is
+queue-empty.
+
+### Lane state at end of round
+
+| Lane | State |
+|------|-------|
+| @@Systacean | `-18` follow-up #4 + `systacean-19` authorized; not yet started (or in flight without source mods); expect commit + smoke |
+| @@CI | Idle; queue-empty |
+| @@FullStackA | `-a-48` cleared (commit-ready); expect commit + `-a-53` pickup |
+| @@FullStackB | `-24` smoke #6 in flight at `fullstack-b-24-smoke` run 26245378140; expect verdict |
+| @@WebtestA | Queue-empty until next bundled walk (after -a-48 + -a-53 + -a-54 land) |
+| @@WebtestB | Proactive verdict committed; queue-empty |
+
+### What I'm committing this round
+
+| File | Reason |
+|------|--------|
+| `architect/journal.md` | This entry |
+| `alex/event-architect-fullstack-a.md` | -a-48 commit clearance + follow-up scope ack + -a-42 sequencing note |
+| `alex/event-architect-fullstack-b.md` | after-the-fact ack on 8e4ce5c + smoke #6 in flight |
+| `alex/event-architect-webtest-b.md` | after-the-fact ack on 743ee69 |

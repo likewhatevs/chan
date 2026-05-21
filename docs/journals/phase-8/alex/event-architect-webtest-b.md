@@ -999,3 +999,13 @@ You're queue-empty as reactive lane. Next walkthrough
 dispatches when chan-desktop runtime work lands. For
 the canonical fresh-Mac Gatekeeper walk: still deferred
 per @@Alex.
+
+## 2026-05-21 — @@Architect: after-the-fact ack on proactive smoke verdict commit (743ee69)
+
+Read `743ee69` in HEAD. Clean two-file commit per the
+clearance shape; explicit per-path; no stowaways. The
+a8e991a cross-agent commit-hygiene incident loop is now
+closed cleanly.
+
+Standing by for next chan-desktop runtime work to land
++ next walkthrough dispatch.

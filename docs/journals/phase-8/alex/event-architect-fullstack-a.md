@@ -2082,3 +2082,77 @@ architect-side docs commits going forward.
 Standing by for your `-a-48` commit-readiness poke per
 option (B) + then `-a-53` (with the bundled custom-TERM
 fix) pickup.
+
+## 2026-05-21 — @@Architect: approved + commit clearance (fullstack-a-48 option B)
+
+Cleared. Option B execution is exactly what I routed —
+SPA wiring + default ON + Preferences shape established;
+backend gating + destructive-on-disable modal captured
+as the follow-up scope. Three toggles in HybridFileBrowserConfig
+(Semantic search migrated; multi-model picker
+placeholder; chan-reports NEW); SettingsPanel
+substantially trimmed.
+
+* **Commit subject**: `Migrate Search/Indexing/Reports settings to Hybrid FB back-side (fullstack-a-48 option B)` (your suggested subject; accepted verbatim).
+* **Files** (race-safe pathspec; explicit per-path):
+  * `crates/chan-server/src/config.rs`
+  * `crates/chan-server/src/routes/preferences.rs`
+  * `web/src/api/types.ts`
+  * `web/src/components/HybridFileBrowserConfig.svelte`
+  * `web/src/components/HybridFileBrowserConfig.test.ts`
+  * `web/src/components/SettingsPanel.svelte`
+  * `docs/journals/phase-8/fullstack-a/fullstack-a-48.md`
+  * `docs/journals/phase-8/fullstack-a/journal.md`
+  * `docs/journals/phase-8/alex/event-fullstack-a-architect.md`
+* Pre/post-commit `git diff --staged --stat` +
+  `git show --stat HEAD` per the shared-worktree
+  discipline.
+
+### Shared-infra authorization on chan-server edits
+
+`config.rs` + `routes/preferences.rs` are shared
+chan-server — this commit's edits are narrow
+(`reports.enabled` field addition + PATCH serde
+round-trip). Authorization implicit per the option-B
+routing's "SPA wiring + Preferences shape established"
+scope; flagging explicitly here for the auto-classifier.
+
+### Help text discipline
+
+Your "toggle hint explicitly says backend gating + the
+destructive-on-disable modal land in a follow-up. Users
+don't expect 'OFF' to stop the indexing yet" is the
+right honest-toggle shape. Good call.
+
+### Follow-up task scope captured
+
+Read the "Follow-up needed (per @@Architect's routing)"
+section in the `-a-48` task tail. I'll cut as a new
+`fullstack-a-N` task after `-a-48` lands. Likely
+crosses lanes to @@Systacean for the chan-drive
+indexer-pass flag piece, OR I can route it as
+chan-server-only if the indexer-pass shape stays
+chan-server-side.
+
+### Sequencing after commit
+
+Queue continues per the revised plan:
+
+```
+-a-53 (theme architecture correction + bundled custom-TERM PARTIAL fix)
+-a-54 (flip UX redesign)
+-a-49..52 (graph overhaul first sub-wave)
+-a-42 (About; gates on A+B+C+F landing — all 4 now in HEAD post -a-48)
+```
+
+**Note**: with `-a-48` landed, the "A+B+C+F all in HEAD"
+gate for `-a-42` (About section build-out) is closed.
+That means `-a-42` is now technically unblocked. But the
+queue order keeps it parked after `-a-49..52` (graph
+overhaul) so Hybrid back-side correction tasks (`-a-53`
++ `-a-54`) and the graph wave land first. Don't pull
+`-a-42` forward unless I re-sequence.
+
+Standing by for `-a-48` commit-readiness poke (already
+have everything I need to clear; this is just the
+fire-and-forget commit).
