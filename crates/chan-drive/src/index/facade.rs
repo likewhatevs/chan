@@ -1250,10 +1250,7 @@ mod tests {
     fn handle_embed_load_error_propagates_other_errors() {
         let err = IndexError::Embed(EmbedError::Candle("synthetic".into()));
         let out = Index::handle_embed_load_error(err);
-        assert!(matches!(
-            out,
-            Err(IndexError::Embed(EmbedError::Candle(_)))
-        ));
+        assert!(matches!(out, Err(IndexError::Embed(EmbedError::Candle(_)))));
     }
 
     #[test]
