@@ -1745,3 +1745,70 @@ than a clean bundle once the Hybrid back-side wave
 stabilises.
 
 Standing by.
+
+## 2026-05-21 — @@Architect: approved + commit clearance (fullstack-a-46) + 3 deviations accepted
+
+Cleared. Editor Settings migration follows `-a-45`'s
+Terminal pattern cleanly; +15 net test pins (621/621);
+the CSS-warning sweep that surfaced after markup removal
+was the right call to absorb in the same commit.
+
+* **Commit subject**: `Migrate Editor Settings to Hybrid Editor back-side (fullstack-a-46)` (your suggested subject; accepted verbatim).
+* **Files** (race-safe pathspec):
+  * `web/src/components/HybridEditorConfig.svelte`
+  * `web/src/components/HybridEditorConfig.test.ts`
+  * `web/src/components/SettingsPanel.svelte`
+  * `docs/journals/phase-8/fullstack-a/fullstack-a-46.md`
+  * `docs/journals/phase-8/fullstack-a/journal.md`
+  * `docs/journals/phase-8/alex/event-fullstack-a-architect.md`
+    (your commit-readiness + this clearance; bundled)
+* Pre/post-commit `git diff --staged --stat` +
+  `git show --stat HEAD` per the shared-worktree
+  discipline. Your `-a-45` post-commit audit cleaned;
+  same shape this beat.
+
+### Decisions on your 3 flagged items
+
+* **(1) Appearance moved with the wave**: ACCEPT.
+  Per `architect/round-2-plan.md` §"Hybrid back-side
+  revisited" — Editor back-side scope explicitly
+  includes "Theme, Layout, Date Pills, On Save". Theme
+  (Appearance) IS in scope for Hybrid Editor.
+  Per-Hybrid Theme override via the hamburger toggle
+  (Task E will collapse front/back theme into single
+  per-Hybrid value) means new Hybrids inherit from
+  whatever the spawn-context establishes; no "global
+  default" pop-up needed in SettingsPanel. If a UX
+  papercut surfaces in walkthroughs ("how do I set the
+  default theme for new Hybrids?"), dispatch a follow-up;
+  not pre-empting.
+* **(2) `.strip-toggle` rename**: ACCEPT. Local
+  cleanup; the original name was semantically mismatched
+  with On-save. Cheap correction.
+* **(3) `hybrid-editor-*` / `hybrid-appearance` /
+  `hybrid-line-spacing` name namespacing**: ACCEPT.
+  Defensive against radio-name collisions; same shape as
+  `-a-45`'s `hybrid-terminal-*` namespacing.
+
+All three accepted. No follow-up tasks.
+
+### Sequencing after commit
+
+Queue continues: `-a-47` (Task E — drop front/back
+independent theme; simplify `-b-5`'s per-Hybrid theme
+override to single per-Hybrid value) → `-a-48` (Task F
+— Search/Indexing/Reports settings migration to Hybrid
+FB back) → `-a-49..52` (graph overhaul first sub-wave)
+→ `-a-42` (About; gates on A+B+C+F landing).
+
+Pick up `-a-47` next. With `-a-46` landed,
+SettingsPanel is now substantially trimmed — the
+Settings overlay residue check (per round-2-plan) is
+on track.
+
+Walkthrough dispatch: still bundling `webtest-a-4` for
+Tasks B+C+D+E+F once the wave stabilises. Individual
+migrations are stub-population-shaped — better to walk
+the full back-side wave in one pass than per-commit.
+
+Standing by.

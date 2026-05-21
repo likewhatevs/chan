@@ -2286,3 +2286,118 @@ NOT touching (other agents' own files):
 * All task-file appends (`ci-12.md`, `ci/journal.md`,
   `systacean-15.md`, `systacean-17.md`,
   `fullstack-a-45.md`).
+
+## 2026-05-21 — clearance round 4: -18 follow-up + -a-46 + smoke-mid-flight on -24
+
+### Lane commit landed this beat
+
+| SHA | Subject | Lane |
+|-----|---------|------|
+| `c0600e0` | `chan-server + chan-desktop: gate Unix-only control_socket declarations + rename unused exit_signal (fullstack-b-24)` | @@FullStackB |
+
+Per the option-(A) routing in last round. Smoke branch
+`fullstack-b-24-smoke` now on origin (fourth in the
+audit-trail-keep set). @@FullStackB has NOT yet appended
+a commit-readiness / smoke-verdict poke to their outbound
+channel — smoke run presumed in flight. Holding clearance
+read until they report.
+
+### Two commit-readiness pokes this round
+
+**@@Systacean -18 smoke surfaced ONE additional model-dep
+test**: `crates/chan-drive/tests/contacts_import.rs:274`
+`removing_contact_frontmatter_demotes_node_back_to_file`
+panicked with the same BGE failure shape — not in my
+line-number callout NOR in their `-17`-smoke list because
+cargo's per-binary panic cascade masked it.
+
+They asked for the "obvious-call" shortcut: same scope as
+`-18`, same `#[ignore]` shape, finishes the gate-unblocker
+work, authorize them to commit + re-dispatch in one beat.
+GRANTED. Single-file diff; cross-reference the surfacing
+in the skip reason for audit trail; push as append (not
+force) to `systacean-18-smoke` + re-fire `gh workflow run
+ci.yml`. Expected: Ubuntu fully green; Windows still red
+on chan-desktop dead_code (closes when `fullstack-b-24`
+lands in HEAD — already committed at `c0600e0`).
+
+**@@FullStackA -a-46 (Editor Settings migration)**:
+mirror of `-a-45`'s Terminal pattern; +15 net test pins
+(vitest 621/621); CSS sweep absorbed in same commit
+(clearance to fold cleanup into the migration's commit
+was the right call). Three flagged deviations all
+accepted:
+
+1. Appearance moved with the wave — per round-2-plan
+   spec; Editor back-side scope includes Theme.
+   Per-Hybrid theme override via hamburger toggle means
+   no global-default pop-up needed in SettingsPanel.
+   Walkthroughs catch any UX papercut.
+2. `.strip-toggle` rename — local cleanup; original
+   name was semantically mismatched. Cheap correction.
+3. `hybrid-editor-*` / `hybrid-appearance` /
+   `hybrid-line-spacing` name namespacing — defensive
+   against radio-name collisions; same shape as
+   `-a-45`'s `hybrid-terminal-*`.
+
+### Symmetric empirical-audit-at-pickup pattern
+
+Two lanes caught my architect-side errors at task pickup
+THIS PHASE:
+
+* @@FullStackB caught the `fullstack-b-24` categorical
+  scope error (10/11 lints in chan-server, not
+  chan-desktop) before editing any code.
+* @@Systacean caught the contacts_import test mask via
+  the empirical `-18`-smoke run — pre-emptively beyond
+  the original 14-test gating set.
+
+Both are EXACTLY the discipline I want from every lane:
+read the source / run the smoke before trusting upstream
+framing. The pattern is encoded in the
+`feedback_ground_descriptions_in_source` memory rule;
+the cross-lane reinforcement this round is meaningful
+because it shows the rule applies in BOTH directions
+(architect-to-lane AND smoke-to-architect feedback).
+
+### Lane state at end of round
+
+| Lane | State |
+|------|-------|
+| @@Systacean | `-18` committed (`7a22e63`); `-18` follow-up (contacts_import) cleared + authorized to commit + re-smoke; expect `-16` pickup after |
+| @@CI | Idle; queue-empty until wave-3 Linux-binaries |
+| @@FullStackA | `-a-45` committed (`1f80d09`); `-a-46` cleared; expect commit + `-a-47` pickup (Task E — drop front/back independent theme) |
+| @@FullStackB | `-24` committed (`c0600e0`); smoke in flight at `fullstack-b-24-smoke`; holding for their verdict report |
+| @@WebtestA | Standing by; reactive lane |
+| @@WebtestB | Standing by; reactive lane |
+
+After the `-18` follow-up + `fullstack-b-24-smoke` both
+green-confirm, the **per-PR ci.yml gate is structurally
+fully green** for the first time since ~2026-05-19. The
+Round-3 readiness signal is one smoke-verification away.
+
+Four smoke branches on origin: `ci-12-smoke` +
+`systacean-17-smoke` + `systacean-18-smoke` +
+`fullstack-b-24-smoke`. All prune with the
+`chan-v0.11.99-dryrun.{1..4}` tag cleanup beat.
+
+### What I'm committing this round
+
+| File | Reason |
+|------|--------|
+| `architect/journal.md` | This entry |
+| `alex/event-architect-systacean.md` | -18 follow-up obvious-call greenlight |
+| `alex/event-architect-fullstack-a.md` | -a-46 clearance + 3 deviations accepted |
+
+NOT touching (other agents' own files):
+
+* `crates/chan-drive/tests/contacts_import.rs` —
+  @@Systacean's `-18`-follow-up scope.
+* `web/src/components/{HybridEditorConfig.*,
+  SettingsPanel.svelte}` — @@FullStackA's `-a-46` code.
+* All `event-<agent>-architect.md` files (agents' own
+  outbounds).
+* All task-file appends (`ci-12.md`, `ci/journal.md`,
+  `systacean-15.md`, `systacean-17.md`,
+  `systacean-18.md`, `fullstack-a-45.md`,
+  `fullstack-a-46.md`, `fullstack-a/journal.md`).

@@ -1628,3 +1628,69 @@ your scope; routed cleanly.
 + will route from a future Round-3 task when one opens.
 
 Standing by for your `-18` commit poke + smoke verdict.
+
+## 2026-05-21 — @@Architect: obvious-call shortcut — proceed with -18 follow-up (contacts_import)
+
+Yes, exactly the shape I want. Make the obvious call:
+single-file fix, same scope as `-18`, same `#[ignore =
+"..."]` shape, cross-reference the surfacing in the skip
+reason for audit. Authorized to commit + re-dispatch in
+one beat.
+
+* **Commit subject**: `chan-drive/tests/contacts_import: gate removing_contact_frontmatter test behind #[ignore] (systacean-18 follow-up)` (your suggested subject; accepted verbatim).
+* **Files** (race-safe pathspec):
+  * `crates/chan-drive/tests/contacts_import.rs`
+  * `docs/journals/phase-8/systacean/systacean-18.md`
+    (task tail append)
+  * `docs/journals/phase-8/alex/event-systacean-architect.md`
+    (this poke + your follow-up commit-ready poke;
+    bundle)
+* Pre/post-commit `git diff --staged --stat` +
+  `git show --stat HEAD` per the shared-worktree
+  discipline. The contacts_import test is single-line +
+  bounded — clean audit shape.
+
+### Smoke push: same branch, append (no force-push)
+
+Push the follow-up commit to `systacean-18-smoke` as an
+append (no force). The branch already has the `-18`
+commit base; an append-only push is the natural shape +
+preserves audit trail. `gh workflow run ci.yml --ref
+systacean-18-smoke` re-fires.
+
+Expected outcome on re-fire:
+
+* **Ubuntu cargo test**: fully green (all model-dep tests
+  including contacts_import now skipped).
+* **Windows clippy**: still red on chan-desktop dead_code
+  (out of scope; `fullstack-b-24` already committed at
+  `c0600e0` — once that lands here it greens this too).
+* **All other jobs**: green.
+
+If Ubuntu's empirical green confirms, then the gate-
+unblocker sweep is structurally complete on your lane
+(`-17` + `-18` + `-18`-follow-up). `fullstack-b-24` closes
+the Windows side from FullStackB's lane (their commit's
+on main; their smoke is separately reporting).
+
+### After the follow-up smoke comes back green
+
+Pick up `-16` per the queue (chan-report file-classification
+buckets). Your `FileBucket` enum on `FileStats` (vs reusing
+chan-drive's `FileClass`) reasoning sounds right — the
+semantics are different (graph-color vs IO-contract). If
+the implementation extends chan-report's "which files we
+track" boundary, fire the scope poke + I'll route. Otherwise
+proceed standalone.
+
+### Lesson logged
+
+@@FullStackB caught a categorical error in my `fullstack-b-24`
+task body at pickup (10/11 lints were in `chan-server`,
+not `chan-desktop`) — yours catching this contacts_import
+test was the symmetric save (the per-binary panic cascade
+masked it on the `-17`-smoke). Both lanes' empirical
+audits at pickup beat my line-number guesses + masked
+panic propagation. Discipline pays.
+
+Standing by.
