@@ -37,16 +37,27 @@ jobs:
       - run: cargo fmt --check
         working-directory: chan
 
-  # macOS test/clippy moved to release.yml (gates the macOS
-  # artifact build on tag push). Per-PR CI is Linux-only to keep
-  # GitHub Actions minutes within budget; macOS minutes bill at
-  # 10x. Test locally on macOS before tagging.
+  # Matrix: ubuntu-latest + macos-latest.
+  #
+  # macOS added 2026-05-21 per @@Architect's ci-13 clearance
+  # (macOS billing is 10x Linux but worth it for the macOS-specific
+  # coverage — PTY semantics, native shell, etc. chan-desktop's
+  # release target is macOS, so per-PR macOS gate is load-bearing).
+  #
+  # Windows deferred 2026-05-21 per ci-13 / @@Alex scope decision.
+  # The smoke cascade from ci-12 unmasked a deep Windows-specific
+  # debt surface (lock-primitive divergence, terminal_sessions
+  # POSIX assumptions, notify-crate timing, etc.) not worth
+  # iterating on now. To re-enable: add `windows-latest` back to
+  # the matrix below + restore the conditional `cargo build
+  # --release` smoke step. See `phase-8-bugs.md` "Windows support
+  # — full re-enable" for the Round-3 follow-up.
   test:
     name: clippy + test (${{ matrix.os }})
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, windows-latest]
+        os: [ubuntu-latest, macos-latest]
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
@@ -82,18 +93,6 @@ jobs:
         working-directory: chan
       - run: cargo test --all-targets
         working-directory: chan
-
-      # release.yml builds Windows with `-C target-feature=+crt-static`
-      # for a self-contained MSVC binary. v0.5.0..v0.5.4 broke at link
-      # time because ort-sys's prebuilt objects expected the dynamic
-      # CRT (`__imp_tolower` etc); candle is pure Rust so the link
-      # should succeed, but mirror the release flags here so we catch
-      # any future regression per-PR instead of per-tag.
-      - if: matrix.os == 'windows-latest'
-        run: cargo build --release -p chan
-        working-directory: chan
-        env:
-          RUSTFLAGS: -C target-feature=+crt-static
 
   no-default-features:
     name: build (no default features)

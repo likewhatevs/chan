@@ -1967,3 +1967,145 @@ tail § "Open questions for @@Architect":
   validation "optional").
 
 Standing by for your routing decision + commit clearance.
+
+## 2026-05-21 — poke (ci-12 committed as 6abac58; idle)
+
+Cleared per your "approved + commit clearance (ci-12) +
+5-question answers" heading. Subject accepted verbatim,
+race-safe pathspec form held cleanly, no stowaways.
+
+* **SHA**: `6abac58`
+* **Subject**: `ci: install GTK deps in workspace-clippy jobs + add ci.yml workflow_dispatch (ci-12)`
+* **Files**: 5 (per your scope list) / +754 lines.
+* **Post-commit audit**: `git show --stat HEAD` matches
+  the expected 5-file scope; chan-drive / chan-report /
+  chan-server / event-systacean / event-webtest-* /
+  systacean-15 / webtest-a-{1,3} / webtest-b-1 mods left
+  unstaged in the shared worktree (peer-agent lanes).
+
+### Routing follow-ups noted
+
+* `systacean-17` (Windows lint) + `systacean-18` (model-
+  dependent tests) both cut; lined up after `-15`
+  commits to fully green the per-PR gate. No further
+  action from my lane on either.
+* `ci-12-smoke` branch on origin: kept as audit trail
+  per your "not blocking" framing. Will delete with
+  the `chan-v0.11.99-dryrun.{1..4}` tag pruning beat.
+
+### Lane state
+
+| Item | State |
+|------|-------|
+| ci-10 / ci-11 / ci-12 | ✓ all committed |
+| Per-PR CI gate | partially green (Round-3 readiness pending `-17` + `-18`) |
+| Queue | empty until wave-3 Linux-binaries dispatch |
+
+Idle. Standing by for the v0.12.0 Linux-binaries
+dispatch or any other Round-2 wave-3 / Round-3 work
+you route my way.
+
+## 2026-05-21 — poke (ci-13 commit-readiness — Windows dropped from ci.yml + release.yml)
+
+ci-13 patches landed in working tree; smoke validation
+fired against `ci-13-smoke` branch (run [`26253981385`](https://github.com/fiorix/chan/actions/runs/26253981385)).
+
+### Scope landed
+
+* `ci.yml::test` matrix: `[ubuntu-latest, windows-latest]`
+  → `[ubuntu-latest]`. Dropped the now-dead
+  `if: matrix.os == 'windows-latest'` cargo build smoke
+  step. Added re-enable comment block citing the bug-list
+  umbrella entry.
+* `release.yml::build` matrix: dropped 2 windows-latest
+  entries (x86_64 + aarch64 cross-arm). Updated header
+  comment Targets list + corrected the Linux description
+  ("musl-static" → "glibc dynamic" matching the `gnu`
+  triplet).
+* `phase-8-bugs.md`: added umbrella Round-3 entry
+  "Windows support — full re-enable when Round-3 /
+  public-flip work picks up" consolidating all the
+  per-sub-issue items (lock parity, notify reliability,
+  terminal_sessions failures, cross-platform discipline
+  references) with a 7-step want list for the re-enable
+  task.
+
+### Smoke validation
+
+* **Branch**: `ci-13-smoke` (origin; pushed 2026-05-21).
+* **Run**: [`26253981385`](https://github.com/fiorix/chan/actions/runs/26253981385).
+* In-flight at this poke; will update on completion. Pass
+  criterion: no `windows-latest` job in the run, remaining
+  Linux jobs go green.
+
+### Audit findings (release.yml matrix before/after)
+
+| File | Before | After |
+|------|--------|-------|
+| `ci.yml::test` | `[ubuntu-latest, windows-latest]` | `[ubuntu-latest]` |
+| `release.yml::build` | ubuntu (x2) + windows (x2) + macos | ubuntu (x2) + macos |
+
+Both `release.yml::test-linux` and `test-macos` are
+single-OS jobs (no matrix); unchanged.
+
+### Spec ambiguity (open question)
+
+Task spec § "Expected: matrix runs Ubuntu + macOS only":
+but current ci.yml matrix is Ubuntu + Windows (macOS
+deferred to release.yml per existing comment). Two
+interpretations:
+
+* (a) Drop Windows only → `[ubuntu-latest]`. Honors the
+  literal "Remove the windows-latest matrix entry" +
+  @@Alex's cost framing.
+* (b) Drop Windows + add macos-latest → `[ubuntu-latest,
+  macos-latest]`. Matches the spec language but bills
+  10x macOS minutes per PR.
+
+Picked **(a)**. Full detail + recommendation in
+[`../ci/ci-13.md`](../ci/ci-13.md) tail. Flag if you
+want (b).
+
+### Two minor copy-edits flagged
+
+* **release.yml header Authenticode reference**: dropped
+  alongside the windows entries (Windows out = no zip to
+  sign). When Windows comes back, the re-enable task
+  restores both. Acceptable, or prefer keeping as a
+  "remember this" marker?
+* **release.yml header Linux description**: pre-ci-13
+  said "linux x86_64 musl-static" but the matrix builds
+  gnu. Corrected to "glibc dynamic". Out-of-lane copy
+  edit; acceptable bundled fix, or split?
+
+### Open questions
+
+Three surveyed in [`../ci/ci-13.md`](../ci/ci-13.md) tail.
+All low-stakes; the (a) vs (b) macOS one is the only one
+that materially changes behaviour.
+
+### Cross-platform discipline preserved
+
+Per task spec § Out of scope, the existing `#[cfg(unix)]`
+/ `#[ignore]` gates from `-17` / `-18` / `-20` / `-b-24`
+stay untouched. The bug-list umbrella entry references
+them as preserved cross-platform improvements; reverting
+is the Round-3+ Windows-re-enable task's responsibility.
+
+### Audit-trail artifacts
+
+* `ci-13-smoke` branch on origin (commit `d717d48`).
+  Audit trail; delete on the same beat as `ci-12-smoke`
+  + `chan-v0.11.99-dryrun.{1..4}` tags.
+* No tag pushed, no signing surface touched, no test
+  server spawned, no Chrome MCP tabs.
+
+### Lane state pending clearance
+
+| Item | State |
+|------|-------|
+| ci-13 patches | in working tree (5 files) |
+| ci-13-smoke run | in-flight (`26253981385`) |
+| ci-12 follow-up appends | still working-tree (ci-12.md + journal.md), roll up at session close |
+
+Standing by for your clearance + the (a) vs (b) call.

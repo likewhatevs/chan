@@ -825,3 +825,29 @@
   - lane: @@Systacean (chan-drive owns the watcher → report fanout)
   - parallel to: "Windows lock contract parity — chan-drive lock primitive doesn't surface `DriveLocked` on Windows" above (same Round-3 polish bracket; both unblock the Windows test surface mechanically pending real cross-platform fixes)
   - NOT YET DISPATCHED — Round-3 polish/hardening candidate; same trigger as the lock parity entry (real-user Windows chan-desktop release surface)
+
+- Windows support — full re-enable when Round-3 / public-flip work picks up
+  - umbrella Round-3 entry consolidating the Windows-specific debt surface that surfaced during the ci-12 gate-unblocker cascade (2026-05-21). Added by `ci-13` per @@Alex's 2026-05-21 scope decision: "let's please disable windows and carry on, no time to spend on this and i dont care much about windows for now."
+  - state today: `ci-13` drops `windows-latest` from `ci.yml`'s per-PR matrix + the two Windows entries from `release.yml`'s build matrix. Per-PR ci.yml gate now runs Ubuntu-only; release.yml ships Linux x86_64 + aarch64 + macOS aarch64 only. Windows chan CLI and chan-desktop binaries do not ship on the next `chan-v*` tag (or any subsequent tag until @@Alex revisits).
+  - cross-platform discipline already in place stays untouched per the ci-13 task spec § "What this task is NOT". The `#[cfg(unix)]` gates from `-17` / `-18` / `-20` / `-b-24` document Windows divergences correctly + are reverted as part of the real Windows fix, not as part of the disable.
+  - references (preserved cross-platform improvements):
+    * `systacean-17` — `chan-drive::index::config::ConfigError` boxed via `Box<toml::de::Error>` + manual `From<toml::ser::Error>` impl to preserve `?` ergonomics. Fix Windows `result_large_err` lint; benefits all platforms.
+    * `fullstack-b-24` — 14 Windows `dead_code` lints across `chan-server` + `chan-desktop` IPC code gated via `#[cfg(unix)]`. Documents IPC surface that's POSIX-only today.
+    * `systacean-18` (+ 4 follow-ups) — 28 BGE-dependent `chan-drive` tests gated via `#[ignore]`. Affects all CI runners (model never cached on fresh runners); cross-platform improvement.
+    * `systacean-20` — 3 chan-drive lock-contract tests gated via `#[cfg(unix)]` (lock primitive doesn't surface `DriveLocked` on Windows). See "Windows lock contract parity" entry above.
+    * `systacean-20` smoke #2 + #3 fixups — watcher test + supporting helpers/imports gated `#[cfg(unix)]`. See "Windows notify-crate / report-writer reliability" entry above.
+  - references (Windows-specific failures still pending root-cause; from the smoke cascade):
+    * chan-server `terminal_sessions::tests` 7 Windows failures including `spawn_uses_configured_default_term`, `api_restart_terminal_respawns_same_session_command`, `conditional_pty_programs_validate_real_terminal`, `dispatch_agent_event_uses_chord_in_agent_mode`. Root cause: POSIX-shell assumptions in PTY spawn / chord dispatch paths
+    * chan-server PTY 7 new tests surfaced post-`-20` smoke #3 (per @@Systacean's scope poke #3): same POSIX-shell root family
+    * file move of watcher test to a Unix-only file from `systacean-20`-smoke-#3 cascade-terminator routing was CANCELLED 2026-05-21 (no longer needed since Windows is out of the gate)
+  - want (Round-3 / public-flip readiness, before re-enabling):
+    1. Windows lock-primitive bridge (`LockFileEx` or equivalent) in `chan-drive/src/lock.rs` so the existing `#[cfg(unix)]`-gated lock tests pass without the gate. Then revert the `-20` lock-contract gates.
+    2. `chan-server::terminal_sessions` Windows portability fixes (likely PTY semantics + path handling + chord/key dispatch diverge). The 7+ test failures all live in one module; could be tractable with one Windows-aware PTY abstraction.
+    3. notify-crate / report-writer reliability on Windows for fresh file events (per the "Windows notify-crate / report-writer reliability" entry above). Likely path-encoding normalization or per-platform debounce tuning.
+    4. chan-desktop Windows runtime + Tauri Windows bundle. Separate from CI; depends on chan-desktop dev resourcing.
+    5. After 1-3 land + revert their `#[cfg(unix)]` gates: re-add `windows-latest` to `ci.yml` matrix + restore the conditional `cargo build --release -p chan` smoke step (deleted by `ci-13`).
+    6. After chan-desktop Windows bundle lands: re-add the 2 `windows-latest` entries to `release.yml`'s build matrix + restore the Authenticode signing path (already mentioned in `release.yml`'s header comment as deferred).
+    7. Audit + drop the umbrella entry; reactivate the underlying sub-issues (lock parity / notify reliability / terminal_sessions / etc.) if any still need work.
+  - lane: @@CI primary for the CI re-enable; @@Systacean for the chan-drive / chan-server portability fixes; @@FullStackB for chan-desktop Windows bundling.
+  - trigger to revisit: Round-3 / public-flip work, OR a real-user Windows chan-desktop release ask. Per @@Alex's framing, this is "for now"; scope-deferral, not permanent drop.
+  - NOT YET DISPATCHED — Round-3+ umbrella; per-sub-issue dispatch when work picks up.

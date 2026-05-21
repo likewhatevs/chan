@@ -14,19 +14,21 @@ name: Release
 # (v0.6.x through v0.11.0) stay matched for back-compat.
 #
 # Targets:
-#   linux x86_64       musl-static
-#   linux aarch64      musl-static
-#   windows x86_64     +crt-static
-#   windows aarch64    +crt-static (cross-compiled from x86_64
-#                                   runner if the arm runner
-#                                   isn't available)
+#   linux x86_64       glibc dynamic
+#   linux aarch64      glibc dynamic
 #   macos aarch64      Apple Silicon native (Intel intentionally
 #                                            excluded)
 #
-# Artifacts are unsigned. Apple Gatekeeper will warn on the
-# .pkg until you sign + notarize it with a Developer ID; same
-# for Windows authenticode. Signing is a separate post-build
-# step gated on having the certificates loaded as repo secrets.
+# Windows targets deferred 2026-05-21 per ci-13 / @@Alex scope
+# decision. Restore the two `windows-latest` matrix entries +
+# the Authenticode signing path when Windows comes back online.
+# See `docs/journals/phase-8/phase-8-bugs.md` "Windows support
+# — full re-enable" for the Round-3 follow-up.
+#
+# Artifacts are unsigned on Linux. Apple Gatekeeper will warn
+# on the .pkg until you sign + notarize it with a Developer ID;
+# signing is a separate post-build step gated on having the
+# certificates loaded as repo secrets.
 
 on:
   push:
@@ -120,17 +122,12 @@ jobs:
             binname: chan
             deb_arch: arm64
             rpm: true
-          - os: windows-latest
-            target: x86_64-pc-windows-msvc
-            archive: zip
-            binname: chan.exe
-            rustflags: -C target-feature=+crt-static
-          - os: windows-latest
-            target: aarch64-pc-windows-msvc
-            archive: zip
-            binname: chan.exe
-            rustflags: -C target-feature=+crt-static
-            cross_windows_arm: true
+          # Windows entries dropped 2026-05-21 per ci-13 / @@Alex
+          # scope decision. Restore `x86_64-pc-windows-msvc` +
+          # `aarch64-pc-windows-msvc` (+ cross_windows_arm flag)
+          # when Windows comes back online. The Archive (zip)
+          # step below still handles `archive: zip` for any
+          # future restored entry.
           - os: macos-latest
             target: aarch64-apple-darwin
             archive: tar.gz
