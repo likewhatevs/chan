@@ -1006,3 +1006,71 @@ verification tables at the tails of
 [`../fullstack-b/fullstack-b-17.md`](../fullstack-b/fullstack-b-17.md),
 [`../fullstack-b/fullstack-b-18.md`](../fullstack-b/fullstack-b-18.md),
 [`../fullstack-b/fullstack-b-19.md`](../fullstack-b/fullstack-b-19.md).
+
+## 2026-05-21 — poke (v0.11.2 wave closeout: 3 SHAs landed)
+
+All three v0.11.2 wave tasks committed per your recommended
+order:
+
+| SHA       | Subject                                                                                          |
+|-----------|--------------------------------------------------------------------------------------------------|
+| `5850750` | chan-desktop: reload_window + open_devtools IPC + Cmd+R / Cmd+Opt+I accelerators (fullstack-b-17) |
+| `59f5688` | chan-desktop: Cmd+= / Cmd+- / Cmd+0 zoom chords + per-window persistence (fullstack-b-19)        |
+| `f6d498c` | Rich prompt: re-sync submit-mode on tab restore + tooltip copy fix (fullstack-b-18)              |
+
+Interleaved cleanly with @@FullStackA's `-a-37` through `-a-41`
+landings (HEAD has `-b-17` → `-a-38` → `-a-39` → `-a-40` →
+`-b-19` → `-a-41` → `-b-18`). Pre-commit
+`git diff --staged --stat` + post-commit `git show --stat HEAD`
+confirmed each landing matched the intended file set + no
+stowaways.
+
+### Multi-agent stowaway race survived
+
+`-b-17`'s first commit attempt absorbed @@FullStackA's `-a-37`
+work as a stowaway: between my `git add` (of my 5 chan-desktop
+files) and `git commit -F`, @@FullStackA's session ran their own
+`git add` for `FileEditorTab.svelte` + `missingFileRecovery.test.ts`
++ `store.svelte.ts` + `tabs.svelte.ts`, replacing my index
+entries. My `commit -F` then committed THEIR 4 files under my
+"fullstack-b-17" message (commit `3abb6e3` — wrong content,
+wrong message).
+
+Recovery per `feedback_shared_worktree_commits`:
+* `git reset --soft HEAD~1` — undid `3abb6e3`. HEAD back to
+  `f5b0122` (ci-9). Index had FA's 4 files staged.
+* `git restore --staged` for FA's 4 files — moved them back to
+  unstaged in the working tree.
+* `git add` for MY -17 files explicitly.
+* Verified staged stat matched my expected -17 content.
+* `git commit -F` — landed as `5850750`.
+
+@@FullStackA's session subsequently re-committed `-a-37` cleanly
+under their own SHA (`6f1850a`). No work lost; the
+volatile-SHA-during-multi-agent-rebase principle from
+`feedback_shared_worktree_commits` held — both lanes have the
+right commits in HEAD now.
+
+### -b-19 / -b-18 commit shape
+
+After the -17 fix, the -19 + -18 commits chained without
+incident. I used `&&`-chained `git add` + `git diff --staged
+--stat` + `git commit -F` blocks to minimise the race window.
+
+### Final gate state
+
+* Workspace fmt + clippy `--workspace -D warnings` + test
+  (chan-desktop 26 → 33 across the wave; workspace total 862
+  passing) + no-default-features build all clean at every
+  commit boundary.
+* SPA svelte-check 3983 files / 0 errors; vitest 583 → 586
+  (3 new tests for -b-18 resync).
+
+### Standing down
+
+Queue empty per your "After all 3 commit" note. Standby for
+v0.11.2 walkthrough verdicts from @@WebtestA / @@WebtestB +
+ci-8 dry-run support if @@CI needs hands.
+
+Push waits for @@Systacean's `chan-v0.11.2` cut per the
+commit-plan.
