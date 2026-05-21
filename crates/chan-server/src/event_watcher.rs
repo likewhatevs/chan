@@ -114,8 +114,42 @@ impl EventWatcherHandle {
         let mut watcher =
             notify::recommended_watcher(move |res: notify::Result<notify::Event>| match res {
                 Ok(event) => {
-                    if let Some(path) = event_final_path(&event) {
-                        ingest_once(&callback_dir, path, &dispatch, &dropped_events, &seen);
+                    // systacean-14: log every notify event so the
+                    // ingest-wedge investigation can see what kinds
+                    // fire. The previous `_ => None` branch in
+                    // `event_final_path` swallowed Modify(Data) /
+                    // Modify(Metadata) / Other / Any silently, which
+                    // is one of the leading wedge hypotheses on macOS
+                    // FSEvents bursts.
+                    tracing::debug!(
+                        kind = ?event.kind,
+                        paths = ?event.paths,
+                        dir = %callback_dir.display(),
+                        "notify event"
+                    );
+                    match event_final_path(&event) {
+                        Some(path) => {
+                            ingest_once(&callback_dir, path, &dispatch, &dropped_events, &seen)
+                        }
+                        None => {
+                            // systacean-14: kinds the matcher in
+                            // `event_final_path` doesn't accept are
+                            // mostly noise on macOS FSEvents
+                            // (Modify(Metadata) from xattr / Spotlight
+                            // ticks, Access from grep'ing the dir).
+                            // Logging at debug keeps the wedge
+                            // investigation visible under
+                            // `RUST_LOG=chan_server::event_watcher=debug`
+                            // without polluting `dropped_events`
+                            // (which feeds the rich-prompt red-toast
+                            // on the SPA side).
+                            tracing::debug!(
+                                kind = ?event.kind,
+                                paths = ?event.paths,
+                                dir = %callback_dir.display(),
+                                "event watcher: unhandled notify event kind"
+                            );
+                        }
                     }
                 }
                 Err(e) => {
@@ -161,6 +195,7 @@ fn ingest_once(
     // Skip directory paths silently: they aren't event-file payloads,
     // so dropping them isn't a dropped event. systacean-5.
     if std::fs::metadata(&path).is_ok_and(|m| m.is_dir()) {
+        tracing::debug!(path = %path.display(), "event watcher: skipping directory path");
         return;
     }
     // systacean-10: the SPA filter + the systacean-9 server read
@@ -172,9 +207,15 @@ fn ingest_once(
     // bad JSON), so only the filename filter is silenced; bad content
     // keeps the existing per-error branch below.
     let Some(name) = path.file_name().and_then(|n| n.to_str()) else {
+        tracing::debug!(path = %path.display(), "event watcher: path has no valid filename");
         return;
     };
     if !is_watcher_event_filename(name) {
+        tracing::debug!(
+            name,
+            path = %path.display(),
+            "event watcher: filename does not match (event|pre-flight)-<id>.{{md,json}}"
+        );
         return;
     }
     let text = match std::fs::read_to_string(&path) {
@@ -207,8 +248,28 @@ fn ingest_once(
         .expect("event watcher seen ids poisoned")
         .insert(event.id.clone())
     {
+        // systacean-14: duplicate event id (the producer rewrote the
+        // same file or a different filename carrying an id the watcher
+        // has already dispatched). Silent skip per the dedup contract,
+        // but log at debug so the wedge investigation can tell "we
+        // never saw this event" apart from "we saw it but it was a
+        // dup".
+        tracing::debug!(
+            id = %event.id,
+            from = %event.from,
+            to = %event.to,
+            path = %path.display(),
+            "event watcher: duplicate event id, skipping"
+        );
         return;
     }
+    tracing::debug!(
+        id = %event.id,
+        from = %event.from,
+        to = %event.to,
+        path = %path.display(),
+        "event watcher: dispatching"
+    );
     dispatch(event);
 }
 
@@ -467,6 +528,167 @@ mod tests {
         assert!(
             rx.recv_timeout(Duration::from_millis(100)).is_err(),
             "bad-JSON files must not dispatch"
+        );
+    }
+
+    #[test]
+    fn watcher_dispatches_burst_of_events() {
+        // systacean-14: @@WebtestB observed the watcher silently
+        // wedging after the first two events on `/tmp/chan-survey-wb-r2`.
+        // This test fires a burst of N atomic-rename events back-to-
+        // back and asserts every one dispatches. If notify (macOS
+        // FSEvents on this host) coalesces or drops past the 2nd one,
+        // the test catches it.
+        const N: usize = 12;
+        let dir = tempfile::tempdir().expect("temp event dir");
+        let (tx, rx) = mpsc::channel();
+        let dropped = Arc::new(AtomicU64::new(0));
+        let dispatch = Arc::new(move |event: AgentEvent| {
+            tx.send(event).expect("send event");
+        });
+        let _watcher =
+            EventWatcherHandle::start(dir.path().to_path_buf(), dispatch, dropped.clone())
+                .expect("start watcher");
+        // Give the watcher a beat to attach before producing.
+        std::thread::sleep(Duration::from_millis(150));
+
+        for i in 0..N {
+            let id = format!("burst-{i}");
+            let tmp = dir.path().join(format!(".{id}.tmp"));
+            let final_path = dir.path().join(format!("event-{id}.json"));
+            let body = format!(r#"{{"id":"{id}","type":"poke","from":"@@A","to":"@@B"}}"#);
+            std::fs::write(&tmp, body).expect("write temp");
+            std::fs::rename(&tmp, &final_path).expect("rename final");
+        }
+
+        let mut received = Vec::new();
+        // Generous overall budget; the watcher should be quick but
+        // FSEvents has a small coalescing latency on macOS.
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        while received.len() < N && std::time::Instant::now() < deadline {
+            match rx.recv_timeout(Duration::from_millis(250)) {
+                Ok(event) => received.push(event),
+                Err(mpsc::RecvTimeoutError::Timeout) => continue,
+                Err(mpsc::RecvTimeoutError::Disconnected) => break,
+            }
+        }
+
+        let dropped_count = dropped.load(Ordering::Relaxed);
+        assert_eq!(
+            received.len(),
+            N,
+            "expected {N} dispatches, got {} (dropped_events={dropped_count})",
+            received.len()
+        );
+        // Every burst-N id should appear exactly once.
+        let mut ids: Vec<String> = received.into_iter().map(|e| e.id).collect();
+        ids.sort();
+        let mut expected: Vec<String> = (0..N).map(|i| format!("burst-{i}")).collect();
+        expected.sort();
+        assert_eq!(ids, expected, "every event id should dispatch exactly once");
+    }
+
+    #[test]
+    fn watcher_handles_repeated_same_filename_writes() {
+        // systacean-14 hypothesis: @@WebtestB tried "atomic mv" multiple
+        // times. If each mv targets the SAME final filename (event-1.md
+        // overwritten by another event-1.md, each with a different
+        // payload), notify on macOS may merge them or report
+        // Modify(Data) for the inode after the first Create. Each event
+        // body carries a distinct id, so dedup shouldn't skip them.
+        const N: usize = 6;
+        let dir = tempfile::tempdir().expect("temp event dir");
+        let (tx, rx) = mpsc::channel();
+        let dropped = Arc::new(AtomicU64::new(0));
+        let dispatch = Arc::new(move |event: AgentEvent| {
+            tx.send(event).expect("send event");
+        });
+        let _watcher =
+            EventWatcherHandle::start(dir.path().to_path_buf(), dispatch, dropped.clone())
+                .expect("start watcher");
+        std::thread::sleep(Duration::from_millis(150));
+
+        let final_path = dir.path().join("event-same.json");
+        for i in 0..N {
+            let tmp = dir.path().join(format!(".event-same-{i}.tmp"));
+            let body = format!(r#"{{"id":"same-{i}","type":"poke","from":"@@A","to":"@@B"}}"#);
+            std::fs::write(&tmp, body).expect("write temp");
+            std::fs::rename(&tmp, &final_path).expect("rename overwrite");
+            std::thread::sleep(Duration::from_millis(40));
+        }
+
+        let mut received = Vec::new();
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        while received.len() < N && std::time::Instant::now() < deadline {
+            match rx.recv_timeout(Duration::from_millis(250)) {
+                Ok(event) => received.push(event),
+                Err(_) => continue,
+            }
+        }
+        // Each id ("same-0" .. "same-N-1") must dispatch exactly once.
+        // The destination filename is identical across writes so this
+        // pins that FSEvents's combined Create + Modify(Name) sequence
+        // for rename-over-existing still reaches dispatch once per
+        // distinct payload.
+        let mut ids: Vec<String> = received.into_iter().map(|e| e.id).collect();
+        ids.sort();
+        let mut expected: Vec<String> = (0..N).map(|i| format!("same-{i}")).collect();
+        expected.sort();
+        assert_eq!(ids, expected);
+        assert_eq!(dropped.load(Ordering::Relaxed), 0);
+    }
+
+    #[test]
+    #[cfg(target_os = "macos")]
+    fn watcher_handles_tmp_symlink_path() {
+        // systacean-14: @@WebtestB's wedge dir was `/tmp/chan-survey-wb-r2`.
+        // On macOS `/tmp` is a symlink to `/private/tmp`. Notify might
+        // watch the symlink target while the producer writes to the
+        // symlink path (or vice versa), and the canonical-path
+        // mismatch could explain why dispatch_count doesn't grow.
+        let base = std::env::temp_dir(); // already canonical under /private/tmp.
+                                         // Build a symlink-style path matching the bug scenario.
+        let symlink_dir = std::path::PathBuf::from("/tmp")
+            .join(format!("chan-systacean-14-{:016x}", rand::random::<u64>()));
+        std::fs::create_dir_all(&symlink_dir).expect("create symlink-style dir");
+
+        let (tx, rx) = mpsc::channel();
+        let dropped = Arc::new(AtomicU64::new(0));
+        let dispatch = Arc::new(move |event: AgentEvent| {
+            tx.send(event).expect("send event");
+        });
+        // Watch the symlink path (/tmp/...) just like @@WebtestB did.
+        let _watcher = EventWatcherHandle::start(symlink_dir.clone(), dispatch, dropped.clone())
+            .expect("start watcher");
+        std::thread::sleep(Duration::from_millis(150));
+
+        const N: usize = 8;
+        for i in 0..N {
+            let id = format!("sym-{i}");
+            let tmp = symlink_dir.join(format!(".{id}.tmp"));
+            let final_path = symlink_dir.join(format!("event-{id}.json"));
+            let body = format!(r#"{{"id":"{id}","type":"poke","from":"@@A","to":"@@B"}}"#);
+            std::fs::write(&tmp, body).expect("write temp");
+            std::fs::rename(&tmp, &final_path).expect("rename");
+            std::thread::sleep(Duration::from_millis(30));
+        }
+
+        let mut received = 0;
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        while received < N && std::time::Instant::now() < deadline {
+            if rx.recv_timeout(Duration::from_millis(250)).is_ok() {
+                received += 1;
+            }
+        }
+        eprintln!(
+            "[systacean-14] /tmp symlink test: received={received}/{N}, dropped={}",
+            dropped.load(Ordering::Relaxed)
+        );
+        let _ = std::fs::remove_dir_all(&symlink_dir);
+        let _ = base; // suppress unused warning
+        assert_eq!(
+            received, N,
+            "all events should dispatch even through /tmp symlink"
         );
     }
 

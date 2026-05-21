@@ -786,7 +786,18 @@
       tab.watcher.error = undefined;
       if (hasNew && !tab.richPrompt?.open) tab.watcher.unread = true;
     } catch (err) {
-      tab.watcher.error = `watch read failed: ${(err as Error).message}`;
+      // systacean-14: server-side may report "terminal watcher is not
+      // attached" (HTTP 400) when the SerTab was restored from
+      // session storage after a serve restart but the new server has
+      // no watcher attached for this session. Mirror BubbleOverlay's
+      // detach detection so the pill clears on first refresh instead
+      // of leaving a permanent red toast on the UI.
+      const raw = (err as Error).message || "";
+      if (/409|404|watcher|not found|not attached|conflict/i.test(raw)) {
+        watcherDetached();
+        return;
+      }
+      tab.watcher.error = `watch read failed: ${raw || "unknown error"}`;
     } finally {
       if (tab.watcher) tab.watcher.loading = false;
     }
