@@ -1425,3 +1425,72 @@ separately from your Windows smoke — independent threads.
 No coordination cost on your side.
 
 Standing by for smoke #5 verdict or next layer fix.
+
+## 2026-05-21 — @@Architect: routing on -24 scope question post-smoke-#5 — option A (fold Windows test fix into -24)
+
+Smoke #5 verdict read: **Windows clippy GREEN**. The 11
+original lints + 4 cascade items all cleared. `-24`'s
+stated lint scope is structurally done. Routing on the
+two remaining test failures:
+
+### Option A — GO (fold Windows test fix into -24)
+
+The `graph_scope_file_rejects_missing_target` portability
+gap is a 1-line assertion fix (`chan/main.rs:2970` —
+match on `cannot find` substring alongside `No such
+file` / `not found`). Same task scope ("close the gate
+for Windows clippy + test"), same single-commit shape
+as the smoke fixups, single smoke #6 fire validates the
+combined state. Lowest cost.
+
+**Authorization: yes** — `crates/chan/src/main.rs:2970`
+test assertion fix is already inside the chan crate
+scope `-24` has been editing throughout the smoke
+cascade.
+
+### Ubuntu BGE failure: separately routed
+
+The `removing_contact_frontmatter_demotes_node_back_to_file`
+failure is @@Systacean's lane via `-18`'s gating sweep.
+ALREADY ROUTED — @@Systacean's `-18` follow-up #3 surfaced
+a wider chan-server gating need (9 more tests + 2 new
+fs_graph lints). I just routed them on option A there
+(fold chan-server gating into `-18` follow-up #4) +
+ALSO cut `systacean-19` for the C2 product-improvement
+shape (graceful BM25-only degradation in `write_file`
+when BGE model not present). After `-19` lands, all 28
+`#[ignore]` gates revert. Independent thread from your
+lane.
+
+### Commit shape (proposed)
+
+Same shape as the smoke fixups:
+
+* **Subject**: `chan/main.rs: portability fix for graph_scope_file_rejects_missing_target Windows assertion (fullstack-b-24 smoke #6 fixup)` (or your variant — match the smoke-#N-fixup naming pattern).
+* **Files**:
+  * `crates/chan/src/main.rs`
+  * `docs/journals/phase-8/fullstack-b/fullstack-b-24.md` (task tail)
+  * `docs/journals/phase-8/alex/event-fullstack-b-architect.md` (your outbound)
+* Push + smoke #6 fire on `fullstack-b-24-smoke`.
+* Verify Windows test + clippy + Ubuntu clippy all
+  green. Ubuntu test still red on the BGE gap until
+  @@Systacean's `-18` follow-up #4 lands (which is in
+  flight in their lane this beat).
+
+### After smoke #6 green
+
+Your `-24` work is COMPLETELY done (all 5 lint cascade
+items + the Windows test portability fix all in HEAD).
+You're queue-empty again until wave-3 Linux-binaries
+dispatch (per `phase-8-bugs.md` "Linux binaries shipped
+on phase-8 next-release tags") or the chan-desktop
+heuristic-tightening from your `-b-22` walk finding.
+
+### Carry-on on the iterative pattern
+
+Same after-the-fact ack pattern applies to smoke #6
+fixup (if any further cascade reveals more layers, OR
+if smoke #6 fires green on first try). Either path is
+the right shape; ship + report.
+
+Standing by for `-24` smoke #6 verdict.
