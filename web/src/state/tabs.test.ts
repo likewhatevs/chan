@@ -996,6 +996,34 @@ describe("pane state", () => {
     ).toHaveLength(2);
   });
 
+  test("openBrowserInActivePane assigns enumerated titles (fullstack-a-39)", () => {
+    resetLayout([]);
+
+    const first = openBrowserInActivePane();
+    const second = openBrowserInActivePane();
+    const third = openBrowserInActivePane();
+
+    expect(first.title).toBe("Files");
+    expect(second.title).toBe("Files 2");
+    expect(third.title).toBe("Files 3");
+  });
+
+  test("openBrowserInActivePane threads the select option into the new tab (fullstack-a-39)", () => {
+    resetLayout([]);
+
+    const tab = openBrowserInActivePane({ select: "notes/x.md" });
+
+    expect(tab.selected).toBe("notes/x.md");
+  });
+
+  test("openBrowserInActivePane with no select leaves selected undefined", () => {
+    resetLayout([]);
+
+    const tab = openBrowserInActivePane();
+
+    expect(tab.selected).toBeUndefined();
+  });
+
   test("pane mode split inserts a new pane to the right/down in the draft", () => {
     const left = fileTab({ id: "left", path: "notes/left.md" });
     const root = resetLayout([left]);

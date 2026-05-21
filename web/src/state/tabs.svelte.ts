@@ -1041,7 +1041,9 @@ export function openGraphInPane(paneId: string, opts: OpenGraphOptions = {}): Gr
   return tab;
 }
 
-export function openBrowserInActivePane(): BrowserTab {
+export function openBrowserInActivePane(
+  opts: { select?: string | null } = {},
+): BrowserTab {
   const p = activePane();
   // `fullstack-47`: no dedup. Each press of the file-browser
   // affordance spawns a new browser tab with its own current dir
@@ -1049,13 +1051,41 @@ export function openBrowserInActivePane(): BrowserTab {
   const tab: BrowserTab = {
     kind: "browser",
     id: id("browser"),
-    title: "Files",
+    title: nextBrowserTitle(),
     inspectorOpen: defaultBrowserInspectorOpen(),
+    ...(opts.select ? { selected: opts.select } : {}),
   };
   p.tabs.push(tab);
   p.activeTabId = tab.id;
   layout.activePaneId = p.id;
   return tab;
+}
+
+/// Mirrors `nextTerminalTitle`: walk every existing browser tab,
+/// find the highest "Files" / "Files N" number, return next. The
+/// title is what `browserTabLabel`'s fallback path uses when the
+/// drive context isn't wired (unit tests, edge surfaces) AND it
+/// also matters when two unselected FB tabs sit side-by-side —
+/// numbering disambiguates them in the tab strip.
+function nextBrowserTitle(): string {
+  let max = 0;
+  let hasUnnumbered = false;
+  for (const node of Object.values(layout.nodes)) {
+    if (node.kind !== "leaf") continue;
+    for (const tab of node.tabs) {
+      if (tab.kind !== "browser") continue;
+      const match = /^Files(?: (\d+))?$/.exec(tab.title);
+      if (!match) continue;
+      if (match[1] === undefined) {
+        hasUnnumbered = true;
+      } else {
+        const n = Number(match[1]);
+        if (Number.isInteger(n) && n > max) max = n;
+      }
+    }
+  }
+  if (!hasUnnumbered) return "Files";
+  return `Files ${Math.max(max + 1, 2)}`;
 }
 
 function defaultBrowserInspectorOpen(): boolean {

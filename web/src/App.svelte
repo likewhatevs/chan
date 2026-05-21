@@ -59,8 +59,9 @@
     enterPaneMode,
     isWindowFullyReadOnly,
     layout,
-    openFind,
     openActiveTerminalRichPrompt,
+    openBrowserInActivePane,
+    openFind,
     openInActivePane,
     scheduleAutosave,
     flipHybrid,
@@ -303,14 +304,18 @@
   }
   function spawnBrowserFromContext(): void {
     const ctx = resolveSpawnContext();
-    // Reveal-and-select primes the module-level `browserSelection`
-    // BEFORE the new browser tab mounts. Same pattern Hybrid NAV
-    // `2` uses (App.svelte case `2` calls revealAndSelect before
-    // commitPaneMode) — the new tab's tree picks up the prime on
-    // mount.
-    if (ctx.file) revealAndSelect(ctx.file);
-    else if (ctx.dir) revealAndSelect(ctx.dir);
-    openBrowser();
+    const select = ctx.file ?? ctx.dir ?? null;
+    // Prime the expanded-dirs map + browserSelection so the new
+    // tab's tree opens with the context path visible.
+    if (select) revealAndSelect(select);
+    // `fullstack-a-39`: always spawn a new FB tab. Bypass
+    // `openBrowser()`'s `focusExistingBrowserTab` fall-through so
+    // the chord stays consistent with the other spawn chords
+    // (Cmd+T new terminal every press; Cmd+Shift+M new graph every
+    // press). The `select` arg threads the context path into the
+    // tab's `selected` field directly so `restoreFromTab`'s mount
+    // wipe doesn't clobber the prime.
+    openBrowserInActivePane({ select });
     scheduleSessionSave();
   }
   function spawnRichPromptFromContext(): void {
