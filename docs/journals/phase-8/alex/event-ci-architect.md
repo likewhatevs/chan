@@ -1609,3 +1609,197 @@ Race-safe pathspec form per ci-10 + ci-7 pattern.
   ci-11 clears.
 
 Idle pending review.
+
+## 2026-05-21 — poke (ci-11 committed at 2193946 + LATENT GAP discovered: ci.yml broken on main for at least 15 commits)
+
+Cleared per your "approved + commit clearance (ci-11)"
+heading; committed at **`2193946`** (3 files, +484 / -4).
+Race-safe pathspec form held cleanly through two
+post-ci-10 HEAD shifts (`3987e73` fullstack-b-22 +
+`a603bc3` systacean-14 landed since).
+
+The smoke dispatch run (26227752597) completed: **red**.
+Root-cause investigation surfaces a much larger finding
+than a single workflow regression — flagging
+immediately before the recycle so the next @@Architect
+session inherits the context.
+
+### Smoke run conclusion
+
+| Job                                | Result    |
+|------------------------------------|-----------|
+| clippy + test (ubuntu-latest)      | ✗ failure |
+| clippy + test (macos-latest)       | (skipped) |
+| build (5-target matrix)            | (skipped) |
+| github release                     | (skipped) |
+
+Failure mode: `cargo clippy --all-targets -- -D warnings`
+from the workspace root, exited at compile time of
+`glib-sys v0.18.1` (a Tauri transitive dep pulled by
+`desktop/src-tauri`):
+
+```
+The system library `glib-2.0` required by crate `glib-sys` was not found.
+The file `glib-2.0.pc` needs to be installed and the
+PKG_CONFIG_PATH environment variable must contain its parent directory.
+```
+
+`pkg-config --libs --cflags glib-2.0 'glib-2.0 >= 2.70'`
+exits 1 because `libglib2.0-dev` isn't apt-installed
+on the runner.
+
+### LATENT GAP: this is workspace-wide, NOT a release.yml issue
+
+Investigating the smoke failure, I checked whether
+ci.yml has the same shape and found that **every
+ci.yml run for the last 15 commits has failed with
+the SAME glib-sys root cause**. Recent samples:
+
+| Commit                          | ci.yml run    | Wall-clock | Failure |
+|---------------------------------|---------------|------------|---------|
+| `e7468db` (post-v0.11.2)         | 26222568670   | 6m57s      | glib-sys missing on `clippy + test (ubuntu-latest)` + `(windows-latest)` + `build (no default features)` |
+| `60901c1` (chan v0.11.2)         | 26221281389   | 6m51s      | same |
+| `2c9ff0e` (-b-20 commit poke)    | (older runs follow same shape) |  |  |
+
+Per `gh run list --workflow=ci.yml --limit=15`: last 15
+runs **all** `failure`. The per-PR CI gate has been
+broken on main since at least 2026-05-19. PRs have
+been merging despite the red badge — implying the
+local pre-push hook is doing the actual gating, and
+GHA CI is a known-broken second opinion.
+
+### Root cause
+
+`desktop/src-tauri` joined the workspace (per
+`Cargo.toml [workspace.members]`). `cargo clippy
+--all-targets` from the workspace root touches ALL
+members including chan-desktop, which transitively
+depends on `glib-sys` → needs `libglib2.0-dev` on
+Ubuntu and the equivalent on Windows. ci.yml's
+`test` job has NO apt install step for GTK deps;
+release.yml's `test-linux` / `test-macos` jobs same.
+`release-desktop.yml` IS the only workflow that
+installs the GTK stack (libwebkit2gtk-4.1-dev,
+libayatana-appindicator3-dev, librsvg2-dev,
+libsoup-3.0-dev, patchelf — at lines 114-123). Its
+build job runs `make build` from `chan/desktop`, NOT
+clippy from the workspace root.
+
+Local development presumably passes because workstation
+configs have the GTK stack installed (chan-desktop devs
+need it for `make run` anyway). Per the
+[`feedback-pre-push-checks`](file://~/.claude/projects/-Users-fiorix-dev-github-com-fiorix-chan/memory/feedback_pre_push_checks.md)
+memory, the local pre-push hook runs the same clippy
+gate — but in a developer environment that has glib
+already, so the bug is invisible locally.
+
+### Two reasonable fix shapes
+
+* **(a) Apt-install the GTK deps in ci.yml + release.yml
+  test jobs.** Mirror `release-desktop.yml`'s shape (add
+  the same `libwebkit2gtk-4.1-dev` + GTK stack via apt
+  before clippy). Restores the per-PR CI gate to a
+  green state without changing what's being tested.
+  Largest scope: 4 jobs need the apt step (ci.yml's
+  `test (ubuntu-latest)` + `(windows-latest)` —
+  Windows uses chocolatey for the equivalent — +
+  release.yml's `test-linux` + `test-macos`). Windows
+  may not even need the apt step if it's only ubuntu
+  matrix entries that hit it; need to verify.
+
+* **(b) Exclude `desktop/src-tauri` from default
+  workspace clippy/test sweep.** Use `cargo clippy
+  --workspace --exclude chan-desktop --all-targets`
+  (or similar). chan-desktop's own CI happens via
+  `release-desktop.yml`'s `make build` chain on tag
+  push, which already pre-installs GTK. Trade-off:
+  chan-desktop crate doesn't get the per-PR clippy
+  gate anymore. But it never has, in practice —
+  ci.yml has been failing for 15+ commits with this
+  exact issue, so the "gate" was never load-bearing
+  for chan-desktop anyway.
+
+**Recommendation: (a)** is more correct but heavier;
+**(b)** is faster + matches the current effective
+state. Tilting (b) for the immediate fix (one-line
+change vs. four jobs of apt setup), with (a) as a
+follow-up if/when the chan-desktop crate stabilizes +
+the workspace policy is "all crates pass per-PR
+clippy." Not my call to cut a task; flagging for
+architect routing.
+
+### Authorization note
+
+I have not edited ci.yml. Both fix shapes touch
+`.github/workflows/ci.yml` (shared infra). My
+authorization for ci-11 covered `release.yml` only.
+A new task with explicit authorization would be the
+clean shape (provisional `ci-12`).
+
+### What this means for ci-11's audit trail
+
+ci-11 closes its acceptance criterion ("trigger glob
+matches `chan-v*`; on the next real `chan-v*` tag
+fire, both release.yml and release-desktop.yml run").
+The smoke dispatch surfaced an out-of-lane bug per
+your dispatch-red routing framing; ci-11 itself is
+clean.
+
+The smoke dispatch DID NOT validate that the matrix
+"builds clean against current HEAD" — because the
+chain dies at test-linux's clippy step before the
+matrix even runs. So ci-11's "matrix builds clean"
+half is **not** empirically confirmed; the trigger-
+glob fix IS confirmed structurally. When the
+underlying ci-12-equivalent fix lands, a re-fire of
+the smoke dispatch (or the next real `chan-v*` tag)
+will be the final validation.
+
+### Standing state on my lane (pre-recycle)
+
+| Item                                 | State                                       |
+|--------------------------------------|---------------------------------------------|
+| ci-10                                | ✓ committed (`8aed906`)                     |
+| ci-11                                | ✓ committed (`2193946`)                     |
+| Smoke dispatch (release.yml)         | ✗ run 26227752597 red (glib-sys)            |
+| ci.yml gate on main                  | **BROKEN** since 2026-05-19+ (~15 commits)  |
+| Workspace-wide glib-sys gap          | flagged, no task cut yet                    |
+| v0.11.2 CLI binary backfill          | deferred to @@Alex                          |
+| Auto-fetch notary log                | ✓ in ci-10                                  |
+| `_x64` DMG suffix drop               | ✓ in ci-10                                  |
+
+### Recycle readiness
+
+Bootstrap-ready. Final journal handover entry going
+into [`../ci/journal.md`](../ci/journal.md) with the
+glib-sys finding included. Idle pending architect
+routing on ci-12-equivalent (workspace-wide gap) and
+@@Alex's v0.11.2 backfill call.
+
+## 2026-05-21 — session closed
+
+Tear-down signal received from @@Architect; session-
+close docs commit on its way. Final lane state at
+close:
+
+* `ci-10` ✓ committed (`8aed906`).
+* `ci-11` ✓ committed (`2193946`).
+* `ci-10.md` "committed as <sha>" append rolled into
+  `3262e61` (architect pre-recycle prep commit) ahead
+  of this signal.
+* This commit captures the remaining ci-11 follow-up
+  appends + the journal close-out + this session-
+  closed marker.
+* Glib-sys finding (provisional `ci-12` shape) +
+  v0.11.2 CLI backfill question are the two queued
+  items for the next @@CI session per the journal
+  handover entry.
+
+Next @@CI session bootstraps fresh; reading order is
+the journal first (post-recycle close-out heading),
+then this channel for routing on ci-12 + Alex's
+backfill call.
+
+Tear-down: no orphaned processes / drives / tabs from
+my lane. Smoke run 26227752597 is complete (red,
+documented). External state is clean.

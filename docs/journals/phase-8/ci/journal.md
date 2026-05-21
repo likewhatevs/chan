@@ -900,3 +900,109 @@ sequence is:
 
 Cleaner teardown than prior recycles. Ready for the
 next @@CI session.
+
+## 2026-05-21 — ci-11 committed + smoke-run gap surfaced (final pre-recycle)
+
+ci-11 cleared + committed at **`2193946`** (3 files,
++484 / -4) per the architect heading in
+[`../alex/event-architect-ci.md`](../alex/event-architect-ci.md)
+"approved + commit clearance (ci-11)". Subject accepted
+verbatim. Race-safe pathspec form again — HEAD had
+shifted twice more since ci-10 (`3987e73`
+fullstack-b-22 + `a603bc3` systacean-14); pathspec
+form held cleanly.
+
+### Smoke dispatch result: RED + workspace-wide gap surfaced
+
+The smoke dispatch (run 26227752597) completed red at
+`cargo clippy --all-targets` compilation of
+`glib-sys v0.18.1`. Investigating revealed this is
+NOT a ci-11 issue but a much larger latent gap:
+
+**Every ci.yml run on main for the last 15+ commits
+has failed with the same root cause.** Per-PR CI
+gate has been silently broken since at least
+2026-05-19. Local pre-push hooks have been doing the
+actual gating; the GHA per-PR badge has been
+ignorable-red.
+
+Root cause: `desktop/src-tauri` is a workspace member
+(per `Cargo.toml`); `cargo clippy --all-targets` from
+workspace root touches all members; chan-desktop's
+Tauri deps (`glib-sys` etc.) need GTK system libs;
+ci.yml + release.yml test jobs don't apt-install
+them. Only `release-desktop.yml` does. Local dev
+boxes have GTK installed (for `make run`), so the
+issue is invisible locally.
+
+Two fix shapes surfaced for architect routing in the
+outbound poke (provisional ci-12):
+
+* **(a)** apt-install GTK in 4 test jobs (correct,
+  heavier).
+* **(b)** exclude `chan-desktop` from workspace
+  clippy/test sweep (faster; matches current effective
+  state; recommended for immediate unblock).
+
+Not cutting a task — per the bootstrap rules, the
+next @@CI session reads
+[`../alex/event-architect-ci.md`](../alex/event-architect-ci.md)
+tail for architect routing on the finding.
+
+### Final lane state at recycle
+
+| Item                                  | State                                       |
+|---------------------------------------|---------------------------------------------|
+| ci-10 commit                          | ✓ (`8aed906`)                               |
+| ci-11 commit                          | ✓ (`2193946`)                               |
+| Smoke dispatch (run 26227752597)      | ✗ red (glib-sys; out-of-lane root cause)    |
+| ci.yml gate on main                   | **BROKEN** since 2026-05-19+ (~15 commits)  |
+| Workspace-wide glib-sys gap           | flagged + routed; awaits ci-12              |
+| v0.11.2 CLI binary backfill           | deferred to @@Alex                          |
+| Universal2 / lipo follow-up           | post-v0.11.2 ci-N (not cut)                 |
+| Round-3 full-SHA pin sweep            | Round-3 fan-out                             |
+
+### Next-session bootstrap action sequence (updated)
+
+1. **Read this journal entry first.**
+2. **Read inbound `event-architect-ci.md` tail** for
+   the routing on the glib-sys finding (provisional
+   `ci-12`). The fix is one of (a) / (b) per the prior
+   poke; architect's reply will route + authorize.
+3. **If routed**: cut + work the ci-12 patch. (b) is
+   ~1-line per workflow; (a) is ~4 jobs of apt setup.
+4. **Re-fire the release.yml smoke dispatch** after
+   ci-12 lands to confirm matrix builds clean against
+   current HEAD.
+5. **If a real `chan-v*` tag fires before ci-12 lands**:
+   the release.yml workflow will fire on the new tag
+   per my ci-11 fix, but the test-linux/macos jobs
+   will red at the same glib-sys step. release-desktop.yml's
+   chan-desktop DMG pipeline keeps working
+   independently (it has its own GTK install + isn't
+   gated on test-linux). So the worst case is a
+   tag with: ✗ release.yml red (CLI binaries not
+   uploaded yet), ✓ release-desktop.yml green (DMG
+   shipped). Surface to architect; the v0.11.2
+   experience repeats.
+6. **Pick up v0.11.2 CLI backfill** if @@Alex routes
+   it.
+7. **Otherwise idle**.
+
+### Teardown sweep (final)
+
+* No `chan serve` processes from my lane (CI lane is
+  workflow-edit + gh CLI; nothing local-spawned).
+* No throwaway drives.
+* No Chrome MCP tabs.
+* `act` not installed.
+* Working tree of CI-lane files: ci-10 + ci-11 both
+  committed; journal + event-channel appends are the
+  only working-tree changes left (per the per-task
+  commit convention, those stay untracked until close-
+  out rollup).
+* External state: workflow_dispatch run `26227752597`
+  is complete (red). Documented in this entry +
+  outbound poke. No cleanup needed.
+
+Cleaner-than-prior teardown. Recycle ready.
