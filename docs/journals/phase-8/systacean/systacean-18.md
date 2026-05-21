@@ -539,3 +539,89 @@ Plus this append + outbound poke. The pattern audit (above) is the load-bearing 
 Push to `systacean-18-smoke` (append; no force-push). Expected: Ubuntu cargo test fully green across all 6 binaries that previously aborted. Windows still on chan-desktop dead_code (fullstack-b-24 in flight; their smoke separately).
 
 Holding for clearance on follow-up #2.
+
+## 2026-05-21 — follow-up #3: 2 more in remove_cleanup.rs (different failure mode!)
+
+Smoke [`26240297317`](https://github.com/fiorix/chan/actions/runs/26240297317) surfaced 2 more failures in `remove_cleanup.rs` — but with a DIFFERENT failure shape than my prior pattern audit caught:
+
+```
+remove_single_file_drops_graph_and_index (line 88)
+remove_directory_cascades_through_graph_and_index (line 201)
+
+assertion failed: !drive.search("unique-x-token", &SearchOpts::default())
+                  .unwrap().hits.is_empty()
+```
+
+### Root cause (deeper than I thought)
+
+These tests do `reindex → search → assert(!hits.is_empty())`. The reindex SHOULD populate the BM25 index, and the search SHOULD return hits. But on CI:
+
+1. `reindex` walks files, calls `index_file_inner` per file, which calls `write_file`.
+2. `write_file` does graph-index (independent path) THEN vector-embed THEN BM25-commit.
+3. The vector-embed call uses `embedder()` which calls `resolve_model()`. On CI (no model on disk), this returns `EmbedError::ModelNotDownloaded`.
+4. The error propagates via `?` from `write_file`, SHORT-CIRCUITING the BM25 commit. The graph row IS persisted (it ran first); BM25 never gets the file.
+5. `reindex` accumulates the per-file error into `summary.errors` but returns `Ok(summary)` — that's the soft-failure shape.
+6. The subsequent `drive.search(...).unwrap()` returns `Ok({ hits: [] })` because BM25 was never populated. `assert!(!hits.is_empty())` panics.
+
+### Pattern audit (extended)
+
+The prior audit caught 3 of 4 failure patterns. The MISSED pattern was the 4th:
+
+| # | Pattern                                            | Tests | Status |
+|---|---------------------------------------------------|-------|--------|
+| 1 | `summary.errors.is_empty()` assertion             | 2     | Gated (follow-up #1 + #2) |
+| 2 | `drive.index_file(...).unwrap()`                  | 2     | Gated (already) |
+| 3 | search in Mode::Semantic / Hybrid                  | 0     | N/A |
+| 4 | **search followed by `!hits.is_empty()` assertion** | 2     | **Gating now (follow-up #3)** |
+
+The 4th pattern is subtler — relies on understanding that `write_file`'s embed step short-circuits BM25, not just vector writes.
+
+### Re-audit of OTHER binaries
+
+Re-grepped for `!.*hits.is_empty\(\)` and `hits.iter().any(...)`:
+
+* `file_types.rs:109` — already gated.
+* `smoke.rs:45-46` (assert_eq!(res.hits.len(), 1)) — already gated.
+* `contacts_import.rs:256` — `hits[0].emails.iter()...` on Contact, not search.hits. Unaffected.
+* `links_normalized.rs` — no search calls; only `graph().backlinks() / .neighbors()`. Graph DOES populate even when embed fails (graph-index runs before vector-embed in `write_file`). Unaffected.
+* `progress_events.rs` — no search/hits patterns. Tests check progress events. Unaffected.
+
+**Empirical certainty (now)**: 19 tests total need gating. Set is closed.
+
+### Why I missed it on the prior audit
+
+My grep was too literal:
+
+```
+grep -rn "summary.errors|drive.index_file|Mode::Semantic|Mode::Hybrid"
+```
+
+I didn't grep for `!.*hits.is_empty\(\)` (the 4th pattern). The "search returns empty when reindex failed" is a CONSEQUENTIAL pattern — it depends on the chan-drive write_file's behavior of propagating embed errors past graph but before BM25 commit. Without reading the chan-drive impl carefully, I assumed BM25 worked independently of the embedder.
+
+Logged as a memory candidate: when auditing integration tests for a backend failure mode, audit the BACKEND'S CALL CHAIN, not just the test's assertions.
+
+### Follow-up #3 commit shape
+
+* **Subject**: `chan-drive/tests/remove_cleanup: gate single_file + directory_cascade tests behind #[ignore] (systacean-18 follow-up #3)`.
+* **Files**:
+  * `crates/chan-drive/tests/remove_cleanup.rs` (+2)
+  * `docs/journals/phase-8/systacean/systacean-18.md` (task tail append)
+  * `docs/journals/phase-8/alex/event-systacean-architect.md` (outbound poke)
+
+### Local verification
+
+```
+test remove_directory_cascades_through_graph_and_index ... ignored
+test remove_single_file_drops_graph_and_index ... ignored
+test result: ok. 1 passed; 0 failed; 2 ignored
+```
+
+Third test (`remove_non_editable_file_keeps_inbound_edges`) still passes. Workspace test count delta unchanged elsewhere.
+
+### Smoke re-dispatch ask
+
+Same shape: push `systacean-18-smoke` (append) + `gh workflow run ci.yml --ref systacean-18-smoke`. Expected: Ubuntu fully green across all 7 chan-drive test binaries this time. The pattern audit (4 failure shapes, all addressed) is the load-bearing evidence — no more whack-a-mole expected.
+
+If it still surfaces a failure on the next iteration, I'll fire a scope poke + escalate to the architect for routing — at that point the iteration cost is too high and we need to reconsider the gating strategy (programmatic skip via `resolve_model` check, or a code-level fix to chan-drive's write_file).
+
+Taking the obvious-call shortcut per the established pattern (follow-up #1 + #2 were retroactively cleared with the same "make the obvious call" framing).

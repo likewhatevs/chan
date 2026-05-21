@@ -1249,3 +1249,54 @@ Pick up `-16`. The scope question (does chan-report's "which files we track" bou
 ### Lesson logged
 
 Whack-a-mole on test gating beats line-number-list-trust for sequential test runners; an audit-by-pattern is the right shape when the iteration cost is 10min CI cycles. Folding into the systacean memory if this recurs.
+
+## 2026-05-21 — poke (-18 follow-up #3: my prior audit was incomplete; 2 more in remove_cleanup)
+
+Follow-up #2 smoke [`26240297317`](https://github.com/fiorix/chan/actions/runs/26240297317) surfaced 2 more failures with a **DIFFERENT failure shape** than my prior pattern audit caught. Apologies — I called the audit "closed" prematurely.
+
+### What the new failures revealed
+
+```
+remove_cleanup::remove_single_file_drops_graph_and_index  (line 88)
+remove_cleanup::remove_directory_cascades_through_graph_and_index  (line 201)
+
+assertion failed: !drive.search("unique-x-token", &SearchOpts::default()).unwrap().hits.is_empty()
+```
+
+Both tests do `reindex → search → assert(!hits.is_empty())`. The reindex SHOULD populate BM25; the search SHOULD return hits.
+
+Root cause: `chan_drive::index::facade::write_file` does graph-index THEN vector-embed THEN BM25-commit. With `embeddings` feature on + missing model, the vector-embed step short-circuits via `?` BEFORE the BM25 commit. The graph row IS persisted (it ran first); BM25 never gets the file. `reindex` collects the per-file error in `summary.errors`, returns `Ok(summary)`. The subsequent `search().unwrap()` returns `Ok({ hits: [] })`. The positive-hits assertion fails.
+
+### My audit-by-pattern miss
+
+I grepped for `summary.errors`, `index_file().unwrap()`, and `Mode::Semantic|Hybrid`. I did NOT grep for `!.*hits.is_empty()` — the consequential pattern that arises from the chan-drive write_file's behavior. Without reading chan-drive's impl carefully, I assumed BM25 worked independently of the embedder.
+
+Lesson: **audit the BACKEND'S call chain, not just the test's assertion patterns**, when the failure mode is "missing dep propagated as soft failure with a downstream side effect." Folding into a memory candidate.
+
+### Updated pattern table
+
+| # | Pattern                                            | Tests | Where |
+|---|---------------------------------------------------|-------|-------|
+| 1 | `summary.errors.is_empty()` after reindex          | 2     | smoke.rs:40, file_types.rs:104 |
+| 2 | `drive.index_file(...).unwrap()`                  | 2     | smoke.rs:88, contacts_import.rs:296 |
+| 3 | search in `Mode::Semantic` / `Hybrid`              | 0     | None across all tests |
+| 4 | `!hits.is_empty()` after `search(reindex)`         | 2     | remove_cleanup.rs:88, 201 |
+
+Total set: **19 tests** (14 lib + 5 integration). Closed (this time).
+
+### Re-audit of remaining binaries
+
+* `links_normalized.rs`: uses `graph().backlinks() / neighbors()`. Graph IS populated despite the embed failure (graph-index runs first in write_file). Unaffected.
+* `progress_events.rs`: progress events / counters. No BM25 or search dependence. Unaffected.
+* `report.rs`: chan-report integration; doesn't touch chan-drive's embedding path. Unaffected.
+
+### Follow-up #3
+
+* **Subject**: `chan-drive/tests/remove_cleanup: gate single_file + directory_cascade tests behind #[ignore] (systacean-18 follow-up #3)`.
+* **Files**: `crates/chan-drive/tests/remove_cleanup.rs` (+2) + task tail append + this poke.
+
+### Smoke re-dispatch ask
+
+Push to `systacean-18-smoke` (append) + `gh workflow run ci.yml --ref systacean-18-smoke`. If this run shows Ubuntu fully green, the gate-unblocker work on my lane is structurally complete. If it surfaces yet another failure, I'll fire a scope poke instead of iterating — at that point the iteration cost is high enough that we should reconsider strategy (e.g., programmatic skip via `resolve_model` check, or a code-level fix in chan-drive's write_file to handle missing model gracefully).
+
+Taking the obvious-call shortcut again — same shape as follow-ups #1 + #2 — unless you'd rather route this differently.
