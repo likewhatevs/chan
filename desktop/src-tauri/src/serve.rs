@@ -831,6 +831,20 @@ const KEY_BRIDGE_JS: &str = r#"
     window.dispatchEvent(new CustomEvent('chan:command',
       { detail: Object.assign({ name: name }, detail || {}) }));
   }
+  // `fullstack-b-17`: Cmd+R reloads the webview, Cmd+Opt+I opens
+  // DevTools. Both bypass the SPA event bus and invoke their
+  // Tauri IPC commands directly so a frozen Svelte runtime or a
+  // broken chord registry can't lock the dev affordances away.
+  function invokeIpc(e, cmd) {
+    e.preventDefault();
+    e.stopImmediatePropagation();
+    const tauri = window.__TAURI__;
+    if (tauri && tauri.core && typeof tauri.core.invoke === 'function') {
+      tauri.core.invoke(cmd).catch((err) => {
+        console.error('[chan] IPC ' + cmd + ' failed:', err);
+      });
+    }
+  }
   // `fullstack-42` pruned every native chord whose action is now
   // covered by Pane Mode (Cmd+K). Dropped: Cmd+P, Cmd+N, Cmd+`,
   // Cmd+[/Cmd+], Cmd+Shift+M, Cmd+Shift+F. Kept: Cmd+W (close
@@ -847,11 +861,22 @@ const KEY_BRIDGE_JS: &str = r#"
   // the web/Win/Linux fallback path.
   function onKey(e) {
     const meta = e.metaKey || e.ctrlKey;
-    if (!meta || e.altKey) return;
+    if (!meta) return;
     const shift = e.shiftKey;
+    const alt = e.altKey;
     const code = e.code;
+    if (alt) {
+      // Cmd+Opt+I (macOS) / Ctrl+Alt+I (Linux/Windows) → DevTools.
+      // No other meta+alt chord today; bail out for everything else
+      // so we don't shadow the webview's defaults.
+      if (!shift && code === 'KeyI') {
+        invokeIpc(e, 'open_devtools');
+      }
+      return;
+    }
     if (!shift) {
       switch (code) {
+        case 'KeyR': invokeIpc(e, 'reload_window'); return;
         case 'KeyT': fire(e, 'app.terminal.toggle'); return;
         case 'KeyO': fire(e, 'app.files.toggle');    return;
         case 'KeyP': fire(e, 'app.terminal.richPrompt'); return;
@@ -916,6 +941,51 @@ mod tests {
         assert!(normal_termination(None, Some(nix::libc::SIGTERM)));
         assert!(normal_termination(None, Some(nix::libc::SIGINT)));
         assert!(!normal_termination(None, Some(nix::libc::SIGKILL)));
+    }
+
+    #[test]
+    fn invoke_handler_registers_reload_window_and_open_devtools() {
+        // `fullstack-b-17`: the IPC commands `reload_window` and
+        // `open_devtools` MUST be in the `tauri::generate_handler!`
+        // list so the SPA's tab context-menu (via -a-36) and the
+        // accelerator path can reach them. The generate_handler!
+        // macro does not catch a missing handler at compile time,
+        // so we pin it here against the source file. Tests live in
+        // serve.rs because main.rs has no test module today; using
+        // `include_str!` keeps the pin source-of-truth-correct.
+        const MAIN_RS: &str = include_str!("main.rs");
+        assert!(MAIN_RS.contains("reload_window,"));
+        assert!(MAIN_RS.contains("open_devtools,"));
+        assert!(MAIN_RS.contains("fn reload_window(window: tauri::WebviewWindow)"));
+        assert!(MAIN_RS.contains("fn open_devtools(window: tauri::WebviewWindow)"));
+    }
+
+    #[test]
+    fn key_bridge_wires_reload_and_devtools_ipc() {
+        // `fullstack-b-17`: Cmd+R fires the `reload_window` IPC and
+        // Cmd+Opt+I fires `open_devtools`, bypassing the SPA event
+        // bus so a frozen Svelte runtime can't lock the dev
+        // affordances away. The accelerator path goes through
+        // `invokeIpc(...)` (not the `chan:command` `fire(...)`
+        // bridge), so the contract pin checks both the IPC command
+        // names and the case-label they're bound from.
+        assert!(KEY_BRIDGE_JS.contains("invokeIpc(e, 'reload_window')"));
+        assert!(KEY_BRIDGE_JS.contains("invokeIpc(e, 'open_devtools')"));
+        assert!(KEY_BRIDGE_JS.contains("case 'KeyR': invokeIpc"));
+        assert!(KEY_BRIDGE_JS.contains("code === 'KeyI'"));
+    }
+
+    #[test]
+    fn key_bridge_invokes_tauri_ipc_via_core_invoke() {
+        // The `invokeIpc` helper grabs `window.__TAURI__.core.invoke`
+        // (Tauri 2's invoke surface; was `window.__TAURI__.invoke`
+        // in Tauri 1). Pin so a future bridge rewrite doesn't
+        // silently regress to the v1 shape — the new shape returns
+        // undefined from a webview without the v2 IPC surface
+        // attached, which silently swallows the Cmd+R / Cmd+Opt+I
+        // accelerators.
+        assert!(KEY_BRIDGE_JS.contains("window.__TAURI__"));
+        assert!(KEY_BRIDGE_JS.contains("tauri.core.invoke"));
     }
 
     #[test]

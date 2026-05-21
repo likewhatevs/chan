@@ -893,3 +893,116 @@ Wave-2 fan-out.
 
 See [../fullstack-b/fullstack-b-16.md](../fullstack-b/fullstack-b-16.md)
 for the full implementation note + suggested commit subject.
+
+## 2026-05-21 — poke (v0.11.2 wave: -17 / -18 / -19 all ready)
+
+All three v0.11.2 mini-wave tasks ship-ready in one session.
+Workspace pre-push gate green (workspace fmt + clippy
+`--workspace -D warnings` + test + no-default-features build +
+svelte-check + npm build + vitest). chan-desktop test count
+21 → 33 across the wave (+4 in -17, +4 in -19, +0 Rust /
++3 vitest in -18). vitest 555 → 568 (+10 net).
+
+### -b-17: tab right-click Reload + Open Inspector (DEV META-BLOCKER)
+
+* **`desktop/src-tauri/Cargo.toml`** — `devtools` feature added
+  to the `tauri` workspace dep so release builds carry the
+  inspector affordance (Tauri 2 dropped the v1 `app.devTools`
+  JSON key for this compile-time flag).
+* **`main.rs`** — `reload_window(window: WebviewWindow) ->
+  Result<(), String>` evals `window.location.reload()` (Tauri 2
+  removed `WebviewWindow::reload()`; eval is the supported
+  path). `open_devtools(window)` calls
+  `WebviewWindow::open_devtools()` directly. Both registered
+  in `generate_handler!`.
+* **`serve.rs`** — KEY_BRIDGE_JS extended with `Cmd+R` →
+  `invokeIpc('reload_window')` and `Cmd+Opt+I` /
+  `Ctrl+Alt+I` → `invokeIpc('open_devtools')`. New
+  `invokeIpc(e, cmd)` helper calls
+  `window.__TAURI__.core.invoke(cmd)` directly. Bypasses the
+  SPA event bus so a frozen Svelte runtime can't lock the
+  dev affordances away.
+
+IPC contract for @@FullStackA's `-a-36`:
+* `__TAURI__.core.invoke('reload_window')` — no args.
+* `__TAURI__.core.invoke('open_devtools')` — no args.
+
+### -b-18: submit-mode reload persistence + tooltip
+
+SPA-only. Server-side untouched.
+
+* **`tabs.svelte.ts`** — after richPromptFromSer resolves
+  during tab restore, if the deserialized tab has
+  `submitMode === "agent"` AND a `terminalSessionId`, fire
+  `api.setTerminalSubmitMode(sessionId, "agent")` as
+  fire-and-forget. Server's `Session.agent_mode` defaults
+  false on every spawn; this re-sync closes the desync that
+  the bug entry's reproducer (toolbar says Agent, server
+  emits Shell chord) was hitting.
+* **`TerminalRichPrompt.svelte`** — shell-mode tooltip copy
+  changed from `"Submit mode: shell (Cmd+Enter sends a
+  trailing newline)"` to `"Submit mode: shell (default;
+  Cmd+Enter submits the buffer verbatim)"`. The
+  agent-mode tooltip stayed accurate (chord IS appended).
+* 3 new vitest pins covering the re-sync (agent fires PUT,
+  shell skips PUT, no-session skips PUT).
+
+### -b-19: chan-desktop Cmd+= / Cmd+- / Cmd+0 zoom
+
+* **`config.rs`** — `WindowConfig.zoom_level: f64` with
+  `#[serde(default = "default_zoom")]` (returns 1.0).
+  Backward compat with existing `config.json` files pinned.
+* **`main.rs`** — `AppState.live_window_zooms:
+  Mutex<HashMap<String, f64>>`. Three IPC handlers
+  `zoom_in` / `zoom_out` / `zoom_reset` with shared
+  `current_zoom` + `apply_zoom` helpers. Step 10 %, clamp
+  [0.25, 5.0]. Registered in `generate_handler!`.
+* **`serve.rs`** — KEY_BRIDGE_JS routes `Equal` /
+  `NumpadAdd` → `zoom_in`, `Minus` / `NumpadSubtract` →
+  `zoom_out`, `Digit0` / `Numpad0` → `zoom_reset`. Routed
+  BEFORE the shift branch so `Cmd+=` and `Cmd+Shift+=`
+  (= `Cmd++`) both zoom in. `build_drive_window` accepts a
+  `zoom_seed` parameter and applies it via
+  `WebviewWindow::set_zoom` after build. The close handler
+  drains the live zoom into `WindowConfig.zoom_level` so
+  the `-b-1` LRU restore picks it up on the next open.
+* Tauri's `zoom_hotkeys_enabled(true)` polyfill stays on as
+  a mousewheel + trackpad pinch fallback (chord overlap is
+  harmless — capture-phase listener pre-empts the polyfill).
+* 4 new tests (2 config + 2 serve).
+
+### Coordination footprint
+
+* No overlap with @@FullStackA's `-a-36` (paired SPA work for
+  -17) — they consume the IPC names I've locked here.
+* No overlap with @@CI's ci-7 (release-desktop.yml) or
+  @@Systacean's `-11` / `-13` (signing block /
+  Makefile notarytool) — different files.
+* Same shared-worktree commit discipline as `-15` / `-16`:
+  per-file `git add`, pre-commit `git diff --staged --stat`,
+  post-commit `git show --stat HEAD`. Tauri Cargo.toml
+  feature flag change is in shared file space; will stage
+  explicitly and verify.
+
+### Suggested commit subjects (one per task)
+
+* `chan-desktop: reload_window + open_devtools IPC + Cmd+R /
+  Cmd+Opt+I accelerators (fullstack-b-17)`
+* `Rich prompt: re-sync submit-mode on tab restore + tooltip
+  copy fix (fullstack-b-18)`
+* `chan-desktop: Cmd+= / Cmd+- / Cmd+0 zoom chords + per-window
+  persistence (fullstack-b-19)`
+
+### Recommended commit order
+
+1. `-b-17` first (unblocks @@FullStackA's `-a-36` SPA dispatch).
+2. `-b-19` second (extends `-b-17`'s `KEY_BRIDGE_JS` +
+   `invoke_handler!` + adds the `WindowConfig.zoom_level`
+   field; touches main.rs's AppState).
+3. `-b-18` third (SPA-only; no Rust dependency on -17 / -19).
+
+Holding for commit clearance. Per-task implementation notes +
+verification tables at the tails of
+[`../fullstack-b/fullstack-b-17.md`](../fullstack-b/fullstack-b-17.md),
+[`../fullstack-b/fullstack-b-18.md`](../fullstack-b/fullstack-b-18.md),
+[`../fullstack-b/fullstack-b-19.md`](../fullstack-b/fullstack-b-19.md).

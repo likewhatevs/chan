@@ -576,6 +576,35 @@ fn show_window(app: &tauri::AppHandle, label: &str) -> Result<(), String> {
     Ok(())
 }
 
+/// Reload the calling webview window. Drives the SPA's tab
+/// context-menu "Reload" entry (via `fullstack-a-36`) AND the
+/// `Cmd+R` accelerator wired in `KEY_BRIDGE_JS`. The accelerator
+/// path bypasses the SPA event bus and invokes this command
+/// directly so a SPA-side fault (frozen Svelte runtime, JS error
+/// in the chord handler) doesn't lock the dev affordance away.
+#[tauri::command]
+fn reload_window(window: tauri::WebviewWindow) -> Result<(), String> {
+    // Tauri 2's `WebviewWindow::eval` runs JS inside the webview;
+    // we use it instead of the missing-in-2 `reload()` method.
+    window
+        .eval("window.location.reload()")
+        .map_err(|e| format!("reloading window: {e}"))
+}
+
+/// Open the DevTools inspector on the calling webview. Mirrors
+/// the SPA's "Open Inspector" context-menu entry from `-a-36`
+/// AND the `Cmd+Opt+I` accelerator in `KEY_BRIDGE_JS`. Requires
+/// the `devtools` Cargo feature on the `tauri` crate (enabled in
+/// `desktop/src-tauri/Cargo.toml`) so release builds carry the
+/// inspector affordance, not just debug builds. Tauri 2 removed
+/// the `app.devTools` JSON config key in favour of this
+/// compile-time flag.
+#[tauri::command]
+fn open_devtools(window: tauri::WebviewWindow) {
+    window.open_devtools();
+}
+
+
 /// Canonical-path key used for sidecar lookups, serve identity, and
 /// the displayed path. `canonicalize` falls back to the input on
 /// error so we still produce a stable key for not-yet-existing or
@@ -798,6 +827,8 @@ fn main() {
             get_config,
             home_dir,
             reveal_in_finder,
+            reload_window,
+            open_devtools,
             tunnel_status,
             tunnel_start,
             tunnel_stop,
