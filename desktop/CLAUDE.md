@@ -30,28 +30,59 @@ one pass, and `ci-7`'s notarization roundtrip covers both for free.
 
 ### Resolution helpers
 
-`crates/chan-desktop/src/serve.rs` exposes two helpers used by every
-spawn site:
+`crates/chan-desktop/src/serve.rs` exposes three helpers used by
+every spawn site:
 
-* `bundled_chan_path() -> Result<PathBuf, String>` — pure path math
-  over `current_exe()`. Returns the expected sidecar path without
-  checking that the file exists. Cheap, infallible at runtime in
-  practice (only fails if `current_exe()` itself fails).
+* `resolve_chan_binary() -> Result<PathBuf, String>` — the
+  PATH-first picker. Walks `PATH` for a `chan` (or `chan.exe`)
+  binary; if found, probes its `--version` and accepts only an
+  EXACT semver match against chan-desktop's own
+  `env!("CARGO_PKG_VERSION")`. Any failure (no chan on PATH,
+  spawn error, --version error, version mismatch) falls through
+  to `bundled_chan_path()`. Result: `add_drive`, `remove_drive`,
+  `set_drive_on`, and the boot-time preflight all delegate to
+  this helper so a power user who runs `cargo install --path
+  crates/chan` against the matching version gets to use their
+  own build through chan-desktop without rebuilding chan-desktop.
+* `bundled_chan_path() -> Result<PathBuf, String>` — pure path
+  math over `current_exe()`. Returns the expected sidecar path
+  without checking that the file exists. Cheap, infallible at
+  runtime in practice (only fails if `current_exe()` itself
+  fails).
 * `probe_chan_version(bin: &Path) -> Result<(), String>` — runs
   `<bin> --version` and asserts an EXACT semver match against
-  chan-desktop's own `env!("CARGO_PKG_VERSION")`. Exact match (not
-  a `>=` floor) is the locked Round-2 decision-3 contract:
-  bundled chan is built from the same workspace checkout as
-  chan-desktop, so the only way for the versions to diverge is a
-  tampered bundle or a build-system fault; either case should fail
-  loudly. The exact-match shape is also what the PATH resolver in
-  `fullstack-b-16` builds on (PATH chan must match the bundled
-  version or be rejected in favour of the bundled fallback).
+  `env!("CARGO_PKG_VERSION")`. Used by both the boot-time
+  preflight (validating whatever `resolve_chan_binary()` picks)
+  AND `resolve_chan_binary()` itself (validating the PATH
+  candidate before accepting it). Exact match (not a `>=` floor)
+  is the locked Round-2 decision-3 contract: bundled chan is
+  built from the same workspace checkout as chan-desktop, and
+  any PATH chan that doesn't match the same version is rejected
+  in favour of the bundled fallback.
 
 The boot-time preflight in `main.rs::compute_bin_status` runs the
-existence + version check exactly once, stores the verdict in
-`AppState::bin_status`, and every IPC that spawns chan gates on
-`require_bin()` before calling `bundled_chan_path()`.
+resolver + existence check + version check exactly once, stores
+the verdict in `AppState::bin_status`, and every IPC that spawns
+chan gates on `require_bin()` before calling
+`resolve_chan_binary()`.
+
+#### Resolution algorithm (user-facing behaviour)
+
+| State                                          | Picked binary            |
+|------------------------------------------------|--------------------------|
+| `chan vN` on PATH (N = chan-desktop's version) | PATH chan                |
+| `chan vM` on PATH, M ≠ N                       | bundled (PATH rejected)  |
+| `chan` on PATH errors on `--version`           | bundled                  |
+| no `chan` on PATH                              | bundled                  |
+| both unavailable                               | error → `BinStatus::missing` |
+
+Fresh installs Just Work: chan-desktop ships the matching `chan`
+inside the app bundle. Power users who want chan-desktop to drive
+their own chan build install it to PATH at the matching version
+(`cargo install --path crates/chan` from the same checkout), and
+chan-desktop picks it up automatically on next launch. A
+mismatched PATH install (older or newer than chan-desktop) is
+ignored cleanly — the app keeps working via the bundled binary.
 
 ### Architecture handling
 

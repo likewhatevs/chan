@@ -394,19 +394,18 @@ pub fn bundled_chan_path() -> Result<PathBuf, String> {
     Ok(dir.join(name))
 }
 
-/// Probe the bundled `chan` binary's `--version` output and confirm
-/// it matches chan-desktop's own version exactly.
+/// Probe a `chan` binary's `--version` output and confirm it
+/// matches chan-desktop's own version exactly.
 ///
-/// Bundled chan ships from the same workspace checkout as
-/// chan-desktop, so the two versions are always identical in a
-/// clean build. A mismatch indicates either a tampered bundle or a
-/// build-system fault and is treated as a hard failure: the
-/// frontend disables every spawn path.
-///
-/// Locked decision: PATH-first w/ bundled fallback + version match
-/// (round-2-plan decisions table, item 3). Exact-match here is the
-/// contract that the PATH-resolution layer in `fullstack-b-16`
-/// builds on.
+/// Used by both the boot-time preflight (validating the bundled
+/// sidecar at `bundled_chan_path()`) and the PATH-first resolver
+/// (deciding whether a `chan` on the user's `PATH` is usable as a
+/// substitute for the bundled binary). The exact-match contract
+/// is the locked Round-2 decision 3 (round-2-plan decisions
+/// table): bundled chan ships from the same workspace checkout
+/// as chan-desktop so the versions are always identical in a
+/// clean build, and any PATH chan that doesn't match the same
+/// version is rejected in favour of the bundled fallback.
 pub fn probe_chan_version(bin: &Path) -> Result<(), String> {
     let out = std::process::Command::new(bin)
         .arg("--version")
@@ -433,6 +432,107 @@ pub fn probe_chan_version(bin: &Path) -> Result<(), String> {
         ));
     }
     Ok(())
+}
+
+/// Resolve which `chan` binary chan-desktop should spawn.
+///
+/// PATH-first with bundled fallback. Locked Round-2 decision 3
+/// (`docs/journals/phase-8/architect/round-2-plan.md`).
+///
+/// Algorithm:
+///   1. Look up `chan` (or `chan.exe`) on the user's `PATH`. If
+///      found, probe its `--version` and check it matches
+///      chan-desktop's `env!("CARGO_PKG_VERSION")` exactly. On
+///      match, return the resolved PATH path.
+///   2. Any failure (no chan on `PATH`, spawn error, `--version`
+///      error, version mismatch) falls through to the bundled
+///      sidecar at `bundled_chan_path()`.
+///
+/// Why PATH-first: a power user who runs their own chan build
+/// from this checkout and `cargo install --path crates/chan`
+/// expects chan-desktop to use their build. Why exact-match: a
+/// stale PATH chan (vN-1) running against chan-desktop vN — or a
+/// vN+1 prerelease — produces weird-state crashes the locked
+/// decision was designed to prevent; falling back to bundled
+/// keeps the app launchable.
+///
+/// The resolver does NOT existence-check the bundled fallback;
+/// the boot-time preflight in `crate::compute_bin_status` owns
+/// the file + version check on whatever path is picked, and
+/// surfaces "bundled missing AND PATH missing" via the
+/// `BinStatus::missing` kind that the frontend already handles.
+pub fn resolve_chan_binary() -> Result<PathBuf, String> {
+    resolve_chan_binary_with(which_chan(), probe_chan_version, bundled_chan_path)
+}
+
+/// Testable core of `resolve_chan_binary`. The `path_candidate`
+/// is the `which`-style lookup result; `probe` is the
+/// `--version`-and-exact-match check (real implementation:
+/// `probe_chan_version`); `bundled_fn` is the fallback path
+/// resolver (real implementation: `bundled_chan_path`). Pure
+/// composition over its three inputs so the five acceptance
+/// branches in `fullstack-b-16` can be covered by unit tests
+/// without spawning real binaries.
+fn resolve_chan_binary_with<P, B>(
+    path_candidate: Option<PathBuf>,
+    probe: P,
+    bundled_fn: B,
+) -> Result<PathBuf, String>
+where
+    P: FnOnce(&Path) -> Result<(), String>,
+    B: FnOnce() -> Result<PathBuf, String>,
+{
+    if let Some(path_chan) = path_candidate {
+        if probe(&path_chan).is_ok() {
+            return Ok(path_chan);
+        }
+    }
+    bundled_fn()
+}
+
+/// `which chan` for the current process: walk `PATH` and return
+/// the first executable entry named `chan` (or `chan.exe` on
+/// Windows). Returns None when `PATH` is unset, empty, or has
+/// no matching entry. Pure-environment lookup; does not spawn a
+/// subprocess.
+fn which_chan() -> Option<PathBuf> {
+    let path_var = std::env::var_os("PATH")?;
+    let exe_name = if cfg!(target_os = "windows") {
+        "chan.exe"
+    } else {
+        "chan"
+    };
+    which_chan_in(&path_var, exe_name)
+}
+
+/// `which_chan` factored over the `PATH` value + binary name so
+/// tests can drive it with synthetic fixtures without mutating
+/// the live process environment (which would race across the
+/// test binary's threads).
+fn which_chan_in(path_var: &std::ffi::OsStr, name: &str) -> Option<PathBuf> {
+    for dir in std::env::split_paths(path_var) {
+        let candidate = dir.join(name);
+        if is_executable_file(&candidate) {
+            return Some(candidate);
+        }
+    }
+    None
+}
+
+#[cfg(unix)]
+fn is_executable_file(path: &Path) -> bool {
+    use std::os::unix::fs::PermissionsExt;
+    match path.metadata() {
+        Ok(meta) => meta.is_file() && (meta.permissions().mode() & 0o111 != 0),
+        Err(_) => false,
+    }
+}
+
+#[cfg(not(unix))]
+fn is_executable_file(path: &Path) -> bool {
+    // Windows: PATHEXT decides what counts as executable. We only
+    // ever look for `chan.exe`, so file-exists is sufficient.
+    path.is_file()
 }
 
 /// Stable window-label prefix for a tunneled drive, namespaced
@@ -881,6 +981,116 @@ mod tests {
             path.file_name().and_then(|n| n.to_str()),
             Some(expected_name),
         );
+    }
+
+    #[test]
+    fn resolve_chan_binary_picks_path_when_version_matches() {
+        // `fullstack-b-16`: PATH chan exists + version matches → use
+        // PATH path. Tested via dependency injection (no real
+        // subprocess spawn). The probe argument simulates a
+        // successful version match; the bundled-fn argument is a
+        // sentinel that must NOT be called when PATH succeeds.
+        let path_chan = PathBuf::from("/usr/local/bin/chan");
+        let resolved = resolve_chan_binary_with(
+            Some(path_chan.clone()),
+            |_| Ok(()),
+            || panic!("bundled fallback must not run when PATH chan matches"),
+        )
+        .expect("resolves successfully");
+        assert_eq!(resolved, path_chan);
+    }
+
+    #[test]
+    fn resolve_chan_binary_falls_back_when_path_version_mismatches() {
+        // PATH chan exists but version probe errors (mismatch, or
+        // failed `--version` invocation — same outward shape). Must
+        // fall through to the bundled path.
+        let path_chan = PathBuf::from("/usr/local/bin/chan");
+        let bundled = PathBuf::from("/Applications/Chan.app/Contents/MacOS/chan");
+        let resolved = resolve_chan_binary_with(
+            Some(path_chan),
+            |_| Err("v0.10.0 != v0.11.1".to_string()),
+            || Ok(bundled.clone()),
+        )
+        .expect("resolves successfully via bundled");
+        assert_eq!(resolved, bundled);
+    }
+
+    #[test]
+    fn resolve_chan_binary_falls_back_when_no_chan_on_path() {
+        // PATH lookup turned up empty (no chan binary in any entry
+        // of `$PATH`). Resolver returns the bundled path without
+        // attempting a version probe.
+        let bundled = PathBuf::from("/Applications/Chan.app/Contents/MacOS/chan");
+        let resolved = resolve_chan_binary_with(
+            None,
+            |_| panic!("probe must not run when there is no PATH candidate"),
+            || Ok(bundled.clone()),
+        )
+        .expect("resolves successfully via bundled");
+        assert_eq!(resolved, bundled);
+    }
+
+    #[test]
+    fn resolve_chan_binary_surfaces_error_when_bundled_also_missing() {
+        // Edge case from the task spec: no chan on PATH AND
+        // `bundled_chan_path()` errors (e.g. `current_exe()` failed).
+        // The helper propagates the bundled error so the boot-time
+        // preflight can map it to `BinStatus::missing`.
+        let resolved = resolve_chan_binary_with(
+            None,
+            |_| panic!("probe must not run when there is no PATH candidate"),
+            || Err("locating chan-desktop binary: io error".to_string()),
+        );
+        let err = resolved.expect_err("must propagate the bundled error");
+        assert!(err.contains("locating chan-desktop binary"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn which_chan_in_finds_chan_in_first_matching_path_entry() {
+        // `which_chan_in` is the testable seam for the `PATH`
+        // lookup. Synthesize a temp directory containing an
+        // executable `chan`, point PATH at it, and confirm the
+        // helper returns that path. Then drop a SECOND temp dir
+        // also containing chan and confirm first-match-wins.
+        use std::fs;
+        use std::os::unix::fs::PermissionsExt;
+
+        let tmp_root =
+            std::env::temp_dir().join(format!("chan-fullstack-b-16-which-{}", std::process::id()));
+        let first = tmp_root.join("first");
+        let second = tmp_root.join("second");
+        fs::create_dir_all(&first).expect("create first PATH dir");
+        fs::create_dir_all(&second).expect("create second PATH dir");
+        for dir in [&first, &second] {
+            let bin = dir.join("chan");
+            fs::write(&bin, b"#!/bin/sh\necho stub\n").expect("write stub chan");
+            fs::set_permissions(&bin, fs::Permissions::from_mode(0o755))
+                .expect("mark stub executable");
+        }
+
+        let path_var = std::env::join_paths([&first, &second]).expect("join PATH");
+        let resolved = which_chan_in(&path_var, "chan").expect("resolves PATH chan");
+        assert_eq!(resolved, first.join("chan"));
+
+        // No matching binary anywhere on PATH → None.
+        let empty_dir = tmp_root.join("empty");
+        fs::create_dir_all(&empty_dir).expect("create empty PATH dir");
+        let empty_path = std::env::join_paths([&empty_dir]).expect("join PATH");
+        assert!(which_chan_in(&empty_path, "chan").is_none());
+
+        // Non-executable file is rejected (Unix-only branch; the
+        // Windows fall-through accepts any matching name).
+        let no_exec_dir = tmp_root.join("no-exec");
+        fs::create_dir_all(&no_exec_dir).expect("create no-exec PATH dir");
+        let no_exec = no_exec_dir.join("chan");
+        fs::write(&no_exec, b"not executable\n").expect("write non-exec stub");
+        fs::set_permissions(&no_exec, fs::Permissions::from_mode(0o644)).expect("mark non-exec");
+        let no_exec_path = std::env::join_paths([&no_exec_dir]).expect("join PATH");
+        assert!(which_chan_in(&no_exec_path, "chan").is_none());
+
+        fs::remove_dir_all(&tmp_root).expect("cleanup temp PATH fixtures");
     }
 
     #[test]

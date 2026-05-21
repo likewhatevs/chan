@@ -246,7 +246,7 @@ async fn add_drive(
 ) -> Result<(), String> {
     require_bin(&state.bin_status)?;
     let path = canonical_key(Path::new(&path));
-    let bin = serve::bundled_chan_path()?;
+    let bin = serve::resolve_chan_binary()?;
     emit_chan_busy(&app, true, "add", &path);
     let out = Command::new(&bin)
         .args(["add", &path])
@@ -283,7 +283,7 @@ async fn remove_drive(
     serve::stop(&state, &key);
 
     emit_chan_busy(&app, true, "remove", &key);
-    let out = Command::new(serve::bundled_chan_path()?)
+    let out = Command::new(serve::resolve_chan_binary()?)
         .args(["remove", &key])
         .kill_on_drop(true)
         .output()
@@ -315,7 +315,7 @@ fn set_drive_on(
     let key = canonical_key(Path::new(&path));
     if on {
         require_bin(&state.bin_status)?;
-        serve::start(app, Arc::clone(&state), key, &serve::bundled_chan_path()?)?;
+        serve::start(app, Arc::clone(&state), key, &serve::resolve_chan_binary()?)?;
     } else {
         serve::stop(&state, &key);
     }
@@ -609,8 +609,13 @@ fn is_app_translocated() -> bool {
 
 /// Boot-time preflight. Runs once before `AppState` is built and the
 /// result is stored verbatim. Order matters: translocation is
-/// checked first because in the translocated case the bundled file
-/// *is* present, but spawning it is futile.
+/// checked first because the bundled sidecar is found at the
+/// translocated path but the broader runtime environment is hostile
+/// regardless of which `chan` we'd pick; a PATH-installed `chan`
+/// doesn't rescue a translocated install. After that we let
+/// `resolve_chan_binary` pick PATH or bundled per the locked
+/// Round-2 decision 3 (PATH-first w/ bundled fallback) and validate
+/// the resolved path's existence + exact version match.
 fn compute_bin_status() -> BinStatus {
     #[cfg(target_os = "macos")]
     {
@@ -627,7 +632,7 @@ fn compute_bin_status() -> BinStatus {
             };
         }
     }
-    let bin = match serve::bundled_chan_path() {
+    let bin = match serve::resolve_chan_binary() {
         Ok(p) => p,
         Err(e) => {
             return BinStatus {
@@ -641,7 +646,7 @@ fn compute_bin_status() -> BinStatus {
         return BinStatus {
             ok: false,
             kind: "missing",
-            reason: format!("bundled chan sidecar not found at {}", bin.display()),
+            reason: format!("chan sidecar not found at {}", bin.display()),
         };
     }
     match serve::probe_chan_version(&bin) {

@@ -729,3 +729,167 @@ on first run that cleared on rerun) all green.
 
 See [../fullstack-b/fullstack-b-15.md](../fullstack-b/fullstack-b-15.md)
 for the full implementation note + suggested commit subject.
+
+## 2026-05-21 — poke (fullstack-b-15 committed; stowaway recovery flagged)
+
+`-15` committed as `6f4f697` "chan-desktop: expose
+bundled_chan_path() + exact-match version probe (fullstack-b-15)".
+Five files, 368 insertions / 74 deletions. Pre-commit
+`git diff --staged --stat` and post-commit `git show --stat
+HEAD` both clean. Starting on `-16` now (hard-sequential
+unblocked).
+
+### Stowaway recovery worth surfacing
+
+The commit window hit a multi-agent index race that needed
+the `feedback_shared_worktree_commits` recovery protocol.
+Reflog summary:
+
+```
+7845402  good baseline
+c279733  @@CI "ci: tag-triggered..." (committed while my
+         CLAUDE.md hunk was in the index → absorbed it as a
+         stowaway; 65 lines of MY content under a ci-7
+         commit message)
+01f10d3  @@Systacean "Makefile: notarytool ..." on top of
+         the stowaway commit
+[someone reset --soft HEAD~1 → c279733]
+[I reset --soft HEAD~1 → 7845402, intending to re-stage]
+666c027  @@CI re-committed cleanly: ci-7 work proper
+         (release-desktop.yml + ci-7.md only; no stowaway
+         from my work). Excellent recovery on their end.
+6f4f697  fullstack-b-15 (this commit)
+```
+
+Net result: history is correct in commit content. `666c027`
+contains @@CI's actual ci-7 work as advertised by the commit
+message. `6f4f697` contains my -15 work. No SHA is wrong on
+content vs message.
+
+What @@Systacean's `01f10d3` (notarytool keychain-profile
+work, systacean-13 territory) needs from me: nothing.
+@@Systacean's session got reset out at HEAD@{2} → HEAD@{1};
+they'll need to re-commit. Their Makefile + systacean-13.md +
+journal entries are still unstaged in the working tree,
+ready for them to pick up.
+
+This was the second time this round a multi-lane race
+absorbed my staged hunk into another agent's commit (`-b-10`
+hit the same shape with @@Systacean's `systacean-4`). The
+`git add -p` discipline I used here (selective per-hunk
+staging to leave the notarization section unstaged for @@CI)
+worked correctly — the race wasn't from my staging being
+wide, it was from concurrent commits while my partial
+staging was in flight. The recovery protocol absorbed it
+cleanly.
+
+No journal-side action needed from your end; @@Systacean's
+session should be aware they need to re-stage + re-commit
+systacean-13 on top of `6f4f697`. Same `git add` ↔ `git diff
+--staged --stat` discipline applies.
+
+### Starting -16 now
+
+`fullstack-b-16` queue-empty unblocked. Algorithm shape (per
+locked decision 3 + the task body):
+
+1. `which chan` (via `Command::new("chan").arg("--version")`
+   probe — `which` itself isn't needed; if the spawn fails
+   with ENOENT, PATH has no chan).
+2. Parse output with `semver`.
+3. Compare against `env!("CARGO_PKG_VERSION")` (exact match,
+   same shape as `probe_chan_version` in `-15`).
+4. Match → return PATH chan path.
+5. Mismatch / spawn error / no chan on PATH → return
+   `bundled_chan_path()`.
+
+Implementation lives in `serve.rs` alongside the helpers
+from `-15`. Will plan to reuse `probe_chan_version` against
+both bundled + PATH binaries.
+
+Will poke when ready for review.
+
+## 2026-05-21 — poke (fullstack-b-16 ready for review)
+
+`-16` ready for review. PATH-first resolver builds on `-15`'s
+public surface (`bundled_chan_path()` + `probe_chan_version()`)
+without touching its signatures.
+
+### Changes
+
+* **`desktop/src-tauri/src/serve.rs`** — new `pub fn
+  resolve_chan_binary() -> Result<PathBuf, String>` implementing
+  the locked-decision-3 algorithm. Backed by a testable core
+  `resolve_chan_binary_with(path_candidate, probe, bundled_fn)`
+  + `which_chan_in(path_var, name)` so the five acceptance
+  branches don't need real subprocesses. `probe_chan_version`'s
+  doc generalized to "any chan binary" since it's reused for
+  both bundled + PATH probes.
+* **`desktop/src-tauri/src/main.rs`** — three IPC handlers
+  (`add_drive`, `remove_drive`, `set_drive_on`) and
+  `compute_bin_status()` route via `serve::resolve_chan_binary()`
+  instead of `serve::bundled_chan_path()`. Translocation check
+  stays first (PATH chan doesn't rescue a translocated install).
+* **`desktop/CLAUDE.md`** — "Resolution helpers" subsection
+  expanded with `resolve_chan_binary()` as the user-facing
+  entry point + new "Resolution algorithm" subsection (state →
+  picked-binary table). Touches only the Resolution-helpers
+  region of CLAUDE.md; the notarization section other agents are
+  still staging is left untouched.
+
+### Tests
+
+Five new unit tests in `serve.rs::tests`. Chan-desktop 21 → 26
+tests:
+
+| Test                                                                  | Branch                                       |
+|-----------------------------------------------------------------------|----------------------------------------------|
+| `resolve_chan_binary_picks_path_when_version_matches`                 | PATH match → PATH path.                       |
+| `resolve_chan_binary_falls_back_when_path_version_mismatches`         | PATH version mismatch (or probe error) → bundled. |
+| `resolve_chan_binary_falls_back_when_no_chan_on_path`                 | No PATH chan → bundled.                       |
+| `resolve_chan_binary_surfaces_error_when_bundled_also_missing`        | Both unavailable → error propagated.          |
+| `which_chan_in_finds_chan_in_first_matching_path_entry` (Unix)        | Real PATH-walk against temp-dir fixtures.     |
+
+### Pre-push gate
+
+Workspace fmt + clippy `--workspace -D warnings` + test
+(chan-desktop 21 → 26; chan-server 202; full workspace clean) +
+no-default-features build + svelte-check (3978 files, 0 errors)
+all green.
+
+### Notes for review
+
+* **One extra `chan --version` subprocess at boot** (only when
+  PATH actually has a chan binary). Measurable; deferred to
+  @@WebtestB's lane-B walkthrough as cold-start latency
+  verification per the task's acceptance criteria. Standing
+  permission covers debug-build runtime checks on my end if a
+  more rigorous measurement is needed before clearance.
+* **PATH-resolution edge cases** — first-match-wins on multiple
+  PATH entries (`which_chan_in` test covers it explicitly).
+  Non-executable files at a matching name are rejected on Unix
+  (test covers it explicitly). The Windows branch accepts any
+  matching `chan.exe` file via `.is_file()` because PATHEXT
+  semantics are baked into the filename match itself.
+* **Translocation interaction** — `compute_bin_status` still
+  short-circuits on translocation before calling the resolver.
+  A PATH chan doesn't rescue a translocated install since the
+  broader runtime environment (config dir, file watchers, etc.)
+  is also affected. Documented inline.
+
+### Coordination footprint
+
+* No overlap with @@CI's ci-7 (`.github/workflows/`,
+  `docs/journals/phase-8/ci/`).
+* No overlap with @@Systacean's systacean-11 (signing block in
+  `tauri.conf.json`) or systacean-13 (Makefile notarytool path).
+  CLAUDE.md edit is in the Resolution-helpers subsection only;
+  notarization section is untouched.
+* No overlap with `tabs.svelte.ts` / chan-server route table —
+  this is pure chan-desktop / Tauri-side work.
+
+After commit clearance, queue empty for Wave-1. Standby until
+Wave-2 fan-out.
+
+See [../fullstack-b/fullstack-b-16.md](../fullstack-b/fullstack-b-16.md)
+for the full implementation note + suggested commit subject.

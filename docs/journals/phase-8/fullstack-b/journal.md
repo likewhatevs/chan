@@ -538,6 +538,88 @@ Both slices commit-ready. Holding for @@Architect commit
 clearance. Push held for the patch-release commit-grouping
 cut.
 
+## 2026-05-21 — fullstack-b-15 committed; starting fullstack-b-16
+
+Round-2 Wave-1 fan-out cut `fullstack-b-15` (bundle chan +
+`bundled_chan_path()` helper) and `fullstack-b-16` (PATH-first
+resolver). Hard sequential per the task brief.
+
+### -15: implementation note
+
+Bundling-the-binary was already wired via Tauri's `externalBin`
+mechanism + `desktop/Makefile`'s `chan-bin` recipe. The actual
+missing pieces from the task spec were:
+
+1. A public helper exposed to launcher code (the existing
+   `chan_bin()` was private in `main.rs`).
+2. An *exact-match* version probe per locked Round-2 decision 3
+   (the existing probe used `MIN_CHAN_VERSION = "0.8.1"` as a
+   floor; the locked contract is exact equality).
+3. A unit test pinning the resolution contract.
+4. Documentation of the bundle layout in `desktop/CLAUDE.md`.
+
+Changes shipped:
+* `desktop/src-tauri/src/serve.rs` — new `pub fn bundled_chan_path()
+  -> Result<PathBuf, String>` (pure path math; existence check moved
+  to `compute_bin_status`) + `pub fn probe_chan_version(&Path)` (exact
+  match against `env!("CARGO_PKG_VERSION")`). New unit test
+  `bundled_chan_path_is_sibling_of_chan_desktop_executable` (chan-
+  desktop 20 → 21 tests).
+* `desktop/src-tauri/src/main.rs` — dropped relocated helpers +
+  the `MIN_CHAN_VERSION` constant. `compute_bin_status()` and the
+  three IPC handlers (`add_drive`, `remove_drive`, `set_drive_on`)
+  route via `serve::bundled_chan_path()`.
+* `desktop/CLAUDE.md` — new "Bundled chan sidecar" section with
+  bundle layout per build profile + resolution-helper API +
+  universal2 follow-up flagged for `ci-7`.
+
+Pre-push gate green workspace-wide: fmt + clippy `-D warnings` +
+test (chan-desktop 21; chan-server 202; full workspace clean) +
+no-default-features build + svelte-check (3978 files / 0 errors) +
+npm build + vitest 544/544 (after one transient flake on first run
+that cleared on rerun).
+
+### -15 commit + stowaway recovery
+
+Committed as `6f4f697`. Pre-commit `git diff --staged --stat` and
+post-commit `git show --stat HEAD` both clean (5 files, mine
+only).
+
+The commit window hit a multi-agent index race. While my
+`git add -p` for CLAUDE.md was selecting only my "Bundled chan
+sidecar" hunk (leaving @@CI's notarization section unstaged),
+@@CI's session committed `c279733` with the message "ci: tag-
+triggered signed + notarized chan-desktop release" — but the
+actual content was MY 65-line CLAUDE.md hunk, absorbed as a
+stowaway. @@Systacean then committed systacean-13 (`01f10d3`,
+notarytool keychain-profile work) on top of the stowaway. Both
+later reset --soft'd; @@CI re-committed cleanly as `666c027`
+(actual ci-7 work: `release-desktop.yml` + `ci-7.md`); I
+re-staged + re-committed my -15 as `6f4f697`.
+
+Net result: commit content matches commit message on every
+post-recovery SHA. @@Systacean's systacean-13 was wiped by their
+own reset and needs re-staging + re-committing on top of
+`6f4f697` (their files are still in the working tree unstaged).
+Flagged in [`../alex/event-fullstack-b-architect.md`](../alex/event-fullstack-b-architect.md)
+so @@Architect can route a heads-up if needed.
+
+The `git add -p` discipline I used (selective per-hunk staging
+to coexist with @@CI's CLAUDE.md hunk) was correct. The race
+wasn't from my staging being wide; it was from another agent's
+commit landing while my partial staging was in flight. The
+`feedback_shared_worktree_commits` recovery protocol cleanly
+absorbed it.
+
+### Starting -16
+
+`fullstack-b-16` (PATH-first resolver) builds on `-15`'s
+public surface. Algorithm shape per the locked decision:
+PATH chan via `Command::new("chan").arg("--version")` → exact-
+match against `env!("CARGO_PKG_VERSION")` → match → PATH path;
+else → `bundled_chan_path()`. Implementation lives next to the
+`-15` helpers in `serve.rs`.
+
 ## 2026-05-20 — three commits landed (mini-wave queue empty)
 
 @@Architect cleared both -b-13 server-side and -b-14;
