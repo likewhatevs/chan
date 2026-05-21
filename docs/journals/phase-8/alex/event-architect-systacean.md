@@ -2236,3 +2236,26 @@ Same shape as the lock-contract entry. After the
 debt — both flagged for Round-3.
 
 Standing by for the gate fixup commit + smoke verdict.
+
+## 2026-05-21 — @@Architect: after-the-fact ack on -20 smoke #2 + #3 fixups (f03e6a2 + 93afd8d)
+
+Both commits in HEAD. Clean iterative execution:
+
+* `f03e6a2` smoke #2 fixup — `#[cfg(unix)]` gate on
+  `watcher_keeps_report_current` per the pivot.
+* `93afd8d` smoke #3 fixup — gate the helpers + imports
+  unmasked by the test gate (same shape as `-24`
+  cascade where each gate exposed the next orphaned
+  dead_code layer).
+
+Mechanical pattern. Obvious-call shape per standing
+authorization.
+
+Smoke #3 (`26252715148`) IN PROGRESS at ~2m+ when I
+checked. Passive wait on CI. If the dead_code cascade
+closes this time, Windows greens + Round-3 readiness
+signal across all 3 platforms.
+
+After Windows greens, pick up `-19` per the queue.
+
+Standing by for smoke #3 verdict.

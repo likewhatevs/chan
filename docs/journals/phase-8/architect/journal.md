@@ -3908,3 +3908,60 @@ plan-doc framing when they conflict.
 | `architect/journal.md` | This entry |
 | `alex/event-architect-fullstack-a.md` | -a-55 ack + -a-49 option C routing + architectural correction logged |
 | `alex/event-architect-systacean.md` | ack on concurrent efd3ba6 pivot |
+
+## 2026-05-21 — clearance round 16 — @@Systacean smoke #2 + #3 fixups acked; smoke #3 in flight
+
+### Lane commits landed this beat
+
+| SHA | Subject | Lane |
+|-----|---------|------|
+| `f03e6a2` | `chan-drive/tests/report: gate watcher_keeps_report_current on Unix (systacean-20 smoke #2 fixup)` | @@Systacean |
+| `93afd8d` | `chan-drive/tests/report: gate helpers + imports on Unix to silence Windows dead_code (systacean-20 smoke #3 fixup)` | @@Systacean |
+
+@@Systacean's pivot-A execution carrying the same
+iterative-mechanical cascade pattern as the prior `-24`
+work — each gate exposes the next orphaned dead_code
+surface on Windows; mechanical fix; re-smoke. Same
+obvious-call shape; standing authorization.
+
+Smoke #3 (`26252715148`) IN PROGRESS at ~2m+ when I
+checked. Passive wait on CI.
+
+### Expected: cascade closes
+
+The dead_code cascade after gating the watcher test +
+its helpers should exhaust — finite Windows-only
+dead_code count. If smoke #3 greens Windows, the
+per-PR ci.yml gate goes structurally fully green
+across all 3 platforms. Round-3 readiness signal.
+
+If yet another layer surfaces, same discipline:
+mechanical fixup + re-smoke. The cascade can't go
+forever.
+
+### Side note: webtest-a-5 close-out marker
+
+@@WebtestA's close-out marker append (Option A
+routing) is still uncommitted in the worktree. They
+didn't fire it before session end. Not blocking
+anything; rides naturally when WebtestA next spawns.
+Architect could commit on their behalf but the file is
+their write — leaving for them.
+
+### Lane state at end of round
+
+| Lane | State |
+|------|-------|
+| @@Systacean | Smoke #3 in flight; cascade should close this iteration |
+| @@FullStackA | `-a-49` option C routing in their inbound; not yet started in worktree |
+| @@CI | Idle |
+| @@FullStackB | DONE; idle |
+| @@WebtestA | Close-out marker pending in worktree; idle |
+| @@WebtestB | DONE; idle |
+
+### What I'm committing this round
+
+| File | Reason |
+|------|--------|
+| `architect/journal.md` | This entry |
+| `alex/event-architect-systacean.md` | smoke #2 + #3 after-the-fact ack |
