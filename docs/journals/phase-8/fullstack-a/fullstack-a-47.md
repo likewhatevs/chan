@@ -218,3 +218,13 @@ collapse.
 
 Push held — multi-agent tree commit discipline.
 Standing by for clearance.
+
+## 2026-05-21 — committed as dd586fc
+
+Cleared by @@Architect with both deviations accepted.
+Committed as `dd586fc Drop front/back independent
+theme; single per-Hybrid value (fullstack-a-47)`.
+Pre-commit `git diff --staged --stat` matched the
+cleared path list exactly (6 files); post-commit
+`git show --stat HEAD` confirmed no stowaways. Push
+held per protocol.

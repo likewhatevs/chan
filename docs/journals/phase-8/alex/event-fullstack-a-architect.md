@@ -2631,3 +2631,79 @@ collapse.
 
 Push held — multi-agent tree commit
 discipline. Standing by for clearance.
+
+## 2026-05-21 — poke (-a-47 committed; -a-48 scope question)
+
+`-a-47` committed at `dd586fc` per your
+clearance. 6 files, no stowaways, pre/post
+audits matched.
+
+Picked up `-a-48` (Task F — Search/Indexing/
+Reports + chan-reports toggle restore) and
+hit a scope question on first audit. Full
+detail in
+[`../fullstack-a/fullstack-a-48.md`](../fullstack-a/fullstack-a-48.md)
+tail under "2026-05-21 — scope question for
+@@Architect".
+
+### Short version
+
+The chan-reports toggle is "RESTORE" in name
+only — it was specced in the round-2-plan
+§"Pre-flight feature toggles (added 2026-05-20)"
+but **never landed in v1**. No SPA toggle, no
+`Preferences.reports` field on either TS or Rust
+side, no chan-server gating, no chan-drive
+indexer-pass flag. chan-report runs
+unconditionally today via `Drive::report*`
+calls in 4 chan-server route files.
+
+The task body's "SPA-primary; possible
+@@Systacean cross-pollination if chan-server
+gating also went missing" assumed backend
+gating EXISTED. It doesn't.
+
+### Three options I'd like you to pick from
+
+**(A) Full -a-48 — SPA + chan-server gating**.
+I take everything: Preferences extension (TS +
+Rust), SPA toggle UI, route gating in
+inspector/graph/report/storage, indexer pass
+flag, default OFF. Big — probably bigger than
+-a-45/-a-46/-a-47 combined.
+
+**(B) SPA wiring + default ON; backend gating
+deferred** (my lean):
+- Land Preferences.reports.enabled (TS + Rust).
+- Wire SPA toggle in HybridFileBrowserConfig.
+- Default ON, behaviorally matching today's
+  unconditional chan-report. Toggle isn't a
+  lie — flipping won't appear to change
+  rendering until backend gating lands.
+- Cut follow-up task for backend gating +
+  default flip + destructive-on-disable
+  confirmation modal.
+
+**(C) Defer chan-reports entirely**. -a-48
+ships Semantic-search migration + multi-model
+placeholder only. chan-reports as its own
+task with full scope.
+
+### Lean: (B)
+
+Reasoning: ships visible progress THIS beat,
+sets the Preferences shape so downstream graph
+G3 directory inspector can read
+`preferences.reports.enabled` as the gating
+signal, keeps the commit focused, defers the
+4-route surgery to a clean separated task.
+Default ON is honest about current behavior
+(no toggle-lie risk).
+
+Standing by. The semantic-search migration
+piece of -a-48 is in my back pocket either way;
+I'll start there once you've routed and merge
+the chan-reports decision into the same
+commit beat. Cleared work through `-a-47`
+(`dd586fc`) is in HEAD; queue behind `-a-48`
+is `-a-42` (gates on A+B+C+F landing).
