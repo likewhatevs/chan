@@ -565,3 +565,118 @@ notification poke fires next.
 
 Round-1 + mini-wave queue all closed. Standing by for
 the agent-recycle event + Round-2 fan-out.
+
+## 2026-05-20 — Round-2 Wave-1 dispatch picked up
+
+Fresh @@Systacean session. Round-2 decisions all locked
+2026-05-20; Wave-1 north-star track dispatched. Queue:
+
+* `systacean-11` — chan-desktop signing-key rotation
+  (DEV → release Developer ID). Parked on @@Alex's
+  identity-string answer. Permission event fired to
+  [`../alex/event-systacean-alex.md`](../alex/event-systacean-alex.md).
+  Architect confirmed (via inbound poke) that @@Alex
+  completed the ci-3 brief checklist in a prior chan
+  incarnation → branch (a); just need the actual string.
+* `systacean-12` — `tauri-plugin-updater` cross-platform
+  verification. In flight; deferred deep dive until -13
+  closes (architect noted -13 is a natural fill-in fit).
+* `systacean-13` — NEW: Keychain-driven
+  `make app-notarized`. Pre-authorized; @@Alex's in-chat
+  confirmation (profile name = `chan`, blessed mechanism
+  = `xcrun notarytool store-credentials`) pre-answered
+  the only open question. Land first per architect's
+  ordering recommendation.
+
+## 2026-05-20 — systacean-13 implementation ready
+
+Implemented + render-checked. Awaiting @@Architect
+clearance + @@Alex's smoke-test result.
+
+**Load-bearing finding**: `tauri-bundler` 2.8.1's
+`notarize_auth` (in `bundle/macos/sign.rs:96`) accepts
+ONLY `APPLE_ID`/`APPLE_PASSWORD`/`APPLE_TEAM_ID` or
+`APPLE_API_*` env vars. NO `APPLE_KEYCHAIN_PROFILE`
+support. To honour the architect's option-1 spec
+(`--keychain-profile chan`), had to split build from
+notarize: Tauri builds + signs (with the three notarize
+env vars unset, so its internal notarize step is
+skipped); the Makefile then calls
+`xcrun notarytool submit` + `xcrun stapler staple`
+directly with the appropriate auth flag based on
+detected mode (env > Keychain profile > error).
+
+CI behaviour stays identical (same credentials reach
+notarytool, manual call instead of via tauri-bundler).
+
+### Changes
+
+* `desktop/Makefile` (~50 lines added, ~10 reshaped):
+  new `NOTARIZE_PROFILE ?= chan` variable,
+  `NOTARIZE_VIA` mode detection (env vs keychain),
+  `notarize-prereqs` rewritten with a two-option setup
+  hint, `app-notarized` refactored to split build from
+  notarize+staple.
+* `desktop/CLAUDE.md` (~60 lines appended at end): new
+  "Local notarization setup" section. Appended at end
+  deliberately to keep my diff hunk separated from
+  `fullstack-b-15`'s in-flight "Bundled chan sidecar"
+  hunk near the top. Pre-commit `git add -p` partition
+  per the `systacean-4` shared-worktree lesson.
+
+### Render checks
+
+`make -n app-notarized` with env credentials produces
+the env-branch shell expansion (correct shape: `env -u
+APPLE_ID -u APPLE_PASSWORD -u APPLE_TEAM_ID cargo tauri
+build ...` then `xcrun notarytool submit ... --apple-id
+... --password ... --team-id ... --wait` then `xcrun
+stapler staple ...`). `make -n notarize-prereqs` without
+credentials falls through to the help-text option-1
+/ option-2 block as expected. Keychain branch unrendered
+on this agent (no profile on the build host); branch
+shape is symmetric to env so trusting the conditional.
+
+### Pre-push gate
+
+Scope per task acceptance: Makefile + Markdown only. No
+Rust / Web / JSON changes. `make -n` validates rendered
+recipe. Full workspace gate untouched + green at HEAD.
+
+### Smoke test ask
+
+@@Alex runs `cd desktop && make app-notarized` from a
+bare shell (no env exports) on the workstation; expected
+output starts with "notarizing <DMG> (via Keychain
+profile 'chan')"; ends with a `.dmg` that opens cleanly
+on a second Mac with no Gatekeeper warning. Detailed
+expectations + fallback (`NOTARIZE_PROFILE=<name>` if
+their profile is under a different label) at the tail
+of [`systacean-13.md`](systacean-13.md).
+
+Architect poke fires next.
+
+## 2026-05-21 — systacean-13 committed
+
+Cleared + landed as `01f10d3`:
+
+```
+desktop/Makefile: notarytool keychain-profile path for local make app-notarized (systacean-13)
+```
+
+5 files, +561 / -16. Pre/post-commit audits clean; the fb-15 sidecar section in desktop/CLAUDE.md was already in HEAD via architect's `7845402`, so the partition discipline was easier than expected — only 1 hunk in my CLAUDE.md diff at staging time. Push held per Round-2 policy (no patch tag cut yet; @@Alex deciding v0.11.2 scope in `round-2-open-questions.md` A.5).
+
+Queue post-`-13`:
+
+* `-11` still parked on @@Alex's identity-string answer (`round-2-open-questions.md` B.1).
+* `-12` (tauri-plugin-updater verify) — natural resume; can drive desk-work (upstream docs read + test minisign keypair generation + mock-feed JSON authoring) without runtime permission. The Tauri-build + Chan.app-launch click-through walk needs a separate runtime permission event when ready.
+* `-13` smoke test runs independently on @@Alex's workstation (`round-2-open-questions.md` B.3).
+* No new tasks queued per architect's "After -13 commits" note.
+
+## 2026-05-21 — -13 orphaned by upstream reset; re-committing
+
+`01f10d3` was reset away (`HEAD@{5}: reset: moving to HEAD~1`) before ci-7 + fb-15 + architect-v0.11.2-dispatch + fb-16 landed sequentially on top of the older base. Working-tree content survived (CLAUDE.md "Local notarization setup" section + Makefile rewrites + systacean-13.md untracked) but no longer reachable from main. None of the four newer HEAD commits include my -13 changes — verified by `git show HEAD:<file> | grep` against NOTARIZE_PROFILE / "Local notarization setup" / `git ls-files systacean-13.md`. Cause: multi-agent rebase per the shared-worktree-commits memory; another agent did `git reset --hard HEAD~N` past my commit + re-committed their own work without cherry-picking mine.
+
+Re-committing with the same content + same commit subject. New SHA. Audit anchor at the tail of [`systacean-13.md`](systacean-13.md) "2026-05-21 — orphaned by upstream reset; re-committing".
+
+Procedural takeaway: pre-commit `git diff --staged --stat` + post-commit `git show --stat HEAD` audits caught nothing because the orphaning happened EXTERNALLY (another agent's reset), not via my own commit shape. The mitigation is `git log --oneline -3` BEFORE staging the next commit (so I see whether my prior commit is still in HEAD) — but for a sequential session pickup that's awkward. Better: check `git reflog` for unexpected resets on resume. Update the [shared-worktree memory](../../../../.claude/projects/-Users-fiorix-dev-github-com-fiorix-chan/memory/feedback_shared_worktree_commits.md) if this pattern recurs.

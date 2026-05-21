@@ -65,13 +65,19 @@ clean:
 #                           -> App-Specific Passwords. NOT the iCloud
 #                           password. Treat as a credential.
 #
-# Recommended flow: stash APPLE_ID + APPLE_PASSWORD in your shell rc
-# (~/.bashrc, ~/.zshrc, ...) or read APPLE_PASSWORD from the macOS
-# keychain, e.g.
+# Recommended local flow: stash the app-specific password as a
+# notarytool Keychain profile so `make app-notarized` runs from a
+# bare shell with no env exports (see "Local notarization setup" in
+# desktop/CLAUDE.md):
 #
-#   security add-generic-password -s chan-notary -a "$$APPLE_ID" -w
-#   export APPLE_PASSWORD=$$(security find-generic-password \
-#       -s chan-notary -a "$$APPLE_ID" -w)
+#   xcrun notarytool store-credentials chan \
+#       --apple-id <email> --team-id <TEAMID> --password <app-pw>
+#
+# Then plain `make app-notarized` Just Works. CI keeps the env-var
+# path via APPLE_ID + APPLE_PASSWORD + APPLE_TEAM_ID populated from
+# GitHub Actions Secrets. Env vars win over Keychain profile when
+# both are present (lets you test alternative credentials without
+# removing your default profile).
 #
 # Two paths:
 #
@@ -121,6 +127,32 @@ ifneq ($(APPLE_TEAM_ID),)
 export APPLE_TEAM_ID
 endif
 
+# Local-notarization helper. Apple's blessed mechanism for storing
+# app-specific passwords for `notarytool` is `xcrun notarytool
+# store-credentials <profile-name>`; once a profile is stashed,
+# subsequent submissions consume it via --keychain-profile. Default
+# profile name is `chan`; override with NOTARIZE_PROFILE=othername.
+NOTARIZE_PROFILE ?= chan
+
+# Detect which credential source app-notarized uses. Precedence:
+# env vars first (CI's GH-Secrets-driven path stays authoritative),
+# then the local Keychain profile. Empty if neither is configured;
+# notarize-prereqs reports the case with a setup hint.
+#
+# The Keychain check uses `security find-generic-password` against
+# notarytool's service id (com.apple.gke.notary.tool); it just
+# tests existence (no -g/-w), so it does not prompt for Keychain
+# access and the actual password value never leaves the Keychain.
+ifneq ($(and $(APPLE_ID),$(APPLE_PASSWORD),$(APPLE_TEAM_ID)),)
+NOTARIZE_VIA := env
+else ifneq ($(shell security find-generic-password \
+    -s "com.apple.gke.notary.tool" -a "$(NOTARIZE_PROFILE)" \
+    >/dev/null 2>&1 && echo yes),)
+NOTARIZE_VIA := keychain
+else
+NOTARIZE_VIA :=
+endif
+
 sign-prereqs:
 	@if [ -z "$$APPLE_SIGNING_IDENTITY" ]; then \
 	    echo "error: APPLE_SIGNING_IDENTITY not set"; \
@@ -137,12 +169,20 @@ sign-prereqs:
 	}
 
 notarize-prereqs:
-	@if [ -z "$$APPLE_ID" ] || [ -z "$$APPLE_PASSWORD" ] || [ -z "$$APPLE_TEAM_ID" ]; then \
-	    echo "error: notarization needs APPLE_ID, APPLE_PASSWORD, APPLE_TEAM_ID"; \
-	    echo "APPLE_ID       = developer account email"; \
-	    echo "APPLE_PASSWORD = app-specific password (appleid.apple.com)"; \
-	    echo "APPLE_TEAM_ID  = 10-char team id (auto-derived from APPLE_SIGNING_IDENTITY"; \
-	    echo "                 when the cert name ends in '(TEAMID)')"; \
+	@if [ -z "$(NOTARIZE_VIA)" ]; then \
+	    echo "error: no notarization credentials available"; \
+	    echo "  option 1 (local dev, recommended): stash an app-specific"; \
+	    echo "    password as a notarytool Keychain profile named"; \
+	    echo "    '$(NOTARIZE_PROFILE)'. One-time setup on the workstation:"; \
+	    echo "      xcrun notarytool store-credentials $(NOTARIZE_PROFILE) \\"; \
+	    echo "          --apple-id <email> --team-id <TEAMID> \\"; \
+	    echo "          --password <app-specific-password>"; \
+	    echo "    Override the profile name with NOTARIZE_PROFILE=othername."; \
+	    echo "  option 2 (CI / env-driven): set APPLE_ID + APPLE_PASSWORD +"; \
+	    echo "    APPLE_TEAM_ID. APPLE_PASSWORD is the app-specific password"; \
+	    echo "    generated at appleid.apple.com, NOT the iCloud password."; \
+	    echo "    APPLE_TEAM_ID auto-derives from APPLE_SIGNING_IDENTITY"; \
+	    echo "    when the cert name ends in '(TEAMID)'."; \
 	    exit 1; \
 	fi
 
@@ -155,11 +195,36 @@ app-signed: sign-prereqs chan-bin
 	@echo "signed .app: $(CHAN_REPO)/target/release/bundle/macos/Chan.app"
 	@echo "verify: codesign -dv --verbose=2 $(CHAN_REPO)/target/release/bundle/macos/Chan.app"
 
-# Sign + notarize + staple + bundle a .dmg. Tauri's CLI handles the
-# notary roundtrip automatically when APPLE_ID + APPLE_PASSWORD +
-# APPLE_TEAM_ID are present in the env.
+# Sign + notarize + staple + bundle a .dmg.
+#
+# We split the build (Tauri) from the notarize (xcrun notarytool)
+# because tauri-bundler 2.x only knows the APPLE_ID/PASSWORD/TEAM_ID
+# auth shape; it does NOT consume notarytool Keychain profiles. To
+# support `--keychain-profile <name>` for local dev (Apple's blessed
+# mechanism) AND env-var for CI, we unset Tauri's notarize env vars
+# during the build so tauri-bundler skips its own notarize step, then
+# call `xcrun notarytool submit` ourselves with the appropriate flag
+# set. CI behaviour is identical to the prior path (manual notarytool
+# call uses the same credentials Tauri would have used).
 app-notarized: sign-prereqs notarize-prereqs chan-bin
-	cd src-tauri && cargo tauri build --bundles app,dmg
+	cd src-tauri && env -u APPLE_ID -u APPLE_PASSWORD -u APPLE_TEAM_ID \
+	    cargo tauri build --bundles app,dmg
+	@DMG=$$(ls -1 $(CHAN_REPO)/target/release/bundle/dmg/*.dmg | head -1); \
+	    if [ -z "$$DMG" ]; then \
+	        echo "error: no .dmg produced by cargo tauri build"; exit 1; \
+	    fi; \
+	    if [ "$(NOTARIZE_VIA)" = "keychain" ]; then \
+	        echo "notarizing $$DMG (via Keychain profile '$(NOTARIZE_PROFILE)')"; \
+	        xcrun notarytool submit "$$DMG" \
+	            --keychain-profile "$(NOTARIZE_PROFILE)" --wait; \
+	    else \
+	        echo "notarizing $$DMG (via env vars)"; \
+	        xcrun notarytool submit "$$DMG" \
+	            --apple-id "$(APPLE_ID)" \
+	            --password "$(APPLE_PASSWORD)" \
+	            --team-id "$(APPLE_TEAM_ID)" --wait; \
+	    fi && \
+	    xcrun stapler staple "$$DMG"
 	@echo ""
 	@echo "notarized artifacts:"
 	@ls -1 $(CHAN_REPO)/target/release/bundle/dmg/*.dmg 2>/dev/null || true

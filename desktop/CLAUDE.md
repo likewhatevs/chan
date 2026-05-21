@@ -135,3 +135,79 @@ Client probes:
 `https://chan.app/dl/desktop/{{target}}/{{current_version}}/latest.json`
 
 Server-side publishing of that manifest is owned by chan-prod-setup.
+
+## Local notarization setup
+
+`make app-notarized` (in `desktop/Makefile`) accepts notarization
+credentials from two sources, in this precedence order:
+
+1. **Environment variables** (`APPLE_ID` + `APPLE_PASSWORD` +
+   `APPLE_TEAM_ID`). What CI uses; populated from GitHub Actions
+   Secrets in `.github/workflows/release-desktop.yml`. Wins when
+   present, so a one-off `APPLE_ID=... APPLE_PASSWORD=...
+   APPLE_TEAM_ID=... make app-notarized` shadows whatever Keychain
+   profile is configured locally.
+2. **`notarytool` Keychain profile** (Apple's blessed mechanism for
+   local dev). One-time setup on the workstation:
+
+   ```
+   xcrun notarytool store-credentials chan \
+       --apple-id <your-apple-id-email> \
+       --team-id <10-char-team-id> \
+       --password <app-specific-password>
+   ```
+
+   Stashes the Apple ID + Team ID + app-specific password in the
+   default macOS Keychain under a profile named `chan`. After this,
+   plain `make app-notarized` runs from a bare shell with no env
+   exports; the Makefile detects the profile and passes
+   `--keychain-profile chan` to `xcrun notarytool submit`. Override
+   the profile name via `NOTARIZE_PROFILE=othername make
+   app-notarized` if you store it under a different label.
+
+The app-specific password (option 2 above) is generated at
+<https://account.apple.com/> -> Sign-In and Security ->
+App-Specific Passwords -> Generate. It is NOT the iCloud account
+password; the iCloud password will not work for `notarytool`
+because of two-factor auth.
+
+### Verifying the Keychain profile is in place
+
+```
+security find-generic-password -s "com.apple.gke.notary.tool" -a chan
+```
+
+Returns the keychain item attributes if the profile exists, exits
+non-zero otherwise. The actual password value never leaves the
+Keychain (no `-g`/`-w` flag).
+
+`xcrun notarytool history --keychain-profile chan` is the
+network-dependent variant: lists Apple-side notary submissions and
+fails on a bad / non-existent profile. Useful as an end-to-end
+"is this profile actually valid against Apple" check.
+
+### Why the Makefile splits build from notarize
+
+`cargo tauri build --bundles app,dmg` signs the `.app` (via
+`codesign`, driven by `APPLE_SIGNING_IDENTITY`) and packages the
+`.dmg`. Tauri's bundler can ALSO notarize as part of that single
+command, but only when `APPLE_ID` + `APPLE_PASSWORD` +
+`APPLE_TEAM_ID` are present in the env — `tauri-bundler` 2.x does
+not consume `notarytool` Keychain profiles directly. To support
+the local Keychain-profile path AND the CI env-var path under one
+recipe, the Makefile unsets the three notarize env vars during the
+`cargo tauri build` call (so tauri-bundler skips its own notarize
+step) and then runs `xcrun notarytool submit` + `xcrun stapler
+staple` itself with the appropriate flag set.
+
+CI behaviour is identical to the prior path: the credentials reach
+notarytool the same way, just via a manual invocation instead of
+tauri-bundler's internal one.
+
+### CI does not need the Keychain profile
+
+`release-desktop.yml` reads `APPLE_ID` + `APPLE_PASSWORD` +
+`APPLE_TEAM_ID` straight from `secrets.APPLE_*` (per the
+`docs/release/macos-signing.md` brief). The env-var path runs
+unchanged on the runner; no `xcrun notarytool store-credentials`
+step is needed in CI.

@@ -626,3 +626,98 @@ GO received + executed. `systacean-3` complete.
 
 Recycle-eligible per the agent-recycle protocol.
 Awaiting your next signal.
+
+## 2026-05-20 — poke (resumed; Round-2 Wave-1 queue picked up)
+
+Fresh @@Systacean session post-recycle. Picked up the Round-2 Wave-1 dispatch from your `9c879c7` commit + the inbound poke.
+
+* `-11` (signing-key rotation) — parked on @@Alex's identity-string answer. Permission event fired to [`event-systacean-alex.md`](event-systacean-alex.md). Your follow-up confirmed @@Alex completed the ci-3 brief checklist (branch (a)) but the actual string value hasn't landed in chat yet. Continuing to wait.
+* `-12` (tauri-plugin-updater verify) — prep work only so far (inspected the current updater wiring: plugin registered at `desktop/src-tauri/src/main.rs:771`, capabilities granted on main + main-*, endpoint `https://chan.app/dl/desktop/{{target}}/{{current_version}}/latest.json`, DEV minisign pubkey). Deferred deep dive per your "natural fill-in" framing on -13.
+* `-13` (Keychain-driven `make app-notarized`) — implementation ready.
+
+## 2026-05-20 — poke (systacean-13 ready for commit clearance)
+
+Implemented + render-checked. Awaiting your commit clearance + @@Alex's smoke-test result.
+
+### Load-bearing finding before the impl
+
+`tauri-bundler` 2.8.1's `notarize_auth` (`bundle/macos/sign.rs:96`) accepts ONLY `APPLE_ID`/`APPLE_PASSWORD`/`APPLE_TEAM_ID` or `APPLE_API_*`. No `APPLE_KEYCHAIN_PROFILE` env var support. The task spec's option-1 (`--keychain-profile chan`) therefore required splitting the build from the notarize: Tauri builds + signs (with the three notarize env vars unset, so its internal notarize is skipped), then the Makefile calls `xcrun notarytool submit` + `xcrun stapler staple` directly with the appropriate auth flag.
+
+CI behaviour is identical to the prior path (same credentials reach notarytool, manual call instead of via tauri-bundler).
+
+### Changes
+
+* `desktop/Makefile`: new `NOTARIZE_PROFILE ?= chan` variable; `NOTARIZE_VIA` mode detection (env vars first per "precedence" rule in the task spec, then `security find-generic-password -s "com.apple.gke.notary.tool" -a "$(NOTARIZE_PROFILE)"` for the Keychain profile); `notarize-prereqs` rewritten with a two-option setup hint; `app-notarized` refactored to `env -u APPLE_ID -u APPLE_PASSWORD -u APPLE_TEAM_ID cargo tauri build --bundles app,dmg` then conditional `xcrun notarytool submit` + `xcrun stapler staple`.
+* `desktop/CLAUDE.md`: new "Local notarization setup" section APPENDED AT END to keep my diff hunk separated from `fullstack-b-15`'s in-flight "Bundled chan sidecar" hunk near the top. Pre-commit `git add -p` partition planned per the `systacean-4` lesson.
+
+### Render checks
+
+`make -n app-notarized` with env credentials produces the correct env-branch expansion. `make -n notarize-prereqs` without credentials produces the help-text option-1 / option-2 fall-through. Keychain branch unrendered on this agent (no profile on the build host); branch shape is symmetric to env so trusting the conditional.
+
+### Pre-push gate
+
+Scope per the task acceptance: Makefile + Markdown only. No Rust / Web / JSON changes. `make -n` validates rendered recipe.
+
+### Smoke test ask (does NOT block commit clearance)
+
+@@Alex runs `cd desktop && make app-notarized` from a bare shell. Detailed expectations + fallback at the tail of [`../systacean/systacean-13.md`](../systacean/systacean-13.md). The smoke test can run in parallel with or after your clearance; results don't block the commit.
+
+### Commit subject
+
+```
+desktop/Makefile: notarytool keychain-profile path for local make app-notarized (systacean-13)
+```
+
+### Queue after -13 lands
+
+* `-11` still parked on @@Alex's identity string.
+* `-12` resumes — tauri-plugin-updater cross-platform verification. Will fire a runtime permission event for the actual chan-desktop launch + click-through walk when ready.
+
+Holding for your clearance.
+
+## 2026-05-21 — poke (systacean-13 committed: 01f10d3)
+
+Cleared per your 2026-05-21 poke + landed.
+
+```
+desktop/Makefile: notarytool keychain-profile path for local make app-notarized (systacean-13)
+```
+
+5 files, +561 / -16. Pre/post-commit audits clean. fb-15's CLAUDE.md sidecar section was already in HEAD via your `7845402` so the partition discipline simplified — only my "Local notarization setup" hunk in the CLAUDE.md diff at staging time.
+
+Push held per the v0.11.2 / Round-2 decision in `round-2-open-questions.md` A.5.
+
+Smoke test on @@Alex's plate tracked in B.3 — does NOT block anything on my lane; landing parallel.
+
+### Queue update
+
+* `-11` still parked on B.1 (identity string).
+* `-12` (tauri-plugin-updater verify) resuming — desk-work first (upstream docs read + test minisign keypair generation + mock-feed JSON authoring); will fire a runtime permission event before launching Chan.app.
+* `-13` done.
+
+No new pokes expected from me until either `-12` reaches a milestone or `-11` unblocks.
+
+## 2026-05-21 — poke (-13 orphaned by upstream reset; re-committing + landing -11)
+
+Heads-up before my next two commits.
+
+### -13 orphaning
+
+`git reflog` post-resume shows `01f10d3` (-13) was reset away (HEAD@{5}: `reset: moving to HEAD~1`) before ci-7 / fb-15 / your `01b103d` / fb-16 landed sequentially on top of the older base (`7845402`). Working-tree content survived (CLAUDE.md "Local notarization setup" section + Makefile rewrites + systacean-13.md untracked) but is no longer reachable from main; none of the four newer HEAD commits include my -13 changes (verified via `git show HEAD:<file>` greps).
+
+Cause: classic multi-agent rebase. Likely the `01b103d` mini-wave assembly did a hard reset to re-base on `7845402` without cherry-picking my interstitial commit back in. Not pointing fingers; the multi-agent tree's SHA volatility memo covers exactly this pattern.
+
+Re-committing -13 with identical content + same commit subject (`desktop/Makefile: notarytool keychain-profile path for local make app-notarized (systacean-13)`). New SHA. Audit anchor in [`../systacean/systacean-13.md`](../systacean/systacean-13.md) tail "2026-05-21 — orphaned by upstream reset; re-committing".
+
+### -11 (Apple Developer ID identity)
+
+@@Alex's B.1 reply landed on [`event-systacean-alex.md`](event-systacean-alex.md) 2026-05-21: identity = `Developer ID Application: Alexandre Fiori (W73XV5CK3N)`, providerShortName OUT. Per the transcription, I land the JSON rotation commit on the next inbound poll.
+
+Two commits incoming, both signing-related, in sequence:
+
+1. `desktop/Makefile: notarytool keychain-profile path for local make app-notarized (systacean-13)` — re-application of the orphaned commit.
+2. `chan-desktop: pin Developer ID Application signing identity (systacean-11)` — JSON edit + new "Apple Developer ID signing" section in `desktop/CLAUDE.md`.
+
+Both push held per Round-2 / v0.11.2 policy. The `populate-apple-secrets.sh` helper from your `01b103d` is the gating piece for `ci-8`'s real-keys dry-run; -11 unblocks the JSON side independently.
+
+Pre/post-commit audits per standard discipline. Flagging in advance so the next inbound `git log --oneline` doesn't look like SHA churn — it's a deliberate re-commit + a fresh -11 commit, both planned.
