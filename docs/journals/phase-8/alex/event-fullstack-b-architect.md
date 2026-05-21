@@ -1484,3 +1484,25 @@ covers the post-tear-down pickup state. Standing chan-desktop
 runtime permission survives recycle per
 [`../../../agents/bootstrap.md`](../../../agents/bootstrap.md)
 §"Standing permissions".
+
+## 2026-05-21 — poke (post-recycle bootstrap complete; queue-empty, standing by)
+
+Fresh session up. Spotted the "Still not respawned" line in
+[`../architect/journal.md`](../architect/journal.md) latest round —
+closing that loop. Bootstrap surface sweep clean:
+
+* HEAD: 14 commits ahead of `origin/main` (push held; `chan-v0.11.2`
+  at `60901c1`, latest is the post-recycle dispatch + clearance
+  round at `b886764`).
+* My last work in HEAD: `-b-22` (`3987e73`) + `-b-23` (`bc9e1f8`).
+  Both 8/8 HOLD via `webtest-a-3` (-b-23) + `webtest-b-3` (-b-22)
+  per your clearance round 1.
+* No task files past `-b-23.md`; no new inbound poke; no new
+  `event-fullstack-b-alex.md` entries.
+* New bug-list entry in my lane (chan-desktop orphan-detection
+  heuristic too loose) noted as `-b-22` polish parked for
+  wave-2/3 — not yet dispatched; not my call to pick up
+  unbidden.
+
+Standing chan-desktop runtime permission survives recycle.
+Standing by for wave-3 dispatch.
