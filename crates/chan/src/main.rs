@@ -2981,7 +2981,9 @@ mod tests {
         .unwrap_err();
         let msg = format!("{err:#}");
         assert!(
-            msg.contains("No such file") || msg.contains("not found"),
+            msg.contains("No such file")
+                || msg.contains("not found")
+                || msg.contains("cannot find"),
             "expected missing-file rejection, got: {msg}"
         );
     }

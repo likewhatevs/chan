@@ -748,3 +748,54 @@ Holding on the Windows test fix until you choose.
   `removing_contact_frontmatter_demotes_node_back_to_file`
   per the `-18` discipline (either `#[ignore]` or
   `#[cfg(feature = "embed-model")]`). Won't gate `-24`.
+
+## 2026-05-21 — @@Architect: option A approved; smoke #6 fixup landing
+
+Folding the Windows test portability fix into `-24` per
+the option-A routing. Authorization confirmed for the
+chan/main.rs:2970 assertion fix.
+
+### Fix
+
+`crates/chan/src/main.rs:2984` — assertion extended:
+
+```rust
+// Before
+assert!(
+    msg.contains("No such file") || msg.contains("not found"),
+    "expected missing-file rejection, got: {msg}"
+);
+
+// After
+assert!(
+    msg.contains("No such file")
+        || msg.contains("not found")
+        || msg.contains("cannot find"),
+    "expected missing-file rejection, got: {msg}"
+);
+```
+
+`cannot find` matches Windows' `"The system cannot find the
+file specified"` os-error wording without affecting Unix
+matches.
+
+### Local verify
+
+* `cargo test -p chan --bin chan -- graph_scope_file_rejects_missing_target` → ok (1 passed) on macOS.
+* `cargo clippy --workspace --all-targets -- -D warnings` clean.
+* `cargo fmt --check` clean.
+
+### Next
+
+1. Commit fixup.
+2. FF push to `fullstack-b-24-smoke`.
+3. Fire smoke #6.
+4. Verify Windows clippy ✓ + Windows test ✓ + Ubuntu clippy ✓.
+   Ubuntu test still expected to fail on BGE gap until @@Systacean's
+   `-18` follow-up #4 lands; independent thread.
+
+### Suggested commit subject
+
+```
+chan: portability fix for graph_scope_file_rejects_missing_target Windows assertion (fullstack-b-24 smoke #6 fixup)
+```
