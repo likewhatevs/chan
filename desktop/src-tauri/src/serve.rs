@@ -478,14 +478,14 @@ fn exit_info(status: Option<&ExitStatus>) -> (Option<i32>, Option<i32>) {
     (code, signal)
 }
 
-fn normal_termination(exit_code: Option<i32>, exit_signal: Option<i32>) -> bool {
+fn normal_termination(exit_code: Option<i32>, _exit_signal: Option<i32>) -> bool {
     if exit_code == Some(0) {
         return true;
     }
     #[cfg(unix)]
     {
         matches!(
-            exit_signal,
+            _exit_signal,
             Some(x) if x == nix::libc::SIGTERM || x == nix::libc::SIGINT
         )
     }

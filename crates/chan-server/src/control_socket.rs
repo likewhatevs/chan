@@ -20,12 +20,14 @@ use tokio::task::JoinHandle;
 
 use crate::state::DriveCell;
 
+#[cfg(unix)]
 #[derive(Debug, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ControlRequest {
     OpenPath { window_id: String, path: PathBuf },
 }
 
+#[cfg(unix)]
 #[derive(Debug, Serialize)]
 #[serde(tag = "status", rename_all = "snake_case")]
 pub enum ControlResponse {
@@ -33,6 +35,7 @@ pub enum ControlResponse {
     Error { message: String },
 }
 
+#[cfg(unix)]
 #[derive(Debug, Serialize)]
 #[serde(tag = "command", rename_all = "snake_case")]
 enum WindowCommand {
@@ -48,10 +51,12 @@ enum WindowCommand {
     },
 }
 
+#[cfg(unix)]
 fn is_false(value: &bool) -> bool {
     !*value
 }
 
+#[cfg(unix)]
 #[derive(Debug, Serialize)]
 struct WindowCommandFrame {
     #[serde(rename = "type")]
@@ -160,6 +165,7 @@ pub fn start(
     ))
 }
 
+#[cfg(unix)]
 fn handle_request(
     req: ControlRequest,
     drive_cell: &Arc<RwLock<Option<DriveCell>>>,
@@ -188,6 +194,7 @@ fn handle_request(
     }
 }
 
+#[cfg(unix)]
 fn open_path(
     drive: &Drive,
     self_writes: &crate::self_writes::SelfWrites,
@@ -249,6 +256,7 @@ fn open_path(
     Ok(format!("open request queued for {rel}"))
 }
 
+#[cfg(unix)]
 fn abs_to_drive_rel(root: &Path, requested: &Path) -> Result<String, String> {
     if !requested.is_absolute() {
         return Err("control path must be absolute".into());
@@ -284,6 +292,7 @@ fn abs_to_drive_rel(root: &Path, requested: &Path) -> Result<String, String> {
     Ok(path_to_posix(rel))
 }
 
+#[cfg(unix)]
 fn path_to_posix(path: &Path) -> String {
     path.components()
         .filter_map(|c| match c {
@@ -294,13 +303,14 @@ fn path_to_posix(path: &Path) -> String {
         .join("/")
 }
 
+#[cfg(unix)]
 fn parent_rel(rel: &str) -> String {
     rel.rsplit_once('/')
         .map(|(parent, _)| parent.to_string())
         .unwrap_or_default()
 }
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 mod tests {
     use super::*;
     use serde_json::Value;

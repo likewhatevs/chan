@@ -413,3 +413,123 @@ per-PR ci.yml gate FULLY GREEN for the first time since
 
 Greenlit on the (A) shape. Pick up the implementation;
 your fix-shape recommendation matches mine.
+
+## 2026-05-21 — implementation note (ready to commit + smoke)
+
+Implementation landed on the corrected scope per @@Architect's
+option (A) clearance.
+
+### Changes
+
+**`crates/chan-server/src/control_socket.rs`** — `#[cfg(unix)]`
+added at the 10 declaration sites:
+
+| Line | Item                  | Form |
+|------|-----------------------|------|
+| 23   | `pub enum ControlRequest`     | attribute prepended above `#[derive(...)]` |
+| 30   | `pub enum ControlResponse`    | attribute prepended above `#[derive(...)]` |
+| 38   | `enum WindowCommand`          | attribute prepended above `#[derive(...)]` |
+| 53   | `fn is_false`                 | attribute prepended above `fn` |
+| 58   | `struct WindowCommandFrame`   | attribute prepended above `#[derive(...)]` |
+| 166  | `fn handle_request`           | attribute prepended above `fn` |
+| 194  | `fn open_path`                | attribute prepended above `fn` |
+| 255  | `fn abs_to_drive_rel`         | attribute prepended above `fn` |
+| 290  | `fn path_to_posix`            | attribute prepended above `fn` |
+| 300  | `fn parent_rel`               | attribute prepended above `fn` |
+
+One additional change beyond the 10 declarations:
+
+* `#[cfg(test)]` on the test module → `#[cfg(all(test, unix))]`.
+  The two tests (`parent_rel_returns_empty_for_root_file`,
+  `open_path_creates_markdown_and_broadcasts_window_command`,
+  `open_path_enters_existing_directory`) reference `parent_rel`
+  + `open_path`, both now `#[cfg(unix)]`-gated. Without the test
+  mod also being Unix-gated, Windows cargo test would fail
+  compilation with "function not found in this scope" on the
+  newly-gated items.
+
+**`desktop/src-tauri/src/serve.rs`** — `exit_signal` parameter
+renamed to `_exit_signal` per the task body's idiomatic-Rust
+suggestion:
+
+```rust
+// Before
+fn normal_termination(exit_code: Option<i32>, exit_signal: Option<i32>) -> bool {
+    ...
+    #[cfg(unix)]
+    { matches!(exit_signal, Some(x) if ...) }
+    #[cfg(not(unix))]
+    { false }
+}
+
+// After
+fn normal_termination(exit_code: Option<i32>, _exit_signal: Option<i32>) -> bool {
+    ...
+    #[cfg(unix)]
+    { matches!(_exit_signal, Some(x) if ...) }
+    #[cfg(not(unix))]
+    { false }
+}
+```
+
+Unix branch still reads the parameter (underscore-prefixed
+names are not syntactic — only suppress unused-variable warnings
+on the inactive branch). Function not part of any extern
+interface (`fn`, not `pub fn`); rename is local-only.
+
+### Pre-push gate (local, macOS aarch64)
+
+| Surface                                                                 | State                                |
+|-------------------------------------------------------------------------|--------------------------------------|
+| `cargo fmt --check`                                                     | Clean.                               |
+| `cargo clippy --workspace --all-targets -- -D warnings`                 | Clean.                               |
+| `cargo test --workspace`                                                | All pass (workspace-total unchanged from HEAD baseline; the gated-out tests on the `cfg(all(test, unix))` mod run normally on Unix). |
+| `cargo build --workspace --no-default-features`                         | Clean.                               |
+| `web/` `npx svelte-check`                                               | 3989 files, 0 errors, 0 warnings.    |
+| `web/` `npm run build`                                                  | Clean (pre-existing chunk-size warnings only). |
+
+vitest not re-run; change is Rust-only with no SPA surface.
+
+### Coordination footprint
+
+* @@FullStackA: in flight on `-a-46` (HybridEditorConfig.svelte,
+  HybridEditorConfig.test.ts, SettingsPanel.svelte) per
+  `git status`. No overlap with my Rust-only scope.
+* @@CI: ci-12 modifications on event channel + `ci-12.md` +
+  `journal.md` are docs only; no overlap.
+* @@Systacean: in flight on `systacean-15.md` / `systacean-17.md`
+  (docs appends per `git status`); no overlap with `control_socket.rs`.
+* @@WebtestA / @@WebtestB: event-channel work only; no overlap.
+
+Standard `git add` per-path discipline mandatory for the
+commit; `git diff --staged --stat` audit before commit;
+`git show --stat HEAD` after. The a8e991a / `-b-22` /
+`-b-15` recovery shapes are well-known.
+
+### Files to stage
+
+```
+crates/chan-server/src/control_socket.rs
+desktop/src-tauri/src/serve.rs
+docs/journals/phase-8/fullstack-b/fullstack-b-24.md
+```
+
+The `docs/journals/phase-8/alex/event-fullstack-b-architect.md`
+gets its commit-readiness append in a follow-up after the
+smoke run completes (separate from the implementation
+commit; cleaner audit trail).
+
+### Suggested commit subject
+
+```
+chan-server + chan-desktop: gate Unix-only control_socket declarations + rename unused exit_signal (fullstack-b-24)
+```
+
+### Next
+
+After commit:
+1. Push HEAD to `fullstack-b-24-smoke` branch.
+2. `gh workflow run ci.yml --ref fullstack-b-24-smoke`.
+3. Wait for run completion.
+4. Verify Windows clippy passes + Ubuntu + macOS green.
+5. Append result + fire commit-readiness poke to @@Architect.
