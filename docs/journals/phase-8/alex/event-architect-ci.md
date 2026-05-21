@@ -623,3 +623,73 @@ chan-desktop binaries; cleaner story for users + audit
 trail.
 
 Proceed with the rerun whenever you're ready.
+
+## 2026-05-21 — poke (latent ci-4 `^2` bug: approve Option C + tag-shape (b))
+
+Sharp catch on the latent bug from `ci-4`. The `^2`
+assumption was reasonable given cargo's syntax familiarity
+— `taiki-e/install-action`'s narrower contract (no semver
+operators) is exactly the kind of thing that surfaces only
+when the workflow fires for real.
+
+### Routing approved
+
+* **Option C** (direct amendment commit, no task file) —
+  approved. 1-line YAML fix doesn't warrant task ceremony.
+  Use your proposed commit message:
+
+  ```
+  ci: tauri-cli major-only pin for taiki-e/install-action (fixes ci-4 latent bug)
+  ```
+
+  Bump the message slightly to include the v0.11.2-wave
+  context if you like, but the audit trail in the commit
+  body + the [ci-4 task file](../ci/ci-4.md) "Open
+  questions" / "Findings" append (recommend adding one
+  noting the latent bug + the post-mortem) is enough.
+
+* **Tag-shape (b)** — approved. Cut a new dry-run tag
+  `chan-v0.11.99-dryrun.2` pointing at the fix commit.
+  Leaves `dryrun.1`'s failed-run audit anchor in the
+  Actions history; `dryrun.2` carries the green run.
+
+### Action sequence
+
+1. Apply the 1-line YAML fix to
+   `.github/workflows/release-desktop.yml`.
+2. YAML-parse validation locally.
+3. Append a "Findings (2026-05-21 post-fire bug)" section
+   to [`../ci/ci-4.md`](../ci/ci-4.md) documenting the
+   `^2` vs `2` issue so the audit trail self-corrects.
+4. Commit (single workflow file + the ci-4 docs append):
+   ```
+   ci: tauri-cli major-only pin for taiki-e/install-action (fixes ci-4 latent bug)
+   ```
+5. Cut + push the new dry-run tag:
+   ```bash
+   git tag -a chan-v0.11.99-dryrun.2 -m "Dry-run #2 with ci-4 ^2 fix" HEAD
+   git push origin chan-v0.11.99-dryrun.2
+   ```
+6. Workflow fires automatically on the tag. Watch the run
+   + capture metrics in the `ci-8` task tail per the
+   acceptance criteria.
+
+### After ci-8 dry-run green
+
+* Ping back so I can route @@WebtestB for second-Mac
+  install + Gatekeeper-clean check.
+* Once @@WebtestB confirms green, @@Alex fires the "cut it"
+  signal → @@Systacean cuts `chan-v0.11.2`.
+
+### Lane state update
+
+| Item                                  | State                                |
+|---------------------------------------|--------------------------------------|
+| ci-7 commit                           | ✓ (`666c027`)                        |
+| ci-9 commit                           | ✓ (`f5b0122`)                        |
+| Billing                               | ✓ unblocked                          |
+| ci-4 `^2` bug                         | Approved Option C amendment commit   |
+| ci-8 dry-run #2                       | Approved tag-shape (b); fire after the fix commits |
+
+Proceed without further architect ack — both decisions
+locked.
