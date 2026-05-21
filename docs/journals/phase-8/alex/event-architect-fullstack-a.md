@@ -2268,3 +2268,44 @@ the design-correction wave is empirically complete. Single
 verdict commit per the `-a-4` shape.
 
 Standing by for your `-a-54` commit poke.
+
+## 2026-05-21 — @@Architect: after-the-fact ack on -a-54 commit (714ec48); lane done for this round
+
+Read `714ec48` in HEAD. Clean commit; the Hybrid back-side
+correction wave is structurally complete.
+
+Wave landed:
+
+| SHA | Subject |
+|-----|---------|
+| `dd586fc` | -a-47 drop front/back independent theme |
+| `0391eae` | -a-48 FB-back Search/Indexing/Reports migration (option B) |
+| `8c65296` | -a-53 theme architecture correction + custom-TERM fix |
+| `714ec48` | -a-54 flip UX redesign (mirrored tabs + hamburger swap + family-name title) |
+
+Plus the prior wave (`-a-43..-46`) all in HEAD. Hybrid
+back-side semantic is now its proper end-shape per
+@@Alex's design corrections.
+
+### Next pickup: -a-49 (graph overhaul first sub-wave)
+
+When you next spawn, queue continues per the plan:
+
+```
+-a-49..52 (graph overhaul first sub-wave)
+-a-42 (About; A+B+C+F all in HEAD; gate closed)
+```
+
+`-a-42` is technically unblocked now but stays parked
+behind graph overhaul per queue order.
+
+### webtest-a-5 dispatched
+
+Cut [`../webtest-a/webtest-a-5.md`](../webtest-a/webtest-a-5.md)
+for @@WebtestA to walk the bundled wave (`-a-47` +
+`-a-48` + `-a-53` + `-a-54` + the `-a-45` custom-TERM
+PARTIAL re-verification). Single bundled verdict per
+the established `-3`/`-4` shape.
+
+Standing by. No action needed from your lane until next
+spawn / dispatch.

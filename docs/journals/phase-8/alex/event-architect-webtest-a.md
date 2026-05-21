@@ -685,3 +685,29 @@ either webtest-tooling notes or future polish).
 
 Standing by until `-a-48` / `-a-53` / `-a-54` land in
 HEAD; I'll cut `webtest-a-5` then.
+
+## 2026-05-21 — poke (webtest-a-5: Hybrid back-side correction wave bundled walkthrough)
+
+All four pieces of the Hybrid back-side correction wave
+landed in HEAD:
+
+* `dd586fc` -a-47 (drop front/back independent theme)
+* `0391eae` -a-48 (FB-back Search/Indexing/Reports
+  migration, option B)
+* `8c65296` -a-53 (theme architecture correction +
+  custom-TERM PARTIAL fix bundled)
+* `714ec48` -a-54 (flip UX redesign — mirrored tabs +
+  hamburger swap + family-name title in tab area)
+
+Cut [`../webtest-a/webtest-a-5.md`](../webtest-a/webtest-a-5.md)
+bundling all four slices into a single walkthrough +
+verdict per the `-3`/`-4` shape. Includes a re-verification
+of the `-a-45` custom-TERM PARTIAL from `webtest-a-4`
+(should now be HOLD post-`-a-53` fix).
+
+20 acceptance checks total across the four slices + the
+re-verification. Standing terminal + Chrome MCP perm
+covers everything.
+
+Verdict goes to `webtest-a-1.md` as a fresh dated append;
+poke me on `event-webtest-a-architect.md` when done.

@@ -3320,3 +3320,64 @@ Windows lock-primitive bridge lands in Round-3 polish.
 | `architect/journal.md` | This entry |
 | `alex/event-architect-fullstack-a.md` | -a-54 commit clearance + 5 shape decisions accepted |
 | `alex/event-architect-systacean.md` | -18 fu#4 Ubuntu green ack + -20 proactive clearance + bundled smoke plan ack |
+
+## 2026-05-21 — clearance round 11 — -a-54 landed; FullStackA done; webtest-a-5 dispatched
+
+### Lane commit landed this beat
+
+| SHA | Subject | Lane |
+|-----|---------|------|
+| `714ec48` | `Hybrid flip UX: preserve tab strip + mirror tabs + swap hamburger + family-name title (fullstack-a-54)` | @@FullStackA |
+
+@@Alex 2026-05-21: "fullstackA is done, now only
+systacean working". @@FullStackA's session is wrapping
+up after the Hybrid back-side correction wave landed
+fully. Their queue continues with `-a-49` (graph
+overhaul first sub-wave) on next spawn; not picking up
+this round.
+
+### Hybrid back-side correction wave structurally complete
+
+All four pieces in HEAD:
+
+* `dd586fc` -a-47 (drop front/back independent theme)
+* `0391eae` -a-48 (FB-back Search/Indexing/Reports
+  migration, option B; chan-reports toggle restored)
+* `8c65296` -a-53 (theme architecture correction +
+  custom-TERM PARTIAL fix bundled)
+* `714ec48` -a-54 (flip UX redesign)
+
+This closes the design-correction follow-up loop from
+the @@Alex corrections that surfaced after `-a-46`
+shipped. Hybrid back-side semantic is now at its proper
+end-shape.
+
+### webtest-a-5 dispatched
+
+Cut [`../webtest-a/webtest-a-5.md`](../webtest-a/webtest-a-5.md)
+bundling all four slices + a re-verification of the
+`-a-45` custom-TERM PARTIAL (should now be HOLD
+post-`-a-53`). 20 acceptance checks total. Single
+bundled verdict per the `-3`/`-4` shape. @@WebtestA is
+idle; the dispatch waits in their inbound channel for
+next spawn / poll.
+
+### Lane state at end of round
+
+| Lane | State |
+|------|-------|
+| @@Systacean | Only lane actively working; bundled smoke `26247985860` in flight at ~11m; then -19 pickup |
+| @@CI | Idle; queue-empty |
+| @@FullStackA | DONE for this round; -a-49 next on respawn |
+| @@FullStackB | DONE; queue-empty post -24 |
+| @@WebtestA | webtest-a-5 dispatched; reactive lane idle until next spawn |
+| @@WebtestB | DONE; queue-empty |
+
+### What I'm committing this round
+
+| File | Reason |
+|------|--------|
+| `architect/journal.md` | This entry |
+| `alex/event-architect-fullstack-a.md` | after-the-fact ack on -a-54 |
+| `alex/event-architect-webtest-a.md` | webtest-a-5 dispatch |
+| `webtest-a/webtest-a-5.md` | NEW task (bundled Hybrid back-side correction walkthrough) |
