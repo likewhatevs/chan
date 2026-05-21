@@ -658,3 +658,93 @@ chan: gate Unix-only ControlResponse enum on Windows (fullstack-b-24 smoke #2 fi
 3. Re-fire workflow.
 4. Confirm Windows clippy green (or surface the next layer if more
    dead-code is hiding).
+
+## 2026-05-21 — smoke runs #3 / #4 / #5: cascade resolved; Windows clippy GREEN
+
+Iteration chain bottomed out. Each smoke uncovered one more
+downstream item because Windows clippy stops at the first error
+per crate:
+
+| Run            | Surfaced                                                           | Fix                                                                                                                |
+|----------------|--------------------------------------------------------------------|--------------------------------------------------------------------------------------------------------------------|
+| `26240201841` (#3) | `enum ControlResponse` in `chan/main.rs:1628`                  | `#[cfg(unix)]` on the enum (commit `f796345`).                                                                       |
+| `26240844057` (#4) | `unused import: Deserialize` in `chan/main.rs:55`              | Split `use serde::{Deserialize, Serialize}`: `Serialize` unconditional, `Deserialize` `#[cfg(unix)]` (commit `68e1cbc`). |
+| `26241431377` (#5) | `fn node` + `fn node_path_kind` in `chan-server/routes/fs_graph.rs` test mod | `#[cfg(unix)]` on both test helpers; they're called only by `#[cfg(unix)]` symlink tests (commit `b01b310`). |
+
+After smoke #5: **Windows `cargo clippy --all-targets -- -D
+warnings` GREEN.** The 11 original lints + the 4 cascade items
+all cleared. `-24`'s stated scope is complete.
+
+### Two test-step failures remain (not in -24's literal scope)
+
+The broken Windows-clippy gate had been masking these:
+
+#### Windows test (1 failure)
+
+```
+test tests::graph_scope_file_rejects_missing_target ... FAILED
+panicked at crates\chan\src\main.rs:2983:9:
+expected missing-file rejection, got: stat graph file target `notes/no-such-file.md`: io error: The system cannot find the file specified. (os error 2)
+```
+
+The assertion at `crates/chan/src/main.rs:2984`:
+
+```rust
+assert!(
+    msg.contains("No such file") || msg.contains("not found"),
+    "expected missing-file rejection, got: {msg}"
+);
+```
+
+hard-codes Unix-style OS error wording. Windows says
+`"The system cannot find the file specified"` — neither
+substring matches. One-line fix: add
+`|| msg.contains("cannot find")`. This is a pre-existing
+portability gap exposed now that the test step actually
+runs to completion on Windows.
+
+#### Ubuntu test (1 failure)
+
+```
+test removing_contact_frontmatter_demotes_node_back_to_file ... FAILED
+panicked at crates/chan-drive/tests/contacts_import.rs:296:37
+called `Result::unwrap()` on an `Err` value: Search("embedding model 'BAAI/bge-small-en-v1.5' not downloaded; ...")
+```
+
+BGE-small model gap. `systacean-18`'s `#[ignore]` sweep
+missed this specific test. Not in `-24`'s scope (chan-drive
+lane); systacean territory.
+
+### Scope question for @@Architect
+
+Three options:
+
+* **(A) Fold the Windows test fix into `-24`.** One-line
+  change to make the assertion Windows-portable. Same
+  spirit as the cascade fixes (silencing latent issues the
+  prior broken gate had been hiding). `-24` closes with
+  Windows green; Ubuntu green pending systacean-18-followup.
+  Recommended.
+* **(B) Close `-24` here.** Windows clippy is green; the
+  task's literal scope was lint silencing. Cut a follow-up
+  (`fullstack-b-25` or assign elsewhere) for the Windows
+  test assertion fix.
+* **(C) Cut both follow-ups separately** (Windows test +
+  systacean-18-followup) and close `-24` now.
+
+Recommendation: **(A)**. The Windows test failure is a
+direct consequence of the clippy gate now working
+(previously masked); the fix is mechanical and tiny;
+single smoke fire validates everything together. The
+Ubuntu BGE failure is genuinely separate scope
+(systacean-18 lane) — flag for routing regardless of
+option chosen.
+
+Holding on the Windows test fix until you choose.
+
+### Coordination
+
+* @@Systacean: please pick up the BGE-model gap on
+  `removing_contact_frontmatter_demotes_node_back_to_file`
+  per the `-18` discipline (either `#[ignore]` or
+  `#[cfg(feature = "embed-model")]`). Won't gate `-24`.

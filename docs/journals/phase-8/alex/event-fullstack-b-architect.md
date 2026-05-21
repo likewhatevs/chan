@@ -1506,3 +1506,71 @@ closing that loop. Bootstrap surface sweep clean:
 
 Standing chan-desktop runtime permission survives recycle.
 Standing by for wave-3 dispatch.
+
+## 2026-05-21 — poke (fullstack-b-24: scope question on actual lint locations)
+
+`-b-24` received. Grep against the 11 names says 10 of them
+live in `crates/chan-server/src/control_socket.rs` (Unix-only
+file already gated `#[cfg(unix)]`; the declarations leak to
+Windows), not in `desktop/src-tauri/src/`. Only `exit_signal`
+is genuinely in chan-desktop.
+
+Authorization in the task body covers `desktop/src-tauri/src/*.rs`
+only; touching chan-server is shared lane scope and I want
+explicit OK before editing it inside `-24`.
+
+Scope question + three routing options + recommendation at
+the tail of [`../fullstack-b/fullstack-b-24.md`](../fullstack-b/fullstack-b-24.md)
+"scope question for @@Architect" section. Recommendation:
+(A) expand `-24` authorization to also cover the chan-server
+file, single commit, single smoke fire.
+
+Holding on implementation. No code edits yet.
+
+## 2026-05-21 — poke (-b-24 smoke iterations 1-5: clippy GREEN; 2 test failures remain — scope question)
+
+Implementation landed; cascade resolved through 5 smoke
+iterations.
+
+Commits on main:
+* `c0600e0` — original 11 lints
+* `e8ff68a` — smoke #1 fixup (orphaned chan_drive/serde imports + parse_ps helper)
+* `f796345` — smoke #2 fixup (ControlResponse in chan/main.rs)
+* `68e1cbc` — smoke #3 fixup (Deserialize import split in chan/main.rs)
+* `b01b310` — smoke #4 fixup (fs_graph.rs test helpers)
+
+After smoke #5 ([run `26241431377`](https://github.com/fiorix/chan/actions/runs/26241431377)):
+
+**Windows `cargo clippy --all-targets -- -D warnings` GREEN.**
+The 11 original lints + the 4 cascade items all cleared.
+`-24`'s stated lint-silencing scope is done.
+
+### Two test-step failures remain (latent under the broken clippy gate)
+
+| Job             | Failure                                                                                              | Lane                                |
+|-----------------|------------------------------------------------------------------------------------------------------|-------------------------------------|
+| Windows test    | `graph_scope_file_rejects_missing_target` in `chan/main.rs:2970` — assertion hard-codes Unix OS-error wording ("No such file" / "not found"); Windows says "The system cannot find the file specified" | Pre-existing portability gap; 1-line fix |
+| Ubuntu test     | `removing_contact_frontmatter_demotes_node_back_to_file` in `chan-drive/tests/contacts_import.rs:296` — BGE model gap | systacean-18 #[ignore] sweep missed it |
+
+### Scope question
+
+Three options at the tail of [`../fullstack-b/fullstack-b-24.md`](../fullstack-b/fullstack-b-24.md)
+"Scope question for @@Architect" section:
+
+* **(A)** Fold the Windows test fix into `-24` (one-line
+  assertion + `cannot find` substring). Single smoke fire
+  validates everything together. **Recommended.**
+* **(B)** Close `-24` here; cut a follow-up for the Windows
+  test fix.
+* **(C)** Cut both follow-ups separately and close `-24` now.
+
+Ubuntu BGE failure is genuinely separate scope (systacean
+lane) regardless of (A)/(B)/(C); flagging for routing.
+
+Holding on the Windows test fix until you choose.
+
+### Standing chan-desktop runtime perm unused
+
+Not consumed this task — `-24` is declaration-only Rust;
+no runtime walkthrough needed. Standing perm available
+for future tasks.
