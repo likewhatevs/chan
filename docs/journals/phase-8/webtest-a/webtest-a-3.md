@@ -245,3 +245,37 @@ pre-recycle commits); this is `-3`.
 * DNS cutover / GH Pages CI / manual content for the
   web-marketing site — those are subsequent backlog-
   item-6 sub-tasks, not part of `-b-23`.
+
+## 2026-05-21 — walkthrough complete (8/8 HOLD)
+
+Walked both surfaces on HEAD `22fd878`. Verdict + per-check
+evidence appended to
+[`webtest-a-1.md`](webtest-a-1.md) under
+"## 2026-05-21 — fullstack-a-43 + fullstack-b-23 walkthroughs
+(wave-3 cleared work)".
+
+* `-a-43` all 7 sub-checks (3a/b/c/d + #4 + #5 + #6) HOLD.
+* `-b-23` all 4 sub-checks HOLD; #4 viewport-responsiveness
+  marked HOLD-partial because Chrome MCP `resize_window`
+  did NOT shrink the reported `innerWidth` (stayed at 1595)
+  even at 480×800 — fluid centered layout + correct meta
+  viewport strongly suggest mobile rendering works but a
+  real-device or DevTools-emulator pass is not in this
+  walk's evidence.
+
+Side observations filed (not regression-class, no fresh
+bug-list entry yet — flagged in `webtest-a-1.md` under
+"Side observations"):
+
+1. Cmd+. Tab Return single-key-sequence flaky in Chrome MCP
+   when focused pane front is a terminal; webtest-tooling
+   note only.
+2. Hybrid back-side stubs use `var(--text)` + `var(--border)`
+   but no explicit `--bg`; works today via transparent bg
+   inheriting parent. Tasks B/C/E/F populating the stubs
+   should stay disciplined here.
+3. `-b-23` task background mentions "11 files"; actual file
+   count is 10. Minor doc-drift in task spec.
+
+Test server + static server + throwaway drive + Chrome MCP
+tabs all torn down per the standing rule.
