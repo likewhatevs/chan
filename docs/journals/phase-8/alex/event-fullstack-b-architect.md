@@ -1138,3 +1138,95 @@ cuts `chan-v0.11.2`. Standing by for verdicts.
 
 See [../fullstack-b/fullstack-b-20.md](../fullstack-b/fullstack-b-20.md)
 for the full implementation note + verification table.
+
+## 2026-05-21 — poke (fullstack-b-21 committed; ci-8 dry-run #4 unblocked)
+
+`-b-21` committed as `ae389f7` "chan-desktop: codesign bundled
+chan sidecar for notarization". 3 files, 387 insertions / 3
+deletions. Pre-commit `git diff --staged --stat` + post-commit
+`git show --stat HEAD` clean.
+
+### Option C ruled out empirically
+
+Tested per the task body's recommendation first. Result:
+tauri-build rejected `bundle.macOS.externalBin` with
+
+```
+unknown field `externalBin`, expected one of `frameworks`,
+`files`, `bundle-version`, `bundle-name`, `minimum-system-version`,
+`exception-domain`, `signing-identity`, `hardened-runtime`,
+`provider-short-name`, `entitlements`, `info-plist`, `dmg`
+```
+
+Tauri 2's `MacOSConfig` schema does NOT include an `externalBin`
+key. The task body's hypothesis (that per-platform externalBin
+might behave differently from the top-level key WRT
+triple-append) is moot — the field doesn't exist at the
+per-platform level in this Tauri version. CLAUDE.md now records
+this so future implementers don't retry it.
+
+### Option A landed
+
+Added a codesign step to `desktop/Makefile`'s `chan-bin`
+recipe, gated on `APPLE_SIGNING_IDENTITY` being non-empty:
+
+```make
+@if [ -n "$$APPLE_SIGNING_IDENTITY" ]; then \
+    codesign --force --options=runtime --timestamp \
+        --sign "$$APPLE_SIGNING_IDENTITY" $(CHAN_BIN); \
+fi
+```
+
+Runs after chan is staged to
+`src-tauri/binaries/chan-<host-triple>` and before Tauri's
+bundler picks it up. Tauri's bundle-signing pass preserves the
+chan signature (only re-signs files it owns; chan is a
+files-map payload from its perspective).
+
+### Empirical verification
+
+`make app-signed` from `desktop/` on aarch64 Mac with my
+standing chan-desktop runtime permission:
+
+```
+$ codesign -dv --verbose=2 .../Chan.app/Contents/MacOS/chan
+Identifier=chan-aarch64-apple-darwin
+flags=0x10000(runtime)
+Authority=Developer ID Application: Alexandre Fiori (W73XV5CK3N)
+Authority=Developer ID Certification Authority
+Authority=Apple Root CA
+Timestamp=21 May 2026 at 09:36:30
+TeamIdentifier=W73XV5CK3N
+Runtime Version=26.4.0
+
+$ codesign --verify --strict --deep .../Chan.app; echo $?
+0
+```
+
+All three notary-rejection criteria satisfied:
+* Developer ID Application signature ✓
+* Hardened runtime (`flags=0x10000(runtime)`) ✓
+* Secure timestamp (not "none") ✓
+
+The bundled chan's CodeDirectory identifier is
+`chan-aarch64-apple-darwin` (inherited from the staging
+filename); should not block notarization. If notary balks on
+the identifier in dry-run #4, a follow-up can rename the staged
+binary to `chan` before signing.
+
+### `notarytool submit` not run locally
+
+Per the task body's optional-quota clause; CI dry-run #4 is the
+authoritative test. My standing permission covers a local
+`xcrun notarytool submit` if you want belt-and-braces before
+@@CI fires, but the codesign verification + the matching
+identity should be sufficient.
+
+### Hand-off
+
+ci-8 dry-run #4 can fire against `ae389f7`. If green →
+@@WebtestB second-Mac verify → @@Alex "cut it" → @@Systacean
+cuts `chan-v0.11.2`. Standing by for verdicts.
+
+See [../fullstack-b/fullstack-b-21.md](../fullstack-b/fullstack-b-21.md)
+for the full implementation note + verification table.
