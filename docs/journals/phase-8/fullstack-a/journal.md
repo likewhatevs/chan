@@ -398,3 +398,102 @@ Full impl note + suggested commit subject at the tail of
 changed, four new files. Outbound poke fired to
 @@Architect with Commit readiness; standing by for
 review + commit routing.
+
+## 2026-05-21 — Round-2 Wave-2 -a-44: ready for review
+
+Recycled session bootstrap (post tear-down) ran clean.
+PRE-RECYCLE HANDOVER queue picked up cleanly: `-a-43`
+committed (`b36ca96`) by the previous incarnation;
+`-a-44` (Hybrid drag-to-rearrange + transaction-mode
+NAV) is the next item, prereq in HEAD.
+
+### -a-44 complete
+
+Four-file change (SPA + state only; no Rust touched):
+* `web/src/state/tabs.svelte.ts` — `paneMode` shape
+  gains `transactionMode` / `grabPaneId` /
+  `hoverPaneId`. New `enterPaneModeTransaction`,
+  `paneModeSetGrab`, `paneModeSetHover`,
+  `paneModeSwapWith` exports.
+* `web/src/state/tabs.test.ts` — 8 new pins under
+  a `Hybrid NAV transaction mode (fullstack-a-44)`
+  describe block covering Entry A / Entry B / swap
+  semantics / state-gating / commit-clear /
+  cancel-clear.
+* `web/src/components/Pane.svelte` — dead-zone
+  div between last `.tab` and `.actions`, with
+  manual mousedown + 5-px threshold mousemove
+  tracking (Entry A) + dblclick (Entry B). Pane
+  root augmented with `transaction-active` /
+  `transaction-grab` / `transaction-drop-target`
+  class flags + mouseenter/leave/up handlers that
+  drive grab + hover state. CSS for grab cursor +
+  dashed outline on grab pane + inset overlay on
+  drop target. `position: relative` added to
+  `.pane` so the `::after` drop-target overlay
+  anchors correctly.
+* `web/src/components/Pane.test.ts` — 4 new pins
+  under a `Pane Hybrid NAV transaction mode
+  (fullstack-a-44)` describe block covering
+  dead-zone presence, dblclick → Entry B,
+  class-flip dynamics through grab/hover state,
+  and a raw-source guard that the dead zone uses
+  manual mousedown (not HTML5 dragstart).
+
+### Design rationale
+
+* **Manual mousedown + threshold, not HTML5
+  drag**: tabs in the strip own `draggable="true"`
+  for inter-pane tab DnD. Routing the dead zone
+  through the same pipeline would collide.
+  Manual state-machine keeps the two flows clean.
+* **`paneModeSwap` refactored on top of
+  `paneModeSwapWith`**: directional swap now
+  reduces to "resolve neighbour, swap by id".
+  The new function is the underlying primitive;
+  the keyboard NAV's WASD-swap reads the same.
+* **Transaction state cleared by
+  commit/cancel**: the existing keyboard NAV
+  Enter/Esc paths already clear the new fields
+  via my updates to `commitPaneMode` /
+  `cancelPaneMode`. No App.svelte chord
+  additions needed.
+* **Chain semantics**: each drop clears grab +
+  hover but keeps `transactionMode` on, matching
+  the task's "Drag continues until
+  commit/dismiss" rule.
+* **Drop-target visuals distinct from focus**:
+  `.transaction-drop-target` uses an inset
+  overlay (not the `.pane.focused` solid ring),
+  so the user can tell drop-here apart from
+  keyboard-active.
+
+### Gate
+
+* vitest **600 / 600** (+12 net: 8 in
+  tabs.test.ts, 4 in Pane.test.ts).
+* svelte-check 0 errors / 0 warnings across
+  3987 files.
+* npm build clean.
+* Rust gate not re-run (no Rust touched).
+
+### Decisions flagged in the task tail
+
+* Cmd+. mid-transaction left as a no-op (task
+  default was "yes exit" but existing keyboard
+  NAV doesn't exit on Cmd+. either; consistency
+  argument cuts both ways). Esc dismisses
+  cleanly.
+* Click-without-drag → no-op release (matches
+  task default).
+* Every pane can be the drop target (not just
+  Hybrid-marked panes). Matches @@Alex's
+  "rearrange any pane" intent.
+
+Impl note + suggested commit subject at the tail
+of [fullstack-a-44.md](fullstack-a-44.md).
+Outbound poke fired to @@Architect with Commit
+readiness; standing by for review + commit
+routing. Queue waiting: `-a-45..-48` (Hybrid
+back-side Tasks B/C/E/F) → `-a-49..52` (graph
+overhaul first sub-wave) → `-a-42` (About).

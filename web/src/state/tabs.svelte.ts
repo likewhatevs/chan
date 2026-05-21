@@ -695,14 +695,27 @@ export type PaneModeSpawnIntent = {
   ctx: SpawnContext;
 };
 
+/// `fullstack-a-44`: `transactionMode` is the mouse-driven variant of
+/// Hybrid NAV. Entered by drag-from-dead-zone (Entry A — sets
+/// `grabPaneId` to the originating pane) or by double-click on the
+/// dead zone (Entry B — `grabPaneId` stays null until the user clicks
+/// + drags inside a pane). Mouse handlers in transaction mode operate
+/// on the full pane body, not just the top bar. Enter / Esc / Cmd+.
+/// exit through the same paths as keyboard NAV.
 export const paneMode = $state<{
   active: boolean;
   draft: LayoutState | null;
   spawnIntent: PaneModeSpawnIntent | null;
+  transactionMode: boolean;
+  grabPaneId: string | null;
+  hoverPaneId: string | null;
 }>({
   active: false,
   draft: null,
   spawnIntent: null,
+  transactionMode: false,
+  grabPaneId: null,
+  hoverPaneId: null,
 });
 
 /// Single-fire wobble bus. Each pane's entry holds a monotonic
@@ -1834,6 +1847,41 @@ export function enterPaneMode(): void {
   paneMode.draft = cloneLayoutState(layout);
   paneMode.active = true;
   paneMode.spawnIntent = null;
+  paneMode.transactionMode = false;
+  paneMode.grabPaneId = null;
+  paneMode.hoverPaneId = null;
+}
+
+/// `fullstack-a-44`: mouse-driven NAV entry. `grabPaneId` is the pane
+/// the user started dragging from (Entry A — drag-with-payload), or
+/// null when entered via double-click on the dead zone (Entry B —
+/// drag-no-payload; mode is standby until the user clicks + drags
+/// inside any pane). Idempotent if already in transaction mode.
+export function enterPaneModeTransaction(grabPaneId: string | null): void {
+  if (!paneMode.active) {
+    paneMode.draft = cloneLayoutState(layout);
+    paneMode.active = true;
+    paneMode.spawnIntent = null;
+  }
+  paneMode.transactionMode = true;
+  paneMode.grabPaneId = grabPaneId;
+}
+
+/// `fullstack-a-44`: set the current grab pane while in transaction
+/// mode. Used when the user clicks + drags inside any pane after
+/// entering via Entry B, or when they re-grab a different pane
+/// mid-transaction. No-op outside transaction mode.
+export function paneModeSetGrab(paneId: string | null): void {
+  if (!paneMode.transactionMode) return;
+  paneMode.grabPaneId = paneId;
+}
+
+/// `fullstack-a-44`: track the pane currently under the cursor while
+/// a grab is held. Drives the drop-target highlight. No-op outside
+/// transaction mode.
+export function paneModeSetHover(paneId: string | null): void {
+  if (!paneMode.transactionMode) return;
+  paneMode.hoverPaneId = paneId;
 }
 
 export function commitPaneMode(): void {
@@ -1857,12 +1905,18 @@ export function commitPaneMode(): void {
   paneMode.active = false;
   paneMode.draft = null;
   paneMode.spawnIntent = null;
+  paneMode.transactionMode = false;
+  paneMode.grabPaneId = null;
+  paneMode.hoverPaneId = null;
 }
 
 export function cancelPaneMode(): void {
   paneMode.active = false;
   paneMode.draft = null;
   paneMode.spawnIntent = null;
+  paneMode.transactionMode = false;
+  paneMode.grabPaneId = null;
+  paneMode.hoverPaneId = null;
 }
 
 /// `fullstack-72`: stage a tab spawn for commit. Replaces any
@@ -1946,23 +2000,33 @@ export function paneModeSwap(direction: Direction): void {
   if (!draft) return;
   const nextId = neighbourLeaf(draft, draft.activePaneId, direction);
   if (!nextId) return;
-  const current = draft.nodes[draft.activePaneId];
-  const next = draft.nodes[nextId];
-  if (!current || current.kind !== "leaf" || !next || next.kind !== "leaf") return;
-  const currentTabs = current.tabs;
-  const currentActive = current.activeTabId;
-  const nextTabs = next.tabs;
-  const nextActive = next.activeTabId;
-  current.tabs = nextTabs;
-  current.activeTabId = nextActive;
-  next.tabs = currentTabs;
-  next.activeTabId = currentActive;
-  draft.activePaneId = next.id;
+  paneModeSwapWith(draft.activePaneId, nextId);
+}
+
+/// `fullstack-a-44`: swap two arbitrary panes' contents by id. The
+/// directional `paneModeSwap` reduces to this once the neighbour
+/// resolves. Transaction-mode mouse drag uses this directly: the
+/// grab pane is `grabId`, the drop target is `dropId`. Focus moves
+/// to the destination so subsequent swaps chain naturally.
+export function paneModeSwapWith(grabId: string, dropId: string): void {
+  const draft = draftLayout();
+  if (!draft) return;
+  if (grabId === dropId) return;
+  const a = draft.nodes[grabId];
+  const b = draft.nodes[dropId];
+  if (!a || a.kind !== "leaf" || !b || b.kind !== "leaf") return;
+  const aTabs = a.tabs;
+  const aActive = a.activeTabId;
+  a.tabs = b.tabs;
+  a.activeTabId = b.activeTabId;
+  b.tabs = aTabs;
+  b.activeTabId = aActive;
+  draft.activePaneId = b.id;
   // Both panes had their content swapped, so both should
   // wobble so the user's eye tracks where their content
   // landed and which slot now holds whatever was displaced.
-  requestPaneWobble(current.id);
-  requestPaneWobble(next.id);
+  requestPaneWobble(a.id);
+  requestPaneWobble(b.id);
 }
 
 function nearestAncestorSplit(

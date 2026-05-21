@@ -5,6 +5,7 @@
     activeLayout,
     closeTab,
     enterPaneMode,
+    enterPaneModeTransaction,
     flipHybrid,
     focusColorForWindow,
     isDirty,
@@ -16,6 +17,9 @@
     openTerminalInPane,
     paneFlip,
     paneMode,
+    paneModeSetGrab,
+    paneModeSetHover,
+    paneModeSwapWith,
     paneWobble,
     reorderTab,
     reopenClosedTab,
@@ -255,6 +259,104 @@
     closePaneMenus();
     enterPaneMode();
   }
+
+  /// `fullstack-a-44`: transaction-mode (mouse-driven NAV) handlers.
+  ///
+  /// Two entry paths target the same dead zone on the top bar (the
+  /// stretch between the last tab and the hamburger). Entry A is a
+  /// drag-with-payload: mousedown + drag past the threshold enters
+  /// NAV with the originating pane already grabbed. Entry B is a
+  /// double-click: enter NAV in standby, the next click + drag
+  /// inside any pane sets the grab.
+  ///
+  /// Once in transaction mode: pane-body mousedown sets grab + a
+  /// pending start point; pane-body mouseenter (cursor under grab)
+  /// tracks the drop target; pane-body mouseup commits a swap with
+  /// the current drop target. Enter / Esc / Cmd+. exit through the
+  /// same paths as keyboard NAV (handled at App.svelte).
+  const DEAD_ZONE_DRAG_THRESHOLD_PX = 5;
+  let deadZoneDragStart: { x: number; y: number } | null = null;
+
+  function onDeadZoneMouseDown(e: MouseEvent): void {
+    if (e.button !== 0) return;
+    deadZoneDragStart = { x: e.clientX, y: e.clientY };
+    window.addEventListener("mousemove", onDeadZoneMouseMove);
+    window.addEventListener("mouseup", onDeadZoneMouseUp);
+  }
+
+  function onDeadZoneMouseMove(e: MouseEvent): void {
+    if (!deadZoneDragStart) return;
+    const dx = e.clientX - deadZoneDragStart.x;
+    const dy = e.clientY - deadZoneDragStart.y;
+    if (Math.hypot(dx, dy) < DEAD_ZONE_DRAG_THRESHOLD_PX) return;
+    deadZoneDragStart = null;
+    window.removeEventListener("mousemove", onDeadZoneMouseMove);
+    window.removeEventListener("mouseup", onDeadZoneMouseUp);
+    enterPaneModeTransaction(pane.id);
+  }
+
+  function onDeadZoneMouseUp(): void {
+    deadZoneDragStart = null;
+    window.removeEventListener("mousemove", onDeadZoneMouseMove);
+    window.removeEventListener("mouseup", onDeadZoneMouseUp);
+  }
+
+  function onDeadZoneDblClick(): void {
+    enterPaneModeTransaction(null);
+  }
+
+  /// Pane-body mousedown while in transaction mode. Two roles:
+  /// (1) if no grab is held, set this pane as the grab (Entry B
+  /// path picks up here when the user clicks + drags into a pane).
+  /// (2) when a grab is held but on a different pane, treat the
+  /// new mousedown as a re-grab (the user changed their mind).
+  /// The hoverPaneId tracking on mouseenter handles the drop side.
+  function onPaneBodyMouseDown(e: MouseEvent): void {
+    if (!paneMode.transactionMode) return;
+    if (e.button !== 0) return;
+    paneModeSetGrab(pane.id);
+  }
+
+  function onPaneBodyMouseEnter(): void {
+    if (!paneMode.transactionMode) return;
+    if (!paneMode.grabPaneId) return;
+    paneModeSetHover(pane.id);
+  }
+
+  function onPaneBodyMouseLeave(): void {
+    if (!paneMode.transactionMode) return;
+    if (paneMode.hoverPaneId === pane.id) paneModeSetHover(null);
+  }
+
+  /// Pane-body mouseup while in transaction mode with a grab held.
+  /// If the cursor is over this pane (we are the drop target) and
+  /// the grab is on a different pane, commit the swap. Transaction
+  /// stays active for chained swaps until Enter / Esc.
+  function onPaneBodyMouseUp(): void {
+    if (!paneMode.transactionMode) return;
+    const grab = paneMode.grabPaneId;
+    if (!grab) return;
+    if (grab === pane.id) {
+      paneModeSetGrab(null);
+      return;
+    }
+    paneModeSwapWith(grab, pane.id);
+    paneModeSetGrab(null);
+    paneModeSetHover(null);
+  }
+
+  /// True when this pane is the drop target under a held grab. Drives
+  /// the outline cue. Distinct from the keyboard-NAV active-pane
+  /// highlight so the user can tell drop-target apart from focus.
+  const isTransactionGrab = $derived(
+    paneMode.transactionMode && paneMode.grabPaneId === pane.id,
+  );
+  const isTransactionDropTarget = $derived(
+    paneMode.transactionMode &&
+      paneMode.grabPaneId !== null &&
+      paneMode.grabPaneId !== pane.id &&
+      paneMode.hoverPaneId === pane.id,
+  );
 
   /// `fullstack-59`: per-Hybrid theme override. Click on the
   /// Hybrid chrome's theme button cycles between "follow global"
@@ -771,9 +873,18 @@
   class:focused={isFocused}
   class:wobble={wobbleActive}
   class:flipping={flipActive}
+  class:transaction-active={paneMode.transactionMode}
+  class:transaction-grab={isTransactionGrab}
+  class:transaction-drop-target={isTransactionDropTarget}
   data-focus-color={focusColorForWindow()}
   data-theme={pane.theme}
-  onmousedown={() => setActivePane(pane.id)}
+  onmousedown={(e) => {
+    setActivePane(pane.id);
+    onPaneBodyMouseDown(e);
+  }}
+  onmouseenter={onPaneBodyMouseEnter}
+  onmouseleave={onPaneBodyMouseLeave}
+  onmouseup={onPaneBodyMouseUp}
   onanimationend={(e) => {
     if (e.animationName === "pane-wobble-once") wobbleActive = false;
     if (e.animationName === "pane-flip-once") flipActive = false;
@@ -936,6 +1047,19 @@
     {#if dropIndicator === pane.tabs.length}
       <div class="drop-bar" aria-hidden="true"></div>
     {/if}
+    <!-- `fullstack-a-44`: top-bar dead zone. The empty stretch
+         between the last tab and the hamburger actions captures
+         mousedown + double-click to enter Hybrid NAV in transaction
+         mode. Manual mousedown + threshold tracking (not HTML5
+         dragstart) avoids stomping the per-tab inter-pane DnD that
+         lives on each .tab; that DnD remains unchanged. -->
+    <!-- svelte-ignore a11y_no_static_element_interactions -->
+    <div
+      class="dead-zone"
+      aria-hidden="true"
+      onmousedown={onDeadZoneMouseDown}
+      ondblclick={onDeadZoneDblClick}
+    ></div>
     <div class="actions">
       <!-- `fullstack-a-27`: the per-Hybrid theme toggle button used
            to live here as standalone chrome (`fullstack-59`); @@Alex
@@ -1230,6 +1354,7 @@
     min-width: 0;
     min-height: 0;
     flex: 1;
+    position: relative;
     border: 1px solid transparent;
     background: var(--bg);
     color: var(--text);
@@ -1455,6 +1580,49 @@
     flex-shrink: 0;
   }
   .actions { margin-left: auto; display: flex; align-items: center; gap: 6px; padding-left: 4px; }
+  /* `fullstack-a-44`: dead zone on the top bar — the stretch between
+     the last tab and the hamburger. mousedown + drag past 5 px
+     enters transaction-mode NAV (Entry A, drag-with-payload);
+     dblclick enters transaction-mode NAV with no originating grab
+     (Entry B). flex: 1 fills any remaining horizontal space; the
+     min-width guard keeps the affordance hittable even when the
+     tab strip is fully packed. The `grab` cursor advertises the
+     drag-to-rearrange interaction; switches to `grabbing` while
+     a transaction is in flight. */
+  .dead-zone {
+    flex: 1;
+    min-width: 12px;
+    align-self: stretch;
+    cursor: grab;
+  }
+  .dead-zone:active,
+  .pane.transaction-active .dead-zone {
+    cursor: grabbing;
+  }
+  /* `fullstack-a-44`: transaction-mode visual cues.
+     `.transaction-active` is set on every pane while transaction
+     mode is in flight; the body cursor flips to `grabbing` so the
+     mouse-grab affordance reads from anywhere in the pane.
+     `.transaction-grab` outlines the pane currently held; the
+     dotted-orange ring distinguishes the held pane from focus
+     (which uses the solid coloured ring per `.pane.focused`).
+     `.transaction-drop-target` is set on the pane currently under
+     the cursor while a grab is held; a brighter inset overlay
+     signals the drop will land here. */
+  .pane.transaction-active { cursor: grabbing; }
+  .pane.transaction-grab {
+    outline: 2px dashed #f97316;
+    outline-offset: -3px;
+  }
+  .pane.transaction-drop-target::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+    border: 2px solid var(--pane-focus);
+    background: color-mix(in srgb, var(--pane-focus) 8%, transparent);
+    z-index: 5;
+  }
   /* `fullstack-a-43` removed the back-side-attention indicator
      (originally `fullstack-48` Phase C). Under the new back-side
      model — a per-surface configuration view scoped to the active

@@ -17,6 +17,7 @@ import {
   detachTabToPaneEdge,
   dismissTerminalEnvNamePrompt,
   enterPaneMode,
+  enterPaneModeTransaction,
   flipHybrid,
   focusColorForWindow,
   browserTabLabel,
@@ -37,9 +38,12 @@ import {
   paneModeOpenGraph,
   paneModeOpenTerminal,
   paneModeResize,
+  paneModeSetGrab,
+  paneModeSetHover,
   paneModeSplit,
   paneModeStageSpawn,
   paneModeSwap,
+  paneModeSwapWith,
   removeTerminalFromBroadcastGroup,
   registerTerminalInputSink,
   markLocalTabDrop,
@@ -1088,6 +1092,142 @@ describe("pane state", () => {
     expect(committedLeft.tabs[0]?.id).toBe("right");
     expect(committedRight.tabs[0]?.id).toBe("left");
     expect(layout.activePaneId).toBe(committedLeft.id);
+  });
+});
+
+describe("Hybrid NAV transaction mode (fullstack-a-44)", () => {
+  function setupTwoPanes(): { leftPane: LeafNode; rightPane: LeafNode } {
+    const left = fileTab({ id: "left", path: "notes/left.md" });
+    const right = fileTab({ id: "right", path: "notes/right.md" });
+    const leftPane = resetLayout([left]);
+    splitPane(leftPane.id, "row", "after");
+    const root = layout.nodes[layout.rootId];
+    if (root?.kind !== "split") throw new Error("expected split");
+    const rightPane = layout.nodes[root.b];
+    if (rightPane?.kind !== "leaf") throw new Error("expected leaf");
+    rightPane.tabs.push(right);
+    rightPane.activeTabId = right.id;
+    return { leftPane, rightPane };
+  }
+
+  test("enterPaneModeTransaction with grab activates transaction mode + sets grab pane (Entry A)", () => {
+    const { leftPane } = setupTwoPanes();
+
+    enterPaneModeTransaction(leftPane.id);
+
+    expect(paneMode.active).toBe(true);
+    expect(paneMode.transactionMode).toBe(true);
+    expect(paneMode.grabPaneId).toBe(leftPane.id);
+    expect(paneMode.hoverPaneId).toBeNull();
+    expect(paneMode.draft).not.toBeNull();
+
+    cancelPaneMode();
+  });
+
+  test("enterPaneModeTransaction(null) activates transaction mode with no grab (Entry B)", () => {
+    setupTwoPanes();
+
+    enterPaneModeTransaction(null);
+
+    expect(paneMode.transactionMode).toBe(true);
+    expect(paneMode.grabPaneId).toBeNull();
+
+    cancelPaneMode();
+  });
+
+  test("paneModeSwapWith swaps two arbitrary panes' contents", () => {
+    const { leftPane, rightPane } = setupTwoPanes();
+
+    enterPaneModeTransaction(leftPane.id);
+    paneModeSwapWith(leftPane.id, rightPane.id);
+    commitPaneMode();
+
+    const leftAfter = layout.nodes[leftPane.id];
+    const rightAfter = layout.nodes[rightPane.id];
+    if (leftAfter?.kind !== "leaf" || rightAfter?.kind !== "leaf") {
+      throw new Error("expected leaves after swap");
+    }
+    expect(leftAfter.tabs[0]?.id).toBe("right");
+    expect(rightAfter.tabs[0]?.id).toBe("left");
+  });
+
+  test("paneModeSwapWith is a no-op outside pane mode", () => {
+    const { leftPane, rightPane } = setupTwoPanes();
+
+    paneModeSwapWith(leftPane.id, rightPane.id);
+
+    const leftAfter = layout.nodes[leftPane.id];
+    const rightAfter = layout.nodes[rightPane.id];
+    if (leftAfter?.kind !== "leaf" || rightAfter?.kind !== "leaf") {
+      throw new Error("expected leaves");
+    }
+    expect(leftAfter.tabs[0]?.id).toBe("left");
+    expect(rightAfter.tabs[0]?.id).toBe("right");
+  });
+
+  test("paneModeSwapWith is a no-op when grab and drop are the same pane", () => {
+    const { leftPane } = setupTwoPanes();
+
+    enterPaneModeTransaction(leftPane.id);
+    paneModeSwapWith(leftPane.id, leftPane.id);
+
+    const draftLeft = paneMode.draft?.nodes[leftPane.id];
+    if (draftLeft?.kind !== "leaf") throw new Error("expected leaf in draft");
+    expect(draftLeft.tabs[0]?.id).toBe("left");
+
+    cancelPaneMode();
+  });
+
+  test("paneModeSetGrab and paneModeSetHover only mutate state while transactionMode is on", () => {
+    const { leftPane, rightPane } = setupTwoPanes();
+
+    paneModeSetGrab(leftPane.id);
+    paneModeSetHover(rightPane.id);
+    expect(paneMode.grabPaneId).toBeNull();
+    expect(paneMode.hoverPaneId).toBeNull();
+
+    enterPaneMode();
+    paneModeSetGrab(leftPane.id);
+    paneModeSetHover(rightPane.id);
+    expect(paneMode.grabPaneId).toBeNull();
+    expect(paneMode.hoverPaneId).toBeNull();
+    cancelPaneMode();
+
+    enterPaneModeTransaction(null);
+    paneModeSetGrab(leftPane.id);
+    paneModeSetHover(rightPane.id);
+    expect(paneMode.grabPaneId).toBe(leftPane.id);
+    expect(paneMode.hoverPaneId).toBe(rightPane.id);
+    cancelPaneMode();
+  });
+
+  test("cancelPaneMode clears transaction state alongside the draft", () => {
+    const { leftPane, rightPane } = setupTwoPanes();
+
+    enterPaneModeTransaction(leftPane.id);
+    paneModeSetHover(rightPane.id);
+    cancelPaneMode();
+
+    expect(paneMode.active).toBe(false);
+    expect(paneMode.transactionMode).toBe(false);
+    expect(paneMode.grabPaneId).toBeNull();
+    expect(paneMode.hoverPaneId).toBeNull();
+  });
+
+  test("commitPaneMode persists the swap and clears transaction state", () => {
+    const { leftPane, rightPane } = setupTwoPanes();
+
+    enterPaneModeTransaction(leftPane.id);
+    paneModeSwapWith(leftPane.id, rightPane.id);
+    commitPaneMode();
+
+    expect(paneMode.active).toBe(false);
+    expect(paneMode.transactionMode).toBe(false);
+    expect(paneMode.grabPaneId).toBeNull();
+    expect(paneMode.hoverPaneId).toBeNull();
+    const leftAfter = layout.nodes[leftPane.id];
+    if (leftAfter?.kind !== "leaf") throw new Error("expected leaf");
+    expect(leftAfter.tabs[0]?.id).toBe("right");
   });
 });
 

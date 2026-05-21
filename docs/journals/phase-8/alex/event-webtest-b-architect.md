@@ -759,3 +759,152 @@ Tear-down checklist:
 Session closing committed via
 `docs: webtest-b session close (lane-B teardown
 post-v0.11.2 walkthrough)`.
+
+## 2026-05-21 — ack (post-recycle bootstrap; tightened-scope re-loaded)
+
+Fresh @@WebtestB session bootstrapped from the
+`bootstrap.md` Working-agent block. Re-acked the
+2026-05-21 tightened-scope clarification for
+DMG/Gatekeeper verification (no `/Applications/Chan.app`
+writes; PID capture not triage; no system-path
+`xattr` writes; pause-and-warn rule for canonical
+fresh-Mac walks). Standing chan-desktop runtime
+permission against throwaway drives carries over per
+`bootstrap.md` §"Standing permissions".
+
+Current state on bootstrap:
+
+* HEAD `22fd878`, working tree clean.
+* No lane-B serve up; no chan-desktop running.
+* No `webtest-b-3.md` task file cut yet. Pre-recycle
+  handover tagged `-b-22` (`3987e73` orphan sidecar
+  reap + drive-lock-takeover UX) as my next dispatch
+  once the recycled @@Architect routes a walkthrough
+  task.
+* Fresh-Mac Gatekeeper perm ask still parked with
+  @@Alex in
+  [`event-webtest-b-alex.md`](event-webtest-b-alex.md);
+  default-to-(c) applies if no reply by the time the
+  walk fires.
+
+Holding for the @@Architect routing on the `-b-22`
+walkthrough (or any other dispatch you cut).
+
+## 2026-05-21 — poke (webtest-b-3: -b-22 walkthrough; component VERIFIED, click cycles PARKED)
+
+Walked the four acceptance subsections of `-b-22`
+(`3987e73` — process-group sidecar reap + drive-lock-
+takeover UX). Verdict appended to
+[`../webtest-b/webtest-b-1.md`](../webtest-b/webtest-b-1.md)
+under the `2026-05-21 — fullstack-b-22 walkthrough
+(orphan sidecar reap + lock takeover)` heading. Throwaway-
+drive shape per the standing chan-desktop runtime
+permission; tightened-scope rules honoured throughout (no
+`/Applications/Chan.app` touch, no triage-shape kills, no
+system-path xattr).
+
+### Per-subsection verdict
+
+| Subsection                                  | Verdict                        |
+|---------------------------------------------|--------------------------------|
+| Prevention half — graceful exit (SIGTERM)   | source+tests VERIFIED; click PARKED |
+| Prevention half — ungraceful exit (kill -9) | source CONFIRMED; click PARKED |
+| Recovery half — lock-takeover dialog        | marker + heuristic VERIFIED; dialog click PARKED |
+| Negative case — non-chan PID on the port    | source VERIFIED; ps-grep false-positive flagged |
+
+### What was empirically verified
+
+* chan-desktop test suite 39/39 green at HEAD `22fd878`
+  (matches `-b-22`'s "+7 new since 32" count).
+* `DRIVE_LOCKED_MARKER` substring scan is anchored against
+  the REAL chan-drive output: a second `chan serve` against
+  the same drive (different port) exits with byte-identical
+  `Error: drive is locked by another process`.
+* `find_orphan_chan_serve_pids` ps-grep heuristic correctly
+  matches a live orphan-shaped chan serve (the manually-
+  spawned PID 21889 was picked up by the equivalent filter).
+* `kill_orphan_with_grace` shape works: SIGTERM on the
+  orphan-shaped PID exited within 1 s, no SIGKILL escalation
+  needed in this run.
+
+### Side observation — `find_orphan_chan_serve_pids` false-positive surface
+
+The heuristic matches ANY process whose command line
+contains `chan` + ` serve ` + drive-key as three independent
+substrings. During the walk, bash/awk pipeline lines that
+mentioned all three (via my shell command and my filter
+regex) appeared in the candidate list alongside the real
+chan serve. Real-world likelihood is narrow but non-zero
+for users with a noisy shell environment: a `tail -f
+chan-serve.log` over the drive key, an IDE process
+inspecting the directory, a tmux pane with `chan serve
+<drive-key>` in its visible scrollback that happens to be
+mid-process, etc., COULD enter the candidate set. The
+`promptDriveLockTakeover()` Tauri `ask()` dialog does not
+display the candidate PIDs to the user (yes/no shape), so
+the destructive-action confirmation surface is opaque.
+
+Two follow-up paths for Round-2 polish:
+
+* Tighten the heuristic to match `chan serve <drive-key>`
+  as a contiguous sequence (regex or positional argv check)
+  instead of three independent substrings.
+* Render the candidate PIDs in the Reclaim dialog
+  (replace Tauri's plain `ask()` with a custom modal so the
+  user sees what's about to be killed).
+
+Neither is gating; flagging for the bug list.
+
+### Why I did NOT launch debug chan-desktop
+
+@@Alex's `/Applications/Chan.app` (PID 39577) is live and
+sharing `~/Library/Application Support/Chan Desktop/config.json`
+with whatever debug chan-desktop I'd launch. The
+atomic-write contract prevents corruption but last-writer-
+wins could discard live `window_configs` from @@Alex's
+in-flight session. "No persistent side effects outside the
+throwaway-drive set" applies — held off, exercised
+chan-drive + chan-serve invariants underneath directly
+instead. If @@Alex's working session is paused in a future
+window, a follow-up empirical walkthrough can launch
+debug chan-desktop cleanly.
+
+### Unblock suggestions (same shape as -b-1/-b-14/-b-7 carry-overs)
+
+1. macOS Accessibility entitlement on Claude Code's parent
+   process — `osascript` GUI scripting becomes available.
+2. chan-desktop `--drive <path>` CLI arg (Round-3 polish)
+   — bypasses the launcher click entirely.
+3. @@Alex's eventual `chan.app` walk at v0.12.0 cut per
+   the 2026-05-21 "i will only test the chan.app at the
+   very very end" decision — covers every parked click
+   cycle in one pass.
+
+### Tear-down evidence
+
+* My orphan-shaped chan serve (PID 21889) SIGTERM'd cleanly
+  during the empirical pass; gone before tear-down.
+* `/tmp/chan-test-phase8-wb-b22/` `rm -rf`'d.
+* Drive registry entry `chan remove
+  /private/tmp/chan-test-phase8-wb-b22` → `unregistered`.
+* Config backup compared to live config — identical (no
+  chan-desktop write occurred); backup file removed.
+* Log files cleaned (no `/tmp/chan-test-phase8-wb-b22-*`
+  left).
+* `target/debug/chan-desktop` build artifact left in place
+  (shared workspace cache).
+
+### Commit readiness
+
+Verdict + this poke ready to commit when you route
+clearance.
+
+* **Suggested commit subject**:
+  `docs: webtest-b-3 — -b-22 orphan-sidecar reap walkthrough (component verified, click cycles parked)`.
+* **Files** (explicit per-path `git add`):
+  `docs/journals/phase-8/webtest-b/webtest-b-1.md` +
+  `docs/journals/phase-8/alex/event-webtest-b-architect.md`.
+* Pre/post-commit `git diff --staged --stat` +
+  `git show --stat HEAD` per the shared-worktree
+  discipline; will spot-check for stowaways before
+  committing.

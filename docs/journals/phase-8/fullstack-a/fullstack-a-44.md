@@ -189,3 +189,238 @@ Highest committed `-a-N` is `-a-41`; `-a-42` is About,
 A); this is `-a-44`. The Hybrid back-side Tasks B-F when
 they fan out will claim `-a-45..-a-49`; About (`-a-42`)
 stays put.
+
+## 2026-05-21 — ready for review
+
+Four-file change. SPA + state only; no Rust touched.
+
+### Architecture
+
+State (`web/src/state/tabs.svelte.ts`):
+
+* `paneMode` gains two transaction-mode fields:
+  `transactionMode: boolean` (mouse-driven NAV active)
+  and `grabPaneId: string | null` (the pane currently
+  held), plus `hoverPaneId: string | null` for the
+  drop-target highlight. All three reset on
+  `enterPaneMode` / `commitPaneMode` / `cancelPaneMode`
+  so the keyboard NAV path stays unaffected.
+* New `enterPaneModeTransaction(grabPaneId)`: lazy-
+  inits paneMode if not already active (so the same
+  call works whether the user is mid-keyboard-NAV or
+  starting fresh) and flips `transactionMode = true`
+  + sets the originating grab. `null` enters in
+  standby (Entry B, drag-no-payload).
+* New `paneModeSetGrab(paneId)` / `paneModeSetHover
+  (paneId)`: gated on `transactionMode` so callers
+  outside transaction mode can't accidentally muck
+  with grab/hover state. Drives the visual cues from
+  `Pane.svelte` mouse handlers.
+* New `paneModeSwapWith(grabId, dropId)`: the
+  directional `paneModeSwap` now reduces to this
+  once it resolves a neighbour. Transaction-mode
+  drop-on-pane calls this directly with the two
+  pane ids. No-op if `grabId === dropId`, no-op
+  outside pane mode (so a stray mouseup off-drop
+  doesn't fire). Both panes wobble per the existing
+  swap convention.
+
+UI (`web/src/components/Pane.svelte`):
+
+* `.dead-zone` div added between the last `.tab` and
+  the `.actions` hamburger inside the `.tabs` strip.
+  `flex: 1` + 12 px min-width keeps the affordance
+  hittable even when the tab strip is fully packed.
+* Entry A: `onmousedown` on the dead zone records the
+  start point + attaches window-level `mousemove` +
+  `mouseup` listeners. If `mousemove` crosses the
+  5 px threshold, the listeners detach and
+  `enterPaneModeTransaction(pane.id)` fires (drag
+  started; this pane is the first grab). If
+  `mouseup` fires before the threshold, the
+  listeners detach without entering NAV (it was just
+  a click in the dead zone).
+* Entry B: `ondblclick` on the dead zone calls
+  `enterPaneModeTransaction(null)` directly.
+* Pane root handlers: `onmousedown` augmented to
+  call `onPaneBodyMouseDown` (sets the grab to this
+  pane when in transaction mode + no grab held, i.e.
+  Entry B's first grab); `onmouseenter` /
+  `onmouseleave` track hover for drop-target
+  indication; `onmouseup` commits the swap with the
+  currently-held grab when this pane is the drop
+  target.
+* Class flags: `.transaction-active` (always while
+  transactionMode is on; body cursor → grabbing),
+  `.transaction-grab` (dashed orange outline on the
+  held pane — distinct from the solid focus ring on
+  the keyboard-active pane), `.transaction-drop-
+  target` (inset overlay in `--pane-focus` colour on
+  the pane under the cursor while a grab is held).
+* `.pane { position: relative }` added so the
+  drop-target `::after` overlay anchors to the pane.
+
+Exit / commit: handled entirely by the existing
+keyboard NAV path. `handlePaneModeKey` in App.svelte
+already routes Enter → `commitPaneMode` and Esc →
+`cancelPaneMode`; both already clear the new
+transaction fields by virtue of my updates to those
+helpers. No App.svelte chord-layer additions in this
+landing.
+
+### Manual mouse handling vs HTML5 dragstart
+
+Tabs in the strip are `draggable="true"` for inter-
+pane tab DnD (the pre-existing per-tab handlers
+fire `onDragStart` / `onTabDragOver` / `onTabDrop`).
+Adding `draggable="true"` to the dead zone would
+route through the same HTML5 drag pipeline and
+collide with that DnD. Manual mousedown +
+`mousemove` threshold tracking + `mouseup` cleanup
+gives the dead-zone interaction full control over
+its own state machine without touching the tab
+DnD. Pinned by a raw-source test.
+
+### Drop-target indication
+
+`.transaction-drop-target::after` paints a 2 px
+solid `var(--pane-focus)` border with an 8 %
+inset fill colour-mixed against the same focus
+colour. Distinguishable from `.pane.focused`
+(solid coloured ring on the box itself); the
+overlay reads as "drop here" rather than "this
+is focused". `z-index: 5` sits above the editor
+body but below the pane chrome.
+
+### Chain semantics
+
+Each drop fires a swap-then-clear: `grabPaneId →
+null`, `hoverPaneId → null`. Transaction mode
+stays on; the user can immediately grab another
+pane and continue swapping until they press
+Enter (commit) or Esc (dismiss). Matches the
+task's "Drag continues until commit/dismiss" rule.
+
+### Tests
+
+`tabs.test.ts` — new `Hybrid NAV transaction mode
+(fullstack-a-44)` describe block, 8 pins:
+
+* Entry A activates transaction mode + sets grab.
+* Entry B activates transaction mode with no grab.
+* `paneModeSwapWith` swaps two arbitrary panes.
+* No-op outside pane mode.
+* No-op when grab == drop.
+* `paneModeSetGrab` / `paneModeSetHover` gated by
+  `transactionMode` (no-op outside; no-op in
+  keyboard-only paneMode; mutates in transaction).
+* `cancelPaneMode` clears transaction state.
+* `commitPaneMode` persists swap + clears
+  transaction state.
+
+`Pane.test.ts` — new `Pane Hybrid NAV transaction
+mode (fullstack-a-44)` describe block, 4 pins:
+
+* Dead-zone div renders inside `.tabs` between
+  the last tab and `.actions`.
+* Double-click on the dead zone enters
+  transaction mode in standby (no grab).
+* Pane root flips `transaction-grab` /
+  `transaction-drop-target` classes from
+  `paneMode` state changes (mounts the left pane
+  of a two-pane layout, drives state, asserts
+  class flips).
+* Dead-zone wiring uses manual mousedown +
+  threshold tracking, NOT HTML5 dragstart.
+  Raw-source guard against a future edit that
+  routes through `draggable="true"` and stomps
+  the per-tab DnD.
+
+### Gate
+
+* vitest **600 / 600** (+12 net from -a-43's
+  588 baseline; 8 new in tabs.test.ts, 4 new
+  in Pane.test.ts).
+* svelte-check 0 errors / 0 warnings across
+  3987 files.
+* npm build clean.
+* Rust gate not re-run (no Rust touched).
+
+### Deviations / decisions flagged
+
+* **Cmd+. mid-transaction**: task default was
+  "yes, Cmd+. exits". I did not wire it. The
+  existing keyboard NAV doesn't exit on Cmd+.
+  today (only Enter / Esc); changing that
+  behaviour for both keyboard and transaction
+  mode is scope creep. Esc dismisses cleanly;
+  Cmd+. mid-transaction is a no-op (the
+  `paneMode.active` short-circuit in
+  `onWindowKey` keeps the chord from re-
+  entering pane mode). Flag if the call should
+  flip.
+* **Click-without-drag in transaction**: a
+  mousedown + mouseup inside a pane body (no
+  cursor movement past threshold) sets grab
+  on the down + immediately swaps with the
+  same pane on the up. `paneModeSwapWith`
+  is a no-op when grab == drop, so the
+  observable effect is "grab + release on
+  same pane = re-set grab to null". Matches
+  the task's "no-op release" default.
+* **Originating drag continuation**: Entry A
+  records the originating-pane id but does
+  not synthesize a fake mousemove path. The
+  user has to keep dragging past the threshold
+  AND release on a different pane to swap.
+  Releasing back on the originating pane
+  hits the same-pane no-op above. Reads as
+  "drag to swap" semantically; no impedance.
+* **Cross-Hybrid drag**: any pane can be the
+  drop target, not just Hybrid-marked panes.
+  The task body says "any mousedown + drag
+  inside a Hybrid pane (front side, anywhere)
+  grabs that pane" — chan's layout treats every
+  leaf pane as "a Hybrid" in this sense
+  (`pane.back` is lazily created on first
+  flip). Rather than gate on `pane.back !==
+  undefined` I let every pane participate,
+  which matches the user's "rearrange any
+  pane" expectation. Flag if hybrid-only
+  participation was wanted.
+
+### Suggested commit subject
+
+```
+Hybrid pane drag-to-rearrange + transaction-mode NAV (fullstack-a-44)
+```
+
+Single commit. State additions + Pane.svelte
+handlers + CSS + tests are tightly coupled around
+the same feature; intermediate states would not
+compile (the test imports reference the new
+exports). No Rust touched.
+
+### Files
+
+* `web/src/state/tabs.svelte.ts` — paneMode shape
+  extensions, `enterPaneModeTransaction`,
+  `paneModeSetGrab`, `paneModeSetHover`,
+  `paneModeSwapWith`; `paneModeSwap` refactored
+  to call `paneModeSwapWith` internally.
+* `web/src/state/tabs.test.ts` — `Hybrid NAV
+  transaction mode (fullstack-a-44)` describe
+  block (8 pins) + import additions.
+* `web/src/components/Pane.svelte` — imports,
+  dead-zone handler functions + threshold const,
+  pane-body handlers, dead-zone div in the tabs
+  strip, transaction-mode class flags on pane
+  root, CSS for dead-zone cursor +
+  transaction-* visual cues, `position:
+  relative` on `.pane`.
+* `web/src/components/Pane.test.ts` — `Pane
+  Hybrid NAV transaction mode (fullstack-a-44)`
+  describe block (4 pins) + raw-source import.
+
+Push held — multi-agent tree commit discipline.
+Standing by for clearance.

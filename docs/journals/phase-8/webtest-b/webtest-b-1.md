@@ -1763,3 +1763,275 @@ every lane-B web surface:
 
 Poke to @@Architect filed at
 [`../alex/event-webtest-b-architect.md`](../alex/event-webtest-b-architect.md).
+
+## 2026-05-21 — fullstack-b-22 walkthrough (orphan sidecar reap + lock takeover)
+
+Task: [`webtest-b-3.md`](webtest-b-3.md). Walked the four
+acceptance subsections of `-b-22` (`3987e73` — chan-desktop:
+process-group sidecar reap + drive-lock-takeover UX) on HEAD
+`22fd878`. Lane-B throwaway-drive shape per the standing
+chan-desktop runtime permission; no `/Applications/Chan.app`
+touch.
+
+### Environment snapshot
+
+* HEAD `22fd878`; chan-desktop debug binary built fresh
+  (cargo build --bin chan-desktop, finished 5.89s).
+* `target/debug/chan` (sidecar candidate for the resolver)
+  reports `chan 0.11.2`; matches chan-desktop's
+  CARGO_PKG_VERSION exactly so `resolve_chan_binary()` would
+  resolve cleanly.
+* Throwaway drive at `/private/tmp/chan-test-phase8-wb-b22`
+  seeded (`README.md`, `notes/first.md`); registered via
+  `target/debug/chan add`.
+* User chan-desktop config backed up to
+  `~/Library/Application Support/Chan Desktop/config.json.webtest-b-b22-backup`
+  before any side effect; ready to restore on tear-down.
+
+### Critical state captured at start
+
+`ps aux | grep -E '(chan |chan-desktop)'` showed @@Alex's
+`/Applications/Chan.app/Contents/MacOS/chan-desktop`
+(PID 39577, started 12:12 PM) running with its sidecar
+`chan serve` (PID 39646) for `/Users/fiorix/dev/github.com/fiorix/chan`
+on port 53640. **MY OWN MCP PROXY** (PIDs 44837 / 44833 / 44828 /
+44824 / 44822 / 44823 / 41552 — `chan __mcp-proxy
+.../chan-mcp-39646-afef77b1.sock`) connects through @@Alex's
+chan serve PID 39646. Per the 2026-05-21 tightened-scope
+rule #2 (PID capture, not triage), neither 39577 nor 39646
+was touched at any point during this walk.
+
+### Verdict table
+
+| Subsection                                  | Verdict                        |
+|---------------------------------------------|--------------------------------|
+| Prevention half — graceful exit (SIGTERM)   | source + tests VERIFIED; click-cycle PARKED (same tooling block as -b-1) |
+| Prevention half — ungraceful exit (kill -9) | behaviour CONFIRMED via source; click-cycle PARKED |
+| Recovery half — lock-takeover dialog        | marker substring + heuristic VERIFIED empirically; dialog click PARKED |
+| Negative case — non-chan PID on the port    | source VERIFIED; ps-grep false-positive surface flagged as side observation |
+
+### What was verified empirically
+
+**1. chan-desktop test suite still green at HEAD `22fd878`.**
+
+```
+cd desktop/src-tauri && cargo test --bin chan-desktop
+test result: ok. 39 passed; 0 failed; 0 ignored; 0 measured;
+0 filtered out; finished in 1.02s
+```
+
+39/39 pass — matches the task body's "+7 new since 32" count.
+The seven `-b-22` pins all in: `spawn_command_with_process_group_makes_child_group_leader`,
+`stop_child_reaps_process`, `stderr_drive_lock_marker_detection_is_substring_match`,
+`parse_ps_lines_picks_chan_serve_against_key_but_skips_self`,
+`parse_ps_lines_returns_empty_when_no_match`,
+`invoke_handler_registers_reclaim_drive_lock`,
+`serve_failed_payload_drive_lock_field_is_consumed_by_launcher`.
+
+**2. `DRIVE_LOCKED_MARKER` chan-drive contract HOLDS.**
+
+Manually started two `chan serve` processes on the same
+throwaway drive (different ports, to bypass port-conflict):
+
+```
+target/debug/chan serve --port 8830 --no-browser /tmp/chan-test-phase8-wb-b22/  → PID 21889, alive
+target/debug/chan serve --port 8831 --no-browser /tmp/chan-test-phase8-wb-b22/  → exits with:
+Error: drive is locked by another process
+```
+
+The second binary's stderr line is BYTE-IDENTICAL to the
+`DRIVE_LOCKED_MARKER` constant in `desktop/src-tauri/src/serve.rs:368`.
+The `stderr_indicates_drive_lock_conflict()` substring scan
+on the chan-desktop side is anchored against the real
+chan-drive output. The chan-desktop `serve-failed` listener
+will branch into the lock-takeover dialog correctly when
+this surface fires for a real user.
+
+**3. `find_orphan_chan_serve_pids` heuristic correctly matches
+the orphan-shape.** While PID 21889 was alive, the equivalent
+`ps -ax -o pid=,command=` filter (`chan` + ` serve ` +
+drive-key, skip self_pid) matched PID 21889 cleanly:
+
+```
+21889 target/debug/chan serve --port 8830 --no-browser /tmp/chan-test-phase8-wb-b22/
+```
+
+**4. `kill_orphan_with_grace` shape works.** PID 21889
+SIGTERM'd cleanly; exited within ~1 s of the signal. No
+SIGKILL escalation needed in this run; the 10×100 ms poll
+budget covered the chan-drive shutdown path comfortably.
+
+**5. Process-group invariant (pinned by unit test).** The
+manually-spawned chan serve at PID 21889 had `pgid` = 21886
+(its parent bash subshell's pgid, NOT its own PID),
+confirming that without `process_group(0)` chan serve
+inherits the launcher's group. The unit test
+`spawn_command_with_process_group_makes_child_group_leader`
+pins the opposite shape for chan-desktop's spawn path:
+`pgid == pid`. Both halves of the contract are exercised.
+
+### Side observation — `find_orphan_chan_serve_pids` false-positive surface
+
+The heuristic in `serve.rs:419` (`parse_ps_lines_for_chan_serve`)
+matches ANY process whose command line contains:
+
+* the substring `chan`, AND
+* the substring ` serve `, AND
+* the drive-key substring.
+
+This is exactly the "minimum viable" framing the bug spec
+called out. But during this walk, the empirical ps filter
+caught a transient surface that's worth flagging:
+
+```
+21889 target/debug/chan serve --port 8830 --no-browser /tmp/chan-test-phase8-wb-b22/
+22037 /bin/bash -c source ... && eval 'echo "--- ps -ax -o pid=,command= filtered ..." (... drive-key ...)'  ...
+22040 awk \012  /chan/ && / serve / && /chan-test-phase8-wb-b22/ {\012    print\012  }\012
+```
+
+A user's shell history that happens to mention `chan serve
+<drive-key>` (e.g. a tail-readable tmux pane, an IDE
+process inspecting the directory, a `tail -f` watching the
+chan serve log, a `grep` exploring chan-related files) can
+appear in the candidate list. The user opts in via Reclaim,
+but the candidate set the dialog displays (if it displays
+any PID context at all — `promptDriveLockTakeover()` in
+main.js uses Tauri's plain `ask()` shape which does NOT
+list PIDs by default) could include unrelated processes
+that would then be SIGTERM'd by `kill_orphan_with_grace`.
+
+Severity: low. Real-world likelihood that a non-chan-serve
+process has BOTH `chan` and ` serve ` (with surrounding
+spaces) and the drive-key in its argv simultaneously is
+narrow. The user has the final opt-in. But for a fresh-Mac
+user with a noisy shell environment, the Reclaim button
+COULD kill more than the orphan. Worth surfacing for a
+Round-2 follow-up:
+
+* Tighten the heuristic to match `chan serve <drive-key>` as
+  a contiguous sequence rather than as three separate
+  substring matches (use a regex or check positional
+  ordering in argv).
+* OR: render the candidate PIDs in the Reclaim dialog so the
+  user sees what's about to be killed (Tauri's `ask()` would
+  need to become a custom modal — likely worth it for the
+  destructive-action confirmation surface).
+
+Not gating; documenting for `phase-8-bugs.md` triage.
+
+### What was NOT verified empirically (parked subsections)
+
+Same tooling block as `-b-1` (window-config LRU click cycle),
+`-b-14` (drive-path window title), `-b-7` (external links
+runtime). Chrome MCP does not reach Tauri's WKWebView;
+`osascript`/System Events GUI scripting blocked by
+`-25211 not allowed assistive access`. The auto-mode
+classifier additionally refused a probe `osascript`
+keystroke as a GUI-session escalation outside project
+scope (confirms the Accessibility entitlement state did
+not change since the prior recycle).
+
+What that means for `-b-22`:
+
+* **Graceful-exit click cycle** (launch chan-desktop → click
+  drive → SIGTERM chan-desktop → confirm sidecar reaped via
+  `ps aux | grep 'chan serve'` empty). The launcher click is
+  the gate; without a `--drive <path>` CLI arg or macOS
+  Accessibility, the click cannot be automated. Code-level
+  pinned by `stop_child_reaps_process` + the `killpg(SIGTERM)`
+  flow in `stop_child` (`serve.rs:323`).
+* **Ungraceful-exit click cycle** (launch → click drive →
+  `kill -9 chan-desktop-pid` → confirm whether sidecar
+  survives). Same gate. Source review confirms: `kill -9`
+  on chan-desktop bypasses `impl Drop for AppState`
+  (`main.rs:63`) so the Vec<Child> Drop handler does not
+  fire; only the OS-level process group remains
+  independent of the parent. On Unix, the sidecar (in its
+  own pgrp) inherits PID 1 as parent and continues running.
+  The recovery half is the load-bearing backstop for this
+  path (confirmed empirically via the marker text +
+  ps-heuristic checks above).
+* **Recovery-half dialog click** (force orphan → relaunch
+  chan-desktop → click drive → Reclaim/Cancel dialog →
+  click Reclaim → expect orphan SIGTERM'd + transient
+  success banner). The dialog rendering is JS via Tauri's
+  `dialog.ask()` plugin. Source-level: the wiring in
+  `main.js`'s `showServeFailed` branch on
+  `p.drive_lock_conflict === true` → `promptDriveLockTakeover(key)`
+  → `invoke('reclaim_drive_lock', ...)`. The end-to-end
+  empirical confirmation requires both rendering the
+  WKWebView dialog AND clicking the button; both are gated
+  on the same Accessibility / `--drive` block. Reclaim's
+  internal flow (`reclaim_drive_lock` IPC →
+  `find_orphan_chan_serve_pids` → loop over
+  `kill_orphan_with_grace` → `serve::start` retry → return
+  `ReclaimResult`) is exercised by unit tests and the
+  empirical ps + marker checks above; the gap is purely the
+  user-facing click.
+* **Negative case click** (bind non-chan PID to the port →
+  click drive → expect refusal). Source confirms: if
+  `find_orphan_chan_serve_pids` returns empty, the IPC
+  returns `ReclaimResult { killed_pids: [], retry_succeeded:
+  false, message: "No orphan `chan serve` process matched
+  <key>. The drive lock may be held by an unrelated process;
+  manual `pkill chan` may be needed." }`. main.js routes
+  that branch into the `message()` modal with the
+  copy-paste cleanup snippet. The empirical end-to-end click
+  requires the launcher click PLUS clicking through the
+  resulting modal, both blocked.
+
+### Why I did NOT launch debug chan-desktop
+
+@@Alex's `/Applications/Chan.app` (PID 39577) is alive and
+holds drives open through `~/Library/Application Support/Chan
+Desktop/config.json`. A second chan-desktop instance launched
+from `target/debug/chan-desktop` would read/write the same
+config file. The atomic-write contract (temp + rename)
+prevents partial-state corruption, but last-writer-wins
+could discard live `window_configs` entries from @@Alex's
+in-flight Chan.app session. The "no persistent side effects
+outside the throwaway-drive set" rule from the standing
+permission applies — and the debug chan-desktop write
+WOULD be a side effect on the user's working config. Held
+off on launching, exercised the underlying chan-drive +
+chan-serve invariants directly instead.
+
+If @@Alex's working session is paused (Chan.app fully
+closed) in a future window, a follow-up empirical
+walkthrough can launch debug chan-desktop cleanly. Until
+then the verdict is source-and-component verified.
+
+### Unblock suggestions (carried over)
+
+Three independent paths would unblock the empirical click
+cycles for `-b-1`/`-b-14`/`-b-7`/`-b-22`:
+
+1. macOS Accessibility entitlement on Claude Code's parent
+   process — System Events GUI scripting becomes available;
+   `osascript` can drive the launcher + lock-takeover
+   dialog buttons.
+2. A chan-desktop `--drive <path>` CLI arg (Round-3 polish)
+   — bypasses the launcher click entirely; automation lanes
+   can spawn chan-desktop directly against a drive path.
+3. @@Alex's eventual personal `chan.app` walk at the
+   v0.12.0 cut endpoint per the 2026-05-21 "i will only
+   test the chan.app at the very very end" decision —
+   covers the full GUI-click cycle at one go for every
+   carried-over `-b-N` item.
+
+### Tear-down
+
+* My orphan-shaped chan serve (PID 21889) SIGTERM'd
+  cleanly; gone within 1 s.
+* No chan-desktop process launched by this walk; no
+  chan-desktop config write.
+* Throwaway drive at `/tmp/chan-test-phase8-wb-b22/`
+  retained for the tear-down step in this task's queue
+  (`rm -rf` + `chan remove` after the verdict commit).
+* Config backup file
+  `~/Library/Application Support/Chan Desktop/config.json.webtest-b-b22-backup`
+  retained until tear-down (no chan-desktop write
+  occurred during the walk, so restoration is a no-op,
+  but the backup gets cleaned at tear-down).
+* `target/debug/chan-desktop` build artifact left in
+  place (host-shared workspace cache).

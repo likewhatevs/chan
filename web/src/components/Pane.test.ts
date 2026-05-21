@@ -3,10 +3,16 @@
 import { mount, tick, unmount } from "svelte";
 import { afterEach, describe, expect, test } from "vitest";
 
+import paneSource from "./Pane.svelte?raw";
 import {
   cancelPaneMode,
   enterPaneMode,
+  enterPaneModeTransaction,
   layout,
+  paneMode,
+  paneModeSetGrab,
+  paneModeSetHover,
+  splitPane,
   type LeafNode,
   type TerminalTab,
 } from "../state/tabs.svelte";
@@ -348,4 +354,105 @@ describe("Pane back-side configuration view (fullstack-a-43)", () => {
     expect(target.querySelector(".tabs")).toBeNull();
     expect(target.querySelector(".back-side")).not.toBeNull();
   }, 15000);
+});
+
+describe("Pane Hybrid NAV transaction mode (fullstack-a-44)", () => {
+  test("renders dead-zone hit area between last tab and actions", async () => {
+    const pane: LeafNode = {
+      kind: "leaf",
+      id: "pane-dz",
+      tabs: [terminalTab()],
+      activeTabId: "term-1",
+    };
+    const target = await renderPane(pane, { paneMode: false });
+
+    const tabs = target.querySelector(".tabs");
+    const deadZone = target.querySelector(".dead-zone");
+    const actions = target.querySelector(".actions");
+    expect(deadZone).not.toBeNull();
+    // Dead zone must sit inside the tab strip, between the last tab
+    // and the .actions block, so it absorbs mouse interactions in
+    // the empty stretch the user perceives as "the pane top bar".
+    expect(tabs?.contains(deadZone!)).toBe(true);
+    expect(tabs?.contains(actions!)).toBe(true);
+  }, 15000);
+
+  test("double-click on the dead zone enters transaction mode with no grab (Entry B)", async () => {
+    const pane: LeafNode = {
+      kind: "leaf",
+      id: "pane-dz-dblclick",
+      tabs: [terminalTab()],
+      activeTabId: "term-1",
+    };
+    const target = await renderPane(pane, { paneMode: false });
+    const deadZone = target.querySelector<HTMLElement>(".dead-zone");
+    expect(deadZone).not.toBeNull();
+
+    deadZone!.dispatchEvent(new MouseEvent("dblclick", { bubbles: true }));
+    await tick();
+
+    expect(paneMode.active).toBe(true);
+    expect(paneMode.transactionMode).toBe(true);
+    expect(paneMode.grabPaneId).toBeNull();
+  }, 15000);
+
+  test("pane root flips transaction-grab / transaction-drop-target classes from paneMode state", async () => {
+    const leftTab = terminalTab({ id: "term-left", title: "Left" });
+    const leftPane: LeafNode = {
+      kind: "leaf",
+      id: "pane-left",
+      tabs: [leftTab],
+      activeTabId: leftTab.id,
+    };
+    layout.rootId = leftPane.id;
+    layout.activePaneId = leftPane.id;
+    layout.nodes = { [leftPane.id]: leftPane };
+    layout.focusColor = "blue";
+    splitPane(leftPane.id, "row", "after");
+    const root = layout.nodes[layout.rootId];
+    if (root?.kind !== "split") throw new Error("expected split");
+    const rightPane = layout.nodes[root.b];
+    if (rightPane?.kind !== "leaf") throw new Error("expected leaf");
+
+    // Render the left pane explicitly so we can assert class flips
+    // against the known pane id without relying on multi-pane mount.
+    cancelPaneMode();
+    const target = document.createElement("div");
+    document.body.append(target);
+    const { default: Pane } = await import("./Pane.svelte");
+    const component = mount(Pane, { target, props: { pane: leftPane } });
+    mounted.push(component);
+    await tick();
+
+    const paneEl = target.querySelector<HTMLElement>(".pane");
+    expect(paneEl).not.toBeNull();
+    expect(paneEl!.classList.contains("transaction-active")).toBe(false);
+
+    enterPaneModeTransaction(leftPane.id);
+    await tick();
+    expect(paneEl!.classList.contains("transaction-active")).toBe(true);
+    expect(paneEl!.classList.contains("transaction-grab")).toBe(true);
+
+    // Switching grab to the OTHER pane while hovering THIS pane
+    // flips the drop-target class on instead.
+    paneModeSetGrab(rightPane.id);
+    paneModeSetHover(leftPane.id);
+    await tick();
+    expect(paneEl!.classList.contains("transaction-grab")).toBe(false);
+    expect(paneEl!.classList.contains("transaction-drop-target")).toBe(true);
+  }, 15000);
+
+  test("dead-zone uses manual mousedown + threshold tracking, not HTML5 dragstart", () => {
+    // The per-tab DnD on each `.tab` already owns HTML5 drag for
+    // inter-pane tab moves. The dead-zone interaction has to use
+    // manual mousedown + a window-level mousemove threshold so the
+    // tab-DnD pipeline stays untouched. Pin the wiring shape.
+    expect(paneSource).toContain('class="dead-zone"');
+    expect(paneSource).toContain("onmousedown={onDeadZoneMouseDown}");
+    expect(paneSource).toContain("ondblclick={onDeadZoneDblClick}");
+    expect(paneSource).toMatch(/DEAD_ZONE_DRAG_THRESHOLD_PX\s*=\s*5/);
+    // The dead-zone element itself must NOT be draggable=true (that
+    // would route through HTML5 drag and collide with per-tab DnD).
+    expect(paneSource).not.toMatch(/class="dead-zone"[\s\S]{0,200}draggable="true"/);
+  });
 });
