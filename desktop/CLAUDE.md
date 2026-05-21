@@ -44,9 +44,38 @@ expectation by:
   the host-triple binary into `MacOS/chan` directly. This bypasses
   the triple-expansion logic since `bundle.macOS.files` is a
   literal source-to-destination map. End result on disk:
-  `Chan.app/Contents/MacOS/chan`, signed under the same
-  Developer ID identity as `chan-desktop` in the same pass
-  (no `--deep` needed).
+  `Chan.app/Contents/MacOS/chan`.
+
+`fullstack-b-21` (notarization fix for the same v0.11.2 hotfix
+path) adds a codesign step to the `chan-bin` Makefile recipe.
+Reason: `bundle.macOS.files` is a "copy verbatim" primitive —
+Tauri's signing pass walks the binaries it knows about
+(`chan-desktop`, `externalBin` entries, the `.app` wrapper) but
+does NOT route the `files` map through that pass. The
+cargo-built `target/release/chan` carries an ad-hoc rustc/macOS
+signature that satisfies `codesign --verify` locally but Apple's
+notary correctly rejects (no Developer ID, no hardened runtime,
+no secure timestamp). Tested option C
+(`bundle.macOS.externalBin`) first; Tauri 2's per-platform
+`macOS` config does NOT support an `externalBin` field (only
+`frameworks`, `files`, `signing-identity`, etc.). Falling back
+to Option A — Makefile codesign before staging:
+
+```make
+@if [ -n "$$APPLE_SIGNING_IDENTITY" ]; then \
+    codesign --force --options=runtime --timestamp \
+        --sign "$$APPLE_SIGNING_IDENTITY" $(CHAN_BIN); \
+fi
+```
+
+Skipped when `APPLE_SIGNING_IDENTITY` is empty (local dev /
+unsigned-build path). After this, Tauri's bundler copies the
+already-signed chan binary into `Chan.app/Contents/MacOS/chan`
+verbatim, preserving the signature. Verified locally:
+`codesign -dv --verbose=2` shows
+`flags=0x10000(runtime)` + `Authority=Developer ID Application:
+... (TEAMID)` + `Timestamp=<date>` on the bundled chan;
+`codesign --verify --strict --deep` exits 0 on `Chan.app`.
 
 Two known regressions from the externalBin drop:
 

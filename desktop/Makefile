@@ -10,11 +10,31 @@ CHAN_BIN := src-tauri/binaries/chan-$(TARGET_TRIPLE)
 # in-progress chan edits flow into `make run` without a separate
 # step; cargo's own incremental build keeps the cost small when
 # nothing changed.
+#
+# `fullstack-b-21`: when an APPLE_SIGNING_IDENTITY is in the env,
+# codesign chan with Developer ID + hardened runtime + secure
+# timestamp BEFORE Tauri's bundler picks it up. Tauri's
+# `bundle.macOS.files` copies the binary into the .app bundle
+# verbatim without routing it through Tauri's signing pass, so
+# Apple's notary rejected `-b-20`'s output for missing
+# Developer-ID-signature / no-timestamp / no-runtime on the
+# bundled chan. Signing here gets the file into the bundle
+# already-correct; Tauri's later codesign on the .app itself
+# preserves chan's existing signature when the identity matches.
+# Skipped when APPLE_SIGNING_IDENTITY is empty (local dev /
+# unsigned-build path); the signed targets (app-signed /
+# app-notarized) gate on `sign-prereqs` which already enforces
+# the identity is set.
 chan-bin:
 	cd $(CHAN_REPO)/web && npm run build
 	cd $(CHAN_REPO) && cargo build --release --bin chan
 	mkdir -p src-tauri/binaries
 	cp $(CHAN_REPO)/target/release/chan $(CHAN_BIN)
+	@if [ -n "$$APPLE_SIGNING_IDENTITY" ]; then \
+	    echo "codesign chan: --options=runtime --timestamp --sign $$APPLE_SIGNING_IDENTITY"; \
+	    codesign --force --options=runtime --timestamp \
+	        --sign "$$APPLE_SIGNING_IDENTITY" $(CHAN_BIN); \
+	fi
 
 run: chan-bin
 	cd src-tauri && cargo tauri dev
