@@ -831,3 +831,100 @@ poke fired; standing by. Queue waiting: `-a-53`
 custom-TERM PARTIAL fix) → `-a-54` (flip UX
 redesign) → `-a-49..52` (graph overhaul) →
 `-a-42` (About).
+
+## 2026-05-21 — -a-48 committed; -a-53 ready for review
+
+`-a-48` cleared + committed as `0391eae Migrate
+Search/Indexing/Reports settings to Hybrid FB
+back-side (fullstack-a-48 option B)`. 9 files,
+no stowaways, pre/post audits matched.
+
+### -a-53 complete (theme architecture correction + custom-TERM PARTIAL fix)
+
+Six-file change. SPA-only; no Rust touched.
+
+**Architecture decision flagged**: kept the
+existing `pane.theme?: HybridTheme` field name
+rather than renaming to `themeOverride`. The
+field semantic was already 3-state
+(`undefined | "light" | "dark"`) — the
+`themeOverride` name in the task body reads as
+descriptive of intent, not a literal rename.
+The new 3-option UI (Inherit / Light / Dark)
+writes to `pane.theme = undefined` / `"light"`
+/ `"dark"`. Avoids 6-file rename churn for a
+semantic that's stable. Flag if a literal
+rename is wanted.
+
+**Files touched**:
+
+* `Pane.svelte` — `HybridTerminalConfig` +
+  `HybridEditorConfig` now receive a `pane`
+  prop so the override toggles can write to
+  `pane.theme`.
+* `HybridEditorConfig.svelte` — Appearance
+  section + `setThemeChoice`/`ThemeChoice`
+  imports removed; `editing.theme` from
+  dirty/save scopes; new per-Hybrid override
+  toggle section (3 radios) reading from
+  `pane.theme`.
+* `HybridTerminalConfig.svelte` — new
+  per-Hybrid override toggle section
+  alongside scrollback + TERM; `customMode`
+  state machinery for the custom-TERM fix
+  (init from persisted shape; flips on user
+  dropdown choice; preserved across drive
+  refreshes via `customModeInited` gate).
+* `SettingsPanel.svelte` — Appearance section
+  restored with `name="settings-appearance"`;
+  `setThemeChoice`/`ThemeChoice`/`ui` imports
+  added back; `.theme-row`+`.theme-opt` CSS
+  restored.
+* `HybridEditorConfig.test.ts` — 5 rewritten
+  pins to match the new contract.
+* `HybridTerminalConfig.test.ts` — 5 new pins
+  for the override toggle + customMode +
+  setTermSelection routing.
+
+**Custom-TERM PARTIAL fix** (bundled per
+@@Architect's option-B routing):
+
+`-a-45`'s
+`setTermSelection("__custom__")` seeded
+`default_term=""`. The `currentTerm` derivation
+then collapsed empty → DEFAULT_TERM, which
+landed `termSelectValue` on a known entry and
+hid the custom input. The fix tracks
+"user picked Custom" in a separate
+`customMode` state slot independent of the
+persisted value. Persisted string is now left
+alone when the user toggles Custom; toggling
+Custom → known → Custom restores the user's
+previous custom string in the input.
+
+### Gate
+
+* vitest **643 / 643** (+6 net).
+* svelte-check 0 errors / 0 warnings across
+  3990 files.
+* npm build clean.
+* Rust gate not re-run (no Rust touched).
+
+### Decisions flagged
+
+* Kept `pane.theme` field name (vs literal
+  rename to `themeOverride`). Existing
+  semantic + wire compat preserved.
+* `customMode` init gated on
+  `customModeInited` to survive drive.info
+  refreshes.
+* Inherit represented as
+  `pane.theme = undefined`; wire compat with
+  existing `ht` field encoding.
+
+Impl note + commit subject at
+[fullstack-a-53.md](fullstack-a-53.md).
+Outbound poke fired; standing by. Queue
+waiting: `-a-54` (flip UX redesign — needs
+`-a-53` first) → `-a-49..52` (graph overhaul)
+→ `-a-42` (About).

@@ -1210,9 +1210,9 @@
            Task A ships title-band stubs. -->
       <div class="back-side" role="region" aria-label="hybrid back side">
         {#if active?.kind === "terminal"}
-          <HybridTerminalConfig />
+          <HybridTerminalConfig {pane} />
         {:else if active?.kind === "file"}
-          <HybridEditorConfig />
+          <HybridEditorConfig {pane} />
         {:else if active?.kind === "graph"}
           <HybridGraphConfig />
         {:else if active?.kind === "browser"}

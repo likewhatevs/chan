@@ -12,8 +12,11 @@ import source from "./HybridTerminalConfig.svelte?raw";
 
 describe("fullstack-a-45: HybridTerminalConfig wiring", () => {
   test("warning copy distinguishes device-wide scope from per-pane", () => {
+    // `-a-53` updated the warning copy when the Appearance
+    // override toggle joined this surface — Scrollback + TERM
+    // are device-wide; Appearance is per-Hybrid.
     expect(source).toMatch(
-      /These settings apply to ALL terminals, not just this one\./,
+      /Scrollback and TERM apply to ALL terminals on this device/,
     );
     expect(source).toMatch(/class="hint warning"/);
   });
@@ -79,6 +82,57 @@ describe("fullstack-a-45: HybridTerminalConfig wiring", () => {
     expect(source).toMatch(/function terminalDirty\(\): boolean/);
     expect(source).toMatch(
       /JSON\.stringify\(editing\.terminal \?\? null\)[\s\S]*?JSON\.stringify\(server \?\? null\)/,
+    );
+  });
+});
+
+describe("fullstack-a-53: HybridTerminalConfig per-Hybrid override + custom-TERM fix", () => {
+  test("per-Hybrid Appearance override radios bind pane.theme", () => {
+    expect(source).toMatch(/name="hybrid-terminal-theme-override"/);
+    expect(source).toContain('"inherit"');
+    expect(source).toContain('"light"');
+    expect(source).toContain('"dark"');
+    expect(source).toMatch(/setOverrideChoice\(opt\.value\)/);
+    expect(source).toMatch(/pane\.theme = next/);
+    expect(source).toMatch(/pane\.theme = undefined/);
+  });
+
+  test("pane prop is accepted via $props", () => {
+    expect(source).toMatch(/let \{ pane \}: \{ pane: LeafNode \} = \$props\(\)/);
+  });
+
+  test("custom-TERM fix: customMode state tracks dropdown choice (-a-53)", () => {
+    // The `-a-45` PARTIAL: setting default_term="" after picking
+    // "Custom..." collapsed back to DEFAULT_TERM via the
+    // currentTerm fallback, snapping termSelectValue to a known
+    // entry and hiding the custom input. The fix tracks
+    // "user chose Custom" in a separate state slot.
+    expect(source).toMatch(/let customMode = \$state\(false\)/);
+    expect(source).toMatch(
+      /termSelectValue = \$derived\([\s\S]*?customMode\s*\?\s*CUSTOM_TERM_SENTINEL/,
+    );
+  });
+
+  test("setTermSelection routes Custom selection through customMode (-a-53)", () => {
+    // setTermSelection("__custom__") must flip customMode = true
+    // and leave the persisted default_term ALONE (don't seed it
+    // to "" the way the old code did — that's what triggered the
+    // PARTIAL).
+    expect(source).toMatch(
+      /if \(next === CUSTOM_TERM_SENTINEL\)\s*\{\s*customMode = true/,
+    );
+    expect(source).toMatch(
+      /customMode = false;\s*editing\.terminal = \{ \.\.\.editing\.terminal, default_term: next \}/,
+    );
+  });
+
+  test("custom-TERM input renders when termSelectValue is the sentinel", () => {
+    // Pinning the markup wiring — the {#if termSelectValue ===
+    // CUSTOM_TERM_SENTINEL} block stays the conditional gate on
+    // the custom input. Fix shape is in setTermSelection +
+    // customMode, NOT in the markup.
+    expect(source).toMatch(
+      /\{#if termSelectValue === CUSTOM_TERM_SENTINEL\}[\s\S]*?class="custom-term"/,
     );
   });
 });

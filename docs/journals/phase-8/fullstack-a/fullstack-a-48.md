@@ -441,3 +441,17 @@ all part of the same option (B) landing.
 
 Push held — multi-agent tree commit
 discipline. Standing by for clearance.
+
+## 2026-05-21 — committed as 0391eae
+
+Cleared by @@Architect; committed as `0391eae
+Migrate Search/Indexing/Reports settings to
+Hybrid FB back-side (fullstack-a-48 option B)`.
+Pre-commit `git diff --staged --stat` matched
+the cleared path list exactly (9 files);
+post-commit `git show --stat HEAD` confirmed
+no stowaways from other lanes
+(chan-drive/tests changes from systacean-18
+follow-ups, ci-12 docs, plus various event
+channels all stayed unstaged). Push held per
+protocol.

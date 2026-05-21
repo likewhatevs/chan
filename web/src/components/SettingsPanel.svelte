@@ -19,6 +19,9 @@
   import {
     refreshDrive,
     settingsOverlay,
+    setThemeChoice,
+    type ThemeChoice,
+    ui,
     drive,
   } from "../state/store.svelte";
   import {
@@ -36,14 +39,18 @@
   // date format, On save / strip trailing whitespace) out of this
   // overlay into `HybridEditorConfig.svelte`.
   //
-  // `fullstack-a-48` (Task F option B) moves the Semantic search
+  // `fullstack-a-48` (Task F option B) moved the Semantic search
   // section out of this overlay into `HybridFileBrowserConfig.svelte`
   // alongside the new chan-reports toggle + the future multi-model
-  // picker placeholder. After `-a-48`, this overlay is reduced to
-  // the About section + the GlobalConfig autosave plumbing; the
-  // Settings-shaped surface for editor preferences (-a-53 will
-  // revert Appearance) and FB preferences (this task) lives in
-  // the Hybrid back-side surfaces.
+  // picker placeholder.
+  //
+  // `fullstack-a-53` reverts the Appearance section from
+  // `HybridEditorConfig.svelte` back here. Appearance is a GLOBAL
+  // default; the per-Hybrid override toggle (Inherit / Light /
+  // Dark) lives in BOTH Hybrid Editor + Hybrid Terminal back-sides
+  // and writes to `pane.theme` (the existing override slot from
+  // `-b-5`/`-a-47`). Render resolution: pane.theme wins if set;
+  // else this overlay's `ui.themeChoice`.
 
   function doToggleOverlayMaximized(): void {
     setOverlayMaximized(!overlayMaximized.on);
@@ -288,26 +295,54 @@
   <div class="placeholder">loading settings…</div>
 {:else}
   <div class="settings">
-    <!-- `fullstack-a-45` (Task B) removed the Terminal section
-         (scrollback MB + default TERM) — its UI lives in the
-         Hybrid Terminal back now (`HybridTerminalConfig.svelte`).
-         Terminal preferences still round-trip through the same
-         GlobalConfig PATCH; only the mounting point changed.
+    <!-- `fullstack-a-45` Terminal, `-a-46` Editor settings,
+         `-a-48` Semantic search migrations — see component-level
+         comments in `HybridTerminalConfig` / `HybridEditorConfig`
+         / `HybridFileBrowserConfig`. Only the Appearance (global
+         theme) section + About live here after the wave.
 
-         `fullstack-a-46` (Task C) removed the Editor sections
-         (Editor theme, Appearance, Layout, Date pills, On save)
-         for the same reason — they live in
-         `HybridEditorConfig.svelte` now. -->
-
-
-    <!-- `fullstack-a-48` (Task F option B) removed the Semantic
-         search section. Its UI + state machine live in
-         `HybridFileBrowserConfig.svelte` now (alongside the new
-         chan-reports toggle + the Round-3 multi-model picker
-         placeholder). Semantic-search state isn't a Preferences
-         field — its enable/disable POSTs against the chan-server
-         directly — so nothing in the GlobalConfig autosave path
-         changes. -->
+         `fullstack-a-53` Appearance revert: this section MOVED
+         briefly to HybridEditorConfig in `-a-46`; @@Alex's design
+         correction (2026-05-21) restored it here. The global
+         default lives in Settings; per-Hybrid Inherit / Light /
+         Dark overrides live in HybridEditor + HybridTerminal
+         back-sides. -->
+    <section>
+      <h3>Appearance</h3>
+      <p class="hint">
+        Global default for chan's chrome and editor body. Per-
+        device only; lives in browser storage. "System" follows
+        your OS appearance setting live. Override per-Hybrid in
+        the Hybrid Editor or Hybrid Terminal back-side
+        (Inherit / Light / Dark).
+      </p>
+      <div class="theme-row" role="radiogroup" aria-label="Appearance">
+        {#each [
+          { value: "system", label: "System" },
+          { value: "light", label: "Light" },
+          { value: "dark", label: "Dark" },
+        ] as opt (opt.value)}
+          <label class="theme-opt" class:on={ui.themeChoice === opt.value}>
+            <input
+              type="radio"
+              name="settings-appearance"
+              value={opt.value}
+              checked={ui.themeChoice === opt.value}
+              onchange={() => {
+                const v = opt.value as ThemeChoice;
+                setThemeChoice(v);
+                // Keep the autosave form in sync so the next
+                // PATCH ships the new theme value (otherwise the
+                // merge would revert the choice).
+                if (editing) editing.theme = v;
+                if (globalConfig) globalConfig.preferences.theme = v;
+              }}
+            />
+            <span>{opt.label}</span>
+          </label>
+        {/each}
+      </div>
+    </section>
 
     <section class="about">
       <h3>About</h3>
@@ -454,13 +489,40 @@
   .mono { font-family: ui-monospace, monospace; }
   .muted { color: var(--text-secondary); font-style: italic; }
   .v .ok { color: var(--accent); }
-  /* `fullstack-a-48` (Task F option B) swept the semantic-search
-     CSS scope (`.theme-opt` chips + `.semantic-toggle` checkbox
-     reset + `.semantic-info` info grid + `.spinner` download
-     indicator + `.hint` / `.hint code` / `.hint.err` paragraph
-     styles) — all migrated to `HybridFileBrowserConfig.svelte`
-     alongside the section markup. The About section keeps
-     `.grid`, `.mono`, `.muted`, `.v .ok`. */
+  /* `fullstack-a-48` (Task F option B) swept most of the
+     semantic-search CSS scope. `fullstack-a-53` brings back the
+     `.theme-row` + `.theme-opt` chip styles for the restored
+     Appearance section (the Inherit / Light / Dark per-Hybrid
+     override toggles in HybridEditorConfig + HybridTerminalConfig
+     own their own copies of these). The Appearance section needs
+     the chip layout to render the system / light / dark radios. */
+  .theme-row { display: flex; gap: 4px; flex-wrap: wrap; }
+  .theme-opt {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 4px 10px;
+    border: 1px solid var(--btn-border);
+    border-radius: 4px;
+    background: var(--btn-bg);
+    cursor: pointer;
+    font-size: 14px;
+  }
+  .theme-opt input[type="radio"] {
+    width: auto;
+    margin: 0;
+    padding: 0;
+    border: 0;
+    background: transparent;
+  }
+  .theme-opt > span { color: var(--text); }
+  .theme-opt:hover { border-color: var(--btn-hover); }
+  .theme-opt.on { border-color: var(--link); background: var(--hover-bg); }
+  .hint {
+    margin: 0;
+    color: var(--text-secondary);
+    font-size: 13px;
+  }
   /* Tab-bar autosave indicator. Sits between the title and the
      actions strip. Empty when idle (no extra padding). */
   .save-status { font-size: 14px; min-width: 60px; text-align: right; }

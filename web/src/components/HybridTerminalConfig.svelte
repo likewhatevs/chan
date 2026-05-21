@@ -6,7 +6,29 @@
 
   import { api } from "../api/client";
   import type { GlobalConfig, Preferences } from "../api/types";
-  import { drive } from "../state/store.svelte";
+  import { drive, ui } from "../state/store.svelte";
+  import type { HybridTheme, LeafNode } from "../state/tabs.svelte";
+
+  /// `fullstack-a-53` per-Hybrid theme override toggle.
+  /// `pane` is the Hybrid pane this back-side surface belongs to.
+  /// The override radios (Inherit / Light / Dark) write to
+  /// `pane.theme` (the existing per-Hybrid override slot from
+  /// `-b-5`/`-a-47`). Resolution at render time:
+  /// `pane.theme ?? ui.theme`.
+  let { pane }: { pane: LeafNode } = $props();
+
+  type OverrideChoice = "inherit" | HybridTheme;
+  const overrideValue = $derived<OverrideChoice>(
+    pane.theme ?? "inherit",
+  );
+
+  function setOverrideChoice(next: OverrideChoice): void {
+    if (next === "inherit") {
+      pane.theme = undefined;
+    } else {
+      pane.theme = next;
+    }
+  }
   import {
     clampScrollbackMb,
     SCROLLBACK_MB_DEFAULT,
@@ -83,15 +105,42 @@
   const scrollbackMb = $derived(
     clampScrollbackMb(editing?.terminal?.scrollback_mb),
   );
-  const currentTerm = $derived(
-    (editing?.terminal?.default_term ?? DEFAULT_TERM).trim() || DEFAULT_TERM,
+  /// Raw persisted value WITHOUT the empty → DEFAULT_TERM
+  /// collapse. The previous derivation
+  /// (`(default_term ?? DEFAULT_TERM).trim() || DEFAULT_TERM`)
+  /// over-coerced empty values, which is what produced the
+  /// `-a-45` custom-TERM PARTIAL surfaced by `webtest-a-4` —
+  /// after the user picked "Custom..." (seeding default_term=""),
+  /// the derivation snapped back to DEFAULT_TERM, isKnownTerm
+  /// went true, and the custom input never appeared. `-a-53`
+  /// fix: track "user picked Custom" in a separate
+  /// `customMode` state so the input renders even when the
+  /// persisted value is empty.
+  const persistedTerm = $derived(
+    (editing?.terminal?.default_term ?? "").trim(),
   );
-  const isKnownTerm = $derived(
-    (KNOWN_TERM_VALUES as readonly string[]).includes(currentTerm),
+  const currentTerm = $derived(persistedTerm || DEFAULT_TERM);
+  const persistedIsKnown = $derived(
+    persistedTerm.length > 0 &&
+      (KNOWN_TERM_VALUES as readonly string[]).includes(persistedTerm),
   );
+  let customMode = $state(false);
+  let customModeInited = false;
+  /// Initialise `customMode` from the persisted shape exactly
+  /// once, after the first server load. Re-syncs are gated to
+  /// avoid clobbering the user's in-progress dropdown choice on
+  /// every drive.info refresh.
+  $effect(() => {
+    if (customModeInited) return;
+    if (!editing) return;
+    if (persistedTerm.length === 0) return;
+    customMode = !persistedIsKnown;
+    customModeInited = true;
+  });
   const termSelectValue = $derived(
-    isKnownTerm ? currentTerm : CUSTOM_TERM_SENTINEL,
+    customMode ? CUSTOM_TERM_SENTINEL : (persistedIsKnown ? persistedTerm : DEFAULT_TERM),
   );
+  const isKnownTerm = $derived(persistedIsKnown);
 
   function setScrollbackMb(raw: number): void {
     if (!editing) return;
@@ -104,10 +153,14 @@
   function setTermSelection(next: string): void {
     if (!editing) return;
     if (next === CUSTOM_TERM_SENTINEL) {
-      const seed = isKnownTerm ? "" : currentTerm;
-      editing.terminal = { ...editing.terminal, default_term: seed };
+      customMode = true;
+      // Don't clear the persisted value here — if the user
+      // toggles Custom → known → Custom, their previous custom
+      // string should still be in the input. We just flip the
+      // UI mode; the input becomes editable.
       return;
     }
+    customMode = false;
     editing.terminal = { ...editing.terminal, default_term: next };
   }
 
@@ -217,12 +270,47 @@
     <!-- `fullstack-a-45`: warning copy carried over from the
          round-2-plan Hybrid back-side scope note. These settings
          are device-wide, not per-pane; every terminal in the
-         drive picks them up on next spawn. -->
+         drive picks them up on next spawn. The Appearance
+         override below is the only per-Hybrid setting on this
+         surface (`-a-53`). -->
     <p class="hint warning">
-      These settings apply to ALL terminals, not just this one.
-      Existing terminals keep their current scrollback and
+      Scrollback and TERM apply to ALL terminals on this device.
+      The Appearance override below applies only to THIS Hybrid
+      pane. Existing terminals keep their current scrollback and
       <code>TERM</code> value until the chan session restarts.
     </p>
+
+    <!-- `fullstack-a-53` per-Hybrid Appearance override. Layered
+         on top of the global Settings Appearance default;
+         resolution at render: `pane.theme ?? ui.theme`. -->
+    <section class="terminal-field">
+      <h3 class="terminal-label">
+        <span>Appearance (this Hybrid)</span>
+      </h3>
+      <p class="hint sub-hint">
+        Override the global Appearance default for just this
+        Hybrid pane. Inherit follows the global Settings choice
+        (currently <strong>{ui.themeChoice}</strong>).
+      </p>
+      <div class="theme-row" role="radiogroup" aria-label="Per-Hybrid Appearance override">
+        {#each [
+          { value: "inherit" as const, label: "Inherit" },
+          { value: "light" as const, label: "Light" },
+          { value: "dark" as const, label: "Dark" },
+        ] as opt (opt.value)}
+          <label class="theme-opt" class:on={overrideValue === opt.value}>
+            <input
+              type="radio"
+              name="hybrid-terminal-theme-override"
+              value={opt.value}
+              checked={overrideValue === opt.value}
+              onchange={() => setOverrideChoice(opt.value)}
+            />
+            <span>{opt.label}</span>
+          </label>
+        {/each}
+      </div>
+    </section>
 
     <div class="terminal-field">
       <label class="terminal-label" for="hybrid-terminal-scrollback-mb">
@@ -393,5 +481,47 @@
   .terminal-field .sub-hint {
     margin: 0;
     font-size: 11.5px;
+  }
+  /* `fullstack-a-53` per-Hybrid Appearance override chips.
+     Same shape as `HybridEditorConfig.svelte` (and SettingsPanel
+     after the Appearance revert). The override section reuses
+     the existing `.terminal-field` wrapper for vertical layout
+     consistency; the .theme-row chip group lives inside. */
+  .theme-row { display: flex; gap: 4px; flex-wrap: wrap; }
+  .theme-opt {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 4px 10px;
+    border: 1px solid var(--btn-border);
+    border-radius: 4px;
+    background: var(--btn-bg);
+    cursor: pointer;
+    font-size: 14px;
+  }
+  .theme-opt input[type="radio"] {
+    width: auto;
+    margin: 0;
+    padding: 0;
+    border: 0;
+    background: transparent;
+  }
+  .theme-opt > span { color: var(--text); }
+  .theme-opt:hover { border-color: var(--btn-hover); }
+  .theme-opt.on { border-color: var(--link); background: var(--hover-bg); }
+  /* Override-section header lives inside .terminal-field so the
+     section heading aligns vertically with the surrounding
+     Scrollback / Default TERM labels. `h3.terminal-label` keeps
+     the typography consistent with the rest of the labels in
+     this surface. */
+  h3.terminal-label {
+    margin: 0;
+    font-size: 14px;
+    font-weight: 600;
+  }
+  .hint {
+    margin: 0;
+    color: var(--text-secondary);
+    font-size: 13px;
   }
 </style>

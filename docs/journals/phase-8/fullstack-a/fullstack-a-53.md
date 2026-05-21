@@ -217,6 +217,207 @@ Add a test pin to `HybridTerminalConfig.test.ts` for the
 custom-TERM rendering path. `webtest-a-5` will re-walk
 this check after `-a-53` + `-a-54` land.
 
+## 2026-05-21 — ready for review
+
+Six-file change. SPA-only; no Rust touched.
+
+### Architectural decision: keep `pane.theme` field name
+
+The task body specifies "add a `themeOverride:
+'light' | 'dark' | null` field to the Hybrid wire
+format." I read this as descriptive of intent
+rather than a literal rename, and kept the
+existing `pane.theme?: HybridTheme` field
+(the field semantic was already 3-state:
+`undefined | "light" | "dark"`). The 3-option
+UI surface (Inherit / Light / Dark) layers on
+top — it writes `pane.theme = undefined` for
+Inherit, `"light"` for Light, `"dark"` for Dark.
+
+Why not rename: the rename would touch 6
+files + 15+ test pins to change a field name
+that already encodes the right semantic.
+`pane.theme` as the per-Hybrid override slot
+is a stable -b-5/-a-47 convention; renaming
+now adds churn without changing behaviour.
+
+Flag if a literal rename is wanted; I'll cut a
+follow-up cleanup task. Otherwise the existing
+field name is the load-bearing one.
+
+### What landed
+
+**Appearance revert** (HybridEditorConfig →
+SettingsPanel):
+
+* `HybridEditorConfig.svelte`: Appearance
+  section markup + `setThemeChoice` /
+  `ThemeChoice` imports + `editing.theme` from
+  `editorSnapshot` / `editorDirty` / save body
+  all removed.
+* `SettingsPanel.svelte`: Appearance section
+  markup restored (with `name="settings-
+  appearance"`). Imports of `setThemeChoice` +
+  `ThemeChoice` + `ui` added back. CSS:
+  `.theme-row` + `.theme-opt` chip styles
+  restored.
+
+**Per-Hybrid Appearance override toggle**:
+
+* `Pane.svelte`: `HybridTerminalConfig` +
+  `HybridEditorConfig` now receive a `pane`
+  prop.
+* `HybridEditorConfig.svelte`: imports
+  `HybridTheme` + `LeafNode` types; accepts
+  `pane` via `$props`; derived `overrideValue`
+  reads from `pane.theme ?? "inherit"`; new
+  `setOverrideChoice(next)` writes `pane.theme
+  = undefined` for Inherit or `next` for
+  Light/Dark. Section markup with 3 radios
+  under `name="hybrid-editor-theme-override"`.
+* `HybridTerminalConfig.svelte`: identical
+  shape; section markup under
+  `name="hybrid-terminal-theme-override"`.
+  CSS: `.theme-row` + `.theme-opt` +
+  `h3.terminal-label` + `.hint` added.
+
+**Render resolution**: `Pane.svelte`'s existing
+`paneEffectiveTheme()` already returns
+`pane.theme ?? ui.theme`, so the 3-state
+override field naturally drives the CSS
+cascade. No `Pane.svelte` render-logic change
+needed beyond passing the new `pane` prop.
+
+**Bundled fix for -a-45 custom-TERM PARTIAL**
+(per @@Architect's routing on the option-B
+poke):
+
+* `HybridTerminalConfig.svelte`: new
+  `customMode` state tracks "user explicitly
+  picked Custom..." independent of the
+  persisted `default_term`. A
+  `customModeInited` flag initialises it once
+  from the persisted shape after the first
+  server load. `termSelectValue` derivation
+  now reads
+  `customMode ? CUSTOM_TERM_SENTINEL :
+  (persistedIsKnown ? persistedTerm :
+  DEFAULT_TERM)`.
+* `setTermSelection("__custom__")` no longer
+  seeds `default_term=""` (the bug shape); it
+  just flips `customMode = true`. The
+  persisted value is preserved so toggling
+  Custom → known → Custom restores the user's
+  previous custom string in the input.
+* Non-sentinel selections flip `customMode =
+  false` and write the persisted value as
+  before.
+
+### Migration
+
+`pane.theme` field name + semantic is unchanged.
+Existing serialised sessions round-trip without
+migration: the SerLeaf `ht` wire field has
+identical interpretation. New sessions emit the
+same shape.
+
+### Tests
+
+`HybridEditorConfig.test.ts` rewritten across 5
+pins to match the new shape:
+
+* "warning copy" updated to the new "Most
+  settings here apply to ALL editors" string.
+* "Appearance radios drive setThemeChoice"
+  removed; replaced with
+  "per-Hybrid Appearance override radios bind
+  pane.theme (-a-53)".
+* "dirty check is scoped to the FOUR editor
+  fields" (was five; theme removed).
+* "section headers for the migrated sections
+  are gone" updated to exclude
+  `<h3>Appearance</h3>` (which is back in
+  SettingsPanel post `-a-53`).
+* "Appearance section restored to
+  SettingsPanel" pin added.
+
+`HybridTerminalConfig.test.ts` adds a new
+describe block with 5 pins:
+
+* per-Hybrid Appearance override radios bind
+  pane.theme.
+* pane prop accepted via $props.
+* custom-TERM fix: `customMode` state in
+  `$state(false)`.
+* `setTermSelection` routes Custom selection
+  through customMode (the fix shape).
+* Custom-TERM input renders when
+  termSelectValue is the sentinel (markup-side
+  conditional unchanged; the fix is in the
+  state machinery).
+
+The "warning copy" pin updated similarly to
+HybridEditorConfig.
+
+### Gate
+
+* vitest **643 / 643** (+6 net from -a-48's
+  637: 5 new HybridTerminalConfig pins + 1
+  net HybridEditorConfig (rewritten +
+  Appearance-restored-to-SP pin added)).
+* svelte-check 0 errors / 0 warnings across
+  3990 files.
+* npm build clean.
+* Rust gate not re-run (no Rust touched).
+
+### Decisions
+
+* **Field-name decision** flagged above
+  (keep `pane.theme`; deviation from literal
+  task wording).
+* **`customMode` init pattern**: gated on
+  `customModeInited` so the toggle's
+  user-selected state survives subsequent
+  drive.info refreshes. Without the gate, a
+  background refresh after the user picked
+  Custom would re-init `customMode = false`
+  (because the persisted value is known per
+  the seed) and silently lose the user's
+  choice.
+* **"Inherit" represented as
+  `pane.theme = undefined`** on the wire.
+  Matches the existing wire serializer (no
+  `ht` field emitted when undefined) — no
+  serialization changes needed.
+
+### Suggested commit subject
+
+```
+Hybrid back-side theme architecture correction + custom-TERM fix (fullstack-a-53)
+```
+
+Single commit. Appearance revert + per-Hybrid
+override + bundled custom-TERM fix are all part
+of the same Hybrid back-side correction.
+
+### Files for `git add` (per-path discipline)
+
+* `web/src/components/HybridEditorConfig.svelte`
+* `web/src/components/HybridEditorConfig.test.ts`
+* `web/src/components/HybridTerminalConfig.svelte`
+* `web/src/components/HybridTerminalConfig.test.ts`
+* `web/src/components/Pane.svelte`
+* `web/src/components/SettingsPanel.svelte`
+* `docs/journals/phase-8/fullstack-a/fullstack-a-48.md`
+  (-a-48 "committed as 0391eae" trailing
+  append; bundled per the established pattern)
+* `docs/journals/phase-8/fullstack-a/fullstack-a-53.md`
+* `docs/journals/phase-8/fullstack-a/journal.md`
+* `docs/journals/phase-8/alex/event-fullstack-a-architect.md`
+
+Push held — multi-agent tree commit
+discipline. Standing by for clearance.
+
 ## Out of scope
 
 * Re-naming `themeOverride` to something cleaner if a

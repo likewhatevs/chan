@@ -1,9 +1,18 @@
 <script lang="ts">
   // `fullstack-a-46` Task C: Editor settings migrated out of
   // `SettingsPanel.svelte` into the Hybrid back-side mount point
-  // introduced by `-a-43` Task A. Five sections move:
-  // Editor theme, Appearance, Layout (line spacing), Date pills
-  // (date format), On save (strip trailing whitespace).
+  // introduced by `-a-43` Task A. Four sections live here:
+  // Editor theme, Layout (line spacing), Date pills (date format),
+  // On save (strip trailing whitespace).
+  //
+  // `fullstack-a-53` reverted the Appearance section back to
+  // SettingsPanel — Appearance is a GLOBAL default with per-Hybrid
+  // OVERRIDES (added below as a new 3-option toggle), not a
+  // per-Hybrid-only setting. The 3-option Inherit / Light / Dark
+  // override toggle writes to `pane.theme` (the existing per-
+  // Hybrid override slot from `-b-5`/`-a-47`). Resolution at
+  // render: `pane.theme` wins if set; else the global
+  // `ui.themeChoice` from Settings.
   //
   // Same self-contained / merge-against-current-server save shape
   // as `HybridTerminalConfig.svelte` (-a-45). The dirty comparator
@@ -18,12 +27,29 @@
     LineSpacing,
     Preferences,
   } from "../api/types";
-  import {
-    drive,
-    setThemeChoice,
-    type ThemeChoice,
-    ui,
-  } from "../state/store.svelte";
+  import { drive, ui } from "../state/store.svelte";
+  import type { HybridTheme, LeafNode } from "../state/tabs.svelte";
+
+  /// `fullstack-a-53` per-Hybrid theme override toggle.
+  /// `pane` is the Hybrid pane this back-side surface belongs to.
+  /// The override radios (Inherit / Light / Dark) write to
+  /// `pane.theme` (the existing per-Hybrid override slot from
+  /// `-b-5`/`-a-47`). Resolution at render time:
+  /// `pane.theme ?? ui.theme`.
+  let { pane }: { pane: LeafNode } = $props();
+
+  type OverrideChoice = "inherit" | HybridTheme;
+  const overrideValue = $derived<OverrideChoice>(
+    pane.theme ?? "inherit",
+  );
+
+  function setOverrideChoice(next: OverrideChoice): void {
+    if (next === "inherit") {
+      pane.theme = undefined;
+    } else {
+      pane.theme = next;
+    }
+  }
   import { DATE_FORMATS } from "../editor/dateFormats";
   import { editorToolsPrefs } from "../state/editorTools.svelte";
 
@@ -71,7 +97,6 @@
     if (!editing) return "null";
     return JSON.stringify({
       editor_theme: editing.editor_theme,
-      theme: editing.theme,
       line_spacing: editing.line_spacing,
       date_format: editing.date_format,
       strip_trailing_whitespace_on_save:
@@ -119,7 +144,6 @@
     const server = drive.info.preferences;
     return (
       editing.editor_theme !== server.editor_theme ||
-      editing.theme !== server.theme ||
       editing.line_spacing !== server.line_spacing ||
       editing.date_format !== server.date_format ||
       editing.strip_trailing_whitespace_on_save !==
@@ -157,7 +181,6 @@
         preferences: {
           ...current.preferences,
           editor_theme: editing.editor_theme,
-          theme: editing.theme,
           line_spacing: editing.line_spacing,
           date_format: editing.date_format,
           strip_trailing_whitespace_on_save:
@@ -213,11 +236,42 @@
   </header>
   <div class="config-body">
     <p class="hint warning">
-      These settings apply to ALL editors, not just this one. The
-      per-Hybrid appearance override (set via the pane hamburger
-      Theme entry) survives on top of the global Appearance choice
-      below.
+      Most settings here apply to ALL editors on this device; the
+      Appearance override below applies only to THIS Hybrid pane.
     </p>
+
+    <!-- `fullstack-a-53` per-Hybrid Appearance override. The
+         global Appearance default lives in the Settings overlay;
+         this toggle layers an explicit Light / Dark per-Hybrid
+         override on top, or falls through to Inherit. Render
+         resolution: `pane.theme ?? ui.theme`. -->
+    <section>
+      <h3>Appearance (this Hybrid)</h3>
+      <p class="hint">
+        Override the global Appearance default for just this
+        Hybrid pane. Inherit follows the global Settings choice
+        (currently
+        <strong>{ui.themeChoice}</strong>).
+      </p>
+      <div class="theme-row" role="radiogroup" aria-label="Per-Hybrid Appearance override">
+        {#each [
+          { value: "inherit" as const, label: "Inherit" },
+          { value: "light" as const, label: "Light" },
+          { value: "dark" as const, label: "Dark" },
+        ] as opt (opt.value)}
+          <label class="theme-opt" class:on={overrideValue === opt.value}>
+            <input
+              type="radio"
+              name="hybrid-editor-theme-override"
+              value={opt.value}
+              checked={overrideValue === opt.value}
+              onchange={() => setOverrideChoice(opt.value)}
+            />
+            <span>{opt.label}</span>
+          </label>
+        {/each}
+      </div>
+    </section>
 
     {#if editing}
     <section>
@@ -243,39 +297,6 @@
               checked={editing.editor_theme === opt.value}
               onchange={() => {
                 editing!.editor_theme = opt.value as EditorTheme;
-              }}
-            />
-            <span>{opt.label}</span>
-          </label>
-        {/each}
-      </div>
-    </section>
-
-    <section>
-      <h3>Appearance</h3>
-      <p class="hint">
-        Per-device only; lives in browser storage. "System" follows
-        your OS appearance setting live.
-      </p>
-      <div class="theme-row" role="radiogroup" aria-label="Appearance">
-        {#each [
-          { value: "system", label: "System" },
-          { value: "light", label: "Light" },
-          { value: "dark", label: "Dark" },
-        ] as opt (opt.value)}
-          <label class="theme-opt" class:on={ui.themeChoice === opt.value}>
-            <input
-              type="radio"
-              name="hybrid-appearance"
-              value={opt.value}
-              checked={ui.themeChoice === opt.value}
-              onchange={() => {
-                const v = opt.value as ThemeChoice;
-                setThemeChoice(v);
-                // Keep the autosave form in sync; otherwise the
-                // next PATCH ships `editing.theme` stale and
-                // reverts the choice on the merge.
-                if (editing) editing.theme = v;
               }}
             />
             <span>{opt.label}</span>

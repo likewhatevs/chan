@@ -2888,3 +2888,149 @@ architecture correction + bundled custom-TERM
 PARTIAL fix) → `-a-54` (flip UX redesign) →
 `-a-49..52` (graph overhaul) → `-a-42`
 (About).
+
+## 2026-05-21 — poke (fullstack-a-48 committed + fullstack-a-53 ready for review)
+
+`-a-48` committed at `0391eae Migrate Search/
+Indexing/Reports settings to Hybrid FB back-
+side (fullstack-a-48 option B)` per your
+clearance. 9 files, no stowaways, pre/post
+audits matched.
+
+`-a-53` ready for review. Six-file change.
+SPA-only; no Rust touched. Bundled the
+`-a-45` custom-TERM PARTIAL fix per your
+option-B routing.
+
+### Architecture decision flagged
+
+I kept the existing `pane.theme?: HybridTheme`
+field name rather than renaming to
+`themeOverride` per the task body's literal
+wording. The field's semantic is already
+3-state (`undefined | "light" | "dark"`) — the
+"themeOverride" naming in the task reads as
+descriptive of intent. The new 3-option UI
+writes `pane.theme = undefined` for Inherit,
+`"light"` for Light, `"dark"` for Dark. Avoids
+a 6-file rename + ~15 test-pin updates for a
+stable -b-5/-a-47 field name. Flag if a literal
+rename is wanted; I'll cut a follow-up cleanup
+task.
+
+### What landed
+
+**Appearance revert** (HybridEditorConfig →
+SettingsPanel):
+
+* `HybridEditorConfig.svelte`: Appearance
+  section, `setThemeChoice`/`ThemeChoice`
+  imports, `editing.theme` field references
+  all removed (4 mentions in
+  `editorSnapshot`/`editorDirty`/save body).
+* `SettingsPanel.svelte`: Appearance section
+  restored with `name="settings-appearance"`.
+  Imports of `setThemeChoice` + `ThemeChoice`
+  + `ui` added back. `.theme-row` +
+  `.theme-opt` chip CSS restored alongside
+  `.hint` for the section.
+
+**Per-Hybrid Appearance override toggle**
+(both HybridEditorConfig + HybridTerminalConfig):
+
+* `Pane.svelte`: passes the new `pane` prop
+  to both components.
+* Both config components: import
+  `HybridTheme` + `LeafNode` types; accept
+  `pane` via `$props`; new
+  `overrideValue = pane.theme ?? "inherit"`;
+  `setOverrideChoice(next)` writes
+  `pane.theme = next === "inherit" ?
+  undefined : next`. Section markup with 3
+  radios.
+
+**Render resolution unchanged**:
+`Pane.svelte`'s existing
+`paneEffectiveTheme()` already returns
+`pane.theme ?? ui.theme`, so the 3-state
+override field naturally drives the CSS
+cascade. No render-logic change beyond
+passing the new prop.
+
+**Custom-TERM PARTIAL fix**
+(`HybridTerminalConfig.svelte`):
+
+* New `customMode` $state tracks "user picked
+  Custom..." independent of the persisted
+  `default_term` value.
+* Initial sync via `$effect` gated on
+  `customModeInited` flag — flips on first
+  server load, doesn't re-init on subsequent
+  drive.info refreshes (so the user's choice
+  survives background polls).
+* `termSelectValue` derivation: `customMode
+  ? CUSTOM_TERM_SENTINEL : (persistedIsKnown
+  ? persistedTerm : DEFAULT_TERM)`.
+* `setTermSelection("__custom__")` no longer
+  seeds `default_term=""` (the bug shape);
+  flips `customMode = true` and leaves the
+  persisted string alone. Toggling Custom →
+  known → Custom restores the user's
+  previous custom string in the input.
+
+### Tests
+
+`HybridEditorConfig.test.ts` — 5 rewritten pins
++ 1 new "Appearance restored to SettingsPanel"
+pin. Net: same pin count, different shape.
+
+`HybridTerminalConfig.test.ts` — warning copy
+updated; new describe block with 5 pins for
+the override toggle + customMode + Custom
+routing.
+
+### Gate
+
+* vitest **643 / 643** (+6 net from -a-48's
+  637).
+* svelte-check 0 errors / 0 warnings across
+  3990 files.
+* npm build clean.
+* Rust gate not re-run (no Rust touched).
+
+### Suggested commit subject
+
+```
+Hybrid back-side theme architecture correction + custom-TERM fix (fullstack-a-53)
+```
+
+Single commit. Appearance revert + per-Hybrid
+override + bundled custom-TERM fix are all
+part of the same Hybrid back-side correction
+wave.
+
+### Files for `git add` (per-path discipline)
+
+* `web/src/components/HybridEditorConfig.svelte`
+* `web/src/components/HybridEditorConfig.test.ts`
+* `web/src/components/HybridTerminalConfig.svelte`
+* `web/src/components/HybridTerminalConfig.test.ts`
+* `web/src/components/Pane.svelte`
+* `web/src/components/SettingsPanel.svelte`
+* `docs/journals/phase-8/fullstack-a/fullstack-a-48.md`
+  (`-a-48` "committed as 0391eae" trailing
+  append; bundled per the established
+  pattern)
+* `docs/journals/phase-8/fullstack-a/fullstack-a-53.md`
+* `docs/journals/phase-8/fullstack-a/journal.md`
+* `docs/journals/phase-8/alex/event-fullstack-a-architect.md`
+  (this append)
+
+Push held — multi-agent tree commit
+discipline. Standing by for clearance. After
+`-a-53` lands, queue is `-a-54` (flip UX
+redesign; needs `-a-53` in HEAD first per the
+task's "back-side CONTENT before reshaping
+the back-side CHROME" sequencing) →
+`-a-49..52` (graph overhaul) → `-a-42`
+(About).

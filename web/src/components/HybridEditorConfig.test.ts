@@ -13,8 +13,12 @@ import panel from "./SettingsPanel.svelte?raw";
 
 describe("fullstack-a-46: HybridEditorConfig wiring", () => {
   test("warning copy distinguishes device-wide scope from per-Hybrid override", () => {
+    // `-a-53` updated the warning copy when the Appearance
+    // section reverted to SettingsPanel — the Appearance
+    // override is the only per-Hybrid setting on this surface
+    // now; the rest are device-wide.
     expect(source).toMatch(
-      /These settings apply to ALL editors, not just this one\./,
+      /Most settings here apply to ALL editors on this device/,
     );
     expect(source).toMatch(/class="hint warning"/);
   });
@@ -28,12 +32,18 @@ describe("fullstack-a-46: HybridEditorConfig wiring", () => {
     );
   });
 
-  test("Appearance radios drive setThemeChoice + sync editing.theme", () => {
-    expect(source).toContain('"system"');
+  test("per-Hybrid Appearance override radios bind pane.theme (-a-53)", () => {
+    // `-a-53` replaced the moved-out Appearance section with an
+    // Inherit / Light / Dark override layer that writes to
+    // `pane.theme`. Three radios under the same `.theme-row`
+    // chip layout SettingsPanel uses for the global default.
+    expect(source).toMatch(/name="hybrid-editor-theme-override"/);
+    expect(source).toContain('"inherit"');
     expect(source).toContain('"light"');
     expect(source).toContain('"dark"');
-    expect(source).toMatch(/setThemeChoice\(v\)/);
-    expect(source).toMatch(/if \(editing\) editing\.theme = v/);
+    expect(source).toMatch(/setOverrideChoice\(opt\.value\)/);
+    expect(source).toMatch(/pane\.theme = next/);
+    expect(source).toMatch(/pane\.theme = undefined/);
   });
 
   test("Layout radios cover standard + compact + bind line_spacing", () => {
@@ -85,14 +95,14 @@ describe("fullstack-a-46: HybridEditorConfig wiring", () => {
     expect(source).toMatch(/await api\.updateConfig\(cfgBody\)/);
   });
 
-  test("dirty check is scoped to the five editor-related fields", () => {
-    // Comparing the whole Preferences would react to terminal /
-    // semantic-search / about edits owned by other surfaces and
-    // fire spurious PATCHes (worse: a PATCH from here could
-    // clobber state SettingsPanel hadn't yet flushed).
+  test("dirty check is scoped to the four editor-related fields (-a-53)", () => {
+    // `-a-53` reverted Appearance to SettingsPanel; the
+    // `editing.theme` field is no longer touched here. dirty()
+    // compares 4 fields now: editor_theme + line_spacing +
+    // date_format + strip_trailing_whitespace_on_save.
     expect(source).toMatch(/function editorDirty\(\): boolean/);
     expect(source).toMatch(/editing\.editor_theme !== server\.editor_theme/);
-    expect(source).toMatch(/editing\.theme !== server\.theme/);
+    expect(source).not.toMatch(/editing\.theme !== server\.theme/);
     expect(source).toMatch(/editing\.line_spacing !== server\.line_spacing/);
     expect(source).toMatch(/editing\.date_format !== server\.date_format/);
     expect(source).toMatch(
@@ -112,22 +122,30 @@ describe("fullstack-a-46: HybridEditorConfig wiring", () => {
   });
 });
 
-describe("fullstack-a-46: Editor section removed from SettingsPanel", () => {
-  test("section headers for the migrated sections are gone", () => {
+describe("fullstack-a-46 + fullstack-a-53: Editor section trim in SettingsPanel", () => {
+  test("editor section headers for migrated subsections are gone", () => {
+    // `-a-46` migrated Editor theme, Layout, Date pills, On
+    // save. `-a-53` reverted Appearance back to SettingsPanel —
+    // so Appearance IS still in SettingsPanel; the others
+    // stay migrated.
     expect(panel).not.toMatch(/<h3>Editor theme<\/h3>/);
-    expect(panel).not.toMatch(/<h3>Appearance<\/h3>/);
     expect(panel).not.toMatch(/<h3>Layout<\/h3>/);
     expect(panel).not.toMatch(/<h3>Date pills<\/h3>/);
     expect(panel).not.toMatch(/<h3>On save<\/h3>/);
   });
 
+  test("Appearance section restored to SettingsPanel (-a-53 revert)", () => {
+    expect(panel).toMatch(/<h3>Appearance<\/h3>/);
+    expect(panel).toMatch(/name="settings-appearance"/);
+    expect(panel).toMatch(/import\s+\{[^}]*\bsetThemeChoice\b/);
+  });
+
   test("editor-only imports are gone from SettingsPanel", () => {
-    // Assert against import statements specifically; "carry-over"
-    // comments that mention the symbols are benign.
+    // `-a-46` migrations: EditorTheme + LineSpacing + DATE_FORMATS
+    // + editorToolsPrefs stay gone. `-a-53` revert restores
+    // setThemeChoice + ThemeChoice for the Appearance section.
     expect(panel).not.toMatch(/import\s+\{[^}]*\bEditorTheme\b/);
     expect(panel).not.toMatch(/import\s+\{[^}]*\bLineSpacing\b/);
-    expect(panel).not.toMatch(/import\s+\{[^}]*\bThemeChoice\b/);
-    expect(panel).not.toMatch(/import\s+\{[^}]*\bsetThemeChoice\b/);
     expect(panel).not.toMatch(/import\s+\{[^}]*\bDATE_FORMATS\b/);
     expect(panel).not.toMatch(/import\s+\{[^}]*\beditorToolsPrefs\b/);
   });
