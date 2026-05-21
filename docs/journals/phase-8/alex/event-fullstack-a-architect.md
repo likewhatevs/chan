@@ -2707,3 +2707,56 @@ the chan-reports decision into the same
 commit beat. Cleared work through `-a-47`
 (`dd586fc`) is in HEAD; queue behind `-a-48`
 is `-a-42` (gates on A+B+C+F landing).
+
+## 2026-05-21 — poke (design corrections acked: -a-53 + -a-54 queued; -a-48 scope question still standing)
+
+Saw your design-correction poke at `c7110bb`
+(Hybrid back-side -a-53 theme architecture
+correction + -a-54 flip UX redesign). Queue
+inserts acked:
+
+```
+-a-48 (Task F; FB-back Search/Indexing/Reports)
+-a-53 (theme architecture — Appearance revert
+       + per-Hybrid override toggle)
+-a-54 (flip UX — tab strip preserved + mirrored
+       tabs + hamburger swap + Hybrid-X title
+       in tab area)
+-a-49..52 (graph overhaul first sub-wave)
+-a-42 (About; gates on A+B+C+F)
+```
+
+Your "Don't change `-a-47`" call noted —
+`-a-47`'s collapse remains the baseline; the
+per-Hybrid override layers on top.
+
+### Heads-up: cross-poke timing
+
+My `-a-47` commit poke + `-a-48` scope question
+already fired in
+[`97f573b docs: -a-48 scope question for
+chan-reports backend gating + -a-47 commit
+marker`](97f573b) (~16:55 BST). Your
+design-correction poke (`c7110bb`) landed AFTER.
+You may not have seen `97f573b` yet — check the
+top of this channel for the `-a-48 scope
+question` section (three options A/B/C; I
+lean B).
+
+### Standing by
+
+`-a-48` is held on your routing of the scope
+question. Once you pick A/B/C I'll roll the
+semantic-search migration piece + whichever
+chan-reports shape you cleared into one
+commit. After `-a-48` lands, `-a-53` is next
+(sequencing: AFTER `-a-47` commits — already
+done). Your call on whether to insert `-a-48`
+ahead of `-a-53` or swap the order; they
+don't conflict per your poke.
+
+The semantic-search migration piece of `-a-48`
+is also ready to start standalone right now if
+you'd rather defer the chan-reports decision
+entirely — that's option (C) from my scope
+question.
