@@ -1397,3 +1397,178 @@ In practice with the always-new spawn path + select threading: every Cmd+Alt+O p
 **Contention**: none from this lane. Both -a-39 Piece A and -a-37 Piece 3 are SPA-side work; lane assignment unchanged from current ownership (@@FullStackA).
 
 **Not tested this pass**: -a-38 Piece A (pre-flight spinner gating) — would need watcher event drop with no-timing payload; -a-42 (Settings About section); v0.11.1 carryovers (-a-32 through -a-35) — last verified HOLD on `ada8478` (v0.11.1 cut), no v0.11.2 commit touched those areas. Spot-check next pass if @@Architect wants.
+
+## 2026-05-21 — fullstack-a-43 + fullstack-b-23 walkthroughs (wave-3 cleared work)
+
+Per [`webtest-a-3.md`](webtest-a-3.md). Walked `-a-43` Hybrid back-side
+per-surface refactor + `-b-23` web-marketing static-site source on
+HEAD `22fd878` (pre-recycle session close). Throwaway drive
+`/tmp/chan-test-phase8-wa-r4/` seeded with chan repo (excluding
+`.git`/`target`/`node_modules`/`web/dist`); chan serve on
+127.0.0.1:8787; static server on 127.0.0.1:8090; Chrome MCP tabs.
+
+### Verdicts
+
+| Check | Surface | Verdict |
+|-------|---------|---------|
+| -a-43 3a | Hybrid Terminal back stub | HOLD |
+| -a-43 3b | Hybrid Editor back stub | HOLD |
+| -a-43 3c | Hybrid Graph back stub | HOLD |
+| -a-43 3d | Hybrid File Browser back stub | HOLD |
+| -a-43 #4 | Per-Hybrid theme (front/back same + per-pane independent) | HOLD |
+| -a-43 #5 | Flip animation (3D half-flip) | HOLD |
+| -a-43 #6 | Switch-front-while-flipped (back swaps to match new front type) | HOLD |
+| -b-23 #1 | Landing page renders | HOLD |
+| -b-23 #2 | Donation QR + sha256 match `web/public/qr-donate.png` | HOLD |
+| -b-23 #3 | Install scripts + favicon serve | HOLD |
+| -b-23 #4 | Viewport meta + fluid layout | HOLD (partial) |
+
+### `-a-43` per-check evidence
+
+* **3a Hybrid Terminal**: opened FB → spawned Terminal-1 via Cmd+Alt+T
+  → flipped via pane hamburger "Flip pane". Back shows title "Hybrid
+  Terminal", empty body. Matches `HybridTerminalConfig.svelte` stub
+  source (`crates/chan` web tree: `<h2 class="config-title">Hybrid
+  Terminal</h2>` + empty `.config-body`).
+* **3b Hybrid Editor**: while on Hybrid Terminal back, double-clicked
+  `CLAUDE.md` in the left FB dock — opened a wysiwyg editor tab in
+  the same pane AND back swapped to title "Hybrid Editor". Verifies
+  3b + #6 simultaneously without leaving the back side.
+* **3c Hybrid Graph**: while on Hybrid Editor back, fired
+  Cmd+Shift+M — graph tab spawned + back swapped to title "Hybrid
+  Graph" without leaving back. Verifies 3c + #6 again.
+* **3d Hybrid File Browser**: initial state (single FB tab, no other
+  tabs) → flipped via Cmd+. Tab Return → title "Hybrid File Browser",
+  empty body. Matches stub.
+* **#4 Per-Hybrid theme**:
+  * **Front/back same theme**: applied "Light mode" via FRONT hamburger
+    on the original Hybrid (FB+Terminal+Editor+Graph tabs). Flipped to
+    back — JS-confirmed via `document.querySelectorAll('.pane')`:
+    `dataTheme="light"` on the focused pane; `.hybrid-config` body
+    color `rgb(28,28,30)` (dark text on light bg), title color matching.
+    Front graph + Details inspector are LIGHT (white bg). The
+    front-and-back share the same theme value, no front/back split.
+  * **Per-pane independent**: Cmd+. / Return (split right) → second
+    Hybrid spawned. Spawned Terminal-2 via Cmd+. t Return. JS confirms
+    LEFT pane `dataTheme="light"`, `bg=rgb(255,255,255)`; RIGHT pane
+    has NO `dataTheme` override + `bg=rgb(28,28,30)` (inherits page
+    default dark). Visually: LEFT graph + inspector LIGHT, RIGHT
+    Terminal-2 DARK. Themes are genuinely per-Hybrid.
+* **#5 Flip animation**: captured a screenshot mid-flip (immediately
+  after `cmd+.` + `Tab` before the `Return` commit). The pane shows
+  a 3D perspective rotation — front and back faces are visible on
+  the same rectangle at different rotation angles. Half-flip
+  animation works.
+* **#6 Switch-front-while-flipped**: covered above (3b + 3c). Twice
+  swapped the back-side stub while remaining on the back, by
+  activating a new front-tab type (Editor via FB dock dbl-click;
+  Graph via Cmd+Shift+M). Load-bearing flip-reveals-config-for-the-
+  current-surface behaviour holds.
+
+### `-b-23` per-check evidence
+
+* **#1 Landing page**: title `<chan markdown editor>`. Header logo
+  (`chan-mark.png`) + "chan" wordmark + light/dark sun-icon toggle
+  top-right. Hero "chan markdown editor / plain files. real
+  wiki-links. runs in your browser, off your machine." Section
+  flow: intro paragraph → § install (macOS/Linux curl-pipe-sh +
+  Windows iex line, with COPY buttons + "read the script" link
+  → install.sh) → "Then: chan serve ~/notes" → "opens
+  http://localhost:8787" → § what else (6 feature bullets) → § the
+  editor (light/dark screenshot pair `editor-recipes.png` +
+  `editor-dark.png`) → fig.1 caption → § about the name (禪
+  glyph) → § status (Alpha, hello@chan.app) → § support (QR) →
+  footer (chan · hello@chan.app · github.com/chan-writer).
+* **#2 Donation QR**: `qr-donate.png` decodes (img.complete=true,
+  natural 700x700). `shasum -a 256`:
+  `3a29118f07838c73706abce246fb1fba983591a8fb410803a747348e99e65164`
+  matches `web/public/qr-donate.png` byte-for-byte. Renders cleanly
+  on the page in the § support section with chan-logo embedded in
+  the center.
+* **#3 Install scripts + favicon**: `curl http://127.0.0.1:8090/`
+  → install.sh HTTP 200 (2059 bytes; starts with `#!/bin/sh` +
+  curl-pipe-sh doc-comment) → install.ps1 HTTP 200 (2291 bytes) →
+  favicon.ico HTTP 200 (110130 bytes). Page link "read the script"
+  resolves to `http://127.0.0.1:8090/install.sh`. Zero broken
+  images (`document.querySelectorAll('img')` all complete with
+  natural dimensions).
+* **#4 Viewport / responsive**: `<meta name="viewport"
+  content="width=device-width,initial-scale=1">` present. Layout
+  is a centered max-width text column with whitespace gutters
+  (text wraps naturally; no horizontal scrolling at the rendered
+  width). Chrome MCP `resize_window(480, 800)` did NOT shrink the
+  reported `innerWidth` (stayed at 1595) — full small-viewport
+  rendering not visually verified due to that MCP quirk, so this
+  is HOLD (partial). The fluid centered shape strongly suggests
+  it'd hold on a real mobile, but a real-device or DevTools-emulator
+  spot-check from @@Alex would close this fully.
+
+### Highlights
+
+* **Hybrid back-side flip works exactly as specced**: per-surface
+  stub keyed to the active front tab type; back-side title swaps
+  the moment the front tab type changes (no need to flip back-
+  to-front). The four stubs are placeholder bodies waiting for
+  Tasks B/C/E/F to populate.
+* **Per-Hybrid theme is genuinely per-pane**: the spec's "front/back
+  independent theme dropped — both sides share a single per-Hybrid
+  theme value" lands cleanly. Confirmed via JS read of
+  `pane[data-theme]` attribute on both sides; second Hybrid spawned
+  via split starts with the page-default dark (does NOT inherit
+  the focused pane's theme at split time).
+* **Flip animation looks polished**: the 3D perspective half-flip
+  is visible mid-frame; no flicker / no overlap / no broken layer
+  order.
+* **Web-marketing site is print-quality**: monospace-typewriter
+  voice + § section anchors + the 禪 origin paragraph + the
+  donation QR with embedded chan-logo. Light/dark toggle on the
+  fig.1 screenshot pair is a nice touch. No console errors.
+
+### Side observations
+
+* **Cmd+. Tab Return as single key-action sequence is flaky in
+  Chrome MCP** when the focused pane front-content is a terminal:
+  the terminal captures the Tab/Return keystrokes before the
+  Hybrid NAV handler. Workaround during the walk: use the pane
+  hamburger menu's "Flip pane" item OR click outside the terminal
+  body first. Not a chan bug — webtest-tooling note for future
+  automation. Real-user keyboard input on a non-headless browser
+  generates the full pointer/focus sequence and doesn't trip this.
+* **Back-side stub uses `--text` + `--border` CSS variables but no
+  explicit `--bg`**: the stub body fills via transparent
+  background, inheriting the pane's bg. Works correctly today
+  because the pane element has the bg. Tasks B/C/E/F populating
+  the stubs should keep this discipline (rely on parent's theme
+  variables, not hard-code colors) so the per-Hybrid theme
+  continues to propagate cleanly.
+* **`-b-23` "11 files" in the task background**: actual file
+  count is 10 (`find web-marketing -type f`): `README.md`,
+  `chan-mark.png`, `favicon.ico`, `index.html`, `install.ps1`,
+  `install.sh`, `qr-donate.png`, `assets/editor-dark.png`,
+  `assets/editor-recipes.png`, plus the directory `assets/`
+  itself. Minor doc-drift in the task spec; the commit content
+  itself is correct.
+
+### Tear-down evidence
+
+Per the standing rule:
+
+1. Chan serve (`127.0.0.1:8787`) — to be killed.
+2. Python static server (`127.0.0.1:8090`) — to be killed.
+3. Throwaway drive `/tmp/chan-test-phase8-wa-r4/` — to be
+   `rm -rf`'d.
+4. Drive registry — `chan remove /tmp/chan-test-phase8-wa-r4/`.
+5. Chrome MCP tabs (`503725655` chan + `503725677` static site) —
+   to be closed.
+
+Evidence appended after the tear-down step. The walk completed
+8/8 acceptance checks HOLD (with #4 partial on viewport pending
+a real-device emulation pass).
+
+**Tear-down complete**:
+
+1. chan serve killed (TaskStop on the background bash for `chan serve --port 8787`).
+2. python static server killed (TaskStop on the bash for `python3 -m http.server 8090`).
+3. `rm -rf /tmp/chan-test-phase8-wa-r4/` — directory gone (verified via `ls /tmp/ | grep chan-test` shows only -wa-r2 + -wa-r3 stale entries from prior recycles).
+4. `chan remove /tmp/chan-test-phase8-wa-r4/` → output `unregistered: /tmp/chan-test-phase8-wa-r4/`. `chan list` confirms drive no longer registered.
+5. Chrome MCP tabs 503725655 (chan SPA) + 503725677 (static site) closed via `tabs_close_mcp`. MCP tab group empty.

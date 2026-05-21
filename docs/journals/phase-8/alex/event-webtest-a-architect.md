@@ -525,3 +525,145 @@ v0.11.2 cut walkthrough verdicts shipped (carried into commit
 `3262e61` pre-recycle prep). Lane-A test server + throwaway
 drive `/tmp/chan-test-phase8-wa-r3/` torn down. Next session
 re-spins per the architect's wave-3 queue.
+
+## 2026-05-21 — poke (fresh session up; reactive lane standing by)
+
+Bootstrapped fresh per `docs/agents/bootstrap.md`. Walked:
+
+* Contact card + `webdev` skill guide.
+* `process.md` (phase-8 deltas) + phase-7 process inheritance.
+* `request.md` (Round 1 → Round 2 → Round 3 shape; Round-2
+  wave-2/wave-3 currently in flight).
+* My journal (last entry 2026-05-20 00:25 BST; pre-recycle
+  carryover continues on outbound channel and task files).
+* Task files `webtest-a-1.md` (omnibus) + `webtest-a-2.md`
+  (v0.11.2 walkthrough; verdict cleared + committed via
+  `3262e61` per pre-recycle prep).
+* Inbound channel through your "TEAR-DOWN signal" 2026-05-21
+  + my session-closed append.
+* `git status` (clean; 13 commits ahead of origin) +
+  `git log --oneline -20` (HEAD `22fd878`, post-tear-down
+  pokes; `chan-v0.11.2` tag shipped).
+* Bug-list tail — fresh entries from the graph-overhaul
+  conversation (`-a-37` suggest-reopen, `-a-39` `be`
+  serialization gap, chan-reports settings regression,
+  depth slider, search overlay redesign, F3 unified entity
+  search, Linux binaries) all marked NOT YET DISPATCHED.
+
+### State
+
+* Standing perm (test-server + Chrome MCP) survives recycle
+  per bootstrap doc §"Standing permissions".
+* Lane-A test server torn down at last session-close;
+  re-spin per the next walkthrough task you dispatch.
+* No tasks dispatched to me as of recycle (reactive lane).
+
+### Standing by
+
+Waiting on your wave-2 / wave-3 walkthrough cuts. Per your
+PRE-RECYCLE HANDOVER the candidate queue includes `-a-43`
+(Hybrid back-side refactor — already at `b36ca96`),
+Hybrid back-side wave Tasks B/C/E/F, `-a-44` drag-to-
+rearrange, `-b-23` chan.app static-site walkthrough
+(already at `bc9e1f8`), and the graph overhaul wave
+(`-a-49` through `-a-52`). I'll re-spin a fresh
+`/tmp/chan-test-phase8-wa-r4/` (chan-source seed by
+default; tell me if a specific seed shape is wanted) on
+the first dispatch.
+
+## 2026-05-21 — poke (webtest-a-3 complete: 8/8 HOLD, both -a-43 + -b-23)
+
+Walked
+[`../webtest-a/webtest-a-3.md`](../webtest-a/webtest-a-3.md)
+on HEAD `22fd878` (pre-recycle close-out). Throwaway drive
+`/tmp/chan-test-phase8-wa-r4/` seeded with chan repo;
+chan serve on 127.0.0.1:8787 + python static server on
+127.0.0.1:8090. Verdict appended to
+[`../webtest-a/webtest-a-1.md`](../webtest-a/webtest-a-1.md)
+under `## 2026-05-21 — fullstack-a-43 + fullstack-b-23
+walkthroughs (wave-3 cleared work)`.
+
+### Verdicts
+
+| Task   | Surface                                              | Verdict |
+|--------|------------------------------------------------------|---------|
+| -a-43  | Hybrid Terminal/Editor/Graph/FileBrowser stubs (4)   | HOLD    |
+| -a-43  | Per-Hybrid theme (front/back same + per-pane indep)  | HOLD    |
+| -a-43  | Flip animation (3D half-flip)                        | HOLD    |
+| -a-43  | Switch-front-while-flipped (back swaps on front swap)| HOLD    |
+| -b-23  | Landing page renders                                 | HOLD    |
+| -b-23  | Donation QR + sha256 matches `web/public/qr-donate.png` | HOLD |
+| -b-23  | Install scripts + favicon serve                      | HOLD    |
+| -b-23  | Viewport meta + fluid layout                         | HOLD (partial — see below) |
+
+### Highlights
+
+* **Hybrid back-side flip works exactly as specced**: the four
+  stubs (`HybridTerminalConfig` / `HybridEditorConfig` /
+  `HybridGraphConfig` / `HybridFileBrowserConfig`) mount keyed to
+  the active front-tab type. Twice I activated a new front-tab
+  type WHILE on the back side (Editor via FB-dock dbl-click;
+  Graph via Cmd+Shift+M) and the back-side title swapped
+  immediately — the load-bearing flip-reveals-config-for-the-
+  current-surface behaviour.
+* **Per-Hybrid theme is genuinely per-pane**: JS-confirmed via
+  `pane[data-theme]` read. Left Hybrid `data-theme=light` after
+  hamburger toggle; second Hybrid spawned via Cmd+. / Return
+  has NO `data-theme` override and inherits page-default dark.
+  The spec's "front/back independent theme dropped — both sides
+  share a single per-Hybrid theme value" lands cleanly. Front +
+  back of the same Hybrid both render the light theme; second
+  Hybrid stays dark independently.
+* **Flip animation captured mid-frame**: 3D perspective rotation
+  visible in the screenshot, no flicker / no broken layer order.
+* **Web-marketing site is print-quality**: monospace voice + §
+  section anchors + 禪 etymology + the donation QR with embedded
+  chan-logo. Light/dark fig.1 toggle is a nice touch. Zero
+  console errors. Install scripts + favicon all serve at HTTP
+  200 from the static server.
+
+### Lowlights
+
+* **-b-23 #4 viewport-responsiveness is HOLD-partial**: Chrome
+  MCP `resize_window(480, 800)` did NOT shrink the reported
+  `innerWidth` (stayed at 1595), so I could not visually
+  confirm the small-viewport rendering in this walk. The
+  `<meta name="viewport" content="width=device-width,
+  initial-scale=1">` is set correctly and the layout is fluid
+  centered-column with whitespace gutters (text wraps
+  naturally), so mobile rendering very likely works — but a
+  real-device or DevTools-emulator spot-check would close
+  this fully. Your call whether to dispatch a quick @@WebtestB
+  fresh-device spot-check or punt to a future polish task.
+
+### Side observations (not regression-class; filed in the verdict tail)
+
+1. **Cmd+. Tab Return single-key-action sequence flaky in
+   Chrome MCP when the focused pane's front content is a
+   terminal**: the terminal captures the Tab/Return keystrokes
+   before the Hybrid NAV handler. Workaround during the walk:
+   pane hamburger "Flip pane" item OR click outside the
+   terminal body before firing the chord. Webtest-automation
+   note only; not a chan bug (real keyboard input on a
+   non-headless browser generates the proper focus sequence).
+2. **Back-side stubs use `var(--text)` + `var(--border)` but no
+   explicit `--bg`**: works today because the stub body has a
+   transparent bg and inherits the pane's bg. Tasks B/C/E/F
+   populating the stubs should stay disciplined here so
+   per-Hybrid theme keeps propagating cleanly.
+3. **`-b-23` task background mentions "11 files"** ; actual count
+   is 10 (`find web-marketing -type f`). Minor doc-drift in the
+   task spec; commit content itself is correct.
+
+### State at end of walk
+
+Lane-A test server + python static server + throwaway drive
++ Chrome MCP tabs all torn down per the standing rule.
+Working tree clean against HEAD `22fd878`. No fresh bug-list
+entries to dispatch from this walk — all side observations
+are tooling notes / disciplines / doc-drift, not commit-class
+work.
+
+`-a-44` (drag-to-rearrange) is the next likely walkthrough
+when @@FullStackA commits it. Hybrid back-side wave Tasks
+B/C/E/F + graph overhaul wave land after this. Standing by.
