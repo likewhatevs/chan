@@ -1968,3 +1968,60 @@ If option B: hold the smoke until the split is complete.
 ### Holding
 
 No commits + no pushes until you route. Will fire smoke + audit-append work the moment you call A or B.
+
+## 2026-05-21 — poke (-19 smoke ALL GREEN; per-PR gate structurally fully green; picking up -16)
+
+🎉 **Per-PR ci.yml gate structurally fully green on all matrix entries** for the first time since ~2026-05-19.
+
+### Smoke verdict — `systacean-19-smoke` run [`26255658401`](https://github.com/fiorix/chan/actions/runs/26255658401)
+
+| Job | Result |
+|-----|--------|
+| rustfmt | ✓ 21s |
+| build (no default features) | ✓ 1m40s |
+| web (check + test + build) | ✓ 2m33s |
+| clippy + test (ubuntu-latest) | ✓ **3m5s** (C2 confirmed end-to-end) |
+| clippy + test (macos-latest) | ✓ **5m53s** (new matrix entry per ci-13; first green) |
+
+**No Windows job** per @@Alex's `ci-13` matrix change.
+
+### Two-stage smoke chronology
+
+* Prior run `26254931045`: Ubuntu cargo test ✓ 10m23s (C2 fallback validated empirically — 28 previously-gated tests run + pass on the model-less runner). Failed rustfmt on my unit-test code style (`assert!(matches!(...))` needed one-line collapse). Pushed fixup commit `4f964fc`.
+* Re-fire `26255658401`: rustfmt + everything else green. Empirical green across all 5 jobs.
+
+### What this empirically validates
+
+* C2 graceful BM25-only fallback works on the model-less Ubuntu CI runner. The 28 previously-gated tests (including `index_file().unwrap()`, `summary.errors.is_empty()`, search-after-reindex hit assertions) all pass without the model present. The fallback path silently skips vector commits + lets BM25 take over.
+* The one-shot `tracing::warn!` (`std::sync::Once`-guarded) doesn't spam the log.
+* Workspace test count unchanged from pre-`-18` baseline; coverage fully restored.
+
+### Audit-trail incident: closed
+
+`5685be4` misattribution corrected per option (a) — audit anchor in `systacean-19.md` task tail (commit `a5d2dc1`). Future readers walk the task file for `-19` audit.
+
+### Atomic audit-commit discipline: adopted
+
+The fmt-fix commit `4f964fc` used the chained `git add && diff --staged --stat && git commit && show --stat HEAD` pattern per the saved memory entry. Closing the inter-command race window for future commits.
+
+### `-19` task closed
+
+Structurally complete. C2 impl in HEAD via `5685be4`; audit anchor in `systacean-19.md`; smoke validates fallback path end-to-end; per-PR ci.yml gate fully green.
+
+### Picking up `-16` now
+
+Per the queue: `systacean-16` (chan-report file-classification buckets). Per your prior framing + the `feedback_ground_descriptions_in_source` memory: firing the scope question first BEFORE implementation. Question on whether "chan-report classifies **every file** into one of Markdown / SourceCode / Binary / Media / Other" expands chan-report's currently-tracked file set (binary + media files are dropped by `count_file_impl` today via `LanguageType::from_path → None`) OR whether the bucket only applies to the existing tracked-file set.
+
+Will fire that scope poke as a separate message after this success-ack.
+
+### Status summary
+
+* `-15` ✓ committed.
+* `-17` ✓ committed.
+* `-18` (+ 4 follow-ups) ✓ shipped + ALL 28 gates REVERTED by `-19`.
+* `-19` ✓ shipped + smoke-validated.
+* `-20` ✓ committed (3 `#[cfg(unix)]` lock gates stay as documentation per the Windows-out-of-CI decision).
+* `-16` 🟡 picking up next + firing scope question first.
+* `-12` 🟡 still parked on a fresh runtime-permission ask.
+
+Standing by; scope poke for `-16` fires next.
