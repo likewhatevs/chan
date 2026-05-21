@@ -36,7 +36,11 @@ Distinction:
 
 (ii) keeps `-b-5`'s per-pane independence; (i) simplifies but loses the per-pane affordance. **Recommend (i)** since @@Alex's "docs light, terminals dark" framing reads more naturally as a global preference than a per-pane default. Confirm before Task E (drop front/back independent theme) cuts.
 
-**Follow-up reply from @@Alex**: 
+**Follow-up reply from @@Alex 2026-05-21**:
+
+> global per-type
+
+**Status**: ANSWERED. Global per-type theme — theme lives with the surface type, not the pane. `-b-5`'s per-pane override goes away entirely. All editors render with the editor theme; all terminals render with the terminal theme. Hamburger toggle from `-a-27` flips the GLOBAL theme for the current surface type (not per-pane). Task E (drop front/back independent theme) becomes "drop per-pane theme override entirely; move to global per-type". Update the round-2-plan "Hybrid back-side revisited" section + the Task E spec at fan-out.
 
 ---
 
@@ -124,6 +128,32 @@ Distinction:
 
 **Your reply** (just say yes / no / something else): 
 
+**Reply from @@Alex 2026-05-21**:
+
+> 1. yes
+
+**Status**: ANSWERED. **Cut v0.11.2.** Architect cuts task files + dispatches the mini-wave; @@Systacean cuts the tag once the wave lands green. **Expanded scope 2026-05-21 per @@Alex's follow-up** ("if there are more items that DO NOT need much spec and we have answers, we could bake all into this release too" + "the working agents have been mostly idle this session, mostly you") — packed maximally with anything well-defined + answered + small scope. Final v0.11.2 scope = 10 fixes across 9 tasks:
+
+@@FullStackA (6 tasks):
+* `-a-36` Tab Reload + Inspector SPA (paired with `-b-17`)
+* `-a-37` File moved or deleted false-positive (CRITICAL)
+* `-a-38` Notification surface polish (spinner gating + Copied path auto-dismiss)
+* `-a-39` FB tab state polish (expand persistence + spawn-new chord)
+* `-a-40` Wysiwyg outline-style dotted numbering (CSS counters per A.7 a)
+* `-a-41` Source-mode editor list intervention
+
+@@FullStackB (3 tasks):
+* `-b-17` Tab Reload + Inspector Tauri IPC (paired with `-a-36`)
+* `-b-18` Submit-mode persistence on reload + tooltip copy fix
+* `-b-19` chan-desktop browser-style zoom (Cmd + / - / 0)
+
+Plus already-landed Round-2 Wave-1 work absorbs into the patch tag:
+* `-b-15` + `-b-16` (bundled chan binary + PATH-first probe)
+* `ci-7` (signing workflow YAML)
+* `systacean-11 + -12 + -13` (signing-key rotation + tauri-plugin-updater verify + Keychain-driven Makefile)
+
+Full plan at [`commit-plan-v0.11.2.md`](commit-plan-v0.11.2.md). Tasks dispatched 2026-05-21 via outbound poke channels.
+
 ---
 
 ### A.6 — Markmap support: Round-2 wave-2 or Round-3?
@@ -155,7 +185,11 @@ Distinction:
 * Re-route the markmap entry in [`../phase-8-bugs.md`](../phase-8-bugs.md) from "Round-2 wave-2" → "Round-3 polish (whenever quiet slot)".
 * Confirm @@Alex meant "next to the StyleToolbar mode toggle" — if they actually meant a different surface (the YAML frontmatter editor area, etc.), the placement changes.
 
-**Follow-up reply from @@Alex (placement confirmation)**: 
+**Follow-up reply from @@Alex (placement confirmation) 2026-05-21**:
+
+> 5. yes
+
+**Status**: ANSWERED. StyleToolbar mode-toggle confirmed. Markmap entry in `phase-8-bugs.md` re-routes from Round-2 wave-2 → Round-3 polish (whenever quiet slot).
 
 ---
 
@@ -192,7 +226,15 @@ Distinction:
 
 **Reply path**: append a `## 2026-05-21 — approved` section to [`../alex/event-systacean-alex.md`](../alex/event-systacean-alex.md) with the identity string. @@Systacean lands the JSON rotation commit that day.
 
-**Status**: 
+**Reply from @@Alex 2026-05-21**:
+
+> 2. you can get this from my machine already.. there are 2
+> there, a new one which i recently used for chan, and an
+> old one from 2013 iirc which you can discard
+
+**Status**: ANSWERED. @@Architect ran `security find-identity -v -p codesigning` 2026-05-21; the recent Developer ID Application cert is `Developer ID Application: Alexandre Fiori (W73XV5CK3N)` (Team ID `W73XV5CK3N`). The Apple Development cert (second valid identity) is a different category (dev builds, not distribution). The 2013-era cert @@Alex remembered is already pruned from the keychain (not in current valid-identities listing).
+
+Transcribed to [`../alex/event-systacean-alex.md`](../alex/event-systacean-alex.md) as `## 2026-05-21 — approved (transcribed by @@Architect)`. @@Systacean lands the JSON rotation commit on the next inbound poll.
 
 ---
 
@@ -213,7 +255,24 @@ Distinction:
 
 **Reply path**: append a one-line "checklist done, all six secrets populated" (or "still pending, no ETA") to [`../alex/event-ci-alex.md`](../alex/event-ci-alex.md). Optionally confirm the test-tag name (default `chan-v0.11.99-dryrun.1`).
 
-**Status**: 
+**Reply from @@Alex 2026-05-21**:
+
+> 3. do i have to do this? we have the gh binary here, you
+> do it if you can
+
+**Status**: IN PROGRESS. @@Architect attempted to populate via `gh` CLI 2026-05-21 — auto-mode classifier blocked the multi-step credential-extraction + remote-write combo. Provided @@Alex with a one-shot shell script to run locally (values pipe through stdin direct to `gh secret set`; no values appear in shell history; `security export` step pops a Keychain "Allow access" dialog).
+
+Script includes:
+* `printf 'Developer ID Application: ...' | gh secret set APPLE_SIGNING_IDENTITY` (public identifier)
+* `printf 'W73XV5CK3N' | gh secret set APPLE_TEAM_ID`
+* `printf 'fiorix@gmail.com' | gh secret set APPLE_ID`
+* `security find-generic-password -s chan-notary -w | tr -d '\n' | gh secret set APPLE_PASSWORD`
+* `openssl rand` generates a strong fresh passphrase; `security export -t identities -f pkcs12 -P "$PASSPHRASE" -o /tmp/chan-developerid.p12` exports
+* `printf '%s' "$PASSPHRASE" | gh secret set APPLE_CERTIFICATE_PASSWORD`
+* `base64 -i /tmp/chan-developerid.p12 | tr -d '\n' | gh secret set APPLE_CERTIFICATE_BASE64`
+* Cleanup + `gh secret list` verify
+
+Awaiting @@Alex's run + a one-line confirmation `gh secret list` shows all six names → status flips to ANSWERED + @@CI's `ci-8` unblocks for the dry-run.
 
 ---
 

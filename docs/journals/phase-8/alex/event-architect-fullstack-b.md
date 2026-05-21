@@ -780,3 +780,70 @@ Round-2 Wave-2 fan-out (drive pre-flight UX +
 chan-desktop first-launch manual + zoom/submit-mode bug
 follow-ups — both filed in `phase-8-bugs.md` 2026-05-20
 to your lane).
+
+## 2026-05-21 — poke (fullstack-b-16 cleared + v0.11.2 mini-wave dispatch: 3 tasks)
+
+`-16` approved + cleared to commit. Excellent implementation:
+new `resolve_chan_binary()` factored over three injectable
+dependencies (PATH candidate + version probe + bundled
+fallback) so the 5 acceptance branches don't need real
+subprocesses. `which_chan_in()` helper takes the PATH-value
+string explicitly for test-friendly synthetic PATH dirs.
+`probe_chan_version`'s doc generalized correctly since `-16`
+now uses it for the PATH candidate too. `is_executable_file`
+Unix/non-Unix branch handles both target families cleanly.
+
+Per-task review at the tail of [`../fullstack-b/fullstack-b-16.md`](../fullstack-b/fullstack-b-16.md);
+use your proposed commit subject. Push waits until end of
+Round 2 — or rides v0.11.2 if @@Alex's mini-wave plan
+absorbs it (per the commit-plan).
+
+### v0.11.2 mini-wave dispatch
+
+@@Alex approved v0.11.2 patch wave 2026-05-21 + asked to
+maximally pack well-defined fixes given the working agents
+have been mostly idle this session. Your queue, 3 tasks:
+
+* [`../fullstack-b/fullstack-b-17.md`](../fullstack-b/fullstack-b-17.md)
+  — Tab right-click Reload + Open Inspector (Tauri IPC +
+  accelerator bindings). **DEV META-BLOCKER** — paired
+  with @@FullStackA's `-a-36`. **Authorization: yes**,
+  covers `desktop/src-tauri/src/main.rs` IPC handlers,
+  `tauri.conf.json` `app.devTools`, and `KEY_BRIDGE_JS`
+  accelerators (`Cmd+R` + `Cmd+Opt+I`).
+* [`../fullstack-b/fullstack-b-18.md`](../fullstack-b/fullstack-b-18.md)
+  — Submit-mode persistence on reload + shell-mode
+  tooltip copy fix. Two combined: SPA re-fires
+  `setTerminalSubmitMode` on tab restore (closes
+  the `-b-13` server-state desync) + tooltip copy cleanup
+  (no chan-server changes needed; pure SPA).
+* [`../fullstack-b/fullstack-b-19.md`](../fullstack-b/fullstack-b-19.md)
+  — chan-desktop browser-style zoom (Cmd + / - / 0).
+  **Authorization: yes**, covers
+  `desktop/src-tauri/src/main.rs` accelerators + IPC
+  handlers, `WindowConfig.zoom_level: f64` field (extends
+  `-b-1`'s LRU restore path), `tauri.conf.json` if any
+  capability grant needs widening. `core:webview:allow-set-webview-zoom`
+  already enabled per `-b-7`.
+
+### Recommended order
+
+1. **`-b-17`** first — pairs with `-a-36` for the
+   DEV META-BLOCKER unlock. SPA dispatch side blocks on
+   the IPC surface you expose here.
+2. **`-b-18`** — SPA-only; can land in parallel.
+3. **`-b-19`** — chan-desktop accelerator + WindowConfig;
+   parallelisable. Slightly heavier scope (LRU persistence
+   extension) so do third if bandwidth is tight.
+
+### Wave context
+
+Commit-plan at
+[`../architect/commit-plan-v0.11.2.md`](../architect/commit-plan-v0.11.2.md)
+— full v0.11.2 scope + sequencing + tag-cut steps + the
+post-v0.11.2 ci-8 + session-recycle path. Read for the
+big picture before starting.
+
+Push held until @@Systacean cuts the v0.11.2 tag (planned
+after the 9 task commits + pre-landed Wave-1 work all
+land green).

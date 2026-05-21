@@ -1131,6 +1131,73 @@ Your lane is queue-empty for the mini-wave after these
 (carousel + Infographics + BOOT + manual + signing
 pipeline with real keys, per `round-2-plan.md`).
 
+## 2026-05-21 — poke (v0.11.2 mini-wave dispatch: 6 tasks)
+
+@@Alex approved v0.11.2 patch wave 2026-05-21 + asked to
+maximally pack well-defined fixes given the working agents
+have been mostly idle this session. Your queue, 6 tasks:
+
+* [`../fullstack-a/fullstack-a-36.md`](../fullstack-a/fullstack-a-36.md)
+  — Tab right-click Reload + Open Inspector (SPA dispatch
+  + runtime detection). **DEV META-BLOCKER** — paired with
+  @@FullStackB's `-b-17`. Coordinate on IPC command names +
+  signatures at task-start.
+* [`../fullstack-a/fullstack-a-37.md`](../fullstack-a/fullstack-a-37.md)
+  — "File moved or deleted" false-positive. **CRITICAL**.
+  Three pieces: stop false detection + fix Re-open button
+  (currently broken; routes to FB-with-nothing-selected) +
+  add Find-suggest-reopen inline UX per @@Alex's
+  framing.
+* [`../fullstack-a/fullstack-a-38.md`](../fullstack-a/fullstack-a-38.md)
+  — Notification surface polish. Two combined: spinner-at-0:00
+  gating (suppress when no timing data) + "Copied path"
+  auto-dismiss (3 s default). Audit transient vs persistent
+  taxonomy.
+* [`../fullstack-a/fullstack-a-39.md`](../fullstack-a/fullstack-a-39.md)
+  — FB tab state polish. Two combined: expand-state
+  persistence across tab switch (new `SerTab.fbe?: string[]`)
+  + FB-spawn chord always creates new tab (no focus-existing
+  fall-through).
+* [`../fullstack-a/fullstack-a-40.md`](../fullstack-a/fullstack-a-40.md)
+  — Wysiwyg outline-style dotted numbering. @@Alex
+  confirmed option (a) in A.7: pure visual CSS counters;
+  source stays standard markdown.
+* [`../fullstack-a/fullstack-a-41.md`](../fullstack-a/fullstack-a-41.md)
+  — Source-mode editor list intervention. Source mode is
+  RAW — strip list keymaps from source-mode CM6 extension
+  stack.
+
+### Recommended order
+
+1. **`-a-36`** first — pairs with `-b-17` for the
+   DEV META-BLOCKER unlock. DevTools needs to be working
+   before -a-37's investigation lands.
+2. **`-a-37`** — CRITICAL writing interruption; needs
+   DevTools for root-cause narrowing.
+3. **`-a-38 / -a-39 / -a-40 / -a-41`** in parallel — all
+   independent of each other; commit as ready.
+
+### Authorization on shared infra
+
+* `-a-36`: pairs with `-b-17`. @@FullStackB owns the
+  Tauri IPC side; you own SPA dispatch. **Authorization: yes**.
+* `-a-37`: may touch chan-server `self_writes.rs` or
+  chan-drive watcher IF root cause lands there.
+  Coordinate via permission event to @@FullStackB or
+  @@Systacean if needed.
+
+### Wave context
+
+Commit-plan at
+[`../architect/commit-plan-v0.11.2.md`](../architect/commit-plan-v0.11.2.md)
+— full v0.11.2 scope + sequencing + tag-cut steps + the
+post-v0.11.2 ci-8 + session-recycle path. Read for the
+big picture before starting.
+
+Push held until @@Systacean cuts the v0.11.2 tag (planned
+after the 9 task commits + pre-landed Wave-1 work all
+land green).
+
 ## 2026-05-20 — poke (Round-2 spawn ack + Wave-2 standby)
 
 @@Alex confirmed Round-2 decisions (clean sweep) and
