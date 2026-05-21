@@ -147,3 +147,105 @@ chan-desktop: aarch64-only DMG for v0.11.2 + unused-app rename (fullstack-b-20)
 ## Open questions
 
 (populated as you investigate)
+
+## 2026-05-21 — implementation note
+
+### Bug #1 — externalBin → bundle.macOS.files
+
+Empirically verified option (iii) does NOT work: Tauri 2's
+tauri-build crate appends the target triple UNCONDITIONALLY,
+so `bundle.externalBin = ["binaries/chan-aarch64-apple-darwin"]`
+expands to `binaries/chan-aarch64-apple-darwin-aarch64-apple-darwin`
+(file doesn't exist; cargo check fails). Confirmed at task-tail
+verification round 1.
+
+Going with option (i)-adjacent: drop `bundle.externalBin` entirely
++ use Tauri 2's `bundle.macOS.files` map (`{ "<dest>": "<src>" }`)
+to copy chan into the bundle at bundle time. Empirically verified
+destinations are relative to `Chan.app/Contents/`, NOT the
+bundle root (first attempt with `"Contents/MacOS/chan"` produced
+`Contents/Contents/MacOS/chan`; fixed to `"MacOS/chan"`).
+
+End-to-end verification: `cargo tauri build --bundles app` on
+macos-latest (aarch64) produces a properly-signed
+`Chan.app/Contents/MacOS/chan` (26 MB, executable, version
+matches chan-desktop's 0.11.1). The Tauri signing pass covers
+both binaries under the same Developer ID identity.
+
+### Bug #2 — main.rs:910 `app` is conditionally used
+
+Surprise: the closure parameter `app` IS used at line 932 inside
+`#[cfg(target_os = "macos")]`. Ubuntu fails strict-warnings only
+because the macOS-gated branch is conditionally compiled out;
+the parameter is unused on Linux.
+
+The 1-char rename suggested by the task body produces a
+*different* compile error on macOS: line 932's reference to `app`
+falls back to the OUTER `let app` binding (which is `tauri::App`,
+not `&AppHandle`), and `show_window` requires `&AppHandle`.
+
+Fix: rename param to `_app` (suppresses the unused warning on
+Linux) AND update the reference at line 932 to `_app` (the
+leading-underscore identifier is still usable as a regular
+binding; only the unused-warning is suppressed).
+
+### Changes landed
+
+* **`desktop/src-tauri/tauri.conf.json`** —
+  * Removed `bundle.externalBin = ["binaries/chan"]`.
+  * Added `bundle.macOS.files = { "MacOS/chan": "binaries/chan-aarch64-apple-darwin" }`.
+* **`desktop/src-tauri/src/main.rs`** —
+  * Line 910: `move |app, event|` → `move |_app, event|`.
+  * Line 932 (gated to macOS): `show_window(app, ...)` →
+    `show_window(_app, ...)`.
+* **`desktop/CLAUDE.md`** —
+  * "Bundled chan sidecar" section rewritten to reflect the
+    `bundle.macOS.files` mechanism + the v0.11.2 hotfix
+    rationale.
+  * New "v0.11.2 hotfix: aarch64-only DMG, no externalBin"
+    subsection documenting the two known regressions
+    (dev-mode auto-copy gone — PATH chan still works via
+    `-b-16` resolver; Linux/Windows bundling no longer ships
+    chan) as scoped trade-offs for the signed-macOS DMG ship.
+  * "Architecture handling" subsection updated to flag the
+    `ci-N` follow-up that pairs universal2 + multi-platform
+    bundling restoration.
+
+### Acceptance criteria — verification
+
+| Criterion                                                                            | State                                                                                  |
+|--------------------------------------------------------------------------------------|----------------------------------------------------------------------------------------|
+| `cargo tauri build` on macos-latest succeeds without missing-x86_64-binary error     | Verified locally on aarch64 Mac (chan-desktop runtime permission); .app built clean.    |
+| `RUSTFLAGS="-D warnings" cargo build -p chan-desktop --release` succeeds              | Verified locally; release build green.                                                  |
+| `desktop/CLAUDE.md` notes aarch64-only shape for v0.11.2 + deferred universal2       | Landed in the "v0.11.2 hotfix" + "Architecture handling" subsections.                   |
+| Pre-push gate                                                                        | Workspace fmt + clippy `-D warnings` + test + no-default-features build all green.      |
+| Bundle integrity                                                                     | `Chan.app/Contents/MacOS/chan` present (26 MB, executable, `chan --version` → 0.11.1). |
+| Code-signature                                                                       | Tauri signed both `chan-desktop` and `chan` under Developer ID Application: Alexandre Fiori (W73XV5CK3N) in the same bundle pass. |
+
+### Coordination footprint
+
+* No overlap with @@FullStackA's parallel work (`-a-37` →
+  `-a-41`, none of which touched chan-desktop/).
+* No overlap with @@Systacean's `-11` (`signingIdentity` set in
+  `tauri.conf.json` was preserved in my edit) or `-13`
+  (Makefile notarytool path untouched).
+* No overlap with @@CI's `ci-9` (workflow YAML untouched).
+* CLAUDE.md edit is in the "Bundled chan sidecar" /
+  "Architecture handling" subsections only; the
+  "Apple Developer ID signing" + "Local notarization setup"
+  sections from @@Systacean / @@CI are preserved verbatim.
+
+### Suggested commit subject
+
+```
+chan-desktop: aarch64-only DMG via bundle.macOS.files + main.rs unused-app rename (fullstack-b-20)
+```
+
+Touches:
+* `desktop/src-tauri/tauri.conf.json`
+* `desktop/src-tauri/src/main.rs`
+* `desktop/CLAUDE.md`
+
+Holding for @@Architect commit clearance. Push waits for
+@@Systacean's `chan-v0.11.2` tag cut per the v0.11.2
+commit-plan.

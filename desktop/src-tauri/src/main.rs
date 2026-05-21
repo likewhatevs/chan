@@ -907,7 +907,7 @@ fn main() {
         .build(tauri::generate_context!())
         .expect("error building tauri application");
 
-    app.run(move |app, event| {
+    app.run(move |_app, event| {
         match event {
             RunEvent::Exit => {
                 // Best-effort: SIGKILL every running chan child so
@@ -929,7 +929,7 @@ fn main() {
                 has_visible_windows: false,
                 ..
             } => {
-                let _ = show_window(app, "main");
+                let _ = show_window(_app, "main");
             }
             _ => {}
         }

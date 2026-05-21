@@ -4,29 +4,73 @@
 
 chan-desktop ships with a copy of the `chan` binary inside the
 packaged app so the user does not need a separate `cargo install` /
-`brew install` to run drives. The bundling is configured via Tauri's
-`externalBin` mechanism in `src-tauri/tauri.conf.json`
-(`bundle.externalBin = ["binaries/chan"]`), and `desktop/Makefile`'s
-`chan-bin` recipe stages `target/release/chan` to
-`src-tauri/binaries/chan-<target-triple>` before every build.
+`brew install` to run drives. `desktop/Makefile`'s `chan-bin` recipe
+stages `target/release/chan` to
+`src-tauri/binaries/chan-<target-triple>` before every build; the
+copy into the bundle is configured via Tauri's
+`bundle.macOS.files` map in `src-tauri/tauri.conf.json`.
 
 ### Bundle layout
 
-Tauri strips the `-<target-triple>` suffix at bundle time and places
-the sidecar next to chan-desktop's own binary:
-
 | Build              | Sidecar path                                 |
 |--------------------|----------------------------------------------|
-| `cargo tauri dev`  | `target/debug/chan`                          |
+| `cargo tauri dev`  | `target/debug/chan` (see "Dev-mode" below)   |
 | Packaged macOS     | `Chan.app/Contents/MacOS/chan`               |
-| Packaged Linux     | sibling of `chan-desktop` in the install dir |
-| Packaged Windows   | sibling of `chan-desktop.exe`, name `chan.exe` |
+| Packaged Linux     | not bundled in v0.11.2 (see below)           |
+| Packaged Windows   | not bundled in v0.11.2 (see below)           |
 
 `Contents/MacOS/chan` is the recommended location on macOS because
 Tauri's code-signing step automatically covers everything under
 `Contents/MacOS/`. No custom `codesign --deep` invocation is needed:
 both binaries get a Developer ID signature from the same identity in
 one pass, and `ci-7`'s notarization roundtrip covers both for free.
+
+### v0.11.2 hotfix: aarch64-only DMG, no externalBin
+
+Tauri 2's `bundle.externalBin` field auto-expands the configured
+path with the target triple AND, on macOS, looks for BOTH
+`-aarch64-apple-darwin` and `-x86_64-apple-darwin` (universal2
+expectation). `desktop/Makefile`'s `chan-bin` recipe only stages
+the host triple, so the x86_64 lookup fails on the `macos-latest`
+CI runner. `ci-8` dry-run #2 surfaced this as a hard
+"resource path doesn't exist" bundle error.
+
+`fullstack-b-20` (the v0.11.2 hotfix) routes around the universal2
+expectation by:
+
+* Dropping `bundle.externalBin` entirely.
+* Using Tauri 2's `bundle.macOS.files` map (destination paths are
+  relative to `Chan.app/Contents/`, NOT the bundle root) to copy
+  the host-triple binary into `MacOS/chan` directly. This bypasses
+  the triple-expansion logic since `bundle.macOS.files` is a
+  literal source-to-destination map. End result on disk:
+  `Chan.app/Contents/MacOS/chan`, signed under the same
+  Developer ID identity as `chan-desktop` in the same pass
+  (no `--deep` needed).
+
+Two known regressions from the externalBin drop:
+
+1. **Dev-mode auto-copy gone** — `cargo tauri dev` previously
+   relied on Tauri's externalBin auto-copy to drop `chan` into
+   `target/debug/` so `bundled_chan_path()` resolves. With
+   externalBin removed, the bundled sidecar doesn't exist in dev.
+   The `-b-16` PATH-first resolver picks up
+   `cargo install --path crates/chan` chan automatically, so dev
+   mode WORKS for any contributor who has installed the matching
+   chan version to PATH. Without a PATH install, dev mode reports
+   `BinStatus::missing` and disables spawn paths. Documented
+   trade-off until the Makefile gains a manual `target/debug/`
+   copy step (post-v0.11.2 follow-up).
+2. **Linux + Windows bundling no longer ships chan** —
+   `bundle.macOS.files` is macOS-only. On Linux, the .deb / .appimage
+   produced by `make build` no longer includes chan. Users on Linux
+   need to install chan separately via `cargo install --path
+   crates/chan` and rely on the `-b-16` PATH resolver. Windows
+   distribution is not currently exercised; same caveat applies.
+
+Both regressions are scoped trade-offs for v0.11.2's signed-macOS
+DMG ship. The full multi-platform externalBin restoration is a
+post-v0.11.2 `ci-N` task that pairs with the universal2 work.
 
 ### Resolution helpers
 
@@ -87,14 +131,20 @@ ignored cleanly — the app keeps working via the bundled binary.
 ### Architecture handling
 
 `desktop/Makefile`'s `chan-bin` recipe currently builds for the
-host's target triple only (`$(shell rustc -vV | sed -n 's/host: //p')`).
+host's target triple only (`$(shell rustc -vV | sed -n 's/host: //p')`),
+and `bundle.macOS.files` in `tauri.conf.json` hardcodes
+`binaries/chan-aarch64-apple-darwin` as the source path. The
+v0.11.2 macOS DMG is therefore aarch64-only.
+
 A macOS universal2 fat binary (`aarch64-apple-darwin` +
-`x86_64-apple-darwin` merged via `lipo -create`) is the next step
-for distributing a single DMG that runs natively on both Apple
-Silicon and Intel Macs; that work is owned by `ci-7` in the
-GitHub Actions release workflow rather than in this Makefile (CI
+`x86_64-apple-darwin` merged via `lipo -create`) is the next
+post-v0.11.2 step for distributing a single DMG that runs natively
+on both Apple Silicon and Intel Macs. That work is owned by a
+`ci-N` follow-up in the GitHub Actions release workflow (CI
 already runs per-arch matrix builds and is the natural place to
-`lipo`-merge before bundling).
+`lipo`-merge before bundling); the same task can restore
+multi-platform `bundle.<linux|windows>.files` for Linux/Windows
+bundling once the matrix supports it.
 
 ## Apple Developer ID signing
 
