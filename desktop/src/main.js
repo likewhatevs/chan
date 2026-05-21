@@ -548,6 +548,19 @@ listen('serve-crashed', (e) => {
 
 async function showServeFailed(p) {
   const driveLabel = p.key ? p.key : 'this drive';
+  const tailLines = Array.isArray(p.stderr_tail) ? p.stderr_tail : [];
+  // `fullstack-b-22`: chan-desktop sets `drive_lock_conflict: true`
+  // on the payload when the stderr tail matched the
+  // "drive is locked by another process" marker. Route into the
+  // takeover prompt instead of the generic error modal so the
+  // user sees the actionable path first. The detection lives in
+  // serve.rs::stderr_indicates_drive_lock_conflict; keep the
+  // branch shape additive — never silence the generic modal for
+  // a non-lock failure.
+  if (p.key && p.drive_lock_conflict === true) {
+    await promptDriveLockTakeover(p.key);
+    return;
+  }
   let exitDesc;
   if (typeof p.exit_signal === 'number') {
     exitDesc = `chan was killed by signal ${p.exit_signal}.`;
@@ -558,8 +571,8 @@ async function showServeFailed(p) {
   }
   // Keep the dialog body bounded: native message dialogs don't
   // scroll on every platform, so trim to the last 20 lines.
-  const tailLines = Array.isArray(p.stderr_tail) ? p.stderr_tail.slice(-20) : [];
-  const tail = tailLines.length ? tailLines.join('\n') : '(no output captured)';
+  const trimmed = tailLines.slice(-20);
+  const tail = trimmed.length ? trimmed.join('\n') : '(no output captured)';
   const body =
     `Failed to start ${driveLabel}.\n\n` +
     `${exitDesc}\n\n` +
@@ -570,6 +583,79 @@ async function showServeFailed(p) {
     // Dialog plugin not available or denied: fall back to the
     // inline banner so the user still sees something.
     showError(body);
+  }
+}
+
+/// `fullstack-b-22`: minimum-viable lock-takeover prompt.
+///
+/// Surfaces when chan-desktop hits a "drive is locked by another
+/// process" failure from a previous chan-desktop session's orphan
+/// sidecar. The Reclaim path calls the `reclaim_drive_lock` IPC
+/// which SIGTERMs (then SIGKILLs) every chan serve process whose
+/// argv contains the drive key, then retries the bind. Result is
+/// rendered as a follow-up message.
+async function promptDriveLockTakeover(key) {
+  const body =
+    `An orphaned chan sidecar is holding the lock for:\n\n${key}\n\n` +
+    `This usually means a previous Chan Desktop session was killed ` +
+    `without a chance to clean up its background processes. ` +
+    `Reclaim the drive by terminating the orphan and re-opening it?`;
+  let accepted = false;
+  try {
+    accepted = await ask(body, {
+      title: 'Drive lock held by orphan process',
+      okLabel: 'Reclaim',
+      cancelLabel: 'Cancel',
+      kind: 'warning',
+    });
+  } catch {
+    // Dialog plugin denied — fall back to the inline banner so the
+    // user at least sees the explanation. They can use the OS to
+    // `pkill chan` and toggle the drive on again.
+    showError(body);
+    return;
+  }
+  if (!accepted) return;
+  let result;
+  try {
+    result = await invoke('reclaim_drive_lock', { path: key });
+  } catch (e) {
+    const msg = (e && e.message) || String(e);
+    try {
+      await message(
+        `Reclaim failed: ${msg}\n\nManual cleanup: \`pkill -f "chan serve ${key}"\` from a terminal.`,
+        { title: 'Drive lock reclaim failed', kind: 'error' },
+      );
+    } catch {
+      showError(`Reclaim failed: ${msg}`);
+    }
+    return;
+  }
+  if (result && result.retry_succeeded) {
+    // Success path: the new chan serve fires `serves-changed` once
+    // it prints its URL banner, which the existing listener already
+    // turns into a `refresh()`. Surface a transient inline banner
+    // so the user sees the reclaim message even before the table
+    // re-renders.
+    const okMsg = result.message || `Reclaimed ${key}.`;
+    const banner = document.createElement('div');
+    banner.className = 'error-banner';
+    banner.style.background = 'var(--ok-bg, #1e4620)';
+    banner.style.borderColor = 'var(--ok-border, #3a7d44)';
+    banner.textContent = okMsg;
+    main.prepend(banner);
+    setTimeout(() => banner.remove(), 5000);
+    refresh().catch(showError);
+    return;
+  }
+  const tail = result && result.message ? result.message : 'Reclaim did not complete.';
+  try {
+    await message(
+      `${tail}\n\nIf the drive still won't open, try \`pkill -f "chan serve ${key}"\` from a terminal.`,
+      { title: 'Drive lock reclaim incomplete', kind: 'warning' },
+    );
+  } catch {
+    showError(tail);
   }
 }
 

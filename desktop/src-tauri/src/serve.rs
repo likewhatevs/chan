@@ -13,15 +13,27 @@
 //!    frontend as a `chan-log` event so the console window can
 //!    display it.
 //!
-//! Stop is currently `Child::kill` (SIGKILL on Unix). chan never
-//! gets a chance to flush or unbind cleanly; the OS reclaims the
-//! port within seconds. Upgrading to SIGTERM with a grace period
-//! is a follow-up; see design.md section 3.4.
+//! Stop sends SIGTERM with a five-second grace deadline before
+//! falling back to SIGKILL (`stop_child`). On Unix every child is
+//! placed in its own process group via `CommandExt::process_group`
+//! and `stop_child` signals the group so any helper subprocesses
+//! chan serve may have spawned die alongside the parent. On
+//! Windows the equivalent is the `CREATE_NEW_PROCESS_GROUP`
+//! creation flag.
+//!
+//! `AppState::drop` also calls `stop_all` as a defense-in-depth
+//! reap path: panics that unwind through `tauri::App` (or any
+//! other holder of the Arc) still tear children down even when the
+//! Tauri `RunEvent::Exit` hook never fires.
 
 use std::collections::VecDeque;
 use std::hash::{DefaultHasher, Hash, Hasher};
 use std::io::{BufRead, BufReader};
 use std::net::TcpListener;
+#[cfg(unix)]
+use std::os::unix::process::CommandExt;
+#[cfg(windows)]
+use std::os::windows::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, ExitStatus, Stdio};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -86,6 +98,12 @@ pub struct ServeFailedPayload {
     /// Last `STDERR_TAIL_MAX` stderr lines, oldest first. Empty when
     /// the child died before writing anything.
     pub stderr_tail: Vec<String>,
+    /// `fullstack-b-22`: true when `stderr_tail` contains the
+    /// "drive is locked by another process" marker chan serve emits
+    /// when the per-drive flock is already held. Routes the SPA
+    /// into the lock-takeover prompt + `reclaim_drive_lock` IPC
+    /// instead of the generic "drive failed to start" modal.
+    pub drive_lock_conflict: bool,
 }
 
 /// Live state for one running serve. Held in `AppState.serves`
@@ -131,6 +149,20 @@ pub fn start(
     ])
     .stdout(Stdio::null())
     .stderr(Stdio::piped());
+
+    // Detach into a fresh process group so `stop_child` can signal
+    // every descendant chan may have spawned, not just the direct
+    // child. The group is keyed by the child's own PID once it
+    // execs (Unix: setpgid(0,0); Windows: CREATE_NEW_PROCESS_GROUP).
+    #[cfg(unix)]
+    cmd.process_group(0);
+    #[cfg(windows)]
+    {
+        // CREATE_NEW_PROCESS_GROUP from winapi. Hard-coded constant
+        // avoids pulling a winapi crate just for this flag.
+        const CREATE_NEW_PROCESS_GROUP: u32 = 0x0000_0200;
+        cmd.creation_flags(CREATE_NEW_PROCESS_GROUP);
+    }
 
     let mut child = cmd
         .spawn()
@@ -205,13 +237,16 @@ pub fn start(
             // `stop` / `stop_all` removes the handle before
             // terminating the child, so this EOF is intentional.
         } else if !saw_url {
+            let stderr_tail: Vec<String> = tail.into_iter().collect();
+            let drive_lock_conflict = stderr_indicates_drive_lock_conflict(&stderr_tail);
             let _ = app2.emit(
                 SERVE_FAILED,
                 ServeFailedPayload {
                     key: key2.clone(),
                     exit_code,
                     exit_signal,
-                    stderr_tail: tail.into_iter().collect(),
+                    stderr_tail,
+                    drive_lock_conflict,
                 },
             );
         } else if !normal_termination(exit_code, exit_signal) {
@@ -222,6 +257,12 @@ pub fn start(
                     exit_code,
                     exit_signal,
                     stderr_tail: tail.into_iter().collect(),
+                    // `drive_lock_conflict` only meaningful on the
+                    // SERVE_FAILED path (where chan serve exited
+                    // before printing the URL banner); a post-URL
+                    // crash with the marker in the tail is an
+                    // unrelated coincidence.
+                    drive_lock_conflict: false,
                 },
             );
         }
@@ -282,8 +323,12 @@ pub fn stop_all(state: &AppState) {
 fn stop_child(mut child: Child, deadline: Instant) {
     #[cfg(unix)]
     {
-        let pid = nix::unistd::Pid::from_raw(child.id() as i32);
-        let _ = nix::sys::signal::kill(pid, nix::sys::signal::Signal::SIGTERM);
+        // `start` placed the child in its own process group (pgid =
+        // child PID); signal the whole group so any helpers chan
+        // spawned die alongside the leader. `killpg` matches POSIX
+        // semantics; a stale group is a no-op (ESRCH).
+        let pgid = nix::unistd::Pid::from_raw(child.id() as i32);
+        let _ = nix::sys::signal::killpg(pgid, nix::sys::signal::Signal::SIGTERM);
     }
     #[cfg(not(unix))]
     {
@@ -301,9 +346,122 @@ fn stop_child(mut child: Child, deadline: Instant) {
             }
         }
     }
+    // Grace expired. Escalate to SIGKILL on the group on Unix; the
+    // direct `child.kill()` is sufficient on Windows.
+    #[cfg(unix)]
+    {
+        let pgid = nix::unistd::Pid::from_raw(child.id() as i32);
+        let _ = nix::sys::signal::killpg(pgid, nix::sys::signal::Signal::SIGKILL);
+    }
     let _ = child.kill();
     let _ = child.wait();
 }
+
+/// Substring chan serve writes to stderr when the per-drive flock
+/// is already held (see `chan_drive::error::ChanError::DriveLocked`).
+/// Matched as a free-text substring rather than via a structured
+/// exit code because chan serve's stderr is the only signal that
+/// reaches chan-desktop today; the next chan-server release could
+/// promote this to a stable exit code without breaking the SPA-side
+/// lock-takeover prompt (the SPA fall-through still works on the
+/// substring match).
+pub const DRIVE_LOCKED_MARKER: &str = "drive is locked by another process";
+
+/// True if any of the captured stderr lines contains the
+/// drive-locked marker chan serve emits when the per-drive flock is
+/// already held. Used by chan-desktop's `serve-failed` listener to
+/// branch into the lock-takeover UI instead of the generic error
+/// modal.
+pub fn stderr_indicates_drive_lock_conflict(stderr_tail: &[String]) -> bool {
+    stderr_tail
+        .iter()
+        .any(|line| line.contains(DRIVE_LOCKED_MARKER))
+}
+
+/// Find pids of orphan `chan serve` processes whose argv contains
+/// the given drive key. Used by the lock-takeover IPC after a
+/// `serve-failed` payload was recognised as a drive-lock conflict.
+///
+/// Implementation: shell out to `ps -ax -o pid=,command=` and parse
+/// the lines. Pure best-effort — the heuristic accepts any process
+/// whose command line contains both `chan`, ` serve `, and the
+/// drive key substring, skipping the current chan-desktop process.
+/// Per the task body's "minimum viable" framing we deliberately
+/// avoid elaborate orphan-detection heuristics; the user has
+/// already opted in via the takeover dialog.
+#[cfg(unix)]
+pub fn find_orphan_chan_serve_pids(key: &str) -> Result<Vec<u32>, String> {
+    let out = std::process::Command::new("ps")
+        .args(["-ax", "-o", "pid=,command="])
+        .output()
+        .map_err(|e| format!("invoking `ps`: {e}"))?;
+    if !out.status.success() {
+        return Err(format!(
+            "`ps` exited with {}: {}",
+            out.status,
+            String::from_utf8_lossy(&out.stderr).trim(),
+        ));
+    }
+    let our_pid = std::process::id();
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    Ok(parse_ps_lines_for_chan_serve(&stdout, key, our_pid))
+}
+
+#[cfg(not(unix))]
+pub fn find_orphan_chan_serve_pids(_key: &str) -> Result<Vec<u32>, String> {
+    Err("orphan `chan serve` reclaim is not implemented on this platform".to_string())
+}
+
+/// Testable core of [`find_orphan_chan_serve_pids`]. Walks the
+/// `ps -ax -o pid=,command=` output and returns every pid whose
+/// command line contains both `chan`, ` serve `, and the drive key,
+/// excluding `self_pid`.
+fn parse_ps_lines_for_chan_serve(ps_output: &str, key: &str, self_pid: u32) -> Vec<u32> {
+    let mut pids = Vec::new();
+    for line in ps_output.lines() {
+        let line = line.trim_start();
+        let (pid_str, rest) = match line.split_once(char::is_whitespace) {
+            Some(p) => p,
+            None => continue,
+        };
+        let pid: u32 = match pid_str.parse() {
+            Ok(p) => p,
+            Err(_) => continue,
+        };
+        if pid == self_pid {
+            continue;
+        }
+        if !rest.contains("chan") || !rest.contains(" serve ") {
+            continue;
+        }
+        if !rest.contains(key) {
+            continue;
+        }
+        pids.push(pid);
+    }
+    pids
+}
+
+/// SIGTERM the given pid, wait up to one second for it to exit,
+/// then escalate to SIGKILL. Best-effort: a missing process (ESRCH)
+/// is treated as success.
+#[cfg(unix)]
+pub fn kill_orphan_with_grace(pid: u32) {
+    use nix::sys::signal::{kill, Signal};
+    use nix::unistd::Pid;
+    let pid_t = Pid::from_raw(pid as i32);
+    let _ = kill(pid_t, Signal::SIGTERM);
+    for _ in 0..10 {
+        thread::sleep(Duration::from_millis(100));
+        if kill(pid_t, None).is_err() {
+            return;
+        }
+    }
+    let _ = kill(pid_t, Signal::SIGKILL);
+}
+
+#[cfg(not(unix))]
+pub fn kill_orphan_with_grace(_pid: u32) {}
 
 fn exit_info(status: Option<&ExitStatus>) -> (Option<i32>, Option<i32>) {
     let Some(status) = status else {
@@ -1058,6 +1216,37 @@ mod tests {
     }
 
     #[test]
+    fn invoke_handler_registers_reclaim_drive_lock() {
+        // `fullstack-b-22`: the lock-takeover dialog in
+        // `desktop/src/main.js` invokes `reclaim_drive_lock` via
+        // tauri-plugin invoke when the user clicks Reclaim. Same
+        // pin-against-generate_handler! shape as the reload /
+        // zoom tests above.
+        const MAIN_RS: &str = include_str!("main.rs");
+        assert!(MAIN_RS.contains("reclaim_drive_lock,"));
+        assert!(MAIN_RS.contains("fn reclaim_drive_lock("));
+    }
+
+    #[test]
+    fn serve_failed_payload_drive_lock_field_is_consumed_by_launcher() {
+        // `fullstack-b-22`: the SPA-side branch into the lock
+        // takeover prompt reads `p.drive_lock_conflict` straight
+        // from the serve-failed payload. Pin the field name on
+        // both ends so renaming one side without the other gets
+        // caught by tests rather than as a silent regression to
+        // the generic error modal.
+        const MAIN_JS: &str = include_str!("../../src/main.js");
+        assert!(
+            MAIN_JS.contains("drive_lock_conflict"),
+            "main.js must read payload.drive_lock_conflict"
+        );
+        assert!(
+            MAIN_JS.contains("invoke('reclaim_drive_lock'"),
+            "main.js must invoke the reclaim_drive_lock IPC"
+        );
+    }
+
+    #[test]
     fn key_bridge_wires_reload_and_devtools_ipc() {
         // `fullstack-b-17`: Cmd+R fires the `reload_window` IPC and
         // Cmd+Opt+I fires `open_devtools`, bypassing the SPA event
@@ -1287,6 +1476,74 @@ mod tests {
         stop_child(child, Instant::now() + Duration::from_secs(1));
         let still_alive = nix::sys::signal::kill(nix::unistd::Pid::from_raw(pid), None).is_ok();
         assert!(!still_alive, "child process should be gone");
+    }
+
+    #[test]
+    fn stderr_drive_lock_marker_detection_is_substring_match() {
+        // Producer side is `chan_drive::ChanError::DriveLocked`'s
+        // Display: "drive is locked by another process". The
+        // chan-desktop side recognises it via a substring scan
+        // across the captured stderr tail, so a leading "Error: "
+        // prefix or trailing context don't defeat it.
+        let tail = vec![
+            "starting chan serve".to_string(),
+            "Error: drive is locked by another process".to_string(),
+            "exiting".to_string(),
+        ];
+        assert!(stderr_indicates_drive_lock_conflict(&tail));
+        let no_lock_tail = vec![
+            "starting chan serve".to_string(),
+            "bind failed: address already in use".to_string(),
+        ];
+        assert!(!stderr_indicates_drive_lock_conflict(&no_lock_tail));
+        assert!(!stderr_indicates_drive_lock_conflict(&[]));
+    }
+
+    #[test]
+    fn parse_ps_lines_picks_chan_serve_against_key_but_skips_self() {
+        // Synthetic `ps -ax -o pid=,command=` output. Mix of:
+        // * a chan serve against the target key (should match)
+        // * the running chan-desktop pid (should be skipped)
+        // * a chan serve against a different key (should skip)
+        // * an unrelated process containing the key substring (no
+        //   ` serve ` ⇒ should skip)
+        // * a chan process without the ` serve ` token (should skip)
+        let ps = "  100 /Applications/Chan.app/Contents/MacOS/chan-desktop\n\
+                  200 /Applications/Chan.app/Contents/MacOS/chan serve /tmp/notes --host 127.0.0.1 --port 49991 --no-browser\n\
+                  300 /Applications/Chan.app/Contents/MacOS/chan serve /tmp/other --host 127.0.0.1 --port 49992 --no-browser\n\
+                  400 /usr/bin/grep -r foo /tmp/notes\n\
+                  500 /Applications/Chan.app/Contents/MacOS/chan add /tmp/notes\n";
+        // self_pid = 100 (chan-desktop) so it must be filtered out.
+        let pids = parse_ps_lines_for_chan_serve(ps, "/tmp/notes", 100);
+        assert_eq!(pids, vec![200]);
+    }
+
+    #[test]
+    fn parse_ps_lines_returns_empty_when_no_match() {
+        let ps = "  100 /Applications/Chan.app/Contents/MacOS/chan-desktop\n\
+                  300 /Applications/Chan.app/Contents/MacOS/chan serve /tmp/other --host 127.0.0.1 --port 49992\n";
+        assert!(parse_ps_lines_for_chan_serve(ps, "/tmp/notes", 100).is_empty());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn spawn_command_with_process_group_makes_child_group_leader() {
+        // `fullstack-b-22`: every `chan serve` is detached into its
+        // own process group so a stop signal can reach helper
+        // subprocesses chan may have spawned, not just the direct
+        // child. Validates the `process_group(0)` shape used in
+        // `start`. Spawning chan directly is heavy; we mirror the
+        // same `CommandExt` call against `sh -c sleep` so the
+        // assertion is cheap.
+        let child = Command::new("sh")
+            .args(["-c", "sleep 30"])
+            .process_group(0)
+            .spawn()
+            .expect("spawn sleep");
+        let pid = child.id() as i32;
+        let pgid = unsafe { nix::libc::getpgid(pid) };
+        stop_child(child, Instant::now() + Duration::from_secs(1));
+        assert_eq!(pid, pgid, "child should be its own process-group leader");
     }
 
     // `fullstack-b-7`: drive and tunnel webviews host the SPA, which

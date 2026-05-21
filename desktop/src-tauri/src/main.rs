@@ -52,6 +52,20 @@ pub struct AppState {
     pub live_window_zooms: Mutex<HashMap<String, f64>>,
 }
 
+/// Defense-in-depth sidecar reap: `RunEvent::Exit` is the primary
+/// teardown path, but a panic unwinding through `tauri::App` can
+/// bypass it entirely. Dropping the last `Arc<AppState>` (which
+/// includes panic unwind on the runtime, since chan-desktop builds
+/// with the default `unwind` panic strategy) signals every running
+/// chan serve via `serve::stop_all`. Idempotent: stop_all drains
+/// the serves map, so a normal-exit run followed by Drop is a
+/// no-op on the second pass.
+impl Drop for AppState {
+    fn drop(&mut self) {
+        serve::stop_all(self);
+    }
+}
+
 /// Frontend-visible verdict from the boot-time `chan` preflight.
 /// `kind` discriminates the error so the UI can choose copy:
 ///   * `"ok"`          — binary found, environment is fine.
@@ -329,6 +343,78 @@ fn set_drive_on(
         serve::stop(&state, &key);
     }
     Ok(())
+}
+
+/// `fullstack-b-22`: result returned by [`reclaim_drive_lock`].
+/// Frontend reads the fields to decide whether to show a success
+/// toast, a "killed but retry failed" warning, or a "no orphan
+/// found, you may need to `pkill chan`" surface.
+#[derive(Debug, Clone, Serialize)]
+struct ReclaimResult {
+    /// Pids that were signaled (SIGTERM, escalated to SIGKILL).
+    /// Empty when no orphan was found that matches the drive key.
+    killed_pids: Vec<u32>,
+    /// True when the retry `serve::start` after the kill succeeded
+    /// (chan serve handed off to the supervisor; the SPA will pick
+    /// up the URL via the usual `serves-changed` event).
+    retry_succeeded: bool,
+    /// Pre-formatted line for the frontend to render in a toast /
+    /// status message. Already contains drive key context.
+    message: String,
+}
+
+/// `fullstack-b-22`: minimum-viable lock-takeover for orphan
+/// `chan serve` sidecars. When chan-desktop is killed ungracefully
+/// (SIGKILL, panic that bypasses the unwind, OS reboot mid-run),
+/// the bundled chan children get reparented to PID 1 and continue
+/// holding the per-drive flock. A fresh chan-desktop launch sees
+/// `serve-failed` with `"drive is locked by another process"` in
+/// the stderr tail; the SPA then prompts the user and routes here
+/// to reclaim.
+///
+/// Skips elaborate detection heuristics per the task body's
+/// minimum-viable framing: any process whose argv contains `chan`,
+/// ` serve `, and the drive key is treated as a takeover
+/// candidate. The Reclaim button is the user's opt-in.
+#[tauri::command]
+fn reclaim_drive_lock(
+    app: tauri::AppHandle,
+    state: State<Arc<AppState>>,
+    path: String,
+) -> Result<ReclaimResult, String> {
+    let key = canonical_key(Path::new(&path));
+    let pids = serve::find_orphan_chan_serve_pids(&key)?;
+    if pids.is_empty() {
+        return Ok(ReclaimResult {
+            killed_pids: vec![],
+            retry_succeeded: false,
+            message: format!(
+                "No orphan `chan serve` process matched {key}. The drive lock may be \
+                 held by an unrelated process; manual `pkill chan` may be needed."
+            ),
+        });
+    }
+    for pid in &pids {
+        serve::kill_orphan_with_grace(*pid);
+    }
+    require_bin(&state.bin_status)?;
+    match serve::start(
+        app,
+        Arc::clone(&state),
+        key.clone(),
+        &serve::resolve_chan_binary()?,
+    ) {
+        Ok(()) => Ok(ReclaimResult {
+            killed_pids: pids,
+            retry_succeeded: true,
+            message: format!("Reclaimed {key} from orphan sidecar."),
+        }),
+        Err(e) => Ok(ReclaimResult {
+            killed_pids: pids,
+            retry_succeeded: false,
+            message: format!("Killed orphan sidecar(s) for {key} but the retry start failed: {e}"),
+        }),
+    }
 }
 
 #[tauri::command]
@@ -886,6 +972,7 @@ fn main() {
             add_drive,
             remove_drive,
             set_drive_on,
+            reclaim_drive_lock,
             get_config,
             home_dir,
             reveal_in_finder,
