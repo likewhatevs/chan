@@ -4150,3 +4150,88 @@ EXECUTE the deferral, not negotiate.
 | `alex/event-architect-ci.md` | ci-13 dispatch poke |
 | `alex/event-architect-systacean.md` | CANCEL the structural-fix routing |
 | `ci/ci-13.md` | NEW task (drop Windows from matrices) |
+
+## 2026-05-21 — clearance round 17 — three lanes commit-ready simultaneously
+
+### Three commit-readinesses cleared
+
+**`ci-13` (drop Windows from matrices)**: cleared. All 3
+minor questions answered:
+
+* (a) macOS-only matrix shape accepted (ubuntu + macOS;
+  10x macOS billing is worth the macOS-specific
+  coverage).
+* Authenticode reference dropped in release.yml header
+  (bundled; restored at Round-3+ Windows re-enable).
+* Linux description copy-edit (gnu vs musl-static
+  bundled fix).
+
+`ci-13-smoke` (`26253981385`) in flight at ~7m+.
+
+**`systacean-19` (C2 graceful BM25 fallback)**: cleared
++ smoke-branch authorized. 13 paths; +108/-6 facade.rs
+for the fallback path + one-shot warning; ALL 28 BGE
+`#[ignore]` reverts across the workspace (14 chan-drive
+lib + 5 integration + 9 chan-server). chan-server
+205/0/0 (was 196/9). Workspace gate green; web 658/658.
+Fresh `systacean-19-smoke` branch authorized (new
+lifecycle, distinct from the closed `-18-smoke` chain).
+
+**`fullstack-a-49` (graph layout filesystem-hierarchy
+backbone)**: cleared. Strategy (1) d3-force `forceY`
+per depth + parentX. forceLink unchanged; non-hierarchical
+tag/mention/language nodes float center-of-canvas.
+6 files.
+
+### Round-3 readiness signal redefined under Windows-deferral
+
+After all three land + smoke greens:
+
+* `ci-13`: Windows out of `ci.yml` + `release.yml`
+  matrices.
+* `-19`: 28 BGE `#[ignore]` gates reverted; chan-drive
+  + chan-server tests run end-to-end on default-build
+  CI runners.
+* `-a-49`: filesystem-hierarchy as graph backbone (G2
+  empirical delivery).
+
+Per-PR ci.yml gate is **STRUCTURALLY FULLY GREEN on
+Ubuntu + macOS** for the first time since ~2026-05-19.
+The Round-3 readiness signal applies under the new
+2-platform shape.
+
+### graph-overhaul-plan.md G2 framing — to update post-commit
+
+@@FullStackA's `-a-49` audit caught that the G2 framing
+in `architect/graph-overhaul-plan.md` was wrong (it
+assumed flat-edges data; reality is chan-server already
+emits hierarchical data, gap was SPA layout). I noted in
+the @@FullStackA channel that I'll update the plan
+doc post-`-a-49` commit. Don't want to thrash the doc
+in the middle of `-a-49` landing; small edit afterward.
+
+### Lane state at end of round
+
+| Lane | State |
+|------|-------|
+| @@CI | ci-13 cleared; expect commit + smoke green |
+| @@Systacean | -19 cleared; expect commit + smoke green |
+| @@FullStackA | -a-49 cleared; expect commit + -a-50 pickup |
+| @@FullStackB | DONE; idle |
+| @@WebtestA | Close-out marker committed; idle |
+| @@WebtestB | DONE; idle |
+
+Three substantial commits landing in parallel. After
+all three + their respective smokes, the gate-unblocker
+sweep + the Hybrid back-side correction wave + the
+graph G2 baseline are all empirically confirmed
+complete.
+
+### What I'm committing this round
+
+| File | Reason |
+|------|--------|
+| `architect/journal.md` | This entry |
+| `alex/event-architect-ci.md` | ci-13 commit clearance + 3 question answers |
+| `alex/event-architect-systacean.md` | -19 commit clearance + smoke-branch authorized |
+| `alex/event-architect-fullstack-a.md` | -a-49 commit clearance |

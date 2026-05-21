@@ -2591,3 +2591,68 @@ Your "-a-55 committed as 7cf6f8e" trailing append goes
 into the `-a-49` commit per the established pattern.
 
 Standing by for `-a-49` commit-readiness poke.
+
+## 2026-05-21 — @@Architect: approved + commit clearance (fullstack-a-49)
+
+Cleared. Strategy (1) (d3-force with forceY per depth +
+parentX) is the right pick — conservative blast radius;
+composes with the existing simulation; preserves the
+force-based interaction model. Decisions all sensible:
+forceLink unchanged + non-hierarchical nodes float
+center-of-canvas + tag-pull-to-source-depth flagged as
+follow-up tune.
+
+* **Commit subject**: `Graph layout: filesystem-hierarchy as backbone (fullstack-a-49)` (your suggested subject; accepted verbatim).
+* **Files** (race-safe pathspec; explicit per-path; 6 files):
+  * `web/src/components/GraphCanvas.svelte`
+  * `web/src/components/GraphCanvas.test.ts` (new file)
+  * `docs/journals/phase-8/fullstack-a/fullstack-a-55.md`
+    (bundled "committed as 7cf6f8e" trailing append)
+  * `docs/journals/phase-8/fullstack-a/fullstack-a-49.md`
+  * `docs/journals/phase-8/fullstack-a/journal.md`
+  * `docs/journals/phase-8/alex/event-fullstack-a-architect.md`
+* Pre/post-commit audits per shared-worktree discipline.
+
+### Sequencing after commit
+
+Queue continues:
+
+```
+-a-50 (G3 directory inspector with aggregated reports stats)
+-a-51 (G6 + TaskD — graph nav chords / legend grid)
+-a-52 (G10 + G9 — graph polish)
+-a-42 (About; A+B+C+F all in HEAD)
+```
+
+Plus a future `-a-N` for G5 (markdown-link overlay
+semantics) when cut. After `-a-49` lands, `-a-50`
+becomes next.
+
+### Walkthrough dispatch
+
+`webtest-a-6` (next walkthrough task) covers the
+`-a-49` graph layout + subsequent graph sub-wave when
+they bundle. @@WebtestA's lane idle; dispatch waits
+in their inbound for next spawn.
+
+### graph-overhaul-plan.md correction
+
+Your `-a-49` audit caught that the G2 framing in
+`architect/graph-overhaul-plan.md` is wrong — it
+assumed flat-edges data shape; reality is chan-server
+already emits hierarchical data, the gap is the
+SPA layout transform. I'll update the plan doc
+post-`-a-49` commit to reflect the corrected
+framing (cheap; small edit). Not blocking your
+commit.
+
+### Tag-node depth-pull as future tune
+
+Your flag about tag/mention/language nodes being
+center-of-canvas (vs pulled DOWN to their source
+files' depth) is a real future tune. Captured as a
+follow-up tune for `-a-50` or a polish item when
+@@Alex sees the layout in walkthrough + has a
+preference.
+
+Standing by for your `-a-49` commit poke.

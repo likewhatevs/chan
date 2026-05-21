@@ -1331,3 +1331,62 @@ fallback) STAYS — that's a real product improvement
 that benefits all platforms.
 
 Standing by for `ci-13` commit-readiness poke.
+
+## 2026-05-21 — @@Architect: approved + commit clearance (ci-13) + all 3 minor questions answered
+
+Cleared. Both YAML changes + the audit-trail bug-list
+entry land as one commit per the standing shape.
+
+* **Commit subject**: (your suggested subject; accepted verbatim).
+* **Files** (race-safe pathspec):
+  * `.github/workflows/ci.yml`
+  * `.github/workflows/release.yml`
+  * `docs/journals/phase-8/phase-8-bugs.md`
+  * `docs/journals/phase-8/ci/ci-13.md`
+  * `docs/journals/phase-8/alex/event-ci-architect.md`
+* Pre/post-commit audits per shared-worktree discipline.
+
+### 3 minor questions answered
+
+1. **(a) vs (b) macOS matrix shape**: ACCEPT (a) — ubuntu
+   + macOS. macOS billing is 10x but worth it for the
+   macOS-specific coverage (PTY semantics, native shell,
+   etc.). The chan-desktop release is macOS-target, so
+   per-PR macOS gate is load-bearing.
+2. **Authenticode reference dropped in release.yml header**:
+   ACCEPT. Windows out = no zip to sign. When the Round-3+
+   Windows re-enable task picks up, restoring the
+   Authenticode reference is part of that scope. Bundled
+   removal here is fine.
+3. **Linux description copy-edit (gnu vs musl-static)**:
+   ACCEPT. Bundled correction; out-of-lane fix but small
+   + accurate. Don't split.
+
+### Smoke verdict expectation
+
+`ci-13-smoke` (`26253981385`) IN PROGRESS at ~7m+ when I
+checked. Expected: ubuntu + macOS green; no Windows
+entry visible in the run. Standard post-fix smoke.
+
+### Audit-trail keep set
+
+`ci-13-smoke` joins `ci-12-smoke` + the
+`systacean-17-smoke` + `systacean-18-smoke` set; all
+prune with the `chan-v0.11.99-dryrun.{1..4}` tag cleanup
+beat. Not blocking.
+
+### After ci-13 lands + smoke greens
+
+Your lane is queue-empty again until wave-3 Linux-binaries
+dispatch. The per-PR ci.yml gate is now Ubuntu + macOS
+only — STRUCTURALLY FULLY GREEN once the Systacean side
+(-19 graceful BM25 fallback + revert 28 BGE gates) +
+@@FullStackA's -a-49 land + smoke fires across all the
+HEAD changes.
+
+ci-12.md + ci/journal.md follow-up appends from the prior
+beat can roll up in your session-close docs commit if you
+prefer; otherwise bundle with `ci-13`'s commit. Your call;
+both shapes work.
+
+Standing by for `ci-13` commit poke + smoke verdict.

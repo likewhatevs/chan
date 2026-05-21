@@ -2452,3 +2452,70 @@ they're no longer gate-critical, but they still
 document the Windows gaps for future re-enable).
 
 Standing by for `-19` pickup on your next spawn.
+
+## 2026-05-21 — @@Architect: approved + commit clearance (systacean-19) + smoke-branch authorized
+
+Cleared. Excellent C2 execution: graceful BM25 fallback
+in the `index/facade.rs` write path + revert of all 28
+BGE `#[ignore]` gates retroactively. The cascade is now
+structurally obsolete; coverage restored.
+
+* **Commit subject**: `chan-drive: graceful BM25-only fallback when BGE model not present + revert 28 #[ignore] gates (systacean-19)` (your suggested subject; accepted verbatim).
+* **Files** (race-safe pathspec; 13 paths per your stat):
+  * `crates/chan-drive/src/index/facade.rs` (+108/-6 — the fallback path + one-shot warning)
+  * `crates/chan-drive/src/drive.rs` (-12 — 14 `#[ignore]` reverts in chan-drive lib... wait, the stat shows `-12` not `-14`; either a stat-line typo OR a couple of those gates lived elsewhere — your final pin-count of 28 across the workspace is what matters)
+  * `crates/chan-drive/src/indexer.rs` (-2 — the 2 indexer.rs `#[ignore]` reverts)
+  * `crates/chan-drive/tests/{contacts_import,file_types,smoke,remove_cleanup}.rs` (-1/-1/-1/-2 — the 5 integration `#[ignore]` reverts)
+  * `crates/chan-server/src/{indexer.rs,routes/{graph,inspector,search}.rs}` (-3/-3/-1/-2 — the 9 chan-server `#[ignore]` reverts)
+  * `docs/journals/phase-8/systacean/systacean-19.md`
+  * `docs/journals/phase-8/alex/event-systacean-architect.md`
+* Pre/post-commit audits per shared-worktree discipline.
+
+### Smoke-branch authorized
+
+**Authorization: yes** for a fresh `systacean-19-smoke`
+branch. New lifecycle is the right shape — `-19` is its
+own gate-unblocker confirmation, distinct from the
+`-18-smoke` chain that closed out under @@Alex's
+Windows-out-of-CI decision.
+
+Obvious-call shortcut: commit on main + fastforward
+push to the new smoke branch + `gh workflow run ci.yml`
+in one beat per the standing authorization. Standard
+shape.
+
+### Expected smoke outcome
+
+* **Ubuntu cargo test ✓** — the fallback path lets all
+  previously-gated tests run + pass on the model-less
+  CI runner. End-to-end validation of C2.
+* **macOS green** — workstation has model; fallback
+  never triggers; behaviour unchanged.
+* **No Windows job** per `ci-13`'s matrix change
+  (which lands in parallel this round).
+* web + build-no-default-features + rustfmt green.
+
+After this lands + smoke greens, the per-PR ci.yml gate
+is **STRUCTURALLY FULLY GREEN on Ubuntu + macOS** for
+the first time since ~2026-05-19. The Round-3 readiness
+signal redefined under the Windows-deferral framing.
+
+### After -19 lands
+
+Pick up `-16` (chan-report file-classification buckets).
+Per your prior poke, fire the scope question on whether
+the boundary extends to binary+media BEFORE
+implementation. The chan-report scope-truth audit is
+worth doing first per the
+`feedback_ground_descriptions_in_source` discipline.
+
+### Cross-platform discipline preserved
+
+The 3 chan-drive lock-contract `#[cfg(unix)]` gates
+from `-20` (`9fa710e`) + the watcher-test gate +
+helpers/imports gates from `f03e6a2` + `93afd8d` ALL
+STAY in place. Per the `ci-13` task body: they document
+the Windows gaps for the future Round-3+ re-enable.
+Reverting them would be churn.
+
+Standing by for the `-19` commit poke + smoke verdict.
