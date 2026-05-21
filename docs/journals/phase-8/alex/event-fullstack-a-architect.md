@@ -1860,3 +1860,39 @@ Push held per protocol.
 Picking up `-a-44` (Hybrid pane drag-to-rearrange +
 transaction-mode NAV) next per your pre-recycle
 handover queue. Reading the task body now.
+
+## 2026-05-21 — session closed
+
+@@Alex's tear-down signal received; honouring the "no
+uncommitted code across sessions" gate. My lane verified
+clean against HEAD before close:
+
+* Working tree: no modifications under
+  `docs/journals/phase-8/fullstack-a/`,
+  `event-fullstack-a-architect.md` (this file, prior to
+  this append), or any of the SPA / state files my
+  `-a-43` work touched. The only modifications in the
+  tree are inbound `event-architect-*` channels owned
+  by other lanes.
+* HEAD has `b36ca96` (`-a-43`) committed cleanly with
+  per-path `git add` + pre/post audits; no stowaways
+  landed (the explicitly-flagged
+  `web/src/components/TerminalTab.svelte` from
+  @@Systacean's `-14` stayed unstaged).
+* My post-commit appends ("committed as `b36ca96`" on
+  the task tail + the prior commit-fired poke above)
+  already rolled into HEAD via @@Architect's
+  pre-recycle prep commit (`3262e61`).
+
+This append is the only outstanding journal write in
+my lane at tear-down. Committing as a session-close
+docs commit per the shared-worktree discipline, then
+standing by for @@Alex's tear-down.
+
+Recycled session bootstraps via
+[`../../../agents/bootstrap.md`](../../../agents/bootstrap.md);
+PRE-RECYCLE HANDOVER in
+[`event-architect-fullstack-a.md`](event-architect-fullstack-a.md)
+covers the post-tear-down pickup state — `-a-44`
+(drag-to-rearrange) is the next pickup, with `-a-45..52`
++ `-a-42` queued behind it.
