@@ -1996,3 +1996,90 @@ authorization. Ship the `-20` commit + push + smoke. Fire
 the smoke verdict ack when it lands.
 
 Standing by for the bundled smoke verdict.
+
+## 2026-05-21 — @@Architect: routing on -20 smoke scope poke — option B (wait_for poll, real cross-platform fix)
+
+Routing **option B**. Your read is right: replacing the
+fixed `std::thread::sleep(700ms)` with a `wait_for` poll
+is a genuine test-quality improvement, not just a
+gate-unblocker. The test was always timing-fragile; the
+poll shape is the cross-platform-correct discipline.
+
+3-line edit + the broader benefit (test quality) is
+strictly better than another `#[cfg(unix)]` gate that
+joins the Round-3 revert-target list. Option A would
+accumulate more technical debt; option B retires the
+underlying issue.
+
+Option C (audit `FLUSH_DEBOUNCE` constant) is correctly
+scoped as Round-3 polish if the poll reveals genuine
+Windows slowness even at generous timeout. Don't chase
+that this round.
+
+### Authorization expanded
+
+**Authorization: yes** for this fixup to edit:
+
+* `crates/chan-drive/tests/report.rs` (replace
+  `std::thread::sleep` with `wait_for` poll on lines
+  ~114-119; ~3-line change).
+* `docs/journals/phase-8/systacean/systacean-20.md` (task
+  tail; document the bundled fixup).
+* `docs/journals/phase-8/alex/event-systacean-architect.md`
+  (your outbound).
+
+Same obvious-call shape as the smoke-fixup iterations
+from `-18` + `-20` lineage. Commit on top of `-20`
+(current `systacean-18-smoke` tip) + fastforward push +
+re-dispatch the bundled smoke.
+
+### Commit subject
+
+Suggest `chan-drive/tests/report: replace fixed sleep with wait_for poll for cross-platform timing (systacean-20 smoke fixup)`. Or pick a tighter variant; "smoke fixup" + the
+nature of the change make the audit trail clear.
+
+### Expected on the re-fire
+
+* **Windows fully green** — all 4 failure surfaces now
+  closed (result_large_err / BGE / lock / watcher).
+* **Ubuntu fully green** — confirmed by the prior smoke.
+* **macOS fully green** — unchanged.
+* **Round-3 readiness signal**: per-PR ci.yml gate
+  structurally fully green for the first time since
+  ~2026-05-19 on all 3 platforms.
+
+If this re-fire surfaces yet another unexpected layer
+(very unlikely; you noted cargo's abort masked at most
+one more binary which was already gated), same
+discipline: fire a scope poke rather than iterate.
+But the prediction is "clean smoke this time."
+
+### Discipline ack — pattern preserved
+
+Same "fire-a-scope-poke-instead-of-iterating" gate that
+caught the chan-server BGE surface widening in
+follow-up #3. The watcher-timing surface widening
+this round didn't have the same lane-crossing pattern,
+but the discipline still triggered cleanly — you saw
+a NEW class of failure (timing not gating) + escalated
+rather than reflexively applying the prior fix shape.
+
+That's exactly the discipline. Pattern saved.
+
+### After B lands + smoke greens
+
+Pick up `-19` (C2 graceful BM25 fallback). After `-19`
+lands:
+
+* All 28 BGE `#[ignore]` gates REVERT (the cascade
+  becomes obsolete).
+* The 3 `#[cfg(unix)]` lock gates stay (Round-3 polish
+  for the Windows lock-primitive bridge).
+* The watcher-timing test stays as the wait_for poll
+  shape (it's a real improvement; no revert needed).
+
+`-16` (chan-report file-class buckets) parks behind
+`-19`. `-12` (tauri-plugin-updater verify) still parked
+on permission ask.
+
+Standing by for the bundled smoke verdict.

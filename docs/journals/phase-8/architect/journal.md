@@ -3381,3 +3381,247 @@ next spawn / poll.
 | `alex/event-architect-fullstack-a.md` | after-the-fact ack on -a-54 |
 | `alex/event-architect-webtest-a.md` | webtest-a-5 dispatch |
 | `webtest-a/webtest-a-5.md` | NEW task (bundled Hybrid back-side correction walkthrough) |
+
+## 2026-05-21 — clearance round 12 — -20 smoke scope poke routed (option B; real test-quality fix)
+
+### Bundled smoke verdict: one new Windows failure
+
+@@Systacean's bundled smoke `26247985860` completed
+FAILURE — but surfaced only ONE new Windows red, a
+4th separate class of failure parallel to the prior
+three:
+
+1. result_large_err (closed by `-17`).
+2. BGE-test panics (closed by `-18` + 4 follow-ups).
+3. Lock contract gap (closed by `-20`).
+4. **NEW: chan-drive watcher timing on Windows** —
+   `watcher_keeps_report_current` in
+   `chan-drive/tests/report.rs:119`.
+
+Root cause: test uses `std::thread::sleep(700ms)` for
+report-writer debounce; isn't enough on Windows where
+notify-crate timing differs from Unix
+`inotify`/`kqueue`.
+
+### Lane discipline carried forward
+
+@@Systacean correctly applied the "fire-a-scope-poke-
+instead-of-iterating" gate. They didn't reflexively
+apply the prior `#[cfg(unix)]` pattern to this 4th
+failure — recognized it was a different class (timing
+fragility, not platform-specific contract) + escalated
+for routing. Same discipline that caught the chan-server
+BGE widening in `-18` fu#3.
+
+### Three options laid out + routed (B)
+
+* **A**: `#[cfg(unix)]` mechanical gate (same as `-20`).
+* **B**: Replace fixed sleep with `wait_for` poll
+  (~3 lines; cross-platform-correct test discipline).
+* **C**: Root-cause `FLUSH_DEBOUNCE` constant audit.
+
+**Routed B.** Reasoning:
+
+* B is the GENUINE fix to a test that was always timing-
+  fragile. The poll-with-timeout shape is just better
+  test discipline; works correctly on all platforms.
+* A would accumulate another `#[cfg(unix)]` on the
+  Round-3 revert-target list. Each gate added is
+  technical debt.
+* C is out-of-scope; would become a Round-3 polish item
+  if the poll reveals deeper Windows-watcher slowness.
+
+@@Systacean's recommendation matched mine; obvious-call
+authorized. Same smoke-fixup shape as the prior
+iterations: commit on top of `-20` (current
+`systacean-18-smoke` tip) + fastforward push + re-fire.
+
+### After B lands + smoke greens
+
+If the re-fire goes fully green on all 3 platforms,
+that's the Round-3 readiness signal — per-PR ci.yml
+gate structurally fully green for the first time since
+~2026-05-19. Per @@Systacean's analysis ("cargo's abort
+masks at most one more test which is already gated"),
+the cascade is structurally exhausted; no more
+whack-a-mole expected.
+
+After that:
+
+* `systacean-19` (C2 graceful BM25 fallback) is the next
+  pickup. After C2 lands, the 28 BGE `#[ignore]` gates
+  REVERT — cascade becomes obsolete.
+* 3 `#[cfg(unix)]` lock gates from `-20` stay (Round-3
+  polish for Windows lock-primitive bridge).
+* The watcher-timing test stays as wait_for poll
+  (improvement, not gate — no revert needed).
+
+### Pattern observation: lane-scope-escalation has become a load-bearing discipline
+
+The "fire-a-scope-poke-instead-of-iterating" pattern
+has fired THREE times in this gate-unblocker sweep:
+
+1. @@FullStackB `-24` scope (10/11 lints in chan-server
+   not chan-desktop).
+2. @@Systacean `-18` fu#3 (BGE surface widening into
+   chan-server lib).
+3. @@Systacean `-20` smoke (NEW class of failure —
+   timing, not gating).
+
+Each time the lane caught a real structural insight
+@@Architect wouldn't have surfaced from line-number
+audits alone. The discipline prevents:
+
+* Architect-side categorical errors from compounding.
+* Lanes from blindly applying the wrong fix shape.
+* Wasted CI iteration time (each scope-poke beat saves
+  one or more wrong-shape commits + smoke runs).
+
+Saving as a process-discipline pattern in this journal
+(no new memory entry — it's already encoded in
+`feedback_ground_descriptions_in_source` rule applied
+in BOTH directions: architect-to-lane AND lane-to-
+architect feedback).
+
+### Lane state at end of round
+
+| Lane | State |
+|------|-------|
+| @@Systacean | Routed B for `-20` smoke fixup; expect commit + smoke + then `-19` pickup |
+| @@CI | Idle |
+| @@FullStackA | DONE; `-a-49` next on respawn |
+| @@FullStackB | DONE post `-24` |
+| @@WebtestA | webtest-a-5 dispatched; idle until next spawn |
+| @@WebtestB | DONE |
+
+### What I'm committing this round
+
+| File | Reason |
+|------|--------|
+| `architect/journal.md` | This entry |
+| `alex/event-architect-systacean.md` | -20 smoke scope poke routed option B + obvious-call authorization |
+
+## 2026-05-21 — -a-54 design-correction follow-up cut as -a-55 (architect-side misinterpretation; 2 corrections from @@Alex)
+
+@@Alex 2026-05-21 (chat, post `-a-54` ship at `714ec48`)
+flagged two corrections in two consecutive messages:
+
+1. **Family-name title in tab strip — REMOVE.**
+   Screenshot showed "HYBRID FILE BROWSER" appearing
+   in the tab strip alongside the mirrored tabs.
+   @@Alex: "i never asked for that.. we should keep
+   just the tabs there, flipped, no need to add that
+   extra label; i saw the same with terminal."
+2. **Tab alignment in flipped state — RIGHT.**
+   "when we flip, the tabs must be aligned to the
+   right.. not to the left, because we flipped."
+
+### Architect-side misinterpretation root cause
+
+My `-a-54` task body explicitly spec'd "Family-name
+title in tab area" with "shows INSIDE the tab area
+when flipped — does NOT add a new chrome row."
+@@FullStackA implemented faithfully per the spec.
+
+@@Alex's actual intent (clarified post-ship): "tab
+area" = back-side config view (NOT tab strip chrome).
+The `HybridXConfig.svelte` stubs from `-a-43` already
+carry the family-name title at the top of their config
+view content. No need to duplicate in chrome.
+
+My misread: I took "inside the tab area" as "in the
+tab strip area" — should have looked at the existing
+back-side config view stub (which already had the
+title) to disambiguate. The phrasing "like in the
+front pane" was a hint I missed — front pane doesn't
+have a family-name title in its chrome, so "like in
+the front pane" + a family-name title means the title
+lives in the CONTENT area, not the chrome.
+
+### Lesson logged
+
+When a design framing references "like X" or "the
+existing Y", READ the existing shape FIRST before
+specifying. The `feedback_ground_descriptions_in_source`
+memory rule applies to design framings too, not just
+crate capability descriptions. Same discipline:
+empirical reading over inferential interpretation.
+
+### -a-55 cut
+
+[`../fullstack-a/fullstack-a-55.md`](../fullstack-a/fullstack-a-55.md):
+
+* Remove family-name title from tab strip in flipped
+  state (`Pane.svelte` + supporting CSS).
+* Add right-alignment for tabs in flipped state
+  (`flex-direction: row-reverse` OR `justify-content:
+  flex-end` — implementer picks the cleaner composition
+  with the existing hamburger swap).
+* Update `Pane.test.ts` pins from `-a-54` (invert the
+  tab-area-title pin; keep mirrored-tab + hamburger-swap
+  + click-through pins).
+
+3-piece change; small commit. Inserts ahead of
+`-a-49..52` in @@FullStackA's queue to close the
+design-correction loop before graph overhaul.
+
+### round-2-plan + webtest-a-5 updated
+
+* `round-2-plan.md` §"Flip UX correction 2026-05-21"
+  updated: title lives INSIDE the back-side config
+  view (not tab strip chrome) + tab right-alignment
+  specification + architect-side misinterpretation note
+  pointing at `-a-55` as the corrective follow-up.
+* `webtest-a-5.md` `-a-54` walk section updated to
+  carry design-correction context — @@WebtestA grades
+  the current shipped state with awareness that `-a-55`
+  removes the tab-area title + right-aligns the tabs.
+  Don't grade the current state as a failure.
+
+### Pattern note: design-iteration via task chain
+
+The Hybrid back-side design has now had THREE
+correction cycles since the original `-a-43` shipped:
+
+1. `-a-53` (theme architecture correction) — Appearance
+   revert + per-Hybrid override.
+2. `-a-54` (flip UX redesign) — preserve tab strip,
+   mirror tabs, hamburger swap, family-name title.
+3. `-a-55` (this round) — remove the tab-strip
+   family-name title (`-a-54` misinterpretation) +
+   right-align tabs in flipped state.
+
+The chain works — each iteration captures a real
+design refinement from @@Alex; the append-only
+coordination shape preserves the audit trail without
+breaking landed work. Three follow-up tasks beats one
+big "redesign + iterate" surface.
+
+But the architect-side cost: each misinterpretation
+ships before @@Alex catches it post-walk. The
+prevention is empirical-reading-of-existing-state
+before specifying. Cost-of-not-doing-that: one
+follow-up task + one wave of WebtestA verdict
+re-interpretation. Acceptable but not free.
+
+### Lane state at end of round
+
+| Lane | State |
+|------|-------|
+| @@Systacean | `-20` smoke fixup option B routed; expect commit + smoke + then `-19` |
+| @@CI | Idle |
+| @@FullStackA | DONE on `-a-54`; `-a-55` cut ahead of `-a-49`; pickup on next spawn |
+| @@FullStackB | DONE post `-24` |
+| @@WebtestA | `webtest-a-5` dispatched (with design-correction context); idle until next spawn |
+| @@WebtestB | DONE |
+
+### What I'm committing this round (revised — bundling -a-55 cut + design corrections with prior systacean routing)
+
+| File | Reason |
+|------|--------|
+| `architect/journal.md` | This entry |
+| `architect/round-2-plan.md` | Flip UX correction section updated for back-side-config-view title placement + tab right-alignment + misinterpretation note |
+| `alex/event-architect-systacean.md` | -20 smoke scope poke routed option B (from earlier in the round) |
+| `alex/event-architect-fullstack-a.md` | -a-55 dispatch poke + lesson logged |
+| `webtest-a/webtest-a-5.md` | design-correction context appended to -a-54 walk section |
+| `fullstack-a/fullstack-a-55.md` | NEW task (tab-strip title removal + right-alignment) |

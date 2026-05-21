@@ -878,22 +878,38 @@ deltas:
   front-side position (e.g. right end of tab strip) to
   the OPPOSITE end (e.g. left end of tab strip) when
   flipped. Mirrors the "looking from behind" semantic.
-* **Title band INSIDE the tab area**: "Hybrid Terminal"
-  / "Hybrid Editor" / etc. shows inside the tab strip
-  region — does NOT add a new chrome row. Tab strip's
-  available space hosts both the mirrored tabs AND the
-  family-name title. Exact composition (title above
-  tabs? title in place of inactive tab text? title as
-  the bar background?) is the implementer's call.
+* **Title band INSIDE the BACK-SIDE CONFIG VIEW** (NOT
+  the tab strip chrome). The back-side config view
+  components (`HybridXConfig.svelte`) already display
+  the family-name title at the top of their content
+  per `-a-43`'s stub shape. NO additional title in the
+  tab strip itself — the mirrored tabs + the swapped
+  hamburger are the visual cues; the back-side config
+  view content is the contextual cue.
+* **Tab alignment in flipped state**: tabs aligned to
+  the **RIGHT** (not left). The mirrored semantic
+  reverses their collective flow — looking from behind,
+  tabs come from the right edge. Hamburger sits on the
+  LEFT (the swapped position from front-right).
 
 Rationale: keeping the tab strip + hamburger as anchors
 preserves the user's spatial model of "which pane is
 this" while signaling flip-state through the mirroring
-+ side-swap. The "Hybrid Terminal" title gives explicit
-confirmation of which surface's settings the back-side
-hosts.
++ side-swap. The back-side config view's own title
+identifies which surface's settings the back hosts; no
+duplication needed in chrome.
 
-Dispatched as **fullstack-a-54** below.
+**2026-05-21 correction** (post-`-a-54` ship): the
+"title band in tab strip" reading was an architect-side
+misinterpretation of @@Alex's "inside the tab area"
+framing. Actual intent: the back-side config view
+(which already had the title). `-a-54` shipped the
+misinterpretation; `-a-55` (below) corrects it (remove
+the tab-strip title + add right-alignment for tabs in
+flipped state).
+
+Dispatched as **fullstack-a-54** + correction
+**fullstack-a-55** below.
 
 #### Settings-overlay residue
 

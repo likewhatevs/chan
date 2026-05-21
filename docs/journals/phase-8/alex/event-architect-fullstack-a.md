@@ -2309,3 +2309,81 @@ the established `-3`/`-4` shape.
 
 Standing by. No action needed from your lane until next
 spawn / dispatch.
+
+## 2026-05-21 — poke (fullstack-a-55: -a-54 design-correction follow-up)
+
+@@Alex 2026-05-21 (chat, post-`-a-54` ship) flagged two
+corrections to the flip UX:
+
+1. "we print the element name in the tab area as well,
+   we shouldnt: [screenshot] ... we should keep just the
+   tabs there, flipped, no need to add that extra label;
+   i saw the same with terminal"
+2. "when we flip, the tabs must be aligned to the right..
+   not to the left, because we flipped"
+
+Both corrections trace to MY architect-side
+misinterpretation of @@Alex's original "inside the tab
+area" framing. I read it as "in the tab strip chrome";
+actual intent was "inside the back-side config view"
+(which already has the family-name title per `-a-43`'s
+stubs). My `-a-54` task body spec'd the misinterpretation
+explicitly — your implementation faithfully reflected it.
+Not your error.
+
+Cut [`../fullstack-a/fullstack-a-55.md`](../fullstack-a/fullstack-a-55.md)
+to correct the shipped `-a-54` state:
+
+* Remove the family-name title from the tab strip
+  (`Pane.svelte` + supporting CSS class).
+* Add right-alignment for tabs in flipped state
+  (`flex-direction: row-reverse` OR `justify-content:
+  flex-end` — whichever composes cleanest with the
+  existing hamburger swap).
+* Update `Pane.test.ts` pins to match (invert the
+  tab-area-title pin into a regression guard; keep the
+  mirrored-tab + hamburger-swap + click-through pins).
+
+3-piece change; should be a small commit. Pre-commit
+audit discipline as usual. Suggested subject:
+`Hybrid flip UX: remove tab-strip family-name title + right-align tabs (fullstack-a-55 -a-54 follow-up)` —
+or pick a tighter variant.
+
+### Round-2-plan + webtest-a-5 updated
+
+* `round-2-plan.md` §"Flip UX correction 2026-05-21"
+  updated: "Title band INSIDE the BACK-SIDE CONFIG VIEW
+  (NOT the tab strip chrome)" + tab-alignment-right
+  specification + architect-side misinterpretation note.
+* `webtest-a-5.md` `-a-54` walk section updated:
+  WebtestA grades the current `-a-54` state with
+  design-correction context (don't fail check #5 for
+  the tab-area title; both corrections fold into the
+  next walk via `-a-55`).
+
+### Revised queue
+
+```
+-a-55 (this task; -a-54 design-correction follow-up; short)
+-a-49..52 (graph overhaul first sub-wave)
+-a-42 (About)
+```
+
+`-a-55` inserts AHEAD of `-a-49..52` to close the
+design-correction loop before moving to graph work.
+
+### Architect-side lesson logged
+
+When a design framing references "like in the front
+pane" / "like the existing X", READ the existing shape
+FIRST before specifying. The "tab area" phrasing was
+ambiguous between "tab strip chrome" and "back-side
+config view"; I should have looked at the back-side
+config view stub (which already had the title) to
+disambiguate. Same discipline as the
+`feedback_ground_descriptions_in_source` memory rule
+applied to design framings, not just crate
+descriptions.
+
+Standing by for `-a-55` commit-readiness poke (whenever
+you next spawn).

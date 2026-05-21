@@ -138,6 +138,23 @@ single bundled verdict.
 
 ### `-a-54` — Flip UX redesign (6 checks)
 
+**DESIGN-CORRECTION CONTEXT 2026-05-21**: @@Alex
+clarified post-`-a-54` ship that the family-name title
+should NOT appear in the tab strip chrome — only the
+back-side config view (which already has it per
+`-a-43`'s stubs) carries the title. Plus: in flipped
+state, tabs should align RIGHT (not left), since flipped
+means "looking from behind." `-a-55` is the corrective
+follow-up (cut 2026-05-21; sits between this walk and
+the next wave).
+
+Walk the CURRENT state as below; grade checks #5 + #6
+with the design-correction context in mind (don't FAIL
+the walk for the family-name title's presence in the
+strip — `-a-55` will remove it; also expect tabs to
+align LEFT in this walk's snapshot since right-alignment
+hasn't landed yet).
+
 1. **Front state unchanged**: visual identity matches
    pre-`-a-54` (un-flipped panes look the same).
 2. **Flipped state — tab strip preserved**: same physical
@@ -149,15 +166,36 @@ single bundled verdict.
    the OPPOSITE end of the tab strip when flipped
    (e.g. front: right end → back: left end). Click
    functional + menu anchors correctly.
-5. **Flipped state — family-name title visible**:
+5. **Flipped state — family-name title visible
+   (CURRENT STATE; slated for REMOVAL via `-a-55`)**:
    "Hybrid Terminal" / "Hybrid Editor" / etc. shows
-   INSIDE the tab area (not a new chrome row). Should be
-   un-mirrored (front-readable per @@Alex's "like in the
-   front pane" framing).
-6. **Tab switching from back + family-name title swap**:
-   with a Hybrid flipped, click a mirrored tab. Active
-   tab swaps; family-name title updates to match the new
-   front-tab type; back-side config component swaps.
+   INSIDE the tab area. Capture as HOLD or PARTIAL +
+   note: "to be removed via `-a-55`; back-side config
+   view's own title is the canonical surface."
+6. **Tab switching from back**: with a Hybrid flipped,
+   click a mirrored tab. Active tab swaps; back-side
+   config component swaps. The family-name title in
+   the back-side CONFIG VIEW (NOT the tab strip's
+   title) updates to match — that's the canonical
+   indicator.
+
+### `-a-54` / `-a-55` — design-correction side observation
+
+Capture two side observations in the verdict tail (NOT
+failures, just design-history notes for the walk):
+
+* Tab-strip family-name title (check #5) is the
+  architect-side misinterpretation slated for removal
+  in `-a-55`.
+* Tab alignment in flipped state: currently LEFT-aligned
+  per `-a-54` ship; should be RIGHT-aligned per
+  @@Alex's "tabs aligned to the right.. because we
+  flipped" correction. `-a-55` includes the
+  right-alignment fix.
+
+Don't grade either as a failure; the architect-side
+misinterpretation produced `-a-54`'s current shape,
+and `-a-55` is the corrective follow-up.
 
 ### Walkthrough audit trail
 
