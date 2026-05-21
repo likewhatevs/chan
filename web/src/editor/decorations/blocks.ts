@@ -26,8 +26,11 @@
 //     by a `•` widget. Items that carry a TaskMarker keep their
 //     source marker so the checkbox handler stays in charge of the
 //     visual.
-//   - OrderedList: no marker replacement (numbers are content the
-//     user types); only the per-line indent decoration applies.
+//   - OrderedList: source markers stay as typed for portability;
+//     a Widget overlay replaces each rendered ListMark with the
+//     outline-style dotted chain (`1.`, `1.1.`, `1.1.1.`, ...) so
+//     nested numbering reads as an outline. Source-mode view +
+//     external markdown tools see the unmodified `1. / 1. / 1.`.
 //   - All three list kinds emit a `cm-md-list-line` line decoration
 //     on every line within their range so CSS can add the small
 //     left indent that signals "this is a list".
@@ -509,6 +512,98 @@ const handleBulletList: TokenHandler = (ctx) => {
   } while (cursor.nextSibling());
 };
 
+/// Outline-style dotted marker for nested ordered lists. The source
+/// markdown stays standard (each line typed by the user keeps its
+/// own `1.` / `2.` marker); only the displayed text is recomputed
+/// into a dotted chain (`1.`, `1.1.`, `1.1.1.`, ...). Source-mode
+/// view + GitHub / Obsidian export are unaffected.
+class OrderedMarkerWidget extends WidgetType {
+  constructor(private label: string) {
+    super();
+  }
+
+  eq(other: OrderedMarkerWidget): boolean {
+    return this.label === other.label;
+  }
+
+  toDOM(): HTMLElement {
+    const el = document.createElement("span");
+    el.className = "cm-md-ol-marker";
+    el.textContent = this.label;
+    return el;
+  }
+
+  ignoreEvent(): boolean {
+    return true;
+  }
+}
+
+function ancestorOrderedList(
+  node: import("@lezer/common").SyntaxNode,
+): boolean {
+  let cur = node.parent;
+  while (cur) {
+    if (cur.name === "OrderedList") return true;
+    cur = cur.parent;
+  }
+  return false;
+}
+
+/// Compose the dotted outline marker for an ordered-list item at
+/// `index` within the given ancestor `prefix` chain. Exposed so
+/// the format stays test-pinnable independent of the CM6 widget
+/// wiring.
+export function orderedMarkerLabel(
+  prefix: readonly number[],
+  index: number,
+): string {
+  return `${[...prefix, index].join(".")}.`;
+}
+
+/// Walk an OrderedList's direct ListItem children, decorate each
+/// ListMark with the dotted prefix, and recurse into nested
+/// OrderedLists. The recursion lives in this single walk (instead
+/// of relying on the per-node handler firing again for nested OLs)
+/// so the prefix chain stays accurate; we early-return from
+/// `handleOrderedList` for any OL nested inside another OL.
+function decorateOrderedList(
+  ctx: TokenContext,
+  ol: import("@lezer/common").SyntaxNode,
+  prefix: number[],
+): void {
+  const cursor = ol.cursor();
+  if (!cursor.firstChild()) return;
+  let index = 0;
+  do {
+    if (cursor.name !== "ListItem") continue;
+    index += 1;
+    const chain = [...prefix, index];
+    const label = orderedMarkerLabel(prefix, index);
+    const item = cursor.node;
+    const sub = item.cursor();
+    if (sub.firstChild()) {
+      do {
+        if (sub.name === "ListMark") {
+          ctx.push(
+            Decoration.replace({ widget: new OrderedMarkerWidget(label) }),
+            sub.from,
+            sub.to,
+          );
+          break;
+        }
+      } while (sub.nextSibling());
+    }
+    const childCursor = item.cursor();
+    if (childCursor.firstChild()) {
+      do {
+        if (childCursor.name === "OrderedList") {
+          decorateOrderedList(ctx, childCursor.node, chain);
+        }
+      } while (childCursor.nextSibling());
+    }
+  } while (cursor.nextSibling());
+}
+
 const handleOrderedList: TokenHandler = (ctx) => {
   const startLine = ctx.state.doc.lineAt(ctx.node.from).number;
   const endLine = ctx.state.doc.lineAt(
@@ -518,6 +613,10 @@ const handleOrderedList: TokenHandler = (ctx) => {
     const line = ctx.state.doc.line(n);
     ctx.push(listLineDecoration(line.text), line.from, line.from);
   }
+  // Skip the dotted-marker pass when this OrderedList is nested
+  // inside another OrderedList — the outer pass owns the chain.
+  if (ancestorOrderedList(ctx.node.node)) return;
+  decorateOrderedList(ctx, ctx.node.node, []);
 };
 
 const handleFrontmatter: TokenHandler = (ctx) => {

@@ -889,6 +889,16 @@
     color: var(--text-secondary, #888);
     font-weight: 700;
   }
+  /* Outline-style ordered-list marker that replaces the source
+     `1.` / `2.` text in the wysiwyg render. Inherits text colour
+     + font from the surrounding line so it sits with the rest
+     of the content; deeper labels (`1.1.1.`) expand naturally
+     since the widget is inline-flow text. Source-mode view
+     reads the unmodified markdown. */
+  :global(.md-wysiwyg-cm6 .cm-md-ol-marker) {
+    color: var(--text-secondary, #888);
+    font-variant-numeric: tabular-nums;
+  }
   /* Left indent and guides on every line of every list (bullet,
      ordered, task). Three-class chain matches the fence-row pattern
      so the rule beats CM6's `.cm-line` default cascade.

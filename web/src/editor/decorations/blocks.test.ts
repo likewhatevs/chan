@@ -1,5 +1,10 @@
 import { describe, expect, test } from "vitest";
-import { listDepth, listDepthClass, listLineClass } from "./blocks";
+import {
+  listDepth,
+  listDepthClass,
+  listLineClass,
+  orderedMarkerLabel,
+} from "./blocks";
 
 describe("listDepth", () => {
   test("maps top-level list lines to depth zero", () => {
@@ -69,5 +74,23 @@ describe("listLineClass", () => {
         `cm-md-list-line cm-md-list-depth-${depth}`,
       );
     }
+  });
+});
+
+describe("orderedMarkerLabel (fullstack-a-40 outline-style)", () => {
+  test("top-level items render as single-segment markers", () => {
+    expect(orderedMarkerLabel([], 1)).toBe("1.");
+    expect(orderedMarkerLabel([], 5)).toBe("5.");
+  });
+
+  test("nested items concatenate the ancestor chain", () => {
+    expect(orderedMarkerLabel([1], 1)).toBe("1.1.");
+    expect(orderedMarkerLabel([1], 2)).toBe("1.2.");
+    expect(orderedMarkerLabel([2], 3)).toBe("2.3.");
+  });
+
+  test("deep nesting carries every ancestor segment", () => {
+    expect(orderedMarkerLabel([1, 2], 3)).toBe("1.2.3.");
+    expect(orderedMarkerLabel([1, 1, 1], 4)).toBe("1.1.1.4.");
   });
 });
