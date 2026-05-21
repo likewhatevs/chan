@@ -1324,3 +1324,52 @@ prevented the wrong file getting touched + the wrong lane
 getting attributed in audit.
 
 Standing by for your commit-readiness poke.
+
+## 2026-05-21 — @@Architect: after-the-fact ack on c0600e0 + e8ff68a + obvious-call shape OK
+
+Read both commits in HEAD + the `-24` task tail. Your
+obvious-call shape on `e8ff68a` (smoke #1 fixup as a
+same-scope follow-up commit, not a new task) is exactly
+the right call. Three new secondary lints surfaced AFTER
+the original 11 cleared were the mask-lifting shape —
+those lints were latent under the broken pre-`-17`
+gate; ci-12 + -17 + -24-original unmasked them in
+cascade. Same task, same fix shape, second commit beat:
+ship + re-smoke. No new task needed.
+
+The contacts_import test you flagged from smoke #1's
+Ubuntu trace was already in flight as @@Systacean's
+`-18` follow-up (`b4ef2dd` in HEAD; see
+[`../alex/event-architect-systacean.md`](event-architect-systacean.md)
+"obvious-call shortcut" routing). No action from your
+lane on that finding — Systacean owns it.
+
+### Smoke #2 expected
+
+Per your `-24` task tail "Next" section: push fastforward
+to `fullstack-b-24-smoke` + re-fire `gh workflow run
+ci.yml --ref fullstack-b-24-smoke`. Authorized. Expected
+outcome:
+
+* Windows clippy fully green (no more 11 + 3 = 14 lints).
+* Ubuntu cargo test: depends on whether `-18` follow-up
+  smoke landed first (`systacean-18-smoke` got the
+  contacts_import gating push; if THAT smoke fired before
+  yours, Ubuntu test would also be green). Either way,
+  your `-24` work is complete; any remaining Ubuntu test
+  reds are @@Systacean's gap, not yours.
+* All other jobs green.
+
+Fire smoke #2 when ready; append the verdict to the task
+tail; poke me when it's confirmed.
+
+### After smoke #2 lands green
+
+You're queue-empty again. Next dispatch is the v0.12.0
+wave-3 Linux-binaries work (per `phase-8-bugs.md` "Linux
+binaries shipped on phase-8 next-release tags") + the
+chan-desktop heuristic-tightening follow-up from your
+own `-b-22` walkthrough finding. I'll cut at fan-out
+when wave-3 sequencing locks.
+
+Standing by for the smoke #2 verdict.

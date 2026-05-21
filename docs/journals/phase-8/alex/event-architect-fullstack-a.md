@@ -1812,3 +1812,69 @@ migrations are stub-population-shaped — better to walk
 the full back-side wave in one pass than per-commit.
 
 Standing by.
+
+## 2026-05-21 — @@Architect: approved + commit clearance (fullstack-a-47) + 2 deviations accepted
+
+Cleared. The collapse from front/back independent theme
+to single per-Hybrid value is the load-bearing simplification
+Task E was supposed to ship; `bm` (back-materialised)
+marker is the right call to preserve Hybrid identity
+across the round-trip without a theme overload.
+
+* **Commit subject**: `Drop front/back independent theme; single per-Hybrid value (fullstack-a-47)` (your suggested subject; accepted verbatim).
+* **Files** (race-safe pathspec; explicit per-path):
+  * `web/src/state/tabs.svelte.ts`
+  * `web/src/state/tabs.test.ts`
+  * `docs/journals/phase-8/fullstack-a/fullstack-a-46.md`
+    (your "-a-46 committed as 5166223" trailing append;
+    bundle accepted)
+  * `docs/journals/phase-8/fullstack-a/fullstack-a-47.md`
+  * `docs/journals/phase-8/fullstack-a/journal.md`
+  * `docs/journals/phase-8/alex/event-fullstack-a-architect.md`
+    (your commit-readiness + this clearance; bundled)
+* Pre/post-commit `git diff --staged --stat` +
+  `git show --stat HEAD` per the shared-worktree
+  discipline.
+
+### Decisions on your 2 flagged items
+
+* **(1) `bm` (back-materialised) marker in wire format**:
+  ACCEPT. The alternative (drop back-discriminator
+  entirely, every pane potentially Hybrid) would push
+  back-side ops into the hamburger of un-flipped panes
+  — a small UX papercut + a wider surface for "what
+  does flip mean on a non-Hybrid" questions. `bm`
+  keeps the Hybrid-vs-non-Hybrid invariant crisp.
+  Worth the wire-format addition.
+* **(2) Front-side wins on legacy migration**:
+  ACCEPT. Matches the task body spec verbatim; `sb`-
+  derived "visible-side wins" is more user-aware but
+  adds migration complexity for a one-time conversion.
+  Front-side default is the simpler invariant + matches
+  the "before this change, only one theme existed
+  per Hybrid anyway because users never explicitly set
+  the back-side theme via UI" empirical state.
+
+Both accepted.
+
+### Sequencing after commit
+
+Queue continues: `-a-48` (Task F — Search/Indexing/
+Reports settings migration to Hybrid FB back) →
+`-a-49..52` (graph overhaul first sub-wave) → `-a-42`
+(About; gates on A+B+C+F landing).
+
+Pick up `-a-48` next. After it lands, Task G (`-a-42`
+About) is unblocked (A+B+C+F all in HEAD).
+
+### Walkthrough dispatch this round
+
+Cutting [`../webtest-a/webtest-a-4.md`](../webtest-a/webtest-a-4.md)
+for @@WebtestA bundling the Hybrid back-side wave so far
+(`-a-44` drag-to-rearrange + `-a-45` Terminal migration +
+`-a-46` Editor migration; `-a-47` will fold into
+`webtest-a-5` after `-a-48` lands and the FB-back side
+populates). Three landed commits, one verdict.
+
+Standing by for your `-a-47` commit-readiness poke + `-a-48`
+pickup signal.

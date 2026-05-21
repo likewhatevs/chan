@@ -2401,3 +2401,132 @@ NOT touching (other agents' own files):
   `systacean-15.md`, `systacean-17.md`,
   `systacean-18.md`, `fullstack-a-45.md`,
   `fullstack-a-46.md`, `fullstack-a/journal.md`).
+
+## 2026-05-21 — clearance round 5 — four lanes all needed something + webtest-a-4 dispatched
+
+### Three lane commits landed this beat
+
+| SHA | Subject | Lane |
+|-----|---------|------|
+| `b4ef2dd` | `chan-drive/tests/contacts_import: gate removing_contact_frontmatter test behind #[ignore] (systacean-18 follow-up)` | @@Systacean |
+| `5166223` | `Migrate Editor Settings to Hybrid Editor back-side (fullstack-a-46)` | @@FullStackA |
+| `e8ff68a` | `chan-server + chan-desktop: smoke #1 fixup — gate orphaned Unix-only imports + parse_ps helper on Windows (fullstack-b-24)` | @@FullStackB |
+
+Plus my `319b45e` (terminal-line xterm.js#2409 bug
+annotation). 5 commits since clearance round 4.
+
+### Four lanes had asks at this beat
+
+@@Alex flagged "they seem to be all waiting on you now."
+Surface sweep confirmed:
+
+* **@@FullStackA**: `-a-47` (drop front/back independent
+  theme) ready for review with 2 flagged deviations (`bm`
+  back-materialised marker; front-side-wins on legacy
+  migration). Both accepted; cleared.
+* **@@FullStackB**: `c0600e0` + `e8ff68a` smoke #1
+  fixup landed without a separate clearance ask — they
+  took the obvious-call shape (same task scope; commit
+  + re-smoke in one beat). After-the-fact ack issued;
+  shape was right. Smoke #2 expected to confirm Windows
+  clippy green.
+* **@@Systacean**: `b4ef2dd` (`-18` follow-up) landed
+  per the obvious-call shortcut I'd authorized; their
+  channel hadn't been updated post-commit. After-the-
+  fact ack issued; `-16` (file-class buckets) greenlit
+  as next pickup.
+* **@@WebtestA**: standing by for next walkthrough.
+  Three commits accumulated since `-3` verdict
+  (`-a-44` drag, `-a-45` Terminal mig, `-a-46` Editor
+  mig) — exactly the "logical grouping" trigger I'd
+  set for the next bundled walk.
+
+### webtest-a-4 cut
+
+[`../webtest-a/webtest-a-4.md`](../webtest-a/webtest-a-4.md)
+bundles all three slices with 6 acceptance checks each.
+Single bundled verdict commit; standing perm covers it;
+`-a-47` folds into `webtest-a-5` alongside `-a-48`
+(FB-back Search/Indexing/Reports migration) when both
+land.
+
+The bundling shape is the right grain — per-commit
+walkthrough would 3x the audit surface for the same
+coverage; the migrations are mechanical UX moves
+(Settings → Hybrid back-side) so the walk grades each
+slice quickly.
+
+### @@WebtestB: nothing actionable this round
+
+Their lane is idle by design — current Round-2 wave-3
+in-flight work is all SPA / chan-server / chan-drive /
+chan-desktop-declaration scope. No runtime behavioural
+shift requiring chan-desktop walkthroughs. Routed an
+"ack standby" with a proactive-coverage-walks
+suggestion: walk HEAD chan-desktop runtime on a
+throwaway drive to confirm `-b-22` orphan-sidecar reap
++ drive-lock-takeover UX still holds post-`-24`
+`#[cfg(unix)]` gating. NOT a dispatch — opt-in idle
+fill via the `feedback_proactive_walks` memory.
+
+### @@CI: idle is fine; v0.12.0 Linux-binaries is the next dispatch
+
+Not cutting it now — gate-unblocker work is still
+landing. Once `-18` follow-up smoke + `-24` smoke #2
+both confirm green, the per-PR ci.yml gate is
+structurally fully-green; THAT is when wave-3 Linux
+fan-out makes sense.
+
+### Smoke-branch state on origin
+
+Four smoke branches now:
+
+* `ci-12-smoke` (idle; original gate fix)
+* `systacean-17-smoke` (idle; Windows result_large_err)
+* `systacean-18-smoke` (in flight on smoke #2 after
+  `b4ef2dd` append push)
+* `fullstack-b-24-smoke` (in flight on smoke #2 after
+  `e8ff68a` fastforward push)
+
+All four prune with the `chan-v0.11.99-dryrun.{1..4}`
+tag cleanup beat. No action needed until then.
+
+### Pattern: obvious-call shape across lanes
+
+Both @@Systacean (`-18` follow-up) AND @@FullStackB
+(smoke #1 fixup as `e8ff68a`) took the same shape: a
+same-task-scope follow-up commit without a separate
+clearance round. That's the discipline I want — the
+ask is "does my next obvious-call commit count as a
+new task or a follow-up to the current task?" — and
+the answer is "follow-up if scope unchanged + work is
+reactive to the same trigger." Both lanes' read was
+correct.
+
+The architect-side cost: I have to maintain awareness
+of which lane is in flight + ack after-the-fact. That's
+fine — auditing HEAD per-commit was already part of
+the beat-sweep discipline.
+
+### Lane state at end of round
+
+| Lane | State |
+|------|-------|
+| @@Systacean | `-18` follow-up committed (`b4ef2dd`); after-the-fact ack issued; `-16` greenlit; expect commit-readiness OR smoke #2 verdict |
+| @@CI | Idle; queue-empty until wave-3 Linux-binaries (lands when full gate-green confirms) |
+| @@FullStackA | `-a-47` cleared; expect commit + `-a-48` pickup (Task F — Search/Indexing/Reports migration) |
+| @@FullStackB | `c0600e0` + `e8ff68a` committed; smoke #2 in flight; expect verdict report + then queue-empty until wave-3 Linux dispatch |
+| @@WebtestA | `webtest-a-4` dispatched (bundled walk); pickup imminent |
+| @@WebtestB | Ack-standby issued; opt-in proactive coverage walk suggested; otherwise idle |
+
+### What I'm committing this round
+
+| File | Reason |
+|------|--------|
+| `architect/journal.md` | This entry |
+| `alex/event-architect-fullstack-a.md` | -a-47 clearance + 2 deviations accepted |
+| `alex/event-architect-fullstack-b.md` | after-the-fact ack on c0600e0 + e8ff68a |
+| `alex/event-architect-systacean.md` | after-the-fact ack on b4ef2dd + -16 greenlit |
+| `alex/event-architect-webtest-a.md` | webtest-a-4 dispatch |
+| `alex/event-architect-webtest-b.md` | ack-standby + proactive-walks suggestion |
+| `webtest-a/webtest-a-4.md` | NEW task (bundled walkthrough) |

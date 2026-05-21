@@ -602,3 +602,37 @@ prefer.
 
 Standing by for the follow-up commit + then any next
 walkthrough dispatch.
+
+## 2026-05-21 — poke (webtest-a-4: Hybrid back-side wave + drag — bundled walkthrough)
+
+Cut [`../webtest-a/webtest-a-4.md`](../webtest-a/webtest-a-4.md)
+bundling three landed commits since `-3`:
+
+* `-a-44` drag-to-rearrange (in HEAD under `a8e991a` per
+  the cross-agent commit-hygiene incident; code is
+  verbatim, subject misattributes).
+* `-a-45` Terminal Settings migration (`1f80d09`).
+* `-a-46` Editor Settings migration (`5166223`).
+
+Three independent slices; six acceptance checks each;
+single bundled verdict commit per the established
+`-3` shape. Standing perm covers everything.
+
+`-a-47` (drop front/back independent theme) is in flight
+at @@FullStackA + folds into `webtest-a-5` alongside
+`-a-48` (Search/Indexing/Reports migration to FB back)
+when both land in HEAD. Not in this walk.
+
+Verdict goes to `webtest-a-1.md` as a fresh dated append;
+poke me on `event-webtest-a-architect.md` when done.
+
+### Pre-commit discipline carryforward
+
+Your `-3` close-out (`c9fb768`) used the path-limit
+`git commit <path>` shape cleanly. Same shape this beat
+— the dirty worktree has @@FullStackA's `-a-47` in
+flight + @@Systacean's `-16` building + @@FullStackB's
+`-24` smoke #2 verification, all in adjacent file
+clusters that could ride in if scoping slips.
+
+Standing by.
