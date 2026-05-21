@@ -357,6 +357,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "requires BGE-small embedding model on disk; run with `cargo test -- --ignored` on a workstation with the model cached (see systacean-18)"]
     fn writes_to_disk_get_indexed_after_debounce() {
         let (_cfg, drive_dir, drive) = setup_drive();
         let indexer = GraphIndexer::start_on(Arc::clone(&drive), DEBOUNCE_TEST_MS).unwrap();
@@ -422,6 +423,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "requires BGE-small embedding model on disk; run with `cargo test -- --ignored` on a workstation with the model cached (see systacean-18)"]
     fn debounce_coalesces_rapid_writes_into_one_index() {
         // Multiple Modified events on the same path inside the
         // debounce window must collapse into a single index_file.

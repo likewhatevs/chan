@@ -1029,3 +1029,120 @@ Picking up `systacean-18` (chan-drive tests skip / feature-gate on missing BGE m
 ### `-16` + `-12` standing
 
 `-16` (file-classification buckets) still queued behind `-18` per the revised order. `-12` (tauri-plugin-updater verify) still parked on a fresh runtime-permission ask to @@Alex.
+
+## 2026-05-21 — poke (-17 committed + smoke PASS; -18 next + Windows dead_code follow-up flag)
+
+`-17` committed as `663ab26`; smoke dispatch landed; **`result_large_err` cleared on Windows**.
+
+### Empirical verdict — `-17` PASS
+
+Smoke run [`26235956637`](https://github.com/fiorix/chan/actions/runs/26235956637) (10m wall-clock):
+
+* **Windows clippy**: reached the clippy step; reds on 11 `dead_code` lints (chan-desktop IPC code: `path_to_posix`, `abs_to_drive_rel`, `parent_rel`, `open_path`, `handle_request`, `WindowCommandFrame`, `is_false`, `WindowCommand`, `ControlResponse`, `ControlRequest`, `exit_signal`). **NO `result_large_err`**. Boxing fix worked as predicted.
+* **Ubuntu clippy**: PASS. Test step failed on the exact 14 BGE-model tests `-18` targets (pre-existing, not regression).
+* **build (no default features)**: 7m37s green. The `c1e9c41` (`-s-8` follow-up) discipline still holds.
+* **rustfmt**: 22s green.
+* **web**: 2m19s green.
+
+Per the `-17` task acceptance criterion ("`test (windows-latest)` reaches the clippy step and either passes OR reds on something OTHER than `result_large_err`"), the verification PASSES. No escalation to shape (b) (`Box<ConfigError>` at call sites) needed.
+
+### Out-of-scope finding: 11 Windows-only dead_code lints in chan-desktop IPC
+
+The Windows clippy reds are all in `desktop/src-tauri/src/` IPC types/functions. They're declared at module scope but only consumed inside `#[cfg(target_os = "macos")]` / `#[cfg(target_os = "linux")]` branches; the Windows compile path keeps the declarations alive without callers, tripping `dead_code`.
+
+Lint list:
+
+```
+function path_to_posix is never used
+function abs_to_drive_rel is never used
+function parent_rel is never used
+function open_path is never used
+function handle_request is never used
+struct WindowCommandFrame is never constructed
+function is_false is never used
+enum WindowCommand is never used
+enum ControlResponse is never used
+enum ControlRequest is never used
+unused variable: exit_signal
+```
+
+NOT in `-17`'s scope (chan-drive lane). Flagging for architect routing — likely a `desktop-N` task or fold into `@@FullStackB`'s Windows polish queue when one opens. After `-18` lands + the CI gate fully greens (sans these Windows reds), they're the next gate-unblocker for the Windows runner.
+
+### Branch handling
+
+Per your "audit-trail-keep set" note, `systacean-17-smoke` joins `ci-12-smoke` for the keep list; both prune with the `chan-v0.11.99-dryrun.{1..4}` tag cleanup beat.
+
+### Picking up `-18` now
+
+Empirical test list from the Ubuntu run aligns with the `-18` task body (14 tests across drive.rs + indexer.rs). Implementation underway:
+
+* **Gating shape**: leaning toward `#[ignore = "..."]` (a1) over `#[cfg(feature = "embed-model")]` (a2). chan-drive's `Cargo.toml` doesn't declare `embed-model` (that feature lives in chan-server). Adding a dummy flag to chan-drive purely for test gating would conflate semantics. Per the task body's "If (a2) introduces awkward `#[cfg]` boilerplate, fall back to (a1)" guidance, (a1) is the cleaner shape here. Will document the reasoning in the commit-readiness append.
+* **Targeted test set** (empirical from smoke run):
+  * drive.rs (12): `link_targets_finds_file_after_index`, `index_file_stamps_pre_read_stat_so_concurrent_writes_stay_visible`, `pending_writes_journal_handles_forget_op`, `pending_writes_journal_is_empty_on_a_clean_path`, `pending_writes_journal_replay_converges_after_simulated_crash`, `pending_writes_replay_degrades_index_op_to_forget_when_file_is_gone`, `reconcile_catches_same_mtime_different_size_rewrite`, `reconcile_on_empty_graph_indexes_everything_like_a_fresh_reindex`, `reconcile_picks_up_files_added_offline`, `reconcile_picks_up_modified_files`, `resolve_link_returns_contact_kind_for_contact_node`, `resolve_link_returns_file_kind_for_plain_note`.
+  * indexer.rs (2): `debounce_coalesces_rapid_writes_into_one_index`, `writes_to_disk_get_indexed_after_debounce`.
+* **CI smoke after commit**: same shape as `-17` — push to `systacean-18-smoke` + `gh workflow run ci.yml`. Pre-flag here for consistency.
+
+Standing by for the architect's audit ack on `-17`'s smoke verdict. `-18` implementation proceeds in parallel; readiness poke fires when the gate is locally green.
+
+## 2026-05-21 — poke (-18 ready for review; (a1) #[ignore] over (a2) #[cfg])
+
+`-18` desk implementation complete; local pre-push gate green. Holding for commit clearance + smoke-dispatch decision.
+
+### Gating shape: (a1) `#[ignore]` — rationale
+
+Chose shape **(a1)** `#[ignore = "..."]` over architect's preferred (a2) `#[cfg(feature = "embed-model")]`. Decision rationale:
+
+* **chan-drive's `Cargo.toml` does NOT declare `embed-model`**. That feature lives in chan-server (controls rust-embed of the BGE bytes; my `systacean-6` work). chan-drive's features: `default = ["embeddings"]`, plus `metal` / `cuda`.
+* To use (a2) I'd add a no-op `embed-model` feature flag to `chan-drive/Cargo.toml` purely for test gating. The flag carries no actual code (no deps, no `#[cfg]` branches outside tests).
+* Architect's task body explicitly allows the fallback: "If (a2) introduces awkward `#[cfg]` boilerplate at module scope (helper functions used by both gated and ungated tests), fall back to (a1) `#[ignore]`."
+* (a1) avoids the dummy-feature confusion. Tests stay discoverable ("16 ignored"); `-- --ignored` is the standard Rust opt-in; the skip reason explains the model dependency.
+
+Flag if you want me to switch to (a2) anyway — the dummy-feature path is a 5-min edit. (a1) is what landed.
+
+### Empirical test list (from smoke run 26235956637 Ubuntu panic trace)
+
+drive.rs (12): `link_targets_finds_file_after_index`, `index_file_stamps_pre_read_stat_so_concurrent_writes_stay_visible`, `pending_writes_journal_handles_forget_op`, `pending_writes_journal_is_empty_on_a_clean_path`, `pending_writes_journal_replay_converges_after_simulated_crash`, `pending_writes_replay_degrades_index_op_to_forget_when_file_is_gone`, `reconcile_catches_same_mtime_different_size_rewrite`, `reconcile_on_empty_graph_indexes_everything_like_a_fresh_reindex`, `reconcile_picks_up_files_added_offline`, `reconcile_picks_up_modified_files`, `resolve_link_returns_contact_kind_for_contact_node`, `resolve_link_returns_file_kind_for_plain_note`.
+
+indexer.rs (2): `debounce_coalesces_rapid_writes_into_one_index`, `writes_to_disk_get_indexed_after_debounce`.
+
+Total: 14. Slight delta from your line-number callout: three architect-listed tests (`reindex_consumes_pending_rename_log_after_reopen`, `stat_uses_lstat_for_symlinks`, `resolve_link_path_escape_rejected`) weren't in the empirical panic list, so NOT gated. Three other tests (`link_targets_finds_file_after_index`, `resolve_link_returns_file_kind_for_plain_note`, `pending_writes_journal_is_empty_on_a_clean_path`) WERE in the panic list but weren't in the line-number callout; gated per empirical evidence.
+
+### Local verification
+
+* `cargo test -p chan-drive`: `411 passed; 0 failed; 16 ignored` (was `425 passed; 2 ignored` pre-gating — 425-14=411; 2+14=16).
+* `cargo test -p chan-drive -- --ignored` on this workstation (BGE-small cached at `~/.cache/chan/models/...`): all 16 pass; no skips. Total = 411 + 16 = 427 either way; **no coverage loss**.
+* Workspace tests: chan-server 205, chan-report 20, chan-llm 29, all others green.
+* `RUSTFLAGS="-D warnings" cargo build --no-default-features`: green.
+* `cd web && npm run check`: 0e/0w/3987. `npm test -- --run`: 600/600. (Web grew by 12 tests since `-15`; not my doing — concurrent agent landings.)
+
+### Files
+
+```
+crates/chan-drive/src/drive.rs                      | +12 / 0
+crates/chan-drive/src/indexer.rs                    | +2  / 0
+docs/journals/phase-8/systacean/systacean-18.md     | (task tail append)
+docs/journals/phase-8/alex/event-systacean-architect.md  | (this poke)
+```
+
+4 paths for the commit; foreign files in the dirty tree stay un-staged per shared-worktree discipline.
+
+### Suggested commit subject
+
+```
+chan-drive: gate 14 model-dependent tests behind #[ignore] (systacean-18)
+```
+
+### Smoke-dispatch ask
+
+Same shape as `-17`: push to `systacean-18-smoke` branch + `gh workflow run ci.yml`. Expected outcome:
+* Ubuntu `cargo test --all-targets` PASSES (14 BGE tests skipped instead of panicking).
+* Windows clippy STILL reds on the chan-desktop dead_code lints (out of scope per `-17` smoke report).
+* All other jobs green.
+
+Go ahead and authorize the smoke branch (like `-17`)? Or fold into the regular push at next main-push pass? Either works; same trade-off as `-17` (smoke gives empirical confirmation; fold avoids a branch lifecycle).
+
+### Round-3 (b) follow-up
+
+Task's "Optional follow-up note": shape (b) deterministic-fixture / mock-embedder is Round-3 cleanup territory. With (b), the affected tests could exercise chunking + embedding-orchestration without the real BGE model on disk. Out of scope here; flagged so you can route to a future Round-3 task when one opens.
+
+Holding.

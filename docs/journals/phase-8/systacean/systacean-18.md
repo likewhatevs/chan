@@ -187,3 +187,195 @@ the first time since ~2026-05-19.
 * Auditing OTHER test failures on CI beyond the 14
   model-dependent ones. If you spot adjacent issues,
   surface as separate tasks or bug-list entries.
+
+## 2026-05-21 — implementation + commit readiness
+
+Implemented shape (a1) `#[ignore = "..."]` per the
+empirical test list surfaced by `systacean-17-smoke` run
+[`26235956637`](https://github.com/fiorix/chan/actions/runs/26235956637).
+14 tests gated; 14 lines added across 2 files.
+
+### Why (a1) over (a2)
+
+Architect's preferred shape was (a2) `#[cfg(feature =
+"embed-model")]`. Audited the chan-drive `Cargo.toml`
+features: `default = ["embeddings"]`, plus `metal` /
+`cuda` GPU backends. **chan-drive does NOT declare
+`embed-model`**; that feature lives in chan-server
+(controls whether the BGE-small bytes are rust-embedded
+into the binary).
+
+To use (a2) I would have had to:
+1. Add a dummy `embed-model` feature to
+   `crates/chan-drive/Cargo.toml` with no deps.
+2. Gate 14 tests on that feature.
+
+The dummy feature would carry no actual code (no deps,
+no `#[cfg]` branches outside tests), making it a
+test-only flag that re-uses the `embed-model` name for a
+semantically different purpose. The architect's task body
+explicitly anticipated this case: "If (a2) introduces
+awkward `#[cfg]` boilerplate at module scope (helper
+functions used by both gated and ungated tests), fall
+back to (a1) `#[ignore]`."
+
+(a1) `#[ignore]` is:
+* No `Cargo.toml` changes.
+* Tests stay discoverable via the standard `cargo test`
+  output ("16 ignored").
+* Opt-in via the standard `cargo test -- --ignored` flag.
+* Skip reason carried in the attribute string so the
+  user reads "requires BGE-small embedding model" in the
+  test output.
+
+### Gating
+
+All 14 tests gated with the same skip reason:
+
+```rust
+#[test]
+#[ignore = "requires BGE-small embedding model on disk; run with `cargo test -- --ignored` on a workstation with the model cached (see systacean-18)"]
+fn <name>() { ... }
+```
+
+* `crates/chan-drive/src/drive.rs` (12 tests, +12 lines):
+  `link_targets_finds_file_after_index`,
+  `index_file_stamps_pre_read_stat_so_concurrent_writes_stay_visible`,
+  `pending_writes_journal_handles_forget_op`,
+  `pending_writes_journal_is_empty_on_a_clean_path`,
+  `pending_writes_journal_replay_converges_after_simulated_crash`,
+  `pending_writes_replay_degrades_index_op_to_forget_when_file_is_gone`,
+  `reconcile_catches_same_mtime_different_size_rewrite`,
+  `reconcile_on_empty_graph_indexes_everything_like_a_fresh_reindex`,
+  `reconcile_picks_up_files_added_offline`,
+  `reconcile_picks_up_modified_files`,
+  `resolve_link_returns_contact_kind_for_contact_node`,
+  `resolve_link_returns_file_kind_for_plain_note`.
+* `crates/chan-drive/src/indexer.rs` (2 tests, +2 lines):
+  `debounce_coalesces_rapid_writes_into_one_index`,
+  `writes_to_disk_get_indexed_after_debounce`.
+
+Empirical list above is what the Ubuntu runner panicked
+on in `26235956637` — not the architect's line-number
+list (which was a close-but-not-exact approximation).
+Some architect-listed tests (`reindex_consumes_pending_rename_log_after_reopen`,
+`stat_uses_lstat_for_symlinks`, `resolve_link_path_escape_rejected`)
+were NOT in the empirical panic list, so they don't
+need gating. Three other tests
+(`link_targets_finds_file_after_index`,
+`resolve_link_returns_file_kind_for_plain_note`,
+`pending_writes_journal_is_empty_on_a_clean_path`) WERE
+in the empirical list but weren't in the architect's
+line-number callout; gating them too per the empirical
+evidence.
+
+### Local verification
+
+Default `cargo test -p chan-drive`:
+
+```
+test result: ok. 411 passed; 0 failed; 16 ignored; 0 measured; 0 filtered out
+```
+
+Was previously `425 passed; 2 ignored` (425 - 14 = 411;
+2 + 14 = 16). Two pre-existing ignored tests carry
+forward; my 14 are the delta.
+
+`cargo test -p chan-drive -- --ignored` on this
+workstation (with the BGE-small model cached at
+`~/.cache/chan/models/models--BAAI--bge-small-en-v1.5/`):
+
+```
+test drive::tests::pending_writes_journal_replay_converges_after_simulated_crash ... ok
+test drive::tests::pending_writes_replay_degrades_index_op_to_forget_when_file_is_gone ... ok
+test drive::tests::link_targets_finds_file_after_index ... ok
+test drive::tests::pending_writes_journal_is_empty_on_a_clean_path ... ok
+test drive::tests::pending_writes_journal_handles_forget_op ... ok
+test drive::tests::resolve_link_returns_contact_kind_for_contact_node ... ok
+test drive::tests::reconcile_picks_up_files_added_offline ... ok
+test drive::tests::resolve_link_returns_file_kind_for_plain_note ... ok
+test drive::tests::reconcile_on_empty_graph_indexes_everything_like_a_fresh_reindex ... ok
+test drive::tests::reconcile_catches_same_mtime_different_size_rewrite ... ok
+test drive::tests::reconcile_picks_up_modified_files ... ok
+test indexer::tests::debounce_coalesces_rapid_writes_into_one_index ... ok
+test indexer::tests::writes_to_disk_get_indexed_after_debounce ... ok
+test drive::tests::index_file_stamps_pre_read_stat_so_concurrent_writes_stay_visible ... ok
+test result: ok. 16 passed; 0 failed; 0 ignored; 0 measured; 411 filtered out; finished in 18.27s
+```
+
+All 14 gated tests run + pass with `--ignored` on a
+workstation with the model cached. Total = 411 + 16 =
+427; matches pre-gating's `425 + 2 = 427`. **No coverage
+loss** — power users / local dev keep the full suite via
+`--ignored`.
+
+### Pre-push gate
+
+All green at HEAD `663ab26` (post-`-17` commit):
+
+* `cargo fmt --check` — clean.
+* `cargo clippy --all-targets -- -D warnings` — clean.
+* `cargo test` (workspace) — 411+16 chan-drive; 205
+  chan-server; 20 chan-report; 29 chan-llm; all other
+  crates green; no drift.
+* `RUSTFLAGS="-D warnings" cargo build --no-default-features`
+  — green.
+* `cd web && npm run check` — 0e / 0w / 3987 files.
+* `cd web && npm test -- --run` — 600 / 600 passed.
+
+### Suggested commit subject
+
+```
+chan-drive: gate 14 model-dependent tests behind #[ignore] (systacean-18)
+```
+
+### Files
+
+| File                                    | +     | -    |
+|-----------------------------------------|-------|------|
+| crates/chan-drive/src/drive.rs          | +12   | 0    |
+| crates/chan-drive/src/indexer.rs        | +2    | 0    |
+| **Total**                               | +14   | 0    |
+
+Plus this task tail append. Single-purpose commit.
+
+### Shared-worktree discipline
+
+Working tree is dirty with several foreign in-flight
+files (event channels from concurrent agents, ci/webtest
+task tails, the architect's journal). Pre-stage explicit
+`git add` of exactly:
+
+```
+crates/chan-drive/src/drive.rs
+crates/chan-drive/src/indexer.rs
+docs/journals/phase-8/systacean/systacean-18.md
+docs/journals/phase-8/alex/event-systacean-architect.md
+```
+
+Pre-commit `git diff --staged --stat` audit + post-commit
+`git show --stat HEAD` audit will confirm exactly 4 paths
+staged.
+
+### Round-3 (b) follow-up
+
+Per the task's "Optional follow-up note": shape (b)
+deterministic-fixture / mock-embedder for the affected
+tests is Round-3 cleanup territory. With (b) in place,
+the tests could exercise chunking + embedding-orchestration
+logic against a tiny in-tree mock without needing the
+real BGE model on disk. Out of scope here.
+
+### CI smoke after commit
+
+Same shape as `-17`: push the commit (plus the prior
+`f4a197d` + `663ab26` queue) to a
+`systacean-18-smoke` branch + `gh workflow run ci.yml`.
+Expected outcome: `clippy + test (ubuntu-latest)`
+passes (14 BGE tests skipped instead of panicking).
+Windows still reds on the chan-desktop dead_code lints
+(pre-existing, out of scope here per `-17`'s smoke
+report).
+
+Holding for @@Architect commit clearance + smoke-dispatch
+decision (push to branch OR fold into main push).
