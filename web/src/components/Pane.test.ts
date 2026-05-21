@@ -249,37 +249,103 @@ describe("Pane right-click menus", () => {
     expect(menuLabels()).toEqual(["Reload", "Open Inspector"]);
   }, 15000);
 
-  test("back-side-attention indicator surfaces when back has unread (fullstack-48 phase C)", async () => {
+  // `fullstack-a-43` removed the `.back-attention` indicator. The
+  // two phase-C pins that asserted its presence + absence don't
+  // apply under the new back-side configuration-view model — the
+  // back has no "unread" or "activity" surface to flag.
+});
+
+describe("Pane back-side configuration view (fullstack-a-43)", () => {
+  test("renders HybridTerminalConfig when active front tab is terminal", async () => {
     const front = terminalTab({ id: "front-term", title: "front" });
-    const backTerm = terminalTab({
-      id: "back-term",
-      title: "back",
-      watcher: { path: "/tmp/w", events: [], seenIds: [], unread: true },
-    });
     const pane: LeafNode = {
       kind: "leaf",
-      id: "pane-attn",
+      id: "pane-back-term",
       tabs: [front],
       activeTabId: front.id,
-      back: { tabs: [backTerm], activeTabId: backTerm.id },
+      back: {},
+      showingBack: true,
     };
     const target = await renderPane(pane, { paneMode: false });
 
-    expect(target.querySelector(".back-attention")).not.toBeNull();
+    expect(
+      target.querySelector('[aria-label="Hybrid Terminal configuration"]'),
+    ).not.toBeNull();
+    // Tab strip is hidden on the back side.
+    expect(target.querySelector(".tabs")).toBeNull();
   }, 15000);
 
-  test("back-side-attention indicator stays clear when back is idle (fullstack-48 phase C)", async () => {
-    const front = terminalTab({ id: "front-term", title: "front" });
-    const backTerm = terminalTab({ id: "back-term", title: "back" });
+  test("renders HybridEditorConfig when active front tab is a file", async () => {
+    const front = {
+      kind: "file" as const,
+      fileKind: "document" as const,
+      id: "front-file",
+      path: "notes/a.md",
+      content: "",
+      saved: "",
+      savedMtime: null,
+      mode: "wysiwyg" as const,
+      loading: false,
+      error: null,
+      fileMissing: null,
+      inspectorOpen: false,
+      outlineOpen: false,
+      repoRoot: null,
+      readMode: false,
+      fsWritable: true,
+      styleToolbarOpen: false,
+      syntaxHighlight: true,
+      highlightTrailingWhitespace: false,
+      codeBlocksCollapsed: false,
+    };
     const pane: LeafNode = {
       kind: "leaf",
-      id: "pane-idle-back",
+      id: "pane-back-editor",
       tabs: [front],
       activeTabId: front.id,
-      back: { tabs: [backTerm], activeTabId: backTerm.id },
+      back: {},
+      showingBack: true,
     };
     const target = await renderPane(pane, { paneMode: false });
 
-    expect(target.querySelector(".back-attention")).toBeNull();
+    expect(
+      target.querySelector('[aria-label="Hybrid Editor configuration"]'),
+    ).not.toBeNull();
+  }, 15000);
+
+  test("renders Hybrid placeholder when no front tab is active", async () => {
+    const pane: LeafNode = {
+      kind: "leaf",
+      id: "pane-back-empty",
+      tabs: [],
+      activeTabId: null,
+      back: {},
+      showingBack: true,
+    };
+    const target = await renderPane(pane, { paneMode: false });
+
+    // No specific config surface — the empty-state placeholder
+    // renders instead, asking the user to open a front tab first.
+    expect(target.querySelector(".back-empty")).not.toBeNull();
+    expect(
+      target.querySelector('[aria-label="hybrid back side"]'),
+    ).not.toBeNull();
+  }, 15000);
+
+  test("front-tab content does not render while showingBack=true", async () => {
+    const front = terminalTab({ id: "front-term" });
+    const pane: LeafNode = {
+      kind: "leaf",
+      id: "pane-back-content-hidden",
+      tabs: [front],
+      activeTabId: front.id,
+      back: {},
+      showingBack: true,
+    };
+    const target = await renderPane(pane, { paneMode: false });
+
+    // Tab strip suppressed; back-side wrapper visible.
+    expect(target.querySelector(".tabs")).toBeNull();
+    expect(target.querySelector(".back-side")).not.toBeNull();
   }, 15000);
 });

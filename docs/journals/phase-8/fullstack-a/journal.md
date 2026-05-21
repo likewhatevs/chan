@@ -309,3 +309,92 @@ in-flight mini-wave (-28 / -29 / -30 / -31 already in
 HEAD). Six commits ready for the patch-release commit-
 grouping cut once architect clears each. Standing down
 unless redirected.
+
+## 2026-05-21 — Round-2 Wave-2 Task A: -a-43 ready for review
+
+Fresh @@FullStackA session bootstrapped through the live
+rich-prompt-watcher pre-flight test. Once the user
+signalled work could start, picked up the dispatched
+`-a-43` (Hybrid back-side architecture refactor — Task A)
+from `event-architect-fullstack-a.md` 2026-05-21 tail.
+
+### Scope
+
+Foundational refactor for the round-2-plan §"Hybrid
+back-side revisited" wave. Back of a Hybrid pane stops
+being a tab collection (the `fullstack-48` shape) and
+becomes a per-surface configuration view scoped to the
+active front-tab type. Per the task body, this lands the
+ARCHITECTURE; Tasks B / C / D / F populate the four
+config component bodies; Task E collapses the front/back
+theme split; Task G (cut as `-a-42`) builds out the
+remaining About section once the Settings overlay is
+trimmed.
+
+### What landed
+
+* `HybridSide` slimmed to `{ theme? }` — tab collection
+  removed from the type.
+* `flipHybrid()` no longer swaps tabs; only toggles
+  `showingBack` + (vestigially) swaps the per-side
+  theme override. `pane.tabs` is now invariantly the
+  front-side tabs.
+* `Pane.svelte` hides the tab strip when
+  `pane.showingBack`; mounts a `HybridXConfig`
+  component matching `active?.kind` in the `.editor-wrap`
+  body when flipped. Pane-mode preview still operates on
+  front content; terminal each-block (kept mounted for
+  scrollback) gains the new `!pane.showingBack` gate on
+  active+focused props so xterm doesn't steal focus
+  through the config view.
+* Four new stub components in `web/src/components/`:
+  `HybridTerminalConfig.svelte`,
+  `HybridEditorConfig.svelte`,
+  `HybridGraphConfig.svelte`,
+  `HybridFileBrowserConfig.svelte`. Title band only; each
+  documents the populating task in its script header.
+* `.back-attention` chrome + CSS + `backHasAttention`
+  derived all dropped. Under the new model the back has
+  no "unread/activity" surface to flag; the chrome
+  stayed lean.
+* Serialization: `bt` (back tabs) no longer emitted;
+  legacy `bt` payloads tolerated on deserialize (the
+  tab contents are discarded). `hb` + `sb` round-trip
+  unchanged.
+
+### Tests
+
+vitest 588/588 across the rewritten + new pins:
+* `tabs.test.ts`: 4 flip-suite pins rewritten to match
+  the new "front tabs never swap" invariant. Split-from-
+  back pin updated. Serialize/restore pin updated to
+  forbid `bt` emission.
+* `Pane.test.ts`: 2 obsolete `.back-attention` pins
+  dropped; 4 new pins added under a new
+  `describe("Pane back-side configuration view")` block.
+* `paneTerminalMount.test.ts`: pin regex tightened to
+  include the new `!pane.showingBack` gate.
+
+### Gate
+
+vitest 588/588, svelte-check 0/0 across 3983 files,
+npm build clean, `cargo fmt --check` clean,
+`cargo clippy -p chan --all-targets -- -D warnings`
+clean. No Rust touched.
+
+### Subtle deviations flagged in the impl note
+
+* Theme swap preserved (task body's "stays for now"
+  reading). Task E collapses.
+* Back-existence round-trip: pre-`-a-43` serializer had
+  the equivalent edge-case loss; new shape is
+  structurally identical. Documented in the round-trip
+  test.
+* Empty-pane back state: rendered as a generic Hybrid
+  placeholder asking the user to open a front tab.
+
+Full impl note + suggested commit subject at the tail of
+[fullstack-a-43.md](fullstack-a-43.md). Five files
+changed, four new files. Outbound poke fired to
+@@Architect with Commit readiness; standing by for
+review + commit routing.

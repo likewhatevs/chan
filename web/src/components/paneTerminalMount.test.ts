@@ -22,15 +22,23 @@ describe("fullstack-b-2: TerminalTabs survive Hybrid NAV toggles", () => {
     expect(pane).not.toMatch(banned);
   });
 
-  test("active prop is gated by !paneMode.active", () => {
+  test("active prop is gated by !paneMode.active + !pane.showingBack", () => {
     // The prop must short-circuit on pane mode so the existing
     // visibility-hidden CSS rule fires during Hybrid NAV.
-    expect(pane).toMatch(/active=\{!paneMode\.active && t\.id === pane\.activeTabId\}/);
+    // `fullstack-a-43` also added `!pane.showingBack` to keep
+    // terminals hidden while the back-side configuration view
+    // is up.
+    expect(pane).toMatch(
+      /active=\{!paneMode\.active && !pane\.showingBack && t\.id === pane\.activeTabId\}/,
+    );
   });
 
-  test("focused prop is gated by !paneMode.active", () => {
-    // Same gate on focused so we don't pull focus into a hidden
-    // xterm during pane mode (would swallow the next chord).
-    expect(pane).toMatch(/focused=\{!paneMode\.active && t\.id === pane\.activeTabId && viewLayout\.activePaneId === pane\.id\}/);
+  test("focused prop is gated by !paneMode.active + !pane.showingBack", () => {
+    // Same gates on focused so we don't pull focus into a hidden
+    // xterm during pane mode OR the back-side config view (would
+    // swallow the next chord).
+    expect(pane).toMatch(
+      /focused=\{!paneMode\.active && !pane\.showingBack && t\.id === pane\.activeTabId && viewLayout\.activePaneId === pane\.id\}/,
+    );
   });
 });

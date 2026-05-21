@@ -195,33 +195,34 @@ describe("tab close confirmation", () => {
     expect(activePane().activeTabId).toBe(reopened.id);
   });
 
-  test("closing the last tab on the back side keeps showingBack=true (fullstack-a-11)", async () => {
+  test("closing a front tab while flipped preserves showingBack=true (fullstack-a-11 + -a-43)", async () => {
     // Sibling fix to `fullstack-a-5`. Closing should never change
     // a Hybrid's flip orientation — only the explicit flip chord
-    // does. Pre-`fullstack-a-11`, the back side appeared to
-    // auto-flip to the front when the user closed the last
-    // back-side tab. Today closeTabAsync mutates p.tabs (which IS
-    // the back side's tabs when showingBack=true) and leaves the
-    // flip state alone; pin that behaviour so a regression here
-    // gets caught.
+    // does. Pre-`fullstack-a-11` the back side appeared to
+    // auto-flip to the front when the last back-side tab closed.
+    // Under `-a-43` the back is no longer a tab collection (it's
+    // a per-surface configuration view), so the regression shape
+    // shifted: now we pin that closing the last FRONT tab while
+    // the pane is flipped to its back leaves `showingBack=true`
+    // intact. The user is mid-configuration; closing a front tab
+    // shouldn't yank them back to an empty front.
     const front = fileTab({ id: "front", path: "notes/front.md" });
     const seed = resetLayout([front]);
     flipHybrid(seed.id);
     let live = layout.nodes[seed.id];
     if (live?.kind !== "leaf") throw new Error("expected leaf");
     expect(live.showingBack).toBe(true);
-    live.tabs.push(fileTab({ id: "back", path: "notes/back.md" }));
-    live.activeTabId = "back";
+    // Front tabs are still `pane.tabs` under the new model;
+    // closing the only front tab below should leave showingBack
+    // intact even though the front becomes empty.
 
-    await closeTab(seed.id, "back", { force: true });
+    await closeTab(seed.id, "front", { force: true });
 
     live = layout.nodes[seed.id];
     if (live?.kind !== "leaf") throw new Error("expected leaf");
     expect(live.showingBack).toBe(true);
     expect(live.tabs).toHaveLength(0);
     expect(live.activeTabId).toBeNull();
-    // Front tabs parked on the back slot are untouched.
-    expect(live.back?.tabs.map((t) => t.id)).toEqual(["front"]);
   });
 
   test("closing the last tab in a Hybrid pane leaves the pane in place (fullstack-a-5)", async () => {
@@ -1102,7 +1103,7 @@ describe("splitPane side preservation", () => {
     expect(newPane.back).toBeUndefined();
   });
 
-  test("splitting from the back side puts the new pane on its back too", () => {
+  test("splitting from the back side puts the new pane on its back too (fullstack-a-43)", () => {
     const seed = resetLayout([fileTab({ id: "f", path: "a.md" })]);
     flipHybrid(seed.id);
     const live = layout.nodes[seed.id];
@@ -1115,11 +1116,10 @@ describe("splitPane side preservation", () => {
     const newPane = layout.nodes[root.b];
     if (newPane?.kind !== "leaf") throw new Error("expected leaf");
     expect(newPane.showingBack).toBe(true);
-    // New pane starts with an empty back so the visible side renders
-    // cleanly; no theme is inherited (overrides stay per-pane).
-    expect(newPane.back?.tabs).toEqual([]);
-    expect(newPane.back?.activeTabId).toBeNull();
-    expect(newPane.back?.theme).toBeUndefined();
+    // `-a-43`: the back is no longer a tab collection — just a
+    // (theme-only for now) per-Hybrid slot. The new pane gets an
+    // empty back materialised on demand; overrides stay per-pane.
+    expect(newPane.back).toEqual({});
     // Original pane's hybrid state is intact.
     const original = layout.nodes[seed.id];
     if (original?.kind !== "leaf") throw new Error("expected leaf");
@@ -1127,8 +1127,8 @@ describe("splitPane side preservation", () => {
   });
 });
 
-describe("Hybrid flip (fullstack-48 phase A)", () => {
-  test("first flip lazy-initializes back with inverted theme and swaps slots", () => {
+describe("Hybrid flip (fullstack-48 phase A; revisited by fullstack-a-43)", () => {
+  test("first flip lazy-initializes back with inverted theme; front tabs stay put (fullstack-a-43)", () => {
     const front = fileTab({ id: "front", path: "notes/front.md" });
     const seed = resetLayout([front]);
     expect(seed.back).toBeUndefined();
@@ -1142,17 +1142,20 @@ describe("Hybrid flip (fullstack-48 phase A)", () => {
     expect(live?.kind).toBe("leaf");
     if (live?.kind !== "leaf") return;
     expect(live.showingBack).toBe(true);
-    expect(live.tabs).toHaveLength(0);
-    expect(live.activeTabId).toBeNull();
-    expect(live.back?.tabs.map((t) => t.id)).toEqual(["front"]);
-    expect(live.back?.activeTabId).toBe("front");
-    // Visible side inherits the inverted seed (light); back drops
-    // back to undefined (the previous front had no explicit theme).
+    // `-a-43`: `pane.tabs` always describes the FRONT — flipping no
+    // longer swaps tab collections. The front tab is untouched
+    // across the flip; only the rendered surface changes (the
+    // back-side config view takes over via Pane.svelte).
+    expect(live.tabs.map((t) => t.id)).toEqual(["front"]);
+    expect(live.activeTabId).toBe("front");
+    // Theme swap is preserved for now (`-b-5` legacy; Task E will
+    // collapse the front/back split). Visible side inherits the
+    // inverted seed (light); back keeps the original undefined.
     expect(live.theme).toBe("light");
     expect(live.back?.theme).toBeUndefined();
   });
 
-  test("flipping back restores the original front + preserves user themes", () => {
+  test("flipping back round-trips showingBack + theme; front tabs never swap (fullstack-a-43)", () => {
     const front = fileTab({ id: "f1", path: "a.md" });
     const seed = resetLayout([front]);
 
@@ -1160,18 +1163,19 @@ describe("Hybrid flip (fullstack-48 phase A)", () => {
     let live = layout.nodes[seed.id];
     if (live?.kind !== "leaf") throw new Error("expected leaf");
     expect(live.showingBack).toBe(true);
-    // User opens a tab on the back side and picks dark.
-    live.tabs.push(fileTab({ id: "b1", path: "b.md" }));
-    live.activeTabId = "b1";
+    // Under the new model the user can't open a tab "on the back" —
+    // there are no back-side tabs. They explicitly pick dark on
+    // the visible (back-config) surface; theme is per-side until
+    // Task E.
     live.theme = "dark";
 
     flipHybrid(seed.id);
     live = layout.nodes[seed.id];
     if (live?.kind !== "leaf") throw new Error("expected leaf");
     expect(live.showingBack).toBe(false);
+    // Front tabs survive every flip untouched.
     expect(live.tabs.map((t) => t.id)).toEqual(["f1"]);
-    expect(live.back?.tabs.map((t) => t.id)).toEqual(["b1"]);
-    // Front had no explicit theme; back kept dark.
+    // Front had no explicit theme; back kept dark via the swap.
     expect(live.theme).toBeUndefined();
     expect(live.back?.theme).toBe("dark");
 
@@ -1179,7 +1183,9 @@ describe("Hybrid flip (fullstack-48 phase A)", () => {
     live = layout.nodes[seed.id];
     if (live?.kind !== "leaf") throw new Error("expected leaf");
     expect(live.showingBack).toBe(true);
-    expect(live.tabs.map((t) => t.id)).toEqual(["b1"]);
+    // Front tabs STILL the same single tab — the third flip just
+    // toggles showingBack + swaps theme back.
+    expect(live.tabs.map((t) => t.id)).toEqual(["f1"]);
     expect(live.theme).toBe("dark");
   });
 
@@ -1210,15 +1216,14 @@ describe("Hybrid flip (fullstack-48 phase A)", () => {
     expect(live.back).toBeUndefined();
   });
 
-  test("serialize / restore round-trips back tabs + themes + showingBack", async () => {
+  test("serialize / restore round-trips per-side themes + showingBack (fullstack-a-43)", async () => {
     const front = fileTab({ id: "front", path: "front.md" });
     const seed = resetLayout([front]);
 
     flipHybrid(seed.id);
-    // Visible side is the seeded empty back; add a browser tab and
-    // pick dark explicitly on the visible side. The hidden side
-    // keeps the original front file tab.
-    openBrowserInActivePane();
+    // Pick dark explicitly on the visible (back-config) side.
+    // The front-side tabs stay put; no "open a tab on the back"
+    // ceremony under the new model.
     const live = layout.nodes[seed.id];
     if (live?.kind !== "leaf") throw new Error("expected leaf");
     live.theme = "dark";
@@ -1229,14 +1234,20 @@ describe("Hybrid flip (fullstack-48 phase A)", () => {
     const json = JSON.stringify(snapshot);
     expect(json).toContain("\"sb\":1");
     expect(json).toContain("\"ht\":\"d\"");
+    // `-a-43`: no `bt` (back-side tabs) emitted any more.
+    expect(json).not.toContain("\"bt\":");
 
     await restoreLayout(snapshot);
 
     const restored = activePane();
     expect(restored.showingBack).toBe(true);
     expect(restored.theme).toBe("dark");
-    expect(restored.tabs.map((t) => t.kind)).toEqual(["browser"]);
-    expect(restored.back?.tabs.map((t) => t.kind)).toEqual(["file"]);
+    expect(restored.tabs.map((t) => t.kind)).toEqual(["file"]);
+    // `restored.back` may be undefined when no back-side theme
+    // override exists — flipHybrid lazy-inits it on the next flip.
+    // The user-visible round-trip (theme + showingBack + front
+    // tabs) is what matters; `back` materialisation is an
+    // implementation detail.
   });
 });
 

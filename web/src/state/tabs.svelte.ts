@@ -596,20 +596,22 @@ function nextTerminalTitle(): string {
   return `Terminal-${max + 1}`;
 }
 
-/// `fullstack-48`: each pane (Hybrid in user-facing copy) holds an
-/// optional back-side slot mirroring the front (tabs + active-tab id
-/// + per-side theme override). `pane.tabs` / `pane.activeTabId` /
-/// `pane.theme` always describe the **currently-visible** side so
-/// existing consumers stay agnostic to the front/back split; the
-/// hidden side parks in `back`. `flipHybrid()` swaps the slots and
-/// toggles `showingBack`. Both fields are optional so legacy panes
-/// (no `back`, no `theme`) load cleanly.
+/// `fullstack-48` original, `fullstack-a-43` revisited: each pane
+/// (Hybrid in user-facing copy) holds an optional back-side slot.
+/// Under `-a-43` the back is no longer a content collection — it is
+/// a per-surface configuration view scoped to the type of the
+/// currently-active front tab. `pane.tabs` / `pane.activeTabId`
+/// always describe the FRONT side; `showingBack` toggles whether the
+/// pane renders the front content tabs or the back configuration
+/// surface. `flipHybrid()` no longer swaps tab collections; it only
+/// toggles `showingBack` and swaps the per-side theme override
+/// (which Task E will collapse to a single per-Hybrid value).
 export type HybridTheme = "dark" | "light";
 
 export type HybridSide = {
-  tabs: Tab[];
-  activeTabId: string | null;
   /// Per-side theme override. `undefined` means "follow global".
+  /// Task E will drop the front/back split entirely — both sides
+  /// of a Hybrid will share a single per-Hybrid theme.
   theme?: HybridTheme;
 };
 
@@ -621,12 +623,14 @@ export type Pane = {
   theme?: HybridTheme;
   /// Hidden side. `undefined` for never-flipped panes; the first
   /// `flipHybrid()` call lazily materialises it with an inverted
-  /// default theme so the back reads as the obvious mirror.
+  /// default theme so the back reads as the obvious mirror under
+  /// the per-side theme override from `-b-5`.
   back?: HybridSide;
-  /// User-visible flag for "this Hybrid is currently on its back".
-  /// Independent of whether `back` exists: a pane that has been
-  /// flipped twice has `back !== undefined` but `showingBack === false`
-  /// again. Defaults to false.
+  /// User-visible flag for "this Hybrid is currently flipped to its
+  /// back-side configuration view". Independent of whether `back`
+  /// exists: a pane that has been flipped twice has
+  /// `back !== undefined` but `showingBack === false` again.
+  /// Defaults to false.
   showingBack?: boolean;
 };
 
@@ -1804,8 +1808,6 @@ function cloneNode(src: Node): Node {
     ...(src.back
       ? {
           back: {
-            tabs: src.back.tabs.map((tab) => cloneTab(tab)),
-            activeTabId: src.back.activeTabId,
             ...(src.back.theme ? { theme: src.back.theme } : {}),
           },
         }
@@ -2315,7 +2317,7 @@ export function splitPane(
     ...(original.showingBack
       ? {
           showingBack: true,
-          back: { tabs: [], activeTabId: null },
+          back: {},
         }
       : {}),
   };
@@ -2360,48 +2362,34 @@ export function setActivePane(paneId: string): void {
   if (current.nodes[paneId]?.kind === "leaf") current.activePaneId = paneId;
 }
 
-/// `fullstack-48`: swap the visible side of a Hybrid (pane) with
-/// its back. The back is lazily materialised on first flip with an
-/// inverted theme default so the user has an immediate visual cue
-/// that they've turned the pane over; subsequent flips toggle
-/// existing state, preserving any per-side theme override the user
-/// set explicitly. The wobble bus fires after the swap so
-/// Pane.svelte's existing pane-wobble keyframe can act as the
-/// flip-landing animation until Phase B lands the dedicated CSS 3D
-/// rotateY.
+/// `fullstack-48` original, `fullstack-a-43` revisited: flip the
+/// pane between its front (content tabs) and its back (per-surface
+/// configuration view). Under `-a-43` the back is no longer a
+/// content collection — `pane.tabs` always stays the front's tab
+/// list; this function only toggles `showingBack` and (for now)
+/// swaps the per-side theme override that `-b-5` introduced.
+/// Task E will collapse the front/back theme split to a single
+/// per-Hybrid value; until then the swap preserves existing
+/// behaviour for users who have set per-side themes.
 export function flipHybrid(paneId: string): void {
   const node = activeLayout().nodes[paneId];
   if (!node || node.kind !== "leaf") return;
   if (!node.back) {
     // Lazy init: back inherits an inverted theme so a default-dark
-    // chan shows a light back on first flip and vice-versa. If the
-    // user later sets the visible side's theme explicitly the back
-    // keeps its current value — we only seed at materialisation.
-    node.back = {
-      tabs: [],
-      activeTabId: null,
-      theme: inverseTheme(node.theme),
-    };
+    // chan shows a light back on first flip and vice-versa. The
+    // back-side state has shrunk to just the theme slot; tab
+    // collection is gone (`-a-43`).
+    node.back = { theme: inverseTheme(node.theme) };
   }
   const back = node.back;
-  // Swap tabs + activeTabId.
-  const tmpTabs = node.tabs;
-  const tmpActive = node.activeTabId;
-  node.tabs = back.tabs;
-  node.activeTabId = back.activeTabId;
-  back.tabs = tmpTabs;
-  back.activeTabId = tmpActive;
-  // Swap per-side theme override.
   const tmpTheme = node.theme;
   node.theme = back.theme;
   back.theme = tmpTheme;
   node.showingBack = !node.showingBack;
-  // `fullstack-a-22`: switch the post-flip cue from the structural
-  // wobble (scale bounce, used for split / close / swap) to the
-  // orientation-change flip (Y-axis rotation). Two distinct visual
-  // signals for two distinct kinds of state change — the wobble
-  // is "this pane reshaped"; the flip is "this pane changed which
-  // side it's showing".
+  // `fullstack-a-22`: orientation-change flip cue (Y-axis rotation)
+  // distinct from the structural wobble used for split / close /
+  // swap. Animation unchanged under `-a-43`; only the destination
+  // semantics changed.
   requestPaneFlip(node.id);
 }
 
@@ -2815,19 +2803,22 @@ type SerLeaf = {
   f?: 1;
   wc?: SerFocusColor;
   pc?: SerFocusColor;
-  /// `fullstack-48`: per-pane Hybrid back-side state.
-  /// `bt`: back-side tabs (omitted when the pane has no back yet).
-  /// `ht`: visible-side theme override.
-  /// `hb`: back-side theme override.
-  /// `sb`: `1` when the user is currently viewing the back side;
-  /// `t` / `bt` always describe whatever's in the live `pane.tabs`
-  /// / `pane.back.tabs` slots on save, so the flag round-trips the
-  /// user's last-viewed side without us re-deriving which slot is
-  /// "really" front.
-  bt?: SerTab[];
+  /// `fullstack-48` original, `fullstack-a-43` revisited: per-pane
+  /// Hybrid back-side state. The `bt` slot (back-side tabs) was
+  /// removed in `-a-43` — the back is no longer a content
+  /// collection. Wire-compat: `bt` from older sessions is parsed
+  /// and discarded on rehydrate (see `deserializeNode`).
+  /// `ht`: per-Hybrid front-side theme override.
+  /// `hb`: per-Hybrid back-side theme override (Task E will
+  /// collapse this to a single per-Hybrid value).
+  /// `sb`: `1` when the pane is currently flipped to its back
+  /// configuration view.
   ht?: SerHybridTheme;
   hb?: SerHybridTheme;
   sb?: 1;
+  /// Legacy: pre-`-a-43` back-side tabs. Ignored on rehydrate
+  /// to keep wire compat with older URL hashes / session blobs.
+  bt?: SerTab[];
 };
 type SerSplit = {
   k: "s";
@@ -3019,10 +3010,7 @@ function serializeNode(
     // URL hash + per-window session round-trip the flip-aware
     // layout. Empty / never-flipped panes emit nothing extra so
     // the hash stays as short as before for the common case.
-    if (n.back && (n.back.tabs.length > 0 || n.back.theme)) {
-      out.bt = n.back.tabs.map((t) =>
-        serializeTab(t, t.id === n.back!.activeTabId, opts),
-      );
+    if (n.back?.theme) {
       const bk = serializeHybridTheme(n.back.theme);
       if (bk) out.hb = bk;
     }
@@ -3278,131 +3266,18 @@ export async function restoreLayout(
       }
       // If no tab was marked active but there are tabs, focus the first.
       if (!p.activeTabId && p.tabs.length > 0) p.activeTabId = p.tabs[0]!.id;
-      // `fullstack-48` Phase A: back-side restore. Reuses the
-      // same file / browser / graph paths as the front loop but
-      // SKIPS terminals — session restore is pane-keyed today,
-      // so back-side terminals would need a session-format
-      // change. Phase B can wire that when the UI starts
-      // exposing back terminals.
-      if (node.bt && node.bt.length > 0) {
-        const backTabs: Tab[] = [];
-        let backActiveId: string | null = null;
-        for (const sertab of node.bt) {
-          const kind = sertab.k ?? "f";
-          if (kind === "t" || kind === "s" || kind === "h") continue;
-          if (kind === "g") {
-            const mode = restoreGraphMode(sertab.gm);
-            const scopeId = sertab.gs || "drive";
-            const selectedNodeId =
-              typeof sertab.gn === "string" ? sertab.gn : null;
-            const selectedNodeLabel =
-              typeof sertab.gnl === "string" ? sertab.gnl : null;
-            const tab: GraphTab = {
-              kind: "graph",
-              id: id("graph"),
-              title: graphTitle(mode, scopeId),
-              mode,
-              scopeId,
-              depth: Number.isFinite(sertab.gd)
-                ? Math.max(0, Number(sertab.gd))
-                : 1,
-              filters: decodeGraphTabFilters(sertab.gf),
-              inspectorOpen: sertab.gi === 1,
-              pendingSelectId: sertab.gp ?? selectedNodeId,
-              selectedNodeId,
-              selectedNodeLabel,
-              ...(typeof sertab.iw === "number" && sertab.iw > 0
-                ? { inspectorWidth: sertab.iw }
-                : {}),
-            };
-            backTabs.push(tab);
-            if (sertab.a) backActiveId = tab.id;
-            continue;
-          }
-          if (kind === "b") {
-            const tab: BrowserTab = {
-              kind: "browser",
-              id: id("browser"),
-              title: "Files",
-              inspectorOpen: sertab.bi === 1,
-              ...(typeof sertab.bs === "string" ? { selected: sertab.bs } : {}),
-              ...(sertab.bd === 1 ? { showDrive: true } : {}),
-              ...(Array.isArray(sertab.be) && sertab.be.length > 0
-                ? { expanded: sertab.be.filter((p) => typeof p === "string") }
-                : {}),
-              ...(typeof sertab.bsc === "number" && sertab.bsc > 0
-                ? { scroll: sertab.bsc }
-                : {}),
-              ...(typeof sertab.iw === "number" && sertab.iw > 0
-                ? { inspectorWidth: sertab.iw }
-                : {}),
-            };
-            backTabs.push(tab);
-            if (sertab.a) backActiveId = tab.id;
-            continue;
-          }
-          if (kind !== "f") continue;
-          const restoredPath = sertab.p ?? "";
-          const restoredPathKind = classifyPath(restoredPath);
-          const restoredFileKind: FileKind =
-            restoredPathKind === "document" || restoredPathKind === "text"
-              ? restoredPathKind
-              : "document";
-          const tab: FileTab = {
-            kind: "file",
-            fileKind: restoredFileKind,
-            id: id("tab"),
-            path: restoredPath,
-            content: "",
-            saved: "",
-            savedMtime: null,
-            mode: validateRestoredMode(sertab.m, restoredPath, restoredFileKind),
-            loading: true,
-            error: null,
-            fileMissing: null,
-            inspectorOpen: !!sertab.o,
-            outlineOpen: !!sertab.ol,
-            repoRoot: null,
-            readMode: sertab.r === 1,
-            fsWritable: true,
-            styleToolbarOpen: sertab.s === 1,
-            syntaxHighlight: sertab.h !== 0,
-            highlightTrailingWhitespace: false,
-            codeBlocksCollapsed: false,
-            caret:
-              Array.isArray(sertab.c) && sertab.c.length === 2
-                ? { from: sertab.c[0], to: sertab.c[1] }
-                : undefined,
-            ...(typeof sertab.iw === "number" && sertab.iw > 0
-              ? { inspectorWidth: sertab.iw }
-              : {}),
-            ...(typeof sertab.ow === "number" && sertab.ow > 0
-              ? { outlineWidth: sertab.ow }
-              : {}),
-          };
-          backTabs.push(tab);
-          if (sertab.a) backActiveId = tab.id;
-          if (tab.path) {
-            tabsToLoad.push({ paneId: p.id, tabId: tab.id, path: tab.path });
-          }
-        }
-        if (!backActiveId && backTabs.length > 0) {
-          backActiveId = backTabs[0]!.id;
-        }
-        p.back = {
-          tabs: backTabs,
-          activeTabId: backActiveId,
-          ...(node.hb ? { theme: node.hb === "d" ? "dark" : "light" } : {}),
-        };
-      } else if (node.hb) {
-        // Back-side theme override without back tabs is valid:
-        // the user picked a theme for the back before populating
-        // it. Materialise an empty back so the override survives.
-        p.back = {
-          tabs: [],
-          activeTabId: null,
-          theme: node.hb === "d" ? "dark" : "light",
-        };
+      // `fullstack-a-43`: back-side is no longer a tab collection.
+      // Old sessions with `bt` (back-side tabs) are accepted on
+      // the wire for backwards compat but their tab contents are
+      // discarded; only the per-side theme override and the flip
+      // flag survive into the new model.
+      if (node.hb) {
+        p.back = { theme: node.hb === "d" ? "dark" : "light" };
+      } else if (node.bt && node.bt.length > 0) {
+        // Legacy session blob that had back-side tabs but no
+        // back-side theme override — materialise an empty back so
+        // `showingBack` round-trips into the new config-view model.
+        p.back = {};
       }
       if (node.ht) p.theme = node.ht === "d" ? "dark" : "light";
       if (node.sb) p.showingBack = true;

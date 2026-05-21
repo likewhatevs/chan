@@ -48,6 +48,11 @@
     Terminal,
     User,
   } from "lucide-svelte";
+
+  import HybridTerminalConfig from "./HybridTerminalConfig.svelte";
+  import HybridEditorConfig from "./HybridEditorConfig.svelte";
+  import HybridGraphConfig from "./HybridGraphConfig.svelte";
+  import HybridFileBrowserConfig from "./HybridFileBrowserConfig.svelte";
   import EmptyPaneCarousel from "./EmptyPaneCarousel.svelte";
   import FileEditorTab from "./FileEditorTab.svelte";
   import FileBrowserSurface from "./FileBrowserSurface.svelte";
@@ -315,28 +320,11 @@
     });
   });
 
-  /// `fullstack-48` Phase C: small flashing dot on the pane chrome
-  /// when the OTHER side of the Hybrid has something unread /
-  /// active. Designed as a generic signal so future attention
-  /// sources (terminal activity per `fullstack-25`, etc.) plug in
-  /// here without re-spec. Today the wired sources are:
-  ///   - any terminal tab on the hidden side with
-  ///     `watcher.unread === true`
-  ///   - any terminal tab on the hidden side with
-  ///     `terminalActivity === true`
-  /// The check is symmetric: the indicator shows on whichever side
-  /// is currently visible whenever the hidden side has attention,
-  /// and clears the moment the user flips to that side (since
-  /// flipping moves those tabs into `pane.tabs`).
-  const backHasAttention = $derived.by<boolean>(() => {
-    if (!pane.back) return false;
-    for (const tab of pane.back.tabs) {
-      if (tab.kind !== "terminal") continue;
-      if (tab.watcher?.unread) return true;
-      if (tab.terminalActivity) return true;
-    }
-    return false;
-  });
+  /// `fullstack-a-43` removed the back-side-attention indicator
+  /// (originally `fullstack-48` Phase C). Under the new model the
+  /// back is a per-surface configuration view, not a content tab
+  /// collection — there is no "unread" or "activity" signal on a
+  /// settings surface to attend to.
 
   function closePaneMenus(): void {
     paneMenu?.close();
@@ -793,6 +781,13 @@
   role="region"
   aria-label="editor pane"
 >
+  <!-- `fullstack-a-43`: tab strip is hidden when the pane is
+       flipped to its back-side configuration view. The back is a
+       single config surface scoped to the active front-tab type;
+       no tab navigation is meaningful there. Flip back to the
+       front via the `Cmd+. Tab` chord (or `Cmd+. f` / `Cmd+. b` /
+       etc to reach a specific front tab kind). -->
+  {#if !pane.showingBack}
   <!-- svelte-ignore a11y_interactive_supports_focus -->
   <div
     class="tabs"
@@ -942,18 +937,6 @@
       <div class="drop-bar" aria-hidden="true"></div>
     {/if}
     <div class="actions">
-      {#if backHasAttention}
-        <!-- fullstack-48 Phase C: back-side-attention indicator.
-             Sits just left of the hamburger so it's adjacent to
-             the chrome the user is already scanning. Cleared
-             automatically when the user flips because the
-             attention sources move into the visible-side tabs. -->
-        <span
-          class="back-attention"
-          aria-label="back side has unread activity"
-          title="back side has unread activity (Cmd+K Tab to flip)"
-        ></span>
-      {/if}
       <!-- `fullstack-a-27`: the per-Hybrid theme toggle button used
            to live here as standalone chrome (`fullstack-59`); @@Alex
            asked to move it into the hamburger so the pane chrome
@@ -1079,6 +1062,7 @@
       </HamburgerMenu>
     </div>
   </div>
+  {/if}
 
   <div
     class="editor-wrap"
@@ -1093,7 +1077,34 @@
     role="group"
     aria-label="pane content"
   >
-    {#if paneMode.active}
+    {#if pane.showingBack && !paneMode.active}
+      <!-- `fullstack-a-43`: per-surface back-side configuration
+           view. Dispatched off the type of the currently-active
+           FRONT tab — switching the front tab while flipped swaps
+           the back's content to the matching surface family.
+           Tasks B / C / D / F populate each component body;
+           Task A ships title-band stubs. -->
+      <div class="back-side" role="region" aria-label="hybrid back side">
+        {#if active?.kind === "terminal"}
+          <HybridTerminalConfig />
+        {:else if active?.kind === "file"}
+          <HybridEditorConfig />
+        {:else if active?.kind === "graph"}
+          <HybridGraphConfig />
+        {:else if active?.kind === "browser"}
+          <HybridFileBrowserConfig />
+        {:else}
+          <!-- Empty pane (no active front tab). Open a front tab
+               and flip again to see its configuration surface. -->
+          <div class="back-empty">
+            <h2 class="back-title">Hybrid</h2>
+            <p class="back-hint">
+              Open a tab on the front to configure its surface here.
+            </p>
+          </div>
+        {/if}
+      </div>
+    {:else if paneMode.active}
       <div class="pane-mode-preview" aria-label="Hybrid NAV preview">
         <div class="pane-mode-title">{active ? tabLabel(active, browserCtxFor(active)) : "Empty pane"}</div>
         <div class="pane-mode-subtitle">
@@ -1205,8 +1216,8 @@
       <TerminalTab
         tab={t}
         paneId={pane.id}
-        active={!paneMode.active && t.id === pane.activeTabId}
-        focused={!paneMode.active && t.id === pane.activeTabId && viewLayout.activePaneId === pane.id}
+        active={!paneMode.active && !pane.showingBack && t.id === pane.activeTabId}
+        focused={!paneMode.active && !pane.showingBack && t.id === pane.activeTabId && viewLayout.activePaneId === pane.id}
       />
     {/each}
   </div>
@@ -1444,26 +1455,44 @@
     flex-shrink: 0;
   }
   .actions { margin-left: auto; display: flex; align-items: center; gap: 6px; padding-left: 4px; }
-  /* fullstack-48 Phase C — back-side-attention indicator. Same
-     warn-text family as the terminal activity marker so a user
-     learns one colour-language across the chrome. The 1.5s alpha
-     cycle is gentle enough to read as "pulsing" without becoming
-     a strobe at the corner of vision. prefers-reduced-motion
-     replaces the pulse with a static dot. */
-  .back-attention {
-    width: 8px;
-    height: 8px;
-    border-radius: 50%;
-    background: var(--warn-text, #d29922);
-    flex-shrink: 0;
-    animation: back-attention-pulse 1.5s ease-in-out infinite;
+  /* `fullstack-a-43` removed the back-side-attention indicator
+     (originally `fullstack-48` Phase C). Under the new back-side
+     model — a per-surface configuration view scoped to the active
+     front-tab type — there is no "unread" or "activity" signal on
+     the back to flag. The chrome stayed lean as a result. */
+  /* `fullstack-a-43`: back-side surface wrapper. The HybridXConfig
+     stubs (Task A) each carry their own title band; this wrapper
+     just fills the editor-wrap so the body reads as a single
+     config page. Tasks B / C / D / F replace the empty bodies. */
+  .back-side {
+    display: flex;
+    flex-direction: column;
+    flex: 1;
+    min-width: 0;
+    min-height: 0;
+    overflow: auto;
+    background: var(--bg);
   }
-  @keyframes back-attention-pulse {
-    0%, 100% { opacity: 1; }
-    50%      { opacity: 0.35; }
+  .back-empty {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    padding: 24px;
+    text-align: center;
+    color: var(--text-secondary);
+    gap: 8px;
   }
-  @media (prefers-reduced-motion: reduce) {
-    .back-attention { animation: none; }
+  .back-empty .back-title {
+    margin: 0;
+    font-size: 18px;
+    font-weight: 600;
+    color: var(--text);
+  }
+  .back-empty .back-hint {
+    margin: 0;
+    font-size: 13px;
   }
   /* `fullstack-a-27` removed the standalone `.pane-theme-toggle`
      chrome button (per `fullstack-59`); the theme toggle now lives
