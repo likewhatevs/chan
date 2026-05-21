@@ -11,10 +11,12 @@
 
   import FileInfoBody from "./FileInfoBody.svelte";
   import TagInfoBody from "./TagInfoBody.svelte";
+  import DirectoryInfoBody from "./DirectoryInfoBody.svelte";
   import type { GraphViewNode } from "../state/graphData.svelte";
 
   export type InspectorSelection =
     | { kind: "file"; path: string }
+    | { kind: "directory"; path: string; label?: string }
     | {
         kind: "tag" | "mention" | "date";
         nodeId: string;
@@ -77,6 +79,13 @@
     {onContactNavigate}
     {onSetAsScope}
     {showRefs}
+  />
+{:else if selection.kind === "directory"}
+  <DirectoryInfoBody
+    path={selection.path}
+    label={selection.label}
+    {onSetAsScope}
+    {onClose}
   />
 {:else}
   <TagInfoBody

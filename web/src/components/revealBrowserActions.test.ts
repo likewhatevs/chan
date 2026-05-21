@@ -82,22 +82,33 @@ describe("no inline close affordance on first-class surfaces", () => {
   });
 
   // `fullstack-a-33`: the explicit "Graph from here" button on the
-  // graph's inspector goes away. DriveInfoBody / FileInfoBody /
-  // TagInfoBody still ship the button (FileBrowserSurface consumes
-  // it), but the GraphPanel no longer passes `onSetAsScope` from
-  // any of its inspector branches. The ancestor breadcrumb above
-  // the inspector body is the in-graph re-scope path.
+  // graph's inspector goes away for file / tag / mention bodies.
+  // DriveInfoBody / FileInfoBody / TagInfoBody still ship the
+  // button (FileBrowserSurface consumes it), but the GraphPanel
+  // no longer passes `onSetAsScope` for those. The ancestor
+  // breadcrumb above the inspector body is the in-graph re-scope
+  // path.
+  // `fullstack-a-50` G3 re-introduces `onSetAsScope` ONLY for the
+  // new directory inspector (DirectoryInfoBody) — the breadcrumb
+  // covers ancestor navigation upward; the directory inspector's
+  // button targets the SELECTED directory (which may be unrelated
+  // to the current scope's ancestor chain, e.g. a directory the
+  // user navigated into via cross-link).
   test("GraphPanel does not pass onSetAsScope to DriveInfoBody", () => {
     expect(graph).not.toMatch(/<DriveInfoBody\s+onSetAsScope=/);
   });
 
-  test("GraphPanel does not pass onSetAsScope on any InspectorBody", () => {
+  test("GraphPanel passes onSetAsScope on InspectorBody only for directory selections (-a-50)", () => {
     // The fs-mode and semantic-mode branches both used to wire
     // `onSetAsScope` against `scopeFsGraphFromHere` / inline
-    // `graphState.scopeId = ...` blocks. `fullstack-a-33` drops
-    // both; the breadcrumb (scope-crumbs nav below) is the
-    // replacement.
-    expect(graph).not.toMatch(/<InspectorBody[\s\S]*?onSetAsScope=/);
+    // `graphState.scopeId = ...` blocks. `fullstack-a-33` dropped
+    // both. `fullstack-a-50` re-adds it scoped to
+    // `inspectorSelection?.kind === "directory"` → re-roots via
+    // `rescopeFromHere("dir:<path>")`. Non-directory selections
+    // still skip the prop (the breadcrumb covers them).
+    expect(graph).toMatch(
+      /onSetAsScope=\{[\s\S]*?inspectorSelection\?\.kind === "directory"[\s\S]*?rescopeFromHere\(/,
+    );
   });
 
   test("GraphPanel renders the scope-crumbs ancestor breadcrumb", () => {

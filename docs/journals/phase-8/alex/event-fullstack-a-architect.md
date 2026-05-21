@@ -3671,3 +3671,137 @@ grep-anchor commit.
   resolution shape.
 
 Holding.
+
+## 2026-05-21 — poke (fullstack-a-50 ready for review)
+
+Incident acked, `(b)+(c)` routing applied
+(grep-anchor `75b0953` already in HEAD;
+audit-trail correction in
+`fullstack-a-49.md` from `cc3a888`). New
+memory rule `feedback-atomic-audit-commit`
+saved. Picked up `-a-50`.
+
+`-a-50` ready for review. Six-file change.
+SPA-only; no Rust touched. All prereqs in HEAD
+(`-a-43` Task A, `-a-45..-a-48` Tasks B/C/E/F,
+`systacean-15` cross-dir aggregation, `-a-49`
+G2 hierarchy spine).
+
+### What landed
+
+`web/src/api/client.ts` — new
+`api.reportDir(path)` calls
+`/api/report/dir` (the O(1) cache from
+`systacean-15`). Same `ReportPrefix` response
+shape as `reportPrefix`.
+
+`web/src/components/InspectorBody.svelte` —
+`InspectorSelection` extended with
+`{ kind: "directory"; path: string; label?: string }`.
+Dispatch branch routes directory selections to
+`<DirectoryInfoBody>`.
+
+`web/src/components/DirectoryInfoBody.svelte`
+(new) — FB-style body. Sections: kind chip +
+title + monospaced path + "Graph from here"
+button + Totals (files / SLOC / comments /
+blanks) + By-language table + COCOMO summary.
+404 from the cache endpoint surfaces a
+"no chan-report data yet" affordance pointing
+at the chan-reports toggle in the Hybrid FB
+back-side (`-a-48`).
+
+`web/src/components/GraphPanel.svelte` —
+`inspectorSelection` derived maps
+`selectedNode.kind === "folder"` to the new
+directory inspector kind. The SPA normalises
+chan-server's `"directory"` wire kind to
+`"folder"` at data-load time (see
+GraphPanel.svelte lines ~957/958 + ~1039/1041);
+`RenderedNode` narrows to `"folder"`. Matching
+`"folder"` is type-safe + covers the current
+data path.
+
+`<InspectorBody onSetAsScope={...}>` re-wired
+for directory selections only: calls
+`rescopeFromHere(\`dir:${inspectorSelection.path}\`)`
+using the existing `-a-33` re-rooting helper.
+Non-directory selections still skip the prop
+(the breadcrumb covers them; matches `-a-33`'s
+rule).
+
+`web/src/components/DirectoryInfoBody.test.ts`
+(new) — 10 raw-source pins.
+
+`web/src/components/revealBrowserActions.test.ts`
+— `-a-33`'s "GraphPanel does not pass
+onSetAsScope on any InspectorBody" pin rewritten
+to the `-a-50` shape: assert directory-only
+onSetAsScope wiring exists. Comment block
+expanded to call out the `-a-33` → `-a-50`
+evolution.
+
+### Decisions flagged
+
+* **Cache endpoint over walk-the-file-map**:
+  `api.reportDir` is faster + fresh per the
+  maintained cache invariant from `systacean-15`.
+* **`kind: "folder"` matched, not
+  `"directory"`**: SPA normalisation at
+  load-time renames the wire kind. Type-safe.
+* **404 → empty-state hint** (not hard error):
+  empty directories or pre-indexing
+  surface a "Enable chan-reports in Hybrid FB
+  back" hint via the `-a-48` toggle.
+* **Inline `<span>` "DIR" chip**: `KindChip`
+  doesn't have a directory kind yet; an inline
+  text chip avoids extending it in this commit.
+  Flag if you'd like KindChip extended to
+  cover directory in a follow-up.
+* **`rescopeFromHere` reused** — matches the
+  breadcrumb button's semantic.
+
+### Gate
+
+* vitest **668 / 668** (+10 net from `-a-49`'s
+  658).
+* svelte-check 0 errors / 0 warnings across
+  3992 files.
+* npm build clean.
+* Rust gate not re-run (no Rust touched).
+
+### Atomic-audit-commit applied
+
+Going to commit this beat using the new
+`feedback-atomic-audit-commit` discipline —
+single bash invocation chaining
+`git add <paths> && git diff --staged --stat
+&& git commit -m "..." && git show --stat HEAD`.
+No inter-command race window. Memory rule
+saved as documented.
+
+### Suggested commit subject
+
+```
+Graph directory inspector + chan-reports aggregated stats (fullstack-a-50)
+```
+
+Single commit. API + InspectorSelection +
+component + GraphPanel wiring + tests are
+tightly coupled.
+
+### Files for `git add` (per-path discipline)
+
+* `web/src/api/client.ts`
+* `web/src/components/DirectoryInfoBody.svelte`
+* `web/src/components/DirectoryInfoBody.test.ts`
+* `web/src/components/InspectorBody.svelte`
+* `web/src/components/GraphPanel.svelte`
+* `web/src/components/revealBrowserActions.test.ts`
+* `docs/journals/phase-8/fullstack-a/fullstack-a-50.md`
+* `docs/journals/phase-8/fullstack-a/journal.md`
+* `docs/journals/phase-8/alex/event-fullstack-a-architect.md`
+  (this append)
+
+Push held — multi-agent tree commit
+discipline. Standing by for clearance.

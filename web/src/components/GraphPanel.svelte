@@ -756,7 +756,20 @@
               nodeId: selectedNode.id,
               label: selectedNode.label,
             }
-          : null,
+          : selectedNode.kind === "folder"
+            ? {
+                // `fullstack-a-50` G3: directory nodes route to
+                // DirectoryInfoBody via the new "directory" kind on
+                // InspectorSelection. Backend emits `directory` for
+                // the main /api/graph filesystem layer; GraphPanel
+                // normalises that to `folder` for `RenderedNode`
+                // (see `kind: "folder"` mappings at the data load
+                // step). Both surfaces map to the same inspector.
+                kind: "directory",
+                path: selectedNode.path,
+                label: selectedNode.label,
+              }
+            : null,
   );
 
   // ---- presentation ------------------------------------------------------
@@ -1389,11 +1402,15 @@
           <div class="missing">{hint}</div>
         </div>
       {:else}
-        <!-- `fullstack-a-33`: dropped `onSetAsScope`. Path-based
-             re-scope is the breadcrumb's job; pivoting to a tag /
-             mention / file's neighbourhood now goes through chord
-             spawn (Cmd+Shift+M with the focused node as context,
-             wired in `fullstack-a-32`). -->
+        <!-- `fullstack-a-33`: dropped `onSetAsScope` for the
+             tag / mention / file paths — breadcrumb + chord
+             spawn cover those.
+             `fullstack-a-50` G3: directory nodes get
+             `onSetAsScope` back so the "Graph from here"
+             button in DirectoryInfoBody re-roots the current
+             graph at that directory via the existing
+             `rescopeFromHere` helper. Mirror's the breadcrumb
+             button's semantic. -->
         <InspectorBody
           selection={inspectorSelection}
           onOpen={
@@ -1413,6 +1430,11 @@
           onReveal={revealSelectedFile}
           onNavigate={selectByPath}
           onContactNavigate={selectByPath}
+          onSetAsScope={
+            inspectorSelection?.kind === "directory"
+              ? () => rescopeFromHere(`dir:${inspectorSelection.path}`)
+              : undefined
+          }
           documentsOverride={selectionDocumentsInScope}
         />
       {/if}

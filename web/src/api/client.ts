@@ -307,6 +307,16 @@ export const api = {
       "GET",
       `/api/report/prefix?path=${encodeURIComponent(path)}`,
     ),
+  /// `fullstack-a-50` G3: per-directory roll-up via the O(1) cache
+  /// from `systacean-15`. Same response shape as `reportPrefix` but
+  /// reads from the maintained cache instead of walking the file map.
+  /// Empty `path` returns the drive root. 404 when the directory
+  /// has no tracked files (caller treats null as "no report yet").
+  reportDir: (path: string) =>
+    req<ReportPrefix>(
+      "GET",
+      `/api/report/dir?path=${encodeURIComponent(path)}`,
+    ),
   /// Resolve a wiki / markdown link target to the actual drive file
   /// + node kind. `target` is the path portion of the link (no
   /// `#anchor`); pass through path-encoded segments verbatim. The

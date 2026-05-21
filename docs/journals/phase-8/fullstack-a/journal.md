@@ -1196,3 +1196,87 @@ Outbound poke fired; standing by. Queue
 waiting: `-a-50..52` (further graph overhaul)
 + G5 task (markdown-link overlay; architect to
 cut as `-a-56` or `-a-57`) → `-a-42` (About).
+
+## 2026-05-21 — -a-49 committed (5685be4 cross-agent incident); -a-50 ready for review
+
+`-a-49` cleared + committed as `5685be4 Graph
+layout: filesystem-hierarchy as backbone
+(fullstack-a-49)`, BUT post-commit audit caught a
+cross-agent commit-hygiene incident — same race
+shape as `-a-44`'s `a8e991a` but REVERSED.
+@@Systacean's `-19` work was staged in parallel
+during round-17's three-lane simultaneous clearance;
+my `git commit` swept it up. Net state: both
+lanes' work in HEAD verbatim under my commit
+subject. Architect routed (b)+(c): audit-trail
+correction in both task tails + grep-anchor
+docs commit at `75b0953`. Saved
+`feedback-atomic-audit-commit` memory entry from
+the incident — going forward, audit + commit
+collapse into ONE bash invocation chain.
+
+### -a-50 complete (G3 directory inspector)
+
+Six-file change. SPA-only.
+
+* `web/src/api/client.ts` — new
+  `api.reportDir(path)` calls `/api/report/dir`
+  (the O(1) cache from `systacean-15`).
+* `web/src/components/InspectorBody.svelte` —
+  `InspectorSelection` extended with
+  `{ kind: "directory"; path; label? }`;
+  dispatches to the new `DirectoryInfoBody`.
+* `web/src/components/DirectoryInfoBody.svelte`
+  (new) — FB-style body for directory nodes:
+  totals + by-language table + COCOMO summary +
+  "Graph from here" button. 404 from the cache
+  endpoint renders the "no chan-report data
+  yet" affordance pointing at the chan-reports
+  toggle (-a-48).
+* `web/src/components/GraphPanel.svelte` —
+  `inspectorSelection` maps
+  `selectedNode.kind === "folder"` to the
+  directory inspector kind (SPA normalises
+  chan-server's `"directory"` to `"folder"` at
+  load). `InspectorBody onSetAsScope` re-wired
+  for directory selections; calls
+  `rescopeFromHere(\`dir:${path}\`)`.
+* `web/src/components/DirectoryInfoBody.test.ts`
+  (new) — 10 wiring pins.
+* `web/src/components/revealBrowserActions.test.ts`
+  — `-a-33` pin updated to assert the
+  directory-only `onSetAsScope` wiring exists.
+
+### Decisions
+
+* Cache endpoint over walk-the-file-map endpoint.
+* `kind: "folder"` matched (SPA-normalised);
+  not `"directory"` (wire-side).
+* 404 → empty-state with chan-reports toggle
+  hint, not hard error.
+* Inline "DIR" text chip; KindChip doesn't
+  cover directory kind yet (future polish).
+* `rescopeFromHere(\`dir:${path}\`)` reuses
+  `-a-33` re-rooting machinery.
+
+### Gate
+
+* vitest **668 / 668** (+10 net).
+* svelte-check 0 errors / 0 warnings across
+  3992 files.
+* npm build clean.
+* Rust gate not re-run (no Rust touched).
+
+### Atomic-audit-commit applied
+
+Per the new memory rule, this commit will use a
+single bash invocation chaining `git add` +
+audit + `git commit` + post-audit. No
+inter-command race window.
+
+Impl note + commit subject at
+[fullstack-a-50.md](fullstack-a-50.md). Outbound
+poke fired; standing by. Queue waiting:
+`-a-51` (G6 + Task D — graph nav chords / legend
+grid) → `-a-52` (G10 + G9 — graph polish) → G5
+follow-up → `-a-42` (About).
