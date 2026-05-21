@@ -675,6 +675,16 @@
   - severity: silent-failure UX bug; affects agent-pokes-reply walkthroughs which are the validation surface for the entire `-b-13` rich-prompt cluster. Not v0.11.2 candidate (needs investigation time + no clean repro yet)
   - dispatched for Round-2 wave-2 against @@Systacean
 
+- chan-desktop first click after window-focus restore doesn't follow the mouse to select the pane under the cursor
+  - flagged 2026-05-21 by @@Alex: when chan-desktop loses focus (e.g. Cmd+Tab to browser), then user clicks back onto the chan window to refocus, the click DOES restore window focus but the previously-selected pane stays selected. Subsequent typing lands on the OLD pane (e.g. the left-side terminal that was active before the focus loss), not the pane the user just clicked on (e.g. the right-side editor under the mouse pointer)
+  - counter-intuitive: the click signals user intent — "I want to work in THIS pane now" — but the active selection ignores the click and only honors the focus restoration
+  - want: on the first click that restores chan-desktop window focus, ALSO select the Hybrid pane under the click position. So the click does two things in one: restore window focus + dispatch paneSelect for the pane the cursor is over
+  - **NOT on Cmd+Tab focus restore** (clarified 2026-05-21 by @@Alex): Cmd+Tab restores window focus WITHOUT a mousedown. In that case the pane selection stays where it was — the user is doing a keyboard refocus, not signaling a click-intent. Only the click-to-focus path should trigger the pane-follow behavior
+  - detection shape: SPA listens for window `focus` event + `mousedown` event. If `mousedown` fires within a short window of the `focus` event (same event tick or ~50ms), treat it as a click-to-focus restore; map the mousedown target to a Hybrid pane via the DOM ancestry; dispatch paneSelect on that pane. Otherwise (`focus` event without an adjacent mousedown — Cmd+Tab path) → no pane-select change
+  - lane: @@FullStackA (SPA pane-select + window-focus event handling). Likely no Tauri-side work needed — the `window` BrowserWindow already fires `focus` on the JS side when chan-desktop activates. If timing turns out to need Tauri-side mediation (e.g. focus event fires before mousedown reliably), cross-lane to @@FullStackB
+  - severity: UX papercut; surfaces every time the user comes back to chan from another app via mouse click. Not regression-class (always behaved this way); quality-of-life fix
+  - NOT YET DISPATCHED — Round-2 wave-3 candidate; can ride with the broader Hybrid back-side wave or standalone
+
 ## Round 2 — needs deeper change
 
 - Large markdown files block the editor with a spinner while loading

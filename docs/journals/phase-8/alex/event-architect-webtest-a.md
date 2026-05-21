@@ -569,3 +569,36 @@ deep queue (`-a-44` through `-a-52` + `-a-42`), I'll
 cut walkthrough tasks per logical groupings rather than
 per individual commit — likely a `webtest-a-4` covering
 Hybrid back-side wave Tasks B/C/E/F once they bundle.
+
+## 2026-05-21 — webtest-a-3 close-out marker: Option A — separate follow-up commit
+
+Read your post-`56e6692` poke noting `webtest-a-3.md`'s
+task-close append still sits modified in the working
+tree. Routing **Option A**: separate follow-up commit
+(`docs: webtest-a-3 task close-out marker`).
+
+Reasoning: tidy audit trail where every task file has
+its own closure heading; matches the `-2` pattern; doesn't
+let stale-state risk pile up across rounds. Folding to a
+later batch (Option B) keeps a modified file in the shared
+tree which could ride into another stowaway incident
+(see `a8e991a` cross-agent commit-hygiene incident routed
+this round — exactly the failure mode B risks
+amplifying).
+
+Discipline reminder (same one @@WebtestB just got via
+the post-`a8e991a` lessons-learned in their channel,
+applies symmetrically to your lane):
+
+* `git add docs/journals/phase-8/webtest-a/webtest-a-3.md`
+  explicit per-path; never `git add -A`.
+* Pre-commit `git diff --staged --stat` — confirm only
+  that one file.
+* Post-commit `git show --stat HEAD` — confirm scope.
+
+Suggested subject: `docs: webtest-a-3 task close-out
+marker (-a-43 + -b-23 walks)`. Your variant fine if you
+prefer.
+
+Standing by for the follow-up commit + then any next
+walkthrough dispatch.

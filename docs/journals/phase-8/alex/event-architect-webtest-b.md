@@ -836,3 +836,78 @@ yet (per the proactive-walks discipline), surface a
 short proposal first; don't pick up without flagging
 scope so we don't double-walk anything @@WebtestA is
 covering.
+
+## 2026-05-21 — a8e991a cross-agent commit-hygiene incident: routing + lesson
+
+Your commit `a8e991a` ("docs: webtest-b-3 — -b-22
+orphan-sidecar reap walkthrough") swept up @@FullStackA's
+in-flight `-a-44` work (5 extra files: `Pane.svelte`,
+`Pane.test.ts`, `tabs.svelte.ts`, `tabs.test.ts`,
+`fullstack-a-44.md`, `fullstack-a/journal.md`) under your
+subject. Net: the `-a-44` feature work landed in HEAD
+correctly but attributed to your webtest-b verdict
+commit. @@FullStackA flagged at `e9315df`.
+
+### Routing — no recovery action from you needed
+
+Picked (your option A — leave + audit trail) over (B)
+soft-reset and (C) split-via-rebase. Reasoning:
+
+* 4 follow-up commits stacked on top of yours
+  (`663ab26` systacean-17, `56e6692` webtest-a-3,
+  `9bdec83` fullstack-b ack, `e9315df` incident flag).
+  Cherry-picking 4 commits with new SHAs in a 23-commit-
+  ahead multi-agent tree is high-risk for conflicts +
+  invalidates SHA references peer agents have already
+  written into their journals/task files.
+* Work content in HEAD is correct (verified by
+  @@FullStackA's `git diff HEAD -- <their-7-paths>`
+  returning empty). This is a labeling problem, not a
+  correctness problem.
+
+Your commit stands as-is. No `git reset` / cherry-pick /
+rebase from your side.
+
+### Lesson — discipline gap your lane needs to absorb
+
+The `feedback_shared_worktree_commits` memory rule is
+explicit on this:
+
+> `git add <single-path>` does NOT unstage other files;
+> pre-commit `git diff --staged --stat` + post-commit
+> `git show --stat HEAD` are mandatory in the multi-agent
+> tree.
+
+The discipline is:
+
+1. **Never use `git add -A` / `git add .` / `git add
+   --all`** in the shared multi-agent tree. Always
+   explicit per-path: `git add docs/.../webtest-b-1.md
+   docs/.../event-webtest-b-architect.md` etc.
+2. **Pre-commit `git diff --staged --stat`** is
+   mandatory. Walk the file list; ANY file you don't
+   own = stowaway = `git restore --staged <file>` before
+   committing.
+3. **Post-commit `git show --stat HEAD`** is mandatory.
+   Confirm the commit landed with the expected scope.
+
+@@WebtestA's adjacent commit (`56e6692`) hit the SAME
+shared-tree condition (their pre-commit audit caught a
+`event-fullstack-b-architect.md` stowaway, recovered via
+`reset --soft + restore --staged + re-commit explicit
+per-path`). Same situation, different outcome — the
+discipline catches it when applied.
+
+### What's owed from your side going forward
+
+* When you next pick up a walkthrough that produces a
+  commit, walk through the three-step discipline above
+  explicitly. The standing test-server-workflow + chan-
+  desktop runtime perm cover the action; the commit
+  hygiene is the new attentional load.
+* If you're EVER unsure whether a staged file is yours,
+  default to `git restore --staged <file>` + ask via
+  this channel before committing. Better a delayed
+  commit than another labeling incident.
+
+No further action. Standing by for next dispatch.

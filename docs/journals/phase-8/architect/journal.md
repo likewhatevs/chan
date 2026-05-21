@@ -1882,3 +1882,152 @@ NOT touching (other agents' own files):
 * All `event-<agent>-architect.md` files (agents' own
   outbounds; they commit with their work).
 * All task-file appends in agent dirs (theirs to commit).
+
+## 2026-05-21 — incident routing: a8e991a cross-agent commit-hygiene + 1 new bug
+
+### Five lane commits landed since last round
+
+| SHA | Subject | Lane |
+|-----|---------|------|
+| `a8e991a` | `docs: webtest-b-3 — -b-22 orphan-sidecar reap walkthrough (component verified, click cycles parked)` | @@WebtestB (BUT see incident below) |
+| `663ab26` | `chan-drive: box toml::Error variants in ConfigError (systacean-17)` | @@Systacean |
+| `56e6692` | `docs: webtest-a-3 — -a-43 Hybrid back-side + -b-23 web-marketing walkthroughs (8/8 HOLD)` | @@WebtestA |
+| `9bdec83` | `docs: fullstack-b post-recycle bootstrap ack (queue-empty, standing by)` | @@FullStackB |
+| `e9315df` | `docs: -a-44 commit-hygiene incident flag to @@Architect` | @@FullStackA |
+
+Two of these (`663ab26`, `9bdec83`) are clean per their
+own audits. The other three are the incident chain.
+
+### The a8e991a cross-agent commit-hygiene incident
+
+@@WebtestB's commit `a8e991a` (intended scope: 2 webtest-b
+verdict files) used a broad `git add` and swept up 5
+additional in-flight files from @@FullStackA's `-a-44`
+work: `Pane.svelte`, `Pane.test.ts`, `tabs.svelte.ts`,
+`tabs.test.ts`, `fullstack-a-44.md`, `fullstack-a/journal.md`,
++ @@FullStackA's outbound poke. Net 9-file commit under
+the wrong subject; @@FullStackA's intended commit subject
+(`Hybrid pane drag-to-rearrange + transaction-mode NAV
+(fullstack-a-44)`) never landed.
+
+Both @@FullStackA AND @@WebtestB independently flagged the
+incident:
+
+* @@FullStackA via `event-fullstack-a-architect.md` then
+  committed the flag as `e9315df`.
+* @@WebtestB via `event-webtest-b-architect.md` with
+  three proposed recovery options (A audit-trail / B
+  soft-reset + cherry-pick / C rebase-split).
+
+Adjacent risk surface: @@WebtestA's `56e6692` commit hit
+the SAME shared-tree condition but their pre-commit audit
+caught the stowaway (`event-fullstack-b-architect.md`),
+recovered via `reset --soft + restore --staged + re-commit
+explicit per-path`. Same condition, different outcome —
+the discipline catches it when applied.
+
+### Routing decision — (b) audit-trail + (c) anchor commit
+
+**(a) History rewrite — DECLINED.** With 4 follow-up
+commits stacked on `a8e991a` (`663ab26`, `56e6692`,
+`9bdec83`, `e9315df`), rewriting requires cherry-picking
+each. Peer agents have already referenced the existing
+SHAs in their journals/task files. Push is still held but
+the local-tree blast radius alone justifies refusal.
+@@WebtestB's options (B) + (C) decline for the same
+reason.
+
+**(b) Audit-trail correction in task file — GO.**
+Routed to @@FullStackA: append a `## 2026-05-21 — landed
+under cross-agent commit (a8e991a)` section to
+[`../fullstack-a/fullstack-a-44.md`](../fullstack-a/fullstack-a-44.md)
+tail at next commit beat. Future readers walk the task
+file when grepping `-a-44`; the canonical audit anchor
+is the task file, not the commit log.
+
+**(c) Architect-side grep-anchor commit — DOING IT NOW.**
+This commit (current beat) carries `fullstack-a-44` in
+the subject line:
+`docs: architect routing on a8e991a cross-agent commit-hygiene incident + new pane-focus bug (fullstack-a-44 audit anchor)`.
+That closes the (c) need without forcing an empty commit
+from @@FullStackA's side.
+
+### Lesson routed to @@WebtestB
+
+Append on `event-architect-webtest-b.md` carrying the
+`feedback_shared_worktree_commits` memory rule + the
+explicit discipline:
+
+1. NEVER `git add -A` / `git add .` in the shared tree.
+2. Pre-commit `git diff --staged --stat` is mandatory.
+3. Post-commit `git show --stat HEAD` is mandatory.
+
+Cross-referenced @@WebtestA's same-condition save as
+the empirical proof the discipline works when applied.
+
+### Closure granted on @@FullStackA
+
+Greenlighted them to pick up `-a-45` (Hybrid back-side
+Task B — Terminal Settings migration) immediately, with
+the (b) audit-trail append landing alongside the `-a-45`
+commit beat. No work blockage from the incident.
+
+### New @@Alex bug filed this round
+
+[`../phase-8-bugs.md`](../phase-8-bugs.md) appended with:
+
+* **chan-desktop first click after window-focus restore
+  doesn't follow the mouse to select the pane under the
+  cursor.** UX papercut surfacing every time the user
+  Cmd+Tabs away and then clicks back onto chan-desktop.
+  Currently: click restores window focus but pane
+  selection stays at the pre-focus-loss pane; subsequent
+  typing lands on the OLD pane, not the clicked one.
+  Wanted: on the first click that restores window focus,
+  ALSO dispatch paneSelect on the Hybrid pane under the
+  mousedown.
+
+  Critical disambiguation @@Alex clarified mid-round:
+  **NOT on Cmd+Tab** (keyboard refocus without
+  mousedown). Detection shape: SPA listens for window
+  `focus` + `mousedown`; if mousedown fires within ~50ms
+  of focus, treat as click-to-focus + dispatch
+  paneSelect. Focus-without-mousedown (Cmd+Tab) → no
+  pane-select change.
+
+  Lane: @@FullStackA primary (SPA window-focus + pane-
+  select); possible cross-lane to @@FullStackB if Tauri-
+  side mediation needed. Round-2 wave-3 candidate; not
+  regression-class.
+
+### Lane state at end of round
+
+| Lane | State |
+|------|-------|
+| @@Systacean | `-17` committed (`663ab26`); expect `-18` pickup next (model-dep tests gate-unblocker); smoke branch `systacean-17-smoke` on origin |
+| @@CI | Idle; ci-12 committed (`6abac58`); queue-empty until wave-3 Linux-binaries |
+| @@FullStackA | `-a-44` cleared + landed (incorrectly under a8e991a); greenlit `-a-45` pickup with (b) audit-trail append owed |
+| @@FullStackB | Respawned (`9bdec83`); queue-empty; standing by for wave-3 |
+| @@WebtestA | `-a-3` verdict committed (`56e6692`); Option A close-out marker pending |
+| @@WebtestB | `-b-3` verdict committed (`a8e991a`, the incident commit); lesson routed; standing by |
+
+### What I'm committing this round
+
+| File | Reason |
+|------|--------|
+| `architect/journal.md` | This entry |
+| `alex/event-architect-fullstack-a.md` | (b) routing + `-a-45` greenlight |
+| `alex/event-architect-webtest-b.md` | Incident routing + lessons-learned |
+| `alex/event-architect-webtest-a.md` | Option A on close-out marker |
+| `phase-8-bugs.md` | New focus-follows-click bug |
+
+NOT touching (other agents' own files):
+
+* All `event-<agent>-architect.md` files modified by
+  agents (their own outbounds — `event-ci-architect.md`,
+  `event-webtest-a-architect.md`, `event-webtest-b-architect.md`
+  are post-commit appends agents will commit with their
+  next work).
+* All task-file appends (`ci-12.md`, `ci/journal.md`,
+  `systacean-15.md`, `webtest-a-3.md`).
+* No code touched.
