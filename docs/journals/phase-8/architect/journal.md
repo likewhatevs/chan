@@ -1777,3 +1777,108 @@ their work):
   (will commit with `-15` code).
 * `webtest-a/webtest-a-3.md` — touched by @@WebtestA on
   pickup (likely a status update); they own that file.
+
+## 2026-05-21 — second clearance round (-17 + -44) + smoke-dispatch decision
+
+@@Systacean + @@CI both committed their cleared work
+(`f4a197d` and `6abac58` in HEAD). @@FullStackA respawned
+mid-round (not signaled separately; bootstrap was clean),
+picked their queue head `-a-44`, implemented + poked.
+@@Systacean continued forward to `-17`, implemented +
+poked.
+
+### Lane commits landed (per agent self-commit)
+
+| SHA | Subject | Lane |
+|-----|---------|------|
+| `f4a197d` | `chan-report: maintained per-directory aggregation cache + /api/report/dir (systacean-15)` | @@Systacean |
+| `6abac58` | `ci: install GTK deps in workspace-clippy jobs + add ci.yml workflow_dispatch (ci-12)` | @@CI |
+
+Both per my prior clearance pokes; pre/post-commit audits
+clean; no stowaways. @@CI's `ci-11-post-mortem.md` append
+landed with `6abac58` per the post-mortem placement
+decision.
+
+### Two new commit-readiness pokes (cleared this round)
+
+* **@@Systacean -17**: shape (a) implementation with
+  defensive Encode-side boxing on top of the named
+  Decode-side fix. Single-file diff +26/-3 in
+  `crates/chan-drive/src/index/config.rs`. Manual
+  `From<toml::ser::Error>` impl preserves `?` ergonomics
+  at the `toml::to_string_pretty(cfg)?` call site (would
+  have broken under `#[from]` on `Box<...>`). All 425+
+  chan-drive tests + workspace test + workspace clippy +
+  build-no-default-features green.
+
+  Asked me to pick between (1) smoke dispatch via
+  `systacean-17-smoke` branch and (2) fold into regular
+  push flow. Picked **option 1** — reuses the
+  `ci-12-smoke` pattern; operationally low-cost; gives
+  empirical Windows clippy confirmation before main
+  lands the gate-unblocker. Smoke-branch push
+  authorized (non-tag; doesn't trip the Round-2-close
+  tag-push hold).
+
+* **@@FullStackA -44**: Hybrid pane drag-to-rearrange +
+  transaction-mode NAV. Four-file SPA + state change +
+  12 new test pins. vitest 600/600 (+12 net from
+  `-a-43`'s 588). Three flagged deviations, all
+  accepted:
+
+  1. Cmd+. mid-transaction NOT wired — asymmetry with
+     keyboard NAV's Enter-only / Esc-only model would
+     diverge; Esc as universal exit is the right shape.
+  2. Click-without-drag → no-op release — matches task
+     default + `paneModeSwapWith` grab==drop no-op
+     covers the edge case.
+  3. Every pane drop-target (not just Hybrid) — matches
+     bug-list "rearrange ANY pane" + window-manager-like
+     framing.
+
+### Smoke-branch lifecycle reminder
+
+After this round + `-17` smoke completes, we'll have THREE
+smoke branches on origin: `ci-12-smoke` + (impending)
+`systacean-17-smoke` + any future smoke shape. All prune
+on the same beat as the `chan-v0.11.99-dryrun.{1..4}`
+tag cleanup; not blocking, but worth tracking so the
+audit-trail-keep set doesn't grow indefinitely.
+
+### Lane state at end of round
+
+| Lane | State |
+|------|-------|
+| @@Systacean | `-17` cleared + smoke option 1 chosen; expect commit + smoke + then `-18` pickup |
+| @@CI | `ci-12` committed (`6abac58`); idle until wave-3 Linux-binaries dispatch |
+| @@FullStackA | `-a-44` cleared; expect commit + then `-a-45` pickup (Hybrid back-side wave Task B) |
+| @@FullStackB | Still not respawned; queue-empty post-`-b-23` |
+| @@WebtestA | Verdict still uncommitted by them; cleared last round |
+| @@WebtestB | Verdict still uncommitted by them; cleared last round |
+
+The webtest verdicts staying uncommitted across two
+rounds is mildly surprising — both lanes were up and
+poke-ready last round. Likely either: their sessions
+have idled / closed and will re-pick up the clearance
+when they next bootstrap, OR they're queue-empty and
+waiting on the next dispatch (which doesn't gate on
+their commit). Not blocking my work; if it persists
+past the @@FullStackA `-a-44` commit + next walkthrough
+dispatch, I'll check directly.
+
+### What I'm committing this round
+
+| File | Reason |
+|------|--------|
+| `architect/journal.md` | This entry |
+| `alex/event-architect-systacean.md` | -17 clearance + option 1 smoke pick |
+| `alex/event-architect-fullstack-a.md` | -44 clearance + 3 deviations accepted |
+
+NOT touching (other agents' own files):
+
+* `crates/chan-drive/src/index/config.rs` — @@Systacean's
+  `-17` code.
+* `web/src/{components/Pane.svelte,Pane.test.ts,state/tabs.svelte.ts,tabs.test.ts}` — @@FullStackA's `-a-44` code.
+* All `event-<agent>-architect.md` files (agents' own
+  outbounds; they commit with their work).
+* All task-file appends in agent dirs (theirs to commit).

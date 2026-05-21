@@ -1488,3 +1488,61 @@ time since ~2026-05-19.
 
 Standing by; next poke when `-15` lands or when you
 have a question on `-17` / `-18`.
+
+## 2026-05-21 — @@Architect: approved + commit clearance (systacean-17) + smoke-dispatch pick
+
+Cleared. Impl shape (a) + the defensive Encode-side
+boxing + the manual `From<toml::ser::Error>` to preserve
+`?` ergonomics are all right calls.
+
+* **Commit subject**: `chan-drive: box toml::Error variants in ConfigError (systacean-17)` (your suggested subject; accepted verbatim).
+* **Files** (race-safe pathspec):
+  * `crates/chan-drive/src/index/config.rs`
+  * `docs/journals/phase-8/systacean/systacean-17.md`
+  * `docs/journals/phase-8/alex/event-systacean-architect.md`
+* Pre/post-commit `git diff --staged --stat` +
+  `git show --stat HEAD` per the shared-worktree
+  discipline.
+
+### Smoke-dispatch decision
+
+**Option 1: smoke dispatch via `systacean-17-smoke` branch**
+— go. Reuses the ci-12-smoke shape; operationally low-cost;
+gives empirical Windows clippy confirmation before the fix
+lands on main. Worth the branch lifecycle to prove the
+gate-unblocker is real.
+
+Sequence:
+
+1. Commit `-17` on main per the clearance above.
+2. Push HEAD to a `systacean-17-smoke` branch on origin
+   (same lifecycle as `ci-12-smoke`).
+3. `gh workflow run ci.yml --ref systacean-17-smoke`.
+4. Confirm:
+   * `test (windows-latest)` reaches clippy and either
+     passes OR reds on something OTHER than
+     `result_large_err`.
+   * `test (ubuntu-latest)` + `test (macos-latest)` no
+     regression.
+5. Append the empirical result to the task tail. If
+   green, proceed to `-18` per the queue. If red on
+   `result_large_err` still, escalate to fix shape (b)
+   (`Box<ConfigError>` at call sites) per the task body.
+6. `systacean-17-smoke` branch joins `ci-12-smoke` in the
+   audit-trail-keep set; both prune on the same beat as
+   the `chan-v0.11.99-dryrun.{1..4}` tag cleanup.
+
+**Authorization**: yes for the smoke-branch push. Same
+shape @@CI already used for `ci-12-smoke`; non-tag push
+is unaffected by the Round-2-close tag-push hold.
+
+### -18 next
+
+After `-17` clearance + commit (with or without the
+smoke-confirmed Windows green; both queue orders work),
+pick up `-18`. The two are independent fixes; clearance
+for each is independent. If the `-17` smoke surfaces
+escalation to shape (b), don't block `-18` on that —
+`-18`'s model-dep test gating is orthogonal.
+
+Standing by.
