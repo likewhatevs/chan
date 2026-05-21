@@ -1006,3 +1006,367 @@ tail for architect routing on the finding.
   outbound poke. No cleanup needed.
 
 Cleaner-than-prior teardown. Recycle ready.
+
+## 2026-05-21 — post-recycle boot + ci-12 (workspace GTK install)
+
+Bootstrapped fresh @@CI session via the
+[`bootstrap.md`](../../../agents/bootstrap.md)
+Working-agent block. Re-read contact card + skill
+guides + phase process + request + this journal +
+inbound architect channel + outbound recall. Working
+tree matched the prior session's expected recycle-state:
+`ci-10` (`8aed906`) + `ci-11` (`2193946`) both in HEAD;
+`d0b168e` session-close docs commit landed; branch
+ahead of origin/main pending Round-2 close.
+
+### Inbound on bootstrap
+
+Architect's pre-recycle handover sequence executed
+cleanly:
+
+* `v0.11.2 CLI binary backfill` declined by @@Alex
+  (route stays DMG-only for v0.11.2; Linux binaries
+  unification deferred to v0.12.0 wave-3).
+* `ci-12` cut per my pre-recycle finding on the
+  workspace-wide glib-sys gap. Fix shape (a) routed
+  per @@Alex's "install gtk dev as you recommend".
+  Full authorization for ci.yml + release.yml edits.
+* Round-1 / Round-2 commits stay unpushed locally
+  per the structural change; first GitHub Release
+  fires whenever Round-2 close cuts the next tag.
+
+### ci-12 (landed, committed)
+
+Workspace-wide CI gate restoration. The chan-desktop
+workspace member's Linux Tauri stack pulls
+`webkit2gtk-sys` + `glib-sys`; `cargo clippy
+--all-targets` from workspace root walks it; ci.yml +
+release.yml test jobs didn't apt-install the GTK
+stack; gate has been red since ~2026-05-19 (~15
+consecutive runs).
+
+**Files modified** (5 / +754 lines):
+
+| File | Change |
+|---------------------------------------|----------------------------------------------------------------|
+| `.github/workflows/ci.yml`            | + GTK install on `test (ubuntu-latest)` (matrix-gated)         |
+| `.github/workflows/ci.yml`            | + GTK install on `no-default-features` (always Ubuntu)         |
+| `.github/workflows/ci.yml`            | + `workflow_dispatch:` trigger (was needed for smoke fire; HTTP 422 without it) |
+| `.github/workflows/release.yml`       | + GTK install on `test-linux` (always Ubuntu)                  |
+| `docs/journals/phase-8/ci/ci-11-post-mortem.md` | + appended ci-12 post-mortem section (shared file per architect's hint that ci-11 + ci-12 are tightly coupled) |
+| `docs/journals/phase-8/ci/ci-12.md`   | + Commit readiness section + 5 open questions                  |
+| `docs/journals/phase-8/alex/event-ci-architect.md` | + commit-readiness poke + post-commit follow-up         |
+
+Package list mirrors `release-desktop.yml` lines 114-123
+verbatim. `if: matrix.os == 'ubuntu-latest'` on the
+ci.yml `test` matrix entry so Windows + macOS stay
+unchanged (Tauri cargo-gates GTK to Linux). Other
+ubuntu-only jobs got unconditional steps.
+
+### Smoke validation
+
+`gh workflow run ci.yml --ref ci-12-smoke` against
+the smoke branch fired run [`26231816355`](https://github.com/fiorix/chan/actions/runs/26231816355).
+Conclusion failure overall; the GTK fix itself
+validated empirically:
+
+| Job                                       | Conclusion | Notes                                      |
+|-------------------------------------------|------------|--------------------------------------------|
+| `rustfmt`                                 | success    | (unchanged)                                |
+| `web (check + test + build)`              | success    | (unchanged)                                |
+| `clippy + test (ubuntu-latest)`           | failure    | clippy step ITSELF green; cargo test red   |
+| `clippy + test (windows-latest)`          | failure    | `result_large_err` lint (pre-existing)     |
+| `build (no default features)`             | success    | GTK fix validated end-to-end on this job   |
+
+Per the task spec § Smoke validation acceptance ("EITHER
+passes OR reds on something other than glib-sys"), the
+GTK fix is validated: the ubuntu clippy step no longer
+trips on `glib-sys` / `pkg-config`. Downstream cargo
+test failure is out-of-lane.
+
+### Two out-of-lane findings surfaced + routed
+
+* **Finding #1 — Windows `result_large_err`**: pre-existing
+  clippy lint on `chan-drive/src/index/{config,facade}.rs`
+  (`ConfigError` boxing `toml::de::Error`). Not GTK-related;
+  pre-existing. @@Architect routed as
+  [`../systacean/systacean-17.md`](../systacean/systacean-17.md).
+* **Finding #2 — chan-drive cargo tests need BGE-small
+  model**: 14 tests panic with "embedding model not
+  downloaded". Stems from systacean-6/-7 making the
+  embed opt-in; tests assume model present at runtime.
+  Hidden behind GTK gap; unmasked by ci-12. @@Architect
+  routed as [`../systacean/systacean-18.md`](../systacean/systacean-18.md)
+  with shape (a) immediate-unblock (`#[ignore]` or
+  feature-gate on `embed-model`).
+
+After `-17` + `-18` land, per-PR CI gate goes fully
+green (4 of 4 affected jobs). That's the Round-3
+readiness signal.
+
+### Architect cleared + commit landed
+
+`6b8bf38` docs commit landed @@Architect's clearance
+round (`-15` + `ci-12` + 2 webtest verdicts) plus the
+two new systacean tasks (`-17` + `-18`). My clearance:
+
+> **Commit subject**: `ci: install GTK deps in
+> workspace-clippy jobs + add ci.yml workflow_dispatch
+> (ci-12)` (your suggested subject; accepted verbatim).
+
+Committed at **`6abac58`** (5 files, +754 / -0).
+Race-safe pathspec form per `ci-7` / `ci-10` / `ci-11`
+pattern; post-commit `git show --stat HEAD` matched
+the expected 5-file scope; no peer-agent stowaways
+from the shared worktree.
+
+### Cumulative lane summary (phase-8)
+
+| Task  | Topic                                                         | Commit  |
+|-------|---------------------------------------------------------------|---------|
+| ci-1  | web/ gate per-PR                                              | 6d5d8ac |
+| ci-2  | tag-triggered chan-desktop release scaffold                   | 97b82df |
+| ci-2  | drop stranded desktop/.github/workflows/ci.yml                | 97ca38a |
+| ci-3  | macOS signing + notarization brief                            | 141aa4d |
+| ci-4  | swap `cargo install` → taiki-e/install-action                 | 385da20 |
+| ci-5  | cache encoded BGE-small bundle                                | 0c076f0 |
+| ci-6  | gate ci-5 on `--features embed-model`                         | 747b7be |
+| ci-7  | tag-triggered signed + notarized chan-desktop                 | 666c027 |
+| ci-9  | release-desktop verify-step matches DMG-only staple           | f5b0122 |
+| ci-4  | tauri-cli `^2` → `2` major-only pin (latent fix)              | 988ce1d |
+| ci-10 | release-desktop polish (notary-log fetch + drop _x64 suffix)  | 8aed906 |
+| ci-11 | release.yml triggers on `chan-v*`                             | 2193946 |
+| ci-12 | install GTK deps in workspace-clippy jobs + workflow_dispatch | 6abac58 |
+
+13 commits across 12 tasks (ci-2 = 2 commits, ci-4 = 2
+commits, ci-8 = no commit / dryrun-tag-only).
+
+### Open Round-2 wave-3 / Round-3 lane (next-session handover)
+
+* **v0.12.0 Linux binaries** — Round-2 wave-3
+  candidate; not dispatched yet. Per the bug list
+  entry, spans `release.yml` matrix audit (Linux
+  targets present, producing artifacts) +
+  `release-desktop.yml` release-job extension (wire
+  Linux workflow artifacts into the upload-to-release
+  step). Includes the 2026-05-21 architecture
+  caveat: aarch64 Linux release builds (local
+  validation via sdme + lima-vm is aarch64-only; CI
+  ubuntu-latest is x86_64). Likely 1-2 ci-N tasks.
+* **`ci-12-smoke` branch + `chan-v0.11.99-dryrun.{1..4}`
+  tags** — both kept as audit trail; can be deleted
+  on the same beat at @@Alex's convenience. Not
+  blocking.
+* **Round-3 Track 3 — release readiness** — @@CI
+  portion includes CHANGELOG generation + final
+  pre-push gate run + signed-DMG smoke against the
+  v0.12.0 cut. Not dispatched yet.
+* **Round-3 full-SHA pin sweep** — third-party action
+  versions in workflows pinned to major (`@v4`, `@v2`);
+  full-SHA pin sweep is a Round-3 hardening task.
+  Deferred per `ci-7` Q3.
+
+### Teardown sweep
+
+* No `chan serve` processes from my lane (CI work is
+  workflow-edit + gh CLI; nothing local-spawned).
+* No throwaway drives in `/tmp/chan-test-*`.
+* No Chrome MCP tabs.
+* `act` not installed.
+* lima/sdme local-Linux validation NOT exercised
+  (smoke dispatch was canonical per task spec).
+* External state: smoke `workflow_dispatch` run
+  `26231816355` is complete (failure on ubuntu cargo
+  test + windows lint; documented). `ci-12-smoke`
+  branch on origin holds the smoke commit `517bc95`
+  as audit trail. No tag pushed; no signing surface
+  touched.
+* Working tree of CI-lane files: ci-12 committed
+  cleanly at `6abac58`; this journal append + the
+  outbound poke append + the ci-12.md "committed
+  as" append are the only working-tree changes from
+  my lane (per the per-task commit convention;
+  these roll up at session close).
+
+Idle pending wave-3 dispatch.
+
+## 2026-05-21 — ci-13 (drop Windows from per-PR matrix + release.yml)
+
+Same session continued; @@Architect dispatched `ci-13`
+post-poke based on @@Alex's 2026-05-21 chat: "let's
+please disable windows and carry on, no time to spend
+on this and i dont care much about windows for now."
+
+The smoke cascade since `ci-12` had unmasked a deep
+Windows-specific debt surface across multiple lanes
+(lock primitive divergence, terminal_sessions POSIX
+assumptions, notify-crate timing, watcher test cascade,
+chan-server PTY POSIX-shell assumptions). Cumulative
+iteration cost crossed @@Alex's "no time to spend"
+threshold; drop Windows from the per-PR gate, revisit
+in Round-3+.
+
+### Files modified
+
+| File | Change |
+|---------------------------------------|----------------------------------------------------------------|
+| `.github/workflows/ci.yml`            | matrix `[ubuntu-latest, windows-latest]` → `[ubuntu-latest, macos-latest]` (per architect's text-intent reading; see label-confusion note below) |
+| `.github/workflows/ci.yml`            | dropped the dead Windows `if: matrix.os == 'windows-latest'` cargo build step |
+| `.github/workflows/ci.yml`            | re-enable comment block citing the bug-list umbrella entry    |
+| `.github/workflows/release.yml`       | dropped 2 windows-latest entries from build matrix (`x86_64-pc-windows-msvc` + `aarch64-pc-windows-msvc` cross-arm) |
+| `.github/workflows/release.yml`       | updated header comment Targets list + Authenticode signing reference + corrected "musl-static" → "glibc dynamic" (matches `gnu` triplet) |
+| `docs/journals/phase-8/phase-8-bugs.md` | + umbrella Round-3 entry "Windows support — full re-enable when Round-3 / public-flip work picks up" with 7-step want list |
+| `docs/journals/phase-8/ci/ci-13.md`   | Commit readiness + post-commit follow-ups                     |
+
+### Architect (a)/(b) label confusion reconciled
+
+Architect's clearance text said "ACCEPT (a) — ubuntu +
+macOS" but my labels were (a) = Ubuntu-only, (b) =
+Ubuntu + macOS. Treated as a label slip; landed the
+text-intent shape `[ubuntu-latest, macos-latest]`.
+Architect explicitly confirmed in `076b2cf` (after-the-
+fact ack) that my reading was correct: "My text intent
+was Ubuntu + macOS ... You read the text-intent
+correctly + landed `[ubuntu-latest, macos-latest]`.
+Confirmed as the right shape; no follow-up needed to
+drop macOS."
+
+Architect-side lesson logged: restate chosen-option
+TEXT in clearance, not just the letter.
+
+### Smoke validation (two laps)
+
+* **Smoke #1**: `ci-13-smoke` branch (commit `d717d48`;
+  ubuntu-only matrix). Run [`26253981385`](https://github.com/fiorix/chan/actions/runs/26253981385).
+  **Result: SUCCESS** (all 4 jobs green, no
+  windows-latest entry visible).
+* **Smoke #2**: `ci-13-smoke-v2` branch (commit
+  `9959780`; ubuntu + macOS matrix per architect's
+  text-intent). Run [`26254608202`](https://github.com/fiorix/chan/actions/runs/26254608202).
+  Overall conclusion failure due to out-of-lane
+  rustfmt; all 4 substantive jobs ✓:
+
+| Job | Conclusion |
+|------|------|
+| `rustfmt` | ✗ failure (OUT OF LANE; routed to @@Systacean as -19 fixup) |
+| `web (check + test + build)` | ✓ success |
+| `clippy + test (ubuntu-latest)` | ✓ success |
+| `build (no default features)` | ✓ success |
+| `clippy + test (macos-latest)` | ✓ success |
+
+The macOS validation is the new data point: chan-desktop
++ all chan-server / chan-drive lanes compile + test
+cleanly on macos-latest. The matrix shape works
+structurally for per-PR coverage.
+
+### Out-of-lane finding: rustfmt failure on facade.rs:1250 (routed)
+
+`crates/chan-drive/src/index/facade.rs:1250` has a
+multi-line `assert!(matches!(out, Err(IndexError::Embed(EmbedError::Candle(_))))))`
+that rustfmt wants single-line. Introduced by
+`5685be4` (the cross-agent commit-hygiene incident
+where @@FullStackA's fullstack-a-49 commit subject
+swept up @@Systacean's `-19` test code).
+
+Architect routed to @@Systacean as a `-19` smoke
+fixup. Not my lane; surfaced for visibility only.
+Reproduced locally via `cargo fmt --check` against
+`ci-13-smoke-v2` to confirm `5685be4` artifact (not
+a ci-13 side effect).
+
+### Commit
+
+`b017d3d` (`ci: drop Windows from ci.yml + release.yml
+matrices (ci-13)`). 5 files, +438 / -38; race-safe
+pathspec form per ci-7 / ci-10 / ci-11 / ci-12
+pattern. Pre-stage audit empty; post-commit `git show
+--stat HEAD` lists exactly the 5 cleared files.
+
+### Mid-task recovery
+
+One mistake undone via the `git reset --soft HEAD~1`
+recovery from `feedback-shared-worktree-commits`
+memory. While trying to push the macOS-added change
+to `ci-13-smoke`, the `git switch ci-13-smoke` failed
+silently (peer-agent uncommitted files would have
+been overwritten). My next `git commit` ran on main
+instead of the smoke branch with a wrong subject +
+incomplete scope. Reset undid the rogue commit
+`316fc00` (reflog-only, never pushed). Created
+`ci-13-smoke-v2` as a fresh branch from current main
+HEAD for the macOS-included smoke instead.
+
+Memory pattern validated: race-safe pathspec on
+commits + pre-stage / post-commit audits would have
+flagged the wrong-scope issue immediately, but
+`git switch`'s "would overwrite" refusal is a
+DIFFERENT recovery shape that needs the stash
++ switch + restore dance to work cleanly in a shared
+multi-agent worktree. Logged as audit-trail in this
+journal entry.
+
+### Cumulative lane summary (phase-8)
+
+| Task  | Topic                                                         | Commit  |
+|-------|---------------------------------------------------------------|---------|
+| ci-1  | web/ gate per-PR                                              | 6d5d8ac |
+| ci-2  | tag-triggered chan-desktop release scaffold                   | 97b82df |
+| ci-2  | drop stranded desktop/.github/workflows/ci.yml                | 97ca38a |
+| ci-3  | macOS signing + notarization brief                            | 141aa4d |
+| ci-4  | swap `cargo install` → taiki-e/install-action                 | 385da20 |
+| ci-5  | cache encoded BGE-small bundle                                | 0c076f0 |
+| ci-6  | gate ci-5 on `--features embed-model`                         | 747b7be |
+| ci-7  | tag-triggered signed + notarized chan-desktop                 | 666c027 |
+| ci-9  | release-desktop verify-step matches DMG-only staple           | f5b0122 |
+| ci-4  | tauri-cli `^2` → `2` major-only pin (latent fix)              | 988ce1d |
+| ci-10 | release-desktop polish (notary-log fetch + drop _x64 suffix)  | 8aed906 |
+| ci-11 | release.yml triggers on `chan-v*`                             | 2193946 |
+| ci-12 | install GTK deps in workspace-clippy jobs + workflow_dispatch | 6abac58 |
+| ci-13 | drop Windows from ci.yml + release.yml matrices               | b017d3d |
+
+14 commits across 13 tasks. After ci-13: per-PR ci.yml
+gate is `[ubuntu-latest, macos-latest]`; release.yml
+ships Linux x86_64 + aarch64 + macOS aarch64; chan-desktop
+DMG via release-desktop.yml unaffected (macOS-only).
+
+### Open Round-2 wave-3 / Round-3 lane
+
+* **v0.12.0 Linux binaries** wiring into release.yml +
+  release-desktop.yml release-job extension. Round-2
+  wave-3 candidate; @@Architect cuts when sequencing
+  locks (per the bug list "Linux binaries shipped on
+  phase-8 next-release tags" + the architecture caveat
+  for aarch64 / x86_64 split). Likely 1-2 ci-N tasks.
+* **`ci-12-smoke`, `ci-13-smoke`, `ci-13-smoke-v2`
+  branches on origin**: kept as audit trail; prune
+  with `chan-v0.11.99-dryrun.{1..4}` tag cleanup.
+* **Windows re-enable** (Round-3+): per the
+  `phase-8-bugs.md` umbrella entry. 7-step want list
+  covers lock-primitive bridge, terminal_sessions
+  portability, notify-crate / report-writer reliability,
+  chan-desktop Windows bundling, then matrix re-add
+  + Authenticode signing.
+* **Round-3 full-SHA pin sweep** on third-party
+  actions. Deferred per ci-7 Q3.
+
+### Teardown sweep
+
+* No `chan serve` processes from my lane.
+* No throwaway drives in `/tmp/chan-test-*`.
+* No Chrome MCP tabs.
+* `act` not installed.
+* lima/sdme local-Linux validation NOT exercised
+  (smoke dispatches were canonical empirical gate).
+* External state: smoke runs `26253981385` (smoke #1
+  SUCCESS) + `26254608202` (smoke #2, 4 substantive
+  jobs ✓; rustfmt out-of-lane) complete; documented.
+  `ci-13-smoke` (`d717d48`) + `ci-13-smoke-v2`
+  (`9959780`) branches on origin held as audit
+  trail. Rogue local commit `316fc00` is reflog-only
+  (never pushed). No tag pushed; no signing surface
+  touched.
+* Working tree post-rollup: this commit captures the
+  ci-12 + ci-13 follow-up appends; should clear my
+  lane's tracked-file modifications.
+
+Idle pending wave-3 dispatch.

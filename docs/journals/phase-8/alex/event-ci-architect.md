@@ -2109,3 +2109,92 @@ is the Round-3+ Windows-re-enable task's responsibility.
 | ci-12 follow-up appends | still working-tree (ci-12.md + journal.md), roll up at session close |
 
 Standing by for your clearance + the (a) vs (b) call.
+
+## 2026-05-21 — poke (ci-13 committed as b017d3d; smoke verdict + 1 out-of-lane finding)
+
+Your "approved + commit clearance (ci-13) + all 3 minor
+questions answered" cleared the verbatim subject + the
+shape. Landed at `b017d3d` per race-safe pathspec; 5
+files / +438 / -38; pre/post-stage audits clean.
+
+### (a) vs (b) label reconciliation
+
+Your reply wrote "ACCEPT (a) — ubuntu + macOS" but my
+labels were (a) = Ubuntu-only, (b) = Ubuntu + macOS.
+Treated as a label mixup; landed the (b) text-intent
+shape (matrix = `[ubuntu-latest, macos-latest]`). The
+reasoning you cited (10x billing but worth it for
+chan-desktop-target macOS coverage) is unambiguous;
+matches (b).
+
+If you actually wanted (a) literal (Ubuntu-only) and
+the "ubuntu + macOS" text was a slip, flag + I'll cut
+a follow-up `ci-N` to drop macOS back out. Default
+assumption: text-intent wins.
+
+### Two smoke runs covered the split
+
+* **Smoke #1** ([`26253981385`](https://github.com/fiorix/chan/actions/runs/26253981385))
+  on `ci-13-smoke` (commit `d717d48`; ubuntu-only matrix):
+  ALL 4 JOBS ✓.
+* **Smoke #2** ([`26254608202`](https://github.com/fiorix/chan/actions/runs/26254608202))
+  on `ci-13-smoke-v2` (commit `9959780`; ubuntu + macOS
+  matrix per your text-intent): macOS clippy + test ✓;
+  Ubuntu clippy ✓ + cargo test in-flight at commit time;
+  no-default-features ✓; web ✓; rustfmt ✗ (OUT OF LANE,
+  see below).
+
+The macOS validation is the key new data point. macOS
+clippy + test passed cleanly on `5685be4` HEAD with my
+matrix change.
+
+### Out-of-lane finding: rustfmt failure on facade.rs:1250 (already routed)
+
+`crates/chan-drive/src/index/facade.rs:1250` has a
+multi-line `assert!(matches!(...))` introduced by
+`5685be4` (the fullstack-a-49 sweep-up incident). Per
+your `cc3a888` / `88a084c` / `75b0953` routing, the
+underlying incident is already flagged + in @@Systacean
+lane's hands.
+
+Surfacing here for visibility only (the smoke v2 overall
+conclusion will be failure because of rustfmt; that's
+expected + unrelated to ci-13's correctness). Reproduced
+locally via `cargo fmt --check` against `ci-13-smoke-v2`
+tree to confirm it's real + a `5685be4` artifact, not a
+ci-13 side effect.
+
+### Lane state post-commit
+
+| Item | State |
+|------|-------|
+| ci-13 commit | ✓ `b017d3d` |
+| Per-PR ci.yml matrix | `[ubuntu-latest, macos-latest]` (Windows out per scope decision) |
+| release.yml build matrix | linux (x2) + macos; 2 windows entries dropped |
+| `phase-8-bugs.md` umbrella entry | added per task spec § Audit-trail |
+| Queue | empty until wave-3 Linux-binaries dispatch |
+| Smoke branches on origin | `ci-13-smoke` + `ci-13-smoke-v2` (audit trail; prune with the dryrun tags) |
+
+### Working-tree follow-up appends (post-commit)
+
+* `ci-13.md` "committed as b017d3d" + smoke verdict + 
+  rustfmt finding sections.
+* `event-ci-architect.md` this poke append.
+* `ci-12.md` + `journal.md` ci-12 follow-up appends
+  (carried over from the prior beat).
+
+All accumulating as working-tree; will roll up in a
+session-close docs commit at the natural moment per the
+prior `d0b168e docs: ci-11 follow-up + session close
+(ci)` pattern. You explicitly authorized either shape
+(bundle with ci-13 or split for session close); went
+with split for the cleaner ci-13 commit subject.
+
+### Round-3 readiness signal
+
+Per your "After ci-13 lands" note: per-PR ci.yml gate is
+NOW Ubuntu + macOS on the ci-13 commit. Once the
+rustfmt fix lands (the `5685be4` incident routing), the
+gate goes structurally fully green.
+
+Standing by for wave-3 dispatch.
