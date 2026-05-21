@@ -4036,3 +4036,117 @@ file gate becomes redundant; watcher test back in
 |------|--------|
 | `architect/journal.md` | This entry |
 | `alex/event-architect-systacean.md` | smoke #3 verdict + structural-fix routing |
+
+## 2026-05-21 — SCOPE DECISION: Windows dropped from CI per @@Alex
+
+@@Alex 2026-05-21 (chat, after smoke #4 surfaced 7
+NEW chan-server `terminal_sessions::tests` Windows
+failures): "let's please disable windows and carry
+on, no time to spend on this and i dont care much
+about windows for now."
+
+### What this changes
+
+Windows is dropped from the per-PR `ci.yml` gate
+matrix. Round-2 CI gate becomes **Ubuntu + macOS
+only**. Windows becomes a Round-3+ scoping decision
+when @@Alex revisits (likely tied to public-flip or
+when Windows becomes a real-user surface ask).
+
+### Why
+
+The gate-unblocker cascade since `ci-12` revealed
+the Windows debt surface is deeper than the
+mechanical-cascade pattern can comfortably terminate:
+
+* `systacean-17` (boxing) ✓ cross-platform improvement
+* `fullstack-b-24` (chan-server dead_code) ✓
+* `systacean-18` + 4 follow-ups (BGE gates) — Ubuntu,
+  not Windows-specific; ✓
+* `systacean-20` (lock contract gates) — Windows
+* `systacean-20` smoke cascade — watcher + helpers —
+  Windows; iterative
+* **NEW (smoke #4)**: 7 chan-server `terminal_sessions::tests`
+  failures on Windows — PTY semantics + path handling
+  divergences.
+
+Each new Windows layer costs ~10-15 min of CI + a
+commit + architect routing. @@Alex's framing: the
+ROI on Windows-fixing at this phase is negative.
+Drop Windows entirely from the gate; revisit at
+Round-3+.
+
+### Routings issued this round
+
+* **`ci-13` cut** for @@CI: drop Windows from
+  `ci.yml` per-PR matrix + audit `release.yml` for
+  Windows artifact entries (drop if present). Bug-list
+  Round-3 entry consolidates all Windows polish
+  items.
+* **@@Systacean's structural-fix routing CANCELLED**:
+  the watcher-test file move from the previous
+  beat is superseded by this scope decision. The
+  existing `#[cfg(unix)]` gates from `f03e6a2` +
+  `93afd8d` stay (they're still technically correct
+  + document Windows gaps).
+* **@@Systacean `-19` STAYS** as next substantive
+  work — C2 graceful BM25 fallback is a real
+  product improvement benefiting all platforms.
+  After it lands, the 28 BGE `#[ignore]` gates
+  revert.
+
+### What stays as Round-3 polish
+
+The bug-list entry from `ci-13` consolidates:
+
+* Windows lock-primitive bridge
+  (`LockFileEx` or equivalent in
+  `chan-drive/src/lock.rs`).
+* notify-crate / report-writer reliability on
+  Windows for fresh file events.
+* `chan-server` `terminal_sessions` Windows
+  portability (PTY + path handling).
+* chan-desktop Windows runtime + Tauri bundle
+  (separate from CI).
+* Audit + re-enable Windows in `ci.yml` +
+  `release.yml` matrices.
+
+@@Alex revisits at Round-3 readiness OR when
+Windows becomes a real-user surface ask.
+
+### Lane state at end of round
+
+| Lane | State |
+|------|-------|
+| @@Systacean | Structural file-move CANCELLED; `-19` is next substantive pickup |
+| @@CI | `ci-13` cut to drop Windows from matrices; pickup on next spawn |
+| @@FullStackA | `-a-49` in flight in worktree (`GraphCanvas.svelte` + test file) |
+| @@FullStackB | DONE; idle |
+| @@WebtestA | Close-out marker committed (`f1c1edb`); idle |
+| @@WebtestB | DONE; idle |
+
+### Architect-side lesson logged
+
+Scope-deferral decisions sometimes look like "giving
+up" — but the alternative (iterating indefinitely on
+a surface the user explicitly doesn't care about) is
+worse. Cost-of-staying-the-course on Windows had
+become higher than the value @@Alex placed on
+Windows support at this phase. Drop the scope; preserve
+the cross-platform DISCIPLINE artifacts (`#[cfg(unix)]`
+gates + `feedback_ground_descriptions_in_source`
+rule); revisit when scope priority shifts.
+
+Same shape as the v0.11.2 CLI backfill decision earlier
+in the phase — when @@Alex says "leave the past alone,
+focus on the future," the architect-side action is to
+EXECUTE the deferral, not negotiate.
+
+### What I'm committing this round
+
+| File | Reason |
+|------|--------|
+| `architect/journal.md` | This entry |
+| `alex/event-architect-ci.md` | ci-13 dispatch poke |
+| `alex/event-architect-systacean.md` | CANCEL the structural-fix routing |
+| `ci/ci-13.md` | NEW task (drop Windows from matrices) |

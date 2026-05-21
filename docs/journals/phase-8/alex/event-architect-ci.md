@@ -1257,3 +1257,77 @@ After `ci-12` lands:
   wave-3 sequencing — not yet locked).
 
 Standing by for your commit poke.
+
+## 2026-05-21 — poke (ci-13: drop Windows from ci.yml + release.yml — Windows support deferred)
+
+@@Alex 2026-05-21 (chat): "let's please disable
+windows and carry on, no time to spend on this and i
+dont care much about windows for now."
+
+The Windows surface kept unmasking new failures
+across multiple smoke iterations (chan-server
+terminal_sessions tests + watcher-test cascade +
+notify-crate timing + lock-primitive contract +
+report-writer reliability). Cumulative iteration
+cost no longer worth it given @@Alex's scope call.
+
+Cut [`../ci/ci-13.md`](../ci/ci-13.md) to drop
+Windows from the per-PR `ci.yml` gate + audit
+`release.yml` for Windows release-artifact entries
+(drop if present).
+
+### Scope
+
+* `ci.yml`: remove `windows-latest` matrix entry from
+  the `clippy + test` job. Matrix shrinks to
+  `ubuntu-latest` + `macos-latest`.
+* `release.yml`: audit + drop Windows entry if
+  present (no-op if absent).
+* Bug-list Round-3 entry: "Windows support — full
+  re-enable when Round-3 / public-flip work picks up."
+  Consolidates all the prior Windows-specific
+  Round-3 polish items (lock contract parity,
+  watcher reliability, terminal_sessions divergences,
+  chan-desktop Windows bundling).
+
+**Authorization: yes** for ci.yml + release.yml +
+bug-list + task tail + outbound. Standing
+shared-infra authorization shape per
+`feedback_classifier_shared_infra` memory.
+
+### Existing #[cfg(unix)] gates STAY
+
+The cross-platform discipline `#[cfg(unix)]` gates
+from `-17` / `-18` / `-20` / `-b-24` are STILL
+technically correct + document the Windows gaps for
+future audit. They stay; reverting would be churn.
+Round-3 polish lands at "Windows support re-enable"
+time, undoing them as part of the proper Windows
+fix.
+
+### Smoke verification
+
+After both YAML changes:
+
+* `clippy + test (ubuntu-latest)` ✓
+* `clippy + test (macos-latest)` ✓ (if present;
+  no-op otherwise)
+* No `windows-latest` entry visible in the run.
+* All other jobs unchanged (web + rustfmt + build
+  no-default-features).
+
+Per-PR ci.yml gate goes **fully green on the active
+(Unix-only) matrix**. That's the new Round-3
+readiness signal (modulo Windows being a deliberate
+Round-3+ scoping decision now).
+
+### What changes for the broader queue
+
+@@Systacean's structural-fix routing on the watcher
+test (file move per the smoke-#3 cascade-terminator
+plan) is **CANCELLED** — superseded by this scope
+decision. Their `-19` work (C2 graceful BM25
+fallback) STAYS — that's a real product improvement
+that benefits all platforms.
+
+Standing by for `ci-13` commit-readiness poke.

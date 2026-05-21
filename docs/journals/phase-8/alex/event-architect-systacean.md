@@ -2381,3 +2381,74 @@ the file move can be reverted (file `#![cfg(unix)]`
 becomes redundant) + watcher test back in `report.rs`.
 
 Standing by for the file-move commit + smoke verdict.
+
+## 2026-05-21 — @@Architect: CANCEL the structural-fix routing — Windows deferred
+
+@@Alex 2026-05-21 (chat, post smoke #3 + smoke #4
+trace showing 7 NEW Windows failures in chan-server
+`terminal_sessions::tests`): "let's please disable
+windows and carry on, no time to spend on this and i
+dont care much about windows for now."
+
+The watcher-test file-move routing from the previous
+beat is **CANCELLED**. Windows is being dropped from
+the `ci.yml` per-PR gate via `ci-13` (routed to @@CI
+this round). No file move needed; `watcher_keeps_report_current`
+stays in `report.rs` with its current `#[cfg(unix)]`
+gate from `f03e6a2` — that's still technically
+correct, just no longer gate-critical.
+
+### Existing -20 gates stay
+
+The 3 chan-drive lock-contract `#[cfg(unix)]` gates
++ the watcher-test gate from `f03e6a2` + the
+helper-imports gates from `93afd8d` ALL stay in
+place. They document the Windows gaps + cost
+nothing to keep. The structural file move (moving
+the test to a new file) is superseded by the
+Windows-out-of-CI decision; don't ship it.
+
+### Smoke #3 / #4 verdicts: superseded
+
+Smoke #3 (`26252715148`) was running with the 3 new
+dead_code orphans (Collector / wait_for); smoke #4
+trace from @@Alex showed 7 NEW terminal_sessions
+test failures. None of this is now actionable on
+your lane — Windows is out of the gate.
+
+### Your queue this round
+
+* **NOT** the structural file move (cancelled).
+* `-19` (C2 graceful BM25 fallback) is the next
+  substantive work. Real product improvement
+  benefiting all platforms (default-build installs
+  get working BM25 indexing instead of panicking on
+  first file edit). Aligns with `systacean-6`/`-7`
+  opt-in architecture. After `-19` lands, the 28
+  BGE `#[ignore]` gates REVERT — coverage restored
+  retroactively.
+* `-16` (chan-report file-class buckets) parks
+  behind `-19` per existing queue order.
+
+### -20 close-out
+
+`-20` (the chan-drive lock-contract gates) is
+structurally complete: 3 gates landed (`9fa710e`)
++ watcher-test gate (`f03e6a2`) + helpers/imports
+gate (`93afd8d`). Document the close-out + the
+cancellation of the file-move routing at the task
+tail when you spawn. Subject suggestion for the
+close-out commit (if you want one — optional given
+the file-move cancellation): `docs: systacean-20
+close-out — Windows deferred, file move superseded`.
+
+### After -19 lands
+
+The 28 BGE `#[ignore]` gates from `-18` + follow-ups
+revert. The remaining `#[cfg(unix)]` gates from
+`-20` (lock + watcher + helpers) and from
+`fullstack-b-24` STAY (Windows-out-of-CI means
+they're no longer gate-critical, but they still
+document the Windows gaps for future re-enable).
+
+Standing by for `-19` pickup on your next spawn.
