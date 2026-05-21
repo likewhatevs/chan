@@ -266,3 +266,43 @@ verdict + `c9fb768` close-out marker); this is `-5`.
 * chan-reports backend gating + destructive-on-disable
   modal (deferred follow-up from `-a-48` option B;
   not yet cut as a task).
+
+## 2026-05-21 — walkthrough complete (19/20 HOLD + 1 N/A + 1 PARTIAL)
+
+Walked all four slices on HEAD `f3c36e5`. Verdict + per-check
+evidence appended to
+[`webtest-a-1.md`](webtest-a-1.md) under
+"## 2026-05-21 — fullstack-a-47 + -a-48 + -a-53 + -a-54
+walkthroughs".
+
+* **`-a-47`** Drop front/back independent theme: 3/4 HOLD,
+  1 N/A (legacy migration check skipped — fresh drive has no
+  legacy state).
+* **`-a-48`** Search/Indexing/Reports → FB back: 5/5 HOLD.
+* **`-a-53`** Theme architecture correction: 6/6 HOLD
+  (including the bundled custom-TERM PARTIAL re-verification
+  from `webtest-a-4`).
+* **`-a-54`** Flip UX redesign: 5/6 HOLD, 1 PARTIAL
+  (click-existing-mirrored-tab from back doesn't activate;
+  spawn-from-FB-sidebar + spawn-via-chord paths swap cleanly).
+
+The `webtest-a-4` PARTIAL on `-a-45` #3 (custom-TERM input
+rendering) is re-verified as HOLD post-`-a-53` bundled fix.
+
+Side observations (not regression-class):
+
+1. Pane hamburger items still minimal — `-a-53` did NOT
+   restore "Light mode" / "Flip pane" / "Theme"; theme is
+   now exclusively via back-side override toggle (intended
+   end state).
+2. Cmd+, focus requirement — chord swallowed by terminal
+   stdin; webtest-automation note.
+3. Back-side stub bg reads white even with `data-theme=dark`
+   pane — settings forms intentionally light for readability,
+   but worth a deliberate decision.
+4. Cross-drive preference carryover — chan config store may
+   be per-machine, not fully per-drive; test-server-workflow
+   teardown may need to clear caches between sessions.
+
+Test server + throwaway drive + Chrome MCP tab all torn down
+per the standing rule.
