@@ -1,9 +1,17 @@
 name: Release
 
-# Triggered on `v*` tag pushes (e.g. `v0.1.0`) and via manual
-# dispatch for testing. Builds five static-leaning binaries +
-# .deb + .rpm + .pkg, attaches all artifacts to a GitHub
-# release on tag push.
+# Triggered on `v*` and `chan-v*` tag pushes (e.g. `v0.1.0`,
+# `chan-v0.11.2`) and via manual dispatch for testing. Builds
+# five static-leaning binaries + .deb + .rpm + .pkg, attaches
+# all artifacts to a GitHub release on tag push.
+#
+# The `chan-v*` pattern was added 2026-05-21 (ci-11) to restore
+# intended behaviour. Phase-8 adopted the `chan-v*` tagging
+# convention (chan-v0.11.0, chan-v0.11.1, chan-v0.11.2); the
+# original `v*`-only glob silently skipped every phase-8
+# release tag, so chan CLI binaries never shipped to the
+# corresponding GitHub Releases. Pre-existing `v*` tags
+# (v0.6.x through v0.11.0) stay matched for back-compat.
 #
 # Targets:
 #   linux x86_64       musl-static
@@ -24,6 +32,7 @@ on:
   push:
     tags:
       - 'v*'
+      - 'chan-v*'
   workflow_dispatch:
 
 env:
