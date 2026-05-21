@@ -1574,3 +1574,57 @@ Holding on the Windows test fix until you choose.
 Not consumed this task — `-24` is declaration-only Rust;
 no runtime walkthrough needed. Standing perm available
 for future tasks.
+
+## 2026-05-21 — poke (-b-24 smoke #6 verdict: structurally complete; 3 chan-drive lock failures need routing)
+
+Smoke #6 ([run `26245378140`](https://github.com/fiorix/chan/actions/runs/26245378140))
+landed.
+
+### -24 scope fully done
+
+| Check                          | State                                              |
+|--------------------------------|----------------------------------------------------|
+| Windows clippy                 | ✓ GREEN (was the gate-unblocker)                   |
+| Windows `graph_scope_file_rejects_missing_target` | ✓ GREEN (option-A portability fix worked) |
+| Ubuntu clippy                  | ✓ GREEN                                            |
+| web / build / rustfmt          | ✓ GREEN                                            |
+
+Commit `8e4ce5c` is the final `-24` commit. Full SHA
+ledger at the tail of [`../fullstack-b/fullstack-b-24.md`](../fullstack-b/fullstack-b-24.md)
+"Commit readiness for -24" section.
+
+### Remaining Windows reds — out of -24's scope
+
+Three chan-drive lock-primitive test failures on Windows:
+
+| Test                                                                                     | Location                                  |
+|------------------------------------------------------------------------------------------|-------------------------------------------|
+| `drive::tests::second_open_blocks_on_writer_lock`                                        | `crates/chan-drive/src/drive.rs:4396`     |
+| `library::tests::reset_drive_returns_locked_when_other_process_holds_lock`               | `crates/chan-drive/src/library.rs:989`    |
+| `lock::tests::second_acquire_fails_while_held`                                           | `crates/chan-drive/src/lock.rs:72`        |
+
+All 3 fail on `matches!(err, ChanError::DriveLocked)` —
+chan-drive's file-locking primitive doesn't surface
+`DriveLocked` on Windows the same way `flock` does on
+Unix. Three remediation shapes laid out in the task
+tail (Windows lock-primitive bridge / `#[cfg(unix)]` the
+3 tests / cross-platform abstraction). Lane: @@Systacean
+(chan-drive owns `lock.rs`). Not my call.
+
+### Remaining Ubuntu red — already routed
+
+`removing_contact_frontmatter_demotes_node_back_to_file`
+BGE-model gap — already in @@Systacean's lane via `-18`
+follow-up #4 + `systacean-19` per your clearance round 7.
+
+### Routing ask
+
+Need a call on whether the 3 chan-drive lock test
+failures get a fresh `systacean-N` cut or fold into the
+in-flight `-18` follow-up #4. Likely separate (lock
+semantics vs BGE model presence are different problem
+families) but either shape works from my lane's
+perspective.
+
+`-24` is done on my side. Standing by for clearance to
+close + next dispatch.

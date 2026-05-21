@@ -799,3 +799,98 @@ matches.
 ```
 chan: portability fix for graph_scope_file_rejects_missing_target Windows assertion (fullstack-b-24 smoke #6 fixup)
 ```
+
+## 2026-05-21 — smoke run #6 verdict + commit readiness
+
+Smoke #6 ([run `26245378140`](https://github.com/fiorix/chan/actions/runs/26245378140))
+results:
+
+| Job                             | State                                |
+|---------------------------------|--------------------------------------|
+| rustfmt                         | ✓ 21s                                |
+| build (no default features)     | ✓ 1m42s                              |
+| web (check + test + build)      | ✓ 2m36s                              |
+| clippy + test (windows-latest)  | clippy ✓ / test ✗ (3 chan-drive lock failures, not -24 scope) |
+| clippy + test (ubuntu-latest)   | clippy ✓ / test ✗ (BGE-model gap, systacean-18 follow-up territory) |
+
+### -24's stated scope: STRUCTURALLY COMPLETE
+
+* Windows `cargo clippy --all-targets -- -D warnings`:
+  **GREEN** (was the gate-unblocker after `ci-12` +
+  `systacean-17` + `systacean-18`).
+* Windows test `graph_scope_file_rejects_missing_target`:
+  **GREEN** after the option-A portability fix.
+* Ubuntu clippy: **GREEN** (was the secondary unblocker
+  after `ci-12` GTK install).
+
+### Remaining Windows test reds (3 — chan-drive lock semantics)
+
+Out of `-24`'s scope; all on chan-drive's file-locking
+primitive:
+
+| Test                                                                                     | Location                                  | Assertion                                            |
+|------------------------------------------------------------------------------------------|-------------------------------------------|------------------------------------------------------|
+| `drive::tests::second_open_blocks_on_writer_lock`                                        | `crates/chan-drive/src/drive.rs:4396`     | `matches!(err, ChanError::DriveLocked)`              |
+| `library::tests::reset_drive_returns_locked_when_other_process_holds_lock`               | `crates/chan-drive/src/library.rs:989`    | `matches!(err, ChanError::DriveLocked)`              |
+| `lock::tests::second_acquire_fails_while_held`                                           | `crates/chan-drive/src/lock.rs:72`        | `matches!(r2, Err(ChanError::DriveLocked))`          |
+
+All 3 are real cross-process-lock semantic assertions —
+Windows' file-locking primitive either returns a
+different `ChanError` variant or doesn't fail in the
+same way `flock` would on Unix. This is a genuine
+platform-behavior gap, not text-portability or
+declaration gating. Lane: @@Systacean (chan-drive owns
+the lock module). Fix shape would be either:
+
+* (i) Make the lock primitive return `ChanError::DriveLocked`
+  on Windows too (likely a Windows-specific bridge in
+  `lock.rs` over `LockFileEx` or similar).
+* (ii) Gate the 3 tests `#[cfg(unix)]` if Windows lock
+  semantics genuinely diverge and the divergence is
+  acceptable.
+* (iii) Cross-platform abstraction layer to harmonise
+  the lock contract.
+
+Implementer's call which shape fits. None of these are
+my lane to design.
+
+### Remaining Ubuntu test red
+
+`removing_contact_frontmatter_demotes_node_back_to_file`
+BGE-model gap. Already routed to @@Systacean's `-18`
+follow-up #4 + `systacean-19` (graceful BM25-only
+degradation) per @@Architect's clearance round 7.
+Independent thread.
+
+### Commit readiness for -24
+
+All `-24` commits in HEAD:
+
+| SHA       | Subject                                                                                                             |
+|-----------|---------------------------------------------------------------------------------------------------------------------|
+| `c0600e0` | chan-server + chan-desktop: gate Unix-only control_socket declarations + rename unused exit_signal (fullstack-b-24) |
+| `e8ff68a` | chan-server + chan-desktop: smoke #1 fixup — gate orphaned Unix-only imports + parse_ps helper on Windows           |
+| `f796345` | chan: gate Unix-only ControlResponse enum on Windows (smoke #2 fixup)                                                |
+| `68e1cbc` | chan: gate Deserialize import on Windows (smoke #3 fixup)                                                            |
+| `b01b310` | chan-server: gate Unix-only fs_graph test helpers on Windows (smoke #4 fixup)                                        |
+| `02dbb2a` | docs: fullstack-b-24 smoke #3-5 audit trail + scope question                                                         |
+| `8e4ce5c` | chan: portability fix for graph_scope_file_rejects_missing_target Windows assertion (smoke #6 fixup)                 |
+
+Plus this final docs append.
+
+Total: 6 implementation commits + 1 docs commit + this
+final append. Push parked per release discipline; the
+smoke branch `fullstack-b-24-smoke` joins the
+audit-trail-keep set (prunes with the
+`chan-v0.11.99-dryrun.{1..4}` tag cleanup beat per the
+task body).
+
+### Hand-off
+
+`-24` ready to close on my side. The remaining 3 chan-drive
+lock tests + Ubuntu BGE failure are out of scope. Need a
+routing call on whether to cut a `systacean-N` for the lock
+tests too (option (i)/(ii)/(iii) per the table above) or
+defer until the broader Windows lane work picks up.
+
+Standing by for architect's verdict.
