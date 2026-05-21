@@ -347,3 +347,34 @@ If the smoke surfaces ANY failure other than known fullstack-b-24 / fullstack-a-
 * The remaining 3 `#[cfg(unix)]` gates from `-20` (lock contract) + 1 from smoke #2 fixup (`watcher_keeps_report_current` + its helpers) STAY. They document Windows gaps independent of BGE; Round-3 polish for the real cross-platform fixes when Windows becomes a real-user surface again.
 
 Holding for @@Architect commit clearance + smoke-branch authorization. Same shape as the prior cleared smokes.
+
+## 2026-05-21 — committed inside 5685be4 (cross-agent commit-hygiene incident)
+
+The C2 fallback implementation + all 28 `#[ignore]` reverts described above ARE in HEAD, but landed inside commit `5685be4` whose subject is misattributed to `fullstack-a-49`. Audit anchors here so future readers walk the task file rather than relying on `git log`.
+
+### What happened
+
+A `git add` race during the cleared commit attempt: my 13 paths landed in an index already pre-staged with 5 FullStackA files (`event-fullstack-a-architect.md`, `fullstack-a-49.md`, `fullstack-a/journal.md`, `web/src/components/GraphCanvas.svelte`, `web/src/components/GraphCanvas.test.ts`). @@FullStackA's `git commit -m "Graph layout: filesystem-hierarchy as backbone (fullstack-a-49)"` fired BEFORE my `git restore --staged` could partition the stowaways, sweeping all 18 files into one commit under the `-a-49` subject.
+
+### Audit trail
+
+* **`5685be4`** — the load-bearing commit. `git show 5685be4 --stat` lists 18 files including all 13 `-19` paths (the C2 fix in `facade.rs` + the 14 chan-drive lib reverts + 5 integration reverts + 9 chan-server lib reverts) + the 5 expected `-a-49` paths.
+* **`cc3a888`** — @@FullStackA's incident flag (event-fullstack-a-architect + fullstack-a-49.md tail).
+* **`88a084c`** — my incident flag (event-systacean-architect.md tail with options A/B).
+* **`75b0953`** — @@Architect's routing: option (a) accepted (audit-trail correction; soft-reset declined because the incident-flag commits already reference `5685be4`). Memory entry `feedback-atomic-audit-commit` saved.
+
+### Audit anchor for `-19`
+
+The canonical implementation summary for `systacean-19` is THIS TASK FILE — specifically the "## 2026-05-21 — implementation + commit readiness" section above. Not the commit subject of `5685be4` (which reads `-a-49`).
+
+For git-blame on `crates/chan-drive/src/index/facade.rs` C2 fallback (the `warn_bm25_only_once` + `handle_embed_load_error` + the discriminator matches at `write_file` + `flush_embed_batch`): the blame attribution will read `5685be4 fullstack-a-49` but the actual scope is `-19`'s.
+
+### Process-lesson logged
+
+The atomic-audit-commit pattern (collapse `git add` + audit + `git commit` into a single chained `&&` invocation, OR use `git commit --only <paths>`) closes the inter-command race window that produced this incident. The pattern is saved to memory as `feedback-atomic-audit-commit`. Going forward all my shared-worktree commits use this discipline.
+
+### Smoke verification
+
+Per the architect's routing: `-19`'s smoke verification proceeds unaffected by the attribution incident. The C2 fallback path is the load-bearing thing under test; it's in `5685be4`'s file contents regardless of the misattribution. Smoke validates the fix end-to-end on the model-less Ubuntu runner.
+
+Next beat: push fastforward to `systacean-19-smoke` (the work is already in `5685be4` on main; the smoke branch just needs HEAD) + dispatch CI.
