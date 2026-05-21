@@ -13,7 +13,6 @@
     markLocalTabDrop,
     moveTab,
     openInPane,
-    openBrowserInActivePane,
     openTerminalInPane,
     paneFlip,
     paneMode,
@@ -31,6 +30,7 @@
   } from "../state/tabs.svelte";
 
   import {
+    Bug,
     Check,
     FileText,
     FlipHorizontal2,
@@ -39,7 +39,6 @@
     MessageSquare,
     Moon,
     Network,
-    PanelRight,
     Palette,
     Radio,
     RefreshCw,
@@ -57,11 +56,16 @@
   import TerminalTab from "./TerminalTab.svelte";
   import {
     driveDisplayName,
-    refreshTree,
     scheduleSessionSave,
     tree,
     ui,
   } from "../state/store.svelte";
+  import {
+    isTauriDesktop,
+    openWebInspector,
+    reloadWindow,
+  } from "../api/desktop";
+  import { notify } from "../state/notify.svelte";
   import {
     tabLabel,
     tabLabelInPane,
@@ -349,22 +353,19 @@
     paneMenu?.close();
   }
 
-  function doReloadPane(): void {
+  async function doReloadPane(): Promise<void> {
     closePaneMenus();
-    void refreshTree();
+    await reloadWindow();
   }
 
-  function doToggleInspector(): void {
+  async function doOpenInspector(): Promise<void> {
     closePaneMenus();
-    if (active?.kind === "file") {
-      active.inspectorOpen = !active.inspectorOpen;
-    } else if (active?.kind === "graph") {
-      active.inspectorOpen = !active.inspectorOpen;
-    } else if (active?.kind === "browser") {
-      active.inspectorOpen = !active.inspectorOpen;
-    } else {
-      openBrowserInActivePane();
-    }
+    if (await openWebInspector()) return;
+    notify(
+      isTauriDesktop()
+        ? "Inspector unavailable in this build"
+        : "Use the browser's built-in inspector (Right-click → Inspect Element)",
+    );
   }
 
   function doSetFocusColor(color: FocusColor): void {
@@ -1070,9 +1071,9 @@
           </button>
         </li>
         <li>
-          <button role="menuitem" onclick={doToggleInspector}>
-            <PanelRight size={16} strokeWidth={1.75} aria-hidden="true" />
-            <span>Toggle Web Inspector</span>
+          <button role="menuitem" onclick={doOpenInspector}>
+            <Bug size={16} strokeWidth={1.75} aria-hidden="true" />
+            <span>Open Inspector</span>
           </button>
         </li>
       </HamburgerMenu>

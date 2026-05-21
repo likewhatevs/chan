@@ -246,7 +246,7 @@ describe("Pane right-click menus", () => {
     );
     await tick();
 
-    expect(menuLabels()).toEqual(["Reload", "Toggle Web Inspector"]);
+    expect(menuLabels()).toEqual(["Reload", "Open Inspector"]);
   }, 15000);
 
   test("back-side-attention indicator surfaces when back has unread (fullstack-48 phase C)", async () => {
