@@ -328,3 +328,92 @@ The pre-landed Wave-1 work that rides the tag bundle is
 unchanged otherwise. Total commit count for the patch
 now: ~10 new (9 task commits + ci-9) + ~6 pre-landed +
 docs commits = **~20-22 commits in the v0.11.2 set**.
+
+## Tag draft (v0.11.2)
+
+@@Systacean uses this at tag-cut time. Subject under 50
+chars; body wrapped at 72 cols. Refine if it reads awkwardly
+against the actual landed-commits list at cut time.
+
+### Subject
+
+```
+chan v0.11.2
+```
+
+### Body
+
+```
+First signed + notarized release. UX bug-fix wave from
+v0.11.1 dogfooding plus the Round-2 signing pipeline
+landing.
+
+User-visible fixes
+==================
+
+Editor + writing flow:
+* "File moved or deleted" panel no longer falsely surfaces
+  while the file is on disk; Re-open button restored; Find-
+  suggest-reopen inline UX on legitimate moves.
+* Source-mode editor stops auto-continuing lists (raw mode
+  is now raw).
+* Wysiwyg outline-style dotted numbering for nested
+  numbered lists (1. / 1.1. / 1.1.1.).
+
+Rich prompt + notifications:
+* "Copied path" status-bar notification auto-dismisses
+  after ~3 s.
+* Pre-flight bubble spinner no longer stuck at 0:00 (gated
+  on timing data being present).
+* Submit-mode toolbar toggle now persists correctly across
+  page reload (SerTab rpsm re-syncs server-side on tab
+  restore).
+* Shell-mode tooltip copy fixed (no longer claims to
+  append a trailing newline).
+
+File browser:
+* Expand/collapse state persists across tab switches.
+* Spawn chord (Cmd+O / Hybrid NAV `o`) now always creates
+  a new FB tab instead of focusing an existing one.
+
+chan-desktop (Tauri):
+* Right-click tab Reload + Open Inspector now work
+  (previously no-op on desktop-native). Tauri IPC
+  commands + Cmd+R / Cmd+Opt+I accelerators wired.
+* Browser-style zoom: Cmd++ / Cmd+- / Cmd+0 zoom in /
+  out / reset. Zoom level persists per-window.
+
+Round-2 signing pipeline (build-time / CI):
+* Tag-triggered signed + notarized chan-desktop workflow
+  (.github/workflows/release-desktop.yml).
+* chan-desktop bundles the chan binary; launch-time
+  PATH-first probe with bundled fallback + version match.
+* Makefile supports notarytool Keychain profile for local
+  smoke tests (Apple-blessed mechanism).
+* signing identity rotated to release Developer ID.
+
+Known limitations
+=================
+
+* tauri-plugin-updater self-update flow is registered but
+  not yet user-invokable (no UI hook); planned for Round-2
+  wave-2.
+* macOS DMG signed + notarized; Linux .AppImage / .deb /
+  .rpm + Windows MSI signing brief land in Round-2 wave-2.
+
+Audit trail at docs/journals/phase-8/architect/commit-plan-v0.11.2.md.
+```
+
+### Tag command
+
+```bash
+git tag -a chan-v0.11.2 -F <(cat <<'EOF'
+<body from above>
+EOF
+)
+git push origin main --follow-tags
+```
+
+(Use `-F` with a tempfile if the heredoc shell-substitution
+trips on embedded single quotes, per the v0.11.1 tag-cut
+pattern.)
