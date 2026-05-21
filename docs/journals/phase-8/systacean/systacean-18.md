@@ -625,3 +625,89 @@ Same shape: push `systacean-18-smoke` (append) + `gh workflow run ci.yml --ref s
 If it still surfaces a failure on the next iteration, I'll fire a scope poke + escalate to the architect for routing — at that point the iteration cost is too high and we need to reconsider the gating strategy (programmatic skip via `resolve_model` check, or a code-level fix to chan-drive's write_file).
 
 Taking the obvious-call shortcut per the established pattern (follow-up #1 + #2 were retroactively cleared with the same "make the obvious call" framing).
+
+## 2026-05-21 — follow-up #4: 9 chan-server gates applied per architect's option A routing
+
+Architect's routing on the scope poke chose **option A** (fold chan-server gating into `-18` follow-up #4) + cut **`systacean-19`** for the C2 product improvement (graceful BM25 fallback). Authorization expanded to cover the 4 chan-server source files explicitly.
+
+### What's done
+
+| File                                         | Lines added | Tests gated |
+|----------------------------------------------|-------------|-------------|
+| `crates/chan-server/src/indexer.rs`          | +3          | `apply_watch_change_indexes_regular_file`, `create_event_admits_new_indexable_file_into_bm25`, `apply_watch_change_special_clears_prior_index_entry` |
+| `crates/chan-server/src/routes/graph.rs`     | +3          | `link_to_non_markdown_disk_file_resolves_to_real_file`, `link_to_directory_does_not_synthesize_ghost_file_node`, `merged_graph_layers_emit_filesystem_media_and_language_nodes` |
+| `crates/chan-server/src/routes/inspector.rs` | +1          | `inspector_payload_covers_drive_directory_text_and_binary` |
+| `crates/chan-server/src/routes/search.rs`    | +2          | `indexing_state_endpoint_requires_auth`, `indexing_state_endpoint_returns_dir_nodes` |
+| **Total**                                    | **+9**      | **9 tests**  |
+
+All 9 gates carry the same `#[ignore]` skip reason with a forward-reference to `systacean-19`'s revert pass, so the audit trail is clean when `-19` reverses them.
+
+### What's NOT in this commit
+
+The 2 `fs_graph.rs` `#[cfg(unix)]` gates the architect mentioned (`node` + `node_path_kind` on lines 927+932) were ALREADY landed in `b01b310` (`chan-server: gate Unix-only fs_graph test helpers on Windows (fullstack-b-24 smoke #4 fixup)`) — `b01b310` is local on main but not yet on origin. The next push to `systacean-18-smoke` will include both that commit + this follow-up #4 commit, so the upcoming smoke will exercise both fixes together.
+
+### Special note: tokio::test compatibility
+
+Two of the 9 gated tests (`indexing_state_endpoint_*`) use `#[tokio::test]` rather than `#[test]`. The `#[ignore]` attribute works the same way for both — it's a runner-level skip, not test-framework-specific. Verified locally: both ignored cleanly in `cargo test -p chan-server`; both pass under `-- --ignored`.
+
+### Why both auth-only test gates need ignore
+
+`indexing_state_endpoint_requires_auth` doesn't directly call `drive.index_file()`, but its shared `route_test_app()` helper does (search.rs:544). The panic happens during test setup, before the actual auth-check assertion. Gating both async tests is necessary; targeting only the helper isn't possible (Rust doesn't support `#[ignore]` on helpers).
+
+### Local verification
+
+```
+cargo test -p chan-server                       → 196 passed; 0 failed; 9 ignored
+cargo test -p chan-server -- --ignored          → 9 passed; 0 failed; 196 filtered
+```
+
+Total: 196 + 9 = 205 — matches the pre-gating count. **No coverage loss**.
+
+### Workspace pre-push gate
+
+* `cargo fmt --check` — clean.
+* `cargo clippy --all-targets -- -D warnings` — clean.
+* `cargo test` workspace — all green (chan-drive: 411+16i+5i lib; chan-server: 196+9i; chan-report: 20; others unchanged).
+* `RUSTFLAGS="-D warnings" cargo build --no-default-features` — green.
+* (web gates unchanged: not touching any web files in this follow-up.)
+
+### Suggested commit subject
+
+```
+chan-server: gate 9 model-dependent tests behind #[ignore] (systacean-18 follow-up #4)
+```
+
+### Files
+
+```
+crates/chan-server/src/indexer.rs          | +3 / 0
+crates/chan-server/src/routes/graph.rs     | +3 / 0
+crates/chan-server/src/routes/inspector.rs | +1 / 0
+crates/chan-server/src/routes/search.rs    | +2 / 0
+docs/journals/phase-8/systacean/systacean-18.md    | (this append)
+docs/journals/phase-8/alex/event-systacean-architect.md | (outbound poke)
+```
+
+6 paths total. Foreign files in dirty tree stay un-staged per shared-worktree discipline.
+
+### Smoke re-dispatch ask
+
+Same shape: push to `systacean-18-smoke` (append) + `gh workflow run ci.yml --ref systacean-18-smoke`. Expected:
+
+* **Ubuntu cargo test**: fully green (all 19+9=28 BGE tests skipped instead of panicking).
+* **Windows clippy**: fully green (the 2 `fs_graph.rs` dead_code lints already fixed by `b01b310` riding the same push).
+* **macOS + others**: unchanged.
+
+If the smoke comes back green on both Ubuntu and Windows, the gate-unblocker work is structurally complete from my lane. `-19` (the C2 fix) becomes the next task — bigger structural change that reverts all 28 gates after it lands.
+
+### Taking the obvious-call shortcut again
+
+Per the architect's prior pattern + the explicit "authorization expanded" clause in the routing message. Committing + pushing + re-smoking in one beat.
+
+### After follow-up #4 smoke is green
+
+1. Pick up `-19` per the queue (`systacean-19.md` is cut + ready). C2 graceful degradation in chan-drive's `write_file`.
+2. `-19` will REVERT all 28 `#[ignore]` gates after the fallback lands. Coverage fully restored.
+3. `-16` (chan-report file-classification buckets) follows after `-19` if bandwidth allows.
+
+Holding for smoke verdict.

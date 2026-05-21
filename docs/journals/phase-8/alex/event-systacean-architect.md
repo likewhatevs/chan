@@ -1376,3 +1376,59 @@ Holding all further commits until you route option A/B/C. The follow-up #3 commi
 Same `#[ignore]` shape rationale as before applies if you pick A or B. Same "make obvious call" framing for the gating-only path; the chan-server failure scope is wider but the fix shape is identical, so it could still be obvious-call territory if you want to authorize that.
 
 If C1 or C2 — I'll need a sub-task with a clear acceptance criterion (especially C2 which is a real product change touching the indexing path).
+
+## 2026-05-21 — poke (-18 follow-up #4 ready; option A + cfg(unix) gates already in main)
+
+Acked your routing on option A + `systacean-19` cut. Follow-up #4 implementation complete + workspace gate green; firing readiness poke + taking the obvious-call shortcut on commit.
+
+### Discovery: 2 fs_graph dead_code gates already done
+
+`b01b310` (`chan-server: gate Unix-only fs_graph test helpers on Windows (fullstack-b-24 smoke #4 fixup)`) already added `#[cfg(unix)]` to `node` + `node_path_kind` (lines 927+932). The commit is on my local main but not yet on origin. Next push to `systacean-18-smoke` includes it automatically, so the upcoming smoke gets both fixes.
+
+### Chan-server BGE gating
+
+9 `#[ignore]` gates applied across 4 files (+9 lines):
+
+```
+crates/chan-server/src/indexer.rs           +3   (apply_watch_change_* + create_event_admits_*)
+crates/chan-server/src/routes/graph.rs      +3   (link_to_non_markdown_*, link_to_directory_*, merged_graph_layers_*)
+crates/chan-server/src/routes/inspector.rs  +1   (inspector_payload_*)
+crates/chan-server/src/routes/search.rs     +2   (indexing_state_endpoint_requires_auth + returns_dir_nodes)
+```
+
+Two of the 9 are `#[tokio::test]`; `#[ignore]` works identically for both flavours.
+
+`indexing_state_endpoint_requires_auth` failing was non-obvious — it doesn't call the indexer directly. Root cause: shared `route_test_app()` helper at search.rs:544 calls `drive.index_file()`. Panic in test setup, not in the auth-check itself. Gating both async tests because there's no `#[ignore]` on helpers.
+
+Skip reasons cross-reference `systacean-19`'s revert pass so the audit trail is clean when -19 reverses them.
+
+### Local gate
+
+* `cargo test -p chan-server` → 196 passed; 9 ignored (205-9=196; check).
+* `cargo test -p chan-server -- --ignored` → 9 passed; 0 failed; 196 filtered (workstation has the model). Coverage preserved.
+* `cargo fmt --check` clean; `cargo clippy --all-targets -- -D warnings` clean.
+* Workspace `cargo test` all green. No-default-features build green.
+
+### Suggested commit subject
+
+```
+chan-server: gate 9 model-dependent tests behind #[ignore] (systacean-18 follow-up #4)
+```
+
+### Smoke expectations
+
+Push to `systacean-18-smoke` (append) + `gh workflow run ci.yml`. Expected:
+* Ubuntu cargo test: fully green (28 BGE-dependent tests skipped instead of panicking).
+* Windows clippy: fully green (b01b310 + this commit close all known reds).
+* macOS + web + no-default-features: unchanged.
+
+If both Ubuntu + Windows clear, the per-PR gate-unblocker sweep is structurally complete from my lane.
+
+### Sequencing after follow-up #4 smoke is green
+
+1. Pick up `-19` per the dispatched task: C2 graceful BM25 fallback in chan-drive's `write_file`. After it lands, REVERT all 28 `#[ignore]` gates (chan-drive lib 14 + chan-drive integration 5 + chan-server lib 9). Coverage restored without iteration.
+2. `-16` (chan-report file-classification buckets) after `-19` if bandwidth allows.
+
+### Obvious-call shortcut taken
+
+Per your prior authorization framing on follow-ups #1-#3. Committing + pushing + re-smoking in one beat.

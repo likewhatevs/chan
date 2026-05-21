@@ -590,6 +590,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[ignore = "requires BGE-small embedding model on disk; route_test_app() helper calls drive.index_file() which panics without it. Run with `cargo test -- --ignored` on a workstation with the model cached. systacean-19 will revert this gate (see systacean-18 follow-up #4)"]
     async fn indexing_state_endpoint_requires_auth() {
         let app = route_test_app();
         let router = crate::router(app.state);
@@ -604,6 +605,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[ignore = "requires BGE-small embedding model on disk; route_test_app() helper calls drive.index_file() which panics without it. Run with `cargo test -- --ignored` on a workstation with the model cached. systacean-19 will revert this gate (see systacean-18 follow-up #4)"]
     async fn indexing_state_endpoint_returns_dir_nodes() {
         let app = route_test_app();
         let router = crate::router(app.state);
