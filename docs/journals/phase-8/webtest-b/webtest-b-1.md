@@ -2035,3 +2035,85 @@ cycles for `-b-1`/`-b-14`/`-b-7`/`-b-22`:
   but the backup gets cleaned at tear-down).
 * `target/debug/chan-desktop` build artifact left in
   place (host-shared workspace cache).
+
+## 2026-05-21 — proactive smoke walk against HEAD post -b-24 + -a-47
+
+Per @@Architect's proactive coverage suggestion in
+[`../alex/event-architect-webtest-b.md`](../alex/event-architect-webtest-b.md)
+"@@Architect: ack standby; no dispatch this round —
+Proactive coverage suggestion". Tight regression-class
+smoke against HEAD `82ba444` to confirm `-b-22`'s
+chan-desktop runtime contract still holds after the
+Windows cfg gating (`-b-24` c0600e0 / e8ff68a / f796345)
++ `-a-47` (drop front/back independent Hybrid theme) +
+`-18` follow-ups (chan-drive test gates).
+
+### Constraint at start
+
+@@Alex's `/Applications/Chan.app/Contents/MacOS/chan-desktop`
+(PID 39577) still alive with its sidecar (PID 39646).
+No second chan-desktop launch (shared `config.json`
+race). Smoke is component-level only: tests + chan
+serve probes; no chan-desktop launch.
+
+### Probes
+
+| Probe                                                       | HEAD `82ba444` |
+|-------------------------------------------------------------|----------------|
+| `cargo build --bin chan-desktop` (macOS)                    | clean (2.42s)  |
+| `cargo test -p chan-desktop --bin chan-desktop`             | 39/39 pass     |
+| `DRIVE_LOCKED_MARKER` substring from real chan-drive output | unchanged      |
+| `find_orphan_chan_serve_pids` matches orphan-shape (live)   | matches PID 80619 |
+| `kill_orphan_with_grace`-shape SIGTERM exits orphan         | 200 ms (2×100 ms poll) |
+
+### Repro shape (for future smoke walks)
+
+```
+target/debug/chan add /tmp/chan-test-phase8-wb-smoke/
+target/debug/chan serve --port 8830 --no-browser /tmp/chan-test-phase8-wb-smoke/ &  # FIRST
+target/debug/chan serve --port 8831 --no-browser /tmp/chan-test-phase8-wb-smoke/    # exits with:
+# Error: drive is locked by another process
+ps -ax -o pid=,command= | awk '/chan/ && / serve / && /chan-test-phase8-wb-smoke/'  # matches FIRST
+kill <FIRST>; # exits within 1 s of SIGTERM, kill_orphan_with_grace shape
+target/debug/chan remove /private/tmp/chan-test-phase8-wb-smoke
+rm -rf /tmp/chan-test-phase8-wb-smoke
+```
+
+### Verdict — no regression
+
+`-b-22`'s chan-desktop runtime contract (drive-lock
+marker, orphan-detection heuristic, kill-with-grace
+shape) all intact at HEAD `82ba444`. `-b-24`'s
+`#[cfg(unix)]` gating does NOT bleed into the macOS
+runtime path; tests + build + the orphan-reclaim
+component chain all green. `-a-47`'s SPA theme drop
+has no surface in chan-desktop runtime; out of probe
+scope.
+
+### Side observations (unchanged from `-b-3`)
+
+* The ps-grep heuristic still matches bash/awk
+  pipeline lines that carry the trigger substrings
+  (same false-positive surface as `-b-3` documented).
+  Already filed in `phase-8-bugs.md` as the
+  heuristic-tightening @@FullStackB candidate.
+
+### Tear-down
+
+* Both chan serve subprocesses (PID 80619, the
+  bind-failed second one) gone before tear-down.
+* `/tmp/chan-test-phase8-wb-smoke/` `rm -rf`'d.
+* `chan remove /private/tmp/chan-test-phase8-wb-smoke`
+  → `unregistered`.
+* Log files cleaned.
+* `~/Library/Application Support/Chan Desktop/config.json`
+  NOT touched (no chan-desktop launched in this walk).
+
+### Coverage gap still parked
+
+Same as `-b-3`: GUI click cycles for the lock-takeover
+dialog Reclaim button (and the negative-case modal)
+remain blocked by macOS Accessibility + no
+`--drive <path>` CLI arg. @@Alex's canonical chan.app
+walk at v0.12.0 cut endpoint covers the final empirical
+seal.

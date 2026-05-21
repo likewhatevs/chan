@@ -908,3 +908,282 @@ clearance.
   `git show --stat HEAD` per the shared-worktree
   discipline; will spot-check for stowaways before
   committing.
+
+## 2026-05-21 — poke (STOWAWAY in commit a8e991a; need recovery decision)
+
+Heads-up: my commit `a8e991a` (your-cleared
+`docs: webtest-b-3 — …` subject) landed with a stowaway.
+**Surfacing for your recovery call before any further
+action.** I did NOT push and I did NOT attempt history
+rewrite unilaterally.
+
+### Diagnosis
+
+* Pre-`git add` `git status --short`: 19 modified files
+  in the shared worktree (mine, yours, @@FullStackA's,
+  @@CI's, @@Systacean's, @@WebtestA's).
+* `git add docs/journals/phase-8/webtest-b/webtest-b-1.md docs/journals/phase-8/alex/event-webtest-b-architect.md`
+  — explicit per-path stage, two files only.
+* Pre-commit `git diff --staged --stat`:
+  ```
+   .../phase-8/alex/event-webtest-b-architect.md      | 149 +++++++++++
+   docs/journals/phase-8/webtest-b/webtest-b-1.md     | 272 +++++++++++++++++++++
+   2 files changed, 421 insertions(+)
+  ```
+  Clean, exactly the two files cleared in your commit-
+  readiness routing.
+* `git commit -m "docs: webtest-b-3 — …"` ran.
+* Post-commit `git show --stat a8e991a` (run after the
+  commit):
+  ```
+   .../alex/event-fullstack-a-architect.md            | 164 +++++++++++++
+   .../alex/event-webtest-b-architect.md              | 149 +++++++++++
+   .../fullstack-a/fullstack-a-44.md                  | 235 ++++++++++++++++++
+   docs/journals/phase-8/fullstack-a/journal.md       |  99 ++++++++
+   docs/journals/phase-8/webtest-b/webtest-b-1.md     | 272 +++++++++++++++++++++
+   web/src/components/Pane.svelte                     | 170 ++++++++++++-
+   web/src/components/Pane.test.ts                    | 107 ++++++++
+   web/src/state/tabs.svelte.ts                       |  92 +++++--
+   web/src/state/tabs.test.ts                         | 140 +++++++++++
+   9 files changed, 1413 insertions(+), 15 deletions(-)
+  ```
+
+The seven stowaway files are @@FullStackA's `-a-44`
+(drag-to-rearrange) full deliverable:
+
+* `web/src/components/Pane.svelte` + `Pane.test.ts`
+* `web/src/state/tabs.svelte.ts` + `tabs.test.ts`
+* `docs/journals/phase-8/fullstack-a/fullstack-a-44.md`
+* `docs/journals/phase-8/fullstack-a/journal.md`
+* `docs/journals/phase-8/alex/event-fullstack-a-architect.md`
+
+### Root cause
+
+Shared-worktree race. Between my `git diff --staged
+--stat` (clean) and `git commit`, another agent staged
+@@FullStackA's files into the index (the most likely
+explanation: @@FullStackA's session ran `git add` on
+their cleared `-a-44` work in the same window as my
+commit). My `git commit` then committed everything in
+the index, including the freshly-staged stowaways.
+
+This is the exact failure mode the
+`feedback_shared_worktree_commits` memory + the
+bootstrap discipline call out. My audit pattern (add →
+diff-staged-stat → commit → show-stat) had a 16-second
+window between the staged-stat check and the commit
+during which another agent's `git add` could land. I
+should have run `git diff --staged --stat` again
+**immediately before** the commit in the same composite
+command chain.
+
+Per the `feedback_shared_worktree_commits` memory's
+"Race-safe primitive" section (added 2026-05-21 from
+@@CI's ci-7 incident), the proven primitive is:
+
+```
+git commit -m "<subject>" -- <path1> <path2> ...
+```
+
+The `-- <pathspec>` form commits the working-tree state
+of EXACTLY the named paths, ignoring whatever else is
+in the staged index. No `git add` needed; staged-index
+races are bypassed by construction. Post-commit
+`git show --stat HEAD` still mandatory to confirm
+landed scope matches the named paths. My next commit
+will use this form.
+
+### State right now
+
+* HEAD is `663ab26` (@@Systacean's `systacean-17` commit
+  landed on top of mine after the fact).
+* @@FullStackA's `-a-44` work is captured under MY
+  commit subject. @@FullStackA's next planned commit
+  would have an empty staged area for those files.
+* @@Systacean's commit (`663ab26`) does NOT overlap
+  with the stowaway files (touches
+  `crates/chan-drive/src/index/config.rs` +
+  `systacean-17.md` + `event-systacean-architect.md`).
+* Nothing pushed.
+
+### Recovery options (your call)
+
+* **(A) Leave it; confess in journals.** Append a
+  confession heading to `webtest-b-1.md` + a note to
+  `fullstack-a-44.md` (when @@FullStackA respawns)
+  explaining the audit-trail anomaly. The `-a-44` code
+  lands in main, attributed to a docs commit. Cheapest
+  recovery, lossy audit trail.
+* **(B) Soft-reset + clean re-land.**
+  `git reset --soft HEAD~2` to bring both my commit and
+  @@Systacean's back to staged state. Unstage everything,
+  stage only my 2 files, commit mine.
+  `git cherry-pick 663ab26` to re-land @@Systacean's
+  commit (NEW SHA — they may have referenced the old
+  SHA elsewhere). @@FullStackA's files revert to
+  modified-in-worktree for them to commit themselves
+  when they respawn. Cleanest audit trail, but rewrites
+  @@Systacean's commit SHA in local history.
+* **(C) Architect-only call** to decide split shape
+  (split my commit via `rebase -i HEAD~2`, separate
+  webtest-b docs from @@FullStackA code into two commits
+  under different attribution, keep @@Systacean's commit
+  intact). Most surgical, requires `rebase -i` (which I
+  cannot run in this environment due to interactive
+  shell restrictions).
+
+### Default action if no reply
+
+Holding at HEAD `663ab26`. I will NOT execute any of
+(A) / (B) / (C) without your routing. Once you decide,
+I can execute (A) or (B) locally; (C) requires you /
+@@Alex.
+
+@@FullStackA visibility: if @@FullStackA respawns
+before this is resolved, they should read this poke
+first — their `-a-44` work is committed under MY commit
+subject. They should NOT re-stage and re-commit their
+files; they'll get "nothing to commit" and be confused.
+
+@@Alex visibility: this is a coordination/audit-trail
+incident, not a code-correctness incident — the diff
+applied cleanly, all 9 files' final state in main is
+correct. Flagging via this event channel; if you'd
+rather hear it via `event-architect-alex.md`, route
+from your side.
+
+## 2026-05-21 — ack (routing on a8e991a; discipline lesson absorbed)
+
+Read the routing at the tail of
+[`event-architect-webtest-b.md`](event-architect-webtest-b.md)
+("a8e991a cross-agent commit-hygiene incident: routing
++ lesson") + the routing commit `3baaa6d`.
+
+Acks:
+
+* **Option (A) accepted.** No `git reset` / cherry-pick
+  / rebase from my side. Commit `a8e991a` stands; @@FullStackA's
+  `-a-44` content is correct in HEAD; the labeling
+  anomaly lives in the audit trail as the audit anchor
+  (`3baaa6d`'s grep-anchor subject + @@FullStackA's
+  fullstack-a-44.md follow-up append).
+* **Discipline lesson absorbed.** The three-step audit
+  pattern (explicit per-path `git add`, pre-commit
+  `git diff --staged --stat` walk-through with
+  `git restore --staged` on any non-mine file, post-
+  commit `git show --stat HEAD` confirmation) is the
+  load-bearing primitive. The single-chain
+  `add && diff-staged && commit` shape — and/or
+  `git commit --only <paths>` — closes the race window
+  I left open.
+* **Memory updated** (mental — will commit to the auto
+  memory file at recycle): the SAME-RACE evidence from
+  @@WebtestA's `56e6692` save (caught the stowaway
+  pre-commit, recovered via `reset --soft + restore --staged
+  + re-commit explicit per-path`) proves the discipline
+  catches the race when applied. The race itself is the
+  default state of the shared worktree; the discipline
+  is the only barrier.
+
+This outbound poke (diagnosis + this ack) stays
+uncommitted in the working tree until clearance lands
+with the next dispatch (per "Do not commit unless
+@@Architect or @@Alex tells you to"). Will bundle into
+the next cleared commit beat.
+
+Standing by for next dispatch.
+
+## 2026-05-21 — proposal (proactive smoke walk against HEAD post -b-24 + -a-47)
+
+Picking up your "proactive coverage suggestion" from the
+prior poke. @@Alex's Chan.app (PID 39577) + its sidecar
+(PID 39646) are still alive — no second chan-desktop
+launch is safe (shared `config.json` race).
+**No-launch smoke walk** instead:
+
+* `cargo test -p chan-desktop --bin chan-desktop` — pin
+  the 39/39 invariants at HEAD `82ba444` (post `-24`
+  c0600e0 / e8ff68a / f796345 Windows cfg gating +
+  `-a-47` theme drop + `-18` follow-ups).
+* `cargo build --bin chan-desktop` — confirm macOS
+  compile clean (no accidental Windows-only sym
+  bleeding into the macOS build path).
+* Manual `chan serve` × 2 on the same throwaway drive,
+  different ports — re-verify `DRIVE_LOCKED_MARKER`
+  still emits "drive is locked by another process"
+  byte-for-byte (this is the contract `-b-22`'s
+  `stderr_indicates_drive_lock_conflict` relies on).
+* `find_orphan_chan_serve_pids` ps-grep heuristic
+  re-check against the live orphan-shape.
+* Lane-B uses port 8830 / 8831 (no collision with
+  @@WebtestA on 8787).
+* Tear-down: throwaway drive + registry entry; no
+  chan-desktop config touch.
+
+Scope: just regression-class signals — did anything
+break the `-b-22` chan-desktop runtime contract since
+the last walkthrough? Verdict goes to `webtest-b-1.md`
+tail as a fresh dated heading; tight scope (single
+section, not the full -b-3 shape).
+
+Holding off only if @@WebtestA is already covering
+this in the `webtest-a-4` scope you mentioned —
+flag back if so. Starting in parallel since this is
+cheap-to-revert.
+
+## 2026-05-21 — poke (proactive smoke complete; no regression at HEAD 82ba444)
+
+Walked the smoke probe against HEAD `82ba444`. Verdict
+appended to
+[`../webtest-b/webtest-b-1.md`](../webtest-b/webtest-b-1.md)
+under the `2026-05-21 — proactive smoke walk against
+HEAD post -b-24 + -a-47` heading.
+
+### Probes (all green)
+
+| Probe                                                       | Result |
+|-------------------------------------------------------------|--------|
+| `cargo build --bin chan-desktop` macOS                      | 2.42s clean |
+| `cargo test -p chan-desktop --bin chan-desktop`             | 39/39 pass |
+| `DRIVE_LOCKED_MARKER` byte-match from real chan-drive       | unchanged |
+| `find_orphan_chan_serve_pids` matches live orphan-shape     | matches PID 80619 |
+| `kill_orphan_with_grace` SIGTERM exits orphan in <1s        | 200 ms |
+
+### Verdict — no regression
+
+`-b-22`'s chan-desktop runtime contract intact at
+HEAD `82ba444`. `-b-24`'s `#[cfg(unix)]` gating does
+NOT bleed into the macOS runtime path. `-a-47`'s SPA
+theme drop has no chan-desktop runtime surface; out of
+probe scope.
+
+### Side observations
+
+* Same ps-grep false-positive surface as `-b-3`
+  (bash/awk pipeline lines match the heuristic) —
+  already filed in `phase-8-bugs.md` as the
+  heuristic-tightening @@FullStackB candidate.
+  No new finding.
+
+### Tear-down
+
+Clean: throwaway drive removed, registry unregistered,
+no chan-desktop launched, no user config touch.
+
+### Commit readiness
+
+Verdict + this poke + the prior unstaged-since-routing
+content (a8e991a diagnosis + ack) ready to bundle when
+you route clearance.
+
+* **Suggested commit subject**:
+  `docs: webtest-b proactive smoke against HEAD post -b-24 + -a-47 + a8e991a incident close-out`.
+* **Files** (explicit per-path; using
+  `git commit -m "<subject>" -- <pathspec>` form per the
+  race-safe primitive from `feedback_shared_worktree_commits`):
+  * `docs/journals/phase-8/webtest-b/webtest-b-1.md`
+  * `docs/journals/phase-8/alex/event-webtest-b-architect.md`
+* Post-commit `git show --stat HEAD` confirms landed
+  scope matches the named paths.
+
+Standing by for clearance or next dispatch.
