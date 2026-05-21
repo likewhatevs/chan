@@ -4339,3 +4339,72 @@ second repeat, not the first.
 | `architect/journal.md` | This entry |
 | `alex/event-architect-fullstack-a.md` | incident routing for -a-49 sweeper side |
 | `alex/event-architect-systacean.md` | incident routing for -19 swept side |
+
+## 2026-05-21 — ci-13 + -19 audit anchor landed; label-confusion reconciled; rustfmt routed
+
+### Two lane commits landed this beat
+
+| SHA | Subject | Lane |
+|-----|---------|------|
+| `a5d2dc1` | `docs(systacean-19): audit anchor for 5685be4 misattribution incident (architect option (a) acked)` | @@Systacean |
+| `b017d3d` | `ci: drop Windows from ci.yml + release.yml matrices (ci-13)` | @@CI |
+
+### Label-confusion reconciled
+
+My `ci-13` clearance wrote "ACCEPT (a) — ubuntu +
+macOS" but @@CI's option labels had (a) = Ubuntu-only,
+(b) = Ubuntu + macOS. @@CI correctly took the
+TEXT-INTENT (Ubuntu + macOS) per their well-judged
+"text wins over letter" interpretation. Confirmed
+(b) is the right shape.
+
+Architect-side lesson: when reading option-label
+tables, restate the CHOSEN OPTION'S TEXT in the
+clearance, not just the letter. Avoids exactly this
+shape of confusion. Logged.
+
+### CI smoke pattern this round
+
+* `ci-13-smoke` (Ubuntu-only baseline): ✓ — confirmed
+  Windows-drop doesn't break Ubuntu lanes.
+* `ci-13-smoke-v2` (Ubuntu + macOS per text-intent):
+  macOS clippy + test ✓ — confirms macOS lane healthy
+  on current HEAD.
+* `ci-13-smoke-v2` overall-failure was rustfmt on
+  `5685be4`'s multi-line `assert!(matches!(...))` —
+  out-of-lane finding routed to @@Systacean.
+
+### rustfmt fixup routed to @@Systacean
+
+The multi-line `assert!` in
+`crates/chan-drive/src/index/facade.rs:1250` is
+@@Systacean's `-19` code (swept into `5685be4` via
+the cross-agent commit-hygiene incident). Routed as
+a small `-19` smoke fixup on their channel.
+Authorization inline for the fmt edit + smoke
+re-fire.
+
+### -19 smoke status
+
+`systacean-19-smoke` run `26254931045` IN PROGRESS
+at ~12m+. Validates the C2 fix empirically;
+rustfmt cleanup follows in next re-fire iteration.
+
+### Lane state at end of round
+
+| Lane | State |
+|------|-------|
+| @@Systacean | -19 audit-anchor in HEAD; rustfmt fixup routed; -19-smoke in flight |
+| @@CI | ci-13 in HEAD (`b017d3d`); queue-empty until wave-3 Linux-binaries |
+| @@FullStackA | -a-50 in flight (DirectoryInfoBody.svelte + .test.ts new; GraphPanel + InspectorBody modified) |
+| @@FullStackB | DONE; idle |
+| @@WebtestA | Idle |
+| @@WebtestB | DONE; idle |
+
+### What I'm committing this round
+
+| File | Reason |
+|------|--------|
+| `architect/journal.md` | This entry |
+| `alex/event-architect-ci.md` | ci-13 commit ack + label-confusion reconciled + rustfmt routed to Systacean |
+| `alex/event-architect-systacean.md` | rustfmt fixup authorization + -19 audit-anchor ack |

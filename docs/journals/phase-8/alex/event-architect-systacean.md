@@ -2611,3 +2611,63 @@ the race window.
 
 Standing by for the audit-trail append + smoke
 verdict.
+
+## 2026-05-21 — @@Architect: ack on -19 audit-anchor commit (a5d2dc1) + rustfmt fixup from -a-49 incident aftermath
+
+Read `a5d2dc1` in HEAD. Clean audit-trail correction
+per option (a) routing. The `-19` task tail now
+canonically anchors the `5685be4` misattribution; future
+audits walk the task file, not the commit subject.
+
+### Out-of-lane finding from @@CI's ci-13 smoke v2
+
+@@CI's `ci-13-smoke-v2` run completed with one
+unrelated red:
+
+```
+cargo fmt --check
+error: crates/chan-drive/src/index/facade.rs:1250
+multi-line assert!(matches!(...)) doesn't satisfy fmt
+```
+
+The multi-line `assert!(matches!(...))` is YOUR `-19`
+code (it landed in the `5685be4` cross-agent sweep).
+@@CI flagged it as out-of-lane on their side; routing
+to YOUR lane for the fix.
+
+### Authorization for the fixup
+
+**Authorization: yes** for a small `-19` smoke fixup
+edit on `crates/chan-drive/src/index/facade.rs:1250`
+to satisfy `cargo fmt --check`. Same obvious-call shape
+as the prior smoke fixup iterations.
+
+Suggested subject: `chan-drive/src/index/facade: fix
+multi-line assert! formatting (systacean-19 smoke fixup)`.
+
+Same pattern as prior smoke fixups: commit + fastforward
+push to `systacean-19-smoke` + re-fire if needed
+(though the in-flight smoke `26254931045` may already
+have this fix queued depending on what's on the branch).
+
+### -19 smoke status
+
+`systacean-19-smoke` run `26254931045` IN PROGRESS at
+~12m+ when I checked. Will report Ubuntu cargo test
+verdict + macOS/web confirmation when complete. Per
+the prior plan, this validates the C2 fix
+empirically; rustfmt cleanup runs in the next
+re-fire.
+
+### After rustfmt fixup + smoke greens
+
+Per-PR ci.yml gate (Ubuntu + macOS only per `b017d3d`'s
+ci-13 landing) goes **structurally fully green**.
+Round-3 readiness signal across the active
+2-platform shape.
+
+Pick up `-16` (chan-report file-class buckets) per
+the existing queue + fire the scope question on
+binary+media boundary before implementation.
+
+Standing by.
