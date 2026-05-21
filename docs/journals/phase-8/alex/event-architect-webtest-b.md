@@ -766,3 +766,73 @@ poke me on `event-webtest-b-architect.md` when done.
 
 `-b-23` chan.app static-site walk routes to @@WebtestA via
 `webtest-a-3.md`; not in your queue.
+
+## 2026-05-21 — @@Architect: approved + commit clearance (webtest-b-3 verdict)
+
+Cleared with explicit acknowledgement of the partial shape.
+Your judgement on the `/Applications/Chan.app` config.json
+collision was the right call: the live Chan.app shares
+`~/Library/Application Support/Chan Desktop/config.json`
+with any debug chan-desktop you'd launch, and the
+last-writer-wins on `window_configs` could discard @@Alex's
+in-flight state. "No persistent side effects outside the
+throwaway-drive set" applies; honoring it produced a
+component-verified verdict instead of a destructive one.
+
+* **Commit subject**: `docs: webtest-b-3 — -b-22 orphan-sidecar reap walkthrough (component verified, click cycles parked)` (your suggested subject; accepted verbatim).
+* **Files** (explicit per-path):
+  * `docs/journals/phase-8/webtest-b/webtest-b-1.md`
+  * `docs/journals/phase-8/alex/event-webtest-b-architect.md`
+    (your respawn ack + this commit-readiness poke; bundled).
+* Pre/post-commit `git diff --staged --stat` +
+  `git show --stat HEAD` per the shared-worktree
+  discipline; spot-check for stowaways before committing.
+
+### Routing on your heuristic-tightening finding
+
+Filed to [`../phase-8-bugs.md`](../phase-8-bugs.md) as a
+Round-2 wave-2/wave-3 polish candidate. Two follow-up
+paths per your shape:
+
+* Tighten the candidate-PID heuristic to match `chan serve
+  <drive-key>` as a contiguous argv sequence (not three
+  independent substrings).
+* Render candidate PIDs in the Reclaim dialog (replace
+  Tauri's plain `ask()` with a custom modal showing what's
+  about to be killed).
+
+Both are @@FullStackB lane (chan-desktop runtime). NOT
+YET DISPATCHED — folds into the `-b-22` follow-up sweep
+when @@FullStackB respawns. Real-world false-positive
+likelihood is narrow (your read) so this is polish, not
+a regression-blocker.
+
+### Routing on the canonical chan.app walkthrough
+
+Confirmed: the load-bearing chan-desktop runtime piece
+(takeover dialog UX with @@Alex's actual orphan
+condition) parks indefinitely behind @@Alex's "I will
+only test the chan.app at the very very end" decision.
+Your component-verified verdict + the heuristic finding
+are sufficient interim coverage. No fresh perm asks
+needed.
+
+### Standing by
+
+After your commit lands, you're queue-empty as the
+reactive lane. Next walkthrough dispatches when:
+
+* @@FullStackA respawns + commits `-a-44`
+  (drag-to-rearrange) — that's @@WebtestA's lane though;
+  not yours by default unless you swap.
+* @@FullStackB respawns + commits the
+  heuristic-tightening follow-up OR any new
+  chan-desktop runtime work — that's your lane
+  (chan-desktop runtime perm).
+
+If you want to proactively run a coverage walk on any
+in-HEAD chan-desktop runtime work you haven't exercised
+yet (per the proactive-walks discipline), surface a
+short proposal first; don't pick up without flagging
+scope so we don't double-walk anything @@WebtestA is
+covering.

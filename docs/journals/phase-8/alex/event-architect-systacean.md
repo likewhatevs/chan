@@ -1424,3 +1424,67 @@ PRE-RECYCLE HANDOVER above is your handover. Queue waiting:
 `-14` (done) → `-15` (chan-report cross-dir aggregation) →
 `-16` (file-classification buckets). `-12` parked on fresh
 permission ask.
+
+## 2026-05-21 — @@Architect: approved + commit clearance (systacean-15)
+
+Cleared. Your impl + tests + cross-crate wiring + pre-push
+gate are all green; suggested subject + file scope are right.
+
+* **Commit subject**: `chan-report: maintained per-directory aggregation cache + /api/report/dir (systacean-15)` (your suggested subject; accepted verbatim).
+* **Files** (race-safe pathspec form per the shared-worktree discipline):
+  * `crates/chan-drive/src/drive.rs`
+  * `crates/chan-drive/src/report.rs`
+  * `crates/chan-report/src/lib.rs`
+  * `crates/chan-report/tests/integration.rs`
+  * `crates/chan-server/src/lib.rs`
+  * `crates/chan-server/src/routes/mod.rs`
+  * `crates/chan-server/src/routes/report.rs`
+  * `docs/journals/phase-8/systacean/systacean-15.md`
+  * `docs/journals/phase-8/alex/event-systacean-architect.md`
+* **Pre-stage audit + post-commit audit** per the
+  shared-worktree memory.
+* No conflicts with concurrent @@CI / @@Webtest / @@FullStack
+  in-flight work in the dirty tree (your finding matches mine).
+
+Proceed with the commit. Push held per Round-2-close
+discipline.
+
+## 2026-05-21 — queue re-prioritization: -17 + -18 ahead of -16
+
+Two new tasks cut from @@CI's `ci-12` smoke validation
+findings (the GTK fix unmasked them):
+
+* [`../systacean/systacean-17.md`](../systacean/systacean-17.md)
+  — Windows `result_large_err` clippy lint on `chan-drive`
+  (`ConfigError` carries unboxed `toml::de::Error`; large
+  on Windows target). Pre-existing on Windows for the
+  last ~15 commits' worth of unverified main runs; not
+  net-new from ci-12, just newly-visible now the GTK
+  gate is partially restored.
+* [`../systacean/systacean-18.md`](../systacean/systacean-18.md)
+  — chan-drive tests panic on CI runners because the
+  BGE-small embedding model isn't cached. Shape (a):
+  `#[ignore]` or feature-gate the affected tests so
+  default builds skip them; deterministic-fixture shape
+  (b) is Round-3 cleanup.
+
+**Pick these up BEFORE `-16`**: they unblock the per-PR CI
+gate (load-bearing for every future commit). `-16`
+(chan-report file-classification buckets) is feature work
++ can wait one queue position. Revised queue:
+
+```
+-15 (committable now)
+-17 (Windows lint — gate-unblocker)
+-18 (model-dep tests — gate-unblocker)
+-16 (file-class buckets — feature work)
+-12 (parked on fresh permission ask)
+```
+
+Both -17 + -18 are bounded scope (Rust source fixes in
+chan-drive); per-task ~30-60min of work each. After both
+land, the per-PR CI gate goes fully green for the first
+time since ~2026-05-19.
+
+Standing by; next poke when `-15` lands or when you
+have a question on `-17` / `-18`.

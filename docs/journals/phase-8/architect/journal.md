@@ -1671,3 +1671,109 @@ Committing the architect-owned files as a single
 "dispatch fan-out" docs commit. The two webtest channel
 appends stay uncommitted; the recycled lanes commit
 their own writes on their next batch.
+
+## 2026-05-21 — clearance round + 2 new tasks (ci-12 smoke surfaced two findings)
+
+Four lanes poke-poked in one beat. Cleared all four +
+cut two new follow-up tasks from @@CI's smoke validation
+findings.
+
+### Clearances issued
+
+| Lane | Task | Status | Notes |
+|------|------|--------|-------|
+| @@Systacean | `-15` | Clearance approved | chan-report cross-dir aggregation cache + `/api/report/dir` route; 7 files +573/-37 + 8 new tests; full pre-push gate green. Suggested subject + file scope accepted verbatim. |
+| @@CI | `ci-12` | Clearance approved | GTK install in workspace-clippy jobs + `workflow_dispatch:` added to ci.yml; post-mortem appended to ci-11-post-mortem.md (tightly coupled per the joint discovery cycle). 5 open questions answered inline. |
+| @@WebtestA | `webtest-a-3` verdict | Clearance approved | 8/8 HOLD on `-a-43` + `-b-23`; one HOLD-partial on `-b-23` viewport-responsiveness (Chrome MCP `resize_window` tooling gap, not chan bug). Three side observations triaged: tooling note (#1), discipline reminder for Tasks B/C/E/F (#2), doc-drift (#3) — none filed to bug list. |
+| @@WebtestB | `webtest-b-3` verdict | Clearance approved (partial shape acknowledged) | Component-verified `-b-22` via chan-drive + chan-serve invariants directly; did NOT launch debug chan-desktop because @@Alex's live `/Applications/Chan.app` shares `config.json` with any debug instance (last-writer-wins on `window_configs` would discard live state). Right call per the "no persistent side effects outside throwaway-drive set" rule. |
+
+### Two new @@Systacean tasks cut (from @@CI's smoke findings)
+
+@@CI's ci-12 smoke validation unmasked TWO pre-existing
+issues that had been hidden behind the GTK gap. Both are
+chan-drive Rust source-code fixes (not @@CI's lane):
+
+* [`../systacean/systacean-17.md`](../systacean/systacean-17.md)
+  — Windows `result_large_err` lint on
+  `chan-drive::index::config::ConfigError` (carries
+  unboxed `toml::de::Error`; large on Windows target
+  stack alignment). Trips at `config.rs:130`, `:140`,
+  `facade.rs:177` + likely more. Fix shape (a): box the
+  large variant(s). Pre-existing on Windows for ~15
+  commits' worth of unverified main; not net-new from
+  ci-12.
+* [`../systacean/systacean-18.md`](../systacean/systacean-18.md)
+  — chan-drive tests panic on CI runners when the
+  BGE-small embedding model isn't cached. 14 tests
+  affected across `drive.rs` + `indexer.rs`. Fix shape
+  (a): `#[cfg(feature = "embed-model")]` or `#[ignore]`
+  the affected tests so default-build CI skips them
+  cleanly. Deterministic-fixture shape (b) is Round-3
+  cleanup territory; not pursuing now.
+
+### Queue re-prioritization
+
+@@Systacean's revised queue: `-15` (committable) → `-17`
+(Windows lint; gate-unblocker) → `-18` (model-dep tests;
+gate-unblocker) → `-16` (file-class buckets; feature
+work). The two gate-unblockers ride ahead of `-16` because
+they're load-bearing for the per-PR CI gate (broken since
+~2026-05-19 across ~15 commits). After both land, the
+gate goes fully green for the first time since that
+window.
+
+### Bug-list entry filed
+
+[`../phase-8-bugs.md`](../phase-8-bugs.md) appended with
+the chan-desktop orphan-detection heuristic-tightening
+finding from @@WebtestB's `-b-22` walk. Two follow-up
+pieces (tighten heuristic to contiguous argv match +
+render candidate PIDs in the dialog); @@FullStackB lane;
+Round-2 wave-2/wave-3 polish.
+
+### After this round lands
+
+| Lane | Next pickup |
+|------|-------------|
+| @@Systacean | Commit `-15` → pick `-17` → pick `-18` → then `-16` |
+| @@CI | Commit `ci-12` → queue-empty until v0.12.0 Linux-binaries dispatch (wave-3) |
+| @@WebtestA | Commit verdict → standing by; next walk likely `-a-44` once @@FullStackA respawns |
+| @@WebtestB | Commit verdict → queue-empty as reactive lane; next walk on chan-desktop runtime work when it lands |
+| @@FullStackA | Still not respawned; queue rich (`-a-44` → `-a-45..52` → `-a-42`) |
+| @@FullStackB | Still not respawned; queue-empty post-`-b-23`; wave-3 fan-out candidates ready |
+
+Gate-state outlook: after ci-12 lands, ci.yml gate goes
+**partial green** (3 of 4 affected jobs). After
+systacean-17 + systacean-18 land, ci.yml gate goes
+**fully green** for the first time since ~2026-05-19.
+That's the Round-3 readiness signal — meaning the per-PR
+gate is reliably catching regressions again.
+
+### What I'm committing this round
+
+| File | Reason |
+|------|--------|
+| `architect/journal.md` | This entry |
+| `alex/event-architect-systacean.md` | -15 clearance + -17/-18 queue re-prioritization |
+| `alex/event-architect-ci.md` | ci-12 clearance + 5-question answers |
+| `alex/event-architect-webtest-a.md` | verdict clearance + side-observation triage |
+| `alex/event-architect-webtest-b.md` | verdict clearance + heuristic-finding routing |
+| `phase-8-bugs.md` | chan-desktop orphan-detection heuristic entry |
+| `systacean/systacean-17.md` | NEW task (Windows lint) |
+| `systacean/systacean-18.md` | NEW task (model-dep tests) |
+
+NOT touching (other agents' own files; they commit with
+their work):
+
+* `crates/chan-{drive,report,server}/...` — @@Systacean's
+  `-15` code.
+* `.github/workflows/{ci,release}.yml` + `ci/ci-12.md` +
+  `ci/ci-11-post-mortem.md` — @@CI's `ci-12` work.
+* `webtest-{a,b}/webtest-{a,b}-1.md` — webtest verdict
+  appends.
+* `alex/event-{ci,systacean,webtest-a,webtest-b}-architect.md`
+  — agents' own outbounds (will commit with their work).
+* `systacean/systacean-15.md` — @@Systacean's task tail
+  (will commit with `-15` code).
+* `webtest-a/webtest-a-3.md` — touched by @@WebtestA on
+  pickup (likely a status update); they own that file.

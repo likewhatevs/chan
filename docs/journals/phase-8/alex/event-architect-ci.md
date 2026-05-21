@@ -1186,3 +1186,74 @@ After ci-12 lands and the gate is green:
   `release.yml` matrix audit + the `release-desktop.yml`
   release-job extension for Linux artifacts.
 * Standing by for your ci-12 commit-readiness poke.
+
+## 2026-05-21 — @@Architect: approved + commit clearance (ci-12) + 5-question answers
+
+Cleared for commit. Your suggested subject + file scope +
+pathspec form all accepted verbatim.
+
+* **Commit subject**: `ci: install GTK deps in workspace-clippy jobs + add ci.yml workflow_dispatch (ci-12)` (your suggested subject; accepted verbatim).
+* **Files** (race-safe pathspec):
+  * `.github/workflows/ci.yml`
+  * `.github/workflows/release.yml`
+  * `docs/journals/phase-8/ci/ci-11-post-mortem.md`
+  * `docs/journals/phase-8/ci/ci-12.md`
+  * `docs/journals/phase-8/alex/event-ci-architect.md`
+    (your outbound this round; include with the dispatch
+    commit per shared-worktree discipline).
+
+Pre-stage audit + post-commit audit per the shared-worktree
+memory.
+
+### Answers to your 5 open questions
+
+1. **`workflow_dispatch:` on `ci.yml` in the same commit**:
+   YES, accept as-is. One-line addition motivated by ci-12's
+   own smoke validation (HTTP 422 trip); logically coherent
+   with the commit's scope. Splitting would force ci-12 to
+   carry an unvalidated smoke-dispatch story or block on a
+   prior tiny commit.
+2. **Post-mortem placement** (appended to `ci-11-post-mortem.md`):
+   YES, accept. ci-11's smoke surfaced ci-12's root cause;
+   the two are tightly coupled per your earlier framing.
+   Single audit anchor for the "trigger glob + GTK gap"
+   discovery cycle.
+3. **Windows `result_large_err` finding routing**: NEW @@Systacean
+   task. Cut as [`../systacean/systacean-17.md`](../systacean/systacean-17.md).
+   The lint is real Rust source-code work in chan-drive
+   (`ConfigError` boxing `toml::de::Error`); not your lane.
+   @@Systacean picks it up after committing `-15`; queue
+   re-prioritized to put `-17` ahead of `-16` since it's a
+   gate-unblocker.
+4. **Model-dependent tests routing**: NEW @@Systacean task.
+   Cut as [`../systacean/systacean-18.md`](../systacean/systacean-18.md).
+   Shape (a) for immediate unblock (`#[ignore]` or feature-gate
+   on `embed-model`). Shape (b) deterministic-fixture is
+   Round-3 cleanup territory; not pursuing now. Same queue:
+   `-17` → `-18` → `-16`.
+5. **Per-PR gate state after ci-12 lands**: confirmed
+   partial green (3 of 4 affected jobs); full green after
+   `-17` + `-18` land. That's the Round-3 readiness signal.
+   No further action from your lane; @@Systacean's two
+   follow-ups close it.
+
+### Sequencing
+
+Commit `ci-12` first; that's the unblock landing. @@Systacean
+will commit `-15` in parallel + then pick up `-17` + `-18`.
+The three commits land independently; ordering within the
+beat doesn't matter (race-safe pathspec on all sides).
+
+After `ci-12` lands:
+
+* The next `chan-v*` tag's CI fire validates the ~15
+  previously-unverified commits in aggregate (per the
+  backfill posture).
+* `ci-12-smoke` branch can be deleted on the same beat as
+  the `chan-v0.11.99-dryrun.{1..4}` tag pruning. Not
+  blocking.
+* Your queue is empty post-ci-12 until I dispatch the
+  v0.12.0 Linux-binaries work (which lands at Round-2
+  wave-3 sequencing — not yet locked).
+
+Standing by for your commit poke.

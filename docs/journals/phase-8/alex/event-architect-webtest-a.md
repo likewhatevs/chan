@@ -516,3 +516,56 @@ flag in your poke for follow-up dispatch.
 `-a-44` (drag-to-rearrange) is @@FullStackA's queue next
 pickup; not yet committed. Cut a separate walkthrough task
 when it lands.
+
+## 2026-05-21 — @@Architect: approved + commit clearance (webtest-a-3 verdict)
+
+Cleared. 8/8 HOLD on the acceptance matrix (six `-a-43`
+SPA checks + the four `-b-23` static-site checks, of which
+viewport-responsiveness is HOLD-partial per the Chrome
+MCP resize_window tooling gap). All three side
+observations are tooling notes / discipline reminders /
+doc-drift; nothing regression-class.
+
+* **Commit subject**: `docs: webtest-a-3 — -a-43 Hybrid back-side + -b-23 web-marketing walkthroughs (8/8 HOLD)` (or your variant; mine is suggested, refine if you prefer).
+* **Files** (explicit per-path):
+  * `docs/journals/phase-8/webtest-a/webtest-a-1.md` (verdict append).
+  * `docs/journals/phase-8/alex/event-webtest-a-architect.md` (your respawn poke + this commit-readiness poke; bundled).
+* Pre/post-commit `git diff --staged --stat` +
+  `git show --stat HEAD` per the shared-worktree
+  discipline.
+
+### Decisions on your flagged items
+
+* **`-b-23` viewport-responsiveness partial**: PUNT. The
+  viewport meta + fluid centered-column layout are
+  correct; the Chrome MCP `resize_window` tooling gap is
+  a separate problem. @@Alex's eventual chan.app /
+  marketing-site walk at v0.12.0 cut covers mobile
+  rendering personally (per the 2026-05-21 "I will only
+  test the chan.app at the very very end" decision). Not
+  worth a fresh-device spot-check dispatch right now.
+* **Side observation #1** (Cmd+. Tab Return + terminal
+  focus): webtest-automation note only; logging in the
+  verdict tail is sufficient. Not filing in the bug list.
+* **Side observation #2** (back-side stubs use
+  `var(--text)` + `var(--border)` without explicit
+  `--bg`): discipline reminder for Tasks B/C/E/F when
+  they populate the stubs; noted in the journal so
+  @@FullStackA picks it up at fan-out. Not filing as a
+  bug.
+* **Side observation #3** (`-b-23` task body says "11
+  files", actual is 10): doc-drift; not worth a fix
+  commit on its own. @@FullStackB picks it up if they
+  revisit the task file for any reason; otherwise it
+  stays as a known artefact. Not filing.
+
+### Sequencing
+
+Commit your verdict; then standing by until the next
+walkthrough dispatches. The most likely next walk is
+`-a-44` (drag-to-rearrange) once @@FullStackA respawns
++ commits it. If @@FullStackA's session reopens with a
+deep queue (`-a-44` through `-a-52` + `-a-42`), I'll
+cut walkthrough tasks per logical groupings rather than
+per individual commit — likely a `webtest-a-4` covering
+Hybrid back-side wave Tasks B/C/E/F once they bundle.

@@ -770,6 +770,16 @@
   - inspector pattern is shared with the graph overhaul's G3/G4 + the FB-side inspector — single component shape across all surfaces
   - implementer audits at fan-out: chan-server probably has separate endpoints per entity type; the unified search either fans out internally OR a new unified-search endpoint aggregates
   - the F3 entry above + this addendum together are the operative spec; round-2-plan §"Search overlay redesign" carries the consolidated version
+- chan-desktop orphan-detection heuristic too loose (false-positive risk in noisy shell environments)
+  - flagged 2026-05-21 by @@WebtestB during `-b-22` walkthrough (`webtest-b-3` verdict): the heuristic in chan-desktop's drive-lock-takeover path matches ANY process whose command line contains `chan` + ` serve ` + drive-key as three INDEPENDENT substrings, not a contiguous `chan serve <drive-key>` argv sequence
+  - real-world likelihood narrow but non-zero: a `tail -f chan-serve.log` over the drive key, an IDE process inspecting the directory, a tmux pane with `chan serve <drive-key>` in visible scrollback that happens to be mid-process, etc. COULD enter the candidate set
+  - destructive-action confirmation surface is opaque: the `promptDriveLockTakeover()` Tauri `ask()` dialog does NOT display candidate PIDs to the user (yes/no shape only); the user can't see what's about to be killed
+  - want, TWO pieces:
+    1. **Tighten the heuristic**: match `chan serve <drive-key>` as a contiguous argv sequence (regex or positional argv check) instead of three independent substrings
+    2. **Render candidate PIDs in dialog**: replace Tauri's plain `ask()` with a custom modal so the user sees the offending PIDs + command lines before confirming the SIGTERM
+  - lane: @@FullStackB (chan-desktop runtime)
+  - NOT YET DISPATCHED — Round-2 wave-2/wave-3 polish for the `-b-22` follow-up; not regression-blocker (the existing `-b-22` shape works for the load-bearing case Alex demonstrated; this is hardening against edge cases)
+
 - Linux binaries shipped on phase-8 next-release tags (chan CLI + chan-desktop)
   - feature ask 2026-05-21 by @@Alex: "next phase we should have binaries for linux too, chan and chan-desktop!"
   - state today:
