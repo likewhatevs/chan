@@ -8,7 +8,9 @@
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, RwLock};
 
+#[cfg(unix)]
 use chan_drive::Drive;
+#[cfg(unix)]
 use serde::{Deserialize, Serialize};
 #[cfg(unix)]
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};

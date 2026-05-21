@@ -533,3 +533,80 @@ After commit:
 3. Wait for run completion.
 4. Verify Windows clippy passes + Ubuntu + macOS green.
 5. Append result + fire commit-readiness poke to @@Architect.
+
+## 2026-05-21 — smoke run #1 (`26238801236`): uncovered three downstream Windows clippy errors
+
+Committed `c0600e0` + pushed to `fullstack-b-24-smoke` +
+fired `gh workflow run ci.yml --ref fullstack-b-24-smoke`.
+Results:
+
+| Job                             | State    |
+|---------------------------------|----------|
+| web (check + test + build)      | ✓ 2m27s  |
+| build (no default features)     | ✓ 6m43s  |
+| clippy + test (windows-latest)  | ✗ 9m32s  |
+| clippy + test (ubuntu-latest)   | ✗ 9m21s  |
+| rustfmt                         | ✓ 17s    |
+
+### Windows clippy: 3 new errors
+
+The original 11 lints cleared, but `cargo clippy --all-targets
+-- -D warnings` then surfaced three secondary issues that the
+broken pre-`-17` Windows gate had been masking:
+
+1. **`unused import: chan_drive::Drive`** in
+   `crates/chan-server/src/control_socket.rs:11`. Drive is
+   only used by the now-`#[cfg(unix)]`-gated `open_path` +
+   `abs_to_drive_rel` + `handle_request`; on Windows the
+   import has no consumers.
+2. **`unused imports: Deserialize, Serialize`** in
+   `crates/chan-server/src/control_socket.rs:12`. Same shape:
+   the derive macros that consume them are now Unix-gated.
+3. **`function parse_ps_lines_for_chan_serve is never used`**
+   in `desktop/src-tauri/src/serve.rs:419`. Not from my -24
+   change — `-b-22` added this helper as the testable core of
+   `find_orphan_chan_serve_pids` (which IS already
+   `#[cfg(unix)]` gated for the `ps` syscall it wraps). The
+   helper itself wasn't gated; previous Windows clippy runs
+   couldn't reach this code path because `-17`'s
+   `result_large_err` red blocked compilation earlier.
+
+### Ubuntu test failure: out-of-scope (BGE model gap)
+
+`removing_contact_frontmatter_demotes_node_back_to_file` in
+`crates/chan-drive/tests/contacts_import.rs:296` panics on
+the CI runner because the BGE-small embedding model isn't
+cached. `systacean-18`'s `#[ignore]` pass missed this
+specific test. NOT in -24's scope (chan-drive lane); flagged
+for @@Architect routing to @@Systacean as a -18 follow-up.
+
+### Fix
+
+* **`crates/chan-server/src/control_socket.rs`** — `#[cfg(unix)]`
+  prepended to the `use chan_drive::Drive` + `use serde::{Deserialize, Serialize}`
+  lines.
+* **`desktop/src-tauri/src/serve.rs`** — `#[cfg(unix)]`
+  prepended to `fn parse_ps_lines_for_chan_serve` +
+  `#[cfg(unix)]` added to the two test functions that
+  reference it (`parse_ps_lines_picks_chan_serve_against_key_but_skips_self`,
+  `parse_ps_lines_returns_empty_when_no_match`).
+
+### Re-verify
+
+Local clippy + fmt clean post-fix on macOS. CI smoke #2
+needed for Windows confirmation (macOS clippy can't catch
+Windows-only dead-code because the items ARE used on macOS).
+
+### Suggested commit subject
+
+```
+chan-server + chan-desktop: smoke #1 fixup — gate orphaned Unix-only imports + parse_ps helper on Windows (fullstack-b-24)
+```
+
+### Next
+
+1. Commit fixup on main.
+2. Fast-forward push `fullstack-b-24-smoke`.
+3. Re-fire `gh workflow run ci.yml --ref fullstack-b-24-smoke`.
+4. Confirm Windows clippy green.
+5. (Ubuntu test failure stays as the systacean-18 gap; not -24's gate.)

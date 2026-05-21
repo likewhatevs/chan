@@ -416,6 +416,7 @@ pub fn find_orphan_chan_serve_pids(_key: &str) -> Result<Vec<u32>, String> {
 /// `ps -ax -o pid=,command=` output and returns every pid whose
 /// command line contains both `chan`, ` serve `, and the drive key,
 /// excluding `self_pid`.
+#[cfg(unix)]
 fn parse_ps_lines_for_chan_serve(ps_output: &str, key: &str, self_pid: u32) -> Vec<u32> {
     let mut pids = Vec::new();
     for line in ps_output.lines() {
@@ -1499,6 +1500,7 @@ mod tests {
         assert!(!stderr_indicates_drive_lock_conflict(&[]));
     }
 
+    #[cfg(unix)]
     #[test]
     fn parse_ps_lines_picks_chan_serve_against_key_but_skips_self() {
         // Synthetic `ps -ax -o pid=,command=` output. Mix of:
@@ -1518,6 +1520,7 @@ mod tests {
         assert_eq!(pids, vec![200]);
     }
 
+    #[cfg(unix)]
     #[test]
     fn parse_ps_lines_returns_empty_when_no_match() {
         let ps = "  100 /Applications/Chan.app/Contents/MacOS/chan-desktop\n\
