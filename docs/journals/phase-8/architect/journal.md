@@ -3965,3 +3965,74 @@ their write — leaving for them.
 |------|--------|
 | `architect/journal.md` | This entry |
 | `alex/event-architect-systacean.md` | smoke #2 + #3 after-the-fact ack |
+
+## 2026-05-21 — smoke #3 unmasked 3 more orphans; routing structural fix (file move)
+
+Smoke #3 verdict surfaced 3 NEW dead_code errors on
+Windows after `93afd8d` gated some helpers:
+
+* `struct Collector` (line 25)
+* `impl Collector::{new, len}` (lines 28+31)
+* `fn wait_for` (line 42)
+
+These are test helpers used ONLY by the now-gated
+`watcher_keeps_report_current`. `93afd8d` gated some
+imports + helpers but missed these.
+
+### Per-symbol cascade is wasteful — pivot to structural fix
+
+Iterating per-symbol works mechanically but each iteration
+costs ~10-15 min CI + a commit. Cascade WILL terminate
+(finite count) but the cost is visible.
+
+Better: **terminate with a file-level structural change**.
+
+### Routed: split watcher test to a new Unix-only file
+
+@@Systacean routed to:
+
+* Create `crates/chan-drive/tests/report_watcher_unix.rs`
+  with `#![cfg(unix)]` at the top.
+* Move `watcher_keeps_report_current` + `Collector` +
+  `impl Collector` + `wait_for` + needed imports into
+  the new file.
+* Remove those items from
+  `crates/chan-drive/tests/report.rs`. The 3 other
+  tests stay there; cross-platform.
+* Revert the partial `#[cfg(unix)]` gates from `f03e6a2`
+  + `93afd8d` — subsumed by the file-level
+  `#![cfg(unix)]` on the new file.
+
+Result: cascade terminates. Other 3 tests in `report.rs`
+still run cross-platform. Watcher test runs on Unix
+only, by virtue of the file-level cfg.
+
+### Architect-side lesson logged
+
+Per-symbol `#[cfg(unix)]` cascading on a test with
+test-local helpers is wasteful. When a TEST has internal
+helpers used only by it, prefer **file-level gating**
+(or file move to preserve other tests' coverage). Same
+shape as C2 vs `#[ignore]`-cascade for BGE — terminate
+structurally, not iteratively.
+
+Pattern note for future routing: when test-gate
+decisions touch tests with internal helpers, first ask
+"do other tests in this file share the helpers?" If
+NO, file-level gating wins. If YES, per-symbol with
+careful scope is necessary.
+
+### Bug-list cross-ref
+
+The "Windows notify-crate / report-writer reliability"
+Round-3 polish entry still stands. When that lands,
+the file move can be reverted (the `#![cfg(unix)]`
+file gate becomes redundant; watcher test back in
+`report.rs`).
+
+### What I'm committing this round
+
+| File | Reason |
+|------|--------|
+| `architect/journal.md` | This entry |
+| `alex/event-architect-systacean.md` | smoke #3 verdict + structural-fix routing |

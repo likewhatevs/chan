@@ -2259,3 +2259,125 @@ signal across all 3 platforms.
 After Windows greens, pick up `-19` per the queue.
 
 Standing by for smoke #3 verdict.
+
+## 2026-05-21 — @@Architect: smoke #3 unmasked 3 more orphans; routing structural fix — split watcher test to new Unix-only file
+
+Smoke #3 verdict (paraphrased from @@Alex chat):
+
+```
+error: struct `Collector` is never constructed
+  --> crates\chan-drive\tests\report.rs:25:8
+error: associated items `new` and `len` are never used
+error: function `wait_for` is never used
+  --> crates\chan-drive\tests\report.rs:42:4
+```
+
+So `93afd8d`'s "helpers + imports" sweep missed:
+`Collector` struct + `impl Collector::{new, len}` + the
+`wait_for` helper. They're only used by the now-gated
+`watcher_keeps_report_current`; on Windows they're
+dead.
+
+### Per-symbol cascade is wasteful — pivot to structural fix
+
+Per-symbol `#[cfg(unix)]` keeps unmasking the next
+layer:
+
+1. Smoke #1: original 11 lints + the test.
+2. Smoke #2 (`f03e6a2`): gated the test → orphaned
+   helpers exposed.
+3. Smoke #3 (`93afd8d`): gated SOME helpers/imports
+   → orphaned Collector + wait_for exposed.
+4. Smoke #4 (predicted if we keep iterating): possibly
+   more orphans from the now-gated Collector/wait_for.
+
+The cascade WILL terminate (finite item count), but
+each iteration costs ~10-15 min of CI + a commit. Better:
+**terminate it with a file-level structural change**.
+
+### Route: split watcher test to new Unix-only file
+
+* Create `crates/chan-drive/tests/report_watcher_unix.rs`
+  with `#![cfg(unix)]` at the top of the file.
+* Move into it: `watcher_keeps_report_current` test +
+  `Collector` struct + `impl Collector` + `wait_for`
+  helper + any imports those need.
+* Remove the moved items from
+  `crates/chan-drive/tests/report.rs`. The 3 remaining
+  tests in `report.rs` (`report_for_prefix_restricts_to_subtree`,
+  `report_initial_scan_picks_up_markdown_and_code`,
+  `report_returns_for_empty_drive`) stay there; they
+  run cross-platform.
+* Revert the partial `#[cfg(unix)]` gates from `f03e6a2`
+  + `93afd8d` (they're now subsumed by the file-level
+  `#![cfg(unix)]` on the new file).
+
+Result: cascade terminates definitively. The 3
+cross-platform `report.rs` tests still run on Windows
++ macOS + Linux. The watcher test (Unix-only by virtue
+of the file-level cfg) skips on Windows + runs on
+Unix.
+
+### Authorization
+
+**Authorization: yes** for:
+
+* `crates/chan-drive/tests/report.rs` (remove the
+  watcher test + helpers + cfg gates).
+* `crates/chan-drive/tests/report_watcher_unix.rs`
+  (new file with `#![cfg(unix)]` at top).
+* `docs/journals/phase-8/systacean/systacean-20.md`
+  (task tail).
+* `docs/journals/phase-8/alex/event-systacean-architect.md`
+  (outbound).
+
+@@Systacean may proceed without further confirmation
+from @@Alex.
+
+### Why this is the right shape (not iteration)
+
+* Structural: the "watcher test is Unix-only" semantic
+  IS what we want; file-level cfg expresses it clearly.
+* Terminates: no further dead_code cascade possible
+  inside that file — the whole compilation unit is
+  skipped on Windows.
+* Preserves coverage: the OTHER 3 tests still run on
+  Windows.
+* Clean diff: ~50 lines moved between two files; no
+  per-symbol attribute spam.
+
+### Smoke verdict expectation
+
+Push fastforward + re-fire. Expected:
+
+* Windows ✓ — the new file is skipped via
+  `#![cfg(unix)]`; the original `report.rs` no longer
+  has unused symbols.
+* Ubuntu + macOS ✓ — watcher test still runs (Unix).
+* All other jobs unchanged.
+* **Round-3 readiness signal**: per-PR ci.yml gate
+  structurally fully green across all 3 platforms.
+
+### Lesson logged (architect-side)
+
+Per-symbol `#[cfg(unix)]` cascading on a test that has
+test-local helpers is wasteful. When a TEST module has
+internal-only helpers, prefer **file-level** gating
+(or move the test + its helpers to a Unix-only file
+to preserve other tests' cross-platform coverage).
+Same lesson as C2 (graceful BM25 fallback) — terminate
+cascades structurally, not iteratively.
+
+Update for the next architect session: when routing
+test gates, FIRST ask "does this test have helpers
+that only it uses?" If yes, structural-file move is
+the better routing than per-symbol cfg.
+
+### Bug-list cross-ref
+
+The "Windows notify-crate / report-writer reliability"
+Round-3 polish entry still stands. When that lands,
+the file move can be reverted (file `#![cfg(unix)]`
+becomes redundant) + watcher test back in `report.rs`.
+
+Standing by for the file-move commit + smoke verdict.
