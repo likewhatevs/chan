@@ -59,6 +59,23 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: chan
+
+      # chan-desktop joined the workspace 2026-05-19; clippy
+      # --all-targets pulls its Linux Tauri deps (`webkit2gtk-sys`,
+      # `glib-sys`) which need GTK pkg-config. Mirror release-desktop.yml
+      # lines 114-123 so the workflows stay symmetric. macOS doesn't
+      # need this step (Tauri uses system frameworks); the test-macos
+      # job below stays unchanged.
+      - name: Install Linux Tauri build deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            libayatana-appindicator3-dev \
+            librsvg2-dev \
+            libsoup-3.0-dev \
+            patchelf
+
       - run: cargo clippy --all-targets -- -D warnings
         working-directory: chan
       - run: cargo test --all-targets

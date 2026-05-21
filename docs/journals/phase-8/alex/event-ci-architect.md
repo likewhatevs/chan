@@ -1803,3 +1803,167 @@ backfill call.
 Tear-down: no orphaned processes / drives / tabs from
 my lane. Smoke run 26227752597 is complete (red,
 documented). External state is clean.
+
+## 2026-05-21 — poke (ci-12 commit-readiness + 2 out-of-lane findings)
+
+Fresh @@CI session bootstrapped from the
+[`bootstrap.md`](../../../agents/bootstrap.md)
+Working-agent block. Read inbound channel, picked up
+the `ci-12` dispatch, and worked the patch end-to-end
+including smoke validation.
+
+### Work landed (in working tree)
+
+`ci-12` patches in working tree on `main`:
+
+* `.github/workflows/ci.yml`: GTK apt-install on `test
+  (ubuntu-latest)` (matrix-gated `if: matrix.os ==
+  'ubuntu-latest'`) + `no-default-features` (always
+  Ubuntu, unconditional) + `workflow_dispatch:` trigger
+  added to `on:` block.
+* `.github/workflows/release.yml`: GTK apt-install on
+  `test-linux` (always Ubuntu, unconditional). macOS
+  + Windows entries unchanged (Tauri cargo-gates GTK
+  to Linux).
+* `docs/journals/phase-8/ci/ci-11-post-mortem.md`:
+  appended ci-12 post-mortem section per your hint
+  that ci-11 + ci-12 are tightly coupled.
+* `docs/journals/phase-8/ci/ci-12.md`: Commit
+  readiness section appended.
+
+Package list mirrors `release-desktop.yml` lines 114-123
+verbatim (libwebkit2gtk-4.1-dev, libayatana-appindicator3-dev,
+librsvg2-dev, libsoup-3.0-dev, patchelf).
+
+### Smoke validation
+
+`gh workflow run ci.yml --ref ci-12-smoke` fired run
+[`26231816355`](https://github.com/fiorix/chan/actions/runs/26231816355).
+Completed; conclusion failure, but the GTK fix itself
+is validated empirically:
+
+| Job                                       | Conclusion | Notes                                                                  |
+|-------------------------------------------|------------|------------------------------------------------------------------------|
+| `rustfmt`                                 | success    | (unchanged)                                                            |
+| `web (check + test + build)`              | success    | (unchanged)                                                            |
+| `clippy + test (ubuntu-latest)`           | failure    | clippy step ITSELF green (glib-sys gone); cargo test failed (finding #2 below) |
+| `clippy + test (windows-latest)`          | failure    | `result_large_err` clippy lint on chan-drive (finding #1; pre-existing) |
+| `build (no default features)`             | success    | GTK fix validated end-to-end on this Linux job                         |
+
+Per the task spec § Smoke validation acceptance: "EITHER
+passes OR reds on something other than glib-sys": the
+ubuntu clippy step's stderr no longer mentions glib-sys
+or pkg-config; my GTK install step succeeded and the
+subsequent `cargo clippy --all-targets -- -D warnings`
+step reached green. The downstream `cargo test`
+failure is the new out-of-lane finding below.
+
+### Out-of-lane finding #1 — Windows `result_large_err`
+
+`ci.yml::test (windows-latest)` reds on a clippy lint:
+
+```
+the `Err`-variant returned from this function is very large
+  --> crates/chan-drive/src/index/config.rs:130:34
+help: try reducing the size of `index::config::ConfigError`,
+      for example by boxing large elements or replacing it
+      with `Box<index::config::ConfigError>`
+```
+
+Same lint also surfaces at:
+* `crates/chan-drive/src/index/config.rs:140` (`save`)
+* `crates/chan-drive/src/index/facade.rs:177` (`open`)
+* (and a few more; multi-line log)
+
+Pre-existing; not net-new from ci-12. The lint is a
+Windows-only clippy finding (different stack
+size/alignment from Linux). @@Systacean lane
+(chan-drive). Recommend cutting a fresh
+`systacean-N` for the box-it fix; 1-3 lines per call site.
+
+### Out-of-lane finding #2 — chan-drive cargo tests need embedding model
+
+NEW finding unmasked by ci-12. With clippy past
+glib-sys, `cargo test --all-targets` runs on Ubuntu;
+411 pass + 14 fail. Failure root cause:
+
+```
+called `Result::unwrap()` on an `Err` value:
+  Search("embedding model 'BAAI/bge-small-en-v1.5' not
+  downloaded; expected at \"/home/runner/.cache/chan/models/
+  models--BAAI--bge-small-en-v1.5\". Run
+  `chan index download-model` or rebuild with
+  `--features embed-model`.")
+```
+
+Origin: `systacean-6`/`-7` made the BGE-small bundle
+opt-in (default builds drop the ~140 MB embed). The
+chan-drive tests at `crates/chan-drive/src/drive.rs:{3365,
+3442, 3478, 3522, 3589, 3670, 3735, 3782, 3845, 4659,
+4806, 4818}` + indexer tests at `indexer.rs:{378, 444}`
+panic when the model isn't present (default on CI
+runners; usually cached on dev workstations).
+
+This was hidden behind the GTK gap; ci-12 unmasks it.
+Three fix shapes for the routing call (full detail in
+[`../ci/ci-12.md`](../ci/ci-12.md) tail):
+
+* (a) Mark affected tests `#[ignore]` or feature-gate
+  on `embed-model`. Smallest delta; matches the
+  post-systacean-6 "embedding model is optional" reality.
+  Recommended for immediate unblock.
+* (b) Tests bring own deterministic fixture instead
+  of requiring BGE-small. Better long-term coverage;
+  larger effort. Round-3 cleanup candidate.
+* (c) Pre-fetch model in ci.yml's test job. Heaviest
+  (~30-60s + 140 MB per run); doesn't match the
+  default-build shape.
+
+@@Systacean lane (chan-drive tests). Recommend cutting
+a `systacean-N` with shape (a) for the unblock + (b)
+as Round-3 cleanup.
+
+### Commit shape (proposed)
+
+* **Commit subject**: `ci: install GTK deps in workspace-clippy jobs + add ci.yml workflow_dispatch (ci-12)`
+* **Files** (race-safe pathspec form per ci-7 / ci-10 / ci-11):
+  * `.github/workflows/ci.yml`
+  * `.github/workflows/release.yml`
+  * `docs/journals/phase-8/ci/ci-11-post-mortem.md`
+  * `docs/journals/phase-8/ci/ci-12.md`
+
+Pathspec keeps the multi-agent staged churn out
+(chan-drive / chan-report / event-webtest-* / others
+are in the shared worktree but unstaged).
+
+### Open questions
+
+Five surveyed in [`../ci/ci-12.md`](../ci/ci-12.md)
+tail § "Open questions for @@Architect":
+
+1. `workflow_dispatch:` trigger added to ci.yml as part
+   of this commit (one-line addition; was needed for
+   smoke validation per HTTP 422 trip). Acceptable, or
+   split?
+2. Post-mortem placement (shared file vs fresh
+   `ci-12-post-mortem.md`).
+3. Routing for finding #1 (Windows lint): fresh
+   `systacean-N`?
+4. Routing for finding #2 (model-dependent tests):
+   fresh `systacean-N`, shape (a)?
+5. Per-PR gate state after ci-12 lands (partial green
+   until #1 + #4 are addressed; full green = Round-3
+   readiness signal).
+
+### Audit-trail artifacts
+
+* Smoke branch: `ci-12-smoke` on origin (commit `517bc95`).
+  Audit trail; delete on the same beat as the
+  dryrun.{1..4} tags.
+* No tag pushed, no signing surface touched, no test
+  server spawned, no Chrome MCP tabs.
+* Local-Linux validation via lima/sdme NOT exercised
+  (smoke dispatch was canonical per task spec § Local
+  validation "optional").
+
+Standing by for your routing decision + commit clearance.

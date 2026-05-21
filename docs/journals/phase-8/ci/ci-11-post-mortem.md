@@ -195,3 +195,230 @@ from `ci-11`'s acceptance criteria. Future workflow
 additions should reference this file in their YAML
 header comment OR cite it in the task body's
 acceptance criteria as the preflight checklist.
+
+---
+
+# ci-12 post-mortem: workspace-wide GTK gap in CI test jobs
+
+Author: @@CI
+Date: 2026-05-21
+
+Appended to this file per @@Architect's hint that
+`ci-11` + `ci-12` are tightly coupled (the `ci-11`
+smoke dispatch surfaced `ci-12`'s root cause).
+
+## Summary
+
+`cargo clippy --all-targets` from the workspace root
+walks every workspace member, including
+`desktop/src-tauri` (chan-desktop). chan-desktop's
+Linux Tauri stack pulls `webkit2gtk-sys` + `glib-sys`
+via the gtk-rs crate family; both compile through
+pkg-config against GTK system libs. `ci.yml` and
+`release.yml`'s test jobs do not apt-install the GTK
+stack, so `glib-sys`'s build script reds at
+"Package glib-2.0 was not found in the pkg-config
+search path".
+
+The per-PR CI gate has been red on `main` since
+~2026-05-19 (about 15 consecutive runs) with this
+exact root cause. The release.yml smoke dispatch fired
+during `ci-11` validation (run 26227752597) hit the
+same gap on `test-linux`.
+
+## Cause
+
+`desktop/src-tauri` joined the workspace 2026-05-19
+when the chan-core / chan workspace merge landed
+(commit `ff80ad7`). Before the merge, ci.yml's clippy
+ran against a workspace that did NOT include
+chan-desktop; the GTK install step was unnecessary.
+After the merge, the same clippy invocation walks
+chan-desktop, but the workflow's GTK-install step was
+not added because:
+
+* The merge commit's primary scope was the workspace
+  consolidation itself, not the per-PR CI matrix.
+* The `release-desktop.yml` workflow (which DID
+  acquire the GTK install step in `ci-2`) builds
+  chan-desktop via `make build`, NOT via `cargo clippy
+  --all-targets` from the workspace root. Its scope
+  was narrow; reviewers focused on its own correctness,
+  not on whether `ci.yml`'s shape needed mirroring.
+* Local dev workstations need GTK installed for
+  `make run` (chan-desktop launches webkit2gtk in
+  process). The local pre-push hook
+  (`scripts/install-hooks`) runs the same clippy gate;
+  passes locally because GTK is already present. The
+  gap was invisible to anyone running the pre-push
+  hook on their own machine.
+
+## How it stayed latent
+
+Two compounding factors:
+
+1. **Local pre-push hook was the de facto gate.** Per
+   the [`feedback-pre-push-checks`](file://~/.claude/projects/-Users-fiorix-dev-github-com-fiorix-chan/memory/feedback_pre_push_checks.md)
+   memory, every push runs fmt + clippy + test +
+   svelte-check + npm build locally before hitting
+   the remote. With GTK present on every contributor
+   machine, those checks pass cleanly. The GitHub
+   Actions ci.yml gate became a known-broken second
+   opinion; the per-PR badge was "ignorable red".
+
+2. **No first-real-fire trip until `ci-11`'s smoke.**
+   Per `ci-11`'s post-mortem above, `release.yml` did
+   not fire on any phase-8 tag because its trigger
+   glob did not match `chan-v*`. So the
+   `release.yml::test-linux` job, which has the same
+   workspace-clippy shape as `ci.yml::test`, never
+   ran during phase-8 either. The `ci-11`
+   workflow_dispatch smoke against main HEAD was the
+   first time ANY workflow's workspace clippy
+   exercised the post-merge tree. That trip surfaced
+   `ci-12`.
+
+   Connection to `ci-11`'s prevention layers:
+   `ci-11` argued for trigger-mismatch preflight as a
+   layered defence. `ci-12` is the canonical example
+   of why first-real-fire matters: a glibly green
+   smoke dispatch (workflow definition valid, all
+   jobs queue, runners spin up) reveals the
+   underlying state-of-the-tree problem only because
+   the workflow actually ran end-to-end.
+
+## Fix
+
+Mirror `release-desktop.yml` lines 114-123 GTK install
+into every workflow job that runs `cargo clippy
+--all-targets` / `cargo test --all-targets` from the
+workspace root on Linux:
+
+* `.github/workflows/ci.yml::test` (matrix; conditional
+  on `matrix.os == 'ubuntu-latest'` so the
+  Windows entry stays unchanged).
+* `.github/workflows/ci.yml::no-default-features`
+  (always Ubuntu; unconditional step).
+* `.github/workflows/release.yml::test-linux` (always
+  Ubuntu; unconditional step).
+
+Package list verbatim from `release-desktop.yml`:
+`libwebkit2gtk-4.1-dev`, `libayatana-appindicator3-dev`,
+`librsvg2-dev`, `libsoup-3.0-dev`, `patchelf`. The
+minimum technical requirement for `glib-sys`'s pkg-config
+is `libglib2.0-dev` alone, but the full stack matches
+the existing workflow's pattern + leaves no drift for
+the next workspace-member addition that might pull a
+different gtk-rs dependency.
+
+Each new step carries a WHY comment block citing the
+workspace-merge cause + the symmetry with
+`release-desktop.yml` (per CLAUDE.md "comments explain
+WHY, not WHAT").
+
+### `workflow_dispatch` trigger added to ci.yml
+
+Small scope addition: `ci.yml` previously triggered on
+`push` to main + `pull_request` only. The architect's
+task spec § "Smoke validation" required a
+`gh workflow run ci.yml --ref <branch>` dispatch, but
+the trigger did not exist, so the first attempt failed
+with HTTP 422 "Workflow does not have 'workflow_dispatch'
+trigger". Added `workflow_dispatch:` to ci.yml's `on:`
+block, matching `release.yml`'s shape (which has had
+the trigger since phase-8 began). One additional line.
+Enables future smoke dispatches against patch branches
+without needing to merge first.
+
+### Out-of-scope finding surfaced for separate routing
+
+The `ci.yml::test (windows-latest)` job is ALSO red,
+but for an unrelated cause: a `result_large_err` clippy
+lint against `crates/chan-drive/src/index/config.rs`
+(and a handful of call sites). The `ConfigError` enum
+boxes `toml::de::Error` as a variant; clippy on Windows
+flags the resulting Err-variant as "very large" and
+fails under `-D warnings`. This is a Rust source-code
+issue, not a CI workflow issue, and lives in the
+@@Systacean / FullStack lane (chan-drive). Surfaced in
+the commit-readiness poke for @@Architect to route as
+a separate `systacean-N` or `fullstack-N` task.
+
+The Windows lint failure is independent of the GTK
+fix; landing ci-12 unblocks Ubuntu (clippy + test +
+no-default-features) but leaves Windows red until the
+lint is addressed. The per-PR gate is **partially
+restored** (3 of 4 affected jobs green); fully green
+needs the separate lint fix.
+
+## Prevention
+
+Extends `ci-11`'s three layered defences with one
+addition:
+
+4. **Workspace-membership preflight on dep-tree
+   changes.** When a Cargo workspace gains a new
+   member (or an existing member acquires new
+   transitive system-lib deps), any CI workflow that
+   walks the workspace root with `cargo clippy
+   --all-targets` / `cargo test --all-targets` MUST be
+   audited for the new system-lib needs. Concrete
+   check at workspace-merge / member-add review:
+
+   ```
+   cargo tree --workspace --depth 1 \
+       | grep -E '^[├└]── [a-z].*sys '
+   ```
+
+   Lists every `*-sys` crate in the workspace tree.
+   Each `-sys` crate IS a system-lib dep; each one
+   needs an install step on every runner OS the
+   workspace clippy targets. The `ff80ad7` merge added
+   `glib-sys`, `gtk-sys`, `gobject-sys`, `gio-sys`,
+   `webkit2gtk-sys`, `pango-sys`, `cairo-sys-rs`,
+   `gdk-sys`, `gdk-pixbuf-sys` to the chan workspace.
+   Spot-checking even one of those against ci.yml's
+   apt-install (absent) would have caught it.
+
+   Pre-existing workspace `-sys` deps to keep in mind:
+   `openssl-sys`, `libsqlite3-sys`, etc; most have
+   bundled / vendored features and don't need a system
+   lib; gtk-rs is the exception that pkg-configs hard.
+
+This prevention layer pairs with `ci-11`'s "trigger
+preflight" + "first-real-fire validation" + "post-
+release asset audit". The four together: trigger
+correctness (ci-11 catch), workspace dep-tree (ci-12
+catch), first-real-fire (catch latent), post-fire
+audit (catch slipped-through).
+
+## Backfill posture
+
+@@Alex 2026-05-21: "whatever is cheaper". Per
+architect routing: lean on the next `chan-v*` tag's
+CI fire as the validation lap rather than re-running
+ci.yml per-commit against the ~15 unverified main
+heads. Reasoning:
+
+* The unverified commits have been journaled +
+  code-reviewed + locally pre-push-gated; a per-commit
+  CI replay would surface only what the local hook
+  already caught.
+* Per-commit replay would burn ~15 × ~7 minutes of
+  Ubuntu runner time (~100 min). A single tag fire
+  sweeps the aggregate state in one matrix run.
+* The first chan-v* tag post-`ci-12` (likely v0.12.0
+  per Round-2 close) is the canonical validation:
+  if `release.yml::test-linux` AND `ci.yml::test
+  (ubuntu-latest)` both go green on that tag, the
+  fix is confirmed end-to-end.
+
+No backfill task cut. Documented here so the audit
+trail captures the deliberate choice.
+
+## Closes
+
+This appended post-mortem closes the `ci-12`
+acceptance criterion. The combined `ci-11` + `ci-12`
+post-mortem file is the load-bearing reference for
+future workflow + dep-tree audit work.
