@@ -127,3 +127,54 @@ ci: release-desktop verify step matches DMG-only staple flow (ci-9)
 ## Open questions
 
 (populated as you investigate)
+
+## 2026-05-21 — Patch landed (committing per pre-cleared authorization)
+
+Architect's "Proceed without further architect ack — both
+items unblocked" in
+[`../alex/event-architect-ci.md`](../alex/event-architect-ci.md)
+2026-05-21 "Items 2 + 3 routing" poke pre-cleared this
+commit. Skipping the standard "readiness → wait for
+clearance" loop; committing directly.
+
+### Patch applied verbatim
+
+Single file: `.github/workflows/release-desktop.yml`
+(+13 / -7 net on the verify-step block, plus comment
+expansion explaining the systacean-13 architectural shift):
+
+* Drop `stapler validate "$APP"` (post-systacean-13 .app
+  is unstapled).
+* Swap `spctl -a -t open --context context:primary-signature
+  -v "$APP"` → `spctl -a -t install -v "$DMG"` (install-time
+  Gatekeeper check on the DMG = actual user flow).
+* Keep `codesign -dv --verbose=2 "$APP"` (no staple needed
+  to validate signing identity).
+* Keep `stapler validate "$DMG"` (DMG is the stapled
+  artifact in the new flow).
+
+Comment header rewritten to name systacean-13 explicitly +
+explain WHY DMG-only staple is canonical for DMG
+distribution + why `stapler validate Chan.app` would fail.
+
+### Validation
+
+* YAML parses clean: `ruby -ryaml -e
+  "YAML.load_file('.github/workflows/release-desktop.yml')"`
+  → `YAML parses clean`.
+* `git diff` confirmed scope: single file, verify-step
+  block + its comment header only. No other YAML touched.
+
+### Commit shape
+
+Per the bootstrap-rule lesson learned on ci-7 (see
+[`feedback-shared-worktree-commits`](file://~/.claude/projects/-Users-fiorix-dev-github-com-fiorix-chan/memory/feedback_shared_worktree_commits.md)
+"Race-safe primitive"), using `git commit -m "..." --
+<pathspec>` to commit only the named paths regardless of
+what's staged. Pathspec: workflow YAML + this ci-9.md
+task file.
+
+Commit subject per architect's task spec (line 124):
+```
+ci: release-desktop verify step matches DMG-only staple flow (ci-9)
+```

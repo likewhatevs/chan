@@ -250,26 +250,32 @@ jobs:
           set -o pipefail
           make app-notarized 2>&1 | tee /tmp/chan-desktop-build.log
 
-      # Confirm the signing identity actually landed on the .app
-      # and that the notarization ticket is stapled to both the
-      # .app and the .dmg. Catches a class of silent-failure where
-      # Tauri's CLI exits 0 but the bundle is unsigned / unstapled
-      # (rare, but the cost of `stapler validate` is seconds and
-      # catching it here saves a botched release).
+      # Confirm the signing identity landed on the .app and the
+      # notarization ticket is stapled to the DMG.
+      #
+      # systacean-13 split the Makefile's app-notarized recipe:
+      # tauri-bundler 2.x doesn't consume notarytool Keychain
+      # profiles, so the new shape unsets APPLE_* env vars during
+      # `cargo tauri build` (Tauri skips its own notarize step)
+      # and runs `xcrun notarytool submit` + `xcrun stapler staple`
+      # against the DMG ONLY. That matches Apple's canonical DMG
+      # distribution shape: stapling the DMG wrapper is sufficient
+      # since Gatekeeper verifies it when the user mounts the
+      # image; the .app inside inherits trust at install time.
+      # `stapler validate Chan.app` would fail on the unstapled
+      # .app (it's signed but carries no notary ticket of its own).
       - if: matrix.os == 'macos-latest'
         name: Verify signature + stapled notarization
         run: |
           set -e
           APP="chan/target/release/bundle/macos/Chan.app"
           DMG=$(ls chan/target/release/bundle/dmg/*.dmg | head -1)
-          echo "=== codesign -dv on Chan.app ==="
+          echo "=== codesign -dv on Chan.app (no staple required) ==="
           codesign -dv --verbose=2 "$APP" 2>&1 | head -30
-          echo "=== spctl assessment ==="
-          spctl -a -t open --context context:primary-signature -v "$APP"
-          echo "=== stapler validate Chan.app ==="
-          stapler validate "$APP"
           echo "=== stapler validate $DMG ==="
           stapler validate "$DMG"
+          echo "=== spctl assessment on $DMG (install context) ==="
+          spctl -a -t install -v "$DMG"
 
       # On any failure in the macOS build/sign/notarize/verify
       # chain, capture the diagnostic surface: Tauri's full build
