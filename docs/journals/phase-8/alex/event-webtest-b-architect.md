@@ -585,3 +585,129 @@ sibling before `ditto`).
 
 Standing by for the canonical second-Mac result + the
 v0.11.2 mini-wave commits landing.
+
+## 2026-05-21 — ack (scope clarification on standing chan-desktop runtime perm)
+
+Bootstrapped fresh session. Read the 2026-05-21 scope-
+clarification poke at the tail of
+[`event-architect-webtest-b.md`](event-architect-webtest-b.md).
+The three DMG/Gatekeeper-verification exclusions
+(never touch `/Applications/Chan.app`; process ownership
+by capture not triage; no `xattr -w
+com.apple.quarantine` on system paths) plus the
+pause-and-warn rule (fire a permission event to @@Alex
+BEFORE any canonical fresh-Mac walkthrough) are loaded.
+Will not start any DMG-verification work without firing
+the permission event first.
+
+Note: this session is a rich-prompt / watcher pre-flight
+per @@Alex; holding idle, acting on architect tasks
+only. No new walkthrough work in flight.
+
+## 2026-05-21 — poke (webtest-b-2: v0.11.2 lane-B walkthrough — web surfaces all green; chan-desktop pending @@Alex)
+
+@@Alex's pre-flight ended and routed me to start work;
+your `webtest-b-2` task picked up immediately.
+
+### Headline
+
+v0.11.2 cut binary verified on **every lane-B web
+surface**. Single regression-class wording bug found
+(predates the cut; not a v0.11.2 regression). chan-
+desktop bundle/first-launch portion held pending
+@@Alex's reply on the fresh-Mac Gatekeeper-clean
+permission ask.
+
+Full audit at
+[`../webtest-b/webtest-b-1.md`](../webtest-b/webtest-b-1.md)
+"## 2026-05-21 — v0.11.2 cut walkthrough lane B".
+
+### Per-surface verdict
+
+| Surface                                  | Verdict                |
+|------------------------------------------|------------------------|
+| `chan list --json`                       | ✓                      |
+| `chan index status` (text + `--json`)    | ✓ (lock-relax holds)   |
+| systacean-8 sub-fixes (3)                | ✓                      |
+| Watcher dialog 3 cases (b-10)            | ✓                      |
+| systacean-5 (event_watcher EISDIR skip)  | ✓ (zero WARN lines)    |
+| systacean-9 (outside-drive events)       | ✓ (no red toast)       |
+| systacean-10 (silent-skip non-events)    | ✓ (counter clean)      |
+| fullstack-b-18 (submit-mode tooltip)     | ✓ (new copy renders)   |
+| Terminal cluster (Cmd+Alt+T, mount, lH)  | ✓ (empirical + pin)    |
+| Indexing chart pan/zoom (b-4)            | ✓ (all three controls) |
+| chan-desktop bundle + first-launch       | pending @@Alex         |
+| Lock-error wording on enable/disable     | Round-2 polish         |
+
+### Tightened-scope ack
+
+The 2026-05-21 scope clarification (3 exclusions for
+DMG verification + pause-and-warn rule) is loaded
+per the prior ack append on this channel. Did NOT
+touch `/Applications/Chan.app`, no system-path
+`xattr` writes, no `pkill -f chan-desktop` triage.
+The chan-desktop portion fires a permission event
+to @@Alex before starting any DMG work.
+
+### chan-desktop pending — permission ask shape
+
+Per `webtest-b-2`'s "Canonical fresh-Mac
+Gatekeeper walk" section, I fired a permission
+event to @@Alex at
+[`event-webtest-b-alex.md`](event-webtest-b-alex.md)
+"permission (canonical fresh-Mac Gatekeeper walk for
+chan-v0.11.2 DMG)". Three options offered:
+
+* (a) pause @@Alex's current chan-desktop + close
+  Chan.app + resume via iTerm with the tightened
+  scope
+* (b) run on @@Alex's secondary Mac
+* (c) defer / decline — I do the documented partial
+  in throwaway-drive shape (no DMG install action;
+  keychain-independent signals on the mounted DMG
+  only). I default to (c) if @@Alex doesn't reply.
+
+### Side observations for triage
+
+1. **Lock-error wording** on `chan index
+   enable-semantic` / `disable-semantic` against a
+   live-served drive: error message reads
+   `Error: not a chan drive at <path>; run \`chan add
+   <path>\` first` with the real cause
+   `drive is locked by another process` demoted to
+   a `Caused by:` line. Misleading for scripted
+   wrappers — a script that hits the failure may
+   run `chan add` redundantly. Pre-existing in
+   v0.11.1 (systacean-7's verdict tested toggles on
+   an unserved drive so this didn't surface).
+   **Round-2 polish candidate** in the systacean-8
+   family.
+2. Terminal tab close buttons require a full
+   pointerdown → mousedown → pointerup → mouseup →
+   click sequence; bare `.click()` is sometimes
+   dropped. Minor headless-driving quirk, not a
+   real-user regression. Recording for future
+   webtest automation lanes.
+
+### Carry-over (parked)
+
+* `fullstack-b-1` empirical LRU click cycle
+* `fullstack-b-14` window-title-as-drive-path
+  empirical
+* `fullstack-b-7` runtime click
+
+All three remain blocked on macOS Accessibility /
+hypothetical `--drive <path>` chan-desktop CLI arg;
+permission scope changes don't address this.
+
+### Lane-B state
+
+* Serve still up on `127.0.0.1:8820` against
+  `/tmp/chan-test-phase8-wb-r2`.
+* Outside-drive fixture
+  `/tmp/chan-watch-wb-v0112-outside/` left in place
+  (held the systacean-10 walk artifacts).
+* No chan-desktop launched; no system-path mutation.
+
+Standing by for @@Alex's reply on the permission ask
+or for next routing.

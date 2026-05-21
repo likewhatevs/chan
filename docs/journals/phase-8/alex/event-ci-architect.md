@@ -1295,3 +1295,317 @@ journey + metrics + per-step timings + failure-injection
 coverage table — that file is the load-bearing reference
 for the v0.11.2 close-out + the eventual v0.12.0 north
 star.
+
+## 2026-05-21 — poke (chan-v0.11.2 workflow GREEN + release.yml trigger gap finding)
+
+Fresh @@CI session booted; caught journal up to
+Round-2-close shape ([`../ci/journal.md`](../ci/journal.md)
+"2026-05-21 — Round-2 close-out"). Two reportables.
+
+### 1. chan-v0.11.2 release-desktop workflow: GREEN
+
+Run [`26221281508`](https://github.com/fiorix/chan/actions/runs/26221281508),
+19m45s wall-clock — same trajectory as dryrun.4 (no
+workflow changes between). All three sub-jobs success:
+
+| Sub-job                       | Result    | Time      |
+|-------------------------------|-----------|-----------|
+| build (macos-latest)          | ✓ success | 13m40s    |
+| build (ubuntu-latest)         | ✓ success | 19m24s    |
+| github release (chan-desktop) | ✓ success | 16s       |
+
+GH Release `chan-v0.11.2` shipped
+`Chan_0.11.2_x64.dmg` (16,442,495 B; signed + notarized,
+Developer ID Application: Alexandre Fiori W73XV5CK3N).
+First signed chan-desktop bundle to end users.
+
+ci-7 + ci-9 + ci-4 fix all proved correct end-to-end on
+a real release tag.
+
+### 2. Finding: `release.yml` trigger glob mismatch — chan CLI binaries never shipped on phase-8 tags
+
+Spotted while verifying v0.11.2's GH Release assets.
+`release.yml`'s trigger is `tags: ['v*']` — does NOT
+match the `chan-v*` tagging convention adopted phase-8.
+Consequence: chan CLI binaries (.deb / .rpm / .pkg /
+.tar.gz across the matrix) have not been built or
+uploaded for ANY phase-8 tag (chan-v0.11.0,
+chan-v0.11.1, chan-v0.11.2).
+
+Empirical confirmation:
+* `gh release view chan-v0.11.0` → "release not found"
+* `gh release view chan-v0.11.1` → "release not found"
+* `gh release view chan-v0.11.2` → has only the DMG
+* `gh run list --workflow=release.yml --limit=5` shows
+  only `v0.11.0` (failed, 7s, billing) + `v0.10.1`
+  (failed, 7s, billing). No `chan-v*` runs of
+  release.yml ever fired.
+
+Masking factors:
+* Earlier phase-8 tags' release-desktop.yml runs were
+  billing-blocked, so nobody noticed release.yml's
+  silence either.
+* My own expected-shape table in this channel
+  (2026-05-21 v0.11.2 preflight) wrote "release.yml
+  (chan CLI) — green on all matrix entries. Unchanged
+  behaviour from v0.11.1." That was wrong on inspection:
+  v0.11.1's release.yml run itself failed at the
+  billing layer; the "unchanged behaviour" was actually
+  "unchanged failure". My oversight — `gh run list`
+  on release.yml during preflight would have caught it.
+* `architect/journal.md` describes the system as "on
+  the `chan-v*` tag per `release.yml`" — so the
+  architect mental model matches what the workflow
+  SHOULD do, not what it currently does.
+
+### Routing options
+
+* **(a) Fix forward only**: 1-line YAML patch extends
+  `release.yml`'s trigger to match `chan-v*` (or add
+  `chan-v*` as a second pattern). Fires on the next
+  release. v0.11.2's GH Release stays as-is (DMG only).
+  Cleanest audit shape; clean story per-version.
+* **(b) Fix + backfill v0.11.2 CLI binaries**: (a)
+  plus `workflow_dispatch` against the v0.11.2 tag
+  after the patch, uploading CLI artifacts to the
+  existing release. More complete but needs the
+  release-job to handle the existing-release case
+  (gh-release action's `fail_on_unmatched_files` /
+  `make_latest` interactions).
+* **(c) Defer**: leave the trigger alone, document
+  that phase-8 ships DMG-only via release-desktop.yml,
+  re-think the CLI distribution channel separately
+  (Homebrew formula, separate v1.0+ tagging
+  convention, etc.).
+
+**Recommendation: (a)**. Small contained fix, restores
+intended behaviour, fires on the next tag. Skips
+v0.11.2 backfill (audit trail stays clean — v0.11.2
+shipped DMG-only as the north-star validation lap).
+
+### Authorization needed
+
+Edits `.github/workflows/release.yml` (shared infra).
+Standard authorization pattern please if you want me
+to cut + commit this as a small `ci-N` (would
+provisionally be ci-10 or whatever's free at fan-out).
+
+If (a) routed: I'd handle (1) the trigger-glob patch,
+(2) a small `release.yml` smoke-validation via
+`workflow_dispatch` against a non-tag branch to
+confirm the matrix still builds against current HEAD
+(separate from a real tag-fire — same pattern as
+ci-8's dry-run discipline), (3) a post-mortem note in
+ci-4.md or a fresh task body about the "structural
+validation only" miss that let this stay latent.
+
+### Lane state
+
+| Item                                 | State                              |
+|--------------------------------------|------------------------------------|
+| chan-v0.11.2 workflow                | ✓ GREEN (run 26221281508)          |
+| chan-v0.11.2 GH Release DMG          | ✓ shipped (signed + notarized)     |
+| release.yml trigger mismatch         | **NEW finding**; awaiting routing  |
+| Auto-fetch notarytool log on failure | parked ci-N                        |
+| Universal2 / lipo matrix             | parked ci-N (post-v0.11.2)         |
+| DMG `_x64` filename polish           | parked ci-N (cosmetic)             |
+| dryrun.1-4 remote tag cleanup        | non-urgent                         |
+| Round-3 full-SHA pin sweep           | Round-3 fan-out                    |
+
+Standing by. Will not touch `release.yml` until you
+route (a) / (b) / (c) / something-else.
+
+## 2026-05-21 — poke (ci-10 ready for review: 3-item polish bundle landed)
+
+ci-10's three polish items all handled in a single
+edit to `.github/workflows/release-desktop.yml`. No
+`tauri.conf.json` change (architectural finding —
+tauri-bundler 2.x doesn't expose a filename template
+knob; workflow-side rename is the right surface).
+Pre-push gate: YAML-only, parses clean. Full status +
+proposed commit at the tail of
+[`../ci/ci-10.md`](../ci/ci-10.md) "Work landed".
+
+### Item summary
+
+| # | Topic                       | Surface                                    | Status |
+|---|-----------------------------|--------------------------------------------|--------|
+| 1 | Auto-fetch notarytool log on `failure()` | new `Fetch Apple notary log` step + add `/tmp/notary-log.json` to existing upload | ✓ landed |
+| 2 | Drop `_x64` DMG suffix      | new `Drop _x64 suffix from DMG filename` step, post-build rename via `sed` | ✓ landed |
+| 3 | Dryrun tag cleanup decision | task-tail recommendation: keep all four as audit trail; deferred to @@Alex for counter | ✓ surfaced |
+
+### Notable findings
+
+* **Item 2 surface call**: I did NOT touch
+  `tauri.conf.json` despite authorization covering it.
+  Tauri-bundler 2.x hardcodes `<ProductName>_<version>_x64.dmg`
+  in `bundle/macos/dmg.rs`; no config knob exists in
+  Tauri 2's schema for the filename. Workflow-side
+  rename is the right shape; flagging the authorization-
+  scope-not-fully-used because it's worth noting that
+  the architecture lean ("Update Tauri-bundler config
+  to match") wasn't achievable without a tauri-bundler
+  upstream change. Step is forward-compat — if bundler
+  ever fixes the default, the step prints "skipping"
+  and remains a no-op.
+
+* **Step ordering** (post-edit):
+  `Build + sign + notarize` (line 248) →
+  `Verify signature + stapled notarization` (274) →
+  `Drop _x64 suffix from DMG filename` (297, success
+  only) →
+  `Fetch Apple notary log` (321, failure() only) →
+  `Upload notarization diagnostics` (356, failure()
+  only, picks up `/tmp/notary-log.json`) →
+  `upload-artifact` (376, final, picks up the renamed
+  DMG).
+
+* **Notary log fetch shape**: best-effort (`set +e`).
+  Parsing failure → `::warning::` + `exit 0`, lets the
+  diagnostic-upload step still capture build log +
+  bundle dir + transporter logs. notarytool's
+  submission id appears in the build log as `id: <uuid>`;
+  `tail -1` picks the most recent in case multiple
+  submits run.
+
+### Proposed commit (race-safe pathspec form)
+
+* Files: `.github/workflows/release-desktop.yml` + the
+  ci-10 task file (currently untracked).
+* Subject: `ci: release-desktop polish — notary-log fetch on failure + drop _x64 DMG suffix (ci-10)`
+* Body: see ci-10.md "Commit readiness" section for the
+  full draft.
+* Form: `git commit -m "..." -- <pathspec1> <pathspec2>`
+  (race-safe; ignores staged index). Per the
+  shared-worktree memory + the ci-7 incident.
+
+### Runtime validation
+
+No dry-run fired from my side; per the ci-8 dry-run
+discipline, runtime exercise on a real Apple-rejected
+tag (for item 1's notary-log path) would burn macOS
+runner minutes for a known-fail scenario. The
+diagnostic step is gated on `matrix.os == 'macos-latest'
+&& failure()`; both gates exercise cleanly in YAML
+structural review.
+
+Item 2's rename is success-gated and runs on every
+real release-desktop tag. Will validate on the next
+`chan-v*` tag (probably v0.11.3 or v0.12.0) — if the
+rename misfires, it's a one-line `sed` fix. Could
+optionally cut a `chan-v0.11.99-dryrun.5` tag for
+runtime validation; flagging as a routing option but
+NOT recommending it (cost > value; the rename pattern
+is mechanical).
+
+### Standing by for routing
+
+* Clearance to commit ci-10 (your usual ack +
+  commit-message confirmation).
+* Plus your earlier-asked routing on the `release.yml`
+  trigger-glob mismatch from the prior poke (option
+  (a) / (b) / (c)). The two are independent — ci-10
+  can land first; release.yml trigger fix would be a
+  fresh ci-11.
+
+Lane summary in [`../ci/journal.md`](../ci/journal.md)
+"2026-05-21 — Round-2 close-out" + ci-10 task tail.
+
+Idle pending review.
+
+## 2026-05-21 — poke (ci-10 committed at 8aed906; picking up ci-11)
+
+Cleared per your "approved + commit clearance (ci-10)"
+heading; committed at **`8aed906`** (2 files, +358 / -3).
+Race-safe pathspec form, no stowaways. Heads-up that
+HEAD moved from `e7468db` → `b36ca96` (fullstack-a-43)
+mid-task; the pathspec form ignored the index churn
+cleanly per the documented pattern.
+
+Picking up `ci-11` (release.yml trigger-glob fix,
+option (a) authorized) next. Will append commit-
+readiness + poke when ready.
+
+Also acked the PRE-RECYCLE HANDOVER heading; will
+extend the journal handover entry after ci-11 lands so
+the next @@CI bootstrap has a clean reading.
+
+## 2026-05-21 — poke (ci-11 ready for review: trigger-glob patch + post-mortem)
+
+ci-11 work landed. YAML 1-pattern add + a structural
+post-mortem artifact. Pre-push gate: YAML clean
+(`ruby -ryaml`), Markdown ASCII / 80-col / no em
+dashes. Full status + proposed commit at the tail of
+[`../ci/ci-11.md`](../ci/ci-11.md) "Work landed".
+
+### Patch shape
+
+```diff
+ on:
+   push:
+     tags:
+       - 'v*'
++      - 'chan-v*'
+   workflow_dispatch:
+```
+
+ADD over replace per your lean; legacy `v*` tags
+(v0.6.8 .. v0.11.0) confirmed extant via `git tag
+--list 'v*' | grep -v chan-v`. Header-comment block
+also updated with the dual-pattern explanation + cite
+to this task.
+
+### Post-mortem placement
+
+[`../ci/ci-11-post-mortem.md`](../ci/ci-11-post-mortem.md).
+Picked the fresh-artifact option over the
+ci-4.md-append option because the lesson is
+structurally about trigger-glob-vs-tagging-convention
+mismatch, not ci-4's install-action swap; ci-4 already
+carries the `^2`-bug post-mortem and doubling up
+unrelated post-mortems in one task file dilutes the
+audit trail. Easy to find by file name.
+
+Three-layer prevention shape documented (trigger
+preflight on workflow add/edit + first-real-fire
+validation + post-release asset audit). Worth a read
+if you want to weave any of the layers into the
+future cut-task / commit-readiness template.
+
+### Smoke validation: workflow_dispatch on main, in flight
+
+`gh workflow run release.yml --ref main` fired against
+current main HEAD; run [`26227752597`](https://github.com/fiorix/chan/actions/runs/26227752597)
+started in seconds. Full chain (test-linux →
+test-macos → 5-target build → release-skipped-on-non-tag)
+is ~30 min sequential. Release job correctly skips on
+non-tag dispatch per the existing `if:
+startsWith(github.ref, 'refs/tags/')` guard.
+
+What the dispatch validates: main's source builds
+cleanly through release.yml's chain (the build hasn't
+been exercised since v0.10.1 / before phase-8). The
+trigger-glob change is logically independent — only
+fires on tag pushes — so a green/red result here is a
+build-chain signal, not a ci-11 signal. If the run
+goes red, that's an out-of-lane bug routing (whichever
+crate fails), not a ci-11 blocker. I'll follow up with
+the run's conclusion in a separate poke.
+
+### Files for commit
+
+* `.github/workflows/release.yml`
+* `docs/journals/phase-8/ci/ci-11.md`
+* `docs/journals/phase-8/ci/ci-11-post-mortem.md`
+
+Race-safe pathspec form per ci-10 + ci-7 pattern.
+
+### Sequence
+
+* ci-10 already committed (`8aed906`).
+* ci-11 awaits clearance.
+* Both ride along the next release-tag cut for push.
+* Pre-recycle journal handover sweep lands after
+  ci-11 clears.
+
+Idle pending review.

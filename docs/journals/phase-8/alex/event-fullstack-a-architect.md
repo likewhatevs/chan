@@ -1730,3 +1730,133 @@ queue-empty for the patch-release cut.
 Round-2 broader fan-out (carousel + Infographics + BOOT
 + manual + signing pipeline with real keys per
 round-2-plan.md) standby per your closing note.
+
+## 2026-05-21 — poke (fullstack-a-43 ready for review)
+
+Fresh @@FullStackA session bootstrapped through @@Alex's
+live rich-prompt-watcher pre-flight test (echo smoke
+cancelled per your subsequent poke; no echo ack
+written). Once @@Alex signalled real work could start,
+picked up `-a-43` (Hybrid back-side architecture refactor
+— Task A) per your dispatch.
+
+`fullstack-a-43` ready for review. Five-file change.
+SPA + state only; no Rust touched. Foundational scope
+per the task body — populating the four config bodies is
+Tasks B / C / D / F, theme collapse is Task E, About
+build-out stays at `-a-42`.
+
+### Architecture
+
+* `HybridSide` slimmed from `{ tabs, activeTabId, theme? }`
+  to `{ theme? }`. Tab collection removed from the type.
+* `flipHybrid()` no longer swaps tabs; only toggles
+  `showingBack` + (preserved per the task body, until
+  Task E) swaps the per-side theme override. `pane.tabs`
+  is now invariantly the front-side tabs.
+* `Pane.svelte`: tab strip hidden when `pane.showingBack`;
+  `.editor-wrap` dispatches a back-side branch off
+  `active?.kind` to mount the matching `HybridXConfig`.
+  Pane-mode preview still operates on front content;
+  terminal each-block (kept mounted across pane mode for
+  scrollback per `-b-2`) gains `!pane.showingBack` on
+  active+focused props.
+* Four new stub components in `web/src/components/`
+  (`HybridTerminalConfig` / `HybridEditorConfig` /
+  `HybridGraphConfig` / `HybridFileBrowserConfig`).
+  Title band only; each names its populating task.
+* `.back-attention` chrome + CSS + `backHasAttention`
+  derived all removed. No "unread / activity" surface
+  on a configuration view to flag.
+* Serialization: `bt` (back tabs) no longer emitted.
+  Legacy `bt` from older session blobs tolerated on
+  deserialize (contents discarded). `hb` + `sb` + `ht`
+  unchanged.
+
+### Tests
+
+* `tabs.test.ts`: 4 flip-suite pins rewritten to match
+  the new "front tabs never swap" invariant; split-from-
+  back pin updated; serialize/restore pin updated to
+  pin `"bt":` is NEVER emitted.
+* `Pane.test.ts`: 2 obsolete `.back-attention` pins
+  dropped; new `describe("Pane back-side configuration
+  view (fullstack-a-43)")` adds 4 pins for the
+  front-tab-kind → back-component dispatch, the
+  no-active-front placeholder, and the tab strip + body
+  hidden behaviours.
+* `paneTerminalMount.test.ts`: pin regex tightened to
+  include the new `!pane.showingBack` gate.
+
+### Gate
+
+* vitest **588 / 588**.
+* svelte-check 0 errors / 0 warnings across 3983 files.
+* npm build clean.
+* `cargo fmt --check` clean.
+* `cargo clippy -p chan --all-targets -- -D warnings`
+  clean.
+* `cargo test -p chan` not re-run (no Rust touched).
+
+### Deviations flagged
+
+* **Theme swap preserved.** Task body says
+  "Per-Hybrid theme (`-b-5`) stays for now; Task E
+  simplifies to single-value." `flipHybrid` still
+  swaps `pane.theme` ↔ `back.theme`. The locked design's
+  Task A bullet in the round-2-plan reads "drop
+  front/back independent theme + tabs collections";
+  I read the conflict as task body wins (drop tabs in
+  Task A, theme collapse in Task E). Flag if you want
+  the theme swap dropped here too.
+* **Empty-pane back render.** A pane with no active
+  front tab + `showingBack=true` renders a generic
+  Hybrid placeholder. The flip chord still works.
+* **Back-existence round-trip.** Edge case: a pane with
+  no back-theme + `showingBack=true` round-trips
+  through serialize with no `back` field. After restore,
+  `pane.back === undefined` but `pane.showingBack === true`.
+  Next flip lazy-inits cleanly. Pre-`-a-43` serializer
+  had the structurally-identical loss for "no theme,
+  no tabs".
+
+### Suggested commit subject
+
+```
+Hybrid back-side architecture refactor: per-surface config view (fullstack-a-43)
+```
+
+Single commit. State model + Pane render + 4 component
+stubs + test updates are tightly coupled around the
+same conceptual change; intermediate states would
+either not compile (type cascade) or render incorrectly
+(component imports without dispatch branch).
+
+Push held — multi-agent tree commit discipline + you
+route the commit per the task's Coordination section.
+Tasks B / C / D / E / F + the relocated G (already
+`-a-42`) are unblocked by this landing in HEAD.
+
+See [../fullstack-a/fullstack-a-43.md](../fullstack-a/fullstack-a-43.md)
+tail for the full impl note. Standing by.
+
+## 2026-05-21 — poke (fullstack-a-43 committed)
+
+`-a-43` committed at `b36ca96` per your clearance.
+Single commit; 11 files (5 modified + 4 new
+`HybridXConfig.svelte` stubs + the task file + the
+fullstack-a journal). Subject `Hybrid back-side
+architecture refactor: per-surface config view
+(fullstack-a-43)` verbatim.
+
+Pre-stage audit caught no stowaways;
+`TerminalTab.svelte` (@@Systacean's `-14` hunk you
+flagged) stayed unstaged. Post-commit
+`git show --stat HEAD` matched the staged audit
+exactly.
+
+Push held per protocol.
+
+Picking up `-a-44` (Hybrid pane drag-to-rearrange +
+transaction-mode NAV) next per your pre-recycle
+handover queue. Reading the task body now.

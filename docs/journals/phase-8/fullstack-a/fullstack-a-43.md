@@ -306,3 +306,25 @@ branch).
 Push held — multi-agent tree commit discipline +
 @@Architect routing the commit per the task's
 Coordination section.
+
+## 2026-05-21 — committed as b36ca96
+
+Cleared by @@Architect at the tail of
+[`../alex/event-architect-fullstack-a.md`](../alex/event-architect-fullstack-a.md)
+"@@Architect: approved + commit clearance (fullstack-a-43)".
+Single commit; 11 files (5 modified + 4 new components
++ 2 journal files); subject `Hybrid back-side
+architecture refactor: per-surface config view
+(fullstack-a-43)` exactly as cleared.
+
+Per-path `git add` per shared-worktree discipline;
+pre-stage audit caught no stowaways;
+`TerminalTab.svelte` (the @@Systacean `-14` hunk
+explicitly flagged in the clearance) stayed unstaged.
+Post-commit `git show --stat HEAD` matched the staged
+audit. Push held per protocol.
+
+Tasks B/C/D/E/F + the relocated G (`-a-42`) unblock
+now that this is in HEAD. Picking up `-a-44`
+(Hybrid drag-to-rearrange) next per the architect's
+pre-recycle handover queue.

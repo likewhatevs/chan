@@ -900,19 +900,36 @@ Substantial. Likely 3-5 tasks across `-a-N` slots:
   to be SINGLE per-Hybrid value (no front/back split). Update
   `-a-27` hamburger theme toggle to flip the single value.
   Documentation / test updates.
-* **Task F — Search settings migration to Hybrid FB back**
+* **Task F — Search / Indexing / Reports settings migration to Hybrid FB back**
   (@@FullStackA, ADDED 2026-05-21 per @@Alex's lock on open
-  question #2 below): move drive-level search settings out of
-  `SettingsPanel.svelte` (semantic search toggle from `-a-21`;
-  future multi-model picker from Round-3 Track 2) into
+  question #2 below; EXPANDED 2026-05-21 to absorb the
+  chan-reports toggle per the graph-overhaul scope
+  conversation): move drive-level search + indexing +
+  reports settings out of `SettingsPanel.svelte` into
   `HybridFileBrowserConfig.svelte`. The FB back-side stops
   being a "reserved for future use" placeholder and becomes
-  the Search / Indexing configuration surface — UX rationale:
-  FB is where users see their indexed content + where search
-  results land them, so config-lives-next-to-the-affected-
-  surface holds. Settings storage shape unchanged (same
-  `Preferences` fields). Search OVERLAY (`Cmd+K F` global
-  spawn) stays out-of-Hybrid; only the search SETTINGS move.
+  the **Search / Indexing / Reports** configuration surface.
+  Three toggles in v1:
+  * **Semantic search** (from `-a-21`).
+  * **Multi-model picker** (Round-3 Track 2 future).
+  * **chan-reports** (RESTORE — toggle was specced in the
+    pre-flight feature toggles plan but never landed in v1,
+    surfaced as a regression by @@Alex 2026-05-21; folds
+    into Task F's scope). Settings storage shape per the
+    existing Preferences fields (or a fresh `reports`
+    section if no prior storage exists).
+  UX rationale: FB is where users see their indexed content
+  + where search results land them, so config-lives-next-to-
+  the-affected-surface holds; chan-reports' aggregated stats
+  also surface in the FB-adjacent directory inspector
+  (graph-overhaul G3), so reports-toggle-next-to-its-
+  consumer parallel applies. Search OVERLAY (`Cmd+K F`
+  global spawn) stays out-of-Hybrid; only the search +
+  reports SETTINGS move.
+
+  Task F is a **prereq for graph-overhaul G3** (directory
+  inspector with aggregated reports stats can't render
+  until the reports toggle is restored + ON).
 * **Task G — Settings About section build-out + donation QR**
   (@@FullStackA, ADDED 2026-05-21; task file
   [`../fullstack-a/fullstack-a-42.md`](../fullstack-a/fullstack-a-42.md)):
@@ -1038,3 +1055,194 @@ on each before fan-out.
 * A scope-creep gate. Bugs that surface during Round-2
   walkthroughs land in Round 2 if they're regressions or
   release-blockers; otherwise roll to Round 3 or later.
+## 2026-05-21 — Search overlay redesign + file-name search (added; couples with carousel + Infographics wave)
+
+Source: @@Alex 2026-05-21 mid-pre-recycle.
+
+Three coupled features that reshape the search overlay
+and move drive-level status surfaces into the carousel:
+
+### F1 — Remove scope from search overlay
+
+The Cmd+K F search overlay's scope affordance is
+dropped entirely; the overlay reduces to a single
+global query surface.
+
+* Small SPA-only fix.
+* Lane: @@FullStackA.
+
+### F2 — Search Status panels move from overlay to carousel
+
+Two panels currently in the Search Status overlay:
+
+* **INDEX** — state, chunks, vectors, model (e.g.
+  `BAAI/bge-small-en-v1.5`), Rebuild index button.
+* **CODE REPORT** — total files / SLOC / comments /
+  complexity + per-language SLOC + file-count bars +
+  "Graph from here" button.
+
+Both relocate into the drive metadata carousel
+(Infographics tab container per Item 1+4). The carousel
+becomes the canonical home for drive-level status
+surfaces; the search overlay reduces to the query
+surface.
+
+* Couples with: G1 chan-reports settings restoration
+  (Task F); chan-report cross-dir aggregation
+  (`systacean-15`); carousel + Infographics container
+  (Item 1+4); graph-from-here entry point shared with
+  graph overhaul G3.
+* Lane: @@FullStackA (carousel + Infographics);
+  consumes `systacean-15`'s aggregated stats endpoint.
+
+### F3 — Unified entity search by name (files, tags, contacts, mentions, languages, anything)
+
+New search MODE distinct from the existing
+semantic + BM25 content search: substring-match name
+search across EVERY indexed entity type — files,
+hashtags, contacts, mentions, languages, directories,
+anything in the chan-drive graph index. @@Alex
+2026-05-21 follow-up: "also tags, contacts, anything".
+
+Result row tells the user what KIND the result is
+(file / hashtag / contact / mention / language /
+directory) + its name; clicking opens the inspector
+for that entity, per-type:
+
+* **File** → file inspector with Open (if openable) +
+  Graph-from-here (if markdown) per graph overhaul G4.
+* **Directory** → directory inspector with aggregated
+  reports stats per graph overhaul G3.
+* **Hashtag** → tagged-files list (the same shape that
+  hashtag nodes surface in the graph today).
+* **Contact / Mention** → contact card (the existing
+  contacts surface shape).
+* **Language** → language node behaviour per graph
+  overhaul G7/G8 (first-depth dirs containing files of
+  that language).
+
+Inspector pattern is shared with the graph overhaul's
+G3/G4 + the FB-side inspector — single component shape
+across all surfaces. Memory: `project_media_browser`
+planned non-editable files (images) visible in tree;
+the prior image inspector is the visual reference.
+
+* Audit at fan-out: chan-server probably has separate
+  endpoints per entity type (FB tree, graph hashtags /
+  mentions, etc.). The unified search either fans out
+  internally OR a new unified-search endpoint
+  aggregates. Implementer decides at fan-out + flags
+  the choice in the task tail.
+* Lane: @@FullStackA (search overlay redesign +
+  per-type inspector composition); possible
+  @@Systacean cross-pollination if a new unified-search
+  endpoint is needed.
+
+### Sequencing
+
+Pair with Items 1+4 (carousel + Infographics) since
+F2 lives inside that container. F1 + F3 can land
+either before or after the carousel work; F1 is small
++ standalone (could ride a quick standalone task), F3
+is medium + couples with the overlay redesign that F1
+triggers.
+
+Recommended cuts at fan-out time:
+* One small task for F1 (overlay scope removal).
+* Bundle F2 with whichever task lands the carousel
+  Infographics content for the Index + Code Report
+  panels (likely `-a-N` paired with `-a-N+1` for
+  Item 1+4).
+* Standalone task for F3 (file-name search +
+  inspector).
+
+### Dependencies
+
+* Task F (Hybrid back-side Search/Indexing/Reports
+  settings) — provides the chan-reports toggle that
+  gates whether Code Report renders in the carousel.
+* `systacean-15` (chan-report cross-dir aggregation)
+  — surfaces aggregated stats that the carousel Code
+  Report consumes.
+* `fullstack-a-43` (Hybrid back-side architecture
+  refactor) — already cleared + committed.
+* G3 (graph directory inspector) — shares inspector
+  shape with F3's per-file inspector.
+
+### NOT in scope
+
+* The current overlay's other affordances (autocomplete,
+  filters within results, etc.) stay unchanged unless
+  the redesign explicitly addresses them.
+* Edge cases for the carousel relocation (Infographics
+  tab navigation, slide ordering) are Item 1+4
+  decisions.
+
+## 2026-05-21 — Linux binaries for v0.12.0 (chan + chan-desktop)
+
+@@Alex 2026-05-21: "next phase we should have binaries
+for linux too, chan and chan-desktop!"
+
+The chan-v0.12.0 cut (Round-2 close) ships Linux
+binaries alongside the macOS DMG on the GitHub Release
+page. Both:
+
+* **chan CLI** — `.deb` / `.rpm` / `.tar.gz` per the
+  existing `release.yml` matrix shape.
+* **chan-desktop** — `.deb` / `.AppImage` per the
+  existing `release-desktop.yml` Linux build job.
+
+### State today (audited from existing CI traces)
+
+* `release.yml` is currently inert across phase-8 tags
+  due to the trigger-glob mismatch caught by `ci-11`.
+  Once `ci-11` lands, the NEXT `chan-v*` tag fires the
+  workflow and ships the CLI matrix — assuming Linux
+  is in the matrix shape. Audit at fan-out.
+* `release-desktop.yml` builds Linux .deb / .AppImage
+  on macos-latest jobs and uploads as workflow
+  artifact `chan-desktop-linux-x86_64-unsigned`. The
+  upload-to-release step apparently only handles the
+  macOS DMG today. Verified empirically by inspecting
+  past `chan-v0.11.2` release: only `Chan_0.11.2_x64.dmg`
+  on the GH Release page; the Linux artifact lives as
+  a workflow artifact, not a Release downloadable.
+
+### What needs to happen
+
+* **`release.yml` audit + (if needed) extend matrix**
+  — confirm Linux targets are present + producing
+  artifacts. If missing, add. @@CI lane.
+* **`release-desktop.yml` release-job extension** —
+  wire the Linux `.deb` / `.AppImage` workflow
+  artifacts into the `softprops/action-gh-release`
+  step (or equivalent) so they land on the GH Release
+  alongside the DMG. @@CI lane.
+* **No signing for Linux yet** — Linux binaries ship
+  unsigned for the v0.12.0 dogfood window. Linux
+  signing options (e.g. `dpkg-sig` for .deb, AppImage
+  bundling key) exist but are NOT in scope for this
+  cut. Document the unsigned status in the release
+  notes when v0.12.0 cuts.
+
+### Sequencing
+
+Lands ahead of v0.12.0 cut. Pair with the v0.12.0
+release-readiness sweep. Likely 1-2 `ci-N` tasks:
+
+* `ci-N` — Linux binaries wired into `release-desktop.yml`
+  release-job.
+* (Optional) `ci-N+1` — `release.yml` matrix audit +
+  fixes if Linux not already present.
+
+Both can run after `ci-11` lands (which fixes the
+fundamental trigger gap).
+
+### Out of scope
+
+* Windows binaries beyond the existing matrix
+  (Round-3 territory if not already shipping).
+* Code signing for Linux (Round-3 polish).
+* Apt / yum / Homebrew tap distribution channels
+  (Round-3+ territory; v0.12.0 ships via direct GH
+  Release download).

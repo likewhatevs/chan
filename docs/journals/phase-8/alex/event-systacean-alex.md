@@ -107,3 +107,84 @@ NOT in this permission. The cross-platform verify per the task body's "Verified 
 ### Approval shape
 
 Append a `## 2026-05-21 — approved` (or "approved-with-caveats" / "denied") section below. Or in-chat is fine if you'd rather just say "go" and Architect transcribes.
+
+## 2026-05-21 — approved (transcribed by @@Architect)
+
+@@Alex 2026-05-21 (in chat to @@Architect): "permission
+granted.. please do not kill my chan.app, i am running on
+it and i have a drive on our repo's source code path"
+
+### Approved scope
+
+The `-12` macOS dry-run goes ahead per the task body's
+"Step 5+ plan":
+
+* `#[cfg(debug_assertions)]`-gated `--check-update-now`
+  CLI handler edit to `desktop/src-tauri/src/main.rs`.
+* `python3 -m http.server 8765 --directory /tmp/chan-updater-test/`
+  in the background.
+* `cargo tauri dev --config /tmp/chan-updater-test/override.json -- --check-update-now`.
+* Iterate the 3 failure modes (invalid signature,
+  corrupted download, version downgrade attempt).
+
+### Hard safety constraints from @@Alex
+
+@@Alex's working chan.app is **alive on the workstation
+right now** with a registered drive at the chan repo
+source path. Operational hard rules — these are
+not-negotiable for this dry-run:
+
+1. **NEVER touch @@Alex's running chan.app.** Don't
+   SIGTERM it, don't SIGKILL it, don't `pkill chan`,
+   don't `pkill -f chan-desktop`, don't `kill -9 <any-PID>`
+   that wasn't your own spawn.
+2. **Process ownership by CAPTURE, not triage.** Capture
+   the PID of the `cargo tauri dev` chan-desktop launch
+   AT SPAWN; only SIGTERM that captured PID at teardown.
+   No "high elapsed time so it must not be mine"
+   inference — that exact failure mode surfaced in the
+   @@WebtestB ci-8 dryrun.4 walkthrough (see
+   [`event-architect-webtest-b.md`](event-architect-webtest-b.md)
+   "Scope clarification" for the historical incident).
+3. **Don't open the chan repo source drive.** The
+   `--check-update-now` should fire + exit (or run to
+   completion) without engaging any drive UI. If the
+   dev chan-desktop process tries to present a drive
+   picker, dismiss / close without selecting. If it
+   auto-opens a registered drive, abort the dry-run,
+   surface the unexpected behaviour to @@Alex via a
+   permission event, and we re-shape.
+4. **Background process discipline.** Capture the
+   python3 http.server PID at spawn; SIGTERM by PID at
+   teardown. No `pkill python` / no port-based kill
+   heuristics.
+
+### Teardown checklist (must be clean before close-poke)
+
+* `kill -SIGTERM <captured-cargo-tauri-dev-PID>`; verify
+  it exited; SIGKILL only if SIGTERM doesn't take.
+* `kill -SIGTERM <captured-http-server-PID>`; verify
+  port 8765 freed.
+* `rm -rf /tmp/chan-updater-test/`.
+* Revert OR feature-gate the temp edit in
+  `desktop/src-tauri/src/main.rs`. Per the task body's
+  shared-worktree-commits discipline: pre/post-commit
+  audits (`git diff --staged --stat` + `git show --stat
+  HEAD`) + explicit `git add <path>` per file.
+* @@Alex's chan.app + registered drives **left
+  untouched**.
+* `ps aux | grep -E '(chan|python|cargo)'` shows no
+  stragglers from your work.
+
+### Linux + Windows verify
+
+Out of scope for this permission. Fire a separate
+permission event if/when you reach that step.
+
+### Scope expiry
+
+This permission covers the `-12` macOS dry-run +
+teardown only. Out-of-scope actions (e.g. canonical
+fresh-Mac walk for a separate task, Apple notary log
+spelunking, sidecar process supervision changes) fire
+fresh permission events.

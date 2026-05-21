@@ -494,3 +494,167 @@ When you bootstrap next, append a one-line ack to
 confirming you've read this scope clarification. Doesn't
 need to be detailed — just confirms the rules are
 loaded before you start any DMG-verification work.
+## 2026-05-21 — poke (smoke-test complete; wave-2 dispatch — webtest-b-2)
+
+A coordination smoke test fired earlier today between
+@@Architect + @@FullStackA + @@FullStackB surfaced a
+watcher-vs-journal shape gap; captured at
+[`../architect/watcher-vs-journal-shape.md`](../architect/watcher-vs-journal-shape.md)
+as wave-2/3 design work. Not your lane.
+
+### Your task
+
+[`../webtest-b/webtest-b-2.md`](../webtest-b/webtest-b-2.md)
+— **v0.11.2 cut walkthrough lane B.**
+
+The first signed+notarized chan-desktop release is live
+on the GitHub Release (16.4 MB `Chan_0.11.2_x64.dmg`,
+workflow run 26221281508 green in 19m45s). Walk your
+lane-B coverage slice on the shipped binary.
+
+Lane-B surfaces per the `-1` split: native
+window-config, terminal cluster, watcher dialog cluster,
+indexing-chart pan/zoom, CLI scriptability, chan-desktop
+signed bundle + first-launch.
+
+### Canonical fresh-Mac walk
+
+The chan-v0.11.2 DMG is the first signed+notarized
+chan-desktop binary to ship publicly. A canonical
+fresh-Mac walk is high-value. **Fire a permission event
+to @@Alex FIRST** per the tightened scope rules earlier
+in this channel ("Scope clarification..." +
+pause-and-warn rule); pick from (a) pause current
+chan-desktop session OR (b) secondary Mac. WAIT for
+@@Alex's call before any DMG-install action.
+
+If @@Alex defers / declines: walk in lane-B
+throwaway-drive shape only; capture keychain-independent
+signals (spctl + stapler + codesign + syspolicyd);
+document the partial.
+
+### Tightened-scope ack on bootstrap
+
+On bootstrap, ack the tightened scope by appending a
+one-line confirmation to
+[`event-webtest-b-architect.md`](event-webtest-b-architect.md)
+before starting any DMG-verification work.
+
+### Coordination
+
+* Standing perm covers throwaway-drive shape.
+* Tightened DMG/Gatekeeper scope applies (3 exclusions
+  + pause-and-warn rule).
+* Append verdict to
+  [`../webtest-b/webtest-b-1.md`](../webtest-b/webtest-b-1.md)
+  tail under `## 2026-05-21 — v0.11.2 cut walkthrough
+  lane B`.
+
+## 2026-05-21 — poke (lane-B throwaway-drive walkthrough in flight; fresh-Mac perm parked with @@Alex)
+
+Acked your `webtest-b-2` permission event to @@Alex with
+the three options (a)/(b)/(c). Default-to-(c) is the
+right play; the keychain-independent signals on the
+mounted DMG (without `/Applications` install) cover the
+load-bearing acceptance criterion for v0.11.2's signed
+bundle.
+
+Your parallel lane-B throwaway-drive walkthrough is in
+scope per the standing perm — proceed with that while
+@@Alex decides on the fresh-Mac path.
+
+### Side observations from your inbound — acks
+
+1. **Lock-error wording on `chan index enable-semantic`
+   / `disable-semantic` against a live-served drive** —
+   misleading message + demoted lock cause. Filing in
+   `phase-8-bugs.md` as a systacean-8-family Round-2
+   polish candidate; not gating anything.
+2. **Terminal tab close buttons require full pointer
+   sequence** — headless-driving quirk, not a real-user
+   regression. Filing as a webtest-tooling note in the
+   bug list for future automation lanes.
+
+### Walkthrough verdict commit clearance — when ready
+
+When lane-B throwaway-drive walk completes + you've
+appended the verdict to `webtest-b-1.md` tail:
+
+* **Suggested commit subject**:
+  `docs: v0.11.2 lane-B walkthrough verdict (webtest-b-2)`.
+* **Files**: `docs/journals/phase-8/webtest-b/webtest-b-1.md` + `docs/journals/phase-8/webtest-b/webtest-b-2.md`. Explicit per-path `git add`; pre/post-commit audits.
+* Fire a "Commit readiness" append + poke me; I'll route
+  the final clearance.
+
+If the fresh-Mac perm resolves while you're mid-walk
+(a/b/c picked), append the path you take in the same
+verdict.
+
+## 2026-05-21 — PRE-RECYCLE HANDOVER (read on bootstrap)
+
+@@Alex is recycling all working sessions via the
+bootstrap prompt.
+
+### In-flight work (commit on bootstrap if pending)
+
+Lane-B v0.11.2 throwaway-drive walkthrough was in
+flight at recycle. If you appended verdicts to
+[`../webtest-b/webtest-b-1.md`](../webtest-b/webtest-b-1.md)
+before tear-down, the next session of you commits
+that append:
+
+* **Commit subject (when ready)**: `docs: v0.11.2
+  lane-B walkthrough verdict (webtest-b-2)`.
+* Files: `webtest-b-1.md` + `webtest-b-2.md`.
+* Explicit per-path `git add`; pre/post-commit audits.
+
+If the lane-B walkthrough was NOT complete at tear-
+down, resume on bootstrap: the throwaway drive at
+`/tmp/chan-test-phase8-wb-r2` + serve on
+`127.0.0.1:8820` may still be running (per
+`event-webtest-b-architect.md` 2026-05-21 tail).
+Decide whether to tear down + re-spin or continue
+where you left off.
+
+### Open permission ask (parked with @@Alex)
+
+Your fresh-Mac Gatekeeper walk permission ask sits in
+[`event-webtest-b-alex.md`](event-webtest-b-alex.md)
+"permission (canonical fresh-Mac Gatekeeper walk for
+chan-v0.11.2 DMG)" with three options:
+
+* (a) pause @@Alex's current chan.app + close
+  /Applications/Chan.app + resume via iTerm with the
+  tightened scope.
+* (b) secondary Mac.
+* (c) defer / declined — documented partial in
+  throwaway-drive shape only (no DMG install action).
+
+Default (c) if no reply by the time you bootstrap.
+
+### Standing permission survives
+
+Your chan-desktop runtime walkthrough standing
+permission per `event-webtest-b-alex.md` 2026-05-20
+survives recycle, and the 2026-05-21 tightened-scope
+clarification for DMG/Gatekeeper verification stays in
+force. Ack the tightened scope on bootstrap by
+appending a one-line confirmation to
+[`event-webtest-b-architect.md`](event-webtest-b-architect.md)
+before any DMG-verification work.
+
+### Queued task
+
+`-b-22` (orphan sidecar reap + lock-takeover) runtime
+walkthrough is your next dispatch when @@FullStackB
+commits the work. The recycled @@Architect cuts a
+specific webtest-b-N walkthrough task once the
+commit lands.
+
+### Recycle continuity
+
+The current @@Architect session is LAST to recycle. By
+the time you bootstrap, the architect should also be
+fresh. Reads include the architect prep entry in
+[`../architect/journal.md`](../architect/journal.md)
+"2026-05-21 — Pre-recycle prep complete".

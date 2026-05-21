@@ -339,3 +339,123 @@ Stand up + spin a fresh lane-A test server against
 any throwaway drive (the chan-source seed is the right
 test bed for `-a-33` ancestor navigation). Fire pokes
 as each task verifies cleanly OR as repros surface.
+## 2026-05-21 — poke (smoke-test complete; wave-2 dispatch — webtest-a-2)
+
+A coordination smoke test fired earlier today between
+@@Architect + @@FullStackA + @@FullStackB surfaced a
+watcher-vs-journal shape gap; captured at
+[`../architect/watcher-vs-journal-shape.md`](../architect/watcher-vs-journal-shape.md)
+as wave-2/3 design work. Not your lane.
+
+### Your task
+
+[`../webtest-a/webtest-a-2.md`](../webtest-a/webtest-a-2.md)
+— **v0.11.2 cut walkthrough lane A.**
+
+The first signed+notarized chan-desktop release is live
+on the GitHub Release (16.4 MB `Chan_0.11.2_x64.dmg`,
+workflow run 26221281508 green in 19m45s). Walk your
+lane-A coverage slice on the shipped binary.
+
+Lane-A surfaces per the `-1` split: file-browser tab +
+tooltips, status bar + notifications, Cmd+K cluster +
+Hybrid NAV migration, rich prompt cluster, editor
+cluster (Wysiwyg paste, image-insert, file rename band,
+source-mode list keymap), graph (ancestor breadcrumb +
+from-here default).
+
+Append verdict to
+[`../webtest-a/webtest-a-1.md`](../webtest-a/webtest-a-1.md)
+tail under `## 2026-05-21 — v0.11.2 cut walkthrough
+lane A`. Surface regressions as v0.11.3 candidates or
+Round-2 wave-2 items per severity.
+
+### Coordination
+
+* Standing perm covers test-server + Chrome MCP.
+* DMG install to `/Applications/` is OUT of your lane's
+  perm scope (chan-desktop runtime tightening is
+  WebtestB-side); if you want to walk the user-realistic
+  install path, fire a fresh permission event first.
+
+## 2026-05-21 — @@Architect: approved + commit clearance (webtest-a-2 walkthrough verdict)
+
+Cleared for commit per your "8/8 lane-A fixes HOLD on v0.11.2"
+verdict.
+
+* **Commit subject**: `docs: v0.11.2 lane-A walkthrough verdict — 8/8 HOLD (webtest-a-2)`.
+* **Files**: `docs/journals/phase-8/webtest-a/webtest-a-1.md` + `docs/journals/phase-8/webtest-a/webtest-a-2.md`. Explicit per-path `git add`; pre/post-commit audits.
+
+### Side observations — filing as undispatched bugs
+
+The three I've seen in your verdict:
+
+1. **`-a-37` suggest-reopen flow gap** (timing-dependent — pieces 1+2 solid; the suggest-from-FB path needs the indexer to have re-indexed the moved file). I'm filing in `phase-8-bugs.md` as undispatched; Round-2 wave-3 or v0.11.3 candidate depending on severity.
+2. **`-a-39` title fallback `Files N` not exercised** (might be intended user-facing behaviour, might be a gap). Filing as undispatched + flagging the "intended vs gap" question for the implementer when it dispatches.
+3. **`-a-39` chan-server-side `be` serialization** — `untrack` blocks hash-write for FB tabs. The narrowing in your observation is useful triage; filing the diagnosis as a side observation under the existing `-a-39` bug-list entry.
+
+Lane-A test server can tear down at your convenience; nothing else is pending verification on it right now. Round-2 wave-2 broader fan-out lands after the four currently-in-flight lanes commit + Tasks B-F dispatch.
+
+Proceed with the commit.
+
+## 2026-05-21 — PRE-RECYCLE HANDOVER (read on bootstrap)
+
+@@Alex is recycling all working sessions via the
+bootstrap prompt.
+
+### Cleared work in working tree (commit on bootstrap FIRST)
+
+Lane-A v0.11.2 walkthrough verdict cleared 2026-05-21 —
+see the `## 2026-05-21 — @@Architect: approved + commit
+clearance (webtest-a-2 walkthrough verdict)` heading
+above. Files
+(`docs/journals/phase-8/webtest-a/webtest-a-1.md` +
+`docs/journals/phase-8/webtest-a/webtest-a-2.md`) +
+explicit per-path `git add`; pre/post-commit audits.
+
+### Queued tasks
+
+None dispatched as of recycle. Your lane is reactive
+— the recycled @@Architect routes per-task verification
+walkthroughs to you as wave-2 commits land:
+
+* `-a-43` (Hybrid back-side architecture refactor) —
+  major SPA refactor; visual + structural verification
+  worth a walk.
+* Hybrid back-side wave Tasks B/C/E/F — Settings UI
+  migration; visual + persistence verification.
+* `-a-44` (drag-to-rearrange) — new interaction
+  affordance.
+* `-b-22` (orphan sidecar reap + lock-takeover) —
+  runtime walkthrough already routed to @@WebtestB
+  lane; not yours.
+* `-b-23` (chan.app marketing port) — static-site
+  walkthrough.
+* Graph overhaul wave (`-a-49` through `-a-52`) — major
+  graph rework; walks worth their own dedicated cuts.
+
+The architect dispatches per-task walkthroughs as the
+commits land in HEAD; you don't need to anticipate the
+queue.
+
+### Standing permission survives
+
+Your test-server + Chrome MCP standing permission per
+`event-webtest-a-alex.md` 2026-05-19 survives recycle.
+
+### Recycle continuity
+
+The current @@Architect session is LAST to recycle. By
+the time you bootstrap, the architect should also be
+fresh. Reads include the architect prep entry in
+[`../architect/journal.md`](../architect/journal.md)
+"2026-05-21 — Pre-recycle prep complete".
+
+### Test-server state
+
+Lane-A test server is still live on `127.0.0.1:8787`
+(see your `event-webtest-a-architect.md` 2026-05-20
+"v0.11.1 walkthrough complete" tail). Decide on
+recycle: tear it down and re-spin per the new tasks,
+or keep it for the v0.11.2-binary walkthrough you
+just verified — your call.

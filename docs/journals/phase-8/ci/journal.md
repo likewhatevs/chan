@@ -642,3 +642,261 @@ this journal first per the bootstrap protocol; the
 ci-3 brief + the ci-5/ci-6 cache-and-gate pair are the
 load-bearing reference points for everything Round-2
 will touch.
+
+## 2026-05-21 — Round-2 close-out (ci-7 + ci-8 + ci-9 + v0.11.2 ship)
+
+Catching the journal up after Round-2 fan-out. The
+recycled session worked the full north-star arc end-to-end
+in event channels; this entry pulls the load-bearing
+artifacts into the journal so the next @@CI bootstrap
+inherits a clean handover.
+
+### Wave-1 north-star track (ci-7 → ci-9 → ci-8)
+
+| Task | Topic                                          | Commit  |
+|------|------------------------------------------------|---------|
+| ci-7 | tag-triggered signed + notarized chan-desktop  | 666c027 |
+| ci-9 | release-desktop verify-step matches DMG-only staple (post-systacean-13 split) | f5b0122 |
+| ci-4 | tauri-cli `^2` → `2` major-only pin (latent install-action contract bug) | 988ce1d |
+
+ci-7 commit took three attempts due to multi-agent
+staging races; landed cleanly via `git commit --
+<pathspec>` (race-safe primitive — pathspec form ignores
+the staged index). The two reset-away commits (3d24ad8,
+c279733) are reflog-only. Memory updated at
+[`feedback-shared-worktree-commits`](file://~/.claude/projects/-Users-fiorix-dev-github-com-fiorix-chan/memory/feedback_shared_worktree_commits.md)
+with the pattern + the orphaning-cascade incident
+(my recovery `git reset --soft` was the first half of
+a cascade that orphaned @@Systacean's `01f10d3`
+systacean-13; -13 had to be re-applied as `2fb3f12`).
+
+ci-9 was cut after I spotted that systacean-13's
+notarytool split changed the staple shape (DMG-only,
+not .app-too); the original ci-7 verify step would
+have failed on `stapler validate "$APP"` post-13. Five-
+line patch dropped the `.app` staple check + swapped
+`spctl -t open` on .app → `spctl -t install` on DMG.
+
+ci-4's `^2` bug was latent since 2026-05-20 — my
+original ci-4 validation was YAML-structural + grep
+only, no runtime exercise. taiki-e/install-action's
+contract is name@latest / name@<exact> / name@<major>
+/ name@<major>.<minor> — NO semver operators. First
+real workflow fire surfaced it. Caught + fixed without
+ceremony per Option C (no task file, just amendment
+commit + audit append in ci-4.md).
+
+### ci-8 dry-run journey (1 → 4)
+
+Each dry-run peeled back a layer revealing the next
+failure mode. Empirically validates ci-8's failure-
+injection acceptance criterion organically (no
+deliberate sabotage needed; the bug chain was real).
+
+| Run  | Tag                          | Result   | Root cause                                                |
+|------|------------------------------|----------|-----------------------------------------------------------|
+| 1    | chan-v0.11.99-dryrun.1       | ✗ 54s    | GitHub Actions billing block (account-side, not workflow) |
+| 2    | chan-v0.11.99-dryrun.2       | ✗ 16m    | ci-4 latent `^2` syntax bug at tauri-cli install          |
+| 3    | chan-v0.11.99-dryrun.3       | ✗ 19m    | Linux: unused `app` var → `_app` rename (fullstack-b-20); macOS: externalBin universal2 expectation (fullstack-b-20 dropped to aarch64-only); macOS notarize: bundled chan sidecar unsigned (fullstack-b-21) |
+| 4    | chan-v0.11.99-dryrun.4       | ✓ 20m11s | First fully green run; signed DMG (15.68 MB) uploaded     |
+
+Out-of-lane bug routing: -b-20 + -b-21 against
+@@FullStackB; both landed before dry-run #4. My lane
+proved correct end-to-end through dryrun.4.
+
+### chan-v0.11.2 ship (real release)
+
+@@Systacean cut `chan-v0.11.2` tag at `60901c1`;
+release-desktop.yml auto-fired on the tag.
+
+**Result: GREEN.** Run `26221281508`, 19m45s
+wall-clock — same trajectory as dryrun.4.
+
+| Sub-job                      | Result    | Time      |
+|------------------------------|-----------|-----------|
+| build (macos-latest)         | ✓ success | 13m40s    |
+| build (ubuntu-latest)        | ✓ success | 19m24s    |
+| github release (chan-desktop)| ✓ success | 16s       |
+
+GH Release `chan-v0.11.2` asset:
+`Chan_0.11.2_x64.dmg` (16,442,495 B; signed +
+notarized via Developer ID Application: Alexandre
+Fiori W73XV5CK3N). First signed chan-desktop bundle
+shipped to end users.
+
+### Finding: `release.yml` trigger gap
+
+While confirming v0.11.2's GH Release contents, noticed
+`release.yml` (the chan CLI matrix that ships .deb /
+.rpm / .pkg / .tar.gz) has trigger glob `tags: ['v*']`
+— does NOT match the `chan-v*` tagging convention
+adopted phase-8. Consequence: chan CLI binaries have
+not been built or uploaded for any phase-8 tag
+(chan-v0.11.0, chan-v0.11.1, chan-v0.11.2).
+`gh release view chan-v0.11.1` returns "release not
+found"; `chan-v0.11.2`'s release has only the DMG.
+
+This was masked by:
+* Earlier phase-8 tags' release-desktop.yml runs being
+  billing-blocked, so nobody noticed release.yml's
+  silence either.
+* My own expected-shape table in [`event-ci-architect.md`](../alex/event-ci-architect.md)
+  (2026-05-21 v0.11.2 preflight) wrote "release.yml
+  (chan CLI) — green on all matrix entries. Unchanged
+  behaviour from v0.11.1." That was wrong — v0.11.1's
+  release.yml run itself failed; the "unchanged
+  behaviour" was actually "unchanged failure".
+
+Architect/journal.md describes the system as "on the
+`chan-v*` tag per `release.yml`" — so the architect
+mental model matches what the workflow SHOULD do, not
+what it currently does.
+
+Flagging for routing as a follow-up `ci-N`. Two
+shapes possible:
+
+* **(a)** Extend `release.yml`'s trigger glob to match
+  `chan-v*`. Single-line YAML change. Fires on the next
+  release; v0.11.2's GH Release stays as-is (DMG only).
+* **(b)** As (a) + backfill v0.11.2's CLI binaries by
+  re-firing the workflow via `workflow_dispatch` against
+  the v0.11.2 tag and uploading to the existing
+  release. More complete; needs the workflow's release-
+  job to handle the existing-release case.
+
+Recommendation: **(a)** for the next tag (v0.12.0 or
+v0.11.3 if @@Systacean cuts a patch), skip the v0.11.2
+backfill (cleaner audit trail; v0.11.2 ships
+DMG-only as part of the north-star validation lap).
+
+### Open parked ci-N items (post-v0.11.2)
+
+| Topic                                                 | Trigger to cut |
+|-------------------------------------------------------|----------------|
+| Auto-fetch `xcrun notarytool log` on `failure()` step | architect routing |
+| DMG filename `_x64` suffix despite aarch64 binary    | cosmetic, future polish |
+| Universal2 (`lipo -create` matrix, x86_64 build)     | post-v0.11.2 (this entry) |
+| `release.yml` `v*` → `chan-v*` trigger fix           | NEW finding (above); architect routing |
+| Round-3 Track 3 — full-SHA pin sweep on third-party actions | Round-3 fan-out |
+| Full-SHA pin sweep deferred per ci-7 Q3              | (same as above) |
+
+dryrun.1-4 tags can be deleted from origin at
+convenience; they're audit-trail artifacts not blocking
+anything. Not urgent.
+
+### Lane state at journal-write time
+
+| Item                                  | State                          |
+|---------------------------------------|--------------------------------|
+| chan-v0.11.2 GREEN                    | ✓ run 26221281508              |
+| @@WebtestB dev-Mac partial walk       | ✓ accepted by @@Alex           |
+| chan-v0.11.2 signed DMG on GH Release | ✓ Chan_0.11.2_x64.dmg          |
+| release.yml trigger gap               | NEW finding; awaiting routing  |
+| Parked ci-N queue                     | 6 items (see above)            |
+| Working tree                          | clean; main = origin/main      |
+
+Idle pending @@Architect routing on the release.yml
+trigger-gap finding + any further Round-2/Round-3 work.
+
+## 2026-05-21 — post-recycle close-out (ci-10 + ci-11 + handover)
+
+@@Architect routed both items I had in flight from the
+prior journal entry:
+
+* **ci-10** — committed (`8aed906`). Commit subject
+  cleared verbatim. Race-safe pathspec form ignored
+  the active multi-agent staging churn (HEAD shifted
+  from `e7468db` → `b36ca96` via fullstack-a-43 mid-task);
+  pathspec form picked up exactly the 2 named files
+  with zero stowaways. Verified via `git show --stat HEAD`.
+* **ci-11** — landed locally (release.yml trigger-glob
+  fix + post-mortem); awaiting commit clearance.
+  Architect routed (a) (add `chan-v*` alongside `v*`)
+  per my finding's recommendation. Smoke dispatch run
+  fired against main HEAD; first job entered
+  in_progress within seconds of fire — billing healthy,
+  full chain validating main's build cleanliness
+  independent of the trigger fix.
+
+### Open `release.yml` smoke run
+
+| Field          | Value                                                            |
+|----------------|------------------------------------------------------------------|
+| Run ID         | 26227752597                                                       |
+| URL            | https://github.com/fiorix/chan/actions/runs/26227752597          |
+| Trigger        | `workflow_dispatch` against `main`                                |
+| Started        | 2026-05-21 ~13:05 UTC                                             |
+| Expected ETA   | ~30 min sequential through release job (skipped on non-tag)       |
+| Next-session action | Check the run's conclusion via `gh run view 26227752597`. Report the result in event-ci-architect.md. If green, it confirms main's chan CLI build chain is clean (hasn't been exercised since v0.10.1). If red, route the failing crate's test out-of-lane (not a ci-11 issue — trigger fix doesn't touch build steps). |
+
+### Lane state at recycle time
+
+| Item                                       | State                                                          |
+|--------------------------------------------|----------------------------------------------------------------|
+| ci-10 commit                               | ✓ (`8aed906`)                                                  |
+| ci-11 work in working tree                 | release.yml + ci-11.md + ci-11-post-mortem.md (all uncommitted)|
+| ci-11 commit                               | ⏳ awaiting @@Architect clearance                              |
+| release.yml smoke dispatch                 | in flight (run 26227752597; ~30 min)                           |
+| Auto-fetch notarytool log on failure       | ✓ landed in ci-10                                              |
+| `_x64` DMG suffix drop                     | ✓ landed in ci-10                                              |
+| Dryrun.{1..4} tag cleanup                  | keep (architect cleared 2026-05-21)                            |
+| v0.11.2 CLI binary backfill (option b)     | DEFERRED to @@Alex (architect surfaced separately)             |
+| Round-3 full-SHA pin sweep                 | Round-3 fan-out (not in current queue)                         |
+| Universal2 / lipo follow-up                | Post-v0.11.2 ci-N (not cut yet)                                |
+
+### What the next @@CI session does on bootstrap
+
+Per `event-architect-ci.md` "PRE-RECYCLE HANDOVER"
+heading + this journal entry, the bootstrap action
+sequence is:
+
+1. **Read this journal entry first** (canonical state).
+2. **Check the smoke dispatch result**:
+   `gh run view 26227752597 --json status,conclusion,jobs`.
+   * If `success`: append a confirmation poke to
+     `event-ci-architect.md` confirming the chain is
+     clean; no further action.
+   * If `failure`: read the failing job's logs +
+     route a poke to architect identifying the failing
+     crate / step. NOT a ci-11 blocker.
+3. **Commit ci-11 if cleared** (`event-architect-ci.md`
+   inbound should carry the clearance heading by then).
+   Race-safe pathspec form per the ci-10 + ci-7 pattern:
+
+   ```bash
+   git commit -F /tmp/chan-ci-11-msg.txt -- \
+       .github/workflows/release.yml \
+       docs/journals/phase-8/ci/ci-11.md \
+       docs/journals/phase-8/ci/ci-11-post-mortem.md
+   ```
+
+   Commit message body proposed in `ci-11.md` "Commit
+   readiness" section.
+4. **Pick up @@Alex's call on the v0.11.2 backfill
+   question** if it lands in the inbound channel. If
+   yes, cut a follow-up `ci-12` for the
+   `workflow_dispatch` against the existing `chan-v0.11.2`
+   tag (release-job uploads to the existing release).
+5. **Otherwise idle** — no other Round-2/Round-3 work
+   in my queue.
+
+### Teardown sweep (per process.md "Teardown")
+
+* No `chan serve` processes from my lane (CI work is
+  entirely workflow-edit + gh CLI; nothing local
+  spawned).
+* No throwaway drives in `/tmp/chan-test-*` from my
+  lane.
+* No Chrome MCP tabs (never invoked Chrome MCP this
+  session).
+* `act` still not installed (per the prior teardown
+  entries; non-issue).
+* Working tree of CI-lane files: ci-10 committed
+  cleanly; ci-11 changes in working tree pending
+  clearance.
+* External-state side-effect: workflow dispatch run
+  `26227752597` is in flight. Cleanly tagged in this
+  journal entry; next session picks up the result.
+
+Cleaner teardown than prior recycles. Ready for the
+next @@CI session.

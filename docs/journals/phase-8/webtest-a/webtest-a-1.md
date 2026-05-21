@@ -1308,3 +1308,92 @@ from chan repo (excluding `.git`, `target`, `node_modules`, `web/dist`),
   (different drive, different tab — observed via Chrome MCP
   `tabs_context_mcp`). Not mine; not interacted with.
 
+
+## 2026-05-21 — v0.11.2 cut walkthrough lane A
+
+Fresh @@WebtestA session against HEAD `e7468db` (post-v0.11.2
+close-out, docs-only commit on top of `60901c1` chan-v0.11.2).
+Throwaway drive: `/tmp/chan-test-phase8-wa-r3/`, seeded from chan
+repo (excluding `.git`, `target`, `node_modules`, `web/dist`), 972
+files, 107 MB. Build local (`cargo build -p chan` up-to-date with
+HEAD); server `./target/debug/chan serve --host 127.0.0.1 --port
+8787 --no-browser`. URL deterministic on drive root:
+`http://127.0.0.1:8787/?t=Bna2VZo7Lb2n4Lvct6srJKPg8PUbLt2A`.
+
+DMG install path skipped (out of lane-A standing perm scope; not
+needed — direct-from-source local build covers the same SPA + crates
+behavior tagged as v0.11.2).
+
+### Verdicts on v0.11.2 lane-A items
+
+| Task    | Verdict                | Empirical signal                                                                                                          |
+|---------|------------------------|---------------------------------------------------------------------------------------------------------------------------|
+| -a-37   | MOSTLY HOLDS           | Piece 1 ✓ (no false positive observed on idle load + edit of README.md and list-test.md; auto-recovery confirmed — see below); Piece 2 ✓ (Re-open auto-recovers when file is back at original path; falls through to FB-navigation with "Choose the moved file in Files to re-open this tab" status hint when file is truly gone); Piece 3 NOT SURFACED in my repro (moved list-test.md → subdir/list-test.md, basename preserved, indexer reindex visible in status bar; suggested-path inline row never rendered after 3.5 s wait; `runSuggestReopenLookup` runs once at panel-surface time; likely indexer hadn't picked up the moved file by then — see "Side observation" below) |
+| -a-38   | A NOT TESTED / B HOLDS | Piece A (pre-flight spinner gating) NOT TESTED this pass (would need pre-flight event drop into a watched dir; deferred). Piece B ✓ HOLDS: right-click README.md in dock → Copy Path → status-bar `.section.status-msg` text "Copied path" surfaces; gone within 3.5 s wait (auto-dismiss confirmed at t≈3.5s and still gone at t=5.5s). |
+| -a-39   | A FAILS / B HOLDS      | **Piece A REGRESSION**: per-tab expand-state persistence does NOT hold empirically. With 5 FB tabs in the same pane (created via 5× Cmd+Alt+O), expanding `.claude/.github/desktop/scripts/` on one tab then clicking another tab shows the SAME 4 expanded dirs on the second tab; switching to a third tab shows the SAME 4 expanded dirs again. NO tab serialized `be` into the URL hash at any point (all 5 tabs serialized as `{k:"b",bi:1,bs:"docs/journals"}` with no `be` field). Singleton-bleed: the live `treeExpanded.map` is shared across tabs in the same pane, snapshot/restore is not flipping it on tab switch. Piece B ✓ HOLDS: 3× Cmd+Alt+O from a single-FB layout → 3 new FB tabs appended (no focus-existing fall-through); select threading propagates `bs:"docs/journals"` to every new tab. Title-numbering "Files N" fallback NOT EXERCISED in my flow (drive context was always present → titles fell back to dir-name `journals/` instead of `Files`). |
+| -a-40   | FIX HOLDS              | Created `list-test.md` with `1.` `2.` `3.` ordered-list + a nested `1.` `2.` `3.` under `3. Third item`. Wysiwyg mode renders nested markers as `3.1.` `3.2.` `3.3.` (outline-style hierarchy). cm-line classes `cm-md-list-line cm-md-list-depth-0` and `cm-md-list-depth-1` match the depth tagging. Top-level markers `1.` `2.` `3.` `4.` unchanged.                                                |
+| -a-41   | FIX HOLDS              | Source mode on `list-test.md`. Cursor at end of `- bullet one`, press Enter, type `MARK_UL` → new line is `MARK_UL` (no auto `- ` prefix). Cursor at end of `1. First item`, Enter, `MARK_OL` → new line is `MARK_OL` (no auto `2. ` prefix). lang-markdown's auto-list keymap successfully suppressed.       |
+| -a-36   | NOT IN LANE-A          | Tab right-click Reload + Open Inspector is a Tauri IPC chord; lane-A standing perm does not cover chan-desktop runtime. Deferred to @@WebtestB.                                                                                                                                                               |
+| -a-42   | DOCS-ONLY              | Settings About section build-out task; live-test not the right surface (UI lives behind Cmd+, settings overlay). Not exercised this pass — flag if @@Architect wants a Settings overlay walk.                                                                                                                  |
+
+### -a-37 detail — what I tested
+
+1. **Load idle**: navigate `?path=list-test.md&m=wysiwyg`. Editor renders, no missing-file panel. ✓
+2. **Edit live**: source mode; type `MARK_UL` / `MARK_OL`. No false-positive flash. ✓ (Sibling-write activity wasn't synthesized but the watcher's own indexer-rebuild noise didn't trigger the panel either; status bar showed "reindexing list-test.md" during these edits without surfacing missing-file UX.)
+3. **Genuine delete**: `rm /tmp/.../list-test.md` → panel surfaces within ~1.5 s: title "File moved or deleted", path `list-test.md`, buttons "Re-open / Find / Close". ✓ Correct behavior.
+4. **Restore at original path**: recreate `list-test.md` on disk with different content → panel AUTO-DISMISSES within 1.5 s; editor switches to showing the restored content (`# List Test (restored)` / `This is the restored content.`). Re-open click not needed; the debounced recovery check (Piece 1) reloaded in-place. ✓
+5. **Move to different path (different basename)**: `mv list-test.md list-test-moved.md` → panel resurfaces; no inline-suggestion (basename differs from the missing path — `runSuggestReopenLookup`'s exact-basename filter at `tabs.svelte.ts:3525` correctly skips). Re-open click failed (file gone at original path), fell through to FB navigation with status-bar hint "Choose the moved file in Files to re-open this tab". ✓ matches source intent.
+6. **Move to subdir (basename preserved)**: `mv list-test-moved.md subdir/list-test.md`. Panel still showed the basic 3-button UX with NO inline suggestion after 3.5 s wait. The `runSuggestReopenLookup` only runs at panel-surface time, not on subsequent file-system mutations; by the time the file landed at `subdir/list-test.md`, the lookup had already completed (and returned no candidates because the indexer hadn't picked up the subdir/ create yet). Closing + reopening the file via FB navigation would re-fire the lookup, but the panel state didn't re-trigger it on its own. **Suggested follow-up**: if Piece 3 needs to be empirical-grade reliable, the suggested-path lookup wants to re-fire on a debounce when the panel is visible and the indexer ticks — otherwise it's a single-shot at a race-y moment. Flag for @@Architect to decide whether this needs a follow-up cut.
+
+### -a-39 detail — Piece A regression empirical signal
+
+State at repro:
+- Layout: single pane, 5 FB tabs (created via 5× Cmd+Alt+O). Active = tab #5.
+- Tree expansion (clicked twirls): `.claude/`, `.github/`, `desktop/`, `scripts/` (visibly expanded; tree shows 30 li items).
+- URL hash: all 5 tabs serialized as `{k:"b",bi:1,bs:"docs/journals"}`. NO tab has a `be` field. The active-flag `a:1` is on tab #5.
+
+Cross-tab switch test:
+- Click tab #1 (leftmost) → URL hash updates `a:1` to position 0. **Tree shows SAME expanded dirs** (`.claude/`, `.github/`, `desktop/`, `scripts/`). Item count unchanged.
+- Click tab #5 (rightmost) → `a:1` moves back to position 4. **Tree state unchanged**.
+- Click tab #1 again → `a:1` moves back to position 0. **Tree state unchanged**.
+
+Expected per `fullstack-a-39.md` "Piece A" + audit verdict appended 2026-05-21 ("ready for review"): the per-tab `tab.expanded` array (field name `be` on SerTab per `tabs.svelte.ts:2802`) should be snapshot-on-deactivate / restore-on-activate via `FileBrowserSurface.svelte:101-128`. Empirically: the snapshot-on-deactivate path doesn't persist the singleton's state into the deactivating tab's `expanded` (or persists with an untracked write that doesn't propagate to `persistLayoutToHash`), AND the restore-on-activate path doesn't clear or rewrite the singleton from the activating tab's `expanded` array.
+
+Audit notes flagged: "If @@Alex still observes lost expand-state on the v0.11.2 walkthrough — i.e., the symptom is real but the diagnosis mis-identified the failure mode — we'd need a live repro with DevTools to narrow which of the three layers mis-fires. Most plausible suspect: Svelte 5 effect-order race on FB-A → FB-B switch in the same pane (effect 3's continuous tracker reading the singleton before effect 1 restores it). Doesn't reproduce in unit tests."
+
+**This is that live repro.** All three layers are wired in source but the runtime effect is that all 5 FB tabs share a single visible expansion set (the singleton is canonical, the per-tab `expanded` field is either never written or written without triggering the hash-persist effect — the hash empirically never carries `be`).
+
+### Side observation — drive-context-threaded titles
+
+The Round-1 "want" for FB tab labels (per bug 1's "want" spec landed in `-a-1`): drive-root selected → drive name with trailing slash; directory selected → `<dirname>/`; file selected → parent-dir name with trailing slash. The `-a-39` Piece B journal note adds: "First tab = `Files`, then `Files 2`, `Files 3`, … . Used by the `browserTabLabel` fallback when no drive context is present + helps disambiguate the tab strip when two un-selected FBs sit side-by-side."
+
+In practice with the always-new spawn path + select threading: every Cmd+Alt+O propagates the active tab's `bs` to the new tab, so the new tab's drive context is non-empty and it falls back to the `<dirname>/` convention rather than to `Files N`. I never observed a `Files` / `Files 2` label in my walk. Whether that's a regression depends on whether @@Alex expects the `Files N` titles to surface in the typical chord-spawn flow — flagging for @@Architect.
+
+### Side observation — `-a-37` Piece 3 not surfacing on later moves
+
+`runSuggestReopenLookup` (`tabs.svelte.ts:3514`) is fired ONCE at panel-surface time. If the file ends up at a basename-matching path AFTER the panel surfaces (e.g., move-then-rename sequence, or the indexer hasn't seen the moved file by the time `api.search` runs), the inline suggestion never appears. The user has to close the tab and re-open via FB. Probably fine for the typical "I moved the file then noticed the editor is showing the panel" timing (the lookup catches the rename if the indexer is current), but a debounced re-run while the panel is visible would harden the UX.
+
+### -a-39 vs -a-37 trade-off
+
+@@FullStackA's audit explicitly anticipated the Piece A "no-rename, no-new-field" deviation could leave the symptom unfixed. Pasting the audit's framing: "If @@Alex still observes lost expand-state on the v0.11.2 walkthrough … we'd need a live repro." This walk provides that repro. @@Architect's call on whether this becomes a v0.11.3 hotfix candidate or a Round-2 wave-2 follow-up (the symptom is annoying but not regression-class — the singleton-shared model is the EXISTING behavior; -a-39 Piece A would be additive UX, not a bug fix in the Piece B sense).
+
+### State at end of walkthrough
+
+- Drive `/tmp/chan-test-phase8-wa-r3/`: test artifact `subdir/list-test.md` (the move-to-subdir test for -a-37 Piece 3); root-level `list-test.md` and `list-test-moved.md` gone (cleaned during the test sequence). Drive-root tree still indexes the original chan-source seed.
+- Server: still live on `127.0.0.1:8787` (URL above). Will tear down at the next recycle signal or on @@Architect's poke.
+- Note: chan instance on port `8820` observed via Chrome MCP `tabs_context_mcp` (different drive, different tab — not mine; carried over from prior session per the journal). Not interacted with.
+
+### Curated summary (highlights / lowlights / contention)
+
+**Highlights**:
+- -a-40 (Wysiwyg outline-numbered markers) + -a-41 (source-mode list keymap suppression) + -a-38 Piece B (status-bar auto-dismiss): all three clean fixes hold on lane-A walkthrough.
+- -a-37 Pieces 1 + 2 are solid: no false-positive observed across idle viewing + active editing + indexer noise; debounced recovery check auto-restores when file returns at original path (better than expected).
+- -a-39 Piece B (always-new FB spawn + select threading): clean, exactly as spec.
+
+**Lowlights / blocking**:
+- **-a-39 Piece A FAILS** empirically: per-tab expand state is singleton-shared across tabs in the same pane. URL hash never serializes `be`. The audit's "no-rename, no-new-field" deviation that @@FullStackA explicitly flagged as possibly under-fixing the symptom is reproducing as predicted. Forwarding to @@Architect for v0.11.3 vs Round-2 wave-2 call.
+- **-a-37 Piece 3** (Find-suggest-reopen inline UX): single-shot lookup at panel-surface time; doesn't re-fire when the indexer catches up to a basename-matching move. Inline suggestion never surfaced in my move-to-subdir repro. Flagging as a usability gap rather than a regression.
+
+**Contention**: none from this lane. Both -a-39 Piece A and -a-37 Piece 3 are SPA-side work; lane assignment unchanged from current ownership (@@FullStackA).
+
+**Not tested this pass**: -a-38 Piece A (pre-flight spinner gating) — would need watcher event drop with no-timing payload; -a-42 (Settings About section); v0.11.1 carryovers (-a-32 through -a-35) — last verified HOLD on `ada8478` (v0.11.1 cut), no v0.11.2 commit touched those areas. Spot-check next pass if @@Architect wants.

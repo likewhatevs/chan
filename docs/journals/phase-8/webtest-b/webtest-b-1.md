@@ -1444,3 +1444,322 @@ restore.
 Poke fired at
 [`../alex/event-webtest-b-architect.md`](../alex/event-webtest-b-architect.md).
 
+## 2026-05-21 — v0.11.2 cut walkthrough lane B
+
+Resumed lane B post the rich-prompt/watcher pre-flight on a
+fresh `@@WebtestB` session. Architect task at
+[`webtest-b-2.md`](webtest-b-2.md). Tightened-scope ack
+landed at
+[`../alex/event-webtest-b-architect.md`](../alex/event-webtest-b-architect.md)
+"ack (scope clarification on standing chan-desktop runtime
+perm)". Fresh-Mac DMG permission ask fired to @@Alex at
+[`../alex/event-webtest-b-alex.md`](../alex/event-webtest-b-alex.md)
+"permission (canonical fresh-Mac Gatekeeper walk for
+chan-v0.11.2 DMG)"; chan-desktop bundle/first-launch
+portion holds pending @@Alex's reply.
+
+### Setup
+
+* Binary: `./target/debug/chan --version` → `chan 0.11.2`.
+  `git diff chan-v0.11.2..HEAD -- crates/ web/src/
+  web/index.html web/package.json` is empty (the
+  post-tag commits are docs-only), so the current
+  binary is binary-equivalent to the shipped tag.
+* Drive: reused `/tmp/chan-test-phase8-wb-r2/` per the
+  architect's task hint. Pre-walk content is the
+  chan-repo seed; verified no walkthrough pollution at
+  the root.
+* Serve: `./target/debug/chan serve
+  /tmp/chan-test-phase8-wb-r2 --port 8820` (PID 53339,
+  bearer in `/tmp/chan-webtest-b-r2-8820.log`).
+* Chrome MCP tab on `http://127.0.0.1:8820`.
+
+### CLI scriptability — REGRESSION-class finding on lock-error wording
+
+* `chan list --json` — parses cleanly (7 drives, schema
+  `{name, path, uuid, last_opened}`). Pass.
+* `chan index status --path <served-drive>` — works
+  WITH `chan serve` live on the same drive (text +
+  `--json` both clean; JSON keys
+  `drive, mode, model_name, model_path, model_present,
+  model_size_bytes, semantic_enabled`). `model size:
+  128.0 MB` row present. Pre-systacean-8 the same
+  invocation returned `drive is locked by another
+  process`. systacean-8 fix #1 holds.
+* `chan index status --path <nonexistent>` — refuses
+  with `not a chan drive at <path>; run \`chan add
+  <path>\` first`. No registration side-effect
+  (verified via post-call `chan list`). systacean-8
+  fix #2 holds.
+* `chan index rebuild --help` documents both `[PATH]`
+  positional AND `--path <PATH>` flag. systacean-8
+  fix #3 holds. `chan index rebuild --path
+  /tmp/chan-test-phase8-wb-r2` against live-served
+  drive errors with `Error: drive is locked by
+  another process` directly (correct — lock-relax was
+  scoped to read-only `status`).
+* `chan index enable-semantic --path
+  /tmp/chan-test-phase8-wb-r2` against live-served
+  drive — **regression-class wording bug**:
+    ```
+    Error: not a chan drive at
+    /tmp/chan-test-phase8-wb-r2;
+    run `chan add /tmp/chan-test-phase8-wb-r2` first
+
+    Caused by:
+        drive is locked by another process
+    ```
+  The drive IS a registered chan drive (per `chan
+  list`); the actual blocker is the live serve's
+  exclusive lock. The error wrapper hijacks the
+  "not a chan drive" path used for genuinely
+  unregistered paths and demotes the real cause to
+  a `Caused by:` line. Same shape on
+  `disable-semantic`. Pre-existing in v0.11.1
+  (systacean-7's verdict tested the toggles on the
+  default drive without a live serve, so this didn't
+  surface), but it's load-bearing for scripted
+  semantic-toggle wrappers: a script that hits the
+  failure on a served drive sees a misleading
+  "not a chan drive" message and may run
+  `chan add` redundantly. **Filing as a Round-2 polish
+  candidate** — same family as systacean-8.
+
+### Watcher dialog cluster + bubble overlay — fully VERIFIED
+
+Drove the rich prompt watcher dialog via the SPA in
+Chrome MCP against Terminal-1 on the lane-B drive.
+
+* **Submit-mode toggle tooltip** —
+  `fullstack-b-18` fix VERIFIED. The shell-mode
+  toolbar toggle's `title` attribute reads
+  `Submit mode: shell (default; Cmd+Enter submits the
+  buffer verbatim)`. Pre-fix wording was
+  `Submit mode: shell (Cmd+Enter sends a trailing
+  newline)`, which my prior session flagged as
+  inaccurate. The new copy matches the actual SPA
+  behaviour (the rich prompt sends the buffer
+  verbatim via `sendUserInput(source)` in shell
+  mode).
+* **Watch directory dialog opens** via the toolbar's
+  `Watch directory` icon button. Initial state:
+  placeholder `directory/path`, hint `type a path`,
+  OK button disabled. Clean.
+* **Case (a) in-drive existing dir** — typed `docs`.
+  Hint flipped to `→ attach watcher to docs/`, OK
+  enabled. fullstack-b-10 attach-mode flip holds;
+  the misleading `⚠ overwrites existing directory
+  docs/` warning from pre-b-10 is gone.
+* **Case (b) in-drive missing dir** — typed
+  `newdir-wb-v0112`. Hint reads
+  `→ attach watcher to newdir-wb-v0112/`, OK
+  enabled. Same attach branch.
+* **Case (c) outside-drive absolute path** — typed
+  `/tmp/chan-watch-wb-v0112-outside`. Hint reads
+  `→ attach watcher to /tmp/chan-watch-wb-v0112-outside/`,
+  OK enabled. Clicked OK → dialog closed cleanly;
+  watcher pill rendered as `watching
+  /tmp/chan-watch-wb-v0112-outside Stop watching` in
+  the rich prompt; the Terminal-1 tab gained the
+  watcher-active `●` indicator (title="watcher
+  active") next to its name. **NO red toast surfaced.**
+  Pre-systacean-9 this would have fired
+  `watch read failed: io error: No such file or
+  directory (os error 2)` because
+  `refreshWatcherEvents` used drive-sandboxed
+  `api.list`. systacean-9 holds.
+* **Server-side**: `/tmp/chan-watch-wb-v0112-outside/`
+  silently created on disk by the watcher's
+  `create_dir_all`. chan-server log clean across the
+  attach — **zero** `chan_server::event_watcher` WARN
+  lines for the empty watch root. systacean-5
+  (EISDIR skip on watch root) holds.
+
+### Watcher convention — systacean-10 silent-skip VERIFIED
+
+Three non-event filenames dropped into
+`/tmp/chan-watch-wb-v0112-outside/`: `notes.txt`,
+`README.md`, `random.json`. `/api/health`
+`terminal_event_watcher.dropped_events` stayed at
+**baseline 0** across all three drops. Zero log
+entries for the non-event paths. SPA: no red toast.
+
+Control case — `event-malformed.md` (matches the
+`^(event|pre-flight)-<id>\.(md|json)$` filter, but
+content is invalid JSON):
+
+* `dropped_events` bumped to **1** as expected.
+* WARN log: `chan_server::event_watcher: failed to
+  parse event file
+  /private/tmp/chan-watch-wb-v0112-outside/event-malformed.md:
+  expected ident at line 1 column 2`.
+
+The silent-skip is precisely scoped to
+non-matching filenames; the legitimate
+producer-error signal path is preserved.
+systacean-10 holds end-to-end.
+
+### Terminal cluster — VERIFIED via empirical + source-pin
+
+* **Cmd+Alt+T spawn** — keydown dispatch (the SPA's
+  `KeyboardEvent.code === "KeyT"` + `metaKey + altKey`
+  binding for `app.terminal.toggle`) fires the spawn
+  cleanly. Three back-to-back chord dispatches
+  produced Terminal-1, Terminal-2, Terminal-3 in
+  one go. URL hash transitioned to
+  `t=[{k:b,...},{k:t,n:Terminal-1},...]`.
+* **Mount-pin (fullstack-b-2)** — all three
+  spawned `.xterm` instances stayed mounted across
+  tab switches (`document.querySelectorAll('.xterm').length
+  === 3` while the file browser tab was active).
+  Page reload restored all three from URL hash.
+* **lineHeight 1.2 (fullstack-b-2)** —
+  `getComputedStyle(.xterm-rows > div)` reports row
+  height 19px against fontSize 15px (ratio ≈ 1.27,
+  i.e. lineHeight ≥ 1.2 applied; visually
+  comfortable, no glyph collisions in the rendered
+  rows).
+* **Scrollback retention (fullstack-b-2)** —
+  source pin unchanged from v0.11.1 cut
+  (`TerminalTab.svelte:294` `scrollback: 20_000`;
+  `Pane.svelte:1110-1115` mount short-circuit on
+  pane mode). v0.11.2 didn't touch this surface.
+  Confirmed surrounding mount behaviour empirically
+  (above); scrollback content reads are deferred —
+  programmatic xterm.js PTY-input driving via the
+  DevTools `KeyboardEvent` / `ClipboardEvent` path
+  is unreliable in headless mode (xterm.js
+  intercepts native textarea events, not
+  synthesised ones). Real human keyboard input
+  works fine; the `paneTerminalMount.test.ts`
+  regression pin remains.
+* **Hybrid NAV `t` alias (fullstack-b-9)** —
+  source pin unchanged from v0.11.1; verified
+  empirically in prior session against
+  binary-equivalent HEAD. v0.11.2 didn't touch.
+* **Default TERM env** — no v0.11.2 commits
+  touched the PTY env shape; the spawned `-bash`
+  children of `chan serve` inherit `chan`'s
+  configured PTY env (probe deferred for the same
+  PTY-driving-from-headless reason).
+
+### Indexing chart pan/zoom — fully VERIFIED
+
+Navigated to slide 3 (Indexing graph) of the empty-
+pane carousel by closing all tabs, then clicking
+the `slide 3` dot button. SVG `svg.indexing-graph`
+renders at 300×300 with baseline `g` transform
+`translate(0 0) scale(1)`.
+
+* **Wheel-zoom**: synthetic `WheelEvent{deltaY:-500,
+  clientX/Y at SVG center}` → `g` transform updates
+  to `translate(-155.86 -155.60) scale(2.117)`. Scale
+  factor exp(-(-500)*0.0015) ≈ 2.117 matches the
+  `expSensitivity` formula from `ca8a441`'s
+  `fullstack-b-4` commit. Translate compensates per
+  the cursor-anchor formula `tx' = svg - (svg - tx) *
+  (k / scale)`.
+* **Recenter button** (`aria-label="recenter graph"`,
+  bottom-right of slide) — `g` transform resets to
+  `translate(0 0) scale(1)`.
+* **Drag-pan**: synthetic `PointerEvent` from
+  `(10, 10)` to `(160, 160)` inside SVG, with
+  `setPointerCapture` patched to no-op (synthetic
+  PointerEvents fail capture in current Chromium;
+  real human pointer events work fine), produced
+  `translate(140 140) scale(1)`. Delta 140 ≈
+  150 × (VIEW_SIZE / rect.width) with 300×300 rect.
+* **Recenter post-pan**: resets to
+  `translate(0 0) scale(1)`. Clean.
+
+fullstack-b-4 holds on v0.11.2.
+
+### chan-desktop native window-config + signed bundle first-launch — PENDING permission
+
+Standing chan-desktop runtime perm covers
+throwaway-drive Tauri launches only; the tightened
+scope (2026-05-21 architect "Scope
+clarification...") explicitly excludes
+`/Applications/Chan.app` overwrite, system-path
+`xattr` writes, and `pkill -f chan-desktop` triage.
+The canonical fresh-Mac Gatekeeper-clean
+walkthrough requires either:
+
+* (a) pausing @@Alex's current chan-desktop session
+  + closing `/Applications/Chan.app` + resuming via
+  iTerm with the tightened scope, OR
+* (b) running on @@Alex's secondary Mac, OR
+* (c) the documented partial (no DMG install
+  action; keychain-independent signals on the
+  mounted DMG only).
+
+Permission event fired at
+[`../alex/event-webtest-b-alex.md`](../alex/event-webtest-b-alex.md)
+"permission (canonical fresh-Mac Gatekeeper walk
+for chan-v0.11.2 DMG)". Holding the chan-desktop
+portion pending @@Alex's reply; will default to (c)
+if no answer when I resume.
+
+The `fullstack-b-1` empirical LRU click cycle +
+`fullstack-b-14` window-title-as-drive-path remain
+parked on the same tooling blocker (macOS
+Accessibility / `--drive <path>` CLI arg);
+permission scope changes don't address this gap.
+
+### Side observations
+
+1. **Lock-error wording on `enable-semantic` /
+   `disable-semantic`** (covered above). Wraps
+   "drive is locked" inside the "not a chan drive"
+   error path. Round-2 polish candidate; same
+   family as systacean-8. Confirmed not v0.11.2
+   regression (predates the cut).
+2. Terminal tab close buttons (`button.close`
+   inside `[role="tab"]`) respond to a full
+   `pointerdown → mousedown → pointerup → mouseup
+   → click` sequence, but a bare `.click()` is
+   occasionally dropped — looks like a Svelte
+   event-listener-on-pointerdown registration that
+   the synthesized `click` alone doesn't satisfy.
+   Minor headless-driving quirk; not a real-user
+   regression. Recording for future
+   automation lanes.
+
+### Lane-B state
+
+* Lane-B serve still up on `127.0.0.1:8820` against
+  `/tmp/chan-test-phase8-wb-r2`. Bearer in
+  `/tmp/chan-webtest-b-r2-8820.log`.
+* Fixture state:
+  * In-drive: pristine chan-repo seed (no
+    new dirs created at root).
+  * Outside-drive: `/tmp/chan-watch-wb-v0112-outside/`
+    with `notes.txt`, `README.md`, `random.json`,
+    `event-malformed.md` (the systacean-10 walk
+    leftovers).
+* chan-desktop NOT launched in this session.
+* Chrome MCP tab (lane-B) still open at the lane-B
+  URL for follow-up walks.
+* Permission ask to @@Alex is open and pending.
+
+### Verdict
+
+v0.11.2 cut binary on lane B — **clean** across
+every lane-B web surface:
+
+| Surface                                     | Verdict           |
+|---------------------------------------------|-------------------|
+| `chan list --json` / `chan index status`    | ✓                 |
+| systacean-8 fixes (3 sub-fixes)             | ✓                 |
+| Watcher dialog 3 cases (b-10)               | ✓                 |
+| systacean-5 (event_watcher EISDIR skip)     | ✓                 |
+| systacean-9 (outside-drive events)          | ✓                 |
+| systacean-10 (silent-skip non-events)       | ✓                 |
+| fullstack-b-18 (tooltip copy)               | ✓                 |
+| Terminal cluster (spawn/mount-pin/lineH)    | ✓ (empirical+pin) |
+| Indexing chart pan/zoom (b-4)               | ✓                 |
+| chan-desktop bundle + first-launch          | pending @@Alex    |
+| Lock-error wording on enable/disable        | Round-2 polish    |
+
+Poke to @@Architect filed at
+[`../alex/event-webtest-b-architect.md`](../alex/event-webtest-b-architect.md).

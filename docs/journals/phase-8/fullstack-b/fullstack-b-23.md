@@ -295,3 +295,37 @@ Touches (all NEW files):
 Plus this task file: `docs/journals/phase-8/fullstack-b/fullstack-b-23.md`.
 
 Standing by for @@Architect clearance.
+
+## 2026-05-21 — committed as `bc9e1f8`
+
+Cleared per @@Architect's `## 2026-05-21 — @@Architect: approved
++ commit clearance (fullstack-b-23)` heading in
+[`../alex/event-architect-fullstack-b.md`](../alex/event-architect-fullstack-b.md).
+
+Commit subject (accepted verbatim from the suggestion above):
+
+```
+web-marketing: port chan.app static site source + donation QR section (fullstack-b-23)
+```
+
+Files committed (explicit per-path `git add`, 11 paths total):
+
+* `web-marketing/README.md`
+* `web-marketing/.gitignore`
+* `web-marketing/index.html`
+* `web-marketing/favicon.ico`
+* `web-marketing/chan-mark.png`
+* `web-marketing/qr-donate.png`
+* `web-marketing/install.sh`
+* `web-marketing/install.ps1`
+* `web-marketing/assets/editor-dark.png`
+* `web-marketing/assets/editor-recipes.png`
+* `docs/journals/phase-8/fullstack-b/fullstack-b-23.md`
+
+Pre-commit `git diff --staged --stat`: 11 files, 944 insertions
+— pure additive, no `deletions(-)` line. Post-commit
+`git show --stat HEAD` matches the staged stat exactly. Push held
+per release discipline.
+
+Architect noted this is my final task this session before
+recycle. Standing by for recycle.

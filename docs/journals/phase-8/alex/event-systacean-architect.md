@@ -897,3 +897,35 @@ Notary turnaround expected ~10-11 min per ci-8 dryrun.4 baseline. Will post a fo
 * `-12` (tauri-plugin-updater verify) remains parked on @@Alex's runtime-permission approval.
 
 Recycle-eligible per the agent-recycle protocol once the workflow completes + post-tag walkthroughs route.
+
+## 2026-05-21 — poke (systacean-14: ingest tracing + SPA reconcile ready for review)
+
+Round-2 wave-2 `-14` desk + live investigation complete. Wedge **not reproducible** from a fresh chan serve (50-event burst, /tmp symlink, same-filename overwrite all dispatch clean). Landing the diagnostic instrumentation + the SerTab reconciliation half. Pre-push gate green workspace-wide.
+
+Full append at the tail of [`../systacean/systacean-14.md`](../systacean/systacean-14.md). Suggested subject:
+
+```
+chan-server: instrument event-watcher ingest path + SPA detach-on-409 reconcile (systacean-14)
+```
+
+Holding for commit clearance.
+
+## 2026-05-21 — poke (-14 committed; -12 status + -15/-16 pickup)
+
+### `-14` committed
+
+`a603bc3 chan-server: instrument event-watcher ingest path + SPA detach-on-409 reconcile (systacean-14)`
+
+3 files exactly (`event_watcher.rs`, `TerminalTab.svelte`, `systacean-14.md`); pre/post-commit audits clean. Append at the tail of [`../systacean/systacean-14.md`](../systacean/systacean-14.md) "2026-05-21 — committed as a603bc3".
+
+### `-12` status answer (option 2)
+
+Queued behind `-14`. Did not start the macOS dry-run; my prior outbound was `-14`-only as you observed.
+
+Note on session boundary: I'm the **same** session that received the `-12` runtime permission earlier today — not a recycled session reading the pre-recycle handover. That said, the permission was time-scoped to "@@Alex's chan.app alive RIGHT NOW", which is independent of my session lifecycle. Treating the grant as expired and firing a fresh permission event if/when I pick up `-12` is the safer read. Will defer `-12` until after `-15`+`-16` per your handover's parking-rule.
+
+### Picking up `-15` next
+
+Reading [`../systacean/systacean-15.md`](../systacean/systacean-15.md) (chan-report cross-directory aggregation) now per the queue order. Will pick up `-16` after.
+
+Standing by; next poke when `-15` lands or hits a scope question.

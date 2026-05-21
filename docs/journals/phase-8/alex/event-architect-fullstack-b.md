@@ -1025,3 +1025,165 @@ inbound + outbound events; new task file appears as
 untracked in `git status`). No standing @@Architect
 behaviour is implied — this is a one-shot routing for
 Round-2-close momentum.
+
+## 2026-05-21 — poke (coordination smoke-test: echo round-trip)
+
+@@Alex turned on the rich-prompt watcher pointed at
+`docs/journals/phase-8/alex/`. Smoke-test the dispatch loop:
+read this inbound, ack, poke me back. Confirms the round-trip
+under live observation before we resume real wave-2 dispatch.
+
+### What to do
+
+1. Append a single dated heading to your outbound channel
+   `docs/journals/phase-8/alex/event-fullstack-b-architect.md`:
+
+   ```
+   ## 2026-05-21 — echo (smoke-test ack)
+
+   Echo received from @@Architect on 2026-05-21. <one line about
+   your current state: bootstrap clean / any surprises / what's
+   in your queue / standing by>.
+   ```
+
+2. No code change, no commit, no git activity. Pure journal append.
+3. After the append, stop. I'll route from here.
+
+### Why
+
+If anything breaks (filename mismatch, can't write outbound,
+inbound shape confusing, append discipline conflict, etc.)
+flag it instead of working around. We pause + analyse if
+needed, per @@Alex's directive.
+
+## 2026-05-21 — poke (smoke-test complete; wave-2 dispatch — fullstack-b-22)
+
+**Smoke test complete.** Cancel the echo ack from the prior
+poke — it's no longer load-bearing. The watcher-vs-journal
+gap that surfaced is captured at
+[`../architect/watcher-vs-journal-shape.md`](../architect/watcher-vs-journal-shape.md)
+as Round-2 wave-2/3 design work; not your lane.
+
+### Your task
+
+[`../fullstack-b/fullstack-b-22.md`](../fullstack-b/fullstack-b-22.md)
+— **chan-desktop orphan sidecar reap + lock-takeover UX.**
+
+REGRESSION-class bug filed today: chan-desktop leaves
+bundled `chan serve` sidecars orphaned after ungraceful
+parent exit, blocking the next launch from binding the
+same drive. Two parts: prevention (process group + Drop
+handler) + minimum-viable recovery UX (lock-takeover
+dialog).
+
+Per the phase-9 forward-look (embed-by-default may
+obsolete this entirely), **keep the recovery-UX side
+minimal**; sink real investment into the prevention side
+(durable regardless of phase-9 direction).
+
+### Coordination
+
+* @@FullStackB lane (chan-desktop is your area).
+  Possible cross-pollination with @@Systacean if a
+  chan-drive lock-takeover protocol primitive is needed;
+  surface a scope question if you hit that boundary.
+* Standing chan-desktop runtime permission covers the
+  verify cycle (kill chan-desktop, relaunch, observe).
+* Shared-infra authorization: yes for
+  `desktop/src-tauri/src/main.rs` + new SPA dialog
+  component; NOT pre-granted for
+  `desktop/src-tauri/tauri.conf.json` edits (fire a
+  scope question if needed).
+
+## 2026-05-21 — @@Architect: approved + commit clearance (fullstack-b-22)
+
+Cleared for commit per your implementation note.
+
+* **Commit subject**: `chan-desktop: process-group sidecar reap + drive-lock-takeover UX (fullstack-b-22)` (your suggested subject, accepted verbatim).
+* **Files**: `desktop/src-tauri/src/main.rs` + `desktop/src-tauri/src/serve.rs` + `desktop/src/main.js` + `docs/journals/phase-8/fullstack-b/fullstack-b-22.md`. Explicit per-path `git add` per the shared-worktree memory; pre/post-commit `git diff --staged --stat` + `git show --stat HEAD` audits as usual.
+* **No `tauri.conf.json` edit**: confirmed; the recovery path is pure IPC + SPA dialog, no capability gate change needed. Authorization not consumed.
+* **No @@Systacean cross-pollination**: confirmed; flock auto-release on kill removes the need for a chan-drive lock-takeover protocol primitive.
+
+### Runtime walkthrough routing — @@WebtestB lane
+
+Agreed with your judgement: fresh eyes on the dialog text + click cycle is more valuable than your own pass. I'll cut a webtest-b follow-up after lane-B's current walkthrough lands. Standing chan-desktop runtime perm covers it; the tightened DMG/Gatekeeper scope only applies to canonical fresh-Mac DMG installs, not this kind of throwaway-drive runtime verification.
+
+Proceed with the commit.
+
+## 2026-05-21 — PRE-RECYCLE HANDOVER (read on bootstrap)
+
+@@Alex is recycling all working sessions via the
+bootstrap prompt.
+
+### Cleared work in working tree (commit on bootstrap FIRST)
+
+`fullstack-b-22` cleared 2026-05-21 — see the
+`## 2026-05-21 — @@Architect: approved + commit
+clearance (fullstack-b-22)` heading above. Three
+files (`desktop/src-tauri/src/main.rs`,
+`desktop/src-tauri/src/serve.rs`, `desktop/src/main.js`)
++ task file. Explicit per-path `git add`; pre/post-
+commit audits.
+
+### Queued tasks (pickup in numeric order after the commit)
+
+1. `-b-23.md` — Port chan.app source into
+   `web-marketing/` (Item 6 sub-piece). Where the
+   chan.app source lives today is open; fire a
+   permission event to @@Alex if you can't locate it.
+
+### Standing permission survives
+
+Your chan-desktop runtime verification permission
+(STANDING per `event-fullstack-b-alex.md` 2026-05-20)
+survives recycle and is referenced in
+[`../../../agents/bootstrap.md`](../../../agents/bootstrap.md)
+§"Standing permissions". Use it as needed for
+chan-desktop verification on `-b-23` or the runtime
+walkthrough I asked you to consider for `-b-22`.
+
+### Runtime walkthrough for `-b-22`
+
+I routed the orphan-sidecar runtime walkthrough to
+@@WebtestB lane (per your suggestion above + my
+clearance poke). You don't need to perform it; the
+recycled @@WebtestB will pick it up.
+
+### When you commit
+
+Append a `## YYYY-MM-DD — committed as <sha>` line to
+the task tail + a follow-up poke in your outbound
+channel. Then pick up `-b-23`.
+
+### Recycle continuity
+
+The current @@Architect session is LAST to recycle. By
+the time you bootstrap, the architect should also be
+fresh. Reads on bootstrap include the architect prep
+entry in
+[`../architect/journal.md`](../architect/journal.md)
+"2026-05-21 — Pre-recycle prep complete".
+
+## 2026-05-21 — @@Architect: approved + commit clearance (fullstack-b-23)
+
+Cleared for commit per your implementation note.
+
+* **Commit subject**: `web-marketing: port chan.app static site source + donation QR section (fullstack-b-23)` (your suggested subject, accepted verbatim).
+* **Files** (all NEW + the task file):
+  * `web-marketing/README.md`
+  * `web-marketing/.gitignore`
+  * `web-marketing/index.html`
+  * `web-marketing/favicon.ico`
+  * `web-marketing/chan-mark.png`
+  * `web-marketing/qr-donate.png`
+  * `web-marketing/install.sh`
+  * `web-marketing/install.ps1`
+  * `web-marketing/assets/editor-dark.png`
+  * `web-marketing/assets/editor-recipes.png`
+  * `docs/journals/phase-8/fullstack-b/fullstack-b-23.md`
+  Explicit per-path `git add`; pre/post-commit audits.
+* **Pure static HTML (no build pipeline)**: confirmed. Cleanest possible additive shape — no workspace member, no toolchain coupling, no shared package.json. The source IS the artifact.
+* **Donation QR placement (§support section above footer)**: agreed. The rationale (single-page site; footer crowded with mailto + github; "by the way, if you want to support" rather than paywall) is the right read. Mobile-flexbox-collapses under 520px also acked.
+* **Nginx config deliberately NOT ported**: agreed. Item-6 hosting locked to GitHub Pages; nginx decommissions with the legacy host in the follow-up `systacean-N` DNS task.
+
+Proceed with the commit. This is your final task this session before recycle.

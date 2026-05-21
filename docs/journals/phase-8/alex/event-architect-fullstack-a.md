@@ -1320,3 +1320,199 @@ walkthrough finding from v0.11.1 in your scope, I cut
 a follow-up task ahead of Wave-2.
 
 Stand by.
+
+## 2026-05-21 — poke (coordination smoke-test: echo round-trip)
+
+@@Alex turned on the rich-prompt watcher pointed at
+`docs/journals/phase-8/alex/`. Smoke-test the dispatch loop:
+read this inbound, ack, poke me back. Confirms the round-trip
+under live observation before we resume real wave-2 dispatch.
+
+### What to do
+
+1. Append a single dated heading to your outbound channel
+   `docs/journals/phase-8/alex/event-fullstack-a-architect.md`:
+
+   ```
+   ## 2026-05-21 — echo (smoke-test ack)
+
+   Echo received from @@Architect on 2026-05-21. <one line about
+   your current state: bootstrap clean / any surprises / what's
+   in your queue / standing by>.
+   ```
+
+2. No code change, no commit, no git activity. Pure journal append.
+3. After the append, stop. I'll route from here.
+
+### Why
+
+If anything breaks (filename mismatch, can't write outbound,
+inbound shape confusing, append discipline conflict, etc.)
+flag it instead of working around. We pause + analyse if
+needed, per @@Alex's directive.
+
+## 2026-05-21 — poke (smoke-test complete; wave-2 dispatch — fullstack-a-43 Task A)
+
+**Smoke test complete.** Cancel the echo ack from the prior
+poke — it's no longer load-bearing. The watcher-vs-journal
+gap that surfaced is captured at
+[`../architect/watcher-vs-journal-shape.md`](../architect/watcher-vs-journal-shape.md)
+as Round-2 wave-2/3 design work; not your lane.
+
+### Your task
+
+[`../fullstack-a/fullstack-a-43.md`](../fullstack-a/fullstack-a-43.md)
+— **Hybrid back-side architecture refactor (Task A).**
+
+Foundational SPA refactor. Back of a Hybrid pane stops
+being a tab collection + becomes a per-surface config
+surface scoped to the active front-tab type. Tasks B-F
+(populate the four config surfaces) and the relocated G
+(About + QR) cut as follow-ups once A lands.
+
+Locked design at
+[`../architect/round-2-plan.md`](../architect/round-2-plan.md)
+§"Hybrid back-side revisited" + source spec
+[`../alex/hybrid-revisited.md`](../alex/hybrid-revisited.md).
+
+### Coordination
+
+* SPA + state only. No cross-lane touch.
+* Pre-push gate green before commit clearance.
+* Append "Commit readiness" + poke me when ready; I
+  route the commit.
+
+## 2026-05-21 — poke (queued: fullstack-a-44 — Hybrid drag-to-rearrange)
+
+@@Alex flagged a new feature: Hybrid pane drag-to-
+rearrange via the top-bar dead zone, auto-entering NAV
+mode in "transaction mode" with click-anywhere-in-Hybrid
+grab.
+
+### Queued task
+
+[`../fullstack-a/fullstack-a-44.md`](../fullstack-a/fullstack-a-44.md)
+— **Hybrid pane drag-to-rearrange + transaction-mode
+NAV.**
+
+### Hard sequencing constraint
+
+`-a-44` depends on `-a-43` (Hybrid back-side architecture
+refactor) landing in HEAD first. `Pane.svelte` gets
+refactored in `-a-43`; concurrent edits would create
+merge pain in the multi-agent worktree.
+
+**Do NOT start `-a-44` until `-a-43` commits + clears.**
+
+Natural sequence after `-a-43` lands:
+
+1. `-a-43` commits; I clear.
+2. Tasks B/C/D/E/F (Hybrid back-side population) fan
+   out as a queue.
+3. `-a-44` (drag) + `-a-42` (About) can land in any
+   order relative to B/C/D/E/F since they touch
+   different surfaces.
+
+I'll coordinate the final ordering at the B-F fan-out
+beat.
+
+### What I expect from you now
+
+Continue with `-a-43`. When it's ready, append "Commit
+readiness" to its task tail + poke me — I clear, you
+commit, then we pick the next task together.
+
+## 2026-05-21 — @@Architect: approved + commit clearance (fullstack-a-43)
+
+Cleared for commit per your "ready for review" append.
+
+* **Commit subject**: `Hybrid back-side architecture refactor: per-surface config view (fullstack-a-43)` (your suggested subject, accepted verbatim).
+* **Files**: `web/src/components/Pane.svelte` + `web/src/components/Pane.test.ts` + `web/src/components/paneTerminalMount.test.ts` + `web/src/state/tabs.svelte.ts` + `web/src/state/tabs.test.ts` + the four new `web/src/components/Hybrid{Terminal,Editor,Graph,FileBrowser}Config.svelte` + `docs/journals/phase-8/fullstack-a/fullstack-a-43.md` + `docs/journals/phase-8/fullstack-a/journal.md`. Explicit per-path `git add` per shared-worktree discipline; pre/post-commit audits.
+* **Single commit**: agreed. State model + Pane render + 4 stub components + test updates are one coherent refactor; intermediate states would either not compile or render incorrectly.
+
+### Deviations — acked
+
+* **Theme swap preserved in -43.** Correct call. The task body wins over the round-2-plan's "drop ... theme" bullet (task body is more specific + says explicitly "Task E completes the simplification"). Task E will collapse the per-Hybrid theme to single-value in a clean follow-up; keeping the swap here keeps -43's scope tight.
+* **Empty-pane back render**: acceptable. The placeholder + back-existence round-trip both behave correctly under serialize/restore; the loss-on-no-back-theme parallels the pre-`-43` shape ("no theme, no tabs" had the same structural loss).
+
+### Cross-file flag — TerminalTab.svelte
+
+@@Systacean's `-14` also touches `web/src/components/TerminalTab.svelte` (their detach-on-409 reconcile in `refreshWatcherEvents`). Verified `git diff --stat` shows the file has 13 lines of total change. Per your outbound channel — and your file list — you did NOT touch `TerminalTab.svelte`; only `paneTerminalMount.test.ts`.
+
+Proceed with `git add` per the listed paths above. Do **NOT** `git add web/src/components/TerminalTab.svelte` — that's @@Systacean's hunk. @@Systacean will commit -14 separately + take that file.
+
+If your audit catches `TerminalTab.svelte` in the staged index by accident, `git restore --staged web/src/components/TerminalTab.svelte` + re-audit.
+
+Proceed.
+
+### Tasks B-F unblock when this lands
+
+When `-43` is in HEAD, Tasks B/C/D/E/F + the relocated G (`-a-42` About) all unblock. I'll fan them out as the next sub-wave; you stand by for the dispatch pokes.
+
+## 2026-05-21 — PRE-RECYCLE HANDOVER (read on bootstrap)
+
+@@Alex is recycling all working sessions via the
+bootstrap prompt. This poke captures your state at
+recycle-time so the next session of you can pick up
+cleanly.
+
+### Cleared work in working tree (commit on bootstrap FIRST)
+
+`fullstack-a-43` cleared 2026-05-21 — see the
+`## 2026-05-21 — @@Architect: approved + commit
+clearance (fullstack-a-43)` heading above. Commit
+subject + file list there. Single commit; pre/post-
+commit audits per shared-worktree memory; do NOT touch
+`web/src/components/TerminalTab.svelte` — that's
+@@Systacean's `-14` hunk.
+
+### Queued tasks (pickup in numeric order after the commit)
+
+1. `-a-44.md` — Hybrid pane drag-to-rearrange (drag-
+   from-dead-zone + double-click; transaction mode).
+   HARD prereq: -a-43 in HEAD.
+2. `-a-45.md` — Task B: Terminal Settings migration to
+   Hybrid Terminal back. Prereq: -a-43.
+3. `-a-46.md` — Task C: Editor Settings migration to
+   Hybrid Editor back. Prereq: -a-43.
+4. `-a-47.md` — Task E: Drop front/back independent
+   theme. Prereq: -a-43.
+5. `-a-48.md` — Task F: Search / Indexing / **Reports**
+   settings migration to Hybrid FB back. **Restores
+   chan-reports toggle (G1 regression fix folded in).**
+   Prereq: -a-43.
+6. `-a-49.md` — Graph overhaul G2: filesystem-hierarchy
+   as graph spine. Prereqs: -a-43 + Tasks B/C/E/F land.
+7. `-a-50.md` — Graph overhaul G3: directory nodes +
+   FB-style inspector. Prereqs: -a-43 + Tasks B/C/E/F +
+   systacean-15 + Task F.
+8. `-a-51.md` — Graph overhaul G6 + Hybrid Graph
+   legend (Task D combined). Prereqs: -a-43 +
+   systacean-16.
+9. `-a-52.md` — Graph overhaul G10 + G9 absorbed:
+   filter toolbar + depth slider semantic. Prereq:
+   -a-43.
+10. `-a-42.md` — Settings About + donation QR. Gates
+    on A+B+C+F per its own body.
+
+`-a-49` through `-a-52` are the graph overhaul first
+sub-wave; can run partly in parallel once their
+prereqs land. Full spec in
+[`../architect/graph-overhaul-plan.md`](../architect/graph-overhaul-plan.md).
+
+### When you commit
+
+Append a `## YYYY-MM-DD — committed as <sha>` line to
+the task tail + a follow-up poke in your outbound
+channel
+[`event-fullstack-a-architect.md`](event-fullstack-a-architect.md).
+Then pick up the next queued task.
+
+### Recycle continuity
+
+The current @@Architect session is LAST to recycle. By
+the time you bootstrap, the architect should also be
+fresh. Channel reads on bootstrap pick up everything
+in this poke + the architect's prep entry in
+[`../architect/journal.md`](../architect/journal.md)
+"2026-05-21 — Pre-recycle prep complete".

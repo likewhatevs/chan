@@ -681,3 +681,102 @@
   - want: lazy / chunked loading as the user scrolls, instead of one big up-front parse
   - architectural change (virtual scroll + chunked parser), not a quick fix → carries to Round 2
 
+- Watcher dialog rejects trailing `/` on directory paths it should detect as directories
+  - flagged 2026-05-21 by @@Alex: pasting an absolute directory path with the trailing slash (e.g. `/Users/fiorix/dev/github.com/fiorix/chan/docs/journals/phase-8/alex/`) into the watcher's "watch directory" dialog produces the inline error `path ends with /, type a name` and disables OK
+  - in attach mode (`PathPromptMode === "attach"`), trailing `/` is semantically a directory hint, not "I haven't typed the basename yet" — the validator's existing rejection rule from `pathValidate.ts:45-54` doesn't distinguish create/move/rename (where the slash IS a missing-basename signal) from attach (where the slash IS the intent)
+  - root cause: `web/src/components/PathPromptModal.svelte:105` calls `validatePath` without an `allowTrailingSlash` opt or mode-aware branch; `pathValidate.ts::validatePath` only knows the generic case
+  - fix direction: extend `validatePath`'s `opts` with `allowTrailingSlash?: boolean` (or thread the `PathPromptMode` through) so the attach call site accepts the slash; resolver server-side already handles the trailing slash either way (the watcher resolver from `fullstack-b-3` / `systacean-5` treats the path as a directory regardless of the slash)
+  - small SPA-side fix; @@FullStackA lane (validator + modal call site)
+  - **NOT YET DISPATCHED** — Round-2 wave-2 candidate per @@Alex "for later"
+
+- Hybrid pane drag-to-rearrange via top-bar dead zone (auto-enters NAV transaction mode)
+  - feature ask 2026-05-21 by @@Alex: today's Hybrid NAV mode is keyboard-chord-driven; mouse interactions are limited to top-bar clicks. Mouse-native rearrange would feel like dragging windows in a tiling window manager
+  - two entries to transaction mode, both targeting the same top-bar dead zone (space between last tab and hamburger menu):
+    - **drag-start** from the dead zone enters NAV transaction mode WITH the originating pane as the first grab (drag-with-payload; fluent path).
+    - **double-click** on the dead zone enters NAV transaction mode WITHOUT an originating grab (standby; next click+drag inside any Hybrid grabs that pane; discoverable affordance).
+  - once in transaction mode: click anywhere inside any Hybrid grabs + drags that pane; Enter commits the rearrangement, Esc dismisses + reverts
+  - keyboard NAV (`Cmd+.` + chord-rearrange) stays unchanged — transaction mode is a SUPERSET of mouse affordances on top
+  - composes with `-a-32` chord migration + `-a-43` Hybrid back-side refactor (hard prereq — concurrent Pane.svelte edits would create merge pain)
+  - dispatched as `fullstack-a-44` (queued; starts after `-a-43` commits + clears)
+
+- `-a-37` suggest-reopen flow: indexer-timing-dependent gap on the FB suggest path
+  - side observation 2026-05-21 by @@WebtestA during v0.11.2 lane-A walkthrough: pieces 1+2 (debounced recovery check + Re-open path) verified working. The suggest-from-FB-basename-match piece is intermittent — if the basename-matching path fires AFTER the indexer has picked up the moved file, suggestion appears; if the timing is reversed (indexer hasn't re-indexed yet), the suggestion never appears
+  - root cause hypothesis: suggest-from-FB depends on indexer state; race against the move event vs the indexer's pickup latency
+  - want: deterministic timing — either gate the suggest on indexer-up-to-date confirmation, or wait + retry on miss
+  - NOT YET DISPATCHED — Round-2 wave-3 or v0.11.3 candidate; pieces 1+2 are the load-bearing fix from `-a-37` and held under all conditions
+- `-a-39` title fallback `Files N` not exercised + chan-server-side `be` serialization gap
+  - side observations 2026-05-21 by @@WebtestA during v0.11.2 lane-A walkthrough
+  - **Title fallback**: every Cmd+Alt+O spawn in @@WebtestA's walk threaded the existing tab's `bs:"docs/journals"` selection, so new tabs fell back to the dir-name convention (`journals/`) rather than the `Files N` convention. Whether this is the intended user-facing behaviour OR a gap is open — flag for the implementer when this dispatches
+  - **`be` serialization**: URL hash never carries `be` for any FB tab in repro, even when the active tab's tree has 4+ expanded dirs. The continuous tracker effect at `FileBrowserSurface.svelte:142-150` is wrapped in `untrack` (writes to `tab.expanded` don't propagate to the outer `persistLayoutToHash` effect); even if `tab.expanded` does update reactively, the hash-write trigger doesn't fire
+  - NOT YET DISPATCHED — annotate against the existing `-a-39` lineage when cut
+- `chan index enable-semantic` / `disable-semantic` against a live-served drive: misleading error wording
+  - side observation 2026-05-21 by @@WebtestB during v0.11.2 lane-B walkthrough: error reads `Error: not a chan drive at <path>; run \`chan add <path>\` first` with the real cause `drive is locked by another process` demoted to a `Caused by:` line
+  - misleading for scripted wrappers — a script that hits the failure may run `chan add` redundantly
+  - pre-existing in v0.11.1; systacean-7's verdict tested toggles on an unserved drive so this didn't surface
+  - want: top-line error names the real cause; the "not a chan drive" message reserved for actual not-a-drive paths
+  - NOT YET DISPATCHED — Round-2 polish candidate; systacean-8 family
+- Webtest tooling: terminal tab close buttons require full pointer sequence (headless-driving quirk)
+  - side observation 2026-05-21 by @@WebtestB: terminal tab close buttons need a full pointerdown → mousedown → pointerup → mouseup → click sequence; bare `.click()` is sometimes dropped
+  - NOT a real-user regression (mouse generates the full sequence); webtest-automation note only
+  - want: future webtest automation lanes default to the full pointer sequence on close-button interactions, OR audit why the bare `.click()` is intermittent and document
+  - NOT YET DISPATCHED — webtest-tooling tracking item, no end-user impact
+
+- chan-reports settings toggle missing from Settings UI (regression)
+  - flagged 2026-05-21 by @@Alex during the graph-overhaul scope conversation: "chan-reports disappeared and there's no setting to turn it on/off anymore... i want it back!"
+  - reports toggle was specced in the Round-2 pre-flight feature toggles plan (`round-2-plan.md` §"Pre-flight feature toggles") alongside the semantic-search toggle from `-a-21`. Either the toggle never landed (only `-a-21` semantic-search landed) OR landed and got removed in a later refactor
+  - want: chan-reports settings toggle restored + a discoverable home (current overlay or one of the Hybrid back-sides per the sequencing decision below)
+  - sequenced with the broader graph overhaul per @@Alex 2026-05-21 "no v0.11.3 hotfix; v0.11.2 stays as-is; next cut bundles all of Round 2 (possibly Round 3)"
+  - settings home is open question #2 in the architect-side graph overhaul plan (overlay vs FB-back vs Graph-back)
+  - NOT YET DISPATCHED — folds into the graph-overhaul wave
+- Graph: depth slider does not reveal more nodes as depth increases
+  - flagged 2026-05-21 by @@Alex during the graph-overhaul scope conversation: "the depth slider seems not to be working at all.. that slider should reveal forward nodes as the depth increases"
+  - "forward nodes" semantic: outgoing-edge targets from the current root (still needs confirmation per architect open question #5)
+  - hypothesis space: (a) slider value not threading through to the layout/filter code; (b) slider value threads through but filter logic is wrong (no-op); (c) the slider does what its implementer intended but the semantic doesn't match user expectation
+  - want: dragging the depth slider higher reveals additional forward-node hops from the current root; dragging lower hides them again
+  - investigate first; if pure-SPA wire bug, @@FullStackA lane; if server-side depth gate, @@Systacean lane
+  - NOT YET DISPATCHED — folds into the graph-overhaul wave
+
+- Search overlay: remove the scope affordance entirely
+  - feature ask 2026-05-21 by @@Alex: "remove the scope from the search overlay"
+  - the current Cmd+K F search overlay has a scope control that @@Alex no longer wants; the search overlay simplifies to a single global query input
+  - couples with the broader search overlay redesign (move Search Status panels into the carousel; add file-name search)
+  - NOT YET DISPATCHED — Round-2 wave-3 candidate; couples with the carousel redesign (Item 1+4) sub-wave
+- Search Status panels (Index + Code Report) move from search overlay into the carousel
+  - feature ask 2026-05-21 by @@Alex: "the search status stuff... will move to the carousel" (with screenshot)
+  - panels in scope:
+    - **INDEX** panel: state, chunks, vectors, model (e.g. `BAAI/bge-small-en-v1.5`), Rebuild index button.
+    - **CODE REPORT** panel: total files / SLOC / comments / complexity + per-language SLOC + file-count bars, plus a "Graph from here" button.
+  - destination: the drive metadata carousel (currently the Infographics tab container per Round-2 Item 1+4)
+  - the carousel becomes the canonical home for drive-level status surfaces; the search overlay reduces to the query surface
+  - couples with: chan-reports settings restoration (G1 / Task F); carousel redesign + Infographics tab container (Item 1+4); chan-report cross-dir aggregation (`systacean-15`)
+  - NOT YET DISPATCHED — Round-2 wave-3 candidate; couples with the carousel redesign sub-wave
+- Search by file name (or parts of name) + per-file inspector like the prior image inspector
+  - feature ask 2026-05-21 by @@Alex: "id like to be able to find all files by name or parts of the name via the search, and see their inspector like we used to have for images"
+  - new search mode: file-name search distinct from the existing semantic + BM25 content search. Returns files matching a substring of the basename (or full path? scope question for fan-out)
+  - inspector pattern: surface the metadata + actions inspector for any selected result, modeled on the image-file inspector pattern that existed previously (memory: `project_media_browser` planned non-editable files visible in tree; future media browser is first-class)
+  - relates to the existing FB / Cmd+K F query plumbing — implementer audits whether the chan-server already exposes a file-name search endpoint (file-browser uses prefix search) or needs an addition
+  - couples with: search overlay redesign (above); FB-side inspector pattern (used as visual reference for the search-result inspector)
+  - NOT YET DISPATCHED — Round-2 wave-3 candidate; could ship alongside the search overlay redesign
+
+- F3 SCOPE UPDATE 2026-05-21: unified entity search broadens beyond files
+  - @@Alex follow-up: "also tags, contacts, anything"
+  - F3 (filed above as "Search by file name...") is reframed: substring-match name search across EVERY indexed entity type — files, hashtags, contacts, mentions, languages, directories, anything in the chan-drive graph index
+  - Result row tells the user what KIND of entity (file / hashtag / contact / mention / language / directory) + its name; clicking opens the inspector for that entity, per-type:
+    - **File** → file inspector with Open + Graph-from-here (graph overhaul G4)
+    - **Directory** → directory inspector with aggregated reports stats (graph overhaul G3)
+    - **Hashtag** → tagged-files list
+    - **Contact / Mention** → contact card
+    - **Language** → first-depth dirs containing files of that language (graph overhaul G7/G8)
+  - inspector pattern is shared with the graph overhaul's G3/G4 + the FB-side inspector — single component shape across all surfaces
+  - implementer audits at fan-out: chan-server probably has separate endpoints per entity type; the unified search either fans out internally OR a new unified-search endpoint aggregates
+  - the F3 entry above + this addendum together are the operative spec; round-2-plan §"Search overlay redesign" carries the consolidated version
+- Linux binaries shipped on phase-8 next-release tags (chan CLI + chan-desktop)
+  - feature ask 2026-05-21 by @@Alex: "next phase we should have binaries for linux too, chan and chan-desktop!"
+  - state today:
+    - **chan CLI Linux binaries**: blocked on the `release.yml` trigger glob mismatch caught by `ci-11`. With ci-11's fix landing (adds `chan-v*` to the trigger), the NEXT `chan-v*` tag fires `release.yml` and ships the matrix — IF Linux is already in the matrix shape. Audit needed at fan-out.
+    - **chan-desktop Linux binaries**: per `ci-7` audit trail (2026-05-21), `release-desktop.yml` builds Linux .deb / .AppImage and uploads them as the workflow artifact `chan-desktop-linux-x86_64-unsigned` — but NOT as GitHub Release downloadables. The upload-to-release step apparently only handles the macOS DMG today
+  - want: on the next `chan-v*` tag (v0.12.0 or whichever ships next), the GitHub Release page carries downloadable Linux binaries alongside the macOS DMG. Both chan CLI (.deb / .rpm / .tar.gz) AND chan-desktop (.deb / .AppImage) accessible from the Releases page
+  - Linux binaries are unsigned (no equivalent of Apple Developer ID for the dogfood / public-flip window); Linux signing options exist but are NOT in scope for v0.12.0
+  - couples with: `ci-11` (release.yml trigger fix, already cleared); a new `ci-N` task to wire the Linux artifact path into `release-desktop.yml`'s release-job; possible matrix audit in `release.yml` to confirm Linux targets are present
+  - lane: @@CI primary; @@Systacean possibly if matrix shape needs cargo-target additions
+  - NOT YET DISPATCHED — Round-2 wave-3 candidate; lands ahead of v0.12.0 cut

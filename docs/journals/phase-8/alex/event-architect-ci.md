@@ -878,3 +878,146 @@ flagged in ci-8's final-metrics append. Worth a tiny
 fixup in some future tag — not v0.11.2 scope.
 
 Standing by for the workflow result poke on tag-push.
+
+## 2026-05-21 — poke (smoke-test complete; wave-2 dispatch — ci-10)
+
+A coordination smoke test fired earlier today between
+@@Architect + @@FullStackA + @@FullStackB surfaced a
+watcher-vs-journal shape gap; captured at
+[`../architect/watcher-vs-journal-shape.md`](../architect/watcher-vs-journal-shape.md)
+as wave-2/3 design work. Not your lane.
+
+### Your task
+
+[`../ci/ci-10.md`](../ci/ci-10.md) — **post-v0.11.2
+release-pipeline polish bundle (3 items).**
+
+1. Auto-fetch `xcrun notarytool log` on `failure()` so
+   the diagnostic-upload step captures the notary
+   rejection JSON as an artifact.
+2. `_x64` filename suffix on aarch64 DMG — cosmetic
+   only; recommendation in the task body is to drop the
+   suffix (universal2 future + the suffix becomes
+   misleading either way).
+3. Dryrun tag cleanup — recommendation is to keep as
+   audit trail; surface in task tail for @@Alex's call.
+
+All three carryover items from the v0.11.2 close-out.
+
+### Shared-infra authorization
+
+**Authorization: yes** for this task to edit
+`.github/workflows/release-desktop.yml` +
+`desktop/src-tauri/tauri.conf.json` (filename suffix)
+per the goal in the task body. Signing-secret VALUES
+still never appear in journals / chat / commits — values
+stay in GitHub Actions Secrets per the `ci-3` brief.
+
+### Coordination
+
+* Pre-push gate green before commit clearance.
+* Append "Commit readiness" + poke me when ready.
+
+## 2026-05-21 — @@Architect: approved + commit clearance (ci-10)
+
+Cleared for commit per your "Work landed (ready for review)"
+append.
+
+* **Commit subject**: `ci: release-desktop polish — notary-log fetch on failure + drop _x64 DMG suffix (ci-10)` (your suggested subject, accepted verbatim).
+* **Files**: `.github/workflows/release-desktop.yml` + `docs/journals/phase-8/ci/ci-10.md`. Race-safe pathspec form as you proposed (`git commit -m "..." -- <paths>`).
+* **Item 3 (dryrun tag cleanup)**: keep all four, accepting your recommendation. Audit-trail value > Releases-page noise; the prereleases don't surface as "Latest". No code change for Item 3.
+* **Runtime validation deferral**: agreed. Cost > value for a deliberate dryrun.5; the rename pattern is mechanical + the failure() gate is YAML-structural. Will validate organically on the next real `chan-v*` tag.
+
+Proceed with the commit.
+
+## 2026-05-21 — poke (ci-11 cut — release.yml trigger-glob fix, option (a) authorized)
+
+Routing per your finding: option (a) authorized + cut as
+`ci-11`.
+
+### Your task
+
+[`../ci/ci-11.md`](../ci/ci-11.md) — **release.yml
+trigger-glob fix**.
+
+1-line YAML patch (or near-1-line) extending the
+trigger to match `chan-v*` so chan CLI binaries actually
+ship on phase-8 release tags. Plus a short post-mortem
+note (append to ci-4.md or a fresh ci-11-post-mortem.md
+under `docs/journals/phase-8/ci/` — your pick).
+
+### Authorization
+
+**Authorization: yes** for this task to edit
+`.github/workflows/release.yml` + the post-mortem
+artifact per the task body. Proceed without further
+in-chat confirmation.
+
+### Deferred to @@Alex — v0.11.2 backfill question
+
+Your option (b) (workflow_dispatch against v0.11.2 to
+upload CLI binaries to the existing release) is @@Alex's
+call. Surfacing separately in my next status snapshot
+to @@Alex; for now, do NOT implement the backfill — just
+land the trigger fix.
+
+### Sequencing
+
+Land `ci-10` first (the commit you have cleared above).
+`ci-11` is independent; can land in the same session if
+you have bandwidth, or queue for next.
+
+## 2026-05-21 — PRE-RECYCLE HANDOVER (read on bootstrap)
+
+@@Alex is recycling all working sessions via the
+bootstrap prompt.
+
+### Cleared work in working tree (commit on bootstrap FIRST)
+
+`ci-10` cleared 2026-05-21 — see the
+`## 2026-05-21 — @@Architect: approved + commit
+clearance (ci-10)` heading above. Files
+(`.github/workflows/release-desktop.yml`, `ci-10.md`)
++ race-safe pathspec form per your proposed shape.
+
+### Queued tasks (pickup in numeric order after the commit)
+
+1. `ci-11.md` — release.yml trigger-glob fix (option
+   (a) authorized). 1-line YAML patch + post-mortem.
+   Authorization: yes for
+   `.github/workflows/release.yml` per the task body.
+
+### Deferred to @@Alex (NOT in your queue)
+
+* **v0.11.2 CLI binary backfill** (option b from your
+  finding) — workflow_dispatch against existing
+  v0.11.2 tag to upload chan CLI binaries to the
+  existing GH Release. @@Alex's call. Surfaced in the
+  pre-recycle status to @@Alex. If they say yes, a
+  follow-up ci-N cuts then.
+
+### When you commit
+
+Append a `## YYYY-MM-DD — committed as <sha>` line to
+each task tail + a follow-up poke in your outbound
+channel. Then pick up `ci-11`.
+
+### Recycle continuity
+
+The current @@Architect session is LAST to recycle. By
+the time you bootstrap, the architect should also be
+fresh. Reads include the architect prep entry in
+[`../architect/journal.md`](../architect/journal.md)
+"2026-05-21 — Pre-recycle prep complete".
+
+## 2026-05-21 — @@Architect: approved + commit clearance (ci-11)
+
+Cleared for commit per your "Work landed (ready for review)" append.
+
+* **Commit subject**: `ci: release.yml triggers on chan-v* (closes phase-8 ci-11)` (your suggested subject, accepted verbatim).
+* **Files**: `.github/workflows/release.yml` + `docs/journals/phase-8/ci/ci-11.md` + `docs/journals/phase-8/ci/ci-11-post-mortem.md`. Race-safe pathspec form per ci-10 + ci-7 pattern.
+* **ADD-over-replace**: agreed. Legacy v0.6.x-through-v0.11.0 tag matching preserved is paranoia-safe; on the next chan-v* tag both `release.yml` AND `release-desktop.yml` fire.
+* **`workflow_dispatch` smoke validation (run 26227752597)**: agreed not blocking ci-11. The trigger glob change is logically independent of build-chain correctness; if the dispatch reds, that's an out-of-lane bug routing, not a ci-11 blocker. Follow-up on the run's conclusion lands when it does (~30 min from dispatch).
+* **Post-mortem placement (fresh file over ci-4.md append)**: agreed. Cleaner audit trail; easy to find by topic.
+
+Proceed with the commit. This is your final task this session before recycle.

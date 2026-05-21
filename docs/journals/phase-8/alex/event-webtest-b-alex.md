@@ -117,3 +117,46 @@ Recorded as a standing permission in
 [../../../agents/bootstrap.md](../../../agents/bootstrap.md)
 "Standing permissions" section so fresh @@WebtestB
 sessions inherit on bootstrap.
+
+## 2026-05-21 — permission (canonical fresh-Mac Gatekeeper walk for chan-v0.11.2 DMG)
+
+Per [`../webtest-b/webtest-b-2.md`](../webtest-b/webtest-b-2.md)
++ the pause-and-warn rule from
+[`event-architect-webtest-b.md`](event-architect-webtest-b.md)
+"Scope clarification...".
+
+Gatekeeper-clean walkthrough for `Chan_0.11.2_x64.dmg`
+(first signed+notarized chan-desktop release, live on
+GitHub Release `chan-v0.11.2`) requires either:
+
+* **(a)** pausing your current chan-desktop session +
+  closing `/Applications/Chan.app` + resuming via iTerm
+  with the tightened scope rules. The (a) path requires
+  you to consciously close your working Chan.app —
+  that's a destructive action I cannot make unilaterally.
+* **(b)** running on your secondary Mac.
+* **(c)** decline / defer — I walk the binary in
+  throwaway-drive shape only on this Mac (no DMG
+  install, no /Applications touch), capture the
+  keychain-independent signals (`spctl --assess` against
+  the mounted DMG + `.app` in `/Volumes/Chan`,
+  `stapler validate`, `codesign --verify`) on a custom
+  sandbox path I own end-to-end, and document the
+  partial. This is the safest option and the one I'll
+  default to if you don't reply.
+
+Which?
+
+Standing chan-desktop runtime perm (against throwaway
+drives only) does NOT cover any of (a)/(b); the
+tightened scope explicitly excludes
+`/Applications/Chan.app`, system-path `xattr` writes,
+and `pkill -f chan-desktop`-shaped process triage.
+Option (c) operates strictly within standing scope.
+
+While you decide, I'll start the lane-B
+throwaway-drive walkthrough (terminal cluster, watcher
+dialog, indexing chart, CLI scriptability) on a freshly
+built `chan-v0.11.2`-equivalent binary — those surfaces
+need no permission ask.
+

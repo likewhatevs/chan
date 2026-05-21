@@ -302,3 +302,17 @@ chan-server: instrument event-watcher ingest path + SPA detach-on-409 reconcile 
 `/tmp/s14-fire.sh` is a throwaway repro script kept on
 disk only for the duration of this session; not part of
 the commit.
+
+## 2026-05-21 — committed as a603bc3
+
+`a603bc3 chan-server: instrument event-watcher ingest path + SPA detach-on-409 reconcile (systacean-14)`
+
+3 files, +540 / -3. Pre-commit `git diff --staged --stat`
+audit clean (only the three architect-cleared paths:
+`event_watcher.rs`, `TerminalTab.svelte`, this task
+file); post-commit `git show --stat HEAD` confirmed
+matching shape. No stowaways from the ~30 other agents'
+modified files in the working tree.
+
+Push held per the post-v0.11.2 Round-2 cadence
+(architect orchestrates the next tag cut).

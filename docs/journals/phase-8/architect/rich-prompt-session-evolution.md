@@ -354,3 +354,25 @@ include this animation spec in the acceptance criteria.
 History-list flip-back button placement next to the
 existing toolbar buttons (Send / Collapse / submit-mode
 toggle / page-width slider).
+
+## 2026-05-21 — Watcher-vs-journal shape captured as a design gap
+
+Live smoke test on 2026-05-21 surfaced a structural
+mismatch between today's coordination journals (append-
+only markdown) and the chan runtime watcher
+(`AgentEvent` JSON, single-message per file, fires on
+Create only). The watcher and journals share filenames
+and a directory but the event-kind + content layers
+talk past each other.
+
+Full analysis + three-path resolution options +
+recommendation (option A: dual-write journal + wire
+event per append) live at
+[`watcher-vs-journal-shape.md`](watcher-vs-journal-shape.md).
+
+The session-evolution wave is the natural place this
+lands because it already touches the architect-skill
+discipline + the bootstrap-step inbound-read. When the
+wave cuts, surface the four decisions from the design
+artifact §"Decisions @@Alex needs to make" alongside the
+existing rich-prompt asks.

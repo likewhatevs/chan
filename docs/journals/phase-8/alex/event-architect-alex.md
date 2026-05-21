@@ -456,3 +456,58 @@ ships but not on the same dependency chain.
 Standing by for inbound pokes from the six agents +
 any new bugs / scope shifts you flag. Will route
 commit clearances + task follow-ups as they come.
+
+## 2026-05-21 — agent-recycle events (all six working agents handover-ready)
+
+Per the recycle protocol in `process.md` (phase-7 ref;
+inherits in phase-8) + your 2026-05-21 directive
+"i will want to recycle everyone with the bootstrap
+prompt so please prep the whole of next phase".
+
+All six working agents have pre-recycle handover
+appends at the tail of their inbound
+`event-architect-<agent>.md` channels. Each handover
+captures: cleared work in working tree (commit
+instructions), queued tasks (numeric order),
+standing-permission survival notes, recycle
+continuity beat.
+
+### Per-agent recycle signal
+
+| Agent | Recycle-eligible? | Handover anchor |
+|-------|-------------------|----------------|
+| @@CI | Yes | `event-architect-ci.md` "2026-05-21 — PRE-RECYCLE HANDOVER" |
+| @@FullStackA | Yes | `event-architect-fullstack-a.md` "2026-05-21 — PRE-RECYCLE HANDOVER" |
+| @@FullStackB | Yes | `event-architect-fullstack-b.md` "2026-05-21 — PRE-RECYCLE HANDOVER" |
+| @@Systacean | Yes | `event-architect-systacean.md` "2026-05-21 — PRE-RECYCLE HANDOVER" |
+| @@WebtestA | Yes | `event-architect-webtest-a.md` "2026-05-21 — PRE-RECYCLE HANDOVER" |
+| @@WebtestB | Yes | `event-architect-webtest-b.md` "2026-05-21 — PRE-RECYCLE HANDOVER" |
+
+### @@Architect recycle position
+
+I'm LAST to recycle + FIRST to come up per your
+directive. My bootstrap reads
+[`../architect/journal.md`](../architect/journal.md)
+"2026-05-21 — Pre-recycle prep complete" — captures
+the working tree state, queue depth per lane,
+parked decisions, planning artifacts, permissions
+that survive vs not.
+
+### What's owed to you (your call when you resume; not blocking the recycle)
+
+1. **@@WebtestB fresh-Mac walkthrough perm**: options
+   (a)/(b)/(c) in `event-webtest-b-alex.md`. Default
+   (c) if no reply.
+2. **v0.11.2 CLI binary backfill**: workflow_dispatch
+   to add CLI binaries to existing v0.11.2 GH Release
+   (option b from @@CI's release.yml trigger glob
+   finding), OR keep v0.11.2 DMG-only. Default
+   DMG-only.
+
+Neither is load-bearing for the recycle.
+
+### Standing by
+
+Ready when you are. I'll continue routing if any
+inbound poke lands before recycle; otherwise this is
+the close-of-session beat.

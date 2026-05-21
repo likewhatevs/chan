@@ -1239,3 +1239,211 @@ Phase 8 finishes per existing plan: v0.11.2 cut → Round-2
 wave-2 (Hybrid back-side + the new Task F + Task G About)
 → Round-3 public flip + multi-model picker + polish wave.
 Phase 9 opens after Round 3 lands.
+
+## 2026-05-21 — coordination smoke-test surfaced watcher-vs-journal shape gap
+
+@@Alex turned on the rich-prompt watcher pointed at
+`docs/journals/phase-8/alex/` and asked for an echo-
+round-trip smoke test through @@FullStackA + @@FullStackB
+to confirm the dispatch loop is live under the watcher.
+
+@@Architect cut two pokes (appended to `event-architect-
+fullstack-{a,b}.md`). @@Alex saw nothing in the watcher.
+Smoke test paused per @@Alex's "if it breaks we pause +
+analyse" directive.
+
+### Root cause
+
+Two structural mismatches in `chan-server/src/event_watcher.rs`:
+
+1. **Event kind**: handles `Create(_)` + `Modify(Name(_))`;
+   `Modify(Data)` (file append) falls through to None.
+   Journal appends do not fire the watcher.
+2. **Content shape**: parses each fired file as
+   `AgentEvent` JSON. Markdown narrative bodies (our
+   journal shape) fail the parse + bump `dropped_events`.
+
+The two shapes co-exist under the same filename prefix +
+the same regex + the same directory but talk past each
+other.
+
+### Decision: option C (capture + carry forward)
+
+@@Alex picked option C from the three-paths choice. Three
+were:
+* A — demo the watcher with a proper JSON event (proves
+  infra works).
+* B — re-shape the smoke test (heavier; teach FullStacks
+  the wire shape).
+* C — capture the gap as wave-2/3 design work; leave the
+  smoke test as-is.
+
+Captured at
+[`watcher-vs-journal-shape.md`](watcher-vs-journal-shape.md).
+That artifact carries the two-shape comparison, the
+three-resolution-options analysis (dual-write A /
+watcher-tail-diff B / channel-migration C), the
+recommendation (A — lowest-risk, preserves journal
+discipline, lights up watcher), and four decisions for
+@@Alex when the rich-prompt session-evolution wave cuts.
+
+### Smoke test status (post-decision)
+
+The FullStacks DO still see the inbound pokes via the
+normal journal-poll bootstrap mechanism. Their echo
+appends will land in `event-fullstack-{a,b}-architect.md`
+when they poll; @@Architect picks them up on the next
+inbound check. @@Alex's watcher view stays dark for
+these — that's the expected behaviour under the captured
+gap, not a new failure.
+
+The smoke test thus served its diagnostic purpose:
+surfaced the audit-trail-vs-wire-shape split that the
+phase-8 dispatch blueprint (memory
+`project_dispatch_is_automation_blueprint`) has been
+implicitly assuming was resolved.
+
+### Cross-references
+
+* [`watcher-vs-journal-shape.md`](watcher-vs-journal-shape.md)
+* [`rich-prompt-session-evolution.md`](rich-prompt-session-evolution.md)
+  — to be updated with cross-ref to the new design
+  artifact on next material edit.
+
+## 2026-05-21 — Pre-recycle prep complete; all lanes handover-ready
+
+@@Alex 2026-05-21: "i will want to recycle everyone
+with the bootstrap prompt so please prep the whole of
+next phase as i tear them down and get ready to
+recycle.. you will be the last to recycle and the
+first to come up".
+
+### Recycle order
+
+* All six working agents (CI, FullStackA, FullStackB,
+  Systacean, WebtestA, WebtestB) get torn down +
+  respawned per the bootstrap prompt in
+  [`../../../agents/bootstrap.md`](../../../agents/bootstrap.md).
+* @@Architect is LAST to recycle + FIRST to come up.
+  Fresh architect bootstrap reads this journal + the
+  channels + the plans; the working agents respawn
+  into a fully dispatched state.
+
+### Working tree at recycle (cleared work pending commit)
+
+| Lane | Cleared task | Commit subject |
+|------|-------------|----------------|
+| @@CI | `ci-10` | `ci: release-desktop polish — notary-log fetch on failure + drop _x64 DMG suffix (ci-10)` |
+| @@FullStackA | `-a-43` | `Hybrid back-side architecture refactor: per-surface config view (fullstack-a-43)` |
+| @@FullStackB | `-b-22` | `chan-desktop: process-group sidecar reap + drive-lock-takeover UX (fullstack-b-22)` |
+| @@Systacean | `-14` | `chan-server: instrument event-watcher ingest path + SPA detach-on-409 reconcile (systacean-14)` |
+| @@WebtestA | `-2` verdict | `docs: v0.11.2 lane-A walkthrough verdict — 8/8 HOLD (webtest-a-2)` |
+| @@WebtestB | in-flight walk | TBD — append + commit when lane-B walkthrough lands |
+
+Each recycled session reads their inbound event-
+architect channel on bootstrap; the clearance + queue
+state survives the recycle naturally. If a session
+tears down BEFORE committing, the next session picks
+up the cleared work + commits per the standing
+clearance.
+
+### Queue depth per lane post-recycle
+
+| Lane | Queue (numeric order) | Total tasks queued |
+|------|----------------------|--------------------|
+| @@FullStackA | `-a-43` (committable) → `-a-44` (drag) → `-a-45` (Task B) → `-a-46` (Task C) → `-a-47` (Task E) → `-a-48` (Task F + reports) → `-a-49` (G2) → `-a-50` (G3) → `-a-51` (G6+TaskD) → `-a-52` (G10+G9) → `-a-42` (About; gates on A+B+C+F) | 10 |
+| @@FullStackB | `-b-22` (committable) → `-b-23` (chan.app marketing port) | 2 |
+| @@Systacean | `-14` (committable) → `-15` (chan-report cross-dir aggregation) → `-16` (file-class buckets); `-12` parked on fresh permission ask | 3 + parked |
+| @@CI | `ci-10` (committable) → `ci-11` (release.yml trigger fix) | 2 |
+| @@WebtestA | verdict (committable); no further tasks dispatched (reactive lane) | 1 |
+| @@WebtestB | in-flight; fresh-Mac perm parked with @@Alex; reactive lane | n/a |
+
+### Open decisions parked for @@Alex (not load-bearing for the recycle)
+
+* **@@WebtestB fresh-Mac walkthrough perm**: (a) pause
+  current chan.app session, (b) secondary Mac, (c)
+  declined / partial in throwaway-drive shape. Default
+  (c) if no reply. Lives in
+  [`../alex/event-webtest-b-alex.md`](../alex/event-webtest-b-alex.md)
+  "permission (canonical fresh-Mac Gatekeeper walk for
+  chan-v0.11.2 DMG)".
+* **v0.11.2 CLI binary backfill**: workflow_dispatch
+  against existing v0.11.2 tag to add chan CLI binaries
+  to the existing GH Release (option b from ci-11
+  finding), OR stay DMG-only as the "north-star
+  validation lap" (option a's stance). Default: DMG-only.
+
+### Standing permissions that survive recycle
+
+Per [`../../../agents/bootstrap.md`](../../../agents/bootstrap.md)
+§"Standing permissions":
+
+* @@FullStackB chan-desktop runtime verification —
+  STANDING (2026-05-20).
+* @@WebtestB chan-desktop runtime walkthroughs —
+  STANDING (2026-05-20), with the 2026-05-21
+  tightened-scope clarification for the DMG/Gatekeeper
+  verification subset.
+
+### Permissions that DO NOT survive recycle (session-scoped)
+
+* @@Systacean `-12` runtime permission for the
+  tauri-plugin-updater dry-run. Granted 2026-05-21
+  with safety constraints ("chan.app alive RIGHT NOW
+  on the workstation"). Since `-12` was NOT executed
+  before recycle, the recycled session MUST re-fire a
+  fresh permission event to @@Alex; the prior approval
+  was time-specific.
+
+### Planning artifacts that survive recycle
+
+* [`round-2-plan.md`](round-2-plan.md) — Task F expanded
+  2026-05-21 to absorb chan-reports.
+* [`graph-overhaul-plan.md`](graph-overhaul-plan.md) — full
+  graph overhaul spec; 10-task decomposition (G1-G10);
+  5 locked decisions; refinement section on depth +
+  filters; clarification that filters are NODE-type
+  only.
+* [`watcher-vs-journal-shape.md`](watcher-vs-journal-shape.md)
+  — coordination shape design gap for rich-prompt
+  session-evolution wave.
+* [`rich-prompt-session-evolution.md`](rich-prompt-session-evolution.md)
+  — extended with watcher-vs-journal cross-reference.
+
+### Bug list state
+
+[`../phase-8-bugs.md`](../phase-8-bugs.md) has 95+
+entries. New entries this session: G1 (chan-reports
+settings regression), G9 (depth slider broken — outgoing
+semantic confirmed), the watcher dialog trailing-slash
+trip, Hybrid pane drag-to-rearrange feature (dispatched
+as `-a-44`), 4 walkthrough side observations from
+WebtestA + WebtestB.
+
+### My next session bootstrap
+
+When the fresh @@Architect comes up FIRST per @@Alex's
+order:
+
+1. Bootstrap walks `architect.md` + skill guide.
+2. Reads `process.md` + `request.md`.
+3. Reads THIS journal — the most recent entry (THIS
+   one) is the load-bearing handover.
+4. Reads the planning artifacts under `architect/`.
+5. Reads `phase-8-bugs.md`.
+6. Reads inbound events from all six working agents
+   (most recent appends carry the pre-recycle
+   handover state — see per-agent appends below).
+7. Reads outbound events (own log).
+8. Skims task-file tails — most recent appends carry
+   commit-readiness from cleared work.
+9. `git status` + `git log --oneline -20`. Uncommitted
+   working-tree state should be the cleared commits
+   waiting on agent recycle.
+
+Then: watch for the first inbound poke from the
+respawned working agents (their bootstrap → commit
+their cleared work → poke back). Route follow-ups as
+each lane progresses through their queue.
+
+No active decisions blocked on me at recycle time.

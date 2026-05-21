@@ -410,3 +410,109 @@ signal.
 Round-2 broader fan-out (carousel redesign, BOOT, manual, etc.)
 parks until you cut the patch tag — standing by.
 
+
+## 2026-05-21 — poke (webtest-a-2: v0.11.2 cut walkthrough complete; 1 regression + 1 usability gap)
+
+Walked the lane-A v0.11.2 cut surfaces from
+[`../webtest-a/webtest-a-2.md`](../webtest-a/webtest-a-2.md)
+against HEAD `e7468db` (post-v0.11.2 close-out, docs-only on
+top of `60901c1` chan-v0.11.2). Local build; DMG install path
+skipped (out of lane-A perm scope per the task spec).
+
+Per-task empirical signal under "2026-05-21 — v0.11.2 cut
+walkthrough lane A" tail in
+[`../webtest-a/webtest-a-1.md`](../webtest-a/webtest-a-1.md).
+
+### Verdicts
+
+| Task    | Verdict                |
+|---------|------------------------|
+| -a-37   | MOSTLY HOLDS — pieces 1+2 clean; piece 3 not surfacing (see lowlight) |
+| -a-38   | A NOT TESTED / B HOLDS |
+| -a-39   | A FAILS / B HOLDS (Piece A is a real regression — see lowlight)       |
+| -a-40   | FIX HOLDS              |
+| -a-41   | FIX HOLDS              |
+| -a-36   | NOT IN LANE-A (Tauri IPC; @@WebtestB) |
+| -a-42   | DOCS-ONLY / Settings overlay walk deferred |
+
+### Critical lowlights
+
+* **`-a-39` Piece A regression**: per-tab FB expand-state persistence
+  does NOT hold. Repro: 5 FB tabs in one pane, expand 4 dirs on one
+  tab, switch tabs via click → every tab shows the SAME 4 expanded
+  dirs. URL hash never serializes `be` for any tab. @@FullStackA's
+  audit verdict on -a-39 explicitly anticipated this could happen:
+  "If @@Alex still observes lost expand-state on the v0.11.2
+  walkthrough — i.e., the symptom is real but the diagnosis
+  mis-identified the failure mode — we'd need a live repro." This
+  walk provides that repro. The "no-rename, no-new-field" deviation
+  in -a-39 Piece A (kept existing `be` SerTab field, skipped the
+  rename to `fbe`) is reproducing the under-fix. **Singleton-bleed
+  symptom is the EXISTING behavior on main; -a-39 Piece A would be
+  additive UX, not a bug-introducing regression**. Your call on
+  v0.11.3 hotfix vs Round-2 wave-2 follow-up.
+* **`-a-37` Piece 3 usability gap** (NOT regression-class): the
+  inline "File seems to have moved to `<path>`" suggestion never
+  surfaced in my move-to-subdir repro (basename preserved). Root
+  cause looks like single-shot timing: `runSuggestReopenLookup`
+  fires ONCE when `markFileMissing` runs; if the file lands at a
+  basename-matching path AFTER that (or the indexer hasn't picked
+  up the moved file yet), the suggestion never appears. Pieces 1
+  and 2 are solid: the debounced recovery check auto-restores the
+  editor when the file returns at its original path (better than
+  the spec — no Re-open click needed). Re-open + fall-through-to-FB
+  with "Choose the moved file" status hint is the documented
+  failover and works.
+
+### Highlights
+
+* **`-a-40`**: Wysiwyg outline-style ordered-list markers render
+  `3.1.` `3.2.` `3.3.` at nested depth (under `3. Third item`).
+  Top-level markers unchanged. Clean.
+* **`-a-41`**: source-mode auto-list continuation suppressed for
+  both UL (`- bullet one` + Enter → `MARK_UL`, no `- ` prefix) and
+  OL (`1. First item` + Enter → `MARK_OL`, no `2. ` prefix).
+* **`-a-38` Piece B**: "Copied path" status auto-dismisses within
+  3.5 s (gone at t≈3.5s and still gone at t=5.5s).
+* **`-a-39` Piece B**: 3× Cmd+Alt+O from single FB → 3 new tabs.
+  Select-threading propagates `bs:"docs/journals"` to every new
+  tab.
+* **`-a-37` recovery**: deleting a file out from under the editor
+  then immediately recreating it at the same path → panel surfaces
+  briefly then auto-dismisses when the recovery check (Piece 1)
+  fires; editor swaps to the restored content. No Re-open click
+  needed.
+
+### Side observation — title fallback `Files N` not exercised
+
+@@FullStackA's -a-39 Piece B journal note mentioned the `Files N`
+title-fallback for "no drive context" / "two un-selected FBs side
+by side". In my walk every Cmd+Alt+O spawn threaded the existing
+tab's `bs:"docs/journals"` selection, so the new tabs fell back to
+the dir-name convention (`journals/`) rather than the `Files N`
+convention. Whether this is the intended user-facing behavior or a
+gap worth flagging is your call.
+
+### Side observation — chan-server-side `be` serialization
+
+URL hash never carries `be` for any FB tab in my repro, even when
+the active tab's tree visibly has 4 expanded dirs. The continuous
+tracker effect at `FileBrowserSurface.svelte:142-150` is wrapped in
+`untrack` (writes to `tab.expanded` don't propagate to the outer
+`persistLayoutToHash` effect), so even if `tab.expanded` does
+update reactively, the hash-write trigger doesn't fire. The
+component-level snapshot/restore at lines 101-128 is the only path
+that should kick the hash-persist, and empirically it doesn't seem
+to swap the singleton on tab activation. Flagging as a possible
+narrowing of the diagnosis — but the deeper triage is Lane-A's
+implementer to do.
+
+### State at end of walk
+
+Server still live at `http://127.0.0.1:8787/?t=Bna2VZo7Lb2n4Lvct6srJKPg8PUbLt2A`
+against `/tmp/chan-test-phase8-wa-r3/` (chan repo seed + a few
+ad-hoc test artifacts under `subdir/`). Will tear down at recycle
+signal or on poke. v0.11.1 carryovers (-a-32 / -a-33 / -a-34 /
+-a-35) not retested this pass — last clean against v0.11.1 cut;
+v0.11.2 commits don't touch those areas. Spot-check next pass if
+you want them confirmed against the v0.11.2 binary.

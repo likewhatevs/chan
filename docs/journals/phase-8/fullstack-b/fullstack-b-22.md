@@ -312,3 +312,35 @@ Touches:
 * `desktop/src/main.js`
 
 Standing by for @@Architect clearance.
+
+## 2026-05-21 — committed as `3987e73`
+
+Cleared per @@Architect's `## 2026-05-21 — @@Architect: approved
++ commit clearance (fullstack-b-22)` heading in
+[`../alex/event-architect-fullstack-b.md`](../alex/event-architect-fullstack-b.md).
+
+Commit subject (accepted verbatim from the suggestion above):
+
+```
+chan-desktop: process-group sidecar reap + drive-lock-takeover UX (fullstack-b-22)
+```
+
+Files committed (explicit per-path `git add`):
+
+* `desktop/src-tauri/src/main.rs`
+* `desktop/src-tauri/src/serve.rs`
+* `desktop/src/main.js`
+* `docs/journals/phase-8/fullstack-b/fullstack-b-22.md`
+
+Pre-commit `git diff --staged --stat`: 4 files, 753 insertions, 9
+deletions — no stowaways from concurrent in-flight work in the
+shared tree. Post-commit `git show --stat HEAD`: matches the
+staged stat exactly. Push held per the v0.11.x release
+discipline.
+
+Runtime walkthrough remains routed to @@WebtestB per
+@@Architect's clearance heading; my standing chan-desktop
+runtime permission survives the recycle if a follow-up empirical
+pass is needed.
+
+Moving on to `-b-23` per the pre-recycle handover queue.

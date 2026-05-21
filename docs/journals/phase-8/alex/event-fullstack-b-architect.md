@@ -1230,3 +1230,232 @@ cuts `chan-v0.11.2`. Standing by for verdicts.
 
 See [../fullstack-b/fullstack-b-21.md](../fullstack-b/fullstack-b-21.md)
 for the full implementation note + verification table.
+
+## 2026-05-21 — poke (fullstack-b-22 ready for commit clearance)
+
+`-b-22` (chan-desktop orphan sidecar reap + lock-takeover UX)
+implementation landed locally; pre-push gate green; commit
+held pending your clearance. Working tree is clean for the
+three files I touched
+(`desktop/src-tauri/src/{main,serve}.rs` +
+`desktop/src/main.js`).
+
+### Shape
+
+Prevention (heavy invest, durable past phase-9):
+
+* Process group on spawn (`process_group(0)` Unix +
+  `CREATE_NEW_PROCESS_GROUP` Windows).
+* `stop_child` signals the **group** via `killpg`, not just
+  the leader PID — catches helper subprocesses too.
+* `impl Drop for AppState` calls `serve::stop_all` for the
+  panic-unwind path; bridges the gap when `RunEvent::Exit`
+  doesn't fire.
+
+Recovery (minimum-viable, per your phase-9 forward-look):
+
+* New `ServeFailedPayload.drive_lock_conflict: bool` set by
+  the reader thread when stderr matches chan-drive's
+  `DriveLocked` Display string.
+* SPA-side branch: `showServeFailed` reroutes into a
+  `promptDriveLockTakeover` dialog (`ask()` plugin, Reclaim
+  + Cancel buttons).
+* New `reclaim_drive_lock(path)` IPC: `ps`-scans for orphan
+  chan serve processes against the drive key, SIGTERM →
+  SIGKILL after a 1s grace, retries `serve::start`. Returns
+  `ReclaimResult { killed_pids, retry_succeeded, message }`.
+* Failure path renders a `pkill -f "chan serve <key>"`
+  copy-paste cleanup snippet rather than silently retrying.
+
+### Pre-push gate
+
+| Surface                                                                | State                                          |
+|------------------------------------------------------------------------|------------------------------------------------|
+| `cargo fmt --check`                                                    | Clean.                                         |
+| `cargo clippy --workspace --all-targets -- -D warnings`                | Clean.                                         |
+| `cargo test --workspace`                                               | All pass (chan-desktop 32 → 39, +7 new).       |
+| `cargo build --workspace --no-default-features`                        | Clean.                                         |
+| `web/` `npx svelte-check`                                              | 3987 / 0 errors / 0 warnings.                  |
+| `web/` `npm run build`                                                 | Clean.                                         |
+| `web/` `npx vitest run`                                                | 58 / 588 tests pass.                           |
+
+### Runtime walkthrough — flagged for @@WebtestB
+
+The task body's "verified: kill chan-desktop SIGTERM / SIGKILL /
+panic; confirm no orphan via `ps aux | grep chan`" criterion is
+explicitly the audit-trail walkthrough shape. Standing
+chan-desktop runtime permission lets me run it myself, but the
+canonical lane is @@WebtestB; my judgement is that fresh eyes on
+the dialog text + click cycle is more valuable than my own pass.
+Happy to run it myself on your say-so. Detailed walkthrough
+script is in the task's "Runtime verification" section.
+
+### No cross-lane touch
+
+* No `tauri.conf.json` edit (recovery is pure IPC + SPA dialog;
+  no new capability needed).
+* No chan-drive change (flock auto-releases on kill).
+* No @@Systacean cross-pollination materialised — the chan-drive
+  lock-takeover protocol primitive the task body flagged as a
+  possibility was not needed.
+* Touches confined to: `desktop/src-tauri/src/main.rs`,
+  `desktop/src-tauri/src/serve.rs`, `desktop/src/main.js`. None
+  of those are touched by @@FullStackA / @@CI / @@Systacean's
+  in-flight work in the current dirty tree.
+
+### Suggested commit subject
+
+```
+chan-desktop: process-group sidecar reap + drive-lock-takeover UX (fullstack-b-22)
+```
+
+### Hand-off
+
+Awaiting:
+1. Your clearance to commit (then I'll explicit-add the three
+   files only, `git diff --staged --stat` audit, commit, and
+   `git show --stat HEAD` post-audit).
+2. Routing on the runtime walkthrough — @@WebtestB lane or my
+   follow-up. Either is fine.
+
+See [../fullstack-b/fullstack-b-22.md](../fullstack-b/fullstack-b-22.md)
+for the full implementation note + verification table.
+
+## 2026-05-21 — poke (fullstack-b-22 committed; picking up -b-23)
+
+`-b-22` committed as `3987e73` "chan-desktop: process-group
+sidecar reap + drive-lock-takeover UX (fullstack-b-22)". 4 files,
+753 insertions / 9 deletions. Pre-commit `git diff --staged
+--stat` + post-commit `git show --stat HEAD` clean — no
+stowaways. Push held per release discipline.
+
+@@WebtestB lane retains the runtime walkthrough per your
+clearance heading; my standing chan-desktop runtime perm
+survives recycle if a follow-up empirical pass is needed.
+
+Picking up `-b-23` (port chan.app source into web-marketing/)
+per the pre-recycle handover queue. Will fire a permission event
+to @@Alex on the chan.app source location if I can't locate it
+in-tree.
+
+See [../fullstack-b/fullstack-b-22.md](../fullstack-b/fullstack-b-22.md)
+"2026-05-21 — committed as `3987e73`" for the post-commit audit
+trail.
+
+## 2026-05-21 — poke (fullstack-b-23 ready for commit clearance)
+
+`-b-23` (port chan.app source into `web-marketing/`)
+implementation landed locally; pre-push gate green; commit held
+pending your clearance.
+
+### Source located
+
+Confirmed with @@Alex via in-session question (local-only on
+their machine):
+`/Users/fiorix/dev/github.com/chan-writer/chan-prod-setup/etc/chan-site`.
+No need for a separate permission event after that.
+
+The chan.app source turned out to be **pure static HTML** —
+single `index.html` (all CSS + JS inline) plus PNGs and the
+two install scripts. No framework, no npm, no build step. Means
+the publishable artifact is the source tree itself; no `dist/`
+shape needed.
+
+### Shape
+
+* Ported 7 source files + 2 screenshot assets from `chan-site/`
+  into `web-marketing/` (`index.html`, `favicon.ico`,
+  `chan-mark.png`, `install.sh`, `install.ps1`, `assets/editor-*.png`).
+* Deliberately **not** ported: `site.nginx.conf` (legacy host
+  config; decommissions with the `systacean-N` DNS task per
+  round-2-plan's GitHub Pages decision).
+* Mirrored `web/public/qr-donate.png` into
+  `web-marketing/qr-donate.png` for the donation QR.
+* Added a dedicated **§support section** above the footer
+  containing the QR + a small caption pointing to
+  `mailto:hello@chan.app`. Chose this over a footer-cramped or
+  separate-page placement; rationale documented in the task
+  tail. ~12 lines of new CSS in the existing inline style block;
+  mobile-collapsing.
+* Added `web-marketing/README.md` (build + preview + deployment
+  docs) and `web-marketing/.gitignore` (forward-compat for
+  `node_modules/`, `dist/`, etc.).
+
+### Workspace boundary
+
+* No `Cargo.toml` in `web-marketing/`; root workspace `members`
+  is explicit (not glob), so cargo ignores the dir entirely.
+  Verified: `cargo test --workspace` clean post-port.
+* No `package.json` shared with `web/` either. Zero coupling.
+
+### Pre-push gate
+
+| Surface                                                 | State                                                |
+|---------------------------------------------------------|------------------------------------------------------|
+| `cargo fmt --check`                                     | Clean.                                               |
+| `cargo clippy --workspace --all-targets -- -D warnings` | Clean.                                               |
+| `cargo test --workspace`                                | All pass.                                            |
+| `cargo build --workspace --no-default-features`         | Clean.                                               |
+| `web/` `npx svelte-check`                               | 3987 / 0 / 0.                                        |
+| `web/` `npx vitest run`                                 | 58 / 588 tests pass.                                 |
+| `web/` `npm run build`                                  | Clean.                                               |
+| Local preview                                           | `python3 -m http.server` + curl smoke on key URLs.   |
+
+### Suggested commit subject
+
+```
+web-marketing: port chan.app static site source + donation QR section (fullstack-b-23)
+```
+
+Files (all NEW; explicit per-path `git add` plus the task file):
+
+```
+web-marketing/README.md
+web-marketing/.gitignore
+web-marketing/index.html
+web-marketing/favicon.ico
+web-marketing/chan-mark.png
+web-marketing/qr-donate.png
+web-marketing/install.sh
+web-marketing/install.ps1
+web-marketing/assets/editor-dark.png
+web-marketing/assets/editor-recipes.png
+docs/journals/phase-8/fullstack-b/fullstack-b-23.md
+```
+
+### Hand-off
+
+Awaiting your clearance to commit. Pure additive — no overlap
+with concurrent FullStackA / CI / Systacean / WebtestA / WebtestB
+work in the dirty tree.
+
+See [../fullstack-b/fullstack-b-23.md](../fullstack-b/fullstack-b-23.md)
+for the full implementation note + verification table +
+QR-placement rationale.
+
+## 2026-05-21 — poke (fullstack-b-23 committed; pre-recycle wrap)
+
+`-b-23` committed as `bc9e1f8` "web-marketing: port chan.app
+static site source + donation QR section (fullstack-b-23)".
+11 files, 944 insertions (pure additive, zero deletions).
+Pre-commit `git diff --staged --stat` + post-commit
+`git show --stat HEAD` clean. Push held per release discipline.
+
+This session's full landed set:
+
+| SHA       | Subject                                                                       |
+|-----------|-------------------------------------------------------------------------------|
+| `3987e73` | chan-desktop: process-group sidecar reap + drive-lock-takeover UX (fullstack-b-22) |
+| `bc9e1f8` | web-marketing: port chan.app static site source + donation QR section (fullstack-b-23) |
+
+Pre-recycle posture per your handover heading:
+
+* `-b-22` runtime walkthrough remains routed to @@WebtestB.
+* Standing chan-desktop runtime permission survives recycle
+  (recorded in [`../../../agents/bootstrap.md`](../../../agents/bootstrap.md)
+  §"Standing permissions").
+* No in-flight work in my queue; ready for recycle.
+
+See [../fullstack-b/fullstack-b-23.md](../fullstack-b/fullstack-b-23.md)
+"2026-05-21 — committed as `bc9e1f8`" for the post-commit audit
+trail.

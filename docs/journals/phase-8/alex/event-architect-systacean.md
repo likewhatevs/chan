@@ -1203,3 +1203,191 @@ poke already does the heavy lifting; this is just a
 clean session-close beat.
 
 See you next session, @@Systacean. Solid v0.11.2 cut.
+
+## 2026-05-21 — poke (smoke-test complete; wave-2 dispatch — systacean-14)
+
+A coordination smoke test fired earlier today between
+@@Architect + @@FullStackA + @@FullStackB surfaced a
+watcher-vs-journal shape gap; captured at
+[`../architect/watcher-vs-journal-shape.md`](../architect/watcher-vs-journal-shape.md)
+as wave-2/3 design work. Not your lane directly — flagged
+for awareness because it shares the watcher source file
+(`event_watcher.rs`) with your `-14` task.
+
+### Your task
+
+[`../systacean/systacean-14.md`](../systacean/systacean-14.md)
+— **Terminal watcher silent-wedge investigation + SerTab
+state reconciliation.**
+
+Filed today from @@WebtestB's `-b-13` walkthrough: events
+stop landing in the SPA mid-session even though the
+SerTab pill still shows "active"; first interaction
+surfaces `terminal watcher is not attached`. Two parts:
+diagnose the wedge (ingest channel saturation? task
+panic? fsnotify drop?) + reconcile SerTab pill state on
+serve restart.
+
+Adjacent to your `-9`/`-10` lineage on the watcher's
+ingest plumbing.
+
+### `-12` remains parked
+
+The tauri-plugin-updater verify (`-12`) stays parked on
+@@Alex's runtime-permission approval. The permission ask
+is in
+[`event-systacean-alex.md`](event-systacean-alex.md)
+2026-05-21; resume `-12` when @@Alex approves. `-14`
+proceeds in parallel; they're independent.
+
+### Coordination
+
+* Pre-push gate green before commit clearance.
+* Append "Commit readiness" + poke me when ready.
+
+## 2026-05-21 — poke (@@Alex granted -12 macOS dry-run permission — read safety rules before starting)
+
+@@Alex granted the runtime permission you fired in
+[`event-systacean-alex.md`](event-systacean-alex.md). The
+full transcribed approval is at the tail of that channel:
+"2026-05-21 — approved (transcribed by @@Architect)".
+
+### Read the safety constraints BEFORE starting
+
+@@Alex's working chan.app is alive on the workstation
+RIGHT NOW with a registered drive on the chan repo
+source path. The transcribed approval carries four hard
+operational rules:
+
+1. NEVER touch @@Alex's running chan.app.
+2. Process ownership by CAPTURE (PID at spawn), not
+   triage.
+3. Your dry-run must NOT open the chan repo source
+   drive — `--check-update-now` fires + exits without
+   any drive UI engagement.
+4. Background process discipline: capture the
+   http.server PID too.
+
+The @@WebtestB ci-8 dryrun.4 walkthrough incident (see
+[`event-architect-webtest-b.md`](event-architect-webtest-b.md)
+"Scope clarification") is the historical reference —
+same shape of risk, surfaced in a different lane. We do
+NOT want a repeat.
+
+### If anything surprises you, abort first
+
+If during the dry-run the dev chan-desktop process tries
+to auto-open a drive, or you spot a process you can't
+unambiguously attribute to your own spawn, **abort
+immediately**, restore the working tree, fire a
+permission event to @@Alex framing the surprise. We
+re-shape and re-fire; we do NOT improvise around the
+constraints.
+
+### Sequencing
+
+* Proceed with `-12` macOS dry-run + the 3 failure
+  modes per the task body's step 5+ plan.
+* Teardown per the transcribed approval's checklist.
+* Append findings + teardown audit to
+  [`../systacean/systacean-12.md`](../systacean/systacean-12.md)
+  tail under a fresh dated heading.
+* Poke me on completion or blocker.
+
+### `-14` remains in parallel
+
+Your other dispatched task `-14` (terminal watcher
+silent-wedge) is independent. Pick up either first;
+they don't gate on each other. If `-12` has any
+hold-state (waiting on a notary response, mid-iteration
+on a failure mode), `-14` is the natural parallel.
+
+## 2026-05-21 — @@Architect: approved + commit clearance (systacean-14) + status check on -12
+
+### -14 cleared
+
+Cleared for commit per your "investigation log + first patch round" append.
+
+* **Commit subject**: `chan-server: instrument event-watcher ingest path + SPA detach-on-409 reconcile (systacean-14)` (your suggested subject, accepted verbatim).
+* **Files**: `crates/chan-server/src/event_watcher.rs` + `web/src/components/TerminalTab.svelte` + `docs/journals/phase-8/systacean/systacean-14.md`. Explicit per-path `git add`; pre/post-commit audits as usual.
+* **Non-reproducibility verdict**: accepted. The instrumentation makes the next recurrence in-place-diagnosable; the SPA reconcile closes the visible "stale active pill" half. Right shape for a non-deterministic Heisenbug — instrument-and-wait beats guessing.
+* **`Modify(Metadata)` tracing-without-counter-bump**: thoughtful call. Avoids re-introducing the systacean-5 toast-spam regression while still surfacing the unhandled-kind branch in debug-level logs. Acked.
+
+Proceed with the commit.
+
+### -12 status check
+
+Your most recent outbound poke is `-14`-only; the `-12` macOS dry-run permission landed on 2026-05-21 with the four hard safety rules transcribed at the tail of [`event-systacean-alex.md`](event-systacean-alex.md). systacean-12.md's most recent dated heading is "Option C approved; steps 3-4 complete" — i.e. PRE-permission-grant.
+
+What's the `-12` state? Three possibilities I can think of:
+
+1. **Done but not yet logged** — the dry-run ran, just hasn't been written up. Surface a poke when it lands.
+2. **Queued behind -14** — you prioritised -14, will pick up -12 next. Fine; just confirm.
+3. **Hit a blocker on -12** — abort and re-fire a permission event per the "if anything surprises you, abort first" rule in my prior poke.
+
+Reply via the channel with which one (or shape that doesn't fit any of those). @@Alex's "everyone's done" came in just now — I'd like to reconcile your -12 state with that signal before reporting.
+
+@@Alex's chan.app is still alive on the workstation; the safety rules still apply when -12 picks up.
+
+## 2026-05-21 — PRE-RECYCLE HANDOVER (read on bootstrap)
+
+@@Alex is recycling all working sessions via the
+bootstrap prompt.
+
+### Cleared work in working tree (commit on bootstrap FIRST)
+
+`systacean-14` cleared 2026-05-21 — see the
+`## 2026-05-21 — @@Architect: approved + commit
+clearance (systacean-14)` heading above. Files
+(`crates/chan-server/src/event_watcher.rs`,
+`web/src/components/TerminalTab.svelte`, `systacean-14.md`)
++ explicit per-path `git add`; pre/post-commit audits.
+
+### Queued tasks (pickup in numeric order after the commit)
+
+1. `-15.md` — chan-report cross-directory aggregation
+   feature. Prereq for graph G3.
+2. `-16.md` — chan-report file-classification buckets
+   (markdown / source / binary / media). Prereq for
+   graph G6 + G7/G8.
+
+Both extend the chan-report crate; can run in either
+order. Full design context at
+[`../architect/graph-overhaul-plan.md`](../architect/graph-overhaul-plan.md)
+§"Cross-cutting prereqs".
+
+### `-12` permission DOES NOT survive recycle
+
+Your prior session received a runtime permission for
+the `-12` tauri-plugin-updater macOS dry-run, granted
+with safety constraints ("@@Alex's chan.app alive
+RIGHT NOW on the workstation"). The dry-run was NOT
+executed before recycle (your most recent outbound
+poke is `-14`-only). Since the permission was
+session-scoped + time-specific:
+
+* **DO NOT proceed with `-12` on the assumption the
+  prior permission still holds.**
+* Fire a FRESH permission event to @@Alex via
+  [`event-systacean-alex.md`](event-systacean-alex.md)
+  on bootstrap if you intend to pick up `-12`. Include
+  the same scope + teardown shape as before; @@Alex
+  re-confirms or denies based on the current
+  chan.app state.
+
+If @@Alex hasn't responded by the time `-14`+`-15`+`-16`
+finish, `-12` parks until they do.
+
+### When you commit
+
+Append a `## YYYY-MM-DD — committed as <sha>` line to
+each task tail + a follow-up poke in your outbound
+channel. Then pick up the next queued task.
+
+### Recycle continuity
+
+The current @@Architect session is LAST to recycle. By
+the time you bootstrap, the architect should also be
+fresh. Reads include the architect prep entry in
+[`../architect/journal.md`](../architect/journal.md)
+"2026-05-21 — Pre-recycle prep complete".
