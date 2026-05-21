@@ -952,7 +952,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "requires BGE-small embedding model on disk; drive.index_file() / apply_watch_change panic without it. Run with `cargo test -- --ignored` on a workstation with the model cached. systacean-19 will revert this gate (see systacean-18 follow-up #4)"]
     fn apply_watch_change_indexes_regular_file() {
         let (_cfg, dir, drive) = setup_drive();
         fs::write(dir.path().join("a.md"), "# A\n\nbody\n").unwrap();
@@ -961,7 +960,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "requires BGE-small embedding model on disk; drive.index_file() / apply_watch_change panic without it. Run with `cargo test -- --ignored` on a workstation with the model cached. systacean-19 will revert this gate (see systacean-18 follow-up #4)"]
     fn create_event_admits_new_indexable_file_into_bm25() {
         let (_cfg, dir, drive) = setup_drive();
         fs::write(
@@ -1067,7 +1065,6 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
-    #[ignore = "requires BGE-small embedding model on disk; drive.index_file() / apply_watch_change panic without it. Run with `cargo test -- --ignored` on a workstation with the model cached. systacean-19 will revert this gate (see systacean-18 follow-up #4)"]
     fn apply_watch_change_special_clears_prior_index_entry() {
         // Regression: if a user replaces a regular .md with a symlink
         // of the same name, the apply path should clean out the old

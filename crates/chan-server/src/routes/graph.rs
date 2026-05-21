@@ -1296,7 +1296,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "requires BGE-small embedding model on disk; drive.index_file() panics without it. Run with `cargo test -- --ignored` on a workstation with the model cached. systacean-19 will revert this gate (see systacean-18 follow-up #4)"]
     fn link_to_non_markdown_disk_file_resolves_to_real_file() {
         // Regression for systacean-2: a markdown file linking to a
         // non-graph regular file (LICENSE, src/lib.rs, ...) was being
@@ -1379,7 +1378,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "requires BGE-small embedding model on disk; drive.index_file() panics without it. Run with `cargo test -- --ignored` on a workstation with the model cached. systacean-19 will revert this gate (see systacean-18 follow-up #4)"]
     fn link_to_directory_does_not_synthesize_ghost_file_node() {
         // Regression for systacean-4: a markdown link whose target is
         // a directory (e.g. `[notes](../alex/)` from a phase journal)
@@ -1467,7 +1465,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "requires BGE-small embedding model on disk; drive.index_file() panics without it. Run with `cargo test -- --ignored` on a workstation with the model cached. systacean-19 will revert this gate (see systacean-18 follow-up #4)"]
     fn merged_graph_layers_emit_filesystem_media_and_language_nodes() {
         let (_cfg, root, drive) = open_drive();
         put(root.path(), "notes/a.md", b"# A\n\n[[notes/b.md]]\n#tag\n");

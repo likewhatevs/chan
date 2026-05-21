@@ -271,7 +271,6 @@ fn imported_contacts_are_reachable_by_email_substring_via_picker_filter() {
 }
 
 #[test]
-#[ignore = "requires BGE-small embedding model on disk; run with `cargo test -- --ignored` on a workstation with the model cached (see systacean-18 follow-up: integration-test BGE panic surfaced on systacean-18-smoke run 26237942440)"]
 fn removing_contact_frontmatter_demotes_node_back_to_file() {
     // If a user edits a contact note and strips the chan.kind
     // frontmatter, the next index pass should drop it from

@@ -1819,3 +1819,77 @@ After routing on this:
 3. `-16` after `-19` if bandwidth.
 
 Standing by for routing.
+
+## 2026-05-21 — poke (-19 implementation complete; ready for clearance + smoke branch)
+
+Acked the @@Alex scope decision (Windows out of CI per `ci-13`; my `-20` gates stay as documentation). Picked up `-19` per the queue. Implementation complete + workspace gate fully green.
+
+### What landed in chan-drive/src/index/facade.rs
+
+* **`warn_bm25_only_once()`** free function: `std::sync::Once`-guarded `tracing::warn!`. Fires once per process with "Embedding model not downloaded; falling back to BM25-only keyword search. Run `chan index download-model` to enable semantic search (or rebuild with `--features embed-model`)."
+* **`Index::handle_embed_load_error`** associated function: single discriminator. `ModelNotDownloaded` → log once + return Ok; other errors propagate.
+* **`write_file`** (per-file embed chokepoint): match-discriminator on `self.embedder()`. ModelNotDownloaded routes through `handle_embed_load_error`; vector commit skipped; BM25 commit continues.
+* **`flush_embed_batch`** (bulk reindex's vector batch): same discriminator. `pending.drain(..)` + `Ok(empty errors)` so summary.errors stays clean. (BM25 indexing in `build_all` runs in the per-file loop BEFORE `flush_embed_batch`, so BM25 is already committed when the vector batch flushes.)
+* **2 new unit tests**: direct coverage for `handle_embed_load_error` with synthetic ModelNotDownloaded + Candle errors (workstation has model cached so the end-to-end fallback can never naturally trip in `cargo test`).
+
+### 28 `#[ignore]` gates reverted
+
+* chan-drive lib: 14 (drive.rs `-12` + indexer.rs `-2`).
+* chan-drive integration: 5 (contacts_import + file_types + smoke `-1` each + remove_cleanup `-2`).
+* chan-server lib: 9 (indexer.rs `-3` + routes/graph.rs `-3` + routes/inspector.rs `-1` + routes/search.rs `-2`).
+
+Bulk revert via sed pattern `^[[:space:]]*#\[ignore = "requires BGE-small`. Verified 0 remaining matches; pre-revert count was 28.
+
+### Local gate
+
+* chan-drive lib: **425 passed; 0 failed; 2 ignored** (was 411 / 16 pre-revert; the 14 reverted now run + pass).
+* chan-server lib: **205 passed; 0 failed; 0 ignored** (was 196 / 9; 9 reverted run + pass).
+* chan-drive integration binaries: all green; 5 reverted tests run + pass.
+* Workspace `cargo test`: all green.
+* `cargo fmt --check` + `cargo clippy --all-targets -- -D warnings` + `RUSTFLAGS="-D warnings" cargo build --no-default-features`: all clean.
+* `cd web && npm run check` (0e/0w/3991) + `npm test -- --run` (658/658).
+
+### Suggested commit subject
+
+```
+chan-drive: graceful BM25-only fallback when BGE model not present + revert 28 #[ignore] gates (systacean-19)
+```
+
+### Diff stat
+
+```
+crates/chan-drive/src/index/facade.rs            +108  / -6
+crates/chan-drive/src/drive.rs                     0  / -12
+crates/chan-drive/src/indexer.rs                   0  / -2
+crates/chan-drive/tests/contacts_import.rs         0  / -1
+crates/chan-drive/tests/file_types.rs              0  / -1
+crates/chan-drive/tests/smoke.rs                   0  / -1
+crates/chan-drive/tests/remove_cleanup.rs          0  / -2
+crates/chan-server/src/indexer.rs                  0  / -3
+crates/chan-server/src/routes/graph.rs             0  / -3
+crates/chan-server/src/routes/inspector.rs         0  / -1
+crates/chan-server/src/routes/search.rs            0  / -2
+docs/journals/phase-8/systacean/systacean-19.md  (task tail append)
+docs/journals/phase-8/alex/event-systacean-architect.md  (this poke)
+```
+
+13 paths. Foreign files in dirty tree stay un-staged per shared-worktree discipline.
+
+### Smoke ask
+
+Authorize a fresh `systacean-19-smoke` branch (new lifecycle; `-19` is its own gate-unblocker confirmation, distinct from the `-18-smoke` chain that closed out under @@Alex's Windows-out-of-CI decision)? Expected:
+
+* Ubuntu cargo test fully green — the fallback path lets all previously-gated tests run + pass on the model-less CI runner. End-to-end validation that C2 works.
+* macOS green (workstation has model; fallback never triggers; behavior unchanged).
+* No Windows job per the matrix change.
+* web + build-no-default-features + rustfmt green.
+
+If the smoke comes back green, `-19` is structurally complete; coverage restored across the workspace; opt-in BGE architecture from `systacean-6`/`-7` aligned with runtime degradation here.
+
+Per the prior obvious-call shortcut pattern: I'd push the commit on main + fastforward to the smoke branch + dispatch CI in one beat once cleared.
+
+### After -19 lands + smoke greens
+
+Pick up `-16` (chan-report file-classification buckets). Scope question still TBD on whether chan-report's "which files we track" boundary extends to binary+media (fire scope poke before implementation).
+
+Holding for clearance + smoke-branch authorization.

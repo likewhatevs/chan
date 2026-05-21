@@ -82,6 +82,18 @@
     missing: boolean;
     isFocal: boolean;
     radius: number;
+    /// `fullstack-a-49` (G2): filesystem-hierarchy spine. `depth`
+    /// is the path-segment count from the drive root (drive root
+    /// = 0, top-level dirs / root files = 1, nested = 2+). Non-
+    /// hierarchical nodes (tag / mention / language) get depth =
+    /// -1 and are exempt from the depth-based forceY anchor —
+    /// they continue to float on the existing center force.
+    /// `parentId` is the id of the parent directory node (the
+    /// drive-root marker is "" per chan-server's
+    /// `directory_node_id("")`); `null` for the drive root or
+    /// for non-hierarchical nodes.
+    depth: number;
+    parentId: string | null;
     // d3-force mutates these in-place; declared optional so the
     // first tick can initialise them.
     index?: number;
@@ -113,6 +125,11 @@
   /// d3-force tuning. Values mirror the d3-compare demo defaults so
   /// the cutover lands in the same regime the user has already been
   /// looking at; tweak here, not in the per-call layout configs.
+  /// `fullstack-a-49` (G2): added `hierarchyYSpacing` +
+  /// `hierarchyYStrength` for the filesystem-spine forceY +
+  /// `parentXStrength` for the parent-anchored forceX so each file
+  /// node sits below its directory and siblings cluster horizontally
+  /// under the same parent.
   const FORCE = {
     chargeStrength: -120,
     linkDistance: 70,
@@ -121,6 +138,9 @@
     collidePad: 2,
     velocityDecay: 0.55,
     centerStrength: 0.04,
+    hierarchyYSpacing: 90,
+    hierarchyYStrength: 0.45,
+    parentXStrength: 0.18,
   };
 
   /// Stroke ring colour for non-missing nodes. Reads from the page
@@ -376,6 +396,49 @@
   /// DNodes when ids match (preserves position + velocity through a
   /// scope/depth tick); creates fresh ones for newly-visible ids and
   /// drops any whose id left the visible set.
+  /// `fullstack-a-49` (G2): derive a node's filesystem depth +
+  /// parent-directory id from its kind + path. Drive root (folder
+  /// id "") sits at depth 0; top-level files / directories at
+  /// depth 1; nested at depth = parent depth + 1. Non-hierarchical
+  /// node kinds (tag / mention / language) return `depth: -1` so
+  /// the layout forces skip them — those nodes float on the
+  /// existing center force without a depth anchor.
+  function nodeHierarchy(n: RenderedNode): {
+    depth: number;
+    parentId: string | null;
+  } {
+    if (n.kind === "tag" || n.kind === "mention" || n.kind === "language") {
+      return { depth: -1, parentId: null };
+    }
+    if (n.kind === "folder") {
+      // Drive root marker emitted by chan-server as
+      // `directory_node_id("")` → id "". Sits at depth 0 with no
+      // parent.
+      if (n.id === "" || n.path === "") {
+        return { depth: 0, parentId: null };
+      }
+      const segs = n.path.split("/").filter((s) => s.length > 0);
+      const depth = segs.length;
+      const parentSegs = segs.slice(0, -1);
+      const parentPath = parentSegs.join("/");
+      const parentId = parentPath === ""
+        ? ""
+        : `directory:${parentPath}`;
+      return { depth, parentId };
+    }
+    // File / media node: depth = directory depth + 1; parent is
+    // the directory node id at the path-without-basename.
+    const filePath = n.path ?? "";
+    const segs = filePath.split("/").filter((s) => s.length > 0);
+    const parentSegs = segs.slice(0, -1);
+    const depth = segs.length;
+    const parentPath = parentSegs.join("/");
+    const parentId = parentPath === ""
+      ? ""
+      : `directory:${parentPath}`;
+    return { depth, parentId };
+  }
+
   function rebuildWorkingSet(): { added: DNode[]; removed: DNode[] } {
     const newById = new Map<string, DNode>();
     const added: DNode[] = [];
@@ -394,17 +457,20 @@
       const missing = n.kind === "file" && Boolean(n.missing);
       const isFocal = focalSet.has(n.id);
       const radius = renderRadius(kind, n.id);
+      const { depth, parentId } = nodeHierarchy(n);
       if (existing) {
         existing.label = n.label;
         existing.kind = kind;
         existing.missing = missing;
         existing.isFocal = isFocal;
         existing.radius = radius;
+        existing.depth = depth;
+        existing.parentId = parentId;
         newById.set(n.id, existing);
       } else {
         const fresh: DNode = {
           id: n.id, label: n.label, kind, missing,
-          isFocal, radius,
+          isFocal, radius, depth, parentId,
         };
         newById.set(n.id, fresh);
         added.push(fresh);
@@ -515,7 +581,31 @@
         forceCollide<DNode>().radius((d) => d.radius + FORCE.collidePad),
       )
       .force("x", forceX<DNode>(0).strength(FORCE.centerStrength))
-      .force("y", forceY<DNode>(0).strength(FORCE.centerStrength))
+      // `fullstack-a-49` (G2) filesystem-hierarchy spine:
+      //   * Hierarchical nodes (file / folder / media) get a
+      //     depth-anchored forceY pulling each toward
+      //     `depth * hierarchyYSpacing` so the layout reads
+      //     top-to-bottom as drive-root → top-level dirs → nested
+      //     dirs → files. Non-hierarchical nodes (tag / mention /
+      //     language; depth = -1) keep the existing weak center
+      //     force.
+      //   * A custom parent-anchored forceX pulls each
+      //     hierarchical node toward its parent directory's X
+      //     position, so siblings under the same parent cluster
+      //     together. The existing `contains` edges stay in the
+      //     link force; the parent-X anchor reinforces the
+      //     hierarchy without removing the link spring's
+      //     contribution.
+      .force(
+        "y",
+        forceY<DNode>((d) => {
+          if (d.depth < 0) return 0;
+          return d.depth * FORCE.hierarchyYSpacing;
+        }).strength((d) =>
+          d.depth < 0 ? FORCE.centerStrength : FORCE.hierarchyYStrength,
+        ),
+      )
+      .force("parentX", parentXForce(FORCE.parentXStrength))
       .velocityDecay(FORCE.velocityDecay)
       .alpha(1)
       .alphaTarget(0)
@@ -523,6 +613,31 @@
       // just needs to mutate positions. No-op on tick keeps us from
       // doing per-tick work twice (rAF + tick callback).
       .on("tick", () => {});
+  }
+
+  /// `fullstack-a-49` (G2): parent-anchored X force. Each
+  /// hierarchical node (depth >= 0) with a known parent gets
+  /// pulled toward its parent's current X position. The pull is
+  /// proportional to `strength * alpha` so the simulation
+  /// converges as alpha decays. Non-hierarchical nodes + nodes
+  /// whose parent is missing from the working set are skipped.
+  function parentXForce(strength: number) {
+    let initialized: DNode[] = [];
+    function force(alpha: number) {
+      for (const node of initialized) {
+        if (node.depth < 0) continue;
+        if (node.parentId === null) continue;
+        const parent = nodeById.get(node.parentId);
+        if (!parent || parent.x == null) continue;
+        const nodeX = node.x ?? 0;
+        const dx = parent.x - nodeX;
+        node.vx = (node.vx ?? 0) + dx * strength * alpha;
+      }
+    }
+    force.initialize = (n: DNode[]) => {
+      initialized = n;
+    };
+    return force;
   }
 
   /// Re-warm with a fresh `dNodes` / `dEdges` set without

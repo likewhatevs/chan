@@ -254,3 +254,96 @@ it as feature work.
   going with C2 instead because it fixes user experience).
 * A pre-fetch model in CI shape (option (c) from @@CI's
   original ci-12 analysis — declined long ago).
+
+## 2026-05-21 — implementation + commit readiness
+
+C2 graceful degradation landed at the per-file embed chokepoint + the bulk-reindex batch path. All 28 BGE `#[ignore]` gates reverted. Workspace tests green; unit coverage added for the new fallback discriminator.
+
+### Changes
+
+* **`crates/chan-drive/src/index/facade.rs`** (+108 / -6):
+  * New free function `warn_bm25_only_once()` — `std::sync::Once`-guarded `tracing::warn!`; fires once per process lifetime with a clear "BGE not downloaded; falling back to BM25-only; run `chan index download-model` to enable semantic search" message. Avoids log spam on bulk reindex where every file would otherwise trip the warning.
+  * New associated function `Index::handle_embed_load_error(e) -> Result<(), IndexError>` — single discriminator. `Err(IndexError::Embed(EmbedError::ModelNotDownloaded { .. }))` → log once + return Ok (caller skips vector commit, falls through to BM25). Any other error variant propagates as `Err(e)`.
+  * `write_file` (per-file path used by `index_one` watcher + bulk reindex): match-discriminator on `self.embedder()`. ModelNotDownloaded routes through `handle_embed_load_error`; other errors propagate via the `?`-shape that was there before.
+  * `flush_embed_batch` (bulk reindex's vector-batch optimization): same discriminator. ModelNotDownloaded → `warn_bm25_only_once()` + `pending.drain(..)` + `Ok(empty errors)`. The BM25 indexing in `build_all` happens BEFORE `flush_embed_batch` in the loop (line ~468 `self.bm25.index_chunks`), so dropping the vector batch leaves BM25 correct + `summary.errors` stays clean.
+  * 2 new unit tests in `mod tests` directly exercising `handle_embed_load_error` with synthetic `ModelNotDownloaded` + `Candle("synthetic")` errors. Workstation has the BGE model cached so the end-to-end fallback path can never naturally trip in `cargo test`; the unit tests give the discriminator direct coverage regardless of model presence.
+
+* **All 28 `#[ignore]` gates reverted**:
+  * `crates/chan-drive/src/drive.rs` (-12 lines): `reindex_consumes_pending_rename_log_after_reopen`, `pending_writes_journal_is_empty_on_a_clean_path`, `pending_writes_journal_replay_converges_after_simulated_crash`, `pending_writes_replay_degrades_index_op_to_forget_when_file_is_gone`, `pending_writes_journal_handles_forget_op`, `reconcile_picks_up_files_added_offline`, `reconcile_picks_up_modified_files`, `reconcile_catches_same_mtime_different_size_rewrite`, `index_file_stamps_pre_read_stat_so_concurrent_writes_stay_visible`, `reconcile_on_empty_graph_indexes_everything_like_a_fresh_reindex`, `link_targets_finds_file_after_index`, `resolve_link_returns_contact_kind_for_contact_node`, `resolve_link_returns_file_kind_for_plain_note`.
+  * `crates/chan-drive/src/indexer.rs` (-2 lines): `writes_to_disk_get_indexed_after_debounce`, `debounce_coalesces_rapid_writes_into_one_index`.
+  * `crates/chan-drive/tests/contacts_import.rs` (-1): `removing_contact_frontmatter_demotes_node_back_to_file`.
+  * `crates/chan-drive/tests/file_types.rs` (-1): `file_type_policy_end_to_end`.
+  * `crates/chan-drive/tests/smoke.rs` (-1): `end_to_end_register_open_write_index_search_graph`.
+  * `crates/chan-drive/tests/remove_cleanup.rs` (-2): `remove_single_file_drops_graph_and_index`, `remove_directory_cascades_through_graph_and_index`.
+  * `crates/chan-server/src/indexer.rs` (-3): `apply_watch_change_indexes_regular_file`, `create_event_admits_new_indexable_file_into_bm25`, `apply_watch_change_special_clears_prior_index_entry`.
+  * `crates/chan-server/src/routes/graph.rs` (-3): `link_to_non_markdown_disk_file_resolves_to_real_file`, `link_to_directory_does_not_synthesize_ghost_file_node`, `merged_graph_layers_emit_filesystem_media_and_language_nodes`.
+  * `crates/chan-server/src/routes/inspector.rs` (-1): `inspector_payload_covers_drive_directory_text_and_binary`.
+  * `crates/chan-server/src/routes/search.rs` (-2): `indexing_state_endpoint_requires_auth`, `indexing_state_endpoint_returns_dir_nodes`.
+
+  Total revert: 28 lines (14 chan-drive lib + 5 chan-drive integration + 9 chan-server lib).
+
+### Local verification
+
+* `cargo test -p chan-drive`: **425 passed; 0 failed; 2 ignored** (was 411 passed / 16 ignored pre-revert; 14 newly-ungated tests now run + pass with the model loaded on workstation).
+* `cargo test -p chan-server`: **205 passed; 0 failed; 0 ignored** (was 196 / 9 pre-revert; 9 newly-ungated tests now run + pass).
+* `cargo test` (workspace): all green, no FAILED anywhere.
+* `cargo fmt --check`: clean.
+* `cargo clippy --all-targets -- -D warnings`: clean.
+* `RUSTFLAGS="-D warnings" cargo build --no-default-features`: green.
+* `cd web && npm run check`: 0 errors / 0 warnings / 3991 files.
+* `cd web && npm test -- --run`: 658 / 658 passed.
+
+### Verification of the fallback path
+
+Workstation has BGE cached at `~/.cache/chan/models/...` so the unit tests with synthetic errors are the load-bearing fallback-path coverage on this host. End-to-end fallback validation will happen on the CI smoke (Ubuntu runner has no model cached; if all previously-gated tests pass, the fallback path is exercised end-to-end with no panics).
+
+### Architecture aligns with systacean-6 / -7
+
+* `systacean-6`: BGE bundle opt-in via `embed-model` cargo feature; default builds don't ship the bytes.
+* `systacean-7`: `chan index download-model` CLI + `/api/index/semantic/*` endpoints; user-driven model download.
+* **`systacean-19` (this task)**: graceful runtime fallback when the model isn't on disk. The default-build install path (no `embed-model` + no prior download) now works: BM25 keyword search out of the box; `chan index download-model` upgrades to hybrid retroactively.
+
+The 3 pieces together = consistent opt-in semantic-search architecture across build-time, runtime CLI, and runtime fallback.
+
+### Suggested commit subject
+
+```
+chan-drive: graceful BM25-only fallback when BGE model not present + revert 28 #[ignore] gates (systacean-19)
+```
+
+### Files for commit
+
+```
+crates/chan-drive/src/index/facade.rs            +108 / -6   (C2 impl + 2 unit tests)
+crates/chan-drive/src/drive.rs                   0    / -12  (revert lib gates)
+crates/chan-drive/src/indexer.rs                 0    / -2   (revert lib gates)
+crates/chan-drive/tests/contacts_import.rs       0    / -1   (revert integration gate)
+crates/chan-drive/tests/file_types.rs            0    / -1   (revert integration gate)
+crates/chan-drive/tests/smoke.rs                 0    / -1   (revert integration gate)
+crates/chan-drive/tests/remove_cleanup.rs        0    / -2   (revert integration gates)
+crates/chan-server/src/indexer.rs                0    / -3   (revert chan-server gates)
+crates/chan-server/src/routes/graph.rs           0    / -3   (revert chan-server gates)
+crates/chan-server/src/routes/inspector.rs       0    / -1   (revert chan-server gate)
+crates/chan-server/src/routes/search.rs          0    / -2   (revert chan-server gates)
+docs/journals/phase-8/systacean/systacean-19.md  (this append)
+docs/journals/phase-8/alex/event-systacean-architect.md  (outbound poke)
+```
+
+13 paths total. Foreign files in dirty tree stay un-staged per shared-worktree discipline.
+
+### Smoke verification ask
+
+Push to `systacean-19-smoke` branch (new branch; tracks `-19` as its own gate-unblocker confirmation) + `gh workflow run ci.yml --ref systacean-19-smoke`. Expected:
+
+* **Ubuntu cargo test fully green** without the 28 `#[ignore]` gates: the fallback path lets all previously-gated tests run + pass on the model-less CI runner.
+* **macOS cargo test fully green**: workstation has model cached; no change in behavior (the fallback never triggers).
+* **Windows**: not in the matrix anymore per @@Alex's CI decision (`ci-13`).
+* **web + rustfmt + build-no-default-features**: green.
+
+If the smoke surfaces ANY failure other than known fullstack-b-24 / fullstack-a-N follow-ups already routed, escalate via scope poke per the prior discipline.
+
+### Round-3 follow-up flags (out of scope here)
+
+* The remaining 3 `#[cfg(unix)]` gates from `-20` (lock contract) + 1 from smoke #2 fixup (`watcher_keeps_report_current` + its helpers) STAY. They document Windows gaps independent of BGE; Round-3 polish for the real cross-platform fixes when Windows becomes a real-user surface again.
+
+Holding for @@Architect commit clearance + smoke-branch authorization. Same shape as the prior cleared smokes.

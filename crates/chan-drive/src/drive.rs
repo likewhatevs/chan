@@ -3369,7 +3369,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "requires BGE-small embedding model on disk; run with `cargo test -- --ignored` on a workstation with the model cached (see systacean-18)"]
     fn pending_writes_journal_is_empty_on_a_clean_path() {
         // A successful index_file must leave no trace in the
         // journal: enter -> record -> graph -> index -> clear.
@@ -3424,7 +3423,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "requires BGE-small embedding model on disk; run with `cargo test -- --ignored` on a workstation with the model cached (see systacean-18)"]
     fn pending_writes_journal_replay_converges_after_simulated_crash() {
         // Simulate the crash window: a journal entry is left behind
         // as if index_file had committed graph but died before the
@@ -3482,7 +3480,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "requires BGE-small embedding model on disk; run with `cargo test -- --ignored` on a workstation with the model cached (see systacean-18)"]
     fn pending_writes_replay_degrades_index_op_to_forget_when_file_is_gone() {
         // index_file was journaled before the crash, but between
         // the crash and the replay the user deleted the file from
@@ -3529,7 +3526,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "requires BGE-small embedding model on disk; run with `cargo test -- --ignored` on a workstation with the model cached (see systacean-18)"]
     fn pending_writes_journal_handles_forget_op() {
         // Symmetric to the index_op replay test: a forget_file
         // call that crashed mid-flight has its journal entry
@@ -3590,7 +3586,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "requires BGE-small embedding model on disk; run with `cargo test -- --ignored` on a workstation with the model cached (see systacean-18)"]
     fn reconcile_picks_up_files_added_offline() {
         // Simulate "user added files while the watcher was down":
         // the graph snapshot is missing entries that exist on disk.
@@ -3664,7 +3659,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "requires BGE-small embedding model on disk; run with `cargo test -- --ignored` on a workstation with the model cached (see systacean-18)"]
     fn reconcile_picks_up_modified_files() {
         // A file's mtime changed since the last index but the
         // watcher missed the modify event. Reconcile detects the
@@ -3714,7 +3708,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "requires BGE-small embedding model on disk; run with `cargo test -- --ignored` on a workstation with the model cached (see systacean-18)"]
     fn reconcile_catches_same_mtime_different_size_rewrite() {
         // Regression for the same-mtime-different-content gap that
         // PR9's size column closes. We forcibly stamp the graph's
@@ -3777,7 +3770,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "requires BGE-small embedding model on disk; run with `cargo test -- --ignored` on a workstation with the model cached (see systacean-18)"]
     fn index_file_stamps_pre_read_stat_so_concurrent_writes_stay_visible() {
         // TOCTOU between `stat` and `read_text` inside
         // `index_file_inner`. We use a test-only thread-local hook
@@ -3854,7 +3846,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "requires BGE-small embedding model on disk; run with `cargo test -- --ignored` on a workstation with the model cached (see systacean-18)"]
     fn reconcile_on_empty_graph_indexes_everything_like_a_fresh_reindex() {
         // Edge case: graph is empty (fresh drive, or after a
         // reset_drive). Reconcile sees every disk file as "new"
@@ -4684,7 +4675,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "requires BGE-small embedding model on disk; run with `cargo test -- --ignored` on a workstation with the model cached (see systacean-18)"]
     fn link_targets_finds_file_after_index() {
         let (_cfg, _root, drive) = fixture();
         drive
@@ -4832,7 +4822,6 @@ mod tests {
     /// matches what the picker put in the graph. This is the path
     /// that drives the editor's kind-aware pill rendering.
     #[test]
-    #[ignore = "requires BGE-small embedding model on disk; run with `cargo test -- --ignored` on a workstation with the model cached (see systacean-18)"]
     fn resolve_link_returns_contact_kind_for_contact_node() {
         let (_cfg, root, drive) = link_fixture();
         std::fs::create_dir_all(root.path().join("Contacts")).unwrap();
@@ -4848,7 +4837,6 @@ mod tests {
     /// resolve_link to confirm the kind reflects the indexed value
     /// (not a constant default).
     #[test]
-    #[ignore = "requires BGE-small embedding model on disk; run with `cargo test -- --ignored` on a workstation with the model cached (see systacean-18)"]
     fn resolve_link_returns_file_kind_for_plain_note() {
         let (_cfg, _root, drive) = link_fixture();
         drive.index_file("recipes/pasta.md").unwrap();

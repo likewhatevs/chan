@@ -8,6 +8,8 @@
 
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
+#[cfg(feature = "embeddings")]
+use std::sync::Once;
 use std::sync::{Arc, Mutex};
 
 use serde::{Deserialize, Serialize};
@@ -25,6 +27,30 @@ use super::vectors;
 use super::vectors::{VectorError, VectorStore};
 use crate::error::ChanError;
 use crate::fs_ops::{self, WalkFilter};
+
+/// systacean-19: emit a one-shot `tracing::warn!` when chan-drive
+/// falls back to BM25-only because the BGE embedding model isn't
+/// downloaded. The fallback path runs in `write_file` +
+/// `flush_embed_batch`; both share the same warning so the user
+/// only sees one log line per process lifetime regardless of how
+/// many files trigger the fallback (a bulk reindex would
+/// otherwise spam the log with hundreds of identical warnings).
+///
+/// Aligns with the systacean-6 / -7 opt-in architecture: default
+/// builds ship without the model bundled; users get working BM25
+/// keyword search out of the box; `chan index download-model`
+/// upgrades them to hybrid semantic+BM25 retrieval.
+#[cfg(feature = "embeddings")]
+fn warn_bm25_only_once() {
+    static WARNED: Once = Once::new();
+    WARNED.call_once(|| {
+        tracing::warn!(
+            "Embedding model not downloaded; falling back to BM25-only \
+             keyword search. Run `chan index download-model` to enable \
+             semantic search (or rebuild with `--features embed-model`)."
+        );
+    });
+}
 
 #[derive(Debug, Error)]
 pub enum IndexError {
@@ -332,6 +358,25 @@ impl Index {
         let e = Arc::new(Embedder::open(&model_id, &cache_dir)?);
         *guard = Some(Arc::clone(&e));
         Ok(e)
+    }
+
+    /// systacean-19: classify an embed-step error as "the model
+    /// isn't downloaded, fall back to BM25-only" vs "something
+    /// else, propagate". Single-shot `tracing::warn!` so the log
+    /// doesn't spam on every per-file embed in a bulk reindex.
+    ///
+    /// Returns `Ok(())` for the fallback path (caller skips the
+    /// vector commit + continues to BM25); returns `Err(e)` for
+    /// any other error shape (caller propagates as before).
+    #[cfg(feature = "embeddings")]
+    fn handle_embed_load_error(e: IndexError) -> Result<(), IndexError> {
+        match e {
+            IndexError::Embed(EmbedError::ModelNotDownloaded { .. }) => {
+                warn_bm25_only_once();
+                Ok(())
+            }
+            other => Err(other),
+        }
     }
 
     /// Walk the drive and re-index everything from scratch. If
@@ -672,8 +717,22 @@ impl Index {
         if pending.is_empty() {
             return Ok(errors);
         }
+        // systacean-19: discriminator on the embed-step error.
+        // ModelNotDownloaded → log once, drop the pending batch
+        // (vectors get skipped) but don't poison every queued
+        // file with a per-file error in `errors`. The bulk reindex
+        // path already commits BM25 separately + earlier in the
+        // loop (line ~468 self.bm25.index_chunks), so dropping
+        // the vector commit leaves the BM25 index correct +
+        // searchable. summary.errors stays clean, matching the
+        // default-build invariant after this fix lands.
         let embedder = match self.embedder() {
             Ok(e) => e,
+            Err(IndexError::Embed(EmbedError::ModelNotDownloaded { .. })) => {
+                warn_bm25_only_once();
+                pending.drain(..);
+                return Ok(errors);
+            }
             Err(e) => {
                 let msg = e.to_string();
                 for (rel, _) in pending.drain(..) {
@@ -766,12 +825,22 @@ impl Index {
                 if chunks.is_empty() {
                     self.vectors.replace_file(rel_path, &model, 0, vec![])?;
                 } else {
-                    let embedder = self.embedder()?;
-                    let dim = embedder.dim();
-                    let bodies: Vec<&str> = chunks.iter().map(|c| c.body.as_str()).collect();
-                    let vectors_raw = embedder.embed_documents(&bodies)?;
-                    let embedded = vectors::pair(&chunks, vectors_raw);
-                    self.vectors.replace_file(rel_path, &model, dim, embedded)?;
+                    // systacean-19: discriminator on the embed-step
+                    // error. When the BGE model isn't downloaded
+                    // (default-build install + no prior download),
+                    // log once + skip the vector commit + fall
+                    // through to BM25. Any other error propagates.
+                    match self.embedder() {
+                        Ok(embedder) => {
+                            let dim = embedder.dim();
+                            let bodies: Vec<&str> =
+                                chunks.iter().map(|c| c.body.as_str()).collect();
+                            let vectors_raw = embedder.embed_documents(&bodies)?;
+                            let embedded = vectors::pair(&chunks, vectors_raw);
+                            self.vectors.replace_file(rel_path, &model, dim, embedded)?;
+                        }
+                        Err(e) => Self::handle_embed_load_error(e)?,
+                    }
                 }
             }
         }
@@ -1158,6 +1227,33 @@ mod tests {
             include_vectors: false,
             ..BuildOptions::default()
         }
+    }
+
+    // systacean-19: direct unit coverage for the C2 fallback
+    // discriminator. The workstation has the BGE model cached so
+    // the integration / end-to-end tests can never naturally trip
+    // the fallback path; these tests synthesise the
+    // `ModelNotDownloaded` error directly + assert on the
+    // discriminator's branching.
+    #[cfg(feature = "embeddings")]
+    #[test]
+    fn handle_embed_load_error_falls_back_on_model_not_downloaded() {
+        let err = IndexError::Embed(EmbedError::ModelNotDownloaded {
+            model_id: "BAAI/bge-small-en-v1.5".to_string(),
+            expected_dir: PathBuf::from("/nope"),
+        });
+        assert!(Index::handle_embed_load_error(err).is_ok());
+    }
+
+    #[cfg(feature = "embeddings")]
+    #[test]
+    fn handle_embed_load_error_propagates_other_errors() {
+        let err = IndexError::Embed(EmbedError::Candle("synthetic".into()));
+        let out = Index::handle_embed_load_error(err);
+        assert!(matches!(
+            out,
+            Err(IndexError::Embed(EmbedError::Candle(_)))
+        ));
     }
 
     #[test]

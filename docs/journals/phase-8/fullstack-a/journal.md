@@ -1098,3 +1098,101 @@ Impl note + suggested commit subject at
 Outbound poke fired; standing by. Queue
 waiting: `-a-49..52` (graph overhaul) →
 `-a-42` (About).
+
+## 2026-05-21 — -a-55 committed; -a-49 ready for review (option C)
+
+`-a-55` cleared + committed as `7cf6f8e
+Hybrid flip UX: remove tab-strip title +
+right-align tabs + fix mirrored-tab click
+(fullstack-a-55)`.
+
+Then picked up `-a-49` and the audit caught an
+architect-side error in the task body: chan-
+server's `merge_filesystem_layer` ALREADY emits
+Directory nodes + contains edges (line 1131 in
+routes/graph.rs). The SPA already CONSUMES them.
+So G2 was never about adding ancestor data to
+the wire; it's about the LAYOUT TRANSFORM in
+GraphCanvas.svelte (1133 lines, d3-force).
+
+Architect routed option C (layout transform
+only; defer markdown-link / G5 to its own
+follow-up).
+
+### -a-49 complete
+
+Two-file change. SPA-only.
+
+`web/src/components/GraphCanvas.svelte`:
+
+* `DNode` extended with `depth: number` +
+  `parentId: string | null`.
+* `FORCE` config gains `hierarchyYSpacing: 90`,
+  `hierarchyYStrength: 0.45`,
+  `parentXStrength: 0.18`.
+* `nodeHierarchy(n)` helper derives depth +
+  parentId from kind + path: non-hierarchical
+  kinds (tag/mention/language) → depth -1; drive
+  root → 0/null; folder/file via path-segment
+  count.
+* `rebuildWorkingSet` populates depth + parentId
+  on both branches (mutate + fresh).
+* `buildSim` replaces `forceY<DNode>(0)` with a
+  depth-aware variant — hierarchical nodes
+  target `depth * hierarchyYSpacing` with
+  `hierarchyYStrength`; non-hierarchical keep
+  `centerStrength` at y=0.
+* New custom `parentXForce(strength)` factory
+  added as `"parentX"` force — per-tick velocity
+  push toward parent's X position. Skips
+  non-hierarchical + null-parent + missing-parent
+  edge cases.
+
+`web/src/components/GraphCanvas.test.ts` (new):
+
+* 11 raw-source pins for the wiring shape
+  (DNode + FORCE config + nodeHierarchy
+  branches + rebuildWorkingSet propagation +
+  buildSim wiring + parentXForce shape).
+
+### Layout strategy: (1) d3-force with depth
+forces
+
+Picked (1) over (2) hybrid d3-hierarchy + force
+overlay or (3) full d3-hierarchy tree. (1) is
+conservative blast radius — composes with the
+existing simulation + preserves the drag /
+interaction model. (2) adds a second layout
+engine that has to reconcile with force
+positions; (3) drops the force-based affordances
+entirely. (1) keeps the existing UX intact while
+adding the hierarchy backbone.
+
+### Visual behavior
+
+* Drive root at y=0 (depth 0).
+* Top-level dirs (`docs`, `crates`, `web`) at
+  y=90 (depth 1).
+* `docs/journals/` at y=180.
+* `docs/journals/phase-8/` at y=270.
+* Files at their parent dir's depth + 1.
+
+Architect's acceptance criterion (deep dir
+below shallow dir below root) → vitest pins
+lock the wiring; manual visual verification
+recommended via `webtest-a-6` walk.
+
+### Gate
+
+* vitest **658 / 658** (+11 net).
+* svelte-check 0 errors / 0 warnings across
+  3990 files.
+* npm build clean.
+* Rust gate not re-run (no Rust touched).
+
+Impl note + commit subject at
+[fullstack-a-49.md](fullstack-a-49.md).
+Outbound poke fired; standing by. Queue
+waiting: `-a-50..52` (further graph overhaul)
++ G5 task (markdown-link overlay; architect to
+cut as `-a-56` or `-a-57`) → `-a-42` (About).

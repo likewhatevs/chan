@@ -199,3 +199,190 @@ whichever shape of `-a-49` lands first.
 Standing by. Queue behind `-a-49` is `-a-50..52`
 (further graph overhaul) → `-a-42` (About; A+B+C+F
 all in HEAD).
+
+## 2026-05-21 — ready for review (option C — layout transform only)
+
+Two-file change. SPA-only; no Rust touched. Scope
+locked to the filesystem-hierarchy layout transform
+per your routing; markdown-link overlay / G5 stays
+deferred.
+
+### Layout strategy picked
+
+**Strategy (1)** — d3-force with depth-anchored
+`forceY` + parent-anchored custom `forceX`. Lowest
+blast radius; composes with the existing simulation;
+keeps all the existing interaction model intact (pan,
+zoom, drag, selection, refit).
+
+Why not (2) or (3):
+
+* **(2) hybrid d3-hierarchy.tree() + d3-force
+  overlay** would be architecturally cleaner but
+  introduces a second layout engine that has to
+  reconcile positions with the force model. The
+  existing simulation already runs every tick;
+  adding a tree() pre-pass + overlay would mean
+  re-running the tree on every node-set change and
+  managing position handoff. Significantly higher
+  blast radius for marginal visual improvement.
+* **(3) full d3-hierarchy tree() (no force)** drops
+  the force-based interaction model entirely — no
+  more dragging nodes apart to investigate clusters,
+  no more "release node to let it relax." The user
+  loses the existing affordances. Architect's note
+  flagged this trade-off explicitly.
+
+(1) is the conservative implementer call. If a
+future pass wants to migrate to (2)/(3), the
+hierarchy fields on `DNode` (depth + parentId) +
+the helper (`nodeHierarchy`) carry forward
+cleanly.
+
+### What landed
+
+`web/src/components/GraphCanvas.svelte`:
+
+* `DNode` extended with `depth: number` +
+  `parentId: string | null` fields. Initialized
+  from a new `nodeHierarchy(node)` helper.
+* `FORCE` config gains three new knobs:
+  - `hierarchyYSpacing: 90` — vertical pixels per
+    depth level. Roughly matches the existing
+    `linkDistance: 70` + a bit of room.
+  - `hierarchyYStrength: 0.45` — strong-ish pull
+    toward the depth band so the tree shape
+    holds against the link springs.
+  - `parentXStrength: 0.18` — weaker pull toward
+    parent's X so siblings cluster but can
+    individually drift to avoid collisions.
+* `nodeHierarchy(n)` helper derives depth + parentId
+  from the node's kind + path:
+  - tag / mention / language: `depth: -1,
+    parentId: null` (exempt from hierarchy
+    forces; keep floating on the center force).
+  - folder with id "" or path "": drive root, depth
+    0, parentId null.
+  - folder with path "docs/journals": depth 2,
+    parentId "directory:docs".
+  - file with path "docs/foo.md": depth 2,
+    parentId "directory:docs".
+  - file at drive root ("README.md"): depth 1,
+    parentId "" (drive root).
+* `rebuildWorkingSet` populates depth + parentId
+  on both the existing-node mutate branch + the
+  fresh-node construct branch.
+* `buildSim` replaces the centered `forceY<DNode>(0)`
+  with a depth-aware variant: hierarchical nodes
+  (depth >= 0) target `depth * hierarchyYSpacing`
+  with `hierarchyYStrength`; non-hierarchical
+  (depth < 0) keep `centerStrength` at y=0.
+* `buildSim` adds a new `"parentX"` force via the
+  custom `parentXForce(strength)` factory.
+* `parentXForce`: per-tick velocity push toward
+  parent's X position. Skips non-hierarchical
+  nodes (depth < 0) + nodes with null parentId +
+  nodes whose parent isn't in the working set
+  (filtered out by visibility). Velocity push
+  proportional to `strength * alpha` so the
+  simulation converges as alpha decays.
+* `parentXForce.initialize(nodes)` wires the
+  node array per the d3-force `Force` interface.
+
+`web/src/components/GraphCanvas.test.ts` (new):
+
+* 11 raw-source pins for the wiring shape:
+  - DNode carries depth + parentId.
+  - FORCE config has the three new knobs.
+  - nodeHierarchy: non-hierarchical → -1; drive
+    root → 0/null; folder path derivation; file
+    path derivation.
+  - rebuildWorkingSet propagates depth +
+    parentId on both branches.
+  - buildSim wires depth-aware forceY.
+  - buildSim registers the parentX force.
+  - parentXForce skips non-hierarchical + null
+    parent + missing parent.
+  - parentXForce.initialize wires the node array.
+
+### Visual behavior
+
+After this lands:
+
+* Drive root sits at y=0 (depth 0).
+* Top-level directories (`docs`, `crates`, `web`)
+  sit at y=90 (depth 1).
+* Second-level dirs (`docs/journals`) at y=180.
+* Third-level (`docs/journals/phase-8`) at y=270.
+* Files render at their parent dir's depth + 1.
+
+Per the architect's acceptance criteria refinement:
+`docs/journals/phase-8/` renders BELOW `docs/`
+renders BELOW the repo root. Markdown files within
+a directory render BELOW the directory node. ✓
+(force-relaxed; siblings spread laterally via
+charge + collide.)
+
+### Out-of-scope reminder
+
+* Markdown-link semantics (G5) — link targets
+  WITH parent-dir edges in the chan-server
+  response will get the depth-anchored layout
+  treatment. The G5 task is the one that decides
+  whether link targets keep their parent-dir
+  edges initially or not; this task doesn't gate
+  the data shape.
+* "Graph from here" re-rooting — works because
+  the focal-id positioning in `rebuildWorkingSet`
+  pins the focal at (0,0), and the depth layout
+  is RELATIVE to the visible node set. Re-rooting
+  on a deep file naturally shows just that
+  file's ancestor chain (depth re-calculates
+  based on the new visible set's contents).
+
+### Gate
+
+* vitest **658 / 658** (+11 net from `-a-55`'s
+  647).
+* svelte-check 0 errors / 0 warnings across
+  3990 files.
+* npm build clean.
+* Rust gate not re-run (no Rust touched).
+
+### Empirical verification recommendation
+
+Vitest pins lock the WIRING shape; the visual
+layout HAS to be verified empirically against a
+chan source drive. The architect's acceptance
+criterion check —
+`docs/journals/phase-8/` BELOW `docs/` BELOW the
+repo root — needs a manual eye on a running
+chan-desktop or chan-serve with the chan repo
+mounted. Recommend a `webtest-a-6` walk with this
+specific verification + the broader graph layout
+sanity check.
+
+### Suggested commit subject
+
+```
+Graph layout: filesystem-hierarchy as backbone (fullstack-a-49)
+```
+
+Single commit. State extension + helper +
+sim-build wiring + custom force + tests are all
+tightly coupled around the same layout
+transform.
+
+### Files for `git add` (per-path discipline)
+
+* `web/src/components/GraphCanvas.svelte`
+* `web/src/components/GraphCanvas.test.ts`
+* `docs/journals/phase-8/fullstack-a/fullstack-a-55.md`
+  (`-a-55` "committed as 7cf6f8e" trailing
+  append; bundled per the established pattern)
+* `docs/journals/phase-8/fullstack-a/fullstack-a-49.md`
+* `docs/journals/phase-8/fullstack-a/journal.md`
+* `docs/journals/phase-8/alex/event-fullstack-a-architect.md`
+
+Push held — multi-agent tree commit discipline.
+Standing by for clearance.

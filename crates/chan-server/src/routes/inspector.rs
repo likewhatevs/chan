@@ -269,7 +269,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "requires BGE-small embedding model on disk; drive.index_file() panics without it. Run with `cargo test -- --ignored` on a workstation with the model cached. systacean-19 will revert this gate (see systacean-18 follow-up #4)"]
     fn inspector_payload_covers_drive_directory_text_and_binary() {
         let (_cfg, root, drive) = open_drive();
         put(root.path(), "src/lib.rs", b"fn main() {}\n");

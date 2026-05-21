@@ -8,7 +8,6 @@ use chan_drive::{Library, SearchOpts};
 use tempfile::TempDir;
 
 #[test]
-#[ignore = "requires BGE-small embedding model on disk; reindex's write_file propagates EmbedError when the model is missing (embeddings feature on, default build), short-circuiting before BM25 commit. Subsequent `!hits.is_empty()` assertions fail. Run with `cargo test -- --ignored` on a workstation with the model cached (see systacean-18 follow-up #3)"]
 fn remove_single_file_drops_graph_and_index() {
     let cfg = TempDir::new().unwrap();
     let drive_root = TempDir::new().unwrap();
@@ -104,7 +103,6 @@ fn remove_single_file_drops_graph_and_index() {
 }
 
 #[test]
-#[ignore = "requires BGE-small embedding model on disk; reindex's write_file propagates EmbedError when the model is missing (embeddings feature on, default build), short-circuiting before BM25 commit. Subsequent `!hits.is_empty()` assertions fail. Run with `cargo test -- --ignored` on a workstation with the model cached (see systacean-18 follow-up #3)"]
 fn remove_directory_cascades_through_graph_and_index() {
     let cfg = TempDir::new().unwrap();
     let drive_root = TempDir::new().unwrap();

@@ -3421,3 +3421,159 @@ shape of `-a-49` lands first.
 Queue behind `-a-49` is `-a-50..52` (further
 graph overhaul) → `-a-42` (About; A+B+C+F
 all in HEAD).
+
+## 2026-05-21 — poke (fullstack-a-49 ready for review — option C)
+
+`-a-49` ready for review per your option C
+routing. Two-file change. SPA-only; no Rust
+touched. Scope locked to the layout transform;
+markdown-link overlay / G5 deferred per the
+routing.
+
+### Layout strategy: (1) d3-force with depth forces
+
+Picked **(1)** — depth-anchored `forceY` +
+parent-anchored custom `parentXForce`. Lowest
+blast radius; composes with the existing
+simulation; preserves the existing interaction
+model (pan, zoom, drag, selection, refit).
+
+Why not (2)/(3):
+
+* **(2) hybrid d3-hierarchy + d3-force overlay**:
+  two layout engines reconciling positions on
+  every tick. Higher complexity for marginal
+  visual gain.
+* **(3) full d3-hierarchy tree (no force)**: drops
+  the force-based affordances (drag-to-release,
+  cluster relaxation). Architect's note flagged
+  this trade-off; matches the lean toward
+  preservation.
+
+If a future pass wants to migrate, `DNode.depth`
++ `DNode.parentId` + `nodeHierarchy()` helper
+carry forward cleanly.
+
+### What landed
+
+`web/src/components/GraphCanvas.svelte`:
+
+* **`DNode`** extended with `depth: number` +
+  `parentId: string | null`.
+* **`FORCE` config** gains three knobs:
+  - `hierarchyYSpacing: 90` (vertical pixels per
+    depth).
+  - `hierarchyYStrength: 0.45` (strong-ish pull
+    so the tree shape holds against link
+    springs).
+  - `parentXStrength: 0.18` (weaker pull so
+    siblings cluster but individually drift
+    against collisions).
+* **`nodeHierarchy(n)`** helper derives the two
+  hierarchy fields from kind + path:
+  - tag/mention/language → `depth: -1,
+    parentId: null` (exempt from hierarchy
+    forces).
+  - folder with id "" or path "" → drive root,
+    `depth: 0, parentId: null`.
+  - folder path "docs/journals" → `depth: 2,
+    parentId: "directory:docs"`.
+  - file path "docs/foo.md" → `depth: 2,
+    parentId: "directory:docs"`.
+  - file at drive root → `depth: 1,
+    parentId: ""` (drive root marker).
+* **`rebuildWorkingSet`** populates depth +
+  parentId on both branches (existing-node
+  mutate + fresh-node construct).
+* **`buildSim`** replaces `forceY<DNode>(0)` with
+  a depth-aware variant. Hierarchical nodes
+  target `depth * hierarchyYSpacing` with
+  `hierarchyYStrength`; non-hierarchical
+  (depth -1) keep `centerStrength` at y=0.
+* **`parentXForce(strength)`** new factory
+  added as `"parentX"` force. Per-tick velocity
+  push toward parent's X. Skips non-hierarchical
+  + null parent + missing parent. Includes the
+  d3-force `initialize(nodes)` wiring.
+
+`web/src/components/GraphCanvas.test.ts` (new):
+11 raw-source pins for the wiring shape
+(DNode shape; FORCE knobs;
+nodeHierarchy branches; rebuildWorkingSet
+propagation on both branches; buildSim
+depth-aware forceY; buildSim parentX force
+registration; parentXForce skip conditions;
+parentXForce.initialize).
+
+### Visual behavior
+
+* Drive root at y=0 (depth 0).
+* `docs`, `crates`, `web` at y=90.
+* `docs/journals/` at y=180.
+* `docs/journals/phase-8/` at y=270.
+* Files at their parent dir's depth + 1.
+
+Architect's acceptance criterion (deep dir
+below shallow dir below root) → vitest pins
+lock the wiring; manual visual verification
+recommended via `webtest-a-6` walk on a chan-
+source drive.
+
+### Gate
+
+* vitest **658 / 658** (+11 net from `-a-55`'s
+  647).
+* svelte-check 0 errors / 0 warnings across
+  3990 files.
+* npm build clean.
+* Rust gate not re-run (no Rust touched).
+
+### Decisions
+
+* **Strategy (1)** picked for blast-radius +
+  interaction-preservation reasons (above).
+* **`forceLink` unchanged**: the existing
+  `contains` edges stay in the link force.
+  Combined with the new depth-anchored
+  forceY + parentX, they reinforce the
+  hierarchy without redundant pull. The
+  existing link strength (0.55) + distance
+  (70) compose well with hierarchyYSpacing
+  (90) — link springs accommodate the
+  enforced depth gap rather than fighting it.
+* **Non-hierarchical nodes float**: tag /
+  mention / language nodes keep the existing
+  centerStrength center-of-canvas pull. They
+  cluster near the middle (y=0) regardless
+  of which depth band the file they're linked
+  to sits at. Reasonable default; if @@Alex
+  wants tag nodes pulled DOWN to their
+  source files' depth, that's a follow-up
+  tune (cheap; just adjust the forceY for
+  -1-depth nodes).
+
+### Suggested commit subject
+
+```
+Graph layout: filesystem-hierarchy as backbone (fullstack-a-49)
+```
+
+Single commit. State extension + helper + sim
+wiring + custom force + tests are tightly
+coupled.
+
+### Files for `git add` (per-path discipline)
+
+* `web/src/components/GraphCanvas.svelte`
+* `web/src/components/GraphCanvas.test.ts`
+* `docs/journals/phase-8/fullstack-a/fullstack-a-55.md`
+  (`-a-55` "committed as 7cf6f8e" trailing
+  append; bundled per the established
+  pattern)
+* `docs/journals/phase-8/fullstack-a/fullstack-a-49.md`
+* `docs/journals/phase-8/fullstack-a/journal.md`
+* `docs/journals/phase-8/alex/event-fullstack-a-architect.md`
+  (this append)
+
+Push held — multi-agent tree commit
+discipline. Standing by for clearance.
