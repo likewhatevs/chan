@@ -96,6 +96,78 @@ GitHub Actions release workflow rather than in this Makefile (CI
 already runs per-arch matrix builds and is the natural place to
 `lipo`-merge before bundling).
 
+## Apple Developer ID signing
+
+The chan-desktop `.app` (and the bundled `.dmg`) are codesigned with
+an Apple Developer ID Application certificate so Gatekeeper accepts
+the install on default-configured macOS. The signing identity is
+named in `src-tauri/tauri.conf.json` under
+`bundle.macOS.signingIdentity`:
+
+```json
+"bundle": {
+  "macOS": {
+    "signingIdentity": "Developer ID Application: <Name> (<TEAMID>)"
+  }
+}
+```
+
+The identity NAME is a public identifier (the same string that
+`security find-identity -v -p codesigning` prints), safe to land in
+the repo. The matching private key + cert blob stay outside the repo
+entirely: in the developer's macOS Keychain for local builds; in
+`secrets.APPLE_CERTIFICATE_BASE64` + `secrets.APPLE_CERTIFICATE_PASSWORD`
+for CI (imported into a temp keychain by
+`apple-actions/import-codesign-certs@v3` in `release-desktop.yml`).
+See the [macOS signing brief](../docs/release/macos-signing.md) for
+the full per-secret table.
+
+`bundle.macOS.providerShortName` is omitted because chan-desktop's
+Apple Developer account is Individual enrollment with a single ASC
+team. Populate the field only if the account is associated with
+multiple teams.
+
+### Local-build vs CI-build behaviour
+
+* **Local build with the cert in your Keychain**: `make app-signed`
+  and `make app-notarized` codesign the .app with the named identity.
+  Works out of the box.
+* **Local build WITHOUT the cert**: `make app-signed` /
+  `make app-notarized` fail at the codesign step with
+  `identity '...' not in keychain` (the `sign-prereqs` check in
+  `desktop/Makefile`). That is expected; it just means you cannot
+  produce a signed bundle on a workstation that does not hold the
+  signing key. `make build` (the unsigned path) still works for
+  general development.
+* **CI build**: `release-desktop.yml` imports the cert into a temp
+  keychain via secrets, then runs `make app-notarized` with the env
+  vars populated. Same identity, just supplied differently.
+
+### Rotation (if the Developer ID identity ever changes)
+
+Developer ID Application certs expire every 5 years; rotation also
+applies if the cert is revoked or replaced. Steps:
+
+1. Generate the new cert per the [macOS signing brief](../docs/release/macos-signing.md)
+   "Developer ID Application certificate generation".
+2. Update `bundle.macOS.signingIdentity` in `tauri.conf.json` to the
+   new identity string. Single-field swap.
+3. Refresh `APPLE_CERTIFICATE_BASE64` + `APPLE_CERTIFICATE_PASSWORD`
+   + `APPLE_SIGNING_IDENTITY` + `APPLE_TEAM_ID` in GitHub Actions
+   Secrets via `docs/release/populate-apple-secrets.sh` (re-run the
+   relevant steps).
+4. Refresh the local Keychain: import the new `.p12`; remove the
+   old cert (`security delete-certificate -c "Developer ID
+   Application: <Old Name> ..."`) so the `sign-prereqs`
+   `grep -c "Developer ID Application:"` detection picks the new
+   one unambiguously.
+
+No bridge release is needed for Developer ID cert rotation (unlike
+the minisign updater key rotation below). Gatekeeper trusts any
+Developer ID Application cert chained to Apple's root, regardless
+of which one signed the previous release, so the next signed bundle
+under the new identity is accepted by clients that had the old one.
+
 ## Auto-upgrade signing (tauri-plugin-updater)
 
 The desktop app verifies update bundles with a minisign signature.

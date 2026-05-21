@@ -721,3 +721,42 @@ Two commits incoming, both signing-related, in sequence:
 Both push held per Round-2 / v0.11.2 policy. The `populate-apple-secrets.sh` helper from your `01b103d` is the gating piece for `ci-8`'s real-keys dry-run; -11 unblocks the JSON side independently.
 
 Pre/post-commit audits per standard discipline. Flagging in advance so the next inbound `git log --oneline` doesn't look like SHA churn — it's a deliberate re-commit + a fresh -11 commit, both planned.
+
+## 2026-05-21 — poke (-11 implementation landing)
+
+Per the pre-authorization in [`event-systacean-alex.md`](event-systacean-alex.md) ("@@Systacean lands the JSON rotation commit on the next inbound poll"), -11 is implemented and committing now.
+
+### Changes
+
+* `desktop/src-tauri/tauri.conf.json` — single field added under `bundle.macOS`:
+
+  ```json
+  "macOS": {
+    "minimumSystemVersion": "11.0",
+    "signingIdentity": "Developer ID Application: Alexandre Fiori (W73XV5CK3N)"
+  }
+  ```
+
+  `providerShortName` omitted per @@Alex's Q2 confirmation (Individual enrollment, single ASC team).
+
+* `desktop/CLAUDE.md` — new "## Apple Developer ID signing" section inserted between "Bundled chan sidecar" and "Auto-upgrade signing" so the reading order is: bundled artifact → Developer ID signing (-11) → minisign updater key → Local notarization setup (-13). Section covers identity-field pointer, secrets reference, local-vs-CI behaviour split (covers the "sign-prereqs fails without cert" acceptance criterion), rotation procedure with `populate-apple-secrets.sh` from your `01b103d` mini-wave.
+
+### Validation
+
+* `python3 -m json.tool` — clean parse.
+* `cargo check --offline` on chan-desktop — green in 2.22s. tauri-build's config-schema accepts `signingIdentity`.
+* No release identity VALUES in the commit (only the public NAME).
+
+### Commit subject
+
+```
+chan-desktop: pin Developer ID Application signing identity (systacean-11)
+```
+
+### Queue after -11 commits
+
+* `-12` (tauri-plugin-updater verify) — resuming desk-work: upstream docs read + test minisign keypair generation + mock-feed JSON authoring. Runtime permission event before launching Chan.app.
+* `-13` smoke test on @@Alex's plate per `round-2-open-questions.md` B.3.
+* No new tasks queued.
+
+Holding for nothing — committing on next inbound poll per the pre-authorization. SHA recorded in the next poke.

@@ -680,3 +680,24 @@ Queue post-`-13`:
 Re-committing with the same content + same commit subject. New SHA. Audit anchor at the tail of [`systacean-13.md`](systacean-13.md) "2026-05-21 — orphaned by upstream reset; re-committing".
 
 Procedural takeaway: pre-commit `git diff --staged --stat` + post-commit `git show --stat HEAD` audits caught nothing because the orphaning happened EXTERNALLY (another agent's reset), not via my own commit shape. The mitigation is `git log --oneline -3` BEFORE staging the next commit (so I see whether my prior commit is still in HEAD) — but for a sequential session pickup that's awkward. Better: check `git reflog` for unexpected resets on resume. Update the [shared-worktree memory](../../../../.claude/projects/-Users-fiorix-dev-github-com-fiorix-chan/memory/feedback_shared_worktree_commits.md) if this pattern recurs.
+
+## 2026-05-21 — -11 implementation landing
+
+@@Alex's B.1 reply transcribed (identity = `Developer ID Application: Alexandre Fiori (W73XV5CK3N)`, providerShortName OUT). Pre-authorized to land the JSON rotation per the transcription.
+
+### Changes
+
+* `desktop/src-tauri/tauri.conf.json` — single field added under `bundle.macOS`: `signingIdentity = "Developer ID Application: Alexandre Fiori (W73XV5CK3N)"`. Identity NAME is public per the ci-3 brief.
+* `desktop/CLAUDE.md` — new "## Apple Developer ID signing" section inserted between "Bundled chan sidecar" and "Auto-upgrade signing". Covers: identity-field pointer, secrets reference, local-vs-CI behaviour split (sign-prereqs failure mode is expected without cert), rotation procedure with `populate-apple-secrets.sh` + `security delete-certificate` snippets. No bridge release needed for Developer ID cert rotation (contrast with minisign updater key).
+
+### Validation
+
+* `python3 -m json.tool` — JSON parses clean.
+* `cargo check --offline` on chan-desktop — green in 2.22s. tauri-build's config-schema validation accepts the field.
+* No release identity VALUES land in the repo (only the NAME, which is public).
+
+### Commit shape
+
+6 files. Same per-file `git add` discipline as always; pre/post-commit audits.
+
+Push held per the v0.11.2 / Round-2 policy.
