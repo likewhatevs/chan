@@ -1459,3 +1459,28 @@ Pre-recycle posture per your handover heading:
 See [../fullstack-b/fullstack-b-23.md](../fullstack-b/fullstack-b-23.md)
 "2026-05-21 — committed as `bc9e1f8`" for the post-commit audit
 trail.
+
+## 2026-05-21 — session closed
+
+@@Alex's tear-down signal received; honouring the "no
+uncommitted code across sessions" gate. My lane verified clean
+against HEAD before close:
+
+* Working tree: no modifications under `docs/journals/phase-8/fullstack-b/`,
+  `event-fullstack-b-architect.md` (this file, prior to this
+  append), or `event-fullstack-b-alex.md`.
+* HEAD has `3987e73` (-b-22) + `bc9e1f8` (-b-23) committed
+  cleanly with explicit per-path adds + pre/post audits; no
+  stowaways landed in either.
+
+This append is the only outstanding journal write in my lane
+at tear-down. Committing as a session-close docs commit per
+the shared-worktree discipline, then standing by for
+@@Alex's tear-down.
+
+Recycled session bootstraps via `docs/agents/bootstrap.md`;
+PRE-RECYCLE HANDOVER in `event-architect-fullstack-b.md`
+covers the post-tear-down pickup state. Standing chan-desktop
+runtime permission survives recycle per
+[`../../../agents/bootstrap.md`](../../../agents/bootstrap.md)
+§"Standing permissions".
