@@ -3209,3 +3209,114 @@ Round 3+).
 | `alex/event-architect-fullstack-b.md` | -24 close + lock tests routed to systacean-20 |
 | `alex/event-architect-systacean.md` | -18 follow-up #4 ack + systacean-20 dispatch |
 | `systacean/systacean-20.md` | NEW task (Windows lock test gating) |
+
+## 2026-05-21 — clearance round 10 — -a-54 cleared + -18 fu#4 Ubuntu GREEN + -20 cleared proactively
+
+### Lane commit landed this beat
+
+| SHA | Subject | Lane |
+|-----|---------|------|
+| `8c65296` | `Hybrid back-side theme architecture correction + custom-TERM fix (fullstack-a-53)` | @@FullStackA |
+
+### -a-54 cleared (flip UX redesign)
+
+@@FullStackA delivered the flip UX redesign cleanly. 5
+implementation choices documented (NOT deviations; all
+sensible reads of the spec):
+
+1. Family-name title in dead-zone slot — natural empty
+   space; matches @@Alex's "inside the tab area" framing.
+2. Flex order swap for hamburger (not DOM reshuffle) —
+   cleaner; HamburgerMenu anchor works automatically.
+3. Un-mirrored title — matches @@Alex's "like in the
+   front pane" wording (front-readable, not mirrored).
+4. Dead-zone cursor reset on flip — drag-to-NAV from
+   `-a-44` is naturally front-state; cursor reset is the
+   right visual cue.
+5. `scaleX(-1)` click-through verified — modern browsers
+   handle mirrored hit-testing cleanly.
+
+All accepted. vitest 646/646 (+3 net). Cleared verbatim.
+
+After commit, the Hybrid back-side correction wave is
+structurally complete: `-a-47` collapse + `-a-48` FB-back
+migration + `-a-53` theme architecture + `-a-54` flip UX
+all landed (or about to). `webtest-a-5` walks the
+bundled corrected wave once everything's in HEAD.
+
+### -18 follow-up #4 Ubuntu GREEN confirmed
+
+@@Systacean's smoke run `26247086815` empirically confirmed:
+
+* Ubuntu cargo test ✓ (28 BGE tests skipped cleanly via
+  the `#[ignore]` cascade).
+* Web + build + rustfmt ✓.
+* Windows half still running at time of their poke.
+
+The BGE-test gate-unblocker work is empirically closed on
+Ubuntu. The cascade peeling pattern from prior rounds
+reached its terminal point — finite item count, cascade
+exhausted, gate green.
+
+### -20 cleared proactively
+
+@@Systacean implemented `-20` (3 chan-drive lock-contract
+test `#[cfg(unix)]` gates) while waiting for Windows half
+of the `-18` fu#4 smoke. Same mechanical pattern; local
+gate green. Cleared for commit + the bundled-smoke plan
+(commit on top of `bf85e8a` + fastforward push +
+re-dispatch the bundled smoke validates `-18` fu#4 + `-20`
+together).
+
+### Expected bundled smoke verdict
+
+Windows fully green (chan-desktop dead_code from
+`c0600e0`+`8e4ce5c` + fs_graph dead_code from `b01b310` +
+chan-server BGE gates from `bf85e8a` + chan-drive lock
+gates from `-20`). Ubuntu fully green (confirmed by the
+prior smoke). macOS green (lock tests still run on macOS).
+
+**Round-3 readiness signal: per-PR ci.yml gate structurally
+fully green for the first time since ~2026-05-19 on all 3
+platforms.**
+
+### Pattern complete: gate-unblocker cascade exhausted
+
+The cascade has been peeling back layers since `ci-12`
+opened. Final state:
+
+* `ci-12` (GTK install) ✓ landed.
+* `systacean-17` (Windows result_large_err) ✓ landed.
+* `fullstack-b-24` (Windows chan-server dead_code + smoke
+  fixup cascade) ✓ landed (7 implementation commits).
+* `systacean-18` (chan-drive BGE-panic) + 4 follow-ups ✓
+  landed (mechanical `#[ignore]` cascade across
+  chan-drive lib + integration + chan-server lib).
+* `systacean-20` (3 chan-drive lock tests on Windows) ✓
+  cleared this round; commit pending.
+
+After the bundled smoke greens, the per-PR ci.yml gate
+becomes load-bearing again. `systacean-19` (C2 graceful
+BM25 fallback) follows as the structural fix that reverts
+the 28 `#[ignore]` gates retroactively. The 3
+`#[cfg(unix)]` gates from `-20` stay until the real
+Windows lock-primitive bridge lands in Round-3 polish.
+
+### Lane state at end of round
+
+| Lane | State |
+|------|-------|
+| @@Systacean | `-18` fu#4 Ubuntu green confirmed; `-20` cleared; expect bundled smoke verdict + then `-19` pickup |
+| @@CI | Idle; queue-empty |
+| @@FullStackA | `-a-53` committed (`8c65296`); `-a-54` cleared; expect commit + `-a-49` pickup (graph overhaul first sub-wave) |
+| @@FullStackB | `-24` CLOSED; queue-empty until wave-3 dispatch |
+| @@WebtestA | Queue-empty; `webtest-a-5` cuts after `-a-54` lands |
+| @@WebtestB | Queue-empty |
+
+### What I'm committing this round
+
+| File | Reason |
+|------|--------|
+| `architect/journal.md` | This entry |
+| `alex/event-architect-fullstack-a.md` | -a-54 commit clearance + 5 shape decisions accepted |
+| `alex/event-architect-systacean.md` | -18 fu#4 Ubuntu green ack + -20 proactive clearance + bundled smoke plan ack |

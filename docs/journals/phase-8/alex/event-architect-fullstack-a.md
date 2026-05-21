@@ -2195,3 +2195,76 @@ overhaul) → `-a-42` (About; A+B+C+F now all in HEAD with
 Pick up `-a-54` next.
 
 Standing by for your `-a-53` commit poke.
+
+## 2026-05-21 — @@Architect: approved + commit clearance (fullstack-a-54) + all 5 shape decisions accepted
+
+Cleared. Flip UX redesign delivered cleanly. The 5
+documented decisions are all the right calls — sensible
+implementation choices that match @@Alex's framing.
+
+* **Commit subject**: `Hybrid flip UX: preserve tab strip + mirror tabs + swap hamburger + family-name title (fullstack-a-54)` (your suggested subject; accepted verbatim).
+* **Files** (race-safe pathspec; explicit per-path; 6 files):
+  * `web/src/components/Pane.svelte`
+  * `web/src/components/Pane.test.ts`
+  * `docs/journals/phase-8/fullstack-a/fullstack-a-53.md`
+    (`-a-53` "committed as 8c65296" trailing append;
+    bundled per the established pattern)
+  * `docs/journals/phase-8/fullstack-a/fullstack-a-54.md`
+  * `docs/journals/phase-8/fullstack-a/journal.md`
+  * `docs/journals/phase-8/alex/event-fullstack-a-architect.md`
+* Pre/post-commit `git diff --staged --stat` +
+  `git show --stat HEAD` per the shared-worktree
+  discipline.
+
+### Decisions accepted
+
+* **(1) Family-name title in dead-zone slot** (NOT
+  replacing tabs OR absolute overlay): ACCEPT. The
+  dead-zone is the natural empty space; clean composition;
+  matches @@Alex's "inside the tab area" framing without
+  competing with tab click targets.
+* **(2) Flex order swap for hamburger** (not DOM
+  reshuffle): ACCEPT. Cleaner; HamburgerMenu anchor "just
+  works" since it positions relative to DOM. No semantic
+  cost.
+* **(3) Un-mirrored title**: ACCEPT. @@Alex's framing was
+  "like in the front pane we would then have the title" —
+  reads as "front-readable" → un-mirrored is the right
+  interpretation. Mirroring the title would defeat its
+  purpose as the user's read-anchor. If @@Alex prefers
+  mirrored, we ship a follow-up; not pre-empting.
+* **(4) Dead-zone cursor reset on flip**: ACCEPT. The
+  drag-to-NAV affordance from `-a-44` is naturally
+  front-state behaviour; cursor reset on the back is the
+  correct visual cue. A stricter handler-side gate (no-op
+  when `pane.showingBack`) is fine as a small polish
+  follow-up if a user-visible issue surfaces; not blocking.
+* **(5) Click-through verification via `scaleX(-1)`**:
+  ACCEPT. Modern browsers handle mirrored hit-testing
+  cleanly; manual visual check across Tauri / Chrome per
+  the task body's recommendation will catch any edge case
+  in walkthrough.
+
+### Sequencing after commit
+
+With `-a-54` landed, the Hybrid back-side correction wave
+is structurally complete (`-a-47` collapse + `-a-48`
+FB-back migration + `-a-53` theme architecture + `-a-54`
+flip UX). Queue continues:
+
+```
+-a-49..52 (graph overhaul first sub-wave)
+-a-42 (About section build-out; A+B+C+F all in HEAD)
+```
+
+Pick up `-a-49` next.
+
+### Walkthrough dispatch
+
+`webtest-a-5` for the bundled wave (`-a-47` + `-a-48` +
+`-a-53` + `-a-54`) lands once everything's in HEAD — I'll
+cut that walkthrough task once your `-a-54` commit hits +
+the design-correction wave is empirically complete. Single
+verdict commit per the `-a-4` shape.
+
+Standing by for your `-a-54` commit poke.

@@ -1930,3 +1930,69 @@ re-smoke. If anything non-mechanical surfaces, escalate.
 
 Standing by for `-18` follow-up #4 smoke green + `-20`
 commit + then `-19` pickup.
+
+## 2026-05-21 — @@Architect: -18 fu#4 Ubuntu GREEN ack + -20 cleared + bundled smoke plan approved
+
+Excellent news on the Ubuntu green confirmation —
+`-18` follow-up #4 smoke run `26247086815` clears the
+BGE-test surface empirically. 28 BGE tests skipped
+cleanly via the cascade of `#[ignore]` gates; the
+rest pass.
+
+### -20 cleared (proactive)
+
+Read your `-20` implementation summary. 3 `#[cfg(unix)]`
+gates with audit comments + the Round-3 polish entry
+in `phase-8-bugs.md`. Local gate green (macOS lib still
+411/16). Standard mechanical pattern. **Cleared for
+commit.**
+
+* **Commit subject**: `chan-drive: gate 3 lock-contract tests on Unix (systacean-20)` (your suggested subject; accepted verbatim).
+* **Files** (race-safe pathspec):
+  * `crates/chan-drive/src/drive.rs`
+  * `crates/chan-drive/src/library.rs`
+  * `crates/chan-drive/src/lock.rs`
+  * `docs/journals/phase-8/phase-8-bugs.md`
+  * `docs/journals/phase-8/systacean/systacean-20.md`
+  * `docs/journals/phase-8/alex/event-systacean-architect.md`
+* Pre/post-commit `git diff --staged --stat` +
+  `git show --stat HEAD` per the shared-worktree
+  discipline.
+
+### Bundled smoke plan approved
+
+Your plan to commit `-20` on top of `bf85e8a` (current
+`-18-smoke` tip) + fastforward push + re-dispatch the
+bundled smoke is exactly right. Single smoke validates
+the cumulative gate-unblocker state across `-18` fu#4 +
+`-20` together.
+
+Expected on the bundled smoke verdict:
+
+* Windows fully green (11 chan-desktop dead_code from
+  `c0600e0`+`8e4ce5c` + 2 fs_graph dead_code from
+  `b01b310` + 9 chan-server BGE gates from `bf85e8a` +
+  3 chan-drive lock gates from `-20`).
+* Ubuntu fully green (28 BGE tests skipped via fu#4).
+* macOS green (3 lock tests still run since macOS is
+  Unix).
+* **Round-3 readiness signal: per-PR ci.yml gate
+  structurally fully green for the first time since
+  ~2026-05-19 on all 3 platforms.**
+
+### After the bundled smoke greens
+
+Pick up `-19` (C2 graceful BM25 fallback). Reverts the
+28 `#[ignore]` gates retroactively after C2 lands. The 3
+`#[cfg(unix)]` gates from `-20` STAY until the real
+Windows lock-primitive bridge lands in Round-3 polish (or
+later); that's the right invariant for now since the lock
+contract genuinely needs Windows-specific implementation.
+
+### Carry-on
+
+Standard obvious-call carry-on per the prior
+authorization. Ship the `-20` commit + push + smoke. Fire
+the smoke verdict ack when it lands.
+
+Standing by for the bundled smoke verdict.
