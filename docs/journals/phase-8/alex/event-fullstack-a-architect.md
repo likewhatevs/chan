@@ -3312,3 +3312,112 @@ discipline. Standing by for clearance.
 After `-a-55` lands, queue is `-a-49..52`
 (graph overhaul first sub-wave) → `-a-42`
 (About).
+
+## 2026-05-21 — poke (fullstack-a-55 committed + fullstack-a-49 scope-check)
+
+`-a-55` committed at `7cf6f8e Hybrid flip UX:
+remove tab-strip title + right-align tabs +
+fix mirrored-tab click (fullstack-a-55)` per
+your clearance. 6 files, no stowaways.
+
+Picked up `-a-49` (graph overhaul G2 —
+filesystem-hierarchy as graph spine) and the
+audit surfaced a scope question worth your
+routing. Full detail at
+[`../fullstack-a/fullstack-a-49.md`](../fullstack-a/fullstack-a-49.md)
+tail under "2026-05-21 — audit findings +
+scope-check poke".
+
+### Short version
+
+The task body's framing assumes the chan-server
+graph route returns "flat edges" + that ancestor
+data needs adding. **That's wrong for current
+HEAD**: `crates/chan-server/src/routes/graph.rs:1131`
+already calls `merge_filesystem_layer` which
+emits `Directory` nodes + `contains` edges
+unconditionally. The SPA already CONSUMES them
+(GraphPanel.svelte:491/543/789/1003).
+
+The actual G2 gap is in the LAYOUT TRANSFORM
+in `web/src/components/GraphCanvas.svelte`
+(1133 lines, d3-force force-directed
+simulation). The filesystem-hierarchy data
+is in the response; the SPA just doesn't
+position nodes hierarchically. All nodes are
+equal participants in the force simulation.
+
+### Implication: G2 is a substantial layout-
+algorithm design
+
+To make "filesystem-rooted hierarchy by
+default" emerge, GraphCanvas needs:
+
+* A directory-depth-based Y-axis force
+  (`forceY` per depth so files sit below
+  parent dir).
+* A parent-anchored X-axis force pulling
+  children toward parent's X position.
+* OR: switch to hybrid layout —
+  `d3-hierarchy.tree()/cluster()` for the
+  directory backbone + d3-force for
+  markdown-link overlay forces.
+
+Substantial. The task body's "Design the
+layout transform" reads as a small "step 3"
+but it's the load-bearing piece.
+
+### Three options for routing
+
+**(A) -a-49 as-spec'd**: full layout
+transform + the markdown-link overlay
+semantics + "Graph from here" re-rooting in
+one commit. Biggest single SPA commit of
+the session.
+
+**(B) Split into -a-49a/b/c**: separate
+data-shape audit / layout transform /
+markdown-link overlay into smaller commits.
+Cleaner review boundaries.
+
+**(C) -a-49 scope = layout transform
+ONLY**: defer the markdown-link / G5 piece
+to its own follow-up (G5 is in the queue
+already as a separate item per
+graph-overhaul-plan.md). Keeps commit
+focused.
+
+### My lean: (C)
+
+The "Markdown-link targets DO NOT carry
+parent-dir edges initially" line in -a-49's
+acceptance criteria reads as a teaser for
+G5; G5 has its own task slot. Keeping -a-49
+focused on the layout transform alone keeps
+the commit boundary clean. Markdown-link
+semantics land separately when -a-N (G5
+task) is dispatched.
+
+### Note on the task body's "graph route may need ancestor data"
+
+The architect's task body said "today's
+route returns flat edges (@@Systacean: graph
+route may need ancestor data)." I assume
+this references an earlier graph route state
+or anticipates the depth gate. Current HEAD
+has the data; only the SPA layout needs
+attention. Routing the layout work as @@FullStackA
+solo (no @@Systacean cross-pollination) is
+fine.
+
+### Standing by
+
+Holding `-a-49` here until you route the
+scope. The `-a-55` "committed as 7cf6f8e"
+trailing append is in my working tree (not
+yet committed); I'll bundle with whichever
+shape of `-a-49` lands first.
+
+Queue behind `-a-49` is `-a-50..52` (further
+graph overhaul) → `-a-42` (About; A+B+C+F
+all in HEAD).
