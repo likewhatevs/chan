@@ -109,3 +109,127 @@ just need explicit accelerator bindings.
 ## Open questions
 
 (populated as you investigate)
+
+## 2026-05-21 — implementation note
+
+### Architecture
+
+Tauri 2's `WebviewWindow::set_zoom()` is the underlying primitive
+(reachable via the `core:webview:allow-set-webview-zoom`
+capability granted during `-b-7`). The bug report says the
+standard zoom chords no-op; the existing
+`.zoom_hotkeys_enabled(true)` Tauri polyfill in
+`build_drive_window` is either broken in this Tauri version or
+hasn't been wired through to webview events the SPA can see.
+
+Solution: explicit `zoom_in` / `zoom_out` / `zoom_reset` IPC
+commands fired from `KEY_BRIDGE_JS` in capture phase, so the
+chord works regardless of the polyfill's state. Per-window
+zoom level tracked in `AppState.live_window_zooms`
+(`Mutex<HashMap<String, f64>>`); drained into
+`WindowConfig.zoom_level` by the close handler so the LRU
+restore from `-b-1` picks the level up on the next open.
+
+Tauri's polyfill stays on as a mousewheel + trackpad pinch
+fallback. The chord overlap is harmless because the
+KEY_BRIDGE_JS capture-phase listener calls `preventDefault +
+stopImmediatePropagation` before the polyfill's bubble-phase
+listener sees the keydown.
+
+### Changes landed
+
+* **`desktop/src-tauri/src/config.rs`** — `WindowConfig` gains
+  a `pub zoom_level: f64` field with `#[serde(default =
+  "default_zoom")]` + `fn default_zoom() -> f64 { 1.0 }`.
+  Backward compat: pre-`-b-19` `config.json` entries load with
+  `zoom_level = 1.0` instead of failing the load.
+* **`desktop/src-tauri/src/main.rs`** —
+  * `AppState` gains
+    `pub live_window_zooms: Mutex<HashMap<String, f64>>`.
+  * Three IPC commands: `zoom_in`, `zoom_out`, `zoom_reset`.
+    Each reads the current level from `live_window_zooms`
+    (defaulting to 1.0), computes the next level (+/- 10 %
+    or reset to 1.0), clamps to [0.25, 5.0], calls
+    `WebviewWindow::set_zoom`, writes back to
+    `live_window_zooms`. Registered in
+    `tauri::generate_handler!` next to `reload_window` and
+    `open_devtools`.
+  * `apply_zoom` + `current_zoom` helpers shared between the
+    three handlers.
+* **`desktop/src-tauri/src/serve.rs`** —
+  * `KEY_BRIDGE_JS`: routes `Equal` / `NumpadAdd` →
+    `zoom_in`, `Minus` / `NumpadSubtract` → `zoom_out`,
+    `Digit0` / `Numpad0` → `zoom_reset`. Routed BEFORE the
+    shift branch so `Cmd+=` and `Cmd+Shift+=` (= `Cmd++`)
+    both zoom in.
+  * `build_drive_window` gains a `zoom_seed: f64` parameter;
+    after window creation, applies `set_zoom(zoom_seed)` and
+    records into `live_window_zooms` when `zoom_seed != 1.0`.
+  * `spawn_local_drive_window` + `spawn_tunneled_drive_window`
+    pass the popped `WindowConfig.zoom_level` (or 1.0) as
+    `zoom_seed`.
+  * `capture_window_config_on_close` drains the live zoom for
+    the closing window into the pushed `WindowConfig`.
+
+### Tests landed (chan-desktop 29 → 33)
+
+| Test                                                                | Pinned contract                                                                       |
+|---------------------------------------------------------------------|---------------------------------------------------------------------------------------|
+| `window_config_zoom_level_defaults_to_one_on_missing_field` (config)| Pre-`-b-19` JSON loads with `zoom_level = 1.0`. Backward compat with existing configs. |
+| `window_config_zoom_level_round_trips` (config)                     | Serde round-trip of `zoom_level = 1.4` (representative non-default).                  |
+| `key_bridge_wires_zoom_chords_to_ipc` (serve)                       | KEY_BRIDGE_JS contains the 3 IPC names + the 6 case labels (Equal/Minus/Digit0 + Numpad variants). |
+| `invoke_handler_registers_zoom_commands` (serve)                    | `tauri::generate_handler!` lists `zoom_in,` / `zoom_out,` / `zoom_reset,`.            |
+
+### Acceptance criteria — verification
+
+| Criterion                                                                  | State                                                                                  |
+|----------------------------------------------------------------------------|----------------------------------------------------------------------------------------|
+| Cmd+= / Cmd++ zoom in (~10 % step)                                         | KEY_BRIDGE_JS `Equal` + `NumpadAdd` → `zoom_in` IPC → `apply_zoom` step `+0.10`.       |
+| Cmd+- zoom out (~10 % step, floor at 0.25)                                 | KEY_BRIDGE_JS `Minus` + `NumpadSubtract` → `zoom_out` → clamp `.max(0.25)`.            |
+| Cmd+0 reset to 100 %                                                       | KEY_BRIDGE_JS `Digit0` + `Numpad0` → `zoom_reset` → `apply_zoom(1.0)`.                  |
+| Each action calls `WebviewWindow::set_zoom(new_level)`                     | Yes — via the `apply_zoom` helper.                                                     |
+| Per-window persistence via `WindowConfig.zoom_level: f64`                  | Field added with `#[serde(default = "default_zoom")]`. Drained on close, applied on next open via `-b-1`'s LRU. |
+| Cross-platform (Cmd on macOS, Ctrl on Linux/Windows)                       | KEY_BRIDGE_JS guard is `meta = e.metaKey || e.ctrlKey` — handles both.                  |
+| Backward compat with existing `config.json` files                          | `window_config_zoom_level_defaults_to_one_on_missing_field` pins serde-default 1.0.    |
+| Pre-push gate                                                              | Workspace fmt + clippy `-D warnings` + test (chan-desktop 29 → 33) + no-default-features build + svelte-check (3981 / 0) + npm build + vitest (558 → 568) all green. |
+
+### Coordination footprint
+
+* **Composes with `-b-1`** — `WindowConfig` gains a new field;
+  `-b-1`'s LRU restore path picks it up automatically through
+  the `zoom_seed` parameter threaded into `build_drive_window`.
+  Backward compat via serde-default = 1.0; pre-`-b-19` configs
+  load without breaking.
+* **Composes with `-b-17`** — both touch `KEY_BRIDGE_JS` +
+  `tauri::generate_handler!`. Different chord names + different
+  IPC commands; no overlap. The same `invokeIpc(e, cmd)` helper
+  introduced in `-b-17` is reused for the zoom chords.
+* **Independent of `-b-18`** (SPA-only).
+* **Composes with `-b-7`** — already-granted
+  `core:webview:allow-set-webview-zoom` permission on drive-*
+  and tunnel-* windows is the reason `WebviewWindow::set_zoom`
+  is callable. No capability changes needed.
+
+### Suggested commit subject
+
+```
+chan-desktop: Cmd+= / Cmd+- / Cmd+0 zoom chords + per-window persistence (fullstack-b-19)
+```
+
+Touches:
+* `desktop/src-tauri/src/config.rs`
+* `desktop/src-tauri/src/main.rs`
+* `desktop/src-tauri/src/serve.rs`
+
+Holding for @@Architect commit clearance. Push waits until
+the v0.11.2 commit-grouping cut.
+
+### Runtime verification (deferred)
+
+Like `-b-17`, the chord behaviour can only be confirmed
+empirically (KEY_BRIDGE_JS injection runs inside a real Tauri
+webview, and `WebviewWindow::set_zoom` is webview-level).
+@@WebtestB's lane-B walkthrough validates Cmd+= / Cmd+- /
+Cmd+0 cycle + the close-and-reopen zoom-level persistence.
+My standing chan-desktop runtime permission covers a smoke
+check if @@WebtestB wants me to set up the fixture first.

@@ -99,9 +99,20 @@ pub struct WindowConfig {
     /// trip across the close/open cycle.
     #[serde(default)]
     pub url_hash: String,
+    /// Browser-style zoom level, 1.0 = 100 %. Persists across the
+    /// close/open cycle so Cmd++ / Cmd+- / Cmd+0 chord state from
+    /// `fullstack-b-19` survives a session restart. `#[serde(default
+    /// = "default_zoom")]` keeps backward compat with pre-`-b-19`
+    /// `config.json` entries (missing field reads as 1.0).
+    #[serde(default = "default_zoom")]
+    pub zoom_level: f64,
     /// Wall-clock millis when this config was pushed. Newest first
     /// in the stack; only used for diagnostics + LRU eviction.
     pub saved_at: u64,
+}
+
+fn default_zoom() -> f64 {
+    1.0
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -223,6 +234,7 @@ mod tests {
             key: key.to_string(),
             window_label: label.to_string(),
             url_hash: hash.to_string(),
+            zoom_level: 1.0,
             saved_at,
         }
     }
@@ -284,6 +296,37 @@ mod tests {
         push_window_config(&mut cfg, entry("/drive/a", "drive-a-0", "", 100));
         assert!(pop_window_config(&mut cfg, "/drive/missing").is_none());
         assert_eq!(cfg.window_configs.len(), 1);
+    }
+
+    #[test]
+    fn window_config_zoom_level_defaults_to_one_on_missing_field() {
+        // `fullstack-b-19`: existing `config.json` files predate
+        // the `zoom_level` field. The serde-default keeps them
+        // loadable as 1.0 instead of failing the load and dropping
+        // the entire window-config stack on the floor.
+        let pre_b19 = r#"{
+            "key": "/drive/legacy",
+            "window_label": "drive-legacy-0",
+            "url_hash": "files=1",
+            "saved_at": 12345
+        }"#;
+        let cfg: WindowConfig = serde_json::from_str(pre_b19).expect("legacy load");
+        assert_eq!(cfg.zoom_level, 1.0);
+        assert_eq!(cfg.url_hash, "files=1");
+    }
+
+    #[test]
+    fn window_config_zoom_level_round_trips() {
+        let entry = WindowConfig {
+            key: "/drive/a".to_string(),
+            window_label: "drive-a-0".to_string(),
+            url_hash: String::new(),
+            zoom_level: 1.4,
+            saved_at: 0,
+        };
+        let json = serde_json::to_string(&entry).expect("serialize");
+        let back: WindowConfig = serde_json::from_str(&json).expect("deserialize");
+        assert!((back.zoom_level - 1.4).abs() < f64::EPSILON);
     }
 
     #[test]

@@ -574,9 +574,13 @@ pub fn spawn_local_drive_window(app: &AppHandle, key: &str, url: &str) -> Result
         Some(c) => c.window_label.clone(),
         None => new_drive_window_label(key),
     };
-    let url_hash = restore.map(|c| c.url_hash).unwrap_or_default();
+    let url_hash = restore
+        .as_ref()
+        .map(|c| c.url_hash.clone())
+        .unwrap_or_default();
+    let zoom_level = restore.as_ref().map(|c| c.zoom_level).unwrap_or(1.0);
     let title = drive_title(key);
-    build_drive_window(app, &label, &title, url, &url_hash, config_key)
+    build_drive_window(app, &label, &title, url, &url_hash, config_key, zoom_level)
 }
 
 /// Spawn a new tunneled-drive webview window. Same multi-window
@@ -595,12 +599,16 @@ pub fn spawn_tunneled_drive_window(
         Some(c) => c.window_label.clone(),
         None => new_tunnel_window_label(tenant_label, drive),
     };
-    let url_hash = restore.map(|c| c.url_hash).unwrap_or_default();
+    let url_hash = restore
+        .as_ref()
+        .map(|c| c.url_hash.clone())
+        .unwrap_or_default();
+    let zoom_level = restore.as_ref().map(|c| c.zoom_level).unwrap_or(1.0);
     // `fullstack-b-14`: matches the local-drive title shape; the
     // tunneled drive has no local filesystem path, so we use the
     // closest analog ("<tenant>·<drive>") with no prefix.
     let title = format!("{tenant_label} \u{00b7} {drive}");
-    build_drive_window(app, &label, &title, url, &url_hash, config_key)
+    build_drive_window(app, &label, &title, url, &url_hash, config_key, zoom_level)
 }
 
 /// Pop the top-of-stack window config for `config_key` only if the
@@ -661,6 +669,7 @@ fn build_drive_window(
     url: &str,
     url_hash_seed: &str,
     config_key: String,
+    zoom_seed: f64,
 ) -> Result<(), String> {
     let Ok(mut parsed) = url.parse::<tauri::Url>() else {
         return Err(format!("bad chan URL for {window_label}: {url}"));
@@ -686,10 +695,15 @@ fn build_drive_window(
             .min_inner_size(640.0, 400.0)
             .resizable(true)
             .initialization_script(KEY_BRIDGE_JS)
-            // Tauri polyfill: Cmd/Ctrl + [+ = -] and mousewheel zoom,
-            // 20% per step, 20%-1000%. Requires the
-            // `core:webview:allow-set-webview-zoom` permission on
-            // drive-* / tunnel-* windows in capabilities/drive.json.
+            // `fullstack-b-19`: explicit `zoom_in` / `zoom_out` /
+            // `zoom_reset` IPC commands fired from KEY_BRIDGE_JS
+            // are the primary path; this Tauri-level polyfill stays
+            // on as a mousewheel + pinch fallback (the chord
+            // overlap is harmless because KEY_BRIDGE_JS's capture-
+            // phase listener calls preventDefault before the
+            // polyfill's bubble-phase listener sees the keydown).
+            // Requires `core:webview:allow-set-webview-zoom` on
+            // drive-* / tunnel-* windows per capabilities/drive.json.
             .zoom_hotkeys_enabled(true)
             // Hand HTML5 drag-and-drop to the page. Tauri's OS-level
             // drag handler swallows dragover events otherwise, so
@@ -699,6 +713,28 @@ fn build_drive_window(
             .build()
         {
             Ok(window) => {
+                // `fullstack-b-19`: restore the persisted zoom level from
+                // the popped WindowConfig (if any). 1.0 is the chan-
+                // desktop default; skip the IPC round-trip when there's
+                // nothing to apply. Best-effort: a Tauri set_zoom error
+                // here just leaves the new window at default zoom — the
+                // user can re-press Cmd++/Cmd+- to recover.
+                if (zoom_seed - 1.0).abs() > f64::EPSILON {
+                    if let Err(e) = window.set_zoom(zoom_seed) {
+                        tracing::warn!(
+                            label = %label_owned,
+                            error = %e,
+                            "restoring window zoom level failed",
+                        );
+                    } else {
+                        let state = app_owned.state::<Arc<AppState>>();
+                        state
+                            .live_window_zooms
+                            .lock()
+                            .unwrap()
+                            .insert(label_owned.clone(), zoom_seed);
+                    }
+                }
                 let app_for_close = app_owned.clone();
                 let label_for_close = label_owned.clone();
                 let key_for_close = config_key.clone();
@@ -727,6 +763,10 @@ fn build_drive_window(
 /// SPA writes the latest state to `location.hash` via
 /// `persistStateToHash`, and Tauri's URL reflection picks that up
 /// on platforms with the WKWebView / WebView2 backends.
+///
+/// `fullstack-b-19`: also drains the live zoom level for this
+/// window into `WindowConfig.zoom_level` so the next open of the
+/// same drive restores the zoom.
 fn capture_window_config_on_close(app: &AppHandle, window_label: &str, config_key: &str) {
     let Some(window) = app.get_webview_window(window_label) else {
         return;
@@ -743,10 +783,17 @@ fn capture_window_config_on_close(app: &AppHandle, window_label: &str, config_ke
         }
     };
     let state = app.state::<Arc<AppState>>();
+    let zoom_level = state
+        .live_window_zooms
+        .lock()
+        .unwrap()
+        .remove(window_label)
+        .unwrap_or(1.0);
     state.push_window_config(WindowConfig {
         key: config_key.to_string(),
         window_label: window_label.to_string(),
         url_hash,
+        zoom_level,
         saved_at: 0,
     });
 }
@@ -874,6 +921,24 @@ const KEY_BRIDGE_JS: &str = r#"
       }
       return;
     }
+    // `fullstack-b-19`: zoom chords route regardless of shift so
+    // Cmd+= (US) and Cmd+Shift+= (= Cmd++) both fire zoom_in.
+    // NumpadAdd / NumpadSubtract similarly. Cmd+0 / Cmd+Numpad0
+    // reset to 100 %.
+    switch (code) {
+      case 'Equal':
+      case 'NumpadAdd':
+        invokeIpc(e, 'zoom_in');
+        return;
+      case 'Minus':
+      case 'NumpadSubtract':
+        invokeIpc(e, 'zoom_out');
+        return;
+      case 'Digit0':
+      case 'Numpad0':
+        invokeIpc(e, 'zoom_reset');
+        return;
+    }
     if (!shift) {
       switch (code) {
         case 'KeyR': invokeIpc(e, 'reload_window'); return;
@@ -958,6 +1023,38 @@ mod tests {
         assert!(MAIN_RS.contains("open_devtools,"));
         assert!(MAIN_RS.contains("fn reload_window(window: tauri::WebviewWindow)"));
         assert!(MAIN_RS.contains("fn open_devtools(window: tauri::WebviewWindow)"));
+    }
+
+    #[test]
+    fn key_bridge_wires_zoom_chords_to_ipc() {
+        // `fullstack-b-19`: Cmd+= / Cmd+- / Cmd+0 (and their
+        // Numpad variants) route directly to the chan-desktop
+        // zoom IPC commands. Routed BEFORE the shift branch so
+        // Cmd+Shift+= (= Cmd++) also zooms in. Capture-phase
+        // listener stops the keydown so Tauri's `zoom_hotkeys_enabled`
+        // polyfill (still on as a mousewheel + pinch fallback)
+        // doesn't double-fire.
+        assert!(KEY_BRIDGE_JS.contains("invokeIpc(e, 'zoom_in')"));
+        assert!(KEY_BRIDGE_JS.contains("invokeIpc(e, 'zoom_out')"));
+        assert!(KEY_BRIDGE_JS.contains("invokeIpc(e, 'zoom_reset')"));
+        assert!(KEY_BRIDGE_JS.contains("case 'Equal':"));
+        assert!(KEY_BRIDGE_JS.contains("case 'Minus':"));
+        assert!(KEY_BRIDGE_JS.contains("case 'Digit0':"));
+        assert!(KEY_BRIDGE_JS.contains("case 'NumpadAdd':"));
+        assert!(KEY_BRIDGE_JS.contains("case 'NumpadSubtract':"));
+        assert!(KEY_BRIDGE_JS.contains("case 'Numpad0':"));
+    }
+
+    #[test]
+    fn invoke_handler_registers_zoom_commands() {
+        // `fullstack-b-19`: zoom_in / zoom_out / zoom_reset must be
+        // in `tauri::generate_handler!` so KEY_BRIDGE_JS's IPC
+        // invocations reach a registered command. generate_handler!
+        // doesn't catch missing entries at compile time; pin here.
+        const MAIN_RS: &str = include_str!("main.rs");
+        assert!(MAIN_RS.contains("zoom_in,"));
+        assert!(MAIN_RS.contains("zoom_out,"));
+        assert!(MAIN_RS.contains("zoom_reset,"));
     }
 
     #[test]

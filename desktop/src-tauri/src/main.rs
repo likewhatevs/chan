@@ -41,6 +41,15 @@ pub struct AppState {
     /// frontend disables every action that would try to spawn chan,
     /// and the mutating IPC commands short-circuit with `reason`.
     bin_status: BinStatus,
+    /// `fullstack-b-19`: per-live-window zoom level. Tracks the
+    /// current zoom for every open webview keyed by window label so
+    /// `zoom_in` / `zoom_out` / `zoom_reset` can compute the next
+    /// level without spawning a JS eval round-trip to read the
+    /// current. Drained into `WindowConfig.zoom_level` by the close
+    /// handler so the LRU restore from `-b-1` picks the level up on
+    /// the next open. Missing entry reads as 1.0 (the chan-desktop
+    /// default).
+    pub live_window_zooms: Mutex<HashMap<String, f64>>,
 }
 
 /// Frontend-visible verdict from the boot-time `chan` preflight.
@@ -604,6 +613,58 @@ fn open_devtools(window: tauri::WebviewWindow) {
     window.open_devtools();
 }
 
+/// `fullstack-b-19`: browser-style zoom controls. Step size is
+/// 10 % per Cmd++/Cmd+- press; the clamp range matches Tauri's own
+/// `zoom_hotkeys_enabled` polyfill semantics (0.25-5.0).
+const ZOOM_STEP: f64 = 0.10;
+const ZOOM_MIN: f64 = 0.25;
+const ZOOM_MAX: f64 = 5.0;
+
+/// Read the current zoom level for `label` from process state,
+/// defaulting to 1.0 (chan-desktop's initial zoom). Pure read; the
+/// IPC handlers compute the next level locally and write back.
+fn current_zoom(state: &AppState, label: &str) -> f64 {
+    state
+        .live_window_zooms
+        .lock()
+        .unwrap()
+        .get(label)
+        .copied()
+        .unwrap_or(1.0)
+}
+
+fn apply_zoom(window: &tauri::WebviewWindow, state: &AppState, next: f64) -> Result<(), String> {
+    let clamped = next.clamp(ZOOM_MIN, ZOOM_MAX);
+    window
+        .set_zoom(clamped)
+        .map_err(|e| format!("setting webview zoom on {}: {e}", window.label()))?;
+    state
+        .live_window_zooms
+        .lock()
+        .unwrap()
+        .insert(window.label().to_string(), clamped);
+    Ok(())
+}
+
+/// Zoom the calling webview one step up (Cmd++ / Ctrl++).
+#[tauri::command]
+fn zoom_in(window: tauri::WebviewWindow, state: State<Arc<AppState>>) -> Result<(), String> {
+    let current = current_zoom(&state, window.label());
+    apply_zoom(&window, &state, current + ZOOM_STEP)
+}
+
+/// Zoom the calling webview one step down (Cmd+- / Ctrl+-).
+#[tauri::command]
+fn zoom_out(window: tauri::WebviewWindow, state: State<Arc<AppState>>) -> Result<(), String> {
+    let current = current_zoom(&state, window.label());
+    apply_zoom(&window, &state, current - ZOOM_STEP)
+}
+
+/// Reset the calling webview to 100 % (Cmd+0 / Ctrl+0).
+#[tauri::command]
+fn zoom_reset(window: tauri::WebviewWindow, state: State<Arc<AppState>>) -> Result<(), String> {
+    apply_zoom(&window, &state, 1.0)
+}
 
 /// Canonical-path key used for sidecar lookups, serve identity, and
 /// the displayed path. `canonicalize` falls back to the input on
@@ -743,6 +804,7 @@ fn main() {
         serves: Mutex::new(HashMap::new()),
         tunnel: TunnelState::new(),
         bin_status,
+        live_window_zooms: Mutex::new(HashMap::new()),
     });
     let state_for_exit = Arc::clone(&state);
     let state_for_setup = Arc::clone(&state);
@@ -829,6 +891,9 @@ fn main() {
             reveal_in_finder,
             reload_window,
             open_devtools,
+            zoom_in,
+            zoom_out,
+            zoom_reset,
             tunnel_status,
             tunnel_start,
             tunnel_stop,
