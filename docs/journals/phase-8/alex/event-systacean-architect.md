@@ -1741,3 +1741,81 @@ Committing + pushing + re-smoking now per the obvious-call shortcut.
 ### After this smoke greens
 
 Pick up `-19` per the queue (C2 graceful BM25 fallback + revert all 28 BGE `#[ignore]` gates). Desk-prep done; chokepoint identified at `chan-drive/src/index/facade.rs::write_file` line 769 + `flush_embed_batch` line 675. Single discriminator + Once-guarded `tracing::warn!` helper. Will fire commit-ready poke when the workspace gate is green.
+
+## 2026-05-21 — scope poke #3 (-20 smoke #3 surfaced 7 NEW chan-server PTY tests failing on Windows)
+
+Per the same discipline. The smoke #3 fixup [`93afd8d`] applied + smoke fired as [`26252715148`](https://github.com/fiorix/chan/actions/runs/26252715148):
+
+| Job | Result |
+|-----|--------|
+| rustfmt | ✓ 26s |
+| web | ✓ 2m29s |
+| build (no default features) | ✓ 1m50s |
+| Ubuntu cargo test | ✓ 2m44s |
+| **Windows clippy** | **✓** (dead_code cascade closed) |
+| Windows cargo test | **X** (7 NEW PTY/terminal failures) |
+
+**Good news**: dead_code lints fully closed. The helper-gating fixup `93afd8d` worked.
+
+**Surprise**: 7 NEW failures in chan-server's PTY/terminal-session tests, all on Windows. None of them in my prior audit pattern (BGE / lock / watcher).
+
+### The 7 new failures
+
+```
+chan-server/src/routes/terminal.rs:1293       api_restart_terminal_respawns_same_session_command
+chan-server/src/routes/terminal.rs:1331       api_restart_terminal_updates_chan_tab_name_env
+chan-server/src/routes/terminal.rs:1485       write_event_reply_atomic_cleans_tmp_on_failure
+chan-server/src/routes/terminal.rs:1685       conditional_pty_programs_validate_real_terminal
+chan-server/src/routes/terminal.rs:1894       mcp_env_off_omits_chan_mcp_vars
+chan-server/src/terminal_sessions.rs:1821     spawn_uses_configured_default_term
+chan-server/src/terminal_sessions.rs:1914     dispatch_agent_event_uses_chord_in_agent_mode
+```
+
+### Root cause: POSIX-shell assumptions in tests, run against cmd.exe on Windows
+
+Empirical from the panic messages — all 7 spawn a PTY, expect to drive it with POSIX shell commands like `printf '\n__MCP_ENV_OFF_BEGIN__\n'; env | grep '^CHAN_MCP_' || true`, then assert on the resulting output. On Windows the PTY ends up running `cmd.exe` (or similar), which doesn't understand the POSIX syntax — leading to outputs like:
+
+* `The system cannot find the file specified.` (cmd.exe can't find `sh`).
+* `Microsoft Windows [Version 10.0.26100...]` (cmd.exe banner in PTY output).
+* `printf: warning: ignoring excess arguments, starting with 'tty;'` (cmd.exe semicolons aren't statement separators).
+* `restart-$SYSTACEAN_RESTART"; sleep 1` literally appearing in the output (cmd.exe doesn't expand `$VAR` or interpret semicolons).
+
+This is a fundamental cross-platform PTY test problem: the test infrastructure spawns the OS-default shell (`cmd.exe` on Windows), but the test bodies assume POSIX.
+
+### Same shape, larger scale
+
+Same mechanical fix shape as `-20` lock + watcher gates. But 7 tests this time. Three options:
+
+* **A — mechanical `#[cfg(unix)]` gate** on all 7 tests. Bug-list Round-3 entry: "chan-server terminal/PTY tests assume POSIX shell; gate on Unix until Windows-shell-aware test infra lands." Same pattern as `-20`. Diff: ~14 lines (7 attribute + 7 audit comment blocks).
+* **B — rewrite test infra to abstract the shell** so each test specifies its command in a shell-portable way (e.g., a `cmd_for_platform` helper that returns the right shell + args). Bigger scope; touches every test's command-line setup. Not Round-3 polish — it's a real test-infra refactor.
+* **C — broader question: is Windows a real CI target for chan-server today?** chan-desktop ships macOS-only at v0.11.2. The Windows chan binary CLI may be a real-user surface (download links from `release.yml`), but chan-server's terminal sessions surface is exercised primarily by chan-desktop. If Windows isn't going to ship chan-desktop in v0.12.0 either, the per-PR Windows clippy + cargo-test gate could be RELAXED — remove the windows-latest matrix entry from `ci.yml` until Windows becomes a real release target. That's not in my lane though; it's a `@@CI` + `@@Alex` decision about CI matrix shape.
+
+### Recommendation
+
+**A** for the immediate per-PR-gate close. Same mechanical pattern + same Round-3-polish bug-list entry pattern that worked for lock contract + watcher fanout.
+
+**C** is the bigger question worth surfacing to @@Alex separately. If Windows is genuinely not a v0.12.0 release surface for chan-server, the per-PR matrix entry is iteration cost without empirical product value. The relax-the-matrix decision would also revert the 19 platform-specific gates (`-20` lock-3 + smoke #2 fixup watcher-1 + this proposed 7 PTY + the existing) the moment Windows becomes a real release target — they're all "until-then" gates anyway.
+
+### Pattern observation (for the systacean memory candidate list)
+
+Three iterations on the Windows surface have surfaced three classes of "Unix-assumption-in-test" failures:
+1. Lock contract (`-20`): tests assume Unix `flock` semantics.
+2. Watcher fanout (smoke #2 fixup): tests assume Unix-fast `notify` event delivery.
+3. PTY shell (this poke): tests assume POSIX shell.
+
+The aggregate signal: chan-server + chan-drive's test suites are Unix-shaped because the development happens on macOS/Linux. Windows CI is exposing this Unix-shape as gate failures. Either gate-each (Round-3 work to fix-each) OR relax-the-matrix is the architectural decision the project will need to make for v0.12.0 + beyond.
+
+### NOT iterating
+
+Same discipline as the prior 2 scope pokes. The first surfaced chan-server BGE widening; the second surfaced wait_for not being enough for the watcher; this third surfaces PTY tests. Each time the fix shape is mechanical but the SCOPE / pattern is new enough to warrant a pause + architect call.
+
+Holding for routing. The chan-drive `tests/smoke.rs` binary may still be behind this PTY failure (cargo aborted after the terminal failures); but `tests/smoke.rs` is already `#[ignore]`-gated by `-18` fu#2 so it should be a no-op when reached.
+
+### Sequencing
+
+After routing on this:
+1. Land the chosen fix (A or B; or @@Alex pivots to C).
+2. Pick up `-19` (C2 graceful BM25 fallback). Reverts all 28 BGE `#[ignore]` gates; the platform `#[cfg(unix)]` gates stay until Round-3 (or matrix relax in C).
+3. `-16` after `-19` if bandwidth.
+
+Standing by for routing.
