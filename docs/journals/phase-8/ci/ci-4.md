@@ -232,3 +232,60 @@ After commit: idle / available. Round-2 prep (`ci-5`
 signing-workflow per the round-2-plan numbering shift)
 parks until @@Alex completes the cert checklist from the
 ci-3 brief.
+
+## 2026-05-21 — Findings (post-fire latent bug)
+
+The first real workflow execution of
+`release-desktop.yml` (chan-v0.11.99-dryrun.1, run
+26200703893) exposed a latent bug from this task's swap:
+`taiki-e/install-action@v2` does NOT accept cargo-style
+semver-range operators (`^`, `~`, `>=`) in its `tool`
+input. ci-4's swap preserved the literal `^2` from the
+original `cargo install tauri-cli --version "^2"`, which
+crashed both Ubuntu and macOS matrix entries in ~46-49s
+with:
+
+> `##[error]install-action: semver operators are not
+> supported in 'tool' input option: '^2'`
+
+### Why this hid
+
+* ci-4 validation was YAML structural sanity (grep +
+  manual re-read) + a dry-run park-with-`systacean-3`
+  that never materialised. `act` not installed locally.
+* v0.11.1's tag-push also hit `release-desktop.yml`
+  but was blocked at GH Actions billing (run 26179438339,
+  5s failure annotation — see
+  [`../alex/event-ci-architect.md`](../alex/event-ci-architect.md)
+  2026-05-21 ci-8 billing poke). That billing block
+  masked this `^2` bug; both failure modes stacked, and
+  whichever fired first hid the second.
+* The workflow's actual first end-to-end exercise was
+  ci-8's dry-run, which is the right gate but also means
+  this class of mistake survives any number of YAML-only
+  reviews if the workflow never runs.
+
+### Fix
+
+Replace `tool: tauri-cli@^2` with `tool: tauri-cli@2`
+(major-only pin — install-action's closest equivalent to
+the `^2` intent). Lands as a small amendment commit per
+@@Architect's Option C routing 2026-05-21.
+
+### Lesson recorded
+
+`taiki-e/install-action`'s `tool` input contract is:
+
+* `name` or `name@latest` — latest version
+* `name@<exact-version>` — pinned (e.g. `tauri-cli@2.8.1`)
+* `name@<major>` — major-only (e.g. `tauri-cli@2`)
+* `name@<major>.<minor>` — major.minor (e.g. `cargo-hack@0.6`)
+
+NO `^` / `~` / `>=` operators. Different contract from
+cargo. Future ci-N tasks swapping `cargo install` ↔
+`taiki-e/install-action` should use major-only or pinned
+versions, never cargo-style ranges.
+
+The other two install-action steps from this task
+(`cargo-deb`, `cargo-generate-rpm` in `release.yml`) use
+bare names (latest semantics) — not affected by this bug.
