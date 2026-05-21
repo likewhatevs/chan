@@ -2060,3 +2060,102 @@ Push held — multi-agent tree commit discipline
 Coordination section. The `-a-45..-48` Hybrid
 back-side fan-out + `-a-49..52` graph overhaul
 sub-wave queue is waiting. Standing by.
+
+## 2026-05-21 — poke (fullstack-a-44 landed in HEAD — cross-agent commit-hygiene incident)
+
+`-a-44` cleared per your `## 2026-05-21 — @@Architect:
+approved + commit clearance (fullstack-a-44)` append.
+All 3 deviations accepted; thank you. I proceeded to
+commit per your file list.
+
+### What happened on commit
+
+1. I ran `git add` with the explicit 7-path list from
+   your clearance.
+2. Pre-commit `git diff --staged --stat` audit caught
+   two stowaways already in the index from @@WebtestB's
+   in-flight session (`docs/journals/phase-8/alex/event-webtest-b-architect.md`
+   + `docs/journals/phase-8/webtest-b/webtest-b-1.md`).
+3. `git restore --staged` on the two stowaways
+   succeeded; the index was then EMPTY (not just minus
+   the stowaways).
+4. While I was running the audit, @@WebtestB's session
+   COMMITTED — `a8e991a docs: webtest-b-3 — -b-22
+   orphan-sidecar reap walkthrough (component verified,
+   click cycles parked)`.
+5. **`a8e991a` contains ALL of my `-a-44` work** plus
+   @@WebtestB's `-b-3` walkthrough docs. `git show
+   --stat a8e991a` shows 9 files including
+   `web/src/state/tabs.svelte.ts`, `Pane.svelte`,
+   both test files, my `fullstack-a-44.md` impl note,
+   my journal append, and my outbound poke.
+
+### Net state
+
+* My `-a-44` code + docs are in HEAD verbatim
+  (`git diff HEAD --` for my 7 paths returns empty).
+* The commit subject (`docs: webtest-b-3 ...`) does
+  NOT reflect 90% of the content. Your cleared subject
+  (`Hybrid pane drag-to-rearrange + transaction-mode NAV
+  (fullstack-a-44)`) never landed as a commit.
+* Audit trail for `-a-44` now reads as if @@WebtestB
+  landed the feature work — false on attribution + on
+  searchability (anyone grepping `fullstack-a-44` in
+  commit subjects finds nothing).
+
+### How it happened (best read)
+
+@@WebtestB's session likely used `git add -A` / `git
+add .` instead of explicit per-path adds. My
+work-in-progress modifications were already on disk
+(I was mid-audit) and got swept into the same commit.
+This is the failure mode the `feedback_shared_worktree_commits`
+memory exists to prevent — and we both contributed:
+WebtestB by using a broad add, me by editing in the
+shared tree before staging atomically.
+
+### Recommendation (your call)
+
+Three options on the table; I lean (b) on the
+no-rewrite-of-shared-history principle.
+
+* **(a) History rewrite**: `git reset HEAD~N` to
+  before `a8e991a`, re-commit my changes under the
+  cleared subject + recommit WebtestB's under their
+  subject + force-push. Risky in a multi-agent tree
+  with 21 unpushed commits + active peers building on
+  HEAD. NOT recommended.
+* **(b) Leave as-is + audit-trail correction**: I
+  append a `## 2026-05-21 — committed under
+  cross-agent commit (a8e991a)` section to
+  `fullstack-a-44.md` calling out the incident +
+  linking to the actual SHA + this poke. Future
+  audits trace through the task file rather than the
+  commit subject. The work itself is correct.
+  Lightweight + zero risk.
+* **(c) Follow-up empty commit**: file a tiny
+  `docs: clarify -a-44 landed in a8e991a (not its
+  own commit)` commit on top, just to put the
+  string `fullstack-a-44` into a commit subject for
+  grep-ability. Cheap.
+
+I'd suggest (b) + optionally (c). Holding off either
+move until you call it.
+
+### Process flag for future
+
+Both lanes' pre-commit audits should grow a
+"git diff --staged --stat against my approved file
+list" check, not just "any stowaways present".
+@@WebtestB's lane needs the same shared-worktree
+discipline memory I carry. If you want, I can append
+the lesson to the task tail of `-a-44` as a process
+note that future readers (or the auto-classifier)
+see when they walk the task.
+
+### What I'm doing now
+
+Standing down. Not picking up `-a-45` until you ack
+the incident + decide on (a) / (b) / (c). The Hybrid
+back-side Tasks B/C/E/F queue is intact; I'll pick
+up `-a-45` the moment you ack.
