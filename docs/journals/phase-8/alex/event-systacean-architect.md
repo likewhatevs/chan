@@ -1623,3 +1623,80 @@ Pick up `-19` per the queue (C2 graceful BM25 fallback + revert all 28 `#[ignore
 ### Discipline ack ack
 
 Pattern preserved. The "new class of failure → escalate even if not lane-crossing" trigger is now bookended by two empirical cases (chan-server BGE widening; watcher timing). Both surfaced cleanly + got routed cleanly. Saving the pattern.
+
+## 2026-05-21 — scope poke (-20 fixup smoke STILL fails on report watcher; option B insufficient)
+
+Per the same discipline. The `wait_for` poll fixup [`76a07a0`] applied + smoke re-fired as [`26250685864`](https://github.com/fiorix/chan/actions/runs/26250685864). Result on Windows:
+
+```
+chan-drive/tests/report.rs:130
+test watcher_keeps_report_current ... FAILED
+report missed b.md within 5s
+```
+
+Same test, slightly different line (130 vs 119 — assert moved as part of the fixup). **`wait_for` polls every 50ms for up to 5s = 100 iterations**. None of the 100 polls finds `b.md` in `drive.report().files`. So this isn't a 700ms-too-short problem — it's a "watcher → report fanout doesn't deliver `b.md` on Windows at all within 5 seconds".
+
+### Diagnosis
+
+The test:
+1. Creates `a.md` (warmup). ✓
+2. Attaches `drive.watch(cb)`. ✓ (no error)
+3. Creates `b.md`.
+4. `wait_for(collector.len() >= 1, 5s)` — **PASSES** on Windows (test's own collector saw the event).
+5. `wait_for(report has b.md, 5s)` — **FAILS** on Windows. Polled 100x, never sees b.md.
+
+The watcher itself works (step 4). The collector test callback fires. But the report's internal `ReportFanOut` (which is the OTHER subscriber to the watcher events) presumably doesn't dispatch the event to the report-writer thread, OR the writer thread doesn't pick it up.
+
+Possible root causes (not investigating — out of scope):
+
+* `notify` crate's macOS-fsevent / Windows-readDirectoryChangesW path-event format mismatch — the path's representation might differ enough that the report state's path-lookup misses.
+* `ReportFanOut::on_event` failing silently on Windows (e.g., path encoding mismatch with the `chan_report::Index`).
+* `ReportState::on_event` calling `idx.update(path)` where the path is in a Windows-specific shape that the index doesn't recognize.
+
+### Option B WAS the right call
+
+The `wait_for` poll is genuinely better test discipline than a fixed sleep — that part of the fixup stands as a real improvement. The bonus: the test now demonstrably WAITS 5 seconds on Windows (giving the underlying issue room to manifest) vs the prior 700ms which might have masked a smaller-magnitude version of the same issue. Now we have empirical evidence the issue is real, not timing-margin.
+
+### Recommendation: pivot to option A
+
+Given option B isn't sufficient, pivot to **option A** (`#[cfg(unix)]` gate) for the immediate unblock + Round-3 polish bug-list entry for the underlying `ReportFanOut` Windows reliability gap. Same pattern as `-20`'s lock-contract gating: mechanical gate, real fix deferred to Round-3.
+
+The KEEP from option B: the `wait_for` poll change stays in (genuine test-quality improvement, no downside on Unix). The ADD is the `#[cfg(unix)]` attribute on top.
+
+### Diff for the pivot
+
+```rust
+// systacean-20 smoke fixup: gated on Unix because the watcher-to-
+// report fanout doesn't deliver new-file events to the report
+// state on Windows even after 5s of polling. Underlying gap
+// tracked in phase-8-bugs.md "Windows watcher → ReportFanOut
+// reliability"; revert this gate when the fan-out wire is
+// audited + fixed for Windows.
+#[cfg(unix)]
+#[test]
+fn watcher_keeps_report_current() { ... }
+```
+
+Plus a Round-3 polish bug-list entry mirroring `-20`'s pattern.
+
+### Or option C if you prefer the real fix
+
+Audit `chan-drive/src/report.rs::ReportFanOut::on_event` + `ReportState::on_event` + `chan_report::Index::update`'s path-handling on Windows. Diagnose what's happening between the watcher event firing and the report state updating. Likely a path-encoding / path-comparison issue specific to Windows file paths. Real fix; bigger scope.
+
+Recommendation: **A** for this round (matches `-20`'s pattern; lowest cost; gets gate green now). **C** as Round-3 polish.
+
+### NOT iterating
+
+Per the same discipline. The first scope poke for chan-server BGE was right; the second for watcher-timing was right; this third one for "option B wasn't enough" is also right. Fire-and-route beats fire-and-hope-it-converges.
+
+### Sequencing if A approved
+
+1. Add `#[cfg(unix)]` to the test (keeps the wait_for poll improvement).
+2. Add Round-3 polish bug-list entry "Windows watcher → ReportFanOut reliability".
+3. Push fastforward + re-smoke.
+4. Expected: all 4 Windows surfaces closed; Round-3 readiness signal hits.
+5. Pick up `-19` after.
+
+If C — I'll need a fresh task spec since "audit watcher-to-report fanout on Windows" is a real investigation, not a mechanical fix.
+
+Standing by for routing.
