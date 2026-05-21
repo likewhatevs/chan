@@ -1074,3 +1074,67 @@ ci-8 dry-run support if @@CI needs hands.
 
 Push waits for @@Systacean's `chan-v0.11.2` cut per the
 commit-plan.
+
+## 2026-05-21 — poke (fullstack-b-20 committed; ci-8 dry-run #3 unblocked)
+
+`-b-20` committed as `602d0cb` "chan-desktop: aarch64-only DMG
+via bundle.macOS.files + main.rs unused-app rename". 4 files,
+175 insertions / 21 deletions. Pre-commit
+`git diff --staged --stat` + post-commit
+`git show --stat HEAD` clean.
+
+### Empirical findings beyond the task body
+
+* **Option (iii) doesn't work.** Tested locally: setting
+  `bundle.externalBin = ["binaries/chan-aarch64-apple-darwin"]`
+  caused tauri-build to look for
+  `binaries/chan-aarch64-apple-darwin-aarch64-apple-darwin`
+  (Tauri 2 appends the triple unconditionally; no
+  detect-existing-triple short-circuit). Confirmed via
+  `cargo check`.
+* **Option (i) with `bundle.macOS.files`** is the cleanest
+  workable path. Destinations are relative to
+  `Chan.app/Contents/`, NOT the bundle root — first attempt
+  with `"Contents/MacOS/chan"` produced
+  `Chan.app/Contents/Contents/MacOS/chan` (two levels).
+  Corrected to `"MacOS/chan"` and end-to-end verified:
+  `cargo tauri build --bundles app` produces
+  `Chan.app/Contents/MacOS/chan` (26 MB, executable, signed,
+  `chan --version` → 0.11.1).
+* **Bug #2's task-body "1-char rename" is incomplete.** The
+  closure parameter `app` IS used at line 932 inside
+  `#[cfg(target_os = "macos")]`. The naive rename to `_app`
+  makes the body's `app` reference fall back to the outer
+  `tauri::App` binding (wrong type for `show_window(&AppHandle,
+  ...)`); macOS build fails to compile. Fix: rename the param
+  AND update the line 932 reference to `_app`. `_app` is still
+  a usable binding; only the unused-warning is suppressed.
+
+### Trade-offs documented in CLAUDE.md
+
+Dropping `bundle.externalBin` has two scoped regressions, both
+documented in `desktop/CLAUDE.md`'s new "v0.11.2 hotfix:
+aarch64-only DMG, no externalBin" subsection:
+
+1. **Dev-mode auto-copy** via externalBin is gone. `cargo tauri
+   dev` no longer drops chan into `target/debug/`. Contributors
+   with `cargo install --path crates/chan` chan on PATH get the
+   `-b-16` resolver path automatically; without it, dev mode
+   reports `BinStatus::missing`.
+2. **Linux/Windows bundling** no longer ships chan
+   (`bundle.macOS.files` is macOS-only). Users on those
+   platforms install chan separately and rely on `-b-16`'s
+   PATH resolver.
+
+Both restored as a post-v0.11.2 `ci-N` follow-up that pairs
+universal2 / lipo work with multi-platform
+`bundle.<linux|windows>.files` restoration.
+
+### Hand-off
+
+ci-8 dry-run #3 can fire against `602d0cb`. If green →
+@@WebtestB second-Mac verify → @@Alex "cut it" → @@Systacean
+cuts `chan-v0.11.2`. Standing by for verdicts.
+
+See [../fullstack-b/fullstack-b-20.md](../fullstack-b/fullstack-b-20.md)
+for the full implementation note + verification table.
