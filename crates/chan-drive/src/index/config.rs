@@ -103,6 +103,15 @@ impl Default for IndexConfig {
     }
 }
 
+// `toml::de::Error` and `toml::ser::Error` are intentionally
+// boxed here. Both carry inline message buffers + span info that
+// push their stack size on the Windows target past clippy's
+// `result-large-err` 128-byte threshold; boxing brings the
+// `ConfigError` variant down to a single pointer so every
+// `Result<_, ConfigError>` return site stays under the lint.
+// Linux + macOS don't trip the lint (different stack alignment
+// and intrinsic type sizes there), but the boxing also reduces
+// the size of the Ok variant's stack slot on every platform.
 #[derive(Debug, Error)]
 pub enum ConfigError {
     #[error(transparent)]
@@ -111,12 +120,23 @@ pub enum ConfigError {
     Decode {
         path: PathBuf,
         #[source]
-        source: toml::de::Error,
+        source: Box<toml::de::Error>,
     },
     #[error(transparent)]
-    Encode(#[from] toml::ser::Error),
+    Encode(Box<toml::ser::Error>),
     #[error(transparent)]
     Chan(#[from] ChanError),
+}
+
+// Manual `From` for the encoder side: `#[from]` on a `Box<_>`
+// field would generate `From<Box<toml::ser::Error>>`, which
+// breaks `?` at the `toml::to_string_pretty(...)` call site.
+// Wrap the bare error in a `Box` at the boundary so `?`
+// continues to compile unchanged.
+impl From<toml::ser::Error> for ConfigError {
+    fn from(e: toml::ser::Error) -> Self {
+        Self::Encode(Box::new(e))
+    }
 }
 
 /// Path to the index config inside `index_dir`.
@@ -133,7 +153,10 @@ pub fn load(index_dir: &Path) -> Result<IndexConfig, ConfigError> {
         return Ok(IndexConfig::default());
     }
     let raw = std::fs::read_to_string(&path)?;
-    toml::from_str(&raw).map_err(|source| ConfigError::Decode { path, source })
+    toml::from_str(&raw).map_err(|source| ConfigError::Decode {
+        path,
+        source: Box::new(source),
+    })
 }
 
 /// Persist the config. Creates the parent directory if needed.

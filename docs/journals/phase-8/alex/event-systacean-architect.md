@@ -959,3 +959,73 @@ After `-15` clearance + commit, picking up `systacean-16` (chan-report file-clas
 ### `-12` still parked
 
 Tauri-plugin-updater verify continues parked on a fresh runtime-permission ask to @@Alex; prior session-scoped grant did not survive recycle per the pre-recycle handover.
+
+## 2026-05-21 — poke (-15 committed; picking up -17)
+
+`-15` cleared + committed cleanly.
+
+* **SHA**: `f4a197d` — `chan-report: maintained per-directory aggregation cache + /api/report/dir (systacean-15)`.
+* **Files**: 9 paths exactly per your clearance list. Pre-stage `git diff --staged --stat` + post-commit `git show --stat HEAD` audits both clean. The 10 foreign modified files (`.github/workflows/{ci,release}.yml`, the four `event-*-architect.md` channels, `ci/ci-{11-post-mortem,12}.md`, three `webtest-{a,b}/*.md` task tails) stayed un-staged per the shared-worktree-commits discipline.
+* **Task tail**: [`../systacean/systacean-15.md`](../systacean/systacean-15.md) "## 2026-05-21 — committed as f4a197d" carries the audit anchor.
+
+Push held per Round-2-close.
+
+### Picking up `-17` now
+
+Per your revised queue order, `-17` (Windows `result_large_err` clippy on `ConfigError`) is gate-unblocker priority ahead of `-16`. Reading [`../systacean/systacean-17.md`](../systacean/systacean-17.md) + `crates/chan-drive/src/index/config.rs` + `facade.rs` now. Shape (a) (`Box<toml::de::Error>` inside the offending variant) is the recommended path; falling back to (b) only if (a) doesn't bring the type under the threshold.
+
+`-18` follows. `-16` parks one queue position back as feature work. `-12` continues parked on the fresh-permission-ask gate.
+
+### CI smoke note
+
+The task acceptance asks for `gh workflow run ci.yml --ref <branch>` CI verification of the Windows runner. Since Round-2-close holds local commits unpushed, I'll either (a) push to a smoke branch (similar to @@CI's `ci-12-smoke` shape) for the workflow run, or (b) trust the per-PR gate at the eventual push time. Will flag in the commit-readiness poke before committing if the local repro is inconclusive — Windows shape is hard to repro without a Windows host.
+
+## 2026-05-21 — poke (-17 ready for review; Windows verification pending)
+
+Single-file fix; local pre-push gate green; Windows clippy not repro-able on this host (anticipated). Holding for commit clearance.
+
+### Highlights
+
+* **Shape (a)** per the architect recommendation: box `toml::de::Error` in `ConfigError::Decode` + box `toml::ser::Error` in `ConfigError::Encode`. Variant size shrinks to a single pointer, so every `Result<_, ConfigError>` return site stays under the Windows `result_large_err` threshold.
+* **Encode-side detail**: dropped `#[from]` (would generate `From<Box<toml::ser::Error>>`, breaking `?` at the `toml::to_string_pretty(cfg)?` call site). Added a manual `impl From<toml::ser::Error>` that wraps in `Box::new(e)`. Call-site `?` continues to compile unchanged.
+* **Defensive choice**: boxed BOTH Decode + Encode at the same time even though `ci-12-smoke` only named `toml::de::Error`. Same crate, same size class; hedges against future toml-crate version bumps changing the ser-side payload.
+* **No other lint sites**: `ChanError` in `crates/chan-drive/src/error.rs:77-90` already string-renders toml errors at the `From` boundary. No collateral boxing needed.
+
+### Files
+
+```
+crates/chan-drive/src/index/config.rs               | +26 / -3
+docs/journals/phase-8/systacean/systacean-17.md     | (task tail append)
+docs/journals/phase-8/alex/event-systacean-architect.md  | (this poke)
+```
+
+3 paths total for the commit. Foreign files in the dirty working tree (the `.github/workflows/*`, four `event-{ci,webtest-a,webtest-b}-architect.md`, the ci/webtest task tails) all stay un-staged per the shared-worktree discipline.
+
+### Suggested commit subject
+
+```
+chan-drive: box toml::Error variants in ConfigError (systacean-17)
+```
+
+### Local pre-push gate
+
+All green at HEAD `f4a197d`: fmt + clippy `-D warnings` workspace-wide + `cargo test -p chan-drive` (all 425+ tests, including `malformed_is_error` which pins the `Decode { .. }` pattern against the boxed source) + workspace `cargo test` + `RUSTFLAGS="-D warnings" cargo build --no-default-features`.
+
+### Windows verification — pending
+
+Tried `cargo clippy -p chan-drive --target x86_64-pc-windows-msvc` from this host. Target is installed via rustup but the `onig_sys` C dep (oniguruma) fails because Windows MSVC C headers aren't available on macOS (`stdlib.h` not found). This matches the task body's "hard to repro locally" note + the "Recommend skipping local repro attempt + relying on `ci-12-smoke`-style smoke dispatch for confirmation" guidance.
+
+Two paths to empirical confirmation:
+
+1. **Smoke dispatch via a branch** (similar to @@CI's `ci-12-smoke`): push HEAD + my impending `-17` commit to a `systacean-17-smoke` branch and `gh workflow run ci.yml --ref systacean-17-smoke`. Confirms Windows clippy clears `result_large_err` before main lands the fix. Operationally low-cost; reuses the pattern @@CI established for `ci-12`.
+2. **Fold into the regular push flow**: clear + commit on main; the next push pass exercises the per-PR gate against the cumulative queue. Slower feedback loop but no extra branch lifecycle.
+
+Per the architect's "make obvious calls" memory for code-lane decisions, recommending option 1 (smoke dispatch). Flag if option 2 fits better with the broader Round-2 push cadence.
+
+### `-18` next
+
+Picking up `systacean-18` (chan-drive tests skip / feature-gate on missing BGE model) after `-17` clearance, regardless of which verification path is chosen. Both `-17` + `-18` need to land before the per-PR CI gate goes fully green.
+
+### `-16` + `-12` standing
+
+`-16` (file-classification buckets) still queued behind `-18` per the revised order. `-12` (tauri-plugin-updater verify) still parked on a fresh runtime-permission ask to @@Alex.
