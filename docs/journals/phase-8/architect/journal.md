@@ -3819,3 +3819,92 @@ commit on their next spawn.
 Standing by for the gate fixup commit + the re-smoke
 verdict (Round-3 readiness signal once Windows greens
 on the gated test).
+
+## 2026-05-21 — clearance round 15 — -a-55 landed; -a-49 routed option C; @@Systacean concurrent pivot acked
+
+### Lane commits landed this beat
+
+| SHA | Subject | Lane |
+|-----|---------|------|
+| `7cf6f8e` | `Hybrid flip UX: remove tab-strip title + right-align tabs + fix mirrored-tab click (fullstack-a-55)` | @@FullStackA |
+| `8be1bfc` | `docs: -a-49 scope-check poke + -a-55 commit marker (fullstack-a-49 audit anchor)` | @@FullStackA |
+| `efd3ba6` | `docs(systacean): scope poke #2 on -20 smoke — option B insufficient; pivot to A (cfg(unix)) or C (Windows fanout audit)` | @@Systacean |
+
+@@Systacean's `efd3ba6` (21:17 BST) and my pivot
+routing `00ddc79` (21:22 BST) raced — same conclusion
+reached independently. Convergent cross-routing; their
+discipline of NOT iterating silently after B failed
+was exactly right.
+
+### -a-49 scope-check — third architect-side error caught by lane at pickup
+
+@@FullStackA's audit caught a real categorical error in
+my `-a-49` task body: chan-server's
+`merge_filesystem_layer` ALREADY emits Directory nodes
++ `contains` edges; SPA already consumes them
+(GraphPanel.svelte:491/543/789/1003). The G2 gap is in
+the LAYOUT TRANSFORM in `GraphCanvas.svelte` (d3-force
+simulation; all nodes are equal participants), NOT the
+data shape.
+
+Same pattern as @@FullStackB's `-24` lint-location +
+@@Systacean's `-18` chan-server widening. THREE
+architect-side categorical errors in a row caught by
+lane discipline at pickup. The
+`feedback_ground_descriptions_in_source` memory rule
+applied to architect-to-lane direction saves real
+work each time.
+
+Pattern emerging: my task bodies are framing graph /
+chan-server / chan-drive scope inaccurately when I
+don't read the source first. Need to internalize:
+ALWAYS grep / read the implementation surface before
+specifying scope. Cost of NOT doing that has become
+visible — each catch costs a task body revision +
+re-routing round.
+
+### Routing: -a-49 option C — layout transform ONLY
+
+Picked C per @@FullStackA's lean. Markdown-link
+semantics defer to G5's own task slot (cut as a new
+`-a-N` when `-a-49` lands).
+
+Three layout shapes flagged for implementer:
+
+1. d3-force with `forceY` per depth + parent-anchored
+   `forceX` (conservative blast radius).
+2. Hybrid `d3-hierarchy.tree()` + d3-force overlay
+   (architectural separation).
+3. Full d3-hierarchy tree (cleanest visually; drops
+   force-based interaction).
+
+@@FullStackA picks based on the actual implementation
+audit.
+
+### graph-overhaul-plan implication
+
+`graph-overhaul-plan.md` G2 framing needs updating to
+reflect "data is correct; layout transform is the
+gap." I'll update on next graph-related routing round
+(don't want to thrash the plan doc this beat). Pattern
+note for the architect lesson: prefer source-truth over
+plan-doc framing when they conflict.
+
+### Lane state at end of round
+
+| Lane | State |
+|------|-------|
+| @@Systacean | Gate fixup (#[cfg(unix)] on watcher_keeps_report_current) in flight in worktree; expect commit + re-smoke + then -19 |
+| @@CI | Idle |
+| @@FullStackA | -a-49 option C routed; expect commit + then -a-50 pickup (G3 directory inspector) |
+| @@FullStackB | DONE; idle |
+| @@WebtestA | Idle; close-out marker still pending |
+| @@WebtestB | DONE; idle |
+
+### What I'm committing this round
+
+| File | Reason |
+|------|--------|
+| `architect/journal.md` | This entry |
+| `alex/event-architect-fullstack-a.md` | -a-55 ack + -a-49 option C routing + architectural correction logged |
+| `alex/event-architect-systacean.md` | ack on concurrent efd3ba6 pivot |

@@ -2205,3 +2205,34 @@ real fix will work on the target platform. Option B as
 a Round-3 follow-up after empirical Windows access.
 
 Standing by for the gate fixup commit + smoke verdict.
+
+## 2026-05-21 — @@Architect: ack on your concurrent scope poke #2 (efd3ba6)
+
+Your scope poke `efd3ba6` (committed at 21:17 BST) and
+my pivot `00ddc79` (committed at 21:22 BST) raced — we
+independently reached the same conclusion: option B's
+`wait_for` poll doesn't fix the Windows surface; pivot
+to option A `#[cfg(unix)]` gate.
+
+Same call you proposed in `efd3ba6`. The cross-routing
+is convergent — your discipline of NOT iterating
+silently on the next smoke after B failed was exactly
+right. Pattern preserved.
+
+Worktree shows you've already started applying the gate
+(`crates/chan-drive/tests/report.rs` + supporting
+`systacean-20.md` + bug-list entry modified). Carry on;
+that's exactly the implementation per the A routing.
+
+### Bug-list entry
+
+The Round-3 polish entry per my pivot routing covers
+the underlying gap ("Windows notify-crate /
+report-writer reliability for fresh file events").
+Same shape as the lock-contract entry. After the
+`-19` follow-up undoes the 28 BGE gates, the 3
+`#[cfg(unix)]` lock gates + this 1 watcher
+`#[cfg(unix)]` gate are the remaining cross-platform
+debt — both flagged for Round-3.
+
+Standing by for the gate fixup commit + smoke verdict.
