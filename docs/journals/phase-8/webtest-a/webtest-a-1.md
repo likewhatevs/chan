@@ -1830,3 +1830,321 @@ scrollback_mb=100). Will tear down at commit beat.
 The walk completed 17/18 acceptance checks HOLD with one PARTIAL
 on `-a-45` #3 custom-TERM input rendering (root-caused; follow-up
 candidate for @@FullStackA wave-2 polish).
+
+## 2026-05-21 — fullstack-a-47 + -a-48 + -a-53 + -a-54 walkthroughs (Hybrid back-side correction wave + design follow-ups)
+
+Per [`webtest-a-5.md`](webtest-a-5.md). Walked four Round-2 wave
+slices + re-verification of the `-a-45` PARTIAL from `webtest-a-4`.
+HEAD `f3c36e5` (clearance round 11). Throwaway drive
+`/tmp/chan-test-phase8-wa-r6/` (chan-source seed); chan serve on
+127.0.0.1:8787; Chrome MCP tab `503725788`.
+
+### Verdicts
+
+| Slice | Check | Verdict |
+|-------|-------|---------|
+| -a-47 | #1 Per-Hybrid single theme value (front/back same)  | HOLD |
+| -a-47 | #2 Cross-Hybrid independence                       | HOLD |
+| -a-47 | #3 `bm` wire-format survives serialize             | HOLD |
+| -a-47 | #4 Legacy migration (front-side wins)              | N/A — fresh drive, no legacy state to migrate |
+| -a-48 | #1 Hybrid FB back populated                        | HOLD |
+| -a-48 | #2 Semantic search toggle                          | HOLD |
+| -a-48 | #3 Multi-model picker placeholder + disabled       | HOLD |
+| -a-48 | #4 chan-reports toggle default ON + honest-toggle  | HOLD |
+| -a-48 | #5 Settings overlay shrunk (Appearance + About)    | HOLD |
+| -a-53 | #1 Appearance section back in Settings             | HOLD |
+| -a-53 | #2 Per-Hybrid override toggle on Editor back       | HOLD |
+| -a-53 | #3 Per-Hybrid override toggle on Terminal back     | HOLD |
+| -a-53 | #4 Override > global resolution                    | HOLD |
+| -a-53 | #5 Inherit > global resolution                     | HOLD |
+| -a-53 | #6 Custom-TERM PARTIAL re-verification             | HOLD |
+| -a-54 | #1 Front state unchanged                           | HOLD |
+| -a-54 | #2 Tab strip preserved on flip                     | HOLD |
+| -a-54 | #3 Tabs mirrored                                   | HOLD |
+| -a-54 | #4 Hamburger swapped to opposite end on back       | HOLD |
+| -a-54 | #5 Family-name title visible un-mirrored in tab area | HOLD |
+| -a-54 | #6 Tab switching from back + family-name swap      | PARTIAL |
+
+**19/20 HOLD + 1 N/A + 1 PARTIAL** (`-a-54` #6 — see lowlight below;
+N/A is `-a-47` #4 which has no legacy state to migrate from on a
+fresh drive).
+
+### `-a-47` per-check evidence
+
+* **#1 Per-Hybrid single theme value (front/back same)**: opened
+  CLAUDE.md as Editor on LEFT pane; flipped to back; set
+  Appearance override = Dark via the new `-a-53` 3-option toggle
+  (Inherit / Light / Dark); flipped back to front via
+  `Cmd+. Tab Return`. Front side rendered Dark
+  (`pane[data-theme=dark]`, bg `rgb(28,28,30)`). No front-vs-back
+  split — both sides carry the SAME theme value via the single
+  pane-level `data-theme` attribute.
+* **#2 Cross-Hybrid independence**: split right (`Cmd+. /
+  Return`), spawned Terminal-2 in RIGHT pane via `Cmd+. t Return`.
+  JS check `document.querySelectorAll('.pane')`: LEFT
+  `data-theme=light`/`dark` per override; RIGHT no `data-theme`
+  override (inherits global). Both panes' bgs match: LEFT was
+  whatever I set, RIGHT followed global Settings (verified by
+  toggling Settings global Dark / Light and seeing RIGHT track).
+* **#3 `bm` wire-format survives serialize**: F5 reload after
+  setting override on LEFT pane → URL hash still contains
+  `"ht":"d"` for LEFT, no `ht` for RIGHT; both panes' visual
+  state held; `bm:1` marker present where the back was open
+  pre-reload.
+* **#4 Legacy migration (front-side wins)**: N/A. Fresh `r6` drive
+  has no pre-`-a-47` stored Hybrid panes. The architect's task
+  spec notes this is a check applicable only "if your test drive
+  has any stored Hybrid panes from pre-`-a-47`" — mine doesn't.
+  Skipping with explicit note rather than failing.
+
+### `-a-48` per-check evidence
+
+* **#1 Hybrid FB back populated**: clicked FB tab in LEFT pane
+  (the `chan-test-phase8-wa-r6/` mirrored tab) → flipped via
+  `Cmd+. Tab Return`. Back rendered
+  `HybridFileBrowserConfig.svelte` body: title "Hybrid File
+  Browser", banner ("These settings apply to ALL file-browser
+  surfaces on this drive, not just this one."), three sections:
+  Semantic search, Embedding model, chan-reports.
+* **#2 Semantic search toggle**: present + interactive — Enable
+  checkbox; Active: BM25; Stored at:
+  `/Users/fiorix/Library/Caches/chan/models/models--BAAI--bge-small-en-v1.5`.
+  Default state OFF (matches `-a-21` behaviour); checkbox visible
+  and clickable. Did NOT toggle ON during the walk (would trigger
+  model download).
+* **#3 Multi-model picker placeholder + disabled**: select
+  element present + `disabled=true`; value =
+  `BAAI/bge-small-en-v1.5 (default)`; help text "Picker
+  placeholder; lands with the Round-3 multi-model registry."
+  Renders cleanly but doesn't accept input — matches spec.
+* **#4 chan-reports toggle default ON + honest-toggle UX**:
+  checkbox visible, checked by default (`checked=true` on
+  initial render). Toggle OFF → save fired (3s debounce); server
+  GET `/api/config` returns `preferences.reports.enabled=false`.
+  Help text below toggle: "Toggle persists via /api/config;
+  backend gating + the destructive-on-disable confirmation modal
+  land in a follow-up task. Default is ON to match today's
+  unconditional behaviour." — honest-toggle UX as specced.
+* **#5 Settings overlay shrunk**: `Cmd+,` after focusing the
+  LEFT pane body. Settings overlay opens with only TWO sections:
+  - **APPEARANCE**: "Global default for chan's chrome and editor
+    body. Per-device only; lives in browser storage. 'System'
+    follows your OS appearance setting live. Override per-Hybrid
+    in the Hybrid Editor or Hybrid Terminal back-side (Inherit /
+    Light / Dark)." → System / Light / Dark.
+  - **ABOUT**: chan version `0.11.2`; embeddings status
+    ("on (hybrid search available)"); terminal font (Source Code
+    Pro Regular + SIL OFL 1.1 link).
+  NO Semantic search section, NO chan-reports section. Confirms
+  the migration completed.
+
+### `-a-53` per-check evidence
+
+* **#1 Appearance section back in Settings**: confirmed by
+  `-a-48` #5 walk — Appearance section is the top-level entry
+  in Settings (System / Light / Dark radio group). Regression
+  guard against `-a-46`'s migration into Hybrid Editor back
+  PASSES.
+* **#2 Per-Hybrid override toggle on Editor back**: visible at
+  top of Hybrid Editor back-side body. Heading "Appearance (this
+  Hybrid)", subtitle "Override the global Appearance default for
+  just this Hybrid pane. Inherit follows the global Settings
+  choice (currently **dark**)." 3-option radio: Inherit / Light
+  / Dark. Default selected: Inherit. Radiogroup name
+  `hybrid-editor-theme-override`.
+* **#3 Per-Hybrid override toggle on Terminal back**: identical
+  shape on Hybrid Terminal back-side body. Radiogroup name
+  `hybrid-terminal-theme-override` (inferred from symmetry; same
+  3-option Inherit/Light/Dark layout, same banner copy).
+* **#4 Override > global resolution**: set Settings global =
+  Dark; on LEFT (Editor) Hybrid set override = Light. JS check:
+  HTML `data-theme=dark`; LEFT pane `data-theme=light`,
+  `bg=rgb(255,255,255)`; RIGHT pane no override,
+  `bg=rgb(28,28,30)`. LEFT Hybrid renders light while global +
+  RIGHT stay dark. Confirmed.
+* **#5 Inherit > global resolution**: from #4 state, switched
+  LEFT override back to Inherit. JS check: LEFT pane data-theme
+  attribute REMOVED, bg switched to `rgb(28,28,30)` (tracking
+  global). Inherit defers to Settings, dark wins. Confirmed.
+* **#6 Custom-TERM PARTIAL re-verification**: re-walked the
+  `webtest-a-4` `-a-45` #3 fail. Opened Hybrid Terminal back;
+  changed Default TERM dropdown to "Custom...". JS check:
+  `input.custom-term` IS now present in the DOM (was absent in
+  `-a-4`); rendered with placeholder "alacritty-direct" and
+  seeded with the prior known TERM value ("xterm-256color") so
+  the user has context to edit from. Typed "vt100" → server GET
+  `/api/drive` returns `terminal.default_term="vt100"`.
+  Persistence round-trips. The fix from `-a-53` bundled scope
+  (seeding default_term to current value rather than empty
+  string) breaks the previous fallback-to-DEFAULT_TERM chain that
+  prevented the conditional from firing. PARTIAL → HOLD.
+
+### `-a-54` per-check evidence
+
+* **#1 Front state unchanged**: front side of Hybrid Editor
+  with CLAUDE.md active renders normally — hamburger on right
+  end of tab strip, tabs read left-to-right (un-mirrored),
+  no chrome rotation. Visual identity matches pre-`-a-54`.
+* **#2 Tab strip preserved on flip**: when flipped to back,
+  the tab strip remains at the SAME physical position (top of
+  pane) — no chrome rotation, no tab strip removal. Verified
+  across all four front-tab types (FB / Editor / Terminal /
+  Graph).
+* **#3 Tabs mirrored**: on the flipped state, tab labels are
+  rendered with horizontal flip — e.g. CLAUDE.md as "EDUALC.cm",
+  chan-test-phase8-wa-r6 as "6r-aw-8esahp-tset-nahc". Reads as
+  "viewed from behind", matching the @@Alex framing.
+* **#4 Hamburger swapped to opposite end on back**: on FRONT
+  the hamburger is at the right end of the tab strip (~x=820
+  for LEFT pane); on BACK it appears at the LEFT end (~x=280
+  as a `:` symbol). Click still functional — opening it
+  surfaces the same menu (4 spawn items + Enter Hybrid NAV +
+  Focus border colour blue/green/pink).
+* **#5 Family-name title visible un-mirrored in tab area**:
+  "HYBRID EDITOR" / "HYBRID TERMINAL" / "HYBRID FILE BROWSER"
+  text renders inside the tab area on the OPPOSITE end of the
+  swapped hamburger (i.e. on the right for LEFT pane back, on
+  the right for RIGHT pane back). Text is un-mirrored
+  (front-readable, NOT scaleX(-1)), matching the @@Alex "like
+  in the front pane" framing. Updates per-active-tab type.
+* **#6 Tab switching from back + family-name swap**: PARTIAL.
+  Two distinct paths to test:
+  - **New-tab-spawn path** (HOLD): double-clicking a file in
+    the LEFT FB sidebar dock while LEFT pane is on back side
+    spawns a new Editor tab AND swaps the back-side from
+    "Hybrid File Browser" to "Hybrid Editor" + family-name
+    title from "HYBRID FILE BROWSER" to "HYBRID EDITOR" without
+    leaving back. Equivalent behavior was verified twice in
+    this walk (FB → Editor and Editor → Graph in webtest-a-3
+    + chord-driven `Cmd+. t Return` in this walk). Works as
+    specced.
+  - **Click-existing-mirrored-tab path** (FAIL): clicking an
+    EXISTING mirrored tab in the tab strip while on back side
+    does NOT activate that tab. Verified empirically via
+    `find` + `left_click` on the chan-test-phase8-wa-r6 FB
+    tab (ref_68) and via programmatic `tab.click()` +
+    full-sequence `pointerdown/mousedown/pointerup/mouseup/click`
+    dispatch — neither switched the active tab from CLAUDE.md
+    back to the FB tab. The URL hash `"a":1` marker stayed on
+    CLAUDE.md throughout. The mirroring (`scaleX(-1)` per the
+    spec) may be capturing pointer events in a way that breaks
+    the click handler, OR the back-side tab-strip is using a
+    different event delegate. See lowlight below.
+
+### Critical lowlight
+
+* **`-a-54` Check #6 click-existing-mirrored-tab fails**: from
+  the back side, clicking an existing mirrored tab in the tab
+  strip does NOT activate that tab. Spawn-from-FB-sidebar and
+  spawn-via-chord paths both work (and swap the back-side
+  config + family-name title cleanly), but the click-driven
+  active-tab switch is broken. Reproduce: open a Hybrid pane
+  with 2+ tabs (e.g. FB + Editor); flip to back; click any
+  non-active mirrored tab — active doesn't change. JS
+  `tab.click()` programmatic invocation also fails to swap.
+  Hypothesis: the CSS `scaleX(-1)` transform on the mirrored
+  tab elements may be causing pointer-events to mis-resolve,
+  OR the back-side tab strip may be rendering a static visual
+  copy without binding the click handler. Lane: @@FullStackA;
+  likely a small fix (transform: `scaleX(-1)` + `pointer-events:
+  auto` confirmation + click-handler verification). Flagging as
+  Round-2 wave-2 follow-up — not regression-blocking the
+  `-a-54` migration commit which IS in HEAD with correct
+  migration scope for the OTHER 5/6 checks.
+
+### Side observations (not regression-class)
+
+1. **Pane hamburger items still minimal**: spawn items (Terminal,
+   FB, Rich Prompt, Graph) + Enter Hybrid NAV + Focus border
+   colour. The "Light mode" + "Flip pane" + "Theme" items that
+   `webtest-a-4` flagged as missing — `-a-53` did NOT restore
+   them (theme is now exclusively via the back-side override
+   toggle, which is the intended design). Flip pane chord
+   Cmd+. Tab still works. This is the corrected end state;
+   `-a-4` side observation is resolved as expected behavior, not
+   regression.
+2. **Cmd+, focus requirement**: the Settings overlay chord
+   only fires reliably when focus is on the SPA body / a
+   non-terminal pane. Pressing Cmd+, while focus is on a
+   terminal stdin gets swallowed by the terminal. Pressing
+   while focus is on the back-side body had inconsistent
+   behaviour in my walk — sometimes fired, sometimes didn't.
+   Workaround: click outside any terminal first. Webtest-
+   automation note + possible accessibility / focus-restoration
+   polish for keyboard users.
+3. **Back-side stub bg is white-ish even with dark pane theme**
+   (initial observation from earlier passes; re-verified): the
+   `.hybrid-config` `.config-body` background reads light even
+   when the pane has `data-theme=dark`. JS computed style of
+   `.hybrid-config` shows `background: rgba(0,0,0,0)`
+   (transparent), so it's inheriting from a parent. The parent
+   bg might be using `var(--surface)` (light) rather than
+   `var(--bg)` (theme-tracking). Settings forms typically want
+   consistent light bg for form readability, so this may be
+   intentional. Flag for the implementer when the next
+   back-side stub touch happens.
+4. **Cross-drive preference carryover**: `preferences.theme`,
+   `preferences.line_spacing`, `terminal.scrollback_mb`, and
+   `terminal.default_term` from prior `r5` walk session were
+   present in this fresh `r6` drive's GET `/api/drive`
+   response. Suggests some preferences are per-machine (chan
+   config store) rather than per-drive, OR my throwaway-drive
+   workflow doesn't fully reset (rsync may carry a hidden
+   `.chan/` directory). Not blocking the walk — flagging for
+   future test-server-workflow discipline.
+
+### Highlights
+
+* **`-a-47` theme collapse is clean**: front+back share the
+  same per-Hybrid theme value via a single `pane[data-theme]`
+  attribute; second Hybrid spawned via split inherits the
+  global default, NOT the focused pane's override; URL `ht`
+  marker round-trips serialize/restore.
+* **`-a-48` FB-back migration restores chan-reports
+  visibility**: the regression bug @@Alex flagged
+  ("chan-reports disappeared and there's no setting to turn
+  it on/off anymore... i want it back!") is fixed. Toggle is
+  default ON, persists to `/api/config`, with explicit
+  honest-toggle help text about the backend gating + modal
+  follow-up.
+* **`-a-53` theme architecture correction is the right
+  shape**: global Appearance back in Settings (per-device,
+  browser storage); per-Hybrid override on Editor + Terminal
+  backs (Inherit / Light / Dark); override > global > inherit
+  resolution order ALL hold under test.
+* **`-a-53` bundled custom-TERM fix lands cleanly**: the
+  `webtest-a-4` PARTIAL is now HOLD. Picking "Custom..."
+  surfaces the text input (was previously hidden by the
+  fallback-to-DEFAULT_TERM derivation bug). Seeding the custom
+  input with the current TERM value gives the user good
+  context to edit from.
+* **`-a-54` flip UX is mostly excellent**: tab strip preserved
+  + tabs mirrored + hamburger swapped + family-name title
+  un-mirrored — the visual identity is precisely what
+  @@Alex's framing called for. The one click-existing-tab
+  path that fails is fixable; the other 5 checks all hold.
+
+### State at end of walk
+
+Lane-A test server still live on
+`http://127.0.0.1:8787/?t=nwuyyNmVyLyyq6vvrRxz9tgEh7sCS73i`
+against `/tmp/chan-test-phase8-wa-r6/` (chan repo seed +
+preferences mutations from the walk: global theme=dark briefly,
+back to default; LEFT pane override=Dark/Light/Inherit cycle;
+Terminal default_term=vt100; chan-reports=disabled). Will tear
+down at commit beat.
+
+**Tear-down complete**:
+
+1. chan serve killed (TaskStop on the background bash for
+   `chan serve --port 8787`).
+2. `rm -rf /tmp/chan-test-phase8-wa-r6/` — directory gone.
+3. `chan remove /tmp/chan-test-phase8-wa-r6/` → `unregistered`.
+4. Chrome MCP tab `503725788` (chan SPA) closed via
+   `tabs_close_mcp`. Tab group empty.
+
+The walk completed 19/20 acceptance checks HOLD + 1 N/A
+(`-a-47` #4 legacy migration — no legacy state on fresh drive)
++ 1 PARTIAL (`-a-54` #6 click-existing-mirrored-tab from
+back-side). `webtest-a-4`'s PARTIAL (`-a-45` #3 custom-TERM)
+re-verified as HOLD post-`-a-53` bundled fix.

@@ -862,3 +862,137 @@ Option A (separate commit per the `-3` shape) or fold into
 this beat — flagging here for your decision.
 
 Standing by.
+
+## 2026-05-21 — poke (webtest-a-5: Hybrid back-side correction wave + design follow-ups — 19/20 HOLD + 1 N/A + 1 PARTIAL; -a-45 PARTIAL re-verified as HOLD)
+
+Walked
+[`../webtest-a/webtest-a-5.md`](../webtest-a/webtest-a-5.md)
+on HEAD `f3c36e5` (clearance round 11). Throwaway drive
+`/tmp/chan-test-phase8-wa-r6/` (chan-source seed); chan serve
+on 127.0.0.1:8787; Chrome MCP tab `503725788`. Verdict +
+per-check evidence appended to
+[`../webtest-a/webtest-a-1.md`](../webtest-a/webtest-a-1.md)
+under `## 2026-05-21 — fullstack-a-47 + -a-48 + -a-53 + -a-54
+walkthroughs (Hybrid back-side correction wave + design
+follow-ups)`.
+
+### Verdicts
+
+| Slice | Verdict |
+|-------|---------|
+| `-a-47` Drop front/back independent theme | 3/4 HOLD, 1 N/A (legacy migration; no legacy state on fresh drive) |
+| `-a-48` Search/Indexing/Reports → FB back | 5/5 HOLD |
+| `-a-53` Theme architecture correction | 6/6 HOLD (incl. bundled custom-TERM PARTIAL re-verify) |
+| `-a-54` Flip UX redesign | 5/6 HOLD, 1 PARTIAL (click-existing-mirrored-tab) |
+
+**Overall**: 19/20 HOLD + 1 N/A + 1 PARTIAL. The
+`webtest-a-4` PARTIAL on `-a-45` #3 (custom-TERM input
+rendering) is **re-verified as HOLD** post-`-a-53` bundled
+fix.
+
+### Highlights
+
+* **`-a-47` theme collapse**: front+back share single
+  per-Hybrid value via `pane[data-theme]`; cross-Hybrid
+  independence holds; `ht` wire marker round-trips
+  serialize/restore.
+* **`-a-48` FB-back migration restores chan-reports**: the
+  user-flagged regression ("chan-reports disappeared and
+  there's no setting to turn it on/off anymore... i want
+  it back!") is fixed. Toggle default ON, persists to
+  `/api/config`, honest-toggle UX explicit about backend
+  gating + destructive-on-disable follow-up. Settings
+  overlay shrunk to APPEARANCE + ABOUT only.
+* **`-a-53` theme architecture correction**: Appearance
+  back in Settings as the global default; per-Hybrid
+  override (Inherit / Light / Dark) on Editor + Terminal
+  backs; override > global, inherit > global resolution
+  both confirmed via JS read of pane data-theme + bg
+  values.
+* **`-a-53` bundled custom-TERM fix**: dropdown
+  "Custom..." now surfaces the text input (was hidden in
+  `webtest-a-4` due to seed-empty falling back to
+  DEFAULT_TERM); seeded with the prior known TERM value
+  for user editing context. Typed "vt100" persisted via
+  `/api/drive`.
+* **`-a-54` flip UX is precise**: tab strip preserved on
+  flip + tabs mirrored (`scaleX(-1)`) + hamburger swapped
+  to opposite end + family-name title visible un-mirrored
+  in tab area. Visual identity matches @@Alex's framing
+  exactly.
+
+### Lowlight (PARTIAL → follow-up candidate)
+
+* **`-a-54` Check #6 click-existing-mirrored-tab fails**.
+  From the back side, clicking an existing mirrored tab in
+  the tab strip does NOT swap the active tab. The
+  spawn-from-FB-sidebar and spawn-via-chord paths DO swap
+  the back-side config + family-name title cleanly — so
+  the back-side title-swap mechanic itself works. But the
+  click-driven active-tab switch is broken. Verified
+  empirically via both Chrome MCP click on the DOM ref
+  AND programmatic `tab.click()` + full-sequence
+  `pointerdown/mousedown/pointerup/mouseup/click` dispatch
+  — neither swapped active. The CSS `scaleX(-1)`
+  transform on mirrored tab elements may be capturing
+  pointer events incorrectly, OR the back-side tab strip
+  may be rendering a static visual copy without binding
+  the click handler. Lane: @@FullStackA; likely a small
+  fix. **Not blocking the `-a-54` migration commit** —
+  the OTHER 5/6 checks all hold; the new-tab-spawn path
+  to swap back-side config still works.
+
+### Side observations (not regression-class)
+
+1. **Pane hamburger items still minimal**: spawn items +
+   Enter Hybrid NAV + Focus border colour. `-a-53` did
+   NOT restore "Light mode" / "Flip pane" / "Theme" to
+   the hamburger; theme is exclusively via back-side
+   override toggle (this is the intended corrected end
+   state, so `webtest-a-4`'s observation is resolved as
+   expected behavior, not regression).
+2. **Cmd+, focus requirement**: chord only fires reliably
+   when focus is on the SPA body / non-terminal pane.
+   Terminal stdin swallows it. Webtest-automation +
+   possible accessibility polish for keyboard users.
+3. **Back-side stub bg reads white** even with the pane
+   `data-theme=dark`. Settings forms intentionally light
+   for readability is one possibility; could also be a
+   missed `--surface` vs `--bg` variable. Worth a
+   deliberate decision when the next back-side touch
+   happens.
+4. **Cross-drive preference carryover**: `r5`-session
+   preferences (`theme=light`, `line_spacing=compact`,
+   `scrollback_mb=100`, `default_term`) showed up in
+   fresh `r6` drive's `/api/drive` response. Suggests
+   chan config store may be per-machine (or my rsync
+   carried a hidden `.chan/` dir). Test-server-workflow
+   teardown discipline may need a config-cache scrub
+   between sessions. Not blocking the walk; flagging for
+   future workflow tightening.
+
+### Suggested commit shape
+
+Path-limited per the discipline that landed `-3` and `-4`
+cleanly:
+
+* **Commit subject**: `docs: webtest-a-5 — Hybrid back-side
+  correction wave + design follow-ups walkthrough (19/20
+  HOLD + 1 N/A + 1 PARTIAL on -a-54 click-existing-tab; -a-45
+  custom-TERM PARTIAL re-verified HOLD)`.
+* **Files** (explicit per-path):
+  * `docs/journals/phase-8/webtest-a/webtest-a-1.md`
+    (verdict append).
+  * `docs/journals/phase-8/alex/event-webtest-a-architect.md`
+    (this poke + the prior unshipped close-out poke from
+    `c9fb768` cycle + the `06afe3f` follow-up; bundled).
+* Path-limited `git commit <path1> <path2> -m "..."` to
+  bypass the shared index. Post-commit
+  `git show --stat HEAD` confirm scope.
+
+The `webtest-a-5.md` task close-out marker has a new
+"walkthrough complete (19/20 HOLD)" append. Per the
+established Option A pattern from `-3` close-out, your call
+on whether to land that as a separate follow-up commit.
+
+Standing by.
