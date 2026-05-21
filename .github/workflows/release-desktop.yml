@@ -283,13 +283,75 @@ jobs:
           echo "=== spctl assessment on $DMG (install context) ==="
           spctl -a -t install -v "$DMG"
 
+      # Tauri-bundler 2.x hardcodes the macOS DMG filename as
+      # `<ProductName>_<version>_x64.dmg` regardless of the target
+      # arch (aarch64-apple-darwin still produces `_x64`). The
+      # suffix is misleading today (the binary is aarch64) and will
+      # stay misleading once universal2 lands per the post-v0.11.2
+      # ci-N follow-up. Drop the suffix here so the GH Release
+      # artifact is `Chan_<version>.dmg` — arch-agnostic, matches
+      # the universal2 future state. Done as a workflow-side rename
+      # because tauri-bundler 2.x does not expose a filename
+      # template knob; revisit if tauri-bundler grows one.
+      - if: matrix.os == 'macos-latest'
+        name: Drop _x64 suffix from DMG filename
+        run: |
+          set -e
+          DMG_DIR="chan/target/release/bundle/dmg"
+          OLD=$(ls "$DMG_DIR"/*.dmg | head -1)
+          NEW=$(echo "$OLD" | sed 's/_x64\.dmg$/.dmg/')
+          if [ "$OLD" != "$NEW" ]; then
+            mv "$OLD" "$NEW"
+            echo "renamed $(basename "$OLD") -> $(basename "$NEW")"
+          else
+            echo "no _x64 suffix in $(basename "$OLD"); skipping"
+          fi
+
       # On any failure in the macOS build/sign/notarize/verify
       # chain, capture the diagnostic surface: Tauri's full build
       # log (notarytool output, codesign exit codes), the partial
       # bundle dir (so we can see what state the .app reached),
-      # and Apple's transporter logs (~/Library/Logs/...). These
-      # land as a workflow artifact so triage doesn't require
-      # rerunning the workflow with extra logging.
+      # Apple's transporter logs (~/Library/Logs/...), and Apple's
+      # notary log JSON for the failed submission. The notary log
+      # is the load-bearing artifact for triaging "why did Apple
+      # reject" — without it, the human round-trip is @@Alex
+      # running `xcrun notarytool log` against the local Keychain
+      # profile. Capturing it in CI removes that round-trip.
+      - if: matrix.os == 'macos-latest' && failure()
+        name: Fetch Apple notary log
+        env:
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        # Best-effort: never propagate failures from this diagnostic
+        # step — the upload step that follows still needs to run so
+        # the rest of the diagnostic surface (build log, bundle dir,
+        # transporter logs) lands in the artifact. notarytool's
+        # submission id appears in the build log as `id: <uuid>` on
+        # every `xcrun notarytool submit` invocation; `tail -1` picks
+        # the most recent one in case multiple submits ran.
+        run: |
+          set +e
+          SUBMISSION_ID=$(grep -oE 'id: [a-f0-9-]{36}' /tmp/chan-desktop-build.log 2>/dev/null \
+              | tail -1 \
+              | awk '{print $2}')
+          if [ -z "$SUBMISSION_ID" ]; then
+            echo "::warning::No notarytool submission id found in build log; skipping notary log fetch."
+            exit 0
+          fi
+          echo "Fetching notary log for submission $SUBMISSION_ID"
+          xcrun notarytool log "$SUBMISSION_ID" \
+              --apple-id "$APPLE_ID" \
+              --password "$APPLE_PASSWORD" \
+              --team-id "$APPLE_TEAM_ID" \
+              /tmp/notary-log.json
+          if [ -f /tmp/notary-log.json ]; then
+            echo "=== notary log (saved to /tmp/notary-log.json) ==="
+            cat /tmp/notary-log.json
+          else
+            echo "::warning::notarytool log call produced no output file."
+          fi
+
       - if: matrix.os == 'macos-latest' && failure()
         name: Upload notarization diagnostics
         uses: actions/upload-artifact@v4
@@ -297,6 +359,7 @@ jobs:
           name: notarization-diagnostics-${{ matrix.artifact_name }}
           path: |
             /tmp/chan-desktop-build.log
+            /tmp/notary-log.json
             chan/target/release/bundle/
             ~/Library/Logs/com.apple.amp.itmstransporter/
           if-no-files-found: ignore
