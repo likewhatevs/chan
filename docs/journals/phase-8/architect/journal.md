@@ -2530,3 +2530,170 @@ the beat-sweep discipline.
 | `alex/event-architect-webtest-a.md` | webtest-a-4 dispatch |
 | `alex/event-architect-webtest-b.md` | ack-standby + proactive-walks suggestion |
 | `webtest-a/webtest-a-4.md` | NEW task (bundled walkthrough) |
+
+## 2026-05-21 — Hybrid back-side design correction from @@Alex: 2 new tasks (-a-53 + -a-54)
+
+@@Alex 2026-05-21 (chat, post webtest-a-4 dispatch)
+surfaced two corrections to the Hybrid back-side wave
+design. Both significant enough to merit new tasks (per
+the append-only-in-coordination memory rule).
+
+### Correction 1 — theme architecture
+
+@@Alex (verbatim):
+
+> 1. the appearance system/dark/light should remain on
+>    settings..
+> 2. the editor and terminal etc have their own toggle..
+>    e.g. i want dark mode from the settings but all my
+>    editors are light mode
+
+Architecture:
+
+* Global default Appearance (system/dark/light) lives
+  in **Settings overlay**.
+* Each Hybrid Editor + Hybrid Terminal back-side
+  carries a **per-Hybrid override toggle**
+  (`inherit | light | dark`).
+* Resolution: per-Hybrid override if set → else global
+  default → else system.
+
+Example use-case: Settings = dark, but all Editor panes
+= light. Override semantic = "this surface specifically
+renders different from the global."
+
+Conflict with `-a-46` (HEAD `5166223`): Appearance was
+migrated WHOLESALE to `HybridEditorConfig` back. That's
+intermediate state; needs partial revert. Per
+@@FullStackA's `-a-46` clearance flagged-deviation note
+("If so, the section + `setThemeChoice` import + 3
+Appearance tests can revert via a small follow-up") —
+the revert path was anticipated.
+
+NO conflict with `-a-47` (collapse front/back
+independent theme; cleared but uncommitted). The
+collapse + the override are orthogonal: collapse runs
+WITHIN a single Hybrid; override runs ACROSS Hybrid vs
+global. Both right.
+
+Dispatched as
+[`../fullstack-a/fullstack-a-53.md`](../fullstack-a/fullstack-a-53.md).
+
+### Correction 2 — flip UX
+
+@@Alex (verbatim):
+
+> when we flip the tab, we need to keep the pane's bar
+> where all tabs are, and we should still show the tabs
+> but flipped — their text is like if you were looking
+> at them from behind.. and we should be able to switch
+> between them on the back.. the hamburger would be on
+> the other side, like it flipped
+>
+> only inside the tab area (like in the front pane) we
+> would then have the title Hybrid Terminal, Hybrid
+> Editor, and so on
+
+Visual deltas (vs current post-`-a-43` flip behaviour):
+
+* Tab strip stays in same physical position when
+  flipped (NOT a full chrome rotate).
+* Tab labels render mirrored (`scaleX(-1)`-ish) but
+  remain clickable.
+* Hamburger swaps to opposite end of tab strip.
+* Family-name title ("Hybrid Terminal" / etc.) shows
+  INSIDE the tab area (NOT a new chrome row).
+
+Rationale: preserves user's spatial model ("this is
+the same pane") while signaling flip via mirroring +
+side-swap. Title gives explicit confirmation of
+which surface's settings the back hosts.
+
+Dispatched as
+[`../fullstack-a/fullstack-a-54.md`](../fullstack-a/fullstack-a-54.md).
+
+### Revised @@FullStackA queue
+
+```
+-a-47 (committable; collapse front/back theme)
+-a-48 (Task F; FB-back Search/Indexing/Reports migration)
+-a-53 (theme architecture correction — Appearance revert + per-Hybrid override)
+-a-54 (flip UX redesign — preserve tab strip + mirrored tabs + hamburger swap + title in tab area)
+-a-49..52 (graph overhaul first sub-wave)
+-a-42 (About; gates on A+B+C+F landing)
+```
+
+`-a-53` + `-a-54` insert AHEAD of `-a-49..52` to finish
+the Hybrid back-side semantic before moving to graph
+work. Sequencing within the new pair:
+
+* `-a-53` should pick up AFTER `-a-47` commits
+  (front/back theme collapse is the right baseline for
+  the override layer).
+* `-a-54` should pick up AFTER `-a-53` commits
+  (back-side CONTENT before back-side CHROME).
+
+`-a-48` can interleave anywhere — independent of the
+new pair (FB-back is its own surface).
+
+### round-2-plan updated
+
+Two new sections appended to
+[`round-2-plan.md`](round-2-plan.md) §"Hybrid back-side
+revisited":
+
+* "Theme architecture correction 2026-05-21" — global
+  default + per-Hybrid override pattern.
+* "Flip UX correction 2026-05-21" — tab strip
+  preserved + mirrored + hamburger swap + title in tab
+  area.
+
+Per-surface back-side scope table also updated to
+reflect "per-Hybrid theme override toggle" in both
+Hybrid Terminal + Hybrid Editor scopes; Appearance
+explicitly OUT of Hybrid Editor scope.
+
+### webtest-a-4 walk-context update
+
+Appended a design-context note to
+[`../webtest-a/webtest-a-4.md`](../webtest-a/webtest-a-4.md)
+explaining that the `-a-46` Appearance section IS in
+`HybridEditorConfig` back per the as-landed `-a-46`
+spec, BUT slated for partial revert by `-a-53`. @@WebtestA
+walks the current state, captures the as-landed
+behaviour as HOLD if it works, and files the design-
+correction note as a SIDE OBSERVATION — NOT a failure.
+`webtest-a-5` walks the corrected end state after `-a-53`
++ `-a-54` land.
+
+### Pattern: design corrections after a task lands
+
+`-a-46` was the second time this round a task landed
+correctly per spec + then @@Alex flagged a design
+correction post-landing (the first was `webtest-b-3`'s
+heuristic-tightening finding from @@WebtestB's walk —
+filed in the bug list). The append-only coordination
+discipline holds: don't amend the landed work; cut
+new tasks; document the design history in the round
+plan + walk verdicts.
+
+The architect-side takeaway: my `-a-46` clearance
+should have flagged @@FullStackA's "if so, the section
+... can revert via a small follow-up" deviation as a
+"this might revert" risk rather than the simple ACCEPT.
+@@FullStackA was right to flag it; I should have
+shown more uncertainty. Next time a clearance has a
+deviation that touches a design surface @@Alex hasn't
+explicitly confirmed, raise the flag explicitly to
+@@Alex rather than accepting silently.
+
+### What I'm committing this round
+
+| File | Reason |
+|------|--------|
+| `architect/journal.md` | This entry |
+| `architect/round-2-plan.md` | 2 design-correction sections |
+| `alex/event-architect-fullstack-a.md` | -a-53 + -a-54 dispatch poke |
+| `webtest-a/webtest-a-4.md` | design-context note for the walk |
+| `fullstack-a/fullstack-a-53.md` | NEW task (theme architecture correction) |
+| `fullstack-a/fullstack-a-54.md` | NEW task (flip UX redesign) |

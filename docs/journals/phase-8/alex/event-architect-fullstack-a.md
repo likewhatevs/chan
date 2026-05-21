@@ -1878,3 +1878,119 @@ populates). Three landed commits, one verdict.
 
 Standing by for your `-a-47` commit-readiness poke + `-a-48`
 pickup signal.
+
+## 2026-05-21 — poke (Hybrid back-side design correction from @@Alex: -a-53 + -a-54 added to queue)
+
+@@Alex 2026-05-21 (chat) surfaced two corrections to the
+Hybrid back-side wave design — load-bearing enough that
+they're cut as new tasks rather than amendments:
+
+### Correction 1 — theme architecture
+
+Quoting @@Alex:
+
+> 1. the appearance system/dark/light should remain on
+>    settings..
+> 2. the editor and terminal etc have their own toggle..
+>    e.g. i want dark mode from the settings but all my
+>    editors are light mode
+
+So Appearance is a **GLOBAL DEFAULT** (Settings overlay)
++ each Hybrid Editor / Hybrid Terminal back-side carries
+a **per-Hybrid override** (`inherit | light | dark`).
+Resolution: override if set; else global; else system.
+
+`-a-46`'s Appearance migration to `HybridEditorConfig`
+needs a partial revert. Your flagged-deviation note on
+`-a-46` clearance specifically called out this revert
+path ("If so, the section + `setThemeChoice` import + 3
+Appearance tests can revert via a small follow-up"). The
+follow-up is now dispatched:
+
+Cut [`../fullstack-a/fullstack-a-53.md`](../fullstack-a/fullstack-a-53.md)
+— theme architecture correction: revert Appearance to
+SettingsPanel + add per-Hybrid override toggle to BOTH
+HybridEditor + HybridTerminal back-sides.
+
+`-a-47` (collapse front/back independent theme) stays
+correct as specced — the FRONT-vs-BACK split collapses;
+the new override toggle layers ON TOP of the collapsed
+per-Hybrid value. Don't change `-a-47`.
+
+### Correction 2 — flip UX
+
+@@Alex's framing (verbatim):
+
+> when we flip the tab, we need to keep the pane's bar
+> where all tabs are, and we should still show the tabs
+> but flipped — their text is like if you were looking
+> at them from behind.. and we should be able to switch
+> between them on the back.. the hamburger would be on
+> the other side, like it flipped
+>
+> only inside the tab area (like in the front pane) we
+> would then have the title Hybrid Terminal, Hybrid
+> Editor, and so on
+
+So when flipped: tab strip stays in same position; tabs
+render mirrored (`scaleX(-1)`-ish) but stay clickable;
+hamburger swaps to opposite end; "Hybrid X" title shows
+INSIDE the tab area (not a new chrome row).
+
+Cut [`../fullstack-a/fullstack-a-54.md`](../fullstack-a/fullstack-a-54.md)
+— flip UX redesign.
+
+### Revised queue
+
+```
+-a-47 (committable; collapse front/back theme)
+-a-48 (Task F; FB-back Search/Indexing/Reports migration)
+-a-53 (theme architecture correction — Appearance revert + per-Hybrid override)
+-a-54 (flip UX redesign — preserve tab strip + mirrored tabs + hamburger swap + title in tab area)
+-a-49..52 (graph overhaul first sub-wave)
+-a-42 (About; gates on A+B+C+F landing)
+```
+
+`-a-53` + `-a-54` insert AHEAD of `-a-49..52` — finish
+the Hybrid back-side semantic before moving to the next
+major surface (graph). Both new tasks have explicit
+sequencing dependencies:
+
+* `-a-53` should pick up AFTER `-a-47` commits
+  (front/back theme collapse is the baseline for the
+  override layer).
+* `-a-54` should pick up AFTER `-a-53` commits (finishes
+  the back-side CONTENT before reshaping the back-side
+  CHROME).
+
+`-a-48` can land before or after the new pair — they
+don't conflict (FB-back is its own back-side surface).
+
+### Walkthrough impact
+
+`webtest-a-4` (in flight; bundled walk of `-a-44 + -a-45
++ -a-46`) will walk the CURRENT Appearance-in-Hybrid-
+Editor-back behaviour. That's still a useful "pre-
+correction" baseline; their verdict captures the current
+state. After `-a-53` + `-a-54` land, a future
+`webtest-a-5` walks the corrected end state. I'll route
+WebtestA on `webtest-a-4`'s scope so they don't grade
+Appearance-in-back as a failure (it's intentionally
+landed as the precursor; revert is the next step).
+
+### Round-2-plan updated
+
+Added two sections to
+[`../architect/round-2-plan.md`](../architect/round-2-plan.md)
+§"Hybrid back-side revisited":
+
+* "Theme architecture correction 2026-05-21" — describes
+  the global default + per-Hybrid override pattern.
+* "Flip UX correction 2026-05-21" — describes the tab-
+  strip-preserved + mirrored + hamburger-swap shape.
+
+Future architect sessions reading round-2-plan inherit
+the corrected design automatically.
+
+Standing by for your `-a-47` commit poke + then `-a-48`
+pickup signal. The two new tasks queue behind `-a-48`.

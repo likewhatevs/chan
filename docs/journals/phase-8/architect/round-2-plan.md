@@ -818,8 +818,8 @@ behind the front panel.
 
 | Front-tab type | Back-side content                                                                                        |
 |----------------|----------------------------------------------------------------------------------------------------------|
-| Hybrid Terminal | All terminal settings currently in the Settings overlay (scrollback MB, default TERM, font, etc.). Carries an explicit warning: "these settings apply to ALL terminals, not just this one". |
-| Hybrid Editor   | Editor settings currently in Settings: Theme, Layout, Date Pills, On Save (per `-a-25`).                |
+| Hybrid Terminal | Terminal settings (scrollback MB, default TERM, font, etc.) + **per-Hybrid theme override toggle** (inherit/light/dark). Carries an explicit warning: "these settings apply to ALL terminals, not just this one". |
+| Hybrid Editor   | Editor settings: Layout, Date Pills, On Save (per `-a-25`) + **per-Hybrid theme override toggle** (inherit/light/dark). **NOT** Appearance/Theme — that stays as a GLOBAL default in Settings overlay (see "Theme architecture correction 2026-05-21" below). |
 | Hybrid Graph    | Legend grid: `[Node] [Colour]` rows for each node type chan supports — `Dir`, `File (Regular, Code, Document, Contact)`, `Hashtag`, `Mention`, `Language (Code)`. |
 | Hybrid File Browser | Placeholder for now ("FB has no per-surface configuration; reserved for future use" or similar). |
 
@@ -827,7 +827,73 @@ Each back-side surface carries the family name as its title
 band (e.g., "Hybrid Terminal" / "Hybrid Editor" / "Hybrid
 Graph" / "Hybrid File Browser"). The title is the visual
 anchor that confirms which surface's settings the user is
-looking at after the flip.
+looking at after the flip — **placement: inside the tab
+area** (per "Flip UX correction 2026-05-21" below).
+
+#### Theme architecture correction 2026-05-21
+
+@@Alex correction: the Appearance system/dark/light selector
+stays in **Settings overlay** as the GLOBAL DEFAULT. Each
+Hybrid Editor + Hybrid Terminal back-side carries a **per-
+Hybrid theme override toggle** (`inherit | light | dark`).
+Resolution order at render time:
+
+1. If per-Hybrid override is `light` or `dark`: use that.
+2. Else (`inherit`): use the global Settings Appearance
+   value (which resolves system/dark/light as before).
+
+Example use-case from @@Alex: "i want dark mode from the
+settings but all my editors are light mode" — global =
+dark; per-Hybrid override on each Editor pane = light.
+Effective: Editor renders light, everything else (terminal
+chrome, hybrid graph, FB) renders dark.
+
+This means `-a-46`'s "Appearance section moved to Hybrid
+Editor back" needs to **partially revert**: Appearance
+section comes back to Settings; HybridEditorConfig gets a
+narrower "theme override" toggle. Same fix applies to
+Hybrid Terminal: it gets a per-Hybrid theme override toggle
+alongside the migrated scrollback / TERM controls.
+Dispatched as **fullstack-a-53** below.
+
+`-a-47` (collapse front/back independent theme to single
+per-Hybrid value) still lands as specced — it's collapsing
+the FRONT-vs-BACK split within a single Hybrid; the per-
+Hybrid OVERRIDE vs global DEFAULT story is orthogonal +
+additive.
+
+#### Flip UX correction 2026-05-21
+
+@@Alex correction on the flip behaviour: when a Hybrid
+pane flips, the tab strip **stays in the same physical
+position** — it does NOT rotate or disappear. Visual
+deltas:
+
+* **Tab strip preserved**: same bar, same vertical position.
+* **Tabs shown mirrored**: tab text renders as if viewed
+  from behind (each character's visual is mirrored).
+  Tabs remain CLICKABLE — user can still switch between
+  tabs on the back side.
+* **Hamburger position swaps**: hamburger moves from its
+  front-side position (e.g. right end of tab strip) to
+  the OPPOSITE end (e.g. left end of tab strip) when
+  flipped. Mirrors the "looking from behind" semantic.
+* **Title band INSIDE the tab area**: "Hybrid Terminal"
+  / "Hybrid Editor" / etc. shows inside the tab strip
+  region — does NOT add a new chrome row. Tab strip's
+  available space hosts both the mirrored tabs AND the
+  family-name title. Exact composition (title above
+  tabs? title in place of inactive tab text? title as
+  the bar background?) is the implementer's call.
+
+Rationale: keeping the tab strip + hamburger as anchors
+preserves the user's spatial model of "which pane is
+this" while signaling flip-state through the mirroring
++ side-swap. The "Hybrid Terminal" title gives explicit
+confirmation of which surface's settings the back-side
+hosts.
+
+Dispatched as **fullstack-a-54** below.
 
 #### Settings-overlay residue
 

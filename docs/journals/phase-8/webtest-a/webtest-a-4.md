@@ -252,3 +252,80 @@ Highest committed `webtest-a-N` is `-3` (`56e6692` verdict
 * `-a-42` About section build-out — not yet committed
   (gates on A+B+C+F landing); folds into the final
   Round-2-wave-3 walk.
+
+## 2026-05-21 — @@Architect: design-context note for the -a-46 Appearance check
+
+@@Alex 2026-05-21 (chat, post-task-cut) surfaced two
+corrections to the Hybrid back-side design — captured
+in [`../architect/round-2-plan.md`](../architect/round-2-plan.md)
+§"Theme architecture correction 2026-05-21" + §"Flip UX
+correction 2026-05-21". Dispatched as new tasks
+`fullstack-a-53` (theme architecture revert + override
+toggle) + `fullstack-a-54` (flip UX redesign).
+
+**Impact on this walk's `-a-46` § Editor Settings check
+#2 (Theme/Appearance)**:
+
+The current behaviour you'll walk has Appearance moved
+INTO `HybridEditorConfig` back-side per `-a-46`. That's
+**intentionally landed as the precursor + slated for
+partial revert** by `-a-53` (Appearance returns to
+SettingsPanel as global default; HybridEditorConfig
+gets a narrower `inherit | light | dark` override
+toggle instead).
+
+So:
+
+* Walk check #2 as specced — confirm `-a-46`'s
+  Appearance section IS in `HybridEditorConfig` back +
+  round-trips persistence. Verdict the check as HOLD if
+  the migration worked.
+* **Do NOT grade the placement as a failure**. The
+  placement is a known intermediate state slated for
+  `-a-53` revert.
+* Capture as a SIDE OBSERVATION in your verdict tail:
+  "Appearance is in HybridEditorConfig per `-a-46`;
+  per `-a-53` (cut 2026-05-21) it reverts to Settings
+  as global default + a per-Hybrid override toggle
+  replaces it here."
+
+This keeps the audit trail honest (the walk verifies
+WHAT LANDED; the design history is captured in the
+side note for context). `webtest-a-5` will walk the
+corrected end state after `-a-53` + `-a-54` land.
+
+Other checks unaffected — `-a-44` drag, `-a-45`
+Terminal, the rest of `-a-46`'s Editor settings
+(Layout, Date Pills, On Save) all walk as specced.
+
+## 2026-05-21 — walkthrough complete (17/18 HOLD, 1 PARTIAL)
+
+Walked all three slices on HEAD `f796345` (after the recent
+`-a-44`/`-a-45`/`-a-46` landings + fullstack-b-24 Windows
+fixups). Verdict + per-check evidence appended to
+[`webtest-a-1.md`](webtest-a-1.md) under
+"## 2026-05-21 — fullstack-a-44 + -a-45 + -a-46 walkthroughs".
+
+* **`-a-44`** drag-to-rearrange: 6/6 HOLD.
+* **`-a-45`** Terminal Settings migration: 5/6 HOLD, 1 PARTIAL
+  (custom TERM input doesn't render when `Custom...` selected —
+  root-caused in `HybridTerminalConfig.svelte:281` conditional;
+  `setTermSelection("__custom__")` seeds empty string which the
+  `currentTerm` derivation falls back to `DEFAULT_TERM`,
+  preventing the conditional from firing).
+* **`-a-46`** Editor Settings migration: 6/6 HOLD.
+
+Side observations filed (not regression-class):
+
+1. Pane hamburger "Light mode" + "Flip pane" items removed
+   in current build — likely in-flight `-a-47` intermediate
+   state. Theme moved into Hybrid Editor back; Flip pane chord
+   still works but menu affordance lost.
+2. JS-dispatched `change` events on the TERM select don't
+   trigger Svelte reactivity reliably — webtest-automation
+   tooling note.
+3. Drag-to-rearrange dead-zone affordance not visually
+   distinguished — discoverability polish candidate.
+
+Test server + throwaway drive + Chrome MCP tab all torn down
+per the standing rule.
