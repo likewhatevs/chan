@@ -26,6 +26,9 @@
 - terminal line adjustment still buggy:
   - iterm: ![](./attachments/image-3.png#w=250)
   - chan's term:  ![](./attachments/image-4.png#w=250)
+  - **finding 2026-05-21 by @@Alex**: this is xterm.js issue [#2409](https://github.com/xtermjs/xterm.js/issues/2409) — "Manually draw pixel-perfect glyphs for Box Drawing and Block Elements characters." Block-element glyphs (▀ ▄ █ ▌ ▐ etc., used by the Claude Code mascot pixel-art in the screenshots) don't connect cleanly when the system font renders them with implicit padding / anti-aliasing — visible vertical gaps through the mascot. iTerm draws these pixel-perfect; xterm.js bridges the gap with the `customGlyphs` option that bypasses the font for box-drawing + block-element ranges. Fix shipped in xterm.js 4.14.0
+  - we're on `@xterm/xterm@^6.0.0` (well past 4.14.0) but `web/src/components/TerminalTab.svelte:344` `new Terminal({...})` does NOT set `customGlyphs: true`. Suspected one-line fix: add `customGlyphs: true` to the Terminal options. Defaults to `true` in newer xterm.js but verify against the actual 6.x default + any renderer constraint (Canvas vs WebGL renderer support varies)
+  - lane: @@FullStackB (chan-desktop terminal owner) OR @@FullStackA (SPA component). Either lane can take it; small fix. Round-2 wave-3 polish candidate
 - Native window state is not persisted: closing the (last) chan-desktop window resets the next open to a blank New state
   - want: stackable record of window configs; closing the last window remembers its layout (panes, tabs, selections, hash state) so the next open restores it
   - keep up to 20 window configs for now; LRU eviction beyond that
