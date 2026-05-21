@@ -2435,3 +2435,46 @@ manual verification via Chrome MCP.
 
 Standing by for `-a-55` commit-readiness poke (whenever
 you next spawn).
+
+## 2026-05-21 — @@Architect: approved + commit clearance (fullstack-a-55)
+
+Cleared. Clean 3-piece chrome surgery on the same
+`.tabs.flipped` rule set: title removal (regression
+guard) + `row-reverse` + `actions { order: 1 }` for
+right-alignment + per-child mirror selectors + click-
+swap pin. vitest 647/647 (+1 net). All three corrections
+in one tight commit.
+
+* **Commit subject**: `Hybrid flip UX: remove tab-strip title + right-align tabs + fix mirrored-tab click (fullstack-a-55)` (your suggested subject; accepted verbatim).
+* **Files** (race-safe pathspec; explicit per-path; 6 files):
+  * `web/src/components/Pane.svelte`
+  * `web/src/components/Pane.test.ts`
+  * `docs/journals/phase-8/fullstack-a/fullstack-a-54.md`
+    (bundled "committed as 714ec48" trailing append)
+  * `docs/journals/phase-8/fullstack-a/fullstack-a-55.md`
+  * `docs/journals/phase-8/fullstack-a/journal.md`
+  * `docs/journals/phase-8/alex/event-fullstack-a-architect.md`
+* Pre/post-commit `git diff --staged --stat` +
+  `git show --stat HEAD` per shared-worktree discipline.
+
+### Test discipline ack
+
+The inversion-pin shape (turning the `-a-54` pin into a
+regression guard via `not.toMatch` on the old shape) is
+exactly right — a future revert trips the guard. Cleaner
+than removing the pin entirely. Good shape; carry forward.
+
+### Sequencing after commit
+
+Queue continues: `-a-49` (graph overhaul first sub-wave)
+next. `-a-42` (About; A+B+C+F all in HEAD) stays parked
+behind the graph wave per queue order.
+
+### Walkthrough dispatch
+
+`webtest-a-6` (next walkthrough task) covers `-a-55`
+re-verification + the graph overhaul sub-wave when that
+bundles. @@WebtestA's lane idle right now; dispatch
+waits in their inbound until next spawn.
+
+Standing by for `-a-55` commit poke + `-a-49` pickup.

@@ -3698,3 +3698,63 @@ spawns the lanes.
 | `alex/event-architect-webtest-a.md` | -a-5 verdict ack + PARTIAL routing + close-out Option A |
 | `alex/event-architect-fullstack-a.md` | -a-55 scope addition (click-existing-tab PARTIAL bundled) |
 | `fullstack-a/fullstack-a-55.md` | Scope addition for the PARTIAL fix |
+
+## 2026-05-21 — clearance round 14 — -a-55 cleared + -20 option B fixup committed; bundled smoke in flight
+
+### Lane commit landed this beat
+
+| SHA | Subject | Lane |
+|-----|---------|------|
+| `76a07a0` | `chan-drive/tests/report: replace fixed sleep with wait_for poll for cross-platform timing (systacean-20 smoke fixup)` | @@Systacean |
+
+Clean option-B execution per the prior routing — the
+`wait_for` poll replacing the fixed sleep is the real
+test-quality improvement (cross-platform-correct test
+discipline), not just a gate-unblocker.
+
+Bundled smoke `26250685864` fired on `systacean-18-smoke`
+(fastforwarded with this fix on top). Passive wait on CI.
+If green, the gate-unblocker cascade is structurally
+exhausted — Round-3 readiness signal across all 3
+platforms.
+
+### -a-55 cleared
+
+@@FullStackA delivered all 3 bundled corrections cleanly:
+
+* Tab-strip family-name title removed (regression-guard
+  pin asserts `.hybrid-title` is null in flipped state).
+* Right-alignment via `flex-direction: row-reverse` +
+  `.tabs.flipped .actions { order: 1 }` (parent `row-reverse`
+  + per-child `scaleX(-1)` mirroring gives "looking from
+  behind, tabs flow from right edge" visual).
+* Click-swap fix via per-child mirror selectors (so the
+  click target stays unmirrored at the event-binding
+  level).
+
+vitest 647/647 (+1 net click-swap pin). 6 files per
+per-path discipline. Test inversion shape (turning the
+`-a-54` pin into a regression guard via `not.toMatch`)
+is exactly the right pattern; saves future revert from
+silently passing.
+
+Cleared verbatim.
+
+### Lane state at end of round
+
+| Lane | State |
+|------|-------|
+| @@Systacean | `-20` smoke fixup committed; bundled smoke in flight; expect verdict + then `-19` pickup |
+| @@CI | Idle |
+| @@FullStackA | `-a-55` cleared; expect commit + `-a-49` pickup (graph overhaul first sub-wave) |
+| @@FullStackB | DONE; idle |
+| @@WebtestA | Verdict committed; close-out marker pending; idle |
+| @@WebtestB | DONE; idle |
+
+### What I'm committing this round
+
+| File | Reason |
+|------|--------|
+| `architect/journal.md` | This entry |
+| `alex/event-architect-fullstack-a.md` | -a-55 commit clearance |
+| `alex/event-architect-systacean.md` | -20 smoke fixup after-the-fact ack |

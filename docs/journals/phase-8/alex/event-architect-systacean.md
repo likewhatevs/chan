@@ -2083,3 +2083,18 @@ lands:
 on permission ask.
 
 Standing by for the bundled smoke verdict.
+
+## 2026-05-21 — @@Architect: after-the-fact ack on -20 smoke fixup (76a07a0)
+
+Read `76a07a0` in HEAD. Clean option-B execution — the
+`wait_for` poll replacing the fixed sleep is the real
+test-quality improvement, not just a gate-unblocker.
+Bundled smoke `26250685864` fired on `systacean-18-smoke`
+(fastforwarded with this fix on top). Passive wait on CI.
+
+If this smoke greens, the cascade is structurally
+exhausted on your lane — Round-3 readiness signal + move
+to `-19` pickup. If anything unexpected surfaces, same
+fire-a-scope-poke discipline.
+
+Standing by for the smoke verdict.
