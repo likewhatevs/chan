@@ -366,3 +366,74 @@ Fastforward to `systacean-18-smoke` (append; no force) + `gh workflow run ci.yml
 If a 5th failure surfaces (unlikely; cargo's prior abort masked at most `chan-drive/tests/smoke.rs` which is already gated by `-18` fu#2), same discipline — escalate via scope poke rather than iterate.
 
 Obvious-call shortcut taken per the architect's authorization framing.
+
+## 2026-05-21 — smoke fixup #2: B→A pivot on watcher_keeps_report_current
+
+`-20` smoke fixup #1 (`76a07a0`, option B `wait_for` poll) ran on bundled smoke [`26250685864`]. Verdict: Ubuntu fully green ✓ but **Windows STILL red** on `watcher_keeps_report_current` — the `wait_for(5s)` poll genuinely times out, not a 700ms-too-short issue.
+
+Architect routed B→A pivot. See [`../alex/event-architect-systacean.md`](../alex/event-architect-systacean.md) "option B didn't fix it — pivoting to gate (shape A)".
+
+### Diagnosis (recapped here for the audit trail)
+
+The test:
+1. `drive.write_text("a.md", ...)` (warmup).
+2. `drive.watch(cb)` attaches.
+3. `drive.write_text("b.md", ...)` (the watched event).
+4. `wait_for(collector.len() >= 1, 5s)` — **PASSES** on Windows (test's own callback collected the event).
+5. `wait_for(report has b.md, 5s)` — **FAILS** on Windows. 100 polls at 50ms each over 5s, none finds `b.md` in `drive.report().files`.
+
+Step 4 passes → `notify` IS firing on Windows. Step 5 fails → the `ReportFanOut::on_event` → `ReportState::on_event` → `Index::update` → `drive.report()` chain doesn't propagate `b.md` on Windows. Real product gap, not test timing.
+
+### Fixup applied (B→A pivot)
+
+* `crates/chan-drive/tests/report.rs::watcher_keeps_report_current` gated with `#[cfg(unix)]` + an 8-line audit comment block cross-referencing `systacean-20` smoke #2 + the Round-3 polish bug-list entry.
+* `wait_for` poll body from option B STAYS. It's a genuine test-quality improvement on Unix (replacing fixed sleep with polling); no downside on Unix. When the Round-3 Windows fanout fix lands, the `#[cfg(unix)]` revert leaves the better poll discipline in place.
+
+### Bug-list entry
+
+Added Round-3 polish entry "Windows notify-crate / report-writer reliability for fresh file events" to `phase-8-bugs.md`. Same shape as the lock-contract entry. Captures:
+- Empirical: the exact failure mode + smoke run reference.
+- State: 1 test gated `#[cfg(unix)]` by this fixup.
+- Possible root causes (3 hypotheses; not yet investigated).
+- Want: root-cause the Windows event chain gap; fix at the source; revert the gate.
+- Non-blocking: chan-desktop is macOS-only at v0.11.2; Windows isn't a real-user release surface yet.
+- Lane: @@Systacean (chan-drive owns the watcher → report fanout).
+
+### Local verification
+
+```
+test watcher_keeps_report_current ... ok
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.11s
+```
+
+Still passes on macOS (Unix branch active). fmt + clippy clean.
+
+### Suggested commit subject
+
+```
+chan-drive/tests/report: gate watcher_keeps_report_current on Unix (systacean-20 smoke #2 fixup)
+```
+
+### Files
+
+```
+crates/chan-drive/tests/report.rs                +9   / 0
+docs/journals/phase-8/phase-8-bugs.md            +14  / 0
+docs/journals/phase-8/systacean/systacean-20.md  (this append)
+docs/journals/phase-8/alex/event-systacean-architect.md  (outbound poke)
+```
+
+4 paths total.
+
+### Smoke re-fire
+
+Same `systacean-18-smoke` branch, fastforward push, then dispatch. Expected on the re-fire:
+
+* **Windows fully green** — all 4 failure classes closed (`result_large_err` by `-17`; BGE panics by `-18`+fu; lock contract by `-20`; watcher-fanout by this fixup).
+* **Ubuntu fully green** — confirmed by prior smoke.
+* **macOS fully green** — unchanged.
+* **Round-3 readiness signal: per-PR ci.yml gate structurally fully green on all 3 platforms.**
+
+If a 5th failure surfaces (cargo's prior abort masked at most `chan-drive/tests/smoke.rs` which is already gated by `-18` fu#2; should be empty after this), same discipline: scope poke.
+
+Obvious-call shortcut taken per the architect's explicit authorization on this pivot.

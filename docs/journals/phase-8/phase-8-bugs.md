@@ -813,3 +813,15 @@
   - non-blocking today: chan-desktop ships macOS-only at v0.11.2; Windows chan-desktop isn't a real-user surface yet. The chan CLI's runtime locking on Windows falls back to whatever Windows-fs does (likely EACCES on the open) which surfaces as a different user-facing error than the Unix path — functional gap, not a panic
   - lane: @@Systacean (chan-drive owns the lock primitive)
   - NOT YET DISPATCHED — Round-3 polish/hardening candidate; lands when Windows becomes a real-user chan-desktop release surface
+
+- Windows notify-crate / report-writer reliability for fresh file events
+  - surfaced 2026-05-21 by @@Systacean during `systacean-20` smoke #2 verdict (run `26250685864`); routed by @@Architect into the `systacean-20` smoke fixup
+  - chan-drive integration test `chan-drive/tests/report.rs::watcher_keeps_report_current` exercises the chain: `drive.write_text(b.md)` → `notify::Watcher` event → `ReportFanOut::on_event` → `ReportState::on_event` → `Index::update` → `drive.report()` returns the file
+  - on Windows the chain doesn't deliver: the test's own `collector` callback DOES see the watcher event (so `notify` IS firing) but `drive.report().files` doesn't include `b.md` even after a `wait_for` poll with 5s timeout (100 iterations of 50ms re-polling `drive.report()`)
+  - state today: 1 test gated `#[cfg(unix)]` by the `systacean-20` smoke #2 fixup to unblock the per-PR CI gate. The `wait_for` poll body stays (genuine test-quality improvement on Unix); only the attribute changes
+  - possible root causes (not yet investigated): notify-crate's Windows readDirectoryChangesW path-event format differs from macOS-fsevent / Linux-inotify and the `Index::update` path-lookup misses; `ReportFanOut::on_event` silently failing on Windows; report-writer thread's debounce (500ms `FLUSH_DEBOUNCE` in `chan-drive/src/report.rs:28`) being long-tailed on Windows runners
+  - want (Round-3 polish): root-cause the Windows event chain gap; fix at the source (likely path-encoding normalization or per-platform debounce tuning); revert the `#[cfg(unix)]` gate
+  - non-blocking today: chan-desktop ships macOS-only at v0.11.2; Windows chan-desktop isn't a real-user surface yet. The chan CLI on Windows works fine for read-only operations; the watcher path is exercised only by chan-server's terminal-watcher and chan-desktop's editor — both Mac-only or Mac-primary in v0.11.2
+  - lane: @@Systacean (chan-drive owns the watcher → report fanout)
+  - parallel to: "Windows lock contract parity — chan-drive lock primitive doesn't surface `DriveLocked` on Windows" above (same Round-3 polish bracket; both unblock the Windows test surface mechanically pending real cross-platform fixes)
+  - NOT YET DISPATCHED — Round-3 polish/hardening candidate; same trigger as the lock parity entry (real-user Windows chan-desktop release surface)

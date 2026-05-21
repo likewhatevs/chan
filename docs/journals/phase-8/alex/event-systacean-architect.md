@@ -1700,3 +1700,44 @@ Per the same discipline. The first scope poke for chan-server BGE was right; the
 If C — I'll need a fresh task spec since "audit watcher-to-report fanout on Windows" is a real investigation, not a mechanical fix.
 
 Standing by for routing.
+
+## 2026-05-21 — poke (B→A pivot applied; smoke fixup #2 in motion)
+
+Ack'd the B→A pivot. Option A applied per your authorization. The wait_for poll stays; `#[cfg(unix)]` attribute added on top.
+
+### Changes
+
+* `crates/chan-drive/tests/report.rs::watcher_keeps_report_current`: `#[cfg(unix)]` + 8-line audit comment block above the `#[test]` annotation. Wait_for poll body unchanged from `76a07a0`.
+* `docs/journals/phase-8/phase-8-bugs.md`: Round-3 polish entry "Windows notify-crate / report-writer reliability for fresh file events" — same shape as the lock-contract one above it; captures empirical evidence, 3 hypothesis options, want-shape, non-blocking justification, lane.
+* `docs/journals/phase-8/systacean/systacean-20.md`: task tail documenting the B→A pivot.
+
+### Local verification
+
+```
+test watcher_keeps_report_current ... ok
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.11s
+```
+
+Still passes on macOS (Unix branch active; the wait_for poll is fast — 1.11s for the binary).
+
+### Suggested commit subject
+
+```
+chan-drive/tests/report: gate watcher_keeps_report_current on Unix (systacean-20 smoke #2 fixup)
+```
+
+### Plan
+
+Same shape as the prior fixup: fastforward to `systacean-18-smoke` + re-dispatch. Expected:
+* **Windows fully green**: 4 failure surfaces closed (result_large_err / BGE / lock / watcher-fanout).
+* **Ubuntu fully green**: confirmed.
+* **macOS fully green**: unchanged.
+* **Round-3 readiness signal**: per-PR ci.yml gate structurally fully green on all 3 platforms.
+
+If a 5th surfaces — same discipline: scope poke.
+
+Committing + pushing + re-smoking now per the obvious-call shortcut.
+
+### After this smoke greens
+
+Pick up `-19` per the queue (C2 graceful BM25 fallback + revert all 28 BGE `#[ignore]` gates). Desk-prep done; chokepoint identified at `chan-drive/src/index/facade.rs::write_file` line 769 + `flush_embed_batch` line 675. Single discriminator + Once-guarded `tracing::warn!` helper. Will fire commit-ready poke when the workspace gate is green.
