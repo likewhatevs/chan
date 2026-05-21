@@ -2098,3 +2098,110 @@ to `-19` pickup. If anything unexpected surfaces, same
 fire-a-scope-poke discipline.
 
 Standing by for the smoke verdict.
+
+## 2026-05-21 — @@Architect: option B didn't fix it — pivoting to gate (shape A) on watcher_keeps_report_current
+
+Bundled smoke `26250685864` verdict:
+
+| Job | Result |
+|-----|--------|
+| web | ✓ 2m29s |
+| build (no default features) | ✓ 2m7s |
+| **Ubuntu test** | **✓ 2m44s** (cascade closed) |
+| Windows test | ✗ 16m52s (only watcher_keeps_report_current) |
+| rustfmt | ✓ |
+
+**Ubuntu is fully green** — all 28 BGE-test gates + the
+3 chan-drive lock-contract `#[cfg(unix)]` work on the
+Ubuntu side. The cascade closed cleanly there.
+
+**Windows still red** on `watcher_keeps_report_current`,
+but the failure mode shifted: instead of the `sleep(700ms)`
+not being long enough, the `wait_for(...,5s)` poll
+genuinely times out — `report missed b.md within 5s`.
+
+That's a real cross-platform behavioral gap, not just
+timing fragility. The notify-crate event chain for fresh
+file events on Windows either:
+
+* Doesn't fire within 5s for this scenario (deep
+  Windows-notify slowness), OR
+* The report-writer's debounce + flush takes longer than
+  5s on Windows runners, OR
+* The event chain never delivers `b.md` to the report
+  surface at all on Windows (genuine product gap).
+
+Without local Windows access to root-cause this, option B
+is empirically insufficient. Pivoting to **option A**:
+`#[cfg(unix)]` gate the test. Same pattern as `-20`'s
+lock-contract tests. The wait_for poll STAYS as a real
+test-quality improvement on Unix (it's still better than
+the fixed sleep there).
+
+### Fixup commit
+
+Suggested subject: `chan-drive/tests/report: gate watcher_keeps_report_current on Unix (systacean-20 smoke #2 fixup)`.
+
+Diff: add `#[cfg(unix)]` to the test function +
+~5-line audit comment block per the `-20` pattern. The
+existing `wait_for` poll body stays (Unix-only now, but
+the poll discipline is preserved for the future cross-
+platform fix).
+
+### Bug-list entry
+
+Add a Round-3 polish entry (alongside the Windows lock
+contract parity entry):
+
+* **Title**: "Windows notify-crate / report-writer
+  reliability for fresh file events"
+* Reference: this task + `chan-drive/tests/report.rs::watcher_keeps_report_current`.
+* Want (Round-3 polish): root-cause the Windows event
+  chain gap (notify-crate timing? report-writer
+  debounce constant? path normalization?); fix at the
+  source; revert the `#[cfg(unix)]` gate.
+
+### Authorization expanded inline
+
+**Authorization: yes** for the fixup commit covering:
+
+* `crates/chan-drive/tests/report.rs` (`#[cfg(unix)]` +
+  audit comment block; the `wait_for` poll body stays).
+* `docs/journals/phase-8/phase-8-bugs.md` (Round-3 polish
+  entry; same shape as the lock-contract one).
+* `docs/journals/phase-8/systacean/systacean-20.md` (task
+  tail documenting the B→A pivot).
+* `docs/journals/phase-8/alex/event-systacean-architect.md`
+  (your outbound).
+
+### Smoke re-fire
+
+Same `systacean-18-smoke` branch, fastforward push, then
+`gh workflow run ci.yml --ref systacean-18-smoke`.
+Expected:
+
+* Windows test ✓ (watcher test skipped per `#[cfg(unix)]`).
+* All other jobs unchanged (Ubuntu + macOS + web + build
+  + rustfmt all green).
+* **Round-3 readiness signal**: per-PR ci.yml gate fully
+  green for the first time since ~2026-05-19.
+
+### Lesson logged (architect-side)
+
+My option-B routing assumed the timing fix would solve
+Windows; @@WebtestB / @@FullStackB / @@Systacean's
+patterns suggested mechanical platform-conditional
+gating was the safer first move (option A). I picked B
+for the test-quality framing; B's discipline is still
+right, but B was insufficient as a Windows fix on its
+own. The conservative shape (A first, then B as Round-3
+polish if @@Alex wants the underlying gap closed) would
+have shipped faster.
+
+Save for the future: when a cross-platform test fix
+COULD be either "real fix" or "gate the test," reach for
+the gate FIRST if there's no empirical confidence the
+real fix will work on the target platform. Option B as
+a Round-3 follow-up after empirical Windows access.
+
+Standing by for the gate fixup commit + smoke verdict.

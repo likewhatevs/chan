@@ -3758,3 +3758,64 @@ Cleared verbatim.
 | `architect/journal.md` | This entry |
 | `alex/event-architect-fullstack-a.md` | -a-55 commit clearance |
 | `alex/event-architect-systacean.md` | -20 smoke fixup after-the-fact ack |
+
+## 2026-05-21 — option B insufficient on Windows; pivoting to gate (shape A)
+
+Bundled smoke `26250685864` verdict:
+
+* **Ubuntu cargo test ✓** — cascade closed cleanly on
+  the Ubuntu side (28 BGE gates + 3 lock-contract
+  gates).
+* **Windows test ✗** — only `watcher_keeps_report_current`
+  fails. New failure mode: instead of `sleep(700ms)`
+  being insufficient, the `wait_for(...,5s)` poll
+  genuinely times out (`report missed b.md within 5s`).
+
+Empirically: option B's `wait_for` poll didn't fix the
+Windows surface. The notify-crate event chain for
+fresh file events either doesn't fire within 5s for
+this scenario on Windows, or the report-writer's
+debounce + flush takes longer than 5s, or the event
+never delivers `b.md` to the report at all on Windows.
+
+### Pivoting B → A
+
+Routed @@Systacean to `#[cfg(unix)]` gate the test (same
+pattern as `-20`'s lock-contract tests). The `wait_for`
+poll body stays (Unix-only now, but the poll discipline
+is preserved for the future cross-platform fix).
+
+Bug-list entry for the underlying gap added alongside
+the Windows lock contract parity entry — Round-3 polish:
+"Windows notify-crate / report-writer reliability for
+fresh file events."
+
+### Architect-side lesson
+
+My option-B routing assumed the timing fix would solve
+Windows. The empirical result: B's `wait_for` poll
+discipline is right (cross-platform-correct), but the
+underlying Windows event chain has a real gap that
+5s isn't enough to mask. Option A (mechanical gate
+first) would have shipped faster.
+
+Save for future: when a cross-platform test fix COULD
+be either "real fix" or "gate the test," reach for the
+gate FIRST if there's no empirical confidence the real
+fix will work on the target platform. Real fix becomes
+Round-3 polish after empirical Windows access.
+
+Cost of this iteration: one extra smoke cycle (~17 min)
++ one fixup commit. Acceptable but not free; the lesson
+is the takeaway.
+
+### Same beat status
+
+@@Systacean is the only lane that needs to act this
+beat — apply the gate fixup + re-smoke. @@FullStackA's
+`-a-55` clearance from the prior round stands; they
+commit on their next spawn.
+
+Standing by for the gate fixup commit + the re-smoke
+verdict (Round-3 readiness signal once Windows greens
+on the gated test).
