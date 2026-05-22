@@ -2025,3 +2025,99 @@ Will fire that scope poke as a separate message after this success-ack.
 * `-12` 🟡 still parked on a fresh runtime-permission ask.
 
 Standing by; scope poke for `-16` fires next.
+
+## 2026-05-22 — scope poke (-16: which files get classified into a FileBucket?)
+
+Picking up `systacean-16` per the queue. Per the `feedback_ground_descriptions_in_source` discipline: firing the scope question BEFORE implementation. The task body has a meaningful ambiguity on what "every file" means; the existing chan-report code shape + chan-drive's parallel `FileClass` taxonomy make it worth your routing.
+
+### Task body says
+
+> chan-report classifies every file into one of: `Markdown`, `SourceCode { language }`, `Binary`, `Media`, `Other`. The bucket is exposed alongside the existing per-file language detection.
+
+Plus the acceptance criterion test list: `markdown, Rust, TypeScript, Python, JPG, PNG, MP4, binary .so, vendored .gen.rs`. Three of those (JPG, PNG, MP4, .so) are NOT in chan-report's currently-tracked file set — `LanguageType::from_path` returns None + `count_file_impl` drops them today.
+
+### Existing taxonomy split
+
+`chan-drive` already has a parallel classification system (`FileClass` enum in `fs_ops.rs`, re-exported at the crate root):
+
+* `EditableText` — `.md`, `.txt`.
+* `Text` — source code / config / build files / well-known basenames (Makefile, Dockerfile, LICENSE).
+* `Image` — `.png`, `.jpg`, `.svg`, `.gif`, `.webp`, `.avif`.
+* `Pdf` — `.pdf`.
+* `Other` — archives, audio, video, fonts, unknown.
+
+This serves the IO contract layer (what can be edited, what's read-only, what's previewed). The graph already uses it: `chan_drive::classify()` is called from the graph-indexer layer for non-markdown files.
+
+`chan-report`'s task -16 proposes a SEPARATE classification axis: `Markdown / SourceCode { language } / Binary / Media / Other` — for the graph overhaul's G6/G7/G8 color scheme + language-dir relationships.
+
+The two systems are orthogonal but adjacent:
+* chan-drive `FileClass`: IO contract (read/write/edit semantics).
+* chan-report `FileBucket`: graph-color + source-code-language scheme.
+
+### Three implementation options
+
+**Option (a) — chan-report tracks ALL files; expand the tracked-file set**
+
+* Modify `count_file_impl` to NOT drop files where `LanguageType::from_path` returns None.
+* Emit FileStats for binary/media files with zero stats (`code: 0, comments: 0, blanks: 0, complexity: 0, bytes: <real>`) + appropriate bucket.
+* `.chan/report.jsonl` carries rows for every file in the drive (subject to gitignore + filter).
+* Bucket enum: `Markdown` / `SourceCode { language }` / `Binary` / `Media` / `Other`.
+
+**Pros**: matches the most literal reading of "every file". The task's test list (binary .so, JPG, PNG, MP4) fits naturally.
+
+**Cons**: meaningfully expands chan-report's "what we track" boundary. Schema impact (JSONL grows with non-source rows). Per-drive `.chan/report.jsonl` could grow substantially on drives heavy in media. The aggregation work from `systacean-15` (per-directory rollups) would need to decide how to weight zero-SLOC binary/media files in the totals.
+
+**Option (b) — chan-report keeps its tracked-file set; bucket only Markdown vs SourceCode**
+
+* `FileBucket` enum: `Markdown` / `SourceCode { language }` (and maybe a `Headerless` variant for LICENSE/Makefile-style well-known basenames that tokei recognizes but aren't conventional source).
+* chan-report tracked set unchanged; binary/media stay out.
+* The graph indexer composes: file in chan-report's index → use bucket; file NOT in chan-report's index → use chan-drive's `FileClass` directly (map Image+Pdf → Media; Other → Binary; etc.).
+
+**Pros**: small, clean, additive change to chan-report. No JSONL schema growth. No aggregation-counting surprise on per-directory rollups. Leans on the already-existing chan-drive `FileClass` for the non-source axis.
+
+**Cons**: more orchestration at the graph-indexer layer (it has to know to consult BOTH chan-report bucket + chan-drive FileClass). The task body's "every file" language is met indirectly (via composition) rather than directly (one classification system).
+
+**Option (c) — hybrid: chan-report exposes its bucket; graph indexer maps via combined system**
+
+Same as (b) but call out the composition explicitly: ship the chan-report bucket for tracked files + amend the graph indexer's existing FileClass usage to map `Image + Pdf → graph "media"`, `Text + Other → graph "binary"`, etc. The chan-report bucket is the smaller addition; the graph mapping change is the orchestration layer.
+
+**Pros**: clean separation of concerns. chan-report bucket = source-code-shaped axis; chan-drive FileClass = IO-contract axis; graph indexer = the composition.
+
+**Cons**: most coordination. Probably needs a small chan-drive PR alongside (or an explicit "graph indexer change is in @@FullStackA's lane for the eventual graph overhaul").
+
+### My recommendation
+
+**Option (c)** for the cleanest separation. chan-report stays focused on source-code-shaped data + SLOC; chan-drive's existing `FileClass` carries the non-source classification; the graph indexer's existing FileClass call site is where the two compose. This:
+
+* Matches `feedback_ground_descriptions_in_source` — both systems describe what they actually do, no semantic overload.
+* Aligns with `systacean-15`'s per-directory aggregation work (per-dir rollups stay SLOC-shaped, not polluted by binary/media zero rows).
+* Leans on a system that ALREADY exists (`chan_drive::FileClass`) rather than duplicating its purpose into chan-report.
+
+Fallback: **(b)** — even simpler, equivalent end-result, just leaves the graph indexer's classification call site to a separate task / lane (the graph overhaul work itself).
+
+I'd discourage **(a)** unless you have a specific reason to grow chan-report's scope. The "every file" reading of the task body is real but the cost of `.chan/report.jsonl` schema growth + the per-dir aggregation weighting question are non-trivial.
+
+### Other dependencies / considerations
+
+* `systacean-15` (per-directory aggregation, already shipped): if option (a) lands, the per-dir rollups would need a policy decision on whether binary/media zero-SLOC rows count toward `files` total. Default would presumably be "yes count" but it changes the existing rollup contract.
+* Graph overhaul (FullStackA's lane, eventual): G6 color rules depend on knowing the bucket per node. Option (c) makes this composition explicit; (a) or (b) place the bucket lookup in different layers.
+* JSONL schema version (currently 1): option (a) probably warrants a bump to v2 (binary/media rows are new on-disk shape). Options (b) + (c) are strictly additive to the existing schema (bucket field on FileStats), so schema can stay v1 with backward-compat default.
+
+### Sequencing if (b) or (c)
+
+* Add `FileBucket` enum to chan-report (`Markdown` / `SourceCode { language }`) — additive to `FileStats`.
+* `count_file_impl` populates the bucket using `tokei::LanguageType` info already on hand (Markdown special-case, everything else SourceCode { language: language_name }).
+* JSONL: emit bucket as an optional field on `kind: "file"` records (schema-compat: missing field defaults to None on load).
+* Tests against a fixture tree (markdown, Rust, Python, etc.).
+* Existing `dir_report` from `-15` carries through unchanged.
+
+### Sequencing if (a)
+
+Same as above plus:
+* Modify `count_file_impl` to emit zero-stats rows for files `LanguageType::from_path` returns None for. Need to decide how to classify them (extension list for media; UTF-8 content sniff + extension fallback for binary vs other).
+* Probably bump SCHEMA_VERSION to 2; loader handles v1 file rows without bucket field.
+* `dir_report` rollup behavior: decide whether binary/media zero-SLOC rows count toward `files` total or are filtered.
+
+### Standing by
+
+Holding for routing. After your call I'll implement + commit with the atomic audit-commit discipline + push to a `systacean-16-smoke` branch + dispatch CI to verify cross-platform green.
