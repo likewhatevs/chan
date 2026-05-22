@@ -8218,3 +8218,103 @@ Hybrid hamburger: add New Draft as first spawn entry (fullstack-a-67 slice 2)
 Single bash invocation per discipline.
 
 Push held. Standing by for clearance.
+
+## 2026-05-22 — poke (fullstack-a-70 audit + scope-poke — no SPA change this round)
+
+Audit-only. The SPA-side mention bubble
+relies entirely on `/api/contacts` (contact
+files); the mention corpus (free-form
+`@@<token>` strings observed across the
+indexed body text) has no dedicated picker-
+friendly endpoint.
+
+### Audit findings
+
+* Trigger:
+  `web/src/editor/bubbles/contact.ts::openContactBubble`.
+* Data source: `api.contacts(query, limit)`
+  → `/api/contacts` (returns
+  `Array<{path, label, emails?, aliases?}>`
+  for contact files only).
+* Where the corpus DOES live: chan-server's
+  `/api/graph` walks `EdgeKind::Mention` edges
+  + builds a `mention_set:
+  BTreeSet<String>` at
+  `crates/chan-server/src/routes/graph.rs:1142`.
+  These become `GraphNodeView::Mention` nodes
+  but are only reachable via the heavy graph
+  query.
+
+### Routing decision
+
+New `/api/mentions?q=<prefix>&limit=<int>`
+endpoint. Walks the same mention_set
+aggregation `/api/graph` does + returns a
+flat `Array<{label: string}>` (matching
+`/api/contacts`'s shape so the SPA union is
+straightforward).
+
+Considered alternatives:
+* Extending `/api/contacts` (wider blast
+  radius; changes the contract).
+* SPA queries `/api/graph` once + caches
+  (graph payload is MB-scale; not viable
+  for keystroke-driven picker).
+
+Routing #1 is cleanest.
+
+### Scope-poke to @@Systacean (route via architect)
+
+`crates/chan-server/src/routes/` (new
+`mentions.rs` OR extension to `graph.rs`):
+* `api_mentions(state, query)` handler.
+* Query: `?q=<prefix>&limit=<int>`. Default
+  limit 10 (mirror /api/contacts).
+* Build the same `mention_set` aggregation
+  the graph route uses; filter by
+  case-insensitive prefix; sort label-asc;
+  cap at `limit`.
+* Return JSON `Array<{label: string}>`.
+* Wire `/api/mentions` in `lib.rs`; export
+  from `routes/mod.rs`.
+* Rust pin: fixture insert + assert tokens
+  appear.
+
+If the per-call walk is too slow on the
+chan-source seed (~1973 files), @@Systacean's
+call to lift mention-extraction into the
+indexer boot pass + cache on the graph
+handle.
+
+### Follow-up SPA work (after endpoint lands)
+
+Small. `api.mentions(q, limit)` client
+method + `openContactBubble` queries BOTH
+in parallel + merges. Optional dim style
+for mention-only hits.
+
+### No commit this round
+
+Audit-only. Deliverable:
+* Impl note documenting the gap + routing.
+* This scope-poke for @@Systacean piece.
+
+### Suggested commit subject (when shipping)
+
+```
+docs(fullstack-a-70): audit + scope-poke for chan-server mention corpus endpoint
+```
+
+### Files for `git add`
+
+* `docs/journals/phase-8/fullstack-a/fullstack-a-70.md`
+* `docs/journals/phase-8/fullstack-a/journal.md`
+* `docs/journals/phase-8/alex/event-fullstack-a-architect.md`
+  (this append)
+
+### Atomic-audit-commit applied
+
+Single bash invocation per discipline.
+
+Standing by for the chan-server endpoint
+landing + the SPA wiring follow-up.

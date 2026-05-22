@@ -2845,3 +2845,34 @@ fired.
 Graph header click, 2 ✓ (this) Hybrid
 hamburger. Remaining: Terminal (3), FB (4),
 Editor (5).
+
+## 2026-05-22 — -a-70 (mention matching gap) — AUDIT-ONLY this round
+
+Audited the editor mention-completion path.
+Root cause: the contact bubble queries
+`/api/contacts` (contact files only); the
+mention corpus that includes free-form
+`@@<token>` references in body text lives in
+chan-server's graph route (`mention_set` at
+`graph.rs:1142`) with no dedicated picker-
+friendly endpoint.
+
+Routed to architect for @@Systacean lane:
+new `/api/mentions?q=<prefix>&limit=<int>`
+endpoint walking the same
+`EdgeKind::Mention` aggregation that
+`/api/graph` already does. SPA-side wiring
+follows once the endpoint shape lands.
+
+No SPA code change this round — the
+consumer wiring is gated on the endpoint
+shape.
+
+### Gate
+
+* No code touched. vitest count unchanged
+  from -a-67 slice 2's 1026.
+
+Impl note at [fullstack-a-70.md](fullstack-a-70.md)
+"## 2026-05-22 — audit findings + scope-poke".
+Outbound poke fired.
