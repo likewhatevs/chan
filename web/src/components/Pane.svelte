@@ -1075,7 +1075,7 @@
     {/if}
     <!-- `fullstack-a-44`: top-bar dead zone. The empty stretch
          between the last tab and the hamburger actions captures
-         mousedown + double-click to enter Hybrid NAV in transaction
+         mousedown + double-click to enter Hybrid Nav in transaction
          mode. Manual mousedown + threshold tracking (not HTML5
          dragstart) avoids stomping the per-tab inter-pane DnD that
          lives on each .tab; that DnD remains unchanged. -->
@@ -1357,7 +1357,7 @@
       </div>
     {/if}
     <!--
-      `fullstack-b-2`: keep terminal tabs mounted across Hybrid NAV
+      `fullstack-b-2`: keep terminal tabs mounted across Hybrid Nav
       (pane mode) toggles so xterm.js's 20k-line scrollback buffer
       survives. Previously the outer `{#if !paneMode.active}` wrapper
       unmounted every terminal on Cmd+K entry, disposing the

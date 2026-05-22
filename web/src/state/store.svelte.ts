@@ -1454,7 +1454,7 @@ export function openGraph(): void {
 
 /** `fullstack-a-32`: spawn a graph tab rooted at the focused
  *  surface's context. Mirrors `paneModeOpenGraph` (which targets
- *  the Hybrid NAV draft); this variant spawns in the live layout
+ *  the Hybrid Nav draft); this variant spawns in the live layout
  *  for top-level chords (`Cmd+Shift+M`, `chan:command
  *  app.graph.toggle`). `fullstack-a-33` makes "from here" the
  *  default rendering mode, so passing `file:` / `dir:` here lands

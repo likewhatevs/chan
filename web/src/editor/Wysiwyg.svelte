@@ -513,7 +513,7 @@
     if (autoFocus) view.focus();
     // `fullstack-a-65`: force a viewport re-measure after mount.
     // The editor frequently mounts while the pane is still
-    // animating in (Hybrid NAV exit, tab-switch transitions) so
+    // animating in (Hybrid Nav exit, tab-switch transitions) so
     // the initial viewport calculation runs against a zero-size
     // or hidden host. Without this, image decorations skip
     // rendering until the user pokes the cursor + the decoration

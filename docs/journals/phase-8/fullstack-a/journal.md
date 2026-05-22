@@ -3037,3 +3037,28 @@ Impl note at [fullstack-a-70.md](fullstack-a-70.md)
 "## 2026-05-22 — SPA wiring". Outbound
 poke fired. `-a-70` complete pending
 @@WebtestA empirical walk.
+
+## 2026-05-22 — -a-68 slice 1c (source-file comment sweep) ready for review
+
+Ten-file change. Doc-comment + JSDoc sweep
+across all non-test source files. Closes the
+deferred follow-up from slice 1b.
+
+Bulk perl swap `Hybrid NAV` → `Hybrid Nav`
+across App.svelte + 5 components + 4 state
+files. All comment-only edits; no runtime
+behaviour change.
+
+Test files preserved verbatim — negative-pin
++ historical describe-block context needs
+the literal.
+
+### Gate
+
+* vitest **1043 / 1043** (unchanged).
+* svelte-check 0/0 across 4040 files.
+* npm build clean.
+
+Impl note at [fullstack-a-68b.md](fullstack-a-68b.md)
+"## 2026-05-22 — slice 1c". Outbound poke
+fired.

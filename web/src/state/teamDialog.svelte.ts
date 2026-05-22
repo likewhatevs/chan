@@ -3,7 +3,7 @@
 // Mirrors the spawnDialog pattern (`-a-4`): a state singleton +
 // open/close helpers, dialog rendered at App root so it's free
 // of every parent stacking context (rich-prompt is absolute /
-// z-index:20; panes are overflow-hidden; Hybrid NAV adds a
+// z-index:20; panes are overflow-hidden; Hybrid Nav adds a
 // filter to non-focused panes — any of those can clip a
 // position:fixed dialog).
 

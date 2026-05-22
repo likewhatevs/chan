@@ -3,7 +3,7 @@
 // The SpawnDialog used to render inside `<TerminalRichPrompt>`,
 // which made it sensitive to the stacking-context tree of every
 // ancestor (rich-prompt is `position: absolute; z-index: 20`,
-// the pane container has `overflow: hidden`, and Hybrid NAV
+// the pane container has `overflow: hidden`, and Hybrid Nav
 // adds a `filter` to non-focused panes). Any of those can
 // clip or hide a `position: fixed` descendant in practice.
 // Mounting the dialog at the App root and signalling intent

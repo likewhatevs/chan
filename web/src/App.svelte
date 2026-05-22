@@ -300,7 +300,7 @@
   /// cwd of a focused terminal; scope path of a focused graph)
   /// through `resolveSpawnContext` and threads it into the matching
   /// spawn API. Single source of truth means the four surfaces
-  /// (chord / Hybrid NAV / hamburger menu / right-click) all
+  /// (chord / Hybrid Nav / hamburger menu / right-click) all
   /// behave identically.
   function spawnTerminalFromContext(): void {
     const ctx = resolveSpawnContext();
@@ -342,7 +342,7 @@
   ///   Cmd+O          -> File Browser (native; Cmd+Alt+O on web Mac)
   ///   Cmd+P          -> Rich Prompt (native; Cmd+Alt+P on web Mac)
   ///   Cmd+Shift+M    -> Graph (native + web)
-  ///   Mod+. t/o/p/v  -> universal aliases via Hybrid NAV
+  ///   Mod+. t/o/p/v  -> universal aliases via Hybrid Nav
   ///
   /// Other app chords:
   ///
@@ -379,7 +379,7 @@
       handlePaneModeKey(e);
       return;
     }
-    // `fullstack-a-7`: swap the Hybrid NAV entry chord from
+    // `fullstack-a-7`: swap the Hybrid Nav entry chord from
     // Cmd+K to Cmd+. so Cmd+, can own Settings (macOS
     // app-preferences convention; already wired via
     // `app.settings.toggle` in `shortcuts.ts`). Cmd+. is not
@@ -476,7 +476,7 @@
       case "0":
         paneModeEqualize();
         return;
-      // `fullstack-a-32`: Hybrid NAV spawn keys are mnemonic now —
+      // `fullstack-a-32`: Hybrid Nav spawn keys are mnemonic now —
       // `t` (terminal), `o` (file browser), `p` (rich prompt), `v`
       // (graph). The pre-`-a-32` numeric `1/2/3/4` cases drop;
       // they duplicated the top-level Cmd+T / Cmd+O / Cmd+P /
@@ -616,7 +616,7 @@
     }
     // `fullstack-a-90`: removed the legacy `Alt+Space` rich-prompt
     // chord. Rich prompt is now Cmd+P (native) + Cmd+Alt+P (web Mac
-    // fallback) + `Mod+. p` (Hybrid NAV). `-a-32`'s muscle-memory
+    // fallback) + `Mod+. p` (Hybrid Nav). `-a-32`'s muscle-memory
     // bridge expired.
     // `fullstack-a-32`: spawn-chord family. Each Cmd+Alt+<letter>
     // chord is the macOS web fallback for the matching native
@@ -630,7 +630,7 @@
     // that includes Ctrl) so Ctrl+Alt+<letter> on Win/Linux stays
     // free for other bindings (`Ctrl+Alt+T` is owned by
     // `app.tab.reopenClosed`; Ctrl+Alt+O / P aren't used yet but
-    // we don't want to claim them either). Hybrid NAV `o`/`p`/`v`
+    // we don't want to claim them either). Hybrid Nav `o`/`p`/`v`
     // is the universal fallback on every platform.
     if (e.metaKey && e.altKey && !e.shiftKey && !e.ctrlKey && e.code === "KeyT") {
       e.preventDefault();
@@ -995,7 +995,7 @@
 <!-- `fullstack-a-4`: Spawn agent dialog. Mounted at the App
      root rather than inside the rich prompt so its `position:
      fixed` backdrop is never clipped by an ancestor's stacking
-     context (the pane has `overflow: hidden`; Hybrid NAV adds
+     context (the pane has `overflow: hidden`; Hybrid Nav adds
      a `filter` to unfocused panes; the rich prompt itself is a
      positioned z-index: 20 stacking context). -->
 <SpawnDialog />

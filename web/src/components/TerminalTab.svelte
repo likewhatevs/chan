@@ -1115,7 +1115,7 @@
     }
     // `fullstack-a-90`: removed the legacy `Alt+Space` rich-prompt
     // chord. Cmd+P (native), Cmd+Alt+P (web Mac), and `Mod+. p`
-    // (Hybrid NAV) cover the rich-prompt entry points.
+    // (Hybrid Nav) cover the rich-prompt entry points.
     if (
       (e.metaKey || e.ctrlKey) &&
       !e.shiftKey &&
@@ -1294,7 +1294,7 @@
              entry; Cmd+K p is the canonical entry, the rich prompt's
              own `×` button is the exit. `fullstack-a-90` removed
              the legacy Alt+Space alias; Cmd+P (native) / Cmd+Alt+P
-             (web Mac) / `Mod+. p` (Hybrid NAV) are the entry
+             (web Mac) / `Mod+. p` (Hybrid Nav) are the entry
              points. -->
         <button class="mbtn" onclick={copyTerminalCwd}>
           <span class="mbtn-icon">

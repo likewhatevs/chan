@@ -688,7 +688,7 @@ export const layout = $state<{
 
 export type LayoutState = typeof layout;
 
-/// `fullstack-72`: staged spawn for the Hybrid NAV (Pane Mode)
+/// `fullstack-72`: staged spawn for the Hybrid Nav (Pane Mode)
 /// number keys. Tab already uses a draft/commit model — pressing
 /// Tab flips the Hybrid live, Enter keeps it, Esc reverses. The
 /// 1/2/3 keys used to push directly into the draft tab list which
@@ -707,7 +707,7 @@ export type PaneModeSpawnIntent = {
 };
 
 /// `fullstack-a-44`: `transactionMode` is the mouse-driven variant of
-/// Hybrid NAV. Entered by drag-from-dead-zone (Entry A — sets
+/// Hybrid Nav. Entered by drag-from-dead-zone (Entry A — sets
 /// `grabPaneId` to the originating pane) or by double-click on the
 /// dead zone (Entry B — `grabPaneId` stays null until the user clicks
 /// + drags inside a pane). Mouse handlers in transaction mode operate
@@ -910,7 +910,7 @@ export function openActiveTerminalRichPrompt(): void {
   // helper-textarea since the user was just looking at a terminal)
   // is still the keyboard target. A fast typer who starts typing
   // immediately after the rich-prompt chord (Cmd+P, Cmd+Alt+P, or
-  // Hybrid NAV `p`) hits that race window: the first
+  // Hybrid Nav `p`) hits that race window: the first
   // keystroke lands on xterm-helper-textarea, fires
   // `term.onData -> sendUserInput`, and is sent to the PTY behind
   // the user's back. The dispatch they later trigger from the
@@ -2117,7 +2117,7 @@ function nearestAncestorSplit(
   return null;
 }
 
-/// Hybrid NAV resize. `positive=true` shifts the divider toward
+/// Hybrid Nav resize. `positive=true` shifts the divider toward
 /// the right (row axis) or the bottom (column axis); `positive=false`
 /// shifts it toward the left / top. This is the
 /// `fullstack-a-9` convention: bracket-direction == divider-

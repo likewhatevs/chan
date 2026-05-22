@@ -181,3 +181,115 @@ guard.
 Per the memory rule. Per-path staging only.
 
 Push held. Standing by for clearance.
+
+## 2026-05-22 — slice 1c (source-file comment sweep) ready for review
+
+Ten-file change. Doc-comment + JSDoc sweep
+across all non-test source files. Closes the
+deferred follow-up from slice 1b.
+
+### What landed
+
+Bulk perl swap `Hybrid NAV` → `Hybrid Nav`
+across:
+
+* `web/src/App.svelte` (5 comment refs).
+* `web/src/components/AppStatusBar.svelte`
+  (2 refs).
+* `web/src/components/Pane.svelte` (2
+  refs).
+* `web/src/components/PaneModeHelp.svelte`
+  (1 ref in the component header
+  comment).
+* `web/src/components/TerminalTab.svelte`
+  (2 refs).
+* `web/src/editor/Wysiwyg.svelte` (1 ref).
+* `web/src/state/spawnDialog.svelte.ts`
+  (1 ref).
+* `web/src/state/store.svelte.ts` (1 ref).
+* `web/src/state/tabs.svelte.ts` (4 refs).
+* `web/src/state/teamDialog.svelte.ts`
+  (1 ref).
+
+All edits comment-only. No runtime
+behaviour changes.
+
+### Test files preserved verbatim
+
+Test files (`*.test.ts`) NOT touched. Two
+reasons:
+
+1. **Negative pins**: `hybridNavShortcutsLabel.test.ts`
+   literally asserts the ABSENCE of "Hybrid
+   NAV" in shortcuts.ts. The string must
+   appear in the test file (as the
+   pattern being negated) for the pin to
+   make sense.
+2. **Historical describe blocks**:
+   `Pane.test.ts` line 484 + `tabs.test.ts`
+   line 1104 use "Hybrid NAV" in describe-
+   block labels that historicize `-a-44`'s
+   work. Renaming would break test
+   discovery + obscure the historical
+   context.
+
+### Acceptance (slice 1c)
+
+1. **All non-test source files swept** ✓
+   — 0 `Hybrid NAV` references in
+   src/{components,editor,state,App.svelte}.
+2. **No runtime behaviour change** ✓ —
+   comment-only edits.
+3. **Test pins preserved** ✓ — `*.test.ts`
+   files untouched.
+
+### Gate
+
+* vitest **1043 / 1043** (unchanged from
+  `-a-70`'s SPA wiring — no test files
+  edited).
+* svelte-check 0 errors / 0 warnings across
+  4040 files.
+* npm build clean.
+
+### Decisions
+
+* **Bulk perl swap** — case-exact
+  consistent with slice 1 + slice 1b.
+* **Test files preserved** — negative-pin
+  + historical describe-block context
+  needs the literal.
+* **Single commit** — comment-only sweep
+  across 10 files reads cleaner as one
+  atomic change than 10 separate commits.
+
+### Suggested commit subject
+
+```
+Hybrid NAV → Hybrid Nav: source-file comment sweep (fullstack-a-68 slice 1c)
+```
+
+Single commit. 10 source files + this
+impl note + journal + outbound.
+
+### Files for `git add` (per-path discipline)
+
+* `web/src/App.svelte`
+* `web/src/components/AppStatusBar.svelte`
+* `web/src/components/Pane.svelte`
+* `web/src/components/PaneModeHelp.svelte`
+* `web/src/components/TerminalTab.svelte`
+* `web/src/editor/Wysiwyg.svelte`
+* `web/src/state/spawnDialog.svelte.ts`
+* `web/src/state/store.svelte.ts`
+* `web/src/state/tabs.svelte.ts`
+* `web/src/state/teamDialog.svelte.ts`
+* `docs/journals/phase-8/fullstack-a/fullstack-a-68b.md`
+* `docs/journals/phase-8/fullstack-a/journal.md`
+* `docs/journals/phase-8/alex/event-fullstack-a-architect.md`
+
+### Atomic-audit-commit
+
+Per the memory rule. Per-path staging only.
+
+Push held. Standing by for clearance.

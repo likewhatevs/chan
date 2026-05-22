@@ -1,5 +1,5 @@
 <script lang="ts">
-  // Hybrid NAV cheatsheet. Shown while `h` is toggled inside Hybrid
+  // Hybrid Nav cheatsheet. Shown while `h` is toggled inside Hybrid
   // NAV (entered via `Cmd+.` per `fullstack-a-7`). Each key-cap is a
   // clickable <button> in addition to the
   // visible label, so the cheatsheet doubles as a mouse-driveable

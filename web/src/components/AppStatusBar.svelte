@@ -106,12 +106,12 @@
           <span class="sep">·</span>
         {/if}
         {#if paneModeVisible}
-          <!-- `fullstack-a-3`: status-bar label for Hybrid NAV
+          <!-- `fullstack-a-3`: status-bar label for Hybrid Nav
                (Cmd+K). Per the phase-8 bug list the wording is
                `Hybrid ☯ Enter commit, Esc discard, H help`; the
                spawn-intent chip stays because 1/2/3 still stage
                a tab spawn before commit. -->
-          <span class="section pane-mode-pill" aria-label="Hybrid NAV active">
+          <span class="section pane-mode-pill" aria-label="Hybrid Nav active">
             <span class="dot working"></span>
             Hybrid ☯ Enter commit, Esc discard, H help
             {#if paneMode.spawnIntent}

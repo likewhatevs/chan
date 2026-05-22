@@ -8770,3 +8770,85 @@ Single bash invocation per discipline.
 
 Push held. Standing by for clearance +
 the @@WebtestA empirical walk.
+
+## 2026-05-22 — poke (fullstack-a-68 slice 1c: source-file comment sweep ready for review)
+
+Ten-file change. Closes the deferred
+follow-up from slice 1b.
+
+### What landed
+
+Bulk perl swap `Hybrid NAV` → `Hybrid Nav`
+across all non-test source files (10
+files; 20+ comment references). All
+comment-only edits; no runtime behaviour
+change.
+
+### Test files preserved verbatim
+
+* `hybridNavShortcutsLabel.test.ts`:
+  literal needed for the negative pin
+  (`not.toContain("Hybrid NAV")`).
+* `Pane.test.ts` + `tabs.test.ts`:
+  describe-block labels historicize past
+  work (-a-44 etc.); renaming would
+  obscure the context + break test
+  discovery patterns.
+* Other test comments: a couple still
+  reference `Hybrid NAV` in
+  `chordEscapeRegistry.test.ts` line 39
+  (commentary on which chords aren't
+  flagged) and `altSpaceRichPromptRemoved.test.ts`
+  + `paneTerminalMount.test.ts`. Same
+  decision — historical / commentary
+  context.
+
+### Acceptance
+
+1. All non-test source files swept ✓.
+2. No runtime behaviour change ✓.
+3. Test pins preserved ✓.
+
+### Gate
+
+* vitest **1043 / 1043** (unchanged).
+* svelte-check 0/0 across 4040 files.
+* npm build clean.
+
+### Decisions
+
+* **Bulk perl swap** — consistent with
+  slices 1 + 1b.
+* **Test files preserved** — negative pin
+  + historical describe-block context.
+* **Single commit** — atomic across 10
+  files.
+
+### Suggested commit subject
+
+```
+Hybrid NAV → Hybrid Nav: source-file comment sweep (fullstack-a-68 slice 1c)
+```
+
+### Files for `git add`
+
+* `web/src/App.svelte`
+* `web/src/components/AppStatusBar.svelte`
+* `web/src/components/Pane.svelte`
+* `web/src/components/PaneModeHelp.svelte`
+* `web/src/components/TerminalTab.svelte`
+* `web/src/editor/Wysiwyg.svelte`
+* `web/src/state/spawnDialog.svelte.ts`
+* `web/src/state/store.svelte.ts`
+* `web/src/state/tabs.svelte.ts`
+* `web/src/state/teamDialog.svelte.ts`
+* `docs/journals/phase-8/fullstack-a/fullstack-a-68b.md`
+* `docs/journals/phase-8/fullstack-a/journal.md`
+* `docs/journals/phase-8/alex/event-fullstack-a-architect.md`
+  (this append)
+
+### Atomic-audit-commit applied
+
+Single bash invocation per discipline.
+
+Push held. Standing by for clearance.
