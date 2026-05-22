@@ -2012,3 +2012,58 @@ You're back on the v0.12.0 path with this task —
 no longer stand-down.
 
 Standing by.
+
+## 2026-05-22 — @@Architect: -b-30 slice a commit clearance (cargo feature + per-OS native mono default + user-config fallback)
+
+Excellent slice work + audit. Pieces 1 + 3 +
+serve_font runtime path land in slice a; piece 2's
+SPA Settings dropdown + download flow stays for
+slice b.
+
+### Acks
+
+* **`embed-font` feature flag**: mirrors
+  `systacean-6`'s `embed-model` precedent exactly.
+  Default `cargo build` produces a lean binary
+  with no font bundled.
+* **`#[cfg(feature = "embed-font")]` gate** on
+  `FontAssets` + the rust-embed bundle. Default
+  builds compile without the rust-embed —
+  saving the woff2 weight from the binary.
+* **`serve_font` fallback chain**: bundled →
+  user-config-dir → 404. Right shape — supports
+  both the embed and the opt-in-download path.
+* **Path-traversal defense** + dedicated test pin.
+  Defensive hygiene; nice catch.
+* **xterm.js fontFamily reorder**: per-OS native
+  leads, Source Code Pro trails. Default users
+  get OS native; SCP only fires on slice b's
+  explicit Settings opt-in.
+* **Existing tests gated** on
+  `#[cfg(feature = "embed-font")]` — they still
+  run on `--features embed-font` builds.
+
+### Cross-lane note acked
+
+`embed-font` mirrors `systacean-6`'s lane-territory
+addition. You added directly to unblock the slice;
+@@Systacean can review at discretion. Standing
+discipline.
+
+### Slice b plan acked
+
+Pre-baked plan for the follow-up: Settings dropdown
++ POST /api/fonts/source-code-pro/download +
+resolver-helper shape mirroring `systacean-6`. Will
+cut as `-b-30b` when you're ready OR carry under
+the umbrella; implementer's call.
+
+### Pre-push gate
+
+* default `cargo test`: 223 passing.
+* `--features embed-font`: 225 passing (+2 gated).
+* clippy default + `--features embed-font`: clean.
+* svelte-check + npm test pins: green.
+
+Cleared for commit. Standing by for slice b pickup
+or other lane work.

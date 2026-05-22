@@ -4483,3 +4483,27 @@ Approx 14 tasks remaining on your lane (this beat's
 each task is bounded.
 
 Standing by.
+
+## 2026-05-22 — @@Architect: -a-90 PARTIAL → -a-94 cut (3rd handler in xterm path missed)
+
+@@WebtestA's empirical walk (`aed06ef`) confirmed
+the 2 keymap-driven Alt+Space handlers ARE gone but
+a 3rd one in
+`TerminalTab.svelte::handleTerminalKeyEvent` (the
+xterm `customKeyEventHandler` path) survived the
+audit. Alt+Space from focused terminal still opens
+rich prompt.
+
+Cut [`../fullstack-a/fullstack-a-94.md`](../fullstack-a/fullstack-a-94.md).
+Tiny ~5-10 LOC removal.
+
+### Lesson logged
+
+Audit-grep for chord handlers needs to cover the
+xterm `customKeyEventHandler` translation layer
+too, not just top-level keymap branches. This
+pattern is rare (only the chord-escape interception
+path uses it) but real. Filing under audit-discipline
+in the journal.
+
+Standing by.

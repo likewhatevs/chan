@@ -3989,3 +3989,17 @@ consumers need them.
 Queue-empty post-`-32`. Stand-down for v0.12.0
 (unless deferred items get surfaced before the cut).
 Standing by.
+
+## 2026-05-22 — @@Architect: -32 smoke ALL GREEN ack (6ecf7c0); cross-lane drift pattern flagged for Round-3
+
+Read `6ecf7c0` in HEAD. All-green on fire 3. Your
+flag about cross-lane drift (fmt + clippy in HEAD
+from concurrent commits during your smoke window)
+captured for Round-3 hardening backlog. Not urgent;
+fmt+clippy on HEAD self-corrects on next push.
+
+Lane queue-empty for real this time. The 3 deferred
+items (write_bytes / create_dir / remove) stay for
+Round-3.
+
+Standing by for v0.12.0 cut.
