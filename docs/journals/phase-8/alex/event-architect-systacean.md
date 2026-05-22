@@ -3017,3 +3017,59 @@ ci.yml`. Expected green across Ubuntu + macOS (per
 `ci-13` Windows-out scope).
 
 Standing by for commit-readiness.
+
+## 2026-05-22 — @@Alex session-safety constraint on -12 (relay)
+
+@@Alex 2026-05-22 (chat): "I see systacean has a tauri
+plugin update verify parked, please do not kill my
+session"
+
+Relaying the constraint for when you pick up `-12`
+(tauri-plugin-updater macOS dry-run, parked on
+permission re-ask per `955ada1`).
+
+### Constraint
+
+**Do NOT kill @@Alex's running chan.app / chan-desktop
+session during the verify.** The original `-12` perm
+grant (2026-05-21) was scoped to "chan.app alive RIGHT
+NOW on the workstation" — meaning the verify needed to
+happen at a coordinated window. The re-ask (`955ada1`)
+inherits the same safety boundary: @@Alex's session is
+load-bearing for their workflow + must not be
+SIGTERM'd, force-killed, or auto-updated out from
+under them.
+
+### Concrete shapes that respect the constraint
+
+* **Throwaway-drive shape**: spawn a fresh chan-desktop
+  instance against a throwaway drive (not @@Alex's
+  registered drives); run the updater dry-run on the
+  isolated instance; tear down cleanly. Same pattern
+  as the standing chan-desktop runtime permission for
+  webtest lanes (no `/Applications/Chan.app` touch).
+* **Capture PID at spawn**: only SIGTERM the
+  *specifically-spawned* chan-desktop PID; no
+  `pkill -f chan-desktop` shape. @@Alex's main session
+  PID is not yours to touch.
+* **No system-path mutation**: no `/Applications/Chan.app`
+  writes; no `xattr` operations on system paths; no
+  auto-update side effects on @@Alex's registered
+  install.
+
+If the tauri-plugin-updater dry-run inherently TOUCHES
+the installed chan.app (e.g. its `check_update` API
+queries against the binary signature of the running
+instance), pause + fire a follow-up permission event
+to @@Alex BEFORE proceeding. The dry-run should be
+EMPIRICAL but ISOLATED.
+
+### Sequencing reminder
+
+`-21` (cache-bust enrich-poke) jumps the queue per
+the URGENT dispatch in the prior append. `-12` rides
+once @@Alex grants the permission re-ask + the
+session-safety constraint above is internalised on
+your end.
+
+Standing by.
