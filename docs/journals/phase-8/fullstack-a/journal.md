@@ -2410,3 +2410,49 @@ through it (`|W` overlap fixed).
 
 Impl note at [fullstack-a-84.md](fullstack-a-84.md).
 Outbound poke fired.
+
+## 2026-05-22 — -a-83 HIGH (effect-ordering race) ready for review
+
+Two-file change. SPA-only.
+
+### Root cause
+
+When tab.saved arrives + tab.content ===
+tab.saved (both just loaded from disk, no
+user edit yet), the two $effect blocks fire
+in the same tick:
+* Mount effect (declared first): reads
+  divergentBufferOrNull → recoveredBuffer
+  = buffer.
+* Persistence effect (declared second):
+  content === saved → clean-state branch
+  → clearEditorBuffer(tab.path).
+
+Microtask order can wipe localStorage
+before/after the mount effect's read,
+tearing down the banner state.
+
+### Fix
+
+1. Persistence-effect clean-state branch
+   gated on `recoveredBuffer === null` —
+   when banner is up, leave buffer in
+   place; Restore / Discard click is the
+   finaliser.
+2. discardBuffer swapped `tab.id` →
+   `tab.path` (stale relic from before
+   -a-82's path-keying re-key; silently
+   no-op'd).
+
+5 raw-source pins in
+`hangRecoveryEffectOrder.test.ts`.
+
+### Gate
+
+* vitest **929 / 929** (+5 net from -a-84's
+  924).
+* svelte-check 0/0 across 4026 files.
+* npm build clean.
+
+Impl note at [fullstack-a-83.md](fullstack-a-83.md).
+Outbound poke fired.

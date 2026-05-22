@@ -104,3 +104,154 @@ This is `-a-83`.
 * Re-architecting the recovery mechanism beyond
   the effect-ordering fix.
 * Terminal-side recovery.
+
+## 2026-05-22 — ready for review (effect-ordering race fixed + tab.id discard relic cleaned up)
+
+Two-file change. SPA-only.
+
+### Audit verdict
+
+@@WebtestA's `206c010` walk: path-keying
+works (buffer key confirmed
+`chan:editor-buffer:CLAUDE.md`) but banner
+STILL doesn't surface. Framing: effect-
+ordering race.
+
+Audit confirms the race shape: when
+`tab.saved` arrives AND `tab.content === tab.saved`
+(both just loaded from disk, no user edit
+yet), the two effects fire in the same tick:
+
+* Mount effect (declared first): reads
+  `divergentBufferOrNull(tab.path, ...)`
+  → if buffer divergent vs disk →
+  `recoveredBuffer = buffer`.
+* Persistence effect (declared second):
+  reads `content === saved` (true; both
+  just loaded) → enters the clean-state
+  branch → `clearEditorBuffer(tab.path)`.
+
+Depending on microtask order in Svelte 5,
+the persistence effect can wipe localStorage
+BEFORE the mount effect reads it, OR after
+— either way it tears down the banner state
+the user needed to act on.
+
+### Fix
+
+`web/src/components/FileEditorTab.svelte`:
+
+1. **Persistence-effect clean-state guard**
+   — added `if (recoveredBuffer !== null) {
+   return; }` at the top of the clean-state
+   branch. When the banner is showing, leave
+   the buffer in place + skip the
+   `cancelPendingBufferWrite`. The user's
+   Restore / Discard click is the trigger
+   that finalises the state.
+
+2. **`discardBuffer` follow-up fix to
+   `-a-82`** — swapped `clearEditorBuffer(tab.id)`
+   → `clearEditorBuffer(tab.path)`. Audit
+   caught the stale `tab.id` relic from
+   before the path-keying re-key (the
+   pre-`-a-83` discard silently no-op'd
+   because `tab.id` changes on every reload
+   + the call targeted a non-existent key).
+   The banner cleared from
+   `recoveredBuffer = null` but the
+   localStorage entry would linger until
+   natural expiration.
+
+Inline comments at both sites cross-
+reference `-a-82` and the effect-ordering
+race for future readers.
+
+### Tests
+
+`web/src/components/hangRecoveryEffectOrder.test.ts`
+(new): 5 raw-source pins:
+* Clean-state branch's `recoveredBuffer !== null`
+  guard structure.
+* Rationale comment cites
+  "effect-ordering" + the wipe-between-
+  read narrative.
+* Banner-up "leave buffer in place"
+  comment.
+* `discardBuffer` uses `tab.path`.
+* Pre-fix `tab.id` discard call gone.
+
+### Acceptance
+
+1. **Force-reload empirically restores
+   banner** ✓ (mechanism via test pins;
+   @@WebtestA empirical re-walk for
+   confirmation).
+2. **No regression on `-a-82`'s path-keying**
+   ✓ — buffer key still
+   `chan:editor-buffer:<path>`; all 18+
+   prior pins still pass.
+3. **No regression on saved-state
+   suppression**: clean state STILL
+   suppresses banner on subsequent loads
+   ✓ — once the user clicks Restore /
+   Discard, `recoveredBuffer = null` →
+   next persistence-effect clean-state run
+   clears localStorage normally.
+4. **discardBuffer fix is a positive net**
+   ✓ — Discard now actually wipes
+   localStorage; pre-fix it silently leaked.
+
+### Gate
+
+* vitest **929 / 929** (+5 net from
+  `-a-84`'s 924).
+* svelte-check 0 errors / 0 warnings across
+  4026 files.
+* npm build clean.
+* Rust gate not re-run (no Rust touched).
+
+### Decisions
+
+* **Guard the clean-state branch** (not
+  the mount effect) — minimal-blast-radius
+  fix. The mount effect's behavior is
+  already correct; the persistence
+  effect's clean-state branch was over-
+  eager.
+* **Bundled the `discardBuffer` `tab.id`
+  fix** — same file, same
+  `-a-82` family, surfaced by the audit.
+  Caller of the bug shows the `-a-82`
+  re-key didn't fully reach this spot.
+* **Skip `cancelPendingBufferWrite` too**
+  when banner is up — defensive; in clean
+  state there shouldn't be a pending
+  write anyway (the persistence effect
+  doesn't queue in clean state), but
+  symmetry with the original branch.
+
+### Suggested commit subject
+
+```
+Hang-recovery: guard buffer-clear when banner is up + fix discardBuffer key (fullstack-a-83)
+```
+
+Single commit. Effect guard + discard fix
++ 5 test pins.
+
+### Files for `git add` (per-path discipline)
+
+* `web/src/components/FileEditorTab.svelte`
+* `web/src/components/hangRecoveryEffectOrder.test.ts` (new)
+* `docs/journals/phase-8/fullstack-a/fullstack-a-83.md`
+* `docs/journals/phase-8/fullstack-a/journal.md`
+* `docs/journals/phase-8/alex/event-fullstack-a-architect.md`
+
+### Atomic-audit-commit
+
+Per the memory rule. Per-path staging only.
+
+Push held. Standing by for clearance + the
+@@WebtestA empirical re-walk that closes the
+3rd-round PARTIAL.

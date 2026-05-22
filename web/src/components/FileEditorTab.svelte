@@ -213,10 +213,33 @@
     // queue an empty `""` write that races the file fetch +
     // could clobber the freshly-restored buffer with empty
     // content after the 500ms debounce.
+    //
+    // `fullstack-a-83`: when a recovery banner is currently
+    // surfacing, DO NOT clear the buffer in the clean-state
+    // branch. This guards the effect-ordering race
+    // @@WebtestA caught: the mount-time effect + the
+    // persistence effect both fire in the same tick once
+    // `tab.saved` arrives;
+    // depending on the microtask order, the persistence
+    // effect's `clearEditorBuffer` can wipe the localStorage
+    // buffer between the mount effect's read and the user's
+    // chance to act on it. Banner stays on screen only until
+    // the user clicks Restore (which replaces `tab.content`)
+    // or Discard (which explicitly clears the buffer). Both
+    // paths drop `recoveredBuffer` to null + the next
+    // persistence-effect run will reach the clean-state
+    // branch + clear normally.
     const content = tab.content;
     const saved = tab.saved;
     if (saved === undefined) return;
     if (content === saved) {
+      if (recoveredBuffer !== null) {
+        // Banner is up — leave the buffer in place so the
+        // user can still click Restore. Skip queue cancel
+        // too; queueBufferWrite is a no-op in the clean
+        // state anyway.
+        return;
+      }
       cancelPendingBufferWrite(tab.path);
       clearEditorBuffer(tab.path);
       return;
@@ -234,7 +257,16 @@
   }
 
   function discardBuffer(): void {
-    clearEditorBuffer(tab.id);
+    // `fullstack-a-83` follow-up to `-a-82`: discard must use
+    // `tab.path` to match the path-keyed storage. The
+    // pre-`-a-83` `tab.id` form was a stale relic from before
+    // `-a-82` re-keyed the buffer — it silently no-op'd
+    // (tab.id changes on every reload, so `clearEditorBuffer`
+    // was called against a non-existent key). The banner
+    // would clear from `recoveredBuffer = null` but the
+    // localStorage entry would linger until natural
+    // expiration.
+    clearEditorBuffer(tab.path);
     recoveredBuffer = null;
   }
 
