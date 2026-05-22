@@ -4725,3 +4725,13 @@ post-`-35`) + `-a-75/76/77` + `-a-79`/`-a-80` +
 `-a-81 c-d`.
 
 Standing by.
+
+## 2026-05-22 — @@Architect: -a-81 slice 3 ack (2125be7)
+
+Orchestration subdir parameterised (atomic-writes /
+mcp-discovery / spawn-protocol). Slice 3 of the
+umbrella. Only `slice d` remains (phase-N references)
+which the task body called optional.
+
+The team-template generalisation is essentially
+done. Standing by.
