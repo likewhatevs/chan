@@ -610,6 +610,44 @@ fn path_class_for_graph(drive: &chan_drive::Drive, path: &str) -> Option<PathCla
 /// in markdown bodies. The pre-`-22` behaviour emitted all 1973
 /// contact File nodes; this filter collapses to the referenced
 /// subset (~49).
+/// systacean-25: synthesize the Drafts root node + the
+/// distinguished `drafts_link` edge from drive-root → Drafts-
+/// root when any indexed file lives under the `Drafts/`
+/// unified-keyspace prefix. Inserts the node into `nodes` (no-
+/// op when the node already exists) + returns the edges to
+/// append. Pure with respect to its inputs so the caller can
+/// fold the edges into the final `edges` Vec at the end of
+/// `api_graph` without changing the ordering of the other layers.
+fn synthesize_drafts_layer(
+    files: &[String],
+    nodes: &mut std::collections::BTreeMap<String, GraphNodeView>,
+) -> Vec<GraphEdgeView> {
+    let drafts_root_id = directory_node_id("Drafts");
+    let any_draft_indexed = files.iter().any(|p| p.starts_with("Drafts/"));
+    if !any_draft_indexed {
+        return Vec::new();
+    }
+    nodes
+        .entry(drafts_root_id.clone())
+        .or_insert_with(|| GraphNodeView::Directory {
+            id: drafts_root_id.clone(),
+            label: "Drafts".to_string(),
+            path: "Drafts".to_string(),
+            path_class: None,
+            files: 0,
+            code: 0,
+        });
+    vec![GraphEdgeView {
+        source: directory_node_id(""),
+        target: drafts_root_id,
+        kind: "drafts_link",
+        broken: None,
+        rank: None,
+        files: None,
+        code: None,
+    }]
+}
+
 fn should_emit_contact_file(
     path: &str,
     contact_paths: &std::collections::HashSet<String>,
@@ -1155,6 +1193,17 @@ pub async fn api_graph(
         );
     }
 
+    // systacean-25: synthesize the special Drafts root + the
+    // distinguished `drafts_link` edge from drive-root → Drafts-
+    // root when any indexed file lives under the `Drafts/`
+    // unified-keyspace prefix. chan-drive emits per-file under
+    // `Drafts/...`; this is the chan-server piece per the routed
+    // (3.iii) decision in the -24 scope-poke. The SPA reads the
+    // `drafts_link` kind to style the edge / Drafts root
+    // differently from regular `contains` edges (per
+    // addendun-a.md's spec).
+    let drafts_link_edges = synthesize_drafts_layer(&files, &mut nodes);
+
     let mut edges: Vec<GraphEdgeView> = all_edges
         .iter()
         // Same defensive guard as the node-set above: an edge with
@@ -1209,6 +1258,12 @@ pub async fn api_graph(
     if let Err(e) = merge_language_layer(&drive, &p, &mut nodes, &mut edges) {
         return err_from(&e);
     }
+
+    // systacean-25: append the synthesized drafts-link edges (if
+    // any) AFTER the filesystem + language layers merge their own
+    // edges. The Drafts root node was already inserted into
+    // `nodes` above.
+    edges.extend(drafts_link_edges);
 
     Json(GraphViewResponse {
         nodes: nodes.into_values().collect(),
@@ -1642,6 +1697,58 @@ mod tests {
             &contact_paths,
             &referenced_contact_paths
         ));
+    }
+
+    #[test]
+    fn synthesize_drafts_layer_emits_root_node_and_distinct_link_edge_when_drafts_present() {
+        // systacean-25: when any indexed file path starts with
+        // `Drafts/`, api_graph synthesizes a special Drafts root
+        // node + a `drafts_link` edge from drive-root → Drafts
+        // root. The SPA distinguishes from regular `contains`
+        // edges by the `kind` field.
+        let files = vec![
+            "notes/intro.md".to_string(),
+            "Drafts/untitled-1/draft.md".to_string(),
+        ];
+        let mut nodes: std::collections::BTreeMap<String, GraphNodeView> =
+            std::collections::BTreeMap::new();
+
+        let edges = super::synthesize_drafts_layer(&files, &mut nodes);
+
+        // Drafts root inserted as a Directory node.
+        let drafts_root = nodes
+            .get("directory:Drafts")
+            .expect("Drafts root node should be synthesized");
+        match drafts_root {
+            GraphNodeView::Directory { label, path, .. } => {
+                assert_eq!(label, "Drafts");
+                assert_eq!(path, "Drafts");
+            }
+            other => panic!("expected Directory variant, got {other:?}"),
+        }
+
+        // Exactly one `drafts_link` edge from drive-root
+        // (`directory:`) → Drafts root.
+        assert_eq!(edges.len(), 1, "got {edges:?}");
+        let edge = &edges[0];
+        assert_eq!(edge.source, "directory:");
+        assert_eq!(edge.target, "directory:Drafts");
+        assert_eq!(edge.kind, "drafts_link");
+    }
+
+    #[test]
+    fn synthesize_drafts_layer_is_noop_when_no_draft_paths() {
+        // systacean-25: drives without any Drafts/-prefixed paths
+        // see no Drafts root + no drafts_link edge. Backward-
+        // compatibility for users who never create a draft.
+        let files = vec!["notes/intro.md".to_string(), "src/lib.rs".to_string()];
+        let mut nodes: std::collections::BTreeMap<String, GraphNodeView> =
+            std::collections::BTreeMap::new();
+
+        let edges = super::synthesize_drafts_layer(&files, &mut nodes);
+
+        assert!(edges.is_empty());
+        assert!(!nodes.contains_key("directory:Drafts"));
     }
 
     #[test]

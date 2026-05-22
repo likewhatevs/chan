@@ -82,6 +82,37 @@ pub trait WatchCallback: Send + Sync {
     fn on_event(&self, event: WatchEvent);
 }
 
+/// systacean-25: one of possibly several roots the watcher is
+/// attached to. `abs` is the absolute filesystem path being
+/// watched recursively; `prefix` is the optional keyspace prefix
+/// prepended to relative paths emitted for events under this
+/// root. Drive root passes `prefix: None`; the Drafts subtree
+/// passes `prefix: Some("Drafts".into())` so events emerge in
+/// the indexer with a unified `Drafts/<name>/...` keyspace.
+#[derive(Debug, Clone)]
+pub struct WatchRoot {
+    pub abs: PathBuf,
+    pub prefix: Option<String>,
+}
+
+impl WatchRoot {
+    /// Drive-root convenience: no keyspace prefix.
+    pub fn drive(abs: &Path) -> Self {
+        Self {
+            abs: abs.to_path_buf(),
+            prefix: None,
+        }
+    }
+
+    /// Drafts-root convenience: `Drafts/` keyspace prefix.
+    pub fn drafts(abs: &Path) -> Self {
+        Self {
+            abs: abs.to_path_buf(),
+            prefix: Some("Drafts".to_string()),
+        }
+    }
+}
+
 /// Holds the underlying watcher; drop to stop watching.
 pub struct WatchHandle {
     /// Kept alive so the watcher thread doesn't exit. Field is
@@ -90,12 +121,26 @@ pub struct WatchHandle {
 }
 
 impl WatchHandle {
-    pub(crate) fn start(drive_root: &Path, cb: Arc<dyn WatchCallback>) -> Result<Self> {
-        let root = drive_root.to_path_buf();
+    /// systacean-25: attach the notify backend to one or more
+    /// roots. Each root carries an optional keyspace prefix; the
+    /// dispatcher relativizes events against whichever root they
+    /// emerge under and prepends the prefix when set so the
+    /// indexer sees paths in a unified namespace
+    /// (`<rel>` for drive-root events; `Drafts/<rel>` for
+    /// drafts-root events). Existing single-root callers pass
+    /// `&[WatchRoot::drive(drive_root)]`.
+    pub(crate) fn start(roots: &[WatchRoot], cb: Arc<dyn WatchCallback>) -> Result<Self> {
+        if roots.is_empty() {
+            return Err(crate::error::ChanError::Io(
+                "WatchHandle::start: at least one root required".into(),
+            ));
+        }
+        let dispatch_roots: Arc<Vec<WatchRoot>> = Arc::new(roots.to_vec());
         let cb_clone = cb.clone();
+        let dispatch_roots_for_cb = Arc::clone(&dispatch_roots);
         let mut watcher =
             notify::recommended_watcher(move |res: notify::Result<notify::Event>| match res {
-                Ok(event) => dispatch(&root, event, &*cb_clone),
+                Ok(event) => dispatch(&dispatch_roots_for_cb, event, &*cb_clone),
                 Err(e) => {
                     // notify backend errors (inotify queue overflow,
                     // fseventsd disconnect, watch path vanishing)
@@ -115,12 +160,40 @@ impl WatchHandle {
                     );
                 }
             })?;
-        watcher.watch(drive_root, RecursiveMode::Recursive)?;
+        for root in dispatch_roots.iter() {
+            watcher.watch(&root.abs, RecursiveMode::Recursive)?;
+        }
         Ok(Self { _watcher: watcher })
     }
 }
 
-fn dispatch(root: &Path, event: notify::Event, cb: &dyn WatchCallback) {
+/// Find which `WatchRoot` an absolute filesystem path falls
+/// under. Returns the root's index + the relative path beneath
+/// it (without prefix yet). When several roots could match (one
+/// nested inside another), the longer-path root wins — practical
+/// safeguard against drafts_dir being misconfigured under
+/// drive_root.
+fn locate_root<'a>(roots: &'a [WatchRoot], abs: &Path) -> Option<(&'a WatchRoot, String)> {
+    let mut best: Option<(&'a WatchRoot, String, usize)> = None;
+    for root in roots {
+        if let Some(rel) = relativize(&root.abs, abs) {
+            let depth = root.abs.components().count();
+            if best.as_ref().map(|(_, _, d)| depth > *d).unwrap_or(true) {
+                best = Some((root, rel, depth));
+            }
+        }
+    }
+    best.map(|(r, rel, _)| (r, rel))
+}
+
+fn apply_prefix(prefix: Option<&str>, rel: String) -> String {
+    match prefix {
+        Some(p) if !p.is_empty() => format!("{p}/{rel}"),
+        _ => rel,
+    }
+}
+
+fn dispatch(roots: &[WatchRoot], event: notify::Event, cb: &dyn WatchCallback) {
     use notify::EventKind;
     let kind = match event.kind {
         EventKind::Create(_) => WatchKind::Created,
@@ -132,19 +205,37 @@ fn dispatch(root: &Path, event: notify::Event, cb: &dyn WatchCallback) {
     let mut paths = event.paths.into_iter();
     let from = paths.next();
     let to = paths.next();
-    let from_rel = from.as_deref().and_then(|p| relativize(root, p));
-    let to_rel = to.as_deref().and_then(|p| relativize(root, p));
 
-    // Skip drive-internal noise unconditionally on both legs of a
-    // rename. The previous version only filtered `from_rel`, so a
-    // pathological rename whose destination landed inside .chan/
-    // would leak through.
-    if from_rel.as_deref().map(is_filtered).unwrap_or(false) {
+    let from_resolved = from
+        .as_deref()
+        .and_then(|p| locate_root(roots, p))
+        .map(|(root, rel)| (root.prefix.clone(), rel));
+    let to_resolved = to
+        .as_deref()
+        .and_then(|p| locate_root(roots, p))
+        .map(|(root, rel)| (root.prefix.clone(), rel));
+
+    // Apply is_filtered against the RAW relative path (no prefix)
+    // so the `.chan/` / `.git/` filters keep matching their
+    // canonical shape. The prefixed path is the keyspace shape
+    // the indexer consumes downstream.
+    if from_resolved
+        .as_ref()
+        .map(|(_, rel)| is_filtered(rel))
+        .unwrap_or(false)
+    {
         return;
     }
-    if to_rel.as_deref().map(is_filtered).unwrap_or(false) {
+    if to_resolved
+        .as_ref()
+        .map(|(_, rel)| is_filtered(rel))
+        .unwrap_or(false)
+    {
         return;
     }
+
+    let from_rel = from_resolved.map(|(prefix, rel)| apply_prefix(prefix.as_deref(), rel));
+    let to_rel = to_resolved.map(|(prefix, rel)| apply_prefix(prefix.as_deref(), rel));
 
     safe_call(
         cb,

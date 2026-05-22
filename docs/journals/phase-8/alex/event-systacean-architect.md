@@ -2747,3 +2747,64 @@ chan-drive: Drafts metadata folder primitive layer (systacean-24 foundation)
 ### Holding for routing
 
 Going to commit + push + smoke the foundation now (auto-mode says make the call; the foundation is independently valuable + unblocks SPA). Will hold on items 4-6 until you confirm the slice + namespace/watcher/graph-emit decisions.
+
+## 2026-05-22 — poke (-24 foundation smoke green; -25 implementation complete; ready for smoke)
+
+Foundation smoke `26281634676` ALL GREEN (rustfmt 22s, web 2m38s, macOS 6m1s, build-no-default-features 6m54s, Ubuntu 10m36s). Picked up `-25` directly per your sequencing. All 3 acceptance criteria implemented per your routed (1.i) / (2.i) / (3.iii) decisions.
+
+### What landed in this PR
+
+* **`crates/chan-drive/src/watch.rs`**: `WatchRoot` struct + `WatchHandle::start(&[WatchRoot], cb)` multi-root signature. `locate_root` resolves which root an event path falls under (longer-path tiebreak); dispatch applies prefix to relative paths so drafts events emerge as `Drafts/<...>` in the unified keyspace.
+* **`crates/chan-drive/src/drive.rs::Drive::watch`**: passes both roots (drive + drafts) to `WatchHandle::start`. New `Drive::index_draft_file(rel)` reads from `drafts_dir/<sub_rel>` + stores under the full `Drafts/<...>` key. Forget routes through the existing `forget_file` (path string opaque).
+* **`crates/chan-drive/src/indexer.rs::apply_event`**: routes `Drafts/`-prefixed paths to `index_draft_file`; non-prefixed paths use the existing `index_file`.
+* **`crates/chan-server/src/routes/graph.rs::synthesize_drafts_layer`**: extracted helper. Inserts Drafts root Directory node + `drafts_link` edge from `directory:` → `directory:Drafts` when any indexed path starts with `Drafts/`. Called from `api_graph` after the per-file + per-language layer merges.
+
+### Tests (+5)
+
+* `chan-drive::indexer::tests::writes_to_drafts_subtree_get_indexed_under_drafts_prefix` — end-to-end: create draft dir + write inside → watcher fires → indexer routes to `index_draft_file` → BM25 returns under `Drafts/untitled-1/draft.md`. 5/5 local-mac runs green after a 200ms sleep between create + write to defuse FSEvents coalescing.
+* `chan-server::routes::graph::tests::synthesize_drafts_layer_emits_root_node_and_distinct_link_edge_when_drafts_present` — pure helper unit.
+* `chan-server::routes::graph::tests::synthesize_drafts_layer_is_noop_when_no_draft_paths` — pure helper unit (backward-compat).
+
+### Diff
+
+| File                                       | +    | -   |
+|--------------------------------------------|------|-----|
+| `crates/chan-drive/src/watch.rs`           | +117 | -22 |
+| `crates/chan-drive/src/drive.rs`           | +79  | -5  |
+| `crates/chan-drive/src/indexer.rs`         | +71  | -4  |
+| `crates/chan-server/src/routes/graph.rs`   | +107 | 0   |
+
+Plus task tail + this poke. 6 paths total.
+
+### Pre-push gate
+
+* `cargo fmt --check`: clean.
+* `cargo clippy --all-targets -- -D warnings`: clean.
+* `cargo test -p chan-drive --lib`: **440 / 0 / 2-ignored** (+1 vs `-24` baseline).
+* `cargo test -p chan-server --lib`: **213 / 0** (+2).
+* `cargo test` workspace: all crates green.
+* `RUSTFLAGS="-D warnings" cargo build --no-default-features`: green.
+
+### Acceptance criteria status
+
+| # | Criterion | Status |
+|---|-----------|--------|
+| 4 | Watcher emits events for Drafts subtree | ✓ |
+| 5 | Indexer includes Drafts in search | ✓ |
+| 6 | Graph emit carries Drafts root + distinct edge | ✓ |
+| 7 | Regression check (drive content unchanged) | ✓ |
+| 8 | SPA can read new edge attribute via `/api/graph?scope=drive` | ✓ |
+
+### Suggested commit subject
+
+```
+chan-drive + chan-server: Drafts watcher + indexer + graph route synthesis (systacean-25)
+```
+
+### Smoke plan
+
+`gh workflow run ci.yml --ref systacean-25-smoke`. Expected ALL GREEN; the only race-prone piece is the new drafts-indexer test where the 200ms sleep + outcome-poll absorb FSEvents coalescing. If macOS still red, pivot to longer sleep or split into two tests (one watcher-fires + one file-write event independently).
+
+### Holding for smoke
+
+Proceeding to commit + push + smoke per the standing atomic-audit-commit pattern. Will surface smoke verdict.

@@ -1917,6 +1917,73 @@ impl Drive {
         result
     }
 
+    /// systacean-25: index a draft file by its unified-keyspace
+    /// path (e.g. `"Drafts/untitled-1/draft.md"`). Reads the file
+    /// from `drafts_dir`, parses it for graph emit, and stores in
+    /// BM25 + graph DB under the `Drafts/...` key so search +
+    /// graph reflect Drafts content alongside drive content.
+    ///
+    /// Skipped silently for non-indexable text (mirrors
+    /// `index_file`); errors propagate when the file is unreadable
+    /// or graph/index storage fails.
+    ///
+    /// Routed via `WatchHandle`'s multi-root dispatch: events
+    /// emerging under the drafts watch root arrive with the
+    /// `Drafts/` prefix already applied, and the indexer's
+    /// `apply_event` dispatches to this method instead of
+    /// `index_file`.
+    pub fn index_draft_file(&self, rel: &str) -> Result<()> {
+        let Some(sub_rel) = rel.strip_prefix("Drafts/") else {
+            return Err(ChanError::Io(format!(
+                "index_draft_file called with non-Drafts/-prefixed rel `{rel}`"
+            )));
+        };
+        if !fs_ops::is_indexable_text(rel) {
+            return Ok(());
+        }
+        let abs = self.paths.drafts.join(sub_rel);
+        let meta = match std::fs::metadata(&abs) {
+            Ok(m) => m,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                // Drafts file vanished between the watcher event
+                // and our read. Forget any prior entry + carry on.
+                return self.forget_file(rel);
+            }
+            Err(e) => {
+                return Err(ChanError::Io(format!("stat draft {}: {e}", abs.display())));
+            }
+        };
+        if !meta.is_file() {
+            // A directory or special file under Drafts/. Nothing
+            // to index; do not error so a directory-Create event
+            // (e.g. user dropped a new untitled-N/) doesn't make
+            // the indexer panic.
+            return Ok(());
+        }
+        let content = std::fs::read_to_string(&abs)
+            .map_err(|e| ChanError::Io(format!("read draft {}: {e}", abs.display())))?;
+        let mtime = meta
+            .modified()
+            .ok()
+            .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+            .map(|d| d.as_secs() as i64);
+        let size = i64::try_from(meta.len()).ok();
+        let (title, node_kind, headings, edges, emails, aliases) = parse_for_graph(rel, &content);
+        self.graph()?.replace_file(
+            rel,
+            title.as_deref(),
+            mtime,
+            size,
+            node_kind,
+            &edges,
+            &headings,
+            emails.as_deref(),
+            aliases.as_deref(),
+        )?;
+        self.index()?.index_one(rel, &content)?;
+        Ok(())
+    }
+
     fn forget_file_inner(&self, rel: &str) -> Result<()> {
         self.graph()?.forget_file(rel)?;
         self.index()?.forget(rel)?;
@@ -2230,7 +2297,17 @@ impl Drive {
     pub fn watch(self: &Arc<Self>, cb: Arc<dyn WatchCallback>) -> Result<WatchHandle> {
         let report = self.report_state()?;
         let fan: Arc<dyn WatchCallback> = ReportFanOut::new(cb, report.clone());
-        WatchHandle::start(self.root(), fan)
+        // systacean-25: also watch the per-drive drafts subtree
+        // so drafts content participates in the unified
+        // search + graph keyspace (paths emerge as
+        // `Drafts/<name>/...` to the indexer). The drafts dir is
+        // eagerly created in Drive::open so the watch attaches
+        // cleanly even on a fresh drive.
+        let roots = [
+            crate::watch::WatchRoot::drive(self.root()),
+            crate::watch::WatchRoot::drafts(self.drafts_dir()),
+        ];
+        WatchHandle::start(&roots, fan)
     }
 
     /// Start the built-in graph indexer on this drive. Returns a

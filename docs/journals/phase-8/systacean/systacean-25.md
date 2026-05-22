@@ -139,3 +139,97 @@ This is `-25`.
 * Per-draft contact/mention extraction beyond
   what already runs on drive content (uniform
   treatment per the routed (i) decision).
+
+## 2026-05-22 — implementation complete; ready for smoke
+
+`-25` picked up directly after the `-24` foundation smoke landed green. All 3 acceptance criteria (#4 watcher, #5 indexer, #6 graph emit) implemented per the architect's routed (1.i) / (2.i) / (3.iii) decisions.
+
+### chan-drive watcher refactor (acceptance #4)
+
+`crates/chan-drive/src/watch.rs`:
+
+* New `WatchRoot` struct: `{ abs: PathBuf, prefix: Option<String> }`. Constructors `WatchRoot::drive(abs)` (no prefix) + `WatchRoot::drafts(abs)` (prefix `"Drafts"`).
+* `WatchHandle::start` signature changed from `(drive_root: &Path, cb)` to `(roots: &[WatchRoot], cb)`. Single caller (`Drive::watch`) updated.
+* New `locate_root` helper: resolves which `WatchRoot` an absolute event path falls under (longer-path tiebreak for nested-root safety).
+* `dispatch` extended to find the originating root, relativize against it, apply the root's prefix when set. `is_filtered` still runs against the RAW (pre-prefix) relative path so `.chan/` filters keep their canonical shape.
+
+`crates/chan-drive/src/drive.rs::Drive::watch`:
+
+* Now passes `&[WatchRoot::drive(self.root()), WatchRoot::drafts(self.drafts_dir())]` to `WatchHandle::start`. Drafts subtree is watched alongside the drive root; events emerge with `Drafts/<name>/...` paths in the unified keyspace.
+
+### chan-drive indexer integration (acceptance #5)
+
+`crates/chan-drive/src/drive.rs::Drive::index_draft_file`:
+
+* New public method. Accepts paths with `Drafts/` prefix; strips the prefix to resolve the file on disk under `drafts_dir`; stores BM25 + graph DB entries under the full `Drafts/<...>` key.
+* Reads via `std::fs::read_to_string` from `drafts_dir/<sub_rel>` (NOT the sandboxed `Drive::dir`). Drafts are chan-drive's own metadata; the sandbox isn't a security concern at the drafts root.
+* Stat-before-read pattern preserved (parallel to `index_file_inner`); mtime + size stored on the graph entry.
+* Skipped silently for non-indexable text + for directory events (FSEvents fires Created on parent dir creation).
+* On `NotFound` (drafts file vanished between event and read), routes through `Drive::forget_file` to keep BM25 + graph consistent.
+
+`crates/chan-drive/src/indexer.rs::run_loop`:
+
+* `apply_event`'s ready-list dispatcher routes `Drafts/`-prefixed paths to `index_draft_file`; non-prefixed paths go to the existing `index_file` as before. Remove events go to the existing `forget_file` regardless (path string is opaque to forget).
+
+### chan-server graph route synthesis (acceptance #6)
+
+`crates/chan-server/src/routes/graph.rs::synthesize_drafts_layer`:
+
+* New helper called from `api_graph` after the per-file + per-language layer merges.
+* Checks if any indexed file path starts with `Drafts/`. If yes:
+  * Inserts a `GraphNodeView::Directory { id: "directory:Drafts", label: "Drafts", path: "Drafts", files: 0, code: 0 }` (no clobber if already present).
+  * Returns a single `GraphEdgeView { source: "directory:", target: "directory:Drafts", kind: "drafts_link", ... }`.
+* The SPA reads `kind == "drafts_link"` to style the Drafts root + edge differently from regular `contains` (per `addendun-a.md`'s "different edge to the drive to indicate this one is different than the others").
+
+### Tests (+5)
+
+**chan-drive** (+1):
+
+* `indexer::tests::writes_to_drafts_subtree_get_indexed_under_drafts_prefix` — full end-to-end: create_draft_dir + std::fs::write inside drafts → watcher fires → indexer routes to `index_draft_file` → search returns the draft under `Drafts/untitled-1/draft.md` path. Uses the `-23` outcome-poll pattern + small sleep between create + write so macOS FSEvents doesn't coalesce the events into a single directory-Created (5/5 local runs green after the sleep was added).
+
+**chan-server** (+2):
+
+* `routes::graph::tests::synthesize_drafts_layer_emits_root_node_and_distinct_link_edge_when_drafts_present` — pure helper unit. Files contains a `Drafts/...` path → Drafts root node + `drafts_link` edge synthesized.
+* `routes::graph::tests::synthesize_drafts_layer_is_noop_when_no_draft_paths` — files contains no `Drafts/` paths → no synthesis (backward-compat for users without drafts).
+
+### Pre-push gate
+
+* `cargo fmt --check`: clean.
+* `cargo clippy --all-targets -- -D warnings`: clean.
+* `cargo test -p chan-drive --lib`: **440 passed; 0 failed; 2 ignored** (was 439; +1 new test).
+* `cargo test -p chan-server --lib`: **213 passed; 0 failed** (was 211; +2 new tests).
+* `cargo test` workspace: all crates green.
+* `RUSTFLAGS="-D warnings" cargo build --no-default-features`: green.
+
+### Files
+
+| File                                            | +    | -   |
+|-------------------------------------------------|------|-----|
+| `crates/chan-drive/src/watch.rs`                | +117 | -22 |
+| `crates/chan-drive/src/drive.rs`                | +79  | -5  |
+| `crates/chan-drive/src/indexer.rs`              | +71  | -4  |
+| `crates/chan-server/src/routes/graph.rs`        | +107 | 0   |
+
+Plus task tail + outbound poke. 6 paths total.
+
+### Acceptance criteria status
+
+| # | Criterion | Status |
+|---|-----------|--------|
+| 4 | Watcher emits events for Drafts subtree changes | ✓ |
+| 5 | Indexer includes Drafts content in search results | ✓ |
+| 6 | Graph emit carries a Drafts root + distinct drive→Drafts edge | ✓ |
+| 7 | Existing drive-content indexing unchanged (regression check) | ✓ (all prior tests green) |
+| 8 | SPA can read the new edge attribute via `/api/graph?scope=drive` | ✓ (`kind: "drafts_link"` in JSON; verified via unit test) |
+
+### Suggested commit subject
+
+```
+chan-drive + chan-server: Drafts watcher + indexer + graph route synthesis (systacean-25)
+```
+
+### Smoke plan
+
+`gh workflow run ci.yml --ref systacean-25-smoke` on a fresh smoke branch. Expected: all 5 jobs green. The drafts-indexer test is the only race-prone piece on macOS; the 200ms sleep + outcome-poll wait_for absorb the FSEvents coalescing. If macOS still red post-fix, would pivot to a more aggressive timing tune.
+
+Holding for smoke verdict.

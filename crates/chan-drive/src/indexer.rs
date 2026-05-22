@@ -230,12 +230,23 @@ fn run_loop(
             // reconcile. The journal in PR5 already protects
             // against partial-commit drift inside index_file
             // itself.
-            match drive.index_file(path) {
+            // systacean-25: route drafts events (paths under the
+            // `Drafts/` unified-keyspace prefix) to the parallel
+            // draft-indexer entrypoint, which reads from the
+            // drafts subtree instead of the sandboxed drive root.
+            // Non-prefixed paths go to the drive-root indexer as
+            // before.
+            let result = if path.starts_with("Drafts/") {
+                drive.index_draft_file(path)
+            } else {
+                drive.index_file(path)
+            };
+            match result {
                 Ok(()) => {
                     state.indexed_total.fetch_add(1, Ordering::Relaxed);
                 }
                 Err(e) => {
-                    tracing::warn!(path = %path, ?e, "indexer: index_file failed");
+                    tracing::warn!(path = %path, ?e, "indexer: index_*_file failed");
                 }
             }
         }
@@ -405,6 +416,62 @@ mod tests {
         assert!(
             visible,
             "watched.md never appeared in BM25 hits within 5s after \
+             indexer fired (indexed_total = {})",
+            indexer.indexed_total()
+        );
+
+        indexer.stop();
+    }
+
+    #[test]
+    fn writes_to_drafts_subtree_get_indexed_under_drafts_prefix() {
+        // systacean-25: the multi-root watcher walks the per-drive
+        // drafts dir alongside the drive root. Writing a file under
+        // a draft directory fires a FSEvent + the indexer routes
+        // through Drive::index_draft_file, which stores the BM25
+        // entry under `Drafts/<name>/...` so the unified keyspace
+        // returns drafts hits from regular drive search.
+        let (_cfg, _drive_dir, drive) = setup_drive();
+        let indexer = GraphIndexer::start_on(Arc::clone(&drive), DEBOUNCE_TEST_MS).unwrap();
+
+        // Create the draft dir via the public API (parallels what
+        // the SPA's Cmd+N flow will do via the chan-server route)
+        // and write a draft.md inside via plain `std::fs::write`
+        // so the watcher's notify backend is the trigger end-to-
+        // end. Brief sleep between the two operations so macOS
+        // FSEvents doesn't coalesce them into a single Created
+        // event for the parent dir — without the separation,
+        // ~3/5 local runs miss the file-write delivery.
+        let draft = drive.create_draft_dir("untitled-1").unwrap();
+        std::thread::sleep(Duration::from_millis(200));
+        std::fs::write(
+            draft.abs.join("draft.md"),
+            "# my draft\ndraft-marker-systacean-25 here\n",
+        )
+        .unwrap();
+
+        // wait_for the indexer to fire (proves the watcher
+        // dispatched a drafts event + the indexer routed to
+        // index_draft_file).
+        let saw = wait_for(Duration::from_secs(5), || indexer.indexed_total() >= 1);
+        assert!(saw, "indexer did not pick up the drafts file write");
+
+        // Poll BM25 outcome per the systacean-23 pattern.
+        let opts = crate::drive::SearchOpts {
+            mode: SearchMode::Bm25,
+            limit: 10,
+            scope: None,
+        };
+        let expected_path = "Drafts/untitled-1/draft.md";
+        let visible = wait_for(Duration::from_secs(5), || {
+            drive
+                .search("draft-marker-systacean-25", &opts)
+                .map(|hits| hits.hits.iter().any(|h| h.path == expected_path))
+                .unwrap_or(false)
+        });
+        assert!(
+            visible,
+            "draft did not appear under `{expected_path}` in BM25 hits within 5s after \
              indexer fired (indexed_total = {})",
             indexer.indexed_total()
         );
