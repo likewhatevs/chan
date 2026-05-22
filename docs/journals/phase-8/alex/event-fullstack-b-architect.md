@@ -2068,3 +2068,102 @@ Full implementation note at the tail of
 "slice -b-28b-iii implementation note".
 
 Standing by for clearance + next dispatch.
+
+## 2026-05-22 — poke (-b-28b slice ii commit-ready: get_drive_features via chan index status --json — UMBRELLA CLOSED)
+
+Picked up slice ii per @@Alex's "take -28-b" direct
+directive. Closes the `-b-28b` umbrella. Commit
+`efd7688`.
+
+### Slice ii shape
+
+* Touches BOTH `crates/chan/src/main.rs` (one-line
+  additive `reports_enabled` field in `chan index
+  status --json` output) AND `desktop/src-tauri/src/main.rs`
+  (swap `get_drive_features` IPC to async CLI
+  subprocess).
+* `cfg.reports_enabled` was already loaded by
+  `cmd_index_status` (used in mode computation) — just
+  not emitted. Strict additive JSON extension; existing
+  consumers ignore unknown fields.
+* `get_drive_features` becomes async; spawns
+  `chan index status --json --path <path>`; parses both
+  flags; mirrors result into sidecar on success;
+  falls back to sidecar on any CLI error.
+
+### Cross-lane scope note
+
+`crates/chan/src/main.rs` is traditionally @@Systacean
+lane. Per @@Alex's "take -28-b" directive + slice ii's
+own blocker definition (a CLI surface for
+`reports_enabled` reads), the minimum-scope unlock is
+the one-line extension. Alternative considered + rejected:
+a separate `chan reports status --json` subcommand
+(mirrors `chan index status` for symmetry). Bigger
+change; introduces a new subcommand pair where the
+unified IndexConfig already lives behind one read.
+Flagged in the task tail; future polish if
+@@Systacean prefers the symmetry.
+
+### Tests
+
+* `get_drive_features_reads_chan_index_status_after_b28b_ii`
+  — IPC uses `read_features_via_chan_index_status` +
+  CLI argument shape + JSON field names.
+* `chan_index_status_json_carries_reports_enabled_after_b28b_ii`
+  — **cross-crate pin**: asserts chan's source emits
+  `"reports_enabled": cfg.reports_enabled`. A future
+  chan-side rename/removal of the field fails this
+  test loudly + forces a coordinated cross-lane fix
+  rather than a silent revert to sidecar-only reads.
+
+chan-desktop 55 → 57.
+
+### -b-28a stub forward-compat gap auto-closes
+
+The gap I documented under slice i — `-b-28a` users
+who toggled stub state have sidecar saying e.g.
+`{bge: true}` but chan-drive at `{bge: false}` —
+closes automatically with slice ii. On the first
+`get_drive_features` after upgrade, the CLI returns
+chan-drive's actual state and the sidecar realigns.
+
+### Umbrella close-out
+
+| Slice | Commit    | Scope                                                       |
+|-------|-----------|-------------------------------------------------------------|
+| i     | `0ce975b` | `set_drive_features` stub → chan CLI subprocess             |
+| iii   | `defbdcc` | pre-flight modal at drive add + add_drive flag pass-through |
+| ii    | `efd7688` | `get_drive_features` reads via chan index status --json     |
+
+Sidecar is now a pure write-through cache that converges
+to chan-drive truth on every read.
+
+### Deferred for future tasks (NOT covered by `-b-28b`)
+
+* Broader pre-flight report (perms/size/SCM/etc.) —
+  needs new backend + design pass.
+* Standalone `chan reports status` subcommand —
+  symmetric polish; reject in favour of additive
+  `chan index status` extension this slice.
+
+### Gate
+
+* `cargo clippy -p chan-desktop -p chan --all-targets -- -D warnings`: clean.
+* `cargo test -p chan-desktop`: 57 passing.
+* `cargo test -p chan`: 58 passing (no count change).
+* `cargo build -p chan-desktop -p chan --no-default-features`: clean.
+
+### Runtime walkthrough
+
+Standing chan-desktop runtime perm available; otherwise
+routing to @@WebtestB per lane boundary. Webtest walks:
+launcher panel reflects state correctly across
+out-of-band CLI toggles (terminal `chan reports
+enable/disable` flips show up on next panel render).
+
+Full implementation note at the tail of
+[`../fullstack-b/fullstack-b-28.md`](../fullstack-b/fullstack-b-28.md)
+"slice -b-28b-ii implementation note".
+
+Standing by for clearance + next dispatch.
