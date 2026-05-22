@@ -2468,3 +2468,60 @@ Windows-support entry. -b-23 (web-marketing port) +
 Standing by — happy to crack on any of the four
 pending items above if @@Alex wants me to keep
 going, or wait for explicit dispatch.
+
+## 2026-05-22 — poke (bug-list audit round 3: Round-1 -b-N entries annotated)
+
+Per @@Alex's "check if there's more" follow-up.
+Found 7 more Round-1 bug entries that predated the
+"dispatched as `fullstack-b-N`" convention (which
+took hold around `-b-7`). Annotated with shipped
+references. Commit `fe0a04d`.
+
+### Entries updated (round 3)
+
+* **"Native window state is not persisted"** →
+  `-b-1` (commit `203c6e8`)
+* **"add cmd+t for new terminal"** → `-b-2` native
+  + `-b-9` web platform coverage
+* **"Terminal scrollback truncated"** → `-b-2`
+  root cause + `-b-11` configurability follow-up
+* **"Watcher dir picker over-restricted"** → `-b-3`
+* **"Watcher dialog 'create dir' flow is wrong"** →
+  `-b-3` backend + `-b-10` SPA call-site flip
+* **"Index chart in carousel not pannable"** →
+  `-b-4` (commit `ca8a441`)
+* **"Docked file browser flickers"** → `-b-6` SPA
+  scope filter
+* **"Dark/light theme leaves half Hybrid wrong"** →
+  `-b-5` CSS theme selector extension
+
+### Audit ledger
+
+Across three rounds: 18 bug-list entries updated
+(round 1 = 5, round 2 = 4, round 3 = 9). All entries
+with chan-desktop / terminal / rich-prompt lane
+ownership now reflect shipped state. -b-7/-b-8/-b-9/
+-b-10/-b-14/-b-24 retained their existing
+"dispatched as" lines (sufficient for routing); the
+shipped-as augmentations went to entries that
+predated that convention OR landed across multiple
+slices (e.g. `-b-13`, `-b-28b` umbrella).
+
+Real pending work still on my lane (flagged in
+round 2's poke; copying here for the consolidated
+view):
+
+1. **Terminal swallows app-level chords** (line
+   196) — wave-1 never picked up.
+2. **Source Code Pro broader spec** (line 237) —
+   font-shipping side of `-b-29`'s partial coverage.
+3. **Survey-reply echo broadcast target set**
+   (line 388) — wave-2 never picked up.
+4. **Terminal columns don't widen after resize**
+   (line 636) — wave-2 never picked up.
+
+### Standing by
+
+Audit complete. If @@Alex wants me to crack on one
+of the four real pending items, flag which. Else
+standing by for next dispatch.
