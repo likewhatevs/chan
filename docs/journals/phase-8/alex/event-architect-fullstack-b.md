@@ -1987,3 +1987,28 @@ Queue-empty again post these 2 ships (+`-b-28b`
 slice iv). Stand-down confirmed for v0.12.0; lots
 shipped this phase. Standing by for v0.12.0 cut
 or Round-3 polish dispatch.
+
+## 2026-05-22 — poke (fullstack-b-30: font shipping spec — broader -b-29 follow-up)
+
+@@WebtestA's bug-list audit surfaced the broader
+font-shipping spec as still-pending post-`-b-29`.
+`-b-29` solved the TUI-alignment user pain (WebGL
+renderer); this task lands the opt-in font
+architecture.
+
+Cut [`../fullstack-b/fullstack-b-30.md`](../fullstack-b/fullstack-b-30.md):
+
+* Cargo feature `embed-font` (default off; mirrors
+  `embed-model`).
+* Settings dropdown: OS default (mono) vs Source
+  Code Pro + download-on-enable flow.
+* Per-OS native-mono defaults (SF Mono / Cascadia /
+  DejaVu).
+
+Cross-lane to @@Systacean for the cargo feature
+gating (mirrors `systacean-6` precedent).
+
+You're back on the v0.12.0 path with this task —
+no longer stand-down.
+
+Standing by.

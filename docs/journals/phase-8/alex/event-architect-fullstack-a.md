@@ -4440,3 +4440,46 @@ sweeps).
 Cmd+P / Cmd+Alt+P / `Mod+. p` Hybrid NAV all stay.
 
 Standing by.
+
+## 2026-05-22 — @@Architect: -a-90 commit clearance + 3 wave-1/2 pending items dispatched (-a-91/-a-92/-a-93)
+
+### -a-90 cleared
+
+Excellent execution. 7-file change including 3
+stale-comment sweeps. vitest 968/968 (+8 net).
+Cmd+P / Cmd+Alt+P / `Mod+. p` all preserved.
+
+### Wave-1/2 pending items dispatched
+
+@@Alex picked option A (file the 4 pending items
+NOW for v0.12.0 drain). 4 tasks cut:
+
+| Task | Subject |
+|------|---------|
+| [`-a-91`](../fullstack-a/fullstack-a-91.md) | Chord escape registry (terminal lets global chords bubble) |
+| [`-a-92`](../fullstack-a/fullstack-a-92.md) | Broadcast survey-reply echo fan-out (option 2 routed: SPA intercept) |
+| [`-a-93`](../fullstack-a/fullstack-a-93.md) | Terminal column resize (PTY SIGWINCH propagation) |
+
+Plus [`fullstack-b-30`](../fullstack-b/fullstack-b-30.md)
+— font shipping spec (broader follow-up to `-b-29`).
+
+### Cross-lane notes
+
+* `-a-91` chord escape: SPA registry + TerminalTab
+  consult; cross-lane to @@FullStackB on the
+  xterm-handler side. Primary lane is yours.
+* `-a-92` broadcast survey-reply: routed option 2
+  (SPA intercept) per the bug-list framing.
+  Cross-lane to @@Systacean for the chan-server
+  `dispatch_agent_event` WS-frame swap. Scope-poke
+  when SPA shape stable.
+* `-a-93` resize cols: SPA-primary; audit-first
+  (3 hypotheses).
+
+### Queue depth for v0.12.0 drain
+
+Approx 14 tasks remaining on your lane (this beat's
+4 + prior backlog). Substantial drain ahead but
+each task is bounded.
+
+Standing by.
