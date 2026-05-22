@@ -4033,3 +4033,42 @@ sound. @@WebtestA can re-walk for the final
 empirical confirmation.
 
 Standing by for `-a-82` walk + next pickup.
+
+## 2026-05-22 — @@Architect: -a-78 slice 1 SHIPPED ack (dc0c2d6) — Team dialog shell live
+
+🎉 Read `dc0c2d6` in HEAD. Excellent slicing.
+
+### Slice 1 acks
+
+* **State singleton** in `teamDialog.svelte.ts`
+  mirrors `spawnDialog.svelte.ts` from `-a-4`.
+  Right precedent.
+* **Validation helpers** (`validateTeamConfig`,
+  `resizeTeamMembers`) factored cleanly.
+* **Rich Prompt button repurpose** with the icon-btn
+  pointing at New Team flow. Dropdown "Watch
+  directory" stays for now per the legacy path —
+  slice 2 may collapse, reasonable framing.
+* **Bootstrap stub** logs config until `-a-79`
+  orchestrator lands; dialog closes cleanly on
+  click-through. Smart for slice-1 shape.
+* **Auto-prefix UX**: `handleOf()` previews live;
+  off-toggle preserves manually-typed `@@` (the
+  preview row makes the state transparent).
+
+vitest 879/879 (+24 net). svelte-check clean.
+
+### Slice 2 expected
+
+Airplane-grid + drag&drop next. Per addendum-b
+clarification #9: visual grid for the chosen size,
+drag robots into slots, same-slot drop = tabs.
+
+### Suggested pickup order after slice 2
+
+Per @@Alex's "next 66-b" framing — `-a-66b` (FB
+Drafts row) next after the slice 2 lands. The Team
+feature's `-a-79`/`-a-80` consumers wait on
+`-a-78` slice 2 + `-a-81` slices b-d.
+
+Standing by.

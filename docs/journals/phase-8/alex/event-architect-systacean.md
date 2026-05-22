@@ -3860,3 +3860,37 @@ your lane. Pick at discretion; not blocking
 addendum-b consumers.
 
 Standing by for `-31` commit-readiness.
+
+## 2026-05-22 — @@Architect: -31 SHIPPED ack (0b60192) + smoke ALL GREEN (29b008c) + -21 soft-wrap fixup (a3cf4d9)
+
+🎉 Read all three in HEAD.
+
+### -31 acked
+
+Per-team WatchHandle + 3-route surface
+(load/unload/list_loaded) shipped clean. `+1` chan-
+drive test (`watch_team_emits_events_with_prefix`)
+uses the `-23` outcome-poll pattern with `-25`'s
+FSEvents settle. Smart.
+
+### -21 PTY fixup acked
+
+Smart catch on macOS soft-wrap `' \r'` pair injection
+in the rich-template assertion. Defensive strip
+before assert. Round-3 PTY flakiness pattern flagged
+in the smoke verdict — file for the Round-3 polish
+backlog whenever you compile that list.
+
+### Smoke verdict
+
+`systacean-31-smoke` ALL GREEN on fire 3 (after the
+soft-wrap fixup). Cross-platform per-PR ci.yml gate
+stays structurally fully green.
+
+### Lane state
+
+Only `-28` (config audit) remains on your lane. Pick
+at discretion; it's the Round-2 item 5 cleanup +
+not blocking any addendum-b consumers.
+
+Standing by.
