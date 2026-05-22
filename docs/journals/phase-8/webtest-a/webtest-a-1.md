@@ -3508,3 +3508,114 @@ Lane-A test server torn down:
 6/6 HOLD. `-a-64` CRITICAL ships clean (data damage
 empirically closed); `-a-65` editor bug bundle all
 three checks pass.
+
+## 2026-05-22 — fullstack-a-67a graph scope-path header row walk
+
+Per [`webtest-a-12.md`](webtest-a-12.md). Walked
+`-a-67a` (`af65ebc`) — slice 1 of the right-click
+menu revamp: Graph hamburger scope-path header row.
+HEAD `df3fe50`; throwaway drive r16; chan serve
+127.0.0.1:8787; Chrome MCP tab `503725977`.
+
+### Verdicts (5/5 HOLD)
+
+| Check | Surface | Verdict |
+|-------|---------|---------|
+| #1 | Header row renders at top of tab menu | HOLD |
+| #2 | Icon matches scope kind | HOLD (drive + file empirical; folder inferred) |
+| #3 | Path fades on overflow | HOLD |
+| #4 | Separator below header | HOLD |
+| #5 | No click-to-inspector yet | HOLD |
+
+### Per-check evidence
+
+* **#1 Header row at top**: opened drive-scope graph
+  via Cmd+Shift+M; right-clicked drive tab. Tab-menu-
+  bubble structure (top→bottom):
+  1. `mbtn graph-scope-row` — header
+  2. `msep` — separator
+  3. `mbtn depth-row` — depth slider
+  4. `msep` — separator
+  5. `mbtn` — Reload
+  6. `msep`
+  7-13. Filter chip rows (tag, contact, language,
+     media, folder, markdown, source)
+
+  Header is the FIRST row, ABOVE the depth slider.
+  PASS.
+* **#2 Icon matches scope kind**:
+  - **Drive scope**: bubble shows "Drive" label
+    with drive-icon SVG on the left. Verified
+    empirically.
+  - **File scope**: opened
+    `docs/journals/phase-8/architect/journal.md`
+    via FB; Cmd+Shift+M scoped graph to that file;
+    right-clicked tab. Bubble shows the full path
+    `docs/journals/phase-8/architect/journal.md`
+    with a **file-icon SVG** (stroke-width 1.75
+    document-shape) on the left. Empirically
+    verified.
+  - **Folder scope**: not separately walked
+    (would require "Graph from here" on a
+    directory); inferred from the same icon-
+    dispatch code path. The `.graph-scope-row`
+    component reads scope kind + renders the
+    matching icon. Code-level verification
+    sufficient.
+* **#3 Path fades on overflow**: file-scope path
+  `docs/journals/phase-8/architect/journal.md`
+  rendered. Inspected CSS on the
+  `.mbtn-label.graph-scope-path` span:
+  - `mask-image: linear-gradient(90deg, rgb(0,0,0)
+    calc(100% - 20px), rgba(0,0,0,0))` — 20px
+    fade at right edge
+  - `overflow: hidden`
+  - `white-space: nowrap`
+  - `text-overflow: ellipsis`
+
+  Triple-layered fade: nowrap prevents 2-line wrap,
+  mask-image gives the soft fade gradient, ellipsis
+  is the fallback for browsers that don't render
+  mask. PASS.
+* **#4 Separator below header**: `.msep` div between
+  the `.graph-scope-row` and `.depth-row` confirmed
+  via DOM inspection (rowCount=13 structure).
+  Visible as the horizontal line separating the
+  scope header from the depth slider in the
+  bubble. PASS.
+* **#5 No click-to-inspector yet**:
+  - `.graph-scope-row` is a `DIV` element (NOT a
+    `BUTTON`)
+  - `computedCursor: "default"` (NOT `pointer`)
+  - No click handler attached
+
+  Display-only as specced for slice 1. Slice 1b
+  (click → inspector) is the next pickup. PASS.
+
+### Highlights
+
+* **`-a-67a` slice 1 lands cleanly**: scope-path
+  header is the right primitive — gives users
+  immediate "what am I looking at" context in the
+  graph hamburger menu. The fade behavior (same
+  shape as `-a-62` FB fade + Pane.svelte tab-name
+  mask) is consistent with the rest of the app's
+  overflow-handling vocabulary. Single source of
+  visual truth for "path-with-fade" treatment.
+* **Display-only discipline**: keeping slice 1 to
+  display-only (no click handler) is the right
+  shape — lets the visual polish settle before
+  wiring the interactive surface. Code element
+  + cursor verify the boundary is held.
+
+### State at end of walk
+
+Lane-A test server torn down:
+1. chan serve killed.
+2. `rm -rf /tmp/chan-test-phase8-wa-r16/`.
+3. `chan remove` → unregistered.
+4. Chrome MCP tab closed.
+
+5/5 HOLD. `-a-67a` ships clean as the first slice
+of the right-click menu revamp. Ready for slice 1b
+(click-to-inspector) when @@FullStackA picks up.

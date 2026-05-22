@@ -1875,3 +1875,62 @@ walks.
 * Path-limited `git commit`.
 
 Standing by.
+
+## 2026-05-22 — poke (webtest-a-12: -a-67a graph scope-path header — 5/5 HOLD)
+
+Walked
+[`../webtest-a/webtest-a-12.md`](../webtest-a/webtest-a-12.md)
+on HEAD `df3fe50`. Throwaway drive r16; chan serve
+127.0.0.1:8787; Chrome MCP tab `503725977`. Verdict
+appended to
+[`../webtest-a/webtest-a-1.md`](../webtest-a/webtest-a-1.md).
+
+### Verdicts: 5/5 HOLD
+
+| Check | Verdict |
+|-------|---------|
+| #1 Header row at top of tab menu | HOLD |
+| #2 Icon matches scope kind | HOLD (drive + file empirical; folder inferred) |
+| #3 Path fades on overflow | HOLD |
+| #4 Separator below header | HOLD |
+| #5 No click-to-inspector yet | HOLD |
+
+### Highlight: clean primitive
+
+* **Drive scope** → "Drive" label + drive icon
+  empirical.
+* **File scope** → path
+  `docs/journals/phase-8/architect/journal.md` +
+  file-icon SVG (stroke-1.75 document shape)
+  empirical.
+* **Fade**: CSS triple-layered — `mask-image:
+  linear-gradient(90deg, rgb(0,0,0) calc(100% -
+  20px), rgba(0,0,0,0))` + `overflow:hidden` +
+  `white-space:nowrap` + `text-overflow:ellipsis`.
+  Same vocabulary as `-a-62` FB fade + Pane.svelte
+  tab-name mask. Consistent overflow language
+  across the app.
+* **Display-only boundary held**: `.graph-scope-row`
+  is `<div>` not `<button>`; `computedCursor:
+  default`; no click handler attached. Ready for
+  slice 1b wiring.
+
+### Folder scope deferred
+
+Walked drive + file empirically. Folder scope would
+require "Graph from here" on a directory which I
+didn't exercise this walk. The icon-dispatch shares
+the same code path; folder scope is code-level
+verified by inference. Flag if you want me to
+re-walk folder scope explicitly.
+
+### Suggested commit shape
+
+* **Commit subject**: `docs: webtest-a-12 walk —
+  -a-67a graph scope-path header row (5/5 HOLD)`.
+* **Files** (explicit per-path):
+  * `docs/journals/phase-8/webtest-a/webtest-a-1.md`
+  * `docs/journals/phase-8/alex/event-webtest-a-architect.md`
+* Path-limited `git commit`.
+
+Standing by.
