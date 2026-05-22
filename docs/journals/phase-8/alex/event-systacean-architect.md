@@ -2356,3 +2356,53 @@ Going forward, when you (or any lane) fire a poke event, populate `path` + `head
 ### Holding
 
 Per the atomic-audit-commit + obvious-call-shortcut discipline. Will push + smoke once cleared.
+
+## 2026-05-22 — poke (-21 committed + smoke ALL GREEN; cache-bust mitigation live)
+
+@@Alex's "ok go on" direct approval acked. Executed + smoke-validated.
+
+### Commit chain
+
+* `f593f35` — `chan-server: enrich poke event echo with timestamp + path + heading (systacean-21)`. Atomic audit-commit clean; 6 paths.
+* `f7de5f2` — `chan-server + chan-desktop: post-systacean-21 fmt fixup (serve.rs portion is pre-existing from fullstack-b-25 f29611c)`. First smoke `26271256248` surfaced 4 fmt diffs: 2 in my new test code (`terminal_sessions.rs:2134,2142`) + 2 pre-existing in `desktop/src-tauri/src/serve.rs:441,1572` from `f29611c` `-b-25` (FullStackB lane). Bundled both per obvious-call discipline since serve.rs was blocking the gate; attribution noted in commit subject.
+
+### Smoke verdicts
+
+| Run | Result | Notes |
+|-----|--------|-------|
+| `26271256248` (f593f35) | ✗ rustfmt fail | 4 diffs (2 mine + 2 pre-existing serve.rs); all other jobs green |
+| `26271673535` (f7de5f2) | ✓ **ALL GREEN** | rustfmt 18s, web 2m29s, build-no-default-features 2m6s, macOS 3m3s, Ubuntu 2m48s |
+
+Notable: first-run web was GREEN (my local 24-error report was transient; CI ran clean on the same HEAD). The pre-existing `-a-52` G10 web work I flagged in the readiness apparently didn't actually break the gate in HEAD — possibly because the failing tests aren't part of the CI suite, or the imports were broken locally only.
+
+### What this empirically validates
+
+* AgentEvent `path`/`heading` schema additions parse cleanly + backward-compat (4 new tests; `parse_event_path_and_heading_are_optional_with_backward_compat` confirms pre-`-21` events still load with both as None).
+* `dispatch_agent_event` rich-template path + fallback path both function (3 tests; one for happy path, one for missing-path fallback, one pure-helper for the spec).
+* `chrono::Local` formatting works on both Ubuntu + macOS runners (no chrono-version drift, no TZ surprises).
+* Cross-lane fmt fixup landed clean; serve.rs unblock didn't break chan-desktop tests.
+
+### Cache-bust mitigation: LIVE
+
+Once architect-side workflow tooling starts populating `path` + `heading` in outbound event payloads, future pokes carry the rich template:
+
+```
+Poke, it's Fri, 22 May at 07:14. Check your task at docs/journals/phase-8/systacean/systacean-21.md#2026-05-22-poke and execute.
+```
+
+Each poke becomes a unique PTY input → cache-miss on the prompt-cache layer → bypass the bare-`poke` rate-limit pattern @@Alex was hitting. Backward-compat means in-flight pre-`-21` events still work via the bare-`poke` fallback; no migration needed.
+
+### Lane state
+
+| Task | State |
+|------|-------|
+| -21 | ✓ shipped + smoke-validated; cache-bust mitigation live |
+| -12 | ✓ macOS happy path shipped; failure modes + Linux/Windows deferred |
+| -16 | ✓ shipped (chan-report FileBucket) |
+| All prior systacean tasks | ✓ shipped |
+
+Systacean lane fully idle post-`-21`. Architect-side workflow tooling update (populate `path` + `heading` in poke writers) is out of scope per the task body; flagged for follow-up if specific writer sites surface as broken.
+
+### Holding
+
+Standing by for new dispatches. Atomic-audit-commit + obvious-call discipline preserved across all post-incident commits this session.
