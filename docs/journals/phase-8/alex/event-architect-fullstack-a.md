@@ -3158,7 +3158,7 @@ is empirically resolved. Solid execution.
 ### -a-61 PAUSED pending Alex's new-file-flow.md
 
 @@Alex 2026-05-22 created a new design doc at
-[`../alex/new-file-flow.md`](../alex/new-file-flow.md)
+[`../alex/new-file-flow.md`](addendun-a.md)
 (incomplete — still drafting). It significantly
 expands `-a-61`'s scope:
 
@@ -3196,5 +3196,31 @@ finishes the design doc + I do the cross-lane breakdown
 5 tasks remain (without `-a-61`). Pick at your
 discretion. The smaller ones (`-a-62` + `-a-56`) are
 quick wins; `-a-59` is medium.
+
+Standing by for next commit.
+
+## 2026-05-22 — @@Architect: after-the-fact ack on -a-62 (1d3d200) — FB fade lands
+
+Read `1d3d200` in HEAD. Clean execution: `.name` rule
++ `.tree.right-dock .name` mirrored direction + 4 raw-
+source pins. vitest 722/722 (+4 net). Resize-behavior
+automatic (mask keyed off row width; no JS).
+
+Cutting [`../webtest-a/webtest-a-8.md`](../webtest-a/webtest-a-8.md)
+to walk `-a-62` + `-22` together (visual checks
+bundled).
+
+### Queue continues — 4 remaining
+
+```
+-a-56 (Cmd+P 3-state + depth-slider cue)
+-a-59 (pane-focus-click)
+-a-60 (graph hit-radius)
+-a-61 ⏸ PAUSED (Alex's draft-folder design firming up
+       in addendun-a.md; I'll re-cut once finalized —
+       don't start)
+```
+
+Pick at your discretion.
 
 Standing by for next commit.

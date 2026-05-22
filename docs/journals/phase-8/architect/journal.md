@@ -5245,3 +5245,75 @@ design doc completion + my cross-lane breakdown.
 | `alex/event-architect-fullstack-a.md` | -a-58 ack + -a-61 PAUSE |
 | `alex/event-architect-webtest-a.md` | -a-58 proactive walk ack |
 | `phase-8-bugs.md` | contact-dedup entry corrected diagnosis |
+
+## 2026-05-22 — -a-62 + -22 both shipped; webtest-a-8 bundled walk dispatched
+
+### Two commits landed since last beat
+
+| SHA | Subject | Lane |
+|-----|---------|------|
+| `1d3d200` | `File tree: fade long filenames at edge instead of wrapping (fullstack-a-62)` | @@FullStackA |
+| `6443b98` | `chan-server: filter unreferenced contact File nodes + emit FileBucket on graph nodes (systacean-22)` | @@Systacean |
+
+### Both clean executions
+
+* **-a-62**: `.name` rule + `.tree.right-dock .name`
+  mirrored direction; 4 pins; vitest 722/722. CSS-
+  only; resize-behavior automatic.
+* **-22**: Option A filter (`should_emit_contact_file`
+  helper at module scope; `referenced_contact_paths`
+  collected during mention-edge rewrite loop) + bucket
+  emit bundle (`bucket: Option<ReportFileBucket>` on
+  `GraphNodeView::File` populated from `report_buckets`
+  HashMap built once at top of `api_graph`). Single
+  atomic commit; right scope call.
+
+### webtest-a-8 bundles both walks
+
+[`../webtest-a/webtest-a-8.md`](../webtest-a/webtest-a-8.md)
+dispatched. 4 + 5 acceptance checks. Headline: contact
+count on chan-source seed should drop from ~1973 (pre-
+fix) to ~49 (only mentioned handles).
+
+### @@Systacean queue empty post-`-22`
+
+Lane stands down cleanly. Round-2 wave-2/wave-3 work
+complete: `-14` (event-watcher tracing) + `-15` (cross-
+dir aggregation) + `-16` (FileBucket) + `-17` (Windows
+result_large_err) + `-18`+4-followups (BGE gates → all
+reverted by `-19`) + `-19` (BM25 fallback) + `-20`
+(lock/watcher/helpers gating) + `-12` (updater verify)
++ `-21` (cache-bust enrich-poke) + `-22` (contact
+filter + bucket emit). 11 tasks shipped on the lane.
+
+### @@CI -14 status
+
+Per @@Alex's "they completed" framing: poked all three
+(@@FullStackA + @@CI + @@Systacean) + got commits from
+@@FullStackA + @@Systacean. @@CI's last commit remains
+`b017d3d` (ci-13). No `-14` commit yet — they may have
+completed their session-window without shipping code,
+OR hit something. Channel last post still pre-`-14`
+("Standing by for wave-3 dispatch"). Worth a follow-up
+poke from @@Alex.
+
+### Lane state
+
+| Lane | State |
+|------|-------|
+| @@Systacean | -21 + -22 shipped; lane queue-empty; stand-down |
+| @@FullStackA | -a-62 ✓; queue: -a-56/-a-59/-a-60; -a-61 PAUSED |
+| @@FullStackB | -b-25 ✓; queue-empty |
+| @@CI | -14 in inbound; not committed; needs re-prompt |
+| @@WebtestA | webtest-a-8 dispatched (bundled -a-62 + -22) |
+| @@WebtestB | -b-4 ✓; reactive |
+
+### What I'm committing this round
+
+| File | Reason |
+|------|--------|
+| `architect/journal.md` | This entry |
+| `alex/event-architect-fullstack-a.md` | -a-62 ack + webtest-a-8 cross-ref |
+| `alex/event-architect-systacean.md` | -22 ack + lane stand-down |
+| `alex/event-architect-webtest-a.md` | webtest-a-8 dispatch poke |
+| `webtest-a/webtest-a-8.md` | NEW task (bundled walk) |

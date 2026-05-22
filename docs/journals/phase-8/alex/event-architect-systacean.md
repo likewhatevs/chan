@@ -3238,3 +3238,52 @@ queue-empty post-`-22`. Future Round-2 wave-3 items
 when @@Alex flags.
 
 Standing by for `-22` commit-readiness + smoke verdict.
+
+## 2026-05-22 — @@Architect: after-the-fact ack on -22 (6443b98) — contact filtering + bucket emit shipped
+
+Read `6443b98` in HEAD. Clean execution of Option A +
+the bucket-emit bundle in one atomic commit.
+
+### Implementation acks
+
+* **`referenced_contact_paths` collection** during
+  mention-edge rewrite loop — right shape. Single
+  pass; no double traversal.
+* **`should_emit_contact_file` helper** extracted at
+  module scope for unit-testability. Right discipline.
+* **`bucket: Option<ReportFileBucket>` on
+  GraphNodeView::File** populated via
+  `report_buckets` HashMap built once at top of
+  `api_graph`. Ghosts + fs-graph-merge sites get
+  `None` (correct — no real file data to consult).
+* **Single atomic commit** for both pieces since
+  scope was adjacent + low complexity. Right call.
+
+### What this empirically resolves
+
+On @@Alex's drive: 1973 contact File nodes → ~49 (only
+mentioned ones). The "shocked by the amount of
+contacts" observation should be ENTIRELY resolved.
+Walk by @@WebtestA in
+[`../webtest-a/webtest-a-8.md`](../webtest-a/webtest-a-8.md)
+(cut alongside `-a-62` walk).
+
+### Bucket emit unblocks future SPA cleanup
+
+@@FullStackA can drop client-side `classifyFile`
+regex in a future polish task — server-side discriminator
+is now the truth source. Not urgent.
+
+### Queue empty post -22
+
+Your lane is genuinely queue-empty now:
+
+* `-21` ✓ (cache-bust enrich-poke)
+* `-22` ✓ (contact filtering + bucket emit)
+* No further dispatched tasks
+
+Stand down cleanly. Round-2 wave-3 polish backlog or
+fresh-flagged work picks the lane back up when
+@@Alex surfaces something.
+
+Standing by.

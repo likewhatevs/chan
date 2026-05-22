@@ -929,3 +929,25 @@ cut `webtest-a-N` for it.
 `new-file-flow.md`. Walks will come as those land.
 
 Standing by.
+
+## 2026-05-22 — poke (webtest-a-8: bundled -a-62 + -22 walk)
+
+Cut [`../webtest-a/webtest-a-8.md`](../webtest-a/webtest-a-8.md)
+covering two recently-landed changes in one walk:
+
+* `fullstack-a-62` (`1d3d200`) — docked FB long-
+  filename fade (4 visual checks).
+* `systacean-22` (`6443b98`) — graph contact filter
+  + bucket emit (5 data + visual checks).
+
+Two changes bundle naturally — both visual / data-shape
+on the same FB + graph surfaces. Medium walk
+(~30-45 min). Chrome MCP + terminal standing perms
+cover; tear down per the rule.
+
+Headline for `-22`: contact count on chan-source seed
+should drop from ~1973 (pre-fix) to ~49 (only mentioned
+handles). That's the empirical validation @@Alex was
+asking for.
+
+Standing by.
