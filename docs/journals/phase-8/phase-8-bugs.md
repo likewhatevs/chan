@@ -720,6 +720,37 @@
     3. cmd+P from a non-terminal tab spawns a fresh terminal + opens rich prompt on it.
   - NOT YET DISPATCHED — small fix; can ride into `-a-42` (About) or a tiny standalone commit; implementer picks at pickup time
 
+- Enrich poke event echo with timestamp + task path + heading anchor
+  - feature ask 2026-05-22 by @@Alex: replace the bare `poke` literal that `dispatch_agent_event` writes to the receiving agent's PTY with a richer string that gives the agent enough context to resume work without polling:
+    ```
+    Poke, it's {Fri, 22 May at 05:31}. Check your task at {path}#{heading} and execute.\n
+    ```
+  - **PRIMARY MOTIVATION (load-bearing)** — @@Alex 2026-05-22: the bare `poke` literal appears to be triggering Anthropic's prompt-cache hit / rate-limit / HTTP 500 pattern. Identical input repeated across multiple agent sessions hits the same cache key + appears to land on capacity-constrained paths. By including a wall-clock timestamp + a unique task-path + heading anchor per poke, EACH poke becomes a unique input — guaranteed cache-miss on Anthropic's side → fresh evaluation → reduces the rate-limit / 500 surface that @@Alex has been hitting daily over the past 3 days at this time of day (see also: webtest-a's stalled session in the screenshot earlier this session)
+  - secondary benefit: gives the agent immediate context (no grep for "what task am I supposed to work on")
+  - today's behaviour (`crates/chan-server/src/terminal_sessions.rs:525-549`):
+    - `dispatch_agent_event` writes literal `b"poke"` + the per-session submit chord (`\n` for shell mode; `\x1b[27;9;13~` for agent mode per `-b-13`).
+    - Agent receives the word "poke" + a submit, then has to context-switch to figure out what to look at.
+  - wanted behaviour: the poke text itself tells the agent WHERE to look. Server-side template:
+    ```
+    Poke, it's {<weekday>, <day> <month> at <HH:MM>}. Check your task at <path>#<heading> and execute.\n
+    ```
+    - `<weekday>` short form: `Fri`, `Sat`, etc.
+    - `<day> <month>`: `22 May`, `3 Jun`, etc. (no leading zero on day; abbreviated month).
+    - `<HH:MM>`: 24-hour, zero-padded (`05:31`, `14:08`).
+    - Server-side wall-clock; chan-server's TZ (likely UTC OR system-local — implementer picks; flag in the task spec).
+    - `<path>` + `<heading>` come from the AgentEvent payload (NEW fields on the schema).
+  - wire-shape changes (chan-server `event_watcher.rs`):
+    - Add `path: Option<String>` to `AgentEvent` (relative-to-drive-root recommended; matches the existing event-channel file shape).
+    - Add `heading: Option<String>` to `AgentEvent` (the markdown anchor slug without the `#` prefix; e.g. `"2026-05-22-architect-routing"`).
+    - Both optional + serde-skip-when-None for backward-compat with pre-feature event files.
+  - content templating (chan-server `terminal_sessions.rs::dispatch_agent_event`):
+    - Format the template above if both `path` + `heading` are present.
+    - Fallback to bare `poke` if either is missing (covers in-flight legacy events + survey/survey-reply types that don't need the path context).
+  - architect-side workflow change: when firing poke events going forward, include `path` + `heading` in the JSON payload. The architect's outbound channel writer needs the template update too. NOT a hard break; legacy pokes without these fields still dispatch as today (bare "poke")
+  - lane: @@Systacean primary (chan-server event_watcher + dispatch_agent_event are their wheelhouse). Possible @@FullStackB / FullStackA cross if the architect-side workflow tooling needs SPA updates (currently the architect writes events manually via the journal infrastructure; if the SPA's broadcast / spawn-agent surfaces evolve to emit pokes, they'd need to include path + heading too — that's `rich-prompt-session-evolution`'s territory)
+  - severity: **operational; bumping above feature ask**. The rate-limit / HTTP 500 pattern is actively blocking @@Alex's workflow (multi-agent sessions stalling daily at the same hour). Cache-bust via uniqueness is the immediate mitigation. NOT YET DISPATCHED — Round-2 wave-3 candidate; small chan-server change + backward-compat schema bump
+  - sequencing suggestion: if @@Systacean's queue stays empty post-`-16` + `-12` parked, this is a natural pickup for them (chan-server lane). Cheaper than waiting for wave-3 fan-out
+
 ## Round 2 — needs deeper change
 
 - Large markdown files block the editor with a spinner while loading
