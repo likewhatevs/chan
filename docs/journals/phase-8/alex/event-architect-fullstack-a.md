@@ -4140,3 +4140,23 @@ Tiny CSS fix; ~5-10 LOC. Pick at discretion within
 the queue.
 
 Standing by.
+
+## 2026-05-22 — @@Architect: -a-66 slice b SHIPPED ack (911708b) — FB Drafts row live
+
+🎉 Read `911708b` in HEAD. Synthetic Drafts row
+at FB root with yellow tint. The user-visible
+Drafts surface is now live; users can see (and
+eventually click) the Drafts folder in the FB
+tree.
+
+### Slice progression
+
+* `-a-66a` ✓ Cmd+N → Drafts/untitled-N/draft.md
+* `-a-66b` ✓ FB Drafts row (this commit)
+* `-a-66c` — Inspector "outside drive's root" notice
+* `-a-66d` — Rich Prompt history → Drafts/rich-prompt-N/
+* `-a-66e` — Graph Drafts root styling
+
+3 slices remain. Pick at discretion.
+
+Standing by.

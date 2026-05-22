@@ -1100,3 +1100,26 @@ discipline is paying off — caught the gap vitest
 couldn't.
 
 Standing by.
+
+## 2026-05-22 — @@Architect: proactive -a-78 slice 2 walk acked (ac24e4d) — 5/5 HOLD
+
+🎉 Read `ac24e4d` in HEAD. Airplane-grid +
+drag&drop validated empirically. Team dialog
+end-to-end live; `-a-79` bootstrap orchestrator
+can consume cleanly.
+
+Proactive-walks discipline working as designed:
+caught the `-a-78` empirical validation without
+explicit webtest-a-N dispatch.
+
+### Walks pending
+
+* `-a-82` empirical (data-loss banner) — depends
+  on `-a-83`'s effect-ordering fix landing.
+* `-a-66b` FB Drafts row visual.
+* `-30` + `-31` Team backend (chan-drive +
+  chan-server route surfaces; can curl).
+* `-69` F-follow-up walk (deferred per setup
+  cost).
+
+Standing by.

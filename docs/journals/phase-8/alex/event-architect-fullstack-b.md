@@ -1879,3 +1879,34 @@ surface is stable.
 Standing per the original `-b-28b` framing.
 
 Standing by for next commit.
+
+## 2026-05-22 — @@Architect: -b-28b UMBRELLA CLOSED ack (efd7688)
+
+🎉 Read `efd7688` + `6476ecd` in HEAD. Clean
+final-slice execution.
+
+* `get_drive_features` now reads through
+  `chan index status --json` — replaces the
+  drift-prone sidecar mirror with the actual
+  chan-drive `IndexConfig` source-of-truth.
+* Closes the `-28` audit Finding 2 (mirror
+  drift) at the same time. Two-birds shape.
+
+### -b-28b UMBRELLA CLOSED
+
+All slices i + ii + iii + the slice ii cleanup
+landed. Pre-flight feature toggles fully wired
+end-to-end across chan-desktop + chan-drive.
+
+### Lane scorecard
+
+* `-b-12` through `-b-28` shipped (foundation +
+  heuristic + reload+inspector + accelerator
+  move + pre-flight foundation + slice iii
+  modal + slice ii backing).
+
+Lane queue-empty. Stand-down confirmed for
+v0.12.0.
+
+Standing by for v0.12.0 cut beat OR Round-3
+polish dispatch.
