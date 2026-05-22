@@ -188,3 +188,48 @@ teardown only. Out-of-scope actions (e.g. canonical
 fresh-Mac walk for a separate task, Apple notary log
 spelunking, sidecar process supervision changes) fire
 fresh permission events.
+
+## 2026-05-22 — permission (systacean-12: tauri-plugin-updater dry-run; re-ask post-recycle)
+
+You poked me with "check your tasks and execute"; `-12` is the only queued item. Per the architect's framing the prior permission was session/chan.app-state-scoped + expired with the recycle. Same scope shape as the prior approval; re-asking before any runtime action.
+
+### What I'd do
+
+Per [`../systacean/systacean-12.md`](../systacean/systacean-12.md) step 5+ plan, unchanged from the prior ask:
+
+1. Add a `#[cfg(debug_assertions)]`-gated `--check-update-now` CLI handler to `desktop/src-tauri/src/main.rs` (~30 LOC; calls `update.check()` against the override-configured endpoint + logs the result).
+2. Start a background `python3 -m http.server 8765 --directory /tmp/chan-updater-test/` (capture the PID at spawn).
+3. `cargo tauri dev --config /tmp/chan-updater-test/override.json -- --check-update-now` from `desktop/src-tauri/` (capture the chan-desktop PID at spawn).
+4. Observe + capture log lines: `update.check()` detects update 0.99.0, download URL hits the http.server, signature-verify pass, apply-step attempts (fake bundle WILL fail apply — boundary of pre-flight verification per the task spec).
+5. Iterate the three failure modes: invalid signature, corrupted download, version downgrade attempt.
+
+### Scaffolding state (survives between sessions)
+
+`/tmp/chan-updater-test/` still has the test fixtures from the prior session: `test.key` / `test.key.pub` (minisign keypair) + `latest.json` (mock feed) + `fake-bundle.tar.gz` + `.sig` + `override.json`. No re-scaffolding needed; step 5+ can proceed directly once permission lands.
+
+### Hard safety constraints (same as prior; re-stating for the audit)
+
+* **NEVER touch @@Alex's running chan.app**. `pgrep -af "chan|Chan.app"` currently shows 5 chan-class PIDs (39577, 39646, 41552, 44822, 44823) — some yours, some other lanes' serves. Don't `pkill`, don't SIGTERM anything I didn't spawn.
+* **Process ownership by CAPTURE, not triage**. Capture the `cargo tauri dev` chan-desktop launch PID + the `python3 -m http.server` PID AT SPAWN; only SIGTERM those at teardown.
+* **Don't open the chan repo source drive**. The `--check-update-now` should fire + exit (or run to completion) without engaging any drive UI. If dev chan-desktop auto-opens a registered drive, abort + surface as a fresh permission event.
+* **No background processes left alive after teardown**. Both PIDs SIGTERM'd; verify with `ps`.
+
+### Teardown checklist
+
+* `kill -SIGTERM <captured-cargo-tauri-dev-PID>`; verify it exited; SIGKILL only if SIGTERM doesn't take.
+* `kill -SIGTERM <captured-http-server-PID>`; verify port 8765 freed.
+* `rm -rf /tmp/chan-updater-test/`.
+* Revert OR feature-gate the `desktop/src-tauri/src/main.rs` test caller; pre/post-commit audits + explicit `git add <path>` per file.
+* `pgrep -af "chan|python|cargo"` shows no stragglers from my work.
+
+### Duration
+
+~30 min wall-clock. Sub-second per check + download + verify cycle; most of the time is iterating the 3 failure modes + capturing log lines.
+
+### Linux + Windows verify
+
+NOT in this permission. Separate ask once macOS green (probably won't happen this session; Linux/Windows need VM or secondary machines).
+
+### Approval shape
+
+Append a `## 2026-05-22 — approved` (or "approved-with-caveats" / "denied") section below. Or in-chat is fine if you'd rather just say "go" and I'll transcribe per the process.md format.
