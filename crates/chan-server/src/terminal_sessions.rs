@@ -11,6 +11,8 @@ use std::sync::atomic::{AtomicBool, AtomicI64, AtomicU64, AtomicUsize, Ordering}
 use std::sync::{Arc, Mutex, Weak};
 use std::time::Duration;
 
+use chrono::Local;
+
 use portable_pty::{native_pty_system, CommandBuilder, PtySize};
 use rand::RngCore;
 use serde::Serialize;
@@ -540,11 +542,22 @@ impl Registry {
         // session's submit-mode. Shell mode → `\n` (the original
         // behaviour). Agent mode → `\x1b[27;9;13~` (Claude Code's
         // xterm modifyOtherKeys Cmd+Enter chord, probed live
-        // 2026-05-20). The "poke" literal itself is unchanged.
+        // 2026-05-20).
+        //
+        // systacean-21: rich-template echo when both `path` +
+        // `heading` are present (cache-bust mitigation for the
+        // bare-`poke` rate-limit pattern @@Alex hit daily). The
+        // template carries a wall-clock timestamp + the task
+        // location anchor so each poke is a unique input
+        // (cache-miss on the prompt-cache layer) + gives the
+        // agent immediate context. Falls back to bare `poke` when
+        // either field is missing (legacy events; survey types).
         let mode = session.submit_mode();
-        let mut bytes = Vec::with_capacity(4 + mode.submit_chord().len());
-        bytes.extend_from_slice(b"poke");
-        bytes.extend_from_slice(mode.submit_chord());
+        let poke_text = format_poke_text(event.path.as_deref(), event.heading.as_deref());
+        let chord = mode.submit_chord();
+        let mut bytes = Vec::with_capacity(poke_text.len() + chord.len());
+        bytes.extend_from_slice(poke_text.as_bytes());
+        bytes.extend_from_slice(chord);
         session.send_input(&bytes);
     }
 
@@ -978,6 +991,34 @@ impl Session {
             tail.clear();
             tail.extend_from_slice(&scan[scan.len() - keep..]);
         }
+    }
+}
+
+/// systacean-21: build the rich poke template that
+/// `dispatch_agent_event` writes to the receiving agent's PTY.
+/// When both `path` + `heading` are present, returns
+/// `"Poke, it's <Weekday>, <day> <Month> at <HH:MM>. Check
+/// your task at <path>#<heading> and execute."`. Otherwise
+/// falls back to the bare `"poke"` string (legacy events;
+/// survey types where the path context doesn't apply).
+///
+/// The timestamp is system-local wall-clock per the task body's
+/// recommendation. Cache-bust on the prompt-cache layer relies
+/// on the timestamp + the path+heading combination being unique
+/// per poke; the architect-side workflow populates `path` +
+/// `heading` for the typical task-dispatch poke.
+fn format_poke_text(path: Option<&str>, heading: Option<&str>) -> String {
+    match (path, heading) {
+        (Some(p), Some(h)) => {
+            let now = Local::now();
+            // chrono format spec: `%a` = abbreviated weekday
+            // (Mon..Sun); `%-d` = day-of-month with no leading
+            // zero; `%b` = abbreviated month (Jan..Dec); `%H:%M`
+            // = zero-padded 24-hour HH:MM.
+            let ts = now.format("%a, %-d %b at %H:%M");
+            format!("Poke, it's {ts}. Check your task at {p}#{h} and execute.")
+        }
+        _ => "poke".to_string(),
     }
 }
 
@@ -1853,6 +1894,8 @@ mod tests {
             answers: None,
             scope_grant: None,
             note: None,
+            path: None,
+            heading: None,
         });
 
         let out = collect_until(&mut handle, "poke", Duration::from_secs(5)).await;
@@ -1900,6 +1943,8 @@ mod tests {
             answers: None,
             scope_grant: None,
             note: None,
+            path: None,
+            heading: None,
         });
 
         // The PTY echoes the input we wrote, so the chord bytes
@@ -1975,6 +2020,135 @@ mod tests {
         assert_eq!(SubmitMode::default(), SubmitMode::Shell);
     }
 
+    #[tokio::test]
+    async fn dispatch_agent_event_writes_rich_template_when_path_and_heading_present() {
+        // systacean-21: when both `path` + `heading` are Some on
+        // the AgentEvent, dispatch_agent_event writes the rich
+        // template "Poke, it's <weekday>, <day> <month> at
+        // <HH:MM>. Check your task at <path>#<heading> and
+        // execute." instead of the bare "poke" literal. Each
+        // poke becomes a unique PTY input (cache-bust on the
+        // prompt-cache layer) + gives the agent immediate
+        // task-location context.
+        let registry = Arc::new(Registry::new(test_config(4096, 4, 60)));
+        let mut handle = registry
+            .create(CreateOptions {
+                size: test_size(),
+                tab_name: Some("Systacean".into()),
+                window_id: None,
+                mcp_env: true,
+                cwd: None,
+                command: None,
+                env: Default::default(),
+                preflight: None,
+            })
+            .unwrap();
+
+        let task_path = "docs/journals/phase-8/systacean/systacean-21.md";
+        let heading = "2026-05-22-poke";
+        registry.dispatch_agent_event(AgentEvent {
+            id: "event-rich".into(),
+            event_type: crate::event_watcher::AgentEventType::Poke,
+            from: "@@Architect".into(),
+            to: "@@Systacean".into(),
+            topic: None,
+            questions: None,
+            standing_options: None,
+            scope: None,
+            answers: None,
+            scope_grant: None,
+            note: None,
+            path: Some(task_path.into()),
+            heading: Some(heading.into()),
+        });
+
+        let out = collect_until(&mut handle, "execute.", Duration::from_secs(5)).await;
+        assert!(
+            out.contains("Poke, it's "),
+            "rich template missing prefix; got {out:?}"
+        );
+        let needle = format!("Check your task at {task_path}#{heading} and execute.");
+        assert!(
+            out.contains(&needle),
+            "rich template missing task-location anchor `{needle}`; got {out:?}"
+        );
+        registry.close(handle.id(), CloseReason::Explicit);
+    }
+
+    #[tokio::test]
+    async fn dispatch_agent_event_falls_back_to_bare_poke_when_path_missing() {
+        // systacean-21: when either `path` or `heading` is None,
+        // dispatch_agent_event falls back to the legacy bare
+        // "poke" literal. Covers: pre-`-21` event files that
+        // never carried path/heading; survey-type events where
+        // the path context doesn't apply. The submit chord
+        // append behaviour from -b-13 is preserved either way.
+        let registry = Arc::new(Registry::new(test_config(4096, 4, 60)));
+        let mut handle = registry
+            .create(CreateOptions {
+                size: test_size(),
+                tab_name: Some("Systacean".into()),
+                window_id: None,
+                mcp_env: true,
+                cwd: None,
+                command: None,
+                env: Default::default(),
+                preflight: None,
+            })
+            .unwrap();
+
+        registry.dispatch_agent_event(AgentEvent {
+            id: "event-legacy".into(),
+            event_type: crate::event_watcher::AgentEventType::Poke,
+            from: "@@Architect".into(),
+            to: "@@Systacean".into(),
+            topic: None,
+            questions: None,
+            standing_options: None,
+            scope: None,
+            answers: None,
+            scope_grant: None,
+            note: None,
+            // heading is set but path is None → fallback per spec.
+            path: None,
+            heading: Some("ignored-without-path".into()),
+        });
+
+        let out = collect_until(&mut handle, "poke", Duration::from_secs(5)).await;
+        assert!(
+            out.contains("poke"),
+            "legacy fallback should emit bare poke; got {out:?}"
+        );
+        assert!(
+            !out.contains("Check your task at"),
+            "legacy fallback must not emit the rich template; got {out:?}"
+        );
+        registry.close(handle.id(), CloseReason::Explicit);
+    }
+
+    #[test]
+    fn format_poke_text_emits_rich_template_with_chrono_spec() {
+        // systacean-21: pin the rich-template shape directly so
+        // the format spec doesn't drift away from the
+        // architect-side documentation in the task body. The
+        // exact timestamp is wall-clock so we don't assert on
+        // its value; we assert on the literal prefixes +
+        // path#heading anchor instead.
+        let out =
+            super::format_poke_text(Some("path/to/task.md"), Some("2026-05-22-poke"));
+        assert!(out.starts_with("Poke, it's "), "got {out:?}");
+        assert!(
+            out.contains("Check your task at path/to/task.md#2026-05-22-poke and execute."),
+            "got {out:?}"
+        );
+        assert!(!out.ends_with('\n'), "trailing chord is added by the caller, not the helper; got {out:?}");
+
+        // Either missing field → bare "poke" (no template).
+        assert_eq!(super::format_poke_text(None, Some("h")), "poke");
+        assert_eq!(super::format_poke_text(Some("p"), None), "poke");
+        assert_eq!(super::format_poke_text(None, None), "poke");
+    }
+
     #[test]
     fn dispatch_agent_event_counts_unmatched_targets() {
         let registry = Registry::new(test_config(4096, 4, 60));
@@ -1991,6 +2165,8 @@ mod tests {
             answers: None,
             scope_grant: None,
             note: None,
+            path: None,
+            heading: None,
         });
 
         assert_eq!(registry.watcher_dropped_events(), 1);

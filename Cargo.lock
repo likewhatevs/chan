@@ -1063,6 +1063,7 @@ dependencies = [
  "chan-llm",
  "chan-tunnel-client",
  "chan-tunnel-proto",
+ "chrono",
  "dirs 5.0.1",
  "notify",
  "open",

@@ -58,6 +58,21 @@ pub(crate) struct AgentEvent {
     pub answers: Option<Vec<SurveyAnswer>>,
     pub scope_grant: Option<SurveyScope>,
     pub note: Option<String>,
+    /// systacean-21: relative path to the task file the
+    /// receiving agent should walk on the wake. When paired
+    /// with `heading`, drives `dispatch_agent_event`'s rich
+    /// template (cache-bust + immediate context). Missing on
+    /// pre-`-21` events; the writer (architect-side tooling +
+    /// any lane firing pokes) populates it going forward.
+    #[serde(default)]
+    pub path: Option<String>,
+    /// systacean-21: heading anchor inside the task file
+    /// (markdown slug, no leading `#`). Combined with `path`
+    /// into `<path>#<heading>` in the rich template so the
+    /// receiving agent jumps directly to the relevant section
+    /// instead of walking the whole file.
+    #[serde(default)]
+    pub heading: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
@@ -381,6 +396,33 @@ mod tests {
         assert_eq!(event.event_type, AgentEventType::SurveyReply);
         assert_eq!(event.answers.expect("answers")[0].key, "1");
         assert_eq!(event.scope_grant, Some(SurveyScope::TopicSession));
+    }
+
+    #[test]
+    fn parse_event_path_and_heading_are_optional_with_backward_compat() {
+        // systacean-21: AgentEvent gains `path` + `heading`
+        // optional fields for the rich-poke-template cache-bust
+        // mitigation in dispatch_agent_event. Both fields are
+        // #[serde(default)]; pre-`-21` event files (no path /
+        // heading) must parse cleanly with both as None.
+        let legacy = parse_agent_event(
+            r#"{"id":"1","type":"poke","from":"@@Architect","to":"@@Systacean"}"#,
+        )
+        .expect("legacy event without path/heading should parse");
+        assert_eq!(legacy.path, None);
+        assert_eq!(legacy.heading, None);
+
+        // New-shape event carries both fields; round-trip via
+        // the parser.
+        let rich = parse_agent_event(
+            r#"{"id":"2","type":"poke","from":"@@Architect","to":"@@Systacean","path":"docs/journals/phase-8/systacean/systacean-21.md","heading":"2026-05-22-poke"}"#,
+        )
+        .expect("rich event with path+heading should parse");
+        assert_eq!(
+            rich.path.as_deref(),
+            Some("docs/journals/phase-8/systacean/systacean-21.md")
+        );
+        assert_eq!(rich.heading.as_deref(), Some("2026-05-22-poke"));
     }
 
     #[test]

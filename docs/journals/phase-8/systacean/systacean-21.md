@@ -289,3 +289,76 @@ interactive permission window.
 * An agent-side change. Pure server-side; agents see
   richer text + their existing input handling
   consumes it normally.
+
+## 2026-05-22 — implementation + commit readiness
+
+URGENT operational mitigation per @@Alex's bare-poke rate-limit observation. Authorization explicit in the task body.
+
+### Schema extension (event_watcher.rs)
+
+* Added `path: Option<String>` + `heading: Option<String>` to `AgentEvent`, both `#[serde(default)]` so pre-`-21` event files load cleanly with both as `None`.
+* New unit test `parse_event_path_and_heading_are_optional_with_backward_compat` — synthesizes a legacy event (no `path`/`heading`) + a new-shape event (both present) + asserts the parser handles both.
+
+### Content templating (terminal_sessions.rs)
+
+* New free function `format_poke_text(path: Option<&str>, heading: Option<&str>) -> String`:
+  * When both `Some`: builds `"Poke, it's <Weekday>, <day> <Month> at <HH:MM>. Check your task at <path>#<heading> and execute."` using `chrono::Local` + `%a, %-d %b at %H:%M` format spec.
+  * Otherwise: returns bare `"poke"` (legacy + survey fallback).
+* `dispatch_agent_event` rewritten to call `format_poke_text(event.path.as_deref(), event.heading.as_deref())` + append `mode.submit_chord()` (preserves `-b-13` chord behaviour).
+* Submit-chord append behaviour unchanged — chord still appended whether template or legacy.
+
+### Timestamp dep
+
+`chrono` was already a workspace dep (used by chan-drive, chan-report); added an explicit declaration to `chan-server/Cargo.toml` (`chrono = { workspace = true }`) so the import is unambiguous. No new transitive deps; workspace already locked it.
+
+### Tests (3 new + 1 updated)
+
+* `dispatch_agent_event_writes_rich_template_when_path_and_heading_present` — fixture event with `path = Some("docs/.../systacean-21.md")` + `heading = Some("2026-05-22-poke")`; asserts the PTY output contains `"Poke, it's "` prefix + the literal `"Check your task at <path>#<heading> and execute."` anchor.
+* `dispatch_agent_event_falls_back_to_bare_poke_when_path_missing` — fixture event with `heading = Some(...)` + `path = None`; asserts output contains `"poke"` + does NOT contain `"Check your task at"` (template was suppressed).
+* `format_poke_text_emits_rich_template_with_chrono_spec` — pure unit test on the helper. Asserts the rich-template shape (prefix, anchor, no trailing chord) when both fields present; asserts `"poke"` for the 3 None combinations (heading-only / path-only / both-None).
+* Existing `parse_event_path_and_heading_are_optional_with_backward_compat` (event_watcher.rs) — schema round-trip per the task spec.
+* Existing 3 `AgentEvent { ... }` literal call sites in tests updated to include `path: None, heading: None` (required by struct construction; field-add isn't backward-compat for literal builders).
+
+### Files
+
+| File                                            | +    | -  |
+|-------------------------------------------------|------|----|
+| `crates/chan-server/Cargo.toml`                 | +1   | 0  |
+| `Cargo.lock`                                    | +1   | 0  |
+| `crates/chan-server/src/event_watcher.rs`       | +42  | 0  |
+| `crates/chan-server/src/terminal_sessions.rs`   | +184 | -4 |
+
+Plus task tail + outbound poke. 6 paths total.
+
+### Pre-push gate
+
+* `cargo fmt --check`: clean.
+* `cargo clippy --all-targets -- -D warnings`: clean.
+* `cargo test -p chan-server`: **209 passed; 0 failed** (was 205 pre-`-21`; +4 new tests).
+* `cargo test` workspace: all crates green.
+* `RUSTFLAGS="-D warnings" cargo build --no-default-features`: green.
+* **Web side**: `cd web && npm run check` reports 24 errors (`GraphPanel.svelte` `Property 'markdown'/'source' does not exist on type 'GraphFilters'`) + 2 vitest failures (`fullstack-a-52 G10: link filter dropped`). **These are PRE-EXISTING from FullStackA's in-flight `-a-52` work, not from `-21`**. My changes are Rust-only; `git diff --stat -- web/` is empty. Flagged so the smoke run's web job is understood as not a `-21` regression.
+
+### Suggested commit subject
+
+```
+chan-server: enrich poke event echo with timestamp + path + heading (systacean-21)
+```
+
+### Smoke plan
+
+Atomic-audit-commit pattern + push to fresh `systacean-21-smoke` branch + `gh workflow run ci.yml --ref systacean-21-smoke`. Expected:
+
+* rustfmt ✓
+* Ubuntu cargo test ✓ (chan-server lib gets the 4 new tests)
+* macOS cargo test ✓
+* build no-default-features ✓
+* **web — pre-existing fail per the FullStackA in-flight state**. NOT a `-21` regression.
+
+If web is the only red on the smoke, that's the empirical evidence the Rust-side change shipped clean.
+
+### Operational note
+
+Once `-21` lands + the architect-side workflow tooling starts populating `path` + `heading` in outbound event payloads, the bare-`poke` cache-collision pattern goes away. Architect-side tooling update is out of scope per the task body; flagged as a follow-up.
+
+Holding for @@Architect commit clearance + smoke-branch authorization.

@@ -2299,3 +2299,60 @@ docs(systacean-12): macOS updater dry-run verified happy path + dialog-finding f
 ### Holding
 
 Lane fully idle post-this. Future Round-3 self-update task picks up the dialog finding when it cuts.
+
+## 2026-05-22 — poke (-21 ready for review; URGENT cache-bust enrichment implementation complete)
+
+Picked up `-21` per @@Alex's direct redirect ("cant you see -21 there?") + the URGENT dispatch poke. Implementation complete + workspace gate green on the Rust side.
+
+### What landed
+
+* **Schema**: `crates/chan-server/src/event_watcher.rs::AgentEvent` gains `path: Option<String>` + `heading: Option<String>`, both `#[serde(default)]` for backward-compat. Pre-`-21` event files load cleanly with both as None.
+* **Template**: new free function `format_poke_text(path, heading)` in `terminal_sessions.rs`. When both present: `"Poke, it's <Weekday>, <day> <Month> at <HH:MM>. Check your task at <path>#<heading> and execute."` via `chrono::Local` + format spec `"%a, %-d %b at %H:%M"`. Otherwise: bare `"poke"`. `dispatch_agent_event` calls the helper + appends `mode.submit_chord()` (preserves `-b-13` chord behaviour).
+* **Tests**: 4 new (3 dispatch-level + 1 schema round-trip). Existing 3 `AgentEvent { ... }` literal sites updated for the new fields.
+* **Dep**: `chrono` added to `chan-server/Cargo.toml` (already a workspace dep; no new transitives).
+
+### Files
+
+```
+crates/chan-server/Cargo.toml                +1
+Cargo.lock                                   +1
+crates/chan-server/src/event_watcher.rs      +42
+crates/chan-server/src/terminal_sessions.rs  +184 / -4
+docs/journals/phase-8/systacean/systacean-21.md  (task tail)
+docs/journals/phase-8/alex/event-systacean-architect.md  (this poke)
+```
+
+6 paths total.
+
+### Suggested commit subject
+
+```
+chan-server: enrich poke event echo with timestamp + path + heading (systacean-21)
+```
+
+### Pre-push gate
+
+* fmt + clippy + no-default-features build: clean.
+* `cargo test -p chan-server`: 209/0 (was 205; +4 new tests).
+* Workspace `cargo test`: all crates green.
+* **Web pre-existing breakage flagged**: `npm run check` reports 24 errors + 2 vitest failures, all from FullStackA's in-flight `-a-52` G10 work (`GraphPanel.svelte` references `filters.markdown` / `filters.source` that don't exist on `GraphFilters` yet; `graphDepthFilter.test.ts` asserts the `link` filter is gone). My `git diff --stat -- web/` is empty — `-21` is Rust-only; this is NOT a `-21` regression. Flagged so the smoke run's web job is understood correctly.
+
+### Smoke ask
+
+Authorize `systacean-21-smoke` branch (fresh lifecycle; `-21` is its own gate-unblocker). Expected:
+
+* rustfmt ✓
+* build no-default-features ✓
+* Ubuntu cargo test ✓
+* macOS cargo test ✓
+* **web — pre-existing fail per FullStackA's `-a-52` in-flight state**. NOT a `-21` regression.
+
+If web is the only red, that's empirical evidence `-21` shipped clean.
+
+### Operational note for the architect-side workflow
+
+Going forward, when you (or any lane) fire a poke event, populate `path` + `heading` in the JSON payload to get the rich-template echo. Backward-compat means existing event-file infrastructure keeps working untouched; the legacy bare-`poke` fallback handles in-flight pre-`-21` events. If specific writer call sites in the architect workflow tooling need touching, that's out of scope per the task body — flag for follow-up if surfaced.
+
+### Holding
+
+Per the atomic-audit-commit + obvious-call-shortcut discipline. Will push + smoke once cleared.
