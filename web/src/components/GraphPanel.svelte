@@ -484,6 +484,37 @@
       if (next.size === 0) break;
       frontier = next;
     }
+    // `fullstack-a-58` parent-edge invariant: pull each in-scope
+    // node's ancestor chain via `contains` edges. The forward-only
+    // BFS above expands DOWN from the seed; contains edges point
+    // parent→child, so the parent is UPSTREAM of the seed (the
+    // file is the target end of the parent→file contains edge).
+    // Without this pass, file-scope graphs render the file but
+    // not its parent directory + the user can't click-up via the
+    // graph. Per @@Alex's spec: "every node has an inbound
+    // contains edge from a parent directory unless folder filter
+    // is OFF" — folder filter hiding is handled later by
+    // `hiddenFolderIds` so we always include the chain here.
+    //
+    // Implementation: iterate to a fixed point, adding `source`
+    // of every contains edge whose `target` is already in scope.
+    // The contains-edge subgraph is a forest (each file/dir has
+    // at most one parent) so this terminates in at most O(depth)
+    // iterations.
+    let pulled = true;
+    while (pulled) {
+      pulled = false;
+      for (const e of edges) {
+        if (
+          e.kind === "contains" &&
+          visited.has(e.target) &&
+          !visited.has(e.source)
+        ) {
+          visited.add(e.source);
+          pulled = true;
+        }
+      }
+    }
     return visited;
   });
 

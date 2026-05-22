@@ -1489,3 +1489,76 @@ Outbound poke fired; standing by. Queue
 waiting: `-a-58` (parent-edge audit-then-fix)
 → `-a-56` / `-a-59` / `-a-60` per architect's
 suggested order.
+
+## 2026-05-22 — -a-58 (parent-edge invariant) ready for review
+
+Audit-then-fix verdict: **HYBRID**. File-scope
+manifestation is a clear regression I introduced
+in `-a-52`'s G9 forward-only BFS; drive-scope
+orphan markdown needs empirical confirmation
+deferred to a follow-up.
+
+### Audit (source-level)
+
+* chan-server `walk_file` + `walk_directory`
+  in `crates/chan-server/src/routes/fs_graph.rs`
+  emit `contains` edges (parent → child) for
+  every directory visit. Data is structurally
+  present at chan-server emit.
+* `merge_filesystem_layer` is unconditionally
+  called from `/api/graph`, so semantic mode
+  drive/dir/file scopes ALSO carry the
+  filesystem layer + contains edges.
+* SPA gap is in `scopedNodeIds` BFS:
+  forward-only BFS from a file walks
+  `source → target` only; contains edge has
+  parent at source + file at target, so the
+  parent is upstream of the file + never
+  added to scope.
+* Diagnosis: `-a-52`'s G9 simplification
+  introduced the file-scope regression. Pre-
+  `-a-52` bidirectional BFS would have added
+  the parent.
+
+### Drive-scope orphan markdown — deferred
+
+scopedNodeIds = null for drive scope; no SPA
+filter applies. chan-server emit looks complete
+on source-reading. Couldn't run a test server
+this beat (registered drives locked + classifier
+denied /tmp writes for a fresh scratch). Flagged
+for empirical confirmation in a follow-up.
+
+### Fix (SPA)
+
+`GraphPanel.svelte`: added a parent-pull pass to
+`scopedNodeIds` after the forward BFS — iterate
+to a fixed point, adding `source` for every
+`contains` edge whose `target` is already in
+scope. Ancestor chains pull cleanly (file →
+parent → ... → root). Gated on
+`e.kind === "contains"` so other edge kinds
+keep `-a-52`'s forward-only semantics. Folder
+chip OFF still hides parent dirs via the
+existing `hiddenFolderIds` gate.
+
+### Tests
+
+`graphParentEdgeInvariant.test.ts` (new): 5
+raw-source pins covering the while loop shape,
+post-BFS positional anchor, contains-only gate,
+visited-set write, folder-filter respect.
+
+### Gate
+
+* vitest **718 / 718** (+5 net from `-a-57`'s
+  713).
+* svelte-check 0 errors / 0 warnings across
+  3996 files.
+* npm build clean.
+* Rust gate not re-run (no Rust touched).
+
+Impl note + commit subject at
+[fullstack-a-58.md](fullstack-a-58.md). Outbound
+poke fired with the HYBRID verdict; standing by.
+Queue waiting: `-a-56` / `-a-59` / `-a-60`.

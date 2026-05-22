@@ -4271,3 +4271,171 @@ WAVE-3 FAN-OUT dispatch.
 
 Push held — multi-agent tree commit discipline.
 Standing by for clearance.
+
+## 2026-05-22 — poke (fullstack-a-58 audit verdict + ready for review)
+
+Audit-then-fix verdict: **HYBRID** (one-line
+summary):
+
+* **File-scope parent-edge manifestation**: SPA-
+  side regression from my `-a-52` G9 forward-only
+  BFS — fixed in this commit via a parent-pull
+  pass.
+* **Drive-scope orphan markdown**: empirical
+  confirmation deferred to follow-up (couldn't
+  run a test server this beat — registered
+  drives locked + classifier denied /tmp writes
+  for a fresh scratch). The chan-server emit
+  appears structurally complete on source-
+  reading.
+
+### Audit (source-level)
+
+* `crates/chan-server/src/routes/fs_graph.rs:500`
+  `walk_file` emits the file node + its
+  immediate parent dir + a `contains` edge with
+  `source=parent`, `target=file`.
+* `walk_directory` recursively emits `contains`
+  edges for every dir → child relationship.
+* `merge_filesystem_layer` is unconditionally
+  called from `/api/graph`, so semantic mode
+  drive/dir/file scopes ALSO carry the
+  filesystem layer.
+* SPA `scopedNodeIds` BFS at file-scope: seeds
+  = file node id; forward-only BFS walks
+  `source → target` only. The parent → file
+  contains edge has the parent at SOURCE +
+  file at TARGET. BFS at the file walks
+  OUTGOING — the contains edge is INCOMING.
+  Parent never gets added to scope.
+
+**Diagnosis**: `-a-52` G9's forward-only
+simplification introduced this regression. Pre-
+`-a-52` bidirectional BFS would have added the
+parent via the `frontier.has(e.target) → add
+e.source` arm I removed.
+
+### Drive-scope deferred — empirical-confirm path
+
+Drive-scope sets `scopedNodeIds = null` — no SPA
+BFS filter applies; all nodes from chan-server
+render directly. Source-reading suggests
+chan-server emits the full contains-edge tree;
+empirical confirmation would need:
+
+* Running test server against the seed drive.
+* `curl http://127.0.0.1:<port>/api/graph?scope=drive`
+* Sample a few orphan markdown nodes; trace
+  whether their parent dir appears in the nodes
+  array + whether the contains edge appears in
+  the edges array.
+
+If the contains edges ARE in the response, then
+drive-scope orphans are a different SPA bug
+(possibly a chip-filter strip; possibly my
+`-a-57` markdown-chip wiring — though defaults
+are ON so this shouldn't trigger). If contains
+edges are MISSING from the response, scope poke
+to @@Systacean for chan-server emit gap.
+
+Could you sequence the drive-scope confirmation
+as a separate beat (give me a green-light on /tmp
+writes OR route to webtest lane for the
+empirical curl)?
+
+### Fix (SPA)
+
+`web/src/components/GraphPanel.svelte`
+`scopedNodeIds` derive: added parent-pull pass
+AFTER the forward BFS. Iterate to a fixed point,
+adding `source` for every `contains` edge whose
+`target` is already in scope.
+
+```ts
+let pulled = true;
+while (pulled) {
+  pulled = false;
+  for (const e of edges) {
+    if (
+      e.kind === "contains" &&
+      visited.has(e.target) &&
+      !visited.has(e.source)
+    ) {
+      visited.add(e.source);
+      pulled = true;
+    }
+  }
+}
+```
+
+Properties:
+
+* **Ancestor chain**: file → parent →
+  grandparent → root, all pulled into scope.
+* **Contains-only gate**: other edge kinds
+  (link/tag/mention) keep `-a-52`'s G9 forward-
+  only semantics. The structural invariant is
+  specifically about parent-dir → child file
+  contains edges.
+* **Folder filter still applies**: parent-pull
+  adds parent dirs to scopedNodeIds, but
+  `hiddenFolderIds` still hides folder nodes
+  when folder chip is OFF via `visibleNodeIds`.
+  Acceptance criterion 3 satisfied without
+  parent-pull bypassing the chip gate.
+* **Fixed-point**: contains-edge subgraph is a
+  forest (each file/dir has at most one
+  parent), so the loop terminates in O(depth)
+  iterations.
+
+### Tests
+
+`graphParentEdgeInvariant.test.ts` (new): 5
+raw-source pins covering parent-pull existence
++ while-loop shape, positional anchor (runs
+AFTER BFS via comment-block index check), the
+`e.kind === "contains"` gate, `visited`-set
+write, folder-filter respect.
+
+### Acceptance coverage
+
+1. File-scope parent + contains edge: ✓.
+2. Drive-scope every file has inbound contains:
+   **deferred** for empirical confirm.
+3. Folder filter OFF → no parent dirs: ✓.
+4. Click parent-dir → directory inspector:
+   ✓ (wired in `-a-50`).
+
+### Gate
+
+* vitest **718 / 718** (+5 net from `-a-57`'s
+  713).
+* svelte-check 0 errors / 0 warnings across
+  3996 files.
+* npm build clean.
+* Rust gate not re-run.
+
+### Suggested commit subject
+
+```
+Graph parent-edge invariant: pull ancestor chain via contains edges (fullstack-a-58)
+```
+
+Single commit.
+
+### Files for `git add`
+
+* `web/src/components/GraphPanel.svelte`
+* `web/src/components/graphParentEdgeInvariant.test.ts`
+* `docs/journals/phase-8/fullstack-a/fullstack-a-58.md`
+* `docs/journals/phase-8/fullstack-a/journal.md`
+* `docs/journals/phase-8/alex/event-fullstack-a-architect.md`
+  (this append)
+
+### Atomic-audit-commit applied
+
+Single bash invocation per discipline.
+
+Push held — multi-agent tree commit discipline.
+Standing by for clearance + drive-scope empirical
+confirmation routing.

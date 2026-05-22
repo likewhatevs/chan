@@ -118,3 +118,193 @@ This is `-a-58`.
   if you happen to touch the same render path).
 * Filter chip extensions (separate task `-a-57`).
 * New graph features beyond the parent-edge invariant.
+
+## 2026-05-22 — audit verdict + ready for review
+
+Two-file change (1 SPA + 1 new test + 3 docs).
+SPA-only; no Rust touched.
+
+### Audit verdict: HYBRID (SPA-side fix + drive-scope flagged)
+
+**File-scope: SPA regression from `-a-52`.** Source-
+level audit (no test-server needed):
+
+* chan-server `walk_file`
+  (`crates/chan-server/src/routes/fs_graph.rs:500`)
+  emits the file node + the parent directory node +
+  a `contains` edge with source=parent, target=file.
+  Data is present at chan-server.
+* `merge_filesystem_layer` is called UNCONDITIONALLY
+  on every `/api/graph` request, so semantic-mode
+  drive/dir/file scopes ALSO carry the filesystem
+  layer.
+* SPA `scopedNodeIds` BFS at file-scope: seedIds =
+  the file node id; the forward-only BFS (introduced
+  by `fullstack-a-52`'s G9) walks `source → target`
+  only. The parent → file contains edge has parent
+  at SOURCE, file at TARGET. BFS starting at the
+  file walks OUTGOING edges — but the contains edge
+  is INCOMING to the file. Parent never gets added
+  to scopedNodeIds.
+
+**Diagnosis**: my `-a-52` G9 simplification
+introduced this regression. Pre-`-a-52`, the
+bidirectional BFS would have added the parent via
+`frontier.has(e.target) → add e.source`.
+
+**Drive-scope orphan markdown**: structurally
+unrelated to file-scope (drive-scope sets
+`scopedNodeIds = null` — no BFS filter; all nodes
+from chan-server render directly). chan-server's
+`walk_directory` emits contains edges recursively
+for descendants, so the wire data appears complete
+on source-reading.
+
+Empirical confirmation of drive-scope orphans
+requires a running test server + curl of the
+graph response. **Couldn't run one this beat** —
+the registered test drives are locked, and the
+classifier denied my Write attempts to a fresh
+`/tmp/chan-test-a58-audit/` scratch dir. Flagging
+drive-scope orphans as a follow-up for empirical
+confirmation in a separate session that can
+write to `/tmp` or has direct access to a fresh
+seed.
+
+If the drive-scope manifestation turns out to be
+the file-scope fix transitively (drive scope
+shares no scoped filter so it shouldn't need a
+fix), this lands here. If it's a separate
+chan-server emit gap, a scope poke routes the fix
+to @@Systacean.
+
+### Fix shape
+
+`web/src/components/GraphPanel.svelte` `scopedNodeIds`
+derive — added a **parent-pull pass** after the
+forward BFS:
+
+```ts
+let pulled = true;
+while (pulled) {
+  pulled = false;
+  for (const e of edges) {
+    if (
+      e.kind === "contains" &&
+      visited.has(e.target) &&
+      !visited.has(e.source)
+    ) {
+      visited.add(e.source);
+      pulled = true;
+    }
+  }
+}
+```
+
+Iterates to a fixed point so ancestor chains pull
+cleanly (file → parent → grandparent → ... → drive
+root). Gates on `e.kind === "contains"` so other
+edge kinds (link/tag/mention) keep their
+forward-only semantics from `-a-52`'s G9.
+
+The parent-pull adds nodes to `visited` but
+`hiddenFolderIds` in `visibleNodeIds` still hides
+folder nodes when the folder chip is OFF —
+satisfying acceptance criterion 3 (folder filter
+OFF → parent dirs don't render) without
+parent-pull bypassing the chip gate.
+
+### Acceptance criteria — coverage
+
+1. **File-scope: parent dir + contains edge render**
+   ✓ — parent-pull adds the parent's directory node
+   to scopedNodeIds; the existing `visibleEdges`
+   chain renders the contains edge because both
+   endpoints are now in scope.
+2. **Drive-scope: every file has inbound contains
+   edge** — DEFERRED for empirical confirmation
+   (per audit-then-fix shape). If drive-scope
+   shares the chan-server data, no separate fix
+   needed; if not, scope poke for chan-server emit
+   gap.
+3. **Folder filter OFF: parent dirs don't render**
+   ✓ — `hiddenFolderIds` still applies in
+   `visibleNodeIds` regardless of parent-pull.
+4. **Click parent-dir node → directory inspector**
+   ✓ — already wired in `-a-50`; this task only
+   ensures the parent node renders so the click
+   target exists.
+
+### Tests
+
+`web/src/components/graphParentEdgeInvariant.test.ts`
+(new): 5 raw-source pins.
+
+* Parent-pull pass exists + uses the fixed-point
+  while loop shape.
+* Pass runs AFTER the BFS (positional anchor
+  check via index of comment markers).
+* Pass gates on `e.kind === "contains"` only.
+* Pass writes to `visited` directly (single
+  accumulator).
+* Folder-filter hiding still kicks in via
+  `hiddenFolderIds`.
+
+### Gate
+
+* vitest **718 / 718** (+5 net from `-a-57`'s
+  713).
+* svelte-check 0 errors / 0 warnings across
+  3996 files.
+* npm build clean.
+* Rust gate not re-run (no Rust touched).
+
+### Decisions
+
+* **(B) SPA-side fix** over scope poke — clear
+  regression caused by `-a-52`, easy + targeted
+  one-pass while loop.
+* **Iterate to fixed point** — supports ancestor
+  chains. Files often live 3-5 levels deep; one-
+  pass would miss grandparents.
+* **Gate on `contains` only** — other edge kinds
+  (link/tag/mention) keep `-a-52`'s forward-only
+  semantics. The structural invariant the bug
+  spec'd is specifically about parent-dir →
+  child file contains edges.
+* **Parent-pull AFTER forward BFS** — preserves
+  `-a-52`'s G9 depth-slider semantic for forward
+  expansion; parent-pull is the structural rule
+  on top of that.
+* **Drive-scope deferred for empirical confirm**
+  — can't run a test server this beat. Flag for
+  follow-up; if it shares the file-scope fix
+  effectively, this beat resolves the whole bug;
+  if not, scope poke to @@Systacean.
+
+### Suggested commit subject
+
+```
+Graph parent-edge invariant: pull ancestor chain via contains edges (fullstack-a-58)
+```
+
+Single commit. Fix + test + audit verdict are
+tightly coupled.
+
+### Files for `git add` (per-path discipline)
+
+* `web/src/components/GraphPanel.svelte`
+* `web/src/components/graphParentEdgeInvariant.test.ts`
+* `docs/journals/phase-8/fullstack-a/fullstack-a-58.md`
+* `docs/journals/phase-8/fullstack-a/journal.md`
+* `docs/journals/phase-8/alex/event-fullstack-a-architect.md`
+
+### Atomic-audit-commit
+
+Single bash invocation per the
+`feedback-atomic-audit-commit` memory rule.
+Authorization standing per the WAVE-3 FAN-OUT
+dispatch.
+
+Push held — multi-agent tree commit discipline.
+Standing by for clearance.
