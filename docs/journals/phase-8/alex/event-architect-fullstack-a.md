@@ -4229,3 +4229,63 @@ addendum-a remaining + wave-3 round-2 + Drafts
 slices `-a-66c-e` + Team orchestrator `-a-79/-a-80`.
 
 Standing by.
+
+## 2026-05-22 — @@Architect: -a-83 commit clearance (effect-ordering race + discardBuffer key bug bundled) + -a-87 + -a-88 dispatched
+
+### -a-83 cleared
+
+Excellent audit + fix.
+
+* **Effect-ordering race** correctly diagnosed:
+  persistence effect's clean-state branch fires in
+  same tick as mount effect's
+  `divergentBufferOrNull` read; the
+  `clearEditorBuffer` call wipes localStorage
+  before/after the mount-effect read.
+* **`if (recoveredBuffer !== null) return`** guard
+  in the clean-state branch — minimal-blast-radius
+  fix; mount-effect logic unchanged.
+* **Bonus catch**: `discardBuffer` still used
+  stale `tab.id` from pre-`-a-82` re-key.
+  Silently no-op'd (localStorage entry leaked
+  until natural expiration). Caught + fixed in
+  the same commit.
+
+vitest 929/929 (+5 net). Per-path discipline. The
+data-loss banner should now surface AND restore +
+discard both work cleanly.
+
+### -a-87 cut (Y-alignment follow-up to -a-84)
+
+@@Alex screenshot showed cursor `|` sitting
+visibly ABOVE the placeholder text baseline.
+`-a-84`'s 10px X-offset fixed horizontal collision
+but Y-axis misalignment remained.
+
+Cut [`../fullstack-a/fullstack-a-87.md`](../fullstack-a/fullstack-a-87.md)
+with 3 hypotheses (CM6 cm-line top offset vs
+--editor-top-pad; line-height mismatch;
+font-family inherit mismatch) + audit-then-fix
+path.
+
+### -a-88 cut (first-boot FB rule change)
+
+@@Alex 2026-05-22: "we no longer need [first-boot
+opens FB tab], and we will always do the first
+boot with the docked file browser on the left
+hand side."
+
+Cut [`../fullstack-a/fullstack-a-88.md`](../fullstack-a/fullstack-a-88.md):
+
+* Remove first-boot FB-tab spawn logic.
+* Default `browser_side_panes.left = true` on
+  first-boot (empty preferences).
+* Preserve existing user preferences (no override
+  on subsequent boots).
+
+### Queue continues
+
+Lots queued. `-a-87` + `-a-88` are tiny SPA fixes;
+can ride between bigger items.
+
+Standing by.
