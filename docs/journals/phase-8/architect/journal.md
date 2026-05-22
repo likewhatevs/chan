@@ -5169,3 +5169,79 @@ Cut [`../systacean/systacean-22.md`](../systacean/systacean-22.md):
 | `alex/event-architect-webtest-a.md` | -a-57 walk ack |
 | `alex/event-architect-webtest-b.md` | -b-4 clearance |
 | `systacean/systacean-22.md` | NEW task |
+
+## 2026-05-22 — Architectural orphan fix lands (-a-58); -22 diagnosis OVERTURNED by audit; -a-61 paused for Alex's new draft-folder design
+
+### Five commits landed since last beat
+
+| SHA | Subject | Lane |
+|-----|---------|------|
+| `a8de934` | `Graph parent-edge invariant: pull ancestor chain via contains edges (fullstack-a-58)` | @@FullStackA |
+| `7175c1a` | `docs: proactive -a-58 graph parent-edge invariant walkthrough (3/4 HOLD)` | @@WebtestA |
+| `57e0311` | `docs(systacean-21): smoke ALL GREEN; cache-bust mitigation live` | @@Systacean |
+| `2d581b9` | `docs: webtest-b-4 — -b-25 walkthrough` | @@WebtestB |
+| `99d0e70` | `docs(systacean-22): audit verdict — dedup hypothesis wrong; actual issue is unfiltered contact files` | @@Systacean |
+
+### -a-58 architectural orphan fix lands
+
+The multi-kind orphan bug @@Alex flagged in screenshots
+is structurally resolved. Drive-scope: 0 real-file
+orphans. File-scope: full parent chain renders.
+Composition with `-a-50` directory inspector seamless.
+
+@@WebtestA's proactive walk (3/4 HOLD + 1 NOT TESTED)
+empirically confirms. They walked it without waiting
+for me to cut `webtest-a-N` — `feedback_proactive_walks`
+discipline at work.
+
+### -22 diagnosis OVERTURNED
+
+@@Systacean's empirical audit on a throwaway drive
+proved the bug body's "dedup hypothesis" wrong:
+
+* 47 mention nodes deduped from 8912 raw `@@Handle`
+  occurrences in `docs/` — dedup works.
+* Real cause: ~1973 imported contact FILES in @@Alex's
+  `contacts/` directory, each emits a File node with
+  `node_kind: "contact"` regardless of mention status.
+
+Architect-side correction: my "spot-check" was
+misleading (counted handles in `docs/` only; didn't
+account for the imported contacts directory). The
+empirical diagnosis is the real shape.
+
+### Routed Option A on -22
+
+Filter contact File nodes to only the mentioned subset
+via existing `mention_to_contact` map. ~10 LOC + 1
+test. Bucket emit bundle authorized as optional.
+Bug-list entry updated with corrected diagnosis.
+
+### -a-61 PAUSED
+
+@@Alex created `alex/new-file-flow.md` (incomplete)
+spec'ing a Drafts folder in chan-drive METADATA
+(alongside Trash), distinct FB color, multi-lane scope.
+`-a-61` scope no longer matches; PAUSED pending Alex's
+design doc completion + my cross-lane breakdown.
+
+### Lane state
+
+| Lane | State |
+|------|-------|
+| @@Systacean | `-22` Option A routed; expect commit-readiness |
+| @@FullStackA | `-a-58` ✓; queue: `-a-56`/`-a-59`/`-a-60`/`-a-62`; `-a-61` paused |
+| @@FullStackB | `-b-25` ✓; queue-empty |
+| @@CI | `-14` still in inbound; not yet started |
+| @@WebtestA | `-a-58` proactive walk ✓; reactive |
+| @@WebtestB | `-b-4` ✓; reactive |
+
+### What I'm committing this round
+
+| File | Reason |
+|------|--------|
+| `architect/journal.md` | This entry |
+| `alex/event-architect-systacean.md` | -22 Option A routing + bucket emit bundle authorized |
+| `alex/event-architect-fullstack-a.md` | -a-58 ack + -a-61 PAUSE |
+| `alex/event-architect-webtest-a.md` | -a-58 proactive walk ack |
+| `phase-8-bugs.md` | contact-dedup entry corrected diagnosis |

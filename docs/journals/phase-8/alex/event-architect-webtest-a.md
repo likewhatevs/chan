@@ -897,3 +897,35 @@ No action needed from your lane on that — `webtest-a-N`
 
 Lane reactive. Walks `-a-58` when it lands. Walks
 `-a-56` / `-a-59` / `-a-60` as those land. Standing by.
+
+## 2026-05-22 — @@Architect: after-the-fact ack on proactive -a-58 walk (7175c1a) — 3/4 HOLD architectural fix lands
+
+Read `7175c1a` in HEAD. Excellent proactive walk:
+
+* **Drive-scope: 0 real-file orphans** — the original
+  multi-kind orphan bug @@Alex flagged is empirically
+  resolved.
+* **File-scope: full parent chain renders** — Cmd+Shift+M
+  on any file shows the ancestor → drive-root chain.
+* **Composition with `-a-50` directory inspector
+  seamless** — parent-dir nodes are first-class.
+* **API-level invariant auditable** — `GET /api/graph?scope=drive`
+  curl + jq check can catch future regressions.
+
+The #3 NOT TESTED (folder-OFF case) is acceptable —
+URL-hash manipulation test env limitation is well-
+documented; static-analysis sweep covers the exit
+state.
+
+Right call on the test environment caveat note. The
+proactive-walks discipline pays off again — you
+caught + walked the architectural fix before I even
+cut `webtest-a-N` for it.
+
+### Queue continues
+
+`-a-56` / `-a-59` / `-a-60` / `-a-62` still queued on
+@@FullStackA. `-a-61` paused pending Alex's
+`new-file-flow.md`. Walks will come as those land.
+
+Standing by.

@@ -3171,3 +3171,70 @@ side mention extraction needs touching: scope-poke
 first (don't expand into chan-drive unilaterally).
 
 Standing by for `-22` commit-readiness.
+
+## 2026-05-22 — @@Architect: ACCEPT Option A (filter unreferenced contact files); bucket emit bundle authorized
+
+Excellent audit. The bug body's hypothesis was wrong;
+your empirical test ruled out per-occurrence dedup
+issues + correctly diagnosed the real cause:
+**unfiltered contact File nodes** (1973 imported
+contact files → 1973 nodes regardless of whether
+mentioned).
+
+The discipline of NOT acting unilaterally when the
+diagnosis changes shape is exactly right per
+`feedback_ground_descriptions_in_source`. Your
+empirical-throwaway-drive test (47 mention nodes from
+8912 raw occurrences = dedup works) is the load-
+bearing finding.
+
+### Routing: Option A
+
+**Accept** — filter contact File nodes to only the
+subset referenced by mention edges (resolved via the
+existing `mention_to_contact` map at line 866-890).
+
+Reasoning:
+* Matches the bug body's headline (1973 → ~49).
+* Matches the graph's purpose: "who-mentions-whom" —
+  unreferenced contacts contribute nothing to that.
+* ~10 LOC change + 1 test; bounded scope.
+* No chan-drive-side changes needed.
+* Option B's query-param flexibility can be a follow-
+  up if needed; default-filtered is the right shape.
+
+### Bucket emit bundle: yes
+
+Bundle `bucket: Option<FileBucket>` on
+`GraphNodeView::File` in the same commit if it doesn't
+expand the commit surface meaningfully. Independent
+change; lets @@FullStackA drop client-side
+`classifyFile` regex in a future SPA polish.
+
+If the bundle adds complexity (e.g. additional test
+plumbing or schema decisions), split into a follow-up
+task — implementer's call.
+
+### Update the bug-list framing
+
+For audit trail: the original bug-list entry "Contact-
+node count seems anomalously high" carried a wrong
+hypothesis (dedup gap). I'll update the entry on my
+side to reflect the corrected empirical diagnosis +
+reference your audit. No action needed from your end
+on the bug-list.
+
+### Authorization
+
+**Yes** for the option A fix + bucket emit bundle (if
+included). All in `crates/chan-server/src/routes/graph.rs`
++ test fixtures + task tail + outbound. Standing
+atomic-audit-commit + smoke-branch shape.
+
+### Sequencing
+
+`-22` is the only queued item on your lane. Lane goes
+queue-empty post-`-22`. Future Round-2 wave-3 items
+when @@Alex flags.
+
+Standing by for `-22` commit-readiness + smoke verdict.

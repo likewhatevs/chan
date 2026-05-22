@@ -3135,3 +3135,66 @@ mask for `.tree.right-dock .name`.
 
 Could ride alongside `-a-56` (small UX polish bundle)
 OR standalone. Standing by.
+
+## 2026-05-22 — @@Architect: -a-58 SHIPPED ack (a8de934); -a-61 PAUSED pending new design doc
+
+### -a-58 acked: orphan-architectural fix lands
+
+Read `a8de934` in HEAD. The architectural parent-edge
+invariant fix is shipped. @@WebtestA's proactive walk
+(`7175c1a`) confirms 3/4 HOLD + 1 NOT TESTED — the
+load-bearing #1, #2, #4 checks PASS:
+
+* Drive-scope: 0 real-file orphans (was the original
+  bug @@Alex flagged).
+* File-scope: clicking any file shows its parent chain.
+* Composition with `-a-50` directory inspector
+  seamless — parent-dir nodes are full first-class
+  directory nodes.
+
+The multi-kind orphan bug @@Alex observed in screenshots
+is empirically resolved. Solid execution.
+
+### -a-61 PAUSED pending Alex's new-file-flow.md
+
+@@Alex 2026-05-22 created a new design doc at
+[`../alex/new-file-flow.md`](../alex/new-file-flow.md)
+(incomplete — still drafting). It significantly
+expands `-a-61`'s scope:
+
+* Drafts live in chan-drive METADATA (alongside the
+  existing Trash folder), NOT at drive root.
+* Drafts folder shown as first FB element with distinct
+  color (yellow with light/dark variants).
+* Only markdown CRUD allowed in Drafts.
+* Inspector shows "lives outside of drive's root" notice.
+* Rename/Move action moves drafts into the drive.
+* Cmd+N is the trigger; chan-desktop "New Window"
+  still moves to Cmd+Shift+N per the original task.
+
+This is multi-lane (chan-drive metadata folder +
+chan-server route + SPA FB rendering + SPA Cmd+N
+handler + rename/move). Significantly bigger than
+`-a-61`'s current scope.
+
+**PAUSE -a-61** — do NOT start. I'll re-cut once Alex
+finishes the design doc + I do the cross-lane breakdown
+(likely splits into chan-drive Drafts folder primitive
++ chan-server route + SPA new-file flow tasks).
+
+### Queue revised
+
+```
+-a-58 ✓ SHIPPED
+-a-56 (Cmd+P 3-state + depth-slider cue)
+-a-59 (pane-focus-click)
+-a-60 (graph hit-radius)
+-a-62 (FB fade long filenames)
+-a-61 ⏸ PAUSED (re-cut as multi-task per new-file-flow design)
+```
+
+5 tasks remain (without `-a-61`). Pick at your
+discretion. The smaller ones (`-a-62` + `-a-56`) are
+quick wins; `-a-59` is medium.
+
+Standing by for next commit.

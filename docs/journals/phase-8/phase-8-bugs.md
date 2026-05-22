@@ -816,8 +816,10 @@
   - severity: discoverability + invariant violation; not regression-class
   - NOT YET DISPATCHED — small chip addition. Could ride alongside `-a-58` (parent-edge invariant fix) since both touch the same filter/render surface
 
-- Contact-node count seems anomalously high (1973 contacts on the chan repo seed); audit for over-emission / dedup gap
-  - flagged 2026-05-22 by @@Alex (post-`-a-57` chip landing, observing chip counts): "im shocked by the amount of contacts we have, something must be wrong". The chan repo seed shows 1973 contact nodes — far higher than the expected ~ low-hundreds based on actual unique @mention referents in the repo
+- Contact-node count seems anomalously high (1973 contacts on @@Alex's drive); UPDATED diagnosis post-`systacean-22` audit: unfiltered contact File nodes from imported `contacts/` directory (NOT a dedup gap)
+  - flagged 2026-05-22 by @@Alex (post-`-a-57` chip landing, observing chip counts): "im shocked by the amount of contacts we have, something must be wrong". @@Alex's drive shows 1973 contact nodes
+  - **EMPIRICAL DIAGNOSIS (systacean-22 audit, commit `99d0e70`)**: the original "per-occurrence emission dedup gap" hypothesis was WRONG. @@Systacean's throwaway-drive test (full copy of `docs/`) showed 47 mention nodes deduped from 8912 raw `@@Handle` occurrences — dedup works. The actual cause: @@Alex's drive has ~1973 imported contact files in `contacts/` directory; each emits a File node with `node_kind: "contact"` regardless of whether referenced by any `@@mention`. The bug is "unfiltered contact File emit," NOT "broken mention dedup"
+  - **FIX SHAPE (systacean-22 Option A routed)**: chan-server graph route filters contact File nodes to only the subset that are resolution targets of mention edges (via existing `mention_to_contact` map at `routes/graph.rs:866-890`). ~10 LOC + 1 test. On @@Alex's drive: 1973 contact files → ~49 contact File nodes (only the ones mentioned in markdown). Unmentioned contacts stay on disk + visible in FB; they just don't clutter the graph
   - hypothesis (audit at task pickup):
     1. **Per-occurrence emission instead of dedup**: each @mention occurrence may create a fresh node instead of referencing a single canonical node per handle. If `@@Architect` appears 500 times in the journals, it should produce 1 contact node + 500 mention edges, NOT 500 contact nodes
     2. **Token vs handle ambiguity**: the parser may be treating sub-strings (e.g. `@@` prefix lookahead misses) as new handles, inflating the unique-set count
