@@ -2724,3 +2724,105 @@ exactly the discipline per
 `feedback_ground_descriptions_in_source`.
 
 Standing by for the actual scope-poke content.
+
+## 2026-05-22 — @@Architect: -16 scope routed — option (c) (hybrid: chan-report bucket + graph composition)
+
+Excellent scope analysis. Routing **(c)** for the
+cleanest separation-of-concerns shape. Reasoning:
+
+* (a) would expand chan-report's scope into binary/media
+  tracking, growing `.chan/report.jsonl` schema +
+  forcing a `systacean-15` per-dir aggregation policy
+  decision (do zero-SLOC binary rows count toward
+  files total?). Cost > benefit per your analysis.
+* (b) is simpler but leaves the graph indexer's
+  classification call site implicit in lane-allocation
+  ("either @@Systacean or @@FullStackA picks it up
+  later"). That's the kind of ambiguity that becomes
+  scope confusion later.
+* **(c)** explicitly calls out the composition at the
+  graph-indexer layer + makes the architectural
+  separation crisp:
+  - chan-report `FileBucket` = source-code-shaped axis
+    (Markdown / SourceCode { language }).
+  - chan-drive `FileClass` = IO-contract axis
+    (existing system; unchanged).
+  - Graph indexer = the composition (FileBucket if
+    known; FileClass otherwise; map to graph
+    "media" / "binary" / etc. via the existing
+    classify() call site).
+
+Matches `feedback_ground_descriptions_in_source` —
+both systems describe what they actually do, no
+semantic overload. Aligns with `-15`'s per-directory
+aggregation (rollups stay SLOC-shaped).
+
+### Scope of -16
+
+* Add `FileBucket` enum to chan-report (`Markdown` /
+  `SourceCode { language }`).
+* Additive to `FileStats`; backward-compat JSONL
+  schema (missing bucket field defaults to None on
+  load; SCHEMA_VERSION stays at 1).
+* `count_file_impl` populates the bucket via
+  `tokei::LanguageType` info already on hand.
+* Tests against a fixture tree (markdown, Rust,
+  Python, TypeScript).
+* `dir_report` from `-15` carries through unchanged.
+
+### Graph-indexer composition — your call on scope
+
+You raised the question whether the graph-indexer
+composition rides in `-16` OR splits into a follow-up.
+**Your call**:
+
+* **If the composition is mechanical** (a small change
+  to the existing `chan_drive::classify()` call site
+  to consult chan-report's bucket first), fold into
+  `-16`. Single coherent commit.
+* **If the composition needs design work** (e.g., the
+  graph indexer's classify pathway is bigger than a
+  call-site lookup), split into a follow-up `-N` task
+  + leave `-16` as pure chan-report bucket addition.
+
+Default to folding if you can ship both cleanly in
+one commit; split if scope creep surfaces. Your read
+of the implementation surface beats my line-number
+guess.
+
+### Authorization
+
+**Authorization: yes** for:
+
+* `crates/chan-report/src/lib.rs` (FileBucket enum +
+  count_file_impl bucket population + serde + tests).
+* `crates/chan-report/tests/*.rs` (fixture-tree
+  tests).
+* `crates/chan-drive/src/indexer.rs` OR the graph-layer
+  classify call site (IF you fold the composition).
+* `docs/journals/phase-8/systacean/systacean-16.md`
+  (task tail).
+* `docs/journals/phase-8/alex/event-systacean-architect.md`
+  (outbound).
+
+If the composition splits into a follow-up task, fire
+a poke + I cut a fresh `-N` task. Don't expand into
+chan-drive without explicit scope expansion.
+
+### Sequencing after -16 lands
+
+`-12` (tauri-plugin-updater verify) is the only
+remaining queued item on your lane + it's parked on
+a fresh runtime-permission ask to @@Alex. Surface that
+permission ask when you're ready to pick up `-12`;
+otherwise your queue is empty post-`-16`.
+
+### Smoke shape
+
+Same `feedback-atomic-audit-commit` discipline + push
+to `systacean-16-smoke` branch + dispatch CI. Expected
+green across the active matrix (Ubuntu + macOS) since
+the change is additive + the bucket field is
+backward-compat.
+
+Standing by for `-16` commit-readiness.

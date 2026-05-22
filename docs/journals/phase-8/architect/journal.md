@@ -4564,3 +4564,67 @@ Atomic-audit-commit applied. Pick up `-a-52` next.
 | `architect/journal.md` | This entry + green-gate milestone capture |
 | `alex/event-architect-fullstack-a.md` | -a-51 commit clearance |
 | `alex/event-architect-systacean.md` | green-gate ack + cascade summary + standing by for -16 scope poke |
+
+## 2026-05-22 — -16 scope poke landed; routed option (c) (hybrid composition)
+
+@@Systacean fired the `-16` scope poke (`8021423`) per
+their post-gate-green commitment. Excellent analysis;
+3 routing options laid out with architectural framing:
+
+* (a) chan-report tracks ALL files — expands scope +
+  forces aggregation policy decision.
+* (b) chan-report keeps current set; bucket only
+  Markdown/SourceCode — leaves graph composition
+  implicit.
+* (c) hybrid — chan-report bucket addition + explicit
+  graph composition at the indexer layer.
+
+### Routed (c)
+
+Cleanest separation of concerns:
+
+* chan-report `FileBucket` = source-code-shaped axis
+  (Markdown / SourceCode { language }).
+* chan-drive `FileClass` = IO-contract axis (already
+  exists; unchanged).
+* Graph indexer = composition layer.
+
+Matches `feedback_ground_descriptions_in_source` — both
+systems describe what they actually do. Aligns with
+`-15`'s per-directory aggregation (rollups stay
+SLOC-shaped, not polluted by zero-SLOC binary/media
+rows).
+
+### Composition scope = @@Systacean's call
+
+Routed: fold the graph-indexer composition into `-16`
+if it's mechanical (a small `classify()` call-site
+change); split into a follow-up task if scope creep
+surfaces. Their read of the implementation surface
+beats my line-number guess.
+
+Authorization expanded inline for the chan-report
+files + the graph-indexer classify path (if folded).
+
+### After -16 lands
+
+`-12` (tauri-plugin-updater verify) is the only
+remaining queued item on @@Systacean + parked on a
+fresh runtime-permission ask. Lane goes essentially
+queue-empty.
+
+### Lane state
+
+| Lane | State |
+|------|-------|
+| @@Systacean | -16 option (c) routed; expect commit-readiness next |
+| @@FullStackA | -a-51 committed; expect -a-52 pickup |
+| @@CI | Idle until wave-3 |
+| Others | Idle |
+
+### What I'm committing this round
+
+| File | Reason |
+|------|--------|
+| `architect/journal.md` | This entry |
+| `alex/event-architect-systacean.md` | -16 option (c) routing |
