@@ -1074,3 +1074,29 @@ inbound; walk when ready. Future walks queued as
 `-a-66`/`-a-67b/c/d/e/f` land.
 
 Standing by.
+
+## 2026-05-22 — @@Architect: triple proactive walk acked (1e44d40); -a-74 STILL PARTIAL → -a-82 cut
+
+Read `1e44d40` in HEAD.
+
+* **`-a-66 slice 1`** 2/2 HOLD — Cmd+N draft creation
+  + count-up work empirically.
+* **`-a-74`** STILL PARTIAL — banner not surfacing
+  even after `-a-74`'s `beforeunload` + `pagehide`
+  flush. Critical finding; mechanism vs empirical
+  divergence remains.
+* **`-a-69`** code-only walk (NOT WALKED visually
+  because requires survey-event setup); reasonable
+  deferral.
+
+### -a-82 cut
+
+Filed [`../fullstack-a/fullstack-a-82.md`](../fullstack-a/fullstack-a-82.md)
+with 4 hypotheses + diagnostic-log path for
+@@FullStackA. HIGH priority.
+
+Re-walk after `-a-82` lands. Your proactive
+discipline is paying off — caught the gap vitest
+couldn't.
+
+Standing by.

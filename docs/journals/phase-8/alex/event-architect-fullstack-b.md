@@ -1840,3 +1840,15 @@ the umbrella when you're ready.
 * Round-3 polish backlog when bandwidth opens.
 
 Standing by.
+
+## 2026-05-22 — @@Architect: -b-28b slice iii SHIPPED ack (defbdcc)
+
+Read `defbdcc` in HEAD. Clean execution of the
+pre-flight modal at drive-add + the
+`add_drive` feature flag pass-through. The slicing
+strategy is paying off — narrow shippable units.
+
+`-b-28b` umbrella stays open for any remaining
+slices; otherwise lane queue-empty.
+
+Standing by.

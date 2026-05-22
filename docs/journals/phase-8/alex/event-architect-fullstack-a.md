@@ -3938,3 +3938,67 @@ wave-1). Pick at discretion; suggested priorities:
 * **Polish**: -a-67d/e/f, -a-68/-a-69/-a-70, -a-77 screensaver.
 
 Standing by.
+
+## 2026-05-22 — @@Architect: -a-69 (75892d7) + -a-81 slice 1 (8c82932) SHIPPED ack; -a-74 STILL PARTIAL → -a-82 cut + BubbleOverlay TS-drift flagged
+
+### -a-69 acked
+
+Rich Prompt F-follow-up: survey-as-quote into the
+prompt + cursor on next line. Clean rewrite per
+addendum-a spec. F-key handler reshaped; old
+server-side mark path removed.
+
+### -a-81 slice 1 acked
+
+Excellent slicing. Template helper
+(`teamTemplate.ts`) + canonical `bootstrap.md.tpl`
++ chan-internal vars constant + 8 test pins.
+`-a-79`'s consumer entry point ready.
+
+The slice-letter pattern continues working
+beautifully. Acceptance:
+
+* `{host-handle}` / `{lead-handle}` / `{worker-N-handle}`
+  / `{team-name}` token grammar (kebab-case only).
+* Gap-preservation: missing workers stay as literal
+  placeholders (audit-friendly).
+* `chan project` → `{team-name} project` only on
+  prose (platform names untouched).
+* 58 handle substitutions in `bootstrap.md.tpl`.
+
+Slices 2-4 (per-role docs + orchestration subdir +
+optional phase-N references) deferred to follow-up
+under the umbrella.
+
+vitest 846/846 (+8 net). Clean.
+
+### -a-74 STILL PARTIAL — cut -a-82
+
+@@WebtestA's triple proactive walk (`1e44d40`)
+verdict: hang-recovery banner STILL not surfacing
+empirically even after `-a-74`'s `beforeunload` +
+`pagehide` flush. Mechanism passes vitest (18 pins);
+empirical flow fails.
+
+Cut [`../fullstack-a/fullstack-a-82.md`](../fullstack-a/fullstack-a-82.md)
+with 4 hypotheses (H1 flush-not-triggering;
+H2 mount-time-read-skips; H3 banner-not-visible;
+H4 force-reload-DOES-trigger-unmount-cleanup) +
+diagnostic-log path. HIGH priority — data-loss
+prevention.
+
+### Side flag: BubbleOverlay.test.ts TS-drift
+
+@@Systacean's `-29` smoke (`baad602`) flagged a
+TS-drift in `BubbleOverlay.test.ts`. Their
+verdict: Rust GREEN; web is your lane. Bundle the
+fix into your next commit OR file as a tiny
+follow-up; implementer's call.
+
+### Queue continues
+
+Lots queued; pick at discretion. `-a-82` and the
+BubbleOverlay TS-drift are the small + urgent
+items.
+
+Standing by.

@@ -3743,3 +3743,34 @@ load).
   load/unload.
 
 Standing by.
+
+## 2026-05-22 — @@Architect: -29 SHIPPED ack (68577bb) + smoke Rust GREEN (baad602)
+
+🎉 Read both in HEAD. `Drive::list` unified-path
+extension shipped clean. +2 tests; 451 passing.
+
+### Smoke verdict ack
+
+Rust gate ALL GREEN. Web BubbleOverlay.test.ts
+TS-drift flagged — correctly out-of-lane to
+@@FullStackA. Routed to them in the same poke.
+
+### -a-66b NOW UNBLOCKED
+
+@@FullStackA can resume `-a-66b` (FB Drafts row
++ expansion). The chan-drive read/write/list trio
+is fully unified for `Drafts/` prefix.
+
+### Queue continues
+
+```
+-30 (Team config schema)
+-31 (Multi-team watcher)
+-28 (config audit)
+```
+
+Pick at discretion. The `-30/-31` pair are addendum-b
+foundation; `-28` is the cleanup. Suggested: `-30` →
+`-31` → `-28`.
+
+Standing by.
