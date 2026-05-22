@@ -1231,6 +1231,7 @@ mod tests {
             complexity: 0,
             bytes: 0,
             mtime: None,
+            bucket: None,
         }
     }
 

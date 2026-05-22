@@ -2121,3 +2121,69 @@ Same as above plus:
 ### Standing by
 
 Holding for routing. After your call I'll implement + commit with the atomic audit-commit discipline + push to a `systacean-16-smoke` branch + dispatch CI to verify cross-platform green.
+
+## 2026-05-22 — poke (-16 ready for review; folded composition into the same commit)
+
+Acked option (c) routing. Implementation complete + workspace gate fully green. **Folded the graph-indexer composition into `-16`** per your "your call on scope" — the composition is automatic via the existing `/api/report/file` endpoint: chan-report's `FileStats.bucket` field flows through unchanged once exposed. FullStackA's already-shipped G6 colour scheme (`362aa96`) consumes report data via existing endpoints, so the bucket becomes available to the frontend without any chan-drive/graph-route edits.
+
+### What landed
+
+* **chan-report `FileBucket` enum**: `Markdown` (G6 orange) / `SourceCode { language: String }` (G6 royalblue). Lives in `summary.rs`. Re-exported from chan-report's lib + from chan-drive as `ReportFileBucket`.
+* **`FileStats.bucket: Option<FileBucket>`**: optional + serde-skipped when None. SCHEMA_VERSION stays at 1 (additive, backward-compat).
+* **`count_file_impl` populates the bucket**: tokei `LanguageType::Markdown` → `FileBucket::Markdown`; everything else recognized → `FileBucket::SourceCode { language: tokei.name() }`.
+* **chan-server graph route test helper** updated to include `bucket: None` (forced by the new struct field).
+* **4 new integration tests** in `chan-report/tests/integration.rs`: markdown classification, source-code classification (Rust/Python/TypeScript/TOML pinned by name), JSONL round-trip preserves bucket, pre-`-16` JSONL loads cleanly with `bucket = None`.
+
+### Why no chan-drive/graph-route changes
+
+The G6 colour scheme already shipped via `362aa96` on the SPA side, consuming `/api/report/file` (and similar). The bucket field becomes available in those responses automatically once the chan-report struct change lands. The IO-contract axis (`chan_drive::FileClass`) stays unchanged + still drives the non-source colour mapping (media / binary / other) via the graph route's existing call sites.
+
+If the SPA needs further bucket-driven mapping logic, that's a separate FullStackA task (consume the new field). My lane's scope ends at exposing the bucket via the existing endpoint.
+
+### Pre-push gate
+
+* `cargo fmt --check`: clean (applied fmt for the `pub use summary` re-export + a couple of new assert layouts).
+* `cargo clippy --all-targets -- -D warnings`: clean (added `bucket: None` to graph route test helper).
+* `cargo test` workspace: chan-report 24/0/0 (4 new + 20 existing); chan-server 205/0; chan-drive 425/0/2; all crates green.
+* `RUSTFLAGS="-D warnings" cargo build --no-default-features`: green.
+* `cd web && npm run check`: 0e/0w/3994 files.
+* `cd web && npm test -- --run`: 685/685 (64 files).
+
+### Files
+
+```
+crates/chan-report/src/summary.rs          +37 / 0
+crates/chan-report/src/count.rs            +22 / -1
+crates/chan-report/src/lib.rs              +3  / -1
+crates/chan-report/tests/integration.rs    +107 / 0
+crates/chan-drive/src/lib.rs               +3  / -3
+crates/chan-server/src/routes/graph.rs     +1  / 0
+docs/journals/phase-8/systacean/systacean-16.md  (task tail append)
+docs/journals/phase-8/alex/event-systacean-architect.md  (this poke)
+```
+
+8 paths total.
+
+### Suggested commit subject
+
+```
+chan-report: add FileBucket (Markdown / SourceCode { language }) on FileStats (systacean-16)
+```
+
+### Smoke plan
+
+Atomic audit-commit pattern (`git add <paths> && git diff --staged --stat && git commit && git show --stat HEAD`) + push to `systacean-16-smoke` (new lifecycle) + `gh workflow run ci.yml --ref systacean-16-smoke`. Expected:
+
+* Ubuntu cargo test ✓
+* macOS cargo test ✓ (new matrix entry per `ci-13`)
+* web ✓, rustfmt ✓, build-no-default-features ✓
+* No Windows job per @@Alex's `ci-13` scope decision.
+
+If green: `-16` structurally complete; systacean queue empty except for `-12` (parked).
+
+### After -16 smoke greens
+
+* `-12` (tauri-plugin-updater verify) remains parked on a fresh runtime-permission ask. If @@Alex surfaces a permission window I pick that up; otherwise systacean lane is idle.
+* No new tasks on my queue beyond that.
+
+Holding for clearance + smoke-branch authorization.

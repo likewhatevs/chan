@@ -15,7 +15,26 @@ use tokei::{Config, LanguageType};
 
 use crate::complexity;
 use crate::error::ChanReportError;
-use crate::summary::FileStats;
+use crate::summary::{FileBucket, FileStats};
+
+/// systacean-16: classify a tokei-recognized language into the
+/// source-code-shaped bucket axis. Markdown is the only special
+/// case (the graph G6 colour scheme distinguishes notes from
+/// source); everything else `tokei` recognizes falls under
+/// `SourceCode { language: <tokei name> }`.
+///
+/// Binary / Media / Other don't appear here because chan-report
+/// doesn't track those file kinds; the graph indexer composes
+/// chan-report's bucket with `chan_drive::classify()` (the
+/// IO-contract axis) for those.
+fn classify_bucket(language: LanguageType) -> FileBucket {
+    match language {
+        LanguageType::Markdown => FileBucket::Markdown,
+        other => FileBucket::SourceCode {
+            language: other.name().to_string(),
+        },
+    }
+}
 
 /// Files larger than this skip the in-memory read (and therefore
 /// complexity scoring). tokei still counts them via its streaming
@@ -103,6 +122,7 @@ pub(crate) fn count_file_impl(
         complexity: complexity_score,
         bytes,
         mtime,
+        bucket: Some(classify_bucket(language)),
     }))
 }
 

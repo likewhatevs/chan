@@ -6,7 +6,7 @@ use std::fs;
 use std::io::Cursor;
 
 use chan_report::{
-    CocomoParams, Index, Report, ReportOptions, Scope, UpdateOutcome, SCHEMA_VERSION,
+    CocomoParams, FileBucket, Index, Report, ReportOptions, Scope, UpdateOutcome, SCHEMA_VERSION,
 };
 
 use tempfile::tempdir;
@@ -422,6 +422,111 @@ fn dir_report_survives_jsonl_roundtrip() {
     let after = reloaded.dir_report("src", &p).unwrap();
     assert_eq!(before.totals, after.totals);
     assert_eq!(before.by_language, after.by_language);
+}
+
+#[test]
+fn file_bucket_is_markdown_for_md_files() {
+    // systacean-16: the graph G6 colour scheme distinguishes
+    // markdown notes (orange) from source code (royalblue).
+    // chan-report carries the Markdown bucket explicitly so the
+    // graph layer doesn't have to re-detect the language at
+    // render time.
+    let d = tempdir().unwrap();
+    write(d.path(), "notes/intro.md", "# Intro\n\nbody.\n");
+    let idx = Index::scan(&ReportOptions::new(d.path())).unwrap();
+    let row = idx.file("notes/intro.md").expect("md tracked");
+    assert_eq!(row.bucket, Some(FileBucket::Markdown));
+}
+
+#[test]
+fn file_bucket_is_source_code_for_known_languages() {
+    // Rust / Python / TypeScript / TOML — all source code from
+    // tokei's perspective. The bucket carries the language name
+    // through verbatim so consumers can group + display per-language
+    // without re-parsing.
+    let d = tempdir().unwrap();
+    write(d.path(), "src/main.rs", "fn main() {}\n");
+    write(d.path(), "tool.py", "def x():\n    return 1\n");
+    write(d.path(), "ui.ts", "export const x = 1;\n");
+    write(d.path(), "Cargo.toml", "[package]\nname = \"x\"\n");
+    let idx = Index::scan(&ReportOptions::new(d.path())).unwrap();
+
+    let rs = idx.file("src/main.rs").expect("rust tracked");
+    assert!(
+        matches!(&rs.bucket, Some(FileBucket::SourceCode { language }) if language == "Rust"),
+        "expected SourceCode {{ Rust }}, got {:?}",
+        rs.bucket
+    );
+    let py = idx.file("tool.py").expect("python tracked");
+    assert!(
+        matches!(&py.bucket, Some(FileBucket::SourceCode { language }) if language == "Python"),
+        "expected SourceCode {{ Python }}, got {:?}",
+        py.bucket
+    );
+    let ts = idx.file("ui.ts").expect("typescript tracked");
+    assert!(
+        matches!(&ts.bucket, Some(FileBucket::SourceCode { language }) if language == "TypeScript"),
+        "expected SourceCode {{ TypeScript }}, got {:?}",
+        ts.bucket
+    );
+    let toml = idx.file("Cargo.toml").expect("toml tracked");
+    assert!(
+        matches!(&toml.bucket, Some(FileBucket::SourceCode { language }) if language == "TOML"),
+        "expected SourceCode {{ TOML }}, got {:?}",
+        toml.bucket
+    );
+}
+
+#[test]
+fn file_bucket_round_trips_through_jsonl() {
+    // The bucket field is additive on FileStats and must survive
+    // write_jsonl → load_jsonl. Schema stays at v1 (backward-
+    // compat via `#[serde(default, skip_serializing_if = "Option::is_none")]`).
+    let d = tempdir().unwrap();
+    write(d.path(), "notes/a.md", "# a\n");
+    write(d.path(), "src/lib.rs", "fn x() {}\n");
+
+    let idx = Index::scan(&ReportOptions::new(d.path())).unwrap();
+    let mut buf = Vec::new();
+    idx.write_jsonl(&mut buf, &Scope::All, &CocomoParams::default())
+        .unwrap();
+
+    let opts = ReportOptions::new(d.path());
+    let reloaded = Index::load_jsonl(Cursor::new(buf), &opts).unwrap();
+    assert_eq!(
+        reloaded.file("notes/a.md").unwrap().bucket,
+        Some(FileBucket::Markdown)
+    );
+    let rs_bucket = reloaded.file("src/lib.rs").unwrap().bucket.clone();
+    assert!(
+        matches!(rs_bucket, Some(FileBucket::SourceCode { language }) if language == "Rust"),
+        "Rust bucket lost across JSONL round-trip; got {:?}",
+        reloaded.file("src/lib.rs").unwrap().bucket
+    );
+}
+
+#[test]
+fn file_bucket_absent_in_old_jsonl_loads_as_none() {
+    // Backward-compat invariant: a JSONL file written BEFORE
+    // systacean-16 doesn't have the bucket field. The loader must
+    // accept it cleanly + default the missing field to None, so
+    // older drives don't trip schema-mismatch on first open.
+    let d = tempdir().unwrap();
+    // Hand-write a JSONL stream with the pre-systacean-16 file row
+    // shape (no `bucket` field). One meta + one file row.
+    let old = format!(
+        "{{\"kind\":\"meta\",\"schema\":{},\"root\":\"/abs\",\"generated_at\":\"2026-05-12T12:00:00Z\"}}\n\
+         {{\"kind\":\"file\",\"path\":\"src/lib.rs\",\"language\":\"Rust\",\"code\":10,\"comments\":2,\"blanks\":1,\"complexity\":3,\"bytes\":120}}\n",
+        SCHEMA_VERSION
+    );
+    let opts = ReportOptions::new(d.path());
+    let idx = Index::load_jsonl(Cursor::new(old.as_bytes()), &opts).unwrap();
+    let row = idx.file("src/lib.rs").expect("file row loaded");
+    assert_eq!(
+        row.bucket, None,
+        "missing bucket field must default to None"
+    );
+    assert_eq!(row.language, "Rust", "other fields unaffected");
 }
 
 #[test]

@@ -41,9 +41,9 @@ pub mod vcs;
 pub mod watch;
 
 pub use chan_report::{
-    CocomoModel, CocomoParams, CocomoSummary, FileStats as ReportFileStats,
-    LanguageStats as ReportLanguageStats, Report, ReportMeta, Scope as ReportScope,
-    Totals as ReportTotals,
+    CocomoModel, CocomoParams, CocomoSummary, FileBucket as ReportFileBucket,
+    FileStats as ReportFileStats, LanguageStats as ReportLanguageStats, Report, ReportMeta,
+    Scope as ReportScope, Totals as ReportTotals,
 };
 
 pub use contacts::{

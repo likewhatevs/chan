@@ -20,7 +20,9 @@ mod walk;
 pub use cocomo::{CocomoModel, CocomoParams, CocomoSummary};
 pub use error::ChanReportError;
 pub use jsonl::report_to_jsonl_string;
-pub use summary::{FileStats, LanguageStats, Report, ReportMeta, Totals, SCHEMA_VERSION};
+pub use summary::{
+    FileBucket, FileStats, LanguageStats, Report, ReportMeta, Totals, SCHEMA_VERSION,
+};
 
 use std::collections::HashMap;
 use std::io::{BufRead, Write};

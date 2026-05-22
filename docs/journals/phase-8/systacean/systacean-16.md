@@ -95,3 +95,75 @@ extensions, generated files, etc.).
 
 This is `-16`. See `-15` for the broader wave
 numbering note.
+
+## 2026-05-22 — implementation + commit readiness (option (c) fold-into-`-16`)
+
+Architect routed option (c) hybrid (chan-report bucket + graph composition via existing chan-drive `FileClass`). Per the architect's "your call on scope" framing on the graph-indexer composition: **folded into `-16`** because the composition is mechanical via the existing `/api/report/file` endpoint — chan-report's `bucket` field flows through unchanged once exposed on `FileStats`. The frontend (already shipped G6 colours via `fullstack-a-51`/`362aa96`) can read the bucket directly from existing report responses. No graph-route edits needed in this commit.
+
+### Changes
+
+* **`crates/chan-report/src/summary.rs`** (+37 lines): new `FileBucket` enum (`Markdown` / `SourceCode { language: String }`) with serde tag-style JSON shape. New `bucket: Option<FileBucket>` field on `FileStats`, marked `#[serde(default, skip_serializing_if = "Option::is_none")]` so pre-`-16` JSONL loads cleanly + the field stays absent in serialized output when None. SCHEMA_VERSION stays at 1 (additive change).
+* **`crates/chan-report/src/count.rs`** (+22 lines): new `classify_bucket(language: LanguageType) -> FileBucket` helper. `LanguageType::Markdown` → `FileBucket::Markdown`; everything else tokei recognizes → `FileBucket::SourceCode { language: tokei.name() }`. `count_file_impl` populates the bucket alongside the existing language/stats fields.
+* **`crates/chan-report/src/lib.rs`** (+1 line): re-export `FileBucket` from the crate root.
+* **`crates/chan-drive/src/lib.rs`** (+1 line): re-export as `ReportFileBucket` alongside the existing `ReportFileStats`/`ReportLanguageStats` aliases.
+* **`crates/chan-server/src/routes/graph.rs`** (+1 line): test-helper `report_file()` updated to add `bucket: None` (matches the new struct shape; the helper builds synthetic ReportFileStats values for graph route tests).
+* **`crates/chan-report/tests/integration.rs`** (+107 lines): 4 new tests covering the bucket population + JSONL round-trip + backward-compat. Existing 24 tests still pass.
+
+### What lives in chan-report vs chan-drive (option (c) separation)
+
+* **chan-report `FileBucket`** = source-code-shaped axis. Two variants: `Markdown` (G6 orange) + `SourceCode { language }` (G6 royalblue, with per-language metadata for grouping/display). Populated by tokei language detection; lives on files chan-report tracks (those with a recognized language).
+* **chan-drive `FileClass`** = IO-contract axis (unchanged from systacean-1+). `EditableText` / `Text` / `Image` / `Pdf` / `Other`. The graph indexer's existing `chan_drive::classify()` call site (graph.rs:591 `is_media_graph_path`, inspector.rs:147 etc.) carries the non-source classification for media + binary + other.
+* **Graph indexer composes** at render time: when a node has a chan-report bucket (consultable via `/api/report/file?path=...`), it uses that for the G6 colour (markdown vs source code); when not (binary/media/non-tracked), it falls back to the existing `FileClass`-based colour mapping.
+
+No chan-drive or graph-route code change required for this composition because the frontend already reads `/api/report/file` for inspector data; the bucket field is now automatically present in those responses.
+
+### Schema-compat invariant
+
+JSONL files written BEFORE `-16` don't have the `bucket` field. The new test `file_bucket_absent_in_old_jsonl_loads_as_none` synthesizes such an old row + asserts `load_jsonl` reads it cleanly with `bucket: None`. SCHEMA_VERSION stays at 1; no migration needed.
+
+### Tests (4 new in `crates/chan-report/tests/integration.rs`)
+
+* `file_bucket_is_markdown_for_md_files` — `notes/intro.md` → `Some(FileBucket::Markdown)`.
+* `file_bucket_is_source_code_for_known_languages` — `.rs` / `.py` / `.ts` / `.toml` → `SourceCode { language: "Rust" / "Python" / "TypeScript" / "TOML" }`. Pins the language-string contract consumers depend on for grouping.
+* `file_bucket_round_trips_through_jsonl` — write_jsonl → load_jsonl preserves bucket field across serialization.
+* `file_bucket_absent_in_old_jsonl_loads_as_none` — backward-compat with pre-`-16` files.
+
+### Pre-push gate
+
+All green at HEAD (post-architect routing):
+
+* `cargo fmt --check` — clean (after applying fmt for the new tests + the `pub use summary` re-export).
+* `cargo clippy --all-targets -- -D warnings` — clean (`bucket: None` added to the chan-server graph route's test helper to satisfy the new field).
+* `cargo test` (workspace) — chan-report `24 passed / 0 failed / 0 ignored`; chan-server `205 passed`; all other crates green.
+* `RUSTFLAGS="-D warnings" cargo build --no-default-features` — green.
+* `cd web && npm run check` — 0 errors / 0 warnings / 3994 files.
+* `cd web && npm test -- --run` — 685 / 685 passed (64 files).
+
+### Files
+
+| File                                         | +    | -  |
+|----------------------------------------------|------|----|
+| `crates/chan-report/src/summary.rs`          | +37  | 0  |
+| `crates/chan-report/src/count.rs`            | +22  | -1 |
+| `crates/chan-report/src/lib.rs`              | +3   | -1 |
+| `crates/chan-report/tests/integration.rs`    | +107 | 0  |
+| `crates/chan-drive/src/lib.rs`               | +3   | -3 |
+| `crates/chan-server/src/routes/graph.rs`     | +1   | 0  |
+
+Plus this task tail append + outbound poke. Foreign files in dirty tree stay un-staged per shared-worktree discipline.
+
+### Suggested commit subject
+
+```
+chan-report: add FileBucket (Markdown / SourceCode { language }) on FileStats (systacean-16)
+```
+
+### Smoke plan
+
+Atomic audit-commit pattern + push to fresh `systacean-16-smoke` branch + dispatch CI. Expected green across Ubuntu + macOS (additive change; bucket field is backward-compat).
+
+### Sequencing after `-16` lands
+
+`-12` (tauri-plugin-updater verify) is the only remaining queued item, parked on a fresh @@Alex runtime-permission ask. If @@Alex hasn't surfaced a new permission window, the systacean queue is empty post-`-16`.
+
+Holding for @@Architect commit clearance + smoke-branch authorization.
