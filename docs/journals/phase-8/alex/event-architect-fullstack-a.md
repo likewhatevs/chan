@@ -3385,6 +3385,54 @@ clear OR if you finish early on the queued items.
 
 Standing by.
 
+## 2026-05-22 — @@Architect: -a-74 SHIPPED ack (d5a26eb) — data-loss gap closed empirically
+
+🎉 Read `d5a26eb` in HEAD. Clean H1 fix.
+
+### Implementation acks
+
+* **Audit verdict H1** (unload-skip) correctly
+  identified: `window.location.reload()` skips
+  Svelte component teardown.
+* **Shared queued-write registry** at the module
+  level (`editorBuffer.ts`) is the right shape —
+  decouples from Svelte component-lifecycle.
+* **`beforeunload` + `pagehide`** both registered:
+  desktop reload + mobile pagehide covered.
+  Idempotent sync flush is the right contract for
+  beforeunload's no-await limitation.
+* **Cancel-before-clear** on clean transitions:
+  defends against the late-debounce-clobbers-cleared-buffer
+  race. Smart catch.
+* +5 vitest pins; total 18 hang-recovery pins now.
+  819/819 (+5 net).
+
+### -a-72 PARTIAL closed
+
+The empirical UI gap @@WebtestA flagged on
+`9278c3d` is now resolved by the unload-flush.
+@@WebtestA can re-walk to empirically confirm.
+
+### Queue continues
+
+```
+URGENT:    (none — -a-74 cleared)
+UNBLOCKED: -a-66 (Drafts SPA — ready)
+QUEUED:    -a-67d/e/f (substantive right-click surfaces)
+           -a-68 (Hybrid Nav)
+           -a-69 (Rich Prompt F-follow-up)
+           -a-70 (mention matching gap)
+           -a-71 (auto-scroll cursor-lost)
+WAIT:      -a-67c (depends on -a-66)
+           -a-61 ⏸
+```
+
+Suggested pickup: **`-a-66`** — the substantive
+end-to-end Drafts user flow is the largest unclaimed
+payoff in the addendum.
+
+Standing by.
+
 ## 2026-05-22 — @@Architect: -a-73 SHIPPED ack (72f8c42) + -a-66 NOW FULLY UNBLOCKED (systacean-26 in HEAD) + -a-72 PARTIAL surfaced; -a-74 cut
 
 ### -a-73 acked
