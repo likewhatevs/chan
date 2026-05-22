@@ -7907,3 +7907,99 @@ Single bash invocation per discipline.
 
 Push held. Standing by for clearance + the
 @@WebtestA empirical walk.
+
+## 2026-05-22 — poke (fullstack-a-66 slice e ready for review — CLOSES UMBRELLA)
+
+Three-file change. SPA-only. chan-server
+side already emits via `synthesize_drafts_layer`
+(no Rust touched).
+
+### What landed
+
+`types.ts`: `GraphViewEdgeKind` union
+extended with `"drafts_link"`.
+
+`GraphCanvas.svelte`:
+* `RenderedEdgeKind` extended.
+* `edgesByKind` bucket + iteration
+  order.
+* drafts_link stroke → theme.drafts at
+  α=0.4 (bump from regular 0.18 for
+  yellow legibility).
+* `ThemeColors.drafts` wired from
+  `--fb-drafts-fg` (same var as FB row +
+  inspector chip).
+* Drafts root node tinted via id literal
+  (`directory:Drafts`).
+
+`graphDraftsStyling.test.ts` (new): 12
+raw-source pins.
+
+### Acceptance (slice e)
+
+1. Drafts root in yellow ✓.
+2. drafts_link edge distinct ✓.
+3. Files inside Drafts behave like drive
+   files ✓ (chan-server default; no SPA
+   gating change).
+4. No regression on regular folders ✓.
+
+### -a-66 umbrella status: CLOSED
+
+5/5 slices shipped end-to-end. Drafts is
+now first-class across the surface:
+* a ✓ Cmd+N creation.
+* b ✓ FB row.
+* c ✓ Inspector chip + notice.
+* d ✓ Rich Prompt history persist.
+* e ✓ Graph styling.
+
+### Gate
+
+* vitest **1014 / 1014** (+12 net from -a-93's
+  1002).
+* svelte-check 0 errors / 0 warnings across
+  4035 files.
+* npm build clean.
+
+### Decisions
+
+* **Id-literal match** for the Drafts root
+  (`directory:Drafts`) — DNode is the
+  layout shape; adding `path` for one
+  check would inflate every node. Surgical
+  is right.
+* **Reuse `--fb-drafts-fg`** — single
+  source of truth across all three
+  surfaces.
+* **α=0.4 for drafts_link** — yellow needs
+  bumped contrast vs regular 0.18 connectors.
+* **No new GraphViewNode kind** — the
+  chan-server emits Drafts as a regular
+  directory; id-literal match avoids
+  rippling a discriminator change through
+  the inspector dispatcher.
+
+### Suggested commit subject
+
+```
+Graph: Drafts root node + drafts_link edge styling (fullstack-a-66 slice e; closes umbrella)
+```
+
+### Files for `git add`
+
+* `web/src/api/types.ts`
+* `web/src/components/GraphCanvas.svelte`
+* `web/src/components/graphDraftsStyling.test.ts` (new)
+* `docs/journals/phase-8/fullstack-a/fullstack-a-66.md`
+* `docs/journals/phase-8/fullstack-a/journal.md`
+* `docs/journals/phase-8/alex/event-fullstack-a-architect.md`
+  (this append)
+
+### Atomic-audit-commit applied
+
+Single bash invocation per discipline.
+
+Push held. Standing by for clearance + the
+@@WebtestA walk. -a-66 umbrella closes on
+clearance.

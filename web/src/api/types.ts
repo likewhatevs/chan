@@ -330,7 +330,14 @@ export type GraphViewEdgeKind =
   | "mention"
   | "contains"
   | "language"
-  | "date";
+  | "date"
+  /// `fullstack-a-66` slice e: distinguished edge from drive-root
+  /// → Drafts-root. Emitted by chan-server's
+  /// `synthesize_drafts_layer` when any indexed file lives under
+  /// the `Drafts/` unified-keyspace prefix. Styled distinctly in
+  /// the graph canvas (yellow tint) so the drafts surface reads
+  /// as "different category" at a glance.
+  | "drafts_link";
 
 export type GraphViewEdge = {
   source: string;

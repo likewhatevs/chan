@@ -2729,3 +2729,43 @@ Palliative fix per architect.
 
 Impl note at [fullstack-a-93.md](fullstack-a-93.md).
 Outbound poke fired.
+
+## 2026-05-22 — -a-66 slice e (Graph Drafts styling) — CLOSES UMBRELLA
+
+Three-file change. SPA-only. chan-server side
+already emitted via `synthesize_drafts_layer`.
+
+* `types.ts`: `GraphViewEdgeKind` union
+  extended with `"drafts_link"`.
+* `GraphCanvas.svelte`:
+  * `RenderedEdgeKind` extended.
+  * `edgesByKind` bucket + iteration order.
+  * drafts_link stroke → theme.drafts at
+    α=0.4.
+  * ThemeColors.drafts wired from
+    `--fb-drafts-fg`.
+  * Drafts root node (`directory:Drafts`
+    id literal) → theme.drafts fill.
+* `graphDraftsStyling.test.ts` (new): 12
+  raw-source pins.
+
+### -a-66 umbrella status: CLOSED
+
+5/5 slices shipped:
+* a ✓ Cmd+N → Drafts/untitled-N/draft.md.
+* b ✓ FB synthetic Drafts row.
+* c ✓ Inspector chip + notice (both
+  DirectoryInfoBody + FileInfoBody paths).
+* d ✓ Rich Prompt history persist.
+* e ✓ Graph Drafts root + drafts_link.
+
+### Gate
+
+* vitest **1014 / 1014** (+12 net from -a-93's
+  1002).
+* svelte-check 0/0 across 4035 files.
+* npm build clean.
+
+Impl note at [fullstack-a-66.md](fullstack-a-66.md)
+"## 2026-05-22 — slice e". Outbound poke
+fired.

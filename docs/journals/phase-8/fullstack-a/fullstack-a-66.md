@@ -914,3 +914,168 @@ Per the memory rule. Per-path staging only.
 Push held. Standing by for clearance + the
 @@WebtestA empirical re-walk that closes the
 slice c PARTIAL.
+
+## 2026-05-22 — slice e (Graph Drafts root + drafts_link edge) ready for review — CLOSES UMBRELLA
+
+Three-file change. SPA-only. chan-server side
+already emitted via `synthesize_drafts_layer`
+(per `systacean-25`/`-26`/`-29`).
+
+### What landed
+
+`web/src/api/types.ts`:
+* Extended `GraphViewEdgeKind` union with
+  `"drafts_link"`. Doc-comment cross-
+  references the chan-server emitter +
+  describes the visual semantic ("category
+  boundary crossing").
+
+`web/src/components/GraphCanvas.svelte`:
+* Extended `RenderedEdgeKind` union with
+  `"drafts_link"`.
+* `edgesByKind` preallocates the new bucket;
+  the kind-iteration tuple includes it.
+* Edge stroke routes `drafts_link` →
+  `theme.drafts` at α=0.4 (regular edges
+  use α=0.18; the bump matches the yellow
+  tint's lower contrast against the bg).
+* `ThemeColors` interface declares
+  `drafts: string` with cross-surface
+  rationale.
+* `readTheme` pulls `--fb-drafts-fg` into
+  `theme.drafts` (same var the FB row + the
+  inspector chip use; single source of
+  truth for the yellow tint across all
+  three surfaces).
+* `theme` `$state` initial value carries
+  the drafts default (`#e3b341`).
+* Folder-node fill check: when
+  `n.kind === "folder" && n.id ===
+  "directory:Drafts"`, the Drafts root
+  paints `theme.drafts` instead of the
+  regular `theme.folder` grey. Match by id
+  literal because `DNode` doesn't carry
+  the raw path (the canvas only tracks
+  id/label/kind for layout).
+
+`web/src/components/graphDraftsStyling.test.ts`
+(new): 12 raw-source pins:
+* GraphViewEdgeKind union extended.
+* RenderedEdgeKind union extended.
+* edgesByKind bucket + iteration order.
+* drafts_link stroke routes to theme.drafts
+  + bumped alpha.
+* ThemeColors.drafts declared.
+* readTheme reads --fb-drafts-fg.
+* theme $state initial value.
+* isDraftsRoot derivation.
+* Fill branch routes to theme.drafts.
+* Rationale comment cross-references.
+
+### Acceptance (slice e — closes `-a-66`)
+
+1. **Drafts root node renders in yellow** ✓
+   — mechanism via pin; @@WebtestA empirical
+   walk for confirm.
+2. **Drive-root → Drafts edge styled
+   distinctly** ✓ — drafts_link routes
+   through the same yellow tint.
+3. **Files inside Drafts behave like drive
+   files** ✓ — chan-server-side default
+   (no SPA gating change needed). Files
+   under `Drafts/*` get the same `doc` /
+   `source` / `img` / `binary` kind
+   classification as drive-root files.
+4. **No regression on regular folder
+   styling** ✓ — only `directory:Drafts`
+   matches the new branch.
+
+### `-a-66` umbrella closes
+
+* `-a-66 slice a` ✓ Cmd+N → Drafts/untitled-N/draft.md.
+* `-a-66 slice b` ✓ FB Drafts row (yellow tint).
+* `-a-66 slice c` ✓ Inspector chip + notice
+  (in both DirectoryInfoBody + FileInfoBody
+  paths).
+* `-a-66 slice d` ✓ Rich Prompt history →
+  Drafts/rich-prompt-N/prompt.md.
+* `-a-66 slice e` ✓ (this) Graph Drafts
+  root styling + drafts_link edge.
+
+5 slices total. The Drafts surface is now
+end-to-end: filesystem → FB → inspector →
+graph.
+
+### Gate
+
+* vitest **1014 / 1014** (+12 net from
+  `-a-93`'s 1002).
+* svelte-check 0 errors / 0 warnings across
+  4035 files.
+* npm build clean.
+* Rust gate not re-run (no Rust touched;
+  chan-server emit already shipped in prior
+  rounds).
+
+### Decisions
+
+* **Match by node id literal**
+  (`directory:Drafts`) — DNode is the
+  layout shape, not the full node payload.
+  Adding a `path` field to DNode just for
+  this one check would carry the full path
+  for every node + waste memory at the
+  layout-engine layer. The literal match is
+  cheap + locks the contract via the
+  chan-server-side `directory_node_id`
+  helper.
+* **Reuse `--fb-drafts-fg` var** — single
+  source of truth across FB row +
+  inspector chip + graph node + graph
+  edge. Light/dark mode override flows
+  through automatically since the CSS
+  variable is declared on `:root` +
+  `[data-theme="light"]` per slice b's
+  App.svelte changes.
+* **α=0.4 for drafts_link** — regular
+  edges use α=0.18 (low-contrast
+  background). Yellow has poor contrast
+  against most chan themes at α=0.18, so
+  bump to 0.4 for legibility. Still well
+  under α=1 so it doesn't dominate the
+  canvas.
+* **Did NOT add a separate "drafts" kind
+  to `GraphViewNode`** — the chan-server
+  side emits the Drafts root as a
+  `directory` (later projected to `folder`
+  client-side). Adding a new kind would
+  ripple through the inspector dispatcher
+  + the entire GraphViewNode discriminated
+  union. The id-literal match is
+  surgical.
+
+### Suggested commit subject
+
+```
+Graph: Drafts root node + drafts_link edge styling (fullstack-a-66 slice e; closes umbrella)
+```
+
+Single commit. Type union extension +
+canvas styling + theme wiring + test pins.
+
+### Files for `git add` (per-path discipline)
+
+* `web/src/api/types.ts`
+* `web/src/components/GraphCanvas.svelte`
+* `web/src/components/graphDraftsStyling.test.ts` (new)
+* `docs/journals/phase-8/fullstack-a/fullstack-a-66.md`
+* `docs/journals/phase-8/fullstack-a/journal.md`
+* `docs/journals/phase-8/alex/event-fullstack-a-architect.md`
+
+### Atomic-audit-commit
+
+Per the memory rule. Per-path staging only.
+
+Push held. Standing by for clearance + the
+@@WebtestA walk that confirms the Drafts
+surface in the graph canvas.

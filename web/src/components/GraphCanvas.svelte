@@ -40,7 +40,18 @@
   } from "d3-force";
   import type { GraphViewEdge, GraphViewNode } from "../api/types";
 
-  type RenderedEdgeKind = "link" | "tag" | "mention" | "contains" | "language" | "group";
+  type RenderedEdgeKind =
+    | "link"
+    | "tag"
+    | "mention"
+    | "contains"
+    | "language"
+    | "group"
+    /// `fullstack-a-66` slice e: drive-root → Drafts-root edge.
+    /// Styled distinctly in the canvas to read as a "different
+    /// category" connector matching the FB Drafts row's yellow
+    /// tint.
+    | "drafts_link";
   type RenderedEdge = GraphViewEdge & { kind: RenderedEdgeKind };
   type RenderedNode = Extract<
     GraphViewNode,
@@ -336,6 +347,11 @@
     /// reassigns binary to grey + introduces a separate source
     /// hue for code files.
     binary: string;
+    /// `fullstack-a-66` slice e: Drafts directory node fill +
+    /// drafts_link edge stroke. Pulls from --fb-drafts-fg so
+    /// the graph + the FB row + the inspector header all
+    /// render the same yellow tint.
+    drafts: string;
   };
 
   function readTheme(host: HTMLElement): ThemeColors {
@@ -359,6 +375,9 @@
       // purple (--g-img).
       source: v("--g-source", "#4169e1"),
       binary: v("--g-binary", "#5e5e62"),
+      // `fullstack-a-66` slice e: Drafts tint pulled from the
+      // same CSS variable as the FB row + the inspector chip.
+      drafts: v("--fb-drafts-fg", "#e3b341"),
     };
   }
 
@@ -366,7 +385,7 @@
     bg: "#1c1c1e", bgCard: "#232325", text: "#ebebf0", textSec: "#8e8e93",
     doc: "#ff8a3d", img: "#b07dff", tag: "#6cd07a", mention: "#e3b341",
     language: "#ff4db8", accent: "#3fb950", folder: "#8e8e93",
-    source: "#4169e1", binary: "#5e5e62",
+    source: "#4169e1", binary: "#5e5e62", drafts: "#e3b341",
   });
 
   function refreshTheme(): void {
@@ -823,19 +842,25 @@
     // change strokeStyle once per kind.
     ctx.lineWidth = 1 / Math.max(0.5, transform.k);
     const edgesByKind: Record<RenderedEdgeKind, DEdge[]> = {
-      link: [], tag: [], mention: [], contains: [], language: [], group: [],
+      link: [], tag: [], mention: [], contains: [], language: [], group: [], drafts_link: [],
     };
     for (const e of visibleEdgeRefs) edgesByKind[e.kind].push(e);
-    for (const kind of ["link", "tag", "mention", "contains", "language", "group"] as const) {
+    for (const kind of ["link", "tag", "mention", "contains", "language", "group", "drafts_link"] as const) {
       const list = edgesByKind[kind];
       if (list.length === 0) continue;
-      ctx.globalAlpha = 0.18;
+      // `fullstack-a-66` slice e: `drafts_link` renders at the
+      // same low base alpha as the other connectors but uses the
+      // Drafts yellow tint (--fb-drafts-fg) so the
+      // drive-root → Drafts edge reads as a category boundary
+      // crossing, not a regular contains edge.
+      ctx.globalAlpha = kind === "drafts_link" ? 0.4 : 0.18;
       ctx.strokeStyle =
         kind === "link" ? theme.text
         : kind === "tag" ? theme.tag
         : kind === "mention" ? theme.mention
         : kind === "contains" ? theme.folder
         : kind === "language" ? theme.language
+        : kind === "drafts_link" ? theme.drafts
         : theme.accent;
       ctx.beginPath();
       for (const e of list) {
@@ -883,8 +908,17 @@
       // mention happens to fuzzy-match a contact file shows up
       // in the inspector ("Open"), not the graph.
       const isGhost = n.missing;
+      // `fullstack-a-66` slice e: tint the Drafts directory node
+      // with the Drafts yellow so the graph reads consistent with
+      // the FB row + the inspector chip. Match by node id — the
+      // chan-server `synthesize_drafts_layer` emits this node as
+      // `directory_node_id("Drafts")` → `"directory:Drafts"`.
+      // DNode doesn't carry the raw path (the canvas only needs
+      // id + label + kind), so we key on the id literal instead.
+      const isDraftsRoot = n.kind === "folder" && n.id === "directory:Drafts";
       const fill = isGhost
         ? theme.bgCard
+        : isDraftsRoot ? theme.drafts
         : n.kind === "doc" ? theme.doc
         : n.kind === "img" ? theme.img
         : n.kind === "contact" ? theme.mention
