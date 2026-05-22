@@ -1066,8 +1066,13 @@ fn install_app_menu(app: &tauri::AppHandle) -> tauri::Result<()> {
     // shortcuts: declare a MenuItemBuilder here with the
     // `CmdOrCtrl+<key>` accelerator, prepend into the Window
     // submenu below, and add a matching `on_menu_event` branch.
+    // `fullstack-b-27`: moved from `CmdOrCtrl+N` to
+    // `CmdOrCtrl+Shift+N` so the SPA's New Draft handler (per
+    // `fullstack-a-66`) can claim plain Cmd+N without the menu
+    // accelerator intercepting first. Menu label stays
+    // "New Window"; only the chord moves.
     let new_window = MenuItemBuilder::with_id("app-new-window", "New Window")
-        .accelerator("CmdOrCtrl+N")
+        .accelerator("CmdOrCtrl+Shift+N")
         .build(app)?;
     let settings = MenuItemBuilder::with_id("chan-settings", "Settings…")
         .accelerator("CmdOrCtrl+,")

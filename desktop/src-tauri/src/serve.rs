@@ -1278,6 +1278,24 @@ mod tests {
     }
 
     #[test]
+    fn new_window_accelerator_uses_cmd_shift_n() {
+        // `fullstack-b-27`: the "New Window" menu item moves from
+        // `CmdOrCtrl+N` to `CmdOrCtrl+Shift+N` to free Cmd+N for
+        // the SPA's New Draft handler (`fullstack-a-66`). Pin the
+        // chord so a future menu edit can't silently revert to
+        // plain Cmd+N and re-clash with the SPA chord.
+        const MAIN_RS: &str = include_str!("main.rs");
+        assert!(
+            MAIN_RS.contains(".accelerator(\"CmdOrCtrl+Shift+N\")"),
+            "main.rs must bind the New Window menu item to CmdOrCtrl+Shift+N"
+        );
+        assert!(
+            !MAIN_RS.contains(".accelerator(\"CmdOrCtrl+N\")"),
+            "main.rs must NOT bind any menu item to plain CmdOrCtrl+N (reserved for SPA New Draft)"
+        );
+    }
+
+    #[test]
     fn serve_failed_payload_drive_lock_field_is_consumed_by_launcher() {
         // `fullstack-b-22`: the SPA-side branch into the lock
         // takeover prompt reads `p.drive_lock_conflict` straight
