@@ -9025,3 +9025,97 @@ Single bash invocation per discipline.
 
 Standing by for the chan-server endpoint
 landing.
+
+## 2026-05-23 — poke (fullstack-a-77 audit + scope-poke — no SPA change this round)
+
+Audit-only. Same shape as -a-70 / -a-76.
+
+### Audit findings
+
+**SPA primitives**:
+* `idle.svelte.ts` is unfit for re-use
+  (5s window, wrong event set — keydown
+  + scroll deliberately ignored).
+  Screensaver needs a separate longer-
+  window timer.
+
+**chan-drive primitives**:
+* No PIN-hash storage.
+* No screensaver config fields.
+
+### Architecture decisions
+
+1. **Per-drive PIN** in chan-drive
+   metadata (task-body framing; matches
+   "drive contents hidden" semantic).
+2. **PBKDF2 + SHA-256** via `crypto.subtle`
+   (built-in; no new deps; matches "local-
+   only" threat model).
+3. **SPA-side hashing**, chan-drive stores
+   opaque bytes (simpler contract).
+4. **New `state/screensaver.svelte.ts`**
+   timer module distinct from
+   `idle.svelte.ts`.
+
+### Scope-poke to @@Systacean (via architect)
+
+**chan-drive**: 6 new `Drive::*` methods
+(`screensaver_pin_hash` / `set_*` /
+`screensaver_timeout_secs` / `set_*` /
+`screensaver_enabled` / `set_*`). All
+fields go in `IndexConfig` next to
+`reports_enabled` / `semantic_enabled`.
+
+**chan-server**: new `routes/screensaver.rs`
+with:
+* `GET /api/screensaver/state` →
+  `{ enabled, timeout_secs, pin_set }`
+  (hash never leaves server).
+* `PATCH /api/screensaver/state` for
+  enabled + timeout.
+* `POST /api/screensaver/pin` with
+  `{ hash: base64 }`.
+* `DELETE /api/screensaver/pin` clears.
+* `POST /api/screensaver/verify` with
+  `{ hash: base64 }` returning
+  `{ verified: bool }`.
+
+Rust pins on chan-drive round-trips +
+chan-server handler each.
+
+### SPA-side follow-up (post chan-drive)
+
+* `state/screensaver.svelte.ts` —
+  timeout state machine.
+* `ScreensaverOverlay.svelte` —
+  full-window overlay + PIN entry.
+* `SettingsPanel.svelte` Features section
+  pairs with -a-76 reports toggle.
+* PBKDF2 hash via `crypto.subtle`.
+* Manual "Lock now" chord (suggested
+  `Mod+L`; or a Hybrid Nav letter).
+
+### No commit this round
+
+Audit-only. Same delivery shape as -a-70 /
+-a-76: impl note + scope-poke.
+
+### Suggested commit subject (when shipping)
+
+```
+docs(fullstack-a-77): audit + scope-poke for chan-drive screensaver PIN storage
+```
+
+### Files for `git add`
+
+* `docs/journals/phase-8/fullstack-a/fullstack-a-77.md`
+* `docs/journals/phase-8/fullstack-a/journal.md`
+* `docs/journals/phase-8/alex/event-fullstack-a-architect.md`
+  (this append)
+
+### Atomic-audit-commit applied
+
+Single bash invocation per discipline.
+
+Standing by for chan-drive + chan-server
+endpoints to land.

@@ -3126,3 +3126,37 @@ No code change this round.
 Impl note at [fullstack-a-76.md](fullstack-a-76.md)
 "## 2026-05-22 — audit findings".
 Outbound poke + scope-poke fired.
+
+## 2026-05-23 — -a-77 (screensaver) — AUDIT-ONLY this round
+
+Audited chan-drive + SPA primitives for the
+screensaver implementation.
+
+* SPA's existing `idle.svelte.ts` is too
+  short-window + has the wrong event set for
+  screensaver re-use. Need a new
+  `screensaver.svelte.ts` module.
+* chan-drive has no PIN-hash storage or
+  screensaver config fields.
+* Decided architecture: per-drive PIN
+  stored in chan-drive metadata + PBKDF2
+  hash done SPA-side via `crypto.subtle` +
+  hash-agnostic chan-server endpoints.
+
+Routed to architect for @@Systacean:
+chan-drive PIN-hash + screensaver-state
+APIs + chan-server HTTP routes mirroring
+the semantic / reports shape.
+
+No code change this round. SPA-side overlay
++ Settings UI follow once the endpoint
+shape lands.
+
+### Gate
+
+* No code touched. vitest count unchanged
+  from -a-76 audit's 1047.
+
+Impl note at [fullstack-a-77.md](fullstack-a-77.md)
+"## 2026-05-23 — audit findings".
+Outbound poke + scope-poke fired.
