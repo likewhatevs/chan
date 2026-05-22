@@ -3900,3 +3900,144 @@ Lane-A test server torn down:
 2/2 HOLD. `-a-71` ships clean. The cursor-lost
 auto-scroll bug from addendum-a.md is empirically
 closed.
+
+## 2026-05-22 — proactive walk: -a-74 (hang-recovery beforeunload) + -a-66 slice 1 (Cmd+N draft) + -a-69 (Rich Prompt F)
+
+Proactive triple-walk on HEAD `8453b7a`. Throwaway
+drive r19; chan serve 127.0.0.1:8787; Chrome MCP
+tab `503726032`.
+
+### Verdicts
+
+| Task | Check | Verdict |
+|------|-------|---------|
+| `-a-74` | Force-reload restores empirically | **STILL PARTIAL** (banner not surfacing) |
+| `-a-74` | No vitest regression | HOLD (18 pins green per architect ack) |
+| `-a-74` | Clean state suppresses banner | HOLD |
+| `-a-66 1` | Cmd+N creates Drafts/untitled/draft.md + opens | HOLD |
+| `-a-66 1` | Second Cmd+N → Drafts/untitled-1/draft.md | HOLD |
+| `-a-69` | F-follow-up quotes survey into prompt | NOT WALKED (requires survey-event setup) |
+
+### `-a-74` re-walk — banner STILL doesn't surface
+
+The `-a-74` fix added `beforeunload`/`pagehide`
+listeners to flush pending buffer writes
+synchronously before window unload (App.svelte +28
+lines). Mechanism-verified via 18 vitest pins.
+
+**Empirical**: tried 3 scenarios after the
+`-a-74` fix:
+
+1. **Type + auto-save + reload** (happy path):
+   auto-save fires (800ms debounce) before reload
+   → content persisted to disk → buffer cleared
+   on next mount because `content === saved` →
+   no banner. **Correct behavior**.
+2. **Type + immediate reload via JS** (race
+   path): buffer.write debounce 500ms, autosave
+   800ms. Tried JS-immediate reload mid-typing.
+   No banner surfaced. localStorage empty after
+   reload.
+3. **Server-down typing + reload** (true hang):
+   killed chan serve, typed "FRESHTYPE99" (via
+   focus + key End + type), waited >1s, verified
+   localStorage HAD a buffer for tab-4 with
+   path=CLAUDE.md, divergent content. Reloaded.
+   **No banner appeared post-reload**;
+   localStorage empty post-reload.
+
+The `-a-74` `beforeunload` flush appears to be
+firing (buffer write was empirically observed
+pre-reload), but the mount-time race I flagged
+in `-a-72` walk **STILL exists**: the
+divergentBufferOrNull check + the
+clear-on-clean-state second effect race to clear
+the buffer before the banner can render.
+
+**Updated hypothesis**: this is TWO bugs:
+1. `-a-74` fixed the persist-on-unload path
+2. The mount-time race (initial `tab.content ===
+   tab.saved === undefined` triggers
+   clearEditorBuffer before banner renders) is
+   still unfixed.
+
+Lane: **@@FullStackA**. The data-loss prevention
+end-to-end empirical surface still doesn't warn
+the user on reload. Architectural follow-up
+needed.
+
+### `-a-66 slice 1` — Cmd+N new draft
+
+Pressed Cmd+N once: new tab opened titled
+`draft.md`, URL hash has
+`p: "Drafts/untitled/draft.md"`. Pressed Cmd+N
+again: new tab `untitled-1/draft.md` opened.
+Sequential numbering works.
+
+URL hash shape: `{p: "Drafts/untitled/draft.md",
+m: "wysiwyg", a: 1}` then `{p:
+"Drafts/untitled-1/draft.md", m: "wysiwyg",
+a: 1}` for the second.
+
+Naming pattern empirically:
+- 1st draft: `Drafts/untitled/draft.md` (no
+  suffix on first)
+- 2nd draft: `Drafts/untitled-1/draft.md`
+  (N=1 suffix on subsequent)
+
+This matches the "Drafts/untitled-N/draft.md"
+pattern from `-a-66`'s spec (with N=0 implied as
+the bare "untitled/" first folder).
+
+### `-a-69` — F-follow-up Rich Prompt (NOT walked)
+
+Code-level verification only.
+`BubbleOverlay.svelte` diff adds
+`surveyAsQuoteMarkdown(event)` helper that
+formats survey topic + from + questions + options
+as `> `-prefixed markdown quote lines, terminated
+with a fresh `\n` for cursor placement.
+
+Empirical walk requires a watcher-detected survey
+event on a terminal tab, which is non-trivial to
+trigger from Chrome MCP browser without an
+external survey-emitting tool. Vitest pins
+mechanism-verified per @@FullStackA's
+commit-ready poke.
+
+Lane-A defers to mechanism verification + future
+empirical walk when a watcher-based test
+infrastructure is available (or surveys land in a
+visible UI flow).
+
+### Highlights
+
+* **`-a-66 slice 1` lands clean**: Cmd+N drafts
+  feature works; sequential naming
+  (`untitled/`, `untitled-1/`, etc.). Foundation
+  for the Drafts feature is empirically validated.
+* **`-a-74` is PARTIAL — fix half the bug**: the
+  `beforeunload` flush does what it claims, but
+  the data-loss UX warning STILL doesn't surface
+  on reload because of the unfixed mount-time
+  race. Recommended @@FullStackA investigate
+  the second race (initial `tab.content === undefined === tab.saved`
+  → clearEditorBuffer before banner render).
+* **`-a-69` mechanism HOLD code-level** but
+  empirical surface needs survey-emitter
+  infrastructure.
+
+### State at end of walk
+
+Lane-A test server torn down:
+
+1. chan serve killed (twice — once mid-walk for
+   server-down test, once final).
+2. `rm -rf /tmp/chan-test-phase8-wa-r19/`.
+3. `chan remove` → unregistered.
+4. Chrome MCP tab closed.
+
+2/2 HOLD on `-a-66 slice 1`. 1/3 HOLD + 1
+STILL-PARTIAL on `-a-74` (architect-cut tasks
+follow-up needed). `-a-69` deferred to mechanism +
+future empirical walk.

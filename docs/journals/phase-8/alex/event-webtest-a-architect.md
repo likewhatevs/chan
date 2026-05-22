@@ -2127,3 +2127,102 @@ covers the gate-removal contract.
 * Path-limited `git commit`.
 
 Standing by.
+
+## 2026-05-22 — poke (proactive triple-walk: -a-74 STILL PARTIAL + -a-66 1 HOLD + -a-69 NOT WALKED)
+
+Proactive walk on HEAD `8453b7a`. Throwaway drive
+r19; chan serve 127.0.0.1:8787; Chrome MCP tab
+`503726032`. Verdict in
+[`../webtest-a/webtest-a-1.md`](../webtest-a/webtest-a-1.md).
+
+### `-a-74` — STILL PARTIAL on empirical banner surface
+
+The `beforeunload`/`pagehide` flush DOES persist
+the buffer (empirically verified: buffer for
+`tab-4` with path=CLAUDE.md and divergent content
+was present in localStorage immediately before
+reload when chan serve was DOWN).
+
+**But banner STILL doesn't render on reload.**
+localStorage empty post-reload. Banner DOM
+absent.
+
+Reading `-a-72` walk verdict together with
+`-a-74` walk: this is **TWO bugs**:
+
+1. **`-a-74` fixed the persist-on-unload path**
+   (buffer is now written synchronously before
+   page unload, even when reload happens
+   mid-typing) ✓
+2. **The mount-time race I flagged in `-a-72`
+   walk is STILL unfixed**: on initial mount,
+   `tab.content === tab.saved === undefined`
+   evaluates TRUE → second effect's
+   `clearEditorBuffer(tabId)` fires BEFORE the
+   banner can render. When `tab.saved` loads
+   async, `divergentBufferOrNull` returns null
+   (buffer already cleared) → `recoveredBuffer
+   = null` → banner state never sets.
+
+**The end-to-end data-loss prevention UX is
+STILL NOT working** for the user-visible
+surface. `-a-72` mechanism + `-a-74` persist-
+path are both green at the unit level, but the
+banner the user needs to see on reload still
+doesn't render.
+
+**Proposed fix (reiterating from -a-72 walk)**:
+gate `FileEditorTab.svelte`'s second effect on
+`tab.saved !== undefined` OR detect
+"initial-mount-before-disk-load" and skip the
+clear. The mount-time check should be the only
+clear-or-set authority during the disk-load
+window.
+
+Lane: @@FullStackA. **Recommend a third task**
+(`-a-75`?) to address the second race. The data-
+damage scenario @@Alex flagged in addendum-a.md
+is empirically still open.
+
+### `-a-66 slice 1` HOLD — Cmd+N draft creation
+
+Empirically verified:
+- 1st Cmd+N → `Drafts/untitled/draft.md` (no
+  suffix on first)
+- 2nd Cmd+N → `Drafts/untitled-1/draft.md`
+  (N=1 suffix on subsequent)
+
+Both open in editor immediately. URL hash
+correctly tracks `p: "Drafts/untitled[-N]/draft.md",
+m: "wysiwyg", a: 1`. Foundation for the Drafts
+feature works as specced.
+
+### `-a-69` NOT WALKED — survey-event setup gap
+
+Code-level only. `BubbleOverlay.svelte`'s
+`surveyAsQuoteMarkdown(event)` helper formats
+survey topic/from/questions/options as `> `-
+prefixed markdown quote lines. Empirical walk
+requires a watcher-detected survey event on a
+terminal tab, which is non-trivial to trigger
+from Chrome MCP browser.
+
+Vitest pins mechanism-verified per
+@@FullStackA's commit-ready poke. Lane-A defers
+empirical to future walk when survey-emitter
+infrastructure is set up.
+
+### Suggested commit shape
+
+* **Commit subject**: `docs: webtest-a proactive
+  walk — -a-66 1 HOLD + -a-74 STILL PARTIAL
+  (mount-time race needs second fix) + -a-69
+  code-only`.
+* **Files**:
+  * `docs/journals/phase-8/webtest-a/webtest-a-1.md`
+  * `docs/journals/phase-8/alex/event-webtest-a-architect.md`
+* Path-limited `git commit`.
+
+Standing by. Recommend cutting a follow-up task
+for the `FileEditorTab.svelte` initial-mount race
+before declaring `-a-72`/`-a-74` shipped.
