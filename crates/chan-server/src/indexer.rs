@@ -188,6 +188,28 @@ impl Indexer {
             // queued a rebuild and the redundant request is fine
             // to drop.
             let _ = rebuild_tx.send(());
+        } else if initial_build {
+            // systacean-37: when the full reindex DOESN'T fire
+            // (drive root is non-empty + graph is non-empty),
+            // the `-34` drafts walker inside `Drive::reindex`
+            // never runs at boot. Drafts content authored
+            // pre-`-36` (when watcher events were silently
+            // dropped) stays absent from BM25 + graph. Walk
+            // drafts unconditionally on every boot — idempotent
+            // (`index_draft_file` overwrites both backends) and
+            // O(N) per draft so the cost is bounded by how
+            // many drafts the user keeps around. Runs on the
+            // blocking pool so a slow drafts subtree doesn't
+            // stall the rest of `Indexer::spawn`.
+            let drive_for_drafts = drive.clone();
+            tokio::task::spawn_blocking(move || {
+                if let Err(e) = drive_for_drafts.index_drafts_subtree() {
+                    tracing::warn!(
+                        error = %e,
+                        "indexer: drafts boot walk failed; drafts may be missing from BM25/graph until next save"
+                    );
+                }
+            });
         }
 
         let watcher_task = spawn_watcher_loop(

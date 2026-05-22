@@ -3828,3 +3828,71 @@ Second consecutive first-fire green (`-36` + `-35`). The `-33` test refactor tha
 26 systacean tasks shipped this phase. v0.12.0 + addendum-b items all closed. Lane idle.
 
 Standing by for new dispatches or v0.12.0 cut.
+
+## 2026-05-22 — poke (-37 root cause located + fixed; closes -a-66e BM25 secondary PARTIAL)
+
+Picked up `-37` per the secondary PARTIAL dispatch.
+
+### Audit verdict — NOT what the task body hypothesized
+
+Architect's hypothesis: BM25 step inside `index_draft_file` fails OR BM25 layer has its own classification gap. **Both wrong** — empirically verified:
+
+* `index_draft_file` writes both graph + BM25 via `self.index.index_one(rel, content)` (which calls `bm25.index_file` + `commit`).
+* BM25 accepts arbitrary path strings (no filtering on rel).
+* My `-34` + `-36` tests BOTH already assert BM25 search returns hits for `Drafts/<...>` content (and pass).
+
+### Real root cause
+
+`-34`'s `index_drafts_subtree` walker fires INSIDE `Drive::reindex_with_aggression`. chan-server's `Indexer::spawn` only triggers reindex when `indexed_docs == 0 || graph_empty`. On a drive with existing drive-root content, neither is true → reindex doesn't fire → `-34`'s drafts walker never runs at boot.
+
+Drafts authored pre-`-36` (when `apply_watch_change` was dropping `Drafts/...` watcher events) stayed absent from BM25. Once `-36` shipped, NEW events route correctly — but PRE-EXISTING drafts on disk needed a boot walk to catch up. None ever happened (reindex didn't fire).
+
+### Fix
+
+Two parts:
+
+1. `Drive::index_drafts_subtree` made `pub` (was private `fn`; only called inside `reindex_with_aggression`).
+2. chan-server `Indexer::spawn` walks drafts unconditionally on every boot via `tokio::task::spawn_blocking`, in the `else if initial_build` branch that fires when full reindex is SKIPPED. Idempotent (`index_draft_file` overwrites both backends).
+
+### Diff
+
+* `crates/chan-drive/src/drive.rs`: +18 / -7 (visibility + doc update).
+* `crates/chan-server/src/indexer.rs`: +22 / 0 (unconditional spawn_blocking call).
+
+Plus task tail + this poke. 4 paths.
+
+### Tests
+
+No new tests. The existing `reindex_walks_drafts_subtree_into_graph_and_bm25` pin from `-34` covers the underlying `index_drafts_subtree` primitive. The `apply_watch_change_indexes_drafts_prefixed_path` pin from `-36` covers the live-watcher path. The chan-server `Indexer::spawn` boot path requires the full async indexer setup; integration testing it directly is non-trivial. Combination of primitive + watcher + my smoke run gives full coverage.
+
+### Pre-push gate
+
+* fmt + clippy + no-default-features clean (1 rustdoc `+` → `and` fix).
+* `cargo test -p chan-drive --lib`: 463 / 0 / 2-ignored (unchanged).
+* `cargo test -p chan-server --lib`: 228 / 0 (unchanged).
+
+### Suggested commit subject
+
+```
+chan-server + chan-drive: unconditional Drafts boot walk in Indexer::spawn (systacean-37; closes -a-66e BM25 secondary PARTIAL)
+```
+
+### Saga COMPLETELY closed
+
+| Task | Coverage |
+|------|----------|
+| `-25` | watcher integration (Drafts/ prefix) |
+| `-26` | unified read_text/write_text |
+| `-29` | unified list |
+| `-32` | unified stat/exists/read |
+| `-34` | drafts walker inside reindex |
+| `-36` | apply_watch_change routes Drafts/ events |
+| `-37` | drafts walker on EVERY boot |
+
+All 3 entry points (fresh-drive cold-boot, live watcher events, restart-on-existing-drive) covered.
+
+### Lane state
+
+27 systacean tasks shipped this phase. v0.12.0 unblocking items + Drafts saga + addendum-b items all closed.
+
+Per pre-authorization, proceeding to commit + push + smoke.

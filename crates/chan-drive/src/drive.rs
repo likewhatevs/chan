@@ -1783,12 +1783,23 @@ impl Drive {
         Ok(summary)
     }
 
-    /// systacean-34: walk the per-drive Drafts subtree + invoke
-    /// `index_draft_file` on each indexable text file so the
-    /// initial-build corpus includes drafts content. Closes the
-    /// gap where `-25`'s watcher caught ongoing changes but the
-    /// boot-time graph + BM25 was empty under the `Drafts/`
-    /// prefix.
+    /// systacean-34 + systacean-37: walk the per-drive Drafts
+    /// subtree + invoke `index_draft_file` on each indexable
+    /// text file so the boot corpus includes drafts content.
+    ///
+    /// Called automatically at the end of
+    /// `Drive::reindex_with_aggression` (`-34`) AND exposed
+    /// public for chan-server's `Indexer::spawn` boot path to
+    /// invoke unconditionally (`-37`). The latter closes the
+    /// gap where reindex doesn't fire (drive non-empty at
+    /// startup, so the indexer's "indexed_docs == 0 ||
+    /// graph_empty" trigger stays false) but pre-existing
+    /// drafts still need a boot walk to land in BM25 + graph.
+    ///
+    /// Idempotent: `index_draft_file` overwrites existing graph
+    /// and BM25 entries, so calling this on every chan-server
+    /// boot is cheap when nothing changed and costs O(N) per
+    /// draft when something did.
     ///
     /// Walks `<state_dir>/drafts/<uuid>/` directly via `std::fs`
     /// (drafts are chan-drive's own metadata; the cap-std sandbox
@@ -1798,7 +1809,7 @@ impl Drive {
     ///
     /// Per-file errors log + continue (best-effort; the watcher
     /// will retry on the next change).
-    fn index_drafts_subtree(&self) -> Result<()> {
+    pub fn index_drafts_subtree(&self) -> Result<()> {
         let drafts_root = &self.paths.drafts;
         if !drafts_root.is_dir() {
             return Ok(());
