@@ -1908,3 +1908,75 @@ Full implementation note + verification table at the tail
 of [`../fullstack-b/fullstack-b-28.md`](../fullstack-b/fullstack-b-28.md).
 
 Standing by for clearance + next dispatch.
+
+## 2026-05-22 — poke (-b-28b slice i commit-ready: stub → chan CLI swap)
+
+Picked up `-b-28b` as a follow-up under the umbrella per
+your "treat it as a follow-up under the umbrella when
+you're ready" note. Sliced into three; landing slice i
+now. Commit `0ce975b`.
+
+### Slice plan
+
+* **slice i** (this commit): swap `set_drive_features`
+  stub to real chan CLI. Sidecar stays as the read
+  mirror.
+* **slice ii** (deferred): swap `get_drive_features` to
+  read both flags via CLI. Blocked on @@Systacean shipping
+  `chan reports status --json` — today `chan index status`
+  covers semantic only.
+* **slice iii** (deferred): full pre-flight screen
+  between `pickAndAdd` and `add_drive` with the verbatim
+  round-2-plan explanatory copy + the perms/size/SCM
+  report. Independent design pass.
+
+### Slice i headlines
+
+* `set_drive_features` diffs current sidecar vs requested
+  features + shells out to chan CLI for each changed flag:
+  * bge: `chan index enable-semantic|disable-semantic --path <p>`.
+  * reports: `chan reports enable|disable --path <p> [-y]`.
+* Sequential — first-flag failure leaves the second
+  untouched.
+* Sidecar mirror updates on full success only.
+* New `run_chan_feature_subcommand` helper shares the
+  spawn shape + error formatting between flag paths.
+* Structural pin asserts the four CLI argument strings
+  so a future refactor can't silently revert to the stub.
+* chan-desktop 51 → 52.
+
+### -b-28a stub forward-compat
+
+Users who toggled under `-b-28a` (stub only) have a
+sidecar that says e.g. `{bge: true}` but chan-drive
+still at `{bge: false}`. After this swap the SPA still
+shows the sidecar state (matches user intent); the
+user's NEXT toggle is the first CLI call. So a user who
+enabled BGE under the stub sees BGE "on" in the launcher
+but BM25-only search until they toggle BGE off + back
+on.
+
+**Not auto-migrated in this slice.** Mitigations flagged
+at the task tail (one-time push on first
+`set_drive_features` post-upgrade adds a `synced: bool`
+to `DriveSidecar`). Likely a non-issue since `-b-28a`
+shipped today + few users have stub-state to migrate.
+
+### Gate
+
+* `cargo clippy -p chan-desktop --all-targets -- -D warnings`: clean.
+* `cargo test -p chan-desktop`: 52 passing.
+* `cargo build -p chan-desktop --no-default-features`: clean.
+
+### Routing for slice ii
+
+If @@Systacean ships `chan reports status --json` (mirror
+of the existing `chan index status` shape), slice ii
+becomes trivial: parse both into the IPC return. Flag
+when ready + I'll pick it up.
+
+Full implementation note at the tail of
+[`../fullstack-b/fullstack-b-28.md`](../fullstack-b/fullstack-b-28.md)
+"slice -b-28b-i implementation note".
+
+Standing by for clearance + next dispatch.
