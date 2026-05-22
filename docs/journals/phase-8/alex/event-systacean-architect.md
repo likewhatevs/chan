@@ -3116,3 +3116,53 @@ Proceeding to commit + push + smoke. Will surface verdict.
 | -28 (config audit) | DEFERRED — separate cleanup task, not blocking |
 | -30 (Team config schema) | DEFERRED until `-29` smoke verdict + then sequencing |
 | -31 (multi-team watcher) | DEFERRED — depends on `-30` |
+
+## 2026-05-22 — -29 smoke web-fail (NOT mine); flagging cross-lane TS issue
+
+`-29`'s 4 Rust jobs all PASS on smoke (`26290349280` + `26290531357`):
+* rustfmt ✓ 21-23s
+* clippy + test (ubuntu-latest) ✓ 2m51s-3m3s
+* clippy + test (macos-latest) ✓ 2m12s-2m42s
+* build (no default features) ✓ 2m2s
+
+**Web job FAILS consistently** across both fires on the SAME error:
+
+```
+src/components/BubbleOverlay.test.ts:39:7
+Error: Type 'Mock<Procedure | Constructable>' is not assignable to type '(() => void) | undefined'.
+  Type 'MockInstance<Procedure | Constructable> & (new (...args: any[]) => any) & {}' is not assignable to type '(() => void) | undefined'.
+      onRefresh: vi.fn(),
+      onWatcherDetached,
+      onQuoteToPrompt: opts.onQuoteToPrompt,
+```
+
+### Diagnosis
+
+* The error is in `BubbleOverlay.test.ts` (FullStackA's test code). Not in `-29`'s chan-drive diff.
+* **Local svelte-check passes**: `cd web && npm run check` reports 4015 files, 0 errors, 0 warnings. Likely a stale node_modules locally vs CI doing fresh `npm ci`.
+* The error pattern is vitest's `vi.fn()` Mock type not directly assignable to `(() => void)` under stricter TS strict-null settings. Real type drift, not transient.
+* @@FullStackA's recent commits likely introduced the test type drift; possibly hasn't run a clean install locally.
+
+### Not unilaterally fixing
+
+Could land a 1-line cast (`vi.fn() as () => void`) but that's a real TS decision (cast vs type-parametrize vs reshape mock) that belongs in FullStackA's lane. Cross-lane mechanical fmt fixups are precedented (`-21` `fb61ab9`, `-27` `ae19acb`); cross-lane TS-type decisions aren't the same shape.
+
+### Recommended routing
+
+* Notify @@FullStackA that `BubbleOverlay.test.ts:39` has a TS-type drift that CI's svelte-check catches but local stale-deps doesn't.
+* Their fix lands as a small commit on main.
+* I re-fire `-29-smoke` after their fix; expect ALL GREEN.
+
+### `-29`'s functional state
+
+Rust side is structurally complete + verified on smoke. The web fail is pure noise from a sibling lane's drift. `-29` ships as soon as the web issue is resolved.
+
+### Lane state
+
+| Task | State |
+|------|-------|
+| -29 | ship-pending on FullStackA fixing BubbleOverlay.test.ts; Rust jobs all green |
+| -28 | DEFERRED (config audit; standalone) |
+| -30, -31 | DEFERRED (Team feature; depend on `-29` clearance for sequencing) |
+
+Holding for routing on the BubbleOverlay fix.
