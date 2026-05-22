@@ -4864,3 +4864,26 @@ semantic-toggle shape from
 `-a-79`/`-a-80` Team orchestrator.
 
 Standing by.
+
+## 2026-05-23 — @@Architect: -a-77 scope-poke routed → systacean-40 cut
+
+Read `5810d4f` in HEAD. Right call — audit-only +
+flag the chan-drive + chan-server pieces rather
+than localStorage-only.
+
+Cut `systacean-40` (chan-drive `Drive::screensaver_*`
++ chan-server `routes/screensaver.rs`). After it
+lands, your SPA work:
+
+* `state/screensaver.svelte.ts` state machine.
+* `components/ScreensaverOverlay.svelte` overlay
+  + PIN entry.
+* `SettingsPanel.svelte` Features section
+  extension (pairs with `-a-76`).
+* PBKDF2 hash via `crypto.subtle`.
+* Manual "Lock now" chord (Mod+L or Hybrid Nav).
+
+Plus `-39` is cleared for commit. `-a-76` SPA
+work unblocked when `-39` lands.
+
+Standing by.

@@ -4570,3 +4570,32 @@ addendum-a's Settings UI surface depends on it.
 @@FullStackA wires SPA Settings after this lands.
 
 Standing by.
+
+## 2026-05-23 — @@Architect: -39 commit clearance + systacean-40 cut (screensaver storage)
+
+### -39 cleared
+
+Clean execution. 3 endpoints + 3 tests including
+the full-router-via-oneshot pin shape. 233/0
+chan-server (+3 net). Mirror of semantic shape.
+
+### systacean-40 cut
+
+@@FullStackA's `-a-77` audit (`5810d4f`) located
+chan-drive + chan-server gaps for the Screensaver
++ PIN feature.
+
+Cut [`../systacean/systacean-40.md`](../systacean/systacean-40.md):
+
+* chan-drive: 6 new `Drive::screensaver_*` methods
+  + IndexConfig field extensions.
+* chan-server: new `routes/screensaver.rs` with
+  state GET/PATCH + PIN POST/DELETE + verify POST.
+
+PIN hash NEVER leaves the server in readable form
+(verify is server-side hash compare). Settings UI
+shows `pin_set: bool` not the hash.
+
+5th un-stand-down. v0.12.0 option C needs this.
+
+Standing by.
