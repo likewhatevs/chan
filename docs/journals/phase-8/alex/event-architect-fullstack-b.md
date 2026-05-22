@@ -1769,3 +1769,18 @@ Lane queue-empty until next dispatch. Possibilities:
   surfaces chan-desktop bundle gaps.
 
 Standing by.
+
+## 2026-05-22 — poke (fullstack-b-28: chan-desktop pre-flight UX — surfaces BGE + reports toggles; Round-2 deferred)
+
+Cut [`../fullstack-b/fullstack-b-28.md`](../fullstack-b/fullstack-b-28.md).
+
+Extends `fullstack-b-13`'s pre-flight UX with two
+toggles: BGE-small semantic search + chan-reports.
+Both default OFF (lean drive). Persists via chan-
+drive config from `systacean-27`.
+
+You can shell-and-stub the toggle UI now + wire to
+the chan-drive API once `-27` ships. Implementer's
+call on whether to wait or parallelise.
+
+Standing by.

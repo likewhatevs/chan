@@ -5560,6 +5560,73 @@ batch.
 | `systacean/systacean-26.md` | NEW task |
 | `fullstack-a/fullstack-a-{68,69,70,71,72}.md` | 5 NEW tasks |
 
+## 2026-05-22 — ROUND-2 WAVE-3 FAN-OUT — 6 tasks dispatching the long-deferred items @@Alex was waiting on
+
+@@Alex asked where the carousel migration, screensaver,
+and other Round-2-plan items had gone (we'd drifted to
+the addendum-driven work). Picked option (B): dispatch
+all the deferred Round-2 items NOW as wave-3 alongside
+the addendum drain. Refinements deferred to wave-4.
+
+### 6 tasks dispatched
+
+Per round-2-plan ordering of remaining items 1+4 +
+2 + 3 + 5:
+
+| Task | Lane | Round-2 item |
+|------|------|--------------|
+| [`fullstack-a-75`](../fullstack-a/fullstack-a-75.md) | @@FullStackA | Items 1+4: Carousel redesign + Infographics tab container (coupled) |
+| [`systacean-27`](../systacean/systacean-27.md) | @@Systacean | Item 2 backend: pre-flight feature toggles (BGE + reports) + BOOT |
+| [`fullstack-b-28`](../fullstack-b/fullstack-b-28.md) | @@FullStackB | Item 2 UX: chan-desktop launcher pre-flight |
+| [`fullstack-a-76`](../fullstack-a/fullstack-a-76.md) | @@FullStackA | Item 2 SPA: Settings surface for the toggles |
+| [`fullstack-a-77`](../fullstack-a/fullstack-a-77.md) | @@FullStackA | Item 3: Screensaver with PIN unlock |
+| [`systacean-28`](../systacean/systacean-28.md) | @@Systacean | Item 5: chan config currency audit |
+
+### Plus -a-66 slice 1 cleared
+
+@@FullStackA shipped Cmd+N → `Drafts/untitled-N/draft.md`
+→ open in editor. 5-slice split accepted. Slices b-e
+queued under the `-a-66` umbrella.
+
+### Lane state after wave-3 dispatch
+
+| Lane | Active tasks |
+|------|--------------|
+| @@Systacean | -27 + -28 |
+| @@FullStackA | -a-66b-e + -a-67d/e/f + -a-68/-a-69/-a-70/-a-71 + -a-75/76/77 |
+| @@FullStackB | -b-28 |
+| @@CI | idle (no natural work) |
+| @@WebtestA | reactive |
+| @@WebtestB | reactive |
+
+@@FullStackA queue is 13-deep. @@Systacean has 2.
+@@FullStackB has 1.
+
+### Sequencing suggestion
+
+@@FullStackA: finish `-a-66` slices first (slice 1's
+mechanism unblocks the rest's UX layers), then
+`-a-75` (carousel is highest-visibility deferred
+Round-2 item).
+
+@@Systacean: `-27` unblocks both @@FullStackB's
+`-b-28` and @@FullStackA's `-a-76`. Highest leverage.
+
+@@FullStackB: shell-and-stub `-b-28` if you want to
+start before `-27` lands; wire when ready.
+
+### What I'm committing this round
+
+| File | Reason |
+|------|--------|
+| `architect/journal.md` | This entry |
+| `alex/event-architect-fullstack-a.md` | -a-66 slice 1 clearance + wave-3 dispatch |
+| `alex/event-architect-systacean.md` | -27 + -28 dispatch |
+| `alex/event-architect-fullstack-b.md` | -b-28 dispatch |
+| `fullstack-a/fullstack-a-{75,76,77}.md` | 3 NEW tasks |
+| `systacean/systacean-{27,28}.md` | 2 NEW tasks |
+| `fullstack-b/fullstack-b-28.md` | 1 NEW task |
+
 ## 2026-05-22 — ADDENDUM-A WAVE — 6 tasks dispatched from @@Alex's finalised draft-folder + menu revamp + CRITICAL bug spec
 
 @@Alex finalised [`alex/addendun-a.md`](../alex/addendun-a.md).

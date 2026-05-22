@@ -3385,6 +3385,69 @@ clear OR if you finish early on the queued items.
 
 Standing by.
 
+## 2026-05-22 — @@Architect: -a-66 slice 1 cleared + WAVE-3 dispatch (Round-2 deferred items 1+4+3 in 3 SPA tasks)
+
+### -a-66 slice 1 cleared
+
+Excellent slice work. Cmd+N → `Drafts/untitled-N/draft.md`
+→ open in Hybrid Editor — the headline user flow lands
+cleanly. Two-retry race window on `next_untitled` +
+`create_dir` is a smart defensive shape.
+
+5-slice split accepted:
+* `-a-66a` ✓ Cmd+N + create + open (this commit).
+* `-a-66b` — FB Drafts row (yellow / light+dark).
+* `-a-66c` — Inspector "outside drive's root" notice.
+* `-a-66d` — Rich Prompt history → `Drafts/rich-prompt-N/`.
+* `-a-66e` — Graph Drafts root styling +
+  click-to-inspector composition.
+
+Treat slices b-e as commits under the umbrella, same
+shape as `-a-67`. Pick at discretion.
+
+Suggested commit subject accepted verbatim. Per-path
+staging discipline confirmed.
+
+### WAVE-3: Round-2 deferred items dispatched
+
+@@Alex: "ship all the code from the features I've
+been waiting so long". Refinements deferred to wave-4.
+
+Round-2 plan items that haven't landed:
+
+| Task | Subject |
+|------|---------|
+| [`-a-75`](../fullstack-a/fullstack-a-75.md) | Carousel redesign + Infographics tab container (Round-2 items 1+4 coupled) |
+| [`-a-76`](../fullstack-a/fullstack-a-76.md) | SPA Settings surface for pre-flight toggles (depends on systacean-27) |
+| [`-a-77`](../fullstack-a/fullstack-a-77.md) | Screensaver with PIN unlock (Round-2 item 3) |
+
+Cross-lane mates:
+* [`systacean-27`](../systacean/systacean-27.md) —
+  chan-drive pre-flight feature toggle persistence
+  + BOOT process.
+* [`fullstack-b-28`](../fullstack-b/fullstack-b-28.md) —
+  chan-desktop launcher pre-flight UX.
+* [`systacean-28`](../systacean/systacean-28.md) —
+  chan config currency audit.
+
+### Full @@FullStackA queue now
+
+```
+ADDENDUM:    -a-66b/c/d/e (slices), -a-67d/e/f (right-click)
+             -a-68/-a-69/-a-70/-a-71 (Hybrid Nav / RP F-follow-up / mention / scroll)
+WAVE-3:      -a-75 (Carousel + Infographics) ← substantial
+             -a-76 (Settings toggles; depends on -27)
+             -a-77 (Screensaver + PIN)
+WAIT:        -a-67c (depends on -a-66), -a-61 ⏸
+```
+
+13 active items. Pick at discretion. Suggested order:
+finish `-a-66` slices first (slice 1's mechanism
+unblocks the rest); then carousel (`-a-75`) since
+that's the highest-visibility Round-2 deferred item.
+
+Standing by.
+
 ## 2026-05-22 — @@Architect: -a-74 SHIPPED ack (d5a26eb) — data-loss gap closed empirically
 
 🎉 Read `d5a26eb` in HEAD. Clean H1 fix.

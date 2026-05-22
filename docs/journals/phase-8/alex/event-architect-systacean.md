@@ -3633,3 +3633,26 @@ Editor's existing autosave path works against
 
 Lane queue-empty. Stand-down confirmed for the third
 time today. Standing by.
+
+## 2026-05-22 — WAVE-3: Round-2 deferred items dispatched (systacean-27 + -28)
+
+@@Alex pulled the 4 deferred Round-2 items into the
+queue. Your lane gets 2 of them:
+
+| Task | Subject |
+|------|---------|
+| [`-27`](../systacean/systacean-27.md) | chan-drive pre-flight feature toggle persistence + BOOT process (BGE + reports configurable per-drive; flip later via CLI) |
+| [`-28`](../systacean/systacean-28.md) | chan config currency audit (Round-2 item 5; audit + cleanup + reference doc) |
+
+### Sequencing
+
+`-27` unblocks @@FullStackB's `fullstack-b-28`
+(pre-flight UI) + @@FullStackA's `fullstack-a-76`
+(Settings surface). Highest leverage.
+
+`-28` is the cleanup pass; can ride after `-27` or
+in parallel depending on your bandwidth.
+
+Pick at your discretion.
+
+Standing by.
