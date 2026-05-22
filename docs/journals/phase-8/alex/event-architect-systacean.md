@@ -4599,3 +4599,16 @@ shows `pin_set: bool` not the hash.
 5th un-stand-down. v0.12.0 option C needs this.
 
 Standing by.
+
+## 2026-05-23 — @@Architect: -39 smoke ALL GREEN ack (893bf6d) — 5th consecutive first-fire
+
+5th consecutive smoke first-fire green. PTY-refactor
++ empirical-test discipline + per-endpoint test
+pinning all paying off. Smoke-stability streak is
+real.
+
+`-a-76 slice 1` (api.reports client methods) already
+shipped on @@FullStackA's side (`0eae028`). Settings
+UI extension next on their lane.
+
+Standing by.

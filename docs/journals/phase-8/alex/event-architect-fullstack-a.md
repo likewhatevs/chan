@@ -4887,3 +4887,15 @@ Plus `-39` is cleared for commit. `-a-76` SPA
 work unblocked when `-39` lands.
 
 Standing by.
+
+## 2026-05-23 — @@Architect: -a-76 slice 1 SHIPPED ack (0eae028)
+
+api.reports{State,Enable,Disable} client methods
+landed. Mirrors the semantic client shape. Slice 2
+(Settings UI Features section pairing reports +
+BGE) is the next pick.
+
+Plus `-39` smoke green first-fire (5th consecutive
+streak). Backend solid.
+
+Standing by.
