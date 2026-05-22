@@ -5523,3 +5523,121 @@ Lane-A test server torn down:
 Slice e GRAPH HOLD; BM25 PARTIAL.
 Slice 1 (Hybrid Nav rename) PARTIAL on
 welcome-screen label.
+
+## 2026-05-22 — proactive triple walk: -a-68 1b HOLD + systacean-37 STILL PARTIAL + -a-70 endpoint HOLD
+
+Proactive walk on HEAD `7bbe925`. Throwaway drive
+r33; chan serve 127.0.0.1:8787; Chrome MCP tab
+`503726157`.
+
+### Verdicts
+
+| Task | Check | Verdict |
+|------|-------|---------|
+| `-a-68 1b` shortcuts.ts label sweep | empirical | HOLD 🎉 |
+| systacean-37 BM25 boot walk | empirical | **STILL PARTIAL** |
+| `-a-70` /api/mentions endpoint | empirical | HOLD |
+
+### `-a-68 slice 1b` HOLD — label sweep closed
+
+The follow-up I flagged is shipped (`ef9a045`).
+Empirical on welcome screen:
+- "Hybrid NAV" (uppercase) count: 0 ✓ (was 5)
+- "Hybrid Nav" (proper case) count: 5 ✓ (was 0)
+
+Visible chord docs now show:
+- `Enter Hybrid Nav  Cmd+.`
+- `Mod+. p (Hybrid Nav)` (etc.)
+
+All instances are proper-case. Slice 1 rename
+closure confirmed.
+
+### systacean-37 STILL PARTIAL — BM25 still doesn't find Drafts content
+
+systacean-37 (`0841c00`) adds "unconditional
+Drafts boot walk in Indexer::spawn". Empirical:
+
+- Created `Drafts/untitled/draft.md` with unique
+  marker "UNIQUEMARKER37BM25CLOSURE".
+- Restarted chan serve (boot walk should fire).
+- Waited 16+ seconds.
+- `/api/search/content?q=UNIQUEMARKER37BM25CLOSURE`:
+  `{ready: true, mode: bm25, hits: []}`
+
+The BM25 indexer still doesn't surface Drafts
+content even after restart with the boot walk in
+Indexer::spawn.
+
+This is a **5th-degree gap** on slice e BM25:
+- original PARTIAL flagged in my walk
+- systacean-32 (Drive::stat unified)
+- systacean-34 (boot walks Drafts/ subtree)
+- systacean-36 (apply_watch_change routes Drafts/)
+- systacean-37 (Indexer::spawn unconditional boot walk)
+- **STILL no BM25 hits**
+
+Either Indexer::spawn isn't actually walking
+Drafts (despite the "unconditional" framing), OR
+the walk happens but the per-file indexing call
+silently fails for Drafts paths.
+
+Worth a deeper audit — possibly a
+systacean-38? Or the issue is that the BM25
+indexer uses on-disk file open (which fails for
+Drafts/ in the unified keyspace) while graph
+uses a different path.
+
+### `-a-70` /api/mentions endpoint HOLD
+
+Direct API query:
+- `GET /api/mentions` returns 200
+- Response: array of `{label: string}` items
+- 10 mentions returned (sample: @@Architect,
+  @@Alex, @@FullStackA, @@Systacean, @@WebtestA)
+
+The endpoint that backs the editor mention
+bubble (`-a-70`) is live + returning the
+deduped mention corpus.
+
+Empirical bubble test (typing `@@cl` in editor)
+was inconclusive — my Cmd+N didn't actually
+open an editor (welcome screen stayed visible),
+likely a window-state issue. The endpoint
+mechanism works; SPA bubble integration would
+need a clean editor mount to verify.
+
+**Note on count discrepancy**: 10 returned, but
+prior `-22` walk counted 49 unique mention nodes
+in the graph. Possible reason: `/api/mentions`
+filters to deduped corpus + may exclude
+spurious matches. Worth verifying with @@FullStackA
+that 10 is intentional (vs 49 graph mentions).
+
+### Highlights
+
+* **`-a-68 1b` label sweep ships clean** in one
+  round-trip after my proactive walk caught the
+  central label miss.
+* **systacean-37 hasn't closed the BM25 PARTIAL**:
+  the slice e BM25 gap is now 5 task-iterations
+  deep. There's a structural issue with the
+  BM25 ingestion path that the boot-walk fix
+  alone isn't addressing.
+* **`-a-70` server endpoint live**: the mention
+  corpus is exposed via `/api/mentions` for the
+  editor bubble integration. Empirical bubble
+  walk pending.
+
+### State at end of walk
+
+Lane-A test server torn down:
+1. chan serve killed (twice — once for boot-walk
+   restart, once final).
+2. `rm -rf /tmp/chan-test-phase8-wa-r33/`.
+3. `chan remove` → unregistered.
+4. Chrome MCP tab closed.
+5. Drafts metadata cleaned.
+
+1 HOLD + 1 PARTIAL + 1 HOLD-endpoint. The
+`-a-68` slice 1 saga finally closed. BM25 saga
+still open — needs deeper audit.

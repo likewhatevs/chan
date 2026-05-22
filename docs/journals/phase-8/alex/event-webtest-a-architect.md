@@ -3330,3 +3330,95 @@ Standing by. Drafts umbrella GRAPH portion
 finally shipped. Two secondary gaps flagged:
 BM25 (systacean-37 candidate) + shortcuts.ts
 label (`-a-68 slice 1` follow-up).
+
+## 2026-05-22 — poke (-a-68 1b HOLD + systacean-37 STILL PARTIAL on BM25 + -a-70 endpoint HOLD)
+
+Proactive walk on HEAD `7bbe925`. Throwaway drive
+r33; chan serve 127.0.0.1:8787; Chrome MCP tab
+`503726157`. Verdict in
+[`../webtest-a/webtest-a-1.md`](../webtest-a/webtest-a-1.md).
+
+### Verdicts
+
+| Task | Verdict |
+|------|---------|
+| `-a-68 1b` Hybrid Nav label sweep | HOLD 🎉 |
+| systacean-37 BM25 boot walk | **STILL PARTIAL** |
+| `-a-70` /api/mentions endpoint | HOLD |
+
+### `-a-68 slice 1b` HOLD — closes my flagged label miss
+
+Welcome screen empirical:
+- "Hybrid NAV" (uppercase) count: 0 ✓
+- "Hybrid Nav" (proper case) count: 5 ✓
+
+The `shortcuts.ts:202` label sweep is complete.
+Slice 1 rename closure confirmed across all
+user-facing strings.
+
+### systacean-37 STILL PARTIAL — 5th-degree slice e gap
+
+systacean-37 adds "unconditional Drafts boot
+walk in Indexer::spawn". But empirically:
+
+- Created `Drafts/untitled/draft.md` with marker
+  "UNIQUEMARKER37BM25CLOSURE".
+- Restarted chan serve.
+- Waited 16+ seconds.
+- `/api/search/content?q=UNIQUEMARKER37BM25CLOSURE`:
+  `{ready: true, mode: bm25, hits: []}`
+
+The slice e BM25 saga is now 5 iterations deep:
+- original PARTIAL
+- systacean-32 (Drive::stat unified)
+- systacean-34 (boot walks Drafts subtree)
+- systacean-36 (apply_watch_change routes Drafts/)
+- systacean-37 (Indexer::spawn unconditional boot walk)
+- **STILL no BM25 hits**
+
+Either Indexer::spawn isn't actually walking
+Drafts (despite "unconditional"), OR the per-file
+indexing call silently fails for Drafts paths
+because the BM25 indexer uses on-disk file open
+(which fails for Drafts/ in the unified keyspace
+that doesn't exist on disk).
+
+Recommend a deeper audit — possibly trace the
+indexer's file-open code path to see if it uses
+the unified `Drive::read` (which works for
+Drafts) or raw `std::fs::open` (which doesn't).
+
+### `-a-70` /api/mentions HOLD — endpoint live
+
+- `GET /api/mentions` → 200
+- Returns array of `{label: string}` items
+- 10 mentions: @@Architect, @@Alex, @@FullStackA,
+  @@Systacean, @@WebtestA, ...
+
+**Count discrepancy**: 10 returned vs 49 unique
+mention nodes seen in `-22` walk graph data.
+Worth a quick verification with @@FullStackA
+that 10 is the intentional deduped corpus (vs
+49 graph mentions that may include partial
+matches / handle variants).
+
+Empirical bubble integration test (typing
+`@@cl` in editor for autocomplete) was
+inconclusive — Cmd+N didn't open editor in
+clean state. Endpoint mechanism works; bubble
+SPA integration needs a clean editor mount.
+
+### Suggested commit shape
+
+* **Commit subject**: `docs: webtest-a re-walk —
+  -a-68 1b HOLD (label sweep closed) + systacean-37
+  STILL PARTIAL on BM25 (5th-degree slice e gap) +
+  -a-70 /api/mentions HOLD`.
+* **Files**:
+  * `docs/journals/phase-8/webtest-a/webtest-a-1.md`
+  * `docs/journals/phase-8/alex/event-webtest-a-architect.md`
+* Path-limited `git commit`.
+
+Standing by. The BM25 path appears to be a
+structural issue (Drafts paths don't exist on
+disk for raw file opens) — deeper audit needed.
