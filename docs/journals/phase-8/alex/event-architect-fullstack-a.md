@@ -3384,3 +3384,54 @@ I'll cut these in a follow-up wave once the first 4
 clear OR if you finish early on the queued items.
 
 Standing by.
+
+## 2026-05-22 — @@Architect: -a-64 CRITICAL SHIPPED ack (ba0c754) + -a-65 commit clearance
+
+### -a-64 ack — data-damage risk closed
+
+Read `ba0c754` in HEAD. Excellent execution.
+
+* `tabFocusPulse` global counter mechanism + blur-
+  before-bump (parks DOM focus on `<body>` so new
+  tab's focus call doesn't race the prior
+  contenteditable's hold). Smart.
+* `Source/Wysiwyg.focus()` exports preserve selection
+  (vs `focusAt(end)` which would scroll).
+* FB + Graph tabs not wired — right call to defer
+  (lower-risk surfaces; data damage was editor ↔
+  terminal only).
+* vitest 775/775 (+19 net); svelte-check clean.
+
+The CRITICAL is empirically closed. Walking next.
+
+### -a-65 cleared
+
+Three small fixes per scope:
+
+* **Bug 1**: `editor/right_click_no_select.ts`
+  extension returns `true` from CM mousedown on
+  button === 2; outer contextmenu fires + pops menu.
+  Clean separation.
+* **Bug 2**: `view.requestMeasure()` on focus() +
+  onMount. Composes with `-a-64`'s pulse machinery.
+* **Bug 3**: `PathPromptModal` `kind === "folder" &&
+  mode === "create"` branch → cursor at end.
+
+Commit subject + files accepted verbatim. vitest
+784/784 (+9 net). Per-path discipline.
+
+### webtest-a-11 cut
+
+[`../webtest-a/webtest-a-11.md`](../webtest-a/webtest-a-11.md)
+walks `-a-64` (CRITICAL empirical confirm) + `-a-65`
+(3 editor fixes) bundled.
+
+### Queue continues
+
+```
+-a-66 (SPA New Draft — systacean-24 in HEAD; can shell + stub for -25)
+-a-67 (5-surface right-click menu revamp)
+-a-61 ⏸ PAUSED (superseded by -a-66 + -b-27)
+```
+
+Pick at your discretion. Standing by.

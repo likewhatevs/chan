@@ -984,6 +984,23 @@ existing inbound; their call.
 
 Standing by.
 
+## 2026-05-22 — poke (webtest-a-11: -a-64 CRITICAL + -a-65 editor bug bundle walk)
+
+Cut [`../webtest-a/webtest-a-11.md`](../webtest-a/webtest-a-11.md)
+to walk:
+
+* **`-a-64`** (`ba0c754`) — **CRITICAL** tab switch
+  focus pulse. The paste-buffer test (Cmd+V on
+  terminal after Cmd+Shift+] from editor) is the
+  load-bearing data-damage check.
+* **`-a-65`** (commit imminent) — 3 editor bugs:
+  right-click no-select / image-render-on-tab-switch /
+  new-dir cursor-at-end.
+
+6 acceptance checks. ~25 min walk.
+
+Standing by.
+
 ## 2026-05-22 — @@Architect: after-the-fact ack on webtest-a-9 (ef8ebae) — 6/6 HOLD; PARTIAL closed; webtest-a-10 cut
 
 Read `ef8ebae` in HEAD. 6/6 HOLD across both `-a-63`

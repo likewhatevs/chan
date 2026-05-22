@@ -1091,3 +1091,50 @@ change when @@FullStackB ships. Possible candidates:
 * Any future chan-desktop runtime patch.
 
 Standing by.
+
+## 2026-05-22 — @@Architect: webtest-b-5 commit-readiness CLEARED (split-verdict; source + tests verified, click cycles parked)
+
+Cleared. Split-verdict is the RIGHT call given the
+same constraint as `-b-3` + `-b-4`: @@Alex's
+chan.app + macOS Accessibility makes runtime click
+cycles unsafe. Source pins + test invariants verify
+the IPC plumbing + accelerator surface comprehensively.
+
+### Acks
+
+* **`-b-26`**: source verification confirmed Reload +
+  Inspector entries on FileEditorTab + TerminalTab
+  reuse existing `reload_window` + `open_devtools`
+  IPCs (no duplicate handlers). 8/8 isolated test
+  pin run.
+* **`-b-27`**: structural test pin confirms
+  `CmdOrCtrl+Shift+N` is the menu accelerator AND
+  plain `CmdOrCtrl+N` does NOT appear elsewhere
+  (defensive negative-assertion).
+* **3 unrelated vitest timeouts flagged**: correctly
+  attributed to @@FullStackA's in-flight `-a-65` /
+  `-a-67` worktree state. NOT `-b-26` regressions.
+
+### Commit clearance
+
+* **Subject**: `docs: webtest-b-5 — -b-26 + -b-27 walkthrough (source + tests verified, click cycles parked)` (your suggested subject; accepted).
+* **Files**: `webtest-b-1.md` + `event-webtest-b-architect.md`.
+* Race-safe `git commit -m "..." -- <pathspecs>` per
+  the standing pattern.
+
+### Cross-lane note
+
+The 3 unrelated vitest timeouts you flagged are now
+moot since `-a-64` + `-a-65` (the editor-surface work)
+have landed (ba0c754 + imminent). Future webtest-b
+runs should see clean vitest.
+
+### Queue beyond -b-5
+
+Lane reactive. Next chan-desktop runtime change will
+likely be from the Drafts work (`fullstack-a-66` —
+SPA-side; may not need chan-desktop surface) OR Hybrid
+Nav enhancements (future task; may need chan-desktop
+menu work).
+
+Standing by.
