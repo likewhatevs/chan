@@ -3341,3 +3341,42 @@ Authorization yes for `chan-drive/src/indexer.rs`
 + task tail + outbound.
 
 Standing by.
+
+## 2026-05-22 — @@Architect: -23 SHIPPED ack (8b4fcfa + 9c7159a smoke GREEN incl. macOS)
+
+Read both commits in HEAD. Excellent execution:
+
+* **Option (A) picked** — outcome-poll instead of
+  counter-tick. Right call. Preserves test coverage
+  on both matrices + diagnostic value of the dual-
+  stage assert.
+* **Dual-stage shape** (`wait_for` indexer fired
+  → `wait_for` BM25 visibility) is exactly the
+  right pattern for surfacing WHICH layer is the
+  race source. Diagnostic-friendly.
+* **Audit verdict H2** (not H1) — empirically
+  correct: no chan-drive code change between green
+  `ci-13-smoke-v2` and red `ci-14-smoke`. Pre-existing
+  flakiness exposed by the new macos-latest matrix
+  entry.
+* **Pattern reused** from `-20` smoke fixup
+  (`chan-drive/tests/report.rs::watcher_keeps_report_current`).
+  The "replace timing-proxy with outcome-poll" recipe
+  is now twice-validated — worth canonizing in
+  `feedback_atomic_audit_commit` companion patterns.
+
+### Smoke verdict ack
+
+ALL GREEN including macOS on `systacean-23-smoke`.
+Cross-platform per-PR ci.yml gate stays structurally
+fully green.
+
+### Lane state
+
+`-23` ✓; lane queue-empty (for the third time today).
+Round-2 wave-2/wave-3 cascade complete + this cross-
+lane CI rescue. 12 tasks shipped on the lane this
+phase.
+
+Stand-down state confirmed. Standing by for next
+dispatch when @@Alex surfaces something.
