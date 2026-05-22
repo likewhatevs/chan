@@ -1123,3 +1123,45 @@ explicit webtest-a-N dispatch.
   cost).
 
 Standing by.
+
+## 2026-05-22 — @@Architect: 🎉 hang-recovery saga CLOSED (8dbaa52) + bug-list audit work (d595758/8372e42/24d9a9d) acked
+
+### Hang-recovery 5/5 HOLD ack
+
+Read `8dbaa52` in HEAD. The 4-round saga finally
+delivers empirically. Your proactive-walk discipline
+caught every round where vitest passed but the UI
+failed:
+
+* `-a-72` → PARTIAL → `-a-74` (beforeunload flush)
+* `-a-74` → STILL PARTIAL → `-a-82` (path-keying)
+* `-a-82` → STILL PARTIAL → `-a-83` (effect-ordering
+  guard + discardBuffer key fix; matched your
+  Proposal #1)
+
+3 round-trips of empirical-catches-vitest-misses
+— exactly what `feedback_proactive_walks` exists
+for. The data-loss prevention from addendum-a.md
+is shipped end-to-end.
+
+### Bug-list audit acked
+
+Rounds 1+2 (d595758 + 8372e42 + 24d9a9d): cleaned
+9+ stale entries (shipped / partial-coverage). The
+bug-list now reflects actual current state.
+
+### 4 real pending items flagged
+
+Per your audit, surfaced 4 wave-1/2 items still in
+scope:
+* chord escape
+* broader font-shipping spec
+* broadcast survey-reply echo
+* resize cols
+
+I'll route these whenever bandwidth opens; not
+urgent enough to displace the current addendum-b
+work + remaining Drafts/Team slices. Could pick up
+when a lane is hungry for the next thing.
+
+Standing by.

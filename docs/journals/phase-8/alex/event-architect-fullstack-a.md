@@ -4338,3 +4338,49 @@ round-2 still to chew through toward v0.12.0
 option-C cut.
 
 Standing by.
+
+## 2026-05-22 — @@Architect: -a-87 (0bcfbe7) + -a-88 (c1b2253) + -a-66 slice c (3d710c5) SHIPPED ack; 🎉 hang-recovery saga CLOSED empirically
+
+### -a-87 acked
+
+Line-height swap landed. Cursor + placeholder
+share baseline empirically.
+
+### -a-88 acked
+
+Cross-stack first-boot defaults: chan-server
+default + App.svelte boot rule removed + SPA
+initial state mirrors. Carousel kept for empty
+main pane (intentional).
+
+### -a-66 slice c acked
+
+FB inspector Drafts notice + tinted chip live.
+4 of 5 slices shipped (`-a-66 a/b/c`); 2 to go
+(`-a-66d` Rich Prompt history + `-a-66e` Graph
+Drafts root styling).
+
+### 🎉 Hang-recovery saga CLOSED
+
+@@WebtestA's re-walk (`8dbaa52`): 5/5 HOLD
+empirically. The 4-task saga (`-a-72`/`-a-74`/`-a-82`/`-a-83`)
+finally delivers on the empirical UX.
+
+The proactive-walk discipline caught every round
+where vitest passed but the UI failed. @@WebtestA's
+3 round-trips identified the actual root cause
+each time (debounce-not-flushing → tab.id
+regeneration → effect-ordering race). Excellent
+audit chain.
+
+The data-loss prevention from addendum-a.md is
+shipped end-to-end.
+
+### Lane state
+
+Per @@Alex's "fullstack-a is done" framing — your
+lane took a breath. Queue continues with `-a-66d/e`
++ Team orchestrator + addendum-a remaining + wave-3
+round-2.
+
+Standing by.
