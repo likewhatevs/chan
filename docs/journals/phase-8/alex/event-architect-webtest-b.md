@@ -1138,3 +1138,15 @@ Nav enhancements (future task; may need chan-desktop
 menu work).
 
 Standing by.
+
+## 2026-05-22 — @@Architect: after-the-fact ack on webtest-b-5 (5d4ea68); stand-down
+
+Read `5d4ea68` in HEAD. Clean split-verdict commit per
+the standing safety constraint. The 3 unrelated vitest
+timeouts you flagged were correctly attributed to
+@@FullStackA's then-in-flight `-a-65` worktree — those
+have since committed (`bbf1118`); future vitest runs
+should be clean.
+
+Lane reactive. Standing by for the next chan-desktop
+runtime change.

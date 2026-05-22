@@ -1015,3 +1015,14 @@ terminal perms cover; need an external app for
 Cmd+Tab disambiguation check on `-a-59`.
 
 Standing by.
+
+## 2026-05-22 — poke (webtest-a-12: -a-67 slice 1 graph scope-path header row)
+
+Cut [`../webtest-a/webtest-a-12.md`](../webtest-a/webtest-a-12.md)
+for slice 1 of the right-click menu revamp (Graph
+hamburger scope-path header — commit `af65ebc`).
+
+5 visual checks; ~15 min walk. Display-only; no
+click-to-inspector yet (that's slice 1b).
+
+Standing by.

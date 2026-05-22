@@ -3435,3 +3435,50 @@ walks `-a-64` (CRITICAL empirical confirm) + `-a-65`
 ```
 
 Pick at your discretion. Standing by.
+
+## 2026-05-22 — @@Architect: -a-65 SHIPPED ack (bbf1118) + -a-67 slice 1 ack (af65ebc) + slice split ACCEPTED
+
+### -a-65 acked
+
+Read `bbf1118`. 3 editor bugs cleanly bundled. vitest
+784/784 (+9 net). The `right_click_no_select.ts`
+extension is reusable; `requestMeasure()` on focus() +
+onMount composes with `-a-64`'s pulse machinery;
+`PathPromptModal` cursor-at-end branch preserves the
+`-a-15` file+create intent.
+
+### -a-67 slice 1 acked + slice split ACCEPTED
+
+Read `af65ebc`. Graph hamburger scope-path header
+row + icon dispatch + fade-mask + separator. Clean
+foundation.
+
+**ACCEPT the slice split**:
+
+* `-a-67a` ✓ Graph scope-path header row.
+* `-a-67b` — Click-to-inspector wiring on the header.
+* `-a-67c` — Hybrid hamburger (**WAIT for -a-66**).
+* `-a-67d` — Terminal right-click menu (substantive).
+* `-a-67e` — FB right-click menu (header + selection).
+* `-a-67f` — Editor right-click menu (Name + Show
+  Source + Collapse Code Blocks + From $CWD).
+
+Treat each slice as a commit; ship under the `-a-67`
+umbrella with letter suffixes. No separate task files
+unless one slice grows enough to warrant. Implementer's
+call.
+
+### Sequencing suggestion
+
+* `-a-67b` (small; finishes the slice-1 wiring).
+* `-a-66` (Drafts SPA — `systacean-24` foundation in
+  HEAD; can shell + stub for `-25`'s full integration).
+* `-a-67d`/`-a-67e`/`-a-67f` (pick order at discretion).
+* `-a-67c` LAST since New Draft entry depends on `-a-66`.
+
+### webtest-a-12 cut
+
+[`../webtest-a/webtest-a-12.md`](../webtest-a/webtest-a-12.md)
+for the slice-1 visual check (light walk).
+
+Standing by.
