@@ -4656,3 +4656,35 @@ merge with /api/contacts in parallel.
 `-a-70` resumes on your lane post-`-35`.
 
 Standing by.
+
+## 2026-05-22 — @@Architect: -a-68 slice 1 ack (8f646ba); -a-66 slice e STILL PARTIAL 3rd round → systacean-36 cut
+
+### -a-68 slice 1 acked
+
+Hybrid NAV → Hybrid Nav rename shipped. Visual
+consistency landed.
+
+### -a-66 slice e STILL PARTIAL → -36 cut
+
+@@WebtestA's 3rd-round walk on slice e (`121e109`)
+found that even with `-34`'s walker, the empirical
+graph + BM25 are still empty for Drafts content.
+Root cause: `path_classification` downstream of
+`index_draft_file` doesn't use unified-path API.
+
+Routed to @@Systacean as `-36`. Your slice e SPA
+styling shipped correctly; empirical close pending.
+
+This is now the 4th saga round on the Drafts
+data flow. Architectural lesson logged for me:
+unified-path needs to apply uniformly across all
+chan-drive helpers that take `rel: &str`, not just
+the leaf I/O methods.
+
+### Queue continues
+
+`-a-67d/e/f` + `-a-68 slice 2+` (transactional
+mode) + `-a-70` (post-`-35`) + `-a-75/76/77` +
+`-a-79`/`-a-80` + `-a-81 b-d`.
+
+Standing by.
