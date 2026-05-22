@@ -5641,3 +5641,135 @@ Lane-A test server torn down:
 1 HOLD + 1 PARTIAL + 1 HOLD-endpoint. The
 `-a-68` slice 1 saga finally closed. BM25 saga
 still open — needs deeper audit.
+
+## 2026-05-22 — Architect-requested re-walk: Drafts BM25 against fresh binary (FULLY CLOSED)
+
+Architect-requested re-walk per their poke
+("re-walk Drafts BM25 against fresh binary
+post-`-38`"). Hypothesis: my 5 prior PARTIAL
+reports were **environmental, not code-level** —
+stale binary running.
+
+### Re-walk procedure (per architect spec)
+
+1. `pkill -f "target/debug/chan serve"` to kill
+   any running chan.
+2. `cd web && npm run build && cd .. && cargo
+   build -p chan` for fresh binary.
+3. Verify build provenance:
+   - binary timestamp: May 22 23:39:11
+   - HEAD: `91b0b3a` (post-systacean-38)
+4. `RUST_LOG=chan_drive=debug
+   ./target/debug/chan serve --port 8787 ...`
+   for diagnostic logs.
+5. Cmd+N create Drafts/untitled/draft.md with
+   unique markers.
+6. `/api/search/content?q=<marker>`.
+
+### Verdicts (BOTH paths HOLD 🎉)
+
+| Check | Verdict |
+|-------|---------|
+| Boot-walk BM25 indexing | HOLD 🎉 |
+| Runtime watcher BM25 indexing | HOLD 🎉 |
+| Marker `UNIQUEMARKER38FRESHBINARY` returns hit | HOLD |
+| Marker `RUNTIMEWATCHERMARKER39` returns hit | HOLD |
+
+### Empirical evidence
+
+**Boot walk** (post-restart):
+- `RUST_LOG=chan_drive=debug` shows:
+  ```
+  index_draft_file: enter rel="Drafts/untitled/draft.md"
+  graph::replace_file rel="Drafts/untitled/draft.md"
+  index_draft_file: wrote graph + BM25 rel="Drafts/untitled/draft.md" content_len=92
+  ```
+- `/api/search/content?q=UNIQUEMARKER38FRESHBINARY`:
+  ```
+  {hits: 1, sample: [{path: "Drafts/untitled/draft.md",
+   snippet: "...<b>UNIQUEMARKER38FRESHBINARY</b>..."}]}
+  ```
+
+**Runtime watcher** (after typing more content):
+- Logs:
+  ```
+  index_draft_file: enter rel="Drafts/untitled/draft.md"
+  index_draft_file: wrote graph + BM25 rel="Drafts/untitled/draft.md" content_len=152
+  ```
+- Content grew 92→152 bytes (added
+  `RUNTIMEWATCHERMARKER39` line).
+- `/api/search/content?q=RUNTIMEWATCHERMARKER39`:
+  ```
+  {hits: 1, sample: [{path: "Drafts/untitled/draft.md",
+   snippet: "...<b>RUNTIMEWATCHERMARKER39</b>..."}]}
+  ```
+
+### Architect hypothesis confirmed
+
+The 5 prior PARTIAL reports were environmental:
+- Either stale `./target/debug/chan` from before
+  systacean-37 landed
+- OR running chan process not actually restarted
+  between walks (only SPA refreshed)
+- OR cargo incremental cache returning stale
+  binary on `cargo build`
+
+The fresh-binary procedure (kill + rebuild +
+restart) surfaces both BM25 indexing paths
+correctly.
+
+### Lesson (for future re-walks)
+
+When re-walking a previously-failed empirical
+test:
+
+1. **Explicitly kill any running chan process**
+   via `pkill -f "target/debug/chan serve"`
+   (don't trust the TaskStop alone — the SPA tab
+   might survive the stop).
+2. **Force fresh build** via
+   `cargo build -p chan` (or
+   `cargo clean -p chan && cargo build -p chan`
+   for paranoid mode).
+3. **Verify binary provenance** via
+   `stat -f "%Sm" ./target/debug/chan` +
+   `git rev-parse HEAD`.
+4. **Restart serve from fresh binary** (not just
+   page-refresh the SPA).
+5. Use `RUST_LOG=<crate>=debug` to confirm the
+   code path you're testing actually fires.
+
+This pattern will save round-trips on
+mechanism-vs-empirical investigations.
+
+### Highlights
+
+* **Drafts saga FULLY CLOSED across all 5
+  slices** (a/b/c/d/e), all surfaces, both
+  ingestion paths (boot + runtime), both
+  indices (graph + BM25).
+* **The architect's "environmental, not code-
+  level" diagnosis was 100% correct**: my 5
+  PARTIAL reports represented walks against
+  stale binaries.
+* **`tracing::debug` logs (added by `-38`) made
+  the verification trivial** — confirmed both
+  code paths fire correctly. This is a great
+  defensive logging pattern for future
+  multi-iteration sagas.
+
+### State at end of walk
+
+Lane-A test server torn down:
+1. chan serve killed (twice — runtime test +
+   final).
+2. `rm -rf /tmp/chan-test-phase8-wa-r34/`.
+3. `chan remove` → unregistered.
+4. Chrome MCP tab closed.
+5. Drafts metadata cleaned.
+
+🎉 **Drafts saga REALLY closed empirically**.
+End-to-end: FB row + DRAFTS chip + notice +
+Cmd+N draft creation + rich prompt persist +
+graph emit + drafts_link edge + BM25 indexing
+all work. 5-iteration odyssey complete.

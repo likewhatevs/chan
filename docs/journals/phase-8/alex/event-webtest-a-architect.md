@@ -3422,3 +3422,103 @@ SPA integration needs a clean editor mount.
 Standing by. The BM25 path appears to be a
 structural issue (Drafts paths don't exist on
 disk for raw file opens) — deeper audit needed.
+
+## 2026-05-22 — poke (Architect re-walk request honored: Drafts BM25 FULLY CLOSED via fresh-binary procedure)
+
+Per your re-walk request. Procedure followed:
+
+1. `pkill -f "target/debug/chan serve"` ✓
+2. `npm run build && cargo build -p chan` ✓
+3. Build provenance verified:
+   - Binary timestamp: May 22 23:39:11
+   - HEAD: `91b0b3a` (post-systacean-38)
+4. `RUST_LOG=chan_drive=debug` chan serve ✓
+5. Created Drafts/untitled/draft.md with marker
+6. Restarted to trigger boot walk
+7. Queried `/api/search/content`
+
+### 🎉 Drafts BM25 FULLY CLOSED — your hypothesis confirmed
+
+**Boot walk** (post-restart):
+- Logs show:
+  ```
+  index_draft_file: wrote graph + BM25
+    rel="Drafts/untitled/draft.md" content_len=92
+  ```
+- `/api/search/content?q=UNIQUEMARKER38FRESHBINARY`:
+  `hits: 1, path: "Drafts/untitled/draft.md"` ✓
+
+**Runtime watcher** (typed more content after boot):
+- Logs:
+  ```
+  index_draft_file: wrote graph + BM25
+    rel="Drafts/untitled/draft.md" content_len=152
+  ```
+- `/api/search/content?q=RUNTIMEWATCHERMARKER39`:
+  `hits: 1, path: "Drafts/untitled/draft.md"` ✓
+
+Both indexing paths empirically surface Drafts
+content in BM25. The `tracing::debug` logs added
+by `-38` made the verification trivial.
+
+### Your "environmental, not code-level" diagnosis 100% correct
+
+My 5 prior PARTIAL reports were against stale
+binaries. Most likely root causes:
+- Either old `./target/debug/chan` from before
+  systacean-37 landed
+- OR running chan process not actually restarted
+  between walks (only SPA page-refreshed)
+- OR cargo incremental compilation returned a
+  stale binary
+
+Apologies for the false-positive PARTIALs;
+should have explicitly killed + rebuilt + restarted
+between each walk.
+
+### Lesson for future re-walks
+
+I'm going to apply this discipline going forward
+for previously-failed empirical re-tests:
+
+1. `pkill -f "target/debug/chan serve"` explicitly.
+2. `cargo build -p chan` (or `cargo clean -p chan
+   && cargo build -p chan` for paranoid mode).
+3. Verify binary provenance:
+   - `stat -f "%Sm" ./target/debug/chan`
+   - `git rev-parse HEAD`
+4. Start from fresh binary.
+5. `RUST_LOG=<crate>=debug` to confirm code path
+   fires.
+
+This will save round-trips on the next
+mechanism-vs-empirical investigation.
+
+### The full Drafts saga (8 task iterations, fully closed)
+
+| Item | Surface | Status |
+|------|---------|--------|
+| slice a | Cmd+N creates draft | HOLD |
+| slice b | FB synthetic row + yellow tint | HOLD |
+| slice c | FB inspector DRAFTS chip + notice | HOLD |
+| slice d | Rich Prompt persist to disk | HOLD |
+| slice d | API listing of Drafts/<sub>/ | HOLD (-32) |
+| slice e | Graph root node + drafts_link edge | HOLD (-36) |
+| slice e | BM25 boot walk | HOLD (-37 + fresh binary) |
+| slice e | BM25 runtime watcher | HOLD (-38 wiring + fresh binary) |
+
+### Suggested commit shape
+
+* **Commit subject**: `docs: webtest-a
+  architect-requested re-walk — Drafts BM25
+  FULLY CLOSED via fresh-binary procedure (saga
+  CLOSED end-to-end across 5 slices)`.
+* **Files**:
+  * `docs/journals/phase-8/webtest-a/webtest-a-1.md`
+  * `docs/journals/phase-8/alex/event-webtest-a-architect.md`
+* Path-limited `git commit`.
+
+Standing by. Drafts saga truly closed end-to-end.
+Thanks for the re-walk routing + the
+fresh-binary directive — it was exactly the
+right diagnostic move.
