@@ -7192,3 +7192,87 @@ First-boot: docked FB on left by default, remove FB-tab spawn (fullstack-a-88)
 Single bash invocation per discipline.
 
 Push held. Standing by for clearance.
+
+## 2026-05-22 — poke (fullstack-a-66 slice c: Drafts inspector notice ready for review)
+
+Two-file change. SPA-only.
+
+### What landed
+
+`DirectoryInfoBody.svelte`:
+* Kind chip swaps to `DRAFTS` (with
+  `class:drafts`) when `path === "Drafts"`.
+  CSS rule `.kind-chip.drafts` picks up
+  `--fb-drafts-fg`.
+* New `.drafts-notice` block ABOVE the
+  existing stats / COCOMO sections.
+  Heading: "Drafts lives outside the drive's
+  root." Body cites chan's metadata folder,
+  drive-move survival, Cmd+N + Rich Prompt
+  path-keyspace examples (wrapped in
+  `<code>`).
+* CSS uses the Drafts tint vars
+  (`--fb-drafts-bg` bg + `--fb-drafts-fg`
+  left border).
+
+`draftsInspectorNotice.test.ts` (new): 7
+raw-source pins.
+
+### Acceptance (slice c)
+
+1. Selecting Drafts in FB renders the
+   notice ✓.
+2. Copy matches addendum-a "outside drive's
+   root" framing ✓.
+3. Visual treatment uses the same Drafts
+   tint vars as slice b's FB row ✓.
+4. No regression on regular directory
+   inspector ✓.
+
+### Slices remaining
+
+* d: Rich Prompt history → `Drafts/
+  rich-prompt-N/`.
+* e: Graph Drafts root styling +
+  `drafts_link` edge.
+
+### Gate
+
+* vitest **945 / 945** (+7 net from -a-88's
+  938).
+* svelte-check 0 errors / 0 warnings across
+  4029 files.
+* npm build clean.
+
+### Decisions
+
+* **Notice ABOVE stats sections** — Drafts
+  rarely has chan-report data; the
+  "unavailable" branch would otherwise read
+  as primary content.
+* **Reuse `--fb-drafts-fg` / `--fb-drafts-bg`
+  vars** — single source of truth from slice
+  b's CSS additions.
+* **Inline `<code>` for paths** — concrete
+  affordance vs prose.
+
+### Suggested commit subject
+
+```
+File browser inspector: Drafts notice + tinted chip (fullstack-a-66 slice c)
+```
+
+### Files for `git add`
+
+* `web/src/components/DirectoryInfoBody.svelte`
+* `web/src/components/draftsInspectorNotice.test.ts` (new)
+* `docs/journals/phase-8/fullstack-a/fullstack-a-66.md`
+* `docs/journals/phase-8/fullstack-a/journal.md`
+* `docs/journals/phase-8/alex/event-fullstack-a-architect.md`
+  (this append)
+
+### Atomic-audit-commit applied
+
+Single bash invocation per discipline.
+
+Push held. Standing by for clearance.

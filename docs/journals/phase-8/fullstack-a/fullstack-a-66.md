@@ -508,3 +508,121 @@ Per the memory rule. Per-path staging only.
 
 Push held. Standing by for clearance + the
 @@WebtestA empirical re-walk.
+
+## 2026-05-22 — slice c (Drafts inspector notice) ready for review
+
+Two-file change. SPA-only.
+
+### What landed
+
+`web/src/components/DirectoryInfoBody.svelte`:
+
+* **Kind chip swap**: `DIR` → `DRAFTS` (with
+  `class:drafts` toggle) when `path === "Drafts"`.
+  CSS class `.kind-chip.drafts` picks up
+  `--fb-drafts-fg` so the chip's yellow tint
+  matches the FB row (slice b) for cross-surface
+  consistency.
+* **Notice block**: above the existing stats /
+  COCOMO sections, render a `.drafts-notice`
+  with heading "Drafts lives outside the
+  drive's root." and a short paragraph
+  explaining chan's metadata folder, that
+  files survive drive moves, and that Cmd+N
+  + Rich Prompts persist under
+  `Drafts/untitled-N/` / `Drafts/rich-prompt-N/`.
+* CSS: `.drafts-notice` uses the Drafts tint
+  vars (`--fb-drafts-bg` background +
+  `--fb-drafts-fg` left border) +
+  monospace inline code for the path
+  examples.
+
+`web/src/components/draftsInspectorNotice.test.ts`
+(new): 7 raw-source pins covering:
+* Kind-chip class hook + label swap.
+* `.kind-chip.drafts` tint rule.
+* Notice block conditional render.
+* "outside the drive's root" copy.
+* Cmd+N + Rich Prompt path cross-references.
+* Notice CSS using the Drafts tint vars.
+* Rationale comment cross-referencing
+  chan-drive's metadata folder + drafts_dir
+  handle.
+
+### Acceptance (slice c)
+
+1. **Selecting Drafts in FB renders the
+   notice** ✓ (mechanism via tests;
+   @@WebtestA walk for empirical).
+2. **Notice copy matches addendum-a "outside
+   drive's root"** ✓.
+3. **Visual treatment uses the same Drafts
+   tint vars as the FB row** ✓ —
+   cross-surface consistency.
+4. **No regression on regular directory
+   inspector** ✓ — notice only renders
+   inside the `{#if path === "Drafts"}`
+   guard.
+
+### Out of scope (deferred slices)
+
+* Slice d: Rich Prompt history → `Drafts/
+  rich-prompt-N/`.
+* Slice e: Graph Drafts root styling +
+  `drafts_link` edge.
+
+### Gate
+
+* vitest **945 / 945** (+7 net from `-a-88`'s
+  938).
+* svelte-check 0 errors / 0 warnings across
+  4029 files.
+* npm build clean.
+* Rust gate not re-run (no Rust touched).
+
+### Decisions
+
+* **Notice ABOVE the stats sections** — the
+  Drafts directory will rarely have
+  chan-report data (no source files
+  typically) + the "stats unavailable" empty
+  state would read as the primary content
+  otherwise. Notice first gives the user the
+  "why" before the stats branch.
+* **Drafts tint vars reused** — single
+  source of truth for the yellow tone
+  introduced in slice b. No new vars added.
+* **Code-style inline path examples** — both
+  `Drafts/untitled-N/` and
+  `Drafts/rich-prompt-N/` wrapped in
+  `<code>` so the path-keyspace shape reads
+  as a concrete affordance, not prose.
+* **Kept stats sections** — the notice
+  doesn't replace them; if chan-drive's
+  Drafts indexing ever surfaces stats, the
+  existing branches handle them. Notice +
+  stats coexist.
+
+### Suggested commit subject
+
+```
+File browser inspector: Drafts notice + tinted chip (fullstack-a-66 slice c)
+```
+
+Single commit. Inspector body markup + CSS +
+test pins tightly coupled around the same
+slice-c contract.
+
+### Files for `git add` (per-path discipline)
+
+* `web/src/components/DirectoryInfoBody.svelte`
+* `web/src/components/draftsInspectorNotice.test.ts` (new)
+* `docs/journals/phase-8/fullstack-a/fullstack-a-66.md`
+* `docs/journals/phase-8/fullstack-a/journal.md`
+* `docs/journals/phase-8/alex/event-fullstack-a-architect.md`
+
+### Atomic-audit-commit
+
+Per the memory rule. Per-path staging only.
+
+Push held. Standing by for clearance.

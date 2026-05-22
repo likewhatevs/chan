@@ -2505,3 +2505,28 @@ Four-file change. Cross-stack.
 
 Impl note at [fullstack-a-88.md](fullstack-a-88.md).
 Outbound poke fired.
+
+## 2026-05-22 — -a-66 slice c (Drafts inspector notice) ready for review
+
+Two-file change. SPA-only.
+
+* `DirectoryInfoBody.svelte`: kind-chip
+  swaps to `DRAFTS` with `--fb-drafts-fg`
+  tint when `path === "Drafts"`; new
+  `.drafts-notice` block above the stats
+  section with the "outside drive's root"
+  explanatory copy + Cmd+N / Rich Prompt
+  cross-references.
+* `draftsInspectorNotice.test.ts` (new): 7
+  raw-source pins.
+
+### Gate
+
+* vitest **945 / 945** (+7 net from -a-88's
+  938).
+* svelte-check 0/0 across 4029 files.
+* npm build clean.
+
+Impl note at [fullstack-a-66.md](fullstack-a-66.md)
+"## 2026-05-22 — slice c". Outbound poke
+fired.

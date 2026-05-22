@@ -87,11 +87,31 @@
 
 <div class="info">
   <header class="head">
-    <span class="kind-chip">DIR</span>
+    <span class="kind-chip" class:drafts={path === "Drafts"}>
+      {path === "Drafts" ? "DRAFTS" : "DIR"}
+    </span>
   </header>
   <h3 class="title">{displayName}</h3>
   {#if path !== ""}
     <div class="path-row" title={path}>{path}</div>
+  {/if}
+  {#if path === "Drafts"}
+    <!-- `fullstack-a-66` slice c: Drafts lives in chan-drive's
+         metadata folder (drafts_dir handle), NOT under the
+         drive root. The synthetic FB row + the unified
+         `Drive::list` make it appear in the wire keyspace as
+         `Drafts/...`, but every Drafts/ path routes through
+         the drafts cap-std handle (-26 read/write + -29 list).
+         The notice tells users why their `crates/` or `docs/`
+         aren't sibling to Drafts on disk. -->
+    <div class="drafts-notice" role="note">
+      <strong>Drafts lives outside the drive's root.</strong>
+      Files here are stored in chan's metadata folder so they
+      survive drive moves + don't clutter your tree. Cmd+N
+      creates a fresh draft under <code>Drafts/untitled-N/</code>;
+      Rich Prompts persist as <code>Drafts/rich-prompt-N/</code>
+      in a follow-up slice.
+    </div>
   {/if}
 
   {#if onSetAsScope}
@@ -191,6 +211,35 @@
     font-size: 11px;
     font-weight: 700;
     letter-spacing: 0.05em;
+  }
+  /* `fullstack-a-66` slice c: Drafts chip picks up the same
+     yellow tone the FB row uses (`-a-66b`). Cross-surface
+     consistency matters here — the chip is the only inspector
+     header element that visually distinguishes Drafts from a
+     regular directory. */
+  .kind-chip.drafts {
+    background: var(--fb-drafts-fg);
+  }
+  .drafts-notice {
+    margin: 0.5rem 0;
+    padding: 0.5rem 0.6rem;
+    border-radius: 4px;
+    background: var(--fb-drafts-bg);
+    border-left: 3px solid var(--fb-drafts-fg);
+    font-size: 12.5px;
+    color: var(--text);
+    line-height: 1.45;
+  }
+  .drafts-notice strong {
+    display: block;
+    margin-bottom: 0.25rem;
+  }
+  .drafts-notice code {
+    background: var(--bg);
+    padding: 1px 4px;
+    border-radius: 3px;
+    font-family: ui-monospace, monospace;
+    font-size: 11.5px;
   }
   .title {
     margin: 0 0 0.25rem 0;
