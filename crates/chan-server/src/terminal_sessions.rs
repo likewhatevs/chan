@@ -2063,13 +2063,19 @@ mod tests {
         });
 
         let out = collect_until(&mut handle, "execute.", Duration::from_secs(5)).await;
-        // systacean-26 follow-up: the PTY wraps long lines at the
-        // terminal's column width, which on macos-latest's
-        // narrower default split the path across `\r` line wraps
-        // (`systa\rcean/systacean-21.md`). Strip CR + LF before
-        // asserting on the substring so the assertion is
-        // terminal-width agnostic.
-        let flat: String = out.chars().filter(|c| *c != '\r' && *c != '\n').collect();
+        // systacean-31 follow-up to the -26 fixup: the PTY's
+        // soft-wrap on macos-latest emits ` \r` (trailing space
+        // then carriage return) at column-80, then continues the
+        // next line. The prior `-26` strip removed `\r` but left
+        // the padding space behind, producing `systa cean` from
+        // `systa \rcean`. Now strip the space-before-CR pair
+        // first, then drop any remaining CR/LF. Terminal-width
+        // agnostic.
+        let no_soft_wrap = out.replace(" \r", "");
+        let flat: String = no_soft_wrap
+            .chars()
+            .filter(|c| *c != '\r' && *c != '\n')
+            .collect();
         assert!(
             flat.contains("Poke, it's "),
             "rich template missing prefix; got {flat:?} (raw: {out:?})"
