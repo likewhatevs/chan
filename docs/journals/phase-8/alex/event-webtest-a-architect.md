@@ -2712,3 +2712,96 @@ synthetic-Drafts-entry data flow holistically.
 Standing by. Recommend a holistic audit of the
 synthetic-Drafts inspector dispatch before
 declaring slice c shipped.
+
+## 2026-05-22 — poke (-a-89 placeholder rewrite HOLD + -a-66 slice d disk-persist HOLD / API listing PARTIAL — 3rd repetition of slice b/c/d data-flow gap)
+
+Proactive walk on HEAD `5845fa0`. Throwaway drive
+r26; chan serve 127.0.0.1:8787; Chrome MCP tab
+`503726098`. Verdict in
+[`../webtest-a/webtest-a-1.md`](../webtest-a/webtest-a-1.md).
+
+### Verdicts
+
+| Task | Verdict |
+|------|---------|
+| `-a-89` placeholder via CM6 extension | HOLD |
+| `-a-66 d` disk persistence on submit | HOLD |
+| `-a-66 d` API surfaces `Drafts/rich-prompt/` | **PARTIAL** |
+
+### `-a-89` HOLD — architectural improvement
+
+CSS overlay → CM6 native placeholder extension.
+The `.cm-placeholder` element is now a CodeMirror
+widget decoration rather than absolutely-positioned
+CSS. Baseline alignment + cursor positioning come
+"for free" from CM6's layout engine.
+
+**Supersedes**:
+- `-a-84` (manual 2px x-offset)
+- `-a-87` (manual line-height match)
+
+Net code reduction + correctness via the
+canonical CM6 surface.
+
+### `-a-66 slice d` — disk persist HOLD; API listing PARTIAL
+
+**Disk persist WORKS**:
+- Submitted `echo test-a-66d-rich-prompt-history-marker`
+  via Cmd+Return.
+- File at
+  `~/Library/Application Support/chan/drafts/dff9fc3a6072d447/rich-prompt/prompt.md`
+  with verbatim content. ✓
+
+**API listing INCOMPLETE (third repetition of
+slices b/c/d gap)**:
+- `/api/files?dir=Drafts/rich-prompt` returns
+  empty array
+- `/api/files` (root) returns only the synthetic
+  Drafts shell entry
+- The file IS on disk in chan's metadata folder
+  but the wire-keyspace listing for
+  `Drafts/<sub>/` doesn't reach it
+
+### The pattern across slices b/c/d
+
+| Slice | Wins | Gap |
+|-------|------|-----|
+| b | FB shows synthetic Drafts row ✓ (post follow-up) | (slice b closed) |
+| c | DirectoryInfoBody.svelte has DRAFTS chip + notice | Inspector path doesn't reach it; uses different component |
+| d | Disk persist on submit | API recursive listing doesn't reach `Drafts/<sub>/` |
+
+**Recommend holistic audit** of the drafts-
+metadata-vs-wire-keyspace bridge in the unified
+`Drive::list` API before slice e (Graph styling)
+lands. The synthetic-Drafts data flow has a
+recurring gap at the boundary between chan-drive's
+metadata folder and the API/SPA surface.
+
+Lane suggestion: **@@Systacean** for the API
+recursive-list bridge + **@@FullStackA** for the
+inspector dispatch (slice c follow-up).
+
+### Tear-down hygiene note
+
+`chan remove` doesn't auto-clean
+`~/Library/Application Support/chan/drafts/<drive-hash>/`
+since Drafts live outside the drive root. Future
+walks that exercise the Drafts surface should
+explicitly clean this metadata folder
+post-tear-down. (I cleaned `dff9fc3a6072d447`
+this walk.)
+
+### Suggested commit shape
+
+* **Commit subject**: `docs: webtest-a proactive
+  walk — -a-89 placeholder rewrite HOLD; -a-66
+  slice d disk-persist HOLD / API listing PARTIAL
+  (3rd slice b/c/d data-flow gap)`.
+* **Files**:
+  * `docs/journals/phase-8/webtest-a/webtest-a-1.md`
+  * `docs/journals/phase-8/alex/event-webtest-a-architect.md`
+* Path-limited `git commit`.
+
+Standing by. **Strongly recommend** the holistic
+drafts-metadata-vs-wire-keyspace audit before
+slice e lands.

@@ -4744,3 +4744,124 @@ Lane-A test server torn down:
 clean. `-a-66 slice c` mechanism in code but
 inspector path needs follow-up to reach the
 slice-c chip + notice rendering.
+
+## 2026-05-22 — proactive walk: -a-89 placeholder rewrite + -a-66 slice d Rich Prompt history
+
+Proactive walk on HEAD `5845fa0`. Throwaway drive
+r26; chan serve 127.0.0.1:8787; Chrome MCP tab
+`503726098`.
+
+### Verdicts
+
+| Task | Check | Verdict |
+|------|-------|---------|
+| `-a-89` | CSS overlay → CM6 placeholder extension | HOLD |
+| `-a-89` | Placeholder text + position correct | HOLD |
+| `-a-66 d` | Submit persists to disk | HOLD |
+| `-a-66 d` | API surfaces `Drafts/rich-prompt/` | **PARTIAL** (same gap as slices b/c) |
+
+### `-a-89` HOLD — architectural placeholder rewrite
+
+The `cm-placeholder` element is now an actual CM6
+placeholder widget (the official CodeMirror 6
+extension), not a CSS overlay. Verified via JS:
+- `.cm-placeholder` element present
+- Text: "Write a multi-line command and Cmd+Enter"
+- Class: `cm-placeholder` (CM6 canonical class)
+- Position: x=350.63, y=476, w=317
+- Cursor at x=350.04, y=464.5, w=1
+
+The placeholder is now a CodeMirror widget
+decoration rather than the previous absolutely-
+positioned CSS overlay. This means:
+- Line-height and baseline alignment come "for
+  free" from CM6's layout engine (supersedes
+  `-a-87`'s manual line-height match)
+- Cursor positioning is CM6's responsibility
+  (supersedes `-a-84`'s manual 2px offset)
+- Hide-on-type / reappear-on-delete is CM6's
+  default behavior (no Svelte conditional render
+  needed)
+
+Visually the placeholder renders cleanly with no
+overlap; cursor sits at column 0 before the
+placeholder text.
+
+### `-a-66 slice d` MIXED — disk persist HOLD; API listing PARTIAL
+
+**Disk persistence WORKS**:
+- Submitted `echo test-a-66d-rich-prompt-history-marker`
+  in rich prompt via Cmd+Return.
+- File created on disk at
+  `/Users/fiorix/Library/Application Support/chan/drafts/dff9fc3a6072d447/rich-prompt/prompt.md`
+- Content matches submitted prompt verbatim ✓
+- Path shape: `{drafts-metadata-dir}/{drive-hash}/rich-prompt/prompt.md`
+  (first rich-prompt — no `-N` suffix per the
+  pattern seen on older drives where second+
+  submits land in `rich-prompt-1`, `-2`, etc.)
+- Drafts live OUTSIDE the drive root in chan's
+  metadata folder per `-a-66 slice c`'s notice
+  text. ✓
+
+**API listing INCOMPLETE** (same data-flow gap as
+slices b/c):
+- `/api/files?dir=Drafts/rich-prompt` returns empty
+- `/api/files` (root) returns only the synthetic
+  Drafts entry, no recursion into `rich-prompt/`
+  subdir
+- The submitted file is on disk in the metadata
+  folder but the wire-keyspace listing for
+  `Drafts/rich-prompt/` doesn't surface it
+
+**Root-cause pattern (same as slices b/c)**: the
+synthetic Drafts entry in chan-server's
+`api_list_files` provides the root-level `Drafts/`
+shell, but the recursive listing under
+`Drafts/<sub>/` doesn't route through the unified
+`Drive::list` for the metadata folder. The file is
+ON DISK; the API just doesn't expose it.
+
+Lane: **@@FullStackA** / **@@Systacean**. This is
+load-bearing for the user-visible feature — the
+file IS persisted (so data isn't lost on hang
+recovery scenarios), but the user can't see it in
+the FB tree until the API listing gap is closed.
+
+### Highlights
+
+* **`-a-89` is the right architectural call**:
+  using CM6's native placeholder extension makes
+  `-a-84` (x-offset) + `-a-87` (line-height
+  match) obsolete in one change. Net code
+  reduction + correctness.
+* **`-a-66 slice d` core mechanism works**:
+  rich-prompt submits ARE persisted; data safety
+  shipped. The discoverability surface (FB
+  listing) still has the data-flow gap I've
+  flagged across slices b/c/d.
+* **Pattern repetition**: this is the THIRD
+  slice (-a-66 b/c/d) where the synthetic-Drafts
+  data flow doesn't reach the user-visible
+  surface. Recommend a holistic audit of the
+  drafts-metadata-vs-wire-keyspace bridge in the
+  `Drive::list` unified-path API before slice e
+  (Graph styling) lands.
+
+### State at end of walk
+
+Lane-A test server torn down:
+1. chan serve killed.
+2. `rm -rf /tmp/chan-test-phase8-wa-r26/`.
+3. `chan remove` → unregistered.
+4. Chrome MCP tab closed.
+5. **Additional cleanup**: drafts metadata leftover
+   at `~/Library/Application Support/chan/drafts/dff9fc3a6072d447/`
+   removed. This metadata folder is NOT auto-
+   cleaned by `chan remove` since Drafts live
+   outside the drive root — worth flagging as a
+   tear-down hygiene note for future walks that
+   exercise the Drafts surface.
+
+3/4 HOLD + 1 PARTIAL. `-a-89` ships clean (and
+supersedes 2 prior tasks); `-a-66 slice d` disk
+persistence works but API listing gap repeats.
