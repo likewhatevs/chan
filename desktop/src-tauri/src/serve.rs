@@ -1363,6 +1363,49 @@ mod tests {
     }
 
     #[test]
+    fn get_drive_features_reads_chan_index_status_after_b28b_ii() {
+        // `fullstack-b-28b` slice ii: `get_drive_features` swaps
+        // from sidecar-only to a `chan index status --json` CLI
+        // round-trip, picking up out-of-band feature flips (e.g.
+        // a user toggling via terminal). Pin the subprocess
+        // argument shape so a refactor can't silently revert to
+        // the slice-i sidecar-only read path.
+        const MAIN_RS: &str = include_str!("main.rs");
+        assert!(
+            MAIN_RS.contains("read_features_via_chan_index_status"),
+            "get_drive_features must call read_features_via_chan_index_status as the authoritative read path",
+        );
+        assert!(
+            MAIN_RS.contains("[\"index\", \"status\", \"--json\", \"--path\", key]"),
+            "the CLI read must use `chan index status --json --path <path>`",
+        );
+        assert!(
+            MAIN_RS.contains("\"semantic_enabled\""),
+            "the JSON parser must pull semantic_enabled from chan index status output",
+        );
+        assert!(
+            MAIN_RS.contains("\"reports_enabled\""),
+            "the JSON parser must pull reports_enabled from chan index status output",
+        );
+    }
+
+    #[test]
+    fn chan_index_status_json_carries_reports_enabled_after_b28b_ii() {
+        // `fullstack-b-28b` slice ii: chan-desktop's CLI read
+        // depends on `chan index status --json` emitting
+        // `reports_enabled` alongside `semantic_enabled`. Pin
+        // the field name in the chan binary's source so a rename
+        // / removal on the chan side fails this test loudly +
+        // forces a coordinated cross-lane fix instead of a
+        // silent regression to sidecar-only reads.
+        const CHAN_MAIN_RS: &str = include_str!("../../../crates/chan/src/main.rs");
+        assert!(
+            CHAN_MAIN_RS.contains("\"reports_enabled\": cfg.reports_enabled"),
+            "chan index status --json must emit reports_enabled for the chan-desktop get_drive_features IPC",
+        );
+    }
+
+    #[test]
     fn set_drive_features_calls_chan_cli_after_b28b() {
         // `fullstack-b-28b-i`: `set_drive_features` no longer
         // writes the sidecar in isolation. It first invokes the

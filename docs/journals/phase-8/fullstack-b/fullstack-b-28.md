@@ -552,3 +552,159 @@ of truth for ALL feature reads (slice i + iii both
 write it; the only path that wouldn't is a `chan
 reports {enable,disable}` invocation from outside
 chan-desktop, e.g. from a terminal — edge case).
+
+## 2026-05-22 — slice -b-28b-ii implementation note (ready for commit clearance)
+
+Picked up slice ii per @@Alex's "take -28-b" directive.
+Closes the umbrella by swapping `get_drive_features` to
+chan-drive's authoritative state via the existing `chan
+index status --json` CLI surface, plus a one-line
+additive extension that emits `reports_enabled`
+alongside `semantic_enabled`.
+
+### Slice ii scope
+
+* Add `reports_enabled` to `chan index status --json`
+  output. Single additive JSON field; `chan_drive::
+  index::config::load` already populates the value
+  (slice ii read it but didn't print). Existing JSON
+  consumers ignore unknown fields, so this is a strict
+  extension.
+* Swap `get_drive_features` IPC from sync sidecar read
+  to an async CLI subprocess (`chan index status
+  --json --path <path>`). Parse both flags from the
+  JSON body; sync the result into the sidecar mirror
+  on success so subsequent reads pick up out-of-band
+  changes (e.g. a user running `chan reports enable`
+  from a terminal).
+* Graceful fallback to sidecar on any CLI error
+  (drive not yet registered, chan binary unavailable,
+  JSON parse failure) so the launcher panel still
+  renders something sensible.
+
+### Cross-lane scope expansion (chan CLI)
+
+The `cmd_index_status` JSON-emission code lives in
+`crates/chan/src/main.rs` — chan crate, traditionally
+@@Systacean's lane. Per @@Alex's "take -28-b" direct
+directive ("there are new items in the queue, please
+crack them on") + slice ii's blocker definition (a
+`chan reports status --json` or equivalent CLI), the
+minimum-scope unlock is to teach the EXISTING `chan
+index status` to emit the second field. One-line JSON
+add; matches the systacean-27 IndexConfig model that
+already groups both flags into one struct.
+
+Alternative considered + rejected: a separate
+`chan reports status --json` CLI subcommand (mirrors
+`chan index status` shape). Bigger change; introduces
+a new subcommand pair where the unified IndexConfig
+already lives behind one read.
+
+### Changes
+
+* **`crates/chan/src/main.rs::cmd_index_status`** —
+  one-line additive field in the JSON body:
+  `"reports_enabled": cfg.reports_enabled`. Text-mode
+  output unchanged (Round-3 polish can expand the
+  human-readable form if needed; the JSON is the
+  load-bearing consumer here).
+* **`desktop/src-tauri/src/main.rs::get_drive_features`**
+  — async IPC; spawns `chan index status --json
+  --path <path>`; parses both flags from the JSON
+  body; updates sidecar mirror on success; falls back
+  to sidecar on any error. The fallback chain keeps
+  the launcher resilient when the chan binary isn't
+  available (boot-time preflight failed) or when the
+  drive isn't yet registered.
+* **`desktop/src-tauri/src/main.rs::read_features_via_chan_index_status`**
+  (new) — captures the spawn + parse shape so future
+  changes (e.g., add timeout, add caching) have one
+  spot to touch. Missing/unparseable fields default
+  to `false` so a partial JSON shape doesn't silently
+  flip a toggle ON.
+* **`serve.rs::tests`** — two new structural pins:
+  * `get_drive_features_reads_chan_index_status_after_b28b_ii`
+    — asserts the IPC uses `read_features_via_chan_index_status`
+    + the CLI argument shape + the JSON field names.
+  * `chan_index_status_json_carries_reports_enabled_after_b28b_ii`
+    — cross-crate pin: asserts the chan binary's
+    source emits the `"reports_enabled": cfg.reports_enabled`
+    line. A future chan-side rename / removal of that
+    field fails this test loudly + forces a
+    coordinated cross-lane fix.
+
+chan-desktop 55 → 57.
+chan: no test count change; existing 58 tests pass.
+
+### Slice-i mirror semantics now reverse-flow too
+
+With slice ii reading from chan-drive on every
+`get_drive_features` call, the sidecar mirror becomes
+a write-through cache:
+
+* slice i: `set_drive_features` writes both chan-drive
+  AND sidecar.
+* slice ii (this commit): `get_drive_features` reads
+  from chan-drive + writes back to sidecar if
+  different.
+* slice iii: `add_drive` writes both chan-drive
+  (via `chan add --semantic-search/--reports`) AND
+  sidecar.
+
+The sidecar is now a read cache that converges to
+chan-drive's truth on the next read after any
+out-of-band flip. The `-b-28a` stub forward-compat
+gap I documented under slice i closes automatically:
+on the first `get_drive_features` after upgrade, the
+CLI returns chan-drive's actual state (default off if
+the user never ran `chan index enable-semantic` or
+`chan reports enable`), and the sidecar mirror
+realigns to match.
+
+### Pre-push gate (local, macOS aarch64; -b-28b-ii scope only)
+
+| Surface                                                                | State                                       |
+|------------------------------------------------------------------------|---------------------------------------------|
+| `cargo clippy -p chan-desktop -p chan --all-targets -- -D warnings`    | Clean.                                      |
+| `cargo test -p chan-desktop`                                           | 57 passing (+2 structural pins).            |
+| `cargo test -p chan`                                                   | 58 passing (no count change).               |
+| `cargo build -p chan-desktop -p chan --no-default-features`            | Clean.                                      |
+
+### Files to stage
+
+```
+crates/chan/src/main.rs
+desktop/src-tauri/src/main.rs
+desktop/src-tauri/src/serve.rs
+docs/journals/phase-8/fullstack-b/fullstack-b-28.md
+```
+
+Atomic `git commit --only` per `feedback_shared_worktree_commits`.
+
+### Suggested commit subject
+
+```
+chan + chan-desktop: get_drive_features reads via chan index status --json (fullstack-b-28b slice ii)
+```
+
+### Umbrella close-out
+
+All three slices shipped:
+
+| Slice | Commit    | Scope                                                   |
+|-------|-----------|---------------------------------------------------------|
+| i     | `0ce975b` | `set_drive_features` stub → chan CLI subprocess         |
+| iii   | `defbdcc` | pre-flight modal at drive add + add_drive flag pass-through |
+| ii    | (this)    | `get_drive_features` reads via chan index status --json |
+
+Remaining deferred (NOT covered by `-b-28`):
+
+* The broader pre-flight report (perms/size/SCM/etc.)
+  needs backend support and a design pass; tracked
+  separately if @@Alex prioritises.
+* `chan reports status` as a standalone subcommand
+  (mirror of `chan index status`) was considered +
+  rejected in favour of the additive extension to
+  `chan index status`. Future polish if @@Systacean
+  prefers the symmetry.

@@ -468,29 +468,91 @@ fn get_config(state: State<Arc<AppState>>) -> Result<Config, String> {
     state.store.lock().unwrap().get().map_err(err)
 }
 
-/// `fullstack-b-28a`: read the persisted feature toggles for a
-/// drive. Returns the default `{bge: false, reports: false}` for
-/// any drive that has no sidecar entry yet — the launcher's
-/// expand panel calls this on render so first-time drives show
-/// up with both toggles off as the round-2-plan specifies.
+/// `fullstack-b-28a` + `-b-28b` slice ii: read the persisted
+/// feature toggles for a drive. Returns the default `{bge:
+/// false, reports: false}` for any drive that has no sidecar
+/// entry yet — the launcher's expand panel calls this on render
+/// so first-time drives show up with both toggles off as the
+/// round-2-plan specifies.
 ///
-/// `-b-28b-i`: still reads the sidecar mirror as the source of
-/// the SPA's last-known state. `set_drive_features` writes both
-/// chan-drive (via the `chan` CLI) AND the sidecar mirror on
-/// every change, so the sidecar stays in sync with the
-/// authoritative chan-drive state. A future slice (`-b-28b-ii`)
-/// will swap reads to a `chan index status --json` + `chan
-/// reports status --json` (pending in @@Systacean's lane) call
-/// chain; the chan-drive state stays authoritative regardless.
+/// Slice ii reads from chan-drive's authoritative state via
+/// `chan index status --json --path <path>` (which carries
+/// `semantic_enabled` + `reports_enabled` — the latter was
+/// added in slice ii's chan-CLI extension). On any CLI error
+/// (drive not yet registered, chan binary unavailable, JSON
+/// parse failure, etc.) the IPC falls back to the sidecar
+/// mirror so the launcher row's expand panel still renders.
+/// On a successful CLI read the sidecar mirror updates if the
+/// CLI state differs — picks up out-of-band changes (e.g. user
+/// ran `chan reports enable` from a terminal) so the launcher
+/// reflects truth on the next render without a manual refresh.
 #[tauri::command]
-fn get_drive_features(state: State<Arc<AppState>>, path: String) -> Result<DriveFeatures, String> {
+async fn get_drive_features(
+    state: State<'_, Arc<AppState>>,
+    path: String,
+) -> Result<DriveFeatures, String> {
     let key = canonical_key(Path::new(&path));
+    if state.bin_status.ok {
+        if let Ok(bin) = serve::resolve_chan_binary() {
+            if let Ok(features) = read_features_via_chan_index_status(&bin, &key).await {
+                let mut store = state.store.lock().unwrap();
+                let mut cfg = store.get().map_err(err)?;
+                let entry = cfg.sidecar.entry(key).or_default();
+                if entry.features != features {
+                    entry.features = features;
+                    // Best-effort cache update: a save failure here
+                    // doesn't change the value returned to the SPA;
+                    // the next read will retry the CLI.
+                    let _ = store.save(&cfg);
+                }
+                return Ok(features);
+            }
+        }
+    }
+    // Fall-through: chan binary unavailable OR CLI read failed.
+    // Sidecar mirror is the best available source.
     let cfg = state.store.lock().unwrap().get().map_err(err)?;
     Ok(cfg
         .sidecar
         .get(&key)
         .map(|s| s.features)
         .unwrap_or_default())
+}
+
+/// `fullstack-b-28b` slice ii: parse chan-drive's authoritative
+/// feature state from `chan index status --json --path <path>`.
+/// `semantic_enabled` has been emitted since `systacean-7`;
+/// `reports_enabled` was added by this slice. Missing/unparseable
+/// fields default to false so a partial JSON shape doesn't
+/// silently flip a toggle ON.
+async fn read_features_via_chan_index_status(
+    bin: &Path,
+    key: &str,
+) -> Result<DriveFeatures, String> {
+    let out = Command::new(bin)
+        .args(["index", "status", "--json", "--path", key])
+        .kill_on_drop(true)
+        .output()
+        .await
+        .map_err(|e| format!("running `chan index status`: {e}"))?;
+    if !out.status.success() {
+        return Err(format!(
+            "`chan index status` failed: {}",
+            String::from_utf8_lossy(&out.stderr).trim()
+        ));
+    }
+    let body: serde_json::Value = serde_json::from_slice(&out.stdout)
+        .map_err(|e| format!("parsing `chan index status` JSON: {e}"))?;
+    Ok(DriveFeatures {
+        bge: body
+            .get("semantic_enabled")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false),
+        reports: body
+            .get("reports_enabled")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false),
+    })
 }
 
 /// `fullstack-b-28a` + `-b-28b-i`: write the feature toggle pair

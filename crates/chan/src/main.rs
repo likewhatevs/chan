@@ -1659,6 +1659,13 @@ fn cmd_index_status(path: Option<PathBuf>, json: bool) -> Result<()> {
         "bm25"
     };
     if json {
+        // `fullstack-b-28b` slice ii: emit `reports_enabled`
+        // alongside `semantic_enabled` so chan-desktop's
+        // `get_drive_features` IPC can read both flags from one
+        // CLI round-trip. `chan_drive::index::config::load`
+        // already populated both fields; this is a strict
+        // additive extension (existing JSON consumers ignore
+        // unknown fields).
         let body = serde_json::json!({
             "drive": canonical_root.display().to_string(),
             "mode": mode,
@@ -1667,6 +1674,7 @@ fn cmd_index_status(path: Option<PathBuf>, json: bool) -> Result<()> {
             "model_path": expected_dir.display().to_string(),
             "model_size_bytes": model_size_bytes,
             "semantic_enabled": semantic_enabled,
+            "reports_enabled": cfg.reports_enabled,
         });
         println!("{}", serde_json::to_string_pretty(&body)?);
     } else {
