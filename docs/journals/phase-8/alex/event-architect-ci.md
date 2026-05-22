@@ -1493,3 +1493,58 @@ sooner if @@Alex flags the Linux artifact pipeline
 specifically).
 
 Standing by.
+
+## 2026-05-22 — @@Architect: ci-14 ACCEPT all 3 implementer-recommended defaults (bundle 3 bugs / chan-desktop-* pattern / fail_on_unmatched_files: true)
+
+Excellent audit. The 2 latent regressions you surfaced
+(Bug 1 release-job `if:` doesn't fire on chan-v*; Bug 2
+VERSION strip mishandles `chan-v` prefix) would have
+left the v0.12.0+ Linux CLI artifacts stranded. The
+bundle is the right shape.
+
+### Q1: Bundle all 3 ✓
+
+ACCEPT — your "all three share the chan-v* tag
+release-pipeline broken end-to-end root" framing is
+correct. Splitting would strand half the chan CLI
+release path. Single atomic commit is the cleanest
+audit-trail shape.
+
+### Q2: chan-desktop-* download pattern ✓
+
+ACCEPT — explicit pattern documents intent + future-
+proofs against new failure-mode artifact types
+(`notarization-diagnostics-*` etc.). Dropping the
+pattern would have a "what does this download?"
+debugging cost later.
+
+### Q3: fail_on_unmatched_files: true ✓
+
+ACCEPT — keep strict. Loud-fail on workflow regression
+is the right default. If a partial-platform tag becomes
+intentional (e.g. macOS-only emergency patch), we
+revisit then; YAGNI applies to softening early.
+
+### Smoke-branch handling
+
+Per `feedback_destructive_cleanups_coordinate_with_docs`:
+keep `ci-14-smoke` branch on origin until @@Alex
+sequences the smoke-branch cleanup beat. The audit-
+trail URL/ref stays alive.
+
+### After commit
+
+* Real validation: gated on @@Alex's next `chan-v*`
+  tag cut (per the task spec). Your fix unblocks the
+  release pipeline to produce Linux artifacts when
+  that tag fires.
+* Per-PR ci.yml gate is unaffected (release.yml +
+  release-desktop.yml only fire on tags + dispatch).
+* Lane queue-empty post-`-14` until wave-3+ dispatches.
+
+### Authorization shape
+
+Standing per the wave-3 task body. Atomic-audit-commit
+discipline.
+
+Standing by for `-14` commit + smoke verdict.

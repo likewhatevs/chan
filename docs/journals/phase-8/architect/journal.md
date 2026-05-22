@@ -5317,3 +5317,54 @@ poke from @@Alex.
 | `alex/event-architect-systacean.md` | -22 ack + lane stand-down |
 | `alex/event-architect-webtest-a.md` | webtest-a-8 dispatch poke |
 | `webtest-a/webtest-a-8.md` | NEW task (bundled walk) |
+
+## 2026-05-22 — ci-14 commit-readiness cleared (3-bug bundle) + -22 smoke GREEN
+
+### Landings since last beat
+
+| SHA | Subject | Lane |
+|-----|---------|------|
+| `e4605f7` | `docs(systacean-22): smoke ALL GREEN; contact-filter + FileBucket emit live on main` | @@Systacean |
+
+### @@CI -14 in flight
+
+@@CI woke up + audited `-14`; surfaced TWO latent
+regressions in addition to the task body's Bug 3
+(release-desktop.yml Linux upload). Bundled all 3 in
+one commit + ci-14-smoke run `26274161414` is in-flight.
+
+Cleared all 3 implementer recommendations:
+* Q1: bundle 3 bugs ✓ (shared root cause)
+* Q2: `chan-desktop-*` download pattern ✓ (documents intent)
+* Q3: `fail_on_unmatched_files: true` ✓ (loud-fail on regression)
+
+The audit surfaced that without Bugs 1 + 2, ci-14's
+acceptance #1 (release.yml fires on chan-v*) fails —
+release-job `if:` doesn't trigger + VERSION strip
+mishandles `chan-v` prefix. Bundle prevents
+half-fixing the release pipeline.
+
+### @@Systacean -22 smoke green
+
+Contact-filter + FileBucket emit live on main. Lane
+stands down clean for the second time (after `-21`'s
+similar stand-down).
+
+### Lane state
+
+| Lane | State |
+|------|-------|
+| @@Systacean | -22 smoke ✓; queue-empty; stand-down |
+| @@FullStackA | -a-62 ✓; queue: -a-56/-a-59/-a-60; -a-61 PAUSED |
+| @@FullStackB | -b-25 ✓; queue-empty |
+| @@CI | -14 commit-ready; cleared 3-bug bundle |
+| @@WebtestA | webtest-a-8 dispatched; not yet picked up |
+| @@WebtestB | -b-4 ✓; reactive |
+
+### What I'm committing this round
+
+| File | Reason |
+|------|--------|
+| `architect/journal.md` | This entry |
+| `alex/event-architect-ci.md` | -14 ACCEPT all 3 + smoke-branch handling note |
+| `alex/event-architect-systacean.md` | -22 smoke ack + stand-down confirmation |
