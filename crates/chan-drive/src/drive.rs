@@ -205,6 +205,14 @@ pub struct Drive {
     /// pair had a small TOCTOU window between the lexical sandbox
     /// check and the kernel-side path walk; cap-std closes it.
     dir: cap_std::fs::Dir,
+    /// systacean-26: cap-std handle rooted at `paths.drafts`,
+    /// parallel to `dir`. Editable-text reads + writes whose `rel`
+    /// starts with `Drafts/` route through this handle (after
+    /// stripping the prefix) instead of `dir`, so the sandbox
+    /// invariant + atomic-write semantics + editable-text gate
+    /// apply uniformly to drafts. The drafts dir is eagerly
+    /// created in `Drive::open` so this handle attaches cleanly.
+    drafts_dir_handle: cap_std::fs::Dir,
     paths: DrivePaths,
     /// Held for the lifetime of the Drive. Released on drop.
     _lock: DriveLock,
@@ -357,6 +365,19 @@ impl Drive {
                 "failed to ensure drafts dir on Drive::open"
             );
         }
+        // systacean-26: open a cap-std handle on the drafts dir so
+        // unified-path read/write helpers (read_text /
+        // write_text / write_text_if_unchanged for `Drafts/`-
+        // prefixed rels) get the same sandbox + atomic-write
+        // semantics as drive-root files. The drafts dir was just
+        // ensured above so `open_ambient_dir` lands on an
+        // existing path. A failure here is unusual (permissions
+        // on `state_dir`) but recoverable on the next open; we
+        // surface as an `Io` so callers see why drafts writes
+        // can't proceed.
+        let drafts_dir_handle =
+            cap_std::fs::Dir::open_ambient_dir(&paths.drafts, cap_std::ambient_authority())
+                .map_err(|e| ChanError::Io(format!("open drafts dir: {e}")))?;
         // A stale `rebuild.inprogress` marker means the previous
         // reindex did not finish atomically. Promote it to an
         // in-process flag the consumer can observe via
@@ -396,6 +417,7 @@ impl Drive {
             entry,
             root_canon,
             dir,
+            drafts_dir_handle,
             paths,
             _lock: lock,
             index: std::sync::OnceLock::new(),
@@ -440,6 +462,36 @@ impl Drive {
     /// gives crisp error variants.
     fn rel(&self, rel: &str) -> Result<std::path::PathBuf> {
         fs_ops::validate_rel(rel)
+    }
+
+    /// systacean-26: resolve a unified-path rel to the
+    /// (cap-std dir, validated PathBuf inside that dir) pair the
+    /// IO helpers operate against. Drafts/-prefixed rels route
+    /// through `drafts_dir_handle` (rooted at `paths.drafts`)
+    /// with the prefix stripped; everything else routes through
+    /// `dir` (rooted at the drive root) unchanged. The cap-std
+    /// sandbox prevents traversal escape in either case.
+    ///
+    /// Returns the validated PathBuf (no leading `Drafts/`)
+    /// because cap-std's `open` / `atomic_write_in` / etc. expect
+    /// paths relative to the dir handle they're called against.
+    /// The full unified path (with `Drafts/` prefix) is still
+    /// what callers pass into editable-text gates + journaling +
+    /// graph/index keys.
+    fn resolve_io(&self, rel: &str) -> Result<(&cap_std::fs::Dir, std::path::PathBuf)> {
+        if let Some(sub) = rel.strip_prefix("Drafts/") {
+            if sub.is_empty() {
+                return Err(ChanError::Io(
+                    "rel `Drafts/` cannot be the drafts root itself; pass `Drafts/<name>/<file>`"
+                        .into(),
+                ));
+            }
+            let validated = fs_ops::validate_rel(sub)?;
+            Ok((&self.drafts_dir_handle, validated))
+        } else {
+            let validated = fs_ops::validate_rel(rel)?;
+            Ok((&self.dir, validated))
+        }
     }
 
     pub fn root(&self) -> &std::path::Path {
@@ -503,10 +555,13 @@ impl Drive {
         if !fs_ops::is_editable_text(rel) {
             return Err(ChanError::NotEditableText(rel.to_string()));
         }
-        let rel_path = self.rel(rel)?;
-        ensure_regular_file_in(&self.dir, &rel_path)?;
-        let mut f = self
-            .dir
+        // systacean-26: route Drafts/-prefixed rels through the
+        // drafts-rooted cap-std handle. The full `rel` (with
+        // prefix) still flows through the editable-text gate
+        // above so the gate's per-extension rules apply uniformly.
+        let (dir, rel_path) = self.resolve_io(rel)?;
+        ensure_regular_file_in(dir, &rel_path)?;
+        let mut f = dir
             .open(&rel_path)
             .map_err(|e| ChanError::Io(e.to_string()))?;
         use std::io::Read;
@@ -525,10 +580,10 @@ impl Drive {
         if !fs_ops::is_editable_text(rel) {
             return Err(ChanError::NotEditableText(rel.to_string()));
         }
-        let rel_path = self.rel(rel)?;
-        ensure_regular_file_in(&self.dir, &rel_path)?;
-        let mut f = self
-            .dir
+        // systacean-26: same Drafts routing as read_text.
+        let (dir, rel_path) = self.resolve_io(rel)?;
+        ensure_regular_file_in(dir, &rel_path)?;
+        let mut f = dir
             .open(&rel_path)
             .map_err(|e| ChanError::Io(e.to_string()))?;
         let meta = f.metadata()?;
@@ -552,15 +607,22 @@ impl Drive {
         if !fs_ops::is_editable_text(rel) {
             return Err(ChanError::NotEditableText(rel.to_string()));
         }
-        let rel_path = self.rel(rel)?;
-        let prev = ensure_writable_in(&self.dir, &rel_path)?;
+        // systacean-26: same Drafts routing as read_text. The
+        // editable-text gate + size gate + atomic-write semantics
+        // (tmp + fsync + rename + parent fsync) all apply
+        // uniformly whether the destination is drive-root or
+        // drafts. Chan-server's `SelfWrites` tracker keys on the
+        // full unified rel so watcher self-write suppression
+        // works for drafts writes too.
+        let (dir, rel_path) = self.resolve_io(rel)?;
+        let prev = ensure_writable_in(dir, &rel_path)?;
         check_size(
             "text",
             content.len(),
             TEXT_WRITE_LIMIT,
             prev.as_ref().map(|m| m.len()),
         )?;
-        fs_ops::atomic_write_in(&self.dir, &rel_path, content.as_bytes())
+        fs_ops::atomic_write_in(dir, &rel_path, content.as_bytes())
     }
 
     /// Optimistic-concurrency write: succeeds only when the file's
@@ -603,8 +665,13 @@ impl Drive {
         if !fs_ops::is_editable_text(rel) {
             return Err(ChanError::NotEditableText(rel.to_string()));
         }
-        let rel_path = self.rel(rel)?;
-        let prev = ensure_writable_in(&self.dir, &rel_path)?;
+        // systacean-26: same Drafts routing as write_text.
+        // Optimistic-concurrency mtime check uses the same dir
+        // handle for the prev stat + the atomic-write so the
+        // small TOCTOU window between mtime check + rename is no
+        // worse than the drive-root path.
+        let (dir, rel_path) = self.resolve_io(rel)?;
+        let prev = ensure_writable_in(dir, &rel_path)?;
         let (current, exists, prev_size) = match prev.as_ref() {
             Some(meta) => (mtime_ns_cap(meta), true, Some(meta.len())),
             None => (None, false, None),
@@ -620,7 +687,7 @@ impl Drive {
             });
         }
         check_size("text", content.len(), TEXT_WRITE_LIMIT, prev_size)?;
-        fs_ops::atomic_write_in(&self.dir, &rel_path, content.as_bytes())
+        fs_ops::atomic_write_in(dir, &rel_path, content.as_bytes())
     }
 
     /// Atomically write raw bytes. NOT gated by editable-text;
@@ -1017,6 +1084,33 @@ impl Drive {
     pub fn promote_draft(&self, name: &str, target_rel: &str) -> Result<()> {
         let target_abs = self.root().join(target_rel);
         drafts::promote(&self.paths.drafts, name, &target_abs)
+    }
+
+    /// systacean-26: pick the smallest unused `untitled-N` name
+    /// under the drafts root. Returns `"untitled"` on the first
+    /// call (no `untitled` dir exists); `"untitled-1"` if
+    /// `untitled` is taken; `"untitled-2"` if both are taken; etc.
+    /// The caller composes the full path (e.g.
+    /// `format!("Drafts/{name}/draft.md")`) when calling
+    /// `Drive::write_text`. Race-window note: two concurrent
+    /// callers can both observe the same gap and race on
+    /// `create_draft_dir`; the loser's `create_draft_dir` errors
+    /// with `AlreadyExists` and the caller can retry.
+    pub fn next_untitled_draft_name(&self) -> Result<String> {
+        let existing = self.list_drafts()?;
+        let names: std::collections::HashSet<&str> =
+            existing.iter().map(|d| d.name.as_str()).collect();
+        if !names.contains("untitled") {
+            return Ok("untitled".to_string());
+        }
+        let mut i: u32 = 1;
+        loop {
+            let candidate = format!("untitled-{i}");
+            if !names.contains(candidate.as_str()) {
+                return Ok(candidate);
+            }
+            i += 1;
+        }
     }
 
     // ---- session blobs ----
@@ -4843,6 +4937,110 @@ mod tests {
 
         drive.create_draft_dir("untitled-1").unwrap();
         assert!(drive.create_draft_dir("untitled-1").is_err());
+    }
+
+    #[test]
+    fn unified_path_read_write_roundtrip_for_drafts() {
+        // systacean-26: Drive::read_text + Drive::write_text are
+        // prefix-aware. A unified `Drafts/<name>/<file>` rel
+        // routes through the drafts-rooted cap-std handle so the
+        // editor's autosave path can target drafts without API
+        // branching.
+        let (_cfg, _root, drive) = fixture();
+        drive.create_draft_dir("untitled-1").unwrap();
+
+        let rel = "Drafts/untitled-1/draft.md";
+        drive
+            .write_text(rel, "# hello from a draft\n")
+            .expect("write_text should route to drafts dir");
+        let content = drive
+            .read_text(rel)
+            .expect("read_text should route to drafts dir");
+        assert_eq!(content, "# hello from a draft\n");
+    }
+
+    #[test]
+    fn unified_path_write_text_atomic_for_drafts() {
+        // systacean-26: atomic-write parity. Overwriting an
+        // existing draft file via write_text replaces atomically
+        // (no zero-length window observable) — same semantics as
+        // drive-root files via the shared `atomic_write_in`.
+        let (_cfg, _root, drive) = fixture();
+        drive.create_draft_dir("untitled-1").unwrap();
+        let rel = "Drafts/untitled-1/draft.md";
+        drive.write_text(rel, "v1").unwrap();
+        drive.write_text(rel, "v2").unwrap();
+        let content = drive.read_text(rel).unwrap();
+        assert_eq!(content, "v2");
+    }
+
+    #[test]
+    fn unified_path_rejects_drafts_root_as_target() {
+        // systacean-26: `Drafts/` with no sub-path is not a valid
+        // target — there's no file to read or write at the drafts
+        // root itself. The helper surfaces this as an Io error
+        // rather than dispatching into the cap-std handle with an
+        // empty path.
+        let (_cfg, _root, drive) = fixture();
+        assert!(drive.read_text("Drafts/").is_err());
+        assert!(drive.write_text("Drafts/", "anything").is_err());
+    }
+
+    #[test]
+    fn unified_path_drive_root_paths_unchanged() {
+        // systacean-26: backward-compat regression check. Paths
+        // without the `Drafts/` prefix continue to route through
+        // the drive-root cap-std handle exactly as before.
+        let (_cfg, root, drive) = fixture();
+        drive.write_text("notes/intro.md", "# intro\n").unwrap();
+        assert_eq!(drive.read_text("notes/intro.md").unwrap(), "# intro\n");
+        // File landed on disk under the drive root, NOT the
+        // drafts root.
+        assert!(root.path().join("notes/intro.md").is_file());
+        assert!(!drive.drafts_dir().join("notes").exists());
+    }
+
+    #[test]
+    fn next_untitled_draft_name_counts_up_through_gaps() {
+        // systacean-26: smallest-unused-N picker. First call
+        // returns bare `untitled`. After `untitled` exists the
+        // picker returns `untitled-1`, then `untitled-2`, etc.
+        // Gaps in the existing-set ARE filled (smallest unused,
+        // not always last+1) — the caller of create_draft_dir is
+        // free to skip-number names by hand.
+        let (_cfg, _root, drive) = fixture();
+        assert_eq!(drive.next_untitled_draft_name().unwrap(), "untitled");
+        drive.create_draft_dir("untitled").unwrap();
+        assert_eq!(drive.next_untitled_draft_name().unwrap(), "untitled-1");
+        drive.create_draft_dir("untitled-1").unwrap();
+        drive.create_draft_dir("untitled-3").unwrap();
+        // Gap: untitled-2 free → that's the next pick.
+        assert_eq!(drive.next_untitled_draft_name().unwrap(), "untitled-2");
+    }
+
+    #[test]
+    fn unified_path_write_text_if_unchanged_for_drafts() {
+        // systacean-26: optimistic-concurrency parity. The mtime
+        // check uses the same dir handle for stat + atomic write
+        // so drafts edits get the same WriteConflict semantics as
+        // drive-root edits.
+        let (_cfg, _root, drive) = fixture();
+        drive.create_draft_dir("untitled-1").unwrap();
+        let rel = "Drafts/untitled-1/draft.md";
+        // First write: file doesn't exist; expected_mtime=None
+        // succeeds.
+        drive.write_text_if_unchanged(rel, None, "v1").unwrap();
+        let (_, stat) = drive.read_text_with_stat(rel).unwrap();
+        // Stale-mtime write: rejected.
+        let err = drive
+            .write_text_if_unchanged(rel, Some(stat.mtime_ns.unwrap_or(0) + 1), "v2")
+            .unwrap_err();
+        assert!(matches!(err, ChanError::WriteConflict { .. }));
+        // Current-mtime write: accepted.
+        drive
+            .write_text_if_unchanged(rel, stat.mtime_ns, "v2")
+            .unwrap();
+        assert_eq!(drive.read_text(rel).unwrap(), "v2");
     }
 
     #[test]

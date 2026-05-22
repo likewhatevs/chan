@@ -2853,3 +2853,61 @@ The full Drafts cascade (`-24` foundation + `-25` integration) is now landed:
 | All prior | ✓ shipped |
 
 Lane fully idle post-`-25`. Standing by for new dispatches. Smoke branches preserved per `feedback_destructive_cleanups_coordinate_with_docs`.
+
+## 2026-05-22 — poke (-26 implementation complete; unified-path API for Drafts ready for smoke)
+
+Picked up `-26` (FullStackA's scope-poke to unblock `-a-66`). Routed (A) implemented via the recommended shape — make `read_text` / `write_text` themselves prefix-aware rather than parallel `_unified` methods.
+
+### What landed
+
+* `Drive.drafts_dir_handle: cap_std::fs::Dir` — new field, opened in `Drive::open` against `paths.drafts`. Sandboxed handle parallel to existing `dir`.
+* `Drive::resolve_io(rel)` helper — strips `Drafts/` prefix when present, returns the drafts handle + validated sub-path; otherwise drive handle unchanged.
+* `read_text` / `read_text_with_stat` / `write_text` / `write_text_if_unchanged` refactored to use `resolve_io`. Editable-text gate still runs against the FULL unified rel.
+* `Drive::next_untitled_draft_name()` — smallest-unused-N picker (fills gaps).
+
+### Parity coverage
+
+* **Atomic write**: drafts use `fs_ops::atomic_write_in` against the drafts cap-std handle. Same tmp + fsync + rename + parent-dir fsync semantics as drive-root.
+* **Watcher self-write annotation**: chan-server's `SelfWrites` tracker keys on the rel string passed to `Drive::write_text`. Since chan-server now passes `Drafts/<...>` rels, and `-25`'s multi-root watcher emits matching `Drafts/<...>` event paths, suppression flows through. No chan-server changes needed.
+* **Sandbox**: cap-std prevents traversal-escape on either route.
+
+### Tests (+6)
+
+1. `unified_path_read_write_roundtrip_for_drafts` — write/read round-trips against `Drafts/untitled-1/draft.md`.
+2. `unified_path_write_text_atomic_for_drafts` — overwrite atomically replaces.
+3. `unified_path_rejects_drafts_root_as_target` — bare `Drafts/` is rejected (no file there).
+4. `unified_path_drive_root_paths_unchanged` — backward-compat regression check (drive-root rels still hit the drive dir, not drafts).
+5. `next_untitled_draft_name_counts_up_through_gaps` — `untitled` → `untitled-1` → fills gaps (smallest unused, not last+1).
+6. `unified_path_write_text_if_unchanged_for_drafts` — optimistic-concurrency parity (`WriteConflict` on stale mtime).
+
+### Diff
+
+`crates/chan-drive/src/drive.rs`: +179 / -8. Plus task tail + this poke. 3 paths.
+
+### Pre-push gate
+
+* fmt + clippy clean.
+* `cargo test -p chan-drive --lib`: **446 / 0 / 2-ignored** (was 440; +6 new).
+* workspace tests + no-default-features build green.
+
+### Suggested commit subject
+
+```
+chan-drive: prefix-aware unified-path read_text + write_text + next_untitled_draft_name for Drafts (systacean-26)
+```
+
+### Smoke plan
+
+`gh workflow run ci.yml --ref systacean-26-smoke`. Expected ALL GREEN. Pure additive chan-drive; backward-compat preserves existing contract.
+
+### What this unblocks
+
+`fullstack-a-66` (SPA New Draft):
+
+* `POST /api/files/Drafts/<name>/draft.md` via the existing route (now backed by the prefix-aware `Drive::write_text`).
+* `GET /api/files/Drafts/<name>/draft.md` via the existing route (backed by `Drive::read_text`).
+* Editor autosave loop (`write_text_if_unchanged`) works for drafts.
+* `Drive::next_untitled_draft_name()` for the Cmd+N spawn name.
+* `Drive::promote_draft(name, target_rel)` for the Rename/Move flow (already shipped in `-24`).
+
+Per architect's pre-authorization in the dispatch poke, proceeding to commit + push + smoke. Will surface verdict.

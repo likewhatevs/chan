@@ -138,3 +138,72 @@ This is `-26`.
   Drive API means chan-server's existing
   `/api/files/*path` route works as-is; if any
   small chan-server adjustment is needed, scope-poke).
+
+## 2026-05-22 — implementation complete; ready for smoke
+
+Picked up `-26` per the architect's dispatch poke. Routed (A) — extend chan-drive with prefix-aware unified-path ops. Single API entry per the recommended shape ("make `Drive::read_text` + `Drive::write_text` themselves prefix-aware").
+
+### What landed
+
+* **`crates/chan-drive/src/drive.rs`**:
+  * `Drive.drafts_dir_handle: cap_std::fs::Dir` — new field, opened in `Drive::open` against `paths.drafts` (just after `drafts::ensure_root`). Sandboxed cap-std handle parallel to the existing `dir` handle for drive root.
+  * `Drive::resolve_io(rel) -> Result<(&Dir, PathBuf)>` — new helper. Strips `Drafts/` prefix when present + returns the drafts handle + validated sub-path; otherwise returns the drive handle + validated path unchanged. Empty `Drafts/` (no sub-path) errors as Io.
+  * `read_text` + `read_text_with_stat` + `write_text` + `write_text_if_unchanged` — refactored to use `resolve_io`. The editable-text gate still runs against the FULL unified rel (so `.md` etc. matches uniformly).
+  * `Drive::next_untitled_draft_name() -> Result<String>` — smallest-unused-N picker. Returns bare `untitled` if free; else `untitled-1`; else `untitled-2`; etc. Fills gaps (smallest unused, not last+1).
+
+### Atomic-write + watcher self-write annotation parity
+
+* **Atomic write**: drafts writes go through `fs_ops::atomic_write_in` on the drafts cap-std handle — same tmp + fsync + rename + parent-dir fsync semantics as drive-root writes. No behavioral divergence.
+* **Watcher self-write annotation**: this is chan-server's responsibility via the `SelfWrites` tracker (chan-drive doesn't own that mechanism). Since chan-server keys `SelfWrites` on the rel string passed to `Drive::write_text`, and chan-server now calls `Drive::write_text("Drafts/...", content)` for drafts writes, the same suppression flows through. `-25`'s watcher prefix means the inbound watcher event arrives with the matching `Drafts/<...>` key. Parity achieved without chan-server changes.
+
+### Sandbox + traversal safety
+
+The cap-std Dir handle prevents traversal-escape on either route — drafts writes can't read or write outside the drafts dir even if a `..` slipped past `fs_ops::validate_rel` (which it can't, but defense in depth). Same invariant as drive-root.
+
+### Tests (+6)
+
+All in `crates/chan-drive/src/drive.rs::tests`:
+
+1. `unified_path_read_write_roundtrip_for_drafts` — write/read against `Drafts/untitled-1/draft.md` succeeds; content round-trips.
+2. `unified_path_write_text_atomic_for_drafts` — overwrite atomically replaces; final content matches the second write.
+3. `unified_path_rejects_drafts_root_as_target` — `read_text("Drafts/")` + `write_text("Drafts/", ...)` both error (no file at the drafts root itself).
+4. `unified_path_drive_root_paths_unchanged` — drive-root paths (e.g. `notes/intro.md`) route to the drive dir, land on disk under the drive root, NOT the drafts root. Backward-compat regression check.
+5. `next_untitled_draft_name_counts_up_through_gaps` — first → `untitled`; with `untitled` present → `untitled-1`; with `untitled` + `untitled-1` + `untitled-3` present → `untitled-2` (smallest gap-fill).
+6. `unified_path_write_text_if_unchanged_for_drafts` — optimistic-concurrency parity. None-mtime + missing file = create; stale mtime = `WriteConflict`; current mtime = succeed.
+
+### Acceptance criteria status
+
+| # | Criterion | Status |
+|---|-----------|--------|
+| 1 | `read_text("Drafts/some-draft/draft.md")` returns content | ✓ |
+| 2 | `write_text("Drafts/some-draft/draft.md", content)` atomic; self-write annotation flows through chan-server's SelfWrites | ✓ |
+| 3 | `next_untitled_draft_name()` returns `untitled` first; `untitled-1` if `untitled` exists; etc. | ✓ |
+| 4 | Existing drive-root callers unchanged (backward-compat regression) | ✓ |
+
+### Pre-push gate
+
+* `cargo fmt --check`: clean.
+* `cargo clippy --all-targets -- -D warnings`: clean.
+* `cargo test -p chan-drive --lib`: **446 passed; 0 failed; 2 ignored** (+6 vs `-25` baseline of 440).
+* `cargo test` workspace: all crates green.
+* `RUSTFLAGS="-D warnings" cargo build --no-default-features`: green.
+
+### Files
+
+| File                                       | +    | -   |
+|--------------------------------------------|------|-----|
+| `crates/chan-drive/src/drive.rs`           | +179 | -8  |
+
+Plus task tail + outbound poke. 3 paths total.
+
+### Suggested commit subject
+
+```
+chan-drive: prefix-aware unified-path read_text + write_text + next_untitled_draft_name for Drafts (systacean-26)
+```
+
+### Smoke plan
+
+`gh workflow run ci.yml --ref systacean-26-smoke` on a fresh smoke branch. Expected: all 5 jobs green. Pure additive chan-drive; backward-compat preserves the existing API contract. No chan-server changes; no SPA changes.
+
+Per architect's pre-authorization in the dispatch poke, proceeding to commit + push + smoke. Will surface verdict.
