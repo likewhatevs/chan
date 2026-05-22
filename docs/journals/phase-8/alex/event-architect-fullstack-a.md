@@ -3123,3 +3123,15 @@ line is trivial; the SPA work is the substantive
 piece.
 
 Standing by.
+
+## 2026-05-22 — poke (fullstack-a-62: docked FB fade long filenames at edge — same pattern as tab names)
+
+Tight CSS-only task. Cut
+[`../fullstack-a/fullstack-a-62.md`](../fullstack-a/fullstack-a-62.md).
+
+`FileTree.svelte:1039-1048` `.name` gets the fade-mask
+pattern from `Pane.svelte:1607-1608`. ~10 LOC. Mirror-
+mask for `.tree.right-dock .name`.
+
+Could ride alongside `-a-56` (small UX polish bundle)
+OR standalone. Standing by.

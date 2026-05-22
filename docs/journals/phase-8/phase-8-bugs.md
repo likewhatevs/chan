@@ -830,6 +830,34 @@
   - severity: data-shape correctness; not regression-class but undermines the count's informational value (1973 ≠ truth)
   - NOT YET DISPATCHED — audit-first task; could ride into `-a-58`'s broader graph-data audit if same lane picks both up
 
+- Docked file browser wraps long filenames to 2 lines instead of fading at the edge (like tab names)
+  - flagged 2026-05-22 by @@Alex: filenames like `chan-desktop-onboarding-redesign.md`, `commit-plan-v0.11.1.md`, `phase-9-desktop-native-vision.md`, `rich-prompt-session-evolution.md` wrap to 2 lines in the docked FB. Wants the same fade-out-on-overflow technique as tab names — resize narrower fades more text; resize wider reveals more
+  - audit-confirmed: `FileTree.svelte:1039-1048` `.name` has `flex: 1` but no `white-space: nowrap` / `overflow: hidden` / mask-image. Compare with `Pane.svelte:1594-1608` tab-name fade-mask pattern:
+    ```css
+    mask-image: linear-gradient(to right, black calc(100% - 1.25rem), transparent);
+    -webkit-mask-image: linear-gradient(to right, black calc(100% - 1.25rem), transparent);
+    ```
+  - fix shape (~10 LOC CSS in `FileTree.svelte`):
+    ```css
+    .name {
+      /* existing flex:1 + button reset */
+      display: block;
+      white-space: nowrap;
+      overflow: hidden;
+      mask-image: linear-gradient(to right, black calc(100% - 1.25rem), transparent);
+      -webkit-mask-image: linear-gradient(to right, black calc(100% - 1.25rem), transparent);
+    }
+    .tree.right-dock .name {
+      /* mirror direction for right-aligned text */
+      mask-image: linear-gradient(to left, black calc(100% - 1.25rem), transparent);
+      -webkit-mask-image: linear-gradient(to left, black calc(100% - 1.25rem), transparent);
+    }
+    ```
+  - resize behavior is automatic — the mask is keyed off the row's own width (`calc(100% - 1.25rem)`); resizing the docked FB column wider/narrower changes the mask extent live
+  - lane: @@FullStackA (SPA-only CSS in `FileTree.svelte`)
+  - severity: UX papercut; ~10 LOC; trivially small
+  - NOT YET DISPATCHED — small fix; can ride into `-a-56` polish bundle OR standalone
+
 - Graph canvas click hit-radius is too tight; users need to zoom in to register clicks on nodes
   - flagged 2026-05-22 by @@WebtestA during proactive `-a-49`+`-a-50`+`-a-51` walk (`a63c8cb`): clicks at multiple positions near visible nodes missed consistently before zoom — e.g. `(1356, 539)`, `(1351, 411)`, `(881, 247)` all missed. Pattern suggests the canvas hit-test uses the node's stroke radius as the hit-box rather than a slightly-expanded one
   - want: expand the click hit-radius beyond the visible stroke (typical UX pattern: `hitRadius = strokeRadius + ~8-12px` for forgiving-feeling clicks)
