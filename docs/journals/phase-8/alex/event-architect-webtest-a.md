@@ -951,3 +951,15 @@ handles). That's the empirical validation @@Alex was
 asking for.
 
 Standing by.
+
+## 2026-05-22 — poke (webtest-a-9: -a-63 chip count visual + -a-56 retest)
+
+Cut [`../webtest-a/webtest-a-9.md`](../webtest-a/webtest-a-9.md):
+
+* `-a-63` (`19d3d4f`): chip count should drop from
+  ~1982 to ~48 on chan-source seed. Headline win.
+* `-a-56` (`9f0ac44`): retest Cmd+P 3-state +
+  depth-slider shallow-scope cue (blocked in
+  `webtest-a-8` by the build incident).
+
+Light walk; ~20 min. Standing by.

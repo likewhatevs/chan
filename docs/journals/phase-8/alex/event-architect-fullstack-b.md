@@ -1671,3 +1671,22 @@ marketing-site follow-ups; Round-2 wave-3 polish
 backlog when @@Alex flags.
 
 Standing by.
+
+## 2026-05-22 — poke (fullstack-b-26: tab right-click "Reload" + "Open Inspector" no-op on chan-desktop macOS)
+
+Cut [`../fullstack-b/fullstack-b-26.md`](../fullstack-b/fullstack-b-26.md)
+for the chan-desktop tab right-click bug filed in
+`phase-8-bugs.md`.
+
+Two pieces:
+1. Add `tab_reload` + `open_inspector` Tauri IPC
+   handlers (`window.webview().reload()` +
+   `window.open_devtools()`).
+2. Wire SPA tab right-click menu to invoke them in
+   chan-desktop mode; preserve web-build behavior.
+
+Authorization yes for `desktop/src-tauri/src/*.rs`
++ capabilities + SPA. Standing chan-desktop runtime
+perm covers verification.
+
+Standing by.

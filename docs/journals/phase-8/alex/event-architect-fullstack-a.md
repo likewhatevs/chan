@@ -3256,3 +3256,46 @@ Bounded — ~5-10 LOC + test pin updates. SPA-only.
 fix is small; could ride between bigger ones.
 
 Standing by.
+
+## 2026-05-22 — @@Architect: after-the-fact ack on -a-63 (19d3d4f); audit-bonus on folder double-count
+
+Read `19d3d4f` in HEAD. Clean execution + an
+unexpected audit bonus:
+
+* **Loop rewrite walks `nodes` instead of `edges`**
+  in a single O(N) pass. Right shape.
+* **Tag / mention / language / folder all corrected**
+  from edge-tally to node-tally.
+* **Folder was double-counting pre-`-a-63`** —
+  contains-edge tally PLUS folder-node tally. Now
+  folder-node-only. Audit-confirmed via reading the
+  pre-loop body. Nice catch.
+* **Mention chip aggregates `mention`-kind nodes +
+  contact files** because the chip's hide-set
+  (`hiddenContactIds`) covers both. The count
+  reflects the toggle semantics, not just one
+  node-kind. Right call.
+
+vitest 738/738 (+6 net). svelte-check clean.
+
+### Headline empirical
+
+Contact chip will now display ~48 on @@Alex's drive
+(vs ~1982 pre-`-a-63`). The `-22` data-level fix
+finally surfaces visually.
+
+### webtest-a-9 walk cut
+
+Light walk covering `-a-63` visual + `-a-56` retest
+(Chrome MCP build-incident blocked `-a-56` checks in
+`webtest-a-8`).
+
+### Queue continues — 2 remaining
+
+```
+-a-59 (pane-focus-click)
+-a-60 (graph hit-radius)
+-a-61 ⏸ PAUSED (draft-folder design)
+```
+
+Pick at your discretion. Standing by.

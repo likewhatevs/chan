@@ -5439,3 +5439,66 @@ code.
 | `alex/event-architect-fullstack-a.md` | -63 dispatch poke |
 | `systacean/systacean-23.md` | NEW task (macOS indexer) |
 | `fullstack-a/fullstack-a-63.md` | NEW task (chip count semantics) |
+
+## 2026-05-22 — Velocity push: -a-63 acked + 2 more tasks fanned out (webtest-a-9 + fullstack-b-26)
+
+@@Alex 2026-05-22: "either we are closing the session
+or you're not dispatching fast enough". Velocity push.
+
+### Landings this beat
+
+| SHA | Subject | Lane |
+|-----|---------|------|
+| `19d3d4f` | `Graph chip counts: switch from edge-tally to node-tally (fullstack-a-63)` | @@FullStackA |
+
+### -a-63 acked + audit bonus
+
+@@FullStackA's audit caught that folder chip was
+DOUBLE-counting (contains-edge tally + folder-node
+tally) pre-`-a-63`. Now folder-node-only. Mention chip
+aggregates `mention`-kind nodes + contact files since
+the chip's hide-set covers both — right call.
+
+Contact chip will now display ~48 on @@Alex's drive
+(vs ~1982 pre-fix). `-22` data-level fix finally
+surfaces visually.
+
+### Fan-out: 2 new tasks
+
+| Task | Lane | Source |
+|------|------|--------|
+| [`webtest-a-9`](../webtest-a/webtest-a-9.md) | @@WebtestA | -a-63 chip count visual + -a-56 retest |
+| [`fullstack-b-26`](../fullstack-b/fullstack-b-26.md) | @@FullStackB | Tab right-click no-op on chan-desktop |
+
+### @@CI and @@WebtestB stay idle
+
+Honest assessment: @@CI's queue is genuinely empty
+post-`-14`. No natural CI work pending. Filing a
+`ci-15` would be manufacturing work. They idle until
+the next release-cycle or wave-3+ surface.
+
+@@WebtestB has no new chan-desktop runtime change to
+walk yet — they'll pick up after `-b-26` ships
+(`webtest-b-5` dispatched then).
+
+### Lane state
+
+| Lane | State |
+|------|-------|
+| @@Systacean | -23 in flight (macOS indexer fix in worktree) |
+| @@FullStackA | -a-63 ✓; queue: -a-59/-a-60; -a-61 PAUSED |
+| @@FullStackB | -b-26 dispatched (tab right-click) |
+| @@CI | -14 ✓; queue-empty; idle |
+| @@WebtestA | webtest-a-9 dispatched |
+| @@WebtestB | -b-4 ✓; idle until -b-26 lands |
+
+### What I'm committing this round
+
+| File | Reason |
+|------|--------|
+| `architect/journal.md` | This entry |
+| `alex/event-architect-fullstack-a.md` | -a-63 ack |
+| `alex/event-architect-webtest-a.md` | webtest-a-9 dispatch poke |
+| `alex/event-architect-fullstack-b.md` | -b-26 dispatch poke |
+| `webtest-a/webtest-a-9.md` | NEW task |
+| `fullstack-b/fullstack-b-26.md` | NEW task |
