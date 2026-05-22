@@ -17,6 +17,7 @@
     ArrowLeft,
     ArrowRight,
     Braces,
+    Bug,
     Code2,
     Copy,
     Eraser,
@@ -27,6 +28,7 @@
     Network,
     Pencil,
     Pilcrow,
+    RefreshCw,
     RotateCw,
     Search as SearchIcon,
     Settings as SettingsIcon,
@@ -108,6 +110,12 @@
     closeTabMenu,
     openTabMenu,
   } from "../state/tabMenu.svelte";
+  import {
+    isTauriDesktop,
+    openWebInspector,
+    reloadWindow,
+  } from "../api/desktop";
+  import { notify } from "../state/notify.svelte";
 
   let { tab }: { tab: FileTab } = $props();
 
@@ -407,6 +415,30 @@
     } catch (err) {
       console.error("[chan] reload failed", err);
     }
+  }
+
+  /// `fullstack-b-26`: tab right-click "Reload" entry. Reuses the
+  /// existing `reload_window` IPC plumbed by `-b-17` (chan-desktop)
+  /// and `-a-36` (SPA helper); on web falls through to
+  /// `window.location.reload()`. Window-level reload — distinct
+  /// from "Reload from Disk" above which re-reads just this file.
+  async function doReloadWindow(): Promise<void> {
+    closeTabMenu();
+    await reloadWindow();
+  }
+
+  /// `fullstack-b-26`: tab right-click "Open Inspector" entry.
+  /// Invokes the `open_devtools` IPC on chan-desktop; on web the
+  /// helper returns false and we toast a hint pointing the user
+  /// at the browser's built-in inspector.
+  async function doOpenInspector(): Promise<void> {
+    closeTabMenu();
+    if (await openWebInspector()) return;
+    notify(
+      isTauriDesktop()
+        ? "Inspector unavailable in this build"
+        : "Use the browser's built-in inspector (Right-click → Inspect Element)",
+    );
   }
 
   function doOpenSettings(): void {
@@ -762,6 +794,28 @@
           </span>
           <span class="mbtn-label">Settings</span>
           <span class="mbtn-chord">{chordLabel("app.settings.toggle")}</span>
+        </button>
+        <!-- `fullstack-b-26`: window-level Reload + Open Inspector
+             at the tail of every tab right-click menu. Reuses the
+             `reload_window` + `open_devtools` IPCs that `-b-17` +
+             `-a-36` already plumbed for the pane-context menu; same
+             helpers in `web/src/api/desktop.ts`. Distinct from the
+             tab-specific "Reload from Disk" row above (which only
+             re-reads this file's content). -->
+        <div class="msep" role="separator"></div>
+        <button class="mbtn" onclick={doReloadWindow}>
+          <span class="mbtn-icon">
+            <RefreshCw size={16} strokeWidth={1.75} aria-hidden="true" />
+          </span>
+          <span class="mbtn-label">Reload</span>
+          <span class="mbtn-chord"></span>
+        </button>
+        <button class="mbtn" onclick={doOpenInspector}>
+          <span class="mbtn-icon">
+            <Bug size={16} strokeWidth={1.75} aria-hidden="true" />
+          </span>
+          <span class="mbtn-label">Open Inspector</span>
+          <span class="mbtn-chord"></span>
         </button>
       </div>
     </div>

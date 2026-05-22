@@ -1,6 +1,7 @@
 <script lang="ts">
   import { tick } from "svelte";
   import {
+    Bug,
     Check,
     Clipboard,
     ClipboardPaste,
@@ -11,6 +12,7 @@
     Network,
     Pencil,
     Radio,
+    RefreshCw,
     RotateCcw,
     Search,
   } from "lucide-svelte";
@@ -73,6 +75,12 @@
     openTabMenu,
     tabMenu,
   } from "../state/tabMenu.svelte";
+  import {
+    isTauriDesktop,
+    openWebInspector,
+    reloadWindow,
+  } from "../api/desktop";
+  import { notify } from "../state/notify.svelte";
   import BubbleOverlay from "./BubbleOverlay.svelte";
   import TerminalRichPrompt from "./TerminalRichPrompt.svelte";
   import { readWatcherEvents } from "../state/watcherEvents";
@@ -632,6 +640,29 @@
     if (!text) return;
     await navigator.clipboard?.writeText(text);
     term?.focus();
+  }
+
+  /// `fullstack-b-26`: tab right-click "Reload" entry. Reuses the
+  /// existing `reload_window` IPC plumbed by `-b-17`. Window-level
+  /// reload — distinct from terminal "Restart" above which spawns
+  /// a fresh shell in the same tab.
+  async function doReloadWindow(): Promise<void> {
+    closeTabMenu();
+    await reloadWindow();
+  }
+
+  /// `fullstack-b-26`: tab right-click "Open Inspector" entry.
+  /// Invokes the `open_devtools` IPC on chan-desktop; on web the
+  /// helper returns false and we toast a hint pointing the user
+  /// at the browser's built-in inspector.
+  async function doOpenInspector(): Promise<void> {
+    closeTabMenu();
+    if (await openWebInspector()) return;
+    notify(
+      isTauriDesktop()
+        ? "Inspector unavailable in this build"
+        : "Use the browser's built-in inspector (Right-click → Inspect Element)",
+    );
   }
 
   async function pasteClipboard(): Promise<void> {
@@ -1198,6 +1229,25 @@
             </span>
           </label>
         {/each}
+        <!-- `fullstack-b-26`: window-level Reload + Open Inspector
+             at the tail of the terminal-tab right-click menu.
+             Reuses `reload_window` + `open_devtools` IPCs that
+             `-b-17` + `-a-36` already plumbed. -->
+        <div class="msep" role="separator"></div>
+        <button class="mbtn" onclick={doReloadWindow}>
+          <span class="mbtn-icon">
+            <RefreshCw size={16} strokeWidth={1.75} aria-hidden="true" />
+          </span>
+          <span class="mbtn-label">Reload</span>
+          <span class="mbtn-chord"></span>
+        </button>
+        <button class="mbtn" onclick={doOpenInspector}>
+          <span class="mbtn-icon">
+            <Bug size={16} strokeWidth={1.75} aria-hidden="true" />
+          </span>
+          <span class="mbtn-label">Open Inspector</span>
+          <span class="mbtn-chord"></span>
+        </button>
       </div>
     </div>
   {/if}
