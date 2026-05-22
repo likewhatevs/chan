@@ -2134,14 +2134,16 @@ mod tests {
         // exact timestamp is wall-clock so we don't assert on
         // its value; we assert on the literal prefixes +
         // path#heading anchor instead.
-        let out =
-            super::format_poke_text(Some("path/to/task.md"), Some("2026-05-22-poke"));
+        let out = super::format_poke_text(Some("path/to/task.md"), Some("2026-05-22-poke"));
         assert!(out.starts_with("Poke, it's "), "got {out:?}");
         assert!(
             out.contains("Check your task at path/to/task.md#2026-05-22-poke and execute."),
             "got {out:?}"
         );
-        assert!(!out.ends_with('\n'), "trailing chord is added by the caller, not the helper; got {out:?}");
+        assert!(
+            !out.ends_with('\n'),
+            "trailing chord is added by the caller, not the helper; got {out:?}"
+        );
 
         // Either missing field → bare "poke" (no template).
         assert_eq!(super::format_poke_text(None, Some("h")), "poke");

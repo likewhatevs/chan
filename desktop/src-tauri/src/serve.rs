@@ -441,7 +441,11 @@ pub fn find_orphan_chan_serve_candidates(_key: &str) -> Result<Vec<OrphanCandida
 /// `self_pid` so the current chan-desktop process never
 /// nominates itself.
 #[cfg(unix)]
-fn parse_ps_lines_for_chan_serve(ps_output: &str, key: &str, self_pid: u32) -> Vec<OrphanCandidate> {
+fn parse_ps_lines_for_chan_serve(
+    ps_output: &str,
+    key: &str,
+    self_pid: u32,
+) -> Vec<OrphanCandidate> {
     let mut candidates = Vec::new();
     for line in ps_output.lines() {
         let line = line.trim_start();
@@ -1572,7 +1576,9 @@ mod tests {
         assert_eq!(candidates.len(), 1);
         assert_eq!(candidates[0].pid, 200);
         assert!(
-            candidates[0].command.starts_with("/Applications/Chan.app/Contents/MacOS/chan serve /tmp/notes"),
+            candidates[0]
+                .command
+                .starts_with("/Applications/Chan.app/Contents/MacOS/chan serve /tmp/notes"),
             "command field must carry the raw argv for the dialog: {}",
             candidates[0].command,
         );
