@@ -297,6 +297,57 @@ that don't block the cut but should land in Round-3:
   the main-Settings entry retreats to a global default
   vs per-tab override pattern.
 
+* **Drafts row should be FIRST in FB tree, BEFORE the
+  drive's directories** (added 2026-05-22 by @@Alex; spec
+  miss in `-a-66 slice b`). Per addendum-a: "The Drafts
+  folder will be shown in the File Browser as the very
+  first element." Current behavior: Drafts is sorted
+  alphabetically between `docs/` and `scripts/`. The
+  synthetic-injection from `-a-66 slice b` adds Drafts
+  but doesn't pin its position. Fix: pin the synthetic
+  Drafts entry to position 0 in the FB tree sort, before
+  the drive's own directories. Lane: @@FullStackA (SPA
+  FB tree rendering — likely a one-line sort
+  predicate adjustment).
+
+* **Test case: user creates a folder called "Drafts"
+  inside their drive** (added 2026-05-22 by @@Alex —
+  collision scenario). The synthetic Drafts row from
+  `-a-66 slice b` lives at the FB-tree level
+  ABOVE the drive's actual contents (it's a metadata
+  folder injected as wire-layer). If the user creates a
+  real `Drafts/` directory inside the drive root, what
+  happens? Two visible rows? Merge attempted? Sort
+  conflict? Document the expected behavior + add a
+  walkthrough scenario. Lane: @@FullStackA + audit
+  expected semantics first.
+
+* **Test case: New Terminal from a doc in Drafts should
+  CWD into the metadata Drafts location, not the drive
+  root** (added 2026-05-22 by @@Alex). When user opens
+  a Drafts/untitled/draft.md doc and clicks "New
+  Terminal" from the menu / right-click, the spawned
+  terminal's CWD should be the actual on-disk drafts
+  metadata dir (`~/.chan/.../Drafts/untitled/` per the
+  systacean-24 layout) — NOT the drive root. Lane:
+  @@FullStackA (SPA new-terminal CWD resolution) +
+  possible scope-poke to @@Systacean if a chan-drive
+  API helper is needed to resolve the on-disk path.
+
+* **Graph error "no such path: Drafts/untitled/draft.md"
+  on file-scope graph** (added 2026-05-22 by @@Alex via
+  screenshot during `-a-66 slice b/c/d` validation).
+  Graph view scoped to a Drafts file shows "no such
+  path" error. May be related to the slice b/c/d
+  data-flow gap that `systacean-32` partially closed
+  via `Drive::stat` unification — graph route may
+  still have a path-resolution code path that's NOT
+  unified-aware. Audit at task pickup: trace the
+  graph route's path resolution for `Drafts/`-prefixed
+  files. Lane: @@FullStackA (SPA graph) OR @@Systacean
+  (chan-server graph route) depending on which layer
+  fails. Audit-then-route.
+
 ## Track 5 — Per-agent submit-chord encoding map (LOCKED 2026-05-20)
 
 Promoted from parking-lot to confirmed Round-3 track on

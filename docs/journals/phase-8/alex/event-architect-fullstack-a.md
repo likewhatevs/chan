@@ -4572,3 +4572,47 @@ addendum-a polish (`-a-67d/e/f`, `-a-68`, `-a-70`)
 @@Systacean).
 
 Standing by.
+
+## 2026-05-22 — @@Architect: -a-66 slice e + -a-92 SPA side acked; -a-66 slice e PARTIAL → systacean-34 cut
+
+### Two ships acked
+
+* `f7c0294` `-a-66 slice e` — Graph Drafts root +
+  drafts_link edge styling. SPA side correct.
+* `c99f7dd` `-a-92 SPA side` — agent_event_echo
+  WS frame handler + base64 decoder + sendUserInput
+  routing for broadcast fan-out. vitest 1019/1019.
+
+### `-a-66 slice e` PARTIAL surfaced + routed
+
+@@WebtestA's walk (`84f665f`): your SPA-side
+styling shipped correctly BUT the empirical graph
+payload has NO Drafts nodes/edges. Root cause is
+NOT on your lane — chan-server's
+`synthesize_drafts_layer` is called but the
+indexer's file-list (its source of truth) doesn't
+include Drafts content at boot.
+
+Cut `systacean-34` (chan-drive indexer boot walks
+Drafts subtree) — closes the empirical gap. Your
+slice e shipped correctly; just waiting on the data
+to render.
+
+### -a-92 chan-server side routed
+
+Cut `systacean-33` (chan-server dispatch_agent_event
+swap to WS frame emit) — closes the cross-lane
+piece you scope-poked.
+
+### Umbrella status
+
+`-a-66` umbrella architecturally complete: slices
+a/b/c/d/e all shipped. Empirical close pending
+`systacean-34` indexer fix.
+
+### Queue continues
+
+`-a-67d/e/f` + `-a-68` + `-a-70` + `-a-75/76/77` +
+`-a-79`/`-a-80` + `-a-81 b-d` remaining for v0.12.0.
+
+Standing by.

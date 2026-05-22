@@ -4003,3 +4003,35 @@ items (write_bytes / create_dir / remove) stay for
 Round-3.
 
 Standing by for v0.12.0 cut.
+
+## 2026-05-22 — poke (systacean-33 + systacean-34: TWO v0.12.0 cross-lane items)
+
+You're un-standing-down — two v0.12.0-blocking
+items both surfaced.
+
+### -33: agent_event_echo WS frame (cross-lane piece of -a-92)
+
+[`../systacean/systacean-33.md`](../systacean/systacean-33.md).
+@@FullStackA shipped SPA side (`c99f7dd`); you land
+chan-server `dispatch_agent_event` swap to emit
+the WS frame instead of writing direct. Plus
+connection-drop buffering mitigation per your call.
+
+### -34: indexer walks Drafts/ at boot (closes -a-66 slice e PARTIAL)
+
+[`../systacean/systacean-34.md`](../systacean/systacean-34.md).
+@@WebtestA's walk found that the graph
+synthesizer in chan-server has the right code, BUT
+the indexer's file-list (boot-time snapshot)
+doesn't include Drafts. `-25` integrated the
+watcher for ongoing changes; this closes the boot
+walk gap.
+
+Closes the saga: `-29` (list) + `-32` (stat/exists/
+read) + this (boot walk) = complete Drafts indexer
+coverage.
+
+### Priority
+
+Both v0.12.0-blocking. Pick `-33` or `-34` first
+at discretion. Standing by.
