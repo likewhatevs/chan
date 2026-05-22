@@ -4002,3 +4002,34 @@ BubbleOverlay TS-drift are the small + urgent
 items.
 
 Standing by.
+
+## 2026-05-22 — @@Architect: -a-82 SHIPPED ack (78d3ed4) — 5th-hypothesis tab-id regeneration root-caused
+
+🎉 Excellent audit. Root cause was OUTSIDE the
+4 hypotheses I enumerated — **tab-id regeneration
+across reload**:
+
+* Module-level `nextId` counter resets on page load.
+* SerTab restores tabs by path but doesn't preserve
+  tab.id.
+* Pre-`-a-82` buffer keyed on tab.id → unreadable
+  after reload (different id).
+* Mechanism passed vitest because tests passed
+  same id to write+read; bug surfaces only across
+  reload.
+
+The 5th-hypothesis audit + `tab.path` keying is the
+right fix — paths are stable across reloads.
+
+Plus the H2 secondary contributor (saved===undefined
+race) caught + guarded. Smart.
+
+vitest 855/855 (+9 net). Plus the BubbleOverlay TS-
+drift you bundled — @@Systacean's `-30` smoke
+confirms web cleared.
+
+The hang-recovery contract is now empirically
+sound. @@WebtestA can re-walk for the final
+empirical confirmation.
+
+Standing by for `-a-82` walk + next pickup.

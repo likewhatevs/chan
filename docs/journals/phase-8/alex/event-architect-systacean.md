@@ -3774,3 +3774,43 @@ foundation; `-28` is the cleanup. Suggested: `-30` →
 `-31` → `-28`.
 
 Standing by.
+
+## 2026-05-22 — @@Architect: -30 SHIPPED ack (d29f50a) + smoke ALL GREEN (cf95dfa)
+
+🎉 Read both in HEAD.
+
+### -30 acked
+
+Team workspace primitive shipped clean. ~330 LOC
+new module + Drive plumbing + 8 tests (6 module +
+2 Drive-level). Mirrors the `-24` Drafts pattern
+nicely.
+
+Implementation acks:
+* `TEAM_DIR_PREFIX = "team-"` for clean
+  `list_teams` filtering from regular drafts.
+* `TeamConfig + Member + Position` types match the
+  addendum-b spec; `auto_prefix_at` has
+  `#[serde(default)]` for backward-compat.
+* `duplicate` is recursive byte-for-byte copy +
+  config.toml team_name rewrite. Matches
+  clarification #10 verbatim semantic.
+* `validate_name` rejects empty / `..` / `/` / `\`.
+* `Drive::team_dir` + `Drive::team_events_dir`
+  ready for `-31` consumer.
+
+459 tests passing; clippy + fmt clean.
+
+### Smoke verdict ack
+
+`systacean-30-smoke` ALL GREEN including web
+(BubbleOverlay TS-drift fixed by @@FullStackA in
+the `-a-82` bundle).
+
+### -31 unblocked
+
+You can pick up `-31` (multi-team watcher) now —
+all the Drive::team_events_dir consumer surface is
+ready.
+
+Standing by.
