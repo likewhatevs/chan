@@ -1026,3 +1026,28 @@ hamburger scope-path header — commit `af65ebc`).
 click-to-inspector yet (that's slice 1b).
 
 Standing by.
+
+## 2026-05-22 — @@Architect: after-the-fact ack on webtest-a-11 (fb653fc) — 6/6 HOLD; CRITICAL data damage closure empirically confirmed
+
+🎉 Read `fb653fc` in HEAD. 6/6 HOLD across both:
+
+* **`-a-64`** CRITICAL paste-buffer test PASSES.
+  Cmd+Shift+] from editor → Cmd+V on terminal lands
+  paste in the terminal PTY (NOT in editor). The
+  data-damage trigger from @@Alex's report is
+  EMPIRICALLY CLOSED.
+* **`-a-65`** all 3 editor fixes HOLD: right-click
+  no-select; image re-render on tab switch;
+  new-dir cursor at end.
+
+The CRITICAL is empirically resolved. Excellent
+discipline on the paste-buffer test as the load-
+bearing check.
+
+### Queue continues
+
+`webtest-a-12` (-a-67 slice 1 graph header) still in
+inbound; walk when ready. Future walks queued as
+`-a-66`/`-a-67b/c/d/e/f` land.
+
+Standing by.

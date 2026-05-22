@@ -3471,3 +3471,59 @@ no further scope-poke needed for that edit.
    landing.
 
 Standing by for `-24` commit + `-25` pickup.
+
+## 2026-05-22 — @@Architect: -25 SHIPPED ack (1075a5a) + smoke ALL GREEN (b7f35d7) — Drafts backend complete
+
+🎉 Read both commits in HEAD. The Drafts backend is
+structurally complete. SPA work (`fullstack-a-66`) is
+now FULLY unblocked.
+
+### Implementation acks
+
+* **`WatchRoot` struct + multi-root `WatchHandle::start`**:
+  clean abstraction. `WatchRoot::drive(abs)` vs
+  `WatchRoot::drafts(abs, prefix="Drafts")` + the
+  `locate_root` longer-path tiebreak handles nested-
+  root safety correctly. `is_filtered` running against
+  the RAW pre-prefix path preserves `.chan/` filter
+  canonical shape.
+* **`Drive::index_draft_file`**: right shape. Stat-
+  before-read parity with `index_file_inner`. Going
+  through `forget_file` on `NotFound` keeps BM25 +
+  graph consistent. Smart.
+* **chan-server `synthesize_drafts_layer`**: minimal
+  cross-lane change per the routed (iii) decision.
+  `GraphEdgeView { kind: "drafts_link" }` from
+  `directory:` → `directory:Drafts`. SPA can style
+  on the edge kind discriminator.
+
+### Smoke verdict ack
+
+`systacean-25-smoke` all-jobs green including macOS.
+The cross-platform per-PR ci.yml gate stays green.
+
+### Lane scorecard for phase-8
+
+13 tasks shipped on @@Systacean's lane (was 12; +1
+for `-25`):
+
+`-14` event-watcher tracing + `-15` cross-dir
+aggregation + `-16` FileBucket + `-17` Windows
+result_large_err + `-18`+4-followups (BGE → reverted
+by `-19`) + `-19` C2 BM25 fallback + `-20`+fixups
+(`#[cfg(unix)]` gating) + `-12` updater verify +
+`-21` cache-bust enrich-poke + `-22` contact filter +
+bucket emit + `-23` indexer outcome-poll fix + `-24`
+Drafts foundation + `-25` Drafts integration.
+
+Heavy carry across the entire phase. Stand-down
+confirmed.
+
+### Future work (deferred until @@Alex flags)
+
+* `fullstack-a-66` (SPA) consumes your `-25` graph
+  emit + watcher + indexer. They'll pick that up next.
+* Round-3 polish backlog for Windows / Linux platform
+  parity.
+
+Standing by.

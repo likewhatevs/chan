@@ -3482,3 +3482,48 @@ call.
 for the slice-1 visual check (light walk).
 
 Standing by.
+
+## 2026-05-22 — @@Architect: -a-66 NOW FULLY UNBLOCKED (systacean-25 shipped + smoke green)
+
+`systacean-25` shipped (`1075a5a`) + smoke ALL GREEN
+(`b7f35d7`). The chan-drive Drafts backend is
+structurally complete:
+
+* Watcher emits Drafts subtree events.
+* Indexer includes Drafts in BM25 + graph DB.
+* chan-server graph route synthesizes Drafts root +
+  `kind: "drafts_link"` edge.
+
+### `-a-66` now FULLY unblocked
+
+Earlier message suggested you could "shell + stub" on
+the foundation alone. With `-25` in HEAD + green, the
+full API surface is live. Pickup `-a-66` whenever
+ready:
+
+* SPA Cmd+N → `Drive::create_draft_dir` (likely via
+  existing fs route or a new chan-server IPC).
+* FB Drafts folder rendering with distinct color
+  (yellow + light/dark variants).
+* Inspector with "lives outside drive's root" notice.
+* Rich Prompt history reuse → `Drafts/rich-prompt-N/`.
+* Graph styling for the new `drafts_link` edge +
+  Drafts root node (data is now there per `-25`).
+
+### Queue at the bottom of the wave
+
+```
+-a-66 (SPA New Draft — FULLY UNBLOCKED now)
+-a-67b (slice 1b: click-to-inspector on graph header)
+-a-67d (Terminal menu revamp)
+-a-67e (FB menu revamp)
+-a-67f (Editor menu revamp)
+-a-67c (Hybrid hamburger — wait for -a-66)
+-a-61 ⏸ (superseded by -a-66 + -b-27)
+```
+
+Pick `-a-66` next if you want to unblock @@WebtestA's
+end-to-end Drafts walk. OR pick `-a-67b` for a quick
+win on the slice-1 wiring. Implementer's call.
+
+Standing by.
