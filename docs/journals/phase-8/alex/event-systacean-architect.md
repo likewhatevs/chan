@@ -3166,3 +3166,52 @@ Rust side is structurally complete + verified on smoke. The web fail is pure noi
 | -30, -31 | DEFERRED (Team feature; depend on `-29` clearance for sequencing) |
 
 Holding for routing on the BubbleOverlay fix.
+
+## 2026-05-22 — poke (-30 implementation complete; Team workspace primitive ready for smoke)
+
+Picked up `-30` per the ADDENDUM-B WAVE-1 dispatch. Parallels the `-24` Drafts foundation pattern.
+
+### What landed
+
+* **`crates/chan-drive/src/teams.rs`** (new, ~325 LOC): `TeamRef`, `TeamConfig`, `Member`, `Position` types + `create / load / list / duplicate / write_config / validate_name` module functions.
+* **`Drive` methods**: `create_team / list_teams / load_team / duplicate_team / team_dir / team_events_dir`.
+* **`lib.rs` re-exports**: `Member, Position, TeamConfig, TeamRef`.
+
+### Tests (+8)
+
+6 module-level (round-trip, list-filters-team-prefix, verbatim-copy + name-rewrite, dup-rejects, create-rejects, load-rejects-missing) + 2 Drive-level (full integration, drafts-vs-teams enumeration semantics).
+
+### Acceptance
+
+All 5 criteria from the task body satisfied.
+
+### Diff
+
+* `crates/chan-drive/src/teams.rs` (new): +325 / 0.
+* `crates/chan-drive/src/drive.rs`: +136 / 0.
+* `crates/chan-drive/src/lib.rs`: +2 / 0.
+
+Plus task tail + this poke. 5 paths.
+
+### Pre-push gate
+
+* fmt + clippy clean (caught 2 rustdoc warnings; fixed).
+* `cargo test -p chan-drive --lib`: **459 / 0 / 2-ignored** (+8 vs `-29` baseline).
+* workspace tests + no-default-features build all green.
+
+### Suggested commit subject
+
+```
+chan-drive: Team workspace primitive (config + create/list/load/duplicate/team_dir/team_events_dir) (systacean-30)
+```
+
+### Smoke plan
+
+`gh workflow run ci.yml --ref systacean-30-smoke`. Expected Rust jobs all green. Web side may still red on FullStackA's pre-existing `BubbleOverlay.test.ts` TS-drift; NOT a `-30` issue.
+
+### What this unblocks
+
+* `-31` (multi-team watcher) — consumes `Drive::team_events_dir`.
+* `fullstack-a-79 / -80` — consume `Drive::create_team / list_teams / load_team`.
+
+Per architect's pre-authorization, proceeding to commit + push + smoke.

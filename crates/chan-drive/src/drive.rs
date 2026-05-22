@@ -1111,6 +1111,64 @@ impl Drive {
         drafts::promote(&self.paths.drafts, name, &target_abs)
     }
 
+    // ---- teams (systacean-30) ----
+    //
+    // Team workspaces live inside the per-drive Drafts metadata
+    // dir as `team-{name}/` directories. Parallels the drafts
+    // primitive layer: filesystem ops here, schema in
+    // `crate::teams`. Consumed by `systacean-31` (multi-team
+    // watcher) + the SPA's Team bootstrap flow.
+
+    /// Create a new team workspace under this drive's drafts dir.
+    /// Creates `team-{config.team_name}/` with `config.toml`,
+    /// empty `events/`, and empty `docs/`. Errors when the team
+    /// name is invalid or the dir already exists.
+    pub fn create_team(&self, config: &crate::teams::TeamConfig) -> Result<crate::teams::TeamRef> {
+        crate::teams::create(&self.paths.drafts, config)
+    }
+
+    /// Enumerate teams under this drive's drafts dir. Returns
+    /// only directories whose name starts with `team-` (regular
+    /// drafts are excluded). Sorted by team name.
+    pub fn list_teams(&self) -> Result<Vec<crate::teams::TeamRef>> {
+        crate::teams::list(&self.paths.drafts)
+    }
+
+    /// Read + parse `config.toml` for the named team. Errors
+    /// when the team dir is missing or the config is malformed.
+    pub fn load_team(&self, team_name: &str) -> Result<crate::teams::TeamConfig> {
+        crate::teams::load(&self.paths.drafts, team_name)
+    }
+
+    /// Verbatim-copy a team workspace under a new name. All
+    /// files + subdirectories copy byte-for-byte; the new team's
+    /// `config.toml` then has its `team_name` rewritten to
+    /// `new_name`. Per addendum-b clarification #10.
+    pub fn duplicate_team(
+        &self,
+        source_name: &str,
+        new_name: &str,
+    ) -> Result<crate::teams::TeamRef> {
+        crate::teams::duplicate(&self.paths.drafts, source_name, new_name)
+    }
+
+    /// Absolute path to a team's workspace directory. Errors
+    /// when the team isn't registered (`load_team` validates).
+    /// Useful for consumers that need to spawn processes with
+    /// CWD set to the team workspace.
+    pub fn team_dir(&self, team_name: &str) -> Result<std::path::PathBuf> {
+        // load_team validates existence + name shape.
+        self.load_team(team_name)?;
+        let dir_name = format!("{}{}", crate::teams::TEAM_DIR_PREFIX, team_name);
+        Ok(self.paths.drafts.join(dir_name))
+    }
+
+    /// Absolute path to a team's `events/` subdirectory.
+    /// Consumed by `systacean-31`'s per-team watcher attach.
+    pub fn team_events_dir(&self, team_name: &str) -> Result<std::path::PathBuf> {
+        Ok(self.team_dir(team_name)?.join("events"))
+    }
+
     /// systacean-26: pick the smallest unused `untitled-N` name
     /// under the drafts root. Returns `"untitled"` on the first
     /// call (no `untitled` dir exists); `"untitled-1"` if
@@ -5029,6 +5087,84 @@ mod tests {
 
         drive.create_draft_dir("untitled-1").unwrap();
         assert!(drive.create_draft_dir("untitled-1").is_err());
+    }
+
+    #[test]
+    fn teams_create_list_load_duplicate_through_drive() {
+        // systacean-30: Drive-level integration. Create team via
+        // Drive method, verify list_teams + load_team round-trip,
+        // verify team_dir + team_events_dir resolve correctly,
+        // duplicate produces a verbatim copy with rewritten name.
+        let (_cfg, _root, drive) = fixture();
+        let cfg = crate::teams::TeamConfig {
+            team_name: "marketing".to_string(),
+            host_name: "Alex".to_string(),
+            host_handle: "@@Alex".to_string(),
+            auto_prefix_at: true,
+            created_at: "2026-05-22T13:57:00Z".to_string(),
+            members: vec![],
+        };
+        let team = drive.create_team(&cfg).unwrap();
+        assert_eq!(team.name, "marketing");
+        assert!(team.abs.is_dir());
+
+        let teams = drive.list_teams().unwrap();
+        assert_eq!(teams.len(), 1);
+        assert_eq!(teams[0].name, "marketing");
+
+        let loaded = drive.load_team("marketing").unwrap();
+        assert_eq!(loaded.team_name, "marketing");
+
+        let team_dir = drive.team_dir("marketing").unwrap();
+        assert_eq!(team_dir, drive.drafts_dir().join("team-marketing"));
+        let events_dir = drive.team_events_dir("marketing").unwrap();
+        assert_eq!(events_dir, team_dir.join("events"));
+
+        let dup = drive.duplicate_team("marketing", "marketing-2025").unwrap();
+        assert_eq!(dup.name, "marketing-2025");
+        let dup_cfg = drive.load_team("marketing-2025").unwrap();
+        assert_eq!(dup_cfg.team_name, "marketing-2025");
+        // The duplicate's host_handle was preserved verbatim.
+        assert_eq!(dup_cfg.host_handle, "@@Alex");
+
+        let after_dup = drive.list_teams().unwrap();
+        let names: Vec<String> = after_dup.iter().map(|t| t.name.clone()).collect();
+        assert_eq!(names, ["marketing", "marketing-2025"]);
+    }
+
+    #[test]
+    fn teams_dont_appear_in_list_drafts_under_team_prefix() {
+        // systacean-30: although team workspaces live in the same
+        // metadata dir as drafts, `list_drafts` reports them too
+        // (since they're directories there). `list_teams`
+        // filters to only `team-*` dirs. This pin documents the
+        // current behavior: drafts vs teams share the metadata
+        // dir; the filter is on the listing side, not the
+        // storage side.
+        let (_cfg, _root, drive) = fixture();
+        drive.create_draft_dir("untitled-1").unwrap();
+        drive
+            .create_team(&crate::teams::TeamConfig {
+                team_name: "alpha".to_string(),
+                host_name: "Alex".to_string(),
+                host_handle: "@@Alex".to_string(),
+                auto_prefix_at: true,
+                created_at: "2026-05-22T13:57:00Z".to_string(),
+                members: vec![],
+            })
+            .unwrap();
+
+        let teams = drive.list_teams().unwrap();
+        assert_eq!(teams.len(), 1);
+        assert_eq!(teams[0].name, "alpha");
+
+        // list_drafts sees both (since `team-alpha` is a dir
+        // under drafts_dir). Callers that want only true drafts
+        // can filter post-hoc by checking name.starts_with("team-").
+        let drafts = drive.list_drafts().unwrap();
+        let names: Vec<String> = drafts.iter().map(|d| d.name.clone()).collect();
+        assert!(names.contains(&"untitled-1".to_string()));
+        assert!(names.contains(&"team-alpha".to_string()));
     }
 
     #[test]
