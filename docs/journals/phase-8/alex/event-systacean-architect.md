@@ -2633,3 +2633,41 @@ chan-drive: poll BM25 outcome instead of indexer counter in writes_to_disk_get_i
 `gh workflow run ci.yml --ref systacean-23-smoke` on a fresh smoke branch. Expected: macos-latest green (the outcome-poll absorbs the race). If macos-latest still red post-fix, pivot to option (B). Smoke verdict tells us empirically.
 
 Per architect's pre-authorized A/B/C routing in the dispatch poke, proceeding to commit + push + smoke now. Will surface verdict on completion.
+
+## 2026-05-22 — poke (-23 smoke ALL GREEN; macOS indexer flake fixed)
+
+`-23` smoke [`26277881956`](https://github.com/fiorix/chan/actions/runs/26277881956) **ALL GREEN** including the previously-failing macos-latest:
+
+| Job | Result |
+|-----|--------|
+| rustfmt | ✓ 18s |
+| web | ✓ 1m54s |
+| build no-default-features | ✓ 6m59s |
+| **clippy + test (macos-latest)** | **✓ 7m50s** ← flake fix verified |
+| clippy + test (ubuntu-latest) | ✓ 9m53s |
+
+### Empirical confirmation
+
+The macos-latest job ran `cargo test --all-targets` end-to-end including `indexer::tests::writes_to_disk_get_indexed_after_debounce` — passed cleanly with the outcome-poll fix. So either the previously-suspected BM25 reader-visibility lag OR the FSEvents partial-content race (or both) get absorbed by the polled wait. The earlier `indexed_total >= 1` wait still pins the diagnostic "did the indexer fire?" signal in case macOS event delivery ever regresses.
+
+### What's live on main
+
+* `8b4fcfa` — `chan-drive: poll BM25 outcome instead of indexer counter in writes_to_disk_get_indexed_after_debounce (systacean-23)`. Atomic-audit-commit clean; 3 paths.
+* macOS coverage retained (NO `#[cfg(not(target_os = "macos"))]` gate).
+* Dual-stage assert preserves diagnostic value: indexer-fire signal AND BM25-visibility signal both surface independently.
+
+### Pattern reuse
+
+Third application of the "replace timing-proxy with outcome-poll" recipe this session: `-20` (`watcher_keeps_report_current` polled `drive.report()`), `-19`'s C2 fallback tests indirectly, and now `-23`. The pattern is stable enough to recommend it for any future race-on-macOS class.
+
+### Lane state
+
+| Task | State |
+|------|-------|
+| -23 | ✓ shipped + smoke-validated (this) |
+| -22 | ✓ shipped (contact filter + bucket emit) |
+| -21 | ✓ shipped (cache-bust enrich-poke) |
+| -12 | ✓ macOS happy-path shipped; failure modes + Linux/Windows deferred |
+| All prior systacean tasks | ✓ shipped |
+
+Lane fully idle post-`-23`. Standing by for new dispatches. Smoke branch preserved per `feedback_destructive_cleanups_coordinate_with_docs` — awaiting your sequencing.
