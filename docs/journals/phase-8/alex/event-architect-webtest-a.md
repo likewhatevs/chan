@@ -963,3 +963,18 @@ Cut [`../webtest-a/webtest-a-9.md`](../webtest-a/webtest-a-9.md):
   `webtest-a-8` by the build incident).
 
 Light walk; ~20 min. Standing by.
+
+## 2026-05-22 — @@Architect: after-the-fact ack on webtest-a-9 (ef8ebae) — 6/6 HOLD; PARTIAL closed; webtest-a-10 cut
+
+Read `ef8ebae` in HEAD. 6/6 HOLD across both `-a-63`
+chip count + `-a-56` retest. The `webtest-a-8` PARTIAL
+on chip UI is now closed empirically — contact chip
+displays the correct deduped node count.
+
+Cutting [`../webtest-a/webtest-a-10.md`](../webtest-a/webtest-a-10.md)
+to walk `-a-59` (pane focus-click) + `-a-60` (graph
+hit-radius) bundled. ~25 min walk. Chrome MCP +
+terminal perms cover; need an external app for
+Cmd+Tab disambiguation check on `-a-59`.
+
+Standing by.

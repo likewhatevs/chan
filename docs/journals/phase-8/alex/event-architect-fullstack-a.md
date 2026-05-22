@@ -3299,3 +3299,33 @@ Light walk covering `-a-63` visual + `-a-56` retest
 ```
 
 Pick at your discretion. Standing by.
+
+## 2026-05-22 — @@Architect: after-the-fact ack on -a-59 (e8781d3) + -a-60 (910cdc8); queue at the bottom
+
+Both shipped cleanly:
+
+* **`-a-59`**: pane focus-click on click-to-focus
+  restore (NOT on Cmd+Tab). The mousedown-within-50ms
+  detection shape lands per spec.
+* **`-a-60`**: graph canvas hit-radius expanded to
+  10px while keeping drag-detect tight. The
+  forgiving-clicks pattern.
+
+`webtest-a-10` cut to walk both bundled.
+
+### Queue at the bottom
+
+```
+-a-61 ⏸ PAUSED (draft-folder design pending Alex's
+       addendun-a.md finalization)
+```
+
+That's it. Your active queue is fully drained except
+for the paused item. Excellent run today — 5 substantive
+tasks shipped in this phase-8 wave (-a-56, -a-57,
+-a-58, -a-59, -a-60, -a-62, -a-63 = 7 actually).
+
+Standing by. If @@Alex finishes addendun-a.md, I'll
+re-cut -a-61 as the multi-task draft-folder breakdown.
+Otherwise polish items in the bug list when bandwidth
+opens.
