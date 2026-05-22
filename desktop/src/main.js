@@ -295,10 +295,12 @@ function render(drives) {
       <td class="path-cell" data-act="reveal" title="${escapeAttr(d.path)} — click to open in Finder">${renderPath(d.path)}</td>
       <td>
         <div class="row-actions">
+          ${renderFeaturesToggle(d.path)}
           ${renderOpenSplit({ hasUrl, includeForget: true, disabledAttr })}
         </div>
       </td>
-    </tr>`;
+    </tr>
+    ${renderFeaturesPanel(d.path)}`;
   }).join('');
 
   main.innerHTML = `
@@ -314,6 +316,70 @@ function render(drives) {
     </table>`;
 
   bindRowEvents();
+}
+
+/// `fullstack-b-28a`: per-drive features toggle. Renders the
+/// "⚙" expand button shown alongside the Open split. Clicking
+/// expands the sibling feature-panel row showing the BGE +
+/// reports checkboxes. Stub-persisted via chan-desktop's
+/// sidecar config until `systacean-27` lands the chan-drive
+/// config API + `-b-28b` swaps the IPC body.
+function renderFeaturesToggle(path) {
+  return `
+    <button class="btn features-toggle" data-act="toggle-features"
+            data-features-path="${escapeAttr(path)}"
+            aria-expanded="false"
+            aria-controls="features-${escapeAttr(path)}"
+            title="Per-drive feature toggles">
+      <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor"
+           stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+        <circle cx="12" cy="12" r="3"/>
+        <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09a1.65 1.65 0 0 0-1-1.51 1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09a1.65 1.65 0 0 0 1.51-1 1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33h0a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51h0a1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82v0a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/>
+      </svg>
+    </button>`;
+}
+
+/// `fullstack-b-28a`: sibling row holding the BGE + reports
+/// checkboxes + brief explanatory copy. Hidden by default; the
+/// features-toggle button flips the `hidden` attribute on click
+/// and lazy-loads the persisted state via `get_drive_features`.
+/// Round-2-plan's full explanatory paragraph + per-toggle hint
+/// copy will land in `-b-28b`'s full pre-flight screen.
+function renderFeaturesPanel(path) {
+  return `
+    <tr class="features-panel" id="features-${escapeAttr(path)}"
+        data-features-for="${escapeAttr(path)}" hidden>
+      <td colspan="3">
+        <div class="features-content">
+          <p class="features-copy">
+            Chan walks this drive and indexes the wiki-link graph plus
+            BM25 keyword search by default. Two optional layers can be
+            enabled per-drive; both default off and drop their data when
+            disabled.
+          </p>
+          <label class="features-row">
+            <input type="checkbox" data-feat="bge" disabled />
+            <span class="features-label">
+              <strong>Semantic search</strong>
+              <span class="features-hint">
+                Dense embeddings via BGE-small (~63 MB shared model;
+                per-drive vector index).
+              </span>
+            </span>
+          </label>
+          <label class="features-row">
+            <input type="checkbox" data-feat="reports" disabled />
+            <span class="features-label">
+              <strong>Reports</strong>
+              <span class="features-hint">
+                File classification + per-language SLOC + Basic COCOMO
+                via chan-report.
+              </span>
+            </span>
+          </label>
+        </div>
+      </td>
+    </tr>`;
 }
 
 /// Per-row "Open" split button: primary action opens the drive in
@@ -412,8 +478,96 @@ function bindRowEvents() {
       });
     }
 
+    bindFeaturesToggle(tr);
     bindSplitMenu(tr);
   });
+}
+
+/// `fullstack-b-28a`: wire the ⚙ features toggle on a drive row.
+/// Click flips the sibling `features-panel` row's `hidden`
+/// attribute. First open lazy-loads the persisted state via
+/// `get_drive_features` (so a fresh render only pays the IPC cost
+/// on drives the user actually inspects). Subsequent
+/// checkbox changes call `set_drive_features` with the current
+/// pair value; optimistic update + revert on failure.
+function bindFeaturesToggle(tr) {
+  const path = tr.dataset.path;
+  const toggle = tr.querySelector('[data-act="toggle-features"]');
+  if (!toggle) return;
+  const panel = main.querySelector(`tr.features-panel[data-features-for="${cssEscape(path)}"]`);
+  if (!panel) return;
+
+  toggle.addEventListener('click', async (e) => {
+    e.stopPropagation();
+    const willOpen = panel.hasAttribute('hidden');
+    if (willOpen) {
+      panel.removeAttribute('hidden');
+      toggle.setAttribute('aria-expanded', 'true');
+      if (!panel.dataset.loaded) {
+        await loadFeaturesInto(panel, path);
+        panel.dataset.loaded = '1';
+      }
+    } else {
+      panel.setAttribute('hidden', '');
+      toggle.setAttribute('aria-expanded', 'false');
+    }
+  });
+
+  for (const box of panel.querySelectorAll('input[type="checkbox"][data-feat]')) {
+    box.addEventListener('change', async (e) => {
+      const target = e.target;
+      const checked = target.checked;
+      const features = collectFeaturesFromPanel(panel);
+      try {
+        await invoke('set_drive_features', { path, features });
+      } catch (err) {
+        // Revert the toggle on failure so the UI matches persisted state.
+        target.checked = !checked;
+        showError(err);
+      }
+    });
+  }
+}
+
+/// Read the persisted feature pair via IPC and reflect it on the
+/// panel's checkboxes. Boxes are `disabled` while the IPC is in
+/// flight so a fast double-click can't fire a `set_drive_features`
+/// before the load resolves.
+async function loadFeaturesInto(panel, path) {
+  try {
+    const features = await invoke('get_drive_features', { path });
+    for (const box of panel.querySelectorAll('input[type="checkbox"][data-feat]')) {
+      const feat = box.dataset.feat;
+      box.checked = Boolean(features && features[feat]);
+      box.disabled = false;
+    }
+  } catch (err) {
+    showError(err);
+  }
+}
+
+/// Snapshot the checkbox pair into the same `{bge, reports}` shape
+/// the Rust IPC expects. Missing field defaults to false on the
+/// Rust side; defensive default here keeps the contract explicit.
+function collectFeaturesFromPanel(panel) {
+  const features = { bge: false, reports: false };
+  for (const box of panel.querySelectorAll('input[type="checkbox"][data-feat]')) {
+    const feat = box.dataset.feat;
+    if (feat in features) features[feat] = box.checked;
+  }
+  return features;
+}
+
+/// CSS.escape polyfill for older webviews. Tauri's WKWebView /
+/// WebView2 both ship `CSS.escape` today, but the launcher's
+/// minimum-supported runtime predates that guarantee; the
+/// fallback hand-escapes the ASCII characters that matter for
+/// drive paths (`/`, `.`, ` `, `:`).
+function cssEscape(s) {
+  if (typeof CSS !== 'undefined' && typeof CSS.escape === 'function') {
+    return CSS.escape(s);
+  }
+  return String(s).replace(/[^a-zA-Z0-9_-]/g, (ch) => `\\${ch}`);
 }
 
 /// Wire the split-button caret + dropdown items shared between

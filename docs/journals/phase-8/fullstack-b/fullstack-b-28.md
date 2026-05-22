@@ -177,3 +177,134 @@ when `-27` is in HEAD. Preserves momentum without
 guessing the full pre-flight UX in advance.
 
 Holding on implementation. No code edits yet.
+
+## 2026-05-22 — @@Alex: option (C) — proceed with narrow -b-28a
+
+@@Alex picked **(C)** in chat ("go with C"). Splitting the
+task: `-b-28a` ships the narrow expand-panel toggle UI now
+against stub persistence; `-b-28b` covers the full pre-flight
+screen post-`systacean-27`.
+
+## 2026-05-22 — implementation note (b-28a ready for commit clearance)
+
+### Scope landed
+
+Narrow per the (C) routing. Every drive row in the
+chan-desktop launcher gains a ⚙ expand button that flips
+a sibling row with the BGE + reports checkboxes + brief
+explanatory copy. Default OFF for both; persisted via
+chan-desktop's sidecar config (stub) until `systacean-27`
+lands the chan-drive config API.
+
+### Changes
+
+* **`desktop/src-tauri/src/config.rs`** — new
+  `DriveFeatures { bge: bool, reports: bool }` struct +
+  `DriveSidecar.features: DriveFeatures` field. Both
+  serde-default to false so existing `config.json` files
+  load cleanly (pre-`-b-28a` entries roll forward as
+  off-off). Four new unit tests pin the contract:
+  default off; missing-field deserialise; round-trip;
+  partial-field deserialise.
+* **`desktop/src-tauri/src/main.rs`** — two new IPCs
+  `get_drive_features(path)` + `set_drive_features(path,
+  features)` mirroring `reclaim_drive_lock`'s pattern.
+  Both registered in `generate_handler!`. Body reads /
+  writes the sidecar `HashMap<key, DriveSidecar>` with
+  the existing atomic ConfigStore save semantics. `-b-28b`
+  will swap the body to call chan-drive's
+  `Drive::set_feature_bge` / `set_feature_reports` from
+  `systacean-27` without changing the IPC contract.
+* **`desktop/src/main.js`** — new `renderFeaturesToggle()`
+  + `renderFeaturesPanel()` + `bindFeaturesToggle()` +
+  `loadFeaturesInto()` + `collectFeaturesFromPanel()`.
+  Click on the ⚙ button flips the sibling
+  `tr.features-panel`'s `hidden` attribute; first open
+  lazy-loads state via `get_drive_features` so the IPC
+  cost is paid only on drives the user actually
+  inspects. Checkbox changes fire `set_drive_features`
+  with optimistic update + revert on failure. Small
+  `cssEscape` helper for the legacy-webview path
+  (Tauri's WKWebView / WebView2 both ship `CSS.escape`
+  today but the polyfill is cheap insurance).
+* **`desktop/src/styles.css`** — `.features-toggle` +
+  `.features-panel` + `.features-content` + per-row
+  hint copy styles. Toggle button mirrors the
+  existing icon-button shape (`button.btn.icon`); panel
+  uses a brand-tinted background + dashed top border so
+  it reads as a sub-section of the parent row.
+* **`desktop/src-tauri/src/serve.rs::tests`** — three new
+  structural pins:
+  * `invoke_handler_registers_drive_features_ipcs` —
+    both `#[tauri::command]` handlers registered in
+    `generate_handler!`.
+  * `launcher_calls_drive_features_ipcs` — main.js
+    invokes both IPCs by exact name.
+  * `launcher_features_panel_carries_round2_plan_toggles`
+    — panel HTML carries the "Semantic search" +
+    "Reports" labels and the `data-feat="bge"` /
+    `data-feat="reports"` checkbox bindings.
+
+### Pre-push gate (local, macOS aarch64; -b-28a scope only)
+
+| Surface                                              | State                                       |
+|------------------------------------------------------|---------------------------------------------|
+| `cargo fmt --check` (my files)                       | Clean.                                      |
+| `cargo clippy -p chan-desktop --all-targets -- -D warnings` | Clean.                              |
+| `cargo test -p chan-desktop`                         | 51 tests (was 44 in `-b-27`; +4 config tests + 3 structural pins = +7 net). |
+| `cargo build -p chan-desktop --no-default-features`  | Clean.                                      |
+| `web/` `npx svelte-check`                            | 4012 files / 0 errors / 0 warnings.         |
+| `web/` `npx vitest run`                              | 829/829 (one earlier flake on three timer-driven tests cleared on rerun; pre-existing pattern not from `-b-28a`). |
+| `web/` `npm run build`                               | Clean.                                      |
+
+Workspace-wide `cargo clippy` + `cargo fmt --check` flag
+unrelated diffs in @@Systacean's WIP on chan-drive +
+chan-server (their `IndexConfig::reports_enabled` field
+addition is mid-flight; not mine to fix). I use
+`cargo clippy -p chan-desktop` + `git commit --only`
+to isolate.
+
+### Files to stage
+
+```
+desktop/src-tauri/src/config.rs
+desktop/src-tauri/src/main.rs
+desktop/src-tauri/src/serve.rs
+desktop/src/main.js
+desktop/src/styles.css
+docs/journals/phase-8/fullstack-b/fullstack-b-28.md
+```
+
+### Suggested commit subject
+
+```
+chan-desktop: per-drive feature toggle expand panel + stub persistence (fullstack-b-28a)
+```
+
+### -b-28b prerequisites
+
+Architect cuts `-b-28b` when:
+
+1. `systacean-27` is in HEAD (chan-drive `Drive::set_feature_*`
+   API + BOOT integration).
+2. (Optional) Pre-flight screen design lock if the full
+   report (perms / size / SCM / etc.) needs a separate
+   product-design review.
+
+When -28b lands, it:
+1. Replaces the IPC body to call chan-drive helpers
+   instead of writing to the chan-desktop sidecar.
+2. Adds the full pre-flight screen between
+   `pickAndAdd` + `add_drive` carrying the report +
+   verbatim explanatory copy from round-2-plan.
+3. Migrates any in-the-wild stub-persisted feature
+   pairs into chan-drive on first read (forward-compat
+   shim; drop after one release cycle).
+
+### Runtime walkthrough
+
+Standing chan-desktop runtime perm is available if you'd
+prefer a quick visual smoke. Otherwise routing to
+@@WebtestB per the established lane boundary; webtest
+walks the expand UI + checkbox flips + persistence
+across restart.

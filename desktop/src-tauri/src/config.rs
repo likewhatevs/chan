@@ -40,6 +40,38 @@ pub struct DriveSidecar {
     /// tabs the user has open keep their URL valid.
     #[serde(default)]
     pub last_port: Option<u16>,
+    /// `fullstack-b-28a`: per-drive feature toggle stub. Persisted
+    /// in chan-desktop's sidecar config until `systacean-27` lands
+    /// the chan-drive-side config API; `-b-28b` will swap this stub
+    /// for the real API call without changing the SPA-facing IPC
+    /// shape.
+    ///
+    /// Both default OFF (lean drive; BM25-only). Toggled via the
+    /// launcher row's expandable feature panel; `-a-76` will mirror
+    /// the same toggles into Settings.
+    #[serde(default)]
+    pub features: DriveFeatures,
+}
+
+/// `fullstack-b-28a`: per-drive feature toggles. Surfaced via the
+/// launcher row's expand panel. The pair is wide enough to absorb
+/// future toggles (chan-report variants, alternate embedding
+/// models, etc.) without re-shaping the IPC contract.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, Default, PartialEq, Eq)]
+pub struct DriveFeatures {
+    /// Semantic search via BGE-small embeddings. Default OFF.
+    /// Round-2-plan §"Pre-flight feature toggles": enabling
+    /// triggers a download of the shared model file (~63 MB) +
+    /// a per-drive dense-vector index pass alongside the BM25
+    /// walk.
+    #[serde(default)]
+    pub bge: bool,
+    /// File classification + stats reports (tokei + per-language
+    /// SLOC + Basic COCOMO). Default OFF. Round-2-plan §"Pre-
+    /// flight feature toggles": enabling triggers a chan-report
+    /// pass maintained incrementally from filesystem events.
+    #[serde(default)]
+    pub reports: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -337,5 +369,61 @@ mod tests {
             local_window_key("/home/alex/notes"),
             tunnel_window_key("alice", "notes"),
         );
+    }
+
+    #[test]
+    fn drive_features_default_off() {
+        // `fullstack-b-28a`: per-drive feature toggles default OFF
+        // so a lean drive opens BM25-only. The user opts into BGE +
+        // reports explicitly via the launcher's expand panel.
+        let f = DriveFeatures::default();
+        assert!(!f.bge);
+        assert!(!f.reports);
+    }
+
+    #[test]
+    fn drive_sidecar_features_missing_field_defaults_off() {
+        // `fullstack-b-28a`: existing `config.json` predates the
+        // `features` field. The serde-default keeps legacy entries
+        // loadable as `{bge: false, reports: false}` instead of
+        // failing the load and dropping the entire sidecar map.
+        let pre_b28 = r#"{
+            "last_port": 49991
+        }"#;
+        let cfg: DriveSidecar = serde_json::from_str(pre_b28).expect("legacy load");
+        assert_eq!(cfg.last_port, Some(49991));
+        assert!(!cfg.features.bge);
+        assert!(!cfg.features.reports);
+    }
+
+    #[test]
+    fn drive_sidecar_features_round_trip() {
+        // The toggle pair survives a save+load cycle so a flip in
+        // the launcher panel sticks across desktop restarts.
+        let sidecar = DriveSidecar {
+            last_port: Some(50000),
+            features: DriveFeatures {
+                bge: true,
+                reports: false,
+            },
+        };
+        let json = serde_json::to_string(&sidecar).expect("serialize");
+        let back: DriveSidecar = serde_json::from_str(&json).expect("deserialize");
+        assert!(back.features.bge);
+        assert!(!back.features.reports);
+        assert_eq!(back.last_port, Some(50000));
+    }
+
+    #[test]
+    fn drive_sidecar_features_missing_partial_field_defaults() {
+        // Partial migration: a future config might carry `bge: true`
+        // but not `reports`. The serde-default on each field keeps
+        // the missing one as false rather than failing the load.
+        let partial = r#"{
+            "features": { "bge": true }
+        }"#;
+        let cfg: DriveSidecar = serde_json::from_str(partial).expect("partial load");
+        assert!(cfg.features.bge);
+        assert!(!cfg.features.reports);
     }
 }

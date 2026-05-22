@@ -16,7 +16,7 @@ use tauri::menu::{Menu, MenuItemBuilder, MenuItemKind, PredefinedMenuItem, WINDO
 use tauri::{Emitter, Manager, RunEvent, State, WebviewUrl, WebviewWindowBuilder, WindowEvent};
 use tokio::process::Command;
 
-use config::{Config, ConfigStore, WindowConfig};
+use config::{Config, ConfigStore, DriveFeatures, WindowConfig};
 use serve::ServeHandle;
 use tunnel::TunnelState;
 
@@ -434,6 +434,47 @@ fn find_drive_lock_candidates(path: String) -> Result<Vec<serve::OrphanCandidate
 #[tauri::command]
 fn get_config(state: State<Arc<AppState>>) -> Result<Config, String> {
     state.store.lock().unwrap().get().map_err(err)
+}
+
+/// `fullstack-b-28a`: read the persisted feature toggles for a
+/// drive. Returns the default `{bge: false, reports: false}` for
+/// any drive that has no sidecar entry yet — the launcher's
+/// expand panel calls this on render so first-time drives show
+/// up with both toggles off as the round-2-plan specifies.
+///
+/// Stub: persistence lives in chan-desktop's sidecar config
+/// until `systacean-27` ships the chan-drive config API; `-b-28b`
+/// will swap the body without changing the IPC contract.
+#[tauri::command]
+fn get_drive_features(
+    state: State<Arc<AppState>>,
+    path: String,
+) -> Result<DriveFeatures, String> {
+    let key = canonical_key(Path::new(&path));
+    let cfg = state.store.lock().unwrap().get().map_err(err)?;
+    Ok(cfg.sidecar.get(&key).map(|s| s.features).unwrap_or_default())
+}
+
+/// `fullstack-b-28a`: write the feature toggle pair for a drive.
+/// Both fields are written together so a partial flip doesn't
+/// leave a half-state on disk; the SPA always sends the current
+/// full state on every change.
+///
+/// Stub: persistence lives in chan-desktop's sidecar config
+/// until `systacean-27` ships the chan-drive config API; `-b-28b`
+/// will swap the body to call the chan-drive `Drive::set_feature_*`
+/// helpers without changing the IPC contract.
+#[tauri::command]
+fn set_drive_features(
+    state: State<Arc<AppState>>,
+    path: String,
+    features: DriveFeatures,
+) -> Result<(), String> {
+    let key = canonical_key(Path::new(&path));
+    let mut store = state.store.lock().unwrap();
+    let mut cfg = store.get().map_err(err)?;
+    cfg.sidecar.entry(key).or_default().features = features;
+    store.save(&cfg).map_err(err)
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -988,6 +1029,8 @@ fn main() {
             set_drive_on,
             reclaim_drive_lock,
             find_drive_lock_candidates,
+            get_drive_features,
+            set_drive_features,
             get_config,
             home_dir,
             reveal_in_finder,

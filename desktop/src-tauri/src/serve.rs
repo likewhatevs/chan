@@ -1278,6 +1278,62 @@ mod tests {
     }
 
     #[test]
+    fn invoke_handler_registers_drive_features_ipcs() {
+        // `fullstack-b-28a`: the launcher's expand panel calls
+        // `get_drive_features` on first open + `set_drive_features`
+        // on every checkbox flip. Mirrors the `reclaim_drive_lock`
+        // pin shape so a future rename of either side without the
+        // other gets caught.
+        const MAIN_RS: &str = include_str!("main.rs");
+        assert!(MAIN_RS.contains("get_drive_features,"));
+        assert!(MAIN_RS.contains("set_drive_features,"));
+        assert!(MAIN_RS.contains("fn get_drive_features("));
+        assert!(MAIN_RS.contains("fn set_drive_features("));
+    }
+
+    #[test]
+    fn launcher_calls_drive_features_ipcs() {
+        // `fullstack-b-28a`: the SPA-side launcher MUST invoke
+        // both IPCs so the expand panel reflects + persists
+        // toggle state. Pin the invoke names alongside the
+        // Rust registration above.
+        const MAIN_JS: &str = include_str!("../../src/main.js");
+        assert!(
+            MAIN_JS.contains("invoke('get_drive_features'"),
+            "main.js must invoke get_drive_features on panel open"
+        );
+        assert!(
+            MAIN_JS.contains("invoke('set_drive_features'"),
+            "main.js must invoke set_drive_features on checkbox change"
+        );
+    }
+
+    #[test]
+    fn launcher_features_panel_carries_round2_plan_toggles() {
+        // `fullstack-b-28a`: the panel HTML ships both feature
+        // labels + the brief copy. Pin the label strings so a
+        // future renaming requires deliberate coordination
+        // (Settings copy in `-a-76` mirrors these labels).
+        const MAIN_JS: &str = include_str!("../../src/main.js");
+        assert!(
+            MAIN_JS.contains("Semantic search"),
+            "features panel must label the BGE toggle as 'Semantic search'"
+        );
+        assert!(
+            MAIN_JS.contains("Reports"),
+            "features panel must label the chan-report toggle as 'Reports'"
+        );
+        assert!(
+            MAIN_JS.contains("data-feat=\"bge\""),
+            "features panel must bind the BGE checkbox to the bge field"
+        );
+        assert!(
+            MAIN_JS.contains("data-feat=\"reports\""),
+            "features panel must bind the reports checkbox to the reports field"
+        );
+    }
+
+    #[test]
     fn new_window_accelerator_uses_cmd_shift_n() {
         // `fullstack-b-27`: the "New Window" menu item moves from
         // `CmdOrCtrl+N` to `CmdOrCtrl+Shift+N` to free Cmd+N for
