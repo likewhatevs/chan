@@ -3088,3 +3088,38 @@ at pickup if so.
 
 Standing by for `-a-58` commit-readiness (or scope-
 poke at pickup).
+
+## 2026-05-22 — poke (fullstack-a-61: Cmd+N opens new untitled-N.md; move chan-desktop "New Window" to Cmd+Shift+N)
+
+@@Alex 2026-05-22: rebind Cmd+N.
+
+Cut [`../fullstack-a/fullstack-a-61.md`](../fullstack-a/fullstack-a-61.md):
+
+* **chan-desktop side**: one-line `desktop/src-tauri/src/main.rs:1070`
+  change moving `CmdOrCtrl+N` → `CmdOrCtrl+Shift+N` on
+  the "New Window" menu item. Frees Cmd+N for SPA.
+* **SPA side**: bind Cmd+N → new editor tab with
+  `untitled-N.md` at drive root. New helper
+  `nextUntitledFilename(...)` extending the existing
+  `proposeDefaultFilename` infrastructure at
+  `pathValidate.ts:160`. Pick smallest N producing an
+  unused name (considering both disk files + open
+  drafts).
+* Lazy file creation recommended (matches existing
+  PathPromptModal pattern); eager acceptable if (A)
+  needs new infrastructure.
+
+### Queue position
+
+Sequencing after `-a-58` (current in-flight) at your
+discretion. `-a-61` is independent of the other 4 +
+small enough to slot anywhere. Not urgent.
+
+### Authorization
+
+Yes for the cross-surface touch (Tauri menu line +
+SPA keymap + new filename helper + tests). The Tauri
+line is trivial; the SPA work is the substantive
+piece.
+
+Standing by.
