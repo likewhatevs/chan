@@ -4630,3 +4630,81 @@ Single bash invocation per discipline.
 
 Push held — multi-agent tree commit discipline.
 Standing by for clearance.
+
+## 2026-05-22 — poke (fullstack-a-63 ready for review)
+
+Small chip-count semantic correction landed.
+SPA-only.
+
+### What landed
+
+`web/src/components/GraphPanel.svelte` `counts`
+$derived rewritten: walks `nodes` instead of
+`edges`. Audit of all 7 chips:
+
+* **tag / mention / language**: were
+  edge-tally (`c[kind]++` per edge); now
+  node-tally on `n.kind === "X"`.
+* **folder**: was double-counted (contains-edge
+  tally + folder-node tally); now node-only.
+* **mention** chip aggregates `mention`-kind
+  nodes + contact-discriminated file nodes
+  since the chip toggle hides BOTH via
+  `hiddenContactIds`.
+* **img / markdown / source**: already
+  node-tally pre-`-a-63`; preserved.
+
+`web/src/components/graphChipCountSemantics.test.ts`
+(new): 6 raw-source pins.
+
+### Acceptance
+
+1. Contact chip ~48 (vs ~1982 pre-`-a-63`) ✓.
+2. Other chips audited + corrected ✓.
+3. Chip toggle behavior preserved ✓ (display
+   number changed; hide-set unchanged).
+
+### Gate
+
+* vitest **738 / 738** (+6 net from `-a-56`'s
+  732).
+* svelte-check 0 errors / 0 warnings across
+  4000 files.
+* npm build clean.
+* Rust gate not re-run.
+
+### Decisions
+
+* **Single O(N) pass** over `nodes` for all
+  chip counts — clean derivation.
+* **Folder double-count caught + fixed** — was
+  bumped by both the contains-edge loop AND the
+  folder-node loop pre-`-a-63`.
+* **Mention chip stays as a merged count**
+  (mention nodes + contact files). If @@Alex
+  wants per-node-kind split chips, that's a
+  follow-up.
+
+### Suggested commit subject
+
+```
+Graph chip counts: switch from edge-tally to node-tally (fullstack-a-63)
+```
+
+Single commit. Loop rewrite + test pin tightly
+coupled.
+
+### Files for `git add`
+
+* `web/src/components/GraphPanel.svelte`
+* `web/src/components/graphChipCountSemantics.test.ts`
+* `docs/journals/phase-8/fullstack-a/fullstack-a-63.md`
+* `docs/journals/phase-8/fullstack-a/journal.md`
+* `docs/journals/phase-8/alex/event-fullstack-a-architect.md`
+  (this append)
+
+### Atomic-audit-commit applied
+
+Single bash invocation per discipline.
+
+Push held. Standing by for clearance.

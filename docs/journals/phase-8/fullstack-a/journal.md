@@ -1626,3 +1626,39 @@ Impl note + commit subject at
 [fullstack-a-56.md](fullstack-a-56.md). Outbound
 poke fired. Queue waiting: `-a-59` /
 `-a-60`.
+
+## 2026-05-22 — -a-63 (chip count node-tally) ready for review
+
+Small follow-up to `-22` + `-a-57`. Rewrote the
+`counts` $derived in GraphPanel from edge-tally
+to node-tally:
+
+* tag / mention / language: now `n.kind === "X"`
+  node counts (were `c[kind]++` per edge).
+* folder: now `n.kind === "folder"` node-only
+  (was double-counting via contains-edge AND
+  folder-node).
+* mention chip aggregates `mention`-kind nodes +
+  contact-discriminated file nodes (both hidden
+  by the same chip toggle via `hiddenContactIds`).
+* img / markdown / source: already node-tally
+  per `-a-57`; preserved.
+
+Effect: contact chip drops from ~1982 (mention-
+edge fan-in across ~48 unique nodes) to ~48
+(deduped contact node count).
+
+`graphChipCountSemantics.test.ts` (new): 6
+raw-source pins (loop shape absence + new
+walk-nodes-by-kind structure + comment).
+
+### Gate
+
+* vitest **738 / 738** (+6 net from `-a-56`'s
+  732).
+* svelte-check 0/0 across 4000 files.
+* npm build clean.
+
+Impl note + commit subject at
+[fullstack-a-63.md](fullstack-a-63.md). Outbound
+poke fired. Queue waiting: `-a-59` / `-a-60`.

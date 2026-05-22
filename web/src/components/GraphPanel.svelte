@@ -668,11 +668,27 @@
     return ids;
   });
 
-  /// Chip counts. Edge-kind chips report the underlying edge count;
-  /// the `img` chip reports image-file-node count since that's what
-  /// it actually toggles. The mention chip (user label "contact")
-  /// adds the contact-file count on top of mention edges so the
-  /// number reflects everything the toggle hides.
+  /// Chip counts.
+  ///
+  /// `fullstack-a-63` semantic correction: chip counts are NODE
+  /// counts, not edge counts. Pre-`-a-63` shape tallied edges per
+  /// kind (so mention chip showed 1973-2000 mention-edge fan-in
+  /// across only ~48 distinct contact nodes — ~40x over-tally).
+  /// User reads the chip as "how many of THIS thing is in the
+  /// graph", which is the node count. Edge counts are the
+  /// rendered-edge population, which is a different concept and
+  /// not what the chip needs to expose.
+  ///
+  /// The contact / mention chip count adds:
+  ///   * `mention`-kind nodes (handle nodes the parser emits).
+  ///   * Contact-discriminated FILE nodes (`node_kind === "contact"`)
+  ///     since the mention chip toggle hides BOTH (see
+  ///     `hiddenContactIds`).
+  ///
+  /// The img chip count covers media-class file nodes (the chip
+  /// toggle hides those). The folder chip count covers folder-kind
+  /// nodes (the chip toggle hides those). Markdown / source chips
+  /// added in `-a-57` already used node-tally semantics; preserved.
   const counts = $derived.by(() => {
     const c: Record<FilterKind, number> = {
       tag: 0,
@@ -683,21 +699,19 @@
       markdown: 0,
       source: 0,
     };
-    for (const e of edges) {
-      // `fullstack-a-52` G10: link edges no longer have a chip;
-      // skip the count increment. `contains` routes to the folder
-      // slot. The remaining kinds (tag / mention / language) all
-      // have chips. (Group edges aren't in `edges`; they're
-      // synthesized elsewhere outside the RenderedEdge ∩
-      // GraphViewEdge intersection.)
-      const kind = e.kind;
-      if (kind === "contains") {
-        c.folder++;
-      } else if (kind !== "link") {
-        c[kind]++;
-      }
-    }
     for (const n of nodes) {
+      if (n.kind === "tag") {
+        c.tag++;
+        continue;
+      }
+      if (n.kind === "mention") {
+        c.mention++;
+        continue;
+      }
+      if (n.kind === "language") {
+        c.language++;
+        continue;
+      }
       if (n.kind === "folder") {
         c.folder++;
         continue;
@@ -706,8 +720,6 @@
       const cls = classifyFile(n.path, n.node_kind);
       if (cls === "img") c.img++;
       else if (cls === "contact") c.mention++;
-      // `fullstack-a-57`: count markdown + source file nodes for
-      // the new chips.
       else if (cls === "doc") c.markdown++;
       else if (cls === "source") c.source++;
     }
