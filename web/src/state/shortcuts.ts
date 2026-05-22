@@ -198,6 +198,18 @@ export const SHORTCUTS: readonly Shortcut[] = [
     native: "Mod+R",
     group: "App",
   },
+  // `fullstack-a-66`: New Draft action — creates a fresh draft
+  // dir under chan-drive's metadata-side Drafts folder + opens
+  // `draft.md` in the Hybrid Editor. chan-desktop's
+  // `-b-27` moved its "New Window" accelerator to Cmd+Shift+N
+  // so plain Cmd+N is reserved for this SPA handler.
+  {
+    id: "app.draft.new",
+    label: "New draft",
+    web: "Mod+N",
+    native: "Mod+N",
+    group: "App",
+  },
   {
     id: "app.pane.flip",
     label: "Flip Hybrid",

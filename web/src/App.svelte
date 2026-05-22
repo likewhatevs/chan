@@ -87,6 +87,7 @@
   import { applyEditorTheme, DEFAULT_EDITOR_THEME } from "./state/editorTheme";
   import { flushPendingBufferWrites, pruneEditorBuffers } from "./state/editorBuffer";
   import { reloadWindow } from "./api/desktop";
+  import { api } from "./api/client";
   import {
     applyInitialPageWidth,
     watchPageWidth,
@@ -703,6 +704,33 @@
       e.preventDefault();
       void reloadWindow();
       return;
+    }
+    // `fullstack-a-66`: Cmd+N (Ctrl+N on non-Mac) — New Draft.
+    // Calls /api/drafts/new which creates a fresh
+    // `Drafts/<untitled-N>/draft.md` via chan-drive's
+    // unified-path API + indexes it. The returned unified path
+    // opens in the active pane like any other file (post-`-26`
+    // the editor's read/write goes through the same Drafts/-
+    // prefix-routing). chan-desktop's `-b-27` moved its
+    // "New Window" accelerator to Cmd+Shift+N to free plain
+    // Cmd+N for this handler.
+    //
+    // Cmd+Shift+N falls through to chan-desktop's Tauri menu
+    // (or browser's New Incognito on web); we only intercept
+    // bare Cmd+N here.
+    if (meta && !e.altKey && !e.shiftKey && !e.ctrlKey && e.code === "KeyN") {
+      e.preventDefault();
+      void createDraftAndOpen();
+      return;
+    }
+  }
+
+  async function createDraftAndOpen(): Promise<void> {
+    try {
+      const { path } = await api.createDraft();
+      await openInActivePane(path);
+    } catch (err) {
+      console.warn("[chan] createDraft failed", err);
     }
   }
   onMount(() => document.addEventListener("keydown", onWindowKey));

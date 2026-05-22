@@ -47,7 +47,8 @@ pub use routes::{build_fs_graph, FsGraphResponse, FsGraphScope};
 use auth::{auth_middleware, load_or_create_token};
 use bus::{make_progress_broadcast, make_watch_bridge};
 use routes::{
-    api_backlinks, api_build_info, api_cloud_drives, api_create_file, api_create_terminal,
+    api_backlinks, api_build_info, api_cloud_drives, api_create_draft, api_create_file,
+    api_create_terminal,
     api_delete_file, api_delete_session, api_delete_terminal, api_fs_graph, api_get_config,
     api_get_contacts, api_get_drive, api_get_server_config, api_get_session, api_graph,
     api_headings, api_health, api_index_rebuild, api_index_status, api_indexing_state,
@@ -795,6 +796,12 @@ fn router(state: Arc<AppState>) -> Router {
         .route("/api/drive", get(api_get_drive))
         .route("/api/cloud-drives", get(api_cloud_drives))
         .route("/api/files", get(api_list_files).post(api_create_file))
+        // `fullstack-a-66`: New Draft action. Creates
+        // `Drafts/<next-untitled>/draft.md` + indexes via the
+        // chan-drive unified-path API (`systacean-25`/`-26`).
+        // SPA Cmd+N chord routes here; response path opens via
+        // the existing /api/files/Drafts/.../draft.md GET path.
+        .route("/api/drafts/new", post(api_create_draft))
         .route(
             "/api/files/*path",
             get(api_read_file)

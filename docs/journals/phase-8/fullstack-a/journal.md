@@ -1984,3 +1984,55 @@ preserved.
 
 Impl note at [fullstack-a-74.md](fullstack-a-74.md).
 Outbound poke fired.
+
+## 2026-05-22 — -a-66 slice 1 (Cmd+N New Draft) ready for review
+
+Six-file change. SPA + chan-server. Per
+architect's slice-friendly framing, `-a-66`
+decomposes into 5 pieces; slice 1 is the
+core user flow.
+
+### What landed
+
+**chan-server**:
+* `routes/drafts.rs` (new) with `api_create_draft`
+  handler. Picks `next_untitled_draft_name` →
+  `create_draft_dir` → `write_text("Drafts/<n>/
+  draft.md", "")` → returns
+  `{ path, name }`. Two-retry race window.
+* `routes/mod.rs`: declares `drafts` + re-export.
+* `lib.rs`: registers `POST /api/drafts/new`.
+
+**SPA**:
+* `api/client.ts`: `api.createDraft()` helper.
+* `state/shortcuts.ts`: `app.draft.new` →
+  Mod+N (web + native).
+* `App.svelte`: keymap branch on bare Cmd+N
+  (Cmd+Shift+N falls through to chan-desktop's
+  New Window per `-b-27`). Handler calls
+  `api.createDraft()` + `openInActivePane(path)`
+  with try/catch error swallow.
+
+**Tests**:
+* `newDraftCmdN.test.ts` (new): 5 pins.
+
+### Slices deferred
+
+* Slice 2: FB Drafts row rendering (yellow).
+* Slice 3: Drafts folder inspector notice.
+* Slice 4: Rich Prompt history → Drafts/
+  rich-prompt-N/.
+* Slice 5: Graph Drafts root + drafts_link
+  edge styling.
+
+### Gate
+
+* vitest **825 / 825** (+6 net from `-a-74`'s
+  819).
+* svelte-check 0/0 across 4010 files.
+* npm build clean.
+* `cargo test -p chan-server --lib`: 213
+  passed.
+
+Impl note at [fullstack-a-66.md](fullstack-a-66.md).
+Outbound poke fired.

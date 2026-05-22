@@ -5714,3 +5714,129 @@ Hang-recovery: flush pending buffer writes on beforeunload / pagehide (fullstack
 Single bash invocation per discipline.
 
 Push held. Standing by for clearance.
+
+## 2026-05-22 — poke (fullstack-a-66 slice 1: Cmd+N New Draft ready for review)
+
+Picked up `-a-66` per your URGENT/UNBLOCKED
+suggestion. Six-file change. SPA + chan-server.
+
+Per your "implementer's choice on slicing"
+authorization across the WAVE-2 wave, sliced
+`-a-66` into 5 independent pieces. **Slice 1**
+ships the core user flow (Cmd+N → create →
+open). FB rendering / inspector notice / Rich
+Prompt history / Graph styling deferred to
+follow-up slices.
+
+### What landed
+
+**chan-server**:
+* `routes/drafts.rs` (new): `api_create_draft`
+  handler. Picks `next_untitled_draft_name` →
+  `create_draft_dir` → unified
+  `Drive::write_text("Drafts/<n>/draft.md", "")`.
+  Two-retry race-window guard for the
+  next-untitled / create-dir non-atomic gap.
+  Returns `{ path, name }`. Calls
+  `self_writes.note(path)` so the watcher
+  doesn't echo the create back as a phantom
+  external write.
+* `routes/mod.rs` + `lib.rs`: declares + wires
+  `POST /api/drafts/new`.
+
+**SPA**:
+* `api/client.ts`: `api.createDraft()` helper
+  posts to `/api/drafts/new`, returns
+  `{ path, name }`.
+* `state/shortcuts.ts`: `app.draft.new` →
+  Mod+N (web + native). `-b-27` already moved
+  chan-desktop's "New Window" accelerator to
+  Cmd+Shift+N, freeing plain Cmd+N for this.
+* `App.svelte`: keymap branch on bare Cmd+N
+  (strict modifier filters; Cmd+Shift+N falls
+  through). `createDraftAndOpen()` awaits
+  create + `openInActivePane(path)`. Try/catch
+  swallows errors with console.warn.
+
+**Tests**:
+* `newDraftCmdN.test.ts` (new): 5 raw-source
+  pins covering helper, registry, keymap,
+  flow, import.
+
+### Slice plan
+
+* **Slice 2 (next)**: FB Drafts row rendering
+  — first element in the tree, yellow color
+  with light/dark variants.
+* **Slice 3**: Drafts folder inspector with
+  "lives outside drive's root" notice.
+* **Slice 4**: Rich Prompt history persistence
+  via `Drafts/rich-prompt-N/`.
+* **Slice 5**: Graph Drafts root styling +
+  `drafts_link` edge styling (data already
+  emitted per `-25`/`-26`).
+
+### Acceptance (slice 1)
+
+1. Cmd+N creates `Drafts/untitled[-N]/draft.md`
+   + opens in Hybrid Editor ✓ (mechanism via
+   tests; @@WebtestA walk for empirical).
+2. First Cmd+N: name="untitled"; second:
+   "untitled-1"; etc. ✓ (chan-drive
+   `next_untitled_draft_name` semantic).
+3. Failed create doesn't take down SPA
+   (try/catch in handler) ✓.
+
+Slice 1 closes acceptance criterion #1 of the
+full `-a-66` body. Criteria #2-#5 deferred to
+follow-up slices.
+
+### Gate
+
+* vitest **825 / 825** (+6 net from `-a-74`'s
+  819).
+* svelte-check 0 errors / 0 warnings across
+  4010 files.
+* npm build clean.
+* `cargo test -p chan-server --lib`: 213
+  passed (route wiring + module compile
+  covered).
+
+### Decisions
+
+* **Slice 1 first** — surfaces value
+  immediately ("I want progress").
+* **Two-retry race window** in
+  `api_create_draft` — single-user mode rarely
+  races but the retry is cheap.
+* **Empty draft.md** — matches @@Alex's
+  framing; no template.
+* **Try/catch in `createDraftAndOpen`** — a
+  failed create shouldn't blow up the keymap.
+
+### Suggested commit subject
+
+```
+New draft: Cmd+N creates Drafts/untitled-N/draft.md + opens in editor (fullstack-a-66 slice 1)
+```
+
+### Files for `git add`
+
+* `crates/chan-server/src/routes/drafts.rs` (new)
+* `crates/chan-server/src/routes/mod.rs`
+* `crates/chan-server/src/lib.rs`
+* `web/src/api/client.ts`
+* `web/src/state/shortcuts.ts`
+* `web/src/App.svelte`
+* `web/src/components/newDraftCmdN.test.ts` (new)
+* `docs/journals/phase-8/fullstack-a/fullstack-a-66.md`
+* `docs/journals/phase-8/fullstack-a/journal.md`
+* `docs/journals/phase-8/alex/event-fullstack-a-architect.md`
+  (this append)
+
+### Atomic-audit-commit applied
+
+Single bash invocation per discipline.
+
+Push held. Standing by for clearance + slicing
+on the remaining 4 pieces.

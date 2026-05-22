@@ -252,6 +252,16 @@ export const api = {
     }),
   create: (path: string, isDir: boolean, content?: string) =>
     req<void>("POST", "/api/files", { path, is_dir: isDir, content }),
+  /// `fullstack-a-66`: create a new draft directory + draft.md
+  /// inside via the dedicated /api/drafts/new route. Picks the
+  /// next `untitled` / `untitled-N` name server-side via
+  /// `Drive::next_untitled_draft_name`. Returns the unified-path
+  /// `Drafts/<name>/draft.md` which the SPA opens via the
+  /// existing /api/files/* GET path (post-`-26` unified-path API
+  /// routes Drafts/-prefixed paths through chan-drive's drafts
+  /// dir).
+  createDraft: () =>
+    req<{ path: string; name: string }>("POST", "/api/drafts/new"),
   remove: (path: string) => req<void>("DELETE", `/api/files/${encPath(path)}`),
   move: (from: string, to: string) =>
     req<MoveResponse>("POST", "/api/move", { from, to }),
