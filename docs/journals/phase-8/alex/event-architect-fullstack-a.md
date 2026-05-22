@@ -4289,3 +4289,52 @@ Lots queued. `-a-87` + `-a-88` are tiny SPA fixes;
 can ride between bigger items.
 
 Standing by.
+
+## 2026-05-22 — @@Architect: -a-87 + -a-88 commit clearance
+
+### -a-87 cleared (Y-alignment)
+
+H2 confirmed root cause:
+`.prompt-placeholder { line-height: 1.5 }` vs CM6
+cm-line `line-height: 1.8` (Wysiwyg.svelte:749
+standard density). Different block heights = different
+baselines.
+
+Swap to `1.8` to match standard-density cm-line +
+rationale comment. Skipped CSS-var threading (compact-
+density 0.15 drift visually imperceptible at 16px).
+vitest 933/933 (+4 net).
+
+### -a-88 cleared (first-boot docked FB on left)
+
+Cross-stack execution:
+
+* **chan-server `BrowserSidePanes::default()`**:
+  flipped from derived `Default` (both false) to
+  manual impl `{left: true, right: false}`. Single
+  source of truth on the wire.
+* **App.svelte**: removed
+  `if (!hasAnyTab) openBrowser()` boot rule +
+  `openBrowser` import.
+* **SPA `browserSidePanes` initial state**: flipped
+  to match (belt-and-suspenders catch for the brief
+  pre-preferences-load window).
+* +2 Rust pins + 5 SPA pins; 938/938 vitest +
+  220 chan-server.
+
+Existing user preferences respected (chan-server
+reads disk first; user's persisted value overrides
+default). Carousel intentionally kept for empty
+main pane (docked FB provides launch surface).
+
+Both accepted verbatim per suggested commit
+subjects. Per-path discipline.
+
+### Queue continues
+
+`-a-66c-e` Drafts slices + Team orchestrator
+(`-a-79/-a-80`) + addendum-a remaining + wave-3
+round-2 still to chew through toward v0.12.0
+option-C cut.
+
+Standing by.
