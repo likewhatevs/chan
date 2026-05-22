@@ -1980,3 +1980,91 @@ Full implementation note at the tail of
 "slice -b-28b-i implementation note".
 
 Standing by for clearance + next dispatch.
+
+## 2026-05-22 — poke (-b-28b slice iii commit-ready: pre-flight modal + add_drive feature flag pass-through)
+
+Picked up slice iii right after slice i per @@Alex's
+"there are new items in the queue. please crack them
+on" repeated nudge. Lands the user-facing pre-flight
+modal between the directory picker and `add_drive` so
+the round-2-plan §"UI surface" intent (toggles +
+verbatim explanatory copy BEFORE chan-drive's BOOT runs)
+is honoured at registration time. Commit `defbdcc`.
+
+### Slice iii headlines
+
+* **Pre-flight modal** between `pickAndAdd`'s directory
+  picker + `add_drive` invoke. Carries the verbatim
+  round-2-plan copy (BM25 baseline + the two optional
+  layers + can't-be-disabled framing). Default OFF on
+  both toggles.
+* **`add_drive(path, features?)`** IPC accepts the
+  feature pair + forwards `--semantic-search` /
+  `--reports` to `chan add`. systacean-27's BOOT process
+  activates the chosen layers on the FIRST open — no
+  stub-then-toggle dance.
+* **Sidecar mirror** updates on add when features are
+  non-default so the launcher row's expand panel from
+  `-b-28a` shows correct state immediately.
+* **Same modal pattern as `-b-22`'s reclaim dialog** —
+  vanilla JS, backdrop + Escape cancel, Open focused +
+  Enter triggers. UX consistency across launcher
+  modals.
+
+### Test pins
+
+* `add_drive_passes_feature_flags_to_chan_cli` —
+  IPC arg shape + the `--semantic-search` / `--reports`
+  CLI flag strings.
+* `pick_and_add_shows_preflight_dialog_before_add_drive`
+  — main.js gates the add_drive invoke behind
+  `showPreflightDialog` + threads the feature pair
+  through.
+* `preflight_dialog_carries_round2_plan_explanatory_copy`
+  — pins the five load-bearing phrases ("BM25 keyword
+  search is", "can't be disabled", "dense-vector
+  embeddings", "tokei", "COCOMO"). Round-2-plan flagged
+  the copy as load-bearing; a refactor that drops it
+  fails this test loudly.
+
+chan-desktop 52 → 55.
+
+### Deliberate omissions
+
+The round-2-plan §"UI surface" sketches a broader
+pre-flight report (perms / size class / media class /
+SCM / conflict / file count). The report needs backend
+support that doesn't exist today. Slice iii ships the
+load-bearing pieces (toggles + copy + Open/Cancel) only;
+a future `-b-N` task can layer the report on top once
+the backend lands. Flagged in the task tail so a
+webtest walkthrough doesn't flag the missing report as a
+regression.
+
+### Slice ii still deferred
+
+Read-via-CLI swap blocked on `chan reports status
+--json` from @@Systacean. Sidecar is now authoritative
+for all feature reads since slice i + iii both write
+it (the only edge case is a `chan reports
+{enable,disable}` invocation from outside chan-desktop,
+e.g. from a user's terminal).
+
+### Gate
+
+* `cargo clippy -p chan-desktop --all-targets -- -D warnings`: clean.
+* `cargo test -p chan-desktop`: 55 passing.
+* `cargo build -p chan-desktop --no-default-features`: clean.
+* svelte-check: 4015 / 0 / 0.
+
+### Runtime walkthrough
+
+Routing to @@WebtestB per the lane boundary. Standing
+chan-desktop runtime perm available if you'd prefer me
+to run a quick visual smoke first.
+
+Full implementation note at the tail of
+[`../fullstack-b/fullstack-b-28.md`](../fullstack-b/fullstack-b-28.md)
+"slice -b-28b-iii implementation note".
+
+Standing by for clearance + next dispatch.
