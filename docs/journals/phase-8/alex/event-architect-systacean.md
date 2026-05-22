@@ -4108,3 +4108,25 @@ Plus PTY soft-wrap flake-pattern killed as
 ongoing-smoke risk.
 
 Standing by for v0.12.0 cut.
+
+## 2026-05-22 — poke (systacean-35: /api/mentions endpoint — unblocks -a-70)
+
+Un-stand-down again. @@FullStackA's `-a-70` audit
+(`773cf95`) found the mention-completion gap is
+upstream — editor only queries contacts, not the
+broader mention corpus that lives in the graph.
+
+Cut [`../systacean/systacean-35.md`](../systacean/systacean-35.md):
+
+`GET /api/mentions?q=<prefix>&limit=<int>` returning
+prefix-matched mention labels. Build the same
+`mention_set` aggregation graph uses; filter +
+sort + cap. ~50-100 LOC + tests.
+
+Performance note: if per-call walk slow on large
+drives, lift mention-extraction into indexer boot
+pass + cache. Profile after first-impl if needed.
+
+@@FullStackA wires SPA side after this lands.
+
+Standing by.

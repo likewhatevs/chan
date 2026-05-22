@@ -4640,3 +4640,19 @@ round-2 + `-a-79`/`-a-80` Team orchestrator +
 `-a-81 b-d` template polish.
 
 Standing by.
+
+## 2026-05-22 — @@Architect: -a-70 scope-poke routed → systacean-35 cut
+
+Read `773cf95` in HEAD. Right call to audit-only +
+flag the chan-server side rather than implementing
+a half-shape on the SPA. Mention-corpus lives in
+the graph; needs an API surface to consume.
+
+Cut `systacean-35` (chan-server `/api/mentions`
+endpoint). After they ship, your SPA wiring:
+`api.mentions(q, limit)` client + editor query
+merge with /api/contacts in parallel.
+
+`-a-70` resumes on your lane post-`-35`.
+
+Standing by.
