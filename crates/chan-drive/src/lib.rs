@@ -23,6 +23,7 @@
 
 mod blob;
 pub mod contacts;
+pub mod drafts;
 pub mod drive;
 pub mod error;
 pub mod fs_ops;
@@ -50,6 +51,7 @@ pub use contacts::{
     Contact, EmailAddress, ImportCounts, ImportOpts, ImportOutcome, ImportSummary, Organization,
     PhoneNumber, ProviderKind,
 };
+pub use drafts::DraftRef;
 pub use drive::ReconcileReport;
 pub use drive::{
     DirEntry, Drive, FileStat, RenameOutcome, ResolvedLink, SearchOpts, TreeEntry,

@@ -2671,3 +2671,79 @@ Third application of the "replace timing-proxy with outcome-poll" recipe this se
 | All prior systacean tasks | ✓ shipped |
 
 Lane fully idle post-`-23`. Standing by for new dispatches. Smoke branch preserved per `feedback_destructive_cleanups_coordinate_with_docs` — awaiting your sequencing.
+
+## 2026-05-22 — scope-progress poke (-24 foundation landed; indexer + graph emit need routing)
+
+Picked up `-24`. **Shipping the filesystem primitive layer in this PR**; flagging architectural decisions for the remaining 3 acceptance criteria so you can route.
+
+### What's in this PR (foundation)
+
+* `crates/chan-drive/src/paths.rs`: `DrivePaths.drafts: PathBuf` field; populated in `drive_paths_for_uuid` as `state_dir/drafts/<uuid>/`; orphan-sweep parity.
+* `crates/chan-drive/src/drafts.rs` (new module): `DraftRef` + `ensure_root` + `create_dir` + `list` + `promote` + `validate_name`. 8 module-level tests.
+* `crates/chan-drive/src/drive.rs`: 4 public methods — `drafts_dir() / create_draft_dir / list_drafts / promote_draft`. `Drive::open` eagerly ensures the drafts subtree. 4 Drive-level tests.
+* `crates/chan-drive/src/lib.rs`: re-export.
+
+Diff: +386 / -1 across 4 chan-drive files (mostly the new module). Tests: chan-drive 439/0/2-ignored (was 427; +12 new).
+
+### Acceptance criteria status
+
+| # | Criterion | Status |
+|---|-----------|--------|
+| 1 | `Drive::drafts_dir()` | ✓ |
+| 2 | `create_draft_dir(name)` atomic | ✓ |
+| 3 | `list_drafts()` enumeration | ✓ |
+| **4** | **Watcher emits events for Drafts subtree** | **deferred** |
+| **5** | **Indexer includes Drafts in search** | **deferred** |
+| **6** | **Graph emit carries Drafts root + distinct edge** | **deferred** |
+| 7 | `promote_draft(name, target)` atomic | ✓ |
+
+### Why defer 4-6: architectural decisions warrant your routing
+
+Three open shape questions; each affects blast radius:
+
+1. **Path namespace for BM25 + graph DB keys**
+   * (i) Unified keyspace with `Drafts/<name>/...` prefix (single index/DB; namespace collision risk if user creates a `Drafts/` dir in drive root).
+   * (ii) Separate tantivy index + separate graph DB (clean isolation; 2x storage, double-query).
+   * (iii) Logical prefix (`_drafts/` or similar non-colliding scheme).
+
+2. **Watcher attachment**
+   * (i) `WatchHandle::start` accepts a list of roots; events carry origin.
+   * (ii) Separate `WatchHandle::start_drafts` parallel surface.
+   * (iii) Higher-level "indexable trees" abstraction.
+
+3. **Graph emit ownership**
+   * (i) chan-drive emits Drafts-prefixed contains edges; chan-server route renders them as-is.
+   * (ii) chan-server graph route synthesizes the special "Drafts root" node + distinct edge attribute (the SPA-visible shape) on top of chan-drive's plain emission.
+   * (iii) Split.
+
+(3.ii) and (3.iii) need a chan-server companion change — the task body said "scope-poke if chan-server graph route needs companion changes".
+
+### My recommended slice
+
+Cut **`systacean-25`** for items 4-6, with these decisions pre-routed (or argue back):
+
+* **Namespace**: (1.i) — `Drafts/<name>/...` prefix in unified keyspace. Document the `Drafts/` drive-root collision (chan-drive can refuse a write to drive-root `Drafts/` as a sanity gate).
+* **Watcher**: (2.i) — `WatchHandle::start` accepts multiple roots.
+* **Graph emit**: (3.iii) — chan-drive emits per-file edges under `Drafts/` prefix; chan-server graph route synthesizes the "Drafts root" node + distinct edge. Smallest cross-lane change.
+
+If you accept the slice, `-25` is well-scoped (~150-300 LOC across chan-drive watcher/indexer + chan-server graph route). If you'd rather bundle into `-24`, this PR stays uncommitted + I extend in-place.
+
+### Why I'm committing the foundation NOW (rather than waiting)
+
+* SPA consumer (`fullstack-a-66`) can start the New Draft flow against just `Drive::create_draft_dir` + `Drive::list_drafts` + `Drive::promote_draft`. They don't need search/graph integration for the user-visible action to work.
+* The foundation is fully tested + clean diff; landing it unblocks the SPA consumer earlier.
+* Items 4-6 are additive on top of the foundation — no rework needed when they ship.
+
+### Suggested commit subject
+
+```
+chan-drive: Drafts metadata folder primitive layer (systacean-24 foundation)
+```
+
+### Smoke plan
+
+`gh workflow run ci.yml --ref systacean-24-smoke`. Expected ALL GREEN. Pure additive chan-drive; no chan-server / SPA effects.
+
+### Holding for routing
+
+Going to commit + push + smoke the foundation now (auto-mode says make the call; the foundation is independently valuable + unblocks SPA). Will hold on items 4-6 until you confirm the slice + namespace/watcher/graph-emit decisions.

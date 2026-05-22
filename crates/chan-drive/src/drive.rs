@@ -10,6 +10,7 @@ use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
 
+use crate::drafts::{self, DraftRef};
 use crate::error::{ChanError, Result};
 use crate::fs_ops;
 use crate::graph::GraphView;
@@ -342,6 +343,20 @@ impl Drive {
         // Errors are swallowed: a corrupt trash dir must never block
         // a legitimate drive open.
         let _ = trash::sweep_expired(&paths.trash, TRASH_RETENTION_SECS);
+        // systacean-24: eagerly ensure the per-drive drafts
+        // subtree exists so `create_draft_dir` / `list_drafts`
+        // calls don't need to re-check + so the watcher
+        // attachment in a future task lands on a path that
+        // already exists. Errors logged + ignored: the drafts
+        // dir is recoverable (next call re-tries) and shouldn't
+        // block a legitimate drive open.
+        if let Err(e) = drafts::ensure_root(&paths.drafts) {
+            tracing::warn!(
+                error = %e,
+                path = %paths.drafts.display(),
+                "failed to ensure drafts dir on Drive::open"
+            );
+        }
         // A stale `rebuild.inprogress` marker means the previous
         // reindex did not finish atomically. Promote it to an
         // in-process flag the consumer can observe via
@@ -957,6 +972,51 @@ impl Drive {
     /// Permanently delete every trash entry for this drive.
     pub fn trash_empty(&self) -> Result<()> {
         trash::purge_all(&self.paths.trash)
+    }
+
+    // ---- drafts (systacean-24) ----
+    //
+    // Per-drive Drafts metadata folder. Parallels trash: lives in
+    // `state_dir/drafts/<uuid>/`, holds in-progress drafts as
+    // directories so users can paste images / drop config files
+    // alongside `draft.md`. The watcher + indexer integration that
+    // makes drafts searchable + graph-emit-able is built on top
+    // of these primitives in follow-up scope.
+
+    /// Per-drive drafts root path. Always present on disk after
+    /// `Drive::open` (eagerly created via `drafts::ensure_root`).
+    pub fn drafts_dir(&self) -> &std::path::Path {
+        &self.paths.drafts
+    }
+
+    /// Create a draft directory by name (e.g. `"untitled-1"` or
+    /// `"rich-prompt-3"`). Returns a handle with the leaf name +
+    /// absolute path. Errors when the name contains a path
+    /// separator / traversal segment / already exists. Atomic via
+    /// `fs::create_dir_all` on a non-existing leaf.
+    pub fn create_draft_dir(&self, name: &str) -> Result<DraftRef> {
+        drafts::create_dir(&self.paths.drafts, name)
+    }
+
+    /// Enumerate drafts. Sorted by name. Empty when the drafts
+    /// root has never been written to. Skips stray non-directory
+    /// entries silently.
+    pub fn list_drafts(&self) -> Result<Vec<DraftRef>> {
+        drafts::list(&self.paths.drafts)
+    }
+
+    /// Promote a draft into the drive root by atomic rename.
+    /// `name` is the leaf inside drafts (e.g. `"untitled-1"`);
+    /// `target_rel` is the relative path inside the drive that
+    /// should receive the directory (e.g. `"notes/published"`).
+    /// Errors when the source is missing, the target already
+    /// exists, or the target's parent doesn't exist. Same-
+    /// filesystem promotion is atomic; cross-filesystem
+    /// promotion fails (caller's problem to retry as
+    /// copy-then-delete; chan-drive doesn't paper over that).
+    pub fn promote_draft(&self, name: &str, target_rel: &str) -> Result<()> {
+        let target_abs = self.root().join(target_rel);
+        drafts::promote(&self.paths.drafts, name, &target_abs)
     }
 
     // ---- session blobs ----
@@ -4646,6 +4706,82 @@ mod tests {
         assert_eq!(drive.trash_list().unwrap().len(), 1);
         drive.trash_empty().unwrap();
         assert!(drive.trash_list().unwrap().is_empty());
+    }
+
+    // ---- drafts (systacean-24) ----
+
+    #[test]
+    fn drafts_dir_exists_after_drive_open() {
+        // systacean-24: Drive::open eagerly ensures the drafts
+        // subtree exists so callers don't need to re-check.
+        let (_cfg, _root, drive) = fixture();
+        assert!(
+            drive.drafts_dir().is_dir(),
+            "drafts dir should be ready after Drive::open: {}",
+            drive.drafts_dir().display()
+        );
+        assert!(drive.list_drafts().unwrap().is_empty());
+    }
+
+    #[test]
+    fn drafts_create_list_and_promote_roundtrip() {
+        // systacean-24 round-trip: create two drafts, list them,
+        // promote one into the drive root + verify the directory
+        // moved + the draft is no longer listed.
+        let (_cfg, root, drive) = fixture();
+        let a = drive.create_draft_dir("untitled-1").unwrap();
+        let b = drive.create_draft_dir("rich-prompt-2").unwrap();
+        assert!(a.abs.is_dir());
+        assert!(b.abs.is_dir());
+
+        // Seed a draft.md inside untitled-1 so we can confirm the
+        // promote rename carries companion content.
+        std::fs::write(a.abs.join("draft.md"), b"# hello\n").unwrap();
+
+        let listed = drive.list_drafts().unwrap();
+        assert_eq!(listed.len(), 2);
+        // Sorted by name.
+        assert_eq!(listed[0].name, "rich-prompt-2");
+        assert_eq!(listed[1].name, "untitled-1");
+
+        // Promote untitled-1 into the drive root.
+        drive.promote_draft("untitled-1", "untitled-1").unwrap();
+        assert!(root.path().join("untitled-1").is_dir());
+        assert!(root.path().join("untitled-1").join("draft.md").is_file());
+        assert!(!drive.drafts_dir().join("untitled-1").exists());
+
+        // rich-prompt-2 still listed; untitled-1 gone.
+        let after = drive.list_drafts().unwrap();
+        assert_eq!(after.len(), 1);
+        assert_eq!(after[0].name, "rich-prompt-2");
+    }
+
+    #[test]
+    fn drafts_reject_traversal_and_existing() {
+        // systacean-24: name validation + collision detection.
+        let (_cfg, _root, drive) = fixture();
+        assert!(drive.create_draft_dir("").is_err());
+        assert!(drive.create_draft_dir("..").is_err());
+        assert!(drive.create_draft_dir("a/b").is_err());
+
+        drive.create_draft_dir("untitled-1").unwrap();
+        assert!(drive.create_draft_dir("untitled-1").is_err());
+    }
+
+    #[test]
+    fn drafts_promote_rejects_when_target_exists() {
+        // systacean-24: promote_draft refuses to clobber an
+        // existing drive-root file/directory. The draft remains
+        // in place for the caller to retry under a different
+        // target.
+        let (_cfg, root, drive) = fixture();
+        drive.create_draft_dir("untitled-1").unwrap();
+        drive.write_text("untitled-1/sentinel.md", "x").unwrap();
+        assert!(drive.promote_draft("untitled-1", "untitled-1").is_err());
+        // Draft still exists; nothing in the drive's untitled-1
+        // dir was disturbed.
+        assert!(drive.drafts_dir().join("untitled-1").is_dir());
+        assert!(root.path().join("untitled-1").join("sentinel.md").is_file());
     }
 
     #[cfg(unix)]

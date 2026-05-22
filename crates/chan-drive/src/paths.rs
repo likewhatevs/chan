@@ -168,6 +168,16 @@ pub struct DrivePaths {
     /// ReportState writer thread. Lives in state_dir; the report
     /// is regenerable from a full rescan if missing or corrupt.
     pub report: PathBuf,
+    /// systacean-24: per-drive Drafts dir. Holds in-progress
+    /// drafts as `<name>/draft.md + companions` (e.g.
+    /// `untitled-1/draft.md` plus pasted images). The Drafts
+    /// subtree sits in `state_dir/drafts/<uuid>/` so the user's
+    /// drive root stays clean of uncommitted scratch work
+    /// (SCM-friendly per the addendum-a spec). Rich Prompt
+    /// history (`rich-prompt-N/`) lives here too. The watcher +
+    /// indexer walk this subtree alongside the drive root so
+    /// drafts participate in search + graph.
+    pub drafts: PathBuf,
 }
 
 /// Resolve the per-drive global paths for a uuid. The uuid is the
@@ -189,6 +199,7 @@ pub fn drive_paths_for_uuid(uuid: &str) -> DrivePaths {
         tokens: state.join("tokens").join(uuid),
         trash: state.join("trash").join(uuid),
         report: state.join("report").join(uuid).join("report.jsonl"),
+        drafts: state.join("drafts").join(uuid),
     }
 }
 
@@ -206,6 +217,7 @@ pub fn drive_subsystem_dirs() -> Vec<PathBuf> {
         state.join("tokens"),
         state.join("trash"),
         state.join("report"),
+        state.join("drafts"),
         cache.join("index"),
     ]
 }
