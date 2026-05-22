@@ -283,6 +283,17 @@ function showPreflightDialog(path) {
     pathEl.textContent = path;
     dialog.appendChild(pathEl);
 
+    // `fullstack-b-28b` slice iv: report rows populated by
+    // `compute_drive_preflight` IPC. Renders a "Scanning..."
+    // placeholder while the walk runs so the modal opens fast
+    // even on a large drive; resolved facts replace the row
+    // contents in-place.
+    const reportEl = document.createElement('div');
+    reportEl.className = 'preflight-report';
+    reportEl.setAttribute('aria-busy', 'true');
+    reportEl.textContent = 'Scanning drive…';
+    dialog.appendChild(reportEl);
+
     const baseline = document.createElement('p');
     baseline.className = 'preflight-baseline';
     baseline.textContent =
@@ -386,7 +397,97 @@ function showPreflightDialog(path) {
     document.addEventListener('keydown', onKey);
 
     openBtn.focus();
+
+    // `fullstack-b-28b` slice iv: kick off the pre-flight walk
+    // in parallel with the modal mount so the user can read
+    // the explanatory copy while the report is filling in. The
+    // dialog stays usable (Open/Cancel still respond) even if
+    // the IPC takes the full cap (5s).
+    invoke('compute_drive_preflight', { path })
+      .then((report) => renderPreflightReport(reportEl, report))
+      .catch((err) => {
+        reportEl.removeAttribute('aria-busy');
+        reportEl.classList.add('preflight-report-error');
+        reportEl.textContent = `Couldn't scan drive: ${(err && err.message) || String(err)}`;
+      });
   });
+}
+
+/// `fullstack-b-28b` slice iv: replace the "Scanning…" placeholder
+/// with the resolved report rows. Each row carries one fact the
+/// user needs to confirm "this is the folder I meant" + "I know
+/// what I'm committing to" before chan-drive's BOOT runs.
+function renderPreflightReport(host, report) {
+  host.removeAttribute('aria-busy');
+  host.textContent = '';
+
+  if (report.already_registered) {
+    const warn = document.createElement('p');
+    warn.className = 'preflight-warn';
+    warn.textContent =
+      'This folder is already a registered chan drive. Opening it from the launcher row is the safer path.';
+    host.appendChild(warn);
+  }
+  if (!report.writable) {
+    const warn = document.createElement('p');
+    warn.className = 'preflight-warn';
+    warn.textContent =
+      'Read-only mount: chan can still index this drive but you will not be able to create or edit notes from chan.';
+    host.appendChild(warn);
+  }
+
+  const rows = document.createElement('dl');
+  rows.className = 'preflight-report-rows';
+
+  const filesLabel = report.truncated
+    ? `${report.file_count.toLocaleString()}+ (scan capped)`
+    : report.file_count.toLocaleString();
+  appendPreflightRow(rows, 'Files', filesLabel);
+  appendPreflightRow(
+    rows,
+    'Markdown',
+    report.markdown_count.toLocaleString(),
+  );
+  appendPreflightRow(rows, 'Size', formatPreflightBytes(report.size_bytes));
+
+  const mediaParts = [];
+  if (report.image_count) mediaParts.push(`${report.image_count.toLocaleString()} images`);
+  if (report.audio_count) mediaParts.push(`${report.audio_count.toLocaleString()} audio`);
+  if (report.video_count) mediaParts.push(`${report.video_count.toLocaleString()} video`);
+  appendPreflightRow(
+    rows,
+    'Media',
+    mediaParts.length ? mediaParts.join(' · ') : 'none',
+  );
+
+  if (report.scm) {
+    appendPreflightRow(rows, 'Source control', report.scm);
+  }
+
+  host.appendChild(rows);
+}
+
+function appendPreflightRow(parent, label, value) {
+  const dt = document.createElement('dt');
+  dt.textContent = label;
+  const dd = document.createElement('dd');
+  dd.textContent = value;
+  parent.appendChild(dt);
+  parent.appendChild(dd);
+}
+
+/// Human-friendly byte formatter. Caps at 999 G so the modal
+/// never spills past a reasonable column width.
+function formatPreflightBytes(bytes) {
+  const units = ['B', 'KB', 'MB', 'GB'];
+  let n = bytes;
+  let unit = 0;
+  while (n >= 1024 && unit < units.length - 1) {
+    n = n / 1024;
+    unit += 1;
+  }
+  const formatted = unit === 0 ? `${n}` : n.toFixed(n >= 10 ? 0 : 1);
+  return `${formatted} ${units[unit]}`;
 }
 
 function render(drives) {

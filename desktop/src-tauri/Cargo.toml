@@ -58,3 +58,4 @@ nix = { version = "0.29", default-features = false, features = ["signal"] }
 [dev-dependencies]
 chan-tunnel-client = { workspace = true }
 reqwest = { workspace = true }
+tempfile = { workspace = true }

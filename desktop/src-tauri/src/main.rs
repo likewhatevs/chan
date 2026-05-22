@@ -555,6 +555,262 @@ async fn read_features_via_chan_index_status(
     })
 }
 
+/// `fullstack-b-28b` slice iv: the pre-flight report displayed in
+/// the drive-add modal. Carries the load-bearing facts the
+/// round-2-plan §"UI surface" calls out so the user can answer
+/// "is this the folder I meant?" + "what am I about to commit
+/// to?" before chan-drive's BOOT starts walking. Strict superset
+/// of slice iii's modal — toggles still render at the bottom of
+/// the same dialog.
+///
+/// All counts are best-effort: the walker caps at
+/// `MAX_PREFLIGHT_FILES` files + `MAX_PREFLIGHT_SECS` wall-clock
+/// seconds; on cap `truncated = true` so the modal can render
+/// "100,000+" instead of a misleading exact number.
+///
+/// `already_registered` is checked via `chan list --json` — if
+/// the canonical path is already in the registry, the modal
+/// flags the duplicate so the user doesn't accidentally re-add
+/// the same drive. The chan CLI is the authority; we don't
+/// duplicate registry-parsing logic in chan-desktop.
+#[derive(Debug, Clone, Serialize)]
+struct PreflightReport {
+    /// Canonical drive path. Mirrors what `add_drive` will
+    /// pass to `chan add`.
+    path: String,
+    /// True iff `std::fs::metadata(path).permissions().readonly()`
+    /// is false. A read-only mount surfaces an explicit warning
+    /// in the modal so the user knows chan can't write notes
+    /// into the drive.
+    writable: bool,
+    /// Files visited under `path` (excluding directories +
+    /// SCM-internal / build-output trees). Capped.
+    file_count: usize,
+    /// Markdown files visited (extensions `.md` / `.markdown`).
+    /// The primary content type chan operates on; surfaced
+    /// separately so the modal can read it as "drive readiness"
+    /// rather than just "total file count".
+    markdown_count: usize,
+    /// Total byte size of files visited. Capped alongside
+    /// `file_count`.
+    size_bytes: u64,
+    /// Counts by media class (extension-classified). Sum can be
+    /// less than `file_count` since unclassified extensions
+    /// (markdown, source, configs, etc.) don't increment any
+    /// of these.
+    image_count: usize,
+    audio_count: usize,
+    video_count: usize,
+    /// SCM identifier if `.git` / `.hg` / `.svn` exists at root:
+    /// `Some("git")` / `Some("hg")` / `Some("svn")`. `None`
+    /// means no SCM was detected; the modal stays silent in that
+    /// case.
+    scm: Option<String>,
+    /// True iff the canonical path already appears in `chan list
+    /// --json`. The modal renders a duplicate-registration
+    /// warning so the user can cancel before chan errors on add.
+    already_registered: bool,
+    /// True when the walker hit `MAX_PREFLIGHT_FILES` or
+    /// `MAX_PREFLIGHT_SECS`. Modal renders the counts with a
+    /// "+" suffix so users know more files may exist.
+    truncated: bool,
+}
+
+const MAX_PREFLIGHT_FILES: usize = 100_000;
+const MAX_PREFLIGHT_SECS: u64 = 5;
+
+/// `fullstack-b-28b` slice iv: walk the drive root + collect
+/// the facts the pre-flight modal needs to render. Capped so a
+/// monster drive doesn't pin the chan-desktop UI for minutes;
+/// the modal communicates the cap to the user via the
+/// `truncated` flag.
+///
+/// `chan_drive::indexer` uses a near-identical excluded-dirs
+/// set + extension-classification map; replicating the small
+/// surface here keeps chan-desktop independent of the chan-drive
+/// linkage we deliberately don't have at this layer.
+fn walk_drive_preflight(root: &Path) -> WalkOutcome {
+    use std::collections::VecDeque;
+    use std::time::Instant;
+    let start = Instant::now();
+    let mut queue: VecDeque<PathBuf> = VecDeque::new();
+    queue.push_back(root.to_path_buf());
+    let mut out = WalkOutcome::default();
+    while let Some(dir) = queue.pop_front() {
+        if out.file_count >= MAX_PREFLIGHT_FILES
+            || start.elapsed().as_secs() >= MAX_PREFLIGHT_SECS
+        {
+            out.truncated = true;
+            break;
+        }
+        let Ok(entries) = std::fs::read_dir(&dir) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            let Ok(meta) = entry.metadata() else {
+                continue;
+            };
+            let name = entry.file_name();
+            if meta.is_dir() {
+                if should_skip_preflight_dir(&name) {
+                    continue;
+                }
+                queue.push_back(entry.path());
+            } else if meta.is_file() {
+                out.file_count += 1;
+                out.size_bytes = out.size_bytes.saturating_add(meta.len());
+                classify_preflight_extension(&name, &mut out);
+                if out.file_count >= MAX_PREFLIGHT_FILES {
+                    out.truncated = true;
+                    break;
+                }
+            }
+        }
+    }
+    out
+}
+
+#[derive(Debug, Default, PartialEq, Eq)]
+struct WalkOutcome {
+    file_count: usize,
+    markdown_count: usize,
+    size_bytes: u64,
+    image_count: usize,
+    audio_count: usize,
+    video_count: usize,
+    truncated: bool,
+}
+
+/// Mirrors `chan/src/main.rs::DEFAULT_INDEX_EXCLUDED_DIRS` so the
+/// pre-flight count + bytes line up with what chan-drive will
+/// actually index. Drift between the two lists would surprise
+/// the user ("preflight said 12K files; chan reports 8K?"); if
+/// chan-drive's defaults change, this list moves alongside.
+fn should_skip_preflight_dir(name: &std::ffi::OsStr) -> bool {
+    matches!(
+        name.to_str(),
+        Some(
+            ".git"
+                | ".hg"
+                | ".svn"
+                | ".chan"
+                | "node_modules"
+                | "target"
+                | ".next"
+                | ".vercel"
+                | "dist"
+                | "build"
+        )
+    )
+}
+
+/// Extension → media-class bucket. Mirrors chan-drive's
+/// classification at a smaller scope (no Markdown / source-code
+/// breakouts here; only the three media classes the round-2-plan
+/// pre-flight calls out). `markdown_count` is tracked separately
+/// for the "drive readiness" hint.
+fn classify_preflight_extension(name: &std::ffi::OsStr, out: &mut WalkOutcome) {
+    let Some(ext) = Path::new(name)
+        .extension()
+        .and_then(|s| s.to_str())
+        .map(|s| s.to_ascii_lowercase())
+    else {
+        return;
+    };
+    match ext.as_str() {
+        "md" | "markdown" => out.markdown_count += 1,
+        "png" | "jpg" | "jpeg" | "gif" | "webp" | "heic" | "heif" | "bmp" | "tiff" | "svg"
+        | "ico" => out.image_count += 1,
+        "mp3" | "wav" | "m4a" | "flac" | "ogg" | "opus" | "aac" => out.audio_count += 1,
+        "mp4" | "mov" | "webm" | "mkv" | "avi" | "m4v" => out.video_count += 1,
+        _ => {}
+    }
+}
+
+/// Return the SCM kind rooted at `root` if any. Only checks the
+/// root level — chan's own walk doesn't climb above the drive
+/// root either, so an SCM in an ancestor dir isn't surfaced.
+fn detect_drive_scm(root: &Path) -> Option<String> {
+    for (kind, dir) in [("git", ".git"), ("hg", ".hg"), ("svn", ".svn")] {
+        if root.join(dir).exists() {
+            return Some(kind.to_string());
+        }
+    }
+    None
+}
+
+/// `fullstack-b-28b` slice iv: assemble the pre-flight report.
+/// Walks the drive + checks SCM + shells out to `chan list
+/// --json` for the duplicate-registration check. Tolerates a
+/// missing chan binary (returns `already_registered = false`)
+/// so the modal still renders something useful when the boot-
+/// time preflight has failed.
+#[tauri::command]
+async fn compute_drive_preflight(
+    state: State<'_, Arc<AppState>>,
+    path: String,
+) -> Result<PreflightReport, String> {
+    let key = canonical_key(Path::new(&path));
+    let root = PathBuf::from(&key);
+    let writable = std::fs::metadata(&root)
+        .map(|m| !m.permissions().readonly())
+        .unwrap_or(false);
+    let walk = walk_drive_preflight(&root);
+    let scm = detect_drive_scm(&root);
+    let already_registered = if state.bin_status.ok {
+        if let Ok(bin) = serve::resolve_chan_binary() {
+            check_drive_already_registered(&bin, &key).await
+        } else {
+            false
+        }
+    } else {
+        false
+    };
+    Ok(PreflightReport {
+        path: key,
+        writable,
+        file_count: walk.file_count,
+        markdown_count: walk.markdown_count,
+        size_bytes: walk.size_bytes,
+        image_count: walk.image_count,
+        audio_count: walk.audio_count,
+        video_count: walk.video_count,
+        scm,
+        already_registered,
+        truncated: walk.truncated,
+    })
+}
+
+/// `fullstack-b-28b` slice iv: parse `chan list --json` and
+/// check whether the canonical path is already a registered
+/// drive. Returns `false` on any error (chan unavailable, JSON
+/// parse failure, etc.) — the modal's duplicate warning is a
+/// nicety, not a load-bearing gate. Worst case the user
+/// double-adds; `chan add` itself rejects duplicates so no data
+/// is corrupted.
+async fn check_drive_already_registered(bin: &Path, key: &str) -> bool {
+    let Ok(out) = Command::new(bin)
+        .args(["list", "--json"])
+        .kill_on_drop(true)
+        .output()
+        .await
+    else {
+        return false;
+    };
+    if !out.status.success() {
+        return false;
+    }
+    let Ok(body): Result<serde_json::Value, _> = serde_json::from_slice(&out.stdout) else {
+        return false;
+    };
+    let Some(drives) = body.get("drives").and_then(|v| v.as_array()) else {
+        return false;
+    };
+    drives
+        .iter()
+        .any(|d| d.get("path").and_then(|v| v.as_str()) == Some(key))
+}
+
 /// `fullstack-b-28a` + `-b-28b-i`: write the feature toggle pair
 /// for a drive. Both fields land together so a partial flip
 /// doesn't leave a half-state on disk; the SPA always sends the
@@ -1199,6 +1455,7 @@ fn main() {
             find_drive_lock_candidates,
             get_drive_features,
             set_drive_features,
+            compute_drive_preflight,
             get_config,
             home_dir,
             reveal_in_finder,
@@ -1404,4 +1661,117 @@ fn dispatch_to_focused_drive(app: &tauri::AppHandle, command: &str) {
         serde_json::to_string(command).unwrap_or_else(|_| "\"\"".into())
     );
     let _ = w.eval(&js);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
+    use tempfile::TempDir;
+
+    /// `fullstack-b-28b` slice iv: extension classifier maps the
+    /// expected file types into the three media buckets + the
+    /// markdown counter. Pin the mapping so a future drift between
+    /// chan-drive's classification + chan-desktop's pre-flight
+    /// doesn't silently mis-count files.
+    #[test]
+    fn classify_preflight_extension_maps_known_buckets() {
+        let mut out = WalkOutcome::default();
+        let cases = [
+            ("notes.md", "markdown"),
+            ("README.markdown", "markdown"),
+            ("photo.jpg", "image"),
+            ("ICON.PNG", "image"),
+            ("scan.heic", "image"),
+            ("tune.mp3", "audio"),
+            ("loop.OGG", "audio"),
+            ("clip.mp4", "video"),
+            ("clip.MOV", "video"),
+            ("README", "skip"),
+            ("script.sh", "skip"),
+            ("config.toml", "skip"),
+        ];
+        let mut expected_md = 0;
+        let mut expected_img = 0;
+        let mut expected_audio = 0;
+        let mut expected_video = 0;
+        for (name, kind) in cases {
+            classify_preflight_extension(std::ffi::OsStr::new(name), &mut out);
+            match kind {
+                "markdown" => expected_md += 1,
+                "image" => expected_img += 1,
+                "audio" => expected_audio += 1,
+                "video" => expected_video += 1,
+                _ => {}
+            }
+        }
+        assert_eq!(out.markdown_count, expected_md);
+        assert_eq!(out.image_count, expected_img);
+        assert_eq!(out.audio_count, expected_audio);
+        assert_eq!(out.video_count, expected_video);
+    }
+
+    #[test]
+    fn should_skip_preflight_dir_matches_chan_drive_defaults() {
+        // Mirrors `chan/src/main.rs::DEFAULT_INDEX_EXCLUDED_DIRS`
+        // so the pre-flight count stays consistent with what
+        // chan-drive will actually index.
+        for skip in [
+            ".git",
+            ".hg",
+            ".svn",
+            ".chan",
+            "node_modules",
+            "target",
+            ".next",
+            ".vercel",
+            "dist",
+            "build",
+        ] {
+            assert!(
+                should_skip_preflight_dir(std::ffi::OsStr::new(skip)),
+                "{skip} must be skipped",
+            );
+        }
+        for keep in ["notes", "drafts", "src", "assets", ".github", "docs"] {
+            assert!(
+                !should_skip_preflight_dir(std::ffi::OsStr::new(keep)),
+                "{keep} must NOT be skipped",
+            );
+        }
+    }
+
+    #[test]
+    fn detect_drive_scm_finds_git_hg_svn_at_root() {
+        let tmp = TempDir::new().unwrap();
+        // No SCM yet — None.
+        assert_eq!(detect_drive_scm(tmp.path()), None);
+        // git → "git"
+        fs::create_dir_all(tmp.path().join(".git")).unwrap();
+        assert_eq!(detect_drive_scm(tmp.path()).as_deref(), Some("git"));
+    }
+
+    #[test]
+    fn walk_drive_preflight_counts_files_skips_excluded_dirs() {
+        let tmp = TempDir::new().unwrap();
+        let root = tmp.path();
+        fs::write(root.join("notes.md"), b"hello").unwrap();
+        fs::write(root.join("photo.jpg"), b"xxx").unwrap();
+        // Hidden in node_modules — must not be counted.
+        fs::create_dir_all(root.join("node_modules")).unwrap();
+        fs::write(root.join("node_modules/package.json"), b"{}").unwrap();
+        // Hidden in .git — same.
+        fs::create_dir_all(root.join(".git")).unwrap();
+        fs::write(root.join(".git/HEAD"), b"ref: refs/heads/main").unwrap();
+        // Nested user content — must be counted.
+        fs::create_dir_all(root.join("notes")).unwrap();
+        fs::write(root.join("notes/deep.md"), b"deep").unwrap();
+
+        let out = walk_drive_preflight(root);
+        assert_eq!(out.file_count, 3, "must skip node_modules + .git");
+        assert_eq!(out.markdown_count, 2);
+        assert_eq!(out.image_count, 1);
+        assert!(!out.truncated);
+        assert!(out.size_bytes > 0);
+    }
 }

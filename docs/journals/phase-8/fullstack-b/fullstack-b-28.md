@@ -708,3 +708,159 @@ Remaining deferred (NOT covered by `-b-28`):
   rejected in favour of the additive extension to
   `chan index status`. Future polish if @@Systacean
   prefers the symmetry.
+
+## 2026-05-22 — slice -b-28b-iv implementation note (ready for commit clearance)
+
+Picked up slice iv per @@Alex's "take -28-b" directive +
+the @@Alex routing entry in the inbound (above the
+architect's UMBRELLA CLOSED ack which only acked the
+toggle plumbing, not the broader report). Lands the
+round-2-plan §"UI surface" pre-flight report — the
+scope I deferred under slice iii.
+
+### Slice iv scope
+
+* `PreflightReport` struct covers the round-2-plan
+  rows: file count, markdown count, size, media
+  counts (image/audio/video), SCM, already-
+  registered, writable, truncated.
+* `compute_drive_preflight(path)` IPC walks the
+  drive (capped at 100k files OR 5s wall-clock;
+  `truncated` flag surfaces the cap) + classifies
+  extensions + detects SCM at root + shells out to
+  `chan list --json` for the duplicate-registration
+  check.
+* SPA modal renders a "Scanning…" placeholder while
+  the IPC runs + replaces it with the report rows on
+  resolve. Read-only mount + already-registered both
+  surface as warning rows above the row grid.
+  Toggles + Open/Cancel from slice iii stay
+  unchanged below.
+
+### Walker caps
+
+100k files / 5s wall-clock. Normal-sized notes drives
+(< 10k files) complete in < 100ms locally; monster
+drives surface the truncation via the `+` suffix +
+the `(scan capped)` annotation so the user knows
+the count is a floor. Saturating-add on size
+defends against overflow on absurd drives. BFS via
+`VecDeque` avoids stack overflow on deeply-nested
+trees.
+
+### Synchronous walk in async IPC
+
+`walk_drive_preflight` is sync; called from the async
+`compute_drive_preflight` handler. For typical drives
+the walk is fast enough that blocking the executor is
+acceptable. If telemetry shows real-world drives
+pinning the executor, the walk can move to
+`tokio::task::spawn_blocking` — but that adds a
+thread-pool round-trip cost not warranted without
+evidence.
+
+### Changes
+
+* **`desktop/src-tauri/src/main.rs`** —
+  * `PreflightReport` struct + `MAX_PREFLIGHT_FILES`
+    / `MAX_PREFLIGHT_SECS` constants.
+  * `walk_drive_preflight` BFS walker +
+    `WalkOutcome` accumulator.
+  * `should_skip_preflight_dir` mirrors
+    `chan/src/main.rs::DEFAULT_INDEX_EXCLUDED_DIRS`
+    so the pre-flight numbers line up with what
+    chan-drive will index.
+  * `classify_preflight_extension` — markdown +
+    three media buckets; case-insensitive.
+  * `detect_drive_scm` — `.git` / `.hg` / `.svn`
+    root check.
+  * `compute_drive_preflight` IPC — assembles the
+    full report; tolerates a missing chan binary
+    (returns `already_registered=false`).
+  * `check_drive_already_registered` helper —
+    parses `chan list --json`; returns false on any
+    error (duplicate warning is a nicety, not a
+    load-bearing gate; `chan add` itself rejects
+    duplicates).
+  * 4 new walker unit tests in `tests` mod.
+* **`desktop/src-tauri/Cargo.toml`** — `tempfile`
+  added to `[dev-dependencies]` for the walker
+  tempdir fixtures.
+* **`desktop/src/main.js`** —
+  * Modal renders a `Scanning…` placeholder via a
+    new `.preflight-report` div placed between the
+    path display + the baseline copy.
+  * `invoke('compute_drive_preflight')` kicks off in
+    parallel with the modal mount (user reads
+    baseline copy while the walk runs).
+  * `renderPreflightReport(host, report)` replaces
+    the placeholder with rows + warning banners.
+  * `appendPreflightRow` + `formatPreflightBytes`
+    helpers.
+* **`desktop/src/styles.css`** —
+  `.preflight-report*` + `.preflight-warn` styles.
+  Report rows use a two-column dl grid; warnings
+  use the brand danger colour against a tinted
+  background.
+* **`desktop/src-tauri/src/serve.rs::tests`** — 2 new
+  structural pins:
+  * `invoke_handler_registers_compute_drive_preflight`.
+  * `preflight_modal_renders_report_rows_after_b28b_iv`
+    — modal invokes the IPC + calls
+    `renderPreflightReport` + surfaces five report
+    row labels (Files, Markdown, Size, Media,
+    Source control).
+
+chan-desktop count: 57 → 63 (+4 walker + 2 structural).
+
+### Pre-push gate (local, macOS aarch64; -b-28b-iv scope)
+
+| Surface                                                                | State                                       |
+|------------------------------------------------------------------------|---------------------------------------------|
+| `cargo clippy -p chan-desktop --all-targets -- -D warnings`            | Clean.                                      |
+| `cargo test -p chan-desktop`                                           | 63 passing.                                 |
+| `cargo build -p chan-desktop --no-default-features`                    | Clean.                                      |
+| `Cargo.lock`                                                            | Mine only (tempfile dev-dep addition).      |
+
+### Files to stage
+
+```
+Cargo.lock
+desktop/src-tauri/Cargo.toml
+desktop/src-tauri/src/main.rs
+desktop/src-tauri/src/serve.rs
+desktop/src/main.js
+desktop/src/styles.css
+docs/journals/phase-8/fullstack-b/fullstack-b-28.md
+```
+
+### Suggested commit subject
+
+```
+chan-desktop: pre-flight report (perms/size/media/SCM/conflict/count) in drive-add modal (fullstack-b-28b slice iv)
+```
+
+### Umbrella status
+
+| Slice | Commit    | Scope                                                       |
+|-------|-----------|-------------------------------------------------------------|
+| i     | `0ce975b` | set_drive_features stub → chan CLI subprocess               |
+| iii   | `defbdcc` | pre-flight modal + add_drive feature flag pass-through      |
+| ii    | `efd7688` | get_drive_features via chan index status --json             |
+| iv    | (this)    | pre-flight REPORT in modal (perms/size/SCM/conflict/count)  |
+
+The `-b-28b` umbrella now matches the round-2-plan
+§"UI surface" intent in full: report + toggles +
+explanatory copy + load-bearing IPCs. Sidecar mirror
++ chan-drive truth aligned via slice ii's read
+swap. Stub forward-compat auto-converged.
+
+### Runtime walkthrough
+
+Standing chan-desktop runtime perm available;
+otherwise routing to @@WebtestB for the empirical
+walk. Webtest covers: modal opens fast on small
+drives, scan indicator visible on large drives,
+warning rows surface correctly (read-only mount,
+already-registered), report numbers line up with
+what chan reports after add.

@@ -1363,6 +1363,42 @@ mod tests {
     }
 
     #[test]
+    fn invoke_handler_registers_compute_drive_preflight() {
+        // `fullstack-b-28b` slice iv: the pre-flight modal calls
+        // `compute_drive_preflight` after mount to populate the
+        // report rows. Mirrors the other IPC registration pins
+        // so a rename catches deliberately.
+        const MAIN_RS: &str = include_str!("main.rs");
+        assert!(MAIN_RS.contains("compute_drive_preflight,"));
+        assert!(MAIN_RS.contains("fn compute_drive_preflight("));
+    }
+
+    #[test]
+    fn preflight_modal_renders_report_rows_after_b28b_iv() {
+        // `fullstack-b-28b` slice iv: the modal kicks off
+        // `compute_drive_preflight` after mount and renders the
+        // returned facts via `renderPreflightReport`. Pin both
+        // the invoke + the renderer + the load-bearing report
+        // labels so a future refactor can't silently revert to
+        // the slice-iii "toggles only" shape.
+        const MAIN_JS: &str = include_str!("../../src/main.js");
+        assert!(
+            MAIN_JS.contains("invoke('compute_drive_preflight'"),
+            "main.js must invoke compute_drive_preflight from showPreflightDialog",
+        );
+        assert!(
+            MAIN_JS.contains("renderPreflightReport(reportEl, report)"),
+            "main.js must render the resolved report into the dialog",
+        );
+        for label in ["'Files'", "'Markdown'", "'Size'", "'Media'", "'Source control'"] {
+            assert!(
+                MAIN_JS.contains(label),
+                "preflight modal must surface {label} report row",
+            );
+        }
+    }
+
+    #[test]
     fn get_drive_features_reads_chan_index_status_after_b28b_ii() {
         // `fullstack-b-28b` slice ii: `get_drive_features` swaps
         // from sidecar-only to a `chan index status --json` CLI
