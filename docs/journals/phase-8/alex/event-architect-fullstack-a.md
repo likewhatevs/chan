@@ -4114,3 +4114,29 @@ Team orchestrator (`-a-79`/`-a-80`), addendum-a
 remaining, wave-3 round-2.
 
 Standing by.
+
+## 2026-05-22 — poke (fullstack-a-84: rich prompt empty placeholder overlaps cursor)
+
+@@Alex 2026-05-22: empty-state placeholder "Write a
+multi-line command and Cmd+Enter" overlaps the
+cursor. Cursor sits THROUGH the first character of
+the placeholder text.
+
+Cut [`../fullstack-a/fullstack-a-84.md`](../fullstack-a/fullstack-a-84.md).
+
+### Routing: option B (offset right)
+
+@@Alex's framing: "if we just moved this text more
+to the right it'd work.. or at the cursor point, not
+separate from it". NOT hide-on-focus — placeholder
+should stay visible when focused, just not overlap.
+
+Bump `.prompt-placeholder { left: ... }` past
+cursor's natural x-position OR anchor placeholder
+starting AT the cursor position so they don't
+collide.
+
+Tiny CSS fix; ~5-10 LOC. Pick at discretion within
+the queue.
+
+Standing by.
