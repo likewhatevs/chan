@@ -3126,3 +3126,139 @@ load-bearing data-level wins (`-a-62` fade rendering
 display gap on `-22` flagged for follow-up; resize
 behaviors deferred for a beat with cleaner drag
 tooling.
+
+## 2026-05-22 — fullstack-a-63 chip count + fullstack-a-56 retest
+
+Per [`webtest-a-9.md`](webtest-a-9.md). Two-part walk:
+- `-a-63` (`19d3d4f`): chip count edge-tally → node-tally
+  (fixes the PARTIAL @@WebtestA flagged in `webtest-a-8`)
+- `-a-56` (`9f0ac44`) retest: Cmd+P 3-state contract +
+  depth slider shallow-scope cue (blocked by build
+  incident in `webtest-a-8`)
+
+HEAD `9c7159a`; throwaway drive
+`/tmp/chan-test-phase8-wa-r13/` (chan-source seed); chan
+serve on 127.0.0.1:8787; Chrome MCP tab `503725916`.
+Frontend + binary rebuilt; build clean.
+
+### Verdicts (6/6 HOLD)
+
+| Check | Surface | Verdict |
+|-------|---------|---------|
+| `-a-63` #1 | Contact chip ~48 | HOLD |
+| `-a-63` #2 | Other chips node-tally semantic | HOLD |
+| `-a-56` #3 | Cmd+P on terminal (no prompt) → opens | HOLD |
+| `-a-56` #4 | Cmd+P on terminal (prompt shown) → hides | HOLD |
+| `-a-56` #5 | Cmd+P on non-terminal → spawn + open | HOLD |
+| `-a-56` #6 | Depth slider shallow-scope cue | HOLD |
+
+### `-a-63` per-check evidence
+
+* **#1 Contact chip drops to 49**: drive-scope graph
+  → right-click `drive` tab → chip menu shows:
+  - tag **6**
+  - **contact 49** ← (was 1982 in `webtest-a-8`
+    pre-`-a-63`; architect predicted ~48)
+  - language 14
+  - media 31
+  - folder 16
+  - markdown 648
+  - source 31
+  The PARTIAL I flagged in `webtest-a-8` is now
+  HOLD. Empirical proof: the chip-count semantic
+  matches the data-level dedup (48 mention nodes
+  per `-22`'s data fix; chip displays the same).
+* **#2 Other chips node-tally**: cross-check pre/post
+  comparison:
+  | Chip | webtest-a-7 (pre-22 edge-tally) | webtest-a-8 (post-22 edge-tally) | webtest-a-9 (post-63 node-tally) |
+  |------|---------------------------------|-----------------------------------|----------------------------------|
+  | tag | 8 | 8 | **6** |
+  | contact | 1973 | 1982 | **49** |
+  | language | 14 | 14 | **14** |
+  | media | 21 | 23 | **31** |
+  | folder | 33 | 33 | **16** |
+  | markdown | 639 | 644 | **648** |
+  | source | 31 | 29 | **31** |
+  The dramatic drops are: contact (-97.5%) and folder
+  (-51.5%). language stayed the same (already
+  consistent). markdown / source counts updated
+  slightly (data drift between walks). The semantic
+  switch is clean — chip labels now answer "how
+  many NODES of this kind?" instead of "how many
+  EDGES touch this kind?".
+
+### `-a-56` per-check evidence
+
+* **#3 Cmd+P on terminal (no prompt) → opens**:
+  spawned Terminal-1 via `Cmd+Alt+T` (web Mac
+  chord since Cmd+P is browser-print-owned).
+  Pressed `Cmd+Alt+P` on focused Terminal-1 tab.
+  Rich prompt opened with placeholder text "Write a
+  multi-line command and Cmd+Enter". JS check:
+  `document.querySelector('[class*=rich-prompt i]')`
+  returns truthy.
+* **#4 Cmd+P on terminal (prompt shown) → hides**:
+  pressed `Cmd+Alt+P` again with prompt visible.
+  Prompt disappeared. JS check: no
+  `[class*=rich-prompt]` element + no element with
+  "multi-line command" text. Toggle-off confirmed.
+* **#5 Cmd+P on non-terminal → spawn + open**:
+  clicked the FB tab (`chan-test-phase8-wa-r13/` —
+  not a terminal). Pressed `Cmd+Alt+P`. Result:
+  - New **Terminal-2** spawned (tabs: FB, drive
+    graph, Terminal-1, Terminal-2).
+  - Terminal-2 became active.
+  - Rich prompt opened on Terminal-2.
+  Both effects in one chord — exactly the 3-state
+  contract spec.
+* **#6 Depth slider shallow-scope cue**: opened
+  CLAUDE.md → Cmd+Shift+M (file-scope graph).
+  Right-click the CLAUDE.md graph tab → tab-menu-
+  bubble:
+  - **Depth row**: "Depth  ▬● 1 **[max]**" — the
+    `[max]` annotation is the visible cue.
+  - **`.depth-row` class includes `shallow`**.
+  - **Title tooltip**: "Scope is shallow — depth 1
+    already reveals everything forward-reachable"
+    — verbatim the discoverability polish I
+    requested in `webtest-a-6` side observation.
+  - Slider: `value=1, max=1, disabled=true` — disabled
+    because no more depth to reveal.
+  The `webtest-a-6` side observation → `webtest-a-7`
+  proactive walk → @@FullStackA flag → `-a-56`
+  implementation → empirically validated loop closed.
+
+### Highlights
+
+* **`-a-63` fix is exactly the right shape**: chip-
+  count semantic switch from edge-tally to
+  node-tally fixes the UX gap I flagged in
+  `webtest-a-8` PARTIAL. Contact chip drops 1982 →
+  49, matching the data-level dedup from `-22`.
+  The empirical loop (walk → flag → fix → re-walk)
+  closed in <24 hours.
+* **`-a-56` Cmd+P 3-state contract is solid**:
+  open-on-terminal, hide-when-showing, spawn-from-
+  non-terminal — all three states work cleanly with
+  the same chord. The previous webtest-a-8 build
+  incident blocked this verification; now confirmed
+  HOLD.
+* **`-a-56` depth slider shallow-scope cue**: the
+  `[max]` annotation + `shallow` CSS class +
+  tooltip text triple-redundancy gives users
+  three independent cues that depth=1 is the
+  limit. Discoverability polish lands.
+
+### State at end of walk
+
+Lane-A test server torn down:
+
+1. chan serve killed.
+2. `rm -rf /tmp/chan-test-phase8-wa-r13/`.
+3. `chan remove` → unregistered.
+4. Chrome MCP tab closed; group auto-removed.
+
+6/6 HOLD. `-a-63` closes the `webtest-a-8` PARTIAL.
+`-a-56` retest passes. The chip-count semantic + the
+Cmd+P 3-state contract + the depth-slider polish all
+ship clean.

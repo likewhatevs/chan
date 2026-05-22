@@ -1633,3 +1633,81 @@ slider cue) shipped under `-a-56` mid-walk.
 * Path-limited `git commit` to bypass shared index.
 
 Standing by.
+
+## 2026-05-22 — poke (webtest-a-9: -a-63 chip count + -a-56 retest — 6/6 HOLD)
+
+Walked
+[`../webtest-a/webtest-a-9.md`](../webtest-a/webtest-a-9.md)
+on HEAD `9c7159a`. Throwaway drive r13 (chan-source);
+chan serve 127.0.0.1:8787; Chrome MCP tab `503725916`.
+Verdict appended to
+[`../webtest-a/webtest-a-1.md`](../webtest-a/webtest-a-1.md).
+
+### Verdicts: 6/6 HOLD
+
+| Check | Verdict |
+|-------|---------|
+| `-a-63` #1 Contact chip ~48 | HOLD (actual 49) |
+| `-a-63` #2 Other chips node-tally | HOLD |
+| `-a-56` #3 Cmd+P on terminal (no prompt) → opens | HOLD |
+| `-a-56` #4 Cmd+P on terminal (prompt shown) → hides | HOLD |
+| `-a-56` #5 Cmd+P on non-terminal → spawn + open | HOLD |
+| `-a-56` #6 Depth slider shallow-scope cue | HOLD |
+
+### Highlight: webtest-a-8 PARTIAL closed
+
+**Contact chip dropped 1982 → 49** (architect predicted
+~48). Cross-walk comparison:
+
+| Chip | webtest-a-7 | webtest-a-8 | **webtest-a-9** |
+|------|-------------|-------------|------------------|
+| tag | 8 | 8 | **6** |
+| contact | 1973 | 1982 | **49** |
+| language | 14 | 14 | **14** |
+| media | 21 | 23 | **31** |
+| folder | 33 | 33 | **16** |
+| markdown | 639 | 644 | **648** |
+| source | 31 | 29 | **31** |
+
+Dramatic drops on contact (-97.5%) + folder (-51.5%) =
+the edge-tally → node-tally semantic switch. language
+stayed consistent (already accurate). The empirical
+loop walk → flag → fix → re-walk closed in <24h.
+
+### `-a-56` Cmd+P 3-state contract
+
+All three states tested empirically:
+- terminal + no prompt → opens
+- terminal + prompt → hides
+- non-terminal → spawns Terminal-N + opens prompt
+
+Web Mac chord is **Cmd+Alt+P** (Cmd+P is browser-print-
+owned; web Mac uses Cmd+Alt+P per
+`shortcuts.ts:123`). Worth flagging in case the task
+spec at any point reads "Cmd+P" without the modifier
+qualification — the source-of-truth is the chord
+table in shortcuts.ts.
+
+### `-a-56` Depth slider shallow-scope cue
+
+Triple-redundant cue at file-scope CLAUDE.md (depth-cap=1):
+- **`[max]` annotation** next to slider value
+- **`.shallow` CSS class** on `.depth-row` element
+- **Tooltip**: "Scope is shallow — depth 1 already
+  reveals everything forward-reachable"
+- Slider `disabled=true` because no deeper hops to reveal
+
+The discoverability polish I flagged in `webtest-a-6`
+side observation now ships in `-a-56`. Loop closed.
+
+### Suggested commit shape
+
+* **Commit subject**: `docs: webtest-a-9 walk — -a-63
+  chip count fix + -a-56 retest (6/6 HOLD; webtest-a-8
+  PARTIAL closed)`.
+* **Files** (explicit per-path):
+  * `docs/journals/phase-8/webtest-a/webtest-a-1.md`
+  * `docs/journals/phase-8/alex/event-webtest-a-architect.md`
+* Path-limited `git commit` to bypass shared index.
+
+Standing by.
