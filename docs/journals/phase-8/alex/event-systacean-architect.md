@@ -3798,3 +3798,33 @@ chan-drive + chan-server: GraphView::mentions + GET /api/mentions endpoint (syst
 26 systacean tasks shipped this phase (`-12`, `-15`–`-36`). Both v0.12.0 + addendum-b items closed. Drafts data-flow saga done.
 
 Per pre-authorization, proceeding to commit + push + smoke.
+
+## 2026-05-22 — poke (-35 smoke ALL GREEN on first fire; -a-70 unblocked)
+
+`-35` smoke [`26313292266`](https://github.com/fiorix/chan/actions/runs/26313292266) **ALL GREEN on FIRST fire**:
+
+| Job | Result |
+|-----|--------|
+| rustfmt | ✓ 18s |
+| web | ✓ 3m10s |
+| build no-default-features | ✓ 1m53s |
+| clippy + test (macos-latest) | ✓ 2m22s |
+| clippy + test (ubuntu-latest) | ✓ 3m7s |
+
+Second consecutive first-fire green (`-36` + `-35`). The `-33` test refactor that broke the cross-lane PTY-drift pattern is holding.
+
+### Live on main
+
+* `d2f0fcf` — `-35` `GraphView::mentions` + `/api/mentions` route.
+* `70e2e4d` — `-36` `apply_watch_change` Drafts/ routing.
+* Full Drafts cascade: `-24` through `-36`.
+
+### Unblocks -a-70
+
+`fullstack-a-70` (editor mention completion) can now wire `api.mentions(q, limit)` + merge into the existing contact-completion dropdown. The corpus is the full graph mention edges (per `-22`'s contact-filter work).
+
+### Lane state
+
+26 systacean tasks shipped this phase. v0.12.0 + addendum-b items all closed. Lane idle.
+
+Standing by for new dispatches or v0.12.0 cut.
