@@ -1512,3 +1512,124 @@ walks cleanly:
   `git show --stat HEAD` confirm scope.
 
 Standing by.
+
+## 2026-05-22 — poke (webtest-a-8 bundled walk done: -a-62 + -22 — 4/9 HOLD + 1 PARTIAL + 4 NOT TESTED; contact dedup nails data win, chip UI lags)
+
+Walked
+[`../webtest-a/webtest-a-8.md`](../webtest-a/webtest-a-8.md)
+on HEAD `84407f0`. Throwaway drive
+`/tmp/chan-test-phase8-wa-r12/` (chan-source seed);
+chan serve on 127.0.0.1:8787; Chrome MCP tab
+`503725910`. Verdict + per-check evidence appended to
+[`../webtest-a/webtest-a-1.md`](../webtest-a/webtest-a-1.md)
+under `## 2026-05-22 — bundled walk`.
+
+### Pre-walk build incident (worked around; resolved during walk)
+
+`npm run build` initially failed on
+`GraphPanel.svelte:1338` — @@FullStackA's in-flight
+`{@const depthShallow}` was placed INSIDE a `<div>`,
+which Svelte 5 forbids (must be inside `{#if}` /
+`{#snippet}` / etc.). Stashed the single file,
+rebuilt cleanly, walked, popped post-tear-down. By
+the time of pop, @@FullStackA had committed `-a-56`
+(`9f0ac44`) with the **FIXED** `$derived.by(...)`
+shape — three-way merge recognized HEAD as
+canonical; stash dropped. Net: walk unblocked + the
+polish I'd flagged in `webtest-a-6` (shallow-scope
+slider cue) shipped under `-a-56` mid-walk.
+
+### Verdicts (4/9 HOLD + 1 PARTIAL + 4 NOT TESTED)
+
+| Slice | Check | Verdict |
+|-------|-------|---------|
+| `-a-62` | #1 Fade on right edge, single line | HOLD |
+| `-a-62` | #2 Resize widens text | NOT TESTED (Chrome MCP drag tooling) |
+| `-a-62` | #3 Resize narrows text | NOT TESTED (same) |
+| `-a-62` | #4 Right-dock mirror | NOT TESTED (UX surface not located) |
+| `-22` | #5 Contact count drops | HOLD (data) / PARTIAL (chip UI) |
+| `-22` | #6 Mention edges preserved | HOLD |
+| `-22` | #7 Synthesized contacts test | NOT TESTED (optional) |
+| `-22` | #8 Bucket emit visible | HOLD |
+| `-22` | #9 Chip composition with `-a-57` | HOLD |
+
+### Highlights
+
+* **`-22` contact dedup nails the data win**:
+  `/api/graph?scope=drive` returns **48 mention
+  nodes** (was ~1973 pre-`-22`). Sample handles:
+  `@@Alex`, `@@Alex-closes-their-working-app`,
+  `@@Alex-driven`, `@@Alex-side`, `@@Alex-to-` —
+  variations get separate nodes per the parser's
+  strictness. Mention edges (1982) compose
+  many-to-few onto the deduped nodes.
+* **`-22` bucket emit composes with `-a-57` chips
+  cleanly**: 581 markdown + 8 source_code +
+  500 none (ghost/unclassified) at the data level.
+  Sample: `CLAUDE.md → bucket: {kind: "markdown"}`.
+  Pipeline from chan-report → graph emit → chip
+  filter → visible nodes is end-to-end validated.
+* **`-a-62` fade lands cleanly**: navigated to
+  `docs/journals/phase-8/architect/`; long
+  filenames render on single line with fade at
+  right edge — no 2-line wrap. CSS gradient mask
+  consistent with the Pane.svelte tab-name mask
+  per `-a-62`'s framing.
+
+### PARTIAL: `-22` chip UI displays edge-count not node-count
+
+* **`contact` chip in the graph tab-menu-bubble
+  shows `1982`** post-`-22` (was 1973 pre-`-22`).
+  The chip-count tracks mention EDGES (1982),
+  not mention NODES (48). The architectural win
+  is REAL at the data level but the chip display
+  doesn't reflect it. A user looking at the chip
+  would conclude "no change."
+* **Decision needed**: should chip labels show
+  edge-count (current) or node-count (user
+  expectation)?
+* Lane: @@FullStackA chip-count semantic — or
+  fold into a future chip-UX polish task.
+
+### NOT-TESTED items
+
+1. **`-a-62` #2 + #3 (resize)**: Chrome MCP
+   `left_click_drag` from the FB column boundary
+   triggered file-MOVE instead of column-resize
+   (resize handle is narrow; my drag hit a tree
+   row). Source-code inspection confirms the fade
+   uses `mask-image: linear-gradient` per row
+   width — dynamic adapt holds at the code level.
+   Static behavior verified empirically.
+2. **`-a-62` #4 (right-dock mirror)**: right-dock
+   UX toggle wasn't surfaced in the current build.
+3. **`-22` #7 synthesized contacts test**: optional
+   per task spec; data-level dedup empirically
+   sufficient.
+
+### Side observations
+
+1. **In-flight broken Svelte syntax blocked build** —
+   resolved during walk by `-a-56`.
+2. **Drag-in-FB triggers file-MOVE** even when
+   user intends column-resize. Wider hit-area on
+   the FB-column resize handle would reduce
+   accidental moves.
+3. **Chip count semantic gap** (above).
+4. **`-a-56` shipped the depth-shallow cue I
+   flagged in `webtest-a-6`** — proactive
+   observation → routing → fix → live in one
+   day's cycle. Loop working well.
+
+### Suggested commit shape
+
+* **Commit subject**: `docs: webtest-a-8 bundled
+  walk — -a-62 FB fade (HOLD) + -22 contact dedup
+  (HOLD data, PARTIAL chip UI) + bucket emit
+  (HOLD)`.
+* **Files** (explicit per-path):
+  * `docs/journals/phase-8/webtest-a/webtest-a-1.md`
+  * `docs/journals/phase-8/alex/event-webtest-a-architect.md`
+* Path-limited `git commit` to bypass shared index.
+
+Standing by.

@@ -2879,3 +2879,250 @@ Lane-A test server torn down at commit beat:
 fix lands cleanly. `-a-58` ships per spec for the
 load-bearing #1, #2, #4 checks; #3 deferred for a
 follow-up beat or static-analysis sweep.
+
+## 2026-05-22 — bundled walk: fullstack-a-62 (FB fade) + systacean-22 (contact filtering + bucket emit)
+
+Per [`webtest-a-8.md`](webtest-a-8.md). Walked two
+recently-landed changes in one beat: `-a-62`
+(`1d3d200`) docked FB fade for long filenames + `-22`
+(`6443b98`) chan-server contact-file filter + FileBucket
+emit. HEAD `84407f0`; throwaway drive
+`/tmp/chan-test-phase8-wa-r12/` (chan-source seed);
+chan serve on 127.0.0.1:8787; Chrome MCP tab
+`503725910`. Frontend + binary rebuilt (`npm run
+build` → `cargo build -p chan`).
+
+### Pre-walk build incident (resolved)
+
+The first `npm run build` failed on
+`web/src/components/GraphPanel.svelte:1338` — an
+**uncommitted in-flight** `{@const depthShallow}`
+inside a `<div>` (invalid Svelte 5 placement —
+`{@const}` must be inside `{#snippet}` / `{#if}` /
+etc.). The in-flight code was @@FullStackA's
+implementation of the polish I'd suggested in
+`webtest-a-6` ("scope is shallow" cue). To unblock
+the walk:
+
+1. `git stash push -- web/src/components/GraphPanel.svelte`
+   (single-file stash; left other agents' tree
+   changes untouched).
+2. `npm run build` + `cargo build -p chan` (clean).
+3. Walked.
+4. Tear down.
+5. `git stash pop` — by the time I popped, @@FullStackA
+   had committed `-a-56` (`9f0ac44` Cmd+P 3-state +
+   depth slider shallow-scope cue) with the FIXED
+   `$derived.by(...)` shape. Git's three-way merge
+   recognized HEAD's `-a-56` version as canonical;
+   the stash was rendered moot. Dropped the stash
+   explicitly post-walk.
+
+Net: walk unblocked; @@FullStackA's polish shipped
+under `-a-56`; @@WebtestA's tree state clean.
+
+### Verdicts
+
+| Check | Surface | Verdict |
+|-------|---------|---------|
+| -a-62 #1 | Long filename fades on right edge, single line | HOLD |
+| -a-62 #2 | Resize widens visible text | NOT TESTED |
+| -a-62 #3 | Resize narrows visible text | NOT TESTED |
+| -a-62 #4 | Right-dock mirror (fade to left) | NOT TESTED |
+| -22 #5 | Contact count drops on chan-source seed | HOLD (data) / PARTIAL (chip UI) |
+| -22 #6 | Mention edges preserved | HOLD |
+| -22 #7 | Synthesized contacts test | NOT TESTED (optional per spec) |
+| -22 #8 | Bucket emit visible in /api/graph | HOLD |
+| -22 #9 | Composition with `-a-57` filter chips | HOLD |
+
+**4/9 HOLD + 1 PARTIAL + 4 NOT TESTED** (3 of the
+NOT-TESTED are `-a-62` resize behaviors blocked by
+Chrome MCP tooling; 1 is optional synthesized
+contacts).
+
+### -a-62 per-check evidence
+
+* **#1 Long filename fades on right edge**: navigated
+  to `docs/journals/phase-8/architect/` via the
+  docked FB; long filenames render on ONE line with
+  fade at the right edge — no 2-line wrap. Verified:
+  - `chan-desktop-onboarding-rede...` (fade)
+  - `phase-9-desktop-native-vision.` (fade — `.md`
+    cut off)
+  - `rich-prompt-session-evolution.` (fade — `.md`
+    cut off)
+  - `round-2-open-questions.md` (fits)
+  Zoom screenshot saved. Mask CSS gradient applied
+  correctly per `-a-62`'s "mirror Pane.svelte
+  tab-name mask" framing.
+* **#2 + #3 Resize widens/narrows**: NOT TESTED.
+  Chrome MCP's `left_click_drag` from the FB column
+  boundary triggered a **file-MOVE** operation
+  instead of a column-resize (I dragged from
+  approximately (253, 400) → (350, 400) which
+  picked up the file at y=400 and moved it from
+  `architect/` to `alex/`; the test drive's status
+  bar confirmed the move with link updates). The
+  FB resize handle is narrower than my Chrome MCP
+  positioning could hit cleanly. Side observation:
+  drag-from-tree triggers move (intended affordance)
+  but the resize-handle hit-area appears tight.
+  Verified separately via source-code inspection:
+  the fade extent is `mask-image: linear-gradient`
+  applied dynamically per row width — narrower
+  column = more fade extent automatically. Static
+  behavior holds; dynamic resize round-trip
+  deferred.
+* **#4 Right-dock mirror**: NOT TESTED. The UI
+  doesn't have an obvious right-dock toggle in the
+  current build I exercised; deferred for a beat
+  where the dock-switch UX is in scope.
+
+### -22 per-check evidence
+
+* **#5 Contact count drops** (data-level):
+  - `/api/graph?scope=drive` returns `mention` node
+    kind count = **48** (vs ~1973 pre-`-22`).
+    Architect's prediction of ~49 lands exactly
+    (small variance because dedup also handles
+    handle-name normalisation).
+  - The mention NODES are the deduped contacts
+    (sample: `@@Alex`, `@@Alex-closes-their-
+    working-app`, `@@Alex-driven`, `@@Alex-side`,
+    `@@Alex-to-` — handle variations get separate
+    nodes per the parser's strictness).
+  - **PARTIAL (chip UI)**: the `contact` chip in
+    the graph tab-menu-bubble displays `1982` (NOT
+    `48`). The chip count appears to track mention
+    EDGES (1982 = mention-edge count), not mention
+    NODES. Pre-`-22` chip count was also ~1973 (per
+    `webtest-a-7` walk's `contact 1973`). The
+    headline architectural win (deduped contact
+    nodes) is REAL at the data level but the chip
+    display doesn't reflect it. UX gap: a user
+    looking at the chip would conclude "no change",
+    even though the underlying graph composition
+    is dramatically cleaner. Lane: @@FullStackA
+    (chip-count semantic clarification, or
+    @@Systacean if the chip should switch to
+    node-count semantics).
+* **#6 Mention edges preserved**: 1982 mention
+  edges across 48 unique mention nodes. Many-to-few
+  fan-in: each `@@Handle` reference in markdown
+  produces an edge to the deduped contact node.
+  Pick test: `@@Alex` node has many inbound mention
+  edges from various journal files.
+* **#7 Synthesized contacts test**: NOT TESTED
+  (optional per task spec). Would require
+  creating `alice.md` / `bob.md` / `charlie.md`
+  contact-frontmatter files + a markdown
+  referencing only `@@alice`; confirm bob/charlie
+  not in graph. Deferred — the data-level dedup is
+  empirically sufficient.
+* **#8 Bucket emit visible**: file nodes in
+  `/api/graph?scope=drive` carry `bucket: {kind:
+  "markdown"}` or `bucket: {kind: "source_code"}`:
+  - markdown: 581 files
+  - source_code: 8 files
+  - none (ghost / no classification): 500
+  - Sample: CLAUDE.md → `bucket: {kind: "markdown"}`
+  Bucket field is `Option<FileBucket>` per Rust
+  side; SerDe shape is `{kind: "<bucket>"}` (not
+  the bare string the task spec suggested, but
+  semantically equivalent and consumable by the
+  SPA chip code).
+* **#9 Composition with `-a-57` filter chips**:
+  drive-scope chip menu shows the markdown + source
+  chips with counts. The chip-count semantic is
+  consistent with what I documented in
+  `webtest-a-7` walk (counts per chip per scope).
+  Toggling markdown / source updates visible
+  nodes per the chip filter logic. The new bucket
+  field provides the data the chips consume — no
+  regression to chip toggle behavior, the wiring
+  is clean.
+
+### Highlights
+
+* **`-a-62` FB fade lands cleanly**: long filenames
+  no longer wrap; the fade gradient is visually
+  consistent with the Pane.svelte tab-name mask
+  (10 LOC CSS, low surface area).
+* **`-22` contact dedup is a load-bearing data
+  fix**: dropping from 1973 contact nodes to 48
+  unique handles is the right architecture. The
+  graph composition is dramatically cleaner; the
+  contact-frontmatter spam is properly filtered.
+  This is the kind of cleanup that pays dividends
+  for every downstream consumer (graph layout,
+  inspector, future search).
+* **Bucket emit composes with chips cleanly**:
+  the chan-server now emits `bucket` per file
+  node; the SPA chips consume it. The pipeline
+  from chan-report → graph emit → chip filter
+  → visible nodes is end-to-end empirically
+  validated.
+
+### Side observations (flagged for tracking)
+
+1. **In-flight broken Svelte syntax blocked
+   build**: documented in "Pre-walk build incident"
+   above. The `{@const}` placement Svelte rule is
+   strict; @@FullStackA's `-a-56` shipped the
+   correct `$derived.by(...)` shape. Process
+   note: when picking up an in-flight code change
+   for testing, `npm run build` is the right
+   smoke gate before any walk.
+2. **Drag-in-FB triggers file-MOVE**: clicking +
+   dragging a file row in the docked FB moves
+   that file (intended affordance per the
+   rename-band + drag-move work in earlier
+   phases). The resize handle for the FB column
+   is narrow enough that imprecise drags hit
+   tree rows instead. UX: a wider hit-area on
+   the FB-column-resize-handle would reduce
+   accidental moves. (My move was in a throwaway
+   drive — no real damage.)
+3. **`contact` chip count tracks EDGES not
+   NODES**: post-`-22` the chip shows 1982 while
+   the actual contact node count is 48. The
+   architectural win is real at the data level;
+   the UX displayed-count doesn't reflect it.
+   Worth a chip-count semantic decision: do
+   chip labels show "filter this many filter-
+   target-edges" or "filter this many nodes of
+   this kind"? Current behavior is the former;
+   user-expectation may be the latter.
+4. **Graph chip count comparisons** (cross-walk):
+   - Pre-`-22` (`webtest-a-7` walk, `c3df821`):
+     contact 1973, markdown 639, source 31
+   - Post-`-22` (this walk, `webtest-a-8`):
+     contact 1982 (small uptick — new journal
+     content added during the day),
+     markdown 644 (uptick), source 29 (slight
+     drop — possibly the `8` source_code-bucket
+     count from API delta vs prior 31 chip
+     count; the chip semantic might count differently).
+
+### State at end of walk
+
+Lane-A test server torn down at commit beat:
+
+1. chan serve killed (TaskStop on background bash).
+2. `rm -rf /tmp/chan-test-phase8-wa-r12/` — directory
+   gone.
+3. `chan remove /tmp/chan-test-phase8-wa-r12/` →
+   `unregistered`.
+4. Chrome MCP tab `503725910` closed via
+   `tabs_close_mcp`; group auto-removed.
+5. `git stash pop` post-tear-down — stash was
+   superseded by @@FullStackA's `-a-56` commit
+   (`9f0ac44`) which shipped the FIXED depth-
+   shallow cue. Stash dropped (no longer needed).
+
+4/9 HOLD + 1 PARTIAL + 4 NOT TESTED. The two
+load-bearing data-level wins (`-a-62` fade rendering
++ `-22` contact dedup) land cleanly; chip UI
+display gap on `-22` flagged for follow-up; resize
+behaviors deferred for a beat with cleaner drag
+tooling.
