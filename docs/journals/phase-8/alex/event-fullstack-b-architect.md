@@ -1699,3 +1699,77 @@ tail of [`../fullstack-b/fullstack-b-25.md`](../fullstack-b/fullstack-b-25.md)
 "implementation note (ready for commit clearance)".
 
 Standing by for clearance + next dispatch.
+
+## 2026-05-22 — poke (fullstack-b-26 commit-ready: tab right-click Reload + Open Inspector)
+
+`-26` landed locally as `77c0129`. Single atomic commit per
+the `feedback_shared_worktree_commits` discipline; 4 files
+all mine (2 svelte + new vitest + task file).
+
+### Scope correction at pickup
+
+Task body proposed adding new IPC commands `tab_reload` +
+`open_inspector`. Source grep showed `reload_window` +
+`open_devtools` (added in `-b-17`, consumed via
+`reloadWindow()` + `openWebInspector()` from `-a-36`) already
+do exactly the work. Reused them — no duplicate IPC handlers.
+Same shape catch as `-24`'s chan-server-vs-chan-desktop
+misroute; documented in the task tail.
+
+The pane-context menu was already wired by `-a-36` / `-b-17`.
+The PER-TAB right-click menu (rendered by each tab
+component) had no window-level Reload + Open Inspector
+entries. That's the gap `-26` closes.
+
+### Changes
+
+* **`FileEditorTab.svelte`** — `doReloadWindow` +
+  `doOpenInspector` handlers + Reload + Open Inspector menu
+  rows at the tail (after Settings + separator). Existing
+  "Reload from Disk" row stays for file-content reload.
+* **`TerminalTab.svelte`** — same shape; rows at the tail
+  after the broadcast targets section. Existing "Restart"
+  row stays for shell respawn.
+* **`tabMenuReloadInspector.test.ts`** (new) — 8 `?raw`-source
+  pins for both components: entry labels + click handlers +
+  IPC helper imports + web-fallback toast.
+
+### Deliberate omissions
+
+GraphPanel + FileBrowserSurface NOT extended in `-26`.
+Both already have a "Reload" entry in their tab right-click
+menu (graph reload / tree reload). Adding another "Reload"
+labelled entry would create two identical-looking buttons
+with different semantics — bad UX. Resolution shape (rename
+existing → "Reload Graph" / "Reload Tree" and add
+window-level "Reload"; or rely on pane-context menu +
+keyboard Cmd+R in those tab contexts) flagged at the task
+tail for `-26` walkthrough verdict.
+
+### Pre-push gate
+
+| Surface                                  | State                              |
+|------------------------------------------|------------------------------------|
+| fmt / clippy / cargo test workspace      | Clean.                             |
+| no-default-features build                | Clean.                             |
+| svelte-check                             | 53/0/0.                            |
+| vitest                                   | 73/764 (was 756; +8 from new pins).|
+| npm build                                | Clean.                             |
+
+### Coordination
+
+Multi-agent WIP in tree (CI on `ci-14`, FullStackA on
+`-a-64`/`-a-65` untracked, Systacean on `-24` untracked).
+Atomic `git commit --only` landed clean.
+
+### Runtime walkthrough
+
+@@WebtestB owns per task body's out-of-scope clause.
+Standing chan-desktop runtime perm available if you'd
+prefer me to verify visually first; otherwise leaving to
+webtest.
+
+Full implementation note + verification table at the tail of
+[`../fullstack-b/fullstack-b-26.md`](../fullstack-b/fullstack-b-26.md).
+
+Standing by for clearance + next dispatch.
