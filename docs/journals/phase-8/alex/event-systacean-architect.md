@@ -3507,3 +3507,54 @@ Worth flagging for Round-3 hardening. Not blocking; the bundled-fixup pattern wo
 22 systacean tasks shipped this phase (incl. `-32`). Drafts data-flow fully closed for read/list/stat. Lane idle.
 
 Standing by.
+
+## 2026-05-22 — poke (-34 implementation complete; closes -a-66 slice e + Drafts data-flow saga)
+
+Picked up `-34` first (between `-33` + `-34`; closes my own Drafts saga). Audit-first per the task body.
+
+### Root cause confirmed
+
+`Drive::reindex_with_aggression` walks ONLY drive-root via `fs_ops::list_tree_filtered`. Drafts subtree at `<state>/drafts/<uuid>/` is NOT in the boot walk. `-25`'s watcher catches changes after but the initial corpus is empty under `Drafts/` prefix.
+
+### Fix
+
+Extended `reindex_with_aggression` with a `self.index_drafts_subtree()` step after the existing `rebuild_graph` + `Index::build_all`. Recursive walker calls `Drive::index_draft_file("Drafts/<sub_rel>")` on each indexable text file. Per-file errors log + continue. Non-files (symlinks etc) skipped.
+
+### Tests (+1)
+
+`reindex_walks_drafts_subtree_into_graph_and_bm25` — write draft via raw `std::fs::write` (bypass watcher) → `reindex()` → BM25 hit + `graph.files()` includes the unified path. End-to-end pin.
+
+### Diff
+
+`crates/chan-drive/src/drive.rs`: +145 / 0. Plus task tail + this poke. 3 paths.
+
+### Pre-push gate
+
+* fmt + clippy + no-default-features clean.
+* `cargo test -p chan-drive --lib`: **462 / 0 / 2-ignored** (+1).
+
+### Suggested commit subject
+
+```
+chan-drive: reindex walks Drafts/ subtree at boot (systacean-34; closes -a-66 slice e PARTIAL)
+```
+
+### Saga closure
+
+| Task | Fix |
+|------|-----|
+| `-29` | `Drive::list` unified-path |
+| `-32` | `Drive::stat` + `exists` + `read` unified-path |
+| **`-34`** | **`reindex` walks Drafts at boot** |
+
+End-to-end Drafts data flow through chan-drive → graph DB → chan-server graph route synthesize → SPA rendering.
+
+### Smoke plan
+
+`gh workflow run ci.yml --ref systacean-34-smoke`. Cross-lane drift may recur from HEAD; will bundle fixups if needed.
+
+### Next
+
+`-33` (agent_event_echo WS frame) queued after `-34` smoke green.
+
+Per pre-authorization, proceeding to commit + push + smoke.

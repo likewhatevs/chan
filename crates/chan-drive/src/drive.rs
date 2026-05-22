@@ -1745,6 +1745,19 @@ impl Drive {
         self.clear_rebuild_marker();
         self.needs_rebuild
             .store(false, std::sync::atomic::Ordering::Release);
+        // systacean-34: walk the per-drive Drafts subtree + index
+        // each indexable text file through `index_draft_file`.
+        // The watcher (`-25`) catches ongoing changes; this closes
+        // the boot-time gap where the initial corpus walk missed
+        // drafts files (graph payload had `synthesize_drafts_layer`
+        // wired but `files` was empty). Best-effort: any single-
+        // file failure logs at warn + the loop continues.
+        if let Err(e) = self.index_drafts_subtree() {
+            tracing::warn!(
+                error = %e,
+                "reindex: drafts subtree walk failed; drafts may be missing from graph + BM25"
+            );
+        }
         // Drop the cumulative rename log: the freshly-rebuilt graph
         // already reflects every current path, so any prior in-process
         // translation is now a no-op (and would be wrong if the user
@@ -1768,6 +1781,30 @@ impl Drive {
             }
         }
         Ok(summary)
+    }
+
+    /// systacean-34: walk the per-drive Drafts subtree + invoke
+    /// `index_draft_file` on each indexable text file so the
+    /// initial-build corpus includes drafts content. Closes the
+    /// gap where `-25`'s watcher caught ongoing changes but the
+    /// boot-time graph + BM25 was empty under the `Drafts/`
+    /// prefix.
+    ///
+    /// Walks `<state_dir>/drafts/<uuid>/` directly via `std::fs`
+    /// (drafts are chan-drive's own metadata; the cap-std sandbox
+    /// isn't a security concern here, same as `index_draft_file`).
+    /// Emits paths in the unified `Drafts/<name>/<file>` keyspace
+    /// per the `-25`/`-26` contract.
+    ///
+    /// Per-file errors log + continue (best-effort; the watcher
+    /// will retry on the next change).
+    fn index_drafts_subtree(&self) -> Result<()> {
+        let drafts_root = &self.paths.drafts;
+        if !drafts_root.is_dir() {
+            return Ok(());
+        }
+        walk_drafts_recursive(drafts_root, drafts_root, self)?;
+        Ok(())
     }
 
     /// Stamp `paths.graph_dir/rebuild.inprogress`. Atomic write so a
@@ -2684,6 +2721,62 @@ impl Drive {
 /// Effective limit = max(prev_size, limit). Refusal carries the
 /// effective limit so the editor can show the user the exact
 /// number it has to stay under.
+/// systacean-34: recursive walker for `Drive::index_drafts_subtree`.
+/// Lives at module scope (not on `Drive`) because the recursion
+/// keeps `dir` as a `&Path` parameter; the only `Drive` capability
+/// used is the public `index_draft_file` entry.
+///
+/// `drafts_root` is the per-drive drafts dir (the abs path
+/// `state_dir/drafts/<uuid>/`); `dir` is the current subtree being
+/// walked. The path passed to `index_draft_file` is the unified
+/// `Drafts/<rel_under_drafts_root>` shape per the `-25`/`-26`
+/// contract.
+fn walk_drafts_recursive(
+    drafts_root: &std::path::Path,
+    dir: &std::path::Path,
+    drive: &Drive,
+) -> Result<()> {
+    let rd = match std::fs::read_dir(dir) {
+        Ok(rd) => rd,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(e) => return Err(ChanError::Io(format!("walk drafts {}: {e}", dir.display()))),
+    };
+    for entry in rd.flatten() {
+        let path = entry.path();
+        let Ok(ft) = entry.file_type() else { continue };
+        if ft.is_dir() {
+            walk_drafts_recursive(drafts_root, &path, drive)?;
+            continue;
+        }
+        if !ft.is_file() {
+            // Symlinks / FIFOs / sockets / devices: skip silently
+            // (mirrors the special-file refusal pattern elsewhere
+            // in chan-drive).
+            continue;
+        }
+        let Ok(sub_rel) = path.strip_prefix(drafts_root) else {
+            continue;
+        };
+        let sub_rel_str = sub_rel.to_string_lossy().replace('\\', "/");
+        if sub_rel_str.is_empty() {
+            continue;
+        }
+        let unified = format!("Drafts/{sub_rel_str}");
+        if !fs_ops::is_indexable_text(&unified) {
+            continue;
+        }
+        match drive.index_draft_file(&unified) {
+            Ok(()) => {}
+            Err(e) => tracing::warn!(
+                path = %unified,
+                error = %e,
+                "walk_drafts_recursive: index_draft_file failed; skipping",
+            ),
+        }
+    }
+    Ok(())
+}
+
 fn check_size(kind: &'static str, size: usize, limit: u64, prev_size: Option<u64>) -> Result<()> {
     let size = size as u64;
     let effective = std::cmp::max(prev_size.unwrap_or(0), limit);
@@ -5279,6 +5372,58 @@ mod tests {
         let names: Vec<String> = drafts.iter().map(|d| d.name.clone()).collect();
         assert!(names.contains(&"untitled-1".to_string()));
         assert!(names.contains(&"team-alpha".to_string()));
+    }
+
+    #[test]
+    fn reindex_walks_drafts_subtree_into_graph_and_bm25() {
+        // systacean-34: closes the boot-walk gap. `-25` extended
+        // the watcher to multi-root but `Drive::reindex` only
+        // walked drive-root — so the initial corpus was empty
+        // under the `Drafts/` prefix even when draft files
+        // existed on disk. After this PR, reindex_with_aggression
+        // additionally walks drafts and pumps each file through
+        // index_draft_file.
+        let (_cfg, _root, drive) = fixture();
+        drive.create_draft_dir("untitled-1").unwrap();
+        // Write the file directly (bypass write_text so the
+        // watcher doesn't catch it; we want to verify the BOOT
+        // walk picks it up).
+        std::fs::write(
+            drive.drafts_dir().join("untitled-1").join("draft.md"),
+            "# hello\nboot-walk-marker-systacean-34 here\n",
+        )
+        .unwrap();
+
+        // Reindex (boot-equivalent path).
+        drive.reindex(None).unwrap();
+
+        // BM25 should now know about the draft under the unified
+        // `Drafts/untitled-1/draft.md` key.
+        let opts = crate::drive::SearchOpts {
+            mode: SearchMode::Bm25,
+            limit: 10,
+            scope: None,
+        };
+        let hits = drive
+            .search("boot-walk-marker-systacean-34", &opts)
+            .unwrap();
+        assert!(
+            hits.hits
+                .iter()
+                .any(|h| h.path == "Drafts/untitled-1/draft.md"),
+            "boot walk should have indexed the draft; got {:?}",
+            hits.hits
+        );
+
+        // Graph DB should also have the file as a node — verified
+        // via the public files() listing (which the chan-server
+        // graph route consumes).
+        let graph = drive.graph().unwrap();
+        let files = graph.files().unwrap();
+        assert!(
+            files.iter().any(|p| p == "Drafts/untitled-1/draft.md"),
+            "graph files() should include the draft; got {files:?}"
+        );
     }
 
     #[test]
