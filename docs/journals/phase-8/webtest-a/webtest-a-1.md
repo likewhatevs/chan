@@ -2262,3 +2262,164 @@ Tear-down at commit beat.
 
 3/3 HOLD; `webtest-a-5` PARTIAL closed; `-a-55` walk
 complete.
+
+## 2026-05-22 — fullstack-a-49 + -a-50 + -a-51 proactive walkthrough (graph overhaul wave; -a-52 not in scope)
+
+Proactive lane-A walk of the three landed graph-overhaul
+commits per the memory rule on proactive coverage. `-a-52`
+(G9 + G10 minimum cut — depth-slider forward-only + drop link
+filter) is still gate-contingent in @@FullStackA's lane; walk
+deferred until it lands. HEAD `e80db8b`; throwaway drive
+`/tmp/chan-test-phase8-wa-r8/` (chan-source seed); chan serve
+on 127.0.0.1:8787; Chrome MCP tab `503725870`. Frontend
+rebuilt (npm run build → cargo build -p chan) to embed
+`-a-51`'s `GraphCanvas.svelte` + `HybridGraphConfig.svelte`
+changes (web/dist before rebuild lagged `-a-51` by one beat;
+rebuild includes @@FullStackA's in-flight `-a-52`
+`GraphPanel.svelte` changes too — `-a-52` specific surfaces
+explicitly OUT of scope for this walk).
+
+### Verdicts
+
+| Slice | Surface | Verdict |
+|-------|---------|---------|
+| -a-49 | Graph layout: filesystem-hierarchy as backbone | HOLD |
+| -a-50 | Directory inspector + chan-reports aggregated stats | HOLD |
+| -a-51 | G6 colour scheme on graph canvas | HOLD |
+| -a-51 | Hybrid Graph back-side legend grid | HOLD |
+
+**4/4 HOLD**.
+
+### `-a-49` per-check evidence
+
+* **API contract**: `GET /api/graph?scope=drive` (Bearer
+  token from sessionStorage) returns 1301 nodes across
+  six kinds: `tag`, `file`, `mention`, `media`,
+  `directory`, `language`. 116 directory nodes total.
+  Sample root directory: `{kind: "directory", id:
+  "directory:", label: "chan-test-phase8-wa-r8", path: "",
+  files: 3, code: 153}` — the drive root carries
+  aggregated `files` + `code` stats from the chan-reports
+  fanout.
+* **Visual confirmation**: graph canvas renders directory
+  nodes as solid grey filled circles (per the G6 palette
+  `--g-folder #8e8e93`). They serve as the backbone of the
+  layout — files cluster around their parent directory
+  nodes, and the periphery shows grey directory anchors
+  (e.g. `web/` directory node visible at upper-left in the
+  zoomed-in view).
+
+### `-a-50` per-check evidence
+
+* **Click + inspector**: clicked the `web/` directory node
+  in the graph canvas (grey filled circle). Right inspector
+  panel rendered the `DirectoryInfoBody.svelte` component
+  with the following sections:
+  - Header: "drive" breadcrumb + "**DIR**" badge (vs
+    "DOCUMENT" badge for file nodes) + title `web/` +
+    subtitle `web`.
+  - Action button: **"Graph from here"** — re-scope graph
+    to this directory.
+  - **TOTALS** section (aggregated chan-reports stats):
+    `files 230 / code (SLOC) 31,428 / comments 7,548 /
+    blanks 2,820`.
+  - **BY LANGUAGE** table (7 rows):
+    `TypeScript 160 / 22,232; Svelte 53 / 5,960; JSON 3 /
+    2,842; Markdown 3 / 0; CSS 5 / 291; JavaScript 2 / 47;
+    HTML 4 / 56`.
+  - **COCOMO (BASIC-ORGANIC)** estimator:
+    `effort 89.6 pmo; schedule 13.8 mo; developers 6.5;
+    cost (est) US$1,720,660`.
+* All sections render cleanly. Data matches what
+  chan-report's `FileBucket` (Markdown / SourceCode / etc.)
+  computes for the `web/` subtree.
+
+### `-a-51` per-check evidence — G6 colour scheme
+
+* **Graph canvas** uses the new G6 palette (per
+  `GraphCanvas.svelte:323-369`):
+  - Markdown (doc): orange `#ff8a3d`
+  - Source code: royalblue `#4169e1`
+  - Binary: darker grey `#5e5e62` (distinct from folder
+    grey `#8e8e93`)
+  - Media: purple `#b07dff`
+  - Directory (folder): grey `#8e8e93`
+  - Hashtag (tag): green `#6cd07a`
+  - Mention/contact: yellow `#e3b341`
+  - Language: pink `#ff4db8`
+* Visually verified in the rendered graph: orange `D` letter
+  badges for markdown files, grey filled circles for
+  directories (with "D" letter — the directory glyph),
+  occasional yellow `A` (alias/contact), green `P` (hashtag),
+  pink `E` (something), blue `D` (source code per
+  `--g-source`).
+
+### `-a-51` per-check evidence — Hybrid Graph back-side legend grid
+
+* Flipped Hybrid Graph pane to back via `Cmd+. Tab Return`.
+  Back-side body rendered the `HybridGraphConfig.svelte`
+  legend grid as specced:
+  - **Title**: "Hybrid Graph"
+  - **Subtitle**: "Colour scheme for graph nodes. Same
+    palette renders on the graph canvas + here; per-Hybrid
+    Appearance overrides cascade through automatically."
+  - **FILES** category (5 rows):
+    | Markdown      | `.md / .txt`                  | orange dot |
+    | Source code   | `.rs / .py / .ts / config`    | blue dot   |
+    | Binary        | `archives / executables / other` | grey dot |
+    | Media         | `images / PDFs`               | purple dot |
+    | Contact       | `chan.kind: contact`          | yellow dot |
+  - **CONTAINERS** category (1 row):
+    | Directory     | `filesystem dir + drive root` | grey dot   |
+  - **GRAPH RELATIONS** category (3 rows):
+    | Hashtag       | `#tag`                        | green dot  |
+    | Mention       | `@@mention`                   | yellow dot |
+    | Language      | `tokei language nodes`        | pink dot   |
+* Legend grid renders cleanly; color dots match graph
+  canvas exactly (verified by inspection).
+
+### Highlights
+
+* **`-a-49` filesystem-hierarchy backbone is functional**:
+  directory nodes are first-class in the graph (116 of them
+  in the chan repo seed) + the layout uses them as
+  structural anchors. This is the foundation that `-a-50`
+  + `-a-51` build on.
+* **`-a-50` DirectoryInfoBody is a polished surface**: the
+  inspector cleanly bridges graph → chan-reports stats.
+  COCOMO estimator is a delightful touch that gives
+  immediate "how big is this codebase" intuition.
+* **`-a-51` G6 colour scheme is a real readability win**:
+  the markdown/source/binary/media split makes the graph
+  legible at a glance. The Hybrid Graph back-side legend
+  grid is the right home for the palette reference —
+  always one flip away when the user forgets which color
+  is which.
+
+### Side observation (out of scope; flagging)
+
+* **Click hit-radius on graph canvas is tight**: clicking
+  near a node but not directly on it consistently
+  produced no inspector selection (e.g. clicks at (1356,
+  539), (1351, 411), (881, 247) all missed despite being
+  close to visible node centers). Real users may need to
+  zoom in to click smaller nodes. Not regression-class —
+  the click DID hit cleanly on `web/` directory after
+  zoom + repositioning — but a small hit-area buffer
+  around each node could improve discoverability. Lane:
+  @@FullStackA (graph canvas hit-test logic).
+
+### State at end of walk
+
+Lane-A test server torn down at commit beat:
+
+1. chan serve killed (TaskStop on background bash).
+2. `rm -rf /tmp/chan-test-phase8-wa-r8/` — directory gone.
+3. `chan remove /tmp/chan-test-phase8-wa-r8/` →
+   `unregistered`.
+4. Chrome MCP tab `503725870` closed via `tabs_close_mcp`;
+   group auto-removed.
+
+4/4 HOLD; graph overhaul wave first-three-slices walked.
+`-a-52` (depth-slider + drop link filter) walk lands
+separately when `-a-52` commits cleanly.

@@ -1119,3 +1119,100 @@ cut it, it can scope purely to the graph overhaul sub-wave
 (`-a-49..52`) without needing to re-walk `-a-55`.
 
 Standing by.
+
+## 2026-05-22 — poke (proactive walk of -a-49 + -a-50 + -a-51 done; 4/4 HOLD; -a-52 deferred)
+
+Picked up the graph-overhaul wave for a proactive lane-A
+walk per the memory rule on proactive coverage. Three slices
+in HEAD (`5685be4` -a-49, `fc5dfdf` -a-50, `362aa96` -a-51);
+`-a-52` (G9 + G10 minimum cut) deferred until it lands
+cleanly. HEAD `e80db8b`; throwaway drive
+`/tmp/chan-test-phase8-wa-r8/` (chan-source seed); chan
+serve on 127.0.0.1:8787; Chrome MCP tab `503725870`.
+Verdict appended to
+[`../webtest-a/webtest-a-1.md`](../webtest-a/webtest-a-1.md)
+under `## 2026-05-22 — fullstack-a-49 + -a-50 + -a-51
+proactive walkthrough`.
+
+### Verdicts (4/4 HOLD)
+
+| Slice | Verdict |
+|-------|---------|
+| `-a-49` Graph filesystem-hierarchy backbone | HOLD |
+| `-a-50` Directory inspector + chan-reports stats | HOLD |
+| `-a-51` G6 colour scheme on graph canvas | HOLD |
+| `-a-51` Hybrid Graph back-side legend grid | HOLD |
+
+### Build note
+
+Frontend rebuilt (`npm run build` → `cargo build -p chan`)
+to embed `-a-51`'s `GraphCanvas.svelte` +
+`HybridGraphConfig.svelte` changes; web/dist pre-rebuild
+lagged `-a-51` by one beat (Pane.svelte / dist build was
+23:09 yesterday; `-a-51` committed 04:42 today). The
+rebuild also pulled in @@FullStackA's in-flight `-a-52`
+`GraphPanel.svelte` changes — **`-a-52`-specific surfaces
+(depth slider + link-filter chips) were explicitly OUT of
+scope** for this walk; they get their own beat when
+`-a-52` commits.
+
+### Highlights
+
+* **`-a-49` server contract**: `GET /api/graph?scope=drive`
+  returns 1301 nodes across 6 kinds including 116
+  `kind=directory` nodes; each directory carries
+  aggregated `files` + `code` stats (e.g. root:
+  `files: 3, code: 153`). Graph canvas renders them as
+  grey filled circles per G6.
+* **`-a-50` DirectoryInfoBody is polished**: clicking
+  `web/` directory node → inspector shows DIR badge +
+  "Graph from here" button + TOTALS (230 files / 31,428
+  SLOC / 7,548 comments / 2,820 blanks) + BY LANGUAGE
+  table (7 langs, TypeScript dominant at 160 files /
+  22,232 SLOC) + COCOMO estimator (effort 89.6 pmo /
+  schedule 13.8 mo / developers 6.5 / cost US$1,720,660).
+  Aggregation correctly bridges chan-reports stats into
+  the graph inspector surface.
+* **`-a-51` Hybrid Graph legend grid is complete**: flip
+  to back surfaces the full G6 palette reference in three
+  categories (FILES: 5 entries; CONTAINERS: 1; GRAPH
+  RELATIONS: 3) with color dots matching the graph canvas
+  exactly. Subtitle reads "Same palette renders on the
+  graph canvas + here; per-Hybrid Appearance overrides
+  cascade through automatically." — clean composition
+  with the `-a-53` override toggle.
+
+### Side observation (out of `-a-49`/`-a-50`/`-a-51` scope; flagging for tracking)
+
+* **Click hit-radius on graph canvas is tight**: clicks
+  at multiple positions near visible nodes missed
+  consistently before I zoomed in (e.g. clicks at
+  (1356, 539), (1351, 411), (881, 247) all missed).
+  Likely the canvas hit-test uses the node's stroke
+  radius rather than a small expanded hit-box. Real
+  users zoom in, but mobile users on small screens
+  might struggle with default-zoom. Discoverability
+  polish candidate. Lane: @@FullStackA (graph canvas
+  hit-test logic).
+
+### Suggested commit shape
+
+Same path-limit discipline as the prior walk commits:
+
+* **Commit subject**: `docs: proactive -a-49 + -a-50 +
+  -a-51 graph-wave walkthrough (4/4 HOLD; -a-52 deferred)`.
+* **Files** (explicit per-path):
+  * `docs/journals/phase-8/webtest-a/webtest-a-1.md`
+    (verdict append).
+  * `docs/journals/phase-8/alex/event-webtest-a-architect.md`
+    (this poke).
+* Path-limited `git commit <path1> <path2> -m "..."` to
+  bypass the shared index. Post-commit
+  `git show --stat HEAD` confirm scope.
+
+When you cut `webtest-a-6`, scope can shrink to JUST `-a-52`
+(depth slider + link filter) since the rest of the graph
+overhaul wave (`-a-49`/`-a-50`/`-a-51`) is now empirically
+validated.
+
+Standing by.
