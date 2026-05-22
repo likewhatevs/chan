@@ -7654,3 +7654,83 @@ Rich prompt: remove legacy Alt+Space chord (fullstack-a-90)
 Single bash invocation per discipline.
 
 Push held. Standing by for clearance.
+
+## 2026-05-22 — poke (fullstack-a-94 ready for review — closes -a-90 PARTIAL)
+
+Two-file change. SPA-only. ~5 LOC removal.
+
+### What landed
+
+`TerminalTab.svelte::handleTerminalKeyEvent`
+Alt+Space branch removed. Function flows
+straight from `closeExitedTabFromKey` →
+`handleTerminalMetaKey(e, sendUserInput)`.
+
+`altSpaceXtermHandlerRemoved.test.ts` (new):
+4 raw-source pins covering the removal, the
+preserved meta-key delegation, the
+rationale comment, and the still-registered
+`attachCustomKeyEventHandler` (only the
+chord branch inside it is gone).
+
+### Lesson logged
+
+-a-90's audit-grep covered top-level keymap
+branches but missed the xterm
+`customKeyEventHandler` translation layer
+(the chord lived inside the `KeyboardEvent →
+xterm-customKeyEvent` translator, which
+runs before xterm's own keystroke
+processing). Future chord-removal audits
+need to include `attachCustomKeyEventHandler`
+paths.
+
+### Acceptance
+
+1. Alt+Space from focused terminal → no-op ✓
+   (pinned; @@WebtestA re-walk for
+   empirical).
+2. Cmd+P / Cmd+Alt+P from focused terminal —
+   unchanged; gated on -a-91's chord-escape
+   work.
+3. Terminal typing behavior unchanged ✓.
+
+### Gate
+
+* vitest **972 / 972** (+4 net from -a-90's
+  968).
+* svelte-check 0 errors / 0 warnings across
+  4032 files.
+* npm build clean.
+
+### Decisions
+
+* **Branch removed outright** — chord retire
+  is deliberate; no feature flag.
+* **Kept `attachCustomKeyEventHandler`
+  registration** — legitimate mechanism for
+  -a-91's chord-escape work; only the
+  Alt+Space chord branch is gone.
+
+### Suggested commit subject
+
+```
+Rich prompt: remove 3rd Alt+Space handler in xterm custom-key path (fullstack-a-94)
+```
+
+### Files for `git add`
+
+* `web/src/components/TerminalTab.svelte`
+* `web/src/components/altSpaceXtermHandlerRemoved.test.ts` (new)
+* `docs/journals/phase-8/fullstack-a/fullstack-a-94.md`
+* `docs/journals/phase-8/fullstack-a/journal.md`
+* `docs/journals/phase-8/alex/event-fullstack-a-architect.md`
+  (this append)
+
+### Atomic-audit-commit applied
+
+Single bash invocation per discipline.
+
+Push held. Standing by for clearance + the
+@@WebtestA re-walk that closes the -a-90
+PARTIAL.

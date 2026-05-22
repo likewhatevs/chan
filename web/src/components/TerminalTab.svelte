@@ -985,18 +985,12 @@
 
   function handleTerminalKeyEvent(e: KeyboardEvent): boolean {
     if (closeExitedTabFromKey(e)) return false;
-    if (
-      e.type === "keydown" &&
-      e.altKey &&
-      !e.ctrlKey &&
-      !e.metaKey &&
-      !e.shiftKey &&
-      e.code === "Space"
-    ) {
-      e.preventDefault();
-      openRichPrompt();
-      return false;
-    }
+    // `fullstack-a-94`: removed the third Alt+Space handler.
+    // `-a-90` swept the two keymap-driven branches but missed
+    // THIS one — the xterm `customKeyEventHandler` translation
+    // layer registered at line ~424. Caught empirically by
+    // @@WebtestA (`aed06ef`); audit-grep needs to include
+    // `attachCustomKeyEventHandler` chord paths going forward.
     return handleTerminalMetaKey(e, sendUserInput);
   }
 

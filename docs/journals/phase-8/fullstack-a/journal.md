@@ -2652,3 +2652,26 @@ comments. Rich prompt still entered via Cmd+P
 
 Impl note at [fullstack-a-90.md](fullstack-a-90.md).
 Outbound poke fired.
+
+## 2026-05-22 — -a-94 (3rd Alt+Space handler removed) ready for review
+
+Two-file change. SPA-only. ~5 LOC removal +
+4 raw-source pins.
+
+`TerminalTab.svelte::handleTerminalKeyEvent`
+Alt+Space branch removed. Function now flows
+straight from the exit-tab-from-key guard
+into `handleTerminalMetaKey`. -a-90's audit-
+grep missed this branch because it lives in
+the xterm `customKeyEventHandler` translation
+layer rather than as a top-level keymap.
+
+### Gate
+
+* vitest **972 / 972** (+4 net from -a-90's
+  968).
+* svelte-check 0/0 across 4032 files.
+* npm build clean.
+
+Impl note at [fullstack-a-94.md](fullstack-a-94.md).
+Outbound poke fired.
