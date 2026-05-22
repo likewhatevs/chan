@@ -114,7 +114,17 @@
     | { type: "resize_other"; cols: number; rows: number }
     | { type: "closed"; reason: CloseReason }
     | { type: "exit"; code: number }
-    | { type: "error"; message?: string; reason?: string };
+    | { type: "error"; message?: string; reason?: string }
+    /// `fullstack-a-92`: server-side `dispatch_agent_event` no
+    /// longer writes the `poke + chord` echo directly to the
+    /// agent session's PTY. It emits this frame instead; the
+    /// SPA routes the payload through `sendUserInput` so the
+    /// existing broadcast layer (`-a-31`) fans the echo to
+    /// every selected broadcast target. Payload is base64 of
+    /// the raw bytes (chord may include non-UTF8 bytes per
+    /// `fullstack-b-13`'s submit-mode chord; base64 round-trips
+    /// the whole sequence without escape-string contortions).
+    | { type: "agent_event_echo"; payload_b64: string };
 
   type CloseReason = "idle" | "drive" | "shutdown" | "explicit" | "capped" | "error";
 
@@ -538,6 +548,25 @@
         const detail = frame.message ?? frame.reason ?? "unknown error";
         statusDetail = detail;
         term?.writeln(`\r\nterminal error: ${detail}`);
+      } else if (frame.type === "agent_event_echo") {
+        // `fullstack-a-92`: server-side `dispatch_agent_event`
+        // (`terminal_sessions.rs`) emits this frame instead of
+        // writing the `poke + chord` bytes directly to the
+        // PTY. Routing the payload through `sendUserInput`
+        // does two things at once:
+        //   1. Hits `sendInput` → server writes to the local
+        //      PTY (preserving today's "the agent sees `poke`
+        //      as if typed" UX).
+        //   2. Hits `broadcastTerminalInput` (the existing
+        //      `-a-31` fan-out) — when broadcast input is ON
+        //      for this session, the same bytes ALSO go to
+        //      every selected broadcast target. When OFF, the
+        //      fan-out is a no-op + behaviour matches today.
+        // Single source of truth on broadcast targeting:
+        // `tab.broadcastEnabled` + the broadcast-member set
+        // that the SPA already owns.
+        const payload = decodeAgentEventEcho(frame.payload_b64);
+        if (payload) sendUserInput(payload);
       }
     };
     ws.onclose = () => {
@@ -601,6 +630,25 @@
 
   function sendInput(data: string): void {
     send({ type: "input", data });
+  }
+
+  /// `fullstack-a-92`: decode a base64 agent-event payload
+  /// into the string `sendUserInput` expects. Returns null on
+  /// malformed base64 so the WS handler can short-circuit
+  /// without raising — a malformed echo would still pass the
+  /// JSON parse + the type discriminator, so the decoder must
+  /// fail soft. The decoded string carries the raw byte
+  /// sequence (including any modifyOtherKeys chord that the
+  /// server picked per the session's submit-mode); the WS
+  /// `input` frame on the inbound leg accepts string verbatim
+  /// (PTY write is bytes-of-string).
+  function decodeAgentEventEcho(payload_b64: string): string | null {
+    try {
+      const binary = atob(payload_b64);
+      return binary;
+    } catch {
+      return null;
+    }
   }
 
   function sendUserInput(data: string): void {

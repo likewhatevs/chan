@@ -2769,3 +2769,32 @@ already emitted via `synthesize_drafts_layer`.
 Impl note at [fullstack-a-66.md](fullstack-a-66.md)
 "## 2026-05-22 — slice e". Outbound poke
 fired.
+
+## 2026-05-22 — -a-92 SPA-side ready for review (cross-lane scope-poked to Systacean)
+
+Two-file change. SPA-only.
+
+* `TerminalTab.svelte`: `ServerFrame` union
+  extended with `agent_event_echo`; WS
+  handler routes the decoded payload through
+  `sendUserInput` so the existing -a-31
+  broadcast layer fans automatically; new
+  `decodeAgentEventEcho` helper.
+* `agentEventEchoFanout.test.ts` (new): 5
+  raw-source pins.
+
+Cross-lane piece (chan-server
+`dispatch_agent_event` swap) scope-poked to
+architect for @@Systacean routing. Wire
+contract: `{ type: "agent_event_echo",
+payload_b64: base64(bytes) }`.
+
+### Gate
+
+* vitest **1019 / 1019** (+5 net from -a-66
+  slice e's 1014).
+* svelte-check 0/0 across 4036 files.
+* npm build clean.
+
+Impl note at [fullstack-a-92.md](fullstack-a-92.md).
+Outbound poke + scope-poke fired.

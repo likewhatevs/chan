@@ -8003,3 +8003,117 @@ Single bash invocation per discipline.
 Push held. Standing by for clearance + the
 @@WebtestA walk. -a-66 umbrella closes on
 clearance.
+
+## 2026-05-22 — poke (fullstack-a-92 SPA-side ready for review + scope-poke for Systacean chan-server piece)
+
+Two-file change. SPA-only.
+
+### What landed (SPA)
+
+`TerminalTab.svelte`:
+* `ServerFrame` union extended with
+  `{ type: "agent_event_echo"; payload_b64:
+  string }`. Doc-comment cites broadcast-
+  layer reuse (-a-31) + base64 framing
+  rationale.
+* WS handler branch decodes + calls
+  `sendUserInput(payload)`. Existing
+  broadcast fan-out (sendInput +
+  broadcastTerminalInput pair) fires
+  automatically.
+* `decodeAgentEventEcho(payload_b64)` helper
+  uses `atob` + null-soft on malformed b64.
+
+`agentEventEchoFanout.test.ts` (new): 5
+raw-source pins.
+
+### Cross-lane scope-poke (route to @@Systacean)
+
+`crates/chan-server/src/terminal_sessions.rs`
+`dispatch_agent_event` (line ~527):
+
+1. Compute `bytes` as today (poke_text +
+   chord).
+2. Replace `session.send_input(&bytes);`
+   with a WS-frame emit:
+   `{type: "agent_event_echo",
+   payload_b64: base64::encode(&bytes)}`
+   to the agent session's WS.
+3. Match the existing JSON-frame emit shape
+   used by "ready" / "session" / "cwd".
+
+Connection-drop mitigation: implementer's
+call. Suggested: buffer the frame briefly
+(~5s) + emit on reconnect. SPA side is
+mitigation-shape-agnostic.
+
+Server-side test: assert
+`dispatch_agent_event` emits the new frame
+instead of calling `send_input`.
+
+### Architecture rationale
+
+Option 2 (SPA intercept) per bug-list
+routing. SPA owns broadcast targeting
+state (`tab.broadcastEnabled` +
+`terminalBroadcastMemberIds`); server-
+side fan-out would have required new
+state tracking SPA selection changes.
+
+Routing the payload through `sendUserInput`
+(instead of `sendInput`) is the key — the
+broadcast fan-out is the SAME helper as
+user-typed input goes through, so no new
+fan-out path needed.
+
+### Acceptance (pending chan-server)
+
+1. Broadcast ON → echoes to all selected
+   targets ✓ (mechanism via tests).
+2. Broadcast OFF → echoes to originating
+   session only ✓.
+3. Connection-drop graceful per
+   @@Systacean's chosen mitigation.
+
+### Gate
+
+* vitest **1019 / 1019** (+5 net from -a-66
+  slice e's 1014).
+* svelte-check 0 errors / 0 warnings across
+  4036 files.
+* npm build clean.
+* Rust gate not re-run (chan-server piece
+  pending @@Systacean).
+
+### Decisions
+
+* **Option 2** (SPA intercept) per
+  bug-list.
+* **Base64 framing** — non-UTF8 chord
+  bytes need binary-safe carry.
+* **`atob` + null-soft** — malformed
+  echoes no-op.
+* **`sendUserInput` route** — broadcast
+  fan-out is automatic.
+
+### Suggested commit subject
+
+```
+Terminal: SPA-side agent_event_echo handler (broadcast fan-out via existing -a-31 layer) (fullstack-a-92 SPA-side)
+```
+
+### Files for `git add`
+
+* `web/src/components/TerminalTab.svelte`
+* `web/src/components/agentEventEchoFanout.test.ts` (new)
+* `docs/journals/phase-8/fullstack-a/fullstack-a-92.md`
+* `docs/journals/phase-8/fullstack-a/journal.md`
+* `docs/journals/phase-8/alex/event-fullstack-a-architect.md`
+  (this append)
+
+### Atomic-audit-commit applied
+
+Single bash invocation per discipline.
+
+Push held. Standing by for clearance + the
+@@Systacean chan-server-side landing.
