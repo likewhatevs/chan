@@ -537,10 +537,14 @@ impl Drive {
     /// drive root; symlinks, FIFOs, sockets, and devices are
     /// rejected.
     pub fn read(&self, rel: &str) -> Result<Vec<u8>> {
-        let rel_path = self.rel(rel)?;
-        ensure_regular_file_in(&self.dir, &rel_path)?;
-        let mut f = self
-            .dir
+        // systacean-32: prefix-aware for Drafts/<...> paths,
+        // parallel to read_text + stat. Without this, reading a
+        // pasted image (or any non-text file) under
+        // `Drafts/untitled-N/...` would route to the drive-root
+        // capfs + NotFound.
+        let (dir, rel_path) = self.resolve_io(rel)?;
+        ensure_regular_file_in(dir, &rel_path)?;
+        let mut f = dir
             .open(&rel_path)
             .map_err(|e| ChanError::Io(e.to_string()))?;
         use std::io::Read;
@@ -711,10 +715,14 @@ impl Drive {
     /// so a `true` return is a strong signal that a read will
     /// succeed.
     pub fn exists(&self, rel: &str) -> bool {
-        let Ok(rel_path) = self.rel(rel) else {
+        // systacean-32: prefix-aware for Drafts/<...> paths.
+        // Same routing as read / stat; without this, a SPA
+        // existence check on a draft file would always return
+        // false.
+        let Ok((dir, rel_path)) = self.resolve_io(rel) else {
             return false;
         };
-        match self.dir.symlink_metadata(&rel_path) {
+        match dir.symlink_metadata(&rel_path) {
             Ok(m) => m.is_file() && !m.file_type().is_symlink(),
             Err(_) => false,
         }
@@ -723,10 +731,17 @@ impl Drive {
     /// Stat the path using `lstat` semantics (so a symlink reports
     /// as such, not as its target). Refuses paths that escape the
     /// drive root through a mid-path symlink.
+    ///
+    /// systacean-32: prefix-aware for `Drafts/<...>` paths, same
+    /// routing as `read_text` / `write_text` / `list` post-`-26` +
+    /// `-29`. Without this, `Drive::stat("Drafts/<name>")` returned
+    /// NotFound (drive-root capfs has no `Drafts` entry), which
+    /// silently dropped Drafts subdirectories from
+    /// `list_dir_entries` enumeration — the recurring `-a-66 b/c/d`
+    /// data-flow gap @@WebtestA caught.
     pub fn stat(&self, rel: &str) -> Result<FileStat> {
-        let rel_path = self.rel(rel)?;
-        let meta = self
-            .dir
+        let (dir, rel_path) = self.resolve_io(rel)?;
+        let meta = dir
             .symlink_metadata(&rel_path)
             .map_err(|e| ChanError::Io(e.to_string()))?;
         Ok(FileStat {
@@ -5264,6 +5279,38 @@ mod tests {
         let names: Vec<String> = drafts.iter().map(|d| d.name.clone()).collect();
         assert!(names.contains(&"untitled-1".to_string()));
         assert!(names.contains(&"team-alpha".to_string()));
+    }
+
+    #[test]
+    fn stat_unified_routes_drafts_paths_to_drafts_dir() {
+        // systacean-32: Drive::stat is prefix-aware. Closes the
+        // recurring `-a-66 b/c/d` data-flow gap where
+        // `list_dir_entries` called `stat("Drafts/untitled-N")`
+        // on each child returned by `Drive::list("Drafts/")` +
+        // got NotFound from the drive-root cap-std handle, then
+        // skipped the entry → empty wire listing.
+        let (_cfg, _root, drive) = fixture();
+        drive.create_draft_dir("untitled-1").unwrap();
+        drive
+            .write_text("Drafts/untitled-1/draft.md", "# hello\n")
+            .unwrap();
+
+        // Stat the draft directory.
+        let dir_stat = drive.stat("Drafts/untitled-1").unwrap();
+        assert!(dir_stat.is_dir, "draft directory should stat as is_dir");
+
+        // Stat a file inside the draft directory.
+        let file_stat = drive.stat("Drafts/untitled-1/draft.md").unwrap();
+        assert!(!file_stat.is_dir);
+        // "# hello\n" is 8 bytes.
+        assert_eq!(file_stat.size, 8);
+
+        // Drive-root path continues to route through the drive
+        // handle (regression check).
+        drive.write_text("notes/intro.md", "drive\n").unwrap();
+        let drive_stat = drive.stat("notes/intro.md").unwrap();
+        assert!(!drive_stat.is_dir);
+        assert_eq!(drive_stat.size, 6);
     }
 
     #[test]

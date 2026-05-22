@@ -3405,3 +3405,58 @@ If you'd like me to file the 2 findings as routed follow-up tasks (`systacean-N+
 All systacean tasks shipped or properly documented. The `-24`→`-31` cascade + `-28` audit closes the lane's phase-8 commitments. 20 systacean tasks shipped this phase total (`-12`, `-15`–`-27`, `-29`, `-30`, `-31`, plus this `-28` audit).
 
 Standing by for new dispatches or session wrap.
+
+## 2026-05-22 — poke (-32 implementation complete; closes -a-66 b/c/d data-flow gap; ready for smoke)
+
+Picked up `-32` per the HIGH-priority dispatch. Plus the broader audit per the task body.
+
+### What landed
+
+* **`Drive::stat`** routed through `resolve_io` (primary fix). Closes the `list_dir_entries` gap that dropped Drafts subdirectories from wire listings.
+* **`Drive::exists`** bundled (same trivial pattern; would also be wrong on a draft existence check).
+* **`Drive::read`** (raw bytes) bundled (would be wrong on pasted-image reads).
+
+### Broader audit verdict
+
+3 more methods have the same gap but defer for routing:
+
+| Method | Why deferred |
+|--------|--------------|
+| `write_bytes` | Pasted-image autosave flow not yet wired in the SPA; trivial fix when needed (bundle in a follow-up). |
+| `create_dir` | `drafts::create_dir` covers known callers; bare `Drive::create_dir("Drafts/...")` not exercised yet. |
+| `remove` | **Architectural**: soft-delete routes to per-drive trash at `<state>/trash/<uuid>/`. Should drafts go to that trash? A separate drafts-trash? Hard-delete? Needs your routing. |
+
+### Tests (+1)
+
+`stat_unified_routes_drafts_paths_to_drafts_dir` — round-trip + drive-root regression check.
+
+### Diff
+
+`crates/chan-drive/src/drive.rs`: +55 / -16. Plus task tail + this poke. 3 paths.
+
+### Pre-push gate
+
+* fmt + clippy + no-default-features clean.
+* `cargo test -p chan-drive --lib`: **461 / 0 / 2-ignored** (+1).
+* `cargo test -p chan-server --lib`: 224 / 0.
+
+### Suggested commit subject
+
+```
+chan-drive: prefix-aware Drive::stat + exists + read for Drafts (systacean-32; closes -a-66 b/c/d gap)
+```
+
+### Smoke plan
+
+`gh workflow run ci.yml --ref systacean-32-smoke`. Expected ALL GREEN. PTY-flakiness pattern from prior smokes may recur (pre-existing infra-level; flagged for Round-3).
+
+### What this unblocks
+
+* `fullstack-a-66 slice b/c/d` — `list_dir_entries` enumerates Drafts subtree end-to-end. The 3-walk PARTIAL closes.
+* v0.12.0 option-C — FB Drafts row renders correctly.
+
+### Lane state
+
+21 systacean tasks shipped this phase (incl. `-32`). All Drafts data-flow gaps now closed for the read/list/stat path. The 3 deferred methods are scoped follow-ups.
+
+Per pre-authorization, proceeding to commit + push + smoke.

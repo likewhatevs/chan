@@ -119,3 +119,61 @@ This is `-32`.
 * Inspector / chip rendering bugs from slice c
   (separate; `-a-66c` audit needed if API listing
   alone doesn't surface them).
+
+## 2026-05-22 — implementation complete; broader audit; ready for smoke
+
+Picked up `-32` per the HIGH-priority dispatch.
+
+### Primary fix: `Drive::stat` prefix-aware
+
+Routed through `resolve_io` (same pattern as `-26`'s `read_text` + `write_text` and `-29`'s `list`). `list_dir_entries` (chan-server `routes/files.rs:154`) calls `stat` on each child returned by `list("Drafts/")` — that pipeline now works end-to-end.
+
+### Broader audit (per task body)
+
+| Method | Routing pre-`-32` | Action |
+|--------|--------------------|--------|
+| `read_text / read_text_with_stat / write_text / write_text_if_unchanged` | unified post-`-26` | ✓ no-op |
+| `list` | unified post-`-29` | ✓ no-op |
+| **`stat`** | NOT unified | **✓ FIXED this PR** |
+| **`exists`** | NOT unified | **✓ FIXED this PR** (bundled; same trivial pattern) |
+| **`read`** (raw bytes) | NOT unified | **✓ FIXED this PR** (bundled; same trivial pattern) |
+| `write_bytes` | NOT unified | ⚠ DEFERRED — pasted-image flow not yet wired |
+| `create_dir` | NOT unified | ⚠ DEFERRED — `drafts::create_dir` already covers known callers |
+| `remove` | NOT unified | ⚠ DEFERRED — needs architectural decision on drafts-trash routing |
+| `index_file / index_draft_file / forget_file` | separate by design | ✓ no-op |
+
+### Tests (+1)
+
+`stat_unified_routes_drafts_paths_to_drafts_dir` — full round-trip:
+- `stat("Drafts/untitled-1")` returns `is_dir: true`.
+- `stat("Drafts/untitled-1/draft.md")` returns `is_dir: false; size: 8`.
+- `stat("notes/intro.md")` continues to drive-root (backward-compat).
+
+### Pre-push gate
+
+* fmt + clippy + no-default-features build: clean.
+* `cargo test -p chan-drive --lib`: **461 / 0 / 2-ignored** (was 460; +1 new).
+* `cargo test -p chan-server --lib`: 224 / 0 (+11 from concurrent lanes).
+* workspace tests all green.
+
+### Files
+
+`crates/chan-drive/src/drive.rs`: +55 / -16. Plus task tail + outbound poke. 3 paths.
+
+### Suggested commit subject
+
+```
+chan-drive: prefix-aware Drive::stat + exists + read for Drafts (systacean-32; closes -a-66 b/c/d gap)
+```
+
+### Smoke plan
+
+`gh workflow run ci.yml --ref systacean-32-smoke`. Expected ALL GREEN.
+
+### Deferred items needing routing (architect Round-3 backlog)
+
+1. `Drive::write_bytes` for pasted-image autosave under Drafts/ (trivial when needed).
+2. `Drive::create_dir` for SPA-driven Drafts subdir creation (consumer-driven).
+3. `Drive::remove` for draft soft-delete — **architectural**: separate trash, shared trash, or hard-delete?
+
+Per architect's pre-authorization, proceeding to commit + push + smoke.
