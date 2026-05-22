@@ -1844,3 +1844,67 @@ Holding on implementation. No code edits yet.
 Same shape catch as `-24` (chan-server vs chan-desktop)
 and `-26` (existing IPCs vs new aliases). Surfacing
 upfront rather than building on a false foundation.
+
+## 2026-05-22 — poke (fullstack-b-28a commit-ready: per-drive feature toggle expand panel + stub persistence)
+
+`-b-28a` landed locally as `c5315fd` per @@Alex's option
+(C) routing ("go with C" in chat). 6 files all mine
+(536 insertions).
+
+### Headlines
+
+* **`DriveFeatures { bge, reports }`** new struct in
+  `config.rs`; `DriveSidecar.features` field. Serde-
+  default everywhere so existing `config.json` rolls
+  forward as off-off.
+* **Two new IPCs**: `get_drive_features(path) ->
+  DriveFeatures` + `set_drive_features(path, features)`.
+  Stub-bodied against the chan-desktop sidecar; `-b-28b`
+  will swap to the chan-drive API from `systacean-27`
+  without changing the IPC contract.
+* **Launcher row gains ⚙ expand button** opening a
+  sibling row with the BGE + reports checkboxes +
+  brief copy. First open lazy-loads; checkbox flips
+  fire `set_drive_features` with optimistic update.
+* **Tests**: 4 new config-round-trip + 3 new structural
+  pins (IPC registration, main.js invoke names, panel
+  labels). chan-desktop 44 → 51.
+
+### Pre-push gate
+
+| Surface                                                              | State                                                        |
+|----------------------------------------------------------------------|--------------------------------------------------------------|
+| `cargo clippy -p chan-desktop --all-targets -- -D warnings`          | Clean.                                                       |
+| `cargo test -p chan-desktop`                                         | 51 passing.                                                  |
+| `cargo build -p chan-desktop --no-default-features`                  | Clean.                                                       |
+| `web/` svelte-check                                                  | 4012/0/0.                                                    |
+| `web/` vitest                                                        | 829/829 (one earlier flake on three timer tests cleared on rerun; pre-existing). |
+| `web/` npm build                                                     | Clean.                                                       |
+
+Workspace clippy + fmt flag unrelated diffs in @@Systacean's
+in-flight `systacean-27` chan-drive work
+(`IndexConfig::reports_enabled`); isolated via
+`-p chan-desktop` + `git commit --only`.
+
+### -b-28b prerequisites
+
+`-b-28b` is buildable once `systacean-27` is in HEAD. It
+swaps the IPC stub bodies to call chan-drive's
+`Drive::set_feature_*` helpers + adds the full pre-flight
+screen (perms / size / SCM / etc. + the verbatim
+explanatory copy from round-2-plan) between `pickAndAdd`
+and `add_drive`. Forward-compat shim migrates any
+in-the-wild stub-persisted pairs to chan-drive on first
+read.
+
+### Runtime walkthrough
+
+Standing chan-desktop runtime perm available; otherwise
+routing to @@WebtestB per the lane boundary. Webtest
+walks: expand UI flip, checkbox state load, persistence
+across desktop restart.
+
+Full implementation note + verification table at the tail
+of [`../fullstack-b/fullstack-b-28.md`](../fullstack-b/fullstack-b-28.md).
+
+Standing by for clearance + next dispatch.
