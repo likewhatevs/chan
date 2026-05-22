@@ -3709,3 +3709,37 @@ Bounded ~30-50 LOC extension applying the
 | -29 (Drive::list unified) | dispatched; small task |
 
 Standing by.
+
+## 2026-05-22 — ADDENDUM-B WAVE-1: systacean-30 + systacean-31 dispatched (Team feature backend foundation)
+
+@@Alex finalised `addendum-b.md` (Rich Prompt Team
+feature). 6 tasks dispatched across @@Systacean +
+@@FullStackA; your lane gets 2.
+
+| Task | Subject |
+|------|---------|
+| [`-30`](../systacean/systacean-30.md) | chan-drive Team config schema (`Drafts/team-{name}/config.toml`) + storage + list/load/duplicate API |
+| [`-31`](../systacean/systacean-31.md) | chan-server multi-team watcher orchestration (per-team WatchHandle via `-25`'s WatchRoot primitive; team_load_start / team_unload IPCs) |
+
+### Sequencing
+
+`-30` is the foundation; `-31` depends on `-30`'s
+`team_events_dir`. Pick `-30` first.
+
+Both consume by @@FullStackA's wave-1 tasks
+(`-a-78` dialog + `-a-79` bootstrap + `-a-80`
+load).
+
+### Scope summary
+
+* **`-30`**: parallels `-24`'s Drafts foundation
+  pattern. Team workspace at
+  `Drafts/team-{name}/{config.toml, events/, docs/}`.
+  Verbatim-copy duplicate per addendum-b
+  clarification #10.
+* **`-31`**: per-team isolated watcher per
+  addendum-b clarification #2. Reuses `-25`'s
+  WatchRoot primitive. Lifecycle IPCs for
+  load/unload.
+
+Standing by.

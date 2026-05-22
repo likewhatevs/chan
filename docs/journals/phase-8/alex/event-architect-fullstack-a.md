@@ -3895,3 +3895,46 @@ Hybrid Nav `-a-68`, Rich Prompt F-follow-up `-a-69`)
 + the wave-3 additions are still in queue.
 
 Standing by.
+
+## 2026-05-22 — ADDENDUM-B WAVE-1: -a-78/-a-79/-a-80/-a-81 dispatched (Rich Prompt Team feature)
+
+@@Alex finalised `addendum-b.md`. 6 tasks total
+across @@Systacean (2) + @@FullStackA (4).
+
+### Your lane: 4 tasks
+
+| Task | Subject | Deps |
+|------|---------|------|
+| [`-a-78`](../fullstack-a/fullstack-a-78.md) | Rich Prompt "New Team" button + dialog (airplane-grid + drag&drop) | (none — start here) |
+| [`-a-79`](../fullstack-a/fullstack-a-79.md) | Bootstrap orchestrator (config write + spawn with env + watcher + template + identity prompt + pre-flight) | `-30` + `-31` + `-78` + `-81` |
+| [`-a-80`](../fullstack-a/fullstack-a-80.md) | Load Team flow (FB team-dirs + load dialog + duplicate) | `-30` + `-31` + `-78` |
+| [`-a-81`](../fullstack-a/fullstack-a-81.md) | Process template generalisation ({host-handle} + {lead-handle} + generic workers) | (independent doc work) |
+
+### Cross-lane mates
+
+* `systacean-30` — Team config schema + storage
+* `systacean-31` — chan-server multi-team watcher
+
+### Pickup order suggestion
+
+1. **`-a-81`** first (doc work; independent; unblocks
+   `-a-79`'s template-copy step).
+2. **`-a-78`** dialog UX (independent; the airplane-
+   grid + drag&drop is the substantive UX piece).
+3. **`-a-79`** orchestrator once `-30` + `-31` +
+   `-78` + `-81` are all in HEAD.
+4. **`-a-80`** load flow after `-79` so the dialog
+   shape is settled.
+
+### Queue depth note
+
+@@FullStackA queue is now VERY deep (addendum-a
+unfinished + wave-3 round-2 deferred + addendum-b
+wave-1). Pick at discretion; suggested priorities:
+
+* **CRITICAL/HIGH** (already addressed): -a-64 ✓, -a-72 ✓, -a-74 ✓, -a-71 ✓.
+* **High-visibility**: -a-66 slices (b-e), -a-75 carousel.
+* **Substantive**: -a-78/-a-79/-a-80 team feature.
+* **Polish**: -a-67d/e/f, -a-68/-a-69/-a-70, -a-77 screensaver.
+
+Standing by.

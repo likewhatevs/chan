@@ -5629,7 +5629,7 @@ start before `-27` lands; wire when ready.
 
 ## 2026-05-22 — ADDENDUM-A WAVE — 6 tasks dispatched from @@Alex's finalised draft-folder + menu revamp + CRITICAL bug spec
 
-@@Alex finalised [`alex/addendun-a.md`](../alex/addendun-a.md).
+@@Alex finalised [`alex/addendun-a.md`](../alex/addendum-a.md).
 Dense spec: New Draft + Drafts metadata folder, 5-surface
 right-click menu revamp, Hybrid Nav enhancements, Rich
 Prompt F-follow-up rewrite, 6 bugs (one CRITICAL).
@@ -5679,3 +5679,49 @@ in worktree).
 | `fullstack-a/fullstack-a-{64,65,66,67}.md` | 4 NEW tasks |
 | `systacean/systacean-24.md` | NEW task |
 | `fullstack-b/fullstack-b-27.md` | NEW task |
+
+## 2026-05-22 — ADDENDUM-B WAVE-1 DISPATCHED — 6 tasks (Team feature)
+
+@@Alex's `addendum-b.md` reviewed; 10 gaps surfaced + answered; clarifications block landed in the doc; @@Alex confirmed "A" — cut the wave now.
+
+### 6 tasks dispatched
+
+| Task | Lane | Subject |
+|------|------|---------|
+| [`systacean-30`](../systacean/systacean-30.md) | @@Systacean | Team config schema + storage + list/load/duplicate API |
+| [`systacean-31`](../systacean/systacean-31.md) | @@Systacean | chan-server multi-team watcher orchestration |
+| [`fullstack-a-78`](../fullstack-a/fullstack-a-78.md) | @@FullStackA | Rich Prompt Team button + dialog (airplane-grid + drag&drop) |
+| [`fullstack-a-79`](../fullstack-a/fullstack-a-79.md) | @@FullStackA | Bootstrap orchestrator |
+| [`fullstack-a-80`](../fullstack-a/fullstack-a-80.md) | @@FullStackA | Load Team flow |
+| [`fullstack-a-81`](../fullstack-a/fullstack-a-81.md) | @@FullStackA | Process template generalisation |
+
+### Dependency graph
+
+`-30 → -79` (config API consumer)
+`-30 → -31 → -79/-80` (watcher consumes config; orchestrator + load consume watcher)
+`-78 → -79/-80` (dialog component)
+`-81 → -79` (template-copy at bootstrap)
+
+### Pickup suggestion
+
+@@Systacean: `-30` first; `-31` after.
+@@FullStackA: `-a-81` + `-a-78` in parallel; `-a-79` after deps; `-a-80` last.
+
+### What addendum-b unlocks
+
+The Team feature generalises today's hardcoded chan phase-8 multi-agent setup. The current chan setup IS itself a team that fits the model:
+* `{host-handle} = @@Alex`
+* `{lead-handle} = @@Architect`
+* workers = @@FullStackA / @@FullStackB / @@Systacean / @@CI / @@WebtestA / @@WebtestB
+
+`-a-81`'s parameterisation makes that explicit.
+
+### Lane state after dispatch
+
+| Lane | Active |
+|------|--------|
+| @@Systacean | -28 + -29 + -30 + -31 |
+| @@FullStackA | addendum-a unfinished + wave-3 round-2 + addendum-b wave-1 |
+| @@FullStackB | -b-28b unblocked |
+| @@CI | Idle |
+| Others | Reactive |
