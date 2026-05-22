@@ -179,11 +179,11 @@ mod tests {
     use super::*;
     use tempfile::TempDir;
 
-    /// `fullstack-a-66` slice d: prefix-aware name picker
-    /// should ignore non-matching draft dirs (e.g. coexisting
-    /// `untitled` drafts from slice a) when picking the next
-    /// `rich-prompt-N` slot. Also test the gap-counting +
-    /// the first-slot-without-suffix shape.
+    // `fullstack-a-66` slice d: prefix-aware name picker should
+    // ignore non-matching draft dirs (e.g. coexisting `untitled`
+    // drafts from slice a) when picking the next `rich-prompt-N`
+    // slot. Also test the gap-counting + the first-slot-without-
+    // suffix shape.
 
     fn make_drive() -> (TempDir, TempDir, std::sync::Arc<chan_drive::Drive>) {
         let cfg = TempDir::new().unwrap();

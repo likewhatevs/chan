@@ -231,8 +231,8 @@ mod tests {
         // paired with an App.svelte first-boot openBrowser tab
         // spawn @@Alex retired.
         let bsp = BrowserSidePanes::default();
-        assert_eq!(bsp.left, true);
-        assert_eq!(bsp.right, false);
+        assert!(bsp.left);
+        assert!(!bsp.right);
     }
 
     #[test]
@@ -241,8 +241,8 @@ mod tests {
         // the docked-left FB so a missing preferences.toml
         // produces the same first-boot UX as a fresh one.
         let prefs = EditorPrefs::default();
-        assert_eq!(prefs.browser_side_panes.left, true);
-        assert_eq!(prefs.browser_side_panes.right, false);
+        assert!(prefs.browser_side_panes.left);
+        assert!(!prefs.browser_side_panes.right);
     }
 
     #[test]
