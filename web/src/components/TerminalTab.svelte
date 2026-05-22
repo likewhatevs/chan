@@ -21,6 +21,7 @@
   import { SearchAddon } from "@xterm/addon-search";
   import { SerializeAddon } from "@xterm/addon-serialize";
   import { WebLinksAddon } from "@xterm/addon-web-links";
+  import { WebglAddon } from "@xterm/addon-webgl";
   import "@xterm/xterm/css/xterm.css";
   import { api, sessionWindowId, withTokenQuery } from "../api/client";
   import type { TerminalSpawnResponse } from "../api/types";
@@ -379,6 +380,36 @@
     term.loadAddon(serialize);
     term.loadAddon(new WebLinksAddon());
     term.open(host);
+    // `fullstack-b-29`: WebGL renderer makes xterm.js's built-in
+    // customGlyphs path actually fire — under the default DOM
+    // renderer, box-drawing + block-element characters fall
+    // through to the system font which (with lineHeight: 1.2)
+    // renders with vertical gaps between cells. The WebglAddon
+    // draws pixel-perfect glyphs into the cell rectangle
+    // including the line-height padding, so ASCII tables +
+    // pixel-art mascots render gap-free.
+    //
+    // WebGL initialisation throws on contexts where the
+    // browser declined to allocate a WebGL context (rare on
+    // chan-desktop's WKWebView / WebView2, but possible inside
+    // headless test harnesses or odd Linux GPU setups). The
+    // try/catch + onContextLoss handler keep us safe: on
+    // failure we silently fall back to the DOM renderer the
+    // user already had (with the original rendering bug intact
+    // but no regression).
+    try {
+      const webgl = new WebglAddon();
+      webgl.onContextLoss(() => webgl.dispose());
+      term.loadAddon(webgl);
+    } catch (err) {
+      // Tauri webviews effectively always have WebGL; surface
+      // the failure to the console for the rare regression
+      // case but don't break terminal mount.
+      console.warn(
+        "[chan] xterm.js WebGL renderer unavailable; falling back to DOM:",
+        err,
+      );
+    }
     term.attachCustomKeyEventHandler(handleTerminalKeyEvent);
     term.onData(sendUserInput);
     term.onResize(({ cols, rows }) => send({ type: "resize", cols, rows }));
