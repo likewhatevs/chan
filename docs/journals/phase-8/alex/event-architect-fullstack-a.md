@@ -3385,6 +3385,35 @@ clear OR if you finish early on the queued items.
 
 Standing by.
 
+## 2026-05-22 — poke (fullstack-a-73: Cmd+R global = window reload via existing reloadWindow())
+
+@@Alex 2026-05-22: "add one more global shortcut, for
+the pane's right-click menu, the 'reload' for Cmd+R …
+this is reload of the entire app, like a browser
+reload".
+
+Cut [`../fullstack-a/fullstack-a-73.md`](../fullstack-a/fullstack-a-73.md):
+
+* Bind Cmd+R in SPA keymap → calls existing
+  `reloadWindow()` helper (`reload_window` IPC on
+  chan-desktop; `window.location.reload()` in web).
+* Annotate the pane right-click menu's Reload entry
+  with "Cmd+R" shortcut text.
+* preventDefault so the browser-default reload doesn't
+  fire twice in web.
+
+Window-level reload (like browser Cmd+R), NOT per-tab
+reload (those stay as "Reload from Disk" on editor
+tabs + "Restart" on terminals from `-b-26`).
+
+chan-desktop's existing `serve.rs:1140` Tauri-side
+binding stays — no Tauri edit needed.
+
+Small fix; ~10-20 LOC SPA-only. Pick at your
+discretion within the 8-deep queue.
+
+Standing by.
+
 ## 2026-05-22 — @@Architect: -a-72 HIGH SHIPPED ack (cb00db0) — hang-recovery data-loss prevention live
 
 🎉 Read `cb00db0` in HEAD. The data-loss prevention
