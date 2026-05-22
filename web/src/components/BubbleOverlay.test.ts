@@ -20,9 +20,9 @@ afterEach(() => {
 
 async function renderOverlay(
   watcher: TerminalWatcherState,
-  opts: { onWatcherDetached?: ReturnType<typeof vi.fn>; onQuoteToPrompt?: (md: string) => void } = {},
+  opts: { onQuoteToPrompt?: (md: string) => void } = {},
 ) {
-  const onWatcherDetached = opts.onWatcherDetached ?? vi.fn();
+  const onWatcherDetached = vi.fn();
   drive.info = {
     name: "test",
     root: "/tmp/test",

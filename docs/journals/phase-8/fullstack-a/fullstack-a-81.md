@@ -135,3 +135,176 @@ This is `-a-81`.
   history, not process template).
 * Bootstrap orchestrator (`-a-79`).
 * Team config schema (`systacean-30`).
+
+## 2026-05-22 — slice 1 (helper + bootstrap.md.tpl) ready for review
+
+Per the architect's slice-friendly framing, I'm
+splitting `-a-81` into per-doc slices.
+**Slice 1**: substitution helper + the first
+canonical template (`bootstrap.md.tpl`).
+Remaining `docs/agents/*.md` files
+(architect.md, fullstack.md, systacean.md, etc.)
+land in follow-up slices as `-a-79`'s
+orchestrator surfaces the need.
+
+Four-file change. Docs + SPA helper.
+
+### What landed
+
+`web/src/state/teamTemplate.ts` (new):
+
+* Exports `substituteTeamTemplate(template, vars)`
+  + `TeamTemplateVars` interface +
+  `CHAN_INTERNAL_TEAM_VARS` constant.
+* Token grammar: `{host-handle}` /
+  `{lead-handle}` / `{worker-N-handle}` /
+  `{team-name}`. Kebab-case only;
+  CamelCase / snake_case variants left as-is
+  so typos surface at audit time rather than
+  silently rendering empty strings.
+* Gap-friendly: `{worker-5-handle}` when only
+  3 workers exist preserves the placeholder
+  literally instead of inserting empty.
+* `CHAN_INTERNAL_TEAM_VARS` exports chan's
+  own substitution map (@@Alex / @@Architect
+  / @@FullStackA..WebtestB / team-name="chan")
+  so `-a-79` can reuse it for the chan-
+  internal substitution path.
+
+`docs/templates/team-process/bootstrap.md.tpl`
+(new): canonical bootstrap prompt, parameterised
+from `docs/agents/bootstrap.md`. Substitutions
+applied via bulk regex:
+
+* `@@FullStackA` → `{worker-1-handle}`
+* `@@FullStackB` → `{worker-2-handle}`
+* `@@Systacean` → `{worker-3-handle}`
+* `@@CI` → `{worker-4-handle}`
+* `@@WebtestA` → `{worker-5-handle}`
+* `@@WebtestB` → `{worker-6-handle}`
+* `@@Architect` → `{lead-handle}`
+* `@@Alex` → `{host-handle}`
+* `chan project` → `{team-name} project`
+  (only the prose; platform-name references
+  like `chan-server` / `chan-drive` left as-is
+  since those reference the underlying chan
+  platform that all teams use).
+
+58 handle tokens substituted. 3 remaining `@@`
+references are meta-placeholders showing the
+substitution shape (`@@<AgentName>`,
+`@@<Agent>`, `@@X`) — left as-is intentionally.
+
+`docs/templates/team-process/README.md` (new):
+documents the substitution tokens + the chan-
+internal usage pattern. References the helper
++ the substitution map.
+
+`web/src/state/teamTemplate.test.ts` (new): 8
+test pins covering all four token types,
+gap-preservation for missing workers,
+team-name defaulting, unknown-token preservation
+(audit-friendly), repeated tokens in a single
+template, and the chan-internal vars
+roundtrip.
+
+### What's deferred to follow-up slices
+
+* **Slice 2 (when `-a-79` needs it)**: parameterise
+  `docs/agents/architect.md`,
+  `docs/agents/fullstack.md`, etc. — the per-
+  role process docs.
+* **Slice 3**: parameterise the
+  `docs/agents/orchestration/` subdir.
+* **Slice 4**: optionally parameterise
+  `phase-N` references if `-a-79`'s orchestrator
+  wants new teams to start at a different
+  phase label.
+
+The parent `-a-81` umbrella stays open until
+all docs are parameterised; architect's call on
+whether to dispatch each slice as a separate
+task or keep under the umbrella.
+
+### Acceptance (slice 1)
+
+1. `bootstrap.md.tpl` parameterised on
+   `{host-handle}` + `{lead-handle}` +
+   `{worker-N-handle}` ✓.
+2. Chan's own agents still operate per the
+   process — substitution path validated by
+   `substituteTeamTemplate(bootstrap-tpl,
+   CHAN_INTERNAL_TEAM_VARS)` producing
+   chan-canonical handles ✓.
+3. Template form exists for `-a-79`'s
+   bootstrap orchestrator to copy + substitute
+   ✓.
+4. Substitution helper works ✓ (8 raw-source +
+   behaviour pins).
+
+### Gate
+
+* vitest **846 / 846** (+8 net from `-a-69`'s
+  838).
+* svelte-check 0 errors / 0 warnings across
+  4015 files.
+* npm build clean.
+* Rust gate not re-run (no Rust touched; this
+  is docs + SPA helper).
+
+(3 unrelated test flakes on first vitest run —
+known EmptyPaneCarousel / Pane / TerminalTab
+load-contention pattern; cleared on re-run.)
+
+### Decisions
+
+* **Per-slice split** matches `-a-67` /
+  `-a-66`'s shape. Substantial doc work
+  warrants slicing.
+* **Helper in SPA (`web/src/state/teamTemplate.ts`)**
+  vs chan-server-side Rust — the bootstrap
+  orchestrator is SPA-side (`-a-79`); helper
+  lives where its consumer does.
+* **Kebab-case-only token grammar** —
+  rigorous; typos / wrong-case land in the
+  audit pin.
+* **Preserve unknown tokens literally** —
+  audit-friendly. The orchestrator can detect
+  un-substituted tokens via a regex sweep
+  before publishing the team's docs.
+* **`{worker-N-handle}` gap preservation** —
+  if a team has only 3 workers, references
+  to worker 5 stay as `{worker-5-handle}`
+  rather than rendering empty. The template
+  author / orchestrator sees the gap.
+* **`chan project` → `{team-name} project`**
+  only on prose mentions; platform-name
+  references (`chan-server`, `chan-drive`)
+  left as-is. Those reference the underlying
+  chan platform that all teams use.
+
+### Suggested commit subject
+
+```
+Team-process templates: substitution helper + bootstrap.md.tpl (fullstack-a-81 slice 1)
+```
+
+Single commit. Helper + template + README +
+tests tightly coupled.
+
+### Files for `git add` (per-path discipline)
+
+* `web/src/state/teamTemplate.ts` (new)
+* `web/src/state/teamTemplate.test.ts` (new)
+* `docs/templates/team-process/bootstrap.md.tpl` (new)
+* `docs/templates/team-process/README.md` (new)
+* `web/src/components/BubbleOverlay.test.ts` (type-fix follow-up to `-a-69`)
+* `docs/journals/phase-8/fullstack-a/fullstack-a-81.md`
+* `docs/journals/phase-8/fullstack-a/journal.md`
+* `docs/journals/phase-8/alex/event-fullstack-a-architect.md`
+
+### Atomic-audit-commit
+
+Per the memory rule. Per-path staging only.
+
+Push held. Standing by for clearance.

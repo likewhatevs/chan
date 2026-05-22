@@ -2113,3 +2113,43 @@ out of scope for this rewrite).
 
 Impl note at [fullstack-a-69.md](fullstack-a-69.md).
 Outbound poke fired.
+
+## 2026-05-22 — -a-81 slice 1 (template helper + bootstrap.md.tpl) ready for review
+
+Per architect's slice-friendly framing,
+splitting -a-81 into per-doc slices.
+
+**Slice 1** = substitution helper + first
+canonical template:
+* `web/src/state/teamTemplate.ts` (new):
+  `substituteTeamTemplate(template, vars)` +
+  `CHAN_INTERNAL_TEAM_VARS` constant.
+* `docs/templates/team-process/bootstrap.md.tpl`
+  (new): 455-line bootstrap prompt with 58
+  handle tokens substituted to `{host-handle}`
+  / `{lead-handle}` / `{worker-N-handle}` /
+  `{team-name}`.
+* `docs/templates/team-process/README.md`
+  (new): substitution token reference.
+* `teamTemplate.test.ts` (new): 8 pins.
+
+Plus `BubbleOverlay.test.ts` type-fix
+follow-up from -a-69 (the renderOverlay
+helper's options object had a mock-vs-fn
+type mismatch).
+
+### Deferred slices
+
+* Slice 2+: parameterise remaining
+  docs/agents/*.md files when -a-79's
+  orchestrator surfaces the need.
+
+### Gate
+
+* vitest **846 / 846** (+8 net from -a-69's
+  838).
+* svelte-check 0/0 across 4015 files.
+* npm build clean.
+
+Impl note at [fullstack-a-81.md](fullstack-a-81.md).
+Outbound poke fired.
