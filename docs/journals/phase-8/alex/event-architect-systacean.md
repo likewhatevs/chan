@@ -2826,3 +2826,71 @@ the change is additive + the bucket field is
 backward-compat.
 
 Standing by for `-16` commit-readiness.
+
+## 2026-05-22 — @@Architect: approved + commit clearance (systacean-16) + smoke-branch authorized
+
+Cleared. Elegant execution — (c)'s "composition layer"
+turned out to be effectively free because the SPA already
+consumes `/api/report/file` via `-a-51`'s G6 work
+(`362aa96`). The bucket field flows through unchanged.
+chan-drive/graph-route edits were just a re-export +
+test-helper struct field — no actual classification logic
+moved.
+
+* **Commit subject**: `chan-report: add FileBucket (Markdown / SourceCode { language }) on FileStats (systacean-16)` (your suggested subject; accepted verbatim).
+* **Files** (per-path; 8 files):
+  * `crates/chan-report/src/summary.rs`
+  * `crates/chan-report/src/count.rs`
+  * `crates/chan-report/src/lib.rs`
+  * `crates/chan-report/tests/integration.rs`
+  * `crates/chan-drive/src/lib.rs`
+  * `crates/chan-server/src/routes/graph.rs`
+  * `docs/journals/phase-8/systacean/systacean-16.md`
+  * `docs/journals/phase-8/alex/event-systacean-architect.md`
+* Atomic-audit-commit discipline per the standing pattern.
+
+### Discipline acks
+
+* **SCHEMA_VERSION stays at 1** with bucket as
+  `Option<FileBucket>`, serde-skipped when None —
+  backward-compat shape; pre-`-16` JSONL loads cleanly
+  with `bucket = None`. Test pin verifies the round-trip
+  + the cleanly-loads-as-None case.
+* **4 new integration tests** covering classification +
+  JSONL round-trip + backward-compat. Right test scope
+  for the change shape.
+* **Lane boundary preserved**: chan-drive's `FileClass`
+  axis stays unchanged; chan-report's bucket axis is
+  additive; the graph indexer composition lands
+  automatically via the SPA's existing endpoint
+  consumption. Clean.
+
+### Smoke-branch authorized
+
+`systacean-16-smoke` branch (new lifecycle). Same pattern:
+push fastforward + `gh workflow run ci.yml`. Expected
+green across the active matrix (Ubuntu + macOS).
+Authorization implicit per the standing systacean smoke
+pattern.
+
+### After -16 smoke greens
+
+* `-16` structurally complete.
+* `-12` (tauri-plugin-updater verify) remains parked on
+  the fresh runtime-permission ask. Surface the perm ask
+  to @@Alex when you next have a session window if you
+  want to clear it; otherwise the parked state is fine.
+* Your queue is essentially **empty** post-`-16` + parked
+  `-12`. The systacean lane has shipped a substantial
+  Round-2 wave-2/wave-3 cascade:
+  - `-14` event-watcher tracing
+  - `-15` chan-report cross-dir aggregation
+  - `-17` Windows result_large_err boxing
+  - `-18` + 4 follow-ups (28 BGE gates, all reverted by -19)
+  - `-19` C2 graceful BM25 fallback
+  - `-20` lock-contract + watcher + helpers gating
+  - `-16` FileBucket on FileStats
+
+Excellent run.
+
+Standing by for the `-16` commit + smoke verdict.

@@ -4628,3 +4628,59 @@ queue-empty.
 |------|--------|
 | `architect/journal.md` | This entry |
 | `alex/event-architect-systacean.md` | -16 option (c) routing |
+
+## 2026-05-22 — -16 cleared; @@Systacean cascade wraps
+
+@@Systacean delivered `-16` cleanly. (c)'s composition
+layer was effectively free — the SPA already consumes
+`/api/report/file` via `-a-51`'s G6 work (`362aa96`),
+so the new bucket field flows through automatically.
+chan-drive/graph-route edits reduced to a re-export
++ a test-helper struct field.
+
+8 files; workspace gate green; SCHEMA_VERSION stays at
+1 (backward-compat); 4 new integration tests covering
+classification + JSONL round-trip + backward-compat.
+
+Cleared verbatim. Smoke-branch authorized
+(`systacean-16-smoke`).
+
+### Systacean cascade summary
+
+The lane shipped a substantial Round-2 wave-2/wave-3
+sequence:
+
+| Task | What |
+|------|------|
+| `-14` | event-watcher tracing |
+| `-15` | chan-report cross-dir aggregation |
+| `-17` | Windows result_large_err boxing |
+| `-18` + 4 follow-ups | 28 BGE gates landed → ALL reverted by `-19` |
+| `-19` | C2 graceful BM25 fallback |
+| `-20` + 3 smoke fixups | lock + watcher + helpers `#[cfg(unix)]` discipline |
+| `-16` | FileBucket on FileStats |
+
+Plus the cross-platform discipline artifacts that stay
+as Windows-gap documentation per the Windows-out
+scope decision. The lane has been carrying load
+across the entire gate-unblocker cascade + the
+C2 product improvement + the chan-report extensions
+that feed the graph overhaul.
+
+### Lane state at end of round
+
+| Lane | State |
+|------|-------|
+| @@Systacean | -16 cleared; expect commit + smoke + then queue-empty (`-12` parked) |
+| @@CI | Idle until wave-3 |
+| @@FullStackA | -a-51 committed; expect -a-52 pickup |
+| @@FullStackB | DONE; idle |
+| @@WebtestA | Standing by for webtest-a-6 (waiting on -a-52 to bundle) |
+| @@WebtestB | DONE; idle |
+
+### What I'm committing this round
+
+| File | Reason |
+|------|--------|
+| `architect/journal.md` | This entry + cascade summary |
+| `alex/event-architect-systacean.md` | -16 commit clearance |
