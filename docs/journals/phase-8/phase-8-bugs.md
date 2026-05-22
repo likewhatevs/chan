@@ -688,6 +688,38 @@
   - severity: UX papercut; surfaces every time the user comes back to chan from another app via mouse click. Not regression-class (always behaved this way); quality-of-life fix
   - NOT YET DISPATCHED — Round-2 wave-3 candidate; can ride with the broader Hybrid back-side wave or standalone
 
+- Cmd+P (rich prompt) doesn't honor the active-tab + doesn't toggle-to-hide on re-press
+  - flagged 2026-05-22 by @@Alex: with 4 terminal tabs open in a pane, rich prompt previously opened on tab 1; switching to tab 4 + hitting Cmd+P switches the UI back to tab 1 and opens the rich prompt there instead of opening it over tab 4. Plus a missing toggle: re-pressing Cmd+P on a tab whose rich prompt is already showing should HIDE the prompt
+  - **canonical 3-state contract** (@@Alex 2026-05-22):
+    1. current tab IS a terminal + prompt NOT showing → open prompt on the current terminal
+    2. current tab IS a terminal + prompt IS showing → HIDE the prompt (toggle off)
+    3. current tab is NOT a terminal → create a terminal + enable rich prompt on it (or use an existing terminal in the pane if non-current — TBD; cleanest is to spawn a fresh one so the user's spatial model isn't disrupted)
+  - root cause for state 1 (audit confirmed): `web/src/state/tabs.svelte.ts:964-975` `showOrSpawnRichPromptInFocusedPane()` calls `p.tabs.find((t) => t.kind === "terminal")` which returns the FIRST terminal in the pane's tab list + then assigns `p.activeTabId = terminal.id`. The function assumed at most one terminal per pane; with multi-terminal panes, the FIRST is always picked even when the currently-active tab is a different terminal
+  - root cause for state 2 (audit confirmed): `openActiveTerminalRichPrompt()` at `tabs.svelte.ts:895-929` ALWAYS sets `richPrompt.open = true`; there is NO existing toggle-to-hide path on Cmd+P. The "hide on second press" semantic doesn't exist in the code today — it's a missing feature, not just a buggy one
+  - fix shape (single function rewrite):
+    ```ts
+    const activeTab = p.tabs.find((t) => t.id === p.activeTabId);
+    if (activeTab?.kind === "terminal") {
+      if (activeTab.richPrompt?.open) {
+        activeTab.richPrompt.open = false;   // case 2: toggle off
+        return;
+      }
+      openActiveTerminalRichPrompt();         // case 1: open on current
+      return;
+    }
+    // case 3: active tab is not a terminal — spawn fresh + open
+    openTerminalInPane(p.id, {});
+    openActiveTerminalRichPrompt();
+    ```
+    (Alternative for case 3: if a terminal exists elsewhere in the pane, prefer switching to it over spawning a new one — @@FullStackA picks at implementation time based on which reads more like @@Alex's spatial expectation. Spawn-fresh is the safer default since it doesn't surprise the user with a tab-switch.)
+  - lane: @@FullStackA (SPA-only fix in `tabs.svelte.ts`)
+  - severity: UX papercut + missing-feature on the toggle. Not regression-class; the toggle behavior was likely never wired
+  - test pins:
+    1. cmd+P from non-first terminal (4 tabs, active = tab 4) opens rich prompt on tab 4 (not tab 1).
+    2. cmd+P with rich prompt already open on the active terminal closes the rich prompt.
+    3. cmd+P from a non-terminal tab spawns a fresh terminal + opens rich prompt on it.
+  - NOT YET DISPATCHED — small fix; can ride into `-a-42` (About) or a tiny standalone commit; implementer picks at pickup time
+
 ## Round 2 — needs deeper change
 
 - Large markdown files block the editor with a spinner while loading
