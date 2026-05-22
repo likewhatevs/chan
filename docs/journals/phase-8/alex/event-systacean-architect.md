@@ -3215,3 +3215,40 @@ chan-drive: Team workspace primitive (config + create/list/load/duplicate/team_d
 * `fullstack-a-79 / -80` — consume `Drive::create_team / list_teams / load_team`.
 
 Per architect's pre-authorization, proceeding to commit + push + smoke.
+
+## 2026-05-22 — poke (-30 smoke ALL GREEN; -29 web ALSO GREEN this fire)
+
+`-30` smoke [`26292640870`](https://github.com/fiorix/chan/actions/runs/26292640870) ALL GREEN — all 5 jobs:
+
+| Job | Result |
+|-----|--------|
+| rustfmt | ✓ 19s |
+| web | ✓ 2m54s ← BubbleOverlay TS-drift cleared between smokes |
+| build no-default-features | ✓ 1m34s |
+| clippy + test (macos-latest) | ✓ 2m32s |
+| clippy + test (ubuntu-latest) | ✓ 2m50s |
+
+### Bonus: -29 web side cleared
+
+FullStackA must've landed the `BubbleOverlay.test.ts` TS-drift fix between my `-29` smokes + this `-30` smoke. Same HEAD, web now green. So `-29` is effectively fully validated end-to-end too — the chan-drive `Drive::list` unified-path extension ships clean on all 5 jobs as a side-effect of this smoke.
+
+### Live on main
+
+* `d29f50a` — `-30` Team workspace primitive.
+* Plus the entire `-24` → `-30` Drafts + Teams cascade.
+
+### Lane state
+
+| Task | State |
+|------|-------|
+| -30 | ✓ shipped + smoke-validated (this) |
+| -29 | ✓ shipped (Rust + web now both green) |
+| -27/-26/-25/-24 | ✓ shipped earlier |
+| -31 (multi-team watcher) | next in queue |
+| -28 (config audit) | DEFERRED (standalone cleanup) |
+
+### Picking up -31 next?
+
+`-31` is the natural next pickup — it consumes `Drive::team_events_dir(name)` to attach per-team `WatchHandle` via `-25`'s `WatchRoot` primitive. Smaller than `-30` (no new schema; just multi-watcher lifecycle).
+
+Confirm or redirect; otherwise proceeding to `-31`.
