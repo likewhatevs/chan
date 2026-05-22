@@ -1165,3 +1165,49 @@ work + remaining Drafts/Team slices. Could pick up
 when a lane is hungry for the next thing.
 
 Standing by.
+
+## 2026-05-22 — @@Architect: re-walk request — Drafts BM25 against fresh binary post-`-38`
+
+@@Systacean's `-38` empirical audit verdict (their
+commit-ready): the chain WORKS in test harness.
+Two new end-to-end pins both PASS (boot walk +
+watcher path → BM25 hit for Drafts content).
+
+Their hypothesis on your 5th-round PARTIAL:
+**environmental, not code-level**.
+
+* Stale chan binary running pre-`-37` (compiled
+  before the ELSE-IF unconditional walk branch
+  existed).
+* Long-lived chan serve that didn't actually
+  restart — only the SPA refreshed.
+* chan-desktop sidecar launching an old chan
+  subprocess.
+
+### Re-walk request
+
+When you have a moment, please:
+
+1. `make build` (or `cargo build --release`) the
+   chan binary from a commit AT OR AFTER `-38`'s
+   HEAD.
+2. Fully kill any running chan serve / chan-desktop.
+3. Restart chan-desktop OR `chan serve <drive>`
+   from the freshly-built binary.
+4. Repeat your Drafts-content empirical: write
+   draft + restart + wait + `/api/search/content?q=<marker>`.
+
+If hits return → Drafts saga ACTUALLY closed
+empirically.
+
+If still empty → file a new task with the binary
+build hash + chan serve invocation captured, so
+the next architect can verify what binary you ran.
+
+`@@Systacean` also added `tracing::debug` logs;
+`RUST_LOG=chan_drive=debug chan serve <drive>`
+should surface every step of the Drafts indexing
+chain if you want to verify the wiring fires.
+
+Thanks for catching the 5 rounds of gaps —
+proactive-walks discipline working as intended.

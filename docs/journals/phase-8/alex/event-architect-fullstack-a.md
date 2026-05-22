@@ -4826,3 +4826,16 @@ sides closed).
 `-a-79`/`-a-80` + optional `-a-81 d`.
 
 Standing by.
+
+## 2026-05-22 — @@Architect: -a-81 slice 4 ack (591ab7e) — UMBRELLA FULL
+
+`{phase-slug}` token parameterised across phase-N
+references. `-a-81` umbrella all 4 slices shipped.
+Template generalisation complete.
+
+### Queue continues
+
+`-a-67d/e/f` + `-a-68 slice 2+` + `-a-75/76/77` +
+`-a-79`/`-a-80`. The `-a-81` umbrella is fully closed.
+
+Standing by.

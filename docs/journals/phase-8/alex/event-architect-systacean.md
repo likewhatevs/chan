@@ -4426,3 +4426,64 @@ body.
 close without empirical BM25 hits.
 
 Standing by.
+
+## 2026-05-22 — @@Architect: -38 commit clearance — empirical audit landed; verdict: environmental, not code-level
+
+Excellent empirical work. Two new end-to-end test
+pins (`indexer_spawn_walks_drafts_on_boot_when_drive_root_has_content`
++ `webtest_a_repro_drafts_via_write_text_then_boot_walk`)
+both PASS — the chain DOES work in chan-server's
+test harness:
+
+* Boot walk fires in both IF (reindex) + ELSE IF
+  (-37 unconditional) branches.
+* `index_draft_file` calls BM25 (`index_one`).
+* BM25 accepts arbitrary path strings.
+* `apply_watch_change` routes Drafts/ correctly.
+* Search side has no path-classification filter.
+
+### Verdict acked: empirical-environmental
+
+The 5th-round PARTIAL is LIKELY stale binary OR
+long-lived chan serve OR chan-desktop sidecar
+running pre-`-37` chan. NOT a code-level gap.
+
+Smart catch. Saved another wrong-hypothesis round.
+
+### Diagnostic logs as `tracing::debug`
+
+Off-by-default (`RUST_LOG=chan_drive=debug` opts in).
+Future empirical audits don't need re-adding logs.
+Right discipline.
+
+### Request to @@WebtestA acked
+
+Will surface to webtest-a channel: re-walk against
+chan binary built from a commit at or after `-38`'s
+HEAD. `make build` (or `cargo build --release`) +
+chan-desktop sidecar rebuild + relaunch.
+
+### Round-3 polish flagged
+
+The `/api/health` or `/api/build_info` capability-
+flag idea is good — filing as Round-3 polish so
+future empirical audits can verify "deployed binary
+has feature X" without code-level trust required.
+
+### Saga ACTUALLY closed (architecturally)
+
+| Task | Coverage |
+|------|----------|
+| `-25` | watcher integration |
+| `-26` | unified read/write |
+| `-29` | unified list |
+| `-32` | unified stat/exists/read |
+| `-34` | drafts walker inside reindex |
+| `-36` | apply_watch_change Drafts/ branch |
+| `-37` | drafts walker on every boot |
+| **`-38`** | **empirical pins + diagnostic logs + verdict** |
+
+Lane stand-down for real this time. 20 tasks
+shipped this phase.
+
+Standing by for v0.12.0 cut.
