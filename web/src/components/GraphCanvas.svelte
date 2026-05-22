@@ -74,7 +74,17 @@
 
   // ---- types: d3-shaped working copies ---------------------------------
 
-  type DKind = "doc" | "img" | "contact" | "tag" | "mention" | "language" | "folder" | "drive";
+  type DKind =
+    | "doc"
+    | "img"
+    | "contact"
+    | "source"
+    | "binary"
+    | "tag"
+    | "mention"
+    | "language"
+    | "folder"
+    | "drive";
   type DNode = {
     id: string;
     label: string;
@@ -270,6 +280,14 @@
     loadIcon(iconImages, "mention", svgStrokeIcon(PATH_CONTACT, bg));
     loadIcon(iconImages, "language", svgTextIcon("{ }", bg));
     loadIcon(iconImages, "folder", svgStrokeIcon(PATH_FOLDER, bg));
+    // `fullstack-a-51` G6: source + binary file-class buckets.
+    // Source code uses the same doc/file glyph rendered against the
+    // royalblue fill — the chrome reads as "file" while the colour
+    // discriminates the class. Binary uses the same glyph against
+    // the grey fill so users see "yes it's a file but it's not
+    // editable" via colour alone.
+    loadIcon(iconImages, "source", svgStrokeIcon(PATH_DOC, bg));
+    loadIcon(iconImages, "binary", svgStrokeIcon(PATH_DOC, bg));
     // Drive root: stroke against the dark fill so the glyph still
     // reads; uses text-secondary (lifted off the bgCard fill that
     // matches the panel background).
@@ -285,6 +303,8 @@
     loadIcon(ghostIconImages, "mention", svgStrokeIcon(PATH_CONTACT, ghostStroke));
     loadIcon(ghostIconImages, "language", svgTextIcon("{ }", ghostStroke));
     loadIcon(ghostIconImages, "folder", svgStrokeIcon(PATH_FOLDER, ghostStroke));
+    loadIcon(ghostIconImages, "source", svgStrokeIcon(PATH_DOC, ghostStroke));
+    loadIcon(ghostIconImages, "binary", svgStrokeIcon(PATH_DOC, ghostStroke));
     loadIcon(ghostIconImages, "drive", svgStrokeIcon(PATH_DRIVE, ghostStroke));
   }
 
@@ -301,12 +321,20 @@
     mention: string;
     language: string;
     accent: string;
-    /// Directory node fill (filesystem graph mode). Per request.md
-    /// directories render in grey across every surface.
+    /// Directory node fill (filesystem graph mode).
     folder: string;
-    /// Binary file fill, paired with the inspector FILE blue per
-    /// request.md so binary files read the same hue in the graph
-    /// as in the file tree / inspector / search list.
+    /// `fullstack-a-51` G6: source-code file fill. Royalblue; the
+    /// pre-`-a-51` palette had this hue assigned to `--g-binary`,
+    /// but @@Alex's G6 framing reserves binary for grey + introduces
+    /// source as its own bucket so the markdown / source / binary /
+    /// media split reads clearly.
+    source: string;
+    /// `fullstack-a-51` G6: binary file fill. Grey (darker than
+    /// --g-folder so binary nodes don't visually collapse into
+    /// directory nodes). Pre-`-a-51` this slot was royalblue
+    /// (matching the inspector FILE chip); the new palette
+    /// reassigns binary to grey + introduces a separate source
+    /// hue for code files.
     binary: string;
   };
 
@@ -325,14 +353,20 @@
       language: v("--g-language", "#ff4db8"),
       accent: v("--accent", "#3fb950"),
       folder: v("--g-folder", "#8e8e93"),
-      binary: v("--g-binary", "#58a6ff"),
+      // `fullstack-a-51` G6 colour scheme: source vs binary split.
+      // Markdown stays orange (--g-doc); source code (royalblue);
+      // binary (darker grey distinct from --g-folder); media stays
+      // purple (--g-img).
+      source: v("--g-source", "#4169e1"),
+      binary: v("--g-binary", "#5e5e62"),
     };
   }
 
   let theme: ThemeColors = $state({
     bg: "#1c1c1e", bgCard: "#232325", text: "#ebebf0", textSec: "#8e8e93",
     doc: "#ff8a3d", img: "#b07dff", tag: "#6cd07a", mention: "#e3b341",
-    language: "#ff4db8", accent: "#3fb950", folder: "#8e8e93", binary: "#58a6ff",
+    language: "#ff4db8", accent: "#3fb950", folder: "#8e8e93",
+    source: "#4169e1", binary: "#5e5e62",
   });
 
   function refreshTheme(): void {
@@ -346,13 +380,34 @@
 
   // ---- node classification + data assembly -----------------------------
 
+  /// `fullstack-a-51` G6 file-class buckets. Markdown / source /
+  /// binary / media split per @@Alex's palette correction; client-
+  /// side classification via extension regex while `systacean-16`
+  /// (server-side bucket field) is queued. Conceptually mirrors
+  /// `chan_drive::FileClass` (EditableText / Text / Image / Pdf /
+  /// Other) but routes Pdf into media + Other into binary so the
+  /// SPA's bucket set matches the G6 framing.
+  ///
+  /// Media + contact stay separate: media via extension regex
+  /// (image / pdf), contact via the indexer's `node_kind: "contact"`
+  /// discriminator. Markdown is the default for `.md` / `.txt`
+  /// (the editable-text class). Source covers all other recognised
+  /// code / config text extensions. Binary captures the rest.
+  const MEDIA_EXT_RE = /\.(png|jpe?g|gif|webp|svg|avif|bmp|pdf)$/i;
+  const MARKDOWN_EXT_RE = /\.(md|txt)$/i;
+  const SOURCE_EXT_RE =
+    /\.(rs|py|ts|tsx|js|jsx|mjs|cjs|go|c|cc|cpp|cxx|h|hh|hpp|java|kt|swift|rb|php|cs|sh|bash|zsh|fish|pl|lua|toml|yaml|yml|json|jsonc|ini|conf|cfg|env|xml|html|htm|css|scss|sass|less|vue|svelte|sql|graphql|gql|proto|elm|ex|exs|erl|hs|lhs|ml|mli|fs|fsx|clj|cljs|cljc|edn|jl|nim|d|dart|zig|odin|v|vhd|vhdl|sv|verilog|asm|s|f|f90|f95|tex|R|r)$/i;
+
   function classifyFile(
     path: string,
     nodeKind: "contact" | undefined,
-  ): "doc" | "img" | "contact" {
-    if (/\.(png|jpe?g|gif|webp|svg|avif|bmp)$/i.test(path)) return "img";
+  ): "doc" | "img" | "contact" | "source" | "binary" {
+    if (MEDIA_EXT_RE.test(path)) return "img";
     if (nodeKind === "contact") return "contact";
-    return "doc";
+    if (MARKDOWN_EXT_RE.test(path)) return "doc";
+    if (SOURCE_EXT_RE.test(path)) return "source";
+    // Anything else (archives, executables, fonts, etc.) — binary.
+    return "binary";
   }
 
   /// Backlink counts per node — used to size hubs slightly larger.
@@ -824,6 +879,8 @@
         : n.kind === "language" ? theme.language
         : n.kind === "drive" ? theme.bgCard
         : n.kind === "folder" ? theme.folder
+        : n.kind === "source" ? theme.source
+        : n.kind === "binary" ? theme.binary
         : theme.tag;
       const baseAlpha = isSiblingDim ? 0.45 : 1;
       ctx.globalAlpha = baseAlpha;

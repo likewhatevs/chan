@@ -3805,3 +3805,134 @@ tightly coupled.
 
 Push held — multi-agent tree commit
 discipline. Standing by for clearance.
+
+## 2026-05-21 — poke (fullstack-a-50 committed + fullstack-a-51 ready for review)
+
+`-a-50` committed at `fc5dfdf Graph directory
+inspector + chan-reports aggregated stats
+(fullstack-a-50)` via the atomic-audit-commit
+chain. 9 files staged + committed exactly; no
+stowaways. The new
+`feedback-atomic-audit-commit` discipline
+worked as designed.
+
+`-a-51` ready for review. Four-file change.
+SPA-only; no Rust touched. **Bundled G6 colour
+scheme + Task D legend grid**.
+
+### Scope decision flagged: client-side classification
+
+`systacean-16` (server-side file-class buckets)
+isn't in HEAD yet — task body's HARD prereq.
+Rather than hold, I went with **client-side
+classification** via extension regex (mirrors
+`chan_drive::FileClass`'s Markdown/Text/Image/
+Pdf/Other split). When `systacean-16` ships,
+the server-side discriminator replaces the regex
+without touching the palette / legend / G6
+contract.
+
+Flag if you'd prefer gating `-a-51` on
+`systacean-16` landing first. Legend grid +
+palette work alone is independent of the
+classification source; only the regex would
+change.
+
+### Colour scheme (G6)
+
+| Bucket    | Token         | Dark      | Light     |
+|-----------|---------------|-----------|-----------|
+| Markdown  | `--g-doc`     | `#ff8a3d` | `#c25a1f` |
+| Source    | `--g-source`  | `#4169e1` | `#2851c4` |
+| Binary    | `--g-binary`  | `#5e5e62` | `#4e4e54` |
+| Media     | `--g-img`     | `#b07dff` | `#7a4cd8` |
+| Directory | `--g-folder`  | `#8e8e93` | `#6c6c70` |
+
+Pre-`-a-51` had `--g-binary` mapped to royalblue.
+The reassignment: royalblue moves to new
+`--g-source`; `--g-binary` becomes darker grey
+distinct from `--g-folder`'s medium grey. PDFs
+bucket as media per @@Alex's framing.
+
+**Directory colour pick (flagged for confirm)**:
+kept `--g-folder` at the existing grey. Reads as
+"container" against the warmer file-class hues +
+preserves the chrome users already see. Flag if
+a more distinctive container hue is preferred
+(e.g. muted teal `#5fb7c7`); cheap to swap.
+
+### What landed
+
+`web/src/App.svelte`:
+* Dark mode: adds `--g-source: #4169e1`; changes
+  `--g-binary` from `#58a6ff` → `#5e5e62`.
+* Light mode: adds `--g-source: #2851c4`; changes
+  `--g-binary` from `#0969da` → `#4e4e54`.
+* Comment block updated to describe the G6
+  framing.
+
+`web/src/components/GraphCanvas.svelte`:
+* `classifyFile()` returns 5 buckets via
+  extension regex. Dispatch order: media →
+  contact → markdown → source → binary.
+  Media-first preserves contact-flagged-image
+  routing.
+* `DKind` + `ThemeColors` extended with
+  `source` + `binary` slots.
+* Paint dispatch routes `n.kind === "source" |
+  "binary"` to their theme slots.
+* Icon loaders for both kinds reuse `PATH_DOC`
+  (file glyph); colour discriminates the
+  class.
+* Theme reader pulls `--g-source` + `--g-binary`
+  from CSS.
+
+`web/src/components/HybridGraphConfig.svelte`
+(populated from `-a-43` stub):
+* 3 groups: **Files** (5 rows) / **Containers**
+  (1 row) / **Graph relations** (3 rows).
+* Each row: `[label + description] [swatch]`.
+* Swatch reads `var(--g-X)` inline so theme
+  cascade works.
+
+`web/src/components/HybridGraphConfig.test.ts`
+(new): 17 raw-source pins covering G6
+classification + CSS palette + Task D legend
+structure.
+
+### Gate
+
+* vitest **685 / 685** (+17 net from `-a-50`'s
+  668).
+* svelte-check 0 errors / 0 warnings across
+  3993 files.
+* npm build clean.
+* Rust gate not re-run.
+
+### Suggested commit subject
+
+```
+Graph G6 colour scheme + Hybrid Graph legend grid (fullstack-a-51 — G6 + Task D bundled)
+```
+
+Single commit. Palette + classification +
+legend + tests are tightly coupled.
+
+### Files for `git add`
+
+* `web/src/App.svelte`
+* `web/src/components/GraphCanvas.svelte`
+* `web/src/components/HybridGraphConfig.svelte`
+* `web/src/components/HybridGraphConfig.test.ts`
+* `docs/journals/phase-8/fullstack-a/fullstack-a-51.md`
+* `docs/journals/phase-8/fullstack-a/journal.md`
+* `docs/journals/phase-8/alex/event-fullstack-a-architect.md`
+  (this append)
+
+### Atomic-audit-commit applied
+
+Single bash invocation per the
+`feedback-atomic-audit-commit` discipline.
+
+Push held — multi-agent tree commit
+discipline. Standing by for clearance.

@@ -1280,3 +1280,82 @@ poke fired; standing by. Queue waiting:
 `-a-51` (G6 + Task D — graph nav chords / legend
 grid) → `-a-52` (G10 + G9 — graph polish) → G5
 follow-up → `-a-42` (About).
+
+## 2026-05-21 — -a-50 committed; -a-51 ready for review
+
+`-a-50` cleared + committed as `fc5dfdf Graph
+directory inspector + chan-reports aggregated
+stats (fullstack-a-50)` via the atomic-audit-
+commit shape. 9 files, no stowaways — the new
+`feedback-atomic-audit-commit` discipline
+worked as designed.
+
+### -a-51 complete (G6 + Task D bundled)
+
+Four-file change. SPA-only.
+
+**Scope decision flagged**: `systacean-16`
+(server-side file-class buckets) isn't in HEAD
+yet. Went with **client-side classification** via
+extension regex (mirrors `chan_drive::FileClass`)
+to unblock the colour scheme + legend grid. When
+`systacean-16` ships, the server-side
+discriminator replaces the regex without
+touching the palette / legend / G6 contract.
+
+**Files touched**:
+
+* `web/src/App.svelte` — `--g-source` added
+  (royalblue), `--g-binary` repurposed to grey
+  (was royalblue), `--g-folder` unchanged.
+* `web/src/components/GraphCanvas.svelte` —
+  `classifyFile` extended to return
+  `"source" | "binary"` in addition to
+  `"doc" | "img" | "contact"`. Extension regexes
+  for media / markdown / source. DKind +
+  ThemeColors extended. Paint dispatch +
+  icon loaders + theme reader all updated.
+* `web/src/components/HybridGraphConfig.svelte`
+  — populated from stub with 3 legend groups
+  (Files / Containers / Graph relations) +
+  swatch rows reading `var(--g-X)` for live
+  theme cascade.
+* `web/src/components/HybridGraphConfig.test.ts`
+  (new) — 17 raw-source pins covering G6
+  classification + CSS palette + legend
+  structure.
+
+### Palette decisions
+
+* Markdown → orange (existing `--g-doc`).
+* Source → royalblue `#4169e1` dark / `#2851c4`
+  light (NEW `--g-source`).
+* Binary → grey `#5e5e62` dark / `#4e4e54`
+  light (REPURPOSED `--g-binary`; was
+  royalblue, now darker grey distinct from
+  folder).
+* Media → purple (existing `--g-img`); PDFs
+  bucket here per @@Alex's framing.
+* Directory → kept `--g-folder` grey
+  (#8e8e93 dark / #6c6c70 light). Flagged for
+  @@Alex confirm in case they want a more
+  distinctive container hue.
+
+### Gate
+
+* vitest **685 / 685** (+17 net).
+* svelte-check 0 errors / 0 warnings across
+  3993 files.
+* npm build clean.
+* Rust gate not re-run.
+
+### Atomic-audit-commit
+
+Will use single bash invocation per the new
+`feedback-atomic-audit-commit` discipline.
+
+Impl note + commit subject at
+[fullstack-a-51.md](fullstack-a-51.md). Outbound
+poke fired; standing by. Queue waiting:
+`-a-52` (G10 + G9 — graph polish) → G5
+follow-up → `-a-42` (About).

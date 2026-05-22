@@ -949,12 +949,19 @@
     --chan-color-language: #ff4db8;
     --chan-color-code: var(--chan-color-language);
     --g-language: var(--chan-color-language);
-    /* Binary file kind (zip, tarballs, executables, fonts, PDFs) and
-       directory kind. Binary tracks the inspector FILE-chip blue so the
-       same hue reads as "file" everywhere it surfaces. Directory pulls
-       toward --text-secondary so directory rows recede next to the
-       per-file kind chips — per request.md. */
-    --g-binary: #58a6ff;
+    /* `fullstack-a-51` G6 colour scheme: markdown / source / binary
+       / media split.
+       * `--g-doc` (above) → orange for markdown (.md, .txt).
+       * `--g-source` (royalblue) → code + config text files (.rs,
+         .py, .ts, etc.). Pre-`-a-51` had this hue assigned to
+         `--g-binary`; the rename clarifies the bucket.
+       * `--g-binary` (grey, darker than `--g-folder`) → opaque files
+         (archives, executables, fonts, etc.).
+       * `--g-img` (above) → purple for media (image / pdf).
+       * `--g-folder` (medium grey) → directory nodes; distinct from
+         binary's darker grey so the two don't visually collapse. */
+    --g-source: #4169e1;
+    --g-binary: #5e5e62;
     --g-folder: #8e8e93;
     /* Inline editor pills (wiki link, image, tag, contact, date,
        broken). Hues track the canonical concept palette so the
@@ -1028,7 +1035,10 @@
     --chan-color-language: #c71585;
     --chan-color-code: var(--chan-color-language);
     --g-language: var(--chan-color-language);
-    --g-binary: #0969da;
+    /* `fullstack-a-51` G6 light-mode counterparts: deeper hues
+       balanced against the bright bg. */
+    --g-source: #2851c4;
+    --g-binary: #4e4e54;
     --g-folder: #6c6c70;
     /* Light-mode pill palette. Same canonical mapping as dark
        (document orange, media purple, tag green, contact yellow,
