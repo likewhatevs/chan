@@ -5095,3 +5095,108 @@ Editor bugs: right-click no select + image re-render on tab switch + new-dir cur
 Single bash invocation per discipline.
 
 Push held. Standing by for clearance.
+
+## 2026-05-22 — poke (fullstack-a-67 slice 1: Graph header row ready for review)
+
+Per your "implementer's choice on bundling vs
+splitting" + "per-surface task numbers
+acceptable" framing, I'm slicing -a-67 into
+per-surface commits.
+
+### Slice 1: Graph hamburger scope-path header
+
+Two-file change. SPA-only.
+
+`GraphPanel.svelte`:
+* Imported FileText / Folder / HardDrive / Hash
+  from `lucide-svelte` (existing pattern from
+  Pane.svelte).
+* Added a `.graph-scope-row` at the TOP of the
+  tab-menu bubble, above the depth slider.
+  Kind-appropriate icon + the current scope's
+  path (or kind label for drive/global/etc.).
+  Path fades at right edge via mask-image (1.25rem
+  gradient), matching the `-a-62` FB-tree
+  fade pattern.
+* Separator (`<div class="msep">`) below to
+  delimit the header from the existing depth /
+  reload / filter rows.
+* Icon dispatch covers all 7 ScopeOption kinds:
+  drive/global → HardDrive, dir/git_repo/group
+  → Folder, tag → Hash, file → FileText.
+* **Display-only in this slice**: click-to-
+  inspector wiring deferred to a follow-up
+  slice. The @@Alex spec calls for it but
+  mapping scope kind → inspector-open helper
+  needs its own audit + wiring.
+
+`graphScopeHeaderRow.test.ts` (new): 5
+raw-source pins covering imports, markup,
+icon dispatch coverage, mask-image fade, and
+separator placement.
+
+### Deferred slices (suggested numbering)
+
+* `-a-67b` click-to-inspector wiring on the
+  graph-scope-row.
+* `-a-67c` Hybrid hamburger revamp (cross-dep
+  on `-a-66`'s New Draft Cmd+N handler).
+* `-a-67d` Terminal right-click revamp
+  (substantial: MCP info-button dialog,
+  Restart, From $CWD section, Terminals
+  dropdown with Jitter, etc.).
+* `-a-67e` File Browser right-click revamp
+  (Drive name editable, full path header,
+  (Un)Dock, Expand/Collapse all, Import
+  Contacts, selection menu revamp).
+* `-a-67f` Editor right-click revamp (editable
+  Name w/ path-accept, Show Source Code,
+  Collapse Code Blocks, From $CWD section).
+
+Your call on whether to keep these under the
+`-a-67` umbrella or re-dispatch as separate
+task numbers.
+
+### Gate
+
+* vitest **789 / 789** (+5 net from `-a-65`'s
+  784).
+* svelte-check 0 errors / 0 warnings across
+  4006 files.
+* npm build clean.
+* Rust gate not re-run.
+
+### Decisions
+
+* **Per-surface split** — substantial revamp;
+  shipping slice 1 surfaces value early per
+  @@Alex's "I want to see progress now"
+  framing.
+* **Display-only header** — click wiring
+  warrants its own slice; mapping scope-kind
+  → inspector-open helper across 7 kinds is a
+  separate concern.
+* **`git_repo` + `group` → Folder** (default
+  for directory-aggregate scopes).
+
+### Suggested commit subject
+
+```
+Graph hamburger: scope-path header row with kind icon (fullstack-a-67 slice 1)
+```
+
+### Files for `git add`
+
+* `web/src/components/GraphPanel.svelte`
+* `web/src/components/graphScopeHeaderRow.test.ts` (new)
+* `docs/journals/phase-8/fullstack-a/fullstack-a-67.md`
+* `docs/journals/phase-8/fullstack-a/journal.md`
+* `docs/journals/phase-8/alex/event-fullstack-a-architect.md`
+  (this append)
+
+### Atomic-audit-commit applied
+
+Single bash invocation per discipline.
+
+Push held. Standing by for clearance + routing
+on the remaining 5 surfaces.

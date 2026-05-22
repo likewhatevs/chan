@@ -39,6 +39,7 @@
   import HamburgerMenu from "./HamburgerMenu.svelte";
   import { clampMenu } from "./menuClamp";
   import { tabMenu, closeTabMenu } from "../state/tabMenu.svelte";
+  import { FileText, Folder, HardDrive, Hash } from "lucide-svelte";
   import DriveInfoBody from "./DriveInfoBody.svelte";
   import Inspector from "./Inspector.svelte";
   import OverlayShell from "./OverlayShell.svelte";
@@ -1367,6 +1368,59 @@
       use:clampMenu={tabMenuPos}
       onmousedown={(e) => e.stopPropagation()}
     >
+      <!-- `fullstack-a-67` Graph slice: header row showing the
+           current scope path + a kind-appropriate icon. Mirrors
+           the path-row pattern @@Alex's addendum specs for the
+           Terminal / File Browser / Editor / Graph right-click
+           menus. Click on the row routes through the existing
+           inspector-open path so the user can hop from the menu
+           to the scope's inspector view. -->
+      {#if currentScope}
+        {@const scopePath =
+          currentScope.kind === "drive" ? ""
+          : currentScope.kind === "global" ? ""
+          : currentScope.kind === "file" ? currentScope.path
+          : currentScope.kind === "dir" ? currentScope.path
+          : currentScope.kind === "tag" ? `#${currentScope.label}`
+          : currentScope.kind === "git_repo" ? currentScope.label
+          : currentScope.kind === "group" ? currentScope.label
+          : ""}
+        {@const scopeKindLabel =
+          currentScope.kind === "drive" ? "Drive"
+          : currentScope.kind === "global" ? "Global"
+          : currentScope.kind === "tag" ? "Hashtag"
+          : currentScope.kind === "git_repo" ? "Git repo"
+          : currentScope.kind === "group" ? "Group"
+          : currentScope.kind === "file" ? "File"
+          : currentScope.kind === "dir" ? "Directory"
+          : "Scope"}
+        <div
+          class="mbtn graph-scope-row"
+          role="menuitem"
+          tabindex="-1"
+          title={scopePath || scopeKindLabel}
+        >
+          <span class="mbtn-icon" aria-hidden="true">
+            {#if currentScope.kind === "drive" || currentScope.kind === "global"}
+              <HardDrive size={16} strokeWidth={1.75} />
+            {:else if currentScope.kind === "dir"}
+              <Folder size={16} strokeWidth={1.75} />
+            {:else if currentScope.kind === "tag"}
+              <Hash size={16} strokeWidth={1.75} />
+            {:else if currentScope.kind === "git_repo"}
+              <Folder size={16} strokeWidth={1.75} />
+            {:else if currentScope.kind === "group"}
+              <Folder size={16} strokeWidth={1.75} />
+            {:else}
+              <FileText size={16} strokeWidth={1.75} />
+            {/if}
+          </span>
+          <span class="mbtn-label graph-scope-path">
+            {scopePath || scopeKindLabel}
+          </span>
+        </div>
+        <div class="msep" role="separator"></div>
+      {/if}
       <div
         class="mbtn depth-row"
         class:disabled={depthDisabled}
@@ -2038,6 +2092,27 @@
     font-variant-numeric: tabular-nums;
     width: 1.6em;
     text-align: right;
+  }
+  /* `fullstack-a-67`: Graph hamburger header row — kind icon +
+     path label. Path fades at the right edge for long file
+     paths so the menu width stays bounded; matches the
+     Pane.svelte tab-name + FileTree.svelte (`-a-62`) fade
+     pattern verbatim. The row is non-interactive in this
+     slice (display-only); click-to-inspect wiring can land in
+     a follow-up. */
+  .tab-menu-bubble .graph-scope-row {
+    cursor: default;
+  }
+  .tab-menu-bubble .graph-scope-row .graph-scope-path {
+    flex: 1;
+    min-width: 0;
+    display: block;
+    white-space: nowrap;
+    overflow: hidden;
+    color: var(--text-secondary);
+    font-variant-numeric: tabular-nums;
+    mask-image: linear-gradient(to right, black calc(100% - 1.25rem), transparent);
+    -webkit-mask-image: linear-gradient(to right, black calc(100% - 1.25rem), transparent);
   }
   /* `fullstack-a-56` shallow-scope cue: when the scope's
      depth-cap is 1 (single-file graph, etc.) show a `[max]`

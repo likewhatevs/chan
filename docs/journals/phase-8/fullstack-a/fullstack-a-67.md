@@ -162,3 +162,151 @@ This is `-a-67`.
   `fullstack-a-66`).
 * Cmd+Shift+[/] tab focus bug (separate task
   `fullstack-a-64`).
+
+## 2026-05-22 — slice 1 (Graph surface) ready for review
+
+Per the architect's "use judgment" + "per-surface
+splits acceptable" framing, splitting `-a-67` into
+slices. **Slice 1: Graph hamburger header row only.**
+
+Two-file change. SPA-only.
+
+### What landed
+
+`web/src/components/GraphPanel.svelte`:
+
+* Imported `FileText`, `Folder`, `HardDrive`,
+  `Hash` icons from `lucide-svelte` (existing
+  pattern from `Pane.svelte`).
+* Added a `graph-scope-row` at the TOP of the
+  tab-menu bubble, ABOVE the depth slider.
+  Renders a kind-appropriate icon + the
+  current scope path (or kind-label for drive
+  / global). Path fades at the right edge
+  (1.25rem linear-gradient mask) per the
+  `-a-62` FB-tree pattern; matches @@Alex's
+  addendum spec ("apply the same shade effect
+  we use for tab names").
+* Followed by a `<div class="msep">` separator
+  to delimit the header from the existing
+  depth / reload / filter rows.
+* Icon dispatch covers all ScopeOption kinds
+  (drive / global / dir / tag / git_repo /
+  group / file). `git_repo` + `group` route
+  to the Folder icon as a sensible default
+  (they're directory-like aggregates).
+* Display-only in this slice: no click-to-
+  inspector wiring yet. The @@Alex spec calls
+  for "Clicking on this will open the inspector
+  for the file or directory" — flag for the
+  follow-up slice. Existing tab-menu rows
+  (depth, reload, filters, Settings, Reopen,
+  Close) untouched in this slice.
+
+`web/src/components/graphScopeHeaderRow.test.ts`
+(new): 5 raw-source pins covering the lucide
+imports, header-row markup, icon dispatch
+coverage, mask-image fade, and the separator
+placement before depth-row.
+
+### What's deferred to follow-up slices
+
+* **`-a-67b` (suggested)**: Click-to-inspector
+  wiring on the new graph-scope-row. Spec'd
+  but not yet wired.
+* **`-a-67c` (suggested)**: Hybrid hamburger
+  revamp. Has cross-task dep on `-a-66`
+  (New Draft Cmd+N entry); recommend
+  scheduling after `-a-66` lands so the entry
+  has a real handler.
+* **`-a-67d` (suggested)**: Terminal right-
+  click menu revamp (substantial: MCP env
+  info-button dialog, Restart, From $CWD
+  section, Terminals dropdown with Jitter,
+  Settings toggle, Reopen/Close).
+* **`-a-67e` (suggested)**: File Browser
+  right-click menu revamp (Drive name editable,
+  full path header, (Un)Dock entries,
+  Expand/Collapse all, Import Contacts,
+  selection-menu revamp).
+* **`-a-67f` (suggested)**: Editor right-click
+  menu revamp (editable Name w/ path-accept,
+  Show Source Code shortcut, Collapse Code
+  Blocks, Search/Find/Copy/Paste/Copy paths,
+  From $CWD section, Settings toggle,
+  Reopen/Close).
+
+The `-a-67` parent task stays open as the
+umbrella; closing it requires all 5 surfaces
+landed. Architect's call on whether to
+re-dispatch the follow-up slices as separate
+tasks (-a-67b through -a-67f) or keep them
+under the umbrella.
+
+### Acceptance (slice 1 only)
+
+* Graph tab-menu shows a scope-path header row
+  at the top ✓.
+* Icon matches the scope kind ✓ (HardDrive for
+  drive/global, Folder for dir/git_repo/group,
+  Hash for tag, FileText for file).
+* Path label fades at the right edge for long
+  paths ✓.
+* Separator below the row ✓.
+
+### Gate
+
+* vitest **789 / 789** (+5 net from `-a-65`'s
+  784).
+* svelte-check 0 errors / 0 warnings across
+  4006 files.
+* npm build clean.
+* Rust gate not re-run.
+
+### Decisions
+
+* **Split per surface** — `-a-67` parent
+  authorized this in the task body. Five
+  slices is a lot for one commit; surfacing
+  partial value early matches the
+  "I want to see progress now" framing from
+  @@Alex's addendum.
+* **Display-only header** — click wiring
+  needs to map a scope kind to the right
+  inspector helper (file → file inspector,
+  dir → dir inspector, tag → tag inspector).
+  Slicing the wiring out keeps this commit
+  tight + lets the architect re-validate
+  the click behaviour separately.
+* **`git_repo` + `group` → Folder icon**.
+  No dedicated icon in the spec; they're
+  directory-aggregate scopes so Folder
+  reads sensibly.
+* **Icons via lucide-svelte** — same import
+  pattern as `Pane.svelte`; no new dep.
+
+### Suggested commit subject
+
+```
+Graph hamburger: scope-path header row with kind icon (fullstack-a-67 slice 1)
+```
+
+Single commit. Scope-row markup + CSS +
+imports + test pin tightly coupled.
+
+### Files for `git add` (per-path discipline)
+
+* `web/src/components/GraphPanel.svelte`
+* `web/src/components/graphScopeHeaderRow.test.ts` (new)
+* `docs/journals/phase-8/fullstack-a/fullstack-a-67.md`
+* `docs/journals/phase-8/fullstack-a/journal.md`
+* `docs/journals/phase-8/alex/event-fullstack-a-architect.md`
+
+### Atomic-audit-commit
+
+Per the memory rule. Per-path staging only.
+
+Push held. Standing by for clearance + routing
+on the remaining 5 surfaces (whether to keep
+under `-a-67` umbrella or re-dispatch as
+`-a-67b..f`).

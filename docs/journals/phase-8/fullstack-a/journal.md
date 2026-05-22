@@ -1802,3 +1802,42 @@ Impl note + commit subject at
 Outbound poke fired. Queue: `-a-66` (waiting
 on systacean-24/25) / `-a-67` (right-click
 menus revamp).
+
+## 2026-05-22 — -a-67 slice 1 (Graph scope-path header) ready for review
+
+Per architect's "use judgment + per-surface
+splits acceptable" framing, slicing -a-67 into
+per-surface commits. Slice 1: Graph hamburger
+header row only.
+
+Two-file change. SPA-only.
+
+`GraphPanel.svelte` gets a kind-icon + path-row
+at the top of the tab-menu bubble (above the
+depth slider). Renders FileText / Folder /
+HardDrive / Hash based on currentScope.kind;
+path fades at right edge for long paths per the
+-a-62 pattern. Display-only this slice; click-
+to-inspector wiring deferred.
+
+5 raw-source pins in `graphScopeHeaderRow.test.ts`.
+
+### Deferred to follow-up slices
+
+* `-a-67b` click-to-inspector wiring on the
+  graph-scope-row.
+* `-a-67c` Hybrid hamburger revamp (depends on
+  -a-66 for New Draft Cmd+N).
+* `-a-67d` Terminal right-click revamp.
+* `-a-67e` File Browser right-click revamp.
+* `-a-67f` Editor right-click revamp.
+
+### Gate
+
+* vitest **789 / 789** (+5 net from `-a-65`'s
+  784).
+* svelte-check 0/0 across 4006 files.
+* npm build clean.
+
+Impl note at [fullstack-a-67.md](fullstack-a-67.md)
+"## 2026-05-22 — slice 1". Outbound poke fired.
