@@ -297,6 +297,22 @@ impl Index {
         Ok(())
     }
 
+    /// systacean-27: flip the per-drive chan-report opt-in.
+    /// Idempotent — re-setting to the same value is a no-op.
+    /// Atomic write parallels `set_semantic_enabled`.
+    pub fn set_reports_enabled(&self, enabled: bool) -> Result<(), IndexError> {
+        let to_save = {
+            let mut cfg = self.config.lock().unwrap();
+            if cfg.reports_enabled == enabled {
+                return Ok(());
+            }
+            cfg.reports_enabled = enabled;
+            cfg.clone()
+        };
+        config::save(&self.index_dir, &to_save)?;
+        Ok(())
+    }
+
     /// Persist a (possibly mutated) config. Used by the CLI when
     /// the user passes `--model X`. Switching model invalidates the
     /// existing vectors (different dim / different semantics) so
@@ -1461,6 +1477,7 @@ mod tests {
             vectors_model: Some("BAAI/bge-large-en-v1.5".to_owned()),
             vectors_dim: Some(1024),
             semantic_enabled: false,
+            reports_enabled: false,
         };
         config::save(&dir, &cfg_on_disk).unwrap();
         drop(idx);
@@ -1496,6 +1513,7 @@ mod tests {
             vectors_model: Some(model.clone()),
             vectors_dim: Some(384),
             semantic_enabled: false,
+            reports_enabled: false,
         };
         std::fs::create_dir_all(&dir).unwrap();
         config::save(&dir, &cfg_on_disk).unwrap();
@@ -1529,6 +1547,7 @@ mod tests {
             vectors_model: Some("BAAI/bge-small-en-v1.5".to_owned()),
             vectors_dim: Some(384),
             semantic_enabled: false,
+            reports_enabled: false,
         };
         config::save(&dir, &cfg_on_disk).unwrap();
         let _idx = Index::open(tmp.path(), &dir).unwrap();

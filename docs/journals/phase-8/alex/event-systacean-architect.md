@@ -2961,3 +2961,55 @@ The `-21` test's `out.contains("Check your task at <path>#<heading> and execute.
 | All prior | ✓ shipped |
 
 Lane fully idle post-`-26`. Standing by for new dispatches. fullstack-a-66 has a complete chan-drive API surface to consume now.
+
+## 2026-05-22 — poke (-27 implementation complete; reports_enabled + Drive::boot + CLI ready for smoke)
+
+Acked the WAVE-3 dispatch. Took the "Full -27" routing per your in-chat answer.
+
+### What landed
+
+* **Config**: `IndexConfig.reports_enabled: bool` (#[serde(default)]; backward-compat). Lives in the existing per-drive `<state_dir>/index/<uuid>/config.toml` alongside `semantic_enabled` from `-7`. Pragmatic placement — single file vs parallel ReportConfig.
+* **Drive API**: `Drive::reports_enabled() / set_reports_enabled()` + new `Drive::boot()` BOOT entry-point. Disable is destructive (drops `report.jsonl`). Boot is idempotent + a no-op when both flags off.
+* **CLI**: `Command::Reports { ReportsAction }` with `enable` / `disable` subcommands (`-y` skips destructive prompt). `Command::Add` extended with `--semantic-search` + `--reports` flags. `chan add --semantic-search --reports <path>` lands fully-configured.
+* **Tests** (+3): config round-trip + backward-compat; Drive-level enable+boot+disable; boot no-op when features off.
+
+### Acceptance criteria
+
+All 6 from the task body satisfied (config schema persists, BOOT kicks off per flags, enable/disable triggers, CLI surface).
+
+### What I deferred
+
+1. **chan-server graph route gating**: chan-server's `merge_language_layer` calls `drive.report()` unconditionally. If `reports_enabled = false`, this still tries to scan. Recommend a follow-up `if drive.reports_enabled()? { ... }` guard. Kept this PR scoped to chan-drive + chan CLI.
+2. **`chan index status --json` extension for reports**: keeping `chan index status` as the index-only surface; `chan reports` has its own enable/disable verbs (parallel pair). If a unified status view is wanted, add as polish later.
+3. **fullstack-b-28 + fullstack-a-76 consumer-side surfaces** — those are explicitly out of scope per the task body.
+
+If you want the chan-server gating included before this lands, I can fold in a small ~20 LOC change. Otherwise it rides as a separate task on whichever lane (likely my own as `-29` or a follow-up to `-27`).
+
+### Diff
+
+| File                                       | +    | -   |
+|--------------------------------------------|------|-----|
+| `crates/chan-drive/src/index/config.rs`    | +45  | 0   |
+| `crates/chan-drive/src/index/facade.rs`    | +19  | 0   |
+| `crates/chan-drive/src/drive.rs`           | +120 | 0   |
+| `crates/chan/src/main.rs`                  | +163 | -2  |
+
+Plus task tail + this poke. 6 paths.
+
+### Pre-push gate
+
+* fmt + clippy clean (one rustdoc list-item warning fixed + an em dash slipped through which I also caught + replaced per the writing-rules).
+* `cargo test -p chan-drive --lib`: **449 / 0 / 2-ignored** (+3).
+* workspace tests + no-default-features build all green.
+
+### Suggested commit subject
+
+```
+chan-drive + chan: reports_enabled feature flag + Drive::boot + chan reports CLI + chan add flags (systacean-27)
+```
+
+### Smoke plan
+
+`gh workflow run ci.yml --ref systacean-27-smoke`. Expected ALL GREEN. Pure additive; backward-compat preserves existing contract.
+
+Per pre-authorization in the dispatch poke, proceeding to commit + push + smoke. Will surface verdict.

@@ -88,6 +88,16 @@ pub struct IndexConfig {
     /// `Mode::Hybrid` overrides on `search` still work regardless.
     #[serde(default)]
     pub semantic_enabled: bool,
+    /// systacean-27: per-drive chan-report opt-in (Round-2 pre-flight
+    /// feature toggle). Default-false so drives stay lean (no
+    /// language-detection scan, no SLOC roll-up, no COCOMO). When
+    /// true, `Drive::report()` initializes the per-drive
+    /// `ReportState` + the watcher fanout keeps it current. Lives
+    /// alongside `semantic_enabled` for symmetry; both toggles
+    /// persist in the per-drive `IndexConfig` (Round-3 may refactor
+    /// to a separate `features.toml` if/when more flags accumulate).
+    #[serde(default)]
+    pub reports_enabled: bool,
 }
 
 impl Default for IndexConfig {
@@ -99,6 +109,7 @@ impl Default for IndexConfig {
             vectors_model: None,
             vectors_dim: None,
             semantic_enabled: false,
+            reports_enabled: false,
         }
     }
 }
@@ -213,6 +224,40 @@ mod tests {
         save(tmp.path(), &cfg).unwrap();
         let loaded = load(tmp.path()).unwrap();
         assert!(loaded.semantic_enabled);
+    }
+
+    #[test]
+    fn reports_enabled_defaults_false_and_round_trips_true() {
+        // systacean-27: pin the chan-reports opt-in field. Default
+        // matches Round-2's lean-drive baseline (off). Round-
+        // tripping with the field set to true verifies the toml
+        // shape is preserved across save/load. Backward-compat:
+        // a pre-`-27` config.toml without the field loads with
+        // reports_enabled = false.
+        let tmp = TempDir::new().unwrap();
+        let cfg = load(tmp.path()).unwrap();
+        assert!(!cfg.reports_enabled, "default must be false");
+
+        let cfg = IndexConfig {
+            reports_enabled: true,
+            ..IndexConfig::default()
+        };
+        save(tmp.path(), &cfg).unwrap();
+        let loaded = load(tmp.path()).unwrap();
+        assert!(loaded.reports_enabled);
+        // Backward-compat: serialize manually without the field
+        // (simulating a pre-`-27` on-disk file) + verify
+        // deserialize defaults it to false. Chunking + the new
+        // toggles all use serde defaults so the minimum file is
+        // just schema_version + model.
+        std::fs::write(
+            config_path(tmp.path()),
+            "schema_version = 1\nmodel = \"BAAI/bge-small-en-v1.5\"\n",
+        )
+        .unwrap();
+        let legacy = load(tmp.path()).unwrap();
+        assert!(!legacy.reports_enabled, "missing field defaults to false");
+        assert!(!legacy.semantic_enabled, "missing field defaults to false");
     }
 
     #[test]

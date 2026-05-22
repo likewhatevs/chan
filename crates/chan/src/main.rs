@@ -150,12 +150,28 @@ struct Cli {
 #[derive(Subcommand, Debug)]
 enum Command {
     /// Register a directory as a chan drive.
+    ///
+    /// The baseline filesystem walk + markdown read + documentation
+    /// graph + BM25 always runs. The two optional indexing layers
+    /// below add functionality on top and are off by default per
+    /// Round-2's lean-drive policy (`systacean-27`).
     Add {
         path: PathBuf,
         /// Display name shown in the recents list and window title.
         /// Defaults to the directory's basename on first registration.
         #[arg(long)]
         name: Option<String>,
+        /// systacean-27: enable per-drive semantic search (BGE-small
+        /// dense vectors). Per-drive footprint; needs the shared
+        /// model (`chan index download-model`). Off by default.
+        #[arg(long = "semantic-search")]
+        semantic_search: bool,
+        /// systacean-27: enable per-drive chan-reports (language
+        /// detection + SLOC + COCOMO). Per-drive footprint;
+        /// maintained incrementally from filesystem events. Off by
+        /// default.
+        #[arg(long = "reports")]
+        reports: bool,
     },
     /// List registered drives, most-recent first.
     List {
@@ -318,6 +334,14 @@ enum Command {
     Index {
         #[command(subcommand)]
         action: IndexAction,
+    },
+    /// systacean-27: enable/disable per-drive chan-reports
+    /// (language detection + SLOC + COCOMO). Default off per
+    /// Round-2's lean-drive baseline; opt in here or via the
+    /// pre-flight UI / Settings.
+    Reports {
+        #[command(subcommand)]
+        action: ReportsAction,
     },
     /// Query the BM25 search index.
     Search {
@@ -552,12 +576,51 @@ enum IndexAction {
     },
 }
 
+/// systacean-27: subcommands for `chan reports`. Mirrors
+/// `IndexAction::{EnableSemantic,DisableSemantic}`'s shape so
+/// scripted callers can pattern-match `<feature> enable / disable`
+/// uniformly across the surface (`chan index enable-semantic` /
+/// `chan reports enable`).
+///
+/// Default state for both features is OFF per the Round-2
+/// lean-drive baseline; explicit opt-in via this CLI / the
+/// pre-flight UI / Settings flips them on.
+#[derive(Subcommand, Debug)]
+enum ReportsAction {
+    /// Enable per-drive chan-report (language detection, SLOC
+    /// counts, COCOMO estimate) and trigger an initial scan if
+    /// no persisted report exists. Idempotent: re-enable is a
+    /// no-op.
+    Enable {
+        /// Drive root. Defaults to the registry's current drive
+        /// when omitted.
+        #[arg(long, value_name = "PATH")]
+        path: Option<PathBuf>,
+    },
+    /// Disable per-drive chan-report. Destructive: drops the
+    /// persisted `report.jsonl` so re-enabling later triggers a
+    /// fresh scan. Pass `-y` to skip the confirmation prompt.
+    Disable {
+        /// Drive root.
+        #[arg(long, value_name = "PATH")]
+        path: Option<PathBuf>,
+        /// Skip the destructive-action confirmation prompt.
+        #[arg(short = 'y', long = "yes")]
+        yes: bool,
+    },
+}
+
 fn main() -> Result<()> {
     let cli = Cli::parse();
     init_tracing(cli.verbose);
 
     match cli.command {
-        Command::Add { path, name } => cmd_add(path, name),
+        Command::Add {
+            path,
+            name,
+            semantic_search,
+            reports,
+        } => cmd_add(path, name, semantic_search, reports),
         Command::List { json } => cmd_list(json),
         Command::Open { path } => {
             let rt = tokio::runtime::Builder::new_current_thread()
@@ -621,6 +684,7 @@ fn main() -> Result<()> {
             res
         }
         Command::Index { action } => cmd_index(action),
+        Command::Reports { action } => cmd_reports(action),
         Command::Search { path, query, limit } => cmd_search(path, query, limit),
         Command::Graph {
             path,
@@ -889,7 +953,12 @@ fn ensure_drive_named(
     Ok(entry)
 }
 
-fn cmd_add(path: PathBuf, name: Option<String>) -> Result<()> {
+fn cmd_add(
+    path: PathBuf,
+    name: Option<String>,
+    semantic_search: bool,
+    reports: bool,
+) -> Result<()> {
     // Mirror `chan serve`'s behavior: create the directory if it
     // doesn't exist yet. Single verb covers both "register an
     // existing dir" and "make a fresh drive here". A separate
@@ -901,11 +970,38 @@ fn cmd_add(path: PathBuf, name: Option<String>) -> Result<()> {
     }
     let lib = library()?;
     let entry = ensure_drive_named(&lib, &path, name)?;
+    // systacean-27: opt-in feature flags. Persist before
+    // boot-time activation so a `chan add --reports` lands the
+    // flag immediately + the kickoff scan runs once.
+    if semantic_search || reports {
+        let drive = lib
+            .open_drive(&entry.path)
+            .with_context(|| not_a_chan_drive_hint(&entry.path))?;
+        if semantic_search {
+            drive
+                .set_semantic_enabled(true)
+                .context("persisting semantic_enabled flag")?;
+        }
+        if reports {
+            drive
+                .set_reports_enabled(true)
+                .context("persisting reports_enabled flag")?;
+        }
+        drive
+            .boot()
+            .context("BOOT after enabling optional features")?;
+    }
     println!(
         "registered: {} ({})",
         entry.path.display(),
         entry.name.as_deref().unwrap_or("unnamed"),
     );
+    if semantic_search {
+        println!("semantic search enabled");
+    }
+    if reports {
+        println!("chan-reports enabled");
+    }
     Ok(())
 }
 
@@ -1262,6 +1358,69 @@ async fn cmd_serve(
     chan_server::serve(lib, drive, config)
         .await
         .context("running server")
+}
+
+/// systacean-27: dispatch the `chan reports {enable,disable}`
+/// subcommands. Parallels `cmd_index_set_semantic`'s shape: open
+/// the drive (with the path-resolution fallback to the registry's
+/// default), flip the per-drive `reports_enabled` flag, surface
+/// the verb on stdout. `disable` is destructive — drops the
+/// persisted `report.jsonl` so re-enable triggers a fresh scan;
+/// gated on `--yes` or an interactive prompt to match Round-2's
+/// "explicit confirmation" requirement.
+fn cmd_reports(action: ReportsAction) -> Result<()> {
+    match action {
+        ReportsAction::Enable { path } => cmd_reports_set(path, true, false),
+        ReportsAction::Disable { path, yes } => cmd_reports_set(path, false, yes),
+    }
+}
+
+fn cmd_reports_set(path: Option<PathBuf>, enabled: bool, skip_confirm: bool) -> Result<()> {
+    let lib = library()?;
+    let root = path
+        .or_else(|| lib.default_drive_root())
+        .unwrap_or_else(|| lib.effective_default_drive_root());
+    let drive = lib
+        .open_drive(&root)
+        .with_context(|| not_a_chan_drive_hint(&root))?;
+    // Destructive-action confirmation for disable. The non-
+    // interactive `-y` flag skips the prompt; an interactive TTY
+    // without `-y` blocks until the user confirms.
+    if !enabled && !skip_confirm {
+        eprintln!(
+            "About to disable chan-reports for drive at {}",
+            drive.root().display(),
+        );
+        eprintln!(
+            "This drops the persisted report.jsonl. Re-enabling later \
+             triggers a fresh scan."
+        );
+        eprint!("Continue? [y/N] ");
+        use std::io::Write;
+        let _ = std::io::stderr().flush();
+        let mut line = String::new();
+        std::io::stdin().read_line(&mut line)?;
+        let answer = line.trim().to_ascii_lowercase();
+        if !(answer == "y" || answer == "yes") {
+            eprintln!("Aborted.");
+            return Ok(());
+        }
+    }
+    drive
+        .set_reports_enabled(enabled)
+        .context("persisting reports_enabled flag")?;
+    if enabled {
+        // Kick off the initial scan via `boot` so the flag flip
+        // produces visible data without waiting for the next
+        // `Drive::report()` consumer.
+        drive.boot().context("BOOT after enabling reports")?;
+    }
+    let verb = if enabled { "enabled" } else { "disabled" };
+    println!(
+        "chan-reports {verb} for drive at {}",
+        drive.root().display()
+    );
+    Ok(())
 }
 
 fn cmd_index(action: IndexAction) -> Result<()> {
