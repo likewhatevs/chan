@@ -1,0 +1,105 @@
+import { describe, expect, test } from "vitest";
+import graph from "./GraphPanel.svelte?raw";
+
+// `fullstack-a-52` G9 + G10 (minimum cut):
+//
+// * G9: BFS converted from bidirectional to forward-only so the
+//   depth slider reveals OUTGOING nodes from the root. Previously
+//   `frontier.has(e.source) || frontier.has(e.target)` walked
+//   both directions, which hid the "expand from the root" mental
+//   model @@Alex flagged in the depth-slider bug.
+// * G10: `link` filter dropped from the chip set. Link edges
+//   always render now — visibility is implicit (edge visible iff
+//   both endpoints visible under the node-type filters + depth).
+//   The `link` slot on `GraphFilters` (store.svelte.ts) stays for
+//   URL-hash back-compat but isn't consumed by the UI.
+//
+// Node-type-dependent depth semantic + filter toolbar UI
+// restructure flagged as follow-up; this commit lands the
+// load-bearing fix-the-broken-slider + drop-the-confusing-chip
+// piece + leaves the dispatch shape ready for the per-root-type
+// reveal logic.
+
+describe("fullstack-a-52 G9: forward-only BFS", () => {
+  test("BFS does NOT walk the reverse edge direction", () => {
+    // Old shape:
+    //   if (frontier.has(e.source) && !visited.has(e.target)) {
+    //     ...
+    //   } else if (frontier.has(e.target) && !visited.has(e.source)) {
+    //     ...
+    //   }
+    // Forward-only collapse: only the source-direction branch
+    // survives at both BFS sites (tag-scope + general-scope).
+    // Strip line comments first so the historical-shape comment
+    // block that documents the removal doesn't trip the guard.
+    const stripped = graph
+      .split("\n")
+      .filter((line) => !line.trim().startsWith("//"))
+      .join("\n");
+    expect(stripped).not.toMatch(
+      /else if \(frontier\.has\(e\.target\) && !visited\.has\(e\.source\)\)/,
+    );
+  });
+
+  test("BFS still walks the forward edge direction", () => {
+    // Forward source → target traversal is still the load-bearing
+    // step. Two BFS sites (tag-scope + general-scope) share the
+    // shape.
+    const matches = graph.match(
+      /if \(frontier\.has\(e\.source\) && !visited\.has\(e\.target\)\)/g,
+    );
+    expect(matches).not.toBeNull();
+    expect(matches!.length).toBeGreaterThanOrEqual(2);
+  });
+
+  test("BFS comment documents the forward-only direction", () => {
+    expect(graph).toMatch(/forward-only BFS|outgoing edges only|edges emanate from the root/i);
+  });
+});
+
+describe("fullstack-a-52 G10: link filter dropped", () => {
+  test("FilterKind union no longer includes 'link'", () => {
+    expect(graph).toMatch(
+      /type FilterKind = "tag" \| "mention" \| "language" \| "img" \| "folder"/,
+    );
+    expect(graph).not.toMatch(/type FilterKind = "link"/);
+  });
+
+  test("link is short-circuited to always visible in edgeVisibleByChip", () => {
+    expect(graph).toMatch(/if \(kind === "link"\) return true/);
+  });
+
+  test("chip iterations no longer ship a 'link' entry", () => {
+    // Both iteration sites (tab-menu + filterChips snippet) drop
+    // the "link" element. Pin the new array shape.
+    const matches = graph.match(
+      /\["tag", "mention", "language", "img", "folder"\] as const/g,
+    );
+    expect(matches).not.toBeNull();
+    expect(matches!.length).toBeGreaterThanOrEqual(2);
+    expect(graph).not.toMatch(
+      /\["link", "tag", "mention", "language", "img", "folder"\]/,
+    );
+  });
+
+  test("FILTER_COLORS no longer maps link", () => {
+    // Pin the literal-mapping block; the `link` key shouldn't
+    // appear inside FILTER_COLORS' object literal.
+    expect(graph).toMatch(
+      /FILTER_COLORS: Record<FilterKind, string> = \{[\s\S]*?tag: EDGE_COLORS\.tag/,
+    );
+    expect(graph).not.toMatch(
+      /FILTER_COLORS: Record<FilterKind, string> = \{[\s\S]{0,40}link:/,
+    );
+  });
+
+  test("filesystem-mode label dispatch no longer branches on 'link'", () => {
+    // The filesystem-mode chip-label dispatch used to map link →
+    // "contains". With link dropped from the iteration, that
+    // branch is dead. Confirm it's gone from the chip-label
+    // ladder.
+    expect(graph).not.toMatch(
+      /\{kind === "link"\s*\?\s*"contains"\s*:/,
+    );
+  });
+});

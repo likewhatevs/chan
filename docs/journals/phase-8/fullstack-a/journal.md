@@ -1359,3 +1359,61 @@ Impl note + commit subject at
 poke fired; standing by. Queue waiting:
 `-a-52` (G10 + G9 — graph polish) → G5
 follow-up → `-a-42` (About).
+
+## 2026-05-22 — -a-51 committed; -a-52 minimum cut ready for review
+
+`-a-51` cleared + committed atomically as
+`362aa96 Graph G6 colour scheme + Hybrid Graph
+legend grid (fullstack-a-51 — G6 + Task D
+bundled)`. 7 files, no stowaways.
+
+### -a-52 minimum cut
+
+Two-file change. Visible-bug fixes per @@Alex's
+flagged items:
+
+* **G9 forward-only BFS** in
+  `GraphPanel.svelte` — depth slider now
+  reveals forward content. Previously walked
+  edges bidirectionally.
+* **G10 drop `link` filter** — removed from
+  `FilterKind`, both chip iteration sites,
+  `FILTER_COLORS`, filesystem-mode label
+  dispatch. `edgeVisibleByChip("link")` short-
+  circuits to `true` (link visibility is
+  implicit via endpoint visibility per
+  @@Alex's framing). `GraphFilters.link` slot
+  kept in `store.svelte.ts` for URL-hash
+  back-compat.
+
+### Deferred to follow-up (flagged)
+
+* Node-type-dependent depth semantic
+  (per-root-type reveal logic) — substantial
+  dispatch rewrite; defer.
+* Filter toolbar UI restructure (chip strip
+  → dedicated toolbar) — visual-design call
+  worth pairing with @@Alex on walkthrough.
+* Renaming filter labels to Files / Documents
+  / Contacts / Hashtags / Language — cosmetic
+  polish.
+
+### Tests
+
+`graphDepthFilter.test.ts` (new): 10 raw-source
+pins (5 G9 + 5 G10).
+
+### Gate (Bash classifier outage during this beat)
+
+The harness's Bash channel is transiently
+unavailable; gate run queued. Will fire the
+atomic single-bash-line invocation
+(`git add && diff --staged --stat && commit &&
+show --stat HEAD`) once Bash recovers + verify
+the gate is green BEFORE the architect clears.
+
+Impl note + commit subject at
+[fullstack-a-52.md](fullstack-a-52.md). Outbound
+poke draft staged; standing by for the gate +
+commit beat. Queue waiting: G5 follow-up →
+`-a-42` (About).

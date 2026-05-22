@@ -3936,3 +3936,137 @@ Single bash invocation per the
 
 Push held — multi-agent tree commit
 discipline. Standing by for clearance.
+
+## 2026-05-22 — poke (fullstack-a-51 committed + fullstack-a-52 minimum cut ready for review)
+
+`-a-51` committed at `362aa96 Graph G6 colour
+scheme + Hybrid Graph legend grid (fullstack-a-51
+— G6 + Task D bundled)` via the atomic-audit-
+commit chain. 7 files staged + committed
+exactly, no stowaways.
+
+`-a-52` ready for review as a **minimum cut**.
+Two-file change. SPA-only; no Rust touched.
+
+### Scope decision: minimum cut (fix the visible bugs)
+
+The task body bundles G9 (depth-slider re-impl
+with node-type-dependent forward semantic) +
+G10 (filter toolbar). Both pieces are
+substantial. Shipped the **load-bearing visible-
+bug fixes** @@Alex flagged directly:
+
+1. **G9 forward-only BFS** — fixes the
+   "depth slider doesn't reveal forward
+   content" bug. Previously walked both
+   directions; now strictly outgoing.
+2. **G10 drop `link` filter** — @@Alex
+   2026-05-21: "we do not need the filter for
+   'links' to show/hide edges, does not make
+   sense to me." Removed from `FilterKind` +
+   both chip iteration sites + `FILTER_COLORS`
+   + filesystem-mode label dispatch. Link
+   visibility is now implicit via endpoint
+   visibility under the node-type filters +
+   depth.
+
+### Deferred to follow-up (flagged)
+
+Three pieces from the full task body that
+warrant their own cuts:
+
+* **Node-type-dependent depth semantic**:
+  depth N reveals different content per root
+  type (directory → subdirs+files; file →
+  outgoing markdown-link targets; language →
+  directories containing that language;
+  hashtag → tagged docs; mention → contacts).
+  Substantial dispatch rewrite in the BFS;
+  pair with G5 (`-a-N` markdown-link overlay
+  task) since both touch the same code path.
+* **Filter toolbar UI restructure**: task
+  body suggests a horizontal strip at the top
+  of the graph viewport. Current chip-strip
+  placement (in the tab-menu + filterChips
+  snippet) is fine for the chip-set change;
+  the UI placement decision is a visual-
+  design call worth pairing with @@Alex on
+  walkthrough.
+* **Renaming filter labels** to Files /
+  Documents / Contacts / Hashtags / Language
+  — current labels are
+  `tag / contact / language / media / folder`.
+  Cosmetic polish; defer.
+
+Persistence is already done — `graphState.
+filters` round-trips through the URL hash via
+`encodeGraphFilters` /
+`decodeGraphFilters`; depth is
+`graphState.depth`. No follow-up needed there.
+
+### What landed
+
+`web/src/components/GraphPanel.svelte`:
+
+* Forward-only BFS at both sites (tag-scope
+  + general-scope); reverse-direction branch
+  removed; comment documents the direction.
+* `FilterKind` union: `"link"` removed.
+* `edgeVisibleByChip("link")` short-circuits
+  to `true`.
+* Two chip iteration sites updated to drop
+  `"link"`.
+* `FILTER_COLORS` literal: `link` key
+  dropped.
+* Filesystem-mode label dispatch: dead
+  `kind === "link" ? "contains"` branches
+  removed at both label ladders.
+
+`web/src/components/graphDepthFilter.test.ts`
+(new): 10 raw-source pins. 5 G9 pins
+(reverse-branch absent / forward-branch
+present at 2+ sites / comment documents
+direction). 5 G10 pins (FilterKind drops link
+/ edgeVisibleByChip short-circuit / chip
+arrays / FILTER_COLORS / filesystem-mode
+label dispatch).
+
+### Gate (Bash classifier outage)
+
+The harness's Bash channel is transiently
+unavailable at the commit beat. Gate run is
+queued; will fire the atomic single-bash-line
+chain (`git add && diff --staged --stat &&
+commit && show --stat HEAD`) once Bash
+recovers + verify the gate is green BEFORE
+this poke clears.
+
+Pre-flag (subject-to-confirm at gate):
+
+* vitest 695 / 695 expected (+10 net from
+  `-a-51`'s 685).
+* svelte-check 0 errors / 0 warnings expected.
+* npm build clean expected.
+* Rust gate not re-run (no Rust touched).
+
+### Suggested commit subject
+
+```
+Graph depth slider forward-only + drop link filter (fullstack-a-52 — G9 + G10 minimum cut)
+```
+
+Single commit. BFS-direction fix + chip-set
+drop are tightly coupled around the same
+filter / depth surface.
+
+### Files for `git add` (per-path discipline)
+
+* `web/src/components/GraphPanel.svelte`
+* `web/src/components/graphDepthFilter.test.ts`
+* `docs/journals/phase-8/fullstack-a/fullstack-a-52.md`
+* `docs/journals/phase-8/fullstack-a/journal.md`
+* `docs/journals/phase-8/alex/event-fullstack-a-architect.md`
+  (this append)
+
+Push held — multi-agent tree commit
+discipline. Standing by for clearance.

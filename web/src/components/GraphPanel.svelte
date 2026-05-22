@@ -194,7 +194,12 @@
   /// node filters: flipping them off hides every file node whose
   /// path classifies as image / directory, along with any edge
   /// touching one.
-  type FilterKind = "link" | "tag" | "mention" | "language" | "img" | "folder";
+  /// `fullstack-a-52` G10: `link` removed from the user-facing
+  /// FilterKind — link edges always render now (visibility is
+  /// implicit via endpoint visibility). The `link` slot on
+  /// `GraphFilters` (store.svelte.ts) stays for URL-hash
+  /// back-compat but isn't consumed here.
+  type FilterKind = "tag" | "mention" | "language" | "img" | "folder";
 
   // ---- state -------------------------------------------------------------
 
@@ -388,15 +393,14 @@
       const seedIds = new Set<string>([currentScope.nodeId]);
       const visited = new Set(seedIds);
       let frontier = new Set(seedIds);
+      // `fullstack-a-52` G9: forward-only BFS (outgoing edges
+      // only). See the second BFS site below for the rationale.
       for (let i = 0; i < graphState.depth; i++) {
         const next = new Set<string>();
         for (const e of edges) {
           if (frontier.has(e.source) && !visited.has(e.target)) {
             next.add(e.target);
             visited.add(e.target);
-          } else if (frontier.has(e.target) && !visited.has(e.source)) {
-            next.add(e.source);
-            visited.add(e.source);
           }
         }
         if (next.size === 0) break;
@@ -430,15 +434,20 @@
     if (seedIds.size === 0) return seedIds;
     const visited = new Set(seedIds);
     let frontier = new Set(seedIds);
+    // `fullstack-a-52` G9: forward-only BFS. Previously the
+    // BFS followed edges in both directions
+    // (`frontier.has(e.source)` OR `frontier.has(e.target)`), which
+    // hid the "depth slider reveals forward nodes" semantic @@Alex
+    // wanted. Restricting to outgoing edges only makes the slider
+    // read as "expand from the root in the direction edges point"
+    // — markdown links emanate from the root doc; contains edges
+    // emanate from the root directory toward its children; etc.
     for (let i = 0; i < graphState.depth; i++) {
       const next = new Set<string>();
       for (const e of edges) {
         if (frontier.has(e.source) && !visited.has(e.target)) {
           next.add(e.target);
           visited.add(e.target);
-        } else if (frontier.has(e.target) && !visited.has(e.source)) {
-          next.add(e.source);
-          visited.add(e.source);
         }
       }
       if (next.size === 0) break;
@@ -490,6 +499,13 @@
   function edgeVisibleByChip(kind: RenderedEdgeKind): boolean {
     if (kind === "contains") return show.folder;
     if (kind === "group") return true;
+    // `fullstack-a-52` G10: link edges always render. Per @@Alex's
+    // framing, the link filter doesn't make sense — link visibility
+    // is implicit (an edge renders iff both endpoints render under
+    // the current node-type filters + depth). The `link` slot on
+    // `GraphFilters` stays for wire-format / URL-hash back-compat
+    // but is no longer consumed by the UI.
+    if (kind === "link") return true;
     return show[kind];
   }
 
@@ -532,7 +548,6 @@
   /// number reflects everything the toggle hides.
   const counts = $derived.by(() => {
     const c: Record<FilterKind, number> = {
-      link: 0,
       tag: 0,
       mention: 0,
       language: 0,
@@ -540,8 +555,18 @@
       folder: 0,
     };
     for (const e of edges) {
-      if (e.kind === "contains") c.folder++;
-      else c[e.kind]++;
+      // `fullstack-a-52` G10: link edges no longer have a chip;
+      // skip the count increment. `contains` routes to the folder
+      // slot. The remaining kinds (tag / mention / language) all
+      // have chips. (Group edges aren't in `edges`; they're
+      // synthesized elsewhere outside the RenderedEdge ∩
+      // GraphViewEdge intersection.)
+      const kind = e.kind;
+      if (kind === "contains") {
+        c.folder++;
+      } else if (kind !== "link") {
+        c[kind]++;
+      }
     }
     for (const n of nodes) {
       if (n.kind === "folder") {
@@ -790,7 +815,6 @@
   /// Per-chip dot color. Edge-kind chips reuse EDGE_COLORS; img is a
   /// node filter so it points at the image node color directly.
   const FILTER_COLORS: Record<FilterKind, string> = {
-    link: EDGE_COLORS.link,
     tag: EDGE_COLORS.tag,
     mention: EDGE_COLORS.mention,
     language: EDGE_COLORS.language,
@@ -1213,7 +1237,7 @@
         <span class="mbtn-chord"></span>
       </button>
       <div class="msep" role="separator"></div>
-      {#each ["link", "tag", "mention", "language", "img", "folder"] as const as kind (kind)}
+      {#each ["tag", "mention", "language", "img", "folder"] as const as kind (kind)}
         {@const driveLike =
           currentScope?.kind === "drive" || currentScope?.kind === "global"}
         {#if (!filesystemMode || (kind !== "img" && kind !== "language")) && (languageMode ? kind === "language" : kind !== "language" || driveLike) && (kind !== "folder" || filesystemMode || driveLike)}
@@ -1233,13 +1257,11 @@
             ></span>
             <span class="mbtn-label">
               {#if filesystemMode}
-                {kind === "link"
-                  ? "contains"
-                  : kind === "tag"
-                    ? "symlink"
-                    : kind === "mention"
-                      ? "hardlink"
-                      : "directory"}
+                {kind === "tag"
+                  ? "symlink"
+                  : kind === "mention"
+                    ? "hardlink"
+                    : "directory"}
               {:else}
                 {kind === "mention" ? "contact" : kind === "img" ? "media" : kind}
               {/if}
@@ -1455,7 +1477,7 @@
 
 {#snippet filterChips()}
   <div class="filters">
-    {#each ["link", "tag", "mention", "language", "img", "folder"] as const as kind (kind)}
+    {#each ["tag", "mention", "language", "img", "folder"] as const as kind (kind)}
       {@const driveLike =
         currentScope?.kind === "drive" || currentScope?.kind === "global"}
       {#if (!filesystemMode || (kind !== "img" && kind !== "language")) && (languageMode ? kind === "language" : kind !== "language" || driveLike) && (kind !== "folder" || filesystemMode || driveLike)}
@@ -1463,13 +1485,11 @@
           <input type="checkbox" bind:checked={show[kind]} />
           <span class="dot" style="background:{FILTER_COLORS[kind]}"></span>
           {#if filesystemMode}
-            {kind === "link"
-              ? "contains"
-              : kind === "tag"
-                ? "symlink"
-                : kind === "mention"
-                  ? "hardlink"
-                  : "directory"}
+            {kind === "tag"
+              ? "symlink"
+              : kind === "mention"
+                ? "hardlink"
+                : "directory"}
           {:else}
             {kind === "mention" ? "contact" : kind === "img" ? "media" : kind}
           {/if}
