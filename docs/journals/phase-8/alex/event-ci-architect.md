@@ -2198,3 +2198,133 @@ rustfmt fix lands (the `5685be4` incident routing), the
 gate goes structurally fully green.
 
 Standing by for wave-3 dispatch.
+
+## 2026-05-22 — poke (ci-14 commit-readiness: 3 release-job bugs in scope)
+
+ci-14 dispatch received via @@Alex's direct hand-off
+("ci-14 (Linux binaries on v0.12.0+ tags) is in your
+inbound at docs/journals/phase-8/ci/ci-14.md").
+Patches landed in working tree on main; smoke fired
+on [`ci-14-smoke`](https://github.com/fiorix/chan/tree/ci-14-smoke)
+([run 26274161414](https://github.com/fiorix/chan/actions/runs/26274161414),
+in-flight).
+
+### Audit surfaced 3 release-job bugs (all latent on chan-v* tags)
+
+The task body called out Bug 3 (release-desktop.yml
+Linux artifact upload) explicitly. The audit surfaced
+TWO additional latent bugs in `release.yml` that are
+mechanically required for ci-14's acceptance:
+
+**Bug 1**: `release.yml` release job's `if:` is
+`startsWith(github.ref, 'refs/tags/v')`. On a `chan-v*`
+tag, `github.ref` is `refs/tags/chan-v0.12.0` (leading
+`c`, not `v`), so the release job SKIPS. ci-11 fixed
+the tag trigger glob but missed this second-layer gate;
+the chan CLI Linux binaries built but never shipped to
+the GH Release on chan-v* tags. Fix: extend the `if:`
+to match `chan-v*` too.
+
+**Bug 2**: `release.yml`'s VERSION-stage step does
+`version=${tag#v}` to strip the leading `v` from the
+tag. For `chan-v0.12.0`, the leading `c` doesn't match,
+so the strip is a no-op. VERSION file would contain
+`chan-v0.12.0` instead of `0.12.0`, breaking the
+`chan upgrade` self-upgrade contract (it reads
+`chan.app/dl/latest/VERSION` expecting a semver). Bug
+2 is masked by Bug 1 today; fixing Bug 1 unmasks Bug
+2. Both must land together. Fix: `version=${tag#chan-};
+version=${version#v}` (legacy `v*` tags still strip
+correctly).
+
+**Bug 3** (the one ci-14 was cut against):
+`release-desktop.yml`'s release job's
+`download-artifact` pattern excludes the Linux artifact
++ the upload `files:` only ships `.dmg`. Fix: broaden
+the download pattern to `chan-desktop-*` + add `.deb`
++ `.AppImage` to the upload files.
+
+Full detail + per-bug code blocks in
+[`../ci/ci-14.md`](../ci/ci-14.md) tail.
+
+### Scope decision: all 3 fixes in one commit (flagged for ack)
+
+Bugs 1 + 2 weren't in ci-14's explicit scope but are
+mechanically required for the task's acceptance ("release.yml
+fires on a chan-v* tag + produces Linux CLI artifacts").
+Fixing Bug 3 alone leaves the chan CLI Linux artifacts
+stranded again (release job skips per Bug 1; VERSION
+file broken per Bug 2). Bundling all three.
+
+Flag if you'd prefer to split (could cut ci-14 into
+ci-14a (release-desktop.yml Bug 3) + ci-14b (release.yml
+Bugs 1 + 2)). My read: bundled is the right shape since
+they share the "chan-v* tag release-pipeline broken
+end-to-end" root.
+
+### Files modified
+
+| File | Change |
+|---|---|
+| `.github/workflows/release.yml` | release-job `if:` extended + VERSION strip handles `chan-v` prefix (Bugs 1 + 2) |
+| `.github/workflows/release-desktop.yml` | download pattern broadened + upload `files:` adds `.deb` + `.AppImage` (Bug 3) + header comment + out-of-scope block updated |
+| `docs/journals/phase-8/ci/ci-14.md` | Commit readiness section |
+| `docs/journals/phase-8/alex/event-ci-architect.md` | this poke append |
+
+### Smoke (run 26274161414)
+
+In-flight. Per-PR `workflow_dispatch` against the
+ci-14-smoke branch ref. What it validates:
+
+* YAML structural parse: ✓ (already passed).
+* release.yml build matrix end-to-end on current HEAD
+  (Linux x86_64 + Linux aarch64 + macOS), confirms
+  builds still work post-ci-12/-13/-17/-18/-19/-22.
+* Workflow artifacts upload correctly.
+
+What it CANNOT validate (release job only fires on real
+tag refs):
+
+* Bug 1's `if:` fix: release job skips on
+  `refs/heads/ci-14-smoke`.
+* Bug 2's VERSION strip: lives in the release job.
+* Bug 3's download-pattern + upload-files: lives in
+  release-desktop.yml's release job; release-desktop.yml
+  not smoked separately (workflow_dispatch ref would
+  skip its release job too).
+
+Real validation lands on @@Alex's next `chan-v*` tag.
+Per task spec: "smoke validation against a real chan-v*
+tag is gated on @@Alex's release-cut beat".
+
+### Open questions
+
+Three surveyed in [`../ci/ci-14.md`](../ci/ci-14.md)
+tail § "Open questions":
+
+1. Bundle all 3 fixes in one commit (recommended +
+   default), or split into ci-14a (Bug 3) + ci-14b
+   (Bugs 1 + 2)?
+2. release-desktop.yml download-pattern broadening
+   shape (`chan-desktop-*` vs. no filter).
+3. `fail_on_unmatched_files: true` on the chan-desktop
+   release upload (kept strict; partial-platform tags
+   would require revisiting).
+
+### Audit-trail artifacts
+
+* `ci-14-smoke` branch on origin (commit `ce4f531`).
+  Per the prior pattern + your "destructive cleanups
+  coordinate with docs" guidance, kept until @@Alex
+  sequences the smoke-branch cleanup beat.
+* No tag pushed. No signing surface touched. No
+  test-server / Chrome MCP / lima-vm exercised.
+
+### Lane state pending clearance
+
+| Item | State |
+|------|------|
+| ci-14 patches | in working tree (2 workflow files + 2 doc files) |
+| ci-14-smoke run 26274161414 | in-flight (release.yml build matrix; ~20-30 min) |
+
+Standing by for clearance + the 3-bug bundle ack.

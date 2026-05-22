@@ -342,9 +342,17 @@ jobs:
 
   # Tag-pushed runs end with a GitHub release. workflow_dispatch
   # runs skip this so manual tests don't cut releases.
+  #
+  # The trigger glob (lines 33-37) accepts both `v*` (legacy
+  # v0.6.x..v0.11.0) and `chan-v*` (phase-8 convention). The
+  # release job's `if:` must match BOTH; the original `v*`-only
+  # check silently skipped this job on every phase-8 release tag.
+  # ci-11 fixed the trigger glob but missed this gate, so chan CLI
+  # binaries built (the build job runs) but never shipped to the
+  # GH Release (this job skipped).
   release:
     name: github release
-    if: startsWith(github.ref, 'refs/tags/v')
+    if: startsWith(github.ref, 'refs/tags/v') || startsWith(github.ref, 'refs/tags/chan-v')
     needs: build
     runs-on: ubuntu-latest
     permissions:
@@ -369,7 +377,13 @@ jobs:
           set -e
           mkdir -p release-extras
           tag=${GITHUB_REF#refs/tags/}
-          version=${tag#v}
+          # Strip both `chan-v` (phase-8 convention) and `v`
+          # (legacy v0.6.x..v0.11.0) prefixes so VERSION holds
+          # just the semver (e.g. 0.12.0). Matches the contract
+          # `chan upgrade` expects when reading the file from
+          # chan.app/dl/latest/VERSION.
+          version=${tag#chan-}
+          version=${version#v}
           printf '%s\n' "$version" > release-extras/VERSION
 
           # Flatten artifact subdirs so the checksum file lists
