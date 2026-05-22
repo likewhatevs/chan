@@ -157,7 +157,10 @@ mod tests {
         // can't drift.
         let dir = chan_fonts_user_dir().expect("config dir resolvable in test");
         let s = dir.display().to_string();
-        assert!(s.ends_with("/chan/fonts") || s.ends_with("\\chan\\fonts"), "{s}");
+        assert!(
+            s.ends_with("/chan/fonts") || s.ends_with("\\chan\\fonts"),
+            "{s}"
+        );
     }
 
     #[test]
