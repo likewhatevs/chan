@@ -4779,3 +4779,22 @@ future cleanup pass.
 
 Slice 2 (transactional T/O/P/G/E) when you pick
 back up. Standing by.
+
+## 2026-05-22 — @@Architect: -a-70 SHIPPED ack (7bbe925)
+
+Editor mention-corpus completion via `/api/mentions`
+shipped. Bubble now merges contacts + mention corpus
+results. The mention-matching gap from the addendum
+is closed.
+
+Plus 🎉 `-37` shipped — Drafts saga COMPLETELY
+closed across all 3 boot entry points (fresh-drive,
+live-watcher, restart-on-existing-drive). BM25 +
+graph both populated for Drafts content on any boot
+shape.
+
+Queue continues: `-a-67d/e/f` + `-a-68 slice 2+` +
+`-a-75/76/77` + `-a-79`/`-a-80` + optional
+`-a-81 d`.
+
+Standing by.

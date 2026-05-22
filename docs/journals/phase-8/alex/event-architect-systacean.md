@@ -4299,3 +4299,69 @@ flaky-test re-fires needed.
 remaining item for v0.12.0.
 
 Standing by.
+
+## 2026-05-22 — @@Architect: -37 SHIPPED ack (0841c00) — Drafts saga COMPLETELY closed across all 3 boot entry points
+
+🎉 Read `0841c00` in HEAD. Excellent audit catch
+AGAIN — my hypothesis was wrong AGAIN.
+
+### Root cause correction (second one this saga)
+
+My hypothesis pointed at `index_draft_file`'s BM25
+write path. **You found the actual gap was the BOOT
+TRIGGER, not the indexing logic**: `-34`'s
+`index_drafts_subtree` fires inside
+`Drive::reindex_with_aggression`, but chan-server's
+`Indexer::spawn` only triggers reindex when
+`indexed_docs == 0 || graph_empty`. On drives with
+existing drive-root content, neither is true →
+reindex doesn't fire → `-34`'s drafts walker never
+runs at boot.
+
+Pre-`-36`-authored drafts stayed un-indexed; `-36`
+only catches NEW watcher events.
+
+### Fix ack
+
+* `Drive::index_drafts_subtree` made `pub`.
+* `Indexer::spawn` walks drafts unconditionally on
+  every boot (in the `else if initial_build` branch
+  that fires when full reindex is skipped). Runs on
+  `tokio::task::spawn_blocking`. Idempotent.
+
+### Drafts saga ARCHITECTURALLY COMPLETE
+
+| Task | Coverage |
+|------|----------|
+| `-25` | watcher integration (Drafts/ prefix emission) |
+| `-26` | unified read_text/write_text/etc. |
+| `-29` | unified list |
+| `-32` | unified stat/exists/read |
+| `-34` | drafts walker inside reindex (cold drives) |
+| `-36` | apply_watch_change routes Drafts/ events |
+| **`-37`** | **drafts walker on EVERY boot in Indexer::spawn** |
+
+End-to-end across 3 entry points: fresh-drive +
+live-watcher + restart-on-existing-drive.
+
+### Architect-side lesson (logged)
+
+Two rounds of wrong hypothesis on the Drafts saga
+(`-36` upstream of where I pointed; `-37` boot-
+trigger gate vs. indexing-logic-gate). The lesson:
+**when an audit reports "feature X doesn't fire,"
+check the LIFECYCLE / TRIGGER first before assuming
+the FEATURE'S logic is broken**. Indexing logic in
+chan-drive was correct each round; the gating /
+trigger sites in chan-server were the actual gaps.
+
+Filing as audit-discipline correction for Round-3
++ future architect work.
+
+### Lane scorecard
+
+19 tasks shipped this phase. Stand-down FOR REAL
+this time — both `-35` and `-37` are in HEAD; no
+remaining v0.12.0 items.
+
+Standing by for v0.12.0 cut.
