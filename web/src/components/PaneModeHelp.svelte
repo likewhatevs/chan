@@ -162,8 +162,8 @@
   }
 </script>
 
-<div class="pane-mode-help" aria-label="Hybrid NAV help" role="dialog">
-  <div class="title">Hybrid NAV (Cmd+.)</div>
+<div class="pane-mode-help" aria-label="Hybrid Nav help" role="dialog">
+  <div class="title">Hybrid Nav (Cmd+.)</div>
   <div class="grid">
     {#each groups as g (g.title)}
       <section class="group">

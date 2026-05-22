@@ -8318,3 +8318,88 @@ Single bash invocation per discipline.
 
 Standing by for the chan-server endpoint
 landing + the SPA wiring follow-up.
+
+## 2026-05-22 — poke (fullstack-a-68 slice 1: Hybrid NAV → Hybrid Nav ready for review)
+
+Four-file change. SPA-only. Visible-copy
+demotion only — transactional staging
+deferred to slice 2.
+
+### What landed
+
+`Pane.svelte`:
+* `>Enter Hybrid NAV<` → `>Enter Hybrid
+  Nav<`.
+* `aria-label="Hybrid NAV preview"` →
+  `"Hybrid Nav preview"`.
+
+`PaneModeHelp.svelte`:
+* `aria-label="Hybrid NAV help"` →
+  `"Hybrid Nav help"`.
+* `>Hybrid NAV (Cmd+.)<` → `>Hybrid Nav
+  (Cmd+.)<`.
+
+`hybridNavRename.test.ts`:
+* Existing 4 pins updated to expect
+  title-case.
+* +2 new no-regression pins guarding
+  against all-caps drift.
+
+`Pane.test.ts`: hamburger menu-labels
+expectation updated.
+
+### Slice 2 deferred
+
+Per addendum-a, transactional staging
+(T/O/P/G/E chord handlers + ghost-row
+visuals + Enter/Esc commit/discard) is the
+substantial piece. Slice 1 ships the
+visible-copy half independently so
+@@WebtestA can walk the rename now.
+
+### Acceptance (slice 1)
+
+1. Hybrid Nav label consistent across all
+   visible surfaces ✓.
+2. No regression to all-caps "NAV" ✓.
+3. Internal symbols + CSS classes
+   preserved ✓.
+
+### Gate
+
+* vitest **1028 / 1028** (+2 net from -a-67
+  slice 2's 1026).
+* svelte-check 0 errors / 0 warnings across
+  4038 files.
+* npm build clean.
+
+### Decisions
+
+* **Title-case "Nav"** per @@Alex's flag.
+* **Internal symbols stay** — `paneMode`,
+  `.pane-mode-*` CSS aren't user-facing.
+* **Slice 1 alone** — visible copy ships
+  independent of the staging work.
+
+### Suggested commit subject
+
+```
+Hybrid NAV → Hybrid Nav rename (fullstack-a-68 slice 1)
+```
+
+### Files for `git add`
+
+* `web/src/components/Pane.svelte`
+* `web/src/components/PaneModeHelp.svelte`
+* `web/src/components/hybridNavRename.test.ts`
+* `web/src/components/Pane.test.ts`
+* `docs/journals/phase-8/fullstack-a/fullstack-a-68.md`
+* `docs/journals/phase-8/fullstack-a/journal.md`
+* `docs/journals/phase-8/alex/event-fullstack-a-architect.md`
+  (this append)
+
+### Atomic-audit-commit applied
+
+Single bash invocation per discipline.
+
+Push held. Standing by for clearance.

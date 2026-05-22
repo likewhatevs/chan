@@ -138,7 +138,7 @@ describe("Pane right-click menus", () => {
       "File Browser",
       "Rich Prompt",
       "Graph",
-      "Enter Hybrid NAV",
+      "Enter Hybrid Nav",
       "blue",
       "green",
       "pink",

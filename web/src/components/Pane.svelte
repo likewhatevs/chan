@@ -1130,7 +1130,7 @@
         <li>
           <button role="menuitem" onclick={onEnterPaneMode}>
             <LayoutGrid size={16} strokeWidth={1.75} aria-hidden="true" />
-            <span class="menu-row-label">Enter Hybrid NAV</span>
+            <span class="menu-row-label">Enter Hybrid Nav</span>
             <span class="menu-row-chord">{chordLabel("app.pane.mode")}</span>
           </button>
         </li>
@@ -1261,7 +1261,7 @@
         {/if}
       </div>
     {:else if paneMode.active}
-      <div class="pane-mode-preview" aria-label="Hybrid NAV preview">
+      <div class="pane-mode-preview" aria-label="Hybrid Nav preview">
         <div class="pane-mode-title">{active ? tabLabel(active, browserCtxFor(active)) : "Empty pane"}</div>
         <div class="pane-mode-subtitle">
           {active?.kind === "file"

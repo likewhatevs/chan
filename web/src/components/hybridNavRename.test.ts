@@ -2,11 +2,14 @@ import { describe, expect, test } from "vitest";
 import pane from "./Pane.svelte?raw";
 import paneModeHelp from "./PaneModeHelp.svelte?raw";
 
-// fullstack-62: user-facing copy renamed from "Pane Mode" to
-// "Hybrid NAV" (NAV uppercase per the locked wording). Internal
-// symbols (paneMode, paneModeKeymap, etc.) stay; CSS class names
-// stay; comments stay. This sentinel pins the visible-text rename
-// so a future refactor can't silently regress to old copy.
+// fullstack-62 + fullstack-a-68 slice 1: user-facing copy
+// settled on "Hybrid Nav" (Nav title-case). fullstack-62
+// renamed Pane Mode → Hybrid NAV (all-caps); fullstack-a-68
+// slice 1 demotes the all-caps to title-case per @@Alex's
+// addendum-a flag ("NAame/moV -> Nav"). Internal symbols
+// (paneMode, paneModeKeymap, etc.) stay; CSS class names
+// stay; comments stay. This sentinel pins the visible-text
+// rename + guards against regressions to either older form.
 
 function stripCommentsAndCss(src: string): string {
   // Strip multi-line comments (/* ... */) so JSDoc explanations
@@ -23,13 +26,13 @@ function stripCommentsAndCss(src: string): string {
   return noStyle;
 }
 
-describe("fullstack-62: Pane Mode → Hybrid NAV user-facing rename", () => {
-  test("Pane.svelte hamburger entry reads Enter Hybrid NAV", () => {
-    expect(pane).toContain(">Enter Hybrid NAV<");
+describe("fullstack-a-68 slice 1: Pane Mode → Hybrid Nav user-facing rename", () => {
+  test("Pane.svelte hamburger entry reads Enter Hybrid Nav", () => {
+    expect(pane).toContain(">Enter Hybrid Nav<");
   });
 
-  test("Pane.svelte Hybrid NAV preview aria-label uses the new copy", () => {
-    expect(pane).toContain('aria-label="Hybrid NAV preview"');
+  test("Pane.svelte Hybrid Nav preview aria-label uses the new copy", () => {
+    expect(pane).toContain('aria-label="Hybrid Nav preview"');
   });
 
   test("Pane.svelte renders no user-facing 'Pane Mode' string", () => {
@@ -44,18 +47,34 @@ describe("fullstack-62: Pane Mode → Hybrid NAV user-facing rename", () => {
     expect(visible).not.toMatch(/title="[^"]*Pane Mode[^"]*"/);
   });
 
-  test("PaneModeHelp.svelte title + aria-label use Hybrid NAV", () => {
-    expect(paneModeHelp).toContain('aria-label="Hybrid NAV help"');
+  test("Pane.svelte no longer renders all-caps 'Hybrid NAV' in visible copy", () => {
+    // `fullstack-a-68` slice 1: title-case "Nav" replaces the
+    // all-caps form @@Alex flagged. Internal CSS classes like
+    // `.pane-mode-flash` aren't user-facing; the strip helper
+    // covers the relevant surfaces.
+    const visible = stripCommentsAndCss(pane);
+    expect(visible).not.toContain(">Enter Hybrid NAV<");
+    expect(visible).not.toMatch(/aria-label="[^"]*Hybrid NAV[^"]*"/);
+  });
+
+  test("PaneModeHelp.svelte title + aria-label use Hybrid Nav", () => {
+    expect(paneModeHelp).toContain('aria-label="Hybrid Nav help"');
     // `fullstack-a-19` extended the title to include the entry chord
     // (`(Cmd+.)`) so the cheatsheet's header doubles as a docs-side
-    // pin of the entry binding. Still asserts the Hybrid NAV brand,
+    // pin of the entry binding. Still asserts the Hybrid Nav brand,
     // just with the chord suffix.
-    expect(paneModeHelp).toContain(">Hybrid NAV (Cmd+.)<");
+    expect(paneModeHelp).toContain(">Hybrid Nav (Cmd+.)<");
   });
 
   test("PaneModeHelp.svelte renders no user-facing 'Pane Mode' string", () => {
     const visible = stripCommentsAndCss(paneModeHelp);
     expect(visible).not.toContain(">Pane Mode<");
     expect(visible).not.toMatch(/aria-label="[^"]*Pane Mode[^"]*"/);
+  });
+
+  test("PaneModeHelp.svelte no longer renders all-caps 'Hybrid NAV' in visible copy", () => {
+    const visible = stripCommentsAndCss(paneModeHelp);
+    expect(visible).not.toContain(">Hybrid NAV (Cmd+.)<");
+    expect(visible).not.toMatch(/aria-label="[^"]*Hybrid NAV[^"]*"/);
   });
 });

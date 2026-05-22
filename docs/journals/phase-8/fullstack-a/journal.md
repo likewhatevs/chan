@@ -2876,3 +2876,37 @@ shape.
 Impl note at [fullstack-a-70.md](fullstack-a-70.md)
 "## 2026-05-22 — audit findings + scope-poke".
 Outbound poke fired.
+
+## 2026-05-22 — -a-68 slice 1 (NAV → Nav rename) ready for review
+
+Four-file change. SPA-only. Visible-copy
+demotion from all-caps "Hybrid NAV" to
+title-case "Hybrid Nav".
+
+* `Pane.svelte`: hamburger entry + preview
+  aria-label.
+* `PaneModeHelp.svelte`: title + aria-label.
+* `hybridNavRename.test.ts`: existing pins
+  updated + 2 new no-regression pins.
+* `Pane.test.ts`: hamburger menu-label
+  expectation updated.
+
+Internal symbols (`paneMode`,
+`.pane-mode-*` CSS) preserved — rename
+bounded to visible surfaces.
+
+Slice 2 (transactional staging for
+T/O/P/G/E chords) deferred — substantial
+state machine + ghost-row visuals; cleaner
+as a separate commit.
+
+### Gate
+
+* vitest **1028 / 1028** (+2 net from -a-67
+  slice 2's 1026).
+* svelte-check 0/0 across 4038 files.
+* npm build clean.
+
+Impl note at [fullstack-a-68.md](fullstack-a-68.md)
+"## 2026-05-22 — slice 1". Outbound poke
+fired.
