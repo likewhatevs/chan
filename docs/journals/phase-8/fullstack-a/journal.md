@@ -2238,3 +2238,34 @@ Six-file change. SPA-only.
 
 Impl note at [fullstack-a-78.md](fullstack-a-78.md).
 Outbound poke fired.
+
+## 2026-05-22 — -a-78 slice 2 (airplane-grid + drag&drop) ready for review
+
+Three-file change. Closes -a-78 entirely.
+
+* `teamDialog.svelte.ts`: `GridShape` type +
+  `gridShapesForSize` / `defaultGridForSize` /
+  `emptySlotsForGrid` / `switchRealEstate` /
+  `reshapeSplitGrid` / `assignMemberToCell` /
+  `unassignMember` helpers. `resizeTeamMembers`
+  extended to preserve split mode + drop
+  invalid assignments.
+* `TeamDialog.svelte`: real-estate toggle +
+  shape picker + airplane-grid drop zone +
+  draggable member rows + cell badges.
+* `teamDialog.test.ts`: +18 slice-2 pins.
+
+### Gate
+
+* vitest **898 / 898** (+19 net from slice 1's
+  879).
+* svelte-check 0/0 across 4020 files.
+* npm build clean.
+
+Impl note at [fullstack-a-78.md](fullstack-a-78.md)
+"## 2026-05-22 — slice 2". Outbound poke fired.
+
+`-a-78` umbrella closes here; next pickup per
+architect's suggestion is `-a-66b` (FB Drafts
+row) — `systacean-29` Drive::list unified-path
+extension should be in HEAD now.

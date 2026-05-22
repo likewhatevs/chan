@@ -294,3 +294,154 @@ Single commit. State + dialog + button repurpose
 Per the memory rule. Per-path staging only.
 
 Push held. Standing by for clearance.
+
+## 2026-05-22 — slice 2 (airplane-grid + drag&drop) ready for review
+
+Three-file change. Extends slice 1 with the
+split-pane real-estate selector + grid picker
++ drag&drop assignment.
+
+### What landed
+
+`web/src/state/teamDialog.svelte.ts`:
+
+* `TeamRealEstate` `split` variant tightened
+  to `{ kind: "split"; grid: GridShape; slots:
+  number[][] }` (no longer optional fields).
+* `GridShape` interface + new helpers:
+  * `gridShapesForSize(size)` — most-balanced
+    R×C pairs first; always includes 1×N +
+    N×1 linear fallbacks. Capacity ≥ size for
+    every returned shape (the user can leave
+    cells empty).
+  * `defaultGridForSize(size)` — first entry
+    in `gridShapesForSize`.
+  * `emptySlotsForGrid(grid)` — `R×C`-sized
+    array of empty arrays (one per cell).
+* `switchRealEstate(cfg, kind)` — tabs ↔
+  split toggle. `split → split` is a no-op
+  (preserves arrangement); `tabs → split`
+  picks default grid + empty slots;
+  `split → tabs` drops the grid + slots.
+* `reshapeSplitGrid(cfg, grid)` — switch
+  between shape options for the current size
+  (e.g. 1×4 ↔ 2×2 for size 4); resets slots
+  to empty.
+* `assignMemberToCell(cfg, memberIdx, cellIdx)`
+  — removes from prior cell first; same-cell
+  drop idempotent; multiple members per cell
+  stack as tabs.
+* `unassignMember(cfg, memberIdx)` — removes
+  the member from every cell.
+* `resizeTeamMembers` extended to preserve
+  the split mode + drop slot assignments for
+  removed members (re-picks the default grid
+  for the new size).
+
+`web/src/components/TeamDialog.svelte`:
+
+* New `<fieldset class="team-realestate">`
+  section replacing the slice-1 placeholder.
+  Two-button toggle (`Tabs in current
+  Hybrid` / `Split panes`) + shape picker
+  row + the airplane-grid drop zone.
+* Member rows gain `draggable` (in split
+  mode), `onmemberdragstart` /
+  `onmemberdragend` handlers, and a per-row
+  "cell N" badge (clickable to unassign) or
+  "unassigned" indicator.
+* Airplane-grid renders cells in row-major
+  order with CSS grid (`--grid-rows` /
+  `--grid-cols` custom props). Each cell
+  shows a numeric index + either "drop
+  robot" placeholder or the assigned
+  robots stacked.
+* Drop handlers consume `draggingMember`
+  state + call `assignMemberToCell`.
+
+`web/src/state/teamDialog.test.ts`: +18
+slice 2 pins covering all new helpers +
+assign/unassign behavior + resize
+preservation.
+
+### Acceptance (slice 2 — completes -a-78)
+
+1. Real-estate toggle: `Tabs` ↔ `Split` ✓.
+2. Grid shape picker renders all shapes for
+   the current size; clicking re-shapes ✓.
+3. Drag a robot into a cell → assigned ✓.
+4. Same-cell drop → tabs in that pane
+   (member added to cell's array) ✓.
+5. Re-assign to different cell → removed
+   from prior ✓.
+6. Resize preserves split mode + drops
+   invalid assignments ✓.
+7. Unassign affordance via the badge click ✓.
+
+### Gate
+
+* vitest **898 / 898** (+19 net from slice 1's
+  879).
+* svelte-check 0 errors / 0 warnings across
+  4020 files.
+* npm build clean.
+* Rust gate not re-run.
+
+### Decisions
+
+* **Shape picker as button row** (not a
+  separate "advanced" reveal) — addendum-b
+  framing implies the user wants to see
+  available shapes at a glance.
+* **Grid capacity ≥ size** (not strict
+  equality) — the user can leave cells
+  empty + the orchestrator drops empty
+  panes at materialise time. This gives
+  the user flexibility (e.g. a 2×3 grid for
+  4 robots leaves 2 empty cells if they
+  want airy spacing).
+* **Same-cell drop = stacking** — robots
+  in the same cell become tabs in that
+  pane. Matches addendum-b clarification:
+  "Dropping multiple robots on the same
+  cell = those robots become tabs in the
+  same pane."
+* **Resize preserves split mode** — keeps
+  the user's chosen real-estate strategy.
+  Re-picks the default grid for the new
+  size + drops invalid assignments. Safer
+  than silently reverting to tabs.
+* **Reshape resets slots** — switching from
+  1×4 → 2×2 invalidates the linear
+  positional mapping; cleaner to reset
+  than to guess.
+* **Cell badge unassigns on click** — the
+  airplane-grid's drag-from-grid (drag a
+  robot OUT of a cell) is deferred polish.
+  Click-to-unassign is the quick affordance
+  for now.
+
+### Suggested commit subject
+
+```
+New Team dialog: airplane-grid + drag&drop for split-pane real estate (fullstack-a-78 slice 2)
+```
+
+Single commit. State helpers + dialog UI +
+tests tightly coupled around the same
+slice-2 contract.
+
+### Files for `git add` (per-path discipline)
+
+* `web/src/state/teamDialog.svelte.ts`
+* `web/src/state/teamDialog.test.ts`
+* `web/src/components/TeamDialog.svelte`
+* `docs/journals/phase-8/fullstack-a/fullstack-a-78.md`
+* `docs/journals/phase-8/fullstack-a/journal.md`
+* `docs/journals/phase-8/alex/event-fullstack-a-architect.md`
+
+### Atomic-audit-commit
+
+Per the memory rule. Per-path staging only.
+
+Push held. Standing by for clearance.
