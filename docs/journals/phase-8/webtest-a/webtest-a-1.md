@@ -4865,3 +4865,111 @@ Lane-A test server torn down:
 3/4 HOLD + 1 PARTIAL. `-a-89` ships clean (and
 supersedes 2 prior tasks); `-a-66 slice d` disk
 persistence works but API listing gap repeats.
+
+## 2026-05-22 — proactive re-walk: -a-66 slice c follow-up + systacean-32 (both gaps I flagged CLOSED)
+
+Proactive re-walk on HEAD `b51a4b6`. Throwaway
+drive r27; chan serve 127.0.0.1:8787; Chrome MCP
+tab `503726104`. Both flagged gaps from my prior
+walk (slice c inspector path + slice d API listing)
+addressed in two follow-ups:
+
+* `bf36d46` — `-a-66 c follow-up`: render Drafts
+  chip+notice in FileInfoBody (the actual FB
+  inspector path)
+* `b51a4b6` — `systacean-32`: chan-drive prefix-
+  aware Drive::stat + exists + read for Drafts
+
+### Verdicts (5/5 HOLD)
+
+| Check | Verdict |
+|-------|---------|
+| `-a-66 c` DRAFTS chip in inspector | HOLD 🎉 |
+| `-a-66 c` Drafts notice block | HOLD |
+| `systacean-32` API surfaces `Drafts/<sub>/` | HOLD |
+| `systacean-32` API surfaces `Drafts/.../prompt.md` | HOLD |
+| FB tree expands Drafts/ with subdir | HOLD |
+
+### `-a-66 slice c follow-up` HOLD — DRAFTS chip + notice
+
+Selected `Drafts/` row in main pane FB → DETAILS
+populated:
+- **Chip text "DRAFTS"** (uppercase ✓)
+- Chip class: `kind-chip drafts-chip svelte-1lbd2ty`
+  (slice c follow-up moved the slice c styling
+  into FileInfoBody)
+- Chip background: `rgb(227, 179, 65)` (yellow ✓)
+- **`.drafts-notice` block present** with `role="note"`
+- Notice text: "Drafts lives outside the drive's
+  root. Files here are stored in chan's metadata
+  folder so they survive drive moves + don't
+  clutter your tree. Cmd+N creates a fresh draft
+  under `Drafts/untitled-N/`; Rich Prompt
+  submissions persist as `Drafts/rich-prompt-N/`."
+- Notice background: `rgba(227, 179, 65, 0.1)`
+  (subtle yellow tint matching the chip)
+
+The slice c follow-up moved the styling from
+`DirectoryInfoBody.svelte` (which wasn't the
+actual inspector path) to `FileInfoBody.svelte`
+(which IS). My prior walk's root-cause hypothesis
+was correct: the synthetic Drafts entry routes
+through a different inspector component.
+
+### `systacean-32` HOLD — API surfaces `Drafts/<sub>/`
+
+Submitted rich prompt: `echo systacean-32-api-listing-test`.
+
+**API listing now works**:
+- `/api/files?dir=Drafts` returns:
+  `[{path: "Drafts/rich-prompt", is_dir: true,
+  mtime: 1779477832, size: 0}]`
+- `/api/files?dir=Drafts/rich-prompt` returns:
+  `[{path: "Drafts/rich-prompt/prompt.md",
+  is_dir: false, mtime: 1779477832, size: 34,
+  kind: "document"}]`
+
+The chan-drive prefix-aware `Drive::stat` /
+`exists` / `read` for Drafts means the unified
+listing now reaches into the metadata folder.
+
+### FB tree HOLD — expansion shows subdirs
+
+Clicked the `>` chevron at the Drafts/ row in the
+docked FB. Result:
+- rowCount 18 → 19 (`+1` for `rich-prompt/`)
+- `rich-prompt/` row visible indented under
+  `Drafts/`
+- Tree expansion works end-to-end
+
+### Highlights
+
+* **Both my flagged gaps closed in one round-trip**:
+  - slice c follow-up: targeted the right
+    component (FileInfoBody)
+  - systacean-32: closed the chan-drive
+    unified-path gap that affected slices b/c/d
+* **The proactive-walk discipline closes again**:
+  flagged the recurring data-flow gap → architect
+  cut systacean-32 HIGH → @@Systacean + @@FullStackA
+  shipped fixes → re-walk confirms 5/5 HOLD.
+* **End-to-end Drafts flow validated**:
+  1. Drafts row in FB with yellow tint ✓
+  2. Drafts inspector with DRAFTS chip + notice ✓
+  3. Cmd+N + rich prompt submit persist to disk ✓
+  4. API surfaces Drafts subtree ✓
+  5. FB tree expansion shows persisted entries ✓
+
+### State at end of walk
+
+Lane-A test server torn down:
+1. chan serve killed.
+2. `rm -rf /tmp/chan-test-phase8-wa-r27/`.
+3. `chan remove` → unregistered.
+4. Chrome MCP tab closed.
+5. Drafts metadata cleaned:
+   `~/Library/Application Support/chan/drafts/e1c05da74d6499c5/`
+   removed.
+
+5/5 HOLD. The slice b/c/d data-flow gap saga is
+CLOSED via systacean-32 + slice c follow-up.

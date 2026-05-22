@@ -2805,3 +2805,94 @@ this walk.)
 Standing by. **Strongly recommend** the holistic
 drafts-metadata-vs-wire-keyspace audit before
 slice e lands.
+
+## 2026-05-22 — poke (re-walk: -a-66 slice c follow-up + systacean-32 — BOTH FLAGGED GAPS CLOSED, 5/5 HOLD)
+
+Proactive re-walk on HEAD `b51a4b6`. Throwaway
+drive r27; chan serve 127.0.0.1:8787; Chrome MCP
+tab `503726104`. Verdict in
+[`../webtest-a/webtest-a-1.md`](../webtest-a/webtest-a-1.md).
+
+### 🎉 Both my flagged gaps closed in one round-trip
+
+* `bf36d46` (slice c follow-up) → moved Drafts
+  chip+notice styling to FileInfoBody (the actual
+  inspector path I identified)
+* `b51a4b6` (systacean-32 HIGH) → chan-drive
+  prefix-aware Drive::stat for Drafts (closes the
+  recurring slice b/c/d data-flow gap)
+
+### Verdicts: 5/5 HOLD
+
+| Check | Verdict |
+|-------|---------|
+| DRAFTS chip + notice in inspector | HOLD 🎉 |
+| API surfaces `Drafts/rich-prompt/` | HOLD |
+| API surfaces `Drafts/.../prompt.md` | HOLD |
+| FB tree expansion shows subdirs | HOLD |
+| End-to-end Drafts flow works | HOLD |
+
+### Empirical evidence
+
+**Inspector** (slice c follow-up):
+- Selected `Drafts/` → DETAILS panel
+- Chip: `DRAFTS` (uppercase) in `rgb(227, 179, 65)`
+  yellow background; class
+  `kind-chip drafts-chip` ✓
+- Notice block: `role="note"` with the addendum
+  text + `rgba(227, 179, 65, 0.1)` tint ✓
+
+**API listing** (systacean-32):
+- Submitted `echo systacean-32-api-listing-test`
+  via Cmd+Return
+- `/api/files?dir=Drafts` → returns
+  `[Drafts/rich-prompt]` ✓
+- `/api/files?dir=Drafts/rich-prompt` → returns
+  `[Drafts/rich-prompt/prompt.md, size: 34]` ✓
+
+**FB tree** (composition):
+- Expanded `Drafts/` via chevron click in docked FB
+- `rich-prompt/` row appeared indented under
+  Drafts/ ✓
+- rowCount 18 → 19
+
+### End-to-end Drafts flow validated
+
+1. Drafts row in FB with yellow tint ✓ (slice b)
+2. DRAFTS chip + notice in inspector ✓ (slice c
+   + follow-up)
+3. Cmd+N draft + rich-prompt submit persist to
+   disk ✓ (slices d + persist mechanism)
+4. API surfaces Drafts subtree ✓ (systacean-32)
+5. FB tree expansion shows persisted entries ✓
+   (composition of all the above)
+
+### The flagging-to-fix loop
+
+| Walk | Flag | Fix |
+|------|------|-----|
+| webtest-a slice b walk | Synthetic row missing | follow-up gated on dir="" |
+| webtest-a slice c walk | Chip+notice not rendering | follow-up moved to FileInfoBody |
+| webtest-a slice d walk | API doesn't surface Drafts subtree | systacean-32 HIGH |
+
+Three repetitions of the synthetic-Drafts data-flow
+gap, three round-trip fixes. The proactive-walk
+discipline catches the empirical surface; each fix
+plus the underlying systacean-32 closes the
+recurring pattern at the root (chan-drive's
+unified-path API).
+
+### Suggested commit shape
+
+* **Commit subject**: `docs: webtest-a re-walk —
+  -a-66 c follow-up + systacean-32 (both flagged
+  gaps CLOSED, 5/5 HOLD); end-to-end Drafts flow
+  validated`.
+* **Files**:
+  * `docs/journals/phase-8/webtest-a/webtest-a-1.md`
+  * `docs/journals/phase-8/alex/event-webtest-a-architect.md`
+* Path-limited `git commit`.
+
+Standing by. Drafts feature can be declared
+shipped end-to-end through the b/c/d/systacean-32
+arc.
