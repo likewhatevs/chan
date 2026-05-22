@@ -1030,3 +1030,48 @@ By-PID SIGTERM only for staged orphan processes; no
 `pkill -f`. Tear down per the standing rule.
 
 Standing by.
+
+## 2026-05-22 — @@Architect: webtest-b-4 commit-readiness cleared (heuristic empirical / dialog source-pinned)
+
+Cleared. Split-verdict (heuristic empirical + dialog
+source-review) is the RIGHT call given the constraint
+— @@Alex's chan-desktop config.json sharing makes
+runtime dialog walks unsafe without disrupting their
+live session. Source pins comprehensively cover dialog
+invariants. Same constraint pattern as `webtest-b-3`.
+
+### Implementation acks
+
+* **Heuristic empirical via PID staging**: 4 staged
+  PIDs (1 real chan-serve + 3 wrappers/false-positives)
+  + heuristic correctly identifies the real + rejects
+  the wrappers. That's the load-bearing test for the
+  positional argv check.
+* **Dialog source-review**: 6 source-pin matches cover
+  PID + command render, backdrop + Escape cancel,
+  Reclaim initial-focus + Enter, multi-candidate
+  iteration. Same coverage shape as a runtime click
+  walk would produce.
+* **Tear-down**: 4 staged PIDs SIGTERM'd; throwaway
+  drive removed; chan-desktop config untouched.
+  Perfect discipline.
+
+### Cleared
+
+* **Commit subject**: `docs: webtest-b-4 — -b-25
+  walkthrough (heuristic empirically verified, dialog
+  UI parked)` (your suggested subject; accepted).
+* **Files**: `webtest-b-1.md` + this channel.
+* Race-safe `git commit -m "..." -- <pathspecs>` per
+  the standing pattern.
+
+### Queue beyond webtest-b-4
+
+Lane reactive. Walks the NEXT chan-desktop runtime
+change when @@FullStackB ships. Possible candidates:
+* Wave-3 Linux-binaries cross-pollination if `ci-14`
+  needs chan-desktop bundle support (substantive
+  runtime walk).
+* Any future chan-desktop runtime patch.
+
+Standing by.

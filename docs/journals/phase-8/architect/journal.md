@@ -5100,3 +5100,72 @@ Commit-readiness expected imminent.
 | `alex/event-architect-webtest-b.md` | webtest-b-4 dispatch poke |
 | `webtest-a/webtest-a-7.md` | NEW task |
 | `webtest-b/webtest-b-4.md` | NEW task |
+
+## 2026-05-22 — 🎉 -21 SHIPPED (cache-bust); webtest-a-7 9/9 HOLD; systacean-22 cut (contact dedup)
+
+### Commits landed since last journal beat
+
+| SHA | Subject | Lane |
+|-----|---------|------|
+| `f593f35` | `chan-server: enrich poke event echo with timestamp + path + heading (systacean-21)` | @@Systacean |
+| `f7de5f2` | `chan-server + chan-desktop: post-systacean-21 fmt fixup` | @@Systacean |
+| `c3df821` | `docs: webtest-a-7 — -a-57 graph filter chips walkthrough (9/9 HOLD; markdown-hide headline ask resolved)` | @@WebtestA |
+
+### -21 (cache-bust) is LIVE
+
+The Round-2 operational mitigation for the rate-limit
+pain is structurally landed. From this beat forward,
+architect-side workflow tooling can begin populating
+`path` + `heading` in poke event payloads;
+`dispatch_agent_event` formats the rich template; each
+poke becomes a unique input.
+
+@@Alex bootstrapping agents via non-bare prompts is no
+longer load-bearing once the architect-side workflow
+adopts the new fields.
+
+### -a-57 walk 9/9 HOLD
+
+The "hide markdown to see source" headline ask
+empirically resolved. All chip behaviors symmetric +
+counts populated + URL/SerTab persistence verified.
+
+### webtest-b-4 cleared (split-verdict)
+
+Heuristic empirically verified via PID staging (4
+staged); dialog source-pinned (couldn't launch chan-
+desktop without disrupting @@Alex's config.json).
+Same constraint pattern as `webtest-b-3`. Tear-down
+clean.
+
+### systacean-22 dispatched
+
+@@Alex flagged @@Systacean is holding post-`-21`.
+Cut [`../systacean/systacean-22.md`](../systacean/systacean-22.md):
+
+1. **Contact-node dedup (PRIMARY)** — empirical 1973
+   vs 49 unique handles; ~40x over-emission. Audit-
+   then-fix.
+2. **Optional `GraphNodeView::File` bucket emit** —
+   `-a-57` audit-finding cleanup; bundle if natural.
+
+### Lane state
+
+| Lane | State |
+|------|-------|
+| @@Systacean | `-21` ✓; `-22` dispatched |
+| @@FullStackA | `-a-57` ✓; `-a-58` in flight (worktree: GraphPanel + new graphParentEdgeInvariant.test.ts) |
+| @@FullStackB | `-b-25` ✓; queue-empty |
+| @@CI | `-14` in inbound; not yet started |
+| @@WebtestA | `webtest-a-7` ✓; reactive |
+| @@WebtestB | `webtest-b-4` cleared; commit pending |
+
+### What I'm committing this round
+
+| File | Reason |
+|------|--------|
+| `architect/journal.md` | This entry |
+| `alex/event-architect-systacean.md` | -21 ship ack + -22 dispatch |
+| `alex/event-architect-webtest-a.md` | -a-57 walk ack |
+| `alex/event-architect-webtest-b.md` | -b-4 clearance |
+| `systacean/systacean-22.md` | NEW task |

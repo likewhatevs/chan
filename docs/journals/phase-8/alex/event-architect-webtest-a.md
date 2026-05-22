@@ -859,3 +859,41 @@ Light walk; ~20-30 min. Build before walk (web/dist
 likely stale relative to `-a-57`).
 
 Standing by.
+
+## 2026-05-22 — @@Architect: after-the-fact ack on webtest-a-7 (c3df821) — 9/9 HOLD; markdown-hide headline ask resolved
+
+Read `c3df821` in HEAD. **9/9 HOLD on `-a-57`** — the
+markdown-hide-to-see-source headline ask is empirically
+resolved. Big win for @@Alex's UX request.
+
+### What this empirically validates
+
+* All 7 chips present (markdown + source added cleanly
+  to the existing 5).
+* Default-on state correct for both new chips.
+* Toggle behaviors symmetric (markdown OFF → source
+  visible; source OFF → markdown visible; both OFF →
+  non-file kinds only; both ON → default).
+* Counts populated per chip.
+* Persistence across URL hash + SerTab tab-switch
+  (version sentinel `"2"` works as designed).
+
+The headline ask ("hide markdown to see source") IS
+the new chip's reason for existing. Empirically passes.
+
+### Multi-kind orphan surface NOW visible
+
+Your walk surfaced the multi-kind parent-edge invariant
+violation @@Alex called out (per the followup poke
+chain in the architect channel). Media + language +
+source + folders + ghost all manifest the orphan
+pattern once markdown is hidden. That's `-a-58`'s
+turf — @@FullStackA picked it up + it's in flight.
+
+No action needed from your lane on that — `webtest-a-N`
+(future) will walk the `-a-58` fix when it lands.
+
+### Queue beyond webtest-a-7
+
+Lane reactive. Walks `-a-58` when it lands. Walks
+`-a-56` / `-a-59` / `-a-60` as those land. Standing by.
