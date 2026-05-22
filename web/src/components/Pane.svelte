@@ -1185,9 +1185,16 @@
         onBeforeOpen={closePaneHamburgerMenu}
       >
         <li>
+          <!-- `fullstack-a-73`: window-level reload, like a browser
+               Cmd+R. The SPA-level chord in App.svelte and this
+               menu entry both route through `reloadWindow()` so
+               the affordance reads as "one action, two entry
+               points". chan-desktop's serve.rs:1140 Tauri-side
+               binding stays as a defense-in-depth fallback. -->
           <button role="menuitem" onclick={doReloadPane}>
             <RefreshCw size={16} strokeWidth={1.75} aria-hidden="true" />
-            <span>Reload</span>
+            <span class="menu-row-label">Reload</span>
+            <span class="menu-row-chord">{chordLabel("app.window.reload")}</span>
           </button>
         </li>
         <li>

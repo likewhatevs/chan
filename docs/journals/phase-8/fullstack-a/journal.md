@@ -1925,3 +1925,29 @@ Five-file change.
 
 Impl note at [fullstack-a-72.md](fullstack-a-72.md).
 Outbound poke fired.
+
+## 2026-05-22 — -a-73 (Cmd+R window reload) ready for review
+
+Small SPA-only fix. Four-file change.
+
+* `shortcuts.ts`: new `app.window.reload`
+  registry entry (Mod+R web + native).
+* `App.svelte`: imports `reloadWindow`; new
+  keymap branch on Cmd+R / Ctrl+R with strict
+  modifier-match filters (lets Cmd+Shift+R fall
+  through to browser hard reload).
+* `Pane.svelte`: Reload menu entry restructured
+  to the standard two-span shape with
+  `chordLabel("app.window.reload")` rendering
+  ⌘R / Ctrl+R.
+* `cmdRWindowReload.test.ts` (new): 5 pins.
+
+### Gate
+
+* vitest **814 / 814** (+5 net from `-a-72`'s
+  809).
+* svelte-check 0/0 across 4009 files.
+* npm build clean.
+
+Impl note at [fullstack-a-73.md](fullstack-a-73.md).
+Outbound poke fired.

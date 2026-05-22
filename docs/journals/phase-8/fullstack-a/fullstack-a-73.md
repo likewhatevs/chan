@@ -128,3 +128,116 @@ This is `-a-73`.
   reload, not per-tab reload).
 * Removing chan-desktop's serve.rs:1140 binding (keep
   the redundancy for chan-desktop hardening).
+
+## 2026-05-22 — ready for review
+
+Four-file change. SPA-only.
+
+### What landed
+
+`web/src/state/shortcuts.ts`: registry entry for
+`app.window.reload` (web + native: `Mod+R`, group:
+App). Lets `chordLabel("app.window.reload")` render
+the platform-aware annotation on the menu entry.
+
+`web/src/App.svelte`:
+
+* Imports `reloadWindow` from `./api/desktop`.
+* New keymap branch in `onWindowKey` —
+  `Cmd+R / Ctrl+R` (matches existing `meta` test
+  pattern, with `!e.altKey && !e.shiftKey &&
+  !e.ctrlKey` filters so chord doesn't fire on
+  Cmd+Shift+R / Cmd+Alt+R etc.). Calls
+  `void reloadWindow()` + `e.preventDefault()`.
+
+`web/src/components/Pane.svelte`:
+
+* Reload menu entry restructured from a bare
+  `<span>Reload</span>` to the standard
+  `menu-row-label` + `menu-row-chord` two-span
+  shape that other annotated rows use, with
+  `chordLabel("app.window.reload")` rendering the
+  chord. Comment block documents the dual entry
+  point + chan-desktop's
+  `serve.rs:1140` defense-in-depth.
+
+`web/src/components/cmdRWindowReload.test.ts` (new):
+5 raw-source pins covering the registry entry,
+reloadWindow import, keymap handler shape, menu
+annotation render, and the dual-entry-point
+comment.
+
+### Acceptance
+
+1. **Cmd+R reloads the window**: SPA handler
+   dispatches `reloadWindow()` ✓ (mechanism via
+   tests; UI walk by @@WebtestA for empirical
+   confirmation).
+2. **Menu annotation visible**: Reload entry
+   renders `chordLabel("app.window.reload")` →
+   "⌘R" on macOS, "Ctrl+R" elsewhere ✓.
+3. **No browser-default fallthrough on web**:
+   `e.preventDefault()` suppresses the browser
+   reload chord ✓.
+4. **No IPC regression**: chan-desktop's
+   serve.rs:1140 Tauri binding stays unchanged ✓
+   (not touched in this commit).
+
+### Gate
+
+* vitest **814 / 814** (+5 net from `-a-72`'s
+  809).
+* svelte-check 0 errors / 0 warnings across
+  4009 files.
+* npm build clean.
+* Rust gate not re-run (no Rust touched; task body
+  explicitly preserves the serve.rs binding).
+
+### Decisions
+
+* **`!e.ctrlKey` AND `!e.altKey` AND `!e.shiftKey`
+  filters** — strict modifier match. Cmd+Shift+R is
+  the browser's "hard reload" chord; we don't want
+  to intercept it (let the browser do its thing).
+* **`void reloadWindow()`** — `reloadWindow()`
+  returns a Promise that on chan-desktop awaits
+  the IPC; on web it calls `window.location.reload()`
+  synchronously (the function doesn't return).
+  `void` suppresses the
+  unhandled-promise-rejection lint without
+  blocking the keymap dispatch.
+* **Same registry entry across web + native** —
+  `Mod+R` resolves to ⌘R on Mac (web + native)
+  and Ctrl+R on Linux/Windows. No platform
+  divergence.
+* **Reload entries on other surfaces deferred** —
+  task body's out-of-scope. `-b-26` shipped per-
+  tab "Reload from Disk" on editor + "Restart" on
+  terminal; those have different semantics. Could
+  bundle the annotation as a polish follow-up if
+  @@Alex wants consistency.
+
+### Suggested commit subject
+
+```
+Cmd+R global chord → window reload; annotate pane Reload entry (fullstack-a-73)
+```
+
+Single commit. Registry + keymap + menu + test
+tightly coupled.
+
+### Files for `git add` (per-path discipline)
+
+* `web/src/state/shortcuts.ts`
+* `web/src/App.svelte`
+* `web/src/components/Pane.svelte`
+* `web/src/components/cmdRWindowReload.test.ts` (new)
+* `docs/journals/phase-8/fullstack-a/fullstack-a-73.md`
+* `docs/journals/phase-8/fullstack-a/journal.md`
+* `docs/journals/phase-8/alex/event-fullstack-a-architect.md`
+
+### Atomic-audit-commit
+
+Per the memory rule. Per-path staging only.
+
+Push held. Standing by for clearance.

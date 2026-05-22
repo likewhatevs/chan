@@ -187,6 +187,17 @@ export const SHORTCUTS: readonly Shortcut[] = [
     native: "Mod+.",
     group: "Panes",
   },
+  // `fullstack-a-73`: window-level reload, like a browser Cmd+R.
+  // SPA chord routes through `reloadWindow()` (chan-desktop IPC
+  // OR `window.location.reload()` on web). chan-desktop's
+  // serve.rs:1140 Tauri-side binding stays as defense-in-depth.
+  {
+    id: "app.window.reload",
+    label: "Reload window",
+    web: "Mod+R",
+    native: "Mod+R",
+    group: "App",
+  },
   {
     id: "app.pane.flip",
     label: "Flip Hybrid",

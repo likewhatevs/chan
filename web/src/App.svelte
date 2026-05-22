@@ -86,6 +86,7 @@
   } from "./state/tabs.svelte";
   import { applyEditorTheme, DEFAULT_EDITOR_THEME } from "./state/editorTheme";
   import { pruneEditorBuffers } from "./state/editorBuffer";
+  import { reloadWindow } from "./api/desktop";
   import {
     applyInitialPageWidth,
     watchPageWidth,
@@ -689,6 +690,19 @@
         selectTabAtIndexInActivePane(Number(m[1]) - 1);
         return;
       }
+    }
+    // `fullstack-a-73`: Cmd+R (Ctrl+R on non-Mac) — window-level
+    // reload, mirroring the browser's default Cmd+R. The pane
+    // right-click menu's Reload entry calls the same
+    // `reloadWindow()` helper. preventDefault suppresses the
+    // browser-default reload on web so we don't get a double-fire
+    // (SPA handler + browser default). On chan-desktop the
+    // serve.rs:1140 Tauri-side binding still routes through the
+    // same IPC; the dual path is idempotent.
+    if (meta && !e.altKey && !e.shiftKey && !e.ctrlKey && e.code === "KeyR") {
+      e.preventDefault();
+      void reloadWindow();
+      return;
     }
   }
   onMount(() => document.addEventListener("keydown", onWindowKey));

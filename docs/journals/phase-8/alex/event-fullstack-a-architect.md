@@ -5521,3 +5521,96 @@ Editor hang-recovery: persist unsaved content to localStorage with restore banne
 Single bash invocation per discipline.
 
 Push held. Standing by for clearance.
+
+## 2026-05-22 — poke (fullstack-a-73 ready for review)
+
+Small SPA-only fix. Four-file change.
+
+### What landed
+
+`web/src/state/shortcuts.ts`: new registry
+entry `app.window.reload` (web + native:
+Mod+R; group: App). `chordLabel("app.window.reload")`
+renders ⌘R on Mac, Ctrl+R elsewhere.
+
+`web/src/App.svelte`:
+* Imports `reloadWindow` from `./api/desktop`.
+* New keymap branch on Cmd+R / Ctrl+R with
+  strict modifier filters
+  (`!e.altKey && !e.shiftKey && !e.ctrlKey`).
+  Calls `void reloadWindow()` + `e.preventDefault()`.
+  Browser's Cmd+Shift+R (hard reload) falls
+  through unintercepted.
+
+`web/src/components/Pane.svelte`:
+* Reload menu entry restructured to the
+  standard `menu-row-label` + `menu-row-chord`
+  two-span shape; chord label routed through
+  `chordLabel("app.window.reload")`.
+* Comment block documents the dual entry
+  point (chord + menu) + chan-desktop's
+  serve.rs:1140 defense-in-depth.
+
+`web/src/components/cmdRWindowReload.test.ts`
+(new): 5 raw-source pins covering registry
+entry shape, App.svelte import + handler, Pane
+menu annotation render, and the dual-entry
+comment.
+
+### Acceptance
+
+1. Cmd+R reloads window via reloadWindow() ✓
+   (mechanism-confirmed via tests).
+2. Menu annotation visible (chordLabel-driven)
+   ✓.
+3. No browser-default double-fire on web
+   (preventDefault) ✓.
+4. No IPC regression (serve.rs:1140 untouched)
+   ✓.
+
+### Gate
+
+* vitest **814 / 814** (+5 net from `-a-72`'s
+  809).
+* svelte-check 0 errors / 0 warnings across
+  4009 files.
+* npm build clean.
+* Rust gate not re-run (task explicitly
+  preserves the serve.rs binding).
+
+### Decisions
+
+* **Strict modifier filters** — Cmd+Shift+R
+  (browser hard reload) falls through; only
+  bare Cmd+R intercepted.
+* **Same Mod+R on web + native** — platform
+  shorthand resolves to ⌘R / Ctrl+R via the
+  registry's `chordLabel`.
+* **Other reload entries deferred** —
+  task body's out-of-scope. `-b-26`'s "Reload
+  from Disk" / "Restart" have different
+  semantics. Could bundle annotation polish
+  later if desired.
+
+### Suggested commit subject
+
+```
+Cmd+R global chord → window reload; annotate pane Reload entry (fullstack-a-73)
+```
+
+### Files for `git add`
+
+* `web/src/state/shortcuts.ts`
+* `web/src/App.svelte`
+* `web/src/components/Pane.svelte`
+* `web/src/components/cmdRWindowReload.test.ts` (new)
+* `docs/journals/phase-8/fullstack-a/fullstack-a-73.md`
+* `docs/journals/phase-8/fullstack-a/journal.md`
+* `docs/journals/phase-8/alex/event-fullstack-a-architect.md`
+  (this append)
+
+### Atomic-audit-commit applied
+
+Single bash invocation per discipline.
+
+Push held. Standing by for clearance.
