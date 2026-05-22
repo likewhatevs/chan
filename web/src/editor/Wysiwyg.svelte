@@ -1389,6 +1389,16 @@
     color: var(--text-secondary, #888);
     font-size: 12px;
   }
+  /* `fullstack-a-70`: mention-only rows surface tokens that
+     have no contact file backing them. Dimmer than the
+     contact-file rows so the user reads "this is a body-text
+     mention, not a first-class contact" at a glance. */
+  :global(.md-bubble .md-bubble-row-mention-only) {
+    opacity: 0.7;
+  }
+  :global(.md-bubble .md-bubble-row-mention-only.md-bubble-row-selected) {
+    opacity: 1;
+  }
   :global(.md-bubble .md-bubble-row-level) {
     display: inline-block;
     min-width: 2em;

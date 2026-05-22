@@ -42,6 +42,22 @@ interface Contact {
   aliases?: string[];
 }
 
+/// `fullstack-a-70`: mention-only hit. Represents a `@@<Name>`
+/// token observed in the body text of indexed markdown that
+/// has no corresponding contact file. Surfaces in the bubble
+/// below the contact-file rows so the user can still complete
+/// to it.
+interface MentionHit {
+  /// Label WITH the `@@` sigil (the server-side route composes
+  /// it). The commit path inserts this verbatim into the
+  /// editor.
+  label: string;
+}
+
+type Suggestion =
+  | { kind: "contact"; contact: Contact }
+  | { kind: "mention"; mention: MentionHit };
+
 interface ContactBubbleHandle extends BubbleHandle {
   setTriggerEnd(end: number): void;
 }
@@ -55,11 +71,19 @@ export function openContactBubble(opts: ContactBubbleOpts): ContactBubbleHandle 
   });
   let query = opts.initialQuery;
   let triggerEnd = opts.triggerEnd;
-  let hits: Contact[] = [];
+  let hits: Suggestion[] = [];
   let selectedIndex = 0;
   let reqSeq = 0;
   let debounceTimer: number | undefined;
   let alive = true;
+  /// `fullstack-a-70`: mention-corpus completion is opt-in.
+  /// Wiki mode (the legacy `@` trigger) ONLY surfaces contact
+  /// files — wiki-links resolve to paths, not bare tokens.
+  /// Mention mode (the `@@` trigger) merges both: contact-file
+  /// hits first, then mention-only tokens from
+  /// `api.mentions` below.
+  const mode: ContactBubbleMode = opts.mode ?? "wiki";
+  const includeMentions = mode === "mention";
 
   const list = document.createElement("div");
   list.className = "md-bubble-list";
@@ -72,11 +96,20 @@ export function openContactBubble(opts: ContactBubbleOpts): ContactBubbleHandle 
     if (debounceTimer !== undefined) clearTimeout(debounceTimer);
     const seq = ++reqSeq;
     debounceTimer = window.setTimeout(() => {
-      api
-        .contacts(query, PAGE_LIMIT)
-        .then((results) => {
+      // `fullstack-a-70`: fan-out two queries in mention mode
+      // (contacts + mentions); single query in wiki mode. Both
+      // routes share `PAGE_LIMIT` so the combined result is
+      // capped at 2*PAGE_LIMIT before the dedup pass; the dedup
+      // (next pass) typically collapses common-name overlap
+      // back under PAGE_LIMIT.
+      const contactsP = api.contacts(query, PAGE_LIMIT);
+      const mentionsP = includeMentions
+        ? api.mentions(query, PAGE_LIMIT).catch(() => [] as MentionHit[])
+        : Promise.resolve<MentionHit[]>([]);
+      Promise.all([contactsP, mentionsP])
+        .then(([contactRows, mentionRows]) => {
           if (!alive || seq !== reqSeq) return;
-          hits = results;
+          hits = mergeSuggestions(contactRows, mentionRows);
           if (selectedIndex >= hits.length) selectedIndex = 0;
           render();
         })
@@ -86,6 +119,45 @@ export function openContactBubble(opts: ContactBubbleOpts): ContactBubbleHandle 
           status.textContent = `Contact lookup failed: ${err.message ?? err}`;
         });
     }, FETCH_DEBOUNCE_MS);
+  }
+
+  /// `fullstack-a-70`: merge contact-file hits + mention-only
+  /// tokens. Contact files come first (they carry richer
+  /// context — emails, aliases — so they're the higher-signal
+  /// match). Mention-only tokens come below + are filtered
+  /// against the contact-file set + their aliases so the
+  /// dropdown doesn't show the same name twice (once as a
+  /// contact, once as a mention).
+  ///
+  /// Dedup key: lowercased name with the `@@` sigil stripped.
+  /// A contact file with alias `@@alex` AND the mention corpus's
+  /// `@@Alex` collapse to one row (the contact-file row).
+  function mergeSuggestions(
+    contactRows: Contact[],
+    mentionRows: MentionHit[],
+  ): Suggestion[] {
+    const out: Suggestion[] = contactRows.map((c) => ({
+      kind: "contact",
+      contact: c,
+    }));
+    if (!includeMentions || mentionRows.length === 0) return out;
+    // Build the dedup set from each contact's basename stem +
+    // their alias list (both lowercased, sans `@@`).
+    const seen = new Set<string>();
+    for (const c of contactRows) {
+      seen.add(basenameStem(c.path));
+      if (c.aliases) {
+        for (const a of c.aliases) seen.add(a.toLowerCase());
+      }
+    }
+    for (const m of mentionRows) {
+      const bare = m.label.replace(/^@@/, "").toLowerCase();
+      if (seen.has(bare)) continue;
+      seen.add(bare);
+      out.push({ kind: "mention", mention: m });
+      if (out.length >= PAGE_LIMIT) break;
+    }
+    return out;
   }
 
   function render(): void {
@@ -99,37 +171,64 @@ export function openContactBubble(opts: ContactBubbleOpts): ContactBubbleHandle 
     }
     status.textContent = `${hits.length} result${hits.length === 1 ? "" : "s"} · ↵ to insert`;
     for (let i = 0; i < hits.length; i++) {
-      const c = hits[i]!;
+      const hit = hits[i]!;
       const row = document.createElement("div");
       row.className = "md-bubble-row";
       if (i === selectedIndex) row.classList.add("md-bubble-row-selected");
-      const label = document.createElement("div");
-      label.textContent = c.label;
-      row.appendChild(label);
-      if (c.emails && c.emails.length > 0) {
-        const sub = document.createElement("div");
-        sub.className = "md-bubble-row-sub";
-        sub.textContent = c.emails[0]!;
-        row.appendChild(sub);
+      if (hit.kind === "mention") {
+        // `fullstack-a-70`: mention-only rows are dimmer than
+        // contact-file rows so the user reads "this name has no
+        // contact file backing it; you're completing to a
+        // body-text-only reference."
+        row.classList.add("md-bubble-row-mention-only");
       }
-      // Aliases ride as a tertiary line so power users see at a
-      // glance which @@<alias> shortcuts resolve to this contact.
-      // Suppressed when empty so the common (no-alias) case keeps
-      // the row compact.
-      if (c.aliases && c.aliases.length > 0) {
-        const aliasLine = document.createElement("div");
-        aliasLine.className = "md-bubble-row-sub md-bubble-row-aliases";
-        aliasLine.textContent = c.aliases.map((a) => `@@${a}`).join(" · ");
-        row.appendChild(aliasLine);
+      const label = document.createElement("div");
+      label.textContent = hit.kind === "contact"
+        ? hit.contact.label
+        : hit.mention.label;
+      row.appendChild(label);
+      if (hit.kind === "contact") {
+        const c = hit.contact;
+        if (c.emails && c.emails.length > 0) {
+          const sub = document.createElement("div");
+          sub.className = "md-bubble-row-sub";
+          sub.textContent = c.emails[0]!;
+          row.appendChild(sub);
+        }
+        // Aliases ride as a tertiary line so power users see at a
+        // glance which @@<alias> shortcuts resolve to this contact.
+        // Suppressed when empty so the common (no-alias) case keeps
+        // the row compact.
+        if (c.aliases && c.aliases.length > 0) {
+          const aliasLine = document.createElement("div");
+          aliasLine.className = "md-bubble-row-sub md-bubble-row-aliases";
+          aliasLine.textContent = c.aliases.map((a) => `@@${a}`).join(" · ");
+          row.appendChild(aliasLine);
+        }
       }
       row.addEventListener("mousedown", (e) => {
         e.preventDefault();
         e.stopPropagation();
-        commit(c);
+        if (hit.kind === "contact") commit(hit.contact);
+        else commitMention(hit.mention);
       });
       list.appendChild(row);
     }
     shell.reposition();
+  }
+
+  /// `fullstack-a-70`: mention-only commit. The `@@Name` token
+  /// arrives with its sigil already attached (the server-side
+  /// route composes it), so the insert path is a straight
+  /// substitution. Distinct from `commit(contact)` because
+  /// there's no path / alias resolution to do — the user picked
+  /// a mention token, we splice the token in.
+  function commitMention(m: MentionHit): void {
+    opts.view.dispatch({
+      changes: { from: opts.triggerStart, to: triggerEnd, insert: m.label },
+      selection: { anchor: opts.triggerStart + m.label.length },
+    });
+    dismiss();
   }
 
   function commit(c: Contact): void {
@@ -195,9 +294,10 @@ export function openContactBubble(opts: ContactBubbleOpts): ContactBubbleHandle 
         return true;
       }
       if (event.key === "Enter") {
-        const c = hits[selectedIndex];
-        if (c) {
-          commit(c);
+        const hit = hits[selectedIndex];
+        if (hit) {
+          if (hit.kind === "contact") commit(hit.contact);
+          else commitMention(hit.mention);
           return true;
         }
         return false;

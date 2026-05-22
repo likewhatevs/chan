@@ -233,6 +233,27 @@ export const api = {
       }>
     >("GET", `/api/contacts?${qs.toString()}`);
   },
+  /// `fullstack-a-70`: mention-corpus prefix lookup. Returns the
+  /// distinct `@@<Name>` tokens observed across the indexed
+  /// markdown corpus, NOT just the contact files. The bubble
+  /// merges these with `api.contacts` results so a name that
+  /// has many `@@<Name>` references in body text but no contact
+  /// file still surfaces in the completion dropdown.
+  ///
+  /// Backed by `systacean-35`'s
+  /// `GET /api/mentions?q=<prefix>&limit=<int>` route. Labels
+  /// arrive WITH the `@@` sigil (the route composes it).
+  /// Empty `q` returns the full corpus capped at `limit`
+  /// (default 10).
+  mentions: (q = "", limit = 10) => {
+    const qs = new URLSearchParams();
+    if (q) qs.set("q", q);
+    qs.set("limit", String(limit));
+    return req<Array<{ label: string }>>(
+      "GET",
+      `/api/mentions?${qs.toString()}`,
+    );
+  },
   list: (dir?: string | null) => {
     const qs = new URLSearchParams();
     if (dir !== undefined && dir !== null) qs.set("dir", dir);

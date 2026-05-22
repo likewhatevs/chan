@@ -252,3 +252,148 @@ Per the memory rule. Per-path staging only.
 
 Push held. Standing by for the chan-server
 endpoint landing + the SPA-side follow-up.
+
+## 2026-05-22 — SPA wiring ready for review (post-systacean-35)
+
+Four-file change. SPA-only. Closes the
+audit-only round from earlier today.
+
+### What landed
+
+`web/src/api/client.ts`:
+* New `api.mentions(q = "", limit = 10)`
+  method hitting
+  `GET /api/mentions?q=&limit=` (the
+  `systacean-35` endpoint).
+* Returns `Array<{ label: string }>` where
+  `label` includes the `@@` sigil per the
+  route's composition.
+* Doc-comment cross-references `-a-70` and
+  `systacean-35`.
+
+`web/src/editor/bubbles/contact.ts`:
+* New `MentionHit` interface + `Suggestion`
+  discriminated union (`contact` | `mention`).
+* `hits: Contact[]` → `hits: Suggestion[]`.
+* New `includeMentions` flag — gated on
+  `mode === "mention"`. Wiki mode (legacy
+  `@` trigger) ONLY queries contacts;
+  mention mode (`@@` trigger) fans BOTH
+  queries in parallel via `Promise.all`.
+* New `mergeSuggestions(contactRows,
+  mentionRows)` helper. Dedupes mention
+  tokens against the contact set
+  (basename stem + lowercased aliases) so
+  the dropdown doesn't double-list a name
+  that has a contact file AND mention
+  references. Caps at `PAGE_LIMIT`.
+* New `commitMention(m)` — splices
+  `@@<Name>` verbatim into the editor
+  buffer; distinct from `commit(contact)`
+  which does basename/alias resolution.
+* Render path: mention-only rows get the
+  `md-bubble-row-mention-only` CSS class.
+  Enter / click both route through the
+  right commit path.
+
+`web/src/editor/Wysiwyg.svelte`:
+* CSS rule `.md-bubble-row-mention-only`
+  → `opacity: 0.7`. Selected row restores
+  to `opacity: 1` so the keyboard
+  navigation reads correctly.
+
+`web/src/editor/bubbles/mentionBubble.test.ts`
+(new): 10 raw-source pins covering the
+client method, the doc-comment cross-
+references, the Suggestion type, the
+mode gating, the parallel fan-out, the
+dedup logic, the commit path, the Enter
+key handler, the CSS class assignment,
+and the CSS rules.
+
+### Acceptance
+
+1. **Typing `@@<partial>` brings up
+   matches from the broader corpus** ✓
+   (mention mode fans both queries +
+   merges).
+2. **Match list includes mentions
+   without a contact file backing** ✓
+   (mention rows render below
+   contact-file rows with dim styling).
+3. **Selection completes the mention**
+   ✓ (`commitMention` splices the
+   `@@<Name>` token verbatim).
+4. **No regression on wiki mode** ✓
+   (wiki mode still queries contacts
+   only; `includeMentions` is gated).
+
+### Gate
+
+* vitest **1043 / 1043** (+11 net from
+  `-a-68 slice 1b`'s 1032).
+* svelte-check 0 errors / 0 warnings
+  across 4039 files.
+* npm build clean.
+* Rust gate not re-run (chan-server side
+  was systacean-35's, already shipped).
+
+### Decisions
+
+* **Mode gating** — mention-corpus only
+  surfaces in mention mode (`@@`
+  trigger). Wiki mode (`@` trigger)
+  resolves to wiki-link paths which
+  require a contact-file path target;
+  mention tokens don't have one.
+* **Dedup against basename + aliases**
+  — a contact file `Alex.md` with alias
+  `@@alex` collapses the mention
+  corpus's `@@Alex` row into the
+  contact-file row (single source of
+  truth for the picker).
+* **Dim styling for mention-only** —
+  user reads "this is a body-text-only
+  reference" at a glance vs "this is a
+  first-class contact". Selected row
+  restores full opacity so keyboard
+  navigation reads correctly.
+* **Parallel fan-out via `Promise.all`**
+  — both queries fire on the same
+  debounce tick; the merged response
+  renders once. Mention failure is
+  caught + treated as `[]` so a
+  per-request mention-route blip
+  doesn't tank contact completion.
+* **`commitMention` separate from
+  `commit`** — mention tokens arrive
+  with sigil; no path/alias resolution
+  needed. Keeps the two paths simple.
+
+### Suggested commit subject
+
+```
+Editor: merge /api/mentions into contact bubble (mention-corpus completion) (fullstack-a-70)
+```
+
+Single commit. Client method + bubble
+refactor + CSS rule + 10 test pins.
+
+### Files for `git add` (per-path discipline)
+
+* `web/src/api/client.ts`
+* `web/src/editor/bubbles/contact.ts`
+* `web/src/editor/Wysiwyg.svelte`
+* `web/src/editor/bubbles/mentionBubble.test.ts` (new)
+* `docs/journals/phase-8/fullstack-a/fullstack-a-70.md`
+* `docs/journals/phase-8/fullstack-a/journal.md`
+* `docs/journals/phase-8/alex/event-fullstack-a-architect.md`
+
+### Atomic-audit-commit
+
+Per the memory rule. Per-path staging only.
+
+Push held. Standing by for clearance +
+the @@WebtestA empirical walk that
+confirms `@@<Name>` completion now
+surfaces body-text references.

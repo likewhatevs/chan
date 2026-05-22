@@ -8668,3 +8668,105 @@ Single bash invocation per discipline.
 Push held. Standing by for clearance + the
 @@WebtestA re-walk to close the slice 1
 PARTIAL.
+
+## 2026-05-22 — poke (fullstack-a-70 SPA wiring ready for review)
+
+Four-file change. SPA-only. Closes the
+audit-only round + systacean-35 closure.
+
+### What landed
+
+`api/client.ts`: new `api.mentions(q, limit)`
+hitting `/api/mentions?q=&limit=`. Returns
+`Array<{ label: string }>` (labels with
+`@@` sigil per the route).
+
+`editor/bubbles/contact.ts`:
+* `MentionHit` interface +
+  `Suggestion = contact | mention`
+  discriminated union.
+* `hits: Suggestion[]` (was `Contact[]`).
+* `includeMentions` gated on
+  `mode === "mention"`. Wiki mode only
+  queries contacts.
+* Parallel fan-out via `Promise.all` —
+  contacts + mentions on the same
+  debounce tick.
+* `mergeSuggestions` dedups mention
+  tokens against the contact set
+  (basename stem + lowercased aliases)
+  so a contact file with alias
+  `@@alex` AND a mention `@@Alex`
+  collapse to one row.
+* `commitMention(m)` splices
+  `@@<Name>` verbatim; distinct from
+  `commit(contact)` which does
+  basename/alias resolution.
+* Render: mention-only rows get
+  `md-bubble-row-mention-only` class.
+
+`editor/Wysiwyg.svelte`: CSS rule —
+mention-only rows render at
+`opacity: 0.7`; selected row restores
+to `1` so keyboard nav reads
+correctly.
+
+`mentionBubble.test.ts` (new): 10
+raw-source pins.
+
+### Acceptance
+
+1. `@@<partial>` brings up matches
+   from the mention corpus ✓.
+2. Mention-only hits (no contact file)
+   surface with dim styling ✓.
+3. Selection completes the token ✓.
+4. No regression on wiki mode ✓.
+
+### Gate
+
+* vitest **1043 / 1043** (+11 net from
+  -a-68 slice 1b's 1032).
+* svelte-check 0 errors / 0 warnings
+  across 4039 files.
+* npm build clean.
+
+### Decisions
+
+* **Mode gating** — wiki mode resolves
+  to paths; mention tokens lack one.
+* **Dedup against basename + aliases**
+  — single source of truth in the
+  picker.
+* **Dim mention-only rows** — user
+  reads "body-text-only" at a glance.
+* **Parallel `Promise.all`** — single
+  debounce tick; mention failure is
+  caught.
+* **Separate `commitMention`** —
+  mention tokens arrive with sigil;
+  no resolution needed.
+
+### Suggested commit subject
+
+```
+Editor: merge /api/mentions into contact bubble (mention-corpus completion) (fullstack-a-70)
+```
+
+### Files for `git add`
+
+* `web/src/api/client.ts`
+* `web/src/editor/bubbles/contact.ts`
+* `web/src/editor/Wysiwyg.svelte`
+* `web/src/editor/bubbles/mentionBubble.test.ts` (new)
+* `docs/journals/phase-8/fullstack-a/fullstack-a-70.md`
+* `docs/journals/phase-8/fullstack-a/journal.md`
+* `docs/journals/phase-8/alex/event-fullstack-a-architect.md`
+  (this append)
+
+### Atomic-audit-commit applied
+
+Single bash invocation per discipline.
+
+Push held. Standing by for clearance +
+the @@WebtestA empirical walk.

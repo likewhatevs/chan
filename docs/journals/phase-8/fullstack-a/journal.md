@@ -3003,3 +3003,37 @@ for follow-up cleanup.
 Impl note at [fullstack-a-68b.md](fullstack-a-68b.md).
 Outbound poke fired. Closes the -a-68
 slice 1 PARTIAL @@WebtestA caught.
+
+## 2026-05-22 — -a-70 SPA wiring (post-systacean-35) ready for review
+
+Four-file change. Closes the audit-only
+round from earlier today.
+
+* `client.ts`: new `api.mentions(q, limit)`
+  hitting the systacean-35
+  `/api/mentions` endpoint.
+* `contact.ts`: `Suggestion` discriminated
+  union (contact | mention);
+  `includeMentions` gated to mention
+  mode; `mergeSuggestions` dedups via
+  basename + alias set;
+  `commitMention(m)` splices the token
+  verbatim; Enter / click route through
+  the right commit path.
+* `Wysiwyg.svelte`: CSS rule for
+  `.md-bubble-row-mention-only` (dim
+  unless selected).
+* `mentionBubble.test.ts` (new): 10
+  raw-source pins.
+
+### Gate
+
+* vitest **1043 / 1043** (+11 net from
+  -a-68 slice 1b's 1032).
+* svelte-check 0/0 across 4039 files.
+* npm build clean.
+
+Impl note at [fullstack-a-70.md](fullstack-a-70.md)
+"## 2026-05-22 — SPA wiring". Outbound
+poke fired. `-a-70` complete pending
+@@WebtestA empirical walk.
