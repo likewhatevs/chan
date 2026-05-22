@@ -976,7 +976,7 @@ fn cmd_add(
     if semantic_search || reports {
         let drive = lib
             .open_drive(&entry.path)
-            .with_context(|| not_a_chan_drive_hint(&entry.path))?;
+            .with_context(|| format!("opening drive at {}", entry.path.display()))?;
         if semantic_search {
             drive
                 .set_semantic_enabled(true)
@@ -1382,7 +1382,7 @@ fn cmd_reports_set(path: Option<PathBuf>, enabled: bool, skip_confirm: bool) -> 
         .unwrap_or_else(|| lib.effective_default_drive_root());
     let drive = lib
         .open_drive(&root)
-        .with_context(|| not_a_chan_drive_hint(&root))?;
+        .with_context(|| format!("opening drive at {}", root.display()))?;
     // Destructive-action confirmation for disable. The non-
     // interactive `-y` flag skips the prompt; an interactive TTY
     // without `-y` blocks until the user confirms.
