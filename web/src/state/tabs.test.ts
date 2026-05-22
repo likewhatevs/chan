@@ -864,10 +864,13 @@ describe("pane state", () => {
     expect(pane.activeTabId).toBe(terminal.id);
   });
 
-  test("showOrSpawnRichPromptInFocusedPane focuses an existing terminal in the pane (fullstack-50)", () => {
-    // Pane has a doc tab (active) plus a terminal further down.
-    // Cmd+K p should refocus the terminal AND show the rich prompt
-    // there, leaving the doc tab and the other tabs alone.
+  test("showOrSpawnRichPromptInFocusedPane spawns fresh when active tab is not a terminal even if one exists elsewhere (fullstack-a-56)", () => {
+    // `fullstack-a-56` replaced the "find first terminal in pane"
+    // behaviour with a strict 3-state contract keyed off the
+    // ACTIVE tab. Case 3: active tab is NOT a terminal, so
+    // spawn a fresh one + open the prompt. The pre-existing
+    // terminal further down the tab list is left untouched
+    // (don't surprise the user with a tab-switch).
     const doc = fileTab({ id: "doc-1", path: "notes/x.md" });
     const terminal: TerminalTab = {
       kind: "terminal",
@@ -883,11 +886,13 @@ describe("pane state", () => {
     showOrSpawnRichPromptInFocusedPane();
 
     const pane = layout.nodes[seed.id] as LeafNode;
-    // No new terminal — the existing one was reused.
-    expect(pane.tabs).toHaveLength(2);
-    expect(pane.activeTabId).toBe("term-existing");
-    const live = pane.tabs.find((t) => t.id === "term-existing") as TerminalTab;
-    expect(live.richPrompt?.open).toBe(true);
+    // Fresh terminal spawned + active; existing one untouched.
+    expect(pane.tabs).toHaveLength(3);
+    expect(pane.activeTabId).not.toBe(doc.id);
+    expect(pane.activeTabId).not.toBe("term-existing");
+    const active = pane.tabs.find((t) => t.id === pane.activeTabId);
+    expect(active?.kind).toBe("terminal");
+    expect((active as TerminalTab).richPrompt?.open).toBe(true);
   });
 
   test("showOrSpawnRichPromptInFocusedPane reveals the prompt on an already-open prompt (fullstack-50)", () => {

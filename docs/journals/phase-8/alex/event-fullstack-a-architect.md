@@ -4516,3 +4516,117 @@ dispatch.
 
 Push held — multi-agent tree commit discipline.
 Standing by for clearance.
+
+## 2026-05-22 — poke (fullstack-a-56 ready for review)
+
+Two small UX papercuts bundled. SPA-only.
+
+### Cmd+P 3-state contract
+
+`tabs.svelte.ts` `showOrSpawnRichPromptInFocusedPane`
+rewritten:
+
+* Reads `p.activeTabId` rather than picking the
+  first terminal (PRE-`-a-56` shape: `p.tabs.find
+  ((t) => t.kind === "terminal")` always picked
+  the FIRST one regardless of which was active).
+* Case 1 (active terminal + prompt closed): open.
+* Case 2 (active terminal + prompt open): toggle
+  off (new path; was missing pre-`-a-56`).
+* Case 3 (active not terminal): spawn fresh +
+  open. Picked spawn-fresh over switch-to-existing
+  per the task body's "doesn't surprise the user
+  with a tab-switch" framing.
+
+### Depth-slider shallow-scope cue
+
+`GraphPanel.svelte`:
+
+* New `depthShallow` $derived — hoisted out of
+  `{@const}` to a top-level derived since
+  `{@const}` can't sit inside `<div>` per Svelte's
+  placement rule. Computation gates on
+  `!languageMode && !disabled && depthCap <= 1`.
+* `.depth-row` gets `class:shallow` + a tooltip
+  when shallow.
+* Slider input gets `disabled={depthDisabled ||
+  depthShallow}` so the user can't drag a slider
+  that can't move.
+* `.depth-value` markup branches to render
+  `<span class="depth-cue">[max]</span>` when
+  shallow.
+* CSS: widens `.depth-value` from 1.6em to auto
+  when shallow + adds a `.depth-cue` dimmer-tone
+  rule.
+
+### Tests
+
+`cmdPRichPrompt3State.test.ts` (new): 10
+raw-source pins (3-state contract assertions +
+shallow-cue $derived + markup + CSS).
+
+`tabs.test.ts`: existing "focuses an existing
+terminal in the pane (fullstack-50)" pin
+rewritten to match the new spawn-fresh case-3
+behavior. Pre-`-a-56` expected the function to
+switch to an existing terminal elsewhere in the
+pane; `-a-56` spawns fresh instead. Pin
+renamed + commented to reflect the new
+contract.
+
+### Gate
+
+* vitest **732 / 732** (+10 net from `-a-62`'s
+  722).
+* svelte-check 0 errors / 0 warnings across
+  3999 files.
+* npm build clean.
+* Rust gate not re-run.
+
+### Decisions
+
+* **Case 3 = spawn fresh** over switch-to-existing
+  (task body's recommended default).
+* **`$derived.by` over `{@const}`** for
+  `depthShallow` — Svelte's `{@const}` placement
+  restriction. Cleaner anyway: keeps the gate
+  visible alongside `depthCap`.
+* **Disable slider when shallow** — visual cue
+  AND interaction lock; pretending the slider is
+  draggable when it can't move would be
+  misleading.
+
+### Working-tree caveat
+
+Other lanes (CI, @@Systacean-22) have unrelated
+WIP in the shared worktree
+(`docs/journals/phase-8/alex/event-ci-architect.md`,
+etc.). My atomic-audit-commit stages ONLY my
+files per per-path discipline.
+
+### Suggested commit subject
+
+```
+Cmd+P 3-state contract + depth slider shallow-scope cue (fullstack-a-56)
+```
+
+Single commit. Two papercuts bundled per task
+body.
+
+### Files for `git add`
+
+* `web/src/state/tabs.svelte.ts`
+* `web/src/components/GraphPanel.svelte`
+* `web/src/state/tabs.test.ts`
+* `web/src/components/cmdPRichPrompt3State.test.ts`
+* `docs/journals/phase-8/fullstack-a/fullstack-a-56.md`
+* `docs/journals/phase-8/fullstack-a/journal.md`
+* `docs/journals/phase-8/alex/event-fullstack-a-architect.md`
+  (this append)
+
+### Atomic-audit-commit applied
+
+Single bash invocation per discipline.
+
+Push held — multi-agent tree commit discipline.
+Standing by for clearance.

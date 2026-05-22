@@ -1591,3 +1591,38 @@ Impl note + commit subject at
 [fullstack-a-62.md](fullstack-a-62.md). Outbound
 poke fired. Queue waiting: `-a-56` / `-a-59` /
 `-a-60`.
+
+## 2026-05-22 — -a-56 (Cmd+P 3-state + depth-slider shallow cue) ready for review
+
+Two papercuts bundled per task body.
+
+**Cmd+P**: rewrote `showOrSpawnRichPromptInFocusedPane`
+to follow the canonical 3-state contract. Reads
+`p.activeTabId` instead of picking the first
+terminal; toggle-off path added (case 2);
+case 3 picks spawn-fresh per the task body's
+"doesn't surprise the user" framing.
+
+**Depth slider**: new `depthShallow` $derived
+(hoisted out of `{@const}` since the latter
+can't sit inside `<div>`); when scope's
+depthCap <= 1, the slider gets `disabled`,
+`class:shallow`, a tooltip, and a trailing
+`[max]` cue chip.
+
+`tabs.test.ts` existing `-50` pin rewritten
+to match the new spawn-fresh case-3 behavior;
+new `cmdPRichPrompt3State.test.ts` adds 10
+raw-source pins covering both pieces.
+
+### Gate
+
+* vitest **732 / 732** (+10 net from `-a-62`'s
+  722).
+* svelte-check 0/0 across 3999 files.
+* npm build clean.
+
+Impl note + commit subject at
+[fullstack-a-56.md](fullstack-a-56.md). Outbound
+poke fired. Queue waiting: `-a-59` /
+`-a-60`.

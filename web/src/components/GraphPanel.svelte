@@ -242,6 +242,26 @@
         currentScope?.kind === "global"),
   );
   const languageMode = $derived(graphState.mode === "language");
+
+  /// `fullstack-a-56` shallow-scope cue: when the scope's
+  /// `depthCap` is 1 (single-file graph with no further forward
+  /// hops; tag scope with only direct neighbours; etc.) the
+  /// slider can't meaningfully be dragged. Surface that via a
+  /// `[max]` suffix + disable the slider so the user can see at
+  /// a glance there's nothing more to reveal. Gates: only fires
+  /// outside language mode (which has its own depth=0 "max"
+  /// affordance) + only when the slider would otherwise be
+  /// enabled (depthDisabled is the drive/global guard).
+  const depthShallow = $derived.by(() => {
+    if (languageMode) return false;
+    const disabled =
+      !currentScope ||
+      currentScope.kind === "drive" ||
+      currentScope.kind === "global";
+    if (disabled) return false;
+    return depthCap <= 1;
+  });
+
   const depthCap = $derived.by(() => {
     if (languageMode) return Math.max(1, languageMaxDepth);
     if (loading && currentScope?.kind === "dir" && nodes.length === 0) {
@@ -1335,7 +1355,14 @@
       use:clampMenu={tabMenuPos}
       onmousedown={(e) => e.stopPropagation()}
     >
-      <div class="mbtn depth-row" class:disabled={depthDisabled}>
+      <div
+        class="mbtn depth-row"
+        class:disabled={depthDisabled}
+        class:shallow={depthShallow}
+        title={depthShallow
+          ? "Scope is shallow — depth 1 already reveals everything forward-reachable"
+          : null}
+      >
         <span class="mbtn-icon" aria-hidden="true"></span>
         <span class="mbtn-label">Depth</span>
         <input
@@ -1344,11 +1371,19 @@
           max={depthCap}
           step="1"
           bind:value={graphState.depth}
-          disabled={depthDisabled}
+          disabled={depthDisabled || depthShallow}
           onmousedown={(e) => e.stopPropagation()}
           aria-label="depth"
         />
-        <span class="depth-value">{languageMode && graphState.depth === 0 ? "max" : graphState.depth}</span>
+        <span class="depth-value">
+          {#if languageMode && graphState.depth === 0}
+            max
+          {:else if depthShallow}
+            {graphState.depth} <span class="depth-cue">[max]</span>
+          {:else}
+            {graphState.depth}
+          {/if}
+        </span>
       </div>
       <div class="msep" role="separator"></div>
       <button class="mbtn" onclick={reloadGraph}>
@@ -1991,6 +2026,21 @@
     font-variant-numeric: tabular-nums;
     width: 1.6em;
     text-align: right;
+  }
+  /* `fullstack-a-56` shallow-scope cue: when the scope's
+     depth-cap is 1 (single-file graph, etc.) show a `[max]`
+     suffix on the depth value so the user can see at a glance
+     that the slider can't be dragged further. The `.shallow`
+     class on `.depth-row` widens the value column to fit the
+     suffix; `.depth-cue` is the smaller dimmer trailing chip. */
+  .tab-menu-bubble .depth-row.shallow .depth-value {
+    width: auto;
+  }
+  .tab-menu-bubble .depth-cue {
+    color: var(--text-secondary);
+    font-size: 0.85em;
+    margin-left: 0.25rem;
+    opacity: 0.7;
   }
   /* Filter rows: kind-coloured dot left, label middle, count
      right. On-state fills the dot; off-state shows a hollow ring
