@@ -8403,3 +8403,99 @@ Hybrid NAV → Hybrid Nav rename (fullstack-a-68 slice 1)
 Single bash invocation per discipline.
 
 Push held. Standing by for clearance.
+
+## 2026-05-22 — poke (fullstack-a-81 slice 2: per-role agent docs ready for review)
+
+Docs-only. 5-file change.
+
+### What landed
+
+4 new template files at
+`docs/templates/team-process/`:
+* `architect.md.tpl` (27L, 4 substitutions).
+* `fullstack.md.tpl` (34L, 3).
+* `systacean.md.tpl` (41L, 5).
+* `webtest.md.tpl` (33L, 4).
+
+Same bulk-regex pattern as slice 1's
+bootstrap.md.tpl (`@@FullStackA` →
+`{worker-1-handle}` etc.).
+
+`README.md` extended with:
+* Per-file descriptions in the Files
+  section.
+* New "Note on chan-specific phase
+  history" — predecessor handles
+  (`@@Backend`, `@@Frontend`, etc.) +
+  phase numbers stay verbatim; the
+  `-a-79` orchestrator decides whether
+  to strip for new teams.
+* New "Deferred to follow-up slices"
+  section.
+
+### Acceptance (slice 2)
+
+1. Per-role docs available as templates ✓
+   — lead + 3 worker roles covered.
+2. Substitution shape consistent with
+   slice 1 ✓.
+3. Chan-specific phase history preserved
+   ✓ — flagged for orchestrator.
+4. README reflects new inventory ✓.
+
+### Deferred (slices 3-4)
+
+* Slice 3: per-agent contact cards
+  (fullstack-a/b, webtest-a/b, ci) +
+  `docs/agents/orchestration/` subdir.
+  Per-agent cards encode individual
+  identity that doesn't map to the
+  template variables; needs a different
+  shape (per-worker metadata file
+  generated from team config).
+* Slice 4: optional `phase-N`
+  parameterisation.
+
+### Gate
+
+* No code touched. vitest 1028 / 1028
+  (unchanged from -a-68 slice 1).
+* Rust 226 passed.
+
+### Decisions
+
+* **Bulk regex per file** — same sweep
+  as slice 1.
+* **Don't strip phase history** —
+  orchestrator's decision, not the
+  template's.
+* **Per-agent cards deferred** — they
+  need a different shape than static
+  templates.
+* **README in same commit** — file
+  inventory is part of the slice's
+  deliverable.
+
+### Suggested commit subject
+
+```
+docs(fullstack-a-81): parameterise per-role agent docs (architect / fullstack / systacean / webtest) — slice 2
+```
+
+### Files for `git add`
+
+* `docs/templates/team-process/architect.md.tpl` (new)
+* `docs/templates/team-process/fullstack.md.tpl` (new)
+* `docs/templates/team-process/systacean.md.tpl` (new)
+* `docs/templates/team-process/webtest.md.tpl` (new)
+* `docs/templates/team-process/README.md`
+* `docs/journals/phase-8/fullstack-a/fullstack-a-81.md`
+* `docs/journals/phase-8/fullstack-a/journal.md`
+* `docs/journals/phase-8/alex/event-fullstack-a-architect.md`
+  (this append)
+
+### Atomic-audit-commit applied
+
+Single bash invocation per discipline.
+
+Push held. Standing by for clearance.

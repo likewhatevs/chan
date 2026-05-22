@@ -24,13 +24,35 @@ rendering an empty string.
   from `docs/agents/bootstrap.md` (the chan-internal canonical
   version) so a new team's lead can read it and dispatch
   workers with the same process discipline chan uses.
+* `architect.md.tpl` — lead-role descriptor. Parameterised
+  from `docs/agents/architect.md`. The lead reads this on
+  bootstrap to learn the dispatch / journal / coordination
+  conventions.
+* `fullstack.md.tpl` — full-stack worker role descriptor.
+  Parameterised from `docs/agents/fullstack.md`. Each
+  full-stack worker on a team consumes this on bootstrap.
+* `systacean.md.tpl` — systems / Rust-quality worker role
+  descriptor. Parameterised from `docs/agents/systacean.md`.
+* `webtest.md.tpl` — UI-walkthrough / proactive-walk worker
+  role descriptor. Parameterised from `docs/agents/webtest.md`.
 
-Remaining `docs/agents/*.md` files (architect/working-agent
-process docs, file-browser / terminal / editor walkthroughs)
-will be parameterised in follow-up slices of `-a-81` as
-`-a-79`'s orchestrator surfaces the need; this slice ships the
-helper + the first canonical template so orchestrator
-integration can begin in parallel.
+### Note on chan-specific phase history
+
+The role docs reference predecessor handles (`@@Backend`,
+`@@Frontend`, `@@Syseng`, etc.) + phase numbers (1-8) that
+record chan's own evolution. These references stay verbatim
+in the template; the `fullstack-a-79` orchestrator can
+optionally strip them at publish time if a new team starts
+fresh without inheriting chan's phase history.
+
+### Deferred to follow-up slices
+
+* Slice 3: per-agent contact cards
+  (fullstack-a.md / fullstack-b.md / etc.) + the
+  `docs/agents/orchestration/` subdir.
+* Slice 4: optionally parameterise `phase-N` references if
+  `-a-79`'s orchestrator wants new teams to start at a
+  different phase label.
 
 ## Chan-internal usage
 

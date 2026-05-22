@@ -2910,3 +2910,35 @@ as a separate commit.
 Impl note at [fullstack-a-68.md](fullstack-a-68.md)
 "## 2026-05-22 — slice 1". Outbound poke
 fired.
+
+## 2026-05-22 — -a-81 slice 2 (per-role agent docs) ready for review
+
+Docs-only. 4 new `.tpl` files at
+`docs/templates/team-process/`:
+* `architect.md.tpl` (4 substitutions)
+* `fullstack.md.tpl` (3)
+* `systacean.md.tpl` (5)
+* `webtest.md.tpl` (4)
+
+Same bulk-regex pattern as slice 1's
+bootstrap.md.tpl. README extended with new
+file inventory + "chan-specific phase
+history" note (predecessor handles + phase
+numbers stay verbatim; orchestrator can
+strip).
+
+Slice 3 (per-agent cards + orchestration
+subdir) + slice 4 (phase-N references)
+deferred — per-agent cards encode
+individual identity that needs a different
+shape than the template variables.
+
+### Gate
+
+* vitest 1028 / 1028 (unchanged; no SPA
+  touched).
+* Rust 226 passed.
+
+Impl note at [fullstack-a-81.md](fullstack-a-81.md)
+"## 2026-05-22 — slice 2". Outbound poke
+fired.

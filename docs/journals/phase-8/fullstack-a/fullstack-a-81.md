@@ -308,3 +308,140 @@ tests tightly coupled.
 Per the memory rule. Per-path staging only.
 
 Push held. Standing by for clearance.
+
+## 2026-05-22 — slice 2 (per-role agent docs parameterised) ready for review
+
+Five-file change. Docs-only.
+
+### What landed
+
+Four new template files at
+`docs/templates/team-process/`:
+
+* `architect.md.tpl` (27 lines) —
+  parameterised from
+  `docs/agents/architect.md`. 4 handle
+  substitutions.
+* `fullstack.md.tpl` (34 lines) —
+  parameterised from
+  `docs/agents/fullstack.md`. 3 handle
+  substitutions.
+* `systacean.md.tpl` (41 lines) —
+  parameterised from
+  `docs/agents/systacean.md`. 5 handle
+  substitutions.
+* `webtest.md.tpl` (33 lines) —
+  parameterised from
+  `docs/agents/webtest.md`. 4 handle
+  substitutions.
+
+Total: 16 handle tokens substituted via the
+same bulk regex sweep as slice 1's
+`bootstrap.md.tpl` (`@@FullStackA` →
+`{worker-1-handle}` etc.).
+
+`docs/templates/team-process/README.md`:
+* Files section extended to list the four
+  new role templates with one-line
+  descriptions.
+* New "Note on chan-specific phase
+  history" section explaining that
+  predecessor handles (`@@Backend`,
+  `@@Frontend`, etc.) + phase numbers
+  stay verbatim — the orchestrator can
+  strip them at publish time for new
+  teams.
+* New "Deferred to follow-up slices"
+  section listing slice 3 (per-agent
+  cards + orchestration subdir) and
+  slice 4 (optional phase-N
+  parameterisation).
+
+### Acceptance (slice 2)
+
+1. **Per-role docs available as templates**
+   ✓ — 4 new `.tpl` files cover the lead
+   + the three worker roles a team
+   typically composes from.
+2. **Substitution shape consistent** with
+   slice 1 ✓ — same `{host-handle}` /
+   `{lead-handle}` / `{worker-N-handle}` /
+   `{team-name}` tokens; same regex sweep
+   applied.
+3. **Chan-specific phase history
+   preserved** ✓ — predecessor handle
+   references + phase numbers stay
+   verbatim; flagged in README for the
+   orchestrator's awareness.
+4. **README reflects new file inventory** ✓.
+
+### Out of scope
+
+* **Slice 3 (deferred)**: per-agent contact
+  cards (`fullstack-a.md` / `fullstack-b.md`
+  / `webtest-a.md` / `webtest-b.md` /
+  `ci.md`) + the `docs/agents/orchestration/`
+  subdir. Per-agent cards are
+  individual-identity files that don't
+  generalise cleanly into the template
+  variables; require a different shape
+  (per-worker metadata blob written by the
+  orchestrator from team config).
+* **Slice 4 (deferred)**: `phase-N`
+  reference handling. The orchestrator
+  decides whether to inherit chan's phase
+  labels or start fresh.
+
+### Gate
+
+* No code touched. vitest count unchanged
+  (1028 from -a-68 slice 1).
+* Rust 226 passed.
+* svelte-check + build not re-run (no
+  source files touched).
+
+### Decisions
+
+* **Bulk regex per file** — same sweep
+  pattern as slice 1; quick + reliable.
+* **Don't strip phase history** — the
+  templates carry chan's evolution
+  context; orchestrator is the right
+  layer to decide what new teams inherit.
+* **Per-agent cards deferred** — they
+  encode individual agent identity
+  (slot history, predecessors) that
+  doesn't map cleanly to the
+  team-template variables. Slice 3 will
+  need a different shape (per-worker
+  metadata file generated from team
+  config, not a static template).
+* **README updated in same commit** —
+  file inventory is part of the slice's
+  deliverable; reviewers need the
+  pointer.
+
+### Suggested commit subject
+
+```
+docs(fullstack-a-81): parameterise per-role agent docs (architect / fullstack / systacean / webtest) — slice 2
+```
+
+Docs-only commit.
+
+### Files for `git add` (per-path discipline)
+
+* `docs/templates/team-process/architect.md.tpl` (new)
+* `docs/templates/team-process/fullstack.md.tpl` (new)
+* `docs/templates/team-process/systacean.md.tpl` (new)
+* `docs/templates/team-process/webtest.md.tpl` (new)
+* `docs/templates/team-process/README.md`
+* `docs/journals/phase-8/fullstack-a/fullstack-a-81.md`
+* `docs/journals/phase-8/fullstack-a/journal.md`
+* `docs/journals/phase-8/alex/event-fullstack-a-architect.md`
+
+### Atomic-audit-commit
+
+Per the memory rule. Per-path staging only.
+
+Push held. Standing by for clearance.
