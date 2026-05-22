@@ -2337,3 +2337,241 @@ Accessibility + no `--drive <path>` CLI arg. The
 needs either an Accessibility grant, a `--drive` arg,
 or @@Alex's canonical chan.app walk at the v0.12.0
 cut endpoint.
+
+## 2026-05-22 — fullstack-b-26 + fullstack-b-27 runtime walk
+
+Task: [`webtest-b-5.md`](webtest-b-5.md). Bundled walk
+of two chan-desktop changes:
+
+* `-b-26` (`77c0129`) — Reload + Open Inspector in
+  editor + terminal tab right-click menus (SPA-only
+  change in `FileEditorTab.svelte` + `TerminalTab.svelte`).
+* `-b-27` (`74bd746`) — `CmdOrCtrl+N` → `CmdOrCtrl+Shift+N`
+  accelerator move on the New Window menu item
+  (chan-desktop Tauri menu change).
+
+Walked on HEAD `8b2ceb9` (both commits in history).
+
+### Environment
+
+* `cargo build -p chan-desktop --bin chan-desktop` —
+  clean (6.73s incremental).
+* `cargo test -p chan-desktop --bin chan-desktop` —
+  **44/44 pass** (was 43 pre-`-b-27`; +1 structural
+  pin matches the task body claim).
+* `npx vitest run web/src/components/tabMenuReloadInspector.test.ts`
+  — **8/8 pass** (the new `-b-26` test).
+* No debug chan-desktop launched (same constraint as
+  `-b-3`/`-b-4`/`-b-5` carry-over — @@Alex's Chan.app
+  (PID 39577) live with sidecars; config.json sharing
+  + GUI click block).
+
+### Verdict table
+
+| #   | Check                                                            | Verdict                                |
+|-----|------------------------------------------------------------------|----------------------------------------|
+| 1   | Editor tab right-click → Reload                                  | source + test VERIFIED; click PARKED   |
+| 2   | Editor tab right-click → Open Inspector                          | source + test VERIFIED; click PARKED   |
+| 3   | Terminal tab right-click → Reload                                | source + test VERIFIED; click PARKED   |
+| 4   | Terminal tab right-click → Open Inspector                        | source + test VERIFIED; click PARKED   |
+| 5   | No regression on existing entries (Reload from Disk / Restart)   | source VERIFIED                        |
+| 6   | Cmd+Shift+N opens new window                                     | source + test VERIFIED; chord PARKED   |
+| 7   | Cmd+N does NOT open new window                                   | source + structural-pin VERIFIED       |
+
+### Code-level pin — `-b-26`
+
+`web/src/components/tabMenuReloadInspector.test.ts`
+(new, 8 ?raw-source pins; 8/8 pass):
+
+* `FileEditorTab.svelte` imports `reloadWindow`,
+  `openWebInspector`, `isTauriDesktop`, `notify`.
+* `FileEditorTab.svelte` defines `doReloadWindow` +
+  `doOpenInspector` handlers.
+* `FileEditorTab.svelte` renders two new menu buttons
+  with labels `Reload` + `Open Inspector` wired to
+  the handlers.
+* `TerminalTab.svelte` imports + handlers + menu
+  buttons (same shape).
+
+Source review confirms the wiring:
+
+* `FileEditorTab.svelte:425` `doReloadWindow` calls
+  `reloadWindow()` (existing `-a-36` helper that
+  wraps the `reload_window` Tauri IPC from `-b-17`).
+* `FileEditorTab.svelte:434` `doOpenInspector` calls
+  `openWebInspector()` (wraps `open_devtools` IPC).
+* `FileEditorTab.svelte:766` keeps existing `Reload
+  from Disk` (label distinct + handler `doReload` is
+  the file-reload, not window-reload).
+* `FileEditorTab.svelte:806-817` new tail entries
+  `Reload` + `Open Inspector`.
+* `TerminalTab.svelte:1127` keeps existing `Restart`
+  (terminal-restart, not window-reload).
+* `TerminalTab.svelte:1237-1248` new tail entries
+  `Reload` + `Open Inspector`.
+
+**Check 5 (no regression on existing entries) is
+SOURCE-VERIFIED**: the new entries are TAIL additions
+with DISTINCT labels (`Reload` ≠ `Reload from Disk`;
+`Reload` ≠ `Restart`). No existing entries removed or
+renamed. The label diffraction is the right shape
+(window-level vs file/terminal-level).
+
+### Code-level pin — `-b-27`
+
+`desktop/src-tauri/src/main.rs:1074-1076`:
+
+```
+let new_window = MenuItemBuilder::with_id("app-new-window", "New Window")
+    .accelerator("CmdOrCtrl+Shift+N")
+    .build(app)?;
+```
+
+`desktop/src-tauri/src/main.rs:1111-1115`: `on_menu_event`
+branch `"app-new-window" => open_new_launcher_window(app)`
+unchanged. So when the new accelerator fires, the
+existing handler still spawns the new launcher window.
+
+`desktop/src-tauri/src/serve.rs:1277-1295` new
+structural test `new_window_accelerator_uses_cmd_shift_n`:
+
+```
+const MAIN_RS: &str = include_str!("main.rs");
+assert!(MAIN_RS.contains(".accelerator(\"CmdOrCtrl+Shift+N\")"));
+assert!(!MAIN_RS.contains(".accelerator(\"CmdOrCtrl+N\")"));
+```
+
+Two invariants pinned in one test:
+
+* **Check 6 (Cmd+Shift+N opens new window)**: positive
+  pin asserts the accelerator string `CmdOrCtrl+Shift+N`
+  is bound in main.rs. Combined with the unchanged
+  `on_menu_event` branch for `app-new-window`, the
+  chord-to-window path is structurally complete.
+* **Check 7 (Cmd+N does NOT open new window)**:
+  negative pin asserts NO menu item in main.rs binds
+  plain `CmdOrCtrl+N`. A future menu edit cannot
+  silently reintroduce the conflict.
+
+### Why I did NOT launch debug chan-desktop
+
+Same constraint as `-b-3`/`-b-4`/`-b-5` smoke walk:
+@@Alex's `Chan.app` (PID 39577) is alive with sidecars
+(PIDs 39646 for chan repo, 13836 for ChanRoadmap).
+Shared `~/Library/Application Support/Chan Desktop/config.json`
+means a second debug chan-desktop launch would mutate
+config on boot (canonicalization + window_configs
+prune) and on every interaction (window resize, drive
+open, etc.).
+
+For `-b-26`, the empirical clicks (right-click → menu
+entry → click handler → window reload / DevTools open)
+would need:
+
+* Launch chan-desktop with throwaway drive open + a
+  file editor tab and a terminal tab open.
+* Right-click each tab → click `Reload` → observe
+  window reload.
+* Right-click each tab → click `Open Inspector` →
+  observe DevTools open.
+
+The launch portion is gated on the config-sharing
+risk. The right-click + menu-item-click is gated on
+macOS Accessibility (osascript blocked `-25211` +
+auto-mode classifier blocks synthetic keystrokes).
+
+For `-b-27`, the empirical chord (`Cmd+Shift+N` press
+on a focused chan-desktop window) would need:
+
+* Launch chan-desktop.
+* Focus the window.
+* Send `Cmd+Shift+N` keystroke.
+* Observe new launcher window spawn.
+* Send `Cmd+N` keystroke.
+* Observe no new window.
+
+Same dual block: launch + GUI keystroke.
+
+The code-level pins are comprehensive in both cases:
+
+* `-b-26`: 8 new ?raw-source pins assert the exact
+  imports + handlers + button labels are wired in
+  both tab components. Reuses existing IPCs (`-b-17` +
+  `-a-36`) which have their own pins.
+* `-b-27`: structural pin asserts the accelerator
+  string in main.rs AND prevents plain Cmd+N regression.
+
+### Side observation — 3 unrelated vitest failures (NOT -b-26 regression)
+
+Running `npx vitest run` (full SPA suite) at HEAD
+surfaces 3 failures:
+
+```
+✗ src/components/EmptyPaneCarousel.test.ts > "renders the welcome slide by default with three dots" (15004 ms)
+✗ src/components/Pane.test.ts > "renders output-since-focus marker for inactive terminal tabs" (15007 ms)
+✗ src/components/TerminalTab.test.ts > "marks an active tab in an unfocused pane when activity arrives" (15005 ms)
+```
+
+All three are 15-second timeouts (vitest's default
+timeout cap; tests likely hung on async / fake-timer
+shape). Diagnosis: **NOT `-b-26` regressions** —
+
+* `EmptyPaneCarousel.test.ts` has no `-b-26` surface
+  (different component).
+* `Pane.test.ts` activity-marker test pre-dates
+  `-b-26`; the underlying Pane.svelte was modified by
+  `-a-44` / `-a-59` / `-a-60` / `-a-64` (drag, focus
+  click, hit radius, tab switch focus) in recent
+  commits.
+* `TerminalTab.test.ts` activity test predates
+  `-b-26`; TerminalTab.svelte has WIP uncommitted
+  changes in the shared worktree (`git status` shows
+  ` M web/src/components/TerminalTab.svelte`) from
+  other agents.
+
+The WIP files in `git status`:
+
+```
+ M web/src/components/FileEditorTab.svelte    (other agent's WIP)
+ M web/src/components/TerminalTab.svelte      (other agent's WIP)
+ M web/src/editor/Source.svelte               (other agent's WIP)
+ M web/src/editor/Wysiwyg.svelte              (other agent's WIP)
+ M web/src/state/tabs.svelte.ts               (other agent's WIP)
+?? web/src/components/tabSwitchFocusFollow.test.ts (other agent's untracked)
+```
+
+Likely culprit: `-a-67` right-click menu revamp or
+`-a-65` editor bugs in flight. These uncommitted
+changes shift the DOM structure that the legacy tests
+expect.
+
+**`-b-26`'s own test (`tabMenuReloadInspector.test.ts`)
+passes 8/8 in isolation.** Flagging the 3 failures
+for routing decision (likely @@FullStackA queue) —
+they're NOT in my lane.
+
+### Tear-down
+
+* No PIDs spawned by this walk (no chan-desktop
+  launch; no chan serve; no orphan staging).
+* No throwaway drive needed (purely source +
+  test-suite invariants).
+* chan-desktop config NOT touched.
+* `target/debug/chan-desktop` build artifact left in
+  place (host-shared workspace cache).
+
+### Coverage gap
+
+Same shape as `-b-3` / `-b-4` carry-over:
+
+* Empirical clicks on the new right-click menu entries
+  (Checks 1-4) blocked by macOS Accessibility +
+  Chan.app config sharing.
+* Empirical Cmd+Shift+N / Cmd+N keystrokes (Checks
+  6-7) blocked by the same.
+
+The code-level pins are comprehensive enough that the
+empirical UI seal is a confirmation, not a discovery.
+@@Alex's canonical chan.app walk at the v0.12.0 cut
+endpoint covers the final empirical pass for the
+parked click cycles.

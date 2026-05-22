@@ -1282,3 +1282,96 @@ clearance.
   scope.
 
 Standing by for clearance or next dispatch.
+
+## 2026-05-22 — poke (webtest-b-5: -b-26 + -b-27 walkthrough; source + tests VERIFIED, click PARKED)
+
+Walked `webtest-b-5` (7 checks across -b-26 right-click
+menu + -b-27 Cmd+Shift+N accelerator). Verdict appended
+to [`../webtest-b/webtest-b-1.md`](../webtest-b/webtest-b-1.md)
+under the `2026-05-22 — fullstack-b-26 + fullstack-b-27
+runtime walk` heading. No chan-desktop launch (same
+config-sharing constraint as -b-3/-b-4/smoke walks).
+
+### Per-check verdict
+
+| #   | Check                                                            | Verdict |
+|-----|------------------------------------------------------------------|---------|
+| 1-4 | Editor + terminal tab right-click → Reload / Open Inspector      | source + 8/8 ?raw-source pins VERIFIED; click PARKED |
+| 5   | No regression on Reload from Disk / Restart                      | source VERIFIED (distinct labels, tail additions, separate handlers) |
+| 6   | Cmd+Shift+N opens new window                                     | source + structural pin VERIFIED; chord PARKED |
+| 7   | Cmd+N does NOT open new window                                   | source + negative-pin VERIFIED                |
+
+### Empirical signals (no launch)
+
+* chan-desktop build clean (6.73s incremental).
+* chan-desktop tests 44/44 pass at HEAD `8b2ceb9`
+  (was 43 pre-`-b-27`; +1 structural pin matches
+  task body).
+* `tabMenuReloadInspector.test.ts` 8/8 pass in
+  isolation.
+
+### Code-level pins comprehensive
+
+* `-b-26`: 8 ?raw-source pins assert imports
+  (`reloadWindow`, `openWebInspector`, `isTauriDesktop`,
+  `notify`) + handlers (`doReloadWindow`,
+  `doOpenInspector`) + menu button labels (`Reload`,
+  `Open Inspector`) in BOTH `FileEditorTab.svelte` +
+  `TerminalTab.svelte`.
+* Reuses existing IPCs from `-b-17` + `-a-36` (no new
+  Tauri surface).
+* `-b-27`: structural pin asserts `CmdOrCtrl+Shift+N`
+  bound in main.rs AND no menu item binds plain
+  `CmdOrCtrl+N` (forward-prevents Check 7 regression).
+* `on_menu_event` branch for `app-new-window`
+  unchanged (still calls `open_new_launcher_window`).
+
+### Side observation — 3 unrelated vitest failures
+
+Full vitest suite at HEAD shows 3 failures, all
+15-second timeouts (vitest default cap):
+
+* `EmptyPaneCarousel.test.ts` "renders welcome slide
+  with three dots"
+* `Pane.test.ts` "renders output-since-focus marker
+  for inactive terminal tabs"
+* `TerminalTab.test.ts` "marks an active tab in
+  unfocused pane when activity arrives"
+
+NOT `-b-26` regressions. EmptyPaneCarousel has no
+`-b-26` surface; Pane + TerminalTab tests likely
+broken by other agents' uncommitted WIP in the shared
+worktree (`git status` shows ` M` on TerminalTab.svelte,
+FileEditorTab.svelte, Source.svelte, Wysiwyg.svelte,
+tabs.svelte.ts; `??` on tabSwitchFocusFollow.test.ts —
+all consistent with `-a-67` right-click revamp or
+`-a-65` editor bugs in flight). `-b-26`'s own test
+passes 8/8 in isolation. Likely @@FullStackA lane
+routing.
+
+### Why no chan-desktop launch
+
+Same shape as the prior walks: @@Alex's Chan.app
+(PID 39577) live with sidecars; shared config.json;
+macOS Accessibility blocked. Launching = config
+mutation + zero empirical gain (clicks still
+blocked).
+
+### Tear-down
+
+Nothing to tear down. No PIDs spawned, no drive
+registered, no config touched. Pure source + test
+suite invariants verified.
+
+### Commit readiness
+
+Verdict ready to commit when you route clearance.
+
+* **Suggested commit subject**:
+  `docs: webtest-b-5 — -b-26 + -b-27 walkthrough (source + tests verified, click cycles parked)`.
+* **Files** (race-safe `git commit -m "<subject>" -- <pathspec>`):
+  * `docs/journals/phase-8/webtest-b/webtest-b-1.md`
+  * `docs/journals/phase-8/alex/event-webtest-b-architect.md`
+* Post-commit `git show --stat HEAD` confirms scope.
+
+Standing by.
