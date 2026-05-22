@@ -3247,3 +3247,86 @@ Standing by. Strongly recommend systacean-35 to
 audit `path_classification` + downstream
 indexer file I/O for Drafts-aware path
 resolution.
+
+## 2026-05-22 — poke (-a-66 slice e GRAPH HOLD via systacean-36 / BM25 PARTIAL + -a-68 slice 1 PARTIAL on shortcuts.ts label)
+
+Proactive walk on HEAD `2125be7`. Throwaway drive
+r32; chan serve 127.0.0.1:8787; Chrome MCP tab
+`503726151`. Verdict in
+[`../webtest-a/webtest-a-1.md`](../webtest-a/webtest-a-1.md).
+
+### `-a-66 slice e` GRAPH FINALLY HOLD via systacean-36
+
+systacean-36 closes the saga at the graph layer:
+- `directory:Drafts` node present ✓
+- `drafts_link` edge from `directory:` →
+  `directory:Drafts` present ✓
+- `Drafts/untitled/draft.md` file node present ✓
+- Total graph: 1453 nodes (was 1440)
+
+The architect's "gap UPSTREAM of my hypothesis"
+call was right — `apply_watch_change` routing
+through `index_draft_file` was the real fix, not
+`path_classification`.
+
+🎉 Slice e GRAPH portion closed end-to-end after
+**3 round-trips** (systacean-32 → -34 → -36).
+
+### BM25 secondary PARTIAL
+
+`/api/search/content?q=UNIQUEMARKER36CLOSURE`:
+- Status 200, mode: bm25, ready: true, **hits: []**
+
+Even with the marker uniquely embedded in
+`Drafts/untitled/draft.md` (which IS indexed in
+graph per systacean-36), BM25 returns 0 hits.
+
+The graph indexer + BM25 indexer share different
+ingestion paths. `index_draft_file` reaches the
+graph corpus but not the BM25 store.
+
+This is a 4th-degree gap on the umbrella; not a
+load-bearing UX regression (graph is the slice e
+primary surface). Worth a systacean-37 follow-up
+to align the BM25 path with the graph path.
+
+### `-a-68 slice 1` PARTIAL — `shortcuts.ts` label missed
+
+Rename `"Hybrid NAV"` → `"Hybrid Nav"` updated:
+- `Pane.svelte` menu label + aria-label ✓
+- `PaneModeHelp.svelte` title + aria-label ✓
+- Tests ✓
+
+**Missed**:
+- `web/src/state/shortcuts.ts:202`:
+  `label: "Enter Hybrid NAV"` (still uppercase)
+
+This label drives the welcome screen chord docs.
+Empirically on welcome screen:
+- "Hybrid NAV" (uppercase) count: 5
+- "Hybrid Nav" (proper case) count: 0
+
+The most-visible chord doc surface STILL shows
+the OLD case. Mechanism-vs-empirical gap again.
+
+Suggest follow-up:
+* `web/src/state/shortcuts.ts:202`:
+  `"Enter Hybrid NAV"` → `"Enter Hybrid Nav"`
+* `web/src/state/shortcuts.test.ts:42-43`:
+  update regex pattern.
+
+### Suggested commit shape
+
+* **Commit subject**: `docs: webtest-a re-walk —
+  -a-66 slice e GRAPH HOLD via systacean-36 (3rd
+  round) / BM25 secondary PARTIAL; -a-68 slice 1
+  PARTIAL on shortcuts.ts label`.
+* **Files**:
+  * `docs/journals/phase-8/webtest-a/webtest-a-1.md`
+  * `docs/journals/phase-8/alex/event-webtest-a-architect.md`
+* Path-limited `git commit`.
+
+Standing by. Drafts umbrella GRAPH portion
+finally shipped. Two secondary gaps flagged:
+BM25 (systacean-37 candidate) + shortcuts.ts
+label (`-a-68 slice 1` follow-up).

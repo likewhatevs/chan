@@ -5402,3 +5402,124 @@ Lane-A test server torn down:
 `-a-67 slice 2` HOLD. `-a-66 slice e` STILL
 PARTIAL pending a path_classification follow-up
 (systacean-35?).
+
+## 2026-05-22 — proactive re-walk: -a-66 slice e via systacean-36 (graph HOLD; BM25 PARTIAL) + -a-68 slice 1 Hybrid Nav rename PARTIAL
+
+Proactive walk on HEAD `2125be7`. Throwaway drive
+r32; chan serve 127.0.0.1:8787; Chrome MCP tab
+`503726151`.
+
+### Verdicts
+
+| Task | Check | Verdict |
+|------|-------|---------|
+| `-a-66 e` Drafts in graph (3rd re-walk) | empirical | HOLD 🎉 |
+| `-a-66 e` BM25 search includes Drafts | empirical | PARTIAL (0 hits for content) |
+| `-a-68 1` "Hybrid Nav" rename complete | empirical | PARTIAL (shortcuts.ts label missed) |
+
+### `-a-66 slice e` GRAPH HOLD via systacean-36
+
+systacean-36 (`70e2e4d`) routes
+`apply_watch_change` through `index_draft_file`
+for Drafts/ paths. Architect's audit located the
+gap UPSTREAM of my hypothesis
+(`path_classification` was a red herring; the
+real issue was the watcher → index path).
+
+Empirical verification:
+- Created `Drafts/untitled/draft.md` via Cmd+N
+  with marker text "UNIQUEMARKER36CLOSURE".
+- Waited 8s.
+- `/api/graph?scope=drive` returns:
+  - **Drafts directory node** present:
+    `{kind: "directory", id: "directory:Drafts",
+     label: "Drafts", path: "Drafts"}` ✓
+  - **drafts_link edge** present:
+    `{source: "directory:", target: "directory:Drafts",
+     kind: "drafts_link"}` ✓
+  - **File under Drafts/**:
+    `Drafts/untitled/draft.md` (kind: file) ✓
+  - Total: 1453 nodes (was 1440 pre-Drafts)
+
+🎉 The graph surface FINALLY emits Drafts data
+post-systacean-36. Slice e GRAPH PORTION CLOSED.
+
+### `-a-66 slice e` BM25 PARTIAL — search doesn't find Drafts content
+
+- `/api/search/content?q=UNIQUEMARKER36CLOSURE`:
+  `{ready: true, mode: bm25, hits: []}` after 18s
+  wait.
+- `/api/search/content?q=systacean-36`: same.
+
+The graph indexer + BM25 indexer appear to share
+different ingestion paths. `index_draft_file`
+(per systacean-36) reaches the GRAPH but not
+BM25 store.
+
+This is a 4th-degree gap (slice e original →
+systacean-32 → -34 → -36 → BM25 still missing).
+Worth a systacean-37 follow-up but not a
+load-bearing UX regression (graph is the primary
+slice e surface).
+
+### `-a-68 slice 1` PARTIAL — central label missed
+
+Rename `-a-68 slice 1` (`8f646ba`) updated:
+- `Pane.svelte` menu label + aria-label ✓
+- `PaneModeHelp.svelte` title + aria-label ✓
+- `Pane.test.ts` test expectation ✓
+- `hybridNavRename.test.ts` new test pin ✓
+
+**But missed**:
+- `web/src/state/shortcuts.ts:202`:
+  `label: "Enter Hybrid NAV"` (still uppercase)
+
+This `shortcuts.ts` label drives the WELCOME
+SCREEN chord docs. Empirical check on
+chan-test-phase8-wa-r32's welcome screen:
+- `Hybrid NAV` count: 5 (uppercase)
+- `Hybrid Nav` count: 0 (proper case)
+
+The user-facing chord docs still show the OLD
+case. The Pane menu + Pane mode help dialog
+have been updated, but the welcome screen
+hasn't.
+
+Lane: **@@FullStackA**. Suggest a slice 1
+follow-up: rename `label: "Enter Hybrid NAV"`
+→ `label: "Enter Hybrid Nav"` in
+`shortcuts.ts:202` + update the corresponding
+test pin at `shortcuts.test.ts:42-43`.
+
+### Highlights
+
+* **`-a-66 slice e` GRAPH ships clean via
+  systacean-36**: 3 round-trips on the slice e
+  PARTIAL (systacean-32 → -34 → -36), and the
+  graph emit FINALLY surfaces Drafts. The
+  architect's "audit located gap UPSTREAM of my
+  hypothesis" call was correct — the issue was
+  the watcher → index path, not
+  path_classification.
+* **BM25 secondary gap**: search doesn't yet
+  surface Drafts content. Lower priority than
+  graph (which is the slice e load-bearing UX)
+  but worth tracking.
+* **`-a-68 slice 1` 90% complete**: 4 of 5
+  user-facing strings updated; central
+  `shortcuts.ts` label missed — drives the
+  welcome screen chord docs which is the most
+  visible string of all.
+
+### State at end of walk
+
+Lane-A test server torn down:
+1. chan serve killed.
+2. `rm -rf /tmp/chan-test-phase8-wa-r32/`.
+3. `chan remove` → unregistered.
+4. Chrome MCP tab closed.
+5. Drafts metadata cleaned.
+
+Slice e GRAPH HOLD; BM25 PARTIAL.
+Slice 1 (Hybrid Nav rename) PARTIAL on
+welcome-screen label.
