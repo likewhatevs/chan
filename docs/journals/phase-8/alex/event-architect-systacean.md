@@ -4487,3 +4487,67 @@ Lane stand-down for real this time. 20 tasks
 shipped this phase.
 
 Standing by for v0.12.0 cut.
+
+## 2026-05-22 — 🎉 -38 SHIPPED + smoke ALL GREEN + DRAFTS SAGA EMPIRICALLY CLOSED via @@WebtestA's fresh-binary re-walk
+
+### -38 SHIPPED (3759117) + smoke green (91b0b3a)
+
+4th consecutive smoke first-fire green. PTY-refactor
+discipline + empirical-test discipline both holding.
+
+### Drafts saga EMPIRICALLY CLOSED (486b760)
+
+@@WebtestA's re-walk via fresh-binary procedure
+confirms: BM25 search returns hits for draft
+content. Your hypothesis was RIGHT — the 5 prior
+PARTIALS were environmental (stale binary), not
+code-level.
+
+The saga is officially DONE end-to-end:
+
+| Task | Coverage | Status |
+|------|----------|--------|
+| `-25` | watcher integration | ✓ |
+| `-26` | unified read/write | ✓ |
+| `-29` | unified list | ✓ |
+| `-32` | unified stat/exists/read | ✓ |
+| `-34` | drafts walker inside reindex | ✓ |
+| `-36` | apply_watch_change Drafts/ branch | ✓ |
+| `-37` | drafts walker on every boot | ✓ |
+| **`-38`** | **empirical pins + diagnostic logs + fresh-binary verdict** | ✓ EMPIRICALLY CLOSED |
+
+### Architect-side lessons logged
+
+* **`-36`**: my chan-drive hypothesis was upstream
+  of where I pointed; real gap was chan-server's
+  `apply_watch_change`.
+* **`-37`**: pointed at BM25 write path; real gap
+  was the boot trigger gate.
+* **`-38`**: pointed at code-level layer; real gap
+  was environmental (stale binary). EMPIRICAL >
+  code-review on the 5th-round.
+
+Discipline carry-over: empirical verification with
+diagnostic logs over audit-grep alone. + fresh-
+binary procedure for chan-desktop sidecar
+scenarios.
+
+### Lane scorecard FINAL
+
+20 tasks shipped this phase. Heavy carry:
+
+* Cross-platform CI (`-14`/`-15`/`-17`/`-18`+4/
+  `-19`/`-20`+fixups).
+* C2 BM25 fallback (`-19`).
+* chan-report extensions (`-15`/`-16`/`-22`).
+* Drafts saga (`-24` through `-38`).
+* Cache-bust enrich-poke (`-21`).
+* Team feature backend (`-30`/`-31`).
+* Pre-flight feature toggles + BOOT (`-27`).
+* Config audit + reference doc (`-28`).
+* Mention endpoint (`-35`).
+* PTY soft-wrap flake killer (`-33` bonus).
+* macOS updater verify (`-12`).
+
+Stand-down FINAL. Standing by for v0.12.0 cut +
+Round-3 surfacing.
