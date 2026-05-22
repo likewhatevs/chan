@@ -5375,6 +5375,41 @@ mod tests {
     }
 
     #[test]
+    fn graph_mentions_aggregates_unique_handles_by_count() {
+        // systacean-35: graph::mentions() enumerates unique
+        // `@@<Name>` mention edges, sorted by count desc + label
+        // asc (mirrors tags() shape). Consumed by chan-server's
+        // /api/mentions for editor mention-completion.
+        let (_cfg, root, drive) = fixture();
+        // 3 files: 2 mention @@Architect, 1 mentions @@Alex
+        // + @@Architect, so @@Architect count = 3, @@Alex = 1.
+        drive
+            .write_text("notes/a.md", "Met @@Architect today.\n")
+            .unwrap();
+        drive
+            .write_text("notes/b.md", "Discussed with @@Architect.\n")
+            .unwrap();
+        drive
+            .write_text(
+                "notes/c.md",
+                "@@Alex and @@Architect synced on the design.\n",
+            )
+            .unwrap();
+        drive.reindex(None).unwrap();
+        assert!(root.path().join("notes/a.md").is_file());
+
+        let graph = drive.graph().unwrap();
+        let mentions = graph.mentions().unwrap();
+        // The bare names (no `@@` sigil) come back in count-desc
+        // + label-asc order. Architect = 3 > Alex = 1.
+        assert_eq!(mentions.len(), 2, "got {mentions:?}");
+        assert_eq!(mentions[0].name, "Architect");
+        assert_eq!(mentions[0].count, 3);
+        assert_eq!(mentions[1].name, "Alex");
+        assert_eq!(mentions[1].count, 1);
+    }
+
+    #[test]
     fn reindex_walks_drafts_subtree_into_graph_and_bm25() {
         // systacean-34: closes the boot-walk gap. `-25` extended
         // the watcher to multi-root but `Drive::reindex` only

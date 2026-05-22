@@ -63,7 +63,8 @@ pub use fs_ops::{
     classify, classify_path, FileClass, PathClass, PathKind, PathPermission, WalkFilter,
 };
 pub use graph::{
-    ContactNode, Edge, EdgeKind, GraphView, HeadingRow, LinkTarget, LinkTargetKind, NodeKind, Tag,
+    ContactNode, Edge, EdgeKind, GraphView, HeadingRow, LinkTarget, LinkTargetKind, Mention,
+    NodeKind, Tag,
 };
 pub use index::{
     BuildOptions, BuildSummary, Chunking, Hit, IndexConfig, IndexStats, Mode as SearchMode,

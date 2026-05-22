@@ -209,6 +209,17 @@ pub struct Tag {
     pub count: u32,
 }
 
+/// systacean-35: one unique `@@<Name>` mention extracted from
+/// the graph's mention edges. `name` carries the bare label
+/// (without the `@@` sigil); `count` is the number of mention
+/// edges in the graph that target it (i.e. how often the user
+/// mentions this handle across markdown bodies).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Mention {
+    pub name: String,
+    pub count: u32,
+}
+
 /// Owns the sqlite handles and exposes the read + write API. Two
 /// channels into the same DB:
 ///   * `writer`: single Connection behind a Mutex. Carries every
@@ -627,6 +638,38 @@ impl GraphView {
             let (dst, count) = row?;
             let name = dst.strip_prefix('#').unwrap_or(&dst).to_string();
             out.push(Tag { name, count });
+        }
+        Ok(out)
+    }
+
+    /// systacean-35: enumerate unique `@@<Name>` mentions across
+    /// the graph's mention edges, sorted by count desc + label
+    /// asc (mirrors `tags()`'s shape). `name` is the bare label
+    /// without the `@@` sigil. Consumers (e.g. chan-server's
+    /// `/api/mentions` endpoint for the editor's mention
+    /// completion) filter / cap as needed.
+    ///
+    /// Includes BOTH unresolved mentions (where `dst` is the raw
+    /// `@@<Name>` string) AND resolved mentions whose `dst` was
+    /// rewritten to a contact file path by chan-server's graph
+    /// route. Resolved mentions in the graph DB keep the raw
+    /// `@@<Name>` dst — the rewrite is per-call in chan-server,
+    /// not persisted — so the SQL filter on `kind = 'mention'`
+    /// captures every reference.
+    pub fn mentions(&self) -> Result<Vec<Mention>> {
+        tracing::debug!("graph::mentions");
+        let conn = self.reader()?;
+        let mut stmt = conn.prepare_cached(
+            "SELECT dst, COUNT(*) FROM edges WHERE kind = 'mention' GROUP BY dst ORDER BY 2 DESC, 1",
+        )?;
+        let rows = stmt.query_map([], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)? as u32))
+        })?;
+        let mut out = Vec::new();
+        for row in rows {
+            let (dst, count) = row?;
+            let name = dst.strip_prefix("@@").unwrap_or(&dst).to_string();
+            out.push(Mention { name, count });
         }
         Ok(out)
     }

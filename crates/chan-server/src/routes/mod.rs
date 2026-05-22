@@ -18,6 +18,7 @@ mod health;
 #[cfg(feature = "embeddings")]
 mod index;
 mod inspector;
+mod mentions;
 mod preferences;
 mod report;
 mod search;
@@ -47,6 +48,7 @@ pub use index::{
     api_semantic_disable, api_semantic_download, api_semantic_enable, api_semantic_state,
 };
 pub use inspector::api_inspector;
+pub use mentions::api_get_mentions;
 pub use preferences::{
     api_get_config, api_get_server_config, api_patch_config, api_patch_server_config,
 };

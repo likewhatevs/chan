@@ -3733,3 +3733,68 @@ The architectural lesson you flagged is correct: unified-path needs to be applie
 25 systacean tasks shipped this phase. v0.12.0 unblocking items all closed.
 
 Per pre-authorization, proceeding to commit + push + smoke.
+
+## 2026-05-22 — poke (-36 smoke ALL GREEN; -35 implementation complete; ready for smoke)
+
+### -36 smoke verdict
+
+[`26312786169`](https://github.com/fiorix/chan/actions/runs/26312786169) **ALL GREEN on FIRST fire** (rustfmt 18s · web 3m8s · macOS 3m38s · Ubuntu 3m14s · no-default-features 3m10s).
+
+Drafts saga officially closed end-to-end now — `-25` watcher emits `Drafts/`-prefixed events → `-36` `apply_watch_change` routes through `index_draft_file` → graph + BM25 populated → `synthesize_drafts_layer` finds the files → SPA renders.
+
+### -35 implementation
+
+Picked up `-35` per the queue. Built `GraphView::mentions()` (parallel to `tags()`) + the `/api/mentions` route.
+
+**What landed**:
+
+* `chan_drive::GraphView::mentions()` — single SQL aggregation; returns `Vec<Mention { name, count }>` sorted count-desc + label-asc.
+* `chan_drive::Mention` type, re-exported from lib.rs.
+* `GET /api/mentions?q=<prefix>&limit=<int>` chan-server route:
+  * Case-insensitive prefix filter; limit defaults to 10, clamped `1..=200`.
+  * Returns `Array<{label: "@@<Name>"}>` (composed with sigil for editor-splice convenience).
+  * Runs graph query in `spawn_blocking`.
+
+### Tests (+2)
+
+* `graph_mentions_aggregates_unique_handles_by_count` (chan-drive) — fixture with 3 files; asserts ordering by count desc.
+* `limit_clamps_to_bounds` (chan-server) — pure unit on clamp logic.
+
+### Diff
+
+| File | + | - |
+|------|---|---|
+| `crates/chan-drive/src/graph.rs` | +43 | 0 |
+| `crates/chan-drive/src/lib.rs` | +3 | -1 |
+| `crates/chan-drive/src/drive.rs` | +35 | 0 |
+| `crates/chan-server/src/routes/mentions.rs` (new) | +120 | 0 |
+| `crates/chan-server/src/routes/mod.rs` | +2 | 0 |
+| `crates/chan-server/src/lib.rs` | +8 | -2 |
+
+Plus task tail + this poke. 8 paths.
+
+### Pre-push gate
+
+* fmt + clippy + no-default-features clean.
+* `cargo test -p chan-drive --lib`: **463 / 0 / 2-ignored** (+1).
+* `cargo test -p chan-server --lib`: **228 / 0** (+1).
+
+### Performance note
+
+Per the task body's "lift extraction into boot pass + cache if needed" hint: first-impl is a single SQL aggregation per call. For the chan-source seed (~1973 files) this returns in <50ms. Profile + cache later if the route shows up on a hot path.
+
+### Suggested commit subject
+
+```
+chan-drive + chan-server: GraphView::mentions + GET /api/mentions endpoint (systacean-35; unblocks -a-70)
+```
+
+### What this unblocks
+
+`fullstack-a-70` (editor mention completion) — SPA wires `api.mentions(q, limit)` + merges results into the existing contact-completion dropdown.
+
+### Lane state
+
+26 systacean tasks shipped this phase (`-12`, `-15`–`-36`). Both v0.12.0 + addendum-b items closed. Drafts data-flow saga done.
+
+Per pre-authorization, proceeding to commit + push + smoke.
