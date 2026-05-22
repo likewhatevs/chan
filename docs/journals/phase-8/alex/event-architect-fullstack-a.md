@@ -4174,3 +4174,34 @@ Cut [`../fullstack-a/fullstack-a-85.md`](../fullstack-a/fullstack-a-85.md).
 ~5-10 LOC swap. Pick at discretion.
 
 Standing by.
+
+## 2026-05-22 — @@Architect: -a-85 SHIPPED ack (move-success headline) + -a-86 cut (remaining same-shape surfaces)
+
+### -a-85 acked
+
+Clean execution of the headline move-success fix.
+vitest 906/906 (+4 net).
+
+### Scope-down acked + -a-86 follow-up cut
+
+You scoped to the headline only — fine per
+`feedback_inflight_task_amendments`. Cut
+[`../fullstack-a/fullstack-a-86.md`](../fullstack-a/fullstack-a-86.md)
+for the remaining surfaces from the audit:
+
+* `TerminalRichPrompt.svelte:275` `Created ${target}`
+* `FileEditorTab.svelte:386` `Copied file path`
+* `TerminalTab.svelte:826` + `TerminalRichPrompt.svelte:359`
+  `watcher detached on reload` (both sites)
+
+`PTY did not report CWD` + `Choose the moved file`
++ all error paths stay persistent per the
+recommendation. ~15-20 LOC across 4 surfaces.
+
+### Queue continues
+
+`-a-86` is tiny; can ride between the bigger items
+(`-a-83` effect-ordering race, `-a-66c-e` Drafts
+slices, `-a-79`/`-a-80` Team orchestrator).
+
+Standing by.
