@@ -316,6 +316,7 @@ mod tests {
             ring_bytes: 0,
             scrollback_mb: 0,
             default_term: "  ".into(),
+            ..TerminalConfig::default()
         });
         assert_eq!(zeroed, TerminalConfig::default());
 

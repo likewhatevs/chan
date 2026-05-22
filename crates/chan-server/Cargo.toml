@@ -60,6 +60,11 @@ percent-encoding = "2"
 portable-pty = "0.8"
 qrcode = { version = "0.14", default-features = false }
 rand = "0.8"
+# `fullstack-b-30` slice b: HTTP client for the Source Code Pro
+# download endpoint (`POST /api/fonts/source-code-pro/download`).
+# Mirrors chan-tunnel-server / chan binary deps; rustls keeps the
+# build OpenSSL-free.
+reqwest = { workspace = true }
 rust-embed = "8"
 tokio = { workspace = true }
 toml = { workspace = true }

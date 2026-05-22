@@ -237,3 +237,169 @@ default build → terminal renders in OS native mono;
 available (test pin verifies the embed); user-config
 fallback → drop a woff2 in `<config>/chan/fonts/` +
 verify it's served (manual integration test).
+
+## 2026-05-22 — slice -b-30-b implementation note (ready for commit clearance)
+
+Picked up immediately post-clearance-of-slice-a. Slice
+b lands the user-facing piece: SettingsPanel-side
+font dropdown + POST download endpoint + xterm.js
+fontFamily reorder on opt-in. Slice a's filesystem-
+fallback `serve_font` is the foundation; slice b
+just hooks the SPA up to it.
+
+### Slice b changes
+
+* **`crates/chan-server/Cargo.toml`** — new dep
+  `reqwest` (workspace pin; rustls-tls; no OpenSSL).
+  Mirrors `chan-tunnel-server` + `chan` binary; HTTP
+  client used by the download endpoint.
+* **`crates/chan-server/src/config.rs`** —
+  `TerminalConfig.font: TerminalFontChoice` enum
+  field (`os-default` / `source-code-pro`). Wire
+  shape kept narrow (string enum) so a future
+  "Custom..." path lands without breaking existing
+  config files. `#[serde(default)]` + `Default`
+  impl → pre-`-b-30` config files deserialize
+  cleanly as `os-default`.
+* **`crates/chan-server/src/routes/fonts.rs`** (new)
+  — `POST /api/fonts/source-code-pro/download`
+  endpoint. Fetches `SourceCodePro-Regular.otf.woff2`
+  + `OFL.txt` from Adobe's official GitHub release
+  (`adobe-fonts/source-code-pro` repo,
+  `2.038R-ro/1.058R-it/1.018R-VAR` tag) into
+  `<user-config>/chan/fonts/`. Idempotent
+  (short-circuits when file present + > 1024 B).
+  Atomic write: `.partial` tempfile + rename.
+  60-second timeout. Returns `{ dir, files: [{ name,
+  bytes }] }`. 3 unit tests pin: dir layout,
+  woff2 + OFL both in table, URLs point at Adobe
+  GitHub.
+* **`crates/chan-server/src/lib.rs`** — route wired
+  into the settings-gated lane (same lane as
+  `/api/index/semantic/download`). Settings-gated
+  because activating the font is a preference write
+  + the download mutates the per-machine user-config
+  dir.
+* **`crates/chan-server/src/routes/mod.rs`** —
+  `mod fonts;` + re-export of
+  `api_fonts_source_code_pro_download`.
+* **`web/src/api/types.ts`** —
+  `TerminalPreferences.font?: TerminalFontChoice` +
+  new `TerminalFontChoice = "os-default" |
+  "source-code-pro"` type. Optional on the wire so
+  older servers (no field) deserialize as
+  `os-default`.
+* **`web/src/api/client.ts`** — new
+  `api.fontsSourceCodeProDownload()` method.
+  Returns `{ dir, files }`.
+* **`web/src/components/HybridTerminalConfig.svelte`** —
+  new "Terminal font" dropdown after Default TERM:
+  * Options: "OS default (mono)" + "Source Code Pro".
+  * `setFontChoice` optimistically flips the local
+    edit buffer, then on opt-in to SCP fires
+    `api.fontsSourceCodeProDownload()`. Failure rolls
+    back the preference to `os-default` so the SPA
+    never claims SCP is active while the user-config
+    file is missing.
+  * `disabled` while a download is in flight.
+  * Hint copy names the per-OS native faces, the
+    ~80 KB download footprint, and the spawn-time-
+    only contract (mirrors `-b-11`'s scrollback
+    contract).
+  * Status text appears below the dropdown during +
+    after download (success / failure both
+    surfaced).
+* **`web/src/components/HybridTerminalConfig.test.ts`** —
+  5 new pinning tests covering the dropdown markup,
+  download-endpoint wiring, rollback on failure,
+  disabled-during-download, and the hint copy.
+* **`web/src/components/TerminalTab.svelte`** —
+  fontFamily reads `drive.info?.preferences?.terminal?.font`
+  at spawn time. `source-code-pro` swaps SCP to the
+  front of the chain; `os-default` keeps the slice-a
+  per-OS native lead. Spawn-time-only — existing
+  terminals keep their current font until restart.
+  Two new named constants
+  (`FONT_CHAIN_OS_DEFAULT` +
+  `FONT_CHAIN_SOURCE_CODE_PRO`).
+* **`web/src/components/TerminalTab.font.test.ts`** —
+  `-b-12` font test re-pinned against the new
+  constants (constant-body assertion replacing the
+  inline `fontFamily:` literal). 2 new pins: the
+  Source Code Pro chain shape + the spawn-time
+  preference read.
+
+### Cross-lane note
+
+`reqwest` dep + chan-server Cargo.toml changes sit
+in Systacean territory (matching `systacean-6` +
+`systacean-7` precedents). Added directly per
+@@Alex's take-b-30 routing for slice continuity;
+@@Systacean can review at discretion.
+
+### Pre-push gate (local, macOS aarch64; -b-30-b scope)
+
+| Surface                                                          | State                              |
+|------------------------------------------------------------------|------------------------------------|
+| `cargo test -p chan-server` (default)                            | 226 passing (+3 from slice b).     |
+| `cargo test -p chan-server --features embed-font`                | 228 passing.                       |
+| `cargo clippy -p chan-server -p chan-desktop --all-targets -- -D warnings` | Clean (both feature configs). |
+| `cargo build -p chan-server --no-default-features`               | Clean.                             |
+| `web/` `npx svelte-check`                                        | 4033 / 0 / 0.                      |
+| `web/` `npx vitest run` (TerminalTab* + HybridTerminalConfig)    | 5 files / 35 tests pass (+8 new). |
+| `web/` `npm run build`                                           | Clean.                             |
+
+### Files to stage
+
+```
+Cargo.lock
+crates/chan-server/Cargo.toml
+crates/chan-server/src/config.rs
+crates/chan-server/src/lib.rs
+crates/chan-server/src/routes/fonts.rs (new)
+crates/chan-server/src/routes/mod.rs
+crates/chan-server/src/routes/preferences.rs
+web/src/api/client.ts
+web/src/api/types.ts
+web/src/components/HybridTerminalConfig.svelte
+web/src/components/HybridTerminalConfig.test.ts
+web/src/components/TerminalTab.svelte
+web/src/components/TerminalTab.font.test.ts
+docs/journals/phase-8/fullstack-b/fullstack-b-30.md
+```
+
+### Suggested commit subject
+
+```
+chan-server + HybridTerminalConfig + TerminalTab: Source Code Pro download endpoint + Settings dropdown + spawn-time font reorder (fullstack-b-30 slice b)
+```
+
+### Umbrella close-out
+
+| Slice | Commit    | Scope                                                                            |
+|-------|-----------|----------------------------------------------------------------------------------|
+| a     | `c009f9f` | `embed-font` cargo feature + per-OS native default + `serve_font` user-config fallback |
+| b     | (this)    | Settings dropdown + download endpoint + spawn-time fontFamily reorder            |
+
+`-b-30` umbrella now matches the round-2-plan
+§"Source Code Pro font architecture" intent
+in full. Default `cargo build` ships no font;
+per-OS native mono is the default; SCP opts in
+via Settings; `--features embed-font` keeps the
+bundle path for power-user / offline-install
+builds.
+
+### Runtime walkthrough
+
+Standing chan-desktop runtime perm available;
+otherwise routing to @@WebtestB. Empirical smoke:
+launch a default-build chan-desktop drive → open
+Hybrid → terminal config back-side → flip Terminal
+font to "Source Code Pro" → observe "Downloading
+Source Code Pro…" status → observe "Source Code Pro
+ready." → spawn a new terminal → verify the new
+terminal uses SCP. Conversely: flip back to "OS
+default (mono)" + spawn → verify per-OS native.
+Offline test: disconnect network → flip to SCP →
+observe the failure rollback (preference reverts to
+os-default + error surfaced).

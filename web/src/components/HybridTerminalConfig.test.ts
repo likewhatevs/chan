@@ -136,3 +136,39 @@ describe("fullstack-a-53: HybridTerminalConfig per-Hybrid override + custom-TERM
     );
   });
 });
+
+describe("fullstack-b-30 slice b: terminal-font dropdown + download flow", () => {
+  test("dropdown carries both choices with the OS default as the leading option", () => {
+    expect(source).toMatch(
+      /<select[\s\S]*?id="hybrid-terminal-font"[\s\S]*?<option value="os-default">OS default \(mono\)<\/option>[\s\S]*?<option value="source-code-pro">Source Code Pro<\/option>/,
+    );
+  });
+
+  test("setFontChoice fires the download endpoint when user opts into SCP", () => {
+    // Slice b's user-facing piece: choosing Source Code Pro
+    // triggers the POST endpoint that fetches the woff2 + OFL
+    // into <user-config>/chan/fonts/.
+    expect(source).toMatch(/api\.fontsSourceCodeProDownload\(\)/);
+  });
+
+  test("download failure rolls the preference back to os-default", () => {
+    // The SPA never claims SCP is active while the user-config
+    // file is missing — failure rolls back so the next reload
+    // mounts the OS-default chain.
+    expect(source).toMatch(
+      /editing\.terminal = \{[^}]*?font: "os-default"[^}]*?\};/,
+    );
+    expect(source).toMatch(/Source Code Pro download failed/);
+  });
+
+  test("dropdown is disabled while the download is in flight", () => {
+    expect(source).toMatch(/disabled=\{fontDownloading\}/);
+  });
+
+  test("hint copy names the per-OS native faces + the download size + spawn-time-only contract", () => {
+    expect(source).toMatch(/SF Mono on[\s\S]*?macOS/);
+    expect(source).toMatch(/Cascadia on[\s\S]*?Windows/);
+    expect(source).toMatch(/DejaVu on[\s\S]*?Linux/);
+    expect(source).toMatch(/Spawn-time-only/);
+  });
+});

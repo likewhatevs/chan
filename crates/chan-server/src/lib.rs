@@ -49,7 +49,8 @@ use bus::{make_progress_broadcast, make_watch_bridge};
 use routes::{
     api_backlinks, api_build_info, api_cloud_drives, api_create_draft, api_create_file,
     api_create_rich_prompt, api_create_terminal, api_delete_file, api_delete_session,
-    api_delete_terminal, api_fs_graph, api_get_config, api_get_contacts, api_get_drive,
+    api_delete_terminal, api_fonts_source_code_pro_download, api_fs_graph, api_get_config,
+    api_get_contacts, api_get_drive,
     api_get_server_config, api_get_session, api_graph, api_headings, api_health, api_index_rebuild,
     api_index_status, api_indexing_state, api_inspector, api_language_graph, api_link_targets,
     api_links, api_list_files, api_list_sessions, api_move, api_patch_config, api_patch_drive,
@@ -783,6 +784,14 @@ fn router(state: Arc<AppState>) -> Router {
         .route("/api/index/semantic/enable", post(api_semantic_enable))
         .route("/api/index/semantic/disable", post(api_semantic_disable))
         .route("/api/index/semantic/download", post(api_semantic_download));
+    // `fullstack-b-30` slice b: Source Code Pro download endpoint.
+    // Settings-gated lane because activating the font is a
+    // preference write + the download mutates the per-machine
+    // user-config dir.
+    let settings_writes = settings_writes.route(
+        "/api/fonts/source-code-pro/download",
+        post(api_fonts_source_code_pro_download),
+    );
     let settings_writes = settings_writes.route_layer(middleware::from_fn_with_state(
         state.clone(),
         tunnel_guard::settings_guard,

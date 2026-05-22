@@ -364,18 +364,32 @@
     // Cascadia / DejaVu) so the lean default build (no
     // `--features embed-font`) doesn't 404 on a missing woff2.
     // Source Code Pro stays in the chain but only kicks in when
-    // the user opts in via Settings (slice b follow-up) — the
-    // download flow writes the woff2 to `<user-config>/chan/fonts/`
-    // and the SPA's fontFamily ordering swaps SCP to the front.
-    // Until slice b lands, default-build users get OS native;
-    // `--features embed-font` users still get the bundled SCP
-    // ONLY if they also opt in via Settings.
+    // the user opts in via Settings (slice b) — the download flow
+    // writes the woff2 to `<user-config>/chan/fonts/` and the SPA
+    // reorders the chain to lead with SCP.
+    //
+    // `fullstack-b-30` slice b: honour the persisted font
+    // preference. "source-code-pro" reorders the chain to lead
+    // with SCP; the browser still falls back gracefully if the
+    // face hasn't loaded yet (or if the user-config-dir copy is
+    // missing on a non-embed-font build). "os-default" keeps
+    // the slice-a per-OS native lead. Spawn-time-only — mirrors
+    // -b-11's scrollback contract; existing terminals keep
+    // their current font until session restart.
+    const FONT_CHAIN_OS_DEFAULT =
+      '"SF Mono", SFMono-Regular, "Cascadia Code", "DejaVu Sans Mono", ui-monospace, Menlo, Consolas, "Liberation Mono", "Source Code Pro", monospace';
+    const FONT_CHAIN_SOURCE_CODE_PRO =
+      '"Source Code Pro", "SF Mono", SFMono-Regular, "Cascadia Code", "DejaVu Sans Mono", ui-monospace, Menlo, Consolas, "Liberation Mono", monospace';
+    const fontPref = drive.info?.preferences?.terminal?.font ?? "os-default";
+    const fontFamily =
+      fontPref === "source-code-pro"
+        ? FONT_CHAIN_SOURCE_CODE_PRO
+        : FONT_CHAIN_OS_DEFAULT;
     term = new Terminal({
       allowTransparency: false,
       cursorBlink: false,
       cursorStyle: "block",
-      fontFamily:
-        '"SF Mono", SFMono-Regular, "Cascadia Code", "DejaVu Sans Mono", ui-monospace, Menlo, Consolas, "Liberation Mono", "Source Code Pro", monospace',
+      fontFamily,
       fontSize: 14,
       lineHeight: 1.2,
       macOptionIsMeta: true,

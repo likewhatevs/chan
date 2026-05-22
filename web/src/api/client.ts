@@ -484,6 +484,16 @@ export const api = {
   semanticDownload: () => req<SemanticState>("POST", "/api/index/semantic/download"),
   semanticEnable: () => req<SemanticState>("POST", "/api/index/semantic/enable"),
   semanticDisable: () => req<SemanticState>("POST", "/api/index/semantic/disable"),
+  /// `fullstack-b-30` slice b: download Source Code Pro Regular +
+  /// OFL.txt into `<user-config>/chan/fonts/`. Idempotent server-
+  /// side; safe to call from a click handler without guarding.
+  /// Surfaces { dir, files: [{ name, bytes }] } so the SPA can
+  /// reflect the post-download state.
+  fontsSourceCodeProDownload: () =>
+    req<{ dir: string; files: { name: string; bytes: number }[] }>(
+      "POST",
+      "/api/fonts/source-code-pro/download",
+    ),
 };
 
 /// Encode a path as a sequence of percent-encoded segments. We keep `/`

@@ -169,6 +169,53 @@
     editing.terminal = { ...editing.terminal, default_term: raw };
   }
 
+  /// `fullstack-b-30` slice b: terminal-font preference. Default
+  /// "os-default" leans on the per-OS native mono chain from
+  /// slice a; "source-code-pro" opts the user into SCP. When the
+  /// build doesn't ship the rust-embed bundle (`embed-font` off),
+  /// flipping to SCP fires the download endpoint to fetch the
+  /// woff2 + OFL.txt into `<user-config>/chan/fonts/`. Failures
+  /// roll the preference back to `os-default` so the SPA never
+  /// claims SCP is active while the user-config-dir file doesn't
+  /// exist.
+  let fontDownloading = $state(false);
+  let fontStatusMessage = $state<string | null>(null);
+
+  const fontChoice = $derived(
+    (editing?.terminal?.font ?? "os-default") as
+      | "os-default"
+      | "source-code-pro",
+  );
+
+  async function setFontChoice(next: "os-default" | "source-code-pro"): Promise<void> {
+    if (!editing) return;
+    if (next === fontChoice) return;
+    // Optimistic update: flip the local edit buffer first so the
+    // dropdown reflects the choice immediately. Roll back on
+    // download failure.
+    editing.terminal = { ...editing.terminal, font: next };
+    if (next === "source-code-pro") {
+      fontDownloading = true;
+      fontStatusMessage = "Downloading Source Code Pro…";
+      try {
+        await api.fontsSourceCodeProDownload();
+        fontStatusMessage = "Source Code Pro ready.";
+      } catch (err) {
+        // Roll back the preference so the SPA's terminal font
+        // matches what's actually available on disk.
+        if (editing) {
+          editing.terminal = { ...editing.terminal, font: "os-default" };
+        }
+        const msg = err instanceof Error ? err.message : String(err);
+        fontStatusMessage = `Source Code Pro download failed: ${msg}`;
+      } finally {
+        fontDownloading = false;
+      }
+    } else {
+      fontStatusMessage = null;
+    }
+  }
+
   /// Compare the local terminal slice against the server's most
   /// recent drive.info.preferences. The dirty check is scoped to
   /// the terminal subtree so we never trigger a PATCH for theme /
@@ -384,6 +431,40 @@
         the common terminfo entries or supply a custom value if
         your environment expects something exotic.
       </p>
+    </div>
+
+    <div class="terminal-field">
+      <label class="terminal-label" for="hybrid-terminal-font">
+        <span>Terminal font</span>
+      </label>
+      <div class="terminal-control">
+        <select
+          id="hybrid-terminal-font"
+          class="family"
+          value={fontChoice}
+          disabled={fontDownloading}
+          onchange={(e) =>
+            void setFontChoice(
+              (e.currentTarget as HTMLSelectElement).value as
+                | "os-default"
+                | "source-code-pro",
+            )}
+        >
+          <option value="os-default">OS default (mono)</option>
+          <option value="source-code-pro">Source Code Pro</option>
+        </select>
+      </div>
+      <p class="hint sub-hint">
+        Default uses your OS's native monospace font (SF Mono on
+        macOS, Cascadia on Windows, DejaVu on Linux). Choosing
+        Source Code Pro downloads ~80 KB into your user config
+        dir on first enable; subsequent enables are instant.
+        Spawn-time-only: existing terminals keep their current
+        font until restart.
+      </p>
+      {#if fontStatusMessage}
+        <p class="hint sub-hint" role="status">{fontStatusMessage}</p>
+      {/if}
     </div>
   </div>
 </section>

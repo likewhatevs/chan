@@ -24,9 +24,31 @@ const fonts = readFileSync("src/fonts.css", "utf8");
 // renders the loadable face URL).
 
 describe("fullstack-b-12 + fullstack-b-30: TerminalTab font + cursor parity", () => {
-  test("xterm.js fontFamily leads with per-OS native mono and trails with Source Code Pro", () => {
+  test("OS-default font chain leads with per-OS native mono and trails with Source Code Pro", () => {
+    // `fullstack-b-30` slice b: literal fontFamily inlined string
+    // moved into a named constant (`FONT_CHAIN_OS_DEFAULT`) so the
+    // pref-driven swap can pick between two chains. Pin the
+    // constant body rather than the prior inline `fontFamily:`.
     expect(tab).toMatch(
-      /fontFamily:\s*'"SF Mono",[^']*?"Cascadia Code"[^']*?"DejaVu Sans Mono"[^']*?"Source Code Pro"/,
+      /FONT_CHAIN_OS_DEFAULT\s*=\s*'"SF Mono",[^']*?"Cascadia Code"[^']*?"DejaVu Sans Mono"[^']*?"Source Code Pro"/,
+    );
+  });
+
+  test("Source Code Pro font chain leads with SCP when the user opts in", () => {
+    expect(tab).toMatch(
+      /FONT_CHAIN_SOURCE_CODE_PRO\s*=\s*'"Source Code Pro",[^']*?"SF Mono"/,
+    );
+  });
+
+  test("fontFamily reads the persisted preference at spawn time", () => {
+    // Spawn-time read of `drive.info.preferences.terminal.font`
+    // mirrors `-b-11`'s scrollback contract: existing terminals
+    // keep their font until session restart.
+    expect(tab).toMatch(
+      /drive\.info\?\.preferences\?\.terminal\?\.font\s*\?\?\s*"os-default"/,
+    );
+    expect(tab).toMatch(
+      /fontPref === "source-code-pro"\s*\?\s*FONT_CHAIN_SOURCE_CODE_PRO\s*:\s*FONT_CHAIN_OS_DEFAULT/,
     );
   });
 

@@ -83,7 +83,15 @@ export type TerminalPreferences = {
   /// cleanly; the SPA treats `undefined` as the default
   /// `xterm-256color`.
   default_term?: string;
+  /// `fullstack-b-30` slice b: terminal-font preference. Optional
+  /// on the wire so pre-`-b-30` servers (no field) deserialize as
+  /// the default `os-default` (per-OS native mono lead from slice
+  /// a). `source-code-pro` opts into Source Code Pro; the SPA
+  /// triggers the download endpoint when needed.
+  font?: TerminalFontChoice;
 };
+
+export type TerminalFontChoice = "os-default" | "source-code-pro";
 
 export type BubbleOverlayMode = "stack" | "tray";
 

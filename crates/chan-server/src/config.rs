@@ -102,6 +102,30 @@ pub struct TerminalConfig {
     /// terminals keep their original TERM until restart.
     #[serde(default = "default_terminal_default_term")]
     pub default_term: String,
+    /// `fullstack-b-30` slice b: user's terminal-font preference.
+    /// Default is `os-default` (per-OS native mono — SF Mono on
+    /// macOS, Cascadia on Windows, DejaVu on Linux). Opt-in
+    /// `source-code-pro` activates Source Code Pro by reordering
+    /// xterm.js's fontFamily chain to put SCP first. Selecting SCP
+    /// on a non-embed-font build triggers the SettingsPanel's
+    /// download flow before the activation completes.
+    #[serde(default)]
+    pub font: TerminalFontChoice,
+}
+
+/// `fullstack-b-30` slice b: terminal-font preference. Wire shape
+/// kept narrow (string enum) so a future polish task could add a
+/// "Custom..." path without breaking existing config files.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "kebab-case")]
+pub enum TerminalFontChoice {
+    /// Per-OS native mono. Lean-default baseline from slice a.
+    #[default]
+    OsDefault,
+    /// Source Code Pro Regular. Available either via `--features
+    /// embed-font` (rust-embed bundle) or via the user-config-dir
+    /// path written by the slice b download flow.
+    SourceCodePro,
 }
 
 impl Default for TerminalConfig {
@@ -112,6 +136,7 @@ impl Default for TerminalConfig {
             ring_bytes: default_terminal_ring_bytes(),
             scrollback_mb: default_terminal_scrollback_mb(),
             default_term: default_terminal_default_term(),
+            font: TerminalFontChoice::default(),
         }
     }
 }
@@ -220,6 +245,7 @@ mod tests {
                 ring_bytes: 4096,
                 scrollback_mb: 100,
                 default_term: "tmux-256color".into(),
+                font: TerminalFontChoice::SourceCodePro,
             },
             reports: ReportsConfig { enabled: false },
         };
