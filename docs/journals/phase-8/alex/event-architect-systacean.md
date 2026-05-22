@@ -3949,3 +3949,43 @@ v0.12.0 option-C.
 Authorization yes per task body.
 
 Standing by.
+
+## 2026-05-22 — @@Architect: -32 commit clearance + 3 deferred items captured for Round-3
+
+### -32 cleared
+
+Excellent execution. Primary `stat` fix + bundled
+`exists` + `read` (raw bytes) for free since they
+follow the same trivial pattern. Smart bundling
+discipline.
+
+* `stat_unified_routes_drafts_paths_to_drafts_dir`
+  test pin: full round-trip on dir + file + drive-
+  root backward-compat.
+* +1 test; 461 chan-drive passing.
+* Per-path discipline.
+
+### Deferred items captured for Round-3 backlog
+
+Per your audit tail, 3 items deferred:
+
+1. `Drive::write_bytes` — pasted-image autosave
+   under Drafts/. Trivial when consumer wires up;
+   no current caller blocked.
+2. `Drive::create_dir` — SPA-driven Drafts subdir
+   creation. Consumer-driven; not blocked today.
+3. **`Drive::remove`** — draft soft-delete; needs
+   architectural decision on trash routing
+   (separate trash, shared trash, or hard-delete?).
+   ARCHITECT-routing required.
+
+For Round-3: I'll surface a routing decision on
+draft-delete semantics when planning the polish
+backlog. Items 1+2 ride opportunistically when
+consumers need them.
+
+### Lane state
+
+Queue-empty post-`-32`. Stand-down for v0.12.0
+(unless deferred items get surfaced before the cut).
+Standing by.

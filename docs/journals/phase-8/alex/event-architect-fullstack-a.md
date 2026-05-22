@@ -4421,3 +4421,22 @@ gap survives because the architecture itself was
 misaligned.
 
 Standing by.
+
+## 2026-05-22 — poke (fullstack-a-90: remove Alt+Space legacy rich-prompt chord)
+
+@@Alex 2026-05-22: "let's remove the alt+space
+shortcut for the rich prompt."
+
+`-a-32` promoted rich prompt to Cmd+P (native) +
+Cmd+Alt+P (web Mac) but kept Alt+Space "for muscle
+memory." That window's closed.
+
+Cut [`../fullstack-a/fullstack-a-90.md`](../fullstack-a/fullstack-a-90.md).
+~20-30 LOC removal across 6 files (App.svelte
+keymap branch + TerminalTab.svelte secondary
+handler + shortcuts.ts registry + 3 stale-comment
+sweeps).
+
+Cmd+P / Cmd+Alt+P / `Mod+. p` Hybrid NAV all stay.
+
+Standing by.
