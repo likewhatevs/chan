@@ -3062,3 +3062,32 @@ the literal.
 Impl note at [fullstack-a-68b.md](fullstack-a-68b.md)
 "## 2026-05-22 — slice 1c". Outbound poke
 fired.
+
+## 2026-05-22 — -a-81 slice 4 (phase-N parameterisation) ready for review
+
+Four-file change. Docs + helper extension.
+
+* `bootstrap.md.tpl`: 43 `phase-8` /
+  `phase 8` / `Phase 8` refs → `{phase-slug}`.
+* `teamTemplate.ts`: new `phaseSlug?:
+  string` field; regex extended; default
+  `phase-1`; `CHAN_INTERNAL_TEAM_VARS`
+  carries `phaseSlug: "phase-8"`.
+* `teamTemplate.test.ts`: +4 pins.
+* `README.md`: tokens table + slice-4-landed
+  framing.
+
+### Gate
+
+* vitest **1047 / 1047** (+4 net from -a-68
+  slice 1c's 1043).
+* svelte-check 0/0 across 4040 files.
+* npm build clean.
+
+Slice 5 (per-agent cards) remains deferred —
+needs a different file shape, not just
+parameterisation.
+
+Impl note at [fullstack-a-81.md](fullstack-a-81.md)
+"## 2026-05-22 — slice 4". Outbound poke
+fired.

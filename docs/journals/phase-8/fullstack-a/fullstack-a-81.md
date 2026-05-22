@@ -556,3 +556,139 @@ Docs-only commit.
 Per the memory rule. Per-path staging only.
 
 Push held. Standing by for clearance.
+
+## 2026-05-22 — slice 4 (phase-N parameterisation) ready for review
+
+Four-file change. Docs + helper extension.
+
+### What landed
+
+`docs/templates/team-process/bootstrap.md.tpl`:
+* Bulk perl swap of every
+  `(?:Phase 8|phase 8|phase-8)` →
+  `{phase-slug}`. 43 substitutions across
+  the file. All three case forms collapse
+  to one token; the orchestrator picks
+  whatever slug fits its team layout.
+
+`web/src/state/teamTemplate.ts`:
+* New `phaseSlug?: string` field on
+  `TeamTemplateVars`. Doc-comment cites
+  slice 4's framing + the chan-vs-new-team
+  default split.
+* Substitution regex extended:
+  `{phase-slug}` joins the recognised
+  token list.
+* Default: `phase-1` (new-team friendly)
+  when `vars.phaseSlug` is unset.
+* `CHAN_INTERNAL_TEAM_VARS` adds
+  `phaseSlug: "phase-8"` so the
+  chan-internal substitution renders the
+  template byte-equivalent to pre-slice-4
+  bootstrap.md (paths stay
+  `docs/journals/phase-8/...`).
+
+`web/src/state/teamTemplate.test.ts`: +4
+pins covering:
+* `{phase-slug}` substitution with explicit
+  vars.
+* Default fallback to `phase-1`.
+* `CHAN_INTERNAL_TEAM_VARS.phaseSlug` =
+  `phase-8`.
+* Chan-internal substitution renders
+  bootstrap-style paths verbatim.
+
+`docs/templates/team-process/README.md`:
+* New row in the Substitution tokens
+  table.
+* "Slice 4 (phase-N parameterisation) —
+  landed" section replacing the prior
+  deferred-slice-5 framing.
+* Slice 5 now = per-agent contact cards
+  (still deferred; needs a different
+  shape).
+
+### Acceptance (slice 4)
+
+1. **`{phase-slug}` substitution works**
+   ✓ — explicit value + default
+   fallback both pinned.
+2. **Chan-internal renders byte-
+   equivalent to pre-slice-4** ✓ —
+   `phaseSlug: "phase-8"` in the chan
+   vars; round-trip pin asserts
+   `docs/journals/phase-8/...` output.
+3. **New teams default to `phase-1`** ✓
+   — the default in
+   `substituteTeamTemplate` covers the
+   common case where the orchestrator
+   doesn't pass a slug.
+4. **Token grammar consistent** ✓ —
+   kebab-case `{phase-slug}` matches the
+   existing token shape; case-variants
+   left as-is for typo detection.
+
+### Out of scope (slice 5 remains)
+
+Per-agent contact cards
+(fullstack-a.md / fullstack-b.md /
+webtest-a.md / webtest-b.md / ci.md)
+encode individual identity that doesn't
+map cleanly to the template variables.
+Slice 5 needs a different shape:
+per-worker metadata file generated from
+team config at bootstrap time. Punted.
+
+### Gate
+
+* vitest **1047 / 1047** (+4 net from
+  `-a-68 slice 1c`'s 1043).
+* svelte-check 0 errors / 0 warnings
+  across 4040 files.
+* npm build clean.
+* Rust gate not re-run (no Rust touched).
+
+### Decisions
+
+* **Single token for all three forms**
+  (`Phase 8`, `phase 8`, `phase-8`) — the
+  orchestrator picks one substitution
+  string; readers grok any of the three
+  casings in context. Multiple tokens
+  would add audit complexity for
+  marginal stylistic gain.
+* **Default `phase-1`** for new teams —
+  most teams will start fresh; orchestrator
+  can override to `phase-0` or
+  team-specific.
+* **Chan-internal default `phase-8`** —
+  preserves the byte-equivalent render so
+  no chan-side regression risk.
+* **Slice 5 deferred** — per-agent cards
+  need a different file shape, not just
+  parameterisation.
+
+### Suggested commit subject
+
+```
+docs(fullstack-a-81): parameterise phase-N references via {phase-slug} token — slice 4
+```
+
+Single commit. Template swap + helper
+extension + tests + README.
+
+### Files for `git add` (per-path discipline)
+
+* `docs/templates/team-process/bootstrap.md.tpl`
+* `docs/templates/team-process/README.md`
+* `web/src/state/teamTemplate.ts`
+* `web/src/state/teamTemplate.test.ts`
+* `docs/journals/phase-8/fullstack-a/fullstack-a-81.md`
+* `docs/journals/phase-8/fullstack-a/journal.md`
+* `docs/journals/phase-8/alex/event-fullstack-a-architect.md`
+
+### Atomic-audit-commit
+
+Per the memory rule. Per-path staging only.
+
+Push held. Standing by for clearance.

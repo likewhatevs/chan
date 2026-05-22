@@ -30,6 +30,19 @@ export interface TeamTemplateVars {
   /// `{team-name}`. Falls back to "team" if unset so the
   /// template still renders.
   teamName?: string;
+  /// `fullstack-a-81` slice 4: phase-slug for the team's
+  /// working-directory layout. Substituted as `{phase-slug}`
+  /// everywhere the source template hardcoded chan's own
+  /// `phase-8` path / prose form. Chan-internal substitution
+  /// stays `phase-8`; new teams typically start at `phase-1`
+  /// or omit phases entirely (orchestrator's call).
+  ///
+  /// Falls back to "phase-1" if unset so a fresh new-team
+  /// substitution doesn't render `{phase-slug}` literally on
+  /// the user's first read. Empty string skips the
+  /// substitution + leaves `{phase-slug}` so the orchestrator
+  /// sees a gap.
+  phaseSlug?: string;
 }
 
 /// Substitute `{host-handle}` / `{lead-handle}` /
@@ -49,12 +62,14 @@ export function substituteTeamTemplate(
   vars: TeamTemplateVars,
 ): string {
   const teamName = vars.teamName ?? "team";
+  const phaseSlug = vars.phaseSlug ?? "phase-1";
   return template.replace(
-    /\{(host-handle|lead-handle|worker-(\d+)-handle|team-name)\}/g,
+    /\{(host-handle|lead-handle|worker-(\d+)-handle|team-name|phase-slug)\}/g,
     (_, token: string, workerIdx: string | undefined) => {
       if (token === "host-handle") return vars.hostHandle;
       if (token === "lead-handle") return vars.leadHandle;
       if (token === "team-name") return teamName;
+      if (token === "phase-slug") return phaseSlug;
       const idx = Number(workerIdx) - 1;
       if (
         Number.isInteger(idx) &&
@@ -88,4 +103,11 @@ export const CHAN_INTERNAL_TEAM_VARS: TeamTemplateVars = {
     "@@WebtestB",
   ],
   teamName: "chan",
+  // `fullstack-a-81` slice 4: chan's own working directory is
+  // under `docs/journals/phase-8/` — the templated bootstrap
+  // doc references that path 43 times via `{phase-slug}`.
+  // Substituting with `phase-8` here gives chan's own agents
+  // an identical bootstrap to what they read pre-`-81` slice 4
+  // (templated render is byte-equivalent for the chan case).
+  phaseSlug: "phase-8",
 };

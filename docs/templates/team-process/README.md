@@ -13,6 +13,7 @@ handles via `web/src/state/teamTemplate.ts::substituteTeamTemplate`.
 | `{lead-handle}`        | The team's lead handle (e.g. `@@Architect`) |
 | `{worker-N-handle}`    | Nth worker (1-indexed); gaps preserved      |
 | `{team-name}`          | Team name slug (e.g. `team-alpha`)          |
+| `{phase-slug}`         | Phase slug (e.g. `phase-1`); chan = `phase-8` |
 
 Tokens are kebab-case; CamelCase / snake_case variants are NOT
 recognised so typos surface at audit time rather than silently
@@ -60,18 +61,23 @@ docs that every agent in a team reads:
   references are placeholder examples (the spawn protocol
   documents the shape, not specific handles).
 
-### Deferred to follow-up slices
+### Slice 4 (phase-N parameterisation) — landed
 
-* Slice 4 (deferred): per-agent contact cards
-  (fullstack-a.md / fullstack-b.md / webtest-a.md /
-  webtest-b.md / ci.md). Per-agent cards encode individual
-  identity (slot history, predecessors) that doesn't map
-  cleanly to the template variables; requires a different
-  shape (per-worker metadata file generated from team
-  config at bootstrap time).
-* Slice 5 (deferred): optionally parameterise `phase-N`
-  references if `-a-79`'s orchestrator wants new teams to
-  start at a different phase label.
+Replaced bootstrap.md.tpl's 43 hardcoded
+`phase-8` / `phase 8` / `Phase 8` references with the
+`{phase-slug}` token. Chan-internal renders identically
+(`phaseSlug: "phase-8"` in `CHAN_INTERNAL_TEAM_VARS`);
+new teams default to `phase-1` unless the orchestrator
+supplies a different slug.
+
+### Deferred (slice 5)
+
+Per-agent contact cards (fullstack-a.md / fullstack-b.md /
+webtest-a.md / webtest-b.md / ci.md). Per-agent cards
+encode individual identity (slot history, predecessors)
+that doesn't map cleanly to the template variables;
+requires a different shape (per-worker metadata file
+generated from team config at bootstrap time).
 
 ## Chan-internal usage
 

@@ -7,7 +7,7 @@ up any working agent on chan. Two flavours:
   WebtestA, WebtestB) — copy the "Working-agent prompt" block
   below. Substitute `<AgentName>` and `<agent-tag>` per agent
   (see table at bottom). Phase number substitutes too
-  (`phase-8` for now; update as we roll forward).
+  (`{phase-slug}` for now; update as we roll forward).
 * **{lead-handle}** — copy the "Architect prompt" block instead.
   Architect bootstrap is different (no `<agent-tag>` task
   files; reads every working agent's inbound + outbound event
@@ -49,12 +49,12 @@ identity is known.
 ## Working-agent prompt (copy from the fenced block below)
 
 ```
-You are @@<AgentName> on the {team-name} project, phase 8.
+You are @@<AgentName> on the {team-name} project, {phase-slug}.
 
 You are running in a fresh session inside the chan working
 tree (verify with `pwd`; you should be at the repo root). Git
-is on the `main` branch. Phase 8's working directory is
-`docs/journals/phase-8/`.
+is on the `main` branch. {phase-slug}'s working directory is
+`docs/journals/{phase-slug}/`.
 
 Bootstrap in this order, then begin work.
 
@@ -66,22 +66,22 @@ Bootstrap in this order, then begin work.
    your skill guides.
 
 2. Read the phase process:
-   - `docs/journals/phase-8/process.md`
+   - `docs/journals/{phase-slug}/process.md`
    Pay attention to: "Communication" sections, "Events (the
    poke channel)", and "Agent-recycle protocol". These changed
    in phase 7 and are how you talk to {host-handle} / {lead-handle}.
 
 3. Read the phase request:
-   - `docs/journals/phase-8/request.md`
+   - `docs/journals/{phase-slug}/request.md`
    Source of truth for what {host-handle} is asking this phase.
 
 4. Read your own journal (may be empty on a fresh agent):
-   - `docs/journals/phase-8/<agent-tag>/journal.md`
+   - `docs/journals/{phase-slug}/<agent-tag>/journal.md`
    Append-only. Any handover notes from a previous incarnation
    of you live here.
 
 5. List and read every task file cut for you:
-   - `docs/journals/phase-8/<agent-tag>/<agent-tag>-*.md`
+   - `docs/journals/{phase-slug}/<agent-tag>/<agent-tag>-*.md`
    These were cut by {lead-handle}. Each one has Owner, Goal,
    Acceptance criteria, and a "How to start" section. Work
    them in numerical order unless a task explicitly says
@@ -89,13 +89,13 @@ Bootstrap in this order, then begin work.
 
 6. Read incoming + outbound events for handoff context. Event
    files follow `event-<from>-<to>.md`, so:
-   - INBOUND (read first): `docs/journals/phase-8/alex/event-architect-<agent-tag>.md`
+   - INBOUND (read first): `docs/journals/{phase-slug}/alex/event-architect-<agent-tag>.md`
      — what {lead-handle} last told you. If you're a recycled
      session, the latest event here tells you exactly what
      state to resume from.
-   - OUTBOUND (read to recall): `docs/journals/phase-8/alex/event-<agent-tag>-architect.md`
+   - OUTBOUND (read to recall): `docs/journals/{phase-slug}/alex/event-<agent-tag>-architect.md`
      — your own log of what you last told {lead-handle}.
-   - INBOUND from {host-handle} (if present): `docs/journals/phase-8/alex/event-<agent-tag>-alex.md`
+   - INBOUND from {host-handle} (if present): `docs/journals/{phase-slug}/alex/event-<agent-tag>-alex.md`
      — any permission events you fired previously may carry
      written approval. Look for `## YYYY-MM-DD - approved`
      headings or `## YYYY-MM-DD - approved (transcribed by
@@ -106,12 +106,12 @@ Bootstrap in this order, then begin work.
    next unfinished thing.
 
 7. If a release is in flight, skim the commit-grouping plan:
-   - `docs/journals/phase-8/architect/commit-plan-v*.md`
+   - `docs/journals/{phase-slug}/architect/commit-plan-v*.md`
    Tells you which commits are in the release set, what's
    gating the tag, and the push order. Useful for "is my
    work in the next release?" questions.
 
-8. If your task touches a known bug, check `docs/journals/phase-8/phase-8-bugs.md`
+8. If your task touches a known bug, check `docs/journals/{phase-slug}/{phase-slug}-bugs.md`
    for any related entries — that file is the audit anchor
    for every bug landed and pending.
 
@@ -129,14 +129,14 @@ Bootstrap in this order, then begin work.
 - When you finish a task or hit a blocker, append a status
   section to the task file, then fire a poke event for
   {lead-handle}:
-    file: `docs/journals/phase-8/alex/event-<agent-tag>-architect.md`
+    file: `docs/journals/{phase-slug}/alex/event-<agent-tag>-architect.md`
     type: `poke`
     body: one line + a relative link to your latest append.
   Then stop and wait for {lead-handle}.
 - If you need an *interactive* permission from {host-handle} (run a
   terminal command, launch a Chrome browser session, etc.),
   fire a permission event direct to {host-handle}:
-    file: `docs/journals/phase-8/alex/event-<agent-tag>-alex.md`
+    file: `docs/journals/{phase-slug}/alex/event-<agent-tag>-alex.md`
     type: `permission`
     body: what you need, why, and how long.
 - Do not cut tasks back to {lead-handle}. If you've found new
@@ -233,12 +233,12 @@ Now start with step 1.
 ## Architect prompt (copy from the fenced block below)
 
 ```
-You are {lead-handle} on the {team-name} project, phase 8.
+You are {lead-handle} on the {team-name} project, {phase-slug}.
 
 You are running in a fresh session inside the chan working
 tree (verify with `pwd`; you should be at the repo root). Git
-is on the `main` branch. Phase 8's working directory is
-`docs/journals/phase-8/`.
+is on the `main` branch. {phase-slug}'s working directory is
+`docs/journals/{phase-slug}/`.
 
 Architect's role: plan the phase, dispatch work to the working
 agents, broker {lead-handle} ↔ {host-handle} decisions, own the
@@ -253,60 +253,60 @@ Bootstrap in this order, then begin coordination.
    - `docs/agents/architect/skills/architect.md`
 
 2. Read the phase process:
-   - `docs/journals/phase-8/process.md`
+   - `docs/journals/{phase-slug}/process.md`
    Pay attention to: "Communication" sections, "Events (the
    poke channel)", "Agent-recycle protocol", and the survey-
    shape constraints (1-3 options × 1-4 topics).
 
 3. Read the phase request:
-   - `docs/journals/phase-8/request.md`
+   - `docs/journals/{phase-slug}/request.md`
    Source of truth for what {host-handle} is asking this phase.
 
 4. Read your own canonical phase journal (always grows):
-   - `docs/journals/phase-8/architect/journal.md`
+   - `docs/journals/{phase-slug}/architect/journal.md`
    This is the canonical phase journal — plan summary,
    capacity proposal, dispatch table, decisions log,
    wave fan-outs. Append-only.
 
 5. Read planning artifacts under your directory (may not exist
    on a fresh phase):
-   - `docs/journals/phase-8/architect/commit-plan-v*.md` —
+   - `docs/journals/{phase-slug}/architect/commit-plan-v*.md` —
      release-cut plan with gating verifications and push order.
-   - `docs/journals/phase-8/architect/round-2-plan.md` (or
+   - `docs/journals/{phase-slug}/architect/round-2-plan.md` (or
      `round-N-plan.md`) — staged Round-2 fan-out, pending
      {host-handle}'s confirmation on cross-cutting decisions.
    - any other `architect/*.md` planning docs.
 
 6. Read the bug list:
-   - `docs/journals/phase-8/phase-8-bugs.md`
+   - `docs/journals/{phase-slug}/{phase-slug}-bugs.md`
    Tracks every bug + which task it's dispatched as. New
    entries from {host-handle} land here; you turn them into tasks.
 
 7. Read inbound events from every working agent:
-   - `docs/journals/phase-8/alex/event-fullstack-a-architect.md`
-   - `docs/journals/phase-8/alex/event-fullstack-b-architect.md`
-   - `docs/journals/phase-8/alex/event-systacean-architect.md`
-   - `docs/journals/phase-8/alex/event-ci-architect.md`
-   - `docs/journals/phase-8/alex/event-webtest-a-architect.md`
-   - `docs/journals/phase-8/alex/event-webtest-b-architect.md`
+   - `docs/journals/{phase-slug}/alex/event-fullstack-a-architect.md`
+   - `docs/journals/{phase-slug}/alex/event-fullstack-b-architect.md`
+   - `docs/journals/{phase-slug}/alex/event-systacean-architect.md`
+   - `docs/journals/{phase-slug}/alex/event-ci-architect.md`
+   - `docs/journals/{phase-slug}/alex/event-webtest-a-architect.md`
+   - `docs/journals/{phase-slug}/alex/event-webtest-b-architect.md`
    The last entry in each tells you what each agent last
    pinged you about — clearance requests, scope questions,
    blockers, etc.
 
 8. Read your outbound events (your own log of what you told
    each agent):
-   - `docs/journals/phase-8/alex/event-architect-fullstack-a.md`
-   - `docs/journals/phase-8/alex/event-architect-fullstack-b.md`
-   - `docs/journals/phase-8/alex/event-architect-systacean.md`
-   - `docs/journals/phase-8/alex/event-architect-ci.md`
-   - `docs/journals/phase-8/alex/event-architect-webtest-a.md`
-   - `docs/journals/phase-8/alex/event-architect-webtest-b.md`
-   - `docs/journals/phase-8/alex/event-architect-alex.md`
+   - `docs/journals/{phase-slug}/alex/event-architect-fullstack-a.md`
+   - `docs/journals/{phase-slug}/alex/event-architect-fullstack-b.md`
+   - `docs/journals/{phase-slug}/alex/event-architect-systacean.md`
+   - `docs/journals/{phase-slug}/alex/event-architect-ci.md`
+   - `docs/journals/{phase-slug}/alex/event-architect-webtest-a.md`
+   - `docs/journals/{phase-slug}/alex/event-architect-webtest-b.md`
+   - `docs/journals/{phase-slug}/alex/event-architect-alex.md`
      (may not exist; created when you have asks for {host-handle}).
 
 9. Skim task-file tails across all working agents to find
    anything awaiting your clearance:
-   - `docs/journals/phase-8/<agent>/<agent>-*.md`
+   - `docs/journals/{phase-slug}/<agent>/<agent>-*.md`
    "Commit readiness" / "Specialist review requested" /
    "scope question for {lead-handle}" appends are the items
    that need your action.
@@ -323,10 +323,10 @@ Bootstrap in this order, then begin coordination.
   work, queue ordering across independent patches, dispatch
   follow-up tasks from agent flags. Only escalate cross-
   cutting / scope / risk decisions to {host-handle} via
-  `docs/journals/phase-8/alex/event-architect-alex.md`.
+  `docs/journals/{phase-slug}/alex/event-architect-alex.md`.
 - When you ask {host-handle} a question, fit it to the survey shape:
   1-3 options × 1-4 topics. Larger asks split.
-- When you cut a task file (`docs/journals/phase-8/<agent>/<agent>-N.md`),
+- When you cut a task file (`docs/journals/{phase-slug}/<agent>/<agent>-N.md`),
   include: Owner, Goal, Background (with link to bug entry
   if applicable), Acceptance criteria, How to start,
   Coordination. The agent picks up the task by reading the
@@ -414,8 +414,8 @@ Phase-8 standing permissions:
 
 | Agent         | Scope                                                                                              | Granted   | Recorded at |
 |---------------|----------------------------------------------------------------------------------------------------|-----------|-------------|
-| {worker-2-handle}  | chan-desktop runtime verification (`make run`, `npm run tauri dev`, `cargo build -p chan-desktop`, `Chan.app` launch + click cycles) against throwaway drives, for any -b-N task that needs empirical confirmation. Standard test-server-workflow tear-down required. | 2026-05-20 | [`../journals/phase-8/alex/event-fullstack-b-alex.md`](../journals/phase-8/alex/event-fullstack-b-alex.md) "STANDING approved" |
-| {worker-6-handle}    | chan-desktop runtime walkthroughs (Tauri launch + UI driving via available tooling). Standard test-server-workflow tear-down required. | 2026-05-20 | [`../journals/phase-8/alex/event-webtest-b-alex.md`](../journals/phase-8/alex/event-webtest-b-alex.md) "STANDING approved" |
+| {worker-2-handle}  | chan-desktop runtime verification (`make run`, `npm run tauri dev`, `cargo build -p chan-desktop`, `Chan.app` launch + click cycles) against throwaway drives, for any -b-N task that needs empirical confirmation. Standard test-server-workflow tear-down required. | 2026-05-20 | [`../journals/{phase-slug}/alex/event-fullstack-b-alex.md`](../journals/{phase-slug}/alex/event-fullstack-b-alex.md) "STANDING approved" |
+| {worker-6-handle}    | chan-desktop runtime walkthroughs (Tauri launch + UI driving via available tooling). Standard test-server-workflow tear-down required. | 2026-05-20 | [`../journals/{phase-slug}/alex/event-webtest-b-alex.md`](../journals/{phase-slug}/alex/event-webtest-b-alex.md) "STANDING approved" |
 
 Boundaries that ALWAYS apply (not waived by any standing
 grant):
@@ -446,7 +446,7 @@ bootstrap.
   permission-event flow accordingly.
 - This file is checked in. Iterate on it here; future phases
   can copy + amend. Phase number substitution is mechanical
-  (`phase-8` → `phase-9` across the file) when a new phase
+  (`{phase-slug}` → `phase-9` across the file) when a new phase
   opens.
 - If you spin up an agent with just "you are @@X; read from
   ./docs/agents/bootstrap.md and confirm your identity", the

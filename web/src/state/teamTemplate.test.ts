@@ -107,3 +107,41 @@ describe("fullstack-a-81: CHAN_INTERNAL_TEAM_VARS", () => {
     );
   });
 });
+
+describe("fullstack-a-81 slice 4: phase-slug substitution", () => {
+  test("substitutes {phase-slug} from vars.phaseSlug", () => {
+    const out = substituteTeamTemplate(
+      "Working dir: docs/journals/{phase-slug}/",
+      {
+        hostHandle: "@@H",
+        leadHandle: "@@L",
+        workerHandles: [],
+        teamName: "team-alpha",
+        phaseSlug: "phase-2",
+      },
+    );
+    expect(out).toBe("Working dir: docs/journals/phase-2/");
+  });
+
+  test("defaults {phase-slug} to `phase-1` when unset (new-team friendly)", () => {
+    const out = substituteTeamTemplate(
+      "Working dir: docs/journals/{phase-slug}/",
+      {
+        hostHandle: "@@H",
+        leadHandle: "@@L",
+        workerHandles: [],
+      },
+    );
+    expect(out).toBe("Working dir: docs/journals/phase-1/");
+  });
+
+  test("CHAN_INTERNAL_TEAM_VARS carries phaseSlug='phase-8'", () => {
+    expect(CHAN_INTERNAL_TEAM_VARS.phaseSlug).toBe("phase-8");
+  });
+
+  test("chan-internal substitution renders bootstrap-style paths as `phase-8`", () => {
+    const tpl = "INBOUND: docs/journals/{phase-slug}/alex/event-x.md";
+    const out = substituteTeamTemplate(tpl, CHAN_INTERNAL_TEAM_VARS);
+    expect(out).toBe("INBOUND: docs/journals/phase-8/alex/event-x.md");
+  });
+});

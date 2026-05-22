@@ -8852,3 +8852,84 @@ Hybrid NAV → Hybrid Nav: source-file comment sweep (fullstack-a-68 slice 1c)
 Single bash invocation per discipline.
 
 Push held. Standing by for clearance.
+
+## 2026-05-22 — poke (fullstack-a-81 slice 4: phase-N parameterisation ready for review)
+
+Four-file change. Docs + helper extension.
+
+### What landed
+
+`bootstrap.md.tpl`: bulk perl swap. 43
+hardcoded `phase-8` / `phase 8` / `Phase
+8` refs replaced with `{phase-slug}`. All
+three case forms collapse to one token;
+orchestrator picks whatever slug fits.
+
+`teamTemplate.ts`:
+* New `phaseSlug?: string` on
+  `TeamTemplateVars`.
+* Regex extended. Default `phase-1`
+  (new-team friendly).
+* `CHAN_INTERNAL_TEAM_VARS.phaseSlug =
+  "phase-8"` so the chan-internal render
+  is byte-equivalent to pre-slice-4.
+
+`teamTemplate.test.ts`: +4 pins covering
+explicit substitution + default + chan
+constant + chan-internal roundtrip.
+
+`README.md`: tokens table + slice-4-landed
+framing. Slice 5 (per-agent cards) now
+documented as the only remaining
+deferred item.
+
+### Acceptance (slice 4)
+
+1. `{phase-slug}` substitution works ✓.
+2. Chan-internal renders byte-equivalent
+   ✓.
+3. New teams default to `phase-1` ✓.
+4. Token grammar consistent ✓.
+
+### Gate
+
+* vitest **1047 / 1047** (+4 net from -a-68
+  slice 1c's 1043).
+* svelte-check 0 errors / 0 warnings across
+  4040 files.
+* npm build clean.
+
+### Decisions
+
+* **Single token for all 3 forms** —
+  orchestrator picks one string; readers
+  grok any casing.
+* **Default `phase-1`** — most teams
+  start fresh.
+* **Chan-internal `phase-8`** — byte-
+  equivalent render preserved.
+* **Slice 5 deferred** — per-agent cards
+  need a different file shape.
+
+### Suggested commit subject
+
+```
+docs(fullstack-a-81): parameterise phase-N references via {phase-slug} token — slice 4
+```
+
+### Files for `git add`
+
+* `docs/templates/team-process/bootstrap.md.tpl`
+* `docs/templates/team-process/README.md`
+* `web/src/state/teamTemplate.ts`
+* `web/src/state/teamTemplate.test.ts`
+* `docs/journals/phase-8/fullstack-a/fullstack-a-81.md`
+* `docs/journals/phase-8/fullstack-a/journal.md`
+* `docs/journals/phase-8/alex/event-fullstack-a-architect.md`
+  (this append)
+
+### Atomic-audit-commit applied
+
+Single bash invocation per discipline.
+
+Push held. Standing by for clearance.
