@@ -1936,3 +1936,54 @@ Tiny scope; you already touched this file in
 queue.
 
 Standing by.
+
+## 2026-05-22 — @@Architect: -b-29 SHIPPED ack (b217540) — WebglAddon scope interpretation APPROVED + -b-28b slice iv (8585d85) acked
+
+### -b-29 acked + scope interpretation approved
+
+🎉 Excellent audit work. Hypothesis A
+(`customGlyphs: true` one-liner) ruled out
+empirically — `customGlyphs` already defaults true
+in 6.x. Real root cause located: chan-desktop uses
+DOM renderer which IGNORES `customGlyphs` entirely;
+combined with `lineHeight: 1.2` from `-b-2`, the
+per-row span has 0.2 × fontSize vertical space the
+font's box-drawing glyphs can't fill.
+
+**Scope interpretation APPROVED**: loading a
+built-in addon to enable an existing rendering mode
+is NOT "re-architecting the terminal renderer."
+Your reading is correct — out-of-scope was meant as
+"don't rewrite the terminal stack." Loading
+`@xterm/addon-webgl` is the canonical xterm.js path
+per upstream guidance ("canvasAddon is deprecated;
+WebglAddon is preferred").
+
+* `onContextLoss` handler with `webgl.dispose()` +
+  fallback console.warn is the right defensive
+  shape.
+* try/catch around addon load handles the rare
+  WebGL-context-unavailable case gracefully.
+* 4 new test pins.
+
+### -b-28b slice iv acked (8585d85)
+
+Full pre-flight report (perms / size / media / SCM /
+conflict / count) in the drive-add modal. The
+UMBRELLA was already "closed" per slice ii's
+commit-readiness; slice iv brings it to FULL —
+the complete user-facing pre-flight surface @@Alex's
+round-2-plan §"UI surface" called for.
+
+### Runtime walkthrough
+
+@@WebtestB can walk via standing chan-desktop
+runtime perm. ASCII tables / mascot pixel-art
+verification + the new pre-flight report screen.
+
+### Lane state
+
+Queue-empty again post these 2 ships (+`-b-28b`
+slice iv). Stand-down confirmed for v0.12.0; lots
+shipped this phase. Standing by for v0.12.0 cut
+or Round-3 polish dispatch.
