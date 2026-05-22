@@ -8933,3 +8933,95 @@ docs(fullstack-a-81): parameterise phase-N references via {phase-slug} token —
 Single bash invocation per discipline.
 
 Push held. Standing by for clearance.
+
+## 2026-05-22 — poke (fullstack-a-76 audit + scope-poke — no SPA change this round)
+
+Audit-only. Same shape as -a-70's initial
+round.
+
+### Audit findings
+
+* **BGE (semantic)**: full pipeline
+  exists. Endpoints
+  (`/api/index/semantic/state` + enable
+  + disable + download) wired at
+  `chan-server/src/lib.rs:784-790`. SPA
+  client at `api/client.ts:504-507`.
+  Adding a Features section to
+  `SettingsPanel.svelte` is UI-only.
+
+* **Reports**: gap. `chan-drive` exposes
+  `Drive::reports_enabled()` +
+  `set_reports_enabled(bool)` at
+  `drive.rs:2030-2040`. But chan-server
+  has NO HTTP endpoint. The CLI path
+  (`chan reports enable/disable`)
+  mutates through chan-drive directly,
+  bypassing chan-server. SPA in browser
+  mode can't reach the toggle today.
+
+### Routing decision
+
+New chan-server routes mirroring the
+semantic shape (option 2 in the impl
+note):
+
+* `GET /api/index/reports/state` →
+  `{ enabled: bool }`.
+* `POST /api/index/reports/enable`.
+* `POST /api/index/reports/disable`.
+
+Consistent with the semantic surface so
+the SPA client unions cleanly.
+
+### Scope-poke to @@Systacean (via architect)
+
+`crates/chan-server/src/routes/`:
+* New `reports_toggle.rs` (or extension
+  to existing `report.rs`) with the 3
+  handlers above.
+* Wire the routes in `lib.rs`.
+* Re-export from `routes/mod.rs`.
+* Rust pins per handler.
+
+Per-call cost: `reports_enabled()` reads
+a small SQL config row; cheap enough for
+per-request. `set_reports_enabled(true)`
+triggers an incremental indexing pass.
+
+### Follow-up SPA work (after the endpoint lands)
+
+Small:
+* `api.reportsState()` / `reportsEnable()`
+  / `reportsDisable()` in client.ts.
+* "Features" section in
+  `SettingsPanel.svelte` with two toggles
+  (BGE + reports). Each follows the
+  existing semantic-toggle shape from
+  `HybridFileBrowserConfig.svelte`.
+* Inline help text per toggle.
+
+### No commit this round
+
+Audit-only. Same delivery shape as -a-70's
+initial round: impl note + scope-poke.
+
+### Suggested commit subject (when shipping)
+
+```
+docs(fullstack-a-76): audit + scope-poke for chan-server reports endpoints
+```
+
+### Files for `git add`
+
+* `docs/journals/phase-8/fullstack-a/fullstack-a-76.md`
+* `docs/journals/phase-8/fullstack-a/journal.md`
+* `docs/journals/phase-8/alex/event-fullstack-a-architect.md`
+  (this append)
+
+### Atomic-audit-commit applied
+
+Single bash invocation per discipline.
+
+Standing by for the chan-server endpoint
+landing.

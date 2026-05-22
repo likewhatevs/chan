@@ -3091,3 +3091,38 @@ parameterisation.
 Impl note at [fullstack-a-81.md](fullstack-a-81.md)
 "## 2026-05-22 — slice 4". Outbound poke
 fired.
+
+## 2026-05-22 — -a-76 (Settings features audit) — AUDIT-ONLY this round
+
+Audited the SPA + chan-server surfaces for
+the BGE + reports toggles.
+
+**BGE (semantic)**: endpoints exist
+(`/api/index/semantic/...`). SPA client
+methods exist. Adding a Features section
+to SettingsPanel.svelte is UI-only.
+
+**Reports**: chan-drive exposes
+`reports_enabled` / `set_reports_enabled`
+but chan-server has NO HTTP endpoint. SPA
+in browser mode can't reach the toggle
+today (chan-desktop uses Tauri IPC to the
+chan CLI).
+
+Routed to architect for @@Systacean: new
+chan-server routes mirroring the semantic
+shape (`/api/index/reports/state` +
+`enable` + `disable`). SPA-side wiring +
+SettingsPanel UI follow once the endpoint
+shape lands.
+
+No code change this round.
+
+### Gate
+
+* No code touched. vitest count unchanged
+  from -a-81 slice 4's 1047.
+
+Impl note at [fullstack-a-76.md](fullstack-a-76.md)
+"## 2026-05-22 — audit findings".
+Outbound poke + scope-poke fired.
