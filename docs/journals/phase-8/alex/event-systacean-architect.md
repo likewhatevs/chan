@@ -3460,3 +3460,50 @@ chan-drive: prefix-aware Drive::stat + exists + read for Drafts (systacean-32; c
 21 systacean tasks shipped this phase (incl. `-32`). All Drafts data-flow gaps now closed for the read/list/stat path. The 3 deferred methods are scoped follow-ups.
 
 Per pre-authorization, proceeding to commit + push + smoke.
+
+## 2026-05-22 — poke (-32 smoke ALL GREEN on fire 3; closes -a-66 b/c/d gap; cross-lane fixups bundled)
+
+`-32` smoke chain:
+
+| Fire | Verdict | Notes |
+|------|---------|-------|
+| `26306887406` (`b51a4b6`) | macOS FAILED | 5 cross-lane clippy errors in chan-server tests (`assert_eq!(x, bool)` + empty-doc-line). NOT in `-32`'s diff. |
+| `26307562387` (`4737251`) | rustfmt FAILED | 4 cross-lane fmt diffs from `-a-66 slice d` + `-b-28b-i` + lib.rs imports. NOT in `-32`'s diff. |
+| `26307803908` (`818654a`) | **ALL GREEN** | rustfmt 21s · web 3m1s · macOS 2m9s · Ubuntu 3m10s · no-default-features 1m37s |
+
+Pattern continues: my `-32` diff was clean; the smoke kept turning up cross-lane lint/fmt drift in HEAD from concurrent SPA + desktop work. Bundled both fixups with attribution:
+
+* `4737251` — chan-server clippy fixup (4× `assert_eq!(x, bool)` → `assert!` + 1× empty-doc-line). Owners: `-a-66 slice d` + `-a-88` (BrowserSidePanes default).
+* `818654a` — chan-server + chan-desktop fmt fixup. Owners: `-a-66 slice d` (drafts.rs imports), `-b-28b-i` (main.rs + serve.rs), lib.rs imports churn.
+
+### Live on main
+
+* `b51a4b6` — `-32` `Drive::stat` + `exists` + `read` prefix-aware.
+* `4737251` — cross-lane clippy fixup.
+* `818654a` — cross-lane fmt fixup.
+
+### What this unblocks
+
+* `fullstack-a-66 slice b/c/d` — `list_dir_entries` now enumerates Drafts subtree cleanly via the stat-routed pipeline.
+* v0.12.0 option-C cut — FB Drafts row renders correctly; webtest can re-walk the 3-slice PARTIALs to confirm closure.
+
+### Deferred items (still pending Round-3)
+
+* `Drive::write_bytes` for pasted-image autosave under Drafts/ (bundle when wired).
+* `Drive::create_dir` for SPA-driven Drafts subdirs (consumer-driven).
+* `Drive::remove` for draft soft-delete (architectural — trash routing decision needed).
+
+### Cross-lane pattern observation
+
+This smoke (`-32`) joins `-27`, `-29`, `-31` as smokes where MY diff was clean but cross-lane drift in HEAD turned up on the smoke runner. Pattern is consistent: concurrent lanes ship without `cargo fmt --check` + `cargo clippy --all-targets -- -D warnings` locally, then their drift surfaces on the next smoke that touches the workspace. Either:
+
+1. Pre-push hook enforcement is gapped (or not installed on all lanes).
+2. Lanes ship docs-only commits but the linters fire on the workspace's compiled state.
+
+Worth flagging for Round-3 hardening. Not blocking; the bundled-fixup pattern works but adds smoke-fire round-trips.
+
+### Lane state
+
+22 systacean tasks shipped this phase (incl. `-32`). Drafts data-flow fully closed for read/list/stat. Lane idle.
+
+Standing by.
