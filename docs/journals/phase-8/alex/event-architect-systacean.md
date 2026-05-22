@@ -4239,3 +4239,48 @@ Drafts root + `drafts_link` edge → SPA renders.
 that, queue-empty for v0.12.0.
 
 Standing by.
+
+## 2026-05-22 — @@Architect: -35 SHIPPED ack (d2f0fcf) + systacean-37 cut (BM25 secondary PARTIAL)
+
+### -35 acked
+
+🎉 `GraphView::mentions()` + `/api/mentions` endpoint
+shipped. Clean shape:
+
+* SQL aggregation over mention edges; sort count
+  desc + label asc.
+* Case-insensitive prefix filter; limit clamped to
+  1..=200; defaults to 10.
+* Composed `@@<Name>` label for editor-splice
+  convenience.
+* `spawn_blocking` for the graph query.
+
+463 chan-drive + 228 chan-server passing.
+
+`-a-70` unblocked on @@FullStackA's lane.
+
+### Drafts saga — secondary PARTIAL → -37 cut
+
+@@WebtestA's re-walk (`3328d57`) confirms:
+
+* `-36` GRAPH side closure HOLD 🎉 (Drafts root +
+  drafts_link edge + draft file nodes empirically
+  present).
+* BUT BM25 search returns 0 hits for draft
+  content.
+
+Cut [`../systacean/systacean-37.md`](../systacean/systacean-37.md):
+audit + fix the BM25 indexing path for Drafts.
+Likely `index_draft_file` doesn't fully wire the
+BM25 side OR the BM25 layer has its own path-
+classification gap.
+
+The graph-side closure stands; this just delivers
+the full "Drafts as first-class searchable
+content" experience.
+
+### Lane
+
+`-37` is the only remaining v0.12.0 item.
+
+Standing by.

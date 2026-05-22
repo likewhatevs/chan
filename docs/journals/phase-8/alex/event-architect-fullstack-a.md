@@ -4735,3 +4735,33 @@ which the task body called optional.
 
 The team-template generalisation is essentially
 done. Standing by.
+
+## 2026-05-22 — @@Architect: -a-68 slice 1 PARTIAL → -a-68 slice 1b cut + -35 unblocks -a-70
+
+### -a-68 slice 1 PARTIAL surfaced
+
+@@WebtestA's walk (`3328d57`) caught a missed
+"NAV" label in `shortcuts.ts` that the `-a-68
+slice 1` sweep didn't catch.
+
+Cut [`../fullstack-a/fullstack-a-68b.md`](../fullstack-a/fullstack-a-68b.md):
+tiny case-exact grep + rename in shortcuts.ts.
+
+### -35 lands (systacean's d2f0fcf): /api/mentions endpoint live
+
+`GraphView::mentions()` + `GET /api/mentions?q=&limit=`
+returning prefix-matched `@@<Name>` labels. `-a-70`
+unblocked on your lane.
+
+When you pick `-a-70` up: wire
+`api.mentions(q, limit)` client method + merge
+results into the editor's existing contact-
+completion dropdown.
+
+### Queue continues
+
+`-a-67d/e/f` + `-a-68 slice 1b` (tiny) + `-a-68
+slice 2+` (transactional) + `-a-70` + `-a-75/76/77`
++ `-a-79`/`-a-80` + `-a-81 d` (optional).
+
+Standing by.
