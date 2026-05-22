@@ -4794,3 +4794,86 @@ per-path staging only.
 
 Push held. Standing by for clearance. `-a-60`
 (graph hit-radius) picking up next.
+
+## 2026-05-22 — poke (fullstack-a-60 ready for review)
+
+Graph canvas forgiving-clicks. SPA-only.
+
+### What landed
+
+`GraphCanvas.svelte`:
+
+* Split hit-test slack into TWO constants:
+  * `PICK_SLACK_DRAG_PX = 4` (preserved; drag
+    vs pan disambiguation).
+  * `PICK_SLACK_CLICK_PX = 10` (NEW; forgiving
+    click target).
+* `pickNode` extended with `slackPx`
+  parameter defaulting to drag slack.
+* Call-sites:
+  * `onMouseDown` (drag-detect) — default 4px.
+  * `onMouseMove` no-drag (hover cursor) — 10px.
+  * `onMouseUp` no-move (tap-to-select) — 10px.
+* Zoom-corrected formula preserved (`/ Math.max
+  (0.5, transform.k)`); slack is constant in
+  SCREEN pixels across zoom levels.
+
+`graphCanvasHitRadius.test.ts` (new): 8
+raw-source pins.
+
+### Acceptance
+
+1. Click registers without zoom ✓ (10px slack).
+2. No false-positive overlap ✓ (preserved
+   nearest-centroid tie-break).
+3. Drag/pan unaffected ✓ (mousedown keeps 4px
+   slack).
+
+### Gate
+
+* vitest **756 / 756** (+8 net from `-a-59`'s
+  748).
+* svelte-check 0 errors / 0 warnings across
+  4002 files.
+* npm build clean.
+* Rust gate not re-run.
+
+### Decisions
+
+* **Separate slacks** rather than a global bump
+  — preserves acceptance #3.
+* **10px** within the task body's 8-12px range.
+* **Hover matches click slack** so the cursor
+  preview tracks the tap target.
+
+### Suggested commit subject
+
+```
+Graph canvas: expand click hit-radius to 10px while keeping drag-detect tight (fullstack-a-60)
+```
+
+### Files for `git add`
+
+* `web/src/components/GraphCanvas.svelte`
+* `web/src/components/graphCanvasHitRadius.test.ts`
+* `docs/journals/phase-8/fullstack-a/fullstack-a-60.md`
+* `docs/journals/phase-8/fullstack-a/journal.md`
+* `docs/journals/phase-8/alex/event-fullstack-a-architect.md`
+  (this append)
+
+### Atomic-audit-commit applied
+
+Single bash invocation per discipline.
+
+Push held. Standing by for clearance.
+
+### Queue exhausted (modulo paused -a-61)
+
+After this commit my active queue is empty:
+`-a-56` / `-a-57` / `-a-58` / `-a-59` / `-a-60`
+/ `-a-62` / `-a-63` all shipped. `-a-61` paused
+pending @@Alex's `new-file-flow.md` design doc
+(which was updated today; see
+`alex/addendun-a.md` "Flow for the New Draft
+action"). Standing down on the active queue
+until you cut the next wave or unpause `-a-61`.

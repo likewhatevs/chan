@@ -738,7 +738,22 @@
     };
   }
 
-  function pickNode(px: number, py: number): DNode | null {
+  /// `fullstack-a-60` forgiving-clicks: separate drag-detect from
+  /// click-to-select hit radii. The drag/pan disambiguation uses a
+  /// tight 4px slack (so clicking on empty canvas near a node still
+  /// reads as "pan", not "grab"). The click-to-select tap uses a
+  /// wider 10px slack so users don't need to zoom in to register
+  /// clicks on small nodes — matches the typical UX pattern
+  /// `hitRadius = strokeRadius + 8-12px`. Same `pickNode` covers
+  /// both via the `slack` parameter; closer hits always win when
+  /// several discs overlap (`d2 < bestD2`).
+  const PICK_SLACK_DRAG_PX = 4;
+  const PICK_SLACK_CLICK_PX = 10;
+  function pickNode(
+    px: number,
+    py: number,
+    slackPx: number = PICK_SLACK_DRAG_PX,
+  ): DNode | null {
     const p = screenToWorld(px, py);
     let best: DNode | null = null;
     let bestD2 = Infinity;
@@ -746,9 +761,7 @@
       if (n.x == null || n.y == null) continue;
       const dx = n.x - p.x;
       const dy = n.y - p.y;
-      // Add ~4px slack around the node so small targets are still
-      // clickable; closer hits win when several discs overlap.
-      const r = n.radius + 4 / Math.max(0.5, transform.k);
+      const r = n.radius + slackPx / Math.max(0.5, transform.k);
       const d2 = dx * dx + dy * dy;
       if (d2 <= r * r && d2 < bestD2) {
         best = n;
@@ -1010,8 +1023,11 @@
       transform.y = panStart.ty + (e.clientY - panStart.y);
       return;
     }
-    // Cheap hover update. Picks against the same hit-test as click.
-    const h = pickNode(p.x, p.y);
+    // Cheap hover update. `-a-60`: match the wider click slack so
+    // the cursor preview (`hoverId` → "pointer" CSS) reads the same
+    // hit-target the user will actually tap. Drag-detect (onMouseDown)
+    // uses the tighter slack to keep pan-on-empty usable.
+    const h = pickNode(p.x, p.y, PICK_SLACK_CLICK_PX);
     hoverId = h?.id ?? null;
   }
 
@@ -1030,8 +1046,12 @@
       sim?.alphaTarget(0);
       dragId = null;
       if (!moved) {
-        // A tap on a node (no drag movement) selects it.
-        const tapped = pickNode(p.x, p.y);
+        // A tap on a node (no drag movement) selects it. `-a-60`:
+        // use the wider click slack here so the user doesn't need
+        // to zoom in for small targets. The drag-detect path above
+        // (onMouseDown's pickNode call) still uses the tight 4px
+        // slack so pan-on-empty-space stays usable.
+        const tapped = pickNode(p.x, p.y, PICK_SLACK_CLICK_PX);
         onSelect(tapped ? tapped.id : null);
       }
     } else if (panStart) {

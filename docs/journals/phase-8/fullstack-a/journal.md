@@ -1694,3 +1694,30 @@ test.ts`.
 
 Impl note at [fullstack-a-59.md](fullstack-a-59.md).
 Outbound poke fired. `-a-60` next.
+
+## 2026-05-22 — -a-60 (graph canvas hit-radius) ready for review
+
+Forgiving-clicks expansion in GraphCanvas.svelte:
+
+* Split slack into `PICK_SLACK_DRAG_PX = 4`
+  (preserved for drag-vs-pan disambiguation) +
+  `PICK_SLACK_CLICK_PX = 10` (new wider pad
+  for click-to-select and hover).
+* `pickNode` extended with a `slackPx`
+  parameter defaulting to drag slack; tap-to-
+  select + hover pass the click slack.
+* Drag/pan stays unaffected on empty space
+  near nodes (4px shrinkage preserved).
+
+8 raw-source pins in `graphCanvasHitRadius.
+test.ts`.
+
+### Gate
+
+* vitest **756 / 756** (+8 net from `-a-59`'s
+  748).
+* svelte-check 0/0 across 4002 files.
+* npm build clean.
+
+Impl note at [fullstack-a-60.md](fullstack-a-60.md).
+Outbound poke fired.
