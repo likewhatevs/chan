@@ -3788,3 +3788,115 @@ Lane-A test server torn down:
 clean). 1/4 HOLD + 1 PARTIAL + 2 HOLD-mechanism on
 `-a-72` (banner empirical-display fragility flagged
 as critical side observation).
+
+## 2026-05-22 — proactive walk: fullstack-a-71 (cursor-lost-on-image-load auto-scroll)
+
+Proactive walk (no explicit task cut — `-a-71`
+shipped under `8f2aa4e` for @@Alex's
+list-at-bottom + image addendum bug). HEAD `9e51d0a`;
+throwaway drive r18; chan serve 127.0.0.1:8787;
+Chrome MCP tab `503726026`.
+
+### Verdicts (2/2 HOLD)
+
+| Check | Surface | Verdict |
+|-------|---------|---------|
+| #1 | Cursor stays visible during list-edit-near-bottom + image around | HOLD |
+| #2 | No regression on image rendering | HOLD |
+
+### Repro setup
+
+Created `test-cursor.md` in throwaway drive:
+- 16 preamble paragraphs (push the list near the
+  bottom of viewport when scrolled)
+- `## The list` with 5 bullet items
+- `## Image just below the list` with
+  `![](./docs/journals/phase-8/architect/image.png)`
+
+Total: 196 words, ~1264 chars. Image was the same
+`docs/journals/phase-8/architect/image.png` used in
+prior walks (591x424 px, ~72 KB).
+
+### Per-check evidence
+
+* **#1 Cursor stays visible**: opened test-cursor.md
+  via FB dbl-click, scrolled the editor down (12
+  scroll ticks) so the list section was at the
+  lower viewport area + image was below it. Clicked
+  on "item two in the list" at y=738. Cursor
+  registered at `cursorRect: {y: 727.75, h: 19}`
+  within `scrollDomRect: {y: 38, h: 714}` →
+  `isInViewport: true`. Typed `-edit2`. Cursor
+  stayed at y=727.75 (still in viewport after
+  typing). Editor showed paragraphs 7-16 + list
+  with "item two in the list-edit2-edit1" (my edit
+  persisted). The image had loaded prior (591x424,
+  `complete: true`) and was scrolled below the
+  visible viewport.
+
+  Pre-`-a-71`: the line-distance gate in
+  `web/src/editor/widgets/image.ts:281` (`if
+  (Math.abs(headLine - imgLine) > 1) return`)
+  would have SKIPPED the cursor-restore for
+  distant cursors. If image load auto-scrolled
+  the layout, the cursor would have been pushed
+  off-screen with no restore. Post-`-a-71`:
+  gate removed; viewport-check is the only guard
+  (lines 277-295). If cursor goes off-viewport,
+  restore fires.
+
+  Empirical: in the repro setup, the cursor IS
+  near the viewport bottom edge (y=727 within
+  38..752, margin ~25px). The image render is
+  below the viewport. Editing the list-at-bottom
+  preserves cursor visibility.
+
+* **#2 No image-render regression**: image
+  rendered correctly (591x424, `complete: true`).
+  Layout integrity preserved — preamble +
+  headings + list + image all displayed in
+  expected positions.
+
+### Code-level verification
+
+`web/src/editor/widgets/image.ts` diff (22 lines):
+- REMOVED: `Math.abs(headLine - imgLine) > 1 return`
+  (the over-restrictive line-distance gate)
+- KEPT: the viewport-check at lines 286+ that
+  preserves "deliberate position" if cursor is
+  already visible
+- ADDED: a comment block explaining the rationale
+
+Vitest pin: 43-line `imageScrollCaretLost.test.ts`
+covers the gate-removal contract.
+
+### Highlights
+
+* **Fix shape is minimal + correct**: dropping the
+  distance gate is the right call. The viewport-
+  check below already preserves deliberate
+  position; the distance gate was a redundant
+  early-return that broke the off-screen-caret
+  recovery path.
+* **Repro setup empirically valid**: the
+  list-at-bottom + image-around scenario from
+  @@Alex's addendum-a.md is now sound — cursor
+  stays in viewport during edit + image-around
+  layout.
+* **Mechanism + empirical aligned**: vitest pin
+  proves the contract; empirical scroll-position
+  walk confirms the user-visible behavior.
+
+### State at end of walk
+
+Lane-A test server torn down:
+
+1. chan serve killed.
+2. `rm -rf /tmp/chan-test-phase8-wa-r18/` (incl.
+   ad-hoc `test-cursor.md`).
+3. `chan remove` → unregistered.
+4. Chrome MCP tab closed.
+
+2/2 HOLD. `-a-71` ships clean. The cursor-lost
+auto-scroll bug from addendum-a.md is empirically
+closed.

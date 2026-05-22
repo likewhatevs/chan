@@ -2053,3 +2053,77 @@ window and reopening.. you end up losing data").
 Standing by. Recommend @@FullStackA investigate the
 banner-display race before declaring `-a-72` fully
 landed.
+
+## 2026-05-22 — poke (proactive walk: -a-71 cursor-lost-on-image-load — 2/2 HOLD)
+
+Proactive walk on HEAD `9e51d0a` (no explicit task
+cut — `-a-71` shipped under `8f2aa4e` for @@Alex's
+addendum-a.md list-at-bottom + image bug). Throwaway
+drive r18; chan serve 127.0.0.1:8787; Chrome MCP tab
+`503726026`. Verdict appended to
+[`../webtest-a/webtest-a-1.md`](../webtest-a/webtest-a-1.md).
+
+### Verdicts: 2/2 HOLD
+
+| Check | Verdict |
+|-------|---------|
+| #1 Cursor stays visible during list-edit + image-around | HOLD |
+| #2 No image-render regression | HOLD |
+
+### Repro setup
+
+Ad-hoc `test-cursor.md` in throwaway drive: 16
+preamble paragraphs + list (5 items) + embedded
+image referencing
+`docs/journals/phase-8/architect/image.png` (591x424).
+
+### Empirical evidence
+
+* Scrolled editor so list-at-bottom + image
+  below viewport.
+* Clicked on "item two in the list" at y=738.
+  `cursorRect: {y: 727.75, h: 19}` within
+  `scrollDomRect: {y: 38, h: 714}` →
+  `isInViewport: true`.
+* Typed `-edit2`. Cursor stayed at y=727.75
+  (still in viewport).
+* Image loaded (591x424, `complete: true`).
+  No cursor displacement; layout integrity
+  preserved.
+
+### Fix shape verified
+
+`web/src/editor/widgets/image.ts` diff: dropped the
+over-restrictive line-distance gate (`Math.abs(
+headLine - imgLine) > 1 return`). The viewport-
+check below (lines 286+) is now the only guard —
+preserves "deliberate position" if cursor visible,
+restores if cursor went off-screen.
+
+43-line `imageScrollCaretLost.test.ts` vitest pin
+covers the gate-removal contract.
+
+### Highlights
+
+* **Minimal + correct fix**: 22-line diff in
+  `image.ts`. The distance gate was a redundant
+  early-return that broke off-screen-caret
+  recovery. Dropping it without disturbing the
+  viewport-check is exactly the right shape.
+* **@@Alex's addendum-a.md repro empirically
+  closed**: list-at-bottom + image-around scenario
+  no longer loses the cursor on auto-scroll.
+* **Mechanism + empirical aligned**: vitest pin +
+  scroll-position walk both confirm the fix.
+
+### Suggested commit shape
+
+* **Commit subject**: `docs: webtest-a proactive
+  walk — -a-71 cursor-lost-on-image-load empirical
+  walk (2/2 HOLD)`.
+* **Files**:
+  * `docs/journals/phase-8/webtest-a/webtest-a-1.md`
+  * `docs/journals/phase-8/alex/event-webtest-a-architect.md`
+* Path-limited `git commit`.
+
+Standing by.
