@@ -1766,3 +1766,39 @@ Impl note + commit subject at
 [fullstack-a-64.md](fullstack-a-64.md). Outbound
 poke fired. Queue: `-a-65` / `-a-66` (waiting
 on systacean-24) / `-a-67`.
+
+## 2026-05-22 — -a-65 (editor bug bundle) ready for review
+
+Three bugs, six-file change. SPA-only.
+
+* **Right-click selects line**: new
+  `editor/right_click_no_select.ts` extension
+  returns `true` on button===2 mousedown so
+  CodeMirror skips its default selection
+  gesture. Wired into Wysiwyg + Source.
+* **Image-as-text after tab switch**: added
+  `view.requestMeasure()` to Wysiwyg / Source
+  `focus()` exports + Wysiwyg `onMount` after
+  view creation. Forces a viewport re-measure
+  so image decorations re-evaluate.
+* **New Directory dialog selects whole path**:
+  PathPromptModal new `kind === "folder" &&
+  mode === "create"` branch — cursor-at-end
+  via `setSelectionRange(end, end)`. Other
+  modes (rename / move / file-non-default)
+  keep select-all.
+
+9 raw-source pins in `editorBugBundle.test.ts`.
+
+### Gate
+
+* vitest **784 / 784** (+9 net from `-a-64`'s
+  775).
+* svelte-check 0/0 across 4005 files.
+* npm build clean.
+
+Impl note + commit subject at
+[fullstack-a-65.md](fullstack-a-65.md).
+Outbound poke fired. Queue: `-a-66` (waiting
+on systacean-24/25) / `-a-67` (right-click
+menus revamp).

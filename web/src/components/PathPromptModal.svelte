@@ -54,6 +54,18 @@
             stemStart,
             pathPromptState.defaultValue.length,
           );
+        } else if (
+          pathPromptState.kind === "folder" &&
+          pathPromptState.mode === "create"
+        ) {
+          // `fullstack-a-65`: New Directory dialog opens with the
+          // pre-populated parent path. The user wants to type the
+          // new directory NAME at the end — selecting the whole
+          // path forces them to either delete-all first or
+          // arrow-key past the selection. Cursor-at-end matches
+          // the "ready to type" mental model @@Alex flagged.
+          const end = pathPromptState.defaultValue.length;
+          inputEl?.setSelectionRange(end, end);
         } else {
           inputEl?.select();
         }

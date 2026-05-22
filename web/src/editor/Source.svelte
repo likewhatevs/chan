@@ -33,6 +33,7 @@
     toggleCodeBlocks,
     trailingWhitespaceHighlight,
   } from "./tools";
+  import { rightClickNoSelect } from "./right_click_no_select";
 
   // Editor density follows the user's line_spacing pref. Same hook
   // the Wysiwyg side uses, exposed here as a `data-density` attribute
@@ -125,9 +126,15 @@
   /// switches (`Cmd+Shift+[/]`) to land the caret on the editor
   /// surface immediately. Returns true if the view was ready;
   /// caller can short-circuit otherwise.
+  ///
+  /// `fullstack-a-65`: same `requestMeasure()` parity as
+  /// Wysiwyg's `focus()` — keeps the two modes in sync so
+  /// source-mode tab switches don't surface a different stale-
+  /// render symptom.
   export function focus(): boolean {
     if (!view) return false;
     view.focus();
+    view.requestMeasure();
     return true;
   }
 
@@ -175,6 +182,7 @@
         EditorView.lineWrapping,
         breathingRoom(),
         findField,
+        rightClickNoSelect(),
         EditorView.updateListener.of((u) => {
           sync.onDocChanged(u, (s) => (value = s));
           if (u.selectionSet && onCaretChange) {

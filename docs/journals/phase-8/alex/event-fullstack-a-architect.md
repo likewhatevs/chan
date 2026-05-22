@@ -4994,3 +4994,104 @@ tree carries unrelated WIP; per-path staging
 only.
 
 Push held. Standing by for clearance.
+
+## 2026-05-22 — poke (fullstack-a-65 ready for review)
+
+Three small editor bugs bundled. SPA-only.
+
+### Bug 1 — Right-click no select
+
+New `web/src/editor/right_click_no_select.ts`
+extension: returns `true` on button===2
+mousedown so CodeMirror skips its default
+selection gesture. Wired into Wysiwyg + Source
+extension lists. Outer
+`oncontextmenu={onEditorContext}` still pops
+the tab menu — contextmenu event is separate
+from mousedown.
+
+### Bug 2 — Image-as-text on tab switch
+
+`view.requestMeasure()` added to three sites:
+
+* Wysiwyg `focus()` export (called by
+  `-a-64`'s tabFocusPulse machinery).
+* Source `focus()` export (parity).
+* Wysiwyg `onMount` after `view = new
+  EditorView(...)` — covers fresh mounts
+  where the host is mid-animation.
+
+`requestMeasure()` schedules a measure cycle
+that re-runs decoration evaluation against the
+current viewport, fixing the image-as-text
+symptom.
+
+### Bug 3 — New Directory dialog cursor at end
+
+PathPromptModal's modal-open `$effect` gains a
+new branch:
+
+```ts
+} else if (
+  pathPromptState.kind === "folder" &&
+  pathPromptState.mode === "create"
+) {
+  const end = pathPromptState.defaultValue.length;
+  inputEl?.setSelectionRange(end, end);
+}
+```
+
+`PathPromptKind` is `"file" | "folder"` (not
+"directory"; caught + corrected).
+
+### Tests
+
+`editorBugBundle.test.ts` (new): 9 raw-source
+pins covering all three bugs + the preserved
+prior cases.
+
+### Gate
+
+* vitest **784 / 784** (+9 net from `-a-64`'s
+  775).
+* svelte-check 0 errors / 0 warnings across
+  4005 files.
+* npm build clean.
+* Rust gate not re-run.
+
+### Decisions
+
+* **CodeMirror extension** for bug 1 (reusable;
+  lives alongside other CM6 domEventHandlers).
+* **`requestMeasure()` at 3 sites** for bug 2
+  — covers chord-driven `focus()` (via -a-64's
+  pulse), mouse-click `focus()` (parity), AND
+  fresh mount (zero-size host animation race).
+* **folder+create branch only** for bug 3 —
+  preserved the `-a-15` file+create stem
+  selection and the default select-all for
+  rename/move/attach modes.
+
+### Suggested commit subject
+
+```
+Editor bugs: right-click no select + image re-render on tab switch + new-dir cursor at end (fullstack-a-65)
+```
+
+### Files for `git add`
+
+* `web/src/editor/right_click_no_select.ts` (new)
+* `web/src/editor/Wysiwyg.svelte`
+* `web/src/editor/Source.svelte`
+* `web/src/components/PathPromptModal.svelte`
+* `web/src/components/editorBugBundle.test.ts` (new)
+* `docs/journals/phase-8/fullstack-a/fullstack-a-65.md`
+* `docs/journals/phase-8/fullstack-a/journal.md`
+* `docs/journals/phase-8/alex/event-fullstack-a-architect.md`
+  (this append)
+
+### Atomic-audit-commit applied
+
+Single bash invocation per discipline.
+
+Push held. Standing by for clearance.

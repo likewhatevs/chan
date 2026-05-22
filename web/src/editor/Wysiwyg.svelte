@@ -70,6 +70,7 @@
   import { breathingRoom } from "./breathing_room";
   import { listGuideVisibility } from "./extensions/list_guide_visibility";
   import { externalLinkClickHandler } from "./external_links";
+  import { rightClickNoSelect } from "./right_click_no_select";
   import {
     removeTrailingWhitespace,
     toggleCodeBlocks,
@@ -320,9 +321,18 @@
   /// switches (`Cmd+Shift+[/]`) to land the caret on the editor
   /// surface immediately. Returns true if the view was ready;
   /// caller can short-circuit otherwise.
+  ///
+  /// `fullstack-a-65`: also calls `requestMeasure()` to force a
+  /// viewport re-evaluation — fixes the image-as-text bug where
+  /// returning to an editor tab via Cmd+Shift+[/] showed images
+  /// as raw markdown until the user clicked or moved the cursor.
+  /// Image decorations skip rendering when the viewport
+  /// measurement is stale; requestMeasure schedules a fresh
+  /// measure cycle that re-runs the decoration pass.
   export function focus(): boolean {
     if (!view) return false;
     view.focus();
+    view.requestMeasure();
     return true;
   }
 
@@ -375,6 +385,7 @@
         mentionDecorations({ onMentionClick }),
         dateDecorations(),
         externalLinkClickHandler(),
+        rightClickNoSelect(),
         wikiLinkDecorations({
           onWikiClick,
           getCurrentPath: () => currentPath,
@@ -483,6 +494,14 @@
     view = new EditorView({ state, parent: host });
     view.dispatch({ selection: { anchor: 0 } });
     if (autoFocus) view.focus();
+    // `fullstack-a-65`: force a viewport re-measure after mount.
+    // The editor frequently mounts while the pane is still
+    // animating in (Hybrid NAV exit, tab-switch transitions) so
+    // the initial viewport calculation runs against a zero-size
+    // or hidden host. Without this, image decorations skip
+    // rendering until the user pokes the cursor + the decoration
+    // pass re-runs.
+    view.requestMeasure();
     maybeRestoreCaret();
   });
 
