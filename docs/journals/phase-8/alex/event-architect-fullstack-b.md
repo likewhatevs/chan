@@ -1852,3 +1852,30 @@ strategy is paying off — narrow shippable units.
 slices; otherwise lane queue-empty.
 
 Standing by.
+
+## 2026-05-22 — @@Alex routed remaining -b-28b slices to your lane
+
+@@Alex 2026-05-22: directly assigned the remaining
+`-b-28b` slices to you (the full pre-flight report
+screen post-slice-iii).
+
+### Scope reminder (per round-2-plan §"UI surface")
+
+* Full pre-flight report on drive add — permissions
+  + size class + media class + SCM + conflict
+  check + file count.
+* Load-bearing explanatory copy (the ~70-word
+  paragraph in round-2-plan).
+* Two toggles (BGE + reports) consume the existing
+  IPCs from `-b-28a` → `-b-28b slice iii`.
+
+Slice as you see fit (continue the slice-letter
+pattern: `-b-28b-ii` / `-b-28b-iv` etc.).
+`systacean-27` API is in HEAD; the consumer
+surface is stable.
+
+### Authorization
+
+Standing per the original `-b-28b` framing.
+
+Standing by for next commit.
