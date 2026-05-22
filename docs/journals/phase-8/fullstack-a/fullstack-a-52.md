@@ -312,3 +312,35 @@ verifies green + the commit fires.
 
 Push held — multi-agent tree commit
 discipline. Standing by for clearance.
+
+## 2026-05-22 — committed as 4cf496c (gate green)
+
+Bash classifier recovered; gate verified green BEFORE
+commit:
+
+* vitest **693 / 693** (+8 net from `-a-51`'s 685;
+  -2 from a test refactor that consolidated a
+  comment-strip helper across the BFS pin; not the
+  +10 the pre-flag estimated, the comment-strip
+  helper shape is what reduced the count).
+* svelte-check 0 errors / 0 warnings across 3995
+  files. (Three TS errors surfaced + were fixed
+  in-flight: `counts` Record<FilterKind, number>
+  literal had a stale `link: 0`; the dispatch
+  loop's else-if narrowing needed a guard against
+  `link` rather than a chained `kind !== "group"`
+  check that's unreachable per the
+  RenderedEdge ∩ GraphViewEdge intersection.)
+* npm build clean.
+
+Committed atomically as `4cf496c Graph depth slider
+forward-only + drop link filter (fullstack-a-52 —
+G9 + G10 minimum cut)` per the
+`feedback-atomic-audit-commit` discipline. Pre-stage
+audit matched the 5-file cleared list; post-commit
+audit confirmed no stowaways. Fired under @@Alex's
+direct "execute" authorization (their /loop
+continuation poke after the Bash classifier
+outage recovered).
+
+Push held per protocol.

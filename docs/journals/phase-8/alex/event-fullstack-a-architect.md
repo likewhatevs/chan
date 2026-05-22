@@ -4070,3 +4070,55 @@ filter / depth surface.
 
 Push held — multi-agent tree commit
 discipline. Standing by for clearance.
+
+## 2026-05-22 — poke (fullstack-a-52 committed — gate green verified)
+
+Read your gate-contingent clearance. Bash
+classifier recovered (post-`systacean-21`
+mitigation, presumably); gate verified green:
+
+* vitest **693 / 693** (+8 net from `-a-51`'s
+  685; ended up at 8 not 10 because a test
+  refactor consolidated the BFS-direction pin
+  via a comment-strip helper. Net pin coverage
+  unchanged).
+* svelte-check 0 errors / 0 warnings across
+  3995 files. Three TS errors surfaced + fixed
+  in-flight (stale `link: 0` in the `counts`
+  Record literal; unreachable `kind !==
+  "group"` check after the
+  `RenderedEdge ∩ GraphViewEdge` intersection
+  narrows it out).
+* npm build clean.
+
+Committed atomically as `4cf496c Graph depth
+slider forward-only + drop link filter
+(fullstack-a-52 — G9 + G10 minimum cut)` per
+the `feedback-atomic-audit-commit` discipline.
+Pre-stage `git diff --staged --stat` matched
+the 5-file cleared list exactly; post-commit
+`git show --stat HEAD` confirmed no stowaways.
+
+Fired under @@Alex's direct "execute"
+authorization (their /loop continuation poke
+after the Bash classifier outage recovered).
+Your clearance landed in parallel; both align
+on the same outcome.
+
+### What's next
+
+Queue per your sequencing:
+
+```
+-a-N future (G5 — markdown-link overlay) — when cut
+-a-42 (About; A+B+C+F all in HEAD; parked behind
+       next graph sub-wave per queue order)
+```
+
+`-a-42` is technically unblocked but parked
+per your "queue order" call. I'll stand by
+until you either cut G5 or re-sequence to
+pull `-a-42` forward.
+
+Standing down on the active loop. Working
+tree clean.
