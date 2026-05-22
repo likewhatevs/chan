@@ -10,7 +10,7 @@
 
   import { onDestroy, onMount } from "svelte";
   import { Compartment, EditorState, type Extension } from "@codemirror/state";
-  import { EditorView, keymap, lineNumbers } from "@codemirror/view";
+  import { EditorView, keymap, lineNumbers, placeholder } from "@codemirror/view";
   import {
     defaultKeymap,
     history,
@@ -52,6 +52,7 @@
     highlightTrailingWhitespace = false,
     initialCaret = null,
     autoFocus = true,
+    placeholderText,
     onCaretChange,
   }: {
     value: string;
@@ -68,6 +69,12 @@
     /// same prop on `Wysiwyg.svelte` so the rich-prompt's bubble-gated
     /// focus policy in `fullstack-a-14` works in source mode too.
     autoFocus?: boolean;
+    /// `fullstack-a-89`: empty-state placeholder text. Mirrors
+    /// the same prop on `Wysiwyg.svelte` so the rich prompt's
+    /// source-mode placeholder works identically to wysiwyg
+    /// mode. Unset = no placeholder (the file editor's source
+    /// view doesn't want one).
+    placeholderText?: string;
     onCaretChange?: (from: number, to: number) => void;
   } = $props();
 
@@ -180,6 +187,11 @@
         trailingWhitespace.of(highlightTrailingWhitespace ? trailingWhitespaceHighlight() : []),
         theme.extension,
         EditorView.lineWrapping,
+        // `fullstack-a-89`: optional empty-state placeholder.
+        // Same shape as Wysiwyg.svelte's wiring; both modes
+        // need the prop so the rich prompt's mode-toggle
+        // (`-a-4`) keeps the placeholder visible in either.
+        ...(placeholderText ? [placeholder(placeholderText)] : []),
         breathingRoom(),
         findField,
         rightClickNoSelect(),

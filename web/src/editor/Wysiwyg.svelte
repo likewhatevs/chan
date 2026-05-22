@@ -18,7 +18,7 @@
 
   import { onDestroy, onMount } from "svelte";
   import { Compartment, EditorState, Prec, type Extension } from "@codemirror/state";
-  import { EditorView, drawSelection, keymap } from "@codemirror/view";
+  import { EditorView, drawSelection, keymap, placeholder } from "@codemirror/view";
   import { syntaxTree } from "@codemirror/language";
   import { defaultKeymap, history, historyKeymap } from "@codemirror/commands";
   import { drive, ui } from "../state/store.svelte";
@@ -85,6 +85,7 @@
     highlightTrailingWhitespace = false,
     initialCaret = null,
     autoFocus = true,
+    placeholderText,
     onSubmit,
     onSelectionChange,
     onCaretChange,
@@ -105,6 +106,15 @@
     /// to keep the editor unfocused on mount; otherwise the unconditional
     /// mount focus would race past the host's gate.
     autoFocus?: boolean;
+    /// `fullstack-a-89`: empty-state placeholder text. When set
+    /// the editor adds CM6's `placeholder` extension which
+    /// renders at the cursor position (so cursor + placeholder
+    /// share the exact same x/y). Previously the rich prompt
+    /// used a CSS overlay (`-a-24`) which fought CM6's internal
+    /// coordinate system; `-a-84` + `-a-87` patched alignment
+    /// but couldn't fully close the empirical gap. Unset = no
+    /// placeholder.
+    placeholderText?: string;
     onSubmit?: () => void;
     onSelectionChange?: () => void;
     onCaretChange?: (from: number, to: number) => void;
@@ -365,6 +375,13 @@
         theme.extension,
         trailingWhitespace.of(highlightTrailingWhitespace ? trailingWhitespaceHighlight() : []),
         EditorView.lineWrapping,
+        // `fullstack-a-89`: CM6's built-in placeholder. Renders
+        // at the cursor position (inside the first line) when
+        // the doc is empty + hides on first keystroke. Wired
+        // optionally because file editors don't want a
+        // placeholder; only ephemeral surfaces like the rich
+        // prompt do.
+        ...(placeholderText ? [placeholder(placeholderText)] : []),
         // Replace the browser-native text selection with CM6's
         // synthetic selection layer. Browser selection rectangles
         // are rendered per fragment and don't clear when the caret

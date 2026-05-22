@@ -7374,3 +7374,109 @@ Slice e (Graph Drafts root styling) only
 remaining piece of the -a-66 umbrella.
 
 Push held. Standing by for clearance.
+
+## 2026-05-22 — poke (fullstack-a-89 ready for review — placeholder via CM6 extension)
+
+Architectural swap landed. Five-file change.
+SPA-only.
+
+### What landed
+
+`Wysiwyg.svelte` + `Source.svelte`:
+* Imports `placeholder` from
+  `@codemirror/view`.
+* New optional `placeholderText?: string`
+  prop.
+* Extension list adds
+  `...(placeholderText ? [placeholder(placeholderText)] : [])`.
+
+`TerminalRichPrompt.svelte`:
+* `PROMPT_PLACEHOLDER_TEXT` constant.
+* Wysiwyg + Source both receive the prop.
+* Removed `<div class="prompt-placeholder">`
+  markup + the `.prompt-placeholder` CSS
+  rule (including the `-a-84` X-offset + the
+  `-a-87` line-height match).
+
+`richPromptPlaceholderExtension.test.ts`
+(new): 11 raw-source pins.
+
+`richPromptPlaceholderOffset.test.ts` +
+`richPromptPlaceholderBaseline.test.ts`:
+DELETED. Both pinned the overlay shape
+this task removes.
+
+### Acceptance
+
+1. Cursor + placeholder share the exact
+   position ✓ — CM6 renders inside the
+   first cm-line at the cursor position.
+2. Hide-on-type, re-appears-on-delete
+   inherited from CM6's standard placeholder
+   behavior ✓.
+3. No regression on Cmd+Enter ✓ — extension
+   doesn't touch keymap.
+4. No regression on wysiwyg vs source mode
+   ✓ — both editors carry the prop.
+
+### Gate
+
+* vitest **954 / 954** (+3 net from -a-66
+  slice d's 951: +11 new − 8 deleted).
+* svelte-check 0 errors / 0 warnings across
+  4031 files.
+* npm build clean.
+
+### Decisions
+
+* **Threaded through BOTH editors** — the
+  rich prompt's mode-toggle swaps at
+  runtime; one-sided wiring would drop the
+  placeholder on mode flip.
+* **Optional prop** — file editors don't
+  want a placeholder; existing call sites
+  untouched.
+* **Single `PROMPT_PLACEHOLDER_TEXT`
+  constant** — single source of truth across
+  the two editor instances.
+* **Deleted old test files** — pinning the
+  overlay shape would have introduced
+  false signal that the CSS overlay still
+  ships. The deleted-test approach is
+  cleaner than dead-code pins.
+
+### Other surfaces audit
+
+Rich prompt was the only surface using the
+overlay shape (`-a-24`'s "single in-prompt
+use" framing). No follow-up migration
+needed.
+
+### Suggested commit subject
+
+```
+Rich prompt placeholder: CSS overlay → CM6 placeholder extension (fullstack-a-89)
+```
+
+### Files for `git add`
+
+* `web/src/editor/Wysiwyg.svelte`
+* `web/src/editor/Source.svelte`
+* `web/src/components/TerminalRichPrompt.svelte`
+* `web/src/components/richPromptPlaceholderExtension.test.ts` (new)
+* `web/src/components/richPromptPlaceholderOffset.test.ts` (deleted)
+* `web/src/components/richPromptPlaceholderBaseline.test.ts` (deleted)
+* `docs/journals/phase-8/fullstack-a/fullstack-a-89.md`
+* `docs/journals/phase-8/fullstack-a/journal.md`
+* `docs/journals/phase-8/alex/event-fullstack-a-architect.md`
+  (this append)
+
+### Atomic-audit-commit applied
+
+Single bash invocation per discipline.
+
+Push held. Standing by for clearance + the
+@@WebtestA empirical walk that confirms
+cursor + placeholder finally share the same
+position. `-a-84` + `-a-87` formally
+superseded.

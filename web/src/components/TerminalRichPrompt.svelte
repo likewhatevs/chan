@@ -54,6 +54,11 @@
 
   const MIN_HEIGHT = 150;
   const TOP_GAP = 36;
+  /// `fullstack-a-89`: empty-state hint copy. Threaded as
+  /// `placeholderText` to both the Wysiwyg + Source editors
+  /// so CM6's `placeholder` extension renders it inside the
+  /// first line at the cursor position.
+  const PROMPT_PLACEHOLDER_TEXT = "Write a multi-line command and Cmd+Enter";
   let rootEl: HTMLDivElement | undefined = $state();
   let wysiwygRef: Wysiwyg | undefined = $state();
   let sourceRef: Source | undefined = $state();
@@ -565,6 +570,7 @@
           bind:value={prompt.buffer}
           currentPath={null}
           autoFocus={bubbleCount === 0}
+          placeholderText={PROMPT_PLACEHOLDER_TEXT}
           onSubmit={submit}
           onSelectionChange={() => (selVer += 1)}
         />
@@ -575,21 +581,22 @@
           path="prompt.md"
           syntaxHighlight
           autoFocus={bubbleCount === 0}
+          placeholderText={PROMPT_PLACEHOLDER_TEXT}
         />
       {/if}
     {/key}
-    <!-- `fullstack-a-24`: placeholder hint when the buffer is empty.
-         CSS overlay rather than a CodeMirror placeholder extension
-         to avoid threading a `placeholder` prop through both
-         editor components for this single in-prompt use. The
-         editor still owns interaction; pointer-events: none on
-         the overlay keeps clicks reaching the underlying
-         contenteditable. -->
-    {#if prompt.buffer === ""}
-      <div class="prompt-placeholder" aria-hidden="true">
-        Write a multi-line command and Cmd+Enter
-      </div>
-    {/if}
+    <!-- `fullstack-a-89`: placeholder moved from the
+         pre-fix CSS overlay (`-a-24`) into CM6's built-in
+         `placeholder` extension threaded as
+         `placeholderText` on both Wysiwyg + Source. The
+         extension renders the hint at the cursor position
+         INSIDE the editor's first line, so cursor and
+         placeholder share the exact same x/y instead of
+         living in parallel positioning systems. `-a-84`
+         (10px X-offset) + `-a-87` (line-height 1.8 match)
+         were CSS patches that couldn't fully close the
+         empirical gap because the architecture itself
+         (overlay vs in-editor) was misaligned. -->
   </div>
   {#if menu}
     <div class="ctx" style:left={`${menu.x}px`} style:top={`${menu.y}px`}>
@@ -794,44 +801,13 @@
     position: relative;
     --editor-top-pad: 16px;
   }
-  /* `fullstack-a-24`: empty-buffer placeholder. Sits over the
-     CM6 contenteditable at the same baseline the first line
-     would occupy; `pointer-events: none` so the editor still
-     receives clicks. Hidden via Svelte conditional render once
-     the user types the first character.
-
-     `fullstack-a-84`: shift `left` right by ~10px so the CM6
-     cursor sits cleanly to the LEFT of the placeholder's first
-     character instead of through it. The cursor renders at the
-     CM6 cm-line's natural text-start (~6-8px from the
-     composer-editor edge); the original `left: 1rem` (16px)
-     placed the placeholder roughly at the same x, producing
-     the `|W` overlap @@Alex screenshot-flagged. `1rem + 10px`
-     gives a small visual gap without making the placeholder
-     read as separate from the prompt area. */
-  .prompt-placeholder {
-    position: absolute;
-    top: var(--editor-top-pad, 16px);
-    left: calc(1rem + 10px);
-    right: 1rem;
-    pointer-events: none;
-    color: var(--text-secondary);
-    font-size: var(--chan-editor-body-size, 16px);
-    font-family: var(--chan-editor-body-family, inherit);
-    /* `fullstack-a-87`: match the CM6 cm-line line-height so
-       the placeholder text baseline aligns with the cursor's
-       baseline. Wysiwyg sets cm-line line-height per density
-       (`standard` = 1.8 / `compact` = 1.65; see Wysiwyg.svelte
-       lines 749-750). With line-height: 1.5 on the placeholder
-       and line-height: 1.8 on cm-line, the cursor `|`
-       block-height extended further down than the placeholder
-       text's, putting the visible baselines out of alignment.
-       1.8 matches the standard-density default; compact-density
-       drives have a tiny ~0.15 line-height drift (visually
-       imperceptible at 16px). */
-    line-height: 1.8;
-    user-select: none;
-  }
+  /* `fullstack-a-89`: removed `.prompt-placeholder` CSS
+     overlay (-a-24 / -a-84 / -a-87). CM6's `placeholder`
+     extension threaded via `placeholderText` on Wysiwyg +
+     Source now handles the empty-state hint. Cursor +
+     placeholder share the exact same coordinate system
+     because CM6 renders the placeholder INSIDE the first
+     line at the cursor position. */
   /* `fullstack-a-8`: easeOutBack bubble-pop matching every other
      right-click surface (HamburgerMenu, TerminalTab / GraphPanel
      tab-menu bubbles). Origin sits at top-left because the

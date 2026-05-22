@@ -2567,3 +2567,37 @@ fired.
 
 Only slice e (Graph Drafts root styling)
 remains in the -a-66 umbrella.
+
+## 2026-05-22 — -a-89 (placeholder architecture swap) ready for review
+
+Five-file change. SPA-only.
+
+Replaced the `-a-24` CSS overlay placeholder
+with CM6's `placeholder` extension. Threaded
+optional `placeholderText` prop through both
+Wysiwyg + Source so the rich prompt's
+mode-toggle (`-a-4`) keeps the placeholder
+visible in either mode. TerminalRichPrompt
+removed the `<div class="prompt-placeholder">`
+markup + the `.prompt-placeholder` CSS rule
++ the `-a-84` X-offset + the `-a-87`
+line-height match.
+
+11 new raw-source pins in
+`richPromptPlaceholderExtension.test.ts`.
+Deleted the two pre-fix test files
+(`richPromptPlaceholderOffset.test.ts` +
+`richPromptPlaceholderBaseline.test.ts`)
+since they pinned the now-removed overlay
+shape.
+
+### Gate
+
+* vitest **954 / 954** (+3 net from -a-66
+  slice d's 951; +11 new − 8 deleted).
+* svelte-check 0/0 across 4031 files.
+* npm build clean.
+
+Impl note at [fullstack-a-89.md](fullstack-a-89.md).
+Outbound poke fired. `-a-84` + `-a-87`
+formally superseded.
