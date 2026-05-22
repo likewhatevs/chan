@@ -233,3 +233,9 @@ NOT in this permission. Separate ask once macOS green (probably won't happen thi
 ### Approval shape
 
 Append a `## 2026-05-22 — approved` (or "approved-with-caveats" / "denied") section below. Or in-chat is fine if you'd rather just say "go" and I'll transcribe per the process.md format.
+
+## 2026-05-22 — approved (transcribed from in-chat @@Alex)
+
+@@Alex 2026-05-22 in chat: "go on pick up yer task". Direct approval — proceeding with the step 5+ plan above.
+
+Same hard safety constraints carry forward from the prior approval (NEVER touch @@Alex's running chan.app, capture PIDs at spawn, don't engage drive UI, no background processes left after teardown). Will observe + capture logs through the 3 failure-mode iterations + tear down clean. Permission scoped to macOS dry-run only; Linux/Windows out of scope.

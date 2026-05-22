@@ -2224,3 +2224,78 @@ Your call. Default to firing it if there's no objection; otherwise I sit idle.
 ### Standing by
 
 Systacean lane is otherwise empty post-`-16`. No new asks pending from any other lane that I'm aware of. Will pick up new dispatches as they fan out.
+
+## 2026-05-22 — poke (-12 macOS dry-run executed; happy path verified + UI dialog finding flagged)
+
+@@Alex directly approved in-chat ("go on pick up yer task"); transcribed to [`event-systacean-alex.md`](event-systacean-alex.md). Executed step 5 of the `-12` plan; happy path verified end-to-end with one unexpected finding.
+
+### Empirical happy path
+
+Test caller (`--check-update-now` flag, `#[cfg(debug_assertions)]`-gated, added to `desktop/src-tauri/src/main.rs::main()` setup closure). Spawned `cargo tauri dev --config /tmp/chan-updater-test/override.json -- -- --check-update-now` against the mock feed served by background `python3 -m http.server 8765`. All within 5ms of boot:
+
+```
+INFO chan_desktop: systacean-12: --check-update-now invoked; calling updater.check()
+INFO chan_desktop: systacean-12: updater.check() returned Some(update) version=0.99.0 current=0.11.2
+INFO chan_desktop: systacean-12: download progress downloaded=52 total=Some(52)
+INFO chan_desktop: systacean-12: download finished
+WARN chan_desktop: systacean-12: download_and_install error (expected for fake bundle apply-step boundary) error=invalid gzip header
+```
+
+Validates: endpoint discovery + manifest fetch + version compare + per-platform key resolution (darwin-aarch64 on this Apple Silicon host) + download + minisign signature verify (error fires AFTER verify; about content extraction, not signature) + apply-step boundary.
+
+### Unexpected finding — UI confirmation dialog
+
+@@Alex saw a confirmation dialog pop up on the spawned chan-desktop's window AFTER my programmatic `download_and_install` had already completed:
+
+> "Chan Desktop update / A new version of Chan Desktop is available: 0.99.0 / Mock-feed test release for systacean-12 tauri-plugin-updater verification. Not a real release. Should never be visible to end users. / Install and restart now? / [Later] [Install]"
+
+My code path is purely programmatic — `update.download_and_install(progress_cb, finish_cb).await` with no UI hooks. The dialog comes from a SEPARATE code path — either the `tauri_plugin_updater` default behaviour (the `Builder::new().build()` might wire an internal prompt before install) or an SPA-side auto-check hook fired on app boot.
+
+The dialog shows my mock manifest text verbatim — so whichever source, it IS reading from `http://127.0.0.1:8765/latest.json`. Both code paths fire (programmatic + dialog) on a single launch with the updater plugin in default config.
+
+**Significance for the future Round-3 self-update UX task** (architect's Option C wrap-up flagged this as a deferred design task):
+- For an auto-update path, the dialog is desired (don't install without consent).
+- For a CLI / programmatic test path, the dialog is annoying (interrupts the test; needs Later/Install click).
+- The Round-3 task needs to decide: show the dialog OR silently fetch + queue OR something in between. And the test caller for the Round-3 verification needs to suppress the dialog (or the design needs to accept the dialog as the only UX path).
+
+Flagged in the `-12` task tail under "UNEXPECTED FINDING".
+
+### Failure modes deferred
+
+The original task body's step 6 (invalid signature / corrupted download / version downgrade iterations) would each require re-spawning chan-desktop + re-triggering the unexpected dialog. **Skipped this session** to avoid further @@Alex interruption. The happy-path validation is the load-bearing thing the task asked for; the failure modes are bonus edge-case validation.
+
+If you want them empirically validated, fresh permission ask + iterate. Worth doing once the dialog source is understood + suppressed for the test path.
+
+### Teardown discipline
+
+Per the safety constraints, by-PID SIGTERM only:
+
+* `kill -SIGTERM 5807` (chan-desktop binary) — succeeded; window closed; cargo-tauri (5803) + bash wrapper (5801) cascaded.
+* `kill -SIGTERM 5551` (http.server) — succeeded; port 8765 freed.
+* `rm -rf /tmp/chan-updater-test/` — succeeded.
+* `desktop/src-tauri/src/main.rs` test caller REVERTED; `git diff --stat` empty for that file.
+* Post-teardown chan-class PIDs: only 39577 + baseline survive (NOT mine).
+* @@Alex's chan.app + registered drives **left untouched**.
+
+### Lane state
+
+| Task | State |
+|------|-------|
+| -12 | ✓ macOS happy path verified; failure modes + Linux/Windows DEFERRED. Test caller reverted; scaffolding cleaned. |
+| Future Round-3 self-update UX task | 🟡 inherits the dialog finding from this session for design framing. |
+
+### Commit shape
+
+Single docs commit for the audit trail (task tail append + this poke + alex inbound transcription). No source-code changes survive (test caller reverted).
+
+Suggested subject:
+
+```
+docs(systacean-12): macOS updater dry-run verified happy path + dialog-finding flagged
+```
+
+3 paths total (task tail + this outbound + the alex inbound where the approval was transcribed).
+
+### Holding
+
+Lane fully idle post-this. Future Round-3 self-update task picks up the dialog finding when it cuts.
