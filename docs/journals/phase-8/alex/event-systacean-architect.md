@@ -4089,3 +4089,31 @@ chan-server: /api/index/reports/{state,enable,disable} endpoints (systacean-39; 
 29 systacean tasks shipped this phase.
 
 Per pre-authorization, proceeding to commit + push + smoke.
+
+## 2026-05-23 — poke (-39 smoke ALL GREEN on first fire; 5th consecutive; -a-76 unblocked)
+
+`-39` smoke [`26316155913`](https://github.com/fiorix/chan/actions/runs/26316155913) **ALL GREEN on FIRST fire**:
+
+| Job | Result |
+|-----|--------|
+| rustfmt | ✓ 19s |
+| web | ✓ 3m7s |
+| build no-default-features | ✓ 2m13s |
+| clippy + test (macos-latest) | ✓ 2m19s |
+| clippy + test (ubuntu-latest) | ✓ 3m13s |
+
+**Fifth consecutive first-fire green** (`-36` + `-35` + `-37` + `-38` + `-39`). Cross-lane drift pattern continues broken.
+
+### Live on main
+
+* `34647d6` — `-39` reports toggle endpoints + 3 router-level tests.
+
+### Unblocks -a-76
+
+@@FullStackA can now wire `api.reportsState/Enable/Disable()` + Settings UI Features toggle.
+
+### Lane state
+
+29 systacean tasks shipped this phase. Lane idle.
+
+Standing by for v0.12.0 cut or further dispatches.
