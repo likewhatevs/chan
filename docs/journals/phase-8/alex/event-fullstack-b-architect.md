@@ -2167,3 +2167,101 @@ Full implementation note at the tail of
 "slice -b-28b-ii implementation note".
 
 Standing by for clearance + next dispatch.
+
+## 2026-05-22 — poke (-b-28b slice iv commit-ready: pre-flight REPORT in drive-add modal)
+
+Reconciled a stale-cross-agent conflict before
+picking up: @@Alex's routing of the broader
+pre-flight report (above the UMBRELLA CLOSED ack
+line in my inbound) was the live directive; the
+architect's stand-down acked only the toggle
+plumbing — not the broader report I'd deferred under
+slice iii. @@Alex's "take -28-b" repeated poke
+confirmed: slice iv is mine to ship.
+
+Commit `8585d85`.
+
+### Slice iv headlines
+
+* **PreflightReport** struct (path, writable,
+  file_count, markdown_count, size_bytes,
+  image/audio/video counts, scm, already_registered,
+  truncated) returned by new
+  `compute_drive_preflight(path)` IPC.
+* **Walker** is BFS via VecDeque, capped at
+  100k files OR 5s wall-clock. Saturating-add on
+  size defends against overflow on absurd drives.
+* **`should_skip_preflight_dir` mirrors
+  `DEFAULT_INDEX_EXCLUDED_DIRS`** from chan CLI so
+  the pre-flight numbers line up with what
+  chan-drive will index — drift between the two
+  lists would surprise the user (preflight 12K,
+  chan reports 8K?).
+* **Conflict check** via `chan list --json`
+  subprocess; tolerates failure (returns false; `chan
+  add` itself rejects duplicates if our soft check
+  missed).
+* **SPA modal** kicks off the IPC in parallel with
+  the modal mount + replaces a "Scanning…"
+  placeholder with the resolved rows + warning
+  banners (read-only mount / already-registered both
+  surface explicitly). Toggles + Open/Cancel from
+  slice iii unchanged below.
+
+### Cross-agent staleness — handled per the protocol
+
+Per the `feedback_cross_agent_staleness` memory:
+@@Alex's routing entry + architect's UMBRELLA CLOSED
+ack disagreed on whether the work was done. I
+verified by re-reading both, deciding @@Alex's
+directive takes precedence, and proceeded. Documented
+the reconciliation in the slice iv implementation
+note so the audit trail captures the resolution.
+
+### Tests
+
+* 4 new walker unit tests (in main.rs::tests) —
+  classifier mapping, excluded-dirs match, SCM
+  detection, end-to-end walk on a tempdir fixture
+  (counts files, skips excluded dirs).
+* 2 new structural pins in serve.rs::tests — IPC
+  registration + modal row labels (Files / Markdown
+  / Size / Media / Source control).
+
+chan-desktop 57 → 63.
+
+### Gate
+
+* `cargo clippy -p chan-desktop --all-targets -- -D warnings`: clean.
+* `cargo test -p chan-desktop`: 63 passing.
+* `cargo build -p chan-desktop --no-default-features`: clean.
+* Cargo.lock: mine only (tempfile dev-dep addition).
+
+### Umbrella final status
+
+| Slice | Commit    | Scope                                                       |
+|-------|-----------|-------------------------------------------------------------|
+| i     | `0ce975b` | set_drive_features stub → chan CLI subprocess               |
+| iii   | `defbdcc` | pre-flight modal + add_drive feature flag pass-through      |
+| ii    | `efd7688` | get_drive_features via chan index status --json             |
+| iv    | `8585d85` | pre-flight REPORT (perms/size/media/SCM/conflict/count)     |
+
+`-b-28b` umbrella now fully matches the round-2-plan
+§"UI surface" intent: report + toggles + verbatim
+explanatory copy + load-bearing IPCs.
+
+### Runtime walkthrough
+
+Routing to @@WebtestB per the lane boundary. Standing
+chan-desktop runtime perm available if you'd prefer
+me to verify visually first. Webtest covers: modal
+opens fast on small drives, Scanning placeholder
+visible on large drives, warning rows surface
+correctly (read-only / already-registered), report
+counts align with chan's post-add view.
+
+Full implementation note at the tail of
+[`../fullstack-b/fullstack-b-28.md`](../fullstack-b/fullstack-b-28.md)
+"slice -b-28b-iv implementation note".
+
+Standing by for clearance + next dispatch.
