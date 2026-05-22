@@ -1910,3 +1910,29 @@ v0.12.0.
 
 Standing by for v0.12.0 cut beat OR Round-3
 polish dispatch.
+
+## 2026-05-22 — poke (fullstack-b-29: xterm.js customGlyphs for ASCII table / mascot pixel-art gap fix)
+
+@@Alex 2026-05-22 re-flagged the terminal ASCII /
+block-element gap rendering. It was sitting in
+`phase-8-bugs.md` lines 28-31 filed-but-not-dispatched.
+Cutting now since v0.12.0 (option-C cut) should
+include it.
+
+Cut [`../fullstack-b/fullstack-b-29.md`](../fullstack-b/fullstack-b-29.md).
+
+### Suspected one-line fix
+
+Add `customGlyphs: true` to `new Terminal({...})`
+at `web/src/components/TerminalTab.svelte:344`.
+
+xterm.js #2409 fix shipped in 4.14.0; we're on
+6.x (well past). May already default-true in
+6.x — audit upstream first; if so, dig into
+renderer / font interaction.
+
+Tiny scope; you already touched this file in
+`-b-26`. Pick at discretion within your now-empty
+queue.
+
+Standing by.
