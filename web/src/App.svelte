@@ -85,7 +85,7 @@
     showOrSpawnRichPromptInFocusedPane,
   } from "./state/tabs.svelte";
   import { applyEditorTheme, DEFAULT_EDITOR_THEME } from "./state/editorTheme";
-  import { pruneEditorBuffers } from "./state/editorBuffer";
+  import { flushPendingBufferWrites, pruneEditorBuffers } from "./state/editorBuffer";
   import { reloadWindow } from "./api/desktop";
   import {
     applyInitialPageWidth,
@@ -849,6 +849,32 @@
   // localStorage tidy for users with long-lived sessions.
   onMount(() => {
     pruneEditorBuffers();
+  });
+
+  // `fullstack-a-74`: synchronously flush any in-flight
+  // debounced editor-buffer writes before the page tears down.
+  // The pre-`-a-74` mechanism relied on Svelte component-
+  // cleanup callbacks to flush, but `window.location.reload()`
+  // (Cmd+R / browser refresh / chan-desktop reload IPC) DOES
+  // NOT trigger component cleanup — so the last 500ms of edits
+  // silently vanished. `beforeunload` + `pagehide` both fire
+  // reliably before the page tears down; `pagehide` is the
+  // canonical mobile-safe variant + `beforeunload` covers
+  // desktop reloads, so we register both.
+  //
+  // The handlers are deliberately tiny + synchronous — async
+  // work in beforeunload is unreliable across browsers, and a
+  // synchronous localStorage write is fine.
+  function onUnloadFlushBuffers(): void {
+    flushPendingBufferWrites();
+  }
+  onMount(() => {
+    window.addEventListener("beforeunload", onUnloadFlushBuffers);
+    window.addEventListener("pagehide", onUnloadFlushBuffers);
+  });
+  onDestroy(() => {
+    window.removeEventListener("beforeunload", onUnloadFlushBuffers);
+    window.removeEventListener("pagehide", onUnloadFlushBuffers);
   });
 
   /// `fullstack-a-59` pane-focus-click restore: when chan-desktop is

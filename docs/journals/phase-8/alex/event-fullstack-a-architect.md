@@ -5614,3 +5614,103 @@ Cmd+R global chord → window reload; annotate pane Reload entry (fullstack-a-73
 Single bash invocation per discipline.
 
 Push held. Standing by for clearance.
+
+## 2026-05-22 — poke (fullstack-a-74 URGENT ready for review)
+
+H1 confirmed via source-level audit:
+`window.location.reload()` skips Svelte
+cleanups → the inline-setTimeout debounce in
+FileEditorTab never flushed before page
+teardown → no buffer → no banner.
+
+Three-file change. SPA-only.
+
+### What landed
+
+`web/src/state/editorBuffer.ts`:
+* New `pendingWrites: Map<tabId, PendingWrite>`
+  module-level registry.
+* `queueBufferWrite(tabId, content, path)` —
+  500ms debounce; replaces prior pending entry.
+* `cancelPendingBufferWrite(tabId)` — cancels
+  + removes entry.
+* `flushPendingBufferWrites()` — synchronous
+  drain, returns count flushed.
+
+`web/src/components/FileEditorTab.svelte`:
+* Inline setTimeout → `queueBufferWrite`.
+* Cleanup → `cancelPendingBufferWrite`.
+* Clean-state branch now also cancels + clears
+  (was just clear; cancel defends against late
+  pending write clobbering the cleared state).
+
+`web/src/App.svelte`:
+* Imports `flushPendingBufferWrites`.
+* `beforeunload` + `pagehide` listeners both
+  call `flushPendingBufferWrites` synchronously.
+  Both registered for cross-platform coverage
+  (`pagehide` is mobile-safe; `beforeunload`
+  for desktop reload).
+* Cleanup `removeEventListener` on destroy.
+
+`editorBuffer.test.ts`: +5 new pins —
+debounce timing, latest-wins, cancel,
+multi-tab sync flush, flush idempotence.
+
+### Acceptance
+
+1. Cmd+R → `beforeunload` fires before
+   navigation → `flushPendingBufferWrites`
+   drains pending writes synchronously →
+   reload mount reads buffer → banner
+   surfaces. ✓ (mechanism via tests;
+   @@WebtestA re-walk for empirical confirm.)
+2. 18/18 vitest pins (13 prior + 5 new) ✓.
+3. Clean-state path: cancel-before-clear
+   defends against late-flush race ✓.
+
+### Gate
+
+* vitest **819 / 819** (+5 net from `-a-73`'s
+  814).
+* svelte-check 0 errors / 0 warnings across
+  4010 files.
+* npm build clean.
+* Rust gate not re-run.
+
+### Decisions
+
+* **Registry in editorBuffer.ts** — flush
+  needs to be independent of Svelte
+  component-lifecycle since reload skips it.
+* **Both `beforeunload` + `pagehide`** —
+  cross-platform reliability; idempotent
+  flush handles double-fire.
+* **Synchronous flush** — `beforeunload` can't
+  await async work.
+* **Cancel-before-clear** in clean state —
+  prevents late flush from clobbering the
+  cleared buffer.
+
+### Suggested commit subject
+
+```
+Hang-recovery: flush pending buffer writes on beforeunload / pagehide (fullstack-a-74)
+```
+
+### Files for `git add`
+
+* `web/src/state/editorBuffer.ts`
+* `web/src/state/editorBuffer.test.ts`
+* `web/src/components/FileEditorTab.svelte`
+* `web/src/App.svelte`
+* `docs/journals/phase-8/fullstack-a/fullstack-a-74.md`
+* `docs/journals/phase-8/fullstack-a/journal.md`
+* `docs/journals/phase-8/alex/event-fullstack-a-architect.md`
+  (this append)
+
+### Atomic-audit-commit applied
+
+Single bash invocation per discipline.
+
+Push held. Standing by for clearance.

@@ -60,6 +60,79 @@ function isStorageAvailable(): boolean {
   }
 }
 
+/// `fullstack-a-74` queued-write registry. Each
+/// `queueBufferWrite` call replaces the pending write for that
+/// tab id; `flushPendingBufferWrites` (typically invoked from a
+/// `beforeunload` / `pagehide` handler in App.svelte) drains the
+/// registry synchronously so a force-reload doesn't lose the
+/// last 500ms of edits.
+///
+/// The mechanism deliberately lives in this module (not in the
+/// FileEditorTab component) so the flush callback can run
+/// independently of Svelte's component-lifecycle teardown,
+/// which `window.location.reload()` skips. The mount-side
+/// debounce in FileEditorTab pre-`-a-74` only flushed in the
+/// component-cleanup return; force-reload doesn't run cleanups,
+/// so the last 500ms of edits silently vanished.
+interface PendingWrite {
+  content: string;
+  path: string;
+  timer: ReturnType<typeof setTimeout> | null;
+}
+const pendingWrites = new Map<string, PendingWrite>();
+
+const QUEUED_WRITE_DEBOUNCE_MS = 500;
+
+/// Schedule a debounced buffer write for `tabId`. Calling
+/// repeatedly for the same `tabId` cancels the prior pending
+/// timer + reschedules with the latest content. The callback
+/// writes via `writeEditorBuffer` so quota retries + SSR-safety
+/// behave exactly the same as direct calls.
+export function queueBufferWrite(
+  tabId: string,
+  content: string,
+  path: string,
+): void {
+  const existing = pendingWrites.get(tabId);
+  if (existing?.timer !== null && existing?.timer !== undefined) {
+    clearTimeout(existing.timer);
+  }
+  const entry: PendingWrite = { content, path, timer: null };
+  pendingWrites.set(tabId, entry);
+  entry.timer = setTimeout(() => {
+    writeEditorBuffer(tabId, entry.content, entry.path);
+    pendingWrites.delete(tabId);
+  }, QUEUED_WRITE_DEBOUNCE_MS);
+}
+
+/// Cancel any pending debounced write for `tabId`. Used by
+/// FileEditorTab on graceful unmount (Cmd+W / tab close) or
+/// when the editor transitions back to clean state.
+export function cancelPendingBufferWrite(tabId: string): void {
+  const entry = pendingWrites.get(tabId);
+  if (entry?.timer !== null && entry?.timer !== undefined) {
+    clearTimeout(entry.timer);
+  }
+  pendingWrites.delete(tabId);
+}
+
+/// Synchronously flush every pending debounced write. Intended
+/// for the `beforeunload` / `pagehide` window-event handlers so
+/// a force-reload (`window.location.reload()`, browser refresh,
+/// Cmd+W on the chan-desktop window) persists the in-flight
+/// buffers BEFORE the page tears down. Cancels all timers +
+/// writes synchronously; returns the number of entries flushed.
+export function flushPendingBufferWrites(): number {
+  let flushed = 0;
+  for (const [tabId, entry] of pendingWrites) {
+    if (entry.timer !== null) clearTimeout(entry.timer);
+    writeEditorBuffer(tabId, entry.content, entry.path);
+    flushed += 1;
+  }
+  pendingWrites.clear();
+  return flushed;
+}
+
 export function bufferKey(tabId: string): string {
   return `${BUFFER_KEY_PREFIX}${tabId}`;
 }

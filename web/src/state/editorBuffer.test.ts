@@ -22,9 +22,12 @@ beforeAll(() => {
 });
 import {
   bufferKey,
+  cancelPendingBufferWrite,
   clearEditorBuffer,
   divergentBufferOrNull,
+  flushPendingBufferWrites,
   pruneEditorBuffers,
+  queueBufferWrite,
   readEditorBuffer,
   writeEditorBuffer,
 } from "./editorBuffer";
@@ -148,5 +151,61 @@ describe("fullstack-a-72: divergentBufferOrNull helper", () => {
     // The mismatched-path entry should have been cleared so the
     // next read also returns null.
     expect(readEditorBuffer("tab-1")).toBeNull();
+  });
+});
+
+describe("fullstack-a-74: queued-write debounce + flush", () => {
+  test("queueBufferWrite delays the actual localStorage write", () => {
+    vi.useFakeTimers();
+    queueBufferWrite("tab-1", "draft", "notes/a.md");
+    // Before the debounce elapses, nothing has hit localStorage.
+    expect(readEditorBuffer("tab-1")).toBeNull();
+    vi.advanceTimersByTime(500);
+    const buf = readEditorBuffer("tab-1");
+    expect(buf).not.toBeNull();
+    expect(buf!.content).toBe("draft");
+  });
+
+  test("queueBufferWrite latest call wins when called repeatedly", () => {
+    vi.useFakeTimers();
+    queueBufferWrite("tab-1", "first", "notes/a.md");
+    queueBufferWrite("tab-1", "second", "notes/a.md");
+    queueBufferWrite("tab-1", "third", "notes/a.md");
+    vi.advanceTimersByTime(500);
+    const buf = readEditorBuffer("tab-1");
+    expect(buf!.content).toBe("third");
+  });
+
+  test("cancelPendingBufferWrite cancels the in-flight timer", () => {
+    vi.useFakeTimers();
+    queueBufferWrite("tab-1", "draft", "notes/a.md");
+    cancelPendingBufferWrite("tab-1");
+    vi.advanceTimersByTime(500);
+    expect(readEditorBuffer("tab-1")).toBeNull();
+  });
+
+  test("flushPendingBufferWrites synchronously persists all in-flight writes", () => {
+    vi.useFakeTimers();
+    queueBufferWrite("tab-1", "draft-1", "notes/a.md");
+    queueBufferWrite("tab-2", "draft-2", "notes/b.md");
+    queueBufferWrite("tab-3", "draft-3", "notes/c.md");
+    // Pre-flush: nothing in localStorage yet (debounce hasn't
+    // elapsed).
+    expect(readEditorBuffer("tab-1")).toBeNull();
+    expect(readEditorBuffer("tab-2")).toBeNull();
+    expect(readEditorBuffer("tab-3")).toBeNull();
+    // Flush synchronously — `beforeunload` simulation.
+    const flushed = flushPendingBufferWrites();
+    expect(flushed).toBe(3);
+    expect(readEditorBuffer("tab-1")!.content).toBe("draft-1");
+    expect(readEditorBuffer("tab-2")!.content).toBe("draft-2");
+    expect(readEditorBuffer("tab-3")!.content).toBe("draft-3");
+  });
+
+  test("flushPendingBufferWrites is idempotent: second call returns 0", () => {
+    vi.useFakeTimers();
+    queueBufferWrite("tab-1", "draft", "notes/a.md");
+    expect(flushPendingBufferWrites()).toBe(1);
+    expect(flushPendingBufferWrites()).toBe(0);
   });
 });

@@ -1951,3 +1951,36 @@ Small SPA-only fix. Four-file change.
 
 Impl note at [fullstack-a-73.md](fullstack-a-73.md).
 Outbound poke fired.
+
+## 2026-05-22 — -a-74 URGENT (banner force-reload flush) ready for review
+
+Closes the data-loss gap @@WebtestA flagged on
+`-a-72`: typing unsaved + Cmd+R didn't surface
+the banner because `window.location.reload()`
+skipped Svelte component cleanups → pending
+debounced write never persisted.
+
+Three-file change. Refactored the debounce from
+inline setTimeout in FileEditorTab into a
+shared registry in `editorBuffer.ts`:
+* `queueBufferWrite(tabId, content, path)`
+* `cancelPendingBufferWrite(tabId)`
+* `flushPendingBufferWrites()` — synchronous
+  drain.
+
+App.svelte registers `beforeunload` + `pagehide`
+listeners that call `flushPendingBufferWrites`.
+
++5 new test pins (timing, latest-wins, cancel,
+multi-tab flush, idempotence). 13 prior pins
+preserved.
+
+### Gate
+
+* vitest **819 / 819** (+5 net from `-a-73`'s
+  814).
+* svelte-check 0/0 across 4010 files.
+* npm build clean.
+
+Impl note at [fullstack-a-74.md](fullstack-a-74.md).
+Outbound poke fired.

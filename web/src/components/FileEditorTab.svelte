@@ -12,9 +12,10 @@
   import Wysiwyg from "../editor/Wysiwyg.svelte";
   import Source from "../editor/Source.svelte";
   import {
+    cancelPendingBufferWrite,
     clearEditorBuffer,
     divergentBufferOrNull,
-    writeEditorBuffer,
+    queueBufferWrite,
     type EditorBuffer,
   } from "../state/editorBuffer";
   import JsonPretty from "../editor/JsonPretty.svelte";
@@ -150,19 +151,25 @@
     });
   });
 
-  // `fullstack-a-72` hang-recovery via localStorage:
+  // `fullstack-a-72` hang-recovery via localStorage; `-a-74`
+  // moved the debounce machinery into editorBuffer.ts so a
+  // `beforeunload` / `pagehide` flush can persist pending
+  // writes before the page tears down (force-reload skips
+  // Svelte component cleanups, which had been the previous
+  // flush trigger):
   //
   // * On mount: compare any pre-existing buffer to the
   //   just-loaded disk content (`tab.saved`). If divergent,
-  //   surface `recoveredBuffer` so the banner renders + the user
-  //   can restore or discard.
-  // * On every content mutation (debounced 500ms): persist
-  //   `tab.content` to localStorage so a forced reload doesn't
-  //   lose unsaved data.
-  // * On save success / discard / unmount: clear the buffer.
+  //   surface `recoveredBuffer` so the banner renders + the
+  //   user can restore or discard.
+  // * On every content mutation: queue a debounced (500ms)
+  //   write via `queueBufferWrite` — the registry lives in
+  //   editorBuffer.ts so App.svelte's unload listeners can
+  //   flush all pending writes synchronously.
+  // * On save success / discard / clean transition / unmount:
+  //   cancel any pending write + clear the persisted buffer
+  //   via the appropriate helper.
   let recoveredBuffer: EditorBuffer | null = $state(null);
-  let bufferWriteTimer: ReturnType<typeof setTimeout> | null = null;
-  const BUFFER_WRITE_DEBOUNCE_MS = 500;
 
   $effect(() => {
     // Mount-time divergence check. Use the AS-LOADED disk
@@ -173,33 +180,30 @@
     const disk = tab.saved ?? tab.content;
     recoveredBuffer = divergentBufferOrNull(tab.id, tab.path, disk);
     return () => {
-      // On unmount, flush any pending write so a Cmd+W close
-      // doesn't drop the last 500ms of edits.
-      if (bufferWriteTimer !== null) {
-        clearTimeout(bufferWriteTimer);
-        bufferWriteTimer = null;
-      }
+      // On graceful unmount (Cmd+W close / tab swap), cancel
+      // any pending write. Force-reload doesn't run this path;
+      // App.svelte's `beforeunload` / `pagehide` listeners
+      // call `flushPendingBufferWrites` to handle that.
+      cancelPendingBufferWrite(tab.id);
     };
   });
 
   $effect(() => {
-    // Debounced persistence. Track `tab.content` + `tab.saved`
-    // as reactive deps so the effect re-runs on every
-    // mutation. Skip the write when the content matches the
-    // saved-on-disk content (clean state — nothing to recover).
+    // Persistence on content mutation. Track `tab.content` +
+    // `tab.saved` as reactive deps so the effect re-runs on
+    // every mutation. Skip the write when the content matches
+    // the saved-on-disk content (clean state — nothing to
+    // recover; clear any leftover buffer + cancel any pending
+    // write so a stale recovered-state doesn't surface on
+    // next reload).
     const content = tab.content;
     const saved = tab.saved;
     if (content === saved) {
-      // Clean — clear any leftover buffer so a stale
-      // recovered-state doesn't surface on next reload.
+      cancelPendingBufferWrite(tab.id);
       clearEditorBuffer(tab.id);
       return;
     }
-    if (bufferWriteTimer !== null) clearTimeout(bufferWriteTimer);
-    bufferWriteTimer = setTimeout(() => {
-      writeEditorBuffer(tab.id, content, tab.path);
-      bufferWriteTimer = null;
-    }, BUFFER_WRITE_DEBOUNCE_MS);
+    queueBufferWrite(tab.id, content, tab.path);
   });
 
   function restoreFromBuffer(): void {
