@@ -2391,3 +2391,80 @@ audit-trail is the SHIPPING discovery, not the
 bug-list snapshot.
 
 Standing by for next dispatch.
+
+## 2026-05-22 — poke (bug-list audit round 2: 4 more stale entries → shipped + 1 partial-coverage)
+
+Per @@Alex's "check if there's more" follow-up. Found
+4 more stale entries past the round-1 sweep. Commit
+`8372e42`.
+
+### Entries updated in place (round 2)
+
+* **"Terminal box-drawing characters render with
+  broken alignment under Source Code Pro"** (line 237)
+  — `-b-29`'s WebGL renderer fix closes the
+  *rendering* half (customGlyphs path now fires;
+  alignment works regardless of font coverage).
+  STILL OUT-OF-SCOPE: the broader spec (Source Code
+  Pro behind a cargo feature flag + Settings
+  dropdown for OS-default vs SCP + per-OS native-
+  mono default fontFamily + download-on-enable
+  flow). Annotated as partial-coverage.
+* **"Survey-reply echoes to the terminal as
+  `poke<Enter>`"** (line 331) — shipped as `-b-13`
+  (chord-encoding research + SubmitMode enum +
+  Session.agent_mode + new IPC route + SPA toolbar
+  toggle).
+* **"Rich prompt submit-mode doesn't survive page
+  reload"** (line 365) — shipped as `-b-18`
+  (commit `f6d498c`).
+* **"chan-desktop missing browser-style zoom"**
+  (line 376) — shipped as `-b-19` (commit
+  `59f5688`).
+
+### Real pending work in my lane (NOT shipped, ready to crack on if you flag)
+
+Cross-referencing my shipped commits against bug-list
+"dispatched for ... @@FullStackB" lines, four
+entries remain real pending work:
+
+1. **"Terminal swallows app-level chords"** (line
+   196) — wave-1 dispatched, never picked up.
+   `handleTerminalKeyEvent` in `TerminalTab.svelte`
+   needs to consult `shortcuts.ts` registry +
+   return false for chords flagged
+   `escapeTerminal: true`. Pair with @@FullStackA's
+   chord-migration work.
+2. **"Source Code Pro broader spec"** (line 237) —
+   font-shipping side of the partial-coverage note
+   above. Cargo feature gating + Settings dropdown +
+   per-OS native default + download flow. Paired
+   with @@Systacean's BGE-shape work.
+3. **"Survey-reply echo does not honour the
+   rich-prompt broadcast target set"** (line 388) —
+   wave-2 dispatched, never picked up. Three
+   fix-direction options at the bug body; option 3
+   (suppress server echo for surveys + SPA fires its
+   own through broadcastTerminalInput) is the
+   smallest delta.
+4. **"Terminal columns don't widen after pane /
+   window resize"** (line 636) — wave-2 dispatched,
+   never picked up. Bug body narrowed the root
+   cause to "FIRST resize transition's observer
+   fire is missed/swallowed"; palliative-first
+   option (explicit force-fit on trailing-edge
+   rAF/debounce window) is shippable without full
+   root cause.
+
+### Audit complete
+
+Bug-list entries for the chan-desktop / terminal /
+rich-prompt subsystem now reflect shipped state
+accurately. -b-24 already cross-referenced in the
+Windows-support entry. -b-23 (web-marketing port) +
+-b-27 (Cmd+N accelerator) were not bug-list-driven
+(came from next-phase-backlog + addendum-a directly).
+
+Standing by — happy to crack on any of the four
+pending items above if @@Alex wants me to keep
+going, or wait for explicit dispatch.
