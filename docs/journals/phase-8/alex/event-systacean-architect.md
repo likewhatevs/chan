@@ -3660,3 +3660,76 @@ Clean ship.
 24 systacean tasks shipped this phase. Both v0.12.0 cross-lane items closed (`-33` + `-34`). Lane idle.
 
 Standing by for new dispatches or v0.12.0 cut.
+
+## 2026-05-22 — poke (-36 root cause located + fixed; closes -a-66e PARTIAL 3rd round; ready for smoke)
+
+Picked up `-36` per the HIGH-priority dispatch. Audit-first per the task body.
+
+### Root cause: chan-server `apply_watch_change`, NOT chan-drive
+
+The architect's hypothesis pointed at "a `path_classification` step downstream of `index_draft_file`". The actual gap was **upstream** of `index_draft_file` — in chan-server's `apply_watch_change` (`crates/chan-server/src/indexer.rs::506`):
+
+```rust
+let abs = match chan_drive::fs_ops::resolve_safe(drive.root(), path) {
+    Ok(abs) => abs,
+    Err(_) => return Ok(ApplyOutcome::SkippedMissing),  // ← silent drop
+};
+```
+
+For `Drafts/...` paths from `-25`'s multi-root watcher, `resolve_safe` checks if the path is under DRIVE ROOT. **It's not** — drafts subtree lives at `<state>/drafts/<uuid>/`, OUTSIDE drive root. So resolve_safe returned Err → SkippedMissing → `drive.index_draft_file` NEVER CALLED → graph + BM25 empty.
+
+`-34`'s boot walker DID populate the graph for cold-boot drives (used `index_draft_file` directly). But ANY watcher event (Cmd+N create, save, etc.) afterwards was silently dropped by this filter. That's why @@WebtestA's empirical walk showed empty Drafts AFTER making a draft + restart — the watcher events from the live session never landed.
+
+### Fix
+
+Added a `Drafts/`-prefix branch BEFORE the `resolve_safe` call. Strips prefix → resolves abs via `drive.drafts_dir().join(sub)` → calls `drive.index_draft_file(path)` with the FULL unified-keyspace path. Same logic shape as the non-prefixed branch.
+
+### Test (+1)
+
+`apply_watch_change_indexes_drafts_prefixed_path` — end-to-end:
+1. Create draft + write file.
+2. Call `apply_watch_change(&drive, "Drafts/untitled-1/draft.md", false)`.
+3. Assert Indexed outcome + graph.files() + BM25 search all populated under unified key.
+
+### Acceptance
+
+All 3 criteria satisfied (graph payload, BM25, no regression).
+
+### Diff
+
+`crates/chan-server/src/indexer.rs`: +82 / 0. Plus task tail + this poke. 3 paths.
+
+### Pre-push gate
+
+* fmt + clippy + no-default-features clean.
+* `cargo test -p chan-server --lib`: **227 / 0** (was 226; +1).
+* workspace tests all green.
+
+### Suggested commit subject
+
+```
+chan-server: apply_watch_change routes Drafts/ paths through index_draft_file (systacean-36; closes -a-66e PARTIAL 3rd-round)
+```
+
+### Drafts saga (now hopefully fully closed)
+
+| Task | Coverage |
+|------|----------|
+| `-25` | watcher integration (Drafts/ prefix emission) |
+| `-26` | unified read_text/write_text/etc. |
+| `-29` | unified list |
+| `-32` | unified stat/exists/read |
+| `-34` | boot walker via reindex |
+| **`-36`** | **chan-server apply_watch_change routes prefixed events to index_draft_file** |
+
+The architectural lesson you flagged is correct: unified-path needs to be applied across BOTH chan-drive helpers AND chan-server callers that classify paths before handing them down.
+
+### Smoke plan
+
+`gh workflow run ci.yml --ref systacean-36-smoke`. Expected ALL GREEN.
+
+### Lane state
+
+25 systacean tasks shipped this phase. v0.12.0 unblocking items all closed.
+
+Per pre-authorization, proceeding to commit + push + smoke.

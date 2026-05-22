@@ -512,6 +512,38 @@ fn apply_watch_change(
         drive.forget_file(path)?;
         return Ok(ApplyOutcome::Forgotten);
     }
+    // systacean-36: route `Drafts/`-prefixed paths through the
+    // drafts cap-std handle via `Drive::index_draft_file`. The
+    // chan-drive watcher (`-25`) emits drafts events with the
+    // `Drafts/` prefix already applied; without this branch the
+    // `resolve_safe(drive.root(), ...)` below would error
+    // (drafts dir is at `<state>/drafts/<uuid>/`, NOT under drive
+    // root) + the event would be silently dropped — the root
+    // cause of the recurring `-a-66 slice e` PARTIAL despite
+    // `-34`'s boot walker.
+    if let Some(sub) = path.strip_prefix("Drafts/") {
+        if sub.is_empty() {
+            // `Drafts/` itself (root of the subtree). Nothing to
+            // index; same SkippedSpecial path as for non-file
+            // events under drive root.
+            return Ok(ApplyOutcome::SkippedSpecial);
+        }
+        let abs = drive.drafts_dir().join(sub);
+        match std::fs::symlink_metadata(&abs) {
+            Ok(meta) if meta.is_file() && !meta.file_type().is_symlink() => {
+                drive.index_draft_file(path)?;
+                return Ok(ApplyOutcome::Indexed);
+            }
+            Ok(_) => {
+                let _ = drive.forget_file(path);
+                return Ok(ApplyOutcome::SkippedSpecial);
+            }
+            Err(_) => {
+                let _ = drive.forget_file(path);
+                return Ok(ApplyOutcome::SkippedMissing);
+            }
+        }
+    }
     let abs = match chan_drive::fs_ops::resolve_safe(drive.root(), path) {
         Ok(abs) => abs,
         Err(_) => return Ok(ApplyOutcome::SkippedMissing),
@@ -957,6 +989,56 @@ mod tests {
         fs::write(dir.path().join("a.md"), "# A\n\nbody\n").unwrap();
         let outcome = apply_watch_change(&drive, "a.md", false).unwrap();
         assert_eq!(outcome, ApplyOutcome::Indexed);
+    }
+
+    #[test]
+    fn apply_watch_change_indexes_drafts_prefixed_path() {
+        // systacean-36: closes the recurring `-a-66 slice e`
+        // PARTIAL. The chan-drive watcher (`-25`) emits drafts
+        // events with the `Drafts/` prefix. Pre-`-36`, this
+        // function ran `resolve_safe(drive.root(), path)` for
+        // ALL paths including the prefixed ones; drafts live
+        // outside drive root → resolve_safe failed → events
+        // silently dropped → graph + BM25 empty under `Drafts/`
+        // despite the watcher being correctly attached.
+        //
+        // After `-36`, prefixed paths route through
+        // `index_draft_file` (parallel to the `Drive::stat` /
+        // `read_text` / `list` unified-path API from
+        // `-26`/`-29`/`-32`).
+        let (_cfg, _dir, drive) = setup_drive();
+        drive.create_draft_dir("untitled-1").unwrap();
+        fs::write(
+            drive.drafts_dir().join("untitled-1").join("draft.md"),
+            "# hello\napply-watch-marker here\n",
+        )
+        .unwrap();
+
+        let outcome = apply_watch_change(&drive, "Drafts/untitled-1/draft.md", false).unwrap();
+        assert_eq!(outcome, ApplyOutcome::Indexed);
+
+        // Verify the side-effect: graph + BM25 now know about
+        // the drafted file under the unified key.
+        let graph = drive.graph().unwrap();
+        let files = graph.files().unwrap();
+        assert!(
+            files.iter().any(|p| p == "Drafts/untitled-1/draft.md"),
+            "graph should know the prefixed draft path; got {files:?}"
+        );
+
+        let opts = chan_drive::SearchOpts {
+            mode: chan_drive::SearchMode::Bm25,
+            limit: 10,
+            scope: None,
+        };
+        let hits = drive.search("apply-watch-marker", &opts).unwrap();
+        assert!(
+            hits.hits
+                .iter()
+                .any(|h| h.path == "Drafts/untitled-1/draft.md"),
+            "BM25 should return the draft hit; got {:?}",
+            hits.hits
+        );
     }
 
     #[test]
