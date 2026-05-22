@@ -146,11 +146,24 @@ impl CloseReason {
 #[derive(Debug, Clone)]
 pub enum SessionEvent {
     Output(Vec<u8>),
-    Activity { bytes_since_focus: u64 },
+    Activity {
+        bytes_since_focus: u64,
+    },
     Resize(PtySize),
     Exit(u32),
     Error(String),
     Closed(CloseReason),
+    /// systacean-33: an agent_event_echo frame. Carries the raw
+    /// bytes that the legacy code path used to write directly to
+    /// the PTY via `session.send_input` (poke text + submit
+    /// chord). The WS layer serializes via `ServerFrame::AgentEventEcho`
+    /// with a base64-encoded payload; the SPA decodes + routes
+    /// through the existing `-a-31` broadcast layer per `-a-92`.
+    /// Connection-drop window: the broadcast channel drops events
+    /// for non-receivers; a brief disconnect loses the echo.
+    /// Mitigation deferred to Round-3 (per-session replay buffer
+    /// or a polling `recent_events` endpoint).
+    AgentEventEcho(Vec<u8>),
 }
 
 #[derive(Debug)]
@@ -552,13 +565,22 @@ impl Registry {
         // (cache-miss on the prompt-cache layer) + gives the
         // agent immediate context. Falls back to bare `poke` when
         // either field is missing (legacy events; survey types).
+        //
+        // systacean-33: swap from `session.send_input` (direct PTY
+        // write) to `session.broadcast(SessionEvent::AgentEventEcho)`.
+        // The WS layer serializes via `ServerFrame::AgentEventEcho`
+        // with a base64-encoded payload; the SPA decodes + writes
+        // via its existing `-a-31` broadcast layer (per `-a-92`).
+        // Routing through the SPA layer gives the bubble/event UI
+        // a single funnel for both agent events + manual keypresses
+        // — keeps the dispatch contract uniform across the wire.
         let mode = session.submit_mode();
         let poke_text = format_poke_text(event.path.as_deref(), event.heading.as_deref());
         let chord = mode.submit_chord();
         let mut bytes = Vec::with_capacity(poke_text.len() + chord.len());
         bytes.extend_from_slice(poke_text.as_bytes());
         bytes.extend_from_slice(chord);
-        session.send_input(&bytes);
+        session.broadcast(SessionEvent::AgentEventEcho(bytes));
     }
 
     /// `fullstack-b-13`: SPA-driven flip of a session's submit-mode.
@@ -1475,6 +1497,31 @@ mod tests {
         }
     }
 
+    /// systacean-33: collect the next `AgentEventEcho` payload from
+    /// the session's broadcast channel. Returns `None` on timeout.
+    /// Replaces `collect_until(handle, "poke", ...)` for dispatch
+    /// tests post-`-33`: the dispatch path no longer writes to the
+    /// PTY (no echo to read); it broadcasts an event the WS layer
+    /// serializes as `agent_event_echo`. Tests now read the bytes
+    /// directly + decode for substring matching.
+    async fn collect_agent_event_echo(
+        session: &mut AttachHandle,
+        timeout: Duration,
+    ) -> Option<Vec<u8>> {
+        let deadline = tokio::time::Instant::now() + timeout;
+        loop {
+            if tokio::time::Instant::now() >= deadline {
+                return None;
+            }
+            let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
+            match tokio::time::timeout(remaining, session.rx.recv()).await {
+                Ok(Ok(SessionEvent::AgentEventEcho(bytes))) => return Some(bytes),
+                Ok(Ok(_)) => {}
+                Ok(Err(_)) | Err(_) => return None,
+            }
+        }
+    }
+
     #[test]
     fn activity_counter_tracks_output_since_focus() {
         let session = test_session_with_ring(1024);
@@ -1898,10 +1945,16 @@ mod tests {
             heading: None,
         });
 
-        let out = collect_until(&mut handle, "poke", Duration::from_secs(5)).await;
+        // systacean-33: the dispatch path now broadcasts an
+        // AgentEventEcho event instead of writing to the PTY. The
+        // SPA receives the WS frame + routes it through `-a-31`.
+        let bytes = collect_agent_event_echo(&mut handle, Duration::from_secs(5))
+            .await
+            .expect("agent_event_echo not emitted");
+        let text = String::from_utf8_lossy(&bytes);
         assert!(
-            out.contains("poke"),
-            "target terminal did not receive poke: {out:?}"
+            text.contains("poke"),
+            "agent_event_echo payload missing `poke`: {text:?}"
         );
         assert_eq!(registry.watcher_dropped_events(), 0);
         registry.close(handle.id(), CloseReason::Explicit);
@@ -1947,22 +2000,29 @@ mod tests {
             heading: None,
         });
 
-        // The PTY echoes the input we wrote, so the chord bytes
-        // show up in the output ring. The default shell line
-        // discipline renders ESC as the caret-notation pair `^[`,
-        // so the visible echo is `poke^[[27;9;13~`. Searching for
-        // the chord's `[27;9;13~` fingerprint and the absence of a
-        // `poke\n` (shell-mode shape) catches both halves: the
-        // chord landed, AND it replaced the `\n` (not appended to
-        // it).
-        let out = collect_until(&mut handle, "27;9;13~", Duration::from_secs(5)).await;
+        // systacean-33: post-WS-frame swap the dispatch broadcasts
+        // an AgentEventEcho carrying the raw bytes the legacy
+        // path would have written to the PTY. The agent-mode
+        // chord (\x1b[27;9;13~) appears VERBATIM in the payload
+        // — no PTY line discipline mangling — so the assertion
+        // becomes a direct byte-search instead of substring-
+        // against-shell-echo. Bonus: kills the macOS-specific
+        // PTY soft-wrap + caret-notation flakiness from prior
+        // smokes.
+        let bytes = collect_agent_event_echo(&mut handle, Duration::from_secs(5))
+            .await
+            .expect("agent_event_echo not emitted");
         assert!(
-            out.contains("[27;9;13~"),
-            "agent-mode dispatch did not emit the chord bytes; got {out:?}",
+            bytes
+                .windows(b"\x1b[27;9;13~".len())
+                .any(|w| w == b"\x1b[27;9;13~"),
+            "agent-mode dispatch did not include the chord bytes; got {bytes:?}",
         );
+        // Verify shell-mode `\n` did NOT slip in (chord replaces
+        // the newline, doesn't append to it).
         assert!(
-            !out.contains("poke\n"),
-            "agent-mode dispatch still emitted poke+\\n; got {out:?}",
+            !bytes.contains(&b'\n'),
+            "agent-mode dispatch still emitted a trailing \\n; got {bytes:?}",
         );
         assert_eq!(registry.watcher_dropped_events(), 0);
         registry.close(&id, CloseReason::Explicit);
@@ -2062,28 +2122,25 @@ mod tests {
             heading: Some(heading.into()),
         });
 
-        let out = collect_until(&mut handle, "execute.", Duration::from_secs(5)).await;
-        // systacean-31 follow-up to the -26 fixup: the PTY's
-        // soft-wrap on macos-latest emits ` \r` (trailing space
-        // then carriage return) at column-80, then continues the
-        // next line. The prior `-26` strip removed `\r` but left
-        // the padding space behind, producing `systa cean` from
-        // `systa \rcean`. Now strip the space-before-CR pair
-        // first, then drop any remaining CR/LF. Terminal-width
-        // agnostic.
-        let no_soft_wrap = out.replace(" \r", "");
-        let flat: String = no_soft_wrap
-            .chars()
-            .filter(|c| *c != '\r' && *c != '\n')
-            .collect();
+        // systacean-33: payload is broadcast verbatim as
+        // AgentEventEcho bytes (no PTY echo, no soft-wrap, no
+        // line-discipline mangling). The `-21`/`-26`/`-31` soft-
+        // wrap workarounds become unnecessary — kill the strips
+        // + read bytes directly. As a bonus, the cross-platform
+        // PTY-flake pattern that bit smokes -27/-29/-31/-32
+        // goes away for this test.
+        let bytes = collect_agent_event_echo(&mut handle, Duration::from_secs(5))
+            .await
+            .expect("agent_event_echo not emitted");
+        let text = String::from_utf8_lossy(&bytes);
         assert!(
-            flat.contains("Poke, it's "),
-            "rich template missing prefix; got {flat:?} (raw: {out:?})"
+            text.contains("Poke, it's "),
+            "rich template missing prefix; got {text:?}"
         );
         let needle = format!("Check your task at {task_path}#{heading} and execute.");
         assert!(
-            flat.contains(&needle),
-            "rich template missing task-location anchor `{needle}`; got {flat:?} (raw: {out:?})"
+            text.contains(&needle),
+            "rich template missing task-location anchor `{needle}`; got {text:?}"
         );
         registry.close(handle.id(), CloseReason::Explicit);
     }
@@ -2127,14 +2184,18 @@ mod tests {
             heading: Some("ignored-without-path".into()),
         });
 
-        let out = collect_until(&mut handle, "poke", Duration::from_secs(5)).await;
+        // systacean-33: read AgentEventEcho directly (no PTY echo).
+        let bytes = collect_agent_event_echo(&mut handle, Duration::from_secs(5))
+            .await
+            .expect("agent_event_echo not emitted");
+        let text = String::from_utf8_lossy(&bytes);
         assert!(
-            out.contains("poke"),
-            "legacy fallback should emit bare poke; got {out:?}"
+            text.contains("poke"),
+            "legacy fallback should emit bare poke; got {text:?}"
         );
         assert!(
-            !out.contains("Check your task at"),
-            "legacy fallback must not emit the rich template; got {out:?}"
+            !text.contains("Check your task at"),
+            "legacy fallback must not emit the rich template; got {text:?}"
         );
         registry.close(handle.id(), CloseReason::Explicit);
     }

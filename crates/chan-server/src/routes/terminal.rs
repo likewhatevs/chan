@@ -157,6 +157,15 @@ enum ServerFrame {
         #[serde(skip_serializing_if = "Option::is_none")]
         reason: Option<&'static str>,
     },
+    /// systacean-33: agent_event_echo frame. The
+    /// `dispatch_agent_event` path used to write the poke
+    /// bytes straight to the PTY; now it broadcasts a
+    /// `SessionEvent::AgentEventEcho(bytes)` which serializes to
+    /// this frame, and the SPA decodes + routes through its
+    /// `-a-31` broadcast layer per `-a-92`. Payload is base64-
+    /// encoded raw bytes (poke text + submit-mode chord).
+    #[serde(rename = "agent_event_echo")]
+    AgentEventEcho { payload_b64: String },
 }
 
 pub async fn api_terminal_ws(
@@ -792,6 +801,17 @@ async fn terminal_ws(mut socket: WebSocket, state: Arc<AppState>, opts: Terminal
                     Ok(SessionEvent::Closed(reason)) => {
                         let _ = send_frame(&mut socket, ServerFrame::Closed { reason }).await;
                         break;
+                    }
+                    Ok(SessionEvent::AgentEventEcho(bytes)) => {
+                        // systacean-33: serialize the raw bytes as
+                        // a base64 payload + emit the
+                        // `agent_event_echo` frame; SPA decodes +
+                        // routes through `-a-31` per `-a-92`.
+                        use base64::Engine;
+                        let payload_b64 = base64::engine::general_purpose::STANDARD.encode(&bytes);
+                        if send_frame(&mut socket, ServerFrame::AgentEventEcho { payload_b64 }).await.is_err() {
+                            break;
+                        }
                     }
                     Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {
                         let _ = send_frame(

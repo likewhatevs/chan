@@ -3558,3 +3558,67 @@ End-to-end Drafts data flow through chan-drive → graph DB → chan-server grap
 `-33` (agent_event_echo WS frame) queued after `-34` smoke green.
 
 Per pre-authorization, proceeding to commit + push + smoke.
+
+## 2026-05-22 — poke (-34 smoke ALL GREEN; -33 implementation complete; ready for smoke)
+
+### -34 smoke verdict
+
+Fire 1 (`26310882121`): rustfmt fail (2 cross-lane diffs — `lib.rs` imports + `fonts.rs` from `-b-30`; were in my local working tree from earlier `cargo fmt` but not in the commit). Fixup `215564e` bundled.
+
+Fire 2 (`26311099292`): **ALL GREEN**. rustfmt 19s · web 3m4s · macOS 2m30s · Ubuntu 2m49s · no-default-features 1m32s.
+
+Drafts saga officially closed: `-29` list + `-32` stat/exists/read + `-34` reindex.
+
+### -33 implementation
+
+Picked up `-33` per the queue. Swapped `dispatch_agent_event` from `session.send_input` (direct PTY write) to `session.broadcast(SessionEvent::AgentEventEcho(bytes))`. WS layer serializes via new `ServerFrame::AgentEventEcho { payload_b64 }`. SPA-side already shipped in `c99f7dd` per `-a-92`.
+
+### Test refactor bonus
+
+The 4 existing `dispatch_agent_event_*` tests previously read PTY echo through `collect_until`. After the dispatch path no longer writes to the PTY, refactored them to read `SessionEvent::AgentEventEcho` directly via a new `collect_agent_event_echo` helper. **Side benefit**: kills the macOS PTY soft-wrap + caret-notation flakiness that bit smokes `-27` / `-29` / `-31` / `-32`. Those tests no longer depend on terminal line-discipline.
+
+### Connection-drop mitigation
+
+Documented (not implemented). Two viable Round-3 options:
+
+1. Per-session replay buffer parallel to the existing `Output` ring.
+2. Polling `recent_events` endpoint.
+
+SPA-side `-a-92` is mitigation-agnostic per your dispatch poke.
+
+### Diff
+
+| File | + | - |
+|------|---|---|
+| `crates/chan-server/Cargo.toml` | +1 | 0 |
+| `crates/chan-server/src/terminal_sessions.rs` | +102 | -41 |
+| `crates/chan-server/src/routes/terminal.rs` | +20 | 0 |
+
+Plus task tail + this poke. 5 paths.
+
+### Pre-push gate
+
+* fmt + clippy + no-default-features clean.
+* `cargo test -p chan-server --lib`: **226 / 0** (up from 224; net +2 because removed dead soft-wrap workaround code from `-21`/`-26`/`-31`).
+* workspace tests all green.
+
+### Suggested commit subject
+
+```
+chan-server: dispatch_agent_event broadcasts AgentEventEcho WS frame (systacean-33; closes -a-92 cross-lane)
+```
+
+### Smoke plan
+
+`gh workflow run ci.yml --ref systacean-33-smoke`. Expected ALL GREEN. The cross-lane PTY flakiness that bit prior smokes should be gone since the affected tests no longer depend on PTY echo.
+
+### Closes -a-92 saga
+
+* SPA side: `c99f7dd` (FullStackA).
+* chan-server side: this PR.
+
+### Lane state
+
+24 systacean tasks shipped this phase (incl. -33). v0.12.0 cross-lane items both closed (`-33` + `-34`). Lane idle.
+
+Per pre-authorization, proceeding to commit + push + smoke.
