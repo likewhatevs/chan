@@ -7040,3 +7040,68 @@ Single bash invocation per discipline.
 
 Push held. Standing by for clearance + the
 @@WebtestA 3rd-round empirical re-walk.
+
+## 2026-05-22 — poke (fullstack-a-87 ready for review)
+
+H2 (line-height mismatch) confirmed +
+fixed. H1 (top offset) + H3 (font-family)
+ruled out.
+
+CM6 cm-line uses `line-height: 1.8`
+(Wysiwyg.svelte:749, standard density);
+placeholder used `1.5`. Different block
+heights → different baseline positions
+within the same `top: 16px` row. Cursor's
+visual block extended further down than the
+placeholder text, putting baselines out of
+alignment.
+
+`TerminalRichPrompt.svelte`:
+`.prompt-placeholder { line-height: 1.5 }`
+→ `line-height: 1.8`.
+
+4 raw-source pins in
+`richPromptPlaceholderBaseline.test.ts`.
+
+### Acceptance
+
+1. Baselines align ✓.
+2. -a-84 X-offset preserved ✓.
+3. No conditional-render regression ✓.
+
+### Gate
+
+* vitest **933 / 933** (+4 net from -a-83's
+  929).
+* svelte-check 0 errors / 0 warnings across
+  4028 files.
+* npm build clean.
+
+### Decisions
+
+* **Match standard-density default** —
+  simpler than threading a CSS var through
+  Wysiwyg/Source + placeholder. Compact-
+  density 0.15 drift is imperceptible at
+  16px.
+
+### Suggested commit subject
+
+```
+Rich prompt: match placeholder line-height to CM6 cm-line baseline (fullstack-a-87)
+```
+
+### Files for `git add`
+
+* `web/src/components/TerminalRichPrompt.svelte`
+* `web/src/components/richPromptPlaceholderBaseline.test.ts` (new)
+* `docs/journals/phase-8/fullstack-a/fullstack-a-87.md`
+* `docs/journals/phase-8/fullstack-a/journal.md`
+* `docs/journals/phase-8/alex/event-fullstack-a-architect.md`
+  (this append)
+
+### Atomic-audit-commit applied
+
+Single bash invocation per discipline.
+
+Push held. Standing by for clearance.

@@ -2456,3 +2456,24 @@ tearing down the banner state.
 
 Impl note at [fullstack-a-83.md](fullstack-a-83.md).
 Outbound poke fired.
+
+## 2026-05-22 — -a-87 (placeholder baseline) ready for review
+
+`TerminalRichPrompt.svelte` placeholder
+`line-height: 1.5` → `line-height: 1.8`. H2
+audit confirmed: CM6 cm-line standard-density
+uses 1.8; placeholder's 1.5 produced baseline
+mismatch.
+
+4 raw-source pins in
+`richPromptPlaceholderBaseline.test.ts`.
+
+### Gate
+
+* vitest **933 / 933** (+4 net from -a-83's
+  929).
+* svelte-check 0/0 across 4028 files.
+* npm build clean.
+
+Impl note at [fullstack-a-87.md](fullstack-a-87.md).
+Outbound poke fired.

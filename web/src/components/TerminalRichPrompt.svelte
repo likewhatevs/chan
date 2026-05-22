@@ -818,7 +818,18 @@
     color: var(--text-secondary);
     font-size: var(--chan-editor-body-size, 16px);
     font-family: var(--chan-editor-body-family, inherit);
-    line-height: 1.5;
+    /* `fullstack-a-87`: match the CM6 cm-line line-height so
+       the placeholder text baseline aligns with the cursor's
+       baseline. Wysiwyg sets cm-line line-height per density
+       (`standard` = 1.8 / `compact` = 1.65; see Wysiwyg.svelte
+       lines 749-750). With line-height: 1.5 on the placeholder
+       and line-height: 1.8 on cm-line, the cursor `|`
+       block-height extended further down than the placeholder
+       text's, putting the visible baselines out of alignment.
+       1.8 matches the standard-density default; compact-density
+       drives have a tiny ~0.15 line-height drift (visually
+       imperceptible at 16px). */
+    line-height: 1.8;
     user-select: none;
   }
   /* `fullstack-a-8`: easeOutBack bubble-pop matching every other
