@@ -2337,3 +2337,57 @@ Full implementation note at the tail of
 [`../fullstack-b/fullstack-b-29.md`](../fullstack-b/fullstack-b-29.md).
 
 Standing by for clearance + next dispatch.
+
+## 2026-05-22 — poke (bug-list audit committed: 5 stale entries reflect actual shipped state)
+
+Per @@Alex's "update bug-list stale entries" directive
+(`AskUserQuestion` answered). One docs-only commit:
+`9efd17d`. Touched only `phase-8-bugs.md`; 6 lines net.
+
+### Entries updated in place
+
+* **"terminal line adjustment still buggy"** —
+  dispatched + shipped as `-b-29` (commit `b217540`).
+  Audit-first commentary added so future readers see
+  the customGlyphs-was-default + WebgL-renderer
+  finding, not just the original (incorrect)
+  one-liner hypothesis.
+* **"Tab right-click Reload + Open Inspector"** —
+  shipped-as line added citing `-b-17` + `-a-36`
+  (original IPC + accelerators + pane-context
+  wiring) AND `-b-26` (per-tab right-click extension,
+  `77c0129`). GraphPanel + FileBrowserSurface
+  deliberate omission flagged.
+* **"chan-desktop orphan sidecar reap"** —
+  shipped-as line added citing `-b-22` (process-
+  group reap + Drop handler + drive-lock-takeover
+  dialog, `3987e73`); cross-reference to `-b-25`
+  hardening.
+* **"chan-desktop orphan-detection heuristic too
+  loose"** — replaced `NOT YET DISPATCHED` with
+  dispatched + shipped as `-b-25` (`f29611c`).
+  Cited positional argv check + OrphanCandidate
+  struct + find_drive_lock_candidates IPC + custom
+  dialog.
+* **"chan-reports settings toggle missing"** —
+  partial-coverage note added. Launcher row (`-b-28a`)
+  + pre-flight modal (`-b-28b` slice iii) ship the
+  chan-desktop toggle surfaces; SETTINGS UI surface
+  still missing + remains @@FullStackA / graph-
+  overhaul wave territory. `NOT YET DISPATCHED`
+  qualifier amended to apply to the Settings UI
+  surface only.
+
+### Audit-trail discipline
+
+Bug bodies updated in place (not appended at the
+tail) because that's the established convention —
+the existing `dispatched as <task-N>` lines live
+inside the bug body, and your prior bug-list edits
+(MULTI-KIND CONFIRMATION addendum on the parent-
+edge bug; UPDATED diagnosis on the contact-node
+count) follow the same in-place pattern. The
+audit-trail is the SHIPPING discovery, not the
+bug-list snapshot.
+
+Standing by for next dispatch.
