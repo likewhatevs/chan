@@ -3814,3 +3814,49 @@ all the Drive::team_events_dir consumer surface is
 ready.
 
 Standing by.
+
+## 2026-05-22 — @@Architect: -31 commit clearance (per-team WatchHandle + load/unload/list_loaded routes)
+
+Cleared. Clean execution.
+
+### Implementation acks
+
+* **N separate handles** (vs shared) — right call.
+  Lifecycle = `HashMap::remove` = `Drop` on handle =
+  notify watcher unwatches. No dynamic add/remove
+  on shared state. Matches addendum-b spec's "per-
+  team isolated" wording verbatim.
+* **`loaded_teams: Mutex<HashMap<String, WatchHandle>>`**
+  in AppState — clean state shape.
+* **3-route surface** (`/api/teams/{name}/load`,
+  `/unload`, `/api/teams/loaded`) idempotent +
+  symmetric.
+* **`watch_team_emits_events_with_prefix` test** uses
+  the same outcome-poll pattern from `-23` with
+  200ms FSEvents settle mirror from `-25`. Right
+  shape.
+* **Non-destructive tear-down** confirmed in the
+  state.rs doc — workspace persists; only the
+  watcher releases.
+
+### Smoke shape
+
+Standard `systacean-31-smoke` branch + `gh workflow
+run ci.yml`. PTY-test flakiness from prior smokes
+may appear; re-fire if so. Authorization yes per
+the dispatch.
+
+### What this unblocks
+
+`fullstack-a-79` (bootstrap orchestrator) +
+`fullstack-a-80` (load flow) — both call
+`POST /api/teams/{name}/load` after spawning
+terminals.
+
+### Lane state
+
+`-28` (config audit) is the only remaining item on
+your lane. Pick at discretion; not blocking
+addendum-b consumers.
+
+Standing by for `-31` commit-readiness.

@@ -5725,3 +5725,49 @@ The Team feature generalises today's hardcoded chan phase-8 multi-agent setup. T
 | @@FullStackB | -b-28b unblocked |
 | @@CI | Idle |
 | Others | Reactive |
+
+## 2026-05-22 — v0.12.0 CUT SHAPE: Option (C) — full cut after Round-2 + both addendums
+
+@@Alex 2026-05-22 confirmed v0.12.0 cut shape:
+**Option (C) full cut** — wait for Round-2 +
+addendum-a + addendum-b ALL substantively
+complete before tagging v0.12.0.
+
+### What "complete" means
+
+| Bucket | State |
+|--------|-------|
+| Round-2 originals | `-a-75`/`-a-76`/`-a-77`/`-28` need to ship |
+| Addendum-a | `-a-66 b-e` + `-a-67d/e/f` + `-a-68/70` + `-a-82` walk |
+| Addendum-b | `-31` + `-a-78`/`-79`/`-80`/`-81` b-d slices |
+
+~18-20 substantial tasks remain across 3 lanes
+before the cut.
+
+### Sequencing strategy
+
+Continue current wave-3 + addendum-b wave-1 in
+parallel. As lanes free up, pull next from the
+appropriate bucket. The walks land alongside ships
+to keep webtest lanes flowing.
+
+No new dispatches needed; queues are already deep
+enough to chew through the full list.
+
+### Lane snapshot
+
+| Lane | Active right now |
+|------|------------------|
+| @@Systacean | `-31` ✓ commit-ready; `-28` (config audit) remaining |
+| @@FullStackA | DEEP — addendum-a + wave-3 round-2 + addendum-b wave-1 |
+| @@FullStackB | Queue-empty (`-b-28b` slice iii ✓); could pull `-b-28b` remaining slices |
+| @@CI | Idle (no natural work) |
+| @@WebtestA | Reactive — many ships need walks |
+| @@WebtestB | Reactive |
+
+### What I'm committing this round
+
+| File | Reason |
+|------|--------|
+| `architect/journal.md` | This entry |
+| `alex/event-architect-systacean.md` | -31 commit clearance + lane state |
