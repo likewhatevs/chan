@@ -1414,3 +1414,101 @@ walks cleanly:
   `git show --stat HEAD` confirm scope.
 
 Standing by.
+
+## 2026-05-22 — poke (proactive walk of -a-58 parent-edge invariant — 3/4 HOLD + 1 NOT TESTED; orphan fix lands)
+
+Picked up `-a-58` (`a8de934`) for a proactive lane-A
+walk per the memory rule. The graph parent-edge
+invariant fix addresses the orphan-markdown
+architectural bug. HEAD `a8de934`; throwaway drive
+`/tmp/chan-test-phase8-wa-r11/` (chan-source seed);
+chan serve on 127.0.0.1:8787; Chrome MCP tab
+`503725889`. Frontend + binary rebuilt for `-a-58`.
+Verdict + per-check evidence appended to
+[`../webtest-a/webtest-a-1.md`](../webtest-a/webtest-a-1.md)
+under `## 2026-05-22 — fullstack-a-58 proactive
+walkthrough`.
+
+### Verdicts (3/4 HOLD + 1 NOT TESTED)
+
+| Check | Verdict |
+|-------|---------|
+| #1 File-scope: parent dir renders + contains edge | HOLD |
+| #2 Drive-scope: every file has inbound contains edge | HOLD |
+| #3 Folder filter OFF hides parent-dirs | NOT TESTED |
+| #4 Click parent-dir → directory inspector | HOLD |
+
+### Highlights
+
+* **The architectural orphan bug is fixed**.
+  Drive-scope API check via `GET /api/graph?scope=drive`:
+  1131 file nodes total (1038 real + 93 `missing:true`
+  ghosts); 1153 contains-edges; **0 orphan real-file
+  nodes**. Every real file has an inbound `contains`
+  edge from its parent directory. The architectural
+  invariant holds.
+* **File-scope parent chain now renders**: opening
+  CLAUDE.md → Cmd+Shift+M shows `5/756 nodes` with the
+  `chan-test-phase8-wa-r11/` parent directory node
+  visible at the top + `contains` edge connecting it
+  to CLAUDE. The prior `webtest-a-6` walk on this
+  exact scope showed 4 nodes (no parent); the +1 is
+  `-a-58`'s ancestor-chain code in action.
+* **Composition with `-a-50` is seamless**: clicking
+  the parent-dir node renders the full
+  `DirectoryInfoBody.svelte` inspector (DIR badge +
+  Graph from here + TOTALS files 965 / SLOC 76,098 +
+  BY LANGUAGE table with 12 langs + COCOMO estimator
+  cost US$4,354,661). The parent-dir nodes
+  `-a-58` re-introduces are first-class directory
+  nodes per the data model.
+* **API-level invariant is auditable**: future
+  regressions in this area can be caught via a
+  simple `GET /api/graph?scope=drive` + jq check
+  for orphan files. Worth considering for the test
+  harness if @@Architect wants a regression guard.
+
+### NOT-TESTED item (environmental, not regression)
+
+* **#3 Folder filter OFF hides parent-dirs**:
+  - Folder chip is hidden in file-scope chip row
+    (chips are scope-aware; folder shows only in
+    drive-scope where folder nodes are present
+    independently).
+  - URL-hash manipulation (`gf:2ltmaifds` →
+    `gf:2ltmaids`, dropping `f`) recorded the new
+    value but didn't trigger SPA filter re-render
+    (consistent with the prior `-a-52` walk's
+    URL-hash caveat — SPA filter logic doesn't
+    listen to URL changes; only chip click events).
+  - To fully verify #3 in a follow-up beat: open
+    drive-scope graph from a non-file focus context
+    (FB tab) and toggle folder chip via the
+    right-click bubble.
+
+  The folder filter logic itself is pre-existing
+  (verified in prior `-a-49` + `-a-57` walks).
+  The new question is whether `-a-58`'s
+  ancestor-chain code respects the folder-off
+  override. Static-analysis sweep by @@FullStackA
+  would close this faster than another empirical
+  beat.
+
+### Suggested commit shape
+
+Path-limited per the discipline that landed prior
+walks cleanly:
+
+* **Commit subject**: `docs: proactive -a-58 graph
+  parent-edge invariant walkthrough (3/4 HOLD + 1 NOT
+  TESTED; orphan architectural fix lands)`.
+* **Files** (explicit per-path):
+  * `docs/journals/phase-8/webtest-a/webtest-a-1.md`
+    (verdict append).
+  * `docs/journals/phase-8/alex/event-webtest-a-architect.md`
+    (this poke).
+* Path-limited `git commit <path1> <path2> -m "..."` to
+  bypass the shared index. Post-commit
+  `git show --stat HEAD` confirm scope.
+
+Standing by.

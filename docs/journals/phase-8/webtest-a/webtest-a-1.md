@@ -2739,3 +2739,143 @@ Lane-A test server torn down at commit beat:
 
 9/9 HOLD. The "hide markdown to see source" headline
 ask is empirically resolved. `-a-57` ships as specced.
+
+## 2026-05-22 — fullstack-a-58 proactive walkthrough (graph parent-edge invariant)
+
+Proactive lane-A walk of `-a-58` (`a8de934`) per the
+memory rule on proactive coverage. `-a-58` lands the
+graph parent-edge invariant fix (SPA pulls ancestor
+chain via `contains` edges) addressing the
+"orphan markdown nodes" architectural bug. HEAD
+`a8de934`; throwaway drive
+`/tmp/chan-test-phase8-wa-r11/` (chan-source seed);
+chan serve on 127.0.0.1:8787; Chrome MCP tab
+`503725889`. Frontend + binary rebuilt (`npm run
+build` → `cargo build -p chan`) to embed `-a-58`.
+
+### Verdicts
+
+| Check | Surface | Verdict |
+|-------|---------|---------|
+| #1 | File-scope: parent dir renders + contains edge | HOLD |
+| #2 | Drive-scope: every file has inbound contains edge | HOLD |
+| #3 | Folder filter OFF hides parent-dirs | NOT TESTED |
+| #4 | Click parent-dir → directory inspector | HOLD |
+
+**3/4 HOLD + 1 NOT TESTED** (folder OFF — chip hidden
+in file-scope, URL manipulation insufficient to drive
+re-render; see "Test environment caveats").
+
+### Per-check evidence
+
+* **#1 File-scope parent dir + contains edge**: opened
+  CLAUDE.md via FB → Cmd+Shift+M. File-scope graph
+  shows `5/756 nodes`. Visible nodes: CLAUDE (orange
+  doc) + 3 design targets + **`chan-test-phase8-wa-r11/`
+  parent directory node** (grey folder icon) connected
+  to CLAUDE via a `contains` edge. Compared with the
+  prior `webtest-a-6` walk (pre-`-a-58`) which showed
+  4 nodes (no parent), the +1 is the new parent-edge
+  invariant in action.
+* **#2 Drive-scope invariant**: API check via `GET
+  /api/graph?scope=drive` with Bearer token. Total
+  nodes 1314; file nodes 1131 (1038 real +
+  93 `missing:true` ghost nodes). Contains-edge count:
+  1153. Filtering out missing nodes: **0 orphan real
+  file nodes** — every real file has an inbound
+  `contains` edge from its parent directory. The
+  missing nodes are intentionally edgeless (they're
+  broken-link targets referenced by content but not on
+  disk). Invariant holds at the API level for the real
+  drive contents.
+* **#3 Folder filter OFF hides parent-dirs**: NOT
+  TESTED in this beat. The folder chip is hidden in
+  file-scope chip row (chips are scope-aware; folder
+  shows in drive-scope only). Tried URL-hash
+  manipulation (`gf:2ltmaifds` → `gf:2ltmaids`,
+  dropping the `f`) — URL recorded the change but
+  visible node count + DOM state stayed unchanged
+  (SPA didn't re-render on URL-hash-only update,
+  consistent with the prior `-a-52` walk's URL-hash
+  caveat). A clean drive-scope chip toggle would
+  exercise this, but switching graph scope from
+  file → drive requires a fresh graph tab opened from
+  a non-file focus context, which I didn't manage in
+  this beat. The folder filter logic itself is
+  pre-existing (per the `-a-49` walk + `-a-57` chip
+  walk) — the new question is whether `-a-58`'s
+  ancestor-chain code respects the folder-off
+  override. Deferred for a follow-up beat or for
+  @@FullStackA's static-analysis sweep.
+* **#4 Click parent-dir → directory inspector**:
+  clicked the `chan-test-phase8-wa-r11/` parent-dir
+  node in the graph canvas. Right inspector rendered
+  the `DirectoryInfoBody.svelte` component (per
+  `-a-50` composition):
+  - "drive / CLAUDE.md" breadcrumb
+  - **DIR** badge
+  - Title: `chan-test-phase8-wa-r11/`
+  - **"Graph from here"** button
+  - **TOTALS**: files 965 / code (SLOC) 76,098 /
+    comments 149,417 / blanks 38,386
+  - **BY LANGUAGE** table (12 langs): Markdown 577 /
+    Rust 127 / TypeScript 162 / Svelte 53 / JSON 6 /
+    JavaScript 5 / CSS 6 / TOML 13 / HTML 6 /
+    Makefile 2 / Shell 4 / Plain Text 1 /
+    PowerShell 1 / BASH 2
+  - **COCOMO**: effort 226.8 pmo / schedule 19.6 mo /
+    developers 11.6 / cost US$4,354,661
+  The composition with `-a-50` is clean — clicking
+  any directory node in the graph (now including the
+  parent-dir nodes that `-a-58` re-introduces) opens
+  the full chan-reports inspector.
+
+### Highlights
+
+* **The architectural orphan bug is fixed**: drive-scope
+  graph now has 0 real-file orphans (was the original
+  bug @@Alex flagged). The "file-scope graph doesn't
+  include the parent directory node" gap is closed —
+  Cmd+Shift+M on any file now shows its parent chain.
+* **Composition with `-a-50` is seamless**: clicking
+  the newly-rendered parent-dir node hits the same
+  `DirectoryInfoBody.svelte` pipeline that `-a-50`
+  established. No special-case code; the parent-dir
+  nodes are full first-class directory nodes per the
+  graph data model.
+* **API-level invariant is auditable**: `GET
+  /api/graph?scope=drive` returns the full contains-
+  edge set + can be programmatically checked for
+  orphan files. Future regressions in this area will
+  be catchable via a simple curl + jq check.
+
+### Test environment caveat
+
+* **URL-hash manipulation doesn't trigger SPA filter
+  re-render**: setting `gf` in URL hash via JS
+  records the new value but doesn't trigger the chip
+  filter logic. Real UI flow (click the chip in the
+  tab-menu-bubble) is the reliable way. Folder chip
+  isn't shown in file-scope (scope-aware chip
+  rendering hides chips with zero items in scope),
+  making in-scope folder-OFF testing harder. To
+  fully verify #3 in a future beat, open drive-scope
+  graph from a non-file focus context (FB tab) and
+  toggle folder chip via the right-click bubble.
+
+### State at end of walk
+
+Lane-A test server torn down at commit beat:
+
+1. chan serve killed (TaskStop on background bash).
+2. `rm -rf /tmp/chan-test-phase8-wa-r11/` — directory
+   gone.
+3. `chan remove /tmp/chan-test-phase8-wa-r11/` →
+   `unregistered`.
+4. Chrome MCP tab `503725889` closed via
+   `tabs_close_mcp`; group auto-removed.
+
+3/4 HOLD + 1 NOT TESTED. The architectural orphan
+fix lands cleanly. `-a-58` ships per spec for the
+load-bearing #1, #2, #4 checks; #3 deferred for a
+follow-up beat or static-analysis sweep.
