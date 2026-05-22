@@ -48,6 +48,7 @@ use auth::{auth_middleware, load_or_create_token};
 use bus::{make_progress_broadcast, make_watch_bridge};
 use routes::{
     api_backlinks, api_build_info, api_cloud_drives, api_create_draft, api_create_file,
+    api_create_rich_prompt,
     api_create_terminal, api_delete_file, api_delete_session, api_delete_terminal, api_fs_graph,
     api_get_config, api_get_contacts, api_get_drive, api_get_server_config, api_get_session,
     api_graph, api_headings, api_health, api_index_rebuild, api_index_status, api_indexing_state,
@@ -803,6 +804,12 @@ fn router(state: Arc<AppState>) -> Router {
         // SPA Cmd+N chord routes here; response path opens via
         // the existing /api/files/Drafts/.../draft.md GET path.
         .route("/api/drafts/new", post(api_create_draft))
+        // `fullstack-a-66` slice d: Rich Prompt submission
+        // history. Each Cmd+Enter submit POSTs the source +
+        // server writes `Drafts/rich-prompt-N/prompt.md`. SPA
+        // gets the unified path back; FB Drafts row + the
+        // graph drafts root surface it naturally.
+        .route("/api/drafts/rich-prompt", post(api_create_rich_prompt))
         // systacean-31: per-team watcher lifecycle. Load spins up
         // a `Drive::watch_team` handle; unload drops it
         // (non-destructive — workspace persists on disk).

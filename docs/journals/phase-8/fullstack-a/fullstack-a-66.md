@@ -626,3 +626,162 @@ slice-c contract.
 Per the memory rule. Per-path staging only.
 
 Push held. Standing by for clearance.
+
+## 2026-05-22 — slice d (Rich Prompt history → Drafts/rich-prompt-N/) ready for review
+
+Six-file change. Cross-stack (chan-server +
+SPA).
+
+### What landed
+
+**chan-server**:
+
+`crates/chan-server/src/routes/drafts.rs`:
+* New `RichPromptCreatePayload { content }` +
+  `RichPromptCreateResponse { path, name }`
+  types.
+* New `api_create_rich_prompt` handler.
+  Same retry-once race pattern as
+  `api_create_draft` (`AlreadyExists` →
+  retry once with re-resolved name).
+* New `next_rich_prompt_name(drive)` helper.
+  Lives in chan-server (not chan-drive) so
+  the prefix-pickup loop stays where its
+  consumer is + doesn't expand chan-drive's
+  API surface. First slot is `rich-prompt`;
+  subsequent are `rich-prompt-1` /
+  `rich-prompt-2` / etc. (matches the
+  `untitled` / `untitled-N` shape).
+* +4 Rust unit pins on the helper:
+  first-slot-unsuffixed, gap-counting,
+  ignores-untitled-drafts (cross-prefix
+  isolation), and internal-gap fill.
+
+`crates/chan-server/src/routes/mod.rs`:
+* Re-exports `api_create_rich_prompt`
+  alongside `api_create_draft`.
+
+`crates/chan-server/src/lib.rs`:
+* New route at `POST /api/drafts/rich-prompt`
+  next to the existing `/api/drafts/new`.
+* Import block extended.
+
+**SPA**:
+
+`web/src/api/client.ts`:
+* New `api.createRichPromptDraft(content)`
+  client method. Doc comment cross-
+  references slice d + the `rich-prompt-N`
+  naming.
+
+`web/src/components/TerminalTab.svelte`:
+* `submitRichPrompt` now calls
+  `void persistRichPromptHistory(source)`
+  after the existing send.
+* New `persistRichPromptHistory` helper:
+  * Skips empty / whitespace-only sources
+    (no history entry for an empty submit).
+  * Calls `api.createRichPromptDraft(source)`.
+  * Failures route through
+    `setTransientStatus` (auto-dismiss per
+    `-a-86` pattern) so the user gets a
+    non-fatal heads-up; the original send
+    isn't undone.
+
+`web/src/components/richPromptHistoryPersist.test.ts`
+(new): 6 raw-source pins:
+* api client method signature + route
+  target.
+* Client doc-comment cross-reference.
+* `submitRichPrompt` calls persist helper.
+* persist helper trims + skips empty.
+* persist failures surface via
+  setTransientStatus.
+* persist calls
+  `api.createRichPromptDraft(source)`.
+
+### Acceptance (slice d)
+
+1. **Rich Prompt submission persists into
+   `Drafts/rich-prompt-N/prompt.md`** ✓ —
+   mechanism via the 4 Rust pins on the
+   name picker + the 6 SPA pins on the
+   submit hook. @@WebtestA walk for
+   empirical FB browsability confirmation.
+2. **First submit lands as `rich-prompt`**
+   (no suffix); subsequent as
+   `rich-prompt-1`, `rich-prompt-2`, ...
+   ✓ matches `untitled` naming pattern.
+3. **No regression on the
+   send-to-terminal path** ✓ — persist runs
+   AFTER the send + as a `void` promise;
+   failures don't unwind.
+4. **Empty submits don't create a history
+   entry** ✓ — trim + early-return.
+
+### Out of scope (deferred slice)
+
+* Slice e: Graph Drafts root styling +
+  `drafts_link` edge.
+
+### Gate
+
+* `cargo test -p chan-server --lib`: **224
+  passed** (+4 net from prior 220).
+* vitest **951 / 951** (+6 net from
+  `-a-66` slice c's 945).
+* svelte-check 0 errors / 0 warnings across
+  4030 files.
+* npm build clean.
+
+### Decisions
+
+* **chan-server-side name picker** (not
+  chan-drive) — keeps the prefix-pickup
+  loop where its consumer is + avoids
+  expanding chan-drive's API surface for a
+  one-off use case. `next_untitled_draft_name`
+  stays untouched.
+* **First-slot unsuffixed** matches the
+  `untitled` / `untitled-N` shape for
+  consistency across both flows.
+* **Persist after send** (not before) —
+  the user's primary intent is "send the
+  command"; history is a side effect.
+  Failure to persist doesn't block the
+  command from running.
+* **Auto-dismissing failure toast** per
+  `-a-86` pattern — non-fatal failure
+  shouldn't stick on screen forever.
+* **Trim-only empty check** — pure
+  whitespace prompts probably indicate a
+  paste accident or a cleared buffer
+  rather than a deliberate empty submit;
+  skip the history entry.
+
+### Suggested commit subject
+
+```
+Rich Prompt history: persist each submit as Drafts/rich-prompt-N/prompt.md (fullstack-a-66 slice d)
+```
+
+Single commit. chan-server route + SPA api +
+submit hook + tests tightly coupled.
+
+### Files for `git add` (per-path discipline)
+
+* `crates/chan-server/src/routes/drafts.rs`
+* `crates/chan-server/src/routes/mod.rs`
+* `crates/chan-server/src/lib.rs`
+* `web/src/api/client.ts`
+* `web/src/components/TerminalTab.svelte`
+* `web/src/components/richPromptHistoryPersist.test.ts` (new)
+* `docs/journals/phase-8/fullstack-a/fullstack-a-66.md`
+* `docs/journals/phase-8/fullstack-a/journal.md`
+* `docs/journals/phase-8/alex/event-fullstack-a-architect.md`
+
+### Atomic-audit-commit
+
+Per the memory rule. Per-path staging only.
+
+Push held. Standing by for clearance.

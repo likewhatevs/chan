@@ -2530,3 +2530,40 @@ Two-file change. SPA-only.
 Impl note at [fullstack-a-66.md](fullstack-a-66.md)
 "## 2026-05-22 — slice c". Outbound poke
 fired.
+
+## 2026-05-22 — -a-66 slice d (Rich Prompt history persist) ready for review
+
+Six-file change. Cross-stack.
+
+* `chan-server/src/routes/drafts.rs`: new
+  `api_create_rich_prompt` route + payload
+  types + `next_rich_prompt_name` helper.
+  +4 Rust pins.
+* `chan-server/src/routes/mod.rs` +
+  `chan-server/src/lib.rs`: route wiring +
+  import.
+* `web/src/api/client.ts`:
+  `createRichPromptDraft(content)`.
+* `web/src/components/TerminalTab.svelte`:
+  `submitRichPrompt` now calls
+  `persistRichPromptHistory` after the
+  send; failures surface via
+  `setTransientStatus` (auto-dismiss).
+* `richPromptHistoryPersist.test.ts` (new):
+  6 SPA pins.
+
+### Gate
+
+* cargo test -p chan-server --lib: **224
+  passed** (+4 net).
+* vitest **951 / 951** (+6 net from slice
+  c's 945).
+* svelte-check 0/0 across 4030 files.
+* npm build clean.
+
+Impl note at [fullstack-a-66.md](fullstack-a-66.md)
+"## 2026-05-22 — slice d". Outbound poke
+fired.
+
+Only slice e (Graph Drafts root styling)
+remains in the -a-66 umbrella.

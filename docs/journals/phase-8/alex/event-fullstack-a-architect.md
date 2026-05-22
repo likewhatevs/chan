@@ -7276,3 +7276,101 @@ File browser inspector: Drafts notice + tinted chip (fullstack-a-66 slice c)
 Single bash invocation per discipline.
 
 Push held. Standing by for clearance.
+
+## 2026-05-22 — poke (fullstack-a-66 slice d: Rich Prompt history persist ready for review)
+
+Cross-stack six-file change. SPA + chan-server.
+
+### What landed
+
+`chan-server`:
+* New `POST /api/drafts/rich-prompt`
+  handler. Accepts `{ content }`; writes
+  `Drafts/rich-prompt-N/prompt.md`.
+* New `next_rich_prompt_name(drive)`
+  helper. First slot unsuffixed
+  (`rich-prompt`); subsequent
+  `rich-prompt-1` / `-2` / etc. Matches
+  `untitled` / `untitled-N` shape. Lives
+  in chan-server (not chan-drive) — single
+  consumer; keeps chan-drive API surface
+  minimal.
+* +4 Rust pins on the helper: first-slot
+  unsuffixed, gap-counting, ignores
+  untitled-drafts (cross-prefix isolation),
+  internal-gap fill.
+
+`SPA`:
+* `api.createRichPromptDraft(content)` client
+  method.
+* `submitRichPrompt` calls
+  `persistRichPromptHistory(source)` AFTER
+  the existing send. Persist failures
+  route through `setTransientStatus` (auto-
+  dismiss); user's command still runs.
+* Empty / whitespace-only submits skip the
+  persist (no orphan history entries).
+* 6 SPA raw-source pins.
+
+### Acceptance (slice d)
+
+1. Submissions persist into
+   `Drafts/rich-prompt-N/prompt.md` ✓
+   (mechanism; @@WebtestA empirical walk
+   for FB browsability).
+2. Naming matches `untitled` pattern ✓.
+3. No regression on send path ✓ — persist
+   is post-send + void.
+4. Empty submits don't create entries ✓.
+
+### Gate
+
+* `cargo test -p chan-server --lib`: **224
+  passed** (+4 net).
+* vitest **951 / 951** (+6 net from slice
+  c's 945).
+* svelte-check 0 errors / 0 warnings across
+  4030 files.
+* npm build clean.
+
+### Decisions
+
+* **chan-server picker** vs adding
+  `Drive::next_draft_name(prefix)` —
+  single-consumer; avoids cross-lane
+  chan-drive change.
+* **Persist AFTER send** — command intent
+  is primary; history is side effect.
+* **`setTransientStatus` for failures** —
+  non-fatal; auto-dismiss per `-a-86`.
+* **Trim-empty short-circuit** — no
+  history entry for paste-accident /
+  cleared-buffer cases.
+
+### Suggested commit subject
+
+```
+Rich Prompt history: persist each submit as Drafts/rich-prompt-N/prompt.md (fullstack-a-66 slice d)
+```
+
+### Files for `git add`
+
+* `crates/chan-server/src/routes/drafts.rs`
+* `crates/chan-server/src/routes/mod.rs`
+* `crates/chan-server/src/lib.rs`
+* `web/src/api/client.ts`
+* `web/src/components/TerminalTab.svelte`
+* `web/src/components/richPromptHistoryPersist.test.ts` (new)
+* `docs/journals/phase-8/fullstack-a/fullstack-a-66.md`
+* `docs/journals/phase-8/fullstack-a/journal.md`
+* `docs/journals/phase-8/alex/event-fullstack-a-architect.md`
+  (this append)
+
+### Atomic-audit-commit applied
+
+Single bash invocation per discipline.
+
+Slice e (Graph Drafts root styling) only
+remaining piece of the -a-66 umbrella.
+
+Push held. Standing by for clearance.

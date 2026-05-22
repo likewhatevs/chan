@@ -262,6 +262,17 @@ export const api = {
   /// dir).
   createDraft: () =>
     req<{ path: string; name: string }>("POST", "/api/drafts/new"),
+  /// `fullstack-a-66` slice d: persist a Rich Prompt submission
+  /// as `Drafts/rich-prompt-N/prompt.md`. The SPA POSTs the
+  /// editor source + the chan-server route picks the next slot
+  /// (first is `rich-prompt`; subsequent are `rich-prompt-1`,
+  /// `rich-prompt-2`, ...). The returned path is the unified
+  /// shape so the FB Drafts row + the graph drafts root surface
+  /// the history entries without further plumbing.
+  createRichPromptDraft: (content: string) =>
+    req<{ path: string; name: string }>("POST", "/api/drafts/rich-prompt", {
+      content,
+    }),
   remove: (path: string) => req<void>("DELETE", `/api/files/${encPath(path)}`),
   move: (from: string, to: string) =>
     req<MoveResponse>("POST", "/api/move", { from, to }),

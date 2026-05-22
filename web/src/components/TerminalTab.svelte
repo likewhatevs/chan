@@ -834,6 +834,30 @@
     // refocused the terminal here, which forced the user to
     // click back into the prompt for every entry.
     if (tab.richPrompt) tab.richPrompt.focusNonce = (tab.richPrompt.focusNonce ?? 0) + 1;
+    // `fullstack-a-66` slice d: persist the submitted source as
+    // `Drafts/rich-prompt-N/prompt.md` so the user has
+    // GitHub-style FB access to their history. Best-effort:
+    // a failure here doesn't unwind the send (the terminal
+    // already received the input); we surface it as a
+    // transient status so the user knows the history entry
+    // didn't land but their command still ran.
+    void persistRichPromptHistory(source);
+  }
+
+  async function persistRichPromptHistory(source: string): Promise<void> {
+    const trimmed = source.trim();
+    if (!trimmed) return;
+    try {
+      await api.createRichPromptDraft(source);
+    } catch (err) {
+      // Persist failures are non-fatal — the prompt already
+      // ran. Status pill auto-dismisses (per `-a-86`'s
+      // setTransientStatus pattern) so the user gets a brief
+      // heads-up without sticky UI.
+      setTransientStatus(
+        `rich-prompt history save failed: ${(err as Error).message}`,
+      );
+    }
   }
 
   function watcherStarted(path: string): void {
