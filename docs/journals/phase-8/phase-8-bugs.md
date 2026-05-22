@@ -756,6 +756,27 @@
   - severity: **operational; bumping above feature ask**. The rate-limit / HTTP 500 pattern is actively blocking @@Alex's workflow (multi-agent sessions stalling daily at the same hour). Cache-bust via uniqueness is the immediate mitigation. NOT YET DISPATCHED — Round-2 wave-3 candidate; small chan-server change + backward-compat schema bump
   - sequencing suggestion: if @@Systacean's queue stays empty post-`-16` + `-12` parked, this is a natural pickup for them (chan-server lane). Cheaper than waiting for wave-3 fan-out
 
+- Graph filter chips don't include FileBucket (Markdown / SourceCode); user can't hide markdown to see source
+  - flagged 2026-05-22 by @@Alex during the proactive `-a-49`/`-a-50`/`-a-51` walk verification: with the chan repo seed (~567 markdown files + ~340 source files), the graph view is dominated by orange (markdown). User has no chip to hide markdown nodes + reveal the source-code population
+  - audit: `GraphPanel.svelte:202` defines `FilterKind = "tag" | "mention" | "language" | "img" | "folder"`. Re-labeled in semantic mode (line 1492-1499) as `tag / contact / language / media / folder`. The 5 chips cover graph-internal node kinds (hashtags, @mentions, languages, images, folders) — NOT the FileBucket classification from `systacean-16`
+  - want: add bucket-based filter chips. `systacean-16` already exposes `FileStats.bucket: Markdown | SourceCode { language }` via the `/api/report/file` endpoint. Minimum: two new chips (`markdown` + `source`). Stretch: per-language sub-toggles (rust / ts / svelte / py / etc.) when SourceCode is on
+  - example flow user wants: open graph → toggle markdown chip OFF → see only source-code nodes + their structure (clusters around `crates/` + `web/`)
+  - composition with the Hybrid Graph legend grid (`-a-51`): legend already shows G6 palette in 3 categories with file kinds named. The chip set should be the actionable counterpart — every legend row should be a chip
+  - lane: @@FullStackA (SPA graph filter chip set extension; consumes existing `-16` data)
+  - severity: discoverability + dataset-exploration usability. Real-user impact for any drive that mixes docs + source (any chan-writer repo; any monorepo)
+  - NOT YET DISPATCHED — Round-2 wave-3 candidate; ~50-100 LOC change in `GraphPanel.svelte`
+
+- Graph context-menu / overlay rendering position drifts from click point (re-observed pattern)
+  - flagged 2026-05-22 by @@Alex during webtest-a's graph walk: re-observed a prior issue where a menu / overlay rendered far from the click point that triggered it. Screenshot shows cursor at the top-near-tab-strip area; the Depth/Reload/filter HUD panel rendered top-right of the graph view (anchored to kebab menu icon)
+  - epistemics: the screenshot doesn't unambiguously identify WHICH click triggered which menu. Possible reads:
+    - kebab-menu anchor is fine (top-right by design; cursor moved after open)
+    - context-menu-from-canvas-node rendering top-right instead of near the clicked node
+    - a different menu surface rendering at an unexpected anchor
+  - @@Alex's framing suggests this is a REPRO of a previously-found pattern, so the bug shape exists in the SPA — exact click site needs empirical verification at task pickup
+  - lane: @@FullStackA (SPA — likely menu anchoring / popover positioning logic in GraphPanel or InspectorBody)
+  - severity: UX papercut; not regression-class
+  - NOT YET DISPATCHED — task-pickup audit step: walk the graph with @@WebtestA OR repro empirically, capture which click site → which menu → which mis-position, then route fix
+
 - Graph canvas click hit-radius is too tight; users need to zoom in to register clicks on nodes
   - flagged 2026-05-22 by @@WebtestA during proactive `-a-49`+`-a-50`+`-a-51` walk (`a63c8cb`): clicks at multiple positions near visible nodes missed consistently before zoom — e.g. `(1356, 539)`, `(1351, 411)`, `(881, 247)` all missed. Pattern suggests the canvas hit-test uses the node's stroke radius as the hit-box rather than a slightly-expanded one
   - want: expand the click hit-radius beyond the visible stroke (typical UX pattern: `hitRadius = strokeRadius + ~8-12px` for forgiving-feeling clicks)
