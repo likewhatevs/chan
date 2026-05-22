@@ -5368,3 +5368,74 @@ similar stand-down).
 | `architect/journal.md` | This entry |
 | `alex/event-architect-ci.md` | -14 ACCEPT all 3 + smoke-branch handling note |
 | `alex/event-architect-systacean.md` | -22 smoke ack + stand-down confirmation |
+
+## 2026-05-22 — Two new tasks cut: systacean-23 (macOS indexer flakiness) + fullstack-a-63 (chip count semantics)
+
+### Status check from @@Alex (post-step-away)
+
+Three commits landed while @@Alex was away (`ce3a269`
+@@CI -14 + `9f0ac44` @@FullStackA -a-56 + `7ecd18e`
+@@WebtestA webtest-a-8). All lanes idle now. Two new
+items surfaced.
+
+### Item 1: macOS indexer flakiness → systacean-23
+
+`-14` smoke run `26274161414` failed on `macos-latest`
+cargo test step:
+`writes_to_disk_get_indexed_after_debounce` at
+`chan-drive/src/indexer.rs:385` panicked. Out-of-lane
+finding from @@CI's audit; correctly flagged to me
+for routing to @@Systacean.
+
+Cut [`../systacean/systacean-23.md`](../systacean/systacean-23.md):
+audit-then-fix with 3 options (tune timing / `#[cfg]`
+gate / `#[ignore]` quarantine). Recommend (A) timing
+fix if audit gives clear target; (B) gate fallback.
+
+### Item 2: PARTIAL on webtest-a-8 chip UI → fullstack-a-63
+
+`-22` data layer works (48 deduped contact nodes per
+API) but chip UI displays `1982` — chip is tallying
+mention EDGES not mention NODES. UX gap: user
+concludes "nothing changed". Bounded ~5-10 LOC fix
+in `GraphPanel.svelte:550`'s count loop.
+
+Cut [`../fullstack-a/fullstack-a-63.md`](../fullstack-a/fullstack-a-63.md).
+
+### -a-62 walkthrough side observations (deferred)
+
+@@WebtestA's walk surfaced two NOT-TESTED items on
+`-a-62`:
+* Resize-widen/narrow test blocked by Chrome MCP's
+  drag tooling triggering file-MOVE instead of
+  column-resize. Side observation: FB resize-handle
+  hit-area is tight. Filed mentally; not cut as task
+  yet (low impact).
+* Right-dock toggle test deferred — no obvious UI
+  toggle in current build. Static behavior confirmed
+  via CSS review.
+
+The CSS contract for `-a-62` IS correct per static
+review; dynamic round-trip blocked by tooling, not
+code.
+
+### Lane state
+
+| Lane | State |
+|------|-------|
+| @@Systacean | -23 dispatched (macOS indexer flakiness) |
+| @@FullStackA | -a-56 ✓; queue: -a-59/-a-60/-a-63; -a-61 PAUSED |
+| @@FullStackB | -b-25 ✓; queue-empty |
+| @@CI | -14 committed; macOS finding routed to @@Systacean; queue-empty |
+| @@WebtestA | webtest-a-8 ✓; reactive (next walk after -a-59/-a-60/-a-63 land) |
+| @@WebtestB | -b-4 ✓; reactive |
+
+### What I'm committing this round
+
+| File | Reason |
+|------|--------|
+| `architect/journal.md` | This entry |
+| `alex/event-architect-systacean.md` | -23 dispatch poke |
+| `alex/event-architect-fullstack-a.md` | -63 dispatch poke |
+| `systacean/systacean-23.md` | NEW task (macOS indexer) |
+| `fullstack-a/fullstack-a-63.md` | NEW task (chip count semantics) |

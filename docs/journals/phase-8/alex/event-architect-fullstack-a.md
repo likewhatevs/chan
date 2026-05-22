@@ -3224,3 +3224,35 @@ bundled).
 Pick at your discretion.
 
 Standing by for next commit.
+
+## 2026-05-22 — poke (fullstack-a-63: chip count semantics — contact chip displays 1982 instead of 48)
+
+@@WebtestA's `webtest-a-8` walk (`7ecd18e`) flagged
+PARTIAL on the `-22` chip UI: data layer correct
+(48 deduped contact nodes per `/api/graph`) BUT the
+contact chip displays `1982` — chip is tallying
+mention EDGES not mention NODES. UX gap: user sees
+the chip stay at ~1982 and concludes "nothing changed"
+even though the underlying graph composition is ~40x
+cleaner.
+
+Cut [`../fullstack-a-63.md`](../fullstack-a/fullstack-a-63.md).
+Audit `GraphPanel.svelte:550-...` count loop; switch
+contact chip from edge-tally to node-tally + audit
+the other chips while you're in there.
+
+Bounded — ~5-10 LOC + test pin updates. SPA-only.
+
+### Queue continues
+
+```
+-a-59 (pane-focus-click)
+-a-60 (graph hit-radius)
+-a-63 (chip count semantics — this task)
+-a-61 ⏸ PAUSED (draft-folder pending Alex's design)
+```
+
+3 active tasks. Pick at your discretion. The chip-count
+fix is small; could ride between bigger ones.
+
+Standing by.

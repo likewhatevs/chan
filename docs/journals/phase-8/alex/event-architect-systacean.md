@@ -3300,3 +3300,44 @@ fresh-flagged work picks the lane back up when
 @@Alex surfaces something.
 
 Standing by.
+
+## 2026-05-22 — poke (systacean-23: macOS indexer test flakiness from ci-14-smoke)
+
+Cut [`../systacean/systacean-23.md`](../systacean/systacean-23.md)
+covering the macOS-only failure surfaced by @@CI's
+`-14` smoke (run `26274161414`):
+
+`crates/chan-drive/src/indexer.rs:385`
+`writes_to_disk_get_indexed_after_debounce` panics
+on macos-latest with `expected watched.md in search
+hits; got []`. macOS was green yesterday on
+`ci-13-smoke-v2`; today red. No code change in the
+indexer/debounce path between runs.
+
+Diagnosis hooks in task body:
+* H1: recent regression with macOS FSEvent ordering
+  vs Linux inotify
+* H2: pre-existing flakiness; macOS matrix only just-
+  added per `ci-13`
+
+Fix options (audit-then-pick):
+* (A) Tune debounce/timing — cleanest
+* (B) `#[cfg(not(target_os = "macos"))]` gate +
+  bug-list entry — same shape as `-20` lock-contract
+  gates
+* (C) `#[ignore]` quarantine — last resort
+
+Recommend (A) if audit gives a clear timing target;
+fallback (B); (C) only if (B)'s shape doesn't fit.
+
+### Smoke shape
+
+`systacean-23-smoke` branch + `gh workflow run ci.yml`.
+Standing atomic-audit-commit + smoke-branch retention
+per `feedback_destructive_cleanups_coordinate_with_docs`.
+
+Authorization yes for `chan-drive/src/indexer.rs`
+(+ `watcher.rs` if needed) + bug-list (if (B) or (C))
++ task tail + outbound.
+
+Standing by.
