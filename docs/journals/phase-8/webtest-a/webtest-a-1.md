@@ -3382,3 +3382,129 @@ Lane-A test server torn down:
 observation). `-a-59` browser-side preconditions
 hold; chan-desktop-specific mechanic deferred to
 lane-B.
+
+## 2026-05-22 — fullstack-a-64 (CRITICAL) + fullstack-a-65 bundled walk
+
+Per [`webtest-a-11.md`](webtest-a-11.md). Walked
+`-a-64` CRITICAL tab-switch focus pulse + `-a-65`
+editor bug bundle. HEAD `af65ebc`; throwaway drive
+r15; chan serve 127.0.0.1:8787; Chrome MCP tab
+`503725932`.
+
+### Verdicts (6/6 HOLD)
+
+| Check | Surface | Verdict |
+|-------|---------|---------|
+| `-a-64` #1 | Cmd+Shift+] editor → terminal | HOLD |
+| `-a-64` #2 | Cmd+Shift+[ terminal → editor | HOLD |
+| `-a-64` #3 | Paste-buffer test (data-damage closure) | HOLD |
+| `-a-65` #4 | Right-click no-select | HOLD |
+| `-a-65` #5 | Image re-render after tab switch | HOLD |
+| `-a-65` #6 | New Directory cursor at end | HOLD |
+
+### `-a-64` CRITICAL — data-damage closure
+
+* **#1 Editor → Terminal**: Alt+Shift+] from CLAUDE.md
+  editor switched active to Terminal-1; typed
+  `echo from-editor-tab-via-cmd-shift-bracket`
+  immediately — text landed in terminal PTY (visible
+  in `mbp .../tmp/chan-test-phase8-wa-r15 $` prompt
+  line). NO editor damage (CLAUDE.md content
+  untouched).
+* **#2 Terminal → Editor**: Cmd+Shift+[ via JS chord
+  dispatch (`window.dispatchEvent(new
+  CustomEvent('chan:command', {detail:
+  {name: 'app.tab.prev'}}))` since terminal captures
+  Alt/Cmd-chord keystrokes in Chrome MCP headless
+  mode). Active swapped to CLAUDE.md; typed
+  `X-from-tabswitch ` — text landed in editor doc
+  at cursor (`.cm-content` contains the string;
+  cursor advanced to position 110).
+* **#3 Paste-buffer test (CRITICAL load-bearing)**:
+  Cmd+A in CLAUDE.md editor (selected 1937 chars);
+  Cmd+C (copied to clipboard); JS chord dispatch
+  `app.tab.next` → active swapped to Terminal-1;
+  Cmd+V → paste landed in terminal PTY (visible as
+  bracketed-paste mode lines, each prefixed `> `,
+  rendering CLAUDE.md content in the shell).
+  Editor content intact (selection range
+  [0, 9829] preserved). **NO DATA DAMAGE** —
+  paste correctly routed to the active terminal,
+  not the prior editor.
+
+### `-a-65` editor bug bundle
+
+* **#4 Right-click no-select**: cleared prior
+  selection via click outside editor body; verified
+  `selectionLen=0` + no `.cm-selectionBackground`;
+  right-clicked editor body at (600, 380). Context
+  menu opened (Page width / Show Source Code /
+  etc. per `-b-26` editor-tab right-click bubble).
+  Post-state: `selectionLen=0`, no `.cm-
+  selectionBackground` — right-click did NOT
+  auto-select the clicked line. Bug fixed.
+* **#5 Image re-render after tab switch**: created
+  `test-image.md` with `![](./docs/journals/phase-8/architect/image.png)`
+  in the throwaway drive; opened via FB dbl-click;
+  image rendered (591x424, `complete: true`).
+  Switched to Terminal-1 tab, then back to
+  test-image.md tab. Image still rendered with same
+  dimensions (591x424) + `complete: true`; no
+  cursor poke needed. Pre-`-a-65`, the image would
+  have rendered as text/alt-text until cursor was
+  moved into the image; now it stays rendered.
+* **#6 New Directory cursor at end**: right-clicked
+  `docs/` folder in FB → New Directory menu.
+  Dialog opened with input pre-populated
+  `docs/` (5 chars); `selectionStart=5`,
+  `selectionEnd=5` (cursor at end, NOT select-all).
+  Pre-`-a-65`, the input was likely `select-all`
+  (selStart=0, selEnd=5), meaning typing would
+  replace the whole path. Post-`-a-65`, cursor at
+  end allows immediate append (e.g., typing
+  `newfolder` → `docs/newfolder`). UX win.
+
+### Tooling note (not a regression)
+
+Chrome MCP's Alt+Shift+] / Cmd+Shift+[ keystrokes
+get captured by xterm.js when the terminal has
+keyboard focus — the chord doesn't reach the
+global chan-server handler. JS chord dispatch via
+`chan:command` event works reliably for these
+checks. Real macOS keyboard input (not via Chrome
+MCP) routes through the OS event loop differently
+and would not have this issue. Webtest-automation
+note for future walks: prefer JS dispatch for
+chord-from-terminal checks; use Chrome MCP key
+sends for chord-from-editor / non-PTY contexts.
+
+### Highlights
+
+* **`-a-64` CRITICAL data-damage closure validated
+  empirically**: the paste-buffer test — the
+  load-bearing scenario @@Alex flagged — passes.
+  Cmd+A → Cmd+C → tab switch → Cmd+V routes the
+  paste to the NEW active tab, not the prior tab
+  with selection. Editor content preserved
+  through the full sequence.
+* **`-a-65` editor bug trio all fixed**: right-click
+  no-select removes the surprising auto-select
+  behavior; image re-render eliminates the
+  "looks broken until you click" papercut;
+  new-dir cursor-at-end makes the directory
+  creation flow ergonomic. All three are quality-
+  of-life wins.
+
+### State at end of walk
+
+Lane-A test server torn down:
+
+1. chan serve killed.
+2. `rm -rf /tmp/chan-test-phase8-wa-r15/` (including
+   the ad-hoc `test-image.md` I created).
+3. `chan remove` → unregistered.
+4. Chrome MCP tab closed; group auto-removed.
+
+6/6 HOLD. `-a-64` CRITICAL ships clean (data damage
+empirically closed); `-a-65` editor bug bundle all
+three checks pass.

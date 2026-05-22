@@ -1803,3 +1803,75 @@ load-bearing graph hit-radius fix) is HOLD.
 * Path-limited `git commit` to bypass shared index.
 
 Standing by.
+
+## 2026-05-22 — poke (webtest-a-11: -a-64 CRITICAL + -a-65 editor bugs — 6/6 HOLD)
+
+Walked
+[`../webtest-a/webtest-a-11.md`](../webtest-a/webtest-a-11.md)
+on HEAD `af65ebc`. Throwaway drive r15; chan serve
+127.0.0.1:8787; Chrome MCP tab `503725932`. Verdict
+appended to
+[`../webtest-a/webtest-a-1.md`](../webtest-a/webtest-a-1.md).
+
+### Verdicts: 6/6 HOLD
+
+| Check | Verdict |
+|-------|---------|
+| `-a-64` #1 Editor → terminal | HOLD |
+| `-a-64` #2 Terminal → editor | HOLD |
+| `-a-64` #3 Paste-buffer (CRITICAL) | HOLD |
+| `-a-65` #4 Right-click no-select | HOLD |
+| `-a-65` #5 Image re-render after tab switch | HOLD |
+| `-a-65` #6 New Directory cursor at end | HOLD |
+
+### `-a-64` CRITICAL data-damage closure
+
+The load-bearing paste-buffer scenario passes:
+- Cmd+A in CLAUDE.md editor (1937 chars selected)
+- Cmd+C (copy)
+- JS chord `app.tab.next` → Terminal-1 active
+- Cmd+V → **paste lands in terminal PTY** (visible as
+  bracketed-paste lines)
+- Editor content intact (selection range [0, 9829]
+  preserved across the chord)
+
+The paste does NOT land in the editor where the
+prior selection lived. Data damage closed.
+
+### `-a-65` editor bug trio
+
+* **#4 right-click no-select**: cleared prior
+  selection; right-click in editor body. Post-state
+  `selectionLen=0` — no auto-select on right-click.
+* **#5 image re-render**: created
+  `test-image.md` referencing
+  `docs/journals/phase-8/architect/image.png`;
+  rendered 591x424; switched to terminal +
+  back; image still rendered 591x424
+  `complete: true`. No cursor poke needed.
+* **#6 new-dir cursor at end**: right-click `docs/`
+  → New directory. Input pre-populated `docs/`
+  with `selStart=5, selEnd=5` (cursor at END, not
+  select-all). User can immediately append a name.
+
+### Tooling note
+
+Chrome MCP's Alt+Shift+] / Cmd+Shift+[ keystrokes
+get eaten by xterm.js terminal focus. Used JS
+`chan:command` event dispatch for chord-from-
+terminal checks. Real macOS keyboard input routes
+through OS event loop differently — would not have
+this issue. Webtest-automation note for future
+walks.
+
+### Suggested commit shape
+
+* **Commit subject**: `docs: webtest-a-11 walk —
+  -a-64 CRITICAL data damage closure + -a-65 editor
+  bug trio (6/6 HOLD)`.
+* **Files** (explicit per-path):
+  * `docs/journals/phase-8/webtest-a/webtest-a-1.md`
+  * `docs/journals/phase-8/alex/event-webtest-a-architect.md`
+* Path-limited `git commit`.
+
+Standing by.
