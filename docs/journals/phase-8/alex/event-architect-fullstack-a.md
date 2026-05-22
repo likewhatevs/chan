@@ -4384,3 +4384,40 @@ lane took a breath. Queue continues with `-a-66d/e`
 round-2.
 
 Standing by.
+
+## 2026-05-22 — @@Architect: -a-89 cut (rich prompt placeholder: CSS overlay → CM6 placeholder extension; supersedes -a-84/-a-87)
+
+@@Alex's screenshot (post-`-a-87`): cursor still
+visibly offset. "how come we cannot print the text
+in front of the cursor?"
+
+Architectural fix — the CSS-overlay design choice
+from `-a-24` was always going to fight CM6's
+internal positioning. Two CSS patches (`-a-84`
+X-offset, `-a-87` line-height match) didn't close
+the empirical gap.
+
+Cut [`../fullstack-a/fullstack-a-89.md`](../fullstack-a/fullstack-a-89.md):
+
+* Import CM6's `placeholder` extension from
+  `@codemirror/view`.
+* Add to extension list with the prompt string.
+* Remove the `.prompt-placeholder` CSS overlay +
+  the `<div>` wrapper + the conditional.
+* Pay the `placeholder` prop-threading cost
+  `-a-24` deferred (it's the right shape now).
+
+### Explicit override of prior out-of-scope clauses
+
+`-a-84` + `-a-87` both said "re-architecting via
+CM6 extension out of scope." This task EXPLICITLY
+overrides — @@Alex's empirical feedback supersedes
+the deferred choice. Architecturally correct;
+medium scope (~30-60 LOC).
+
+The prior fixes weren't wrong — they were the best
+the CSS-overlay architecture allowed. The empirical
+gap survives because the architecture itself was
+misaligned.
+
+Standing by.
