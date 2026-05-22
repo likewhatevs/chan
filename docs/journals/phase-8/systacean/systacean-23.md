@@ -168,3 +168,89 @@ filter + bucket emit). This is `-23`.
   scope decision per `ci-13`).
 * Cross-platform watcher abstraction beyond the
   existing notify-rs usage.
+
+## 2026-05-22 — audit verdict + Option A fix landed
+
+Picked up `-23` per the architect's dispatch poke. Audit-first per the task body's H1/H2 framework.
+
+### Audit verdict — H2 + a latent timing-proxy issue (NOT H1)
+
+H1 (recent regression) doesn't fit: between green ci-13-smoke-v2 (2026-05-21) and red ci-14-smoke (2026-05-22), nothing touched `chan-drive/src/indexer.rs` or `chan-drive/src/watch.rs`. Intervening commits:
+
+| Commit | Crate | Touches indexer / watcher? |
+|--------|-------|----------------------------|
+| `-b-25` (chan-desktop) | chan-desktop | NO |
+| `systacean-21` (event_watcher) | chan-server | NO (different `event_watcher.rs`) |
+| `-a-58` (graph parent-edge) | SPA | NO |
+| `systacean-22` (contact filter) | chan-server routes | NO |
+
+So the failure isn't a regression — it's pre-existing macOS flakiness that the new macos-latest matrix exposed (H2 in the task body).
+
+### Failure mechanism (from the CI log)
+
+* CI panic: `crates/chan-drive/src/indexer.rs:385`: `expected watched.md in search hits; got []`.
+* The `wait_for(5s, indexed_total >= 1)` at line 377 PASSED (otherwise the panic would land at line 378).
+* So the indexer fired (counter ticked) but the immediate BM25 search returned empty.
+
+Two plausible race shapes (both fit empirically):
+1. **BM25 reader-visibility lag**: `index_file` returns Ok + ticks `indexed_total` at writer-commit time; reader snapshot doesn't reflect new doc until next refresh.
+2. **FSEvents partial-content race**: macOS FSEvents fires Created early; `index_file` reads partial content; tick happens for an "empty" doc; no re-fire because path was drained from `pending`.
+
+Either way, the test's check is structurally a **proxy** (counter tick), not the **outcome** (search reflects file). Polling the outcome absorbs both races cross-platform without mashing debounce constants.
+
+### Fix shape: Option (A) — poll the outcome
+
+`writes_to_disk_get_indexed_after_debounce` now:
+
+```rust
+let saw = wait_for(Duration::from_secs(5), || indexer.indexed_total() >= 1);
+assert!(saw, "...");
+let visible = wait_for(Duration::from_secs(5), || {
+    drive
+        .search("watcher-token", &opts)
+        .map(|hits| hits.hits.iter().any(|h| h.path == "watched.md"))
+        .unwrap_or(false)
+});
+assert!(visible, "watched.md never appeared in BM25 hits within 5s after \
+                  indexer fired (indexed_total = {})", indexer.indexed_total());
+```
+
+Two waits (not one): the first proves the indexer fired (load-bearing diagnostic for "no FSEvents delivery"); the second proves BM25 visibility settled. If the indexer never fired, the first assert surfaces THAT; if the indexer fired but BM25 stayed empty, the second assert surfaces THAT (with the final `indexed_total` for context).
+
+Same shape as my `-20` smoke fixup that polled `drive.report()` on `chan-drive/tests/report.rs::watcher_keeps_report_current`. Pattern documented in [`feedback_atomic_audit_commit`] as the standing "replace timing-proxy with outcome-poll" recipe.
+
+### NOT Option (B) or (C)
+
+* **(B) `#[cfg(not(target_os = "macos"))]`** skips the test on the same matrix entry `ci-13` just added. Defeats the coverage gain.
+* **(C) `#[ignore]`** is even more passive.
+
+Option (A) preserves test coverage on both matrices + diagnostic value of the dual-stage assert.
+
+### Pre-push gate
+
+* `cargo fmt --check`: clean.
+* `cargo clippy --all-targets -- -D warnings`: clean.
+* `cargo test -p chan-drive --lib`: **427 passed; 0 failed; 2 ignored** (no new ignores from `-23`).
+* Targeted: `cargo test -p chan-drive --lib indexer::tests::writes_to_disk_get_indexed_after_debounce` → green on local dev mac (the failure was specific to macos-latest CI runner timing).
+
+### Files
+
+| File                                       | +    | -   |
+|--------------------------------------------|------|-----|
+| `crates/chan-drive/src/indexer.rs`         | +25  | -6  |
+
+Plus task tail + outbound poke. 3 paths total.
+
+### Suggested commit subject
+
+```
+chan-drive: poll BM25 outcome instead of indexer counter in writes_to_disk_get_indexed_after_debounce (systacean-23)
+```
+
+### Smoke plan
+
+`gh workflow run ci.yml --ref systacean-23-smoke` on a fresh smoke branch. Expected: macos-latest job green (test polls the outcome). Other 4 jobs ride.
+
+If macos-latest still red: pivot to option (B). The smoke verdict tells us empirically whether the polled-outcome approach absorbs the race.
+
+Holding for smoke verdict.

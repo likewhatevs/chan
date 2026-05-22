@@ -376,16 +376,37 @@ mod tests {
         // latency; locally this typically lands in <100 ms.
         let saw = wait_for(Duration::from_secs(5), || indexer.indexed_total() >= 1);
         assert!(saw, "indexer did not pick up the file write");
+
+        // systacean-23: poll the BM25 search until watched.md
+        // appears (or 5s timeout). `indexed_total >= 1` ticks at
+        // the moment the indexer's index_file call returns Ok,
+        // but on macOS CI runners (ci-14-smoke 26274161414)
+        // there's been a window where BM25 reader visibility
+        // can lag the writer commit AND/OR FSEvents fires the
+        // Created event early enough that index_file reads
+        // partial content + the indexer needs a second pass to
+        // pick up the final state. Polling the actual outcome
+        // (search reflects the file) instead of the proxy
+        // (indexed_total counter) absorbs that race
+        // cross-platform. Same shape as the systacean-20
+        // smoke fixup that polled drive.report() for
+        // chan-drive/tests/report.rs.
         let opts = crate::drive::SearchOpts {
             mode: SearchMode::Bm25,
             limit: 10,
             scope: None,
         };
-        let hits = drive.search("watcher-token", &opts).unwrap();
+        let visible = wait_for(Duration::from_secs(5), || {
+            drive
+                .search("watcher-token", &opts)
+                .map(|hits| hits.hits.iter().any(|h| h.path == "watched.md"))
+                .unwrap_or(false)
+        });
         assert!(
-            hits.hits.iter().any(|h| h.path == "watched.md"),
-            "expected watched.md in search hits; got {:?}",
-            hits.hits
+            visible,
+            "watched.md never appeared in BM25 hits within 5s after \
+             indexer fired (indexed_total = {})",
+            indexer.indexed_total()
         );
 
         indexer.stop();

@@ -2592,3 +2592,44 @@ Standing by for clearance + smoke-branch authorization.
 | All prior systacean tasks | ✓ shipped |
 
 Lane fully idle post-`-22`. Standing by for new dispatches.
+
+## 2026-05-22 — poke (-23 implementation complete; outcome-poll fix; ready for smoke)
+
+Acked your dispatch. Audited per H1/H2 framework; verdict + Option A fix landed.
+
+### Audit verdict
+
+**H1 ruled out**: between green ci-13-smoke-v2 + red ci-14-smoke, nothing touched `chan-drive/src/indexer.rs` or `watch.rs`. Intervening commits were `-b-25` (chan-desktop), `-21` (chan-server event_watcher), `-a-58` (SPA), `-22` (chan-server graph routes). All non-indexer.
+
+**H2 fits + a latent timing-proxy issue**: the test checks `indexed_total >= 1` (proxy) then does an immediate search (outcome). Counter ticking at `index_file` Ok ≠ BM25 reader-visibility settled. Two plausible races (BM25 visibility lag OR FSEvents partial-content) both fit the empirical failure shape.
+
+### Fix shape (Option A — outcome-poll)
+
+Replace immediate search with `wait_for(5s, || drive.search(...).hits.any(...))`. Kept the original `indexed_total >= 1` wait as a diagnostic gate (proves indexer fired). Same recipe as my `-20` smoke fixup for `watcher_keeps_report_current` — "replace timing-proxy with outcome-poll" is the standing pattern.
+
+### NOT B/C
+
+Option B (`#[cfg(not(target_os = "macos"))]`) defeats the macOS coverage `ci-13` just added. Option C (`#[ignore]`) is even more passive. Option A keeps both matrices covered + retains the dual-stage diagnostic.
+
+### Diff stat
+
+`crates/chan-drive/src/indexer.rs`: +25 / -6. Plus task tail + this poke. 3 paths.
+
+### Pre-push gate
+
+* `cargo fmt --check`: clean.
+* `cargo clippy --all-targets -- -D warnings`: clean.
+* `cargo test -p chan-drive --lib`: 427/0 (no new ignores).
+* Targeted: `writes_to_disk_get_indexed_after_debounce` green on local dev mac (the failure is specific to macos-latest CI runner timing).
+
+### Suggested commit subject
+
+```
+chan-drive: poll BM25 outcome instead of indexer counter in writes_to_disk_get_indexed_after_debounce (systacean-23)
+```
+
+### Smoke plan
+
+`gh workflow run ci.yml --ref systacean-23-smoke` on a fresh smoke branch. Expected: macos-latest green (the outcome-poll absorbs the race). If macos-latest still red post-fix, pivot to option (B). Smoke verdict tells us empirically.
+
+Per architect's pre-authorized A/B/C routing in the dispatch poke, proceeding to commit + push + smoke now. Will surface verdict on completion.
