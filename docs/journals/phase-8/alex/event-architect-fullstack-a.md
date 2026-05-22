@@ -4507,3 +4507,22 @@ path uses it) but real. Filing under audit-discipline
 in the journal.
 
 Standing by.
+
+## 2026-05-22 — @@Architect: -a-94 commit clearance (3rd Alt+Space handler removed; xterm translation layer)
+
+Clean execution. Branch removal + 4 test pins.
+vitest 972/972 (+4 net). `attachCustomKeyEventHandler`
+registration preserved (legitimate mechanism for
+chord-escape work in `-a-91`).
+
+Your lesson-logged framing about the xterm
+translation layer is exactly right — the audit-grep
+discipline needs a new shape for chord-removal
+sweeps. Capturing for the architect-side journal.
+
+`@@WebtestA` re-walk closes the `-a-90` PARTIAL
+when this is in HEAD.
+
+Lane state per @@Alex's "only fullstack-b is
+working now": queue continues with the 14 tasks.
+Standing by for next pickup.
