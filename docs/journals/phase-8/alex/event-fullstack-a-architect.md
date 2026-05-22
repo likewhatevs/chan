@@ -7480,3 +7480,95 @@ Push held. Standing by for clearance + the
 cursor + placeholder finally share the same
 position. `-a-84` + `-a-87` formally
 superseded.
+
+## 2026-05-22 — poke (fullstack-a-66 slice c follow-up: FileInfoBody dispatch fixed)
+
+Closes @@WebtestA's PARTIAL from `b2dfead`.
+
+### Root cause
+
+FB's inspector dispatcher routes BOTH files +
+directories through `FileInfoBody.svelte`
+(line 445 `{:else if entry.is_dir}` branch).
+`DirectoryInfoBody.svelte` is the graph-side
+component for graph dir nodes.
+
+My slice-c edits landed in the wrong
+component for the FB selection path.
+
+### Fix
+
+`FileInfoBody.svelte`:
+* Header chip swap: when `entry.path ===
+  "Drafts"`, render `<span class="kind-chip
+  drafts-chip">DRAFTS</span>` instead of the
+  default `<KindChip kind="folder" block />`.
+* `.drafts-notice` block added below the
+  title for the Drafts case — same copy as
+  DirectoryInfoBody.
+* CSS mirrors the DirectoryInfoBody rules.
+
+`draftsInspectorFileInfoBody.test.ts` (new):
+6 raw-source pins.
+
+### Acceptance
+
+1. FB-selected Drafts now renders chip +
+   notice ✓ (mechanism; @@WebtestA re-walk
+   for empirical close of slice c).
+2. Regular dirs unchanged ✓.
+3. DirectoryInfoBody still carries the
+   slice-c shape for the graph entry point
+   ✓.
+
+### Gate
+
+* vitest **960 / 960** (+6 net from -a-89's
+  954).
+* svelte-check 0 errors / 0 warnings across
+  4030 files.
+* npm build clean.
+
+### Decisions
+
+* **Inline span, not KindChip extension** —
+  KindChip is shared; adding a Drafts kind
+  would ripple to `kinds.ts` for a single
+  specialized surface.
+* **Duplicated CSS across both inspector
+  components** — small + audit-friendly.
+  If a third entry point shows up, factor
+  into a shared partial.
+* **Kept DirectoryInfoBody slice-c
+  changes** — graph entry point still
+  needs them; removing reintroduces
+  inconsistency.
+
+### Suggested commit subject
+
+```
+File browser inspector: render Drafts chip+notice in FileInfoBody (actual FB inspector path) (fullstack-a-66 slice c follow-up)
+```
+
+### Files for `git add`
+
+* `web/src/components/FileInfoBody.svelte`
+* `web/src/components/draftsInspectorFileInfoBody.test.ts` (new)
+* `docs/journals/phase-8/fullstack-a/fullstack-a-66.md`
+* `docs/journals/phase-8/fullstack-a/journal.md`
+* `docs/journals/phase-8/alex/event-fullstack-a-architect.md`
+  (this append)
+
+### Atomic-audit-commit applied
+
+Single bash invocation per discipline.
+
+Push held. Standing by for clearance + the
+@@WebtestA re-walk that closes slice c.
+
+Note: webtest also flagged the slice-d API
+listing PARTIAL (`/api/files?dir=Drafts/<sub>/`
+returns empty). That's the chan-server side
+of the unified-`Drive::list`/`Drive::stat`
+boundary; routed via systacean-32 per your
+cut.

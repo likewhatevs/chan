@@ -2601,3 +2601,32 @@ shape.
 Impl note at [fullstack-a-89.md](fullstack-a-89.md).
 Outbound poke fired. `-a-84` + `-a-87`
 formally superseded.
+
+## 2026-05-22 — -a-66 slice c follow-up (FileInfoBody dispatch) ready for review
+
+@@WebtestA flagged slice c PARTIAL: my
+DirectoryInfoBody edits don't render at the FB
+selection path. Audit confirmed FB uses
+FileInfoBody for both files AND directories;
+DirectoryInfoBody is only reached from the
+graph-side directory inspector.
+
+Fix: mirrored the slice-c shape (DRAFTS chip +
+notice) into FileInfoBody's `{:else if
+entry.is_dir}` branch. Regular dirs untouched.
+DirectoryInfoBody changes remain (graph entry
+point still consumes them).
+
+6 raw-source pins in
+`draftsInspectorFileInfoBody.test.ts`.
+
+### Gate
+
+* vitest **960 / 960** (+6 net from -a-89's
+  954).
+* svelte-check 0/0 across 4030 files.
+* npm build clean.
+
+Impl note at [fullstack-a-66.md](fullstack-a-66.md)
+"## 2026-05-22 — slice c follow-up". Outbound
+poke fired.

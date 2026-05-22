@@ -445,11 +445,35 @@
 {:else if entry.is_dir}
   <div class="info">
     <header class="head">
-      <KindChip kind="folder" block />
+      {#if entry.path === "Drafts"}
+        <!-- `fullstack-a-66` slice c (follow-up): FB-selected
+             Drafts row routes through THIS component (not
+             DirectoryInfoBody, which renders for Graph
+             directory nodes). Render the same DRAFTS chip +
+             tint that DirectoryInfoBody got so the slice-c
+             shape surfaces at the actual FB inspector entry
+             point. -->
+        <span class="kind-chip drafts-chip">DRAFTS</span>
+      {:else}
+        <KindChip kind="folder" block />
+      {/if}
     </header>
     <h3 class="title" title={entry.path || "/"}>
       {basename(entry.path) || drive.info?.name || "(root)"}
     </h3>
+    {#if entry.path === "Drafts"}
+      <!-- `fullstack-a-66` slice c (follow-up): "outside drive's
+           root" notice. Mirrors the copy added to
+           DirectoryInfoBody. -->
+      <div class="drafts-notice" role="note">
+        <strong>Drafts lives outside the drive's root.</strong>
+        Files here are stored in chan's metadata folder so they
+        survive drive moves + don't clutter your tree. Cmd+N
+        creates a fresh draft under <code>Drafts/untitled-N/</code>;
+        Rich Prompt submissions persist as
+        <code>Drafts/rich-prompt-N/</code>.
+      </div>
+    {/if}
     {#if specialBadges.length > 0}
       <div class="badge-row">
         {#each specialBadges as badge}
@@ -828,6 +852,43 @@
     align-items: center;
     gap: 0.4rem;
     margin-bottom: 0.4rem;
+  }
+  /* `fullstack-a-66` slice c (follow-up): Drafts chip + notice
+     mirror the DirectoryInfoBody styling so the FB-selected
+     Drafts row renders identically to the graph-side dir node
+     inspector. */
+  .kind-chip.drafts-chip {
+    flex: 1;
+    color: #fff;
+    background: var(--fb-drafts-fg);
+    text-transform: uppercase;
+    font-size: 12px;
+    font-weight: 600;
+    letter-spacing: 0.05em;
+    padding: 1px 6px;
+    border-radius: 3px;
+    text-align: center;
+  }
+  .drafts-notice {
+    margin: 0.5rem 0;
+    padding: 0.5rem 0.6rem;
+    border-radius: 4px;
+    background: var(--fb-drafts-bg);
+    border-left: 3px solid var(--fb-drafts-fg);
+    font-size: 12.5px;
+    color: var(--text);
+    line-height: 1.45;
+  }
+  .drafts-notice strong {
+    display: block;
+    margin-bottom: 0.25rem;
+  }
+  .drafts-notice code {
+    background: var(--bg);
+    padding: 1px 4px;
+    border-radius: 3px;
+    font-family: ui-monospace, monospace;
+    font-size: 11.5px;
   }
   /* Image preview frame: fixed max height, checkered fallback bg
      (visible while bytes are loading or for images with alpha so

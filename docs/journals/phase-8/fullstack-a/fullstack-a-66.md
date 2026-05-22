@@ -785,3 +785,132 @@ submit hook + tests tightly coupled.
 Per the memory rule. Per-path staging only.
 
 Push held. Standing by for clearance.
+
+## 2026-05-22 — slice c follow-up (FB dispatch routes to FileInfoBody) ready for review
+
+Two-file change. SPA-only.
+
+### Webtest's PARTIAL diagnosis
+
+`b2dfead` walk: slice c's `DirectoryInfoBody.svelte`
+changes are in the dist bundle but the FB-selected
+Drafts row renders WITHOUT the DRAFTS chip or
+notice. Inspector chip text reads "directory"
+(lowercase, `KindChip kind="folder"` default
+label) + chip background is gray (not yellow).
+
+### Root cause
+
+The FB's inspector dispatcher uses
+`FileInfoBody.svelte` for BOTH files AND
+directories (line 445 `{:else if entry.is_dir}`
+branch), not `DirectoryInfoBody.svelte`.
+`DirectoryInfoBody` is used by GraphPanel for
+graph-side directory nodes.
+
+Slice c's edits landed in the wrong inspector
+component for the FB selection path.
+
+### Fix
+
+`web/src/components/FileInfoBody.svelte` dir
+branch (line ~445):
+* Header chip swap: `<KindChip kind="folder"
+  block />` → `<span class="kind-chip
+  drafts-chip">DRAFTS</span>` when
+  `entry.path === "Drafts"`; else the original
+  `KindChip` for regular directories.
+* `.drafts-notice` block added immediately
+  below the title for the Drafts case.
+  Same copy as DirectoryInfoBody's slice c
+  notice — "Drafts lives outside the drive's
+  root." + Cmd+N / Rich Prompt path
+  cross-references.
+* CSS: `.kind-chip.drafts-chip` mirrors the
+  KindChip `.block` styling (flex:1, etc.)
+  with the `--fb-drafts-fg` tint. `.drafts-
+  notice` mirrors the DirectoryInfoBody
+  rule (`--fb-drafts-bg` background +
+  `--fb-drafts-fg` left border).
+
+`web/src/components/draftsInspectorFileInfoBody.test.ts`
+(new): 6 raw-source pins covering the dir-
+branch swap, the notice block, the
+cross-references, the CSS rules, and the
+rationale comment.
+
+### Acceptance
+
+1. **FB-selected Drafts row now renders the
+   DRAFTS chip + notice** ✓ — mechanism via
+   the 6 new pins. @@WebtestA empirical
+   walk for confirmation that closes the
+   slice c PARTIAL.
+2. **Regular directories unchanged** ✓ —
+   `{:else}` branch falls through to the
+   original `<KindChip kind="folder" block />`.
+3. **DirectoryInfoBody changes still
+   apply** ✓ — that path is reached from
+   GraphPanel directory-node selection,
+   not from the FB. Both components now
+   carry the slice-c shape so either entry
+   point renders consistently.
+
+### Gate
+
+* vitest **960 / 960** (+6 net from `-a-89`'s
+  954).
+* svelte-check 0 errors / 0 warnings across
+  4030 files.
+* npm build clean.
+* Rust gate not re-run (no Rust touched).
+
+### Decisions
+
+* **Inline `<span class="kind-chip
+  drafts-chip">DRAFTS</span>`** rather than
+  extending `KindChip` with a `drafts` kind
+  + a "DRAFTS" label. The KindChip
+  abstraction is shared across many
+  surfaces; adding a Drafts kind would
+  ripple into `state/kinds.ts` +
+  `colorVarFor` for a single specialized
+  surface. Inline span is cheaper.
+* **CSS duplicated across DirectoryInfoBody
+  + FileInfoBody** — same shape, different
+  components. A shared partial would help
+  if a third entry point shows up; for
+  now the duplication is small + audit-
+  friendly.
+* **Did NOT remove DirectoryInfoBody
+  changes** — the graph-side directory
+  inspector still uses that component;
+  removing would re-introduce the
+  inconsistency between FB + Graph
+  inspectors.
+
+### Suggested commit subject
+
+```
+File browser inspector: render Drafts chip+notice in FileInfoBody (actual FB inspector path) (fullstack-a-66 slice c follow-up)
+```
+
+Single commit. Markup + CSS + test pins
+tightly coupled around the FB-side
+inspector path.
+
+### Files for `git add` (per-path discipline)
+
+* `web/src/components/FileInfoBody.svelte`
+* `web/src/components/draftsInspectorFileInfoBody.test.ts` (new)
+* `docs/journals/phase-8/fullstack-a/fullstack-a-66.md`
+* `docs/journals/phase-8/fullstack-a/journal.md`
+* `docs/journals/phase-8/alex/event-fullstack-a-architect.md`
+
+### Atomic-audit-commit
+
+Per the memory rule. Per-path staging only.
+
+Push held. Standing by for clearance + the
+@@WebtestA empirical re-walk that closes the
+slice c PARTIAL.
