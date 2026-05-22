@@ -4292,3 +4292,121 @@ Lane-A test server torn down:
 5/5 HOLD. `-a-78 slice 2` ships clean. Team
 dialog UI is empirically complete; ready for
 `-a-79` bootstrap orchestrator wiring.
+
+## 2026-05-22 — proactive walk: -a-66 slice b FB Drafts row + -a-85/-a-86 toast auto-dismiss
+
+Proactive walk on HEAD `5dffa09`. Throwaway drive
+r22; chan serve 127.0.0.1:8787; Chrome MCP tab
+`503726056`. Bundle of three lane-A landings I
+hadn't walked yet.
+
+### Verdicts
+
+| Task | Check | Verdict |
+|------|-------|---------|
+| `-a-66 b` | API returns synthetic `Drafts` at root pos 0 | HOLD |
+| `-a-66 b` | FB renders Drafts row at top | **PARTIAL** (server side correct; SPA doesn't render) |
+| `-a-66 b` | Yellow tint on Drafts row | NOT TESTED (row absent) |
+| `-a-85/-a-86` | Toast auto-dismisses (`setTransientStatus`) | HOLD (verified on "Copied path") |
+
+### `-a-66 slice b` PARTIAL — synthetic Drafts row not rendered in FB
+
+**Server-side WORKS**:
+* `crates/chan-server/src/routes/files.rs` injects
+  a synthetic entry `{path: "Drafts", is_dir: true,
+  mtime: null, size: 0}` at position 0 of the
+  `/api/files` response when `dir` query is unset
+  (verified at `911708b`'s diff).
+* Empirical: `fetch('/api/files')` returns 1246
+  entries with `Drafts` at position 0 ✓.
+
+**SPA renders WITHOUT the Drafts row**:
+* Rendered FB has 17 rows total: 8 directories
+  (`.claude/`, `.github/`, `crates/`, `desktop/`,
+  `docs/`, `scripts/`, `web/`, `web-marketing/`)
+  + 9 files. **NO `Drafts/` row.**
+* The SPA does fetch `/api/files` (via
+  `api.list("")` in store.svelte.ts:531) and
+  populates `tree.entries`. `sortTreeEntries`
+  sorts dirs-first, alphabetically by path.
+* After sort, `Drafts` SHOULD appear between
+  `docs/` and `scripts/` per JS-eval'd order.
+  But it's absent from the rendered DOM.
+
+**Root-cause hypothesis**: the SPA likely has a
+secondary data source that over-rides `tree.entries`
+after the initial fetch — possibly:
+* The WS-driven indexer event stream re-populates
+  `tree.entries` with the indexer's view, which
+  doesn't include the synthetic injection.
+* OR a filesystem watcher event for `Drafts/`
+  (since I created one via Cmd+N) replaced the
+  synthetic with a "real" entry that then gets
+  filtered somewhere.
+
+Either way, the empirical user-visible surface
+**does NOT show the Drafts row**.
+
+The test pin at `web/src/components/draftsRowFb.test.ts`
+only checks the CSS class shape (`drafts-row` +
+yellow CSS rules), not the runtime rendering. Hence
+mechanism + empirical divergence.
+
+Lane: **@@FullStackA** (or whoever owns the SPA
+tree-data flow). The synthetic Drafts row is
+load-bearing for the Drafts feature surface.
+
+### `-a-85/-a-86` HOLD — toasts auto-dismiss
+
+Walked the most-visible surface ("Copied path"):
+* Right-click `Cargo.lock` in FB → context menu
+  with "Copy Path" item (ref_91).
+* Click "Copy Path".
+* JS-eval status bar at t0: `"Copied path"`
+  visible in status surface.
+* JS-eval status bar at t0+4s: status text empty;
+  `transientStillPresent: false`.
+
+Elapsed: ~4s — toast auto-dismissed within the
+3000ms `TRANSIENT_STATUS_DEFAULT_MS` window
+(plus a sub-second buffer between user action and
+DOM update).
+
+**Mechanism shared by 4 surfaces** (per `-a-86`):
+- `setTransientStatus` writes `ui.status` + sets
+  a 3s `setTimeout` that clears it
+- Surfaces using this function: `Created N`,
+  `Copied file path`, watcher detached toasts
+  (2 variants), file move (via `-a-85`)
+- One empirical check verifies the shared
+  mechanism (the surface-specific text on each
+  surface is mechanically equivalent).
+
+### Highlights
+
+* **`-a-66 slice b` is half-shipped**: server
+  injection is solid (verified by curl); SPA
+  rendering is missing. Vitest pin covers CSS but
+  not runtime. The empirical proactive walk
+  caught the gap — exactly what the proactive-
+  walks discipline is for.
+* **`-a-85/-a-86` toast mechanism works
+  empirically**: 3s auto-dismiss confirmed on
+  Copy Path surface. Shared `setTransientStatus`
+  function means the other 3 surfaces inherit
+  the same behavior.
+
+### State at end of walk
+
+Lane-A test server torn down:
+
+1. chan serve killed.
+2. `rm -rf /tmp/chan-test-phase8-wa-r22/`.
+3. `chan remove` → unregistered.
+4. Chrome MCP tab closed.
+
+**`-a-66 slice b` PARTIAL** on FB rendering;
+**`-a-85/-a-86` HOLD** on toast auto-dismiss. The
+synthetic-row vs indexer-driven-tree question
+needs follow-up before declaring Drafts FB surface
+shipped.

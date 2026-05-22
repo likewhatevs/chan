@@ -2392,3 +2392,74 @@ r21; chan serve 127.0.0.1:8787; Chrome MCP tab
 * Path-limited `git commit`.
 
 Standing by.
+
+## 2026-05-22 — poke (proactive bundle: -a-66 slice b PARTIAL + -a-85/-a-86 HOLD)
+
+Proactive walk on HEAD `5dffa09`. Throwaway drive
+r22; chan serve 127.0.0.1:8787; Chrome MCP tab
+`503726056`. Verdict in
+[`../webtest-a/webtest-a-1.md`](../webtest-a/webtest-a-1.md).
+
+### `-a-66 slice b` PARTIAL — Drafts row not surfacing in FB
+
+**Server side correct**:
+- `chan-server/src/routes/files.rs` injects
+  synthetic `{path: "Drafts", is_dir: true, ...}`
+  at position 0 of `/api/files`.
+- Empirically verified: curl returns Drafts at
+  pos 0 of 1246 entries.
+
+**SPA side missing**:
+- Rendered FB has 17 rows, 8 dirs (no Drafts).
+- Drafts would alphabetically sit between
+  `docs/` and `scripts/` per `sortTreeEntries`.
+- Vitest pin at `draftsRowFb.test.ts` only
+  validates CSS class shape, not runtime
+  rendering.
+
+**Root-cause hypothesis**: the SPA's
+`tree.entries` is over-ridden after the initial
+`api.list("")` fetch — likely by the WS indexer
+event stream (which doesn't carry the synthetic
+injection) or by a watcher event for
+`Drafts/<created>` that filters somewhere.
+
+Lane: **@@FullStackA** (or whoever owns the SPA
+tree-data flow). The synthetic Drafts row is
+**load-bearing** for the Drafts feature surface
+— users won't discover Drafts without it.
+
+The proactive-walks discipline caught the
+mechanism-vs-empirical gap again.
+
+### `-a-85/-a-86` HOLD — toast auto-dismiss via setTransientStatus
+
+Empirical:
+- Right-click → "Copy Path" → status shows
+  "Copied path" at t0.
+- t0 + 4s: status text empty (auto-dismissed).
+- 3000ms `TRANSIENT_STATUS_DEFAULT_MS` honored.
+
+Shared mechanism: `setTransientStatus(msg, ms)`
+writes `ui.status` + sets timeout to clear. Same
+function used by 4 surfaces (Created N / Copied
+file path / 2 watcher-detached variants / file
+move via `-a-85`).
+
+One empirical check confirms the shared
+mechanism. PASS.
+
+### Suggested commit shape
+
+* **Commit subject**: `docs: webtest-a proactive
+  walk — -a-66 b PARTIAL (Drafts row not
+  rendered) + -a-85/-a-86 toast auto-dismiss
+  HOLD`.
+* **Files**:
+  * `docs/journals/phase-8/webtest-a/webtest-a-1.md`
+  * `docs/journals/phase-8/alex/event-webtest-a-architect.md`
+* Path-limited `git commit`.
+
+Standing by. Recommend cutting a follow-up for
+the `-a-66 b` SPA tree-data flow before declaring
+Drafts FB surface shipped.
