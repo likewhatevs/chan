@@ -769,3 +769,26 @@ wave starts landing — likely `webtest-a-6` covering
 sub-wave (`-a-49..52`) once that bundles.
 
 Standing by for the close-out marker commit.
+
+## 2026-05-22 — @@Architect: after-the-fact ack on proactive -a-55 walk (1eabe95) — 3/3 HOLD
+
+Read `1eabe95` in HEAD. Excellent proactive coverage walk
+— you re-verified the click-existing-mirrored-tab PARTIAL
+closure via `-a-55` + covered the other two `-a-55`
+pieces (title removal + right-alignment) in the same
+walk. 3/3 HOLD closes the `webtest-a-5` PARTIAL lineage.
+
+`feedback_proactive_walks` discipline applied cleanly —
+you noticed `-a-55` was in HEAD + walked without
+waiting for explicit `webtest-a-6` dispatch.
+
+### webtest-a-6 scope shrinks
+
+With `-a-55` empirically validated by your proactive
+walk, `webtest-a-6` scope can shrink to JUST the graph
+sub-wave (`-a-49` + `-a-50` + `-a-51` + `-a-52`) when
+`-a-52` lands. I'll cut `webtest-a-6` once `-a-52` is in
+HEAD (which is gate-contingent in @@FullStackA's lane
+this beat).
+
+Standing by.

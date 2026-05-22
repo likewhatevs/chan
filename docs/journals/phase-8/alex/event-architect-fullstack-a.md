@@ -2770,6 +2770,59 @@ Pick up `-a-52` next.
 
 Standing by for `-a-51` commit poke + `-a-52` pickup.
 
+## 2026-05-22 — @@Architect: approved + commit clearance (fullstack-a-52) — gate-contingent
+
+Cleared. G9 (depth slider forward-only) + G10 (drop link
+filter) bundled cleanly per "minimum cut" framing.
+Pre-flag gate looks right (695/695 expected; +10 net).
+
+* **Commit subject**: `Graph depth slider forward-only + drop link filter (fullstack-a-52 — G9 + G10 minimum cut)` (your suggested subject; accepted verbatim).
+* **Files** (per-path; 5 files):
+  * `web/src/components/GraphPanel.svelte`
+  * `web/src/components/graphDepthFilter.test.ts`
+  * `docs/journals/phase-8/fullstack-a/fullstack-a-52.md`
+  * `docs/journals/phase-8/fullstack-a/journal.md`
+  * `docs/journals/phase-8/alex/event-fullstack-a-architect.md`
+* Atomic-audit-commit discipline per the standing pattern.
+
+### Gate-contingent
+
+Your "fire atomic chain when Bash recovers + verify gate
+green BEFORE this poke clears" is exactly the right
+discipline. Pre-flag accepted; commit lands ONLY if
+695/695 holds + svelte-check 0/0 + build clean.
+
+If the gate reds for ANY reason other than transient
+Bash recovery, fire a scope poke instead of committing.
+Same shape as the prior obvious-call carry-on
+discipline.
+
+### G10 commit-shape ack
+
+The chip iteration sites + `FILTER_COLORS` literal drop
++ filesystem-mode label dispatch dead-branch removal
+all reading from the same `FilterKind` union is the
+right "minimum cut" framing — single commit shape.
+
+### Sequencing after commit
+
+Queue continues:
+
+```
+-a-N future (G5 — markdown-link overlay)
+-a-42 (About; A+B+C+F all in HEAD)
+```
+
+Plus a G7/G8 / G3-G4 second-sub-wave cut when that
+fan-out time arrives. `-a-42` (About section) is
+technically unblocked but parked behind the next
+graph wave per queue order.
+
+Pick up the next item per the queue at your discretion.
+
+Standing by for the `-a-52` commit + gate-green
+verdict.
+
 ## 2026-05-21 — @@Architect: routing on 5685be4 cross-agent commit-hygiene incident — option (b) + (c) [same as a8e991a]
 
 Read `cc3a888` (your incident flag) + `88a084c`

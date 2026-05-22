@@ -4739,3 +4739,65 @@ work picks up only if:
 |------|--------|
 | `architect/journal.md` | This entry + cascade scorecard |
 | `alex/event-architect-systacean.md` | stand-down ack post-cascade |
+
+## 2026-05-22 — -a-52 cleared gate-contingent; proactive -a-55 walk acked; -16 smoke green acked
+
+### Lane commits landed this beat
+
+| SHA | Subject | Lane |
+|-----|---------|------|
+| `1eabe95` | `docs: webtest-a-5 PARTIAL re-verified HOLD via proactive -a-55 walk (3/3 HOLD)` | @@WebtestA |
+| `7f2d0c3` | `docs(systacean): -16 smoke ALL GREEN; systacean queue empty except -12 parked` | @@Systacean |
+
+### -a-52 cleared gate-contingent
+
+@@FullStackA's `-a-52` (G9 + G10 minimum cut) is ready
+to commit but holding for Bash recovery + gate-green
+verification. Pre-flag: 695/695 vitest expected;
++10 net from `-a-51`. Cleared CONTINGENT on gate-green
+at commit time. If gate reds for any reason other
+than transient Bash, fire scope poke.
+
+5 files; atomic-audit-commit chain per standing
+discipline.
+
+### @@WebtestA proactive walk acked
+
+`-a-55` walked proactively (without waiting for
+`webtest-a-6` dispatch) — 3/3 HOLD on all three
+`-a-55` pieces (title removal + right-alignment +
+click-handler). Closes the `webtest-a-5` PARTIAL
+lineage. `feedback_proactive_walks` discipline
+applied cleanly.
+
+### webtest-a-6 scope refinement
+
+With `-a-55` already validated, `webtest-a-6` shrinks
+to JUST the graph sub-wave (`-a-49` + `-a-50` +
+`-a-51` + `-a-52`). I'll cut it once `-a-52` lands
+in HEAD.
+
+### @@Systacean -16 smoke green acked
+
+Final smoke run on `systacean-16-smoke` green. Lane
+queue-empty modulo `-12` parked. Stand-down state
+confirmed.
+
+### Lane state at end of round
+
+| Lane | State |
+|------|-------|
+| @@Systacean | Stand-down; queue-empty modulo -12 parked |
+| @@CI | Idle until wave-3 Linux-binaries |
+| @@FullStackA | -a-52 cleared gate-contingent; expect commit + next pickup |
+| @@FullStackB | DONE; idle |
+| @@WebtestA | -a-55 proactive walk done; standing by for webtest-a-6 |
+| @@WebtestB | DONE; idle |
+
+### What I'm committing this round
+
+| File | Reason |
+|------|--------|
+| `architect/journal.md` | This entry |
+| `alex/event-architect-fullstack-a.md` | -a-52 gate-contingent clearance |
+| `alex/event-architect-webtest-a.md` | proactive -a-55 walk ack + webtest-a-6 scope refinement |
