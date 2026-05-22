@@ -13,11 +13,20 @@ const fonts = readFileSync("src/fonts.css", "utf8");
 // 14 pt to match iTerm2's defaults. The pinned-source assertions
 // guard the wiring so a future refactor can't silently drop the
 // bundled face or revert the cursor defaults.
+//
+// `fullstack-b-30` slice a: per-OS native mono now leads the
+// fontFamily chain; Source Code Pro stays in the chain but only
+// kicks in when the user opts in via Settings (slice b
+// follow-up). The "SCP before fallbacks" pin from `-b-12` is
+// inverted accordingly — SCP must now appear AFTER the OS-native
+// faces. The font + OFL pins below stay (the face still ships
+// when `embed-font` is on; the @font-face declaration still
+// renders the loadable face URL).
 
-describe("fullstack-b-12: TerminalTab font + cursor parity", () => {
-  test("xterm.js fontFamily lists Source Code Pro before fallbacks", () => {
+describe("fullstack-b-12 + fullstack-b-30: TerminalTab font + cursor parity", () => {
+  test("xterm.js fontFamily leads with per-OS native mono and trails with Source Code Pro", () => {
     expect(tab).toMatch(
-      /fontFamily:\s*'"Source Code Pro",[^']*?"SF Mono"[^']*?Menlo[^']*?Consolas/,
+      /fontFamily:\s*'"SF Mono",[^']*?"Cascadia Code"[^']*?"DejaVu Sans Mono"[^']*?"Source Code Pro"/,
     );
   });
 

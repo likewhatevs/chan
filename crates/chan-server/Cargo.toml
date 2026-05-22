@@ -27,6 +27,16 @@ embeddings = ["chan-drive/embeddings"]
 # per-machine cache on first server launch. Implies `embeddings`:
 # bundling a model is meaningless without the embedding code.
 embed-model = ["embeddings", "dep:tar", "dep:zstd"]
+# Bundle Source Code Pro Regular into the binary via rust-embed.
+# Opt-in (default-off) so a plain `cargo build` produces a lean
+# binary that uses the per-OS native mono font (SF Mono / Cascadia
+# / DejaVu) by default. With the feature off `serve_font` falls
+# back to a user-config-dir copy at
+# `<user-config>/chan/fonts/SourceCodePro-Regular.otf.woff2`; the
+# Settings UI's "Source Code Pro" opt-in downloads the woff2 +
+# OFL.txt into that directory on enable (slice b follow-up).
+# Implies nothing — the bundle is purely additive.
+embed-font = []
 # Pass-throughs for chan-drive's GPU backends. The chan binary's
 # target-conditional dep wiring auto-flips `metal` on macOS; `cuda`
 # stays opt-in on Linux.

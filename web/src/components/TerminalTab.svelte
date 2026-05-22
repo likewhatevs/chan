@@ -359,12 +359,23 @@
     // case where the @font-face load is still in flight or the
     // browser declines woff2. Cursor goes to a non-blinking block,
     // matching iTerm's defaults captured in the task spec.
+    // `fullstack-b-30` slice a: per-OS native-mono default. The
+    // chain leads with the OS's installed mono face (SF Mono /
+    // Cascadia / DejaVu) so the lean default build (no
+    // `--features embed-font`) doesn't 404 on a missing woff2.
+    // Source Code Pro stays in the chain but only kicks in when
+    // the user opts in via Settings (slice b follow-up) — the
+    // download flow writes the woff2 to `<user-config>/chan/fonts/`
+    // and the SPA's fontFamily ordering swaps SCP to the front.
+    // Until slice b lands, default-build users get OS native;
+    // `--features embed-font` users still get the bundled SCP
+    // ONLY if they also opt in via Settings.
     term = new Terminal({
       allowTransparency: false,
       cursorBlink: false,
       cursorStyle: "block",
       fontFamily:
-        '"Source Code Pro", "SF Mono", SFMono-Regular, ui-monospace, Menlo, Consolas, "Liberation Mono", monospace',
+        '"SF Mono", SFMono-Regular, "Cascadia Code", "DejaVu Sans Mono", ui-monospace, Menlo, Consolas, "Liberation Mono", "Source Code Pro", monospace',
       fontSize: 14,
       lineHeight: 1.2,
       macOptionIsMeta: true,

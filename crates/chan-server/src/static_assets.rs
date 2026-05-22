@@ -31,11 +31,17 @@ struct WebAssets;
 
 /// Server-side resource bundle for runtime fonts (`fullstack-b-12`).
 /// Files at `crates/chan-server/resources/fonts/` are baked in via
-/// rust-embed and served under `/static/fonts/<name>`. The folder
-/// always exists in the source tree (Source Code Pro Regular +
-/// `OFL.txt`); no feature gate because the bundle is small (~80 KB
-/// total) and we want guaranteed availability across every build
-/// profile, including `--no-default-features`.
+/// rust-embed and served under `/static/fonts/<name>`.
+///
+/// `fullstack-b-30` slice a: gated behind the `embed-font` cargo
+/// feature (default off). Default `cargo build` produces a lean
+/// binary that uses per-OS native mono fonts. `cargo build
+/// --features embed-font` re-enables the bundle for power-user /
+/// offline-install builds. When the feature is off, `serve_font`
+/// falls back to reading from
+/// `<user-config>/chan/fonts/<name>` so a Settings-driven download
+/// (slice b) can persist the woff2 there without rebuilding.
+#[cfg(feature = "embed-font")]
 #[derive(RustEmbed)]
 #[folder = "resources/fonts/"]
 struct FontAssets;
@@ -185,11 +191,69 @@ pub fn content_type_for(path: &str) -> &'static str {
 /// policy: the font filename is stable per release and the bytes
 /// for that filename never change.
 pub async fn serve_font(Path(name): Path<String>) -> Response {
-    let Some(file) = FontAssets::get(&name) else {
-        return (StatusCode::NOT_FOUND, "font not bundled").into_response();
+    // `fullstack-b-30` slice a: try the rust-embed bundle first
+    // (only present when the `embed-font` feature is on), then
+    // fall back to a user-config-dir copy. The fallback lets the
+    // Settings-driven download (slice b) persist a woff2 to a
+    // known location without rebuilding the binary. Path
+    // traversal stays impossible because axum's `:name` matches a
+    // single segment; we additionally restrict the filesystem
+    // probe to a known directory + reject any name containing a
+    // `/` defensively.
+    if name.contains('/') || name.contains('\\') || name.starts_with('.') {
+        return (StatusCode::NOT_FOUND, "invalid font name").into_response();
+    }
+    if let Some(body) = bundled_font_bytes(&name) {
+        return font_response(&name, body);
+    }
+    match user_config_font_bytes(&name) {
+        Ok(Some(bytes)) => font_response(&name, bytes),
+        Ok(None) => (StatusCode::NOT_FOUND, "font not bundled").into_response(),
+        Err(_) => (StatusCode::NOT_FOUND, "font not bundled").into_response(),
+    }
+}
+
+/// Rust-embed bundle lookup. Returns `None` in default builds
+/// (`embed-font` off) so the caller falls through to the
+/// filesystem path.
+fn bundled_font_bytes(name: &str) -> Option<Vec<u8>> {
+    #[cfg(feature = "embed-font")]
+    {
+        FontAssets::get(name).map(|file| file.data.into_owned())
+    }
+    #[cfg(not(feature = "embed-font"))]
+    {
+        let _ = name;
+        None
+    }
+}
+
+/// User-config-dir fallback. Reads `<config>/chan/fonts/<name>`
+/// if it exists. Returns `Ok(None)` when the file is missing so
+/// the caller can render a 404; `Err` propagates real I/O errors
+/// for the caller to surface (still as 404 since `serve_font`'s
+/// public contract is bundle-or-missing).
+fn user_config_font_bytes(name: &str) -> std::io::Result<Option<Vec<u8>>> {
+    let Some(dir) = chan_fonts_user_dir() else {
+        return Ok(None);
     };
-    let body = file.data.into_owned();
-    let mut response = ([(header::CONTENT_TYPE, content_type_for(&name))], body).into_response();
+    let path = dir.join(name);
+    match std::fs::read(&path) {
+        Ok(bytes) => Ok(Some(bytes)),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(e) => Err(e),
+    }
+}
+
+/// `<user-config>/chan/fonts/`. None on platforms / accounts
+/// where `dirs::config_dir()` fails to resolve (rare; e.g.
+/// missing `HOME` in stripped CI containers).
+fn chan_fonts_user_dir() -> Option<std::path::PathBuf> {
+    Some(dirs::config_dir()?.join("chan").join("fonts"))
+}
+
+fn font_response(name: &str, body: Vec<u8>) -> Response {
+    let mut response = ([(header::CONTENT_TYPE, content_type_for(name))], body).into_response();
     let headers = response.headers_mut();
     headers.insert(header::CACHE_CONTROL, ASSET_CACHE_CONTROL);
     headers.insert(header::VARY, HOST_VARY);
@@ -265,12 +329,18 @@ mod tests {
         assert_eq!(response.headers().get(header::VARY), Some(&HOST_VARY));
     }
 
+    #[cfg(feature = "embed-font")]
     #[test]
     fn font_bundle_includes_source_code_pro_and_ofl_notice() {
         // `fullstack-b-12`: the binary must ship Source Code Pro and
         // its OFL license notice. Anyone who removes either file from
         // the resources directory must explicitly update this test +
         // the SettingsPanel attribution.
+        //
+        // `fullstack-b-30` slice a: gated on `embed-font` because the
+        // default build no longer ships the font (uses per-OS native
+        // mono via the SPA's fontFamily fallback chain). The test
+        // still runs on `--features embed-font` builds.
         let font = FontAssets::get("SourceCodePro-Regular.otf.woff2")
             .expect("Source Code Pro Regular woff2 must be bundled");
         assert!(
@@ -295,11 +365,15 @@ mod tests {
         );
     }
 
+    #[cfg(feature = "embed-font")]
     #[tokio::test]
     async fn serve_font_returns_bundled_bytes_with_immutable_cache() {
         // The handler is path-only (no AppState), so we can drive it
         // directly. The `Path<String>` extractor wants the matched
         // segment; we feed the same value axum would.
+        //
+        // `fullstack-b-30` slice a: gated on `embed-font` since the
+        // default build serves from user-config dir instead.
         let response = serve_font(Path("SourceCodePro-Regular.otf.woff2".into())).await;
         assert_eq!(response.status(), StatusCode::OK);
         let headers = response.headers();
@@ -319,5 +393,21 @@ mod tests {
     async fn serve_font_returns_404_for_unknown_name() {
         let response = serve_font(Path("does-not-exist.woff2".into())).await;
         assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn serve_font_rejects_path_traversal_attempts() {
+        // `fullstack-b-30` slice a: the filesystem-fallback path
+        // could otherwise read arbitrary files via `..`-style names
+        // (axum's `:name` match shouldn't allow `/` but
+        // belt-and-braces). Reject `/`, `\`, and leading-dot names.
+        for name in ["../etc/passwd", ".hidden", "fonts/x"] {
+            let response = serve_font(Path(name.into())).await;
+            assert_eq!(
+                response.status(),
+                StatusCode::NOT_FOUND,
+                "name {name} must 404",
+            );
+        }
     }
 }
