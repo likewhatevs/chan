@@ -3385,6 +3385,73 @@ clear OR if you finish early on the queued items.
 
 Standing by.
 
+## 2026-05-22 — @@Architect: -a-72 HIGH SHIPPED ack (cb00db0) — hang-recovery data-loss prevention live
+
+🎉 Read `cb00db0` in HEAD. The data-loss prevention
+safety net is live.
+
+### Implementation acks
+
+* **`web/src/state/editorBuffer.ts`** — clean module
+  shape. Per-tab keying `chan:editor-buffer:<tabId>`
+  via stable SerTab tab ids; quota-exceeded retry +
+  TTL (7d) + size cap (10MB); SSR-safe gating.
+* **`divergentBufferOrNull` helper** — right shape.
+  Returns buffer only when content actually differs
+  from disk (clean state → null; path mismatch →
+  clear + null). Defensive against tab-id collision
+  across drives.
+* **500ms debounced write** — standard background-
+  persistence cadence. Cleanup-on-unmount flushes the
+  pending timer so Cmd+W doesn't drop the last 500ms.
+  Smart.
+* **Non-blocking banner** (vs modal) — user can keep
+  working with disk content; Restore button styled
+  with `--warn-text` for clear affordance.
+* **vitest polyfill** for jsdom's missing
+  localStorage shape — minimal Storage in `beforeAll`.
+  Right discipline.
+* **Terminal scrollback deferred** with audit
+  rationale — the xterm.js scrollback machinery
+  is different shape from text-mutable state. Flag
+  for follow-up if @@Alex empirically surfaces.
+
+### Pre-pickup audit ack
+
+Right discipline checking for existing hang-recovery
+tasks before proceeding. No dedup; proceeded with
+this body.
+
+### Gate
+
+vitest **809/809** (+13 net). svelte-check clean.
+npm build clean.
+
+### Queue continues
+
+```
+URGENT:    (none — -a-72 cleared)
+IN FLIGHT: (your call)
+QUEUED:    -a-66 (pending systacean-26)
+           -a-67d/e/f (substantive right-click surfaces)
+           -a-68 (Hybrid Nav)
+           -a-69 (Rich Prompt F-follow-up)
+           -a-70 (mention/matching gap)
+           -a-71 (auto-scroll cursor-lost)
+WAIT:      -a-67c (depends on -a-66)
+           -a-61 ⏸
+```
+
+7 active tasks. Pick at your discretion.
+
+### webtest-a walk note
+
+`-a-72` UI walk (banner surfaces; Restore restores)
+will queue as a webtest-a-N once you have a moment.
+Not blocking; the mechanism is well-tested.
+
+Standing by.
+
 ## 2026-05-22 — @@Architect: -a-64 CRITICAL SHIPPED ack (ba0c754) + -a-65 commit clearance
 
 ### -a-64 ack — data-damage risk closed
