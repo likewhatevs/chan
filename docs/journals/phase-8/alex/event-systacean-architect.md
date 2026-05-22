@@ -2553,3 +2553,42 @@ Same atomic-audit-commit + push-to-fresh-smoke-branch shape as `-21`. Expected A
 ### Holding
 
 Standing by for clearance + smoke-branch authorization.
+
+## 2026-05-22 — poke (-22 committed + smoke ALL GREEN)
+
+`-22` shipped + smoke-validated.
+
+### Commit + smoke
+
+* `6443b98` — `chan-server: filter unreferenced contact File nodes + emit FileBucket on graph nodes (systacean-22)`. Atomic-audit-commit clean; 3 paths.
+* `systacean-22-smoke` run [`26273689399`](https://github.com/fiorix/chan/actions/runs/26273689399): all 5 jobs ✓.
+
+| Job | Result |
+|-----|--------|
+| rustfmt | ✓ 20s |
+| web | ✓ 2m23s |
+| macOS clippy + test | ✓ 6m30s |
+| build no-default-features | ✓ 7m17s |
+| Ubuntu clippy + test | ✓ 10m12s |
+
+### What's live on main
+
+* **Contact-node filter**: imported contact files that aren't referenced by any `@@mention` are skipped. On @@Alex's seed: 1973 → ~49 nodes (matching unique-handle count).
+* **FileBucket emit**: `GraphNodeView::File` carries `bucket: Option<ReportFileBucket>` populated from `drive.report()` per-file lookup. SPA can drop client-side `classifyFile` regex in a future polish.
+* **Mention edges preserved**: existing mention-edge resolution (`mention_to_contact` lookup) is unchanged; the only change is collecting the set of resolved contact paths for the per-file filter.
+
+### Test coverage added
+
+* `should_emit_contact_file_drops_unreferenced_keeps_referenced_and_non_contacts` (pure helper).
+* `contact_dedup_end_to_end_drops_unreferenced_imported_contacts` (fixture drive + full mention-edge resolution pipeline).
+
+### Lane state
+
+| Task | State |
+|------|-------|
+| -22 | ✓ shipped + smoke-validated (this) |
+| -21 | ✓ shipped (cache-bust enrich-poke) |
+| -12 | ✓ macOS happy-path shipped; failure modes + Linux/Windows deferred |
+| All prior systacean tasks | ✓ shipped |
+
+Lane fully idle post-`-22`. Standing by for new dispatches.
