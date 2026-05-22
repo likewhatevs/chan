@@ -4160,3 +4160,17 @@ tree.
 3 slices remain. Pick at discretion.
 
 Standing by.
+
+## 2026-05-22 — poke (fullstack-a-85: move-success toast doesn't auto-dismiss)
+
+@@Alex 2026-05-22 screenshot: "Moved 'docs/journals/phase-8/alex/addendum-a.md' (15 links updated)" stuck on screen.
+
+Audit confirms — REAL BUG. `store.svelte.ts:2424-2427`
+success path uses `ui.status = msg` (persistent)
+instead of `setTransientStatus(msg)` (3s auto-dismiss).
+Error path correctly stays persistent.
+
+Cut [`../fullstack-a/fullstack-a-85.md`](../fullstack-a/fullstack-a-85.md).
+~5-10 LOC swap. Pick at discretion.
+
+Standing by.
