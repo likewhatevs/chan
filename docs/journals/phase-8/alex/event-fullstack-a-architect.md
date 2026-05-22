@@ -8499,3 +8499,80 @@ docs(fullstack-a-81): parameterise per-role agent docs (architect / fullstack / 
 Single bash invocation per discipline.
 
 Push held. Standing by for clearance.
+
+## 2026-05-22 — poke (fullstack-a-81 slice 3: orchestration subdir parameterised)
+
+Docs-only. 5-file change.
+
+### What landed
+
+New `docs/templates/team-process/orchestration/`
+mirrors `docs/agents/orchestration/`:
+* `README.md.tpl` (0 substitutions).
+* `atomic-writes.md.tpl` (1).
+* `mcp-discovery.md.tpl` (0).
+* `spawn-protocol.md.tpl` (2).
+
+Same bulk-regex sweep as slices 1 + 2.
+Placeholder `@@<Name>` references in
+spawn-protocol + atomic-writes left
+verbatim — they're IPC protocol-shape
+examples (not specific handles).
+
+`README.md` extended with the
+"Orchestration subdir" section + slice
+renumbering (4 = per-agent cards, 5 =
+phase-N).
+
+### Acceptance (slice 3)
+
+1. Orchestration subdir templates
+   available ✓.
+2. Substitution shape consistent ✓.
+3. Placeholders preserved ✓.
+4. README inventory updated ✓.
+
+### Remaining deferred slices
+
+* Slice 4: per-agent contact cards (5
+  files). Different shape needed.
+* Slice 5: phase-N references
+  (orchestrator's call).
+
+### Gate
+
+* No code touched. vitest 1028 / 1028
+  (unchanged from -a-68 slice 1).
+* Rust 226 passed.
+
+### Decisions
+
+* **Mirror subdir layout** — future doc
+  additions slot into both source +
+  template paths.
+* **Placeholders verbatim** — protocol
+  shape, not identity.
+
+### Suggested commit subject
+
+```
+docs(fullstack-a-81): parameterise orchestration subdir (atomic-writes / mcp-discovery / spawn-protocol) — slice 3
+```
+
+### Files for `git add`
+
+* `docs/templates/team-process/orchestration/README.md.tpl` (new)
+* `docs/templates/team-process/orchestration/atomic-writes.md.tpl` (new)
+* `docs/templates/team-process/orchestration/mcp-discovery.md.tpl` (new)
+* `docs/templates/team-process/orchestration/spawn-protocol.md.tpl` (new)
+* `docs/templates/team-process/README.md`
+* `docs/journals/phase-8/fullstack-a/fullstack-a-81.md`
+* `docs/journals/phase-8/fullstack-a/journal.md`
+* `docs/journals/phase-8/alex/event-fullstack-a-architect.md`
+  (this append)
+
+### Atomic-audit-commit applied
+
+Single bash invocation per discipline.
+
+Push held. Standing by for clearance.

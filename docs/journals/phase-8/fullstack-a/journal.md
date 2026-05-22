@@ -2942,3 +2942,34 @@ shape than the template variables.
 Impl note at [fullstack-a-81.md](fullstack-a-81.md)
 "## 2026-05-22 — slice 2". Outbound poke
 fired.
+
+## 2026-05-22 — -a-81 slice 3 (orchestration subdir) ready for review
+
+Docs-only. 5-file change.
+
+New `docs/templates/team-process/orchestration/`
+subdir mirrors `docs/agents/orchestration/`:
+* `README.md.tpl` (0 substitutions)
+* `atomic-writes.md.tpl` (1)
+* `mcp-discovery.md.tpl` (0)
+* `spawn-protocol.md.tpl` (2)
+
+Total: 3 handle substitutions via the same
+bulk-regex sweep as slices 1 + 2.
+
+Placeholder `@@<Name>` references in
+spawn-protocol + atomic-writes left verbatim
+— they're IPC protocol-shape examples, not
+specific handles.
+
+README extended with per-file inventory.
+Deferred slices renumbered: slice 4 (per-agent
+cards), slice 5 (phase-N).
+
+### Gate
+
+* vitest 1028 / 1028 (unchanged).
+* Rust 226 passed (unchanged).
+
+Impl note at [fullstack-a-81.md](fullstack-a-81.md)
+"## 2026-05-22 — slice 3". Outbound poke fired.

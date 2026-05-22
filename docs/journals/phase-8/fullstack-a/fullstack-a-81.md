@@ -445,3 +445,114 @@ Docs-only commit.
 Per the memory rule. Per-path staging only.
 
 Push held. Standing by for clearance.
+
+## 2026-05-22 — slice 3 (orchestration subdir parameterised) ready for review
+
+Five-file change. Docs-only.
+
+### What landed
+
+New `docs/templates/team-process/orchestration/`
+subdir mirroring `docs/agents/orchestration/`:
+
+* `README.md.tpl` — subdir index (0
+  handle substitutions; pure orientation
+  doc).
+* `atomic-writes.md.tpl` — atomic-write
+  discipline (1 substitution).
+* `mcp-discovery.md.tpl` — MCP discovery
+  flow (0 substitutions).
+* `spawn-protocol.md.tpl` — spawn-agent
+  IPC contract (2 substitutions).
+
+Total: 3 handle tokens substituted via the
+same bulk-regex sweep as slices 1 + 2.
+
+Remaining `@@<Name>` references in the
+spawn-protocol + atomic-writes templates
+are placeholders (`@@SomeAgent`,
+`@@AgentName`, `@@Name`, `@@HelperName`)
+showing the IPC payload shape rather than
+specific handles. Left verbatim — the
+template documents the protocol structure,
+not specific identities.
+
+`docs/templates/team-process/README.md`:
+* New "Orchestration subdir
+  (`orchestration/`)" section with per-file
+  descriptions + substitution counts.
+* Slice 4 (per-agent cards) bumped from
+  slice 3 to slice 4 in the deferred
+  section.
+* Slice 5 (phase-N references) bumped from
+  slice 4 to slice 5.
+
+### Acceptance (slice 3)
+
+1. **Orchestration subdir templates
+   available** ✓ — 4 new `.tpl` files
+   mirror the source files.
+2. **Substitution shape consistent** with
+   slices 1 + 2 ✓.
+3. **Placeholder `@@<Name>` references
+   preserved** ✓ — they're protocol-shape
+   examples, not specific handles.
+4. **README inventory updated** ✓.
+
+### Out of scope (still deferred)
+
+* Slice 4: per-agent contact cards
+  (fullstack-a.md / fullstack-b.md /
+  webtest-a.md / webtest-b.md / ci.md).
+  Different shape needed (per-worker
+  metadata generated from team config).
+* Slice 5: `phase-N` references —
+  orchestrator's decision.
+
+### Gate
+
+* No code touched. vitest 1028 / 1028
+  (unchanged from -a-68 slice 1).
+* Rust 226 passed (unchanged).
+* svelte-check + build not re-run (no
+  source files touched).
+
+### Decisions
+
+* **Mirror the subdir layout** —
+  `docs/agents/orchestration/` → 
+  `docs/templates/team-process/orchestration/`.
+  Future doc additions slot into both
+  paths.
+* **Placeholder `@@<Name>` left verbatim**
+  — they're IPC protocol shape examples,
+  not specific identities. The orchestrator's
+  publish step doesn't need to touch them.
+* **README update bundled** — file
+  inventory is part of the slice
+  deliverable.
+
+### Suggested commit subject
+
+```
+docs(fullstack-a-81): parameterise orchestration subdir (atomic-writes / mcp-discovery / spawn-protocol) — slice 3
+```
+
+Docs-only commit.
+
+### Files for `git add` (per-path discipline)
+
+* `docs/templates/team-process/orchestration/README.md.tpl` (new)
+* `docs/templates/team-process/orchestration/atomic-writes.md.tpl` (new)
+* `docs/templates/team-process/orchestration/mcp-discovery.md.tpl` (new)
+* `docs/templates/team-process/orchestration/spawn-protocol.md.tpl` (new)
+* `docs/templates/team-process/README.md`
+* `docs/journals/phase-8/fullstack-a/fullstack-a-81.md`
+* `docs/journals/phase-8/fullstack-a/journal.md`
+* `docs/journals/phase-8/alex/event-fullstack-a-architect.md`
+
+### Atomic-audit-commit
+
+Per the memory rule. Per-path staging only.
+
+Push held. Standing by for clearance.

@@ -45,14 +45,33 @@ in the template; the `fullstack-a-79` orchestrator can
 optionally strip them at publish time if a new team starts
 fresh without inheriting chan's phase history.
 
+### Orchestration subdir (`orchestration/`)
+
+Mirrors `docs/agents/orchestration/`. Cross-cutting protocol
+docs that every agent in a team reads:
+
+* `orchestration/README.md.tpl` — subdir index.
+* `orchestration/atomic-writes.md.tpl` — atomic-write
+  discipline; 1 handle substitution.
+* `orchestration/mcp-discovery.md.tpl` — MCP discovery flow;
+  no handle substitutions.
+* `orchestration/spawn-protocol.md.tpl` — spawn-agent IPC
+  contract; 2 handle substitutions. Remaining `@@<Name>`
+  references are placeholder examples (the spawn protocol
+  documents the shape, not specific handles).
+
 ### Deferred to follow-up slices
 
-* Slice 3: per-agent contact cards
-  (fullstack-a.md / fullstack-b.md / etc.) + the
-  `docs/agents/orchestration/` subdir.
-* Slice 4: optionally parameterise `phase-N` references if
-  `-a-79`'s orchestrator wants new teams to start at a
-  different phase label.
+* Slice 4 (deferred): per-agent contact cards
+  (fullstack-a.md / fullstack-b.md / webtest-a.md /
+  webtest-b.md / ci.md). Per-agent cards encode individual
+  identity (slot history, predecessors) that doesn't map
+  cleanly to the template variables; requires a different
+  shape (per-worker metadata file generated from team
+  config at bootstrap time).
+* Slice 5 (deferred): optionally parameterise `phase-N`
+  references if `-a-79`'s orchestrator wants new teams to
+  start at a different phase label.
 
 ## Chan-internal usage
 
