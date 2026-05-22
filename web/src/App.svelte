@@ -27,7 +27,6 @@
     drive,
     fileOps,
     graphOverlay,
-    openBrowser,
     openGraph,
     openGraphWithContext,
     openSettings,
@@ -265,14 +264,14 @@
     // initial load still flushes any in-flight session changes.
     installSessionFlushHook();
     await bootstrap();
-    // Boot-time: if no tabs were restored anywhere in the layout,
-    // pop the file browser so the user has a launch surface instead
-    // of staring at the empty-pane logo. Subsequent tab closes leave
-    // the empty pane intact (the logo + shortcut hints take over).
-    const hasAnyTab = Object.values(layout.nodes).some(
-      (n) => n.kind === "leaf" && n.tabs.length > 0,
-    );
-    if (!hasAnyTab) openBrowser();
+    // `fullstack-a-88`: replaced first-boot "spawn FB tab when
+    // layout empty" with "boot with docked FB on left by
+    // default." The default lives in chan-server's
+    // `BrowserSidePanes::default()` so a brand-new
+    // preferences.toml ships with `left: true`. SPA respects
+    // any user toggle (the load path reads server preferences
+    // before this point). Empty pane stays empty; the carousel
+    // + shortcut hints carry the empty-state UX.
     bootstrapped = true;
     // Visibility-change resume hook. Browsers throttle / suspend
     // backgrounded tabs and the WebSocket reconnect can stretch

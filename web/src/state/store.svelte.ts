@@ -1920,7 +1920,16 @@ export const paneWidths = $state<{
 export const browserSidePanes = $state<{
   left: boolean;
   right: boolean;
-}>({ left: false, right: false });
+}>({
+  // `fullstack-a-88`: docked FB on left by default. The
+  // pre-`-a-88` default was `{left: false, right: false}`
+  // paired with a first-boot openBrowser() tab spawn in
+  // App.svelte. Now: docked FB on left is the launch surface.
+  // chan-server's `BrowserSidePanes::default()` matches this
+  // shape, so a fresh preferences.toml lands here cleanly.
+  left: true,
+  right: false,
+});
 
 /// Currently inspected entry in the File Browser tab. Module-level
 /// (shared across browser tabs); selection is ephemeral so the

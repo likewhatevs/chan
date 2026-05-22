@@ -144,10 +144,25 @@ fn default_outline_width() -> u32 {
     220
 }
 
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct BrowserSidePanes {
     pub left: bool,
     pub right: bool,
+}
+
+impl Default for BrowserSidePanes {
+    /// `fullstack-a-88`: first-boot opens with the docked File
+    /// Browser on the LEFT-hand side instead of spawning an FB
+    /// tab. Replaces the old first-boot behavior @@Alex
+    /// retired 2026-05-22. Users who explicitly toggle the
+    /// left dock off keep their setting (serde reads their
+    /// persisted preferences before this default kicks in).
+    fn default() -> Self {
+        Self {
+            left: true,
+            right: false,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -207,6 +222,28 @@ pub fn default_path() -> PathBuf {
 mod tests {
     use super::*;
     use tempfile::TempDir;
+
+    #[test]
+    fn browser_side_panes_default_is_left_docked() {
+        // `fullstack-a-88`: first-boot opens with the docked FB
+        // on the LEFT-hand side; right stays empty. Replaces
+        // the pre-`-a-88` `Default::default` (both false) which
+        // paired with an App.svelte first-boot openBrowser tab
+        // spawn @@Alex retired.
+        let bsp = BrowserSidePanes::default();
+        assert_eq!(bsp.left, true);
+        assert_eq!(bsp.right, false);
+    }
+
+    #[test]
+    fn editor_prefs_default_carries_left_docked_fb() {
+        // Cross-check: the prefs-level default also surfaces
+        // the docked-left FB so a missing preferences.toml
+        // produces the same first-boot UX as a fresh one.
+        let prefs = EditorPrefs::default();
+        assert_eq!(prefs.browser_side_panes.left, true);
+        assert_eq!(prefs.browser_side_panes.right, false);
+    }
 
     #[test]
     fn default_round_trips() {

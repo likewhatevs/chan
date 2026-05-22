@@ -7105,3 +7105,90 @@ Rich prompt: match placeholder line-height to CM6 cm-line baseline (fullstack-a-
 Single bash invocation per discipline.
 
 Push held. Standing by for clearance.
+
+## 2026-05-22 — poke (fullstack-a-88 ready for review)
+
+Cross-stack four-file change.
+
+### What landed
+
+`chan-server/src/preferences.rs`:
+* Manual `Default` impl on
+  `BrowserSidePanes` returning
+  `{left: true, right: false}`. Fresh
+  `preferences.toml` ships with docked-left
+  FB.
+* +2 Rust pins:
+  `browser_side_panes_default_is_left_docked`
+  +
+  `editor_prefs_default_carries_left_docked_fb`.
+
+`App.svelte`:
+* Removed `if (!hasAnyTab) openBrowser()`
+  rule + the `openBrowser` import.
+* Replacement comment cross-references
+  `-a-88` + chan-server mirror.
+
+`store.svelte.ts`:
+* SPA `browserSidePanes` default flipped to
+  `{left: true, right: false}`. Matches the
+  chan-server default so the brief
+  pre-prefs-load window doesn't flip
+  visually.
+
+`firstBootDockedFb.test.ts` (new): 5
+raw-source pins.
+
+### Acceptance
+
+1. First-boot opens with docked FB on left
+   ✓ (mechanism via 2 Rust pins + 5 SPA
+   pins; @@WebtestA walk for empirical).
+2. No FB-tab spawn on first-boot ✓.
+3. Existing user preferences respected ✓
+   (chan-server reads disk first).
+4. No regression on drive switch / reopen
+   ✓.
+
+### Gate
+
+* `cargo test -p chan-server --lib`: **220
+  passed** (+2 net).
+* vitest **938 / 938** (+9 net from -a-87's
+  929).
+* svelte-check 0 errors / 0 warnings across
+  4028 files.
+* npm build clean.
+
+### Decisions
+
+* **Default fix in chan-server** — single
+  source of truth on the wire.
+* **SPA default flip** — belt-and-suspenders
+  for the brief pre-load window.
+* **Kept empty-pane carousel** — task body
+  preserved it; dock provides launch
+  surface instead.
+
+### Suggested commit subject
+
+```
+First-boot: docked FB on left by default, remove FB-tab spawn (fullstack-a-88)
+```
+
+### Files for `git add`
+
+* `crates/chan-server/src/preferences.rs`
+* `web/src/App.svelte`
+* `web/src/state/store.svelte.ts`
+* `web/src/state/firstBootDockedFb.test.ts` (new)
+* `docs/journals/phase-8/fullstack-a/fullstack-a-88.md`
+* `docs/journals/phase-8/fullstack-a/journal.md`
+* `docs/journals/phase-8/alex/event-fullstack-a-architect.md`
+  (this append)
+
+### Atomic-audit-commit applied
+
+Single bash invocation per discipline.
+
+Push held. Standing by for clearance.

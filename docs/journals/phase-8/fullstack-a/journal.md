@@ -2477,3 +2477,31 @@ mismatch.
 
 Impl note at [fullstack-a-87.md](fullstack-a-87.md).
 Outbound poke fired.
+
+## 2026-05-22 — -a-88 (first-boot docked FB) ready for review
+
+Four-file change. Cross-stack.
+
+* `chan-server/src/preferences.rs`:
+  `BrowserSidePanes::default()` flipped to
+  `{left: true, right: false}` via a manual
+  `Default` impl. +2 Rust pins.
+* `App.svelte`: removed
+  `if (!hasAnyTab) openBrowser()` + the
+  `openBrowser` import.
+* `store.svelte.ts`: SPA default flipped to
+  match.
+* `firstBootDockedFb.test.ts` (new): 5
+  raw-source pins.
+
+### Gate
+
+* cargo test -p chan-server --lib: **220
+  passed** (+2 net).
+* vitest **938 / 938** (+9 net from -a-87's
+  929).
+* svelte-check 0/0 across 4028 files.
+* npm build clean.
+
+Impl note at [fullstack-a-88.md](fullstack-a-88.md).
+Outbound poke fired.
