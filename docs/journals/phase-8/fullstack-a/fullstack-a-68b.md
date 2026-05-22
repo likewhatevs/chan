@@ -65,3 +65,119 @@ unchanged).
 
 * `-a-68 slice 2` transactional T/O/P/G/E
   staging (separate slice).
+
+## 2026-05-22 — ready for review (slice 1b — shortcuts.ts label sweep)
+
+Three-file change. SPA-only.
+
+### What landed
+
+`web/src/state/shortcuts.ts`:
+* Bulk perl swap `Hybrid NAV` → `Hybrid
+  Nav` across the entire file (note
+  strings + doc-comment references).
+* 5 user-visible note strings updated:
+  rich-prompt, files-toggle,
+  graph-toggle, terminal-toggle, +
+  Enter Hybrid Nav label.
+* Doc-comment references in the
+  registry-block header demoted too
+  (lines 96, 106, 130, 145, etc.) for
+  internal-consistency on a future
+  audit-grep.
+
+`web/src/state/shortcuts.test.ts`:
+* Pre-existing test
+  `"advertises Hybrid NAV (Cmd+.) as the
+  canonical spawn surface"` updated to
+  assert title-case `Enter Hybrid Nav`
+  in both `web` + `native` table
+  rendering.
+
+`web/src/state/hybridNavShortcutsLabel.test.ts`
+(new): 4 raw-source pins:
+* No `Hybrid NAV` literal remains.
+* No intermediate `Hybrid NaV` literal.
+* Spot-checks on each `Mod+. <letter>
+  (Hybrid Nav)` note string.
+* `Enter Hybrid Nav` label literal.
+
+### Acceptance
+
+1. **No "NAV" / "NaV" label remnants**
+   in shortcuts.ts ✓ — both case-exact
+   sweep + raw-source pins.
+2. **Rename doesn't break chord
+   bindings** ✓ — only label/note
+   strings changed; handler wiring
+   untouched.
+3. **Related test pins updated** ✓ —
+   the existing `shortcuts.test.ts`
+   table-render assertion now expects
+   title-case.
+
+### Out of scope (deferred)
+
+App.svelte's 6 internal comment-only
+`Hybrid NAV` references aren't user-
+facing (they're inside `///` JSDoc /
+`//` line comments documenting keymap
+intent). They're harmless drift; slice
+1b's task body framed this as a
+shortcuts.ts label sweep specifically.
+A future cleanup pass can demote them
+for internal consistency.
+
+### Gate
+
+* vitest **1032 / 1032** (+4 net from
+  `-a-81 slice 3`'s 1028).
+* svelte-check 0 errors / 0 warnings
+  across 4039 files.
+* npm build clean.
+* Rust gate not re-run (no Rust
+  touched).
+
+### Decisions
+
+* **Bulk perl swap** — cheap + reliable
+  for case-exact `Hybrid NAV` →
+  `Hybrid Nav` everywhere.
+* **Comment references demoted too** —
+  not strictly required by the task
+  body but cheap to do at the same
+  time + reduces future audit-grep
+  noise.
+* **App.svelte comments left alone** —
+  not in slice 1b's scope; flagged for
+  follow-up.
+* **Test pin update bundled** — pre-
+  existing `shortcuts.test.ts`
+  assertion was the test-suite signal
+  of the rename; mandatory to keep
+  green.
+
+### Suggested commit subject
+
+```
+Hybrid NAV → Hybrid Nav: shortcuts.ts label sweep (fullstack-a-68 slice 1b)
+```
+
+Single commit. Perl sweep + test pin
+update + 4 new pins on the no-remnants
+guard.
+
+### Files for `git add` (per-path discipline)
+
+* `web/src/state/shortcuts.ts`
+* `web/src/state/shortcuts.test.ts`
+* `web/src/state/hybridNavShortcutsLabel.test.ts` (new)
+* `docs/journals/phase-8/fullstack-a/fullstack-a-68b.md`
+* `docs/journals/phase-8/fullstack-a/journal.md`
+* `docs/journals/phase-8/alex/event-fullstack-a-architect.md`
+
+### Atomic-audit-commit
+
+Per the memory rule. Per-path staging only.
+
+Push held. Standing by for clearance.

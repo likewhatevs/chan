@@ -2973,3 +2973,33 @@ cards), slice 5 (phase-N).
 
 Impl note at [fullstack-a-81.md](fullstack-a-81.md)
 "## 2026-05-22 — slice 3". Outbound poke fired.
+
+## 2026-05-22 — -a-68 slice 1b (shortcuts.ts NAV sweep) ready for review
+
+Three-file change. SPA-only.
+
+* `shortcuts.ts`: bulk perl swap `Hybrid
+  NAV` → `Hybrid Nav` across all 5
+  user-visible note strings + the
+  registry-block doc comments.
+* `shortcuts.test.ts`: pre-existing
+  table-render assertion updated to
+  title-case.
+* `hybridNavShortcutsLabel.test.ts`
+  (new): 4 raw-source pins.
+
+App.svelte's 6 comment-only refs
+(internal JSDoc / line comments) left
+alone — not in slice 1b scope; flagged
+for follow-up cleanup.
+
+### Gate
+
+* vitest **1032 / 1032** (+4 net from
+  -a-81 slice 3's 1028).
+* svelte-check 0/0 across 4039 files.
+* npm build clean.
+
+Impl note at [fullstack-a-68b.md](fullstack-a-68b.md).
+Outbound poke fired. Closes the -a-68
+slice 1 PARTIAL @@WebtestA caught.

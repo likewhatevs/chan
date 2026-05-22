@@ -8576,3 +8576,95 @@ docs(fullstack-a-81): parameterise orchestration subdir (atomic-writes / mcp-dis
 Single bash invocation per discipline.
 
 Push held. Standing by for clearance.
+
+## 2026-05-22 — poke (fullstack-a-68 slice 1b: shortcuts.ts NAV sweep ready for review — closes slice 1 PARTIAL)
+
+Three-file change. SPA-only.
+
+### What landed
+
+`shortcuts.ts`: bulk perl swap. 0 `Hybrid
+NAV` remnants.
+
+Five user-visible note strings updated:
+* `app.terminal.richPrompt`: `... Mod+. p
+  (Hybrid Nav)`.
+* `app.files.toggle`: `... Mod+. o (Hybrid
+  Nav)`.
+* `app.graph.toggle`: `or Mod+. v (Hybrid
+  Nav)`.
+* `app.terminal.toggle`: `... Mod+. t
+  (Hybrid Nav)`.
+* `app.pane.mode` label: `Enter Hybrid Nav`.
+
+Doc-comment references in the
+registry-block header demoted too for
+internal-consistency on future audit
+greps.
+
+`shortcuts.test.ts`: the existing table-
+render assertion (`"advertises Hybrid NAV
+(Cmd+.) as the canonical spawn surface"`)
+updated to assert title-case.
+
+`hybridNavShortcutsLabel.test.ts` (new):
+4 raw-source pins covering the no-
+remnants guard + the spot-checked note
+strings + the `Enter Hybrid Nav` label
+literal.
+
+### Acceptance
+
+1. No NAV / NaV remnants ✓.
+2. Chord bindings unchanged ✓.
+3. Test pins updated ✓.
+
+### Deferred (out of scope)
+
+App.svelte has 6 internal comment-only
+`Hybrid NAV` references (`///` JSDoc / `//`
+line comments). Not user-facing; slice 1b's
+task body framed this as a `shortcuts.ts`
+sweep specifically. Flagged for a future
+cleanup pass if desired.
+
+### Gate
+
+* vitest **1032 / 1032** (+4 net from -a-81
+  slice 3's 1028).
+* svelte-check 0 errors / 0 warnings across
+  4039 files.
+* npm build clean.
+
+### Decisions
+
+* **Bulk perl swap** — case-exact across
+  all hits including comments.
+* **Comment refs demoted** — cheap +
+  reduces future audit-grep noise.
+* **App.svelte left alone** — out of
+  slice 1b scope.
+
+### Suggested commit subject
+
+```
+Hybrid NAV → Hybrid Nav: shortcuts.ts label sweep (fullstack-a-68 slice 1b)
+```
+
+### Files for `git add`
+
+* `web/src/state/shortcuts.ts`
+* `web/src/state/shortcuts.test.ts`
+* `web/src/state/hybridNavShortcutsLabel.test.ts` (new)
+* `docs/journals/phase-8/fullstack-a/fullstack-a-68b.md`
+* `docs/journals/phase-8/fullstack-a/journal.md`
+* `docs/journals/phase-8/alex/event-fullstack-a-architect.md`
+  (this append)
+
+### Atomic-audit-commit applied
+
+Single bash invocation per discipline.
+
+Push held. Standing by for clearance + the
+@@WebtestA re-walk to close the slice 1
+PARTIAL.

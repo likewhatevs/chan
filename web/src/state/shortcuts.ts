@@ -93,7 +93,7 @@ export type Shortcut = {
 ///
 /// `fullstack-b-9` (2026-05-19) brought `app.terminal.toggle`
 /// back as a direct chord (Cmd+T native / Cmd+Alt+T web Mac /
-/// universal `Mod+. t` via Hybrid NAV).
+/// universal `Mod+. t` via Hybrid Nav).
 ///
 /// `fullstack-a-32` (2026-05-20) re-adds `app.files.toggle`,
 /// `app.graph.toggle`, and updates `app.terminal.richPrompt` to
@@ -103,7 +103,7 @@ export type Shortcut = {
 ///   app.graph.toggle           Cmd+Shift+M native + web        / Mod+. v universal
 ///   app.terminal.richPrompt    Cmd+P native / Cmd+Alt+P web Mac / Mod+. p universal
 ///
-/// Inside Hybrid NAV, the numeric `1/2/3/4` cases drop (they
+/// Inside Hybrid Nav, the numeric `1/2/3/4` cases drop (they
 /// duplicated the new mnemonic chords); `t/T`, `o/O`, `p/P`,
 /// `v/V` cover the same actions with first-letter mnemonics.
 /// `f/F` (Search) and `h/H` (Help) stay. The Cmd+K entry chord
@@ -127,7 +127,7 @@ export const SHORTCUTS: readonly Shortcut[] = [
   // / Cmd+Alt+P (web Mac) so the spawn-chord family (Cmd+T/O/P,
   // Cmd+Shift+M) reads uniformly. `fullstack-a-90` retired the
   // legacy Alt+Space alias the migration kept for muscle memory.
-  // Universal Hybrid NAV `p` (added in `fullstack-50`) covers
+  // Universal Hybrid Nav `p` (added in `fullstack-50`) covers
   // every platform including Win/Linux web where Cmd+P is owned
   // by the browser's print dialog and Cmd+Alt+P isn't a thing.
   {
@@ -136,13 +136,13 @@ export const SHORTCUTS: readonly Shortcut[] = [
     web: "Cmd+Alt+P",
     native: "Mod+P",
     group: "App",
-    note: "macOS web + native everywhere; all platforms via Mod+. p (Hybrid NAV)",
+    note: "macOS web + native everywhere; all platforms via Mod+. p (Hybrid Nav)",
     escapeTerminal: true,
   },
   // `fullstack-a-32`: file-browser top-level chord. Same shape as
   // `app.terminal.toggle` — native uses Cmd+O; web fallback is
   // Cmd+Alt+O (browser owns Cmd+O for Open File on Mac). Universal
-  // Hybrid NAV `o` is added in this task so every platform has
+  // Hybrid Nav `o` is added in this task so every platform has
   // a reachable chord even when Cmd+Alt+O isn't bound on
   // Win/Linux.
   {
@@ -151,7 +151,7 @@ export const SHORTCUTS: readonly Shortcut[] = [
     web: "Cmd+Alt+O",
     native: "Mod+O",
     group: "App",
-    note: "macOS web + native everywhere; all platforms via Mod+. o (Hybrid NAV)",
+    note: "macOS web + native everywhere; all platforms via Mod+. o (Hybrid Nav)",
     escapeTerminal: true,
   },
   // `fullstack-a-32`: graph top-level chord. `Cmd+Shift+M` was the
@@ -159,14 +159,14 @@ export const SHORTCUTS: readonly Shortcut[] = [
   // wired with context-aware spawn semantics (the focused doc /
   // terminal cwd seeds the graph's scope). Native AND web both
   // use the same chord since browsers don't reserve it. Universal
-  // Hybrid NAV `v` covers fallback discoverability.
+  // Hybrid Nav `v` covers fallback discoverability.
   {
     id: "app.graph.toggle",
     label: "Graph",
     web: "Mod+Shift+M",
     native: "Mod+Shift+M",
     group: "App",
-    note: "or Mod+. v (Hybrid NAV)",
+    note: "or Mod+. v (Hybrid Nav)",
     escapeTerminal: true,
   },
   // `fullstack-b-2`: Cmd+T comes back for "new terminal in active
@@ -176,21 +176,21 @@ export const SHORTCUTS: readonly Shortcut[] = [
   // Win/Linux web is already owned by `app.tab.reopenClosed` and
   // we'd rather leave Pane Mode as the fallback than collide.
   //
-  // `fullstack-b-9`: `Mod+. t` (Hybrid NAV `t` mnemonic) is the
+  // `fullstack-b-9`: `Mod+. t` (Hybrid Nav `t` mnemonic) is the
   // universal chord — works on every web platform including
   // Win/Linux where `Cmd+Alt+T` isn't a thing. Surfaces in the
   // PaneModeHelp cheatsheet as an alias for `1` so the discovery
-  // path stays inside the Hybrid NAV overlay.
+  // path stays inside the Hybrid Nav overlay.
   {
     id: "app.terminal.toggle",
     label: "New terminal",
     web: "Cmd+Alt+T",
     native: "Mod+T",
     group: "App",
-    note: "macOS web + native everywhere; all platforms via Mod+. t (Hybrid NAV)",
+    note: "macOS web + native everywhere; all platforms via Mod+. t (Hybrid Nav)",
     escapeTerminal: true,
   },
-  // `fullstack-a-7`: Hybrid NAV chord swapped from Mod+K to
+  // `fullstack-a-7`: Hybrid Nav chord swapped from Mod+K to
   // Mod+. so Mod+, can own Settings (macOS preferences
   // convention; `app.settings.toggle` above). Mod+. is not
   // browser-reserved on macOS and survives both web + native
@@ -199,7 +199,7 @@ export const SHORTCUTS: readonly Shortcut[] = [
   // stays internally consistent.
   {
     id: "app.pane.mode",
-    label: "Enter Hybrid NAV",
+    label: "Enter Hybrid Nav",
     web: "Mod+.",
     native: "Mod+.",
     group: "Panes",

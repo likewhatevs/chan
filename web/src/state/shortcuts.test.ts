@@ -34,13 +34,15 @@ describe("shortcut table", () => {
     expect(table).not.toMatch(/^Terminal +Cmd\+Alt\+T\b/m);
   });
 
-  test("advertises Hybrid NAV (Cmd+.) as the canonical spawn surface", () => {
+  test("advertises Hybrid Nav (Cmd+.) as the canonical spawn surface", () => {
     // Chord swapped to Cmd+. per `fullstack-a-7` so Cmd+, can own
-    // Settings (macOS convention). The label and group stay.
+    // Settings (macOS convention). `fullstack-a-68 slice 1` +
+    // `slice 1b` demoted the label from all-caps "NAV" to
+    // title-case "Nav".
     const web = renderTable("web", "mac");
     const native = renderTable("native", "mac");
-    expect(web).toMatch(/^Enter Hybrid NAV\s+Cmd\+\.$/m);
-    expect(native).toMatch(/^Enter Hybrid NAV\s+Cmd\+\.$/m);
+    expect(web).toMatch(/^Enter Hybrid Nav\s+Cmd\+\.$/m);
+    expect(native).toMatch(/^Enter Hybrid Nav\s+Cmd\+\.$/m);
   });
 
   test("close-tab chord is Ctrl+D on both platforms (per fullstack-41)", () => {
