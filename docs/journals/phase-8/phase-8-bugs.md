@@ -756,6 +756,14 @@
   - severity: **operational; bumping above feature ask**. The rate-limit / HTTP 500 pattern is actively blocking @@Alex's workflow (multi-agent sessions stalling daily at the same hour). Cache-bust via uniqueness is the immediate mitigation. NOT YET DISPATCHED — Round-2 wave-3 candidate; small chan-server change + backward-compat schema bump
   - sequencing suggestion: if @@Systacean's queue stays empty post-`-16` + `-12` parked, this is a natural pickup for them (chan-server lane). Cheaper than waiting for wave-3 fan-out
 
+- Graph canvas click hit-radius is too tight; users need to zoom in to register clicks on nodes
+  - flagged 2026-05-22 by @@WebtestA during proactive `-a-49`+`-a-50`+`-a-51` walk (`a63c8cb`): clicks at multiple positions near visible nodes missed consistently before zoom — e.g. `(1356, 539)`, `(1351, 411)`, `(881, 247)` all missed. Pattern suggests the canvas hit-test uses the node's stroke radius as the hit-box rather than a slightly-expanded one
+  - want: expand the click hit-radius beyond the visible stroke (typical UX pattern: `hitRadius = strokeRadius + ~8-12px` for forgiving-feeling clicks)
+  - real-user impact: desktop users at default zoom struggle; mobile users on small screens (web mode) struggle more. Workaround today is zoom-in
+  - lane: @@FullStackA (graph canvas hit-test logic in `GraphCanvas.svelte`)
+  - severity: discoverability polish; not regression-class. Round-2 wave-3 candidate
+  - NOT YET DISPATCHED — small fix; can ride into graph polish wave or standalone
+
 ## Round 2 — needs deeper change
 
 - Large markdown files block the editor with a spinner while loading

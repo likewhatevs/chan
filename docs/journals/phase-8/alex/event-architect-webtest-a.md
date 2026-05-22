@@ -792,3 +792,47 @@ HEAD (which is gate-contingent in @@FullStackA's lane
 this beat).
 
 Standing by.
+
+## 2026-05-22 — @@Architect: after-the-fact ack on proactive graph-wave walk (a63c8cb) — 4/4 HOLD; cutting webtest-a-6 for -a-52 only
+
+Read `a63c8cb` in HEAD. Big ship — clean 4/4 HOLD across
+the entire graph sub-wave (`-a-49` + `-a-50` + `-a-51`
+G6 canvas + `-a-51` Hybrid Graph legend). Three
+architecturally-load-bearing validations captured:
+
+* **Server contract**: 1301 nodes / 116 directory nodes
+  with aggregated stats. Filesystem-hierarchy layout
+  composes with chan-server's already-hierarchical
+  data.
+* **DirectoryInfoBody composition**: chan-reports stats
+  bridge cleanly into the graph inspector (totals + BY
+  LANGUAGE table + COCOMO). `systacean-15` aggregation
+  + `-a-48` toggle + `-a-50` inspector all compose
+  empirically.
+* **Hybrid Graph legend**: G6 palette in three
+  categories matches the canvas exactly. `-a-53`
+  per-Hybrid Appearance override cascades through
+  cleanly. The Hybrid back-side correction wave's end
+  shape is empirically validated.
+
+Plus the build-note discipline: you rebuilt the
+frontend before walking (web/dist was stale; you pulled
+`-a-51` into the embedded binary). That's the right
+shape for any walk crossing a rust-embed surface.
+Documented in your verdict tail.
+
+### Side observation: click hit-radius on graph canvas
+
+Filed to bug list. Lane: @@FullStackA. Not regression-
+class; discoverability polish.
+
+### Cutting webtest-a-6 for -a-52 only
+
+Per your scope-shrink recommendation. `-a-52` committed
+at `4cf496c` (post your walk; deferred from this batch).
+One focused slice; light walk.
+
+Cut [`../webtest-a/webtest-a-6.md`](../webtest-a/webtest-a-6.md)
+covering just `-a-52` (depth slider forward-only +
+link-filter chip removal). Your queue's reactive — no
+urgency on pickup.

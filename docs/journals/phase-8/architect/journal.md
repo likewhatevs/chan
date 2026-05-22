@@ -4876,3 +4876,80 @@ multi-agent dispatch loop self-heals.
 | `architect/journal.md` | This entry |
 | `alex/event-architect-systacean.md` | -21 URGENT dispatch poke |
 | `systacean/systacean-21.md` | NEW task (enrich poke echo for cache-bust) |
+
+## 2026-05-22 — Big ship from @@WebtestA: proactive graph-wave walk 4/4 HOLD + -a-52 in HEAD + webtest-a-6 cut
+
+### Lane commits landed this beat
+
+| SHA | Subject | Lane |
+|-----|---------|------|
+| `4cf496c` | `Graph depth slider forward-only + drop link filter (fullstack-a-52 — G9 + G10 minimum cut)` | @@FullStackA |
+| `6e57f96` | `docs: -a-52 commit-landed + gate-green ack to @@Architect (4cf496c audit anchor)` | @@FullStackA |
+| `a63c8cb` | `docs: proactive -a-49 + -a-50 + -a-51 graph-wave walkthrough (4/4 HOLD; -a-52 deferred)` | @@WebtestA |
+
+### Proactive graph-wave validation
+
+@@WebtestA's `a63c8cb` is a substantial empirical
+validation of the graph sub-wave. Three load-bearing
+architectural validations:
+
+* **Server contract** (`-a-49`): `/api/graph?scope=drive`
+  returns 1301 nodes / 116 directory nodes with
+  aggregated stats. The filesystem-hierarchy backbone
+  composes cleanly with chan-server's pre-existing
+  hierarchical data shape.
+* **DirectoryInfoBody composition** (`-a-50`): chan-reports
+  stats bridge into the graph inspector via
+  `api.reportDir`. Totals + BY LANGUAGE table + COCOMO
+  estimator render cleanly. Cross-task composition
+  (`systacean-15` aggregation + `-a-48` toggle + `-a-50`
+  inspector) is empirically validated.
+* **Hybrid Graph legend grid** (`-a-51` Task D): G6
+  palette in 3 categories matches the canvas exactly.
+  `-a-53` per-Hybrid Appearance override cascades
+  through. The Hybrid back-side correction wave's
+  end-state is empirically validated.
+
+Plus the build-discipline note (rebuilding web/dist
+before walking a rust-embed-crossing change) is the
+right shape for future walks.
+
+### -a-52 in HEAD via gate-contingent clearance
+
+`4cf496c` committed cleanly post the gate-contingent
+clearance pattern. @@FullStackA's `6e57f96` audit
+anchor closes the loop on the gate-contingent shape.
+
+### webtest-a-6 cut for -a-52 only
+
+Per @@WebtestA's scope-shrink recommendation. `-a-52`
+is one focused slice (G9 depth slider + G10 link
+filter drop); 7 acceptance checks; light walk. Cut as
+[`../webtest-a/webtest-a-6.md`](../webtest-a/webtest-a-6.md).
+
+### Side observation: graph canvas hit-radius
+
+Filed to bug list. Lane: @@FullStackA. Round-2 wave-3
+polish candidate. Click hit-radius too tight; users
+need to zoom-in to register clicks. Real-user impact
+on desktop default-zoom + mobile.
+
+### Lane state at end of round
+
+| Lane | State |
+|------|-------|
+| @@Systacean | -21 URGENT dispatched; -12 parked |
+| @@CI | Idle |
+| @@FullStackA | -a-52 committed (`4cf496c`); next graph polish slice OR G5 markdown overlay OR -a-42 About — pick at next session |
+| @@FullStackB | DONE; idle |
+| @@WebtestA | webtest-a-6 dispatched (light scope; tight walk) |
+| @@WebtestB | DONE; idle |
+
+### What I'm committing this round
+
+| File | Reason |
+|------|--------|
+| `architect/journal.md` | This entry |
+| `alex/event-architect-webtest-a.md` | proactive walk ack + webtest-a-6 dispatch |
+| `webtest-a/webtest-a-6.md` | NEW task (light -a-52 walk) |
+| `phase-8-bugs.md` | graph canvas hit-radius bug entry |
