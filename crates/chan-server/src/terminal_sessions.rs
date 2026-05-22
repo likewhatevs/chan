@@ -2063,14 +2063,21 @@ mod tests {
         });
 
         let out = collect_until(&mut handle, "execute.", Duration::from_secs(5)).await;
+        // systacean-26 follow-up: the PTY wraps long lines at the
+        // terminal's column width, which on macos-latest's
+        // narrower default split the path across `\r` line wraps
+        // (`systa\rcean/systacean-21.md`). Strip CR + LF before
+        // asserting on the substring so the assertion is
+        // terminal-width agnostic.
+        let flat: String = out.chars().filter(|c| *c != '\r' && *c != '\n').collect();
         assert!(
-            out.contains("Poke, it's "),
-            "rich template missing prefix; got {out:?}"
+            flat.contains("Poke, it's "),
+            "rich template missing prefix; got {flat:?} (raw: {out:?})"
         );
         let needle = format!("Check your task at {task_path}#{heading} and execute.");
         assert!(
-            out.contains(&needle),
-            "rich template missing task-location anchor `{needle}`; got {out:?}"
+            flat.contains(&needle),
+            "rich template missing task-location anchor `{needle}`; got {flat:?} (raw: {out:?})"
         );
         registry.close(handle.id(), CloseReason::Explicit);
     }
