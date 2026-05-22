@@ -4041,3 +4041,157 @@ Lane-A test server torn down:
 STILL-PARTIAL on `-a-74` (architect-cut tasks
 follow-up needed). `-a-69` deferred to mechanism +
 future empirical walk.
+
+## 2026-05-22 — proactive walk: -a-82 hang-recovery re-walk + -a-78 slice 1 Team dialog
+
+Proactive walk on HEAD `5cfe964`. Throwaway drive
+r20; chan serve 127.0.0.1:8787; Chrome MCP tab
+`503726041`. Re-walk of the `-a-82` follow-up to my
+flagged `-a-72`/`-a-74` PARTIAL + walk of the new
+`-a-78 slice 1` Team dialog shell.
+
+### Verdicts
+
+| Task | Check | Verdict |
+|------|-------|---------|
+| `-a-82` | Path-keyed buffer survives reload (no tab.id) | HOLD (`chan:editor-buffer:CLAUDE.md` confirmed) |
+| `-a-82` | `saved === undefined` guard in second effect | HOLD (source verified) |
+| `-a-82` | Banner surfaces empirically on divergent reload | **STILL PARTIAL** (banner still not rendering) |
+| `-a-78 1` | "New Team" button replaces watcher button | HOLD |
+| `-a-78 1` | Click → Team dialog renders | HOLD |
+
+### `-a-82` re-walk — most-of-the-way fix but banner STILL not surfacing
+
+**What `-a-82` shipped (per `78d3ed4`)**:
+- `editorBuffer.ts`: key prefix `chan:editor-buffer:`
+  now keyed by `path` (not `tab.id`).
+  `readEditorBuffer(path)` / `writeEditorBuffer(path, ...)`
+  / `clearEditorBuffer(path)` all path-keyed.
+- `FileEditorTab.svelte`:
+  - First effect (mount-time):
+    `recoveredBuffer = divergentBufferOrNull(tab.path, tab.path, disk)`
+    (was `tab.id, tab.path, disk`)
+  - Second effect (persist):
+    **`if (saved === undefined) return;`** guard
+    added (skips clear when disk hasn't loaded
+    yet). Then `content === saved` clear path uses
+    `clearEditorBuffer(tab.path)`. Otherwise
+    `queueBufferWrite(tab.path, content, tab.path)`.
+- 27 LOC diff in FileEditorTab.svelte.
+
+**Empirical verification of mechanism**:
+- Stopped chan serve. Typed
+  `OFFLINE-MARKER-A82-V2` (with editor focus +
+  End key first). Waited 1.5s. Verified
+  localStorage: **single entry
+  `chan:editor-buffer:CLAUDE.md`** with `path:
+  "CLAUDE.md"`, divergent content. **Path-keyed
+  storage works empirically** ✓.
+- This addresses the tab.id-regeneration failure
+  mode from `-a-72`/`-a-74` walks.
+
+**Empirical banner STILL doesn't surface**:
+- Tested 3 scenarios:
+  1. Server-down typing + server-restart + reload:
+     buffer was persisted (path-keyed), but reload
+     showed editor with prior auto-save content
+     (server reconnect may have flushed queued
+     writes). No banner.
+  2. JS-inject divergent buffer with correct schema
+     (`content: string, updatedAt: number, path:
+     string`) → force reload. **Banner did NOT
+     render**. localStorage was cleared on mount.
+  3. JS-inject + reload with `setItem(...)` before
+     `location.reload()` to ensure injection
+     persists. Same result.
+
+**Root-cause hypothesis (refined)**:
+
+Two-effect race STILL exists even after `-a-82`:
+
+1. Mount: tab.content = "", tab.saved = undefined
+2. First effect: disk = "" → readBuffer reads buf →
+   recoveredBuffer = buf ✓ (banner could render here)
+3. Second effect: saved === undefined → return ←
+   `-a-82` guard works here ✓
+4. **Async file load completes**: tab.saved = disk
+   content, tab.content also updates
+5. Reactivity re-triggers BOTH effects:
+   - Second effect: saved != undefined, content ===
+     saved → `clearEditorBuffer(tab.path)` → buffer
+     removed from localStorage
+   - First effect re-runs: disk = saved (disk
+     content) → `divergentBufferOrNull` reads
+     localStorage → **returns null** (just cleared)
+     → recoveredBuffer = null
+6. Banner state nulled → banner doesn't render
+
+The `-a-82` `saved === undefined` guard prevents
+the INITIAL clear. But after async load, BOTH
+effects re-run, and the second effect can still
+clear the buffer if `content === saved`. The first
+effect re-runs reading the now-cleared buffer →
+recoveredBuffer = null.
+
+**Proposed third fix**: gate the second effect's
+clear-when-clean on `!recoveredBuffer` — if there's
+an active recovered buffer awaiting user decision,
+don't clear. OR run the first effect AFTER the
+second so its read sees the cleared state and
+correctly nulls recoveredBuffer.
+
+OR — simpler: once the FIRST effect sets
+recoveredBuffer, DON'T re-run it on subsequent
+dependency changes. Mount-only effect via
+`untrack` or similar.
+
+Lane: **@@FullStackA**. The user-visible data-loss
+prevention surface still isn't complete. `-a-82`
+fixed the persistence-key shape but the
+effect-ordering race lives on.
+
+### `-a-78 slice 1` Team dialog — HOLD
+
+* **Button**: cleared localStorage to avoid
+  buffer noise. Opened terminal via Cmd+Alt+T.
+  Opened rich prompt via Cmd+Alt+P.
+* **Find query**: located **"New Team" button**
+  (ref_84) in the rich prompt toolbar (was the
+  watcher button pre-`-a-78`). Spawn agent
+  button also present (ref_83).
+* **Click → dialog**: clicked "New Team"
+  button. **Dialog renders** with:
+  - Title "New Team"
+  - "Your name" input (default "Alex")
+  - "Team name" input (default "team-alpha")
+  - "Auto-prefix names with @@" checkbox
+    (checked)
+  - "Team size (excluding you): 2" slider
+  - MEMBERS section: Lead (host: claude) +
+    Worker1 (host: claude) + KEY=value env var
+    inputs per member + Lead radio button per
+    member
+  - REAL ESTATE toggle: "Tabs in current
+    Hybrid" / "Split panes"
+  - "host name required" hint at bottom
+  - Cancel + Bootstrap buttons
+* `team-dialog` div has `role="dialog"`.
+  Backdrop separate.
+
+Comprehensive dialog shell. Slice 2+ will wire
+the actual Bootstrap action.
+
+### State at end of walk
+
+Lane-A test server torn down:
+
+1. chan serve killed (twice — once for server-
+   down test, once final).
+2. `rm -rf /tmp/chan-test-phase8-wa-r20/`.
+3. `chan remove` → unregistered.
+4. Chrome MCP tab closed.
+
+**`-a-82` STILL PARTIAL** on banner surface
+(path-keying landed clean, but effect-ordering race
+unfixed). **`-a-78 slice 1` HOLD** on dialog
+shell. The hang-recovery saga continues.

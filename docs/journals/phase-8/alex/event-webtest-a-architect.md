@@ -2226,3 +2226,115 @@ infrastructure is set up.
 Standing by. Recommend cutting a follow-up task
 for the `FileEditorTab.svelte` initial-mount race
 before declaring `-a-72`/`-a-74` shipped.
+
+## 2026-05-22 — poke (-a-82 re-walk STILL PARTIAL + -a-78 slice 1 HOLD)
+
+Proactive walk on HEAD `5cfe964`. Throwaway drive
+r20; chan serve 127.0.0.1:8787; Chrome MCP tab
+`503726041`. Verdict in
+[`../webtest-a/webtest-a-1.md`](../webtest-a/webtest-a-1.md).
+
+### `-a-82` re-walk — most-of-fix landed, banner STILL not surfacing
+
+**What `-a-82` shipped (verified)**:
+* Path-keyed storage: `chan:editor-buffer:CLAUDE.md`
+  (was `chan:editor-buffer:tab-4`). Confirmed
+  empirically by typing offline + observing the
+  key shape in localStorage.
+* `saved === undefined` guard in second effect:
+  source-verified at
+  `FileEditorTab.svelte:206` (added the early
+  return when `saved` hasn't loaded yet).
+* Schema change: `lastWrite` → `updatedAt`. My
+  prior injection tests with the OLD schema were
+  silently rejected by the read parser.
+
+**Empirical banner STILL doesn't render**:
+Three test scenarios all failed to surface the
+banner. Even with correct-schema JS injection
+(`{content, updatedAt, path}`), the banner does
+not render on reload + localStorage is cleared.
+
+**Refined root-cause hypothesis**:
+
+The `-a-82` guard prevents the INITIAL clear (when
+`saved === undefined`). But after the async
+file-load completes:
+
+1. tab.saved updates from undefined → disk content
+2. Both `$effect`s re-trigger (saved is a dep of both)
+3. Second effect: now `saved !== undefined`, and
+   `content === saved` (both equal disk content) →
+   `clearEditorBuffer(tab.path)` → buffer cleared
+4. First effect re-runs: `divergentBufferOrNull`
+   reads localStorage → returns null (just cleared)
+   → `recoveredBuffer = null`
+5. Banner state nulled → template stops rendering
+
+The `-a-82` fix addressed the initial-mount race
+(saved undefined). But there's a SECOND race after
+async load: the second effect can still clear the
+buffer because the buffer content was already
+PERSISTED to disk before the divergence check
+runs in this scenario.
+
+**Proposed third fix**: either
+1. Gate second effect's `clearEditorBuffer` on
+   `!recoveredBuffer` (don't clear while banner is
+   active awaiting user decision), OR
+2. Make first effect mount-only via `untrack` so
+   it doesn't re-read after the second clears, OR
+3. Run divergence check ONCE on mount and use
+   that as the source of truth for the banner
+   (don't re-trigger from `tab.saved` changes).
+
+Lane: **@@FullStackA**. **Three** task numbers
+(`-a-72`/`-a-74`/`-a-82`) have iterated on this
+data-loss prevention without yet surfacing the
+banner empirically. The end-to-end UX still isn't
+working.
+
+Recommend either:
+- Cut `-a-83` for the effect-ordering race, OR
+- Reframe the hang-recovery feature: instead of
+  banner-on-reload, maybe a different UX surface
+  (notification toast on save-failure, or never-
+  lose-content via SSE/websocket sync).
+
+### `-a-78 slice 1` — Team dialog shell HOLD
+
+Cleared localStorage. Cmd+Alt+T → terminal.
+Cmd+Alt+P → rich prompt. Found **"New Team"
+button** in rich prompt toolbar (replaces the
+prior watcher button per spec). Clicked it.
+
+Dialog renders with:
+- Title "New Team"
+- "Your name" input (default Alex)
+- "Team name" input (default team-alpha)
+- "Auto-prefix names with @@" checkbox (checked)
+- "Team size (excluding you): 2" slider
+- MEMBERS: Lead + Worker1, each with host
+  ("claude") + KEY=value env input + Lead
+  radio button
+- REAL ESTATE toggle: "Tabs in current Hybrid"
+  vs "Split panes"
+- "host name required" hint
+- Cancel / Bootstrap buttons
+
+The dialog `<div>` has `role="dialog"`. Slice 2+
+will wire Bootstrap.
+
+### Suggested commit shape
+
+* **Commit subject**: `docs: webtest-a walk —
+  -a-82 STILL PARTIAL (effect-ordering race
+  flagged) + -a-78 slice 1 Team dialog HOLD`.
+* **Files**:
+  * `docs/journals/phase-8/webtest-a/webtest-a-1.md`
+  * `docs/journals/phase-8/alex/event-webtest-a-architect.md`
+* Path-limited `git commit`.
+
+Standing by. **Strongly recommend** cutting
+`-a-83` for the effect-ordering race before
+declaring hang-recovery shipped.
