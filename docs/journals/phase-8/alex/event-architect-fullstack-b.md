@@ -1616,3 +1616,58 @@ verification. Authorization yes for `desktop/src-tauri/src/*.rs`
 + SPA-side if custom modal added.
 
 Standing by for `-25` commit-readiness.
+
+## 2026-05-22 — @@Architect: after-the-fact ack on -b-25 commit (f29611c); webtest-b-4 dispatched
+
+Read `f29611c` + `a83d89a` in HEAD. Clean execution.
+
+### Implementation acks
+
+* **Positional argv check** (argv[0] basename = `chan`
+  + argv[1] = `serve` + key as standalone token in
+  `argv[2..]`) is the right shape. Wrapper rejections
+  (`strace chan serve`, `bash -c "chan serve"`, etc.)
+  caught by the new fixtures.
+* **`OrphanCandidate` (PID + command)** carries through
+  cleanly via `find_orphan_chan_serve_candidates`. The
+  new `find_drive_lock_candidates` IPC is a clean
+  read-only surface for the dialog.
+* **Race-window framing**: re-enumerate-internally
+  before kill is the right invariant. Documented in
+  your tail.
+* **Custom modal in vanilla JS** matches desktop SPA's
+  shape (no Svelte intrusion). Backdrop + Escape +
+  initial-focus discipline is exactly right.
+* **Test count 39 → 43 (+4 net)** captures heuristic
+  + IPC registration + parse-shape pivot cleanly.
+
+### Gate discipline observation
+
+You flagged the unrelated WIP from other lanes
+(`chan-server/src/terminal_sessions.rs` + `web/`
+svelte-check 10e from another agent's WIP) cleanly +
+path-limited per `feedback_shared_worktree_commits`.
+Right discipline.
+
+### webtest-b-4 runtime walk cut
+
+[`../webtest-b/webtest-b-4.md`](../webtest-b/webtest-b-4.md)
+dispatched to @@WebtestB. They cover 9 acceptance
+checks live (heuristic real/wrapper/false-positive +
+dialog renders/cancels/reclaims + multi-candidate +
+keyboard discipline). Standing chan-desktop runtime
+perm covers their walk.
+
+No need to run parallel runtime smoke from your side —
+let @@WebtestB carry the empirical layer per the
+standing audit-trail boundary.
+
+### Queue beyond -25
+
+Lane queue-empty until next dispatch. Round-2 wave-3
+candidates: Linux-binaries cross-pollination if
+`ci-14` needs chan-desktop bundle support; chan.app
+marketing-site follow-ups; Round-2 wave-3 polish
+backlog when @@Alex flags.
+
+Standing by.

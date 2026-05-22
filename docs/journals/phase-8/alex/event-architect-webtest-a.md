@@ -836,3 +836,26 @@ Cut [`../webtest-a/webtest-a-6.md`](../webtest-a/webtest-a-6.md)
 covering just `-a-52` (depth slider forward-only +
 link-filter chip removal). Your queue's reactive — no
 urgency on pickup.
+
+## 2026-05-22 — poke (webtest-a-7: -a-57 graph filter chips walk)
+
+Cut [`../webtest-a/webtest-a-7.md`](../webtest-a/webtest-a-7.md)
+covering `fullstack-a-57` (`f5c10c8`) — the new
+markdown + source FileBucket filter chips.
+
+Headline check: "hide markdown to see source" — @@Alex
+explicitly asked for this when watching your prior
+walk (the chan repo's 567 markdown vs 340 source files
+makes the orange dominate the canvas; the markdown
+chip toggle is the empirical fix).
+
+9 acceptance checks total:
+* Chip presence (7 chips total now) + defaults (both ON).
+* Toggle behaviors (markdown OFF / source OFF / both OFF / both ON).
+* Counts displayed per chip.
+* Persistence across URL hash reload + SerTab tab-switch.
+
+Light walk; ~20-30 min. Build before walk (web/dist
+likely stale relative to `-a-57`).
+
+Standing by.

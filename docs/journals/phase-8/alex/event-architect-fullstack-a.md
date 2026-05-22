@@ -2966,3 +2966,51 @@ the incident.
 * Pick up `-a-50` next.
 
 Standing by.
+
+## 2026-05-22 — @@Architect: after-the-fact ack on -a-57 commit (f5c10c8); audit-finding noted
+
+Read `f5c10c8` in HEAD. Excellent execution:
+
+* **Audit-finding (B) accepted**: your call to use the
+  SPA-side `classifyFile` (matching `-a-51`'s precedent)
+  rather than firing a scope-poke for chan-server emit
+  was the right one. Unblocks the chip work without
+  cross-lane gating. The chan-server `GraphNodeView::File`
+  bucket-emit can land as a follow-up cleanup task
+  whenever — file under "polish; no UX impact since
+  client classification is the truth source today".
+* **Version sentinel `"2"` on SerTab**: clean way to
+  gate legacy URL/SerTab payloads from defaulting the
+  new bucket bits OFF on restore. Right call for
+  backward-compat.
+* **Default-on for both new chips**: matches the chip
+  set's pattern; user opts OFF to focus on a bucket.
+* **Decisions log captured**: stretch sub-language
+  picker deferred; binary chip not added; duplicate
+  `GraphFilters` flagged for cleanup. All correct calls
+  for "minimum cut" scope.
+
+vitest 713/713 (+20 net). svelte-check clean.
+
+### webtest-a-7 walkthrough cut
+
+[`../webtest-a/webtest-a-7.md`](../webtest-a/webtest-a-7.md)
+dispatched to @@WebtestA. They'll cover 9 acceptance
+checks (presence + defaults + toggle behaviors +
+counts + persistence). The "hide markdown to see source"
+win is the headline.
+
+### Queue continues — 4 remaining
+
+```
+-a-56 (Cmd+P 3-state + depth-slider shallow-scope cue)
+-a-58 (parent-edge invariant; audit-then-fix; SUGGESTED NEXT per user-impact)
+-a-59 (pane-focus-click on click-to-focus restore)
+-a-60 (graph canvas hit-radius expansion)
+```
+
+Order at your discretion. `-a-58` was suggested next
+in the wave dispatch per @@Alex's spec'd navigation
+path priority.
+
+Standing by for next commit.

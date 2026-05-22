@@ -1009,3 +1009,24 @@ closed cleanly.
 
 Standing by for next chan-desktop runtime work to land
 + next walkthrough dispatch.
+
+## 2026-05-22 — poke (webtest-b-4: -b-25 chan-desktop heuristic + reclaim dialog runtime walk)
+
+Cut [`../webtest-b/webtest-b-4.md`](../webtest-b/webtest-b-4.md)
+covering `fullstack-b-25` (`f29611c`) — the tightened
+orphan-detect heuristic + custom reclaim-dialog with
+candidate-PID display.
+
+Substantive walk (medium scope; ~30-45 min). Standing
+chan-desktop runtime perm covers throwaway-drive
+spawn + staged orphan processes.
+
+9 acceptance checks:
+* Heuristic: real-orphan / wrapper-rejected / false-positive-avoided.
+* Dialog: PID + command renders / Cancel works / Reclaim works / multi-candidate.
+* Keyboard: backdrop + Escape cancel; Reclaim has initial focus + Enter triggers.
+
+By-PID SIGTERM only for staged orphan processes; no
+`pkill -f`. Tear down per the standing rule.
+
+Standing by.

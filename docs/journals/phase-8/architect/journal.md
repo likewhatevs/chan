@@ -5026,3 +5026,77 @@ queued.
 | `fullstack-a/fullstack-a-{56,57,58,59,60}.md` | 5 NEW task files |
 | `fullstack-b/fullstack-b-25.md` | NEW task file |
 | `ci/ci-14.md` | NEW task file |
+
+## 2026-05-22 — wave-3 first landings: -a-57 + -b-25 in HEAD; webtest-a-7 + webtest-b-4 cut
+
+Wave-3 dispatch executing at speed. Two of seven tasks
+committed within hours of the fan-out:
+
+| SHA | Subject | Lane |
+|-----|---------|------|
+| `f5c10c8` | Graph filter chips: markdown + source FileBucket toggles (fullstack-a-57) | @@FullStackA |
+| `f29611c` | chan-desktop: tighten orphan-detect heuristic + render candidate PIDs in reclaim dialog (fullstack-b-25) | @@FullStackB |
+| `a83d89a` | docs: -b-25 commit-ready poke ack | @@FullStackB |
+
+### -a-57 cleared + audit-finding acked
+
+@@FullStackA discovered at pickup that `FileBucket`
+data does NOT land in the graph-node payload from
+`systacean-16` (it's on chan-report's `FileStats`, not
+`GraphNodeView::File`). They chose route (B) — reuse
+`-a-51`'s SPA-side `classifyFile` — over firing a
+scope-poke for chan-server emit. Right call; matches
+precedent + unblocks without cross-lane gating.
+
+chan-server emit extension can land as a polish
+cleanup task whenever; classified as no-UX-impact
+since client classification is the truth source.
+
+### -b-25 cleared cleanly
+
+@@FullStackB shipped both pieces (positional argv
+check + custom reclaim dialog) in one atomic commit.
+`OrphanCandidate` (PID + command) via new
+`find_drive_lock_candidates` IPC. Wrapper rejections
+caught by new fixtures. 39 → 43 tests (+4 net).
+
+Gate-discipline observation: path-limited per
+`feedback_shared_worktree_commits`; flagged unrelated
+WIP from other lanes cleanly.
+
+### Walkthroughs cut
+
+| Task | Lane | Scope |
+|------|------|-------|
+| [`webtest-a-7`](../webtest-a/webtest-a-7.md) | @@WebtestA | -a-57 filter chip walk; 9 checks; light |
+| [`webtest-b-4`](../webtest-b/webtest-b-4.md) | @@WebtestB | -b-25 runtime walk; 9 checks; medium |
+
+### @@Systacean -21 in flight
+
+Worktree: `Cargo.lock` + `chan-server/Cargo.toml`
+(timestamp dep) + `event_watcher.rs` (schema) +
+`terminal_sessions.rs` (templating) modified.
+Commit-readiness expected imminent.
+
+### Lane state after this beat
+
+| Lane | State |
+|------|-------|
+| @@Systacean | -21 in flight; commit-readiness expected |
+| @@FullStackA | -a-57 ✓; -a-56/-a-58/-a-59/-a-60 queued; -a-58 suggested next |
+| @@FullStackB | -b-25 ✓; queue-empty until next dispatch |
+| @@CI | -14 in inbound; not yet started |
+| @@WebtestA | webtest-a-7 dispatched |
+| @@WebtestB | webtest-b-4 dispatched |
+
+### What I'm committing this round
+
+| File | Reason |
+|------|--------|
+| `architect/journal.md` | This entry |
+| `alex/event-architect-fullstack-a.md` | -a-57 ack + queue continuation |
+| `alex/event-architect-fullstack-b.md` | -b-25 ack + webtest-b-4 cross-ref |
+| `alex/event-architect-webtest-a.md` | webtest-a-7 dispatch poke |
+| `alex/event-architect-webtest-b.md` | webtest-b-4 dispatch poke |
+| `webtest-a/webtest-a-7.md` | NEW task |
+| `webtest-b/webtest-b-4.md` | NEW task |
