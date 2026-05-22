@@ -3619,3 +3619,172 @@ Lane-A test server torn down:
 5/5 HOLD. `-a-67a` ships clean as the first slice
 of the right-click menu revamp. Ready for slice 1b
 (click-to-inspector) when @@FullStackA picks up.
+
+## 2026-05-22 — proactive walk: fullstack-a-67 slice 1b (click→inspector) + fullstack-a-72 (editor hang-recovery)
+
+Proactive walk (no explicit task cut — driven by
+prior walk's "ready for slice 1b" flag + ROUND-2
+WAVE-2 hang-recovery landing). HEAD `42f8647`;
+throwaway drive r17; chan serve 127.0.0.1:8787;
+Chrome MCP tab `503725997`.
+
+Per the **proactive coverage walks** discipline: my
+`webtest-a-12` flagged "ready for slice 1b (click-to-
+inspector) wiring." Slice 1b (`493d9ce`) shipped
+2h later; walking it without waiting for explicit
+routing.
+
+### Verdicts
+
+| Check | Surface | Verdict |
+|-------|---------|---------|
+| `-a-67 1b` | Scope-header is `<button>` (was `<div>`) | HOLD |
+| `-a-67 1b` | Cursor `pointer` (was `default`) | HOLD |
+| `-a-67 1b` | `role="menuitem"` aria shape | HOLD |
+| `-a-67 1b` | Click → inspector opens with scope target | HOLD |
+| `-a-72` #1 | Edit + force reload restores | PARTIAL (banner UI not surfaced empirically) |
+| `-a-72` #2 | Saved content + reload → no banner | HOLD |
+| `-a-72` #3 | TTL eviction | HOLD (mechanism via vitest test pin) |
+| `-a-72` #4 | Storage cap respected | HOLD (mechanism via vitest test pin) |
+
+### `-a-67 slice 1b` per-check evidence (4/4 HOLD)
+
+* Pre-walk DOM snapshot (slice 1a from prior walk):
+  `tag=DIV, cursor=default, no click handler`.
+* Post-`-a-67 1b` DOM snapshot:
+  - `tag=BUTTON` (was DIV)
+  - `role="menuitem"`
+  - `title="CLAUDE.md"`
+  - `computedCursor: "pointer"` (was default)
+  - `isDisabled: false`
+* **Click test**: closed the inspector via the
+  arrow-toggle (top-right of right pane). URL hash
+  lost `gi:1` flag. Reopened the graph hamburger,
+  clicked the scope-header row. URL hash regained
+  `gi:1`; inspector populated with CLAUDE.md
+  DOCUMENT info (size 9.6 KB, breadcrumb
+  `drive / CLAUDE.md`, Open / Show File buttons,
+  LINKS TO list).
+* Slice 1a → 1b transition is clean: same
+  visual surface, now interactive.
+
+### `-a-72` editor hang-recovery — mixed verdict
+
+#### Mechanism + source verification (HOLD)
+
+* `editorBuffer.ts` shape verified at source:
+  - `BUFFER_KEY_PREFIX = "chan:editor-buffer:"`
+  - Per-tab key: `chan:editor-buffer:<tabId>`
+  - Write debounce: `BUFFER_WRITE_DEBOUNCE_MS = 500`
+  - `divergentBufferOrNull(tabId, tabPath, disk)`:
+    - returns null if no buffer
+    - clears + returns null on path mismatch (defensive)
+    - returns null if buf.content === disk
+    - returns buf if buf.path === tabPath && buf.content !== disk
+* `FileEditorTab.svelte` integration verified:
+  - Mount-time effect sets `recoveredBuffer`
+  - Debounced persist effect writes to localStorage
+  - Banner UI at lines 624-650 with `role="alert"` +
+    Restore / Discard buttons
+* Vitest test pins: 152-line `editorBuffer.test.ts`
+  covers write/read/clear/divergence/eviction.
+  Mechanism is test-pin verified.
+
+#### Empirical PARTIAL on banner UI display (#1)
+
+Tried multiple approaches to surface the banner:
+
+1. **Normal typing + reload**: auto-save races
+   faster than buffer-write debounce (500ms).
+   Buffer is cleared before it persists (clean
+   state `content === saved` triggers
+   `clearEditorBuffer`). localStorage stays empty.
+   **Cannot reproduce** the dirty-state-at-reload
+   scenario in a happy-path harness.
+2. **Server-down typing + reload**: stopped
+   `chan serve` mid-session, typed unsaved content,
+   waited >2x debounce. localStorage still empty —
+   the editor doesn't persist when the typing
+   target's auto-save loop never gets to fire?
+   Possibly the editor effect needs a `tab.saved`
+   that differs from `tab.content`, and on
+   network-failed save the state may not advance
+   to "dirty" reliably in the Chrome MCP harness.
+3. **JS-inject + force reload**: cleared localStorage,
+   injected `chan:editor-buffer:tab-1..tab-20`
+   entries with `path: "CLAUDE.md"` +
+   `content: "INJECTED-DIVERGENT-CONTENT"`.
+   Force-reloaded. Observed: **`tab-4` was the
+   editor's tab.id** (cleared on mount; the other
+   19 keys remain). But **banner DID NOT render**
+   visibly. `document.querySelector('.recovery-banner')`
+   returns null; `[role=alert]` count is 0.
+
+#### Side observation: initial-mount race
+
+The empirical evidence (tab-4 buffer CLEARED but
+banner NOT rendered) suggests an **initial-mount
+race** between two effects in
+`FileEditorTab.svelte`:
+
+1. First effect (lines 167-184): mount-time
+   `divergentBufferOrNull` → sets `recoveredBuffer`.
+2. Second effect (lines 185-202): tracks
+   `tab.content` + `tab.saved`. If
+   `content === saved` → `clearEditorBuffer`.
+
+On initial mount, BOTH `tab.content` and
+`tab.saved` may be undefined (file not yet loaded
+from server). `undefined === undefined` evaluates
+TRUE → second effect calls `clearEditorBuffer(tabId)`
+BEFORE the banner can render.
+
+When the async file-load completes, `tab.saved`
+becomes the disk content + first effect re-runs:
+- localStorage tab-N buffer was just cleared
+- `divergentBufferOrNull` returns null
+- `recoveredBuffer = null`
+- Banner state never sets / clears before render
+
+The mechanism (write/read/clear) is correct per
+test pins, but the lifecycle-ordering of the
+banner trigger may be fragile.
+
+**Possible fix**: gate the second effect's
+`clearEditorBuffer` on `tab.saved !== undefined`
+OR detect "initial mount before disk load" and
+skip the clear.
+
+Lane: @@FullStackA. Severity: the data-loss
+prevention mechanism may not actually warn the
+user on real hang scenarios. Mechanism-verified
+shape is sound; the lifecycle-glue needs review.
+
+### Highlights
+
+* **`-a-67 1b` is the right shape**: button
+  semantics + cursor pointer + role menuitem +
+  click → inspector. The display-only boundary
+  from slice 1a is now lifted cleanly. UX win.
+* **`-a-72` mechanism is sound at the unit level**:
+  152 lines of vitest cover write / read / clear /
+  divergence / eviction / cap.
+* **`-a-72` empirical banner display blocked**:
+  could not reproduce the banner UI surfacing in
+  3 different scenarios. Side observation flagged
+  above for @@FullStackA review.
+
+### State at end of walk
+
+Lane-A test server torn down:
+
+1. chan serve killed (twice — once mid-walk for
+   network-fail simulation, once final).
+2. `rm -rf /tmp/chan-test-phase8-wa-r17/`.
+3. `chan remove` → unregistered.
+4. Chrome MCP tab closed.
+
+4/4 HOLD on `-a-67 1b` (click-to-inspector ships
+clean). 1/4 HOLD + 1 PARTIAL + 2 HOLD-mechanism on
+`-a-72` (banner empirical-display fragility flagged
+as critical side observation).

@@ -1934,3 +1934,122 @@ re-walk folder scope explicitly.
 * Path-limited `git commit`.
 
 Standing by.
+
+## 2026-05-22 — poke (proactive walk: -a-67 slice 1b 4/4 HOLD + -a-72 mechanism HOLD but banner UI fragile)
+
+Proactive walk on HEAD `42f8647` (no explicit task
+cut — driven by prior `webtest-a-12` walk's "ready
+for slice 1b" flag + the WAVE-2 `-a-72` landing).
+Throwaway drive r17; chan serve 127.0.0.1:8787;
+Chrome MCP tab `503725997`. Verdict appended to
+[`../webtest-a/webtest-a-1.md`](../webtest-a/webtest-a-1.md)
+under `## 2026-05-22 — proactive walk`.
+
+### `-a-67 slice 1b` (`493d9ce`): 4/4 HOLD
+
+The display-only → interactive transition lands
+cleanly:
+- `tag: DIV → BUTTON`
+- `cursor: default → pointer`
+- `role: <none> → menuitem`
+- Click → inspector populates with scope target
+  (CLAUDE.md DOCUMENT, breadcrumb, Open/Show File,
+  LINKS TO)
+
+URL hash gains `gi:1` on click, confirming
+inspector state flip.
+
+### `-a-72` editor hang-recovery: MIXED VERDICT
+
+| Check | Verdict |
+|-------|---------|
+| #1 Edit + force reload restores | **PARTIAL** (banner UI not surfaced empirically) |
+| #2 Saved content + reload → no banner | HOLD |
+| #3 TTL eviction | HOLD (vitest mechanism) |
+| #4 Storage cap respected | HOLD (vitest mechanism) |
+
+#### Mechanism is sound (test-pin verified)
+
+- `editorBuffer.ts` shape correct: per-tab key,
+  500ms debounce, divergence helper with path
+  guard, eviction + cap policies.
+- `FileEditorTab.svelte` integration: mount-time
+  check + persist effect + banner template with
+  `role="alert"` + Restore/Discard buttons.
+- Vitest 152-line `editorBuffer.test.ts` covers
+  write / read / clear / divergence / eviction /
+  cap.
+
+#### Empirical banner does NOT surface (CRITICAL side observation)
+
+Tried 3 approaches:
+
+1. **Normal typing → reload**: auto-save races
+   buffer-write (500ms). State stays clean
+   (`content === saved`); buffer auto-cleared.
+   localStorage empty.
+2. **Server-down typing → reload**: stopped chan
+   serve mid-session, typed, waited >2x debounce.
+   localStorage still empty (network-fail path may
+   not advance the dirty state in the Chrome MCP
+   harness).
+3. **JS-inject 20 buffers + reload**: 19 keys
+   remain (no path match), `tab-4` cleared (editor
+   path match). But `.recovery-banner` element
+   NOT rendered; `[role=alert]` count is 0.
+
+#### Root cause hypothesis: initial-mount race
+
+Two `$effect`s in `FileEditorTab.svelte`:
+
+1. Mount-time effect (167-184): sets
+   `recoveredBuffer = divergentBufferOrNull(tab.id,
+   tab.path, disk)`.
+2. Persist effect (185-202): on `content === saved`
+   → `clearEditorBuffer(tab.id)`.
+
+On initial mount, **both `tab.content` and
+`tab.saved` may be undefined** (file not yet
+loaded). `undefined === undefined` → TRUE → second
+effect clears the localStorage entry BEFORE the
+banner can render.
+
+When async file-load completes (`tab.saved`
+populated), first effect re-runs:
+- localStorage tab-N buffer was just cleared
+- `divergentBufferOrNull` returns null
+- `recoveredBuffer = null`
+- Banner never displays
+
+**Proposed fix**: gate second effect's
+`clearEditorBuffer` on `tab.saved !== undefined`
+OR detect "initial-mount-before-disk-load" and
+skip the clear.
+
+Severity: **the data-loss prevention mechanism may
+not actually warn the user on real hang scenarios**.
+The vitest test pins pass because they mock the
+lifecycle (sync); the real component lifecycle has
+async load timing that exposes this race.
+
+Lane: @@FullStackA. Worth flagging to @@Alex too —
+this is the load-bearing data-damage scenario
+@@Alex flagged in the addendum-a.md note ("when the
+editor or terminal hangs, the only way to get back
+to it on the desktop native app is by closing the
+window and reopening.. you end up losing data").
+
+### Suggested commit shape
+
+* **Commit subject**: `docs: webtest-a proactive walk
+  — -a-67 1b 4/4 HOLD + -a-72 banner UI fragility
+  flagged (mechanism HOLD via vitest; empirical
+  display blocked)`.
+* **Files**:
+  * `docs/journals/phase-8/webtest-a/webtest-a-1.md`
+  * `docs/journals/phase-8/alex/event-webtest-a-architect.md`
+* Path-limited `git commit`.
+
+Standing by. Recommend @@FullStackA investigate the
+banner-display race before declaring `-a-72` fully
+landed.
