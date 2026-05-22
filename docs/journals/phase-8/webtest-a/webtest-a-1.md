@@ -4410,3 +4410,112 @@ Lane-A test server torn down:
 synthetic-row vs indexer-driven-tree question
 needs follow-up before declaring Drafts FB surface
 shipped.
+
+## 2026-05-22 — proactive walk: -a-66 b follow-up (Drafts row re-walk) + -a-84 rich prompt placeholder offset
+
+Proactive walk on HEAD `3aed6d0`. Throwaway drive
+r23; chan serve 127.0.0.1:8787; Chrome MCP tab
+`503726062`. Re-walk of my flagged `-a-66 slice b`
+PARTIAL after `-a-66 b follow-up` (`7be215e`) +
+walk of `-a-84` rich prompt placeholder offset.
+
+### Verdicts (5/5 HOLD)
+
+| Task | Check | Verdict |
+|------|-------|---------|
+| `-a-66 b` | Drafts row renders in FB | HOLD (PARTIAL closed) |
+| `-a-66 b` | Yellow tint applied | HOLD |
+| `-a-84` | Cursor + placeholder don't overlap | HOLD |
+| `-a-84` | Placeholder hidden on type | HOLD |
+| `-a-84` | Placeholder reappears on full delete | HOLD |
+
+### `-a-66 slice b follow-up` — PARTIAL closed
+
+The follow-up `7be215e` ("File browser Drafts row:
+also gate synthetic injection on dir=''")
+addressed the empirical gap I flagged in
+`9ad002e`. Verified:
+
+* **Drafts row IS rendered** between `docs/` and
+  `scripts/` in BOTH the docked FB (left) AND the
+  main pane FB (right). Alphabetical position
+  consistent with `sortTreeEntries`.
+* **Class**: `row dir svelte-1ms350m drafts-row zebra`
+* **Background color**: `rgba(227, 179, 65, 0.1)`
+  — subtle yellow tint
+* **Name text color**: `rgb(227, 179, 65)` —
+  yellow accent
+* **Row count**: 18 dirs+files vs prior 17 (Drafts
+  added)
+
+Screenshot confirms: `Drafts/` row visible with
+yellow background tint + yellow folder icon + yellow
+filename text. UX cue clear: this row reads as
+"different category" at a glance.
+
+The root cause hypothesis from my prior walk
+(over-ride by indexer event stream) was correct in
+spirit — the fix gated the synthetic injection so
+it wouldn't be over-ridden during subsequent dir
+loads. Mechanism + empirical now aligned.
+
+### `-a-84` rich prompt placeholder offset — HOLD
+
+@@Alex's report: "the cursor sits THROUGH the
+first character of the placeholder" (cursor at
+position 0 overlapping the `W` of "Write a
+multi-line command...").
+
+Empirical verification post-`3869a07`:
+
+* **Cursor + placeholder don't overlap**:
+  - Cursor at `x=350.04, w=1` → right edge at
+    `x=351.04`
+  - Placeholder at `x=353, w=1053` → left edge
+    `x=353`
+  - Gap of ~2px between cursor and placeholder
+  - JS-computed `overlap: false`
+  - Visually: cursor renders as a clean `|`
+    BEFORE the placeholder's "W"; no character
+    collision.
+
+* **Hidden on type**: typed `x` into the empty
+  rich prompt; placeholder disappeared from DOM
+  (`placeholderStillPresent: false`).
+
+* **Reappears on full delete**: pressed Backspace;
+  placeholder reappeared (`placeholderReappeared:
+  true`).
+
+The `{#if prompt.buffer === ""}` conditional render
+is preserved; the cursor-offset shift (option B
+per the architect ack: "offset right of CM6
+cursor") doesn't interact with the show/hide flow.
+
+### Highlights
+
+* **`-a-66 b` PARTIAL → HOLD in one round-trip**:
+  proactive walk → flag → architect routing →
+  fix → re-walk → confirmed. The mechanism-vs-
+  empirical gap is now closed.
+* **`-a-84` micro-fix lands clean**: 2px cursor-
+  placeholder gap is enough to make the visual
+  collision go away; the conditional render
+  contract is preserved.
+* **Yellow tint matches the addendum-a Drafts
+  branding**: `rgb(227, 179, 65)` reads as a warm
+  yellow that the user immediately associates
+  with the new draft surface.
+
+### State at end of walk
+
+Lane-A test server torn down:
+
+1. chan serve killed.
+2. `rm -rf /tmp/chan-test-phase8-wa-r23/`.
+3. `chan remove` → unregistered.
+4. Chrome MCP tab closed.
+
+5/5 HOLD. `-a-66 b` PARTIAL closed via the
+`7be215e` follow-up; `-a-84` placeholder offset
+empirically clean.

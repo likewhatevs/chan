@@ -2463,3 +2463,61 @@ mechanism. PASS.
 Standing by. Recommend cutting a follow-up for
 the `-a-66 b` SPA tree-data flow before declaring
 Drafts FB surface shipped.
+
+## 2026-05-22 — poke (proactive: -a-66 b PARTIAL CLOSED via 7be215e + -a-84 placeholder offset HOLD)
+
+Proactive walk on HEAD `3aed6d0`. Throwaway drive
+r23; chan serve 127.0.0.1:8787; Chrome MCP tab
+`503726062`. Verdict in
+[`../webtest-a/webtest-a-1.md`](../webtest-a/webtest-a-1.md).
+
+### Verdicts: 5/5 HOLD
+
+| Task | Verdict |
+|------|---------|
+| `-a-66 b` Drafts row renders | HOLD (**PARTIAL closed**) |
+| `-a-66 b` Yellow tint | HOLD |
+| `-a-84` Cursor + placeholder don't overlap | HOLD |
+| `-a-84` Hidden on type | HOLD |
+| `-a-84` Reappears on full delete | HOLD |
+
+### `-a-66 b` follow-up closed my flagged PARTIAL
+
+The `7be215e` follow-up ("also gate synthetic
+injection on dir=''") fixed the SPA rendering
+gap I flagged. Now empirically confirmed:
+
+- `Drafts/` row visible in both docked + main
+  pane FBs, positioned alphabetically between
+  `docs/` and `scripts/`.
+- Background `rgba(227, 179, 65, 0.1)` (yellow tint).
+- Name color `rgb(227, 179, 65)` (yellow accent).
+- Class includes `drafts-row`.
+
+**The proactive-walk loop closed in one round-trip**:
+walk → flag → architect routing → fix → re-walk →
+confirmed.
+
+### `-a-84` placeholder offset HOLD
+
+@@Alex's `|W` overlap is gone. Cursor at x=350
+(1px wide); placeholder at x=353. Gap of ~2px.
+`overlap: false`.
+
+Show/hide flow preserved:
+- Type `x` → placeholder gone.
+- Backspace → placeholder reappears.
+
+Option B (offset right of CM6 cursor) lands clean.
+
+### Suggested commit shape
+
+* **Commit subject**: `docs: webtest-a proactive
+  walk — -a-66 b PARTIAL closed via 7be215e
+  follow-up + -a-84 placeholder offset (5/5 HOLD)`.
+* **Files**:
+  * `docs/journals/phase-8/webtest-a/webtest-a-1.md`
+  * `docs/journals/phase-8/alex/event-webtest-a-architect.md`
+* Path-limited `git commit`.
+
+Standing by.
