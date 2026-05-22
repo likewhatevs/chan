@@ -17,7 +17,7 @@ use axum::extract::{Path as AxumPath, Query, State};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use axum::Json;
-use chan_drive::{EdgeKind, FileClass, PathClass, ReportFileStats};
+use chan_drive::{EdgeKind, FileClass, PathClass, ReportFileBucket, ReportFileStats};
 use serde::{Deserialize, Serialize};
 
 use crate::error::err_from;
@@ -146,6 +146,16 @@ enum GraphNodeView {
         /// chan-drive carries on every file node.
         #[serde(skip_serializing_if = "Option::is_none")]
         node_kind: Option<&'static str>,
+        /// systacean-22: chan-report's source-code-shaped bucket
+        /// (`Markdown` / `SourceCode { language }`) from the file's
+        /// per-file stats, populated when the path is in
+        /// chan-report's tracked-file set (markdown + recognized
+        /// source extensions). Missing for files chan-report
+        /// doesn't track (binary, media, unknown). Lets the SPA's
+        /// G6 colour scheme read the truth from the server instead
+        /// of running client-side regex classification.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        bucket: Option<ReportFileBucket>,
         /// True for ghost nodes synthesized as the target of a
         /// broken link. Frontend renders them muted.
         #[serde(skip_serializing_if = "std::ops::Not::not")]
@@ -586,6 +596,28 @@ fn path_class_for_graph(drive: &chan_drive::Drive, path: &str) -> Option<PathCla
     chan_drive::fs_ops::classify_path(drive.root(), path).ok()
 }
 
+/// systacean-22: should a per-file emit at `path` survive the
+/// contact-node filter? The graph's job is "who-mentions-whom":
+/// contact-frontmatter files (imported address-book entries)
+/// that are NOT referenced by any resolved `@@mention` add
+/// nothing to that picture, so they're filtered out. Non-contact
+/// files always emit. Contact files emit only when their path is
+/// in `referenced_contact_paths` (built from the mention-edge
+/// resolution pass earlier in `api_graph`).
+///
+/// Empirical motivation: @@Alex's chan-source seed had 1973
+/// imported contact files vs only ~49 unique `@@Handle` strings
+/// in markdown bodies. The pre-`-22` behaviour emitted all 1973
+/// contact File nodes; this filter collapses to the referenced
+/// subset (~49).
+fn should_emit_contact_file(
+    path: &str,
+    contact_paths: &std::collections::HashSet<String>,
+    referenced_contact_paths: &std::collections::HashSet<String>,
+) -> bool {
+    !contact_paths.contains(path) || referenced_contact_paths.contains(path)
+}
+
 fn is_media_graph_path(path: &str) -> bool {
     matches!(
         chan_drive::fs_ops::classify(path),
@@ -675,6 +707,7 @@ fn merge_filesystem_layer(
                     path: node.path,
                     path_class: node.path_class,
                     node_kind: None,
+                    bucket: None,
                     missing: node.broken,
                 });
             }
@@ -919,6 +952,18 @@ pub async fn api_graph(
     // contact node), even though they refer to the same person.
     // Unresolved mentions keep their `@@name` dst and fall through to
     // the synthesized Mention node below.
+    //
+    // systacean-22: track the set of contact file paths that ARE
+    // referenced by some mention edge. This drives the per-file
+    // emit filter below — contact-frontmatter files that aren't
+    // referenced anywhere get skipped from the graph (vs the prior
+    // behaviour where every imported contact became a node, which
+    // exploded the graph to 1973 contact nodes against ~49 unique
+    // referenced handles on @@Alex's seed). Resolved contacts ARE
+    // kept; unresolved mentions still synthesize a `@@name`
+    // Mention node via the existing mention_set loop.
+    let mut referenced_contact_paths: std::collections::HashSet<String> =
+        std::collections::HashSet::new();
     for e in all_edges.iter_mut() {
         match e.kind {
             EdgeKind::Link => {
@@ -928,6 +973,7 @@ pub async fn api_graph(
                 let stripped = e.dst.strip_prefix("@@").unwrap_or(&e.dst).to_lowercase();
                 if let Some(contact_path) = mention_to_contact.get(&stripped) {
                     e.dst = contact_path.clone();
+                    referenced_contact_paths.insert(contact_path.clone());
                 }
             }
             EdgeKind::Tag => {}
@@ -966,9 +1012,39 @@ pub async fn api_graph(
     // they exist on disk). Ghost file nodes for unresolved link
     // targets so the graph shows broken links as dangling muted
     // nodes.
+    //
+    // systacean-22 (filter): contact-frontmatter files that AREN'T
+    // referenced by any `@@mention` resolution are skipped. The
+    // graph view's job is "who-mentions-whom"; an imported contact
+    // never mentioned anywhere contributes nothing to that picture.
+    // Before the filter @@Alex's seed surfaced 1973 contact nodes;
+    // after, only the ~49 referenced ones.
+    //
+    // systacean-22 (bucket emit): per-file `bucket` from chan-
+    // report is looked up via `path -> Option<FileBucket>` so the
+    // SPA's G6 colour scheme reads the truth from the server
+    // instead of running client-side regex classification.
+    // Building the lookup is a single `drive.report()` call +
+    // HashMap construction; downstream files in the per-file emit
+    // loop pay an O(1) lookup each.
+    let report_buckets: std::collections::HashMap<String, ReportFileBucket> = drive
+        .report()
+        .map(|r| {
+            r.files
+                .into_iter()
+                .filter_map(|f| f.bucket.map(|b| (f.path, b)))
+                .collect()
+        })
+        .unwrap_or_default();
     let mut nodes: std::collections::BTreeMap<String, GraphNodeView> =
         std::collections::BTreeMap::new();
     for path in &files {
+        if !should_emit_contact_file(path, &contact_paths, &referenced_contact_paths) {
+            // Imported but unreferenced contact — skip. See
+            // `should_emit_contact_file` for the audit framing.
+            continue;
+        }
+        let is_contact = contact_paths.contains(path);
         nodes.insert(
             path.clone(),
             GraphNodeView::File {
@@ -976,11 +1052,8 @@ pub async fn api_graph(
                 label: file_label(path),
                 path: path.clone(),
                 path_class: path_class_for_graph(&drive, path),
-                node_kind: if contact_paths.contains(path) {
-                    Some("contact")
-                } else {
-                    None
-                },
+                node_kind: if is_contact { Some("contact") } else { None },
+                bucket: report_buckets.get(path).cloned(),
                 missing: !present_files.contains(path.as_str()),
             },
         );
@@ -1013,6 +1086,7 @@ pub async fn api_graph(
                 path: f.clone(),
                 path_class: path_class_for_graph(&drive, f),
                 node_kind: None,
+                bucket: report_buckets.get(f).cloned(),
                 missing: false,
             },
         );
@@ -1075,6 +1149,7 @@ pub async fn api_graph(
                 path: ghost.clone(),
                 path_class: None,
                 node_kind: None,
+                bucket: None,
                 missing: true,
             },
         );
@@ -1463,6 +1538,159 @@ mod tests {
         assert!(!images.contains("notes/intro.md"));
         assert!(!images.contains("LICENSE"));
         assert!(!images.contains("src/lib.rs"));
+    }
+
+    #[test]
+    fn contact_dedup_end_to_end_drops_unreferenced_imported_contacts() {
+        // systacean-22 end-to-end: fixture drive with 3 contact-
+        // frontmatter files (alice + bob + charlie) and one
+        // markdown body mentioning only `@@alice`. Replays the
+        // api_graph filter pipeline (drive.contacts() →
+        // mention_to_contact lookup → resolved-mention pass →
+        // should_emit_contact_file gate) and asserts the filter
+        // drops bob + charlie + keeps alice. Without this test,
+        // a regression on the filter would only surface on a
+        // live-serve smoke run.
+        let (_cfg, root, drive) = open_drive();
+        put(
+            root.path(),
+            "contacts/alice.md",
+            b"---\nchan:\n  kind: contact\n---\n# Alice\n",
+        );
+        put(
+            root.path(),
+            "contacts/bob.md",
+            b"---\nchan:\n  kind: contact\n---\n# Bob\n",
+        );
+        put(
+            root.path(),
+            "contacts/charlie.md",
+            b"---\nchan:\n  kind: contact\n---\n# Charlie\n",
+        );
+        put(
+            root.path(),
+            "notes/intro.md",
+            b"# Intro\n\nMet @@alice today.\n",
+        );
+        drive.index_file("contacts/alice.md").unwrap();
+        drive.index_file("contacts/bob.md").unwrap();
+        drive.index_file("contacts/charlie.md").unwrap();
+        drive.index_file("notes/intro.md").unwrap();
+
+        // chan-drive surfaces 3 contacts.
+        let contact_rows = drive.contacts().unwrap();
+        let contact_paths: std::collections::HashSet<String> =
+            contact_rows.iter().map(|c| c.rel_path.clone()).collect();
+        assert_eq!(contact_paths.len(), 3, "got {contact_paths:?}");
+
+        // Replay api_graph's mention_to_contact lookup.
+        let mut mention_to_contact: std::collections::HashMap<String, String> =
+            std::collections::HashMap::new();
+        for c in &contact_rows {
+            if let Some(stem) = std::path::Path::new(&c.rel_path)
+                .file_stem()
+                .and_then(|s| s.to_str())
+            {
+                mention_to_contact.insert(stem.to_lowercase(), c.rel_path.clone());
+            }
+        }
+
+        // Walk the indexed graph edges; build the referenced-
+        // contact set the same way api_graph does in the
+        // mention-edge rewrite loop.
+        let graph = drive.graph().unwrap();
+        let edges = graph.neighbors("notes/intro.md").unwrap();
+        let mut referenced_contact_paths: std::collections::HashSet<String> =
+            std::collections::HashSet::new();
+        for e in &edges {
+            if matches!(e.kind, EdgeKind::Mention) {
+                let stripped = e.dst.strip_prefix("@@").unwrap_or(&e.dst).to_lowercase();
+                if let Some(contact_path) = mention_to_contact.get(&stripped) {
+                    referenced_contact_paths.insert(contact_path.clone());
+                }
+            }
+        }
+        assert!(
+            referenced_contact_paths.contains("contacts/alice.md"),
+            "alice should be referenced: got {referenced_contact_paths:?}"
+        );
+        assert_eq!(
+            referenced_contact_paths.len(),
+            1,
+            "only alice referenced: got {referenced_contact_paths:?}"
+        );
+
+        // Apply the filter: alice emits, bob + charlie drop.
+        assert!(super::should_emit_contact_file(
+            "contacts/alice.md",
+            &contact_paths,
+            &referenced_contact_paths
+        ));
+        assert!(!super::should_emit_contact_file(
+            "contacts/bob.md",
+            &contact_paths,
+            &referenced_contact_paths
+        ));
+        assert!(!super::should_emit_contact_file(
+            "contacts/charlie.md",
+            &contact_paths,
+            &referenced_contact_paths
+        ));
+        // notes/intro.md is not a contact — emits regardless.
+        assert!(super::should_emit_contact_file(
+            "notes/intro.md",
+            &contact_paths,
+            &referenced_contact_paths
+        ));
+    }
+
+    #[test]
+    fn should_emit_contact_file_drops_unreferenced_keeps_referenced_and_non_contacts() {
+        // systacean-22: the contact-file emit filter pins the
+        // graph view to "who-mentions-whom". Pre-fix behaviour
+        // emitted every imported contact File node regardless of
+        // whether it was referenced; @@Alex's chan-source seed had
+        // 1973 contact files vs ~49 unique @@Handle strings in
+        // markdown bodies. After the fix, only referenced contacts
+        // survive.
+        let mut contacts = std::collections::HashSet::new();
+        contacts.insert("contacts/alice.md".to_string());
+        contacts.insert("contacts/bob.md".to_string());
+        contacts.insert("contacts/charlie.md".to_string());
+
+        let mut referenced = std::collections::HashSet::new();
+        referenced.insert("contacts/alice.md".to_string());
+
+        // alice IS referenced — emit.
+        assert!(super::should_emit_contact_file(
+            "contacts/alice.md",
+            &contacts,
+            &referenced
+        ));
+        // bob is a contact but NOT referenced — drop.
+        assert!(!super::should_emit_contact_file(
+            "contacts/bob.md",
+            &contacts,
+            &referenced
+        ));
+        // charlie too.
+        assert!(!super::should_emit_contact_file(
+            "contacts/charlie.md",
+            &contacts,
+            &referenced
+        ));
+        // Plain markdown (not a contact) — always emit.
+        assert!(super::should_emit_contact_file(
+            "notes/intro.md",
+            &contacts,
+            &referenced
+        ));
+        // Source file — always emit.
+        assert!(super::should_emit_contact_file(
+            "src/lib.rs",
+            &contacts,
+            &referenced
+        ));
     }
 
     #[test]

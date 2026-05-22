@@ -2502,3 +2502,54 @@ Throwaway drive still alive (PID 36315 on port 8866 against `/tmp/chan-22-audit/
 Per cross-agent-scope discipline. Bug body's diagnosis was wrong; my fix is materially different shape (filter vs dedup). The fix shape change is significant enough to warrant your routing.
 
 Holding for option A/B routing.
+
+## 2026-05-22 — poke (-22 implementation complete; filter + bucket emit; ready for review)
+
+Acked your Option A routing + bucket emit bundle. Implementation complete + workspace gate green + empirically verified against the throwaway drive.
+
+### What landed in `crates/chan-server/src/routes/graph.rs`
+
+* **`referenced_contact_paths` collection**: integrated into the existing mention-edge rewrite loop. When `mention_to_contact.get(&stripped)` resolves a mention to a contact path, insert into the new `HashSet<String>`.
+* **`should_emit_contact_file` helper** (extracted to module scope for unit-testability): non-contact files always emit; contact-frontmatter files emit only when in `referenced_contact_paths`.
+* **Per-file emit gate**: `if !should_emit_contact_file(...) { continue; }` before constructing `GraphNodeView::File`.
+* **`bucket: Option<ReportFileBucket>`** on `GraphNodeView::File`: populated from a per-file lookup built once from `drive.report()` at the top of api_graph. Re-uses `chan-drive`'s `ReportFileBucket` re-export from `-16`. Backward-compat (optional + serde-skip-when-None).
+* **All 4 `GraphNodeView::File` construction sites updated** for the new field: per-file loop (with lookup), referenced-disk-files (with lookup), ghost set (None), fs-graph merge (None).
+
+### Empirical verification
+
+* Throwaway drive `/tmp/chan-22-audit/` (full docs/ copy + 2 contact files).
+* Pre-fix `chan` binary: 1 contact node emitted (alice; bob hadn't propagated). Post-fix rebuild: **0 contact nodes** (alice + bob both unreferenced; both filtered).
+* Added `test-mention-alice.md` with `@@alice` body → reindexed → **1 contact node** (alice emerges; filter respects referenced subset).
+* Bucket emit: 554 markdown + 3 source_code = 557 of 664 file nodes get the bucket field (remainder are files chan-report doesn't track — binary, non-tokei extensions).
+* Teardown clean: chan serve killed by captured PID; throwaway dir removed; port 8866 freed; @@Alex's chan.app untouched.
+
+### Tests added (2)
+
+* **`should_emit_contact_file_drops_unreferenced_keeps_referenced_and_non_contacts`** — pure unit on the helper.
+* **`contact_dedup_end_to_end_drops_unreferenced_imported_contacts`** — fixture drive + mention-edge resolution + filter chain, asserts the full pipeline behaves correctly.
+
+### Diff stat
+
+`crates/chan-server/src/routes/graph.rs`: +234 / -6. Plus task tail + this poke. 3 paths total.
+
+### Pre-push gate
+
+* `cargo fmt --check`: clean.
+* `cargo clippy --all-targets -- -D warnings`: clean.
+* `cargo test -p chan-server`: **211 passed; 0 failed** (was 209; +2 new tests).
+* `cargo test` workspace: all crates green.
+* `RUSTFLAGS="-D warnings" cargo build --no-default-features`: green.
+
+### Suggested commit subject
+
+```
+chan-server: filter unreferenced contact File nodes + emit FileBucket on graph nodes (systacean-22)
+```
+
+### Smoke plan
+
+Same atomic-audit-commit + push-to-fresh-smoke-branch shape as `-21`. Expected ALL GREEN given backward-compat schema + the pre-existing FullStackA web breakage was transient (didn't recur on `-21`).
+
+### Holding
+
+Standing by for clearance + smoke-branch authorization.
