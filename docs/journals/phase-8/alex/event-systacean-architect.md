@@ -3063,3 +3063,56 @@ Not blocking `-27`. Flagged for sequencing.
 `fullstack-b-28` (pre-flight UI) + `fullstack-a-76` (Settings) can now consume the API surface.
 
 Lane idle aside from `-28`. Standing by for routing on whether to pick up `-28` now or hold for further dispatches.
+
+## 2026-05-22 — poke (-29 implementation complete; Drive::list unified-path; ready for smoke)
+
+Picked up `-29` (the smallest of the queued 3 — `-28` audit / `-29` Drive::list / `-30`+ Team feature). Applied the `-26` `resolve_io` pattern to `Drive::list`.
+
+### What landed
+
+`Drive::list(rel)` is now prefix-aware:
+* `"Drafts"` / `"Drafts/"` → list drafts root.
+* `"Drafts/<name>"` / `"Drafts/<name>/<sub>"` → list inside drafts subtree.
+* Anything else → drive-root unchanged (regression preserved).
+
+Reuses `drafts_dir_handle` from `-26`; no new fields / structs.
+
+### Tests (+2)
+
+* `list_unified_routes_drafts_paths_to_drafts_dir` — full round-trip with pasted file content.
+* `list_drafts_root_empty_when_no_drafts` — empty drafts root pin (FB-renders-empty case).
+
+### Diff
+
+`crates/chan-drive/src/drive.rs`: +81 / -1. Plus task tail + this poke. 3 paths.
+
+### Pre-push gate
+
+* fmt + clippy + no-default-features build clean.
+* `cargo test -p chan-drive --lib`: **451 / 0 / 2-ignored** (was 449; +2 new).
+* workspace tests all green.
+
+### Suggested commit subject
+
+```
+chan-drive: prefix-aware Drive::list for Drafts (systacean-29)
+```
+
+### What this unblocks
+
+`fullstack-a-66b` (FB Drafts row + expansion) can now call `Drive::list("Drafts/")` and `Drive::list("Drafts/<name>")` through chan-server's existing `/api/files?dir=<path>` listing route — no chan-server changes needed (route passes the rel through verbatim to `Drive::list`).
+
+### Smoke plan
+
+`gh workflow run ci.yml --ref systacean-29-smoke`. Expected ALL GREEN. Will re-fire if PTY-test flakiness from `-27`'s smokes recurs (not `-29`-related, but the runner is shared).
+
+Proceeding to commit + push + smoke. Will surface verdict.
+
+### Lane state going forward
+
+| Task | State |
+|------|-------|
+| -29 | shipping now (this) |
+| -28 (config audit) | DEFERRED — separate cleanup task, not blocking |
+| -30 (Team config schema) | DEFERRED until `-29` smoke verdict + then sequencing |
+| -31 (multi-team watcher) | DEFERRED — depends on `-30` |

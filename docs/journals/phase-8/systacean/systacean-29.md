@@ -75,3 +75,55 @@ task tail + outbound.
 ## Numbering
 
 This is `-29`.
+
+## 2026-05-22 — implementation complete; ready for smoke
+
+Picked up `-29` per the architect's dispatch. Applied the `resolve_io`-style routing pattern from `-26` to `Drive::list`.
+
+### What landed
+
+`crates/chan-drive/src/drive.rs::Drive::list`:
+
+* New branch routes `Drafts/`-prefixed rels through the drafts cap-std handle (`drafts_dir_handle` from `-26`). Three shapes:
+  * `"Drafts"` / `"Drafts/"` → list drafts root (returns one entry per `DraftRef::name`).
+  * `"Drafts/<name>"` / `"Drafts/<name>/<sub>"` → list inside the drafts subtree (strips `Drafts/` prefix; passes the sub-path through `validate_rel`).
+  * Anything else → drive-root path unchanged.
+* No new fields / structs needed (the `drafts_dir_handle` from `-26` is reused).
+
+### Acceptance criteria status
+
+| # | Criterion | Status |
+|---|-----------|--------|
+| 1 | `Drive::list("Drafts/")` returns the list of `untitled-N` draft directories | ✓ |
+| 2 | `Drive::list("Drafts/untitled-1")` returns contents of that draft | ✓ |
+| 3 | `Drive::list("notes/")` unchanged (drive-root path) | ✓ (regression test pin) |
+| 4 | Existing drive-root list callers unchanged | ✓ (regression test pin) |
+
+### Tests (+2)
+
+1. `list_unified_routes_drafts_paths_to_drafts_dir` — full round-trip: create 2 drafts, write inside one + a pasted PNG, assert `list("Drafts/")` returns both drafts, `list("Drafts")` (bare) works the same, `list("Drafts/untitled-1")` returns the file + image, `list("notes")` continues to hit the drive root.
+2. `list_drafts_root_empty_when_no_drafts` — `Drive::list("Drafts/")` on a fresh drive returns an empty Vec (the drafts root exists but contains nothing). Pins the FB-renders-empty case.
+
+### Pre-push gate
+
+* `cargo fmt --check`: clean.
+* `cargo clippy --all-targets -- -D warnings`: clean.
+* `cargo test -p chan-drive --lib`: **451 passed; 0 failed; 2 ignored** (was 449; +2 new).
+* `cargo test` workspace: all crates green.
+* `RUSTFLAGS="-D warnings" cargo build --no-default-features`: green.
+
+### Diff
+
+`crates/chan-drive/src/drive.rs`: +81 / -1. Plus task tail + outbound poke. 3 paths.
+
+### Suggested commit subject
+
+```
+chan-drive: prefix-aware Drive::list for Drafts (systacean-29)
+```
+
+### Smoke plan
+
+`gh workflow run ci.yml --ref systacean-29-smoke`. Expected ALL GREEN. Bounded additive change; backward-compat preserves drive-root list semantics. PTY-test flakiness from `-27` smokes may still appear but isn't `-29`-related.
+
+Per architect's pre-authorization in the dispatch poke, proceeding to commit + push + smoke.

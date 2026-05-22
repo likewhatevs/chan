@@ -753,7 +753,32 @@ impl Drive {
     /// can act on the count later if needed.
     pub fn list(&self, rel: &str) -> Result<Vec<DirEntry>> {
         let at_root = rel.is_empty() || rel == "." || rel == "/";
-        let read = if at_root {
+        // systacean-29: route Drafts/-prefixed rels through the
+        // drafts cap-std handle (parallels the -26 read_text /
+        // write_text routing). Three shapes:
+        //   * "Drafts/" or "Drafts" → list the drafts root
+        //     (returns each `untitled-N` / `rich-prompt-N`).
+        //   * "Drafts/<name>" or "Drafts/<name>/<sub>" → list
+        //     inside the drafts subtree.
+        //   * anything else → drive-root path (unchanged).
+        let read = if rel == "Drafts" || rel == "Drafts/" {
+            self.drafts_dir_handle
+                .read_dir(".")
+                .map_err(|e| ChanError::Io(e.to_string()))?
+        } else if let Some(sub) = rel.strip_prefix("Drafts/") {
+            let sub = sub.trim_end_matches('/');
+            if sub.is_empty() {
+                // `Drafts/` after trimming → same as drafts root
+                self.drafts_dir_handle
+                    .read_dir(".")
+                    .map_err(|e| ChanError::Io(e.to_string()))?
+            } else {
+                let rel_path = fs_ops::validate_rel(sub)?;
+                self.drafts_dir_handle
+                    .read_dir(&rel_path)
+                    .map_err(|e| ChanError::Io(e.to_string()))?
+            }
+        } else if at_root {
             self.dir
                 .read_dir(".")
                 .map_err(|e| ChanError::Io(e.to_string()))?
@@ -5004,6 +5029,61 @@ mod tests {
 
         drive.create_draft_dir("untitled-1").unwrap();
         assert!(drive.create_draft_dir("untitled-1").is_err());
+    }
+
+    #[test]
+    fn list_unified_routes_drafts_paths_to_drafts_dir() {
+        // systacean-29: Drive::list is prefix-aware. Three shapes:
+        //   * "Drafts" or "Drafts/" lists the drafts root (each
+        //     entry is one `DraftRef::name`).
+        //   * "Drafts/<name>" lists inside that draft directory.
+        //   * "notes/" continues to list the drive root (no
+        //     regression for existing callers).
+        let (_cfg, root, drive) = fixture();
+        drive.create_draft_dir("untitled-1").unwrap();
+        drive.create_draft_dir("untitled-2").unwrap();
+        drive
+            .write_text("Drafts/untitled-1/draft.md", "# hello\n")
+            .unwrap();
+        std::fs::write(
+            drive.drafts_dir().join("untitled-1").join("pasted.png"),
+            b"\x89PNG\r\n",
+        )
+        .unwrap();
+
+        // List the drafts root via "Drafts/".
+        let drafts_root_listing = drive.list("Drafts/").unwrap();
+        let mut names: Vec<String> = drafts_root_listing.iter().map(|e| e.name.clone()).collect();
+        names.sort();
+        assert_eq!(names, ["untitled-1", "untitled-2"]);
+
+        // Same via bare "Drafts" (no trailing slash).
+        let bare = drive.list("Drafts").unwrap();
+        assert_eq!(bare.len(), 2);
+
+        // List inside a draft directory.
+        let inside = drive.list("Drafts/untitled-1").unwrap();
+        let mut leaves: Vec<String> = inside.iter().map(|e| e.name.clone()).collect();
+        leaves.sort();
+        assert_eq!(leaves, ["draft.md", "pasted.png"]);
+
+        // Drive-root list: backward-compat regression check.
+        drive.write_text("notes/intro.md", "# intro\n").unwrap();
+        let drive_root_listing = drive.list("notes").unwrap();
+        let drive_leaves: Vec<&str> = drive_root_listing.iter().map(|e| e.name.as_str()).collect();
+        assert_eq!(drive_leaves, ["intro.md"]);
+        assert!(root.path().join("notes/intro.md").is_file());
+    }
+
+    #[test]
+    fn list_drafts_root_empty_when_no_drafts() {
+        // systacean-29: Drive::list("Drafts/") on a fresh drive
+        // returns an empty Vec (drafts root exists but contains
+        // nothing). Pins the absent-drafts case so the FB
+        // renders the Drafts row without spurious children.
+        let (_cfg, _root, drive) = fixture();
+        let listing = drive.list("Drafts/").unwrap();
+        assert!(listing.is_empty());
     }
 
     #[test]
