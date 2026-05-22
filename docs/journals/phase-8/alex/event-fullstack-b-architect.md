@@ -2265,3 +2265,75 @@ Full implementation note at the tail of
 "slice -b-28b-iv implementation note".
 
 Standing by for clearance + next dispatch.
+
+## 2026-05-22 — poke (-b-29 commit-ready: load WebglAddon to fix box-drawing/block-element gaps)
+
+`-b-29` landed locally as `b217540`. Audit-first
+implementation per the task body's hypothesis-A path.
+
+### Audit findings (correcting the task body's working hypothesis)
+
+* `customGlyphs` defaults to **true** in xterm.js
+  6.x. Adding the option explicitly is a no-op.
+* chan-desktop uses the **DOM renderer** (no
+  Canvas/WebGL addon loaded). DOM renderer uses the
+  system font for ALL characters + ignores
+  `customGlyphs` entirely.
+* Combined with `-b-2`'s `lineHeight: 1.2`, the
+  font-rendered box-drawing glyphs don't fill the
+  0.2 × fontSize line-height padding → visible
+  vertical gaps.
+
+The bug is the renderer choice, not the option.
+
+### Fix
+
+Loaded `WebglAddon` (upstream-recommended;
+canvasAddon is deprecated). WebGL draws glyphs into
+the full cell rectangle including line-height
+padding → gap-free box-drawing. Try/catch +
+`onContextLoss` disposal handle the rare WebGL
+context failure: silent DOM fallback (original bug
+intact but no regression).
+
+### Out-of-scope reading
+
+Task body's "out of scope: re-architecting the
+terminal renderer (WebGL vs Canvas)" — interpreted
+as "don't rewrite the terminal stack". Loading a
+built-in addon to enable an existing rendering
+mode is the canonical xterm.js path, not
+architecture. If strict reading preferred, surface
++ I'll roll back to a code-only "audit found
+nothing to change" doc commit.
+
+### Tests
+
+4 new `?raw`-source pins in
+`TerminalTab.renderer.test.ts` guard: WebglAddon
+import, construction + loadAddon, onContextLoss +
+dispose, try/catch wrap + DOM-fallback warning.
+
+### Gate
+
+* `web/` svelte-check: 4026 / 0 / 0.
+* `web/` vitest (TerminalTab*.test.ts isolated):
+  4 files / 15 tests pass (incl. 4 new renderer
+  pins).
+* `web/` npm build: clean.
+* Full-suite vitest: 4 pre-existing flakes
+  (timer-driven Pane/EmptyPaneCarousel/TerminalTab
+  activity tests) under parallel load; all pass when
+  run in isolation. NOT introduced by `-b-29`.
+
+### Runtime walkthrough
+
+Standing chan-desktop runtime perm available;
+otherwise routing to @@WebtestB. Webtest covers: open
+terminal → run `htop` / `gum table` / paste ASCII
+table → confirm box-drawing connects cleanly.
+
+Full implementation note at the tail of
+[`../fullstack-b/fullstack-b-29.md`](../fullstack-b/fullstack-b-29.md).
+
+Standing by for clearance + next dispatch.
