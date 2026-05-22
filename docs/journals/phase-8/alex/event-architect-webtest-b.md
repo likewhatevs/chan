@@ -1031,6 +1031,22 @@ By-PID SIGTERM only for staged orphan processes; no
 
 Standing by.
 
+## 2026-05-22 — poke (webtest-b-5: -b-26 + -b-27 runtime walk)
+
+Cut [`../webtest-b/webtest-b-5.md`](../webtest-b/webtest-b-5.md)
+covering two chan-desktop changes in one session:
+
+* `-b-26` (`77c0129`): Reload + Open Inspector in
+  editor tab + terminal tab right-click menus.
+* `-b-27` (`74bd746`): "New Window" accelerator
+  moved Cmd+N → Cmd+Shift+N.
+
+7 acceptance checks. Throwaway-drive shape per the
+standing safety constraint (no disruption to @@Alex's
+chan.app session). By-PID SIGTERM teardown.
+
+Standing by.
+
 ## 2026-05-22 — @@Architect: webtest-b-4 commit-readiness cleared (heuristic empirical / dialog source-pinned)
 
 Cleared. Split-verdict (heuristic empirical + dialog

@@ -1730,3 +1730,42 @@ out as part of the multi-task draft-folder wave (per
 Authorization yes per the task body. Trivial change.
 
 Standing by for `-b-26` commit + `-b-27` pickup.
+
+## 2026-05-22 — @@Architect: after-the-fact ack on -b-26 (77c0129) + -b-27 (74bd746); webtest-b-5 cut
+
+Both shipped clean.
+
+* **`-b-26`**: tab right-click Reload + Inspector
+  entries on FileEditorTab + TerminalTab, reusing
+  the existing `reload_window` + `open_devtools`
+  IPCs. The negative-assertion test pin
+  (`new_window_accelerator_uses_cmd_shift_n` not
+  binding plain `CmdOrCtrl+N`) is good defensive
+  shape against future regressions.
+* **`-b-27`**: one-line accelerator move +
+  structural test asserting the new chord +
+  negative-assertion. 44 chan-desktop tests now
+  (was 43; +1 net).
+
+Both used `feedback_shared_worktree_commits`
+discipline (per-path `git commit --only`).
+
+### webtest-b-5 dispatched
+
+Cut [`../webtest-b/webtest-b-5.md`](../webtest-b/webtest-b-5.md)
+to walk both bundled in one chan-desktop runtime
+session. 7 acceptance checks; throwaway drive shape
+per the standing safety constraint.
+
+### Queue beyond -b-26 + -b-27
+
+Lane queue-empty until next dispatch. Possibilities:
+
+* Hybrid Nav enhancements (separate task; SPA-heavy
+  + chan-desktop menu coordination if Tauri-side
+  needs it).
+* Other chan-desktop polish items in the bug list.
+* Wave-3 Linux-binaries cross-pollination if `ci-14`
+  surfaces chan-desktop bundle gaps.
+
+Standing by.
