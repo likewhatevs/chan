@@ -3014,3 +3014,77 @@ in the wave dispatch per @@Alex's spec'd navigation
 path priority.
 
 Standing by for next commit.
+
+## 2026-05-22 — URGENT bump: -a-58 (parent-edge invariant) PRIORITY NEXT + scope-expand to multi-kind
+
+@@Alex 2026-05-22 (post-`-a-57` chip landing): toggled
+markdown OFF in the new chip set + saw the invariant
+violation manifest across MULTIPLE node kinds, not just
+markdown. Plus two new related observations.
+
+### Empirical multi-kind orphan confirmation
+
+* Media (purple) — orphan
+* Language (pink) — parented to folders that are
+  themselves orphan (chain breaks before drive root)
+* Source (blue) — orphan
+* Folders (grey) — many orphan; chain to drive root
+  broken
+* Ghost nodes (dashed circles) — orphan; need parent
+  too
+
+The markdown chip toggle made this visible (markdown
+was drowning the canvas before). `-a-58` scope holds
+but the architectural priority is now URGENT — top of
+your queue.
+
+### Scope expansion on -a-58
+
+Original task body covered the invariant for the
+multi-kind shape (any file node needs a parent, not
+just markdown). New empirical evidence reinforces +
+adds:
+
+* **Ghost nodes** also need the invariant applied
+  (file `phase-8-bugs.md` "Ghost-node filter chip
+  missing from graph view; ghost nodes must also obey
+  parent-edge invariant").
+* The chain-to-drive-root breakage suggests it's not
+  just file → parent but ALSO parent → grandparent
+  → ... → drive root that fails somewhere. Audit must
+  check the FULL chain, not just one hop.
+
+### Two related bugs filed alongside
+
+Both are SMALL and could ride alongside `-a-58` if
+the audit puts you in the same render/filter surface:
+
+1. **Ghost-node filter chip** — add an 8th chip
+   (`ghost` toggle alongside markdown/source/etc.).
+   Default ON. Trivial extension to the chip array.
+2. **Contact-count anomaly** — 1973 contact nodes on
+   the chan repo seed; **architect-side spot-check
+   confirms only 49 unique handles** (`grep -rEo
+   '@@[A-Z]...' docs/ | sort -u | wc -l`). ~40x over-
+   emission ratio. Strong evidence the contact node
+   dedup is broken (per-occurrence emission instead
+   of per-handle). Audit at task pickup; could be
+   chan-server emit issue (cross-lane to @@Systacean)
+   OR SPA-side rendering issue. Audit determines lane.
+
+### Priority order revised
+
+```
+-a-58 (parent-edge invariant; URGENT)    ← top
+  + bundle ghost-chip + contact-dedup audit if natural
+-a-56 (Cmd+P 3-state + depth-slider cue)
+-a-59 (pane-focus-click)
+-a-60 (graph hit-radius)
+```
+
+The contact-dedup audit might surface as cross-lane
+(if chan-server emit is the gap). Fire scope poke
+at pickup if so.
+
+Standing by for `-a-58` commit-readiness (or scope-
+poke at pickup).

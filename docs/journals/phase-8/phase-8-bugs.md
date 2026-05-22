@@ -783,6 +783,13 @@
     2. **Drive-scope**: many orphan markdown dots float in the outer ring with no visible edges to any parent directory (despite `-a-49`'s filesystem-hierarchy backbone landing)
   - **load-bearing UX rationale** (from @@Alex's spec): the parent-dir node in file-scope is the user's primary navigation path UPWARD — click parent dir → inspector → "Graph from here" rooted at parent. Without this edge, the user has to leave the graph (FB sidebar / breadcrumb) to navigate up. The breadcrumb `drive / CLAUDE.md` IS in the details panel but isn't a graph-affordance
   - **GENERAL RULE (@@Alex 2026-05-22)**: a node in the graph can ONLY be orphan (no inbound `contains` edge from a parent directory) IF the folder/directory filter is OFF. With the folder filter ON (the default), **every node must have a parent**. The two observations above are the same invariant violation in two different scopes
+  - **MULTI-KIND CONFIRMATION 2026-05-22** (post-`-a-57` filter chip landing — @@Alex's screenshot after toggling markdown OFF): the invariant violation surfaces across MULTIPLE node kinds, not just markdown:
+    1. **Media** (purple dots) — orphan; not parented to any directory
+    2. **Language** (pink dots) — parented to folder nodes that are THEMSELVES orphan (the chain breaks before reaching drive root)
+    3. **Source** (blue dots) — orphan
+    4. **Folders** (grey dots) — many orphan; chain to drive root broken
+    5. **Ghost nodes** (dashed circles) — must always have a parent too (currently orphan); see separate bug entry on ghost node filter chip
+    Markdown was visually drowning the canvas before; toggling it off exposed the architectural gap unambiguously. **Fix priority: bumped URGENT** — was suggested-next-in-queue; now TOP of @@FullStackA's pickup list
   - **exception**: when the folder/directory filter chip is OFF, parent-dir nodes SHOULD be hidden (user's explicit opt-out from directory structure)
   - root cause hypotheses (audit at task pickup):
     1. **chan-server emit**: `routes/graph.rs::merge_filesystem_layer` calls `build_fs_graph(scope=File, ...)` for `GraphScope::File` (line 649). Audit needed: does `build_fs_graph` in `routes/fs_graph.rs` (`walk_file` at line 500) emit the parent directory NODE + `contains` edge alongside the file in File-scope? `walk_file:508-510` shows it emits the parent — but maybe the parent has a `kind` that gets filtered out downstream, OR the SPA isn't rendering it
@@ -800,6 +807,28 @@
   - severity: meaningful UX gap on the spec'd navigation; not regression-class
   - NOT YET DISPATCHED — Round-2 wave-3; audit before scoping fix
   - REPLACES the prior standalone "orphan markdown dots" framing — same architectural gap
+
+- Ghost-node filter chip missing from graph view; ghost nodes must also obey parent-edge invariant
+  - flagged 2026-05-22 by @@Alex (post-`-a-57` chip landing): the graph shows ghost nodes (rendered as dashed circles per `fs_graph.rs:573-590`'s `ghost` kind emission) but there's no chip in the filter row to toggle them on/off. User can't hide ghost nodes when they want a cleaner view
+  - want: add a `ghost` chip to the filter set alongside markdown / source / tag / contact / language / media / folder (8 chips total). Default ON; toggle OFF hides ghost nodes
+  - dual invariant: ghost nodes must ALSO obey the parent-edge invariant (see prior bug entry "File-scope graph doesn't include the parent directory node"). With folder filter ON, every ghost must have a `contains` edge from its parent directory. Currently they appear orphan in the same way as media/source/etc.
+  - lane: @@FullStackA (SPA-side chip extension in `GraphPanel.svelte`; parent-edge fix lives in the broader `-a-58` task)
+  - severity: discoverability + invariant violation; not regression-class
+  - NOT YET DISPATCHED — small chip addition. Could ride alongside `-a-58` (parent-edge invariant fix) since both touch the same filter/render surface
+
+- Contact-node count seems anomalously high (1973 contacts on the chan repo seed); audit for over-emission / dedup gap
+  - flagged 2026-05-22 by @@Alex (post-`-a-57` chip landing, observing chip counts): "im shocked by the amount of contacts we have, something must be wrong". The chan repo seed shows 1973 contact nodes — far higher than the expected ~ low-hundreds based on actual unique @mention referents in the repo
+  - hypothesis (audit at task pickup):
+    1. **Per-occurrence emission instead of dedup**: each @mention occurrence may create a fresh node instead of referencing a single canonical node per handle. If `@@Architect` appears 500 times in the journals, it should produce 1 contact node + 500 mention edges, NOT 500 contact nodes
+    2. **Token vs handle ambiguity**: the parser may be treating sub-strings (e.g. `@@` prefix lookahead misses) as new handles, inflating the unique-set count
+    3. **Cross-file aggregation gap**: contacts may dedup within a file but not across files
+  - investigation hooks:
+    - Inspect a single contact node's `id` shape via `/api/graph?scope=drive` — are there duplicate ids for the same handle (e.g. multiple `contact:@@Architect` entries) or are the handles being keyed something unique-per-occurrence
+    - Grep the chan-server emit path for the mention/contact node construction; verify dedup key
+    - Cross-check: count unique `@@<Name>` handles in the chan repo (`grep -rEo '@@[A-Z][a-zA-Z0-9]+' docs/ | sort -u | wc -l`) and compare to the 1973 displayed. **Architect-side spot-check 2026-05-22**: only **49 unique handles** in `docs/`. 1973 / 49 ≈ 40x over-emission ratio. Strong evidence the dedup is broken (per-occurrence emission instead of per-handle)
+  - lane: @@FullStackA (SPA-side if rendering issue) OR @@Systacean (chan-server if emit issue). Audit determines lane
+  - severity: data-shape correctness; not regression-class but undermines the count's informational value (1973 ≠ truth)
+  - NOT YET DISPATCHED — audit-first task; could ride into `-a-58`'s broader graph-data audit if same lane picks both up
 
 - Graph canvas click hit-radius is too tight; users need to zoom in to register clicks on nodes
   - flagged 2026-05-22 by @@WebtestA during proactive `-a-49`+`-a-50`+`-a-51` walk (`a63c8cb`): clicks at multiple positions near visible nodes missed consistently before zoom — e.g. `(1356, 539)`, `(1351, 411)`, `(881, 247)` all missed. Pattern suggests the canvas hit-test uses the node's stroke radius as the hit-box rather than a slightly-expanded one
