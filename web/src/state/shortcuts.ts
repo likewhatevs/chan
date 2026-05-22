@@ -58,6 +58,19 @@ export type Shortcut = {
   /// Optional trailing parenthetical for the table (e.g. "browser
   /// owns this chord — handled natively").
   note?: string;
+  /// `fullstack-a-91`: when true, `handleTerminalKeyEvent` in
+  /// `TerminalTab.svelte` returns `false` for this chord so the
+  /// event bubbles out of xterm to the App-level keymap. Default
+  /// false (xterm consumes the keystroke as a shell input). Set
+  /// true on App-group chords (Settings, RichPrompt, Reload,
+  /// FB toggle, Graph, NewDraft, etc.) that must reach
+  /// App.svelte regardless of terminal focus. Pane-Mode entry
+  /// (Cmd+. / Cmd+K) + tab navigation chords stay false: those
+  /// are handled by chan-desktop's KEY_BRIDGE_JS (native) or
+  /// App.svelte's higher-priority handlers BEFORE xterm sees
+  /// the event, so the registry hint doesn't need to fire for
+  /// them.
+  escapeTerminal?: boolean;
 };
 
 /// The complete chord registry. Order in this list is the order the
@@ -108,6 +121,7 @@ export const SHORTCUTS: readonly Shortcut[] = [
     web: "Mod+,",
     native: "Mod+,",
     group: "App",
+    escapeTerminal: true,
   },
   // `fullstack-a-32`: Rich prompt chord migrates to Mod+P (native)
   // / Cmd+Alt+P (web Mac) so the spawn-chord family (Cmd+T/O/P,
@@ -123,6 +137,7 @@ export const SHORTCUTS: readonly Shortcut[] = [
     native: "Mod+P",
     group: "App",
     note: "macOS web + native everywhere; all platforms via Mod+. p (Hybrid NAV)",
+    escapeTerminal: true,
   },
   // `fullstack-a-32`: file-browser top-level chord. Same shape as
   // `app.terminal.toggle` — native uses Cmd+O; web fallback is
@@ -137,6 +152,7 @@ export const SHORTCUTS: readonly Shortcut[] = [
     native: "Mod+O",
     group: "App",
     note: "macOS web + native everywhere; all platforms via Mod+. o (Hybrid NAV)",
+    escapeTerminal: true,
   },
   // `fullstack-a-32`: graph top-level chord. `Cmd+Shift+M` was the
   // pre-`fullstack-42` binding and lands again here, this time
@@ -151,6 +167,7 @@ export const SHORTCUTS: readonly Shortcut[] = [
     native: "Mod+Shift+M",
     group: "App",
     note: "or Mod+. v (Hybrid NAV)",
+    escapeTerminal: true,
   },
   // `fullstack-b-2`: Cmd+T comes back for "new terminal in active
   // pane" (the action behind Pane Mode's `Cmd+K 1`) as a direct
@@ -171,6 +188,7 @@ export const SHORTCUTS: readonly Shortcut[] = [
     native: "Mod+T",
     group: "App",
     note: "macOS web + native everywhere; all platforms via Mod+. t (Hybrid NAV)",
+    escapeTerminal: true,
   },
   // `fullstack-a-7`: Hybrid NAV chord swapped from Mod+K to
   // Mod+. so Mod+, can own Settings (macOS preferences
@@ -196,6 +214,7 @@ export const SHORTCUTS: readonly Shortcut[] = [
     web: "Mod+R",
     native: "Mod+R",
     group: "App",
+    escapeTerminal: true,
   },
   // `fullstack-a-66`: New Draft action — creates a fresh draft
   // dir under chan-drive's metadata-side Drafts folder + opens
@@ -208,6 +227,7 @@ export const SHORTCUTS: readonly Shortcut[] = [
     web: "Mod+N",
     native: "Mod+N",
     group: "App",
+    escapeTerminal: true,
   },
   {
     id: "app.pane.flip",
@@ -324,6 +344,109 @@ export function chordFor(id: string): string | null {
   const chord = s[currentPlatform()];
   if (!chord) return null;
   return formatChord(chord, currentOS());
+}
+
+/// `fullstack-a-91`: derive the platform-resolved chord from a
+/// raw `KeyboardEvent`. Used by `handleTerminalKeyEvent` to
+/// detect whether the incoming keystroke matches an
+/// `escapeTerminal` shortcut + should bubble out of xterm.
+///
+/// Returns a chord string of the same shape the registry uses
+/// (e.g. `"Mod+P"`, `"Cmd+Alt+P"`, `"Ctrl+Alt+1"`). `Mod` is
+/// emitted for `metaKey` on macOS + `ctrlKey` on Linux/Windows;
+/// `Cmd` is emitted for `metaKey` regardless of platform when
+/// `ctrlKey` is also present-or-absent. Keys are normalised to
+/// the registry's casing (`P`, `Enter`, `[`, etc.).
+///
+/// `null` when the event carries no modifier OR the key isn't a
+/// recognisable shortcut surface (printable characters typed
+/// into the editor don't match anything in the registry).
+export function chordFromEvent(e: KeyboardEvent): string | null {
+  const parts: string[] = [];
+  const os = currentOS();
+  // `Mod` semantics: Cmd on macOS, Ctrl elsewhere. Emit `Mod`
+  // when the platform-canonical modifier fires; emit `Cmd` /
+  // `Ctrl` separately when the *non-platform* form fires (the
+  // Cmd+Alt+P web-Mac fallback always uses `Cmd+...`).
+  const modIsMeta = os === "mac";
+  const hasPlatformMod = modIsMeta ? e.metaKey : e.ctrlKey;
+  const hasNonPlatformMeta = modIsMeta ? false : e.metaKey;
+  const hasNonPlatformCtrl = modIsMeta ? e.ctrlKey : false;
+  if (hasPlatformMod) parts.push("Mod");
+  if (hasNonPlatformMeta) parts.push("Cmd");
+  if (hasNonPlatformCtrl) parts.push("Ctrl");
+  if (e.altKey) parts.push("Alt");
+  if (e.shiftKey) parts.push("Shift");
+  const key = canonicalKey(e);
+  if (!key) return null;
+  parts.push(key);
+  if (parts.length <= 1) return null;
+  return parts.join("+");
+}
+
+/// Normalise a `KeyboardEvent.key` to the registry's casing.
+/// Letters are uppercased; printable specials map to their
+/// registry-form (`,`, `[`, `]`, etc.). Returns `null` for
+/// modifier-only events (Shift / Alt / Control / Meta on their
+/// own).
+function canonicalKey(e: KeyboardEvent): string | null {
+  const k = e.key;
+  if (!k || k === "Shift" || k === "Alt" || k === "Control" || k === "Meta") {
+    return null;
+  }
+  if (k.length === 1) return k.toUpperCase();
+  // Multi-char keys: registry uses the browser's `KeyboardEvent.key`
+  // names verbatim (`Enter`, `Tab`, `Escape`, `ArrowLeft`, ...).
+  return k;
+}
+
+/// `fullstack-a-91`: chord-escape lookup. Returns true when
+/// the incoming `KeyboardEvent` matches any registry entry
+/// flagged `escapeTerminal: true`. `handleTerminalKeyEvent`
+/// calls this; on true, returns `false` to xterm so the event
+/// bubbles to the App-level keymap.
+///
+/// Matches BOTH the platform-resolved chord AND the
+/// cross-platform `Cmd+` literal alias (the registry's `Mod`
+/// expands to Cmd on Mac + Ctrl elsewhere; `Cmd+` is the
+/// literal Cmd key used by the web-fallback chords). The
+/// matcher normalises both sides to a canonical token set so
+/// `Mod+Alt+P` (event) === `Cmd+Alt+P` (registry web Mac
+/// fallback) on Mac.
+export function shouldEscapeTerminal(e: KeyboardEvent): boolean {
+  const chord = chordFromEvent(e);
+  if (!chord) return false;
+  const eventTokens = canonicalChordTokens(chord);
+  const platform = currentPlatform();
+  for (const s of SHORTCUTS) {
+    if (!s.escapeTerminal) continue;
+    const registryChord = s[platform];
+    if (!registryChord) continue;
+    if (sameChord(eventTokens, canonicalChordTokens(registryChord))) {
+      return true;
+    }
+  }
+  return false;
+}
+
+/// Normalise a chord string into a Set-shape comparable across
+/// the `Mod` / `Cmd` aliasing on Mac. Both `Mod+Alt+P` and
+/// `Cmd+Alt+P` collapse to the same key set on Mac; on
+/// Linux/Windows they stay distinct (Mod → Ctrl, Cmd → literal
+/// Cmd which most keyboards don't have anyway).
+function canonicalChordTokens(chord: string): Set<string> {
+  const tokens = new Set(chord.split("+"));
+  if (currentOS() === "mac" && tokens.has("Cmd")) {
+    tokens.delete("Cmd");
+    tokens.add("Mod");
+  }
+  return tokens;
+}
+
+function sameChord(a: Set<string>, b: Set<string>): boolean {
+  if (a.size !== b.size) return false;
+  for (const t of a) if (!b.has(t)) return false;
+  return true;
 }
 
 /// Tauri injects `window.__TAURI_INTERNALS__` (newer versions) or

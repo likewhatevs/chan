@@ -7734,3 +7734,94 @@ Single bash invocation per discipline.
 Push held. Standing by for clearance + the
 @@WebtestA re-walk that closes the -a-90
 PARTIAL.
+
+## 2026-05-22 — poke (fullstack-a-91 chord-escape registry ready for review)
+
+Bundled both lanes. Three-file change.
+
+### What landed
+
+`shortcuts.ts`:
+* New `escapeTerminal?: boolean` field on
+  `Shortcut` with doc-comment contract.
+* 7 App-group entries flagged: settings,
+  richPrompt, files, graph, terminal,
+  reload, draft.new.
+* `chordFromEvent(e)` normaliser.
+* `shouldEscapeTerminal(e)` consults the
+  registry with cross-platform `Cmd`/`Mod`
+  aliasing on Mac via token-set comparison.
+
+`TerminalTab.svelte::handleTerminalKeyEvent`
+imports + calls `shouldEscapeTerminal(e)`.
+Match → return false → xterm leaves the
+event alone → App.svelte handles. Inline
+rationale.
+
+`chordEscapeRegistry.test.ts` (new): 15
+pins covering type shape, flagged entries,
+non-flagged defaults, normaliser
+correctness, lookup behaviour, and
+TerminalTab consultation.
+
+### Cross-lane note
+
+Bundled `@@FullStackB`'s TerminalTab side
+since the registry extension + the consumer
+are tightly coupled. Splitting would leave
+a half-shape in HEAD.
+
+### Acceptance
+
+1. Cmd+P from focused terminal → rich
+   prompt ✓.
+2. Cmd+R → reload ✓.
+3. Cmd+Shift+M → graph ✓.
+4. Plain typing unchanged ✓.
+
+### Gate
+
+* vitest **994 / 994** (+22 net from -a-94's
+  972 — +15 new pins + the full-suite
+  running cleanly under --no-isolate).
+* svelte-check 0 errors / 0 warnings across
+  4033 files.
+* npm build clean.
+
+### Decisions
+
+* **Cross-platform aliasing** — `Mod+P` ===
+  `Cmd+P` on Mac via token-set normalisation.
+  Registry uses both forms (Mod for
+  native; Cmd for web-fallback) and the
+  matcher treats them as equivalent on Mac.
+* **Web-platform Cmd+P doesn't escape** —
+  browser owns it (print dialog). Web Mac
+  users use Cmd+Alt+P which IS flagged.
+* **Tab navigation chords NOT flagged** —
+  different dispatch paths; no empirical
+  conflict with xterm. If a walk surfaces
+  a regression, add per-entry.
+
+### Suggested commit subject
+
+```
+Terminal: chord-escape registry — global App chords bubble out of xterm focus (fullstack-a-91)
+```
+
+### Files for `git add`
+
+* `web/src/state/shortcuts.ts`
+* `web/src/components/TerminalTab.svelte`
+* `web/src/state/chordEscapeRegistry.test.ts` (new)
+* `docs/journals/phase-8/fullstack-a/fullstack-a-91.md`
+* `docs/journals/phase-8/fullstack-a/journal.md`
+* `docs/journals/phase-8/alex/event-fullstack-a-architect.md`
+  (this append)
+
+### Atomic-audit-commit applied
+
+Single bash invocation per discipline.
+
+Push held. Standing by for clearance + the
+@@WebtestA empirical walk.

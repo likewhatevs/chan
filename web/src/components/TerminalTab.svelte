@@ -25,7 +25,7 @@
   import "@xterm/xterm/css/xterm.css";
   import { api, sessionWindowId, withTokenQuery } from "../api/client";
   import type { TerminalSpawnResponse } from "../api/types";
-  import { chordFor } from "../state/shortcuts";
+  import { chordFor, shouldEscapeTerminal } from "../state/shortcuts";
   import {
     advanceTerminalSeq,
     allTerminalTabs,
@@ -1005,6 +1005,18 @@
     // layer registered at line ~424. Caught empirically by
     // @@WebtestA (`aed06ef`); audit-grep needs to include
     // `attachCustomKeyEventHandler` chord paths going forward.
+    //
+    // `fullstack-a-91`: chord-escape registry. When the
+    // incoming event matches a shortcut flagged
+    // `escapeTerminal: true` in shortcuts.ts, return false so
+    // xterm doesn't consume the keystroke (the contract
+    // `attachCustomKeyEventHandler` reads: false = let the
+    // browser dispatch it). App.svelte's window-level keymap
+    // then handles the chord. Without this gate Cmd+P,
+    // Cmd+Shift+M, Cmd+R, etc. fired from a focused terminal
+    // would be swallowed by xterm + written to the PTY as
+    // escape sequences.
+    if (shouldEscapeTerminal(e)) return false;
     return handleTerminalMetaKey(e, sendUserInput);
   }
 

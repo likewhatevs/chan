@@ -2675,3 +2675,32 @@ layer rather than as a top-level keymap.
 
 Impl note at [fullstack-a-94.md](fullstack-a-94.md).
 Outbound poke fired.
+
+## 2026-05-22 — -a-91 (chord-escape registry) ready for review
+
+Three-file change. Bundled cross-lane piece
+(@@FullStackB's TerminalTab consultation
+included in the same commit since the registry
+extension + the consumer are tightly coupled).
+
+* `shortcuts.ts`: new `escapeTerminal?: boolean`
+  field + 7 App-group entries flagged +
+  `chordFromEvent` + `shouldEscapeTerminal`
+  helpers + cross-platform `Cmd`/`Mod` aliasing
+  via token-set comparison.
+* `TerminalTab.svelte::handleTerminalKeyEvent`
+  now calls `shouldEscapeTerminal(e)` before
+  the meta-key delegation. Match → return false
+  → xterm leaves the event alone → App.svelte
+  handles.
+* `chordEscapeRegistry.test.ts` (new): 15 pins.
+
+### Gate
+
+* vitest **994 / 994** (+22 net from -a-94's
+  972).
+* svelte-check 0/0 across 4033 files.
+* npm build clean.
+
+Impl note at [fullstack-a-91.md](fullstack-a-91.md).
+Outbound poke fired.
