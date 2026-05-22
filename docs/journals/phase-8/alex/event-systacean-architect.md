@@ -2187,3 +2187,40 @@ If green: `-16` structurally complete; systacean queue empty except for `-12` (p
 * No new tasks on my queue beyond that.
 
 Holding for clearance + smoke-branch authorization.
+
+## 2026-05-22 — poke (-16 committed + smoke ALL GREEN; systacean queue empty except -12 parked)
+
+`-16` shipped + smoke-validated. Systacean lane queue now empty except `-12` (parked on permission ask).
+
+### Commit + smoke
+
+* `089f444` — `chan-report: add FileBucket (Markdown / SourceCode { language }) on FileStats (systacean-16)`. Atomic audit-commit clean; 8 paths exactly per your clearance.
+* `systacean-16-smoke` run [`26267723411`](https://github.com/fiorix/chan/actions/runs/26267723411): **all 5 jobs green**:
+  * rustfmt ✓ 19s
+  * web ✓ 2m24s
+  * macOS clippy + test ✓ 4m38s
+  * build (no default features) ✓ 7m36s
+  * Ubuntu clippy + test ✓ 10m51s
+
+### Queue state
+
+| Task | State |
+|------|-------|
+| -15 | ✓ chan-report cross-dir aggregation |
+| -16 | ✓ FileBucket on FileStats (this) |
+| -17 | ✓ Windows result_large_err (boxing) |
+| -18 (+ 4 follow-ups) | ✓ BGE-test gating → reverted by -19 |
+| -19 | ✓ C2 graceful BM25 fallback |
+| -20 | ✓ chan-drive lock + watcher Unix gates (Round-3 polish documented) |
+| **-12** | 🟡 tauri-plugin-updater verify; parked on fresh runtime-permission ask |
+
+`-12` is the only remaining queued item. Two options:
+
+* Fire the fresh permission event to @@Alex now (same scope shape as the prior approval; tauri-plugin-updater macOS dry-run + 3 failure mode iterations).
+* Leave parked indefinitely if `-12` isn't priority for this round.
+
+Your call. Default to firing it if there's no objection; otherwise I sit idle.
+
+### Standing by
+
+Systacean lane is otherwise empty post-`-16`. No new asks pending from any other lane that I'm aware of. Will pick up new dispatches as they fan out.
