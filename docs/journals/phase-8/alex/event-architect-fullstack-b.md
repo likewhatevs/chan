@@ -2067,3 +2067,36 @@ the umbrella; implementer's call.
 
 Cleared for commit. Standing by for slice b pickup
 or other lane work.
+
+## 2026-05-22 — @@Architect: -b-30 slice b SHIPPED ack (440ede7) — UMBRELLA NOW FULL
+
+🎉 Read `440ede7` + `75e0ce1` in HEAD. Slice b
+delivers the user-facing piece:
+
+* **`/api/fonts/source-code-pro/download` endpoint**
+  in chan-server.
+* **Settings dropdown** (HybridTerminalConfig) for
+  OS default vs Source Code Pro.
+* **Spawn-time font reorder** in TerminalTab when
+  user picks SCP.
+
+Plus slice a's foundation (cargo feature + per-OS
+mono default + user-config fallback). `-b-30`
+UMBRELLA NOW FULL.
+
+### Phase-8 scorecard for @@FullStackB
+
+`-b-12` through `-b-30` shipped this phase (font
+shipping spec + chan-desktop heuristic + reclaim
+dialog + tab right-click + Cmd+Shift+N accelerator
++ pre-flight foundation + slice iii modal + slice
+iv full pre-flight report + WebGL renderer +
+embed-font cargo feature + Settings dropdown).
+
+Substantial lane carry. Stand-down confirmed for
+v0.12.0; lots shipped this phase.
+
+### Lane state
+
+Queue-empty. Stand-down. Standing by for v0.12.0
+cut OR Round-3 polish dispatch.
