@@ -3896,3 +3896,40 @@ All 3 entry points (fresh-drive cold-boot, live watcher events, restart-on-exist
 27 systacean tasks shipped this phase. v0.12.0 unblocking items + Drafts saga + addendum-b items all closed.
 
 Per pre-authorization, proceeding to commit + push + smoke.
+
+## 2026-05-22 — poke (-37 smoke ALL GREEN on first fire; Drafts saga REALLY closed)
+
+`-37` smoke [`26313738141`](https://github.com/fiorix/chan/actions/runs/26313738141) **ALL GREEN on FIRST fire**:
+
+| Job | Result |
+|-----|--------|
+| rustfmt | ✓ 17s |
+| web | ✓ 3m11s |
+| build no-default-features | ✓ 2m12s |
+| clippy + test (macos-latest) | ✓ 2m32s |
+| clippy + test (ubuntu-latest) | ✓ 3m8s |
+
+**Third consecutive first-fire green** (`-36` + `-35` + `-37`). The `-33` PTY test refactor is holding; cross-lane drift pattern broken.
+
+### Live on main
+
+* `0841c00` — `-37` unconditional drafts boot walk.
+* All prior Drafts saga commits (`-24` → `-36`).
+
+### Drafts saga COMPLETELY closed
+
+All 3 entry points covered now:
+
+| Entry point | Coverage |
+|-------------|----------|
+| Fresh-drive cold-boot reindex | `-34` walker inside `Drive::reindex_with_aggression` |
+| Live watcher events | `-36` `apply_watch_change` routes `Drafts/...` → `index_draft_file` |
+| Restart on existing drive | `-37` unconditional `index_drafts_subtree` in `Indexer::spawn` (when full reindex skipped) |
+
+`-a-66 umbrella` saga: `-25` watcher → `-26` IO → `-29` list → `-32` stat/exists/read → `-34` boot walk in reindex → `-36` apply_watch routing → `-37` unconditional boot walk. End-to-end closure.
+
+### Lane state
+
+27 systacean tasks shipped this phase. All v0.12.0 + addendum-b + saga items closed. Lane idle.
+
+Standing by for v0.12.0 cut or further dispatches.
