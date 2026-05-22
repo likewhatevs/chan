@@ -308,3 +308,120 @@ prefer a quick visual smoke. Otherwise routing to
 @@WebtestB per the established lane boundary; webtest
 walks the expand UI + checkbox flips + persistence
 across restart.
+
+## 2026-05-22 — slice -b-28b-i implementation note (ready for commit clearance)
+
+Picked up `-b-28b` as a follow-up under the umbrella
+per @@Architect's "treat it as a follow-up under the
+umbrella when you're ready" framing (no separate
+`-b-28b.md` task file cut). Slicing further:
+
+* **-b-28b-i** (this commit): swap the `set_drive_features`
+  stub body to drive the authoritative chan-drive state
+  via the `chan` CLI. Sidecar stays as the SPA-facing
+  read mirror.
+* **-b-28b-ii** (deferred): swap `get_drive_features` to
+  read both flags via the CLI. Blocked on @@Systacean
+  shipping `chan reports status --json` (the existing
+  `chan index status` covers semantic_enabled only).
+* **-b-28b-iii** (deferred): full pre-flight screen
+  between `pickAndAdd` and `add_drive` with the verbatim
+  round-2-plan explanatory copy + the full report
+  (perms/size/SCM/etc.). Independent design pass.
+
+### Changes (slice -b-28b-i)
+
+* **`desktop/src-tauri/src/main.rs::set_drive_features`** —
+  no longer writes the sidecar in isolation. Diffs the
+  current sidecar features against the requested ones;
+  for each changed flag, shells out to the matching
+  `chan` CLI subcommand. On success of all CLI calls,
+  mirrors the result into the sidecar.
+  * `bge`: `chan index enable-semantic --path <path>` /
+    `chan index disable-semantic --path <path>`.
+  * `reports`: `chan reports enable --path <path>` /
+    `chan reports disable --path <path> -y` (`-y` skips
+    the destructive-action confirmation prompt — the SPA
+    checkbox already confirmed via the click).
+  * Sequential CLI calls so a failure on the first leaves
+    the second untouched. On any CLI failure the IPC
+    returns Err + the sidecar stays at the pre-change
+    state; the SPA reverts the checkbox per the
+    optimistic-update pattern from `-b-28a`.
+* **New helper `run_chan_feature_subcommand`** — captures
+  the spawn shape (resolved chan binary + args + kill-on-
+  drop + stderr surfacing) so the two flag paths share
+  the spawn + the error-formatting boilerplate.
+* **`get_drive_features`** — unchanged in behaviour
+  (still reads sidecar). Docstring updated to describe
+  the new mirror semantics + the deferred `-b-28b-ii`
+  CLI-read swap.
+
+### Test pin (`serve.rs::tests`)
+
+* `set_drive_features_calls_chan_cli_after_b28b` — pins
+  the four CLI argument strings (`"enable-semantic"`,
+  `"disable-semantic"`, `"reports"`, `"-y"`) in
+  `main.rs`. A future refactor that removes the CLI
+  subprocess (e.g. a direct chan-drive link) fails this
+  test loudly so it can't silently revert to the stub
+  shape.
+
+chan-desktop count: 51 → 52.
+
+### -b-28a stub-state forward-compat
+
+Users who toggled feature flags under `-b-28a` (stub
+only) have a sidecar that says e.g. `{bge: true}` but
+the underlying chan-drive state is still `{bge: false}`
+(the stub never called chan-drive). After this swap, the
+SPA still shows the sidecar state (correct from the
+user's perspective) but the user's NEXT toggle is the
+first call that hits chan-drive. So a -b-28a user who
+enabled BGE under the stub will see BGE "on" in the
+launcher but BM25-only search until they toggle BGE off
++ back on (or a future migration pass syncs sidecar →
+chan-drive once on first `set` post-upgrade).
+
+**Documented but not auto-migrated** in this slice. Two
+mitigations available if @@Alex finds the gap material:
+
+1. Explicit one-time migration: on first
+   `set_drive_features` call per drive post-upgrade,
+   push BOTH sidecar flags to chan-drive (not just the
+   changed one). Adds a `synced: bool` to
+   `DriveSidecar`.
+2. Eager sync on chan-desktop boot: for every drive in
+   the registry, if sidecar has non-default features,
+   invoke the CLI to assert the state. Bigger blast
+   radius (boot-time CLI fan-out).
+
+(1) is cheaper + more local; flagged for a follow-up if
+needed. Likely a non-issue in practice since `-b-28a`
+shipped today and the toggle UI is new enough that very
+few users have stub-state to migrate.
+
+### Pre-push gate (local, macOS aarch64; -b-28b-i scope only)
+
+| Surface                                                       | State                                       |
+|---------------------------------------------------------------|---------------------------------------------|
+| `cargo clippy -p chan-desktop --all-targets -- -D warnings`   | Clean.                                      |
+| `cargo test -p chan-desktop`                                  | 52 tests (was 51 from `-b-28a`; +1 pin).    |
+| `cargo build -p chan-desktop --no-default-features`           | Clean.                                      |
+| SPA gate (`-b-28b-i` doesn't touch SPA)                       | Not re-run; no SPA delta in this slice.     |
+
+### Files to stage
+
+```
+desktop/src-tauri/src/main.rs
+desktop/src-tauri/src/serve.rs
+docs/journals/phase-8/fullstack-b/fullstack-b-28.md
+```
+
+Atomic `git commit --only` per `feedback_shared_worktree_commits`.
+
+### Suggested commit subject
+
+```
+chan-desktop: swap set_drive_features stub for chan CLI subprocess (fullstack-b-28b slice i)
+```

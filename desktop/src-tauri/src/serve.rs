@@ -1292,6 +1292,36 @@ mod tests {
     }
 
     #[test]
+    fn set_drive_features_calls_chan_cli_after_b28b() {
+        // `fullstack-b-28b-i`: `set_drive_features` no longer
+        // writes the sidecar in isolation. It first invokes the
+        // `chan` CLI for each changed flag (so chan-drive's
+        // authoritative state matches what the user clicked),
+        // then mirrors the result into the sidecar. Pin the CLI
+        // subcommand names so a rename in chan's CLI surface
+        // (or an architectural swap to a different transport)
+        // can't silently revert chan-desktop to the old stub
+        // behaviour.
+        const MAIN_RS: &str = include_str!("main.rs");
+        assert!(
+            MAIN_RS.contains("\"enable-semantic\""),
+            "set_drive_features must shell out to `chan index enable-semantic` when bge flips ON"
+        );
+        assert!(
+            MAIN_RS.contains("\"disable-semantic\""),
+            "set_drive_features must shell out to `chan index disable-semantic` when bge flips OFF"
+        );
+        assert!(
+            MAIN_RS.contains("\"reports\""),
+            "set_drive_features must invoke `chan reports {{enable,disable}}` for the reports flag"
+        );
+        assert!(
+            MAIN_RS.contains("\"-y\""),
+            "chan reports disable prompts for confirmation; -y must be passed so chan-desktop's checkbox click doesn't deadlock"
+        );
+    }
+
+    #[test]
     fn launcher_calls_drive_features_ipcs() {
         // `fullstack-b-28a`: the SPA-side launcher MUST invoke
         // both IPCs so the expand panel reflects + persists

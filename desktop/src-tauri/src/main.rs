@@ -442,9 +442,14 @@ fn get_config(state: State<Arc<AppState>>) -> Result<Config, String> {
 /// expand panel calls this on render so first-time drives show
 /// up with both toggles off as the round-2-plan specifies.
 ///
-/// Stub: persistence lives in chan-desktop's sidecar config
-/// until `systacean-27` ships the chan-drive config API; `-b-28b`
-/// will swap the body without changing the IPC contract.
+/// `-b-28b-i`: still reads the sidecar mirror as the source of
+/// the SPA's last-known state. `set_drive_features` writes both
+/// chan-drive (via the `chan` CLI) AND the sidecar mirror on
+/// every change, so the sidecar stays in sync with the
+/// authoritative chan-drive state. A future slice (`-b-28b-ii`)
+/// will swap reads to a `chan index status --json` + `chan
+/// reports status --json` (pending in @@Systacean's lane) call
+/// chain; the chan-drive state stays authoritative regardless.
 #[tauri::command]
 fn get_drive_features(state: State<Arc<AppState>>, path: String) -> Result<DriveFeatures, String> {
     let key = canonical_key(Path::new(&path));
@@ -456,26 +461,94 @@ fn get_drive_features(state: State<Arc<AppState>>, path: String) -> Result<Drive
         .unwrap_or_default())
 }
 
-/// `fullstack-b-28a`: write the feature toggle pair for a drive.
-/// Both fields are written together so a partial flip doesn't
-/// leave a half-state on disk; the SPA always sends the current
-/// full state on every change.
+/// `fullstack-b-28a` + `-b-28b-i`: write the feature toggle pair
+/// for a drive. Both fields land together so a partial flip
+/// doesn't leave a half-state on disk; the SPA always sends the
+/// current full state on every change.
 ///
-/// Stub: persistence lives in chan-desktop's sidecar config
-/// until `systacean-27` ships the chan-drive config API; `-b-28b`
-/// will swap the body to call the chan-drive `Drive::set_feature_*`
-/// helpers without changing the IPC contract.
+/// `-b-28b-i` swaps the stub body to drive the real chan-drive
+/// state via the `chan` CLI subprocess. Each changed flag fires
+/// one CLI call:
+///
+///   * `bge`     → `chan index enable-semantic|disable-semantic
+///                 --path <path>`
+///   * `reports` → `chan reports enable|disable --path <path>
+///                 [-y]`
+///
+/// Calls are sequential so a failure on the first leaves the
+/// second un-touched (matches the user's expectation that
+/// "Reclaim semantic, that failed, didn't touch reports"). On
+/// success the sidecar mirror updates so subsequent
+/// `get_drive_features` reads return the authoritative state
+/// without a fresh CLI round-trip. On any CLI failure the
+/// sidecar stays untouched and the error propagates to the SPA
+/// (the launcher's `bindFeaturesToggle` reverts the checkbox).
 #[tauri::command]
-fn set_drive_features(
-    state: State<Arc<AppState>>,
+async fn set_drive_features(
+    state: State<'_, Arc<AppState>>,
     path: String,
     features: DriveFeatures,
 ) -> Result<(), String> {
+    require_bin(&state.bin_status)?;
     let key = canonical_key(Path::new(&path));
+    let current = {
+        let cfg = state.store.lock().unwrap().get().map_err(err)?;
+        cfg.sidecar
+            .get(&key)
+            .map(|s| s.features)
+            .unwrap_or_default()
+    };
+    let bin = serve::resolve_chan_binary()?;
+    if current.bge != features.bge {
+        let action = if features.bge {
+            "enable-semantic"
+        } else {
+            "disable-semantic"
+        };
+        run_chan_feature_subcommand(&bin, &["index", action, "--path", &key], "chan index").await?;
+    }
+    if current.reports != features.reports {
+        let mut args = vec!["reports"];
+        if features.reports {
+            args.push("enable");
+        } else {
+            args.push("disable");
+            // chan reports disable prompts for confirmation; -y
+            // skips so the desktop dialog (which already
+            // confirmed via the checkbox) doesn't deadlock.
+            args.push("-y");
+        }
+        args.extend_from_slice(&["--path", &key]);
+        run_chan_feature_subcommand(&bin, &args, "chan reports").await?;
+    }
     let mut store = state.store.lock().unwrap();
     let mut cfg = store.get().map_err(err)?;
     cfg.sidecar.entry(key).or_default().features = features;
     store.save(&cfg).map_err(err)
+}
+
+/// `fullstack-b-28b-i`: invoke a `chan` CLI subcommand for one
+/// feature flip + surface stderr verbatim on non-zero exit. Used
+/// by `set_drive_features`; pulled into its own helper so the
+/// two flag paths share the spawn shape + the error formatting.
+async fn run_chan_feature_subcommand(
+    bin: &Path,
+    args: &[&str],
+    surface: &str,
+) -> Result<(), String> {
+    let out = Command::new(bin)
+        .args(args)
+        .kill_on_drop(true)
+        .output()
+        .await
+        .map_err(|e| format!("running `{surface}`: {e}"))?;
+    if !out.status.success() {
+        return Err(format!(
+            "`{surface}` failed: {}",
+            String::from_utf8_lossy(&out.stderr).trim()
+        ));
+    }
+    Ok(())
 }
 
 #[derive(Debug, Clone, Serialize)]
