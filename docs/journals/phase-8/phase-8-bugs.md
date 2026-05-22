@@ -777,6 +777,30 @@
   - severity: UX papercut; not regression-class
   - NOT YET DISPATCHED — task-pickup audit step: walk the graph with @@WebtestA OR repro empirically, capture which click site → which menu → which mis-position, then route fix
 
+- File-scope graph doesn't include the parent directory node (spec'd; missing); drive-scope shows orphan markdown nodes — likely same root cause
+  - flagged 2026-05-22 by @@Alex watching webtest-a's graph walks:
+    1. **File-scope** (graph-from-here on CLAUDE.md per screenshot): graph shows the file + its link-out targets (3 design.md links) but does NOT include the parent directory node connected via a `contains` edge. Alex's verbatim spec: "when they select a document/file we are not showing the parent dir connected to that node as i had spec'd: this is so users can always click on this parent node and from the inspector they could click graph from here"
+    2. **Drive-scope**: many orphan markdown dots float in the outer ring with no visible edges to any parent directory (despite `-a-49`'s filesystem-hierarchy backbone landing)
+  - **load-bearing UX rationale** (from @@Alex's spec): the parent-dir node in file-scope is the user's primary navigation path UPWARD — click parent dir → inspector → "Graph from here" rooted at parent. Without this edge, the user has to leave the graph (FB sidebar / breadcrumb) to navigate up. The breadcrumb `drive / CLAUDE.md` IS in the details panel but isn't a graph-affordance
+  - **GENERAL RULE (@@Alex 2026-05-22)**: a node in the graph can ONLY be orphan (no inbound `contains` edge from a parent directory) IF the folder/directory filter is OFF. With the folder filter ON (the default), **every node must have a parent**. The two observations above are the same invariant violation in two different scopes
+  - **exception**: when the folder/directory filter chip is OFF, parent-dir nodes SHOULD be hidden (user's explicit opt-out from directory structure)
+  - root cause hypotheses (audit at task pickup):
+    1. **chan-server emit**: `routes/graph.rs::merge_filesystem_layer` calls `build_fs_graph(scope=File, ...)` for `GraphScope::File` (line 649). Audit needed: does `build_fs_graph` in `routes/fs_graph.rs` (`walk_file` at line 500) emit the parent directory NODE + `contains` edge alongside the file in File-scope? `walk_file:508-510` shows it emits the parent — but maybe the parent has a `kind` that gets filtered out downstream, OR the SPA isn't rendering it
+    2. **SPA rendering**: `GraphCanvas.svelte` may render `contains` edges only when certain chip combinations are on. Audit needed: trace the `contains` edge rendering path; check if file-scope graphs include parent dirs in the node set but filter the edges out
+    3. **Drive-scope deduplication**: `merge_filesystem_layer` may emit parent dirs with `node.kind=directory` (per line 659) but the SPA filter / render layer might suppress them when `folder` chip is on but file-bucket aware filtering applies — TBD audit
+  - investigation hooks:
+    - hit `/api/graph?scope=file&path=CLAUDE.md` directly + inspect JSON for parent dir node + contains edge presence (audit raw data first)
+    - hit `/api/graph?scope=drive` + count orphan files (file nodes with no `contains` edge inbound)
+    - check `GraphCanvas.svelte:43` `RenderedEdgeKind = "link" | "tag" | "mention" | "contains" | "language" | "group"` — "contains" IS in the union; audit which condition determines visibility
+  - acceptance after fix:
+    1. File-scope graph (graph-from-here on a file) includes the file's parent directory as a node + `contains` edge from parent → file, UNLESS folder filter is OFF
+    2. Drive-scope graph: every file node has a `contains` edge inbound from its parent directory node (no orphans), UNLESS folder filter is OFF
+    3. Folder filter OFF: parent-dir nodes don't render in either scope; file nodes float without parent-dir edges — that's the user's explicit choice
+  - lane: TBD pending audit. Likely @@FullStackA (SPA) if data is present but unrendered; @@Systacean (chan-server) if emit is missing
+  - severity: meaningful UX gap on the spec'd navigation; not regression-class
+  - NOT YET DISPATCHED — Round-2 wave-3; audit before scoping fix
+  - REPLACES the prior standalone "orphan markdown dots" framing — same architectural gap
+
 - Graph canvas click hit-radius is too tight; users need to zoom in to register clicks on nodes
   - flagged 2026-05-22 by @@WebtestA during proactive `-a-49`+`-a-50`+`-a-51` walk (`a63c8cb`): clicks at multiple positions near visible nodes missed consistently before zoom — e.g. `(1356, 539)`, `(1351, 411)`, `(881, 247)` all missed. Pattern suggests the canvas hit-test uses the node's stroke radius as the hit-box rather than a slightly-expanded one
   - want: expand the click hit-radius beyond the visible stroke (typical UX pattern: `hitRadius = strokeRadius + ~8-12px` for forgiving-feeling clicks)
