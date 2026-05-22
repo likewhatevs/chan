@@ -2704,3 +2704,28 @@ extension + the consumer are tightly coupled).
 
 Impl note at [fullstack-a-91.md](fullstack-a-91.md).
 Outbound poke fired.
+
+## 2026-05-22 — -a-93 (terminal resize trailing fit) ready for review
+
+Two-file change. Audit ruled out a (no fit)
+and c (no PTY-resize); confirmed b
+(ResizeObserver collapses final fire).
+Palliative fix per architect.
+
+* `TerminalTab.svelte::queueFit` schedules
+  both leading rAF + new trailing
+  `scheduleTrailingFit` (debounced 120ms).
+* `teardown` clears the trailing timer so
+  resize-during-dispose doesn't race.
+* `terminalResizeTrailingFit.test.ts` (new):
+  8 raw-source pins.
+
+### Gate
+
+* vitest **1002 / 1002** (+8 net from -a-91's
+  994).
+* svelte-check 0/0 across 4034 files.
+* npm build clean.
+
+Impl note at [fullstack-a-93.md](fullstack-a-93.md).
+Outbound poke fired.

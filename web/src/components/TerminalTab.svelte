@@ -617,6 +617,40 @@
         // xterm throws if fit runs before dimensions settle.
       }
     });
+    // `fullstack-a-93`: trailing-edge fit. ResizeObserver
+    // sometimes misses or swallows the FINAL resize event of a
+    // drag gesture (browser quirk — observer batches + can
+    // collapse intermediate sizes when the host element
+    // transitions through layout-thrashing states like
+    // `display: none` ↔ visible on tab switch). Without a
+    // trailing-edge fit, the terminal stays at the size from
+    // the FIRST observed resize tick instead of the FINAL pane
+    // width. The rAF above handles the leading edge; the
+    // debounced trailing fit below converges on the steady-
+    // state size 120ms after the last observed change. Idempotent
+    // when the size hasn't drifted: `fit.fit` short-circuits +
+    // `term.resize` no-ops on identical cols/rows so no
+    // spurious SIGWINCH lands on the PTY.
+    scheduleTrailingFit();
+  }
+
+  /// `fullstack-a-93`: trailing-edge fit scheduler. Coalesces
+  /// rapid ResizeObserver fires (pane-divider drag = dozens per
+  /// second) into a single fit 120ms after the last fire. 120ms
+  /// matches the perception threshold for "the user has stopped
+  /// dragging" + leaves room for one more frame of paint.
+  let trailingFitTimer: ReturnType<typeof setTimeout> | null = null;
+  function scheduleTrailingFit(): void {
+    if (trailingFitTimer) clearTimeout(trailingFitTimer);
+    trailingFitTimer = setTimeout(() => {
+      trailingFitTimer = null;
+      try {
+        fit?.fit();
+        if (term) statusDetail = `${term.cols}x${term.rows}`;
+      } catch {
+        // Same throw guard as `queueFit`.
+      }
+    }, 120);
   }
 
   function closeSocket(): void {
@@ -638,6 +672,13 @@
     if (sessionSaveTimer) {
       clearTimeout(sessionSaveTimer);
       sessionSaveTimer = null;
+    }
+    if (trailingFitTimer) {
+      // `fullstack-a-93`: clear the trailing-edge fit timer so a
+      // resize-during-teardown rAF doesn't race against the
+      // `term?.dispose()` below + throw at fit-time.
+      clearTimeout(trailingFitTimer);
+      trailingFitTimer = null;
     }
     closeSocket();
     resizeObserver?.disconnect();

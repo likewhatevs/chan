@@ -7825,3 +7825,85 @@ Single bash invocation per discipline.
 
 Push held. Standing by for clearance + the
 @@WebtestA empirical walk.
+
+## 2026-05-22 — poke (fullstack-a-93 terminal trailing-fit ready for review)
+
+Two-file change. SPA-only.
+
+### Audit verdict
+
+Walked the resize chain:
+* (a) ruled out — ResizeObserver IS
+  attached.
+* (c) ruled out — `term.onResize` IS sending
+  `{type:"resize"}` to chan-server +
+  `Session::resize` IS firing SIGWINCH.
+* (b) confirmed-likely — ResizeObserver
+  collapses the FINAL resize event of a
+  drag gesture; terminal sticks at the
+  leading-edge cols instead of the steady
+  state.
+
+### Fix shape
+
+`TerminalTab.svelte`:
+* `queueFit` schedules BOTH the existing
+  leading rAF fit AND a new
+  `scheduleTrailingFit` (debounced 120ms).
+* `trailingFitTimer` cleared on `teardown`
+  to prevent resize-during-dispose race.
+
+`terminalResizeTrailingFit.test.ts` (new):
+8 raw-source pins on both fits, debounce
+shape, teardown clear, ResizeObserver
+wiring preservation, rationale comment, and
+the PTY-resize send chain.
+
+### Acceptance
+
+1. Cols widen on resize ✓ (mechanism;
+   @@WebtestA walk for empirical).
+2. Agent output unwraps ✓.
+3. Multi-pane independent ✓.
+
+### Gate
+
+* vitest **1002 / 1002** (+8 net from -a-91's
+  994).
+* svelte-check 0 errors / 0 warnings across
+  4034 files.
+* npm build clean.
+
+### Decisions
+
+* **Palliative-first** per your routing —
+  fixes the empirical bug without rooting
+  the specific ResizeObserver quirk.
+* **120ms debounce** — feels snappy + covers
+  the observer batching window.
+* **Kept leading rAF fit** — smooths
+  intermediate drag states.
+* **Clear timer on teardown** — defense-in-
+  depth against dispose race.
+
+### Suggested commit subject
+
+```
+Terminal: trailing-edge fit on resize so cols converge to final pane width (fullstack-a-93)
+```
+
+### Files for `git add`
+
+* `web/src/components/TerminalTab.svelte`
+* `web/src/components/terminalResizeTrailingFit.test.ts` (new)
+* `docs/journals/phase-8/fullstack-a/fullstack-a-93.md`
+* `docs/journals/phase-8/fullstack-a/journal.md`
+* `docs/journals/phase-8/alex/event-fullstack-a-architect.md`
+  (this append)
+
+### Atomic-audit-commit applied
+
+Single bash invocation per discipline.
+
+Push held. Standing by for clearance + the
+@@WebtestA empirical walk.
