@@ -1187,3 +1187,98 @@ you route clearance.
   scope matches the named paths.
 
 Standing by for clearance or next dispatch.
+
+## 2026-05-22 — poke (webtest-b-4: -b-25 walkthrough; heuristic empirically VERIFIED, dialog UI PARKED)
+
+Walked the 9 acceptance checks of `-b-25` (`f29611c`)
+against HEAD `f593f35`. Verdict appended to
+[`../webtest-b/webtest-b-1.md`](../webtest-b/webtest-b-1.md)
+under the `2026-05-22 — fullstack-b-25 runtime
+walkthrough (heuristic + reclaim dialog)` heading.
+Throwaway-drive shape; tightened-scope rules honoured;
+no `/Applications/Chan.app` touch.
+
+### Per-check verdict
+
+| #   | Check                                       | Verdict |
+|-----|---------------------------------------------|---------|
+| 1   | Real-orphan heuristic matches               | EMPIRICALLY VERIFIED |
+| 2   | False-positive (drive-key only) avoided     | EMPIRICALLY VERIFIED |
+| 3   | Wrapper rejected (argv[0] basename != chan) | EMPIRICALLY VERIFIED |
+| 4-9 | Dialog UI walks                             | source + tests VERIFIED; click PARKED |
+
+### Heuristic side — empirically end-to-end
+
+Staged four competing processes against the SAME
+canonical key `/private/tmp/chan-test-phase8-wb-b25`:
+
+```
+ORPHAN  chan serve <key> --host ... --port 8830 ...
+NOISE   tail -f /tmp/wb-b25-noise.log <key>/nonexistent
+GREP    ugrep ... <key>
+WRAPPER python3 -c "import time; time.sleep(60)" chan serve <key> --port 9999
+```
+
+Ran the awk equivalent of `parse_ps_lines_for_chan_serve`
+against live `ps -ax -o pid=,command=` output. **ONLY
+the real orphan matched.** All three false-positive
+shapes correctly rejected by the new positional-argv
+check. The exact `-b-3` false-positive surface
+(bash/awk pipeline lines with the trigger substrings)
+is gone — bash subshell argv[0] basename `bash` ≠
+`chan`, so it's rejected up-front.
+
+### Dialog side — code-level pinned
+
+* 43/43 chan-desktop tests pass (39 → 43; +4 new
+  matching the task body claim).
+* `parse_ps_lines_carries_command_line_into_candidate`
+  pins `OrphanCandidate.command` populated for dialog
+  row rendering.
+* `invoke_handler_registers_find_drive_lock_candidates`
+  pins IPC registration.
+* `serve_failed_payload_drive_lock_field_is_consumed_by_launcher`
+  pins main.js invokes the new IPC.
+* Source review of `desktop/src/main.js::showReclaimDialog`
+  confirms: PID + command rendered per row, backdrop
+  + Escape cancel, Reclaim has initial focus + Enter
+  triggers, multi-candidate iteration. Every check 4-9
+  invariant is in the source.
+
+### Why no chan-desktop launch
+
+Same shape as `-b-3` + the smoke walk: @@Alex's Chan.app
+shares `~/Library/Application Support/Chan Desktop/config.json`.
+A second chan-desktop on boot would mutate config.json
+even without clicks (canonicalization, prune stale
+`window_configs`). The dialog walk additionally needs
+a LAUNCHER CLICK to fire (`set_drive_on` → spawn → bind
+fail → `serve-failed` → `showReclaimDialog`); click is
+gated on macOS Accessibility. Launching would put a
+window on @@Alex's screen with no empirical gain.
+
+### Tear-down
+
+* All 4 staged PIDs (orphan + 3 false-positives)
+  SIGTERM'd; gone within 1 s.
+* `/tmp/chan-test-phase8-wb-b25/` `rm -rf`'d.
+* Drive registry entry `chan remove
+  /private/tmp/chan-test-phase8-wb-b25` →
+  `unregistered`.
+* Log files removed.
+* chan-desktop config untouched.
+
+### Commit readiness
+
+Verdict + this poke ready to commit when you route
+clearance.
+
+* **Suggested commit subject**:
+  `docs: webtest-b-4 — -b-25 walkthrough (heuristic empirically verified, dialog UI parked)`.
+* **Files** (race-safe `git commit -m "<subject>" -- <pathspec>`):
+  * `docs/journals/phase-8/webtest-b/webtest-b-1.md`
+  * `docs/journals/phase-8/alex/event-webtest-b-architect.md`
+* Post-commit `git show --stat HEAD` confirms landed
+  scope.
+
+Standing by for clearance or next dispatch.

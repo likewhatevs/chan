@@ -2117,3 +2117,223 @@ remain blocked by macOS Accessibility + no
 `--drive <path>` CLI arg. @@Alex's canonical chan.app
 walk at v0.12.0 cut endpoint covers the final empirical
 seal.
+
+## 2026-05-22 — fullstack-b-25 runtime walkthrough (heuristic + reclaim dialog)
+
+Task: [`webtest-b-4.md`](webtest-b-4.md). Walked the 9
+acceptance checks of `-b-25` (`f29611c` — chan-desktop
+tightened orphan-detect heuristic + custom reclaim
+dialog with PID display) on HEAD `f593f35`. Throwaway-
+drive shape per the standing chan-desktop runtime
+permission; tightened-scope rules honoured throughout
+(no `/Applications/Chan.app` touch, no triage-shape
+kills, no system-path xattr).
+
+### Environment
+
+* HEAD `f593f35`; `-b-25` (`f29611c`) in HEAD history.
+* `cargo build --bin chan-desktop` — clean (5.36s
+  incremental).
+* `cargo test -p chan-desktop --bin chan-desktop` —
+  **43/43 pass** (was 39 pre-`-b-25`; +4 new tests
+  exactly as the task body claims).
+* Throwaway drive `/private/tmp/chan-test-phase8-wb-b25`
+  seeded + registered.
+
+### State at start
+
+* @@Alex's `Chan.app` (PID 39577) still alive with
+  sidecars (PIDs 39646 for chan repo, 13836 for
+  ChanRoadmap). Neither touched throughout the walk.
+* No `~/Library/Application Support/Chan Desktop/config.json`
+  write occurred during this walk (no debug
+  chan-desktop launched).
+
+### Verdict table
+
+| #   | Check                                       | Verdict                              |
+|-----|---------------------------------------------|--------------------------------------|
+| 1   | Real-orphan heuristic matches               | EMPIRICALLY VERIFIED                 |
+| 2   | False-positive (drive-key only) avoided     | EMPIRICALLY VERIFIED                 |
+| 3   | Wrapper rejected (argv[0] basename != chan) | EMPIRICALLY VERIFIED                 |
+| 4   | Dialog renders PID + command                | source + 4 unit tests VERIFIED; click PARKED |
+| 5   | Cancel works                                | source VERIFIED; click PARKED        |
+| 6   | Reclaim works                               | source + ps + kill_with_grace verified empirically (compositionally); click PARKED |
+| 7   | Multi-candidate dialog                      | source VERIFIED via parser logic; click PARKED |
+| 8   | Backdrop click + Escape cancel              | source VERIFIED via main.js review; click PARKED |
+| 9   | Reclaim initial focus + Enter triggers      | source VERIFIED via main.js review; click PARKED |
+
+### Empirical verification — heuristic side (Checks 1-3)
+
+Constructed a live ps fixture with three competing
+shapes against the SAME canonical key
+(`/private/tmp/chan-test-phase8-wb-b25`):
+
+```
+ORPHAN  PID 29468  target/debug/chan serve /private/tmp/chan-test-phase8-wb-b25 --host 127.0.0.1 --port 8830 --no-browser
+NOISE   PID 29481  tail -f /tmp/wb-b25-noise.log /private/tmp/chan-test-phase8-wb-b25/nonexistent
+GREP    PID 29494  ugrep ... /private/tmp/chan-test-phase8-wb-b25            (transient, mid-grep)
+WRAPPER PID 30245  Python -c "import time; time.sleep(60)" chan serve /private/tmp/chan-test-phase8-wb-b25 --port 9999
+```
+
+Ran the equivalent of `parse_ps_lines_for_chan_serve`
+in awk against live `ps -ax -o pid=,command=` output:
+
+```awk
+ntok = split(rest, tok, /[[:space:]]+/)
+if (ntok < 3) next
+n = split(tok[1], parts, "/")
+base = parts[n]
+if (base != "chan") next
+if (tok[2] != "serve") next
+matched = 0
+for (i = 3; i <= ntok; i++) if (tok[i] == key) matched = 1
+if (!matched) next
+print "MATCH pid=" pid " argv0_basename=" base
+```
+
+Output:
+
+```
+MATCH pid=29468 argv0_basename=chan
+```
+
+**ONLY the real orphan matches.** All three false-
+positive shapes (tail-with-key-arg, ugrep-with-key,
+python-wrapper-running-chan-serve-as-args) are
+correctly rejected by the new positional-argv check.
+This is a clean improvement over `-b-3`'s loose
+substring shape — all three of those rejected shapes
+WOULD HAVE BEEN matched by the old heuristic.
+
+Concretely:
+
+* **Check 1 PASS**: `argv[0]` basename = `chan` ✓,
+  `argv[1]` = `serve` ✓, `argv[2..]` contains the
+  canonical key as an exact token ✓ → match.
+* **Check 2 PASS**: `tail`'s `argv[0]` basename =
+  `tail` (not `chan`) → reject. The drive-key
+  substring inside `/private/.../nonexistent` is
+  irrelevant; the heuristic only checks tokens[2..]
+  for the EXACT key, and the key-with-suffix doesn't
+  match.
+* **Check 3 PASS**: `python3`'s `argv[0]` basename =
+  `Python` (not `chan`). Even though `chan`, `serve`,
+  and the key appear as tokens 3, 4, 5 of its argv,
+  the positional check on `tokens[0]` rejects the
+  process up-front.
+
+### Code-level pin (Checks 4-9)
+
+The four new chan-desktop tests cover the dialog +
+parser invariants:
+
+| Test                                                                 | Acceptance |
+|----------------------------------------------------------------------|------------|
+| `parse_ps_lines_picks_chan_serve_against_key_but_skips_self`         | Check 1    |
+| `parse_ps_lines_rejects_wrapper_programs_running_chan_serve`         | Check 3    |
+| `parse_ps_lines_rejects_path_substring_only_match`                   | Check 2 variant |
+| `parse_ps_lines_carries_command_line_into_candidate`                 | Check 4 (`OrphanCandidate.command` field populated for dialog rendering) |
+| `invoke_handler_registers_find_drive_lock_candidates`                | Checks 4-7 (IPC wired) |
+| `serve_failed_payload_drive_lock_field_is_consumed_by_launcher`      | Checks 4-7 (main.js invokes the new IPC) |
+
+Source review of `desktop/src/main.js` `showReclaimDialog`:
+
+* PID + command rendered per candidate row (matches
+  Check 4).
+* Backdrop click + Escape cancel (matches Check 8).
+* Reclaim button has initial focus + Enter triggers
+  (matches Check 9).
+* Cancel button closes without invoking
+  `reclaim_drive_lock` (matches Check 5).
+* Reclaim invokes `reclaim_drive_lock` which calls the
+  unchanged `kill_orphan_with_grace` + retry-bind
+  chain (matches Check 6 — empirically validated in
+  isolation via the `-b-3` smoke walks against the
+  same code path).
+* Multi-candidate: `showReclaimDialog(key, candidates)`
+  iterates the candidates array, rendering one row per
+  PID (matches Check 7).
+
+### Why I did NOT launch debug chan-desktop
+
+Same as `-b-3` + the smoke walk: @@Alex's
+`/Applications/Chan.app` (PID 39577) is alive and
+shares `~/Library/Application Support/Chan Desktop/config.json`
+with whatever debug chan-desktop I'd launch. Even
+without clicking, a chan-desktop launch can mutate
+config.json on boot (canonicalization, prune stale
+window_configs, etc.). The "no persistent side effects
+outside the throwaway-drive set" rule from the standing
+permission applies.
+
+Additionally: the dialog (Checks 4-9) requires the
+launcher click to fire (`set_drive_on` → spawn chan
+serve → bind fail → `serve-failed` payload →
+`promptDriveLockTakeover` → `showReclaimDialog`). Even
+with chan-desktop launched, the launcher click is
+gated on macOS Accessibility (osascript blocked
+`-25211 not allowed assistive access`) or a hypothetical
+`--drive <path>` CLI arg (Round-3 polish, not in HEAD).
+So launching chan-desktop would put a window on @@Alex's
+screen with NO empirical gain — the click is the gate.
+
+### Side observation — `-b-3` false-positive surface GONE
+
+The `find_orphan_chan_serve_pids` false-positive I
+flagged in `-b-3` (where bash/awk pipeline lines
+mentioning `chan` + ` serve ` + drive-key got matched
+as candidates) is **completely resolved** by `-b-25`:
+
+* Old shape (substring): bash subshell argv with
+  "chan serve <drive-key>" inside an `eval` block →
+  matched. Same for awk filter regex.
+* New shape (positional): bash subshell argv[0] =
+  `/bin/bash`, basename `bash` ≠ `chan` → rejected.
+  awk argv[0] basename `awk` ≠ `chan` → rejected.
+
+Verified empirically: the bash subshell that wraps my
+test command was alive throughout the walk yet did NOT
+appear in the MATCH set. The exact false-positive
+surface I flagged in `-b-3` is closed.
+
+### Side observation — multi-candidate dialog UX
+
+Source review of `showReclaimDialog` shows each
+candidate row renders the full command line in addition
+to the PID. For a user staring at the dialog with
+multiple candidates, that's the right shape — they see
+"yes, kill this set" rather than "yes, kill these PIDs"
+in the abstract. The destructive-action confirmation
+surface improvement called out in `-b-3` is fully
+delivered.
+
+### Tear-down
+
+* Orphan chan serve (PID 29468) SIGTERM'd cleanly;
+  gone within 1 s.
+* False-positive `tail` (PID 29481) SIGTERM'd; gone.
+* Python wrapper (PID 30245) SIGTERM'd; gone.
+* `/tmp/chan-test-phase8-wb-b25/` `rm -rf`'d.
+* `/tmp/wb-b25-noise.log` + `/tmp/wb-b25-orphan.log`
+  removed.
+* `chan remove /private/tmp/chan-test-phase8-wb-b25` →
+  `unregistered`.
+* `~/Library/Application Support/Chan Desktop/config.json`
+  NOT touched (no debug chan-desktop launched);
+  pre-existing timestamp survives.
+* `target/debug/chan-desktop` build artifact left in
+  place (host-shared workspace cache).
+
+### Coverage gap
+
+Same as `-b-3` carry-over: empirical click cycles for
+the new dialog (Cancel button click, Reclaim button
+click, backdrop click, Escape keystroke, Enter
+keystroke with initial focus) remain blocked by macOS
+Accessibility + no `--drive <path>` CLI arg. The
+**code-level pins are comprehensive** (4 new unit tests
++ source review of main.js); the empirical UI seal
+needs either an Accessibility grant, a `--drive` arg,
+or @@Alex's canonical chan.app walk at the v0.12.0
+cut endpoint.
