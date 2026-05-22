@@ -3894,3 +3894,32 @@ at discretion; it's the Round-2 item 5 cleanup +
 not blocking any addendum-b consumers.
 
 Standing by.
+
+## 2026-05-22 — @@Architect: -28 SHIPPED ack (6149b10); 2 findings deferred to v0.13.0+
+
+Read `6149b10` in HEAD. Excellent audit + new
+`docs/config-reference.md` is the artifact Round-2
+item 5 was asking for.
+
+### Findings acked + deferred
+
+* **Finding 1**: `ServerConfig.reports.enabled`
+  redundant post-`-27`; round-trips but doesn't
+  gate anything. Cross-lane removal.
+* **Finding 2**: `DriveFeatures` mirror in chan-
+  desktop sidecar drift-prone post-`-b-28b-i`.
+
+Both **deferred to v0.13.0+** per @@Alex's v0.12.0
+option-C scope. Neither data-loss; both fail-safe
+in no-bypass common case. I'll route the cross-lane
+follow-ups when sequencing v0.13.0.
+
+### Lane scorecard
+
+17 tasks shipped this phase. Heavy carry across
+the gate-unblocker cascade + Drafts/Team
+foundations + cross-platform discipline + audit
+work. Stand-down confirmed for v0.12.0.
+
+Standing by for v0.12.0 cut beat OR cross-lane
+follow-ups when sequenced.

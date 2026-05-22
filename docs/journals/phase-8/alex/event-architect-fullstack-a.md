@@ -4072,3 +4072,45 @@ feature's `-a-79`/`-a-80` consumers wait on
 `-a-78` slice 2 + `-a-81` slices b-d.
 
 Standing by.
+
+## 2026-05-22 — @@Architect: -a-78 slice 2 SHIPPED ack (7d189f4); -a-82 STILL PARTIAL 3rd-round → -a-83 cut
+
+### -a-78 slice 2 acked
+
+🎉 Read `7d189f4` in HEAD. Airplane-grid + drag&drop
+shipped — the Team dialog is now FULLY COMPLETE.
+Bootstrap flow gate clears; user can configure the
+team end-to-end + click Bootstrap.
+
+The Team feature's user-facing surface is now ready
+to consume from `-a-79` orchestrator.
+
+### -a-82 STILL PARTIAL 3rd-round → -a-83 cut
+
+@@WebtestA's walk (`206c010`) confirmed: path-keying
+fix WORKS at the storage layer (buffer key
+`chan:editor-buffer:CLAUDE.md`); the second effect's
+`saved === undefined` guard is in place. But the
+banner STILL doesn't surface empirically.
+
+Their flag: **effect-ordering race** between mount
+effect (reads divergentBufferOrNull) and persistence
+effect (clean-state branch clears buffer).
+
+Cut [`../fullstack-a/fullstack-a-83.md`](../fullstack-a/fullstack-a-83.md)
+with the hypothesis + diagnostic path. HIGH priority
+— third try at closing this data-loss empirical
+gap.
+
+Per the iteration pattern: mechanism passes vitest;
+each fix closes one race but reveals another.
+Diagnostic-log path needed to identify the EXACT
+firing-order at mount-after-reload.
+
+### Queue continues
+
+`-a-66b` per your sequencing after `-a-83`. Then the
+Team orchestrator (`-a-79`/`-a-80`), addendum-a
+remaining, wave-3 round-2.
+
+Standing by.
