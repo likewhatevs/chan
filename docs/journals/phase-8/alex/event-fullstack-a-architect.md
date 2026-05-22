@@ -5200,3 +5200,94 @@ Single bash invocation per discipline.
 
 Push held. Standing by for clearance + routing
 on the remaining 5 surfaces.
+
+## 2026-05-22 — scope poke (fullstack-a-66 needs chan-drive unified-path API extension)
+
+Picking up `-a-66` per the queue head. Audit
+surfaces an API-shape gap that warrants a scope
+poke before I commit cross-lane work
+unilaterally.
+
+### Audit verdict
+
+`systacean-24` + `systacean-25` shipped the
+chan-drive Drafts primitive + watcher / indexer
+/ graph emit. But the **read/write surface for
+files INSIDE a draft** is intentionally
+asymmetric with the drive-root API:
+
+* Drive-root files: `Drive::read_text(rel)` /
+  `Drive::write_text(rel, content)` enforce the
+  editable-text gate, atomic write, watcher
+  self-write annotation, etc.
+* Drafts: `chan_drive::drafts::create_dir(...)`
+  returns a `DraftRef { name, abs }`. Reads /
+  writes for files INSIDE the draft happen via
+  RAW `std::fs` against `DraftRef.abs` — no
+  editable-text gate, no atomic write helper,
+  no self-write annotation. The chan-server
+  `index_draft_file` exists but it's a
+  POST-write call.
+
+This is fine for the chan-drive design (drafts
+are scratch space; gates relaxed). BUT it means
+chan-server's `/api/files/*path` route can't
+serve `Drafts/<name>/<file>` paths because
+`Drive::read_text` operates on the drive-root
+CapFs which doesn't see Drafts.
+
+### Implications for -a-66
+
+To ship "Cmd+N creates Drafts/untitled-N/draft.md
++ open in Hybrid Editor", I need one of:
+
+* **A) chan-drive extends with unified-path
+  ops**: `Drive::read_draft_text(rel)` /
+  `Drive::write_draft_text(rel, content)` /
+  `Drive::next_untitled_draft_name()` that
+  accept `Drafts/`-prefixed paths and route
+  internally. This is the cleanest contract —
+  the editor's existing
+  `api.read("Drafts/untitled-1/draft.md")`
+  call shape works unchanged.
+* **B) chan-server adds parallel
+  `/api/drafts/*` routes**: new
+  GET/PUT/DELETE/POST routes for drafts. SPA's
+  file-tab logic branches on
+  `path.startsWith("Drafts/")` to pick the
+  right route. Doubles the wire surface; the
+  editor's autosave + dirty-mtime path has to
+  switch on the same branch.
+* **C) cross-lane work in this commit**: I
+  extend chan-drive AND chan-server AND SPA in
+  one go. Touches @@Systacean's chan-drive
+  ownership; would expand my commit
+  significantly + risk re-litigating the API
+  shape they just landed.
+
+### Routing recommendation
+
+**Route to @@Systacean for A** — unified-path
+extension to chan-drive. Smallest blast radius,
+preserves the read/write contract the SPA + the
+editor already speak. The graph route already
+synthesizes Drafts/-prefixed paths (per `-25`),
+so the wire format is settled; just need
+chan-drive's read/write surface to recognize the
+prefix.
+
+`-a-66` would then resume on my lane once
+chan-drive lands the extension. Minimal SPA
+work: Cmd+N chord binding + a chan-server
+`POST /api/drafts/new` route + UI integration.
+
+### Standing down on -a-66
+
+Pausing `-a-66` until chan-drive extension
+lands. Picking up `-a-67b` (graph header
+click-to-inspector wiring) next — small slice,
+contained on my lane, no cross-stack
+dependencies.
+
+Standing by for your routing on the chan-drive
+extension piece.
