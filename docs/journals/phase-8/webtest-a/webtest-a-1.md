@@ -4973,3 +4973,103 @@ Lane-A test server torn down:
 
 5/5 HOLD. The slice b/c/d data-flow gap saga is
 CLOSED via systacean-32 + slice c follow-up.
+
+## 2026-05-22 — proactive walk: -a-90 remove Alt+Space chord (PARTIAL — 3rd handler still bound)
+
+Proactive walk on HEAD `81f6007`. Throwaway drive
+r28; chan serve 127.0.0.1:8787; Chrome MCP tab
+`503726114`.
+
+### Verdict (PARTIAL)
+
+| Check | Surface | Verdict |
+|-------|---------|---------|
+| Alt+Space no longer opens rich prompt (terminal-focused) | empirical | **PARTIAL** (still opens) |
+| Cmd+Alt+P still opens rich prompt | empirical | HOLD |
+| App.svelte global Alt+Space handler removed | source | HOLD |
+| TerminalTab.svelte onShellKeydown Alt+Space removed | source | HOLD |
+| TerminalTab.svelte handleTerminalKeyEvent Alt+Space removed | source | **MISSING** |
+
+### Empirical: Alt+Space STILL opens rich prompt
+
+Test sequence:
+1. Cmd+Alt+T → spawn Terminal-1 (active).
+2. Alt+Space → **rich prompt opens** (richPromptPresent: true, richPromptVisible: true).
+3. Cmd+Alt+P → toggles the prompt OFF (richPromptVisible: false).
+
+The empirical surface shows Alt+Space STILL
+spawning the rich prompt when the terminal has
+focus.
+
+### Root cause: 3rd handler not removed
+
+The `-a-90` commit (`81f6007`) removed Alt+Space
+from TWO places:
+1. `App.svelte` global keymap (lines 614-624
+   pre-commit, removed) ✓
+2. `TerminalTab.svelte::onShellKeydown` (line
+   ~993 pre-commit, removed) ✓
+
+But there's a **THIRD handler** in
+`TerminalTab.svelte::handleTerminalKeyEvent`
+(lines 977-989 current source):
+
+```svelte
+function handleTerminalKeyEvent(e: KeyboardEvent): boolean {
+  if (closeExitedTabFromKey(e)) return false;
+  if (
+    e.type === "keydown" &&
+    e.altKey &&
+    !e.ctrlKey &&
+    !e.metaKey &&
+    !e.shiftKey &&
+    e.code === "Space"
+  ) {
+    e.preventDefault();
+    openRichPrompt();
+    return false;
+  }
+  ...
+}
+```
+
+This handler fires when the terminal pane has
+focus (likely the xterm.js key event path).
+`-a-90` missed it.
+
+The vitest pin at
+`web/src/state/altSpaceRichPromptRemoved.test.ts`
+checks two regex patterns but doesn't cover this
+third handler shape — false-positive green.
+
+Lane: **@@FullStackA**. The `-a-90` task should
+have removed all THREE handlers. Suggest a
+follow-up commit removing the
+`handleTerminalKeyEvent` branch + a third vitest
+pin.
+
+### Highlights
+
+* **Empirical surface catches what vitest missed**
+  — the vitest pin checks for the specific
+  `App.svelte` + `onShellKeydown` patterns but
+  doesn't audit `handleTerminalKeyEvent`. Vitest
+  green ≠ feature shipped.
+* **Cmd+Alt+P still works** as the canonical
+  chord. The new entry points are sound.
+* **`-a-90` is 2/3 done**: two of three handlers
+  removed; the terminal-focused path (the most
+  common scenario for a "rich prompt from
+  terminal" muscle memory) is the one missed.
+
+### State at end of walk
+
+Lane-A test server torn down:
+1. chan serve killed.
+2. `rm -rf /tmp/chan-test-phase8-wa-r28/`.
+3. `chan remove` → unregistered.
+4. Chrome MCP tab closed.
+
+PARTIAL. `-a-90` follow-up needed to remove the
+3rd Alt+Space handler in
+`TerminalTab.svelte::handleTerminalKeyEvent`.

@@ -2896,3 +2896,91 @@ unified-path API).
 Standing by. Drafts feature can be declared
 shipped end-to-end through the b/c/d/systacean-32
 arc.
+
+## 2026-05-22 — poke (-a-90 PARTIAL — 3rd Alt+Space handler missed)
+
+Proactive walk on HEAD `81f6007`. Throwaway drive
+r28; chan serve 127.0.0.1:8787; Chrome MCP tab
+`503726114`. Verdict in
+[`../webtest-a/webtest-a-1.md`](../webtest-a/webtest-a-1.md).
+
+### Verdict: PARTIAL
+
+`-a-90` removed Alt+Space from 2 of 3 places.
+
+**Empirical**: spawned Terminal-1 via Cmd+Alt+T,
+pressed Alt+Space. **Rich prompt opened.**
+
+### Root cause: missed handler in TerminalTab.svelte
+
+`-a-90` removed Alt+Space from:
+- `App.svelte` global keymap ✓
+- `TerminalTab.svelte::onShellKeydown` ✓
+
+But **MISSED** the handler in
+`TerminalTab.svelte::handleTerminalKeyEvent`
+(current source lines 977-989):
+
+```svelte
+function handleTerminalKeyEvent(e: KeyboardEvent): boolean {
+  if (closeExitedTabFromKey(e)) return false;
+  if (
+    e.type === "keydown" &&
+    e.altKey &&
+    !e.ctrlKey &&
+    !e.metaKey &&
+    !e.shiftKey &&
+    e.code === "Space"
+  ) {
+    e.preventDefault();
+    openRichPrompt();  // ← STILL BOUND
+    return false;
+  }
+  ...
+}
+```
+
+This handler fires when the xterm.js terminal has
+focus — the most common context for a "rich prompt
+from terminal" muscle-memory hit.
+
+### Vitest pin false-positive
+
+The vitest pin at
+`web/src/state/altSpaceRichPromptRemoved.test.ts`
+checks two specific regex patterns
+(`App.svelte` global + `onShellKeydown`) but
+doesn't audit `handleTerminalKeyEvent`. Tests
+green; empirical surface broken.
+
+This is another **mechanism-vs-empirical gap**
+caught by the proactive-walk discipline.
+
+### Cmd+Alt+P confirmed HOLD
+
+The canonical Cmd+Alt+P (web Mac) chord still
+works — toggles rich prompt as expected. The new
+entry points are sound; only the legacy chord
+removal is incomplete.
+
+### Suggested follow-up
+
+* **Commit subject** (for the @@FullStackA
+  follow-up): `Rich prompt: remove 3rd Alt+Space
+  handler in TerminalTab.handleTerminalKeyEvent
+  (fullstack-a-90 follow-up)` + add vitest pin.
+* **Files**: `web/src/components/TerminalTab.svelte`
+  + the vitest pin file.
+
+### My commit shape for this walk
+
+* **Commit subject**: `docs: webtest-a proactive
+  walk — -a-90 Alt+Space removal PARTIAL (3rd
+  handler in TerminalTab.handleTerminalKeyEvent
+  missed)`.
+* **Files**:
+  * `docs/journals/phase-8/webtest-a/webtest-a-1.md`
+  * `docs/journals/phase-8/alex/event-webtest-a-architect.md`
+* Path-limited `git commit`.
+
+Standing by.
