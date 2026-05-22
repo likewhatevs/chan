@@ -14,6 +14,7 @@
     BuildInfo,
     GlobalConfig,
     Preferences,
+    SemanticState,
   } from "../api/types";
   import { Maximize2, Minimize2, X } from "lucide-svelte";
   import {
@@ -245,11 +246,84 @@
   // keeps only the GlobalConfig autosave plumbing + the About
   // section.
 
+  // `fullstack-a-76` slice 2: Features section pairs the
+  // chan-reports + BGE (semantic) per-drive toggles. State
+  // mirrors `HybridFileBrowserConfig.svelte`'s semantic-toggle
+  // shape (load on mount; optimistic flip with rollback on
+  // error); the simpler "model present?" hint defers the
+  // full download flow to the FB config surface so the
+  // Settings overlay stays a single-screen feature toggle
+  // rather than re-implementing the BGE model-download state
+  // machine.
+  let reportsEnabled = $state<boolean | null>(null);
+  let reportsBusy = $state(false);
+  let reportsError = $state<string | null>(null);
+  let semanticState = $state<SemanticState | null>(null);
+  let semanticBusy = $state(false);
+  let semanticError = $state<string | null>(null);
+
+  async function loadFeaturesState(): Promise<void> {
+    try {
+      const r = await api.reportsState();
+      reportsEnabled = r.enabled;
+    } catch (err) {
+      reportsError = `reports: ${(err as Error).message ?? err}`;
+    }
+    try {
+      semanticState = await api.semanticState();
+    } catch {
+      // Semantic endpoint is gated on the `embeddings` feature
+      // flag in the chan-server binary. A 404 here means the
+      // build doesn't ship embeddings; we surface that as an
+      // explanatory hint rather than an error.
+      semanticState = null;
+    }
+  }
+
+  async function toggleReports(): Promise<void> {
+    if (reportsEnabled === null || reportsBusy) return;
+    reportsBusy = true;
+    reportsError = null;
+    const target = !reportsEnabled;
+    try {
+      const r = target ? await api.reportsEnable() : await api.reportsDisable();
+      reportsEnabled = r.enabled;
+    } catch (err) {
+      reportsError = `${target ? "enable" : "disable"} failed: ${(err as Error).message ?? err}`;
+    } finally {
+      reportsBusy = false;
+    }
+  }
+
+  async function toggleSemantic(): Promise<void> {
+    if (!semanticState || semanticBusy) return;
+    semanticBusy = true;
+    semanticError = null;
+    try {
+      if (semanticState.semantic_enabled) {
+        semanticState = await api.semanticDisable();
+      } else if (semanticState.model_present) {
+        semanticState = await api.semanticEnable();
+      } else {
+        // Model not on disk yet. Settings UI doesn't run the
+        // download itself — defer to the FB config surface
+        // which already implements the polling + progress UX.
+        semanticError =
+          "BGE model not downloaded yet. Open the Hybrid File Browser back-side to download.";
+      }
+    } catch (err) {
+      semanticError = `toggle failed: ${(err as Error).message ?? err}`;
+    } finally {
+      semanticBusy = false;
+    }
+  }
+
   onMount(() => {
     // Make sure we have the latest server state when the tab opens.
     void refreshDrive();
     void loadGlobalConfig();
     void loadBuildInfo();
+    void loadFeaturesState();
   });
 </script>
 
@@ -341,6 +415,89 @@
             <span>{opt.label}</span>
           </label>
         {/each}
+      </div>
+    </section>
+
+    <!-- `fullstack-a-76` slice 2: Features section pairs the
+         chan-reports + BGE (semantic) per-drive toggles. Both
+         hit per-drive endpoints (`/api/index/reports/*` and
+         `/api/index/semantic/*`); the existing
+         `HybridFileBrowserConfig.svelte` keeps its richer
+         per-feature controls (BGE model download + download
+         progress; reports global-preferences mirror). This
+         section is the single-screen "quick toggle" surface;
+         users who need the full per-feature controls open the
+         FB back-side. -->
+    <section class="features">
+      <h3>Features</h3>
+      <p class="hint">
+        Per-drive feature toggles. Mirrors the pre-flight
+        toggles from chan-desktop's launcher.
+      </p>
+      <div class="feature-row">
+        <div class="feature-meta">
+          <div class="feature-title">chan-reports</div>
+          <div class="feature-sub">
+            Code-stats indexing (SLOC + COCOMO + per-language
+            breakdown).
+          </div>
+          {#if reportsError}
+            <div class="err" role="alert">{reportsError}</div>
+          {/if}
+        </div>
+        <label class="feature-switch">
+          <input
+            type="checkbox"
+            checked={reportsEnabled === true}
+            disabled={reportsEnabled === null || reportsBusy}
+            onchange={toggleReports}
+          />
+          <span>
+            {#if reportsEnabled === null}
+              loading…
+            {:else if reportsBusy}
+              flipping…
+            {:else if reportsEnabled}
+              On
+            {:else}
+              Off
+            {/if}
+          </span>
+        </label>
+      </div>
+      <div class="feature-row">
+        <div class="feature-meta">
+          <div class="feature-title">BGE semantic search</div>
+          <div class="feature-sub">
+            Hybrid BM25 + embeddings. Requires the BGE-small
+            model on disk (download from the File Browser
+            back-side).
+          </div>
+          {#if semanticError}
+            <div class="err" role="alert">{semanticError}</div>
+          {/if}
+        </div>
+        <label class="feature-switch">
+          <input
+            type="checkbox"
+            checked={semanticState?.semantic_enabled === true}
+            disabled={semanticState === null || semanticBusy}
+            onchange={toggleSemantic}
+          />
+          <span>
+            {#if semanticState === null}
+              n/a
+            {:else if semanticBusy}
+              flipping…
+            {:else if semanticState.semantic_enabled}
+              On
+            {:else if !semanticState.model_present}
+              Model not downloaded
+            {:else}
+              Off
+            {/if}
+          </span>
+        </label>
       </div>
     </section>
 
@@ -522,6 +679,56 @@
     margin: 0;
     color: var(--text-secondary);
     font-size: 13px;
+  }
+  /* `fullstack-a-76` slice 2: Features section rows. Each row
+     is a metadata block (title + sub + optional error) on the
+     left and a checkbox-styled switch on the right. Width-
+     constrained so a 4040+ component tree's layout stability
+     pin isn't disturbed. */
+  .features {
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+  }
+  .feature-row {
+    display: flex;
+    align-items: flex-start;
+    gap: 1rem;
+    padding: 0.5rem;
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    background: var(--bg);
+  }
+  .feature-meta {
+    flex: 1;
+    min-width: 0;
+  }
+  .feature-title {
+    font-weight: 600;
+    margin-bottom: 0.15rem;
+  }
+  .feature-sub {
+    font-size: 12.5px;
+    color: var(--text-secondary);
+    line-height: 1.35;
+  }
+  .feature-meta .err {
+    margin-top: 0.3rem;
+    font-size: 12.5px;
+    color: var(--warn-text);
+  }
+  .feature-switch {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.4rem;
+    font-size: 13px;
+    color: var(--text-secondary);
+    cursor: pointer;
+    user-select: none;
+    white-space: nowrap;
+  }
+  .feature-switch input[disabled] {
+    cursor: wait;
   }
   /* Tab-bar autosave indicator. Sits between the title and the
      actions strip. Empty when idle (no extra padding). */

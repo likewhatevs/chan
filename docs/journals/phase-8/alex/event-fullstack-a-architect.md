@@ -9226,3 +9226,97 @@ Single bash invocation per discipline.
 
 Standing by for the dual-toggle
 decision.
+
+## 2026-05-23 — poke (fullstack-a-76 slice 2: Settings Features section ready for review)
+
+Three-file change. Treated your "Settings UI
+Features section pairing reports + BGE is
+the next pick" as the dual-toggle
+resolution → COEXIST.
+
+### What landed
+
+`SettingsPanel.svelte`:
+* SemanticState re-imported.
+* 6 new state vars (reports + semantic
+  triplets).
+* `loadFeaturesState` parallel-fetch
+  (api.reportsState + api.semanticState);
+  semantic fetch failure (build without
+  embeddings) caught + renders "n/a" row.
+* `toggleReports` flips via the right
+  endpoint with optimistic update.
+* `toggleSemantic` guards on
+  `model_present` — defers to FB
+  config's download flow with an error
+  hint rather than re-implementing.
+* New `<section class="features">`
+  markup + CSS.
+
+`HybridFileBrowserConfig.test.ts`:
+* `-a-48` removal test block updated.
+  RICH model-download machine stays
+  forbidden in Settings; simple toggle
+  in slice 2 allowed.
+
+`settingsFeaturesSection.test.ts` (new):
+12 raw-source pins.
+
+### Acceptance (slice 2)
+
+1. Settings Features section with two
+   toggles ✓.
+2. Toggle state reflects drive config ✓.
+3. Flips persist + trigger indexing per
+   -39's contract ✓.
+4. Web build + chan-desktop both work ✓.
+
+### Gate
+
+* vitest **1064 / 1064** (+12 net from
+  -a-76 slice 1's 1052).
+* svelte-check 0 errors / 0 warnings
+  across 4041 files.
+* npm build clean.
+
+### Decisions
+
+* **COEXIST resolution** — Settings is
+  the quick-toggle surface;
+  HybridFileBrowserConfig keeps the
+  rich controls.
+* **Defer model download** — BGE
+  enable with absent model surfaces an
+  error hint pointing to FB config; no
+  download flow duplication.
+* **Graceful embeddings-feature gate**
+  — semantic state null when chan-server
+  ships without embeddings.
+* **Updated `-a-48` test block**
+  rather than removing — the intent
+  (don't re-introduce the download
+  complexity in Settings) is still
+  valid.
+
+### Suggested commit subject
+
+```
+Settings: Features section pairs chan-reports + BGE toggles (fullstack-a-76 slice 2)
+```
+
+### Files for `git add`
+
+* `web/src/components/SettingsPanel.svelte`
+* `web/src/components/HybridFileBrowserConfig.test.ts`
+* `web/src/components/settingsFeaturesSection.test.ts` (new)
+* `docs/journals/phase-8/fullstack-a/fullstack-a-76.md`
+* `docs/journals/phase-8/fullstack-a/journal.md`
+* `docs/journals/phase-8/alex/event-fullstack-a-architect.md`
+  (this append)
+
+### Atomic-audit-commit applied
+
+Single bash invocation per discipline.
+
+Push held. Standing by for clearance +
+@@WebtestA empirical walk.

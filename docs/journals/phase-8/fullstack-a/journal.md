@@ -3191,3 +3191,40 @@ once resolution lands.
 Impl note at [fullstack-a-76.md](fullstack-a-76.md)
 "## 2026-05-23 — SPA client wiring slice 1".
 Outbound poke fired.
+
+## 2026-05-23 — -a-76 slice 2 (Settings Features section) ready for review
+
+Three-file change. Pair chan-reports + BGE
+toggles in the Settings overlay.
+
+* `SettingsPanel.svelte`: SemanticState
+  re-imported; 6 new state vars;
+  `loadFeaturesState` parallel-fetch;
+  `toggleReports` + `toggleSemantic`
+  handlers; new `<section
+  class="features">` markup with two
+  `.feature-row` blocks + CSS.
+* `HybridFileBrowserConfig.test.ts`: -a-48
+  test block updated — the RICH
+  model-download state machine stays
+  forbidden in Settings; simple toggle
+  introduced in slice 2 allowed.
+* `settingsFeaturesSection.test.ts` (new):
+  12 raw-source pins.
+
+Resolved the dual-toggle question as
+COEXIST: Settings = quick-toggle surface;
+HybridFileBrowserConfig = rich controls.
+BGE model-download flow defers to FB
+config via an error-message hint.
+
+### Gate
+
+* vitest **1064 / 1064** (+12 net from
+  -a-76 slice 1's 1052).
+* svelte-check 0/0 across 4041 files.
+* npm build clean.
+
+Impl note at [fullstack-a-76.md](fullstack-a-76.md)
+"## 2026-05-23 — SPA slice 2".
+Outbound poke fired.

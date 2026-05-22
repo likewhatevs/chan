@@ -351,3 +351,174 @@ Per the memory rule. Per-path staging only.
 Push held. Standing by for the
 dual-toggle architectural decision +
 then slice 2 ships the Settings UI.
+
+## 2026-05-23 — SPA slice 2 (Settings Features section) ready for review
+
+Three-file change. SPA-only.
+
+Architect's note from `0eae028` ack: "Slice 2
+(Settings UI Features section pairing reports
++ BGE) is the next pick." Treating that as
+the dual-toggle resolution → COEXIST: Settings
+gets a single-screen quick-toggle Features
+section; `HybridFileBrowserConfig.svelte`
+keeps its richer per-feature controls (model
+download flow + global preferences mirror).
+
+### What landed
+
+`web/src/components/SettingsPanel.svelte`:
+* `SemanticState` type re-imported (was
+  removed in `-a-48`).
+* New state variables:
+  `reportsEnabled` / `reportsBusy` /
+  `reportsError`; `semanticState` /
+  `semanticBusy` / `semanticError`.
+* New `loadFeaturesState()` async helper —
+  fans `api.reportsState()` +
+  `api.semanticState()` in parallel; semantic
+  fetch failure (build without
+  `embeddings` feature) is caught + leaves
+  `semanticState` null so the UI renders an
+  "n/a" affordance.
+* New `toggleReports()` — flips per-drive
+  reports via the right endpoint;
+  optimistic state update from the
+  response body.
+* New `toggleSemantic()` —
+  enabled→disable, disabled+model_present→enable,
+  disabled+no_model→error message pointing
+  to FB config (the download flow lives
+  there).
+* `onMount` invokes `loadFeaturesState`.
+* New `<section class="features">` markup
+  with two `.feature-row` blocks (each =
+  meta block + switch). Each row has a
+  title, sub-description, optional inline
+  error, and a checkbox.
+* CSS rules for `.features`,
+  `.feature-row`, `.feature-meta`,
+  `.feature-title`, `.feature-sub`,
+  `.feature-meta .err`,
+  `.feature-switch`. Bordered card per
+  row matches the Appearance section's
+  visual density.
+
+`web/src/components/HybridFileBrowserConfig.test.ts`:
+* `fullstack-a-48: Semantic search removed
+  from SettingsPanel` test block updated to
+  reflect slice 2's re-introduction. The
+  RICH model-download state machine
+  (semanticDownloading, semanticEnabling,
+  semanticPollTimer, semanticToggle,
+  loadSemanticState, formatModelSize,
+  api.semanticDownload) STAYS forbidden in
+  SettingsPanel — those belong to the FB
+  config. Simple toggle helpers introduced
+  in slice 2 ARE allowed.
+* Old `<h3>Semantic search</h3>` section
+  header check stays — the new
+  `<h3>Features</h3>` is a different
+  header.
+
+`web/src/components/settingsFeaturesSection.test.ts`
+(new): 12 raw-source pins covering:
+* State variable declarations.
+* `SemanticState` type import.
+* `loadFeaturesState` parallel-fetch.
+* `onMount` invocation.
+* `toggleReports` direction-aware
+  endpoint pick.
+* `toggleSemantic` model-present guard +
+  error message for model-absent case.
+* Features section markup +
+  title-per-row.
+* Onchange handler wiring per row.
+* "Model not downloaded" copy.
+* Rationale comment cross-references.
+
+### Acceptance (slice 2)
+
+1. **Settings shows Features section
+   with two toggles** ✓ — chan-reports +
+   BGE.
+2. **Toggle state reflects current drive
+   config** ✓ — both load on mount;
+   refresh-on-toggle from the response
+   body.
+3. **Flipping persists + triggers
+   indexing as appropriate** ✓ — per
+   `-39`'s `set_reports_enabled` contract
+   + the existing semantic enable flow.
+4. **Web build + chan-desktop both
+   work** ✓ — same endpoints; same
+   shape.
+
+### Gate
+
+* vitest **1064 / 1064** (+12 net from
+  `-a-76` slice 1's 1052: +12 new pins
+  in settingsFeaturesSection.test.ts;
+  the existing HybridFileBrowserConfig.test.ts
+  block was REWRITTEN, not added/removed).
+* svelte-check 0 errors / 0 warnings
+  across 4041 files.
+* npm build clean.
+* Rust gate not re-run (no Rust touched).
+
+### Decisions
+
+* **Coexist** (option 3 from slice 1's
+  dual-toggle framing). Per architect's
+  "Settings UI Features section pairing
+  reports + BGE is the next pick" — the
+  Settings is the quick-toggle surface;
+  HybridFileBrowserConfig is the
+  rich-controls surface.
+* **Defer model download** for BGE. If
+  the user toggles BGE ON with the model
+  absent, the UI surfaces an error
+  pointing to FB config rather than
+  re-implementing the download flow. The
+  download is non-trivial (polling +
+  progress); duplicating it would be
+  bloat.
+* **Semantic feature-gated graceful**.
+  When chan-server is built without
+  `embeddings`, `/api/index/semantic/state`
+  returns 404. The fetch is caught +
+  `semanticState` stays null; the row
+  renders "n/a" + disabled checkbox.
+  Visible but inert.
+* **Updated the `-a-48` test block**
+  rather than deleting it. The
+  "semantic state machine helpers are
+  gone" intent (don't re-introduce the
+  download-flow complexity into
+  Settings) is still valid; just the
+  specific allowlist changed.
+
+### Suggested commit subject
+
+```
+Settings: Features section pairs chan-reports + BGE toggles (fullstack-a-76 slice 2)
+```
+
+Single commit. Markup + state + CSS + 12
+new pins + 1 updated test block.
+
+### Files for `git add` (per-path discipline)
+
+* `web/src/components/SettingsPanel.svelte`
+* `web/src/components/HybridFileBrowserConfig.test.ts`
+* `web/src/components/settingsFeaturesSection.test.ts` (new)
+* `docs/journals/phase-8/fullstack-a/fullstack-a-76.md`
+* `docs/journals/phase-8/fullstack-a/journal.md`
+* `docs/journals/phase-8/alex/event-fullstack-a-architect.md`
+
+### Atomic-audit-commit
+
+Per the memory rule. Per-path staging only.
+
+Push held. Standing by for clearance +
+the @@WebtestA empirical walk.

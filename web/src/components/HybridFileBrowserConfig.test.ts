@@ -91,32 +91,42 @@ describe("fullstack-a-48: HybridFileBrowserConfig wiring", () => {
   });
 });
 
-describe("fullstack-a-48: Semantic search removed from SettingsPanel", () => {
-  test("section header for semantic search is gone", () => {
+describe("fullstack-a-48: rich Semantic search state machine removed from SettingsPanel", () => {
+  // `fullstack-a-76` slice 2 RE-INTRODUCES a simple
+  // BGE toggle in SettingsPanel's new Features section, but
+  // the FULL model-download state machine (download progress,
+  // polling, model-size formatting) stays exclusive to
+  // HybridFileBrowserConfig. These pins assert the
+  // *specific* removed helpers stay gone in Settings, while
+  // the new simpler toggle introduced in `-a-76` slice 2 is
+  // permitted.
+
+  test("section header for the OLD `Semantic search` section is gone", () => {
+    // The new `-a-76` slice 2 section is `<h3>Features</h3>`
+    // pairing BGE + reports; the OLD `<h3>Semantic search</h3>`
+    // standalone block stays removed.
     expect(panel).not.toMatch(/<h3>Semantic search<\/h3>/);
   });
 
-  test("SemanticState type import is gone", () => {
-    // Assert against an actual import-statement block, not free-
-    // form mentions in carry-over comments.
-    expect(panel).not.toMatch(/import\s+type\s+\{[^}]*\bSemanticState\b/);
-  });
-
-  test("semantic state machine helpers are gone", () => {
-    expect(panel).not.toMatch(/async function semanticToggle/);
+  test("rich model-download state machine helpers stay gone", () => {
+    // These are the FULL HybridFileBrowserConfig-only
+    // helpers (model download + polling); the simpler
+    // `toggleSemantic` in `-a-76` slice 2 is allowed.
+    expect(panel).not.toMatch(/async function semanticToggle\b/);
     expect(panel).not.toMatch(/async function loadSemanticState/);
     expect(panel).not.toMatch(/function formatModelSize/);
-    expect(panel).not.toMatch(/api\.semanticEnable\(\)/);
+    // `api.semanticDownload()` belongs to the FB config
+    // download flow; Settings's toggle defers to it via a
+    // hint rather than re-implementing the download.
     expect(panel).not.toMatch(/api\.semanticDownload\(\)/);
-    expect(panel).not.toMatch(/api\.semanticDisable\(\)/);
-    expect(panel).not.toMatch(/api\.semanticState\(\)/);
   });
 
-  test("semantic state variables are gone", () => {
-    expect(panel).not.toMatch(/let\s+semanticState\s*=/);
+  test("download-state variables stay gone", () => {
+    // The download-flow state (downloading flag + polling
+    // timer + enabling-distinct-from-state) stays in
+    // HybridFileBrowserConfig.
     expect(panel).not.toMatch(/let\s+semanticDownloading\s*=/);
     expect(panel).not.toMatch(/let\s+semanticEnabling\s*=/);
-    expect(panel).not.toMatch(/let\s+semanticError\s*=/);
     expect(panel).not.toMatch(/let\s+semanticPollTimer\s*=/);
   });
 });
