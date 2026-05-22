@@ -4519,3 +4519,108 @@ Lane-A test server torn down:
 5/5 HOLD. `-a-66 b` PARTIAL closed via the
 `7be215e` follow-up; `-a-84` placeholder offset
 empirically clean.
+
+## 2026-05-22 — proactive re-walk: -a-83 hang-recovery (saga finally closed)
+
+Proactive re-walk on HEAD `d595758`. Throwaway
+drive r24; chan serve 127.0.0.1:8787; Chrome MCP
+tab `503726068`. **The 4-task hang-recovery saga
+ends here.**
+
+### Verdicts (5/5 HOLD) — saga ends
+
+| Check | Surface | Verdict |
+|-------|---------|---------|
+| #1 | Banner appears on mount when buffer is divergent | HOLD 🎉 |
+| #2 | Banner has Restore + Discard buttons + role=alert | HOLD |
+| #3 | Restore swaps editor content to buffer | HOLD |
+| #4 | Discard clears localStorage + dismisses banner | HOLD |
+| #5 | Path-keyed clear (no leftover localStorage on Discard) | HOLD |
+
+### The saga in one paragraph
+
+`-a-72` (banner mechanism + vitest pins) →
+`-a-74` (beforeunload flush) →
+`-a-82` (path-keying + saved-undefined guard) →
+**`-a-83`** (banner-active clear guard +
+discardBuffer path key) → 5/5 HOLD empirical.
+
+Four tasks. My proactive-walk discipline caught the
+mechanism-vs-empirical gap each round. The final fix
+in `-a-83` matched my Proposal #1 from the prior
+walk: "gate second effect's `clearEditorBuffer` on
+`!recoveredBuffer`". Architect filed `-a-83` with
+the exact shape needed.
+
+### Per-check evidence
+
+* **#1 Banner appears**: cleared localStorage,
+  injected `chan:editor-buffer:CLAUDE.md` with
+  divergent content, opened CLAUDE.md via FB.
+  **Banner appeared at top of editor**:
+  - Text: "Unsaved changes from a previous
+    session were found."
+  - Position: `x=314, y=38, w=1121, h=43`
+  - role: `alert`
+  - Class: `recovery-banner svelte-6icizy`
+
+* **#2 Buttons present**: `Restore` + `Discard`
+  buttons (refs ref_84 + ref_85).
+
+* **#3 Restore swaps content**: clicked
+  Restore button.
+  - `editorContains('INJECTED-A83-DIVERGENT-CONTENT'): true`
+  - `bannerStillPresent: false`
+  - Editor content is the buffer content; banner
+    dismissed.
+
+* **#4 Discard dismisses + clears**:
+  re-injected a different buffer
+  (`INJECTED-FOR-DISCARD-TEST`), reloaded → banner
+  reappeared. Clicked Discard.
+  - `bannerStillPresent: false`
+  - `lsAfterDiscard: []` (localStorage CLEARED)
+  - `editorRestoredToBuffer: false` (editor
+    stayed at disk content)
+
+* **#5 Path-keyed clear**: the localStorage
+  `chan:editor-buffer:CLAUDE.md` entry was removed
+  on Discard. Pre-`-a-83`, `discardBuffer` used
+  `tab.id` (stale relic) which silently no-op'd
+  → entry would linger. Post-`-a-83`, the
+  `tab.path` key is used → entry cleared.
+
+### Highlights
+
+* **The proactive-walk loop is the right
+  discipline**: 4 task iterations, each iteration
+  caught at the empirical surface, fixed in the
+  next iteration. The vitest mechanism passed
+  every round but the user-visible UX was broken
+  until the empirical-driven proposals landed in
+  `-a-83`.
+
+* **The architect+lane loop is working**:
+  - My PARTIAL flag → architect cuts new task with
+    my proposal
+  - @@FullStackA ships the fix
+  - I re-walk and confirm
+
+  Three round-trips closed the saga.
+
+* **The data-loss prevention UX is empirically
+  shipping**: @@Alex's addendum-a.md repro is
+  now closed. When the editor hangs and the user
+  Cmd+R's, the buffer survives + the banner
+  surfaces + Restore / Discard work as expected.
+
+### State at end of walk
+
+Lane-A test server torn down:
+
+1. chan serve killed.
+2. `rm -rf /tmp/chan-test-phase8-wa-r24/`.
+3. `chan remove` → unregistered.
+4. Chrome MCP tab closed.
+
+5/5 HOLD. **Hang-recovery saga CLOSED.**

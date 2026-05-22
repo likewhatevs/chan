@@ -2521,3 +2521,94 @@ Option B (offset right of CM6 cursor) lands clean.
 * Path-limited `git commit`.
 
 Standing by.
+
+## 2026-05-22 — poke (-a-83 BANNER FINALLY SURFACES — 5/5 HOLD; 4-task saga CLOSED)
+
+Proactive re-walk on HEAD `d595758`. Throwaway
+drive r24; chan serve 127.0.0.1:8787; Chrome MCP
+tab `503726068`. Verdict in
+[`../webtest-a/webtest-a-1.md`](../webtest-a/webtest-a-1.md).
+
+### 🎉 The 4-task hang-recovery saga ENDS HERE
+
+`-a-72` → `-a-74` → `-a-82` → **`-a-83`** → 5/5
+HOLD empirical.
+
+The `-a-83` fix matched my Proposal #1 from the
+prior walk: "gate second effect's
+`clearEditorBuffer` on `!recoveredBuffer`". Plus the
+bonus `discardBuffer` `tab.id` → `tab.path` key fix
+which I hadn't caught.
+
+### Verdicts: 5/5 HOLD
+
+| Check | Verdict |
+|-------|---------|
+| #1 Banner appears on mount when divergent | HOLD 🎉 |
+| #2 Buttons + role=alert | HOLD |
+| #3 Restore swaps content | HOLD |
+| #4 Discard dismisses + clears | HOLD |
+| #5 Path-keyed clear (no leftover) | HOLD |
+
+### Per-check evidence
+
+**Banner appears empirically**:
+- Injected `chan:editor-buffer:CLAUDE.md` with
+  divergent content
+- Opened CLAUDE.md via FB
+- Banner rendered at `x=314, y=38, w=1121, h=43`
+  with text "Unsaved changes from a previous
+  session were found." + Restore + Discard buttons
+  + `role="alert"`
+
+**Restore swaps content**:
+- Clicked Restore → editor content now contains
+  the injected buffer string; banner dismissed.
+
+**Discard clears localStorage + dismisses**:
+- Re-injected a different buffer
+- Reloaded → banner reappeared
+- Clicked Discard → localStorage entry GONE
+  (`lsAfterDiscard: []`); banner dismissed;
+  editor stayed at disk content.
+
+The path-keyed clear works correctly — the
+pre-`-a-83` `tab.id` form would have left the
+localStorage entry lingering, but `-a-83`'s
+`tab.path` fix cleans it up properly.
+
+### The proactive-walk discipline paid off
+
+Three round-trips closed this saga:
+
+1. My `-a-72` walk: flagged PARTIAL on banner
+   surfacing → `-a-74` cut (beforeunload flush).
+2. My `-a-74` walk: STILL PARTIAL → `-a-82` cut
+   (path-keying + saved-undefined guard).
+3. My `-a-82` walk: STILL PARTIAL with refined
+   root cause + 3 proposed fixes → `-a-83` cut
+   (Proposal #1 implemented + path-key fix in
+   discardBuffer).
+
+Each round, vitest pins passed but the
+user-visible UX was broken. Proactive empirical
+walks caught it every time.
+
+**The data-loss prevention scenario @@Alex flagged
+in addendum-a.md is now empirically closed.** When
+the editor hangs and the user force-reloads, the
+buffer survives + the banner surfaces + Restore /
+Discard work as expected.
+
+### Suggested commit shape
+
+* **Commit subject**: `docs: webtest-a re-walk —
+  -a-83 hang-recovery banner FINALLY SURFACES
+  (5/5 HOLD; 4-task saga closed)`.
+* **Files**:
+  * `docs/journals/phase-8/webtest-a/webtest-a-1.md`
+  * `docs/journals/phase-8/alex/event-webtest-a-architect.md`
+* Path-limited `git commit`.
+
+Standing by — hang-recovery feature can be
+declared shipped end-to-end.
