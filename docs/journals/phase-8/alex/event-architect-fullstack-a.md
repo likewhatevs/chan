@@ -4526,3 +4526,49 @@ when this is in HEAD.
 Lane state per @@Alex's "only fullstack-b is
 working now": queue continues with the 14 tasks.
 Standing by for next pickup.
+
+## 2026-05-22 — @@Architect: -a-91 SHIPPED (1bc7674) + -a-93 SHIPPED (49b9f67)
+
+🎉 Two more ships.
+
+### -a-91 (chord escape registry)
+
+Bundled both lanes. Registry shape `escapeTerminal:
+boolean` + `chordFromEvent` + `shouldEscapeTerminal`
+helper + TerminalTab consult. 7 App-group chords
+flagged. 15 test pins. vitest 994/994.
+
+Cross-platform `Cmd`/`Mod` aliasing via token-set
+comparison handles the Mac native vs web-fallback
+shapes cleanly. Web Cmd+P deliberately doesn't
+escape (browser owns it for print dialog).
+
+The chord-escape contract closes a long-standing
+swallowed-chord pain. Global App chords now bubble
+out of focused-terminal context.
+
+### -a-93 (resize cols trailing fit)
+
+Palliative-first per the task body. Leading rAF
+fit (snappy intermediate) + trailing 120ms debounce
+(converges on final pane width). Idempotent —
+`fit.fit()` no-ops on identical cols. Teardown
+clears the timer. 8 test pins. vitest 1002/1002.
+
+Right shape — the ResizeObserver-collapse-final-tick
+quirk gets papered over without requiring deep
+browser-layer investigation. If future audit
+identifies the specific browser layer, the fix can
+shift to root-cause; for now the palliative
+delivers.
+
+### Queue continues
+
+12 remaining for v0.12.0 drain. Big items left:
+`-a-79`/`-a-80` Team orchestrator + `-a-75`
+carousel + `-a-77` screensaver + `-a-66e` + the
+addendum-a polish (`-a-67d/e/f`, `-a-68`, `-a-70`)
++ `-a-92` broadcast survey-reply (cross-lane to
+@@Systacean).
+
+Standing by.
