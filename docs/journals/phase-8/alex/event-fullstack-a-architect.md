@@ -5840,3 +5840,74 @@ Single bash invocation per discipline.
 
 Push held. Standing by for clearance + slicing
 on the remaining 4 pieces.
+
+## 2026-05-22 — scope poke (fullstack-a-66b needs Drive::list unified-path extension)
+
+Picking up `-a-66b` (FB Drafts row). Audit
+surfaces another API-shape gap analogous to the
+read/write one `-26` resolved.
+
+### Audit verdict
+
+`systacean-25` + `-26` shipped unified-path for
+`Drive::read_text` / `write_text` /
+`next_untitled_draft_name`. But
+**`Drive::list(rel)`** (used by chan-server's
+`/api/files?dir=` listing) is NOT unified-path:
+it routes through `self.dir.read_dir(rel_path)`
+where `self.dir` is the drive-root CapFs.
+`Drive::list("Drafts/<name>")` would fail to
+read the metadata-side drafts dir.
+
+### Implications for `-a-66b`
+
+The FB tree's expansion model is "list a
+directory by path" via `/api/files?dir=<path>`.
+For the user to drill into `Drafts/<name>/` and
+see their `draft.md` + any siblings (images,
+config files per @@Alex's "mini-workspace"
+framing), `Drive::list("Drafts/<name>")` needs to
+work end-to-end.
+
+### Routing recommendation
+
+**Option A — chan-drive extension (preferred)**:
+add unified-path routing to `Drive::list` so
+`list("Drafts/<name>")` reads from the drafts
+dir. Smallest blast radius; consistent with
+`-26`'s read/write extension shape; the SPA's
+`/api/files?dir=Drafts/<name>` request "just
+works" post-extension.
+
+**Option B — chan-server route dispatch**:
+chan-server's `api_list_files` could detect
+`Drafts/`-prefix + route to chan-drive's
+`drafts::list_dir(...)` (or similar). Doubles
+the surface area; SPA branching also needs to
+distinguish. Less clean.
+
+**Option C — SPA-only synthetic Drafts row**:
+inject a "Drafts" entry at the top of
+`root.children` purely for visual purposes;
+expansion shows a placeholder. Doesn't satisfy
+the "user can paste images / drop config files
+alongside markdown" use case from
+@@Alex's addendum.
+
+Recommend **A** to @@Systacean (matches `-26`'s
+prior routing). `-a-66b` resumes on my lane
+once the extension lands.
+
+### Standing down on -a-66b
+
+Pausing `-a-66b` until chan-drive `Drive::list`
+unified-path extension lands. Going to pick up
+`-a-71` (auto-scroll cursor-lost — contained
+editor bug) next while the extension's routed.
+
+If you'd prefer me to ship Option C (SPA-only
+synthetic injection) as an interim slice, flag
+and I'll cut it; the affordance would render
+without full backend support until A lands.
+
+Standing by for your routing.
