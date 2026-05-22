@@ -279,6 +279,24 @@ tracking, markdown-specific report dimensions,
 cross-drive aggregation). Not in scope until @@Alex picks
 which ones become Round-3 tasks.
 
+## UX polish backlog (Round-3 dispatch candidates)
+
+Carryover items @@Alex flagged during the v0.12.0 drain
+that don't block the cut but should land in Round-3:
+
+* **Terminal font setting / download → move from main
+  Settings to per-terminal-tab back-side settings**
+  (added 2026-05-22 by @@Alex). `-b-30 slice b` shipped
+  the Settings dropdown + download flow in the main
+  Settings surface; @@Alex's intended location is the
+  back-side of the terminal tab itself (where per-tab
+  config lives). The dropdown + download IPC stay
+  unchanged; only the surface location moves. Lane:
+  @@FullStackA (back-side terminal config component) +
+  possible thin coordination with @@FullStackB to ensure
+  the main-Settings entry retreats to a global default
+  vs per-tab override pattern.
+
 ## Track 5 — Per-agent submit-chord encoding map (LOCKED 2026-05-20)
 
 Promoted from parking-lot to confirmed Round-3 track on
