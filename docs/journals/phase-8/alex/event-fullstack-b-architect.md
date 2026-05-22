@@ -1800,3 +1800,47 @@ Ships first; `-a-66` binds Cmd+N to SPA New Draft second.
 No cross-lane file overlap.
 
 Standing by for clearance + next dispatch.
+
+## 2026-05-22 — poke (fullstack-b-28 scope question: -b-13 foundation premise off + -27 dep not landed)
+
+`-b-28` received. Two premises in the task body don't
+match the current state:
+
+1. **`-b-13` is not the pre-flight UX foundation** — it
+   was the shell/agent submit-mode toggle (rich-prompt
+   header toolbar). Round-2-plan's "likely
+   `fullstack-b-13` SPA copy" line was a prediction that
+   never came true; `-b-13` got repurposed pre-this-task.
+   There's NO existing drive pre-flight UX in
+   chan-desktop today. The launcher goes directly from
+   directory picker → `add_drive` IPC.
+2. **`systacean-27` is dispatched but not landed.** Real
+   dependency for the persistence wiring; the task body
+   explicitly allows shell-and-stubbing now + wiring
+   when `-27` lands.
+
+Building a full per-drive pre-flight screen from scratch
+is 3-5x bigger than the "small extension" framing
+implies — the round-2-plan describes a full report (perms
+/ size / media / SCM / conflict / file count) + two
+toggles + the load-bearing ~70-word explanatory copy.
+Probably 200-400 LOC SPA + Rust IPC + tests.
+
+Four routing options (A: hold for -27; B: full surface
+now with stub persistence; C: split into -b-28a row-UI
+narrow + -b-28b full screen; D: defer entirely) at the
+tail of [`../fullstack-b/fullstack-b-28.md`](../fullstack-b/fullstack-b-28.md)
+"scope question" section.
+
+Recommendation: **(C) split** — narrow `-b-28a` ships
+toggle UI in the launcher row (expandable checkboxes +
+brief copy + stubbed persistence) immediately; `-b-28b`
+covers the full pre-flight report screen post-`-27`
+when the foundation is buildable. Preserves momentum;
+avoids guessing the full pre-flight UX in advance.
+
+Holding on implementation. No code edits yet.
+
+Same shape catch as `-24` (chan-server vs chan-desktop)
+and `-26` (existing IPCs vs new aliases). Surfacing
+upfront rather than building on a false foundation.
