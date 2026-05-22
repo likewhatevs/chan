@@ -1711,3 +1711,95 @@ side observation now ships in `-a-56`. Loop closed.
 * Path-limited `git commit` to bypass shared index.
 
 Standing by.
+
+## 2026-05-22 — poke (webtest-a-10: -a-59 + -a-60 bundled — 4/6 HOLD + 2 NOT TESTED chan-desktop)
+
+Walked
+[`../webtest-a/webtest-a-10.md`](../webtest-a/webtest-a-10.md)
+on HEAD `967eef5`. Throwaway drive r14; chan serve
+127.0.0.1:8787; Chrome MCP tab `503725922`. Verdict
+appended to
+[`../webtest-a/webtest-a-1.md`](../webtest-a/webtest-a-1.md).
+
+### Verdicts (4/6 HOLD + 2 NOT TESTED)
+
+| Check | Verdict |
+|-------|---------|
+| `-a-59` #1 Click-to-focus restore window | NOT TESTED |
+| `-a-59` #2 Cmd+Tab restore preserves pane | NOT TESTED |
+| `-a-59` #3 Click outside any pane | HOLD |
+| `-a-60` #4 Click within ~10px registers | HOLD |
+| `-a-60` #5 Drag/pan unaffected | HOLD |
+| `-a-60` #6 No false-positive overlap | HOLD |
+
+### `-a-60` lands clean
+
+* **#4 hit-radius**: clicked at (470, 376) — node
+  center at (459, 376), so ~11px distance from
+  center / ~5-6px from visible edge. **Hit
+  registered**: URL hash gained `gn:Cargo.lock`;
+  inspector populated. Pre-`-a-60` would likely
+  have missed at that distance. The 10px buffer is
+  the empirical fix.
+* **#5 pan**: drag from (400, 600) → (350, 550) on
+  empty canvas — graph panned, selection preserved.
+  Drag-detect correctly classified as pan, not
+  click.
+* **#6 overlap**: implicit from #4 — click at
+  (470, 376) resolved to Cargo.lock NOT the
+  parent-dir node 119px away. Hit-radius expansion
+  doesn't introduce ambiguity at typical
+  force-directed layout density.
+
+The discoverability gap I flagged in `webtest-a-6`
+side observation ("click hit-radius on graph canvas
+is tight") is now closed empirically.
+
+### `-a-59` partial coverage (chan-desktop scope)
+
+* **#1 + #2 NOT TESTED**: require chan-desktop
+  runtime to exercise the window-unfocus →
+  click-to-restore mechanic. Lane-A's standing
+  perm covers chan serve + Chrome MCP only; chan-
+  desktop is @@WebtestB's standing scope.
+* **#3 HOLD**: clicked the gutter area between
+  panes (chrome, not pane body). Focus state
+  unchanged. Chrome-area clicks are neutral as
+  specced.
+
+Browser-side precondition for #1: basic
+click-to-focus shift between split panes works
+(clicked LEFT pane → focus moved from RIGHT to
+LEFT, JS confirms `pane[0].focused=true,
+pane[1].focused=false`). The pane-level click
+logic is the same in browser + chan-desktop; only
+the window-refocus composition differs.
+
+### Your call on -a-59 #1+#2
+
+Three routing options:
+1. **Lane-B follow-up walk**: route to @@WebtestB
+   for the chan-desktop window-juggling check.
+2. **Bundled chan-desktop walk**: fold into a
+   future chan-desktop runtime walk (e.g.
+   v0.11.3 cut walkthrough or similar).
+3. **Accept precondition as sufficient**: the
+   browser-side pane-level click-to-focus logic
+   passes; chan-desktop's window-refocus
+   composition is independently exercised (e.g.
+   in chan-desktop runtime smoke tests).
+
+No urgency from my side — `-a-60` (the
+load-bearing graph hit-radius fix) is HOLD.
+
+### Suggested commit shape
+
+* **Commit subject**: `docs: webtest-a-10 walk —
+  -a-59 (3/3 testable HOLD) + -a-60 hit-radius (3/3
+  HOLD); 2 chan-desktop checks NOT TESTED`.
+* **Files** (explicit per-path):
+  * `docs/journals/phase-8/webtest-a/webtest-a-1.md`
+  * `docs/journals/phase-8/alex/event-webtest-a-architect.md`
+* Path-limited `git commit` to bypass shared index.
+
+Standing by.

@@ -3262,3 +3262,123 @@ Lane-A test server torn down:
 `-a-56` retest passes. The chip-count semantic + the
 Cmd+P 3-state contract + the depth-slider polish all
 ship clean.
+
+## 2026-05-22 — fullstack-a-59 + fullstack-a-60 bundled walk
+
+Per [`webtest-a-10.md`](webtest-a-10.md). Walked `-a-59`
+pane focus-click + `-a-60` graph hit-radius. HEAD
+`967eef5`; throwaway drive r14; chan serve 127.0.0.1:8787;
+Chrome MCP tab `503725922`.
+
+### Verdicts (4/6 HOLD + 2 NOT TESTED)
+
+| Check | Surface | Verdict |
+|-------|---------|---------|
+| `-a-59` #1 | Click-to-focus restore window | NOT TESTED (chan-desktop scope) |
+| `-a-59` #2 | Cmd+Tab restore preserves pane | NOT TESTED (chan-desktop scope) |
+| `-a-59` #3 | Click outside any pane | HOLD |
+| `-a-60` #4 | Click within ~10px registers as hit | HOLD |
+| `-a-60` #5 | Drag/pan unaffected | HOLD |
+| `-a-60` #6 | No false-positive overlap | HOLD |
+
+### `-a-59` per-check evidence (browser-mode partial coverage)
+
+* **#1 + #2 chan-desktop required**: the window-unfocus
+  → click-to-restore mechanic is chan-desktop-specific.
+  Web build (Chrome MCP browser) has no equivalent —
+  the browser owns window focus. Lane-A's standing
+  perm covers chan serve + Chrome MCP, NOT chan-desktop
+  runtime (that's @@WebtestB's standing scope). Verified
+  the precondition basic click-to-focus shift between
+  panes works in browser:
+  - Split panes (FB left + Terminal right).
+  - Initial focus: Terminal (right).
+  - Clicked LEFT pane body → JS check confirms
+    `pane[0].focused=true, pane[1].focused=false`.
+  - Basic mechanic works; window-refocus + pane-select
+    composition deferred to lane-B walk.
+* **#3 Click outside any pane**: clicked the gutter
+  area between LEFT and RIGHT panes (coordinate
+  ~(849, 21), in the chrome between panes). Focus
+  state unchanged: `[true, false]` — LEFT still
+  focused, RIGHT not focused. Chrome-area clicks
+  don't change pane state. PASS.
+
+### `-a-60` per-check evidence
+
+* **#4 Click within ~10px registers**: opened
+  file-scope graph (Cargo.lock seed → 2/783 nodes:
+  Cargo.lock + parent dir node visible). Clicked at
+  (470, 376) — Cargo.lock node center was at
+  (459, 376), so click distance ~11px from center,
+  ~5-6px from visible node edge (node radius ~5-7px).
+  Hit registered: URL hash now has
+  `gn:Cargo.lock,gnl:Cargo.lock`; right inspector
+  shows TEXT badge + Cargo.lock 231.8 KB. Pre-`-a-60`,
+  the same click would have likely missed (hit-radius
+  was strict to the rendered node circle). The 10px
+  buffer is the empirical fix.
+* **#5 Drag/pan unaffected**: `left_click_drag` from
+  (400, 600) → (350, 550) on empty canvas pixels
+  (well outside any node). Result: graph panned (both
+  visible nodes shifted up-left by the drag delta).
+  Selected node `gn:Cargo.lock` STAYED selected
+  throughout the pan — the drag-detect correctly
+  classified the gesture as pan (not click) even
+  though it started on canvas-empty pixels. PASS.
+* **#6 No false-positive overlap**: implicitly
+  confirmed by #4 — click at (470, 376) resolved to
+  the Cargo.lock node, NOT the parent-dir node at
+  (354, 403) which was 119px away. The hit-radius
+  expansion works without making clicks ambiguous
+  between distant nodes (10px expansion is small
+  enough that adjacent node centroids don't overlap
+  for typical force-directed layouts). PASS.
+
+### Highlights
+
+* **`-a-60` hit-radius expansion is the right
+  amount**: 10px buffer is enough to make
+  imprecise clicks register without making clicks
+  ambiguous between adjacent nodes. The
+  discoverability gap I flagged in `webtest-a-6`
+  side observation is now closed.
+* **Drag-detect is robust**: starting a drag on
+  empty pixels doesn't accidentally trigger node
+  click resolution. The pan affordance is clean.
+* **Click outside any pane is neutral**: gutter
+  clicks don't shift pane focus — clean separation
+  of concerns between pane-level click handlers
+  and global chrome.
+
+### NOT-TESTED items (chan-desktop scope; lane-B candidate)
+
+* **`-a-59` #1 + #2**: require chan-desktop runtime
+  to test the window-unfocus → click-to-restore
+  mechanic. Lane-A's standing perm doesn't cover
+  chan-desktop launches; that's @@WebtestB's
+  scope per the bootstrap doc §"Standing
+  permissions". @@Architect's call whether to:
+  - Route `-a-59` #1+#2 to @@WebtestB as a lane-B
+    follow-up walk
+  - Fold into a future bundled chan-desktop walk
+  - Accept the source-code-level + browser-side
+    precondition verification as sufficient (the
+    pane-level click-to-focus logic is the same
+    in browser + chan-desktop; only the window-
+    refocus composition differs)
+
+### State at end of walk
+
+Lane-A test server torn down:
+
+1. chan serve killed.
+2. `rm -rf /tmp/chan-test-phase8-wa-r14/`.
+3. `chan remove` → unregistered.
+4. Chrome MCP tab closed; group auto-removed.
+
+4/6 HOLD + 2 NOT TESTED. `-a-60` ships clean
+(hit-radius polish addresses the `webtest-a-6` side
+observation). `-a-59` browser-side preconditions
+hold; chan-desktop-specific mechanic deferred to
+lane-B.
