@@ -310,3 +310,102 @@ Push held. Standing by for clearance + routing
 on the remaining 5 surfaces (whether to keep
 under `-a-67` umbrella or re-dispatch as
 `-a-67b..f`).
+
+## 2026-05-22 — slice 1b (Graph header click → inspector) ready for review
+
+Two-file change. SPA-only. Wires the slice-1
+header row (`af65ebc`) to open the inspector
+for the current scope when clicked.
+
+### What landed
+
+`web/src/components/GraphPanel.svelte`:
+
+* New `openScopeHeaderInspector()` handler.
+  Maps the current scope kind to the matching
+  node id in the current graph nodes list:
+  * `drive` → empty-string id (drive root
+    node carries `id=""` in the filesystem-
+    merged layer).
+  * `tag` → `currentScope.nodeId` (the tag
+    scope's stable graph id).
+  * `file` → walk `nodes`, find
+    `n.kind === "file" && n.path === currentScope.path`.
+  * `dir` / `git_repo` → walk `nodes`, find
+    `n.kind === "folder" && n.path === path`.
+    (`git_repo` uses `currentScope.root` for
+    the path lookup.)
+  * `group` / `global` → no-op (no single
+    inspector node; multi-file / no-node
+    scopes don't map cleanly).
+* Header row converted from `<div>` to
+  `<button>` with `onclick={openScopeHeaderInspector}`.
+* `closeTabMenu()` called after setting the
+  selection so the menu doesn't linger.
+* CSS: `cursor: pointer` on
+  `.graph-scope-row` (was `default`); hover
+  state lifts `.graph-scope-path` color to
+  `var(--text)` for affordance.
+
+`web/src/components/graphScopeHeaderRow.test.ts`:
++7 raw-source pins covering the button
+markup, the drive/tag/file/dir mapping
+branches, the inspectorOpen + closeTabMenu
+side-effects, and the hover CSS state.
+
+### Acceptance (slice 1b)
+
+* Click on graph hamburger header row opens
+  the inspector for the current scope ✓.
+* Hover surfaces the affordance (cursor
+  pointer + color lift) ✓.
+* No-op for scopes without a matching node
+  (group / global) ✓.
+
+### Gate
+
+* vitest **796 / 796** (+7 net from slice 1's
+  789).
+* svelte-check 0 errors / 0 warnings across
+  4007 files.
+* npm build clean.
+* Rust gate not re-run.
+
+### Decisions
+
+* **In-graph inspector** (not external
+  navigation) — matches the existing
+  graph-side inspector pattern from
+  `-a-50`'s DirectoryInfoBody work. Click on
+  a graph element opens the in-graph
+  inspector; the inspector's own action
+  buttons handle further navigation
+  (e.g. "Open in editor").
+* **No-op for group/global** — group is a
+  multi-file scope (no single inspector
+  target); global has no first-class node in
+  the current graph view. The handler simply
+  returns early.
+* **closeTabMenu() after select** — without
+  this the menu stays open over the inspector,
+  blocking the user's read.
+
+### Suggested commit subject
+
+```
+Graph hamburger: scope-header click opens inspector (fullstack-a-67 slice 1b)
+```
+
+### Files for `git add` (per-path discipline)
+
+* `web/src/components/GraphPanel.svelte`
+* `web/src/components/graphScopeHeaderRow.test.ts`
+* `docs/journals/phase-8/fullstack-a/fullstack-a-67.md`
+* `docs/journals/phase-8/fullstack-a/journal.md`
+* `docs/journals/phase-8/alex/event-fullstack-a-architect.md`
+
+### Atomic-audit-commit
+
+Per the memory rule. Per-path staging only.
+
+Push held. Standing by for clearance.

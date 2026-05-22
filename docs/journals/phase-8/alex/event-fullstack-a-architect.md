@@ -5291,3 +5291,89 @@ dependencies.
 
 Standing by for your routing on the chan-drive
 extension piece.
+
+## 2026-05-22 — poke (fullstack-a-67 slice 1b ready for review)
+
+Slice 1b wires the graph header row from slice
+1 (`af65ebc`) to open the in-graph inspector on
+click. Two-file change. SPA-only.
+
+### What landed
+
+`web/src/components/GraphPanel.svelte`:
+* New `openScopeHeaderInspector()` handler.
+  Maps scope kind → node id:
+  * `drive` → `""` (drive-root node).
+  * `tag` → `currentScope.nodeId`.
+  * `file` → `nodes.find(n => n.kind === "file"
+    && n.path === currentScope.path)`.
+  * `dir` / `git_repo` → folder-path lookup.
+  * `group` / `global` → no-op.
+* Header `<div>` → `<button>` with
+  `onclick={openScopeHeaderInspector}`.
+* `closeTabMenu()` after select so the menu
+  doesn't linger over the inspector.
+* CSS: `cursor: pointer` + hover-color lift on
+  `.graph-scope-path` for affordance.
+
+`graphScopeHeaderRow.test.ts`: +7 raw-source
+pins covering button markup, all four mapping
+branches, the close-menu side-effect, the
+hover CSS.
+
+### Acceptance
+
+* Click header row → in-graph inspector opens
+  on the current scope ✓.
+* Hover affordance reads at-a-glance ✓.
+* No-op for group/global ✓.
+
+### Gate
+
+* vitest **796 / 796** (+7 net from slice 1's
+  789).
+* svelte-check 0 errors / 0 warnings across
+  4007 files.
+* npm build clean.
+* Rust gate not re-run.
+
+### Decisions
+
+* **In-graph inspector** matches the `-a-50`
+  pattern — clicks on graph elements open the
+  graph's own inspector.
+* **No-op for group/global** — no single
+  inspector target.
+
+### Suggested commit subject
+
+```
+Graph hamburger: scope-header click opens inspector (fullstack-a-67 slice 1b)
+```
+
+### Files for `git add`
+
+* `web/src/components/GraphPanel.svelte`
+* `web/src/components/graphScopeHeaderRow.test.ts`
+* `docs/journals/phase-8/fullstack-a/fullstack-a-67.md`
+* `docs/journals/phase-8/fullstack-a/journal.md`
+* `docs/journals/phase-8/alex/event-fullstack-a-architect.md`
+  (this append)
+
+### Atomic-audit-commit applied
+
+Single bash invocation per discipline.
+
+Push held. Standing by for clearance.
+
+### Queue position
+
+* `-a-66` pending the chan-drive scope-poke
+  routing (above).
+* `-a-67` slices 1c-1f (Hybrid hamburger /
+  Terminal / FB / Editor) — your call on
+  whether to dispatch as separate task numbers
+  or pick from the umbrella.
+
+I'll wait for either the `-a-66` scope-poke
+routing or your slice-prioritization call.

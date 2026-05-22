@@ -897,6 +897,56 @@
     graphState.inspectorOpen = true;
   }
 
+  /// `fullstack-a-67` slice 1b: click on the scope-header row in the
+  /// graph tab-menu opens the inspector for the current scope. Maps
+  /// the scope kind to the matching node id in the current graph
+  /// nodes list; drive root + tag have stable ids, file/dir need a
+  /// path-based lookup. No-op when the scope doesn't have a
+  /// corresponding node in this view (e.g. global scope, or a file
+  /// scope whose file isn't in the response).
+  function openScopeHeaderInspector(): void {
+    if (!currentScope) return;
+    let nodeId: string | null = null;
+    if (currentScope.kind === "drive" || currentScope.kind === "global") {
+      // Drive root node carries id="" in the filesystem-merged
+      // layer. Global has no first-class node; fall through to
+      // no-op (the selection would highlight nothing useful).
+      if (currentScope.kind === "drive") {
+        nodeId = "";
+      }
+    } else if (currentScope.kind === "tag") {
+      nodeId = currentScope.nodeId;
+    } else if (currentScope.kind === "file") {
+      // File-kind nodes carry their path as the id when emitted
+      // from the markdown layer + a synthesized id from the
+      // filesystem layer. Lookup by path matches both shapes.
+      const found = nodes.find(
+        (n) => n.kind === "file" && n.path === currentScope.path,
+      );
+      if (found) nodeId = found.id;
+    } else if (currentScope.kind === "dir" || currentScope.kind === "git_repo" || currentScope.kind === "group") {
+      // Directory nodes' ids carry a `directory:` prefix in the
+      // merged layer; the SPA normalises `kind` to `folder` at
+      // load. Match by path against folder-kind nodes.
+      const path =
+        currentScope.kind === "git_repo"
+          ? currentScope.root
+          : currentScope.kind === "group"
+            ? null
+            : currentScope.path;
+      if (path !== null) {
+        const found = nodes.find(
+          (n) => n.kind === "folder" && n.path === path,
+        );
+        if (found) nodeId = found.id;
+      }
+    }
+    if (nodeId === null) return;
+    selectedId = nodeId;
+    graphState.inspectorOpen = true;
+    closeTabMenu();
+  }
+
   /// Click handler for link / backlink / tag-doc entries surfaced by
   /// the shared InspectorBody. The other surfaces (file browser,
   /// search) treat onNavigate as "open in the editor", but here the
@@ -1394,11 +1444,13 @@
           : currentScope.kind === "file" ? "File"
           : currentScope.kind === "dir" ? "Directory"
           : "Scope"}
-        <div
+        <button
+          type="button"
           class="mbtn graph-scope-row"
           role="menuitem"
           tabindex="-1"
           title={scopePath || scopeKindLabel}
+          onclick={openScopeHeaderInspector}
         >
           <span class="mbtn-icon" aria-hidden="true">
             {#if currentScope.kind === "drive" || currentScope.kind === "global"}
@@ -1418,7 +1470,7 @@
           <span class="mbtn-label graph-scope-path">
             {scopePath || scopeKindLabel}
           </span>
-        </div>
+        </button>
         <div class="msep" role="separator"></div>
       {/if}
       <div
@@ -2101,7 +2153,13 @@
      slice (display-only); click-to-inspect wiring can land in
      a follow-up. */
   .tab-menu-bubble .graph-scope-row {
-    cursor: default;
+    /* `fullstack-a-67` slice 1b: click-to-inspector. Cursor:
+       pointer matches the rest of the menu's clickable rows so
+       the affordance reads at a glance. */
+    cursor: pointer;
+  }
+  .tab-menu-bubble .graph-scope-row:hover .graph-scope-path {
+    color: var(--text);
   }
   .tab-menu-bubble .graph-scope-row .graph-scope-path {
     flex: 1;

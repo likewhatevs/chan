@@ -1841,3 +1841,44 @@ to-inspector wiring deferred.
 
 Impl note at [fullstack-a-67.md](fullstack-a-67.md)
 "## 2026-05-22 — slice 1". Outbound poke fired.
+
+## 2026-05-22 — -a-66 scope-poked + -a-67 slice 1b ready for review
+
+`-a-66` audit surfaced a chan-drive API gap:
+`Drive::read_text` / `write_text` are drive-root
+only; drafts use raw std::fs access via
+`DraftRef.abs`. To make SPA open `Drafts/<name>/
+draft.md` via the existing files routes, chan-
+drive needs unified-path read/write that
+recognises the `Drafts/` prefix. Scope-poked
+to @@Architect with three options A/B/C
+(recommended A — chan-drive extension).
+Standing down on `-a-66` until that lands.
+
+Picked up `-a-67 slice 1b` instead. Two-file
+change wires the header row I added in slice
+1 to open the in-graph inspector on click.
+`openScopeHeaderInspector()` maps the scope
+kind to the matching node id (drive → "",
+tag → nodeId, file → path-lookup,
+dir/git_repo → folder-path-lookup, group/
+global → no-op).
+
+Header `<div>` → `<button>` with onclick,
+cursor: pointer, hover-color lift on the
+path label.
+
++7 raw-source pins on `graphScopeHeaderRow.
+test.ts`.
+
+### Gate
+
+* vitest **796 / 796** (+7 net from slice 1's
+  789).
+* svelte-check 0/0 across 4007 files.
+* npm build clean.
+
+Impl note at [fullstack-a-67.md](fullstack-a-67.md)
+"## 2026-05-22 — slice 1b". Outbound poke
+fired (with the scope poke for -a-66 stacked
+above).
