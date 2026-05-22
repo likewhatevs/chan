@@ -4624,3 +4624,123 @@ Lane-A test server torn down:
 4. Chrome MCP tab closed.
 
 5/5 HOLD. **Hang-recovery saga CLOSED.**
+
+## 2026-05-22 — proactive walk: -a-87 placeholder line-height + -a-88 first-boot FB + -a-66 slice c Drafts inspector
+
+Proactive walk on HEAD `88faa96`. Throwaway drive
+r25 (fresh first-boot — no prior bootstrap); chan
+serve 127.0.0.1:8787; Chrome MCP tab `503726077`.
+
+### Verdicts
+
+| Task | Check | Verdict |
+|------|-------|---------|
+| `-a-87` | Placeholder line-height matches CM6 cm-line | HOLD |
+| `-a-88` | Docked FB on left at first boot | HOLD |
+| `-a-88` | No auto-spawned FB tab at first boot | HOLD |
+| `-a-66 c` | DRAFTS chip + notice in inspector | **PARTIAL** (slice c in dist but inspector doesn't render slice-c shape) |
+
+### `-a-87` HOLD — placeholder baseline alignment
+
+Empirical inspection of computed styles:
+- Placeholder: lineHeight `28.8px`, fontSize `16px`,
+  y=476
+- CM6 cm-line: lineHeight `28.8px`, fontSize `16px`,
+  y=476
+- `alignedY: 0` (pixel-perfect baseline match)
+
+Follow-up to `-a-84`'s 2px x-offset, this gets the
+y-baseline aligned too. Visual cursor + placeholder
+now sit on identical baselines.
+
+### `-a-88` HOLD — first-boot FB layout
+
+On fresh first-boot of throwaway drive r25:
+- **Docked FB present on left**: `.dock` element
+  at `x=0, w=305`.
+- **No FB tab auto-spawned**: tabs array empty
+  `[]` (only the welcome screen visible in the
+  main pane with Terminal/File Browser/Rich
+  Prompt/Graph spawn affordances + chord docs).
+
+Pre-`-a-88`: first boot would auto-open an FB tab
+in the main pane (in addition to the docked
+sidebar). Now the welcome screen is the user's
+first surface; they spawn what they want from
+there.
+
+UX win: avoids the "two FBs visible at once"
+cognitive load.
+
+### `-a-66 slice c` PARTIAL — chip/notice not surfacing in inspector
+
+**Source side WORKS** (per `3d710c5`):
+- `DirectoryInfoBody.svelte` modified:
+  - kind-chip: `"DIR"` → `"DRAFTS"` with
+    `class:drafts={path === "Drafts"}`
+  - `.drafts-notice` block above stats:
+    "Drafts lives outside the drive's root."
+- Bundled dist DOES contain "DRAFTS" + "drafts-
+  notice" strings (verified via grep).
+
+**SPA renders WITHOUT the slice-c shape**:
+- Selected `Drafts/` row in the docked FB.
+- DETAILS panel populated with:
+  - Chip text: `"directory"` (lowercase, not
+    "DIR" or "DRAFTS")
+  - Chip class: `kind-chip svelte-1wicqq0 block`
+    (NO `.drafts` modifier)
+  - Chip color: `rgb(255, 255, 255)` on
+    `rgb(142, 142, 147)` bg — gray, NOT yellow
+  - No `.drafts-notice` div present
+- Stats section: files 0, subdirectories 0, size
+  0 B, last change (unknown) — basic directory
+  inspector
+
+**Root-cause hypothesis** (same pattern as slice b):
+the inspector being shown for the Drafts row is
+NOT `DirectoryInfoBody.svelte` but a different
+component (likely `FileInfoBody.svelte` or a
+generic info body). The slice c code targets
+DirectoryInfoBody specifically; the synthetic
+Drafts entry goes through a different
+inspector path.
+
+Lane: **@@FullStackA**. The chip text "directory"
+lowercase is a strong hint — DirectoryInfoBody
+uses "DIR" / "DRAFTS" uppercase, so this is
+clearly a DIFFERENT component rendering the chip.
+
+This is the SAME root-cause pattern as `-a-66
+slice b` (synthetic-entry-vs-real-entry data
+flow). Slice b was fixed by also gating the
+server injection on `dir=""`. Slice c likely
+needs the inspector to detect synthetic Drafts
+entries and route to DirectoryInfoBody (or apply
+the slice c changes to FileInfoBody too).
+
+### Highlights
+
+* **`-a-87` micro-polish lands clean**: 0px
+  baseline mismatch.
+* **`-a-88` first-boot UX is cleaner**: welcome
+  screen is the user's first surface, docked FB
+  on left for navigation, no clutter.
+* **`-a-66 slice c` mechanism in dist but
+  empirical surface missing**: same pattern as
+  slice b — proactive walk catches the
+  mechanism-vs-empirical gap.
+
+### State at end of walk
+
+Lane-A test server torn down:
+
+1. chan serve killed.
+2. `rm -rf /tmp/chan-test-phase8-wa-r25/`.
+3. `chan remove` → unregistered.
+4. Chrome MCP tab closed.
+
+3/4 HOLD + 1 PARTIAL. `-a-87` + `-a-88` ship
+clean. `-a-66 slice c` mechanism in code but
+inspector path needs follow-up to reach the
+slice-c chip + notice rendering.

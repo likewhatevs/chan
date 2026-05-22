@@ -2612,3 +2612,103 @@ Discard work as expected.
 
 Standing by — hang-recovery feature can be
 declared shipped end-to-end.
+
+## 2026-05-22 — poke (proactive: -a-87 + -a-88 HOLD + -a-66 slice c PARTIAL — same pattern as slice b)
+
+Proactive walk on HEAD `88faa96`. Fresh first-boot
+throwaway drive r25; chan serve 127.0.0.1:8787;
+Chrome MCP tab `503726077`. Verdict in
+[`../webtest-a/webtest-a-1.md`](../webtest-a/webtest-a-1.md).
+
+### Verdicts: 3/4 HOLD + 1 PARTIAL
+
+| Task | Verdict |
+|------|---------|
+| `-a-87` placeholder line-height match | HOLD |
+| `-a-88` docked FB left + no FB tab | HOLD |
+| `-a-66 c` DRAFTS chip + notice | **PARTIAL** |
+
+### `-a-87` HOLD — pixel-perfect baseline
+
+Placeholder and CM6 cm-line:
+- lineHeight: both `28.8px` ✓
+- fontSize: both `16px` ✓
+- y position: both `476` ✓
+- `alignedY: 0` (perfect baseline match)
+
+### `-a-88` HOLD — clean first-boot
+
+Fresh first-boot drive r25:
+- Docked FB on **LEFT** at `x=0, w=305` ✓
+- **NO auto-spawned FB tab** — main pane shows
+  welcome screen with 4 spawn affordances +
+  chord docs ✓
+
+Pre-`-a-88` would have had 2 FBs visible (docked
++ tab). Now the welcome screen is the first
+surface; FB tab is opt-in via Cmd+Alt+O.
+
+### `-a-66 slice c` PARTIAL — same root pattern as slice b
+
+**Source side WORKS**:
+- `DirectoryInfoBody.svelte` has the kind-chip
+  `"DIR" → "DRAFTS"` swap + `.drafts-notice`
+  block (verified in commit + in bundled dist).
+
+**Empirical side MISSING**:
+- Selected `Drafts/` row.
+- Inspector chip shows `"directory"` (lowercase,
+  gray bg).
+- NO `.drafts` class on chip.
+- NO `.drafts-notice` block.
+- DirectoryInfoBody's "DIR"/"DRAFTS" chip text
+  (uppercase) NOT present.
+
+**Root-cause hypothesis (same pattern as slice b)**:
+the inspector rendering the Drafts row is NOT
+`DirectoryInfoBody.svelte` — likely `FileInfoBody`
+or a generic info body. The chip text
+"directory" lowercase confirms this (DirectoryInfoBody
+uses uppercase "DIR"/"DRAFTS").
+
+This is the **synthetic-entry vs real-entry data
+flow gap** I caught in slice b. Slice b was fixed
+by gating server injection on `dir=""`. Slice c
+likely needs:
+- The synthetic Drafts entry's inspector path
+  to route through DirectoryInfoBody, OR
+- Apply slice-c changes to FileInfoBody too,
+  OR
+- Detect synthetic Drafts in the inspector
+  dispatch logic.
+
+Lane: **@@FullStackA**. The proactive walk
+caught the same data-flow gap pattern twice
+across slices b and c. Worth auditing the
+synthetic-Drafts-entry data flow holistically.
+
+### Highlights
+
+* **The proactive walk catches mechanism-vs-
+  empirical gaps systematically**: when slice b
+  PARTIAL was flagged, the fix only touched the
+  server-side injection. Now slice c has the
+  same gap on the inspector side. A holistic
+  audit of synthetic-Drafts data flow might
+  prevent similar gaps in slices d (Rich Prompt
+  history) and e (Graph styling).
+
+### Suggested commit shape
+
+* **Commit subject**: `docs: webtest-a proactive
+  walk — -a-87 + -a-88 HOLD; -a-66 slice c PARTIAL
+  (same synthetic-Drafts data-flow gap as slice
+  b)`.
+* **Files**:
+  * `docs/journals/phase-8/webtest-a/webtest-a-1.md`
+  * `docs/journals/phase-8/alex/event-webtest-a-architect.md`
+* Path-limited `git commit`.
+
+Standing by. Recommend a holistic audit of the
+synthetic-Drafts inspector dispatch before
+declaring slice c shipped.
