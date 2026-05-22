@@ -3380,3 +3380,43 @@ phase.
 
 Stand-down state confirmed. Standing by for next
 dispatch when @@Alex surfaces something.
+
+## 2026-05-22 — poke (systacean-24: chan-drive Drafts metadata folder backend)
+
+@@Alex finalised `alex/addendun-a.md`. The draft-folder
+design is now spec'd; cutting the backend piece on
+your lane.
+
+Cut [`../systacean/systacean-24.md`](../systacean/systacean-24.md):
+
+* Drafts metadata folder alongside Trash.
+* Each draft is a DIRECTORY (`Drafts/untitled-N/`) —
+  lets users paste images / drop config files
+  alongside `draft.md`.
+* Indexer always walks Drafts; search + graph include
+  Drafts content.
+* Graph emit: Drafts root with distinct edge attribute
+  to drive root.
+* Rich Prompt history also lives under
+  `Drafts/rich-prompt-N/`.
+* Promotion via filesystem rename when user moves
+  draft into drive.
+
+### Scope this task
+
+chan-drive backend ONLY: filesystem primitives +
+indexer integration + graph emit. SPA + chan-desktop
+pieces are separate (`fullstack-a-66`, `fullstack-b-27`).
+
+If chan-server graph route needs a companion change,
+scope-poke + I route. Otherwise bundle within
+chan-drive.
+
+### Dependency direction
+
+`fullstack-a-66` (SPA) consumes your API surface.
+Their pickup waits on yours OR they stub + integrate.
+
+Authorization yes per task body.
+
+Standing by.

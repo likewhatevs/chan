@@ -5502,3 +5502,56 @@ walk yet — they'll pick up after `-b-26` ships
 | `alex/event-architect-fullstack-b.md` | -b-26 dispatch poke |
 | `webtest-a/webtest-a-9.md` | NEW task |
 | `fullstack-b/fullstack-b-26.md` | NEW task |
+
+## 2026-05-22 — ADDENDUM-A WAVE — 6 tasks dispatched from @@Alex's finalised draft-folder + menu revamp + CRITICAL bug spec
+
+@@Alex finalised [`alex/addendun-a.md`](../alex/addendun-a.md).
+Dense spec: New Draft + Drafts metadata folder, 5-surface
+right-click menu revamp, Hybrid Nav enhancements, Rich
+Prompt F-follow-up rewrite, 6 bugs (one CRITICAL).
+@@Alex: "I want to see progress now."
+
+### 6 tasks fanned out
+
+| Task | Lane | Priority | Scope |
+|------|------|----------|-------|
+| [`fullstack-a-64`](../fullstack-a/fullstack-a-64.md) | @@FullStackA | **CRITICAL** | Cmd+Shift+[/] tab switch focus stays on previous tab — data damage risk |
+| [`fullstack-a-65`](../fullstack-a/fullstack-a-65.md) | @@FullStackA | high | Editor bug bundle: right-click selects whole line + image-as-text after tab switch + new-dir cursor |
+| [`systacean-24`](../systacean/systacean-24.md) | @@Systacean | high | chan-drive Drafts metadata folder backend |
+| [`fullstack-a-66`](../fullstack-a/fullstack-a-66.md) | @@FullStackA | high | SPA New Draft action + FB Drafts rendering + Rich Prompt history reuse (depends on -24) |
+| [`fullstack-b-27`](../fullstack-b/fullstack-b-27.md) | @@FullStackB | trivial | chan-desktop Cmd+N → Cmd+Shift+N accelerator move |
+| [`fullstack-a-67`](../fullstack-a/fullstack-a-67.md) | @@FullStackA | substantial | Right-click menus revamp across 5 surfaces |
+
+Plus @@FullStackB's `-b-26` clearance landed (commit-ready
+in worktree).
+
+### Items deferred to next wave
+
+* Hybrid Nav enhancements (Nav rename + transactional)
+* Rich Prompt F-follow-up rewrite (survey as quote)
+* Mentions/matching gap in editor
+* Auto-scroll cursor-lost bug
+* Editor/terminal hang recovery via localStorage buffer
+
+### Lane state
+
+| Lane | State |
+|------|-------|
+| @@Systacean | -24 dispatched |
+| @@FullStackA | 4 tasks dispatched + paused -a-61 (superseded by wave) |
+| @@FullStackB | -b-26 commit pending; -b-27 dispatched |
+| @@CI | idle |
+| @@WebtestA | webtest-a-10 dispatched |
+| @@WebtestB | idle until -b-26/-b-27 land |
+
+### What I'm committing this round
+
+| File | Reason |
+|------|--------|
+| `architect/journal.md` | This entry |
+| `alex/event-architect-fullstack-a.md` | 4-task wave dispatch |
+| `alex/event-architect-systacean.md` | -24 dispatch |
+| `alex/event-architect-fullstack-b.md` | -b-26 clearance + -b-27 dispatch |
+| `fullstack-a/fullstack-a-{64,65,66,67}.md` | 4 NEW tasks |
+| `systacean/systacean-24.md` | NEW task |
+| `fullstack-b/fullstack-b-27.md` | NEW task |

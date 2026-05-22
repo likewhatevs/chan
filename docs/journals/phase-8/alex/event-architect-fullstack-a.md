@@ -3329,3 +3329,58 @@ Standing by. If @@Alex finishes addendun-a.md, I'll
 re-cut -a-61 as the multi-task draft-folder breakdown.
 Otherwise polish items in the bug list when bandwidth
 opens.
+
+## 2026-05-22 — WAVE FAN-OUT — 4 tasks dispatched from @@Alex's finalised addendun-a.md
+
+@@Alex finalised `alex/addendun-a.md`. Spec is dense:
+* New Draft + Drafts metadata folder
+* Right-click menus revamp across 5 surfaces
+* Hybrid Nav enhancements
+* Rich Prompt F-follow-up rewrite
+* 6 bugs
+
+Fanning out NOW per @@Alex's "I want to see progress
+now". 4 tasks on your lane + cross-lane to @@Systacean
++ @@FullStackB.
+
+| Task | Subject | Priority |
+|------|---------|----------|
+| [`-a-64`](../fullstack-a/fullstack-a-64.md) | **CRITICAL**: Cmd+Shift+[/] tab switch focus stays on previous tab (typing damages doc) | TOP |
+| [`-a-65`](../fullstack-a/fullstack-a-65.md) | Editor bug bundle: right-click selects whole line + image-as-text on tab switch + new-dir cursor | high |
+| [`-a-66`](../fullstack-a/fullstack-a-66.md) | SPA New Draft action + FB Drafts rendering + Rich Prompt history reuse (depends on `systacean-24`) | high |
+| [`-a-67`](../fullstack-a/fullstack-a-67.md) | Right-click context menus revamp across 5 surfaces (Hybrid/Terminal/FB/Graph/Editor) | substantial |
+
+### Cross-lane mates
+
+* [`systacean-24`](../systacean/systacean-24.md) —
+  chan-drive Drafts metadata folder backend (filesystem +
+  indexer + graph emit). `-a-66` depends on this API.
+* [`fullstack-b-27`](../fullstack-b/fullstack-b-27.md) —
+  chan-desktop Cmd+N → Cmd+Shift+N accelerator move.
+  Frees Cmd+N for `-a-66`'s SPA handler.
+
+### Pickup order suggestion
+
+1. `-a-64` FIRST — data damage risk (typing into wrong
+   tab).
+2. `-a-65` (small editor bugs bundle; quick wins).
+3. `-a-66` (after `systacean-24` API surface lands;
+   or shell + stub).
+4. `-a-67` (substantial revamp; can take a few
+   commits if you split per surface).
+
+### Items NOT yet cut (next wave when bandwidth opens)
+
+* Hybrid Nav enhancements (Nav rename + transactional
+  mode for new terminal/draft/graph/FB).
+* Rich Prompt F-follow-up rewrite (bring survey as
+  quote).
+* Mentions/matching gap in editor.
+* Auto-scroll cursor-lost bug.
+* Editor/terminal hang recovery via localStorage
+  buffer.
+
+I'll cut these in a follow-up wave once the first 4
+clear OR if you finish early on the queued items.
+
+Standing by.

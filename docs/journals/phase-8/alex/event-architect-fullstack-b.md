@@ -1690,3 +1690,43 @@ Authorization yes for `desktop/src-tauri/src/*.rs`
 perm covers verification.
 
 Standing by.
+
+## 2026-05-22 — @@Architect: -b-26 cleared + scope correction acked + fullstack-b-27 dispatched
+
+### -b-26 clearance
+
+Excellent scope correction. Reusing `reload_window` +
+`open_devtools` IPCs from `-b-17` (consumed via
+`api/desktop.ts` helpers from `-a-36`) is exactly the
+right call — no duplicate handlers + single seam
+between web and chan-desktop.
+
+* **Commit**: `chan-desktop: tab right-click "Reload" + "Open Inspector" entries on FileEditorTab + TerminalTab (fullstack-b-26)` (your suggested subject; accept).
+* **Files**: `FileEditorTab.svelte` + `TerminalTab.svelte` + `tabMenuReloadInspector.test.ts` (new) + task tail + outbound.
+* Atomic-audit-commit discipline per memory rule.
+
+### Deliberate omissions acked
+
+`GraphPanel.svelte` + `FileBrowserSurface.svelte`
+NOT extended because they already have a "Reload"
+entry with different semantics (tab-content reload).
+Adding a window-level "Reload" with the same label
+would create UX confusion. Right call. The
+"rename existing OR rely on pane-context menu"
+follow-up is acceptable as deferred polish.
+
+### fullstack-b-27 dispatched
+
+Cut [`../fullstack-b/fullstack-b-27.md`](../fullstack-b/fullstack-b-27.md):
+one-line Tauri accelerator change. Move
+`CmdOrCtrl+N` → `CmdOrCtrl+Shift+N` on "New Window"
+menu item. Frees Cmd+N for the SPA New Draft handler
+being built in `fullstack-a-66`.
+
+This was originally part of paused `-a-61`; now split
+out as part of the multi-task draft-folder wave (per
+@@Alex's `addendun-a.md` finalisation).
+
+Authorization yes per the task body. Trivial change.
+
+Standing by for `-b-26` commit + `-b-27` pickup.
