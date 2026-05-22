@@ -261,18 +261,39 @@ fn list_drives(state: State<Arc<AppState>>) -> Result<Vec<Drive>, String> {
     Ok(merged)
 }
 
+/// `fullstack-b-28b` slice iii: the pre-flight modal collects the
+/// user's feature choices BEFORE the drive is registered + passes
+/// them through to `chan add`. The chan CLI's `--semantic-search`
+/// + `--reports` flags from `systacean-27` are the right
+/// registration-time entry point so chan-drive's BOOT process
+/// picks up the chosen state on the FIRST open (no stub +
+/// re-toggle cycle).
+///
+/// `features` is optional for SPA-side backward compatibility +
+/// for the CLI-level `add_drive` calls that don't surface the
+/// pre-flight UX. Missing or default `features` opens the drive
+/// lean (BM25-only, no reports).
 #[tauri::command]
 async fn add_drive(
     app: tauri::AppHandle,
     state: State<'_, Arc<AppState>>,
     path: String,
+    features: Option<DriveFeatures>,
 ) -> Result<(), String> {
     require_bin(&state.bin_status)?;
     let path = canonical_key(Path::new(&path));
     let bin = serve::resolve_chan_binary()?;
+    let features = features.unwrap_or_default();
+    let mut args: Vec<&str> = vec!["add", &path];
+    if features.bge {
+        args.push("--semantic-search");
+    }
+    if features.reports {
+        args.push("--reports");
+    }
     emit_chan_busy(&app, true, "add", &path);
     let out = Command::new(&bin)
-        .args(["add", &path])
+        .args(&args)
         .kill_on_drop(true)
         .output()
         .await
@@ -284,6 +305,17 @@ async fn add_drive(
             "`chan add` failed: {}",
             String::from_utf8_lossy(&out.stderr).trim()
         ));
+    }
+
+    // `fullstack-b-28b` slice iii: mirror the chosen features into
+    // the sidecar mirror so `get_drive_features` returns the
+    // authoritative state immediately, before the user toggles
+    // anything in the launcher row.
+    if features != DriveFeatures::default() {
+        let mut store = state.store.lock().unwrap();
+        let mut cfg = store.get().map_err(err)?;
+        cfg.sidecar.entry(path.clone()).or_default().features = features;
+        store.save(&cfg).map_err(err)?;
     }
 
     // Auto-start: opening a drive from the desktop is the user's

@@ -1292,6 +1292,77 @@ mod tests {
     }
 
     #[test]
+    fn add_drive_passes_feature_flags_to_chan_cli() {
+        // `fullstack-b-28b` slice iii: the pre-flight modal
+        // collects feature choices BEFORE registration; `add_drive`
+        // must forward them as `--semantic-search` /
+        // `--reports` flags to `chan add`. systacean-27's
+        // BOOT process picks the flags up + activates the layers
+        // on the first open, so the user doesn't need to toggle
+        // post-add to get the chosen state.
+        const MAIN_RS: &str = include_str!("main.rs");
+        assert!(
+            MAIN_RS.contains("features: Option<DriveFeatures>"),
+            "add_drive must accept the pre-flight feature pair as an optional arg",
+        );
+        assert!(
+            MAIN_RS.contains("\"--semantic-search\""),
+            "add_drive must pass --semantic-search to chan add when bge is enabled",
+        );
+        assert!(
+            MAIN_RS.contains("\"--reports\""),
+            "add_drive must pass --reports to chan add when reports is enabled",
+        );
+    }
+
+    #[test]
+    fn pick_and_add_shows_preflight_dialog_before_add_drive() {
+        // `fullstack-b-28b` slice iii: pickAndAdd MUST gate the
+        // add_drive invocation behind the pre-flight modal so the
+        // user always sees the round-2-plan explanatory copy +
+        // the feature toggles BEFORE chan-drive's BOOT runs.
+        const MAIN_JS: &str = include_str!("../../src/main.js");
+        assert!(
+            MAIN_JS.contains("showPreflightDialog("),
+            "main.js must call showPreflightDialog from pickAndAdd",
+        );
+        assert!(
+            MAIN_JS.contains("features: choice.features"),
+            "main.js must thread the pre-flight choice through to add_drive",
+        );
+    }
+
+    #[test]
+    fn preflight_dialog_carries_round2_plan_explanatory_copy() {
+        // `fullstack-b-28b` slice iii: the round-2-plan flagged
+        // the explanatory copy as "load-bearing — @@Alex wants
+        // users to understand the baseline before they choose
+        // what to layer on". Pin the load-bearing phrases so a
+        // future refactor can't silently drop them.
+        const MAIN_JS: &str = include_str!("../../src/main.js");
+        assert!(
+            MAIN_JS.contains("BM25 keyword search is"),
+            "preflight modal must explain the BM25 baseline",
+        );
+        assert!(
+            MAIN_JS.contains("can't be disabled"),
+            "preflight modal must explain that the baseline is mandatory",
+        );
+        assert!(
+            MAIN_JS.contains("dense-vector embeddings"),
+            "preflight modal must describe semantic search via dense embeddings",
+        );
+        assert!(
+            MAIN_JS.contains("tokei"),
+            "preflight modal must name tokei as the language-detection engine",
+        );
+        assert!(
+            MAIN_JS.contains("COCOMO"),
+            "preflight modal must name COCOMO as the estimate model",
+        );
+    }
+
+    #[test]
     fn set_drive_features_calls_chan_cli_after_b28b() {
         // `fullstack-b-28b-i`: `set_drive_features` no longer
         // writes the sidecar in isolation. It first invokes the

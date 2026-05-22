@@ -224,13 +224,169 @@ async function pickAndAdd() {
     title: 'Select a folder containing markdown files',
   });
   if (typeof selected !== 'string' || !selected.length) return;
+  // `fullstack-b-28b` slice iii: interpose the pre-flight modal
+  // between the directory picker and add_drive so the user
+  // chooses BGE + reports BEFORE chan-drive's BOOT process runs.
+  // Cancel exits without any chan-side side effect — the folder
+  // wasn't registered yet, so closing the modal is a clean
+  // back-out.
+  const choice = await showPreflightDialog(selected);
+  if (!choice.accepted) return;
   try {
-    await invoke('add_drive', { path: selected });
+    await invoke('add_drive', {
+      path: selected,
+      features: choice.features,
+    });
   } catch (e) {
     showError(e);
     return;
   }
   await refresh();
+}
+
+/// `fullstack-b-28b` slice iii: pre-flight modal. Round-2-plan
+/// §"UI surface" requires a load-bearing explanatory paragraph
+/// above the toggles so users understand the baseline before
+/// they choose what to layer on. The two toggles default OFF;
+/// Open passes the chosen state through to `add_drive` which
+/// forwards `--semantic-search` / `--reports` to `chan add`,
+/// so chan-drive's BOOT process picks up the choice on the
+/// first open.
+///
+/// Backdrop click + Escape cancel; Open button gets initial
+/// focus + Enter triggers it. Same modal shape as the reclaim
+/// dialog from `-b-22` so the UX feels consistent across the
+/// chan-desktop launcher.
+function showPreflightDialog(path) {
+  return new Promise((resolve) => {
+    const overlay = document.createElement('div');
+    overlay.className = 'preflight-overlay';
+    overlay.setAttribute('role', 'dialog');
+    overlay.setAttribute('aria-modal', 'true');
+    overlay.setAttribute('aria-labelledby', 'preflight-title');
+
+    const dialog = document.createElement('div');
+    dialog.className = 'preflight-dialog';
+
+    const title = document.createElement('h2');
+    title.id = 'preflight-title';
+    title.textContent = 'Open drive';
+    dialog.appendChild(title);
+
+    const intro = document.createElement('p');
+    intro.className = 'preflight-intro';
+    intro.textContent = `This folder will be registered as a chan drive:`;
+    dialog.appendChild(intro);
+
+    const pathEl = document.createElement('p');
+    pathEl.className = 'preflight-path';
+    pathEl.textContent = path;
+    dialog.appendChild(pathEl);
+
+    const baseline = document.createElement('p');
+    baseline.className = 'preflight-baseline';
+    baseline.textContent =
+      "Chan will walk this drive, read every markdown file, and build a documentation graph from the wiki-links between them. This graph plus BM25 keyword search is the minimum needed to operate — it can't be disabled.";
+    dialog.appendChild(baseline);
+
+    const layered = document.createElement('p');
+    layered.className = 'preflight-layered';
+    layered.textContent =
+      'Two optional layers can be enabled on top. Both default off and drop their per-drive data when disabled (the shared model file stays).';
+    dialog.appendChild(layered);
+
+    const togglesWrap = document.createElement('div');
+    togglesWrap.className = 'preflight-toggles';
+
+    const bgeRow = document.createElement('label');
+    bgeRow.className = 'preflight-toggle';
+    const bgeBox = document.createElement('input');
+    bgeBox.type = 'checkbox';
+    bgeBox.dataset.feat = 'bge';
+    bgeRow.appendChild(bgeBox);
+    const bgeLabel = document.createElement('span');
+    bgeLabel.className = 'preflight-toggle-label';
+    bgeLabel.innerHTML =
+      '<strong>Semantic search</strong>' +
+      '<span class="preflight-toggle-hint">Adds dense-vector embeddings for find-by-meaning queries. Needs the BGE-small model (~63 MB, downloaded once + shared across drives) and produces per-drive vector data.</span>';
+    bgeRow.appendChild(bgeLabel);
+    togglesWrap.appendChild(bgeRow);
+
+    const reportsRow = document.createElement('label');
+    reportsRow.className = 'preflight-toggle';
+    const reportsBox = document.createElement('input');
+    reportsBox.type = 'checkbox';
+    reportsBox.dataset.feat = 'reports';
+    reportsRow.appendChild(reportsBox);
+    const reportsLabel = document.createElement('span');
+    reportsLabel.className = 'preflight-toggle-label';
+    reportsLabel.innerHTML =
+      '<strong>Reports</strong>' +
+      '<span class="preflight-toggle-hint">Runs code analysis on every file — language detection (tokei), source-lines-of-code counts per file + per-language roll-ups, and a Basic COCOMO estimate on top. Maintained incrementally from filesystem events. Per-drive.</span>';
+    reportsRow.appendChild(reportsLabel);
+    togglesWrap.appendChild(reportsRow);
+
+    dialog.appendChild(togglesWrap);
+
+    const footer = document.createElement('p');
+    footer.className = 'preflight-footer';
+    footer.textContent =
+      'Both layers can be enabled later from the drive row or Settings.';
+    dialog.appendChild(footer);
+
+    const buttons = document.createElement('div');
+    buttons.className = 'preflight-buttons';
+
+    const cancelBtn = document.createElement('button');
+    cancelBtn.className = 'btn';
+    cancelBtn.type = 'button';
+    cancelBtn.textContent = 'Cancel';
+
+    const openBtn = document.createElement('button');
+    openBtn.className = 'btn primary';
+    openBtn.type = 'button';
+    openBtn.textContent = 'Open';
+
+    buttons.appendChild(cancelBtn);
+    buttons.appendChild(openBtn);
+    dialog.appendChild(buttons);
+
+    overlay.appendChild(dialog);
+    document.body.appendChild(overlay);
+
+    function close(result) {
+      document.removeEventListener('keydown', onKey);
+      overlay.remove();
+      resolve(result);
+    }
+    function snapshot() {
+      return {
+        accepted: true,
+        features: { bge: bgeBox.checked, reports: reportsBox.checked },
+      };
+    }
+    function onKey(e) {
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        close({ accepted: false, features: { bge: false, reports: false } });
+      } else if (e.key === 'Enter' && document.activeElement === openBtn) {
+        e.preventDefault();
+        close(snapshot());
+      }
+    }
+
+    cancelBtn.addEventListener('click', () =>
+      close({ accepted: false, features: { bge: false, reports: false } }),
+    );
+    openBtn.addEventListener('click', () => close(snapshot()));
+    overlay.addEventListener('click', (e) => {
+      if (e.target === overlay)
+        close({ accepted: false, features: { bge: false, reports: false } });
+    });
+    document.addEventListener('keydown', onKey);
+
+    openBtn.focus();
+  });
 }
 
 function render(drives) {

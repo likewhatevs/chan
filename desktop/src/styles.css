@@ -554,3 +554,103 @@ tr.features-panel > td {
   font-size: 12px;
   color: var(--text-secondary, var(--text));
 }
+
+/* fullstack-b-28b slice iii: pre-flight modal shown between
+   the directory picker and add_drive. Visually mirrors the
+   reclaim dialog from -b-22 so the launcher's two modals
+   feel consistent. The toggle rows are wider than the
+   per-row expand panel from -b-28a because the pre-flight
+   carries the full round-2-plan explanatory copy. */
+.preflight-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.55);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+  padding: 24px;
+}
+.preflight-dialog {
+  background: var(--surface, var(--bg));
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 22px 26px 20px;
+  max-width: 640px;
+  width: 100%;
+  max-height: calc(100vh - 80px);
+  overflow-y: auto;
+  box-shadow: 0 16px 48px rgba(0, 0, 0, 0.35);
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.preflight-dialog h2 {
+  margin: 0;
+  font-size: 18px;
+  font-weight: 600;
+}
+.preflight-intro {
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.45;
+  color: var(--text-secondary, var(--text));
+}
+.preflight-path {
+  margin: 0;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 13px;
+  background: var(--btn-bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 6px 10px;
+  word-break: break-all;
+}
+.preflight-baseline,
+.preflight-layered,
+.preflight-footer {
+  margin: 4px 0 0;
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--text-secondary, var(--text));
+}
+.preflight-toggles {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin: 8px 0 4px;
+}
+.preflight-toggle {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  font-size: 13px;
+  cursor: pointer;
+  padding: 10px 12px;
+  background: var(--btn-bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+}
+.preflight-toggle input[type="checkbox"] {
+  margin-top: 3px;
+}
+.preflight-toggle-label {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+.preflight-toggle-label strong {
+  font-weight: 600;
+}
+.preflight-toggle-hint {
+  font-size: 12px;
+  color: var(--text-secondary, var(--text));
+  line-height: 1.45;
+}
+.preflight-buttons {
+  margin-top: 6px;
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}

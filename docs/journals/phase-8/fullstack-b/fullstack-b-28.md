@@ -425,3 +425,130 @@ Atomic `git commit --only` per `feedback_shared_worktree_commits`.
 ```
 chan-desktop: swap set_drive_features stub for chan CLI subprocess (fullstack-b-28b slice i)
 ```
+
+## 2026-05-22 — slice -b-28b-iii implementation note (ready for commit clearance)
+
+Picked up slice iii right after slice i per @@Alex's
+"there are new items in the queue. please crack them
+on" nudge. Lands the user-facing pre-flight modal
+between the directory picker and `add_drive` so the
+round-2-plan §"UI surface" intent (toggles + verbatim
+explanatory copy BEFORE chan-drive's BOOT runs) is
+honoured at registration time.
+
+### Slice iii scope (this commit)
+
+* Pre-flight modal opens after the directory picker +
+  before `add_drive`. Carries the verbatim round-2-plan
+  copy + two checkboxes + Cancel/Open buttons. Cancel
+  exits without any chan-side side effect (the folder
+  was never registered).
+* `add_drive` IPC accepts an optional `features:
+  DriveFeatures` arg + forwards `--semantic-search` /
+  `--reports` to `chan add` (systacean-27's
+  registration-time flags). chan-drive's BOOT picks the
+  flags up on the first open — no stub + re-toggle
+  cycle needed.
+* The chosen state mirrors into the sidecar on
+  successful add so the launcher row's expand panel
+  (from `-b-28a`) shows the right state immediately,
+  without a redundant `set_drive_features` call.
+
+### Out-of-scope for slice iii
+
+Per the round-2-plan §"UI surface", the pre-flight is
+spec'd with a broader report (permissions / size class
+/ media class / SCM / conflict check / file count). The
+report needs backend support (a new IPC that walks the
+directory + summarises) that doesn't exist today. Slice
+iii ships only the toggles + copy + Open/Cancel — the
+load-bearing pieces. A future `-b-N` task can layer the
+report on top once the backend lands. Documented as a
+deliberate omission so a webtest walkthrough doesn't
+flag it as a regression.
+
+### Changes
+
+* **`desktop/src-tauri/src/main.rs::add_drive`** —
+  accepts `features: Option<DriveFeatures>` (Option +
+  serde-default keeps existing SPA call sites and any
+  CLI-level callers working without a features arg).
+  Appends `--semantic-search` / `--reports` to `chan
+  add` per the flags. Sidecar mirror updates on
+  non-default features so `get_drive_features` returns
+  the correct state immediately.
+* **`desktop/src/main.js::pickAndAdd`** — interposes
+  `showPreflightDialog(selected)` between the picker +
+  the `add_drive` invoke. Cancel returns clean (no
+  chan-side write); Open forwards the feature pair
+  through.
+* **`desktop/src/main.js::showPreflightDialog`** (new) —
+  vanilla-JS modal mirroring the reclaim-dialog pattern
+  from `-b-22`. Backdrop click + Escape cancel; Open
+  button focuses on render + Enter triggers it. Builds
+  the DOM in code (no Svelte intrusion; desktop SPA is
+  plain JS). Round-2-plan copy is hard-coded in the
+  builder — pinned via the structural test.
+* **`desktop/src/styles.css`** — `.preflight-overlay` +
+  `.preflight-dialog` + per-row `.preflight-toggle` +
+  hint copy styles. Same visual shape as the reclaim
+  dialog for UX consistency.
+* **`serve.rs::tests`** — three new structural pins:
+  * `add_drive_passes_feature_flags_to_chan_cli` —
+    asserts the IPC arg shape + the two CLI flag
+    strings.
+  * `pick_and_add_shows_preflight_dialog_before_add_drive`
+    — asserts main.js calls `showPreflightDialog` from
+    `pickAndAdd` + threads `features` through to
+    `add_drive`.
+  * `preflight_dialog_carries_round2_plan_explanatory_copy`
+    — asserts the five load-bearing phrases ("BM25
+    keyword search is", "can't be disabled",
+    "dense-vector embeddings", "tokei", "COCOMO") are
+    present in the modal source. The round-2-plan
+    flagged the explanatory copy as load-bearing; a
+    future refactor that drops it fails this test
+    loudly.
+
+chan-desktop count: 52 → 55.
+
+### Pre-push gate (local, macOS aarch64; -b-28b-iii scope only)
+
+| Surface                                                       | State                                       |
+|---------------------------------------------------------------|---------------------------------------------|
+| `cargo clippy -p chan-desktop --all-targets -- -D warnings`   | Clean.                                      |
+| `cargo test -p chan-desktop`                                  | 55 passing (+3 structural pins).            |
+| `cargo build -p chan-desktop --no-default-features`           | Clean.                                      |
+| `web/` `npx svelte-check`                                     | 4015 / 0 / 0.                               |
+
+vitest not re-run; -b-28b-iii touches only desktop/src
+(plain JS, not the Svelte SPA) and the desktop slice's
+structural pins live in serve.rs::tests. The webview
+runtime is the canonical UI-validation path; @@WebtestB
+covers the click cycle.
+
+### Files to stage
+
+```
+desktop/src-tauri/src/main.rs
+desktop/src-tauri/src/serve.rs
+desktop/src/main.js
+desktop/src/styles.css
+docs/journals/phase-8/fullstack-b/fullstack-b-28.md
+```
+
+### Suggested commit subject
+
+```
+chan-desktop: pre-flight modal at drive add + add_drive feature flag pass-through (fullstack-b-28b slice iii)
+```
+
+### Slice ii status (still deferred)
+
+Read-via-CLI swap for `get_drive_features` remains
+blocked on @@Systacean shipping `chan reports status
+--json`. Sidecar mirror is now the authoritative source
+of truth for ALL feature reads (slice i + iii both
+write it; the only path that wouldn't is a `chan
+reports {enable,disable}` invocation from outside
+chan-desktop, e.g. from a terminal — edge case).
