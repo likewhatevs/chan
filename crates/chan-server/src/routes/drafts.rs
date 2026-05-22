@@ -159,8 +159,7 @@ pub async fn api_create_rich_prompt(
 /// uses).
 fn next_rich_prompt_name(drive: &chan_drive::Drive) -> Result<String, chan_drive::ChanError> {
     let existing = drive.list_drafts()?;
-    let names: std::collections::HashSet<String> =
-        existing.into_iter().map(|d| d.name).collect();
+    let names: std::collections::HashSet<String> = existing.into_iter().map(|d| d.name).collect();
     if !names.contains("rich-prompt") {
         return Ok("rich-prompt".to_string());
     }

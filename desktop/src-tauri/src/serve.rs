@@ -1390,7 +1390,13 @@ mod tests {
             MAIN_JS.contains("renderPreflightReport(reportEl, report)"),
             "main.js must render the resolved report into the dialog",
         );
-        for label in ["'Files'", "'Markdown'", "'Size'", "'Media'", "'Source control'"] {
+        for label in [
+            "'Files'",
+            "'Markdown'",
+            "'Size'",
+            "'Media'",
+            "'Source control'",
+        ] {
             assert!(
                 MAIN_JS.contains(label),
                 "preflight modal must surface {label} report row",

@@ -637,8 +637,7 @@ fn walk_drive_preflight(root: &Path) -> WalkOutcome {
     queue.push_back(root.to_path_buf());
     let mut out = WalkOutcome::default();
     while let Some(dir) = queue.pop_front() {
-        if out.file_count >= MAX_PREFLIGHT_FILES
-            || start.elapsed().as_secs() >= MAX_PREFLIGHT_SECS
+        if out.file_count >= MAX_PREFLIGHT_FILES || start.elapsed().as_secs() >= MAX_PREFLIGHT_SECS
         {
             out.truncated = true;
             break;
