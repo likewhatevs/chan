@@ -3923,3 +3923,29 @@ work. Stand-down confirmed for v0.12.0.
 
 Standing by for v0.12.0 cut beat OR cross-lane
 follow-ups when sequenced.
+
+## 2026-05-22 — poke (systacean-32: Drive::stat unified-path for Drafts — closes -a-66 b/c/d data-flow gap; HIGH)
+
+@@WebtestA flagged a recurring PARTIAL across
+3 walks on `-a-66` slices b/c/d. Architect-side
+audit located the root cause:
+
+* `Drive::list` unified per `-29` ✓
+* `Drive::read_text` / `write_text` unified per `-26` ✓
+* `Drive::stat` is **NOT unified** — routes through
+  drive-root capfs, returns "not found" for
+  `Drafts/...` paths, skips the entry in
+  `list_dir_entries`. Empty wire listing.
+
+Cut [`../systacean/systacean-32.md`](../systacean/systacean-32.md).
+Same `resolve_io` pattern from `-26`/`-29`. Plus a
+broader audit at task tail (Drive::delete / rename
+/ etc. may have the same gap).
+
+HIGH priority — closes a recurring 3-slice PARTIAL
++ unblocks the user-visible Drafts FB rendering for
+v0.12.0 option-C.
+
+Authorization yes per task body.
+
+Standing by.
