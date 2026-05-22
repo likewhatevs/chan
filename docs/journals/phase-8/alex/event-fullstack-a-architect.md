@@ -4708,3 +4708,89 @@ coupled.
 Single bash invocation per discipline.
 
 Push held. Standing by for clearance.
+
+## 2026-05-22 — poke (fullstack-a-59 ready for review)
+
+Window-level focus/mousedown correlation in
+App.svelte. SPA-only; no Tauri-side mediation
+needed.
+
+### What landed
+
+`Pane.svelte`: `data-pane-id={pane.id}` on the
+`.pane` root.
+
+`App.svelte`:
+* `FOCUS_CLICK_WINDOW_MS = 50` constant.
+* `focusRestoreAt` timestamp on `window` focus.
+* `onWindowMouseDown` capture-phase handler;
+  walks `e.target.closest(".pane[data-pane-id]")`
+  + calls `setActivePane(paneId)` when click
+  follows focus within 50ms. Short-circuits
+  the timestamp on every code path (idle gap,
+  no-pane target, after-match) so subsequent
+  clicks fall back to Pane.svelte's per-pane
+  handler.
+* Cleanup `onDestroy` removes both listeners.
+
+`paneFocusClickRestore.test.ts` (new): 10
+raw-source pins covering the attribute,
+constants, focus stamping, DOM-ancestry walk,
+setActivePane call, short-circuits, cleanup,
+import.
+
+### Acceptance
+
+1. Click-to-focus → pane under cursor selected ✓.
+2. Cmd+Tab → no pane-select change (focus
+   without follow-up mousedown) ✓.
+3. Click within already-active pane → no-op
+   (setActivePane idempotent) ✓.
+4. Click outside any pane → no-op (closest
+   returns null) ✓.
+
+### Gate
+
+* vitest **748 / 748** (+10 net from `-a-63`'s
+  738).
+* svelte-check 0 errors / 0 warnings across
+  4000 files.
+* npm build clean.
+* Rust gate not re-run.
+
+### Decisions
+
+* **Capture-phase** mousedown listener so it
+  fires before Pane.svelte's bubble handlers
+  + isn't stopped by descendant `stopPropagation`.
+* **50ms** correlation window per bug body
+  recommendation.
+* **Clear after match** so idle clicks
+  long-after-focus don't trigger pane-select.
+
+### Suggested commit subject
+
+```
+Pane focus-click restore: select pane under cursor on click-to-focus (fullstack-a-59)
+```
+
+Single commit.
+
+### Files for `git add`
+
+* `web/src/components/Pane.svelte`
+* `web/src/App.svelte`
+* `web/src/components/paneFocusClickRestore.test.ts`
+* `docs/journals/phase-8/fullstack-a/fullstack-a-59.md`
+* `docs/journals/phase-8/fullstack-a/journal.md`
+* `docs/journals/phase-8/alex/event-fullstack-a-architect.md`
+  (this append)
+
+### Atomic-audit-commit applied
+
+Single bash invocation per discipline. Working
+tree carries unrelated WIP from other lanes;
+per-path staging only.
+
+Push held. Standing by for clearance. `-a-60`
+(graph hit-radius) picking up next.

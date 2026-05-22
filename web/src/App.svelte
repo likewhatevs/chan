@@ -70,6 +70,7 @@
     selectPrevPane,
     selectPrevTabInActivePane,
     selectTabAtIndexInActivePane,
+    setActivePane,
     openTerminalInActivePane,
     paneMode,
     paneModeEqualize,
@@ -825,6 +826,57 @@
   }
   onMount(() => window.addEventListener("chan:command", onChanCommand));
   onDestroy(() => window.removeEventListener("chan:command", onChanCommand));
+
+  /// `fullstack-a-59` pane-focus-click restore: when chan-desktop is
+  /// unfocused and the user clicks back onto the window, the first
+  /// click should ALSO select the Hybrid pane under the cursor (not
+  /// stay on the previously-focused pane). Critical disambiguation:
+  /// only on the mousedown-driven focus restore. Cmd+Tab keyboard
+  /// refocus must NOT change pane selection (focus event without an
+  /// adjacent mousedown).
+  ///
+  /// Detection: track the last `window` focus event timestamp +
+  /// listen for `mousedown` at the window level. If a mousedown
+  /// fires within `FOCUS_CLICK_WINDOW_MS` of a focus event, walk the
+  /// target's DOM ancestry looking for the nearest `.pane[data-pane-
+  /// id]`. If found, call `setActivePane` on that pane id. Clear
+  /// the timestamp after the first matching mousedown so subsequent
+  /// clicks fall back to the existing per-pane `onmousedown` handler
+  /// in `Pane.svelte` (which already calls `setActivePane`).
+  ///
+  /// Why this matters: on macOS / Tauri the first mousedown after a
+  /// window-focus restore is sometimes consumed by the OS for the
+  /// window-activation gesture and doesn't reach the per-pane
+  /// handler. Without this top-level catch, the previously-focused
+  /// pane stays active even though the user just clicked elsewhere.
+  const FOCUS_CLICK_WINDOW_MS = 50;
+  let focusRestoreAt = 0;
+  function onWindowFocus(): void {
+    focusRestoreAt = Date.now();
+  }
+  function onWindowMouseDown(e: MouseEvent): void {
+    if (focusRestoreAt === 0) return;
+    if (Date.now() - focusRestoreAt > FOCUS_CLICK_WINDOW_MS) {
+      focusRestoreAt = 0;
+      return;
+    }
+    focusRestoreAt = 0;
+    const target = e.target;
+    if (!(target instanceof Element)) return;
+    const paneEl = target.closest<HTMLElement>(".pane[data-pane-id]");
+    if (!paneEl) return;
+    const paneId = paneEl.dataset.paneId;
+    if (!paneId) return;
+    setActivePane(paneId);
+  }
+  onMount(() => {
+    window.addEventListener("focus", onWindowFocus);
+    window.addEventListener("mousedown", onWindowMouseDown, true);
+  });
+  onDestroy(() => {
+    window.removeEventListener("focus", onWindowFocus);
+    window.removeEventListener("mousedown", onWindowMouseDown, true);
+  });
 </script>
 
 <div class="app" class:pane-mode={paneMode.active}>

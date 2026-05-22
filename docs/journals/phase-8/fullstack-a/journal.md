@@ -1662,3 +1662,35 @@ walk-nodes-by-kind structure + comment).
 Impl note + commit subject at
 [fullstack-a-63.md](fullstack-a-63.md). Outbound
 poke fired. Queue waiting: `-a-59` / `-a-60`.
+
+## 2026-05-22 — -a-59 (pane-focus-click restore) ready for review
+
+Window-level focus/mousedown correlation in
+App.svelte:
+
+* Added `data-pane-id={pane.id}` on the .pane
+  root in Pane.svelte.
+* App.svelte: `FOCUS_CLICK_WINDOW_MS = 50`
+  constant; `focusRestoreAt` timestamp on
+  window focus; `onWindowMouseDown` capture-
+  phase handler that walks
+  `e.target.closest(".pane[data-pane-id]")` +
+  calls `setActivePane` when the click is
+  within 50ms of focus.
+* Cmd+Tab disambiguation: focus fires WITHOUT
+  a follow-up mousedown; the next user click
+  (>50ms later) short-circuits + resets the
+  timestamp. No pane-select side-effect.
+
+10 raw-source pins in `paneFocusClickRestore.
+test.ts`.
+
+### Gate
+
+* vitest **748 / 748** (+10 net from `-a-63`'s
+  738).
+* svelte-check 0/0 across 4000 files.
+* npm build clean.
+
+Impl note at [fullstack-a-59.md](fullstack-a-59.md).
+Outbound poke fired. `-a-60` next.

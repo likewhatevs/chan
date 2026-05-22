@@ -885,6 +885,7 @@
   class:transaction-drop-target={isTransactionDropTarget}
   data-focus-color={focusColorForWindow()}
   data-theme={pane.theme}
+  data-pane-id={pane.id}
   onmousedown={(e) => {
     setActivePane(pane.id);
     onPaneBodyMouseDown(e);
