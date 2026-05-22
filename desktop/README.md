@@ -18,9 +18,10 @@ there rather than building from source.
 
 ## Build and run
 
-Requirements: stable Rust (pinned in `rust-toolchain.toml`), and the
-`chan` binary on `$PATH` while we are in prototype phase. See
-[design.md](./design.md) for the production bundling plan.
+Requirements: stable Rust (pinned in `rust-toolchain.toml`) and npm for
+the embedded web build. The Makefile builds `chan` and installs
+`tauri-cli` v2 under `../target/tauri-cli` if `cargo-tauri` is not already
+on `$PATH`.
 
 ```bash
 make run      # cargo tauri dev
