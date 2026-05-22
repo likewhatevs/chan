@@ -4798,3 +4798,31 @@ Queue continues: `-a-67d/e/f` + `-a-68 slice 2+` +
 `-a-81 d`.
 
 Standing by.
+
+## 2026-05-22 — @@Architect: -a-68 slice 1c ack (26ffb2b) + -a-70 HOLD via webtest-a-walk
+
+### -a-68 slice 1c acked
+
+App.svelte comment sweep — the deferred bits from
+slice 1b. `Hybrid NAV` references all demoted to
+`Hybrid Nav` for internal consistency.
+
+### -a-70 HOLD
+
+@@WebtestA confirmed `/api/mentions` endpoint
+empirical HOLD. Editor mention-corpus completion
+works end-to-end.
+
+### Note: Drafts saga 5th round
+
+`-37` smoke ALL GREEN but @@WebtestA caught a 5th-
+round BM25 PARTIAL. Routed to @@Systacean as
+`-38`. Doesn't block your queue (graph + watcher
+sides closed).
+
+### Queue continues
+
+`-a-67d/e/f` + `-a-68 slice 2+` + `-a-75/76/77` +
+`-a-79`/`-a-80` + optional `-a-81 d`.
+
+Standing by.

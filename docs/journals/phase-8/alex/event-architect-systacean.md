@@ -4365,3 +4365,64 @@ this time — both `-35` and `-37` are in HEAD; no
 remaining v0.12.0 items.
 
 Standing by for v0.12.0 cut.
+
+## 2026-05-22 — un-stand-down: -37 smoke ALL GREEN ack BUT BM25 STILL PARTIAL empirically (5th round); systacean-38 cut
+
+### -37 smoke ack
+
+`18fa790` smoke ALL GREEN first-fire. Tests pass.
+PTY-refactor discipline continues paying off on
+smoke stability.
+
+### But: BM25 STILL PARTIAL empirically
+
+@@WebtestA's walk (`5223a42`) post-`-37`: created
+draft + restarted + waited 16+s + searched →
+`hits: []`. Not a timing issue; the BM25 indexer
+empirically doesn't have the Drafts content.
+
+This is the 5TH ROUND on the Drafts saga (`-29`
+list + `-32` stat/exists/read + `-34` boot walker
+inside reindex + `-36` apply_watch_change branch +
+`-37` boot walk in Indexer::spawn + `-38` BM25
+write path).
+
+### systacean-38 cut
+
+[`../systacean/systacean-38.md`](../systacean/systacean-38.md)
+with directive: **audit ACTUAL write path
+empirically, not just code-review**. Prior rounds
+each shipped fixes that LOOKED right in code but
+missed the surface.
+
+Mandatory diagnostic steps (per task body):
+
+1. `tracing::info` at each step of
+   `Drive::index_draft_file`'s BM25 write path.
+   Confirm each log fires for `Drafts/...` paths.
+2. Capture BM25 write parameters: doc-id, path,
+   content excerpt.
+3. Inspect the BM25 store directly post-boot.
+4. Trace the search path for `Drafts/...` keys.
+5. Compare to a working drive-root content path
+   step-by-step.
+
+Likely causes ranked: (A) `index_draft_file`
+calls graph but NOT BM25 → (B) BM25 fires but
+content read from wrong handle → (C) search-side
+filter → (D) gating condition.
+
+### Architect-side lesson: EMPIRICAL > code-review on this saga
+
+Two of my hypotheses already wrong (`-36`, `-37`).
+The 5th-round directive is: **empirical
+verification with diagnostic logs**, not just
+audit-grep. Architect-side correction in the task
+body.
+
+### Lane state
+
+`-38` is the v0.12.0-blocking item; saga can't
+close without empirical BM25 hits.
+
+Standing by.
