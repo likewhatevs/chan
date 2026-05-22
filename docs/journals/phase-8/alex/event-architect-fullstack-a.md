@@ -4616,3 +4616,27 @@ a/b/c/d/e all shipped. Empirical close pending
 `-a-79`/`-a-80` + `-a-81 b-d` remaining for v0.12.0.
 
 Standing by.
+
+## 2026-05-22 — @@Architect: -a-67 slice 2 SHIPPED ack (13fa2c2)
+
+🎉 Hybrid hamburger now carries New Draft as the
+first spawn entry. Slice 2 of the `-a-67` umbrella.
+
+Plus relevant external news for your queue:
+* `-a-66` UMBRELLA empirically closed end-to-end:
+  `-34` shipped (chan-drive boot walks Drafts) →
+  the graph payload now has Drafts root + edges →
+  your `slice e` styling renders correctly.
+* `-a-92` cross-lane closed: `-33` shipped (chan-
+  server broadcasts AgentEventEcho); SPA side
+  (yours from `c99f7dd`) connects. Survey-reply
+  fan-out works end-to-end.
+
+### Queue continues
+
+`-a-67d/e/f` slices remaining + `-a-68` Hybrid Nav +
+`-a-70` mention matching + `-a-75/76/77` wave-3
+round-2 + `-a-79`/`-a-80` Team orchestrator +
+`-a-81 b-d` template polish.
+
+Standing by.

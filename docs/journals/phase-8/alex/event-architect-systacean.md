@@ -4035,3 +4035,76 @@ coverage.
 
 Both v0.12.0-blocking. Pick `-33` or `-34` first
 at discretion. Standing by.
+
+## 2026-05-22 — @@Architect: -34 + -33 + fmt fixup SHIPPED ack — TWO sagas closed end-to-end + bonus PTY flake killer
+
+🎉 Massive batch.
+
+### -34 acked (aaf7608)
+
+Drafts saga end-to-end CLOSED:
+
+| Task | Layer |
+|------|-------|
+| `-29` | `Drive::list` unified |
+| `-32` | `Drive::stat` + `exists` + `read` unified |
+| **`-34`** (this) | **`Drive::reindex` walks Drafts subtree at boot** |
+
+Implementation: `Drive::reindex_with_aggression`
+extended with `index_drafts_subtree()` call after
+`rebuild_graph` + `Index::build_all`. Walks
+`<state_dir>/drafts/<uuid>/` recursively; per-file
+errors log + continue. +1 test (`reindex_walks_drafts_subtree_into_graph_and_bm25`)
+pins the full chain. 462 chan-drive passing.
+
+`-a-66 slice e` PARTIAL closed → umbrella complete
+empirically.
+
+### -33 acked (4b003fa) + bonus flake killer
+
+`-a-92` cross-lane closed:
+
+* `SessionEvent::AgentEventEcho(Vec<u8>)` new variant.
+* `ServerFrame::AgentEventEcho { payload_b64 }` new WS frame.
+* `dispatch_agent_event` swap: send_input → broadcast(AgentEventEcho).
+* WS dispatch loop encodes b64 + sends frame.
+
+**Bonus: PTY soft-wrap flakiness ELIMINATED**. The
+4 `dispatch_agent_event_*` tests previously read
+PTY echo to verify dispatch wrote bytes (flaky on
+macOS per `-21`/`-27`/`-29`/`-31`/`-32` smokes).
+Refactored to read `AgentEventEcho` payload
+directly via new `collect_agent_event_echo` helper.
+No more soft-wrap strip / caret-notation workarounds
+needed in those tests.
+
+226 chan-server passing (+2 net + 1 trace from
+removing soft-wrap workaround).
+
+### Connection-drop mitigation deferred
+
+Documented per task body's "OR document a different
+mitigation." Two viable mitigations for Round-3:
+per-session replay buffer OR polling
+`recent_events` endpoint. SPA side is mitigation-
+shape-agnostic.
+
+Filing for Round-3 polish.
+
+### Lane scorecard
+
+18 tasks shipped this phase (added `-33` + `-34`
++ fmt fixup). Stand-down for real this time.
+
+### Saga audit ledger
+
+Two sagas closed in one beat:
+
+* **Drafts data-flow** (`-29` + `-32` + `-34`).
+* **Broadcast survey-reply echo** (`-a-92 SPA` +
+  `-33 chan-server`).
+
+Plus PTY soft-wrap flake-pattern killed as
+ongoing-smoke risk.
+
+Standing by for v0.12.0 cut.
