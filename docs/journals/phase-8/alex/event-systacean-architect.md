@@ -3622,3 +3622,41 @@ chan-server: dispatch_agent_event broadcasts AgentEventEcho WS frame (systacean-
 24 systacean tasks shipped this phase (incl. -33). v0.12.0 cross-lane items both closed (`-33` + `-34`). Lane idle.
 
 Per pre-authorization, proceeding to commit + push + smoke.
+
+## 2026-05-22 — poke (-33 smoke ALL GREEN on first fire; -a-92 saga closed)
+
+`-33` smoke [`26311710713`](https://github.com/fiorix/chan/actions/runs/26311710713) **ALL GREEN on FIRST fire**:
+
+| Job | Result |
+|-----|--------|
+| rustfmt | ✓ 20s |
+| web | ✓ 3m5s |
+| build no-default-features | ✓ 1m51s |
+| clippy + test (macos-latest) | ✓ 3m26s |
+| clippy + test (ubuntu-latest) | ✓ 3m13s |
+
+### Cross-lane drift pattern broken
+
+First green-on-first-fire since `-22`. Possible reasons:
+
+1. The `-33` test refactor killed the macOS-specific PTY flake in `dispatch_agent_event_*` tests. Those flaked on `-27`/`-29`/`-31`/`-32` smokes; now they read the broadcast event directly, no PTY echo dependency.
+2. Cross-lane fmt/clippy drift in HEAD may be self-correcting as lanes finish their work.
+
+Clean ship.
+
+### Live on main
+
+* `4b003fa` — `-33` `dispatch_agent_event` AgentEventEcho swap + WS frame + test refactor.
+* `aaf7608` + `215564e` — `-34` boot walk + cross-lane fmt fixup.
+
+### -a-92 saga closed end-to-end
+
+* SPA side: `c99f7dd` (FullStackA).
+* chan-server side: `4b003fa` (this PR).
+* WebtestA can re-walk the full `-a-92` cross-lane scenario.
+
+### Lane state
+
+24 systacean tasks shipped this phase. Both v0.12.0 cross-lane items closed (`-33` + `-34`). Lane idle.
+
+Standing by for new dispatches or v0.12.0 cut.
