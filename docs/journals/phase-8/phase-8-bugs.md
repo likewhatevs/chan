@@ -17,6 +17,7 @@
 - Rich prompt: opening rich prompt should bring the cursor over to the rich prompt
   - And after pressing cmd+enter the cursor should remain in the rich prompt area
 - add cmd+t for new terminal
+  - shipped as `fullstack-b-2` (native chord via `KEY_BRIDGE_JS`) + `-b-9` (web alternates: Cmd+Alt+T on Mac, universal `Mod+. t` via Hybrid NAV). Together they cover all platforms — native chan-desktop, web Mac, web Linux/Windows
 - for commands 1, 2, 3, cmd+k commits immediately
 - The graph shows links to files that it says are not in the repo: ![](./attachments/image-1.png#w=250) 
   - Can repro seeding the drive with chan's own source code and journals
@@ -34,6 +35,7 @@
   - want: stackable record of window configs; closing the last window remembers its layout (panes, tabs, selections, hash state) so the next open restores it
   - keep up to 20 window configs for now; LRU eviction beyond that
   - applies to the native shell (chan-desktop / Tauri); browser tabs are out of scope
+  - shipped as `fullstack-b-1` (2026-05-19, commit `203c6e8`). `WindowConfig` LRU stack inside chan-desktop's sidecar config (cap = 20, newest first) keyed by drive path with separate namespacing for tunnel drives. Close-handler snapshots URL fragment + window label; reopen pops most-recent matching entry + reuses the same `?w=<label>` so `session.json` rehydrates panes/tabs/selections. `-b-19`'s zoom-level field extends the same struct without breaking compat
 - Rich-prompt watcher hung on first try (2026-05-19 v0.11.0)
   - vague repro: first time using the watcher on this build, hang observed before any test event landed
   - need a reliable repro before triage; flagging now so we don't lose the signal
@@ -41,14 +43,17 @@
   - Pointing the rich-prompt watcher at `/tmp/...` (outside the drive root) is rejected; user has to put the watcher dir inside the drive
   - But event files are infra traffic, not user content (per phase-7 architecture: bypasses chan-drive, written via tokio::fs in the event-reply endpoint)
   - Want: the watcher dialog accepts arbitrary filesystem paths (with a clear "outside drive root" hint if useful), not gated by the drive's editable-text sandbox
+  - shipped as `fullstack-b-3` (2026-05-19, commit `a9579f0`). `resolve_watcher_dir` in `crates/chan-server/src/routes/terminal.rs` now skips the in-drive sandbox check for absolute paths + creates missing directories silently before the metadata check
 - Watcher dialog "create dir" flow is wrong
   - When the path doesn't exist: error instead of silent create
   - When the path exists: warns it will "overwrite", which is not what attaching a watcher does
   - Want: if missing → create silently (or with a single confirm); if exists → just attach the watcher, no overwrite warning ever (we never overwrite a dir when attaching)
+  - shipped as `fullstack-b-3` (2026-05-19) for the backend resolver + `PathPromptMode = "attach"` SPA branch, with `fullstack-b-10` (2026-05-20, commit `641830a`) flipping the `TerminalRichPrompt.svelte` watcher dialog call-site from `mode: "move"` to `mode: "attach"` so existing dirs no longer trip the overwrite warning. PathPromptModal test pins the contract
 - Terminal scrollback truncated / lost too aggressively
   - repro: Alex lost earlier prompt context in an active terminal session; the lines were no longer reachable by scrolling
   - want: a generous scrollback buffer (10k+ lines), and no resets on focus/theme/pane changes
   - audit xterm.js config + any custom buffer trims we added during BCAST / mute reworks
+  - shipped as `fullstack-b-2` (2026-05-19, commit `315fcc1`). Root cause: `Pane.svelte` was unmounting TerminalTab every time Hybrid NAV (`paneMode.active`) toggled — each entry into pane mode disposed the xterm.js EditorView and dropped the 20k-line buffer. Fix dropped the `{#if !paneMode.active}` wrapper around the terminal each-block + gated `active` / `focused` props on `!paneMode.active` so existing CSS `visibility: hidden; pointer-events: none` rule hides the surface without unmounting. Buffer now preserved across pane mode AND intra-pane tab switching. Configurable scrollback size + default TERM landed later in `fullstack-b-11` (commit `ab5a0ce`)
 - Survey bubble keeps re-popping after a reply has been sent
   - confirmed repro (smoke test 2026-05-19 v0.11.0): drop a `survey` event, reply via the bubble, reply lands as `event-reply-<id>.md`, bubble re-appears
   - root cause: `web/src/state/watcherEvents.ts::readWatcherEvents` lists the dir and returns all `event-*.json|md` it finds, including surveys that have already been replied to. The reply file is a sibling, not a tombstone over the original.
@@ -86,11 +91,13 @@
   - corrected repro from Alex (2026-05-19): the drive IS active (other agents writing in `crates/`, `web/`, etc.); the FB has only `tasks/` (a single subtree) expanded but is reloading because the watcher fires on every change anywhere in the drive
   - same bug as phase-7 next-phase-backlog item 9 ("Scope FB watcher to current dir or parent of selected file"); promoting it from Round 2 → Round 1 because the pain is current and disrupts navigation in any non-trivial session
   - fix direction (from item 9): per-tab watcher scoped to the selected dir (or parent of selected file if a file is selected); detach on tab close / scope change. Watcher API on chan-drive may need a subscribe-by-prefix extension; audit before designing
+  - shipped as `fullstack-b-6` (2026-05-19, commit `f3ec455`) — SPA-only scope filter on `onWatchEvent`. Each FB instance contributes a scope from its selection (drive root / dir / parent-of-file); refresh only fires when the event lands in an active scope + only re-fetches the affected parent dir via new `refreshTreeForPath`. No chan-server / chan-drive changes needed (the subscribe-by-prefix direction the bug body floated turned out unnecessary). Known limitation flagged: `tree.entries` is shared across FB instances, so two FBs on different scopes both see refreshes for events matching either scope. The broader scope-set refactor was later filed as a separate item ("File browser misses external file-creation events") for the next-pass
 - Dark/light theme flip leaves half the Hybrid in the wrong palette
   - repro from Alex (2026-05-19): app in dark mode globally; back of a Hybrid pane renders in light mode → white-on-white editor surfaces, broken contrast
   - the per-Hybrid theme override (`ht`/`hb` from phase-7 `fullstack-59`) propagates to xterm.js + GraphCanvas (phase-7 `fullstack-78`) but NOT to the editor surfaces / section chrome on the back side
   - per-pane front/back have independent state (phase-7 `fullstack-70` preserved back-side state across splitPane); the theme propagation needs to apply to BOTH sides of the binary-tree, not just the front
   - acceptance: every surface inside the Hybrid pane on both front and back (editor area, sidebar chrome, section blocks, find/cmd overlays, etc.) honours the per-Hybrid theme override; flipping is fully consistent
+  - shipped as `fullstack-b-5` (2026-05-19, commit `28b168a`). Root cause: each shipped editor theme (`github.css`, `google_docs.css`, `word.css`) gated its dark variant on `:root[data-editor-theme="<name>"][data-theme="dark"]` — the `data-theme="dark"` half only matches the root, so a Hybrid pane that overrode `data-theme="light"` via the phase-7 `fullstack-59` cascade saw the editor-token dark rule fire globally. Fix extended each theme's dark selector to a comma-joined pair that also matches `:root[..] .pane[data-theme="dark"]` (higher specificity wins inside any opted-in pane) + a sibling `.pane[data-theme="light"]` block reasserts the base light defaults to break the cascade. Pure CSS; no JS / Svelte changes
 - CSS wobble effect missing from Hybrid and right-click menus
   - never asked to remove it; it regressed and needs to come back
   - reference: still applied on the OverlayShell for Search and Settings
@@ -107,6 +114,7 @@
   - the indexing-graph slide in the carousel clips at the viewport edges
   - cannot be moved / panned around to see what's off-screen
   - want: use the same pan/zoom settings as the regular Graph view (drag to pan, wheel to zoom, recenter affordance)
+  - shipped as `fullstack-b-4` (2026-05-19, commit `ca8a441`). Self-contained pan/zoom layer in `EmptyPaneCarousel.svelte` modelled on `GraphCanvas` but scoped to SVG-space (no Canvas / d3-force needed). Transform-driven `<g>` wrapper holds edges + nodes; pointer-capture on the SVG drives drag-pan; wheel with `exp(-delta * 0.0015)` smoothing matches `GraphCanvas`'s feel; Locate icon button bottom-right resets to identity. Leaving slide 3 also resets so the next visit lands on a fitted view. Gestures sit on the SVG directly so the Round-2 Infographics-tabs refactor (backlog item 4) inherits the behaviour without re-wiring. 8 new pinned tests
 - chan-desktop: external `http`/`https` links do not open at all
   - flagged 2026-05-20 by Alex: in the current Tauri-built Chan.app, clicking an external `http://...` link inside the webview does nothing, no navigation, no external browser launch
   - tested by clicking the round-1 test-server URL (`http://127.0.0.1:8787/?t=...`); click is a complete no-op
