@@ -22,6 +22,7 @@ mod report;
 mod search;
 mod sessions;
 mod storage;
+mod teams;
 mod terminal;
 mod ws;
 
@@ -53,6 +54,7 @@ pub use search::{
 };
 pub use sessions::{api_delete_session, api_get_session, api_list_sessions, api_put_session};
 pub use storage::api_storage_reset;
+pub use teams::{api_team_list_loaded, api_team_load, api_team_unload};
 pub use terminal::{
     api_create_terminal, api_delete_terminal, api_restart_terminal, api_set_terminal_submit_mode,
     api_set_terminal_watcher, api_terminal_event_reply, api_terminal_watcher_events,

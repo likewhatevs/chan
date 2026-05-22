@@ -3252,3 +3252,67 @@ FullStackA must've landed the `BubbleOverlay.test.ts` TS-drift fix between my `-
 `-31` is the natural next pickup — it consumes `Drive::team_events_dir(name)` to attach per-team `WatchHandle` via `-25`'s `WatchRoot` primitive. Smaller than `-30` (no new schema; just multi-watcher lifecycle).
 
 Confirm or redirect; otherwise proceeding to `-31`.
+
+## 2026-05-22 — poke (-31 implementation complete; multi-team watcher orchestration ready for smoke)
+
+Picked up `-31`. Per-team isolated `WatchHandle` (chose N separate handles over single-handle-multi-roots; rationale in task tail).
+
+### What landed
+
+* **`Drive::watch_team(team_name, cb)`** (chan-drive): wraps `WatchRoot` construction with `team-{name}/events` prefix; delegates to `WatchHandle::start`. Resolves events_dir via `team_events_dir` so missing-team errors cleanly.
+* **`AppState.loaded_teams: Mutex<HashMap<String, WatchHandle>>`** (chan-server): per-team handle registry. Drop-on-remove = non-destructive tear-down.
+* **3 new routes** (chan-server `routes/teams.rs`):
+  * `POST /api/teams/{name}/load` — build bridge + watch_team + insert.
+  * `POST /api/teams/{name}/unload` — remove (drops handle, releases watcher).
+  * `GET /api/teams/loaded` — sorted list of active teams.
+
+### Tests (+1)
+
+`watch_team_emits_events_with_prefix` — full end-to-end: create team → attach watcher → write file in events/ → poll for prefixed event. Uses `-23`'s outcome-poll pattern + `-25`'s 200ms attach-settle sleep for FSEvents coalescing safety.
+
+### Architecture decision
+
+Went with **N separate handles** (one per loaded team) instead of single shared handle with multi-roots. Rationale:
+1. Lifecycle cleaner — `HashMap::remove` = Drop = unwatch. No dynamic add/remove on shared dispatcher.
+2. `WatchHandle::start` currently takes static `&[WatchRoot]`; dynamic-roots would be a chan-drive refactor.
+3. Matches the addendum-b spec's "per-team isolated watcher" wording.
+
+Switch to shared-handle later if profiling shows N-watcher syscall cost.
+
+### Acceptance criteria
+
+All 4 from the task body satisfied (load spins up, unload tears down, multiple concurrent, no regression on `-25`'s watcher).
+
+### Diff
+
+* `crates/chan-drive/src/drive.rs`: +99 / 0.
+* `crates/chan-server/src/state.rs`: +9 / 0.
+* `crates/chan-server/src/lib.rs`: +14 / -2.
+* `crates/chan-server/src/routes/mod.rs`: +2 / 0.
+* `crates/chan-server/src/routes/search.rs`: +1 / 0 (literal `AppState` site).
+* `crates/chan-server/src/routes/teams.rs` (new): +133 / 0.
+
+Plus task tail + this poke. 8 paths.
+
+### Pre-push gate
+
+* fmt + clippy + no-default-features build clean.
+* `cargo test -p chan-drive --lib`: **460 / 0 / 2-ignored** (+1).
+* `cargo test -p chan-server --lib`: 213 / 0 (unchanged; route is HTTP-stack-dependent for integration testing).
+* workspace tests all green.
+
+### Suggested commit subject
+
+```
+chan-drive + chan-server: per-team WatchHandle + team_load/unload/list_loaded routes (systacean-31)
+```
+
+### Smoke plan
+
+`gh workflow run ci.yml --ref systacean-31-smoke`. Expected ALL GREEN. PTY-test flakiness may recur from prior smokes; if so, re-fire.
+
+### What this unblocks
+
+`fullstack-a-79` (bootstrap orchestrator) + `fullstack-a-80` (load flow) — both consume the new IPC routes.
+
+Per architect's pre-authorization, proceeding to commit + push + smoke.

@@ -102,6 +102,14 @@ pub struct AppState {
     /// graceful drain returns in milliseconds instead of holding
     /// open until the hard deadline.
     pub shutdown_rx: watch::Receiver<bool>,
+    /// systacean-31: per-team event-channel watchers. Keyed by
+    /// team name (e.g. `"marketing"`). Each entry holds a
+    /// `WatchHandle` rooted at `Drafts/team-{name}/events/` via
+    /// `-25`'s `WatchRoot` primitive; events emerge with prefix
+    /// `team-{name}/events` so the SPA can route per-team. Lifecycle
+    /// is non-destructive: `team_unload` drops the entry (releases
+    /// the watcher) but the on-disk workspace + terminals persist.
+    pub loaded_teams: Mutex<std::collections::HashMap<String, WatchHandle>>,
 }
 
 /// Drive + its notify watcher. Replaced wholesale by /api/storage/
@@ -225,6 +233,7 @@ pub(crate) mod test_support {
                 terminal: ServerConfig::default().terminal,
             })),
             shutdown_rx,
+            loaded_teams: Mutex::new(std::collections::HashMap::new()),
         })
     }
 }

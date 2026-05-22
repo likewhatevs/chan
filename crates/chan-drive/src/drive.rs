@@ -1169,6 +1169,28 @@ impl Drive {
         Ok(self.team_dir(team_name)?.join("events"))
     }
 
+    /// systacean-31: attach a `WatchHandle` rooted at the team's
+    /// `events/` subdirectory. The watcher emits events with
+    /// paths prefixed by `team-{name}/events/` so chan-server's
+    /// event stream can route per-team. Errors when the team
+    /// isn't registered (the events_dir resolution validates).
+    /// Caller drops the returned handle to stop watching;
+    /// chan-server's `team_unload` route uses this for non-
+    /// destructive tear-down (workspace persists on disk).
+    pub fn watch_team(
+        self: &Arc<Self>,
+        team_name: &str,
+        cb: Arc<dyn crate::watch::WatchCallback>,
+    ) -> Result<crate::watch::WatchHandle> {
+        let events_dir = self.team_events_dir(team_name)?;
+        let prefix = format!("team-{team_name}/events");
+        let root = crate::watch::WatchRoot {
+            abs: events_dir,
+            prefix: Some(prefix),
+        };
+        crate::watch::WatchHandle::start(&[root], cb)
+    }
+
     /// systacean-26: pick the smallest unused `untitled-N` name
     /// under the drafts root. Returns `"untitled"` on the first
     /// call (no `untitled` dir exists); `"untitled-1"` if
@@ -5087,6 +5109,83 @@ mod tests {
 
         drive.create_draft_dir("untitled-1").unwrap();
         assert!(drive.create_draft_dir("untitled-1").is_err());
+    }
+
+    #[test]
+    fn watch_team_emits_events_with_prefix() {
+        // systacean-31: Drive::watch_team attaches a notify
+        // watcher rooted at the team's events/ subdirectory.
+        // Events emerge prefixed `team-{name}/events/<file>` so
+        // chan-server's event stream routes per-team.
+        use crate::watch::WatchCallback;
+        use std::sync::Mutex;
+        use std::sync::OnceLock;
+
+        struct Collector {
+            events: Mutex<Vec<crate::watch::WatchEvent>>,
+        }
+        impl Collector {
+            fn new() -> Self {
+                Self {
+                    events: Mutex::new(Vec::new()),
+                }
+            }
+        }
+        impl WatchCallback for Collector {
+            fn on_event(&self, event: crate::watch::WatchEvent) {
+                self.events.lock().unwrap().push(event);
+            }
+        }
+
+        let (_cfg, _root, drive) = fixture();
+        drive
+            .create_team(&crate::teams::TeamConfig {
+                team_name: "alpha".to_string(),
+                host_name: "Alex".to_string(),
+                host_handle: "@@Alex".to_string(),
+                auto_prefix_at: true,
+                created_at: "2026-05-22T13:57:00Z".to_string(),
+                members: vec![],
+            })
+            .unwrap();
+
+        let collector = std::sync::Arc::new(Collector::new());
+        let cb: std::sync::Arc<dyn WatchCallback> = collector.clone();
+        let _handle = drive.watch_team("alpha", cb).unwrap();
+
+        // Tiny sleep to let the watcher attach to the events dir
+        // before we land the write (mirrors -25's pattern for
+        // macOS FSEvents coalescing safety).
+        std::thread::sleep(std::time::Duration::from_millis(200));
+        let events_dir = drive.team_events_dir("alpha").unwrap();
+        std::fs::write(events_dir.join("event-1.json"), b"{\"poke\":true}").unwrap();
+
+        // Poll for the prefixed event up to 5s.
+        let saw_prefix = OnceLock::new();
+        for _ in 0..50 {
+            std::thread::sleep(std::time::Duration::from_millis(100));
+            let events = collector.events.lock().unwrap();
+            for ev in events.iter() {
+                if let Some(p) = ev.path.as_deref() {
+                    if p.starts_with("team-alpha/events/") && p.ends_with("event-1.json") {
+                        let _ = saw_prefix.set(p.to_string());
+                        break;
+                    }
+                }
+            }
+            if saw_prefix.get().is_some() {
+                break;
+            }
+        }
+
+        let landed = saw_prefix
+            .get()
+            .cloned()
+            .unwrap_or_else(|| format!("none: {:?}", collector.events.lock().unwrap()));
+        assert!(
+            landed.starts_with("team-alpha/events/"),
+            "watch_team did not emit a prefixed event within 5s; observed: {landed}"
+        );
     }
 
     #[test]

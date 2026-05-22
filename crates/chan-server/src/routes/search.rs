@@ -580,6 +580,7 @@ mod tests {
                 terminal: ServerConfig::default().terminal,
             })),
             shutdown_rx,
+            loaded_teams: std::sync::Mutex::new(std::collections::HashMap::new()),
         });
 
         RouteTestApp {

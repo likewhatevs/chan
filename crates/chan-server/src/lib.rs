@@ -56,8 +56,9 @@ use routes::{
     api_post_attachment, api_post_contacts_import, api_put_session, api_read_file, api_report_dir,
     api_report_file, api_report_prefix, api_resolve_link, api_restart_terminal, api_search_content,
     api_search_files, api_set_terminal_submit_mode, api_set_terminal_watcher, api_storage_reset,
-    api_terminal_event_reply, api_terminal_watcher_events, api_terminal_ws,
-    api_unset_terminal_watcher, api_write_file, ws_upgrade,
+    api_team_list_loaded, api_team_load, api_team_unload, api_terminal_event_reply,
+    api_terminal_watcher_events, api_terminal_ws, api_unset_terminal_watcher, api_write_file,
+    ws_upgrade,
 };
 #[cfg(feature = "embeddings")]
 use routes::{
@@ -427,6 +428,7 @@ async fn build_app(
         last_activity: last_activity.clone(),
         terminal_sessions,
         shutdown_rx,
+        loaded_teams: Mutex::new(std::collections::HashMap::new()),
     });
     // Nest under the prefix so `--prefix=/foo` makes every existing
     // route reachable at `/foo<route>` without changing any handler.
@@ -801,6 +803,14 @@ fn router(state: Arc<AppState>) -> Router {
         // SPA Cmd+N chord routes here; response path opens via
         // the existing /api/files/Drafts/.../draft.md GET path.
         .route("/api/drafts/new", post(api_create_draft))
+        // systacean-31: per-team watcher lifecycle. Load spins up
+        // a `Drive::watch_team` handle; unload drops it
+        // (non-destructive — workspace persists on disk).
+        // `/loaded` is read-only for the SPA to know which teams
+        // are active.
+        .route("/api/teams/{name}/load", post(api_team_load))
+        .route("/api/teams/{name}/unload", post(api_team_unload))
+        .route("/api/teams/loaded", get(api_team_list_loaded))
         .route(
             "/api/files/*path",
             get(api_read_file)
