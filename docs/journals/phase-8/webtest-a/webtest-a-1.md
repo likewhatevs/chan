@@ -2148,3 +2148,117 @@ The walk completed 19/20 acceptance checks HOLD + 1 N/A
 + 1 PARTIAL (`-a-54` #6 click-existing-mirrored-tab from
 back-side). `webtest-a-4`'s PARTIAL (`-a-45` #3 custom-TERM)
 re-verified as HOLD post-`-a-53` bundled fix.
+
+## 2026-05-22 — fullstack-a-55 proactive walkthrough (Hybrid flip UX: tab-title removal + right-align + mirrored-tab click fix)
+
+Proactive lane-A walk of `-a-55` (`7cf6f8e`) per the memory
+rule on proactive coverage — the `-a-55` commit fixes the
+`webtest-a-5` PARTIAL on `-a-54` #6 (click-existing-mirrored-
+tab) and bundles two other UX corrections. No
+`webtest-a-6.md` task cut yet; appending verdict here per
+the omnibus pattern. HEAD `e80db8b` (post-systacean smoke
+#3 cascade terminator); throwaway drive
+`/tmp/chan-test-phase8-wa-r7/` (chan-source seed); chan
+serve on 127.0.0.1:8787; Chrome MCP tab `503725864`.
+
+### Verdicts
+
+| Check | Surface | Verdict |
+|-------|---------|---------|
+| -a-55 #1 | Click-existing-mirrored-tab swaps active (the `webtest-a-5` PARTIAL fix) | HOLD |
+| -a-55 #2 | Family-name title removed from tab strip | HOLD |
+| -a-55 #3 | Tab right-alignment on flipped state | HOLD |
+
+**3/3 HOLD**. The `webtest-a-5` PARTIAL on `-a-54` #6 is now
+empirically resolved.
+
+### Per-check evidence
+
+* **#1 Click-existing-mirrored-tab fix**: opened FB + Editor
+  tabs in LEFT pane; CLAUDE.md (Editor) active; flipped to
+  back via `Cmd+. Tab Return` — back showed "Hybrid Editor"
+  stub. Clicked the mirrored `chan-test-phase8-wa-r7/` FB tab
+  via Chrome MCP `find` → `left_click` on the DOM ref.
+  Active tab swapped: URL hash now has `"a":1` on the FB tab
+  (first slot, `k:b`) instead of CLAUDE.md; back-side body
+  swapped from "Hybrid Editor" to "Hybrid File Browser"
+  stub; active-tab × marker moved to the FB tab. Clicked
+  back to CLAUDE.md tab → reverse swap held (back-side
+  "Hybrid Editor" again, active marker on CLAUDE.md).
+  **Bidirectional click-driven tab swap on back-side
+  works** — exactly what the `webtest-a-5` PARTIAL flagged
+  as broken.
+* **#2 Family-name title removed from tab strip**: in
+  `webtest-a-4` + `webtest-a-5`, the flipped state had
+  "HYBRID EDITOR" / "HYBRID TERMINAL" / "HYBRID FILE
+  BROWSER" rendered un-mirrored INSIDE the tab strip
+  area. Post-`-a-55`, that string is GONE from the tab
+  strip on every flipped pane I exercised. The
+  family-name now lives ONLY in the back-side body as an
+  `<h2>` heading (e.g. "Hybrid Editor", "Hybrid File
+  Browser") under the title band — cleaner layering, no
+  duplication.
+* **#3 Tab right-alignment on flipped state**: front-side
+  tabs anchor LEFT-aligned at the start of the tab strip
+  (right after the hamburger). Post-`-a-55` flipped state
+  anchors tabs to the RIGHT edge of the tab strip — the
+  hamburger swaps to the LEFT end (per `-a-54`) and the
+  tabs collapse against the right edge. Visual symmetry
+  reads as "tab strip viewed from behind" — the LTR tab
+  flow on front becomes RTL on back, which is consistent
+  with the `scaleX(-1)` mirror metaphor from `-a-54`.
+
+### Highlight
+
+* **`webtest-a-5` PARTIAL closed empirically**: my
+  `webtest-a-5` lowlight flagged that the back-side
+  click-existing-mirrored-tab didn't swap active. `-a-55`
+  fixed the click handler on mirrored tabs (per the
+  `fullstack-a-55.md` "Bundled scope addition" — the
+  `scaleX(-1)` transform on tab elements was breaking
+  pointer-event resolution; the fix surfaces the click
+  via the correct delegate). Confirmed working
+  bidirectionally; no further follow-up needed.
+
+### Side observation (out of `-a-55` scope; noted)
+
+* **Hybrid File Browser back-side Semantic search section
+  now reads "isn't compiled into this binary"**:
+  > "Semantic search isn't compiled into this binary.
+  > Rebuild with `--features embed-model` (or install a
+  > chan release that includes it) to enable Hybrid
+  > search."
+
+  This replaces the "Enable semantic search (Hybrid
+  mode)" checkbox + "Active: BM25" info that
+  `webtest-a-5` documented. The local `cargo build -p
+  chan` (default features) used for both walks produced
+  different binary outputs — likely because the embed-
+  model feature flag was added/changed in some lane
+  between the two walks. Not in `-a-55` scope; flagging
+  as worth tracking: real users running
+  `cargo install chan` from crates.io with default
+  features may now see "isn't compiled" instead of the
+  Hybrid checkbox. Worth confirming the release-build
+  default. Lane: @@Systacean (build / feature-flag
+  semantics).
+
+### State at end of walk
+
+Lane-A test server still live on
+`http://127.0.0.1:8787/?t=bMNBe8oDyucmvfSzRwfBCxy65Kr2amM9`
+against `/tmp/chan-test-phase8-wa-r7/` (chan repo seed +
+two ad-hoc preference toggles from the swap test).
+Tear-down at commit beat.
+
+**Tear-down complete**:
+
+1. chan serve killed (TaskStop on the background bash for
+   `chan serve --port 8787`).
+2. `rm -rf /tmp/chan-test-phase8-wa-r7/` — directory gone.
+3. `chan remove /tmp/chan-test-phase8-wa-r7/` → `unregistered`.
+4. Chrome MCP tab `503725864` (chan SPA) closed via
+   `tabs_close_mcp`. Tab group empty.
+
+3/3 HOLD; `webtest-a-5` PARTIAL closed; `-a-55` walk
+complete.

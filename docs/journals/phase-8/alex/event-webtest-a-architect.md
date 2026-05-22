@@ -996,3 +996,126 @@ established Option A pattern from `-3` close-out, your call
 on whether to land that as a separate follow-up commit.
 
 Standing by.
+
+## 2026-05-21 — poke (webtest-a-5 close-out committed; -a-55 fix for the PARTIAL is in HEAD)
+
+Routed Option A per your clearance. Committed at `f1c1edb`:
+`docs: webtest-a-5 task close-out marker (Hybrid back-side
+correction wave + design follow-ups walk)`. Single file
+(`webtest-a-5.md`), 40 insertions, path-limited shape — no
+stowaways.
+
+### Audit trail for the webtest-a-5 wave now
+
+* `74b9860` — verdict (`webtest-a-1.md` append + my
+  outbound channel poke bundle).
+* `f1c1edb` — task close-out marker (`webtest-a-5.md`).
+
+### Observation: -a-55 (the PARTIAL fix) is in HEAD
+
+The `-a-54` Check #6 click-existing-mirrored-tab PARTIAL I
+flagged is fixed by `fullstack-a-55` (`7cf6f8e`) which
+also bundles:
+
+* Family-name title removal from the tab strip.
+* Tab right-alignment on the flipped state.
+* Click-handler fix for mirrored tabs.
+
+All three changes touch the same `Pane.svelte` flipped-
+tab-strip surgery surface — clean bundling per your routing
+note in [`../fullstack-a/fullstack-a-55.md`](../fullstack-a/fullstack-a-55.md)
+"Bundled scope addition 2026-05-21".
+
+Per your sequencing note, the next walk
+(`webtest-a-6`) bundles `-a-55` follow-up validation +
+the graph overhaul sub-wave (`-a-49..52`) once that lands.
+Whenever you cut it I'll walk the mirrored-tab click +
+the other two `-a-55` changes alongside the graph
+sub-wave. No urgency from this lane — my queue is empty
+as reactive lane.
+
+Standing by for `webtest-a-6` dispatch.
+
+## 2026-05-22 — poke (proactive walk of -a-55 done; webtest-a-5 PARTIAL empirically closed; 3/3 HOLD)
+
+Picked up `-a-55` (`7cf6f8e`) for a proactive lane-A walk per
+the memory rule on proactive coverage (the fix lives directly
+in my prior PARTIAL, so the cost of waiting on a `webtest-a-6`
+cut was not worth holding). HEAD `e80db8b`; throwaway drive
+`/tmp/chan-test-phase8-wa-r7/` (chan-source seed); chan serve
+on 127.0.0.1:8787; Chrome MCP tab `503725864`. Verdict
+appended to
+[`../webtest-a/webtest-a-1.md`](../webtest-a/webtest-a-1.md)
+under `## 2026-05-22 — fullstack-a-55 proactive walkthrough`.
+
+### Verdicts (3/3 HOLD)
+
+| Check | Verdict |
+|-------|---------|
+| #1 Click-existing-mirrored-tab swaps active (the `webtest-a-5` PARTIAL fix) | HOLD |
+| #2 Family-name title removed from tab strip | HOLD |
+| #3 Tab right-alignment on flipped state | HOLD |
+
+### `webtest-a-5` PARTIAL closed
+
+The `-a-54` Check #6 PARTIAL I flagged in `webtest-a-5`
+(`74b9860`) is now empirically resolved. Clicked the mirrored
+FB tab on a flipped Hybrid Editor pane → active swapped to
+FB + back-side body swapped from "Hybrid Editor" to "Hybrid
+File Browser" stub + active-tab × marker moved to the FB
+tab. Clicked back to the CLAUDE.md mirrored tab → reverse
+swap held. **Bidirectional click-driven tab swap on
+back-side works.** The previous `scaleX(-1)`-eats-pointer-
+events failure mode is gone.
+
+### Highlights from the visual deltas
+
+* **Tab strip is clean post-flip**: no more "HYBRID EDITOR"
+  / "HYBRID TERMINAL" / "HYBRID FILE BROWSER" title text
+  duplicated inside the tab strip area. The family-name now
+  lives ONLY in the back-side body `<h2>` heading — cleaner
+  layering matches @@Alex's design correction framing.
+* **Tab right-alignment reads "viewed from behind"**:
+  tabs collapse against the right edge of the tab strip on
+  flipped state, hamburger swaps to the left edge per
+  `-a-54`. RTL tab flow is symmetric with the front's LTR
+  flow.
+
+### Side observation (out of `-a-55` scope; flagging for tracking)
+
+* **Hybrid FB back-side Semantic search section now reads
+  "isn't compiled into this binary. Rebuild with
+  `--features embed-model`"** instead of the
+  "Enable semantic search (Hybrid mode)" checkbox + Active
+  BM25 / Stored at... info that `webtest-a-5` documented.
+  Both walks used `cargo build -p chan` with default
+  features — so something in the feature-flag wiring
+  changed between the `r6` walk (2026-05-21) and the
+  `r7` walk (2026-05-22). Not in `-a-55` scope; flagging
+  in case real users running `cargo install chan` from
+  crates.io with default features see "isn't compiled"
+  rather than the Hybrid toggle. Lane: @@Systacean
+  (feature-flag / build defaults).
+
+### Suggested commit shape
+
+Path-limited per the discipline that landed `-3` / `-4` /
+`-5` cleanly:
+
+* **Commit subject**: `docs: webtest-a-5 PARTIAL re-verified
+  HOLD via proactive -a-55 walk (3/3 HOLD)`.
+* **Files** (explicit per-path):
+  * `docs/journals/phase-8/webtest-a/webtest-a-1.md`
+    (verdict append).
+  * `docs/journals/phase-8/alex/event-webtest-a-architect.md`
+    (this poke).
+* Path-limited `git commit <path1> <path2> -m "..."` to
+  bypass the shared index. Post-commit
+  `git show --stat HEAD` confirm scope.
+
+This walk also discharges the `-a-55` follow-up validation
+portion of your planned `webtest-a-6` dispatch — when you
+cut it, it can scope purely to the graph overhaul sub-wave
+(`-a-49..52`) without needing to re-walk `-a-55`.
+
+Standing by.
