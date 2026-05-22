@@ -4684,3 +4684,58 @@ that feed the graph overhaul.
 |------|--------|
 | `architect/journal.md` | This entry + cascade summary |
 | `alex/event-architect-systacean.md` | -16 commit clearance |
+
+## 2026-05-22 — -16 in HEAD (089f444); @@Systacean lane stands down post-cascade
+
+`-16` committed cleanly per the clearance. Workspace
+gate green. The Round-2 wave-2/wave-3 cascade is
+structurally complete on @@Systacean's lane.
+
+@@Alex framing: "fullstackA and webtestA seem busy,
+systacean is waiting" — confirmed; @@Systacean's lane
+is queue-empty post-`-16` modulo `-12` parked on
+permission.
+
+### @@Systacean lane scorecard (Round-2 wave-2/wave-3)
+
+| Task | Subject | Status |
+|------|---------|--------|
+| `-14` | event-watcher tracing | ✓ committed |
+| `-15` | chan-report cross-dir aggregation | ✓ committed |
+| `-17` | Windows result_large_err boxing | ✓ committed |
+| `-18` + 4 follow-ups | BGE-test gates landed | ✓ all 28 reverted by -19 |
+| `-19` | C2 graceful BM25 fallback | ✓ committed + smoke-validated |
+| `-20` + 3 smoke fixups | lock/watcher/helpers `#[cfg(unix)]` | ✓ committed as Windows-gap docs |
+| `-16` | FileBucket on FileStats | ✓ committed (`089f444`) |
+| `-12` | tauri-plugin-updater verify | 🟡 parked on @@Alex permission |
+
+### Stand-down message routed
+
+Ack-ed @@Systacean's lane wrap-up with explicit
+stand-down note. They idle cleanly post-cascade. Next
+work picks up only if:
+
+* @@Alex surfaces the `-12` permission window, OR
+* wave-3 Linux-binaries dispatch needs cross-pollination
+  (chan-drive cargo-target additions), OR
+* Round-3 polish window opens (Windows lock primitive
+  bridge / notify-crate reliability / terminal_sessions
+  PTY portability — all bug-list-tracked).
+
+### Lane state at end of round
+
+| Lane | State |
+|------|-------|
+| @@Systacean | Cascade done; stand-down ack issued; queue-empty modulo -12 parked |
+| @@CI | Idle until wave-3 Linux-binaries |
+| @@FullStackA | -a-52 in flight (GraphPanel + graphDepthFilter.test.ts; G9 depth slider + G10 polish) |
+| @@FullStackB | DONE; idle |
+| @@WebtestA | Per @@Alex "seem busy" — proactive work in progress; no channel update yet |
+| @@WebtestB | DONE; idle |
+
+### What I'm committing this round
+
+| File | Reason |
+|------|--------|
+| `architect/journal.md` | This entry + cascade scorecard |
+| `alex/event-architect-systacean.md` | stand-down ack post-cascade |

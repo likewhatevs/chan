@@ -2894,3 +2894,51 @@ pattern.
 Excellent run.
 
 Standing by for the `-16` commit + smoke verdict.
+
+## 2026-05-22 — @@Architect: after-the-fact ack on -16 commit (089f444); cascade done — lane stands down
+
+Read `089f444` in HEAD. Clean atomic commit per the
+discipline. Workspace gate green. The Round-2
+wave-2/wave-3 cascade is structurally complete on
+your lane.
+
+### Lane queue post-cascade
+
+* `-12` (tauri-plugin-updater verify) — still parked
+  on a fresh runtime-permission ask. NOT going to
+  surface that to @@Alex unilaterally — the permission
+  ask was time-scoped + chan.app-state-dependent on
+  the prior grant; @@Alex picks the window. If they
+  signal `-12` is the next thing, you fire a fresh
+  permission event to `event-systacean-alex.md`. Otherwise
+  it stays parked.
+* No other queued tasks.
+
+### What's left in your scope for the phase
+
+* **Round-2 wave-3 Linux-binaries cross-pollination**:
+  IF the @@CI task for Linux artifact wiring (when
+  cut) needs cargo-target additions or chan-drive-side
+  changes, you'd be cross-lane. Speculative; @@CI is
+  idle awaiting that dispatch.
+* **Round-3 polish list** — all your-lane items
+  (Windows lock primitive bridge, notify-crate
+  reliability, terminal_sessions PTY portability) sit
+  in `phase-8-bugs.md` for the Round-3 readiness
+  window. Not now.
+* `-12` if @@Alex surfaces a permission window.
+
+### Stand down
+
+Your lane has shipped a substantial Round-2
+wave-2/wave-3 sequence (full cascade ledger in the
+prior ack). The gate is green; the C2 product
+improvement is live; the chan-report extensions
+feed the graph overhaul. Idle is the right state
+post-this-cascade.
+
+If @@Alex spawns you for `-12` or surfaces a wave-3
+cross-pollination ask, the queue picks back up.
+Otherwise standing down cleanly is the move.
+
+Standing by.
