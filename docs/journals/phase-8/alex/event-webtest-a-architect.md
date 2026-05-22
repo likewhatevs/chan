@@ -3060,3 +3060,98 @@ required entries.
 * Path-limited `git commit`.
 
 Standing by.
+
+## 2026-05-22 — poke (-a-66 slice e PARTIAL — indexer doesn't see Drafts; umbrella NOT closed)
+
+Proactive walk on HEAD `f7c0294`. Throwaway drive
+r30; chan serve 127.0.0.1:8787; Chrome MCP tab
+`503726130`. Verdict in
+[`../webtest-a/webtest-a-1.md`](../webtest-a/webtest-a-1.md).
+
+### Verdict: PARTIAL — umbrella NOT closed
+
+The commit subject says "closes umbrella" but
+empirically the graph **does not** render Drafts
+data.
+
+| Check | Verdict |
+|-------|---------|
+| Drafts root node in `/api/graph?scope=drive` | **MISSING** |
+| `drafts_link` edges in graph | **MISSING** |
+| SPA styling code | HOLD (present, no data to render) |
+
+### Empirical evidence
+
+- Created `Drafts/untitled/draft.md` via Cmd+N
+- Added text content to ensure indexing
+- Waited 4s
+- `/api/graph?scope=drive`:
+  - 1435 nodes, 5857 edges
+  - No Drafts directory node
+  - No drafts_link edges
+  - 0 files matching `path.startsWith('Drafts/')`
+
+### Root cause: indexer doesn't walk Drafts/
+
+`synthesize_drafts_layer` gates on
+`files.iter().any(|p| p.starts_with("Drafts/"))`.
+The `files` argument comes from chan-drive's
+indexer file list. But the indexer walks the drive
+root on disk, not the Drafts metadata folder.
+
+systacean-32 added prefix-aware
+`Drive::stat`/`exists`/`read` for Drafts — but
+NOT the indexer scan. So:
+- `/api/files?dir=Drafts` works ✓ (systacean-32)
+- Indexer file list doesn't include Drafts/ →
+  graph synthesizer's gate doesn't fire → no
+  Drafts node/edge emitted
+
+### The pattern across 5 slices
+
+| Slice | Surface | Gap | Fix |
+|-------|---------|-----|-----|
+| b | FB row | server injection on root listing | follow-up gated on dir="" |
+| c | Inspector | wrong component (DirectoryInfoBody not used) | follow-up moved to FileInfoBody |
+| d | API listing | unified-path didn't reach Drafts subtree | systacean-32 |
+| e | Graph emit | indexer doesn't walk Drafts metadata folder | **NEEDS indexer follow-up** |
+
+The synthetic-Drafts data-flow gap appears at
+every surface that has an input path different
+from the FB row. Each surface has needed a
+targeted fix at its specific input.
+
+### Strongly recommend an indexer-side follow-up
+
+Without indexer-side Drafts/ awareness:
+- Graph won't show Drafts files
+- Full-text search won't find content in
+  draft files
+- chan-report won't include Drafts in stats
+
+This affects multiple downstream surfaces; the
+indexer is the natural shared input. Suggest:
+
+* **Task title**: `chan-drive indexer: walk
+  Drafts/ via unified-path scan`
+* **Lane**: @@Systacean (probably) — extends
+  systacean-32's unified-path bridge into the
+  indexer
+* **Closes**: `-a-66` umbrella + future graph/
+  search/report surfaces that depend on indexed
+  Drafts content
+
+### Suggested commit shape for this walk
+
+* **Commit subject**: `docs: webtest-a proactive
+  walk — -a-66 slice e PARTIAL (graph styling
+  shipped but indexer doesn't walk Drafts;
+  umbrella NOT closed)`.
+* **Files**:
+  * `docs/journals/phase-8/webtest-a/webtest-a-1.md`
+  * `docs/journals/phase-8/alex/event-webtest-a-architect.md`
+* Path-limited `git commit`.
+
+Standing by. Strongly recommend the indexer
+follow-up before declaring the Drafts umbrella
+shipped.

@@ -5181,3 +5181,108 @@ closed (`-a-90` + `-a-94`). The chord-escape
 registry (`-a-91`) makes the broader xterm-
 focus-eats-chord problem go away for the App
 group.
+
+## 2026-05-22 — proactive walk: -a-66 slice e Graph Drafts styling (PARTIAL — indexer gap)
+
+Proactive walk on HEAD `f7c0294`. Throwaway drive
+r30; chan serve 127.0.0.1:8787; Chrome MCP tab
+`503726130`. Final slice of the Drafts umbrella.
+
+### Verdict (PARTIAL)
+
+| Check | Surface | Verdict |
+|-------|---------|---------|
+| Drafts root node + drafts_link edge emitted by API | empirical | **PARTIAL** (indexer doesn't see Drafts) |
+| SPA-side styling for drafts_link edge | source | HOLD (code present, no data to render) |
+| SPA-side styling for Drafts directory node | source | HOLD (code present, no node to style) |
+
+### `-a-66 slice e` PARTIAL — chan-server graph emit not reaching Drafts
+
+**Source side WORKS** (per `f7c0294`):
+- `web/src/api/types.ts`: `GraphViewEdgeKind` adds
+  `"drafts_link"` variant ✓
+- `web/src/components/GraphCanvas.svelte`:
+  - `RenderedEdgeKind` adds `"drafts_link"` ✓
+  - Theme gains `drafts: v("--fb-drafts-fg", "#e3b341")` ✓
+  - Edge rendering: drafts_link at alpha=0.4 (vs
+    0.18 for others) + yellow stroke ✓
+  - Node rendering: Drafts directory tinted yellow ✓
+- `chan-server/src/routes/graph.rs`:
+  - `synthesize_drafts_layer(files, nodes)`
+    function emits Drafts root node + drafts_link
+    edge ✓
+  - Call site at line 1205 invokes the
+    synthesizer with the file list ✓
+
+**Empirical surface MISSING**:
+- Created `Drafts/untitled/draft.md` via Cmd+N.
+- Added content to ensure indexing.
+- Waited 4s for indexer.
+- `/api/graph?scope=drive` returns:
+  - 1435 nodes, 5857 edges
+  - **NO Drafts directory node**
+  - **NO drafts_link edges**
+  - 0 files under `Drafts/` prefix
+  - Directory nodes only include drive-root
+    children (`.claude`, `.github`, `crates`, ...)
+
+**Root cause**: `synthesize_drafts_layer` gates on
+`files.iter().any(|p| p.starts_with("Drafts/"))`.
+The `files` argument is populated from the
+indexer's file list, but **the indexer doesn't
+walk Drafts/** (which lives in chan's metadata
+folder OUTSIDE the drive root, accessible via
+unified-path API but not via the on-disk drive
+walk).
+
+systacean-32 added prefix-aware
+`Drive::stat`/`exists`/`read` for Drafts — but
+NOT the indexer scan. So:
+- `/api/files?dir=Drafts` (file listing) works ✓
+  (systacean-32)
+- chan-drive indexer file list doesn't include
+  Drafts/ → graph synthesizer doesn't fire
+
+This is the **4th repetition** of the synthetic-
+Drafts data-flow gap pattern. Slices b/c/d fixed
+the FB listing + inspector + API listing paths.
+Slice e needs the indexer-side bridge.
+
+### Highlights
+
+* **SPA-side styling code is in place**: theme
+  variable, edge rendering, node tinting all
+  wired correctly. Once the indexer feeds
+  Drafts/ files into the synthesizer, the graph
+  will style them.
+* **The pattern repeats across all 5 slices**:
+  b (FB row), c (inspector), d (API listing),
+  e (graph emit) — each had a different surface
+  with a synthetic-Drafts data-flow gap, each
+  needed a targeted fix at the surface's input
+  path.
+* **Indexer-side gap is the load-bearing
+  follow-up**: without indexer-side Drafts/
+  awareness, neither the graph nor full-text
+  search will see Drafts files. The b/c/d/e
+  surface fixes are necessary but not sufficient
+  until the indexer can walk Drafts/ via the
+  unified-path read.
+
+### State at end of walk
+
+Lane-A test server torn down:
+1. chan serve killed.
+2. `rm -rf /tmp/chan-test-phase8-wa-r30/`.
+3. `chan remove` → unregistered.
+4. Chrome MCP tab closed.
+5. Drafts metadata at
+   `~/Library/Application Support/chan/drafts/c14ddf7c3a579b08`
+   + 2 others cleaned (10-min-old residue from
+   recent walks).
+
+PARTIAL. Slice e SPA styling shipped; chan-server
+synthesizer wired; but indexer-side Drafts/
+awareness needed before the graph can show
+Drafts data. The umbrella does NOT close until
+the indexer follow-up lands.
