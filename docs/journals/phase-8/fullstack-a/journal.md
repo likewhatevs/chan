@@ -2193,3 +2193,48 @@ Four-file change.
 
 Impl note at [fullstack-a-82.md](fullstack-a-82.md).
 Outbound poke fired.
+
+## 2026-05-22 — -a-78 slice 1 (Rich Prompt New Team dialog shell) ready for review
+
+Per architect's slice-friendly framing,
+splitting -a-78 into:
+* Slice 1 (this): dialog shell + button
+  repurpose + state singleton.
+* Slice 2: airplane-grid drag&drop for the
+  split-pane real-estate option.
+
+Six-file change. SPA-only.
+
+* `state/teamDialog.svelte.ts` (new): state
+  singleton + validation + resize helpers +
+  open/close bus. Mirrors spawnDialog pattern.
+* `TeamDialog.svelte` (new): dialog UI with
+  host name + team name + size + auto-prefix
+  + per-member rows + Bootstrap button.
+  Real-estate selector renders a placeholder
+  pointing at slice 2.
+* `App.svelte`: mount TeamDialog at root
+  under `{#if teamDialogState.request}`.
+* `TerminalRichPrompt.svelte`: icon-btn
+  repurposed from `watchDirectory` to
+  `openNewTeamDialog`. Dropdown entry stays
+  for now (legacy attach-watcher).
+* `teamDialog.test.ts` (new): 14 pins on
+  state + validation + resize.
+* `newTeamButton.test.ts` (new): 12 pins on
+  App root mount + Rich Prompt repurpose +
+  dialog shell + slice-2 placeholder.
+* `TerminalRichPrompt.test.ts`: existing
+  "Watch directory" test rewritten to assert
+  the New Team button opens the global
+  dialog with the right hostSessionId.
+
+### Gate
+
+* vitest **879 / 879** (+24 net from -a-82's
+  855).
+* svelte-check 0/0 across 4018 files.
+* npm build clean.
+
+Impl note at [fullstack-a-78.md](fullstack-a-78.md).
+Outbound poke fired.

@@ -22,6 +22,7 @@
   import { openInActivePane } from "../state/tabs.svelte";
   import type { TerminalSpawnResponse } from "../api/types";
   import { openSpawnDialog as openGlobalSpawnDialog } from "../state/spawnDialog.svelte";
+  import { openTeamDialog as openGlobalTeamDialog } from "../state/teamDialog.svelte";
 
   let {
     prompt,
@@ -311,6 +312,28 @@
     }
   }
 
+  /// `fullstack-a-78`: repurpose the "Watch directory" / now
+  /// "New Team" affordance to open the global TeamDialog.
+  /// The dialog's Bootstrap button hands off to `-a-79`'s
+  /// orchestrator (currently a stub — orchestrator lands in
+  /// `-a-79`); the dialog auto-closes on Bootstrap so the
+  /// Rich Prompt regains focus.
+  function openNewTeamDialog(): void {
+    menu = null;
+    openGlobalTeamDialog({
+      hostSessionId: terminalSessionId,
+      onBootstrap: (config) => {
+        // `-a-78` slice 1: log the config; orchestrator
+        // (`-a-79`) wires the actual spawn chain. Once `-a-79`
+        // lands, replace this with the orchestrator entry
+        // point.
+        // eslint-disable-next-line no-console
+        console.info("[chan] New Team bootstrap (pending -a-79):", config);
+      },
+      onSpawned: (response, agentName) => onSpawned?.(response, agentName),
+    });
+  }
+
   function openSpawnDialog(): void {
     menu = null;
     openGlobalSpawnDialog({
@@ -445,14 +468,20 @@
     >
       <Bot size={16} strokeWidth={1.75} aria-hidden="true" />
     </button>
+    <!-- `fullstack-a-78` slice 1: repurposed from "Watch directory"
+         to "New Team" per addendum-b. The watcher backend is
+         still used internally — the TeamDialog → -a-79
+         orchestrator wires watcher attachment as part of the
+         team bootstrap chain. The dropdown's "Watch directory"
+         entry stays for now (legacy attach-watcher flow); slice
+         2 may collapse it. -->
     <button
       type="button"
       class="icon-btn"
       class:on={Boolean(watcherPath)}
-      onclick={watchDirectory}
-      disabled={watcherBusy}
-      title="Watch directory"
-      aria-label="Watch directory"
+      onclick={openNewTeamDialog}
+      title="New Team"
+      aria-label="New Team"
     >
       <FolderSearch size={16} strokeWidth={1.75} aria-hidden="true" />
     </button>

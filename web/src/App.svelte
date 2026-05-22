@@ -5,6 +5,8 @@
   import ConflictModal from "./components/ConflictModal.svelte";
   import DisconnectOverlay from "./components/DisconnectOverlay.svelte";
   import SpawnDialog from "./components/SpawnDialog.svelte";
+  import TeamDialog from "./components/TeamDialog.svelte";
+  import { teamDialogState } from "./state/teamDialog.svelte";
   import FileBrowserSidePane from "./components/FileBrowserSidePane.svelte";
   import MissingTokenOverlay from "./components/MissingTokenOverlay.svelte";
   import PathPromptModal from "./components/PathPromptModal.svelte";
@@ -997,6 +999,13 @@
      a `filter` to unfocused panes; the rich prompt itself is a
      positioned z-index: 20 stacking context). -->
 <SpawnDialog />
+<!-- `fullstack-a-78`: New Team dialog mounted at App root for
+     the same stacking-context reasons as SpawnDialog. Renders
+     only when a request is pending; closes itself on
+     Bootstrap / Cancel / Escape / backdrop click. -->
+{#if teamDialogState.request}
+  <TeamDialog request={teamDialogState.request} />
+{/if}
 <!-- Disconnect overlay applies in every mode: any window is just
      as broken when the watcher dies, regardless of layout. -->
 <DisconnectOverlay />

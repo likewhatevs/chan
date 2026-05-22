@@ -6351,3 +6351,125 @@ Single bash invocation per discipline.
 
 Push held. Standing by for clearance + the
 @@WebtestA empirical re-walk.
+
+## 2026-05-22 — poke (fullstack-a-78 slice 1: New Team dialog shell ready for review)
+
+Picked up -a-78 per your suggested order
+(addendum-b wave-1; -a-81 slice 1 done; -a-78
+is the substantive dialog UX before the
+orchestrator). Per slice-friendly framing,
+splitting:
+
+* **Slice 1 (this)**: dialog shell + button
+  repurpose + state singleton + validation.
+* **Slice 2**: airplane-grid drag&drop for
+  the split-pane real-estate selector.
+
+Six-file change. SPA-only.
+
+### What landed
+
+`state/teamDialog.svelte.ts` (new) — state
+singleton + helpers:
+* `openTeamDialog` / `closeTeamDialog` /
+  `teamDialogState` (mirrors -a-4 spawnDialog).
+* `defaultTeamConfig()` (lead + 1 worker,
+  auto-prefix on, real-estate = tabs).
+* `validateTeamConfig(cfg, existingNames)` —
+  host name + team name non-empty, size in
+  [TEAM_MIN_SIZE=2, TEAM_MAX_SIZE=16],
+  exactly one lead, every member has a name,
+  team name not already taken.
+* `resizeTeamMembers(cfg)` — grow appends
+  Worker-N entries; shrink truncates from end
+  + restores lead to slot 0 if the prior
+  lead got popped.
+
+`TeamDialog.svelte` (new) — dialog UI:
+* Host name + team name + auto-prefix
+  checkbox + size slider + per-member rows
+  (icon + name + command + env + lead
+  radio).
+* Handle preview line shows `@@<name>` live
+  when auto-prefix is on.
+* Bootstrap button gates on
+  `validateTeamConfig` returning null;
+  surfaces issue inline.
+* Cancel / X / Esc / backdrop-click all
+  close.
+* Real-estate placeholder pointing at
+  slice 2.
+
+`App.svelte`: mount under `{#if teamDialogState.request}`.
+
+`TerminalRichPrompt.svelte`: icon-btn
+repurposed from `watchDirectory` →
+`openNewTeamDialog`. Dropdown "Watch
+directory" entry stays for now (legacy
+attach-watcher; slice 2 may collapse).
+
+Tests: `teamDialog.test.ts` (14 pins) +
+`newTeamButton.test.ts` (12 pins) +
+`TerminalRichPrompt.test.ts` (1 rewritten
+test).
+
+### Acceptance (slice 1)
+
+1. Button opens dialog ✓.
+2. Inputs render + validate ✓ (size 2-16,
+   exactly one lead, etc.).
+3. Auto-prefix toggle updates handles live
+   ✓.
+4. Airplane-grid — DEFERRED to slice 2.
+5. Bootstrap hands off via
+   `request.onBootstrap` callback ✓ (stub
+   logs config; -a-79 orchestrator wires
+   actual spawn).
+
+### Gate
+
+* vitest **879 / 879** (+24 net from -a-82's
+  855).
+* svelte-check 0 errors / 0 warnings across
+  4018 files.
+* npm build clean.
+* Rust gate not re-run.
+
+### Decisions
+
+* **Per-slice split** matches -a-67 / -a-66
+  / -a-81 precedent.
+* **State singleton + App root mount**
+  mirrors spawnDialog (-a-4) — escapes
+  parent stacking-context clipping.
+* **Bootstrap stub** logs config; -a-79
+  wires actual orchestration.
+* **Dropdown stays** — slice 2 may collapse.
+* **Auto-prefix off doesn't strip `@@`**
+  pre-prefixed names — rendered as-is.
+
+### Suggested commit subject
+
+```
+Rich Prompt: repurpose watcher button → New Team dialog shell (fullstack-a-78 slice 1)
+```
+
+### Files for `git add`
+
+* `web/src/state/teamDialog.svelte.ts` (new)
+* `web/src/state/teamDialog.test.ts` (new)
+* `web/src/components/TeamDialog.svelte` (new)
+* `web/src/components/newTeamButton.test.ts` (new)
+* `web/src/App.svelte`
+* `web/src/components/TerminalRichPrompt.svelte`
+* `web/src/components/TerminalRichPrompt.test.ts`
+* `docs/journals/phase-8/fullstack-a/fullstack-a-78.md`
+* `docs/journals/phase-8/fullstack-a/journal.md`
+* `docs/journals/phase-8/alex/event-fullstack-a-architect.md`
+  (this append)
+
+### Atomic-audit-commit applied
+
+Single bash invocation per discipline.
+
+Push held. Standing by for clearance.

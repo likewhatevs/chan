@@ -308,15 +308,21 @@ describe("TerminalRichPrompt", () => {
     expect(pane.tabs.some((tab) => tab.kind === "file" && tab.path === "saved-prompt.md")).toBe(true);
   });
 
-  test("Watch directory uses the path prompt and terminal watcher endpoint", async () => {
-    const setWatcher = vi.spyOn(api, "setTerminalWatcher").mockResolvedValue(undefined);
+  test("`-a-78` slice 1: New Team icon-btn opens the global team dialog", async () => {
+    // `fullstack-a-78` repurposed the icon-btn from "Watch
+    // directory" → "New Team". The dialog's bootstrap flow
+    // lives in `-a-79` (orchestrator); slice 1 just opens the
+    // dialog + hands off via the request bus.
+    const { teamDialogState, closeTeamDialog } = await import(
+      "../state/teamDialog.svelte"
+    );
+    closeTeamDialog();
     const prompt: TerminalRichPromptState = {
       buffer: "",
       heightPx: 320,
       open: true,
       mode: "source",
     };
-    const onWatcherStarted = vi.fn();
     installPointerCaptureStubs();
     const target = document.createElement("div");
     Object.assign(target.style, { position: "relative", height: "500px" });
@@ -329,23 +335,17 @@ describe("TerminalRichPrompt", () => {
         onClose: vi.fn(),
         terminalSessionId: "term_123",
         watcherPath: null,
-        onWatcherStarted,
+        onWatcherStarted: vi.fn(),
       },
     });
     mounted.push(component);
     await tick();
 
-    button(target, "Watch directory").click();
+    button(target, "New Team").click();
     await tick();
-    expect(pathPromptState.open).toBe(true);
-    expect(pathPromptState.kind).toBe("folder");
-    expect(pathPromptState.allowAbsolute).toBe(true);
-
-    resolvePathPrompt("/tmp/events");
-    await waitFor(() => onWatcherStarted.mock.calls.length === 1);
-
-    expect(setWatcher).toHaveBeenCalledWith("term_123", "/tmp/events");
-    expect(onWatcherStarted).toHaveBeenCalledWith("/tmp/events");
+    expect(teamDialogState.request).not.toBeNull();
+    expect(teamDialogState.request?.hostSessionId).toBe("term_123");
+    closeTeamDialog();
   });
 
   test("Spawn agent opens dialog and posts terminal control request", async () => {
