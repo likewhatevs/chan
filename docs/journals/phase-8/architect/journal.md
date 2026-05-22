@@ -4801,3 +4801,72 @@ confirmed.
 | `architect/journal.md` | This entry |
 | `alex/event-architect-fullstack-a.md` | -a-52 gate-contingent clearance |
 | `alex/event-architect-webtest-a.md` | proactive -a-55 walk ack + webtest-a-6 scope refinement |
+
+## 2026-05-22 — URGENT: systacean-21 cut for cache-bust mitigation (poke literal causing rate-limit blast)
+
+### Empirical cache-bust confirmation from @@Alex
+
+@@Alex 2026-05-22 confirmed empirically that bare `poke`
+is the root cause of the rate-limit / HTTP 500 pattern
+that's been blocking lanes daily over the past 3 days.
+
+All four lanes (@@FullStackA, @@FullStackB, @@Systacean,
+@@CI) were INSTA-rate-limited on bare `poke` today
+(screenshot at chat time captures it explicitly). The
+same agents prompted with non-bare alternatives:
+
+* "aloha amigo, it's time.. check your tasks and execute"
+* "oi, it's 5:35, check your tasks and execute"
+* "hey it's 5:35, check your tasks and execute"
+
+woke up cleanly. Different cache keys → different
+inference paths → no rate limit. **Hypothesis confirmed
+unambiguously.**
+
+### systacean-21 cut + routed AHEAD of -12
+
+`-12` (tauri-plugin-updater verify) is parked on @@Alex's
+permission re-grant per `955ada1`. `-21` jumps the queue
+because:
+
+* It's operational (the rate-limit blast radius is
+  blocking the entire multi-agent workflow daily).
+* It doesn't need any interactive permission.
+* It reduces the rate-limit surface for @@Systacean
+  themselves (and all other lanes).
+
+### Scope
+
+* `crates/chan-server/src/event_watcher.rs`: extend
+  `AgentEvent` with `path: Option<String>` +
+  `heading: Option<String>` (backward-compat).
+* `crates/chan-server/src/terminal_sessions.rs`:
+  `dispatch_agent_event` formats rich template when
+  both fields present; falls back to bare `b"poke"`
+  otherwise.
+* 3 new tests.
+
+### Chicken-and-egg note
+
+@@Systacean can't pick up `-21` via a bare-poke
+notification (they're rate-limited on the same
+pattern). @@Alex bootstraps each agent's wake via
+non-bare prompts directly until `-21` lands. Then the
+multi-agent dispatch loop self-heals.
+
+### Lane state
+
+| Lane | State |
+|------|-------|
+| @@Systacean | -21 dispatched (URGENT); -12 parked on permission |
+| @@CI | Idle |
+| @@FullStackA | -a-52 gate-contingent in worktree |
+| Others | Idle |
+
+### What I'm committing this round
+
+| File | Reason |
+|------|--------|
+| `architect/journal.md` | This entry |
+| `alex/event-architect-systacean.md` | -21 URGENT dispatch poke |
+| `systacean/systacean-21.md` | NEW task (enrich poke echo for cache-bust) |

@@ -2942,3 +2942,73 @@ cross-pollination ask, the queue picks back up.
 Otherwise standing down cleanly is the move.
 
 Standing by.
+
+## 2026-05-22 — URGENT poke (systacean-21: enrich poke echo for cache-bust — operational mitigation; AHEAD of -12)
+
+Cut [`../systacean/systacean-21.md`](../systacean/systacean-21.md)
+ahead of `-12` (which is gated on @@Alex's permission
+re-grant per your `955ada1`). Pick `-21` up FIRST.
+
+### Why urgent — empirical cache-bust confirmation
+
+@@Alex 2026-05-22 confirmed empirically: bare `poke` is
+hitting Anthropic's prompt-cache + landing on
+rate-limit / HTTP 500 paths. All four agents
+(FullStackA, FullStackB, Systacean, CI) were
+INSTA-rate-limited on bare `poke` today. The same agents
+prompted with non-bare alternatives ("aloha amigo, it's
+time..", "oi, it's 5:35..", "hey it's 5:35..") woke up
+cleanly. Different cache keys → different inference
+paths → no rate limit.
+
+The fix is `-21`: enrich `dispatch_agent_event`'s output
+with a wall-clock timestamp + task path + heading
+anchor. Every poke becomes a unique input → cache miss
+guaranteed → rate-limit blast radius collapses.
+
+### Chicken-and-egg note
+
+YOU can't normally pick up `-21` via a bare-poke
+notification because you're hitting the same rate-limit
+pattern. @@Alex is bootstrapping each agent's wake via
+non-bare prompts directly until this ships. Once `-21`
+lands + future pokes carry the rich template, the
+multi-agent dispatch loop self-heals.
+
+### Scope (full detail in -21 task body)
+
+* `crates/chan-server/src/event_watcher.rs`: add
+  `path: Option<String>` + `heading: Option<String>` to
+  `AgentEvent`. Backward-compat (serde-skip-when-None).
+* `crates/chan-server/src/terminal_sessions.rs`:
+  `dispatch_agent_event` formats
+  `Poke, it's <weekday>, <day> <month> at <HH:MM>. Check your task at <path>#<heading> and execute.`
+  when both `path` + `heading` are Some; fallback to
+  bare `b"poke"` otherwise (legacy + survey types).
+* 3 new tests (rich template emitted; legacy fallback;
+  schema round-trip).
+
+### Authorization
+
+**Yes** for the chan-server source + a timestamp dep
+addition if needed (audit dep graph first; chrono /
+time may already be transitive). Standing
+atomic-audit-commit discipline.
+
+### Queue
+
+```
+-21 (this task — URGENT; operational cache-bust)
+-12 (parked on @@Alex permission per 955ada1)
+```
+
+`-21` first; `-12` rides whenever @@Alex grants the
+permission. Don't wait on `-12`.
+
+### Smoke
+
+Standard `systacean-21-smoke` branch + `gh workflow run
+ci.yml`. Expected green across Ubuntu + macOS (per
+`ci-13` Windows-out scope).
+
+Standing by for commit-readiness.

@@ -726,6 +726,11 @@
     Poke, it's {Fri, 22 May at 05:31}. Check your task at {path}#{heading} and execute.\n
     ```
   - **PRIMARY MOTIVATION (load-bearing)** — @@Alex 2026-05-22: the bare `poke` literal appears to be triggering Anthropic's prompt-cache hit / rate-limit / HTTP 500 pattern. Identical input repeated across multiple agent sessions hits the same cache key + appears to land on capacity-constrained paths. By including a wall-clock timestamp + a unique task-path + heading anchor per poke, EACH poke becomes a unique input — guaranteed cache-miss on Anthropic's side → fresh evaluation → reduces the rate-limit / 500 surface that @@Alex has been hitting daily over the past 3 days at this time of day (see also: webtest-a's stalled session in the screenshot earlier this session)
+  - **EMPIRICAL CONFIRMATION 2026-05-22** — @@Alex tested the hypothesis directly. All four agents (FullStackA, FullStackB, Systacean, CI) were INSTA-RATE-LIMITED on bare `poke`. The exact same agents, prompted with non-bare alternatives, woke up cleanly:
+    - "aloha amigo, it's time.. check your tasks and execute" → wake
+    - "oi, it's 5:35, check your tasks and execute" → wake
+    - "hey it's 5:35, check your tasks and execute" → wake
+    The pattern is reproducible + unambiguous. The cache-bust hypothesis is confirmed. Chicken-and-egg note: agents can't pick up `-21` itself via bare poke since they're rate-limited; @@Alex bootstraps via non-bare prompts until `-21` ships
   - secondary benefit: gives the agent immediate context (no grep for "what task am I supposed to work on")
   - today's behaviour (`crates/chan-server/src/terminal_sessions.rs:525-549`):
     - `dispatch_agent_event` writes literal `b"poke"` + the per-session submit chord (`\n` for shell mode; `\x1b[27;9;13~` for agent mode per `-b-13`).
