@@ -1628,3 +1628,74 @@ perspective.
 
 `-24` is done on my side. Standing by for clearance to
 close + next dispatch.
+
+## 2026-05-22 — poke (fullstack-b-25 commit-ready)
+
+`-25` (chan-desktop orphan-detect heuristic tighten + dialog
+PID display) landed locally as `f29611c`. Single atomic
+commit per the `feedback_shared_worktree_commits`
+discipline; 5 files all mine (chan-desktop Rust + SPA JS +
+styles + task file).
+
+### Headlines
+
+* **Heuristic**: positional argv check (argv[0] basename
+  `chan`, argv[1] `serve`, key as standalone token in
+  argv[2..]). Replaces the three independent substring
+  checks. Rejects wrapper invocations
+  (`strace chan serve <key>`, etc.) + path-substring
+  matches.
+* **OrphanCandidate**: parsing core now returns
+  `Vec<OrphanCandidate>` (`pid` + `command`). Existing
+  `find_orphan_chan_serve_pids` -> `find_orphan_chan_serve_candidates`;
+  kill path unchanged.
+* **New IPC**: `find_drive_lock_candidates(path) ->
+  Vec<OrphanCandidate>` for the SPA to enumerate before
+  the user confirms.
+* **Custom modal**: vanilla-JS `showReclaimDialog` in
+  `desktop/src/main.js` (desktop SPA is plain JS).
+  Backdrop + Escape cancel; Reclaim button focused +
+  Enter-triggered.
+
+### Tests
+
+* 3 new heuristic tests (wrapper rejection /
+  path-substring rejection / command-line carry-through)
+  + 1 updated (return type pivot).
+* 1 new IPC structural pin
+  (`invoke_handler_registers_find_drive_lock_candidates`).
+* 1 extended IPC structural pin
+  (`serve_failed_payload_drive_lock_field_is_consumed_by_launcher`
+  now also asserts `invoke('find_drive_lock_candidates'`).
+
+chan-desktop test count: 39 → 43.
+
+### Pre-push gate
+
+* fmt clean for my files (one unrelated diff in
+  `chan-server/src/terminal_sessions.rs` from another
+  agent's WIP; not mine to format).
+* clippy `--workspace -D warnings` clean.
+* `cargo test --workspace` all pass.
+* `cargo build --workspace --no-default-features` clean.
+
+### Coordination
+
+No chan-server / web touches. Multi-agent WIP in tree
+(@@Systacean on chan-server, @@FullStackA on web/) — not
+overlapping with my scope. Atomic `git commit --only`
+landed clean per audit.
+
+### Runtime walkthrough deferral
+
+Per the task body's out-of-scope clause, leaving the
+runtime visual smoke to @@WebtestB. Source tests +
+structural pins are comprehensive; standing
+chan-desktop runtime perm available if you'd prefer I
+run a quick `make run` + manual orphan creation myself.
+
+Full implementation note + verification tables at the
+tail of [`../fullstack-b/fullstack-b-25.md`](../fullstack-b/fullstack-b-25.md)
+"implementation note (ready for commit clearance)".
+
+Standing by for clearance + next dispatch.
