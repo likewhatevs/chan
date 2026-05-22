@@ -48,10 +48,9 @@ use auth::{auth_middleware, load_or_create_token};
 use bus::{make_progress_broadcast, make_watch_bridge};
 use routes::{
     api_backlinks, api_build_info, api_cloud_drives, api_create_draft, api_create_file,
-    api_create_terminal,
-    api_delete_file, api_delete_session, api_delete_terminal, api_fs_graph, api_get_config,
-    api_get_contacts, api_get_drive, api_get_server_config, api_get_session, api_graph,
-    api_headings, api_health, api_index_rebuild, api_index_status, api_indexing_state,
+    api_create_terminal, api_delete_file, api_delete_session, api_delete_terminal, api_fs_graph,
+    api_get_config, api_get_contacts, api_get_drive, api_get_server_config, api_get_session,
+    api_graph, api_headings, api_health, api_index_rebuild, api_index_status, api_indexing_state,
     api_inspector, api_language_graph, api_link_targets, api_links, api_list_files,
     api_list_sessions, api_move, api_patch_config, api_patch_drive, api_patch_server_config,
     api_post_attachment, api_post_contacts_import, api_put_session, api_read_file, api_report_dir,

@@ -5083,12 +5083,12 @@ mod tests {
         // boot() is idempotent + safe to call after enabling.
         drive.boot().unwrap();
         drive.boot().unwrap(); // re-call no-op
-        // Confirm the report state was initialized (the persisted
-        // jsonl now exists after boot's initial scan + flush).
-        // Best-effort assert: the writer thread flushes async so
-        // give it a small window. The flag persistence + boot
-        // call returning Ok are the load-bearing invariants;
-        // visible jsonl is the operational consequence.
+                               // Confirm the report state was initialized (the persisted
+                               // jsonl now exists after boot's initial scan + flush).
+                               // Best-effort assert: the writer thread flushes async so
+                               // give it a small window. The flag persistence + boot
+                               // call returning Ok are the load-bearing invariants;
+                               // visible jsonl is the operational consequence.
         for _ in 0..50 {
             if drive.paths().report.exists() {
                 break;

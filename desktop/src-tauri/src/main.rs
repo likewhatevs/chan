@@ -446,13 +446,14 @@ fn get_config(state: State<Arc<AppState>>) -> Result<Config, String> {
 /// until `systacean-27` ships the chan-drive config API; `-b-28b`
 /// will swap the body without changing the IPC contract.
 #[tauri::command]
-fn get_drive_features(
-    state: State<Arc<AppState>>,
-    path: String,
-) -> Result<DriveFeatures, String> {
+fn get_drive_features(state: State<Arc<AppState>>, path: String) -> Result<DriveFeatures, String> {
     let key = canonical_key(Path::new(&path));
     let cfg = state.store.lock().unwrap().get().map_err(err)?;
-    Ok(cfg.sidecar.get(&key).map(|s| s.features).unwrap_or_default())
+    Ok(cfg
+        .sidecar
+        .get(&key)
+        .map(|s| s.features)
+        .unwrap_or_default())
 }
 
 /// `fullstack-b-28a`: write the feature toggle pair for a drive.

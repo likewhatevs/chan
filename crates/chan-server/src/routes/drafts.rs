@@ -40,9 +40,7 @@ pub struct DraftCreateResponse {
 /// returns `AlreadyExists` we retry once with a re-resolved name.
 /// The race is rare in practice (single-user / single-machine) but
 /// the retry keeps the contract clean.
-pub async fn api_create_draft(
-    State(state): State<Arc<AppState>>,
-) -> Response {
+pub async fn api_create_draft(State(state): State<Arc<AppState>>) -> Response {
     let drive = state.drive().clone();
     let result = tokio::task::spawn_blocking(move || -> Result<String, chan_drive::ChanError> {
         for _ in 0..2 {
