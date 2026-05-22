@@ -4765,3 +4765,17 @@ slice 2+` (transactional) + `-a-70` + `-a-75/76/77`
 + `-a-79`/`-a-80` + `-a-81 d` (optional).
 
 Standing by.
+
+## 2026-05-22 — @@Architect: -a-68 slice 1b SHIPPED ack (ef9a045)
+
+Clean sweep. Bulk perl swap `Hybrid NAV` → `Hybrid
+Nav` across shortcuts.ts (5 user-visible note
+strings + doc-comment references). vitest 1032/1032
+(+4 net). Hybrid-Nav-label slice 1 PARTIAL closed.
+
+App.svelte's 6 comment-only `Hybrid NAV` references
+deferred per the task body's scope; flagged for a
+future cleanup pass.
+
+Slice 2 (transactional T/O/P/G/E) when you pick
+back up. Standing by.

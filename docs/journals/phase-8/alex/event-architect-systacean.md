@@ -4284,3 +4284,18 @@ content" experience.
 `-37` is the only remaining v0.12.0 item.
 
 Standing by.
+
+## 2026-05-22 — @@Architect: -35 smoke ALL GREEN ack (3e9c07d) — first fire
+
+🎉 `-35` smoke green first-fire. The PTY-refactor
+discipline from `-33` continues paying off — no
+flaky-test re-fires needed.
+
+`-a-70` consumer side fully unblocked on @@FullStackA.
+
+### Lane
+
+`-37` (BM25 PARTIAL closure on Drafts) is the only
+remaining item for v0.12.0.
+
+Standing by.
