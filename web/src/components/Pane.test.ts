@@ -126,12 +126,14 @@ describe("Pane right-click menus", () => {
     // the colour swatches.
     // fullstack-62: user-facing label flipped from "Pane Mode" to
     // "Hybrid NAV"; the internal `paneMode*` symbols stay.
-    // `fullstack-a-32`: four first-class spawn entries land at the
-    // top of the hamburger menu (Terminal / File Browser / Rich
-    // Prompt / Graph), separator, then Enter Hybrid NAV + focus-
-    // border palette. Same set + ordering as the empty-pane right-
-    // click menu and the carousel slide 1.
+    // `fullstack-a-32` + `fullstack-a-67` slice 2: five first-
+    // class spawn entries (New Draft / Terminal / File Browser /
+    // Rich Prompt / Graph) land at the top of the hamburger,
+    // separator, then Enter Hybrid NAV + focus-border palette.
+    // Same set + ordering as the empty-pane right-click menu
+    // and the carousel slide 1.
     expect(menuLabels()).toEqual([
+      "New Draft",
       "Terminal",
       "File Browser",
       "Rich Prompt",
@@ -191,11 +193,13 @@ describe("Pane right-click menus", () => {
     );
     await tick();
 
-    // `fullstack-a-32`: spawn set unified. Four first-class entries
-    // (Terminal / File Browser / Rich Prompt / Graph), separator,
-    // then extras (Search), then Settings. Same set + ordering as
-    // the pane hamburger and the carousel slide 1.
+    // `fullstack-a-32` + `fullstack-a-67` slice 2: spawn set
+    // unified across 5 entries (New Draft / Terminal / File
+    // Browser / Rich Prompt / Graph), separator, then extras
+    // (Search), then Settings. Same set + ordering as the
+    // pane hamburger and the carousel slide 1.
     expect(menuLabels()).toEqual([
+      "New Draft",
       "Terminal",
       "File Browser",
       "Rich Prompt",

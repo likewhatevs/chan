@@ -8117,3 +8117,104 @@ Single bash invocation per discipline.
 
 Push held. Standing by for clearance + the
 @@Systacean chan-server-side landing.
+
+## 2026-05-22 — poke (fullstack-a-67 slice 2: Hybrid hamburger New Draft ready for review)
+
+Four-file change. SPA-only.
+
+### What landed
+
+`Pane.svelte` `spawnActions`:
+* New Draft entry at slot 0
+  (`app.draft.new`).
+* FilePlus icon import added.
+* Shared array → empty-pane right-click +
+  pane hamburger + carousel slide 1 all
+  gain New Draft simultaneously.
+
+`App.svelte` `runCommand`:
+* Routes `app.draft.new` →
+  `createDraftAndOpen()`. Same handler the
+  Cmd+N chord uses; menu click + future
+  native menu all converge.
+
+`Pane.test.ts`: 2 spawn-list expectations
+updated to include "New Draft" at slot 0.
+
+`hybridHamburgerNewDraft.test.ts` (new):
+6 raw-source pins.
+
+### Decision flagged for @@Alex review
+
+Addendum-a Hybrid hamburger spec lists 4
+spawn entries (New Draft / Terminal / Rich
+Prompt / Graph) — NO File Browser. My
+implementation keeps FB in the array (5
+entries total). The array is shared across
+three surfaces; removing FB from JUST the
+Hybrid hamburger needs separate arrays.
+
+If FB-removal-from-Hybrid is load-bearing,
+split into HYBRID_HAMBURGER_ACTIONS +
+EMPTY_PANE_ACTIONS in a follow-up. The
+5-entry shape reads cleaner cross-surface.
+
+### Acceptance (slice 2 — Hybrid hamburger only)
+
+1. Hybrid hamburger shows New Draft first
+   ✓.
+2. Cmd+N + native menu still work ✓
+   (shared handler).
+3. Empty-pane right-click + carousel slide
+   1 also get New Draft ✓.
+
+### Remaining `-a-67` surfaces
+
+| Slice | Surface | Status |
+|-------|---------|--------|
+| 1 | Graph hamburger header | ✓ |
+| 1b | Graph header click → inspector | ✓ |
+| 2 | Hybrid (global) — this | ✓ |
+| 3 | Terminal hamburger | TODO |
+| 4 | File Browser hamburger | TODO |
+| 5 | Editor hamburger | TODO |
+
+### Gate
+
+* vitest **1026 / 1026** (+7 net from -a-92's
+  1019).
+* svelte-check 0 errors / 0 warnings across
+  4037 files.
+* npm build clean.
+
+### Decisions
+
+* **Keep FB in Hybrid hamburger** — shared
+  array; spec deviation flagged above.
+* **Shared `createDraftAndOpen` handler** —
+  chord + menu + native menu converge.
+* **Bundled Pane.test.ts updates** — same
+  commit as the shape change.
+
+### Suggested commit subject
+
+```
+Hybrid hamburger: add New Draft as first spawn entry (fullstack-a-67 slice 2)
+```
+
+### Files for `git add`
+
+* `web/src/components/Pane.svelte`
+* `web/src/App.svelte`
+* `web/src/components/Pane.test.ts`
+* `web/src/components/hybridHamburgerNewDraft.test.ts` (new)
+* `docs/journals/phase-8/fullstack-a/fullstack-a-67.md`
+* `docs/journals/phase-8/fullstack-a/journal.md`
+* `docs/journals/phase-8/alex/event-fullstack-a-architect.md`
+  (this append)
+
+### Atomic-audit-commit applied
+
+Single bash invocation per discipline.
+
+Push held. Standing by for clearance.

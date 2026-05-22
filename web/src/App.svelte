@@ -797,6 +797,14 @@
       case "app.terminal.richPrompt":
         spawnRichPromptFromContext();
         return;
+      // `fullstack-a-67` slice 2: New Draft is now a hamburger
+      // menu entry too. Route the command through
+      // `createDraftAndOpen` so the menu + the Cmd+N chord +
+      // chan-desktop's native menu all converge on a single
+      // handler.
+      case "app.draft.new":
+        void createDraftAndOpen();
+        return;
       case "app.pane.next":
         selectNextPane();
         return;

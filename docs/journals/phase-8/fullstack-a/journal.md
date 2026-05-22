@@ -2798,3 +2798,50 @@ payload_b64: base64(bytes) }`.
 
 Impl note at [fullstack-a-92.md](fullstack-a-92.md).
 Outbound poke + scope-poke fired.
+
+## 2026-05-22 — -a-67 slice 2 (Hybrid hamburger New Draft) ready for review
+
+Four-file change. SPA-only.
+
+* `Pane.svelte` `spawnActions`: New Draft
+  entry at slot 0 (Cmd+N); FilePlus icon
+  import.
+* `App.svelte` `runCommand`: route
+  `app.draft.new` → `createDraftAndOpen()`.
+  Cmd+N chord + menu click + future native
+  menu all converge on the same handler.
+* `Pane.test.ts`: 2 spawn-list expectations
+  updated to include New Draft.
+* `hybridHamburgerNewDraft.test.ts` (new):
+  6 raw-source pins.
+
+Shared `spawnActions` array means the
+empty-pane right-click + the carousel slide
+1 also gain New Draft simultaneously.
+
+### Deviation flagged
+
+Addendum-a spec for Hybrid hamburger lists
+only 4 spawn entries (New Draft / Terminal /
+Rich Prompt / Graph) — no File Browser. My
+implementation keeps FB as the 5th entry
+since the shared `spawnActions` array
+covers three surfaces. If FB removal from
+Hybrid is load-bearing, split into separate
+arrays in a follow-up.
+
+### Gate
+
+* vitest **1026 / 1026** (+7 net from -a-92's
+  1019).
+* svelte-check 0/0 across 4037 files.
+* npm build clean.
+
+Impl note at [fullstack-a-67.md](fullstack-a-67.md)
+"## 2026-05-22 — slice 2". Outbound poke
+fired.
+
+`-a-67` slice progress: 1 ✓ Graph, 1b ✓
+Graph header click, 2 ✓ (this) Hybrid
+hamburger. Remaining: Terminal (3), FB (4),
+Editor (5).

@@ -36,6 +36,7 @@
   import {
     Bug,
     Check,
+    FilePlus,
     FileText,
     FlipHorizontal2,
     Folder,
@@ -162,6 +163,18 @@
   // Anything else (Search etc.) lives below the separator inside
   // each menu surface — these four are the first-class spawn set.
   const spawnActions: EmptyMenuRow[] = [
+    // `fullstack-a-67` slice 2: addendum-a Hybrid hamburger spec
+    // adds New Draft as the first spawn surface (Cmd+N opens a
+    // fresh `Drafts/untitled-N/draft.md` per `-a-66 slice a`).
+    // Shared across the empty-pane right-click + the pane
+    // hamburger + the empty-pane carousel slide 1 so all three
+    // surfaces gain the same affordance.
+    {
+      label: "New Draft",
+      icon: FilePlus,
+      command: "app.draft.new",
+      chordId: "app.draft.new",
+    },
     {
       label: "Terminal",
       icon: Terminal,

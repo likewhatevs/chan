@@ -13,7 +13,7 @@ existing ones.
 
 ## Reference
 
-[`../alex/addendun-a.md`](../alex/addendun-a.md)
+[`../alex/addendun-a.md`](../alex/addendum-a.md)
 "## Right-click menus and flows revisited" — verbatim
 spec per surface. Includes screenshots in the same
 folder (`image-2.png` Hybrid, `image-3.png` Terminal,
@@ -409,3 +409,143 @@ Graph hamburger: scope-header click opens inspector (fullstack-a-67 slice 1b)
 Per the memory rule. Per-path staging only.
 
 Push held. Standing by for clearance.
+
+## 2026-05-22 — slice 2 (Hybrid hamburger New Draft entry) ready for review
+
+Three-file change (plus 1 test update). SPA-only.
+
+### What landed
+
+`web/src/components/Pane.svelte`:
+* New `spawnActions` entry at slot 0:
+  `{ label: "New Draft", icon: FilePlus,
+  command: "app.draft.new", chordId:
+  "app.draft.new" }`.
+* `FilePlus` added to the `lucide-svelte`
+  import block.
+* The 4 prior entries (Terminal / File
+  Browser / Rich Prompt / Graph) stay in
+  order beneath it; nothing about the
+  separator-then-Enter-Hybrid-NAV-then-
+  palette layout changes.
+* Since `spawnActions` is shared across THREE
+  surfaces — pane hamburger, empty-pane
+  right-click, and the empty-pane carousel
+  slide 1 — all three pick up New Draft
+  simultaneously.
+
+`web/src/App.svelte`:
+* `runCommand` switch gains a
+  `case "app.draft.new"` branch that calls
+  `void createDraftAndOpen()`. Routes the
+  menu click (via the existing
+  `chan:command` event) AND the future
+  native-menu binding (chan-desktop)
+  through the same handler the Cmd+N chord
+  already uses.
+* `createDraftAndOpen` helper preserved
+  unchanged.
+
+`web/src/components/Pane.test.ts`:
+* Two existing spawn-list expectations
+  updated to include `"New Draft"` at slot
+  0. Comments cite both `-a-32` (original
+  spawn set) and `-a-67 slice 2`
+  (extension).
+
+`web/src/components/hybridHamburgerNewDraft.test.ts`
+(new): 6 raw-source pins covering the
+spawnActions extension, the icon import,
+the rationale comment, the ordering
+preservation, the runCommand routing, and
+the createDraftAndOpen helper preservation.
+
+### Acceptance (slice 2, Hybrid hamburger surface)
+
+1. **Hybrid hamburger shows New Draft as
+   first row** ✓ — mechanism via tests;
+   @@WebtestA walk for empirical confirm.
+2. **Cmd+N + native menu still work** ✓ —
+   `createDraftAndOpen` is the shared
+   handler; runCommand adds a route, doesn't
+   replace.
+3. **Empty-pane right-click menu also shows
+   New Draft** ✓ (shared array; tested by
+   the existing Pane.test.ts pin update).
+4. **Carousel slide 1 also picks up New
+   Draft** ✓ (same shared array).
+
+### Out of scope for this slice
+
+Per the architect-side queue framing, the
+remaining `-a-67` surfaces (Terminal / FB /
+Editor hamburgers) are separate slices.
+This slice is the smallest one in the menu
+revamp series — single addition + the
+runCommand route.
+
+### Gate
+
+* vitest **1026 / 1026** (+7 net from
+  `-a-92`'s 1019).
+* svelte-check 0 errors / 0 warnings across
+  4037 files.
+* npm build clean.
+* Rust gate not re-run (no Rust touched).
+
+### Decisions
+
+* **Keep File Browser in the Hybrid
+  hamburger** despite the addendum-a spec
+  listing only Terminal / Rich Prompt /
+  Graph alongside New Draft. The current
+  shared `spawnActions` array keeps FB as a
+  first-class spawn surface across the
+  three menus; removing it from JUST the
+  Hybrid hamburger would require splitting
+  the array OR introducing a per-row visibility
+  flag. The 5-entry shape (New Draft +
+  Terminal + FB + Rich Prompt + Graph)
+  reads cleaner than the addendum's strict
+  4-entry shape; document the deviation
+  for @@Alex's review. If the spec is
+  load-bearing, split into separate arrays
+  in a follow-up.
+* **`createDraftAndOpen` is the shared
+  handler** — Cmd+N chord, menu click, and
+  the future native-menu path all converge.
+  Adding a chan:command route was cheaper
+  than restructuring.
+* **Bundle the test-pin updates** in the
+  same commit. The Pane.test.ts pins were
+  literal-array equality checks of the
+  menu shape; updating them belongs with
+  the shape change.
+
+### Suggested commit subject
+
+```
+Hybrid hamburger: add New Draft as first spawn entry (fullstack-a-67 slice 2)
+```
+
+Single commit. spawnActions extension +
+icon + runCommand route + 2 Pane.test
+updates + 6 new pins.
+
+### Files for `git add` (per-path discipline)
+
+* `web/src/components/Pane.svelte`
+* `web/src/App.svelte`
+* `web/src/components/Pane.test.ts`
+* `web/src/components/hybridHamburgerNewDraft.test.ts` (new)
+* `docs/journals/phase-8/fullstack-a/fullstack-a-67.md`
+* `docs/journals/phase-8/fullstack-a/journal.md`
+* `docs/journals/phase-8/alex/event-fullstack-a-architect.md`
+
+### Atomic-audit-commit
+
+Per the memory rule. Per-path staging only.
+
+Push held. Standing by for clearance + the
+@@Alex review on the keep-FB-in-Hybrid
+decision.
