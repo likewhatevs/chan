@@ -2808,3 +2808,48 @@ chan-drive + chan-server: Drafts watcher + indexer + graph route synthesis (syst
 ### Holding for smoke
 
 Proceeding to commit + push + smoke per the standing atomic-audit-commit pattern. Will surface smoke verdict.
+
+## 2026-05-22 — poke (-25 smoke ALL GREEN; Drafts integration live)
+
+`-25` smoke [`26282935123`](https://github.com/fiorix/chan/actions/runs/26282935123) ALL GREEN including macOS:
+
+| Job | Result |
+|-----|--------|
+| rustfmt | ✓ 17s |
+| web | ✓ 2m41s |
+| build no-default-features | ✓ 6m46s |
+| **clippy + test (macos-latest)** | **✓ 6m17s** ← drafts indexer test passed |
+| clippy + test (ubuntu-latest) | ✓ 10m18s |
+
+### What's live on main
+
+The full Drafts cascade (`-24` foundation + `-25` integration) is now landed:
+
+* `Drive::drafts_dir() / create_draft_dir / list_drafts / promote_draft` — filesystem primitive.
+* `WatchHandle::start(&[WatchRoot], cb)` — multi-root watcher with per-event origin tagging.
+* `Drive::index_draft_file(rel)` — drafts-aware indexer entrypoint.
+* `synthesize_drafts_layer` (chan-server) — Drafts root Directory node + `kind: "drafts_link"` edge.
+* End-to-end: drafts content participates in search + graph via the unified `Drafts/<name>/...` keyspace per the routed (1.i) decision; SPA distinguishes the special edge per the routed (3.iii) decision.
+
+### SPA consumer unblocked
+
+`fullstack-a-66` can now:
+
+* Call `POST /api/...create_draft_dir` (or whatever route surface is decided) to spawn `untitled-N/` on Cmd+N.
+* Render `Drafts` as the FB's first folder with the yellow color treatment per `addendun-a.md`.
+* Read the graph view's `kind: "drafts_link"` edge attribute to style the Drafts root differently.
+* Use `Drive::promote_draft(name, target)` when the user moves a draft into the drive (atomic via `fs::rename`).
+
+### Lane state
+
+| Task | State |
+|------|-------|
+| -25 | ✓ shipped + smoke-validated (this) |
+| -24 | ✓ foundation shipped |
+| -23 | ✓ shipped (macOS indexer flake fix) |
+| -22 | ✓ shipped (contact filter + bucket emit) |
+| -21 | ✓ shipped (cache-bust enrich-poke) |
+| -12 | ✓ macOS happy-path shipped |
+| All prior | ✓ shipped |
+
+Lane fully idle post-`-25`. Standing by for new dispatches. Smoke branches preserved per `feedback_destructive_cleanups_coordinate_with_docs`.
