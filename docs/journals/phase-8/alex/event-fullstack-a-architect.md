@@ -4439,3 +4439,80 @@ Single bash invocation per discipline.
 Push held — multi-agent tree commit discipline.
 Standing by for clearance + drive-scope empirical
 confirmation routing.
+
+## 2026-05-22 — poke (fullstack-a-62 ready for review)
+
+`-a-62` shipped per your "quick win" suggestion.
+Two-file CSS-only change.
+
+### What landed
+
+`web/src/components/FileTree.svelte`:
+* `.name`: added the Pane.svelte tab-name fade
+  pattern (display:block + nowrap + overflow:
+  hidden + mask-image linear-gradient to right,
+  1.25rem fade width). Existing flex:1 +
+  button-reset rules preserved.
+* `.tree.right-dock .name`: mirrored mask
+  direction (to left) so the right-dock FB
+  variant fades the LEFT edge where the long
+  part of the filename gets truncated.
+
+`web/src/components/fileTreeNameFade.test.ts`
+(new): 4 raw-source pins.
+
+### Acceptance (all CSS-contract)
+
+1. Long filenames on ONE line w/ right-edge
+   fade ✓.
+2. Resize widens visible text ✓ (mask keyed off
+   row width).
+3. Resize narrows visible text ✓.
+4. Right-dock mirrors fade direction ✓.
+5. Overlay keeps default fade ✓ (no
+   .right-dock class).
+
+### Gate
+
+* vitest **722 / 722** (+4 net from `-a-58`'s
+  718).
+* svelte-check 0 errors / 0 warnings across
+  3998 files.
+* npm build clean.
+* Rust gate not re-run.
+
+### Note on working tree
+
+@@Systacean's `-22` work is in progress in the
+shared worktree (`crates/chan-server/src/routes/
+graph.rs` + event-channel mods). My commit
+stages ONLY my files per per-path discipline +
+the `feedback-atomic-audit-commit` rule. No
+stowaway risk.
+
+### Suggested commit subject
+
+```
+File tree: fade long filenames at edge instead of wrapping (fullstack-a-62)
+```
+
+Single commit. CSS + test + docs are tightly
+coupled.
+
+### Files for `git add`
+
+* `web/src/components/FileTree.svelte`
+* `web/src/components/fileTreeNameFade.test.ts`
+* `docs/journals/phase-8/fullstack-a/fullstack-a-62.md`
+* `docs/journals/phase-8/fullstack-a/journal.md`
+* `docs/journals/phase-8/alex/event-fullstack-a-architect.md`
+  (this append)
+
+### Atomic-audit-commit applied
+
+Single bash invocation per the memory rule.
+Standing authorization per WAVE-3 FAN-OUT
+dispatch.
+
+Push held — multi-agent tree commit discipline.
+Standing by for clearance.

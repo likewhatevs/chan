@@ -1045,6 +1045,18 @@
     flex: 1;
     color: inherit;
     font: inherit;
+    /* `fullstack-a-62`: fade long filenames at the edge instead of
+       wrapping to a second line. Same pattern as Pane.svelte's
+       tab-name mask: keep `nowrap` + `overflow: hidden` so the row
+       stays one line, then apply a linear-gradient mask that fades
+       the last 1.25rem of width to transparent. Mask is keyed off
+       the row's own width so FB column resize automatically widens
+       or narrows the visible portion. */
+    display: block;
+    white-space: nowrap;
+    overflow: hidden;
+    mask-image: linear-gradient(to right, black calc(100% - 1.25rem), transparent);
+    -webkit-mask-image: linear-gradient(to right, black calc(100% - 1.25rem), transparent);
   }
   /* Right-docked mirror: rows lay out chevron / icon / text from the
      right edge inward, the name right-aligns, and the inline padding
@@ -1057,6 +1069,12 @@
   }
   .tree.right-dock .name {
     text-align: right;
+    /* `fullstack-a-62`: in right-dock the text right-aligns, so the
+       fade flips direction — the LEFT edge fades (where the long
+       part of the filename gets truncated). Mirrors Pane.svelte's
+       right-dock tab-name handling. */
+    mask-image: linear-gradient(to left, black calc(100% - 1.25rem), transparent);
+    -webkit-mask-image: linear-gradient(to left, black calc(100% - 1.25rem), transparent);
   }
   /* Empty-state rows in right-dock mirror the text alignment too so
      "Loading..." / "No files" / dir errors don't drift to the left

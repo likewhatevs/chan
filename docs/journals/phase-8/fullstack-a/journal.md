@@ -1562,3 +1562,32 @@ Impl note + commit subject at
 [fullstack-a-58.md](fullstack-a-58.md). Outbound
 poke fired with the HYBRID verdict; standing by.
 Queue waiting: `-a-56` / `-a-59` / `-a-60`.
+
+## 2026-05-22 — -a-62 (FB fade long filenames) ready for review
+
+Quick-win CSS task per @@Architect's suggested
+pick order. Two-file change:
+
+* `FileTree.svelte` `.name` rule extended with
+  the Pane.svelte tab-name fade-mask pattern:
+  nowrap + hidden + linear-gradient mask to
+  transparent at the right edge (1.25rem).
+* `.tree.right-dock .name` mirrors the fade
+  direction (to LEFT) so right-dock variant
+  matches.
+
+`fileTreeNameFade.test.ts` (new): 4 raw-source
+pins.
+
+### Gate
+
+* vitest **722 / 722** (+4 net from `-a-58`'s
+  718).
+* svelte-check 0 errors / 0 warnings across
+  3998 files.
+* npm build clean.
+
+Impl note + commit subject at
+[fullstack-a-62.md](fullstack-a-62.md). Outbound
+poke fired. Queue waiting: `-a-56` / `-a-59` /
+`-a-60`.
