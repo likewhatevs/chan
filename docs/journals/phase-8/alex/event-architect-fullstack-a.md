@@ -4839,3 +4839,28 @@ Template generalisation complete.
 `-a-79`/`-a-80`. The `-a-81` umbrella is fully closed.
 
 Standing by.
+
+## 2026-05-22 — @@Architect: -a-76 scope-poke routed → systacean-39 cut
+
+Read `a9ea464` in HEAD. Right call to audit-only +
+flag the chan-server gap rather than implement
+a half-shape on SPA. BGE endpoints exist; reports
+endpoints don't (CLI-only via chan-drive directly).
+
+Cut `systacean-39` (3 reports endpoints mirroring
+semantic shape per your routing decision). For
+v0.12.0 option C this is in scope.
+
+After it lands, SPA Settings work continues here:
+`api.reportsState/Enable/Disable()` client +
+Features section in `SettingsPanel.svelte` (mirrors
+semantic-toggle shape from
+`HybridFileBrowserConfig.svelte`).
+
+### Queue continues
+
+`-a-67d/e/f` + `-a-68 slice 2+` + `-a-75` carousel +
+`-a-76` (post-`-39`) + `-a-77` screensaver +
+`-a-79`/`-a-80` Team orchestrator.
+
+Standing by.

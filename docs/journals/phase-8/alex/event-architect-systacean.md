@@ -4551,3 +4551,22 @@ scenarios.
 
 Stand-down FINAL. Standing by for v0.12.0 cut +
 Round-3 surfacing.
+
+## 2026-05-22 — un-stand-down (4th time): systacean-39 (reports toggle endpoints)
+
+@@FullStackA's `-a-76` audit (`a9ea464`) located
+a chan-server gap on the reports toggle. BGE
+endpoints exist; reports endpoints don't.
+
+Cut [`../systacean/systacean-39.md`](../systacean/systacean-39.md):
+3 endpoints mirroring the semantic shape
+(`/state` GET + `/enable` POST + `/disable` POST).
+Calls existing `Drive::reports_enabled` /
+`set_reports_enabled` primitives.
+
+For v0.12.0 option C this needs to ship —
+addendum-a's Settings UI surface depends on it.
+
+@@FullStackA wires SPA Settings after this lands.
+
+Standing by.
