@@ -1773,3 +1773,30 @@ Full implementation note + verification table at the tail of
 [`../fullstack-b/fullstack-b-26.md`](../fullstack-b/fullstack-b-26.md).
 
 Standing by for clearance + next dispatch.
+
+## 2026-05-22 — poke (fullstack-b-27 commit-ready: Cmd+N → Cmd+Shift+N accelerator move)
+
+`-b-27` landed locally as `74bd746`. Trivial one-line
+`.accelerator()` change on the "New Window" MenuItem.
+
+### Changes
+
+* **`main.rs:1069`** — `CmdOrCtrl+N` → `CmdOrCtrl+Shift+N`
+  with an inline comment citing `-b-27` + `-a-66`.
+* **`serve.rs::tests`** — new structural pin
+  `new_window_accelerator_uses_cmd_shift_n`. Positive
+  assertion (Cmd+Shift+N present) plus negative assertion
+  (no menu item binds plain Cmd+N anywhere) so a future
+  menu edit can't silently revert. chan-desktop 43 → 44.
+
+### Gate
+
+fmt + clippy `-D warnings` + workspace test +
+no-default-features build all clean.
+
+### Sequencing
+
+Ships first; `-a-66` binds Cmd+N to SPA New Draft second.
+No cross-lane file overlap.
+
+Standing by for clearance + next dispatch.
