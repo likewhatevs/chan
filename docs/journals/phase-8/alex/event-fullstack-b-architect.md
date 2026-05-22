@@ -2525,3 +2525,87 @@ view):
 Audit complete. If @@Alex wants me to crack on one
 of the four real pending items, flag which. Else
 standing by for next dispatch.
+
+## 2026-05-22 — poke (-b-30 slice a commit-ready: embed-font cargo feature + per-OS native default + filesystem fallback)
+
+Picked up immediately post-dispatch. Sliced into two:
+slice a (this commit, `c009f9f`) covers the
+architectural foundation; slice b (Settings dropdown +
+download-on-enable flow) defers.
+
+### Slice a headlines
+
+* `embed-font` cargo feature added to chan-server
+  Cargo.toml (default off; mirrors `systacean-6`'s
+  `embed-model` precedent — one Cargo.toml line, no
+  new deps).
+* `FontAssets` rust-embed gated on
+  `#[cfg(feature = "embed-font")]`. Default builds
+  no longer bundle Source Code Pro.
+* `serve_font` rewritten with a two-tier lookup:
+  rust-embed bundle (feature-gated) → user-config-dir
+  fallback at `<user-config>/chan/fonts/<name>` →
+  404. Path-traversal defense added.
+* xterm.js `fontFamily` in TerminalTab reordered:
+  per-OS native (SF Mono / Cascadia Code / DejaVu Sans
+  Mono) leads; Source Code Pro stays in the chain but
+  only kicks in when none of the OS-native faces
+  resolve OR when slice b's Settings UI overrides.
+* Existing `-b-12` font tests gated on `--features
+  embed-font`; new `serve_font_rejects_path_traversal_attempts`
+  pin guards the filesystem-fallback's defense.
+* `-b-12`'s font-test pin inverted to match the new
+  order ("leads with per-OS native and trails with
+  Source Code Pro").
+
+### Cross-lane note
+
+Cargo.toml change is Systacean territory but
+structurally identical to their `embed-model`
+precedent (one feature line + one `#[cfg]` gate).
+Routed via @@Alex's take-b-30 directive; @@Systacean
+can review at their discretion.
+
+### Slice b plan
+
+* SPA Settings dropdown ("OS default (mono)" vs
+  "Source Code Pro"). Persists via `Preferences.terminal.font`.
+* On SCP select + no bundle:
+  `POST /api/fonts/source-code-pro/download` —
+  fetches woff2 + OFL.txt from a stable URL (Adobe
+  GitHub release) into `<user-config>/chan/fonts/`.
+  Idempotent.
+* On SCP select with font available: fontFamily
+  reorders to put SCP first; persists across reload.
+* `resolve_font(name)` helper mirrors `systacean-6`'s
+  `resolve_model` shape.
+
+Slice b lands the user-facing toggle. Slice a's
+serve_font fallback is the foundation; slice b just
+hooks the SPA up to it.
+
+### Gate
+
+* `cargo test -p chan-server`: 223 passing (default).
+* `cargo test -p chan-server --features embed-font`: 225 passing (+2 gated tests).
+* `cargo clippy -p chan-server -p chan-desktop --all-targets -- -D warnings`: clean (both feature configs).
+* `cargo build -p chan-server --no-default-features`: clean.
+* `web/` svelte-check: 4032 / 0 / 0.
+* `web/` vitest (TerminalTab*.test.ts): 4 files / 15 tests pass.
+* `web/` npm build: clean.
+
+### Runtime walkthrough
+
+Standing chan-desktop runtime perm available; otherwise
+routing to @@WebtestB. Empirical smoke: default build
+→ terminal renders in OS native mono; `--features
+embed-font` build → bundled font available
+post-`resolve_font` swap (slice b dispatch); user-config
+fallback → drop a woff2 in `<config>/chan/fonts/` +
+verify it's served.
+
+Full implementation note at the tail of
+[`../fullstack-b/fullstack-b-30.md`](../fullstack-b/fullstack-b-30.md).
+
+Standing by for clearance + slice b dispatch when
+ready.
