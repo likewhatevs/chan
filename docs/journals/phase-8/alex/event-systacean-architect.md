@@ -3316,3 +3316,41 @@ chan-drive + chan-server: per-team WatchHandle + team_load/unload/list_loaded ro
 `fullstack-a-79` (bootstrap orchestrator) + `fullstack-a-80` (load flow) — both consume the new IPC routes.
 
 Per architect's pre-authorization, proceeding to commit + push + smoke.
+
+## 2026-05-22 — poke (-31 smoke ALL GREEN on fire 3; PTY flakiness pattern continues)
+
+`-31` smoke chain:
+
+| Fire | Verdict | Notes |
+|------|---------|-------|
+| `26298318769` (`0b60192`) | macOS FAILED | `-21` `dispatch_agent_event_writes_rich_template` — my `-26` fix stripped CR but not soft-wrap padding space; raw `systa \rcean` → flat `systa cean`. |
+| `26298634234` (`a3cf4d9`) | Ubuntu FAILED | `mcp_env_off` + `conditional_pty_programs` — pre-existing PTY-test flakes from `-27` smokes. NOT `-31` regressions. |
+| `26298847315` (`a3cf4d9`) | **ALL GREEN** | rustfmt 17s · web 2m44s · macOS 2m29s · Ubuntu 3m2s · no-default-features 1m37s |
+
+### Soft-wrap fix `a3cf4d9`
+
+The terminal soft-wraps long lines with ` \r` at column 80 on macos-latest. My `-26` strip removed CR but left the padding space. Now strip ` \r` pairs first, then CR/LF. Terminal-width agnostic + green on fire 3.
+
+### PTY-test flakiness pattern persists
+
+Across `-27`, `-29`, `-31` smokes, 3 PTY-tests have flaked across different platforms / fires. Recommendation reiterated for Round-3 hardening: mock PTY for byte-pattern assertions, OR CI-level retry, OR widen read-window with an outcome-poll loop. The "write input + read echo + assert" shape is race-sensitive on hosted CI. Not blocking; flagged.
+
+### Live on main
+
+* `0b60192` — `-31` per-team watcher orchestration.
+* `a3cf4d9` — `-21` soft-wrap test-output strip fix.
+
+### Lane state
+
+| Task | State |
+|------|-------|
+| -31 | ✓ shipped + smoke-validated (this) |
+| -30 | ✓ shipped earlier |
+| All prior | ✓ shipped |
+| -28 (config audit) | DEFERRED — standalone cleanup |
+
+### Full Drafts + Teams cascade live
+
+`-24` → `-31`: filesystem primitive → indexer + watcher → graph emit → unified read/write/list → CLI features → Team workspace → multi-team watcher. SPA consumers (`fullstack-a-66` Drafts row + `fullstack-a-79/80` Team bootstrap + load) have the full chan-drive + chan-server API surface to consume.
+
+Lane idle aside from `-28`. Standing by.
