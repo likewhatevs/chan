@@ -347,7 +347,6 @@
   /// Other app chords:
   ///
   ///   Cmd/Ctrl+,             -> Settings (open)
-  ///   Alt+Space              -> Rich Prompt (legacy alias)
   ///   Alt+Shift+[ / ]        -> previous / next tab       (web fallback)
   ///   Ctrl+Alt+1..9          -> jump to tab N             (web fallback)
   ///
@@ -615,16 +614,10 @@
       openSettings();
       return;
     }
-    if (e.altKey && !meta && !e.shiftKey && e.code === "Space") {
-      e.preventDefault();
-      // Alt+Space is the legacy rich-prompt chord; `fullstack-a-32`
-      // promotes the rich-prompt action to the spawn-chord family
-      // (Cmd+P native / Cmd+Alt+P web Mac) but keeps Alt+Space
-      // bound here for muscle memory. Both routes go through the
-      // same context-aware helper.
-      spawnRichPromptFromContext();
-      return;
-    }
+    // `fullstack-a-90`: removed the legacy `Alt+Space` rich-prompt
+    // chord. Rich prompt is now Cmd+P (native) + Cmd+Alt+P (web Mac
+    // fallback) + `Mod+. p` (Hybrid NAV). `-a-32`'s muscle-memory
+    // bridge expired.
     // `fullstack-a-32`: spawn-chord family. Each Cmd+Alt+<letter>
     // chord is the macOS web fallback for the matching native
     // Cmd+<letter> chord that browsers reserve at the OS level

@@ -111,10 +111,9 @@ export const SHORTCUTS: readonly Shortcut[] = [
   },
   // `fullstack-a-32`: Rich prompt chord migrates to Mod+P (native)
   // / Cmd+Alt+P (web Mac) so the spawn-chord family (Cmd+T/O/P,
-  // Cmd+Shift+M) reads uniformly. The Alt+Space chord stays bound
-  // in App.svelte as a secondary alias for muscle memory but is
-  // not advertised in the registry to avoid duplicate rows.
-  // Universal Hybrid NAV `p` (was added in `fullstack-50`) covers
+  // Cmd+Shift+M) reads uniformly. `fullstack-a-90` retired the
+  // legacy Alt+Space alias the migration kept for muscle memory.
+  // Universal Hybrid NAV `p` (added in `fullstack-50`) covers
   // every platform including Win/Linux web where Cmd+P is owned
   // by the browser's print dialog and Cmd+Alt+P isn't a thing.
   {
@@ -123,7 +122,7 @@ export const SHORTCUTS: readonly Shortcut[] = [
     web: "Cmd+Alt+P",
     native: "Mod+P",
     group: "App",
-    note: "macOS web + native everywhere; all platforms via Mod+. p (Hybrid NAV); legacy Alt+Space alias still bound",
+    note: "macOS web + native everywhere; all platforms via Mod+. p (Hybrid NAV)",
   },
   // `fullstack-a-32`: file-browser top-level chord. Same shape as
   // `app.terminal.toggle` — native uses Cmd+O; web fallback is

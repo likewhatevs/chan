@@ -909,7 +909,8 @@ export function openActiveTerminalRichPrompt(): void {
   // focuses, whatever previously held focus (typically xterm's
   // helper-textarea since the user was just looking at a terminal)
   // is still the keyboard target. A fast typer who starts typing
-  // immediately after Alt+Space hits that race window: the first
+  // immediately after the rich-prompt chord (Cmd+P, Cmd+Alt+P, or
+  // Hybrid NAV `p`) hits that race window: the first
   // keystroke lands on xterm-helper-textarea, fires
   // `term.onData -> sendUserInput`, and is sent to the PTY behind
   // the user's back. The dispatch they later trigger from the

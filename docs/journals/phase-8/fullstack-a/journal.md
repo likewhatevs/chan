@@ -2630,3 +2630,25 @@ point still consumes them).
 Impl note at [fullstack-a-66.md](fullstack-a-66.md)
 "## 2026-05-22 — slice c follow-up". Outbound
 poke fired.
+
+## 2026-05-22 — -a-90 (remove Alt+Space chord) ready for review
+
+Seven-file change. SPA-only. Keymap handler
+removal + comment sweep + 8 raw-source pins.
+
+Removed both call sites (App.svelte primary +
+TerminalTab.svelte secondary). Swept registry
+note + 4 stale references in supporting
+comments. Rich prompt still entered via Cmd+P
+(native), Cmd+Alt+P (web Mac), `Mod+. p`
+(Hybrid NAV).
+
+### Gate
+
+* vitest **968 / 968** (+8 net from -a-66
+  slice c follow-up's 960).
+* svelte-check 0/0 across 4032 files.
+* npm build clean.
+
+Impl note at [fullstack-a-90.md](fullstack-a-90.md).
+Outbound poke fired.

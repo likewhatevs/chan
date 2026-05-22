@@ -919,7 +919,8 @@ describe("pane state", () => {
   });
 
   test("openActiveTerminalRichPrompt blurs the focused xterm helper textarea (fullstack-b-8)", () => {
-    // The race: between Alt+Space and the rich-prompt editor child
+    // The race: between the rich-prompt chord (Cmd+P / Cmd+Alt+P /
+    // Hybrid NAV `p`) and the rich-prompt editor child
     // mounting + focusing, xterm-helper-textarea still owns focus.
     // Keystrokes typed in that window fire `term.onData` and reach
     // the live PTY, leaving the dispatched buffer short its first

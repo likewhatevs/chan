@@ -94,3 +94,132 @@ This is `-a-90`.
 * Re-architecting the other spawn chords.
 * Adding new chords.
 * Changing Cmd+P / Cmd+Alt+P semantics.
+
+## 2026-05-22 — ready for review
+
+Seven-file change. SPA-only.
+
+### What landed
+
+`web/src/App.svelte`:
+* Removed the `altKey + Space` keymap branch
+  (line ~618) that called
+  `spawnRichPromptFromContext()`.
+* Removed the `Alt+Space -> Rich Prompt (legacy
+  alias)` line from the keymap doc header
+  (~line 350).
+* Replacement comment cross-references
+  `-a-90` + the still-live entry points.
+
+`web/src/components/TerminalTab.svelte`:
+* Removed the secondary `altKey + Space`
+  handler (line ~996) that called
+  `openRichPrompt()`.
+* Updated the hamburger-menu comment (~line
+  1175) — no longer claims Alt+Space "still
+  works".
+
+`web/src/state/shortcuts.ts`:
+* Registry block comment swapped from
+  "Alt+Space chord stays bound ... muscle
+  memory" to "`fullstack-a-90` retired the
+  legacy Alt+Space alias the migration kept".
+* Registry note string dropped the trailing
+  `; legacy Alt+Space alias still bound`.
+
+`web/src/components/TerminalRichPrompt.svelte`:
+* Auto-focus rationale comment swapped
+  `Cmd+K p / Alt+Space` → `Cmd+K p / Cmd+P`
+  in the focus-race explanation.
+
+`web/src/state/tabs.svelte.ts`:
+* Focus-race comment swapped `immediately
+  after Alt+Space` → `immediately after the
+  rich-prompt chord (Cmd+P / Cmd+Alt+P /
+  Hybrid NAV \`p\`)`.
+
+`web/src/state/tabs.test.ts`:
+* Mirror update to the test comment so the
+  race description matches the live chord
+  set.
+
+`web/src/components/richPromptAutoFocus.test.ts`:
+* Mirror update to the doc-comment.
+
+`web/src/state/altSpaceRichPromptRemoved.test.ts`
+(new): 8 raw-source pins:
+* App.svelte `altKey + Space` branch gone.
+* App.svelte rationale comment present.
+* App.svelte keymap doc-header entry gone.
+* TerminalTab.svelte secondary handler gone.
+* TerminalTab.svelte rationale comment.
+* TerminalTab.svelte hamburger-menu comment
+  no longer claims Alt+Space live.
+* shortcuts.ts registry note no longer
+  mentions Alt+Space.
+* shortcuts.ts retire comment present.
+
+### Acceptance
+
+1. **Alt+Space does nothing** (or browser
+   no-op) ✓ — both keymap handlers removed
+   (pinned by tests).
+2. **Cmd+P opens rich prompt** ✓ — untouched
+   spawn-chord family entry.
+3. **Cmd+Alt+P opens rich prompt (web Mac)**
+   ✓ — untouched.
+4. **`Mod+. p` Hybrid NAV** ✓ — untouched.
+5. **No stale Alt+Space comments as if the
+   chord were live** ✓ — sweep covered all
+   call sites + supporting comments.
+
+### Gate
+
+* vitest **968 / 968** (+8 net from `-a-66`
+  slice c follow-up's 960).
+* svelte-check 0 errors / 0 warnings across
+  4032 files.
+* npm build clean.
+* Rust gate not re-run (no Rust touched).
+
+### Decisions
+
+* **Replacement comments cite `-a-90`** at
+  both call sites so a future audit can find
+  the retire without git blame.
+* **Test comments updated** rather than left
+  as historical — the race description
+  matches the live chord set; otherwise the
+  comment would read as if Alt+Space were
+  the trigger.
+* **Did NOT change Cmd+P / Cmd+Alt+P semantics**
+  per the task body's out-of-scope clause.
+
+### Suggested commit subject
+
+```
+Rich prompt: remove legacy Alt+Space chord (fullstack-a-90)
+```
+
+Single commit. Keymap handler removal +
+comment sweep + test pins.
+
+### Files for `git add` (per-path discipline)
+
+* `web/src/App.svelte`
+* `web/src/components/TerminalTab.svelte`
+* `web/src/components/TerminalRichPrompt.svelte`
+* `web/src/state/shortcuts.ts`
+* `web/src/state/tabs.svelte.ts`
+* `web/src/state/tabs.test.ts`
+* `web/src/components/richPromptAutoFocus.test.ts`
+* `web/src/state/altSpaceRichPromptRemoved.test.ts` (new)
+* `docs/journals/phase-8/fullstack-a/fullstack-a-90.md`
+* `docs/journals/phase-8/fullstack-a/journal.md`
+* `docs/journals/phase-8/alex/event-fullstack-a-architect.md`
+
+### Atomic-audit-commit
+
+Per the memory rule. Per-path staging only.
+
+Push held. Standing by for clearance.

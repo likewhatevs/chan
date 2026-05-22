@@ -993,11 +993,9 @@
     if (closeExitedTabFromKey(e)) {
       return;
     }
-    if (e.altKey && !e.ctrlKey && !e.metaKey && !e.shiftKey && e.code === "Space") {
-      e.preventDefault();
-      openRichPrompt();
-      return;
-    }
+    // `fullstack-a-90`: removed the legacy `Alt+Space` rich-prompt
+    // chord. Cmd+P (native), Cmd+Alt+P (web Mac), and `Mod+. p`
+    // (Hybrid NAV) cover the rich-prompt entry points.
     if (
       (e.metaKey || e.ctrlKey) &&
       !e.shiftKey &&
@@ -1174,8 +1172,10 @@
         </button>
         <!-- `fullstack-50`: dropped the "Rich prompt" hamburger
              entry; Cmd+K p is the canonical entry, the rich prompt's
-             own `×` button is the exit. Alt+Space still works as the
-             out-of-Pane-Mode shortcut for muscle-memory. -->
+             own `×` button is the exit. `fullstack-a-90` removed
+             the legacy Alt+Space alias; Cmd+P (native) / Cmd+Alt+P
+             (web Mac) / `Mod+. p` (Hybrid NAV) are the entry
+             points. -->
         <button class="mbtn" onclick={copyTerminalCwd}>
           <span class="mbtn-icon">
             <Clipboard size={16} strokeWidth={1.75} aria-hidden="true" />

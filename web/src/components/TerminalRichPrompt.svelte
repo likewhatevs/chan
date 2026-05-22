@@ -70,7 +70,7 @@
 
   // `fullstack-79`: auto-focus the input on every `openActiveTerminalRichPrompt`
   // call. The `focusNonce` is bumped by the open helper even when the prompt
-  // is already open, so re-show via Cmd+K p / Alt+Space steals focus back
+  // is already open, so re-show via Cmd+K p / Cmd+P steals focus back
   // even if the user had clicked away. `tick()` waits for the editor child's
   // `bind:this` to settle on first mount, and for the `{#key mode()}` block
   // to remount when the user toggles between wysiwyg and source.

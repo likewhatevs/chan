@@ -7572,3 +7572,85 @@ returns empty). That's the chan-server side
 of the unified-`Drive::list`/`Drive::stat`
 boundary; routed via systacean-32 per your
 cut.
+
+## 2026-05-22 — poke (fullstack-a-90 ready for review)
+
+Seven-file change. SPA-only.
+
+### What landed
+
+`App.svelte`: removed the `altKey + Space`
+keymap branch + the keymap doc-header
+`Alt+Space -> Rich Prompt (legacy alias)`
+line. Replacement comment cross-references
+`-a-90`.
+
+`TerminalTab.svelte`: removed the secondary
+`altKey + Space` handler. Hamburger-menu
+comment updated.
+
+`shortcuts.ts`: registry note dropped the
+trailing `legacy Alt+Space alias still bound`
+fragment; registry block comment updated.
+
+`TerminalRichPrompt.svelte` +
+`tabs.svelte.ts` + 2 test files: stale
+Alt+Space references in supporting comments
+swept to match the live chord set.
+
+`altSpaceRichPromptRemoved.test.ts` (new): 8
+raw-source pins covering both removals + the
+registry note + the rationale comments.
+
+### Acceptance
+
+1. Alt+Space → no-op ✓.
+2. Cmd+P unchanged ✓.
+3. Cmd+Alt+P unchanged ✓.
+4. `Mod+. p` Hybrid NAV unchanged ✓.
+5. No stale "Alt+Space still bound" comments
+   ✓.
+
+### Gate
+
+* vitest **968 / 968** (+8 net from -a-66
+  slice c follow-up's 960).
+* svelte-check 0 errors / 0 warnings across
+  4032 files.
+* npm build clean.
+
+### Decisions
+
+* **Cross-reference `-a-90`** at both
+  removal sites so a future audit can trace
+  the retire without git blame.
+* **Updated test comments** rather than
+  leaving as historical — the race
+  description matches the live chord set.
+
+### Suggested commit subject
+
+```
+Rich prompt: remove legacy Alt+Space chord (fullstack-a-90)
+```
+
+### Files for `git add`
+
+* `web/src/App.svelte`
+* `web/src/components/TerminalTab.svelte`
+* `web/src/components/TerminalRichPrompt.svelte`
+* `web/src/state/shortcuts.ts`
+* `web/src/state/tabs.svelte.ts`
+* `web/src/state/tabs.test.ts`
+* `web/src/components/richPromptAutoFocus.test.ts`
+* `web/src/state/altSpaceRichPromptRemoved.test.ts` (new)
+* `docs/journals/phase-8/fullstack-a/fullstack-a-90.md`
+* `docs/journals/phase-8/fullstack-a/journal.md`
+* `docs/journals/phase-8/alex/event-fullstack-a-architect.md`
+  (this append)
+
+### Atomic-audit-commit applied
+
+Single bash invocation per discipline.
+
+Push held. Standing by for clearance.

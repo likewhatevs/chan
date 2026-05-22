@@ -6,7 +6,7 @@ import tabsModule from "../state/tabs.svelte.ts?raw";
 // `focusNonce` on the rich-prompt state. TerminalRichPrompt's
 // `$effect` watches the nonce and calls `wysiwygRef?.focusEnd()`
 // (or `sourceRef?.focusAt(...)` in source mode) after a `tick()`
-// to grab focus. Re-show via Cmd+K p / Alt+Space steals focus
+// to grab focus. Re-show via Cmd+K p / Cmd+P steals focus
 // back even when `open` was already true.
 
 describe("fullstack-79: rich-prompt auto-focus on entry", () => {
