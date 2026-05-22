@@ -5286,3 +5286,119 @@ synthesizer wired; but indexer-side Drafts/
 awareness needed before the graph can show
 Drafts data. The umbrella does NOT close until
 the indexer follow-up lands.
+
+## 2026-05-22 — proactive re-walk: -a-66 slice e via systacean-34 (STILL PARTIAL) + -a-67 slice 2 New Draft entry
+
+Proactive walk on HEAD `773cf95`. Throwaway drive
+r31; chan serve 127.0.0.1:8787; Chrome MCP tab
+`503726145`.
+
+### Verdicts
+
+| Task | Check | Verdict |
+|------|-------|---------|
+| `-a-66 e` re-walk via systacean-34 | Drafts in graph after restart | **STILL PARTIAL** |
+| `-a-66 e` BM25 search includes Drafts | empirical | **PARTIAL** (search returns 0 hits for draft content) |
+| `-a-67 2` New Draft as first spawn entry | empirical | HOLD |
+
+### `-a-66 slice e` STILL PARTIAL — empirical surface unchanged
+
+systacean-34 (`aaf7608`) added
+`index_drafts_subtree` + `walk_drafts_recursive`
+in `chan-drive::drive`. Hook is at the end of the
+rebuild flow, gated on the rebuild-marker.
+
+**Code-level**:
+- Walker function present ✓
+- Hook called after `clear_rebuild_marker()` ✓
+- `index_draft_file` invoked per indexable text file
+  (per the code comment)
+
+**Empirical**:
+1. Created `Drafts/untitled/draft.md` with content
+   "# Slice e re-walk via systacean-34..." via
+   Cmd+N + typed content.
+2. Restarted chan serve (full reindex triggered:
+   "rebuild.inprogress marker found at open;
+   full reindex required").
+3. Waited ~25 seconds for reindex.
+4. `/api/graph?scope=drive`:
+   - 1440 nodes, 5882 edges
+   - **NO Drafts directory node**
+   - **NO drafts_link edges**
+   - 0 files under `Drafts/` prefix
+5. `/api/search/content?q=systacean-34`:
+   - `ready: true, mode: bm25, hits: []`
+   - **NO BM25 hits** for draft content
+6. Server logs show:
+   - `path classification failed rel=Drafts/untitled/draft.md
+     e=Io("No such file or directory (os error 2)")`
+   - No log line indicating `index_drafts_subtree` ran
+     successfully
+
+**Root-cause hypothesis**: there's a separate
+`path_classification` code path that doesn't use
+systacean-32's unified `Drive::stat` for Drafts —
+so even when the indexer walks Drafts/ (per
+systacean-34), the path classification fails +
+the file may not actually be indexed into
+BM25/graph stores.
+
+This suggests systacean-34's `index_draft_file`
+call may be silently failing OR the
+classification step downstream is broken.
+
+Lane: **@@Systacean**. The chan-drive
+`path_classification` path likely also needs the
+prefix-aware unified-path handling. Suggest a
+systacean-35 follow-up.
+
+### `-a-67 slice 2` HOLD — New Draft as first spawn entry
+
+Empty-pane right-click menu shows:
+1. **New Draft** (Cmd+N) ← FIRST entry ✓
+2. Terminal (Cmd+Alt+T)
+3. File Browser (Cmd+Alt+O)
+4. Rich Prompt (Cmd+Alt+P)
+5. Graph (Cmd+Shift+M)
+6. Search
+7. Settings (Cmd+,)
+
+Menu class: `hamburger-menu svelte-mw99js`. The
+spawn-actions array in `Pane.svelte` got the New
+Draft entry prepended per the diff.
+
+PASS.
+
+### Highlights
+
+* **`-a-67 slice 2` clean win**: New Draft is now
+  the first-class spawn surface, consistent
+  across the spec'd 3 surfaces (empty-pane
+  right-click + pane hamburger + carousel slide
+  1). Matches addendum-a's Drafts-first
+  positioning intent.
+* **`-a-66 slice e` STILL PARTIAL despite
+  systacean-34**: indexer walks Drafts/ at boot
+  per the code, but neither graph nor BM25
+  surfaces Drafts content empirically. Server
+  logs show `path classification failed` errors
+  for `Drafts/<path>` paths.
+* **The `-a-66` umbrella STILL doesn't close
+  end-to-end**: 4 slices closed (a/b/c/d), 1
+  slice (e) still PARTIAL. Drafts FB +
+  inspector + API listing all work; the indexer
+  → graph/search pipeline doesn't.
+
+### State at end of walk
+
+Lane-A test server torn down:
+1. chan serve killed.
+2. `rm -rf /tmp/chan-test-phase8-wa-r31/`.
+3. `chan remove` → unregistered.
+4. Chrome MCP tab closed.
+5. Drafts metadata cleaned.
+
+`-a-67 slice 2` HOLD. `-a-66 slice e` STILL
+PARTIAL pending a path_classification follow-up
+(systacean-35?).

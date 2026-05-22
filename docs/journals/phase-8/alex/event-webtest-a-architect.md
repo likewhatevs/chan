@@ -3155,3 +3155,95 @@ indexer is the natural shared input. Suggest:
 Standing by. Strongly recommend the indexer
 follow-up before declaring the Drafts umbrella
 shipped.
+
+## 2026-05-22 — poke (-a-67 slice 2 HOLD + -a-66 slice e STILL PARTIAL after systacean-34)
+
+Proactive walk on HEAD `773cf95`. Throwaway drive
+r31; chan serve 127.0.0.1:8787; Chrome MCP tab
+`503726145`. Verdict in
+[`../webtest-a/webtest-a-1.md`](../webtest-a/webtest-a-1.md).
+
+### Verdicts
+
+| Task | Verdict |
+|------|---------|
+| `-a-67 2` New Draft as first spawn entry | HOLD |
+| `-a-66 e` Drafts in graph after systacean-34 | **STILL PARTIAL** |
+| `-a-66 e` BM25 search includes Drafts | **PARTIAL** |
+
+### `-a-67 slice 2` HOLD
+
+Empty-pane right-click menu shows New Draft
+(Cmd+N) as the FIRST entry, above Terminal /
+File Browser / Rich Prompt / Graph / Search /
+Settings. Matches addendum-a's Drafts-first
+positioning intent.
+
+### `-a-66 slice e` STILL PARTIAL despite systacean-34
+
+systacean-34 (`aaf7608`) added
+`index_drafts_subtree` + `walk_drafts_recursive`.
+Code looks right. **But empirically Drafts still
+don't surface in graph or BM25**:
+
+- Created `Drafts/untitled/draft.md` with content.
+- Restarted chan serve (full reindex triggered
+  per "rebuild.inprogress marker found" warn).
+- Waited ~25s for reindex.
+- `/api/graph?scope=drive`: 1440 nodes, **0
+  files under `Drafts/`**, no Drafts directory
+  node, no drafts_link edges.
+- `/api/search/content?q=systacean-34`: 0 hits
+  (BM25 ready=true mode=bm25 hits=[]).
+
+**Server logs reveal the root cause**:
+```
+WARN chan_server::routes::files: path classification failed
+  rel=Drafts/untitled/draft.md
+  e=Io("No such file or directory (os error 2)")
+```
+
+There's a `path_classification` step that uses
+ON-DISK file lookup (not systacean-32's unified
+`Drive::stat`). Even when the indexer walks
+Drafts/ per systacean-34, the downstream
+classification fails because Drafts lives in
+chan's metadata folder, not the drive root.
+
+The walker may be silently succeeding at the
+walk step but failing to actually populate
+BM25/graph because the per-file
+classification/indexing step uses the broken
+path resolution.
+
+### Recommend systacean-35
+
+`chan-drive path_classification` (and any
+downstream code that opens files for indexing)
+needs the prefix-aware unified-path handling
+that systacean-32 added to `Drive::stat`/
+`exists`/`read`. Without it, the indexer's
+walk succeeds but the actual indexing fails.
+
+Lane: **@@Systacean**. The `-a-66 slice e`
+PARTIAL is now ~3 layers deep into a single
+codebase area (initial PARTIAL → systacean-32
+fix → systacean-34 fix → STILL PARTIAL). A
+holistic audit of Drafts-aware path code
+would close the umbrella.
+
+### Suggested commit shape
+
+* **Commit subject**: `docs: webtest-a re-walk
+  — -a-67 slice 2 HOLD + -a-66 slice e STILL
+  PARTIAL (path_classification fails despite
+  systacean-34 walker)`.
+* **Files**:
+  * `docs/journals/phase-8/webtest-a/webtest-a-1.md`
+  * `docs/journals/phase-8/alex/event-webtest-a-architect.md`
+* Path-limited `git commit`.
+
+Standing by. Strongly recommend systacean-35 to
+audit `path_classification` + downstream
+indexer file I/O for Drafts-aware path
+resolution.
