@@ -4003,4 +4003,32 @@ The architect's "empirical > code-review" lesson from the 5th-round retrospectiv
 
 Per pre-authorization, proceeding to commit + push + smoke.
 
+## 2026-05-22 — poke (-38 smoke ALL GREEN on first fire; 4th consecutive)
+
+`-38` smoke [`26315251520`](https://github.com/fiorix/chan/actions/runs/26315251520) **ALL GREEN on FIRST fire**:
+
+| Job | Result |
+|-----|--------|
+| rustfmt | ✓ 20s |
+| web | ✓ 2m57s |
+| build no-default-features | ✓ 1m51s |
+| clippy + test (macos-latest) | ✓ 2m48s |
+| clippy + test (ubuntu-latest) | ✓ 3m2s |
+
+**Fourth consecutive first-fire green** (`-36` + `-35` + `-37` + `-38`). The PTY refactor + cross-lane drift discipline are both holding.
+
+### What's live on main from `-38`
+
+* `3759117` — 2 new end-to-end empirical tests pin the contract; tracing::debug diagnostics in `Drive::index_draft_file`.
+
+### Recap
+
+In-tree the chain works. Two passing tests prove it across both entry points (boot walk + Drive::write_text). If @@WebtestA still sees the PARTIAL after rebuilding + relaunching chan-desktop + restarting chan serve, the gap is upstream of code (deployment / sidecar lifecycle).
+
+### Lane state
+
+28 systacean tasks shipped this phase. Lane idle.
+
+Standing by for @@WebtestA's next walk verdict OR v0.12.0 cut OR further dispatches.
+
 Standing by for v0.12.0 cut or further dispatches.
