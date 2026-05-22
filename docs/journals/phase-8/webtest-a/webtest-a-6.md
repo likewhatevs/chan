@@ -145,3 +145,30 @@ close-out + the proactive `a63c8cb` walk). This is
   bug list; not in `-a-52`'s scope).
 * Future graph-overhaul slices (G5 markdown overlay,
   etc.) — those land in future walks.
+
+## 2026-05-22 — walkthrough complete (5/7 HOLD + 2 NOT TESTED)
+
+Walked `-a-52` on HEAD `7b7c8ea`. Verdict + per-check
+evidence appended to
+[`webtest-a-1.md`](webtest-a-1.md) under
+"## 2026-05-22 — fullstack-a-52 walkthrough".
+
+* **G9 (depth slider forward-only)**: #1 + #4 HOLD; #2
+  NOT TESTED (depth-cap auto-adapts; CLAUDE.md scope
+  max=1 — multi-hop expansion not exercised in this
+  beat); #3 N/A (same as #1).
+* **G10 (drop link filter)**: #5 + #6 HOLD; #7 NOT
+  TESTED (filesystem-mode label spot-check deferred;
+  removed code is dead-branch per static analysis).
+
+The graph-overhaul wave (`-a-49`/`-a-50`/`-a-51`/`-a-52`)
+is now empirically walked end-to-end across this beat +
+the proactive `a63c8cb` walk.
+
+Side observation (minor): slider max can be misleading
+for shallow scopes (no visual cue that depth=1 already
+reveals everything forward-reachable). Discoverability
+polish candidate for @@FullStackA.
+
+Test server + throwaway drive + Chrome MCP tab all torn
+down per the standing rule.

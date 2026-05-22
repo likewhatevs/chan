@@ -4953,3 +4953,76 @@ on desktop default-zoom + mobile.
 | `alex/event-architect-webtest-a.md` | proactive walk ack + webtest-a-6 dispatch |
 | `webtest-a/webtest-a-6.md` | NEW task (light -a-52 walk) |
 | `phase-8-bugs.md` | graph canvas hit-radius bug entry |
+
+## 2026-05-22 — WAVE-3 FAN-OUT — 7 tasks dispatched (5 fullstack-a + 1 fullstack-b + 1 ci); systacean-21 URGENT still standing
+
+@@Alex 2026-05-22: "we have 6 agents idling.. is the
+next wave big enough to keep them busy? come on.. it
+feels like we're not moving too fast"
+
+Architect-side correction: I'd been queue-deep on bug
+filing (consolidating observations from @@WebtestA's
+walks + @@Alex's screenshots) but light on DISPATCH.
+The bug list grew; the agent queues didn't. Fanning out
+a substantial wave now.
+
+### 7 tasks cut this beat
+
+| Task | Subject | Lane | Source |
+|------|---------|------|--------|
+| [`fullstack-a-56`](../fullstack-a/fullstack-a-56.md) | Cmd+P 3-state + depth-slider shallow-scope cue | @@FullStackA | bug-list entries |
+| [`fullstack-a-57`](../fullstack-a/fullstack-a-57.md) | Graph filter chips: FileBucket toggles (markdown/source) | @@FullStackA | @@Alex's "hide markdown to see source" ask |
+| [`fullstack-a-58`](../fullstack-a/fullstack-a-58.md) | Graph parent-edge invariant (audit-then-fix; cross-lane escalation if chan-server) | @@FullStackA primary | @@Alex's spec'd nav rule |
+| [`fullstack-a-59`](../fullstack-a/fullstack-a-59.md) | Pane-focus-click on click-to-focus restore (NOT Cmd+Tab) | @@FullStackA | earlier @@Alex flag |
+| [`fullstack-a-60`](../fullstack-a/fullstack-a-60.md) | Graph canvas click hit-radius expansion | @@FullStackA | @@WebtestA's `a63c8cb` observation |
+| [`fullstack-b-25`](../fullstack-b/fullstack-b-25.md) | chan-desktop orphan-detect heuristic tighten + dialog PID display | @@FullStackB | @@WebtestB's `-b-22` walk finding |
+| [`ci-14`](../ci/ci-14.md) | v0.12.0+ Linux binaries on GH Releases | @@CI | wave-3 release prep |
+
+Plus `systacean-21` (URGENT cache-bust) is still in
+@@Systacean's inbound — they did `-12` first (live perm
+window) + need to pick `-21` next.
+
+### Lane saturation after this wave
+
+| Lane | Queue depth |
+|------|-------------|
+| @@Systacean | -21 (URGENT) → idle |
+| @@FullStackA | -a-56 through -a-60 (5 tasks); plus G5 + -a-42 queued behind |
+| @@FullStackB | -b-25 (1 task); plus wave-3 Linux cross-pollination speculative |
+| @@CI | -14 (1 task); plus v0.12.0-cut readiness |
+| @@WebtestA | reactive (walkthroughs cut when above land) |
+| @@WebtestB | reactive (walks `-b-25` when @@FullStackB ships) |
+
+That's at least 8 substantive tasks across 4 active
+lanes. Should saturate the queues.
+
+### Task body discipline note
+
+Task files are TIGHT POINTERS to the bug-list entries
+(which already carry the full context). Avoids the
+duplication overhead that was slowing me down. The
+bug-list is the source of truth; tasks dispatch +
+cross-ref + add authorization framing.
+
+### Architect-side lesson (yet again)
+
+When the bug list grows faster than the dispatch queue
+fills, the discipline-gap is on the dispatch side, not
+the bug-filing side. Filing bugs is necessary but not
+sufficient — dispatch closes the loop. Going forward:
+when @@Alex flags 2-3 observations in close succession,
+batch them into a fan-out wave rather than leaving them
+queued.
+
+### What I'm committing this round
+
+| File | Reason |
+|------|--------|
+| `architect/journal.md` | This entry |
+| `alex/event-architect-fullstack-a.md` | wave-3 5-task fan-out poke |
+| `alex/event-architect-fullstack-b.md` | -b-25 dispatch poke |
+| `alex/event-architect-ci.md` | -14 dispatch poke |
+| `alex/event-architect-systacean.md` | -12 ack + -21 re-prompt |
+| `fullstack-a/fullstack-a-{56,57,58,59,60}.md` | 5 NEW task files |
+| `fullstack-b/fullstack-b-25.md` | NEW task file |
+| `ci/ci-14.md` | NEW task file |

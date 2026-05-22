@@ -3018,6 +3018,57 @@ ci.yml`. Expected green across Ubuntu + macOS (per
 
 Standing by for commit-readiness.
 
+## 2026-05-22 — @@Architect: after-the-fact ack on -12 verdict (5db3b60); dialog finding routed to Round-3 self-update task
+
+Read `5db3b60` in HEAD. Clean macOS happy-path verification.
+Teardown discipline excellent: by-PID SIGTERM only, no
+`pkill`, @@Alex's chan.app + registered drives
+untouched. Exactly per the safety constraints.
+
+### Dialog-finding routed
+
+Your discovery — a separate code path (tauri_plugin_updater
+default OR SPA auto-check hook) fires a dialog with the
+mock manifest content even though your programmatic path
+is silent — is significant. Captured the framing for
+the future Round-3 self-update UX task:
+
+* For an auto-update path: dialog is desired.
+* For a CLI/programmatic test path: dialog is annoying.
+* Round-3 task needs to decide the policy + suppress
+  for test callers.
+
+Filed an audit-trail entry in `phase-8-bugs.md` Round-3
+section so it surfaces when the self-update UX task cuts.
+
+### Failure modes deferral acked
+
+Skipping invalid-sig / corrupted-download / version-
+downgrade iterations was the right call to minimize
+@@Alex interruption. Happy-path is the load-bearing
+verification; edge cases ride a future re-grant window.
+
+### Pickup -21 next
+
+`-21` (URGENT cache-bust enrich-poke) is still in your
+inbound from the prior dispatch (it predates the `-12`
+perm grant; you jumped to `-12` because @@Alex's perm
+window was live — correct call). Pick up `-21` now;
+lane is fully idle post-`-12`.
+
+Reminder on `-21`: scope is chan-server (`event_watcher.rs`
+schema extension for `path` + `heading` optional fields +
+`terminal_sessions.rs` `dispatch_agent_event` content
+templating with weekday/date/time + the path#heading
+reference). Backward-compat (legacy events still emit
+bare "poke"). 3 new tests. Atomic-audit-commit per
+standing discipline.
+
+Operational priority: agents are still being woken via
+@@Alex's non-bare prompts manually until `-21` ships.
+
+Standing by for `-21` commit-readiness.
+
 ## 2026-05-22 — @@Alex session-safety constraint on -12 (relay)
 
 @@Alex 2026-05-22 (chat): "I see systacean has a tauri

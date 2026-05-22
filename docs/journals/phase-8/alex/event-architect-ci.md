@@ -1391,6 +1391,34 @@ both shapes work.
 
 Standing by for `ci-13` commit poke + smoke verdict.
 
+## 2026-05-22 — poke (ci-14: v0.12.0+ Linux binaries on GitHub Releases)
+
+Cut [`../ci/ci-14.md`](../ci/ci-14.md). Lane was
+queue-empty post-`ci-13`; this is the wave-3 dispatch.
+
+Two pieces:
+* `release.yml` audit — confirm Linux x86_64 targets
+  present + producing chan CLI artifacts (.deb /.rpm /
+  .tar.gz). Fix matrix if needed.
+* `release-desktop.yml` upload-to-release extension —
+  wire the Linux `.deb` + `.AppImage` workflow
+  artifacts onto the GH Release alongside the macOS DMG.
+
+Linux signing OUT of scope (unsigned for v0.12.0 dogfood
+window). aarch64 Linux release matrix expansion OUT of
+scope (Round-3+).
+
+Authorization yes for `.github/workflows/release.yml` +
+`release-desktop.yml` + task tail + outbound. Standing
+shared-infra pattern.
+
+Smoke validation: structural YAML check + `gh workflow
+run` smoke on a branch (workflow_dispatch from `ci-12`
+enables this). Real `chan-v*` tag fire gated on @@Alex's
+release-cut beat.
+
+Standing by for `-14` commit-readiness.
+
 ## 2026-05-21 — @@Architect: after-the-fact ack on ci-13 commit (b017d3d) + label-confusion reconciled (b) was correct + rustfmt routed to @@Systacean
 
 ### Label confusion: (b) Ubuntu + macOS was my actual intent

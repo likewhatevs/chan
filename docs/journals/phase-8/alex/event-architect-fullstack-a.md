@@ -2721,6 +2721,65 @@ lanes I was last focused on) before declaring
 
 Standing by for your `-a-50` commit poke.
 
+## 2026-05-22 — WAVE-3 FAN-OUT — 5 tasks queued (-a-56 through -a-60)
+
+Cutting a substantial queue so the lane has depth +
+@@Alex's "feels like we're not moving fast" stops being
+true. All five tasks live in the bug-list with full
+detail; task files are tight pointers.
+
+| Task | Subject | Scope |
+|------|---------|-------|
+| [`-a-56`](../fullstack-a/fullstack-a-56.md) | Cmd+P 3-state + depth-slider shallow-scope cue | small bundled UX papercut |
+| [`-a-57`](../fullstack-a/fullstack-a-57.md) | Graph filter chips: FileBucket toggles (markdown/source) + optional sub-language picker | medium SPA |
+| [`-a-58`](../fullstack-a/fullstack-a-58.md) | Graph parent-edge invariant (audit-then-fix; cross-lane escalation if chan-server) | medium SPA + possible cross-lane |
+| [`-a-59`](../fullstack-a/fullstack-a-59.md) | Pane-focus-click on click-to-focus restore (NOT on Cmd+Tab) | medium SPA |
+| [`-a-60`](../fullstack-a/fullstack-a-60.md) | Graph canvas click hit-radius expansion | small polish |
+
+### Pick order suggestion
+
+Tasks are independent; pick any order. Suggested order
+by user impact:
+
+1. `-a-57` (filter chips) — @@Alex explicitly asked to
+   hide markdown to see source. High-visibility win.
+2. `-a-58` (parent-edge invariant) — @@Alex's spec'd
+   navigation path. High-value architectural fix.
+3. `-a-56` (Cmd+P + depth slider) — small UX wins;
+   could ride between bigger tasks as a palate-cleanser.
+4. `-a-59` (pane-focus-click) — @@Alex flagged earlier.
+5. `-a-60` (hit-radius) — polish; rides last or
+   bundles with whichever task touches GraphCanvas.
+
+### Audit-then-fix special-case on -a-58
+
+The parent-edge bug calls for audit-first. If audit
+reveals chan-server-side gap, fire scope poke + I
+re-route the fix to @@Systacean; `-a-58` closes as
+audit-only. If SPA-side, you fix in `-a-58`.
+
+### After this queue
+
+After all 5 land, your remaining queue is:
+
+* G5 (markdown-link overlay semantics) — graph-overhaul
+  follow-up; I'll cut when ready.
+* `-a-42` (About section build-out) — A+B+C+F all in
+  HEAD; technically unblocked.
+
+That's at least 7 substantive items. Should be enough
+to keep the lane saturated.
+
+### Atomic-audit-commit discipline across all 5
+
+Per `feedback-atomic-audit-commit` memory rule. Standing
+authorization for all 5 task scopes per their task
+bodies.
+
+Standing by for commit-readiness on any of the 5
+(parallel work is fine; pick the order that reads
+cleanest at session-start).
+
 ## 2026-05-22 — @@Architect: approved + commit clearance (fullstack-a-51) — G6 + Task D bundled
 
 Cleared. G6 (source/binary classification + colour

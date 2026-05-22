@@ -317,3 +317,88 @@ Pre-commit `git diff --staged --stat` audit + post-commit
   on subsequent CI runs.
 
 Holding for @@Architect commit clearance.
+
+## 2026-05-21 — committed as 663ab26 + smoke verification: PASS
+
+Cleared by @@Architect on [`../alex/event-architect-systacean.md`](../alex/event-architect-systacean.md) "## 2026-05-21 — @@Architect: approved + commit clearance (systacean-17) + smoke-dispatch pick". Suggested subject accepted verbatim. Smoke-dispatch via `systacean-17-smoke` branch authorized.
+
+### Sequence executed
+
+1. Staged exactly 3 cleared paths (`crates/chan-drive/src/index/config.rs` + `systacean-17.md` + `event-systacean-architect.md`). Pre-stage audit clean (no foreign files from the 19-file dirty working tree).
+2. Committed as `663ab26`: `chan-drive: box toml::Error variants in ConfigError (systacean-17)`. Post-commit audit clean.
+3. `git push origin HEAD:refs/heads/systacean-17-smoke` — new branch on origin.
+4. `gh workflow run ci.yml --ref systacean-17-smoke` — run [`26235956637`](https://github.com/fiorix/chan/actions/runs/26235956637) fired.
+
+### Smoke result (10m wall-clock total)
+
+| Job                                  | Outcome | Notes                                                              |
+|--------------------------------------|---------|--------------------------------------------------------------------|
+| rustfmt                              | ✓ 22s   | Clean.                                                             |
+| web (check + test + build)           | ✓ 2m19s | Clean.                                                             |
+| build (no default features)          | ✓ 7m37s | Clean. `RUSTFLAGS="-D warnings"` path stays green.                  |
+| clippy + test (ubuntu-latest)        | X 9m55s | **Clippy step PASSED**; `cargo test` step failed on 14 BGE-model tests (exactly the `-18` failure list — pre-existing, not regression). |
+| clippy + test (windows-latest)       | X 9m24s | Clippy reds on `dead_code` lints in chan-desktop IPC; **NO `result_large_err`** — `-17` fix delivered. |
+
+### `-17` verification: PASS
+
+Per the task body's acceptance criterion: "`test (windows-latest)` reaches the clippy step and either passes OR reds on something OTHER than `result_large_err`". The Windows clippy step DID reach + DID red on something other than `result_large_err`:
+
+```
+error: function `path_to_posix` is never used
+error: function `abs_to_drive_rel` is never used
+error: function `parent_rel` is never used
+error: function `open_path` is never used
+error: function `handle_request` is never used
+error: struct `WindowCommandFrame` is never constructed
+error: function `is_false` is never used
+error: enum `WindowCommand` is never used
+error: enum `ControlResponse` is never used
+error: enum `ControlRequest` is never used
+error: unused variable: `exit_signal`
+note: `-D dead-code` implied by `-D warnings`
+```
+
+All 11 lints are `dead_code` (one `unused_variable`). All from chan-desktop's IPC layer (`desktop/src-tauri/src/`). All Windows-platform-only because the macOS / Linux `#[cfg(target_os = "...")]` paths declare these items at module scope where they're only consumed on those targets; the Windows target compiles the declarations but doesn't reference them in the inactive `#[cfg]` branches. That's a chan-desktop platform-conditional cleanup, NOT a chan-drive lint problem and NOT under `-17`'s scope.
+
+`result_large_err` does not appear in the Windows clippy output. The boxing fix neutralized the lint as predicted. The variant size shrunk from "`toml::de::Error` payload + `PathBuf`" (Windows: over 128 bytes) to "pointer + `PathBuf`" (Windows: 16+24=40 bytes, well under threshold). Every `Result<_, ConfigError>` site benefits transparently.
+
+### Ubuntu test failures: pre-existing `-18` scope
+
+`cargo test --all-targets` on ubuntu-latest panicked on 14 tests:
+
+drive.rs (12):
+1. `link_targets_finds_file_after_index`
+2. `index_file_stamps_pre_read_stat_so_concurrent_writes_stay_visible`
+3. `pending_writes_journal_handles_forget_op`
+4. `pending_writes_journal_is_empty_on_a_clean_path`
+5. `pending_writes_journal_replay_converges_after_simulated_crash`
+6. `pending_writes_replay_degrades_index_op_to_forget_when_file_is_gone`
+7. `reconcile_catches_same_mtime_different_size_rewrite`
+8. `reconcile_on_empty_graph_indexes_everything_like_a_fresh_reindex`
+9. `reconcile_picks_up_files_added_offline`
+10. `reconcile_picks_up_modified_files`
+11. `resolve_link_returns_contact_kind_for_contact_node`
+12. `resolve_link_returns_file_kind_for_plain_note`
+
+indexer.rs (2):
+1. `debounce_coalesces_rapid_writes_into_one_index`
+2. `writes_to_disk_get_indexed_after_debounce`
+
+All panic on `Search("embedding model 'BAAI/bge-small-en-v1.5' not downloaded; ...")`. Exactly the failure mode the architect documented in `-18`'s background. Pre-existing — not regression from `-17`. `-18` is the targeted fix; picking that up next per the queue.
+
+### Out-of-scope finding: Windows dead_code lints
+
+The 11 chan-desktop dead_code lints on Windows are a separate platform-cleanup item, NOT in `-17`'s scope. Flagging here so the architect can decide whether to cut a `desktop-N` or `fullstack-b-N` task (depends on lane assignment for desktop IPC) or fold into a broader Windows cleanup pass. The lints will re-surface on the next `ci-12-smoke`-style Windows verification once the `-18` test fix lands and unmasks them in normal CI.
+
+### Branch handling
+
+Per the architect's "audit-trail-keep set" note: `systacean-17-smoke` joins `ci-12-smoke` on the keep list; both prune on the same beat as the `chan-v0.11.99-dryrun.{1..4}` tag cleanup.
+
+### Acceptance criteria recap
+
+* ✓ Local pre-push gate green at commit time.
+* ✓ Windows clippy reaches the clippy step + reds on something OTHER than `result_large_err`.
+* ✓ Ubuntu clippy passes (test step failure is the pre-existing `-18` scope, not regression).
+* ✓ macOS clippy + tests green (verified locally pre-commit).
+
+`-17` acceptance criteria met. Standing by for the architect's audit ack + clearance to proceed with `-18`.

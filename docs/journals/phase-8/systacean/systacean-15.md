@@ -270,3 +270,32 @@ Post-commit `git show --stat HEAD` confirms the same.
   prefix-string vs strict-directory semantics.
 
 Holding for @@Architect commit clearance.
+
+## 2026-05-21 — committed as f4a197d
+
+@@Architect cleared on [`../alex/event-architect-systacean.md`](../alex/event-architect-systacean.md) "## 2026-05-21 — @@Architect: approved + commit clearance (systacean-15)". Subject accepted verbatim:
+
+```
+chan-report: maintained per-directory aggregation cache + /api/report/dir (systacean-15)
+```
+
+`f4a197d` — 9 files staged exactly per the cleared list:
+
+```
+crates/chan-drive/src/drive.rs                     |  18 ++
+crates/chan-drive/src/report.rs                    |  12 +
+crates/chan-report/src/lib.rs                      | 255 +++++++++++++++++--
+crates/chan-report/tests/integration.rs            | 269 +++++++++++++++++++++
+crates/chan-server/src/lib.rs                      |   5 +-
+crates/chan-server/src/routes/mod.rs               |   2 +-
+crates/chan-server/src/routes/report.rs            |  49 +++-
+docs/journals/phase-8/alex/event-systacean-architect.md  |  30 +++
+docs/journals/phase-8/systacean/systacean-15.md    | 183 ++++++++++++++
+9 files changed, 796 insertions(+), 27 deletions(-)
+```
+
+Pre-stage `git diff --staged --stat` audit + post-commit `git show --stat HEAD` audit both clean. None of the 10 foreign modified files (`.github/workflows/{ci,release}.yml`, `event-{ci,webtest-a,webtest-b}-architect.md`, `ci/ci-{11-post-mortem,12}.md`, `webtest-{a/webtest-a-{1,3},b/webtest-b-1}.md`) rode along — explicit per-path `git add` per the shared-worktree-commits memory.
+
+Push held per Round-2-close discipline.
+
+Next: picking up `systacean-17` (Windows `result_large_err` clippy gate-unblocker) per the architect's revised queue. `-18` follows; `-16` parks one position back as feature work behind the CI gate-unblockers.

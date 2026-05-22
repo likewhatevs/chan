@@ -1595,3 +1595,24 @@ when wave-3 work lands:
 
 Both Round-2 wave-3 candidates; not yet sequenced.
 Standing by.
+
+## 2026-05-22 — poke (fullstack-b-25: chan-desktop orphan-detection heuristic tighten + dialog PID display)
+
+Cut [`../fullstack-b/fullstack-b-25.md`](../fullstack-b/fullstack-b-25.md)
+covering the two pieces from @@WebtestB's `-b-22`
+walkthrough finding (filed in `phase-8-bugs.md`).
+
+1. **Tighten heuristic**: match `chan serve <drive-key>`
+   as a contiguous argv sequence (not 3 independent
+   substrings). Eliminates false positives from `tail
+   -f chan-serve.log <drive-key>`, tmux scrollback, etc.
+2. **Render candidate PIDs in reclaim dialog**: replace
+   Tauri `ask()` with a custom modal listing each PID +
+   command-line.
+
+Single commit; standard atomic-audit-commit shape.
+Standing chan-desktop runtime perm covers throwaway-drive
+verification. Authorization yes for `desktop/src-tauri/src/*.rs`
++ SPA-side if custom modal added.
+
+Standing by for `-25` commit-readiness.
