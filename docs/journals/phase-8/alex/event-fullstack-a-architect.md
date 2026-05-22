@@ -9119,3 +9119,110 @@ Single bash invocation per discipline.
 
 Standing by for chan-drive + chan-server
 endpoints to land.
+
+## 2026-05-23 — poke (fullstack-a-76 slice 1: client methods ready; Settings UI gated on dual-toggle decision)
+
+Two-file change. Client methods alone;
+Settings UI deferred.
+
+### What landed
+
+`api/client.ts`:
+* `api.reportsState()` →
+  `GET /api/index/reports/state`.
+* `api.reportsEnable()` /
+  `api.reportsDisable()` → POST
+  endpoints.
+* All three return
+  `{ enabled: boolean }` per the
+  systacean-39 shape.
+* Doc-comment cross-references `-76` +
+  `-39` + the `-27` indexing pass.
+
+`reportsToggleClient.test.ts` (new): 5
+raw-source pins (3 method shapes +
+doc-comment + semantic-parallel).
+
+### Dual-toggle question (slice 2 gated)
+
+Discovered during the audit: there are
+TWO reports-related toggles in the SPA
+today.
+
+1. **`Preferences.reports?.enabled`**
+   (`-a-48` Task F option B) — GLOBAL
+   config flag round-tripped via
+   `/api/config`. Existing UI in
+   `HybridFileBrowserConfig.svelte`.
+   Lives in `Preferences` at
+   `api/types.ts:164`.
+2. **`Drive::reports_enabled`** (`-27`)
+   — PER-DRIVE metadata flag. Now
+   exposed via `/api/index/reports/*`
+   per `-39`. No SPA UI yet.
+
+Adding a new Settings Features section
+that uses the per-drive endpoint
+creates a THIRD control surface
+(Settings + HybridFileBrowserConfig +
+the underlying chan-drive flag).
+
+### Three resolutions
+
+1. **Hierarchical**: global = "available";
+   per-drive = "on for THIS drive".
+2. **Migrate**: deprecate the global
+   field; per-drive is canon.
+   HybridFileBrowserConfig re-wires.
+3. **Coexist**: keep both; document the
+   distinction.
+
+Your call. Slice 2 ships the Settings
+Features section once the resolution
+lands.
+
+### Acceptance (slice 1)
+
+1. 3 client methods exposed ✓.
+2. No regression on the existing
+   `Preferences.reports` flow ✓.
+3. No new UI yet (intentional).
+
+### Gate
+
+* vitest **1052 / 1052** (+5 net from
+  -a-77 audit's 1047).
+* svelte-check 0 errors / 0 warnings
+  across 4040 files.
+* npm build clean.
+
+### Decisions
+
+* **Ship client methods alone** —
+  harmless; unblocks slice 2.
+* **Defer Settings UI** vs adding a
+  third surface to the existing dual.
+* **Test-pin the semantic-parallel** —
+  future audits see them as siblings.
+
+### Suggested commit subject
+
+```
+api.reports{State,Enable,Disable}: client methods for systacean-39 endpoints (fullstack-a-76 slice 1)
+```
+
+### Files for `git add`
+
+* `web/src/api/client.ts`
+* `web/src/api/reportsToggleClient.test.ts` (new)
+* `docs/journals/phase-8/fullstack-a/fullstack-a-76.md`
+* `docs/journals/phase-8/fullstack-a/journal.md`
+* `docs/journals/phase-8/alex/event-fullstack-a-architect.md`
+  (this append)
+
+### Atomic-audit-commit applied
+
+Single bash invocation per discipline.
+
+Standing by for the dual-toggle
+decision.

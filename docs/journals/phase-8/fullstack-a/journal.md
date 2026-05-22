@@ -3160,3 +3160,34 @@ shape lands.
 Impl note at [fullstack-a-77.md](fullstack-a-77.md)
 "## 2026-05-23 — audit findings".
 Outbound poke + scope-poke fired.
+
+## 2026-05-23 — -a-76 SPA wiring slice 1 ready for review
+
+Two-file change. Client methods for the
+`systacean-39` per-drive reports endpoints.
+
+* `client.ts`: new `api.reportsState/Enable/Disable`
+  mirroring the semantic shape. Doc-comment
+  cites `-39` + the `-27` indexing contract.
+* `reportsToggleClient.test.ts` (new): 5
+  raw-source pins.
+
+Slice 2 (Settings UI) deferred — the
+pre-existing global `Preferences.reports`
+field via `/api/config` plus the new
+per-drive `Drive::reports_enabled` flag are
+two control surfaces for similar state.
+Architect needs to pick: hierarchical,
+migrate, or coexist. Settings UI ships
+once resolution lands.
+
+### Gate
+
+* vitest **1052 / 1052** (+5 net from
+  -a-77 audit's 1047).
+* svelte-check 0/0 across 4040 files.
+* npm build clean.
+
+Impl note at [fullstack-a-76.md](fullstack-a-76.md)
+"## 2026-05-23 — SPA client wiring slice 1".
+Outbound poke fired.

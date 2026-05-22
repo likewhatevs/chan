@@ -505,6 +505,19 @@ export const api = {
   semanticDownload: () => req<SemanticState>("POST", "/api/index/semantic/download"),
   semanticEnable: () => req<SemanticState>("POST", "/api/index/semantic/enable"),
   semanticDisable: () => req<SemanticState>("POST", "/api/index/semantic/disable"),
+  /// `fullstack-a-76`: per-drive chan-reports toggle. Mirrors the
+  /// semantic-toggle shape (state / enable / disable). Reports
+  /// endpoints landed in `systacean-39` at
+  /// `crates/chan-server/src/routes/reports_toggle.rs`. The
+  /// `enable` call triggers an incremental indexing pass per
+  /// `-27`'s contract; `disable` is idempotent at the
+  /// chan-drive layer.
+  reportsState: () =>
+    req<{ enabled: boolean }>("GET", "/api/index/reports/state"),
+  reportsEnable: () =>
+    req<{ enabled: boolean }>("POST", "/api/index/reports/enable"),
+  reportsDisable: () =>
+    req<{ enabled: boolean }>("POST", "/api/index/reports/disable"),
   /// `fullstack-b-30` slice b: download Source Code Pro Regular +
   /// OFL.txt into `<user-config>/chan/fonts/`. Idempotent server-
   /// side; safe to call from a click handler without guarding.

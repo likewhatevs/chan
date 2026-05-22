@@ -228,3 +228,126 @@ Per the memory rule. Per-path staging only.
 
 Push held. Standing by for the chan-server
 endpoint landing + the SPA-side follow-up.
+
+## 2026-05-23 — SPA client wiring slice 1 ready for review (Settings UI in slice 2)
+
+Two-file change. SPA-only.
+
+### What landed
+
+`web/src/api/client.ts`:
+* New `api.reportsState()` →
+  `GET /api/index/reports/state` →
+  `{ enabled: boolean }`.
+* New `api.reportsEnable()` →
+  `POST /api/index/reports/enable`.
+* New `api.reportsDisable()` →
+  `POST /api/index/reports/disable`.
+* All three return the post-flip
+  `{ enabled }` shape so callers update
+  cache from the response body.
+* Doc-comment cross-references
+  `fullstack-a-76` + `systacean-39` +
+  the `-27` incremental-indexing-pass
+  contract.
+* Sits next to the semantic client
+  methods so a future audit reads the
+  parallel.
+
+`web/src/api/reportsToggleClient.test.ts`
+(new): 5 raw-source pins covering the 3
+method shapes, the doc-comment cross-
+references, and the semantic-parallel
+audit pin.
+
+### Slice 2 deferred — dual-toggle decision needed
+
+The pre-existing
+`Preferences.reports?.enabled` field at
+`web/src/api/types.ts:164` is the GLOBAL
+config flag (round-tripped via
+`/api/config`); UI in
+`HybridFileBrowserConfig.svelte`.
+
+The new `Drive::reports_enabled` flag
+(this slice) is PER-DRIVE metadata via
+the chan-server's `/api/index/reports/*`
+routes.
+
+These are TWO different control surfaces
+for what reads as conceptually-similar
+state. Three resolutions possible:
+
+1. **Hierarchical**: global = "feature
+   available"; per-drive = "is it on
+   for THIS drive". Both must be ON
+   for indexer to run reports.
+2. **Migrate**: deprecate the global
+   `Preferences.reports` field;
+   per-drive is the source of truth.
+   HybridFileBrowserConfig's existing
+   UI gets re-wired.
+3. **Coexist**: keep both surfaces;
+   document the distinction; let the
+   user understand they're different.
+
+Architect's call. Slice 2 (Settings UI)
+ships once the resolution is settled.
+
+### Acceptance (slice 1 — client methods only)
+
+1. **3 client methods exposed** ✓ —
+   shape mirrors semantic.
+2. **No regression on the existing
+   preferences.reports flow** ✓ —
+   nothing touched.
+3. **No new UI yet** — slice 2 awaits
+   the dual-toggle decision.
+
+### Gate
+
+* vitest **1052 / 1052** (+5 net from
+  `-a-77` audit's 1047).
+* svelte-check 0 errors / 0 warnings
+  across 4040 files.
+* npm build clean.
+* Rust gate not re-run (no Rust touched).
+
+### Decisions
+
+* **Ship client methods alone** — they're
+  harmless (no caller yet) + unblock
+  slice 2 the moment the dual-toggle
+  decision lands.
+* **Test-pin the semantic-parallel** —
+  future audits should read both
+  toggles as siblings.
+* **Defer Settings UI** rather than ship
+  a third surface alongside the
+  existing two. Three surfaces would
+  amplify the confusion.
+
+### Suggested commit subject
+
+```
+api.reports{State,Enable,Disable}: client methods for systacean-39 endpoints (fullstack-a-76 slice 1)
+```
+
+Single commit. Client methods + 5 test
+pins.
+
+### Files for `git add` (per-path discipline)
+
+* `web/src/api/client.ts`
+* `web/src/api/reportsToggleClient.test.ts` (new)
+* `docs/journals/phase-8/fullstack-a/fullstack-a-76.md`
+* `docs/journals/phase-8/fullstack-a/journal.md`
+* `docs/journals/phase-8/alex/event-fullstack-a-architect.md`
+
+### Atomic-audit-commit
+
+Per the memory rule. Per-path staging only.
+
+Push held. Standing by for the
+dual-toggle architectural decision +
+then slice 2 ships the Settings UI.
