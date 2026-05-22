@@ -3013,3 +3013,53 @@ chan-drive + chan: reports_enabled feature flag + Drive::boot + chan reports CLI
 `gh workflow run ci.yml --ref systacean-27-smoke`. Expected ALL GREEN. Pure additive; backward-compat preserves existing contract.
 
 Per pre-authorization in the dispatch poke, proceeding to commit + push + smoke. Will surface verdict.
+
+## 2026-05-22 — poke (-27 smoke ALL GREEN after 4 fires; PTY-test flakiness chase)
+
+### Smoke chain
+
+* **Fire 1 (`26287696958`, `d6f804c`)**: rustfmt FAILED. 1 mine (line-wrap on doc comment) + 3 pre-existing in HEAD from concurrent lanes (`-a-66`, `-b-27`, `-b-28a` landed without `cargo fmt`). Fixed all 4 in `ae19acb`.
+* **Fire 2 (`26287884601`, `ae19acb`)**: rustfmt ✓; `build (no default features)` FAILED — my new `cmd_add` + `cmd_reports_set` called `not_a_chan_drive_hint` which is gated on `embeddings` feature. With `--no-default-features`, the helper isn't compiled. Fixed in `ef23d62` by inlining the error message.
+* **Fire 3 (`26288137785`, `ef23d62`)**: macos failed on `terminal_sessions::tests::dispatch_agent_event_uses_chord_in_agent_mode` — the `\x1b[27;9;13~` chord got mangled to `\u{7}7;9;13~` by macOS shell line discipline. Pre-existing `-21` test flake, not `-27`-related.
+* **Fire 4 (`26288364156`, `ef23d62`)**: macOS chord test passed; Ubuntu failed on `mcp_env_off_omits_chan_mcp_vars` + `conditional_pty_programs_validate_real_terminal` — both PTY-tests with race-prone shell-env captures. Pre-existing terminal-test flakes.
+* **Fire 5 (`26288566261`, `ef23d62`)**: **ALL GREEN** — rustfmt 18s, web 2m51s, build-no-default-features 1m55s, macOS 1m56s, Ubuntu 2m46s.
+
+### Pattern: pre-existing PTY-test flakiness, not -27 regressions
+
+Across 4 different fires on the same `-27` code, 3 different tests flaked, each at the shell-PTY-line-discipline boundary. None are in `-27`'s diff:
+
+* `dispatch_agent_event_uses_chord_in_agent_mode` (chan-server `-21` test).
+* `mcp_env_off_omits_chan_mcp_vars` (chan-server, terminal route).
+* `conditional_pty_programs_validate_real_terminal` (chan-server, terminal route).
+
+All three observe PTY output through a real shell. The shell's line discipline + escape sequence interpretation is race-sensitive to CI runner load + macOS-vs-Linux differences. **Worth flagging as a Round-3 hardening item** — the PTY-test pattern (write input → assert echo) is fundamentally flaky on hosted CI. Consider:
+
+1. Mock PTY without line discipline for byte-pattern assertions.
+2. Strip terminal-control bytes before substring matches (similar to my `-21` line-wrap fix in `fb61ab9`).
+3. Re-run flaky PTY tests automatically (CI-level retry) — masks the symptom but eats the cost.
+
+Not blocking `-27`. Flagged for sequencing.
+
+### What's live on main
+
+* `d6f804c` — `-27` chan-drive + chan implementation.
+* `ae19acb` — cross-lane fmt fixup (`-a-66` + `-b-27` + `-b-28a` slipped fmt into HEAD).
+* `ef23d62` — embeddings-feature-gate fixup (`not_a_chan_drive_hint` is `#[cfg(feature = "embeddings")]`).
+
+### Functional verification
+
+* `Drive::reports_enabled()` / `set_reports_enabled()` work end-to-end (tested + smoke validated).
+* `Drive::boot()` no-op when both features off; kicks off reports scan when enabled.
+* `chan reports enable/disable` + `chan add --semantic-search --reports` both work (verified via existing CLI test infrastructure).
+
+### Lane state
+
+| Task | State |
+|------|-------|
+| -27 | ✓ shipped + smoke-validated (this) |
+| -28 | pending (config currency audit) |
+| All prior | ✓ shipped |
+
+`fullstack-b-28` (pre-flight UI) + `fullstack-a-76` (Settings) can now consume the API surface.
+
+Lane idle aside from `-28`. Standing by for routing on whether to pick up `-28` now or hold for further dispatches.
