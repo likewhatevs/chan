@@ -5073,3 +5073,111 @@ Lane-A test server torn down:
 PARTIAL. `-a-90` follow-up needed to remove the
 3rd Alt+Space handler in
 `TerminalTab.svelte::handleTerminalKeyEvent`.
+
+## 2026-05-22 — proactive re-walk: -a-94 (Alt+Space 3rd handler) + -a-91 (chord-escape registry)
+
+Proactive walk on HEAD `5e89a74`. Throwaway drive
+r29; chan serve 127.0.0.1:8787; Chrome MCP tab
+`503726124`.
+
+### Verdicts (3/3 HOLD)
+
+| Check | Surface | Verdict |
+|-------|---------|---------|
+| `-a-94` Alt+Space from terminal no longer opens prompt | empirical | HOLD |
+| `-a-91` Cmd+, escapes xterm focus → Settings opens | empirical | HOLD |
+| `-a-91` Cmd+Alt+P escapes xterm focus → rich prompt opens | empirical | HOLD |
+
+### `-a-94` HOLD — 3rd Alt+Space handler removed
+
+The follow-up I flagged is shipped (`ad54de8`).
+Empirical:
+- Cmd+Alt+T → spawn Terminal-1 (focused)
+- Alt+Space → `richPromptPresent: false`,
+  `richPromptVisible: false` ✓
+
+The legacy chord no longer fires from terminal-
+focused contexts. My flagged PARTIAL is now
+closed.
+
+### `-a-91` HOLD — chord-escape registry works
+
+The new `shouldEscapeTerminal(e)` gate in
+`TerminalTab.svelte::handleTerminalKeyEvent`
+returns `false` for App-group shortcuts so xterm
+doesn't consume them. Verified:
+
+1. **Cmd+, from focused terminal**:
+   - Pre-state: `activeElement.className = "xterm-helper-textarea"`
+     (xterm has focus).
+   - Cmd+, fired.
+   - Result: Settings overlay opens
+     (`settingsVisible: true`, class
+     `settings-tab svelte-182y78p`). URL gained
+     `&settings=1`.
+
+2. **Cmd+Alt+P from focused terminal**:
+   - Clicked terminal body → xterm focused.
+   - Cmd+Alt+P fired.
+   - Result: rich prompt opens
+     (`richPromptVisible: true`).
+
+The chord-escape registry shape (per
+`shortcuts.ts`):
+- `app.settings.toggle` ✓
+- `app.terminal.richPrompt` ✓
+- `app.files.toggle`
+- `app.graph.toggle`
+- `app.terminal.toggle`
+- `app.window.reload`
+- `app.draft.new`
+
+These 7 chords now escape xterm; previously they
+were swallowed and written to PTY as escape
+sequences.
+
+### Out of scope (intentional)
+
+* **Tab-switch chords (Alt+Shift+[ / ])**: NOT
+  in the escape registry. Empirically verified:
+  Alt+Shift+] from focused terminal does NOT
+  switch tabs (still consumed by xterm). This is
+  per the registry's App-group scope; tab-switch
+  is a Tabs-group chord, intentionally left as
+  Cmd+Alt+. / Cmd+Alt+Tab on web Mac or via
+  Hybrid NAV. Flagging as a possible follow-up
+  (could be useful for muscle-memory tab-switch
+  from terminal) but NOT a regression.
+
+### Highlights
+
+* **The PARTIAL → cut → re-walk loop closes
+  again**: my prior walk caught the 3rd handler
+  miss in `handleTerminalKeyEvent`; architect
+  cut `-a-94`; @@FullStackA shipped; re-walk
+  confirms. Two round-trips on the Alt+Space
+  removal saga.
+* **`-a-91` is the right architectural fix**:
+  a registry shape that flags App-group chords
+  for escape is more maintainable than ad-hoc
+  per-chord guards. Future chord additions just
+  flip the `escapeTerminal: true` bit.
+* **Vitest pin covers the registry shape +
+  flagged shortcuts**: 7 App-group entries
+  required `escapeTerminal: true`. Coverage now
+  catches the registry-vs-runtime gap that
+  empirical walks would have caught anyway.
+
+### State at end of walk
+
+Lane-A test server torn down:
+1. chan serve killed.
+2. `rm -rf /tmp/chan-test-phase8-wa-r29/`.
+3. `chan remove` → unregistered.
+4. Chrome MCP tab closed.
+
+3/3 HOLD. The Alt+Space removal saga is fully
+closed (`-a-90` + `-a-94`). The chord-escape
+registry (`-a-91`) makes the broader xterm-
+focus-eats-chord problem go away for the App
+group.

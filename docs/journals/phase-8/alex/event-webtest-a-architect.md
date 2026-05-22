@@ -2984,3 +2984,79 @@ removal is incomplete.
 * Path-limited `git commit`.
 
 Standing by.
+
+## 2026-05-22 — poke (-a-94 + -a-91 re-walk — Alt+Space saga CLOSED + chord-escape registry HOLD; 3/3)
+
+Proactive walk on HEAD `5e89a74`. Throwaway drive
+r29; chan serve 127.0.0.1:8787; Chrome MCP tab
+`503726124`. Verdict in
+[`../webtest-a/webtest-a-1.md`](../webtest-a/webtest-a-1.md).
+
+### Verdicts: 3/3 HOLD
+
+| Check | Verdict |
+|-------|---------|
+| `-a-94` Alt+Space from terminal no longer opens prompt | HOLD |
+| `-a-91` Cmd+, from focused terminal → Settings opens | HOLD |
+| `-a-91` Cmd+Alt+P from focused terminal → rich prompt | HOLD |
+
+### `-a-94` closes my flagged PARTIAL
+
+The 3rd Alt+Space handler in
+`TerminalTab.svelte::handleTerminalKeyEvent`
+removed. Empirical:
+- Cmd+Alt+T → Terminal-1 active.
+- Alt+Space → `richPromptVisible: false` ✓
+
+Two round-trips on the Alt+Space removal saga:
+- `-a-90`: removed 2 of 3 handlers; my walk caught
+  the third
+- `-a-94`: removed the third
+
+Saga CLOSED.
+
+### `-a-91` chord-escape registry works empirically
+
+`shouldEscapeTerminal(e)` gate in
+`handleTerminalKeyEvent` returns false for
+App-group chords so xterm doesn't consume them.
+
+Verified:
+- Cmd+, from focused terminal (`xterm-helper-textarea`
+  active) → **Settings opens** (`settingsVisible: true`)
+- Cmd+Alt+P from focused terminal → **rich prompt
+  opens**
+
+The registry covers 7 App-group chords (Settings,
+RichPrompt, FB, Graph, Terminal, Reload, NewDraft).
+
+### Side observation: tab-switch chords NOT in registry
+
+Alt+Shift+] from focused terminal still doesn't
+switch tabs (xterm eats it). This is by design
+per the registry's App-group scope. Tab-switch is
+a Tabs-group chord. Possible follow-up for
+muscle-memory ergonomics (would be nice to switch
+tabs without leaving terminal focus) but NOT a
+regression.
+
+### Architectural win
+
+`-a-91`'s registry shape (flag chords in
+`shortcuts.ts` with `escapeTerminal: true`) is
+more maintainable than ad-hoc per-chord guards.
+Future chord additions just flip the bit. Vitest
+pin covers both the registry shape AND the 7
+required entries.
+
+### Suggested commit shape
+
+* **Commit subject**: `docs: webtest-a proactive
+  re-walk — -a-94 Alt+Space saga CLOSED + -a-91
+  chord-escape registry empirically HOLD (3/3)`.
+* **Files**:
+  * `docs/journals/phase-8/webtest-a/webtest-a-1.md`
+  * `docs/journals/phase-8/alex/event-webtest-a-architect.md`
+* Path-limited `git commit`.
+
+Standing by.
