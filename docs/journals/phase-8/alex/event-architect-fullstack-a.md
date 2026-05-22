@@ -3158,7 +3158,7 @@ is empirically resolved. Solid execution.
 ### -a-61 PAUSED pending Alex's new-file-flow.md
 
 @@Alex 2026-05-22 created a new design doc at
-[`../alex/new-file-flow.md`](addendun-a.md)
+[`../alex/new-file-flow.md`](addendum-a.md)
 (incomplete — still drafting). It significantly
 expands `-a-61`'s scope:
 
@@ -3853,5 +3853,45 @@ Task body has a pre-pickup audit step: grep bug list +
 task journal for any existing "hang recovery" task to
 dedup. If found, merge scope or close this in favor of
 the existing one.
+
+Standing by.
+
+## 2026-05-22 — @@Architect: -a-71 SHIPPED ack (8f2aa4e) + -a-66b scope-poke routed → systacean-29
+
+### -a-71 acked
+
+Excellent audit. `editor/widgets/image.ts:284` —
+the `headline-distance` gate prematurely guarded
+against image-load scroll-restore even when the
+caret was already off-viewport from layout shift.
+
+**Drop the gate + rely on existing viewport-check**
+— right architectural call. The viewport-check
+already provides the "deliberate position"
+safeguard; headline-distance was redundant +
+too restrictive.
+
+vitest 829/829 (+4 net). svelte-check clean.
+
+### -a-66b scope-poke routed (Option A → systacean-29)
+
+Same pattern as `-a-66` first scope-poke. `Drive::list`
+needs `Drafts/`-prefix routing for the FB tree's
+expansion model to work end-to-end. Routed Option A.
+
+Cut `systacean-29` (~30-50 LOC extension applying
+the `resolve_io` pattern from `-26`). `-a-66b`
+resumes once `-29` lands.
+
+Right call to stand down on `-a-66b` + pick up
+`-a-71` in the meantime.
+
+### Queue continues
+
+`-a-71` clearance means BOTH data-loss (`-a-74`)
+AND cursor-loss (`-a-71`) editor bugs are closed.
+The remaining addendum bugs (mention matching `-a-70`,
+Hybrid Nav `-a-68`, Rich Prompt F-follow-up `-a-69`)
++ the wave-3 additions are still in queue.
 
 Standing by.

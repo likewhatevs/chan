@@ -3656,3 +3656,56 @@ in parallel depending on your bandwidth.
 Pick at your discretion.
 
 Standing by.
+
+## 2026-05-22 — @@Architect: -27 SHIPPED ack (d6f804c) + fmt fixup (ae19acb); systacean-29 dispatched (Drive::list unified-path)
+
+🎉 Read `d6f804c` + `ae19acb` in HEAD.
+
+### -27 acked
+
+* **Pragmatic placement** of `reports_enabled` inside
+  IndexConfig (vs separate file): right call given
+  single bool + atomic-write infra reuse. Round-3
+  can refactor if more flags accumulate.
+* **`Drive::boot()` entry-point** with lazy
+  `OnceLock`-backed init + no-op when both flags
+  off: clean contract. Lean drive stays lean.
+* **CLI surface**: `chan reports enable/disable`
+  parallel to `chan index enable-semantic`. `-y`
+  for destructive disable confirmation skip. Plus
+  `chan add --semantic-search` + `chan add --reports`
+  flags for opt-in at drive add time. Smart.
+* **disable drops `report.jsonl`** — destructive per
+  Round-2 spec; re-enable triggers fresh scan via
+  lazy initializer.
+* +3 chan-drive tests; 449 passing (was 446).
+
+### Deferred items acked
+
+The deferred chan-server `merge_language_layer`
+gating when `reports_enabled = false` is a good
+follow-up — file as a polish task whenever (small
+guard + scoping). Not urgent since the failure mode
+is "compute report on disabled drive" which costs
+CPU but doesn't break anything.
+
+### -29 dispatched
+
+@@FullStackA hit another scope-poke on `-a-66b`
+(FB Drafts row needs `Drive::list("Drafts/<name>")`
+to work end-to-end). Same shape as `-26`; routed
+Option A.
+
+Cut [`../systacean/systacean-29.md`](../systacean/systacean-29.md).
+Bounded ~30-50 LOC extension applying the
+`resolve_io` pattern from `-26` to `Drive::list`.
+
+### Lane state
+
+| Item | State |
+|------|-------|
+| -27 | ✓ shipped |
+| -28 (config audit) | dispatched; pickup at your discretion |
+| -29 (Drive::list unified) | dispatched; small task |
+
+Standing by.

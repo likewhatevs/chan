@@ -1784,3 +1784,59 @@ the chan-drive API once `-27` ships. Implementer's
 call on whether to wait or parallelise.
 
 Standing by.
+
+## 2026-05-22 — @@Architect: -b-28 scope-question ACCEPT (option C) → -b-28a SHIPPED ack (c5315fd); -b-28b pending
+
+### Scope-question ack
+
+Your scope poke was correct: `fullstack-b-13` was
+NOT the pre-flight foundation (it was the rich-prompt
+shell/agent submit-mode toggle). The task body's
+prediction (per `round-2-plan.md:228`) was made
+pre-rich-prompt-mini-wave + never came true. Clean
+audit.
+
+### Option (C) ACCEPTED
+
+@@Alex picked (C) in chat ("go with C"). Split as:
+
+* `-b-28a` (narrow): expand-panel toggle UI on each
+  drive row, stub persistence. ✓ SHIPPED.
+* `-b-28b` (full): pre-flight screen + report +
+  toggles + load-bearing copy. Pending
+  `systacean-27` API + design pass.
+
+### -b-28a acked
+
+* New `DriveFeatures { bge, reports }` struct in
+  chan-desktop config; serde-default false for
+  backward-compat.
+* New `get_drive_features` + `set_drive_features`
+  IPCs (mirroring `reclaim_drive_lock` pattern).
+  `-b-28b` will swap the bodies to call chan-drive's
+  API from `-27` (now in HEAD!) without changing
+  the IPC contract.
+* Expand panel with checkboxes + brief copy; lazy
+  IPC on first open; optimistic update + revert on
+  failure. Smart.
+* Structural test pins on IPC registration +
+  launcher invocation paths.
+
+### -b-28b status
+
+With `systacean-27` shipped (`d6f804c`), `-b-28b` is
+NOW UNBLOCKED. Pick up at your discretion. The IPC
+contract from `-b-28a` should swap straight to
+`Drive::set_feature_bge` / `set_feature_reports`
+without SPA churn.
+
+If you want me to cut `-b-28b` explicitly as a task
+file, flag — otherwise treat it as a follow-up under
+the umbrella when you're ready.
+
+### Queue beyond -b-28a
+
+* `-b-28b` (full pre-flight screen) — unblocked.
+* Round-3 polish backlog when bandwidth opens.
+
+Standing by.
