@@ -2406,3 +2406,99 @@ Systacean lane fully idle post-`-21`. Architect-side workflow tooling update (po
 ### Holding
 
 Standing by for new dispatches. Atomic-audit-commit + obvious-call discipline preserved across all post-incident commits this session.
+
+## 2026-05-22 — scope poke (-22 audit verdict: dedup hypothesis was WRONG; actual issue is filtering unreferenced contacts)
+
+Picked up `-22` per `ed81e76` dispatch. **Audit-first per the task body**. Empirical findings flip the diagnosis: the bug body hypothesized per-occurrence emission / dedup-key collision; my empirical test shows dedup is fine — the actual over-emission is per-imported-contact FILE node, NOT mention-node dedup.
+
+### Empirical setup
+
+* Throwaway drive `/tmp/chan-22-audit/` with a full copy of `docs/` from the chan source.
+* `chan add /tmp/chan-22-audit --name chan22audit`; `chan serve /tmp/chan-22-audit --port 8866` (background, PID 36315).
+* `curl /api/graph?scope=drive` against the live serve.
+
+### Empirical node counts (throwaway drive, NO imported contacts)
+
+```
+total nodes: 788
+  file: 659 (all node_kind=None — no contact-frontmatter files in plain docs/)
+  directory: 48
+  mention: 47   ← matches the ~49 unique @@handles in docs/ within 1-2 (case variation)
+  media: 25
+  tag: 6
+  language: 3
+```
+
+### Adding contact files
+
+Synthesized 2 contact files (`contacts/alice.md` + `contacts/bob.md` with `chan.kind: contact` frontmatter):
+
+```
+total: 791 (+3 vs prior because of 2 new files + 1 new directory)
+  file: 661
+  file node_kind='contact': 1 (only alice.md; bob.md's reindex hadn't propagated yet)
+```
+
+**1 contact file = 1 contact-kind File node**. Pattern: contact File nodes are emitted **per imported contact file**, NOT per `@@mention`. This is the per-file loop at `crates/chan-server/src/routes/graph.rs:971-987` — every file in the drive becomes a File node, contact-frontmatter-marked ones get `node_kind: "contact"`.
+
+### Diagnosis: the "1973 vs 49" gap is contact-FILE count, not mention-NODE count
+
+The bug body's hypothesis was "per-occurrence emission instead of dedup" (i.e. `@@Architect` mentioned 500 times → 500 nodes instead of 1). My empirical test rules that out: mention nodes ARE deduped to ~47 from the 8912 raw `@@Handle` occurrences in docs/.
+
+The actual cause: @@Alex's chan-source drive has **~1973 imported contact files** (likely from address-book import; each becomes a File node with `node_kind: "contact"`). Every imported contact gets a node regardless of whether it's referenced by a `@@mention` anywhere in markdown.
+
+### Empirical proof points
+
+| Pattern | Empirical | Bug-body expectation | Match? |
+|---------|-----------|---------------------|--------|
+| `@@Handle` occurrences in docs/ | 8912 | (implied many) | ✓ |
+| Unique `@@Handle` strings in docs/ | 50 | 49 | ≈ ✓ |
+| Mention NODES emitted (throwaway) | 47 | should be ~49 if dedup works | ✓ |
+| Contact FILE nodes per contact-frontmatter file | 1 | (not measured in bug body) | NEW finding |
+
+So @@Alex's 1973 contact nodes ≈ 1973 imported contact files in their `contacts/` directory. Mention dedup is healthy.
+
+### Two routing options
+
+**Option A — filter contact File nodes to only the referenced subset** (recommended):
+
+When a `@@mention` resolves to a contact file (via the existing `mention_to_contact` lookup at line 866-890), keep that contact's File node. Drop contact File nodes for contacts NOT referenced by any mention. On @@Alex's drive: 1973 contact files → ~49 contact File nodes (only the ones actually mentioned in markdown).
+
+* **Pros**: matches the bug body's desired end state (1973 → ~49). Doesn't require any chan-drive-side changes; pure chan-server graph-route filter. Surfaces only contacts that are graph-relevant.
+* **Cons**: filtering changes the meaning of the graph view ("graph of drive" implicitly drops the unreferenced-contacts subset). Might surprise users who expect "every contact in my contacts/ dir is in the graph view".
+
+Roughly: walk the per-file emit loop; for contact-frontmatter files, only emit if the contact's path is in the resolved-mention-target set OR (defensive) is referenced by some other edge endpoint.
+
+**Option B — surface contact-file emission as configurable** (deferred):
+
+Add a query parameter (`/api/graph?scope=drive&include_unreferenced_contacts=false`) so the SPA can opt out of seeing every imported contact. Lets users see all contacts (current default) or only-referenced. Bigger surface change.
+
+* **Pros**: doesn't change the default behavior; opt-in surface.
+* **Cons**: scope creep beyond -22's "audit + fix" framing.
+
+### My recommendation: Option A
+
+The bug body's headline framing ("1973 vs 49 = ~40x over-emission") strongly implies the user expects ~49. The graph's job is to show "who-mentions-whom" — unreferenced contacts contribute nothing to that. Filtering them is the natural fix.
+
+If you want the unfiltered view available too, Option B (query param) can be a follow-up. But default-filtered is the right shape per the bug framing.
+
+### What I'd do for option A
+
+* `crates/chan-server/src/routes/graph.rs`: collect the set of contact paths that are resolution targets of mention edges (already computed by the existing `mention_to_contact` map at line 866-890). When emitting File nodes, skip contact-frontmatter files whose path is NOT in that set.
+* Tests: fixture with 3 contact files (alice, bob, charlie); markdown only references @@alice; assert only alice emits a node + alice's mention edge points at it; bob + charlie are NOT in the graph.
+
+Diff: ~10 lines in graph.rs + 1 new test + task tail + outbound. Bounded scope.
+
+### Optional bucket emit (still on the table)
+
+Per the task body's "optional secondary scope", I can bundle `bucket: Option<FileBucket>` on `GraphNodeView::File` in the same commit if you approve A. Independent change; no scope creep. Would let @@FullStackA drop client-side classifyFile regex in a future SPA polish.
+
+### Teardown state
+
+Throwaway drive still alive (PID 36315 on port 8866 against `/tmp/chan-22-audit/`). Holding before any fix lands — will tear down after the fix verifies + before commit.
+
+### NOT acting unilaterally
+
+Per cross-agent-scope discipline. Bug body's diagnosis was wrong; my fix is materially different shape (filter vs dedup). The fix shape change is significant enough to warrant your routing.
+
+Holding for option A/B routing.
