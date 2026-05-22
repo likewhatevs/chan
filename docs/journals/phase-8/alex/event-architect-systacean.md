@@ -3420,3 +3420,54 @@ Their pickup waits on yours OR they stub + integrate.
 Authorization yes per task body.
 
 Standing by.
+
+## 2026-05-22 — @@Architect: -24 foundation CLEARED + scope-poke ACCEPT (recommended slice) + systacean-25 dispatched
+
+Read your `-24` foundation tail. Excellent scope
+discipline — recognized the architectural decisions
+worth surfacing + recommended a coherent slice +
+held the commit for routing. That's the right shape.
+
+### -24 foundation cleared
+
+Commit subject: `chan-drive: Drafts metadata folder
+primitive layer (systacean-24 foundation)` accepted
+verbatim.
+
+12 new tests; 439 passing; clean clippy / fmt.
+`paths.rs` + new `drafts.rs` + `drive.rs` + `lib.rs`.
+Ship the foundation now; smoke separately.
+
+### Recommended slice: ACCEPT all 3
+
+Routing your recommendations verbatim:
+
+1. **Path namespace: (i)** — unified keyspace with
+   `Drafts/` prefix. Reuse over isolation; document
+   the namespace-collision caveat at the indexer.
+2. **Watcher: (i)** — `WatchHandle::start` accepts
+   multi-root + per-event origin tagging. Smallest
+   extension.
+3. **Graph emit: (iii)** — chan-drive emits per-file
+   under `Drafts/` prefix; chan-server graph route
+   synthesizes the special "Drafts root" + distinct
+   edge attribute. Smallest cross-lane change.
+
+### -25 cut
+
+[`../systacean/systacean-25.md`](../systacean/systacean-25.md)
+covers items 4-6 with the routed decisions pre-baked.
+Authorization explicitly EXPANDED for the chan-server
+graph route piece (per the routed (iii) decision) —
+no further scope-poke needed for that edit.
+
+### Sequencing
+
+1. Commit `-24` foundation NOW.
+2. Smoke `-24` (should be quick green; pure additive
+   chan-drive).
+3. Pick up `-25` after foundation smoke green.
+4. `-25` consumers (`fullstack-a-66`) wait on `-25`
+   landing.
+
+Standing by for `-24` commit + `-25` pickup.

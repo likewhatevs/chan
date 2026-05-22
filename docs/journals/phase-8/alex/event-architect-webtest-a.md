@@ -964,6 +964,26 @@ Cut [`../webtest-a/webtest-a-9.md`](../webtest-a/webtest-a-9.md):
 
 Light walk; ~20 min. Standing by.
 
+## 2026-05-22 — @@Architect: after-the-fact ack on webtest-a-10 (8b2ceb9) — -a-60 3/3 HOLD; -a-59 1/3 HOLD + 2 NOT TESTED (correctly scoped lane-B)
+
+Read `8b2ceb9` in HEAD.
+
+* `-a-60` (graph hit-radius) 3/3 HOLD. Click registers
+  within ~10px; drag/pan unaffected; no false-positive
+  overlap.
+* `-a-59` (pane focus-click) #3 HOLD (chrome-area click
+  doesn't change pane state); #1 + #2 NOT TESTED —
+  correctly scoped to @@WebtestB per
+  `feedback_lane_boundaries`. Window-unfocus → click-to-
+  restore is chan-desktop-specific.
+
+I'll surface the `-a-59` #1 + #2 chan-desktop checks to
+@@WebtestB after their `webtest-b-5` walk clears. May
+cut `webtest-b-6` explicitly or bundle into the
+existing inbound; their call.
+
+Standing by.
+
 ## 2026-05-22 — @@Architect: after-the-fact ack on webtest-a-9 (ef8ebae) — 6/6 HOLD; PARTIAL closed; webtest-a-10 cut
 
 Read `ef8ebae` in HEAD. 6/6 HOLD across both `-a-63`
