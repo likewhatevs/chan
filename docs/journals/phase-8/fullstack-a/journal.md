@@ -1417,3 +1417,75 @@ Impl note + commit subject at
 poke draft staged; standing by for the gate +
 commit beat. Queue waiting: G5 follow-up →
 `-a-42` (About).
+
+## 2026-05-22 — -a-57 (FileBucket chip toggles) ready for review
+
+WAVE-3 FAN-OUT picked up by @@Alex's standing
+authorization. Started with `-a-57` per the
+architect's suggested order (highest-visibility
+@@Alex ask: hide markdown to see source).
+
+Seven-file change (3 SPA + 2 tests + 1 new test +
+GraphPanel). SPA-only; no Rust touched.
+
+### Decision flagged
+
+`systacean-16` (FileBucket) lives on chan-report's
+`FileStats`, NOT on `GraphNodeView::File`. Reused
+`-a-51`'s SPA-side `classifyFile` helper rather
+than firing a scope poke for chan-server emit
+extension — matches `-a-51` precedent + unblocks
+the chip work. chan-server emit extension can
+land as a clean cleanup task later.
+
+### What landed
+
+* `GraphFilters` extended with `markdown` +
+  `source` bits in BOTH `store.svelte.ts` AND
+  `tabs.svelte.ts` (duplicate type kept in
+  lockstep; future cleanup task could unify).
+* URL-hash `encodeGraphFilters` /
+  `decodeGraphFilters` bumped 6 → 8 bits;
+  trailing-char default-on fallback preserves
+  legacy hashes.
+* `encodeGraphTabFilters` /
+  `decodeGraphTabFilters` gained version
+  sentinel `"2"` to distinguish new-format
+  payloads (explicit OFF) from legacy
+  (default ON).
+* `FilterKind` extended; `FILTER_COLORS` maps
+  the new chips to `--g-doc` / `--g-source`
+  swatches per `-a-51`'s G6 palette.
+* `classifyFile` (GraphPanel-local) extended
+  to return 5 buckets (matches the canvas-side
+  helper of the same name).
+* `hiddenMarkdownIds` + `hiddenSourceIds`
+  derives + `visibleEdges` / `visibleNodeIds`
+  consumption.
+* Both chip iteration sites + counts dispatch
+  extended.
+
+### Tests
+
+`graphFileBucketChips.test.ts` (new): 19 raw-
+source pins. `graphDepthFilter.test.ts` had two
+`-a-52` pins (FilterKind shape, chip array)
+relaxed to tolerate future extensions.
+`store.test.ts` + `tabs.test.ts` filter
+literals patched for the new bits.
+
+### Gate
+
+* vitest **713 / 713** (+20 net from `-a-52`'s
+  693).
+* svelte-check 0 errors / 0 warnings across
+  3995 files.
+* npm build clean.
+* Rust gate not re-run.
+
+Impl note + commit subject at
+[fullstack-a-57.md](fullstack-a-57.md).
+Outbound poke fired; standing by. Queue
+waiting: `-a-58` (parent-edge audit-then-fix)
+→ `-a-56` / `-a-59` / `-a-60` per architect's
+suggested order.

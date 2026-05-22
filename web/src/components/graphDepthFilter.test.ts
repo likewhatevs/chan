@@ -59,9 +59,19 @@ describe("fullstack-a-52 G9: forward-only BFS", () => {
 
 describe("fullstack-a-52 G10: link filter dropped", () => {
   test("FilterKind union no longer includes 'link'", () => {
-    expect(graph).toMatch(
-      /type FilterKind = "tag" \| "mention" \| "language" \| "img" \| "folder"/,
-    );
+    // `-a-52` dropped link from FilterKind; subsequent tasks
+    // (`-a-57`) extend FilterKind with new bucket kinds. Pin the
+    // load-bearing absence (link) rather than the exact union
+    // shape so growing the kind set doesn't trip this guard.
+    expect(graph).toMatch(/type FilterKind =/);
+    expect(graph).toMatch(/\| "tag"/);
+    expect(graph).toMatch(/\| "mention"/);
+    expect(graph).toMatch(/\| "language"/);
+    expect(graph).toMatch(/\| "img"/);
+    expect(graph).toMatch(/\| "folder"/);
+    // No `link` arm in the FilterKind union; tolerate
+    // surrounding whitespace + leading separator.
+    expect(graph).not.toMatch(/type FilterKind =[\s\S]*?\| "link"/);
     expect(graph).not.toMatch(/type FilterKind = "link"/);
   });
 
@@ -71,15 +81,14 @@ describe("fullstack-a-52 G10: link filter dropped", () => {
 
   test("chip iterations no longer ship a 'link' entry", () => {
     // Both iteration sites (tab-menu + filterChips snippet) drop
-    // the "link" element. Pin the new array shape.
-    const matches = graph.match(
-      /\["tag", "mention", "language", "img", "folder"\] as const/g,
-    );
+    // the "link" element. `-a-57` extended the arrays with
+    // additional bucket kinds; pin the load-bearing absence
+    // (link) + the leading-kind shape (starts with tag) so the
+    // guard tolerates future-extension additions.
+    const matches = graph.match(/\["tag", "mention"[^\]]*\] as const/g);
     expect(matches).not.toBeNull();
     expect(matches!.length).toBeGreaterThanOrEqual(2);
-    expect(graph).not.toMatch(
-      /\["link", "tag", "mention", "language", "img", "folder"\]/,
-    );
+    expect(graph).not.toMatch(/\["link",\s*"tag"/);
   });
 
   test("FILTER_COLORS no longer maps link", () => {

@@ -751,9 +751,23 @@ function readLayoutHash(): ReturnType<typeof serializeLayout> {
 /// doesn't bloat the URL. Legacy 5-char hashes (pre-folder)
 /// decode with `folder` treated as the default (on).
 function encodeGraphFilters(f: GraphFilters): string {
-  if (f.link && f.tag && f.mention && f.language && f.img && f.folder) return "";
+  if (
+    f.link &&
+    f.tag &&
+    f.mention &&
+    f.language &&
+    f.img &&
+    f.folder &&
+    f.markdown &&
+    f.source
+  ) {
+    return "";
+  }
   const bit = (v: boolean) => (v ? "1" : "0");
-  return `${bit(f.link)}${bit(f.tag)}${bit(f.mention)}${bit(f.language)}${bit(f.img)}${bit(f.folder)}`;
+  // `fullstack-a-57` extended from 6 to 8 bits (markdown + source).
+  // Legacy 6-char hashes decode cleanly with the new bits falling
+  // back to the default-on via `ch()`'s trailing-char rule.
+  return `${bit(f.link)}${bit(f.tag)}${bit(f.mention)}${bit(f.language)}${bit(f.img)}${bit(f.folder)}${bit(f.markdown)}${bit(f.source)}`;
 }
 
 function decodeGraphFilters(s: string): GraphFilters {
@@ -770,6 +784,8 @@ function decodeGraphFilters(s: string): GraphFilters {
     language: ch(3),
     img: ch(4),
     folder: ch(5),
+    markdown: ch(6),
+    source: ch(7),
   };
 }
 
@@ -838,6 +854,8 @@ function applyOverlaysFromHash(): void {
     graphOverlay.filters.language = f.language;
     graphOverlay.filters.img = f.img;
     graphOverlay.filters.folder = f.folder;
+    graphOverlay.filters.markdown = f.markdown;
+    graphOverlay.filters.source = f.source;
     if (ins === "0" || ins === "1") graphOverlay.inspectorOpen = ins === "1";
     graphOverlay.mode =
       mode === "fs" ? "filesystem" : mode === "lang" ? "language" : "semantic";
@@ -1360,6 +1378,16 @@ export type GraphFilters = {
   /// nodes often crowd a whole-drive graph; the toggle lets the
   /// user collapse them for a cleaner view.
   folder: boolean;
+  /// `fullstack-a-57` G6/G7 FileBucket toggles. Markdown chip hides
+  /// file nodes with `classifyFile === "doc"` (.md / .txt); source
+  /// chip hides file nodes with `classifyFile === "source"` (any
+  /// recognized code / config extension). Binary file nodes don't
+  /// have their own chip — they ride the absence of a more specific
+  /// classification and always render. Mirrors the SPA-side
+  /// classification scheme established in `-a-51`'s G6 colour
+  /// rework; consumes the same `classifyFile` helper.
+  markdown: boolean;
+  source: boolean;
 };
 
 export const DEFAULT_GRAPH_FILTERS: GraphFilters = {
@@ -1369,6 +1397,8 @@ export const DEFAULT_GRAPH_FILTERS: GraphFilters = {
   language: true,
   img: true,
   folder: true,
+  markdown: true,
+  source: true,
 };
 
 export const graphOverlay = $state<{
@@ -1607,6 +1637,8 @@ function mirrorGraphTabToOverlay(tab: {
   graphOverlay.filters.language = tab.filters.language;
   graphOverlay.filters.img = tab.filters.img;
   graphOverlay.filters.folder = tab.filters.folder;
+  graphOverlay.filters.markdown = tab.filters.markdown;
+  graphOverlay.filters.source = tab.filters.source;
   graphOverlay.inspectorOpen = tab.inspectorOpen;
   graphOverlay.open = false;
 }

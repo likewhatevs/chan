@@ -4122,3 +4122,152 @@ pull `-a-42` forward.
 
 Standing down on the active loop. Working
 tree clean.
+
+## 2026-05-22 — poke (fullstack-a-57 ready for review)
+
+WAVE-3 FAN-OUT acked. Started with `-a-57`
+(your suggested order — high-visibility @@Alex
+ask: hide markdown to see source).
+
+`-a-57` ready for review. Seven-file change
+(3 SPA + 3 tests + 1 new test + GraphPanel +
+3 doc files). SPA-only; no Rust touched.
+
+### Decision flagged: client-side classification
+
+Task body said the wire data was in via
+`systacean-16`. **Audit corrects: it's not on
+`GraphNodeView::File`** — `systacean-16` added
+`FileBucket` to chan-report's `FileStats`, but
+the graph-route emit doesn't carry it through.
+Two routes considered:
+
+* **(A)** Fire scope poke for @@Systacean to
+  add `bucket` to `GraphNodeView::File`.
+* **(B)** Reuse `-a-51`'s SPA-side
+  `classifyFile` helper (same regex-based
+  bucket logic already in HEAD).
+
+**Picked (B)** — matches `-a-51` precedent;
+unblocks chip work without cross-lane gating.
+A chan-server emit extension can land later as
+a clean cleanup; the regex would swap to the
+server-side discriminator without touching the
+palette / chip / count contract.
+
+Flag if you'd prefer (A) instead; cheap revert
++ scope poke.
+
+### What landed
+
+`web/src/state/store.svelte.ts`:
+* `GraphFilters` + `DEFAULT_GRAPH_FILTERS`
+  gained `markdown` + `source` bits (default ON).
+* URL-hash `encodeGraphFilters` /
+  `decodeGraphFilters` bumped 6 → 8 bits with
+  trailing-char default-on fallback for legacy
+  hashes.
+* `applyOverlaysFromHash` +
+  `mirrorGraphTabToOverlay` propagate the new
+  bits.
+
+`web/src/state/tabs.svelte.ts`:
+* Duplicate `GraphFilters` type extended in
+  lockstep (comment block flags the duplication
+  for future cleanup).
+* `encodeGraphTabFilters` prefixes payload with
+  `"2"` version sentinel + appends `d`/`s`
+  codes.
+* `decodeGraphTabFilters` reads the sentinel:
+  new-format payloads use explicit on/off;
+  pre-`-a-57` payloads default both buckets to
+  ON to preserve existing-session behaviour.
+
+`web/src/components/GraphPanel.svelte`:
+* `FilterKind` extended with `"markdown"` +
+  `"source"`.
+* `classifyFile` (the GraphPanel-local helper)
+  extended to return 5 buckets — mirrors
+  `GraphCanvas.svelte`'s helper.
+  Constants use `_FA57` suffix to avoid name
+  collision with the canvas-side copies.
+* `hiddenMarkdownIds` + `hiddenSourceIds`
+  derives symmetric with existing img / contact
+  / folder derives.
+* `visibleEdges` + `visibleNodeIds` consume
+  the new hidden sets.
+* `FILTER_COLORS`: markdown → `var(--g-doc)`
+  (orange), source → `var(--g-source)`
+  (royalblue) per `-a-51`'s G6 palette.
+* Both chip iteration sites + `counts`
+  dispatch extended.
+
+`web/src/components/graphFileBucketChips.test.ts`
+(new): 19 raw-source pins covering all of the
+above.
+
+`web/src/components/graphDepthFilter.test.ts`:
+two `-a-52` pins relaxed to tolerate future
+FilterKind extensions (load-bearing absence of
+`link` preserved; exact-shape match dropped).
+
+`web/src/state/store.test.ts` +
+`web/src/state/tabs.test.ts`: filter literals
+patched for the new bits.
+
+### Stretch goal deferred
+
+Sub-language picker (per-language source
+toggle: rust / ts / svelte / py / etc.) —
+task body called it implementer's choice. The
+collective `source` toggle is the load-bearing
+piece. Sub-language picker can land as a polish
+follow-up if @@Alex wants per-language hide.
+
+Binary chip also deferred — task body specified
+markdown + source only. Binary file nodes
+always visible (no chip; the user can't toggle
+them).
+
+### Gate
+
+* vitest **713 / 713** (+20 net from `-a-52`'s
+  693).
+* svelte-check 0 errors / 0 warnings across
+  3995 files.
+* npm build clean.
+* Rust gate not re-run.
+
+### Suggested commit subject
+
+```
+Graph filter chips: markdown + source FileBucket toggles (fullstack-a-57)
+```
+
+Single commit. State extension + encoder /
+decoder + chip wiring + tests are tightly
+coupled.
+
+### Files for `git add` (per-path discipline)
+
+* `web/src/state/store.svelte.ts`
+* `web/src/state/tabs.svelte.ts`
+* `web/src/state/store.test.ts`
+* `web/src/state/tabs.test.ts`
+* `web/src/components/GraphPanel.svelte`
+* `web/src/components/graphDepthFilter.test.ts`
+* `web/src/components/graphFileBucketChips.test.ts`
+* `docs/journals/phase-8/fullstack-a/fullstack-a-57.md`
+* `docs/journals/phase-8/fullstack-a/journal.md`
+* `docs/journals/phase-8/alex/event-fullstack-a-architect.md`
+  (this append)
+
+### Atomic-audit-commit
+
+Single bash invocation per the
+`feedback-atomic-audit-commit` memory rule.
+Authorization on file is standing per your
+WAVE-3 FAN-OUT dispatch.
+
+Push held — multi-agent tree commit discipline.
+Standing by for clearance.

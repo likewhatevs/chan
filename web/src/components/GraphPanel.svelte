@@ -199,7 +199,22 @@
   /// implicit via endpoint visibility). The `link` slot on
   /// `GraphFilters` (store.svelte.ts) stays for URL-hash
   /// back-compat but isn't consumed here.
-  type FilterKind = "tag" | "mention" | "language" | "img" | "folder";
+  /// `fullstack-a-57`: `markdown` + `source` FileBucket toggles
+  /// added; default ON. Consumes `-a-51`'s SPA-side
+  /// `classifyFile` helper to dispatch file nodes into the
+  /// markdown / source / binary buckets without a chan-server
+  /// emit change (the audit found `GraphNodeView::File` doesn't
+  /// carry the `bucket` field even though `systacean-16` added
+  /// it to `ReportFileStats`; reusing the client-side classifier
+  /// follows the `-a-51` precedent).
+  type FilterKind =
+    | "tag"
+    | "mention"
+    | "language"
+    | "img"
+    | "folder"
+    | "markdown"
+    | "source";
 
   // ---- state -------------------------------------------------------------
 
@@ -309,13 +324,29 @@
   /// `contacts()` set, everything else is a doc. Mirrored here
   /// because `hiddenImageIds` / `counts` / `inspectorSelection`
   /// need the kind upfront for chip filtering.
+  /// `fullstack-a-57` extension: file-class buckets (`doc` for
+  /// markdown, `source` for code/config, `binary` for everything
+  /// else not covered by img/contact) added so the new markdown +
+  /// source filter chips can route file nodes into their buckets.
+  /// Mirrors `GraphCanvas.svelte`'s helper of the same name, with
+  /// the addition of `MARKDOWN_EXT_RE` + `SOURCE_EXT_RE` from
+  /// `-a-51`. The two helpers stay separate copies for now —
+  /// they're parallel SPA-side helpers with the same regex set; a
+  /// future cleanup task could extract them into a shared module.
+  const MEDIA_EXT_RE_FA57 = /\.(png|jpe?g|gif|webp|svg|avif|bmp)$/i;
+  const MARKDOWN_EXT_RE_FA57 = /\.(md|txt)$/i;
+  const SOURCE_EXT_RE_FA57 =
+    /\.(rs|py|ts|tsx|js|jsx|mjs|cjs|go|c|cc|cpp|cxx|h|hh|hpp|java|kt|swift|rb|php|cs|sh|bash|zsh|fish|pl|lua|toml|yaml|yml|json|jsonc|ini|conf|cfg|env|xml|html|htm|css|scss|sass|less|vue|svelte|sql|graphql|gql|proto|elm|ex|exs|erl|hs|lhs|ml|mli|fs|fsx|clj|cljs|cljc|edn|jl|nim|d|dart|zig|odin|v|vhd|vhdl|sv|verilog|asm|s|f|f90|f95|tex|R|r)$/i;
+
   function classifyFile(
     path: string,
     nodeKind: "contact" | undefined,
-  ): "doc" | "img" | "contact" {
-    if (/\.(png|jpe?g|gif|webp|svg|avif|bmp)$/i.test(path)) return "img";
+  ): "doc" | "img" | "contact" | "source" | "binary" {
+    if (MEDIA_EXT_RE_FA57.test(path)) return "img";
     if (nodeKind === "contact") return "contact";
-    return "doc";
+    if (MARKDOWN_EXT_RE_FA57.test(path)) return "doc";
+    if (SOURCE_EXT_RE_FA57.test(path)) return "source";
+    return "binary";
   }
 
   // `fullstack-64`: the overlay-maximize toggle helper was removed
@@ -496,6 +527,36 @@
     return ids;
   });
 
+  /// `fullstack-a-57`: file nodes hidden when the markdown chip is OFF.
+  /// Bucket = `classifyFile === "doc"` (.md / .txt per `-a-51`'s
+  /// SPA-side classifier). The `contact` discriminator is gated by
+  /// the `mention` chip (existing hiddenContactIds) and image-class
+  /// files by `img`; this hidden-set covers markdown specifically.
+  const hiddenMarkdownIds = $derived.by(() => {
+    const ids = new Set<string>();
+    if (show.markdown) return ids;
+    for (const n of nodes) {
+      if (n.kind === "file" && classifyFile(n.path, n.node_kind) === "doc") {
+        ids.add(n.id);
+      }
+    }
+    return ids;
+  });
+
+  /// `fullstack-a-57`: file nodes hidden when the source chip is OFF.
+  /// Bucket = `classifyFile === "source"` (recognised code / config
+  /// extensions per `-a-51`).
+  const hiddenSourceIds = $derived.by(() => {
+    const ids = new Set<string>();
+    if (show.source) return ids;
+    for (const n of nodes) {
+      if (n.kind === "file" && classifyFile(n.path, n.node_kind) === "source") {
+        ids.add(n.id);
+      }
+    }
+    return ids;
+  });
+
   function edgeVisibleByChip(kind: RenderedEdgeKind): boolean {
     if (kind === "contains") return show.folder;
     if (kind === "group") return true;
@@ -519,6 +580,13 @@
         !hiddenContactIds.has(e.target) &&
         !hiddenFolderIds.has(e.source) &&
         !hiddenFolderIds.has(e.target) &&
+        // `fullstack-a-57`: hide edges touching markdown / source
+        // file nodes the user has filtered out. Symmetric with the
+        // existing img / contact / folder gates.
+        !hiddenMarkdownIds.has(e.source) &&
+        !hiddenMarkdownIds.has(e.target) &&
+        !hiddenSourceIds.has(e.source) &&
+        !hiddenSourceIds.has(e.target) &&
         (scopedNodeIds === null ||
           (scopedNodeIds.has(e.source) && scopedNodeIds.has(e.target))),
     ),
@@ -528,7 +596,15 @@
     for (const n of nodes) {
       if (scopedNodeIds !== null && !scopedNodeIds.has(n.id)) continue;
       if (hiddenFolderIds.has(n.id)) continue;
-      if (n.kind === "file" && !hiddenImageIds.has(n.id) && !hiddenContactIds.has(n.id)) {
+      // `fullstack-a-57`: skip file nodes that the markdown / source
+      // chips have hidden. The img + contact gates still apply.
+      if (
+        n.kind === "file" &&
+        !hiddenImageIds.has(n.id) &&
+        !hiddenContactIds.has(n.id) &&
+        !hiddenMarkdownIds.has(n.id) &&
+        !hiddenSourceIds.has(n.id)
+      ) {
         ids.add(n.id);
       } else if (n.kind === "folder") {
         ids.add(n.id);
@@ -553,6 +629,8 @@
       language: 0,
       img: 0,
       folder: 0,
+      markdown: 0,
+      source: 0,
     };
     for (const e of edges) {
       // `fullstack-a-52` G10: link edges no longer have a chip;
@@ -577,6 +655,10 @@
       const cls = classifyFile(n.path, n.node_kind);
       if (cls === "img") c.img++;
       else if (cls === "contact") c.mention++;
+      // `fullstack-a-57`: count markdown + source file nodes for
+      // the new chips.
+      else if (cls === "doc") c.markdown++;
+      else if (cls === "source") c.source++;
     }
     return c;
   });
@@ -820,6 +902,13 @@
     language: EDGE_COLORS.language,
     img: "var(--g-img)",
     folder: "var(--g-folder)",
+    // `fullstack-a-57`: FileBucket chip swatch colours. Markdown
+    // tracks `--g-doc` (orange) per `-a-51`'s G6 palette; source
+    // tracks `--g-source` (royalblue). Binary nodes have no chip;
+    // the `--g-binary` slot still drives their canvas fill but the
+    // user can't toggle them on/off.
+    markdown: "var(--g-doc)",
+    source: "var(--g-source)",
   };
 
   function isFsDirectory(node: FsGraphNode): boolean {
@@ -1237,7 +1326,7 @@
         <span class="mbtn-chord"></span>
       </button>
       <div class="msep" role="separator"></div>
-      {#each ["tag", "mention", "language", "img", "folder"] as const as kind (kind)}
+      {#each ["tag", "mention", "language", "img", "folder", "markdown", "source"] as const as kind (kind)}
         {@const driveLike =
           currentScope?.kind === "drive" || currentScope?.kind === "global"}
         {#if (!filesystemMode || (kind !== "img" && kind !== "language")) && (languageMode ? kind === "language" : kind !== "language" || driveLike) && (kind !== "folder" || filesystemMode || driveLike)}
@@ -1477,7 +1566,7 @@
 
 {#snippet filterChips()}
   <div class="filters">
-    {#each ["tag", "mention", "language", "img", "folder"] as const as kind (kind)}
+    {#each ["tag", "mention", "language", "img", "folder", "markdown", "source"] as const as kind (kind)}
       {@const driveLike =
         currentScope?.kind === "drive" || currentScope?.kind === "global"}
       {#if (!filesystemMode || (kind !== "img" && kind !== "language")) && (languageMode ? kind === "language" : kind !== "language" || driveLike) && (kind !== "folder" || filesystemMode || driveLike)}

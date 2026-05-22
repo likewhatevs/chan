@@ -252,6 +252,14 @@ export type GraphFilters = {
   language: boolean;
   img: boolean;
   folder: boolean;
+  /// `fullstack-a-57` FileBucket toggles — mirrors the
+  /// `GraphFilters` shape in `state/store.svelte.ts`. Both files
+  /// declare a local `GraphFilters` (one for the per-tab state
+  /// here, one for the overlay state in store); they stay in
+  /// lockstep when extended. Future cleanup task could unify
+  /// them through a shared module.
+  markdown: boolean;
+  source: boolean;
 };
 
 export type GraphTab = {
@@ -1028,6 +1036,8 @@ const DEFAULT_GRAPH_FILTERS: GraphFilters = {
   language: true,
   img: true,
   folder: true,
+  markdown: true,
+  source: true,
 };
 
 export function openGraphInActivePane(opts: OpenGraphOptions = {}): GraphTab {
@@ -2902,18 +2912,33 @@ function restoreFocusColor(color: SerFocusColor | undefined): FocusColor {
 }
 
 function encodeGraphTabFilters(f: GraphFilters): string {
+  // `fullstack-a-57` introduced FileBucket toggles (markdown / source)
+  // and bumped the payload version. The leading `2` is a sentinel so
+  // the decoder can tell a legacy payload (no version prefix; missing
+  // `d`/`s` bits should default ON) from a new-format payload (version
+  // prefix present; missing `d`/`s` mean explicit OFF). Always
+  // present in new-format payloads regardless of toggle state.
   return [
+    "2",
     f.link ? "l" : "",
     f.tag ? "t" : "",
     f.mention ? "m" : "",
     f.language ? "a" : "",
     f.img ? "i" : "",
     f.folder ? "f" : "",
+    f.markdown ? "d" : "",
+    f.source ? "s" : "",
   ].join("");
 }
 
 function decodeGraphTabFilters(s: string | undefined): GraphFilters {
-  const src = s ?? "ltmaif";
+  const src = s ?? "2ltmaifds";
+  // `fullstack-a-57` version sentinel: a leading `2` marks the
+  // new-format payload. Without it the payload is from a pre-`-a-57`
+  // session and the `markdown` / `source` bits default to ON
+  // (matching existing-session behaviour); with it, missing chars
+  // are explicit OFF.
+  const isV2 = src.startsWith("2");
   return {
     link: src.includes("l"),
     tag: src.includes("t"),
@@ -2921,6 +2946,8 @@ function decodeGraphTabFilters(s: string | undefined): GraphFilters {
     language: src.includes("a"),
     img: src.includes("i"),
     folder: src.includes("f"),
+    markdown: isV2 ? src.includes("d") : true,
+    source: isV2 ? src.includes("s") : true,
   };
 }
 

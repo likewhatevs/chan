@@ -2504,6 +2504,8 @@ describe("graphTabLabel (fullstack-81)", () => {
         language: true,
         img: true,
         folder: true,
+      markdown: true,
+      source: true,
       },
       inspectorOpen: false,
       pendingSelectId: null,
