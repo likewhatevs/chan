@@ -3354,3 +3354,54 @@ Across `-27`, `-29`, `-31` smokes, 3 PTY-tests have flaked across different plat
 `-24` → `-31`: filesystem primitive → indexer + watcher → graph emit → unified read/write/list → CLI features → Team workspace → multi-team watcher. SPA consumers (`fullstack-a-66` Drafts row + `fullstack-a-79/80` Team bootstrap + load) have the full chan-drive + chan-server API surface to consume.
 
 Lane idle aside from `-28`. Standing by.
+
+## 2026-05-22 — poke (-28 audit verdict + reference doc landed; 2 cross-lane findings deferred)
+
+Picked up `-28` per @@Alex's "pick up -28" routing. Audit-first per the task body.
+
+### Verdict: schemas are mostly healthy; 2 findings need cross-lane resolution
+
+Walked 7 config surfaces (chan-server `ServerConfig` + `EditorPrefs`, chan-drive `IndexConfig` + `KnownDrive` + `TeamConfig`, chan-desktop `Config`). Every field IS consumed by SOMETHING (no fully-dead fields). 2 findings flagged:
+
+1. **`ServerConfig.reports.enabled`** — round-trips harmlessly but has no backend gating after `systacean-27` introduced per-drive `IndexConfig.reports_enabled` as the source of truth. SPA's `HybridFileBrowserConfig.svelte` toggle writes to the now-stale server-level field. Recommend removing it; route SPA toggle through `chan reports enable/disable --path <drive>` or a chan-server passthrough that observes per-drive state.
+
+2. **`DriveFeatures` mirror in chan-desktop sidecar** — `fullstack-b-28b-i` correctly swapped `set_drive_features` to shell out to `chan index enable-semantic/disable-semantic` + `chan reports enable/disable` (source of truth = chan-drive's `IndexConfig`). BUT chan-desktop still mirrors the result in its own sidecar JSON. The mirror drifts when users bypass chan-desktop's UI for feature toggles (e.g. terminal-typed CLI). Recommend: `get_drive_features` reads chan-drive directly per-call (one CLI hop) instead of trusting the local mirror.
+
+Both findings are LOW priority — round-trip is harmless; mirror drift is a corner-case for power users. Real-but-not-urgent. Filing for the Round-3 polish backlog.
+
+### Reference doc
+
+Authored `docs/config-reference.md` (~140 lines) listing the canonical schema per crate, per-field defaults / reachability / consumers, layout pointers, and the 2 open findings. Cross-references the systacean / fullstack tasks that introduced each field (audit-trail breadcrumbs for future maintainers).
+
+### Acceptance criteria
+
+| # | Criterion | Status |
+|---|-----------|--------|
+| 1 | Audit verdict (each field + consumers + surface) | ✓ task tail |
+| 2 | Dead fields removed (backward-compat for old configs) | ⚠ DEFERRED — no fully-dead fields; 2 stale-but-consumed need cross-lane work |
+| 3 | Unreachable-but-needed fields surfaced | ✓ — every audited field reachable via at least one surface |
+| 4 | Reference doc `docs/config-reference.md` | ✓ this commit |
+
+### Diff
+
+* `docs/config-reference.md` (new): +140 lines.
+* `docs/journals/phase-8/systacean/systacean-28.md` (task tail).
+* `docs/journals/phase-8/alex/event-systacean-architect.md` (this poke).
+
+3 paths. Pure docs — no Rust changes; cargo gates unchanged.
+
+### Suggested commit subject
+
+```
+docs: chan config currency audit + reference doc; 2 findings deferred to cross-lane follow-ups (systacean-28)
+```
+
+### What the 2 deferred findings need
+
+If you'd like me to file the 2 findings as routed follow-up tasks (`systacean-N+M` for the chan-server piece, `fullstack-b-N+M` for the chan-desktop piece, with SPA cross-coupling), I can write them up. Otherwise they're documented in the reference doc + task tail and rest until you compile the Round-3 polish backlog.
+
+### Lane state
+
+All systacean tasks shipped or properly documented. The `-24`→`-31` cascade + `-28` audit closes the lane's phase-8 commitments. 20 systacean tasks shipped this phase total (`-12`, `-15`–`-27`, `-29`, `-30`, `-31`, plus this `-28` audit).
+
+Standing by for new dispatches or session wrap.
