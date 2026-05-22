@@ -4479,3 +4479,88 @@ to look; expensive to miss.
 |------|--------|
 | `architect/journal.md` | This entry + lesson |
 | `alex/event-architect-fullstack-a.md` | -a-50 commit clearance |
+
+## 2026-05-22 — 🎉 ROUND-3 READINESS SIGNAL: per-PR ci.yml gate STRUCTURALLY FULLY GREEN; -a-51 cleared
+
+### Three commits landed this beat
+
+| SHA | Subject | Lane |
+|-----|---------|------|
+| `4f964fc` | `chan-drive/src/index/facade: fmt fix on systacean-19 unit test (collapse matches! assert to one line)` | @@Systacean |
+| `0b2720c` | `docs: ci-12 + ci-13 follow-up (ci)` | @@CI |
+| `fc5dfdf` | `Graph directory inspector + chan-reports aggregated stats (fullstack-a-50)` | @@FullStackA |
+| `9645e8f` | `docs(systacean): -19 smoke ALL GREEN; per-PR ci.yml gate structurally fully green; -16 scope poke next` | @@Systacean |
+
+### THE GATE IS GREEN
+
+`systacean-19-smoke` run `26255658401` (post-rustfmt-fixup):
+
+* `cargo test (ubuntu-latest)` ✓ 3m5s — C2 fallback
+  empirically validated end-to-end. 28 previously-gated
+  tests run + pass on the model-less CI runner.
+* `cargo test (macos-latest)` ✓ 5m53s — FIRST green on
+  the new matrix entry from `ci-13`.
+* rustfmt + build no-default-features + web all ✓.
+* No Windows job (per @@Alex's scope decision in
+  `ci-13`).
+
+**Per-PR ci.yml gate structurally fully green** on all
+active matrix entries for the first time since
+~2026-05-19. The gate-unblocker sweep that began with
+`ci-12` (GTK install) is empirically complete.
+
+### Cascade summary
+
+| Task | State |
+|------|-------|
+| `ci-12` | ✓ GTK install in workspace-clippy jobs |
+| `ci-13` | ✓ Windows dropped from matrices |
+| `systacean-15` | ✓ chan-report cross-dir aggregation |
+| `systacean-17` | ✓ Windows result_large_err (preserved as cross-platform improvement) |
+| `systacean-18` + 4 follow-ups | ✓ BGE test gates landed → ALL 28 REVERTED by `-19` |
+| `systacean-19` | ✓ C2 graceful BM25 fallback; cascade obsolete |
+| `systacean-20` + 3 smoke fixups | ✓ `#[cfg(unix)]` gates as Windows-gap documentation |
+| `fullstack-b-24` (+ smoke fixups 1-6) | ✓ chan-server + chan-desktop `#[cfg(unix)]` discipline |
+| `fullstack-a-43..-55` (Hybrid back-side correction wave) | ✓ design corrections empirically validated |
+| `fullstack-a-49 + -a-50` | ✓ graph filesystem hierarchy + G3 directory inspector |
+
+### Discipline patterns saved as memory this phase
+
+* `feedback-ground-descriptions-in-source` — read the
+  implementation surface before specifying scope. Lane
+  catches caught THREE architect-side categorical
+  errors at task pickup (`-24` lints location;
+  `-18` chan-server BGE surface; `-a-49` graph data
+  shape).
+* `feedback-atomic-audit-commit` — collapse `git add`
+  + audit + `git commit` + post-audit into ONE
+  chained bash invocation. Closes the inter-command
+  race window that caused two cross-agent commit-
+  hygiene incidents (a8e991a + 5685be4).
+* `reference-local-linux-via-sdme` — operational
+  pattern for local Linux validation via lima-vm +
+  sdme; aarch64 only locally; CI for x86_64.
+
+### -a-51 cleared
+
+@@FullStackA delivered G6 colour scheme + Task D
+legend grid bundled. vitest 685/685 (+17 net).
+Atomic-audit-commit applied. Pick up `-a-52` next.
+
+### Next actions
+
+* @@Systacean fires `-16` scope poke (per their
+  framing, "separate message after this success-ack").
+  Standing by for the chan-report file-classification
+  boundary question.
+* @@FullStackA picks up `-a-52` (G10 + G9 graph polish).
+* @@CI idle until wave-3 Linux-binaries dispatch.
+* Other lanes idle.
+
+### What I'm committing this round
+
+| File | Reason |
+|------|--------|
+| `architect/journal.md` | This entry + green-gate milestone capture |
+| `alex/event-architect-fullstack-a.md` | -a-51 commit clearance |
+| `alex/event-architect-systacean.md` | green-gate ack + cascade summary + standing by for -16 scope poke |

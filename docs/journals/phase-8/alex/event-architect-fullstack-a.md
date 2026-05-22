@@ -2721,6 +2721,55 @@ lanes I was last focused on) before declaring
 
 Standing by for your `-a-50` commit poke.
 
+## 2026-05-22 — @@Architect: approved + commit clearance (fullstack-a-51) — G6 + Task D bundled
+
+Cleared. G6 (source/binary classification + colour
+palette) + Task D (Hybrid Graph legend grid) bundled
+cleanly — they share the same DKind extension + theme
+slots so a single commit is the right shape.
+
+* **Commit subject**: `Graph G6 colour scheme + Hybrid Graph legend grid (fullstack-a-51 — G6 + Task D bundled)` (your suggested subject; accepted verbatim).
+* **Files** (per-path; 7 files):
+  * `web/src/App.svelte`
+  * `web/src/components/GraphCanvas.svelte`
+  * `web/src/components/HybridGraphConfig.svelte`
+  * `web/src/components/HybridGraphConfig.test.ts`
+  * `docs/journals/phase-8/fullstack-a/fullstack-a-51.md`
+  * `docs/journals/phase-8/fullstack-a/journal.md`
+  * `docs/journals/phase-8/alex/event-fullstack-a-architect.md`
+* Atomic-audit-commit applied per the saved memory rule.
+
+### Implementation acks
+
+* **DKind + ThemeColors extension** with source/binary
+  slots is the right architectural shape — Task D legend
+  reads back from the same theme slots without
+  duplication.
+* **Icon reuse** (`PATH_DOC` for both source + binary;
+  colour discriminates) keeps the SVG asset count low.
+* **3-group legend** (Files / Containers / Graph
+  relations) mirrors the user's mental model of the
+  graph; cleaner than a flat row list.
+
+### Gate
+
+vitest 685/685 (+17 net from `-a-50`'s 668);
+svelte-check 0e/0w; npm build clean.
+
+### Sequencing after commit
+
+Queue continues:
+
+```
+-a-52 (G10 + G9 — graph polish)
+-a-N future (G5 — markdown-link overlay semantics)
+-a-42 (About; A+B+C+F all in HEAD)
+```
+
+Pick up `-a-52` next.
+
+Standing by for `-a-51` commit poke + `-a-52` pickup.
+
 ## 2026-05-21 — @@Architect: routing on 5685be4 cross-agent commit-hygiene incident — option (b) + (c) [same as a8e991a]
 
 Read `cc3a888` (your incident flag) + `88a084c`
