@@ -50,24 +50,61 @@ if (moveMsg) {
 }
 ```
 
-Audit similar adjacent surfaces while in this file:
+## Architect-side audit findings (2026-05-22)
 
-* `store.svelte.ts:2475` create failed (error path — KEEP persistent).
-* `store.svelte.ts:2497` create failed (error — KEEP).
-* `store.svelte.ts:2517` rename failed (error — KEEP).
-* `store.svelte.ts:2613` delete failed (error — KEEP).
+Full repo grep on `ui.status =` surfaces 2 MORE
+same-shape bugs (success toasts that should be
+transient) + 3 debatable info/warn messages.
 
-Any other SUCCESS-path direct `ui.status =` writes
-that should be transient? Audit + flag at task tail.
+### Confirmed same-shape bugs (swap to setTransientStatus)
+
+1. **`store.svelte.ts:2424-2427`** — `Moved '{X}' ({N} links updated)` (HEADLINE this task).
+2. **`TerminalRichPrompt.svelte:275`** — `Created ${target}` (success after spawn-from-prompt).
+3. **`FileEditorTab.svelte:386`** — `Copied file path` (success after Copy Path).
+
+All three are direct `ui.status = msg` where the
+message is a SUCCESS confirmation that doesn't
+need user dismissal. Fix uniformly: swap to
+`setTransientStatus(msg)`.
+
+### Correctly persistent (error paths — DO NOT TOUCH)
+
+13 error-path writes across `store.svelte.ts` +
+`EmptyPaneCarousel.svelte` + `TerminalTab.svelte` +
+`TerminalRichPrompt.svelte` + `FileEditorTab.svelte`.
+All `<verb> failed: ${err}` shape. User must notice;
+correctly persistent.
+
+### Debatable (implementer's call after audit)
+
+* `TerminalTab.svelte:720` — `"PTY did not report CWD"`. Warn-style info; could be transient (user can re-trigger if missed) OR stay persistent (PTY misbehavior worth noticing).
+* `TerminalTab.svelte:826` + `TerminalRichPrompt.svelte:359` — `"watcher detached on reload"`. Info; recommend transient (informational; user can re-attach).
+* `FileEditorTab.svelte:582` — `"Choose the moved file in Files to re-open this tab"`. **Directive**; user must act → STAY persistent.
+
+Implementer makes the call per surface. Recommend:
+* `PTY did not report CWD` → STAY persistent (PTY issue worth noticing).
+* `watcher detached on reload` (both sites) → TRANSIENT.
+* `Choose the moved file` → STAY persistent (directive).
+
+Audit the call sites at pickup; flag any other
+similar patterns found in test-files / desktop SPA
+that the grep didn't surface.
 
 ## Acceptance
 
-1. **Move success toast auto-dismisses** at 3s
-   (TRANSIENT_STATUS_DEFAULT_MS default).
-2. **Move error path stays persistent** — user
-   notices `rename failed: ...` without it
-   vanishing.
-3. **"Moving…" in-flight pill behavior unchanged**.
+1. **Move success toast auto-dismisses** at 3s.
+2. **`Created ${target}` toast auto-dismisses** at 3s
+   (per audit finding #2).
+3. **`Copied file path` toast auto-dismisses** at 3s
+   (per audit finding #3).
+4. **Error paths stay persistent** — `<verb> failed`
+   doesn't vanish; user notices.
+5. **"Moving…" in-flight pill behavior unchanged**.
+6. **Debatable info/warn**: 2 surfaces (`watcher
+   detached on reload` at both sites) swapped to
+   transient per recommendation; `PTY did not
+   report CWD` + `Choose the moved file` stay
+   persistent.
 
 ### Tests
 
