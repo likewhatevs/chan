@@ -4032,3 +4032,60 @@ In-tree the chain works. Two passing tests prove it across both entry points (bo
 Standing by for @@WebtestA's next walk verdict OR v0.12.0 cut OR further dispatches.
 
 Standing by for v0.12.0 cut or further dispatches.
+
+## 2026-05-23 — poke (-39 implementation complete; reports toggle endpoints; unblocks -a-76)
+
+Picked up `-39` per the dispatch.
+
+### What landed
+
+New `crates/chan-server/src/routes/reports_toggle.rs` with 3 endpoints + 3 router-level tests:
+
+* `GET /api/index/reports/state` → `{ enabled: bool }` (read-only lane).
+* `POST /api/index/reports/enable` → set true + return updated state (settings-writes lane).
+* `POST /api/index/reports/disable` → set false + return updated state (settings-writes lane).
+
+Mirrors the semantic shape but NOT gated on `embeddings` (reports are part of BM25-only baseline). Wired in `lib.rs::router()` alongside semantic routes.
+
+### Tests (+3)
+
+* `reports_state_endpoint_requires_auth` — anonymous → 401.
+* `reports_round_trip_state_enable_disable` — full round-trip exercising the router + middleware.
+* `reports_disable_is_idempotent_when_already_off` — confirms 200 + correct state on no-op.
+
+All exercise the full router (`crate::router(state)` + `oneshot`).
+
+### Diff
+
+* `crates/chan-server/src/routes/reports_toggle.rs` (new): +209 / 0.
+* `crates/chan-server/src/routes/mod.rs`: +2 / 0.
+* `crates/chan-server/src/lib.rs`: +15 / -2.
+* `Cargo.lock`: +1 / 0 (base64 from `-33`; was uncommitted from prior batch).
+
+Plus task tail + this poke. 6 paths.
+
+### Pre-push gate
+
+* fmt + clippy + no-default-features clean.
+* `cargo test -p chan-server --lib`: **233 / 0** (was 230; +3).
+* workspace tests all green.
+
+### Suggested commit subject
+
+```
+chan-server: /api/index/reports/{state,enable,disable} endpoints (systacean-39; unblocks -a-76)
+```
+
+### Smoke plan
+
+`gh workflow run ci.yml --ref systacean-39-smoke`. Expected ALL GREEN.
+
+### What this unblocks
+
+@@FullStackA's `-a-76` Settings UI Features section.
+
+### Lane state
+
+29 systacean tasks shipped this phase.
+
+Per pre-authorization, proceeding to commit + push + smoke.

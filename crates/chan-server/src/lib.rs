@@ -55,8 +55,9 @@ use routes::{
     api_inspector, api_language_graph, api_link_targets, api_links, api_list_files,
     api_list_sessions, api_move, api_patch_config, api_patch_drive, api_patch_server_config,
     api_post_attachment, api_post_contacts_import, api_put_session, api_read_file, api_report_dir,
-    api_report_file, api_report_prefix, api_resolve_link, api_restart_terminal, api_search_content,
-    api_search_files, api_set_terminal_submit_mode, api_set_terminal_watcher, api_storage_reset,
+    api_report_file, api_report_prefix, api_reports_disable, api_reports_enable, api_reports_state,
+    api_resolve_link, api_restart_terminal, api_search_content, api_search_files,
+    api_set_terminal_submit_mode, api_set_terminal_watcher, api_storage_reset,
     api_team_list_loaded, api_team_load, api_team_unload, api_terminal_event_reply,
     api_terminal_watcher_events, api_terminal_ws, api_unset_terminal_watcher, api_write_file,
     ws_upgrade,
@@ -784,6 +785,13 @@ fn router(state: Arc<AppState>) -> Router {
         .route("/api/index/semantic/enable", post(api_semantic_enable))
         .route("/api/index/semantic/disable", post(api_semantic_disable))
         .route("/api/index/semantic/download", post(api_semantic_download));
+    // systacean-39: reports feature toggle endpoints. Mirror the
+    // semantic shape but NOT gated on `embeddings` — reports are
+    // part of the BM25-only baseline. Settings-writes lane because
+    // flipping the toggle is a settings change.
+    let settings_writes = settings_writes
+        .route("/api/index/reports/enable", post(api_reports_enable))
+        .route("/api/index/reports/disable", post(api_reports_disable));
     // `fullstack-b-30` slice b: Source Code Pro download endpoint.
     // Settings-gated lane because activating the font is a
     // preference write + the download mutates the per-machine
@@ -932,6 +940,9 @@ fn router(state: Arc<AppState>) -> Router {
     // `download`) sit in `settings_writes` and merge below.
     #[cfg(feature = "embeddings")]
     let api = api.route("/api/index/semantic/state", get(api_semantic_state));
+    // systacean-39: reports state is read-only + not settings-
+    // gated (read-only views can land in any lane).
+    let api = api.route("/api/index/reports/state", get(api_reports_state));
     let api = api.merge(settings_writes);
     Router::new()
         .merge(api)
