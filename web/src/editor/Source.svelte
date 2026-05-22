@@ -120,6 +120,17 @@
     view.focus();
   }
 
+  /// `fullstack-a-64`: focus the editor without changing the
+  /// selection. Used by FileEditorTab on chord-driven tab
+  /// switches (`Cmd+Shift+[/]`) to land the caret on the editor
+  /// surface immediately. Returns true if the view was ready;
+  /// caller can short-circuit otherwise.
+  export function focus(): boolean {
+    if (!view) return false;
+    view.focus();
+    return true;
+  }
+
   /// Place caret at a specific document offset and focus. Used by
   /// prompt surfaces that programmatically seed text before the
   /// editor mounts.

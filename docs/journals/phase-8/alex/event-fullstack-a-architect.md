@@ -4877,3 +4877,120 @@ pending @@Alex's `new-file-flow.md` design doc
 `alex/addendun-a.md` "Flow for the New Draft
 action"). Standing down on the active queue
 until you cut the next wave or unpause `-a-61`.
+
+## 2026-05-22 — poke (fullstack-a-64 CRITICAL ready for review)
+
+Five-file change. SPA-only.
+
+### Audit (verified pre-fix)
+
+Chord handlers at `App.svelte:668-691` dispatch
+`select*TabInActivePane` but DON'T follow up
+with focus. TerminalTab has a focus-on-focused
+$effect that fires but RACES the prior tab's
+contenteditable for `document.activeElement`.
+FileEditorTab has NO focus-on-active-tab path.
+
+### Fix: tabFocusPulse mechanism
+
+`tabs.svelte.ts`: new global `tabFocusPulse:
+$state({ value: 0 })`. Three `select*TabInActivePane`
+helpers bump after mutating `activeTabId`.
+`bumpTabFocusPulse` ALSO blurs
+`document.activeElement` (when not `<body>`),
+parking focus on body so the new tab's focus
+call lands clean.
+
+TerminalTab: existing focus $effect reads
+`tabFocusPulse.value`, so chord switches
+re-trigger `term.focus()` via the existing
+microtask.
+
+FileEditorTab: NEW $effect reads the pulse +
+microtask-calls `wysiwygRef?.focus()` /
+`sourceRef?.focus()` based on `tab.mode`.
+
+Source.svelte + Wysiwyg.svelte: NEW
+`export function focus(): boolean` that calls
+`view.focus()` without changing selection.
+
+### Acceptance
+
+1. Editor → terminal: pulse bumps + blur frees
+   editor's contenteditable; TerminalTab's
+   $effect re-runs + term.focus() lands ✓.
+2. Terminal → editor: pulse bumps + blur frees
+   xterm-helper-textarea; FileEditorTab's new
+   $effect microtask-calls editor view focus ✓.
+3. Mouse-click tab switch unchanged: per-tab
+   onmousedown mutates `activeTabId` directly
+   without calling `select*` helpers, so the
+   pulse doesn't fire. Existing focused-prop
+   $effects still drive focus on mouse-switch.
+4. FB + Graph not wired to the pulse (out of
+   bug body's example scope; flag as follow-up).
+
+### Tests
+
+`tabSwitchFocusFollow.test.ts` (new): 9
+raw-source pins covering the pulse export,
+bump+blur sequence, all 3 select helpers
+bumping, both tab-kind effects reading the
+pulse, both editor `focus()` exports.
+
+### Gate
+
+* vitest **775 / 775** (+19 net from `-a-60`'s
+  756).
+* svelte-check 0 errors / 0 warnings across
+  4003 files.
+* npm build clean.
+* Rust gate not re-run.
+
+(Initial vitest run had 3 flaky timeouts in
+unrelated test files under full-suite load;
+isolated re-runs + a fresh full run both clean
+at 775/775. Pre-existing flake pattern from
+prior sessions.)
+
+### Decisions
+
+* **Global pulse** over per-tab nonce — each
+  component already filters by `focused` so
+  pulse-bump-then-filter is cleanest.
+* **Blur prior in bumpTabFocusPulse** — root
+  cause of the race; surfaced via audit.
+* **Editor focus() exports preserve selection**
+  (vs focusAt(end) which scrolls). Existing
+  focusAt callers unchanged.
+* **FB + Graph deferred** — typing into a
+  tree row or canvas doesn't damage data;
+  scope contained to the @@Alex-reported
+  editor↔terminal pair.
+
+### Suggested commit subject
+
+```
+Tab switch chord: bump focus pulse + blur prior so new tab grabs keyboard (fullstack-a-64 CRITICAL)
+```
+
+### Files for `git add`
+
+* `web/src/state/tabs.svelte.ts`
+* `web/src/components/TerminalTab.svelte`
+* `web/src/components/FileEditorTab.svelte`
+* `web/src/editor/Source.svelte`
+* `web/src/editor/Wysiwyg.svelte`
+* `web/src/components/tabSwitchFocusFollow.test.ts`
+* `docs/journals/phase-8/fullstack-a/fullstack-a-64.md`
+* `docs/journals/phase-8/fullstack-a/journal.md`
+* `docs/journals/phase-8/alex/event-fullstack-a-architect.md`
+  (this append)
+
+### Atomic-audit-commit applied
+
+Single bash invocation per discipline. Working
+tree carries unrelated WIP; per-path staging
+only.
+
+Push held. Standing by for clearance.

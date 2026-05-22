@@ -45,6 +45,7 @@
     setTerminalActivity,
     setTerminalMcpEnv,
     setTerminalSession,
+    tabFocusPulse,
     terminalBroadcastMemberIds,
     terminalEnvTabNameStale,
     terminalMcpEnvEnabled,
@@ -205,6 +206,13 @@
 
   $effect(() => {
     if (!focused) return;
+    // `fullstack-a-64`: read the global tab-focus pulse so this
+    // effect re-runs on chord-driven tab switches (Cmd+Shift+[/],
+    // Ctrl+Alt+1..9). Without this dep, switching FROM another
+    // tab IN to the terminal via chord doesn't pull keyboard
+    // focus reliably — the editor's contenteditable retains the
+    // DOM focus and the next keystroke damages the doc.
+    tabFocusPulse.value;
     queueFit();
     setTerminalActivity(tab, false);
     sendFocusState();

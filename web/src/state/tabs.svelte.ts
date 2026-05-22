@@ -1547,6 +1547,45 @@ export function openInActivePane(path: string): Promise<void> {
 /// presses keep rotating instead of dead-ending at the edges. No-op
 /// when the pane is empty or the active tab is somehow not in the
 /// tab list (shouldn't happen but keeps a bad state from crashing).
+/// `fullstack-a-64` keyboard tab-switch focus pulse. Chord-driven
+/// tab switches (`Cmd+Shift+[/]`, `Ctrl+Alt+1..9`) need to also
+/// move keyboard focus to the new active surface — otherwise the
+/// next keystroke lands in the PRIOR tab and damages docs (the
+/// CRITICAL bug from @@Alex's addendum). Mouse-click tab switch
+/// already works because terminal tabs have a `$effect(() => {
+/// if (!focused) return; ... term.focus(); })` that fires on the
+/// `focused` prop flip — BUT some tab kinds (FileEditorTab) don't
+/// have an equivalent path, and even when they do the chord-fired
+/// switch leaves the previously-focused contenteditable holding
+/// the OS-level focus until something explicitly takes it.
+///
+/// Mechanism: a global $state counter bumped here. Tab-kind
+/// components subscribe via $effect; when the pulse increments
+/// AND the tab is focused, the component re-runs its focus
+/// routine in a microtask.
+export const tabFocusPulse = $state({ value: 0 });
+function bumpTabFocusPulse(): void {
+  tabFocusPulse.value += 1;
+  // `fullstack-a-64`: blur the currently-focused element AFTER
+  // bumping. The chord keydown was synchronously dispatched while
+  // the prior tab's input had DOM focus; even if the active tab
+  // changes, the prior input's element retains
+  // `document.activeElement` until something explicitly takes
+  // focus. Blurring here parks focus on `<body>` so the new tab's
+  // pulse-triggered focus call (or its mount-time autoFocus) can
+  // land cleanly without racing the editor's contenteditable.
+  //
+  // SSR-safe: the `typeof document !== "undefined"` guard mirrors
+  // the pattern already used by `blurTerminalHelperTextarea`. The
+  // active element check skips `<body>` so we don't blur the
+  // default focus owner unnecessarily.
+  if (typeof document === "undefined") return;
+  const el = document.activeElement;
+  if (el instanceof HTMLElement && el !== document.body) {
+    el.blur();
+  }
+}
+
 export function selectPrevTabInActivePane(): void {
   const p = activePane();
   if (p.tabs.length === 0 || p.activeTabId === null) return;
@@ -1554,6 +1593,7 @@ export function selectPrevTabInActivePane(): void {
   if (idx < 0) return;
   const next = (idx - 1 + p.tabs.length) % p.tabs.length;
   p.activeTabId = p.tabs[next].id;
+  bumpTabFocusPulse();
 }
 
 export function selectNextTabInActivePane(): void {
@@ -1563,6 +1603,7 @@ export function selectNextTabInActivePane(): void {
   if (idx < 0) return;
   const next = (idx + 1) % p.tabs.length;
   p.activeTabId = p.tabs[next].id;
+  bumpTabFocusPulse();
 }
 
 /// Select the Nth tab in the active pane (0-indexed). Silent no-op
@@ -1572,6 +1613,7 @@ export function selectTabAtIndexInActivePane(index: number): void {
   const p = activePane();
   if (index < 0 || index >= p.tabs.length) return;
   p.activeTabId = p.tabs[index].id;
+  bumpTabFocusPulse();
 }
 
 function leafIdsInOrder(

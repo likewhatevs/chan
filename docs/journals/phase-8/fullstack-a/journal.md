@@ -1721,3 +1721,48 @@ test.ts`.
 
 Impl note at [fullstack-a-60.md](fullstack-a-60.md).
 Outbound poke fired.
+
+## 2026-05-22 — -a-64 (CRITICAL tab switch focus) ready for review
+
+Five-file change. SPA-only.
+
+Mechanism: global `tabFocusPulse: $state({ value:
+number })` in tabs.svelte.ts. The three
+`select*TabInActivePane` helpers bump it after
+mutating activeTabId. `bumpTabFocusPulse` also
+blurs the currently-focused element so the prior
+tab's contenteditable releases DOM focus.
+
+TerminalTab's existing focus $effect adds
+`tabFocusPulse.value` as a reactive dep.
+FileEditorTab gets a new $effect that routes to
+`wysiwygRef?.focus()` / `sourceRef?.focus()` via
+microtask. Source + Wysiwyg expose new
+`focus(): boolean` export that calls
+`view.focus()` without changing selection.
+
+9 raw-source pins in `tabSwitchFocusFollow.test.ts`.
+
+### Gate
+
+* vitest **775 / 775** (+19 net from `-a-60`'s
+  756) — confirmed clean after a flaky first
+  run.
+* svelte-check 0/0 across 4003 files.
+* npm build clean.
+
+### Decisions
+
+* **Pulse over per-tab nonce**: identity-agnostic
+  signal; each component filters by `focused`.
+* **Blur prior in bumpTabFocusPulse**: parks DOM
+  focus on `<body>` so new tab's focus call
+  doesn't race.
+* **FB + Graph not wired**: bug body was
+  specifically editor↔terminal damage; flag as
+  follow-up if needed.
+
+Impl note + commit subject at
+[fullstack-a-64.md](fullstack-a-64.md). Outbound
+poke fired. Queue: `-a-65` / `-a-66` (waiting
+on systacean-24) / `-a-67`.

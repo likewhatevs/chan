@@ -94,6 +94,7 @@
   import {
     openInActivePane,
     openTerminalInPane,
+    tabFocusPulse,
   } from "../state/tabs.svelte";
   import { terminalFromHereTarget } from "../terminal/fromHere";
   import { csvDelimiter, isCsv, isJson } from "../state/fileTypes";
@@ -124,6 +125,24 @@
   // the toolbar can call into the Wysiwyg formatting API.
   let wysiwygRef: Wysiwyg | undefined = $state();
   let sourceRef: Source | undefined = $state();
+
+  // `fullstack-a-64`: when the user switches into this editor tab
+  // via Cmd+Shift+[ / Cmd+Shift+] / Ctrl+Alt+1..9, the chord
+  // handler bumps `tabFocusPulse`. FileEditorTab only mounts when
+  // it's the active tab, so any pulse increment during our
+  // lifetime means we just became the focus target. Re-focus the
+  // appropriate editor ref via the `focus()` export we added to
+  // Source/Wysiwyg in this task. queueMicrotask defers past the
+  // synchronous chord-handler stack so the editor view has had a
+  // tick to take the activeElement back from `<body>` (which
+  // `bumpTabFocusPulse` parks us on by blurring the prior focus).
+  $effect(() => {
+    tabFocusPulse.value;
+    queueMicrotask(() => {
+      if (tab.mode === "wysiwyg") wysiwygRef?.focus();
+      else sourceRef?.focus();
+    });
+  });
 
   /// Read-only mode for this tab. The status bar's lamp toggle
   /// drives `tab.readMode` directly; an OS-level read-only file

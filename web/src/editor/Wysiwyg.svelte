@@ -315,6 +315,17 @@
   export function currentBlockKind(): BlockKind {
     return view ? fmt.currentBlockKind(view) : "normal";
   }
+  /// `fullstack-a-64`: focus the editor without changing the
+  /// selection. Used by FileEditorTab on chord-driven tab
+  /// switches (`Cmd+Shift+[/]`) to land the caret on the editor
+  /// surface immediately. Returns true if the view was ready;
+  /// caller can short-circuit otherwise.
+  export function focus(): boolean {
+    if (!view) return false;
+    view.focus();
+    return true;
+  }
+
   /// Place caret at end of doc and focus. Used by InlineAssist after
   /// content insertion / paste so the user can keep typing.
   export function focusEnd(): void {
