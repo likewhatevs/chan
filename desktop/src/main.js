@@ -586,35 +586,150 @@ async function showServeFailed(p) {
   }
 }
 
+/// `fullstack-b-25`: bespoke reclaim modal. Tauri's `ask()` only
+/// renders a body string + yes/no, so the user couldn't see what
+/// the Reclaim button was about to SIGTERM. This modal lists each
+/// PID + command line so the destructive action is auditable
+/// before the user commits.
+///
+/// Backdrop click + Escape resolve as Cancel. The Reclaim button
+/// gets initial focus so a clicked-into-empty-pane keyboard can
+/// confirm without mousing.
+function showReclaimDialog(key, candidates) {
+  return new Promise((resolve) => {
+    const overlay = document.createElement('div');
+    overlay.className = 'reclaim-overlay';
+    overlay.setAttribute('role', 'dialog');
+    overlay.setAttribute('aria-modal', 'true');
+    overlay.setAttribute('aria-labelledby', 'reclaim-title');
+
+    const dialog = document.createElement('div');
+    dialog.className = 'reclaim-dialog';
+
+    const title = document.createElement('h2');
+    title.id = 'reclaim-title';
+    title.textContent = 'Drive lock held by orphan process';
+    dialog.appendChild(title);
+
+    const intro = document.createElement('p');
+    intro.className = 'reclaim-intro';
+    intro.textContent = `An orphan chan sidecar is holding the lock for:`;
+    dialog.appendChild(intro);
+
+    const keyEl = document.createElement('p');
+    keyEl.className = 'reclaim-key';
+    keyEl.textContent = key;
+    dialog.appendChild(keyEl);
+
+    const explain = document.createElement('p');
+    explain.className = 'reclaim-explain';
+    explain.textContent =
+      'This usually means a previous Chan Desktop session was killed without a chance to clean up its background processes. ' +
+      'Reclaim will SIGTERM the following process(es) and re-open the drive:';
+    dialog.appendChild(explain);
+
+    const list = document.createElement('ul');
+    list.className = 'reclaim-candidates';
+    for (const c of candidates) {
+      const li = document.createElement('li');
+      const pidEl = document.createElement('span');
+      pidEl.className = 'reclaim-pid';
+      pidEl.textContent = `PID ${c.pid}`;
+      const cmdEl = document.createElement('code');
+      cmdEl.className = 'reclaim-command';
+      cmdEl.textContent = c.command;
+      li.appendChild(pidEl);
+      li.appendChild(cmdEl);
+      list.appendChild(li);
+    }
+    dialog.appendChild(list);
+
+    const buttons = document.createElement('div');
+    buttons.className = 'reclaim-buttons';
+
+    const cancelBtn = document.createElement('button');
+    cancelBtn.className = 'btn';
+    cancelBtn.type = 'button';
+    cancelBtn.textContent = 'Cancel';
+
+    const reclaimBtn = document.createElement('button');
+    reclaimBtn.className = 'btn primary';
+    reclaimBtn.type = 'button';
+    reclaimBtn.textContent = 'Reclaim';
+
+    buttons.appendChild(cancelBtn);
+    buttons.appendChild(reclaimBtn);
+    dialog.appendChild(buttons);
+
+    overlay.appendChild(dialog);
+    document.body.appendChild(overlay);
+
+    function close(result) {
+      document.removeEventListener('keydown', onKey);
+      overlay.remove();
+      resolve(result);
+    }
+    function onKey(e) {
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        close(false);
+      } else if (e.key === 'Enter' && document.activeElement === reclaimBtn) {
+        e.preventDefault();
+        close(true);
+      }
+    }
+
+    cancelBtn.addEventListener('click', () => close(false));
+    reclaimBtn.addEventListener('click', () => close(true));
+    overlay.addEventListener('click', (e) => {
+      if (e.target === overlay) close(false);
+    });
+    document.addEventListener('keydown', onKey);
+
+    reclaimBtn.focus();
+  });
+}
+
 /// `fullstack-b-22`: minimum-viable lock-takeover prompt.
+/// `fullstack-b-25`: pre-confirmation candidate list, so the
+/// destructive Reclaim button is no longer opaque about what it
+/// will SIGTERM.
 ///
 /// Surfaces when chan-desktop hits a "drive is locked by another
 /// process" failure from a previous chan-desktop session's orphan
-/// sidecar. The Reclaim path calls the `reclaim_drive_lock` IPC
-/// which SIGTERMs (then SIGKILLs) every chan serve process whose
-/// argv contains the drive key, then retries the bind. Result is
-/// rendered as a follow-up message.
+/// sidecar. Enumerates the orphan candidates via
+/// `find_drive_lock_candidates`, renders a custom modal with the
+/// PIDs + command lines, then calls `reclaim_drive_lock` on
+/// confirm.
 async function promptDriveLockTakeover(key) {
-  const body =
-    `An orphaned chan sidecar is holding the lock for:\n\n${key}\n\n` +
-    `This usually means a previous Chan Desktop session was killed ` +
-    `without a chance to clean up its background processes. ` +
-    `Reclaim the drive by terminating the orphan and re-opening it?`;
-  let accepted = false;
+  let candidates;
   try {
-    accepted = await ask(body, {
-      title: 'Drive lock held by orphan process',
-      okLabel: 'Reclaim',
-      cancelLabel: 'Cancel',
-      kind: 'warning',
-    });
-  } catch {
-    // Dialog plugin denied — fall back to the inline banner so the
-    // user at least sees the explanation. They can use the OS to
-    // `pkill chan` and toggle the drive on again.
-    showError(body);
+    candidates = await invoke('find_drive_lock_candidates', { path: key });
+  } catch (e) {
+    const msg = (e && e.message) || String(e);
+    showError(
+      `Could not enumerate orphan chan serve processes for ${key}: ${msg}\n` +
+        `Manual cleanup: \`pkill -f "chan serve ${key}"\` from a terminal.`,
+    );
     return;
   }
+  if (!Array.isArray(candidates) || candidates.length === 0) {
+    // No matches: the lock may be held by an unrelated process,
+    // or the orphan exited between detection and now. Surface a
+    // non-destructive notice; the existing message() fallback
+    // keeps the user in the loop without offering a Reclaim
+    // button that would no-op.
+    try {
+      await message(
+        `No orphan chan serve process matched ${key}. The drive lock may be held by an unrelated process; manual \`pkill chan\` may be needed.`,
+        { title: 'Drive lock', kind: 'warning' },
+      );
+    } catch {
+      showError(`No orphan chan serve process matched ${key}.`);
+    }
+    return;
+  }
+  const accepted = await showReclaimDialog(key, candidates);
   if (!accepted) return;
   let result;
   try {

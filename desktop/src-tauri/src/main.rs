@@ -383,8 +383,8 @@ fn reclaim_drive_lock(
     path: String,
 ) -> Result<ReclaimResult, String> {
     let key = canonical_key(Path::new(&path));
-    let pids = serve::find_orphan_chan_serve_pids(&key)?;
-    if pids.is_empty() {
+    let candidates = serve::find_orphan_chan_serve_candidates(&key)?;
+    if candidates.is_empty() {
         return Ok(ReclaimResult {
             killed_pids: vec![],
             retry_succeeded: false,
@@ -394,6 +394,7 @@ fn reclaim_drive_lock(
             ),
         });
     }
+    let pids: Vec<u32> = candidates.iter().map(|c| c.pid).collect();
     for pid in &pids {
         serve::kill_orphan_with_grace(*pid);
     }
@@ -415,6 +416,19 @@ fn reclaim_drive_lock(
             message: format!("Killed orphan sidecar(s) for {key} but the retry start failed: {e}"),
         }),
     }
+}
+
+/// `fullstack-b-25`: surface the candidate set to the SPA so the
+/// reclaim dialog can render PID + command line per row. The user
+/// only confirms the kill after seeing what would be SIGTERM'd.
+/// Race window between this call and the `reclaim_drive_lock`
+/// follow-up is acceptable: a stale-but-recent candidate list is
+/// fine; the reclaim path re-enumerates internally before the
+/// kill.
+#[tauri::command]
+fn find_drive_lock_candidates(path: String) -> Result<Vec<serve::OrphanCandidate>, String> {
+    let key = canonical_key(Path::new(&path));
+    serve::find_orphan_chan_serve_candidates(&key)
 }
 
 #[tauri::command]
@@ -973,6 +987,7 @@ fn main() {
             remove_drive,
             set_drive_on,
             reclaim_drive_lock,
+            find_drive_lock_candidates,
             get_config,
             home_dir,
             reveal_in_finder,

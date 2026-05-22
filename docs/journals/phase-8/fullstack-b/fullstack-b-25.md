@@ -124,3 +124,127 @@ dead_code lint sweep + smoke fixup cascade). This is
   per `phase-8-bugs.md` "Windows lock contract parity").
 * Walkthrough (@@WebtestB walks runtime once committed
   — that's a separate dispatch).
+
+## 2026-05-22 — implementation note (ready for commit clearance)
+
+Both pieces landed in one atomic delta. Same single-commit
+shape as the earlier `-b-*` fixes (chan-desktop Rust + SPA
+JS + styles in one bundle, no chan-server cross-lane touch).
+
+### Heuristic tightening — positional argv check
+
+`crates/chan-server/src/control_socket.rs` was already gated
+in `-24`; the heuristic lives in
+`desktop/src-tauri/src/serve.rs`. Old shape: three
+independent substring checks (`rest.contains("chan")` +
+`rest.contains(" serve ")` + `rest.contains(key)`). New
+shape:
+
+* `argv[0]` basename must equal `chan` exactly (via
+  `Path::new(tokens[0]).file_name()`).
+* `argv[1]` must equal `serve`.
+* `key` must appear as a standalone token in `argv[2..]`
+  (slice `.contains(&key)` — clippy::manual_contains).
+
+False-positives caught by the bug list (wrappers like
+`strace chan serve <key>` / `lldb -p N chan serve <key>` /
+`/bin/sh -c chan serve <key>`, path-substring matches like
+`chan serve /tmp/notes-other`) no longer trip the heuristic.
+
+### OrphanCandidate + new IPC
+
+Pulled the existing `find_orphan_chan_serve_pids` to
+`find_orphan_chan_serve_candidates`. The parsing core
+(`parse_ps_lines_for_chan_serve`) now returns
+`Vec<OrphanCandidate>` (`pid: u32` + `command: String`)
+instead of `Vec<u32>`, so the dialog gets both pieces in
+one pass. `reclaim_drive_lock` maps the candidates back to
+PIDs for the SIGTERM loop.
+
+New IPC `find_drive_lock_candidates(path) -> Vec<OrphanCandidate>`
+returns the candidate list to the SPA without touching the
+processes. Race window between `find_drive_lock_candidates`
++ `reclaim_drive_lock` is intentional: reclaim re-enumerates
+internally before the kill, so a candidate disappearing
+between the two calls just means the kill loop has fewer
+PIDs.
+
+`OrphanCandidate` is defined unconditionally
+(`#[derive(Debug, Clone, Serialize)]`). The serde derives
+keep the fields "used" on Windows so clippy's dead-code
+sweep stays quiet there.
+
+### SPA-side custom modal
+
+`desktop/src/main.js::promptDriveLockTakeover` now:
+
+1. Calls `find_drive_lock_candidates`.
+2. If empty → non-destructive `message()` notice ("lock may
+   be held by an unrelated process").
+3. Otherwise → renders `showReclaimDialog(key, candidates)`
+   with PID + command line per row.
+4. On Reclaim → existing `reclaim_drive_lock` path
+   unchanged.
+
+`showReclaimDialog` is a vanilla-JS modal (vanilla shape
+matches the rest of `main.js` — desktop SPA is plain JS,
+not Svelte). Backdrop click + Escape cancel; Reclaim
+button gets initial focus + Enter triggers it. Styles
+appended to `desktop/src/styles.css` under
+`/* fullstack-b-25: drive-lock reclaim modal */`.
+
+### Tests
+
+| New test (chan-desktop, `serve::tests::`)                              | Acceptance criterion |
+|------------------------------------------------------------------------|----------------------|
+| `parse_ps_lines_picks_chan_serve_against_key_but_skips_self` (updated) | Real `chan serve` match still works; return shape pivots to `OrphanCandidate` |
+| `parse_ps_lines_rejects_wrapper_programs_running_chan_serve` (new)     | Wrappers (`strace` / `lldb` / `wrapper-chan-serve.sh` / `/bin/sh -c chan serve …`) rejected |
+| `parse_ps_lines_rejects_path_substring_only_match` (new)               | Keys must match as standalone tokens; `/tmp/notes-other` and `/tmp/notes/sub-drive` don't trip the heuristic when key is `/tmp/notes` |
+| `parse_ps_lines_carries_command_line_into_candidate` (new)             | `OrphanCandidate.command` carries the full argv for the dialog |
+| `invoke_handler_registers_find_drive_lock_candidates` (new)            | `find_drive_lock_candidates` registered in `generate_handler!` + `fn find_drive_lock_candidates` exists |
+| `serve_failed_payload_drive_lock_field_is_consumed_by_launcher` (extended) | main.js invokes `find_drive_lock_candidates` before `reclaim_drive_lock` |
+
+chan-desktop count: 39 → 43 (+4 net; one of the 5
+parse_ps_lines tests replaces the old PID-only fixture).
+
+### Pre-push gate (local, macOS aarch64)
+
+| Surface                                                            | State                                          |
+|--------------------------------------------------------------------|------------------------------------------------|
+| `cargo fmt --check`                                                | Clean for my files (one unrelated diff in `chan-server/src/terminal_sessions.rs` from another agent's WIP; not mine to format). |
+| `cargo clippy --workspace --all-targets -- -D warnings`            | Clean (one `clippy::manual_contains` caught locally, fixed in-flight before commit). |
+| `cargo test --workspace`                                           | All pass.                                     |
+| `cargo build --workspace --no-default-features`                    | Clean.                                         |
+| `web/` `npx svelte-check`                                          | 10 errors in `GraphPanel.svelte` — not from -25 (`web/` WIP from another agent). |
+| `web/` `npm run build`                                             | Not re-run (no SPA change in `-25`; desktop SPA is plain JS in `desktop/src/`). |
+
+### Files to stage
+
+```
+desktop/src-tauri/src/main.rs
+desktop/src-tauri/src/serve.rs
+desktop/src/main.js
+desktop/src/styles.css
+docs/journals/phase-8/fullstack-b/fullstack-b-25.md
+```
+
+Atomic per-path `git commit --only` per
+`feedback_shared_worktree_commits`. Multiple unrelated
+agents' WIP in the tree right now (`chan-server`,
+`web/components`, `Cargo.lock`).
+
+### Suggested commit subject
+
+```
+chan-desktop: tighten orphan-detect heuristic + render candidate PIDs in reclaim dialog (fullstack-b-25)
+```
+
+### Runtime walkthrough
+
+Source-side tests + structural pins are comprehensive.
+Leaving the runtime visual smoke to @@WebtestB per the
+task body's "Walkthrough (@@WebtestB walks runtime once
+committed — that's a separate dispatch)" out-of-scope
+clause. My standing chan-desktop runtime perm is available
+if you'd rather I run a quick `make run` + manually create
+an orphan + observe the modal myself.

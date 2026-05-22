@@ -382,15 +382,37 @@ pub fn stderr_indicates_drive_lock_conflict(stderr_tail: &[String]) -> bool {
 /// the given drive key. Used by the lock-takeover IPC after a
 /// `serve-failed` payload was recognised as a drive-lock conflict.
 ///
-/// Implementation: shell out to `ps -ax -o pid=,command=` and parse
-/// the lines. Pure best-effort — the heuristic accepts any process
-/// whose command line contains both `chan`, ` serve `, and the
-/// drive key substring, skipping the current chan-desktop process.
-/// Per the task body's "minimum viable" framing we deliberately
-/// avoid elaborate orphan-detection heuristics; the user has
-/// already opted in via the takeover dialog.
+/// `fullstack-b-25`: orphan-detect candidate surfaced to the
+/// SPA via the `find_drive_lock_candidates` IPC. The dialog
+/// renders one row per entry so the destructive Reclaim confirm
+/// shows the user exactly which processes the button will
+/// SIGTERM. Always serialised as `{pid, command}`; `command` is
+/// the trimmed `ps -ax -o command=` line for that pid.
+#[derive(Debug, Clone, Serialize)]
+pub struct OrphanCandidate {
+    pub pid: u32,
+    pub command: String,
+}
+
+/// Find every `chan serve <key>` process holding the drive lock.
+///
+/// `fullstack-b-25` tightened the heuristic from "substring of
+/// `chan` + ` serve ` + key anywhere in the argv" to a positional
+/// argv check: argv[0]'s basename must be exactly `chan`, argv[1]
+/// must be `serve`, and `key` must appear as a standalone token in
+/// argv[2..]. The old loose match could be tripped by wrappers
+/// (`strace chan serve <key>`, `lldb -p N chan serve <key>`),
+/// log-tailing on the drive path, and other coincidental
+/// substring overlap; the user couldn't see which PIDs were
+/// being killed either, so a stray match meant silent collateral.
+/// The positional check accepts only genuine `chan serve`
+/// processes and the dialog now shows the matched candidates by
+/// PID + command line.
+///
+/// Implementation: shell out to `ps -ax -o pid=,command=` and
+/// run the testable core [`parse_ps_lines_for_chan_serve`].
 #[cfg(unix)]
-pub fn find_orphan_chan_serve_pids(key: &str) -> Result<Vec<u32>, String> {
+pub fn find_orphan_chan_serve_candidates(key: &str) -> Result<Vec<OrphanCandidate>, String> {
     let out = std::process::Command::new("ps")
         .args(["-ax", "-o", "pid=,command="])
         .output()
@@ -408,39 +430,50 @@ pub fn find_orphan_chan_serve_pids(key: &str) -> Result<Vec<u32>, String> {
 }
 
 #[cfg(not(unix))]
-pub fn find_orphan_chan_serve_pids(_key: &str) -> Result<Vec<u32>, String> {
+pub fn find_orphan_chan_serve_candidates(_key: &str) -> Result<Vec<OrphanCandidate>, String> {
     Err("orphan `chan serve` reclaim is not implemented on this platform".to_string())
 }
 
-/// Testable core of [`find_orphan_chan_serve_pids`]. Walks the
-/// `ps -ax -o pid=,command=` output and returns every pid whose
-/// command line contains both `chan`, ` serve `, and the drive key,
-/// excluding `self_pid`.
+/// Testable core of [`find_orphan_chan_serve_candidates`]. Walks
+/// the `ps -ax -o pid=,command=` output, requires argv[0]'s
+/// basename to be exactly `chan`, argv[1] to be `serve`, and
+/// `key` to appear as a standalone token in argv[2..]. Skips
+/// `self_pid` so the current chan-desktop process never
+/// nominates itself.
 #[cfg(unix)]
-fn parse_ps_lines_for_chan_serve(ps_output: &str, key: &str, self_pid: u32) -> Vec<u32> {
-    let mut pids = Vec::new();
+fn parse_ps_lines_for_chan_serve(ps_output: &str, key: &str, self_pid: u32) -> Vec<OrphanCandidate> {
+    let mut candidates = Vec::new();
     for line in ps_output.lines() {
         let line = line.trim_start();
-        let (pid_str, rest) = match line.split_once(char::is_whitespace) {
-            Some(p) => p,
-            None => continue,
+        let Some((pid_str, rest)) = line.split_once(char::is_whitespace) else {
+            continue;
         };
-        let pid: u32 = match pid_str.parse() {
-            Ok(p) => p,
-            Err(_) => continue,
+        let Ok(pid) = pid_str.parse::<u32>() else {
+            continue;
         };
         if pid == self_pid {
             continue;
         }
-        if !rest.contains("chan") || !rest.contains(" serve ") {
+        let tokens: Vec<&str> = rest.split_whitespace().collect();
+        if tokens.len() < 3 {
             continue;
         }
-        if !rest.contains(key) {
+        let prog_basename = Path::new(tokens[0])
+            .file_name()
+            .and_then(|s| s.to_str())
+            .unwrap_or(tokens[0]);
+        if prog_basename != "chan" || tokens[1] != "serve" {
             continue;
         }
-        pids.push(pid);
+        if !tokens[2..].contains(&key) {
+            continue;
+        }
+        candidates.push(OrphanCandidate {
+            pid,
+            command: rest.to_string(),
+        });
     }
-    pids
+    candidates
 }
 
 /// SIGTERM the given pid, wait up to one second for it to exit,
@@ -1229,6 +1262,18 @@ mod tests {
     }
 
     #[test]
+    fn invoke_handler_registers_find_drive_lock_candidates() {
+        // `fullstack-b-25`: the reclaim dialog enumerates orphan
+        // candidates via `find_drive_lock_candidates` before the
+        // user confirms the SIGTERM. Mirrors the
+        // `reclaim_drive_lock` registration pin above so a future
+        // rename of either side without the other gets caught.
+        const MAIN_RS: &str = include_str!("main.rs");
+        assert!(MAIN_RS.contains("find_drive_lock_candidates,"));
+        assert!(MAIN_RS.contains("fn find_drive_lock_candidates("));
+    }
+
+    #[test]
     fn serve_failed_payload_drive_lock_field_is_consumed_by_launcher() {
         // `fullstack-b-22`: the SPA-side branch into the lock
         // takeover prompt reads `p.drive_lock_conflict` straight
@@ -1236,6 +1281,9 @@ mod tests {
         // both ends so renaming one side without the other gets
         // caught by tests rather than as a silent regression to
         // the generic error modal.
+        // `fullstack-b-25` adds the candidate-enumeration IPC
+        // pin so the SPA always calls find_drive_lock_candidates
+        // before reclaim_drive_lock.
         const MAIN_JS: &str = include_str!("../../src/main.js");
         assert!(
             MAIN_JS.contains("drive_lock_conflict"),
@@ -1244,6 +1292,10 @@ mod tests {
         assert!(
             MAIN_JS.contains("invoke('reclaim_drive_lock'"),
             "main.js must invoke the reclaim_drive_lock IPC"
+        );
+        assert!(
+            MAIN_JS.contains("invoke('find_drive_lock_candidates'"),
+            "main.js must invoke find_drive_lock_candidates before reclaim_drive_lock so the dialog can render PIDs",
         );
     }
 
@@ -1508,16 +1560,22 @@ mod tests {
         // * the running chan-desktop pid (should be skipped)
         // * a chan serve against a different key (should skip)
         // * an unrelated process containing the key substring (no
-        //   ` serve ` ⇒ should skip)
-        // * a chan process without the ` serve ` token (should skip)
+        //   chan basename ⇒ should skip)
+        // * a chan process without the `serve` subcommand (should skip)
         let ps = "  100 /Applications/Chan.app/Contents/MacOS/chan-desktop\n\
                   200 /Applications/Chan.app/Contents/MacOS/chan serve /tmp/notes --host 127.0.0.1 --port 49991 --no-browser\n\
                   300 /Applications/Chan.app/Contents/MacOS/chan serve /tmp/other --host 127.0.0.1 --port 49992 --no-browser\n\
                   400 /usr/bin/grep -r foo /tmp/notes\n\
                   500 /Applications/Chan.app/Contents/MacOS/chan add /tmp/notes\n";
         // self_pid = 100 (chan-desktop) so it must be filtered out.
-        let pids = parse_ps_lines_for_chan_serve(ps, "/tmp/notes", 100);
-        assert_eq!(pids, vec![200]);
+        let candidates = parse_ps_lines_for_chan_serve(ps, "/tmp/notes", 100);
+        assert_eq!(candidates.len(), 1);
+        assert_eq!(candidates[0].pid, 200);
+        assert!(
+            candidates[0].command.starts_with("/Applications/Chan.app/Contents/MacOS/chan serve /tmp/notes"),
+            "command field must carry the raw argv for the dialog: {}",
+            candidates[0].command,
+        );
     }
 
     #[cfg(unix)]
@@ -1526,6 +1584,58 @@ mod tests {
         let ps = "  100 /Applications/Chan.app/Contents/MacOS/chan-desktop\n\
                   300 /Applications/Chan.app/Contents/MacOS/chan serve /tmp/other --host 127.0.0.1 --port 49992\n";
         assert!(parse_ps_lines_for_chan_serve(ps, "/tmp/notes", 100).is_empty());
+    }
+
+    /// `fullstack-b-25`: tightened heuristic rejects non-`chan`
+    /// programs even when their argv tokens line up. Wrappers like
+    /// `strace chan serve <key>`, `lldb -p N chan serve <key>`, or
+    /// shell wrappers whose argv contains the canonical chan serve
+    /// sequence used to trip the old substring-based heuristic and
+    /// would have been SIGTERM'd by the reclaim path.
+    #[cfg(unix)]
+    #[test]
+    fn parse_ps_lines_rejects_wrapper_programs_running_chan_serve() {
+        let ps = "  600 /usr/bin/strace -e openat chan serve /tmp/notes\n\
+                  700 /usr/bin/lldb -p 12345 chan serve /tmp/notes\n\
+                  800 /usr/local/bin/wrapper-chan-serve.sh /tmp/notes\n\
+                  900 /bin/sh -c chan serve /tmp/notes\n";
+        let candidates = parse_ps_lines_for_chan_serve(ps, "/tmp/notes", 100);
+        assert!(
+            candidates.is_empty(),
+            "tightened heuristic must reject wrapper invocations: {candidates:?}",
+        );
+    }
+
+    /// `fullstack-b-25`: heuristic requires the drive key as a
+    /// standalone argv token, not a substring inside another
+    /// token. Without this, paths that contain the key as a
+    /// prefix (e.g. `chan serve /tmp/notes-other`) would be
+    /// reclaimed by mistake.
+    #[cfg(unix)]
+    #[test]
+    fn parse_ps_lines_rejects_path_substring_only_match() {
+        let ps = "  1000 /Applications/Chan.app/Contents/MacOS/chan serve /tmp/notes-other --host 127.0.0.1\n\
+                  1100 /Applications/Chan.app/Contents/MacOS/chan serve /tmp/notes/sub-drive --host 127.0.0.1\n";
+        let candidates = parse_ps_lines_for_chan_serve(ps, "/tmp/notes", 100);
+        assert!(
+            candidates.is_empty(),
+            "drive key must match as a whole argv token, not a substring: {candidates:?}",
+        );
+    }
+
+    /// `fullstack-b-25`: the candidate's `command` field
+    /// surfaces the full `ps` argv so the reclaim dialog can
+    /// show the user exactly what is about to be SIGTERM'd.
+    #[cfg(unix)]
+    #[test]
+    fn parse_ps_lines_carries_command_line_into_candidate() {
+        let ps = "  1234 /Applications/Chan.app/Contents/MacOS/chan serve /tmp/notes --host 127.0.0.1 --port 49991 --no-browser\n";
+        let candidates = parse_ps_lines_for_chan_serve(ps, "/tmp/notes", 100);
+        assert_eq!(candidates.len(), 1);
+        assert_eq!(
+            candidates[0].command,
+            "/Applications/Chan.app/Contents/MacOS/chan serve /tmp/notes --host 127.0.0.1 --port 49991 --no-browser",
+        );
     }
 
     #[cfg(unix)]
