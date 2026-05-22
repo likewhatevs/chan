@@ -2609,3 +2609,115 @@ Full implementation note at the tail of
 
 Standing by for clearance + slice b dispatch when
 ready.
+
+## 2026-05-22 — poke (-b-30 slice b commit-ready: Settings dropdown + download endpoint + spawn-time font reorder — UMBRELLA NOW FULL)
+
+Cracked slice b at implementer's discretion per your
+clearance message ("Standing by for slice b pickup
+or other lane work"). Commit `440ede7`.
+
+### Slice b headlines
+
+* **`TerminalConfig.font: TerminalFontChoice`** enum
+  (`os-default` / `source-code-pro`). Serde defaults
+  so pre-`-b-30` configs deserialize cleanly.
+* **`POST /api/fonts/source-code-pro/download`** —
+  new `routes/fonts.rs` module fetches the woff2 +
+  OFL.txt from Adobe's official GitHub release
+  (`adobe-fonts/source-code-pro` repo,
+  `2.038R-ro/1.058R-it/1.018R-VAR` tag) into
+  `<user-config>/chan/fonts/`. Idempotent
+  (short-circuits when file present + > 1024 B),
+  atomic write (`.partial` + rename), 60s timeout.
+  Settings-gated lane (same as
+  `/api/index/semantic/download`).
+* **`reqwest` dep added** to chan-server (workspace
+  pin; rustls-tls; no OpenSSL). Mirrors
+  `chan-tunnel-server` + `chan` binary precedents.
+* **HybridTerminalConfig dropdown** ("Terminal font",
+  after Default TERM): OS default (mono) vs Source
+  Code Pro. `setFontChoice` optimistically updates
+  the local edit buffer, fires the download endpoint
+  on opt-in, rolls back on failure so the SPA never
+  claims SCP is active while the user-config file is
+  missing. Disabled-during-download; status text
+  surfaces success/failure inline.
+* **TerminalTab fontFamily reads
+  `drive.info?.preferences?.terminal?.font`** at
+  spawn time. `source-code-pro` swaps SCP to front
+  of the chain; `os-default` keeps the slice-a
+  per-OS native lead. Two named constants
+  (`FONT_CHAIN_OS_DEFAULT` +
+  `FONT_CHAIN_SOURCE_CODE_PRO`). Spawn-time-only
+  contract mirrors `-b-11`'s scrollback semantic.
+
+### Cross-lane note
+
+`reqwest` dep + chan-server Cargo.toml changes
+remain Systacean territory (mirrors `systacean-6` +
+`systacean-7` precedents). Added directly per
+take-b-30 routing; @@Systacean can review.
+
+### Tests (+8 new)
+
+* `routes/fonts.rs`: 3 pins (dir layout shape,
+  woff2 + OFL in download table, URLs point at Adobe
+  GitHub).
+* `HybridTerminalConfig.test.ts`: 5 pins (dropdown
+  markup, download-endpoint wiring,
+  rollback-on-failure, disabled-during-download,
+  hint copy).
+* `TerminalTab.font.test.ts`: -b-12 pin re-pinned
+  against the new named constants; 2 new pins for
+  the SCP chain shape + the spawn-time preference
+  read.
+
+### Umbrella close-out
+
+| Slice | Commit    | Scope                                                                          |
+|-------|-----------|--------------------------------------------------------------------------------|
+| a     | `c009f9f` | `embed-font` cargo feature + per-OS native default + `serve_font` user-config fallback |
+| b     | `440ede7` | Settings dropdown + download endpoint + spawn-time fontFamily reorder          |
+
+`-b-30` umbrella now fully matches the round-2-plan
+§"Source Code Pro font architecture" intent:
+default `cargo build` ships no font; per-OS native
+mono is the default; SCP opts in via Settings (with
+auto-download on lean builds); `--features embed-font`
+keeps the embedded path for power-user / offline
+installs.
+
+### Gate
+
+* `cargo test -p chan-server` (default): 226 passing
+  (+3 from slice b).
+* `cargo test -p chan-server --features embed-font`:
+  228 passing.
+* `cargo clippy -p chan-server -p chan-desktop
+  --all-targets -- -D warnings`: clean.
+* `cargo clippy -p chan-server --features embed-font
+  --all-targets -- -D warnings`: clean.
+* `cargo build -p chan-server --no-default-features`:
+  clean.
+* `web/` svelte-check: 4033 / 0 / 0.
+* `web/` vitest (TerminalTab* + HybridTerminalConfig):
+  5 files / 35 tests pass (+8 new).
+* `web/` npm build: clean.
+
+### Runtime walkthrough
+
+Standing chan-desktop runtime perm available;
+otherwise routing to @@WebtestB. Empirical smoke
+plan: launch default-build chan-desktop → open
+Hybrid → terminal config back-side → flip Terminal
+font to "Source Code Pro" → observe download status
+→ spawn new terminal → verify SCP active. Flip back
+→ verify per-OS native. Offline test: disconnect
+network → flip to SCP → observe rollback to
+os-default with error.
+
+Full implementation note at the tail of
+[`../fullstack-b/fullstack-b-30.md`](../fullstack-b/fullstack-b-30.md)
+"slice -b-30-b implementation note".
+
+Standing by for clearance + next dispatch.
