@@ -798,11 +798,21 @@
      CM6 contenteditable at the same baseline the first line
      would occupy; `pointer-events: none` so the editor still
      receives clicks. Hidden via Svelte conditional render once
-     the user types the first character. */
+     the user types the first character.
+
+     `fullstack-a-84`: shift `left` right by ~10px so the CM6
+     cursor sits cleanly to the LEFT of the placeholder's first
+     character instead of through it. The cursor renders at the
+     CM6 cm-line's natural text-start (~6-8px from the
+     composer-editor edge); the original `left: 1rem` (16px)
+     placed the placeholder roughly at the same x, producing
+     the `|W` overlap @@Alex screenshot-flagged. `1rem + 10px`
+     gives a small visual gap without making the placeholder
+     read as separate from the prompt area. */
   .prompt-placeholder {
     position: absolute;
     top: var(--editor-top-pad, 16px);
-    left: 1rem;
+    left: calc(1rem + 10px);
     right: 1rem;
     pointer-events: none;
     color: var(--text-secondary);

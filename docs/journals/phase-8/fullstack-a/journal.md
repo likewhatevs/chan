@@ -2387,3 +2387,26 @@ Fix in chan-server:
 Impl note at [fullstack-a-66.md](fullstack-a-66.md)
 "## 2026-05-22 — slice b follow-up". Outbound
 poke fired.
+
+## 2026-05-22 — -a-84 (rich prompt placeholder offset) ready for review
+
+Two-file change. CSS-only fix.
+
+`TerminalRichPrompt.svelte` placeholder
+`left: 1rem` → `left: calc(1rem + 10px)`.
+Cursor now sits cleanly to the LEFT of the
+placeholder's first character instead of
+through it (`|W` overlap fixed).
+
+4 raw-source pins in
+`richPromptPlaceholderOffset.test.ts`.
+
+### Gate
+
+* vitest **924 / 924** (+8 net from -a-66
+  slice b follow-up's 916).
+* svelte-check 0/0 across 4025 files.
+* npm build clean.
+
+Impl note at [fullstack-a-84.md](fullstack-a-84.md).
+Outbound poke fired.

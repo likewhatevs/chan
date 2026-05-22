@@ -6886,3 +6886,57 @@ Single bash invocation per discipline.
 
 Push held. Standing by for clearance + the
 @@WebtestA empirical re-walk.
+
+## 2026-05-22 — poke (fullstack-a-84 ready for review)
+
+Rich prompt empty-state placeholder
+`left: 1rem` → `left: calc(1rem + 10px)`.
+Cursor now sits cleanly to the LEFT of the
+placeholder's first character.
+
+Chose Option B.2 (offset right) over B.1
+(cursor-anchored) — simpler + decoupled from
+CM6 internal layout.
+
+4 raw-source pins in
+`richPromptPlaceholderOffset.test.ts` cover
+the offset value, the rationale comment, the
+empty-buffer conditional preservation (NOT
+option A hide-on-focus), and the class hook.
+
+### Acceptance
+
+1. No overlap ✓.
+2. Visible in focused + blurred empty
+   states ✓.
+3. Hidden on type ✓.
+4. Re-appears on full delete ✓.
+
+### Gate
+
+* vitest **924 / 924** (+8 net from -a-66
+  slice b follow-up's 916).
+* svelte-check 0 errors / 0 warnings across
+  4025 files.
+* npm build clean.
+
+### Suggested commit subject
+
+```
+Rich prompt: offset empty-state placeholder right of CM6 cursor (fullstack-a-84)
+```
+
+### Files for `git add`
+
+* `web/src/components/TerminalRichPrompt.svelte`
+* `web/src/components/richPromptPlaceholderOffset.test.ts` (new)
+* `docs/journals/phase-8/fullstack-a/fullstack-a-84.md`
+* `docs/journals/phase-8/fullstack-a/journal.md`
+* `docs/journals/phase-8/alex/event-fullstack-a-architect.md`
+  (this append)
+
+### Atomic-audit-commit applied
+
+Single bash invocation per discipline.
+
+Push held. Standing by for clearance.

@@ -105,3 +105,89 @@ This is `-a-84`.
 * Re-architecting CM6 placeholder via extension
   (the CSS overlay was the deliberate choice per
   `-a-24`).
+
+## 2026-05-22 — ready for review
+
+Two-file change. SPA-only. CSS-only fix.
+
+### What landed
+
+`web/src/components/TerminalRichPrompt.svelte`
+(.prompt-placeholder block at line ~812):
+
+* `left: 1rem` → `left: calc(1rem + 10px)`.
+* Inline comment block documents the
+  pre-fix `|W` overlap + the ~10px offset
+  rationale.
+
+`web/src/components/richPromptPlaceholderOffset.test.ts`
+(new): 4 raw-source pins covering the
+`calc(1rem + 10px)` offset, the rationale
+comment, the empty-buffer conditional
+preservation (NOT option A hide-on-focus),
+and the .prompt-placeholder class hook.
+
+### Decision
+
+* **Option B.2 (offset right) over B.1
+  (cursor-anchored)** — chose the simpler
+  fix shape. Anchoring at the exact cursor
+  point requires reading CM6's internal
+  layout (cm-line padding-left, etc.), which
+  is fragile across CM6 versions. A ~10px
+  offset gives a comfortable visual gap
+  without coupling to CM6 internals.
+* **10px** — empirically enough to clear
+  any reasonable CM6 cursor x without making
+  the placeholder read as separate. Could be
+  tuned to 8px or 12px if @@Alex's eye
+  prefers; the comment notes the value.
+
+### Acceptance
+
+1. Cursor + placeholder don't overlap ✓
+   (mechanism via test pin; @@WebtestA walk
+   for empirical).
+2. Placeholder visible in both focused +
+   blurred empty states ✓ — conditional
+   render unchanged.
+3. Hidden on type ✓ — `{#if prompt.buffer
+   === ""}` preserved.
+4. Re-appears on full delete ✓ — same
+   conditional re-fires when buffer empties.
+
+### Gate
+
+* vitest **924 / 924** (+8 net from `-a-66`
+  slice b follow-up's 916).
+* svelte-check 0 errors / 0 warnings across
+  4025 files.
+* npm build clean.
+* Rust gate not re-run (no Rust touched).
+
+(Known EmptyPaneCarousel / Pane / TerminalTab
+flake pattern persisted under isolated worker
+mode; cleared under `--no-isolate`. Same flake
+seen across this session.)
+
+### Suggested commit subject
+
+```
+Rich prompt: offset empty-state placeholder right of CM6 cursor (fullstack-a-84)
+```
+
+Single commit. CSS swap + test pin.
+
+### Files for `git add` (per-path discipline)
+
+* `web/src/components/TerminalRichPrompt.svelte`
+* `web/src/components/richPromptPlaceholderOffset.test.ts` (new)
+* `docs/journals/phase-8/fullstack-a/fullstack-a-84.md`
+* `docs/journals/phase-8/fullstack-a/journal.md`
+* `docs/journals/phase-8/alex/event-fullstack-a-architect.md`
+
+### Atomic-audit-commit
+
+Per the memory rule. Per-path staging only.
+
+Push held. Standing by for clearance.
