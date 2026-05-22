@@ -2911,3 +2911,53 @@ chan-drive: prefix-aware unified-path read_text + write_text + next_untitled_dra
 * `Drive::promote_draft(name, target_rel)` for the Rename/Move flow (already shipped in `-24`).
 
 Per architect's pre-authorization in the dispatch poke, proceeding to commit + push + smoke. Will surface verdict.
+
+## 2026-05-22 — poke (-26 smoke ALL GREEN after one fixup; unified-path API live; fullstack-a-66 fully unblocked)
+
+### Smoke chain
+
+* **First run `26285558152`** (`aa13b0e`): 4/5 green; macos-latest FAILED on `dispatch_agent_event_writes_rich_template_when_path_and_heading_present` — pre-existing terminal line-wrap flake from my own `-21` test, exposed by the macos-latest matrix having a narrower default terminal width. NOT a `-26` regression (`-26` doesn't touch dispatch/event-watcher).
+* **Fixup `fb61ab9`**: strip `\r` + `\n` chars before asserting on the rich-template anchor substring. Terminal-width agnostic.
+* **Re-run `26285760146`** (`fb61ab9`): ALL GREEN — rustfmt 16s + web 2m42s + build-no-default-features 1m53s + macOS 1m55s + Ubuntu 3m9s.
+
+### What's live on main
+
+The full Drafts cascade now has a **unified IO contract**:
+
+* `Drive::read_text("Drafts/<name>/<file>")` reads through the drafts cap-std handle.
+* `Drive::write_text("Drafts/<name>/<file>", content)` writes atomically with full parity (gate + tmp + fsync + rename).
+* `Drive::write_text_if_unchanged` optimistic-concurrency works for drafts.
+* `Drive::next_untitled_draft_name()` picks the smallest unused `untitled-N`.
+* chan-server's existing `/api/files/*path` route + `SelfWrites` tracker work as-is — no chan-server changes needed.
+
+### Fullstack-a-66 fully unblocked
+
+The SPA Cmd+N flow can now compose:
+
+```
+let name = drive.next_untitled_draft_name()?;             // untitled / untitled-N
+drive.create_draft_dir(&name)?;                            // -24
+let rel = format!("Drafts/{name}/draft.md");
+drive.write_text(&rel, "")?;                               // -26 (atomic, self-write annotated)
+// Editor open path:
+let (content, stat) = drive.read_text_with_stat(&rel)?;    // -26
+// Autosave loop:
+drive.write_text_if_unchanged(&rel, stat.mtime_ns, body)?; // -26
+// User clicks "Move to drive":
+drive.promote_draft(&name, target_rel)?;                   // -24
+```
+
+### Pre-existing flake fixed as bonus
+
+The `-21` test's `out.contains("Check your task at <path>#<heading> and execute.")` assertion was matching against raw PTY output that included `\r` from terminal line-wraps. Local macs with wider terminals never triggered it; macos-latest CI runner with its narrower default did. The `fb61ab9` fix collapses `\r` + `\n` before the substring check — terminal-width agnostic.
+
+### Lane state
+
+| Task | State |
+|------|-------|
+| -26 | ✓ shipped + smoke-validated (this) |
+| -25 | ✓ shipped (Drafts indexer + watcher + graph emit) |
+| -24 | ✓ shipped (Drafts foundation) |
+| All prior | ✓ shipped |
+
+Lane fully idle post-`-26`. Standing by for new dispatches. fullstack-a-66 has a complete chan-drive API surface to consume now.
