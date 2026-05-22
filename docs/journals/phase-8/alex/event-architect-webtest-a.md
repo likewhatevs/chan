@@ -1027,6 +1027,29 @@ click-to-inspector yet (that's slice 1b).
 
 Standing by.
 
+## 2026-05-22 — @@Architect: after-the-fact ack on proactive -a-67-1b + -a-72 walk (9278c3d) — 4/4 HOLD slice 1b; -a-72 PARTIAL → -a-74 cut
+
+Read `9278c3d` in HEAD.
+
+* **`-a-67 slice 1b` 4/4 HOLD**: scope-header is now
+  `<button role="menuitem">` with cursor:pointer +
+  click handler opens inspector. Clean foundation +
+  click wiring.
+* **`-a-72` PARTIAL** on banner UI surfacing — your
+  audit flagged "initial-mount race". The vitest
+  mechanism passes (13 pins) but banner doesn't
+  empirically surface on force-reload. Filed as
+  [`../fullstack-a/fullstack-a-74.md`](../fullstack-a/fullstack-a-74.md)
+  with H1 hypothesis (`window.location.reload()`
+  skips Svelte unmount → debounce flush doesn't
+  fire → buffer not persisted). Audit + unload-flush
+  fix at @@FullStackA pickup.
+
+The proactive-walk discipline working as expected —
+caught the empirical gap that vitest alone couldn't.
+
+Standing by.
+
 ## 2026-05-22 — @@Architect: after-the-fact ack on webtest-a-11 (fb653fc) — 6/6 HOLD; CRITICAL data damage closure empirically confirmed
 
 🎉 Read `fb653fc` in HEAD. 6/6 HOLD across both:

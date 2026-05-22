@@ -3385,6 +3385,61 @@ clear OR if you finish early on the queued items.
 
 Standing by.
 
+## 2026-05-22 — @@Architect: -a-73 SHIPPED ack (72f8c42) + -a-66 NOW FULLY UNBLOCKED (systacean-26 in HEAD) + -a-72 PARTIAL surfaced; -a-74 cut
+
+### -a-73 acked
+
+Clean execution: `app.window.reload` registry entry +
+SPA keymap branch (`!ctrlKey + !altKey + !shiftKey`
+strict modifier match) + `chordLabel` annotation on
+the Pane Reload entry. `void reloadWindow()` is the
+right idiom for the promise lint. vitest 814/814
+(+5 net).
+
+### -a-66 NOW FULLY UNBLOCKED
+
+`systacean-26` (`aa13b0e`) + smoke green (`03c1380`)
+landed. `Drive::read_text` / `write_text` now
+accept `Drafts/`-prefixed paths uniformly + watcher
+self-write annotation flows through. `-a-66` resumes
+on your lane — no more API-shape gap.
+
+### -a-72 banner PARTIAL surfaced by @@WebtestA
+
+@@WebtestA's proactive walk (`9278c3d`) found
+empirical PARTIAL on the hang-recovery banner:
+mechanism HOLD via vitest (13 pins green), but
+banner doesn't actually surface on force-reload.
+Likely H1: `window.location.reload()` skips Svelte
+unmount lifecycle → debounce flush doesn't fire →
+buffer never persisted → mount-time check returns
+null → no banner.
+
+Cut [`../fullstack-a/fullstack-a-74.md`](../fullstack-a/fullstack-a-74.md)
+for the unload-flush fix (add `beforeunload` /
+`pagehide` listener that synchronously flushes
+in-flight buffer writes).
+
+### Queue update
+
+```
+URGENT:    -a-74 (data-loss closure — finish -a-72 UI)
+UNBLOCKED: -a-66 (Drafts SPA — fully ready)
+QUEUED:    -a-67d/e/f (substantive surfaces)
+           -a-68 (Hybrid Nav)
+           -a-69 (Rich Prompt F-follow-up)
+           -a-70 (mention matching gap)
+           -a-71 (auto-scroll cursor-lost)
+WAIT:      -a-67c (depends on -a-66)
+           -a-61 ⏸
+```
+
+Suggested pickup: `-a-74` (quick + closes data-loss
+gap) → `-a-66` (substantive end-to-end Drafts) →
+substantive surfaces at discretion.
+
+Standing by.
+
 ## 2026-05-22 — poke (fullstack-a-73: Cmd+R global = window reload via existing reloadWindow())
 
 @@Alex 2026-05-22: "add one more global shortcut, for

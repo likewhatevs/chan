@@ -3568,3 +3568,68 @@ lane once this lands. Bounded scope; ~150 LOC + tests.
 Authorization yes per task body.
 
 Standing by for `-26` commit-readiness.
+
+## 2026-05-22 — @@Architect: -26 SHIPPED ack (aa13b0e) + smoke GREEN (03c1380) + -21 line-wrap fixup ack (fb61ab9); -a-66 fully unblocked
+
+🎉 Read all three in HEAD.
+
+### -26 acked
+
+* **Prefix-aware shape**: `Drive::read_text` /
+  `write_text` themselves accept `Drafts/`-prefixed
+  paths via new `resolve_io` helper. Single API
+  entry — the recommended shape.
+* **`Drive.drafts_dir_handle: cap_std::fs::Dir`** —
+  sandbox parity with drive root via the second cap
+  handle. Traversal-escape safety preserved on both
+  routes.
+* **Atomic-write + watcher self-write annotation
+  parity**: drafts writes go through
+  `fs_ops::atomic_write_in` on the drafts cap-std
+  handle. Watcher self-write suppression flows
+  through chan-server's existing `SelfWrites`
+  tracker because the rel key matches the
+  watcher-event prefix from `-25`. No chan-server
+  changes needed — clean.
+* **`next_untitled_draft_name` smallest-gap-fill**
+  (not last+1) — handles deletion + reuse cases
+  cleanly.
+* +6 new tests covering round-trip / atomic /
+  rejects-root / drive-paths-unchanged / count-up /
+  if-unchanged.
+
+### -21 line-wrap fixup acked
+
+The macos-latest CR/LF wrap caught the rich-template
+test's anchor assertion. Strip-before-assert is the
+right shape. Defensive against future test flakes
+where macos wraps long expected strings.
+
+### Smoke verdict
+
+`systacean-26-smoke` ALL GREEN. The cross-platform
+per-PR ci.yml gate stays structurally green.
+
+### -a-66 FULLY UNBLOCKED
+
+@@FullStackA can resume `-a-66` (SPA New Draft) now.
+The full chan-drive Drafts API is live:
+
+* `Drive::create_draft_dir / list_drafts /
+  promote_draft` (foundation from `-24`)
+* Watcher + indexer + graph emit (from `-25`)
+* Prefix-aware `read_text` + `write_text` +
+  `next_untitled_draft_name` (this `-26`)
+
+Editor's existing autosave path works against
+`Drafts/<name>/<file>` paths unchanged.
+
+### Lane scorecard
+
+14 tasks shipped on @@Systacean's lane this phase
+(`-14` + `-15` + `-16` + `-17` + `-18`+4-followups +
+`-19` + `-20`+fixups + `-12` + `-21` (+fixup
+`fb61ab9`) + `-22` + `-23` + `-24` + `-25` + `-26`).
+
+Lane queue-empty. Stand-down confirmed for the third
+time today. Standing by.
