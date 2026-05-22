@@ -18,7 +18,11 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-async function renderOverlay(watcher: TerminalWatcherState, onWatcherDetached = vi.fn()) {
+async function renderOverlay(
+  watcher: TerminalWatcherState,
+  opts: { onWatcherDetached?: ReturnType<typeof vi.fn>; onQuoteToPrompt?: (md: string) => void } = {},
+) {
+  const onWatcherDetached = opts.onWatcherDetached ?? vi.fn();
   drive.info = {
     name: "test",
     root: "/tmp/test",
@@ -28,7 +32,13 @@ async function renderOverlay(watcher: TerminalWatcherState, onWatcherDetached = 
   document.body.append(target);
   const component = mount(BubbleOverlay, {
     target,
-    props: { watcher, sessionId: "term_123", onRefresh: vi.fn(), onWatcherDetached },
+    props: {
+      watcher,
+      sessionId: "term_123",
+      onRefresh: vi.fn(),
+      onWatcherDetached,
+      onQuoteToPrompt: opts.onQuoteToPrompt,
+    },
   });
   mounted.push(component);
   await tick();
@@ -136,8 +146,13 @@ describe("BubbleOverlay", () => {
     expect(rows[0]?.textContent).toContain("Use the conservative option");
   });
 
-  test("follow-up click writes async reply and keeps the bubble visible", async () => {
+  test("`-a-69` follow-up click calls onQuoteToPrompt with the survey-as-quote markdown", async () => {
+    // `fullstack-a-69` rewrote follow-up: no server reply; instead
+    // the button passes the survey-as-quote markdown to
+    // TerminalTab via the `onQuoteToPrompt` prop, which appends
+    // to `tab.richPrompt.buffer`.
     const { writeReply } = installReplySpies();
+    const quoted: string[] = [];
     const watcher: TerminalWatcherState = {
       path: "events",
       seenIds: ["follow-1"],
@@ -148,6 +163,7 @@ describe("BubbleOverlay", () => {
           type: "survey",
           from: "@@Architect",
           to: "@@Alex",
+          topic: "ready to ship?",
           path: "events/event-follow-1.md",
           questions: [
             {
@@ -159,23 +175,22 @@ describe("BubbleOverlay", () => {
         },
       ],
     };
-    const { target } = await renderOverlay(watcher);
+    const { target } = await renderOverlay(watcher, {
+      onQuoteToPrompt: (md) => quoted.push(md),
+    });
 
     buttonText(target, "follow up").click();
     await tick();
-    await waitFor(() => writeReply.mock.calls.length === 1);
 
+    expect(quoted).toHaveLength(1);
+    expect(quoted[0]).toContain("> **ready to ship?**");
+    expect(quoted[0]).toContain("> **Mode**");
+    expect(quoted[0]).toContain("> Pick mode");
+    expect(quoted[0]).toContain(">   - 1: Fast");
+    // No server reply on follow-up — the pre-`-a-69` writeReply
+    // path is gone for this affordance.
+    expect(writeReply).not.toHaveBeenCalled();
     expect(watcher.events).toHaveLength(1);
-    expect(target.textContent).toContain("follow up");
-    expect(writeReply).toHaveBeenCalledWith("term_123", {
-      id: "follow-1",
-      type: "survey-reply",
-      from: "@@Alex",
-      to: "@@Architect",
-      answers: [],
-      scope_grant: "one-shot",
-      follow_up: true,
-    });
   });
 
   test("follow-up affordance renders as an explicit button with F marker", async () => {
@@ -209,9 +224,14 @@ describe("BubbleOverlay", () => {
     expect(followButton?.textContent).toContain("follow up");
   });
 
-  test("F marks the focused survey as follow-up and a later answer supersedes it", async () => {
+  test("`-a-69` F key calls onQuoteToPrompt for the focused survey; subsequent answer still works", async () => {
+    // `fullstack-a-69`: F is now a UI-only action — quotes the
+    // survey into the rich prompt and returns. The user can
+    // still answer the survey normally afterwards; the answer
+    // path is unchanged.
     vi.useFakeTimers();
     const { writeReply } = installReplySpies();
+    const quoted: string[] = [];
     const watcher: TerminalWatcherState = {
       path: "events",
       seenIds: ["follow-key"],
@@ -233,21 +253,28 @@ describe("BubbleOverlay", () => {
         },
       ],
     };
-    const { target } = await renderOverlay(watcher);
+    const { target } = await renderOverlay(watcher, {
+      onQuoteToPrompt: (md) => quoted.push(md),
+    });
 
     window.dispatchEvent(new KeyboardEvent("keydown", { key: "F" }));
-    await waitFor(() => writeReply.mock.calls.length === 1);
-    await waitFor(() => !buttonText(target, "Fast").disabled);
+    await tick();
 
+    expect(quoted).toHaveLength(1);
+    expect(quoted[0]).toContain("> **Mode**");
+    expect(quoted[0]).toContain("> Pick mode");
+    // F is now UI-only; no server reply fires.
+    expect(writeReply).not.toHaveBeenCalled();
+
+    // The user can still answer the survey normally afterwards.
     buttonText(target, "Fast").click();
     await tick();
     await vi.advanceTimersByTimeAsync(600);
-    await waitFor(() => writeReply.mock.calls.length === 2);
+    await waitFor(() => writeReply.mock.calls.length === 1);
     await waitFor(() => watcher.events.length === 0);
 
-    expect(writeReply.mock.calls).toHaveLength(2);
-    expect(writeReply.mock.calls[0]?.[1]).toMatchObject({ follow_up: true, answers: [] });
-    expect(writeReply.mock.calls[1]?.[1]).toEqual({
+    expect(writeReply.mock.calls).toHaveLength(1);
+    expect(writeReply.mock.calls[0]?.[1]).toEqual({
       id: "follow-key",
       type: "survey-reply",
       from: "@@Alex",

@@ -765,6 +765,22 @@
     term?.focus();
   }
 
+  /// `fullstack-a-69`: F-follow-up rewrite. BubbleOverlay
+  /// formats the current survey as a markdown quote + calls this
+  /// callback to inject it into the Rich Prompt buffer. The
+  /// quote is appended (so any in-flight draft survives), a
+  /// blank line is added below so the caret lands on a fresh
+  /// line, and `focusNonce` is bumped so the Wysiwyg/Source
+  /// re-focus and re-mount the new buffer cleanly.
+  function quoteIntoRichPrompt(markdown: string): void {
+    const rp = ensureRichPrompt();
+    const separator = rp.buffer.length === 0 ? "" : "\n\n";
+    rp.buffer = `${rp.buffer}${separator}${markdown}\n`;
+    rp.open = true;
+    rp.focusNonce = (rp.focusNonce ?? 0) + 1;
+    scheduleTerminalSessionSave();
+  }
+
   function submitRichPrompt(source: string): void {
     // `fullstack-b-13`: when the prompt is in Agent submit-mode,
     // strip any trailing newline the editor left on the buffer
@@ -1286,6 +1302,7 @@
           focusTerminalSession(event.session);
           focusTerminalName(event.tab_label ?? event.from);
         }}
+        onQuoteToPrompt={(markdown) => quoteIntoRichPrompt(markdown)}
       />
     {/if}
     <TerminalRichPrompt

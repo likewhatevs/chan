@@ -2076,3 +2076,40 @@ the scroll-restore.
 
 Impl note at [fullstack-a-71.md](fullstack-a-71.md).
 Outbound poke fired.
+
+## 2026-05-22 — -a-69 (Rich Prompt F-follow-up rewrite) ready for review
+
+Three-file change. SPA-only.
+
+Scratched the old `markFollowUp` server-reply
+path. New behavior:
+* F-key OR follow-up button →
+  `quoteSurveyToPrompt(event)` →
+  `onQuoteToPrompt(surveyAsQuoteMarkdown(event))`.
+* TerminalTab's callback appends to
+  `tab.richPrompt.buffer` + opens prompt +
+  bumps focusNonce.
+
+Quote format: `> **topic**`, `> _from <X>_`,
+`> **Q-header**`, `> Q-text`, `>   - key:
+label` for each option.
+
+Two existing BubbleOverlay tests rewritten for
+the new behavior; +9 new pins in
+`richPromptFollowUp.test.ts`.
+
+`markFollowUp` function removed; `followUps`
+state + `follow-badge` UI stay as dead code
+(removal ripples to `commit()`'s param + the
+chan-server contract on `writeSurveyReply` —
+out of scope for this rewrite).
+
+### Gate
+
+* vitest **838 / 838** (+9 net from `-a-71`'s
+  829).
+* svelte-check 0/0 across 4012 files.
+* npm build clean.
+
+Impl note at [fullstack-a-69.md](fullstack-a-69.md).
+Outbound poke fired.

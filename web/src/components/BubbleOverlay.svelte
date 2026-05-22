@@ -12,12 +12,20 @@
     onRefresh,
     onWatcherDetached,
     onOpenTerminal,
+    onQuoteToPrompt,
   }: {
     watcher: TerminalWatcherState;
     sessionId?: string;
     onRefresh: () => Promise<void> | void;
     onWatcherDetached?: () => void;
     onOpenTerminal?: (event: WatcherEvent) => void;
+    /// `fullstack-a-69`: F-follow-up rewrite. Called when the user
+    /// presses F on (or clicks the F-follow-up affordance for) a
+    /// survey bubble. Mounted from TerminalTab.svelte; appends the
+    /// quote-formatted survey to `tab.richPrompt.buffer` + opens
+    /// the rich prompt + bumps `focusNonce` so the editor lands
+    /// the caret on the new line below the quote.
+    onQuoteToPrompt?: (markdown: string) => void;
   } = $props();
 
   type NumberedOption = SurveyOption & { n: number };
@@ -138,8 +146,42 @@
     await commit(event, {}, 0, false);
   }
 
-  async function markFollowUp(event: WatcherEvent): Promise<void> {
-    await commit(event, {}, -1, true);
+  /// `fullstack-a-69`: format a survey event as a markdown quote
+  /// block suitable for the Rich Prompt. Topic + per-question
+  /// header / text / options each prefixed with `> `. Multi-
+  /// question surveys get a quote-line separator between each.
+  /// Falls back to the bubble's `note` if no questions exist
+  /// (poke-style events).
+  function surveyAsQuoteMarkdown(event: WatcherEvent): string {
+    const lines: string[] = [];
+    if (event.topic) lines.push(`> **${event.topic}**`);
+    if (event.from) lines.push(`> _from ${event.from}_`);
+    if (lines.length) lines.push(">");
+    const qs = event.questions ?? [];
+    for (const q of qs) {
+      if (q.header) lines.push(`> **${q.header}**`);
+      if (q.text) lines.push(`> ${q.text}`);
+      for (const opt of q.options) {
+        lines.push(`>   - ${opt.key}: ${opt.label}`);
+      }
+      lines.push(">");
+    }
+    if (qs.length === 0 && event.note) {
+      lines.push(`> ${event.note}`);
+    }
+    return `${lines.join("\n")}\n`;
+  }
+
+  /// `fullstack-a-69`: bring the current survey into the Rich
+  /// Prompt as a markdown quote. Replaces the pre-`-a-69`
+  /// `markFollowUp` behavior (which marked the survey as needing
+  /// follow-up server-side); per @@Alex's "Whatever it is doing
+  /// today, scratch it" framing. The callback in TerminalTab
+  /// appends the quote to the rich-prompt buffer + lands the
+  /// caret on the line below.
+  function quoteSurveyToPrompt(event: WatcherEvent): void {
+    if (!onQuoteToPrompt) return;
+    onQuoteToPrompt(surveyAsQuoteMarkdown(event));
   }
 
   async function commit(
@@ -271,7 +313,7 @@
     }
     if (e.key === "f" || e.key === "F") {
       e.preventDefault();
-      void markFollowUp(event);
+      quoteSurveyToPrompt(event);
       return;
     }
     if (e.key === "Tab" || e.key === "ArrowRight" || e.key === "ArrowLeft") {
@@ -469,8 +511,7 @@
                 <button
                   type="button"
                   class="follow-button"
-                  disabled={busyReply === event.id}
-                  onclick={() => void markFollowUp(event)}
+                  onclick={() => quoteSurveyToPrompt(event)}
                 >
                   <kbd>F</kbd>
                   <span>follow up</span>

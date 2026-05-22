@@ -6011,3 +6011,107 @@ Single bash invocation per discipline.
 Push held. Standing by for clearance + routing
 on the chan-drive Drive::list extension that
 unblocks `-a-66b`.
+
+## 2026-05-22 — poke (fullstack-a-69 ready for review)
+
+F-follow-up rewrite. Three-file change. SPA-only.
+
+### Audit verdict
+
+Pre-`-a-69` F-follow-up fired
+`writeSurveyReply(..., follow_up: true)` —
+server-side stash + a "follow up" UI badge.
+Per @@Alex's "scratch today's behavior":
+removed the server-side semantic, replaced
+with a client-only quote-into-Rich-Prompt
+action.
+
+### What landed
+
+`BubbleOverlay.svelte`:
+* New `onQuoteToPrompt?: (markdown) => void`
+  prop.
+* New `surveyAsQuoteMarkdown(event)` helper —
+  formats topic / from / per-question header /
+  text / options as `> `-prefixed markdown.
+  Falls back to `event.note` for non-survey
+  bubbles.
+* `quoteSurveyToPrompt(event)` wraps the
+  formatter + callback.
+* F-key + follow-up button both call
+  `quoteSurveyToPrompt`.
+* `markFollowUp` function removed.
+
+`TerminalTab.svelte`:
+* `quoteIntoRichPrompt(markdown)` appends to
+  `tab.richPrompt.buffer` with `\n\n`
+  separator + bumps `focusNonce`.
+* BubbleOverlay mount passes the callback.
+
+`BubbleOverlay.test.ts`:
+* Two existing tests rewritten — assert
+  onQuoteToPrompt called with the formatted
+  markdown; assert no server reply fires.
+* The subsequent-answer path is preserved
+  (still works via the normal answer flow).
+
+`richPromptFollowUp.test.ts` (new): 9
+raw-source pins.
+
+### Decisions flagged
+
+* **Callback prop** over global-state reach
+  from BubbleOverlay. Cleanly decoupled.
+* **`followUps` state + `follow-badge` UI
+  stay as dead code** — removing them ripples
+  to `commit()`'s `followUp` param + the
+  chan-server contract on `writeSurveyReply`.
+  Punted to a follow-up to keep this commit's
+  blast radius tight.
+* **Quote format** topic-first, then
+  question-by-question. Each line `> `-
+  prefixed; options listed under each
+  question. Falls back to `event.note` for
+  non-survey bubbles.
+
+### Acceptance
+
+1. F triggers quote injection ✓.
+2. Quote format with `> ` prefixes ✓.
+3. Cursor lands on new line below quote ✓
+   (via `\n` end-of-content + focusNonce
+   bump).
+4. Old behavior removed ✓ (markFollowUp
+   gone; no follow_up reply fires from F).
+
+### Gate
+
+* vitest **838 / 838** (+9 net from `-a-71`'s
+  829).
+* svelte-check 0 errors / 0 warnings across
+  4012 files.
+* npm build clean.
+* Rust gate not re-run.
+
+### Suggested commit subject
+
+```
+Rich Prompt F-follow-up: quote current survey into prompt instead of marking server-side (fullstack-a-69)
+```
+
+### Files for `git add`
+
+* `web/src/components/BubbleOverlay.svelte`
+* `web/src/components/BubbleOverlay.test.ts`
+* `web/src/components/TerminalTab.svelte`
+* `web/src/components/richPromptFollowUp.test.ts` (new)
+* `docs/journals/phase-8/fullstack-a/fullstack-a-69.md`
+* `docs/journals/phase-8/fullstack-a/journal.md`
+* `docs/journals/phase-8/alex/event-fullstack-a-architect.md`
+  (this append)
+
+### Atomic-audit-commit applied
+
+Single bash invocation per discipline.
+
+Push held. Standing by for clearance.
