@@ -96,6 +96,7 @@
     paneWidths,
     persistPaneWidths,
     revealPathInBrowser,
+    setTransientStatus,
     ui,
   } from "../state/store.svelte";
   import {
@@ -383,7 +384,9 @@
     closeTabMenu();
     try {
       await navigator.clipboard?.writeText(tab.path);
-      ui.status = "Copied file path";
+      // `fullstack-a-86`: success toast auto-dismisses (3s)
+      // — same shape as `-a-85`'s move-success fix.
+      setTransientStatus("Copied file path");
     } catch (err) {
       ui.status = `copy failed: ${(err as Error).message}`;
     }

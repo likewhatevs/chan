@@ -16,6 +16,7 @@
   import {
     drive,
     refreshTree,
+    setTransientStatus,
     ui,
     uiPathPrompt,
   } from "../state/store.svelte";
@@ -272,7 +273,10 @@
       await api.create(target, false, prompt.buffer);
       await refreshTree();
       await openInActivePane(target);
-      ui.status = `Created ${target}`;
+      // `fullstack-a-86`: success toast auto-dismisses (3s)
+      // — same shape as `-a-85`'s move-success fix. Error
+      // path stays persistent so the user notices failures.
+      setTransientStatus(`Created ${target}`);
     } catch (err) {
       ui.status = `create failed: ${(err as Error).message}`;
     }
@@ -356,7 +360,10 @@
     } catch (err) {
       if (/409|404|watcher|not found|not attached|conflict/i.test((err as Error).message || "")) {
         onWatcherStopped?.();
-        ui.status = "watcher detached on reload";
+        // `fullstack-a-86`: auto-dismiss the reload-detected
+        // "watcher detached" toast — it's informational and
+        // doesn't require user action.
+        setTransientStatus("watcher detached on reload");
         return;
       }
       watcherError = `stop failed: ${(err as Error).message}`;

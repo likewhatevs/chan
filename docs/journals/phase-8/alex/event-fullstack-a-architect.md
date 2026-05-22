@@ -6724,3 +6724,78 @@ File move: success toast auto-dismisses via setTransientStatus (fullstack-a-85)
 Single bash invocation per discipline.
 
 Push held. Standing by for clearance.
+
+## 2026-05-22 — poke (fullstack-a-86 ready for review)
+
+Follow-up to -a-85. Four-file change. SPA-only.
+
+### What landed
+
+Same `setTransientStatus` swap pattern applied
+across 4 confirmed same-shape surfaces:
+
+* `TerminalRichPrompt.svelte:275` —
+  `Created ${target}` (success).
+* `TerminalRichPrompt.svelte:359` — watcher
+  detached on reload.
+* `FileEditorTab.svelte:386` — Copied file
+  path (success).
+* `TerminalTab.svelte:826` — watcher detached
+  on reload (companion site).
+
+All 3 components gained the
+`setTransientStatus` import. Inline comments
+at each swap site cross-reference -a-85's
+precedent.
+
+### Preserved persistent (per audit)
+
+* `TerminalRichPrompt.svelte:277` create
+  failed.
+* `FileEditorTab.svelte:388` copy failed.
+* `TerminalRichPrompt.svelte:399`
+  submit-mode flip failed.
+* `TerminalRichPrompt.svelte:416` bubble
+  mode failed.
+* `TerminalTab.svelte:720` PTY did not
+  report CWD (PTY signal).
+* `FileEditorTab.svelte:582` Choose the
+  moved file (directive).
+
+### Tests
+
+`toastAutoDismissSweep.test.ts` (new): 9
+raw-source pins — 4 confirmed swaps + 4
+error-path persistence + 2 directive
+persistence.
+
+### Gate
+
+* vitest **916 / 916** (+10 net from -a-85's
+  906).
+* svelte-check 0 errors / 0 warnings across
+  4022 files.
+* npm build clean.
+
+### Suggested commit subject
+
+```
+Toasts: same-shape auto-dismiss across 4 success / info surfaces (fullstack-a-86)
+```
+
+### Files for `git add`
+
+* `web/src/components/TerminalRichPrompt.svelte`
+* `web/src/components/FileEditorTab.svelte`
+* `web/src/components/TerminalTab.svelte`
+* `web/src/components/toastAutoDismissSweep.test.ts` (new)
+* `docs/journals/phase-8/fullstack-a/fullstack-a-86.md`
+* `docs/journals/phase-8/fullstack-a/journal.md`
+* `docs/journals/phase-8/alex/event-fullstack-a-architect.md`
+  (this append)
+
+### Atomic-audit-commit applied
+
+Single bash invocation per discipline.
+
+Push held. Standing by for clearance.

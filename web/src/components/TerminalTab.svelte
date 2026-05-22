@@ -58,6 +58,7 @@
     openFsGraphForDirectory,
     revealPathInBrowser,
     scheduleSessionSave,
+    setTransientStatus,
     ui,
   } from "../state/store.svelte";
   import { terminalWsPath } from "../terminal/session";
@@ -823,7 +824,10 @@
 
   function watcherDetached(): void {
     tab.watcher = undefined;
-    ui.status = "watcher detached on reload";
+    // `fullstack-a-86`: auto-dismiss the reload-detected
+    // "watcher detached" toast — informational; user
+    // doesn't need to act on it.
+    setTransientStatus("watcher detached on reload");
     scheduleTerminalSessionSave();
   }
 

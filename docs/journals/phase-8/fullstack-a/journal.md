@@ -2330,3 +2330,33 @@ persistent.
 
 Impl note at [fullstack-a-85.md](fullstack-a-85.md).
 Outbound poke fired.
+
+## 2026-05-22 — -a-86 (follow-up toast auto-dismiss) ready for review
+
+Four-file change. Swapped 4 same-shape
+`ui.status =` writes to `setTransientStatus`:
+* `TerminalRichPrompt.svelte:275` Created
+  ${target}.
+* `TerminalRichPrompt.svelte:359` watcher
+  detached on reload.
+* `FileEditorTab.svelte:386` Copied file
+  path.
+* `TerminalTab.svelte:826` watcher detached
+  on reload.
+
+Error paths + directive surfaces (PTY did not
+report CWD, Choose the moved file) preserved
+persistent.
+
+9 raw-source pins in
+`toastAutoDismissSweep.test.ts`.
+
+### Gate
+
+* vitest **916 / 916** (+10 net from -a-85's
+  906).
+* svelte-check 0/0 across 4022 files.
+* npm build clean.
+
+Impl note at [fullstack-a-86.md](fullstack-a-86.md).
+Outbound poke fired.
