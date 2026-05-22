@@ -78,3 +78,14 @@ Resolution of @@Architect's review gaps:
 * **Single-user disclaimer**: chan is single-user per CLAUDE.md; Host = the one user driving the session. Multi-user (multiple humans sharing a team) is out of scope.
 * **Naming**: "team member" = "agent" = an entity with a `@@<handle>` and a terminal. In the config the schema field is `members: [...]` with each entry carrying `handle`, `command`, `env`, `is_lead`.
 * **Pre-flight survey format**: uses the existing survey/survey-reply event shape (one-question multi-choice "are all agents up and running?" with a follow-up step description).
+
+### Team tear-down (@@Alex 2026-05-22 clarification)
+
+Tear-down is the SAME as turning off the watcher today — not a big deal:
+
+* Stop the per-team watcher (chan-server's `team_unload(team_name)` IPC).
+* Team workspace (`Drafts/team-{name}/config.toml + events/ + docs/`) PERSISTS on disk.
+* Terminals stay open — they're user-managed (close them manually if desired; otherwise they keep running).
+* Re-load is a normal "Load Team" flow at any time.
+
+In other words: tear-down is a watcher-lifecycle operation, not a destructive team-cleanup. Same semantics as today's watcher toggle.

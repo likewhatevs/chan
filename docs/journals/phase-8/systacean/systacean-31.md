@@ -26,7 +26,11 @@ dir. Uses the multi-root `WatchRoot` primitive from
   up a watcher rooted at the team's events/ dir.
   Registers per-team event-bus subscribers.
 * `team_unload(team_name) -> Result<()>` — tears down
-  the watcher + unregisters subscribers.
+  the watcher + unregisters subscribers. **Non-destructive**:
+  same semantics as today's watcher off-toggle. The team
+  workspace (config + events + docs) PERSISTS on disk;
+  terminals stay open (user-managed). Re-load via normal
+  Load Team flow at any time.
 * `team_list_loaded() -> Result<Vec<String>>` — for
   SPA to know which teams are active.
 
