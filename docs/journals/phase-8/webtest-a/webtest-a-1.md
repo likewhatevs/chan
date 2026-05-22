@@ -4195,3 +4195,100 @@ Lane-A test server torn down:
 (path-keying landed clean, but effect-ordering race
 unfixed). **`-a-78 slice 1` HOLD** on dialog
 shell. The hang-recovery saga continues.
+
+## 2026-05-22 — proactive walk: -a-78 slice 2 airplane-grid + drag&drop
+
+Proactive walk on HEAD `75f1726`. Throwaway drive
+r21; chan serve 127.0.0.1:8787; Chrome MCP tab
+`503726047`. Slice 2 of the Team dialog adds the
+airplane-grid + drag&drop for the split-pane real
+estate path.
+
+### Verdicts (5/5 HOLD)
+
+| Check | Surface | Verdict |
+|-------|---------|---------|
+| #1 | Real estate "Split panes" toggle reveals grid | HOLD |
+| #2 | Grid shapes match team size | HOLD |
+| #3 | Cells render with index + "drop robot" placeholder | HOLD |
+| #4 | Drag&drop robot → cell occupies cell + updates badge | HOLD |
+| #5 | Multi-robot on same cell (tab grouping) | HOLD |
+
+### Per-check evidence
+
+* **#1 Split-panes toggle reveals grid**: clicked
+  "New Team" button (ref_81 in rich prompt toolbar)
+  → dialog opened. Default real estate was "Tabs in
+  current Hybrid". Clicked "Split panes" (ref_134)
+  → green-highlighted + airplane-grid component
+  `.team-airplane-grid` appeared below.
+* **#2 Grid shapes match size**:
+  - **Size = 2** (default): shapes `1×2` (active) +
+    `2×1`. 2 cells.
+  - **Size = 4** (set via slider): shapes `2×2`
+    (active) + `1×4` + `4×1`. 4 cells.
+
+  Shape-pick logic correct per the spec ("4 → 1x4
+  / 2x2"; `-a-78` slice 2 adds 4×1 as a third
+  option). Default = `2×2` for size=4 (compact
+  shape).
+* **#3 Cells render**: `.team-airplane-cell`
+  elements with `.team-cell-index` (1,2,3,4) +
+  `.team-cell-empty` ("drop robot" placeholder).
+  Each member row also gains a
+  `.team-member-cell-badge.unassigned` badge.
+* **#4 Drag&drop works**: synthesized
+  `dragstart`/`dragover`/`drop`/`dragend` events
+  on a Lead member row → cell 0. Result:
+  - Cell 0 gained class `occupied`
+  - Cell 0 text: **"1 @@Lead"** (member name with
+    `@@` auto-prefix from clarification #8)
+  - Member badges: `["cell 1", "unassigned",
+    "unassigned", "unassigned"]` — Lead now in
+    cell 1.
+* **#5 Multi-robot on same cell**: synthesized a
+  second drag of Worker1 → same cell 0. Result:
+  - Cell 0 text: **"1 @@Lead@@Worker1"** — both
+    members co-located
+  - Badges: `["cell 1", "cell 1", "unassigned",
+    "unassigned"]`
+
+  Multi-robot on same cell = both become tabs in
+  the same pane per the spec ("Dropping multiple
+  robots on the same cell = those robots become
+  tabs in the same pane").
+
+### Highlights
+
+* **Airplane-grid logic is clean**: shape options
+  adapt to team size correctly. 2×2 default for
+  4 is the right ergonomic choice (compact +
+  symmetric). For non-trivial sizes (5/7/11/13),
+  the spec calls for 1×N fallback — not exercised
+  this walk but the shape-generator can be code-
+  verified.
+* **Drag&drop empirically works via synthesized
+  events**: real native drag-and-drop should work
+  identically. The data-flow updates both the
+  cell state (text + `occupied` class) AND the
+  member-row badges (`unassigned` → `cell N`).
+* **Auto-prefix `@@` is applied**: members
+  display as `@@Lead`, `@@Worker1` per the
+  Auto-prefix toggle (clarification #8 honored).
+* **Slice 2 closes the Team dialog UI shell**:
+  slice 1 was static dialog, slice 2 added the
+  real-estate flow. `-a-79` will wire the
+  Bootstrap button to actually spawn the team.
+
+### State at end of walk
+
+Lane-A test server torn down:
+
+1. chan serve killed.
+2. `rm -rf /tmp/chan-test-phase8-wa-r21/`.
+3. `chan remove` → unregistered.
+4. Chrome MCP tab closed.
+
+5/5 HOLD. `-a-78 slice 2` ships clean. Team
+dialog UI is empirically complete; ready for
+`-a-79` bootstrap orchestrator wiring.

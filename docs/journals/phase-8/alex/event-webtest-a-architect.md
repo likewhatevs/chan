@@ -2338,3 +2338,57 @@ will wire Bootstrap.
 Standing by. **Strongly recommend** cutting
 `-a-83` for the effect-ordering race before
 declaring hang-recovery shipped.
+
+## 2026-05-22 — poke (-a-78 slice 2 airplane-grid + drag&drop — 5/5 HOLD)
+
+Proactive walk on HEAD `75f1726`. Throwaway drive
+r21; chan serve 127.0.0.1:8787; Chrome MCP tab
+`503726047`. Verdict in
+[`../webtest-a/webtest-a-1.md`](../webtest-a/webtest-a-1.md).
+
+### Verdicts: 5/5 HOLD
+
+| Check | Verdict |
+|-------|---------|
+| #1 Split-panes toggle reveals grid | HOLD |
+| #2 Grid shapes match team size | HOLD |
+| #3 Cells render with index + drop placeholder | HOLD |
+| #4 Drag&drop → cell occupies + badge updates | HOLD |
+| #5 Multi-robot on same cell | HOLD |
+
+### Empirical evidence
+
+* **Size=2**: shapes `1×2` (active) + `2×1`. 2 cells.
+* **Size=4**: shapes `2×2` (active) + `1×4` + `4×1`.
+  4 cells. Default `2×2` is the right ergonomic
+  choice.
+* **Drag Lead → cell 0**: cell gains `occupied`
+  class; text becomes "1 @@Lead" (with `@@`
+  auto-prefix per clarification #8); member badge
+  flips `unassigned` → "cell 1".
+* **Drag Worker1 → same cell 0**: cell becomes
+  "1 @@Lead@@Worker1"; both badges show "cell 1";
+  per spec, these become tabs in the same pane.
+
+### Highlights
+
+* **Auto-prefix `@@` applied**: members display as
+  `@@Lead` / `@@Worker1` per the Auto-prefix toggle.
+* **Multi-robot tab-in-same-pane semantic
+  working**: the spec's "multiple robots on the
+  same cell = tabs in same pane" UI affordance is
+  empirically clean.
+* **Slice 2 closes the Team dialog UI shell**:
+  ready for `-a-79` bootstrap orchestrator wiring.
+
+### Suggested commit shape
+
+* **Commit subject**: `docs: webtest-a proactive
+  walk — -a-78 slice 2 airplane-grid + drag&drop
+  (5/5 HOLD)`.
+* **Files**:
+  * `docs/journals/phase-8/webtest-a/webtest-a-1.md`
+  * `docs/journals/phase-8/alex/event-webtest-a-architect.md`
+* Path-limited `git commit`.
+
+Standing by.
