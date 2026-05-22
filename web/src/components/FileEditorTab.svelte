@@ -177,14 +177,21 @@
     // user may have already started editing this tick and we
     // need to compare against what the FILE has, not what the
     // BUFFER would have.
+    //
+    // `fullstack-a-82`: key the buffer on `tab.path` (not
+    // `tab.id`). Tab ids are module-counter-generated and
+    // reset on every page load — so a pre-`-a-82` buffer
+    // written as `chan:editor-buffer:<tabId>` became a dead
+    // reference after the user force-reloaded. Path keys
+    // survive the reload + the tab-id regeneration.
     const disk = tab.saved ?? tab.content;
-    recoveredBuffer = divergentBufferOrNull(tab.id, tab.path, disk);
+    recoveredBuffer = divergentBufferOrNull(tab.path, tab.path, disk);
     return () => {
       // On graceful unmount (Cmd+W close / tab swap), cancel
       // any pending write. Force-reload doesn't run this path;
       // App.svelte's `beforeunload` / `pagehide` listeners
       // call `flushPendingBufferWrites` to handle that.
-      cancelPendingBufferWrite(tab.id);
+      cancelPendingBufferWrite(tab.path);
     };
   });
 
@@ -196,14 +203,24 @@
     // recover; clear any leftover buffer + cancel any pending
     // write so a stale recovered-state doesn't surface on
     // next reload).
+    //
+    // `fullstack-a-82`: ALSO skip when `tab.saved` is undefined
+    // — that means the disk content hasn't finished loading
+    // yet (the openInActivePane initialiser sets
+    // `content: ""` + the async fetch fills in `tab.saved`
+    // later). Without this guard the mount-time effect would
+    // queue an empty `""` write that races the file fetch +
+    // could clobber the freshly-restored buffer with empty
+    // content after the 500ms debounce.
     const content = tab.content;
     const saved = tab.saved;
+    if (saved === undefined) return;
     if (content === saved) {
-      cancelPendingBufferWrite(tab.id);
-      clearEditorBuffer(tab.id);
+      cancelPendingBufferWrite(tab.path);
+      clearEditorBuffer(tab.path);
       return;
     }
-    queueBufferWrite(tab.id, content, tab.path);
+    queueBufferWrite(tab.path, content, tab.path);
   });
 
   function restoreFromBuffer(): void {

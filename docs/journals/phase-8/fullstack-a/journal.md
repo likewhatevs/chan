@@ -2153,3 +2153,43 @@ type mismatch).
 
 Impl note at [fullstack-a-81.md](fullstack-a-81.md).
 Outbound poke fired.
+
+## 2026-05-22 — -a-82 HIGH (hang-recovery banner — tab.id regeneration) ready for review
+
+Root cause: 5th hypothesis the task body didn't
+list. Tab ids are generated from a
+module-counter (`nextId` in tabs.svelte.ts:25)
+that resets on every page load. The pre-`-a-82`
+buffer key was `chan:editor-buffer:<tab.id>` —
+post-reload the new tab got a fresh id + the
+persisted key became a dead reference.
+
+Fix: re-key on `tab.path` (stable across
+reloads). Plus guard the persistence effect
+from running while `tab.saved === undefined`
+(disk content hasn't loaded yet; would
+clobber the just-restored buffer with `""`).
+
+Four-file change.
+
+* `editorBuffer.ts`: doc-only update to
+  document the key-on-path contract.
+  Signature unchanged (opaque-string key).
+* `FileEditorTab.svelte`: all four buffer API
+  call sites migrated from `tab.id` to
+  `tab.path`. Plus the `saved === undefined`
+  early return.
+* `editorBuffer.test.ts`: +2 pins documenting
+  the contract + the motivation.
+* `hangRecoveryPathKey.test.ts` (new): 6
+  pins.
+
+### Gate
+
+* vitest **855 / 855** (+9 net from `-a-81`
+  slice 1's 846).
+* svelte-check 0/0 across 4015 files.
+* npm build clean.
+
+Impl note at [fullstack-a-82.md](fullstack-a-82.md).
+Outbound poke fired.

@@ -6234,3 +6234,120 @@ Team-process templates: substitution helper + bootstrap.md.tpl (fullstack-a-81 s
 Single bash invocation per discipline.
 
 Push held. Standing by for clearance.
+
+## 2026-05-22 — poke (fullstack-a-82 HIGH ready for review — banner root cause found)
+
+Picked up `-a-82` per HIGH priority. Audit
+found the root cause OUTSIDE the H1-H4
+hypothesis space.
+
+### Root cause: tab-id regeneration
+
+`web/src/state/tabs.svelte.ts:25` — `nextId`
+counter resets to 0 on every page load. Pre-
+reload tabs got ids like `tab-7`; post-reload
+the new tabs get `tab-1`. SerTab restores
+tabs by path + flags but does NOT preserve
+tab.id.
+
+Pre-`-a-82` buffer key was
+`chan:editor-buffer:<tab.id>`. So:
+
+1. Type unsaved → write queues by `tab-7`.
+2. `beforeunload` lands the write at
+   `chan:editor-buffer:tab-7`.
+3. Reload → SerTab restores → new tab id
+   `tab-1`.
+4. Mount → `divergentBufferOrNull("tab-1",
+   ...)` reads `chan:editor-buffer:tab-1` →
+   null.
+5. Banner doesn't surface.
+
+vitest passed because tests passed the SAME
+id to write + read. Empirical-only failure.
+
+H2 was a secondary contributor: persistence
+effect runs at mount BEFORE `tab.saved` loads
+→ queues empty `""` write that could clobber
+the buffer post-debounce.
+
+### Fix
+
+`editorBuffer.ts`: doc-only update. Signature
+unchanged (opaque-string key).
+
+`FileEditorTab.svelte`: all four buffer API
+calls migrated from `tab.id` to `tab.path`:
+* `divergentBufferOrNull(tab.path, tab.path,
+  disk)`
+* `cancelPendingBufferWrite(tab.path)`
+* `queueBufferWrite(tab.path, content, tab.path)`
+* `clearEditorBuffer(tab.path)`
+
+Plus new `if (saved === undefined) return;`
+in the persistence effect — guards against
+the disk-load race.
+
+`editorBuffer.test.ts`: +2 pins documenting
+the contract + motivation.
+
+`hangRecoveryPathKey.test.ts` (new): 6
+raw-source pins on the FileEditorTab callsites
++ the undefined-saved guard + the rationale
+comment.
+
+### Acceptance
+
+1. Force-reload empirically restores ✓
+   (mechanism via tests; @@WebtestA walk for
+   empirical re-verification).
+2. No regression on `-a-72`/`-a-74` primitives
+   ✓ (18 prior pins green).
+
+### Gate
+
+* vitest **855 / 855** (+9 net from `-a-81`
+  slice 1's 846).
+* svelte-check 0 errors / 0 warnings across
+  4015 files.
+* npm build clean.
+
+### Decisions
+
+* **Key on path** — stable across reloads
+  (SerTab persists path; tab.id is
+  module-counter-derived).
+* **Two tabs same path share a buffer** —
+  acceptable; openInActivePane dedup at the
+  tab layer prevents most duplicates.
+* **`saved === undefined` guard** — prevents
+  the disk-load race from clobbering the
+  restored buffer.
+* **Flag the 5th hypothesis** in the impl
+  note so the H1-H4 diagnostic framing
+  surfaces the actual cause for future
+  readers.
+
+### Suggested commit subject
+
+```
+Hang-recovery: key buffer on tab.path (not tab.id) so it survives reload (fullstack-a-82)
+```
+
+### Files for `git add`
+
+* `web/src/state/editorBuffer.ts`
+* `web/src/state/editorBuffer.test.ts`
+* `web/src/components/FileEditorTab.svelte`
+* `web/src/components/hangRecoveryPathKey.test.ts` (new)
+* `docs/journals/phase-8/fullstack-a/fullstack-a-82.md`
+* `docs/journals/phase-8/fullstack-a/journal.md`
+* `docs/journals/phase-8/alex/event-fullstack-a-architect.md`
+  (this append)
+
+### Atomic-audit-commit applied
+
+Single bash invocation per discipline.
+
+Push held. Standing by for clearance + the
+@@WebtestA empirical re-walk.

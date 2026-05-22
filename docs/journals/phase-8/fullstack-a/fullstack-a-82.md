@@ -130,3 +130,164 @@ This is `-a-82`.
 * Re-architecting the recovery mechanism beyond
   the current `localStorage` + flush pattern.
 * Terminal-side recovery.
+
+## 2026-05-22 — ready for review (H1+ root cause: tab-id regeneration)
+
+Four-file change. SPA-only.
+
+### Audit verdict
+
+Root cause is a **5th hypothesis** the task body
+didn't list: **tab-id regeneration across
+reloads**.
+
+* `web/src/state/tabs.svelte.ts:25`: tab ids are
+  generated from a module-level counter
+  (`nextId`).
+* Module state resets on every page load, so
+  `nextId` restarts at 1.
+* Pre-reload tabs were assigned `tab-3` /
+  `tab-7` / etc.; post-reload they get fresh
+  ids (`tab-1`, `tab-2`, ...).
+* SerTab payload restores tabs by path + flags
+  but does NOT preserve tab.id.
+
+The pre-`-a-82` buffer key was
+`chan:editor-buffer:<tab.id>`. So:
+
+1. User opens `notes/a.md` → tab.id = `tab-7`.
+2. Types unsaved → debounced write queues.
+3. Force-reload → `beforeunload` fires →
+   `flushPendingBufferWrites` lands the write
+   at `chan:editor-buffer:tab-7`.
+4. Reload → SerTab restores tab → tab.id =
+   `tab-1` (fresh counter).
+5. Mount → `divergentBufferOrNull("tab-1", ...)`
+   reads `chan:editor-buffer:tab-1` → null.
+6. Banner doesn't surface.
+
+Mechanism passed vitest because the unit tests
+passed the SAME id to write + read. The
+empirical bug surfaced only across reload.
+
+H2 was a secondary contributor: the persistence
+effect runs at mount BEFORE `tab.saved` finishes
+loading, so it queues an empty `""` write that
+could clobber the restored buffer post-debounce.
+
+### Fix
+
+`web/src/state/editorBuffer.ts`: documented the
+key-on-path convention. The module's signature
+treats the key as opaque, so no code change
+needed there — only the contract update +
+caller-side migration.
+
+`web/src/components/FileEditorTab.svelte`:
+* All buffer-API calls now pass `tab.path`
+  instead of `tab.id`:
+  * `divergentBufferOrNull(tab.path, tab.path, disk)`
+  * `cancelPendingBufferWrite(tab.path)`
+  * `queueBufferWrite(tab.path, content, tab.path)`
+  * `clearEditorBuffer(tab.path)`
+* New early-return in the persistence effect
+  when `tab.saved === undefined` — disk
+  content hasn't loaded yet; skip the write
+  so a `""` initial value doesn't clobber
+  the just-restored buffer after the 500ms
+  debounce.
+* Comment block documents the tab-id
+  regeneration root cause + the disk-load
+  race.
+
+`web/src/state/editorBuffer.test.ts`: +2 new
+pins documenting the key-on-path contract +
+the motivation (a tab-id-keyed buffer is
+unreadable after the id regenerates).
+
+`web/src/components/hangRecoveryPathKey.test.ts`
+(new): 6 raw-source pins covering all four
+buffer API call sites in FileEditorTab using
+`tab.path`, the undefined-saved guard, and the
+rationale comments.
+
+### Acceptance
+
+1. **Force-reload empirically restores**: type
+   unsaved → reload → buffer key is
+   `chan:editor-buffer:notes/a.md` (stable);
+   on remount the new tab also queries by
+   `notes/a.md` → buffer found → divergent →
+   banner ✓ (mechanism-verified; @@WebtestA
+   walk for empirical confirm).
+2. **No regression on `-a-72`/`-a-74`
+   primitives**: helper signature unchanged
+   (opaque-string key); 18 prior pins remain
+   green.
+
+### Gate
+
+* vitest **855 / 855** (+9 net from `-a-81`
+  slice 1's 846).
+* svelte-check 0 errors / 0 warnings across
+  4015 files.
+* npm build clean.
+* Rust gate not re-run.
+
+(3 unrelated test flakes on first vitest run
+— known EmptyPaneCarousel / Pane /
+TerminalTab load-contention pattern; cleared
+on re-run.)
+
+### Decisions
+
+* **Key on path, not tab.id** — paths are
+  stable across reloads (SerTab persists
+  them); tab ids are module-counter-derived
+  + reset on every page load. Path-keyed
+  buffer reads survive the reload + the
+  tab-id regeneration.
+* **Two tabs same path share a buffer** —
+  acceptable edge case. Same file → same
+  unsaved-content semantic; whoever mounts
+  first reads the banner. The SPA's
+  open-by-path dedup at `openInActivePane`
+  already prevents most duplicate file tabs.
+* **`saved === undefined` early return**
+  guards against the disk-load race. Without
+  this, an empty initial `tab.content`
+  + missing `tab.saved` would cause the
+  persistence effect to queue a `""` write
+  that races the file fetch.
+* **Hypothesis labelling**: the task body
+  enumerated H1-H4; my audit found the bug
+  outside that list (tab-id regeneration).
+  Flagging in the impl note so the
+  diagnostic-path framing surfaces the
+  actual cause for future readers.
+
+### Suggested commit subject
+
+```
+Hang-recovery: key buffer on tab.path (not tab.id) so it survives reload (fullstack-a-82)
+```
+
+Single commit. Module doc + caller migration
++ disk-load guard + tests tightly coupled.
+
+### Files for `git add` (per-path discipline)
+
+* `web/src/state/editorBuffer.ts`
+* `web/src/state/editorBuffer.test.ts`
+* `web/src/components/FileEditorTab.svelte`
+* `web/src/components/hangRecoveryPathKey.test.ts` (new)
+* `docs/journals/phase-8/fullstack-a/fullstack-a-82.md`
+* `docs/journals/phase-8/fullstack-a/journal.md`
+* `docs/journals/phase-8/alex/event-fullstack-a-architect.md`
+
+### Atomic-audit-commit
+
+Per the memory rule. Per-path staging only.
+
+Push held. Standing by for clearance + the
+@@WebtestA empirical re-walk.

@@ -209,3 +209,25 @@ describe("fullstack-a-74: queued-write debounce + flush", () => {
     expect(flushPendingBufferWrites()).toBe(0);
   });
 });
+
+describe("fullstack-a-82: path-keyed buffers survive tab-id regeneration", () => {
+  test("buffer written by old tab id is unreadable by new tab id (motivation)", () => {
+    // The pre-`-a-82` bug: tab ids reset on reload, so a buffer
+    // keyed on the OLD id became a dead reference after the new
+    // tab regenerated with a fresh id. This pin captures the
+    // motivation — keyed reads must use a stable identifier (the
+    // path) for cross-reload recovery to work.
+    writeEditorBuffer("tab-3", "draft", "notes/a.md");
+    // Simulate reload: tab id regenerates to "tab-1".
+    expect(readEditorBuffer("tab-1")).toBeNull();
+    expect(readEditorBuffer("tab-3")?.content).toBe("draft");
+  });
+
+  test("buffer written by path key survives reload regardless of tab id", () => {
+    // Post-`-a-82` shape: caller passes tab.path as the key.
+    writeEditorBuffer("notes/a.md", "draft", "notes/a.md");
+    // After reload, the new tab also passes tab.path —
+    // path is stable across reloads, so the lookup matches.
+    expect(readEditorBuffer("notes/a.md")?.content).toBe("draft");
+  });
+});

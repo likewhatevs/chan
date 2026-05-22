@@ -1,20 +1,30 @@
 /// `fullstack-a-72` editor hang-recovery via localStorage buffer.
-/// Persists unsaved editor content per-tab so a forced reload
-/// (when the SPA hangs and the user has to close-and-reopen the
-/// window) doesn't lose unsaved data.
+/// Persists unsaved editor content so a forced reload (when the
+/// SPA hangs and the user has to close-and-reopen the window)
+/// doesn't lose unsaved data.
+///
+/// **`fullstack-a-82` keying fix**: keys on the file's
+/// drive-relative `path`, not the in-memory `tab.id`. Tab ids
+/// are module-counter-generated (`tab-<N>` from a `nextId`
+/// counter that resets on every page load), so a pre-`-a-82`
+/// `chan:editor-buffer:<tabId>` key written before a reload
+/// became a dead reference afterwards — the banner mechanism
+/// passed vitest but never surfaced empirically. Re-keying on
+/// `path` makes the buffer survive the reload + the tab-id
+/// regeneration.
 ///
 /// Mechanism:
 ///
 /// * On every editor mutation (debounced ~500ms),
-///   `writeEditorBuffer(tabId, content)` stores
+///   `writeEditorBuffer(path, content)` stores
 ///   `{ content, updatedAt, path }` under
-///   `chan:editor-buffer:<tabId>`.
-/// * On editor mount, `readEditorBuffer(tabId)` returns the
+///   `chan:editor-buffer:<path>`.
+/// * On editor mount, `readEditorBuffer(path)` returns the
 ///   stored buffer (or null). FileEditorTab compares the buffer
 ///   content to the disk content (`tab.saved`) — divergent =
 ///   surface a restore banner.
 /// * On save success / tab close / discard,
-///   `clearEditorBuffer(tabId)` removes the entry.
+///   `clearEditorBuffer(path)` removes the entry.
 /// * On app load, `pruneEditorBuffers()` evicts entries beyond
 ///   `MAX_BUFFER_AGE_MS` (TTL) and total-size cap
 ///   (`MAX_BUFFER_BYTES`).
@@ -23,6 +33,12 @@
 /// `typeof localStorage !== "undefined"` so unit tests (vitest
 /// node env) + SSR builds don't blow up. Returns null / no-op on
 /// unavailable storage.
+///
+/// Two tabs open against the same path share a buffer key. That's
+/// acceptable: same file, same unsaved-content semantic; whoever
+/// mounts first reads the banner. Edge case (rare in practice
+/// since the SPA's tab-by-path discovery typically prevents
+/// duplicate file tabs at openInActivePane time).
 
 const BUFFER_KEY_PREFIX = "chan:editor-buffer:";
 /// 7-day TTL — stale buffers from forgotten tabs evict on next
