@@ -32,9 +32,9 @@ immediate mitigation. See
 event echo with timestamp + task path + heading anchor"
 for the full framing.
 
-**EMPIRICAL CONFIRMATION 2026-05-22**: @@Alex tested the
-hypothesis directly. All four agents (FullStackA,
-FullStackB, Systacean, CI) were INSTA-RATE-LIMITED on
+**STRONG OBSERVATIONAL EVIDENCE 2026-05-22**: @@Alex
+tested informally. All four agents (FullStackA,
+FullStackB, Systacean, CI) were INSTA-rate-limited on
 bare `poke`. The same agents, prompted with non-bare
 alternatives, woke up cleanly:
 
@@ -42,9 +42,14 @@ alternatives, woke up cleanly:
 * "oi, it's 5:35, check your tasks and execute"
 * "hey it's 5:35, check your tasks and execute"
 
-The cache-bust hypothesis is confirmed. Until `-21`
-ships, @@Alex bootstraps each agent via non-bare prompts
-manually.
+NOT CONFIRMED — the bare-poke + non-bare attempts ran at
+slightly different times; time-of-day capacity variance
+isn't ruled out. Only Anthropic could confirm via their
+telemetry. But evidence is strong enough to act on +
+enriching the poke text is a strict improvement
+regardless (better agent context, less identical-input
+repetition). Until `-21` ships, @@Alex bootstraps each
+agent via non-bare prompts manually.
 
 **Secondary benefit**: gives the agent immediate context
 about what to look at without polling / grepping.

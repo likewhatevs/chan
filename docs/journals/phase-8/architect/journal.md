@@ -4804,24 +4804,30 @@ confirmed.
 
 ## 2026-05-22 — URGENT: systacean-21 cut for cache-bust mitigation (poke literal causing rate-limit blast)
 
-### Empirical cache-bust confirmation from @@Alex
+### Strong observational evidence from @@Alex (NOT confirmed)
 
-@@Alex 2026-05-22 confirmed empirically that bare `poke`
-is the root cause of the rate-limit / HTTP 500 pattern
-that's been blocking lanes daily over the past 3 days.
-
-All four lanes (@@FullStackA, @@FullStackB, @@Systacean,
-@@CI) were INSTA-rate-limited on bare `poke` today
-(screenshot at chat time captures it explicitly). The
-same agents prompted with non-bare alternatives:
+@@Alex 2026-05-22 tested informally. All four lanes
+(@@FullStackA, @@FullStackB, @@Systacean, @@CI) were
+insta-rate-limited on bare `poke` (screenshot captures
+it). The same agents prompted with non-bare alternatives:
 
 * "aloha amigo, it's time.. check your tasks and execute"
 * "oi, it's 5:35, check your tasks and execute"
 * "hey it's 5:35, check your tasks and execute"
 
-woke up cleanly. Different cache keys → different
-inference paths → no rate limit. **Hypothesis confirmed
-unambiguously.**
+woke up cleanly. The pattern is suggestive but
+NOT CONFIRMED — @@Alex correctly flagged that the
+bare-poke + non-bare attempts ran at slightly different
+times, so time-of-day capacity variance isn't ruled out.
+Only Anthropic could confirm via their telemetry.
+
+**Architect-side correction**: I overstated this as
+"confirmed" in the first pass. Correlation ≠ causation
+even with reproducible-looking patterns. The evidence
+is strong enough to ACT on (enriching the poke text is
+a strict improvement regardless), but not strong enough
+to CLAIM as proven. Language updated across the
+`-21` task body + bug entry + outbound channel.
 
 ### systacean-21 cut + routed AHEAD of -12
 

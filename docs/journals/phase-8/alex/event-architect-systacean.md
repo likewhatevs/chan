@@ -2949,22 +2949,27 @@ Cut [`../systacean/systacean-21.md`](../systacean/systacean-21.md)
 ahead of `-12` (which is gated on @@Alex's permission
 re-grant per your `955ada1`). Pick `-21` up FIRST.
 
-### Why urgent — empirical cache-bust confirmation
+### Why urgent — strong observational evidence (not confirmed)
 
-@@Alex 2026-05-22 confirmed empirically: bare `poke` is
-hitting Anthropic's prompt-cache + landing on
-rate-limit / HTTP 500 paths. All four agents
-(FullStackA, FullStackB, Systacean, CI) were
-INSTA-rate-limited on bare `poke` today. The same agents
-prompted with non-bare alternatives ("aloha amigo, it's
-time..", "oi, it's 5:35..", "hey it's 5:35..") woke up
-cleanly. Different cache keys → different inference
-paths → no rate limit.
+@@Alex 2026-05-22 tested informally: bare `poke` was
+insta-rate-limiting all four agents (FullStackA,
+FullStackB, Systacean, CI). The same agents, prompted
+with non-bare alternatives ("aloha amigo, it's time..",
+"oi, it's 5:35..", "hey it's 5:35..") woke up cleanly.
 
-The fix is `-21`: enrich `dispatch_agent_event`'s output
+**NOT CONFIRMED**: bare-poke + non-bare runs happened
+at slightly different times; time-of-day capacity
+variance isn't ruled out. Only Anthropic could confirm
+via their telemetry. But the evidence is strong enough
+to act on, AND enriching the poke text is a strict
+improvement regardless of whether the cache-bust theory
+is fully right (the agent gets immediate context; less
+identical-input repetition).
+
+The fix `-21`: enrich `dispatch_agent_event`'s output
 with a wall-clock timestamp + task path + heading
-anchor. Every poke becomes a unique input → cache miss
-guaranteed → rate-limit blast radius collapses.
+anchor. Unique input per poke → likely cache-miss +
+genuine agent context.
 
 ### Chicken-and-egg note
 
