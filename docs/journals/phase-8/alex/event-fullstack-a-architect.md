@@ -5911,3 +5911,103 @@ and I'll cut it; the affordance would render
 without full backend support until A lands.
 
 Standing by for your routing.
+
+## 2026-05-22 — poke (fullstack-a-71 ready for review)
+
+One-line code fix + comment rewrite. SPA-only.
+
+### Audit verdict
+
+`web/src/editor/widgets/image.ts:284` had a
+too-restrictive gate
+(`Math.abs(headLine - imgLine) > 1 return`)
+that pre-empted the viewport-check. Original
+intent (preserve deliberate-position for
+users editing far from a streaming image)
+was already covered by the viewport-check
+below — the gate was redundant + actively
+harmful when a tall image rendered ABOVE the
+caret line and pushed layout down.
+
+### Fix
+
+Dropped the headline-distance gate; replaced
+the comment with a load-bearing description
+of the layout-shift cause + how the
+viewport-check serves as the actual
+deliberate-position safeguard.
+
+Net behavior:
+* User editing line 1000, image streams at
+  line 5: caret stays visible →
+  viewport-check returns → no scroll
+  (preserved).
+* User editing list at bottom, image above
+  pushes layout down: caret pushed off →
+  viewport-check fails → scroll restores
+  visibility (FIXED).
+
+### What landed
+
+`web/src/editor/widgets/image.ts`: removed
+`if (Math.abs(headLine - imgLine) > 1) return;`
++ rewrote the comment block above to
+document the layout-shift cause.
+
+`web/src/editor/widgets/imageScrollCaretLost.test.ts`
+(new): 4 raw-source pins — gate removal
+(`not.toMatch`), viewport-check preservation,
+scrollIntoView dispatch, and the rationale
+comment.
+
+### Acceptance
+
+1. Repro (list-at-bottom + image-above)
+   doesn't lose caret ✓ (mechanism via
+   tests; @@WebtestA empirical walk).
+2. No regression on image rendering ✓.
+3. Deliberate-position safeguard preserved
+   via the surviving viewport-check ✓.
+
+### Gate
+
+* vitest **829 / 829** (+4 net from `-a-66`'s
+  825).
+* svelte-check 0 errors / 0 warnings across
+  4012 files.
+* npm build clean.
+* Rust gate not re-run.
+
+### Decisions
+
+* **Drop gate vs add OR-branch** — the
+  viewport-check already provides the
+  defense; dropping the redundant gate is
+  cleaner.
+* **Comment rewrite** — important for the
+  next reader; the original framing was
+  load-bearing for the too-restrictive
+  behavior.
+
+### Suggested commit subject
+
+```
+Editor image-load scroll: drop distance gate so off-viewport caret is always restored (fullstack-a-71)
+```
+
+### Files for `git add`
+
+* `web/src/editor/widgets/image.ts`
+* `web/src/editor/widgets/imageScrollCaretLost.test.ts` (new)
+* `docs/journals/phase-8/fullstack-a/fullstack-a-71.md`
+* `docs/journals/phase-8/fullstack-a/journal.md`
+* `docs/journals/phase-8/alex/event-fullstack-a-architect.md`
+  (this append)
+
+### Atomic-audit-commit applied
+
+Single bash invocation per discipline.
+
+Push held. Standing by for clearance + routing
+on the chan-drive Drive::list extension that
+unblocks `-a-66b`.

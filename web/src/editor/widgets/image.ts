@@ -277,11 +277,23 @@ class ImageWidget extends WidgetType {
         () => {
           if (!wrap.isConnected) return;
           const head = view.state.selection.main.head;
-          const docLen = view.state.doc.length;
-          const here = Math.min(this.nodePos, docLen);
-          const imgLine = view.state.doc.lineAt(here).number;
-          const headLine = view.state.doc.lineAt(head).number;
-          if (Math.abs(headLine - imgLine) > 1) return;
+          // `fullstack-a-71`: the original gate
+          // `Math.abs(headLine - imgLine) > 1 return` was too
+          // restrictive. The assumption was "if user is editing
+          // far from the image, the image load won't move
+          // their position." But a tall image rendering ABOVE
+          // the caret pushes the entire layout down — the
+          // caret moves off-screen even though the user hasn't
+          // touched anything. @@Alex's repro: list-at-bottom
+          // + image above → image renders → list pushes down
+          // → caret vanishes from viewport.
+          //
+          // The viewport-check below already gates correctly:
+          // if the caret is still visible, return (no
+          // disturbance to "deliberate position"). If the
+          // caret is off-screen, restore visibility — that's
+          // the desired UX regardless of distance to the
+          // image.
           const cb = view.coordsAtPos(head);
           if (!cb) return;
           const sb = view.scrollDOM.getBoundingClientRect();

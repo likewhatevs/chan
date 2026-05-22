@@ -2036,3 +2036,43 @@ core user flow.
 
 Impl note at [fullstack-a-66.md](fullstack-a-66.md).
 Outbound poke fired.
+
+## 2026-05-22 — -a-71 (auto-scroll cursor-lost) ready for review
+
+Picked up after firing scope-poke on -a-66b
+(chan-drive Drive::list unified-path gap).
+
+One-line code fix + comment rewrite + 4
+test pins.
+
+### Audit verdict
+
+The image-load handler in `widgets/image.ts:284`
+had a too-restrictive gate
+(`Math.abs(headLine - imgLine) > 1 return`) —
+designed to preserve "deliberate position"
+for users editing far from a streaming image,
+but it premature-returned BEFORE the
+viewport-check ran. A tall image rendering
+above the caret pushes layout down → caret
+moves off-screen → user has lost visibility.
+
+### Fix
+
+Drop the gate. The existing viewport-check
+(`if (cb.top >= sb.top && cb.bottom <= sb.bottom) return`)
+already preserves the deliberate-position
+safeguard: caret-visible users aren't
+disturbed; only off-screen-caret users get
+the scroll-restore.
+
+### Gate
+
+* vitest **829 / 829** (+4 net from `-a-66`'s
+  825). 3 unrelated test flakes on first run
+  cleared on re-run.
+* svelte-check 0/0 across 4012 files.
+* npm build clean.
+
+Impl note at [fullstack-a-71.md](fullstack-a-71.md).
+Outbound poke fired.
