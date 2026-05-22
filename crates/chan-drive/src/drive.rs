@@ -2262,12 +2262,14 @@ impl Drive {
     /// `apply_event` dispatches to this method instead of
     /// `index_file`.
     pub fn index_draft_file(&self, rel: &str) -> Result<()> {
+        tracing::debug!(rel, "index_draft_file: enter");
         let Some(sub_rel) = rel.strip_prefix("Drafts/") else {
             return Err(ChanError::Io(format!(
                 "index_draft_file called with non-Drafts/-prefixed rel `{rel}`"
             )));
         };
         if !fs_ops::is_indexable_text(rel) {
+            tracing::debug!(rel, "index_draft_file: skip (not indexable text)");
             return Ok(());
         }
         let abs = self.paths.drafts.join(sub_rel);
@@ -2276,6 +2278,7 @@ impl Drive {
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
                 // Drafts file vanished between the watcher event
                 // and our read. Forget any prior entry + carry on.
+                tracing::debug!(rel, abs = %abs.display(), "index_draft_file: NotFound, forgetting");
                 return self.forget_file(rel);
             }
             Err(e) => {
@@ -2287,6 +2290,7 @@ impl Drive {
             // to index; do not error so a directory-Create event
             // (e.g. user dropped a new untitled-N/) doesn't make
             // the indexer panic.
+            tracing::debug!(rel, "index_draft_file: skip (not regular file)");
             return Ok(());
         }
         let content = std::fs::read_to_string(&abs)
@@ -2310,6 +2314,11 @@ impl Drive {
             aliases.as_deref(),
         )?;
         self.index()?.index_one(rel, &content)?;
+        tracing::debug!(
+            rel,
+            content_len = content.len(),
+            "index_draft_file: wrote graph + BM25"
+        );
         Ok(())
     }
 

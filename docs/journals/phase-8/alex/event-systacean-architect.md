@@ -3932,4 +3932,75 @@ All 3 entry points covered now:
 
 27 systacean tasks shipped this phase. All v0.12.0 + addendum-b + saga items closed. Lane idle.
 
+## 2026-05-22 — poke (-38 empirical audit; chain WORKS in-tree; failure mode points to deployment)
+
+Picked up `-38` per the HIGH-priority dispatch + the architect's empirical-audit directive.
+
+### Empirical-audit verdict
+
+**The chain WORKS empirically in chan-server's test harness.** Both `-37`'s boot walk AND `-36`'s watcher path produce BM25 hits for `Drafts/<...>` content. Two new end-to-end tests added as pins:
+
+1. `indexer_spawn_walks_drafts_on_boot_when_drive_root_has_content`: seeds drive root (forces ELSE IF branch) + writes draft via raw `std::fs::write` + spawns `Indexer::spawn` + polls BM25. PASSES.
+
+2. `webtest_a_repro_drafts_via_write_text_then_boot_walk`: closer reproduction. Uses `Drive::write_text("Drafts/.../draft.md", marker)` + spawns `Indexer::spawn` + polls BM25. On failure, panics with diagnostic state (graph contents, index stats). PASSES.
+
+### Diagnostic logs added
+
+Per the mandatory diagnostic steps: added `tracing::debug` to `Drive::index_draft_file`'s entry / skip paths / write-completion. Kept as `debug` (not `info`) so production stays quiet but `RUST_LOG=chan_drive=debug` surfaces every step. Useful for future empirical audits without re-adding logs each round.
+
+### What's NOT the gap (ruled out by tests)
+
+* `index_draft_file` DOES call BM25 (`self.index.index_one(...)`).
+* BM25 write succeeds for `Drafts/<...>` keys (tantivy accepts arbitrary path strings).
+* Boot walk fires in IF branch (via reindex's `-34`) AND ELSE IF branch (via my `-37`).
+* `apply_watch_change` routes `Drafts/` correctly (post-`-36`).
+* Search side has no path-classification filter.
+
+### My read on the 5th-round PARTIAL
+
+@@WebtestA's empirical failure is **likely deployment-side**, not code-level:
+
+* **Stale binary**: WebtestA's chan binary may pre-date `-37` (commit `0841c00`). The ELSE IF branch with the unconditional drafts walk only exists in `0841c00` or later.
+* **Stale chan-desktop sidecar**: chan-desktop launches `chan serve` as a subprocess. Rebuilding chan doesn't restart chan-desktop's existing subprocess; chan-desktop needs relaunch to spawn the new binary.
+* **Long-lived chan serve**: if WebtestA didn't actually restart chan serve (just refreshed the SPA), `Indexer::spawn` doesn't re-run and the boot walk doesn't fire. The watcher path would still catch NEW writes from that point forward, but pre-existing Drafts would stay un-indexed.
+
+### Diff
+
+* `crates/chan-drive/src/drive.rs`: +9 / 0 (tracing::debug at index_draft_file).
+* `crates/chan-server/src/indexer.rs`: +152 / 0 (2 new empirical tests).
+
+Plus task tail + this poke. 4 paths.
+
+### Pre-push gate
+
+* fmt + clippy + no-default-features clean.
+* `cargo test -p chan-drive --lib`: green.
+* `cargo test -p chan-server --lib indexer`: **19 / 0** (was 17; +2 empirical tests).
+* workspace tests all green.
+
+### Suggested commit subject
+
+```
+chan-server + chan-drive: empirical tests for Drafts boot walk + watcher path + tracing diagnostics (systacean-38)
+```
+
+### Ask for @@WebtestA's next walk
+
+The 2 tests I added LOCK IN the contract. If WebtestA continues to see the PARTIAL empirically:
+
+1. **Verify the binary**: `cargo build -p chan` produces a fresh binary from this commit.
+2. **Verify chan-desktop relaunch**: if testing through chan-desktop, kill + restart the sidecar entirely so the new chan subprocess fires `Indexer::spawn` with the `-37` ELSE IF branch.
+3. **Verify the restart actually happened**: chan serve PID before vs after the restart should differ.
+4. **Try `RUST_LOG=chan_drive=debug,chan_server=debug chan serve <path>`** with my new diagnostics. The `index_draft_file: wrote graph + BM25` line should fire for each draft on boot.
+
+### Architect's lesson follow-up
+
+The architect's "empirical > code-review" lesson from the 5th-round retrospective stands. My audit this round went deeper than prior rounds (live empirical tests for both entry points). The fact that both tests PASS but @@WebtestA still saw PARTIAL is what makes me suspect a deployment-side gap, not code.
+
+### Lane state
+
+28 systacean tasks shipped this phase. All v0.12.0 + addendum-b + saga items closed AGAIN.
+
+Per pre-authorization, proceeding to commit + push + smoke.
+
 Standing by for v0.12.0 cut or further dispatches.

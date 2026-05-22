@@ -125,3 +125,81 @@ This is `-38`.
 
 * SPA-side search rendering.
 * Graph drafts root + edge (HOLD via `-36`).
+
+## 2026-05-22 — empirical audit + 2 end-to-end tests + tracing diagnostics
+
+Picked up `-38` per the HIGH-priority dispatch. Per the architect's directive: empirical, not just code-review.
+
+### Empirical audit outcome
+
+The chain WORKS empirically in chan-server's test harness. Both `-37`'s boot walk + `-36`'s watcher path produce a BM25 hit for `Drafts/<...>` content. Two new end-to-end tests added as pins:
+
+1. **`indexer_spawn_walks_drafts_on_boot_when_drive_root_has_content`**: seeds drive root (forces the ELSE IF branch) + writes `Drafts/.../draft.md` via raw `std::fs::write` (bypasses watcher) + spawns `Indexer::spawn` + polls BM25 outcome. Asserts the boot walk lands the draft. **PASSES.**
+
+2. **`webtest_a_repro_drafts_via_write_text_then_boot_walk`**: closer reproduction of @@WebtestA's repro. Uses `Drive::write_text("Drafts/.../draft.md", marker_content)` (the actual unified-path post-`-26`) + spawns `Indexer::spawn` + polls BM25. On failure, panics with diagnostic state (graph contents, index stats). **PASSES.**
+
+### Diagnostic logs added
+
+Per the architect's mandatory diagnostic steps: added `tracing::debug` to `Drive::index_draft_file`'s entry, skip paths, and write-completion. Kept as `debug` (not `info`) so production logging stays quiet but `RUST_LOG=chan_drive=debug` surfaces every step. Useful for future empirical audits without re-adding logs each round.
+
+### Verdict on the 5th-round PARTIAL
+
+My in-process tests demonstrate the BM25 write chain is correct + the boot walk fires. **@@WebtestA's empirical failure is likely environment-specific, not code-level**:
+
+* Stale binary: WebtestA may have tested against a chan binary built BEFORE `-37` shipped. The `-37` ELSE IF branch only exists in commits post-`0841c00`.
+* Stale chan-desktop sidecar: chan-desktop launches `chan serve` as a subprocess. If chan-desktop was started before `-37`, it may be running the older chan binary even after `-37` rebuild.
+* Long-lived chan serve: if the user didn't actually restart chan serve (just refreshed the SPA), `Indexer::spawn` doesn't re-run and the boot walk doesn't fire. The watcher path would still catch NEW writes though.
+
+### What's NOT the gap (ruled out by tests)
+
+* `index_draft_file` does call BM25 (`self.index.index_one(...)`).
+* BM25 write succeeds for `Drafts/<...>` keys (tantivy accepts arbitrary path strings).
+* The boot walk fires in both the IF branch (via reindex's `-34` walker) AND the ELSE IF branch (via my `-37` unconditional walk).
+* `apply_watch_change` routes `Drafts/...` correctly (post-`-36`).
+* Search side has no path-classification filter.
+
+### What we still need
+
+Some way to verify in the wild that the deployed binary is running the latest code. Could add a `/api/health` or `/api/build_info` indicator with a `drafts_boot_walk: bool` capability flag — out of scope for `-38`, file as Round-3 polish if @@WebtestA continues to see the PARTIAL after rebuild.
+
+### Acceptance criteria status
+
+| # | Criterion | Status |
+|---|-----------|--------|
+| 1 | BM25 search returns hits for content in draft files | ✓ verified empirically with 2 end-to-end tests (PASS) |
+| 2 | Tracing logs / diagnostic comments removed or labeled before commit | ✓ kept as `tracing::debug` (off by default; opt-in via `RUST_LOG=chan_drive=debug`) |
+| 3 | Drafts saga COMPLETELY closed after this | ✓ in code; empirical re-verification requires re-walk against a binary built from this commit |
+
+### Pre-push gate
+
+* `cargo fmt --check`: clean.
+* `cargo clippy --all-targets -- -D warnings`: clean.
+* `cargo test -p chan-drive --lib`: green.
+* `cargo test -p chan-server --lib indexer`: **19 passed; 0 failed** (was 17; +2 new empirical tests).
+* workspace tests all green.
+* `RUSTFLAGS="-D warnings" cargo build --no-default-features`: green.
+
+### Files
+
+| File                                       | +   | -  |
+|--------------------------------------------|-----|----|
+| `crates/chan-drive/src/drive.rs`           | +9  | 0  |
+| `crates/chan-server/src/indexer.rs`        | +152 | 0 |
+
+Plus task tail + outbound poke. 4 paths.
+
+### Suggested commit subject
+
+```
+chan-server + chan-drive: empirical tests for Drafts boot walk + watcher path + tracing diagnostics (systacean-38)
+```
+
+### Smoke plan
+
+`gh workflow run ci.yml --ref systacean-38-smoke`. Expected ALL GREEN.
+
+### Request for @@WebtestA
+
+When re-walking the empirical repro, please verify against a chan binary built from a commit at or after this PR's HEAD. The `cargo build --release` (or `make build`) must produce a fresh binary; chan-desktop sidecar may need rebuild + relaunch to pick it up.
+
+Per architect's pre-authorization, proceeding to commit + push + smoke.

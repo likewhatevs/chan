@@ -1013,6 +1013,158 @@ mod tests {
         assert_eq!(outcome, ApplyOutcome::Indexed);
     }
 
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn webtest_a_repro_drafts_via_write_text_then_boot_walk() {
+        // systacean-38: empirical reproduction of @@WebtestA's
+        // 5th-round PARTIAL. Uses `Drive::write_text` (the actual
+        // path Cmd+N's `api_create_draft` takes, post-`-26`) +
+        // simulates the chan-server boot flow via Indexer::spawn.
+        //
+        // If `-36` + `-37` are both correctly wired, this test
+        // should PASS: the watcher path catches the write +
+        // populates BM25; the boot walk re-indexes on restart;
+        // search returns the hit.
+        //
+        // If this test FAILS, we've reproduced the 5th-round gap
+        // in-tree + can probe the failure mode without needing
+        // a live chan serve.
+        let (_cfg, drive_dir, drive) = setup_drive();
+
+        // Seed drive root to force the ELSE IF branch on the
+        // SECOND Indexer::spawn (graph + BM25 non-empty after
+        // initial reindex).
+        std::fs::write(drive_dir.path().join("seed.md"), "# seed\nbody\n").unwrap();
+        drive.reindex(None).unwrap();
+        assert!(drive.index_stats().unwrap().indexed_docs > 0);
+
+        // Mimic Cmd+N: create draft dir + write file via
+        // unified-path API.
+        drive.create_draft_dir("untitled").unwrap();
+        drive
+            .write_text(
+                "Drafts/untitled/draft.md",
+                "# my draft\nUNIQUEMARKER38BM25CLOSURE here\n",
+            )
+            .unwrap();
+
+        // SIMULATE chan-server restart: spawn the indexer fresh
+        // against the same drive. The boot walk should re-index
+        // existing drafts content under the unified key.
+        let (_events_tx, events_rx) = tokio::sync::broadcast::channel(64);
+        let progress: std::sync::Arc<dyn chan_drive::ProgressCallback> =
+            std::sync::Arc::new(chan_drive::NoProgress);
+        let _indexer = super::Indexer::spawn(
+            drive.clone(),
+            events_rx,
+            true,
+            chan_drive::SearchAggression::Balanced,
+            progress,
+        );
+
+        // Poll BM25 outcome up to 5s for the boot walk + commit
+        // + reader refresh cycle to complete.
+        let opts = chan_drive::SearchOpts {
+            mode: chan_drive::SearchMode::Bm25,
+            limit: 10,
+            scope: None,
+        };
+        let expected = "Drafts/untitled/draft.md";
+        let mut seen = false;
+        for _ in 0..50 {
+            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+            if let Ok(hits) = drive.search("UNIQUEMARKER38BM25CLOSURE", &opts) {
+                if hits.hits.iter().any(|h| h.path == expected) {
+                    seen = true;
+                    break;
+                }
+            }
+        }
+        if !seen {
+            // Empirical-audit failure mode: capture diagnostic
+            // state for the task tail. Probe the graph + index
+            // stats to figure out where the write went.
+            let graph_files = drive.graph().unwrap().files().unwrap();
+            let in_graph = graph_files.iter().any(|p| p == expected);
+            let stats = drive.index_stats().unwrap();
+            panic!(
+                "BM25 search missed the draft after boot walk; \
+                 graph_contains_path={in_graph}, stats={stats:?}, \
+                 graph_files={graph_files:?}"
+            );
+        }
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn indexer_spawn_walks_drafts_on_boot_when_drive_root_has_content() {
+        // systacean-38: empirical test of `-37`'s unconditional
+        // boot walk. Replicates @@WebtestA's repro: drive has
+        // drive-root content (so reindex would NOT fire on
+        // boot), Drafts subtree has content with a unique
+        // marker, `Indexer::spawn` is called, content search
+        // must return a hit.
+        //
+        // Pre-`-37` this would fail: reindex skipped (drive
+        // non-empty) → `-34`'s walker never runs → drafts not
+        // in BM25.
+        let (_cfg, drive_dir, drive) = setup_drive();
+
+        // Seed drive root with content so `indexed_docs > 0`
+        // after we reindex below.
+        std::fs::write(drive_dir.path().join("seed.md"), "# seed\nbody\n").unwrap();
+        drive.reindex(None).unwrap();
+        let stats = drive.index_stats().unwrap();
+        assert!(stats.indexed_docs > 0, "seed not indexed: {stats:?}");
+
+        // Seed Drafts subtree with a marker token. Bypass the
+        // watcher (write directly via std::fs into drafts_dir)
+        // so the boot walk is the ONLY path that can land this
+        // in BM25.
+        drive.create_draft_dir("untitled").unwrap();
+        std::fs::write(
+            drive.drafts_dir().join("untitled").join("draft.md"),
+            "# my draft\nUNIQUEMARKER37BM25CLOSURE here\n",
+        )
+        .unwrap();
+
+        // Spawn the indexer (mirrors chan-server `serve` flow).
+        // initial_build=true triggers the boot-time `-37` walk.
+        let (_events_tx, events_rx) = tokio::sync::broadcast::channel(64);
+        let progress: std::sync::Arc<dyn chan_drive::ProgressCallback> =
+            std::sync::Arc::new(chan_drive::NoProgress);
+        let _indexer = super::Indexer::spawn(
+            drive.clone(),
+            events_rx,
+            true,
+            chan_drive::SearchAggression::Balanced,
+            progress,
+        );
+
+        // Boot walk is `tokio::task::spawn_blocking`'d — give it
+        // a window to complete + BM25 to commit + reader to
+        // refresh.
+        let opts = chan_drive::SearchOpts {
+            mode: chan_drive::SearchMode::Bm25,
+            limit: 10,
+            scope: None,
+        };
+        let expected = "Drafts/untitled/draft.md";
+        let mut seen = false;
+        for _ in 0..50 {
+            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+            if let Ok(hits) = drive.search("UNIQUEMARKER37BM25CLOSURE", &opts) {
+                if hits.hits.iter().any(|h| h.path == expected) {
+                    seen = true;
+                    break;
+                }
+            }
+        }
+        assert!(
+            seen,
+            "boot walk did not land the Drafts file in BM25 within 5s; \
+             search for UNIQUEMARKER37BM25CLOSURE returned no hit"
+        );
+    }
+
     #[test]
     fn apply_watch_change_indexes_drafts_prefixed_path() {
         // systacean-36: closes the recurring `-a-66 slice e`
