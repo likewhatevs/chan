@@ -1102,6 +1102,12 @@
     --g-source: #4169e1;
     --g-binary: #5e5e62;
     --g-folder: #8e8e93;
+    /* `fullstack-a-66b`: Drafts folder distinct yellow tone.
+       Sits at the top of the FB tree as the synthetic "Drafts"
+       entry. Background uses a low-alpha tint so the row reads
+       as a category marker without dominating the panel. */
+    --fb-drafts-fg: #e3b341;
+    --fb-drafts-bg: rgba(227, 179, 65, 0.10);
     /* Inline editor pills (wiki link, image, tag, contact, date,
        broken). Hues track the canonical concept palette so the
        same item reads with the same color across the graph, the
@@ -1179,6 +1185,10 @@
     --g-source: #2851c4;
     --g-binary: #4e4e54;
     --g-folder: #6c6c70;
+    /* `fullstack-a-66b` light-mode counterparts — deeper yellow
+       for contrast against the bright page bg. */
+    --fb-drafts-fg: #9a6700;
+    --fb-drafts-bg: rgba(154, 103, 0, 0.08);
     /* Light-mode pill palette. Same canonical mapping as dark
        (document orange, media purple, tag green, contact yellow,
        date grey, broken red), but deeper foreground hues and

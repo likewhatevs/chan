@@ -22,7 +22,7 @@ SPA implementation of the New Draft flow:
 
 ## Reference
 
-[`../alex/addendun-a.md`](../alex/addendun-a.md):
+[`../alex/addendun-a.md`](../alex/addendum-a.md):
 "## Flow for the 'New Draft' action" + "### Extra"
 sections.
 
@@ -266,6 +266,130 @@ tightly coupled around the same user flow.
 * `web/src/state/shortcuts.ts`
 * `web/src/App.svelte`
 * `web/src/components/newDraftCmdN.test.ts` (new)
+* `docs/journals/phase-8/fullstack-a/fullstack-a-66.md`
+* `docs/journals/phase-8/fullstack-a/journal.md`
+* `docs/journals/phase-8/alex/event-fullstack-a-architect.md`
+
+### Atomic-audit-commit
+
+Per the memory rule. Per-path staging only.
+
+Push held. Standing by for clearance.
+
+## 2026-05-22 — slice b (FB Drafts row) ready for review
+
+Three-file change. SPA + chan-server. Now that
+`systacean-29` lands `Drive::list` unified-path
+routing, the FB Drafts row works end-to-end.
+
+### What landed
+
+**chan-server**:
+
+* `crates/chan-server/src/routes/files.rs`:
+  `api_list_files` now injects a synthetic
+  `Drafts` directory entry at position 0 of
+  the root listing (when `dir` query param is
+  unset). Listing under `dir=Drafts` /
+  `dir=Drafts/<name>` already routes through
+  the unified `Drive::list` thanks to `-29`.
+
+**SPA**:
+
+* `web/src/components/FileTree.svelte`:
+  * Dir row gains `class:drafts-row={node.path
+    === "Drafts"}` so the synthetic row
+    picks up a distinct visual.
+  * CSS rules tint `.row.dir.drafts-row`'s
+    background + icon + name with
+    `--fb-drafts-fg` / `--fb-drafts-bg` so
+    light/dark + per-Hybrid theme overrides
+    cascade.
+* `web/src/App.svelte`: new
+  `--fb-drafts-fg` / `--fb-drafts-bg`
+  variables in both `:root` (dark) and
+  `[data-theme="light"]` blocks. Yellow tone
+  (`#e3b341` dark / `#9a6700` light;
+  low-alpha rgba bg).
+
+**Tests**:
+
+* `web/src/components/draftsRowFb.test.ts`
+  (new): 5 raw-source pins covering the row
+  class hook, the CSS tints, + the
+  dark+light CSS variable declarations.
+
+### Acceptance (slice b)
+
+1. FB shows Drafts as the first row in yellow
+   color ✓ (light + dark vars declared;
+   mechanism via test pins). @@WebtestA walk
+   for empirical confirmation.
+2. Expansion into `Drafts/<name>/...` works
+   via the existing `/api/files?dir=Drafts`
+   route + `-29`'s unified `Drive::list`.
+3. Drafts row click → currently selects the
+   row + treats it as a directory (the
+   "outside drive's root" inspector notice
+   is slice c territory).
+
+### Out of scope (deferred slices)
+
+* **Slice c**: Drafts folder inspector with
+  "lives outside drive's root" notice.
+* **Slice d**: Rich Prompt history persistence
+  via `Drafts/rich-prompt-N/`.
+* **Slice e**: Graph Drafts root styling +
+  `drafts_link` edge styling.
+
+### Gate
+
+* vitest **902 / 902** (+4 net from `-a-78`
+  slice 2's 898).
+* svelte-check 0 errors / 0 warnings across
+  4020 files.
+* `cargo test -p chan-server --lib`: 213
+  passed.
+* npm build clean.
+
+### Decisions
+
+* **Synthetic injection in chan-server** vs
+  SPA-side injection — keeps a single source
+  of truth on the wire. Other consumers
+  (future MCP tools, the search index, etc.)
+  see the same Drafts entry.
+* **Position 0 (top of list)** matches
+  @@Alex's addendum-a framing: "shown in the
+  File Browser as the very first element."
+* **Yellow tone**:
+  - Dark `#e3b341` (matches `--warn-text`
+    family).
+  - Light `#9a6700` (matches `--warn-text`
+    light counterpart).
+  - Low-alpha bg (10% / 8%) so the row
+    reads as a category marker without
+    dominating.
+* **Inspector + Rich Prompt history + Graph
+  styling deferred** — each is a separate
+  slice. This slice just delivers the
+  visible "first row in yellow" affordance.
+
+### Suggested commit subject
+
+```
+File browser: synthetic Drafts row at root with yellow tint (fullstack-a-66 slice b)
+```
+
+Single commit. chan-server injection + SPA
+markup + CSS + test tightly coupled.
+
+### Files for `git add` (per-path discipline)
+
+* `crates/chan-server/src/routes/files.rs`
+* `web/src/components/FileTree.svelte`
+* `web/src/App.svelte`
+* `web/src/components/draftsRowFb.test.ts` (new)
 * `docs/journals/phase-8/fullstack-a/fullstack-a-66.md`
 * `docs/journals/phase-8/fullstack-a/journal.md`
 * `docs/journals/phase-8/alex/event-fullstack-a-architect.md`

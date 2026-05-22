@@ -780,6 +780,7 @@
     {#if node.kind === "dir"}
       <div
         class={`row dir ${rowMatchClass(node.path)}`}
+        class:drafts-row={node.path === "Drafts"}
         class:selected={browserSelection.path === node.path}
         class:zebra={rowIndex % 2 === 1}
         class:drop-target={dropTarget === node.path}
@@ -1012,6 +1013,23 @@
   .row.dir .dir-icon {
     color: var(--g-folder);
     margin-right: 2px;
+  }
+  /* `fullstack-a-66b`: Drafts row sits at the top of the FB
+     tree in a distinct yellow tone. Pulls from
+     `--fb-drafts-fg` / `--fb-drafts-bg` so light/dark mode +
+     per-Hybrid theme overrides cascade automatically. The
+     row's icon + name both pick up the yellow tint so the
+     entry reads as "different category" at a glance, but
+     hover / selection states stay consistent with regular
+     directory rows (no special hover behaviour). */
+  .row.dir.drafts-row .dir-icon {
+    color: var(--fb-drafts-fg);
+  }
+  .row.dir.drafts-row > .name {
+    color: var(--fb-drafts-fg);
+  }
+  .row.dir.drafts-row {
+    background: var(--fb-drafts-bg);
   }
   /* Cmd+F highlight on rows whose filename matches the active find
      query (FileBrowserSurface drives setFindQuery). The current

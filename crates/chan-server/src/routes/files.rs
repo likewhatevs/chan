@@ -99,7 +99,7 @@ pub async fn api_list_files(
         Ok(rows) => rows.into_iter().map(|c| c.rel_path).collect(),
         Err(_) => std::collections::HashSet::new(),
     };
-    let out: Vec<TreeEntryView> = tree
+    let mut out: Vec<TreeEntryView> = tree
         .into_iter()
         .map(|e| TreeEntryView {
             kind: project_kind(&e.path, e.is_dir, contact_paths.contains(&e.path)),
@@ -110,6 +110,25 @@ pub async fn api_list_files(
             size: e.size,
         })
         .collect();
+    // `fullstack-a-66b`: when listing the drive root (`dir`
+    // unset), inject a synthetic `Drafts` entry at position 0
+    // so the file browser renders it as the first row.
+    // `Drafts` lives in chan-drive metadata (drafts_dir), NOT
+    // under the drive root, but appears in the wire under the
+    // `Drafts/` keyspace per `systacean-25` / `-26` / `-29`.
+    // Listing under `dir=Drafts/...` already routes through
+    // the unified `Drive::list` thanks to `-29`.
+    if query.dir.is_none() {
+        let drafts_entry = TreeEntryView {
+            kind: None,
+            path_class: None,
+            path: "Drafts".to_string(),
+            is_dir: true,
+            mtime: None,
+            size: 0,
+        };
+        out.insert(0, drafts_entry);
+    }
     Json(out).into_response()
 }
 

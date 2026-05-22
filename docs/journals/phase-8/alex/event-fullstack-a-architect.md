@@ -6574,3 +6574,103 @@ your suggestion: `-a-66b` (FB Drafts row;
 `-29` should now be in HEAD).
 
 Push held. Standing by for clearance.
+
+## 2026-05-22 — poke (fullstack-a-66 slice b: FB Drafts row ready for review)
+
+`systacean-29` landed → resumed -a-66b. Three-
+file change. SPA + chan-server.
+
+### What landed
+
+`crates/chan-server/src/routes/files.rs`:
+* `api_list_files` injects a synthetic
+  `Drafts` directory entry at position 0 of
+  the root listing (when `dir` query unset).
+  Listing under `dir=Drafts` / `dir=Drafts/<name>`
+  already routes through unified
+  `Drive::list` thanks to `-29`.
+
+`web/src/components/FileTree.svelte`:
+* `class:drafts-row={node.path === "Drafts"}`
+  on the dir row markup.
+* CSS rules tint `.row.dir.drafts-row`'s
+  background + icon + name via
+  `--fb-drafts-fg` / `--fb-drafts-bg`.
+
+`web/src/App.svelte`:
+* New `--fb-drafts-fg` / `--fb-drafts-bg`
+  vars in dark + light blocks. Yellow tone:
+  dark `#e3b341` (matches `--warn-text`);
+  light `#9a6700` (matches light
+  `--warn-text` counterpart).
+* Low-alpha bg (10% / 8%).
+
+`draftsRowFb.test.ts` (new): 5 raw-source
+pins covering row class hook + CSS tints +
+dark/light var declarations.
+
+### Acceptance (slice b)
+
+1. FB shows Drafts as first row in yellow
+   ✓ (mechanism via tests; @@WebtestA walk
+   for empirical).
+2. Expansion via `/api/files?dir=Drafts`
+   routes through `-29`'s unified
+   `Drive::list` ✓.
+3. Inspector "outside drive's root" notice
+   deferred to slice c.
+
+### Deferred slices (umbrella stays open)
+
+* Slice c: Drafts folder inspector with
+  "outside drive's root" notice.
+* Slice d: Rich Prompt history → Drafts/
+  rich-prompt-N/.
+* Slice e: Graph Drafts root styling +
+  `drafts_link` edge styling.
+
+### Gate
+
+* vitest **902 / 902** (+4 net from -a-78
+  slice 2's 898).
+* svelte-check 0 errors / 0 warnings across
+  4020 files.
+* `cargo test -p chan-server --lib`: 213
+  passed.
+* npm build clean.
+
+### Decisions
+
+* **Synthetic injection in chan-server**
+  vs SPA-side — single source of truth on
+  the wire; other consumers see the same
+  Drafts entry.
+* **Position 0** matches addendum-a "very
+  first element" framing.
+* **Yellow tone tracks `--warn-text`
+  family** — fits the existing palette;
+  low-alpha bg so the row reads as a
+  category marker without dominating.
+
+### Suggested commit subject
+
+```
+File browser: synthetic Drafts row at root with yellow tint (fullstack-a-66 slice b)
+```
+
+### Files for `git add`
+
+* `crates/chan-server/src/routes/files.rs`
+* `web/src/components/FileTree.svelte`
+* `web/src/App.svelte`
+* `web/src/components/draftsRowFb.test.ts` (new)
+* `docs/journals/phase-8/fullstack-a/fullstack-a-66.md`
+* `docs/journals/phase-8/fullstack-a/journal.md`
+* `docs/journals/phase-8/alex/event-fullstack-a-architect.md`
+  (this append)
+
+### Atomic-audit-commit applied
+
+Single bash invocation per discipline.
+
+Push held. Standing by for clearance.

@@ -2269,3 +2269,43 @@ Impl note at [fullstack-a-78.md](fullstack-a-78.md)
 architect's suggestion is `-a-66b` (FB Drafts
 row) — `systacean-29` Drive::list unified-path
 extension should be in HEAD now.
+
+## 2026-05-22 — -a-66 slice b (FB Drafts row) ready for review
+
+`systacean-29` (Drive::list unified-path)
+landed; resumed -a-66b. Three-file change.
+
+* `chan-server/src/routes/files.rs`:
+  `api_list_files` injects a synthetic
+  `Drafts` directory entry at position 0
+  when listing the drive root.
+* `FileTree.svelte`: dir row gains
+  `drafts-row` class when path === "Drafts";
+  CSS tints `.row.dir.drafts-row`'s
+  background + icon + name with
+  `--fb-drafts-fg` / `--fb-drafts-bg`.
+* `App.svelte`: new CSS variables
+  (`--fb-drafts-fg` / `--fb-drafts-bg`) in
+  both dark + light blocks. Yellow tone.
+* `draftsRowFb.test.ts` (new): 5 raw-source
+  pins.
+
+### Gate
+
+* vitest **902 / 902** (+4 net from -a-78
+  slice 2's 898).
+* svelte-check 0/0 across 4020 files.
+* cargo test -p chan-server --lib: 213
+  passed.
+* npm build clean.
+
+### Deferred slices
+
+* Slice c: Drafts folder inspector notice.
+* Slice d: Rich Prompt history → Drafts/
+  rich-prompt-N/.
+* Slice e: Graph Drafts root styling.
+
+Impl note at [fullstack-a-66.md](fullstack-a-66.md)
+"## 2026-05-22 — slice b". Outbound poke
+fired.
