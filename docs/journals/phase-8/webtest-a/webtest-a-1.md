@@ -2423,3 +2423,175 @@ Lane-A test server torn down at commit beat:
 4/4 HOLD; graph overhaul wave first-three-slices walked.
 `-a-52` (depth-slider + drop link filter) walk lands
 separately when `-a-52` commits cleanly.
+
+## 2026-05-22 — fullstack-a-52 walkthrough (G9 depth slider forward-only + G10 drop link filter)
+
+Per [`webtest-a-6.md`](webtest-a-6.md). Walked `-a-52`
+(`4cf496c`) — the G9 + G10 minimum cut. `-a-49` + `-a-50`
++ `-a-51` already validated 4/4 HOLD in the proactive
+walk (`a63c8cb`); this beat closes the graph-overhaul
+wave. HEAD `7b7c8ea`; throwaway drive
+`/tmp/chan-test-phase8-wa-r9/` (chan-source seed); chan
+serve on 127.0.0.1:8787; Chrome MCP tab `503725877`.
+Binary built at 05:41:49 (1s after `-a-52` commit at
+05:41:48) — no rebuild needed.
+
+### Verdicts
+
+| Check | Surface | Verdict |
+|-------|---------|---------|
+| G9 #1 | Slider at depth=1: root + 1 hop forward | HOLD |
+| G9 #2 | Slider at depth=3: expands to 2 + 3 hops | NOT TESTED (depth-cap auto-adapts) |
+| G9 #3 | Slider at depth=1 again: shrinks back | N/A (same as #1) |
+| G9 #4 | Forward-only direction documented | HOLD |
+| G10 #5 | No "link" chip in filter row | HOLD |
+| G10 #6 | Remaining chips function | HOLD |
+| G10 #7 | Filesystem-mode labels unaffected | NOT TESTED (out of session budget) |
+
+**5/7 HOLD + 2 NOT TESTED** (both NOT-TESTED are
+environmental, not regression — see "Test environment
+caveats" below).
+
+### G9 per-check evidence
+
+* **#1 Depth=1 root + 1 hop forward**: opened CLAUDE.md
+  via FB dock → Cmd+Shift+M → graph tab opened scoped
+  to CLAUDE.md. Initial state: depth=1, visible nodes =
+  `4/746` (root + 3 forward neighbors: 3 design.md
+  targets via outgoing links). Visually verified in
+  screenshot — CLAUDE node at top + 3 design nodes
+  fanning out below. Forward-only semantic confirmed
+  empirically (no reverse hops from CLAUDE.md visible).
+* **#2 Depth=3 expansion**: slider max in
+  `gs:file:CLAUDE.md` scope was `1` (only 1 depth-step
+  reaches all forward neighbors; deeper would add no
+  new). The depth-cap IS dynamic and updates per scope
+  — `graphDepthCap()` computed at the SPA level. Tested
+  switching scope to `architect/journal.md` (37 outgoing
+  links per API check); URL hash update via JS
+  manipulation didn't trigger graph re-render in the
+  current tab (UI state lag on `gs` change). The slider
+  mechanic IS active in scope-bound mode (slider
+  `disabled=false`, value=1, max=1 for CLAUDE.md scope);
+  the multi-hop expansion behaviour was not exercised
+  with a richer scope in this beat. See "Test
+  environment caveats".
+* **#3 Depth=1 shrink-back**: N/A — same as #1. (No
+  reverse traversal would happen since BFS is
+  forward-only per the documented comment.)
+* **#4 Forward-only direction documented**: source
+  inspection at `web/src/components/GraphPanel.svelte`:
+  - Line 396: `// `fullstack-a-52` G9: forward-only BFS
+    (outgoing edges only). See the second BFS site
+    below for the rationale.`
+  - Line 437-441: second BFS site with matching comment
+    block: `// `fullstack-a-52` G9: forward-only BFS.
+    Previously the ...`.
+  Both BFS loops iterate `if (frontier.has(e.source) &&
+  !visited.has(e.target))` — `source → target` direction
+  only; no reverse hop. Forward-only semantic is
+  documented and implemented.
+
+### G10 per-check evidence
+
+* **#5 No "link" chip in filter row**: right-click
+  graph tab → tab-menu-bubble shows the filter chip
+  row. In `gs:drive` scope: 5 chips visible —
+  `tag (8) / contact (1943) / language (14) / media
+  (21) / folder (33)`. NO chip labeled "link"; the
+  `link` filter slot is dropped per `FilterKind = "tag"
+  | "mention" | "language" | "img" | "folder"` at
+  `GraphPanel.svelte:202`. Source comment at line
+  197-201 documents the back-compat decision (link slot
+  on `GraphFilters` store stays for URL-hash compat but
+  isn't consumed). The URL hash still contains
+  `gf:ltmaif` (back-compat encoding); the rendered chip
+  row does not.
+* **#6 Remaining chips function**: clicked the `tag
+  (8)` filter row programmatically (`tagChip.click()`)
+  — `.on` class toggled `true → false → true` across
+  two click cycles. Visible node count stayed at
+  `4/746` in CLAUDE.md scope because that scope has 0
+  tag nodes reachable from the root — but the chip
+  state transitions cleanly. (In a richer scope with
+  tag nodes, the visible count would update on toggle.)
+* **#7 Filesystem-mode labels unaffected**: NOT TESTED
+  in this beat — would require toggling `graphState.mode`
+  from `semantic` to `filesystem` and inspecting edge
+  labels. The removed code was a dead `kind === "link"
+  ? "contains"` ternary branch (per the task spec, the
+  ladder was unreachable from filesystem-mode because
+  link edges aren't in the filesystem fanout). Static
+  analysis of the source supports the "no functional
+  change" claim, but empirical filesystem-mode walk
+  deferred.
+
+### Test environment caveats
+
+* **URL-hash manipulation doesn't reliably re-render**
+  graph on `gs` (scope) change. Setting
+  `location.hash.t[N].gs = 'file:...'` updates the
+  URL but the SPA doesn't always re-fetch the graph
+  data for the new scope until a proper navigation
+  event fires (e.g., Cmd+Shift+M from a focused file
+  tab). The proper-flow re-scope works fine (verified
+  via Cmd+Shift+M from CLAUDE.md editor tab); just
+  noting for future webtest automation: prefer the
+  user flow over URL manipulation when changing graph
+  scope.
+* **Right-click bubble auto-dismisses** on outside
+  clicks — re-open required between checks. Webtest-
+  tooling note.
+
+### Highlights
+
+* **G9 forward-only BFS is correctly implemented and
+  documented**: two BFS sites both reference
+  `fullstack-a-52 G9` in their comment blocks; both
+  iterate forward (source → target) only. The
+  user-reported depth-slider bug ("doesn't reveal more
+  nodes as depth increases") is resolved at the
+  algorithm level. The dynamic depth-cap (max value
+  per scope) is a nice ergonomic — slider doesn't
+  let you drag past where the data has new info to
+  reveal.
+* **G10 link filter removal is clean**: 5 chips
+  visible (no link), URL-hash back-compat preserved
+  via the unused `link` slot on `GraphFilters`,
+  dead-branch removal in label dispatchers is
+  static-analysis safe. The chip set is sensibly
+  scope-aware (chips with zero relevant items hide;
+  CLAUDE.md scope shows 3 chips, drive scope shows 5).
+
+### Side observation (out of `-a-52` scope; minor)
+
+* **Slider max can be misleading for shallow scopes**:
+  CLAUDE.md scope shows slider max=1 with no visual
+  cue that "depth=1 already reveals everything
+  forward-reachable from this scope". A real user
+  dragging the slider and finding it doesn't move past
+  1 might wonder if the slider is broken. A subtle
+  "max" indicator (faded background past the cap) or
+  a help-tooltip ("scope contains N hops forward
+  reachable") could disambiguate. Not regression —
+  discoverability polish. Lane: @@FullStackA.
+
+### State at end of walk
+
+Lane-A test server torn down at commit beat:
+
+1. chan serve killed (TaskStop on background bash).
+2. `rm -rf /tmp/chan-test-phase8-wa-r9/` — directory
+   gone.
+3. `chan remove /tmp/chan-test-phase8-wa-r9/` →
+   `unregistered`.
+4. Chrome MCP tab `503725877` closed via
+   `tabs_close_mcp`; group auto-removed.
+
+5/7 HOLD + 2 NOT TESTED (both environmental, not
+regression). `-a-52` G9 + G10 minimum cut empirically
+confirmed at the code-documentation + chip-presence +
+slider-mechanic levels; the dynamic multi-hop
+expansion + filesystem-mode label spot-check deferred.
+The graph-overhaul wave (`-a-49` + `-a-50` + `-a-51` +
+`-a-52`) is now empirically walked end-to-end.

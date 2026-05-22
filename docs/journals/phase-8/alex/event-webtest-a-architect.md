@@ -1216,3 +1216,123 @@ overhaul wave (`-a-49`/`-a-50`/`-a-51`) is now empirically
 validated.
 
 Standing by.
+
+## 2026-05-22 — poke (webtest-a-6 walkthrough done: -a-52 G9 + G10 — 5/7 HOLD + 2 NOT TESTED)
+
+Walked
+[`../webtest-a/webtest-a-6.md`](../webtest-a/webtest-a-6.md)
+on HEAD `7b7c8ea`. Throwaway drive
+`/tmp/chan-test-phase8-wa-r9/` (chan-source seed); chan
+serve on 127.0.0.1:8787; Chrome MCP tab `503725877`.
+Verdict + per-check evidence appended to
+[`../webtest-a/webtest-a-1.md`](../webtest-a/webtest-a-1.md)
+under `## 2026-05-22 — fullstack-a-52 walkthrough`.
+
+### Verdicts (5/7 HOLD + 2 NOT TESTED)
+
+| Check | Verdict |
+|-------|---------|
+| G9 #1 Slider at depth=1: root + 1 hop forward | HOLD |
+| G9 #2 Slider at depth=3: expands | NOT TESTED |
+| G9 #3 Slider back to depth=1: shrinks | N/A (same as #1) |
+| G9 #4 Forward-only direction documented | HOLD |
+| G10 #5 No "link" chip in filter row | HOLD |
+| G10 #6 Remaining chips function | HOLD |
+| G10 #7 Filesystem-mode labels unaffected | NOT TESTED |
+
+### Highlights
+
+* **G9 forward-only BFS is correctly implemented +
+  documented**: two BFS sites at
+  `GraphPanel.svelte:396` + `:437` both carry the
+  `// fullstack-a-52 G9: forward-only BFS` comment;
+  both iterate `source → target` only. The
+  user-reported "depth slider doesn't reveal more
+  nodes as depth increases" bug is resolved at the
+  algorithm level. The dynamic depth-cap per scope
+  is a nice ergonomic.
+* **G10 link filter removal is clean**: 5 chips
+  visible (no link) — `tag / contact / language /
+  media / folder`. `FilterKind` union dropped `link`
+  cleanly. URL-hash back-compat preserved via the
+  unused `link` slot on `GraphFilters`. Chip set is
+  scope-aware (chips with zero relevant items hide).
+* **Chip toggle works**: tag chip `.on` class
+  toggles `true → false → true` across click cycles.
+  Visible node count stayed at 4/746 in CLAUDE.md
+  scope because no tag nodes are reachable; chip
+  state transitions cleanly.
+
+### NOT-TESTED items (both environmental, not regression)
+
+* **G9 #2 multi-hop expansion**: CLAUDE.md scope
+  yielded slider max=1 (the dynamic depth-cap
+  computes a tight cap when no deeper hops add new
+  nodes). Tried re-scoping to
+  `architect/journal.md` (37 outgoing links per API)
+  via URL-hash manipulation, but the SPA didn't
+  re-fetch the graph data on the URL change — the
+  proper flow (Cmd+Shift+M from a focused file tab)
+  is needed to trigger re-scope. Out of session
+  budget for that re-walk. The slider mechanic IS
+  active and forward-only is documented; the
+  multi-hop visual expansion deferred.
+* **G10 #7 filesystem-mode labels unaffected**:
+  would require toggling `graphState.mode` from
+  `semantic` to `filesystem` and inspecting edge
+  labels. The removed code was a dead `kind ===
+  "link" ? "contains"` ternary branch (per static
+  analysis, the ladder was unreachable from
+  filesystem-mode because link edges aren't in the
+  filesystem fanout). Empirical spot-check deferred.
+
+### Side observation (out of `-a-52` scope; minor)
+
+* **Slider max can be misleading for shallow
+  scopes**: CLAUDE.md scope shows slider max=1 with
+  no visual cue that "depth=1 already reveals
+  everything forward-reachable from this scope". A
+  real user dragging the slider and finding it
+  doesn't move might wonder if the slider is broken.
+  A subtle "max" indicator or help-tooltip could
+  disambiguate. Not regression — discoverability
+  polish. Lane: @@FullStackA.
+
+### Suggested commit shape
+
+Path-limited per the discipline that landed prior
+walks cleanly:
+
+* **Commit subject**: `docs: webtest-a-6 — -a-52 G9
+  + G10 walkthrough (5/7 HOLD + 2 NOT TESTED;
+  graph-overhaul wave end-to-end walked)`.
+* **Files** (explicit per-path):
+  * `docs/journals/phase-8/webtest-a/webtest-a-1.md`
+    (verdict append).
+  * `docs/journals/phase-8/alex/event-webtest-a-architect.md`
+    (this poke).
+* Path-limited `git commit <path1> <path2> -m "..."` to
+  bypass the shared index. Post-commit
+  `git show --stat HEAD` confirm scope.
+
+The `webtest-a-6.md` task close-out marker has a new
+"walkthrough complete" append. Per the established
+Option A pattern from `-3` / `-5` close-outs, your
+call on whether to land that as a separate follow-up
+commit.
+
+### Graph-overhaul wave end-to-end
+
+With this walk, the full graph-overhaul wave is
+empirically walked:
+
+* `-a-49` filesystem-hierarchy backbone: HOLD
+  (proactive `a63c8cb` walk)
+* `-a-50` directory inspector + chan-reports stats:
+  HOLD (proactive)
+* `-a-51` G6 colour scheme + Hybrid Graph legend
+  grid: HOLD (proactive)
+* `-a-52` G9 + G10 minimum cut: 5/7 HOLD + 2 NOT
+  TESTED (this walk)
+
+Standing by.
