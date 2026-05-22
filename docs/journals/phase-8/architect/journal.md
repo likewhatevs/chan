@@ -5503,6 +5503,63 @@ walk yet — they'll pick up after `-b-26` ships
 | `webtest-a/webtest-a-9.md` | NEW task |
 | `fullstack-b/fullstack-b-26.md` | NEW task |
 
+## 2026-05-22 — Pushed 175 commits + ROUND-2 WAVE-2 dispatched (6 tasks)
+
+### Push completed
+
+Pre-push gate all green (cargo fmt + clippy + test +
+svelte-check + npm test 796/796 + npm build). Pushed
+175 commits to origin/main; CI fired (`26284183617`).
+
+### -a-66 scope poke routed → systacean-26
+
+@@FullStackA's audit during `-a-66` pickup surfaced
+the chan-drive API asymmetry: draft files use raw
+`std::fs` (no editable-text gate / atomic write /
+watcher annotation) which means `Drive::read_text`
+doesn't see Drafts. Recommended (A) — chan-drive
+unified-path extension. Routed accordingly.
+
+Cut [`../systacean/systacean-26.md`](../systacean/systacean-26.md).
+`-a-66` resumes on @@FullStackA once `-26` lands.
+
+### Wave-2: 5 deferred items dispatched per @@Alex's request
+
+@@Alex 2026-05-22: pick up the 5 deferred items from
+the addendum.
+
+| Task | Subject |
+|------|---------|
+| [`-a-68`](../fullstack-a/fullstack-a-68.md) | Hybrid Nav enhancements (Nav rename + transactional staging) |
+| [`-a-69`](../fullstack-a/fullstack-a-69.md) | Rich Prompt F-follow-up rewrite (survey as quote) |
+| [`-a-70`](../fullstack-a/fullstack-a-70.md) | Editor mention/matching gap |
+| [`-a-71`](../fullstack-a/fullstack-a-71.md) | Auto-scroll cursor-lost |
+| [`-a-72`](../fullstack-a/fullstack-a-72.md) | Hang recovery via localStorage (HIGH — data-loss prevention) |
+
+Plus the `-a-67b` slice 1b in flight from the prior
+batch.
+
+### Lane state at end of round
+
+| Lane | State |
+|------|-------|
+| @@Systacean | -25 ✓ smoke green; -26 dispatched (unified-path API) |
+| @@FullStackA | -a-67a/-a-65/-a-64 ✓; deep queue: -a-66 (pending -26) + -a-67b/c/d/e/f + -a-68/-a-69/-a-70/-a-71/-a-72 |
+| @@FullStackB | -b-26+-b-27 ✓; queue-empty |
+| @@CI | -14 ✓; queue-empty |
+| @@WebtestA | -a-11/-a-12 walks committed; reactive |
+| @@WebtestB | -b-5 ✓; reactive |
+
+### What I'm committing this round
+
+| File | Reason |
+|------|--------|
+| `architect/journal.md` | This entry |
+| `alex/event-architect-fullstack-a.md` | -a-66 scope-routing + 5 wave-2 dispatches |
+| `alex/event-architect-systacean.md` | -26 dispatch poke |
+| `systacean/systacean-26.md` | NEW task |
+| `fullstack-a/fullstack-a-{68,69,70,71,72}.md` | 5 NEW tasks |
+
 ## 2026-05-22 — ADDENDUM-A WAVE — 6 tasks dispatched from @@Alex's finalised draft-folder + menu revamp + CRITICAL bug spec
 
 @@Alex finalised [`alex/addendun-a.md`](../alex/addendun-a.md).

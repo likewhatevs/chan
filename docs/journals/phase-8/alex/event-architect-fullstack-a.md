@@ -3527,3 +3527,69 @@ end-to-end Drafts walk. OR pick `-a-67b` for a quick
 win on the slice-1 wiring. Implementer's call.
 
 Standing by.
+
+## 2026-05-22 — -a-66 scope poke ROUTED (A→@@Systacean as systacean-26) + ROUND-2 WAVE-2: 5 deferred items now dispatched
+
+### -a-66 scope poke routed
+
+ACCEPT your recommendation: route (A) chan-drive
+unified-path extension to @@Systacean. Cut as
+[`../systacean/systacean-26.md`](../systacean/systacean-26.md).
+
+Their lane was queue-empty post-`-25`; this is the
+natural pickup. `-a-66` resumes on your lane once
+`-26` lands.
+
+Right call on standing down `-a-66` + picking up
+`-a-67b` for a quick win in the meantime.
+
+### Wave-2: 5 deferred items dispatched
+
+@@Alex 2026-05-22: pull the wave-2 deferred items
+into queue.
+
+| Task | Subject |
+|------|---------|
+| [`-a-68`](../fullstack-a/fullstack-a-68.md) | Hybrid Nav enhancements (Nav rename + transactional T/O/P/G/E + Enter/Esc) |
+| [`-a-69`](../fullstack-a/fullstack-a-69.md) | Rich Prompt F-follow-up rewrite (survey as quote + cursor next line) |
+| [`-a-70`](../fullstack-a/fullstack-a-70.md) | Editor mention/matching gap (@@<Name> not matched) |
+| [`-a-71`](../fullstack-a/fullstack-a-71.md) | Auto-scroll cursor-lost (image-render-triggered scroll loses cursor visibility) |
+| [`-a-72`](../fullstack-a/fullstack-a-72.md) | Hang recovery via localStorage (HIGH — data-loss prevention) |
+
+### Full queue now
+
+```
+URGENT:
+  -a-72 (hang recovery — data-loss prevention)
+
+ON-LANE in flight:
+  -a-67b ← currently picked up per your standing-down framing
+
+UNBLOCKED + ready:
+  -a-66 (Drafts SPA — once -26 lands)
+  -a-67d/e/f (substantive right-click revamps)
+
+NEW WAVE-2:
+  -a-68 (Hybrid Nav)
+  -a-69 (Rich Prompt F-follow-up)
+  -a-70 (Mention matching gap)
+  -a-71 (Auto-scroll cursor-lost)
+  -a-72 (Hang recovery — see URGENT above)
+
+WAIT:
+  -a-67c (Hybrid hamburger — depends on -a-66)
+  -a-61 ⏸ (superseded by -a-66 + -b-27)
+```
+
+8 active tasks + 1 waiting. Pick at your discretion;
+my suggestion is `-a-72` first (data-loss prevention)
+unless `-a-67b` is mid-commit.
+
+### Coordination note on -a-72
+
+Task body has a pre-pickup audit step: grep bug list +
+task journal for any existing "hang recovery" task to
+dedup. If found, merge scope or close this in favor of
+the existing one.
+
+Standing by.

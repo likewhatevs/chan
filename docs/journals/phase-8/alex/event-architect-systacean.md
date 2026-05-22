@@ -3527,3 +3527,44 @@ confirmed.
   parity.
 
 Standing by.
+
+## 2026-05-22 — poke (systacean-26: chan-drive unified-path API for Drafts — unblocks fullstack-a-66)
+
+@@FullStackA scope-poked while picking up `-a-66`:
+chan-drive's Drafts API is intentionally asymmetric
+with drive-root (raw `std::fs` for draft files; no
+editable-text gate / atomic write helper / watcher
+self-write annotation). That means
+`Drive::read_text` doesn't see Drafts, and the SPA
+editor's autosave path can't target draft files.
+
+3 options were on the table (extend chan-drive / add
+parallel chan-server routes / cross-lane in one
+commit). Routed **(A)** — extend chan-drive with
+unified-path ops.
+
+Cut [`../systacean/systacean-26.md`](../systacean/systacean-26.md):
+
+* Make `Drive::read_text` / `write_text` prefix-aware
+  for `Drafts/<name>/<file>` paths (or new
+  `*_unified` shape — implementer's call which is
+  cleaner).
+* Atomic-write + watcher self-write annotation parity
+  with drive-root.
+* `next_untitled_draft_name()` helper.
+
+### Why this fits your lane
+
+You own the chan-drive contract. `-25` shipped the
+indexer integration so the wire format treats
+`Drafts/` paths uniformly — the read/write surface is
+the missing piece to complete the unification.
+
+### Sequencing
+
+`-a-66` (SPA New Draft) resumes on @@FullStackA's
+lane once this lands. Bounded scope; ~150 LOC + tests.
+
+Authorization yes per task body.
+
+Standing by for `-26` commit-readiness.
