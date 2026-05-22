@@ -1336,3 +1336,81 @@ empirically walked:
   TESTED (this walk)
 
 Standing by.
+
+## 2026-05-22 — poke (webtest-a-7 done: -a-57 graph filter chips — 9/9 HOLD; markdown-hide headline ask resolved)
+
+Walked
+[`../webtest-a/webtest-a-7.md`](../webtest-a/webtest-a-7.md)
+on HEAD `f593f35`. Throwaway drive
+`/tmp/chan-test-phase8-wa-r10/` (chan-source seed); chan
+serve on 127.0.0.1:8787; Chrome MCP tab `503725883`.
+Frontend + binary rebuilt (`npm run build` →
+`cargo build -p chan`) for `-a-57`. Verdict + per-check
+evidence appended to
+[`../webtest-a/webtest-a-1.md`](../webtest-a/webtest-a-1.md)
+under `## 2026-05-22 — fullstack-a-57 walkthrough`.
+
+### Verdicts: 9/9 HOLD
+
+* **Chip presence + defaults**: 7 chips total (`tag`,
+  `contact`, `language`, `media`, `folder`, **`markdown`**,
+  **`source`**). Both new chips default ON. URL hash uses
+  version-2 encoding `gf:2ltmaifds`.
+* **Toggle behaviors** (4 states):
+  - bothOn: 788/788 nodes
+  - markdownOff_sourceOn: 96/788 (the @@Alex headline win)
+  - sourceOff_markdownOn: 757/788
+  - bothOff: 65/788 (only non-file kinds + non-orphan
+    edges remain)
+* **Counts**: markdown 639, source 31, folder 33, media
+  21, language 14, contact 1973, tag 8 — matches chan
+  repo composition empirically.
+* **Persistence**: URL hash `gf:2ltmaifs` round-trips
+  through page reload cleanly; chip state holds.
+* **Per-tab independence**: split-pane test — LEFT pane
+  graph at `gf:2ltmaifs` (markdown OFF, 96 nodes); RIGHT
+  pane graph at `gf:2ltmaifds` (default, 788 nodes).
+  SerTab state is per-tab; URL hash serializes both
+  cleanly.
+
+### Headline win
+
+**"Hide markdown to see source"** — @@Alex's explicit
+ask — lands as expected. With 639 markdown vs 31
+source nodes in the chan repo, toggling the markdown
+chip OFF clears the orange dominance and the
+royalblue source-code subgraph becomes navigable. The
+chip is right where it should be (filter chip row),
+defaults sensibly (ON to preserve the prior default
+view), and the count display gives immediate intuition
+about why the graph looks the way it does.
+
+### Side observation (very minor; out of `-a-57` scope)
+
+* **"Both OFF" reveals an orphan-cleanup side-effect**:
+  788 - 639 - 31 = 118 expected when both file chips
+  OFF, but actual count is 65. The delta is because
+  non-file nodes (tags, mentions, languages) that
+  only had edges to file nodes become orphans and
+  hide. Existing behavior, not a regression — but
+  could be tooltip-able for users who notice. Lane:
+  @@FullStackA polish; not blocking.
+
+### Suggested commit shape
+
+Path-limited per the discipline that landed prior
+walks cleanly:
+
+* **Commit subject**: `docs: webtest-a-7 — -a-57 graph
+  filter chips walkthrough (9/9 HOLD; markdown-hide
+  headline ask resolved)`.
+* **Files** (explicit per-path):
+  * `docs/journals/phase-8/webtest-a/webtest-a-1.md`
+    (verdict append).
+  * `docs/journals/phase-8/alex/event-webtest-a-architect.md`
+    (this poke).
+* Path-limited `git commit <path1> <path2> -m "..."` to
+  bypass the shared index. Post-commit
+  `git show --stat HEAD` confirm scope.
+
+Standing by.

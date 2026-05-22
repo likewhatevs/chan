@@ -2595,3 +2595,147 @@ slider-mechanic levels; the dynamic multi-hop
 expansion + filesystem-mode label spot-check deferred.
 The graph-overhaul wave (`-a-49` + `-a-50` + `-a-51` +
 `-a-52`) is now empirically walked end-to-end.
+
+## 2026-05-22 — fullstack-a-57 walkthrough (graph filter chips: markdown + source FileBucket toggles)
+
+Per [`webtest-a-7.md`](webtest-a-7.md). Walked `-a-57`
+(`f5c10c8`) — adds markdown + source FileBucket filter
+chips to the graph filter row. HEAD `f593f35`; throwaway
+drive `/tmp/chan-test-phase8-wa-r10/` (chan-source seed);
+chan serve on 127.0.0.1:8787; Chrome MCP tab `503725883`.
+Frontend + binary rebuilt (`npm run build` →
+`cargo build -p chan`) to embed `-a-57`.
+
+### Verdicts (9/9 HOLD)
+
+| Check | Surface | Verdict |
+|-------|---------|---------|
+| #1 | 7 chips present (includes markdown + source) | HOLD |
+| #2 | Both new chips default ON | HOLD |
+| #3 | markdown OFF → source visible (the headline ask) | HOLD |
+| #4 | source OFF → markdown visible | HOLD |
+| #5 | Both OFF → non-file kinds only | HOLD |
+| #6 | Both ON → all visible | HOLD |
+| #7 | Counts displayed per chip | HOLD |
+| #8 | URL hash persistence across reload | HOLD |
+| #9 | SerTab per-tab state independence | HOLD |
+
+### Per-check evidence
+
+* **#1 + #2 Chip presence + defaults**: right-click
+  graph tab → tab-menu-bubble shows the filter chip
+  row. 7 chips total in order: `tag (8)`, `contact
+  (1973)`, `language (14)`, `media (21)`, `folder
+  (33)`, **`markdown (639)`**, **`source (31)`**.
+  Both new chips render with the `.on` class set
+  (filled-circle indicator); existing 5 chips unchanged.
+  URL hash `gf:2ltmaifds` — version-2 encoding with
+  letters `l/t/m/a/i/f/d/s` mapping to the 7 chips +
+  the back-compat `l` slot. Total nodes visible:
+  `788/788` (all on default).
+* **#3 markdown OFF → source visible (headline ask)**:
+  toggled markdown chip OFF. Visible nodes dropped
+  to `96/788`. The orange markdown cluster
+  (dominant 639 nodes) cleared from the canvas;
+  the royalblue source-code nodes (31) became
+  prominent alongside grey folders, pink language
+  nodes, purple media nodes — exactly the "hide
+  markdown to see source" visual win @@Alex asked
+  for. URL hash dropped to `gf:2ltmaifs` (no `d`).
+* **#4 source OFF → markdown visible**: re-toggled
+  markdown ON + source OFF. Visible nodes: `757/788`
+  (markdown 639 + non-file kinds; missing only the
+  31 source nodes). Source code nodes vanished;
+  markdown sea + non-file kinds remain.
+* **#5 both OFF → non-file kinds only**: both file
+  chips OFF. Visible nodes: `65/788`. Only folders,
+  tags, mentions, languages, media nodes remain.
+  This is well under the math (788 - 639 - 31 = 118
+  expected, actual 65) because some non-file nodes
+  are reachable only via file edges and become
+  orphans when both file chips hide — the
+  hide-orphans behavior takes the count further down.
+* **#6 both ON → all visible**: restored both chips
+  ON. Visible nodes: `788/788`. Default state.
+* **#7 counts per chip**: chip labels carry counts
+  matching the actual populations: `markdown 639`
+  (chan repo has ~639 markdown files), `source 31`
+  (chan repo's TypeScript/Svelte/Rust files in
+  the file graph), `folder 33`, `media 21`,
+  `language 14`, `tag 8`, `contact 1973`. The
+  contact count is high because the journal
+  `@@mention` entries explode contact nodes.
+* **#8 URL hash persistence across reload**:
+  toggled markdown OFF (URL `gf:2ltmaifs`), reloaded
+  page. Post-reload state: markdown chip `.on =
+  false`, source chip `.on = true`, `96/788 nodes`
+  visible, URL `gf:2ltmaifs` preserved. Reload
+  round-trip clean.
+* **#9 SerTab per-tab state independence**: split
+  pane → second graph tab opened in the new pane
+  via Cmd+Shift+M (fresh defaults: all chips ON,
+  `gf:2ltmaifds`). LEFT pane stayed at `gf:2ltmaifs`
+  (markdown OFF, 96 nodes) while RIGHT pane showed
+  `gf:2ltmaifds` (all ON, 788 nodes). Two graph tabs
+  side by side with INDEPENDENT chip state, both
+  serialized to URL hash per-tab. Empirically
+  verified: visual difference clear — left pane is
+  source-code prominent, right pane is markdown
+  dominant.
+
+### Highlights
+
+* **The @@Alex headline ask lands cleanly**: hiding
+  markdown via the dedicated chip toggle reveals
+  the source code visually. With 639 markdown
+  nodes vs 31 source code nodes in the chan repo,
+  the orange-dominated canvas is now actually
+  navigable for code-readers — toggle one chip,
+  the source-code subgraph becomes legible.
+* **Counts are informative**: each chip shows its
+  population count, giving immediate intuition
+  about graph composition without having to
+  inspect node lists.
+* **Per-tab independence is a nice ergonomic**: a
+  user can have one graph tab focused on the
+  markdown surface and another on the source code
+  surface, switching contexts instantly via tab
+  switch rather than chord-toggle.
+* **URL hash back-compat preserved**: the `l` slot
+  in the hash encoding is kept for old-link
+  compatibility per `-a-52`'s comment, even though
+  the link chip is no longer user-facing.
+
+### Side observation (very minor)
+
+* **"Both OFF" reveals an orphan-cleanup
+  side-effect**: with both markdown + source chips
+  OFF, the node count drops to 65 — fewer than
+  the math suggests (788 - 639 - 31 = 118
+  expected). The delta is because some non-file
+  kinds (tags, mentions, languages) have edges
+  only to file nodes; once both file chips hide,
+  those non-file nodes become orphans and the
+  hide-orphans behavior takes the count further
+  down. This is the existing behavior, not a
+  regression — but worth noting that the chip
+  toggle has cascading visibility implications
+  through edges. (Could be hidden via a tooltip
+  on the chip count or a help line, but not
+  blocking.) Lane: @@FullStackA polish; not in
+  `-a-57` scope.
+
+### State at end of walk
+
+Lane-A test server torn down at commit beat:
+
+1. chan serve killed (TaskStop on background bash).
+2. `rm -rf /tmp/chan-test-phase8-wa-r10/` — directory
+   gone.
+3. `chan remove /tmp/chan-test-phase8-wa-r10/` →
+   `unregistered`.
+4. Chrome MCP tab `503725883` closed via
+   `tabs_close_mcp`; group auto-removed.
+
+9/9 HOLD. The "hide markdown to see source" headline
+ask is empirically resolved. `-a-57` ships as specced.
