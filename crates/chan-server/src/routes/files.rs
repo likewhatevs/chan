@@ -110,15 +110,22 @@ pub async fn api_list_files(
             size: e.size,
         })
         .collect();
-    // `fullstack-a-66b`: when listing the drive root (`dir`
-    // unset), inject a synthetic `Drafts` entry at position 0
-    // so the file browser renders it as the first row.
-    // `Drafts` lives in chan-drive metadata (drafts_dir), NOT
-    // under the drive root, but appears in the wire under the
+    // `fullstack-a-66b`: when listing the drive root, inject a
+    // synthetic `Drafts` directory entry at position 0 so the
+    // file browser renders it as the first row. `Drafts`
+    // lives in chan-drive metadata (drafts_dir), NOT under
+    // the drive root, but appears in the wire under the
     // `Drafts/` keyspace per `systacean-25` / `-26` / `-29`.
     // Listing under `dir=Drafts/...` already routes through
     // the unified `Drive::list` thanks to `-29`.
-    if query.dir.is_none() {
+    //
+    // **Webtest-a triage (5dffa09 follow-up)**: the initial
+    // implementation gated on `query.dir.is_none()` only, but
+    // the SPA's `api.list` sends `?dir=` (empty string) for
+    // root listings — that branch silently dropped Drafts.
+    // Match both shapes: no `dir` param OR `dir` normalises
+    // to root (empty / `.` / `/` after trimming).
+    if is_root_listing(query.dir.as_deref()) {
         let drafts_entry = TreeEntryView {
             kind: None,
             path_class: None,
@@ -159,6 +166,24 @@ fn list_dir_entries(
         });
     }
     Ok(out)
+}
+
+/// `fullstack-a-66b` follow-up: classify the `?dir=` query
+/// param as a root listing (used by `api_list_files` to gate
+/// the synthetic Drafts injection). Matches every shape the
+/// SPA + curl could send for "list the drive root":
+///   * absent: `None`
+///   * empty string: `Some("")`
+///   * "/" or "./": trims to `""`
+///   * "." literal: explicit current-dir form.
+fn is_root_listing(dir: Option<&str>) -> bool {
+    match dir {
+        None => true,
+        Some(s) => {
+            let trimmed = s.trim_matches('/');
+            trimmed.is_empty() || trimmed == "."
+        }
+    }
 }
 
 fn normalize_dir_query(dir: &str) -> chan_drive::Result<String> {
@@ -384,6 +409,47 @@ pub async fn api_create_file(
             Ok(Err(e)) => err_from(&e),
             Err(join) => err(StatusCode::INTERNAL_SERVER_ERROR, join.to_string()),
         }
+    }
+}
+
+#[cfg(test)]
+mod is_root_listing_tests {
+    use super::is_root_listing;
+
+    // `fullstack-a-66b` follow-up: the SPA's `api.list("")`
+    // sends `?dir=` (empty string) — pre-fix the gate matched
+    // only `None`, so the synthetic Drafts injection silently
+    // dropped. Pin every shape the SPA / curl / tests could
+    // produce.
+
+    #[test]
+    fn matches_absent_dir_param() {
+        assert!(is_root_listing(None));
+    }
+
+    #[test]
+    fn matches_empty_string_dir() {
+        assert!(is_root_listing(Some("")));
+    }
+
+    #[test]
+    fn matches_slash_only() {
+        assert!(is_root_listing(Some("/")));
+        assert!(is_root_listing(Some("//")));
+    }
+
+    #[test]
+    fn matches_dot_form() {
+        assert!(is_root_listing(Some(".")));
+        assert!(is_root_listing(Some("./")));
+    }
+
+    #[test]
+    fn rejects_non_root_dirs() {
+        assert!(!is_root_listing(Some("docs")));
+        assert!(!is_root_listing(Some("Drafts")));
+        assert!(!is_root_listing(Some("Drafts/untitled-1")));
+        assert!(!is_root_listing(Some("crates/chan-drive")));
     }
 }
 

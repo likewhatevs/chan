@@ -399,3 +399,112 @@ markup + CSS + test tightly coupled.
 Per the memory rule. Per-path staging only.
 
 Push held. Standing by for clearance.
+
+## 2026-05-22 — slice b follow-up (webtest-a PARTIAL fix)
+
+Two-file change. chan-server only.
+
+### Webtest's PARTIAL verdict
+
+`webtest-a-1.md` proactive walk on `5dffa09`:
+* Server-side curl confirmed Drafts at pos 0
+  of `/api/files` (no query).
+* SPA-rendered FB had 17 rows / 8 dirs / no
+  Drafts.
+* Hypothesis: WS indexer event stream
+  overriding the initial fetch OR watcher
+  event filtering.
+
+### Actual root cause
+
+Empirical re-audit:
+* SPA's `api.list("")` (from `refreshTree()`
+  at `store.svelte.ts:531`) constructs the URL
+  as `/api/files?dir=` (empty-string query
+  param), not `/api/files` (no param).
+* Pre-fix gate at `files.rs:121` checked
+  `query.dir.is_none()` — TRUE only when the
+  param is absent. `Some("")` (empty-string)
+  fell through, so the synthetic Drafts
+  injection silently dropped.
+* curl returned the correct shape because
+  curl was hitting the URL without a query
+  param at all.
+
+### Fix
+
+`crates/chan-server/src/routes/files.rs`:
+* Extracted new helper `is_root_listing(dir:
+  Option<&str>) -> bool` that matches every
+  shape:
+  * `None`
+  * `Some("")` ← the fix
+  * `Some("/")` / `Some("//")`
+  * `Some(".")` / `Some("./")`
+* Swapped the `query.dir.is_none()` check
+  for `is_root_listing(query.dir.as_deref())`.
+* Added 5 unit tests on the helper (absent
+  / empty / slash / dot / non-root).
+
+### Acceptance
+
+1. FB shows Drafts at the top empirically ✓
+   (mechanism via 5 new Rust pins; @@WebtestA
+   re-walk for empirical confirm).
+2. `dir=Drafts/...` listings unchanged ✓
+   (`is_root_listing("Drafts")` returns
+   false; routes through `list_dir_entries`
+   as before).
+3. No regression on the regular dir listing
+   paths ✓ (all 213 prior chan-server tests
+   still pass; +5 new = 218).
+
+### Gate
+
+* `cargo test -p chan-server --lib`: **218
+  passed** (+5 net from slice b's 213).
+* vitest **916 / 916** (unchanged; SPA tests
+  not affected).
+* svelte-check 0 errors / 0 warnings across
+  4023 files.
+* npm build clean.
+
+### Decisions
+
+* **Helper extraction over inline check** —
+  enables unit tests + cross-references the
+  contract from the test names. Matches
+  `chan-server`'s pattern (`normalize_dir_query`
+  next door).
+* **Five test pins** — every shape the SPA
+  / curl / tests could produce. Cheap +
+  audit-friendly.
+* **Did NOT extend `normalize_dir_query`** —
+  that helper is used by `list_dir_entries`
+  for dir-validated listings; the
+  Drafts-injection gate is a separate
+  concern (root-vs-non-root) that doesn't
+  need path validation.
+
+### Suggested commit subject
+
+```
+File browser Drafts row: also gate synthetic injection on dir="" (fullstack-a-66 slice b follow-up)
+```
+
+Single commit. Helper + 5 tests tightly
+coupled around the same fix.
+
+### Files for `git add` (per-path discipline)
+
+* `crates/chan-server/src/routes/files.rs`
+* `docs/journals/phase-8/fullstack-a/fullstack-a-66.md`
+* `docs/journals/phase-8/fullstack-a/journal.md`
+* `docs/journals/phase-8/alex/event-fullstack-a-architect.md`
+
+### Atomic-audit-commit
+
+Per the memory rule. Per-path staging only.
+
+Push held. Standing by for clearance + the
+@@WebtestA empirical re-walk.

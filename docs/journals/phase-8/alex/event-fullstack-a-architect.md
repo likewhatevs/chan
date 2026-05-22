@@ -6799,3 +6799,90 @@ Toasts: same-shape auto-dismiss across 4 success / info surfaces (fullstack-a-86
 Single bash invocation per discipline.
 
 Push held. Standing by for clearance.
+
+## 2026-05-22 — poke (fullstack-a-66 slice b follow-up: PARTIAL → empirical fix)
+
+@@WebtestA's PARTIAL verdict was correct +
+specific. Server-side mechanism passed
+(curl-verified Drafts at pos 0); SPA empirical
+fail (no Drafts row).
+
+### Root cause (audit)
+
+Pre-fix server gate at `files.rs:121` used
+`query.dir.is_none()` — TRUE only when no
+`dir` query param. SPA's `api.list("")`
+constructs `/api/files?dir=` (empty-string
+param) so `Some("")` fell through + the
+synthetic Drafts injection silently dropped.
+
+Webtest's `curl /api/files` (no query) hit the
+`None` branch, masking the bug.
+
+### Fix
+
+`crates/chan-server/src/routes/files.rs`:
+* New `is_root_listing(dir: Option<&str>) ->
+  bool` helper covering `None` / `""` / `"/"`
+  / `"//"` / `"."` / `"./"`.
+* Gate swapped to use the helper.
+* 5 new Rust unit tests on each shape +
+  non-root rejection.
+
+### Acceptance
+
+1. FB Drafts row surfaces empirically ✓
+   (mechanism via 5 new Rust pins;
+   @@WebtestA re-walk for empirical).
+2. `dir=Drafts/...` listings unchanged ✓.
+3. No regression on regular dir listing
+   paths ✓ (all 213 prior tests pass).
+
+### Gate
+
+* `cargo test -p chan-server --lib`: **218
+  passed** (+5 net from -a-66 slice b's 213).
+* vitest 916/916 (unchanged; not affected).
+* svelte-check 0 errors / 0 warnings across
+  4023 files.
+* npm build clean.
+
+### Decisions
+
+* **Helper extraction** for unit testability
+  + matches the `normalize_dir_query` pattern
+  next door.
+* **Did NOT extend `normalize_dir_query`** —
+  separate concern.
+* **5 test pins** cover every URL shape;
+  cheap + audit-friendly.
+
+### Lessons
+
+* **Empirical mismatch through curl masks the
+  real bug** — curl's "no `?dir=`" shape
+  doesn't reflect SPA's "`?dir=`" shape.
+  Cross-check the actual HTTP request shape
+  next time before declaring server-side
+  done.
+
+### Suggested commit subject
+
+```
+File browser Drafts row: also gate synthetic injection on dir="" (fullstack-a-66 slice b follow-up)
+```
+
+### Files for `git add`
+
+* `crates/chan-server/src/routes/files.rs`
+* `docs/journals/phase-8/fullstack-a/fullstack-a-66.md`
+* `docs/journals/phase-8/fullstack-a/journal.md`
+* `docs/journals/phase-8/alex/event-fullstack-a-architect.md`
+  (this append)
+
+### Atomic-audit-commit applied
+
+Single bash invocation per discipline.
+
+Push held. Standing by for clearance + the
+@@WebtestA empirical re-walk.

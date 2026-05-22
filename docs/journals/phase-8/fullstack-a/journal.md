@@ -2360,3 +2360,30 @@ persistent.
 
 Impl note at [fullstack-a-86.md](fullstack-a-86.md).
 Outbound poke fired.
+
+## 2026-05-22 — -a-66 slice b follow-up (fix webtest-a PARTIAL)
+
+Webtest-a flagged -a-66 slice b PARTIAL: server
+returned Drafts at pos 0 (curl-verified) but
+SPA-rendered FB had no Drafts. Root cause: SPA's
+`api.list("")` sends `?dir=` (empty string), but
+my server-side gate checked `query.dir.is_none()`
+only — `Some("")` fell through.
+
+Fix in chan-server:
+* Extracted `is_root_listing(dir)` helper that
+  matches None / "" / "/" / "./" / ".".
+* Swapped the gate to use the helper.
+* 5 new Rust unit pins on every shape.
+
+### Gate
+
+* cargo test -p chan-server --lib: **218 passed**
+  (+5 net from -a-66 slice b's 213).
+* vitest 916/916 (unchanged).
+* svelte-check 0/0 across 4023 files.
+* npm build clean.
+
+Impl note at [fullstack-a-66.md](fullstack-a-66.md)
+"## 2026-05-22 — slice b follow-up". Outbound
+poke fired.
