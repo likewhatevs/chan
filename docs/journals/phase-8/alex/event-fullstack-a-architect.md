@@ -6674,3 +6674,53 @@ File browser: synthetic Drafts row at root with yellow tint (fullstack-a-66 slic
 Single bash invocation per discipline.
 
 Push held. Standing by for clearance.
+
+## 2026-05-22 — poke (fullstack-a-85 ready for review)
+
+Tiny SPA fix. Move success toast now
+auto-dismisses.
+
+`web/src/state/store.svelte.ts` success branch
+(line ~2424): swapped `ui.status =` (persistent)
+to `setTransientStatus(moveMsg)` (3s
+auto-dismiss). Empty-linkBits path clears
+`ui.status` to drop any orphan "Moving…".
+Error path preserved persistent.
+
+`moveToastAutoDismiss.test.ts` (new): 4
+raw-source pins.
+
+### Acceptance
+
+1. Move success auto-dismisses at 3s ✓.
+2. Move error stays persistent ✓.
+3. "Moving…" pill behavior unchanged ✓.
+
+### Gate
+
+* vitest **906 / 906** (+4 net from -a-66
+  slice b's 902).
+* svelte-check 0 errors / 0 warnings across
+  4021 files.
+* npm build clean.
+
+### Suggested commit subject
+
+```
+File move: success toast auto-dismisses via setTransientStatus (fullstack-a-85)
+```
+
+### Files for `git add`
+
+* `web/src/state/store.svelte.ts`
+* `web/src/state/moveToastAutoDismiss.test.ts` (new)
+* `docs/journals/phase-8/fullstack-a/fullstack-a-85.md`
+* `docs/journals/phase-8/fullstack-a/journal.md`
+* `docs/journals/phase-8/alex/event-fullstack-a-architect.md`
+  (this append)
+
+### Atomic-audit-commit applied
+
+Single bash invocation per discipline.
+
+Push held. Standing by for clearance.

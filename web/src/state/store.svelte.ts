@@ -2421,10 +2421,24 @@ async function performMove(path: string, target: string): Promise<void> {
         `${resp.conflicts.length} conflict${resp.conflicts.length === 1 ? "" : "s"}`,
       );
     }
-    ui.status =
+    // `fullstack-a-85`: success toast was sticky pre-fix
+    // because the success branch wrote `ui.status =` directly
+    // (persistent shape). Other success confirmations use
+    // `setTransientStatus(msg)` which auto-dismisses at
+    // `TRANSIENT_STATUS_DEFAULT_MS` (3s). Move the success
+    // branch to the transient helper; error path stays
+    // persistent so the user notices failures.
+    const moveMsg =
       linkBits.length > 0
         ? `Moved '${target}' (${linkBits.join(", ")})`
         : null;
+    if (moveMsg) {
+      setTransientStatus(moveMsg);
+    } else {
+      // No link updates worth surfacing — clear any prior
+      // status so the user isn't left looking at "Moving…".
+      ui.status = null;
+    }
   } catch (e) {
     ui.status = `rename failed: ${(e as Error).message}`;
   } finally {

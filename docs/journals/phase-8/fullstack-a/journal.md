@@ -2309,3 +2309,24 @@ landed; resumed -a-66b. Three-file change.
 Impl note at [fullstack-a-66.md](fullstack-a-66.md)
 "## 2026-05-22 — slice b". Outbound poke
 fired.
+
+## 2026-05-22 — -a-85 (move toast auto-dismiss) ready for review
+
+Tiny SPA fix. `store.svelte.ts:2424` success
+branch swapped from `ui.status =` (persistent)
+to `setTransientStatus(moveMsg)` (3s
+auto-dismiss). Error path preserved
+persistent.
+
+4 raw-source pins in
+`moveToastAutoDismiss.test.ts`.
+
+### Gate
+
+* vitest **906 / 906** (+4 net from -a-66
+  slice b's 902).
+* svelte-check 0/0 across 4021 files.
+* npm build clean.
+
+Impl note at [fullstack-a-85.md](fullstack-a-85.md).
+Outbound poke fired.

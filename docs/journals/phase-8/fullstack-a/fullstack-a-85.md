@@ -137,3 +137,60 @@ This is `-a-85`.
 * Adjusting the 3s default timeout.
 * Other adjacent success-path-stuck-as-persistent
   bugs unless surfaced by the same audit.
+
+## 2026-05-22 — ready for review
+
+Two-file change. SPA-only.
+
+### What landed
+
+`web/src/state/store.svelte.ts` (success branch
+in the move helper, line ~2424):
+
+* Pre-fix: `ui.status = ...` direct
+  (persistent shape).
+* Post-fix: extract `moveMsg`; route through
+  `setTransientStatus(moveMsg)` when non-null;
+  fall back to `ui.status = null` when no
+  link updates to surface (clears "Moving…").
+
+`web/src/state/moveToastAutoDismiss.test.ts`
+(new): 4 raw-source pins covering the new
+success path, the preserved error path, and
+the absence of the pre-fix sticky shape.
+
+### Audit findings
+
+* `store.svelte.ts:2424` move success →
+  **FIXED**.
+* Error paths (rename failed / create failed /
+  delete failed) kept persistent ✓.
+
+### Gate
+
+* vitest **906 / 906** (+4 net from `-a-66`
+  slice b's 902).
+* svelte-check 0 errors / 0 warnings across
+  4021 files.
+* npm build clean.
+* Rust gate not re-run.
+
+### Suggested commit subject
+
+```
+File move: success toast auto-dismisses via setTransientStatus (fullstack-a-85)
+```
+
+### Files for `git add`
+
+* `web/src/state/store.svelte.ts`
+* `web/src/state/moveToastAutoDismiss.test.ts` (new)
+* `docs/journals/phase-8/fullstack-a/fullstack-a-85.md`
+* `docs/journals/phase-8/fullstack-a/journal.md`
+* `docs/journals/phase-8/alex/event-fullstack-a-architect.md`
+
+### Atomic-audit-commit applied
+
+Per the memory rule.
+
+Push held. Standing by for clearance.
