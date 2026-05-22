@@ -5377,3 +5377,147 @@ Push held. Standing by for clearance.
 
 I'll wait for either the `-a-66` scope-poke
 routing or your slice-prioritization call.
+
+## 2026-05-22 — poke (fullstack-a-72 URGENT ready for review)
+
+Picked up `-a-72` (editor hang-recovery via
+localStorage) per your URGENT priority. Five-
+file change. SPA-only.
+
+### Pre-pickup audit
+
+@@Alex's "i think we have a task for this" —
+searched phase-8-bugs.md + task journals for
+existing hang-recovery / localStorage / draft-
+buffer tasks. **No existing task matches**;
+proceeded with this body.
+
+### What landed
+
+`state/editorBuffer.ts` (new) — module with:
+
+* `writeEditorBuffer(tabId, content, path)`:
+  persists to `chan:editor-buffer:<tabId>`.
+  Self-prunes on quota exceeded (one retry).
+* `readEditorBuffer(tabId)`: returns the
+  parsed buffer or null. Clears + returns null
+  on malformed entries.
+* `clearEditorBuffer(tabId)`: removes the
+  entry.
+* `pruneEditorBuffers()`: two-pass eviction —
+  TTL (7 days) + size cap (10MB total, oldest-
+  first).
+* `divergentBufferOrNull(tabId, tabPath,
+  diskContent)`: returns the buffer only when
+  it diverges from disk; path-mismatch clears
+  + returns null (defensive against tab-id
+  collisions across drives).
+* SSR-safe: every entry point gates on
+  `typeof localStorage !== "undefined"`.
+
+`FileEditorTab.svelte`:
+
+* `recoveredBuffer` $state + mount-time
+  divergence check via
+  `divergentBufferOrNull`.
+* Debounced (500ms) `writeEditorBuffer` on
+  every `tab.content` mutation. Skips the
+  write + clears stale buffer when
+  `content === saved` (clean state).
+* Mount teardown flushes pending timer so
+  Cmd+W close doesn't drop the last 500ms.
+* `restoreFromBuffer()` sets `tab.content`
+  to the buffer content; debounced effect
+  re-persists on next tick.
+* `discardBuffer()` clears storage +
+  dismisses banner.
+* Banner template + CSS at top of
+  `.editor-tab`. Uses `--warn-text` for the
+  Restore button (attention affordance).
+
+`App.svelte`: `pruneEditorBuffers()` on mount.
+Keeps localStorage tidy for long-lived
+sessions.
+
+`state/editorBuffer.test.ts` (new): 13 pins.
+Includes an inline Storage polyfill in
+`beforeAll` — vitest 4 + jsdom 29 in this repo
+don't expose `localStorage` by default
+(verified empirically:
+`typeof window === "object"` but
+`typeof window.localStorage === "undefined"`).
+Polyfill matches the Storage shape verbatim.
+
+### Acceptance
+
+1. Edit unsaved + force reload → banner
+   surfaces with Restore/Discard ✓.
+2. Save + reload → no banner (clean state
+   cleared the buffer) ✓.
+3. 7-day TTL eviction on app mount ✓.
+4. 10MB total-size cap with oldest-first
+   eviction ✓.
+
+### Gate
+
+* vitest **809 / 809** (+13 net from `-a-67`
+  slice 1b's 796).
+* svelte-check 0 errors / 0 warnings across
+  4008 files.
+* npm build clean.
+* Rust gate not re-run.
+
+### Decisions
+
+* **localStorage (not sessionStorage)** —
+  task body specifies; persistence across
+  window close + reopen is the desired
+  semantic.
+* **Tab-id keys** — SerTab persists tab.id
+  across reloads, so the key is stable.
+* **500ms debounce** — balances "don't miss
+  recent edits" against "don't spam storage."
+* **Clear on clean** — keeps storage
+  bounded; avoids surfacing the banner on
+  cleanly-saved files.
+* **Banner over modal** — non-blocking; user
+  can ignore + keep working with disk
+  content.
+* **Terminal scrollback deferred** — task
+  body recommends primary focus on editor;
+  xterm.js scrollback is genuinely different
+  machinery. If @@Alex flags empirically,
+  cut a separate task.
+
+### vitest jsdom note
+
+The localStorage polyfill in the test file is
+a workaround for the repo's vitest config not
+exposing window.localStorage. If you want me
+to add a global setup file that polyfills
+once for all tests, flag it; for now the
+inline polyfill keeps this commit self-
+contained.
+
+### Suggested commit subject
+
+```
+Editor hang-recovery: persist unsaved content to localStorage with restore banner (fullstack-a-72)
+```
+
+### Files for `git add`
+
+* `web/src/state/editorBuffer.ts` (new)
+* `web/src/state/editorBuffer.test.ts` (new)
+* `web/src/components/FileEditorTab.svelte`
+* `web/src/App.svelte`
+* `docs/journals/phase-8/fullstack-a/fullstack-a-72.md`
+* `docs/journals/phase-8/fullstack-a/journal.md`
+* `docs/journals/phase-8/alex/event-fullstack-a-architect.md`
+  (this append)
+
+### Atomic-audit-commit applied
+
+Single bash invocation per discipline.
+
+Push held. Standing by for clearance.

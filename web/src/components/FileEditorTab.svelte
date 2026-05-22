@@ -11,6 +11,12 @@
 
   import Wysiwyg from "../editor/Wysiwyg.svelte";
   import Source from "../editor/Source.svelte";
+  import {
+    clearEditorBuffer,
+    divergentBufferOrNull,
+    writeEditorBuffer,
+    type EditorBuffer,
+  } from "../state/editorBuffer";
   import JsonPretty from "../editor/JsonPretty.svelte";
   import CsvTable from "../editor/CsvTable.svelte";
   import {
@@ -143,6 +149,72 @@
       else sourceRef?.focus();
     });
   });
+
+  // `fullstack-a-72` hang-recovery via localStorage:
+  //
+  // * On mount: compare any pre-existing buffer to the
+  //   just-loaded disk content (`tab.saved`). If divergent,
+  //   surface `recoveredBuffer` so the banner renders + the user
+  //   can restore or discard.
+  // * On every content mutation (debounced 500ms): persist
+  //   `tab.content` to localStorage so a forced reload doesn't
+  //   lose unsaved data.
+  // * On save success / discard / unmount: clear the buffer.
+  let recoveredBuffer: EditorBuffer | null = $state(null);
+  let bufferWriteTimer: ReturnType<typeof setTimeout> | null = null;
+  const BUFFER_WRITE_DEBOUNCE_MS = 500;
+
+  $effect(() => {
+    // Mount-time divergence check. Use the AS-LOADED disk
+    // content (`tab.saved`) — not `tab.content` — since the
+    // user may have already started editing this tick and we
+    // need to compare against what the FILE has, not what the
+    // BUFFER would have.
+    const disk = tab.saved ?? tab.content;
+    recoveredBuffer = divergentBufferOrNull(tab.id, tab.path, disk);
+    return () => {
+      // On unmount, flush any pending write so a Cmd+W close
+      // doesn't drop the last 500ms of edits.
+      if (bufferWriteTimer !== null) {
+        clearTimeout(bufferWriteTimer);
+        bufferWriteTimer = null;
+      }
+    };
+  });
+
+  $effect(() => {
+    // Debounced persistence. Track `tab.content` + `tab.saved`
+    // as reactive deps so the effect re-runs on every
+    // mutation. Skip the write when the content matches the
+    // saved-on-disk content (clean state — nothing to recover).
+    const content = tab.content;
+    const saved = tab.saved;
+    if (content === saved) {
+      // Clean — clear any leftover buffer so a stale
+      // recovered-state doesn't surface on next reload.
+      clearEditorBuffer(tab.id);
+      return;
+    }
+    if (bufferWriteTimer !== null) clearTimeout(bufferWriteTimer);
+    bufferWriteTimer = setTimeout(() => {
+      writeEditorBuffer(tab.id, content, tab.path);
+      bufferWriteTimer = null;
+    }, BUFFER_WRITE_DEBOUNCE_MS);
+  });
+
+  function restoreFromBuffer(): void {
+    if (!recoveredBuffer) return;
+    tab.content = recoveredBuffer.content;
+    recoveredBuffer = null;
+    // The newly-set content is now divergent from `tab.saved`,
+    // so the debounced write effect will re-persist it on the
+    // next tick. No need to clear storage here.
+  }
+
+  function discardBuffer(): void {
+    clearEditorBuffer(tab.id);
+    recoveredBuffer = null;
+  }
 
   /// Read-only mode for this tab. The status bar's lamp toggle
   /// drives `tab.readMode` directly; an OS-level read-only file
@@ -549,6 +621,33 @@
 <svelte:window onkeydown={onMenuKeydown} onpointerdown={onDocPointerDown} />
 
 <div class="editor-tab">
+  {#if recoveredBuffer}
+    <!-- `fullstack-a-72`: hang-recovery banner. Surfaces when
+         localStorage has unsaved content for this tab that
+         diverges from the on-disk content. User picks Restore
+         (replace editor content with the buffer) or Discard
+         (clear the buffer and keep the disk content). Banner
+         clears itself either way. -->
+    <div class="recovery-banner" role="alert">
+      <span class="recovery-banner-text">
+        Unsaved changes from a previous session were found.
+      </span>
+      <button
+        type="button"
+        class="recovery-banner-btn recovery-banner-restore"
+        onclick={restoreFromBuffer}
+      >
+        Restore
+      </button>
+      <button
+        type="button"
+        class="recovery-banner-btn"
+        onclick={discardBuffer}
+      >
+        Discard
+      </button>
+    </div>
+  {/if}
   {#if menuOpen}
     <!-- Tab menu bubble. Anchored to the tab title in the pane's
          tab strip; rendered here so it has direct access to the
@@ -1114,6 +1213,47 @@
     min-width: 0;
     background: var(--bg);
     color: var(--text);
+  }
+  /* `fullstack-a-72` hang-recovery banner. Sits at the very top
+     of the editor-tab body, above the menu bubble + the editor
+     host. Uses the existing `--warn-text` palette so it reads as
+     an attention-needed affordance without competing with the
+     editor's content area below. Stays compact (single row) so
+     it doesn't push the document down dramatically. */
+  .recovery-banner {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    padding: 0.5rem 1rem;
+    background: color-mix(in srgb, var(--warn-text) 12%, var(--bg));
+    border-bottom: 1px solid var(--border);
+    color: var(--text);
+    font-size: 0.875rem;
+  }
+  .recovery-banner-text {
+    flex: 1;
+    min-width: 0;
+  }
+  .recovery-banner-btn {
+    padding: 0.25rem 0.75rem;
+    background: var(--btn-bg);
+    border: 1px solid var(--btn-border);
+    border-radius: 4px;
+    color: var(--text);
+    font-size: 0.875rem;
+    cursor: pointer;
+  }
+  .recovery-banner-btn:hover {
+    border-color: var(--btn-hover);
+  }
+  .recovery-banner-restore {
+    background: var(--warn-text);
+    color: var(--bg);
+    border-color: var(--warn-text);
+  }
+  .recovery-banner-restore:hover {
+    opacity: 0.9;
+    border-color: var(--warn-text);
   }
   /* Tab menu bubble. Fixed-position so it anchors to the trigger
      button regardless of which pane the user clicked in; the

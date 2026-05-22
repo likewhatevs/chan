@@ -1882,3 +1882,46 @@ Impl note at [fullstack-a-67.md](fullstack-a-67.md)
 "## 2026-05-22 — slice 1b". Outbound poke
 fired (with the scope poke for -a-66 stacked
 above).
+
+## 2026-05-22 — -a-72 URGENT (editor hang-recovery) ready for review
+
+Picked up `-a-72` per architect's URGENT
+priority (data-loss prevention).
+
+### Pre-pickup audit
+
+Searched phase-8-bugs.md + journals for
+existing hang-recovery / localStorage / draft-
+buffer tasks per @@Alex's "i think we have a
+task for this" framing. No existing task found
+that matches; proceeded with this body.
+
+### What landed
+
+Five-file change.
+
+* `state/editorBuffer.ts` (new): localStorage
+  buffer module. `writeEditorBuffer`,
+  `readEditorBuffer`, `clearEditorBuffer`,
+  `pruneEditorBuffers` (TTL + size cap),
+  `divergentBufferOrNull` helper.
+* `FileEditorTab.svelte`: mount-time
+  divergence check + debounced (500ms) write
+  on content mutation + clear on clean state.
+  Restore/Discard banner at top of editor.
+* `App.svelte`: prune sweep on app mount.
+* `editorBuffer.test.ts` (new): 13 raw-source
+  + behavior pins. Inline Storage polyfill in
+  beforeAll because vitest 4 + jsdom 29 in
+  this repo don't expose localStorage by
+  default.
+
+### Gate
+
+* vitest **809 / 809** (+13 net from `-a-67`
+  slice 1b's 796).
+* svelte-check 0/0 across 4008 files.
+* npm build clean.
+
+Impl note at [fullstack-a-72.md](fullstack-a-72.md).
+Outbound poke fired.

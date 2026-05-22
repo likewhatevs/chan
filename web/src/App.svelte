@@ -85,6 +85,7 @@
     showOrSpawnRichPromptInFocusedPane,
   } from "./state/tabs.svelte";
   import { applyEditorTheme, DEFAULT_EDITOR_THEME } from "./state/editorTheme";
+  import { pruneEditorBuffers } from "./state/editorBuffer";
   import {
     applyInitialPageWidth,
     watchPageWidth,
@@ -826,6 +827,15 @@
   }
   onMount(() => window.addEventListener("chan:command", onChanCommand));
   onDestroy(() => window.removeEventListener("chan:command", onChanCommand));
+
+  // `fullstack-a-72`: prune stale + over-cap editor-buffer
+  // entries from localStorage at app load. Background task; the
+  // synchronous read/write paths in editorBuffer.svelte.ts also
+  // self-prune on quota-exceeded but doing a sweep here keeps
+  // localStorage tidy for users with long-lived sessions.
+  onMount(() => {
+    pruneEditorBuffers();
+  });
 
   /// `fullstack-a-59` pane-focus-click restore: when chan-desktop is
   /// unfocused and the user clicks back onto the window, the first
