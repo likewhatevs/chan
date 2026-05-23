@@ -1047,3 +1047,13 @@
   - lane: @@CI primary for the CI re-enable; @@Systacean for the chan-drive / chan-server portability fixes; @@FullStackB for chan-desktop Windows bundling.
   - trigger to revisit: Round-3 / public-flip work, OR a real-user Windows chan-desktop release ask. Per @@Alex's framing, this is "for now"; scope-deferral, not permanent drop.
   - NOT YET DISPATCHED — Round-3+ umbrella; per-sub-issue dispatch when work picks up.
+
+- Terminal glyph rendering corrupted — characters substituted ("C"→"9", "u"→"h", "Svelte"→"Sveite", etc.) post-v0.12.0
+  - reported 2026-05-23 by @@Alex via in-session screenshot. The terminal pane (Architect's @@Architect tab in chan.app v0.12.0) renders text with per-character glyph substitution that looks like a glyph atlas / texture-mapping bug, NOT a clean font fallback (those would replace whole runs consistently). "Thanks" → "Tfanks", "Contributing" → with several swaps, "MCP" with offset. ASCII letters mostly affected; numbers and uppercase mixed.
+  - suspects:
+    * WebGL renderer (shipped `-b-29`) — glyph atlas corruption / texture-coord bug.
+    * Source Code Pro font load race (`-b-30` slice b: spawn-time `fontFamily` reorder + download endpoint). If SCP is enabled but the woff2 download is incomplete or the font face hasn't finished loading at spawn, the renderer may key into a partially-populated glyph table.
+    * Some recent SPA change between v0.11.2 and v0.12.0 that hits the terminal text path.
+  - reproduces: unclear; need @@Alex confirmation of whether it happens on every terminal or only in some panes; whether it persists across reloads; whether SCP setting is on.
+  - lane: SPA-side debugging in `web/src/components/TerminalTab.svelte` + the renderer. @@FullStackA territory.
+  - NOT YET DISPATCHED — pending more data from @@Alex (consistent reproduction, SCP-on-or-off, reload behaviour) before cutting a task. If it becomes a release-blocker before v0.13.0, cuts as `fullstack-a-N+1` polish ticket.
