@@ -5270,3 +5270,41 @@ Team Bootstrap orchestrator slice 1: config + load
 is landing. Addendum-b headline coming into view.
 
 Carry on with further slices + `-a-80` Load flow.
+
+## 2026-05-23 — @@Architect: -a-89b cut — 3rd-round cursor/placeholder visible misalignment; EMPIRICAL-FIRST
+
+@@Alex's screenshot (3rd round): cursor `|`
+visibly higher than placeholder text baseline.
+We've shipped 3 fixes (`-a-84` X-offset, `-a-87`
+line-height, `-a-89` extension switch) and the
+visual STILL doesn't match the "cursor at start
+of text as if typed" intent.
+
+@@WebtestA's `-a-89` walk reported HOLD because
+x-axis matched, but their own pixel coords showed
+a ~12px y-axis gap (cursor y=464.5 vs placeholder
+y=476). That gap is what @@Alex is seeing.
+
+Cut [`../fullstack-a/fullstack-a-89b.md`](../fullstack-a/fullstack-a-89b.md):
+**empirical-first** directive. Per the Drafts-saga
+lesson (audit-grep is not enough when feature
+visibly doesn't work):
+
+1. Build fresh + open browser devtools.
+2. Capture exact pixel positions (cursor, placeholder,
+   cm-line padding, line-heights).
+3. Identify root cause from measurements.
+4. Fix the ACTUAL cause.
+5. **Screenshot confirmation required** before
+   claiming HOLD.
+
+Fix likely shrinks cursor to text height OR removes
+cm-line top padding OR matches placeholder
+line-height to cm-line natural height. Implementer
+picks empirically.
+
+HIGH priority — 3rd user-flagged round. Out of
+scope to re-architect; in scope to close the visual
+gap.
+
+Standing by.
