@@ -5888,3 +5888,39 @@ Bug entry added to `phase-8-bugs.md` for audit-trail
 + recurring-context persistence.
 
 Standing by.
+
+## 2026-05-23 — poke (fullstack-a-97 cut: terminal glyph bug — RELEASE BLOCKER for v0.13.0)
+
+@@Alex confirmed recurrence of the terminal-glyph rendering bug with three side-by-side screenshots (1 OK, 2 corrupted). Multi-pane now; not transient. @@Alex framing:
+
+> "when the agents are switching the fonts to apply those rolling effects of colour and why not we get these messed up characters. this is a new bug. It was not happening in the previous release."
+
+REGRESSION from v0.11.2 → v0.12.0. Promoted to **P0 release blocker for v0.13.0**.
+
+### Dispatch: [`fullstack-a-97`](../fullstack-a/fullstack-a-97.md)
+
+Focused fix task. Highlights:
+
+* Bisect target between `chan-v0.11.2` and `chan-v0.12.0`. Primary suspect: `-b-29` WebGL renderer (glyph atlas / texture-coord bug under animated re-render). Secondary: `-b-30` SCP font load race.
+* Reproduce against a `chan serve` throwaway drive + multiple terminal panes + animated ANSI text source (Claude Code session, `cargo build`, etc.).
+* Fix the renderer path; pin with a test that exercises animated ANSI rendering.
+* Do NOT paper over with a font swap; fix the renderer.
+
+### Priority ordering
+
+`-97` is **P0**; takes priority over `-96`'s sub-pass 4 (api_read_file spawn_blocking).
+
+* If you're mid-flight on `-96` sub-pass 4 (the chan-server file-read wrap), **finish that sub-pass + commit** (it's small + close to done), THEN pick `-97`.
+* If you haven't started sub-pass 4, **pick `-97` first**.
+* The other `-96` sub-passes (dead-code, a11y, perf pass) stay queued after `-97` lands.
+
+### Safety guardrails
+
+* Do NOT touch @@Alex's running chan.app session. Throwaway drives only.
+* If the bisect surfaces a fix that touches `desktop/`, poke back — I bridge with @@Desktect via @@Alex.
+
+### Authorization
+
+Yes for SPA-side edits in `web/` + WebGL renderer paths + test pins + throwaway drives + dev `cargo build`. Time-boxed: 1-2 sessions for repro + bisect + fix; scope-poke back if the bisect surprises.
+
+Standing by.

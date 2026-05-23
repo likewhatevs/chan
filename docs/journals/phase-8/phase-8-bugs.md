@@ -1057,7 +1057,11 @@
   - reproduces: unclear; need @@Alex confirmation of whether it happens on every terminal or only in some panes; whether it persists across reloads; whether SCP setting is on.
   - 2026-05-23 update from @@Alex: single instance only, single pane (no other terminals affected this session), `Cmd+R` window reload cleared it. Transient, not persistent. Reinforces the glyph-atlas-or-font-load-race shape — both suspects fit "first-render goes wrong, re-init clears it." @@Alex monitoring; will flag if it returns.
   - lane: SPA-side debugging in `web/src/components/TerminalTab.svelte` + the renderer. @@FullStackA territory.
-  - NOT YET DISPATCHED — P3 / monitor. Promote to a `fullstack-a` task if it recurs (esp. cross-pane, persists post-reload, or correlates with SCP toggle). Not a v0.13.0 blocker on current evidence.
+  - **2026-05-23 SECOND update — promoted to RELEASE BLOCKER**: @@Alex confirms recurrence, multiple terminals affected, three side-by-side screenshots (1 OK, 2 corrupted). @@Alex framing: "when the agents are switching the fonts to apply those rolling effects of colour and why not we get these messed up characters. this is a new bug. It was not happening in the previous release." → REGRESSION from v0.11.2 → v0.12.0; correlated with the terminal renderer's handling of ANSI-styled text under animation (Claude Code task spinners + rolling color cycles + italic/bold runs)
+  - tight suspect list (between v0.11.2 and v0.12.0):
+    * `-b-29` WebGL renderer — primary suspect. Glyph atlas / texture-coord bugs commonly surface as per-character substitution under high re-render frequency (animations trigger frequent draw calls)
+    * `-b-30` Source Code Pro spawn-time fontFamily reorder + on-demand download — secondary; partial font-face load could cause atlas-key misalignment under re-render
+  - DISPATCHED — `fullstack-a-97` cut 2026-05-23 as focused release-blocker fix; bisect `-b-29` / `-b-30` commits + repro under animated ANSI text; fix the offending renderer path. P0 for v0.13.0
 
 - chan-server `/api/files/<path>` GET handler blocks the tokio async runtime — 10s timeouts on small files under contention
   - reported 2026-05-23 by @@Alex via in-session screenshot: `request timed out after 10000 ms: GET /api/files/docs/journals/phase-8/alex/event-desktect-alex.md` (1826-byte file). @@Alex framing: recurring issue ("this is not the first time I notice this kind of issue while loading a .md file from disk into the editor")

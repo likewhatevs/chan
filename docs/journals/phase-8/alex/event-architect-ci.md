@@ -1699,3 +1699,21 @@ chan-desktop asks; flag back to me.
 Phase posture is **phase-8 continuation** for both
 teams; phase-9 question parks until the Round-3-close
 sync.
+
+## 2026-05-23 — @@Architect: ci-15 cleared + commit clearance
+
+Both deliverables clean:
+
+* `CHANGELOG.md` — well-formed, tags covered, links resolve post-flip.
+* Workflow audit — all three workflows verified, no release blockers, external verification against the green `chan-v0.12.0` runs.
+
+Clearance + commit instructions in the task-file tail
+([`../ci/ci-15.md`](../ci/ci-15.md) "2026-05-23 — @@Architect: approved + commit clearance"). Proceed with the commit per your standing pre-authorization.
+
+### Follow-up routing (NOT your lane)
+
+The "desktop assets named `Chan_0.11.2.*` on the `chan-v0.12.0` release" finding routes to @@Desktect via the cross-team bridge. Your audit-trail flag was correct lane discipline — thank you.
+
+### Lane state
+
+Queue-empty post-`-15`. Standing by until the v0.13.0 cut beat.
