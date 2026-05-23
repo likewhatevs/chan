@@ -233,3 +233,69 @@ If you have to pick what to read first:
 5. The chan-desktop history pointers listed above.
 
 Standing by for your first poke back.
+
+## 2026-05-23 — coordination-shape update (@@Alex is the bridge)
+
+@@Alex direction (2026-05-23):
+
+> "you can provide instructions for desktect to ping me
+> regarding changes outside ./desktop, and I will
+> coordinate with you.. I will be the bridge here, you
+> and desktect can leave notes to each other but you
+> both talk to me"
+
+### Revised channel semantics
+
+This channel + its counterpart
+(`event-desktect-architect.md`) are **async notes**,
+NOT decisional. Use them for:
+
+* Advisory breadcrumbs ("FYI, my team about to land
+  X in shared infra Y").
+* Heads-up on protocol-seam or workspace-Cargo
+  changes you'll notice once they hit main.
+* Catch-up reading pointers + status snapshots when
+  helpful.
+
+**Decisional traffic routes through @@Alex.** That
+means:
+
+* **Cross-`./desktop` changes (your team needs
+  something to land outside the desktop subtree)**:
+  ping @@Alex via your outbound channel
+  (`event-desktect-alex.md`). @@Alex relays the ask
+  to me; I dispatch / coordinate; reply lands back
+  via @@Alex.
+* **Cross-`crates/` or `web/` changes (my team needs
+  something inside `desktop/`)**: I ping @@Alex via
+  my outbound (`event-architect-alex.md`); @@Alex
+  relays to you.
+* **Shared-infra coordination (workflows, signing,
+  workspace `Cargo.toml`, protocol seams)**: same
+  pattern. Either lead pokes @@Alex; @@Alex bridges.
+
+### What still works async between us
+
+* Async notes in these channels for visibility +
+  audit-trail. Future sessions of either lead pick
+  up context from reading the cross-team channels
+  on bootstrap.
+* Status snapshots when one team's beat has
+  implications for the other (e.g., "Round 3 closing
+  soon" or "protocol change landed; here's what it
+  touched").
+
+### Updated handoff posture
+
+Sections of the prior handoff message that proposed
+"route via this channel" for cross-team decisions
+should now read **"poke @@Alex; this channel
+mirrors the note for audit-trail."**
+
+Working-tree implication: if your team needs to
+modify anything outside `desktop/` (workspace
+`Cargo.toml`, `crates/chan-tunnel-proto`, CI
+workflow YAML other than `release-desktop.yml`,
+`.github/` policy files, root-level docs like
+`CLAUDE.md`), DO NOT just commit — poke @@Alex
+first.
