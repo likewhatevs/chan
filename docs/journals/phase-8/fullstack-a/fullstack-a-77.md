@@ -475,3 +475,184 @@ Per the memory rule. Per-path staging only.
 
 Push held. Standing by for clearance +
 slice 2 (state machine + overlay) pickup.
+
+## 2026-05-23 — SPA slice 2 (state machine + overlay) ready for review
+
+Five-file change. SPA-only.
+
+### What landed
+
+`web/src/state/screensaver.svelte.ts` (new):
+* Singleton `screensaver` state with 5
+  fields (enabled / timeout_secs / pin_set
+  / locked / loaded).
+* `loadScreensaverState()` — fetches from
+  `/api/screensaver/state`; populates the
+  singleton; arms the inactivity timer.
+* `noteScreensaverActivity()` — reset on
+  user events; short-circuits when locked
+  or disabled.
+* `lockNow()` — manual-trigger lock
+  (slice 3 wires the chord).
+* `unlockWithPin(pin, driveSalt)` —
+  hashes via slice 1's `hashPin` + posts
+  to `/verify`; flips `locked=false` on
+  success; surfaces failure to the
+  caller.
+* `pauseScreensaverTimer()` — caller-side
+  pause for modals; returns idempotent
+  release fn. Mirrors `pinAccessory()`
+  from `idle.svelte.ts`.
+* `installScreensaverTracker()` — global
+  listeners on keydown / mousedown /
+  touchstart / click / scroll / wheel /
+  pointermove (wider set than
+  `idle.svelte.ts`'s; matches "user
+  stepped away" semantic).
+* Internal `armInactivityTimer` guards
+  on enabled + locked + pauseCount.
+
+`web/src/components/ScreensaverOverlay.svelte`
+(new):
+* Renders `{#if screensaver.locked}` —
+  full-window cover with PIN input + shake
+  on wrong.
+* `role="dialog"` + `aria-modal="true"`
+  + `aria-label="Screen locked"` for AT
+  support.
+* PIN input auto-focuses on lock via
+  `$effect` watching `screensaver.locked`.
+* Enter key triggers `submit()`; wrong
+  PIN triggers 400ms shake animation +
+  clears input. No rate limiting per
+  task body.
+* No-PIN-set branch surfaces a copy
+  pointing to Settings (chan-drive's
+  verify returns `verified: false` when
+  no PIN is set; the overlay still arms
+  but the user can configure from
+  Settings).
+* CSS `@keyframes screensaver-shake`
+  with `translateX` jitter; z-index 2000
+  sits above every other chan overlay.
+
+`web/src/App.svelte`:
+* Imports `installScreensaverTracker` +
+  `loadScreensaverState` from the new
+  state module.
+* Imports + mounts
+  `ScreensaverOverlay` at App root.
+* `onMount` calls `installScreensaverTracker()`
+  alongside `installIdleTracker()` (the
+  short-window pill tracker stays
+  separate; same boot sequence).
+* After `bootstrap()`, fire-and-forget
+  `void loadScreensaverState()`. Failure
+  is non-fatal — the singleton stays in
+  its default disarmed state.
+
+`web/src/state/screensaverMachine.test.ts`
+(new): 21 pins across:
+* 2 pins — singleton + interface shape.
+* 6 pins — state machine helpers
+  (load / noteActivity / lockNow /
+  unlockWithPin / pauseTimer / install
+  + the arm-time guards).
+* 8 pins — overlay component (gating /
+  ARIA / focus / Enter handler /
+  submit / shake / CSS animation /
+  z-index).
+* 4 pins — App.svelte wiring (imports
+  / mount / onMount call /
+  post-bootstrap load).
+
+### Acceptance (slice 2)
+
+1. **State machine drives lock state** ✓
+   — singleton + helpers pinned.
+2. **Overlay renders full-window when
+   locked** ✓ — backdrop CSS + z-index +
+   gating.
+3. **PIN input auto-focuses** ✓ —
+   `$effect` ties to lock state.
+4. **Wrong PIN shakes + clears** ✓.
+5. **Manual `lockNow()` available** ✓ —
+   slice 3 wires the chord.
+
+### Slice 3 plan
+
+* Settings Features section extension —
+  pair with `-a-76` slice 2's reports +
+  BGE toggles. Add: screensaver
+  enable/disable toggle; timeout
+  slider/select; PIN setup +
+  change/clear flow.
+* Manual "Lock now" chord (suggested
+  `Mod+L` per the audit). Routes to
+  `lockNow()`.
+* `pauseScreensaverTimer()` consumers —
+  Settings overlay + any open dialog
+  call it on mount + release on
+  unmount.
+
+### Gate
+
+* vitest **1099 / 1099** (+21 net from
+  `-a-77` slice 1's 1078).
+* svelte-check 0 errors / 0 warnings
+  across 4046 files.
+* npm build clean.
+* Rust gate not re-run (no Rust
+  touched).
+
+### Decisions
+
+* **Singleton `$state`** vs Svelte store
+  — consistent with the rest of chan's
+  state modules (idle.svelte.ts /
+  pathPromptState / spawnDialogState).
+* **Wider event set** than idle.svelte —
+  keydown + scroll + pointermove +
+  wheel. Idle deliberately ignores
+  keydown (typing leaves pills hidden);
+  screensaver must reset on any
+  evidence of presence.
+* **Auto-focus the PIN input** —
+  immediate; no extra click required.
+  Mirror of the empty-pane carousel
+  auto-focus.
+* **No rate limiting** — per task body's
+  local-only framing.
+* **Overlay above every overlay** — z=2000;
+  spawn/team dialog z=50;
+  disconnect/missing-token z=1500.
+* **Fire-and-forget state load** — failure
+  leaves the singleton disarmed, which
+  is the safe default.
+
+### Suggested commit subject
+
+```
+Screensaver: state machine + full-window overlay (fullstack-a-77 slice 2)
+```
+
+Single commit. State module + overlay
+component + App root wiring + 21 test
+pins.
+
+### Files for `git add` (per-path discipline)
+
+* `web/src/state/screensaver.svelte.ts` (new)
+* `web/src/components/ScreensaverOverlay.svelte` (new)
+* `web/src/App.svelte`
+* `web/src/state/screensaverMachine.test.ts` (new)
+* `docs/journals/phase-8/fullstack-a/fullstack-a-77.md`
+* `docs/journals/phase-8/fullstack-a/journal.md`
+* `docs/journals/phase-8/alex/event-fullstack-a-architect.md`
+
+### Atomic-audit-commit
+
+Per the memory rule. Per-path staging only.
+
+Push held. Standing by for clearance +
+slice 3 (Settings UI + Mod+L chord).

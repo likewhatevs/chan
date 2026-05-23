@@ -94,6 +94,11 @@
     watchPageWidth,
   } from "./state/pageWidth.svelte";
   import { installIdleTracker, setReadMode } from "./state/idle.svelte";
+  import {
+    installScreensaverTracker,
+    loadScreensaverState,
+  } from "./state/screensaver.svelte";
+  import ScreensaverOverlay from "./components/ScreensaverOverlay.svelte";
 
   // Keep the URL hash in sync with the current layout so reload (and
   // copy-paste of the URL) restores the same panes/tabs. We touch
@@ -260,6 +265,15 @@
     // Idle tracker: after 2.5s without scroll/click/keypress, the
     // floating pills fade. Any input flips them back on.
     installIdleTracker();
+    // `fullstack-a-77` slice 2: screensaver inactivity
+    // tracker. Different cadence (default 5 min, per-drive
+    // configurable) + wider event set (keydown + scroll +
+    // pointer move; opposite of `installIdleTracker`'s
+    // short-window trigger set). Tracker installs the
+    // listeners regardless of `enabled` state so a later
+    // /api/screensaver/state load doesn't need a re-install
+    // pass; the lock fires only when `enabled=true`.
+    installScreensaverTracker();
     // Hook pagehide BEFORE bootstrap so a fast reload during the
     // initial load still flushes any in-flight session changes.
     installSessionFlushHook();
@@ -273,6 +287,13 @@
     // before this point). Empty pane stays empty; the carousel
     // + shortcut hints carry the empty-state UX.
     bootstrapped = true;
+    // `fullstack-a-77` slice 2: fire-and-forget load of the
+    // per-drive screensaver state. Tracker is already
+    // installed above; the load populates the singleton with
+    // the server-side enabled/timeout/pin_set view. Failure
+    // is non-fatal (the singleton stays in its default
+    // disarmed state).
+    void loadScreensaverState();
     // Visibility-change resume hook. Browsers throttle / suspend
     // backgrounded tabs and the WebSocket reconnect can stretch
     // to seconds before the user returns; a manual nudge here
@@ -1013,6 +1034,12 @@
      SPA shell without the launch token, so /api 401s and the app
      is unusable until they reopen the original URL. -->
 <MissingTokenOverlay />
+<!-- `fullstack-a-77` slice 2: screensaver cover. Mounts at App
+     root so z-index sits above every chan overlay
+     (`screensaver-backdrop` uses z=2000). The component
+     renders nothing while `screensaver.locked === false`;
+     when locked it covers the SPA + accepts PIN entry. -->
+<ScreensaverOverlay />
 
 <style>
   /* Theme palette. Defaults to dark; [data-theme="light"] overrides.

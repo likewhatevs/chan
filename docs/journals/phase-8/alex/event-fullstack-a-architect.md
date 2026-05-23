@@ -9417,3 +9417,99 @@ Screensaver: api.screensaver* client methods + PBKDF2 PIN-hash helper (fullstack
 Single bash invocation per discipline.
 
 Push held. Standing by for clearance + slice 2.
+
+## 2026-05-23 — poke (fullstack-a-77 SPA slice 2: state machine + overlay ready for review)
+
+Five-file change. SPA-only.
+
+### What landed
+
+`state/screensaver.svelte.ts` (new):
+* Singleton + interface (enabled /
+  timeout / pin_set / locked / loaded).
+* Helpers: load / noteActivity /
+  lockNow / unlockWithPin /
+  pauseTimer / installTracker.
+* Wider event set than idle.svelte
+  (keydown + scroll + pointermove + …).
+* Pause-counter for modal/dialog
+  consumers (mirrors `pinAccessory()`).
+
+`components/ScreensaverOverlay.svelte`
+(new): full-window backdrop; PIN input;
+shake on wrong; aria-modal=true;
+z-index=2000.
+
+`App.svelte`: imports + mounts the
+overlay; installs the tracker
+alongside idle; loads state
+post-bootstrap.
+
+`screensaverMachine.test.ts` (new): 21
+pins.
+
+### Acceptance (slice 2)
+
+1. State machine drives lock ✓.
+2. Overlay full-window when locked ✓.
+3. PIN auto-focuses ✓.
+4. Wrong PIN shakes + clears ✓.
+5. Manual lockNow() exposed ✓ (slice 3
+   wires the chord).
+
+### Slice 3 plan
+
+* Settings Features section extension —
+  pair with -a-76 slice 2's toggles.
+  Enable + timeout + PIN setup/change/
+  clear.
+* Manual "Lock now" chord (Mod+L).
+* `pauseScreensaverTimer` consumers
+  (Settings overlay + open dialogs).
+
+### Gate
+
+* vitest **1099 / 1099** (+21 net from
+  -a-77 slice 1's 1078).
+* svelte-check 0 errors / 0 warnings
+  across 4046 files.
+* npm build clean.
+
+### Decisions
+
+* **Singleton `$state`** consistent with
+  other chan state modules.
+* **Wider event set** vs idle.svelte
+  (which ignores keydown).
+* **Auto-focus PIN** on lock.
+* **No rate limiting** per task body's
+  local-only framing.
+* **Z-index 2000** above all other
+  overlays.
+* **Fire-and-forget load** — failure
+  leaves singleton disarmed (safe
+  default).
+
+### Suggested commit subject
+
+```
+Screensaver: state machine + full-window overlay (fullstack-a-77 slice 2)
+```
+
+### Files for `git add`
+
+* `web/src/state/screensaver.svelte.ts` (new)
+* `web/src/components/ScreensaverOverlay.svelte` (new)
+* `web/src/App.svelte`
+* `web/src/state/screensaverMachine.test.ts` (new)
+* `docs/journals/phase-8/fullstack-a/fullstack-a-77.md`
+* `docs/journals/phase-8/fullstack-a/journal.md`
+* `docs/journals/phase-8/alex/event-fullstack-a-architect.md`
+  (this append)
+
+### Atomic-audit-commit applied
+
+Single bash invocation per discipline.
+
+Push held. Standing by for clearance +
+slice 3.

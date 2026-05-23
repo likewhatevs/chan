@@ -3261,3 +3261,36 @@ chord) follow.
 Impl note at [fullstack-a-77.md](fullstack-a-77.md)
 "## 2026-05-23 — SPA slice 1". Outbound
 poke fired.
+
+## 2026-05-23 — -a-77 slice 2 (state machine + overlay) ready for review
+
+Five-file change. SPA-only.
+
+* `state/screensaver.svelte.ts` (new):
+  singleton + `loadScreensaverState` +
+  `noteScreensaverActivity` + `lockNow` +
+  `unlockWithPin` + `pauseScreensaverTimer`
+  + `installScreensaverTracker`.
+* `components/ScreensaverOverlay.svelte`
+  (new): full-window backdrop + PIN input +
+  shake-on-wrong + z-index 2000.
+* `App.svelte`: imports + mounts the
+  overlay; installs the tracker; loads
+  state post-bootstrap.
+* `state/screensaverMachine.test.ts`
+  (new): 21 pins across state, helpers,
+  overlay, and App wiring.
+
+Slice 3 (Settings UI + Mod+L chord)
+follows.
+
+### Gate
+
+* vitest **1099 / 1099** (+21 net from
+  -a-77 slice 1's 1078).
+* svelte-check 0/0 across 4046 files.
+* npm build clean.
+
+Impl note at [fullstack-a-77.md](fullstack-a-77.md)
+"## 2026-05-23 — SPA slice 2".
+Outbound poke fired.
