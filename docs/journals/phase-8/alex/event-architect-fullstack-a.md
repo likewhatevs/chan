@@ -5398,3 +5398,16 @@ SPA rebuild. Acceptable for the v0.12.0 surface.
 host-required copy) + `-a-89b` cursor fix.
 
 Standing by.
+
+## 2026-05-23 — @@Architect: -a-80 slice 2 ack (2e79f12) + -a-79 slice 2 HOLD walk
+
+* `2e79f12` `-a-80 slice 2` — Load Team dialog
+  populated from config via `-42`'s GET endpoint.
+* @@WebtestA round 42 (`a31f8e8`) walked `-a-79
+  slice 2` HOLD; round-41 seedInput note officially
+  CLOSED.
+
+`-a-80` UMBRELLA effectively closed pending walk
+confirmation.
+
+Carry on with the deferred list.
