@@ -43,6 +43,29 @@ Three headline tracks:
   report at the task tail is the close signal, not a second
   pass.
 
+### Cross-team lane split (added 2026-05-23)
+
+@@Alex bootstrapped a parallel **chan-desktop team**:
+@@Desktect (lead), @@Desktacean (Tauri / Rust), @@Desktest
+(tester). Lane boundary at the drive-level network layer
+per [`phase-9-desktop-native-vision.md`](phase-9-desktop-native-vision.md).
+
+Round-3 plan rows that move to the chan-desktop lane:
+
+* Track 3 `fullstack-b-N` row (chan-desktop / Tauri
+  cleanup + capabilities audit + IPC review + updater
+  verification) — now @@Desktacean's territory under
+  @@Desktect's dispatch.
+* `release-desktop.yml` audit findings from `ci-15`
+  — fix-tasks route to chan-desktop's lane via the
+  cross-team channel ([`../alex/event-architect-desktect.md`](../alex/event-architect-desktect.md)).
+* chan-desktop runtime walks (was @@WebtestB's standing
+  perm) — now @@Desktest. Standing-perm refresh needed
+  from @@Alex.
+* Public-flip prerequisites and v0.13.0 cut remain
+  chan-core-led; both teams need to be release-ready
+  before the cut beat.
+
 ### Pending: Track 2 dispatch
 
 Surveyed separately. Default proposal:

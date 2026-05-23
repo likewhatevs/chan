@@ -5869,3 +5869,81 @@ v0.13.0 cut, not the public-flip gate.
 | `alex/event-architect-fullstack-a.md` | -96 dispatch poke |
 | `alex/event-architect-webtest-a.md` | Round-3 heads-up; reactive posture |
 | `alex/event-ci-architect.md` + `ci/ci-14.md` | (separate prior commit `0f150a3`: @@CI teardown-complete docs cleanup) |
+
+## 2026-05-23 — cross-team handoff: @@Desktect / @@Desktacean / @@Desktest spun up; chan-desktop lane handed off
+
+@@Alex bootstrapped a parallel **chan-desktop team**
+~minutes after Wave-1 dispatch landed:
+
+| Tag | Profile (per @@Alex's introduction) |
+|-----|-------------------------------------|
+| @@Desktect | Architect lead, desktop-product focus |
+| @@Desktacean | Tauri expert; Rust + macOS / Linux desktop apps |
+| @@Desktest | Tester; can ship small patches if peers are informed |
+
+@@Alex's direction:
+
+> "your first act here is to delegate all desktop-related
+> work to @@Desktect and I will take over (working with
+> you and the other team lead) once they own the scope"
+
+### Cross-team handoff fired
+
+[`../alex/event-architect-desktect.md`](../alex/event-architect-desktect.md)
+— architect-to-architect channel; carries lane-boundary
+table, in-flight chan-core context, the 7-item scope
+hand-off, coordination shape, catch-up reading priority,
+safety guardrails.
+
+### Lane boundary anchor
+
+Drive-level network layer per
+[`phase-9-desktop-native-vision.md`](phase-9-desktop-native-vision.md).
+chan-tunnel-proto is the seam.
+
+| Surface | Owner |
+|---------|-------|
+| `crates/chan-drive` / `chan-server` / `chan-llm` / `chan-report` | chan-core |
+| `crates/chan` (CLI binary) | chan-core |
+| `crates/chan-tunnel-*` (protocol owner; co-evolve) | chan-core today; shared seam |
+| `web/` (SPA) | chan-core |
+| `desktop/` (Tauri shell + bundling + signing) | **chan-desktop** |
+| `.github/workflows/ci.yml` + `release.yml` | chan-core (@@CI) |
+| `.github/workflows/release-desktop.yml` | **chan-desktop** (@@CI executes per @@Desktect direction) |
+
+@@CI is **shared infra**: my line manager, dispatched
+per chan-desktop asks via the cross-team channel.
+
+### Scope handed off (7 items, full list in the cross-team poke)
+
+1. chan-desktop Tauri-side cleanup pass
+   (was @@FullStackB's Track-3 row).
+2. Capabilities audit + IPC review.
+3. Orphan-sidecar bug.
+4. release-desktop.yml ownership.
+5. chan-desktop runtime walks
+   (was @@WebtestB's standing perm).
+6. chan-desktop Windows bundling
+   (long-deferred umbrella).
+7. Phase-9 vision design discussions
+   (single-binary call; three-mode drive connection).
+
+### Coordination shape (proposed)
+
+* Cross-team-lead channel: scope routing + lane
+  clarifications + shared-infra coordination + cross-
+  cutting design.
+* Working-dir + event-channel structure: suggested
+  mirror of chan-core's pattern; @@Desktect can pick
+  differently.
+* Phase boundary: chan-desktop bootstrap COULD mark
+  phase-9 open; @@Alex hasn't flagged either way.
+  Default-assume phase-8 continuation until told.
+
+### What I'm committing this turn
+
+| File | Reason |
+|------|--------|
+| `architect/journal.md` | This entry |
+| `architect/round-3-plan.md` | Cross-team lane-split note |
+| `alex/event-architect-desktect.md` | NEW channel; cross-team handoff message |
