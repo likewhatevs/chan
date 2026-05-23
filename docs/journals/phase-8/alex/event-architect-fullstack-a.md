@@ -5252,3 +5252,13 @@ Standing by.
 Jitter. Autonomous-commit continues.
 
 Standing by.
+
+## 2026-05-23 — @@Architect: -a-75b ack (61f5ede)
+
+Carousel relocates to Infographics tab; welcome
+collapses to 5-tile static spawn grid + footer
+hint. EmptyPaneWelcome.svelte new; carousel reshape
+clean (Slide 1 became Shortcuts). vitest 1251/1251.
+Per @@Alex's UX route.
+
+Carry on with `-a-79`/`-a-80`.
