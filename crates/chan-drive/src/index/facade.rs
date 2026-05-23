@@ -313,6 +313,51 @@ impl Index {
         Ok(())
     }
 
+    /// systacean-40: flip the per-drive screensaver-enabled flag.
+    /// Idempotent on no-change.
+    pub fn set_screensaver_enabled(&self, enabled: bool) -> Result<(), IndexError> {
+        let to_save = {
+            let mut cfg = self.config.lock().unwrap();
+            if cfg.screensaver_enabled == enabled {
+                return Ok(());
+            }
+            cfg.screensaver_enabled = enabled;
+            cfg.clone()
+        };
+        config::save(&self.index_dir, &to_save)?;
+        Ok(())
+    }
+
+    /// systacean-40: persist the screensaver idle window.
+    /// Idempotent on no-change.
+    pub fn set_screensaver_timeout_secs(&self, secs: u32) -> Result<(), IndexError> {
+        let to_save = {
+            let mut cfg = self.config.lock().unwrap();
+            if cfg.screensaver_timeout_secs == secs {
+                return Ok(());
+            }
+            cfg.screensaver_timeout_secs = secs;
+            cfg.clone()
+        };
+        config::save(&self.index_dir, &to_save)?;
+        Ok(())
+    }
+
+    /// systacean-40: persist or clear the screensaver PIN hash.
+    /// Idempotent on identical input (including None → None).
+    pub fn set_screensaver_pin_hash(&self, hash: Option<Vec<u8>>) -> Result<(), IndexError> {
+        let to_save = {
+            let mut cfg = self.config.lock().unwrap();
+            if cfg.screensaver_pin_hash == hash {
+                return Ok(());
+            }
+            cfg.screensaver_pin_hash = hash;
+            cfg.clone()
+        };
+        config::save(&self.index_dir, &to_save)?;
+        Ok(())
+    }
+
     /// Persist a (possibly mutated) config. Used by the CLI when
     /// the user passes `--model X`. Switching model invalidates the
     /// existing vectors (different dim / different semantics) so
@@ -1478,6 +1523,9 @@ mod tests {
             vectors_dim: Some(1024),
             semantic_enabled: false,
             reports_enabled: false,
+            screensaver_enabled: false,
+            screensaver_timeout_secs: 300,
+            screensaver_pin_hash: None,
         };
         config::save(&dir, &cfg_on_disk).unwrap();
         drop(idx);
@@ -1514,6 +1562,9 @@ mod tests {
             vectors_dim: Some(384),
             semantic_enabled: false,
             reports_enabled: false,
+            screensaver_enabled: false,
+            screensaver_timeout_secs: 300,
+            screensaver_pin_hash: None,
         };
         std::fs::create_dir_all(&dir).unwrap();
         config::save(&dir, &cfg_on_disk).unwrap();
@@ -1548,6 +1599,9 @@ mod tests {
             vectors_dim: Some(384),
             semantic_enabled: false,
             reports_enabled: false,
+            screensaver_enabled: false,
+            screensaver_timeout_secs: 300,
+            screensaver_pin_hash: None,
         };
         config::save(&dir, &cfg_on_disk).unwrap();
         let _idx = Index::open(tmp.path(), &dir).unwrap();

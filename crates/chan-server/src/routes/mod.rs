@@ -22,6 +22,7 @@ mod mentions;
 mod preferences;
 mod report;
 mod reports_toggle;
+mod screensaver;
 mod search;
 mod sessions;
 mod storage;
@@ -55,6 +56,10 @@ pub use preferences::{
 };
 pub use report::{api_report_dir, api_report_file, api_report_prefix};
 pub use reports_toggle::{api_reports_disable, api_reports_enable, api_reports_state};
+pub use screensaver::{
+    api_screensaver_clear_pin, api_screensaver_patch, api_screensaver_set_pin,
+    api_screensaver_state, api_screensaver_verify,
+};
 pub use search::{
     api_index_rebuild, api_index_status, api_indexing_state, api_search_content, api_search_files,
 };

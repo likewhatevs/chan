@@ -98,6 +98,71 @@ pub struct IndexConfig {
     /// to a separate `features.toml` if/when more flags accumulate).
     #[serde(default)]
     pub reports_enabled: bool,
+    /// systacean-40: screensaver overlay opt-in. Default-false so
+    /// drives without the feature configured stay unchanged. SPA
+    /// reads `Drive::screensaver_enabled()` via the
+    /// `/api/screensaver/state` endpoint + arms the overlay
+    /// state machine when true.
+    #[serde(default)]
+    pub screensaver_enabled: bool,
+    /// systacean-40: idle window in seconds before the screensaver
+    /// overlay fires. Default 300 (5 minutes). The SPA computes
+    /// "idle" client-side from last keystroke / pointer activity;
+    /// chan-server just persists the threshold.
+    #[serde(default = "default_screensaver_timeout_secs")]
+    pub screensaver_timeout_secs: u32,
+    /// systacean-40: per-drive PIN hash. `None` when no PIN is
+    /// set (overlay still arms but auto-dismisses on any input).
+    /// The bytes are whatever the SPA POSTs — chan-server stores
+    /// without interpretation; the verify path is a byte-equality
+    /// compare. PBKDF2 happens client-side per `-a-77`.
+    ///
+    /// NEVER serialized back over the wire in plaintext: the
+    /// `/api/screensaver/state` endpoint reports `pin_set: bool`
+    /// only.
+    #[serde(default, with = "screensaver_pin_serde")]
+    pub screensaver_pin_hash: Option<Vec<u8>>,
+}
+
+fn default_screensaver_timeout_secs() -> u32 {
+    300
+}
+
+/// systacean-40: serde adapter for `screensaver_pin_hash`. We
+/// persist as base64 in the TOML so the file stays text-only +
+/// the bytes round-trip cleanly (raw `Vec<u8>` would land as a
+/// TOML array of integers — readable, but noisy + harder for
+/// future migrations to read).
+mod screensaver_pin_serde {
+    use base64::Engine;
+    use serde::{Deserialize, Deserializer, Serializer};
+
+    pub fn serialize<S>(value: &Option<Vec<u8>>, ser: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        match value {
+            Some(bytes) => {
+                let b64 = base64::engine::general_purpose::STANDARD.encode(bytes);
+                ser.serialize_some(&b64)
+            }
+            None => ser.serialize_none(),
+        }
+    }
+
+    pub fn deserialize<'de, D>(de: D) -> Result<Option<Vec<u8>>, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let opt = Option::<String>::deserialize(de)?;
+        match opt {
+            Some(s) => base64::engine::general_purpose::STANDARD
+                .decode(s.as_bytes())
+                .map(Some)
+                .map_err(serde::de::Error::custom),
+            None => Ok(None),
+        }
+    }
 }
 
 impl Default for IndexConfig {
@@ -110,6 +175,9 @@ impl Default for IndexConfig {
             vectors_dim: None,
             semantic_enabled: false,
             reports_enabled: false,
+            screensaver_enabled: false,
+            screensaver_timeout_secs: default_screensaver_timeout_secs(),
+            screensaver_pin_hash: None,
         }
     }
 }

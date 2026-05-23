@@ -4117,3 +4117,82 @@ Per pre-authorization, proceeding to commit + push + smoke.
 29 systacean tasks shipped this phase. Lane idle.
 
 Standing by for v0.12.0 cut or further dispatches.
+
+## 2026-05-23 — poke (-40 implementation complete; screensaver storage + endpoints; unblocks -a-77)
+
+Picked up `-40` per the dispatch.
+
+### chan-drive (IndexConfig + Drive methods)
+
+* `IndexConfig` extended with `screensaver_enabled` (default false), `screensaver_timeout_secs` (default 300), `screensaver_pin_hash: Option<Vec<u8>>` (default None). All `#[serde(default ...)]` for backward-compat on existing drives.
+* PIN hash serialized as base64 in TOML via custom serde adapter (keeps the file text-only + clean for migrations).
+* 6 `Drive::screensaver_*` methods (getter + setter for each field).
+* 4 facade setters mirror `set_semantic_enabled` / `set_reports_enabled` shape; idempotent on no-change.
+* `base64` added as chan-drive workspace dep.
+
+### chan-server (new routes/screensaver.rs)
+
+5 endpoints:
+
+* `GET /api/screensaver/state` → `{ enabled, timeout_secs, pin_set }`. **PIN hash NEVER appears in responses** — `pin_set` is a derived boolean.
+* `PATCH /state` body `{ enabled?, timeout_secs? }` — partial update.
+* `POST /pin` body `{ hash: base64 }` — set hash; rejects invalid base64 with 400.
+* `DELETE /pin` — clear hash.
+* `POST /verify` body `{ hash: base64 }` → `{ verified: bool }`. **Constant-time byte-equality compare** (prevents PIN-length / prefix-match timing leaks). Returns false when no PIN set.
+
+### Routing lanes
+
+* PATCH /state + POST /pin + DELETE /pin → settings-writes lane.
+* GET /state + POST /verify → unrestricted lane (verify must work for non-owners on shared-machine scenarios).
+* All gated by per-launch bearer token.
+
+### Tests (+6)
+
+* `screensaver_primitives_round_trip_and_default_correctly` (chan-drive).
+* 5 chan-server tests via `crate::router(state)` + `oneshot`:
+  * defaults exposed via API.
+  * PATCH partial-update semantics.
+  * Full PIN lifecycle + assert hash never leaks into body.
+  * 400 on invalid base64.
+  * 401 anonymous.
+
+### Diff
+
+| File | + | - |
+|------|---|---|
+| `crates/chan-drive/Cargo.toml` | +1 | 0 |
+| `crates/chan-drive/src/index/config.rs` | +68 | 0 |
+| `crates/chan-drive/src/index/facade.rs` | +54 | 0 |
+| `crates/chan-drive/src/drive.rs` | +85 | 0 |
+| `crates/chan-server/src/routes/screensaver.rs` (new) | +393 | 0 |
+| `crates/chan-server/src/routes/mod.rs` | +5 | 0 |
+| `crates/chan-server/src/lib.rs` | +20 | -2 |
+
+Plus task tail + this poke. 9 paths.
+
+### Pre-push gate
+
+* fmt + clippy + no-default-features clean.
+* `cargo test -p chan-drive --lib`: **464 / 0 / 2-ignored** (+1).
+* `cargo test -p chan-server --lib`: **238 / 0** (+5).
+* workspace tests all green.
+
+### Suggested commit subject
+
+```
+chan-drive + chan-server: screensaver storage primitives + /api/screensaver/* endpoints (systacean-40; unblocks -a-77)
+```
+
+### Smoke plan
+
+`gh workflow run ci.yml --ref systacean-40-smoke`. Expected ALL GREEN.
+
+### What this unblocks
+
+@@FullStackA's `-a-77` Screensaver overlay + PIN unlock.
+
+### Lane state
+
+30 systacean tasks shipped this phase.
+
+Per pre-authorization, proceeding to commit + push + smoke.

@@ -1,0 +1,446 @@
+//! systacean-40: per-drive screensaver overlay state.
+//!
+//! Five endpoints under `/api/screensaver/`:
+//!
+//! * `GET /state` — `{ enabled, timeout_secs, pin_set }`. The
+//!   PIN hash itself never appears on the wire — `pin_set` is a
+//!   `bool` derived from whether `Drive::screensaver_pin_hash()`
+//!   returns `Some(_)`.
+//! * `PATCH /state` body `{ enabled?, timeout_secs? }` — partial
+//!   update.
+//! * `POST /pin` body `{ hash: base64 }` — set the PIN hash.
+//!   Server stores the base64-decoded bytes verbatim. PBKDF2 is
+//!   client-side (`-a-77`).
+//! * `DELETE /pin` — clear the PIN.
+//! * `POST /verify` body `{ hash: base64 }` — returns
+//!   `{ verified: bool }` from a byte-equality compare against
+//!   the stored hash. Returns `verified: false` when no PIN is
+//!   set (the overlay still arms but the lockout is moot).
+
+use std::sync::Arc;
+
+use axum::extract::State;
+use axum::http::StatusCode;
+use axum::response::{IntoResponse, Response};
+use axum::Json;
+use base64::Engine;
+use serde::{Deserialize, Serialize};
+
+use crate::error::{err, err_from};
+use crate::state::AppState;
+
+#[derive(Debug, Clone, Serialize)]
+pub struct ScreensaverState {
+    pub enabled: bool,
+    pub timeout_secs: u32,
+    pub pin_set: bool,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct PatchPayload {
+    #[serde(default)]
+    pub enabled: Option<bool>,
+    #[serde(default)]
+    pub timeout_secs: Option<u32>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct PinPayload {
+    /// Base64-encoded PIN hash bytes. SPA does PBKDF2 client-side
+    /// per `-a-77` + posts the digest here.
+    pub hash: String,
+}
+
+#[derive(Debug, Serialize)]
+pub struct VerifyResult {
+    pub verified: bool,
+}
+
+/// `GET /api/screensaver/state`.
+pub async fn api_screensaver_state(State(state): State<Arc<AppState>>) -> Response {
+    let drive = state.drive();
+    let enabled = match drive.screensaver_enabled() {
+        Ok(v) => v,
+        Err(e) => return err_from(&e),
+    };
+    let timeout_secs = match drive.screensaver_timeout_secs() {
+        Ok(v) => v,
+        Err(e) => return err_from(&e),
+    };
+    let pin_set = match drive.screensaver_pin_hash() {
+        Ok(v) => v.is_some(),
+        Err(e) => return err_from(&e),
+    };
+    Json(ScreensaverState {
+        enabled,
+        timeout_secs,
+        pin_set,
+    })
+    .into_response()
+}
+
+/// `PATCH /api/screensaver/state`. Partial update: only the
+/// fields present in the body are written. Returns the
+/// post-update state, mirroring the semantic + reports toggle
+/// shape so the SPA can update its cache from the response.
+pub async fn api_screensaver_patch(
+    State(state): State<Arc<AppState>>,
+    Json(payload): Json<PatchPayload>,
+) -> Response {
+    let drive = state.drive().clone();
+    let result = tokio::task::spawn_blocking(
+        move || -> Result<(bool, u32, bool), chan_drive::ChanError> {
+            if let Some(enabled) = payload.enabled {
+                drive.set_screensaver_enabled(enabled)?;
+            }
+            if let Some(timeout) = payload.timeout_secs {
+                drive.set_screensaver_timeout_secs(timeout)?;
+            }
+            Ok((
+                drive.screensaver_enabled()?,
+                drive.screensaver_timeout_secs()?,
+                drive.screensaver_pin_hash()?.is_some(),
+            ))
+        },
+    )
+    .await;
+    match result {
+        Ok(Ok((enabled, timeout_secs, pin_set))) => Json(ScreensaverState {
+            enabled,
+            timeout_secs,
+            pin_set,
+        })
+        .into_response(),
+        Ok(Err(e)) => err_from(&e),
+        Err(join) => err_from(&chan_drive::ChanError::Io(join.to_string())),
+    }
+}
+
+/// `POST /api/screensaver/pin`. Set the PIN hash (overwrites any
+/// existing one).
+pub async fn api_screensaver_set_pin(
+    State(state): State<Arc<AppState>>,
+    Json(payload): Json<PinPayload>,
+) -> Response {
+    let bytes = match base64::engine::general_purpose::STANDARD.decode(payload.hash.as_bytes()) {
+        Ok(b) => b,
+        Err(e) => return err(StatusCode::BAD_REQUEST, format!("invalid base64: {e}")),
+    };
+    if bytes.is_empty() {
+        return err(StatusCode::BAD_REQUEST, "empty hash".to_string());
+    }
+    let drive = state.drive().clone();
+    let result =
+        tokio::task::spawn_blocking(move || drive.set_screensaver_pin_hash(Some(bytes))).await;
+    match result {
+        Ok(Ok(())) => api_screensaver_state(State(state)).await,
+        Ok(Err(e)) => err_from(&e),
+        Err(join) => err_from(&chan_drive::ChanError::Io(join.to_string())),
+    }
+}
+
+/// `DELETE /api/screensaver/pin`. Clear the PIN.
+pub async fn api_screensaver_clear_pin(State(state): State<Arc<AppState>>) -> Response {
+    let drive = state.drive().clone();
+    let result = tokio::task::spawn_blocking(move || drive.set_screensaver_pin_hash(None)).await;
+    match result {
+        Ok(Ok(())) => api_screensaver_state(State(state)).await,
+        Ok(Err(e)) => err_from(&e),
+        Err(join) => err_from(&chan_drive::ChanError::Io(join.to_string())),
+    }
+}
+
+/// `POST /api/screensaver/verify`. Returns `{verified: bool}`.
+/// Server-side byte-equality compare; the PIN hash never leaves
+/// the server in either direction (request body is the candidate
+/// hash; response is just a boolean).
+pub async fn api_screensaver_verify(
+    State(state): State<Arc<AppState>>,
+    Json(payload): Json<PinPayload>,
+) -> Response {
+    let candidate = match base64::engine::general_purpose::STANDARD.decode(payload.hash.as_bytes())
+    {
+        Ok(b) => b,
+        Err(e) => return err(StatusCode::BAD_REQUEST, format!("invalid base64: {e}")),
+    };
+    let stored = match state.drive().screensaver_pin_hash() {
+        Ok(v) => v,
+        Err(e) => return err_from(&e),
+    };
+    let verified = match stored {
+        // Constant-time compare to avoid leaking PIN length /
+        // prefix matches through response-timing. `subtle` is a
+        // workspace dep candidate but for v1 the manual loop is
+        // sufficient: both inputs are short fixed-length hashes
+        // so timing differences are below the WS-layer noise
+        // floor anyway. Document the constraint so a future
+        // bcrypt-style migration knows to keep this property.
+        Some(stored_bytes) => constant_time_eq(&candidate, &stored_bytes),
+        None => false,
+    };
+    Json(VerifyResult { verified }).into_response()
+}
+
+/// Constant-time byte-equality. Returns false immediately on
+/// length mismatch (length is not a secret — the SPA controls
+/// the hash length client-side via PBKDF2 output size).
+fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
+    if a.len() != b.len() {
+        return false;
+    }
+    let mut acc: u8 = 0;
+    for (x, y) in a.iter().zip(b.iter()) {
+        acc |= x ^ y;
+    }
+    acc == 0
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::atomic::AtomicU64;
+    use std::sync::{Mutex, RwLock};
+
+    use axum::body::Body;
+    use axum::http::{header, Request, StatusCode};
+    use chan_drive::SearchAggression;
+    use tempfile::TempDir;
+    use tokio::sync::{broadcast, watch};
+    use tower::ServiceExt;
+
+    use crate::self_writes::SelfWrites;
+    use crate::state::DriveCell;
+    use crate::terminal_sessions::{Registry as TerminalRegistry, RegistryConfig};
+    use crate::{EditorPrefs, ServerConfig};
+
+    struct RouteTestApp {
+        _cfg: TempDir,
+        _root: TempDir,
+        state: Arc<AppState>,
+    }
+
+    fn route_test_app() -> RouteTestApp {
+        let cfg = TempDir::new().unwrap();
+        let root = TempDir::new().unwrap();
+        let lib = chan_drive::Library::open_at(cfg.path().join("config.toml")).unwrap();
+        lib.register_drive(root.path(), Some("screensaver-test".into()))
+            .unwrap();
+        let drive = lib.open_drive(root.path()).unwrap();
+
+        let (events_tx, _) = broadcast::channel::<String>(1);
+        let (index_events_tx, _) = broadcast::channel::<chan_drive::WatchEvent>(1);
+        let indexer = Arc::new(crate::indexer::Indexer::spawn(
+            drive.clone(),
+            index_events_tx.subscribe(),
+            false,
+            SearchAggression::Conservative,
+            Arc::new(chan_drive::NoProgress),
+        ));
+        let (shutdown_tx, shutdown_rx) = watch::channel(false);
+        std::mem::forget(shutdown_tx);
+
+        let state = Arc::new(AppState {
+            library: lib,
+            drive_root: root.path().to_path_buf(),
+            drive_cell: Arc::new(RwLock::new(Some(DriveCell {
+                drive,
+                watch_handle: None,
+                indexer,
+            }))),
+            token: Some("secret".to_string()),
+            prefix: Arc::new(RwLock::new(String::new())),
+            settings_disabled: false,
+            tunnel_public: false,
+            last_activity: Arc::new(AtomicU64::new(0)),
+            events_tx,
+            index_events_tx,
+            server_config: Mutex::new(ServerConfig::default()),
+            editor_prefs: Mutex::new(EditorPrefs::default()),
+            self_writes: Arc::new(SelfWrites::new()),
+            terminal_sessions: Arc::new(TerminalRegistry::new(RegistryConfig {
+                drive_root: root.path().to_path_buf(),
+                mcp_socket_path: None,
+                control_socket_path: None,
+                terminal: ServerConfig::default().terminal,
+            })),
+            shutdown_rx,
+            loaded_teams: std::sync::Mutex::new(std::collections::HashMap::new()),
+        });
+
+        RouteTestApp {
+            _cfg: cfg,
+            _root: root,
+            state,
+        }
+    }
+
+    async fn request(
+        router: &axum::Router,
+        method: &str,
+        uri: &str,
+        body: Option<&str>,
+    ) -> (StatusCode, serde_json::Value) {
+        let mut req = Request::builder()
+            .method(method)
+            .uri(uri)
+            .header(header::AUTHORIZATION, "Bearer secret");
+        let body = if let Some(b) = body {
+            req = req.header(header::CONTENT_TYPE, "application/json");
+            Body::from(b.to_string())
+        } else {
+            Body::empty()
+        };
+        let response = router
+            .clone()
+            .oneshot(req.body(body).unwrap())
+            .await
+            .unwrap();
+        let status = response.status();
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let json = serde_json::from_slice(&body).unwrap_or(serde_json::Value::Null);
+        (status, json)
+    }
+
+    #[tokio::test]
+    async fn screensaver_state_default_is_off_300s_no_pin() {
+        // systacean-40: a fresh drive reports the documented
+        // defaults: enabled=false, timeout=300, pin_set=false.
+        let app = route_test_app();
+        let router = crate::router(app.state);
+        let (status, body) = request(&router, "GET", "/api/screensaver/state", None).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["enabled"], false);
+        assert_eq!(body["timeout_secs"], 300);
+        assert_eq!(body["pin_set"], false);
+    }
+
+    #[tokio::test]
+    async fn screensaver_patch_updates_enabled_and_timeout() {
+        // systacean-40: PATCH accepts partial body, applies
+        // present fields, returns post-update state.
+        let app = route_test_app();
+        let router = crate::router(app.state);
+        let (status, body) = request(
+            &router,
+            "PATCH",
+            "/api/screensaver/state",
+            Some(r#"{"enabled":true,"timeout_secs":60}"#),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["enabled"], true);
+        assert_eq!(body["timeout_secs"], 60);
+        assert_eq!(body["pin_set"], false);
+
+        // Partial: only update timeout; enabled stays true.
+        let (status, body) = request(
+            &router,
+            "PATCH",
+            "/api/screensaver/state",
+            Some(r#"{"timeout_secs":120}"#),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["enabled"], true);
+        assert_eq!(body["timeout_secs"], 120);
+    }
+
+    #[tokio::test]
+    async fn screensaver_pin_set_verify_clear_round_trip() {
+        // systacean-40: full PIN lifecycle — set, verify (positive
+        // + negative), clear, verify (always false). PIN hash
+        // never appears in any response body.
+        let app = route_test_app();
+        let router = crate::router(app.state);
+
+        // Set PIN.
+        // base64("\xDE\xAD\xBE\xEF\x42") = "3q2+70I="
+        let (status, body) = request(
+            &router,
+            "POST",
+            "/api/screensaver/pin",
+            Some(r#"{"hash":"3q2+70I="}"#),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["pin_set"], true);
+        // The hash MUST NOT appear in the state body.
+        let body_str = body.to_string();
+        assert!(
+            !body_str.contains("3q2+70I="),
+            "PIN hash leaked into response: {body_str}"
+        );
+
+        // Verify positive: same bytes.
+        let (status, body) = request(
+            &router,
+            "POST",
+            "/api/screensaver/verify",
+            Some(r#"{"hash":"3q2+70I="}"#),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["verified"], true);
+
+        // Verify negative: different bytes.
+        // base64("\xAA\xBB\xCC") = "qrvM"
+        let (_, body) = request(
+            &router,
+            "POST",
+            "/api/screensaver/verify",
+            Some(r#"{"hash":"qrvM"}"#),
+        )
+        .await;
+        assert_eq!(body["verified"], false);
+
+        // Clear PIN.
+        let (status, body) = request(&router, "DELETE", "/api/screensaver/pin", None).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["pin_set"], false);
+
+        // Verify on cleared PIN returns false.
+        let (_, body) = request(
+            &router,
+            "POST",
+            "/api/screensaver/verify",
+            Some(r#"{"hash":"3q2+70I="}"#),
+        )
+        .await;
+        assert_eq!(body["verified"], false);
+    }
+
+    #[tokio::test]
+    async fn screensaver_set_pin_rejects_invalid_base64() {
+        // systacean-40: invalid base64 input returns 400.
+        let app = route_test_app();
+        let router = crate::router(app.state);
+        let (status, _) = request(
+            &router,
+            "POST",
+            "/api/screensaver/pin",
+            Some(r#"{"hash":"not_base64!@#"}"#),
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn screensaver_endpoints_require_auth() {
+        // systacean-40: parity with other settings endpoints —
+        // all routes are gated by the per-launch token.
+        let app = route_test_app();
+        let router = crate::router(app.state);
+        let response = router
+            .oneshot(
+                Request::builder()
+                    .uri("/api/screensaver/state")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    }
+}

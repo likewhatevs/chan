@@ -2059,6 +2059,54 @@ impl Drive {
         Ok(())
     }
 
+    /// systacean-40: read the per-drive screensaver-enabled flag.
+    /// Default-false on drives that pre-date the field; SPA arms
+    /// the overlay state machine when true.
+    pub fn screensaver_enabled(&self) -> Result<bool> {
+        Ok(self.index()?.config().screensaver_enabled)
+    }
+
+    /// systacean-40: flip the per-drive screensaver-enabled flag.
+    /// Idempotent. No filesystem side effects (unlike
+    /// `set_reports_enabled`'s jsonl drop) — the overlay state
+    /// lives entirely client-side; this just persists the toggle.
+    pub fn set_screensaver_enabled(&self, enabled: bool) -> Result<()> {
+        self.index()?.set_screensaver_enabled(enabled)?;
+        Ok(())
+    }
+
+    /// systacean-40: read the idle window (seconds) before the
+    /// SPA arms the overlay. Default 300.
+    pub fn screensaver_timeout_secs(&self) -> Result<u32> {
+        Ok(self.index()?.config().screensaver_timeout_secs)
+    }
+
+    /// systacean-40: persist the idle window. SPA enforces a
+    /// minimum + maximum client-side; chan-drive stores whatever
+    /// value lands.
+    pub fn set_screensaver_timeout_secs(&self, secs: u32) -> Result<()> {
+        self.index()?.set_screensaver_timeout_secs(secs)?;
+        Ok(())
+    }
+
+    /// systacean-40: read the persisted PIN hash. `None` means no
+    /// PIN is set. The hash bytes themselves NEVER leave the
+    /// server in plaintext — the `/api/screensaver/state` endpoint
+    /// reports `pin_set: bool` and the verify endpoint compares
+    /// bytes server-side. This getter is for the chan-server route
+    /// + tests only.
+    pub fn screensaver_pin_hash(&self) -> Result<Option<Vec<u8>>> {
+        Ok(self.index()?.config().screensaver_pin_hash.clone())
+    }
+
+    /// systacean-40: persist or clear the PIN hash. `Some(bytes)`
+    /// stores them verbatim (SPA does PBKDF2 client-side per
+    /// `-a-77`); `None` clears the PIN.
+    pub fn set_screensaver_pin_hash(&self, hash: Option<Vec<u8>>) -> Result<()> {
+        self.index()?.set_screensaver_pin_hash(hash)?;
+        Ok(())
+    }
+
     /// systacean-27: BOOT entry-point. Consumers call this after
     /// `Drive::open` to kick off the optional indexing layers
     /// (semantic + reports) per the persisted feature flags. The
@@ -5627,6 +5675,43 @@ mod tests {
         // drafts root.
         assert!(root.path().join("notes/intro.md").is_file());
         assert!(!drive.drafts_dir().join("notes").exists());
+    }
+
+    #[test]
+    fn screensaver_primitives_round_trip_and_default_correctly() {
+        // systacean-40: 6 Drive::screensaver_* methods round-trip
+        // through IndexConfig + atomic write. Defaults: enabled
+        // false, timeout 300, pin_hash None.
+        let (_cfg, _root, drive) = fixture();
+
+        // Defaults.
+        assert!(!drive.screensaver_enabled().unwrap());
+        assert_eq!(drive.screensaver_timeout_secs().unwrap(), 300);
+        assert!(drive.screensaver_pin_hash().unwrap().is_none());
+
+        // Flip enabled.
+        drive.set_screensaver_enabled(true).unwrap();
+        assert!(drive.screensaver_enabled().unwrap());
+
+        // Update timeout.
+        drive.set_screensaver_timeout_secs(60).unwrap();
+        assert_eq!(drive.screensaver_timeout_secs().unwrap(), 60);
+
+        // Set PIN.
+        let pin_bytes = vec![0xDE, 0xAD, 0xBE, 0xEF, 0x42];
+        drive
+            .set_screensaver_pin_hash(Some(pin_bytes.clone()))
+            .unwrap();
+        assert_eq!(drive.screensaver_pin_hash().unwrap(), Some(pin_bytes));
+
+        // Clear PIN (None).
+        drive.set_screensaver_pin_hash(None).unwrap();
+        assert!(drive.screensaver_pin_hash().unwrap().is_none());
+
+        // Idempotent re-set (same value).
+        drive.set_screensaver_enabled(true).unwrap();
+        drive.set_screensaver_timeout_secs(60).unwrap();
+        drive.set_screensaver_pin_hash(None).unwrap();
     }
 
     #[test]

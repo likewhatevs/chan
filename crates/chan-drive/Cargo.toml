@@ -12,6 +12,7 @@ chan-report = { path = "../chan-report" }
 bincode = { version = "2", features = ["serde"] }
 chrono = { version = "0.4", features = ["serde"] }
 csv = "1"
+base64 = { workspace = true }
 dirs = "5"
 fs4 = { version = "0.9", features = ["sync"] }
 gray_matter = { version = "0.2", default-features = false, features = ["yaml"] }

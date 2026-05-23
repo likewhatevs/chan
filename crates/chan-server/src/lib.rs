@@ -56,8 +56,9 @@ use routes::{
     api_list_sessions, api_move, api_patch_config, api_patch_drive, api_patch_server_config,
     api_post_attachment, api_post_contacts_import, api_put_session, api_read_file, api_report_dir,
     api_report_file, api_report_prefix, api_reports_disable, api_reports_enable, api_reports_state,
-    api_resolve_link, api_restart_terminal, api_search_content, api_search_files,
-    api_set_terminal_submit_mode, api_set_terminal_watcher, api_storage_reset,
+    api_resolve_link, api_restart_terminal, api_screensaver_clear_pin, api_screensaver_patch,
+    api_screensaver_set_pin, api_screensaver_state, api_screensaver_verify, api_search_content,
+    api_search_files, api_set_terminal_submit_mode, api_set_terminal_watcher, api_storage_reset,
     api_team_list_loaded, api_team_load, api_team_unload, api_terminal_event_reply,
     api_terminal_watcher_events, api_terminal_ws, api_unset_terminal_watcher, api_write_file,
     ws_upgrade,
@@ -792,6 +793,15 @@ fn router(state: Arc<AppState>) -> Router {
     let settings_writes = settings_writes
         .route("/api/index/reports/enable", post(api_reports_enable))
         .route("/api/index/reports/disable", post(api_reports_disable));
+    // systacean-40: screensaver overlay state + PIN endpoints.
+    // PATCH/state, POST/pin, DELETE/pin land in settings-writes.
+    // POST/verify is a read-side action (checks the stored hash)
+    // so it stays in the unrestricted lane below — non-owners
+    // can still trigger the verify path to dismiss the overlay.
+    let settings_writes = settings_writes
+        .route("/api/screensaver/state", patch(api_screensaver_patch))
+        .route("/api/screensaver/pin", post(api_screensaver_set_pin))
+        .route("/api/screensaver/pin", delete(api_screensaver_clear_pin));
     // `fullstack-b-30` slice b: Source Code Pro download endpoint.
     // Settings-gated lane because activating the font is a
     // preference write + the download mutates the per-machine
@@ -943,6 +953,12 @@ fn router(state: Arc<AppState>) -> Router {
     // systacean-39: reports state is read-only + not settings-
     // gated (read-only views can land in any lane).
     let api = api.route("/api/index/reports/state", get(api_reports_state));
+    // systacean-40: screensaver state + verify are read-side.
+    // /verify is unrestricted so non-owners can still unlock the
+    // overlay on shared-machine scenarios.
+    let api = api
+        .route("/api/screensaver/state", get(api_screensaver_state))
+        .route("/api/screensaver/verify", post(api_screensaver_verify));
     let api = api.merge(settings_writes);
     Router::new()
         .merge(api)
