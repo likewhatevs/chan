@@ -40,9 +40,13 @@ describe("fullstack-a-79 slice 2: orchestrator step 6 (lead prompt — renumbere
     );
   });
 
-  test("notify success message fires AFTER the lead-prompt step", () => {
+  test("notify success message fires AFTER the lead-prompt step + step 7 lead-rename/restart", () => {
+    // `fullstack-a-79` slice 5: step 7 (lead-terminal rename
+    // + restart) sits between the lead-prompt step and the
+    // success notify so the CHAN_TAB_NAME env refresh lands
+    // before the user submits the prompt.
     expect(orchestrator).toMatch(
-      /if \(leadTab\) primeTerminalRichPrompt\(leadTab, prompt\);[\s\S]{1,400}notify\(`Team "\$\{wire\.team_name\}" bootstrapped\.`\);/,
+      /if \(leadTab\) primeTerminalRichPrompt\(leadTab, prompt\);[\s\S]{1,2000}notify\(`Team "\$\{wire\.team_name\}" bootstrapped\.`\);/,
     );
   });
 });

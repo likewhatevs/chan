@@ -25,14 +25,16 @@
 //     event-channel path is wired in `-a-79` slice 2 when
 //     `systacean-21`'s rich-poke flow consumes a team channel).
 
-import { api, type TeamConfigWire, type TeamMemberWire } from "../api/client";
+import { api, sessionWindowId, type TeamConfigWire, type TeamMemberWire } from "../api/client";
 import { notify } from "./notify.svelte";
 import {
   buildSplitGrid,
   findTerminalBySession,
   layout,
+  markTerminalEnvNameRestarted,
   openTerminalInPane,
   primeTerminalRichPrompt,
+  renameTerminalTab,
   setActivePane,
 } from "./tabs.svelte";
 import type {
@@ -359,6 +361,38 @@ export async function runTeamBootstrap(
   if (hostSessionId) {
     const leadTab = findTerminalBySession(hostSessionId);
     if (leadTab) primeTerminalRichPrompt(leadTab, prompt);
+  }
+  // 7. Rename + restart the host's terminal so it becomes the
+  //    lead's terminal. Per addendum-b clarification #1 the
+  //    host's rich-prompt terminal IS the lead's terminal;
+  //    renaming the tab and restarting the PTY makes
+  //    `CHAN_TAB_NAME` in the lead's shell expand to the lead
+  //    handle (e.g. `@@Lead`). The identity prompt staged in
+  //    step 6 reads `$CHAN_TAB_NAME` literally, so the lead's
+  //    shell needs the new env BEFORE the user submits the
+  //    prompt. The host itself has no dedicated terminal — the
+  //    user drives the team through the lead's + workers'
+  //    terminals (addendum-b 2026-05-23). Silently no-op when
+  //    there's no host session, the host terminal is closed,
+  //    or the config has no member flagged `is_lead`.
+  if (hostSessionId) {
+    const leadTab = findTerminalBySession(hostSessionId);
+    const leadEntry = wire.members.find((m) => m.is_lead);
+    const leadHandle = leadEntry?.handle;
+    if (leadTab && leadHandle && leadTab.terminalSessionId) {
+      renameTerminalTab(leadTab, leadHandle);
+      try {
+        await api.restartTerminal(leadTab.terminalSessionId, {
+          name: leadHandle,
+          window_id: sessionWindowId(),
+        });
+        markTerminalEnvNameRestarted(leadTab);
+      } catch (err) {
+        notify(
+          `Lead terminal restart failed: ${(err as Error).message ?? err}`,
+        );
+      }
+    }
   }
   notify(`Team "${wire.team_name}" bootstrapped.`);
 }

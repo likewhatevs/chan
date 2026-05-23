@@ -760,3 +760,121 @@ Team orchestrator slice 4: split-pane real estate (fullstack-a-79 slice 4)
 * `docs/journals/phase-8/fullstack-a/fullstack-a-79.md`
 
 Autonomous-commit mode. No clearance held.
+
+## 2026-05-23 — slice 5 (lead-terminal rename + PTY restart) + round close
+
+SPA-only. Closes the round per @@Alex's
+teardown poke (`08180b2`). The architect added
+step 7 (lead rename + restart) into my working
+tree mid-flight; this slice finalises it with
+matching test pins + the import fix
+(`TeamMemberDraft` re-export wasn't valid;
+moved to `./teamDialog.svelte`).
+
+### Shape applied
+
+**Architect-side step 7 addition**
+
+The host's rich-prompt terminal IS the lead's
+terminal (addendum-b clarification #1), but
+its `CHAN_TAB_NAME` env-var was whatever the
+user spawned the terminal with (e.g. some
+default name, not the lead's handle). The
+identity prompt staged in step 6 references
+`$CHAN_TAB_NAME` literally — the lead's shell
+needs the new env BEFORE the user submits.
+
+Step 7 wiring:
+1. `findTerminalBySession(hostSessionId)` →
+   leadTab.
+2. `wire.members.find(is_lead)` → leadHandle.
+3. `renameTerminalTab(leadTab, leadHandle)`
+   updates the in-SPA tab title +
+   `tab.terminalEnvTabName` so the env-stale
+   prompt clears.
+4. `api.restartTerminal(sessionId, { name:
+   leadHandle, window_id: sessionWindowId() })`
+   bounces the PTY with the new
+   `CHAN_TAB_NAME` env.
+5. `markTerminalEnvNameRestarted(leadTab)`
+   confirms the env refresh; step succeeds.
+6. Restart failure is non-fatal — surfaces via
+   notify, does not bail the chain.
+
+**Test pin support**
+
+* New `teamLeadRestart.test.ts` (8 pins):
+  step ordering, gating chain, rename-before-
+  restart, restartTerminal payload, success +
+  failure paths, imports.
+* `teamLeadPrompt.test.ts` "notify success"
+  pin loosened — step 7 now lives between the
+  lead-prompt step and the success notify;
+  the regex tolerates the extra block.
+* `teamSplitPaneRealEstate.test.ts` import
+  fix: `TeamMemberDraft` re-imported from
+  `./teamDialog.svelte` directly (orchestrator
+  doesn't re-export it; my slice-4 test
+  imported from the wrong module).
+
+### Files touched
+
+* `web/src/state/teamOrchestrator.svelte.ts`
+  * Architect's step 7 addition (in tree
+    pre-commit).
+* `web/src/state/teamLeadRestart.test.ts`
+  (new) — 8 architectural pins.
+* `web/src/state/teamLeadPrompt.test.ts`
+  * "notify success" pin loosened.
+* `web/src/state/teamSplitPaneRealEstate.test.ts`
+  * `TeamMemberDraft` import path fix.
+
+### Round close
+
+Per @@Alex's `08180b2` ("close round; transfer
+any in-flight @@FullStackA/B + @@Systacean +
+@@WebtestB work to @@WebtestA"):
+
+* All my in-flight slices acked or shipped.
+* Step 7 inherited from the architect's mid-
+  flight addition; tested + committed cleanly.
+* No outstanding lane work; the round ends
+  with @@WebtestA + @@Architect + @@CI per
+  the teardown.
+
+### Remaining deferred (lifts to Round 3+)
+
+* Lead pre-flight survey trigger.
+* `dispatch_agent_event`-driven identity
+  prompts (closes @@WebtestA's seedInput-
+  visibility note).
+* `moveTab` for lead-relocation when the user
+  assigns the lead to a non-starting cell.
+* Jitter (chan-server preferences + delay
+  layer).
+
+### Gate
+
+* `svelte-check` → 0/0.
+* `vitest` → **1344 / 1344** (+8 new pins;
+  intermittent flake on 1 pre-existing
+  terminal-renderer test, unrelated).
+* `npm run build` → clean.
+* `cargo fmt --check` + `clippy --all-targets
+  -- -D warnings` → clean (no Rust delta).
+
+### Suggested commit subject
+
+```
+Team orchestrator slice 5: lead rename + PTY restart (fullstack-a-79 slice 5; round close)
+```
+
+### Files (per-path)
+
+* `web/src/state/teamOrchestrator.svelte.ts`
+* `web/src/state/teamLeadRestart.test.ts` (new)
+* `web/src/state/teamLeadPrompt.test.ts`
+* `web/src/state/teamSplitPaneRealEstate.test.ts`
+* `docs/journals/phase-8/fullstack-a/fullstack-a-79.md`
+
+Autonomous-commit mode. Round closes.

@@ -1,11 +1,11 @@
 import { describe, expect, test } from "vitest";
 import orchestrator from "./teamOrchestrator.svelte.ts?raw";
 import tabs from "./tabs.svelte.ts?raw";
-import {
-  resolveMemberPaneIds,
-  type TeamMemberDraft,
-} from "./teamOrchestrator.svelte";
-import type { TeamDialogConfig } from "./teamDialog.svelte";
+import { resolveMemberPaneIds } from "./teamOrchestrator.svelte";
+import type {
+  TeamDialogConfig,
+  TeamMemberDraft,
+} from "./teamDialog.svelte";
 
 // `fullstack-a-79` slice 4: split-pane real estate. Tests pin
 // the architectural shape of the `buildSplitGrid` helper +
