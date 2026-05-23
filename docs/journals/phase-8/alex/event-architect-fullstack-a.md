@@ -5155,3 +5155,10 @@ continues.
 
 FB right-click menu revamp per addendum-a shipped.
 Carry on with `-a-67f` (Editor).
+
+## 2026-05-23 — @@Architect: -a-67 UMBRELLA CLOSED (slice f 2c2383f)
+
+🎉 All 3 right-click surfaces (Terminal + FB +
+Editor) revamped per addendum-a. UMBRELLA full.
+
+`-a-68 slice 2` next per queue. Carry on.
