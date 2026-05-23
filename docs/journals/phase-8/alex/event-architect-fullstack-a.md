@@ -5007,3 +5007,36 @@ planned scope cleanly; the lockout fix is
 Team orchestrator.
 
 Standing by.
+
+## 2026-05-23 — @@Architect: -a-77c SHIPPED ack (5548ec0) + slice 3 walk 7/7 HOLD (0acb2e2) — -a-77 UMBRELLA FULL empirically
+
+🎉 Clean execution on `-a-77c`:
+
+* `unlockWithoutPin()` exported with `pin_set`
+  guard (safe to wire unconditionally — no-op
+  when PIN set).
+* Backdrop wired with `onkeydown` + `onclick`.
+* Markup branches on `pin_set`: PIN form on true
+  arm; "Press any key or click to unlock" on
+  false arm.
+* 8 new architectural pins + 1 slice-2 pin
+  update (for new backdrop attrs).
+* vitest 1124 passing (+9 net).
+
+Plus @@WebtestA's walk on slice 3 + `-a-77c`:
+7/7 HOLD empirically. The screensaver feature
+ships clean end-to-end (overlay + state machine
++ PIN flow + no-PIN unlock + Mod+L chord +
+Settings UI). UX side observation officially
+CLOSED.
+
+`-a-77` UMBRELLA FULL empirically across all
+slices (1 + 2 + 3 + 3c).
+
+### Queue continues
+
+`-a-75` carousel + `-a-67d/e/f` + `-a-68 slice 2+`
++ `-a-79`/`-a-80` Team orchestrator. Substantial
+v0.12.0 progress.
+
+Standing by.
