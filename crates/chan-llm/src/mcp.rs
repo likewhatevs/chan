@@ -19,6 +19,7 @@
 //! `max_image_bytes` (default 10 MiB, configurable by the server
 //! builder or `--max-image-bytes`).
 
+use std::io::Cursor;
 use std::sync::Arc;
 
 use base64::engine::Engine as _;
@@ -31,9 +32,13 @@ use rmcp::{
     ServerHandler, ServiceExt,
 };
 use serde::Deserialize;
+use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 
 use crate::error::LlmError;
 use crate::tools::{self, ToolContext};
+
+const MCP_FRAME_HEADER_LIMIT: usize = 8192;
+const MCP_FRAME_BODY_LIMIT: usize = 16 * 1024 * 1024;
 
 /// Default hard cap on a single `read_image` response, in bytes.
 /// 10 MiB covers the typical image attachment ceiling of frontier
@@ -121,14 +126,8 @@ impl Server {
     /// stdout; rmcp's internal tracing goes to stderr. Blocks until
     /// the client disconnects.
     pub async fn serve_stdio(self) -> crate::error::Result<()> {
-        let svc = self
-            .serve(stdio())
-            .await
-            .map_err(|e| LlmError::Mcp(format!("serve: {e}")))?;
-        svc.waiting()
-            .await
-            .map_err(|e| LlmError::Mcp(format!("waiting: {e}")))?;
-        Ok(())
+        let (reader, writer) = stdio();
+        self.serve_io(reader, writer).await
     }
 
     /// Run the server over an arbitrary async read/write pair. Used
@@ -142,6 +141,7 @@ impl Server {
         R: tokio::io::AsyncRead + Send + Unpin + 'static,
         W: tokio::io::AsyncWrite + Send + Unpin + 'static,
     {
+        let (reader, writer, framed_tasks) = adapt_mcp_transport(reader, writer).await?;
         let svc = self
             .serve((reader, writer))
             .await
@@ -149,8 +149,171 @@ impl Server {
         svc.waiting()
             .await
             .map_err(|e| LlmError::Mcp(format!("waiting: {e}")))?;
+        drop(framed_tasks);
         Ok(())
     }
+}
+
+struct FramedTasks {
+    inbound: tokio::task::JoinHandle<()>,
+    outbound: tokio::task::JoinHandle<()>,
+}
+
+impl Drop for FramedTasks {
+    fn drop(&mut self) {
+        self.inbound.abort();
+        self.outbound.abort();
+    }
+}
+
+async fn adapt_mcp_transport<R, W>(
+    mut reader: R,
+    writer: W,
+) -> crate::error::Result<(
+    Box<dyn AsyncRead + Send + Unpin>,
+    Box<dyn AsyncWrite + Send + Unpin>,
+    Option<FramedTasks>,
+)>
+where
+    R: AsyncRead + Send + Unpin + 'static,
+    W: AsyncWrite + Send + Unpin + 'static,
+{
+    let mut first = [0u8; 1];
+    let n = reader
+        .read(&mut first)
+        .await
+        .map_err(|e| LlmError::Mcp(format!("read transport prelude: {e}")))?;
+    if n == 0 {
+        return Ok((Box::new(Cursor::new(Vec::new())), Box::new(writer), None));
+    }
+    let first = first[0];
+    let prefixed = Cursor::new(vec![first]).chain(reader);
+    if first != b'C' && first != b'c' {
+        return Ok((Box::new(prefixed), Box::new(writer), None));
+    }
+
+    let (rmcp_in_reader, rmcp_in_writer) = tokio::io::duplex(64 * 1024);
+    let (rmcp_out_reader, rmcp_out_writer) = tokio::io::duplex(64 * 1024);
+    let inbound = tokio::spawn(async move {
+        let _ = content_length_to_lines(prefixed, rmcp_in_writer).await;
+    });
+    let outbound = tokio::spawn(async move {
+        let _ = lines_to_content_length(rmcp_out_reader, writer).await;
+    });
+    Ok((
+        Box::new(rmcp_in_reader),
+        Box::new(rmcp_out_writer),
+        Some(FramedTasks { inbound, outbound }),
+    ))
+}
+
+async fn content_length_to_lines<R, W>(mut reader: R, mut writer: W) -> std::io::Result<()>
+where
+    R: AsyncRead + Unpin,
+    W: AsyncWrite + Unpin,
+{
+    loop {
+        let header = match read_frame_header(&mut reader).await? {
+            Some(header) => header,
+            None => return Ok(()),
+        };
+        let len = parse_content_length(&header)?;
+        if len > MCP_FRAME_BODY_LIMIT {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "mcp frame body too large",
+            ));
+        }
+        let mut body = vec![0u8; len];
+        reader.read_exact(&mut body).await?;
+        writer.write_all(&body).await?;
+        writer.write_all(b"\n").await?;
+        writer.flush().await?;
+    }
+}
+
+async fn lines_to_content_length<R, W>(mut reader: R, mut writer: W) -> std::io::Result<()>
+where
+    R: AsyncRead + Unpin,
+    W: AsyncWrite + Unpin,
+{
+    let mut line = Vec::new();
+    let mut byte = [0u8; 1];
+    loop {
+        line.clear();
+        loop {
+            let n = reader.read(&mut byte).await?;
+            if n == 0 {
+                return Ok(());
+            }
+            if byte[0] == b'\n' {
+                break;
+            }
+            line.push(byte[0]);
+            if line.len() > MCP_FRAME_BODY_LIMIT {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    "mcp line body too large",
+                ));
+            }
+        }
+        if line.last() == Some(&b'\r') {
+            line.pop();
+        }
+        let header = format!("Content-Length: {}\r\n\r\n", line.len());
+        writer.write_all(header.as_bytes()).await?;
+        writer.write_all(&line).await?;
+        writer.flush().await?;
+    }
+}
+
+async fn read_frame_header<R>(reader: &mut R) -> std::io::Result<Option<Vec<u8>>>
+where
+    R: AsyncRead + Unpin,
+{
+    let mut header = Vec::new();
+    let mut byte = [0u8; 1];
+    loop {
+        let n = reader.read(&mut byte).await?;
+        if n == 0 {
+            if header.is_empty() {
+                return Ok(None);
+            }
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::UnexpectedEof,
+                "partial mcp frame header",
+            ));
+        }
+        header.push(byte[0]);
+        if header.len() > MCP_FRAME_HEADER_LIMIT {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "mcp frame header too large",
+            ));
+        }
+        if header.ends_with(b"\r\n\r\n") {
+            return Ok(Some(header));
+        }
+    }
+}
+
+fn parse_content_length(header: &[u8]) -> std::io::Result<usize> {
+    let header = std::str::from_utf8(header)
+        .map_err(|_| std::io::Error::new(std::io::ErrorKind::InvalidData, "non-utf8 header"))?;
+    for line in header.lines() {
+        let Some((name, value)) = line.split_once(':') else {
+            continue;
+        };
+        if name.eq_ignore_ascii_case("content-length") {
+            return value.trim().parse::<usize>().map_err(|_| {
+                std::io::Error::new(std::io::ErrorKind::InvalidData, "bad content length")
+            });
+        }
+    }
+    Err(std::io::Error::new(
+        std::io::ErrorKind::InvalidData,
+        "missing content length",
+    ))
 }
 
 // ---- tool param schemas -----------------------------------------------
@@ -807,5 +970,99 @@ mod tests {
             "should keep mtime numeric in: {err}",
         );
         assert!(err.to_lowercase().contains("conflict"));
+    }
+
+    #[tokio::test]
+    async fn framed_content_length_initialize_roundtrips() {
+        let (_cfg, _root, server) = fixture();
+        let (client_io, server_io) = tokio::io::duplex(64 * 1024);
+        let (server_read, server_write) = tokio::io::split(server_io);
+        let server_task =
+            tokio::spawn(async move { server.serve_io(server_read, server_write).await });
+
+        let (mut client_read, mut client_write) = tokio::io::split(client_io);
+        let init = serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "initialize",
+            "params": {
+                "protocolVersion": "2024-11-05",
+                "capabilities": {},
+                "clientInfo": {"name": "probe", "version": "0"}
+            }
+        })
+        .to_string();
+        write_content_length_frame(&mut client_write, init.as_bytes())
+            .await
+            .unwrap();
+
+        let header = read_frame_header(&mut client_read)
+            .await
+            .unwrap()
+            .expect("response header");
+        let len = parse_content_length(&header).unwrap();
+        let mut body = vec![0u8; len];
+        client_read.read_exact(&mut body).await.unwrap();
+        let response: serde_json::Value = serde_json::from_slice(&body).unwrap();
+
+        assert_eq!(response["jsonrpc"], "2.0");
+        assert_eq!(response["id"], 1);
+        assert_eq!(response["result"]["serverInfo"]["name"], "chan");
+
+        drop(client_write);
+        server_task.abort();
+    }
+
+    #[tokio::test]
+    async fn newline_initialize_still_roundtrips() {
+        let (_cfg, _root, server) = fixture();
+        let (client_io, server_io) = tokio::io::duplex(64 * 1024);
+        let (server_read, server_write) = tokio::io::split(server_io);
+        let server_task =
+            tokio::spawn(async move { server.serve_io(server_read, server_write).await });
+
+        let (mut client_read, mut client_write) = tokio::io::split(client_io);
+        let init = serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "initialize",
+            "params": {
+                "protocolVersion": "2024-11-05",
+                "capabilities": {},
+                "clientInfo": {"name": "probe", "version": "0"}
+            }
+        })
+        .to_string();
+        client_write.write_all(init.as_bytes()).await.unwrap();
+        client_write.write_all(b"\n").await.unwrap();
+        client_write.flush().await.unwrap();
+
+        let mut line = Vec::new();
+        let mut byte = [0u8; 1];
+        loop {
+            client_read.read_exact(&mut byte).await.unwrap();
+            if byte[0] == b'\n' {
+                break;
+            }
+            line.push(byte[0]);
+        }
+        let response: serde_json::Value = serde_json::from_slice(&line).unwrap();
+
+        assert_eq!(response["jsonrpc"], "2.0");
+        assert_eq!(response["id"], 1);
+        assert_eq!(response["result"]["serverInfo"]["name"], "chan");
+
+        drop(client_write);
+        server_task.abort();
+    }
+
+    async fn write_content_length_frame<W>(writer: &mut W, body: &[u8]) -> std::io::Result<()>
+    where
+        W: AsyncWrite + Unpin,
+    {
+        let header = format!("Content-Length: {}\r\n\r\n", body.len());
+        writer.write_all(header.as_bytes()).await?;
+        writer.write_all(body).await?;
+        writer.flush().await
     }
 }
