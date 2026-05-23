@@ -4421,3 +4421,27 @@ services, classified acceptable. Manual key/token/cert sweep +
 docs image audit found no purge-worthy material.
 
 Report + recommendation: [`../systacean/systacean-43.md`](../systacean/systacean-43.md#2026-05-23-1534-bst--audit-report--recommendation)
+
+## 2026-05-23 15:52 BST — poke (-44 Track-3 backend cleanup complete)
+
+`systacean-44` complete. Landed a small backend cleanup/hardening patch:
+
+* removed confirmed unused tunnel dependency edges; `cargo machete` now clean.
+* made `chan-tunnel-server`'s e2e `reqwest` `stream` feature explicit.
+* improved local `chan serve` bind context to include the requested address.
+* capped terminal watcher event-file reads at 1 MiB with a regression test.
+
+Full report: [`../systacean/systacean-44.md`](../systacean/systacean-44.md#2026-05-23-1552-bst--report)
+
+Verification:
+
+* `cargo fmt`
+* `cargo machete`
+* `cargo check -p chan-tunnel-client -p chan-tunnel-server`
+* `cargo test -p chan-server routes::terminal::tests`
+* `cargo test -p chan-tunnel-server`
+* `cargo test -p chan --bin chan parse_idle_timeout`
+* `cargo clippy --all-targets -- -D warnings`
+* `cargo build --no-default-features`
+
+`cargo test` full-workspace hit macOS `Too many open files` in three chan-drive reindex tests; targeted serial rerun of that reindex group passed 8/0, so I classify it as resource pressure rather than a patch failure.

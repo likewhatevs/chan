@@ -1094,20 +1094,14 @@ dependencies = [
 name = "chan-tunnel-client"
 version = "0.11.2"
 dependencies = [
- "anyhow",
- "async-trait",
  "axum",
  "base64 0.22.1",
- "bytes",
  "chan-tunnel-proto",
  "futures",
  "h2",
  "http",
- "http-body",
- "http-body-util",
  "hyper",
  "hyper-util",
- "pin-project-lite",
  "rustls",
  "rustls-native-certs",
  "rustls-pki-types",
@@ -1138,7 +1132,6 @@ dependencies = [
 name = "chan-tunnel-server"
 version = "0.11.2"
 dependencies = [
- "anyhow",
  "async-trait",
  "axum",
  "bytes",
@@ -1148,19 +1141,14 @@ dependencies = [
  "futures",
  "h2",
  "http",
- "http-body",
  "http-body-util",
  "hyper",
  "hyper-util",
  "parking_lot 0.12.5",
- "pin-project-lite",
  "reqwest 0.12.28",
- "serde",
- "serde_json",
  "thiserror 1.0.69",
  "tokio",
  "tokio-util",
- "tower",
  "tower-http",
  "tower_governor",
  "tracing",

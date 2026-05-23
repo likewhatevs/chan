@@ -1357,7 +1357,7 @@ async fn cmd_serve(
     };
     chan_server::serve(lib, drive, config)
         .await
-        .context("running server")
+        .with_context(|| format!("running server on {addr}"))
 }
 
 /// systacean-27: dispatch the `chan reports {enable,disable}`

@@ -421,6 +421,8 @@ struct WatcherEventEntry {
     content: String,
 }
 
+const WATCHER_EVENT_MAX_BYTES: u64 = 1024 * 1024;
+
 /// systacean-9: list event files in the active watcher's directory.
 /// Replaces the prior SPA pattern of `api.list(dir) + api.read(path)`
 /// per file: that composition routed through `/api/files` which
@@ -470,6 +472,9 @@ fn list_watcher_events(dir: &Path) -> std::io::Result<Vec<WatcherEventEntry>> {
             continue;
         };
         if !is_watcher_event_filename(name_str) {
+            continue;
+        }
+        if entry.metadata()?.len() > WATCHER_EVENT_MAX_BYTES {
             continue;
         }
         paths.push(entry.path());
@@ -1100,6 +1105,21 @@ mod tests {
         // `parseWatcherEvent` to validate.
         assert!(entries[0].content.contains("\"id\":\"e1\""));
         assert!(entries[1].content.contains("\"type\":\"pre-flight\""));
+    }
+
+    #[test]
+    fn list_watcher_events_skips_oversized_event_files() {
+        let outside = tempfile::tempdir().expect("outside-drive temp");
+        fs::write(outside.path().join("event-small.json"), "{}").expect("write small event");
+        fs::write(
+            outside.path().join("event-huge.json"),
+            vec![b'x'; WATCHER_EVENT_MAX_BYTES as usize + 1],
+        )
+        .expect("write huge event");
+
+        let entries = list_watcher_events(outside.path()).expect("list");
+        assert_eq!(entries.len(), 1);
+        assert!(entries[0].path.ends_with("event-small.json"));
     }
 
     #[test]

@@ -10,13 +10,12 @@ description = "Server-side of the chan-tunnel implementation; library that termi
 [dev-dependencies]
 chan-tunnel-client = { path = "../chan-tunnel-client" }
 futures = { workspace = true }
-reqwest = { workspace = true }
+reqwest = { workspace = true, features = ["stream"] }
 url = { workspace = true }
 
 [dependencies]
 chan-tunnel-proto = { workspace = true }
 
-anyhow = { workspace = true }
 async-trait = { workspace = true }
 axum = { workspace = true }
 bytes = { workspace = true }
@@ -24,18 +23,13 @@ chrono = { workspace = true }
 futures = { workspace = true }
 h2 = { workspace = true }
 http = { workspace = true }
-http-body = { workspace = true }
 http-body-util = { workspace = true }
 hyper = { workspace = true }
 hyper-util = { workspace = true }
 parking_lot = { workspace = true }
-pin-project-lite = { workspace = true }
-serde = { workspace = true }
-serde_json = { workspace = true }
 thiserror = { workspace = true }
 tokio = { workspace = true }
 tokio-util = { workspace = true }
-tower = { workspace = true }
 tower-http = { workspace = true }
 tower_governor = { workspace = true }
 tracing = { workspace = true }
