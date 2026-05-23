@@ -403,3 +403,33 @@ default (mono)" + spawn → verify per-OS native.
 Offline test: disconnect network → flip to SCP →
 observe the failure rollback (preference reverts to
 os-default + error surfaced).
+
+## 2026-05-23 — teardown-complete
+
+Architect TEARDOWN directive received; v0.12.0 cut
+wraps with @@WebtestA + @@Architect + @@CI only.
+Queue-empty since slice b ack — nothing in flight
+to transfer to @@WebtestA.
+
+### Worktree audit
+
+* Modified at HEAD (NOT mine):
+  * `Cargo.lock` — `base64 0.22.1` added to
+    chan-drive (Systacean change in flight).
+  * `web/src/state/teamOrchestrator.svelte.ts` —
+    `sessionWindowId` + `markTerminalEnvNameRestarted`
+    imports (FullStackA `-a-79` slice 4 follow-up).
+* `/tmp/chan-*`: only `chan-a-*` prefixed files from
+  FullStackA's lane; no `chan-b-*` throwaways.
+* Background processes: Chan.app + @@WebtestA's
+  `target/debug/chan serve /tmp/chan-test-phase8-wa-r43`
+  + Alex's NewHouse drive — none mine.
+* Chrome MCP tabs: none opened this session.
+
+Per `process.md`: nothing to kill, nothing to
+`rm -rf`, nothing to `chan remove`.
+
+### Stand-down FINAL
+
+`-b-12` through `-b-30` shipped this phase
+(~19 tasks). Substantial lane carry.

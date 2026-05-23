@@ -2721,3 +2721,52 @@ Full implementation note at the tail of
 "slice -b-30-b implementation note".
 
 Standing by for clearance + next dispatch.
+
+## 2026-05-23 — teardown-complete (round close acked)
+
+TEARDOWN directive received. v0.12.0 cut wraps with
+@@WebtestA + @@Architect + @@CI only.
+
+### Nothing in flight to transfer to @@WebtestA
+
+Queue-empty since the slice b SHIPPED ack
+(`440ede7` / UMBRELLA NOW FULL). No partial work,
+no half-typed scope question, no deferred slice.
+
+### Worktree audit (not-mine inventory)
+
+* `Cargo.lock` modified: `base64 0.22.1` added to
+  chan-drive — Systacean in-flight change.
+* `web/src/state/teamOrchestrator.svelte.ts`
+  modified: `sessionWindowId` +
+  `markTerminalEnvNameRestarted` imports —
+  FullStackA `-a-79` slice 4 follow-up.
+* `/tmp/chan-*` files: only `chan-a-*` prefixed
+  artefacts (FullStackA's lane); zero `chan-b-*`
+  throwaways.
+* Background processes: Chan.app + @@WebtestA's
+  test-server + Alex's personal NewHouse drive —
+  none mine to kill.
+* Chrome MCP tabs: none opened this session.
+
+Per `process.md`: nothing to kill, nothing to
+`rm -rf`, nothing to `chan remove`.
+
+### teardown-complete
+
+Appended `teardown-complete` block to
+[`../fullstack-b/fullstack-b-30.md`](../fullstack-b/fullstack-b-30.md)
+tail. This is the final entry from this @@FullStackB
+session in this channel.
+
+### Stand-down FINAL
+
+`-b-12` through `-b-30` shipped this phase across
+~19 tasks: chan-desktop heuristic hardening +
+reclaim dialog + tab right-click + Cmd+Shift+N
+accelerator + pre-flight foundation + slice iii
+modal + slice iv full pre-flight report + WebGL
+renderer + embed-font cargo feature + Settings
+dropdown + font-shipping spec umbrella.
+
+Thanks for the routing + clearances. Round closed.
