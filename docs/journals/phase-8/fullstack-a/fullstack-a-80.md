@@ -101,3 +101,123 @@ This is `-a-80`.
 * chan-drive primitives (`-30`).
 * chan-server watcher (`-31`).
 * Process template (`-a-81`).
+
+## 2026-05-23 — slice 1 (FB team-dir badge + Load Team menu + Duplicate flow)
+
+SPA-only. Backend gap on `GET /api/teams/{name}/config`
+blocks the full dialog-from-config path; slice 1
+ships everything that doesn't depend on it.
+
+### Shape applied
+
+**Team-dir detection**
+
+* `TEAM_DIR_RE = /^Drafts\/team-([^/]+)$/` matches
+  the workspace shape `systacean-30` writes.
+* `teamNameFromPath(path) → string | null` extracts
+  the `{name}` group; `isTeamDir(path)` returns
+  the boolean.
+* False-positive defense: any path matching the
+  shape but missing a `config.toml` falls through
+  to the chan-server `team_events_dir` not-found
+  error which the caller surfaces.
+
+**Team badge in the tree**
+
+* FileTree's dir-icon block renders the lucide
+  `Users` icon for team dirs (overrides the
+  default `Folder` / `FolderOpen` swap).
+
+**Load Team menu entry**
+
+* Gated on `menu.isDir && isTeamDir(menu.path)`,
+  so only team dirs surface the entry.
+* Wired to `loadTeamFromMenu(path)` which:
+  1. Walks `api.teamListLoaded()`.
+  2. If the team is in the loaded set: notify +
+     `uiPrompt("Team '{name}' is already running.
+     Duplicate into new name:", "{name}-copy")` →
+     `api.teamDuplicate(name, trimmed)` on submit.
+  3. Otherwise: `api.teamLoad(name)` spins up
+     the watcher + notify ("Loaded team '{name}';
+     Slice 2 will wire the dialog-from-config flow").
+
+### Backend gap (scope-poked separately)
+
+The full Load Team flow per addendum-b §"Loading
+team" calls for the dialog to open populated with
+the persisted config (members, real estate, etc.).
+That requires a `GET /api/teams/{name}/config`
+endpoint that reads
+`Drafts/team-{name}/config.toml` and returns the
+`TeamConfig` shape. `chan-drive` exposes
+`teams::load(drafts_dir, team_name) → TeamConfig`
+but chan-server only surfaces load/unload/loaded
++ create/duplicate (per `-31` + `-41`).
+**Scope-poke filed on the architect event channel
+as the slice-2 unblocker.**
+
+### Files touched
+
+* `web/src/components/FileTree.svelte`
+  * Imports: `Play`, `Users` lucide icons;
+    `uiPrompt` from store; `api` client.
+  * `TEAM_DIR_RE`, `teamNameFromPath`,
+    `isTeamDir` helpers.
+  * `loadTeamFromMenu(path)` handler.
+  * Dir-icon branch for team-* dirs.
+  * Ctx menu Load Team entry.
+* `web/src/components/teamLoadFlow.test.ts`
+  (new) — 11 architectural pins for the
+  detection / badge / menu entry / handler
+  shape.
+
+### Decisions
+
+* **Path-shape detection** (not config.toml
+  read) — keeps the helper cheap + reactive
+  to `tree.entries`. The server's not-found
+  error catches stray `team-*` dirs without
+  configs.
+* **`uiPrompt` for duplicate name** — matches
+  the existing rename / new-file pattern;
+  doesn't require a new modal component.
+* **Slice 1 ships the not-loaded path as a
+  bare teamLoad** rather than blocking on
+  the backend. Spinning up the watcher is
+  the only thing the user can do today
+  short of the dialog; teaching them
+  through notify keeps the surface
+  truthful.
+
+### Gate
+
+* `svelte-check` → 0/0.
+* `vitest` → +11 new pins; intermittent flake
+  on 1-2 pre-existing terminal-renderer tests
+  (jsdom WebGL stub instability, unrelated to
+  this slice — reproduces on isolated runs of
+  the same tests too, depending on test
+  ordering).
+* `npm run build` → clean.
+* `cargo fmt --check` + `clippy --all-targets
+  -- -D warnings` → clean (no Rust delta).
+
+### Suggested commit subject
+
+```
+File Browser: team-dir badge + Load Team menu + Duplicate flow (fullstack-a-80 slice 1)
+```
+
+### Files (per-path)
+
+* `web/src/components/FileTree.svelte`
+* `web/src/components/teamLoadFlow.test.ts` (new)
+* `docs/journals/phase-8/fullstack-a/fullstack-a-80.md`
+
+Autonomous-commit mode. No clearance held.
+Slice 2 blocked on chan-server config-GET
+scope-poke. Picking up `-a-79` slice 2 next
+(template placement + lead pre-flight survey
++ split-pane real estate) per the original
+addendum-b sequence.

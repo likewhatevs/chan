@@ -15,11 +15,15 @@
     FolderOpen,
     Network,
     Pencil,
+    Play,
     Search,
     Settings2,
     Terminal as TerminalIcon,
     Trash2,
+    Users,
   } from "lucide-svelte";
+  import { api } from "../api/client";
+  import { uiPrompt } from "../state/store.svelte";
   import { clampMenu } from "./menuClamp";
   import type { TreeEntry } from "../api/types";
   import { isEditableText } from "../state/fileTypes";
@@ -396,6 +400,73 @@
   function flipFromMenu(): void {
     menu = null;
     onFlip?.();
+  }
+
+  /// `fullstack-a-80` slice 1: detect `Drafts/team-{name}/`
+  /// directories. The team workspace primitive
+  /// (`systacean-30`) puts every team under `Drafts/team-<name>/`
+  /// with a `config.toml` at the root; this helper just
+  /// matches the path shape since the `config.toml` check
+  /// would need a tree-lookup that isn't currently cheap from
+  /// here. False positives (any `Drafts/team-foo/` dir without
+  /// a config) gracefully fall through: the server's
+  /// `team_events_dir` returns a not-found error which the
+  /// caller surfaces.
+  const TEAM_DIR_RE = /^Drafts\/team-([^/]+)$/;
+  function teamNameFromPath(path: string): string | null {
+    const match = TEAM_DIR_RE.exec(path);
+    return match ? match[1] : null;
+  }
+  function isTeamDir(path: string): boolean {
+    return teamNameFromPath(path) !== null;
+  }
+
+  /// `fullstack-a-80` slice 1: Load Team menu handler. Walks:
+  ///   1. teamListLoaded → if the team is already running,
+  ///      surface a notify + prompt for "Duplicate into new
+  ///      name?" → teamDuplicate.
+  ///   2. Otherwise teamLoad spins up the per-team watcher.
+  ///      Slice 2 will populate the New Team dialog with the
+  ///      persisted config + run the full bootstrap chain
+  ///      (`-a-79`'s entry point) — that path is blocked on a
+  ///      `GET /api/teams/{name}/config` endpoint that
+  ///      `systacean-30` exposes only at the chan-drive layer
+  ///      today.
+  async function loadTeamFromMenu(path: string): Promise<void> {
+    menu = null;
+    const name = teamNameFromPath(path);
+    if (!name) return;
+    try {
+      const { teams } = await api.teamListLoaded();
+      if (teams.includes(name)) {
+        // Already up. Per addendum-b: offer to duplicate.
+        const newName = await uiPrompt(
+          `Team "${name}" is already running. Duplicate into new name:`,
+          `${name}-copy`,
+        );
+        if (!newName || newName === name) return;
+        const trimmed = newName.trim();
+        if (!trimmed || trimmed === name) return;
+        try {
+          await api.teamDuplicate(name, trimmed);
+          notify(`Duplicated "${name}" → "${trimmed}".`);
+        } catch (err) {
+          notify(
+            `Duplicate failed: ${(err as Error).message ?? err}`,
+          );
+        }
+        return;
+      }
+      // Not loaded yet. Slice 1 only spins up the watcher;
+      // slice 2 will pre-populate the dialog with the stored
+      // config + run the bootstrap chain.
+      await api.teamLoad(name);
+      notify(
+        `Loaded team "${name}". Slice 2 will wire the dialog-from-config flow.`,
+      );
+    } catch (err) {
+      notify(`Load Team failed: ${(err as Error).message ?? err}`);
+    }
   }
   /// `fullstack-a-67e` slice 2: dropped the legacy `newFile` /
   /// `newDir` local helpers along with the menu's separate New
@@ -849,7 +920,15 @@
              between open / closed so a glance over the column reads
              expand state without parsing chevrons. -->
         <span class="row-icon dir-icon" aria-hidden="true">
-          {#if expanded[node.path]}
+          {#if isTeamDir(node.path)}
+            <!-- `fullstack-a-80` slice 1: team-dir badge.
+                 `Drafts/team-{name}/` dirs render with the
+                 Users icon so the user spots them in the
+                 tree at a glance. Right-click adds a "Load
+                 Team" entry that the ctx-menu block below
+                 wires up. -->
+            <Users size={14} strokeWidth={1.75} />
+          {:else if expanded[node.path]}
             <FolderOpen size={14} strokeWidth={1.75} />
           {:else}
             <Folder size={14} strokeWidth={1.75} />
@@ -966,6 +1045,16 @@
       <button onclick={() => newFileOrDir(menu!.path)}>
         <FilePlus size={16} strokeWidth={1.75} aria-hidden="true" />
         <span>New File or Directory</span>
+      </button>
+    {/if}
+    {#if menu.isDir && isTeamDir(menu.path)}
+      <!-- `fullstack-a-80` slice 1: Load Team entry only
+           surfaces on `Drafts/team-{name}/` dirs. Walks the
+           already-loaded check + dispatches teamLoad or
+           offers Duplicate per addendum-b. -->
+      <button onclick={() => void loadTeamFromMenu(menu!.path)}>
+        <Play size={16} strokeWidth={1.75} aria-hidden="true" />
+        <span>Load Team</span>
       </button>
     {/if}
     <button onclick={() => searchThis(menu!.path, menu!.isDir)}>
