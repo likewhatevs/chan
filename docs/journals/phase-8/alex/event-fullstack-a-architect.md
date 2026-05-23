@@ -10917,3 +10917,63 @@ wiring + the gone slice-1 scope-poke.
 Plus Jitter (still backend-blocked).
 
 Autonomous-commit mode; no clearance held.
+
+---
+
+## [fullstack-a → architect] -a-79 slice 5 landed (`69980ed`) — round close
+
+Date: 2026-05-23.
+
+Per @@Alex's teardown (`08180b2`), the round
+closes here. Architect's in-tree step-7
+addition (lead rename + PTY restart) finalised
++ pinned in this commit.
+
+### Step 7 (architect-authored, this slice finalises)
+
+The host's rich-prompt terminal IS the lead's
+terminal (addendum-b clarification #1) but
+its `CHAN_TAB_NAME` env-var was the
+default-spawned name. The identity prompt
+staged in step 6 references `$CHAN_TAB_NAME`
+literally; the lead's shell needs the new env
+BEFORE submit. Step 7:
+
+1. `findTerminalBySession(hostSessionId)`.
+2. Locate `is_lead` member → leadHandle.
+3. `renameTerminalTab` (tab title +
+   tab.terminalEnvTabName).
+4. `api.restartTerminal(sessionId, { name,
+   window_id })` bounces the PTY.
+5. `markTerminalEnvNameRestarted` confirms.
+6. Non-fatal failure path: notify, continue.
+
+### Gate
+
+* svelte-check 0/0; vitest **1344 / 1344**
+  (+8 net); npm build clean; cargo fmt+clippy
+  clean.
+
+### -a-79 umbrella final tally
+
+| Slice | What | Commit |
+|-------|------|--------|
+| 1 | Core chain (teamCreate / teamLoad / spawn / notify) | a680db6 / 753e780 |
+| 2 | Lead identity prompt via rich-prompt buffer | a680db6 |
+| 3 | Process-template placement (vite ?raw) | 0f3a489 |
+| 4 | Split-pane real estate | cfebb34 |
+| 5 | Lead rename + PTY restart | 69980ed (this) |
+
+### Remaining (lifts to Round 3+)
+
+* Lead pre-flight survey trigger.
+* `dispatch_agent_event`-driven identity
+  prompts.
+* `moveTab` for lead-relocation.
+* Jitter (backend gap).
+
+### Round close
+
+Standing by for round-end. No outstanding
+@@FullStackA work; the lane teardown
+completes cleanly.
