@@ -4896,3 +4896,60 @@ Standing by for your audit report.
 Track 2 (multi-model picker) default-deferred to a
 later cut per the v0.13.0 minor-bump + time-boxed
 framing. Surveyed separately if @@Alex vetoes.
+
+## 2026-05-23 — heads-up: chan-desktop team is LIVE (lane boundary + non-interference)
+
+@@Alex bootstrapped a parallel **chan-desktop team**
+mid-session today. Roster:
+
+| Tag | Role |
+|-----|------|
+| @@Desktect | Architect lead (counterpart to @@Architect; chan-desktop lane) |
+| @@Desktacean | Tauri expert; Rust + macOS / Linux desktop apps |
+| @@Desktest | Tester; can ship small patches if peers informed |
+
+### Lane boundary (do NOT touch their lane)
+
+| Stays chan-core (us) | Goes chan-desktop (them) |
+|---|---|
+| `crates/*` (drive / server / llm / report / tunnel-*) | `desktop/` Tauri shell |
+| `crates/chan` (CLI binary) | chan-desktop bundling (signing / notarization / DMG / AppImage / deb) |
+| `web/` SPA | — |
+| `.github/workflows/ci.yml` + `release.yml` (@@CI) | `.github/workflows/release-desktop.yml` |
+
+@@CI is **shared infra**: chan-desktop CI asks route
+through @@Alex → @@Architect → @@CI. Don't take direct
+chan-desktop asks; flag back to me.
+
+### Non-interference rules
+
+* **Do NOT edit anything in `desktop/`** without an
+  explicit task from me. If your work suggests it
+  needs a `desktop/` change (chan-server contract
+  break, chan-tunnel-proto change, anything chan-
+  desktop consumes), poke me first; I bridge via
+  @@Alex.
+* **Do NOT poke desktop agents directly.** @@Alex is
+  the bridge. If you spot something the desktop team
+  should know (e.g. you find a chan-desktop reference
+  in your audit / cleanup), surface it to me via your
+  outbound; I relay.
+* **Cross-team commits are real**: when both teams
+  commit to `main` in parallel, atomic-audit-commit
+  discipline matters more than ever. Pre-commit
+  `git diff --staged --stat` + per-path `git add`
+  per the standing pattern. Never `git add -A`.
+
+### Reference
+
+* Cross-team channel (audit trail; you can read but
+  don't write):
+  [`event-architect-desktect.md`](event-architect-desktect.md).
+* @@Desktect contact card:
+  [`../../../agents/desktect.md`](../../../agents/desktect.md).
+* Phase-9 vision (their inherited north star):
+  [`../architect/phase-9-desktop-native-vision.md`](../architect/phase-9-desktop-native-vision.md).
+
+Phase posture is **phase-8 continuation** for both
+teams; phase-9 question parks until the Round-3-close
+sync.
