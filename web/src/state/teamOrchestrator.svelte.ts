@@ -25,16 +25,14 @@
 //     event-channel path is wired in `-a-79` slice 2 when
 //     `systacean-21`'s rich-poke flow consumes a team channel).
 
-import { api, sessionWindowId, type TeamConfigWire, type TeamMemberWire } from "../api/client";
+import { api, type TeamConfigWire, type TeamMemberWire } from "../api/client";
 import { notify } from "./notify.svelte";
 import {
   buildSplitGrid,
   findTerminalBySession,
   layout,
-  markTerminalEnvNameRestarted,
   openTerminalInPane,
   primeTerminalRichPrompt,
-  renameTerminalTab,
   setActivePane,
 } from "./tabs.svelte";
 import type {
@@ -358,40 +356,82 @@ export async function runTeamBootstrap(
   //    - No host session id was passed (e.g. invoked from a
   //      surface outside the rich-prompt context).
   //    - The host terminal is no longer open (closed mid-flight).
+  // 6. Promote the host's pre-bootstrap terminal into the lead's
+  //    terminal. Per addendum-b clarification #1 + @@Alex's
+  //    2026-05-23 follow-up: the host's rich-prompt terminal IS
+  //    the lead's terminal — but the lead's shell needs to run
+  //    the lead member's COMMAND (e.g. `claude`), not the host's
+  //    pre-bootstrap default shell. The cleanest shape is
+  //    close-the-host-session + spawn the lead's PTY fresh in
+  //    the same pane: the new session is owned by /api/terminals
+  //    POST, has the right command/env/CHAN_TAB_NAME from spawn-
+  //    time, and the SPA's WS attaches to it normally (no
+  //    restart-with-command WS-reconnect plumbing needed). The
+  //    identity prompt then primes the NEW tab's rich-prompt
+  //    buffer (the buffer is SPA-side, tab-keyed).
+  //    Silently no-op when there's no host session, the host
+  //    terminal is closed, or the config has no `is_lead`
+  //    member.
   if (hostSessionId) {
-    const leadTab = findTerminalBySession(hostSessionId);
-    if (leadTab) primeTerminalRichPrompt(leadTab, prompt);
-  }
-  // 7. Rename + restart the host's terminal so it becomes the
-  //    lead's terminal. Per addendum-b clarification #1 the
-  //    host's rich-prompt terminal IS the lead's terminal;
-  //    renaming the tab and restarting the PTY makes
-  //    `CHAN_TAB_NAME` in the lead's shell expand to the lead
-  //    handle (e.g. `@@Lead`). The identity prompt staged in
-  //    step 6 reads `$CHAN_TAB_NAME` literally, so the lead's
-  //    shell needs the new env BEFORE the user submits the
-  //    prompt. The host itself has no dedicated terminal — the
-  //    user drives the team through the lead's + workers'
-  //    terminals (addendum-b 2026-05-23). Silently no-op when
-  //    there's no host session, the host terminal is closed,
-  //    or the config has no member flagged `is_lead`.
-  if (hostSessionId) {
-    const leadTab = findTerminalBySession(hostSessionId);
+    const oldLeadTab = findTerminalBySession(hostSessionId);
     const leadEntry = wire.members.find((m) => m.is_lead);
-    const leadHandle = leadEntry?.handle;
-    if (leadTab && leadHandle && leadTab.terminalSessionId) {
-      renameTerminalTab(leadTab, leadHandle);
+    if (oldLeadTab && leadEntry && oldLeadTab.terminalSessionId) {
+      // Locate the pane that owns the old lead tab. Falls back
+      // to the resolved lead pane id from step 4 if the walk
+      // can't pin one down (e.g. layout edge cases).
+      let oldLeadPaneId: string | undefined;
+      for (const node of Object.values(layout.nodes)) {
+        if (node.kind !== "leaf") continue;
+        if (node.tabs.some((t) => t.id === oldLeadTab.id)) {
+          oldLeadPaneId = node.id;
+          break;
+        }
+      }
+      const targetPaneId = oldLeadPaneId ?? leadPaneId ?? layout.activePaneId;
       try {
-        await api.restartTerminal(leadTab.terminalSessionId, {
-          name: leadHandle,
-          window_id: sessionWindowId(),
-        });
-        markTerminalEnvNameRestarted(leadTab);
+        await api.closeTerminal(oldLeadTab.terminalSessionId);
       } catch (err) {
         notify(
-          `Lead terminal restart failed: ${(err as Error).message ?? err}`,
+          `Lead old-session close failed: ${(err as Error).message ?? err}`,
         );
       }
+      // Drop the old tab from its pane (its session is gone).
+      const oldPane = oldLeadPaneId ? layout.nodes[oldLeadPaneId] : undefined;
+      if (oldPane && oldPane.kind === "leaf") {
+        const idx = oldPane.tabs.findIndex((t) => t.id === oldLeadTab.id);
+        if (idx >= 0) {
+          oldPane.tabs.splice(idx, 1);
+          if (oldPane.activeTabId === oldLeadTab.id) {
+            oldPane.activeTabId = oldPane.tabs[Math.max(0, idx - 1)]?.id ?? null;
+          }
+        }
+      }
+      // Spawn the lead's terminal afresh + open in the lead's pane.
+      try {
+        const response = await api.spawnTerminal({
+          name: leadEntry.handle,
+          command: leadEntry.command,
+          env: leadEntry.env,
+          ...(hostSessionId ? { orchestrator_session: hostSessionId } : {}),
+        });
+        const newTab = openTerminalInPane(targetPaneId, {
+          sessionId: response.session,
+          title: response.tab_label,
+        });
+        if (newTab) {
+          // Prime the lead's identity prompt on the new tab.
+          primeTerminalRichPrompt(newTab, prompt);
+        }
+      } catch (err) {
+        notify(
+          `Lead spawn failed: ${(err as Error).message ?? err}`,
+        );
+      }
+    } else if (oldLeadTab) {
+      // Fallback when there is no lead member in the config:
+      // still prime the rich-prompt buffer on the old tab so
+      // the user has the identity prompt available.
+      primeTerminalRichPrompt(oldLeadTab, prompt);
     }
   }
   notify(`Team "${wire.team_name}" bootstrapped.`);
