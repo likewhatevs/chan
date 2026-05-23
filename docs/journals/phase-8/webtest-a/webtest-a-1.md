@@ -6278,3 +6278,30 @@ Lane-A test server torn down:
 4. Chrome MCP tab closed.
 
 4/4 HOLD. `-a-75` ships clean.
+
+### Addendum to -a-75 walk: PARTIAL on Infographics tab (no carousel inside)
+
+@@Alex flagged post-walk: expected the Infographics
+tab to HOST the carousel widget (rolling slides +
+pause control inside the tab), not be a static
+shortcut page.
+
+**Empirical re-read**:
+- Welcome screen: carousel widget (rotating
+  slides + pagination dots + play/pause)
+- Infographics tab: static "Shortcuts" page (App /
+  Panes / Tabs sections rendered statically)
+
+**Updated verdict**: `-a-75` is **PARTIAL** on the
+"Infographics tab contains carousel widget" check.
+The static page route extracts one slide's content
+but doesn't carry the rotation + pause UX.
+
+**Suggested fix**: lift the carousel component
+into the Infographics tab body. Welcome screen
+options: (a) static slide-1, (b) keep carousel +
+duplicate, (c) static welcome + carousel-only-in-
+Infographics. @@Alex's "inside the tab instead"
+wording leans toward (c).
+
+Flagged to architect for `-a-75 slice 1b` cut.

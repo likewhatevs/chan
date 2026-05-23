@@ -3876,3 +3876,75 @@ stand-down.
 * Path-limited `git commit`.
 
 Standing down. 🫡
+
+## 2026-05-23 — addendum to -a-75 walk: PARTIAL on Infographics tab (no carousel inside)
+
+@@Alex flagged immediately after the prior poke:
+
+> "I was expecting that we would still have the carousel
+> functionality, but inside the tab instead; this is so
+> that we can see all of the widgets from the carousel
+> rolling and also pause"
+
+### Empirical re-read
+
+* **Welcome screen** (pre-tab): carousel widget
+  with rotating slides + pagination dots `● ○ ○`
+  + play/pause control.
+* **Infographics tab** (post-click): STATIC
+  "Shortcuts" page. No carousel, no rotation, no
+  pause. Just the App / Panes / Tabs chord
+  sections rendered as a single static page.
+
+### Expected vs actual
+
+@@Alex's intent: the Infographics tab should HOST
+the carousel widget itself (rolling slides +
+pause control inside the tab), not be a static
+extract of one slide's content.
+
+Current: carousel lives on welcome (pre-spawn);
+Infographics tab is a static shortcut reference.
+
+### Verdict update for `-a-75`
+
+| Check | Prior | Updated |
+|-------|-------|---------|
+| Carousel slide 1 spawn order | HOLD | HOLD |
+| Empty-pane right-click matches | HOLD | HOLD |
+| Infographics tab spawnable | HOLD | HOLD |
+| Infographics shows carousel widget | (assumed shortcut table) | **PARTIAL** |
+
+### Suggested fix
+
+* Lift the carousel component (slides + pagination
+  + play/pause) from the welcome screen into the
+  Infographics tab body.
+* Welcome screen can either:
+  (a) keep a static slide-1 view (less motion as
+      first impression), OR
+  (b) keep the carousel as today + duplicate inside
+      Infographics, OR
+  (c) move the carousel entirely to Infographics and
+      simplify welcome to just the spawn tiles.
+
+@@Alex's wording ("inside the tab instead") suggests
+option (c): static spawn-tile welcome + carousel-
+inside-Infographics. But other readings work; would
+defer to @@Alex's preference for (a/b/c).
+
+Lane: **@@FullStackA**. Worth a slice 1b
+(`-a-75 slice 1b`?) to move the carousel
+component into the Infographics tab.
+
+### Suggested commit shape (for this addendum)
+
+* **Commit subject**: `docs: webtest-a -a-75
+  addendum — Infographics tab PARTIAL (static
+  page, no carousel widget inside; @@Alex caught
+  the UX gap)`.
+* **Files**:
+  * `docs/journals/phase-8/alex/event-webtest-a-architect.md`
+* Path-limited.
+
+Standing by.
