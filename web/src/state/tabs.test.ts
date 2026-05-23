@@ -292,6 +292,14 @@ describe("pane state", () => {
     await restoreLayout(snapshot!);
 
     expect(focusColorForWindow()).toBe("pink");
+
+    setWindowFocusColor("orange");
+    const orangeSnapshot = serializeLayout();
+    expect(JSON.stringify(orangeSnapshot)).toContain("\"wc\":\"o\"");
+
+    await restoreLayout(orangeSnapshot!);
+
+    expect(focusColorForWindow()).toBe("orange");
   });
 
   test("drops legacy per-pane focus color on restore", async () => {

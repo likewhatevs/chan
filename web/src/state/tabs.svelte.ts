@@ -676,7 +676,7 @@ export type Pane = {
   showingBack?: boolean;
 };
 
-export type FocusColor = "blue" | "green" | "pink";
+export type FocusColor = "blue" | "orange" | "green" | "pink";
 
 export type Split = {
   id: string;
@@ -3192,7 +3192,7 @@ type SerTab = {
   iw?: number;
   ow?: number;
 };
-type SerFocusColor = "g" | "p";
+type SerFocusColor = "o" | "g" | "p";
 type SerHybridTheme = "d" | "l";
 type SerLeaf = {
   k: "l";
@@ -3238,12 +3238,14 @@ type SerSplit = {
 type SerNode = SerLeaf | SerSplit;
 
 function serializeFocusColor(color: FocusColor | undefined): { wc?: SerFocusColor } {
+  if (color === "orange") return { wc: "o" };
   if (color === "green") return { wc: "g" };
   if (color === "pink") return { wc: "p" };
   return {};
 }
 
 function restoreFocusColor(color: SerFocusColor | undefined): FocusColor {
+  if (color === "o") return "orange";
   if (color === "g") return "green";
   if (color === "p") return "pink";
   return "blue";

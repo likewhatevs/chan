@@ -107,7 +107,7 @@ describe("Pane terminal tab activity marker", () => {
 });
 
 describe("Pane right-click menus", () => {
-  test("hamburger uses window-wide focus color before navigation and split actions", async () => {
+  test("hamburger follows roadmap spawn, navigation, and focus colour order", async () => {
     const pane: LeafNode = {
       kind: "leaf",
       id: "pane-menu",
@@ -122,16 +122,6 @@ describe("Pane right-click menus", () => {
     expect(document.body.querySelector(".menu-label span")?.textContent?.trim()).toBe(
       "Focus border colour",
     );
-    // fullstack-60: pane hamburger trimmed to just Enter Pane Mode +
-    // the colour swatches.
-    // fullstack-62: user-facing label flipped from "Pane Mode" to
-    // "Hybrid NAV"; the internal `paneMode*` symbols stay.
-    // `fullstack-a-32` + `fullstack-a-67` slice 2: five first-
-    // class spawn entries (New Draft / Terminal / File Browser /
-    // Rich Prompt / Graph) land at the top of the hamburger,
-    // separator, then Enter Hybrid NAV + focus-border palette.
-    // Same set + ordering as the empty-pane right-click menu
-    // and the carousel slide 1.
     expect(menuLabels()).toEqual([
       "New Draft",
       "Terminal",
@@ -139,20 +129,25 @@ describe("Pane right-click menus", () => {
       "Rich Prompt",
       "Graph",
       "Enter Hybrid Nav",
+      "Split right",
+      "Split bottom",
+      "Next pane",
+      "Previous pane",
       "blue",
+      "orange",
       "green",
       "pink",
     ]);
 
-    const pink = [...document.body.querySelectorAll<HTMLButtonElement>(".hamburger-menu button")]
-      .find((button) => button.textContent?.includes("pink"));
-    pink?.click();
+    const orange = [...document.body.querySelectorAll<HTMLButtonElement>(".hamburger-menu button")]
+      .find((button) => button.textContent?.includes("orange"));
+    orange?.click();
     await tick();
 
-    expect(target.querySelector(".pane")?.getAttribute("data-focus-color")).toBe("pink");
+    expect(target.querySelector(".pane")?.getAttribute("data-focus-color")).toBe("orange");
   }, 15000);
 
-  test("pane hamburger no longer renders Cmd+K-canonical entries (fullstack-60)", async () => {
+  test("pane hamburger keeps roadmap actions without old destructive pane rows", async () => {
     const pane: LeafNode = {
       kind: "leaf",
       id: "pane-trim",
@@ -165,14 +160,29 @@ describe("Pane right-click menus", () => {
     await tick();
 
     const labels = menuLabels();
-    expect(labels).not.toContain("Next pane");
-    expect(labels).not.toContain("Previous pane");
-    expect(labels).not.toContain("Split right");
-    expect(labels).not.toContain("Split down");
+    expect(labels).toContain("Next pane");
+    expect(labels).toContain("Previous pane");
+    expect(labels).toContain("Split right");
+    expect(labels).toContain("Split bottom");
     expect(labels).not.toContain("Flip Hybrid");
     expect(labels).not.toContain("Close all tabs");
     expect(labels).not.toContain("Close pane");
   }, 15000);
+
+  test("pane hamburger pins roadmap chord labels to existing helpers", () => {
+    expect(paneSource).toMatch(
+      /label: "Split right"[\s\S]*?chord: paneModeChordLabel\("\/"\)/,
+    );
+    expect(paneSource).toMatch(
+      /label: "Split bottom"[\s\S]*?chord: paneModeChordLabel\("\\\\"\)/,
+    );
+    expect(paneSource).toMatch(
+      /label: "Next pane"[\s\S]*?command: "app\.pane\.next"[\s\S]*?chord: formatChord\("Mod\+]"/,
+    );
+    expect(paneSource).toMatch(
+      /label: "Previous pane"[\s\S]*?command: "app\.pane\.prev"[\s\S]*?chord: formatChord\("Mod\+\["/,
+    );
+  });
 
   test("empty pane right-click shows the welcome menu", async () => {
     const pane: LeafNode = {

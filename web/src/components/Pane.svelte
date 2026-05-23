@@ -18,6 +18,7 @@
     openTerminalInPane,
     paneFlip,
     paneMode,
+    paneModeSplit,
     paneModeSetGrab,
     paneModeSetHover,
     paneModeStagedTabIds,
@@ -36,6 +37,9 @@
   } from "../state/tabs.svelte";
 
   import {
+    ArrowDown,
+    ArrowLeft,
+    ArrowRight,
     BarChart2,
     Bug,
     Check,
@@ -137,7 +141,7 @@
   /// owns its own copy + the shortcut table.
   const platform = currentPlatform();
   const os = currentOS();
-  const paneFocusColors: FocusColor[] = ["blue", "green", "pink"];
+  const paneFocusColors: FocusColor[] = ["blue", "orange", "green", "pink"];
 
   /// Empty-pane right-click menu, arranged into the canonical
   /// sections shared by every chan menu: content actions, then
@@ -155,6 +159,10 @@
     icon: any;
     command: string;
     chordId?: string;
+  };
+  type PaneMenuRow = EmptyMenuRow & {
+    chord: string;
+    action: () => void;
   };
   // `fullstack-a-32`: unified spawn entries. Same four first-class
   // items + ordering across the empty-pane right-click menu, the
@@ -225,6 +233,10 @@
     const chord = s[platform];
     if (!chord) return "";
     return formatChord(chord, os);
+  }
+  function paneModeChordLabel(key: string): string {
+    const base = chordLabel("app.pane.mode");
+    return base ? `${base} ${key}` : key;
   }
 
   /// Right-click menu state. The HamburgerMenu component owns the
@@ -473,6 +485,12 @@
     setWindowFocusColor(color);
   }
 
+  function doPaneModeSplit(direction: "row" | "column"): void {
+    closePaneMenus();
+    enterPaneMode();
+    paneModeSplit(direction);
+  }
+
   function openPaneContextAt(e: MouseEvent): void {
     e.preventDefault();
     setActivePane(pane.id);
@@ -489,6 +507,42 @@
       new CustomEvent("chan:command", { detail: { name: id } }),
     );
   }
+  const paneNavigationActions: PaneMenuRow[] = [
+    {
+      label: "Split right",
+      icon: ArrowRight,
+      command: "app.pane.splitRight",
+      chord: paneModeChordLabel("/"),
+      action: () => doPaneModeSplit("row"),
+    },
+    {
+      label: "Split bottom",
+      icon: ArrowDown,
+      command: "app.pane.splitBottom",
+      chord: paneModeChordLabel("\\"),
+      action: () => doPaneModeSplit("column"),
+    },
+    {
+      label: "Next pane",
+      icon: ArrowRight,
+      command: "app.pane.next",
+      chord: formatChord("Mod+]", os),
+      action: () => {
+        dispatchCommand("app.pane.next");
+        closePaneHamburgerMenu();
+      },
+    },
+    {
+      label: "Previous pane",
+      icon: ArrowLeft,
+      command: "app.pane.prev",
+      chord: formatChord("Mod+[", os),
+      action: () => {
+        dispatchCommand("app.pane.prev");
+        closePaneHamburgerMenu();
+      },
+    },
+  ];
   // Single-pane layouts hide the focus highlight: it's only useful
   // when there's more than one pane to disambiguate. Re-derives on
   // every layout mutation so the highlight reappears the moment a
@@ -1080,10 +1134,9 @@
     ></div>
     <div class="actions">
       <!-- Pane-only controls live inside a single hamburger menu
-           to match the file browser / search / graph overlays.
-           Split rows hide when the platform doesn't allow any splits
-           (iPhone) and grey out when the platform's cap is reached
-           (iPad after one split, native desktop / web have no cap). -->
+           to match the file browser / search / graph overlays. The
+           split rows route through pane mode so the visible result is
+           consistent with the keyboard path. -->
       <HamburgerMenu
         bind:this={paneMenu}
         bind:open={paneMenuOpen}
@@ -1120,6 +1173,16 @@
             <span class="menu-row-chord">{chordLabel("app.pane.mode")}</span>
           </button>
         </li>
+        {#each paneNavigationActions as row (row.command)}
+          {@const Icon = row.icon}
+          <li>
+            <button role="menuitem" onclick={row.action}>
+              <Icon size={16} strokeWidth={1.75} aria-hidden="true" />
+              <span class="menu-row-label">{row.label}</span>
+              <span class="menu-row-chord">{row.chord}</span>
+            </button>
+          </li>
+        {/each}
         <li class="sep" role="separator"></li>
         <li class="menu-label">
           <Palette size={16} strokeWidth={1.75} aria-hidden="true" />
@@ -1358,6 +1421,7 @@
     box-shadow: var(--pane-shadow);
   }
   .pane[data-focus-color="blue"] { --pane-active-focus: var(--pane-focus); }
+  .pane[data-focus-color="orange"] { --pane-active-focus: #f97316; }
   .pane[data-focus-color="green"] { --pane-active-focus: #22c55e; }
   .pane[data-focus-color="pink"] { --pane-active-focus: #ff5fb7; }
   /* Inset glow rather than just a border-color swap: 2px reads
@@ -1720,6 +1784,7 @@
     box-shadow: 0 0 0 1px var(--border);
   }
   :global(.hamburger-menu .color-dot.blue) { background: var(--pane-focus); }
+  :global(.hamburger-menu .color-dot.orange) { background: #f97316; }
   :global(.hamburger-menu .color-dot.green) { background: #22c55e; }
   :global(.hamburger-menu .color-dot.pink) { background: #ff5fb7; }
   .editor-wrap {
