@@ -2328,3 +2328,10 @@ tail § "Open questions":
 | ci-14-smoke run 26274161414 | in-flight (release.yml build matrix; ~20-30 min) |
 
 Standing by for clearance + the 3-bug bundle ack.
+
+## 2026-05-23 — teardown-complete
+
+TEARDOWN directive received. Appended `teardown-complete`
+to [`../ci/ci-14.md`](../ci/ci-14.md). No background CI
+watchers or throwaway drives to clean up. Stand-down FINAL
+from @@CI.
