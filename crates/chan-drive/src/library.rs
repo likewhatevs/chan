@@ -40,11 +40,10 @@ pub struct ResetReport {
 /// What `Library::sweep_orphans` reclaimed.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SweepReport {
-    /// Distinct uuids whose sidecars were reclaimed. Sorted and
-    /// deduplicated across subsystem parents.
-    pub removed_uuids: Vec<String>,
-    /// Total file + subdirectory entries removed across all wiped
-    /// sidecar dirs.
+    /// Distinct metadata keys whose roots were reclaimed. Sorted.
+    pub removed_metadata_keys: Vec<String>,
+    /// Total file + subdirectory entries removed across wiped
+    /// metadata roots.
     pub removed_entries: usize,
 }
 
@@ -81,7 +80,7 @@ struct LibraryInner {
     ///      contention, which would mislead a developer who is
     ///      really fighting their own forgotten `Arc`.
     ///   2. Defense-in-depth on filesystems where flock is
-    ///      unreliable (NFS-mounted state_dir, certain SMB
+    ///      unreliable (NFS-mounted metadata roots, certain SMB
     ///      configurations). Even if the kernel-side lock is a
     ///      no-op, the in-process map still serializes within a
     ///      single Library handle.
@@ -100,18 +99,8 @@ impl Library {
 
     /// Open a Library against an explicit config path. Used in
     /// tests and by callers that want a non-default location.
-    ///
-    /// Runs the pre-uuid registry migration once on load: any row
-    /// missing a `uuid` adopts the legacy `drive_key(path)` value
-    /// so its existing sidecar dirs (graph DB, search index, ...)
-    /// remain reachable under the new uuid-keyed layout. If any
-    /// row was migrated, the registry is persisted back so the
-    /// next process load reads the upgraded shape directly.
     pub fn open_at(config_path: PathBuf) -> Result<Self> {
-        let mut registry = Registry::load_from(&config_path)?;
-        if registry.migrate_uuids() {
-            registry.save_to(&config_path)?;
-        }
+        let registry = Registry::load_from(&config_path)?;
         Ok(Self {
             inner: Arc::new(LibraryInner {
                 config_path,
@@ -170,16 +159,17 @@ impl Library {
     }
 
     /// Add a drive to the registry. Idempotent: re-registering an
-    /// existing drive only updates `last_opened`, never the name.
-    /// Use `rename_drive` for explicit name changes. The directory
-    /// itself is NOT created here; pass a path that already exists.
-    pub fn register_drive(&self, root: &Path, name: Option<String>) -> Result<KnownDrive> {
+    /// existing drive only updates `last_seen_at`, preserving its
+    /// metadata key. The directory itself is NOT created here; pass
+    /// a path that already exists.
+    pub fn register_drive(&self, root: &Path, _name: Option<String>) -> Result<KnownDrive> {
         if !root.exists() {
             return Err(ChanError::DriveRootMissing(root.to_path_buf()));
         }
         let mut reg = self.inner.registry.lock().unwrap();
-        let idx = reg.touch(root, name);
+        let idx = reg.touch(root);
         let entry = reg.drives[idx].clone();
+        paths::ensure_drive_metadata_dirs(&entry.metadata_key)?;
         reg.save_to(&self.inner.config_path)?;
         Ok(entry)
     }
@@ -195,12 +185,10 @@ impl Library {
     /// recoverable user data, semantically owned by the user even
     /// after the drive is forgotten).
     ///
-    /// Why state is wiped here: per-drive sidecars are keyed by
-    /// `sha256(canonical_path)[..16]`. Without this wipe, deleting
-    /// the drive directory and re-creating it at the same path
-    /// reuses the old sidecar and the new "fresh" drive surfaces
-    /// graph + index entries that belong to the deleted drive.
-    /// Wiping on unregister closes that window.
+    /// Why state is wiped here: the metadata key is deterministic
+    /// for a canonical path. Without this wipe, deleting the drive
+    /// directory and re-creating it at the same path would reuse the
+    /// old metadata root.
     ///
     /// Preconditions: same as `reset_drive`. The caller must drop
     /// any open `Arc<Drive>` for `root` first; otherwise this
@@ -223,14 +211,10 @@ impl Library {
         Ok(true)
     }
 
-    /// Set the display name on a registered drive.
-    pub fn rename_drive(&self, root: &Path, name: Option<String>) -> Result<bool> {
-        let mut reg = self.inner.registry.lock().unwrap();
-        let ok = reg.set_name(root, name);
-        if ok {
-            reg.save_to(&self.inner.config_path)?;
-        }
-        Ok(ok)
+    /// Deprecated no-op retained while app-level callers migrate
+    /// away from named drives. Drive labels are derived from paths.
+    pub fn rename_drive(&self, root: &Path, _name: Option<String>) -> Result<bool> {
+        Ok(self.inner.registry.lock().unwrap().find(root).is_some())
     }
 
     /// Open a drive handle. The drive must already be registered;
@@ -243,7 +227,7 @@ impl Library {
             .ok_or_else(|| ChanError::DriveNotRegistered(root.to_path_buf()))?
             .clone();
         drop(reg);
-        let key = canonical_key(&entry.path);
+        let key = canonical_key(&entry.root_path);
         // In-process pre-check: if we still hold an open handle to
         // this drive, return DriveAlreadyOpen rather than letting
         // the cross-process flock surface as DriveLocked. The lock
@@ -277,10 +261,10 @@ impl Library {
     /// no data, only cross-process coordination).
     ///
     /// Wipe set:
-    ///   - search index (`<cache>/chan/index/<key>/`)
-    ///   - graph DB and sqlite sidecars (`<state>/chan/graph/<key>/`)
-    ///   - session blobs (`<state>/chan/sessions/<key>/`)
-    ///   - app tokens (`<state>/chan/tokens/<key>/`)
+    ///   - search index (`~/.chan/drives/<metadata_key>/index/`)
+    ///   - graph DB and sqlite sidecars (`.../graph/`)
+    ///   - session blobs (`.../sessions/`)
+    ///   - app tokens (`.../tokens/`)
     ///
     /// `ResetMode::Everything` additionally drops the registry
     /// entry so the next `open_drive` treats this path as fresh.
@@ -332,32 +316,30 @@ impl Library {
                 }
             }
         }
-        // Sidecar identity comes from the registry's uuid, not the
-        // path. An unregistered root has no uuid in the registry,
-        // so there is nothing for this Library to wipe under the
-        // current scheme; surface that as an idempotent no-op
-        // rather than guessing at a path-derived key (which could
-        // belong to a different drive that does happen to be
-        // registered). Stale path-derived sidecars from a previous
-        // chan version land in the orphan-sweep path instead.
-        let Some(uuid) = self
+        // Metadata identity comes from the registry's metadata key,
+        // not the current filesystem path. An unregistered root has
+        // no key in the registry, so there is nothing for this
+        // Library to wipe.
+        let Some(metadata_key) = self
             .inner
             .registry
             .lock()
             .unwrap()
             .find(root)
-            .map(|e| e.uuid.clone())
+            .map(|e| e.metadata_key.clone())
         else {
             return Ok(ResetReport { removed_entries: 0 });
         };
-        let drive_paths = paths::drive_paths_for_uuid(&uuid);
+        let drive_paths = paths::drive_paths_for_metadata_key(&metadata_key);
         let _lock = DriveLock::acquire(&drive_paths.lock)?;
         let mut removed = 0;
-        let subsystems: [(&str, &Path); 4] = [
+        let report_dir = drive_paths.report.parent().expect("report path has parent");
+        let subsystems: [(&str, &Path); 5] = [
             ("index", &drive_paths.index),
             ("graph", &drive_paths.graph_dir),
             ("sessions", &drive_paths.sessions),
             ("tokens", &drive_paths.tokens),
+            ("report", report_dir),
         ];
         let total = subsystems.len() as u64;
         for (idx, (name, dir)) in subsystems.iter().enumerate() {
@@ -390,21 +372,19 @@ impl Library {
     }
 
     /// Record an `mv` of a registered drive's directory. Preserves
-    /// the drive's `uuid` (and therefore all its sidecar state,
-    /// graph DB, search index, sessions, tokens, trash,
-    /// report), only rewriting the `path` field on the registry
-    /// row.
+    /// the drive's `metadata_key` and therefore all metadata state,
+    /// only rewriting the `root_path` field on the registry row.
     ///
     /// Refuses if:
     ///   - `old` is not registered (`Ok(false)`),
     ///   - `new` does not exist on disk (`DriveRootMissing`),
-    ///   - `new` is already registered to a different uuid
+    ///   - `new` is already registered to a different metadata key
     ///     (`DriveAlreadyRegistered`), since collapsing two
     ///     registry rows onto one path would orphan one drive's
-    ///     sidecars under a uuid the registry no longer references.
+    ///     metadata under a key the registry no longer references.
     ///   - any `Arc<Drive>` for `old` is still alive
     ///     (`DriveAlreadyOpen`), since the live drive is caching
-    ///     `entry.path` and would silently disagree with the
+    ///     `entry.root_path` and would silently disagree with the
     ///     registry after the move.
     ///
     /// The caller is responsible for actually moving the directory
@@ -428,15 +408,14 @@ impl Library {
         let Some(old_entry) = reg.find(old) else {
             return Ok(false);
         };
-        let old_uuid = old_entry.uuid.clone();
+        let old_metadata_key = old_entry.metadata_key.clone();
         if let Some(existing) = reg.find(new) {
-            if existing.uuid != old_uuid {
+            if existing.metadata_key != old_metadata_key {
                 return Err(ChanError::DriveAlreadyRegistered(new.to_path_buf()));
             }
-            // Same uuid means `new` is already a name for this
-            // drive (idempotent retry after a partial move). Drop
-            // through to set_path which will canonicalize and
-            // overwrite, then save.
+            // Same metadata key means `new` is already an alias for
+            // this drive, e.g. an idempotent retry after a partial
+            // move. Drop through to set_path.
         }
         let ok = reg.set_path(old, new);
         if ok {
@@ -446,43 +425,36 @@ impl Library {
     }
 
     /// Per-drive paths for a registered root. `None` when the
-    /// drive isn't registered (no uuid, so no sidecar identity to
-    /// resolve). Use this rather than `paths::drive_paths_for_uuid`
+    /// drive isn't registered, so no metadata identity can resolve.
+    /// Use this rather than `paths::drive_paths_for_metadata_key`
     /// directly so the registry stays the only source of truth for
-    /// "which uuid is this path."
+    /// "which metadata key is this path."
     pub fn drive_paths_for(&self, root: &Path) -> Option<paths::DrivePaths> {
         let reg = self.inner.registry.lock().unwrap();
         let entry = reg.find(root)?;
-        Some(paths::drive_paths_for_uuid(&entry.uuid))
+        Some(paths::drive_paths_for_metadata_key(&entry.metadata_key))
     }
 
-    /// Reclaim sidecar directories whose uuid no longer appears in
-    /// the registry. Walks every per-subsystem root from
+    /// Reclaim metadata directories whose key no longer appears in
+    /// the registry. Walks the metadata parent from
     /// `paths::drive_subsystem_dirs` and deletes any immediate
-    /// subdirectory whose name isn't a current uuid.
+    /// subdirectory whose name isn't a current metadata key.
     ///
     /// Use cases:
     ///   - A previous chan version `unregister`'d a drive without
-    ///     wiping the sidecar (the bug PR1 closes).
-    ///   - A `Library::move_drive` happened, the drive was later
-    ///     deleted at the new location, leaving an orphaned uuid
-    ///     dir under a previous registry row that has since been
-    ///     removed.
-    ///   - A registry was hand-edited and the matching uuid dirs
-    ///     stayed behind.
+    ///     wiping the metadata root.
+    ///   - A registry was hand-edited and the matching metadata
+    ///     roots stayed behind.
     ///
     /// Cross-process safety: this routine snapshots the registry
     /// under the in-process mutex and walks each subsystem dir
     /// independently. A concurrent `register_drive` on another
-    /// process can race: it mints a new uuid, creates its sidecar
-    /// dir, and saves the registry; our sweep, working from the
-    /// snapshot, then deletes the just-created dir. The window is
-    /// tight (uuid creation -> dir creation -> registry save) and
-    /// the worst case is "the next index access on the new drive
-    /// rebuilds from scratch", which is the same outcome as a
-    /// fresh open. We accept the race rather than introduce a
-    /// cross-process registry lock for what is fundamentally a
-    /// garbage-collection pass.
+    /// process can race: it creates a metadata root and saves the
+    /// registry; our sweep, working from the snapshot, then deletes
+    /// the just-created root. The worst case is "the next index
+    /// access on the new drive rebuilds from scratch". We accept the
+    /// race rather than introduce a cross-process registry lock for
+    /// what is fundamentally a garbage-collection pass.
     pub fn sweep_orphans(&self) -> Result<SweepReport> {
         let known: std::collections::HashSet<String> = self
             .inner
@@ -491,26 +463,26 @@ impl Library {
             .unwrap()
             .drives
             .iter()
-            .map(|d| d.uuid.clone())
+            .map(|d| d.metadata_key.clone())
             .collect();
         sweep_orphans_in(&paths::drive_subsystem_dirs(), &known)
     }
 }
 
-/// Inner workhorse for `Library::sweep_orphans`: walk each parent
-/// in `parents` and remove any immediate subdirectory whose name
-/// is not in `known` AND looks like a uuid (16 lowercase hex). Pure
-/// in its arguments so tests can drive it against a TempDir tree
-/// without mutating the host's real XDG state/cache.
+/// Inner workhorse for `Library::sweep_orphans`: walk each metadata
+/// parent in `parents` and remove any immediate subdirectory whose
+/// name is not in `known`. Pure in its arguments so tests can drive
+/// it against a TempDir tree without mutating the host's real
+/// metadata root.
 ///
-/// Tolerates concurrent removal: a sidecar deleted between
+/// Tolerates concurrent removal: a metadata root deleted between
 /// `read_dir` and `wipe_dir` simply contributes zero entries to
 /// the report.
 fn sweep_orphans_in(
     parents: &[PathBuf],
     known: &std::collections::HashSet<String>,
 ) -> Result<SweepReport> {
-    let mut removed_uuids: Vec<String> = Vec::new();
+    let mut removed_metadata_keys: Vec<String> = Vec::new();
     let mut removed_entries: usize = 0;
     for parent in parents {
         let read = match std::fs::read_dir(parent) {
@@ -527,33 +499,21 @@ fn sweep_orphans_in(
             if known.contains(name_str) {
                 continue;
             }
-            // Defensive: if a future schema adds a non-uuid
-            // file/dir under a subsystem parent, don't delete it.
-            // Only sweep directories that look like uuids: 16
-            // lowercase hex chars. The legacy drive_key and
-            // mint_uuid both produce that shape.
-            if !looks_like_uuid(name_str) {
+            let path = entry.path();
+            if !path.is_dir() {
                 continue;
             }
-            let path = entry.path();
             let entry_count = wipe_dir(&path)?;
             removed_entries += entry_count;
-            removed_uuids.push(name_str.to_string());
+            removed_metadata_keys.push(name_str.to_string());
         }
     }
-    removed_uuids.sort();
-    removed_uuids.dedup();
+    removed_metadata_keys.sort();
+    removed_metadata_keys.dedup();
     Ok(SweepReport {
-        removed_uuids,
+        removed_metadata_keys,
         removed_entries,
     })
-}
-
-/// Shape of `drive_key` / `mint_uuid` outputs: 16 lowercase hex.
-fn looks_like_uuid(s: &str) -> bool {
-    s.len() == 16
-        && s.chars()
-            .all(|c| c.is_ascii_hexdigit() && !c.is_ascii_uppercase())
 }
 
 /// Canonical-form key for the live-drives map. Falls back to the
@@ -614,7 +574,12 @@ mod tests {
             .unwrap();
         let drives = lib.list_drives();
         assert_eq!(drives.len(), 1);
-        assert_eq!(drives[0].name.as_deref(), Some("Notes"));
+        assert_eq!(drives[0].root_path, drive.path().canonicalize().unwrap());
+        assert_eq!(
+            drives[0].metadata_key,
+            paths::metadata_key_for_root(drive.path())
+        );
+        assert!(lib.drive_paths_for(drive.path()).unwrap().root.is_dir());
     }
 
     #[test]
@@ -632,13 +597,17 @@ mod tests {
     }
 
     #[test]
-    fn rename_persists() {
+    fn rename_drive_is_compat_noop() {
         let (lib, _cfg, drive) = lib();
+        assert!(!lib.rename_drive(drive.path(), Some("Notes".into())).unwrap());
         lib.register_drive(drive.path(), None).unwrap();
-        assert!(lib
-            .rename_drive(drive.path(), Some("Renamed".into()))
-            .unwrap());
-        assert_eq!(lib.list_drives()[0].name.as_deref(), Some("Renamed"));
+
+        assert!(lib.rename_drive(drive.path(), Some("Notes".into())).unwrap());
+
+        let drives = lib.list_drives();
+        assert_eq!(drives.len(), 1);
+        assert_eq!(drives[0].root_path, drive.path().canonicalize().unwrap());
+        assert!(drives[0].name.is_none());
     }
 
     #[test]
@@ -725,48 +694,6 @@ mod tests {
     }
 
     #[test]
-    fn open_at_migrates_legacy_registry_uuid_and_persists() {
-        // Write a config.toml the way a pre-uuid version would have:
-        // no uuid field on the entry. Then Library::open_at must
-        // fill it in with drive_key(path) and save the registry
-        // back. A subsequent open_at sees the uuid pre-filled and
-        // does not rewrite (idempotent).
-        let cfg = TempDir::new().unwrap();
-        let drive = TempDir::new().unwrap();
-        let cfg_path = cfg.path().join("config.toml");
-        let legacy = format!(
-            "[[drives]]\npath = {:?}\nname = \"Legacy\"\nlast_opened = \"2024-01-01T00:00:00Z\"\n",
-            drive.path(),
-        );
-        std::fs::write(&cfg_path, legacy).unwrap();
-
-        let lib = Library::open_at(cfg_path.clone()).unwrap();
-        let drives = lib.list_drives();
-        assert_eq!(drives.len(), 1);
-        let migrated_uuid = drives[0].uuid.clone();
-        assert!(
-            !migrated_uuid.is_empty(),
-            "uuid must be filled by migration"
-        );
-        assert_eq!(
-            migrated_uuid,
-            paths::drive_key(drive.path()),
-            "migration must adopt the legacy path-derived key so existing sidecars stay reachable",
-        );
-
-        // File on disk now has the uuid field.
-        let on_disk = std::fs::read_to_string(&cfg_path).unwrap();
-        assert!(
-            on_disk.contains("uuid"),
-            "migration should persist uuid back to disk; got: {on_disk}",
-        );
-
-        // Re-open: no further migration, uuid stays the same.
-        let lib2 = Library::open_at(cfg_path).unwrap();
-        assert_eq!(lib2.list_drives()[0].uuid, migrated_uuid);
-    }
-
-    #[test]
     fn drive_paths_for_returns_none_for_unregistered_root() {
         let (lib, _cfg, drive) = lib();
         assert!(lib.drive_paths_for(drive.path()).is_none());
@@ -775,14 +702,14 @@ mod tests {
     }
 
     #[test]
-    fn move_drive_preserves_uuid_and_sidecars() {
+    fn move_drive_preserves_metadata_key_and_metadata_dirs() {
         let (lib, _cfg, drive_a) = lib();
         let drive_b = TempDir::new().unwrap();
         lib.register_drive(drive_a.path(), Some("Notes".into()))
             .unwrap();
         populate_state(&lib, drive_a.path());
 
-        let uuid_before = lib.list_drives()[0].uuid.clone();
+        let key_before = lib.list_drives()[0].metadata_key.clone();
         let pa = paths_of(&lib, drive_a.path());
         assert!(pa.graph_db.exists());
 
@@ -791,15 +718,21 @@ mod tests {
         // notes into drive_b after the registry update.
         assert!(lib.move_drive(drive_a.path(), drive_b.path()).unwrap());
 
-        // Registry now points at drive_b with the same uuid; the
-        // sidecar dir on disk is untouched (still at the uuid path).
+        // Registry now points at drive_b with the same metadata key.
+        // The metadata root on disk is untouched.
         let after = lib.list_drives();
         assert_eq!(after.len(), 1);
-        assert_eq!(after[0].uuid, uuid_before, "uuid must survive a move");
-        assert_eq!(after[0].path, drive_b.path().canonicalize().unwrap());
+        assert_eq!(
+            after[0].metadata_key, key_before,
+            "metadata key must survive a move"
+        );
+        assert_eq!(after[0].root_path, drive_b.path().canonicalize().unwrap());
 
         let pb = paths_of(&lib, drive_b.path());
-        assert_eq!(pb.graph_db, pa.graph_db, "sidecar paths follow the uuid");
+        assert_eq!(
+            pb.graph_db, pa.graph_db,
+            "metadata paths follow the metadata key"
+        );
         assert!(pb.graph_db.exists(), "graph DB still present after move");
     }
 
@@ -847,46 +780,42 @@ mod tests {
     /// so the test never touches the host's real XDG_STATE_HOME /
     /// XDG_CACHE_HOME. The public `Library::sweep_orphans` is a
     /// thin wrapper that supplies `paths::drive_subsystem_dirs()`
-    /// and the registry's uuid set; the structural behavior we
-    /// care about (reclaim unknown uuids, preserve known uuids,
-    /// preserve non-uuid-shaped names) lives in the inner fn.
+    /// and the registry's metadata-key set; the structural behavior
+    /// we care about lives in the inner fn.
     #[test]
-    fn sweep_orphans_in_reclaims_unknown_uuids() {
+    fn sweep_orphans_in_reclaims_unknown_metadata_keys() {
         use std::collections::HashSet;
         let root = TempDir::new().unwrap();
-        let parents = vec![
-            root.path().join("graph"),
-            root.path().join("sessions"),
-            root.path().join("index"),
-        ];
-        let known_uuid = "feedfacecafebab0";
-        let orphan_uuid = "0123456789abcdef";
+        let parents = vec![root.path().join("drives")];
+        let known_key = "-tmp-known-feedface";
+        let orphan_key = "-tmp-orphan-01234567";
         let mut known = HashSet::new();
-        known.insert(known_uuid.to_string());
+        known.insert(known_key.to_string());
 
         for parent in &parents {
-            std::fs::create_dir_all(parent.join(known_uuid)).unwrap();
-            std::fs::write(parent.join(known_uuid).join("keep"), b"keep").unwrap();
-            std::fs::create_dir_all(parent.join(orphan_uuid)).unwrap();
-            std::fs::write(parent.join(orphan_uuid).join("junk"), b"junk").unwrap();
+            std::fs::create_dir_all(parent.join(known_key)).unwrap();
+            std::fs::write(parent.join(known_key).join("keep"), b"keep").unwrap();
+            std::fs::create_dir_all(parent.join(orphan_key)).unwrap();
+            std::fs::write(parent.join(orphan_key).join("junk"), b"junk").unwrap();
         }
-        // Plant a non-uuid-shaped dir to confirm the shape filter.
-        let preserve = parents[0].join("not-a-uuid");
-        std::fs::create_dir_all(&preserve).unwrap();
-        std::fs::write(preserve.join("keep"), b"keep").unwrap();
+        let file = parents[0].join("not-a-dir");
+        std::fs::write(&file, b"keep").unwrap();
 
         let report = sweep_orphans_in(&parents, &known).unwrap();
-        assert_eq!(report.removed_uuids, vec![orphan_uuid.to_string()]);
-        assert!(report.removed_entries >= 3);
+        assert_eq!(report.removed_metadata_keys, vec![orphan_key.to_string()]);
+        assert!(report.removed_entries >= 1);
 
         for parent in &parents {
-            assert!(parent.join(known_uuid).exists(), "known uuid must survive");
             assert!(
-                !parent.join(orphan_uuid).exists(),
-                "orphan uuid must be gone"
+                parent.join(known_key).exists(),
+                "known metadata root must survive"
+            );
+            assert!(
+                !parent.join(orphan_key).exists(),
+                "orphan metadata root must be gone"
             );
         }
-        assert!(preserve.exists(), "non-uuid-shaped dir must survive");
+        assert!(file.exists(), "non-directory entry must survive");
     }
 
     #[test]
@@ -901,20 +830,8 @@ mod tests {
         ];
         let known = HashSet::new();
         let report = sweep_orphans_in(&parents, &known).unwrap();
-        assert!(report.removed_uuids.is_empty());
+        assert!(report.removed_metadata_keys.is_empty());
         assert_eq!(report.removed_entries, 0);
-    }
-
-    #[test]
-    fn looks_like_uuid_guards_sweep_shape_filter() {
-        assert!(looks_like_uuid("0123456789abcdef"));
-        assert!(looks_like_uuid("feedfacecafebab0"));
-        // Wrong length, wrong case, wrong charset, or has slashes.
-        assert!(!looks_like_uuid("0123456789abcde"));
-        assert!(!looks_like_uuid("0123456789abcdef0"));
-        assert!(!looks_like_uuid("0123456789ABCDEF"));
-        assert!(!looks_like_uuid("0123456789abcdez"));
-        assert!(!looks_like_uuid("not-a-uuid-here1"));
     }
 
     #[test]
@@ -944,7 +861,7 @@ mod tests {
         assert!(drive.path().join("notes/keep.md").exists());
         let drives = lib.list_drives();
         assert_eq!(drives.len(), 1);
-        assert_eq!(drives[0].name.as_deref(), Some("Notes"));
+        assert_eq!(drives[0].root_path, drive.path().canonicalize().unwrap());
     }
 
     #[test]
@@ -1044,11 +961,9 @@ mod tests {
 
     /// Regression for the "delete-and-recreate at the same path
     /// surfaces stale graph data" bug. Before PR1, `unregister_drive`
-    /// only dropped the registry row; the per-drive sidecars
-    /// (graph DB, tantivy segments) lived on, keyed by
-    /// `sha256(canonical_path)[..16]`. Re-registering the same path
-    /// reused the key, so the next graph view returned nodes for
-    /// files that no longer existed on disk.
+    /// only dropped the registry row; the per-drive metadata root
+    /// lived on. Re-registering the same path reuses the
+    /// deterministic metadata key, so unregister must wipe state.
     #[test]
     fn unregister_wipes_state_so_recreate_at_same_path_starts_fresh() {
         let (lib, _cfg, drive) = lib();
@@ -1105,7 +1020,7 @@ mod tests {
         // unregister_drive now wipes state, which requires exclusive
         // access. Holding an open handle must produce a clear error
         // rather than silently leaving the registry row gone and
-        // sidecars half-wiped.
+        // metadata half-wiped.
         let (lib, _cfg, drive) = lib();
         lib.register_drive(drive.path(), None).unwrap();
         let _open = lib.open_drive(drive.path()).unwrap();

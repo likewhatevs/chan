@@ -1,8 +1,8 @@
 // Drive: a registered directory exposed as a sandboxed filesystem
 // plus search and graph. All I/O routes through `resolve_safe` and
-// the editable-text gate. Per-drive state (index, graph, sessions,
-// tokens, trash, report) lives outside the user's notes tree, keyed
-// by the canonical drive path.
+// the editable-text gate. Per-drive metadata (index, graph,
+// sessions, tokens, trash, report) lives outside the user's notes
+// tree under ~/.chan/drives/<metadata_key>/.
 
 use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -20,7 +20,7 @@ use crate::index::{
 };
 use crate::lock::DriveLock;
 use crate::markdown;
-use crate::paths::{drive_paths_for_uuid, DrivePaths};
+use crate::paths::{ensure_drive_metadata_dirs, DrivePaths};
 use crate::registry::KnownDrive;
 use crate::report::{ReportFanOut, ReportState};
 use crate::trash::{self, TrashEntry, TRASH_RETENTION_SECS};
@@ -193,9 +193,9 @@ pub struct ReconcileReport {
 /// Cheap reads are unlocked; writes go through the locked handle.
 pub struct Drive {
     entry: KnownDrive,
-    /// Canonical form of `entry.path`, computed once at open. Used
-    /// where we need an absolute path (display, paths::drive_paths
-    /// keying) and as the slow-path baseline for trash::restore.
+    /// Canonical form of `entry.root_path`, computed once at open.
+    /// Used where we need an absolute path and as the slow-path
+    /// baseline for trash::restore.
     root_canon: std::path::PathBuf,
     /// Capability-based handle to the drive root. All filesystem
     /// ops on user-controllable paths go through this so a mid-path
@@ -293,8 +293,8 @@ pub struct Drive {
 impl std::fmt::Debug for Drive {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("Drive")
-            .field("root", &self.entry.path)
-            .field("name", &self.entry.name)
+            .field("root", &self.entry.root_path)
+            .field("metadata_key", &self.entry.metadata_key)
             .finish()
     }
 }
@@ -312,10 +312,10 @@ impl Drive {
         // shape itself is no longer what the user signed up for.
         // `exists()` follows symlinks, so we use lstat here to catch
         // a "directory turned into a symlink" replacement.
-        let meta = match std::fs::symlink_metadata(&entry.path) {
+        let meta = match std::fs::symlink_metadata(&entry.root_path) {
             Ok(m) => m,
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-                return Err(ChanError::DriveRootMissing(entry.path.clone()));
+                return Err(ChanError::DriveRootMissing(entry.root_path.clone()));
             }
             Err(e) => return Err(ChanError::Io(e.to_string())),
         };
@@ -323,29 +323,24 @@ impl Drive {
         if !ft.is_dir() || ft.is_symlink() {
             return Err(ChanError::SpecialFile {
                 kind: fs_ops::describe_file_kind(&ft).to_string(),
-                path: entry.path.clone(),
+                path: entry.root_path.clone(),
             });
         }
         let root_canon = entry
-            .path
+            .root_path
             .canonicalize()
             .map_err(|e| ChanError::Io(format!("canonicalize drive root: {e}")))?;
-        let dir = cap_std::fs::Dir::open_ambient_dir(&entry.path, cap_std::ambient_authority())
-            .map_err(|e| ChanError::Io(format!("open drive root: {e}")))?;
-        // Sidecar identity comes from the registry-assigned uuid,
-        // not the filesystem path. An empty uuid here means the
-        // KnownDrive was constructed bypassing Library::open_at
-        // (which runs the pre-uuid migration), which is a contract
-        // violation rather than a runtime condition: fail loudly so
-        // a future caller doesn't silently key state under the
-        // empty-string uuid and lose data on the next open.
-        if entry.uuid.is_empty() {
+        let dir =
+            cap_std::fs::Dir::open_ambient_dir(&entry.root_path, cap_std::ambient_authority())
+                .map_err(|e| ChanError::Io(format!("open drive root: {e}")))?;
+        if entry.metadata_key.is_empty() {
             return Err(ChanError::Io(format!(
-                "registry entry for {:?} has empty uuid; open the drive via Library::open_drive so the registry migration runs first",
-                entry.path,
+                "registry entry for {:?} has empty metadata key; open the drive via Library::open_drive",
+                entry.root_path,
             )));
         }
-        let paths = drive_paths_for_uuid(&entry.uuid);
+        let paths = ensure_drive_metadata_dirs(&entry.metadata_key)
+            .map_err(|e| ChanError::Io(format!("ensure drive metadata dirs: {e}")))?;
         let lock = DriveLock::acquire(&paths.lock)?;
         // Lazy GC: reclaim expired trash entries on every open. No
         // background thread, matches the codebase's sync-only rule.
@@ -373,7 +368,7 @@ impl Drive {
         // semantics as drive-root files. The drafts dir was just
         // ensured above so `open_ambient_dir` lands on an
         // existing path. A failure here is unusual (permissions
-        // on `state_dir`) but recoverable on the next open; we
+        // on the metadata root) but recoverable on the next open; we
         // surface as an `Io` so callers see why drafts writes
         // can't proceed.
         let drafts_dir_handle =
@@ -388,7 +383,7 @@ impl Drive {
         let needs_rebuild = paths.graph_dir.join(REBUILD_MARKER).exists();
         if needs_rebuild {
             tracing::warn!(
-                drive = %entry.path.display(),
+                drive = %entry.root_path.display(),
                 "rebuild.inprogress marker found at open; full reindex required",
             );
         }
@@ -409,7 +404,7 @@ impl Drive {
         let needs_replay_writes = !pending_writes.is_empty();
         if needs_replay_writes {
             tracing::warn!(
-                drive = %entry.path.display(),
+                drive = %entry.root_path.display(),
                 count = pending_writes.len(),
                 "pending_writes journal non-empty at open; replay required",
             );
@@ -496,11 +491,14 @@ impl Drive {
     }
 
     pub fn root(&self) -> &std::path::Path {
-        &self.entry.path
+        &self.entry.root_path
     }
 
     pub fn name(&self) -> Option<&str> {
-        self.entry.name.as_deref()
+        self.entry
+            .root_path
+            .file_name()
+            .and_then(|name| name.to_str())
     }
 
     /// Per-drive paths (sessions, index dir, graph DB, lock).
@@ -912,7 +910,7 @@ impl Drive {
         let ft = meta.file_type();
         let is_dir = ft.is_dir();
         let is_regular_file = ft.is_file() && !ft.is_symlink();
-        let abs = self.entry.path.join(&rel_path);
+        let abs = self.entry.root_path.join(&rel_path);
         if !(is_dir || is_regular_file) {
             return Err(ChanError::SpecialFile {
                 kind: describe_cap_file_kind(&ft).to_string(),
@@ -964,7 +962,7 @@ impl Drive {
             if !entry.file_type().is_file() {
                 continue;
             }
-            let rel_path = match entry.path().strip_prefix(&self.entry.path) {
+            let rel_path = match entry.path().strip_prefix(&self.entry.root_path) {
                 Ok(p) => p.to_string_lossy().replace('\\', "/"),
                 Err(_) => continue,
             };
@@ -1043,7 +1041,7 @@ impl Drive {
     /// because the user's intent ("undo my delete") already
     /// succeeded at the filesystem level.
     fn reindex_after_restore(&self, restored: &trash::RestoredEntry) {
-        let abs = self.entry.path.join(&restored.rel_path);
+        let abs = self.entry.root_path.join(&restored.rel_path);
         let is_dir = restored.is_dir;
         if !is_dir {
             if !fs_ops::is_indexable_text(&restored.rel_path) {
@@ -1058,7 +1056,7 @@ impl Drive {
             if !entry.file_type().is_file() {
                 continue;
             }
-            let rel_path = match entry.path().strip_prefix(&self.entry.path) {
+            let rel_path = match entry.path().strip_prefix(&self.entry.root_path) {
                 Ok(p) => p.to_string_lossy().replace('\\', "/"),
                 Err(_) => continue,
             };
@@ -1085,11 +1083,9 @@ impl Drive {
     // ---- drafts (systacean-24) ----
     //
     // Per-drive Drafts metadata folder. Parallels trash: lives in
-    // `state_dir/drafts/<uuid>/`, holds in-progress drafts as
-    // directories so users can paste images / drop config files
-    // alongside `draft.md`. The watcher + indexer integration that
-    // makes drafts searchable + graph-emit-able is built on top
-    // of these primitives in follow-up scope.
+    // `~/.chan/drives/<metadata_key>/drafts/`, holds in-progress
+    // drafts as directories so users can paste images / drop config
+    // files alongside `draft.md`.
 
     /// Per-drive drafts root path. Always present on disk after
     /// `Drive::open` (eagerly created via `drafts::ensure_root`).
@@ -1314,7 +1310,7 @@ impl Drive {
         if !(src_ft.is_dir() || (src_ft.is_file() && !src_ft.is_symlink())) {
             return Err(ChanError::SpecialFile {
                 kind: describe_cap_file_kind(&src_ft).to_string(),
-                path: self.entry.path.join(&from_rel),
+                path: self.entry.root_path.join(&from_rel),
             });
         }
         ensure_writable_in(&self.dir, &to_rel)?;
@@ -1802,9 +1798,10 @@ impl Drive {
     /// boot is cheap when nothing changed and costs O(N) per
     /// draft when something did.
     ///
-    /// Walks `<state_dir>/drafts/<uuid>/` directly via `std::fs`
-    /// (drafts are chan-drive's own metadata; the cap-std sandbox
-    /// isn't a security concern here, same as `index_draft_file`).
+    /// Walks the per-drive drafts metadata dir directly via
+    /// `std::fs` (drafts are chan-drive's own metadata; the cap-std
+    /// sandbox isn't a security concern here, same as
+    /// `index_draft_file`).
     /// Emits paths in the unified `Drafts/<name>/<file>` keyspace
     /// per the `-25`/`-26` contract.
     ///
@@ -2807,9 +2804,9 @@ impl Drive {
 /// keeps `dir` as a `&Path` parameter; the only `Drive` capability
 /// used is the public `index_draft_file` entry.
 ///
-/// `drafts_root` is the per-drive drafts dir (the abs path
-/// `state_dir/drafts/<uuid>/`); `dir` is the current subtree being
-/// walked. The path passed to `index_draft_file` is the unified
+/// `drafts_root` is the per-drive drafts metadata dir; `dir` is the
+/// current subtree being walked. The path passed to
+/// `index_draft_file` is the unified
 /// `Drafts/<rel_under_drafts_root>` shape per the `-25`/`-26`
 /// contract.
 fn walk_drafts_recursive(
@@ -3605,7 +3602,8 @@ mod tests {
         lib.register_drive(drive_dir.path(), Some("RnLog".into()))
             .unwrap();
         // Resolve paths after register so the lookup uses the
-        // registry-assigned uuid rather than guessing from the path.
+        // registry-assigned metadata key rather than guessing from
+        // the path.
         let paths = lib.drive_paths_for(drive_dir.path()).unwrap();
         let drive = lib.open_drive(drive_dir.path()).unwrap();
         drive.write_text("A.md", "# A\n").unwrap();
@@ -3671,8 +3669,8 @@ mod tests {
         let lib = Library::open_at(cfg.path().join("config.toml")).unwrap();
         lib.register_drive(drive_dir.path(), Some("Reb".into()))
             .unwrap();
-        // Stamp the marker AFTER register so the uuid is known.
-        // Open then drop the drive once to let the lazy sidecar
+        // Stamp the marker AFTER register so the metadata key is
+        // known. Open then drop the drive once to let the metadata
         // skeleton (graph_dir) come into existence before we plant
         // the marker; otherwise create_dir_all does the same work
         // but explicit-open is the production code path.

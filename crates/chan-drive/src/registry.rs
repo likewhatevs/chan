@@ -23,45 +23,43 @@ pub struct Registry {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub default_drive_root: Option<PathBuf>,
     /// Known drives the user has opened on this machine. Sorted
-    /// most-recent first by `last_opened`.
+    /// most-recent first by `last_seen_at`.
     #[serde(default)]
     pub drives: Vec<KnownDrive>,
 }
 
-/// One entry in the registry. `name` is user-editable and shown in
-/// recents lists / window titles.
+/// One entry in the registry.
 ///
-/// `uuid` is the stable per-drive identity, 16 hex chars, minted at
-/// first register and preserved across `Library::move_drive`. All
-/// per-drive sidecar paths (graph DB, search index, sessions,
-/// tokens, trash, report) live under this uuid, so the
-/// drive's filesystem path can move freely without invalidating its
-/// state. Two registrations of the same path at different times
-/// produce different uuids: that is the structural fix for
-/// "delete-and-recreate at the same path surfaces stale state".
+/// `root_path` is the current canonical local drive path. It is the
+/// user-content boundary. `metadata_key` is the stable storage key
+/// under `~/.chan/drives/`, allocated from the canonical path when
+/// the drive is first registered and preserved across
+/// `Library::move_drive`.
 ///
-/// Empty `uuid` on load means the row was written by a pre-uuid
-/// version; `Registry::migrate_uuids` fills it with the legacy
-/// `paths::drive_key(path)` so the existing on-disk sidecars stay
-/// valid. `Library::open_at` runs that migration once on load and
-/// persists the result.
-///
-/// `canonical_path` is the canonicalized form of `path`, computed
-/// once at insert / load time and reused for comparisons. The field
-/// is intentionally `#[serde(skip)]`: the canonical form is a
-/// per-machine artifact, recomputable on load, and including it in
-/// the on-disk TOML would invite the registry to disagree with the
-/// filesystem after a `mv`. Falls back to a clone of `path` when
-/// the path doesn't currently canonicalize (drive root deleted /
-/// network mount asleep), keeping the entry comparable lexically.
+/// The registry intentionally carries no user-editable display name.
+/// UIs that need a label derive it from `root_path`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct KnownDrive {
+    pub root_path: PathBuf,
+    /// Stable per-drive metadata storage key under `~/.chan/drives/`.
+    pub metadata_key: String,
+    pub created_at: DateTime<Utc>,
+    pub last_seen_at: DateTime<Utc>,
+    /// In-memory compatibility alias for older callers. Not
+    /// serialized; the registry stores `root_path`.
+    #[serde(skip, default)]
     pub path: PathBuf,
-    /// Stable per-drive identity. See struct-level doc.
-    #[serde(default)]
+    /// In-memory compatibility alias for older callers. Not
+    /// serialized; the registry stores `metadata_key`.
+    #[serde(skip, default)]
     pub uuid: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    /// In-memory compatibility placeholder for older callers. Not
+    /// serialized; display labels are derived from `root_path`.
+    #[serde(skip, default)]
     pub name: Option<String>,
+    /// In-memory compatibility alias for older callers. Not
+    /// serialized; the registry stores `last_seen_at`.
+    #[serde(skip, default = "Utc::now")]
     pub last_opened: DateTime<Utc>,
     #[serde(skip)]
     pub(crate) canonical_path: Option<PathBuf>,
@@ -69,15 +67,22 @@ pub struct KnownDrive {
 
 impl KnownDrive {
     /// Cached canonical path; falls back to a stat if the cache
-    /// hasn't been primed (e.g. an entry constructed by tests
-    /// outside the Registry).
+    /// hasn't been primed, e.g. an entry constructed by tests
+    /// outside the Registry.
     fn canonical(&self) -> PathBuf {
         if let Some(p) = &self.canonical_path {
             return p.clone();
         }
-        self.path
+        self.root_path
             .canonicalize()
-            .unwrap_or_else(|_| self.path.clone())
+            .unwrap_or_else(|_| self.root_path.clone())
+    }
+
+    fn refresh_compat_fields(&mut self) {
+        self.path = self.root_path.clone();
+        self.uuid = self.metadata_key.clone();
+        self.name = None;
+        self.last_opened = self.last_seen_at;
     }
 }
 
@@ -99,12 +104,16 @@ impl Registry {
             message: e.to_string(),
         })?;
         // Prime the canonical-path cache once at load. Comparisons
-        // (find / touch / remove / set_name) are then pure and don't
-        // re-canonicalize per call. Failure here is non-fatal: an
-        // entry whose drive root is missing or asleep stays
-        // comparable lexically.
+        // are then pure and don't re-canonicalize per call. Failure
+        // here is non-fatal: an entry whose drive root is missing or
+        // asleep stays comparable lexically.
         for d in &mut reg.drives {
-            d.canonical_path = Some(d.path.canonicalize().unwrap_or_else(|_| d.path.clone()));
+            d.canonical_path = Some(
+                d.root_path
+                    .canonicalize()
+                    .unwrap_or_else(|_| d.root_path.clone()),
+            );
+            d.refresh_compat_fields();
         }
         Ok(reg)
     }
@@ -118,9 +127,9 @@ impl Registry {
         fs_ops::atomic_write(path, body.as_bytes())
     }
 
-    /// Find a known drive by absolute path (canonicalized when
-    /// possible). Matches by canonical path so symlink wiggles
-    /// don't create duplicate registry entries.
+    /// Find a known drive by absolute path, canonicalized when
+    /// possible. Matches by canonical path so symlink wiggles don't
+    /// create duplicate registry entries.
     pub fn find(&self, root: &Path) -> Option<&KnownDrive> {
         let target = canonicalize_or_keep(root);
         match self.drives.iter().position(|d| d.canonical() == target) {
@@ -132,81 +141,58 @@ impl Registry {
     /// Touch-or-append the drive entry, then sort most-recent first.
     /// Returns the entry's index after the operation.
     ///
-    /// `name` is only set on first insert: re-touching an existing
-    /// drive never clobbers a user-set name. Pass `set_name` from
-    /// the explicit rename path instead.
-    ///
-    /// New rows are minted a fresh `uuid` via `paths::mint_uuid`.
-    /// Re-touching an existing row preserves the uuid (and so
-    /// preserves its sidecar dirs). Two distinct registrations of
-    /// the same path at different times therefore get distinct
-    /// uuids only if the previous row was removed first, which is
-    /// exactly what `Library::unregister_drive` enforces.
-    pub fn touch(&mut self, root: &Path, name: Option<String>) -> usize {
+    /// Re-touching an existing row preserves `metadata_key`, so
+    /// opening the same canonical path reuses the same metadata
+    /// directory.
+    pub fn touch(&mut self, root: &Path) -> usize {
         let canonical = canonicalize_or_keep(root);
         let now = Utc::now();
         let idx = position_match(&self.drives, &canonical);
         if let Some(i) = idx {
-            self.drives[i].last_opened = now;
-            // Refresh the cache: a relinked drive (registered dir
-            // replaced by a symlink to elsewhere) would otherwise
+            self.drives[i].last_seen_at = now;
+            // Refresh the cache: a relinked drive would otherwise
             // keep the stale canonical, then the next touch wouldn't
-            // find it on the fast path. Belt and braces.
+            // find it on the fast path.
             self.drives[i].canonical_path = Some(canonical.clone());
+            self.drives[i].refresh_compat_fields();
         } else {
+            let metadata_key = paths::metadata_key_for_root(&canonical);
             self.drives.push(KnownDrive {
+                root_path: canonical.clone(),
+                metadata_key: metadata_key.clone(),
+                created_at: now,
+                last_seen_at: now,
                 path: canonical.clone(),
-                uuid: paths::mint_uuid(&canonical),
-                name,
+                uuid: metadata_key,
+                name: None,
                 last_opened: now,
                 canonical_path: Some(canonical.clone()),
             });
         }
         self.drives
-            .sort_by_key(|d| std::cmp::Reverse(d.last_opened));
+            .sort_by_key(|d| std::cmp::Reverse(d.last_seen_at));
         position_match(&self.drives, &canonical).unwrap_or(0)
     }
 
-    /// Fill any empty `uuid` fields with the legacy
-    /// `paths::drive_key(path)` value. Returns `true` when at least
-    /// one row was migrated so the caller knows to persist the
-    /// registry back to disk. Idempotent: re-running on an already-
-    /// migrated registry is a no-op and returns `false`.
-    ///
-    /// Why `drive_key(path)` as the migrated value: pre-uuid
-    /// installs keyed every sidecar directory by sha256(path)[..16].
-    /// Adopting that exact value as the new uuid keeps every
-    /// existing graph DB / index segment / trash dir reachable
-    /// under its new home, so the migration is zero file motion.
-    pub fn migrate_uuids(&mut self) -> bool {
-        let mut changed = false;
-        for d in &mut self.drives {
-            if d.uuid.is_empty() {
-                d.uuid = paths::drive_key(&d.path);
-                changed = true;
-            }
-        }
-        changed
-    }
-
-    /// Update the `path` of an existing registry row, preserving
-    /// the uuid (and therefore every sidecar). Used by
-    /// `Library::move_drive` to record an `mv` of the drive
-    /// directory without rebuilding any state. No-op + `false`
-    /// return when `old` is not registered.
+    /// Update the `root_path` of an existing registry row,
+    /// preserving the metadata key and therefore every metadata
+    /// directory. Used by `Library::move_drive` to record an `mv` of
+    /// the drive directory without moving chan-managed state.
     pub fn set_path(&mut self, old: &Path, new: &Path) -> bool {
         let old_canon = canonicalize_or_keep(old);
         let Some(i) = position_match(&self.drives, &old_canon) else {
             return false;
         };
         let new_canon = canonicalize_or_keep(new);
-        self.drives[i].path = new_canon.clone();
+        self.drives[i].root_path = new_canon.clone();
+        self.drives[i].last_seen_at = Utc::now();
         self.drives[i].canonical_path = Some(new_canon);
+        self.drives[i].refresh_compat_fields();
         true
     }
 
-    /// Remove a registry entry. Does not delete the directory or
-    /// the per-drive state on disk; the caller decides whether to
+    /// Remove a registry entry. Does not delete the directory or the
+    /// per-drive metadata on disk; the caller decides whether to
     /// purge that separately.
     pub fn remove(&mut self, root: &Path) -> bool {
         let canonical = canonicalize_or_keep(root);
@@ -214,17 +200,6 @@ impl Registry {
         self.drives
             .retain(|d| d.canonical() != canonical && fresh_canonical(d) != canonical);
         self.drives.len() != before
-    }
-
-    /// Set the display name on an existing drive. No-op if the
-    /// drive isn't registered.
-    pub fn set_name(&mut self, root: &Path, name: Option<String>) -> bool {
-        let canonical = canonicalize_or_keep(root);
-        let Some(i) = position_match(&self.drives, &canonical) else {
-            return false;
-        };
-        self.drives[i].name = name;
-        true
     }
 }
 
@@ -234,16 +209,18 @@ fn canonicalize_or_keep(root: &Path) -> PathBuf {
     root.canonicalize().unwrap_or_else(|_| root.to_path_buf())
 }
 
-/// Re-canonicalize an entry's `path` ignoring its cache. Used as the
-/// slow-path fallback when the cached canonical doesn't match the
-/// target (drive moved or relinked since last load).
+/// Re-canonicalize an entry's `root_path` ignoring its cache. Used
+/// as the slow-path fallback when the cached canonical doesn't match
+/// the target.
 fn fresh_canonical(d: &KnownDrive) -> PathBuf {
-    d.path.canonicalize().unwrap_or_else(|_| d.path.clone())
+    d.root_path
+        .canonicalize()
+        .unwrap_or_else(|_| d.root_path.clone())
 }
 
-/// Index of the drive whose canonical (cached, then fresh) matches
-/// `canonical`. Centralises the fast-path / slow-path lookup so
-/// touch / find / set_name all behave consistently.
+/// Index of the drive whose canonical, cached then fresh, matches
+/// `canonical`. Centralises lookup so touch / find / remove behave
+/// consistently.
 fn position_match(drives: &[KnownDrive], canonical: &Path) -> Option<usize> {
     if let Some(i) = drives.iter().position(|d| d.canonical() == *canonical) {
         return Some(i);
@@ -270,35 +247,25 @@ mod tests {
     fn touch_inserts_then_updates() {
         let tmp = TempDir::new().unwrap();
         let mut reg = Registry::default();
-        let idx1 = reg.touch(tmp.path(), Some("First".into()));
+        let idx1 = reg.touch(tmp.path());
         assert_eq!(idx1, 0);
         assert_eq!(reg.drives.len(), 1);
-        assert_eq!(reg.drives[0].name.as_deref(), Some("First"));
-        let first_opened = reg.drives[0].last_opened;
+        let key = reg.drives[0].metadata_key.clone();
+        let first_seen = reg.drives[0].last_seen_at;
 
         std::thread::sleep(std::time::Duration::from_millis(10));
-        let idx2 = reg.touch(tmp.path(), Some("Renamed".into()));
+        let idx2 = reg.touch(tmp.path());
         assert_eq!(idx2, 0);
         assert_eq!(reg.drives.len(), 1);
-        // Touch must not clobber an existing name.
-        assert_eq!(reg.drives[0].name.as_deref(), Some("First"));
-        assert!(reg.drives[0].last_opened > first_opened);
-    }
-
-    #[test]
-    fn set_name_updates_in_place() {
-        let tmp = TempDir::new().unwrap();
-        let mut reg = Registry::default();
-        reg.touch(tmp.path(), None);
-        assert!(reg.set_name(tmp.path(), Some("Notes".into())));
-        assert_eq!(reg.drives[0].name.as_deref(), Some("Notes"));
+        assert_eq!(reg.drives[0].metadata_key, key);
+        assert!(reg.drives[0].last_seen_at > first_seen);
     }
 
     #[test]
     fn remove_drops_entry() {
         let tmp = TempDir::new().unwrap();
         let mut reg = Registry::default();
-        reg.touch(tmp.path(), None);
+        reg.touch(tmp.path());
         assert!(reg.remove(tmp.path()));
         assert!(reg.drives.is_empty());
         assert!(!reg.remove(tmp.path()));
@@ -309,11 +276,22 @@ mod tests {
         let tmp = TempDir::new().unwrap();
         let cfg_path = tmp.path().join("config.toml");
         let mut reg = Registry::default();
-        reg.touch(tmp.path(), Some("Notes".into()));
+        reg.touch(tmp.path());
+        let key = reg.drives[0].metadata_key.clone();
         reg.save_to(&cfg_path).unwrap();
+        let raw = std::fs::read_to_string(&cfg_path).unwrap();
+        assert!(raw.contains("root_path"));
+        assert!(raw.contains("metadata_key"));
+        assert!(!raw.contains("path ="));
+        assert!(!raw.contains("uuid ="));
+        assert!(!raw.contains("name ="));
         let loaded = Registry::load_from(&cfg_path).unwrap();
         assert_eq!(loaded.drives.len(), 1);
-        assert_eq!(loaded.drives[0].name.as_deref(), Some("Notes"));
+        assert_eq!(loaded.drives[0].metadata_key, key);
+        assert_eq!(loaded.drives[0].path, loaded.drives[0].root_path);
+        assert_eq!(loaded.drives[0].uuid, loaded.drives[0].metadata_key);
+        assert!(loaded.drives[0].name.is_none());
+        assert_eq!(loaded.drives[0].last_opened, loaded.drives[0].last_seen_at);
     }
 
     #[test]
@@ -321,81 +299,74 @@ mod tests {
         let a = TempDir::new().unwrap();
         let b = TempDir::new().unwrap();
         let mut reg = Registry::default();
-        reg.touch(a.path(), Some("A".into()));
+        reg.touch(a.path());
         std::thread::sleep(std::time::Duration::from_millis(10));
-        reg.touch(b.path(), Some("B".into()));
-        assert_eq!(reg.drives[0].name.as_deref(), Some("B"));
+        reg.touch(b.path());
+        assert_eq!(reg.drives[0].root_path, b.path().canonicalize().unwrap());
     }
 
     #[test]
-    fn touch_mints_uuid_on_insert_and_preserves_on_retouch() {
+    fn touch_allocates_deterministic_metadata_key() {
         let tmp = TempDir::new().unwrap();
         let mut reg = Registry::default();
-        reg.touch(tmp.path(), None);
-        let uuid1 = reg.drives[0].uuid.clone();
-        assert_eq!(uuid1.len(), 16, "uuid should be 16 hex chars");
-        assert!(uuid1.chars().all(|c| c.is_ascii_hexdigit()));
-        // Re-touch must keep the uuid stable; otherwise sidecar
-        // directories would orphan every time a drive is re-opened.
-        reg.touch(tmp.path(), Some("Renamed".into()));
-        assert_eq!(reg.drives[0].uuid, uuid1);
+        reg.touch(tmp.path());
+        let key = reg.drives[0].metadata_key.clone();
+        assert_eq!(key, paths::metadata_key_for_root(tmp.path()));
+
+        assert!(reg.remove(tmp.path()));
+        reg.touch(tmp.path());
+        assert_eq!(reg.drives[0].metadata_key, key);
     }
 
     #[test]
-    fn migrate_uuids_fills_legacy_rows_only() {
-        // Build a registry the way a pre-uuid version would have:
-        // empty uuid strings in each row.
+    fn touch_matches_trailing_slash_to_same_canonical_path() {
         let tmp = TempDir::new().unwrap();
         let mut reg = Registry::default();
-        reg.touch(tmp.path(), Some("Notes".into()));
-        // Force the uuid empty as if loaded from a pre-uuid TOML.
-        reg.drives[0].uuid.clear();
+        reg.touch(tmp.path());
+        let key = reg.drives[0].metadata_key.clone();
+        let with_slash = tmp.path().join("");
+        reg.touch(&with_slash);
 
-        assert!(reg.migrate_uuids());
-        let migrated = reg.drives[0].uuid.clone();
-        assert_eq!(migrated, paths::drive_key(tmp.path()));
+        assert_eq!(reg.drives.len(), 1);
+        assert_eq!(reg.drives[0].metadata_key, key);
+    }
 
-        // Idempotent: second call returns false and changes nothing.
-        assert!(!reg.migrate_uuids());
-        assert_eq!(reg.drives[0].uuid, migrated);
+    #[cfg(unix)]
+    #[test]
+    fn touch_matches_symlink_to_same_canonical_path() {
+        use std::os::unix::fs::symlink;
+
+        let tmp = TempDir::new().unwrap();
+        let link_parent = TempDir::new().unwrap();
+        let link = link_parent.path().join("drive-link");
+        symlink(tmp.path(), &link).unwrap();
+
+        let mut reg = Registry::default();
+        reg.touch(tmp.path());
+        let key = reg.drives[0].metadata_key.clone();
+        reg.touch(&link);
+
+        assert_eq!(reg.drives.len(), 1);
+        assert_eq!(reg.drives[0].metadata_key, key);
     }
 
     #[test]
-    fn set_path_preserves_uuid() {
+    fn set_path_preserves_metadata_key() {
         let old = TempDir::new().unwrap();
         let new = TempDir::new().unwrap();
         let mut reg = Registry::default();
-        reg.touch(old.path(), Some("Notes".into()));
-        let uuid_before = reg.drives[0].uuid.clone();
+        reg.touch(old.path());
+        let key_before = reg.drives[0].metadata_key.clone();
 
         assert!(reg.set_path(old.path(), new.path()));
         assert_eq!(
-            reg.drives[0].uuid, uuid_before,
-            "uuid must survive a path move so sidecars stay reachable",
+            reg.drives[0].metadata_key, key_before,
+            "metadata key must survive a path move so metadata stays reachable",
         );
-        // find() now resolves via the new path.
+        assert_eq!(reg.drives[0].path, reg.drives[0].root_path);
+        assert_eq!(reg.drives[0].uuid, reg.drives[0].metadata_key);
+        assert_eq!(reg.drives[0].last_opened, reg.drives[0].last_seen_at);
         assert!(reg.find(new.path()).is_some());
         assert!(reg.find(old.path()).is_none());
-    }
-
-    #[test]
-    fn delete_then_recreate_mints_distinct_uuid() {
-        // The reproducer that PR2 is structurally fixing: register,
-        // unregister, register again at the same path. The new
-        // uuid must differ from the old, otherwise sidecars from
-        // the deleted drive would collide with the new one.
-        let tmp = TempDir::new().unwrap();
-        let mut reg = Registry::default();
-        reg.touch(tmp.path(), None);
-        let first = reg.drives[0].uuid.clone();
-        assert!(reg.remove(tmp.path()));
-        // Sleep so the nanosecond nonce in mint_uuid definitely
-        // advances. The runtime check inside mint_uuid keeps this
-        // robust on coarse clocks, but a tiny sleep makes the test
-        // intent explicit.
-        std::thread::sleep(std::time::Duration::from_millis(1));
-        reg.touch(tmp.path(), None);
-        let second = reg.drives[0].uuid.clone();
-        assert_ne!(first, second);
     }
 }
