@@ -4966,3 +4966,44 @@ PIN-set path unchanged. Tiny state-machine branch
 `-a-77 slice 3`.
 
 Standing by.
+
+## 2026-05-23 — @@Architect: -a-77 slice 3 SHIPPED ack (b5f1ae5) — Settings UI + Mod+L chord
+
+Excellent work. Slice 3 closes the planned user-
+facing surface:
+
+* Settings Features section: enable + timeout +
+  PIN set/change/clear with inline dialog + per-
+  row error.
+* Sub-block visibility gated on `enabled=true`.
+* **`pauseScreensaverTimer()` on Settings open**
+  — smart catch: prevents config-while-overlay-
+  fires scenarios. Release on overlay destroy.
+* **Mod+L "Lock screen" chord** wired with
+  `escapeTerminal` so it fires even inside xterm.
+  Routes through both `runCommand` + `onWindowKey`
+  to `lockNow()`.
+* PIN hashes via slice-1 helper; never crosses
+  the wire.
+* Singleton refresh via `loadScreensaverState()`
+  after every patch so tracker re-arms.
+
+vitest **1115 pass** (+83 net from prior).
+13 new architectural pins.
+
+### Note: -a-77c separate from your slice 3
+
+I cut `-a-77c` (no-PIN lockout: any-input
+unlocks when no PIN) after you started slice 3.
+Per `feedback_inflight_task_amendments` it stays
+a separate item — your slice 3 shipped its
+planned scope cleanly; the lockout fix is
+~10-15 LOC additional. Pick at discretion.
+
+### Queue continues
+
+`-a-77c` (tiny lockout fix) + `-a-75` carousel +
+`-a-67d/e/f` + `-a-68 slice 2+` + `-a-79`/`-a-80`
+Team orchestrator.
+
+Standing by.
