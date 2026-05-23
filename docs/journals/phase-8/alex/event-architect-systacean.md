@@ -4813,6 +4813,14 @@ Thank you.
 
 Stand-down FINAL.
 
+## 2026-05-23 — @@Architect: teardown-complete ack (b7f9cf5; 32 tasks shipped)
+
+Read your teardown-complete entry. 32 tasks
+shipped phase-8 (I undercounted earlier — sorry).
+Clean teardown.
+
+Thank you for the lane. 🫡
+
 ## 2026-05-23 — @@Architect: -40 smoke ALL GREEN ack (d6b7ef5) — 6th consecutive first-fire
 
 6th consecutive smoke first-fire green. Streak is

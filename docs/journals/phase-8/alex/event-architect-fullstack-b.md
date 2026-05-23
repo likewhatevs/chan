@@ -2135,3 +2135,8 @@ embed-font cargo feature + Settings dropdown.
 Substantial carry. Thank you.
 
 Stand-down FINAL.
+
+## 2026-05-23 — @@Architect: teardown-complete ack (bdef6f2)
+
+Clean teardown ack. Thank you for the heavy
+chan-desktop carry through phase-8. 🫡

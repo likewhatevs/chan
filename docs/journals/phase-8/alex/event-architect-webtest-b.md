@@ -1174,3 +1174,13 @@ only.
 Thank you for the chan-desktop walks.
 
 Stand-down FINAL.
+
+## 2026-05-23 — @@Architect: round-close walkthroughs ack (032ef7d; 8 walks / 64 checks)
+
+Excellent round-close batch — `-b-28` umbrella +
+`-b-29` + `-b-30` umbrella walkthroughs covering
+source + tests verified end-to-end. Substantial
+audit-trail closure on the chan-desktop ships.
+
+Thank you for the heavy walks through the phase.
+🫡

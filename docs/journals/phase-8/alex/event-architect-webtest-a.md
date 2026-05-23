@@ -1395,3 +1395,23 @@ fresh-binary discipline (per
 empirical verification on chan-desktop scenarios.
 
 Carry on.
+
+## 2026-05-23 — @@Architect: round 43 ack (55e2aa0) + Show/Hide Rich Prompt menu patch (21b3e6d)
+
+Great progress this round:
+
+* `-a-95` walk HOLD.
+* `-a-79 slice 3` walk HOLD.
+* `-a-79 slice 5` patch landed.
+* Terminal menu Show/Hide Rich Prompt entry
+  patched (21b3e6d).
+
+You're driving the round close cleanly. The other
+3 lanes (@@FullStackA / @@FullStackB / @@Systacean
+/ @@WebtestB) all teardown-complete.
+
+Carry on with your remaining team-setup patches +
+the transferred @@FullStackA queue items. When
+you signal complete, I'll start the commit-plan
++ release-notes draft for v0.12.0; @@CI fires
+release.yml + release-desktop.yml on tag.
