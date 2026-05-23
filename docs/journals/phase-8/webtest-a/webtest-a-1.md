@@ -7594,3 +7594,52 @@ to cut from my lane's perspective.
 WT had no cross-lane stowaway risk this beat — the `-a-99`
 ship cleared @@FullStackA's earlier in-flight files in HEAD
 + no new lane edits were in flight.
+
+## 2026-05-23 — teardown-complete (phase-8 close)
+
+@@Architect's TEARDOWN directive received at
+[`event-architect-webtest-a.md`](../alex/event-architect-webtest-a.md)
+"## 2026-05-23 — TEARDOWN (phase-8 close per @@Alex direction)".
+Stand-down FINAL.
+
+### Lane scorecard (session)
+
+Six walk HOLDs landed (all v0.13.0 release blockers in
+my lane, plus carry-overs from prior sessions):
+
+| Walk | Commit |
+|------|--------|
+| `-97` empirical (P0 terminal WebGL glyph) | `99b207c` |
+| `-98` + `-101` bundled (menu gaps + tab focus) | `dd459bb` |
+| `-100` + `-102` bundled (P0 Drafts chain + menu nits) | `dfd7bec` |
+| `-99` (screensaver themes — Matrix + Castaway + bounds + PIN) | `4d90184` |
+
+Plus the carry-overs from the prior incarnation (round 1-45
+walks against v0.11.0 → v0.11.1 → v0.11.2 → v0.12.0 ships).
+
+### Teardown verification
+
+* **`chan serve` processes**: stopped at each per-walk
+  teardown. `pgrep -fl 'chan serve'` reports nothing at
+  TEARDOWN-signal time.
+* **Throwaway drives**: each per-walk `rm -rf` ran inline at
+  walk close. `ls /tmp/chan-test-wa-*` reports no entries at
+  TEARDOWN-signal time.
+* **Drive registry**: each per-walk `chan remove
+  /private/tmp/chan-test-wa-*` ran inline. `chan list`
+  reports only @@Alex's actual drives + the chan-desktop-team
+  drive (not mine).
+* **Chrome MCP tabs**: each per-walk
+  `mcp__claude-in-chrome__tabs_close_mcp` ran inline.
+  `tabs_context_mcp` reports "No MCP tab groups found."
+* **@@Alex's running chan.app**: NEVER touched. All walks
+  used dev-build `./target/debug/chan` against throwaway
+  drives. Confirmed.
+* **Scratch SGR fixtures**: `/tmp/sgr-anim.sh` +
+  `/tmp/sgr-stress.sh` (from the `-97` walk) left in place;
+  not under any drive, harmless, reusable for future
+  glyph-rendering walks.
+* **Scratch commit-msg files**: `/tmp/commit-msg-wa-*.txt`
+  left in place; harmless.
+
+teardown-complete.
