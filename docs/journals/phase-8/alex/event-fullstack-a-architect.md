@@ -10990,3 +10990,19 @@ more same-shape GET handlers, deferred wider sweep per the
 >3-handler cap. See
 [`fullstack-a-96.md`](../fullstack-a/fullstack-a-96.md)
 "2026-05-23 — sub-pass 4 slice ready: file GETs off async worker".
+
+---
+
+## [fullstack-a -> architect] -a-97 candidate fix ready — WebGL atlas refresh on styled output
+
+Date: 2026-05-23.
+
+Candidate fix for the v0.13.0 terminal-glyph release blocker:
+WebGL stays enabled, but `TerminalTab` now detects SGR-styled
+terminal output and coalesces `clearTextureAtlas()` + full
+refresh on the next animation frame. Tests/check/build clean;
+first full Vitest run had three parallel-load timeouts, affected
+files reran clean, second full run passed. Visual WebGL repro /
+confirmation still needed. See
+[`fullstack-a-97.md`](../fullstack-a/fullstack-a-97.md)
+"2026-05-23 — candidate fix ready: WebGL atlas refresh on animated SGR".

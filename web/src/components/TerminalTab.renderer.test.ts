@@ -27,6 +27,7 @@ describe("fullstack-b-29: TerminalTab WebGL renderer", () => {
     // xterm.js falls back to its DOM rendering for that
     // session instead of crashing.
     expect(tab).toMatch(/webgl\.onContextLoss\(/);
+    expect(tab).toMatch(/webglRendererActive\s*=\s*false/);
     expect(tab).toMatch(/webgl\.dispose\(\)/);
   });
 
@@ -37,5 +38,27 @@ describe("fullstack-b-29: TerminalTab WebGL renderer", () => {
     // exploding the panel.
     expect(tab).toMatch(/try\s*\{[\s\S]*?new WebglAddon[\s\S]*?\}\s*catch/);
     expect(tab).toMatch(/falling back to DOM/);
+  });
+
+  test("refreshes the WebGL texture atlas after animated SGR output", () => {
+    // `fullstack-a-97`: xterm.js documents clearTextureAtlas as
+    // the workaround for corrupted WebGL texture atlases. Claude
+    // Code's animated ANSI status lines churn SGR color/style
+    // sequences; coalescing an atlas clear on those chunks keeps
+    // the renderer from substituting glyphs across panes.
+    expect(tab).toMatch(/function bytesContainSgrSequence\(bytes: Uint8Array\)/);
+    expect(tab).toMatch(/if \(b === 0x6d\) return true/);
+    expect(tab).toMatch(/function maybeRefreshWebglAtlas\(bytes: Uint8Array\)/);
+    expect(tab).toMatch(/term\?\.clearTextureAtlas\(\)/);
+    expect(tab).toMatch(/term\?\.refresh\(0, Math\.max\(0, term\.rows - 1\)\)/);
+  });
+
+  test("checks ArrayBuffer and Blob terminal output for SGR atlas refresh", () => {
+    expect(tab).toMatch(
+      /event\.data instanceof ArrayBuffer[\s\S]*?term\?\.write\(bytes\);[\s\S]*?maybeRefreshWebglAtlas\(bytes\);/,
+    );
+    expect(tab).toMatch(
+      /event\.data instanceof Blob[\s\S]*?term\?\.write\(bytes\);[\s\S]*?maybeRefreshWebglAtlas\(bytes\);/,
+    );
   });
 });

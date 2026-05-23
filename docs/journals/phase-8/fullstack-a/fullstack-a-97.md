@@ -64,3 +64,74 @@ Yes for SPA-side edits (`web/src/`) + WebGL renderer paths + Rust-side terminal 
 * Performance refactor of the WebGL renderer beyond what's needed to fix this bug. The renderer landed in `-b-29`; it's part of the v0.12.0 surface. Wholesale rework is post-v0.13.0 territory.
 * Font choice changes (revert SCP, etc.). Fix the renderer, don't paper over with a font swap.
 * Chan-desktop bundling / signing — chan-desktop team's lane.
+
+## 2026-05-23 — candidate fix ready: WebGL atlas refresh on animated SGR
+
+Root-cause path narrowed by tag-range audit:
+
+* `9029924` (`fullstack-b-29`) introduced
+  `@xterm/addon-webgl` in `TerminalTab.svelte`.
+* `613fc0c` / `e363ee6` (`fullstack-b-30`) changed
+  the terminal font chain, but did not explain
+  per-character substitution under repeated ANSI color /
+  style churn.
+* xterm.js exposes `Terminal.clearTextureAtlas()` with
+  docs naming corrupted WebGL texture atlases as the
+  intended workaround class. That matches @@Alex's
+  observed symptom: correct terminal buffer text but
+  wrong glyphs drawn in some WebGL-rendered panes during
+  animated ANSI style updates.
+
+### Fix
+
+`web/src/components/TerminalTab.svelte` now:
+
+* Tracks whether the WebGL renderer is active.
+* Detects CSI SGR sequences (`ESC [ ... m`) in binary
+  websocket output, including sequences split across
+  chunks.
+* Coalesces a `term.clearTextureAtlas()` + full-row
+  `term.refresh(...)` onto the next animation frame
+  whenever styled animated output hits the WebGL path.
+* Clears the active/queued state on WebGL context loss
+  and terminal teardown.
+
+This keeps WebGL enabled for the box/block glyph fix from
+`-b-29` and targets the renderer's atlas corruption path
+instead of changing fonts or disabling the renderer.
+
+### Test pin
+
+`TerminalTab.renderer.test.ts` now pins:
+
+* WebGL context-loss state reset.
+* SGR detection helper.
+* `maybeRefreshWebglAtlas(...)`.
+* `clearTextureAtlas()` + full refresh.
+* Both `ArrayBuffer` and `Blob` websocket byte paths
+  calling the atlas refresh check after `term.write(...)`.
+
+### Verification
+
+* `npm test -- --run src/components/TerminalTab.renderer.test.ts`
+  — 6/6 pass.
+* `npm run check` — 0 errors / 0 warnings.
+* First `npm test -- --run` hit three 15s UI-test
+  timeouts under parallel load; reran the three affected
+  files directly (`TerminalTab.test.ts`, `Pane.test.ts`,
+  `EmptyPaneCarousel.test.ts`) — 26/26 pass.
+* Second `npm test -- --run` — 1335/1335 pass, 11
+  skipped.
+* `npm run build` — clean; existing chunk-size /
+  ineffective-dynamic-import warnings only.
+
+### Verification gap
+
+I did not visually reproduce / recheck the WebGL glyph
+corruption from this shell. Empirical follow-up needed:
+browser or chan-desktop dev build, three terminal panes,
+animated SGR output, verify no glyph substitutions during
+color/style churn.
+
+Commit readiness:
+`web: terminal: refresh WebGL atlas on styled output (fullstack-a-97)`.

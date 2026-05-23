@@ -153,6 +153,10 @@
   let terminalCwdAbs: string | null = $state(null);
   let watcherPollTimer: ReturnType<typeof setInterval> | null = null;
   const outputDecoder = new TextDecoder();
+  const WEBGL_ATLAS_SCAN_TAIL_BYTES = 32;
+  let webglRendererActive = false;
+  let webglAtlasRefreshQueued = false;
+  let webglAtlasScanTail: number[] = [];
   let lastSessionSave = 0;
   let sessionSaveTimer: ReturnType<typeof setTimeout> | null = null;
   const menuOpen = $derived(tabMenu.openForTabId === tab.id);
@@ -345,6 +349,31 @@
     term.options.theme = terminalTheme();
   }
 
+  function bytesContainSgrSequence(bytes: Uint8Array): boolean {
+    const scan = [...webglAtlasScanTail, ...bytes];
+    webglAtlasScanTail = scan.slice(-WEBGL_ATLAS_SCAN_TAIL_BYTES);
+    for (let i = 0; i < scan.length - 2; i++) {
+      if (scan[i] !== 0x1b || scan[i + 1] !== 0x5b) continue;
+      for (let j = i + 2; j < Math.min(scan.length, i + 34); j++) {
+        const b = scan[j];
+        if (b === 0x6d) return true;
+        if (b >= 0x40 && b <= 0x7e) break;
+      }
+    }
+    return false;
+  }
+
+  function maybeRefreshWebglAtlas(bytes: Uint8Array): void {
+    if (!term || !webglRendererActive || webglAtlasRefreshQueued) return;
+    if (!bytesContainSgrSequence(bytes)) return;
+    webglAtlasRefreshQueued = true;
+    requestAnimationFrame(() => {
+      webglAtlasRefreshQueued = false;
+      term?.clearTextureAtlas();
+      term?.refresh(0, Math.max(0, term.rows - 1));
+    });
+  }
+
   function start(): void {
     if (!host || term) return;
     // `fullstack-b-11`: scrollback honors the Settings MB budget.
@@ -432,8 +461,12 @@
     // but no regression).
     try {
       const webgl = new WebglAddon();
-      webgl.onContextLoss(() => webgl.dispose());
+      webgl.onContextLoss(() => {
+        webglRendererActive = false;
+        webgl.dispose();
+      });
       term.loadAddon(webgl);
+      webglRendererActive = true;
     } catch (err) {
       // Tauri webviews effectively always have WebGL; surface
       // the failure to the console for the rare regression
@@ -489,6 +522,7 @@
       if (event.data instanceof ArrayBuffer) {
         const bytes = new Uint8Array(event.data);
         term?.write(bytes);
+        maybeRefreshWebglAtlas(bytes);
         recordOutputBytes(bytes.byteLength);
         maybeRefreshWatcher(bytes);
         maybeSeedPrompt();
@@ -497,6 +531,7 @@
       if (event.data instanceof Blob) {
         const bytes = new Uint8Array(await event.data.arrayBuffer());
         term?.write(bytes);
+        maybeRefreshWebglAtlas(bytes);
         recordOutputBytes(bytes.byteLength);
         maybeRefreshWatcher(bytes);
         maybeSeedPrompt();
@@ -731,6 +766,9 @@
     resizeObserver = null;
     term?.dispose();
     term = null;
+    webglRendererActive = false;
+    webglAtlasRefreshQueued = false;
+    webglAtlasScanTail = [];
     fit = null;
     search = null;
     serialize = null;
