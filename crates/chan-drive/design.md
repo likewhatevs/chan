@@ -304,13 +304,14 @@ pub struct TrashEntry {
 }
 ```
 
-  - **Location**: `state_dir/trash/<key>/<id>/{payload[/], meta.json}`.
+  - **Location**:
+    `~/.chan/drives/<metadata_key>/trash/<id>/{payload[/], meta.json}`.
     Trash lives outside the user's drive directory because chan-
     drive stores zero state inside the drive. Trade-off: the
     trash does not sync via iCloud / Dropbox / git. Acceptable;
-    trash is per-machine recovery, not collaboration. A user who
-    relocates a drive to a new path also leaves their old trash
-    behind (`<key>` is sha256 of the canonical path).
+    trash is per-machine recovery, not collaboration. A recorded
+    `Library::move_drive` preserves `metadata_key`, so trash follows
+    the moved drive without moving files.
   - **Atomicity**: same-fs path is one atomic `rename` from
     drive root into the trash payload. Cross-fs path falls back
     to `copy + remove`, writing `meta.json` AFTER the copy and
@@ -340,7 +341,7 @@ What's NOT in v1 (deliberately):
 ### Search index
 
 `tantivy` 0.24 backs the per-drive index at
-`<cache_dir>/index/<key>/`. BM25 over `path`, `filename`,
+`~/.chan/drives/<metadata_key>/index/`. BM25 over `path`, `filename`,
 `headings`, and `body`. Schema version lives in
 `<index_dir>/config.toml` as the `schema_version` field of the
 `IndexConfig` struct (alongside the embedding model id and the
@@ -432,7 +433,7 @@ blocked directory on demand.
 ### Graph
 
 `sqlite` (rusqlite, bundled) backs the per-drive graph at
-`<state_dir>/graph/<key>/graph.sqlite`. Schema lives in `nodes`
+`~/.chan/drives/<metadata_key>/graph/graph.sqlite`. Schema lives in `nodes`
 (files), `edges` (links + tags + mentions), and `headings`
 (in-file anchors).
 
@@ -1105,38 +1106,37 @@ chan-drive never emits events for it or includes it in
 ```
 ~/.chan/                          (config_dir on desktop)
   config.toml                     drive registry + default drive root
-
-$DATA_DIR/chan/                   (state_dir; persistent)
-  sessions/<key>/                 per-drive opaque session blobs
-  graph/<key>/graph.sqlite        per-drive graph DB
-  locks/<key>/writer.lock         per-drive cross-process lock
-  tokens/<key>/                   per-drive bearer-token store
-                                  (chan-drive allocates the dir; the
-                                  app, e.g. chan-server, owns the
-                                  contents)
-  trash/<key>/<id>/               per-drive Trash. Each entry holds
-    payload | payload/            the moved file or directory and
-    meta.json                     a JSON sidecar (original_path,
+  drives/<metadata_key>/          per-drive metadata root
+    sessions/                     opaque session blobs
+    graph/graph.sqlite            graph DB and graph sidecars
+    locks/                        cross-process coordination
+    tokens/                       bearer-token store allocated for
+                                  apps such as chan-server
+    trash/<id>/                   per-drive Trash. Each entry holds
+      payload | payload/          the moved file or directory and
+      meta.json                   a JSON sidecar (original_path,
                                   deleted_at, is_dir, size). meta is
                                   written last; sweep treats meta-
                                   less entries as crash leftovers.
-
-$CACHE_DIR/chan/                  (cache_dir; rebuildable)
-  index/<key>/                    per-drive tantivy segments + dense
-                                  vectors + config.toml
+    report/report.jsonl           chan-report cache
+    index/                        tantivy segments + dense vectors +
+                                  config.toml
+    drafts/                       in-progress drafts outside the
+                                  user drive root
 ```
 
-`<key>` is `sha256(canonical_path)[..16]` as hex. Renames invalidate
-the keys; rebuilds are cheap. There is no rename-tracking.
+`<metadata_key>` is the path slug plus an 8-hex hash of the
+canonical path at first registration. `Library::move_drive`
+preserves it when the local path moves, so metadata follows without
+moving files on disk.
 
 Per platform:
 
   Platform    config_dir          state_dir                cache_dir
   ----------  ------------------  -----------------------  ------------------
-  macOS       ~/.chan             ~/Library/AppSupport/    ~/Library/Caches/
-                                  chan                     chan
-  Linux       ~/.chan             $XDG_DATA_HOME/chan      $XDG_CACHE_HOME/chan
-  Windows     C:\Users\u\.chan    %APPDATA%\chan           %LOCALAPPDATA%\chan
+  macOS       ~/.chan             ~/.chan                  ~/.chan
+  Linux       ~/.chan             ~/.chan                  ~/.chan
+  Windows     C:\Users\u\.chan    C:\Users\u\.chan         C:\Users\u\.chan
   iOS         (see below)         $sandbox/Library/        $sandbox/Library/
                                   Application Support/     Caches/chan
                                   chan
