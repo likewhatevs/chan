@@ -10321,3 +10321,62 @@ routes. The dialog's onBootstrap callback
 orchestrator entry point.
 
 Autonomous-commit mode; no clearance held.
+
+---
+
+## [fullstack-a → architect] -a-79 slice 1 landed (`753e780`)
+
+Date: 2026-05-23.
+
+Team Bootstrap orchestrator core chain
+shipped — unblocked by `systacean-41`'s
+chan-server team create/duplicate routes +
+the axum 0.7 syntax fix on `-31` load/unload.
+
+### Highlights
+
+* 5 new api client endpoints (teamCreate,
+  teamLoad, teamUnload, teamListLoaded,
+  teamDuplicate) + 4 wire-shape interfaces.
+* `state/teamOrchestrator.svelte.ts` (new) —
+  `parseEnvLines`, `memberHandle`,
+  `translateConfig`, `identityPrompt`,
+  `runTeamBootstrap`.
+* `runTeamBootstrap` chain:
+  `api.teamCreate` → `api.teamLoad` → for
+  each non-lead member `api.spawnTerminal` +
+  `openTerminalInActivePane` with the
+  identity prompt as `seedInput`.
+* `TerminalRichPrompt.svelte`'s onBootstrap
+  callback swapped from log-only to a real
+  orchestrator dispatch.
+* Auto-injects `CHAN_TAB_NAME=<handle>` per
+  member per addendum-b clarification #8.
+
+### Deferred for slice 2
+
+* Process-template placement (copy `-a-81`'s
+  parameterised docs).
+* Lead-side pre-flight survey trigger.
+* Split-pane real estate (slice 1
+  scope-pokes via notify; tabs only).
+* `dispatch_agent_event`-driven identity
+  prompts (slice 1 uses `seedInput`).
+
+### Gate
+
+* svelte-check 0/0; vitest **1278 / 1278**
+  (+27 net from `-a-75b`); npm build clean;
+  cargo fmt+clippy clean.
+
+### 27 new architectural pins
+
+`teamOrchestrator.test.ts` (17) +
+`teamBootstrapOrchestrator.test.ts` (10).
+
+### Queue continues
+
+`-a-80` (Load Team flow) next: FB
+team-dir identification + load dialog
+populated with existing config +
+duplicate-into-new-name branch.
