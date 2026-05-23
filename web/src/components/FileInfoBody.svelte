@@ -459,7 +459,7 @@
       {/if}
     </header>
     <h3 class="title" title={entry.path || "/"}>
-      {basename(entry.path) || drive.info?.name || "(root)"}
+      {basename(entry.path) || drive.info?.label || "(root)"}
     </h3>
     {#if entry.path === "Drafts"}
       <!-- `fullstack-a-66` slice c (follow-up): "outside drive's

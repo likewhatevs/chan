@@ -206,7 +206,7 @@ pub fn local_window_key(drive_key: &str) -> String {
 }
 
 /// Identity key for a tunneled-drive WindowConfig. Namespaced so a
-/// local drive named `notes` and a tunneled drive with
+/// local drive at `/home/alex/notes` and a tunneled drive with
 /// `(label, drive) = (_, "notes")` don't share the same stack
 /// entry (they have different session.json files in different
 /// drives).

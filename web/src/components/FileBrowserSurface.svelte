@@ -11,7 +11,6 @@
     Network,
     PanelLeftOpen,
     PanelRightOpen,
-    Pencil,
     Settings2,
     Users,
     X,
@@ -46,7 +45,6 @@
     tree,
     treeExpanded,
     drive,
-    ui,
   } from "../state/store.svelte";
   import {
     canReopenClosedTab,
@@ -301,26 +299,9 @@
   /// `graphDrive` / `renameDrive` (modal) — the addendum-a spec
   /// moves New File / New Dir to the selection menu (where they
   /// can root under the selected directory) and replaces the
-  /// modal "Rename drive..." entry with an inline editable
-  /// input in the menu header. `openGraphForDrive` is still
+  /// modal "Rename drive..." entry with a path row in the menu
+  /// header. `openGraphForDrive` is still
   /// reachable via the empty-pane spawn grid + Cmd+Shift+M.
-
-  /// `fullstack-a-67e`: inline drive-rename per addendum-a's
-  /// "editable like Terminal name" spec. Mirrors
-  /// `renameTerminalTab`'s shape — oninput → PATCH on every
-  /// keystroke + write the fresh DriveInfo back into the
-  /// store.
-  async function commitDriveName(next: string): Promise<void> {
-    const trimmed = next.trim();
-    if (!trimmed) return;
-    if (trimmed === drive.info?.name) return;
-    try {
-      const info = await api.updatePreferences({ name: trimmed });
-      drive.info = info;
-    } catch (err) {
-      ui.status = `rename failed: ${(err as Error).message ?? err}`;
-    }
-  }
 
   function showDriveInfo(): void {
     menu?.close();
@@ -518,33 +499,19 @@
 </div>
 
 {#snippet menuItems()}
-  <!-- `fullstack-a-67e`: addendum-a File Browser menu spec.
-       Header: editable Drive name (mirror of Terminal name) +
-       full-path row (drive icon, grey, fade-on-overflow, click
-       → drive inspector). Body: dock toggles, expand/collapse +
+  <!-- File Browser menu.
+       Header: path-derived drive label + full-path row (drive icon,
+       grey, fade-on-overflow, click -> drive inspector). Body:
+       dock toggles, expand/collapse +
        reload, import contacts. Foot: Settings (flipHybrid)
        + Reopen Closed Tab + Close.
        Selection menu (rename/delete/etc.) lives on FileTree's
        row right-click; this menu is the FB tab right-click +
        hamburger. New file / New directory entries moved to the
        selection menu where they're CWD-aware. -->
-  <li class="drive-rename-row" role="none">
-    <label class="drive-rename-label">
-      <Pencil size={15} strokeWidth={1.75} aria-hidden="true" />
-      <span>Drive</span>
-    </label>
-    <input
-      class="drive-rename-input"
-      value={drive.info?.name ?? ""}
-      spellcheck="false"
-      oninput={(e) => void commitDriveName((e.currentTarget as HTMLInputElement).value)}
-      onkeydown={(e) => {
-        if (e.key === "Enter") {
-          e.preventDefault();
-          (e.currentTarget as HTMLInputElement).blur();
-        }
-      }}
-    />
+  <li class="drive-label-row" role="none" title={drive.info?.root}>
+    <HardDrive size={16} strokeWidth={1.75} aria-hidden="true" />
+    <span class="drive-label-text">{drive.info?.label ?? ""}</span>
   </li>
   <li>
     <button
@@ -689,42 +656,24 @@
     color: var(--text);
     border-color: var(--btn-hover);
   }
-  /* `fullstack-a-67e`: inline drive-rename row + drive-path
-     row at the head of the FB tab right-click menu. Mirror of
-     Terminal's name input + status row (TerminalTab.svelte
-     `rename-row` + `terminal-status-row`).
+  /* Drive label + path row at the head of the FB tab right-click
+     menu.
      The :global wrapper drops the `<li>` selectors through to
      the portal'd menu, which renders into <body>. */
-  :global(.hamburger-menu li.drive-rename-row) {
+  :global(.hamburger-menu li.drive-label-row) {
     display: flex;
     align-items: center;
     gap: 8px;
     padding: 6px 8px;
-  }
-  :global(.hamburger-menu .drive-rename-label) {
-    display: inline-flex;
-    align-items: center;
-    gap: 6px;
     color: var(--text-secondary);
-    font-size: 12px;
-    text-transform: lowercase;
-    letter-spacing: 0.02em;
-    flex-shrink: 0;
-  }
-  :global(.hamburger-menu .drive-rename-input) {
-    flex: 1;
-    min-width: 0;
-    background: var(--bg);
-    border: 1px solid var(--border);
-    border-radius: 4px;
-    color: var(--text);
-    font: inherit;
     font-size: 13px;
-    padding: 3px 6px;
   }
-  :global(.hamburger-menu .drive-rename-input:focus) {
-    outline: none;
-    border-color: var(--accent);
+  :global(.hamburger-menu .drive-label-text) {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    color: var(--text);
   }
   :global(.hamburger-menu .drive-path-row) {
     display: flex;
@@ -756,9 +705,8 @@
   }
   /* `fullstack-a-67e`: `.folder-text` / `.folder-label` /
      `.folder-path` / `.mono` selectors dropped along with the
-     "Rename drive..." + "Directory" rows they styled. The new
-     drive-rename + drive-path rows have their own selectors
-     above. */
+     "Rename drive..." + "Directory" rows they styled. The current
+     drive label + path rows have their own selectors above. */
   .body {
     flex: 1;
     display: flex;

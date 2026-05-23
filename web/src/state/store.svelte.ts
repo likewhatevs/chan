@@ -55,17 +55,13 @@ import { uiConfirm } from "./confirm.svelte";
 import { applyEditorToolPreferences } from "./editorTools.svelte";
 export const drive = $state<{ info: DriveInfo | null }>({ info: null });
 
-/// Display name for the active drive. Prefers the registry's explicit
-/// `name` field; falls back to the basename of `root` so a drive
-/// registered without an explicit name still reads as
-/// `~/dev/foo/bar` → `bar` in the file-browser tab title and other
-/// drive-root labels. Returns an empty string only when drive.info
-/// is itself null.
+/// Display name for the active drive. The server computes this from
+/// the path; it is not user-managed registry metadata.
 export function driveDisplayName(): string {
   const info = drive.info;
   if (!info) return "";
-  const explicit = info.name?.trim();
-  if (explicit) return explicit;
+  const label = info.label?.trim();
+  if (label) return label;
   const root = info.root ?? "";
   if (!root) return "";
   const stripped = root.replace(/[/\\]+$/, "");
@@ -312,7 +308,7 @@ export function onWatchEvent(e: unknown): void {
   }
   const kind = (e as { kind?: string } | null)?.kind;
   if (kind === "config_changed") {
-    // A sibling window flipped a setting (theme, fonts, drive name,
+    // A sibling window flipped a setting (theme, fonts,
     // pane widths, default-drive root). Re-fetch and reflect.
     scheduleDriveRefresh();
     return;
@@ -2285,8 +2281,7 @@ export function resolvePrompt(value: string | null): void {
 // Richer cousin of uiPrompt for typing relative paths: live directory
 // autocomplete from the loaded tree, parent-creation hints, overwrite
 // warnings, and client-side validation. Used by file create / move /
-// rename. The plain uiPrompt stays around for label-only inputs (drive
-// rename, etc.).
+// rename. The plain uiPrompt stays around for label-only inputs.
 //
 // `kind` distinguishes the two entity classes the user can be naming:
 // a file (default `.md` will be appended on submit if no extension) or
@@ -2598,26 +2593,6 @@ export const fileOps = {
       browserOverlay.open = false;
     } catch (e) {
       ui.status = `create failed: ${(e as Error).message}`;
-    }
-  },
-  /// Rename the drive (display name only, the on-disk directory
-  /// stays put). The name is registry metadata returned in
-  /// DriveInfo.name and shown in the file-browser header. No-op
-  /// when the user cancels or the input is unchanged; on success
-  /// the fresh DriveInfo from the PATCH response is written back
-  /// into the drive store so the header updates without an extra
-  /// refresh round-trip.
-  async renameDrive(): Promise<void> {
-    const current = drive.info?.name ?? "";
-    const next = await uiPrompt("drive name", current);
-    if (next === null) return;
-    const trimmed = next.trim();
-    if (trimmed === current) return;
-    try {
-      const info = await api.updatePreferences({ name: trimmed });
-      drive.info = info;
-    } catch (e) {
-      ui.status = `rename failed: ${(e as Error).message}`;
     }
   },
   /// Rename or move a file / directory. `isDir` toggles the

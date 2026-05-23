@@ -89,7 +89,14 @@
     scheduleSave();
   });
 
-  function formatLastOpened(iso: string): string {
+  function displayPathLabel(path: string): string {
+    const stripped = path.replace(/[/\\]+$/, "");
+    if (!stripped) return path || "(root)";
+    const slash = Math.max(stripped.lastIndexOf("/"), stripped.lastIndexOf("\\"));
+    return slash < 0 ? stripped : stripped.slice(slash + 1);
+  }
+
+  function formatLastSeen(iso: string): string {
     try {
       const d = new Date(iso);
       const yyyy = d.getUTCFullYear();
@@ -113,7 +120,7 @@
     <span class="kind-chip drive">drive</span>
   </header>
   <h3 class="title" title={drive.info?.root}>
-    {drive.info?.name ?? "(unnamed)"}
+    {drive.info?.label ?? "(drive)"}
   </h3>
   <div class="meta-grid">
     <span class="k">directory</span>
@@ -156,10 +163,8 @@
       <ul class="recents">
         {#each globalConfig.drives as u (u.path)}
           <li>
-            <span class="recents-time">{formatLastOpened(u.last_opened)}</span>
-            {#if u.name}
-              <span class="recents-name">{u.name}</span>
-            {/if}
+            <span class="recents-time">{formatLastSeen(u.last_seen_at)}</span>
+            <span class="recents-name" title={u.path}>{displayPathLabel(u.path)}</span>
             <span class="recents-path mono" title={u.path}>{u.path}</span>
           </li>
         {/each}

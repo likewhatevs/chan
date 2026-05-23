@@ -114,7 +114,7 @@
   <div class="welcome-mark"></div>
   {#if drive.info}
     <div class="welcome-header" aria-label="drive summary">
-      <div class="welcome-name">{drive.info.name ?? "(unnamed)"}</div>
+      <div class="welcome-name" title={drive.info.root}>{drive.info.label ?? "(drive)"}</div>
     </div>
   {/if}
   <div class="spawn-row" aria-label="spawn">

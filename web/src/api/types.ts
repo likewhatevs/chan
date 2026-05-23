@@ -1,9 +1,12 @@
-// API types: the JSON shapes returned by chan-core's HTTP handlers.
-// Keep in lockstep with crates/chan-core/src/server.rs.
+// API types: the JSON shapes returned by chan-server's HTTP handlers.
+// Keep in lockstep with crates/chan-server/src/routes.
 
 export type DriveInfo = {
-  name: string | null;
   root: string;
+  /// Path-derived display label from the server. This is not
+  /// persisted user metadata; full root remains authoritative.
+  label: string | null;
+  metadata_key: string | null;
   /// Mirror of GlobalConfig.preferences. Per-drive overrides
   /// were removed; settings are always per-device-global. Carried
   /// here so a single `/api/drive` round-trip is enough to
@@ -30,12 +33,9 @@ export type GlobalConfig = {
 
 export type KnownDrive = {
   path: string;
-  /// User-editable display name from the registry. Null when the
-  /// drive was registered without one (e.g. legacy entries) or
-  /// after the user explicitly cleared it.
-  name?: string | null;
+  metadata_key: string;
   /// RFC3339 timestamp.
-  last_opened: string;
+  last_seen_at: string;
 };
 
 /// Editor theme. Drives the markdown renderer + source view

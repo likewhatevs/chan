@@ -11,12 +11,10 @@ use serde::Deserialize;
 
 /// One entry in the chan registry. Mirrors the on-disk shape of
 /// `chan_drive::registry::KnownDrive`. We deliberately keep this
-/// minimal: the desktop only needs the path and the user-set name.
+/// minimal: the desktop only needs the path for local drives.
 #[derive(Debug, Clone, Deserialize)]
 pub struct RegistryEntry {
-    pub path: PathBuf,
-    #[serde(default)]
-    pub name: Option<String>,
+    pub root_path: PathBuf,
 }
 
 #[derive(Debug, Default, Deserialize)]

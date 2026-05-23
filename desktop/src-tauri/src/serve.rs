@@ -732,8 +732,8 @@ fn is_executable_file(path: &Path) -> bool {
 }
 
 /// Stable window-label prefix for a tunneled drive, namespaced
-/// separately from `drive-*` so a local drive and a tunneled drive
-/// with the same canonical name don't collide.
+/// separately from `drive-*` so a local drive path and a tunneled
+/// drive slug don't collide.
 pub fn tunnel_window_prefix(tenant_label: &str, drive: &str) -> String {
     let mut h = DefaultHasher::new();
     tenant_label.hash(&mut h);

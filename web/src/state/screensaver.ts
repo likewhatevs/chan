@@ -37,7 +37,7 @@ const PBKDF2_HASH_BITS = 256; // SHA-256 output size.
 /// `hash` field.
 ///
 /// `driveSalt` is any stable per-drive string the caller has
-/// on hand (typical: `drive.info?.root` or `drive.info?.name`).
+/// on hand, typically `drive.info?.root`.
 /// Empty string falls back to a fixed default — usable for
 /// the truly-no-drive case but the SPA shouldn't reach this
 /// helper without a drive loaded anyway.

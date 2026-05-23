@@ -120,12 +120,6 @@ function req<T>(
 
 export const api = {
   drive: () => req<DriveInfo>("GET", "/api/drive"),
-  /// Update the drive's display name in the global registry.
-  /// Other preferences live in the global config and round-trip
-  /// through /api/config.
-  /// Empty / whitespace-only name clears the field.
-  updatePreferences: (body: { name?: string | null }) =>
-    req<DriveInfo>("PATCH", "/api/drive", body),
   /// Read the global per-user config (registry of known drives,
   /// default-drive path, preferences). Mounted by the Settings UI.
   config: () => req<GlobalConfig>("GET", "/api/config"),

@@ -2471,19 +2471,19 @@ describe("browserTabLabel (fullstack-a-1)", () => {
     };
   }
 
-  test("no selection renders drive name + trailing slash", () => {
+  test("no selection renders drive label + trailing slash", () => {
     expect(browserTabLabel(browserTab({ selected: null }), { driveName: "chan" })).toBe("chan/");
     expect(browserTabLabel(browserTab({ selected: undefined }), { driveName: "chan" })).toBe("chan/");
     expect(browserTabLabel(browserTab({ selected: "" }), { driveName: "chan" })).toBe("chan/");
     expect(browserTabLabel(browserTab({ selected: "   " }), { driveName: "chan" })).toBe("chan/");
   });
 
-  test("no selection without drive name falls back to tab title + slash", () => {
+  test("no selection without drive label falls back to tab title + slash", () => {
     expect(browserTabLabel(browserTab({ selected: null }))).toBe("Files/");
     expect(browserTabLabel(browserTab({ selected: "" }))).toBe("Files/");
   });
 
-  test("file at drive root renders drive name + slash", () => {
+  test("file at drive root renders drive label + slash", () => {
     expect(
       browserTabLabel(browserTab({ selected: "README.md" }), {
         driveName: "notes",

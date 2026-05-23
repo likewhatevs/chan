@@ -174,10 +174,10 @@ impl AppState {
 ///
 /// * `kind = "local"`: a chan-registry entry, backed by a
 ///   `chan serve` child the desktop spawned. Includes the canonical
-///   filesystem path, registry-derived name, and live URL.
+///   filesystem path and live URL.
 /// * `kind = "tunneled"`: a remote `chan serve` that dialed into
-///   the embedded tunnel server. No path; `name` is `"{label} ·
-///   {drive}"`; `url` points at the per-tenant loopback listener.
+///   the embedded tunnel server. No path; `url` points at the
+///   per-tenant loopback listener.
 ///
 /// Fields specific to tunneled rows are optional so the JSON shape
 /// is a strict superset of the local row; the renderer reads `kind`
@@ -186,7 +186,6 @@ impl AppState {
 struct Drive {
     kind: &'static str,
     path: String,
-    name: String,
     on: bool,
     url: String,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -214,19 +213,14 @@ fn list_drives(state: State<Arc<AppState>>) -> Result<Vec<Drive>, String> {
     let mut merged: Vec<Drive> = entries
         .into_iter()
         .map(|e| {
-            let key = canonical_key(&e.path);
+            let key = canonical_key(&e.root_path);
             let display_path = key.clone();
-            let name = e
-                .name
-                .or_else(|| basename(&e.path))
-                .unwrap_or_else(|| display_path.clone());
             let handle = serves.get(&key);
             let on = handle.is_some();
             let url = handle.and_then(|h| h.url.clone()).unwrap_or_default();
             Drive {
                 kind: "local",
                 path: display_path,
-                name,
                 on,
                 url,
                 label: None,
@@ -247,7 +241,6 @@ fn list_drives(state: State<Arc<AppState>>) -> Result<Vec<Drive>, String> {
         merged.push(Drive {
             kind: "tunneled",
             path: String::new(),
-            name: format!("{} \u{00b7} {}", t.label, t.drive),
             on: true,
             url: t.url,
             label: Some(t.label),
@@ -1239,10 +1232,6 @@ fn canonical_key(p: &Path) -> String {
         .unwrap_or_else(|_| PathBuf::from(p))
         .display()
         .to_string()
-}
-
-fn basename(p: &Path) -> Option<String> {
-    p.file_name().map(|s| s.to_string_lossy().into_owned())
 }
 
 /// Detect macOS App Translocation. When Gatekeeper sees an unsigned

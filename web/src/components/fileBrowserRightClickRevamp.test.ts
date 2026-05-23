@@ -8,24 +8,13 @@ import pane from "./Pane.svelte?raw";
 // The in-tree selection menu (FileTree.svelte row right-click)
 // is a sibling slice — separate pins land with that change.
 
-describe("fullstack-a-67e: FBSurface menu header — editable drive name + path row", () => {
-  test("drive-rename-row carries an editable input bound to drive.info?.name", () => {
-    expect(surface).toMatch(/<li class="drive-rename-row" role="none">/);
-    expect(surface).toMatch(
-      /class="drive-rename-input"[\s\S]{1,200}value=\{drive\.info\?\.name \?\? ""\}/,
-    );
-  });
-
-  test("input dispatches commitDriveName on oninput", () => {
-    expect(surface).toMatch(
-      /oninput=\{\(e\) => void commitDriveName\(\(e\.currentTarget as HTMLInputElement\)\.value\)\}/,
-    );
-  });
-
-  test("commitDriveName patches preferences and writes the fresh DriveInfo back", () => {
-    expect(surface).toMatch(
-      /async function commitDriveName\(next: string\): Promise<void> \{[\s\S]{1,400}api\.updatePreferences\(\{ name: trimmed \}\)[\s\S]{1,200}drive\.info = info;/,
-    );
+describe("fullstack-a-67e: FBSurface menu header — path-derived drive label + path row", () => {
+  test("drive-label-row renders the API label without an editable input", () => {
+    expect(surface).toMatch(/<li class="drive-label-row" role="none" title=\{drive\.info\?\.root\}>/);
+    expect(surface).toMatch(/class="drive-label-text">\{drive\.info\?\.label \?\? ""\}/);
+    expect(surface).not.toContain("drive-rename-input");
+    expect(surface).not.toContain("commitDriveName");
+    expect(surface).not.toContain("api.updatePreferences");
   });
 
   test("drive-path-row renders with HardDrive icon + click → showDriveInfo + fade-on-overflow", () => {
