@@ -169,14 +169,27 @@ export function wireToDialog(wire: TeamConfigWire): TeamDialogConfig {
 }
 
 /// `fullstack-a-79`: assemble the identity prompt addendum-b
-/// clarification #4 calls for. `$CHAN_TAB_NAME` is intentionally
-/// NOT escaped — the worker's shell expands it to the env-var
-/// value when the agent reads the prompt. The host-handle
-/// substitutes in literally.
-export function identityPrompt(hostHandle: string): string {
+/// clarification #4 calls for, rewritten per @@Alex's 2026-05-
+/// 23 spec to make host vs lead roles explicit. `$CHAN_TAB_NAME`
+/// is intentionally NOT escaped — the worker's shell expands it
+/// to the env-var value when the agent reads the prompt. The
+/// host-handle + lead-handle + bootstrap-doc substitute in
+/// literally.
+///
+/// Role asymmetry (verbatim @@Alex): the host (e.g. @@Alex)
+/// drives the team but mostly talks to the lead (e.g.
+/// @@Architect); agents send events to the lead by default +
+/// accept direct queries from the host but never reach out to
+/// the host on their own initiative.
+export function identityPrompt(
+  hostHandle: string,
+  leadHandle: string,
+  bootstrapDoc: string,
+): string {
   return (
-    `I'm ${hostHandle}. You're $CHAN_TAB_NAME. ` +
-    `Identify yourself, and then read docs/agents/bootstrap.md`
+    `Hello, I am ${hostHandle} and you are $CHAN_TAB_NAME. ` +
+    `Our team lead is ${leadHandle}. ` +
+    `Identify yourself and read ${bootstrapDoc}.`
   );
 }
 
@@ -321,7 +334,17 @@ export async function runTeamBootstrap(
   const leadPaneId = memberPaneIds.lead;
   // 5. Spawn worker terminals (lead is the host session — see
   //    addendum-b clarification #1).
-  const prompt = identityPrompt(wire.host_handle);
+  const leadHandle =
+    wire.members.find((m) => m.is_lead)?.handle ?? wire.host_handle;
+  // Bootstrap doc points at the placed-template path so workers'
+  // `read docs/agents/bootstrap.md` resolves to the actual per-
+  // team file written by `placeTeamTemplates` (slice 3), not the
+  // stale chan-repo reference. CWD for workers spawned via the
+  // orchestrator is the drive root; the placed-template path is
+  // `Drafts/team-{name}/docs/bootstrap.md` per the unified-path
+  // chan-drive routing.
+  const bootstrapDoc = `Drafts/team-${wire.team_name}/docs/bootstrap.md`;
+  const prompt = identityPrompt(wire.host_handle, leadHandle, bootstrapDoc);
   for (let i = 0; i < wire.members.length; i += 1) {
     const m = wire.members[i];
     if (m.is_lead) continue;
