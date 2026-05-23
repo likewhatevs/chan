@@ -3948,3 +3948,40 @@ component into the Infographics tab.
 * Path-limited.
 
 Standing by.
+
+## 2026-05-23 — @@Alex routed -a-75 follow-up: option (c) — carousel only in Infographics tab
+
+@@Alex: "This is correct we will no longer have
+the carousel in the back of the pane and it will
+only live in the tab from now on"
+
+### Routing locked
+
+Option (c) from the prior addendum:
+- **Welcome screen** (back of empty pane): static
+  spawn tiles ONLY. No carousel widget, no
+  rotation, no pause control.
+- **Infographics tab**: hosts the carousel widget
+  with all slides + pagination + play/pause.
+
+The Infographics tab becomes the canonical home
+for the multi-slide widget UX (Shortcuts + future
+slides). The empty-pane back surface simplifies
+to the spawn-tile grid + "Each pane's visible tab
+is part of the scope for Graph." hint.
+
+### Lane
+
+**@@FullStackA**. Slice 1b (`-a-75 slice 1b`?) to:
+1. Move the carousel component from EmptyPane /
+   welcome surface to InfographicsTab body.
+2. Strip the back-of-pane carousel — leave the
+   5-tile spawn grid + footer hint only.
+3. Update the Infographics tab default slide
+   ordering (Shortcuts first, future slides
+   appended).
+
+The carousel rotation + play/pause UX is preserved
+end-to-end, just relocated.
+
+Standing by.
