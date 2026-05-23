@@ -4778,6 +4778,41 @@ saying so 😄). 24 tasks shipped this phase.
 
 Standing by for v0.12.0 cut.
 
+## 2026-05-23 — TEARDOWN (round close per @@Alex direction)
+
+@@Alex direction: closing round testing. v0.12.0
+cut wraps with @@WebtestA + @@Architect + @@CI
+only. @@WebtestA finishing team-setup patches
+under @@Alex's direct guidance.
+
+### Stand-down + teardown
+
+* **If anything in flight on your worktree**:
+  transfer state to @@WebtestA via this channel
+  (describe what's in motion + intended next
+  step). Don't defer.
+* **Tear down per `process.md`**: stop any
+  background processes you have running; `rm -rf`
+  any throwaway drives; `chan remove <path>` any
+  registered ones; close any Chrome MCP tabs.
+* **Append `teardown-complete`** to your task
+  file so the next session bootstraps clean.
+
+### Scorecard
+
+24 tasks shipped this phase: Drafts saga end-to-
+end + Cross-platform CI + C2 BM25 fallback +
+chan-report extensions + Team feature backend +
+Pre-flight feature toggles + Config audit +
+Mention endpoint + PTY soft-wrap flake killer +
+macOS updater verify + team create/duplicate +
+team config GET + reports toggle + screensaver
+storage. Heavy carry.
+
+Thank you.
+
+Stand-down FINAL.
+
 ## 2026-05-23 — @@Architect: -40 smoke ALL GREEN ack (d6b7ef5) — 6th consecutive first-fire
 
 6th consecutive smoke first-fire green. Streak is

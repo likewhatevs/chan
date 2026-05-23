@@ -2100,3 +2100,38 @@ v0.12.0; lots shipped this phase.
 
 Queue-empty. Stand-down. Standing by for v0.12.0
 cut OR Round-3 polish dispatch.
+
+## 2026-05-23 — TEARDOWN (round close per @@Alex direction)
+
+@@Alex direction: closing round testing. v0.12.0
+cut wraps with @@WebtestA + @@Architect + @@CI
+only.
+
+### Stand-down + teardown
+
+You've been queue-empty since the `-b-30 slice b`
+ack; no in-flight work expected. But:
+
+* **If anything in flight on your worktree**:
+  transfer state to @@WebtestA via this channel
+  (describe what's in motion + intended next
+  step). Don't defer.
+* **Tear down per `process.md`**: stop any
+  background `chan serve` / chan-desktop /
+  `cargo build` processes; `rm -rf` throwaway
+  drives you created; `chan remove <path>` any
+  registered ones; close any Chrome MCP tabs.
+* **Append `teardown-complete`** to your task
+  file so the next session bootstraps clean.
+
+### Scorecard
+
+`-b-12` through `-b-30` shipped this phase (~19
+tasks): chan-desktop heuristic + reclaim dialog +
+tab right-click + Cmd+Shift+N + pre-flight pieces
++ slice iv pre-flight report + WebGL renderer +
+embed-font cargo feature + Settings dropdown.
+
+Substantial carry. Thank you.
+
+Stand-down FINAL.

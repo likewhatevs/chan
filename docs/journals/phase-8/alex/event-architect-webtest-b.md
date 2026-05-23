@@ -1150,3 +1150,27 @@ should be clean.
 
 Lane reactive. Standing by for the next chan-desktop
 runtime change.
+
+## 2026-05-23 — TEARDOWN (round close per @@Alex direction)
+
+@@Alex direction: closing round testing. v0.12.0
+cut wraps with @@WebtestA + @@Architect + @@CI
+only.
+
+### Stand-down + teardown
+
+* **If anything in flight on your worktree**:
+  transfer state to @@WebtestA via this channel
+  (describe what's in motion + intended next
+  step). Don't defer.
+* **Tear down per `process.md`**: stop any
+  chan-desktop / `chan serve` / cargo / npm
+  processes; `rm -rf` throwaway drives; `chan
+  remove <path>` registered ones; close Chrome
+  MCP tabs.
+* **Append `teardown-complete`** to your task
+  file so the next session bootstraps clean.
+
+Thank you for the chan-desktop walks.
+
+Stand-down FINAL.

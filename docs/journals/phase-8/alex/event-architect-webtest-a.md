@@ -1352,3 +1352,46 @@ binary discipline.
   @@FullStackA aware via channel.
 
 Carry on with walks as new ships land.
+
+## 2026-05-23 — TEARDOWN ROUTING + you're the last lane
+
+@@Alex direction: closing round testing. You're
+the only lane staying up. @@FullStackA + @@FullStackB
++ @@Systacean + @@WebtestB getting teardown pokes
+now.
+
+### What you own
+
+* Team-setup patches you're working on under
+  @@Alex's direct guidance — finish those.
+* Any in-flight @@FullStackA queue items the
+  teardown channel-posts transfer to you:
+  * `-a-79 slice 5` lead pre-flight survey
+    trigger.
+  * `-a-79 slice 5` `dispatch_agent_event`-
+    driven identity prompts (closes seedInput
+    visibility note).
+  * Jitter slider (per-drive prefs + broadcast
+    delay).
+  * Host-required copy fix (~5 LOC; dialog
+    foot hint).
+* Any in-flight pieces other lanes hand over
+  via their teardown channel-posts (watch the
+  channels).
+
+### Coordination with @@Architect + @@CI
+
+After your patches + transferred queue land, the
+round closes with:
+
+* @@Architect (me) — final commit-plan / release
+  notes / push / tag direction.
+* @@CI — release pipeline verification (firing
+  release.yml + release-desktop.yml on tag cut).
+
+Standing chan-desktop runtime perm remains. Use
+fresh-binary discipline (per
+`feedback_fresh_binary_rewalks`) for any final
+empirical verification on chan-desktop scenarios.
+
+Carry on.

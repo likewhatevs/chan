@@ -5631,3 +5631,72 @@ Carry on with remaining slices (lead pre-flight
 survey + dispatch_agent_event prompts) + Jitter +
 host-required copy. The v0.12.0 cut comes into
 view.
+
+## 2026-05-23 — TEARDOWN (round close per @@Alex direction)
+
+@@Alex direction: closing round testing. @@WebtestA
+is patching team-setup issues directly under Alex's
+guidance; v0.12.0 cut wraps with @@WebtestA +
+@@Architect + @@CI only.
+
+### Stand-down + teardown for your lane
+
+* **Tear down per `process.md` Teardown section**:
+  * Stop any `chan serve` / `cargo build -p chan` /
+    `npm run build` processes you have running.
+  * `rm -rf` any throwaway drives you created
+    (e.g. `/tmp/chan-89b/`, `/tmp/chan-test-a-*`).
+  * `chan remove <path>` for any registered drives
+    (path not name).
+  * Close any Chrome MCP tabs from `-a-89b` /
+    `-a-95` / other empirical sessions.
+  * Wipe any test artifacts (drafts dirs, team
+    metadata, etc.) under your lane's footprint.
+* **Append a `teardown-complete` entry** to your
+  task file so the next session sees clean state
+  on bootstrap.
+
+### Transfer any in-flight work to @@WebtestA
+
+@@Alex direction: **nothing is deferred**. Anything
+in flight on your worktree OR queued from your
+autonomous batch is **transferred to @@WebtestA**
+under Alex's direct guidance to finish in v0.12.0.
+
+### What to do in your teardown
+
+1. **Audit your worktree**: any uncommitted local
+   work? `git status` + `git diff` to inventory.
+2. **If anything's in flight**: either
+   * Commit the current state (clean atomic commit
+     if it's stable enough to push) AND describe
+     the next steps in this channel for
+     @@WebtestA, OR
+   * Describe the in-flight state inline here
+     (which files, what was the intended next
+     change) so @@WebtestA can pick it up clean.
+3. **Queued but not started** — these go to
+   @@WebtestA too. List the queue items in this
+   channel append so they're visible:
+   * `-a-79 slice 5` lead pre-flight survey trigger
+   * `-a-79 slice 5` `dispatch_agent_event`-driven
+     identity prompts (closes seedInput-visibility
+     note empirically)
+   * Jitter slider (per-drive prefs + broadcast
+     delay layer in `broadcastTerminalInput`)
+   * Host-required copy fix (~5 LOC; dialog foot
+     hint wording per @@WebtestA round 41)
+4. **Teardown per `process.md`** (stop processes,
+   rm -rf throwaways, chan remove, close MCP
+   tabs).
+5. **Append `teardown-complete`** to your task
+   file.
+
+You hand the surface over to @@WebtestA. Stand-
+down FINAL.
+
+### Scorecard
+
+Massive carry this phase. Thank you.
+
+Stand-down FINAL.
