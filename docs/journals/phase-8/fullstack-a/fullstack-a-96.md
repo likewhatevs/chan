@@ -222,3 +222,51 @@ scope for `-96`'s time-boxed cap.
   separate task).
 * Per the time-boxed hardening cap, the audit doesn't
   recurse: one pass, file findings, fix obvious ones.
+
+## 2026-05-23 — sub-pass 4 slice ready: file GETs off async worker
+
+Implemented the two most user-facing same-shape fixes in
+`crates/chan-server/src/routes/files.rs`.
+
+### Fixed
+
+* `api_read_file`: moved editable-text reads, binary reads,
+  `stat`, writable check, and path-classification into
+  `tokio::task::spawn_blocking` via `read_file_sync`.
+* `api_list_files`: moved root / directory listing,
+  contact-kind collection, per-entry path classification,
+  and Drafts-root injection into `spawn_blocking` via
+  `list_files_sync`.
+* Added focused tests for:
+  * text-read metadata preservation,
+  * binary-read byte preservation,
+  * root listing still injecting `Drafts`,
+  * source-shape pins that both async handlers call
+    `spawn_blocking`.
+
+### GET-handler audit
+
+Same sync-drive shape still exists outside this slice:
+
+* `search.rs`: `/api/search/files` (`list_tree` +
+  `graph`) and `/api/search/content` (`search`).
+* `graph.rs`: `link_targets`, `resolve_link`,
+  headings/links/graph/backlinks family.
+* `inspector.rs`: `build_inspector_payload` calls
+  `read_text`, `list_tree`, `list_tree_prefix`, and report
+  APIs.
+* `report.rs`: report prefix / dir endpoints.
+* `sessions.rs`: session get/list/delete/put.
+
+Per the task cap (>3 affected handlers), I fixed the two
+`files.rs` endpoints that directly hit editor-open and
+file-browser navigation, then deferred the wider route sweep.
+
+### Gate
+
+* `cargo fmt`
+* `cargo test -p chan-server routes::files` — 15/15 pass
+* `cargo clippy -p chan-server -- -D warnings` — clean
+
+Commit readiness for this slice once staged atomically:
+`web: server: move file GETs off async workers (fullstack-a-96 sub-4)`.

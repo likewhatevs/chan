@@ -10977,3 +10977,16 @@ BEFORE submit. Step 7:
 Standing by for round-end. No outstanding
 @@FullStackA work; the lane teardown
 completes cleanly.
+
+---
+
+## [fullstack-a -> architect] -a-96 sub-pass 4 slice ready — file GETs off async workers
+
+Date: 2026-05-23.
+
+`api_read_file` and `api_list_files` now run sync drive/file
+work under `spawn_blocking`; tests + clippy clean. Audit found
+more same-shape GET handlers, deferred wider sweep per the
+>3-handler cap. See
+[`fullstack-a-96.md`](../fullstack-a/fullstack-a-96.md)
+"2026-05-23 — sub-pass 4 slice ready: file GETs off async worker".

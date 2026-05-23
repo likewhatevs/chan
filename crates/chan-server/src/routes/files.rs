@@ -13,6 +13,16 @@ use crate::error::{err, err_from};
 use crate::state::AppState;
 use crate::static_assets::content_type_for;
 
+enum ReadFileResult {
+    Text {
+        content: String,
+        mtime: Option<i64>,
+        writable: bool,
+        path_class: Option<chan_drive::PathClass>,
+    },
+    Binary(Vec<u8>),
+}
+
 /// Tree entry shape on the wire. Adds a `kind` discriminator on top
 /// of chan-drive's `TreeEntry` so the file browser, search overlay,
 /// and graph inspector can render the right glyph + chip without a
@@ -75,12 +85,22 @@ pub async fn api_list_files(
     State(state): State<Arc<AppState>>,
     Query(query): Query<ListFilesQuery>,
 ) -> Response {
-    let drive = state.drive();
+    let drive = state.drive().clone();
+    let result = tokio::task::spawn_blocking(move || list_files_sync(&drive, query)).await;
+
+    match result {
+        Ok(Ok(out)) => Json(out).into_response(),
+        Ok(Err(e)) => err_from(&e),
+        Err(join) => err(StatusCode::INTERNAL_SERVER_ERROR, join.to_string()),
+    }
+}
+
+fn list_files_sync(
+    drive: &chan_drive::Drive,
+    query: ListFilesQuery,
+) -> chan_drive::Result<Vec<TreeEntryView>> {
     let tree = if let Some(dir) = query.dir.as_deref() {
-        match list_dir_entries(&drive, dir) {
-            Ok(t) => t,
-            Err(e) => return err_from(&e),
-        }
+        list_dir_entries(drive, dir)?
     } else {
         // The browser still reflects live disk, but it should not
         // recursively enumerate build/dependency trees that the drive's
@@ -88,10 +108,7 @@ pub async fn api_list_files(
         // `node_modules/`, ...). Repo roots can otherwise spend startup
         // walking hundreds of thousands of uninteresting files before the
         // user sees anything.
-        match chan_drive::fs_ops::list_tree_filtered(drive.root(), drive.walk_filter()) {
-            Ok(t) => t,
-            Err(e) => return err_from(&e),
-        }
+        chan_drive::fs_ops::list_tree_filtered(drive.root(), drive.walk_filter())?
     };
     // Pull the contact-kind set in one shot; a single SQL scan beats N
     // per-path node_kind lookups on big drives.
@@ -103,7 +120,7 @@ pub async fn api_list_files(
         .into_iter()
         .map(|e| TreeEntryView {
             kind: project_kind(&e.path, e.is_dir, contact_paths.contains(&e.path)),
-            path_class: path_class_for_wire(&drive, &e.path),
+            path_class: path_class_for_wire(drive, &e.path),
             path: e.path,
             is_dir: e.is_dir,
             mtime: e.mtime,
@@ -136,7 +153,7 @@ pub async fn api_list_files(
         };
         out.insert(0, drafts_entry);
     }
-    Json(out).into_response()
+    Ok(out)
 }
 
 fn list_dir_entries(
@@ -229,13 +246,13 @@ fn path_class_for_wire(drive: &chan_drive::Drive, rel: &str) -> Option<chan_driv
     }
 }
 
-/// Check the user-write bit on a drive-relative path. Returns true
-/// when the path can't be safely resolved (matches read_text's own
-/// behavior of failing later) so we don't surface a misleading
-/// "locked" lamp on a path that's actually broken; callers get the
-/// real error from `read_text` instead.
-fn fs_writable(state: &AppState, rel: &str) -> bool {
-    let abs = match chan_drive::fs_ops::resolve_safe_strict(state.drive().root(), rel) {
+/// Check the user-write bit on a drive-relative path. Returns true when
+/// the path can't be safely resolved (matches read_text's own behavior
+/// of failing later) so we don't surface a misleading "locked" lamp on a
+/// path that's actually broken; callers get the real error from
+/// `read_text` instead.
+fn fs_writable(drive: &chan_drive::Drive, rel: &str) -> bool {
+    let abs = match chan_drive::fs_ops::resolve_safe_strict(drive.root(), rel) {
         Ok(p) => p,
         Err(_) => return true,
     };
@@ -243,6 +260,21 @@ fn fs_writable(state: &AppState, rel: &str) -> bool {
         Ok(m) => !m.permissions().readonly(),
         Err(_) => true,
     }
+}
+
+fn read_file_sync(drive: &chan_drive::Drive, path: &str) -> chan_drive::Result<ReadFileResult> {
+    if chan_drive::fs_ops::is_editable_text(path) {
+        let content = drive.read_text(path)?;
+        let mtime = drive.stat(path).ok().and_then(|s| s.mtime);
+        let writable = fs_writable(drive, path);
+        return Ok(ReadFileResult::Text {
+            content,
+            mtime,
+            writable,
+            path_class: path_class_for_wire(drive, path),
+        });
+    }
+    drive.read(path).map(ReadFileResult::Binary)
 }
 
 pub async fn api_read_file(
@@ -254,25 +286,29 @@ pub async fn api_read_file(
     // string. Anything else (images, attachments) comes back as
     // raw bytes with a sniffed Content-Type so `<img src=...>`
     // pointing at /api/files/<path> resolves correctly.
-    if chan_drive::fs_ops::is_editable_text(&path) {
-        let content = match state.drive().read_text(&path) {
-            Ok(c) => c,
-            Err(e) => return err_from(&e),
-        };
-        let mtime = state.drive().stat(&path).ok().and_then(|s| s.mtime);
-        let writable = fs_writable(&state, &path);
-        return Json(FileResponse {
-            path_class: path_class_for_wire(state.drive().as_ref(), &path),
+    let drive = state.drive().clone();
+    let path_for_read = path.clone();
+    let result = tokio::task::spawn_blocking(move || read_file_sync(&drive, &path_for_read)).await;
+
+    match result {
+        Ok(Ok(ReadFileResult::Text {
+            content,
+            mtime,
+            writable,
+            path_class,
+        })) => Json(FileResponse {
+            path_class,
             path,
             content,
             mtime,
             writable,
         })
-        .into_response();
-    }
-    match state.drive().read(&path) {
-        Ok(bytes) => ([(header::CONTENT_TYPE, content_type_for(&path))], bytes).into_response(),
-        Err(e) => err_from(&e),
+        .into_response(),
+        Ok(Ok(ReadFileResult::Binary(bytes))) => {
+            ([(header::CONTENT_TYPE, content_type_for(&path))], bytes).into_response()
+        }
+        Ok(Err(e)) => err_from(&e),
+        Err(join) => err(StatusCode::INTERNAL_SERVER_ERROR, join.to_string()),
     }
 }
 
@@ -414,7 +450,7 @@ pub async fn api_create_file(
 
 #[cfg(test)]
 mod is_root_listing_tests {
-    use super::is_root_listing;
+    use super::{is_root_listing, list_files_sync, ListFilesQuery};
 
     // `fullstack-a-66b` follow-up: the SPA's `api.list("")`
     // sends `?dir=` (empty string) — pre-fix the gate matched
@@ -451,11 +487,103 @@ mod is_root_listing_tests {
         assert!(!is_root_listing(Some("Drafts/untitled-1")));
         assert!(!is_root_listing(Some("crates/chan-drive")));
     }
+
+    #[test]
+    fn list_files_sync_injects_drafts_for_root_dir_query() {
+        let cfg = tempfile::TempDir::new().unwrap();
+        let root = tempfile::TempDir::new().unwrap();
+        let lib = chan_drive::Library::open_at(cfg.path().join("config.toml")).unwrap();
+        lib.register_drive(root.path(), Some("files-list-test".into()))
+            .unwrap();
+        let drive = lib.open_drive(root.path()).unwrap();
+        std::fs::write(root.path().join("note.md"), "hi").unwrap();
+
+        let entries = list_files_sync(
+            &drive,
+            ListFilesQuery {
+                dir: Some(String::new()),
+            },
+        )
+        .unwrap();
+
+        assert_eq!(
+            entries.first().map(|entry| entry.path.as_str()),
+            Some("Drafts")
+        );
+        assert!(entries.iter().any(|entry| entry.path == "note.md"));
+    }
 }
 
 #[cfg(test)]
 mod write_tests {
     use super::*;
+
+    #[test]
+    fn read_file_sync_returns_editable_text_metadata() {
+        let cfg = tempfile::TempDir::new().unwrap();
+        let root = tempfile::TempDir::new().unwrap();
+        let lib = chan_drive::Library::open_at(cfg.path().join("config.toml")).unwrap();
+        lib.register_drive(root.path(), Some("files-read-test".into()))
+            .unwrap();
+        let drive = lib.open_drive(root.path()).unwrap();
+        drive.write_text("note.md", "hello").unwrap();
+
+        let result = read_file_sync(&drive, "note.md").unwrap();
+
+        match result {
+            ReadFileResult::Text {
+                content,
+                mtime,
+                writable,
+                path_class,
+            } => {
+                assert_eq!(content, "hello");
+                assert!(mtime.is_some());
+                assert!(writable);
+                assert_eq!(
+                    path_class.map(|class| class.kind),
+                    Some(chan_drive::PathKind::RegularFile)
+                );
+            }
+            ReadFileResult::Binary(_) => panic!("expected editable text result"),
+        }
+    }
+
+    #[test]
+    fn read_file_sync_returns_binary_bytes() {
+        let cfg = tempfile::TempDir::new().unwrap();
+        let root = tempfile::TempDir::new().unwrap();
+        let lib = chan_drive::Library::open_at(cfg.path().join("config.toml")).unwrap();
+        lib.register_drive(root.path(), Some("files-read-test".into()))
+            .unwrap();
+        let drive = lib.open_drive(root.path()).unwrap();
+        std::fs::write(root.path().join("image.bin"), [0, 1, 2, 3]).unwrap();
+
+        let result = read_file_sync(&drive, "image.bin").unwrap();
+
+        match result {
+            ReadFileResult::Binary(bytes) => assert_eq!(bytes, vec![0, 1, 2, 3]),
+            ReadFileResult::Text { .. } => panic!("expected binary result"),
+        }
+    }
+
+    #[test]
+    fn api_read_file_wraps_sync_drive_reads_in_spawn_blocking() {
+        let source = include_str!("files.rs");
+
+        assert!(source.contains(
+            "tokio::task::spawn_blocking(move || read_file_sync(&drive, &path_for_read))"
+        ));
+    }
+
+    #[test]
+    fn api_list_files_wraps_sync_drive_walk_in_spawn_blocking() {
+        let source = include_str!("files.rs");
+
+        assert!(
+            source.contains("tokio::task::spawn_blocking(move || list_files_sync(&drive, query))")
+        );
+    }
 
     #[test]
     fn write_file_sync_reports_seconds_conflict() {
