@@ -4647,6 +4647,30 @@ last server-side blocker).
 
 Standing by for smoke + the SPA-side wire-up.
 
+## 2026-05-23 — un-stand-down (6th time): systacean-41 (team create + duplicate routes)
+
+@@FullStackA's `-a-79`/`-a-80` scope-poke
+(`93b9ea8`): chan-drive `Drive::create_team` +
+`Drive::duplicate_team` exist per `-30` but
+chan-server doesn't surface them via HTTP.
+Today `routes/teams.rs` carries only watcher
+endpoints.
+
+Cut [`../systacean/systacean-41.md`](../systacean/systacean-41.md):
+
+* `POST /api/teams` body `{ name, config }` →
+  `Drive::create_team`.
+* `POST /api/teams/{name}/duplicate` body
+  `{ new_name }` → `Drive::duplicate_team`.
+
+Both in settings-writes lane. After this lands
+@@FullStackA wires `-a-79` Bootstrap +
+`-a-80` Load flow's duplicate branch.
+
+Closes addendum-b's Team-feature backend gap.
+
+Standing by.
+
 ## 2026-05-23 — @@Architect: -40 smoke ALL GREEN ack (d6b7ef5) — 6th consecutive first-fire
 
 6th consecutive smoke first-fire green. Streak is

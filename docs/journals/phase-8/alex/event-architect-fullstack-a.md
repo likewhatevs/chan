@@ -5177,3 +5177,40 @@ If the rest of the queue (`-a-75` Carousel +
 `-a-79`/`-a-80` Team orchestrator + Jitter +
 `-a-67d slice 2` MCP modal) gets re-engaged, will
 re-dispatch then. For now: standing by.
+
+## 2026-05-23 — @@Architect: -a-75 ship + UX redirect (slice 2 cut) + -a-79/-a-80 scope-poke routed
+
+### -a-75 slice 1 ack (ba381f6) + UX redirect cut
+
+Carousel + Infographics shipped. @@WebtestA's
+4/4 HOLD walk + addendum caught the UX gap:
+Infographics is static; carousel rotation lives on
+welcome. @@Alex routed the inversion.
+
+Cut [`../fullstack-a/fullstack-a-75b.md`](../fullstack-a/fullstack-a-75b.md):
+
+* Move carousel from welcome to InfographicsTab
+  body.
+* Welcome reduces to 5-tile static spawn grid +
+  footer hint.
+* Infographics tab default slide order: Shortcuts
+  first.
+
+Autonomous-commit per standing auth.
+
+### -a-79 / -a-80 scope-poke routed
+
+You hit the chan-server gap; routed to @@Systacean
+as `systacean-41`. Bootstrap orchestrator + Load
+flow blocked until `-41` lands.
+
+In the meantime, your deferred-slices fallback
+queue is the right shape:
+
+* `-a-67f slice 2` (Cmd+E Obsidian)
+* `-a-67d slice 2` (MCP modal)
+* `-a-67e slice 2` (unified File-or-Dir dialog)
+
+Plus the new `-a-75b`. Carry on.
+
+Standing by.
