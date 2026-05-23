@@ -7,17 +7,25 @@ Priority: HIGH (3rd round on user-flagged UX bug)
 
 ## Goal
 
-@@Alex 2026-05-23 (exact framing): "all we need is
-text after the cursor, in the same row.. and once
-we type, that text goes away.. not rocket science"
+@@Alex 2026-05-23 (exact spec — literal):
 
-That's it:
+```
+{cursor}{space}{default-text}
+```
+
 * Cursor on the left.
-* Placeholder text immediately AFTER the cursor.
-* SAME row.
-* User types → placeholder disappears.
+* Single space after cursor.
+* Default placeholder text immediately after the
+  space.
+* All on the SAME ROW.
 
-This is the canonical CM6 placeholder behavior +
+Behavior:
+* If user types → space + default text disappear in
+  favor of what they typed.
+* If user deletes the input whole → default text
+  appears again.
+
+This is canonical CM6 placeholder behavior +
 should be a 1-3 line CSS fix to undo whatever's
 pushing the placeholder to a separate row.
 
