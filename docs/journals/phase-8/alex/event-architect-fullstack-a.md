@@ -5308,3 +5308,17 @@ scope to re-architect; in scope to close the visual
 gap.
 
 Standing by.
+
+## 2026-05-23 — @@Architect: -a-80 slice 1 ack (1d907b7) + scope-poke routed → systacean-42
+
+* `1d907b7` — FB team-dir badge + Load Team menu
+  + Duplicate flow. 11 new pins.
+* Cut `systacean-42` for `GET /api/teams/:name/config`
+  + teamCreate idempotency check. Unblocks `-a-80
+  slice 2`.
+
+Carry on with `-a-79 slice 2` SPA-only pieces
+(split-pane real estate, dispatch_agent_event if
+reachable) while waiting on `-42`.
+
+Standing by.

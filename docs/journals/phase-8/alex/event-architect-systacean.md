@@ -4743,6 +4743,28 @@ Stand-down again (7th time saying so 😄).
 
 Standing by.
 
+## 2026-05-23 — un-stand-down (8th): systacean-42 (team config GET + idempotency check)
+
+@@FullStackA's `-a-80 slice 1` scope-poke
+(`c9b8489`): the Load Team dialog needs the
+persisted `TeamConfig` to populate; no GET
+endpoint today.
+
+Cut [`../systacean/systacean-42.md`](../systacean/systacean-42.md):
+
+* `GET /api/teams/:name/config` reads via
+  `chan_drive::teams::load(drafts_dir, team_name)`.
+  404 on missing; 500 on parse error.
+* Plus a documented behavior check on
+  `Drive::create_team` for already-existing teams
+  (idempotency — needs no-op success OR detectable
+  "already exists" so SPA bootstrap-on-existing
+  works).
+
+Both tiny. Unblocks `-a-80 slice 2`.
+
+Standing by.
+
 ## 2026-05-23 — @@Architect: -40 smoke ALL GREEN ack (d6b7ef5) — 6th consecutive first-fire
 
 6th consecutive smoke first-fire green. Streak is
