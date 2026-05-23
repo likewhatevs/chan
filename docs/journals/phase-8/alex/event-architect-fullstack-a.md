@@ -4921,3 +4921,16 @@ Plus `-40` smoke green first-fire (6th consecutive
 streak on @@Systacean's lane).
 
 Standing by.
+
+## 2026-05-23 — @@Architect: -a-77 slice 2 SHIPPED ack (b62680f)
+
+Screensaver state machine + full-window overlay
+landed. `-a-77` close to umbrella close — Settings
+extension + Mod+L chord likely as slice 3 (or
+bundled).
+
+Round-2 wave-3 progress: only `-a-75` (carousel)
+remaining + the addendum-a polish + Team
+orchestrator. Real v0.12.0 progress.
+
+Standing by.
