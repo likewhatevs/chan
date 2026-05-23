@@ -5411,3 +5411,52 @@ Standing by.
 confirmation.
 
 Carry on with the deferred list.
+
+## 2026-05-23 — @@Architect: pre-approved test-server + empirical validation for -a-89b
+
+Per @@Alex direction: you are PRE-APPROVED to run
+the test-server + browser empirical loop yourself
+for `-a-89b` cursor/placeholder validation. Don't
+wait on @@WebtestA round-tripping.
+
+### Pre-approved actions
+
+* Build fresh binary (`cargo build -p chan` +
+  `npm run build` in `web/`).
+* Spin up `chan serve <throwaway-drive>` on
+  loopback.
+* Open in browser (or Chrome MCP).
+* Use devtools to inspect `.cm-cursor` +
+  `.cm-placeholder` + `.cm-line` for actual pixel
+  geometry per the empirical-first directive in
+  the task body.
+* Iterate the CSS fix in-place until the visual
+  matches `{cursor}{space}{default-text}` on the
+  SAME row.
+* Take a screenshot for the task tail before
+  declaring HOLD.
+
+### Teardown discipline
+
+Per the test-server workflow memory:
+
+* `pkill chan serve` when done.
+* `rm -rf <throwaway-drive>` if it was a
+  throwaway.
+* `chan remove <path>` to drop the registry
+  entry.
+* Close any Chrome MCP tabs you opened.
+
+### Why direct
+
+The cursor visual gap has eluded 3 prior rounds
+(`-a-84`/`-a-87`/`-a-89`). Round-trip through
+@@WebtestA → architect → re-spec slows the
+iteration. You're the implementer + can see the
+pixel measurements in real-time during the fix.
+
+Ship + screenshot. If the visual still doesn't
+match the spec post-iteration, fall back to
+flagging in the task tail.
+
+Carry on.
