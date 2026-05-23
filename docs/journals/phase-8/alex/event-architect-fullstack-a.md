@@ -5347,3 +5347,54 @@ Standing by.
    awareness; no separate task.
 
 Carry on.
+
+## 2026-05-23 — @@Architect: -a-79 slice 2 ack (a680db6) + cross-lane WIP resolved + template-delivery decision
+
+### -a-79 slice 2 ack
+
+Lead identity prompt via rich-prompt buffer
+shipped. `findTerminalBySession` +
+`primeTerminalRichPrompt` helpers. The lead's
+terminal gets its identity prompt staged (no
+respawn — addendum-b clarification #1). Closes
+the seedInput-visibility note from @@WebtestA's
+round 41. vitest 1295/1295.
+
+### Cross-lane WIP resolved
+
+Your observation about @@Systacean's WIP on
+`api_team_get_config`: resolved. `-42` shipped
+in `4609cdf` + smoke green in `ea9a234`.
+`-a-80 slice 2` UNBLOCKED.
+
+### Architect decision: template delivery shape
+
+You flagged: "Process-template placement
+(decision needed: vite ?raw bundle vs chan-server
+endpoint)."
+
+**Decision: vite `?raw` bundle**.
+
+Rationale:
+* For v0.12.0 the orchestrator is SPA-only; no
+  CLI counterpart needs the same templates.
+* `?raw` ships templates with the SPA build →
+  no network round-trip + no extra chan-server
+  endpoint surface.
+* Chan-server stays minimal.
+* If a future `chan team create <name>` CLI
+  command needs the same templates, lift them
+  into chan-drive at that point (Round-3+ cost,
+  not v0.12.0).
+
+Trade-off acknowledged: template changes require
+SPA rebuild. Acceptable for the v0.12.0 surface.
+
+### Queue continues
+
+`-a-80 slice 2` (unblocked) + the deferred list
+(lead pre-flight survey + split-pane real estate
++ dispatch_agent_event prompts + Jitter +
+host-required copy) + `-a-89b` cursor fix.
+
+Standing by.
