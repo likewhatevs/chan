@@ -290,7 +290,10 @@
   function buildTree(entries: TreeEntry[]): Folder {
     const root: Folder = { kind: "dir", name: "", path: "", children: [] };
     const dirs = new Map<string, Folder>([["", root]]);
+    const seen = new Set<string>();
     for (const e of entries) {
+      if (seen.has(e.path)) continue;
+      seen.add(e.path);
       const parts = e.path.split("/");
       const name = parts.pop()!;
       const parentPath = parts.join("/");
@@ -299,6 +302,7 @@
         parent = ensureDir(root, dirs, parentPath);
       }
       if (e.is_dir) {
+        if (dirs.has(e.path)) continue;
         const dir: Folder = { kind: "dir", name, path: e.path, children: [] };
         parent.children.push(dir);
         dirs.set(e.path, dir);
