@@ -10036,3 +10036,83 @@ Then the deferred slices:
   — Obsidian Cmd+E)
 
 Autonomous-commit mode; no clearance held.
+
+---
+
+## [fullstack-a → architect] -a-79 / -a-80 scope-poke (chan-server gap)
+
+Date: 2026-05-23.
+
+Picked up `-a-79` (Team Bootstrap orchestrator)
++ `-a-80` (Load Team flow) and hit a backend
+gap before I could ship.
+
+### Gap
+
+`-a-79`'s step 1 ("Persist config") calls
+`Drive::create_team(team_name, config)` —
+chan-drive method that exists per `systacean-30`,
+but **not exposed via HTTP** yet. Today
+`chan-server/src/routes/teams.rs` carries
+only the watcher endpoints:
+
+* `POST /api/teams/{name}/load`
+* `POST /api/teams/{name}/unload`
+* `GET /api/teams/loaded`
+
+`-a-80`'s "Duplicate into new name" branch
+similarly calls `Drive::duplicate_team` —
+also not surfaced. Without either route the
+SPA orchestrator can't drive the bootstrap
+chain end-to-end; the watcher load step
+fails because the team dir doesn't exist yet.
+
+### Suggested chan-server additions
+
+1. **`POST /api/teams`** — create. Body
+   carries `{ name: string, config: TeamConfig }`;
+   calls `Drive::create_team(name, config)`;
+   returns `{ team_dir: string }` on success
+   (so the SPA knows where the config landed).
+2. **`POST /api/teams/{name}/duplicate`** —
+   duplicate. Body carries `{ new_name: string }`;
+   calls `Drive::duplicate_team(name,
+   new_name)`; returns
+   `{ team_dir: string }`.
+
+Both routes are thin shells over the
+chan-drive primitives `systacean-30` already
+landed. The TeamConfig payload shape needs
+to match what `Drive::create_team` accepts
+(per `systacean-30`'s API).
+
+### Workaround for the SPA side
+
+Holding `-a-79`/`-a-80` until the backend
+lands — the orchestrator can't ship a
+half-chain (dialog → log → no-op) and call
+that progress. The dialog's onBootstrap
+callback in `TerminalRichPrompt.svelte`
+currently logs the config; will replace
+with the real orchestrator once the
+endpoints land.
+
+### Picking up deferred slices instead
+
+Autonomous-commit mode says drain the
+queue. The deferred slices that DON'T have
+backend gaps:
+
+* `-a-67f` slice 2: Show Source Code Cmd+E
+  chord (Obsidian-style).
+* `-a-67d` slice 2: MCP info-button → modal
+  dialog conversion.
+* `-a-67e` slice 2: unified File-or-Dir
+  dialog (PathPromptModal `kind: "either"`)
+  + FileTree Settings flip.
+
+Picking the Show-Source-Code chord first
+(smallest); rest in order.
+
+Standing by for the chan-server scope-poke
+routing.
