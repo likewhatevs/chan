@@ -1630,7 +1630,7 @@ export function openInActivePane(path: string): Promise<void> {
 /// AND the tab is focused, the component re-runs its focus
 /// routine in a microtask.
 export const tabFocusPulse = $state({ value: 0 });
-function bumpTabFocusPulse(): void {
+export function bumpTabFocusPulse(): void {
   tabFocusPulse.value += 1;
   // `fullstack-a-64`: blur the currently-focused element AFTER
   // bumping. The chord keydown was synchronously dispatched while

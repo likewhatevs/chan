@@ -2,6 +2,7 @@ import { describe, expect, test } from "vitest";
 import tabs from "../state/tabs.svelte.ts?raw";
 import terminalTab from "./TerminalTab.svelte?raw";
 import fileEditorTab from "./FileEditorTab.svelte?raw";
+import pane from "./Pane.svelte?raw";
 import source from "../editor/Source.svelte?raw";
 import wysiwyg from "../editor/Wysiwyg.svelte?raw";
 
@@ -43,6 +44,18 @@ describe("fullstack-a-64: tabFocusPulse mechanism", () => {
   test("selectTabAtIndexInActivePane bumps the pulse", () => {
     expect(tabs).toMatch(
       /export function selectTabAtIndexInActivePane\(index: number\): void \{[\s\S]*?p\.activeTabId = p\.tabs\[index\]\.id;[\s\S]*?bumpTabFocusPulse\(\);/,
+    );
+  });
+});
+
+describe("fullstack-a-101: tab header click refocuses input-capable tabs", () => {
+  test("Pane imports bumpTabFocusPulse for tab-strip clicks", () => {
+    expect(pane).toMatch(/import \{[\s\S]*?\bbumpTabFocusPulse,[\s\S]*?\} from "\.\.\/state\/tabs\.svelte";/);
+  });
+
+  test("terminal/editor tab mousedown selects the tab then pulses content focus", () => {
+    expect(pane).toMatch(
+      /onmousedown=\{\(\) => \{[\s\S]*?pane\.activeTabId = t\.id;[\s\S]*?if \(t\.kind === "terminal"\) setTerminalActivity\(t, false\);[\s\S]*?if \(t\.kind === "terminal" \|\| t\.kind === "file"\) bumpTabFocusPulse\(\);/,
     );
   });
 });

@@ -3,6 +3,7 @@
 
   import {
     activeLayout,
+    bumpTabFocusPulse,
     closeTab,
     enterPaneMode,
     enterPaneModeTransaction,
@@ -947,6 +948,7 @@
           tabMouseDownPrevActive = pane.activeTabId;
           pane.activeTabId = t.id;
           if (t.kind === "terminal") setTerminalActivity(t, false);
+          if (t.kind === "terminal" || t.kind === "file") bumpTabFocusPulse();
         }}
         onclick={() => {
           tabMouseDownPrevActive = null;

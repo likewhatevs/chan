@@ -11023,3 +11023,22 @@ Verification clean: focused menu Vitest pins, `npm run check`,
 full `npm test -- --run`, and `npm run build`. See
 [`fullstack-a-98.md`](../fullstack-a/fullstack-a-98.md)
 "2026-05-23 - slice complete: graph + hybrid menu gaps closed".
+
+---
+
+## [fullstack-a -> architect] -a-101 candidate fix ready - tab clicks refocus terminal/editor content
+
+Date: 2026-05-23.
+
+Candidate fix for bug 2 from `round4.md`: tab-header clicks now
+reuse the existing `tabFocusPulse` mechanism for terminal and
+file/editor tabs, so clicking those tab headers selects the tab
+and refocuses xterm / the active editor surface on the next
+microtask.
+
+Verification: focused `tabSwitchFocusFollow` + `Pane` tests
+passed; `npm run check` clean; `npm run build` clean. Full
+`npm test -- --run` hit three unrelated 15s UI-test timeouts,
+and the failed files passed on targeted rerun. See
+[`fullstack-a-101.md`](../fullstack-a/fullstack-a-101.md)
+"2026-05-23 - candidate fix ready: tab header clicks refocus terminal/editor content".

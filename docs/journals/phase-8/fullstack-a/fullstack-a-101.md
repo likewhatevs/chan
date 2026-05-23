@@ -68,3 +68,35 @@ Yes for SPA-side edits + vitest pins.
 ## Reference
 
 * `docs/journals/phase-8/alex/round4.md` bug 2.
+
+---
+
+## 2026-05-23 - candidate fix ready: tab header clicks refocus terminal/editor content
+
+Implemented the small shared fix by reusing the existing
+`tabFocusPulse` path from `fullstack-a-64`:
+
+* Exported `bumpTabFocusPulse()` from `tabs.svelte.ts`.
+* `Pane.svelte` tab-header `mousedown` now selects the tab,
+  clears terminal activity as before, then bumps the pulse for
+  input-capable tab kinds only (`terminal` and `file`).
+* Existing `TerminalTab` and `FileEditorTab` pulse effects perform
+  the actual focus work (`term.focus()`, `wysiwygRef.focus()`, or
+  `sourceRef.focus()`), so this avoids a second focus pipeline.
+* Raw-source pins added in `tabSwitchFocusFollow.test.ts`.
+
+Verification:
+
+* `npm test -- --run src/components/tabSwitchFocusFollow.test.ts src/components/Pane.test.ts`
+  - 2 files passed, 31 tests passed.
+* `npm run check`
+  - svelte-check 0 errors / 0 warnings.
+* `npm test -- --run`
+  - one parallel full-suite run hit 3 unrelated 15s UI-test
+    timeouts (`EmptyPaneCarousel.test.ts`, `TerminalTab.test.ts`,
+    `Pane.test.ts`).
+* `npm test -- --run src/components/EmptyPaneCarousel.test.ts src/components/TerminalTab.test.ts src/components/Pane.test.ts`
+  - targeted rerun passed, 3 files / 26 tests.
+* `npm run build`
+  - passed; existing chunk-size / ineffective dynamic import
+    warnings only.
