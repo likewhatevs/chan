@@ -1055,5 +1055,6 @@
     * Source Code Pro font load race (`-b-30` slice b: spawn-time `fontFamily` reorder + download endpoint). If SCP is enabled but the woff2 download is incomplete or the font face hasn't finished loading at spawn, the renderer may key into a partially-populated glyph table.
     * Some recent SPA change between v0.11.2 and v0.12.0 that hits the terminal text path.
   - reproduces: unclear; need @@Alex confirmation of whether it happens on every terminal or only in some panes; whether it persists across reloads; whether SCP setting is on.
+  - 2026-05-23 update from @@Alex: single instance only, single pane (no other terminals affected this session), `Cmd+R` window reload cleared it. Transient, not persistent. Reinforces the glyph-atlas-or-font-load-race shape — both suspects fit "first-render goes wrong, re-init clears it." @@Alex monitoring; will flag if it returns.
   - lane: SPA-side debugging in `web/src/components/TerminalTab.svelte` + the renderer. @@FullStackA territory.
-  - NOT YET DISPATCHED — pending more data from @@Alex (consistent reproduction, SCP-on-or-off, reload behaviour) before cutting a task. If it becomes a release-blocker before v0.13.0, cuts as `fullstack-a-N+1` polish ticket.
+  - NOT YET DISPATCHED — P3 / monitor. Promote to a `fullstack-a` task if it recurs (esp. cross-pane, persists post-reload, or correlates with SCP toggle). Not a v0.13.0 blocker on current evidence.
