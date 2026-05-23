@@ -27,9 +27,12 @@ describe("fullstack-a-67e: FileTree selection menu header + new entries", () => 
     expect(tree).not.toMatch(/<span>Terminal from here<\/span>/);
   });
 
-  test("New File / New Directory entries kept (gated on isDir)", () => {
-    expect(tree).toMatch(/<span>New File<\/span>/);
-    expect(tree).toMatch(/<span>New Directory<\/span>/);
+  test("Unified \"New File or Directory\" entry replaces the separate New File / New Directory rows", () => {
+    // `fullstack-a-67e` slice 2: spec calls for one entry; the
+    // modal detects file-vs-dir from the trailing slash.
+    expect(tree).toMatch(/<span>New File or Directory<\/span>/);
+    expect(tree).not.toMatch(/<span>New File<\/span>/);
+    expect(tree).not.toMatch(/<span>New Directory<\/span>/);
   });
 
   test("New Graph entry added, routes to graphThis", () => {

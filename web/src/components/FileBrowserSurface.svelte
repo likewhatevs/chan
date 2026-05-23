@@ -478,6 +478,7 @@
         bind:this={treeRef}
         dockSide={variant === "dock" ? side : undefined}
         onClickRow={onRowClicked}
+        onFlip={isTab ? onFlip : undefined}
       />
     </div>
     {#if isWideSurface && browserState.inspectorOpen}

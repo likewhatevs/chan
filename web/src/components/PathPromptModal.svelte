@@ -66,6 +66,17 @@
           // the "ready to type" mental model @@Alex flagged.
           const end = pathPromptState.defaultValue.length;
           inputEl?.setSelectionRange(end, end);
+        } else if (
+          pathPromptState.kind === "either" &&
+          pathPromptState.mode === "create"
+        ) {
+          // `fullstack-a-67e` slice 2: unified "New File or
+          // Directory" dialog. Open with the cursor at end so
+          // typing a name appends to the parent path. Closer
+          // to the folder-flow mental model since the user has
+          // to decide file-vs-dir from the trailing slash.
+          const end = pathPromptState.defaultValue.length;
+          inputEl?.setSelectionRange(end, end);
         } else {
           inputEl?.select();
         }
@@ -79,10 +90,33 @@
   /// rename-time extension preservation in italic — same visual
   /// language for both, which keeps the user from being surprised
   /// by store-side rewrites.
+  /// `fullstack-a-67e` slice 2: when `kind === "either"`, the
+  /// modal detects file vs directory from the trailing slash:
+  /// `foo/bar/` → directory (no `.md` append); `foo/bar` →
+  /// file (`.md` append on create). Mirrors the FB selection
+  /// menu's "New File or Directory" entry; the helper is also
+  /// exposed below as `detectedEitherKind` so the placeholder /
+  /// status row can label the operation correctly.
+  function isEitherDir(trimmed: string): boolean {
+    return trimmed.endsWith("/");
+  }
+  const detectedEitherKind = $derived.by<"file" | "folder" | null>(() => {
+    if (pathPromptState.kind !== "either") return null;
+    return isEitherDir(value.trim()) ? "folder" : "file";
+  });
+  /// Effective kind: explicit `"file"` / `"folder"` from the
+  /// state, or the trailing-slash detection from `either`.
+  /// Used to gate the extension-append + the placeholder text.
+  const effectiveKind = $derived.by<"file" | "folder">(() => {
+    if (pathPromptState.kind === "either") {
+      return detectedEitherKind ?? "file";
+    }
+    return pathPromptState.kind;
+  });
   const resolved = $derived.by<{ path: string; autoSuffix: string }>(() => {
     const trimmed = value.trim();
     if (trimmed === "") return { path: "", autoSuffix: "" };
-    if (pathPromptState.kind !== "file") {
+    if (effectiveKind !== "file") {
       return { path: trimmed, autoSuffix: "" };
     }
     let out = trimmed;
@@ -256,7 +290,7 @@
     // kind-mismatch (target is a file but we're creating a directory,
     // or vice versa).
     const targetEntry = entryByPath.get(path);
-    const wantDir = pathPromptState.kind === "folder";
+    const wantDir = effectiveKind === "folder";
     if (targetEntry) {
       if (targetEntry.is_dir !== wantDir) {
         const have = targetEntry.is_dir ? "directory" : "file";
@@ -483,7 +517,9 @@
         autocomplete="off"
         placeholder={pathPromptState.kind === "folder"
           ? "directory/path"
-          : "file/path"}
+          : pathPromptState.kind === "either"
+            ? "file/path or directory/path/"
+            : "file/path"}
       />
 
       {#if suggestions.length > 0}

@@ -1233,3 +1233,178 @@ Autonomous-commit mode. No clearance held.
 Picking up `-a-67e` slice 2 (unified
 File-or-Dir dialog + FileTree Settings flip)
 next.
+
+## 2026-05-23 — slice -a-67e slice 2 (unified File-or-Dir dialog + FileTree Settings flip)
+
+SPA-only. Closes the last two deferred follow-
+ups from `-a-67e` slice 1.
+
+### Shape applied
+
+**PathPromptKind union extended**
+
+* `store.svelte.ts`: `PathPromptKind` adds
+  `"either"` to its `"file" | "folder"` union.
+  Doc-comment captures the trailing-slash
+  detection convention.
+
+**PathPromptModal handles "either"**
+
+* Two new derived: `detectedEitherKind`
+  (re-evaluates on every keystroke; null
+  outside the "either" branch) +
+  `effectiveKind` (collapses "either" →
+  detected; pass-through for the other two
+  kinds).
+* `.md` auto-append gates on `effectiveKind
+  !== "file"`, so a trailing-slash input
+  doesn't get the suffix.
+* `wantDir` collision check uses
+  `effectiveKind`.
+* Placeholder branches on `"either"` →
+  `"file/path or directory/path/"` so the
+  trailing-slash convention is discoverable
+  inline.
+* Focus-on-mount: cursor at end for the
+  "either" + "create" combo (matches the
+  folder-flow pattern from
+  `fullstack-a-65`).
+
+**`fileOps.createFileOrDir` helper**
+
+* New entry point opens the prompt with
+  `kind: "either"`. On submit:
+  - Trailing slash → `api.create(path, true)`
+    + refreshTree + `revealAndSelect(path)`
+    (mirrors `createDir`).
+  - Otherwise → `appendDefaultMd(next)` +
+    `api.create(path, false, "")` +
+    refreshTree + `openInActivePane(path)`
+    + close the FB overlay (mirrors
+    `createFile`).
+* Existing `createFile` / `createDir`
+  stay on the store for callers that need
+  the kind-specific variants (e.g.
+  `Pane.svelte::newFileHere` is now gone
+  but other historic callers might still
+  reach for the specific helpers).
+
+**FileTree menu**
+
+* New `onFlip?: () => void` prop. Wired by
+  FBSurface's tab variant via `isTab ?
+  onFlip : undefined` so dock + overlay
+  variants hide the Settings entry.
+* New `newFileOrDir(parentPath)` helper
+  routes through `fileOps.createFileOrDir`.
+* New `flipFromMenu()` helper closes the
+  menu + invokes `onFlip?.()`.
+* Menu structure:
+  - Unified "New File or Directory" entry
+    replaces the separate New File + New
+    Directory rows (gated on `menu.isDir`).
+  - Settings (flip) entry at the foot,
+    gated on `onFlip` existence.
+* Legacy `newFile` + `newDir` local
+  helpers dropped (menu-only consumers).
+  `fileOps.createFile` / `createDir`
+  still live on the store.
+
+**FileBrowserSurface**
+
+* Pipes `onFlip` through to FileTree's tab
+  variant: `<FileTree onFlip={isTab ?
+  onFlip : undefined} />`.
+
+### Files touched
+
+* `web/src/state/store.svelte.ts`
+  * `PathPromptKind` extended.
+  * `fileOps.createFileOrDir` added.
+* `web/src/components/PathPromptModal.svelte`
+  * `isEitherDir` / `detectedEitherKind` /
+    `effectiveKind` derivations.
+  * `.md` auto-append + wantDir +
+    placeholder + focus-on-mount branches.
+* `web/src/components/FileTree.svelte`
+  * `onFlip` prop + Settings2 lucide import
+    (FolderPlus dropped).
+  * `newFileOrDir` + `flipFromMenu` helpers.
+  * Menu markup: unified entry + Settings
+    entry.
+  * Legacy `newFile` / `newDir` local
+    helpers dropped.
+* `web/src/components/FileBrowserSurface.svelte`
+  * `<FileTree onFlip=…>` wiring.
+* `web/src/components/fileTreeSelectionMenu.test.ts`
+  * "New File / New Directory entries
+    kept" pin flipped to "Unified New
+    File or Directory entry replaces the
+    separate rows".
+* `web/src/components/fileBrowserUnifiedDialog.test.ts`
+  (new) — 16 architectural pins for the
+  union extension, modal detection, helper,
+  FileTree wiring, FBSurface piping.
+
+### Decisions
+
+* **Trailing-slash detection** matches
+  POSIX shell intuition ("foo/" = dir,
+  "foo" = file). Lower learning curve than
+  a per-entry toggle.
+* **`.md` auto-append only on detected
+  "file"** — typing `foo/bar/` becomes
+  `foo/bar/`, not `foo/bar/.md`. The raw
+  input is preserved as-is for the dir
+  branch.
+* **Settings flip gated on `isTab && onFlip`**
+  in FBSurface (same pattern as the tab-
+  variant foot block in slice 1's menu).
+  Dock + overlay variants never receive
+  `onFlip`, so the menu entry hides.
+* **Settings entry at the foot**, not in
+  the workflow band — semantically distinct
+  from the spawn / search / new entries.
+* **Legacy createFile + createDir stay**
+  on the store (not just on fileOps) —
+  removing them would break the FB tab's
+  pane-hamburger flows that still reach for
+  the kind-specific variants. The unified
+  helper is additive.
+
+### Gate
+
+* `svelte-check` → 0/0.
+* `vitest` → **1250 / 1250** (+16 from
+  `-a-67d` slice 2's 1234).
+* `npm run build` → clean.
+* `cargo fmt --check` + `clippy
+  --all-targets -- -D warnings` → clean
+  (no Rust delta).
+
+### Suggested commit subject
+
+```
+File Browser: unified New File or Directory dialog + FileTree Settings flip (fullstack-a-67e slice 2)
+```
+
+### Files (per-path)
+
+* `web/src/state/store.svelte.ts`
+* `web/src/components/PathPromptModal.svelte`
+* `web/src/components/FileTree.svelte`
+* `web/src/components/FileBrowserSurface.svelte`
+* `web/src/components/fileTreeSelectionMenu.test.ts`
+* `web/src/components/fileBrowserUnifiedDialog.test.ts` (new)
+* `docs/journals/phase-8/fullstack-a/fullstack-a-67.md`
+
+Autonomous-commit mode. No clearance held.
+All SPA-only deferred slices closed.
+Remaining deferred items:
+* `-a-67d` slice 3 (Jitter — chan-server
+  backend gap, scope-poked).
+* `-a-79`/`-a-80` (chan-server team
+  create/duplicate routes, scope-poked).
+
+Queue idle pending architect routing on
+the backend gaps.

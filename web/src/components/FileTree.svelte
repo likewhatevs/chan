@@ -13,10 +13,10 @@
     FilePlus,
     Folder,
     FolderOpen,
-    FolderPlus,
     Network,
     Pencil,
     Search,
+    Settings2,
     Terminal as TerminalIcon,
     Trash2,
   } from "lucide-svelte";
@@ -67,6 +67,7 @@
   let {
     dockSide,
     onClickRow,
+    onFlip,
   }: {
     dockSide?: "left" | "right";
     /// `fullstack-80`: surface-owned hook fired when the user clicks
@@ -75,6 +76,13 @@
     /// don't). Keyboard navigation writes to `browserSelection`
     /// directly without firing this hook.
     onClickRow?: (path: string) => void;
+    /// `fullstack-a-67e` slice 2: surface-owned hook for the
+    /// Settings (flip) entry in the in-tree selection menu.
+    /// FBSurface passes this through from its own `onFlip`
+    /// (which Pane.svelte wires to `flipHybrid(pane.id)`); dock
+    /// + overlay variants don't pass it so the Settings entry
+    /// hides for those variants.
+    onFlip?: () => void;
   } = $props();
   const rightDock = $derived(dockSide === "right");
 
@@ -371,14 +379,30 @@
     menu = { x: ev.clientX, y: ev.clientY, path, isDir };
   }
 
-  async function newFile(parentPath: string): Promise<void> {
-    await fileOps.createFile(parentPath);
+  /// `fullstack-a-67e` slice 2: unified "New File or
+  /// Directory" entry. Opens a single PathPromptModal with
+  /// `kind: "either"`; trailing slash → dir, otherwise →
+  /// file. The legacy `newFile` / `newDir` helpers are no
+  /// longer wired to the menu but kept exported in `fileOps`
+  /// for callers that want the kind-specific variants.
+  async function newFileOrDir(parentPath: string): Promise<void> {
     menu = null;
+    await fileOps.createFileOrDir(parentPath);
   }
-  async function newDir(parentPath: string): Promise<void> {
-    await fileOps.createDir(parentPath);
+  /// Settings (flip) — routes through the surface-supplied
+  /// `onFlip` callback (FBSurface → Pane.svelte →
+  /// `flipHybrid(pane.id)`). Gated on `onFlip` existence so
+  /// dock + overlay variants don't surface the entry.
+  function flipFromMenu(): void {
     menu = null;
+    onFlip?.();
   }
+  /// `fullstack-a-67e` slice 2: dropped the legacy `newFile` /
+  /// `newDir` local helpers along with the menu's separate New
+  /// File / New Directory entries. The unified `newFileOrDir`
+  /// above is the only menu surface; `fileOps.createFile` /
+  /// `createDir` remain on the store for callers that need the
+  /// kind-specific variants.
   async function rename(path: string, isDir: boolean): Promise<void> {
     await fileOps.rename(path, isDir);
     menu = null;
@@ -930,19 +954,18 @@
          Addendum-a doesn't explicitly list Copy Path / Rename
          / Delete; keeping them avoids regressing destructive +
          path ops with no other surface. Flag in journal.
-         The "New File or Directory" unified dialog (spec
-         calls for one input that detects file-vs-dir) is
-         deferred to slice 2 — needs a `kind: "either"`
-         extension to PathPromptModal. -->
+         `fullstack-a-67e` slice 2: unified "New File or
+         Directory" entry replaces the separate New File +
+         New Directory rows; the modal detects file-vs-dir
+         from the path's trailing slash. Settings (flip)
+         entry added at the foot when `onFlip` is wired
+         (tab variant only; dock + overlay variants pass no
+         onFlip so the entry hides). -->
     <div class="from-selection-label">From selection</div>
     {#if menu.isDir}
-      <button onclick={() => newFile(menu!.path)}>
+      <button onclick={() => newFileOrDir(menu!.path)}>
         <FilePlus size={16} strokeWidth={1.75} aria-hidden="true" />
-        <span>New File</span>
-      </button>
-      <button onclick={() => newDir(menu!.path)}>
-        <FolderPlus size={16} strokeWidth={1.75} aria-hidden="true" />
-        <span>New Directory</span>
+        <span>New File or Directory</span>
       </button>
     {/if}
     <button onclick={() => searchThis(menu!.path, menu!.isDir)}>
@@ -970,6 +993,13 @@
       <Trash2 size={16} strokeWidth={1.75} aria-hidden="true" />
       <span>Delete</span>
     </button>
+    {#if onFlip}
+      <div class="ctx-sep" role="separator"></div>
+      <button onclick={flipFromMenu}>
+        <Settings2 size={16} strokeWidth={1.75} aria-hidden="true" />
+        <span>Settings</span>
+      </button>
+    {/if}
   </div>
 {/if}
 

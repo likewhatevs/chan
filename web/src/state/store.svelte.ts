@@ -2275,7 +2275,13 @@ export function resolvePrompt(value: string | null): void {
 //     fire a separate uiConfirm before performing the destructive
 //     action.
 
-export type PathPromptKind = "file" | "folder";
+/// `fullstack-a-67e` slice 2: `"either"` lets the unified
+/// "New File or Directory" prompt accept both shapes. The
+/// modal detects file-vs-dir from the path's trailing slash:
+/// `foo/bar/` → directory, `foo/bar` (or with an extension)
+/// → file. Callers resolve the returned path against the
+/// chosen kind via `pathPromptKind()` below.
+export type PathPromptKind = "file" | "folder" | "either";
 /// `attach` (added per `fullstack-b-3`) is the watcher-dialog mode:
 /// the user picks a path to attach a long-running watcher to,
 /// which is neither "create the entity" nor "move into it". The
@@ -2520,6 +2526,51 @@ export const fileOps = {
       // ancestor along the way so a `a/b/new-directory` create lands
       // visible even if `a` and `b` were collapsed.
       revealAndSelect(path);
+    } catch (e) {
+      ui.status = `create failed: ${(e as Error).message}`;
+    }
+  },
+  /// `fullstack-a-67e` slice 2: unified "New File or Directory"
+  /// dialog. Opens a single PathPromptModal with `kind: "either"`;
+  /// the user types a path ending in `/` for a directory or
+  /// without the trailing slash for a file. On submit, dispatches
+  /// to the underlying API + UI flow that matches the detected
+  /// kind: directories get `revealAndSelect`'d (matches the
+  /// `createDir` flow); files get `.md` auto-appended + opened in
+  /// the active pane (matches `createFile`). The dialog itself
+  /// owns the kind detection via `effectiveKind` — this caller
+  /// re-detects on the resolved path so the dispatch matches what
+  /// the modal validated against.
+  async createFileOrDir(parentPath: string): Promise<void> {
+    const defaultValue = parentPath ? `${parentPath}/` : "";
+    const next = await uiPathPrompt({
+      title: "new file or directory (trailing / = directory)",
+      defaultValue,
+      kind: "either",
+      mode: "create",
+    });
+    if (!next) return;
+    const isDir = next.endsWith("/");
+    if (isDir) {
+      try {
+        await api.create(next, true);
+        await refreshTree();
+        revealAndSelect(next);
+      } catch (e) {
+        ui.status = `create failed: ${(e as Error).message}`;
+      }
+      return;
+    }
+    // File branch: apply the same `.md` auto-append + editable-
+    // text gate as `createFile` for consistency. The modal's
+    // resolved value already includes the suffix (it was
+    // validated there), so this is just an idempotent backstop.
+    const path = appendDefaultMd(next);
+    try {
+      await api.create(path, false, "");
+      await refreshTree();
+      await openInActivePane(path);
+      browserOverlay.open = false;
     } catch (e) {
       ui.status = `create failed: ${(e as Error).message}`;
     }
