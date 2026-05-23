@@ -4507,3 +4507,104 @@ team is LIVE in parallel; @@CI has `event-ci-architect.md` +
 will scope to only the two files above).
 
 Standing by.
+
+## 2026-05-23 — poke (fullstack-a-98 + -a-101 bundled walk: BOTH HOLD — 2/2 v0.13.0 release blockers cleared)
+
+Proactive walk on the two bundled landings — neither cut as
+explicit `webtest-a-13.md`, both walked once they hit HEAD per
+`feedback_proactive_walks` discipline. Verdict: **HOLD for
+both**. Per-check evidence at
+[`../webtest-a/webtest-a-1.md`](../webtest-a/webtest-a-1.md)
+under `## 2026-05-23 — fullstack-a-98 + -a-101 bundled walk`.
+
+Fresh-binary: `npm run build` 16:30:37 + `cargo build -p chan`
+16:30:54 at HEAD `e828c79`. Throwaway drive
+`/tmp/chan-test-wa-98101/` (test.md seeded for editor surface).
+Chrome MCP tab `503726397` (closed at teardown).
+
+### `-a-98` per-surface audit (5/5 HOLD)
+
+| Surface | Status |
+|---------|--------|
+| 1. Pane hamburger (Light/Flip removal) | HOLD (both entries gone) |
+| 2. Terminal right-click footer (Settings + Reopen + Close) | HOLD |
+| 3. File Browser right-click footer | HOLD |
+| 4. Graph right-click footer (was the original P1 gap) | HOLD |
+| 5. Editor right-click footer | HOLD |
+
+Notable: Surface 4 (Graph) closes the original visible gap
+@@Alex flagged from the 2026-05-23 screenshot. All 5 surfaces
+now carry the addendum-a `Settings / Reopen Closed Tab /
+Close` footer pattern uniformly. The `Light mode` / `Flip
+pane` entries from Surface 1 that I flagged as a side
+observation in `webtest-a-4` (2026-05-21) are now empirically
+confirmed removed per the spec end state — that earlier flag
+resolves.
+
+### `-a-101` per-kind verdict (4/4 HOLD)
+
+| Tab kind | After click | Verdict |
+|----------|-------------|---------|
+| Terminal | xterm-helper-textarea focused | HOLD |
+| Editor (test.md) | CM6 cm-editor focused | HOLD |
+| File Browser | UL (tree); no content focus shift | HOLD (correct per spec — no input target) |
+| Graph | BODY; no content focus shift | HOLD (correct per spec — no input target) |
+
+The `tabFocusPulse` reuse (per `-a-64`'s pipeline +
+`bumpTabFocusPulse()` exported from `tabs.svelte.ts` +
+`Pane.svelte`'s `mousedown` bumping for terminal+file kinds
+only) is the right shape — exactly what @@FullStackA's task
+tail described. Empirically clean: input-capable kinds focus
+their content; non-input kinds (FB, graph) leave focus on the
+tab content's first focusable element (UL for FB tree) or fall
+back to BODY (graph), neither attempting to forward focus to
+nothing.
+
+### Side observation — Chrome MCP screenshot scale
+
+`computer.screenshot` captures at lower res than
+`window.innerWidth/innerHeight` (`1324x896` vs `1469x994` CSS-
+pixel viewport). DOM-coordinate clicks via `computer.left_click`
+correctly target the CSS coordinate, but elements visible in
+the CSS viewport can be truncated in the screenshot. Worked
+around by JS `element.click()` + synthetic
+`contextmenu`/`mousedown` dispatch for menu probing. Webtest-
+automation note only; no chan bug. (Same observation logged in
+webtest-a-4 #2 — preserved as a webtest-skill discipline
+reminder.)
+
+### Remaining v0.13.0 blockers for my lane
+
+* `-a-99` (Matrix rain + Castaway + theme picker + screensaver
+  timeout bounds [10s, 3600s] per `33556be`) — not in HEAD as
+  of this walk.
+* `-a-100` (Drafts FB chain — P0; chan-drive drafts handle
+  triage per `round4.md`) — not in HEAD; might be lane-overlap
+  with @@Systacean's spawn_blocking work (`systacean-45`).
+
+Reactive standby. Walk both when @@FullStackA ships.
+
+### Teardown
+
+Lane-A test server stopped (`pkill`), throwaway drive
+`rm -rf`'d, `chan remove /private/tmp/chan-test-wa-98101`
+registry entry dropped, Chrome MCP tab closed. `/tmp/test.md`
+was inside the throwaway and went with it.
+
+### Suggested commit shape
+
+Path-limited per the standing discipline:
+
+* **Subject**: `docs: webtest-a — -a-98 + -a-101 bundled walk HOLD (2/2 v0.13.0 release blockers cleared)`
+* **Files** (explicit per-path):
+  * `docs/journals/phase-8/webtest-a/webtest-a-1.md`
+  * `docs/journals/phase-8/alex/event-webtest-a-architect.md`
+
+Cross-lane awareness: @@Systacean has 12 chan-server route
+files modified in WT (`systacean-45` spawn_blocking audit;
+`a/c/d/f/g/i/i/r/s/t/static_assets`). I will NOT touch those —
+explicit `git add` of my two files only, with pre/post-commit
+`git diff --staged --stat` + `git show --stat HEAD` audit per
+the shared-worktree pattern.
+
+Standing by.

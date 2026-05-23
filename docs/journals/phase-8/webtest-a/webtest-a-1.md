@@ -7193,3 +7193,101 @@ my lane.
   scratch fixtures (not under any drive); harmless and reusable
   for future glyph-rendering walks.
 
+## 2026-05-23 — `fullstack-a-98` + `-a-101` bundled walk (v0.13.0 release blockers) — HOLD
+
+Walked the two bundled v0.13.0 release blockers proactively
+once they landed in HEAD (no explicit `webtest-a-13.md` cut;
+proactive-walks discipline per
+`feedback_proactive_walks`):
+
+* `-a-98` (`dec62ff`) — addendum-a menu gaps closed across all
+  5 right-click surfaces.
+* `-a-101` (`c53cb6c`) — tab-header click focuses content for
+  input-capable tab kinds via the existing `tabFocusPulse`
+  pipeline from `-a-64`.
+
+Fresh-binary discipline applied: `npm run build` (16:30:37) +
+`cargo build -p chan` (16:30:54) at HEAD `e828c79`. Throwaway
+drive `/tmp/chan-test-wa-98101/` seeded with `test.md`. Server
+`http://127.0.0.1:8787/?t=gmJbwNoRWeunqJT4wmo4b7cekcibrpcW`.
+Chrome MCP tab `503726397`.
+
+### `-a-98` per-surface audit verdict
+
+Walked each of the 5 surfaces by setting a 4-tab layout
+(Terminal-1, Graph "drive", File Browser, test.md editor) via
+URL-hash SerLeaf and dispatching contextmenu events
+programmatically + cross-checking the per-surface code at the
+audit anchors named in `-a-98`'s task tail.
+
+| Surface | Spec items present | Footer (Settings / Reopen Closed Tab / Close) | Removed (Light/Flip) | Verdict |
+|---------|-------------------|----------------------------------------------|---------------------|---------|
+| 1. Pane hamburger | spawn rows + Enter Hybrid Nav + Focus border colour | n/a (spec doesn't require footer here) | both gone ✓ | HOLD |
+| 2. Terminal right-click | Set MCP env / Restart / Find / Copy / Paste / Copy path to $CWD / Copy Scrollback / From $CWD (4 spawn rows) / Show Rich Prompt / Select All | all 3 present ✓ | n/a | HOLD |
+| 3. File Browser right-click | path header / Stick to left/right / Expand all / Reload / Import contacts | all 3 present ✓ | n/a | HOLD |
+| 4. Graph right-click | scope-path header (Drive) / Depth / Reload / filter chips (tag/contact/language/media/folder/markdown/source) | all 3 present ✓ | n/a | HOLD |
+| 5. Editor right-click | Show Source Code / Collapse Code Blocks / Show Outline / Show Details / Show Style Toolbar / Highlight+Remove trailing whitespace / Search / Find / Copy paths (file + $CWD) / Reload from Disk / From $CWD (4 spawn rows) | all 3 present ✓ | n/a | HOLD |
+
+The "Light mode" / "Flip pane" entries I flagged as a side
+observation back in `webtest-a-4` (2026-05-21 — "Pane hamburger
+lost Light mode + Flip pane entries; Light mode moved into the
+Hybrid Editor back-side per `-a-46` (Appearance buttons). Flip
+pane removal is less clear ... Flag for design alignment.")
+are now empirically confirmed removed as the intentional end
+state per `-a-98`'s spec. The earlier flag resolves.
+
+### `-a-101` per-kind verdict
+
+Probed `document.activeElement` after a synthetic
+mousedown+mouseup+click sequence on each tab header. The
+`tabFocusPulse` pipeline from `-a-64` reused per the task-tail
+patch shape (`bumpTabFocusPulse()` exported from
+`tabs.svelte.ts`; `Pane.svelte`'s `mousedown` bumps the pulse
+for `terminal` and `file` kinds only).
+
+| Tab kind | `activeElement` after click | Within xterm | Within CM editor | Verdict |
+|----------|------------------------------|--------------|------------------|---------|
+| Terminal | `textarea.xterm-helper-textarea` | yes | no | HOLD — xterm focused |
+| Editor (test.md) | CM6 inner div | no | yes | HOLD — `cm-editor` focused |
+| Terminal (re-click) | `textarea.xterm-helper-textarea` | yes | no | HOLD — re-focus works |
+| File Browser | `UL` (FB tree) | no | no | HOLD — no content focus shift (no input-capable surface; correct per spec acceptance #3) |
+| Graph | `BODY` | no | no | HOLD — no content focus shift (acceptable; graph has no input target) |
+
+All 5 cases match `-a-101`'s acceptance criteria. The
+spec-line "For non-content-input tabs (FB, graph, infographics),
+focus may stay on the tab header — that's fine; focus only the
+input-able kinds" is honored: only Terminal + File (Editor) get
+the focus pulse; the others land focus wherever the activation
+ended up (UL for FB tree, BODY for graph) — neither attempts to
+forward focus to a content input.
+
+### Side observation (not regression; tooling note)
+
+The Chrome MCP `computer.screenshot` captures at a lower
+resolution than the `window.innerWidth/innerHeight` reports
+(`1324x896` screenshot vs `1469x994` CSS-pixel viewport in
+this session). DOM-coordinate clicks via `computer.left_click`
+land on the CSS coordinate, not the screenshot coordinate, so
+elements near the right edge can be in the CSS viewport but
+appear truncated in screenshots. Worked around by clicking via
+JS `element.click()` + `dispatchEvent('contextmenu')` for the
+Graph hamburger probe. Webtest-automation note only; no chan
+bug.
+
+### Decision
+
+Verdict: **HOLD for both `-a-98` and `-a-101`.** v0.13.0
+release blockers cleared from my lane.
+
+Remaining v0.13.0 release blockers: `-a-99` (screensaver
+themes + timeout bounds) + `-a-100` (Drafts FB chain — P0).
+Neither in HEAD as of this walk; reactive standby for both.
+
+### Teardown
+
+* `pkill -f 'chan serve /tmp/chan-test-wa-98101'` — stopped.
+* `rm -rf /tmp/chan-test-wa-98101/` — throwaway drive removed.
+* `chan remove /private/tmp/chan-test-wa-98101` — registry
+  entry dropped.
+* Chrome MCP tab `503726397` closed.
+
