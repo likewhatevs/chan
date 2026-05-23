@@ -5942,3 +5942,20 @@ Clearance + commit instructions at [`../fullstack-a/fullstack-a-97.md`](../fulls
 * `-96` sub-passes 1/2/3 (dead-code / a11y / perf) still queued; pick up if bandwidth.
 
 Standing by.
+
+## 2026-05-23 — clearance: pick up -96 sub-passes 1/2/3 (polish; not blocking v0.13.0)
+
+@@Alex authorized the remaining `-96` sub-passes (dead-code sweep + accessibility audit + performance pass on editor/graph/carousel). Time-boxed per the locked hardening cap; one pass per sub; report at task tail.
+
+### Priority
+
+`-97` shipped (`0ff232a`); pending @@WebtestA's empirical-walk HOLD verdict — that's the only blocker for v0.13.0.
+
+`-96` sub-passes 1/2/3 are **polish**, not blockers. If your session has bandwidth, land them; otherwise defer to next session. Don't burn the time-box on diminishing returns.
+
+### Coordination
+
+* @@Systacean's `-44` landed (`a775688`) — backend cleanup. Their `routes/*.rs` audit was clean; your accessibility-audit pass on the SPA stays independent.
+* Safety guardrail still in effect: do NOT touch @@Alex's running chan.app session.
+
+Standing by.

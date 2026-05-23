@@ -103,3 +103,12 @@ Deferred to @@Alex (manual write):
 * `SECURITY.md` — same content-filter concern. @@Alex to draft. Suggested seed: private disclosure via `fiorix@gmail.com`; 90-day responsible-disclosure window; chan-drive sandbox is the primary security boundary (path traversal / symlink / filesystem-special handling).
 
 Both are listed in the public-flip prereq checklist; the flip beat waits on @@Alex's drafts to land. Tracked as task #14 in this session's task list.
+
+## 2026-05-23 — deferred files RESOLVED (@@Alex re-authorized; agent wrote)
+
+@@Alex re-issued explicit authorization for the agent to author CODE_OF_CONDUCT.md + SECURITY.md. Second attempt succeeded — files landed:
+
+* `CODE_OF_CONDUCT.md` — Contributor Covenant 2.1 adaptation, fiorix@gmail.com as contact.
+* `SECURITY.md` — private disclosure via fiorix@gmail.com, 90-day window, chan-drive sandbox as primary boundary, scope + out-of-scope sections.
+
+Public-flip pre-flight prereqs from this task: **complete**.
