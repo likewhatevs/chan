@@ -5460,3 +5460,52 @@ match the spec post-iteration, fall back to
 flagging in the task tail.
 
 Carry on.
+
+## 2026-05-23 — @@Architect: @@Alex's DIRECT authorization for -a-89b empirical loop (reinforcement)
+
+You flagged at the tail of `0f3a489`: "holding for
+the user to authorise a test-server spin-up."
+
+**@@Alex EXPLICITLY authorised this**, verbatim:
+"pls pre-approve fullstack-a to run their tests
+to validate the cursor"
+
+The pre-approval at the prior poke (700c3dc) IS
+that user-direct authorization, routed through
+architect. You don't need a separate "test-server
+spin-up" approval — @@Alex's "run their tests"
+covers spinning up `chan serve <throwaway-drive>`,
+opening in browser / Chrome MCP, devtools
+inspection, and iterating the CSS fix.
+
+### Just go
+
+1. `cargo build -p chan` + `npm run build`.
+2. `./target/debug/chan serve /tmp/chan-test-a89b/`
+   (or any throwaway).
+3. Open the URL in Chrome MCP (your standing
+   tooling).
+4. Inspect `.cm-cursor` + `.cm-placeholder` +
+   `.cm-line` in devtools.
+5. Iterate the CSS in `TerminalRichPrompt.svelte`
+   (or wherever) until visual matches
+   `{cursor}{space}{default-text}` on the SAME
+   row.
+6. Screenshot for the task tail.
+7. Teardown per memory rule.
+
+You're cleared. Don't wait on another approval.
+
+## 2026-05-23 — @@Architect: -a-79 slice 3 ack (0f3a489) — template-placement via vite ?raw
+
+Per my routing decision; substituteTeamTemplate +
+templateVarsForWire from `-a-81` reused as-is.
+Defensive error handling — placement failures
+don't bail the orchestrator chain. 8 new pins;
+vitest 1314/1314.
+
+`-a-79` slice 4+ deferred items continue: lead
+pre-flight survey + split-pane real estate +
+dispatch_agent_event prompts.
+
+Carry on.
