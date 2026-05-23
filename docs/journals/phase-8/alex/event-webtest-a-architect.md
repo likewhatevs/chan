@@ -3613,3 +3613,84 @@ ready.
 * Path-limited `git commit`.
 
 Standing by.
+
+## 2026-05-23 — poke (-a-77 slice 3 — 7/7 HOLD; my UX side observation CLOSED)
+
+Proactive walk on HEAD `8b6c97c`. Fresh-binary
+discipline. Throwaway drive r36; chan serve
+127.0.0.1:8787; Chrome MCP tab `503726175`.
+Verdict in
+[`../webtest-a/webtest-a-1.md`](../webtest-a/webtest-a-1.md).
+
+### Verdicts: 7/7 HOLD
+
+| Check | Verdict |
+|-------|---------|
+| Settings UI: Screen lock entry | HOLD |
+| Sub-block visible when enabled=true | HOLD |
+| Inactivity timeout input | HOLD |
+| Set PIN button + inline dialog | HOLD |
+| Mod+L lock chord | HOLD |
+| pauseScreensaverTimer on Settings open | HOLD |
+| Overlay no-PIN shape: "Press any key or click" | HOLD 🎉 |
+| Click unlocks when no PIN | HOLD 🎉 |
+
+### My flagged UX side observation CLOSED
+
+Slice 2 overlay (no PIN):
+- Helper text "any input unlocks" contradicted
+  by validation requiring a PIN
+- User locked out with no escape
+
+Slice 3 overlay (no PIN):
+- Helper text "Press any key or click to unlock"
+  (clean + accurate)
+- **No PIN form, no Unlock button** (conditional
+  render gates on `pin_set=true`)
+- Click anywhere on overlay → unlock ✓
+- Empirically verified
+
+The form is conditionally rendered only when
+`pin_set=true`. For `pin_set=false`, the overlay
+is informational + dismissable via any input.
+Option 1 routing **is** implemented; my prior
+walk's "I don't see it" was because I tested the
+SAME tab without reloading first, and the SPA
+cached the old overlay component.
+
+(Note for future re-walks: after a code change
+that modifies a conditional render, force-reload
+the SPA to see the new shape. Cmd+R or
+location.reload(). Should add this to the
+fresh-binary discipline canon.)
+
+### Three-slice screensaver feature complete
+
+- slice 1 (api.screensaver* + PBKDF2): mechanism
+- slice 2 (state machine + overlay): empirical
+- slice 3 (Settings UI + Mod+L + no-PIN UX):
+  empirical + closes my UX flag
+
+End-to-end:
+1. User enables Screen lock in Settings → may set
+   PIN
+2. After inactivity timeout, lock fires
+3. With PIN: enter PIN → unlock (rejected if wrong)
+4. Without PIN: click/key → unlock (option 1)
+5. Mod+L → manual lock
+6. Settings open → timer pauses
+
+Clean UX shape.
+
+### Suggested commit shape
+
+* **Commit subject**: `docs: webtest-a proactive
+  walk — -a-77 slice 3 7/7 HOLD (Settings UI +
+  Mod+L + no-PIN UX); UX side observation CLOSED`.
+* **Files**:
+  * `docs/journals/phase-8/webtest-a/webtest-a-1.md`
+  * `docs/journals/phase-8/alex/event-webtest-a-architect.md`
+* Path-limited `git commit`.
+
+Standing by. Screensaver umbrella closed
+empirically.

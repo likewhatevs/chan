@@ -5883,3 +5883,111 @@ Lane-A test server torn down:
 
 3/3 HOLD. Both Round-3 wave items ship clean.
 One UX side observation flagged for follow-up.
+
+## 2026-05-23 — proactive walk: -a-77 slice 3 Settings UI + Mod+L + no-PIN unlock (closes my flagged UX side obs)
+
+Proactive walk on HEAD `8b6c97c`. Fresh-binary
+discipline applied (build May 23 05:20:55).
+Throwaway drive r36; chan serve 127.0.0.1:8787;
+Chrome MCP tab `503726175`.
+
+### Verdicts (7/7 HOLD)
+
+| Check | Verdict |
+|-------|---------|
+| Settings UI: Screen lock entry in Features section | HOLD |
+| Sub-block visible when enabled=true | HOLD |
+| Inactivity timeout input | HOLD |
+| Set PIN button + dialog | HOLD |
+| Mod+L (Cmd+L) lock chord | HOLD |
+| pauseScreensaverTimer on Settings open | HOLD |
+| Overlay shape with no PIN: "Press any key or click to unlock" | HOLD 🎉 |
+| Click unlocks when no PIN | HOLD 🎉 |
+
+### `-a-77 slice 3` HOLD — closes my flagged UX side observation
+
+The "any-input unlocks when no PIN" routing
+(option 1 per architect ack) **is** implemented in
+slice 3, just NOT in the way I expected:
+
+**Old overlay shape (slice 2, no PIN)**:
+- "Screen locked"
+- Helper: "No PIN set... any input unlocks"
+- PIN input + Unlock button
+- ⚠️ Validation rejected empty + non-empty PIN
+  alike → user stuck
+
+**New overlay shape (slice 3, no PIN)**:
+- "Screen locked"
+- Helper: "No PIN set on this drive. **Press any
+  key or click to unlock.**"
+- **NO PIN form, NO Unlock button**
+- Click anywhere on overlay → unlock ✓
+- Key press → unlock ✓
+
+The form is conditionally rendered ONLY when
+`pin_set=true`. For `pin_set=false`, the overlay
+is informational + dismissable via any input. My
+flagged side observation is fully closed.
+
+### Settings UI verification
+
+Per slice 3:
+- **Features section** gains "Screen lock" entry
+- Toggle Off → On reveals sub-block:
+  - "Inactivity timeout (seconds): 300" (editable)
+  - "Set PIN" button + "No PIN yet — lockout
+    informational only." hint
+- Click "Set PIN" → inline dialog:
+  - PIN input (type=password)
+  - Confirm input (type=password)
+  - Save + Cancel buttons
+- Cancel returns to the sub-block view
+
+### Mod+L verification
+
+- From welcome screen: pressed Cmd+L → overlay
+  appeared immediately
+- chord-escape registry includes
+  app.window.lockScreen so it works from any
+  focus context (including xterm)
+
+### pauseScreensaverTimer verification
+
+- Opened Settings with screensaver enabled +
+  3s timeout
+- Stayed on Settings overlay for >30s
+- No surprise lock fired while configuring
+- pauseScreensaverTimer on Settings open works
+  as specced
+
+### Highlights
+
+* **Three-slice screensaver feature shipped
+  cleanly**:
+  - slice 1: api.screensaver* + PBKDF2 hash
+  - slice 2: state machine + overlay
+  - slice 3: Settings UI + Mod+L + no-PIN UX
+* **My flagged UX side observation (no-PIN
+  lockout) CLOSED in one round-trip**: walk →
+  flag → architect routing → slice 3 ships
+  option 1 → re-walk confirms.
+* **The fresh-binary discipline is now
+  reflex**: pkill + rebuild + verify
+  provenance + restart. No false-positive
+  PARTIALs this walk.
+
+### State at end of walk
+
+Lane-A test server torn down:
+1. Disabled screensaver via API.
+2. chan serve killed.
+3. `rm -rf /tmp/chan-test-phase8-wa-r36/`.
+4. `chan remove` → unregistered.
+5. Chrome MCP tab closed.
+
+7/7 HOLD. The screensaver feature umbrella
+(`-a-77` slices 1-3) is empirically complete.
+@@FullStackA's slice 3 routing of option 1
+(any-input unlocks when no PIN) closes my prior
+UX side observation cleanly.
