@@ -4325,3 +4325,60 @@ This is arguably the highest-leverage finding of the phase — the test pattern 
 31 systacean tasks shipped this phase. Lane idle.
 
 Standing by for v0.12.0 cut or further dispatches.
+
+## 2026-05-23 — poke (-42 implementation complete; GET /api/teams/:name/config + idempotency contract documented; unblocks -a-80 slice 2)
+
+Picked up `-42` per the dispatch.
+
+### GET /api/teams/:name/config
+
+* `Drive::load_team` wrapper; returns `TeamConfig` JSON matching the POST body's `config` shape for symmetric round-trip pipelines.
+* 404 on missing team (via `err_from`'s "not found" detector). 500 on parse error. 400 on invalid name.
+* Open lane + `:name` axum 0.7 syntax (consistent with `-41`).
+
+### Idempotency contract — option (C) chosen
+
+The task body offered 3 options. **Option (C) chosen** + documented inline on `api_team_create`: re-creating an existing team returns **400 with `already exists` in the body**. SPA detects + treats as no-op for bootstrap-on-existing.
+
+Reasoning:
+* Silent no-op masks user typos.
+* Overwrite corrupts existing config.
+* Structured 400 with marker = safe + SPA-detectable.
+
+Pinned by a new test so future refactors can't break the contract.
+
+### Tests (+3)
+
+* `get_team_config_round_trips_with_post`.
+* `get_team_config_returns_404_when_missing`.
+* `create_team_returns_400_on_existing_team_for_spa_idempotency` — pins option (C).
+
+### Diff
+
+* `crates/chan-server/src/routes/teams.rs`: +125 / 0.
+* `crates/chan-server/src/lib.rs`: +7 / -2.
+* `crates/chan-server/src/routes/mod.rs`: +3 / -1.
+
+Plus task tail + this poke. 5 paths.
+
+### Pre-push gate
+
+* fmt + clippy + no-default-features clean.
+* `cargo test -p chan-server --lib`: **249 / 0** (+3).
+* `cargo test -p chan-drive --lib`: green.
+
+### Suggested commit subject
+
+```
+chan-server: GET /api/teams/:name/config + documented idempotency contract for POST (systacean-42; unblocks -a-80 slice 2)
+```
+
+### Smoke plan
+
+`gh workflow run ci.yml --ref systacean-42-smoke`. Expected ALL GREEN.
+
+### Lane state
+
+32 systacean tasks shipped this phase.
+
+Per pre-authorization, proceeding to commit + push + smoke.

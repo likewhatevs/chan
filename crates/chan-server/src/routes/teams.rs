@@ -183,6 +183,19 @@ pub async fn api_team_unload(
 /// Errors:
 /// * empty / traversal / collision → 400 (per task spec).
 /// * other I/O failure → 500 via `err_from`.
+///
+/// systacean-42: **idempotency contract for the SPA orchestrator.**
+/// Calling `POST /api/teams` for a name that ALREADY exists
+/// returns **400 with `already exists` in the response body**.
+/// This is the option (C) outcome from `-42`'s task body: the
+/// SPA detects "already exists" + treats it as a no-op success
+/// for the bootstrap-on-existing flow.
+///
+/// Rationale: a silent no-op-on-existing would mask a real user
+/// mistake (typo on team name colliding with an unrelated team)
+/// and overwrite-on-existing would corrupt the existing config.
+/// Returning a structured error preserves both safety + lets the
+/// SPA layer make the call.
 pub async fn api_team_create(
     State(state): State<Arc<AppState>>,
     Json(payload): Json<CreateTeamPayload>,
@@ -232,6 +245,34 @@ pub async fn api_team_duplicate(
             abs: team_ref.abs.display().to_string(),
         })
         .into_response(),
+        Ok(Err(e)) => map_team_error(&e),
+        Err(join) => err(StatusCode::INTERNAL_SERVER_ERROR, join.to_string()),
+    }
+}
+
+/// systacean-42: `GET /api/teams/:name/config` — read the
+/// persisted `TeamConfig` for a team. Backs @@FullStackA's
+/// `-a-80 slice 2` Load Team dialog (the dialog populates from
+/// this endpoint before the user confirms Bootstrap).
+///
+/// Returns the same `TeamConfig` JSON shape that `POST
+/// /api/teams`'s `config` field expects, so a `GET → mutate →
+/// POST` round-trip pipeline (e.g. "edit existing team") works
+/// without any client-side adapter layer.
+///
+/// Errors:
+/// * Team directory missing → 404 via `err_from`'s "not found"
+///   detector on the underlying `chan_drive::teams::load` error.
+/// * Malformed config.toml → 500 via the generic `err_from`
+///   fallback.
+pub async fn api_team_get_config(
+    State(state): State<Arc<AppState>>,
+    Path(team_name): Path<String>,
+) -> Response {
+    let drive = state.drive().clone();
+    let result = tokio::task::spawn_blocking(move || drive.load_team(&team_name)).await;
+    match result {
+        Ok(Ok(config)) => Json(config).into_response(),
         Ok(Err(e)) => map_team_error(&e),
         Err(join) => err(StatusCode::INTERNAL_SERVER_ERROR, join.to_string()),
     }
@@ -549,6 +590,90 @@ mod tests {
         )
         .await;
         assert_eq!(status, StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn get_team_config_round_trips_with_post() {
+        // systacean-42: POST + GET produce matching JSON. Pins
+        // the SPA-side `api.teamGetConfig(name)` consumer contract.
+        let app = route_test_app();
+        let router = crate::router(app.state);
+
+        let config = sample_config("alpha");
+        let (status, _) = request(
+            &router,
+            "POST",
+            "/api/teams",
+            Some(serde_json::json!({
+                "name": "alpha",
+                "config": config.clone(),
+            })),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+
+        let (status, body) = request(&router, "GET", "/api/teams/alpha/config", None).await;
+        assert_eq!(status, StatusCode::OK);
+        // POST overwrote config.team_name with outer "alpha";
+        // the GET response should reflect that.
+        assert_eq!(body["team_name"], "alpha");
+        assert_eq!(body["host_name"], config["host_name"]);
+        assert_eq!(body["host_handle"], config["host_handle"]);
+        assert_eq!(body["auto_prefix_at"], config["auto_prefix_at"]);
+        assert_eq!(body["created_at"], config["created_at"]);
+        assert_eq!(body["members"], config["members"]);
+    }
+
+    #[tokio::test]
+    async fn get_team_config_returns_404_when_missing() {
+        // systacean-42: missing team → 404 via err_from's "not
+        // found" detector on the underlying teams::load message.
+        let app = route_test_app();
+        let router = crate::router(app.state);
+        let (status, _) = request(&router, "GET", "/api/teams/ghost/config", None).await;
+        assert_eq!(status, StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn create_team_returns_400_on_existing_team_for_spa_idempotency() {
+        // systacean-42: PIN the documented idempotency contract.
+        // Re-creating an existing team returns 400 with
+        // `already exists` in the body. The SPA orchestrator
+        // detects this + treats as no-op success for the
+        // bootstrap-on-existing flow.
+        let app = route_test_app();
+        let router = crate::router(app.state);
+
+        let (status, _) = request(
+            &router,
+            "POST",
+            "/api/teams",
+            Some(serde_json::json!({
+                "name": "alpha",
+                "config": sample_config("alpha"),
+            })),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+
+        let (status, body) = request(
+            &router,
+            "POST",
+            "/api/teams",
+            Some(serde_json::json!({
+                "name": "alpha",
+                "config": sample_config("alpha"),
+            })),
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        // The "already exists" marker must appear in the body so
+        // the SPA can detect + treat as no-op.
+        let body_str = body.to_string();
+        assert!(
+            body_str.contains("already exists"),
+            "response body must carry the `already exists` marker; got {body_str}"
+        );
     }
 
     #[tokio::test]
