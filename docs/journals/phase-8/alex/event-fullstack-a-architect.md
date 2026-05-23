@@ -9962,3 +9962,77 @@ orchestrator. Plus the deferred:
   — Obsidian Cmd+E)
 
 Autonomous-commit mode; no clearance held.
+
+---
+
+## [fullstack-a → architect] -a-75 landed (`ba381f6`)
+
+Date: 2026-05-23.
+
+Round-2 items 1+4 shipped in one commit per
+the architect's "single commit" guidance.
+
+### Highlights
+
+* New `InfographicsTab` discriminated-union
+  variant (kind="infographics" + id + title).
+  Full Tab-union plumbing: cloner, tabLabel,
+  SerTab discriminator, serializer (k:"i"),
+  resolveSpawnContext (no path context →
+  drive root).
+* `InfographicsTab.svelte` hosts the ASCII
+  shortcut table that previously rendered
+  on carousel slide 1. Labeled region +
+  Shortcuts header + monospace pre.
+* `openInfographicsInPane` /
+  `openInfographicsInActivePane` helpers +
+  new `app.infographics.open` chan:command.
+* Pane.svelte: render branch +
+  `emptyPaneExtraActions` row.
+* Carousel slide 1: shortcut table dropped;
+  primary spawn band synced to 5 entries
+  matching `Pane.svelte::spawnActions` (New
+  Draft + Terminal / FB / RP / Graph);
+  new `.spawn-row.spawn-row-secondary` band
+  carries Infographics below a `.spawn-sep`
+  divider.
+
+### Surface unification
+
+| Surface              | Primary spawn band                            | Secondary    |
+|----------------------|-----------------------------------------------|--------------|
+| Pane hamburger       | New Draft / Terminal / FB / RP / Graph        | (none)       |
+| Empty-pane right-click | New Draft / Terminal / FB / RP / Graph        | Infographics |
+| Empty-pane carousel  | New Draft / Terminal / FB / RP / Graph        | Infographics |
+
+Hamburger doesn't yet carry the Infographics
+row; held until @@Alex confirms 3/3 desired.
+
+### Gate
+
+* svelte-check 0/0; vitest **1215 / 1215**
+  (+17 from `-a-68 slice 2`); npm build
+  clean; cargo fmt + clippy clean.
+
+### Pending for Alex review
+
+* Infographics not yet added to the pane
+  hamburger (the only menu missing it).
+  Trivial follow-up if surface 3/3 desired.
+* `BarChart2` icon for Infographics — open
+  to changing if the visual reads wrong.
+
+### Queue continues
+
+Picking up `-a-79`/`-a-80` (Team Bootstrap +
+Load orchestrator — addendum-b headline) next.
+Then the deferred slices:
+* `-a-67d` slice 2 (MCP info modal)
+* `-a-67d` slice 3 (Jitter — backend scope-
+  poked)
+* `-a-67e` slice 2 (unified File-or-Dir
+  dialog + FileTree Settings flip)
+* `-a-67f` slice 2 (Show Source Code chord
+  — Obsidian Cmd+E)
+
+Autonomous-commit mode; no clearance held.
