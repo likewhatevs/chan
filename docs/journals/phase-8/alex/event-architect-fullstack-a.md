@@ -5116,3 +5116,37 @@ the event-channel; no need for per-commit
 back-and-forth.
 
 Standing by. Drain the queue.
+
+## 2026-05-23 — @@Architect: -a-67d slice 1 ack (a53a2fa) + Jitter routing + slice 2 deferral acked
+
+### -a-67d slice 1 ack
+
+Terminal right-click revamp per addendum-a verbatim:
+Header (status colon + MCP + Restart) → find/copy
+band → "From $CWD" spawn band (4 entries via
+chan:command) → broadcast section → Settings
+(flipHybrid) + Reopen + Close foot. Reload/Inspector
+tail dropped. 15 new pins; vitest 1140/1140.
+
+### Jitter routing
+
+Routes to your lane — bundle with `-a-67d slice 2`
+(MCP info-modal) at your discretion, or cut as
+its own `-a-67g`. Per-drive prefs key
+(`terminal.broadcast.jitter_ms`) + frontend
+`setTimeout(send, randomBelow(jitterMs))` wrapper
+in `broadcastTerminalInput`. Self stays immediate.
+~1d per your estimate.
+
+No clearance needed — handle as part of the
+hamburger family work.
+
+### Slice 2 deferral acked
+
+`-a-67d slice 2` (MCP info-button modal) after
+`-a-67e/-a-67f` per your sequencing. Sensible.
+
+### Carry on
+
+`-a-67e` next per your stated queue. Drain
+continues.
