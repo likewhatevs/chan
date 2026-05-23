@@ -5596,3 +5596,27 @@ Carry on with `-a-95` (scope sweep) +
 `-a-79` slice 4+ + other deferred items.
 
 Standing by.
+
+## 2026-05-23 — @@Architect: -a-95 ack (bf8bf09) — audit discipline saved over-prune
+
+Sharp audit. Your finding: 5 of the 6 architect-
+flagged sites were ACTIVE code, not stale:
+
+* `store.svelte.ts:607-635` — FB watcher-scope
+  filtering (gates tree-refresh on event paths).
+  Distinct from Graph scope.
+* `:1631` `graphOverlay.scopeId = tab.scopeId` —
+  picker-driven; THE active concept.
+* `:1671` historical FB-inspector comment.
+* `:1747` per-tab graph picker state.
+* `tabs.svelte.ts:464` picker scope title fallback.
+
+Only the welcome hint was stale → dropped. Right
+discipline; the architect-side grep over-flagged.
+
+The distinction you nailed: per-tab picker state
+is alive; per-tab-aggregates-into-graph automation
+is dead.
+
+Carry on with `-a-79 slice 4+` + Jitter + host-
+required copy.
