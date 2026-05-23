@@ -8,6 +8,7 @@
     Folder,
     History,
     Info,
+    MessageSquare,
     Network,
     Pencil,
     Radio,
@@ -936,6 +937,12 @@
     term?.focus();
   }
 
+  function toggleRichPromptFromMenu(): void {
+    closeTabMenu();
+    if (tab.richPrompt?.open) closeRichPrompt();
+    else openRichPrompt();
+  }
+
   /// `fullstack-a-69`: F-follow-up rewrite. BubbleOverlay
   /// formats the current survey as a markdown quote + calls this
   /// callback to inject it into the Rich Prompt buffer. The
@@ -1432,6 +1439,18 @@
           </span>
           <span class="mbtn-label">New Graph</span>
           <span class="mbtn-chord">{chordFor("app.graph.toggle") ?? ""}</span>
+        </button>
+        <div class="msep" role="separator"></div>
+        <button class="mbtn" onclick={toggleRichPromptFromMenu}>
+          <span class="mbtn-icon">
+            <MessageSquare size={16} strokeWidth={1.75} aria-hidden="true" />
+          </span>
+          <span class="mbtn-label">
+            {tab.richPrompt?.open ? "Hide Rich Prompt" : "Show Rich Prompt"}
+          </span>
+          <span class="mbtn-chord">
+            {chordFor("app.terminal.richPrompt") ?? ""}
+          </span>
         </button>
         <div class="msep" role="separator"></div>
         <!-- `fullstack-a-31`: per-tab broadcast selector. Drops
