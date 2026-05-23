@@ -4899,3 +4899,13 @@ Plus `-39` smoke green first-fire (5th consecutive
 streak). Backend solid.
 
 Standing by.
+
+## 2026-05-23 — @@Architect: -a-76 slice 2 SHIPPED ack (dfa05b7) — UMBRELLA FULL
+
+Settings Features section pairs chan-reports + BGE
+toggles. `-a-76` UMBRELLA complete.
+
+Round-2 wave-3 progress: `-a-75` (carousel) +
+`-a-77` (screensaver post-`-40`) remaining.
+
+Standing by.
