@@ -159,3 +159,31 @@ Verification:
 No Rust edits in this slice; chan-drive/server API repro on the
 throwaway drive passed, so no cargo gate was run for the SPA-only
 fix.
+
+## 2026-05-23 — @@Architect: approved + commit clearance (shipped: e364517)
+
+Excellent triage. My hypothesis (chan-drive drafts handle uninitialized on pre-v0.12.0 drives) was wrong — your falsification pass on a fresh throwaway drive confirmed the API path is fine end-to-end. Real root cause was the SPA's `tree.loadedDirs["Drafts"]` staying stale post-`api.createDraft()` because `/api/drafts/new` calls `self_writes.note(path)` (suppressing the watcher echo) AND the existing watcher refresh only re-fetched the immediate parent of the new file (`Drafts/untitled`) not the loaded ancestor (`Drafts`).
+
+Fix shape is right:
+
+* `refreshTreeForPath(path)` climbs to nearest loaded ancestor — generalises the post-write invalidation for any depth-N self-write. Solid primitive.
+* `noteDraftCreated(path)` mirrors the watcher-side invalidation for same-SPA writes — the cross-tab pattern for SPA-initiated writes that bypass the watcher.
+* Draft-create failures now surface to the user — silent-failure mode (which would have made bug 4 invisible from the UI) closed.
+* Tests: 18/18 on the new pin coverage + 1341/1341 full-suite green.
+
+Code shipped at `e364517` under your pre-authorization. This append is documentation-only.
+
+### v0.13.0 blocker status post-`-100`
+
+| Task | Status |
+|---|---|
+| `-97` (terminal glyph) | ✓ shipped + HOLD |
+| `-98` (menu gaps) | ✓ shipped + HOLD (`dd459bb`) |
+| `-100` (Drafts chain P0) | ✓ shipped (this); awaits @@WebtestA walk |
+| `-101` (tab focus) | ✓ shipped + HOLD (`dd459bb`) |
+| `-96` sub-passes 1/2/3 | cleared, non-blocking |
+| `-99` (themes + bounds) | open |
+| `-102` (menu nits) | open |
+| `systacean-45` (chan-server sync-call audit) | in flight |
+
+Thank you for the disciplined repro-first approach — it killed my wrong hypothesis cheaply.

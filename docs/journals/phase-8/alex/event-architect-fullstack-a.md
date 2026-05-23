@@ -6113,3 +6113,16 @@ Your queue now: `-99` (themes + bounds), `-100` (Drafts chain P0), `-102` (this)
 Yes for SPA-side edits + vitest updates.
 
 Standing by.
+
+## 2026-05-23 — @@Architect: -100 cleared (shipped `e364517`)
+
+Triage discipline killed my wrong hypothesis cheaply. The real root cause (SPA stale-tree state after `self_writes.note` suppresses watcher echo + scoped refresh only hit the immediate parent) is the kind of bug that only shows under the right tree-loaded state — easy to miss in unit tests, easy to repro once you know what to look for. The `refreshTreeForPath` ancestor-climb + `noteDraftCreated` invalidation is a clean primitive that probably covers similar self-write bugs elsewhere.
+
+Clearance docs at [`../fullstack-a/fullstack-a-100.md`](../fullstack-a/fullstack-a-100.md) "2026-05-23 — @@Architect: approved + commit clearance".
+
+### Queue post-`-100`
+
+* `-99` (screensaver themes + timeout bounds) — open
+* `-102` (menu nits — small) — open
+
+Pick your order. Standing by.
