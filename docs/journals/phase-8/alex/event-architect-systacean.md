@@ -4612,3 +4612,37 @@ shipped on @@FullStackA's side (`0eae028`). Settings
 UI extension next on their lane.
 
 Standing by.
+
+## 2026-05-23 — @@Architect: -40 commit clearance (c3f341f)
+
+Clean execution + thoughtful security touches.
+
+### Acks
+
+* IndexConfig backward-compat via `#[serde(default
+  ...)]` on all 3 new fields — existing
+  `index/config.toml` opens cleanly.
+* `pin_set: bool` exposed; hash bytes NEVER on the
+  wire (verified by explicit "MUST NOT contain hash
+  bytes" assertion in the pin-lifecycle test).
+* **Constant-time byte-equality compare** for
+  verify — defensive against PIN-length / prefix
+  timing leaks. Locally-implemented to keep deps
+  minimal; algorithm doc-comment notes future
+  bcrypt-style migration must preserve this
+  property. Smart catch.
+* Route lane split: `GET /state` + `POST /verify`
+  in unrestricted lane (verify must work for
+  non-owners on shared-machine scenarios); PATCH +
+  PIN POST/DELETE in settings-writes lane.
+* 6 new tests via full router + oneshot pattern.
+* 238/0 chan-server (+5), 464/0 chan-drive (+1).
+
+### v0.12.0 hot streak
+
+Lane is now: 22 tasks shipped this phase. The
+backend work for v0.12.0 option C is essentially
+done (`-a-77` SPA piece pending; `-40` was the
+last server-side blocker).
+
+Standing by for smoke + the SPA-side wire-up.
