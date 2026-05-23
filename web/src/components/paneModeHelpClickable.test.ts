@@ -30,11 +30,11 @@ describe("fullstack-63: PaneModeHelp key-caps are clickable buttons", () => {
   });
 
   test("data carries the dispatch key for every clickable spawn / move / split cap", () => {
-    // `fullstack-a-32` reshaped the Spawn group: numeric 1/2/3/4
-    // caps dropped (duplicated the new Cmd+T/O/P/Shift+M chord
-    // family); letter mnemonics t/o/p/v are the universal in-
-    // Hybrid-NAV path. Other groups (Move, Split, WASD, Commit)
-    // unchanged.
+    // `fullstack-a-68 slice 2` reshaped the Spawn group into a
+    // Stage group: T / O / P / G / E stage additions into the
+    // draft; Enter materializes; Esc discards. `v` no longer
+    // surfaces in the cheatsheet (still aliased in the keymap
+    // for muscle memory).
     expect(paneModeHelp).toContain('key: "ArrowUp"');
     expect(paneModeHelp).toContain('key: "ArrowLeft"');
     expect(paneModeHelp).toContain('key: "ArrowDown"');
@@ -42,33 +42,39 @@ describe("fullstack-63: PaneModeHelp key-caps are clickable buttons", () => {
     expect(paneModeHelp).toContain('key: "t"');
     expect(paneModeHelp).toContain('key: "o"');
     expect(paneModeHelp).toContain('key: "p"');
-    expect(paneModeHelp).toContain('key: "v"');
+    expect(paneModeHelp).toContain('key: "g"');
+    expect(paneModeHelp).toContain('key: "n"');
     expect(paneModeHelp).toContain('key: "Tab"');
     expect(paneModeHelp).toContain('key: "Escape"');
     expect(paneModeHelp).toContain('key: "Enter"');
     expect(paneModeHelp).toContain('key: "h"');
-    // Numeric caps gone.
+    // Numeric caps still gone (pre-`-a-32` cleanup).
     expect(paneModeHelp).not.toMatch(/key:\s*"1"/);
     expect(paneModeHelp).not.toMatch(/key:\s*"2"/);
     expect(paneModeHelp).not.toMatch(/key:\s*"3"/);
     expect(paneModeHelp).not.toMatch(/key:\s*"4"/);
   });
 
-  test("fullstack-a-32: spawn group uses letter mnemonics (t/o/p/v) only", () => {
-    // Single-cap rows per spawn target; chord hint lives on the
-    // top-level chord family (Cmd+T/O/P/Shift+M), not duplicated
-    // in the cheatsheet.
-    expect(paneModeHelp).toMatch(
-      /caps:\s*\[\s*\{\s*label:\s*"t",\s*key:\s*"t"\s*\}\s*\],?\s*action:\s*"Spawn Terminal"/,
+  test("fullstack-a-68 slice 2: spawn group renames to Stage (Enter to commit, Esc to discard)", () => {
+    // Group title surfaces the transactional model; row labels
+    // start with "Stage …".
+    expect(paneModeHelp).toContain(
+      'title: "Stage (Enter to commit, Esc to discard)"',
     );
     expect(paneModeHelp).toMatch(
-      /caps:\s*\[\s*\{\s*label:\s*"o",\s*key:\s*"o"\s*\}\s*\],?\s*action:\s*"Spawn File Browser"/,
+      /caps:\s*\[\s*\{\s*label:\s*"t",\s*key:\s*"t"\s*\}\s*\],?\s*action:\s*"Stage Terminal"/,
     );
     expect(paneModeHelp).toMatch(
-      /caps:\s*\[\s*\{\s*label:\s*"p",\s*key:\s*"p"\s*\}\s*\],?\s*action:\s*"Spawn Rich Prompt"/,
+      /caps:\s*\[\s*\{\s*label:\s*"o",\s*key:\s*"o"\s*\}\s*\],?\s*action:\s*"Stage File Browser"/,
     );
     expect(paneModeHelp).toMatch(
-      /caps:\s*\[\s*\{\s*label:\s*"v",\s*key:\s*"v"\s*\}\s*\],?\s*action:\s*"Spawn Graph"/,
+      /caps:\s*\[\s*\{\s*label:\s*"p",\s*key:\s*"p"\s*\}\s*\],?\s*action:\s*"Stage Smart Prompt Terminal"/,
+    );
+    expect(paneModeHelp).toMatch(
+      /caps:\s*\[\s*\{\s*label:\s*"g",\s*key:\s*"g"\s*\}\s*\],?\s*action:\s*"Stage Graph"/,
+    );
+    expect(paneModeHelp).toMatch(
+      /caps:\s*\[\s*\{\s*label:\s*"n",\s*key:\s*"n"\s*\}\s*\],?\s*action:\s*"Stage New Draft"/,
     );
   });
 });

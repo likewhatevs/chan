@@ -34,11 +34,16 @@ describe("Cmd+K pane mode keymap (fullstack-40 inversion)", () => {
 // commits immediately and routes through the same context-aware
 // helper as the matching top-level chord. `f/F` (Search) and
 // `h/H` (Help) are unchanged.
-describe("Cmd+K pane mode keymap (fullstack-a-32 — mnemonic spawn)", () => {
-  test("v commits a Graph spawn immediately; lowercase f opens the Search overlay", () => {
+describe("Cmd+K pane mode keymap (fullstack-a-68 slice 2 — transactional staging)", () => {
+  test("g / G writes directly to the draft layout (no immediate commit)", () => {
     expect(app).toMatch(
-      /case "v":\s*\n\s*case "V": \{[\s\S]*?paneModeStageSpawn\("graph", resolveSpawnContext\(\)\);[\s\S]*?commitPaneMode\(\);/,
+      /case "g":\s*\n\s*case "G":\s*\n?\s*case "v":\s*\n\s*case "V":[\s\S]*?paneModeOpenGraph\(resolveSpawnContext\(\)\);[\s\S]*?return;/,
     );
+    // v / V kept as legacy aliases — muscle memory protection.
+    expect(app).toMatch(/case "v":\s*\n\s*case "V":[\s\S]*?paneModeOpenGraph/);
+  });
+
+  test("lowercase f opens the Search overlay (commits first)", () => {
     expect(app).toMatch(
       /case "f":[\s\S]*?case "F":[\s\S]*?commitPaneMode\(\);[\s\S]*?searchPanel\.open = true;/,
     );
@@ -48,16 +53,10 @@ describe("Cmd+K pane mode keymap (fullstack-a-32 — mnemonic spawn)", () => {
     expect(app).toContain(
       'case "h":\n      case "H":\n        paneModeHelpVisible = !paneModeHelpVisible;',
     );
-    expect(app).toMatch(
-      /case "h":[\s\S]*?case "H":[\s\S]*?paneModeHelpVisible = !paneModeHelpVisible;\s*\n\s*return;/,
-    );
   });
 
-  test("numeric 1 / 2 / 3 / 4 cases are gone", () => {
-    // `fullstack-a-32`: the four numeric shortcuts dropped in
-    // favour of t/o/p/v + the matching top-level Cmd+T/O/P/
-    // Cmd+Shift+M chords. The dispatcher must not declare them
-    // any more.
+  test("numeric 1 / 2 / 3 / 4 cases stay gone", () => {
+    // pre-`-a-32` cleanup preserved.
     expect(app).not.toMatch(/case "1": \{[\s\S]{0,60}paneModeStageSpawn/);
     expect(app).not.toMatch(/case "2": \{[\s\S]{0,60}paneModeStageSpawn/);
     expect(app).not.toMatch(/case "3": \{[\s\S]{0,60}paneModeStageSpawn/);
@@ -65,37 +64,54 @@ describe("Cmd+K pane mode keymap (fullstack-a-32 — mnemonic spawn)", () => {
   });
 });
 
-describe("Cmd+K pane mode spawn commit (fullstack-a-32)", () => {
-  test("t / T commits a terminal spawn immediately", () => {
-    // `fullstack-a-32`: terminal mnemonic stands alone — the
-    // pre-`-a-32` `case "1"` fall-through is gone.
+describe("Cmd+K pane mode transactional staging (fullstack-a-68 slice 2)", () => {
+  test("t / T stages a terminal write into the draft (no immediate commit)", () => {
     expect(app).toMatch(
-      /case "t":\s*\n\s*case "T": \{[\s\S]*?paneModeStageSpawn\("terminal", resolveSpawnContext\(\)\);[\s\S]*?commitPaneMode\(\);/,
+      /case "t":\s*\n\s*case "T":\s*\n?\s*paneModeOpenTerminal\(resolveSpawnContext\(\)\);\s*\n\s*return;/,
+    );
+    // No commitPaneMode inside the t/T branch.
+    expect(app).not.toMatch(
+      /case "t":\s*\n\s*case "T":\s*\n?\s*paneModeOpenTerminal\(resolveSpawnContext\(\)\);\s*\n\s*commitPaneMode/,
     );
   });
 
-  test("o / O commits a browser spawn immediately + primes browserSelection", () => {
-    // Browser case must call `revealAndSelect` BEFORE
-    // `commitPaneMode()` so the new tab's tree lands already
-    // expanded to + selecting the contextual node.
+  test("o / O stages a browser + primes browserSelection without committing", () => {
     expect(app).toMatch(
-      /case "o":\s*\n\s*case "O": \{[\s\S]*?const ctx = resolveSpawnContext\(\);[\s\S]*?paneModeStageSpawn\("browser", ctx\);[\s\S]*?revealAndSelect\(ctx\.file\);[\s\S]*?revealAndSelect\(ctx\.dir\);[\s\S]*?commitPaneMode\(\);/,
+      /case "o":\s*\n\s*case "O": \{[\s\S]*?const ctx = resolveSpawnContext\(\);[\s\S]*?paneModeOpenBrowser\(ctx\);[\s\S]*?revealAndSelect\(ctx\.file\);[\s\S]*?revealAndSelect\(ctx\.dir\);[\s\S]*?return;\s*\n\s*\}/,
     );
   });
 
-  test("v / V commits a graph spawn immediately + context-aware", () => {
+  test("p / P stages a rich-prompt terminal (no immediate commit, no toggle on existing terminal)", () => {
     expect(app).toMatch(
-      /case "v":\s*\n\s*case "V": \{[\s\S]*?paneModeStageSpawn\("graph", resolveSpawnContext\(\)\);[\s\S]*?commitPaneMode\(\);/,
+      /case "p":\s*\n\s*case "P":\s*\n?\s*paneModeOpenRichPromptTerminal\(resolveSpawnContext\(\)\);\s*\n\s*return;/,
     );
   });
 
-  test("Enter still peeks a staged intent before commit (defensive)", () => {
-    // The mnemonic cases commit on keypress, so the Enter path
-    // rarely sees a staged intent in practice. The peek stays
-    // as defensive code: if a future affordance stages without
-    // committing, Enter still primes `browserSelection`.
+  test("n / N stages a new draft editor onto the focused pane", () => {
     expect(app).toMatch(
-      /case "Enter": \{[\s\S]*?const intent = paneMode\.spawnIntent;[\s\S]*?if \(intent && intent\.kind === "browser"\)[\s\S]*?revealAndSelect\(intent\.ctx\.file\);[\s\S]*?revealAndSelect\(intent\.ctx\.dir\);[\s\S]*?commitPaneMode\(\);/,
+      /case "n":\s*\n\s*case "N":\s*\n?\s*paneModeStageDraftEditor\(\);\s*\n\s*return;/,
+    );
+  });
+
+  test("Enter materializes staged draft editors before commit", () => {
+    expect(app).toMatch(
+      /case "Enter": \{[\s\S]*?materializeStagedDraftEditors\(\);[\s\S]*?commitPaneMode\(\);/,
+    );
+  });
+
+  test("Escape cancels (no materializeStagedDraftEditors call before cancelPaneMode)", () => {
+    // Cancel must run BEFORE materialize would — verify no
+    // materialize call sits between Enter's branch and the
+    // Escape case's cancelPaneMode (i.e. Escape just cancels).
+    expect(app).toMatch(
+      /case "Escape":[\s\S]{0,800}cancelPaneMode\(\);/,
+    );
+    // Sanity: the Escape branch must NOT call
+    // materializeStagedDraftEditors (it's OK to mention it in
+    // a comment for context — only the `()` call form is
+    // forbidden, and only before cancelPaneMode runs).
+    expect(app).not.toMatch(
+      /case "Escape":[\s\S]{0,400}materializeStagedDraftEditors\(\);[\s\S]{0,400}cancelPaneMode\(\);/,
     );
   });
 });
@@ -149,14 +165,29 @@ describe("Cmd+T / O / P / Cmd+Shift+M top-level chords (fullstack-a-32)", () => 
   });
 });
 
-describe("Cmd+K pane mode rich-prompt binding (fullstack-50)", () => {
-  test("p commits the draft and shows/spawns the rich prompt on the focused pane", () => {
-    // Commit-first ordering matches the `4` (new file) path so a
-    // spawned terminal survives any pane-mode rollback; the actual
-    // terminal lookup / spawn lives in
-    // showOrSpawnRichPromptInFocusedPane.
+describe("Cmd+K pane mode rich-prompt binding (fullstack-a-68 slice 2 — retire fullstack-50 toggle)", () => {
+  test("p inside Hybrid Nav stages a smart-prompt terminal (no commit, no toggle on existing)", () => {
+    // pre-`-a-68 slice 2` (`fullstack-50`): `P` committed the
+    // draft + showed/spawned the rich prompt on the focused
+    // pane's existing terminal. Addendum-a's "back to
+    // transactional mode" framing replaces that with a fresh
+    // smart-prompt terminal staged into the draft.
     expect(app).toMatch(
-      /case "p":[\s\S]*?case "P":[\s\S]*?commitPaneMode\(\);[\s\S]*?showOrSpawnRichPromptInFocusedPane\(\);/,
+      /case "p":\s*\n\s*case "P":\s*\n?\s*paneModeOpenRichPromptTerminal\(resolveSpawnContext\(\)\);/,
+    );
+    // The legacy "commit then show" path no longer surfaces
+    // inside the Hybrid Nav P case.
+    expect(app).not.toMatch(
+      /case "p":\s*\n\s*case "P":\s*\n?\s*commitPaneMode\(\);\s*\n[\s\S]{0,200}showOrSpawnRichPromptInFocusedPane/,
+    );
+  });
+
+  test("showOrSpawnRichPromptInFocusedPane still imported (top-level Cmd+P chord uses it)", () => {
+    // The toggle behavior remains reachable from outside
+    // Hybrid Nav via `spawnRichPromptFromContext` →
+    // `showOrSpawnRichPromptInFocusedPane`.
+    expect(app).toMatch(
+      /import \{[\s\S]{1,4000}showOrSpawnRichPromptInFocusedPane,/,
     );
   });
 });

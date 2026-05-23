@@ -64,6 +64,7 @@
     openBrowserInActivePane,
     openFind,
     openInActivePane,
+    openInPane,
     scheduleAutosave,
     flipHybrid,
     selectNextPane,
@@ -78,10 +79,11 @@
     paneModeMoveFocus,
     paneModeOpenBrowser,
     paneModeOpenGraph,
+    paneModeOpenRichPromptTerminal,
     paneModeOpenTerminal,
     paneModeResize,
     paneModeSplit,
-    paneModeStageSpawn,
+    paneModeStageDraftEditor,
     paneModeSwap,
     showOrSpawnRichPromptInFocusedPane,
   } from "./state/tabs.svelte";
@@ -440,12 +442,28 @@
           if (intent.ctx.file) revealAndSelect(intent.ctx.file);
           else if (intent.ctx.dir) revealAndSelect(intent.ctx.dir);
         }
+        // `fullstack-a-68 slice 2`: materialize any staged "new
+        // draft editor" intents BEFORE commitPaneMode promotes
+        // the draft to live. Each staged entry pins the target
+        // paneId at press time; createDraft is async, so we kick
+        // off the round-trip in parallel and let each one open
+        // the resulting file in its pinned pane. Commit doesn't
+        // wait — the draft layout already reflects T / O / P /
+        // G additions, and the new-draft files will land in
+        // their panes when the round-trips resolve.
+        materializeStagedDraftEditors();
         commitPaneMode();
         scheduleSessionSave();
         paneModeHelpVisible = false;
         return;
       }
       case "Escape":
+        // `fullstack-a-68 slice 2`: discard staged drafts. The
+        // T / O / P / G additions live inside the draft layout
+        // and disappear automatically when commitPaneMode does
+        // not run. The Esc path bails before
+        // materializeStagedDraftEditors fires, so no orphan
+        // drafts get created.
         cancelPaneMode();
         paneModeHelpVisible = false;
         return;
@@ -498,47 +516,33 @@
       case "0":
         paneModeEqualize();
         return;
-      // `fullstack-a-32`: Hybrid Nav spawn keys are mnemonic now —
-      // `t` (terminal), `o` (file browser), `p` (rich prompt), `v`
-      // (graph). The pre-`-a-32` numeric `1/2/3/4` cases drop;
-      // they duplicated the top-level Cmd+T / Cmd+O / Cmd+P /
-      // Cmd+Shift+M chord set and added noise to the chord-table.
-      // `4` (new file) had no top-level chord either — accessible
-      // via the FB context menu / plus button per the task spec.
-      //
-      // `fullstack-b-9` introduced `t`/`T` as the terminal alias;
-      // -a-32 extends the pattern with `o/O`, `v/V`. `p/P` was
-      // added by `fullstack-50` and stays. All four commit
-      // immediately (matching `fullstack-a-3`'s "press a digit /
-      // letter = do it now" intent) and route through the same
-      // context-aware spawn helpers the top-level chords use.
+      // `fullstack-a-68 slice 2`: Hybrid Nav T / O / P / G / E
+      // chords STAGE additions into the draft layout instead of
+      // committing immediately. Multiple presses stack — three
+      // T's queue three terminals on the focused pane. Enter
+      // materializes the draft; Esc discards. Per addendum-a's
+      // "back to transactional mode" framing. Pre-`-a-68 slice
+      // 2` behavior (`fullstack-a-32` + `fullstack-50`):
+      // immediate commit on T / O / V / P. `v` stays aliased to
+      // `g` so muscle memory survives the rename.
       case "t":
-      case "T": {
-        paneModeStageSpawn("terminal", resolveSpawnContext());
-        commitPaneMode();
-        scheduleSessionSave();
-        paneModeHelpVisible = false;
+      case "T":
+        paneModeOpenTerminal(resolveSpawnContext());
         return;
-      }
       case "o":
       case "O": {
         const ctx = resolveSpawnContext();
-        paneModeStageSpawn("browser", ctx);
+        paneModeOpenBrowser(ctx);
         if (ctx.file) revealAndSelect(ctx.file);
         else if (ctx.dir) revealAndSelect(ctx.dir);
-        commitPaneMode();
-        scheduleSessionSave();
-        paneModeHelpVisible = false;
         return;
       }
+      case "g":
+      case "G":
       case "v":
-      case "V": {
-        paneModeStageSpawn("graph", resolveSpawnContext());
-        commitPaneMode();
-        scheduleSessionSave();
-        paneModeHelpVisible = false;
+      case "V":
+        paneModeOpenGraph(resolveSpawnContext());
         return;
-      }
       // Search lives in an OverlayShell, not a tab type. Open the
       // overlay outside the transaction so it can capture keyboard
       // input cleanly; commit the draft first so any layout edits
@@ -558,18 +562,30 @@
       case "H":
         paneModeHelpVisible = !paneModeHelpVisible;
         return;
-      // `fullstack-50`: `p` shows the rich prompt on the focused
-      // pane's terminal (or spawns a terminal and shows it there).
-      // Commit the draft first so any layout edits the user shaped
-      // before pressing `p` seal, AND so a freshly-spawned terminal
-      // lands in the live layout (not the draft that Esc could
-      // discard). Cmd+K p is the canonical entry; the rich prompt's
-      // own `×` button (and Esc) is the exit.
+      // `fullstack-a-68 slice 2`: `P` now stages a fresh smart-
+      // prompt terminal (a terminal tab with the rich-prompt
+      // overlay armed open) instead of toggling the overlay on
+      // the focused pane's existing terminal. The pre-`-a-68
+      // slice 2` toggle behavior (`fullstack-50`) is reachable
+      // outside Hybrid Nav via the terminal hamburger / Cmd+P
+      // native chord.
       case "p":
       case "P":
-        commitPaneMode();
-        scheduleSessionSave();
-        showOrSpawnRichPromptInFocusedPane();
+        paneModeOpenRichPromptTerminal(resolveSpawnContext());
+        return;
+      // `fullstack-a-68 slice 2`: `N` stages a new draft editor —
+      // mirrors the top-level Cmd+N "new draft" chord (the
+      // mnemonic the user already has in muscle memory).
+      // Drafts are server-side (`api.createDraft()` mints the
+      // file), so the intent queues onto
+      // `paneMode.stagedDraftEditors` pinned to the pane that
+      // was focused at press time. `materializeStagedDraftEditors`
+      // resolves the queue on Enter commit; Esc bails the queue
+      // before the round-trips fire so no orphan drafts get
+      // created.
+      case "n":
+      case "N":
+        paneModeStageDraftEditor();
         return;
       // `fullstack-69`: Cmd+K < and > toggle the docked file
       // browsers. Mapping per @@Alex's verbatim spec — the arrow
@@ -759,6 +775,29 @@
       await openInActivePane(path);
     } catch (err) {
       console.warn("[chan] createDraft failed", err);
+    }
+  }
+
+  /// `fullstack-a-68 slice 2`: walk the queue of staged "new
+  /// draft editor" intents and resolve each one. Snapshot the
+  /// queue up-front because `commitPaneMode` clears it (the
+  /// callsite calls commit immediately after this returns).
+  /// Each round-trip opens the resulting file in the paneId
+  /// pinned at press time so a focus change mid-Nav doesn't
+  /// redirect the materialization. createDraft + openInPane
+  /// failures log + bail per-entry so one bad draft can't
+  /// poison the rest of the queue.
+  function materializeStagedDraftEditors(): void {
+    const queue = paneMode.stagedDraftEditors.slice();
+    for (const entry of queue) {
+      void (async () => {
+        try {
+          const { path } = await api.createDraft();
+          await openInPane(entry.paneId, path);
+        } catch (err) {
+          console.warn("[chan] paneMode stagedDraftEditor failed", err);
+        }
+      })();
     }
   }
   onMount(() => document.addEventListener("keydown", onWindowKey));

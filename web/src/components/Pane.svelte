@@ -19,6 +19,7 @@
     paneMode,
     paneModeSetGrab,
     paneModeSetHover,
+    paneModeStagedTabIds,
     paneModeSwapWith,
     paneWobble,
     reorderTab,
@@ -377,6 +378,14 @@
       paneMode.grabPaneId !== pane.id &&
       paneMode.hoverPaneId === pane.id,
   );
+
+  /// `fullstack-a-68 slice 2`: ids of tabs added by the T/O/P/G/E
+  /// chords during the current pane-mode session. Each entry is
+  /// a "ghost tab" — visible in the draft layout but not yet
+  /// committed to the live one. Empty when pane mode is inactive.
+  /// Derived so the tab strip rerenders the dimmed class as
+  /// chords land and as commit / cancel clear the set.
+  const paneModeStagedSet = $derived(paneModeStagedTabIds());
 
   /// `fullstack-59`: per-Hybrid theme override. Click on the
   /// Hybrid chrome's theme button cycles between "follow global"
@@ -947,6 +956,7 @@
       <div
         class="tab"
         class:active={t.id === pane.activeTabId}
+        class:staged={paneModeStagedSet.has(t.id)}
         onmousedown={() => {
           // Stash the pre-switch active tab id so the onclick handler
           // can tell whether this is a tab-switch (do NOT pop the
@@ -1555,6 +1565,21 @@
     color: var(--text);
     font-weight: 500;
     box-shadow: 0 0 0 1px var(--border);
+  }
+  /* `fullstack-a-68 slice 2`: ghost tab styling for the T/O/P/G/E
+     spawn staging inside Hybrid Nav. Tabs added to the draft
+     layout but not yet committed render with a dashed border +
+     reduced opacity so the user can scan the staged additions
+     before pressing Enter to materialize. Class lifts on commit
+     (set is empty) or on cancel (whole tab removed with the
+     draft). */
+  .tab.staged {
+    opacity: 0.65;
+    border: 1px dashed var(--border);
+    background: transparent;
+  }
+  .tab.staged.active {
+    opacity: 0.85;
   }
   /* CSS-only spinner shown while a tab's content is loading. Inherits
      color from the tab's text-secondary so it sits at the same

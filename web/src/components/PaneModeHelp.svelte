@@ -66,21 +66,19 @@
       ],
     },
     {
-      // `fullstack-a-32`: numeric 1/2/3/4 caps dropped — they
-      // duplicated the new top-level chord set
-      // (Cmd+T / Cmd+O / Cmd+P / Cmd+Shift+M, with
-      // Cmd+Alt+<letter> as the web-Mac fallback). The letter
-      // mnemonics t / o / p / v are the universal in-Hybrid-NAV
-      // path and the only spawn affordance the cheatsheet
-      // surfaces now; each commits immediately ("Spawn …" is
-      // the verb on the keypress). `f` keeps Search; new-file
-      // is reachable via the FB context menu / plus button.
-      title: "Spawn",
+      // `fullstack-a-68 slice 2`: spawn chords STAGE additions
+      // into the draft layout. Multiple presses stack — three
+      // T's queue three terminals on the focused pane. Enter
+      // materializes; Esc discards. Per addendum-a's "back to
+      // transactional mode" framing. `v` stays aliased to `g`
+      // so muscle memory survives the V→G rename.
+      title: "Stage (Enter to commit, Esc to discard)",
       rows: [
-        { caps: [{ label: "t", key: "t" }], action: "Spawn Terminal" },
-        { caps: [{ label: "o", key: "o" }], action: "Spawn File Browser" },
-        { caps: [{ label: "p", key: "p" }], action: "Spawn Rich Prompt" },
-        { caps: [{ label: "v", key: "v" }], action: "Spawn Graph" },
+        { caps: [{ label: "t", key: "t" }], action: "Stage Terminal" },
+        { caps: [{ label: "o", key: "o" }], action: "Stage File Browser" },
+        { caps: [{ label: "p", key: "p" }], action: "Stage Smart Prompt Terminal" },
+        { caps: [{ label: "g", key: "g" }], action: "Stage Graph" },
+        { caps: [{ label: "n", key: "n" }], action: "Stage New Draft" },
         { caps: [{ label: "f", key: "f" }], action: "Search overlay" },
       ],
     },

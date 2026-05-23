@@ -720,6 +720,12 @@ export const paneMode = $state<{
   transactionMode: boolean;
   grabPaneId: string | null;
   hoverPaneId: string | null;
+  /// `fullstack-a-68 slice 2`: queue of "new draft editor"
+  /// intents staged during the current pane-mode session.
+  /// Materialised on Enter (commit); discarded on Esc (cancel).
+  /// Each entry pins the target paneId at press time so
+  /// later focus changes don't redirect the materialization.
+  stagedDraftEditors: { paneId: string }[];
 }>({
   active: false,
   draft: null,
@@ -727,6 +733,7 @@ export const paneMode = $state<{
   transactionMode: false,
   grabPaneId: null,
   hoverPaneId: null,
+  stagedDraftEditors: [],
 });
 
 /// Single-fire wobble bus. Each pane's entry holds a monotonic
@@ -1923,6 +1930,7 @@ export function enterPaneMode(): void {
   paneMode.transactionMode = false;
   paneMode.grabPaneId = null;
   paneMode.hoverPaneId = null;
+  paneMode.stagedDraftEditors = [];
 }
 
 /// `fullstack-a-44`: mouse-driven NAV entry. `grabPaneId` is the pane
@@ -1981,6 +1989,7 @@ export function commitPaneMode(): void {
   paneMode.transactionMode = false;
   paneMode.grabPaneId = null;
   paneMode.hoverPaneId = null;
+  paneMode.stagedDraftEditors = [];
 }
 
 export function cancelPaneMode(): void {
@@ -1990,6 +1999,7 @@ export function cancelPaneMode(): void {
   paneMode.transactionMode = false;
   paneMode.grabPaneId = null;
   paneMode.hoverPaneId = null;
+  paneMode.stagedDraftEditors = [];
 }
 
 /// `fullstack-72`: stage a tab spawn for commit. Replaces any
@@ -2306,6 +2316,98 @@ export function paneModeOpenGraph(ctx?: SpawnContext): void {
   };
   p.tabs.push(tab);
   p.activeTabId = tab.id;
+}
+
+/// `fullstack-a-68 slice 2`: Hybrid Nav transactional staging.
+/// Cmd+K mode `P`. Spawn a fresh "smart prompt" terminal inside
+/// the draft's focused pane — a regular terminal tab with the
+/// rich-prompt overlay armed open + focused on first mount. The
+/// pre-`fullstack-a-68 slice 2` Cmd+K P semantic (toggle the
+/// rich-prompt overlay on the focused pane's existing terminal)
+/// retired with the addendum-a transactional rework; the rich-
+/// prompt overlay is still reachable from the terminal's own
+/// hamburger / `Cmd+P` (native) chord.
+export function paneModeOpenRichPromptTerminal(ctx?: SpawnContext): void {
+  const draft = draftLayout();
+  if (!draft) return;
+  const p = draft.nodes[draft.activePaneId];
+  if (!p || p.kind !== "leaf") return;
+  const cwd = ctx?.dir?.trim();
+  const tab: TerminalTab = {
+    kind: "terminal",
+    id: id("term"),
+    title: nextTerminalTitle(),
+    createdAt: Date.now(),
+    broadcastEnabled: false,
+    broadcastTargetIds: [],
+    mcpEnv: true,
+    sessionMcpEnv: undefined,
+    terminalSessionId: undefined,
+    controlledTerminal: undefined,
+    lastSeq: undefined,
+    cwd: cwd || undefined,
+    seedInput: undefined,
+    richPrompt: {
+      buffer: "",
+      heightPx: 320,
+      open: true,
+      mode: "wysiwyg",
+      focusNonce: 1,
+    },
+  };
+  p.tabs.push(tab);
+  p.activeTabId = tab.id;
+}
+
+/// `fullstack-a-68 slice 2`: stage a "new draft editor" intent
+/// onto the currently-focused pane. Materialization is async
+/// (needs `api.createDraft()` to mint the file), so the intent
+/// queues up to commit-time. Multiple presses queue multiple
+/// staged drafts, each targeting the pane that was focused at
+/// the time of the press.
+///
+/// `paneModeMaterializeStagedDrafts()` is the commit-time
+/// resolver — it walks the queue, creates each draft, and
+/// inserts the matching `FileTab` into the appropriate pane
+/// in the draft layout before the standard commitPaneMode
+/// promotes the draft to live state.
+export interface StagedDraftEditor {
+  paneId: string;
+}
+export function paneModeStageDraftEditor(): void {
+  if (!paneMode.active || !paneMode.draft) return;
+  const paneId = paneMode.draft.activePaneId;
+  paneMode.stagedDraftEditors.push({ paneId });
+}
+
+/// `fullstack-a-68 slice 2`: stage a tab that was added to the
+/// draft layout via paneModeOpen* during pane mode. The set
+/// tracks tab ids that exist in the draft but not in the live
+/// layout; consumers (Pane.svelte's tab strip) render these as
+/// dimmed "ghost rows" while pane mode is open. `commitPaneMode`
+/// clears the set as part of the standard teardown.
+///
+/// Walks the draft layout vs the live layout to derive the set
+/// fresh; cheaper to recompute than to maintain a parallel index
+/// since the number of tabs is small + the set is consumed only
+/// during render.
+export function paneModeStagedTabIds(): Set<string> {
+  if (!paneMode.active || !paneMode.draft) return new Set();
+  const live = new Set<string>();
+  for (const node of Object.values(layout.nodes)) {
+    if (node.kind === "leaf") {
+      for (const t of node.tabs) live.add(t.id);
+    }
+  }
+  const staged = new Set<string>();
+  for (const node of Object.values(paneMode.draft.nodes)) {
+    if (node.kind === "leaf") {
+      for (const t of node.tabs) {
+        if (!live.has(t.id)) staged.add(t.id);
+      }
+    }
+  }
+  return staged;
 }
 
 /// Move a tab from one pane to another. If `toIndex` is omitted the tab
