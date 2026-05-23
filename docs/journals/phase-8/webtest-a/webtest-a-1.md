@@ -6096,3 +6096,107 @@ Lane-A test server torn down:
 
 8/8 HOLD across all 3 batch items. Queue
 empties on lane-A side — moving to stand-down.
+
+## 2026-05-23 — autonomous batch #2: -a-67 d/e/f right-click revamps + -a-68 slice 2 Hybrid Nav (4/4 HOLD)
+
+Per BATCH DISPATCH re-engage: 4 new lane-A landings.
+HEAD `ca5c173`; fresh-binary discipline. Throwaway
+drive r38; chan serve 127.0.0.1:8787; Chrome MCP
+tab `503726187`.
+
+### Verdicts (4/4 HOLD)
+
+| Task | Verdict |
+|------|---------|
+| `-a-67d` Terminal right-click revamp | HOLD |
+| `-a-67e` FB right-click revamp | HOLD |
+| `-a-67f` Editor right-click revamp | HOLD |
+| `-a-68 slice 2` Hybrid Nav transactional T/O/P/G/N | HOLD |
+
+### `-a-67d` Terminal right-click HOLD
+
+Spawned Terminal-1 → right-click. Menu shows
+addendum-a spec:
+- **Name** field with "Terminal-1" + connected
+  status "175x36"
+- **Set MCP env vars** (checked) + Show MCP env
+  in terminal + **Restart** (red)
+- **Find / Copy / Paste / Copy path to $CWD /
+  Copy Scrollback**
+- **from $cwd** section: New File, New Terminal
+  (Cmd+Alt+T), New File Browser (Cmd+Alt+O),
+  New Graph (Cmd+Shift+M)
+- **broadcast input on/off** with Select All +
+  per-tab checkbox (Terminal-1 self)
+- Settings (Cmd+,) + Reopen Closed Tab (Ctrl+Alt+T)
+  + Close (Ctrl+D)
+
+Substantial revamp; all addendum-a items present.
+
+### `-a-67e` FB right-click HOLD
+
+Right-clicked a FB row. Menu shows:
+- "from selection" section header
+- **Search / New Terminal / New Graph**
+- divider
+- **Copy Path / Rename / Move / Delete** (red)
+
+Selection-aware menu with sensible defaults.
+
+### `-a-67f` Editor right-click HOLD
+
+Opened CLAUDE.md in editor → right-click. Menu
+shows:
+- **Page width** slider (80%)
+- **name** field with "CLAUDE.md"
+- **Show Source Code / Collapse Code Blocks**
+- **Show Outline / Show Details / Show Style
+  Toolbar**
+- **Highlight trailing whitespace / Remove
+  trailing whitespace**
+- **Search / Find / Copy path to file / Copy
+  path to $CWD / Reload from Disk**
+- **from $cwd**: Duplicate File / New File / New
+  Terminal / New File Browser / New Graph
+- Settings + Reopen Closed Tab + Close
+
+Comprehensive editor surface per addendum-a.
+
+### `-a-68 slice 2` Hybrid Nav transactional HOLD
+
+Cmd+. entered Hybrid Nav mode. Status bar shows:
+**"Hybrid ☯ Enter commit, Esc discard, H help"**
+
+Pressed `n` (New Draft). Staging is silent (no
+visible pill).
+
+Pressed Enter → committed → new `draft.md` tab
+opened in `Drafts/untitled/draft.md`. Tabs went
+from 3 → 4 with the new draft.
+
+The transactional pattern works: stage with
+T/O/P/G/N, commit with Enter, discard with Esc.
+
+### Highlights
+
+* **3 right-click revamps land per addendum-a
+  spec**: Terminal/FB/Editor surfaces are now
+  fully consistent with the spec'd shape.
+* **Hybrid Nav transactional staging**: prevents
+  accidental spawn-on-keypress; Enter is the
+  explicit commit gesture.
+* **Fresh-binary discipline applied**: pkill +
+  cargo build + verify provenance + restart. No
+  false-positives.
+
+### State at end of walk
+
+Lane-A test server torn down:
+1. chan serve killed.
+2. `rm -rf /tmp/chan-test-phase8-wa-r38/`.
+3. `chan remove` → unregistered.
+4. Chrome MCP tab closed.
+5. Drafts metadata cleaned.
+
+4/4 HOLD. -a-67 + -a-68 UMBRELLAS empirically
+closed.

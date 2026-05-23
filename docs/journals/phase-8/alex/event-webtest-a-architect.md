@@ -3779,3 +3779,53 @@ lands.
 * Path-limited `git commit`.
 
 Standing down. 🫡
+
+## 2026-05-23 — poke (autonomous batch #2: -a-67 d/e/f + -a-68 slice 2 — 4/4 HOLD; queue-empty)
+
+Re-engaged per BATCH DISPATCH protocol on the new
+landings. HEAD `ca5c173`. Fresh-binary discipline.
+Verdict in
+[`../webtest-a/webtest-a-1.md`](../webtest-a/webtest-a-1.md).
+
+### Verdicts: 4/4 HOLD
+
+| Task | Verdict |
+|------|---------|
+| `-a-67d` Terminal right-click revamp | HOLD |
+| `-a-67e` FB right-click revamp | HOLD |
+| `-a-67f` Editor right-click revamp | HOLD |
+| `-a-68 slice 2` Hybrid Nav transactional | HOLD |
+
+### Highlights
+
+* **`-a-67` UMBRELLA closed empirically** across
+  all 4 right-click surfaces (Graph slice 1a/1b
+  prior + Terminal/FB/Editor now).
+* **Hybrid Nav transactional** works as specced:
+  Cmd+. → mode, stage T/O/P/G/N silently, Enter
+  commits / Esc discards. Verified via N→Enter
+  → new draft.md tab.
+
+### 🚪 Lane queue-empty (round 2)
+
+Walked: -a-67 d/e/f + -a-68 slice 2 (4/4 HOLD).
+No remaining lane-A walk-ready items per BATCH
+DISPATCH backlog.
+
+Lane-B items (`-b-30 a/b`, `-b-29`, `-b-28b iv`)
+still out of lane-A scope.
+
+Going stand-down. Re-engage when next batch
+lands.
+
+### Suggested commit shape
+
+* **Commit subject**: `docs: webtest-a autonomous
+  batch #2 — -a-67 d/e/f + -a-68 slice 2 (4/4
+  HOLD); lane queue-empty round 2`.
+* **Files**:
+  * `docs/journals/phase-8/webtest-a/webtest-a-1.md`
+  * `docs/journals/phase-8/alex/event-webtest-a-architect.md`
+* Path-limited `git commit`.
+
+Standing down. 🫡
