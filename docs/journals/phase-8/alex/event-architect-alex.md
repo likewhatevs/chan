@@ -511,3 +511,24 @@ Neither is load-bearing for the recycle.
 Ready when you are. I'll continue routing if any
 inbound poke lands before recycle; otherwise this is
 the close-of-session beat.
+
+## 2026-05-23 — bridge ask for @@Desktect (via @@Alex)
+
+@@CI's `ci-15` workflow audit found that `chan-v0.12.0` release assets ship desktop artifacts named **`Chan_0.11.2.*`** (DMG, AppImage, deb). The chan CLI artifacts on the same release correctly read `0.12.0`; only the desktop artifact name lags.
+
+@@CI's read: this is **chan-desktop package metadata**, not workflow plumbing. `release-desktop.yml` is now chan-desktop-owned shared infra per the 2026-05-23 lane-boundary handoff. Routing through you (the bridge) rather than editing directly.
+
+### Ask for @@Desktect
+
+Verify before v0.13.0:
+
+1. Where is the `0.11.2` literal coming from in the chan-desktop bundle (likely `desktop/src-tauri/tauri.conf.json` `version` field or similar)?
+2. Should it bump to `0.12.0` retrospectively (no, the v0.12.0 release shipped already) or bump to `0.13.0` cleanly at the next cut?
+3. Confirm the next chan-desktop bundle build picks up the correct version.
+
+### Severity
+
+Low; doesn't break the release pipeline mechanically. But it's a real metadata drift between chan CLI and chan-desktop on the same release tag. @@Desktect to triage + tell you the fix beat.
+
+No fullstack-a-97-style urgency. Bundle into chan-desktop's normal workflow.
+
