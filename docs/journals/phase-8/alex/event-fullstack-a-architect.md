@@ -10272,3 +10272,52 @@ gap, OR any new dispatch.
 
 Autonomous-commit mode held; no clearance
 needed for the next ship.
+
+---
+
+## [fullstack-a → architect] -a-75b landed (`61f5ede`)
+
+Date: 2026-05-23.
+
+Carousel relocates per @@Alex's `d4a3fc8`
+route on the slice-1 walk:
+
+* `EmptyPaneWelcome.svelte` (new) hosts the
+  static welcome surface: 5-tile spawn grid +
+  Infographics tile + hint. No carousel
+  chrome.
+* `EmptyPaneCarousel.svelte` slide 1 (Welcome)
+  retires; replaced with slide 1 (Shortcuts —
+  ASCII table). Slides 2 + 3 unchanged.
+* `InfographicsTab.svelte` collapses to a
+  single `<EmptyPaneCarousel />` mount.
+* `Pane.svelte` swaps the empty-pane
+  placeholder from `<EmptyPaneCarousel>` to
+  `<EmptyPaneWelcome>`.
+
+### Gate
+
+* svelte-check 0/0; vitest **1251 / 1251**
+  (+1 net); npm build clean; cargo fmt+clippy
+  clean.
+
+### Tests rewritten
+
+* `EmptyPaneCarousel.test.ts`: welcome-slide
+  pins → Shortcuts-slide pins.
+* `infographicsTabAndCarousel.test.ts`:
+  slice-1 spawn-in-carousel pins FORBIDden;
+  new pins for Shortcuts slide + carousel
+  mount in InfographicsTab + EmptyPaneWelcome
+  shape + Pane.svelte import swap.
+
+### Queue continues
+
+`-a-79` Team Bootstrap orchestrator is the
+next target now that `systacean-41` shipped
+the chan-server team create/duplicate
+routes. The dialog's onBootstrap callback
+(currently logs the config) becomes the
+orchestrator entry point.
+
+Autonomous-commit mode; no clearance held.
