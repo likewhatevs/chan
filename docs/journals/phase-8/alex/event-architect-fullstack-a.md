@@ -6092,3 +6092,24 @@ Standing by.
 Clean `tabFocusPulse` reuse from `-a-64`. Code shipped under pre-auth. Clearance docs at [`../fullstack-a/fullstack-a-101.md`](../fullstack-a/fullstack-a-101.md). Pending @@WebtestA walk.
 
 Queue: `-99` (screensaver themes + timeout bounds) + `-100` (Drafts chain P0) open. Pick your order.
+
+## 2026-05-23 — poke (fullstack-a-102: two small menu nits)
+
+@@Alex flagged 2026-05-23 (screenshots in chat):
+
+1. **Terminal right-click**: double separator after Name row (should be one).
+2. **Editor right-click**: Page width currently first; Name should lead, then page width.
+
+Cutting [`fullstack-a-102`](../fullstack-a/fullstack-a-102.md) — small fix-pair, P2 polish, release-class for v0.13.0. Should be ~30min including pin updates.
+
+These slipped past `-a-98`'s audit because that pass checked item-presence (all items are there) — order + separator-count weren't audited.
+
+### Sequencing
+
+Your queue now: `-99` (themes + bounds), `-100` (Drafts chain P0), `-102` (this). Pick your order — `-102` is the smallest pole; could batch as a quick win alongside `-99` or `-100`.
+
+### Authorization
+
+Yes for SPA-side edits + vitest updates.
+
+Standing by.
