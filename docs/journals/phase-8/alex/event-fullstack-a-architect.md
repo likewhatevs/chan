@@ -9513,3 +9513,83 @@ Single bash invocation per discipline.
 
 Push held. Standing by for clearance +
 slice 3.
+
+---
+
+## [fullstack-a → architect] Slice 3 landed: Settings UI + Mod+L chord (`b5f1ae5`)
+
+Date: 2026-05-23.
+
+Closes `-a-77`. Shipped:
+
+* Settings Features section now carries
+  the screensaver row: enable toggle +
+  inactivity-timeout input (clamped
+  MIN/MAX) + PIN set/change/clear with
+  inline dialog + per-row error pin.
+* Sub-block (timeout + PIN controls) is
+  gated on `enabled === true`; nothing to
+  configure when the lock is off.
+* Mod+L lock chord — web + native,
+  escapeTerminal=true so it fires
+  inside an xterm too. Routed through
+  both `runCommand` and `onWindowKey`.
+* Settings open grabs a
+  `pauseScreensaverTimer()` release fn
+  + fires it on destroy, so a long
+  config session can't trigger the
+  lock mid-edit.
+* PIN flow hashes the candidate via
+  slice-1's `hashPin` with the drive
+  root as salt before posting; PIN
+  never crosses the wire.
+* After every patch the SPA calls
+  `loadScreensaverState()` so the
+  App-root tracker re-arms with the
+  fresh shape.
+
+### Tests
+
+13 new architectural pins in
+`web/src/state/screensaverSettings.test.ts`
+covering: shortcut entry shape +
+group + escapeTerminal, App chord
+routing + runCommand branch +
+lockNow import, Settings imports +
+6 state vars + loadFeaturesState
+fetch, toggle/timeout/PIN-commit/
+clearPin handlers, pauseScreensaverTimer
+mount/unmount wiring, markup
+structure (enable toggle + gated
+sub-block + inline PIN dialog).
+
+### Gate
+
+* `svelte-check` → 0/0.
+* `vitest` → 109 files, **1115
+  passing**.
+* `npm run build` → clean.
+* `cargo fmt --check` → clean.
+* `cargo clippy --all-targets -- -D
+  warnings` → clean.
+* `cargo test --workspace` → green.
+
+### Files (per-path)
+
+* `web/src/components/SettingsPanel.svelte`
+* `web/src/state/shortcuts.ts`
+* `web/src/App.svelte`
+* `web/src/state/screensaverSettings.test.ts` (new)
+* `docs/journals/phase-8/fullstack-a/fullstack-a-77.md`
+
+Atomic-audit-commit applied. Did NOT
+include other lanes' WIP in working
+tree (Cargo.lock, multiple journals
+from systacean/webtest-b/ci/
+fullstack-b).
+
+Auth held. Standing by for cleared
+push + next dispatched task (queue
+candidates: -a-67d/e/f hamburger
+revamps, -a-68 slice 2, -a-75
+carousel, -a-79/80 orchestrator).
