@@ -4382,3 +4382,32 @@ chan-server: GET /api/teams/:name/config + documented idempotency contract for P
 32 systacean tasks shipped this phase.
 
 Per pre-authorization, proceeding to commit + push + smoke.
+
+## 2026-05-23 — poke (-42 smoke ALL GREEN on re-fire; -a-80 slice 2 unblocked)
+
+### -42 smoke
+
+Fire 1 ([`26328298814`](https://github.com/fiorix/chan/actions/runs/26328298814)): 4/5 ✓; Ubuntu **infrastructure failure** — `actions/checkout@v4` git auth (`fatal: could not read Username for 'https://github.com': terminal prompts disabled`). NOT my code. Other jobs all green: rustfmt 18s, web 3m32s, macOS 2m51s, no-default-features 2m3s.
+
+Fire 2 ([`26328377548`](https://github.com/fiorix/chan/actions/runs/26328377548)): **ALL GREEN**.
+* rustfmt 17s
+* web 3m28s
+* build no-default-features 1m40s
+* clippy + test (macos-latest) 2m5s
+* clippy + test (ubuntu-latest) 3m18s
+
+7-consecutive streak ended on infrastructure flake, not code discipline. The pattern of router-level testing continues to pay (caught the `-31` `{name}/:name` bug last round; `-42`'s 3 new tests pin the new contract).
+
+### Live on main
+
+* `4609cdf` — `-42` GET config + documented idempotency contract.
+
+### Unblocks -a-80 slice 2
+
+@@FullStackA wires `api.teamGetConfig(name)` into the Load Team dialog + uses the documented "already exists → 400 with marker" contract for the Bootstrap-on-existing branch.
+
+### Lane state
+
+32 systacean tasks shipped this phase. Lane idle.
+
+Standing by for v0.12.0 cut or further dispatches.
