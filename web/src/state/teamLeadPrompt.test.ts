@@ -27,7 +27,7 @@ describe("fullstack-a-79 slice 2: tabs.svelte helpers", () => {
   });
 });
 
-describe("fullstack-a-79 slice 2: orchestrator step 4 (lead prompt)", () => {
+describe("fullstack-a-79 slice 2: orchestrator step 5 (lead prompt — renumbered by slice 3's template-placement insert)", () => {
   test("orchestrator imports the two new helpers from tabs.svelte", () => {
     expect(orchestrator).toMatch(
       /import \{[\s\S]{1,400}findTerminalBySession,[\s\S]{1,200}openTerminalInActivePane,[\s\S]{1,200}primeTerminalRichPrompt,[\s\S]{1,80}\} from "\.\/tabs\.svelte";/,
@@ -36,7 +36,7 @@ describe("fullstack-a-79 slice 2: orchestrator step 4 (lead prompt)", () => {
 
   test("lead-prompt step runs AFTER the worker spawn loop + gated on hostSessionId", () => {
     expect(orchestrator).toMatch(
-      /\/\/ 3\. Spawn worker terminals[\s\S]{1,4000}\/\/ 4\. Deliver the identity prompt to the lead's terminal[\s\S]{1,2000}if \(hostSessionId\) \{[\s\S]{1,400}const leadTab = findTerminalBySession\(hostSessionId\);[\s\S]{1,400}if \(leadTab\) primeTerminalRichPrompt\(leadTab, prompt\);/,
+      /\/\/ 4\. Spawn worker terminals[\s\S]{1,4000}\/\/ 5\. Deliver the identity prompt to the lead's terminal[\s\S]{1,2000}if \(hostSessionId\) \{[\s\S]{1,400}const leadTab = findTerminalBySession\(hostSessionId\);[\s\S]{1,400}if \(leadTab\) primeTerminalRichPrompt\(leadTab, prompt\);/,
     );
   });
 

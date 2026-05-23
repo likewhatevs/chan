@@ -433,3 +433,156 @@ Team orchestrator slice 2: lead identity prompt via rich-prompt buffer (fullstac
 * `docs/journals/phase-8/fullstack-a/fullstack-a-79.md`
 
 Autonomous-commit mode. No clearance held.
+
+## 2026-05-23 — slice 3 (process-template placement via vite ?raw)
+
+SPA-only. Architect routed delivery shape on
+2026-05-23: vite `?raw` ships the templates with
+the SPA build; no chan-server endpoint, no
+network round-trip on bootstrap. Builds on
+`-a-81`'s parameterised templates +
+`substituteTeamTemplate` helper.
+
+### Shape applied
+
+**Vite config**
+
+* `server.fs.allow: [".", ".."]` lets the
+  parent-dir traversal resolve when importing
+  `../../../docs/templates/team-process/
+  bootstrap.md.tpl?raw`. Default
+  `server.fs.strict: true` would otherwise
+  block.
+
+**Type declarations**
+
+* `raw.d.ts`: declared `*.tpl?raw` + `*.md?raw`
+  modules so the new bundled imports
+  type-check.
+
+**Orchestrator additions**
+
+* `templateVarsForWire(wire) → TeamTemplateVars`
+  — derives `hostHandle` (from `wire.host_handle`),
+  `leadHandle` (from the member flagged
+  `is_lead`, falling back to `host_handle`),
+  `workerHandles` (non-lead members in declared
+  order), `teamName` (from `wire.team_name`).
+  Phase-slug omitted — chan-drive's TeamConfig
+  doesn't persist one today; `teamTemplate.ts`'s
+  default of `phase-1` is the new-team
+  baseline.
+* `placeTeamTemplates(wire)` — substitutes the
+  bundled `bootstrapTemplate` via
+  `substituteTeamTemplate` + writes to
+  `Drafts/team-{name}/docs/bootstrap.md` via
+  `api.create`. The docs/ subdir already exists
+  (`Drive::create_team` materializes
+  team-{name}/{config.toml, events/, docs/} in
+  step 1).
+* `runTeamBootstrap` chain reshape: steps
+  renumbered (1: teamCreate, 2:
+  placeTeamTemplates, 3: teamLoad, 4: spawn
+  worker terminals, 5: lead identity prompt).
+  Template-placement failures don't bail the
+  chain — caught + reported via notify so the
+  watcher load + worker spawn still bring up
+  a working team.
+
+### Why placement before watcher load
+
+The team watcher polls `team-{name}/events/`
+not `docs/`, so step ordering between
+placement + load doesn't materially affect the
+watcher. The architect's task body lists
+template placement as step 2 (right after
+config persistence) per readability — agents
+read the bootstrap doc on their first
+read-on-spawn, so having the file in place
+before the watcher fires keeps the user-flow
+sequencing intuitive.
+
+### Files touched
+
+* `web/vite.config.ts`
+  * `server.fs.allow: [".", ".."]`.
+* `web/src/raw.d.ts`
+  * `*.tpl?raw` + `*.md?raw` module
+    declarations.
+* `web/src/state/teamOrchestrator.svelte.ts`
+  * `bootstrapTemplate` raw import.
+  * `substituteTeamTemplate` /
+    `TeamTemplateVars` import from
+    `./teamTemplate`.
+  * `templateVarsForWire` + `placeTeamTemplates`
+    exports.
+  * `runTeamBootstrap` step 2 insert + step
+    renumbering.
+* `web/src/components/teamBootstrapOrchestrator.test.ts`
+  * Chain-walk pin updated to include the new
+    placement step between teamCreate and
+    teamLoad.
+* `web/src/state/teamLeadPrompt.test.ts`
+  * Step-number pin renumbered from 3/4 to
+    4/5.
+* `web/src/state/teamTemplatePlacement.test.ts`
+  (new) — 8 architectural pins for the
+  bundle import + vite fs.allow + the two
+  new helpers + the chain wiring + the
+  defensive error handling.
+
+### Decisions
+
+* **vite ?raw not chan-server endpoint** —
+  architect's routed shape. Trade-off: SPA
+  rebuild needed when templates change.
+  Acceptable for v0.12.0.
+* **Non-fatal placement failure** — the watcher
+  load + worker spawn still produce a working
+  team if api.create fails (e.g. permission
+  hiccup). Notify the user so they can re-run
+  manually if needed.
+* **No phase-slug surfacing** — chan-drive
+  doesn't persist one; new teams default to
+  `phase-1` via `teamTemplate.ts`'s helper.
+  Chan-internal substitution (`phase-8`) lives
+  in `CHAN_INTERNAL_TEAM_VARS`, not this
+  orchestrator's path.
+
+### Remaining deferred (slice 4+)
+
+* Lead pre-flight survey trigger.
+* Split-pane real estate (paneSplit + per-
+  cell assignment).
+* `dispatch_agent_event`-driven identity
+  prompts (closes @@WebtestA's seedInput-
+  visibility note).
+
+### Gate
+
+* `svelte-check` → 0/0.
+* `vitest` → **1314 / 1314** (+9 from `-a-80`
+  slice 2's 1305; 8 new pins + the 2 fixed
+  pins for step renumbering, net +9 due to
+  one slice-2 pin overlap).
+* `npm run build` → clean.
+* `cargo fmt --check` + `clippy --all-targets
+  -- -D warnings` → clean (no Rust delta).
+
+### Suggested commit subject
+
+```
+Team orchestrator slice 3: process-template placement via vite ?raw (fullstack-a-79 slice 3)
+```
+
+### Files (per-path)
+
+* `web/vite.config.ts`
+* `web/src/raw.d.ts`
+* `web/src/state/teamOrchestrator.svelte.ts`
+* `web/src/components/teamBootstrapOrchestrator.test.ts`
+* `web/src/state/teamLeadPrompt.test.ts`
+* `web/src/state/teamTemplatePlacement.test.ts` (new)
+* `docs/journals/phase-8/fullstack-a/fullstack-a-79.md`
+
+Autonomous-commit mode. No clearance held.

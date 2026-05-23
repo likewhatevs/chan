@@ -22,6 +22,16 @@ export default defineConfig({
   plugins: [svelte()],
   server: {
     port: 5173,
+    // `fullstack-a-79` slice 3: allow vite to serve files from the
+    // chan repo root + the docs/templates/ tree. The team
+    // orchestrator imports `docs/templates/team-process/*.tpl?raw`
+    // to bundle the process docs into the SPA build at compile
+    // time (architect-routed delivery shape: vite `?raw`, no
+    // chan-server endpoint). Without this `fs.allow`, vite's
+    // default `fs.strict` blocks the parent-dir traversal.
+    fs: {
+      allow: [".", ".."],
+    },
     // While iterating, proxy API + WS to a `md serve` instance so we get
     // the real backend without rebuilding the binary on every change.
     proxy: {

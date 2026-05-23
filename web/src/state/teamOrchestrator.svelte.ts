@@ -36,6 +36,19 @@ import type {
   TeamDialogConfig,
   TeamMemberDraft,
 } from "./teamDialog.svelte";
+import {
+  substituteTeamTemplate,
+  type TeamTemplateVars,
+} from "./teamTemplate";
+
+/// `fullstack-a-79` slice 3: process-template sources bundled
+/// into the SPA at build time via vite `?raw`. Architect routed
+/// this delivery shape on 2026-05-23 (no chan-server endpoint,
+/// no network round-trip on bootstrap). The team-process
+/// templates live under `docs/templates/team-process/` in the
+/// chan repo; vite's `fs.allow: ['.', '..']` lets the parent
+/// traversal resolve.
+import bootstrapTemplate from "../../../docs/templates/team-process/bootstrap.md.tpl?raw";
 
 /// `fullstack-a-79`: parse the dialog's free-form env field
 /// ("KEY=VALUE" newline-separated) into a Record. Empty lines +
@@ -164,6 +177,51 @@ export function identityPrompt(hostHandle: string): string {
   );
 }
 
+/// `fullstack-a-79` slice 3: derive the
+/// `substituteTeamTemplate` vars from the wire config + a
+/// fallback phase-slug for teams that don't carry one. The
+/// host handle and lead handle come straight from the
+/// persisted config; workers are the remaining members in
+/// declared order; team_name maps to `{team-name}`.
+export function templateVarsForWire(wire: TeamConfigWire): TeamTemplateVars {
+  const leadEntry = wire.members.find((m) => m.is_lead);
+  const leadHandle = leadEntry?.handle ?? wire.host_handle;
+  const workerHandles = wire.members
+    .filter((m) => !m.is_lead)
+    .map((m) => m.handle);
+  return {
+    hostHandle: wire.host_handle,
+    leadHandle,
+    workerHandles,
+    teamName: wire.team_name,
+    // chan-drive's TeamConfig doesn't persist a phase-slug
+    // today; new teams default to "phase-1" per
+    // `teamTemplate.ts`'s helper. Chan's own bootstrap (the
+    // architect-internal case) substitutes `phase-8` via
+    // `CHAN_INTERNAL_TEAM_VARS`; the orchestrator's path is
+    // the new-team default.
+  };
+}
+
+/// `fullstack-a-79` slice 3: place the process templates in
+/// `Drafts/team-{name}/docs/`. Per architect's 2026-05-23
+/// routing, templates ship via vite `?raw` (bundled at SPA
+/// build time) so the orchestrator doesn't need a chan-server
+/// round-trip. Substitutes `{host-handle}` / `{lead-handle}` /
+/// `{worker-N-handle}` / `{team-name}` / `{phase-slug}` via
+/// `substituteTeamTemplate`; writes to the team workspace's
+/// docs/ subdir (materialised by `Drive::create_team` in step
+/// 1).
+export async function placeTeamTemplates(wire: TeamConfigWire): Promise<void> {
+  const vars = templateVarsForWire(wire);
+  const bootstrap = substituteTeamTemplate(bootstrapTemplate, vars);
+  await api.create(
+    `Drafts/team-${wire.team_name}/docs/bootstrap.md`,
+    false,
+    bootstrap,
+  );
+}
+
 /// `fullstack-a-79` slice 1: run the bootstrap chain. Throws
 /// (returns rejected promise) on any step's failure so the
 /// dialog can surface the error inline. The caller closes the
@@ -186,9 +244,26 @@ export async function runTeamBootstrap(
   }
   // 1. Persist config.
   await api.teamCreate(wire.team_name, wire);
-  // 2. Load watcher.
+  // 2. Place process templates. Per addendum-b's
+  //    process-template-placement step + `-a-81`'s
+  //    parameterised templates, write the bootstrap doc into
+  //    the team workspace's docs/ subdir so each agent's
+  //    `read docs/agents/bootstrap.md` directive resolves to a
+  //    pre-substituted file. `Drive::create_team` already
+  //    materialised `Drafts/team-{name}/docs/` in step 1.
+  //    Failures don't bail the whole chain — the watcher load
+  //    + worker spawn still bring up a working team; just
+  //    flag in notify so the user can re-run / inspect.
+  try {
+    await placeTeamTemplates(wire);
+  } catch (err) {
+    notify(
+      `Template placement failed: ${(err as Error).message ?? err}`,
+    );
+  }
+  // 3. Load watcher.
   await api.teamLoad(wire.team_name);
-  // 3. Spawn worker terminals (lead is the host session — see
+  // 4. Spawn worker terminals (lead is the host session — see
   //    addendum-b clarification #1).
   const prompt = identityPrompt(wire.host_handle);
   for (const m of wire.members) {
@@ -211,7 +286,7 @@ export async function runTeamBootstrap(
       );
     }
   }
-  // 4. Deliver the identity prompt to the lead's terminal (the
+  // 5. Deliver the identity prompt to the lead's terminal (the
   //    host session) via the rich-prompt buffer. Per addendum-b
   //    clarification #1 the lead IS the user's current rich-
   //    prompt terminal; we don't respawn it, just stage the

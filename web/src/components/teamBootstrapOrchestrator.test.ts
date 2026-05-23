@@ -22,9 +22,9 @@ describe("fullstack-a-79 slice 1: TerminalRichPrompt onBootstrap dispatches the 
 });
 
 describe("fullstack-a-79 slice 1: orchestrator bootstrap chain", () => {
-  test("runTeamBootstrap walks teamCreate → teamLoad → spawnTerminal per worker", () => {
+  test("runTeamBootstrap walks teamCreate → placeTeamTemplates → teamLoad → spawnTerminal per worker", () => {
     expect(orchestrator).toMatch(
-      /export async function runTeamBootstrap\([\s\S]{1,400}\): Promise<void> \{[\s\S]{1,4000}await api\.teamCreate\(wire\.team_name, wire\);[\s\S]{1,200}await api\.teamLoad\(wire\.team_name\);[\s\S]{1,2000}await api\.spawnTerminal\(/,
+      /export async function runTeamBootstrap\([\s\S]{1,400}\): Promise<void> \{[\s\S]{1,4000}await api\.teamCreate\(wire\.team_name, wire\);[\s\S]{1,2000}await placeTeamTemplates\(wire\);[\s\S]{1,2000}await api\.teamLoad\(wire\.team_name\);[\s\S]{1,2000}await api\.spawnTerminal\(/,
     );
   });
 

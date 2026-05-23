@@ -8,6 +8,20 @@ declare module "*.ts?raw" {
   export default content;
 }
 
+/// `fullstack-a-79` slice 3: process-template files bundled
+/// into the SPA via vite `?raw`. The orchestrator imports
+/// `docs/templates/team-process/*.tpl?raw` at build time +
+/// substitutes the team's vars on bootstrap.
+declare module "*.tpl?raw" {
+  const content: string;
+  export default content;
+}
+
+declare module "*.md?raw" {
+  const content: string;
+  export default content;
+}
+
 // Minimal `node:fs` shim for tests that need to read on-disk files
 // the `?raw` Vite import can't surface (notably `.css`, which the
 // CSS plugin chain consumes before vitest sees the file). The full
