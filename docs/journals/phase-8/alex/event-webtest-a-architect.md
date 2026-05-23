@@ -4608,3 +4608,98 @@ explicit `git add` of my two files only, with pre/post-commit
 the shared-worktree pattern.
 
 Standing by.
+
+## 2026-05-23 — poke (fullstack-a-100 + -a-102 bundled walk: BOTH HOLD — P0 Drafts chain cleared empirically + menu nits HOLD)
+
+Proactive walk bundled per `feedback_proactive_walks` once
+both ships landed (`e364517` `-a-100` + `53d5104` `-a-102`).
+Verdict: **HOLD for both**. Per-check evidence at
+[`../webtest-a/webtest-a-1.md`](../webtest-a/webtest-a-1.md)
+under `## 2026-05-23 — fullstack-a-100 + -a-102 bundled walk`.
+
+Fresh-binary: `npm run build` 16:52:13 + `cargo build -p chan`
+16:52:58 at HEAD `7c6580f`. Throwaway drive
+`/tmp/chan-test-wa-100-102/`.
+
+### `-a-100` Drafts chain — 4/4 HOLD via the chan.app-style repro
+
+Walked the exact repro shape you flagged ("FB pre-loaded with
+Drafts open before Cmd+N"). End-to-end chain on a fresh drive:
+
+| Step | Result |
+|------|--------|
+| FB `Drafts/` synthetic entry renders | HOLD |
+| Expand empty `Drafts/` → loaded into stale state | HOLD (pre-fix repro condition reproduced) |
+| Cmd+N (bug 4) | HOLD — new draft tab opens + tree refreshes |
+| Second Cmd+N → `untitled-1/` | HOLD — additive refresh |
+| Cmd+N from Graph tab (graphReloadSignal path) | HOLD — new draft + graph stays valid |
+| Graph tab loads with multiple drafts present (bug 3) | HOLD — `1/1 nodes` (empty drafts contribute 0 nodes; correct semantic-graph behavior) |
+| Editor renders + content-editable on new draft (bug 1+4) | HOLD |
+
+The architect-side hypothesis (drive-shape-specific = pre-
+v0.12.0 drives without drafts metadata) was correctly
+falsified by @@FullStackA's repro pass. Real root cause was
+the SPA `tree.loadedDirs["Drafts"]` staleness post-
+`self_writes.note(path)`. Fix mechanism (`refreshTreeForPath`
+ancestor climb + `noteDraftCreated` mirror) works empirically
+against the canonical user scenario. The "i can't browse my
+Drafts" symptom @@Alex hit is empirically closed.
+
+### `-a-102` menu nits — 2/2 HOLD
+
+**Nit 1: Terminal double-separator collapsed.** The single
+visual separator between Name and status row now lives as
+CSS `.rename-row` `border-bottom: 1px solid rgb(74, 74, 77)`
+rather than a sibling `<div class="msep">`. Same visual
+result, fewer DOM nodes. Equivalent to spec's "one separator"
+intent.
+
+**Nit 2: Editor Name-before-page-width reorder.** Confirmed
+`.tab-menu-bubble > .action-list` direct children: idx 0
+`name-row` → idx 1 `msep` → idx 2 `page-width-row` → idx 3+
+mbtns. Matches spec verbatim.
+
+### Side observation — minor doc-drift in -a-102 task body
+
+The task body's pre-fix order claim ("Name → separator →
+separator → status") describes TWO sibling msep divs, but
+`git show 53d5104^:web/src/components/TerminalTab.svelte`
+shows only ONE pre-fix sibling msep — the visual "double
+line" appearance was likely the .rename-row's CSS border-
+bottom + the msep div rendering as two distinct lines. Not a
+chan bug, observation only. The fix correctly removes the
+sibling div + retains the CSS border. (No follow-up.)
+
+### Remaining v0.13.0 blockers in my lane
+
+* `-a-99` (Matrix rain + Castaway + theme picker + screensaver
+  timeout bounds [10s, 3600s] per `33556be`) — not in HEAD.
+
+Reactive standby. Once `-a-99` ships, v0.13.0 should be
+mechanically ready to cut (the `systacean-45` chan-server
+sync-call audit already shipped at `26c036d`).
+
+### Teardown
+
+Lane-A server stopped, throwaway drive `rm -rf`'d, registry
+entry dropped, Chrome MCP tab closed. Saw another `chan serve`
+on port 8799 against `/private/tmp/chan-a100-fresh`
+(@@FullStackA's triage repro server) — left untouched per
+lane discipline.
+
+### Suggested commit shape
+
+Path-limited per the standing discipline. WT is now clean of
+cross-lane mods (@@Systacean's 12 chan-server routes
+committed at `26c036d`; the 7c6580f phase-9 desktop-team
+artifacts already committed).
+
+* **Subject**: `docs: webtest-a — -a-100 + -a-102 bundled walk HOLD (P0 Drafts chain + menu nits cleared)`
+* **Files** (explicit per-path):
+  * `docs/journals/phase-8/webtest-a/webtest-a-1.md`
+  * `docs/journals/phase-8/alex/event-webtest-a-architect.md`
+
+Pre-commit `git diff --staged --stat` + post-commit `git show
+--stat HEAD` audit applied.
+
+Standing by.

@@ -7291,3 +7291,124 @@ Neither in HEAD as of this walk; reactive standby for both.
   entry dropped.
 * Chrome MCP tab `503726397` closed.
 
+## 2026-05-23 — `fullstack-a-100` + `-a-102` bundled walk (P0 Drafts chain + menu nits) — HOLD
+
+Walked the two pending v0.13.0 release-blocker ships once
+they landed in HEAD (`e364517` -a-100; `53d5104` -a-102):
+
+* `-a-100` (P0 v0.13.0 blocker) — Drafts FB chain refresh fix:
+  `refreshTreeForPath()` climbs to nearest loaded ancestor +
+  `noteDraftCreated()` mirrors watcher-side invalidation for
+  same-SPA writes that go through `self_writes.note(path)`.
+* `-a-102` (polish) — Terminal right-click double-separator
+  collapsed; Editor right-click Name-before-page-width reorder.
+
+Fresh-binary discipline: `npm run build` 16:52:13 + `cargo
+build -p chan` 16:52:58 at HEAD `7c6580f`. Throwaway drive
+`/tmp/chan-test-wa-100-102/`. Server
+`http://127.0.0.1:8787/?t=NxJnHZLcq4tLp6FdMksyxzddujBDvkrB`.
+Chrome MCP tab `503726412`.
+
+### `-a-100` Drafts chain — 4/4 HOLD
+
+Architect's recommended repro shape (chan.app-style: FB pre-
+loaded with Drafts expanded BEFORE Cmd+N) walked end-to-end:
+
+| Step | Expected | Observed | Verdict |
+|------|----------|----------|---------|
+| FB loads with `Drafts/` synthetic entry | yes | yes | HOLD |
+| Click `Drafts/` twirl → expand (empty) | `loadedDirs["Drafts"]` = true; tree shows no children | matches | HOLD |
+| Cmd+N → POST /api/drafts/new (bug 4) | new tab `draft.md` opens | active tab = `draft.md`; URL hash `Drafts/untitled/draft.md` | HOLD |
+| Switch back to FB; expand `Drafts/` | tree now shows `untitled/` (the new draft dir) | tree: `Drafts/` + `untitled/` | HOLD — stale-tree fix works |
+| Expand `untitled/` | shows `draft.md` | `draft.md` visible | HOLD |
+| Second Cmd+N from FB tab | creates `untitled-1/draft.md` | new tab opens; tree refreshes to show `untitled-1/` alongside `untitled/` | HOLD |
+| Third Cmd+N **while on Graph tab** (graphReloadSignal path) | creates `untitled-2/draft.md` + graph re-loads cleanly | active tab = `untitled-2/draft.md`; tab count 4→5 | HOLD |
+| Graph tab loads with drafts present (bug 3) | `/api/graph?scope=drive` returns valid payload; status bar populates | `1/1 nodes · 0/0 edges` rendered; folder node visible; no error overlays | HOLD |
+| Editor renders + content-editable on new draft | CM6 cm-content mounts; contentEditable=true | both confirmed | HOLD |
+
+Notable: on a fresh drive, the 3 bugs DID NOT reproduce
+without the fix's repro shape (Drafts loaded-then-Cmd+N). The
+architect's hypothesis (drive-shape-specific = pre-v0.12.0
+drives) was correctly falsified by @@FullStackA's repro pass.
+Root cause is pure SPA-stale-tree post-self-write
+invalidation. Empirical fix confirmed.
+
+Graph 1/1 nodes (drive root only) on the empty drive is
+expected — the semantic graph indexes structured content
+(headings / links / contacts / tags); empty `draft.md` files
+don't contribute graph nodes. Bug 3's "Graph not loading"
+symptom does NOT reproduce here.
+
+### `-a-102` menu nits — 2/2 HOLD
+
+**Nit 1: Terminal double-separator collapsed.**
+Right-clicked Terminal-1 tab strip → `.terminal-tab-menu-bubble`
+direct children:
+
+| idx | element | text |
+|-----|---------|------|
+| 0 | `label.rename-row` (Name input) | "Name" |
+| 1 | `div.terminal-status-row` | "connected: 178x49" |
+| 2 | `div.action-list` | (Set MCP env vars, Restart, ...) |
+
+ZERO `<div class="msep">` between Name and status — the
+single visual separator now lives as a CSS `border-bottom:
+1px solid rgb(74, 74, 77)` + `padding-bottom: 8px` on the
+`.rename-row` itself. Same visual result as a sibling msep
+div, fewer DOM nodes. Spec said "should be one separator";
+implementation chose CSS-border over a sibling element.
+Equivalent.
+
+**Nit 2: Editor Name-before-page-width reorder.**
+Right-clicked editor body (`.cm-content`) → `.tab-menu-bubble
+> .action-list` first 3 children:
+
+| idx | class | text |
+|-----|-------|------|
+| 0 | `name-row` (Name input) | "Name" |
+| 1 | `msep` (separator) | (empty) |
+| 2 | `page-width-row` (Page width slider) | "Page width 80%" |
+| 3+ | mbtn rows | Show Source Code, Collapse Code Blocks, ... |
+
+Name comes first (idx 0 < page-width idx 2); exactly 1
+separator between them. Matches spec verbatim.
+
+### Side observation — minor doc-drift in -a-102 task body
+
+The `-a-102` task spec § "Current order in the Terminal
+right-click menu" listed "1. Name → 2. (separator) → 3.
+(separator)" implying TWO sibling separators were present
+pre-fix. The actual pre-fix code (per
+`git show 53d5104^:web/src/components/TerminalTab.svelte`)
+had only ONE sibling `<div class="msep">` element between
+the rename label and the status row — the `.rename-row`'s
+CSS border-bottom may have produced a visual "double line"
+appearance that's the spec's "two separators" reading. Not
+a chan bug — observation only. The fix correctly removes the
+sibling div, leaving the CSS border as the sole separator.
+
+### Decision
+
+Verdict: **HOLD for both ships.** `-a-100` (P0 v0.13.0
+release blocker) cleared empirically; `-a-102` polish HOLD.
+
+Remaining v0.13.0 release blockers in my lane: `-a-99`
+(Matrix rain + Castaway + theme picker + screensaver
+timeout bounds) — not in HEAD as of this walk. Reactive
+standby.
+
+### Teardown
+
+* `pkill -f 'chan serve /tmp/chan-test-wa-100-102'` —
+  stopped.
+* `rm -rf /tmp/chan-test-wa-100-102/` — throwaway drive
+  removed.
+* `chan remove /private/tmp/chan-test-wa-100-102` —
+  registry entry dropped.
+* Chrome MCP tab `503726412` closed.
+
+Cross-lane: another `chan serve` was running on port 8799
+against `/private/tmp/chan-a100-fresh` during this session —
+that's @@FullStackA's `-a-100` triage repro server. Left
+untouched per lane discipline.
+
