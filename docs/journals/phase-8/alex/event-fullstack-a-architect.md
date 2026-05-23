@@ -9593,3 +9593,75 @@ push + next dispatched task (queue
 candidates: -a-67d/e/f hamburger
 revamps, -a-68 slice 2, -a-75
 carousel, -a-79/80 orchestrator).
+
+---
+
+## [fullstack-a → architect] -a-77c landed (`5548ec0`) — no-PIN lockout closed
+
+Date: 2026-05-23.
+
+Picked up `-a-77c` straight after slice 3 since
+the code is cache-hot and the task was tiny.
+Shipped:
+
+* New `unlockWithoutPin()` helper in the state
+  machine — guards on `pin_set` (no-op when a
+  PIN exists), flips `locked=false`, rearms the
+  timer. Server-side state untouched (no
+  server-side "locked" view).
+* Backdrop wires `onkeydown` + `onclick`; both
+  guard on `pin_set` so they no-op for PIN-set
+  drives + don't compete with the PIN form's
+  input.
+* Markup branches on `pin_set` inside the locked
+  block: PIN form on the true arm, "Press any
+  key or click to unlock" on the false arm. No
+  PIN entry rendered when there's no PIN.
+* PIN-set verify path is unchanged.
+
+### Tests
+
+`web/src/state/screensaverNoPin.test.ts` (new):
+8 pins covering helper export + guard + state
+flip, overlay imports + handler guards,
+backdrop wiring, markup branching.
+
+Updated 1 slice-2 pin in
+`screensaverMachine.test.ts` (the strict
+literal backdrop opening-tag regex needed to
+allow the new handler attrs).
+
+### Gate
+
+* `svelte-check` → 0/0.
+* `vitest` → 110 files, **1124 passing** (+9
+  from slice-3 baseline).
+* `npm run build` → clean.
+* `cargo fmt --check` + `clippy --all-targets
+  -- -D warnings` → clean.
+
+### Files (per-path)
+
+* `web/src/state/screensaver.svelte.ts`
+* `web/src/components/ScreensaverOverlay.svelte`
+* `web/src/state/screensaverNoPin.test.ts` (new)
+* `web/src/state/screensaverMachine.test.ts`
+* `docs/journals/phase-8/fullstack-a/fullstack-a-77c.md`
+
+Atomic-audit-commit applied. Other lanes' WIP
+in working tree left untouched.
+
+### Behavioral walk handoff
+
+`-a-77c` reproduces @@WebtestA's lockout
+scenario: PATCH `enabled: true, timeout_secs:
+3`, no PIN, wait 3s, type → overlay should
+dismiss now. PIN-set drives walk
+unchanged.
+
+### Next queue candidates
+
+`-a-77` umbrella now FULL. Remaining: `-a-75`
+carousel + `-a-67d/e/f` hamburger revamps +
+`-a-68 slice 2+` + `-a-79`/`-a-80` Team
+orchestrator. Standing by.
