@@ -5991,3 +5991,108 @@ Lane-A test server torn down:
 @@FullStackA's slice 3 routing of option 1
 (any-input unlocks when no PIN) closes my prior
 UX side observation cleanly.
+
+## 2026-05-23 — autonomous batch walk per architect BATCH DISPATCH: -a-66 canonical + -a-70 bubble + -a-93 resize (3/3 HOLD)
+
+Per architect's BATCH DISPATCH (`b6dab54`):
+un-tethered to walk backlog autonomously. Fresh-
+binary discipline applied (HEAD `b6dab54`, build
+May 23 05:33:31). Throwaway drive r37.
+
+### Verdicts (8/8 HOLD)
+
+| Task | Check | Verdict |
+|------|-------|---------|
+| `-a-66` umbrella | FB row + chip + notice | HOLD |
+| `-a-66` umbrella | Graph Drafts node + drafts_link edge | HOLD |
+| `-a-66` umbrella | Drafts files in graph | HOLD |
+| `-a-66` umbrella | BM25 hit for `CANONICALMARKER66` | HOLD 🎉 |
+| `-a-70` | Mention bubble appears on `@@<partial>` | HOLD |
+| `-a-70` | Filtered list matches corpus | HOLD |
+| `-a-93` | Terminal reflows on window resize | HOLD |
+| `-a-93` | Reflow converges to final pane width | HOLD |
+
+### `-a-66` umbrella canonical walk — ALL HOLD on fresh binary
+
+Created `Drafts/untitled/draft.md` via Cmd+N with
+content "CANONICALMARKER66 + @@Architect mentioned
++ @@Alex referenced". Restarted serve to trigger
+boot walk indexing.
+
+`/api/files` returns:
+- `{path: "Drafts", is_dir: true, ...}` ✓ (slice b)
+
+`/api/graph?scope=drive`:
+- `directory:Drafts` node ✓ (slice e)
+- 1 `drafts_link` edge ✓ (slice e)
+- 1 file under Drafts/ in graph ✓ (slice e + systacean-36)
+
+`/api/search/content?q=CANONICALMARKER66`:
+- 1 hit at `Drafts/untitled/draft.md` ✓ (systacean-37/-38)
+- snippet shows marker highlighted with `<b>` tags
+- heading "Drafts canonical walk on fresh binary"
+  correctly extracted
+
+The 5-slice Drafts umbrella + 7 systacean follow-ups
+all empirically work end-to-end on fresh binary.
+
+### `-a-70` mention bubble HOLD
+
+Opened `Drafts/untitled/draft.md` in editor. Typed
+`@@Ar` at end of file. Bubble appeared with:
+- `@@Architect` (highlighted/selected)
+- `@@Architect-led`
+- `@@Architect-side`
+- `@@Architect-clearance`
+- `@@Architect-parked`
+- Footer: "5 results · ↵ to insert"
+
+Classes: `md-bubble md-contact-bubble cm-bubble`
++ `md-bubble-row md-bubble-row-mention-only` /
+`md-bubble-row-selected md-bubble-row-mention-o`.
+
+The mention corpus from `/api/mentions` feeds the
+editor bubble correctly. Filtering on `@@Ar`
+narrows to all `@@Architect-*` matches.
+
+### `-a-93` terminal resize HOLD
+
+Spawned Terminal-1 via Cmd+Alt+T. Initial xterm
+bounding rect: 1414×698 px.
+
+Resize window: 1440×900 → 1024×768:
+- xterm rect: 1414→**998 px width** ✓ (reflowed)
+
+Resize window: 1024×768 → 1600×1000:
+- xterm rect: 998→**1574 px width** ✓ (reflowed)
+
+Terminal converges to the final pane width per
+spec. The trailing-edge fit (debounce-only-once
+on resize end) prevents intermediate width
+flicker. Both resize transitions empirically
+clean.
+
+### Highlights
+
+* **Drafts umbrella canonical**: all 5 slices +
+  7 systacean iterations + fresh-binary
+  discipline = end-to-end working. 🎉
+* **Mention bubble**: clean UX with corpus-
+  filtered autocomplete in the editor.
+* **Terminal reflow**: cleanly converges to
+  final width across multiple resizes.
+* **Fresh-binary discipline applied**: pkill +
+  cargo build + verify provenance + restart. No
+  false-positive PARTIALs.
+
+### State at end of walk
+
+Lane-A test server torn down:
+1. chan serve killed.
+2. `rm -rf /tmp/chan-test-phase8-wa-r37/`.
+3. `chan remove` → unregistered.
+4. Chrome MCP tab closed.
+5. Drafts metadata cleaned.
+
+8/8 HOLD across all 3 batch items. Queue
+empties on lane-A side — moving to stand-down.

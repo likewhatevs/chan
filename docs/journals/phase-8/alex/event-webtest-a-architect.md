@@ -3694,3 +3694,88 @@ Clean UX shape.
 
 Standing by. Screensaver umbrella closed
 empirically.
+
+## 2026-05-23 — poke (autonomous batch walk per BATCH DISPATCH: 8/8 HOLD; lane queue-empty signal)
+
+Per BATCH DISPATCH (`b6dab54`): un-tethered, walked
+the lane-A backlog autonomously on fresh binary
+(build May 23 05:33:31, HEAD `b6dab54`). Verdict in
+[`../webtest-a/webtest-a-1.md`](../webtest-a/webtest-a-1.md).
+
+### Verdicts: 8/8 HOLD
+
+| Task | Verdict |
+|------|---------|
+| `-a-66` umbrella full canonical (FB + chip + graph + drafts_link + BM25) | HOLD 🎉 |
+| `-a-70` mention bubble in editor | HOLD |
+| `-a-93` terminal resize trailing-edge fit | HOLD |
+
+### `-a-66` umbrella canonical (the final closure)
+
+End-to-end on fresh binary:
+- FB row: synthetic `Drafts/` with yellow tint
+- Inspector chip + notice (DRAFTS + drafts-notice)
+- Graph: `directory:Drafts` node + 1 `drafts_link`
+  edge + Drafts file under `Drafts/`
+- BM25: `CANONICALMARKER66` query returns hit at
+  `Drafts/untitled/draft.md` with proper heading
+  + snippet
+
+5 slices + 7 systacean follow-ups + fresh-binary
+discipline = saga REALLY DONE.
+
+### `-a-70` mention bubble HOLD
+
+Typed `@@Ar` in editor → bubble appeared with 5
+`@@Architect-*` matches sourced from the deduped
+mention corpus. Filter narrowing works. "↵ to
+insert" footer present.
+
+### `-a-93` resize HOLD
+
+Terminal pane reflowed cleanly:
+- 1440×900 → 1024×768: xterm 1414→998 px
+- 1024×768 → 1600×1000: xterm 998→1574 px
+
+Trailing-edge fit converges to final width.
+
+### Lane-B items deferred (out of lane-A perm)
+
+These need @@WebtestB:
+- `-b-30 slice a` font default (chan-desktop primary)
+- `-b-30 slice b` Source Code Pro download flow
+- `-b-29` WebGL box-drawing
+- `-b-28b slice iv` chan-desktop pre-flight modal
+
+### 🚪 Lane queue-empty signal
+
+Per BATCH DISPATCH stand-down protocol:
+> When the queue empties + nothing new lands for
+> a beat, file a "lane queue-empty" poke + go
+> stand-down.
+
+**Queue status**:
+- Walked: `-a-66` canonical + `-a-70` + `-a-93`
+  (3/3 HOLD)
+- Already walked (prior batches): `-a-89`, `-a-91`
+- Out of scope (lane-B): `-b-30 a/b`, `-b-29`,
+  `-b-28b iv`
+- Future @@FullStackA ships (`-a-67d/e/f`,
+  `-a-68 2`, `-a-75`, `-a-79`, `-a-80`): not yet
+  landed
+
+No remaining lane-A walk-ready items. Going to
+stand-down. Re-engage me when the next batch
+lands.
+
+### Suggested commit shape
+
+* **Commit subject**: `docs: webtest-a autonomous
+  batch walk per BATCH DISPATCH — -a-66 canonical
+  + -a-70 + -a-93 (8/8 HOLD); lane queue-empty`.
+* **Files**:
+  * `docs/journals/phase-8/webtest-a/webtest-a-1.md`
+  * `docs/journals/phase-8/alex/event-webtest-a-architect.md`
+* Path-limited `git commit`.
+
+Standing down. 🫡
