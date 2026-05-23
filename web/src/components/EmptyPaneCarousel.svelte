@@ -27,113 +27,36 @@
   import type { IndexingStateNode, IndexingStateResponse } from "../api/types";
   import { drive, indexStatus, tree, ui } from "../state/store.svelte";
   import {
-    SHORTCUTS,
     currentOS,
     currentPlatform,
-    formatChord,
+    renderTable,
   } from "../state/shortcuts";
   import {
-    BarChart2,
     ChevronLeft,
     ChevronRight,
-    FilePlus,
-    Folder,
     Locate,
-    MessageSquare,
-    Network,
     Pause,
     Play,
-    Terminal,
   } from "lucide-svelte";
 
   type Props = {
-    /// Right-click forwarder. Same handler the empty pane uses to
-    /// open the welcome menu; lifted here so the carousel surface
-    /// preserves the right-click affordance.
+    /// Right-click forwarder. Carousel is now hosted inside the
+    /// Infographics tab (per `fullstack-a-75b`); the forwarder
+    /// stays in the prop list for symmetry with the prior mount
+    /// site but Infographics tab doesn't wire it (right-click
+    /// over the tab body falls through to the tab strip's own
+    /// context menu).
     oncontextmenu?: (e: MouseEvent) => void;
   };
   let { oncontextmenu }: Props = $props();
 
-  /// `fullstack-a-75`: ASCII shortcut table moved to the new
-  /// Infographics tab (see InfographicsTab.svelte). Platform +
-  /// OS still pinned at module init for `chordLabel` lookups
-  /// below.
+  /// `fullstack-a-75b`: ASCII shortcut table now renders as
+  /// slide 1 inside the carousel itself (carousel relocated to
+  /// the Infographics tab). Pin at module init since platform +
+  /// chord set don't change at runtime.
   const platform = currentPlatform();
   const os = currentOS();
-
-  function chordLabel(id: string | undefined): string {
-    if (!id) return "";
-    const s = SHORTCUTS.find((x) => x.id === id);
-    if (!s) return "";
-    const chord = s[platform];
-    if (!chord) return "";
-    return formatChord(chord, os);
-  }
-
-  // `fullstack-a-32` + `fullstack-a-67` slice 2 + `fullstack-a-75`:
-  // first-class spawn entries on the welcome slide. Same set +
-  // ordering as the pane hamburger menu (Pane.svelte::spawnActions)
-  // + the empty-pane right-click menu, so the user sees a unified
-  // affordance surface across all three. New Draft sits at slot
-  // 0 (added by `-a-67` slice 2 to mirror the top-level Cmd+N
-  // chord). Infographics sits in the secondary band below; it's
-  // discoverable but not a primary spawn target.
-  type SpawnRow = {
-    label: string;
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    icon: any;
-    command: string;
-    chordId: string;
-  };
-  const spawnEntries: SpawnRow[] = [
-    {
-      label: "New Draft",
-      icon: FilePlus,
-      command: "app.draft.new",
-      chordId: "app.draft.new",
-    },
-    {
-      label: "Terminal",
-      icon: Terminal,
-      command: "app.terminal.toggle",
-      chordId: "app.terminal.toggle",
-    },
-    {
-      label: "File Browser",
-      icon: Folder,
-      command: "app.files.toggle",
-      chordId: "app.files.toggle",
-    },
-    {
-      label: "Rich Prompt",
-      icon: MessageSquare,
-      command: "app.terminal.richPrompt",
-      chordId: "app.terminal.richPrompt",
-    },
-    {
-      label: "Graph",
-      icon: Network,
-      command: "app.graph.toggle",
-      chordId: "app.graph.toggle",
-    },
-  ];
-  // `fullstack-a-75`: secondary band — Infographics tab (read-
-  // only shortcut sheet + future info panels). Sits below the
-  // primary spawn band so it's discoverable without competing
-  // with the first-class spawn targets.
-  const secondaryEntries: SpawnRow[] = [
-    {
-      label: "Infographics",
-      icon: BarChart2,
-      command: "app.infographics.open",
-      chordId: "app.infographics.open",
-    },
-  ];
-  function dispatchSpawn(command: string): void {
-    window.dispatchEvent(
-      new CustomEvent("chan:command", { detail: { name: command } }),
-    );
-  }
+  const shortcutTable = renderTable(platform, os);
 
   // ---- drive summary -----------------------------------------------------
   //
@@ -625,66 +548,18 @@
 >
   <div class="slide-stage">
     {#if slideIndex === 0}
-      <!-- Slide 1 — Welcome. Logo + drive summary + first-class
-           spawn buttons (`fullstack-a-32`) + ASCII shortcut
-           table. The spawn buttons mirror the four items in
-           Pane.svelte's `spawnActions` so the user sees the
-           same surface across the carousel + pane hamburger +
-           empty-pane right-click. -->
-      <div class="slide slide-welcome" aria-label="Welcome">
-        <div class="placeholder-mark"></div>
-        {#if drive.info}
-          <!-- `fullstack-55`: the files / dirs / contacts / index
-               row was dropped from under the brand mark — that
-               information lives on slide 2 (metadata). Only the
-               drive name remains under the logo. -->
-          <div class="dashboard-header" aria-label="drive summary">
-            <div class="dashboard-name">{drive.info.name ?? "(unnamed)"}</div>
-          </div>
-        {/if}
-        <div class="spawn-row" aria-label="spawn">
-          {#each spawnEntries as row (row.command)}
-            {@const Icon = row.icon}
-            <button
-              type="button"
-              class="spawn-btn"
-              onclick={() => dispatchSpawn(row.command)}
-              title="{row.label} ({chordLabel(row.chordId)})"
-            >
-              <Icon size={18} strokeWidth={1.75} aria-hidden="true" />
-              <span class="spawn-label">{row.label}</span>
-              <span class="spawn-chord">{chordLabel(row.chordId)}</span>
-            </button>
-          {/each}
-        </div>
-        <!-- `fullstack-a-75`: secondary band — Infographics
-             entry sits below the primary spawn band. Separator
-             matches the pane hamburger's spawn/extras divider so
-             the three menus read identically. -->
-        <div class="spawn-sep" role="separator" aria-hidden="true"></div>
-        <div class="spawn-row spawn-row-secondary" aria-label="info">
-          {#each secondaryEntries as row (row.command)}
-            {@const Icon = row.icon}
-            <button
-              type="button"
-              class="spawn-btn"
-              onclick={() => dispatchSpawn(row.command)}
-              title={row.label}
-            >
-              <Icon size={18} strokeWidth={1.75} aria-hidden="true" />
-              <span class="spawn-label">{row.label}</span>
-              <span class="spawn-chord"></span>
-            </button>
-          {/each}
-        </div>
-        <p class="placeholder-hint">
-          Each pane's visible tab is part of the scope<br />
-          for Graph.
-        </p>
-        <!-- `fullstack-a-75`: ASCII shortcut table moved to the
-             new Infographics tab — open via the "Infographics"
-             button above or the pane hamburger / empty-pane
-             right-click menu. -->
+      <!-- `fullstack-a-75b`: Slide 1 — Shortcuts. Carousel
+           relocated to the Infographics tab per @@Alex's route
+           on the slice-1 walk. Welcome with spawn buttons moved
+           to the dedicated EmptyPaneWelcome.svelte surface (now
+           the empty-pane placeholder); slide 1 becomes the
+           ASCII shortcut table that used to live as a static
+           panel inside InfographicsTab.svelte. Same renderTable
+           output; just hosted inside the carousel now so
+           rotation surfaces it alongside metadata + indexing. -->
+      <div class="slide slide-shortcuts" aria-label="Shortcuts">
+        <div class="slide-title">Shortcuts</div>
+        <pre class="shortcuts-table">{shortcutTable}</pre>
       </div>
     {:else if slideIndex === 1}
       <!-- Slide 2 — Metadata. Stacked bar of file kinds across
@@ -942,95 +817,25 @@
     opacity: 0.7;
   }
   /* --- Slide 1 (Welcome) bits, ported from Pane.svelte --- */
-  /* `fullstack-a-32`: first-class spawn buttons. Four-up grid
-     sized to comfortable click targets without dominating the
-     slide. Hovers paint with the link accent so the row reads
-     as "click me" against the otherwise-quiet welcome surface. */
-  .spawn-row {
-    display: grid;
-    grid-template-columns: repeat(4, minmax(110px, 1fr));
-    gap: 8px;
-    width: min(560px, 90%);
-    margin: 0;
-  }
-  .spawn-btn {
-    display: flex;
-    flex-direction: column;
+  /* `fullstack-a-75b`: dropped `.spawn-row` / `.spawn-btn` /
+     `.spawn-label` / `.spawn-chord` / `.placeholder-mark` /
+     `.spawn-sep` / `.spawn-row-secondary` / `.placeholder-hint`
+     / `.dashboard-header` / `.dashboard-name` selectors along
+     with the welcome slide they styled. The static welcome
+     surface lives in EmptyPaneWelcome.svelte now; the carousel
+     only renders Shortcuts / Drive metadata / Indexing graph. */
+  .slide-shortcuts {
     align-items: center;
-    justify-content: center;
-    gap: 4px;
-    padding: 10px 8px;
-    background: var(--bg-card);
-    color: var(--text);
-    border: 1px solid var(--border);
-    border-radius: 8px;
-    cursor: pointer;
-    font: inherit;
-    transition: background-color 120ms ease, border-color 120ms ease,
-      color 120ms ease;
   }
-  .spawn-btn:hover {
-    background: var(--hover-bg);
-    border-color: var(--link);
-  }
-  .spawn-btn:focus-visible {
-    outline: 2px solid var(--link);
-    outline-offset: 1px;
-  }
-  .spawn-label {
-    font-size: 13px;
-    color: var(--text);
-  }
-  .spawn-chord {
+  .shortcuts-table {
+    margin: 0;
     font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-    font-size: 11px;
-    color: var(--text-secondary);
-    opacity: 0.85;
-    text-align: center;
-    line-height: 1.2;
-  }
-  .placeholder-mark {
-    width: 160px;
-    height: 160px;
-    background-color: var(--text-secondary);
-    -webkit-mask: url('/chan-mark.png') center / contain no-repeat;
-            mask: url('/chan-mark.png') center / contain no-repeat;
-    opacity: 0.45;
-  }
-  /* `fullstack-a-75`: separator + secondary spawn band styles
-     for the Infographics row that sits below the primary spawn
-     buttons. Width / spacing mirror `.spawn-row`. */
-  .spawn-sep {
-    width: 70%;
-    max-width: 320px;
-    height: 1px;
-    background: var(--border);
-    margin: 0.5rem auto;
-    opacity: 0.6;
-  }
-  .spawn-row-secondary {
-    opacity: 0.85;
-  }
-  .placeholder-hint {
-    margin: 0;
-    text-align: center;
-    color: var(--text-secondary);
-    font-size: 13px;
-    line-height: 1.4;
-    max-width: 360px;
-  }
-  .dashboard-header {
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    gap: 4px;
-    margin-top: -0.5rem;
-  }
-  .dashboard-name {
-    font-size: 18px;
+    font-size: 12px;
     color: var(--text);
-    opacity: 0.85;
-    letter-spacing: 0.01em;
+    white-space: pre;
+    line-height: 1.45;
+    overflow: auto;
+    max-height: 100%;
   }
   /* --- Slide 2 (Metadata) --- */
   .metadata-bar {

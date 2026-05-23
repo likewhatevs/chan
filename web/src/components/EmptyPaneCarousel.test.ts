@@ -21,22 +21,22 @@ async function renderCarousel(props: { oncontextmenu?: (e: MouseEvent) => void }
 }
 
 describe("EmptyPaneCarousel", () => {
-  test("renders the welcome slide by default with three dots", async () => {
+  test("renders the Shortcuts slide by default with three dots", async () => {
+    // `fullstack-a-75b`: slide 1 is now Shortcuts (the ASCII
+    // table). The welcome slide moved to
+    // EmptyPaneWelcome.svelte as the new placeholder surface.
     const target = await renderCarousel();
 
     expect(target.querySelectorAll(".dot-btn").length).toBe(3);
-    // Slide 1 is the welcome slide — the chan-mark watermark
-    // is the verbatim placeholder bit that survives the lift.
-    expect(target.querySelector(".placeholder-mark")).not.toBeNull();
+    expect(target.querySelector(".slide-shortcuts")).not.toBeNull();
+    expect(target.querySelector(".shortcuts-table")).not.toBeNull();
     expect(target.querySelector(".slide-metadata")).toBeNull();
     expect(target.querySelector(".slide-indexing")).toBeNull();
-    // `fullstack-55`: the files / dirs / contacts / index stats row
-    // under the brand mark was dropped — slide 2 owns those tallies
-    // now. Regression check: no .dashboard-stats and no "N files"
-    // text on slide 1.
+    // Welcome chrome (logo + dashboard stats + spawn buttons)
+    // no longer renders inside the carousel.
+    expect(target.querySelector(".placeholder-mark")).toBeNull();
     expect(target.querySelector(".dashboard-stats")).toBeNull();
-    expect(target.textContent ?? "").not.toMatch(/\d+\s+files/);
-    expect(target.textContent ?? "").not.toMatch(/\d+\s+directories/);
+    expect(target.querySelector(".spawn-row")).toBeNull();
   }, 15000);
 
   test("clicking a dot navigates to that slide", async () => {
@@ -48,7 +48,7 @@ describe("EmptyPaneCarousel", () => {
     dots[1]?.click();
     await tick();
     expect(target.querySelector(".slide-metadata")).not.toBeNull();
-    expect(target.querySelector(".placeholder-mark")).toBeNull();
+    expect(target.querySelector(".slide-shortcuts")).toBeNull();
 
     dots[2]?.click();
     await tick();
@@ -56,7 +56,7 @@ describe("EmptyPaneCarousel", () => {
 
     dots[0]?.click();
     await tick();
-    expect(target.querySelector(".placeholder-mark")).not.toBeNull();
+    expect(target.querySelector(".slide-shortcuts")).not.toBeNull();
   }, 15000);
 
   test("forwards right-click to the parent contextmenu handler", async () => {
@@ -97,7 +97,7 @@ describe("EmptyPaneCarousel", () => {
       new KeyboardEvent("keydown", { key: "ArrowLeft", bubbles: true }),
     );
     await tick();
-    expect(target.querySelector(".placeholder-mark")).not.toBeNull();
+    expect(target.querySelector(".slide-shortcuts")).not.toBeNull();
   }, 15000);
 
   // `fullstack-85`: the carousel's own `:focus-visible` inset ring

@@ -82,50 +82,81 @@ describe("fullstack-a-75: Infographics command + emptyPaneExtraActions wiring", 
 });
 
 describe("fullstack-a-75: carousel slide 1 redesign", () => {
-  test("ASCII shortcut table dropped from carousel markup", () => {
-    expect(carousel).not.toMatch(/class="placeholder-shortcuts"/);
-    expect(carousel).not.toMatch(/renderTable\(platform, os\)/);
+  // `fullstack-a-75b`: spawn entries + secondary band moved
+  // OUT of the carousel and into EmptyPaneWelcome.svelte. The
+  // carousel is now a pure rotating widget hosted inside the
+  // Infographics tab; slide 1 carries the ASCII shortcut table.
+  test("spawn entries no longer surface in the carousel", () => {
+    expect(carousel).not.toMatch(/const spawnEntries: SpawnRow\[\]/);
+    expect(carousel).not.toMatch(/const secondaryEntries: SpawnRow\[\]/);
+    expect(carousel).not.toMatch(/function dispatchSpawn\(/);
   });
 
-  test("renderTable import dropped from carousel", () => {
-    expect(carousel).not.toMatch(
+  test("welcome chrome (logo / dashboard / spawn-row) dropped from carousel markup", () => {
+    expect(carousel).not.toMatch(/class="placeholder-mark"/);
+    expect(carousel).not.toMatch(/class="dashboard-header"/);
+    expect(carousel).not.toMatch(/<div class="spawn-row"/);
+  });
+
+  test("slide 1 is now the Shortcuts ASCII table (renderTable back inside carousel)", () => {
+    expect(carousel).toMatch(
       /import \{[\s\S]{1,400}renderTable,[\s\S]{1,200}\} from "\.\.\/state\/shortcuts";/,
     );
-  });
-
-  test("primary spawnEntries lists New Draft / Terminal / FB / RP / Graph in order", () => {
     expect(carousel).toMatch(
-      /const spawnEntries: SpawnRow\[\] = \[[\s\S]{1,200}label: "New Draft",[\s\S]{1,1000}label: "Terminal",[\s\S]{1,800}label: "File Browser",[\s\S]{1,800}label: "Rich Prompt",[\s\S]{1,800}label: "Graph",/,
+      /const shortcutTable = renderTable\(platform, os\);/,
     );
-  });
-
-  test("secondaryEntries carries Infographics", () => {
     expect(carousel).toMatch(
-      /const secondaryEntries: SpawnRow\[\] = \[[\s\S]{1,400}label: "Infographics",[\s\S]{1,200}command: "app\.infographics\.open",/,
-    );
-  });
-
-  test("markup renders secondary band below the primary spawn-row + separator", () => {
-    expect(carousel).toMatch(
-      /<div class="spawn-row" aria-label="spawn">[\s\S]{1,4000}<div class="spawn-sep"[\s\S]{1,400}<div class="spawn-row spawn-row-secondary"/,
+      /<div class="slide slide-shortcuts" aria-label="Shortcuts">[\s\S]{1,800}<pre class="shortcuts-table">\{shortcutTable\}<\/pre>/,
     );
   });
 });
 
-describe("fullstack-a-75: InfographicsTab body carries the shortcut table", () => {
-  test("renderTable used + shortcutTable rendered as monospace pre", () => {
+describe("fullstack-a-75b: InfographicsTab mounts the carousel", () => {
+  test("InfographicsTab imports + mounts EmptyPaneCarousel", () => {
     expect(infographics).toMatch(
-      /const shortcutTable = renderTable\(platform, os\);/,
+      /import EmptyPaneCarousel from "\.\/EmptyPaneCarousel\.svelte";/,
     );
-    expect(infographics).toMatch(
-      /<pre class="info-shortcuts">\{shortcutTable\}<\/pre>/,
-    );
+    expect(infographics).toMatch(/<EmptyPaneCarousel \/>/);
   });
 
-  test("body wraps the table in a labeled region", () => {
+  test("static ASCII pre + Shortcuts header dropped (carousel owns the shortcut surface now)", () => {
+    expect(infographics).not.toMatch(/<pre class="info-shortcuts">/);
+    expect(infographics).not.toMatch(/renderTable\(platform, os\)/);
+  });
+
+  test("body wraps the carousel in a labeled region", () => {
     expect(infographics).toMatch(
       /<div class="infographics" aria-label="Infographics">/,
     );
-    expect(infographics).toMatch(/<h2>Shortcuts<\/h2>/);
+  });
+});
+
+describe("fullstack-a-75b: EmptyPaneWelcome static spawn surface", () => {
+  test("EmptyPaneWelcome.svelte renders the 5-tile spawn grid + Infographics tile + hint", async () => {
+    const welcome = (await import("./EmptyPaneWelcome.svelte?raw"))
+      .default as string;
+    expect(welcome).toMatch(
+      /const spawnEntries: SpawnRow\[\] = \[[\s\S]{1,200}label: "New Draft",[\s\S]{1,1000}label: "Terminal",[\s\S]{1,800}label: "File Browser",[\s\S]{1,800}label: "Rich Prompt",[\s\S]{1,800}label: "Graph",/,
+    );
+    expect(welcome).toMatch(
+      /const secondaryEntries: SpawnRow\[\] = \[[\s\S]{1,400}label: "Infographics",[\s\S]{1,200}command: "app\.infographics\.open",/,
+    );
+    expect(welcome).toMatch(/class="welcome-hint"/);
+    expect(welcome).toMatch(/Each pane's visible tab is part of the scope/);
+  });
+
+  test("Pane.svelte mounts EmptyPaneWelcome (not EmptyPaneCarousel) on lone-pane empty case", async () => {
+    const pane = (await import("./Pane.svelte?raw")).default as string;
+    expect(pane).toMatch(
+      /import EmptyPaneWelcome from "\.\/EmptyPaneWelcome\.svelte";/,
+    );
+    expect(pane).toMatch(
+      /\{#if !multiPane\}[\s\S]{1,800}<EmptyPaneWelcome oncontextmenu=\{onEmptyPaneContextMenu\} \/>/,
+    );
+    // Pane.svelte no longer imports EmptyPaneCarousel directly
+    // (it's owned by InfographicsTab.svelte now).
+    expect(pane).not.toMatch(
+      /import EmptyPaneCarousel from "\.\/EmptyPaneCarousel\.svelte";/,
+    );
   });
 });

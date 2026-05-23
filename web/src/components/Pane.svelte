@@ -60,7 +60,7 @@
   import HybridEditorConfig from "./HybridEditorConfig.svelte";
   import HybridGraphConfig from "./HybridGraphConfig.svelte";
   import HybridFileBrowserConfig from "./HybridFileBrowserConfig.svelte";
-  import EmptyPaneCarousel from "./EmptyPaneCarousel.svelte";
+  import EmptyPaneWelcome from "./EmptyPaneWelcome.svelte";
   import FileEditorTab from "./FileEditorTab.svelte";
   import InfographicsTab from "./InfographicsTab.svelte";
   import FileBrowserSurface from "./FileBrowserSurface.svelte";
@@ -1324,13 +1324,16 @@
         oncontextmenu={onEmptyPaneContextMenu}
         role="presentation"
       >
-        <!-- Single-pane lone-pane case renders the full carousel
-             (welcome + metadata + indexing graph). Multi-pane
-             empty panes are usually workspace setup ("about to
-             drop files here"), so the chrome stays minimal — just
-             the chan mark, no carousel. -->
+        <!-- `fullstack-a-75b`: single-pane lone-pane case renders
+             the static welcome surface — 5-tile spawn grid +
+             Infographics tile + footer hint. The rotating
+             carousel widget (Shortcuts / Drive metadata /
+             Indexing graph) lives inside the Infographics tab
+             now per @@Alex's route on the `-a-75` walk.
+             Multi-pane empty panes keep the minimal chrome
+             (just the chan mark). -->
         {#if !multiPane}
-          <EmptyPaneCarousel oncontextmenu={onEmptyPaneContextMenu} />
+          <EmptyPaneWelcome oncontextmenu={onEmptyPaneContextMenu} />
         {:else}
           <div class="placeholder-stack">
             <div class="placeholder-mark"></div>
