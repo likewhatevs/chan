@@ -5773,3 +5773,113 @@ End-to-end: FB row + DRAFTS chip + notice +
 Cmd+N draft creation + rich prompt persist +
 graph emit + drafts_link edge + BM25 indexing
 all work. 5-iteration odyssey complete.
+
+## 2026-05-23 — proactive walk: -a-76 slice 2 Settings Features + -a-77 slice 2 screensaver overlay
+
+Proactive walk on HEAD `b099b24` post-fresh-binary
+build (per the new `feedback_fresh_binary_rewalks`
+discipline). Build timestamp May 23 03:41:13.
+Throwaway drive r35; chan serve 127.0.0.1:8787;
+Chrome MCP tab `503726169`.
+
+### Verdicts (3/3 HOLD + 1 side observation)
+
+| Task | Check | Verdict |
+|------|-------|---------|
+| `-a-76 2` Settings Features section pairs reports + BGE | empirical | HOLD |
+| `-a-77 2` Screensaver overlay covers drive on timeout | empirical | HOLD 🎉 |
+| `-a-77 2` PIN entry form rendered | empirical | HOLD |
+| `-a-77 2` Helper text vs validation contradiction | empirical | side observation |
+
+### `-a-76 slice 2` HOLD — Settings Features section
+
+Cmd+, opened Settings overlay. New FEATURES
+section present with:
+- **chan-reports** toggle: "Code-stats indexing
+  (SLOC + COCOMO + per-language breakdown)" —
+  default Off
+- **BGE semantic search** toggle: "Hybrid BM25 +
+  embeddings. Requires the BGE-small model on
+  disk (download from the File Browser
+  back-side)." — default Off
+
+Both toggles paired together per spec. About
+section below shows chan version, embeddings
+status, terminal font.
+
+### `-a-77 slice 2` HOLD — screensaver overlay
+
+**Setup**:
+- `PATCH /api/screensaver/state` with `{enabled:
+  true, timeout_secs: 3}` succeeded → state
+  flipped to enabled w/ 3s timeout
+- Reloaded page to trigger tracker re-install +
+  state re-load
+- Waited 6s (> 3s timeout, no interaction)
+
+**Lock fired empirically**:
+- `.screensaver-backdrop` (svelte-w1bnvt)
+  rendered
+- Full-window coverage (width=1440 height=757,
+  matched viewport)
+- 🔒 lock icon at top of card
+- "Screen locked" title
+- Helper text: "No PIN set on this drive. The
+  lockout is informational only — any input
+  unlocks."
+- PIN input field (placeholder "P I N")
+- Green "Unlock" button
+
+State machine + overlay work as specced.
+
+### Side observation: contradictory UX
+
+The helper text says "any input unlocks" but the
+Unlock button validation rejects empty PIN with
+"Enter a PIN to unlock", then when you DO enter
+something it rejects with "No PIN set on this
+drive. Open Settings to configure."
+
+**Problem**: if no PIN is set + screensaver
+enabled, the user is locked out with no way to
+unlock via the form. Settings is also unreachable
+while overlay is up.
+
+Suggest one of:
+- Make "any input unlocks" actually unlock when
+  no PIN is set (matches the helper text intent)
+- OR rework the helper text to say "Set a PIN in
+  Settings before enabling" and refuse to enable
+  without a PIN
+- OR show a "Disable lock" button in the overlay
+  when no PIN is set
+
+Lane: **@@FullStackA**. UX-only fix, not a
+mechanism regression.
+
+### Highlights
+
+* **Fresh-binary discipline paid off again**:
+  followed the new procedure (pkill + rebuild +
+  verify provenance + restart) per the lesson
+  from the Drafts saga. No false-positive
+  PARTIALs this walk.
+* **`-a-77` slice 2 state machine empirically
+  works**: 3s timeout triggers lock, overlay
+  covers full window, PIN form rendered.
+* **`-a-76` slice 2 Features section paired
+  cleanly**: chan-reports + BGE toggles co-located
+  in Settings.
+
+### State at end of walk
+
+Lane-A test server torn down:
+1. Disabled screensaver via API (avoid lockout
+   on next session).
+2. chan serve killed.
+3. `rm -rf /tmp/chan-test-phase8-wa-r35/`.
+4. `chan remove` → unregistered.
+5. Chrome MCP tab closed.
+
+3/3 HOLD. Both Round-3 wave items ship clean.
+One UX side observation flagged for follow-up.

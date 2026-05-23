@@ -3522,3 +3522,94 @@ Standing by. Drafts saga truly closed end-to-end.
 Thanks for the re-walk routing + the
 fresh-binary directive — it was exactly the
 right diagnostic move.
+
+## 2026-05-23 — poke (-a-76 slice 2 + -a-77 slice 2 — 3/3 HOLD + 1 UX side observation)
+
+Proactive walk on HEAD `b099b24`. Followed the new
+fresh-binary discipline per the Drafts saga lesson.
+Throwaway drive r35; chan serve 127.0.0.1:8787;
+Chrome MCP tab `503726169`. Verdict in
+[`../webtest-a/webtest-a-1.md`](../webtest-a/webtest-a-1.md).
+
+### Verdicts: 3/3 HOLD
+
+| Task | Verdict |
+|------|---------|
+| `-a-76 2` Settings Features (reports + BGE pair) | HOLD |
+| `-a-77 2` Screensaver overlay covers drive | HOLD 🎉 |
+| `-a-77 2` PIN entry form rendered | HOLD |
+
+### `-a-76 slice 2` HOLD
+
+Cmd+, → Settings. New FEATURES section pairs:
+- **chan-reports** (Code-stats indexing) toggle —
+  default Off
+- **BGE semantic search** (Hybrid BM25 +
+  embeddings) toggle — default Off
+
+Both co-located per spec. Clean.
+
+### `-a-77 slice 2` HOLD
+
+Setup:
+- `PATCH /api/screensaver/state {enabled: true,
+  timeout_secs: 3}` ✓
+- Reloaded
+- Waited 6s (> 3s timeout, no interaction)
+
+Lock fired:
+- `.screensaver-backdrop` rendered full-window
+  (1440x757)
+- Lock icon + "Screen locked" title
+- PIN input + green Unlock button
+
+State machine + overlay work as specced.
+
+### Side observation: helper text vs validation contradiction
+
+Helper text: "No PIN set on this drive. The
+lockout is informational only — **any input
+unlocks**."
+
+But empirically:
+- Empty PIN → "Enter a PIN to unlock" error
+- Non-empty PIN → "No PIN set on this drive.
+  Open Settings to configure." error
+
+If no PIN is set + screensaver enabled, the user
+is **locked out with no way to unlock via the
+form**. Settings is also unreachable while
+overlay is up.
+
+Suggest one of three fixes:
+- Make "any input unlocks" actually work when no
+  PIN is set (matches helper text)
+- Rework helper to say "Set a PIN in Settings
+  before enabling" + refuse `enabled=true` when
+  PIN is unset
+- Show a "Disable lock" button in the overlay
+  when no PIN is set (escape hatch)
+
+Lane: **@@FullStackA**. UX-only, not a
+mechanism regression.
+
+### Side note on testing
+
+Without the PIN-set fix, future empirical walks
+of the screensaver flow risk locking themselves
+out. I disabled via API before tear-down. The
+next walker should be aware: don't `enabled=true`
+without `pin_set=true`, or have an API escape
+ready.
+
+### Suggested commit shape
+
+* **Commit subject**: `docs: webtest-a proactive
+  walk — -a-76 2 + -a-77 2 HOLD (3/3); UX side
+  observation on screensaver no-PIN lockout`.
+* **Files**:
+  * `docs/journals/phase-8/webtest-a/webtest-a-1.md`
+  * `docs/journals/phase-8/alex/event-webtest-a-architect.md`
+* Path-limited `git commit`.
+
+Standing by.
