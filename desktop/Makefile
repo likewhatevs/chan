@@ -1,10 +1,24 @@
-.PHONY: run build check fmt fmt-check lint test clean chan-bin \
+.PHONY: run build check fmt fmt-check lint test clean chan-bin tauri-cli \
         app-signed app-notarized sign-prereqs notarize-prereqs
 
 # Monorepo root. Override via CHAN_REPO=/path on CI.
 CHAN_REPO ?= ..
 TARGET_TRIPLE := $(shell rustc -vV | sed -n 's/host: //p')
 CHAN_BIN := src-tauri/binaries/chan-$(TARGET_TRIPLE)
+TAURI_CLI_VERSION ?= ^2
+TAURI_CLI_ROOT := $(abspath $(CHAN_REPO)/target/tauri-cli)
+TAURI_CLI_BIN := $(TAURI_CLI_ROOT)/bin/cargo-tauri
+TAURI := PATH="$(TAURI_CLI_ROOT)/bin:$$PATH" cargo tauri
+
+# Keep local dev self-contained: CI installs tauri-cli globally, but a
+# fresh workstation usually does not have the cargo subcommand yet.
+tauri-cli:
+	@if ! command -v cargo-tauri >/dev/null 2>&1 \
+	    && [ ! -x "$(TAURI_CLI_BIN)" ]; then \
+	    echo "installing tauri-cli $(TAURI_CLI_VERSION) under $(TAURI_CLI_ROOT)"; \
+	    cargo install tauri-cli --locked --version "$(TAURI_CLI_VERSION)" \
+	        --root "$(TAURI_CLI_ROOT)"; \
+	fi
 
 # Stage chan as the bundled sidecar. Rebuilds every invocation so
 # in-progress chan edits flow into `make run` without a separate
@@ -36,11 +50,11 @@ chan-bin:
 	        --sign "$$APPLE_SIGNING_IDENTITY" $(CHAN_BIN); \
 	fi
 
-run: chan-bin
-	cd src-tauri && cargo tauri dev
+run: tauri-cli chan-bin
+	cd src-tauri && $(TAURI) dev
 
-build: chan-bin
-	cd src-tauri && cargo tauri build
+build: tauri-cli chan-bin
+	cd src-tauri && $(TAURI) build
 
 check:
 	cd src-tauri && cargo check
@@ -209,8 +223,8 @@ notarize-prereqs:
 # Sign the .app with the configured Developer ID identity. No
 # notarization, no .dmg. Tauri picks APPLE_SIGNING_IDENTITY out of
 # the env when calling `codesign`.
-app-signed: sign-prereqs chan-bin
-	cd src-tauri && cargo tauri build --bundles app
+app-signed: sign-prereqs tauri-cli chan-bin
+	cd src-tauri && $(TAURI) build --bundles app
 	@echo ""
 	@echo "signed .app: $(CHAN_REPO)/target/release/bundle/macos/Chan.app"
 	@echo "verify: codesign -dv --verbose=2 $(CHAN_REPO)/target/release/bundle/macos/Chan.app"
@@ -226,9 +240,9 @@ app-signed: sign-prereqs chan-bin
 # call `xcrun notarytool submit` ourselves with the appropriate flag
 # set. CI behaviour is identical to the prior path (manual notarytool
 # call uses the same credentials Tauri would have used).
-app-notarized: sign-prereqs notarize-prereqs chan-bin
+app-notarized: sign-prereqs notarize-prereqs tauri-cli chan-bin
 	cd src-tauri && env -u APPLE_ID -u APPLE_PASSWORD -u APPLE_TEAM_ID \
-	    cargo tauri build --bundles app,dmg
+	    $(TAURI) build --bundles app,dmg
 	@DMG=$$(ls -1 $(CHAN_REPO)/target/release/bundle/dmg/*.dmg | head -1); \
 	    if [ -z "$$DMG" ]; then \
 	        echo "error: no .dmg produced by cargo tauri build"; exit 1; \
