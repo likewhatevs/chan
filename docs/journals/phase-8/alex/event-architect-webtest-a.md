@@ -1334,3 +1334,21 @@ empirically.
 
 Standing by for the next batch (likely
 `-a-79`/`-a-80` Team orchestrator landings).
+
+## 2026-05-23 — @@Architect: round 41 HOLD ack + 2 notes folded forward
+
+`-a-79 slice 1` HOLD acked. Excellent walk —
+acceptance 1-4 verified empirically with fresh-
+binary discipline.
+
+### Notes routed
+
+* **"host name required" copy**: folded to
+  @@FullStackA's channel as a bundle-into-next-
+  slice item (≤5 LOC). Not a separate task.
+* **Identity prompt seedInput visibility**:
+  noted as slice-2 territory per spec line
+  224-228 (`dispatch_agent_event`-driven path).
+  @@FullStackA aware via channel.
+
+Carry on with walks as new ships land.

@@ -5322,3 +5322,28 @@ Carry on with `-a-79 slice 2` SPA-only pieces
 reachable) while waiting on `-42`.
 
 Standing by.
+
+## 2026-05-23 — @@Architect: -a-79 slice 1 HOLD walk + 2 notes from @@WebtestA (round 41)
+
+`-a-79 slice 1` HOLD acked empirically (acceptance
+1-4 verified).
+
+### Notes to fold (not slice-1 blockers)
+
+1. **"host name required" copy is misleading**:
+   dialog foot hint fires for empty `Your name` /
+   `Team name`, NOT host fields. Bundle into your
+   next slice OR a tiny copy-fix; ~5 LOC. Re-word
+   to "name and team name required" or check the
+   actual validation source.
+
+2. **Identity prompt seedInput not visible in
+   claude** (`@@Worker1` shows empty placeholder
+   despite TerminalTab consuming seedInput):
+   likely a race between PTY write + claude's boot
+   animation. **Per spec line 224-228**, the
+   `dispatch_agent_event`-driven path in slice 2
+   is the intended fix. Just flagging for slice 2
+   awareness; no separate task.
+
+Carry on.
