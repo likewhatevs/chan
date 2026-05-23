@@ -31,6 +31,8 @@ const ALT_SCREEN_ENTER: &[u8] = b"\x1b[?1049h";
 const ALT_SCREEN_EXIT: &[u8] = b"\x1b[?1049l";
 const ALT_SCREEN_TAIL_BYTES: usize = ALT_SCREEN_ENTER.len() - 1;
 const REDRAW_WOBBLE_DELAY: Duration = Duration::from_millis(50);
+const TERMINAL_FD_HEADROOM: u64 = 32;
+const TERMINAL_SESSION_FD_ESTIMATE: u64 = 8;
 
 pub const ALT_SCREEN_ATTACH_PRELUDE: &[u8] = b"\x1b[?1049h\x1b[2J\x1b[H";
 
@@ -107,6 +109,7 @@ pub struct PreflightConfig {
 #[derive(Debug)]
 pub enum CreateError {
     Capped,
+    FdPressure(FdPressure),
     Spawn(anyhow::Error),
 }
 
@@ -114,12 +117,30 @@ impl std::fmt::Display for CreateError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             CreateError::Capped => f.write_str("terminal session cap reached"),
+            CreateError::FdPressure(pressure) => write!(f, "{pressure}"),
             CreateError::Spawn(e) => write!(f, "{e}"),
         }
     }
 }
 
 impl std::error::Error for CreateError {}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FdPressure {
+    pub open: u64,
+    pub limit: u64,
+    pub required: u64,
+}
+
+impl std::fmt::Display for FdPressure {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "too many open files to start terminal: {}/{} open, need {} fd headroom",
+            self.open, self.limit, self.required
+        )
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "lowercase")]
@@ -227,6 +248,7 @@ impl Registry {
         if sessions.len() >= self.config.terminal.session_cap {
             return Err(CreateError::Capped);
         }
+        reject_terminal_spawn_if_fd_pressure()?;
         let id = self.unused_id(&sessions);
         let session =
             Session::spawn(id.clone(), self.config.clone(), opts).map_err(CreateError::Spawn)?;
@@ -254,6 +276,7 @@ impl Registry {
         if old.closed.load(Ordering::Relaxed) {
             return Ok(false);
         }
+        reject_terminal_spawn_if_fd_pressure()?;
         let mut opts = old.restart_options();
         if tab_name.is_some() {
             opts.tab_name = tab_name;
@@ -626,6 +649,53 @@ impl Registry {
             })
             .cloned()
     }
+}
+
+fn reject_terminal_spawn_if_fd_pressure() -> Result<(), CreateError> {
+    let Some((open, limit)) = fd_snapshot() else {
+        return Ok(());
+    };
+    if fd_headroom_allows(open, limit, TERMINAL_SESSION_FD_ESTIMATE) {
+        return Ok(());
+    }
+    Err(CreateError::FdPressure(FdPressure {
+        open,
+        limit,
+        required: TERMINAL_SESSION_FD_ESTIMATE + TERMINAL_FD_HEADROOM,
+    }))
+}
+
+fn fd_headroom_allows(open: u64, limit: u64, new_fds: u64) -> bool {
+    open.saturating_add(new_fds)
+        .saturating_add(TERMINAL_FD_HEADROOM)
+        < limit
+}
+
+#[cfg(unix)]
+fn fd_snapshot() -> Option<(u64, u64)> {
+    let open = std::fs::read_dir("/dev/fd").ok()?.count() as u64;
+    let limit = nofile_limit()?;
+    Some((open, limit))
+}
+
+#[cfg(not(unix))]
+fn fd_snapshot() -> Option<(u64, u64)> {
+    None
+}
+
+#[cfg(target_os = "linux")]
+fn nofile_limit() -> Option<u64> {
+    rustix::process::getrlimit(rustix::process::Resource::Nofile).current
+}
+
+#[cfg(target_os = "macos")]
+fn nofile_limit() -> Option<u64> {
+    rustix::process::getrlimit(rustix::process::Resource::Nofile).current
+}
+
+#[cfg(all(unix, not(any(target_os = "linux", target_os = "macos"))))]
+fn nofile_limit() -> Option<u64> {
+    None
 }
 
 impl Drop for Registry {
@@ -1774,6 +1844,12 @@ mod tests {
             })
             .unwrap_err();
         assert!(matches!(err, CreateError::Capped));
+    }
+
+    #[test]
+    fn fd_headroom_keeps_terminal_spawns_away_from_process_limit() {
+        assert!(fd_headroom_allows(100, 256, TERMINAL_SESSION_FD_ESTIMATE));
+        assert!(!fd_headroom_allows(216, 256, TERMINAL_SESSION_FD_ESTIMATE));
     }
 
     #[test]

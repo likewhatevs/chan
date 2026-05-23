@@ -359,6 +359,9 @@ pub async fn api_create_terminal(
         Err(CreateError::Capped) => {
             (StatusCode::CONFLICT, "terminal session cap reached").into_response()
         }
+        Err(CreateError::FdPressure(e)) => {
+            (StatusCode::SERVICE_UNAVAILABLE, e.to_string()).into_response()
+        }
         Err(CreateError::Spawn(e)) => (
             StatusCode::BAD_REQUEST,
             format!("failed to start terminal: {e}"),
@@ -407,6 +410,9 @@ pub async fn api_restart_terminal(
         Ok(false) => (StatusCode::NOT_FOUND, "terminal session not found").into_response(),
         Err(CreateError::Capped) => {
             (StatusCode::CONFLICT, "terminal session cap reached").into_response()
+        }
+        Err(CreateError::FdPressure(e)) => {
+            (StatusCode::SERVICE_UNAVAILABLE, e.to_string()).into_response()
         }
         Err(CreateError::Spawn(e)) => (
             StatusCode::BAD_REQUEST,
@@ -706,6 +712,24 @@ async fn terminal_ws(mut socket: WebSocket, state: Arc<AppState>, opts: Terminal
                 .send(Message::Close(Some(CloseFrame {
                     code: 1013,
                     reason: "terminal session cap reached".into(),
+                })))
+                .await;
+            return;
+        }
+        Err(CreateError::FdPressure(e)) => {
+            let message = e.to_string();
+            let _ = send_frame(
+                &mut socket,
+                ServerFrame::Error {
+                    message: message.clone(),
+                    reason: Some("fd_pressure"),
+                },
+            )
+            .await;
+            let _ = socket
+                .send(Message::Close(Some(CloseFrame {
+                    code: 1013,
+                    reason: message.into(),
                 })))
                 .await;
             return;
