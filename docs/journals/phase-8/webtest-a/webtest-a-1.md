@@ -6941,3 +6941,72 @@ from process-creation.
 Contention: the round-41 git-state issue (origin/main dropped
 225 phase-8 commits via PR #1) still unresolved. Local main
 is now 259+ ahead. Not pushing.
+
+---
+
+## 2026-05-23 (round 45) — identity-prompt rewrite per @@Alex (host/lead role clarity)
+
+Architect routed @@Alex's identity-prompt template rewrite —
+explicit host vs lead role clarity so agents default to
+sending events to the lead while accepting direct queries
+from the host (asymmetric: host → all OK, agents → lead
+default, agents NOT → host).
+
+Fresh build at HEAD `c998503`. Throwaway drive `r46` on port
+8796.
+
+### Patch shape (`teamOrchestrator.svelte.ts`)
+
+* `identityPrompt(hostHandle: string)` → `identityPrompt(hostHandle, leadHandle, bootstrapDoc)`.
+* Template literal:
+  * before: `I'm ${host}. You're $CHAN_TAB_NAME. Identify yourself, and then read docs/agents/bootstrap.md`
+  * after: `Hello, I am ${host} and you are $CHAN_TAB_NAME. Our team lead is ${lead}. Identify yourself and read ${bootstrapDoc}.`
+* `$CHAN_TAB_NAME` literal preserved (worker shell expands).
+* `runTeamBootstrap` callsite derives:
+  * `leadHandle` from `wire.members.find(m => m.is_lead)?.handle`
+    (falls back to `wire.host_handle`).
+  * `bootstrapDoc` as `Drafts/team-${wire.team_name}/docs/bootstrap.md`
+    — matches the per-team placed-template path from slice 3
+    (not the stale `docs/agents/bootstrap.md` reference).
+
+### Walk
+
+Cmd+Alt+T → Terminal-1. Cmd+Alt+P → Rich Prompt. New Team
+→ `AlexWT` / `iota` → Bootstrap. Switched to @@Lead tab:
+
+* Claude Code v2.1.150 greeter (slice 5b still working — lead
+  PTY runs claude).
+* Rich-prompt buffer text verbatim:
+  ```
+  Hello, I am @@AlexWT and you are $CHAN_TAB_NAME.
+  Our team lead is @@Lead.
+  Identify yourself and read Drafts/team-iota/docs/bootstrap.md.
+  ```
+* `@@AlexWT` + `@@Lead` rendered as contact bubbles (existing
+  BubbleOverlay integration picks up the `@@` prefix).
+* `Drafts/team-iota/docs/bootstrap.md` is the per-team
+  placement path that resolves through chan-drive's prefix-
+  aware unified-path API.
+
+### Verdict
+
+**HOLD**. Template matches @@Alex's literal verbatim. The
+host/lead role asymmetry is now wired into every agent's
+identity bootstrap — agents read the literal "team lead is
+@@Lead" and the literal "I am @@AlexWT" (host).
+
+### State
+
+Test server torn down: `iota` unloaded, chan serve killed,
+drive + drafts metadata wiped, `chan remove` ran, Chrome tab
+closed.
+
+Highlight: round-43 identity-prompt scope completion. The
+identity prompt template now baked the host/lead role
+asymmetry that addendum-b clarification #6's process
+template was pointing at; the bootstrap doc that agents
+read takes over from there.
+
+Contention: git state still unresolved (local main 263+
+ahead of origin/main due to PR #1 dropping 225 phase-8
+commits). Not pushing.

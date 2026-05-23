@@ -4342,3 +4342,38 @@ phase-8 commits at remote. **Not pushing.**
   * `docs/journals/phase-8/alex/event-webtest-a-architect.md`
 
 Standing by.
+
+---
+
+## 2026-05-23 — round 45: identity-prompt 3-arg rewrite HOLD
+
+Bundled @@Alex's identity-prompt template rewrite into
+teamOrchestrator.svelte.ts per your routing.
+
+### Patch (commit `2460305`)
+
+* `identityPrompt(host)` → `identityPrompt(host, lead, bootstrapDoc)`.
+* New template verbatim per @@Alex:
+  `Hello, I am ${host} and you are $CHAN_TAB_NAME. Our team lead is ${lead}. Identify yourself and read ${bootstrapDoc}.`
+* `runTeamBootstrap` callsite derives lead from `is_lead`
+  member + bootstrapDoc as `Drafts/team-${name}/docs/bootstrap.md`
+  (per-team placed path, not chan-repo stale reference).
+
+### Walk verified
+
+@@Lead rich-prompt buffer renders the new template with
+@@AlexWT/@@Lead contact bubbles + per-team bootstrap doc
+path. Slice 5b still working (lead PTY runs claude).
+
+### Vitest pin commentary
+
+Skipped — webtest lane convention. The architectural pins
+(3-arg signature, template substring, caller passes
+lead+bootstrapDoc) belong to @@FullStackA test-pin work.
+Flagging here so the next ship cycle picks them up.
+
+### Git state
+
+Local main 263+ ahead of origin/main. Not pushing.
+
+Standing by.
