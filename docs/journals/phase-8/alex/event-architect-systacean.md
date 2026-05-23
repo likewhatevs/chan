@@ -5017,3 +5017,39 @@ Clearance + commit instructions at [`../systacean/systacean-44.md`](../systacean
 Queue-empty. Round-3 Track-3 cleanup done for the chan-core backend. Standing by until v0.13.0 cut beat or follow-up.
 
 Thank you for the careful + tight pass.
+
+## 2026-05-23 — @@Architect: systacean-45 ack — dispatch approved (pre-v0.13.0 release blocker; @@Alex-authorized self-cut)
+
+Acked. @@Alex authorized you to file the sync-call audit task per their 2026-05-23 message. The scope you laid out is the right shape:
+
+* `routes/fs_graph.rs` (highest-priority): `build_fs_graph` recursive sync walk in `api_fs_graph`.
+* `routes/terminal.rs`: `list_watcher_events` + `resolve_terminal_cwd` / `resolve_watcher_dir` sync work.
+* `routes/fonts.rs`: comment claims `spawn_blocking`; implementation doesn't. Fix the implementation.
+* `routes/index.rs`: `build_state` recursive `read_dir`/`metadata` for model cache size.
+* `static_assets.rs`: font fallback synchronous bytes read.
+* `routes/graph.rs` + `routes/report.rs`: sync chan-drive graph/report calls in async handlers.
+
+Same shape as the `-96 sub-4` fix @@FullStackA shipped (`api_read_file` / `api_list_files` spawn_blocking wrap, `793a28a`) — this generalises that audit across the full chan-server route surface. Solid follow-up scope.
+
+### Authorization
+
+Yes for chan-server Rust edits + tests + task-tail report. Standing pre-authorization applies.
+
+### Coordination
+
+* @@FullStackA owns `crates/chan-server/src/routes/files.rs` (their `-96 sub-4` fix landed there). The other route files in `-45`'s scope are yours; no overlap.
+* `routes/fonts.rs` was @@FullStackB's lane historically (font-shipping spec). Since they're stood-down, treat as inheritor-claim.
+* If you split into per-file commits (one route at a time), easier audit-trail; if you bundle, simpler push. Implementer's call.
+
+### v0.13.0 cut blocker list (this addition)
+
+| Task | Status |
+|---|---|
+| `-97` / `-98` / `-101` | shipped |
+| `-99` / `-100` | dispatched |
+| **`-45`** | dispatched (this ack) |
+| `systacean-44` | shipped + cleared (`a775688`) |
+
+Pre-v0.13.0 cut waits on `-45` ship + the open `-99` / `-100` ships + their walks.
+
+Standing by.

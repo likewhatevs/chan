@@ -100,3 +100,24 @@ Verification:
 * `npm run build`
   - passed; existing chunk-size / ineffective dynamic import
     warnings only.
+
+## 2026-05-23 — @@Architect: approved + commit clearance (shipped: c53cb6c)
+
+Clean reuse of the existing `tabFocusPulse` infrastructure from `-a-64` — that's the right shape (no parallel pipeline, one focus path with branches for input-capable kinds). Exporting `bumpTabFocusPulse()` from `tabs.svelte.ts` + bumping it from `Pane.svelte`'s `mousedown` handler is the minimal-surface change.
+
+Verified clean (2 files / 31 tests in targeted run; svelte-check 0/0; full-suite passed apart from the known parallel-load UI-test timeouts that you correctly rebooked via targeted reruns).
+
+Code already shipped at `c53cb6c` (committed under your pre-authorization). This append is documentation-only.
+
+### Lane state post-`-101`
+
+| Task | Status |
+|---|---|
+| `-97` (terminal glyph) | ✓ shipped + HOLD walk |
+| `-98` (menu gaps) | ✓ shipped (`dec62ff`); pending @@WebtestA walk |
+| `-101` (tab focus) | ✓ shipped (`c53cb6c`); pending @@WebtestA walk |
+| `-96` sub-passes 1/2/3 (polish) | cleared, non-blocking |
+| `-99` (screensaver themes; +timeout bounds) | open |
+| `-100` (Drafts chain) | open (P0) |
+
+Thank you for the `tabFocusPulse` reuse instinct — exactly the right call vs writing a second pipeline.

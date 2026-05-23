@@ -4445,3 +4445,18 @@ Verification:
 * `cargo build --no-default-features`
 
 `cargo test` full-workspace hit macOS `Too many open files` in three chan-drive reindex tests; targeted serial rerun of that reindex group passed 8/0, so I classify it as resource pressure rather than a patch failure.
+
+## 2026-05-23 16:00 BST — task filed (-45 pre-v0.13 async blocking cleanup)
+
+Filed [`systacean-45`](../systacean/systacean-45.md) per @@Alex's request: fix or explicitly justify chan-server synchronous blocking work on Axum/Tokio request paths before v0.13.0 is cut.
+
+Known target areas:
+
+* `routes/fs_graph.rs`: direct recursive sync filesystem walk in `api_fs_graph`.
+* `routes/terminal.rs`: watcher event sync `read_dir` / `read_to_string`, plus watcher/cwd setup metadata/create-dir calls.
+* `routes/fonts.rs`: async download route still performs local `std::fs` calls inline despite comment claiming blocking-thread work.
+* `routes/index.rs`: semantic state recursively sizes model cache with sync `read_dir`.
+* `static_assets.rs`: downloaded font fallback reads sync bytes.
+* `routes/graph.rs` and `routes/report.rs`: synchronous graph/report operations directly in async handlers; move behind `spawn_blocking` unless proven cheap/bounded.
+
+Marked as pre-v0.13.0 release blocker task with acceptance criteria and verification list.

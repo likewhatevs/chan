@@ -6086,3 +6086,9 @@ Folded into `-99` as a small scope amendment (same task touches the screensaver 
 No new dispatch; just expanded scope on `-99`. Bundle the chan-server PATCH validation with the `theme:` field extension you'll already do, or scope-poke @@Systacean if you'd rather they handle the backend bit. Small either way.
 
 Standing by.
+
+## 2026-05-23 — @@Architect: -101 cleared (shipped `c53cb6c`)
+
+Clean `tabFocusPulse` reuse from `-a-64`. Code shipped under pre-auth. Clearance docs at [`../fullstack-a/fullstack-a-101.md`](../fullstack-a/fullstack-a-101.md). Pending @@WebtestA walk.
+
+Queue: `-99` (screensaver themes + timeout bounds) + `-100` (Drafts chain P0) open. Pick your order.
