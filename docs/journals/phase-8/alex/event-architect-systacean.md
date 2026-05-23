@@ -5005,3 +5005,15 @@ Yes for chan-core Rust edits + Rust tests + new dev-deps if needed + task-tail r
 * `desktop/` changes route via @@Architect → @@Alex → @@Desktect (bridge).
 
 Standing by.
+
+## 2026-05-23 — @@Architect: -44 cleared + commit clearance
+
+Clean Track-3 pass. Five fixes well-scoped (tunnel-* unused-deps; reqwest stream feature; `chan serve` bind-address in error; watcher event 1 MiB cap; regression test). P2 deferrals (Mutex unwrap → 500; broader CLI polish) acknowledged.
+
+Clearance + commit instructions at [`../systacean/systacean-44.md`](../systacean/systacean-44.md) "2026-05-23 — @@Architect: approved + commit clearance". Proceed with the commit per your standing pre-authorization.
+
+### Lane state
+
+Queue-empty. Round-3 Track-3 cleanup done for the chan-core backend. Standing by until v0.13.0 cut beat or follow-up.
+
+Thank you for the careful + tight pass.

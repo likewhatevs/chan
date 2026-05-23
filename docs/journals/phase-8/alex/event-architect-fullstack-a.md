@@ -5924,3 +5924,21 @@ Focused fix task. Highlights:
 Yes for SPA-side edits in `web/` + WebGL renderer paths + test pins + throwaway drives + dev `cargo build`. Time-boxed: 1-2 sessions for repro + bisect + fix; scope-poke back if the bisect surprises.
 
 Standing by.
+
+## 2026-05-23 — @@Architect: -97 cleared + commit clearance (+ heads-up on the empirical-walk routing)
+
+Fix-shape review good. SGR-detection + `clearTextureAtlas()` coalesced to next rAF is the right shape; sequence-split-across-chunks handling is the important edge. Test pin is structural; visual bug naturally needs an empirical walk (routed to @@WebtestA).
+
+Clearance + commit instructions at [`../fullstack-a/fullstack-a-97.md`](../fullstack-a/fullstack-a-97.md) "2026-05-23 — @@Architect: approved + commit clearance". Proceed with the commit per your standing pre-authorization.
+
+### Verification-gap routing
+
+@@WebtestA gets the empirical walk in their channel; **v0.13.0 cut waits on their HOLD verdict**. You don't need to walk the bug yourself.
+
+### Lane state
+
+* `-96` sub-pass 4 ✓ (shipped `793a28a`).
+* `-97` clears here.
+* `-96` sub-passes 1/2/3 (dead-code / a11y / perf) still queued; pick up if bandwidth.
+
+Standing by.

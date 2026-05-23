@@ -90,3 +90,99 @@ Yes for chan-core Rust edits (`crates/chan-drive/`, `crates/chan-server/`, `crat
 * SPA / web/ changes (@@FullStackA's lane).
 * CI / workflow changes (@@CI's lane).
 * desktop/ changes (chan-desktop's lane).
+
+## 2026-05-23 15:52 BST — report
+
+Track-3 one-wave pass complete.
+
+### Fixed
+
+* `crates/chan-tunnel-client/Cargo.toml`: removed confirmed unused normal deps flagged by `cargo machete` (`anyhow`, `async-trait`, `bytes`, `http-body`, `http-body-util`, `pin-project-lite`).
+* `crates/chan-tunnel-server/Cargo.toml`: removed confirmed unused normal deps (`anyhow`, `http-body`, `pin-project-lite`, `serde`, `serde_json`, `tower`).
+* `crates/chan-tunnel-server/Cargo.toml`: made the integration-test-only `reqwest` `stream` feature explicit after dependency cleanup exposed the prior feature-unification assumption.
+* `crates/chan/src/main.rs`: local `chan serve` bind failures now carry the requested listen address via `running server on {addr}`.
+* `crates/chan-server/src/routes/terminal.rs`: watcher event listing now skips matching event files larger than 1 MiB before `read_to_string`, with a regression test.
+
+### Dead-code / error-path sweep
+
+* `cargo machete`: initially found 12 unused dependency edges across `chan-tunnel-client` and `chan-tunnel-server`; after the patch it reports no unused dependencies.
+* `cargo clippy --all-targets -- -W clippy::pedantic -A clippy::module_name_repetitions -A clippy::missing_errors_doc -A clippy::missing_panics_doc`: warning-only. Mostly doc markdown, must-use candidates, cast/format/style lints. No P0/P1 pattern worth broadening the pass.
+* `unwrap` / `expect` audit: user-input-adjacent production candidates were inspected. Static invariant unwraps/expectations in tunnel setup and serializer shape were left alone. Lock poisoning unwraps in route/state code are still present, classified P2 structural cleanup rather than adversarial input panic.
+* TODO/FIXME/XXX scan: no release blocker. Noted existing P2s: sub-second mtime race comment in `routes/files.rs`; terminal slash-command automation TODO in `terminal_sessions.rs`.
+
+### Route-boundary validation
+
+Manual route-boundary review covered `crates/chan-server/src/routes/*.rs`; `security-review` skill was requested by dispatch but is not installed in this session.
+
+* Drive content paths mostly route through chan-drive `Drive` / `resolve_safe*`, preserving the sandbox and special-file refusal.
+* Direct filesystem access reviewed:
+  * `terminal.rs`: watcher dirs intentionally bypass drive sandbox after settings-gated attach; hardened oversized event reads in-task.
+  * `fonts.rs`: hardcoded Adobe GitHub URLs + config-dir writes; no user-controlled URL/path.
+  * `files.rs`, `graph.rs`, `inspector.rs`, `fs_graph.rs`: direct metadata/read paths are behind drive-root resolution or graph-derived drive-relative paths; no cheap P0/P1 bypass found.
+
+### Verification
+
+* `cargo fmt`: pass.
+* `cargo machete`: pass, no findings.
+* `cargo check -p chan-tunnel-client -p chan-tunnel-server`: pass.
+* `cargo test -p chan-server routes::terminal::tests`: pass, 28/0.
+* `cargo test -p chan-server routes::terminal::tests::list_watcher_events`: pass, 2/0.
+* `cargo test -p chan-tunnel-server`: pass, 42/0 across unit + e2e.
+* `cargo test -p chan --bin chan parse_idle_timeout`: pass, 2/0.
+* `cargo clippy --all-targets -- -D warnings`: pass.
+* `cargo build --no-default-features`: pass.
+* `cargo test`: failed under parallel resource pressure with three `chan-drive` reindex tests reporting macOS `Too many open files`; targeted rerun `cargo test -p chan-drive --lib drive::tests::reindex -- --test-threads=1` passed, 8/0. Classified as environment/resource pressure, not this patch.
+
+### Deferred
+
+* P2: convert route/state `Mutex::lock().unwrap()` / `RwLock` unwraps to explicit 500s where it improves crash containment. Broad, mechanical, and not adversarial-input reachable in this pass.
+* P2: CLI error copy still has many polish opportunities beyond the bind-address seed; no release blocker found.
+
+## 2026-05-23 — @@Architect: approved + commit clearance
+
+Report reviewed. Clean Track-3 pass. All five concrete fixes are well-scoped:
+
+* Tunnel-* unused-deps cleanup (12 edges) — `cargo machete` clean post-patch is the right verification.
+* `reqwest` `stream` feature explicit — good catch; feature-unification leaks happen quietly.
+* `chan serve` bind-failure now names the address — exactly the CLI-error-polish seed @@Alex flagged. Good first cut of the standing theme.
+* `routes/terminal.rs` watcher event 1 MiB cap — pre-`read_to_string` is the right placement. Regression-test pin confirms it.
+
+### Deferred items acknowledged
+
+* P2 `Mutex/RwLock` poisoned-unwrap → explicit 500: agreed P2; not adversarial-input reachable; structural cleanup for v0.14+ or later.
+* P2 broader CLI error-message polish: agreed; the bind-address seed lands the pattern; rest is polish territory.
+
+### Security-review skill availability
+
+Noted that the skill wasn't installed in your session. Manual route-boundary review covered the same surface and produced clear findings. Suggest @@Alex / config — `security-review` is on the user-invocable list per the bootstrap reminder. Not blocking; flagging for future polishing.
+
+### Suggested commit subject
+
+```
+crates: Round-3 Track-3 cleanup + hardening (systacean-44: tunnel-* unused-deps removed; chan serve bind-address in error; chan-server watcher event 1 MiB cap; reqwest stream feature explicit)
+```
+
+### Commit instructions
+
+Per the standing pre-authorization for your lane:
+
+* Per-path `git add` only (multi-agent worktree). Stage:
+  * `crates/chan-tunnel-client/Cargo.toml`
+  * `crates/chan-tunnel-server/Cargo.toml`
+  * `crates/chan/src/main.rs`
+  * `crates/chan-server/src/routes/terminal.rs`
+  * any test-file additions
+  * `Cargo.lock` if dep removal touched it
+  * `docs/journals/phase-8/systacean/systacean-44.md`
+  * `docs/journals/phase-8/alex/event-systacean-architect.md` (if appended)
+* Pre-commit `git diff --staged --stat` + post-commit `git show --stat HEAD`.
+
+### macOS open-files test pressure
+
+The `Too many open files` cargo test failure is a known macOS test-environment ceiling, not your patch. Classification is correct. Targeted rerun at `--test-threads=1` passing is sufficient.
+
+### Lane state post-`-44`
+
+Queue-empty. Round-3 Track-3 cleanup done for the chan-core backend. Standing by until v0.13.0 cut beat or any follow-up.
+
+Thank you for the careful + tight pass.

@@ -135,3 +135,38 @@ color/style churn.
 
 Commit readiness:
 `web: terminal: refresh WebGL atlas on styled output (fullstack-a-97)`.
+
+## 2026-05-23 — @@Architect: approved + commit clearance
+
+Fix-shape review:
+
+* Root-cause path correct: xterm.js docs explicitly name corrupted WebGL texture atlases as the target failure mode for `clearTextureAtlas()`. Symptom @@Alex reported (correct buffer text, wrong glyphs drawn) is exactly this class.
+* The SGR-detection + clearTextureAtlas-coalesced-to-rAF shape is the right fix: keeps WebGL enabled (preserves `-b-29`'s box/block-glyph win), targets the corruption path, doesn't paper over with a font swap.
+* Sequences split across websocket chunks are handled — important detail for the streaming animated-output case.
+* Test pin is structural (pins the wiring + the detection helper + the rAF coalescing path). Appropriate for the SPA test layer; the actual visual fix needs an empirical walk.
+
+### Verification-gap routing
+
+The verification gap @@FullStackA flagged is real but expected — this is a visual rendering bug; vitest can't fully smoke it. Routing the empirical walk to @@WebtestA as a follow-up (heads-up in their channel; not blocking your commit). v0.13.0 cut waits on @@WebtestA's HOLD verdict.
+
+### Suggested commit subject
+
+```
+web: terminal: refresh WebGL atlas on styled animated output (fullstack-a-97 — P0 v0.13.0 release blocker fix)
+```
+
+### Commit instructions
+
+Per the standing pre-authorization for your lane:
+
+* Per-path `git add` only.
+* Pre-commit `git diff --staged --stat` + post-commit `git show --stat HEAD` per the atomic-audit pattern.
+* The `crates/chan-server/src/routes/files.rs` `spawn_blocking` work for `-96` sub-pass 4 already shipped (`793a28a`); keep that scope separate.
+
+### Lane state post-`-97` commit
+
+* `-96` sub-pass 4 ✓ (shipped `793a28a`).
+* `-97` ready to ship.
+* `-96` sub-passes 1/2/3 (dead-code / a11y / perf) still queued for your lane — pick up post-`-97` if session bandwidth, otherwise defer to next session.
+
+Thank you for the tight diagnostic + the SGR-split-across-chunks edge handling.

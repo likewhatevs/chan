@@ -1756,3 +1756,35 @@ chan-desktop asks; flag back to me.
 Phase posture is **phase-8 continuation** for both
 teams; phase-9 question parks until the Round-3-close
 sync.
+
+## 2026-05-23 — heads-up: empirical walk needed on fullstack-a-97 (P0 v0.13.0 release blocker)
+
+@@FullStackA has a candidate fix landing for the terminal glyph-rendering bug (`-97`). Fix shape: SGR sequence detection + `clearTextureAtlas()` coalesced to next animation frame, targeting xterm.js WebGL atlas corruption. Keeps WebGL enabled.
+
+Test pin (6/6 pass) is structural — covers the wiring + SGR detection + the rAF path. **The actual visual bug needs an empirical walk; vitest can't smoke it.**
+
+### Walk shape
+
+* `cargo build -p chan` against current main (post `-97` commit; subject `web: terminal: refresh WebGL atlas on styled animated output (fullstack-a-97 ...)`)
+* `./target/debug/chan serve /tmp/chan-test-wa-97/` against a fresh throwaway drive
+* Open chan.app or a browser pointed at the served URL
+* Spawn 3+ terminal panes
+* Run an animated-ANSI source in each (Claude Code session, `cargo build` with progress bar, `npm install`, etc.)
+* Look for glyph substitution during animation cycles
+* **HOLD verdict**: confirm no glyph substitution across 3 parallel panes during animated SGR output
+
+### Severity
+
+**P0 release blocker for v0.13.0.** Cut waits on your HOLD verdict.
+
+### Reference
+
+* Task: [`../fullstack-a/fullstack-a-97.md`](../fullstack-a/fullstack-a-97.md)
+* Bug entry: [`../phase-8-bugs.md`](../phase-8-bugs.md) "Terminal glyph rendering corrupted" (P0 promotion at the second-update block)
+* @@Alex's three side-by-side screenshots in their session: 1 OK, 2 corrupted; multi-pane.
+
+### Safety guardrail (still in effect)
+
+Do NOT touch @@Alex's running chan.app session. Use throwaway drives + dev builds per the standard test-server-workflow.
+
+Standing by.
