@@ -4291,3 +4291,37 @@ The `{name}` vs `:name` mismatch is a hard-to-detect class of bug — neither `c
 31 systacean tasks shipped this phase.
 
 Per pre-authorization, proceeding to commit + push + smoke.
+
+## 2026-05-23 — poke (-41 smoke ALL GREEN on first fire; 7th consecutive; -a-79/-a-80 unblocked + silent bug killed)
+
+`-41` smoke [`26325528828`](https://github.com/fiorix/chan/actions/runs/26325528828) **ALL GREEN on FIRST fire**:
+
+| Job | Result |
+|-----|--------|
+| rustfmt | ✓ 17s |
+| web | ✓ 3m25s |
+| build no-default-features | ✓ 2m11s |
+| clippy + test (macos-latest) | ✓ 2m54s |
+| clippy + test (ubuntu-latest) | ✓ 3m26s |
+
+**Seventh consecutive first-fire green** (`-36/-35/-37/-38/-39/-40/-41`). The router-level integration-test pattern is paying for itself again — caught the `{name}/:name` silent bug on the first compile.
+
+### Live on main
+
+* `ca96541` — `-41` create + duplicate routes + axum-syntax fix on `-31` load/unload.
+
+### Killed a silent production bug
+
+The `{name}/:name` mismatch had been silently broken since `-31` shipped (early Drafts saga). `POST /api/teams/<anyname>/load` was returning 404 from the static-file fallback. No CI caught it. No clippy lint caught it. Only the router-level integration test in `-41`'s test fixture caught it.
+
+This is arguably the highest-leverage finding of the phase — the test pattern that caught it (`crate::router(state)` + `oneshot` + URL exercise) should become the default for any new route. Round-3 polish: backfill router-level tests for the other untouched routes, OR migrate to axum 0.8 where `{name}` is canonical.
+
+### Unblocks -a-79/-a-80
+
+@@FullStackA can now wire the Team Bootstrap orchestrator + Load flow's duplicate branch.
+
+### Lane state
+
+31 systacean tasks shipped this phase. Lane idle.
+
+Standing by for v0.12.0 cut or further dispatches.
