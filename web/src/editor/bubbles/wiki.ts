@@ -127,6 +127,7 @@ export function openWikiBubble(opts: WikiBubbleOpts): WikiBubbleHandle {
   let blockAll: ParsedBlock[] = [];
   let blockOriginalText = "";
   let blockMtime: number | null = null;
+  let blockMtimeNs: string | null = null;
   let blockHits: ParsedBlock[] = [];
   let selectedIndex = 0;
   let reqSeq = 0;
@@ -290,6 +291,7 @@ export function openWikiBubble(opts: WikiBubbleOpts): WikiBubbleHandle {
     blockTarget = null;
     blockOriginalText = "";
     blockMtime = null;
+    blockMtimeNs = null;
     render();
     api
       .read(target)
@@ -299,6 +301,7 @@ export function openWikiBubble(opts: WikiBubbleOpts): WikiBubbleHandle {
         blockTarget = target;
         blockOriginalText = res.content;
         blockMtime = res.mtime;
+        blockMtimeNs = res.mtime_ns ?? null;
         blockAll = parseBlocks(res.content);
         filterBlocksLocal();
       })
@@ -372,10 +375,11 @@ export function openWikiBubble(opts: WikiBubbleOpts): WikiBubbleHandle {
       const newContent = insertBlockAnchor(blockOriginalText, block, anchorId);
       status.textContent = "Adding anchor...";
       try {
-        const res = await api.write(target, newContent, blockMtime);
+        const res = await api.write(target, newContent, blockMtimeNs, blockMtime);
         if (!alive) return;
         blockOriginalText = newContent;
         blockMtime = res.mtime;
+        blockMtimeNs = res.mtime_ns ?? null;
       } catch (err: unknown) {
         const msg =
           err instanceof Error ? err.message : String(err);

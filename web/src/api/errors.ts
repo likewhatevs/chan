@@ -6,7 +6,7 @@
 export class ApiError extends Error {
   public status: number;
   /// Parsed JSON body when the server returned one (e.g. the 409
-  /// conflict body { current_mtime } from the CAS write path).
+  /// conflict body { current_mtime_ns } from the CAS write path).
   /// Null when the body wasn't JSON or was empty. Callers that
   /// care about a specific status code branch on it without paying
   /// the parse on the happy path.

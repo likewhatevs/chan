@@ -145,7 +145,7 @@ export async function request<T>(
     if (!res.ok) {
       const text = await res.text().catch(() => res.statusText);
       // Try to parse the body as JSON so structured error responses
-      // (the 409 { current_mtime } conflict body, the standard
+      // (the 409 { current_mtime_ns } conflict body, the standard
       // { error } wrapper) reach the caller as ApiError.data. Any
       // non-JSON body falls back to the textual message.
       let data: unknown = null;

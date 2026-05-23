@@ -133,13 +133,14 @@ export type FileTab = {
   content: string;
   /// Last persisted content (for dirty detection).
   saved: string;
-  /// Mtime returned by the last successful read or save. Used as
-  /// the CAS token (expected_mtime) on subsequent saves so an
+  /// Mtime returned by the last successful read or save. The
+  /// nanosecond form is the CAS token on subsequent saves so an
   /// external edit between reads is detected as a 409 conflict
   /// rather than silently overwriting the disk-side change.
   /// Null when the file didn't exist yet (saved-from-empty); the
   /// server treats Some(None) as "expecting a fresh file".
   savedMtime: number | null;
+  savedMtimeNs?: string | null;
   mode: Mode;
   loading: boolean;
   error: string | null;
@@ -1507,6 +1508,7 @@ async function loadTabContent(
       t.content = r.content;
       t.saved = r.content;
       t.savedMtime = r.mtime ?? null;
+      t.savedMtimeNs = r.mtime_ns ?? null;
       t.repoRoot = r.repo_root ?? null;
       t.error = null;
       t.fileMissing = null;
@@ -1555,6 +1557,7 @@ export async function openInPane(paneId: string, path: string): Promise<void> {
     pendingReopen.content = "";
     pendingReopen.saved = "";
     pendingReopen.savedMtime = null;
+    pendingReopen.savedMtimeNs = null;
     pendingReopen.mode = defaultModeForPath(path, pendingReopen.fileKind);
     pendingReopen.loading = true;
     pendingReopen.error = null;
@@ -1588,6 +1591,7 @@ export async function openInPane(paneId: string, path: string): Promise<void> {
     content: "",
     saved: "",
     savedMtime: null,
+    savedMtimeNs: null,
     mode: defaultModeForPath(path, fileKind),
     loading: true,
     error: null,
@@ -1933,6 +1937,7 @@ function cloneTab(src: Tab): Tab {
     content: src.content,
     saved: src.saved,
     savedMtime: src.savedMtime,
+    savedMtimeNs: src.savedMtimeNs ?? null,
     mode: src.mode,
     loading: src.loading,
     error: src.error,
@@ -2849,13 +2854,15 @@ export const conflictDialog = $state<{
   /// token) or overwrites (write with this token; another conflict
   /// re-prompts if a third edit landed in the meantime).
   currentMtime: number | null;
-}>({ open: false, tabId: null, path: "", currentMtime: null });
+  currentMtimeNs: string | null;
+}>({ open: false, tabId: null, path: "", currentMtime: null, currentMtimeNs: null });
 
 export function dismissConflict(): void {
   conflictDialog.open = false;
   conflictDialog.tabId = null;
   conflictDialog.path = "";
   conflictDialog.currentMtime = null;
+  conflictDialog.currentMtimeNs = null;
 }
 
 function findFileTabById(tabId: string): { paneId: string; tab: FileTab } | null {
@@ -2886,11 +2893,13 @@ export async function reloadConflictedTab(): Promise<void> {
 export async function overwriteConflictedTab(): Promise<void> {
   const tabId = conflictDialog.tabId;
   const currentMtime = conflictDialog.currentMtime;
+  const currentMtimeNs = conflictDialog.currentMtimeNs;
   dismissConflict();
   if (!tabId) return;
   const found = findFileTabById(tabId);
   if (!found) return;
   found.tab.savedMtime = currentMtime;
+  found.tab.savedMtimeNs = currentMtimeNs;
   await performSave(found.tab);
 }
 
@@ -2936,24 +2945,30 @@ async function performSaveOnce(t: FileTab): Promise<void> {
   const content = stripOnSave
     ? stripTrailingWhitespaceText(sourceContent)
     : sourceContent;
+  const expectedMtimeNs = t.savedMtimeNs ?? null;
   const expectedMtime = t.savedMtime;
   try {
-    const r = await api.write(path, content, expectedMtime);
+    const r = await api.write(path, content, expectedMtimeNs, expectedMtime);
     if (stripOnSave && content !== sourceContent && t.content === sourceContent) {
       t.content = content;
     }
     t.saved = content;
     t.savedMtime = r.mtime ?? null;
+    t.savedMtimeNs = r.mtime_ns ?? null;
     t.error = null;
     t.fileMissing = null;
     mirrorToSiblings(path, content, t.id);
   } catch (e) {
     if (e instanceof ApiError && e.status === 409) {
-      const data = e.data as { current_mtime?: number | null } | null;
+      const data = e.data as {
+        current_mtime?: number | null;
+        current_mtime_ns?: string | null;
+      } | null;
       conflictDialog.open = true;
       conflictDialog.tabId = t.id;
       conflictDialog.path = t.path;
       conflictDialog.currentMtime = data?.current_mtime ?? null;
+      conflictDialog.currentMtimeNs = data?.current_mtime_ns ?? null;
       return;
     }
     throw e;
@@ -3630,6 +3645,7 @@ export async function restoreLayout(
           content: "",
           saved: "",
           savedMtime: null,
+          savedMtimeNs: null,
           // Trust the persisted mode when it is a valid pair for
           // this tab's path; otherwise fall back to the default.
           // Guards: a markdown-only "wysiwyg" mode persisted for a

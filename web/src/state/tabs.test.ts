@@ -2159,25 +2159,36 @@ describe("autosave", () => {
       content: "a  \n\tb\t\n",
       saved: "",
       savedMtime: 1,
+      savedMtimeNs: "1000000001",
     });
     resetLayout([tab]);
-    const write = vi.spyOn(api, "write").mockResolvedValue({ mtime: 2 });
+    const write = vi
+      .spyOn(api, "write")
+      .mockResolvedValue({ mtime: 2, mtime_ns: "2000000002" });
 
     await saveTab(tab);
 
-    expect(write).toHaveBeenCalledWith("notes/a.md", "a\n\tb\n", 1);
+    expect(write).toHaveBeenCalledWith("notes/a.md", "a\n\tb\n", "1000000001", 1);
     expect(tab.content).toBe("a\n\tb\n");
     expect(tab.saved).toBe("a\n\tb\n");
+    expect(tab.savedMtimeNs).toBe("2000000002");
   });
 
   test("serializes overlapping saves and keeps edits after an in-flight save dirty", async () => {
     vi.useFakeTimers();
-    const tab = fileTab({ content: "v1", saved: "base", savedMtime: 1 });
+    const tab = fileTab({
+      content: "v1",
+      saved: "base",
+      savedMtime: 1,
+      savedMtimeNs: "1000000001",
+    });
     const pane = resetLayout([tab]);
     const calls: string[] = [];
-    const pending: Array<(value: { mtime: number }) => void> = [];
-    vi.spyOn(api, "write").mockImplementation(async (_path, content) => {
+    const tokens: Array<string | null | undefined> = [];
+    const pending: Array<(value: { mtime: number; mtime_ns: string }) => void> = [];
+    vi.spyOn(api, "write").mockImplementation(async (_path, content, expectedMtimeNs) => {
       calls.push(content);
+      tokens.push(expectedMtimeNs);
       return new Promise((resolve) => pending.push(resolve));
     });
 
@@ -2190,13 +2201,15 @@ describe("autosave", () => {
     await vi.advanceTimersByTimeAsync(800);
     expect(calls).toEqual(["v1"]);
 
-    pending.shift()!({ mtime: 2 });
+    pending.shift()!({ mtime: 2, mtime_ns: "2000000002" });
     await vi.waitFor(() => expect(calls).toEqual(["v1", "v2"]));
 
-    pending.shift()!({ mtime: 3 });
+    pending.shift()!({ mtime: 3, mtime_ns: "3000000003" });
     await firstSave;
+    expect(tokens).toEqual(["1000000001", "2000000002"]);
     expect(tab.saved).toBe("v2");
     expect(tab.savedMtime).toBe(3);
+    expect(tab.savedMtimeNs).toBe("3000000003");
   });
 });
 

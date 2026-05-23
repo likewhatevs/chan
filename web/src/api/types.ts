@@ -235,6 +235,7 @@ export type FileResponse = {
   path: string;
   content: string;
   mtime: number | null;
+  mtime_ns?: string | null;
   path_class?: PathClass;
   /// Path of the enclosing git repo, relative to the drive root.
   /// Absent when the file is not inside a git repo (or when the

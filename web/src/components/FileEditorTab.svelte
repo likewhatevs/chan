@@ -547,6 +547,7 @@
       tab.content = res.content;
       tab.saved = res.content;
       tab.savedMtime = res.mtime;
+      tab.savedMtimeNs = res.mtime_ns ?? null;
     } catch (err) {
       console.error("[chan] reload failed", err);
     }

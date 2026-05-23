@@ -255,16 +255,33 @@ export const api = {
     return req<TreeEntry[]>("GET", `/api/files${suffix}`);
   },
   read: (path: string) => req<FileResponse>("GET", `/api/files/${encPath(path)}`),
-  /// Persist `content` at `path`. When `expectedMtime` is provided,
+  /// Persist `content` at `path`. When `expectedMtimeNs` is provided,
   /// the server CAS-writes via Drive::write_text_if_unchanged and
-  /// rejects with 409 + { current_mtime } if the on-disk mtime
+  /// rejects with 409 + { current_mtime_ns } if the on-disk mtime
   /// differs (an external edit landed since the client last read).
-  /// Returns the new mtime so callers store it as the next CAS token.
-  write: (path: string, content: string, expectedMtime?: number | null) =>
-    req<{ mtime: number | null }>("PUT", `/api/files/${encPath(path)}`, {
-      content,
-      ...(expectedMtime !== undefined ? { expected_mtime: expectedMtime } : {}),
-    }),
+  /// Returns the new mtime token so callers store it for the next CAS.
+  write: (
+    path: string,
+    content: string,
+    expectedMtimeNs?: string | null,
+    expectedMtime?: number | null,
+  ) => {
+    const body: {
+      content: string;
+      expected_mtime_ns?: string;
+      expected_mtime?: number | null;
+    } = { content };
+    if (expectedMtimeNs !== undefined && expectedMtimeNs !== null) {
+      body.expected_mtime_ns = expectedMtimeNs;
+    } else if (expectedMtime !== undefined) {
+      body.expected_mtime = expectedMtime;
+    }
+    return req<{ mtime: number | null; mtime_ns?: string | null }>(
+      "PUT",
+      `/api/files/${encPath(path)}`,
+      body,
+    );
+  },
   create: (path: string, isDir: boolean, content?: string) =>
     req<void>("POST", "/api/files", { path, is_dir: isDir, content }),
   /// `fullstack-a-66`: create a new draft directory + draft.md

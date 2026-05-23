@@ -169,7 +169,7 @@ The new editor calls the same endpoints as the old:
 | Method | Path | Purpose |
 |--------|------|---------|
 | GET    | `/api/files/{path}`              | load markdown |
-| PUT    | `/api/files/{path}`              | autosave (CAS via `expected_mtime`, 409 on conflict) |
+| PUT    | `/api/files/{path}`              | autosave (CAS via `expected_mtime_ns`, 409 on conflict) |
 | GET    | `/api/search/files`              | wiki picker |
 | GET    | `/api/resolve-link`              | wiki pill kind classification |
 | GET    | `/api/headings/{path}`           | `[[file#` mode |
