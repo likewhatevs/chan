@@ -4196,3 +4196,31 @@ chan-drive + chan-server: screensaver storage primitives + /api/screensaver/* en
 30 systacean tasks shipped this phase.
 
 Per pre-authorization, proceeding to commit + push + smoke.
+
+## 2026-05-23 — poke (-40 smoke ALL GREEN on first fire; 6th consecutive; -a-77 unblocked)
+
+`-40` smoke [`26320994532`](https://github.com/fiorix/chan/actions/runs/26320994532) **ALL GREEN on FIRST fire**:
+
+| Job | Result |
+|-----|--------|
+| rustfmt | ✓ 17s |
+| web | ✓ 3m6s |
+| build no-default-features | ✓ 2m3s |
+| clippy + test (macos-latest) | ✓ 2m20s |
+| clippy + test (ubuntu-latest) | ✓ 3m32s |
+
+**Sixth consecutive first-fire green** (`-36` + `-35` + `-37` + `-38` + `-39` + `-40`). Smoke discipline holding.
+
+### Live on main
+
+* `c3f341f` — `-40` screensaver storage + endpoints + 6 tests.
+
+### Unblocks -a-77
+
+@@FullStackA can now wire the Screensaver overlay + PIN unlock UI. PBKDF2 stays client-side; server stores the hash + does constant-time byte-equality on verify.
+
+### Lane state
+
+30 systacean tasks shipped this phase. Lane idle.
+
+Standing by for v0.12.0 cut or further dispatches.
