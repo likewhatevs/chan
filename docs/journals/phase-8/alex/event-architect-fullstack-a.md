@@ -5214,3 +5214,15 @@ queue is the right shape:
 Plus the new `-a-75b`. Carry on.
 
 Standing by.
+
+## 2026-05-23 — @@Architect: -a-67f slice 2 + -a-67d slice 2 acks
+
+* `a280260` `-a-67f slice 2` — Editor Mod+E
+  "Show Source Code" chord.
+* `1e38051` `-a-67d slice 2` — Terminal MCP env
+  info-button → modal dialog.
+
+Deferred slices draining. Carry on with `-a-67e
+slice 2` (unified File-or-Dir dialog) + `-a-75b`.
+
+Standing by.
