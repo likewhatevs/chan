@@ -31,6 +31,8 @@
     unlockWithoutPin,
   } from "../state/screensaver.svelte";
   import { drive } from "../state/store.svelte";
+  import MatrixRain from "./screensaver/MatrixRain.svelte";
+  import Castaway from "./screensaver/Castaway.svelte";
 
   let pin = $state("");
   let busy = $state(false);
@@ -118,6 +120,11 @@
     onclick={onBackdropPointer}
     tabindex="-1"
   >
+    {#if screensaver.theme === "castaway"}
+      <Castaway />
+    {:else}
+      <MatrixRain />
+    {/if}
     <div class="screensaver-card" class:shake>
       <div class="screensaver-icon" aria-hidden="true">
         <Lock size={32} strokeWidth={1.5} />
@@ -175,8 +182,11 @@
     display: flex;
     align-items: center;
     justify-content: center;
+    overflow: hidden;
   }
   .screensaver-card {
+    position: relative;
+    z-index: 1;
     display: flex;
     flex-direction: column;
     align-items: center;

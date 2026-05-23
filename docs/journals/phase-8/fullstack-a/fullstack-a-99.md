@@ -158,3 +158,97 @@ Clamp the screensaver inactivity-timeout input to **[10s, 3600s]** (1 hour). Def
 ### Coordination
 
 If chan-server validation is fastest as a fold-in alongside the `theme: ScreensaverTheme` extension you'll already be doing, bundle. If you'd prefer scope-poke @@Systacean for the chan-server piece, fine — small either way.
+
+## 2026-05-23 - candidate fix ready: Matrix/Castaway themes + timeout bounds
+
+Implementation:
+
+* Added `ScreensaverTheme` (`matrix` default, `castaway` alternate)
+  to chan-drive index config, drive accessors, and the
+  `/api/screensaver/state` response / PATCH payload.
+* Added chan-server PATCH validation for timeout bounds
+  `[10, 3600]`, returning `400 Bad Request` before writing
+  out-of-range values.
+* Updated SPA screensaver state/API types to carry `theme`.
+* Added Settings theme picker (`Matrix` / `Castaway`) that
+  persists immediately through `api.screensaverPatch({ theme })`.
+* Added lock overlay theme switch:
+  * `MatrixRain.svelte`: full-window canvas rain, reduced-motion
+    path refreshes once per second.
+  * `Castaway.svelte`: full-window code-drawn pixel-art island
+    scene with idle, wave, sit, sleep, drink, walk, fish, and ship
+    states. No copied Windows sprites and no PNG asset delta.
+* Updated timeout constants to `10s` minimum and `3600s` maximum.
+
+Verification:
+
+* `cargo fmt` - pass.
+* `npm test -- --run src/state/screensaver.test.ts src/state/screensaverSettings.test.ts src/state/screensaverMachine.test.ts src/components/screensaverThemes.test.ts` - pass, 55 tests.
+* `cargo test -p chan-server routes::screensaver --lib` - pass, 6 tests.
+* `cargo test -p chan-drive screensaver --lib` - pass, 1 test.
+* `cargo test -p chan-drive index::config --lib` - pass, 7 tests.
+* `npm run check` - pass, 0 diagnostics.
+* `cargo build -p chan` - pass.
+* `npm run build` - pass; existing Vite chunk-size / ineffective-dynamic-import warnings remain. Built JS delta is small (~5.8 KB on the main index chunk), with no binary sprite asset.
+* `npm test -- --run` - repeated exact full runs hit the known 15s parallel UI-test timeout family (`EmptyPaneCarousel.test.ts`, `TerminalTab.test.ts`, `Pane.test.ts`), same pattern seen on `-101` / `-102`.
+* `npm test -- --run src/components/EmptyPaneCarousel.test.ts src/components/TerminalTab.test.ts src/components/Pane.test.ts` - pass, 26 tests.
+* `npm test -- --run --maxWorkers=4` - pass, 128 files passed / 1 skipped, 1347 tests passed / 11 skipped.
+
+Notes:
+
+* Castaway is code-drawn pixel art rather than a PNG sprite sheet.
+  This intentionally avoids copyrighted Johnny Castaway sprites and
+  keeps embedded asset growth below the task budget.
+
+## 2026-05-23 — @@Architect: approved + commit clearance
+
+Excellent work, and a smart scope call on **code-drawn Castaway** (procedural pixel art via canvas drawing instead of a PNG sprite sheet). This avoids:
+
+* Sourcing / drawing / licensing pixel-art assets.
+* Any copyright proximity to the Windows-3.1 Johnny Castaway IP.
+* Binary asset growth (the `~5.8 KB` JS delta on the main chunk is effectively free vs the ~150-400 KB sprite-sheet budget we agreed to).
+
+The trade-off (less faithful visual fidelity) sits inside the mid-fidelity target already locked. And the procedural approach is more portable + maintainable than a PNG asset — easy to tweak palette / animations / scene composition without re-exporting art.
+
+### Coverage review
+
+* Theme: matrix (default) | castaway, persisted per-drive through chan-drive index config + chan-server PATCH + SPA API client. Clean end-to-end.
+* Matrix rain: canvas + reduced-motion-aware (once-per-second refresh fallback). Honors the accessibility requirement.
+* Castaway: idle / wave / sit / sleep / drink / walk / fish / ship animation states — eight states, exceeds the 5-10 target.
+* Timeout bounds: [10, 3600] enforced both at SPA (input attrs + clamp) and chan-server PATCH (400 reject). Defense in depth as scoped.
+* Tests: 55 focused web tests + cargo route + cargo drive + cargo config — all green. The known 15s parallel UI-test timeout family is the same we've seen across `-101` / `-102`; `--maxWorkers=4` clean.
+
+### chan-drive cross-lane note
+
+You folded the chan-drive `ScreensaverTheme` config field in directly (rather than scope-poking @@Systacean). That was explicitly authorized in the task body ("If backend schema extension needed, scope-poke @@Systacean or bundle if minimal. Per the `-a-77` pattern, this is likely a small chan-drive config field addition."). Fold-in is correct here — small mechanical addition; @@Systacean's queue is empty post-`-45` so the lane-courtesy isn't load-bearing.
+
+### Suggested commit subject
+
+```
+screensaver: Matrix rain + code-drawn Castaway themes + theme picker + [10s, 3600s] timeout bounds (fullstack-a-99; v0.13.0 release blocker; closes the original phase-7 backlog screensaver spec)
+```
+
+### Commit instructions
+
+Per standing pre-auth:
+
+* Strict per-path `git add`. Stage:
+  * `crates/chan-drive/src/drive.rs`
+  * `crates/chan-drive/src/index/config.rs`
+  * `crates/chan-drive/src/index/facade.rs`
+  * `crates/chan-drive/src/index/mod.rs`
+  * `crates/chan-drive/src/lib.rs`
+  * `crates/chan-server/src/routes/screensaver.rs`
+  * `web/src/api/client.ts`
+  * `web/src/components/ScreensaverOverlay.svelte`
+  * any new `web/src/components/screensaver/*.svelte` files (MatrixRain + Castaway)
+  * any new test files
+  * `docs/journals/phase-8/fullstack-a/fullstack-a-99.md` (this clearance + your candidate-fix block)
+  * `docs/journals/phase-8/alex/event-fullstack-a-architect.md` (your poke)
+* Pre-commit `git diff --staged --stat` + post-commit `git show --stat HEAD`.
+
+### Lane state post-`-99`
+
+Queue-empty (plus `-96` sub-passes 1/2/3 polish still cleared but non-blocking; pick up if bandwidth, otherwise defer to v0.14).
+
+Thank you for closing the v0.13.0 feature set + the smart no-PNG call.

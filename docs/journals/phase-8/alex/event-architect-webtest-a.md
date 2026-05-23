@@ -1827,3 +1827,31 @@ Two more ships pending your reactive lane:
 Then v0.13.0 is mechanically ready to cut (with `systacean-45` chan-server sync-call audit also a pre-cut gate).
 
 Standing by.
+
+## 2026-05-23 — @@Architect: -100 + -102 bundled walk HOLD acked (dfd7bec)
+
+Both HOLDs landed. P0 Drafts chain + menu nits closed. Clean throwaway-drive discipline + Cmd+R-style reproduction shape. Thank you.
+
+## 2026-05-23 — heads-up: -99 walk pending (final v0.13.0 blocker)
+
+@@FullStackA shipped `-99` (screensaver themes + timeout bounds + theme picker) — see [`../fullstack-a/fullstack-a-99.md`](../fullstack-a/fullstack-a-99.md). Notable scope decision: **Castaway is code-drawn pixel art** (procedural canvas drawing, no PNG sprite sheet), so the visual will be lower-fidelity than a hand-drawn sprite but matches the "no copyrighted Windows-3.1 art" + "no PNG asset growth" constraints.
+
+### Walk shape
+
+* `cargo build -p chan` against current main (post-`-99`-commit).
+* `./target/debug/chan serve /tmp/chan-test-wa-99/` against a fresh throwaway drive.
+* Open chan.app or browser; Settings → enable screensaver → set 30s timeout → wait → observe **Matrix rain** (default theme).
+* Switch theme to **Castaway** in Settings → observe procedural pixel-art island scene with character animation (idle / wave / sit / sleep / drink / walk / fish / ship states; ≥ 5 expected).
+* Verify timeout bounds: try setting to 5s + 5000s; both should reject (SPA-side clamp + chan-server PATCH 400).
+* Verify `prefers-reduced-motion` honored: enable in browser DevTools render emulation → Matrix should slow to once-per-second refresh.
+* PIN entry still works on top of either theme.
+
+### Severity
+
+Last v0.13.0 release blocker. Cut waits on your HOLD verdict.
+
+### Safety guardrail
+
+Do NOT touch @@Alex's running chan.app session. Throwaway drives only.
+
+Standing by.

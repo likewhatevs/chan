@@ -17,7 +17,7 @@ use thiserror::Error;
 
 use super::bm25::{Bm25Error, Bm25Index};
 use super::chunking;
-use super::config::{self, ConfigError, IndexConfig};
+use super::config::{self, ConfigError, IndexConfig, ScreensaverTheme};
 #[cfg(feature = "embeddings")]
 use super::embeddings::{self, EmbedError, Embedder};
 #[cfg(feature = "embeddings")]
@@ -337,6 +337,21 @@ impl Index {
                 return Ok(());
             }
             cfg.screensaver_timeout_secs = secs;
+            cfg.clone()
+        };
+        config::save(&self.index_dir, &to_save)?;
+        Ok(())
+    }
+
+    /// fullstack-a-99: persist the screensaver visual theme.
+    /// Idempotent on no-change.
+    pub fn set_screensaver_theme(&self, theme: ScreensaverTheme) -> Result<(), IndexError> {
+        let to_save = {
+            let mut cfg = self.config.lock().unwrap();
+            if cfg.screensaver_theme == theme {
+                return Ok(());
+            }
+            cfg.screensaver_theme = theme;
             cfg.clone()
         };
         config::save(&self.index_dir, &to_save)?;
@@ -1525,6 +1540,7 @@ mod tests {
             reports_enabled: false,
             screensaver_enabled: false,
             screensaver_timeout_secs: 300,
+            screensaver_theme: config::ScreensaverTheme::Matrix,
             screensaver_pin_hash: None,
         };
         config::save(&dir, &cfg_on_disk).unwrap();
@@ -1564,6 +1580,7 @@ mod tests {
             reports_enabled: false,
             screensaver_enabled: false,
             screensaver_timeout_secs: 300,
+            screensaver_theme: config::ScreensaverTheme::Matrix,
             screensaver_pin_hash: None,
         };
         std::fs::create_dir_all(&dir).unwrap();
@@ -1601,6 +1618,7 @@ mod tests {
             reports_enabled: false,
             screensaver_enabled: false,
             screensaver_timeout_secs: 300,
+            screensaver_theme: config::ScreensaverTheme::Matrix,
             screensaver_pin_hash: None,
         };
         config::save(&dir, &cfg_on_disk).unwrap();

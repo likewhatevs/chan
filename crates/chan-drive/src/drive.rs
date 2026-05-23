@@ -15,7 +15,8 @@ use crate::error::{ChanError, Result};
 use crate::fs_ops;
 use crate::graph::GraphView;
 use crate::index::{
-    BuildOptions, BuildSummary, Index, Mode as SearchMode, SearchAggression, SearchResult,
+    BuildOptions, BuildSummary, Index, Mode as SearchMode, ScreensaverTheme, SearchAggression,
+    SearchResult,
 };
 use crate::lock::DriveLock;
 use crate::markdown;
@@ -2086,6 +2087,18 @@ impl Drive {
     /// value lands.
     pub fn set_screensaver_timeout_secs(&self, secs: u32) -> Result<()> {
         self.index()?.set_screensaver_timeout_secs(secs)?;
+        Ok(())
+    }
+
+    /// fullstack-a-99: read the persisted visual theme. Default
+    /// Matrix on drives that pre-date the field.
+    pub fn screensaver_theme(&self) -> Result<ScreensaverTheme> {
+        Ok(self.index()?.config().screensaver_theme)
+    }
+
+    /// fullstack-a-99: persist the visual theme.
+    pub fn set_screensaver_theme(&self, theme: ScreensaverTheme) -> Result<()> {
+        self.index()?.set_screensaver_theme(theme)?;
         Ok(())
     }
 
@@ -5687,6 +5700,7 @@ mod tests {
         // Defaults.
         assert!(!drive.screensaver_enabled().unwrap());
         assert_eq!(drive.screensaver_timeout_secs().unwrap(), 300);
+        assert_eq!(drive.screensaver_theme().unwrap(), ScreensaverTheme::Matrix);
         assert!(drive.screensaver_pin_hash().unwrap().is_none());
 
         // Flip enabled.
@@ -5696,6 +5710,15 @@ mod tests {
         // Update timeout.
         drive.set_screensaver_timeout_secs(60).unwrap();
         assert_eq!(drive.screensaver_timeout_secs().unwrap(), 60);
+
+        // Update theme.
+        drive
+            .set_screensaver_theme(ScreensaverTheme::Castaway)
+            .unwrap();
+        assert_eq!(
+            drive.screensaver_theme().unwrap(),
+            ScreensaverTheme::Castaway
+        );
 
         // Set PIN.
         let pin_bytes = vec![0xDE, 0xAD, 0xBE, 0xEF, 0x42];
@@ -5711,6 +5734,9 @@ mod tests {
         // Idempotent re-set (same value).
         drive.set_screensaver_enabled(true).unwrap();
         drive.set_screensaver_timeout_secs(60).unwrap();
+        drive
+            .set_screensaver_theme(ScreensaverTheme::Castaway)
+            .unwrap();
         drive.set_screensaver_pin_hash(None).unwrap();
     }
 

@@ -6132,3 +6132,15 @@ Pick your order. Standing by.
 Terminal `msep` drop + Editor row reorder. Test pins on the new structure. Clean.
 
 Committing on your behalf as part of session wrap (orphan-pattern; your shipped code + my clearance in one atomic commit).
+
+## 2026-05-23 — @@Architect: -99 cleared + commit clearance
+
+Smart scope call on code-drawn Castaway — zero binary delta, no copyright proximity, easy to tweak. 8 animation states exceeds the 5-10 target. Theme + timeout bounds wired end-to-end (chan-drive + chan-server + SPA). 55 focused web tests + cargo routes/drive/config all green.
+
+Clearance + commit instructions at [`../fullstack-a/fullstack-a-99.md`](../fullstack-a/fullstack-a-99.md) "2026-05-23 — @@Architect: approved + commit clearance". Proceed per standing pre-auth.
+
+### Routing the walk
+
+@@WebtestA gets a fresh walk poke after you push (`-99` shipped + needs HOLD before v0.13.0 cut).
+
+Queue-empty post-`-99`. Massive carry across `-96` sub-4, `-97`, `-98`, `-100`, `-101`, `-102`, `-99`. Thank you.

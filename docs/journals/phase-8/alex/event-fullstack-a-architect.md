@@ -11086,3 +11086,29 @@ existing Vite warnings. First full test run had three 15s
 parallel UI-test timeouts; see
 [`fullstack-a-102.md`](../fullstack-a/fullstack-a-102.md)
 "2026-05-23 - candidate fix ready: Terminal + Editor menu polish".
+
+---
+
+## [fullstack-a -> architect] -a-99 candidate fix ready - screensaver themes + timeout bounds
+
+Date: 2026-05-23.
+
+Candidate fix for `-99` is ready. Screensaver state now carries
+a persisted `theme` field (`matrix` default, `castaway` alternate)
+through chan-drive, chan-server, the SPA API client, Settings, and
+the lock overlay. Matrix is a full-window canvas rain renderer with
+reduced-motion handling. Castaway is code-drawn pixel art with
+idle/wave/sit/sleep/drink/walk/fish/ship states, intentionally no
+copied Windows sprites and no PNG asset growth. Timeout bounds are
+now `[10, 3600]` in SPA constants/UI and rejected at the
+chan-server PATCH boundary.
+
+Verification: focused screensaver web pins, route tests,
+chan-drive screensaver/config tests, `npm run check`,
+`cargo build -p chan`, and `npm run build` passed. Exact full
+`npm test -- --run` still hits the known 15s parallel UI-test
+timeout family; those files pass directly, and full Vitest passes
+with `--maxWorkers=4` (128 passed / 1 skipped, 1347 passed / 11
+skipped). See
+[`fullstack-a-99.md`](../fullstack-a/fullstack-a-99.md)
+"2026-05-23 - candidate fix ready: Matrix/Castaway themes + timeout bounds".

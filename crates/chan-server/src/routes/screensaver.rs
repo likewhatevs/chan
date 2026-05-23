@@ -2,11 +2,11 @@
 //!
 //! Five endpoints under `/api/screensaver/`:
 //!
-//! * `GET /state` — `{ enabled, timeout_secs, pin_set }`. The
+//! * `GET /state` — `{ enabled, timeout_secs, theme, pin_set }`. The
 //!   PIN hash itself never appears on the wire — `pin_set` is a
 //!   `bool` derived from whether `Drive::screensaver_pin_hash()`
 //!   returns `Some(_)`.
-//! * `PATCH /state` body `{ enabled?, timeout_secs? }` — partial
+//! * `PATCH /state` body `{ enabled?, timeout_secs?, theme? }` — partial
 //!   update.
 //! * `POST /pin` body `{ hash: base64 }` — set the PIN hash.
 //!   Server stores the base64-decoded bytes verbatim. PBKDF2 is
@@ -29,10 +29,14 @@ use serde::{Deserialize, Serialize};
 use crate::error::{err, err_from};
 use crate::state::AppState;
 
+const MIN_TIMEOUT_SECS: u32 = 10;
+const MAX_TIMEOUT_SECS: u32 = 3600;
+
 #[derive(Debug, Clone, Serialize)]
 pub struct ScreensaverState {
     pub enabled: bool,
     pub timeout_secs: u32,
+    pub theme: chan_drive::ScreensaverTheme,
     pub pin_set: bool,
 }
 
@@ -42,6 +46,8 @@ pub struct PatchPayload {
     pub enabled: Option<bool>,
     #[serde(default)]
     pub timeout_secs: Option<u32>,
+    #[serde(default)]
+    pub theme: Option<chan_drive::ScreensaverTheme>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -71,9 +77,14 @@ pub async fn api_screensaver_state(State(state): State<Arc<AppState>>) -> Respon
         Ok(v) => v.is_some(),
         Err(e) => return err_from(&e),
     };
+    let theme = match drive.screensaver_theme() {
+        Ok(v) => v,
+        Err(e) => return err_from(&e),
+    };
     Json(ScreensaverState {
         enabled,
         timeout_secs,
+        theme,
         pin_set,
     })
     .into_response()
@@ -87,27 +98,40 @@ pub async fn api_screensaver_patch(
     State(state): State<Arc<AppState>>,
     Json(payload): Json<PatchPayload>,
 ) -> Response {
+    if let Some(timeout) = payload.timeout_secs {
+        if !(MIN_TIMEOUT_SECS..=MAX_TIMEOUT_SECS).contains(&timeout) {
+            return err(
+                StatusCode::BAD_REQUEST,
+                format!("timeout_secs must be between {MIN_TIMEOUT_SECS} and {MAX_TIMEOUT_SECS}"),
+            );
+        }
+    }
     let drive = state.drive().clone();
     let result = tokio::task::spawn_blocking(
-        move || -> Result<(bool, u32, bool), chan_drive::ChanError> {
+        move || -> Result<(bool, u32, chan_drive::ScreensaverTheme, bool), chan_drive::ChanError> {
             if let Some(enabled) = payload.enabled {
                 drive.set_screensaver_enabled(enabled)?;
             }
             if let Some(timeout) = payload.timeout_secs {
                 drive.set_screensaver_timeout_secs(timeout)?;
             }
+            if let Some(theme) = payload.theme {
+                drive.set_screensaver_theme(theme)?;
+            }
             Ok((
                 drive.screensaver_enabled()?,
                 drive.screensaver_timeout_secs()?,
+                drive.screensaver_theme()?,
                 drive.screensaver_pin_hash()?.is_some(),
             ))
         },
     )
     .await;
     match result {
-        Ok(Ok((enabled, timeout_secs, pin_set))) => Json(ScreensaverState {
+        Ok(Ok((enabled, timeout_secs, theme, pin_set))) => Json(ScreensaverState {
             enabled,
             timeout_secs,
+            theme,
             pin_set,
         })
         .into_response(),
@@ -313,6 +337,7 @@ mod tests {
         assert_eq!(status, StatusCode::OK);
         assert_eq!(body["enabled"], false);
         assert_eq!(body["timeout_secs"], 300);
+        assert_eq!(body["theme"], "matrix");
         assert_eq!(body["pin_set"], false);
     }
 
@@ -326,12 +351,13 @@ mod tests {
             &router,
             "PATCH",
             "/api/screensaver/state",
-            Some(r#"{"enabled":true,"timeout_secs":60}"#),
+            Some(r#"{"enabled":true,"timeout_secs":60,"theme":"castaway"}"#),
         )
         .await;
         assert_eq!(status, StatusCode::OK);
         assert_eq!(body["enabled"], true);
         assert_eq!(body["timeout_secs"], 60);
+        assert_eq!(body["theme"], "castaway");
         assert_eq!(body["pin_set"], false);
 
         // Partial: only update timeout; enabled stays true.
@@ -345,6 +371,24 @@ mod tests {
         assert_eq!(status, StatusCode::OK);
         assert_eq!(body["enabled"], true);
         assert_eq!(body["timeout_secs"], 120);
+        assert_eq!(body["theme"], "castaway");
+    }
+
+    #[tokio::test]
+    async fn screensaver_patch_rejects_timeout_outside_bounds() {
+        // fullstack-a-99: API boundary rejects values outside
+        // the UI-supported [10s, 3600s] range.
+        let app = route_test_app();
+        let router = crate::router(app.state);
+        for body in [r#"{"timeout_secs":9}"#, r#"{"timeout_secs":3601}"#] {
+            let (status, body) =
+                request(&router, "PATCH", "/api/screensaver/state", Some(body)).await;
+            assert_eq!(status, StatusCode::BAD_REQUEST);
+            assert!(
+                body.to_string().contains("timeout_secs"),
+                "body should mention timeout_secs: {body}"
+            );
+        }
     }
 
     #[tokio::test]

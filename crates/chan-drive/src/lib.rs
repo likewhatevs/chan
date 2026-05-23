@@ -68,7 +68,7 @@ pub use graph::{
 };
 pub use index::{
     BuildOptions, BuildSummary, Chunking, Hit, IndexConfig, IndexStats, Mode as SearchMode,
-    SearchAggression, SearchBudget, SearchResult, DEFAULT_MODEL,
+    ScreensaverTheme, SearchAggression, SearchBudget, SearchResult, DEFAULT_MODEL,
 };
 pub use indexer::{GraphIndexer, DEFAULT_DEBOUNCE_MS};
 pub use library::{Library, ResetMode, ResetReport, SweepReport};

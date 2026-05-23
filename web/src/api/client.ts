@@ -527,24 +527,28 @@ export const api = {
   /// `state/screensaver.ts::hashPin`; payload field
   /// `{ hash: base64 }`.
   screensaverState: () =>
-    req<{ enabled: boolean; timeout_secs: number; pin_set: boolean }>(
+    req<{ enabled: boolean; timeout_secs: number; theme: "matrix" | "castaway"; pin_set: boolean }>(
       "GET",
       "/api/screensaver/state",
     ),
-  screensaverPatch: (body: { enabled?: boolean; timeout_secs?: number }) =>
-    req<{ enabled: boolean; timeout_secs: number; pin_set: boolean }>(
+  screensaverPatch: (body: {
+    enabled?: boolean;
+    timeout_secs?: number;
+    theme?: "matrix" | "castaway";
+  }) =>
+    req<{ enabled: boolean; timeout_secs: number; theme: "matrix" | "castaway"; pin_set: boolean }>(
       "PATCH",
       "/api/screensaver/state",
       body,
     ),
   screensaverSetPin: (hash_b64: string) =>
-    req<{ enabled: boolean; timeout_secs: number; pin_set: boolean }>(
+    req<{ enabled: boolean; timeout_secs: number; theme: "matrix" | "castaway"; pin_set: boolean }>(
       "POST",
       "/api/screensaver/pin",
       { hash: hash_b64 },
     ),
   screensaverClearPin: () =>
-    req<{ enabled: boolean; timeout_secs: number; pin_set: boolean }>(
+    req<{ enabled: boolean; timeout_secs: number; theme: "matrix" | "castaway"; pin_set: boolean }>(
       "DELETE",
       "/api/screensaver/pin",
     ),

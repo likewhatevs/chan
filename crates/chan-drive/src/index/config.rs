@@ -45,6 +45,15 @@ pub enum Chunking {
     Fixed { chars: usize },
 }
 
+/// Visual theme rendered behind the screensaver unlock card.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ScreensaverTheme {
+    #[default]
+    Matrix,
+    Castaway,
+}
+
 /// On-disk shape of `<index_dir>/config.toml`.
 ///
 /// `model` is the user-configured target: the model the indexer
@@ -111,6 +120,11 @@ pub struct IndexConfig {
     /// chan-server just persists the threshold.
     #[serde(default = "default_screensaver_timeout_secs")]
     pub screensaver_timeout_secs: u32,
+    /// fullstack-a-99: visual theme for the screensaver overlay.
+    /// Default Matrix preserves the original task's default and keeps
+    /// pre-existing drives deterministic when the field is absent.
+    #[serde(default)]
+    pub screensaver_theme: ScreensaverTheme,
     /// systacean-40: per-drive PIN hash. `None` when no PIN is
     /// set (overlay still arms but auto-dismisses on any input).
     /// The bytes are whatever the SPA POSTs — chan-server stores
@@ -177,6 +191,7 @@ impl Default for IndexConfig {
             reports_enabled: false,
             screensaver_enabled: false,
             screensaver_timeout_secs: default_screensaver_timeout_secs(),
+            screensaver_theme: ScreensaverTheme::Matrix,
             screensaver_pin_hash: None,
         }
     }
