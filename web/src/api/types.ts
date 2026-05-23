@@ -110,6 +110,15 @@ export type TerminalSpawnResponse = {
 export type TerminalRestartRequest = {
   name?: string;
   window_id?: string;
+  /// Optional command override for the restarted PTY. When set,
+  /// the new shell runs this command instead of the original
+  /// spawn command. Used by the team-bootstrap orchestrator to
+  /// flip the host's terminal into the lead's session.
+  command?: string;
+  /// Optional env override for the restarted PTY. Entries are
+  /// merged into the restart options' env so per-member env
+  /// (e.g. CHAN_TAB_NAME = lead handle) lands before respawn.
+  env?: Record<string, string>;
 };
 
 export type Preferences = {

@@ -239,6 +239,8 @@ impl Registry {
         id: &str,
         tab_name: Option<String>,
         window_id: Option<String>,
+        command: Option<String>,
+        env: Option<BTreeMap<String, String>>,
     ) -> Result<bool, CreateError> {
         let old = self
             .sessions
@@ -258,6 +260,17 @@ impl Registry {
         }
         if window_id.is_some() {
             opts.window_id = window_id;
+        }
+        // `fullstack-a-79` slice 5 follow-up: the team-bootstrap
+        // orchestrator overrides command + env to flip the host's
+        // pre-existing PTY into the lead's session (e.g. host's
+        // shell -> lead's `claude` command). When None, restart
+        // preserves the original spawn command/env.
+        if let Some(cmd) = command {
+            opts.command = Some(cmd);
+        }
+        if let Some(extra_env) = env {
+            opts.env.extend(extra_env);
         }
         let session = Session::spawn(id.to_string(), self.config.clone(), opts)
             .map_err(CreateError::Spawn)?;

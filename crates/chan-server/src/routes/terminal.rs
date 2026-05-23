@@ -71,6 +71,17 @@ pub struct CreateTerminalResponse {
 pub struct RestartTerminalBody {
     name: Option<String>,
     window_id: Option<String>,
+    /// Optional command override. When supplied, the restarted PTY
+    /// runs this command instead of the original spawn command.
+    /// Used by the team-bootstrap orchestrator to flip the host's
+    /// terminal into the lead's session (e.g. `bash` -> `claude`).
+    command: Option<String>,
+    /// Optional env override. Merged into the restart options' env
+    /// so the lead's CHAN_TAB_NAME and any other per-member env
+    /// land before the new PTY spawns. Existing entries with the
+    /// same key are replaced.
+    #[serde(default)]
+    env: Option<std::collections::BTreeMap<String, String>>,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -341,7 +352,7 @@ pub async fn api_restart_terminal(
     if state.tunnel_public {
         return err_tunnel_public_locked();
     }
-    let (tab_name, window_id) = if let Some(Json(body)) = body {
+    let (tab_name, window_id, command, env) = if let Some(Json(body)) = body {
         let tab_name = match body.name.as_deref() {
             Some(name) => match normalize_tab_name(name) {
                 Some(name) => Some(name),
@@ -361,13 +372,13 @@ pub async fn api_restart_terminal(
             },
             None => None,
         };
-        (tab_name, window_id)
+        (tab_name, window_id, body.command, body.env)
     } else {
-        (None, None)
+        (None, None, None, None)
     };
     match state
         .terminal_sessions
-        .restart(&session, tab_name, window_id)
+        .restart(&session, tab_name, window_id, command, env)
     {
         Ok(true) => StatusCode::NO_CONTENT.into_response(),
         Ok(false) => (StatusCode::NOT_FOUND, "terminal session not found").into_response(),
