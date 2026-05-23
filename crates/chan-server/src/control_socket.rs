@@ -329,8 +329,7 @@ mod tests {
         let root = tempfile::tempdir().expect("drive root");
         std::fs::create_dir_all(root.path().join("notes")).expect("notes dir");
         let lib = chan_drive::Library::open_at(cfg.path().join("config.toml")).expect("library");
-        lib.register_drive(root.path(), Some("test".into()))
-            .expect("register drive");
+        lib.register_drive(root.path()).expect("register drive");
         let drive = lib.open_drive(root.path()).expect("open drive");
         let self_writes = crate::self_writes::SelfWrites::new();
         let (tx, mut rx) = broadcast::channel(4);
@@ -360,8 +359,7 @@ mod tests {
         let root = tempfile::tempdir().expect("drive root");
         std::fs::create_dir_all(root.path().join("notes/sub")).expect("sub dir");
         let lib = chan_drive::Library::open_at(cfg.path().join("config.toml")).expect("library");
-        lib.register_drive(root.path(), Some("test".into()))
-            .expect("register drive");
+        lib.register_drive(root.path()).expect("register drive");
         let drive = lib.open_drive(root.path()).expect("open drive");
         let self_writes = crate::self_writes::SelfWrites::new();
         let (tx, mut rx) = broadcast::channel(4);

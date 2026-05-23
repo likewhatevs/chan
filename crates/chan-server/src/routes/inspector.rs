@@ -268,8 +268,7 @@ mod tests {
         let cfg = TempDir::new().unwrap();
         let drive_root = TempDir::new().unwrap();
         let lib = chan_drive::Library::open_at(cfg.path().join("config.toml")).unwrap();
-        lib.register_drive(drive_root.path(), Some("inspector-test".into()))
-            .unwrap();
+        lib.register_drive(drive_root.path()).unwrap();
         let drive = lib.open_drive(drive_root.path()).unwrap();
         (cfg, drive_root, drive)
     }

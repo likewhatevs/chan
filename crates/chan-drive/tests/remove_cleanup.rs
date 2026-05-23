@@ -12,8 +12,7 @@ fn remove_single_file_drops_graph_and_index() {
     let cfg = TempDir::new().unwrap();
     let drive_root = TempDir::new().unwrap();
     let lib = Library::open_at(cfg.path().join("config.toml")).unwrap();
-    lib.register_drive(drive_root.path(), Some("Del".into()))
-        .unwrap();
+    lib.register_drive(drive_root.path()).unwrap();
     let drive = lib.open_drive(drive_root.path()).unwrap();
 
     // Markdown link with explicit `.md` so the stored edge `dst`
@@ -107,8 +106,7 @@ fn remove_directory_cascades_through_graph_and_index() {
     let cfg = TempDir::new().unwrap();
     let drive_root = TempDir::new().unwrap();
     let lib = Library::open_at(cfg.path().join("config.toml")).unwrap();
-    lib.register_drive(drive_root.path(), Some("DelDir".into()))
-        .unwrap();
+    lib.register_drive(drive_root.path()).unwrap();
     let drive = lib.open_drive(drive_root.path()).unwrap();
 
     // A subtree mixing editable text, an image, and a PDF. An outside
@@ -219,8 +217,7 @@ fn remove_non_editable_file_keeps_inbound_edges() {
     let cfg = TempDir::new().unwrap();
     let drive_root = TempDir::new().unwrap();
     let lib = Library::open_at(cfg.path().join("config.toml")).unwrap();
-    lib.register_drive(drive_root.path(), Some("Img".into()))
-        .unwrap();
+    lib.register_drive(drive_root.path()).unwrap();
     let drive = lib.open_drive(drive_root.path()).unwrap();
 
     drive

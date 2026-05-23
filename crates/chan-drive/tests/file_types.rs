@@ -11,8 +11,7 @@ fn file_type_policy_end_to_end() {
     let drive_root = TempDir::new().unwrap();
 
     let lib = Library::open_at(cfg.path().join("config.toml")).unwrap();
-    lib.register_drive(drive_root.path(), Some("Types".into()))
-        .unwrap();
+    lib.register_drive(drive_root.path()).unwrap();
     let drive = lib.open_drive(drive_root.path()).unwrap();
 
     // Editable-text: .md and .txt go through write_text.

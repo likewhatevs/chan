@@ -617,8 +617,7 @@ mod tests {
         let cfg = TempDir::new().unwrap();
         let drive_dir = TempDir::new().unwrap();
         let lib = Library::open_at(cfg.path().join("config.toml")).unwrap();
-        lib.register_drive(drive_dir.path(), Some("Test".into()))
-            .unwrap();
+        lib.register_drive(drive_dir.path()).unwrap();
         let drive = lib.open_drive(drive_dir.path()).unwrap();
         let ctx = ToolContext::new(drive);
         (cfg, drive_dir, ctx)

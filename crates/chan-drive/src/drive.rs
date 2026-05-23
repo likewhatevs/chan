@@ -494,13 +494,6 @@ impl Drive {
         &self.entry.root_path
     }
 
-    pub fn name(&self) -> Option<&str> {
-        self.entry
-            .root_path
-            .file_name()
-            .and_then(|name| name.to_str())
-    }
-
     /// Per-drive paths (sessions, index dir, graph DB, lock).
     /// Exposed for apps that want to put their own state alongside
     /// chan-drive's.
@@ -3575,8 +3568,7 @@ mod tests {
         let cfg = TempDir::new().unwrap();
         let drive_dir = TempDir::new().unwrap();
         let lib = Library::open_at(cfg.path().join("config.toml")).unwrap();
-        lib.register_drive(drive_dir.path(), Some("Test".into()))
-            .unwrap();
+        lib.register_drive(drive_dir.path()).unwrap();
         let drive = lib.open_drive(drive_dir.path()).unwrap();
         (cfg, drive_dir, drive)
     }
@@ -3599,8 +3591,7 @@ mod tests {
         let drive_dir = TempDir::new().unwrap();
 
         let lib = Library::open_at(cfg.path().join("config.toml")).unwrap();
-        lib.register_drive(drive_dir.path(), Some("RnLog".into()))
-            .unwrap();
+        lib.register_drive(drive_dir.path()).unwrap();
         // Resolve paths after register so the lookup uses the
         // registry-assigned metadata key rather than guessing from
         // the path.
@@ -3667,8 +3658,7 @@ mod tests {
         let drive_dir = TempDir::new().unwrap();
 
         let lib = Library::open_at(cfg.path().join("config.toml")).unwrap();
-        lib.register_drive(drive_dir.path(), Some("Reb".into()))
-            .unwrap();
+        lib.register_drive(drive_dir.path()).unwrap();
         // Stamp the marker AFTER register so the metadata key is
         // known. Open then drop the drive once to let the metadata
         // skeleton (graph_dir) come into existence before we plant
@@ -3700,8 +3690,7 @@ mod tests {
         // the start so consumers don't reindex every time they open
         // a known-clean drive.
         let drive2_dir = TempDir::new().unwrap();
-        lib.register_drive(drive2_dir.path(), Some("Clean".into()))
-            .unwrap();
+        lib.register_drive(drive2_dir.path()).unwrap();
         let drive2 = lib.open_drive(drive2_dir.path()).unwrap();
         assert!(!drive2.needs_rebuild());
     }
@@ -3768,7 +3757,7 @@ mod tests {
         let cfg = TempDir::new().unwrap();
         let drive_dir = TempDir::new().unwrap();
         let lib = Library::open_at(cfg.path().join("config.toml")).unwrap();
-        lib.register_drive(drive_dir.path(), None).unwrap();
+        lib.register_drive(drive_dir.path()).unwrap();
         let probe = populate_recoverable_drive(&lib, drive_dir.path());
         let drive = lib.open_drive(drive_dir.path()).unwrap();
         drive.reindex(None).unwrap();
@@ -3804,7 +3793,7 @@ mod tests {
         let cfg = TempDir::new().unwrap();
         let drive_dir = TempDir::new().unwrap();
         let lib = Library::open_at(cfg.path().join("config.toml")).unwrap();
-        lib.register_drive(drive_dir.path(), None).unwrap();
+        lib.register_drive(drive_dir.path()).unwrap();
         let probe = populate_recoverable_drive(&lib, drive_dir.path());
         let drive = lib.open_drive(drive_dir.path()).unwrap();
         drive.reindex(None).unwrap();
@@ -3862,7 +3851,7 @@ mod tests {
         let cfg = TempDir::new().unwrap();
         let drive_dir = TempDir::new().unwrap();
         let lib = Library::open_at(cfg.path().join("config.toml")).unwrap();
-        lib.register_drive(drive_dir.path(), None).unwrap();
+        lib.register_drive(drive_dir.path()).unwrap();
         {
             let drive = lib.open_drive(drive_dir.path()).unwrap();
             drive.write_text("a.md", "alpha\n").unwrap();
@@ -3911,7 +3900,7 @@ mod tests {
         let cfg = TempDir::new().unwrap();
         let drive_dir = TempDir::new().unwrap();
         let lib = Library::open_at(cfg.path().join("config.toml")).unwrap();
-        lib.register_drive(drive_dir.path(), None).unwrap();
+        lib.register_drive(drive_dir.path()).unwrap();
         let probe = "rename-recovery-token";
         {
             let drive = lib.open_drive(drive_dir.path()).unwrap();
@@ -3967,7 +3956,7 @@ mod tests {
         let cfg = TempDir::new().unwrap();
         let drive_dir = TempDir::new().unwrap();
         let lib = Library::open_at(cfg.path().join("config.toml")).unwrap();
-        lib.register_drive(drive_dir.path(), None).unwrap();
+        lib.register_drive(drive_dir.path()).unwrap();
         let drive = lib.open_drive(drive_dir.path()).unwrap();
         drive.write_text("a.md", "# a\nbody\n").unwrap();
         drive.index_file("a.md").unwrap();
@@ -3986,7 +3975,7 @@ mod tests {
         let cfg = TempDir::new().unwrap();
         let drive_dir = TempDir::new().unwrap();
         let lib = Library::open_at(cfg.path().join("config.toml")).unwrap();
-        lib.register_drive(drive_dir.path(), None).unwrap();
+        lib.register_drive(drive_dir.path()).unwrap();
         let drive = lib.open_drive(drive_dir.path()).unwrap();
 
         let guard = drive.write_serial.lock().unwrap();
@@ -4021,7 +4010,7 @@ mod tests {
         let cfg = TempDir::new().unwrap();
         let drive_dir = TempDir::new().unwrap();
         let lib = Library::open_at(cfg.path().join("config.toml")).unwrap();
-        lib.register_drive(drive_dir.path(), None).unwrap();
+        lib.register_drive(drive_dir.path()).unwrap();
         let probe = "pending-recovery-token";
         {
             let drive = lib.open_drive(drive_dir.path()).unwrap();
@@ -4078,7 +4067,7 @@ mod tests {
         let cfg = TempDir::new().unwrap();
         let drive_dir = TempDir::new().unwrap();
         let lib = Library::open_at(cfg.path().join("config.toml")).unwrap();
-        lib.register_drive(drive_dir.path(), None).unwrap();
+        lib.register_drive(drive_dir.path()).unwrap();
         {
             let drive = lib.open_drive(drive_dir.path()).unwrap();
             drive.write_text("ghost.md", "# ghost\nbody\n").unwrap();
@@ -4123,7 +4112,7 @@ mod tests {
         let cfg = TempDir::new().unwrap();
         let drive_dir = TempDir::new().unwrap();
         let lib = Library::open_at(cfg.path().join("config.toml")).unwrap();
-        lib.register_drive(drive_dir.path(), None).unwrap();
+        lib.register_drive(drive_dir.path()).unwrap();
         {
             let drive = lib.open_drive(drive_dir.path()).unwrap();
             drive.write_text("doomed.md", "# doomed\nbody\n").unwrap();
@@ -4163,7 +4152,7 @@ mod tests {
         let cfg = TempDir::new().unwrap();
         let drive_dir = TempDir::new().unwrap();
         let lib = Library::open_at(cfg.path().join("config.toml")).unwrap();
-        lib.register_drive(drive_dir.path(), None).unwrap();
+        lib.register_drive(drive_dir.path()).unwrap();
         let drive = lib.open_drive(drive_dir.path()).unwrap();
         drive.write_text("a.md", "# a\nalpha\n").unwrap();
         drive.write_text("b.md", "# b\nbeta\n").unwrap();
@@ -4184,7 +4173,7 @@ mod tests {
         let cfg = TempDir::new().unwrap();
         let drive_dir = TempDir::new().unwrap();
         let lib = Library::open_at(cfg.path().join("config.toml")).unwrap();
-        lib.register_drive(drive_dir.path(), None).unwrap();
+        lib.register_drive(drive_dir.path()).unwrap();
         let drive = lib.open_drive(drive_dir.path()).unwrap();
         drive.write_text("a.md", "# a\nalpha\n").unwrap();
         drive.reindex(None).unwrap();
@@ -4217,7 +4206,7 @@ mod tests {
         let cfg = TempDir::new().unwrap();
         let drive_dir = TempDir::new().unwrap();
         let lib = Library::open_at(cfg.path().join("config.toml")).unwrap();
-        lib.register_drive(drive_dir.path(), None).unwrap();
+        lib.register_drive(drive_dir.path()).unwrap();
         let drive = lib.open_drive(drive_dir.path()).unwrap();
         drive
             .write_text("doomed.md", "# doomed\nbye-token\n")
@@ -4257,7 +4246,7 @@ mod tests {
         let cfg = TempDir::new().unwrap();
         let drive_dir = TempDir::new().unwrap();
         let lib = Library::open_at(cfg.path().join("config.toml")).unwrap();
-        lib.register_drive(drive_dir.path(), None).unwrap();
+        lib.register_drive(drive_dir.path()).unwrap();
         let drive = lib.open_drive(drive_dir.path()).unwrap();
         drive
             .write_text("a.md", "# a\noriginal-content-token\n")
@@ -4308,7 +4297,7 @@ mod tests {
         let cfg = TempDir::new().unwrap();
         let drive_dir = TempDir::new().unwrap();
         let lib = Library::open_at(cfg.path().join("config.toml")).unwrap();
-        lib.register_drive(drive_dir.path(), None).unwrap();
+        lib.register_drive(drive_dir.path()).unwrap();
         let drive = lib.open_drive(drive_dir.path()).unwrap();
         drive
             .write_text("twin.md", "# twin\noriginal-token short\n")
@@ -4383,7 +4372,7 @@ mod tests {
         let cfg = TempDir::new().unwrap();
         let drive_dir = TempDir::new().unwrap();
         let lib = Library::open_at(cfg.path().join("config.toml")).unwrap();
-        lib.register_drive(drive_dir.path(), None).unwrap();
+        lib.register_drive(drive_dir.path()).unwrap();
         let drive = lib.open_drive(drive_dir.path()).unwrap();
 
         drive.write_text("race.md", "# race\nv1 small\n").unwrap();
@@ -4444,7 +4433,7 @@ mod tests {
         let cfg = TempDir::new().unwrap();
         let drive_dir = TempDir::new().unwrap();
         let lib = Library::open_at(cfg.path().join("config.toml")).unwrap();
-        lib.register_drive(drive_dir.path(), None).unwrap();
+        lib.register_drive(drive_dir.path()).unwrap();
         let drive = lib.open_drive(drive_dir.path()).unwrap();
         drive.write_text("a.md", "# a\nshared-token\n").unwrap();
         drive.write_text("b.md", "# b\nshared-token\n").unwrap();
@@ -4485,7 +4474,7 @@ mod tests {
         let cfg = TempDir::new().unwrap();
         let drive_dir = TempDir::new().unwrap();
         let lib = Library::open_at(cfg.path().join("config.toml")).unwrap();
-        lib.register_drive(drive_dir.path(), None).unwrap();
+        lib.register_drive(drive_dir.path()).unwrap();
         let drive = lib.open_drive(drive_dir.path()).unwrap();
         drive.write_text("a.md", "# a\n").unwrap();
         drive.write_text("b.md", "# b\n").unwrap();
@@ -4537,7 +4526,7 @@ mod tests {
         let cfg = TempDir::new().unwrap();
         let drive_dir = TempDir::new().unwrap();
         let lib = Library::open_at(cfg.path().join("config.toml")).unwrap();
-        lib.register_drive(drive_dir.path(), None).unwrap();
+        lib.register_drive(drive_dir.path()).unwrap();
         let drive = lib.open_drive(drive_dir.path()).unwrap();
         drive
             .write_text("a.md", "# old\nold-checkout-token\n")
@@ -4593,10 +4582,8 @@ mod tests {
         let drive_dir = TempDir::new().unwrap();
         let fresh_dir = TempDir::new().unwrap();
         let lib = Library::open_at(cfg.path().join("config.toml")).unwrap();
-        lib.register_drive(drive_dir.path(), Some("checkout".into()))
-            .unwrap();
-        lib.register_drive(fresh_dir.path(), Some("fresh".into()))
-            .unwrap();
+        lib.register_drive(drive_dir.path()).unwrap();
+        lib.register_drive(fresh_dir.path()).unwrap();
 
         let drive = lib.open_drive(drive_dir.path()).unwrap();
         drive
@@ -4644,7 +4631,7 @@ mod tests {
         let cfg = TempDir::new().unwrap();
         let drive_dir = TempDir::new().unwrap();
         let lib = Library::open_at(cfg.path().join("config.toml")).unwrap();
-        lib.register_drive(drive_dir.path(), None).unwrap();
+        lib.register_drive(drive_dir.path()).unwrap();
         let drive = lib.open_drive(drive_dir.path()).unwrap();
         for i in 0..80 {
             drive
@@ -4711,7 +4698,7 @@ mod tests {
         let cfg = TempDir::new().unwrap();
         let drive_dir = TempDir::new().unwrap();
         let lib = Library::open_at(cfg.path().join("config.toml")).unwrap();
-        lib.register_drive(drive_dir.path(), None).unwrap();
+        lib.register_drive(drive_dir.path()).unwrap();
         let drive = lib.open_drive(drive_dir.path()).unwrap();
         drive.write_text("alive.md", "# alive\n").unwrap();
         // Stage a row for a file that does not exist on disk.
@@ -4998,7 +4985,7 @@ mod tests {
         let registered_path = staging.path().join("drive");
         std::fs::create_dir(&registered_path).unwrap();
         let lib = Library::open_at(cfg.path().join("config.toml")).unwrap();
-        lib.register_drive(&registered_path, None).unwrap();
+        lib.register_drive(&registered_path).unwrap();
         // ... then swap it for a symlink to a different directory.
         std::fs::remove_dir(&registered_path).unwrap();
         symlink(real.path(), &registered_path).unwrap();
@@ -5013,7 +5000,7 @@ mod tests {
         let registered_path = staging.path().join("drive");
         std::fs::create_dir(&registered_path).unwrap();
         let lib = Library::open_at(cfg.path().join("config.toml")).unwrap();
-        lib.register_drive(&registered_path, None).unwrap();
+        lib.register_drive(&registered_path).unwrap();
         // Replace the directory with a regular file.
         std::fs::remove_dir(&registered_path).unwrap();
         std::fs::write(&registered_path, b"not a drive").unwrap();

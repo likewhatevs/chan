@@ -1202,8 +1202,7 @@ mod tests {
         let cfg = TempDir::new().unwrap();
         let drive_root = TempDir::new().unwrap();
         let lib = chan_drive::Library::open_at(cfg.path().join("config.toml")).unwrap();
-        lib.register_drive(drive_root.path(), Some("fs-graph-test".into()))
-            .unwrap();
+        lib.register_drive(drive_root.path()).unwrap();
         let drive = lib.open_drive(drive_root.path()).unwrap();
         drive.write_text("notes/a.md", "# a\n").unwrap();
         (cfg, drive_root, drive)

@@ -315,8 +315,7 @@ mod tests {
         let cfg = TempDir::new().unwrap();
         let root = TempDir::new().unwrap();
         let lib = chan_drive::Library::open_at(cfg.path().join("config.toml")).unwrap();
-        lib.register_drive(root.path(), Some("teams-route-test".into()))
-            .unwrap();
+        lib.register_drive(root.path()).unwrap();
         let drive = lib.open_drive(root.path()).unwrap();
 
         let (events_tx, _) = broadcast::channel::<String>(1);

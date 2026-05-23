@@ -535,8 +535,7 @@ mod is_root_listing_tests {
         let cfg = tempfile::TempDir::new().unwrap();
         let root = tempfile::TempDir::new().unwrap();
         let lib = chan_drive::Library::open_at(cfg.path().join("config.toml")).unwrap();
-        lib.register_drive(root.path(), Some("files-list-test".into()))
-            .unwrap();
+        lib.register_drive(root.path()).unwrap();
         let drive = lib.open_drive(root.path()).unwrap();
         std::fs::write(root.path().join("note.md"), "hi").unwrap();
 
@@ -565,8 +564,7 @@ mod write_tests {
         let cfg = tempfile::TempDir::new().unwrap();
         let root = tempfile::TempDir::new().unwrap();
         let lib = chan_drive::Library::open_at(cfg.path().join("config.toml")).unwrap();
-        lib.register_drive(root.path(), Some("files-read-test".into()))
-            .unwrap();
+        lib.register_drive(root.path()).unwrap();
         let drive = lib.open_drive(root.path()).unwrap();
         drive.write_text("note.md", "hello").unwrap();
 
@@ -598,8 +596,7 @@ mod write_tests {
         let cfg = tempfile::TempDir::new().unwrap();
         let root = tempfile::TempDir::new().unwrap();
         let lib = chan_drive::Library::open_at(cfg.path().join("config.toml")).unwrap();
-        lib.register_drive(root.path(), Some("files-read-test".into()))
-            .unwrap();
+        lib.register_drive(root.path()).unwrap();
         let drive = lib.open_drive(root.path()).unwrap();
         std::fs::write(root.path().join("image.bin"), [0, 1, 2, 3]).unwrap();
 
@@ -634,8 +631,7 @@ mod write_tests {
         let cfg = tempfile::TempDir::new().unwrap();
         let root = tempfile::TempDir::new().unwrap();
         let lib = chan_drive::Library::open_at(cfg.path().join("config.toml")).unwrap();
-        lib.register_drive(root.path(), Some("files-write-test".into()))
-            .unwrap();
+        lib.register_drive(root.path()).unwrap();
         let drive = lib.open_drive(root.path()).unwrap();
         drive.write_text("note.md", "v1").unwrap();
 
@@ -655,8 +651,7 @@ mod write_tests {
         let cfg = tempfile::TempDir::new().unwrap();
         let root = tempfile::TempDir::new().unwrap();
         let lib = chan_drive::Library::open_at(cfg.path().join("config.toml")).unwrap();
-        lib.register_drive(root.path(), Some("files-write-test".into()))
-            .unwrap();
+        lib.register_drive(root.path()).unwrap();
         let drive = lib.open_drive(root.path()).unwrap();
         drive.write_text("note.md", "v1").unwrap();
 
@@ -676,8 +671,7 @@ mod write_tests {
         let cfg = tempfile::TempDir::new().unwrap();
         let root = tempfile::TempDir::new().unwrap();
         let lib = chan_drive::Library::open_at(cfg.path().join("config.toml")).unwrap();
-        lib.register_drive(root.path(), Some("files-write-test".into()))
-            .unwrap();
+        lib.register_drive(root.path()).unwrap();
         let drive = lib.open_drive(root.path()).unwrap();
 
         let (mtime, mtime_ns) = write_file_sync(&drive, "note.md", None, None, "v1").unwrap();
@@ -692,8 +686,7 @@ mod write_tests {
         let cfg = tempfile::TempDir::new().unwrap();
         let root = tempfile::TempDir::new().unwrap();
         let lib = chan_drive::Library::open_at(cfg.path().join("config.toml")).unwrap();
-        lib.register_drive(root.path(), Some("files-write-test".into()))
-            .unwrap();
+        lib.register_drive(root.path()).unwrap();
         let drive = lib.open_drive(root.path()).unwrap();
         drive.write_text("note.md", "v1").unwrap();
         let ns = drive.stat("note.md").unwrap().mtime_ns.unwrap();
@@ -836,8 +829,7 @@ mod tests {
         let cfg = tempfile::TempDir::new().unwrap();
         let root = tempfile::TempDir::new().unwrap();
         let lib = chan_drive::Library::open_at(cfg.path().join("config.toml")).unwrap();
-        lib.register_drive(root.path(), Some("files-test".into()))
-            .unwrap();
+        lib.register_drive(root.path()).unwrap();
         let drive = lib.open_drive(root.path()).unwrap();
         std::fs::write(root.path().join("note.md"), "hi").unwrap();
         symlink("note.md", root.path().join("alias.md")).unwrap();

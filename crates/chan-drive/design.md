@@ -87,32 +87,33 @@ Out of scope:
 Per-machine singleton-in-practice. Owns the `Registry`
 (`Mutex<Registry>` intra-process), the config-file path, and the
 default drive root. `open_drive` looks up the registry row for the
-caller's path and constructs a `Drive` keyed by the row's `uuid`,
+caller's path and constructs a `Drive` keyed by the row's
+`metadata_key`,
 holding the cross-process writer lock for its lifetime.
 
-Each registry row carries a stable `uuid` (16 hex chars) minted at
-first register via `paths::mint_uuid` and preserved across
-`Library::move_drive`. All per-drive sidecar paths (graph DB,
-search index, sessions, tokens, trash, report) live
-under this uuid. Consequences:
+Each registry row carries the canonical `root_path`, a stable
+`metadata_key`, and timestamps. The key is derived from the first
+registered path as a readable path slug plus a short hash suffix,
+and is preserved across `Library::move_drive`. All per-drive
+sidecar paths (graph DB, search index, sessions, tokens, trash,
+report) live under `~/.chan/drives/<metadata_key>/`. Consequences:
 
   - Moving the drive directory (recorded via `move_drive`) is a
     registry-only change, zero file motion on the sidecars.
-  - Deleting then re-creating a drive at the same path mints a
-    fresh uuid on the new registration; the new drive cannot
-    surface state from the old one even when the FS path matches.
-  - The legacy path-derived key (`paths::drive_key`) is kept only
-    for migration: on first `Library::open` after an upgrade from
-    a pre-uuid version, rows with empty `uuid` adopt
-    `drive_key(path)` as their uuid so existing on-disk sidecars
-    remain reachable. The migration is one-shot and persisted.
+  - Registering the same canonical path is idempotent and preserves
+    the metadata key.
+  - Deleting then re-creating a drive at the same path uses the
+    same deterministic key. `unregister_drive` wipes chan-managed
+    state so stale sidecars do not reappear by accident.
+  - There is no user-managed drive name in the registry. UIs derive
+    labels from the path and show the full path where identity
+    matters.
 
 `Library::sweep_orphans` reconciles the on-disk sidecar tree
-against the registry: any subdirectory under a per-subsystem root
-(`<state>/graph/`, `<cache>/index/`, ...) whose name is not in
-the current uuid set and looks like a uuid is reclaimed. Used to
-clean up after pre-PR1 unregisters that left state behind, or
-after a `move_drive`-then-deleted-at-new-location workflow.
+against the registry: any subdirectory under `~/.chan/drives/`
+whose name is not in the current metadata-key set is reclaimed.
+Used to clean up after unregisters that left state behind, or after
+a `move_drive`-then-deleted-at-new-location workflow.
 
 `reset_drive` wipes per-drive chan-managed state (search index,
 graph DB, session blobs, app tokens). It never
@@ -133,24 +134,23 @@ recreation happens lazily on the next `open_drive` plus first
 `index()` / `graph()` access; no explicit init step.
 
 Registration is idempotent: re-registering an existing drive only
-updates `last_opened` and never clobbers a user-set name. Rename
-is the only path that overwrites the name.
+updates `last_seen_at` and preserves the metadata key.
 
 `unregister_drive` is `reset_drive(Everything)` plus a `false`
 return when the drive wasn't in the registry. It drops the
 registry row AND wipes per-drive state in one call so a re-register
 at the same path starts from a clean sidecar even when the row's
-uuid is still around in cache. The trash is preserved (recoverable
+metadata key is deterministic. The trash is preserved (recoverable
 user data, owned by the user even after the drive is forgotten).
 Preconditions match `reset_drive`: any open `Arc<Drive>` for the
 root must be dropped first, otherwise the call fails with
 `DriveAlreadyOpen`.
 
 `move_drive(old, new)` records a moved drive directory: it rewrites
-the registry row's `path` while preserving the uuid, so every
-sidecar follows the move with zero file motion. Refuses when the
-source is unregistered, when `new` doesn't exist, when `new` is
-already a different drive, or when the source is open.
+the registry row's `root_path` while preserving the metadata key,
+so every sidecar follows the move with zero file motion. Refuses
+when the source is unregistered, when `new` doesn't exist, when
+`new` is already a different drive, or when the source is open.
 
 ### Drive
 
@@ -668,10 +668,8 @@ Library::default_drive_root() -> Option<PathBuf>
 Library::set_default_drive_root(root: Option<PathBuf>) -> Result<()>
 Library::effective_default_drive_root() -> PathBuf
 
-Library::register_drive(root: &Path, name: Option<String>)
-    -> Result<KnownDrive>
+Library::register_drive(root: &Path) -> Result<KnownDrive>
 Library::unregister_drive(root: &Path) -> Result<bool>
-Library::rename_drive(root: &Path, name: Option<String>) -> Result<bool>
 Library::move_drive(old: &Path, new: &Path) -> Result<bool>
 
 Library::open_drive(root: &Path) -> Result<Arc<Drive>>
@@ -689,7 +687,6 @@ Library::walk_filter() -> Arc<WalkFilter>
 
 ```rust
 Drive::root() -> &Path
-Drive::name() -> Option<&str>
 Drive::paths() -> &DrivePaths
 
 Drive::read(rel: &str) -> Result<Vec<u8>>
@@ -1242,7 +1239,7 @@ repos go public. The fourth is forward-looking.
 ### `chan-writer/chan` :: `chan` (CLI binary)
 
 The `chan` binary parses CLI args (clap) and dispatches
-subcommands (`add`, `list`, `remove`, `rename`, `serve`, `index`,
+subcommands (`add`, `list`, `remove`, `serve`, `index`,
 `search`, `upgrade`, an internal `__mcp`). It depends on
 `chan-drive` directly with `default-features = false`, then
 re-enables `embeddings` (and `metal` on macOS, `cuda` opt-in on
@@ -1254,8 +1251,8 @@ the in-process MCP server.
 Usage shape:
 
   - `Library::open()` once at startup.
-  - `library.list_drives()`, `register_drive`, `rename_drive`,
-    `unregister_drive` for the registry subcommands.
+  - `library.list_drives()`, `register_drive`, `unregister_drive`
+    for the registry subcommands.
   - `library.open_drive(root)` to get an `Arc<Drive>`, then
     `drive.search(...)`, `drive.reindex(...)`, `drive.list_tree()`
     for `index` / `search` / direct CLI access.

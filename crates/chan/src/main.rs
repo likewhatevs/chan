@@ -794,7 +794,7 @@ fn resolve_tunnel_drive_name(flag: Option<String>, root: &Path) -> Result<String
 }
 
 fn ensure_drive_registered(lib: &Library, root: &Path) -> Result<chan_drive::KnownDrive> {
-    lib.register_drive(root, None)
+    lib.register_drive(root)
         .with_context(|| format!("registering {}", root.display()))
 }
 
@@ -2812,8 +2812,7 @@ mod tests {
         let cfg = tempfile::TempDir::new().unwrap();
         let drive_root = tempfile::TempDir::new().unwrap();
         let lib = chan_drive::Library::open_at(cfg.path().join("config.toml")).unwrap();
-        lib.register_drive(drive_root.path(), Some("graph-test".into()))
-            .unwrap();
+        lib.register_drive(drive_root.path()).unwrap();
         let drive = lib.open_drive(drive_root.path()).unwrap();
         // Lay down a couple of files so the graph view has something
         // to read.

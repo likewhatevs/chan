@@ -162,7 +162,7 @@ impl Library {
     /// existing drive only updates `last_seen_at`, preserving its
     /// metadata key. The directory itself is NOT created here; pass
     /// a path that already exists.
-    pub fn register_drive(&self, root: &Path, _name: Option<String>) -> Result<KnownDrive> {
+    pub fn register_drive(&self, root: &Path) -> Result<KnownDrive> {
         if !root.exists() {
             return Err(ChanError::DriveRootMissing(root.to_path_buf()));
         }
@@ -259,6 +259,7 @@ impl Library {
     ///   - graph DB and sqlite sidecars (`.../graph/`)
     ///   - session blobs (`.../sessions/`)
     ///   - app tokens (`.../tokens/`)
+    ///   - report artifacts (`.../report/`)
     ///
     /// `ResetMode::Everything` additionally drops the registry
     /// entry so the next `open_drive` treats this path as fresh.
@@ -282,10 +283,10 @@ impl Library {
 
     /// `reset_drive` plus a `ProgressCallback`. Fires one
     /// `ProgressStage::Reset` event per subsystem (index, graph,
-    /// sessions, tokens) as it is wiped, so a UI can
+    /// sessions, tokens, report) as it is wiped, so a UI can
     /// surface "wiping <subsystem>..." without instrumenting each
     /// caller. The label carries the subsystem name; `current` /
-    /// `total` count through the fixed four-subsystem list.
+    /// `total` count through the fixed subsystem list.
     pub fn reset_drive_with(
         &self,
         root: &Path,
@@ -564,8 +565,7 @@ mod tests {
     #[test]
     fn register_then_list() {
         let (lib, _cfg, drive) = lib();
-        lib.register_drive(drive.path(), Some("Notes".into()))
-            .unwrap();
+        lib.register_drive(drive.path()).unwrap();
         let drives = lib.list_drives();
         assert_eq!(drives.len(), 1);
         assert_eq!(drives[0].root_path, drive.path().canonicalize().unwrap());
@@ -580,7 +580,7 @@ mod tests {
     fn register_missing_path_errors() {
         let (lib, _cfg, _drive) = lib();
         let bogus = std::path::PathBuf::from("/nonexistent/path/to/nowhere/12345");
-        let err = lib.register_drive(&bogus, None).unwrap_err();
+        let err = lib.register_drive(&bogus).unwrap_err();
         assert!(matches!(err, ChanError::DriveRootMissing(_)));
     }
 
@@ -610,7 +610,7 @@ mod tests {
         use crate::SearchMode;
         let (lib, _cfg, drive) = lib();
         lib.set_walk_filter(WalkFilter::new(["node_modules"]));
-        lib.register_drive(drive.path(), None).unwrap();
+        lib.register_drive(drive.path()).unwrap();
         std::fs::create_dir_all(drive.path().join("notes")).unwrap();
         std::fs::write(
             drive.path().join("notes/a.md"),
@@ -677,7 +677,7 @@ mod tests {
     fn drive_paths_for_returns_none_for_unregistered_root() {
         let (lib, _cfg, drive) = lib();
         assert!(lib.drive_paths_for(drive.path()).is_none());
-        lib.register_drive(drive.path(), None).unwrap();
+        lib.register_drive(drive.path()).unwrap();
         assert!(lib.drive_paths_for(drive.path()).is_some());
     }
 
@@ -685,8 +685,7 @@ mod tests {
     fn move_drive_preserves_metadata_key_and_metadata_dirs() {
         let (lib, _cfg, drive_a) = lib();
         let drive_b = TempDir::new().unwrap();
-        lib.register_drive(drive_a.path(), Some("Notes".into()))
-            .unwrap();
+        lib.register_drive(drive_a.path()).unwrap();
         populate_state(&lib, drive_a.path());
 
         let key_before = lib.list_drives()[0].metadata_key.clone();
@@ -719,7 +718,7 @@ mod tests {
     #[test]
     fn move_drive_refuses_when_target_missing() {
         let (lib, _cfg, drive_a) = lib();
-        lib.register_drive(drive_a.path(), None).unwrap();
+        lib.register_drive(drive_a.path()).unwrap();
         let missing = std::path::PathBuf::from("/nonexistent/destination/12345");
         let err = lib.move_drive(drive_a.path(), &missing).unwrap_err();
         assert!(matches!(err, ChanError::DriveRootMissing(_)));
@@ -729,8 +728,8 @@ mod tests {
     fn move_drive_refuses_when_target_is_another_registered_drive() {
         let (lib, _cfg, drive_a) = lib();
         let drive_b = TempDir::new().unwrap();
-        lib.register_drive(drive_a.path(), None).unwrap();
-        lib.register_drive(drive_b.path(), None).unwrap();
+        lib.register_drive(drive_a.path()).unwrap();
+        lib.register_drive(drive_b.path()).unwrap();
         let err = lib.move_drive(drive_a.path(), drive_b.path()).unwrap_err();
         assert!(matches!(err, ChanError::DriveAlreadyRegistered(_)));
         // Both registry rows survive untouched.
@@ -741,7 +740,7 @@ mod tests {
     fn move_drive_refuses_when_source_is_open() {
         let (lib, _cfg, drive_a) = lib();
         let drive_b = TempDir::new().unwrap();
-        lib.register_drive(drive_a.path(), None).unwrap();
+        lib.register_drive(drive_a.path()).unwrap();
         let _open = lib.open_drive(drive_a.path()).unwrap();
         let err = lib.move_drive(drive_a.path(), drive_b.path()).unwrap_err();
         assert!(matches!(err, ChanError::DriveAlreadyOpen));
@@ -817,8 +816,7 @@ mod tests {
     #[test]
     fn reset_state_wipes_chan_state_and_keeps_user_notes_and_registry() {
         let (lib, _cfg, drive) = lib();
-        lib.register_drive(drive.path(), Some("Notes".into()))
-            .unwrap();
+        lib.register_drive(drive.path()).unwrap();
         populate_state(&lib, drive.path());
 
         let p = paths_of(&lib, drive.path());
@@ -847,7 +845,7 @@ mod tests {
     #[test]
     fn reset_everything_also_drops_registry_entry() {
         let (lib, _cfg, drive) = lib();
-        lib.register_drive(drive.path(), None).unwrap();
+        lib.register_drive(drive.path()).unwrap();
         populate_state(&lib, drive.path());
 
         lib.reset_drive(drive.path(), ResetMode::Everything)
@@ -861,7 +859,7 @@ mod tests {
     #[test]
     fn reset_drive_rejects_when_drive_is_open_in_process() {
         let (lib, _cfg, drive) = lib();
-        lib.register_drive(drive.path(), None).unwrap();
+        lib.register_drive(drive.path()).unwrap();
         let _open = lib.open_drive(drive.path()).unwrap();
         // In-process pre-check fires first: clearer error than the
         // cross-process flock would surface, since we know we're
@@ -883,7 +881,7 @@ mod tests {
         // live_drives map, so the in-process check on `lib2`
         // doesn't fire, and we hit the flock instead.
         let (lib, cfg, drive) = lib();
-        lib.register_drive(drive.path(), None).unwrap();
+        lib.register_drive(drive.path()).unwrap();
         let _open = lib.open_drive(drive.path()).unwrap();
         let lib2 = Library::open_at(cfg.path().join("config.toml")).unwrap();
         let err = lib2
@@ -895,7 +893,7 @@ mod tests {
     #[test]
     fn second_open_in_same_process_returns_already_open() {
         let (lib, _cfg, drive) = lib();
-        lib.register_drive(drive.path(), None).unwrap();
+        lib.register_drive(drive.path()).unwrap();
         let first = lib.open_drive(drive.path()).unwrap();
         let err = lib.open_drive(drive.path()).unwrap_err();
         assert!(matches!(err, ChanError::DriveAlreadyOpen));
@@ -907,7 +905,7 @@ mod tests {
     #[test]
     fn reset_is_idempotent_on_never_opened_drive() {
         let (lib, _cfg, drive) = lib();
-        lib.register_drive(drive.path(), None).unwrap();
+        lib.register_drive(drive.path()).unwrap();
         let report = lib.reset_drive(drive.path(), ResetMode::State).unwrap();
         assert_eq!(report.removed_entries, 0);
         // Registry still has it.
@@ -918,8 +916,8 @@ mod tests {
     fn reset_does_not_touch_other_drives_state() {
         let (lib, _cfg, drive_a) = lib();
         let drive_b = TempDir::new().unwrap();
-        lib.register_drive(drive_a.path(), None).unwrap();
-        lib.register_drive(drive_b.path(), None).unwrap();
+        lib.register_drive(drive_a.path()).unwrap();
+        lib.register_drive(drive_b.path()).unwrap();
         populate_state(&lib, drive_a.path());
         populate_state(&lib, drive_b.path());
 
@@ -947,8 +945,7 @@ mod tests {
     #[test]
     fn unregister_wipes_state_so_recreate_at_same_path_starts_fresh() {
         let (lib, _cfg, drive) = lib();
-        lib.register_drive(drive.path(), Some("First".into()))
-            .unwrap();
+        lib.register_drive(drive.path()).unwrap();
         populate_state(&lib, drive.path());
 
         let p = paths_of(&lib, drive.path());
@@ -974,8 +971,7 @@ mod tests {
         // drive's graph must not surface anything until the user
         // reindexes (here: nothing on disk, so nothing to surface).
         std::fs::remove_dir_all(drive.path().join("notes")).ok();
-        lib.register_drive(drive.path(), Some("Second".into()))
-            .unwrap();
+        lib.register_drive(drive.path()).unwrap();
         let d = lib.open_drive(drive.path()).unwrap();
         d.reindex(None).unwrap();
         let opts = crate::drive::SearchOpts {
@@ -1002,7 +998,7 @@ mod tests {
         // rather than silently leaving the registry row gone and
         // metadata half-wiped.
         let (lib, _cfg, drive) = lib();
-        lib.register_drive(drive.path(), None).unwrap();
+        lib.register_drive(drive.path()).unwrap();
         let _open = lib.open_drive(drive.path()).unwrap();
         let err = lib.unregister_drive(drive.path()).unwrap_err();
         assert!(matches!(err, ChanError::DriveAlreadyOpen));
@@ -1013,7 +1009,7 @@ mod tests {
     #[test]
     fn reset_state_preserves_trash() {
         let (lib, _cfg, drive) = lib();
-        lib.register_drive(drive.path(), None).unwrap();
+        lib.register_drive(drive.path()).unwrap();
         {
             let d = lib.open_drive(drive.path()).unwrap();
             d.write_text("doomed.md", "bye").unwrap();

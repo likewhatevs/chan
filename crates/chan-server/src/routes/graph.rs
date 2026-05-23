@@ -1426,8 +1426,7 @@ mod tests {
         let cfg = tempfile::TempDir::new().unwrap();
         let root = tempfile::TempDir::new().unwrap();
         let lib = chan_drive::Library::open_at(cfg.path().join("config.toml")).unwrap();
-        lib.register_drive(root.path(), Some("graph-test".into()))
-            .unwrap();
+        lib.register_drive(root.path()).unwrap();
         let drive = lib.open_drive(root.path()).unwrap();
         (cfg, root, drive)
     }

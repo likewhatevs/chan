@@ -12,8 +12,7 @@ fn abs_and_parent_relative_image_links_both_backlink_to_same_node() {
     let drive_root = TempDir::new().unwrap();
 
     let lib = Library::open_at(cfg.path().join("config.toml")).unwrap();
-    lib.register_drive(drive_root.path(), Some("LinkNorm".into()))
-        .unwrap();
+    lib.register_drive(drive_root.path()).unwrap();
     let drive = lib.open_drive(drive_root.path()).unwrap();
 
     // One image placeholder at the drive root referenced by three
@@ -58,8 +57,7 @@ fn drive_escape_link_is_dropped() {
     let cfg = TempDir::new().unwrap();
     let drive_root = TempDir::new().unwrap();
     let lib = Library::open_at(cfg.path().join("config.toml")).unwrap();
-    lib.register_drive(drive_root.path(), Some("Escape".into()))
-        .unwrap();
+    lib.register_drive(drive_root.path()).unwrap();
     let drive = lib.open_drive(drive_root.path()).unwrap();
 
     // `../../etc/passwd` from a depth-1 file pops past the drive

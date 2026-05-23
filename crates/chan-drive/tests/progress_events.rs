@@ -33,8 +33,7 @@ fn reindex_emits_graph_and_index_stages() {
     let cfg = TempDir::new().unwrap();
     let drive_root = TempDir::new().unwrap();
     let lib = Library::open_at(cfg.path().join("config.toml")).unwrap();
-    lib.register_drive(drive_root.path(), Some("Prog".into()))
-        .unwrap();
+    lib.register_drive(drive_root.path()).unwrap();
     let drive = lib.open_drive(drive_root.path()).unwrap();
     drive.write_text("intro.md", "# Intro\n\nHello\n").unwrap();
     drive.write_text("notes/x.md", "# X\n\nhi\n").unwrap();
@@ -86,8 +85,7 @@ fn no_progress_passes_through_silently() {
     let cfg = TempDir::new().unwrap();
     let drive_root = TempDir::new().unwrap();
     let lib = Library::open_at(cfg.path().join("config.toml")).unwrap();
-    lib.register_drive(drive_root.path(), Some("Silent".into()))
-        .unwrap();
+    lib.register_drive(drive_root.path()).unwrap();
     let drive = lib.open_drive(drive_root.path()).unwrap();
     drive.write_text("a.md", "# a\n").unwrap();
     let s1 = drive.reindex_with(None, &NoProgress).unwrap();
@@ -99,8 +97,7 @@ fn rename_with_link_rewrite_with_emits_rewrite_progress() {
     let cfg = TempDir::new().unwrap();
     let drive_root = TempDir::new().unwrap();
     let lib = Library::open_at(cfg.path().join("config.toml")).unwrap();
-    lib.register_drive(drive_root.path(), Some("Rename".into()))
-        .unwrap();
+    lib.register_drive(drive_root.path()).unwrap();
     let drive = lib.open_drive(drive_root.path()).unwrap();
     // Two source files reference the target by markdown link so
     // the rewriter has work to do per source.
@@ -132,8 +129,7 @@ fn import_contacts_with_emits_per_contact_progress() {
     let cfg = TempDir::new().unwrap();
     let drive_root = TempDir::new().unwrap();
     let lib = Library::open_at(cfg.path().join("config.toml")).unwrap();
-    lib.register_drive(drive_root.path(), Some("Imp".into()))
-        .unwrap();
+    lib.register_drive(drive_root.path()).unwrap();
     let drive = lib.open_drive(drive_root.path()).unwrap();
 
     let contacts = vec![
@@ -179,8 +175,7 @@ fn reset_drive_with_emits_one_event_per_subsystem() {
     let cfg = TempDir::new().unwrap();
     let drive_root = TempDir::new().unwrap();
     let lib = Library::open_at(cfg.path().join("config.toml")).unwrap();
-    lib.register_drive(drive_root.path(), Some("R".into()))
-        .unwrap();
+    lib.register_drive(drive_root.path()).unwrap();
     {
         // Open + write so the per-drive state dirs exist on disk.
         let drive = lib.open_drive(drive_root.path()).unwrap();
@@ -199,8 +194,9 @@ fn reset_drive_with_emits_one_event_per_subsystem() {
             .filter(|e| e.stage == ProgressStage::Reset)
             .cloned()
             .collect();
-    // Four subsystems: index, graph, sessions, tokens.
-    assert_eq!(reset_events.len(), 4, "got events: {reset_events:?}");
+    // Reset reports every chan-managed sidecar subtree except trash
+    // and locks, which preserve user recovery data and coordination.
+    assert_eq!(reset_events.len(), 5, "got events: {reset_events:?}");
     let labels: Vec<_> = reset_events
         .iter()
         .filter_map(|e| e.label.clone())
@@ -209,6 +205,7 @@ fn reset_drive_with_emits_one_event_per_subsystem() {
     assert!(labels.contains(&"graph".to_string()));
     assert!(labels.contains(&"sessions".to_string()));
     assert!(labels.contains(&"tokens".to_string()));
+    assert!(labels.contains(&"report".to_string()));
 }
 
 #[test]
@@ -242,8 +239,7 @@ fn is_reindexing_flips_during_reindex_with() {
     let cfg = TempDir::new().unwrap();
     let drive_root = TempDir::new().unwrap();
     let lib = Library::open_at(cfg.path().join("config.toml")).unwrap();
-    lib.register_drive(drive_root.path(), Some("Live".into()))
-        .unwrap();
+    lib.register_drive(drive_root.path()).unwrap();
     let drive = lib.open_drive(drive_root.path()).unwrap();
     drive.write_text("a.md", "# A\n\nbody\n").unwrap();
     drive.write_text("b.md", "# B\n\nbody\n").unwrap();
@@ -326,8 +322,7 @@ fn progress_fn_adapter_lets_closures_be_callbacks() {
     let cfg = TempDir::new().unwrap();
     let drive_root = TempDir::new().unwrap();
     let lib = Library::open_at(cfg.path().join("config.toml")).unwrap();
-    lib.register_drive(drive_root.path(), Some("Fn".into()))
-        .unwrap();
+    lib.register_drive(drive_root.path()).unwrap();
     let drive = lib.open_drive(drive_root.path()).unwrap();
     drive.write_text("a.md", "# a\n").unwrap();
 

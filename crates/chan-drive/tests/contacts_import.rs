@@ -24,8 +24,7 @@ fn end_to_end_import_into_drive() {
     let cfg = TempDir::new().unwrap();
     let drive_root = TempDir::new().unwrap();
     let lib = Library::open_at(cfg.path().join("config.toml")).unwrap();
-    lib.register_drive(drive_root.path(), Some("ImportTest".into()))
-        .unwrap();
+    lib.register_drive(drive_root.path()).unwrap();
     let drive = lib.open_drive(drive_root.path()).unwrap();
 
     // Parse + import.
@@ -69,8 +68,7 @@ fn re_import_default_skips_existing() {
     let cfg = TempDir::new().unwrap();
     let drive_root = TempDir::new().unwrap();
     let lib = Library::open_at(cfg.path().join("config.toml")).unwrap();
-    lib.register_drive(drive_root.path(), Some("Reimport".into()))
-        .unwrap();
+    lib.register_drive(drive_root.path()).unwrap();
     let drive = lib.open_drive(drive_root.path()).unwrap();
 
     let first = parse_google_csv(CSV.as_bytes()).unwrap();
@@ -102,8 +100,7 @@ fn re_import_with_overwrite_replaces() {
     let cfg = TempDir::new().unwrap();
     let drive_root = TempDir::new().unwrap();
     let lib = Library::open_at(cfg.path().join("config.toml")).unwrap();
-    lib.register_drive(drive_root.path(), Some("Overwrite".into()))
-        .unwrap();
+    lib.register_drive(drive_root.path()).unwrap();
     let drive = lib.open_drive(drive_root.path()).unwrap();
 
     let first = parse_google_csv(CSV.as_bytes()).unwrap();
@@ -134,8 +131,7 @@ fn import_into_drive_root() {
     let cfg = TempDir::new().unwrap();
     let drive_root = TempDir::new().unwrap();
     let lib = Library::open_at(cfg.path().join("config.toml")).unwrap();
-    lib.register_drive(drive_root.path(), Some("Root".into()))
-        .unwrap();
+    lib.register_drive(drive_root.path()).unwrap();
     let drive = lib.open_drive(drive_root.path()).unwrap();
 
     let contacts = parse_google_csv(CSV.as_bytes()).unwrap();
@@ -155,8 +151,7 @@ fn imported_contacts_classified_as_contact_nodes_after_index() {
     let cfg = TempDir::new().unwrap();
     let drive_root = TempDir::new().unwrap();
     let lib = Library::open_at(cfg.path().join("config.toml")).unwrap();
-    lib.register_drive(drive_root.path(), Some("ContactsGraph".into()))
-        .unwrap();
+    lib.register_drive(drive_root.path()).unwrap();
     let drive = lib.open_drive(drive_root.path()).unwrap();
 
     // One contact import + one plain note. Indexing both should
@@ -195,8 +190,7 @@ fn intra_batch_duplicate_name_skips_unrelated_existing_suffixed_file() {
     let cfg = TempDir::new().unwrap();
     let drive_root = TempDir::new().unwrap();
     let lib = Library::open_at(cfg.path().join("config.toml")).unwrap();
-    lib.register_drive(drive_root.path(), Some("DupBatch".into()))
-        .unwrap();
+    lib.register_drive(drive_root.path()).unwrap();
     let drive = lib.open_drive(drive_root.path()).unwrap();
 
     drive.create_dir("Contacts").unwrap();
@@ -239,8 +233,7 @@ fn imported_contacts_are_reachable_by_email_substring_via_picker_filter() {
     let cfg = TempDir::new().unwrap();
     let drive_root = TempDir::new().unwrap();
     let lib = Library::open_at(cfg.path().join("config.toml")).unwrap();
-    lib.register_drive(drive_root.path(), Some("EmailSearch".into()))
-        .unwrap();
+    lib.register_drive(drive_root.path()).unwrap();
     let drive = lib.open_drive(drive_root.path()).unwrap();
 
     let contacts = parse_google_csv(CSV.as_bytes()).unwrap();
@@ -279,8 +272,7 @@ fn removing_contact_frontmatter_demotes_node_back_to_file() {
     let cfg = TempDir::new().unwrap();
     let drive_root = TempDir::new().unwrap();
     let lib = Library::open_at(cfg.path().join("config.toml")).unwrap();
-    lib.register_drive(drive_root.path(), Some("Demote".into()))
-        .unwrap();
+    lib.register_drive(drive_root.path()).unwrap();
     let drive = lib.open_drive(drive_root.path()).unwrap();
 
     drive

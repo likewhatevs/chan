@@ -73,8 +73,7 @@ fn report_initial_scan_picks_up_markdown_and_code() {
     let cfg = TempDir::new().unwrap();
     let drive_root = TempDir::new().unwrap();
     let lib = Library::open_at(cfg.path().join("config.toml")).unwrap();
-    lib.register_drive(drive_root.path(), Some("Report".into()))
-        .unwrap();
+    lib.register_drive(drive_root.path()).unwrap();
     put(drive_root.path(), "notes/today.md", "# today\n\nbody.\n");
     put(
         drive_root.path(),
@@ -95,8 +94,7 @@ fn report_for_prefix_restricts_to_subtree() {
     let cfg = TempDir::new().unwrap();
     let drive_root = TempDir::new().unwrap();
     let lib = Library::open_at(cfg.path().join("config.toml")).unwrap();
-    lib.register_drive(drive_root.path(), Some("Scope".into()))
-        .unwrap();
+    lib.register_drive(drive_root.path()).unwrap();
     put(drive_root.path(), "src/a.rs", "fn a() {}\n");
     put(drive_root.path(), "src/b.rs", "fn b() {}\n");
     put(drive_root.path(), "README.md", "# x\n");
@@ -121,8 +119,7 @@ fn watcher_keeps_report_current() {
     let cfg = TempDir::new().unwrap();
     let drive_root = TempDir::new().unwrap();
     let lib = Library::open_at(cfg.path().join("config.toml")).unwrap();
-    lib.register_drive(drive_root.path(), Some("Watch".into()))
-        .unwrap();
+    lib.register_drive(drive_root.path()).unwrap();
     let drive = lib.open_drive(drive_root.path()).unwrap();
 
     drive.write_text("a.md", "# a\n").unwrap();
@@ -172,8 +169,7 @@ fn report_returns_for_empty_drive() {
     let cfg = TempDir::new().unwrap();
     let drive_root = TempDir::new().unwrap();
     let lib = Library::open_at(cfg.path().join("config.toml")).unwrap();
-    lib.register_drive(drive_root.path(), Some("Empty".into()))
-        .unwrap();
+    lib.register_drive(drive_root.path()).unwrap();
     let drive = lib.open_drive(drive_root.path()).unwrap();
 
     let r = drive.report().unwrap();

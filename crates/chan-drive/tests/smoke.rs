@@ -10,8 +10,7 @@ fn end_to_end_register_open_write_index_search_graph() {
     let drive_root = TempDir::new().unwrap();
 
     let lib = Library::open_at(cfg.path().join("config.toml")).unwrap();
-    lib.register_drive(drive_root.path(), Some("Smoke".into()))
-        .unwrap();
+    lib.register_drive(drive_root.path()).unwrap();
 
     let drive = lib.open_drive(drive_root.path()).unwrap();
     drive
