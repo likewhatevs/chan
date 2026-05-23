@@ -81,6 +81,7 @@
     tabMenu,
   } from "../state/tabMenu.svelte";
   import BubbleOverlay from "./BubbleOverlay.svelte";
+  import McpEnvInfoModal from "./McpEnvInfoModal.svelte";
   import TerminalRichPrompt from "./TerminalRichPrompt.svelte";
   import { readWatcherEvents } from "../state/watcherEvents";
 
@@ -1222,6 +1223,20 @@
     term?.focus();
   }
 
+  /// `fullstack-a-67d` slice 2: open / close the MCP env info
+  /// modal. Closing the menu when the modal opens keeps the
+  /// chrome from stacking — the modal sits at z=26000 above the
+  /// menu bubble, but the bubble visually competes for
+  /// attention; collapsing it on open keeps the dialog the only
+  /// focus.
+  function openMcpInfoModal(): void {
+    closeTabMenu();
+    mcpInfoOpen = true;
+  }
+  function closeMcpInfoModal(): void {
+    mcpInfoOpen = false;
+  }
+
   function onTerminalContextMenu(e: MouseEvent): void {
     e.preventDefault();
     requestTerminalCwd();
@@ -1315,6 +1330,12 @@
             <span class="mbtn-chord"></span>
           </button>
         {/if}
+        <!-- `fullstack-a-67d` slice 2: info button opens a
+             modal dialog (McpEnvInfoModal.svelte) per
+             addendum-a's "dialog like the New File one" spec.
+             The standalone "Show MCP env in terminal" button
+             moved INTO the dialog as its primary CTA; the menu
+             row now just carries the toggle + the info button. -->
         <div class="mcp-env-row">
           <button class="mbtn" class:on={mcpEnvOn} onclick={toggleMcpEnv}>
             <span class="mbtn-icon">
@@ -1328,24 +1349,11 @@
             type="button"
             class="info-btn"
             aria-label="About MCP env vars"
-            aria-expanded={mcpInfoOpen}
-            onclick={() => (mcpInfoOpen = !mcpInfoOpen)}
+            onclick={openMcpInfoModal}
           >
             <Info size={15} strokeWidth={1.75} aria-hidden="true" />
           </button>
         </div>
-        {#if mcpInfoOpen}
-          <div class="mcp-info">
-            When on, chan sets CHAN_MCP_SOCKET, CHAN_MCP_SERVER_JSON, and friends in the
-            PTY env so external agent CLIs can discover the chan MCP server
-            automatically. Turn this off to launch a vanilla shell. Applies to new
-            sessions only.
-          </div>
-        {/if}
-        <button class="mbtn" disabled={showMcpEnvDisabled} onclick={showMcpEnv}>
-          <span class="mbtn-icon"></span>
-          <span class="mbtn-label">Show MCP env in terminal</span>
-        </button>
         <button class="mbtn destructive" onclick={() => void restart()}>
           <span class="mbtn-icon">
             <RotateCcw size={16} strokeWidth={1.75} aria-hidden="true" />
@@ -1580,6 +1588,13 @@
   ></div>
 </div>
 
+<McpEnvInfoModal
+  open={mcpInfoOpen}
+  onClose={closeMcpInfoModal}
+  onShowInTerminal={showMcpEnv}
+  showInTerminalDisabled={showMcpEnvDisabled}
+/>
+
 <style>
   .terminal-tab {
     position: absolute;
@@ -1810,17 +1825,14 @@
     color: var(--text-secondary);
     cursor: pointer;
   }
-  .info-btn:hover,
-  .info-btn[aria-expanded="true"] {
+  .info-btn:hover {
     background: var(--hover-bg);
     color: var(--text);
   }
-  .mcp-info {
-    margin: 2px 8px 6px 34px;
-    color: var(--text-secondary);
-    font-size: 12px;
-    line-height: 1.35;
-  }
+  /* `fullstack-a-67d` slice 2: dropped `.info-btn[aria-expanded]`
+     + `.mcp-info` selectors along with the inline popover; the
+     info button now opens McpEnvInfoModal.svelte (modal sits
+     at z=26000 above the menu bubble). */
   .mbtn-label,
   .target-name {
     flex: 1;

@@ -1128,3 +1128,108 @@ Editor: Mod+E "Show Source Code" chord (fullstack-a-67f slice 2)
 Autonomous-commit mode. No clearance held.
 Picking up `-a-67d` slice 2 (MCP info-button
 modal) or `-a-67e` slice 2 next.
+
+## 2026-05-23 — slice -a-67d slice 2 (MCP info-button modal)
+
+SPA-only. Picks up the deferred follow-up
+from `-a-67d` slice 1 — converts the inline
+toggle popover into a proper modal dialog per
+addendum-a's "info button should bring up a
+dialog like the New File one" framing.
+
+### Shape applied
+
+* New `McpEnvInfoModal.svelte` component.
+  Width-matches `PathPromptModal`
+  (`min-width: 420px; max-width: 80vw`) per
+  the addendum's "same width as the New
+  File one" cue. Backdrop click + Esc both
+  close. Dialog role + `aria-modal="true"`.
+* The dialog hosts the explanation
+  paragraph (CHAN_MCP_SOCKET +
+  CHAN_MCP_SERVER_JSON + "applies to new
+  sessions only" caveat) + a single CTA
+  "Show MCP env in terminal".
+* CTA fires `onShowInTerminal` + closes the
+  modal. `showInTerminalDisabled` prop
+  follows the existing
+  `showMcpEnvDisabled` derived
+  (`tab.sessionMcpEnv === false`).
+* TerminalTab.svelte:
+  * Imports + mounts McpEnvInfoModal.
+  * New `openMcpInfoModal` /
+    `closeMcpInfoModal` helpers.
+  * Info button's onclick swaps from the
+    inline toggle to `openMcpInfoModal`.
+  * Dropped the inline `{#if mcpInfoOpen}
+    <div class="mcp-info"> …</div>` popover
+    block.
+  * Dropped the standalone "Show MCP env
+    in terminal" menu row (the CTA now
+    lives inside the modal — single
+    surface).
+  * CSS: dropped `.info-btn[aria-expanded
+    ="true"]` rule + `.mcp-info` selector
+    along with the popover.
+
+### Files touched
+
+* `web/src/components/McpEnvInfoModal.svelte`
+  (new) — modal component.
+* `web/src/components/TerminalTab.svelte`
+  * Import + mount.
+  * Helpers + wiring.
+  * Inline popover + standalone CTA
+    dropped.
+  * CSS cleanup.
+* `web/src/components/mcpEnvInfoModal.test.ts`
+  (new) — 10 architectural pins for the
+  component shape + the TerminalTab wiring +
+  the dropped surfaces.
+
+### Decisions
+
+* **`closeTabMenu()` on modal open** —
+  collapse the right-click bubble when the
+  modal opens so the chrome doesn't stack.
+  The modal at z=26000 already paints over
+  the menu, but visual competition is
+  avoided this way.
+* **Single CTA, not two** — addendum-a
+  framing reads as "explanation + a button";
+  the modal doesn't carry Set-vs-Show
+  separately. The toggle stays on the menu
+  row (clearer association); the modal
+  owns "show".
+* **Explicit `<code>` styling** in the body
+  for the env-var names — readability win
+  over plain prose.
+
+### Gate
+
+* `svelte-check` → 0/0.
+* `vitest` → **1234 / 1234** (+10 from
+  `-a-67f` slice 2's 1224; all new pins
+  from this slice).
+* `npm run build` → clean.
+* `cargo fmt --check` + `clippy
+  --all-targets -- -D warnings` → clean
+  (no Rust delta).
+
+### Suggested commit subject
+
+```
+Terminal: MCP env info-button → modal dialog (fullstack-a-67d slice 2)
+```
+
+### Files (per-path)
+
+* `web/src/components/McpEnvInfoModal.svelte` (new)
+* `web/src/components/TerminalTab.svelte`
+* `web/src/components/mcpEnvInfoModal.test.ts` (new)
+* `docs/journals/phase-8/fullstack-a/fullstack-a-67.md`
+
+Autonomous-commit mode. No clearance held.
+Picking up `-a-67e` slice 2 (unified
+File-or-Dir dialog + FileTree Settings flip)
+next.
