@@ -5947,3 +5947,63 @@ per chan-desktop asks via the cross-team channel.
 | `architect/journal.md` | This entry |
 | `architect/round-3-plan.md` | Cross-team lane-split note |
 | `alex/event-architect-desktect.md` | NEW channel; cross-team handoff message |
+
+## 2026-05-23 — PHASE 8 CLOSE — chan-v0.13.0 cut shipped; phase 9 inherits the carry-overs
+
+@@Alex 2026-05-23 direction:
+
+> "ok let's wrap v0.13.0 then and I will recycle, we pick up later.. you will do the pre-checks for push, will do the push, but not monitor the CI this will - I will keep an eye on it, don't worry. these items pending, move to phase 9 - including this list + open sourcing the repo and whatever else we had for phase 8 that isn't completing now in this round; we will call it the end of phase 8"
+
+### Round-3 ships (the v0.13.0 contents)
+
+| Track | Tasks | Headline |
+|-------|-------|---------|
+| Track 1 — public-flip pre-flight | `architect-3`, `systacean-43` | LICENSE Apache-2.0 + CONTRIBUTING + CODE_OF_CONDUCT + SECURITY + .github templates + docs/coordination.md; gitleaks history audit clean |
+| Track 3 — cleanup + hardening | `fullstack-a-96` sub-4 + `systacean-44` + `systacean-45` + `ci-15` | chan-server async-blocking cleanup across 13 route handlers + static_assets; tunnel-* unused-deps removed; CHANGELOG.md seeded; workflow audit |
+| Round-3 bugfix wave | `fullstack-a-97` / -98 / -100 / -101 / -102 | Terminal WebGL glyph fix; menu gaps closed (Graph footer rows + Hybrid pane revamp); Drafts FB chain (covers Drafts + Graph + Cmd+N); tab-click focus; menu polish nits |
+| Round-3 feature closure | `fullstack-a-99` | Matrix rain + code-drawn Castaway themes + theme picker + [10s, 3600s] timeout bounds (closes the phase-7-backlog screensaver spec; PIN-only `-a-77` infrastructure now has the user-visible payload) |
+| chan-desktop side | `desktacean-2` / -3 / -4 | Updater pubkey rotation; updater bridge-release flow doc; package metadata bump to v0.13.0 |
+
+### Round-3 walks (@@WebtestA solo)
+
+5 walk HOLDs landed: `-97`, `-98`, `-100`, `-101`, `-102`, `-99`. All P0/P1 release blockers cleared empirically by the time of cut.
+
+### Cross-team coordination
+
+Mid-session @@Alex bootstrapped a parallel **chan-desktop team** (@@Desktect / @@Desktacean / @@Desktest). Lane boundary at the drive-level network layer per the phase-9-desktop-native-vision doc. @@Alex acted as the bridge between team leads. The cross-team coordination ran smoothly: 3 desktop-side commits landed in parallel with chan-core work; no scope collisions.
+
+### What did NOT complete (deferred to phase 9)
+
+Captured in [`../../phase-9/request.md`](../../phase-9/request.md):
+
+* Open-source repo flip (pre-flight docs ready; operational steps remain).
+* Multi-model search picker.
+* Chan metadata import/export.
+* Desktop-native vision implementation (single-binary call, three-mode drive connection, default "Chan" drive lifecycle, bidirectional discovery).
+* chan-desktop runtime walk on chan-v0.13.0 DMG.
+* `-a-96` sub-passes 1/2/3 (frontend cleanup polish).
+* `-44` / `-45` P2 follow-ups (broader Mutex unwrap → 500, broader CLI error polish).
+* Round 4 bug backlog (@@Alex was drafting "Rich Prompt" section).
+* `.codex/` / `.claude/` / `AGENTS.md` decision.
+
+### Phase-8 process notes worth carrying forward
+
+* Multi-agent shared-worktree commit discipline (per-path adds + pre/post audit) caught most mishaps; the few times it slipped (`dec62ff` swept @@FullStackA's staged code into a clearance commit; `33382db` missed 6 SPA files in the -99 add list) were recoverable but worth tightening.
+* Cross-team bridge with chan-desktop ran clean — @@Alex bridging decisional traffic; async-notes between architect channels for context.
+* Self-cut tasks (e.g. `systacean-45`) work when @@Alex authorizes; default to architect-cuts otherwise.
+* Content-filter blocks on legal/policy text writes (CODE_OF_CONDUCT, SECURITY): @@Alex re-authorizing with explicit context unblocked the second attempt. Known failure mode worth documenting.
+
+### Phase-8 final scoreboard
+
+| Category | Count |
+|---|---|
+| Tags shipped this phase | 4 (v0.11.0, v0.11.1, v0.11.2, v0.12.0, v0.13.0) |
+| Tasks dispatched this phase | ~100+ across all agents |
+| Phase-8 bugs closed | Many; tracked in `phase-8-bugs.md` |
+| Working agents at peak | 7 (Architect + 6 working slots; later 5 + 3 desktop) |
+
+### Architect close
+
+Wrapping with the v0.13.0 push. Pre-push gate next, then push main, then annotated tag, then push tag. @@Alex monitors CI; this architect session ends with the tag-push beat.
+
+Thank you for the phase. 🫡

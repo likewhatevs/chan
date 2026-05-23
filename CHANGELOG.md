@@ -6,6 +6,50 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [v0.13.0] - 2026-05-23
+
+Phase-8 closing release. Public-flip pre-flight docs landed, screensaver themes shipped, terminal renderer regression fixed, chan-server async-blocking cleanup, plus a number of UI polish and bug fixes.
+
+### Added
+
+- Apache 2.0 `LICENSE` at the repo root.
+- `CONTRIBUTING.md` with build/test/PR submission instructions plus the architectural ground rules (drive boundary, single binary, local-first, MCP-only, pinned toolchain).
+- `CODE_OF_CONDUCT.md` adapted from Contributor Covenant 2.1.
+- `SECURITY.md` with private disclosure policy, 90-day window, and chan-drive sandbox identified as the primary security boundary.
+- `.github/ISSUE_TEMPLATE/bug_report.md` and `feature_request.md`, plus `PULL_REQUEST_TEMPLATE.md` with the pre-push gate checklist.
+- `docs/coordination.md` explaining the multi-agent development pattern visible in the journals to outside readers.
+- `CHANGELOG.md` (this file) seeded with v0.6.23 through v0.13.0 entries.
+- Screensaver visual themes: Matrix rain (default) and code-drawn Castaway pixel-art scene with eight animation states (idle / wave / sit / sleep / drink / walk / fish / ship).
+- Settings theme picker for screensaver (Matrix or Castaway), persisted per drive.
+- Screensaver `prefers-reduced-motion` handling: Matrix rain drops to once-per-second refresh instead of full animation.
+- Right-click menu footer rows across Terminal, File Browser, Graph, and Editor: Settings (toggle), Reopen Closed Tab, and Close.
+
+### Changed
+
+- Terminal and editor tab header clicks now focus the tab content: terminals are ready to type immediately, editors are ready to edit.
+- Hybrid pane hamburger menu cleaned up to match the addendum-a spec: stale "Light mode" and "Flip pane" entries removed (pane flip is now per-tab-kind via the tab's settings).
+- Editor right-click menu reordered: name row now leads, page width slider follows after the first separator.
+- Terminal right-click menu: redundant separator after the name row removed.
+- Screensaver inactivity timeout bounded to `[10s, 3600s]`; the chan-server PATCH endpoint rejects out-of-range writes with `400 Bad Request`.
+- chan-desktop bundle metadata bumped to track v0.13.0 release artifacts.
+- chan-desktop updater public key rotated to the production identity.
+
+### Fixed
+
+- Terminal WebGL renderer glyph atlas corruption under animated SGR sequences (per-character substitution when colored text and animations hit the renderer simultaneously). Detects styled output, coalesces a texture-atlas refresh on the next animation frame, keeps WebGL enabled.
+- File Browser: Drafts subtree refreshes correctly after `Cmd+N` creates a new draft. `refreshTreeForPath` now climbs to the nearest loaded ancestor instead of no-oping when the immediate parent of the new file is not yet loaded. Fixes the symptom where Drafts looked empty after creating a draft, Graph tabs stalled, and `Cmd+N` appeared to do nothing.
+- chan-server: GET `/api/files` and `/api/files/<path>` no longer block the async runtime. Sync filesystem work moved behind `tokio::task::spawn_blocking`. Resolves the 10s timeouts on small-file reads observed under indexer / watcher contention.
+- chan-server: twelve additional route handlers (`fs_graph`, `terminal`, `fonts`, `index`, `graph`, `report`, `search`, `inspector`, `attachments`, `contacts`, `drive`) plus `static_assets` audited and moved to `spawn_blocking` or `tokio::fs` so request-path filesystem and graph work no longer starves Tokio workers.
+- chan-server: terminal watcher event listing now caps individual event files at 1 MiB before reading them, preventing memory pressure on stray large files in attached watcher directories.
+- chan serve: bind-port errors now name the requested listen address (e.g. `127.0.0.1:8787`) instead of returning a generic message.
+- chan-tunnel-client and chan-tunnel-server: removed twelve confirmed-unused dependency edges; `cargo machete` clean.
+- chan-tunnel-server: integration-test `reqwest` `stream` feature now explicit, no longer relying on feature unification.
+- Repo history audited (gitleaks) for the open-source flip: three pre-release loopback bearer-token entries found, all triaged as acceptable (stopped local services), no purge required.
+
+### Removed
+
+- chan-tunnel-client and chan-tunnel-server: twelve unused dependencies (`anyhow`, `async-trait`, `bytes`, `http-body`, `http-body-util`, `pin-project-lite`, `serde`, `serde_json`, `tower`, and friends across the two crates).
+
 ## [v0.12.0] - 2026-05-23
 
 ### Added
@@ -168,7 +212,8 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 - Final v0.6.x maintenance release before the v0.7 line.
 
-[Unreleased]: https://github.com/fiorix/chan/compare/chan-v0.12.0...HEAD
+[Unreleased]: https://github.com/fiorix/chan/compare/chan-v0.13.0...HEAD
+[v0.13.0]: https://github.com/fiorix/chan/compare/chan-v0.12.0...chan-v0.13.0
 [v0.12.0]: https://github.com/fiorix/chan/compare/chan-v0.11.2...chan-v0.12.0
 [v0.11.2]: https://github.com/fiorix/chan/compare/chan-v0.11.1...chan-v0.11.2
 [v0.11.1]: https://github.com/fiorix/chan/compare/v0.11.0...chan-v0.11.1
