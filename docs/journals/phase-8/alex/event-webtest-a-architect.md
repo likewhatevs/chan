@@ -4277,3 +4277,68 @@ Local main was 232 ahead after round 42; round 43 lands 3 more
 pushing** until @@Alex routes a/b/c from round 41 message.
 
 Standing by.
+
+---
+
+## 2026-05-23 — round 44: slice 4 HOLD + lead-runs-command saga (slice 5b)
+
+### Walks
+
+* `-a-79 slice 4` split-pane real estate HOLD — 2x2 grid with
+  drag&drop cell assignment; each worker spawns in assigned
+  cell; lead's pane = starting pane + focus restored after
+  spawn.
+* `-a-80 slice 2` Load Team from config HOLD (mechanism) —
+  `/api/teams/{name}/config` returns the right TeamConfigWire
+  shape; SPA-side flow covered by 11 architectural pins. FB
+  right-click empirical walk hit a separate FB-render issue
+  in my multi-pane test session.
+
+### @@Alex caught the slice 5 gap mid-walk
+
+Screenshot showed the @@Lead pane stuck at a bash prompt post-
+bootstrap. Slice 5 (rename + restart) was killing the old PTY
+but the new PTY came up as default shell — the host's pre-
+bootstrap terminal had `command: None` in its spawn opts, so
+restart preserved that.
+
+### My patch series (3 commits)
+
+* `7fb7cab` — chan-server: restart endpoint accepts optional
+  command + env override. Orthogonal primitive; backwards-
+  compatible.
+* `7e3e0ce` — Team orchestrator: close+spawn lead (slice 5b).
+  Replaces rename+restart with close-host-session + spawn lead
+  fresh in same pane + prime new tab's rich-prompt. Avoids the
+  WS-reconnect-on-restart-with-command complexity.
+
+Empirical walk confirms: @@Lead tab shows Claude Code greeter
+(claude IS running with CHAN_TAB_NAME=@@Lead); rich-prompt
+buffer has identity prompt; $CHAN_TAB_NAME now expands to
+@@Lead in the lead's shell context.
+
+### Suggested next pickups
+
+* `-a-79 slice 5b` (close+spawn lead) — landed; consider test
+  pins on `teamLeadPrompt.test.ts` (the existing pins assume
+  primeTerminalRichPrompt on existing tab; new flow primes on
+  newly-spawned tab).
+* Backend restart-with-command primitive — landed but unused;
+  consider whether to keep or revert (1 commit; orthogonal).
+* `-a-80 slice 2` empirical FB walk — deferred next session
+  when FB-render issue can be reproduced separately.
+
+### Git state — UNRESOLVED still
+
+Local main 261 ahead of origin/main. PR #1 merge dropped 225
+phase-8 commits at remote. **Not pushing.**
+
+### Suggested commit shape
+
+* `7fb7cab` (already landed) — chan-server restart override
+* `7e3e0ce` (already landed) — orchestrator close+spawn lead
+* Next docs commit (path-limited):
+  * `docs/journals/phase-8/webtest-a/webtest-a-1.md`
+  * `docs/journals/phase-8/alex/event-webtest-a-architect.md`
+
+Standing by.

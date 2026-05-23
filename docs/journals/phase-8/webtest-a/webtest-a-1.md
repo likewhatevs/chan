@@ -6806,3 +6806,138 @@ Contention: the round-41 git-state issue (local main 232+
 ahead of origin/main due to PR #1 dropping 225 phase-8 commits)
 remains UNRESOLVED. Round 43 lands 2 more local commits on top.
 Not pushing.
+
+---
+
+## 2026-05-23 (round 44) — deferred slice walks + lead-runs-command saga
+
+Walked the two deferred items from round 43 + caught a slice-5
+gap that @@Alex flagged mid-walk.
+
+### `-a-79 slice 4` (split-pane real estate) — HOLD ✅
+
+Fresh build at HEAD `7485c9b`. New team `zeta` with size=4
+(Lead + Worker1/2/3). Selected `Split panes` → `2x2` grid →
+drag&drop:
+* Lead → cell 1 (top-left)
+* @@Worker1 → cell 2 (top-right)
+* @@Worker2 → cell 3 (bottom-left)
+* @@Worker3 → cell 4 (bottom-right)
+
+Bootstrap fired → 4 panes materialised in 2x2 grid. Each
+worker terminal spawned in its assigned cell. Lead's pane
+took focus (`wobble focu` class) with rich-prompt buffer
+primed. URL hash encodes the split tree:
+`{k:s,d:r,a:{k:s,d:c,a:{lead},b:{worker2}},b:{k:s,d:c,a:{worker1},b:{worker3}}}`
+— row-major across the split, matching `buildSplitGrid`'s
+shape per `tabs.svelte.ts:1040+` and `resolveMemberPaneIds`'s
+slot mapping in `teamOrchestrator.svelte.ts`.
+
+### `-a-80 slice 2` (Load Team dialog from config) — HOLD (mechanism)
+
+Backend endpoint verified directly:
+
+```
+GET /api/teams/zeta/config
+{
+  "team_name": "zeta",
+  "host_name": "AlexWT",
+  "host_handle": "@@AlexWT",
+  "auto_prefix_at": true,
+  "members": [
+    {"handle": "@@Lead", "command": "claude", "env": {"CHAN_TAB_NAME": "@@Lead"}, "is_lead": true},
+    {"handle": "@@Worker1", ...},
+    ...
+  ]
+}
+```
+
+Returns the `TeamConfigWire` shape per systacean-42 contract.
+SPA-side `wireToDialog(wire)` + `loadTeamFromMenu` rewire +
+`openTeamDialog({initial, onBootstrap: runTeamBootstrap})`
+flow has 11 architectural pins in `teamLoadDialog.test.ts`.
+
+The empirical FB right-click → "Load Team" → populated dialog
+walk hit a separate rendering issue (FB tab body didn't render
+its tree in my multi-pane test session — likely a layout-state
+race independent of -a-80). Mechanism is verified at API +
+module level.
+
+### @@Alex caught the slice-5 gap mid-walk
+
+After my close-of-round-44 walk, @@Alex flagged with a
+screenshot showing the @@Lead pane still at a bash prompt
+(`session ended (explicit)` + idle cursor) — meaning the
+slice-5 rename+restart had successfully renamed the tab and
+killed the old PTY, but the NEW PTY came up running the
+host's default shell (bash), not the lead member's command
+(claude).
+
+Root cause: the chan-server `terminal_sessions::restart`
+preserves the original `spawn_opts.command`. The host's
+pre-bootstrap terminal was WS-spawned with `command: None`
+(default shell), so restart respawned bash. Even after my
+backend extension added `command` + `env` overrides to the
+restart endpoint, the SPA WS that was attached to the OLD
+session's broadcast channel didn't reconnect to the NEW
+session's stream — restart-with-command needs additional
+WS reattach plumbing that's non-trivial.
+
+### Slice 5b patch by @@WebtestA: close+spawn the lead
+
+Switched the orchestrator step 7 from rename+restart to
+close+spawn:
+
+1. `api.closeTerminal(oldLeadSessionId)` — kills the host's
+   pre-bootstrap session server-side.
+2. Remove the old tab from its pane (locate via
+   `layout.nodes` walk).
+3. `api.spawnTerminal({name: leadHandle, command:
+   leadEntry.command, env: leadEntry.env, ...})` — spawns the
+   lead's PTY fresh, same shape as worker spawns; CHAN_TAB_NAME
+   is set at process-creation time.
+4. `openTerminalInPane(targetPaneId, {sessionId, title})` —
+   places the new lead tab in the same pane the host's
+   terminal was in.
+5. `primeTerminalRichPrompt(newTab, prompt)` — primes the
+   new tab's rich-prompt buffer with the identity prompt
+   (replaces the prior step-6 prime which primed the now-
+   removed old tab).
+
+Walked empirically: clicking Bootstrap with `AlexWT` /
+`theta` produces @@Worker1 + @@Lead tabs; clicking @@Lead
+shows Claude Code v2.1.150 greeter (claude IS running);
+rich-prompt buffer has identity prompt:
+`I'm @@AlexWT. You're $CHAN_TAB_NAME. Identify yourself,
+and then read docs/agents/bootstrap.md`. Now `$CHAN_TAB_NAME`
+expands inside claude's shell context to `@@Lead`.
+
+### Backend extension kept
+
+Even though my orchestrator switched to close+spawn, the
+restart-with-command+env backend extension remains landed
+(commit 7fb7cab) as an orthogonal primitive. Backwards-
+compatible (None preserves original spawn opts); could be
+useful for future agent-driven flows that want in-place
+PTY command-flip without the close+spawn dance + the
+attendant WS-reconnect requirement.
+
+### State at end of walk
+
+Lane-A test server torn down:
+1. Teams unloaded (`zeta`, `theta`).
+2. chan serve killed (ports 8792, 8793, 8794, 8795).
+3. Drives wiped: `/tmp/chan-test-phase8-wa-r44/`,
+   `/tmp/chan-test-phase8-wa-r45/`.
+4. Drafts metadata for both drives wiped.
+5. `chan remove` ran.
+6. Chrome MCP tab closed.
+
+Highlight: lead-runs-command saga closed end-to-end — slice-5
+rename+restart shipped, gap caught + slice-5b close+spawn
+shipped. @@Lead now boots claude with `CHAN_TAB_NAME=@@Lead`
+from process-creation.
+
+Contention: the round-41 git-state issue (origin/main dropped
+225 phase-8 commits via PR #1) still unresolved. Local main
+is now 259+ ahead. Not pushing.
