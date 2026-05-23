@@ -2346,3 +2346,10 @@ blocker. One follow-up candidate flagged: `chan-v0.12.0`
 release assets include desktop artifacts named `Chan_0.11.2.*`,
 which looks like chan-desktop package metadata rather than
 workflow plumbing.
+
+## 2026-05-23 - teardown-complete
+
+TEARDOWN directive received. Appended `teardown-complete`
+to [`../ci/ci-15.md`](../ci/ci-15.md). No background CI
+watchers or throwaway drives from this session. Stand-down
+FINAL from @@CI.

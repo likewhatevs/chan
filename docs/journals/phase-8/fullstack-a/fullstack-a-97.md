@@ -170,3 +170,8 @@ Per the standing pre-authorization for your lane:
 * `-96` sub-passes 1/2/3 (dead-code / a11y / perf) still queued for your lane — pick up post-`-97` if session bandwidth, otherwise defer to next session.
 
 Thank you for the tight diagnostic + the SGR-split-across-chunks edge handling.
+
+## 2026-05-23 - teardown-complete
+
+No FullStackA-owned server, build, dev-server, or throwaway drive
+state remains for this task. Phase-8 stand-down acknowledged.

@@ -252,3 +252,8 @@ Per standing pre-auth:
 Queue-empty (plus `-96` sub-passes 1/2/3 polish still cleared but non-blocking; pick up if bandwidth, otherwise defer to v0.14).
 
 Thank you for closing the v0.13.0 feature set + the smart no-PNG call.
+
+## 2026-05-23 - teardown-complete
+
+No FullStackA-owned server, build, dev-server, or throwaway drive
+state remains for this task. Phase-8 stand-down acknowledged.
