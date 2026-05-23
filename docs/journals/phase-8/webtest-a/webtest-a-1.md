@@ -7073,3 +7073,123 @@ before claiming commits were dropped.
 ### State at end of session
 
 Lane clean. Standing down for session wrap. 🫡
+
+## 2026-05-23 — `fullstack-a-97` empirical walk (P0 v0.13.0 release blocker) — HOLD
+
+Walked the WebGL atlas refresh fix dispatched via
+[`event-architect-webtest-a.md`](../alex/event-architect-webtest-a.md)
+"empirical walk needed on fullstack-a-97" 2026-05-23. Fresh-binary
+discipline applied per `feedback_fresh_binary_rewalks`:
+
+1. `pkill -f 'chan serve'` — no stale processes.
+2. `npm run build` in `web/` (web/dist mtime `16:04:02` vs `0ff232a`
+   commit time `15:48:21` — bundle confirmed newer than the fix).
+3. `cargo build -p chan` re-embedded the new bundle. Binary at
+   `target/debug/chan` (118 MB, mtime `16:04:12`).
+4. `grep -c clearTextureAtlas web/dist/assets/index-*.js` → 5 hits
+   in the main chunk; fix code path confirmed present in the
+   shipped SPA bundle.
+
+Throwaway drive: `/tmp/chan-test-wa-97/`. Server:
+`http://127.0.0.1:8787/?t=MnaR4Ljruwa45VnWvbnsETBohr6ab34V`.
+Chrome MCP tab `503726388`. Layout: 3 horizontal panes via
+URL-hash SerSplit `{k:"s",d:"r",...}` (Terminal-1 / Terminal-2 /
+Terminal-3 side-by-side at ~480px wide each).
+
+### Renderer verification
+
+All 3 terminal panes confirmed using WebGL2 (xterm.js
+`@xterm/addon-webgl` per `-b-29`):
+
+| Pane | xterm-screen canvas | renderer context |
+|------|---------------------|------------------|
+| Terminal-1 | canvas idx 1 of 2 | `WebGL2RenderingContext` |
+| Terminal-2 | canvas idx 3 of 6 | `WebGL2RenderingContext` |
+| Terminal-3 | canvas idx 5 of 6 | `WebGL2RenderingContext` |
+
+(Each xterm renders 2 canvases per terminal — the WebGL text
+layer + a small auxiliary; idx 0/2/4 are link-layer fallbacks
+with no GL context. Idx 1/3/5 hold the actual WebGL2 text
+renderer.)
+
+### Test sources
+
+Two animated-SGR sources, both designed to exercise the `-97`
+SGR-detect → coalesced-`clearTextureAtlas()`-on-rAF path:
+
+* **`/tmp/sgr-anim.sh`** — 5 styled text lines per cycle,
+  rotating fg/bg colors + italic + bold + reverse, with 256-color
+  fg every 5 cycles + 4-glyph spinner per cycle. 60s duration =
+  **~316 cycles per pane** (cycle counts 316/314/311 across the
+  3 panes confirm independent execution).
+* **`/tmp/sgr-stress.sh`** — closer to Claude Code's rolling
+  color animation: 5 fixed banner lines overwritten in place via
+  cursor-up + line-clear + 256-color cycling + style rotation
+  through bold/italic/underline/reverse/combinations. 30s
+  duration = **~870-880 iterations per pane** (882/873/863).
+
+Combined SGR transition count per pane across both passes:
+**~5500-5800 style changes over ~90 seconds**, concurrent across
+3 panes.
+
+### Empirical verdict
+
+**No glyph substitution observed.** All test strings rendered
+correctly in all 3 panes:
+
+| Expected string | Pass 1 (sgr-anim) | Pass 2 (sgr-stress) |
+|-----------------|-------------------|---------------------|
+| `background terminal output is what we test` | clean | n/a |
+| `@@Alex manual: rolling colors should not corrupt glyphs` | clean | n/a |
+| `the quick brown fox jumps over the lazy dog 0123456789` | clean | clean |
+| `abcdefghijklmnopqrstuvwxyz ABCDEFGHIJKLMNOPQRSTUVWXYZ` | clean | clean |
+| `the qIick brawn fIx jumps Iver the lazy dog` (control with intentional `I` substitutions) | renders verbatim | n/a |
+| `rolling color test line A/B/C/D/E:` | n/a | clean |
+| `ESC [ 38 ; 5 ; C m -- SGR 256-color test` | n/a | clean |
+| `@@Alex CHAN_TAB_NAME tabSwitch RichPrompt` | n/a | clean (wraps at column boundary, no char substitution) |
+| `typography test: iI lL oO 0 8 B` | n/a | clean |
+
+The "background terminal" → "backgrouLd teamSnal" /
+"@@Alex manual: ..." → "aw.cfhi(ec(I- kw)..." pattern @@Alex
+reported did NOT reproduce in either pass.
+
+Pass-2 cursor-up overwrite produced expected wrap-residue
+artifacts ("01 4 789or test line E:" appearing where the
+overwriting "0123456789" didn't cover the trailing portion of a
+wrapped-from-prior-frame "...test line E:" string). This is
+correct cursor-up + `\033[2K` line-clear semantics on
+auto-wrapped logical rows, not glyph corruption — characters
+themselves are intact at every position.
+
+### Test-environment caveat
+
+I exercised the corruption-trigger path with synthetic SGR
+churn shaped to mirror @@Alex's Claude Code observation:
+high-frequency style+color transitions on long-lived text, 3+
+parallel WebGL terminals. The original report came from a real
+Claude Code session inside @@Alex's chan-desktop runtime; my
+walk used dev-build chan via `chan serve` in Chrome MCP. The
+SGR-detect + rAF-coalesced atlas-refresh code path is the same
+either way (xterm.js `@xterm/addon-webgl` is renderer-agnostic
+between chan-desktop's Tauri webview and the browser). If
+@@Alex sees the bug recur post-v0.13.0 cut in the actual
+chan-desktop runtime under a real Claude Code session, that
+escalates to a renderer-specific gap and the verdict would need
+re-walking in chan-desktop. **My lane's empirical: HOLD on the
+SPA WebGL path**.
+
+### Decision
+
+Verdict: **HOLD**. v0.13.0 release blocker cleared from
+my lane.
+
+### Teardown
+
+* `pkill -f 'chan serve /tmp/chan-test-wa-97'` — stopped.
+* `rm -rf /tmp/chan-test-wa-97/` — throwaway drive removed.
+* `chan remove /tmp/chan-test-wa-97/` — registry entry dropped.
+* Chrome MCP tab `503726388` closed.
+* `/tmp/sgr-anim.sh` + `/tmp/sgr-stress.sh` left in place as
+  scratch fixtures (not under any drive); harmless and reusable
+  for future glyph-rendering walks.
+

@@ -4443,3 +4443,67 @@ reference.
 Pending only your git-state routing decision.
 
 Standing by.
+
+## 2026-05-23 — poke (fullstack-a-97 empirical walk: HOLD — v0.13.0 P0 cleared from my lane)
+
+Fresh-session bootstrap + walked your "empirical walk needed
+on fullstack-a-97" dispatch. Verdict: **HOLD**.
+
+Fresh-binary discipline: `pkill` + `npm run build` + `cargo
+build -p chan` + verified `clearTextureAtlas` × 5 in shipped
+SPA bundle. 3 horizontal Terminal panes via URL-hash SerSplit;
+all 3 WebGL2 contexts confirmed active.
+
+Two test passes, ~90s combined, ~5500-5800 SGR transitions per
+pane concurrent across 3 panes:
+
+| Pass | Source | Duration | Cycles/pane | Glyph substitution |
+|------|--------|----------|-------------|--------------------|
+| 1 | `sgr-anim` (color rotation + style mod + 256-color) | 60s | 311-316 | NONE |
+| 2 | `sgr-stress` (cursor-up overwrite + 256-color cycle) | 30s | 863-882 | NONE |
+
+The "background terminal" → "backgrouLd teamSnal" pattern
+@@Alex reported did NOT reproduce in either pass on any of
+the 3 panes. Per-check evidence appended to
+[`../webtest-a/webtest-a-1.md`](../webtest-a/webtest-a-1.md)
+under `## 2026-05-23 — fullstack-a-97 empirical walk (P0
+v0.13.0 release blocker) — HOLD`.
+
+### Caveat (worth flagging)
+
+I walked the SPA WebGL path via Chrome MCP against a dev-build
+`chan serve` — NOT in chan-desktop's Tauri webview where
+@@Alex's original report originated. The SGR-detect + rAF-
+coalesced atlas-refresh code path is the same either way
+(xterm.js `@xterm/addon-webgl` is renderer-agnostic), so the
+HOLD verdict is load-bearing for the fix itself. **If @@Alex
+sees the bug recur post-v0.13.0 cut in a real chan-desktop +
+Claude Code session, that's a renderer-specific gap and would
+need a chan-desktop walkthrough (which is @@WebtestB's lane;
+they're stood-down FINAL from v0.12.0 close). Flag back if
+that happens.**
+
+### Teardown
+
+Lane-A test server stopped (`pkill`), throwaway drive
+`rm -rf`'d, `chan remove` dropped the registry entry, Chrome
+MCP tab closed. Scratch SGR fixtures (`/tmp/sgr-anim.sh` +
+`/tmp/sgr-stress.sh`) left in place for re-use; not under any
+drive, harmless.
+
+### Suggested commit shape
+
+Path-limited per the standing discipline:
+
+* **Subject**: `docs: webtest-a — fullstack-a-97 empirical walk HOLD (P0 v0.13.0 release blocker cleared)`
+* **Files** (explicit per-path):
+  * `docs/journals/phase-8/webtest-a/webtest-a-1.md`
+  * `docs/journals/phase-8/alex/event-webtest-a-architect.md`
+
+Pre-commit `git diff --staged --stat` + post-commit `git show
+--stat HEAD`. The cross-team awareness applies (chan-desktop
+team is LIVE in parallel; @@CI has `event-ci-architect.md` +
+`ci-14.md` modifications in flight — I'll NOT `git add -A` and
+will scope to only the two files above).
+
+Standing by.
