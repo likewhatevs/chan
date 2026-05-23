@@ -49,8 +49,10 @@ describe("fullstack-b-29: TerminalTab WebGL renderer", () => {
     expect(tab).toMatch(/function bytesContainSgrSequence\(bytes: Uint8Array\)/);
     expect(tab).toMatch(/if \(b === 0x6d\) return true/);
     expect(tab).toMatch(/function maybeRefreshWebglAtlas\(bytes: Uint8Array\)/);
-    expect(tab).toMatch(/term\?\.clearTextureAtlas\(\)/);
-    expect(tab).toMatch(/term\?\.refresh\(0, Math\.max\(0, term\.rows - 1\)\)/);
+    expect(tab).toMatch(/function clearTextureAtlas\(\): void/);
+    expect(tab).toMatch(/maybeClear\?\.call\(term\)/);
+    expect(tab).toMatch(/function refreshTerminalRows\(\): void/);
+    expect(tab).toMatch(/maybeRefresh\?\.call\(term, 0, Math\.max\(0, term\.rows - 1\)\)/);
   });
 
   test("checks ArrayBuffer and Blob terminal output for SGR atlas refresh", () => {
@@ -64,7 +66,7 @@ describe("fullstack-b-29: TerminalTab WebGL renderer", () => {
 
   test("refreshes renderer on focus and after font readiness", () => {
     expect(tab).toMatch(/function refreshTerminalRenderer\(\): void/);
-    expect(tab).toMatch(/if \(webglRendererActive\) term\.clearTextureAtlas\(\)/);
+    expect(tab).toMatch(/clearTextureAtlas\(\);[\s\S]*?refreshTerminalRows\(\);/);
     expect(tab).toMatch(/document\.fonts\?\.ready\.then/);
     expect(tab).toMatch(
       /if \(!focused\) return;[\s\S]*?queueFit\(\);[\s\S]*?refreshTerminalRenderer\(\);/,

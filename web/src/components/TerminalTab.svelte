@@ -350,17 +350,32 @@
     term.options.theme = terminalTheme();
   }
 
+  function clearTextureAtlas(): void {
+    if (!term || !webglRendererActive) return;
+    const maybeClear = (term as Terminal & { clearTextureAtlas?: () => void })
+      .clearTextureAtlas;
+    maybeClear?.call(term);
+  }
+
+  function refreshTerminalRows(): void {
+    if (!term) return;
+    const maybeRefresh = (term as Terminal & {
+      refresh?: (start: number, end: number) => void;
+    }).refresh;
+    maybeRefresh?.call(term, 0, Math.max(0, term.rows - 1));
+  }
+
   function refreshTerminalRenderer(): void {
     if (!term) return;
     requestAnimationFrame(() => {
       if (!term) return;
-      if (webglRendererActive) term.clearTextureAtlas();
-      term.refresh(0, Math.max(0, term.rows - 1));
+      clearTextureAtlas();
+      refreshTerminalRows();
     });
     void document.fonts?.ready.then(() => {
       if (!term) return;
-      if (webglRendererActive) term.clearTextureAtlas();
-      term.refresh(0, Math.max(0, term.rows - 1));
+      clearTextureAtlas();
+      refreshTerminalRows();
     });
   }
 
@@ -384,8 +399,8 @@
     webglAtlasRefreshQueued = true;
     requestAnimationFrame(() => {
       webglAtlasRefreshQueued = false;
-      term?.clearTextureAtlas();
-      term?.refresh(0, Math.max(0, term.rows - 1));
+      clearTextureAtlas();
+      refreshTerminalRows();
     });
   }
 
