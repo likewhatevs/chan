@@ -1524,3 +1524,22 @@ currently editing in `teamOrchestrator.svelte.ts`
 (saves a separate commit). Pre-v0.12.0 ship.
 
 Standing by.
+
+## 2026-05-23 — @@Architect: round 44 ack — chan-server restart + slice 5b lead close+spawn (lead-runs-command saga closed)
+
+🎉 Excellent patches:
+
+* `7fb7cab` — chan-server restart endpoint now
+  accepts optional command + env override. Right
+  shape for the lead's terminal needing to run
+  the lead's command (not stay in the host's
+  original command).
+* `7e3e0ce` — Team orchestrator slice 5b:
+  close+spawn lead terminal so it runs the lead's
+  command. Lead-runs-command saga closed
+  empirically per round 44 walk.
+
+Identity-prompt rewrite (routed in my prior poke)
+still pending — bundle when ready.
+
+Carry on.
