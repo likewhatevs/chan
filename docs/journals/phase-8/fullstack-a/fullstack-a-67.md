@@ -861,3 +861,196 @@ File Browser: right-click menu revamp per addendum-a (fullstack-a-67 slice e)
 
 Autonomous-commit mode. No clearance held.
 Next: -a-67f (Editor).
+
+## 2026-05-23 — slice -a-67f (Editor right-click menu revamp)
+
+SPA-only. FileEditorTab right-click menu
+reshaped per addendum-a's verbatim Editor
+spec. With `-a-67d` (Terminal) and `-a-67e`
+(FB), this closes the umbrella's 5-surface
+sweep.
+
+### Shape applied
+
+Header:
+* Menu-top editable Name input (mirror of
+  Drive name / Terminal name). Commits on
+  Enter/blur via `fileOps.renameInPlace`
+  which handles path traversal
+  (`../other/dir/`), extension preservation,
+  and link rewriting.
+* SEP.
+
+Body:
+* Show Source Code (existing
+  rendered/source toggle).
+* Collapse Code Blocks (existing; relabel
+  to title-case).
+* SEP.
+* View toggles + cleanup utilities — kept
+  against spec (Outline / Details / Style
+  Toolbar / Syntax Highlight / Highlight
+  TW / Remove TW). Addendum doesn't list
+  them; orphan risk if dropped without
+  chord alternatives. Flagged for Alex.
+* SEP.
+* Search (existing) + Find (NEW, opens the
+  per-tab find bar) / Copy path to file
+  (renamed from "Copy File Path") / Copy
+  path to $CWD (NEW) / Reload from Disk
+  (kept against spec — useful for external-
+  edit workflows, no chord alternative).
+
+From-$CWD band (NEW):
+* Label "From $CWD".
+* Duplicate File / New File / New Terminal
+  / New File Browser / New Graph — each
+  fires the matching `chan:command` event
+  (chord-routing layer + empty-pane
+  carousel + this menu all converge on
+  single handlers).
+
+Foot:
+* Settings (flipHybrid via
+  `paneIdForTab`). Replaces direct
+  `openSettings()` (global Settings
+  overlay opener) — semantically distinct;
+  this is per-tab back-side flip.
+* SEP.
+* Reopen Closed Tab.
+* Close.
+
+### Dropped per spec
+
+* `Reload Window` + `Open Inspector` tail
+  entries (per `-a-67d` consistency; Cmd+R
+  + pane hamburger still cover them).
+* `Close others` + `Close all` entries
+  (addendum doesn't list; trivial to
+  restore).
+* `Rename File` modal-driven entry
+  (replaced by menu-top Name input).
+* `Terminal from here` (replaced by
+  "New Terminal" in From-$CWD band).
+* `-a-35` full-width inline rename band
+  (replaced by menu-top input).
+
+### Files touched
+
+* `web/src/components/FileEditorTab.svelte`
+  * Imports: dropped `Bug` / `RefreshCw` /
+    `Settings as SettingsIcon` /
+    `SquareSplitHorizontal` /
+    `SquareSplitVertical`; added
+    `Settings2`. Dropped `isTauriDesktop` /
+    `openWebInspector` / `reloadWindow` +
+    `notify`. Dropped `openSettings` /
+    `closeOtherTabsInPane` /
+    `closeTabsInPane`. Added `flipHybrid`
+    + `openFind` from `tabs.svelte`.
+  * Helpers added: `flipToSettings`,
+    `dispatchChanCommand`, `doNewTerminal`
+    / `doNewFileBrowser` / `doNewGraph`,
+    `doCopyCwdPath`, `doFind`. New
+    `nameDraft` state + sync `$effect` +
+    `commitTabName` + `onTabNameKey`.
+  * Helpers removed: `doRename`,
+    `cancelRename`, `commitRename`,
+    `onRenameKeydown`, `doCloseOthers`,
+    `doCloseAll`, `doReloadWindow`,
+    `doOpenInspector`, `doOpenSettings`.
+    Inline `renameActive` / `renameDraft`
+    / `renameInputEl` state dropped.
+  * Markup: full `action-list` rewrite +
+    dropped `{#if renameActive}` block.
+  * CSS: added `.name-row` / `.name-label`
+    / `.name-input` + `.from-cwd-label`;
+    dropped `.rename-band` / `.rename-label`
+    / `.rename-input` / `.rename-input:focus`.
+
+### Tests
+
+* `web/src/components/editorRightClickRevamp.test.ts`
+  (new): 19 architectural pins covering
+  the menu-top Name input, the Show Source
+  Code + Collapse Code Blocks band, the
+  From-$CWD spawn band (helpers + dispatch
+  + buttons), Find / Copy paths,
+  Settings/Reopen/Close foot, dropped
+  entries, imports.
+* `web/src/components/fileRenameBand.test.ts`:
+  full rewrite. Old `-a-35` band pins
+  flipped from REQUIRE to FORBID; new
+  pins for the menu-top input shape +
+  `nameDraft` state + `commitTabName` +
+  `onTabNameKey`. `fileOps.renameInPlace`
+  store-side existence pin preserved.
+* `web/src/components/tabMenuReloadInspector.test.ts`:
+  file-editor block flipped from REQUIRE
+  to FORBID (matching the terminal block's
+  earlier flip in `-a-67d`).
+
+### Deferred / scope-pokes
+
+* **Show Source Code chord**: addendum-a
+  asks for "copy shortcut from Obsidian
+  if possible" (Cmd+E). Not wired in this
+  slice — chord additions sit outside the
+  menu revamp scope. Picking up as a tiny
+  follow-up.
+* **`-a-67e` slice 2** + **`-a-67d` slice
+  2** still pending (unified File-or-Dir
+  dialog + Settings flip in FileTree;
+  MCP info-button → modal dialog).
+* **`-a-67d` Jitter backend gap** still
+  scope-poked, awaiting architect routing.
+
+### Decisions flagged for Alex review
+
+* **View toggles + cleanup utilities kept
+  against spec**. Outline / Details /
+  Style Toolbar / Syntax Highlight /
+  Highlight TW / Remove TW aren't in
+  addendum-a's Editor menu spec. Dropping
+  them without chord alternatives would
+  orphan the features. Easy to drop if
+  routed.
+* **Close others / Close all dropped**.
+  Spec doesn't list them; less common
+  workflow. Easy to restore.
+* **Reload from Disk kept**. Spec doesn't
+  list it; no chord alternative for the
+  external-edit workflow. Useful when
+  another tool modifies the file.
+
+### Gate
+
+* `svelte-check` → 0/0.
+* `vitest` → **1184 / 1184** (+22 net from
+  `-a-67e`'s 1162; 19 new pins + tests
+  rewritten for the dropped band).
+* `npm run build` → clean.
+* `cargo fmt --check` + `clippy
+  --all-targets -- -D warnings` → clean
+  (no Rust delta).
+
+### Suggested commit subject
+
+```
+Editor: right-click menu revamp per addendum-a (fullstack-a-67 slice f)
+```
+
+### Files (per-path)
+
+* `web/src/components/FileEditorTab.svelte`
+* `web/src/components/editorRightClickRevamp.test.ts` (new)
+* `web/src/components/fileRenameBand.test.ts`
+* `web/src/components/tabMenuReloadInspector.test.ts`
+* `docs/journals/phase-8/fullstack-a/fullstack-a-67.md`
+
+`-a-67` umbrella closes: 5 surfaces
+shipped (Graph header + click + Hybrid New
+Draft + Terminal + FB + Editor). Slice 2s
+for d/e/f tracked separately. Picking up
+`-a-68 slice 2+` next under autonomous-
+commit mode.

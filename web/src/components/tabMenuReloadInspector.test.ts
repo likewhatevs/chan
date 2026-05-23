@@ -9,34 +9,35 @@ import terminalSource from "./TerminalTab.svelte?raw";
 // in the source so a future menu refactor can't silently drop the
 // entries without flagging.
 
-describe("fullstack-b-26: file-editor tab right-click — Reload + Open Inspector", () => {
-  test("menu source ships a Reload entry wired to reloadWindow", () => {
-    expect(fileEditorSource).toMatch(/<span class="mbtn-label">Reload<\/span>/);
-    expect(fileEditorSource).toMatch(/onclick=\{doReloadWindow\}/);
-    expect(fileEditorSource).toMatch(/await reloadWindow\(\)/);
+// `fullstack-a-67f`: addendum-a's verbatim Editor menu spec
+// also drops the `-b-26` Reload + Open Inspector tail entries,
+// matching `-a-67d`'s Terminal drop. These pins flip from
+// REQUIRE to FORBID so a regression that re-adds them gets
+// caught. Cmd+R + the pane hamburger still surface window-level
+// reload + devtools.
+describe("fullstack-a-67f: file-editor tab right-click — Reload + Open Inspector dropped", () => {
+  test("no Reload entry in the editor menu", () => {
+    expect(fileEditorSource).not.toMatch(
+      /<span class="mbtn-label">Reload<\/span>/,
+    );
+    expect(fileEditorSource).not.toMatch(/onclick=\{doReloadWindow\}/);
   });
 
-  test("menu source ships an Open Inspector entry wired to openWebInspector", () => {
-    expect(fileEditorSource).toMatch(
+  test("no Open Inspector entry in the editor menu", () => {
+    expect(fileEditorSource).not.toMatch(
       /<span class="mbtn-label">Open Inspector<\/span>/,
     );
-    expect(fileEditorSource).toMatch(/onclick=\{doOpenInspector\}/);
-    expect(fileEditorSource).toMatch(/await openWebInspector\(\)/);
+    expect(fileEditorSource).not.toMatch(/onclick=\{doOpenInspector\}/);
   });
 
-  test("desktop helpers imported from the api/desktop seam", () => {
-    expect(fileEditorSource).toMatch(/from "\.\.\/api\/desktop"/);
-    expect(fileEditorSource).toMatch(/reloadWindow,/);
-    expect(fileEditorSource).toMatch(/openWebInspector,/);
-    expect(fileEditorSource).toMatch(/isTauriDesktop,/);
+  test("desktop helpers no longer imported", () => {
+    expect(fileEditorSource).not.toMatch(/from "\.\.\/api\/desktop"/);
   });
 
-  test("web-mode inspector fallback toasts a notify() hint", () => {
-    // The user sees a meaningful hint pointing at the browser's
-    // built-in inspector when openWebInspector() returns false on
-    // the web build. Same shape as Pane.svelte's doOpenInspector.
-    expect(fileEditorSource).toMatch(/notify\(/);
-    expect(fileEditorSource).toMatch(/Use the browser's built-in inspector/);
+  test("inspector-fallback notify() hint gone too", () => {
+    expect(fileEditorSource).not.toMatch(
+      /Use the browser's built-in inspector/,
+    );
   });
 });
 

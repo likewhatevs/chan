@@ -24,7 +24,6 @@
     ArrowLeft,
     ArrowRight,
     Braces,
-    Bug,
     Code2,
     Copy,
     Eraser,
@@ -35,13 +34,10 @@
     Network,
     Pencil,
     Pilcrow,
-    RefreshCw,
     RotateCw,
     Search as SearchIcon,
-    Settings as SettingsIcon,
+    Settings2,
     Square,
-    SquareSplitHorizontal,
-    SquareSplitVertical,
     Table2,
     Terminal as TerminalIcon,
     Type,
@@ -64,9 +60,9 @@
     attemptInPlaceReopen,
     beginMissingFileReopen,
     canReopenClosedTab,
-    closeOtherTabsInPane,
     closeTab,
-    closeTabsInPane,
+    flipHybrid,
+    openFind,
     reopenClosedTab,
     setMode,
     setTabCaret,
@@ -90,7 +86,6 @@
     openFsGraphForFile,
     openGraphForFile,
     openGraphForTag,
-    openSettings,
     searchPanel,
     openGraphAtNode,
     paneWidths,
@@ -119,12 +114,12 @@
     closeTabMenu,
     openTabMenu,
   } from "../state/tabMenu.svelte";
-  import {
-    isTauriDesktop,
-    openWebInspector,
-    reloadWindow,
-  } from "../api/desktop";
-  import { notify } from "../state/notify.svelte";
+  // `fullstack-a-67f`: dropped `isTauriDesktop` / `openWebInspector`
+  // / `reloadWindow` + the `notify` import. The Editor right-click
+  // menu no longer carries the `-b-26` Reload / Open Inspector
+  // tail entries per addendum-a's verbatim spec; Cmd+R + the pane
+  // hamburger remain the canonical surfaces. Same drop pattern as
+  // `-a-67d` (Terminal).
 
   let { tab }: { tab: FileTab } = $props();
 
@@ -395,17 +390,10 @@
     if (paneId) void closeTab(paneId, tab.id);
   }
 
-  function doCloseOthers(): void {
-    closeTabMenu();
-    const paneId = paneIdForTab();
-    if (paneId) void closeOtherTabsInPane(paneId, tab.id);
-  }
-
-  function doCloseAll(): void {
-    closeTabMenu();
-    const paneId = paneIdForTab();
-    if (paneId) void closeTabsInPane(paneId);
-  }
+  /// `fullstack-a-67f`: dropped `doCloseOthers` + `doCloseAll`.
+  /// Addendum-a's Editor menu spec lists only "Close" + "Reopen
+  /// last tab" in the foot. Close-others / close-all aren't
+  /// listed; trivial to restore if Alex routes a follow-up.
 
   function parentPath(path: string): string {
     const slash = path.lastIndexOf("/");
@@ -435,39 +423,39 @@
   // shape. The band sits above the editor's page-width-capped
   // content (no `--chan-page-max-width` constraint), Enter commits,
   // Esc cancels.
-  let renameActive = $state(false);
-  let renameDraft = $state("");
-  let renameInputEl: HTMLInputElement | undefined = $state();
-  function doRename(): void {
-    closeTabMenu();
-    renameDraft = tab.path;
-    renameActive = true;
-    // Focus + select-all after the band mounts so the user can
-    // type a replacement immediately. tick() (microtask) is
-    // sufficient — the input mounts synchronously in the same
-    // Svelte tick that flips `renameActive`.
-    queueMicrotask(() => {
-      renameInputEl?.focus();
-      renameInputEl?.select();
-    });
-  }
-  function cancelRename(): void {
-    renameActive = false;
-    renameDraft = "";
-  }
-  async function commitRename(): Promise<void> {
-    const next = renameDraft.trim();
-    renameActive = false;
-    if (!next || next === tab.path) return;
+  /// `fullstack-a-67f`: in-menu inline rename per addendum-a's
+  /// "Name, editable like Terminal's" spec. The legacy `-a-35`
+  /// full-width inline rename band above the editor body is
+  /// dropped; the menu input replaces it. Commits on Enter +
+  /// blur (NOT every keystroke — file rename is destructive +
+  /// cross-tree, can't fire on each character). Uses
+  /// `fileOps.renameInPlace` which handles path traversal
+  /// (`../other/dir/`), extension preservation, and link
+  /// rewriting.
+  let nameDraft = $state("");
+  $effect(() => {
+    // Sync the draft to the tab path when the underlying file
+    // changes (e.g. external rename, or another menu surface).
+    // Fires on mount so the input starts seeded; fires again on
+    // tab.path mutation so external renames stay reflected.
+    nameDraft = tab.path;
+  });
+  async function commitTabName(): Promise<void> {
+    const next = nameDraft.trim();
+    if (!next || next === tab.path) {
+      nameDraft = tab.path;
+      return;
+    }
     await fileOps.renameInPlace(tab.path, next, false);
   }
-  function onRenameKeydown(e: KeyboardEvent): void {
+  function onTabNameKey(e: KeyboardEvent): void {
     if (e.key === "Enter") {
       e.preventDefault();
-      void commitRename();
+      (e.currentTarget as HTMLInputElement).blur();
     } else if (e.key === "Escape") {
       e.preventDefault();
-      cancelRename();
+      nameDraft = tab.path;
+      (e.currentTarget as HTMLInputElement).blur();
     }
   }
 
@@ -564,33 +552,65 @@
     }
   }
 
-  /// `fullstack-b-26`: tab right-click "Reload" entry. Reuses the
-  /// existing `reload_window` IPC plumbed by `-b-17` (chan-desktop)
-  /// and `-a-36` (SPA helper); on web falls through to
-  /// `window.location.reload()`. Window-level reload — distinct
-  /// from "Reload from Disk" above which re-reads just this file.
-  async function doReloadWindow(): Promise<void> {
+  /// `fullstack-a-67f`: dropped `doReloadWindow` + `doOpenInspector`
+  /// helpers. Same drop pattern as `-a-67d` (Terminal). Cmd+R + the
+  /// pane hamburger remain the canonical surfaces.
+
+  /// `fullstack-a-67f`: replaced direct `openSettings()` (global
+  /// Settings overlay) with `flipToSettings()` (per-tab back-side
+  /// flip). Mirrors the addendum-a spec ("Settings (toggle that
+  /// flips the terminal to show settings)") which the
+  /// FBSurface (`-a-67e`) + TerminalTab (`-a-67d`) menus already
+  /// adopted.
+  function flipToSettings(): void {
     closeTabMenu();
-    await reloadWindow();
+    const paneId = paneIdForTab();
+    if (paneId) flipHybrid(paneId);
   }
 
-  /// `fullstack-b-26`: tab right-click "Open Inspector" entry.
-  /// Invokes the `open_devtools` IPC on chan-desktop; on web the
-  /// helper returns false and we toast a hint pointing the user
-  /// at the browser's built-in inspector.
-  async function doOpenInspector(): Promise<void> {
-    closeTabMenu();
-    if (await openWebInspector()) return;
-    notify(
-      isTauriDesktop()
-        ? "Inspector unavailable in this build"
-        : "Use the browser's built-in inspector (Right-click → Inspect Element)",
+  /// `fullstack-a-67f`: "From $CWD" spawn entries. Mirror of the
+  /// `-a-67d` Terminal pattern — each closes the menu + fires the
+  /// canonical `chan:command` event so the chord layer + the
+  /// empty-pane carousel + this menu converge on one handler.
+  function dispatchChanCommand(id: string): void {
+    window.dispatchEvent(
+      new CustomEvent("chan:command", { detail: { name: id } }),
     );
   }
-
-  function doOpenSettings(): void {
+  function doNewTerminal(): void {
     closeTabMenu();
-    openSettings();
+    dispatchChanCommand("app.terminal.toggle");
+  }
+  function doNewFileBrowser(): void {
+    closeTabMenu();
+    dispatchChanCommand("app.files.toggle");
+  }
+  function doNewGraph(): void {
+    closeTabMenu();
+    dispatchChanCommand("app.graph.toggle");
+  }
+
+  /// `fullstack-a-67f`: "Copy path to $CWD" — addendum-a wants
+  /// the editor menu to expose both the file path and the
+  /// parent-directory path. Parent dir is `tab.path` up to the
+  /// last `/`; for root-level files the CWD is the drive root.
+  async function doCopyCwdPath(): Promise<void> {
+    closeTabMenu();
+    const slash = tab.path.lastIndexOf("/");
+    const cwd = slash > 0 ? tab.path.slice(0, slash) : "";
+    try {
+      await navigator.clipboard?.writeText(cwd);
+    } catch (err) {
+      ui.status = `copy failed: ${(err as Error).message ?? err}`;
+    }
+  }
+
+  /// `fullstack-a-67f`: Find — opens the per-tab find bar via the
+  /// existing `openFind(tabId)` helper that the `app.find.open`
+  /// chord already routes to.
+  function doFind(): void {
+    closeTabMenu();
+    openFind(tab.id);
   }
 
   function doOpenSearch(): void {
@@ -737,17 +757,43 @@
         <span class="page-width-value">{Math.round(pageWidth.ratio * 100)}%</span>
       </div>
 
-      <!-- Action rows. Grouping mirrors the overlay menus: view
-           toggles first, then content (reload), then file ops,
-           then navigation. Page-width slider above stays in its
-           own visual layer (already separated by the action-list
-           top border). -->
+      <!-- `fullstack-a-67f`: Editor right-click menu reshape per
+           addendum-a's verbatim spec. Header: editable Name
+           input. Body: Show Source Code + Collapse Code Blocks
+           band, then a View-toggles band (kept against spec
+           since dropping the side-panel toggles + cleanup
+           utilities would orphan the features — flagged in the
+           journal), find/copy band, From-$CWD spawn band.
+           Foot: Settings (flipHybrid) + Reopen Closed Tab +
+           Close. Reload Window / Open Inspector tail dropped
+           per the addendum spec; Cmd+R + pane hamburger still
+           cover them. -->
       <div class="action-list">
-        <!-- Rendered / source toggle. Hidden for plain text tabs
-             (.py / .toml / ...) which have no structured renderer.
-             For markdown the pair is wysiwyg <-> source; for JSON
-             it is pretty <-> source. CSV will plug into the same
-             toggle once its renderer lands. -->
+        <!-- Editable Name input (addendum: "editable like
+             Terminal's"). Commits on Enter/blur via
+             fileOps.renameInPlace which handles path traversal,
+             extension preservation, and link rewriting. -->
+        <label class="name-row">
+          <span class="name-label">
+            <Pencil size={15} strokeWidth={1.75} aria-hidden="true" />
+            <span>Name</span>
+          </span>
+          <input
+            class="name-input"
+            bind:value={nameDraft}
+            spellcheck="false"
+            autocomplete="off"
+            autocorrect="off"
+            autocapitalize="off"
+            onkeydown={onTabNameKey}
+            onblur={commitTabName}
+            aria-label="file path"
+          />
+        </label>
+        <div class="msep" role="separator"></div>
+        <!-- Show Source Code: addendum spec's primary toggle.
+             Hidden for plain text tabs that have no structured
+             renderer. -->
         {#if hasRenderedMode}
           {@const inSource = tab.mode === "source"}
           {@const renderedLabel =
@@ -774,37 +820,6 @@
             <span class="mbtn-chord"></span>
           </button>
         {/if}
-        <!-- Per-tab syntax-highlight toggle. Only meaningful in
-             source mode (wysiwyg paints its own decoration set); we
-             show it whenever the tab is source-side so the user can
-             flip plain-text mode on or off for the file in front of
-             them. Hidden in wysiwyg to keep the menu lean. -->
-        {#if tab.mode === "source"}
-          <button
-            class="mbtn"
-            onclick={doToggleSyntaxHighlight}
-            class:on={tab.syntaxHighlight}
-          >
-            <span class="mbtn-icon">
-              <Highlighter size={16} strokeWidth={1.75} aria-hidden="true" />
-            </span>
-            <span class="mbtn-label">
-              {tab.syntaxHighlight ? "Disable Syntax Highlight" : "Enable Syntax Highlight"}
-            </span>
-            <span class="mbtn-chord"></span>
-          </button>
-        {/if}
-        <button
-          class="mbtn"
-          onclick={doToggleTrailingWhitespace}
-          class:on={tab.highlightTrailingWhitespace}
-        >
-          <span class="mbtn-icon">
-            <Highlighter size={16} strokeWidth={1.75} aria-hidden="true" />
-          </span>
-          <span class="mbtn-label">Highlight trailing whitespace</span>
-          <span class="mbtn-chord"></span>
-        </button>
         {#if markdownToolsEnabled}
           <button
             class="mbtn"
@@ -815,23 +830,19 @@
               <Code2 size={16} strokeWidth={1.75} aria-hidden="true" />
             </span>
             <span class="mbtn-label">
-              {tab.codeBlocksCollapsed ? "Expand code blocks" : "Collapse code blocks"}
+              {tab.codeBlocksCollapsed ? "Expand Code Blocks" : "Collapse Code Blocks"}
             </span>
             <span class="mbtn-chord"></span>
           </button>
         {/if}
-        <button class="mbtn" onclick={doRemoveTrailingWhitespace}>
-          <span class="mbtn-icon">
-            <Eraser size={16} strokeWidth={1.75} aria-hidden="true" />
-          </span>
-          <span class="mbtn-label">Remove trailing whitespace</span>
-          <span class="mbtn-chord"></span>
-        </button>
-        <!-- `fullstack-a-25`: the "Run automatically on save"
-             checkbox for trailing-whitespace strip lived here as
-             a menu entry. Moved to the Settings page where editor
-             preferences belong; the manual one-shot "Remove
-             trailing whitespace" button above stays. -->
+        <!-- `fullstack-a-67f`: View toggles + cleanup utilities
+             kept against spec. Addendum-a's Editor menu does
+             NOT list Outline / Details / Style Toolbar /
+             Syntax Highlight / Trailing Whitespace toggles +
+             the destructive Remove-TW button. Dropping them
+             without a chord alternative would orphan the
+             features. Flagged for Alex review in the journal;
+             trivial to drop if requested. -->
         <div class="msep" role="separator"></div>
         <button class="mbtn" onclick={doToggleOutline} class:on={tab.outlineOpen}>
           <span class="mbtn-icon">
@@ -872,7 +883,88 @@
           </span>
           <span class="mbtn-chord"></span>
         </button>
+        {#if tab.mode === "source"}
+          <button
+            class="mbtn"
+            onclick={doToggleSyntaxHighlight}
+            class:on={tab.syntaxHighlight}
+          >
+            <span class="mbtn-icon">
+              <Highlighter size={16} strokeWidth={1.75} aria-hidden="true" />
+            </span>
+            <span class="mbtn-label">
+              {tab.syntaxHighlight ? "Disable Syntax Highlight" : "Enable Syntax Highlight"}
+            </span>
+            <span class="mbtn-chord"></span>
+          </button>
+        {/if}
+        <button
+          class="mbtn"
+          onclick={doToggleTrailingWhitespace}
+          class:on={tab.highlightTrailingWhitespace}
+        >
+          <span class="mbtn-icon">
+            <Highlighter size={16} strokeWidth={1.75} aria-hidden="true" />
+          </span>
+          <span class="mbtn-label">Highlight trailing whitespace</span>
+          <span class="mbtn-chord"></span>
+        </button>
+        <button class="mbtn" onclick={doRemoveTrailingWhitespace}>
+          <span class="mbtn-icon">
+            <Eraser size={16} strokeWidth={1.75} aria-hidden="true" />
+          </span>
+          <span class="mbtn-label">Remove trailing whitespace</span>
+          <span class="mbtn-chord"></span>
+        </button>
         <div class="msep" role="separator"></div>
+        <button class="mbtn" onclick={doOpenSearch}>
+          <span class="mbtn-icon">
+            <SearchIcon size={16} strokeWidth={1.75} aria-hidden="true" />
+          </span>
+          <span class="mbtn-label">Search</span>
+          <span class="mbtn-chord">{chordLabel("app.search.toggle")}</span>
+        </button>
+        <button class="mbtn" onclick={doFind}>
+          <span class="mbtn-icon">
+            <SearchIcon size={16} strokeWidth={1.75} aria-hidden="true" />
+          </span>
+          <span class="mbtn-label">Find</span>
+          <span class="mbtn-chord">{chordLabel("app.find.open")}</span>
+        </button>
+        <button class="mbtn" onclick={doCopyPath}>
+          <span class="mbtn-icon">
+            <Copy size={16} strokeWidth={1.75} aria-hidden="true" />
+          </span>
+          <span class="mbtn-label">Copy path to file</span>
+          <span class="mbtn-chord"></span>
+        </button>
+        <button class="mbtn" onclick={doCopyCwdPath}>
+          <span class="mbtn-icon">
+            <Copy size={16} strokeWidth={1.75} aria-hidden="true" />
+          </span>
+          <span class="mbtn-label">Copy path to $CWD</span>
+          <span class="mbtn-chord"></span>
+        </button>
+        <button class="mbtn" onclick={doReload}>
+          <span class="mbtn-icon">
+            <RotateCw size={16} strokeWidth={1.75} aria-hidden="true" />
+          </span>
+          <span class="mbtn-label">Reload from Disk</span>
+          <span class="mbtn-chord"></span>
+        </button>
+        <div class="msep" role="separator"></div>
+        <!-- `fullstack-a-67f`: From-$CWD spawn band per addendum-a.
+             Mirror of the `-a-67d` Terminal pattern: New File
+             uses the existing dialog; New Terminal / New File
+             Browser / New Graph fire chan:command events. -->
+        <div class="from-cwd-label">From $CWD</div>
+        <button class="mbtn" onclick={doDuplicate}>
+          <span class="mbtn-icon">
+            <Copy size={16} strokeWidth={1.75} aria-hidden="true" />
+          </span>
+          <span class="mbtn-label">Duplicate File</span>
+          <span class="mbtn-chord"></span>
+        </button>
         <button class="mbtn" onclick={doNewFile}>
           <span class="mbtn-icon">
             <FilePlus size={16} strokeWidth={1.75} aria-hidden="true" />
@@ -880,27 +972,36 @@
           <span class="mbtn-label">New File</span>
           <span class="mbtn-chord">{chordLabel("app.file.new")}</span>
         </button>
-        <button class="mbtn" onclick={doCloseTab}>
+        <button class="mbtn" onclick={doNewTerminal}>
           <span class="mbtn-icon">
-            <Square size={16} strokeWidth={1.75} aria-hidden="true" />
+            <TerminalIcon size={16} strokeWidth={1.75} aria-hidden="true" />
           </span>
-          <span class="mbtn-label">Close</span>
-          <span class="mbtn-chord">{chordLabel("app.tab.close")}</span>
+          <span class="mbtn-label">New Terminal</span>
+          <span class="mbtn-chord">{chordLabel("app.terminal.toggle")}</span>
         </button>
-        <button class="mbtn" onclick={doCloseOthers}>
+        <button class="mbtn" onclick={doNewFileBrowser}>
           <span class="mbtn-icon">
-            <SquareSplitHorizontal size={16} strokeWidth={1.75} aria-hidden="true" />
+            <Folder size={16} strokeWidth={1.75} aria-hidden="true" />
           </span>
-          <span class="mbtn-label">Close others</span>
+          <span class="mbtn-label">New File Browser</span>
+          <span class="mbtn-chord">{chordLabel("app.files.toggle")}</span>
+        </button>
+        <button class="mbtn" onclick={doNewGraph}>
+          <span class="mbtn-icon">
+            <Network size={16} strokeWidth={1.75} aria-hidden="true" />
+          </span>
+          <span class="mbtn-label">New Graph</span>
+          <span class="mbtn-chord">{chordLabel("app.graph.toggle")}</span>
+        </button>
+        <div class="msep" role="separator"></div>
+        <button class="mbtn" onclick={flipToSettings}>
+          <span class="mbtn-icon">
+            <Settings2 size={16} strokeWidth={1.75} aria-hidden="true" />
+          </span>
+          <span class="mbtn-label">Settings</span>
           <span class="mbtn-chord"></span>
         </button>
-        <button class="mbtn" onclick={doCloseAll}>
-          <span class="mbtn-icon">
-            <SquareSplitVertical size={16} strokeWidth={1.75} aria-hidden="true" />
-          </span>
-          <span class="mbtn-label">Close all</span>
-          <span class="mbtn-chord"></span>
-        </button>
+        <div class="msep" role="separator"></div>
         <button
           class="mbtn"
           disabled={!canReopenClosedTab()}
@@ -912,114 +1013,26 @@
           <span class="mbtn-label">Reopen Closed Tab</span>
           <span class="mbtn-chord">{chordLabel("app.tab.reopenClosed")}</span>
         </button>
-        <button class="mbtn" onclick={doDuplicate}>
+        <button class="mbtn" onclick={doCloseTab}>
           <span class="mbtn-icon">
-            <Copy size={16} strokeWidth={1.75} aria-hidden="true" />
+            <X size={16} strokeWidth={1.75} aria-hidden="true" />
           </span>
-          <span class="mbtn-label">Duplicate File</span>
-          <span class="mbtn-chord"></span>
+          <span class="mbtn-label">Close</span>
+          <span class="mbtn-chord">{chordLabel("app.tab.close")}</span>
         </button>
-        <button class="mbtn" onclick={doCopyPath}>
-          <span class="mbtn-icon">
-            <Copy size={16} strokeWidth={1.75} aria-hidden="true" />
-          </span>
-          <span class="mbtn-label">Copy File Path</span>
-          <span class="mbtn-chord"></span>
-        </button>
-        <button class="mbtn" onclick={doRename}>
-          <span class="mbtn-icon">
-            <Pencil size={16} strokeWidth={1.75} aria-hidden="true" />
-          </span>
-          <span class="mbtn-label">Rename File</span>
-          <span class="mbtn-chord"></span>
-        </button>
-        <button class="mbtn" onclick={doReload}>
-          <span class="mbtn-icon">
-            <RotateCw size={16} strokeWidth={1.75} aria-hidden="true" />
-          </span>
-          <span class="mbtn-label">Reload from Disk</span>
-          <span class="mbtn-chord"></span>
-        </button>
-        <!-- `fullstack-42`: dropped "Show File" and "Graph from
-             here" because Pane Mode + context-aware spawn
-             (`fullstack-43`) replaces them. The remaining "Search"
-             and "Terminal from here" stay; Search has no other tab
-             affordance and Terminal-from-here is not yet covered
-             by Pane Mode's spawn keys. -->
-        <div class="msep" role="separator"></div>
-        <button class="mbtn" onclick={doOpenSearch}>
-          <span class="mbtn-icon">
-            <SearchIcon size={16} strokeWidth={1.75} aria-hidden="true" />
-          </span>
-          <span class="mbtn-label">Search</span>
-          <span class="mbtn-chord"></span>
-        </button>
-        <button class="mbtn" onclick={doTerminalFromHere}>
-          <span class="mbtn-icon">
-            <TerminalIcon size={16} strokeWidth={1.75} aria-hidden="true" />
-          </span>
-          <span class="mbtn-label">Terminal from here</span>
-          <span class="mbtn-chord"></span>
-        </button>
-        <div class="msep" role="separator"></div>
-        <button class="mbtn" onclick={doOpenSettings}>
-          <span class="mbtn-icon">
-            <SettingsIcon size={16} strokeWidth={1.75} aria-hidden="true" />
-          </span>
-          <span class="mbtn-label">Settings</span>
-          <span class="mbtn-chord">{chordLabel("app.settings.toggle")}</span>
-        </button>
-        <!-- `fullstack-b-26`: window-level Reload + Open Inspector
-             at the tail of every tab right-click menu. Reuses the
-             `reload_window` + `open_devtools` IPCs that `-b-17` +
-             `-a-36` already plumbed for the pane-context menu; same
-             helpers in `web/src/api/desktop.ts`. Distinct from the
-             tab-specific "Reload from Disk" row above (which only
-             re-reads this file's content). -->
-        <div class="msep" role="separator"></div>
-        <button class="mbtn" onclick={doReloadWindow}>
-          <span class="mbtn-icon">
-            <RefreshCw size={16} strokeWidth={1.75} aria-hidden="true" />
-          </span>
-          <span class="mbtn-label">Reload</span>
-          <span class="mbtn-chord"></span>
-        </button>
-        <button class="mbtn" onclick={doOpenInspector}>
-          <span class="mbtn-icon">
-            <Bug size={16} strokeWidth={1.75} aria-hidden="true" />
-          </span>
-          <span class="mbtn-label">Open Inspector</span>
-          <span class="mbtn-chord"></span>
-        </button>
+        <!-- `fullstack-a-67f`: Reload Window + Open Inspector
+             tail entries dropped per spec consistency with
+             `-a-67d`. Cmd+R + the pane hamburger still surface
+             window-level reload + devtools. -->
       </div>
     </div>
   {/if}
 
-  {#if renameActive}
-    <!-- `fullstack-a-35`: inline rename band. Sits above the
-         editor body, outside the `--chan-page-max-width` cap so
-         the input spans the whole pane width. Triggered from the
-         tab right-click menu's Rename row (`doRename`); Enter
-         commits via the same chan-drive rename + link-rewrite
-         pass the modal-driven path uses; Esc cancels without
-         filesystem side effects. -->
-    <div class="rename-band" role="group" aria-label="rename file">
-      <span class="rename-label">Rename</span>
-      <input
-        bind:this={renameInputEl}
-        bind:value={renameDraft}
-        class="rename-input"
-        type="text"
-        spellcheck="false"
-        autocomplete="off"
-        autocorrect="off"
-        autocapitalize="off"
-        onkeydown={onRenameKeydown}
-        onblur={cancelRename}
-        aria-label="new file path"
-      />
-    </div>
-  {/if}
+  <!-- `fullstack-a-67f`: dropped the `-a-35` inline rename band.
+       Addendum-a moves the rename surface into the menu top as
+       a "Name, editable like Terminal's" input. The new in-menu
+       input commits on Enter/blur via `fileOps.renameInPlace`
+       (same chan-drive rename + link-rewrite pass as before). -->
   {#if tab.fileMissing}
     <div class="editor-toolbar missing-toolbar">
       <span>File moved or deleted</span>
@@ -1454,40 +1467,50 @@
     color: var(--text-primary);
     font-weight: 600;
   }
-  /* `fullstack-a-35`: inline-rename header band. Sits above the
-     editor body, full pane width (no page-width cap). Hosts a
-     label + monospaced input; Enter commits, Esc cancels. */
-  .rename-band {
+  /* `fullstack-a-67f`: the `-a-35` `.rename-band` styles
+     dropped along with the full-width inline rename band.
+     The menu-top `.name-row` input replaces it (styles
+     below). */
+  .name-row {
     display: flex;
     align-items: center;
     gap: 8px;
-    padding: 6px 10px;
-    background: var(--bg-card);
-    border-bottom: 1px solid var(--border);
-    font-size: 13px;
-    width: 100%;
+    padding: 4px 0 6px;
   }
-  .rename-label {
-    flex-shrink: 0;
+  .name-label {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
     color: var(--text-secondary);
-    font-weight: 600;
+    font-size: 12px;
+    text-transform: lowercase;
     letter-spacing: 0.02em;
+    flex-shrink: 0;
   }
-  .rename-input {
+  .name-input {
     flex: 1;
     min-width: 0;
-    padding: 4px 8px;
     background: var(--bg);
-    color: var(--text);
     border: 1px solid var(--border);
     border-radius: 4px;
-    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    color: var(--text);
+    font: inherit;
     font-size: 13px;
+    padding: 3px 6px;
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
   }
-  .rename-input:focus {
+  .name-input:focus {
     outline: none;
-    border-color: var(--link);
-    box-shadow: 0 0 0 1px var(--link);
+    border-color: var(--accent);
+  }
+  /* `fullstack-a-67f`: "From $CWD" section label. Mirrors
+     TerminalTab's `.from-cwd-label` styling. */
+  .from-cwd-label {
+    padding: 4px 8px 2px;
+    color: var(--text-secondary);
+    font-size: 11px;
+    text-transform: lowercase;
+    letter-spacing: 0.02em;
   }
   .placeholder {
     flex: 1;
