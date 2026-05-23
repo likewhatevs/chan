@@ -7010,3 +7010,66 @@ read takes over from there.
 Contention: git state still unresolved (local main 263+
 ahead of origin/main due to PR #1 dropping 225 phase-8
 commits). Not pushing.
+
+---
+
+## 2026-05-23 — teardown-complete (session wrap, round 45 close)
+
+Per @@Architect's TEARDOWN poke (07da8ea3 + the
+git-state correction at 7d142bc):
+
+* chan serve: none running.
+* `/tmp/chan-test-phase8-wa*` directories: removed
+  (`wa`, `wa-r2`, `wa-r3` were stale leftovers
+  from very early rounds; all wiped).
+* chan registry: 0 throwaway `phase8-wa-r*`
+  entries (`wa-r2` + `wa-r3` unregistered).
+* Chrome MCP tab group: none.
+* chan-desktop: untouched (those are @@Alex's
+  running Chan.app instances on the chan repo
+  drive + NewHouse drive; not mine to close).
+
+### Round-series scoreboard
+
+45 rounds of empirical walks across phase-8.
+Highlights:
+
+* Fresh-binary discipline canonised after the
+  Drafts BM25 saga (round-with-5-PARTIALs
+  taught the kill+rebuild+verify pattern that's
+  now memory).
+* Proactive walks pattern caught the gap on
+  every PARTIAL that vitest pins missed (`-a-66`
+  Drafts subtree, `-a-72/-83` hang-recovery
+  banner, `-a-75` carousel-relocation UX,
+  `-a-79 slice 1/5/5b` lead semantics,
+  `-a-89b` cursor alignment).
+* Empirical-loop authority delegated to me by
+  @@Alex for the `-a-77` no-PIN catch +
+  `-a-89b` cursor saga + `-a-79 slice 5b`
+  lead-runs-command patch.
+* Backend extension `7fb7cab` (restart command
+  + env override) shipped as orthogonal primitive
+  even though my own orchestrator switched to
+  close+spawn — kept for future agent-driven
+  flows.
+* Cross-lane patches landed: terminal right-click
+  Show/Hide Rich Prompt entry (`21b3e6d`), team-
+  setup identity-prompt 3-arg rewrite with
+  host/lead role asymmetry (`2460305`).
+
+### Git-state lesson learned
+
+Round-41 "PR #1 dropped 225 commits" framing was
+factually wrong — architect verified it was just
+268 unpushed locals that pushed clean as fast-
+forward (`1fd23e6..d535ee4`). Correction logged
+to inbound channel; future "looks like a
+divergence" diagnosis should run
+`git rev-list --count main..origin/main` +
+`git rev-list --count origin/main..main` FIRST
+before claiming commits were dropped.
+
+### State at end of session
+
+Lane clean. Standing down for session wrap. 🫡
