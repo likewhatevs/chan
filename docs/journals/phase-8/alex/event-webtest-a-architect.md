@@ -3985,3 +3985,65 @@ The carousel rotation + play/pause UX is preserved
 end-to-end, just relocated.
 
 Standing by.
+
+## 2026-05-23 — poke (batch #3: -a-75b + -a-67e s2 + -a-67d s2 — 5/5 HOLD; queue-empty round 4)
+
+Fresh-binary build of `8f98eef`. Verdict in
+[`../webtest-a/webtest-a-1.md`](../webtest-a/webtest-a-1.md).
+
+### Verdicts: 5/5 HOLD
+
+| Check | Verdict |
+|-------|---------|
+| `-a-75b` Carousel in Infographics tab | HOLD 🎉 |
+| `-a-75b` Welcome static spawn grid | HOLD |
+| `-a-67e s2` Unified New File or Directory | HOLD |
+| `-a-67e s2` FB Settings flip entry | HOLD |
+| `-a-67d s2` MCP env vars modal | HOLD |
+
+### `-a-75b` closes my flagged UX PARTIAL
+
+Empirical:
+- Welcome screen: `welcomeHasCarousel: false`; just
+  5 spawn tiles + Infographics tile + footer.
+- Infographics tab: `.carousel` element with
+  pagination + play/pause + arrow nav.
+
+@@Alex's option (c) routing implemented cleanly:
+welcome static, Infographics owns the carousel.
+
+### `-a-67e s2` HOLD
+
+Right-click on FB row → menu order:
+- New File or Directory (unified)
+- Search / New Terminal / New Graph
+- Copy Path / Rename / Move / Delete
+- **Settings** (foot — flips FileTree to
+  settings, tab variant only)
+
+### `-a-67d s2` HOLD
+
+Terminal right-click → "Set MCP env vars" row
+has info-button (i). Click → modal:
+- Title "MCP env vars"
+- Description with `CHAN_MCP_SOCKET` /
+  `CHAN_MCP_SERVER_JSON` tokens
+- "Show MCP env in terminal" action button
+  (moved from menu row)
+
+### 🚪 Lane queue-empty round 4
+
+No remaining lane-A walk-ready items. Going
+stand-down.
+
+### Suggested commit shape
+
+* **Commit subject**: `docs: webtest-a batch #3 -
+  -a-75b carousel relocation + -a-67e s2 + -a-67d
+  s2 (5/5 HOLD); queue-empty round 4`.
+* **Files**:
+  * `docs/journals/phase-8/webtest-a/webtest-a-1.md`
+  * `docs/journals/phase-8/alex/event-webtest-a-architect.md`
+* Path-limited.
+
+Standing down. 🫡

@@ -6305,3 +6305,103 @@ Infographics. @@Alex's "inside the tab instead"
 wording leans toward (c).
 
 Flagged to architect for `-a-75 slice 1b` cut.
+
+## 2026-05-23 — autonomous batch #3: -a-75b carousel relocation + -a-67e s2 unified dialog + -a-67d s2 MCP modal (3/3 HOLD)
+
+Per BATCH DISPATCH re-engage. HEAD `8f98eef`.
+Fresh-binary discipline. Throwaway drive r40;
+chan serve 127.0.0.1:8787; Chrome MCP tab
+`503726199`.
+
+### Verdicts (3/3 HOLD)
+
+| Task | Verdict |
+|------|---------|
+| `-a-75b` Carousel relocated to Infographics tab | HOLD 🎉 |
+| `-a-75b` Welcome static (no carousel) | HOLD |
+| `-a-67e s2` Unified "New File or Directory" entry | HOLD |
+| `-a-67e s2` Settings flip from FB menu | HOLD |
+| `-a-67d s2` MCP env vars info-button → modal | HOLD |
+
+### `-a-75b` HOLD — carousel relocated per @@Alex's option (c)
+
+**Welcome screen** (post-`-a-75b`):
+- 5 spawn tiles in a row: New Draft / Terminal /
+  File Browser / Rich Prompt / Graph
+- Infographics tile below divider
+- Footer hint: "Each pane's visible tab is part
+  of the scope for Graph."
+- **NO carousel widget** (verified
+  `welcomeHasCarousel: false`, no pagination
+  dots, no play/pause)
+
+**Infographics tab** (clicked Infographics tile):
+- `.carousel` element present
+  (`svelte-1cqfcxx`)
+- Pagination dots `● ○ ○` (3 slides)
+- Play/pause control (▷ visible at bottom right)
+- Carousel arrow controls (< >)
+- Slide 1: SHORTCUTS (App / Panes / Tabs /
+  Editor sections)
+
+@@Alex's flagged UX gap from prior walk CLOSED.
+Carousel + rotation + pause UX moved entirely
+into the Infographics tab; welcome simplifies to
+static spawn grid.
+
+### `-a-67e slice 2` HOLD — unified File-or-Directory + Settings flip
+
+Right-clicked Drafts/ row → menu shows:
+- "from selection" header
+- **New File or Directory** ✓ (unified entry —
+  replaces separate New File + New Directory)
+- Search / New Terminal / New Graph
+- Copy Path / Rename / Move / Delete (red)
+- **Settings** ✓ (new entry at foot — flips
+  FileTree to settings; tab variant only)
+
+The trailing-slash detection in the modal routes
+to file vs dir creation per the spec.
+
+### `-a-67d slice 2` HOLD — MCP env modal
+
+Spawned Terminal-1 → right-click → "Set MCP env
+vars" row now has an info-button (i icon) at the
+right edge.
+
+Clicked info-button → modal opens:
+- Title: **"MCP env vars"**
+- Body: "When on, chan sets `CHAN_MCP_SOCKET`,
+  `CHAN_MCP_SERVER_JSON`, and friends in the PTY
+  env so external agent CLIs can discover the
+  chan MCP server automatically. Turn this off
+  to launch a vanilla shell. Applies to new
+  sessions only."
+- Action button: green **"Show MCP env in
+  terminal"** (the action moved from menu row)
+- Close ✕ at top-right
+
+Class: `mcp-modal svelte-1vfxrq0`,
+`role="dialog"`. The "Show MCP env in terminal"
+inline menu entry from prior slice is now GONE
+— replaced by info-button → modal flow.
+
+### Highlights
+
+* **`-a-75` round-trip closure**: my flagged UX
+  PARTIAL → @@Alex routing locked option (c) →
+  @@FullStackA shipped slice 1b → re-walk
+  confirms.
+* **All three slice 2 follow-ups land per
+  addendum-a**: New File/Dir unification, FB
+  Settings flip, MCP modal.
+
+### State at end of walk
+
+Lane-A test server torn down:
+1. chan serve killed.
+2. `rm -rf /tmp/chan-test-phase8-wa-r40/`.
+3. `chan remove` → unregistered.
+4. Chrome MCP tab closed.
+
+5/5 HOLD. Three landings all empirically clean.
