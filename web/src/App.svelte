@@ -87,6 +87,7 @@
     paneModeStageDraftEditor,
     paneModeSwap,
     showOrSpawnRichPromptInFocusedPane,
+    toggleActiveFileTabMode,
   } from "./state/tabs.svelte";
   import { applyEditorTheme, DEFAULT_EDITOR_THEME } from "./state/editorTheme";
   import { flushPendingBufferWrites, pruneEditorBuffers } from "./state/editorBuffer";
@@ -774,6 +775,18 @@
       lockNow();
       return;
     }
+    // `fullstack-a-67f` slice 2: Mod+E (Obsidian-style "Show
+    // Source Code") flips the active file tab's mode between
+    // source and the rendered surface. No-op when the active
+    // tab isn't a file tab. chan-desktop's KEY_BRIDGE_JS
+    // replays Cmd+E natively as `chan:command
+    // app.editor.toggleMode` — both paths converge on the
+    // runCommand switch.
+    if (meta && !e.altKey && !e.shiftKey && !e.ctrlKey && e.code === "KeyE") {
+      e.preventDefault();
+      toggleActiveFileTabMode();
+      return;
+    }
   }
 
   async function createDraftAndOpen(): Promise<void> {
@@ -899,6 +912,16 @@
       // the empty-pane carousel slide-1 button.
       case "app.infographics.open":
         openInfographicsInActivePane();
+        return;
+      // `fullstack-a-67f` slice 2: Obsidian-style Mod+E "Show
+      // Source Code" toggle. The chord fires
+      // `dispatchEditorToggleMode()` which finds the active file
+      // tab and flips its mode between source and the rendered
+      // surface (wysiwyg / pretty / table). No-op when the
+      // active tab isn't a file tab — keeps the chord harmless
+      // outside the editor.
+      case "app.editor.toggleMode":
+        toggleActiveFileTabMode();
         return;
       case "app.pane.next":
         selectNextPane();

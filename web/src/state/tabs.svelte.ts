@@ -2677,6 +2677,24 @@ export function setMode(tab: Tab, mode: Mode): void {
   if (tab.kind === "file") tab.mode = mode;
 }
 
+/// `fullstack-a-67f` slice 2: flip the active pane's file tab
+/// between source and the rendered surface. Routed via the
+/// Mod+E chord (Obsidian-style "Show Source Code") + the
+/// editor's right-click "Show Source Code" entry. Caret
+/// remap (renderedCaretForSourceCaret etc.) lives inside
+/// FileEditorTab.svelte's `doToggleMode`; this chord-level
+/// helper does the basic mode flip and lets the editor's
+/// internal effect handle position fidelity on the next
+/// render. No-op when the active tab isn't a file tab —
+/// the chord stays harmless outside the editor.
+export function toggleActiveFileTabMode(): void {
+  const node = layout.nodes[layout.activePaneId];
+  if (!node || node.kind !== "leaf") return;
+  const tab = node.tabs.find((t) => t.id === node.activeTabId);
+  if (!tab || tab.kind !== "file") return;
+  tab.mode = tab.mode === "source" ? "wysiwyg" : "source";
+}
+
 /// Tab-state mutators. These exist so child components (FileEditorTab
 /// etc.) don't write tab.X = ... directly on a non-bindable prop —
 /// Svelte 5's ownership tracking warns about that pattern. Centralizing

@@ -1054,3 +1054,77 @@ Draft + Terminal + FB + Editor). Slice 2s
 for d/e/f tracked separately. Picking up
 `-a-68 slice 2+` next under autonomous-
 commit mode.
+
+## 2026-05-23 — slice -a-67f slice 2 (Show Source Code Cmd+E chord)
+
+SPA-only. Tiny follow-up to `-a-67f` slice 1
+that wires the Obsidian-style Mod+E chord
+addendum-a calls for.
+
+### Shape applied
+
+* New `app.editor.toggleMode` entry in
+  `shortcuts.ts`. Web + native both bind
+  `Mod+E`. Group is the new `Editor`
+  category. `escapeTerminal: true` so the
+  chord fires even from inside an xterm.
+* `ShortcutGroup` union extended with
+  `"Editor"`.
+* `App.svelte`: new Mod+E branch in
+  `onWindowKey` + new `case
+  "app.editor.toggleMode"` in
+  `runCommand`. Both call the same store
+  helper.
+* `tabs.svelte.ts`: new export
+  `toggleActiveFileTabMode()` — walks the
+  active pane's active tab, no-ops if it
+  isn't a file, otherwise flips `tab.mode`
+  between `"source"` and `"wysiwyg"`. Caret
+  remap stays the editor's responsibility
+  (FileEditorTab's `doToggleMode` handles
+  the rendered/source caret mapping; the
+  chord-level flip is the smaller mode
+  toggle).
+* Editor menu's "Show Source Code" button
+  now surfaces the chord hint via
+  `chordLabel("app.editor.toggleMode")`.
+
+### Files touched
+
+* `web/src/state/shortcuts.ts`
+* `web/src/state/tabs.svelte.ts`
+* `web/src/App.svelte`
+* `web/src/components/FileEditorTab.svelte`
+* `web/src/components/editorShowSourceChord.test.ts`
+  (new) — 9 architectural pins for the
+  registry entry, keymap, runCommand,
+  store helper, chord-hint surface.
+
+### Gate
+
+* `svelte-check` → 0/0.
+* `vitest` → **1224 / 1224** (+9 from
+  `-a-75`'s 1215).
+* `npm run build` → clean.
+* `cargo fmt --check` + `clippy
+  --all-targets -- -D warnings` → clean
+  (no Rust delta).
+
+### Suggested commit subject
+
+```
+Editor: Mod+E "Show Source Code" chord (fullstack-a-67f slice 2)
+```
+
+### Files (per-path)
+
+* `web/src/state/shortcuts.ts`
+* `web/src/state/tabs.svelte.ts`
+* `web/src/App.svelte`
+* `web/src/components/FileEditorTab.svelte`
+* `web/src/components/editorShowSourceChord.test.ts` (new)
+* `docs/journals/phase-8/fullstack-a/fullstack-a-67.md`
+
+Autonomous-commit mode. No clearance held.
+Picking up `-a-67d` slice 2 (MCP info-button
+modal) or `-a-67e` slice 2 next.

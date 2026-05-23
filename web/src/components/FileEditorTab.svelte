@@ -817,7 +817,7 @@
             <span class="mbtn-label">
               {inSource ? renderedLabel : "Show Source Code"}
             </span>
-            <span class="mbtn-chord"></span>
+            <span class="mbtn-chord">{chordLabel("app.editor.toggleMode")}</span>
           </button>
         {/if}
         {#if markdownToolsEnabled}

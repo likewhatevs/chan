@@ -37,7 +37,13 @@ export type Platform = "web" | "native";
 /// itself doesn't branch on OS — only the printable label does.
 export type OS = "mac" | "linux" | "windows";
 
-export type ShortcutGroup = "App" | "File" | "Tabs" | "Panes" | "Find";
+export type ShortcutGroup =
+  | "App"
+  | "File"
+  | "Tabs"
+  | "Panes"
+  | "Find"
+  | "Editor";
 
 export type Shortcut = {
   /// Stable command id. Matches `chan:command` event names so a
@@ -321,6 +327,20 @@ export const SHORTCUTS: readonly Shortcut[] = [
     label: "Find previous",
     native: "Mod+Shift+G",
     group: "Find",
+  },
+  // `fullstack-a-67f` slice 2: Obsidian-style "Show Source Code"
+  // toggle. Cmd+E flips the active editor tab between its
+  // rendered surface (wysiwyg / pretty / table) and the raw
+  // source view. Native binds Mod+E. Web Mac has no
+  // browser-reserved conflict on Cmd+E, so the web SPA also
+  // accepts Mod+E.
+  {
+    id: "app.editor.toggleMode",
+    label: "Show Source Code (toggle rendered/source)",
+    native: "Mod+E",
+    web: "Mod+E",
+    group: "Editor",
+    escapeTerminal: true,
   },
 ];
 
