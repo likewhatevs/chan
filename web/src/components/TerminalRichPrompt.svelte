@@ -24,6 +24,7 @@
   import type { TerminalSpawnResponse } from "../api/types";
   import { openSpawnDialog as openGlobalSpawnDialog } from "../state/spawnDialog.svelte";
   import { openTeamDialog as openGlobalTeamDialog } from "../state/teamDialog.svelte";
+  import { runTeamBootstrap } from "../state/teamOrchestrator.svelte";
 
   let {
     prompt,
@@ -323,21 +324,17 @@
 
   /// `fullstack-a-78`: repurpose the "Watch directory" / now
   /// "New Team" affordance to open the global TeamDialog.
-  /// The dialog's Bootstrap button hands off to `-a-79`'s
-  /// orchestrator (currently a stub — orchestrator lands in
-  /// `-a-79`); the dialog auto-closes on Bootstrap so the
-  /// Rich Prompt regains focus.
+  /// The dialog's Bootstrap button hands off to the orchestrator
+  /// (`fullstack-a-79`) which persists the team config, loads
+  /// the per-team watcher, and spawns worker terminals seeded
+  /// with the identity prompt. The dialog auto-closes on
+  /// Bootstrap so the Rich Prompt regains focus.
   function openNewTeamDialog(): void {
     menu = null;
     openGlobalTeamDialog({
       hostSessionId: terminalSessionId,
-      onBootstrap: (config) => {
-        // `-a-78` slice 1: log the config; orchestrator
-        // (`-a-79`) wires the actual spawn chain. Once `-a-79`
-        // lands, replace this with the orchestrator entry
-        // point.
-        // eslint-disable-next-line no-console
-        console.info("[chan] New Team bootstrap (pending -a-79):", config);
+      onBootstrap: async (config) => {
+        await runTeamBootstrap(config, terminalSessionId);
       },
       onSpawned: (response, agentName) => onSpawned?.(response, agentName),
     });

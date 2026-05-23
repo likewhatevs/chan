@@ -144,3 +144,166 @@ This is `-a-79`.
 * Process template content (`-a-81`).
 * chan-drive primitives (`-30`).
 * chan-server watcher IPCs (`-31`).
+
+## 2026-05-23 — slice 1 (orchestrator core chain)
+
+SPA-only. `systacean-41` shipped the
+chan-server team create/duplicate routes
++ killed the silent axum-syntax bug on the
+`-31` load/unload routes. Unblocked; slice 1
+wires the orchestrator's core chain.
+
+### Shape applied
+
+**API client extension**
+
+* New types: `TeamMemberWire`,
+  `TeamConfigWire`, `TeamRefView`,
+  `TeamLoadResponse` — snake_case mirrors of
+  chan-drive's `TeamConfig` / `Member` /
+  `TeamRef` / `TeamLoadResponse`.
+* 5 new endpoints: `teamCreate`, `teamLoad`,
+  `teamUnload`, `teamListLoaded`,
+  `teamDuplicate`.
+
+**New `state/teamOrchestrator.svelte.ts`**
+
+* `parseEnvLines(text)` — KEY=VALUE
+  newline-separated → Record<string,string>.
+  Mirrors `SpawnDialog.svelte`'s parser.
+* `memberHandle(member, autoPrefix)` —
+  `@@<name>` when autoPrefix on AND name
+  doesn't already start with `@@`; raw
+  otherwise. Matches the dialog's
+  `handleOf` helper.
+* `translateConfig(config)` — SPA
+  camelCase `TeamDialogConfig` →
+  chan-drive snake_case `TeamConfigWire`.
+  Auto-injects `CHAN_TAB_NAME=<handle>`
+  per member when env doesn't already
+  carry it (addendum-b clarification #8).
+  Per-call `created_at` set to ISO 8601 UTC.
+* `identityPrompt(hostHandle)` — addendum-b
+  clarification #4 verbatim. `$CHAN_TAB_NAME`
+  intentionally NOT escaped so worker
+  shells expand it.
+* `runTeamBootstrap(config, hostSessionId?)`
+  — orchestrator entry point. Steps:
+  1. `api.teamCreate(name, wire)` persists
+     `config.toml` at
+     `Drafts/team-{name}/config.toml`.
+  2. `api.teamLoad(name)` spins up the
+     per-team watcher.
+  3. For each non-lead member,
+     `api.spawnTerminal({ name: handle,
+     command, env, orchestrator_session:
+     hostSessionId })` + opens a TerminalTab
+     in the active pane with the new
+     session + seedInput = identityPrompt.
+  4. notify() on success.
+  Split-pane real estate scope-poked via
+  notify (slice 1 falls back to tabs).
+
+**TerminalRichPrompt.svelte rewiring**
+
+* `openNewTeamDialog`'s `onBootstrap`
+  callback swapped from log-only to
+  `await runTeamBootstrap(config,
+  terminalSessionId)`.
+
+### Slice 2 deferred
+
+Per the addendum-b spec:
+
+* Process-template placement (copy
+  `-a-81`'s parameterised docs into
+  `Drafts/team-{name}/docs/`).
+* Lead-side pre-flight survey trigger.
+* Split-pane real estate (paneSplit +
+  per-cell assignment).
+* `dispatch_agent_event`-driven identity
+  prompts (slice 1 uses `seedInput` for
+  in-process delivery; the event-channel
+  path lands when `systacean-21`'s
+  rich-poke flow consumes a team
+  channel).
+
+### Files touched
+
+* `web/src/api/client.ts`
+  * 5 team endpoints + 4 wire-shape
+    interfaces.
+* `web/src/state/teamOrchestrator.svelte.ts`
+  (new) — orchestrator module.
+* `web/src/components/TerminalRichPrompt.svelte`
+  * Import `runTeamBootstrap`.
+  * `onBootstrap` callback dispatches the
+    orchestrator.
+* `web/src/state/teamOrchestrator.test.ts`
+  (new) — 17 architectural pins for
+  parseEnvLines / memberHandle /
+  translateConfig / identityPrompt.
+* `web/src/components/teamBootstrapOrchestrator.test.ts`
+  (new) — 10 integration pins for the
+  TerminalRichPrompt dispatch, the
+  orchestrator's chain ordering, and the
+  api client team endpoints.
+
+### Decisions
+
+* **Lead's terminal = host session**, per
+  addendum-b clarification #1. The
+  orchestrator doesn't spawn a new terminal
+  for the lead; the user's existing rich-
+  prompt terminal IS the lead's surface.
+  Slice 1 skips the lead in the spawn
+  loop; the identity prompt for the lead
+  arrives via the existing rich-prompt
+  buffer (slice 2 wires the auto-fill).
+* **Auto-inject CHAN_TAB_NAME** (addendum-b
+  clarification #8) — users don't have to
+  type it in the env field; the orchestrator
+  fills it from the resolved handle. User
+  overrides preserved.
+* **seedInput for identity prompt** —
+  in-process delivery via the existing
+  terminal seed. The task body mentions
+  `dispatch_agent_event`; that's a separate
+  delivery path (event-channel) that
+  belongs to a slice 2 once the team
+  event channel is consumed.
+* **Split-pane scope-poked**, not silently
+  fallen back. The dialog supports a
+  split-pane real estate today; the
+  orchestrator surfaces a notify() so the
+  user sees the limitation.
+
+### Gate
+
+* `svelte-check` → 0/0.
+* `vitest` → **1278 / 1278** (+27 from
+  `-a-75b`'s 1251).
+* `npm run build` → clean.
+* `cargo fmt --check` + `clippy
+  --all-targets -- -D warnings` → clean
+  (no Rust delta).
+
+### Suggested commit subject
+
+```
+Team Bootstrap orchestrator slice 1: config + load + spawn + identity prompt (fullstack-a-79 slice 1)
+```
+
+### Files (per-path)
+
+* `web/src/api/client.ts`
+* `web/src/state/teamOrchestrator.svelte.ts` (new)
+* `web/src/components/TerminalRichPrompt.svelte`
+* `web/src/state/teamOrchestrator.test.ts` (new)
+* `web/src/components/teamBootstrapOrchestrator.test.ts` (new)
+* `docs/journals/phase-8/fullstack-a/fullstack-a-79.md`
+
+Autonomous-commit mode. No clearance held.
+Picking up `-a-80` (Load Team flow) next —
+duplicate branch + dialog populated with
+existing config + already-loaded notice.

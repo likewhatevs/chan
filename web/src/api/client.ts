@@ -564,7 +564,66 @@ export const api = {
       "POST",
       "/api/fonts/source-code-pro/download",
     ),
+
+  /// `fullstack-a-79`: team workspace endpoints from
+  /// `systacean-30` (chan-drive primitives) + `systacean-41`
+  /// (HTTP routes). The orchestrator (`-a-79`) calls
+  /// teamCreate → teamLoad → terminal spawn-per-member; the
+  /// load flow (`-a-80`) consumes teamListLoaded +
+  /// teamDuplicate. `TeamConfigWire` mirrors chan-drive's
+  /// `TeamConfig` (snake_case per serde default).
+  teamCreate: (name: string, config: TeamConfigWire) =>
+    req<TeamRefView>("POST", "/api/teams", { name, config }),
+  teamLoad: (name: string) =>
+    req<TeamLoadResponse>(
+      "POST",
+      `/api/teams/${encodeURIComponent(name)}/load`,
+    ),
+  teamUnload: (name: string) =>
+    req<{ ok: true }>(
+      "POST",
+      `/api/teams/${encodeURIComponent(name)}/unload`,
+    ),
+  teamListLoaded: () =>
+    req<{ teams: string[] }>("GET", "/api/teams/loaded"),
+  teamDuplicate: (sourceName: string, newName: string) =>
+    req<TeamRefView>(
+      "POST",
+      `/api/teams/${encodeURIComponent(sourceName)}/duplicate`,
+      { new_name: newName },
+    ),
 };
+
+/// `fullstack-a-79`: wire shape for `Drive::create_team` /
+/// `Drive::duplicate_team`. snake_case to match chan-drive's
+/// serde-default field naming. The SPA translates its own
+/// camelCase `TeamDialogConfig` into this on submit.
+export interface TeamMemberWire {
+  handle: string;
+  command: string;
+  env: Record<string, string>;
+  is_lead: boolean;
+  position?: { row: number; col: number };
+}
+
+export interface TeamConfigWire {
+  team_name: string;
+  host_name: string;
+  host_handle: string;
+  auto_prefix_at: boolean;
+  created_at: string;
+  members: TeamMemberWire[];
+}
+
+export interface TeamRefView {
+  name: string;
+  abs: string;
+}
+
+export interface TeamLoadResponse {
+  team_name: string;
+  events_dir: string;
+}
 
 /// Encode a path as a sequence of percent-encoded segments. We keep `/`
 /// raw so axum's `*path` capture works.
