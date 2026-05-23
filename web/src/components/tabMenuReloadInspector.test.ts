@@ -40,30 +40,33 @@ describe("fullstack-b-26: file-editor tab right-click — Reload + Open Inspecto
   });
 });
 
-describe("fullstack-b-26: terminal-tab right-click — Reload + Open Inspector", () => {
-  test("menu source ships a Reload entry wired to reloadWindow", () => {
-    expect(terminalSource).toMatch(/<span class="mbtn-label">Reload<\/span>/);
-    expect(terminalSource).toMatch(/onclick=\{doReloadWindow\}/);
-    expect(terminalSource).toMatch(/await reloadWindow\(\)/);
+// `fullstack-a-67d`: addendum-a's verbatim Terminal menu spec
+// drops the `-b-26` Reload + Open Inspector tail entries. These
+// pins flip from REQUIRE to FORBID so a regression that
+// re-adds them gets caught. Cmd+R and the pane hamburger
+// still surface window-level reload + devtools.
+describe("fullstack-a-67d: terminal-tab right-click — Reload + Open Inspector dropped", () => {
+  test("no Reload entry in the terminal menu", () => {
+    expect(terminalSource).not.toMatch(
+      /<span class="mbtn-label">Reload<\/span>/,
+    );
+    expect(terminalSource).not.toMatch(/onclick=\{doReloadWindow\}/);
   });
 
-  test("menu source ships an Open Inspector entry wired to openWebInspector", () => {
-    expect(terminalSource).toMatch(
+  test("no Open Inspector entry in the terminal menu", () => {
+    expect(terminalSource).not.toMatch(
       /<span class="mbtn-label">Open Inspector<\/span>/,
     );
-    expect(terminalSource).toMatch(/onclick=\{doOpenInspector\}/);
-    expect(terminalSource).toMatch(/await openWebInspector\(\)/);
+    expect(terminalSource).not.toMatch(/onclick=\{doOpenInspector\}/);
   });
 
-  test("desktop helpers imported from the api/desktop seam", () => {
-    expect(terminalSource).toMatch(/from "\.\.\/api\/desktop"/);
-    expect(terminalSource).toMatch(/reloadWindow,/);
-    expect(terminalSource).toMatch(/openWebInspector,/);
-    expect(terminalSource).toMatch(/isTauriDesktop,/);
+  test("desktop helpers no longer imported", () => {
+    expect(terminalSource).not.toMatch(/from "\.\.\/api\/desktop"/);
   });
 
-  test("web-mode inspector fallback toasts a notify() hint", () => {
-    expect(terminalSource).toMatch(/notify\(/);
-    expect(terminalSource).toMatch(/Use the browser's built-in inspector/);
+  test("inspector-fallback notify() hint gone too", () => {
+    expect(terminalSource).not.toMatch(
+      /Use the browser's built-in inspector/,
+    );
   });
 });

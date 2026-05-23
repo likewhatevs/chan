@@ -184,8 +184,14 @@ describe("TerminalTab activity frames", () => {
 
 describe("TerminalTab menu", () => {
   test(
-    "kebab menu no longer renders a New Terminal entry",
+    "kebab menu renders the From-$CWD spawn band including New Terminal",
     async () => {
+      // `fullstack-a-67d`: addendum-a's Terminal spec re-introduces
+      // a "From $CWD" section containing New File / New Terminal /
+      // New File Browser / New Graph. Earlier `-a-32` had pruned
+      // "New Terminal" from this menu when the empty-pane carousel
+      // owned the spawn surface; the addendum brings it back as a
+      // CWD-rooted affordance.
       const tab = terminalTab({ terminalSessionId: "term-session-1" });
       const { target } = await renderTerminal(tab, true);
 
@@ -198,9 +204,13 @@ describe("TerminalTab menu", () => {
       );
       // Sanity check: the menu actually rendered.
       expect(labels.length).toBeGreaterThan(0);
-      expect(labels).not.toContain("New Terminal");
-      // Restart is the canonical neighbour; keep it covered so a future
-      // refactor that drops both rows together is loud.
+      // From-$CWD band — full set.
+      expect(labels).toContain("New File");
+      expect(labels).toContain("New Terminal");
+      expect(labels).toContain("New File Browser");
+      expect(labels).toContain("New Graph");
+      // Restart is the canonical destructive neighbour; addendum
+      // moves it up next to MCP env.
       expect(labels).toContain("Restart");
     },
     15000,

@@ -549,3 +549,145 @@ Per the memory rule. Per-path staging only.
 Push held. Standing by for clearance + the
 @@Alex review on the keep-FB-in-Hybrid
 decision.
+
+## 2026-05-23 — slice -a-67d (Terminal right-click menu revamp)
+
+SPA-only. Substantial reshape of the TerminalTab
+right-click menu per addendum-a's verbatim
+spec.
+
+### Shape applied
+
+* Status row: " - " → ": " (colon, not em dash).
+* MCP env vars + Restart pulled up above the
+  find/copy band (header neighbourhood).
+* Find / Copy / Paste / Copy path to $CWD /
+  Copy Scrollback consolidated in one band.
+* New "From $CWD" section with label + four
+  spawn entries (New File / New Terminal /
+  New File Browser / New Graph). Chord hints
+  surfaced via `chordFor()` lookups.
+* Broadcast section structure kept as-is
+  (deferred: Terminals expander dropdown +
+  Jitter slider — see scope-poke below).
+* New foot block: Settings (flipHybrid) +
+  Reopen Closed Tab + Close. Replaces the
+  prior Reload Window / Open Inspector tail
+  entries that addendum-a's spec drops.
+
+### Files touched
+
+* `web/src/components/TerminalTab.svelte`
+  * Imports: added `Folder` / `Settings2` /
+    `Terminal as TerminalIcon` / `X` from
+    lucide; dropped `Bug` / `FolderOpen` /
+    `RefreshCw`.
+  * Imports: added `flipHybrid` from
+    `../state/tabs.svelte`.
+  * Imports: dropped `isTauriDesktop`,
+    `openWebInspector`, `reloadWindow` from
+    `../api/desktop` + `notify` from
+    `../state/notify.svelte` (only consumers
+    were the dropped Reload + Inspector
+    handlers).
+  * Helpers added: `dispatchChanCommand` +
+    `openNewTerminal` / `openNewFileBrowser` /
+    `openNewGraph` (each closes the menu +
+    fires the canonical `chan:command` event
+    so the chord-routing layer + the empty-
+    pane carousel + this menu all converge on
+    one handler). `flipToSettings` calls
+    `flipHybrid(paneId)`. `closeFromMenu`
+    calls `closeTab(paneId, tab.id)`.
+  * Helpers removed: `doReloadWindow`,
+    `doOpenInspector` (and the inline notify
+    fallback message).
+  * Markup: full `action-list` reshape as
+    described above. Status row em-dash → colon.
+  * CSS: added `.mbtn.destructive`
+    (Restart red color via `--danger-text`)
+    + `.from-cwd-label` (subdued section
+    label per addendum-a's "from-CWD" font).
+
+### Tests
+
+* New file `web/src/components/terminalRightClickRevamp.test.ts`
+  — 15 architectural pins covering the colon
+  switch, the From-$CWD band (label + helpers +
+  buttons + dispatchChanCommand), the
+  MCP/Restart-above-find/copy ordering,
+  Settings (flipHybrid) + Reopen + Close foot
+  block, and the `flipHybrid` import.
+* `web/src/components/tabMenuReloadInspector.test.ts`:
+  flipped the terminal-side block from REQUIRE
+  to FORBID for Reload + Open Inspector + the
+  desktop helper imports + the inspector
+  notify hint. (FileEditor block unchanged —
+  pending `-a-67f`.)
+* `web/src/components/menuTrims.test.ts`: the
+  `-80` Terminal block updated. Search drop
+  preserved; `openSettingsFromMenu` (the
+  global-Settings overlay opener) drop
+  preserved; NEW assertion that
+  `flipToSettings` (per-tab back-side flip,
+  semantically distinct) IS present.
+* `web/src/components/TerminalTab.test.ts`:
+  the "no New Terminal entry" test flipped
+  to "From-$CWD band renders New File / New
+  Terminal / New File Browser / New Graph"
+  (with cite to addendum-a + the historical
+  `-a-32` reasoning).
+
+### Deferred / scope-poke
+
+* **MCP env info-button → modal dialog**:
+  addendum-a wants the info button to open a
+  dialog "like the New File one" with the
+  explanation + a CTA "Show MCP env in
+  terminal". Slice 1 keeps the current toggle
+  popover; slice 2 converts to modal. SPA-only
+  (no backend dep). Tracked as
+  `-a-67d` slice 2.
+* **Terminals expander dropdown + Jitter
+  slider**: addendum-a wants the per-target
+  broadcast list wrapped behind a "Terminals"
+  expander, with a Jitter input (0-5s) at
+  the top of the dropdown that randomly
+  delays broadcast input. Jitter has a
+  chan-server gap: the broadcast logic
+  applies inputs immediately today. Persist
+  the per-drive Jitter value via the
+  preferences endpoint + apply random
+  `[0, jitter]` delay in `broadcastTerminalInput`.
+  Scope-poked to architect as `-a-67d` slice 3
+  (backend gap).
+
+### Gate
+
+* `svelte-check` → 0/0.
+* `vitest` → **1140 passing** (+16 from
+  `-a-77c` baseline: 15 new pins + 1 rewritten
+  `TerminalTab.test` pin).
+* `npm run build` → clean.
+* `cargo fmt --check` + `clippy --all-targets
+  -- -D warnings` → clean (no Rust delta).
+
+### Suggested commit subject
+
+```
+Terminal: right-click menu revamp per addendum-a spec (fullstack-a-67 slice d)
+```
+
+### Files (per-path)
+
+* `web/src/components/TerminalTab.svelte`
+* `web/src/components/terminalRightClickRevamp.test.ts` (new)
+* `web/src/components/tabMenuReloadInspector.test.ts`
+* `web/src/components/menuTrims.test.ts`
+* `web/src/components/TerminalTab.test.ts`
+* `docs/journals/phase-8/fullstack-a/fullstack-a-67.md`
+
+Autonomous-commit mode. No clearance held.
+Next: -a-67e (File Browser) + -a-67f (Editor),
+plus the -a-67d slice-2 (MCP modal) + slice-3
+(Jitter backend scope-poke).

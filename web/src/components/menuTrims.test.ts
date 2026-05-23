@@ -13,15 +13,29 @@ import graph from "./GraphPanel.svelte?raw";
 // redundant once clicking a row auto-opens the inspector in tab +
 // overlay variants (the variants where the inspector is visible).
 
-describe("fullstack-80: TerminalTab right-click drops Search + Settings", () => {
-  test("no Search menu entry", () => {
+describe("fullstack-80 + fullstack-a-67d: TerminalTab right-click — Search still gone; Settings comes back as flip", () => {
+  test("no Search menu entry (Cmd+K f is the global surface)", () => {
     expect(terminal).not.toContain('onclick={openSearch}');
     expect(terminal).not.toMatch(/<span class="mbtn-label">Search<\/span>/);
   });
 
-  test("no Settings menu entry", () => {
+  test("no openSettingsFromMenu entry (the global Settings overlay opener)", () => {
+    // `-80` dropped duplicating the global Settings chord
+    // (Cmd+,) in per-tab menus. That rule stands — no
+    // `openSettingsFromMenu` style handler in the source.
     expect(terminal).not.toContain("onclick={openSettingsFromMenu}");
-    expect(terminal).not.toMatch(/<span class="mbtn-label">Settings<\/span>/);
+  });
+
+  test("Settings (flip) entry is present and routes to flipToSettings", () => {
+    // `fullstack-a-67d`: addendum-a re-adds a Settings entry
+    // that flips the tab to its back-side config view
+    // (HybridTerminalConfig). Semantically distinct from the
+    // global Settings overlay — this is a per-tab flip, not a
+    // global shortcut duplicate. The `-80` rule is preserved
+    // (no global-Settings duplicate); the new entry uses a
+    // different handler.
+    expect(terminal).toContain("onclick={flipToSettings}");
+    expect(terminal).toMatch(/<span class="mbtn-label">Settings<\/span>/);
   });
 
   test("Find row stays (unrelated; lives behind a different chord)", () => {

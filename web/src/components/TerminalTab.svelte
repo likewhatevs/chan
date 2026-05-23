@@ -1,20 +1,21 @@
 <script lang="ts">
   import { tick } from "svelte";
   import {
-    Bug,
     Check,
     Clipboard,
     ClipboardPaste,
     FilePlus,
-    FolderOpen,
+    Folder,
     History,
     Info,
     Network,
     Pencil,
     Radio,
-    RefreshCw,
     RotateCcw,
     Search,
+    Settings2,
+    Terminal as TerminalIcon,
+    X,
   } from "lucide-svelte";
   import { Terminal } from "@xterm/xterm";
   import { FitAddon } from "@xterm/addon-fit";
@@ -33,6 +34,7 @@
     canReopenClosedTab,
     closeTab,
     clearTerminalSession,
+    flipHybrid,
     dismissTerminalEnvNamePrompt,
     layout,
     markTerminalEnvNameRestarted,
@@ -78,12 +80,6 @@
     openTabMenu,
     tabMenu,
   } from "../state/tabMenu.svelte";
-  import {
-    isTauriDesktop,
-    openWebInspector,
-    reloadWindow,
-  } from "../api/desktop";
-  import { notify } from "../state/notify.svelte";
   import BubbleOverlay from "./BubbleOverlay.svelte";
   import TerminalRichPrompt from "./TerminalRichPrompt.svelte";
   import { readWatcherEvents } from "../state/watcherEvents";
@@ -796,28 +792,11 @@
     term?.focus();
   }
 
-  /// `fullstack-b-26`: tab right-click "Reload" entry. Reuses the
-  /// existing `reload_window` IPC plumbed by `-b-17`. Window-level
-  /// reload — distinct from terminal "Restart" above which spawns
-  /// a fresh shell in the same tab.
-  async function doReloadWindow(): Promise<void> {
-    closeTabMenu();
-    await reloadWindow();
-  }
-
-  /// `fullstack-b-26`: tab right-click "Open Inspector" entry.
-  /// Invokes the `open_devtools` IPC on chan-desktop; on web the
-  /// helper returns false and we toast a hint pointing the user
-  /// at the browser's built-in inspector.
-  async function doOpenInspector(): Promise<void> {
-    closeTabMenu();
-    if (await openWebInspector()) return;
-    notify(
-      isTauriDesktop()
-        ? "Inspector unavailable in this build"
-        : "Use the browser's built-in inspector (Right-click → Inspect Element)",
-    );
-  }
+  /// `fullstack-a-67d`: dropped `doReloadWindow` + `doOpenInspector`
+  /// helpers. The Terminal right-click menu no longer carries the
+  /// `-b-26` Reload / Open Inspector tail entries per addendum-a's
+  /// verbatim spec; Cmd+R + the pane hamburger remain the canonical
+  /// surfaces for window-level reload + devtools.
 
   async function pasteClipboard(): Promise<void> {
     closeTabMenu();
@@ -837,6 +816,51 @@
     if (cwd === null) return terminalCwdUnavailable();
     closeTabMenu();
     void fileOps.createFile(cwd);
+  }
+
+  /// `fullstack-a-67d`: From-$CWD spawn entries on the terminal
+  /// right-click menu. Each routes through the same
+  /// `chan:command` event the keymap layer uses, so the menu
+  /// click + the chord both arrive at `runCommand` in
+  /// App.svelte. Toggle commands open the surface in a fresh
+  /// pane / tab; the originating terminal's $CWD context isn't
+  /// passed through (terminal spawn already inherits the
+  /// terminal's CWD via the broker, but the FB / Graph toggles
+  /// open at the drive root — accepted deviation, matches the
+  /// existing empty-pane spawn-grid behavior).
+  function dispatchChanCommand(id: string): void {
+    window.dispatchEvent(
+      new CustomEvent("chan:command", { detail: { name: id } }),
+    );
+  }
+  function openNewTerminal(): void {
+    closeTabMenu();
+    dispatchChanCommand("app.terminal.toggle");
+  }
+  function openNewFileBrowser(): void {
+    closeTabMenu();
+    dispatchChanCommand("app.files.toggle");
+  }
+  function openNewGraph(): void {
+    closeTabMenu();
+    dispatchChanCommand("app.graph.toggle");
+  }
+
+  /// `fullstack-a-67d`: Settings (toggle) → flip to the hybrid
+  /// back-side config view (HybridTerminalConfig). Mirrors the
+  /// pane hamburger's Flip entry.
+  function flipToSettings(): void {
+    closeTabMenu();
+    flipHybrid(paneId);
+  }
+
+  /// `fullstack-a-67d`: Close — explicit menu entry per the
+  /// addendum spec. `force: true` matches the chord path
+  /// (`closeExitedTabFromKey`); the dirty-prompt path lives on
+  /// the file editor, not here.
+  function closeFromMenu(): void {
+    closeTabMenu();
+    void closeTab(paneId, tab.id);
   }
 
   function doReopenClosedTab(): void {
@@ -1248,9 +1272,12 @@
           }}
         />
       </label>
+      <div class="msep" role="separator"></div>
+      <!-- `fullstack-a-67d`: status reads "connected: <detail>"
+           per addendum-a (colon, not em dash). -->
       <div class="terminal-status-row">
         <span class:connected={status === "connected"} class="terminal-status">
-          {status}{statusDetail ? ` - ${statusDetail}` : ""}
+          {status}{statusDetail ? `: ${statusDetail}` : ""}
         </span>
         {#if missedBytes > 0}
           <span class="session-note">missed {missedBytes} bytes</span>
@@ -1266,6 +1293,18 @@
           <button type="button" onclick={() => dismissTerminalEnvNamePrompt(tab)}>Later</button>
         </div>
       {/if}
+      <!-- `fullstack-a-67d`: menu reshape per addendum-a Terminal
+           spec. Header (Name → SEP → status colon → MCP-env +
+           Restart) lands ahead of the find/copy band; the new
+           "From $CWD" section gathers New File / New Terminal /
+           New File Browser / New Graph; the broadcast section
+           keeps its slice-1 shape (Terminals dropdown + Jitter
+           is deferred to a follow-up — backend gap on Jitter
+           persistence); Settings (flipHybrid) + Reopen + Close
+           anchor the foot. `Reload Window` and `Open Inspector`
+           tail entries (originally added by `-b-26`) dropped per
+           the addendum's verbatim spec; Cmd+R and the pane
+           hamburger still surface them. -->
       <div class="action-list">
         {#if sessionClosedReason}
           <button class="mbtn" onclick={() => void restart()}>
@@ -1276,79 +1315,6 @@
             <span class="mbtn-chord"></span>
           </button>
         {/if}
-        <button class="mbtn" onclick={copySelectionOrScrollback}>
-          <span class="mbtn-icon">
-            <Clipboard size={16} strokeWidth={1.75} aria-hidden="true" />
-          </span>
-          <span class="mbtn-label">Copy</span>
-          <span class="mbtn-chord"></span>
-        </button>
-        <button class="mbtn" onclick={pasteClipboard}>
-          <span class="mbtn-icon">
-            <ClipboardPaste size={16} strokeWidth={1.75} aria-hidden="true" />
-          </span>
-          <span class="mbtn-label">Paste</span>
-          <span class="mbtn-chord"></span>
-        </button>
-        <!-- `fullstack-50`: dropped the "Rich prompt" hamburger
-             entry; Cmd+K p is the canonical entry, the rich prompt's
-             own `×` button is the exit. `fullstack-a-90` removed
-             the legacy Alt+Space alias; Cmd+P (native) / Cmd+Alt+P
-             (web Mac) / `Mod+. p` (Hybrid Nav) are the entry
-             points. -->
-        <button class="mbtn" onclick={copyTerminalCwd}>
-          <span class="mbtn-icon">
-            <Clipboard size={16} strokeWidth={1.75} aria-hidden="true" />
-          </span>
-          <span class="mbtn-label">Copy path to CWD</span>
-          <span class="mbtn-chord"></span>
-        </button>
-        <!-- `fullstack-42`: dropped "Show Dir" and "Graph dir";
-             Pane Mode + context-aware spawn (`fullstack-43`) covers
-             both via Cmd+K 2 and Cmd+K 3, with the terminal's CWD
-             as the context. -->
-
-        <div class="msep" role="separator"></div>
-        <button class="mbtn" onclick={openFind}>
-          <span class="mbtn-icon">
-            <Search size={16} strokeWidth={1.75} aria-hidden="true" />
-          </span>
-          <span class="mbtn-label">Find</span>
-          <span class="mbtn-chord">{chordFor("app.find.open") ?? ""}</span>
-        </button>
-        <button class="mbtn" onclick={copyScrollback}>
-          <span class="mbtn-icon">
-            <Clipboard size={16} strokeWidth={1.75} aria-hidden="true" />
-          </span>
-          <span class="mbtn-label">Copy Scrollback</span>
-          <span class="mbtn-chord"></span>
-        </button>
-        <button class="mbtn" onclick={() => void restart()}>
-          <span class="mbtn-icon">
-            <RotateCcw size={16} strokeWidth={1.75} aria-hidden="true" />
-          </span>
-          <span class="mbtn-label">Restart</span>
-          <span class="mbtn-chord"></span>
-        </button>
-        <button class="mbtn" onclick={openNewFile}>
-          <span class="mbtn-icon">
-            <FilePlus size={16} strokeWidth={1.75} aria-hidden="true" />
-          </span>
-          <span class="mbtn-label">New File</span>
-          <span class="mbtn-chord">{chordFor("app.file.new") ?? ""}</span>
-        </button>
-        <button
-          class="mbtn"
-          disabled={!canReopenClosedTab()}
-          onclick={doReopenClosedTab}
-        >
-          <span class="mbtn-icon">
-            <History size={16} strokeWidth={1.75} aria-hidden="true" />
-          </span>
-          <span class="mbtn-label">Reopen Closed Tab</span>
-          <span class="mbtn-chord">{chordFor("app.tab.reopenClosed") ?? ""}</span>
-        </button>
-        <div class="msep" role="separator"></div>
         <div class="mcp-env-row">
           <button class="mbtn" class:on={mcpEnvOn} onclick={toggleMcpEnv}>
             <span class="mbtn-icon">
@@ -1380,14 +1346,98 @@
           <span class="mbtn-icon"></span>
           <span class="mbtn-label">Show MCP env in terminal</span>
         </button>
+        <button class="mbtn destructive" onclick={() => void restart()}>
+          <span class="mbtn-icon">
+            <RotateCcw size={16} strokeWidth={1.75} aria-hidden="true" />
+          </span>
+          <span class="mbtn-label">Restart</span>
+          <span class="mbtn-chord"></span>
+        </button>
         <div class="msep" role="separator"></div>
-        <!-- `fullstack-a-31`: per-tab broadcast selector. Drops the
-             umbrella "Broadcast Input On/Off" rocker — the per-row
-             checkboxes are the only controls. Self appears at the
-             top of the list with a "self" marker; checking self
-             enrolls this tab in the broadcast group. The container
-             label below names the surface so the menu reads
-             "broadcast input on/off" as @@Alex spelled it. -->
+        <button class="mbtn" onclick={openFind}>
+          <span class="mbtn-icon">
+            <Search size={16} strokeWidth={1.75} aria-hidden="true" />
+          </span>
+          <span class="mbtn-label">Find</span>
+          <span class="mbtn-chord">{chordFor("app.find.open") ?? ""}</span>
+        </button>
+        <button class="mbtn" onclick={copySelectionOrScrollback}>
+          <span class="mbtn-icon">
+            <Clipboard size={16} strokeWidth={1.75} aria-hidden="true" />
+          </span>
+          <span class="mbtn-label">Copy</span>
+          <span class="mbtn-chord"></span>
+        </button>
+        <button class="mbtn" onclick={pasteClipboard}>
+          <span class="mbtn-icon">
+            <ClipboardPaste size={16} strokeWidth={1.75} aria-hidden="true" />
+          </span>
+          <span class="mbtn-label">Paste</span>
+          <span class="mbtn-chord"></span>
+        </button>
+        <button class="mbtn" onclick={copyTerminalCwd}>
+          <span class="mbtn-icon">
+            <Clipboard size={16} strokeWidth={1.75} aria-hidden="true" />
+          </span>
+          <span class="mbtn-label">Copy path to $CWD</span>
+          <span class="mbtn-chord"></span>
+        </button>
+        <button class="mbtn" onclick={copyScrollback}>
+          <span class="mbtn-icon">
+            <Clipboard size={16} strokeWidth={1.75} aria-hidden="true" />
+          </span>
+          <span class="mbtn-label">Copy Scrollback</span>
+          <span class="mbtn-chord"></span>
+        </button>
+        <div class="msep" role="separator"></div>
+        <!-- `fullstack-a-67d`: "From $CWD" spawn band. New File
+             uses the existing `openNewFile` which seeds the
+             dialog with `$CWD/untitled.md`. New Terminal / FB /
+             Graph fire the same `chan:command` events the
+             chord-routing layer + the empty-pane carousel use,
+             so handlers stay singular. -->
+        <div class="from-cwd-label">From $CWD</div>
+        <button class="mbtn" onclick={openNewFile}>
+          <span class="mbtn-icon">
+            <FilePlus size={16} strokeWidth={1.75} aria-hidden="true" />
+          </span>
+          <span class="mbtn-label">New File</span>
+          <span class="mbtn-chord">{chordFor("app.file.new") ?? ""}</span>
+        </button>
+        <button class="mbtn" onclick={openNewTerminal}>
+          <span class="mbtn-icon">
+            <TerminalIcon size={16} strokeWidth={1.75} aria-hidden="true" />
+          </span>
+          <span class="mbtn-label">New Terminal</span>
+          <span class="mbtn-chord">{chordFor("app.terminal.toggle") ?? ""}</span>
+        </button>
+        <button class="mbtn" onclick={openNewFileBrowser}>
+          <span class="mbtn-icon">
+            <Folder size={16} strokeWidth={1.75} aria-hidden="true" />
+          </span>
+          <span class="mbtn-label">New File Browser</span>
+          <span class="mbtn-chord">{chordFor("app.files.toggle") ?? ""}</span>
+        </button>
+        <button class="mbtn" onclick={openNewGraph}>
+          <span class="mbtn-icon">
+            <Network size={16} strokeWidth={1.75} aria-hidden="true" />
+          </span>
+          <span class="mbtn-label">New Graph</span>
+          <span class="mbtn-chord">{chordFor("app.graph.toggle") ?? ""}</span>
+        </button>
+        <div class="msep" role="separator"></div>
+        <!-- `fullstack-a-31`: per-tab broadcast selector. Drops
+             the umbrella "Broadcast Input On/Off" rocker — the
+             per-row checkboxes are the only controls. Self
+             appears at the top of the list with a "self"
+             marker.
+             `fullstack-a-67d`: addendum-a calls for wrapping
+             the per-target list inside a "Terminals" expander
+             dropdown with a Jitter slider at the top of the
+             dropdown. The Jitter persistence + broadcast-delay
+             logic is a chan-server gap; scope-poked as a
+             follow-up. Section UI kept as-is until the backend
+             lands. -->
         <div class="broadcast-section-label">
           <span class="mbtn-icon">
             <Radio size={16} strokeWidth={1.75} aria-hidden="true" />
@@ -1432,24 +1482,32 @@
             </span>
           </label>
         {/each}
-        <!-- `fullstack-b-26`: window-level Reload + Open Inspector
-             at the tail of the terminal-tab right-click menu.
-             Reuses `reload_window` + `open_devtools` IPCs that
-             `-b-17` + `-a-36` already plumbed. -->
         <div class="msep" role="separator"></div>
-        <button class="mbtn" onclick={doReloadWindow}>
+        <button class="mbtn" onclick={flipToSettings}>
           <span class="mbtn-icon">
-            <RefreshCw size={16} strokeWidth={1.75} aria-hidden="true" />
+            <Settings2 size={16} strokeWidth={1.75} aria-hidden="true" />
           </span>
-          <span class="mbtn-label">Reload</span>
+          <span class="mbtn-label">Settings</span>
           <span class="mbtn-chord"></span>
         </button>
-        <button class="mbtn" onclick={doOpenInspector}>
+        <div class="msep" role="separator"></div>
+        <button
+          class="mbtn"
+          disabled={!canReopenClosedTab()}
+          onclick={doReopenClosedTab}
+        >
           <span class="mbtn-icon">
-            <Bug size={16} strokeWidth={1.75} aria-hidden="true" />
+            <History size={16} strokeWidth={1.75} aria-hidden="true" />
           </span>
-          <span class="mbtn-label">Open Inspector</span>
-          <span class="mbtn-chord"></span>
+          <span class="mbtn-label">Reopen Closed Tab</span>
+          <span class="mbtn-chord">{chordFor("app.tab.reopenClosed") ?? ""}</span>
+        </button>
+        <button class="mbtn" onclick={closeFromMenu}>
+          <span class="mbtn-icon">
+            <X size={16} strokeWidth={1.75} aria-hidden="true" />
+          </span>
+          <span class="mbtn-label">Close</span>
+          <span class="mbtn-chord">{chordFor("app.tab.close") ?? ""}</span>
         </button>
       </div>
     </div>
@@ -1711,6 +1769,22 @@
   }
   .mbtn:disabled:hover {
     background: none;
+  }
+  /* `fullstack-a-67d`: destructive hint for Restart per
+     addendum-a spec. Color-only; no background change so the
+     hover affordance still reads. */
+  .mbtn.destructive {
+    color: var(--danger-text, #d33);
+  }
+  /* `fullstack-a-67d`: "From $CWD" section label. Subdued
+     style matching the .terminal-status row's secondary
+     text — telegraphs section grouping, not actionable. */
+  .from-cwd-label {
+    padding: 4px 8px 2px;
+    color: var(--text-secondary);
+    font-size: 11px;
+    text-transform: lowercase;
+    letter-spacing: 0.02em;
   }
   .mbtn-icon {
     width: 18px;
