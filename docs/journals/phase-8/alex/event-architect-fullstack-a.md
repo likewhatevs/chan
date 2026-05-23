@@ -5959,3 +5959,48 @@ Standing by.
 * Safety guardrail still in effect: do NOT touch @@Alex's running chan.app session.
 
 Standing by.
+
+## 2026-05-23 — poke (fullstack-a-98 + -99: close addendum-a menu gaps + ship screensaver themes; v0.13.0 blockers per @@Alex)
+
+@@Alex audit-flagged two real scope gaps in `-a-67` umbrella + `-a-77` umbrella:
+
+1. **Graph hamburger missing items**: `-a-67` section 4 spec'd Settings (toggle) + Reopen last / Close; neither shipped. Umbrella closed (`4a70d28`) regardless. Plus the deferred `-a-67c` (Hybrid pane hamburger revamp removing Light mode + Flip pane) is still pending.
+2. **Screensaver themes missing entirely**: `phase-7/next-phase-backlog.md:321-339` specified Matrix rain (default) + Castaway (alternate) + theme picker. The dispatched `-a-77` task body dropped that spec; only PIN infrastructure shipped. The screensaver feature is visually empty.
+
+@@Alex picked **option 1** (block v0.13.0 on closing both gaps + ship complete).
+
+### Dispatch 1: [`fullstack-a-98`](../fullstack-a/fullstack-a-98.md)
+
+Per-surface audit against `-a-67` task body across all 5 menus + fix the Graph hamburger + pick up `-a-67c` (Hybrid pane revamp). Time-boxed, ONE pass.
+
+### Dispatch 2: [`fullstack-a-99`](../fullstack-a/fullstack-a-99.md)
+
+Matrix rain (canvas, ~200 LOC TS, negligible binary delta) + **mid-fidelity Castaway** (pixel-art scene + character + 5-10 animation states, sprite-sheet under 400 KB) + Settings theme picker (Matrix default | Castaway).
+
+Binary-size budget: mid-fidelity Castaway only; not the faithful Windows-3.1 recreation. @@Alex confirmed mid-fidelity target ("Mid-fidelity is the one, let's go" 2026-05-23) — keeps the binary delta in the ~200-400 KB band (~1-2% increase, less than a single bundled JS lib already shipping).
+
+### Priority + sequencing
+
+Both are **release-class for v0.13.0** (cut waits on these). Suggested order for your sessions:
+
+1. `-98` first (text-only menu work; faster wave).
+2. `-99` after (longer pole because of the Castaway sprite-sheet sourcing/drawing).
+
+But your call — if you want to source Castaway art early so it can land in parallel, fine.
+
+### Authorization
+
+* `-98`: SPA-only.
+* `-99`: SPA + chan-server schema extension for `theme: ScreensaverTheme` field (fold in or scope-poke @@Systacean for the chan-drive config-field addition — either works; small scope either way).
+* No `desktop/` edits — chan-desktop team's lane.
+
+### Lane state
+
+| Task | Status |
+|---|---|
+| `-97` (terminal glyph) | SHIPPED (`0ff232a`); awaiting @@WebtestA walk |
+| `-96` sub-passes 1/2/3 (polish) | Cleared, non-blocking |
+| `-98` (menu gaps) | NEW |
+| `-99` (screensaver themes) | NEW |
+
+Standing by.
