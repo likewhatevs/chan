@@ -336,7 +336,7 @@ mod tests {
         assert_eq!(status, StatusCode::OK);
         assert_eq!(body["enabled"], false);
         assert_eq!(body["timeout_secs"], 300);
-        assert_eq!(body["theme"], "matrix");
+        assert_eq!(body["theme"], "plain");
         assert_eq!(body["pin_set"], false);
     }
 
@@ -371,6 +371,39 @@ mod tests {
         assert_eq!(body["enabled"], true);
         assert_eq!(body["timeout_secs"], 120);
         assert_eq!(body["theme"], "castaway");
+    }
+
+    #[tokio::test]
+    async fn screensaver_patch_accepts_plain_theme_round_trip() {
+        let app = route_test_app();
+        let router = crate::router(app.state);
+        let (status, body) = request(
+            &router,
+            "PATCH",
+            "/api/screensaver/state",
+            Some(r#"{"theme":"plain"}"#),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["theme"], "plain");
+
+        let (status, body) = request(&router, "GET", "/api/screensaver/state", None).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["theme"], "plain");
+    }
+
+    #[tokio::test]
+    async fn screensaver_patch_rejects_invalid_theme() {
+        let app = route_test_app();
+        let router = crate::router(app.state);
+        let (status, _) = request(
+            &router,
+            "PATCH",
+            "/api/screensaver/state",
+            Some(r#"{"theme":"unknown"}"#),
+        )
+        .await;
+        assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
     }
 
     #[tokio::test]

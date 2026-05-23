@@ -41,12 +41,12 @@ describe("fullstack-a-77 slice 3: Mod+L chord", () => {
 });
 
 describe("fullstack-a-77 slice 3: Settings UI", () => {
-  test("Settings imports hashPin + the min/max bounds + pause helper", () => {
+  test("Settings imports hashPin + bounds + lock helpers", () => {
     expect(panel).toMatch(
       /import \{[\s\S]{1,400}hashPin,[\s\S]{1,200}SCREENSAVER_MAX_TIMEOUT_SECS,[\s\S]{1,80}SCREENSAVER_MIN_TIMEOUT_SECS,[\s\S]{1,40}\} from "\.\.\/state\/screensaver";/,
     );
     expect(panel).toMatch(
-      /import \{[\s\S]{1,200}loadScreensaverState,[\s\S]{1,80}pauseScreensaverTimer,[\s\S]{1,40}\} from "\.\.\/state\/screensaver\.svelte";/,
+      /import \{[\s\S]{1,200}loadScreensaverState,[\s\S]{1,80}lockNow,[\s\S]{1,80}pauseScreensaverTimer,[\s\S]{1,80}screensaver,[\s\S]{1,40}\} from "\.\.\/state\/screensaver\.svelte";/,
     );
   });
 
@@ -55,7 +55,7 @@ describe("fullstack-a-77 slice 3: Settings UI", () => {
       /let screensaverEnabled = \$state<boolean \| null>\(null\);/,
     );
     expect(panel).toMatch(/let screensaverTimeoutSecs = \$state<number>\(300\);/);
-    expect(panel).toMatch(/let screensaverTheme = \$state<ScreensaverTheme>\("matrix"\);/);
+    expect(panel).toMatch(/let screensaverTheme = \$state<ScreensaverTheme>\("plain"\);/);
     expect(panel).toMatch(/let screensaverPinSet = \$state\(false\);/);
     expect(panel).toMatch(/let screensaverBusy = \$state\(false\);/);
     expect(panel).toMatch(/let screensaverError = \$state<string \| null>\(null\);/);
@@ -64,19 +64,28 @@ describe("fullstack-a-77 slice 3: Settings UI", () => {
     );
   });
 
-  test("loadFeaturesState fetches screensaver state via api.screensaverState", () => {
+  test("loadScreenLockState fetches screensaver state via api.screensaverState", () => {
     expect(panel).toMatch(
       /const s = await api\.screensaverState\(\);[\s\S]{1,200}screensaverEnabled = s\.enabled;[\s\S]{1,200}screensaverTimeoutSecs = s\.timeout_secs;[\s\S]{1,200}screensaverTheme = s\.theme;[\s\S]{1,200}screensaverPinSet = s\.pin_set;/,
     );
   });
 
-  test("theme picker persists matrix/castaway through screensaverPatch", () => {
+  test("theme picker persists plain/matrix/castaway through screensaverPatch", () => {
     expect(panel).toMatch(/type ScreensaverTheme/);
     expect(panel).toMatch(
       /async function commitScreensaverTheme\(e: Event\): Promise<void> \{[\s\S]{1,700}api\.screensaverPatch\(\{ theme \}\);[\s\S]{1,300}await loadScreensaverState\(\);/,
     );
     expect(panel).toMatch(
-      /<select[\s\S]{1,300}bind:value=\{screensaverTheme\}[\s\S]{1,200}onchange=\{commitScreensaverTheme\}[\s\S]{1,300}<option value="matrix">Matrix<\/option>[\s\S]{1,120}<option value="castaway">Castaway<\/option>/,
+      /<select[\s\S]{1,300}bind:value=\{screensaverTheme\}[\s\S]{1,200}onchange=\{commitScreensaverTheme\}[\s\S]{1,300}<option value="plain">Plain<\/option>[\s\S]{1,120}<option value="matrix">Matrix<\/option>[\s\S]{1,120}<option value="castaway">Castaway<\/option>/,
+    );
+  });
+
+  test("Test button reloads state and locks immediately", () => {
+    expect(panel).toMatch(
+      /async function testScreenLock\(\): Promise<void> \{[\s\S]{1,400}await loadScreensaverState\(\);[\s\S]{1,200}if \(!screensaver\.loaded\) \{[\s\S]{1,200}screen lock state unavailable[\s\S]{1,200}lockNow\(\);/,
+    );
+    expect(panel).toMatch(
+      /<button type="button" onclick=\{testScreenLock\} disabled=\{screensaverBusy\}>[\s\S]{1,80}Test[\s\S]{1,80}<\/button>/,
     );
   });
 

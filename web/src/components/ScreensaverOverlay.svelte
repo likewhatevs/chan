@@ -122,7 +122,7 @@
   >
     {#if screensaver.theme === "castaway"}
       <Castaway />
-    {:else}
+    {:else if screensaver.theme === "matrix"}
       <MatrixRain />
     {/if}
     <div class="screensaver-card" class:shake>

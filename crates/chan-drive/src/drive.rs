@@ -2081,7 +2081,7 @@ impl Drive {
     }
 
     /// fullstack-a-99: read the persisted visual theme. Default
-    /// Matrix on drives that pre-date the field.
+    /// plain on drives that pre-date the field.
     pub fn screensaver_theme(&self) -> Result<ScreensaverTheme> {
         Ok(self.index()?.config().screensaver_theme)
     }
@@ -5685,7 +5685,7 @@ mod tests {
         // Defaults.
         assert!(!drive.screensaver_enabled().unwrap());
         assert_eq!(drive.screensaver_timeout_secs().unwrap(), 300);
-        assert_eq!(drive.screensaver_theme().unwrap(), ScreensaverTheme::Matrix);
+        assert_eq!(drive.screensaver_theme().unwrap(), ScreensaverTheme::Plain);
         assert!(drive.screensaver_pin_hash().unwrap().is_none());
 
         // Flip enabled.

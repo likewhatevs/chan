@@ -50,6 +50,7 @@ pub enum Chunking {
 #[serde(rename_all = "lowercase")]
 pub enum ScreensaverTheme {
     #[default]
+    Plain,
     Matrix,
     Castaway,
 }
@@ -121,8 +122,8 @@ pub struct IndexConfig {
     #[serde(default = "default_screensaver_timeout_secs")]
     pub screensaver_timeout_secs: u32,
     /// fullstack-a-99: visual theme for the screensaver overlay.
-    /// Default Matrix preserves the original task's default and keeps
-    /// pre-existing drives deterministic when the field is absent.
+    /// Default plain keeps the lock screen quiet unless the user opts
+    /// into an animated scene.
     #[serde(default)]
     pub screensaver_theme: ScreensaverTheme,
     /// systacean-40: per-drive PIN hash. `None` when no PIN is
@@ -191,7 +192,7 @@ impl Default for IndexConfig {
             reports_enabled: false,
             screensaver_enabled: false,
             screensaver_timeout_secs: default_screensaver_timeout_secs(),
-            screensaver_theme: ScreensaverTheme::Matrix,
+            screensaver_theme: ScreensaverTheme::Plain,
             screensaver_pin_hash: None,
         }
     }
@@ -341,6 +342,24 @@ mod tests {
         let legacy = load(tmp.path()).unwrap();
         assert!(!legacy.reports_enabled, "missing field defaults to false");
         assert!(!legacy.semantic_enabled, "missing field defaults to false");
+    }
+
+    #[test]
+    fn screensaver_theme_plain_round_trips_as_plain() {
+        let tmp = TempDir::new().unwrap();
+        let cfg = IndexConfig {
+            screensaver_theme: ScreensaverTheme::Plain,
+            ..IndexConfig::default()
+        };
+        save(tmp.path(), &cfg).unwrap();
+
+        let raw = std::fs::read_to_string(config_path(tmp.path())).unwrap();
+        assert!(
+            raw.contains("screensaver_theme = \"plain\""),
+            "theme should serialize as plain: {raw}"
+        );
+        let loaded = load(tmp.path()).unwrap();
+        assert_eq!(loaded.screensaver_theme, ScreensaverTheme::Plain);
     }
 
     #[test]

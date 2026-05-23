@@ -18,7 +18,9 @@
   } from "../state/screensaver";
   import {
     loadScreensaverState,
+    lockNow,
     pauseScreensaverTimer,
+    screensaver,
   } from "../state/screensaver.svelte";
   import type {
     BuildInfo,
@@ -248,7 +250,7 @@
   // visible.
   let screensaverEnabled = $state<boolean | null>(null);
   let screensaverTimeoutSecs = $state<number>(300);
-  let screensaverTheme = $state<ScreensaverTheme>("matrix");
+  let screensaverTheme = $state<ScreensaverTheme>("plain");
   let screensaverPinSet = $state(false);
   let screensaverBusy = $state(false);
   let screensaverError = $state<string | null>(null);
@@ -396,6 +398,17 @@
     }
   }
 
+  async function testScreenLock(): Promise<void> {
+    if (screensaverBusy) return;
+    screensaverError = null;
+    await loadScreensaverState();
+    if (!screensaver.loaded) {
+      screensaverError = "screen lock state unavailable";
+      return;
+    }
+    lockNow();
+  }
+
   /// `fullstack-a-77` slice 3: pause the screensaver
   /// inactivity timer while Settings is open so a long
   /// configuration session doesn't trigger the lock
@@ -528,6 +541,7 @@
                   onchange={commitScreensaverTheme}
                   disabled={screensaverBusy}
                 >
+                  <option value="plain">Plain</option>
                   <option value="matrix">Matrix</option>
                   <option value="castaway">Castaway</option>
                 </select>
@@ -546,6 +560,9 @@
               </label>
               <div class="screensaver-pin-controls">
                 {#if pinDialog === null}
+                  <button type="button" onclick={testScreenLock} disabled={screensaverBusy}>
+                    Test
+                  </button>
                   {#if screensaverPinSet}
                     <button type="button" onclick={openPinDialog} disabled={screensaverBusy}>
                       Change PIN
