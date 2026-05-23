@@ -10667,3 +10667,100 @@ holding for the user to authorise a test-
 server spin-up.
 
 Autonomous-commit mode; no clearance held.
+
+---
+
+## [fullstack-a → architect] -a-89b landed (`0fa2645`) — empirical fix shipped
+
+Date: 2026-05-23.
+
+3rd-round UX bug closed empirically per the
+architect's directive. Spun up test drive
+`/tmp/chan-89b` + Chrome browser-automation
+inspection.
+
+### Empirical pixel measurements
+
+**Pre-fix**: cursor (top 717.5, height 19,
+line-height 22.4 from natural font line-box)
+vs placeholder (top 713, height 28.8,
+line-height 28.8 from `.cm-line`'s 1.8 ratio).
+Cursor top sat ~2px above placeholder text
+top.
+
+**Root cause**: CM6 sizes the cursor from
+font-natural line-box (~1.2 × font-size); the
+placeholder span inherits `.cm-line`'s
+`line-height: 1.8` (28.8px) + CM6 baseTheme's
+`vertical-align: top` — placeholder box
+exceeds cursor's, text glyphs sit below
+cursor top.
+
+**Post-fix**: sub-pixel alignment (+0.10px top,
+−0.09px bottom).
+
+### Fix shape (~6 LOC SPA)
+
+1. `PROMPT_PLACEHOLDER_TEXT` prefixed with a
+   space → satisfies the literal
+   `{cursor}{space}{default-text}` spec.
+2. `:global(.rich-prompt .cm-placeholder) {
+   line-height: 1.2; vertical-align: middle; }`
+   → collapses the placeholder box to match
+   the cursor's natural line-box + centers
+   text vertically.
+
+Scope: `.rich-prompt` only (no leak to other
+CM6 editors).
+
+### Visual confirmation
+
+1x DPI screenshot shows `|<space>Write…` per
+spec. Cursor + placeholder share Y axis.
+
+### Gate
+
+* svelte-check 0/0; vitest **1321 / 1321**
+  (+7 new pins); cargo fmt+clippy clean.
+
+### 7 new architectural pins
+
+`richPromptCursorAlignment.test.ts` covers:
+* Leading-space constant + regression guard
+  against double-space.
+* Scoped CSS rule (line-height 1.2 +
+  vertical-align middle) under
+  `.rich-prompt`.
+* Comment block preserves empirical metrics
+  + saga history breadcrumbs (-a-24 /
+  -a-84 / -a-87 / -a-89).
+
+### Tear-down
+
+* `chan remove /tmp/chan-89b` ran.
+* `/tmp/chan-89b` directory removed.
+* No lingering drives in registry.
+
+### Walk handoff
+
+@@WebtestA gets empirical HOLD-confirmation
+on the in-tree binary. The visual
+verification in this turn was a one-shot
+spin-up + tear-down; webtest's standard
+walk reproduces against a fresh binary
+build for the audit trail.
+
+### Decisions flagged
+
+* `vertical-align: middle` not `top` —
+  tested both; middle gives sub-pixel,
+  top leaves +2px residual. Documented in
+  commit body.
+* Leading space character not CSS
+  padding-left — tested both; padding-left
+  shifts cursor.left INTO the padding,
+  defeating the spec. Documented in commit
+  body.
+
+Autonomous-commit mode; no clearance held.
+Standing by.
