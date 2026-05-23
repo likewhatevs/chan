@@ -145,11 +145,9 @@ describe("no inline close affordance on first-class surfaces", () => {
   test("GraphPanel renders a tab-menu-bubble with mbtn rows + vertical filter rows", () => {
     // `fullstack-68` introduced the bubble; `fullstack-75` aligned
     // it with the standard hamburger-menu row shape (`.mbtn`) and
-    // moved the filter chips to vertical rows. `fullstack-80`
-    // dropped the Show Details / Settings actions from the bubble
-    // (Cmd+, owns Settings; click-to-inspector covers the auto-open
-    // case for the FB analogue; Graph keeps the Depth slider +
-    // Reload + per-filter rows).
+    // moved the filter chips to vertical rows. `fullstack-a-98`
+    // keeps Depth + Reload + per-filter rows and adds the
+    // addendum-a footer rows.
     expect(graph).toMatch(/\{#if tab && tabMenuOpen\}[\s\S]*?class="tab-menu-bubble"/);
     expect(graph).toMatch(
       /class="tab-menu-bubble"[\s\S]*?class="mbtn depth-row"/,
@@ -162,12 +160,20 @@ describe("no inline close affordance on first-class surfaces", () => {
     expect(graph).not.toMatch(
       /class="tab-menu-bubble"[\s\S]*?<div class="bubble-filters">/,
     );
-    // `fullstack-80`: dropped from the bubble.
     expect(graph).not.toMatch(
       /class="tab-menu-bubble"[\s\S]*?onclick=\{toggleInspector\}/,
     );
     expect(graph).not.toMatch(
       /class="tab-menu-bubble"[\s\S]*?onclick=\{doOpenSettings\}/,
+    );
+    expect(graph).toMatch(
+      /class="tab-menu-bubble"[\s\S]*?onclick=\{flipToSettings\}[\s\S]*?<span class="mbtn-label">Settings<\/span>/,
+    );
+    expect(graph).toMatch(
+      /class="tab-menu-bubble"[\s\S]*?onclick=\{doReopenClosedTab\}[\s\S]*?<span class="mbtn-label">Reopen Closed Tab<\/span>/,
+    );
+    expect(graph).toMatch(
+      /class="tab-menu-bubble"[\s\S]*?onclick=\{closeFromMenu\}[\s\S]*?<span class="mbtn-label">Close<\/span>/,
     );
   });
 

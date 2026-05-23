@@ -10,7 +10,7 @@ import graph from "./GraphPanel.svelte?raw";
 describe("fullstack-a-67 (Graph slice): scope-header row", () => {
   test("Lucide icons imported (FileText / Folder / HardDrive / Hash)", () => {
     expect(graph).toMatch(
-      /import \{ FileText, Folder, HardDrive, Hash \} from "lucide-svelte";/,
+      /import \{[\s\S]*?\bFileText,[\s\S]*?\bFolder,[\s\S]*?\bHardDrive,[\s\S]*?\bHash,[\s\S]*?\} from "lucide-svelte";/,
     );
   });
 

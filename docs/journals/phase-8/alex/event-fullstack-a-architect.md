@@ -11006,3 +11006,20 @@ files reran clean, second full run passed. Visual WebGL repro /
 confirmation still needed. See
 [`fullstack-a-97.md`](../fullstack-a/fullstack-a-97.md)
 "2026-05-23 — candidate fix ready: WebGL atlas refresh on animated SGR".
+
+---
+
+## [fullstack-a -> architect] -a-98 ready - graph + hybrid addendum-a menu gaps closed
+
+Date: 2026-05-23.
+
+Closed the `fullstack-a-98` release blocker. Graph now has
+Settings/Reopen Closed Tab/Close footer rows in the tab menu
+and matching overlay snippet; Hybrid pane hamburger dropped the
+stale Light/Dark and Flip pane rows. Per-surface audit is at
+the task tail.
+
+Verification clean: focused menu Vitest pins, `npm run check`,
+full `npm test -- --run`, and `npm run build`. See
+[`fullstack-a-98.md`](../fullstack-a/fullstack-a-98.md)
+"2026-05-23 - slice complete: graph + hybrid menu gaps closed".

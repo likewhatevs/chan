@@ -23,7 +23,12 @@
     GraphViewNode,
     LanguageGraphResponse,
   } from "../api/types";
-  import { openInActivePane, type GraphTab } from "../state/tabs.svelte";
+  import {
+    canReopenClosedTab,
+    openInActivePane,
+    reopenClosedTab,
+    type GraphTab,
+  } from "../state/tabs.svelte";
   import {
     availableGraphScopes,
     graphReloadSignal,
@@ -39,7 +44,15 @@
   import HamburgerMenu from "./HamburgerMenu.svelte";
   import { clampMenu } from "./menuClamp";
   import { tabMenu, closeTabMenu } from "../state/tabMenu.svelte";
-  import { FileText, Folder, HardDrive, Hash } from "lucide-svelte";
+  import {
+    FileText,
+    Folder,
+    HardDrive,
+    Hash,
+    History,
+    Settings2,
+    X,
+  } from "lucide-svelte";
   import DriveInfoBody from "./DriveInfoBody.svelte";
   import Inspector from "./Inspector.svelte";
   import OverlayShell from "./OverlayShell.svelte";
@@ -53,9 +66,11 @@
   let {
     tab,
     onClose,
+    onFlip,
   }: {
     tab?: GraphTab;
     onClose?: () => void;
+    onFlip?: () => void;
   } = $props();
 
   const graphState = $derived(tab ?? graphOverlay);
@@ -296,8 +311,8 @@
   let menu: HamburgerMenu | undefined = $state();
   let menuOpen = $state(false);
   /// Bigger than the other overlays because the menu carries the
-  /// scope-conditional depth slider on top of toggle + reload.
-  const POPOVER_HEIGHT = 200;
+  /// scope-conditional depth slider, filters, and tab footer rows.
+  const POPOVER_HEIGHT = 340;
   const POPOVER_WIDTH = 260;
 
   /// `fullstack-68`: tab right-click bubble state. Open when the
@@ -382,6 +397,24 @@
       await loadDriveDepthProbe();
     }
     await load();
+  }
+
+  function flipToSettings(): void {
+    menu?.close();
+    closeTabMenu();
+    onFlip?.();
+  }
+
+  function doReopenClosedTab(): void {
+    menu?.close();
+    closeTabMenu();
+    reopenClosedTab();
+  }
+
+  function closeFromMenu(): void {
+    menu?.close();
+    closeTabMenu();
+    close();
   }
 
   async function loadDriveDepthProbe(): Promise<void> {
@@ -1543,6 +1576,33 @@
           </button>
         {/if}
       {/each}
+      <div class="msep" role="separator"></div>
+      <button class="mbtn" onclick={flipToSettings}>
+        <span class="mbtn-icon">
+          <Settings2 size={16} strokeWidth={1.75} aria-hidden="true" />
+        </span>
+        <span class="mbtn-label">Settings</span>
+        <span class="mbtn-chord"></span>
+      </button>
+      <div class="msep" role="separator"></div>
+      <button
+        class="mbtn"
+        disabled={!canReopenClosedTab()}
+        onclick={doReopenClosedTab}
+      >
+        <span class="mbtn-icon">
+          <History size={16} strokeWidth={1.75} aria-hidden="true" />
+        </span>
+        <span class="mbtn-label">Reopen Closed Tab</span>
+        <span class="mbtn-chord">{chordFor("app.tab.reopenClosed") ?? ""}</span>
+      </button>
+      <button class="mbtn" onclick={closeFromMenu}>
+        <span class="mbtn-icon">
+          <X size={16} strokeWidth={1.75} aria-hidden="true" />
+        </span>
+        <span class="mbtn-label">Close</span>
+        <span class="mbtn-chord">{chordFor("app.tab.close") ?? ""}</span>
+      </button>
     </div>
   {/if}
 
@@ -1805,6 +1865,33 @@
       <span class="glyph" aria-hidden="true">↻</span>
       <span class="menu-row-label">Reload</span>
       <span class="menu-row-chord"></span>
+    </button>
+  </li>
+  <li class="sep" role="separator"></li>
+  <li>
+    <button role="menuitem" onclick={flipToSettings} disabled={!onFlip}>
+      <Settings2 size={16} strokeWidth={1.75} aria-hidden="true" />
+      <span class="menu-row-label">Settings</span>
+      <span class="menu-row-chord"></span>
+    </button>
+  </li>
+  <li class="sep" role="separator"></li>
+  <li>
+    <button
+      role="menuitem"
+      disabled={!canReopenClosedTab()}
+      onclick={doReopenClosedTab}
+    >
+      <History size={16} strokeWidth={1.75} aria-hidden="true" />
+      <span class="menu-row-label">Reopen Closed Tab</span>
+      <span class="menu-row-chord">{chordFor("app.tab.reopenClosed") ?? ""}</span>
+    </button>
+  </li>
+  <li>
+    <button role="menuitem" onclick={closeFromMenu}>
+      <X size={16} strokeWidth={1.75} aria-hidden="true" />
+      <span class="menu-row-label">Close</span>
+      <span class="menu-row-chord">{chordFor("app.tab.close") ?? ""}</span>
     </button>
   </li>
 {/snippet}

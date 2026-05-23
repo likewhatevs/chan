@@ -34,6 +34,26 @@ describe("fullstack-a-67 slice 2: spawnActions includes New Draft first", () => 
   });
 });
 
+describe("fullstack-a-98: Hybrid hamburger removes stale theme/flip rows", () => {
+  test("old Light mode / Flip pane handlers and labels are gone", () => {
+    expect(pane).not.toContain("togglePaneTheme");
+    expect(pane).not.toContain("paneThemeTooltip");
+    expect(pane).not.toContain("paneEffectiveTheme");
+    expect(pane).not.toContain("Light mode");
+    expect(pane).not.toContain("Dark mode");
+    expect(pane).not.toContain("Flip pane");
+    expect(pane).not.toContain("FlipHorizontal2");
+    expect(pane).not.toContain("Moon");
+    expect(pane).not.toContain("Sun");
+  });
+
+  test("Settings remains the Hybrid pane footer action", () => {
+    expect(pane).toMatch(
+      /onclick=\{\(\) => dispatchCommand\("app\.settings\.toggle"\)\}[\s\S]*?<span class="menu-row-label">Settings<\/span>/,
+    );
+  });
+});
+
 describe("fullstack-a-67 slice 2: App.svelte runCommand routes app.draft.new", () => {
   test("runCommand switch dispatches `app.draft.new` to createDraftAndOpen", () => {
     expect(app).toMatch(

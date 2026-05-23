@@ -98,7 +98,7 @@ describe("fullstack-82: FB dock menu drops the Open overlay entry", () => {
   });
 });
 
-describe("fullstack-80: GraphPanel bubble drops Show/Hide Details + Settings", () => {
+describe("fullstack-80 + fullstack-a-98: GraphPanel drops inspector/global Settings and keeps flip footer", () => {
   test("bubble does not invoke toggleInspector", () => {
     expect(graph).not.toMatch(
       /class="tab-menu-bubble"[\s\S]*?onclick=\{toggleInspector\}/,
@@ -111,13 +111,16 @@ describe("fullstack-80: GraphPanel bubble drops Show/Hide Details + Settings", (
     );
   });
 
-  test("menuItems snippet also drops the Show Details + Settings rows", () => {
+  test("menuItems snippet also drops Show Details + global Settings rows", () => {
     expect(graph).not.toContain('onclick={toggleInspector}');
     expect(graph).not.toContain('onclick={doOpenSettings}');
   });
 
-  test("Depth slider + Reload stay (canonical bubble rows)", () => {
+  test("Depth slider + Reload + addendum-a footer stay", () => {
     expect(graph).toContain('class="mbtn depth-row"');
     expect(graph).toContain('onclick={reloadGraph}');
+    expect(graph).toContain('onclick={flipToSettings}');
+    expect(graph).toContain('onclick={doReopenClosedTab}');
+    expect(graph).toContain('onclick={closeFromMenu}');
   });
 });

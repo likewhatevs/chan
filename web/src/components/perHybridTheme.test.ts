@@ -11,24 +11,20 @@ describe("fullstack-59: per-Hybrid theme render wiring", () => {
     expect(pane).toContain("data-theme={pane.theme}");
   });
 
-  test("Pane hamburger renders the theme-toggle entry (fullstack-a-27 relocation)", () => {
-    // `fullstack-a-27` moved the theme toggle from a standalone
-    // `class="pane-theme-toggle"` button in the pane chrome into
-    // the hamburger menu (Hybrid panes only). The handler reference
-    // is the load-bearing pin — wherever the toggle lives, this
-    // string must appear so the function itself stays wired.
-    expect(pane).toContain("togglePaneTheme");
+  test("Pane hamburger no longer renders the old theme-toggle entry", () => {
+    // `fullstack-a-98`: addendum-a routes Settings through the
+    // pane footer; the stale Light/Dark hamburger row is gone.
+    expect(pane).not.toContain("togglePaneTheme");
+    expect(pane).not.toContain("paneThemeTooltip");
+    expect(pane).not.toContain("Light mode");
+    expect(pane).not.toContain("Dark mode");
   });
 
-  test("togglePaneTheme cycles between follow-global and the inverse override", () => {
-    // The toggle's contract is the only place the user can set
-    // `pane.theme` from the UI; if it stops calling
-    // `scheduleSessionSave` or stops cycling through `undefined`,
-    // the round-trip + UX both break.
-    expect(pane).toContain("function togglePaneTheme()");
-    expect(pane).toContain("pane.theme = ui.theme === \"dark\" ? \"light\" : \"dark\"");
-    expect(pane).toContain("pane.theme = undefined");
-    expect(pane).toContain("scheduleSessionSave()");
+  test("Settings remains the pane footer action", () => {
+    expect(pane).toContain('dispatchCommand("app.settings.toggle")');
+    expect(pane).toMatch(
+      /dispatchCommand\("app\.settings\.toggle"\)[\s\S]*?<span class="menu-row-label">Settings<\/span>/,
+    );
   });
 
   test("CSS cascade re-applies token blocks at pane scope", () => {

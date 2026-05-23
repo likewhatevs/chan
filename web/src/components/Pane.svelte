@@ -40,18 +40,15 @@
     Check,
     FilePlus,
     FileText,
-    FlipHorizontal2,
     Folder,
     LayoutGrid,
     MessageSquare,
-    Moon,
     Network,
     Palette,
     Radio,
     RefreshCw,
     Search,
     Settings,
-    Sun,
     Terminal,
     User,
   } from "lucide-svelte";
@@ -69,9 +66,7 @@
   import TerminalTab from "./TerminalTab.svelte";
   import {
     driveDisplayName,
-    scheduleSessionSave,
     tree,
-    ui,
   } from "../state/store.svelte";
   import {
     isTauriDesktop,
@@ -398,33 +393,6 @@
   /// Derived so the tab strip rerenders the dimmed class as
   /// chords land and as commit / cancel clear the set.
   const paneModeStagedSet = $derived(paneModeStagedTabIds());
-
-  /// `fullstack-59`: per-Hybrid theme override. Click on the
-  /// Hybrid chrome's theme button cycles between "follow global"
-  /// (no override) and "override to the opposite of global". One
-  /// override slot per side; `flipHybrid()` already swaps the
-  /// stored override with the back-side override. The data-theme
-  /// attribute on the pane root drives the CSS cascade via the
-  /// `:global(.pane[data-theme="..."])` rules in App.svelte.
-  function paneEffectiveTheme(): "dark" | "light" {
-    return pane.theme ?? ui.theme;
-  }
-
-  function paneThemeTooltip(): string {
-    if (pane.theme === undefined) {
-      return `Theme: follow global (${ui.theme}). Click to override.`;
-    }
-    return `Theme: ${pane.theme} (per-Hybrid). Click to follow global.`;
-  }
-
-  function togglePaneTheme(): void {
-    if (pane.theme === undefined) {
-      pane.theme = ui.theme === "dark" ? "light" : "dark";
-    } else {
-      pane.theme = undefined;
-    }
-    scheduleSessionSave();
-  }
 
   /// Subscribe to the structural-wobble bus. Each splitPane /
   /// closePane / paneModeSwap bumps `paneWobble.versions[pane.id]`;
@@ -1109,12 +1077,6 @@
       ondblclick={onDeadZoneDblClick}
     ></div>
     <div class="actions">
-      <!-- `fullstack-a-27`: the per-Hybrid theme toggle button used
-           to live here as standalone chrome (`fullstack-59`); @@Alex
-           asked to move it into the hamburger so the pane chrome
-           stays leaner. The togglePaneTheme + paneThemeTooltip
-           helpers below stay — the hamburger menu entry calls
-           them. -->
       <!-- Pane-only controls live inside a single hamburger menu
            to match the file browser / search / graph overlays.
            Split rows hide when the platform doesn't allow any splits
@@ -1156,44 +1118,6 @@
             <span class="menu-row-chord">{chordLabel("app.pane.mode")}</span>
           </button>
         </li>
-        <!-- `fullstack-a-27`: Hybrid-specific operations. Theme
-             toggle moved from the standalone pane-chrome button
-             into this menu; flip is the new click affordance for
-             the existing `Cmd+. Tab` chord (`fullstack-a-7`).
-             Both gated on `pane.back !== undefined` — a pane
-             only becomes a Hybrid once flipped at least once
-             (the chord lazy-creates back; this menu surface is
-             for already-Hybrid panes). -->
-        {#if pane.back !== undefined}
-          <li class="sep" role="separator"></li>
-          <li>
-            <button
-              role="menuitem"
-              onclick={togglePaneTheme}
-              title={paneThemeTooltip()}
-            >
-              {#if paneEffectiveTheme() === "dark"}
-                <Sun size={16} strokeWidth={1.75} aria-hidden="true" />
-              {:else}
-                <Moon size={16} strokeWidth={1.75} aria-hidden="true" />
-              {/if}
-              <span class="menu-row-label">
-                {paneEffectiveTheme() === "dark" ? "Light mode" : "Dark mode"}
-              </span>
-            </button>
-          </li>
-          <li>
-            <button
-              role="menuitem"
-              onclick={() => { flipHybrid(pane.id); closePaneHamburgerMenu(); }}
-              title="Flip Hybrid front/back"
-            >
-              <FlipHorizontal2 size={16} strokeWidth={1.75} aria-hidden="true" />
-              <span class="menu-row-label">Flip pane</span>
-              <span class="menu-row-chord">{chordLabel("app.pane.mode")} Tab</span>
-            </button>
-          </li>
-        {/if}
         <li class="sep" role="separator"></li>
         <li class="menu-label">
           <Palette size={16} strokeWidth={1.75} aria-hidden="true" />
@@ -1305,6 +1229,7 @@
         onClose={() => {
           void closeTab(pane.id, active.id);
         }}
+        onFlip={() => flipHybrid(pane.id)}
       />
     {:else if active?.kind === "browser"}
       <FileBrowserSurface

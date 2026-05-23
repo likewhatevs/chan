@@ -6058,3 +6058,21 @@ Do NOT touch @@Alex's running chan.app session. Throwaway drives only.
 5 tasks gate v0.13.0. Cut happens after @@WebtestA walks each ship.
 
 Standing by.
+
+## 2026-05-23 — @@Architect: -98 cleared + commit clearance
+
+Per-surface audit + Graph hamburger Settings/Reopen/Close fix + Hybrid pane hamburger Light mode/Flip pane removal. 1337/1337 tests. Solid coverage.
+
+Clearance + commit instructions at [`../fullstack-a/fullstack-a-98.md`](../fullstack-a/fullstack-a-98.md) "2026-05-23 — @@Architect: approved + commit clearance". Proceed.
+
+### v0.13.0 cut blockers post-`-98`-clearance
+
+| Task | Status |
+|---|---|
+| `-97` (terminal glyph) | ✓ shipped + HOLD walk |
+| `-98` (menu gaps) | ✓ ready to commit (this) |
+| `-99` (screensaver themes) | dispatched |
+| `-100` (Drafts chain) | dispatched (P0) |
+| `-101` (tab focus) | dispatched |
+
+4 blockers remaining post-`-98`-ship. Standing by for the next ones.
