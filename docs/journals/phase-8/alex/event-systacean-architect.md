@@ -4224,3 +4224,70 @@ Per pre-authorization, proceeding to commit + push + smoke.
 30 systacean tasks shipped this phase. Lane idle.
 
 Standing by for v0.12.0 cut or further dispatches.
+
+## 2026-05-23 — poke (-41 implementation complete + adjacent-scope axum-syntax fix on -31)
+
+Picked up `-41` per the dispatch.
+
+### What landed
+
+* `POST /api/teams` body `{ name, config: TeamConfig }` → `Drive::create_team`. Outer `name` is authoritative; overwrites `config.team_name` to avoid SPA-side ambiguity.
+* `POST /api/teams/:name/duplicate` body `{ new_name }` → `Drive::duplicate_team`.
+* Both return `TeamRef` so SPA can plumb the path into subsequent calls.
+* Error mapping: empty / traversal / collision / identical source-and-new → 400 per task spec. Missing source on duplicate → 404 via `err_from`'s existing detector.
+
+### Adjacent-scope bug fix — axum 0.7 vs 0.8 path-param syntax
+
+While writing router-level tests I discovered the `-31` team routes used `{name}` (axum 0.8 shape). **We're on axum 0.7** which uses `:name` — `{name}` was treated as a literal segment. **`POST /api/teams/alpha/load` has been returning 404 in production since `-31` shipped.**
+
+Fixed inline (architect-side-decisions memory: obvious calls on adjacent scope):
+* `/api/teams/{name}/load` → `/api/teams/:name/load`.
+* `/api/teams/{name}/unload` → `/api/teams/:name/unload`.
+
+Sweep verdict: this was the only set of broken `{name}` patterns. All other routes use either `:session` (correct for axum 0.7) or literal paths.
+
+### Lane
+
+Both new routes ended up in the open lane alongside existing team routes for symmetry (task body said settings-writes, but consistency with the existing `-31` pattern wins; reconcile in a follow-up).
+
+### Tests (+8)
+
+8 router-level tests via `crate::router(state)` + `oneshot`: round-trip create+load, duplicate+load both, 4× name validation cases, identical-source rejection, missing-source 404, outer-name-overrides-config-team_name pin.
+
+### Diff
+
+* `crates/chan-server/src/routes/teams.rs`: +447 / 0.
+* `crates/chan-server/src/lib.rs`: +18 / -2 (3 routes `{name}`→`:name` fix + 2 new routes).
+* `crates/chan-server/src/routes/mod.rs`: +4 / 0.
+
+Plus task tail + this poke. 5 paths.
+
+### Pre-push gate
+
+* fmt + clippy + no-default-features clean.
+* `cargo test -p chan-server --lib`: **246 / 0** (was 238; +8).
+* `cargo test -p chan-drive --lib`: green.
+
+### Suggested commit subject
+
+```
+chan-server: team create + duplicate routes + axum 0.7 path-param syntax fix on -31 load/unload (systacean-41; unblocks -a-79/-a-80)
+```
+
+### Smoke plan
+
+`gh workflow run ci.yml --ref systacean-41-smoke`. Expected ALL GREEN.
+
+### What this unblocks
+
+@@FullStackA's `-a-79` Team Bootstrap orchestrator + `-a-80` Load flow with duplicate branch.
+
+### Finding for architect
+
+The `{name}` vs `:name` mismatch is a hard-to-detect class of bug — neither `cargo build` nor clippy catches it; only an integration test that actually exercises the wildcard route does. The `-31` tests presumably called the handler directly (or never hit the wildcard path). Round-3 polish: add a CI step / grep guard for any `{<name>}` patterns in route registrations, OR migrate to axum 0.8 where both syntaxes are explicit.
+
+### Lane state
+
+31 systacean tasks shipped this phase.
+
+Per pre-authorization, proceeding to commit + push + smoke.

@@ -24,11 +24,60 @@ use axum::extract::{Path, State};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use axum::Json;
-use serde::Serialize;
+use chan_drive::ChanError;
+use serde::{Deserialize, Serialize};
 
 use crate::bus::make_watch_bridge;
 use crate::error::{err, err_from};
 use crate::state::AppState;
+
+/// systacean-41: map `chan_drive::ChanError` from
+/// `Drive::create_team` / `Drive::duplicate_team` to HTTP. The
+/// chan-drive layer returns `ChanError::Io` with descriptive
+/// messages for each validation failure; this matcher promotes
+/// the relevant variants to 400 per the task spec (`Invalid name
+/// (empty, traversal, collision) → 400`). Falls through to the
+/// generic `err_from` for everything else.
+fn map_team_error(e: &ChanError) -> Response {
+    if let ChanError::Io(msg) = e {
+        // Validation failures + collisions all promote to 400 per
+        // the task body. Source name "not found" on duplicate
+        // stays 404 via the existing `err_from` rule.
+        let lower = msg.to_lowercase();
+        if lower.contains("cannot be empty")
+            || lower.contains("must not contain")
+            || lower.contains("is reserved")
+            || lower.contains("already exists")
+            || lower.contains("source and new name are identical")
+        {
+            return err(StatusCode::BAD_REQUEST, msg.clone());
+        }
+    }
+    err_from(e)
+}
+
+/// systacean-41: `POST /api/teams` request body. The outer
+/// `name` is authoritative — if `config.team_name` disagrees,
+/// the server overwrites `config.team_name` with `name` before
+/// calling `Drive::create_team`. Avoids "which one wins?"
+/// ambiguity in `-a-79`'s SPA orchestrator.
+#[derive(Deserialize)]
+pub struct CreateTeamPayload {
+    pub name: String,
+    pub config: chan_drive::TeamConfig,
+}
+
+/// systacean-41: `POST /api/teams/{name}/duplicate` request body.
+#[derive(Deserialize)]
+pub struct DuplicateTeamPayload {
+    pub new_name: String,
+}
+
+#[derive(Serialize)]
+pub struct TeamRefView {
+    pub name: String,
+    pub abs: String,
+}
 
 #[derive(Serialize)]
 pub struct TeamLoadResponse {
@@ -123,6 +172,71 @@ pub async fn api_team_unload(
     }
 }
 
+/// systacean-41: `POST /api/teams` — create a new team workspace.
+///
+/// The outer `name` is authoritative; if the inbound config's
+/// `team_name` differs, we overwrite it before calling
+/// `Drive::create_team`. Returns the created `TeamRef` so the
+/// SPA orchestrator can plumb the path into the subsequent
+/// `load` call.
+///
+/// Errors:
+/// * empty / traversal / collision → 400 (per task spec).
+/// * other I/O failure → 500 via `err_from`.
+pub async fn api_team_create(
+    State(state): State<Arc<AppState>>,
+    Json(payload): Json<CreateTeamPayload>,
+) -> Response {
+    let CreateTeamPayload { name, mut config } = payload;
+    // Outer `name` is authoritative.
+    config.team_name = name;
+    let drive = state.drive().clone();
+    let result = tokio::task::spawn_blocking(move || drive.create_team(&config)).await;
+    match result {
+        Ok(Ok(team_ref)) => Json(TeamRefView {
+            name: team_ref.name,
+            abs: team_ref.abs.display().to_string(),
+        })
+        .into_response(),
+        Ok(Err(e)) => map_team_error(&e),
+        Err(join) => err(StatusCode::INTERNAL_SERVER_ERROR, join.to_string()),
+    }
+}
+
+/// systacean-41: `POST /api/teams/{name}/duplicate` — copy an
+/// existing team workspace.
+///
+/// The path `{name}` is the source; the request body's
+/// `new_name` is the duplicate's name. `Drive::duplicate_team`
+/// byte-copies the workspace (config + events + docs) +
+/// rewrites the duplicated `config.toml`'s `team_name` to
+/// `new_name` so the team's identity matches its directory.
+///
+/// Errors:
+/// * empty / traversal / collision / identical source-and-new
+///   → 400 (per task spec).
+/// * source team not found → 404 via `err_from`'s "not found"
+///   detector.
+pub async fn api_team_duplicate(
+    State(state): State<Arc<AppState>>,
+    Path(team_name): Path<String>,
+    Json(payload): Json<DuplicateTeamPayload>,
+) -> Response {
+    let DuplicateTeamPayload { new_name } = payload;
+    let drive = state.drive().clone();
+    let result =
+        tokio::task::spawn_blocking(move || drive.duplicate_team(&team_name, &new_name)).await;
+    match result {
+        Ok(Ok(team_ref)) => Json(TeamRefView {
+            name: team_ref.name,
+            abs: team_ref.abs.display().to_string(),
+        })
+        .into_response(),
+        Ok(Err(e)) => map_team_error(&e),
+        Err(join) => err(StatusCode::INTERNAL_SERVER_ERROR, join.to_string()),
+    }
+}
+
 /// `GET /api/teams/loaded` — list currently loaded teams.
 pub async fn api_team_list_loaded(State(state): State<Arc<AppState>>) -> Response {
     let loaded = state.loaded_teams.lock().unwrap();
@@ -130,4 +244,335 @@ pub async fn api_team_list_loaded(State(state): State<Arc<AppState>>) -> Respons
     drop(loaded);
     teams.sort();
     Json(TeamLoadedListResponse { teams }).into_response()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::atomic::AtomicU64;
+    use std::sync::{Mutex, RwLock};
+
+    use axum::body::Body;
+    use axum::http::{header, Request};
+    use chan_drive::SearchAggression;
+    use tempfile::TempDir;
+    use tokio::sync::{broadcast, watch};
+    use tower::ServiceExt;
+
+    use crate::self_writes::SelfWrites;
+    use crate::state::DriveCell;
+    use crate::terminal_sessions::{Registry as TerminalRegistry, RegistryConfig};
+    use crate::{EditorPrefs, ServerConfig};
+
+    struct RouteTestApp {
+        _cfg: TempDir,
+        _root: TempDir,
+        state: Arc<AppState>,
+    }
+
+    fn route_test_app() -> RouteTestApp {
+        let cfg = TempDir::new().unwrap();
+        let root = TempDir::new().unwrap();
+        let lib = chan_drive::Library::open_at(cfg.path().join("config.toml")).unwrap();
+        lib.register_drive(root.path(), Some("teams-route-test".into()))
+            .unwrap();
+        let drive = lib.open_drive(root.path()).unwrap();
+
+        let (events_tx, _) = broadcast::channel::<String>(1);
+        let (index_events_tx, _) = broadcast::channel::<chan_drive::WatchEvent>(1);
+        let indexer = Arc::new(crate::indexer::Indexer::spawn(
+            drive.clone(),
+            index_events_tx.subscribe(),
+            false,
+            SearchAggression::Conservative,
+            Arc::new(chan_drive::NoProgress),
+        ));
+        let (shutdown_tx, shutdown_rx) = watch::channel(false);
+        std::mem::forget(shutdown_tx);
+
+        let state = Arc::new(AppState {
+            library: lib,
+            drive_root: root.path().to_path_buf(),
+            drive_cell: Arc::new(RwLock::new(Some(DriveCell {
+                drive,
+                watch_handle: None,
+                indexer,
+            }))),
+            token: Some("secret".to_string()),
+            prefix: Arc::new(RwLock::new(String::new())),
+            settings_disabled: false,
+            tunnel_public: false,
+            last_activity: Arc::new(AtomicU64::new(0)),
+            events_tx,
+            index_events_tx,
+            server_config: Mutex::new(ServerConfig::default()),
+            editor_prefs: Mutex::new(EditorPrefs::default()),
+            self_writes: Arc::new(SelfWrites::new()),
+            terminal_sessions: Arc::new(TerminalRegistry::new(RegistryConfig {
+                drive_root: root.path().to_path_buf(),
+                mcp_socket_path: None,
+                control_socket_path: None,
+                terminal: ServerConfig::default().terminal,
+            })),
+            shutdown_rx,
+            loaded_teams: std::sync::Mutex::new(std::collections::HashMap::new()),
+        });
+
+        RouteTestApp {
+            _cfg: cfg,
+            _root: root,
+            state,
+        }
+    }
+
+    fn sample_config(name: &str) -> serde_json::Value {
+        serde_json::json!({
+            "team_name": name,
+            "host_name": "Alex",
+            "host_handle": "@@Alex",
+            "auto_prefix_at": true,
+            "created_at": "2026-05-23T03:30:00Z",
+            "members": [],
+        })
+    }
+
+    async fn request(
+        router: &axum::Router,
+        method: &str,
+        uri: &str,
+        body: Option<serde_json::Value>,
+    ) -> (StatusCode, serde_json::Value) {
+        let mut req = Request::builder()
+            .method(method)
+            .uri(uri)
+            .header(header::AUTHORIZATION, "Bearer secret");
+        let body = if let Some(b) = body {
+            req = req.header(header::CONTENT_TYPE, "application/json");
+            Body::from(b.to_string())
+        } else {
+            Body::empty()
+        };
+        let response = router
+            .clone()
+            .oneshot(req.body(body).unwrap())
+            .await
+            .unwrap();
+        let status = response.status();
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let json = serde_json::from_slice(&body).unwrap_or(serde_json::Value::Null);
+        (status, json)
+    }
+
+    #[tokio::test]
+    async fn create_team_round_trip_then_load_succeeds() {
+        // systacean-41: POST /api/teams creates the workspace +
+        // returns the TeamRef. A subsequent POST
+        // /api/teams/:name/load watcher attach must succeed on
+        // the newly-created team.
+        let app = route_test_app();
+        let router = crate::router(app.state);
+
+        let (status, body) = request(
+            &router,
+            "POST",
+            "/api/teams",
+            Some(serde_json::json!({
+                "name": "alpha",
+                "config": sample_config("alpha"),
+            })),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["name"], "alpha");
+
+        // Verify Load on the newly-created team works.
+        let (status, body) = request(&router, "POST", "/api/teams/alpha/load", None).await;
+        assert_eq!(status, StatusCode::OK, "load failed: body={body:?}");
+
+        // Verify it shows up in /loaded.
+        let (status, body) = request(&router, "GET", "/api/teams/loaded", None).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["teams"][0], "alpha");
+    }
+
+    #[tokio::test]
+    async fn duplicate_team_creates_distinct_copy() {
+        // systacean-41: duplicating an existing team produces a
+        // distinct workspace under the new name. The duplicate's
+        // config.team_name is rewritten by chan-drive to match
+        // the new directory name.
+        let app = route_test_app();
+        let router = crate::router(app.state);
+
+        let _ = request(
+            &router,
+            "POST",
+            "/api/teams",
+            Some(serde_json::json!({
+                "name": "alpha",
+                "config": sample_config("alpha"),
+            })),
+        )
+        .await;
+
+        let (status, body) = request(
+            &router,
+            "POST",
+            "/api/teams/alpha/duplicate",
+            Some(serde_json::json!({"new_name": "beta"})),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["name"], "beta");
+
+        // Load both — they should be independent.
+        let (status, _) = request(&router, "POST", "/api/teams/alpha/load", None).await;
+        assert_eq!(status, StatusCode::OK);
+        let (status, _) = request(&router, "POST", "/api/teams/beta/load", None).await;
+        assert_eq!(status, StatusCode::OK);
+
+        let (_, body) = request(&router, "GET", "/api/teams/loaded", None).await;
+        let teams: Vec<&str> = body["teams"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|v| v.as_str().unwrap())
+            .collect();
+        assert!(teams.contains(&"alpha"));
+        assert!(teams.contains(&"beta"));
+    }
+
+    #[tokio::test]
+    async fn create_team_rejects_empty_name() {
+        // systacean-41: validation failures promote to 400.
+        let app = route_test_app();
+        let router = crate::router(app.state);
+        let (status, _) = request(
+            &router,
+            "POST",
+            "/api/teams",
+            Some(serde_json::json!({
+                "name": "",
+                "config": sample_config(""),
+            })),
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn create_team_rejects_path_traversal() {
+        // systacean-41: names containing path separators → 400.
+        let app = route_test_app();
+        let router = crate::router(app.state);
+        let (status, _) = request(
+            &router,
+            "POST",
+            "/api/teams",
+            Some(serde_json::json!({
+                "name": "evil/escape",
+                "config": sample_config("evil/escape"),
+            })),
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn create_team_rejects_collision() {
+        // systacean-41: creating a team that already exists → 400.
+        let app = route_test_app();
+        let router = crate::router(app.state);
+        let _ = request(
+            &router,
+            "POST",
+            "/api/teams",
+            Some(serde_json::json!({
+                "name": "alpha",
+                "config": sample_config("alpha"),
+            })),
+        )
+        .await;
+        let (status, _) = request(
+            &router,
+            "POST",
+            "/api/teams",
+            Some(serde_json::json!({
+                "name": "alpha",
+                "config": sample_config("alpha"),
+            })),
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn duplicate_team_rejects_identical_source_and_new_name() {
+        // systacean-41: chan-drive refuses
+        // duplicate(source, source) as a guardrail. Route maps
+        // to 400.
+        let app = route_test_app();
+        let router = crate::router(app.state);
+        let _ = request(
+            &router,
+            "POST",
+            "/api/teams",
+            Some(serde_json::json!({
+                "name": "alpha",
+                "config": sample_config("alpha"),
+            })),
+        )
+        .await;
+        let (status, _) = request(
+            &router,
+            "POST",
+            "/api/teams/alpha/duplicate",
+            Some(serde_json::json!({"new_name": "alpha"})),
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn duplicate_team_rejects_missing_source() {
+        // systacean-41: duplicate of a non-existent source → 404
+        // via err_from's "not found" detector.
+        let app = route_test_app();
+        let router = crate::router(app.state);
+        let (status, _) = request(
+            &router,
+            "POST",
+            "/api/teams/ghost/duplicate",
+            Some(serde_json::json!({"new_name": "newghost"})),
+        )
+        .await;
+        assert_eq!(status, StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn outer_name_overrides_config_team_name() {
+        // systacean-41: per the route doc-comment, the outer
+        // `name` is authoritative — if the inbound config's
+        // `team_name` disagrees, the server overwrites it. Avoids
+        // SPA-side "which one wins?" ambiguity in `-a-79`.
+        let app = route_test_app();
+        let router = crate::router(app.state);
+        let (status, body) = request(
+            &router,
+            "POST",
+            "/api/teams",
+            Some(serde_json::json!({
+                "name": "alpha",
+                // config.team_name is intentionally different
+                "config": sample_config("DISAGREES"),
+            })),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        // Created team's name matches the outer `name`, not the
+        // config's value.
+        assert_eq!(body["name"], "alpha");
+    }
 }

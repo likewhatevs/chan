@@ -59,9 +59,9 @@ use routes::{
     api_resolve_link, api_restart_terminal, api_screensaver_clear_pin, api_screensaver_patch,
     api_screensaver_set_pin, api_screensaver_state, api_screensaver_verify, api_search_content,
     api_search_files, api_set_terminal_submit_mode, api_set_terminal_watcher, api_storage_reset,
-    api_team_list_loaded, api_team_load, api_team_unload, api_terminal_event_reply,
-    api_terminal_watcher_events, api_terminal_ws, api_unset_terminal_watcher, api_write_file,
-    ws_upgrade,
+    api_team_create, api_team_duplicate, api_team_list_loaded, api_team_load, api_team_unload,
+    api_terminal_event_reply, api_terminal_watcher_events, api_terminal_ws,
+    api_unset_terminal_watcher, api_write_file, ws_upgrade,
 };
 #[cfg(feature = "embeddings")]
 use routes::{
@@ -841,9 +841,17 @@ fn router(state: Arc<AppState>) -> Router {
         // (non-destructive — workspace persists on disk).
         // `/loaded` is read-only for the SPA to know which teams
         // are active.
-        .route("/api/teams/{name}/load", post(api_team_load))
-        .route("/api/teams/{name}/unload", post(api_team_unload))
+        // systacean-41 follow-up: axum 0.7 path-param syntax is
+        // `:name`, NOT `{name}`. The original `-31` routes used
+        // `{name}` (axum 0.8 shape) which axum 0.7 treats as a
+        // literal segment — these routes have never actually
+        // matched real team names in production. Fixed here as
+        // adjacent scope.
+        .route("/api/teams/:name/load", post(api_team_load))
+        .route("/api/teams/:name/unload", post(api_team_unload))
+        .route("/api/teams/:name/duplicate", post(api_team_duplicate))
         .route("/api/teams/loaded", get(api_team_list_loaded))
+        .route("/api/teams", post(api_team_create))
         .route(
             "/api/files/*path",
             get(api_read_file)
