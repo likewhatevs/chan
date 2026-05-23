@@ -254,6 +254,8 @@ The production pubkey is embedded in `src-tauri/tauri.conf.json`
 under `plugins.updater.pubkey`. Matching private key material lives
 outside the repo in the release owner's secret store.
 
+Runbook: [`updater-bridge.md`](updater-bridge.md).
+
 ### Bridge release required after key rotation
 
 The configured pubkey was rotated from the phase-8 DEV updater key

@@ -23,3 +23,26 @@ green. Old DEV key file is present for bridge signing; no private
 key or password value was read or written. Report appended at
 [`../desktacean/desktacean-2.md`](../desktacean/desktacean-2.md)
 "2026-05-23 - @@Desktacean implementation report".
+
+## 2026-05-23 16:35 - poke
+
+`desktacean-3` complete. Added desktop updater bridge runbook at
+`desktop/updater-bridge.md` and linked it from `desktop/CLAUDE.md`.
+Verified embedded updater pubkey hash/length, old DEV key file
+presence, production key file presence, Tauri signer env var names,
+and current build command shape. Local bundles currently show app/DMG
+only, so updater-feed assembly/publish support likely needs CI or
+release-publisher work routed through @@Alex. No private key contents
+or secret values were read or written. Report appended at
+[`../desktacean/desktacean-3.md`](../desktacean/desktacean-3.md)
+"2026-05-23 - @@Desktacean implementation report".
+
+## 2026-05-23 16:55 - poke
+
+`desktacean-3` review fix complete. Replaced the sample manifest
+version `0.12.0` with `<bridge-version>` in
+`desktop/updater-bridge.md` and documented that the bridge version
+must be greater than every installed version that should discover it
+through the updater. Commit readiness appended at
+[`../desktacean/desktacean-3.md`](../desktacean/desktacean-3.md)
+"2026-05-23 - @@Desktacean commit readiness".
