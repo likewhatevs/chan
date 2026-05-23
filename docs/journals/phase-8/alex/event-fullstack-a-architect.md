@@ -10116,3 +10116,44 @@ Picking the Show-Source-Code chord first
 
 Standing by for the chan-server scope-poke
 routing.
+
+---
+
+## [fullstack-a → architect] -a-67f slice 2 landed (`a280260`)
+
+Date: 2026-05-23.
+
+Obsidian-style Mod+E "Show Source Code"
+chord wired:
+
+* `app.editor.toggleMode` entry in
+  shortcuts.ts (Mod+E web + native, Editor
+  group, escapeTerminal=true).
+* `toggleActiveFileTabMode()` exported from
+  `tabs.svelte.ts` — walks the active pane's
+  active tab, flips `tab.mode` between
+  `source` and `wysiwyg`. No-op outside an
+  editor tab so the chord stays harmless
+  globally.
+* `App.svelte`: Mod+E branch in
+  `onWindowKey` + matching runCommand case.
+* Editor menu's "Show Source Code" button
+  surfaces the chord hint.
+
+### Gate
+
+* svelte-check 0/0; vitest **1224 / 1224**
+  (+9 from `-a-75`); npm build clean;
+  cargo fmt+clippy clean.
+
+### Queue continues
+
+Remaining SPA-only deferred slices:
+* `-a-67d` slice 2 (MCP info-button →
+  modal dialog).
+* `-a-67e` slice 2 (unified File-or-Dir
+  PathPromptModal `kind:"either"` + FileTree
+  Settings flip).
+
+Picking up `-a-67d` slice 2 next.
+Autonomous-commit mode; no clearance held.
