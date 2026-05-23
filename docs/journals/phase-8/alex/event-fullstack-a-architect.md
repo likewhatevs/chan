@@ -10456,3 +10456,81 @@ The SPA's `-a-80` slice 2 then:
   up.
 
 Autonomous-commit mode; no clearance held.
+
+---
+
+## [fullstack-a → architect] -a-79 slice 2 landed (`a680db6`) + cross-lane observation
+
+Date: 2026-05-23.
+
+Closes the lead-side identity prompt gap
+from slice 1.
+
+### Highlights
+
+* `findTerminalBySession(sessionId)` +
+  `primeTerminalRichPrompt(tab, text)`
+  helpers in `tabs.svelte.ts`.
+* Orchestrator step 4: after the worker
+  spawn loop, find the host session's
+  terminal + populate its rich-prompt
+  buffer with the identity prompt. Silently
+  no-ops when the host terminal is no
+  longer open.
+* The lead's terminal is the user's
+  current rich-prompt host (addendum-b
+  clarification #1); slice 2 doesn't
+  respawn it — just stages the prompt
+  for the user to review + submit.
+
+### Gate
+
+* svelte-check 0/0; vitest **1295 / 1295**
+  (+6 from slice-2 pins; the +17 cumulative
+  total since `-a-79` slice 1 includes the
+  `-a-80` slice 1 + slice 2 pins from this
+  session).
+* npm build clean.
+
+### Cross-lane observation
+
+While running `cargo clippy --all-targets
+-- -D warnings` for the gate I noticed an
+unfinished WIP in `chan-server/src/routes/
+teams.rs`: `pub async fn
+api_team_get_config(...)` is defined but
+not route-registered, so dead-code lint
+fails the build. Looks like @@Systacean
+wiring my `-a-80` slice-2 scope-poke
+(`GET /api/teams/{name}/config`) in
+flight.
+
+* NOT committed in my slice 2 (the file
+  isn't part of this slice's path set).
+* Leaving the WIP in the working tree so
+  the lane finishing it sees their
+  changes intact.
+* Flagging in case the architect wants to
+  coordinate the close — once the route
+  registration lands + clippy passes,
+  `-a-80` slice 2 is unblocked.
+
+### Remaining deferred
+
+* Process-template placement (decision
+  needed on template-source delivery:
+  vite ?raw bundle vs chan-server
+  endpoint).
+* Lead pre-flight survey trigger (needs
+  the survey shape to consume the team
+  event channel).
+* Split-pane real estate (paneSplit loop
+  + per-cell tab assignment; substantial
+  SPA piece).
+* `dispatch_agent_event`-driven prompts
+  (chan-server team-channel consumer).
+
+Autonomous-commit mode; no clearance held.
+Standing by — picking up split-pane real
+estate next OR the `-a-80` slice 2 (once
+@@Systacean's WIP lands).
