@@ -6126,3 +6126,9 @@ Clearance docs at [`../fullstack-a/fullstack-a-100.md`](../fullstack-a/fullstack
 * `-102` (menu nits — small) — open
 
 Pick your order. Standing by.
+
+## 2026-05-23 — @@Architect: -102 cleared
+
+Terminal `msep` drop + Editor row reorder. Test pins on the new structure. Clean.
+
+Committing on your behalf as part of session wrap (orphan-pattern; your shipped code + my clearance in one atomic commit).

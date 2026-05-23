@@ -737,26 +737,6 @@
       use:clampMenu={menuPos}
       onmousedown={(e) => e.stopPropagation()}
     >
-      <!-- Page-width slider: ratio of the current window width.
-           100 % is the "no cap" sentinel (drag all the way right).
-           Stored as a ratio so window resize and browser zoom both
-           keep the cap proportional to the viewport. -->
-      <div class="page-width-row">
-        <span class="page-width-label">Page width</span>
-        <input
-          class="page-width-slider"
-          type="range"
-          min={PAGE_WIDTH_MIN_PCT}
-          max={PAGE_WIDTH_MAX_PCT}
-          step={PAGE_WIDTH_STEP_PCT}
-          value={Math.round(pageWidth.ratio * 100)}
-          oninput={onPageWidthSlider}
-          onmousedown={(e) => e.stopPropagation()}
-          aria-label="page width"
-        />
-        <span class="page-width-value">{Math.round(pageWidth.ratio * 100)}%</span>
-      </div>
-
       <!-- `fullstack-a-67f`: Editor right-click menu reshape per
            addendum-a's verbatim spec. Header: editable Name
            input. Body: Show Source Code + Collapse Code Blocks
@@ -791,6 +771,25 @@
           />
         </label>
         <div class="msep" role="separator"></div>
+        <!-- Page-width slider: ratio of the current window width.
+             100 % is the "no cap" sentinel (drag all the way right).
+             Stored as a ratio so window resize and browser zoom both
+             keep the cap proportional to the viewport. -->
+        <div class="page-width-row">
+          <span class="page-width-label">Page width</span>
+          <input
+            class="page-width-slider"
+            type="range"
+            min={PAGE_WIDTH_MIN_PCT}
+            max={PAGE_WIDTH_MAX_PCT}
+            step={PAGE_WIDTH_STEP_PCT}
+            value={Math.round(pageWidth.ratio * 100)}
+            oninput={onPageWidthSlider}
+            onmousedown={(e) => e.stopPropagation()}
+            aria-label="page width"
+          />
+          <span class="page-width-value">{Math.round(pageWidth.ratio * 100)}%</span>
+        </div>
         <!-- Show Source Code: addendum spec's primary toggle.
              Hidden for plain text tabs that have no structured
              renderer. -->

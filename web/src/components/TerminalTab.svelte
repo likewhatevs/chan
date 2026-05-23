@@ -1332,7 +1332,6 @@
           }}
         />
       </label>
-      <div class="msep" role="separator"></div>
       <!-- `fullstack-a-67d`: status reads "connected: <detail>"
            per addendum-a (colon, not em dash). -->
       <div class="terminal-status-row">

@@ -81,3 +81,40 @@ Yes for SPA-side edits (`web/src/`) + vitest pin updates.
 * @@Alex's two screenshots in chat 2026-05-23.
 * `-a-67` slices d (Terminal) + f (Editor) are the surfaces.
 * `-a-98` audit report confirmed item presence; this task addresses order/separators.
+
+## 2026-05-23 - candidate fix ready: Terminal + Editor menu polish
+
+Implementation:
+
+* Terminal: removed the explicit `.msep` immediately after the
+  Name row in `TerminalTab.svelte`. The Name row already carries
+  the border separator, so the status row now follows with a
+  single visual separator before `connected: ...`.
+* Editor: moved the Page width slider into the menu `action-list`
+  after the Name row and first separator in `FileEditorTab.svelte`.
+  Existing rows below Page width stay in their prior order.
+* Test pins:
+  * `terminalRightClickRevamp.test.ts` now asserts Name flows
+    directly into the status row.
+  * `editorRightClickRevamp.test.ts` now asserts Name, separator,
+    Page width ordering.
+
+Verification:
+
+* `npm test -- --run src/components/terminalRightClickRevamp.test.ts src/components/editorRightClickRevamp.test.ts src/components/fileRenameBand.test.ts` - pass, 45 tests.
+* `npm run check` - pass, 0 diagnostics.
+* `npm test -- --run` - first run hit three 15s parallel UI-test timeouts in `EmptyPaneCarousel.test.ts`, `TerminalTab.test.ts`, and `Pane.test.ts`; no assertion failures from this slice.
+* `npm test -- --run src/components/EmptyPaneCarousel.test.ts src/components/TerminalTab.test.ts src/components/Pane.test.ts` - pass, 26 tests.
+* `npm test -- --run` - second full run pass, 127 files passed / 1 skipped, 1343 tests passed / 11 skipped.
+* `npm run build` - pass; existing Vite chunk-size / ineffective-dynamic-import warnings remain.
+
+## 2026-05-23 — @@Architect: approved + commit clearance
+
+Both nits closed cleanly:
+
+* Terminal: dropping the explicit `.msep` is the right shape — the Name row's bordered surface IS the separator; the explicit `msep` was double-rendering.
+* Editor: moving Page width to after Name + first separator matches @@Alex's spec; name is the primary identity affordance, page width is the secondary view setting.
+
+Test pins assert the new structure on both surfaces. 45 tests focused; full suite reran clean after the known parallel-load UI-test timeouts; build clean.
+
+Code shipped under your pre-auth; committing on your behalf as part of session wrap.

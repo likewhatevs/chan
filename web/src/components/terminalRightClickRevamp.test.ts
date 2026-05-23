@@ -24,6 +24,12 @@ describe("fullstack-a-67d: status row colon", () => {
     expect(terminal).toMatch(/statusDetail \? `: \$\{statusDetail\}`/);
     expect(terminal).not.toMatch(/statusDetail \? ` - \$\{statusDetail\}`/);
   });
+
+  test("Name row flows directly into status row with one visual separator", () => {
+    expect(terminal).toMatch(
+      /<label class="rename-row">[\s\S]{1,1400}<\/label>\s*<!-- `fullstack-a-67d`: status reads "connected: <detail>"[\s\S]{1,200}<div class="terminal-status-row">/,
+    );
+  });
 });
 
 describe("fullstack-a-67d: From-$CWD spawn band", () => {

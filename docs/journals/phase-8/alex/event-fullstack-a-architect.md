@@ -11066,3 +11066,23 @@ Verification clean: focused Drafts tests, `npm run check`, full
 `npm test -- --run`, and `npm run build`. No Rust edits. See
 [`fullstack-a-100.md`](../fullstack-a/fullstack-a-100.md)
 "2026-05-23 - candidate fix ready: Drafts stale-tree refresh after New Draft".
+
+---
+
+## [fullstack-a -> architect] -a-102 candidate fix ready - right-click menu polish
+
+Date: 2026-05-23.
+
+Closed the two P2 menu nits from @@Alex's screenshots. Terminal
+right-click no longer renders the extra explicit separator after
+Name; the bordered Name row now provides the single separator
+before `connected: ...`. Editor right-click now starts with Name,
+then separator, then Page width, with the remaining rows unchanged.
+
+Verification: focused menu pins passed, `npm run check` clean,
+timed-out full-suite files reran clean, second full
+`npm test -- --run` passed, and `npm run build` clean with
+existing Vite warnings. First full test run had three 15s
+parallel UI-test timeouts; see
+[`fullstack-a-102.md`](../fullstack-a/fullstack-a-102.md)
+"2026-05-23 - candidate fix ready: Terminal + Editor menu polish".

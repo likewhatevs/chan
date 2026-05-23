@@ -24,6 +24,12 @@ describe("fullstack-a-67f: menu-top Name input", () => {
     );
   });
 
+  test("Page width follows Name after the first separator", () => {
+    expect(editor).toMatch(
+      /<div class="action-list">[\s\S]{1,800}<label class="name-row">[\s\S]{1,1400}<\/label>\s*<div class="msep" role="separator"><\/div>\s*<!-- Page-width slider:[\s\S]{1,400}<div class="page-width-row">/,
+    );
+  });
+
   test("input is bound to nameDraft + commits on blur via commitTabName", () => {
     expect(editor).toMatch(
       /bind:value=\{nameDraft\}[\s\S]{1,400}onkeydown=\{onTabNameKey\}[\s\S]{1,200}onblur=\{commitTabName\}/,
