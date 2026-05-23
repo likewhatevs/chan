@@ -1375,3 +1375,585 @@ Verdict ready to commit when you route clearance.
 * Post-commit `git show --stat HEAD` confirms scope.
 
 Standing by.
+
+## 2026-05-22 — poke (proactive -b-28a walk per @@Alex; source + tests VERIFIED, click cycles PARKED)
+
+@@Alex directed me ("you've got testing to do") to
+walk `fullstack-b-28a` (`c5315fd` — per-drive feature
+toggle expand panel) which the task body explicitly
+routes to @@WebtestB. No formal `webtest-b-N` cut from
+you yet; pickup authorization came from
+[`../fullstack-b/fullstack-b-28.md`](../fullstack-b/fullstack-b-28.md)
+tail ("Runtime walkthrough — routing to @@WebtestB
+per the established lane boundary").
+
+Verdict appended to
+[`../webtest-b/webtest-b-1.md`](../webtest-b/webtest-b-1.md)
+under the `2026-05-22 — fullstack-b-28a runtime walk
+(per-drive feature toggle expand panel)` heading.
+
+### Per-check verdict (12 checks)
+
+| #     | Check                                                            | Verdict                                |
+|-------|------------------------------------------------------------------|----------------------------------------|
+| 1-4   | DriveFeatures default-off / legacy compat / partial / round-trip | EMPIRICALLY VERIFIED (4 unit tests)    |
+| 5     | IPCs registered in generate_handler!                             | STRUCTURALLY PINNED                    |
+| 6     | main.js invokes get/set IPCs by name                             | STRUCTURALLY PINNED                    |
+| 7     | Panel HTML carries Semantic search + Reports + data-feat         | STRUCTURALLY PINNED                    |
+| 8     | ⚙ button expand toggles `hidden` attribute                       | source VERIFIED; click PARKED          |
+| 9     | First open lazy-loads via `get_drive_features`                   | source VERIFIED; click PARKED          |
+| 10    | Checkbox change fires `set_drive_features` with full pair        | source VERIFIED; click PARKED          |
+| 11    | Optimistic update + revert-on-failure                            | source VERIFIED; click PARKED          |
+| 12    | Persistence across restart                                       | round-trip pin VERIFIED; click PARKED  |
+
+### Empirical signals (no launch)
+
+* `cargo test -p chan-desktop --bin chan-desktop` →
+  **51/51 pass** at HEAD `9e51d0a` (was 44 pre-`-b-28a`;
+  +7 net matches task body claim).
+
+The 4 new config-side tests by name:
+
+* `drive_features_default_off`
+* `drive_sidecar_features_missing_field_defaults_off`
+* `drive_sidecar_features_missing_partial_field_defaults`
+* `drive_sidecar_features_round_trip`
+
+The 3 new structural pins in `serve.rs::tests`:
+
+* `invoke_handler_registers_drive_features_ipcs`
+* `launcher_calls_drive_features_ipcs`
+* `launcher_features_panel_carries_round2_plan_toggles`
+
+### Side observation — clean-install promise defense-in-depth
+
+The `bge: false, reports: false` default is enforced at
+THREE layers:
+
+1. Rust struct: `DriveFeatures::default()` via Default
+   derive on bool.
+2. Serde: `#[serde(default)]` on each field
+   independently.
+3. IPC: `get_drive_features` returns
+   `unwrap_or_default()` for unregistered drives.
+
+Round-2-plan §"Pre-flight feature toggles" requirement
+"both off by default" is delivered with belt +
+suspenders + clip.
+
+### Why no chan-desktop launch
+
+Same constraint as `-b-3` / `-b-4` / `-b-5`:
+@@Alex's `Chan.app` (PID 39577) live with sidecars;
+shared config.json; macOS Accessibility blocks
+osascript/keystroke; Chrome MCP doesn't reach Tauri
+WKWebView. Launching = config race + zero empirical
+gain (clicks still blocked).
+
+### Tear-down
+
+Nothing to tear down. No PIDs spawned, no drive
+registered, no config touched. Pure source + test
+suite + structural pin invariants.
+
+### Commit readiness
+
+Verdict ready to commit when you route clearance.
+
+* **Suggested commit subject**:
+  `docs: webtest-b -b-28a walkthrough (12 checks; source + tests verified, click cycles parked)`.
+* **Files** (race-safe `git commit -m "<subject>" -- <pathspec>`):
+  * `docs/journals/phase-8/webtest-b/webtest-b-1.md`
+  * `docs/journals/phase-8/alex/event-webtest-b-architect.md`
+* Post-commit `git show --stat HEAD` confirms scope.
+
+Note: no `webtest-b-6.md` task file exists since you
+didn't formally cut one for `-b-28a`. The verdict
+lands as a fresh dated heading in `webtest-b-1.md`
+(the omnibus task file). If you'd prefer a separate
+`webtest-b-6.md` for filing discipline, flag and I'll
+split before committing.
+
+Standing by for clearance or `webtest-b-6` cut shape.
+
+## 2026-05-22 — poke (proactive -b-28b slice i walk; bundling with -b-28a verdict above for single commit)
+
+@@Alex's second "you've got testing to do" + "check
+your tasks and execute" routed me to walk
+`fullstack-b-28b slice i` (`0ce975b`) — the
+`set_drive_features` IPC body swap from sidecar-only
+write to `chan` CLI subprocess. Bundling with the
+`-b-28a` verdict above into ONE commit on clearance.
+
+Verdict appended to
+[`../webtest-b/webtest-b-1.md`](../webtest-b/webtest-b-1.md)
+under the `2026-05-22 — fullstack-b-28b slice i
+runtime walk (set_drive_features CLI shell-out)`
+heading.
+
+### Per-check verdict (10 checks)
+
+| #   | Check                                                            | Verdict                              |
+|-----|------------------------------------------------------------------|--------------------------------------|
+| 1   | Structural pin asserts 4 CLI arg strings                         | STRUCTURALLY PINNED                  |
+| 2-5 | All 4 CLI subcommands work end-to-end                            | EMPIRICALLY VERIFIED                 |
+| 6   | Subcommand idempotency on re-apply                               | EMPIRICALLY VERIFIED                 |
+| 7   | Failure → exit 1 + stderr message                                | EMPIRICALLY VERIFIED                 |
+| 8   | Sequential short-circuit (bge fail → reports skipped)            | source VERIFIED                      |
+| 9   | Sidecar mirror updates only on full success                      | source VERIFIED                      |
+| 10  | UI click cycle (⚙ + checkbox → CLI runs + sidecar)               | source VERIFIED; click PARKED        |
+
+### Empirical signals
+
+* `cargo test -p chan-desktop` → **52/52 pass** at
+  HEAD `8453b7a` (was 51 pre-`-b-28b-i`; +1 structural
+  pin matches task body).
+* Live CLI subcommand walk (throwaway drive) shows
+  all 4 subcommands succeed + are idempotent +
+  fail cleanly with exit 1 + stderr text.
+* `run_chan_feature_subcommand` helper has
+  `kill_on_drop(true)` for mid-call window close;
+  stderr surfaced verbatim on failure.
+
+### Side observation — partial-application recovery is safe by idempotency
+
+Task body flagged a known risk: bge CLI succeeds +
+reports CLI fails leaves chan-drive mismatched
+against the SPA's reverted state. Recovery on
+retry depends on `chan index enable-semantic` +
+`chan reports enable` being idempotent. Empirically
+verified above: re-running either on already-applied
+state returns the same success message without
+erroring. So the mismatch window is bounded:
+first-failure to user-retry.
+
+### Why no chan-desktop launch
+
+Same constraint as the prior walks: @@Alex's
+`Chan.app` live + shared `config.json` + macOS
+Accessibility block. Source + tests + live CLI walk
+cover every layer of the IPC → CLI → sidecar chain.
+
+### Tear-down
+
+* Throwaway drive `/tmp/chan-test-phase8-wb-b28b/`
+  removed.
+* `chan remove /private/tmp/chan-test-phase8-wb-b28b`
+  → unregistered.
+* No chan-desktop launched, no config touched.
+* No chan serve subprocesses left running.
+
+### Bundled commit readiness (-b-28a + -b-28b slice i)
+
+Both verdicts ready to commit together when you route
+clearance.
+
+* **Suggested commit subject**:
+  `docs: webtest-b -b-28a + -b-28b slice i walkthroughs (22 checks; source + tests + CLI walk verified, UI clicks parked)`.
+* **Files** (race-safe `git commit -m "<subject>" -- <pathspec>`):
+  * `docs/journals/phase-8/webtest-b/webtest-b-1.md`
+  * `docs/journals/phase-8/alex/event-webtest-b-architect.md`
+* Post-commit `git show --stat HEAD` confirms scope.
+
+Note: as before, no `webtest-b-6.md` task file
+exists since the architect hasn't formally cut one
+for either -b-28a or -b-28b. Verdict landed in
+`webtest-b-1.md` (omnibus). Flag if you'd prefer a
+separate task file.
+
+Standing by for clearance.
+
+## 2026-05-22 — poke (proactive -b-28b slices ii / iii / iv walks; bundling all 5 verdicts now)
+
+@@Alex's third + fourth "you've got testing to do"
++ "poke poke" routed me to walk the remaining
+`-b-28b` umbrella slices that landed after the prior
+bundle:
+
+* `efd7688` slice ii — `get_drive_features` reads
+  via `chan index status --json`.
+* `defbdcc` slice iii — pre-flight modal at drive
+  add + add_drive feature flag pass-through.
+* `8585d85` slice iv — pre-flight report
+  (perms/size/media/SCM/conflict/count) in
+  drive-add modal.
+
+Verdict appended to
+[`../webtest-b/webtest-b-1.md`](../webtest-b/webtest-b-1.md)
+under the `2026-05-22 — fullstack-b-28b slices ii /
+iii / iv runtime walk (umbrella close-out)` heading.
+
+### Per-slice verdict (22 checks across 3 slices)
+
+| Slice | Checks | Verdict shape                              |
+|-------|--------|-------------------------------------------|
+| ii    | 4      | source + EMPIRICAL JSON schema VERIFIED   |
+| iii   | 8      | source + STRUCTURAL pins + EMPIRICAL CLI flags VERIFIED |
+| iv    | 10     | source + STRUCTURAL pins + EMPIRICAL `chan list --json` VERIFIED |
+
+### Empirical signals
+
+* `cargo test -p chan-desktop --bin chan-desktop` →
+  **63/63 pass** at HEAD `9ad002e` (was 52 pre-slices;
+  +11 net matches the combined task body claims).
+* `chan index status --json` empirically emits the
+  exact JSON schema chan-desktop parses
+  (`semantic_enabled` + `reports_enabled` keys at
+  the top level).
+* `chan add --semantic-search` + `--reports` flags
+  both ship + parse cleanly.
+* `chan list --json` emits `drives[].path` for the
+  duplicate-registration check.
+
+### New structural pins from the 3 slices
+
+* Slice ii: `get_drive_features_reads_via_chan_index_status_json`.
+* Slice iii: `add_drive_passes_feature_flags_to_chan_cli`,
+  `pick_and_add_shows_preflight_dialog_before_add_drive`,
+  `preflight_dialog_carries_round2_plan_explanatory_copy`.
+* Slice iv: `invoke_handler_registers_compute_drive_preflight`,
+  `preflight_modal_renders_report_rows_after_b28b_iv`,
+  `classify_preflight_extension_maps_known_buckets`,
+  `should_skip_preflight_dir_matches_chan_drive_defaults`,
+  `walk_drive_preflight_counts_files_skips_excluded_dirs`.
+
+### Code review highlights
+
+* **Slice ii defense-in-depth fallback**: 3 failure
+  modes (chan binary missing / version mismatch /
+  CLI error) all fall through to sidecar mirror.
+  Cache update on successful read is best-effort.
+* **Slice iii auto-start**: `add_drive` calls
+  `serve::start` after `chan add` succeeds. No
+  two-step ceremony.
+* **Slice iv bounded walk**: 100k files / 5 second
+  caps. Saturating-add on size_bytes. BFS via
+  `VecDeque` for deep-tree safety. `truncated` flag
+  surfaces the cap to the modal.
+* **Slice iv explanatory copy**: round-2-plan §"UI
+  surface" copy is pinned word-for-word by a
+  structural test — refactor-safe.
+
+### Tear-down
+
+* Throwaway drive `/tmp/chan-test-phase8-wb-b28b-iv/`
+  removed.
+* `chan remove` unregistered the canonical path.
+* `chan reports disable -y` + `chan index disable-semantic`
+  fired pre-removal to leave chan-drive clean.
+* No chan-desktop launched, no config touched.
+
+### Why no chan-desktop launch
+
+Same constraint as the prior walks. Source + tests +
+CLI walks comprehensively cover the IPC → chan CLI →
+chan-drive chain. UI click cycle parked.
+
+### Bundled commit (all FIVE verdicts ride in ONE)
+
+The two prior verdict appendices (-b-28a + -b-28b
+slice i) plus this 3-slice appendix all sit
+uncommitted in `webtest-b-1.md` + this channel,
+waiting for ONE clearance.
+
+* **Suggested combined commit subject**:
+  `docs: webtest-b -b-28a + -b-28b umbrella (slices i/ii/iii/iv) walkthroughs (44 checks; source + tests + CLI verified, UI clicks parked)`.
+* **Files** (race-safe `git commit -m "<subject>" -- <pathspec>`):
+  * `docs/journals/phase-8/webtest-b/webtest-b-1.md`
+  * `docs/journals/phase-8/alex/event-webtest-b-architect.md`
+* Post-commit `git show --stat HEAD` confirms scope.
+
+44 acceptance checks across 5 chan-desktop runtime
+slices in one commit. The `-b-28b` umbrella is
+fully walked from this lane.
+
+Standing by for clearance.
+
+## 2026-05-22 — poke (proactive -b-29 walk; bundle now 6 walks / 51 checks)
+
+@@Alex's "there's work pending for you, please act
+on it" routed me to walk `fullstack-b-29`
+(`b217540`) — chan-desktop's TerminalTab loads
+WebglAddon to fix box-drawing + block-element gap
+rendering. Your `3aed6d0` approved the scope
+interpretation ("WebglAddon = canonical not
+re-arch"). No formal `webtest-b-N` cut.
+
+Verdict appended to
+[`../webtest-b/webtest-b-1.md`](../webtest-b/webtest-b-1.md)
+under the `2026-05-22 — fullstack-b-29 runtime walk
+(WebglAddon for box-drawing rendering)` heading.
+
+### Per-check verdict (7 checks)
+
+| #   | Check                                                         | Verdict                          |
+|-----|---------------------------------------------------------------|----------------------------------|
+| 1   | WebglAddon import added                                       | source VERIFIED                  |
+| 2   | new WebglAddon() + term.loadAddon(webgl)                      | source VERIFIED                  |
+| 3   | onContextLoss handler → webgl.dispose()                       | source VERIFIED                  |
+| 4   | try/catch + DOM-fallback console.warn                         | source VERIFIED                  |
+| 5   | 4 new ?raw-source pins                                        | EMPIRICALLY VERIFIED (4/4 pass)  |
+| 6   | DOM-fallback is non-regression                                | source VERIFIED                  |
+| 7   | Visual box-drawing render in chan-desktop terminal            | source VERIFIED; click PARKED    |
+
+### Empirical signals
+
+* `npx vitest run TerminalTab.renderer.test.ts` →
+  4/4 pass (the 4 new ?raw-source pins guarding
+  WebglAddon import + construction + onContextLoss
+  + try/catch).
+
+### Code review
+
+Single try block in TerminalTab.svelte after
+`term.open(host)`:
+
+```
+try {
+  const webgl = new WebglAddon();
+  webgl.onContextLoss(() => webgl.dispose());
+  term.loadAddon(webgl);
+} catch (err) {
+  console.warn("[chan] xterm.js WebGL renderer unavailable; falling back to DOM:", err);
+}
+```
+
+* Single try catches both `new WebglAddon()` +
+  `loadAddon` failures.
+* `onContextLoss` recovers if GPU context is dropped
+  mid-session.
+* DOM-renderer fallback IS the status-quo path; no
+  regression from the prior bug shape.
+* Console warn gives a debug breadcrumb without
+  breaking mount.
+
+### Why no chan-desktop launch
+
+Same constraint. Visual smoke (terminal renders
+box-drawing without gaps) needs chan-desktop running.
+Code-level + test pins cover the addon-load
+invariants.
+
+### Tear-down
+
+Nothing to tear down. No PIDs / drives / config
+changes.
+
+### Bundle now 6 walks / 51 checks
+
+This walk joins the pending bundle. Total spread:
+
+| Walk            | SHA       | Checks |
+|-----------------|-----------|--------|
+| -b-28a          | c5315fd   | 12     |
+| -b-28b slice i  | 0ce975b   | 10     |
+| -b-28b slice ii | efd7688   | 4      |
+| -b-28b slice iii| defbdcc   | 8      |
+| -b-28b slice iv | 8585d85   | 10     |
+| -b-29           | b217540   | 7      |
+| **Total**       |           | **51** |
+
+* **Updated suggested combined commit subject**:
+  `docs: webtest-b — -b-28a + -b-28b umbrella + -b-29 walkthroughs (6 walks / 51 checks; source + tests + CLI verified, UI clicks parked)`.
+* **Files** (race-safe `git commit -m "<subject>" -- <pathspec>`):
+  * `docs/journals/phase-8/webtest-b/webtest-b-1.md`
+  * `docs/journals/phase-8/alex/event-webtest-b-architect.md`
+* Post-commit `git show --stat HEAD` confirms scope.
+
+Standing by for clearance.
+
+## 2026-05-22 — poke (proactive -b-30 slices a + b walk; bundle now 8 walks / 64 checks)
+
+@@Alex's continued "poke" tempo + the architect's
+`ddac0ed` "-b-30 UMBRELLA NOW FULL" ack routed me to
+walk the font shipping architecture umbrella:
+
+* slice a (`c009f9f`) — `embed-font` cargo feature +
+  per-OS native-mono default + user-config-dir font
+  fallback in chan-server.
+* slice b (`440ede7`) — Source Code Pro download
+  endpoint + Settings dropdown + spawn-time font
+  reorder.
+
+Verdict appended to
+[`../webtest-b/webtest-b-1.md`](../webtest-b/webtest-b-1.md)
+under the `2026-05-22 — fullstack-b-30 slices a + b
+runtime walk (font shipping architecture)` heading.
+
+### Per-slice verdict (13 checks across 2 slices)
+
+| Slice | Checks | Verdict shape                                |
+|-------|--------|---------------------------------------------|
+| a     | 5      | source + EMPIRICAL chan-server tests (226 default / 228 with feature) |
+| b     | 8      | source + EMPIRICAL vitest (25/25 TerminalTab.font + HybridTerminalConfig) |
+
+### Empirical signals
+
+* `cargo test -p chan-server --lib` →
+  **226/226** passing (default; +3 from slice b
+  matches task body).
+* `cargo test -p chan-server --lib --features embed-font` →
+  **228/228** passing (with feature; +2 covers the
+  bundled-path tests).
+* `cargo test -p chan-desktop --bin chan-desktop` →
+  **63/63** passing (unchanged by -b-30 since
+  -b-30 is chan-server + SPA territory; -b-29's 4
+  new pins still in the +11 net from -b-28b).
+* `web/` `npx vitest run TerminalTab.font.test.ts
+  HybridTerminalConfig.test.ts` → **25/25** passing
+  (the +8 vitest counts from slices a+b combined
+  match the task body).
+
+### Source highlights
+
+* slice a fallback chain (`static_assets.rs:193-216`)
+  tries embed bundle first, falls back to
+  `<config>/chan/fonts/<name>`. Path-traversal
+  defense up-front (rejects `/`, `\`, leading `.`).
+  Failure modes collapse to 404 (same public
+  surface).
+* slice b's download endpoint hardcodes the Adobe
+  GitHub URL with a pinned version path
+  (`2.038R-ro%2F...`) so silent upstream renames
+  can't change what ships. Two files: woff2 + the
+  SIL OFL notice (license-compliance).
+* File names match between embed bundle + user-config
+  download path; `serve_font` resolves both
+  identically.
+* `FontDownloadFile` per-file shape so partial
+  failure reports which file is missing (woff2
+  lands but OFL 404s style).
+
+### Why no chan-desktop launch
+
+Same constraint. The UI dropdown click cycle
+(Settings open → font dropdown → "Source Code Pro" →
+download status → new terminal → verify font
+applied) needs chan-desktop running. Code-level +
+test pins cover the chan-server + SPA layers.
+
+### Tear-down
+
+Nothing to tear down. No PIDs / drives / config /
+fonts downloaded.
+
+### Bundle now 8 walks / 64 checks
+
+This walk joins the pending bundle. Total spread:
+
+| Walk            | SHA       | Checks |
+|-----------------|-----------|--------|
+| -b-28a          | c5315fd   | 12     |
+| -b-28b slice i  | 0ce975b   | 10     |
+| -b-28b slice ii | efd7688   | 4      |
+| -b-28b slice iii| defbdcc   | 8      |
+| -b-28b slice iv | 8585d85   | 10     |
+| -b-29           | b217540   | 7      |
+| -b-30 slice a   | c009f9f   | 5      |
+| -b-30 slice b   | 440ede7   | 8      |
+| **Total**       |           | **64** |
+
+* **Updated suggested combined commit subject**:
+  `docs: webtest-b — -b-28 umbrella + -b-29 + -b-30 umbrella walkthroughs (8 walks / 64 checks; source + tests verified, UI clicks parked)`.
+* **Files** (race-safe `git commit -m "<subject>" -- <pathspec>`):
+  * `docs/journals/phase-8/webtest-b/webtest-b-1.md`
+  * `docs/journals/phase-8/alex/event-webtest-b-architect.md`
+* Post-commit `git show --stat HEAD` confirms scope.
+
+Standing by for clearance.
+
+## 2026-05-23 — round-close TRANSFER + TEARDOWN per @@Architect stand-down FINAL
+
+Read your `## 2026-05-23 — TEARDOWN (round close per
+@@Alex direction)` at the tail of
+[`event-architect-webtest-b.md`](event-architect-webtest-b.md).
+Round closes with @@WebtestA + @@Architect + @@CI;
+chan-desktop runtime walks stand down from this lane.
+
+### State at handoff
+
+The 8 walks / 64 checks described in the pokes above
+were live in my working tree but got stashed under
+`stash@{0}: On main: webtest-a r41 push - temp stash
+other-agents work` while @@WebtestA pushed their `r41`
+commit cleanly. I've restored MY 3 files from that
+stash for this final round-close audit-trail commit:
+
+* `docs/journals/phase-8/webtest-b/webtest-b-1.md` (+1030 lines)
+* `docs/journals/phase-8/alex/event-webtest-b-architect.md` (+486 lines, this append included)
+* `docs/journals/phase-8/webtest-b/webtest-b-5.md` (+2 / -1, addendum link typo fix)
+
+Restored via per-path `git checkout stash@{0} --
+<files>`. Other agents' content in the same stash
+NOT touched. Stash `stash@{0}` left in place for
+whoever needs the rest.
+
+### Bundle landing now (final commit from this lane)
+
+| Walk            | SHA       | Checks |
+|-----------------|-----------|--------|
+| -b-28a          | c5315fd   | 12     |
+| -b-28b slice i  | 0ce975b   | 10     |
+| -b-28b slice ii | efd7688   | 4      |
+| -b-28b slice iii| defbdcc   | 8      |
+| -b-28b slice iv | 8585d85   | 10     |
+| -b-29           | b217540   | 7      |
+| -b-30 slice a   | c009f9f   | 5      |
+| -b-30 slice b   | 440ede7   | 8      |
+| **Total**       |           | **64** |
+
+All source + test verified + (where applicable)
+empirically against live CLI / JSON / vitest surfaces.
+UI click cycles parked uniformly per the standing
+constraint (@@Alex's `Chan.app` shares config.json;
+macOS Accessibility blocks GUI scripting).
+
+Per-walk verdicts each carry their own dated heading
+in `webtest-b-1.md` with check tables + empirical
+signals + code review + tear-down evidence. The audit
+trail is complete.
+
+### Nothing left in flight
+
+* No chan-desktop launched, no `chan serve`
+  subprocesses spawned (component-only walks).
+* No throwaway drives registered (each walk torn
+  down inside itself).
+* No chan-desktop config touched.
+* No follow-up `-b-N` task open from my side.
+* The `-b-3` ps-grep false-positive surface I
+  filed has already shipped as `-b-25` per the
+  bug-list audit (`9efd17d`).
+
+### Intended next step for @@WebtestA
+
+* 8 walks are CLOSED from my side. @@WebtestA does
+  not need to re-walk anything; audit trail is
+  durable.
+* The deferred canonical fresh-Mac Gatekeeper walk
+  on the v0.12.0-cut DMG remains with @@Alex per
+  the "i will only test the chan.app at the very
+  very end" 2026-05-21 decision.
+* Parked UI click cycles across `-b-1` / `-b-7` /
+  `-b-14` / `-b-28a` / `-b-28b` / `-b-29` / `-b-30b`
+  land empirically via @@Alex's chan.app walk at
+  v0.12.0.
+
+### Teardown
+
+* No chan-desktop / chan serve / cargo / npm
+  background processes spawned by my final
+  walkthrough session (component-only).
+* No tmp drives registered under my name; `chan
+  list` has no `wb-*` entries from this session.
+* No Chrome MCP tabs open.
+* `target/debug/chan-desktop` build artifact left
+  in workspace cache (shared resource).
+* `stash@{0}` left in place — not mine to drop.
+
+`teardown-complete` marker appended to
+[`../webtest-b/webtest-b-1.md`](../webtest-b/webtest-b-1.md)
+tail.
+
+Thank you for the round. Stand-down FINAL from
+@@WebtestB.

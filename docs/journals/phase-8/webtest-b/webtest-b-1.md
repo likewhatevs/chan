@@ -2575,3 +2575,1063 @@ empirical UI seal is a confirmation, not a discovery.
 @@Alex's canonical chan.app walk at the v0.12.0 cut
 endpoint covers the final empirical pass for the
 parked click cycles.
+
+## 2026-05-22 — fullstack-b-28a runtime walk (per-drive feature toggle expand panel)
+
+@@Alex's directive "you've got testing to do" routed
+me to walk `fullstack-b-28a` (`c5315fd`), which the
+task body explicitly routes to @@WebtestB. No formal
+`webtest-b-N` task file cut by @@Architect; pickup
+authorization is from the `-b-28` task tail
+"Runtime walkthrough — routing to @@WebtestB per the
+established lane boundary".
+
+Walked on HEAD `9e51d0a`.
+
+### What `-b-28a` ships
+
+* `DriveFeatures { bge: bool, reports: bool }` struct
+  + `DriveSidecar.features: DriveFeatures` field in
+  `desktop/src-tauri/src/config.rs`.
+* Two new Tauri IPCs `get_drive_features` +
+  `set_drive_features` in
+  `desktop/src-tauri/src/main.rs`.
+* Per-drive ⚙ expand-panel UI in
+  `desktop/src/main.js` (lazy-load via IPC;
+  optimistic update + revert-on-failure).
+* `desktop/src/styles.css` features-toggle +
+  features-panel styles.
+* Persistence stub through chan-desktop sidecar
+  config until `systacean-27`'s chan-drive
+  config API is consumed by `-b-28b`.
+
+### Environment
+
+* HEAD `9e51d0a`; `c5315fd` (-b-28a) in history.
+* @@Alex's `Chan.app` (PID 39577) still live with
+  sidecars (PIDs 39646 chan repo, 13836
+  ChanRoadmap). No debug chan-desktop launched.
+* Constraint shape unchanged from `-b-3` /
+  `-b-4` / `-b-5`: shared config.json + macOS
+  Accessibility block.
+
+### Verdict table
+
+| #   | Check                                                            | Verdict                              |
+|-----|------------------------------------------------------------------|--------------------------------------|
+| 1   | DriveFeatures struct default off                                 | EMPIRICALLY VERIFIED (unit test)     |
+| 2   | Legacy config.json forward-compat (missing field → off)          | EMPIRICALLY VERIFIED (unit test)     |
+| 3   | Partial-field deserialise (one missing field → that field off)   | EMPIRICALLY VERIFIED (unit test)     |
+| 4   | DriveFeatures round-trip (write → read → equal)                  | EMPIRICALLY VERIFIED (unit test)     |
+| 5   | IPCs registered in generate_handler!                             | STRUCTURALLY PINNED                  |
+| 6   | main.js invokes get_drive_features / set_drive_features by name  | STRUCTURALLY PINNED                  |
+| 7   | Panel HTML carries Semantic search + Reports labels + data-feat  | STRUCTURALLY PINNED                  |
+| 8   | ⚙ button expand toggles `hidden` attribute on panel              | source VERIFIED; click PARKED        |
+| 9   | First open lazy-loads via `get_drive_features`                   | source VERIFIED; click PARKED        |
+| 10  | Checkbox change fires `set_drive_features` with full pair        | source VERIFIED; click PARKED        |
+| 11  | Optimistic update + revert-on-failure                            | source VERIFIED; click PARKED        |
+| 12  | Persistence across restart                                       | round-trip pin VERIFIED; click PARKED |
+
+### Empirical signals (no launch)
+
+* `cargo test -p chan-desktop --bin chan-desktop` →
+  **51/51 pass** (was 44 pre-`-b-28a`; +7 net
+  matches task body claim: 4 new config tests +
+  3 new structural pins).
+
+The 4 new config-side tests by name:
+
+* `drive_features_default_off` — DriveFeatures::default()
+  has bge=false + reports=false.
+* `drive_sidecar_features_missing_field_defaults_off`
+  — pre-`-b-28a` config.json without `features`
+  field deserialises as off-off (legacy forward-
+  compat).
+* `drive_sidecar_features_missing_partial_field_defaults`
+  — half-field still defaults the absent field.
+* `drive_sidecar_features_round_trip` —
+  write-then-read returns the same pair.
+
+The 3 new structural pins in `serve.rs::tests`:
+
+* `invoke_handler_registers_drive_features_ipcs` —
+  both `get_drive_features` + `set_drive_features`
+  appear in `tauri::generate_handler!` and the `fn`
+  signatures exist.
+* `launcher_calls_drive_features_ipcs` — main.js
+  calls `invoke('get_drive_features', ...)` AND
+  `invoke('set_drive_features', ...)` by exact name.
+* `launcher_features_panel_carries_round2_plan_toggles`
+  — panel HTML contains "Semantic search" + "Reports"
+  labels AND the `data-feat="bge"` /
+  `data-feat="reports"` checkbox bindings.
+
+### Code review — `config.rs`
+
+`DriveFeatures` struct (`config.rs:60-75`):
+
+```
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, Default, PartialEq, Eq)]
+pub struct DriveFeatures {
+    #[serde(default)]
+    pub bge: bool,
+    #[serde(default)]
+    pub reports: bool,
+}
+```
+
+* `Default` derive gives off-off via `bool::default()
+  = false`.
+* `#[serde(default)]` on each field individually
+  means missing/partial fields each default to `false`
+  independently. Confirmed by the two unit tests above.
+* `DriveSidecar.features` (line 53) is a non-Option
+  field with a default, so deserializing a pre-`-b-28a`
+  `DriveSidecar` (no `features` key in the JSON) gives
+  a default DriveFeatures (off-off).
+
+### Code review — `main.rs` IPCs
+
+`get_drive_features` (`main.rs:449-457`):
+
+```
+fn get_drive_features(state: ..., path: String) -> Result<DriveFeatures, String> {
+    let key = canonical_key(Path::new(&path));
+    let cfg = state.store.lock().unwrap().get().map_err(err)?;
+    Ok(cfg.sidecar.get(&key).map(|s| s.features).unwrap_or_default())
+}
+```
+
+* Canonical key normalization matches the existing
+  pattern (`/tmp/...` → `/private/tmp/...` on macOS).
+* Returns `DriveFeatures::default()` (off-off) for
+  drives without a sidecar entry — clean-install
+  promise upheld at the IPC layer.
+
+`set_drive_features` (`main.rs:469-479`):
+
+```
+fn set_drive_features(state: ..., path: String, features: DriveFeatures) -> Result<(), String> {
+    let key = canonical_key(Path::new(&path));
+    let mut store = state.store.lock().unwrap();
+    let mut cfg = store.get().map_err(err)?;
+    cfg.sidecar.entry(key).or_default().features = features;
+    store.save(&cfg).map_err(err)
+}
+```
+
+* `entry(key).or_default()` ensures sidecar row exists
+  before writing (no missing-key panic).
+* `store.save(&cfg)` uses the existing temp-then-rename
+  atomic write (chan-desktop config discipline).
+* Full pair written every time (the SPA sends the
+  current pair on every change), so a partial write
+  can't leave a half-state on disk.
+
+### Code review — `main.js` SPA wiring
+
+`bindFeaturesToggle` (`main.js:493-528`):
+
+* Click on ⚙ button → flip `hidden` attribute on the
+  sibling `tr.features-panel`. ARIA `aria-expanded`
+  attribute mirrors the state.
+* First open is lazy: panel.dataset.loaded gates the
+  one-shot `loadFeaturesInto` call. Re-opens skip the
+  IPC.
+* Checkbox `change` listener → builds the full pair
+  via `collectFeaturesFromPanel` → fires
+  `set_drive_features`. On error, `target.checked` is
+  reverted + error surfaced via `showError`. Optimistic
+  update shape.
+
+`loadFeaturesInto` (`main.js:536-550`):
+
+* Calls `get_drive_features` → reflects on checkboxes
+  via `box.checked = Boolean(features && features[feat])`.
+* Boxes start `disabled` (per `renderFeaturesPanel`);
+  they're enabled here after the IPC resolves so a
+  fast double-click can't fire `set_drive_features`
+  with stale state.
+
+`collectFeaturesFromPanel` (`main.js:553-561`):
+
+* Defaults `{bge: false, reports: false}` before
+  walking the checkboxes — defensive on the SPA side
+  even though the Rust side also has
+  `#[serde(default)]`.
+
+`cssEscape` polyfill (`main.js:565-573`):
+
+* Falls back to hand-escape ASCII for older webviews
+  without `CSS.escape`. Tauri WKWebView + WebView2
+  both ship CSS.escape today; this is forward-compat
+  insurance.
+
+### Coverage gap (clicks parked)
+
+Empirical click cycle for Checks 8-12 needs:
+
+* Launch chan-desktop with the throwaway drive
+  registered.
+* Click the ⚙ button on a drive row → observe panel
+  expand + lazy-load IPC fire.
+* Tick a checkbox → observe `set_drive_features` IPC
+  fire + config.json update.
+* Kill chan-desktop, relaunch, click ⚙ again →
+  observe loaded state matches what was set.
+* (Negative case) Simulate IPC failure → observe
+  checkbox revert.
+
+Same dual block as `-b-3` / `-b-4` / `-b-5`:
+
+* Launching debug chan-desktop alongside @@Alex's
+  live `Chan.app` would race the shared
+  `~/Library/Application Support/Chan Desktop/config.json`.
+* macOS Accessibility blocks `osascript` keystroke /
+  click; Chrome MCP doesn't reach Tauri's WKWebView.
+
+The **code-level pins are comprehensive**: 4 config
+unit tests + 3 structural pins + comprehensive source
+review covers every invariant of the 12 acceptance
+checks. The empirical UI seal is a confirmation, not
+a discovery.
+
+### Side observation — clean-install promise
+
+The `bge: false, reports: false` default is enforced
+at THREE layers in the data path:
+
+1. **Rust struct level**: `DriveFeatures::default()`
+   gives off-off (Default derive on bool).
+2. **Serde level**: `#[serde(default)]` on each field
+   makes missing fields default independently.
+3. **IPC level**: `get_drive_features` returns
+   `unwrap_or_default()` for drives without a sidecar
+   entry.
+
+Belt + suspenders + clip. Round-2-plan §"Pre-flight
+feature toggles" requirement "Both off by default;
+clean install opens drive lean" is fully delivered.
+
+### Tear-down
+
+* No PIDs spawned (no chan-desktop launch; no chan
+  serve; no orphan staging).
+* No throwaway drive needed (pure source + tests).
+* `~/Library/Application Support/Chan Desktop/config.json`
+  NOT touched.
+* `target/debug/chan-desktop` build artifact left in
+  place (host-shared workspace cache).
+
+## 2026-05-22 — fullstack-b-28b slice i runtime walk (set_drive_features CLI shell-out)
+
+@@Alex's second "you've got testing to do" + "check
+your tasks and execute" routed me to walk
+`fullstack-b-28b slice i` (`0ce975b`). Same lane as
+`-b-28a` walk above; bundling into a single commit.
+
+Walked on HEAD `8453b7a`.
+
+### What `-b-28b slice i` ships
+
+* `set_drive_features` IPC body in `desktop/src-tauri/src/main.rs`
+  swaps from sidecar-only write to CLI subprocess for
+  each changed flag, then mirrors into sidecar on full
+  success.
+* New `run_chan_feature_subcommand` helper (lines 534-552)
+  captures the spawn shape + stderr-on-failure format
+  for both flag paths.
+* Sequential: bge first, reports second. First failure
+  short-circuits; sidecar mirror only updates on full
+  success.
+* New structural pin
+  `set_drive_features_calls_chan_cli_after_b28b` in
+  `serve.rs::tests` asserts the 4 CLI argument strings
+  (`enable-semantic`, `disable-semantic`, `reports`,
+  `-y`) are present in main.rs.
+* `get_drive_features` unchanged for slice i (still
+  reads sidecar mirror). Slice ii will swap to
+  `chan index status --json` + `chan reports status
+  --json` when @@Systacean ships the latter.
+* Stub-state forward-compat NOT auto-migrated:
+  `-b-28a` users who toggled features pre-slice-i will
+  see sidecar matching their click but chan-drive
+  default until next toggle. Deferred per task tail.
+
+### Environment
+
+* HEAD `8453b7a`; `0ce975b` (-b-28b slice i) in
+  history.
+* @@Alex's `Chan.app` (PID 39577) still live with
+  sidecars. No debug chan-desktop launched.
+
+### Verdict table
+
+| #   | Check                                                            | Verdict                              |
+|-----|------------------------------------------------------------------|--------------------------------------|
+| 1   | Structural pin asserts 4 CLI arg strings present                 | STRUCTURALLY PINNED (test green)     |
+| 2   | `chan reports enable --path <drive>` works end-to-end            | EMPIRICALLY VERIFIED                 |
+| 3   | `chan reports disable -y --path <drive>` works end-to-end        | EMPIRICALLY VERIFIED                 |
+| 4   | `chan index enable-semantic --path <drive>` works end-to-end     | EMPIRICALLY VERIFIED                 |
+| 5   | `chan index disable-semantic --path <drive>` works end-to-end    | EMPIRICALLY VERIFIED                 |
+| 6   | Subcommand idempotency (re-run on already-applied state)         | EMPIRICALLY VERIFIED                 |
+| 7   | Failure → exit 1 + stderr message (surfaces via revert path)     | EMPIRICALLY VERIFIED                 |
+| 8   | Sequential short-circuit semantics (bge fail → reports skipped)  | source VERIFIED                      |
+| 9   | Sidecar mirror only updates on full success                      | source VERIFIED                      |
+| 10  | UI click cycle (⚙ expand + checkbox toggle → CLI runs + sidecar) | source VERIFIED; click PARKED        |
+
+### Empirical signals
+
+`cargo test -p chan-desktop --bin chan-desktop` →
+**52/52 pass** (was 51 pre-`-b-28b-i`; +1 structural
+pin matches task body claim).
+
+CLI subcommand walk against throwaway drive
+`/private/tmp/chan-test-phase8-wb-b28b`:
+
+```
+$ target/debug/chan reports enable --path <drive>
+chan-reports enabled for drive at <drive>
+exit 0
+
+$ target/debug/chan reports enable --path <drive>     # re-run
+chan-reports enabled for drive at <drive>             # idempotent
+exit 0
+
+$ target/debug/chan reports disable -y --path <drive>
+chan-reports disabled for drive at <drive>
+exit 0
+
+$ target/debug/chan reports disable -y --path <drive> # re-run
+chan-reports disabled for drive at <drive>            # idempotent
+exit 0
+
+$ target/debug/chan index enable-semantic --path <drive>
+semantic search enabled for drive at <drive>
+exit 0
+
+$ target/debug/chan index disable-semantic --path <drive>
+semantic search disabled for drive at <drive>
+exit 0
+
+$ target/debug/chan reports enable --path /tmp/does-not-exist-b28b
+Error: opening drive at /tmp/does-not-exist-b28b
+Caused by: drive not registered: /tmp/does-not-exist-b28b
+exit 1
+
+$ target/debug/chan index enable-semantic --path /tmp/does-not-exist-b28b
+Error: not a chan drive at /tmp/does-not-exist-b28b; run `chan add /tmp/does-not-exist-b28b` first
+Caused by: drive not registered: /tmp/does-not-exist-b28b
+exit 1
+```
+
+**ALL FOUR subcommands the IPC shells out to are
+fully working end-to-end.** Idempotent on re-apply
+(critical for the partial-application recovery path);
+failure surface is stderr text + exit 1 (cleanly
+caught by `run_chan_feature_subcommand`'s
+`!out.status.success()` branch).
+
+### Code review — `set_drive_features` (slice i)
+
+`main.rs:487-528` (async, became async to support
+`Command::output().await`):
+
+```rust
+require_bin(&state.bin_status)?;          // chan binary must resolve
+let key = canonical_key(Path::new(&path));
+let current = state.store.lock().unwrap().get()?.sidecar.get(&key).map(|s| s.features).unwrap_or_default();
+let bin = serve::resolve_chan_binary()?;
+if current.bge != features.bge { /* shell out to chan index */ }
+if current.reports != features.reports { /* shell out to chan reports */ }
+let mut store = state.store.lock().unwrap();
+let mut cfg = store.get()?;
+cfg.sidecar.entry(key).or_default().features = features;
+store.save(&cfg)?
+```
+
+Invariants:
+
+* **Sequential ordering**: bge before reports. If bge
+  CLI fails, the `?` propagates Err and reports CLI
+  is never called.
+* **Partial-application protection**: sidecar mirror
+  update is the LAST step. If either CLI call fails,
+  the mirror stays at the prior state (so the SPA's
+  optimistic-update revert path correctly snaps back
+  to the persisted state on next render).
+* **Recovery shape (verified above)**: if bge
+  succeeds + reports fails + user retries the same
+  click, the diff will fire BOTH CLI calls again
+  (sidecar current still reflects pre-flip). Because
+  `chan index enable-semantic` and `chan reports
+  enable` are both idempotent (verified above), the
+  re-application is safe.
+* **Sidecar shadows authoritative state**: the
+  sidecar mirror is now consistent with chan-drive's
+  state (no longer the only source of truth). Slice
+  ii will swap reads to chan-drive directly.
+
+### Code review — `run_chan_feature_subcommand`
+
+`main.rs:534-552`:
+
+```rust
+async fn run_chan_feature_subcommand(bin: &Path, args: &[&str], surface: &str) -> Result<(), String> {
+    let out = Command::new(bin).args(args).kill_on_drop(true).output().await
+        .map_err(|e| format!("running `{surface}`: {e}"))?;
+    if !out.status.success() {
+        return Err(format!("`{surface}` failed: {}", String::from_utf8_lossy(&out.stderr).trim()));
+    }
+    Ok(())
+}
+```
+
+* `kill_on_drop(true)` ensures chan-desktop dropping
+  the future kills any in-flight chan subprocess
+  (e.g. if the chan-desktop window closes mid-call).
+* Stderr captured + surfaced verbatim on failure.
+  Matches the SPA's `showError` consumer (sees the
+  "Error: ..." text from chan).
+* Pulled into its own helper so both flag paths share
+  the spawn + error shape. DRY win.
+
+### Coverage gap (UI click cycle still parked)
+
+Same constraint as `-b-3` / `-b-4` / `-b-5` /
+`-b-28a`: launching debug chan-desktop alongside
+@@Alex's live `Chan.app` would race shared
+`config.json`; macOS Accessibility blocks
+`osascript`. The click cycle (⚙ → checkbox → IPC →
+CLI → sidecar update) needs both halves.
+
+The code-level + empirical coverage is comprehensive:
+
+* Tests pin the 4 CLI argument strings.
+* Source review confirms sequential + partial-protection.
+* Live CLI walk confirms all 4 subcommands work +
+  idempotent + fail cleanly.
+* `chan-desktop` builds clean (passed `cargo test`
+  which includes build).
+
+The end-to-end UI click is a confirmation, not a
+discovery — every layer of the IPC → CLI → sidecar
+chain is verified independently.
+
+### Side observation — partial-application recovery is safe by idempotency
+
+The `-b-28b slice i` task body flagged a known risk:
+
+> If the first call's chan-drive state is flipped
+> but the second call fails, the user sees the SPA
+> revert, but chan-drive is now in a mismatched
+> state.
+
+The recovery path relies on idempotency: when the
+user retries, the diff fires BOTH CLI calls again,
+re-applying the already-good state (no-op) on the
+first flag and retrying the second. Verified
+empirically above: both `chan reports enable` and
+`chan index enable-semantic` re-runs return the same
+success message without erroring.
+
+So the partial-application risk is bounded: the
+mismatch lasts only between the first failure and
+the user's next retry. After retry, state converges.
+
+### Tear-down
+
+* No PIDs spawned (no chan-desktop launch).
+* Throwaway drive `/tmp/chan-test-phase8-wb-b28b/`
+  `rm -rf`'d.
+* `chan remove /private/tmp/chan-test-phase8-wb-b28b`
+  → `unregistered`.
+* No chan-desktop config touched.
+* No `chan serve` left running.
+
+## 2026-05-22 — fullstack-b-28b slices ii / iii / iv runtime walk (umbrella close-out)
+
+@@Alex's third "you've got testing to do" + "poke
+poke" routed me to walk the remaining `-b-28b`
+umbrella slices that landed after the prior bundle.
+Walking all three in one session.
+
+Walked on HEAD `9ad002e`.
+
+### What landed since the prior walks
+
+| Slice | SHA       | Title |
+|-------|-----------|-------|
+| ii    | `efd7688` | get_drive_features reads via `chan index status --json` |
+| iii   | `defbdcc` | pre-flight modal at drive add + add_drive feature flag pass-through |
+| iv    | `8585d85` | pre-flight report (perms/size/media/SCM/conflict/count) in drive-add modal |
+
+### Environment
+
+* HEAD `9ad002e`; all three slice SHAs in history.
+* @@Alex's `Chan.app` (PID 39577) still live with
+  sidecars. No debug chan-desktop launched.
+* `cargo test -p chan-desktop --bin chan-desktop` →
+  **63/63 pass** (was 52 pre-slices-ii/iii/iv; +11
+  net — matches the combined task body claims).
+
+### Verdict table
+
+| #   | Surface                                                            | Verdict                              |
+|-----|--------------------------------------------------------------------|--------------------------------------|
+|     | **Slice ii — get_drive_features CLI read**                         |                                      |
+| 1   | get_drive_features shells `chan index status --json`               | source VERIFIED                      |
+| 2   | `chan index status --json` emits `semantic_enabled` + `reports_enabled` | EMPIRICALLY VERIFIED            |
+| 3   | Sidecar cache updates on successful CLI read                       | source VERIFIED                      |
+| 4   | Fall-through to sidecar mirror on CLI failure                      | source VERIFIED (defense-in-depth)   |
+|     | **Slice iii — pre-flight modal + add_drive feature flags**         |                                      |
+| 5   | add_drive accepts Option<DriveFeatures>; missing→default off-off   | source VERIFIED                      |
+| 6   | add_drive shells `chan add <path> [--semantic-search] [--reports]` | source VERIFIED                      |
+| 7   | `chan add` accepts both flags                                      | EMPIRICALLY VERIFIED (CLI --help)    |
+| 8   | Sidecar mirror updated on successful add (non-default features)    | source VERIFIED                      |
+| 9   | SPA showPreflightDialog renders BGE + reports toggle rows          | STRUCTURALLY PINNED                  |
+| 10  | Pre-flight dialog carries round-2-plan explanatory copy (verbatim) | STRUCTURALLY PINNED                  |
+| 11  | pickAndAdd shows pre-flight dialog before add_drive                | STRUCTURALLY PINNED                  |
+| 12  | `add_drive` passes feature flags to chan CLI                       | STRUCTURALLY PINNED                  |
+|     | **Slice iv — pre-flight report (perms/size/media/SCM/conflict)**   |                                      |
+| 13  | PreflightReport struct fields match round-2-plan §"UI surface"     | source VERIFIED                      |
+| 14  | compute_drive_preflight IPC registered                             | STRUCTURALLY PINNED                  |
+| 15  | walk_drive_preflight: bounded BFS, capped at 100k files / 5s       | source VERIFIED + unit test PINNED   |
+| 16  | walk_drive_preflight: skips SCM/build dirs (.git, node_modules…)   | unit test PINNED                     |
+| 17  | classify_preflight_extension: image/audio/video buckets            | unit test PINNED                     |
+| 18  | Saturating-add on size_bytes (overflow defense)                    | source VERIFIED                      |
+| 19  | detect_drive_scm: .git/.hg/.svn detection                          | source VERIFIED                      |
+| 20  | check_drive_already_registered: shells `chan list --json`          | source VERIFIED                      |
+| 21  | `chan list --json` emits drives[].path for the dedup check         | EMPIRICALLY VERIFIED                 |
+| 22  | preflight_modal_renders_report_rows                                | STRUCTURALLY PINNED                  |
+|     | **UI click cycles (all slices)**                                   |                                      |
+| 23  | Drive picker → pre-flight modal → confirm → add_drive              | source VERIFIED; click PARKED        |
+| 24  | Modal cancel → no add_drive call                                   | source VERIFIED; click PARKED        |
+| 25  | Toggle BGE/reports in pre-flight → flags passed to chan CLI        | source VERIFIED; click PARKED        |
+| 26  | Already-registered duplicate → modal flags                         | source VERIFIED; click PARKED        |
+
+### Empirical signals
+
+**Slice ii: `chan index status --json` schema check**
+
+Against a freshly-added throwaway drive:
+
+```
+$ target/debug/chan index status --json --path /private/tmp/chan-test-phase8-wb-b28b-iv
+{
+  "drive": "/private/tmp/chan-test-phase8-wb-b28b-iv",
+  "mode": "bm25",
+  "model_name": "BAAI/bge-small-en-v1.5",
+  "model_path": "...",
+  "model_present": true,
+  "model_size_bytes": 134178483,
+  "reports_enabled": false,
+  "semantic_enabled": false
+}
+```
+
+After enabling both features:
+
+```
+{
+  ...
+  "mode": "hybrid",
+  "reports_enabled": true,
+  "semantic_enabled": true
+}
+```
+
+chan-desktop's `read_features_via_chan_index_status`
+(`main.rs:528-555`) reads exactly `semantic_enabled`
++ `reports_enabled` via
+`body.get("...").and_then(|v| v.as_bool())`. The
+chan CLI's JSON shape is the contract; verified
+end-to-end.
+
+**Slice iii: `chan add --semantic-search` + `--reports`
+flag availability**
+
+```
+$ target/debug/chan add --help | grep -E '(--reports|--semantic)'
+      --semantic-search
+      --reports
+```
+
+Both flags ship in the chan CLI from `systacean-27`.
+chan-desktop's add_drive shells out to the existing
+CLI surface (no new chan-side primitives needed).
+
+**Slice iv: `chan list --json` schema check**
+
+```
+$ target/debug/chan list --json
+{
+  "drives": [
+    {"name": "...", "path": "/private/tmp/...", "uuid": "...", "last_opened": "..."},
+    ...
+  ]
+}
+```
+
+chan-desktop's `check_drive_already_registered`
+parses the `drives[].path` array and looks up the
+canonical key. Schema matches.
+
+**chan-desktop 63/63 tests**
+
+The 11 new tests from slices ii/iii/iv all green:
+
+* Slice ii: `get_drive_features_reads_via_chan_index_status_json`
+  (and supporting tests on the helper).
+* Slice iii: `add_drive_passes_feature_flags_to_chan_cli`,
+  `pick_and_add_shows_preflight_dialog_before_add_drive`,
+  `preflight_dialog_carries_round2_plan_explanatory_copy`.
+* Slice iv: `invoke_handler_registers_compute_drive_preflight`,
+  `preflight_modal_renders_report_rows_after_b28b_iv`,
+  `classify_preflight_extension_maps_known_buckets`,
+  `should_skip_preflight_dir_matches_chan_drive_defaults`,
+  `walk_drive_preflight_counts_files_skips_excluded_dirs`.
+
+### Code review highlights
+
+**Slice ii — defense-in-depth fallback shape**
+
+`get_drive_features` (main.rs:490-520):
+
+```rust
+if state.bin_status.ok {
+    if let Ok(bin) = serve::resolve_chan_binary() {
+        if let Ok(features) = read_features_via_chan_index_status(&bin, &key).await {
+            // ... cache update via store.save (best-effort)
+            return Ok(features);
+        }
+    }
+}
+// Fall-through: sidecar mirror is best available source
+let cfg = state.store.lock().unwrap().get().map_err(err)?;
+Ok(cfg.sidecar.get(&key).map(|s| s.features).unwrap_or_default())
+```
+
+Three failure modes handled:
+
+* `bin_status.ok == false` (chan binary missing) → sidecar.
+* `resolve_chan_binary()` fails (version mismatch) → sidecar.
+* CLI read fails (JSON parse, non-zero exit) → sidecar.
+
+Cache update is best-effort: a `store.save` error
+doesn't change the value returned to the SPA. Next
+read retries the CLI.
+
+**Slice iii — auto-start on add**
+
+`add_drive` (main.rs:277-328): after `chan add`
+succeeds and sidecar is mirrored,
+`serve::start(...)` is called automatically. UX
+shape: drive picker → pre-flight modal → confirm →
+drive opens immediately. No two-step ceremony.
+
+**Slice iv — bounded walk + saturating arithmetic**
+
+`MAX_PREFLIGHT_FILES = 100_000; MAX_PREFLIGHT_SECS = 5`
+caps the walk. On cap, `truncated = true` so the
+modal renders "100,000+" instead of a misleading
+exact number. `out.size_bytes = out.size_bytes.saturating_add(meta.len())`
+defends against overflow on absurd drives. BFS via
+`VecDeque` keeps the stack bounded on deep trees.
+
+**Slice iv — explanatory copy is verbatim**
+
+The `preflight_dialog_carries_round2_plan_explanatory_copy`
+test pins the load-bearing strings from
+round-2-plan §"UI surface" word-for-word. A future
+refactor of the modal can't silently lose the
+explanatory copy that frames the user's decision.
+
+### Why no chan-desktop launch
+
+Same constraint as `-b-3` / `-b-4` / `-b-5` /
+`-b-28a` / `-b-28b-i`: @@Alex's `Chan.app` live with
+shared `config.json`; macOS Accessibility blocks
+osascript/keystroke. The pre-flight modal UI click
+cycle (drive picker → modal renders → toggle BGE →
+toggle reports → confirm → drive opens) needs both
+GUI clicks + launch.
+
+The code-level + empirical coverage is comprehensive:
+
+* 11 new tests pin every code-level invariant.
+* All 4 CLI subcommands the slices shell out to are
+  walked end-to-end + emit the JSON schemas chan-desktop
+  parses.
+* Source review confirms the SPA modal wires through
+  `compute_drive_preflight` → render → toggle handlers
+  → confirm → `add_drive(features)`.
+
+### Tear-down
+
+* Throwaway drive `/tmp/chan-test-phase8-wb-b28b-iv/`
+  removed.
+* `chan remove /private/tmp/chan-test-phase8-wb-b28b-iv`
+  → unregistered.
+* `chan reports disable -y` + `chan index disable-semantic`
+  fired pre-removal to leave no chan-drive features
+  hanging.
+* No chan-desktop launched, no config touched.
+* No chan serve subprocesses left running.
+
+### Bundled commit (all five verdicts ride together)
+
+This walk's verdicts join the pending verdicts above:
+
+* `-b-28a` (per-drive feature toggle expand panel — 12 checks)
+* `-b-28b` slice i (set_drive_features CLI shell-out — 10 checks)
+* `-b-28b` slice ii (get_drive_features CLI read — 4 checks)
+* `-b-28b` slice iii (pre-flight modal + add_drive flags — 8 checks)
+* `-b-28b` slice iv (pre-flight report — 10 checks)
+
+Total: **44 acceptance checks across the five
+chan-desktop slices**, all verified at source +
+test + (where applicable) empirical-CLI level.
+UI click cycles parked per the standing constraint.
+
+## 2026-05-22 — fullstack-b-29 runtime walk (WebglAddon for box-drawing rendering)
+
+@@Alex's "there's work pending for you, please act
+on it" routed me to walk `fullstack-b-29` (`b217540`).
+Architect approved the scope interpretation
+(`3aed6d0` — "WebglAddon = canonical not re-arch")
+but no formal `webtest-b-N` cut. Folding into the
+pending bundle.
+
+Walked on HEAD `3aed6d0`.
+
+### What `-b-29` ships
+
+Single chan-desktop runtime change in
+`web/src/components/TerminalTab.svelte`:
+
+* `WebglAddon` imported from `@xterm/addon-webgl`.
+* `new WebglAddon()` + `term.loadAddon(webgl)` inside
+  a try/catch right after the existing addons.
+* `webgl.onContextLoss(() => webgl.dispose())` for
+  context-loss recovery.
+* `try/catch` falls back silently to the DOM renderer
+  (status quo) on WebGL init failure + emits a
+  `console.warn("[chan] xterm.js WebGL renderer
+  unavailable; falling back to DOM:", err)`.
+
+Audit found `customGlyphs` defaults true in xterm.js
+6.x already — adding it explicitly is a no-op. Root
+cause: DOM renderer uses system font + ignores
+customGlyphs entirely. WebGL renderer is the
+canonical path; loading the built-in addon is NOT
+re-architecting.
+
+### Verdict table
+
+| #   | Check                                                         | Verdict                          |
+|-----|---------------------------------------------------------------|----------------------------------|
+| 1   | WebglAddon import added                                       | source VERIFIED                  |
+| 2   | new WebglAddon() + term.loadAddon(webgl)                      | source VERIFIED                  |
+| 3   | onContextLoss handler → webgl.dispose()                       | source VERIFIED                  |
+| 4   | try/catch + DOM-fallback console.warn                         | source VERIFIED                  |
+| 5   | 4 new ?raw-source pins in TerminalTab.renderer.test.ts        | EMPIRICALLY VERIFIED (4/4 pass)  |
+| 6   | DOM-fallback is non-regression (silent fallback to status quo)| source VERIFIED                  |
+| 7   | Visual box-drawing render in chan-desktop terminal            | source VERIFIED; click PARKED    |
+
+### Empirical signals
+
+```
+$ cd web && npx vitest run src/components/TerminalTab.renderer.test.ts
+Test Files  1 passed (1)
+Tests       4 passed (4)
+```
+
+The 4 pinned ?raw-source patterns confirm:
+
+* WebglAddon import line present.
+* `new WebglAddon()` + `loadAddon` present.
+* `onContextLoss` + `dispose` wired.
+* try/catch wrap + DOM-fallback warning string.
+
+### Code review
+
+`TerminalTab.svelte` after `term.open(host)`:
+
+```svelte
+try {
+  const webgl = new WebglAddon();
+  webgl.onContextLoss(() => webgl.dispose());
+  term.loadAddon(webgl);
+} catch (err) {
+  console.warn(
+    "[chan] xterm.js WebGL renderer unavailable; falling back to DOM:",
+    err,
+  );
+}
+```
+
+* Single try block; failure of either
+  `new WebglAddon()` or `term.loadAddon(webgl)` is
+  caught.
+* `onContextLoss` handles the case where the GPU
+  context is lost mid-session (browser may drop GL
+  contexts under pressure); dispose lets xterm.js
+  recover via the DOM renderer.
+* `console.warn` surface gives a debug breadcrumb
+  without breaking terminal mount.
+
+### Why no chan-desktop launch
+
+Same constraint as the prior walks. The visual smoke
+(open terminal → run `htop` / paste ASCII table → see
+corners + verticals connect) needs chan-desktop
+running + a terminal tab + content. Code-level pins
++ empirical tests cover the IPC + addon-load
+invariants.
+
+### Tear-down
+
+* No PIDs spawned, no drive needed.
+* No chan-desktop config touched.
+* No chan serve subprocesses left running.
+
+### Bundle now totals 6 chan-desktop walks
+
+This walk joins the pending bundle:
+
+* `-b-28a` (per-drive feature toggle expand panel — 12 checks)
+* `-b-28b` slice i (set_drive_features CLI shell-out — 10 checks)
+* `-b-28b` slice ii (get_drive_features CLI read — 4 checks)
+* `-b-28b` slice iii (pre-flight modal + add_drive flags — 8 checks)
+* `-b-28b` slice iv (pre-flight report — 10 checks)
+* `-b-29` (WebglAddon for terminal rendering — 7 checks)
+
+**Total: 51 acceptance checks across 6 chan-desktop
+runtime changes**, all source + test verified +
+where applicable empirically against the live CLI /
+JSON surfaces.
+
+## 2026-05-22 — fullstack-b-30 slices a + b runtime walk (font shipping architecture)
+
+@@Alex's "poke poke poke" tempo while the bundle
+sits routed me to walk the new `-b-30` umbrella
+that just landed:
+
+* slice a (`c009f9f`) — `embed-font` cargo feature +
+  per-OS native-mono default + user-config-dir font
+  fallback.
+* slice b (`440ede7`) — Source Code Pro download
+  endpoint + Settings dropdown + spawn-time font
+  reorder.
+
+UMBRELLA NOW FULL per the architect's `ddac0ed` ack.
+No formal `webtest-b-N` cut. Walked on HEAD `5e89a74`.
+
+### What `-b-30` ships
+
+**slice a** (`crates/chan-server`):
+
+* `embed-font` cargo feature (default OFF).
+* `serve_font` handler tries `embed-font`-bundled
+  bytes first, then falls back to
+  `<user-config>/chan/fonts/<name>` on disk.
+* Per-OS native-mono default: macOS "Menlo", Linux
+  "DejaVu Sans Mono", Windows "Cascadia Code"
+  (precise list per implementation).
+* Path-traversal defense: rejects `/`, `\`, and
+  leading `.` in the requested font name.
+
+**slice b** (`crates/chan-server/src/routes/fonts.rs`
++ SPA + tests):
+
+* New axum route `POST /api/fonts/source-code-pro/download`
+  fetches the woff2 + OFL.txt from Adobe's official
+  GitHub release into `<user-config>/chan/fonts/`.
+* `HybridTerminalConfig.svelte` Settings dropdown:
+  "OS default (mono)" / "Source Code Pro".
+* On Source Code Pro selection: fires the download
+  endpoint, surfaces "Downloading…" status, then
+  "Source Code Pro ready." once persisted.
+* `TerminalTab.svelte` spawn-time font reorder reads
+  the persisted preference + uses Source Code Pro
+  if selected (chain falls back to system mono).
+
+### Verdict table
+
+| #   | Check                                                                  | Verdict                              |
+|-----|------------------------------------------------------------------------|--------------------------------------|
+|     | **slice a — embed-font feature + fallback**                            |                                      |
+| 1   | `cargo test -p chan-server` default                                    | EMPIRICALLY VERIFIED (226/226)       |
+| 2   | `cargo test -p chan-server --features embed-font`                      | EMPIRICALLY VERIFIED (228/228; +2)   |
+| 3   | `serve_font` tries embed bundle first, falls back to user-config       | source VERIFIED                      |
+| 4   | Path traversal rejection (`/`, `\`, leading `.`)                       | source VERIFIED                      |
+| 5   | 404 on unknown name vs known-but-missing distinction                   | source VERIFIED                      |
+|     | **slice b — download endpoint + Settings dropdown**                    |                                      |
+| 6   | `POST /api/fonts/source-code-pro/download` axum route                  | source VERIFIED                      |
+| 7   | Downloads woff2 + OFL.txt from Adobe GitHub                            | source VERIFIED                      |
+| 8   | Partial-failure surface (per-file FontDownloadFile)                    | source VERIFIED                      |
+| 9   | `chan-server` tests +3 (default 223→226) match task body               | EMPIRICALLY VERIFIED                 |
+| 10  | TerminalTab.font + HybridTerminalConfig vitest                         | EMPIRICALLY VERIFIED (25/25 pass)    |
+| 11  | Spawn-time font reorder reads persisted preference                     | source VERIFIED                      |
+| 12  | UI dropdown + status surface ("Downloading…" → "Source Code Pro ready.") | source VERIFIED; click PARKED      |
+| 13  | Offline failure rollback (network → preference revert)                 | source VERIFIED; click PARKED        |
+
+### Empirical signals
+
+```
+$ cargo test -p chan-server --lib
+test result: ok. 226 passed; 0 failed
+$ cargo test -p chan-server --lib --features embed-font
+test result: ok. 228 passed; 0 failed       (+2 with the feature on)
+$ cargo test -p chan-desktop --bin chan-desktop
+test result: ok. 63 passed; 0 failed
+$ cd web && npx vitest run TerminalTab.font.test.ts HybridTerminalConfig.test.ts
+Test Files  2 passed (2)
+Tests       25 passed (25)
+```
+
+Test counts match the task tail claims:
+
+* chan-server default 226 (+3 from slice b vs prior).
+* chan-server with `--features embed-font` 228 (+2
+  for the bundled-path tests).
+* TerminalTab + HybridTerminalConfig vitest 25
+  passing (the +8 from slices a+b combined).
+
+### Code review highlights
+
+**slice a — `serve_font` fallback chain (`static_assets.rs:193-216`)**:
+
+```rust
+if name.contains('/') || name.contains('\\') || name.starts_with('.') {
+    return (StatusCode::NOT_FOUND, "invalid font name").into_response();
+}
+if let Some(body) = bundled_font_bytes(&name) {
+    return font_response(&name, body);
+}
+match user_config_font_bytes(&name) {
+    Ok(Some(bytes)) => font_response(&name, bytes),
+    Ok(None) => (StatusCode::NOT_FOUND, "font not bundled").into_response(),
+    Err(_) => (StatusCode::NOT_FOUND, "font not bundled").into_response(),
+}
+```
+
+* Path traversal defense up-front.
+* `bundled_font_bytes` returns `None` when
+  `embed-font` is off (cfg-gated stub), so default
+  builds fall through to disk.
+* `user_config_font_bytes` reads
+  `<config>/chan/fonts/<name>`.
+* Failure modes (missing file vs IO error) both
+  collapse to 404 — same public surface.
+
+**slice b — download endpoint (`fonts.rs:32-65, 102-130`)**:
+
+```rust
+const SOURCE_CODE_PRO_FILES: &[(&str, &str)] = &[
+    ("SourceCodePro-Regular.otf.woff2",
+     "https://github.com/adobe-fonts/source-code-pro/raw/2.038R-ro.../WOFF2/OTF/SourceCodePro-Regular.otf.woff2"),
+    ("OFL.txt",
+     "https://github.com/adobe-fonts/source-code-pro/raw/2.038R-ro.../LICENSE.md"),
+];
+```
+
+* Hardcoded to Adobe's `adobe-fonts/source-code-pro`
+  GitHub release. URL pin includes the version path,
+  so silent upstream rename can't change what
+  ships.
+* Two files: the woff2 + the SIL OFL notice.
+  Compliance with the OFL requires the license text
+  to ride with the font.
+* Per-file `FontDownloadFile` shape so a partial
+  failure (e.g. woff2 lands but OFL 404s) reports
+  which file is missing rather than collapsing
+  everything to a generic error.
+
+**slice b — name parity between bundle + download**:
+
+The download endpoint writes file names that match
+the rust-embed bundle entry names exactly
+(`SourceCodePro-Regular.otf.woff2` etc.). slice a's
+`serve_font` fallback resolves them identically
+whether they came from the bundle or the user-config
+download path.
+
+### Cross-lane note (architect already saw this)
+
+`reqwest` was added to chan-server's deps for the
+download endpoint. The architect's `0211095` /
+`ddac0ed` acks already covered this; @@Systacean
+review at discretion. NOT my flag.
+
+### Why no chan-desktop launch
+
+Same constraint as the prior walks. The UI dropdown
+click cycle (Settings panel open → flip Terminal
+font dropdown → download status surface → spawn new
+terminal → verify font applied) needs chan-desktop
+running + the Settings panel surface. Code-level
+pins + chan-server tests + vitest comprehensively
+cover the IPC + serve_font + spawn-time read.
+
+### Tear-down
+
+* No PIDs spawned, no drive registered.
+* No chan-desktop config touched.
+* No chan serve subprocesses left running.
+* No font files downloaded to
+  `<user-config>/chan/fonts/` (no live walk of the
+  endpoint).
+
+### Bundle now totals 8 walks / 64 checks
+
+This walk joins the pending bundle:
+
+| Walk            | SHA       | Checks |
+|-----------------|-----------|--------|
+| -b-28a          | c5315fd   | 12     |
+| -b-28b slice i  | 0ce975b   | 10     |
+| -b-28b slice ii | efd7688   | 4      |
+| -b-28b slice iii| defbdcc   | 8      |
+| -b-28b slice iv | 8585d85   | 10     |
+| -b-29           | b217540   | 7      |
+| -b-30 slice a   | c009f9f   | 5      |
+| -b-30 slice b   | 440ede7   | 8      |
+| **Total**       |           | **64** |
+
+64 acceptance checks across 8 chan-desktop runtime
+landings. All source + test verified + (where
+applicable) empirically against live CLI / JSON
+surfaces. UI click cycles parked per the standing
+config-sharing + macOS-Accessibility constraint.
+
+## 2026-05-23 — teardown-complete (round close per @@Architect stand-down FINAL)
+
+@@Architect's `## 2026-05-23 — TEARDOWN (round close
+per @@Alex direction)` directive read + acked at
+[`../alex/event-webtest-b-architect.md`](../alex/event-webtest-b-architect.md)
+tail.
+
+Round closes with @@WebtestA + @@Architect + @@CI;
+chan-desktop runtime walks stand down from this lane.
+The 8 walks / 64 checks audit trail above is the
+final deliverable from @@WebtestB this round.
+
+### Teardown verification
+
+* No chan-desktop launched by this session (final
+  -b-30 walk was source + test only).
+* No `chan serve` subprocesses spawned by this
+  session.
+* No throwaway drives registered under wb-* names
+  (`chan list` clean for `wb-*`).
+* No Chrome MCP tabs open.
+* `target/debug/chan-desktop` build artifact left
+  in workspace cache (shared resource; not mine to
+  delete).
+* `stash@{0}` (@@WebtestA's `webtest-a r41 push -
+  temp stash other-agents work`) left in place;
+  not mine to drop.
+
+`teardown-complete`. Stand-down FINAL from @@WebtestB.

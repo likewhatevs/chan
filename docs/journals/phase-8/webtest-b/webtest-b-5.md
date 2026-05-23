@@ -21,7 +21,7 @@ Walk two chan-desktop changes in one session:
 * `-b-26`: [`../fullstack-b/fullstack-b-26.md`](../fullstack-b/fullstack-b-26.md)
   + scope correction in the tail.
 * `-b-27`: [`../fullstack-b/fullstack-b-27.md`](../fullstack-b/fullstack-b-27.md).
-* Addendum A: [`../alex/addendun-a.md`](../alex/addendun-a.md)
+* Addendum A: [`../alex/addendun-a.md`](../alex/addendum-a.md)
   for the menu-revamp context.
 
 ## Acceptance
