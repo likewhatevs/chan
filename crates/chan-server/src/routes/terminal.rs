@@ -1370,6 +1370,8 @@ mod tests {
             Some(Json(RestartTerminalBody {
                 name: Some("@@Second".into()),
                 window_id: None,
+                command: None,
+                env: None,
             })),
         )
         .await;

@@ -151,14 +151,24 @@ describe("fullstack-a-79: translateConfig", () => {
 });
 
 describe("fullstack-a-79: identityPrompt", () => {
-  test("constructs the addendum-b clarification #4 prompt verbatim", () => {
-    expect(identityPrompt("@@Alice")).toBe(
-      "I'm @@Alice. You're $CHAN_TAB_NAME. Identify yourself, and then read docs/agents/bootstrap.md",
+  test("constructs the addendum-a 2026-05-23 prompt verbatim with host/lead asymmetry", () => {
+    expect(
+      identityPrompt(
+        "@@Alice",
+        "@@Lead",
+        "Drafts/team-foo/docs/bootstrap.md",
+      ),
+    ).toBe(
+      "Hello, I am @@Alice and you are $CHAN_TAB_NAME. Our team lead is @@Lead. Identify yourself and read Drafts/team-foo/docs/bootstrap.md.",
     );
   });
 
   test("does NOT escape $CHAN_TAB_NAME (agents read it as a live env-var)", () => {
-    const out = identityPrompt("@@Bob");
+    const out = identityPrompt(
+      "@@Bob",
+      "@@Lead",
+      "Drafts/team-bar/docs/bootstrap.md",
+    );
     expect(out).toContain("$CHAN_TAB_NAME");
     expect(out).not.toContain("\\$CHAN_TAB_NAME");
   });
