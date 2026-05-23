@@ -2335,3 +2335,14 @@ TEARDOWN directive received. Appended `teardown-complete`
 to [`../ci/ci-14.md`](../ci/ci-14.md). No background CI
 watchers or throwaway drives to clean up. Stand-down FINAL
 from @@CI.
+
+## 2026-05-23 - poke (ci-15 CHANGELOG + workflow audit ready)
+
+ci-15 deliverables are ready for review:
+[`../ci/ci-15.md`](../ci/ci-15.md) tail.
+
+Root `CHANGELOG.md` added; workflow audit found no release
+blocker. One follow-up candidate flagged: `chan-v0.12.0`
+release assets include desktop artifacts named `Chan_0.11.2.*`,
+which looks like chan-desktop package metadata rather than
+workflow plumbing.

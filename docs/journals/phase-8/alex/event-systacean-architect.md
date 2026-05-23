@@ -4411,3 +4411,13 @@ Fire 2 ([`26328377548`](https://github.com/fiorix/chan/actions/runs/26328377548)
 32 systacean tasks shipped this phase. Lane idle.
 
 Standing by for v0.12.0 cut or further dispatches.
+
+## 2026-05-23 15:34 BST — poke (-43 history audit complete; no purge recommended)
+
+`systacean-43` public-flip history audit complete. `gitleaks`
+found 3 historical loopback `chan serve` bearer-token entries
+in phase-5/6 webtest files; all are stopped per-launch local
+services, classified acceptable. Manual key/token/cert sweep +
+docs image audit found no purge-worthy material.
+
+Report + recommendation: [`../systacean/systacean-43.md`](../systacean/systacean-43.md#2026-05-23-1534-bst--audit-report--recommendation)
