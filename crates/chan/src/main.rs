@@ -2,16 +2,13 @@
 //
 // This binary is the user-facing entry point. Subcommands:
 //
-//   chan add <path> [--name NAME]   register a directory as a chan
+//   chan add <path>                 register a directory as a chan
 //                                   drive in ~/.chan/config.toml
 //   chan list [--json]              list registered drives,
 //                                   most-recent first. --json emits
 //                                   a stable machine-readable shape.
-//   chan remove <path> | --name N   drop a drive from the registry
-//                                   by path or by display name
+//   chan remove <path>              drop a drive from the registry
 //                                   (filesystem contents untouched)
-//   chan rename <path> <name>       set / clear a drive's display
-//                                   name
 //   chan serve [-4|-6] [--host H --port N]
 //                                   run the HTTP server. Defaults
 //                                   to 127.0.0.1 (loopback only);
@@ -39,7 +36,6 @@
 // invariants (atomic writes, path sandbox, special-file refusal,
 // cross-process writer lock) apply uniformly.
 
-use std::io::{IsTerminal, Write};
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -157,10 +153,6 @@ enum Command {
     /// Round-2's lean-drive policy (`systacean-27`).
     Add {
         path: PathBuf,
-        /// Display name shown in the recents list and window title.
-        /// Defaults to the directory's basename on first registration.
-        #[arg(long)]
-        name: Option<String>,
         /// systacean-27: enable per-drive semantic search (BGE-small
         /// dense vectors). Per-drive footprint; needs the shared
         /// model (`chan index download-model`). Off by default.
@@ -175,10 +167,10 @@ enum Command {
     },
     /// List registered drives, most-recent first.
     List {
-        /// Emit machine-readable JSON: `{"drives":[{name,path,uuid,
-        /// last_opened},...]}`. `name` is null when the drive has
-        /// no display name; `last_opened` is RFC3339 UTC. The text
-        /// format is unchanged when this flag is omitted.
+        /// Emit machine-readable JSON:
+        /// `{"drives":[{path,metadata_key,last_seen_at},...]}`.
+        /// `last_seen_at` is RFC3339 UTC. The text format is
+        /// unchanged when this flag is omitted.
         #[arg(long)]
         json: bool,
     },
@@ -197,33 +189,9 @@ enum Command {
     /// Drop a drive from the registry. Does not delete the
     /// directory or its content; only forgets it on this machine.
     ///
-    /// Identify the drive by PATH or by `--name NAME`. Drive names
-    /// are not required to be unique; if two drives share a name
-    /// `--name` fails with a list of candidate paths and asks for
-    /// the path form instead.
-    #[command(group(
-        clap::ArgGroup::new("remove_target")
-            .required(true)
-            .args(["path", "name"]),
-    ))]
     Remove {
         #[arg(value_hint = clap::ValueHint::AnyPath)]
-        path: Option<PathBuf>,
-        /// Drop by display name. Fails when no registered drive
-        /// has this name, or when more than one does.
-        #[arg(long, conflicts_with = "path")]
-        name: Option<String>,
-    },
-    /// Set or clear a drive's display name.
-    ///
-    /// Both PATH and NAME are required: defaulting PATH to the
-    /// default drive would silently rename the wrong drive when
-    /// multiple are registered. Explicit beats friendly here. To
-    /// rename the drive you're standing in: `chan rename . NEWNAME`.
-    Rename {
         path: PathBuf,
-        /// Pass `""` to clear the name.
-        name: String,
     },
     /// Run the HTTP server. Defaults to 127.0.0.1 (loopback only).
     #[command(long_about = SERVE_LONG_ABOUT)]
@@ -308,11 +276,10 @@ enum Command {
         /// in `ps`.
         #[arg(long, env = "CHAN_TUNNEL_TOKEN")]
         tunnel_token: Option<String>,
-        /// Drive name to publish at /{user}/<name>. Must be
+        /// Drive URL slug to publish at /{user}/<name>. Must be
         /// lowercase [a-z0-9-], 1-32 chars, no leading/trailing
-        /// hyphen. Defaults to a sanitized form of the drive's
-        /// stored display name (e.g. "My Notes" -> "my-notes");
-        /// chan emits a NOTE when it had to sanitize.
+        /// hyphen. Defaults to a sanitized form of the drive path
+        /// basename; chan emits a NOTE when it had to sanitize.
         #[arg(long)]
         tunnel_drive: Option<String>,
         /// Expose the tunneled drive without an OAuth gate. By
@@ -617,10 +584,9 @@ fn main() -> Result<()> {
     match cli.command {
         Command::Add {
             path,
-            name,
             semantic_search,
             reports,
-        } => cmd_add(path, name, semantic_search, reports),
+        } => cmd_add(path, semantic_search, reports),
         Command::List { json } => cmd_list(json),
         Command::Open { path } => {
             let rt = tokio::runtime::Builder::new_current_thread()
@@ -630,8 +596,7 @@ fn main() -> Result<()> {
             rt.block_on(cmd_open(path))
         }
         Command::Completions { shell } => cmd_completions(shell),
-        Command::Remove { path, name } => cmd_remove(path, name),
-        Command::Rename { path, name } => cmd_rename(path, name),
+        Command::Remove { path } => cmd_remove(path),
         Command::Serve {
             path,
             here,
@@ -773,120 +738,22 @@ fn default_index_walk_filter() -> WalkFilter {
     WalkFilter::new(DEFAULT_INDEX_EXCLUDED_DIRS.iter().copied())
 }
 
-/// Resolve the display name to register for `root`. Behavior:
-///
-///   - When the caller passed an explicit name (non-empty), use it
-///     verbatim. The user's choice always wins.
-///   - When the drive is already registered with a non-empty name,
-///     keep it. Re-registration is a no-op for the name field.
-///   - Otherwise default to the directory's basename. If that
-///     basename collides with another already-registered drive's
-///     name, prompt the user on a TTY for an alternative; on a
-///     non-TTY (chan-app embedding, scripts, CI) fall back to a
-///     `<basename> (<parent-dir>)` disambiguator so the registry
-///     stays unambiguous without blocking startup.
-fn resolve_drive_name(lib: &Library, root: &Path, requested: Option<String>) -> Result<String> {
-    if let Some(n) = requested
-        .as_ref()
-        .map(|s| s.trim())
-        .filter(|s| !s.is_empty())
-    {
-        return Ok(n.to_string());
-    }
-    let drives = lib.list_drives();
-    if let Some(existing) = drives
-        .iter()
-        .find(|d| same_path(&d.path, root))
-        .and_then(|d| d.name.as_deref())
-        .filter(|s| !s.is_empty())
-    {
-        return Ok(existing.to_string());
-    }
-    let basename = root
-        .file_name()
-        .map(|s| s.to_string_lossy().into_owned())
-        .filter(|s| !s.is_empty())
-        .unwrap_or_else(|| "drive".to_string());
-    let conflict = drives
-        .iter()
-        .any(|d| !same_path(&d.path, root) && d.name.as_deref() == Some(basename.as_str()));
-    if !conflict {
-        return Ok(basename);
-    }
-    let auto = disambiguate_name(&basename, root);
-    if std::io::stdin().is_terminal() && std::io::stderr().is_terminal() {
-        Ok(prompt_drive_name(&basename, root, &auto))
-    } else {
-        eprintln!(
-            "chan: drive name '{basename}' already in use; auto-naming as '{auto}'. \
-             Rename later with `chan rename {} <name>`.",
-            root.display(),
-        );
-        Ok(auto)
-    }
-}
-
-/// "Notes (Documents)" style disambiguator: append the immediate
-/// parent directory name in parens. Stable per path so re-running
-/// chan against the same drive lands the same name.
-fn disambiguate_name(basename: &str, root: &Path) -> String {
-    let parent = root
-        .parent()
-        .and_then(|p| p.file_name())
-        .map(|s| s.to_string_lossy().into_owned())
-        .unwrap_or_default();
-    if parent.is_empty() {
-        basename.to_string()
-    } else {
-        format!("{basename} ({parent})")
-    }
-}
-
-fn prompt_drive_name(basename: &str, root: &Path, default: &str) -> String {
-    eprintln!("Drive name '{basename}' is already used by another drive in the registry.");
-    eprintln!("Path: {}", root.display());
-    eprint!("Pick a different name (or press Enter for '{default}'): ");
-    let _ = std::io::stderr().flush();
-    let mut buf = String::new();
-    let _ = std::io::stdin().read_line(&mut buf);
-    let trimmed = buf.trim();
-    if trimmed.is_empty() {
-        default.to_string()
-    } else {
-        trimmed.to_string()
-    }
-}
-
 fn same_path(a: &Path, b: &Path) -> bool {
     let ca = a.canonicalize().unwrap_or_else(|_| a.to_path_buf());
     let cb = b.canonicalize().unwrap_or_else(|_| b.to_path_buf());
     ca == cb
 }
 
-/// Register the drive AND make sure it ends up with a non-empty
-/// display name. `register_drive` only sets the name on first
-/// insert (chan-drive's "never clobber a user-set name" policy),
-/// so a previously-unnamed entry stays unnamed on subsequent
-/// `chan serve` calls. We backfill via `rename_drive` so users
-/// who already had a drive registered before the auto-name change
-/// still see a real name in the file browser without typing
-/// `chan rename` first.
 /// Pick the URL-safe drive name to publish under
-/// `{user}.drive.chan.app/<name>`. The registry display name
-/// (used in the file browser, logs, etc.) and the wire name
-/// are decoupled: the display name can be "My Notes", but the
-/// tunnel name has to satisfy `is_valid_drive_name`.
+/// `{user}.drive.chan.app/<name>`. This is a tunnel URL concern,
+/// separate from local path-keyed drive metadata.
 ///
 /// - With `--tunnel-drive`: validate it; bail with a clear
 ///   message + a suggested sanitized form if rejected.
-/// - Without: take the registry name (or basename), sanitize.
-///   Warn when sanitize altered it. Bail when sanitize yields
-///   `None` (the path collapses to all punctuation).
-fn resolve_tunnel_drive_name(
-    flag: Option<String>,
-    registry_name: Option<&str>,
-    root: &Path,
-) -> Result<String> {
+/// - Without: take the path basename and sanitize. Warn when
+///   sanitize altered it. Bail when sanitize yields `None` (the
+///   basename collapses to all punctuation).
+fn resolve_tunnel_drive_name(flag: Option<String>, root: &Path) -> Result<String> {
     if let Some(name) = flag {
         if chan_server::tunnel::is_valid_drive_name(&name) {
             return Ok(name);
@@ -901,21 +768,17 @@ fn resolve_tunnel_drive_name(
             "--tunnel-drive {name:?} is not URL-safe (need [a-z0-9-], 1-{max} chars, no leading/trailing hyphen).{hint}"
         );
     }
-    let source = registry_name
-        .filter(|s| !s.is_empty())
-        .map(str::to_string)
-        .unwrap_or_else(|| {
-            root.file_name()
-                .map(|s| s.to_string_lossy().into_owned())
-                .unwrap_or_default()
-        });
+    let source = root
+        .file_name()
+        .map(|s| s.to_string_lossy().into_owned())
+        .unwrap_or_default();
     if chan_server::tunnel::is_valid_drive_name(&source) {
         return Ok(source);
     }
     match chan_server::tunnel::sanitize_drive_name(&source) {
         Some(sanitized) => {
             eprintln!(
-                "NOTE: drive name {source:?} sanitized to {sanitized:?} for the tunnel URL. \
+                "NOTE: drive path basename {source:?} sanitized to {sanitized:?} for the tunnel URL. \
                  Pass --tunnel-drive to override."
             );
             Ok(sanitized)
@@ -930,35 +793,12 @@ fn resolve_tunnel_drive_name(
     }
 }
 
-fn ensure_drive_named(
-    lib: &Library,
-    root: &Path,
-    requested: Option<String>,
-) -> Result<chan_drive::KnownDrive> {
-    let resolved = resolve_drive_name(lib, root, requested)?;
-    let entry = lib
-        .register_drive(root, Some(resolved.clone()))
-        .with_context(|| format!("registering {}", root.display()))?;
-    if entry.name.as_deref().unwrap_or("").is_empty() {
-        lib.rename_drive(root, Some(resolved.clone()))
-            .with_context(|| format!("renaming {}", root.display()))?;
-        // KnownDrive carries private fields (canonical_path) so we
-        // can't struct-update the prior entry. register_drive is
-        // idempotent: re-call it to pick up the new name plus
-        // whatever else the registry recomputed.
-        return lib
-            .register_drive(root, Some(resolved))
-            .with_context(|| format!("re-registering {}", root.display()));
-    }
-    Ok(entry)
+fn ensure_drive_registered(lib: &Library, root: &Path) -> Result<chan_drive::KnownDrive> {
+    lib.register_drive(root, None)
+        .with_context(|| format!("registering {}", root.display()))
 }
 
-fn cmd_add(
-    path: PathBuf,
-    name: Option<String>,
-    semantic_search: bool,
-    reports: bool,
-) -> Result<()> {
+fn cmd_add(path: PathBuf, semantic_search: bool, reports: bool) -> Result<()> {
     // Mirror `chan serve`'s behavior: create the directory if it
     // doesn't exist yet. Single verb covers both "register an
     // existing dir" and "make a fresh drive here". A separate
@@ -969,14 +809,14 @@ fn cmd_add(
             .with_context(|| format!("creating drive root {}", path.display()))?;
     }
     let lib = library()?;
-    let entry = ensure_drive_named(&lib, &path, name)?;
+    let entry = ensure_drive_registered(&lib, &path)?;
     // systacean-27: opt-in feature flags. Persist before
     // boot-time activation so a `chan add --reports` lands the
     // flag immediately + the kickoff scan runs once.
     if semantic_search || reports {
         let drive = lib
-            .open_drive(&entry.path)
-            .with_context(|| format!("opening drive at {}", entry.path.display()))?;
+            .open_drive(&entry.root_path)
+            .with_context(|| format!("opening drive at {}", entry.root_path.display()))?;
         if semantic_search {
             drive
                 .set_semantic_enabled(true)
@@ -991,11 +831,7 @@ fn cmd_add(
             .boot()
             .context("BOOT after enabling optional features")?;
     }
-    println!(
-        "registered: {} ({})",
-        entry.path.display(),
-        entry.name.as_deref().unwrap_or("unnamed"),
-    );
+    println!("registered: {}", entry.root_path.display());
     if semantic_search {
         println!("semantic search enabled");
     }
@@ -1019,12 +855,11 @@ fn cmd_list(json: bool) -> Result<()> {
         return Ok(());
     }
     for d in drives {
-        let name = d.name.as_deref().unwrap_or("unnamed");
         println!(
-            "{:<24} {}  (last opened {})",
-            name,
-            d.path.display(),
-            d.last_opened.format("%Y-%m-%d %H:%M"),
+            "{}  (last seen {}, metadata {})",
+            d.root_path.display(),
+            d.last_seen_at.format("%Y-%m-%d %H:%M"),
+            d.metadata_key,
         );
     }
     Ok(())
@@ -1037,78 +872,13 @@ fn cmd_completions(shell: Shell) -> Result<()> {
     Ok(())
 }
 
-fn cmd_remove(path: Option<PathBuf>, name: Option<String>) -> Result<()> {
+fn cmd_remove(path: PathBuf) -> Result<()> {
     let lib = library()?;
-    let target = match (path, name) {
-        (Some(p), _) => p,
-        (None, Some(name)) => {
-            let drives = lib.list_drives();
-            pick_drive_by_name(
-                drives.iter().map(|d| (d.name.as_deref(), d.path.as_path())),
-                &name,
-            )?
-        }
-        (None, None) => unreachable!("clap group `remove_target` requires path or --name"),
-    };
     let removed = lib
-        .unregister_drive(&target)
-        .with_context(|| format!("unregistering {}", target.display()))?;
+        .unregister_drive(&path)
+        .with_context(|| format!("unregistering {}", path.display()))?;
     if removed {
-        println!("unregistered: {}", target.display());
-    } else {
-        println!("(not registered: {})", target.display());
-    }
-    Ok(())
-}
-
-/// Resolve a `chan remove --name NAME` to a registered drive path.
-///
-/// Drive names are not unique in the registry (see
-/// `crates/chan-drive/src/registry.rs`: neither `touch` nor
-/// `set_name` enforces uniqueness). Two `chan add ... --name foo`
-/// invocations at different paths happily coexist. So `--name`
-/// resolves to a path only when exactly one drive matches; on
-/// collision the user picks the path manually rather than letting
-/// chan guess.
-fn pick_drive_by_name<'a, I>(drives: I, name: &str) -> Result<PathBuf>
-where
-    I: Iterator<Item = (Option<&'a str>, &'a Path)>,
-{
-    let matches: Vec<PathBuf> = drives
-        .filter(|(n, _)| *n == Some(name))
-        .map(|(_, p)| p.to_path_buf())
-        .collect();
-    match matches.len() {
-        0 => anyhow::bail!(
-            "no registered drive named {name:?}; \
-             check `chan list` or pass the path to `chan remove`"
-        ),
-        1 => Ok(matches.into_iter().next().unwrap()),
-        _ => {
-            let list = matches
-                .iter()
-                .map(|p| format!("  {}", p.display()))
-                .collect::<Vec<_>>()
-                .join("\n");
-            anyhow::bail!(
-                "multiple drives named {name:?}; chan does not enforce unique drive names. \
-                 Pick one with `chan remove <path>`:\n{list}"
-            )
-        }
-    }
-}
-
-fn cmd_rename(path: PathBuf, name: String) -> Result<()> {
-    let new_name = if name.is_empty() { None } else { Some(name) };
-    let ok = library()?
-        .rename_drive(&path, new_name.clone())
-        .with_context(|| format!("renaming {}", path.display()))?;
-    if ok {
-        println!(
-            "renamed: {} ({})",
-            path.display(),
-            new_name.as_deref().unwrap_or("unnamed"),
-        );
+        println!("unregistered: {}", path.display());
     } else {
         println!("(not registered: {})", path.display());
     }
@@ -1266,7 +1036,7 @@ async fn cmd_serve(
         std::fs::create_dir_all(&root)
             .with_context(|| format!("creating drive root {}", root.display()))?;
     }
-    let known = ensure_drive_named(&lib, &root, None)?;
+    ensure_drive_registered(&lib, &root)?;
     let drive = lib.open_drive(&root)?;
 
     // Best-effort update notice. The banner reads cached state
@@ -1289,7 +1059,7 @@ async fn cmd_serve(
                  Prefer CHAN_TUNNEL_TOKEN env var instead."
             );
         }
-        let drive_name = resolve_tunnel_drive_name(tunnel_drive, known.name.as_deref(), &root)?;
+        let drive_name = resolve_tunnel_drive_name(tunnel_drive, &root)?;
         if tunnel_public {
             eprintln!(
                 "WARNING: --public exposes this drive at \
@@ -1447,11 +1217,9 @@ fn cmd_index(action: IndexAction) -> Result<()> {
 fn cmd_index_rebuild(path: PathBuf) -> Result<()> {
     let lib = library()?;
     // Idempotent: registering an already-known drive only touches
-    // last_opened. CLI users expect `chan index rebuild /some/path`
-    // to work without a prior `chan add`. First-touch defaults the
-    // name to the directory's basename (or prompts on conflict) so
-    // the file browser doesn't show "(unnamed)" later.
-    ensure_drive_named(&lib, &path, None)?;
+    // last_seen_at. CLI users expect `chan index rebuild /some/path`
+    // to work without a prior `chan add`.
+    ensure_drive_registered(&lib, &path)?;
     let drive = lib.open_drive(&path)?;
 
     // Live progress on stderr so the user can see the embed pass
@@ -1639,8 +1407,8 @@ fn cmd_index_status(path: Option<PathBuf>, json: bool) -> Result<()> {
     let canonical_root = lib
         .list_drives()
         .into_iter()
-        .find(|d| same_path(&d.path, &root))
-        .map(|d| d.path)
+        .find(|d| same_path(&d.root_path, &root))
+        .map(|d| d.root_path)
         .unwrap_or(root);
     let cfg = chan_drive::index::config::load(&drive_paths.index)
         .with_context(|| format!("reading index config at {}", drive_paths.index.display()))?;
@@ -1765,7 +1533,7 @@ fn humanize_bytes(bytes: u64) -> String {
 /// external MCP clients through config files; not user-facing.
 ///
 /// We deliberately do NOT auto-register the drive here: the host
-/// (chan-server) has already gone through `ensure_drive_named` for
+/// (chan-server) has already registered the drive for
 /// this drive when the session started, and the MCP subprocess
 /// inherits that registry. If the drive isn't registered when the
 /// agent invokes the subcommand, that's a wiring bug worth
@@ -1922,7 +1690,7 @@ async fn cmd_mcp_proxy(_socket: PathBuf) -> Result<()> {
 
 fn cmd_search(path: PathBuf, query: String, limit: u32) -> Result<()> {
     let lib = library()?;
-    ensure_drive_named(&lib, &path, None)?;
+    ensure_drive_registered(&lib, &path)?;
     let drive = lib.open_drive(&path)?;
     let opts = SearchOpts {
         limit,
@@ -1955,23 +1723,19 @@ struct DriveListOutput {
 
 #[derive(Serialize)]
 struct DriveListEntry {
-    /// `null` when the drive has no display name (still unique by
-    /// path / uuid).
-    name: Option<String>,
     path: String,
-    /// Stable per-drive identity (16 hex chars).
-    uuid: String,
+    /// Stable per-drive metadata storage key under ~/.chan/drives/.
+    metadata_key: String,
     /// RFC3339 UTC timestamp.
-    last_opened: String,
+    last_seen_at: String,
 }
 
 impl From<&KnownDrive> for DriveListEntry {
     fn from(d: &KnownDrive) -> Self {
         Self {
-            name: d.name.clone(),
-            path: d.path.display().to_string(),
-            uuid: d.uuid.clone(),
-            last_opened: d.last_opened.to_rfc3339(),
+            path: d.root_path.display().to_string(),
+            metadata_key: d.metadata_key.clone(),
+            last_seen_at: d.last_seen_at.to_rfc3339(),
         }
     }
 }
@@ -1996,7 +1760,7 @@ struct GraphEdgeOutput {
 #[derive(Serialize)]
 struct StatusOutput {
     root: String,
-    registered_name: Option<String>,
+    metadata_key: Option<String>,
     index: StatusIndex,
     graph: StatusGraph,
     report: StatusReport,
@@ -2051,7 +1815,7 @@ fn cmd_graph(
     json: bool,
 ) -> Result<()> {
     let lib = library()?;
-    ensure_drive_named(&lib, &path, None)?;
+    ensure_drive_registered(&lib, &path)?;
     let drive = lib.open_drive(&path)?;
     if scope != GraphScope::All {
         return cmd_filesystem_graph(&drive, scope, target, depth, limit, json);
@@ -2158,12 +1922,12 @@ fn cmd_status(path: Option<PathBuf>, json: bool) -> Result<()> {
     let root = path
         .or_else(|| lib.default_drive_root())
         .unwrap_or_else(|| lib.effective_default_drive_root());
-    ensure_drive_named(&lib, &root, None)?;
+    ensure_drive_registered(&lib, &root)?;
     let drive = lib.open_drive(&root)?;
     let known = lib
         .list_drives()
         .into_iter()
-        .find(|d| same_path(&d.path, drive.root()));
+        .find(|d| same_path(&d.root_path, drive.root()));
     let index = drive.index_stats().context("reading index stats")?;
     let graph = drive.graph().context("opening graph")?;
     let graph_files = graph.files().context("reading graph files")?;
@@ -2188,7 +1952,7 @@ fn cmd_status(path: Option<PathBuf>, json: bool) -> Result<()> {
         .collect();
     let out = StatusOutput {
         root: drive.root().display().to_string(),
-        registered_name: known.and_then(|d| d.name),
+        metadata_key: known.map(|d| d.metadata_key),
         index: StatusIndex {
             ready: index.ready,
             indexed_docs: index.indexed_docs,
@@ -2216,8 +1980,8 @@ fn cmd_status(path: Option<PathBuf>, json: bool) -> Result<()> {
         return Ok(());
     }
     println!("drive: {}", out.root);
-    if let Some(name) = &out.registered_name {
-        println!("name: {name}");
+    if let Some(metadata_key) = &out.metadata_key {
+        println!("metadata: {metadata_key}");
     }
     println!(
         "index: ready={} docs={} vectors={} model={}",
@@ -2629,7 +2393,7 @@ fn cmd_contacts_import_csv(
         std::fs::create_dir_all(&root)
             .with_context(|| format!("creating drive root {}", root.display()))?;
     }
-    ensure_drive_named(&lib, &root, None)?;
+    ensure_drive_registered(&lib, &root)?;
     let drive = lib.open_drive(&root)?;
 
     if dry_run {
@@ -2839,15 +2603,14 @@ mod tests {
     #[test]
     fn tunnel_drive_flag_passes_through_when_valid() {
         let root = PathBuf::from("/tmp/whatever");
-        let out = resolve_tunnel_drive_name(Some("notes".into()), Some("My Notes"), &root).unwrap();
+        let out = resolve_tunnel_drive_name(Some("notes".into()), &root).unwrap();
         assert_eq!(out, "notes");
     }
 
     #[test]
     fn tunnel_drive_flag_rejected_with_suggestion() {
         let root = PathBuf::from("/tmp/whatever");
-        let err = resolve_tunnel_drive_name(Some("My Drive!".into()), Some("My Notes"), &root)
-            .unwrap_err();
+        let err = resolve_tunnel_drive_name(Some("My Drive!".into()), &root).unwrap_err();
         let msg = err.to_string();
         assert!(msg.contains("not URL-safe"), "{msg}");
         assert!(msg.contains("--tunnel-drive=my-drive"), "{msg}");
@@ -2856,35 +2619,21 @@ mod tests {
     #[test]
     fn tunnel_drive_flag_rejected_when_unsanitizable() {
         let root = PathBuf::from("/tmp/whatever");
-        let err = resolve_tunnel_drive_name(Some("---".into()), Some("notes"), &root).unwrap_err();
+        let err = resolve_tunnel_drive_name(Some("---".into()), &root).unwrap_err();
         assert!(err.to_string().contains("not URL-safe"));
     }
 
     #[test]
-    fn tunnel_drive_default_uses_registry_name_as_is_when_valid() {
-        let root = PathBuf::from("/tmp/whatever");
-        let out = resolve_tunnel_drive_name(None, Some("notes"), &root).unwrap();
-        assert_eq!(out, "notes");
-    }
-
-    #[test]
-    fn tunnel_drive_default_sanitizes_registry_name() {
-        let root = PathBuf::from("/tmp/whatever");
-        let out = resolve_tunnel_drive_name(None, Some("My Notes"), &root).unwrap();
-        assert_eq!(out, "my-notes");
-    }
-
-    #[test]
-    fn tunnel_drive_default_falls_back_to_basename_when_no_registry_name() {
+    fn tunnel_drive_default_uses_path_basename() {
         let root = PathBuf::from("/tmp/Daily Journal");
-        let out = resolve_tunnel_drive_name(None, None, &root).unwrap();
+        let out = resolve_tunnel_drive_name(None, &root).unwrap();
         assert_eq!(out, "daily-journal");
     }
 
     #[test]
     fn tunnel_drive_default_bails_when_basename_collapses() {
         let root = PathBuf::from("/tmp/---");
-        let err = resolve_tunnel_drive_name(None, None, &root).unwrap_err();
+        let err = resolve_tunnel_drive_name(None, &root).unwrap_err();
         assert!(err.to_string().contains("cannot derive"));
     }
 
@@ -2974,53 +2723,6 @@ mod tests {
         let mut server = ServerConfig::default();
         let err = write_server_config_key(&mut server, "server.attachments_dir", "").unwrap_err();
         assert!(err.to_string().contains("non-empty"));
-    }
-
-    #[test]
-    fn pick_drive_by_name_finds_unique_match() {
-        let drives = [
-            (Some("alpha"), Path::new("/tmp/a")),
-            (Some("beta"), Path::new("/tmp/b")),
-            (None, Path::new("/tmp/c")),
-        ];
-        let got = pick_drive_by_name(drives.iter().copied(), "beta").unwrap();
-        assert_eq!(got, PathBuf::from("/tmp/b"));
-    }
-
-    #[test]
-    fn pick_drive_by_name_errors_when_no_match() {
-        let drives = [(Some("alpha"), Path::new("/tmp/a"))];
-        let err = pick_drive_by_name(drives.iter().copied(), "ghost").unwrap_err();
-        let msg = err.to_string();
-        assert!(msg.contains("no registered drive"), "{msg}");
-        assert!(msg.contains("ghost"), "{msg}");
-    }
-
-    #[test]
-    fn pick_drive_by_name_errors_on_duplicate_with_candidate_paths() {
-        // Names are NOT required to be unique in the registry
-        // (registry::touch / set_name do not enforce uniqueness),
-        // so `chan remove --name` must refuse to guess and surface
-        // both candidates instead of removing the wrong one.
-        let drives = [
-            (Some("notes"), Path::new("/tmp/work-notes")),
-            (Some("notes"), Path::new("/tmp/personal-notes")),
-        ];
-        let err = pick_drive_by_name(drives.iter().copied(), "notes").unwrap_err();
-        let msg = err.to_string();
-        assert!(msg.contains("multiple drives"), "{msg}");
-        assert!(msg.contains("/tmp/work-notes"), "{msg}");
-        assert!(msg.contains("/tmp/personal-notes"), "{msg}");
-    }
-
-    #[test]
-    fn pick_drive_by_name_ignores_unnamed_drives() {
-        let drives = [
-            (None, Path::new("/tmp/unnamed")),
-            (Some("alpha"), Path::new("/tmp/a")),
-        ];
-        let err = pick_drive_by_name(drives.iter().copied(), "unnamed").unwrap_err();
-        assert!(err.to_string().contains("no registered drive"));
     }
 
     #[test]

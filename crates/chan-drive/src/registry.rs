@@ -45,22 +45,6 @@ pub struct KnownDrive {
     pub metadata_key: String,
     pub created_at: DateTime<Utc>,
     pub last_seen_at: DateTime<Utc>,
-    /// In-memory compatibility alias for older callers. Not
-    /// serialized; the registry stores `root_path`.
-    #[serde(skip, default)]
-    pub path: PathBuf,
-    /// In-memory compatibility alias for older callers. Not
-    /// serialized; the registry stores `metadata_key`.
-    #[serde(skip, default)]
-    pub uuid: String,
-    /// In-memory compatibility placeholder for older callers. Not
-    /// serialized; display labels are derived from `root_path`.
-    #[serde(skip, default)]
-    pub name: Option<String>,
-    /// In-memory compatibility alias for older callers. Not
-    /// serialized; the registry stores `last_seen_at`.
-    #[serde(skip, default = "Utc::now")]
-    pub last_opened: DateTime<Utc>,
     #[serde(skip)]
     pub(crate) canonical_path: Option<PathBuf>,
 }
@@ -76,13 +60,6 @@ impl KnownDrive {
         self.root_path
             .canonicalize()
             .unwrap_or_else(|_| self.root_path.clone())
-    }
-
-    fn refresh_compat_fields(&mut self) {
-        self.path = self.root_path.clone();
-        self.uuid = self.metadata_key.clone();
-        self.name = None;
-        self.last_opened = self.last_seen_at;
     }
 }
 
@@ -113,7 +90,6 @@ impl Registry {
                     .canonicalize()
                     .unwrap_or_else(|_| d.root_path.clone()),
             );
-            d.refresh_compat_fields();
         }
         Ok(reg)
     }
@@ -154,18 +130,12 @@ impl Registry {
             // keep the stale canonical, then the next touch wouldn't
             // find it on the fast path.
             self.drives[i].canonical_path = Some(canonical.clone());
-            self.drives[i].refresh_compat_fields();
         } else {
-            let metadata_key = paths::metadata_key_for_root(&canonical);
             self.drives.push(KnownDrive {
                 root_path: canonical.clone(),
-                metadata_key: metadata_key.clone(),
+                metadata_key: paths::metadata_key_for_root(&canonical),
                 created_at: now,
                 last_seen_at: now,
-                path: canonical.clone(),
-                uuid: metadata_key,
-                name: None,
-                last_opened: now,
                 canonical_path: Some(canonical.clone()),
             });
         }
@@ -187,7 +157,6 @@ impl Registry {
         self.drives[i].root_path = new_canon.clone();
         self.drives[i].last_seen_at = Utc::now();
         self.drives[i].canonical_path = Some(new_canon);
-        self.drives[i].refresh_compat_fields();
         true
     }
 
@@ -282,16 +251,12 @@ mod tests {
         let raw = std::fs::read_to_string(&cfg_path).unwrap();
         assert!(raw.contains("root_path"));
         assert!(raw.contains("metadata_key"));
-        assert!(!raw.contains("path ="));
-        assert!(!raw.contains("uuid ="));
-        assert!(!raw.contains("name ="));
+        assert!(!raw.lines().any(|line| line.starts_with("path =")));
+        assert!(!raw.lines().any(|line| line.starts_with("uuid =")));
+        assert!(!raw.lines().any(|line| line.starts_with("name =")));
         let loaded = Registry::load_from(&cfg_path).unwrap();
         assert_eq!(loaded.drives.len(), 1);
         assert_eq!(loaded.drives[0].metadata_key, key);
-        assert_eq!(loaded.drives[0].path, loaded.drives[0].root_path);
-        assert_eq!(loaded.drives[0].uuid, loaded.drives[0].metadata_key);
-        assert!(loaded.drives[0].name.is_none());
-        assert_eq!(loaded.drives[0].last_opened, loaded.drives[0].last_seen_at);
     }
 
     #[test]
@@ -363,9 +328,6 @@ mod tests {
             reg.drives[0].metadata_key, key_before,
             "metadata key must survive a path move so metadata stays reachable",
         );
-        assert_eq!(reg.drives[0].path, reg.drives[0].root_path);
-        assert_eq!(reg.drives[0].uuid, reg.drives[0].metadata_key);
-        assert_eq!(reg.drives[0].last_opened, reg.drives[0].last_seen_at);
         assert!(reg.find(new.path()).is_some());
         assert!(reg.find(old.path()).is_none());
     }

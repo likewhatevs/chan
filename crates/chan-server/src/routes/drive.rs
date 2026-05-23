@@ -6,24 +6,24 @@ use axum::extract::State;
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use axum::Json;
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 
 use super::preferences::{preferences_view, PreferencesView};
-use crate::error::err_from;
 use crate::state::AppState;
 
 #[derive(Serialize)]
 struct DriveInfo {
-    /// User-facing display name from the registry. None when the
-    /// drive has no name set; the frontend falls back to the
-    /// basename of `root` for display.
-    name: Option<String>,
     /// Absolute drive root, POSIX-style on every platform so the
     /// JSON shape stays stable. Empty string on `--tunnel-public`
     /// runs: the absolute path of the owner's drive would otherwise
     /// reveal the owner's username and filesystem layout to every
     /// anonymous visitor.
     root: String,
+    /// Path-derived label for compact UI surfaces. It is not stored
+    /// in the registry and cannot be edited through `/api/drive`.
+    label: Option<String>,
+    /// Stable metadata storage key under `~/.chan/drives/`.
+    metadata_key: Option<String>,
     /// Per-device preferences view. The frontend uses this to seed
     /// the editor (fonts, theme, line spacing) without a follow-up
     /// /api/config round-trip. Same shape as
@@ -36,44 +36,17 @@ pub async fn api_get_drive(State(state): State<Arc<AppState>>) -> Response {
     Json(drive_info(&state)).into_response()
 }
 
-#[derive(Deserialize)]
-pub struct PatchDriveBody {
-    /// Empty string clears the name (the basename takes over for
-    /// display). Field absent in the body is a no-op so the same
-    /// PATCH endpoint can grow other fields later without each
-    /// caller having to pass them.
-    #[serde(default)]
-    name: Option<String>,
-}
-
 pub async fn api_patch_drive(
     State(state): State<Arc<AppState>>,
-    Json(body): Json<PatchDriveBody>,
+    Json(body): Json<serde_json::Value>,
 ) -> Response {
-    // The `tunnel_guard::settings_guard` middleware already refused
-    // this call when settings are disabled; no per-handler gate.
-    let state_for_task = state.clone();
-    match tokio::task::spawn_blocking(move || {
-        if let Some(name) = body.name {
-            let new_name = if name.is_empty() { None } else { Some(name) };
-            if let Err(e) = state_for_task
-                .library
-                .rename_drive(state_for_task.drive().root(), new_name)
-            {
-                return err_from(&e);
-            }
-        }
-        Json(drive_info(&state_for_task)).into_response()
-    })
-    .await
-    {
-        Ok(response) => response,
-        Err(e) => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            format!("drive patch task panicked: {e}"),
-        )
-            .into_response(),
+    // Kept as a compatibility endpoint while the frontend drops its
+    // former drive-name editor. Local drive names are no longer a
+    // mutable registry field.
+    if body.get("name").is_some() {
+        return (StatusCode::BAD_REQUEST, "drive names are not supported").into_response();
     }
+    Json(drive_info(&state)).into_response()
 }
 
 #[derive(Serialize)]
@@ -116,9 +89,7 @@ pub async fn api_cloud_drives(State(state): State<Arc<AppState>>) -> Response {
     }
 }
 
-/// Build a `DriveInfo` from current registry state. Re-reads the
-/// registry on every call so a CLI-side `chan rename` immediately
-/// reflects in the next /api/drive response.
+/// Build a `DriveInfo` from current registry state.
 ///
 /// `root` is blanked on `--tunnel-public` runs so the owner's
 /// absolute filesystem path does not leak to anonymous visitors.
@@ -134,15 +105,19 @@ fn drive_info(state: &AppState) -> DriveInfo {
     // between the registry lookup and the path serialization.
     let drive = state.drive();
     let drive_root = drive.root();
-    let entry = drives.iter().find(|d| d.path.as_path() == drive_root);
+    let entry = drives.iter().find(|d| d.root_path.as_path() == drive_root);
     let root = if state.tunnel_public {
         String::new()
     } else {
         drive_root.to_string_lossy().into_owned()
     };
     DriveInfo {
-        name: entry.and_then(|e| e.name.clone()),
         root,
+        label: entry
+            .and_then(|e| e.root_path.file_name())
+            .and_then(|name| name.to_str())
+            .map(str::to_string),
+        metadata_key: entry.map(|e| e.metadata_key.clone()),
         preferences: preferences_view(state),
     }
 }

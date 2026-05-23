@@ -211,12 +211,6 @@ impl Library {
         Ok(true)
     }
 
-    /// Deprecated no-op retained while app-level callers migrate
-    /// away from named drives. Drive labels are derived from paths.
-    pub fn rename_drive(&self, root: &Path, _name: Option<String>) -> Result<bool> {
-        Ok(self.inner.registry.lock().unwrap().find(root).is_some())
-    }
-
     /// Open a drive handle. The drive must already be registered;
     /// callers do `register_drive` first if needed (CLI does both
     /// in one shot for the "point at a directory and go" path).
@@ -594,20 +588,6 @@ mod tests {
     fn unregister_returns_false_when_absent() {
         let (lib, _cfg, drive) = lib();
         assert!(!lib.unregister_drive(drive.path()).unwrap());
-    }
-
-    #[test]
-    fn rename_drive_is_compat_noop() {
-        let (lib, _cfg, drive) = lib();
-        assert!(!lib.rename_drive(drive.path(), Some("Notes".into())).unwrap());
-        lib.register_drive(drive.path(), None).unwrap();
-
-        assert!(lib.rename_drive(drive.path(), Some("Notes".into())).unwrap());
-
-        let drives = lib.list_drives();
-        assert_eq!(drives.len(), 1);
-        assert_eq!(drives[0].root_path, drive.path().canonicalize().unwrap());
-        assert!(drives[0].name.is_none());
     }
 
     #[test]

@@ -135,9 +135,9 @@ struct GlobalConfigView {
 #[derive(Serialize)]
 struct KnownDriveView {
     path: String,
-    name: Option<String>,
+    metadata_key: String,
     /// RFC3339 timestamp.
-    last_opened: String,
+    last_seen_at: String,
 }
 
 #[derive(Deserialize)]
@@ -148,8 +148,8 @@ pub struct PatchConfigBody {
     preferences: Option<PreferencesView>,
     #[serde(default)]
     default_drive_root: Option<Option<String>>,
-    /// Read-only on PATCH: drives are managed via /api/drive PATCH and
-    /// the CLI (`chan add` / `remove`). Frontend sends the field for
+    /// Read-only on PATCH: drives are managed by path through the
+    /// CLI (`chan add` / `remove`). Frontend sends the field for
     /// round-tripping; we just ignore it.
     #[serde(default)]
     #[allow(dead_code)]
@@ -172,9 +172,9 @@ fn global_config_view(state: &AppState) -> GlobalConfigView {
         .list_drives()
         .into_iter()
         .map(|d| KnownDriveView {
-            path: d.path.to_string_lossy().into_owned(),
-            name: d.name,
-            last_opened: d.last_opened.to_rfc3339(),
+            path: d.root_path.to_string_lossy().into_owned(),
+            metadata_key: d.metadata_key,
+            last_seen_at: d.last_seen_at.to_rfc3339(),
         })
         .collect();
     GlobalConfigView {
