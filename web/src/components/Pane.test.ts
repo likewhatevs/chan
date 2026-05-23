@@ -193,11 +193,13 @@ describe("Pane right-click menus", () => {
     );
     await tick();
 
-    // `fullstack-a-32` + `fullstack-a-67` slice 2: spawn set
-    // unified across 5 entries (New Draft / Terminal / File
-    // Browser / Rich Prompt / Graph), separator, then extras
-    // (Search), then Settings. Same set + ordering as the
-    // pane hamburger and the carousel slide 1.
+    // `fullstack-a-32` + `fullstack-a-67` slice 2 +
+    // `fullstack-a-75`: spawn set unified across 5 entries (New
+    // Draft / Terminal / File Browser / Rich Prompt / Graph),
+    // separator, then extras (Search + Infographics), then
+    // Settings. Same set + ordering as the pane hamburger and
+    // the carousel slide 1. Infographics added by -a-75 (read-
+    // only shortcut sheet + future info panels).
     expect(menuLabels()).toEqual([
       "New Draft",
       "Terminal",
@@ -205,6 +207,7 @@ describe("Pane right-click menus", () => {
       "Rich Prompt",
       "Graph",
       "Search",
+      "Infographics",
       "Settings",
     ]);
   }, 15000);

@@ -31,11 +31,12 @@
     currentOS,
     currentPlatform,
     formatChord,
-    renderTable,
   } from "../state/shortcuts";
   import {
+    BarChart2,
     ChevronLeft,
     ChevronRight,
+    FilePlus,
     Folder,
     Locate,
     MessageSquare,
@@ -53,11 +54,12 @@
   };
   let { oncontextmenu }: Props = $props();
 
-  /// ASCII shortcut table. Picked at module init since platform +
-  /// chord set don't change at runtime.
+  /// `fullstack-a-75`: ASCII shortcut table moved to the new
+  /// Infographics tab (see InfographicsTab.svelte). Platform +
+  /// OS still pinned at module init for `chordLabel` lookups
+  /// below.
   const platform = currentPlatform();
   const os = currentOS();
-  const shortcutTable = renderTable(platform, os);
 
   function chordLabel(id: string | undefined): string {
     if (!id) return "";
@@ -68,13 +70,14 @@
     return formatChord(chord, os);
   }
 
-  // `fullstack-a-32`: first-class spawn entries on the welcome
-  // slide. Same four items + ordering as the pane hamburger menu
-  // (Pane.svelte::spawnActions) + the empty-pane right-click
-  // menu, so the user sees a unified affordance surface no matter
-  // where they enter from. Clicks dispatch the `chan:command`
-  // event the chord layer also fires, routing through the
-  // context-aware spawn helpers in App.svelte.
+  // `fullstack-a-32` + `fullstack-a-67` slice 2 + `fullstack-a-75`:
+  // first-class spawn entries on the welcome slide. Same set +
+  // ordering as the pane hamburger menu (Pane.svelte::spawnActions)
+  // + the empty-pane right-click menu, so the user sees a unified
+  // affordance surface across all three. New Draft sits at slot
+  // 0 (added by `-a-67` slice 2 to mirror the top-level Cmd+N
+  // chord). Infographics sits in the secondary band below; it's
+  // discoverable but not a primary spawn target.
   type SpawnRow = {
     label: string;
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -83,6 +86,12 @@
     chordId: string;
   };
   const spawnEntries: SpawnRow[] = [
+    {
+      label: "New Draft",
+      icon: FilePlus,
+      command: "app.draft.new",
+      chordId: "app.draft.new",
+    },
     {
       label: "Terminal",
       icon: Terminal,
@@ -106,6 +115,18 @@
       icon: Network,
       command: "app.graph.toggle",
       chordId: "app.graph.toggle",
+    },
+  ];
+  // `fullstack-a-75`: secondary band — Infographics tab (read-
+  // only shortcut sheet + future info panels). Sits below the
+  // primary spawn band so it's discoverable without competing
+  // with the first-class spawn targets.
+  const secondaryEntries: SpawnRow[] = [
+    {
+      label: "Infographics",
+      icon: BarChart2,
+      command: "app.infographics.open",
+      chordId: "app.infographics.open",
     },
   ];
   function dispatchSpawn(command: string): void {
@@ -636,11 +657,34 @@
             </button>
           {/each}
         </div>
+        <!-- `fullstack-a-75`: secondary band — Infographics
+             entry sits below the primary spawn band. Separator
+             matches the pane hamburger's spawn/extras divider so
+             the three menus read identically. -->
+        <div class="spawn-sep" role="separator" aria-hidden="true"></div>
+        <div class="spawn-row spawn-row-secondary" aria-label="info">
+          {#each secondaryEntries as row (row.command)}
+            {@const Icon = row.icon}
+            <button
+              type="button"
+              class="spawn-btn"
+              onclick={() => dispatchSpawn(row.command)}
+              title={row.label}
+            >
+              <Icon size={18} strokeWidth={1.75} aria-hidden="true" />
+              <span class="spawn-label">{row.label}</span>
+              <span class="spawn-chord"></span>
+            </button>
+          {/each}
+        </div>
         <p class="placeholder-hint">
           Each pane's visible tab is part of the scope<br />
           for Graph.
         </p>
-        <pre class="placeholder-shortcuts">{shortcutTable}</pre>
+        <!-- `fullstack-a-75`: ASCII shortcut table moved to the
+             new Infographics tab — open via the "Infographics"
+             button above or the pane hamburger / empty-pane
+             right-click menu. -->
       </div>
     {:else if slideIndex === 1}
       <!-- Slide 2 — Metadata. Stacked bar of file kinds across
@@ -953,13 +997,19 @@
             mask: url('/chan-mark.png') center / contain no-repeat;
     opacity: 0.45;
   }
-  .placeholder-shortcuts {
-    margin: 0;
-    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-    font-size: 12px;
-    line-height: 1.5;
-    white-space: pre;
-    color: var(--text-secondary);
+  /* `fullstack-a-75`: separator + secondary spawn band styles
+     for the Infographics row that sits below the primary spawn
+     buttons. Width / spacing mirror `.spawn-row`. */
+  .spawn-sep {
+    width: 70%;
+    max-width: 320px;
+    height: 1px;
+    background: var(--border);
+    margin: 0.5rem auto;
+    opacity: 0.6;
+  }
+  .spawn-row-secondary {
+    opacity: 0.85;
   }
   .placeholder-hint {
     margin: 0;

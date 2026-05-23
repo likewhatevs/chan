@@ -1761,6 +1761,10 @@ export function resolveSpawnContext(): SpawnContext {
       return resolveBrowserSpawnContext();
     case "graph":
       return resolveGraphSpawnContext(tab.scopeId);
+    case "infographics":
+      // `fullstack-a-75`: read-only tab carries no path context.
+      // Spawn from here lands at drive root.
+      return { dir: "" };
   }
 }
 

@@ -64,6 +64,7 @@
     openBrowserInActivePane,
     openFind,
     openInActivePane,
+    openInfographicsInActivePane,
     openInPane,
     scheduleAutosave,
     flipHybrid,
@@ -151,8 +152,14 @@
             void t.filters.language;
             void t.filters.img;
             void t.filters.folder;
-          } else {
+          } else if (t.kind === "browser") {
             void t.inspectorOpen;
+          } else {
+            // `fullstack-a-75`: infographics tab carries no
+            // reactivity-relevant state today (title is
+            // immutable + id is stable). Touch the id so the
+            // effect still observes tab-list mutations cleanly.
+            void t.id;
           }
           continue;
         }
@@ -885,6 +892,13 @@
       // handler.
       case "app.screensaver.lock":
         lockNow();
+        return;
+      // `fullstack-a-75`: open the new Infographics tab in the
+      // active pane. Surface unification: same command from the
+      // pane hamburger, the empty-pane right-click menu, and
+      // the empty-pane carousel slide-1 button.
+      case "app.infographics.open":
+        openInfographicsInActivePane();
         return;
       case "app.pane.next":
         selectNextPane();

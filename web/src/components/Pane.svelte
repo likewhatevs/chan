@@ -35,6 +35,7 @@
   } from "../state/tabs.svelte";
 
   import {
+    BarChart2,
     Bug,
     Check,
     FilePlus,
@@ -61,6 +62,7 @@
   import HybridFileBrowserConfig from "./HybridFileBrowserConfig.svelte";
   import EmptyPaneCarousel from "./EmptyPaneCarousel.svelte";
   import FileEditorTab from "./FileEditorTab.svelte";
+  import InfographicsTab from "./InfographicsTab.svelte";
   import FileBrowserSurface from "./FileBrowserSurface.svelte";
   import GraphPanel from "./GraphPanel.svelte";
   import HamburgerMenu from "./HamburgerMenu.svelte";
@@ -208,6 +210,16 @@
       icon: Search,
       command: "app.search.toggle",
       chordId: "app.search.toggle",
+    },
+    // `fullstack-a-75`: discoverable spawn entry for the new
+    // Infographics tab — hosts the ASCII shortcut table that
+    // used to live on the empty-pane carousel slide 1, plus
+    // future info panels.
+    {
+      label: "Infographics",
+      icon: BarChart2,
+      command: "app.infographics.open",
+      chordId: "app.infographics.open",
     },
   ];
   function chordLabel(id: string | undefined): string {
@@ -1303,6 +1315,8 @@
         }}
         onFlip={() => flipHybrid(pane.id)}
       />
+    {:else if active?.kind === "infographics"}
+      <InfographicsTab />
     {:else if !active}
       <div
         class="placeholder"
