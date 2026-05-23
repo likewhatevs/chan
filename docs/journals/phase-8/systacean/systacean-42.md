@@ -187,3 +187,40 @@ chan-server: GET /api/teams/:name/config + documented idempotency contract for P
 * `api.teamCreate(...)` for Bootstrap, with the "already exists → no-op" branch handled per the documented idempotency contract.
 
 Per architect's pre-authorization, proceeding to commit + push + smoke.
+
+## 2026-05-23 — teardown-complete
+
+@@Architect's TEARDOWN directive received (round close per @@Alex direction; v0.12.0 cut wraps with @@WebtestA + @@Architect + @@CI only).
+
+Lane state at teardown:
+
+* **Nothing in flight.** Last task `-42` smoke ALL GREEN on re-fire (fire 1 was Ubuntu actions/checkout infrastructure flake, not code).
+* **Background processes**: none owned by this lane. Verified `ps aux | grep chan` — running chan processes are @@Alex's chan.app (untouched) + a webtest-a chan serve on `/tmp/chan-test-phase8-wa-r43` (not mine).
+* **Throwaway drives**: `/tmp/chan-22-audit` + `/tmp/chan-38-audit` dirs already absent on disk; the stale `chan22audit` registry entry unregistered via `chan remove /private/tmp/chan-22-audit`.
+* **Chrome MCP tabs**: none opened by this lane (port-binding for live chan serve was auto-classifier-denied earlier, so no browser session was created).
+
+### Final phase-8 scorecard for the Systacean lane
+
+32 tasks shipped (`-12`, `-15` through `-42`):
+
+* Cross-platform CI (`-14`/`-15`/`-17`/`-18`+4 cohort/`-19`/`-20`+fixups).
+* C2 BM25 fallback (`-19`).
+* chan-report extensions (`-15`/`-16`/`-22`).
+* Drafts saga end-to-end across all 3 entry points (`-24` through `-38`).
+* Cache-bust enrich-poke (`-21`).
+* Team feature backend (`-30`/`-31`/`-41`/`-42`).
+* Pre-flight feature toggles + `Drive::boot` (`-27`).
+* Config audit + reference doc (`-28`).
+* Mention endpoint (`-35`).
+* PTY soft-wrap flake killer (`-33` bonus — broke the cross-lane drift pattern for 7 consecutive smokes).
+* macOS updater verify (`-12`).
+* Agent_event_echo WS frame (`-33`).
+* Reports toggle endpoints (`-39`).
+* Screensaver storage + endpoints (`-40`).
+* Adjacent-scope axum syntax bug fix on `-31` team load/unload (caught via `-41`'s router-level tests).
+
+### Architect-side lesson handed up
+
+The router-level integration-test pattern (full router via `crate::router(state)` + `oneshot` + URL exercise) caught the silent `-31` `{name}` axum-syntax bug that had been broken in production since `-31` shipped. Round-3 polish: backfill this pattern for any untouched routes, OR migrate to axum 0.8 where `{name}` is the canonical syntax.
+
+teardown-complete
