@@ -12,12 +12,12 @@ import app from "../App.svelte?raw";
 describe("fullstack-a-77 slice 2: state singleton shape", () => {
   test("singleton declared with the 5 expected fields", () => {
     expect(source).toMatch(
-      /export const screensaver = \$state<ScreensaverState>\(\{[\s\S]*?enabled: false,[\s\S]*?timeout_secs: SCREENSAVER_DEFAULT_TIMEOUT_SECS,[\s\S]*?pin_set: false,[\s\S]*?locked: false,[\s\S]*?loaded: false,/,
+      /export const screensaver = \$state<ScreensaverState>\(\{[\s\S]*?enabled: false,[\s\S]*?timeout_secs: SCREENSAVER_DEFAULT_TIMEOUT_SECS,[\s\S]*?theme: SCREENSAVER_DEFAULT_THEME,[\s\S]*?pin_set: false,[\s\S]*?locked: false,[\s\S]*?loaded: false,/,
     );
   });
 
   test("ScreensaverState interface carries enabled / timeout / pin_set / locked / loaded", () => {
-    expect(source).toMatch(/export interface ScreensaverState \{[\s\S]*?enabled: boolean;[\s\S]*?timeout_secs: number;[\s\S]*?pin_set: boolean;[\s\S]*?locked: boolean;[\s\S]*?loaded: boolean;/);
+    expect(source).toMatch(/export interface ScreensaverState \{[\s\S]*?enabled: boolean;[\s\S]*?timeout_secs: number;[\s\S]*?theme: ScreensaverTheme;[\s\S]*?pin_set: boolean;[\s\S]*?locked: boolean;[\s\S]*?loaded: boolean;/);
   });
 });
 
@@ -113,6 +113,14 @@ describe("fullstack-a-77 slice 2: overlay component", () => {
 
   test("backdrop z-index is 2000 (above every other overlay)", () => {
     expect(overlay).toMatch(/z-index: 2000;/);
+  });
+
+  test("overlay switches MatrixRain / Castaway from screensaver.theme", () => {
+    expect(overlay).toMatch(/import MatrixRain from "\.\/screensaver\/MatrixRain\.svelte";/);
+    expect(overlay).toMatch(/import Castaway from "\.\/screensaver\/Castaway\.svelte";/);
+    expect(overlay).toMatch(
+      /\{#if screensaver\.theme === "castaway"\}[\s\S]{1,80}<Castaway \/>[\s\S]{1,80}\{:else\}[\s\S]{1,80}<MatrixRain \/>/,
+    );
   });
 });
 

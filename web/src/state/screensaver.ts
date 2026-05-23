@@ -99,5 +99,8 @@ export const SCREENSAVER_DEFAULT_TIMEOUT_SECS = 300;
 /// accept. The chan-drive layer doesn't clamp; the SPA
 /// enforces a reasonable range so a typo of `1` doesn't lock
 /// out the user mid-keystroke.
-export const SCREENSAVER_MIN_TIMEOUT_SECS = 30;
-export const SCREENSAVER_MAX_TIMEOUT_SECS = 60 * 60 * 4; // 4h
+export const SCREENSAVER_MIN_TIMEOUT_SECS = 10;
+export const SCREENSAVER_MAX_TIMEOUT_SECS = 60 * 60; // 1h
+
+export type ScreensaverTheme = "matrix" | "castaway";
+export const SCREENSAVER_DEFAULT_THEME: ScreensaverTheme = "matrix";
