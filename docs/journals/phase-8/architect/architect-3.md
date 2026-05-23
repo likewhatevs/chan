@@ -85,3 +85,21 @@ audit); the public flip itself happens only after both land
 
 Time-boxed: one pass. Polish lands as PR review feedback at
 flip time, not in this task.
+
+## 2026-05-23 — commit-readiness + deferred files
+
+Landed in `main`:
+
+* `LICENSE` — canonical Apache 2.0 text with `Copyright 2024-2026 Alexandre Fiori` in the appendix.
+* `CONTRIBUTING.md` — repo build/test/PR flow + the architectural ground rules.
+* `.github/ISSUE_TEMPLATE/bug_report.md`
+* `.github/ISSUE_TEMPLATE/feature_request.md`
+* `.github/PULL_REQUEST_TEMPLATE.md` — pre-push gate checklist.
+* `docs/coordination.md` — multi-agent dev pattern explainer for outside readers.
+
+Deferred to @@Alex (manual write):
+
+* `CODE_OF_CONDUCT.md` — Contributor Covenant 2.1 adaptation. Agent's output kept getting blocked by Anthropic's content-filtering policy on legal/conduct text. @@Alex to draft manually. Suggested seed: standard Contributor Covenant 2.1 with `fiorix@gmail.com` as contact.
+* `SECURITY.md` — same content-filter concern. @@Alex to draft. Suggested seed: private disclosure via `fiorix@gmail.com`; 90-day responsible-disclosure window; chan-drive sandbox is the primary security boundary (path traversal / symlink / filesystem-special handling).
+
+Both are listed in the public-flip prereq checklist; the flip beat waits on @@Alex's drafts to land. Tracked as task #14 in this session's task list.
