@@ -6200,3 +6200,81 @@ Lane-A test server torn down:
 
 4/4 HOLD. -a-67 + -a-68 UMBRELLAS empirically
 closed.
+
+## 2026-05-23 — autonomous walk: -a-75 Infographics tab + carousel redesign (4/4 HOLD)
+
+Per BATCH DISPATCH re-engage. HEAD `1662ba9`.
+Fresh-binary discipline. Throwaway drive r39;
+chan serve 127.0.0.1:8787; Chrome MCP tab
+`503726193`.
+
+### Verdicts (4/4 HOLD)
+
+| Check | Verdict |
+|-------|---------|
+| Carousel slide 1: spawn actions in order | HOLD |
+| Empty-pane right-click matches (verified prior) | HOLD |
+| Infographics tab spawnable | HOLD |
+| Infographics contains former carousel shortcut table | HOLD |
+
+### `-a-75` Infographics + carousel HOLD
+
+**Carousel slide 1** (welcome screen) shows:
+- Row 1: **New Draft** (Cmd+N) + **Terminal**
+  (Cmd+Alt+T) + **File Browser** (Cmd+Alt+O) +
+  **Rich Prompt** (Cmd+Alt+P)
+- Row 2: **Graph** (Cmd+Shift+M)
+- Divider
+- **Infographics** tile (spawnable)
+- Footer: "Each pane's visible tab is part of
+  the scope for Graph."
+- Pagination dots: `● ○ ○` (3 slides)
+- Play/pause carousel button
+
+5 spawn actions + Infographics surface. The
+New Draft entry from `-a-67 slice 2` is preserved
+as the first-class spawn.
+
+### Infographics tab content HOLD
+
+Clicked the Infographics tile → tab spawned with
+URL hash `t:[{k:i, a:1}]` (tab kind `i`).
+
+Content (former carousel shortcut table now
+dedicated):
+- **App** section: Settings (Cmd+,), Terminal
+  rich prompt (Cmd+Alt+P), File browser
+  (Cmd+Alt+O), Graph (Cmd+Shift+M), New terminal
+  (Cmd+Alt+T), Reload window (Cmd+R), New draft
+  (Cmd+N), Lock screen (Cmd+L), Dismiss overlay
+  (Esc)
+- **Panes** section: Enter Hybrid Nav (Cmd+.),
+  Flip Hybrid (Cmd+. Tab)
+- **Tabs** section: Close tab, Reopen closed
+  tab, Next tab, Previous tab, Jump to tab N
+
+The reference now lives at a stable spawn surface
+instead of being part of the welcome carousel —
+matches addendum-a's "shortcut reference as
+first-class info pane" framing.
+
+### Highlights
+
+* **Carousel redesign clean**: 5-tile spawn grid
+  + Infographics-as-tab.
+* **Infographics tab** lives on its own URL
+  (`k:i`) — reachable via direct hash, future-
+  navigable from chord help.
+* **Spawn ordering preserved**: New Draft first
+  (per -a-67 slice 2), then Terminal/FB/Rich
+  Prompt/Graph.
+
+### State at end of walk
+
+Lane-A test server torn down:
+1. chan serve killed.
+2. `rm -rf /tmp/chan-test-phase8-wa-r39/`.
+3. `chan remove` → unregistered.
+4. Chrome MCP tab closed.
+
+4/4 HOLD. `-a-75` ships clean.

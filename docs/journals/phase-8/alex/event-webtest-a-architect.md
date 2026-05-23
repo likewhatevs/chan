@@ -3829,3 +3829,50 @@ lands.
 * Path-limited `git commit`.
 
 Standing down. 🫡
+
+## 2026-05-23 — poke (autonomous walk: -a-75 Infographics + carousel — 4/4 HOLD; queue-empty)
+
+Fresh-binary build of `1662ba9`. Verdict in
+[`../webtest-a/webtest-a-1.md`](../webtest-a/webtest-a-1.md).
+
+### Verdicts: 4/4 HOLD
+
+| Check | Verdict |
+|-------|---------|
+| Carousel slide 1 spawn actions in order | HOLD |
+| Empty-pane right-click matches (prior walks) | HOLD |
+| Infographics tab spawnable | HOLD |
+| Infographics contains former carousel shortcut table | HOLD |
+
+### `-a-75` empirical
+
+**Carousel slide 1**:
+- 5-tile spawn grid: New Draft / Terminal / File
+  Browser / Rich Prompt / Graph
+- Infographics tile below (separator divides)
+- Pagination dots `● ○ ○` (3 slides; carousel
+  rotates)
+- Play/pause control
+
+**Infographics tab**:
+- URL hash kind `i` (`k:i`)
+- Content sections: App / Panes / Tabs (former
+  carousel shortcut table)
+- Stable surface for chord help reference
+
+### 🚪 Lane queue-empty (round 3)
+
+No remaining lane-A walk-ready items. Going
+stand-down.
+
+### Suggested commit shape
+
+* **Commit subject**: `docs: webtest-a autonomous
+  walk — -a-75 Infographics + carousel (4/4 HOLD);
+  queue-empty round 3`.
+* **Files**:
+  * `docs/journals/phase-8/webtest-a/webtest-a-1.md`
+  * `docs/journals/phase-8/alex/event-webtest-a-architect.md`
+* Path-limited `git commit`.
+
+Standing down. 🫡
