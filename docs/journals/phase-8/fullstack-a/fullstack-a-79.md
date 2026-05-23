@@ -307,3 +307,129 @@ Autonomous-commit mode. No clearance held.
 Picking up `-a-80` (Load Team flow) next —
 duplicate branch + dialog populated with
 existing config + already-loaded notice.
+
+## 2026-05-23 — slice 2 (lead identity prompt via rich-prompt buffer)
+
+SPA-only follow-up. Closes the lead-side
+identity prompt gap from slice 1.
+
+### Shape applied
+
+Per addendum-b clarification #1, the lead's
+terminal IS the user's current rich-prompt
+terminal (the host session). Slice 1 skipped
+the lead in the spawn loop; slice 2 delivers
+the identity prompt to it by populating the
+rich-prompt buffer programmatically.
+
+**Two new helpers in `tabs.svelte.ts`**
+
+* `findTerminalBySession(sessionId)` walks
+  `allTerminalTabs()` + matches on
+  `terminalSessionId`. Returns null when no
+  matching tab is open — the orchestrator
+  silently skips lead-prompt in that case
+  (e.g. host terminal closed mid-flight).
+* `primeTerminalRichPrompt(tab, text)` —
+  initializes the buffer + flags open. If
+  `richPrompt` is already armed, overwrites
+  buffer + flips open + defaults mode to
+  wysiwyg.
+
+**Orchestrator step 4**
+
+After the worker spawn loop:
+
+```ts
+if (hostSessionId) {
+  const leadTab = findTerminalBySession(hostSessionId);
+  if (leadTab) primeTerminalRichPrompt(leadTab, prompt);
+}
+```
+
+Followed by the existing notify("Team
+…bootstrapped.") so the success message
+fires only after the lead is staged.
+
+### Decisions
+
+* **Rich-prompt buffer, not seedInput** —
+  the lead's terminal is already mounted +
+  attached to a live PTY; `seedInput` is
+  for fresh terminal opens. The buffer
+  surface lets the user review + submit
+  the identity prompt themselves, matching
+  the existing rich-prompt UX for outbound
+  agent dispatches.
+* **Silently no-op when host session can't
+  be found** — closed terminals or wrong
+  invocation surfaces don't deserve a
+  notify spam; the workers still got their
+  prompts.
+* **`mode ??=` on the already-armed
+  branch** — preserves an existing `source`
+  selection if the user happened to be
+  composing in source mode; otherwise
+  defaults to wysiwyg.
+
+### Files touched
+
+* `web/src/state/tabs.svelte.ts`
+  * Added `findTerminalBySession` +
+    `primeTerminalRichPrompt` exports.
+* `web/src/state/teamOrchestrator.svelte.ts`
+  * Imports the two new helpers.
+  * Step 4 added after the spawn loop.
+* `web/src/state/teamLeadPrompt.test.ts`
+  (new) — 6 architectural pins for the
+  helpers + the orchestrator step ordering.
+
+### Still deferred to slice 3+
+
+* Process-template placement
+  (`Drafts/team-{name}/docs/bootstrap.md`)
+  — needs decision on template-source
+  delivery (bundle into SPA via vite ?raw
+  vs chan-server endpoint).
+* Lead pre-flight survey trigger —
+  needs the survey shape to consume the
+  team event channel.
+* Split-pane real estate — paneSplit loop
+  + per-cell tab assignment. Larger SPA
+  piece; needs its own slice.
+* `dispatch_agent_event`-driven identity
+  prompts — needs the team event channel
+  consumer in chan-server.
+
+### Gate
+
+* `svelte-check` → 0/0.
+* `vitest` → **1295 / 1295** (+17 from
+  `-a-80` slice 1's 1278; 6 new pins for
+  slice 2 + 11 net from -a-80 slice 1's
+  earlier batch).
+* `npm run build` → clean.
+* Rust gate: chan-server build flagged a
+  separate lane's unfinished WIP
+  (`api_team_get_config` added but not
+  route-registered — looks like
+  @@Systacean responding to my `-a-80`
+  slice-2 scope-poke). NOT committed in
+  this slice; leaving the WIP in the
+  working tree for the lane to finish.
+  This slice is SPA-only.
+
+### Suggested commit subject
+
+```
+Team orchestrator slice 2: lead identity prompt via rich-prompt buffer (fullstack-a-79 slice 2)
+```
+
+### Files (per-path)
+
+* `web/src/state/tabs.svelte.ts`
+* `web/src/state/teamOrchestrator.svelte.ts`
+* `web/src/state/teamLeadPrompt.test.ts` (new)
+* `docs/journals/phase-8/fullstack-a/fullstack-a-79.md`
+
+Autonomous-commit mode. No clearance held.

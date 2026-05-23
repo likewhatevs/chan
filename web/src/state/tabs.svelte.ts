@@ -1351,6 +1351,45 @@ export function allTerminalTabs(): TerminalTab[] {
   return out;
 }
 
+/// `fullstack-a-79` slice 2: find a TerminalTab by its
+/// chan-server session id. The team orchestrator pins the
+/// host session at dialog-open time (per `hostSessionId` on
+/// `TeamDialogRequest`); the lead-prompt step uses this to
+/// locate the tab and populate its rich-prompt buffer.
+/// Returns null when no matching tab is open — the orchestrator
+/// silently skips the lead-prompt step in that case.
+export function findTerminalBySession(sessionId: string): TerminalTab | null {
+  if (!sessionId) return null;
+  for (const tab of allTerminalTabs()) {
+    if (tab.terminalSessionId === sessionId) return tab;
+  }
+  return null;
+}
+
+/// `fullstack-a-79` slice 2: prime the rich-prompt buffer on
+/// a terminal tab + flag it open. Mirrors the shape
+/// `openActiveTerminalRichPrompt` uses but without the focus
+/// nonce kick (the orchestrator just wants the text seeded; the
+/// user focuses the prompt themselves to commit). Used by the
+/// orchestrator to deliver the identity prompt to the lead's
+/// terminal (which IS the host session — see addendum-b
+/// clarification #1).
+export function primeTerminalRichPrompt(tab: TerminalTab, text: string): void {
+  if (!tab.richPrompt) {
+    tab.richPrompt = {
+      buffer: text,
+      heightPx: 320,
+      open: true,
+      mode: "wysiwyg",
+      focusNonce: 1,
+    };
+    return;
+  }
+  tab.richPrompt.buffer = text;
+  tab.richPrompt.open = true;
+  tab.richPrompt.mode ??= "wysiwyg";
+}
+
 export function hasGraphTab(): boolean {
   return Object.values(layout.nodes).some(
     (node) => node.kind === "leaf" && node.tabs.some((tab) => tab.kind === "graph"),

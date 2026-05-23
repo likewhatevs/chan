@@ -27,7 +27,11 @@
 
 import { api, type TeamConfigWire, type TeamMemberWire } from "../api/client";
 import { notify } from "./notify.svelte";
-import { openTerminalInActivePane } from "./tabs.svelte";
+import {
+  findTerminalBySession,
+  openTerminalInActivePane,
+  primeTerminalRichPrompt,
+} from "./tabs.svelte";
 import type {
   TeamDialogConfig,
   TeamMemberDraft,
@@ -162,6 +166,19 @@ export async function runTeamBootstrap(
         `spawn failed for ${m.handle}: ${(err as Error).message ?? err}`,
       );
     }
+  }
+  // 4. Deliver the identity prompt to the lead's terminal (the
+  //    host session) via the rich-prompt buffer. Per addendum-b
+  //    clarification #1 the lead IS the user's current rich-
+  //    prompt terminal; we don't respawn it, just stage the
+  //    identity prompt in the composer so the user reviews +
+  //    submits. Silently no-op when:
+  //    - No host session id was passed (e.g. invoked from a
+  //      surface outside the rich-prompt context).
+  //    - The host terminal is no longer open (closed mid-flight).
+  if (hostSessionId) {
+    const leadTab = findTerminalBySession(hostSessionId);
+    if (leadTab) primeTerminalRichPrompt(leadTab, prompt);
   }
   notify(`Team "${wire.team_name}" bootstrapped.`);
 }
