@@ -168,3 +168,175 @@ slice 2 of `-a-89`).
   verifying the visual.
 * DON'T claim HOLD until the visual matches
   the "cursor at the start of text" intent.
+
+## 2026-05-23 — Empirical-first investigation + fix landed
+
+Per the architect's mandatory empirical-first
+directive. Built fresh binary, spun up
+`/tmp/chan-89b` test drive at port 8787, opened
+the rich prompt in Chrome, measured pixel
+positions via `getBoundingClientRect()` +
+`getComputedStyle()`.
+
+### Pre-fix pixel measurements
+
+Captured against the running binary (commit
+`0f3a489` baseline):
+
+| element        | top     | bottom    | height | line-height |
+|----------------|---------|-----------|--------|-------------|
+| .cm-cursor     | 717.5   | 736.5     | 19.0   | 22.4px (inherited) |
+| .cm-placeholder| 713.0   | 741.8     | 28.8   | 28.8px (= .cm-line) |
+| .cm-line       | 713.0   | 741.8     | 28.8   | 28.8px |
+
+Delta: cursor top is **+4.5px below** placeholder
+box top; cursor bottom is **−5.3px above**
+placeholder box bottom. Cursor visually floats
+INSIDE the line box, with its top edge **above**
+the placeholder text top (cap-height ≈ +6.4px
+from line top → text top ≈ 719.4; cursor top
+717.5 → cursor sticks ~2px above the visible
+"W" of "Write").
+
+### Root cause
+
+CM6's `coordsAtPos(0)` returns the rect at the
+caret position based on the **font's natural
+line-box** (font-size × ~1.2 = 19.2px for 16px
+font). The cursor's height is that natural
+line-box.
+
+The placeholder is rendered as `<span
+class="cm-placeholder">` inside `.cm-line`. The
+span inherits `.cm-line`'s `line-height: 1.8`
+(28.8px) and uses CM6 baseTheme's
+`vertical-align: top`. The span's box is
+28.8px tall, and the text inside sits at the
+top of that box (because vertical-align: top).
+
+Cursor extends from natural line-box top (slightly
+above text top) to natural line-box bottom
+(line baseline). Placeholder text sits at the
+top of a 28.8px box, which is BELOW the cursor's
+natural line-box top.
+
+Hence the visible misalignment: cursor's top
+sticks above the placeholder text's top.
+
+### Fix shape
+
+Two minimal changes:
+
+1. **`PROMPT_PLACEHOLDER_TEXT`** prefixed with
+   a single space (` Write a multi-line command
+   and Cmd+Enter`). Satisfies @@Alex's literal
+   `{cursor}{space}{default-text}` spec.
+2. **CSS scoped to `.rich-prompt
+   .cm-placeholder`**:
+   ```css
+   line-height: 1.2;
+   vertical-align: middle;
+   ```
+   Collapses the placeholder's inline-block to
+   match the cursor's natural line-box (1.2 ×
+   16px = 19.2px) + centers the placeholder text
+   vertically so its top aligns with the cursor
+   top (sub-pixel: +0.10px top, −0.09px bottom).
+
+### Post-fix pixel measurements
+
+| element        | top     | bottom    | height |
+|----------------|---------|-----------|--------|
+| .cm-cursor     | 719.29  | 738.29    | 19.0   |
+| .cm-placeholder| 719.19  | 738.38    | 19.20  |
+
+Delta: +0.10px top, −0.09px bottom. **Sub-pixel
+alignment**. Cursor + placeholder share the same
+Y bounding box.
+
+X-axis: cursor.left 46.08 < placeholder text
+start (placeholder.left 41.63 + leading space
+glyph). Visually `|<space>Write…` per spec.
+
+### Visual confirmation
+
+Zoomed screenshot of the rich prompt at 1x DPI:
+cursor `|` blinks at the start of the line, a
+visible space follows, then "Write a multi-line
+command and Cmd+Enter" placeholder text. Cursor
+and placeholder text share the same baseline +
+top edge.
+
+### Files touched
+
+* `web/src/components/TerminalRichPrompt.svelte`
+  * `PROMPT_PLACEHOLDER_TEXT` prefix.
+  * `:global(.rich-prompt .cm-placeholder)` CSS
+    rule with the empirical-measurement
+    comment block (root-cause + before/after
+    metrics).
+* `web/src/components/richPromptCursorAlignment.test.ts`
+  (new) — 7 architectural pins for the leading
+  space + the scoped CSS rule + the metric-
+  preserving comment block.
+* `web/src/components/richPromptPlaceholderExtension.test.ts`
+  * `PROMPT_PLACEHOLDER_TEXT` pin updated for
+    the leading space.
+
+### Decisions
+
+* **Leading space in the constant**, not via
+  CSS padding-left. Tested both: padding-left
+  shifts the cursor INTO the padding area
+  (cursor.left moves right by the padding
+  amount because CM6 measures the caret at
+  the placeholder's first-text position). The
+  leading space character keeps the cursor at
+  the line's natural left edge + pushes the
+  visible glyphs right by one space-width.
+  Cleanest reading of the spec literal
+  `{cursor}{space}{default-text}`.
+* **Scoped CSS rule** (`.rich-prompt
+  .cm-placeholder`), not a global override.
+  CM6's `placeholder` extension is also used
+  in the file editor (Wysiwyg + Source); the
+  rich prompt's font sizing + line-height
+  context is different from the file
+  editor's, so scoping prevents collateral
+  visual changes in other CM6 surfaces.
+* **`line-height: 1.2`** (relative) not
+  `19.2px` (absolute). Relative scales with
+  font-size if the user ever increases the
+  rich prompt's font (e.g. accessibility zoom).
+* **`vertical-align: middle`** not `top`.
+  Tested both; `middle` gives sub-pixel
+  alignment, `top` leaves a residual +2px
+  cursor-above-text delta.
+
+### Gate
+
+* Empirical: cursor + placeholder share Y axis
+  (deltas ≤ 0.1px). Visual screenshot
+  confirms `{cursor}{space}{default-text}` per
+  spec.
+* `svelte-check` → 0/0.
+* `vitest` → **1321 / 1321** (+7 new pins).
+* Rust gate clean (no Rust delta).
+
+### Suggested commit subject
+
+```
+Rich prompt: cursor/placeholder Y-alignment (fullstack-a-89b)
+```
+
+### Files (per-path)
+
+* `web/src/components/TerminalRichPrompt.svelte`
+* `web/src/components/richPromptCursorAlignment.test.ts` (new)
+* `web/src/components/richPromptPlaceholderExtension.test.ts`
+* `docs/journals/phase-8/fullstack-a/fullstack-a-89b.md`
+
+Autonomous-commit mode. No clearance held.
+Test drive torn down (`chan remove /tmp/chan-89b`).
+Walk handed back to @@WebtestA for empirical
+HOLD confirmation against the in-tree binary.

@@ -59,7 +59,13 @@
   /// `placeholderText` to both the Wysiwyg + Source editors
   /// so CM6's `placeholder` extension renders it inside the
   /// first line at the cursor position.
-  const PROMPT_PLACEHOLDER_TEXT = "Write a multi-line command and Cmd+Enter";
+  // `fullstack-a-89b`: leading space per @@Alex's literal spec
+  // `{cursor}{space}{default-text}`. The space gives a visible
+  // gap between the blinking cursor and the placeholder text so
+  // the cursor reads as a starting position rather than overlapping
+  // the first glyph. Paired with the `.cm-placeholder` CSS rule
+  // in TerminalRichPrompt's style block below.
+  const PROMPT_PLACEHOLDER_TEXT = " Write a multi-line command and Cmd+Enter";
   let rootEl: HTMLDivElement | undefined = $state();
   let wysiwygRef: Wysiwyg | undefined = $state();
   let sourceRef: Source | undefined = $state();
@@ -801,10 +807,30 @@
   /* `fullstack-a-89`: removed `.prompt-placeholder` CSS
      overlay (-a-24 / -a-84 / -a-87). CM6's `placeholder`
      extension threaded via `placeholderText` on Wysiwyg +
-     Source now handles the empty-state hint. Cursor +
-     placeholder share the exact same coordinate system
-     because CM6 renders the placeholder INSIDE the first
-     line at the cursor position. */
+     Source now handles the empty-state hint. */
+  /* `fullstack-a-89b`: empirical fix for the cursor/placeholder
+     Y-misalignment that survived `-a-89`. Measured in browser
+     devtools (cursor: top 717.5, bottom 736.5, height 19;
+     placeholder default: top 713, bottom 741.8, height 28.8 →
+     ~4.5px cursor-above-text-top delta).
+     Root cause: CM6 sizes the cursor from the font's natural
+     line-box (~1.2 × font-size = 19.2px for 16px font), but the
+     placeholder span inherits `.cm-line`'s `line-height: 1.8`
+     (28.8px) and vertically aligns to `top` — so its text
+     glyphs sit lower than the cursor's bounding box.
+     Fix: collapse the placeholder's box to match the cursor's
+     natural line-box (`line-height: 1.2`) + center-align vertically
+     so the placeholder text top aligns with the cursor top. The
+     leading space character in `PROMPT_PLACEHOLDER_TEXT` adds the
+     `{cursor}{space}{default-text}` gap @@Alex's literal spec
+     calls for.
+     Scope is the prompt area only; the `:global` chain pins to
+     `.rich-prompt` (the root of this component) so the rule
+     doesn't leak to other CM6 editors in the app. */
+  :global(.rich-prompt .cm-placeholder) {
+    line-height: 1.2;
+    vertical-align: middle;
+  }
   /* `fullstack-a-8`: easeOutBack bubble-pop matching every other
      right-click surface (HamburgerMenu, TerminalTab / GraphPanel
      tab-menu bubbles). Origin sits at top-left because the

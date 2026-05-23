@@ -49,9 +49,11 @@ describe("fullstack-a-89: Source.svelte threads placeholderText", () => {
 });
 
 describe("fullstack-a-89: TerminalRichPrompt wires the new prop + drops the overlay", () => {
-  test("PROMPT_PLACEHOLDER_TEXT constant declared", () => {
+  test("PROMPT_PLACEHOLDER_TEXT constant declared with leading space (per -a-89b)", () => {
+    // `fullstack-a-89b`: leading space added to satisfy
+    // @@Alex's literal spec `{cursor}{space}{default-text}`.
     expect(richPrompt).toMatch(
-      /const PROMPT_PLACEHOLDER_TEXT = "Write a multi-line command and Cmd\+Enter";/,
+      /const PROMPT_PLACEHOLDER_TEXT = " Write a multi-line command and Cmd\+Enter";/,
     );
   });
 
