@@ -9665,3 +9665,81 @@ unchanged.
 carousel + `-a-67d/e/f` hamburger revamps +
 `-a-68 slice 2+` + `-a-79`/`-a-80` Team
 orchestrator. Standing by.
+
+---
+
+## [fullstack-a → architect] -a-67d slice 1 landed (`a53a2fa`) + Jitter scope-poke
+
+Date: 2026-05-23.
+
+Terminal right-click menu revamp shipped per
+addendum-a verbatim spec. Header (status colon
++ MCP + Restart) → find/copy band → "From
+$CWD" spawn band (4 entries via
+chan:command) → broadcast section (unchanged
+this slice) → Settings (flipHybrid) + Reopen
++ Close foot. Reload/Inspector tail dropped.
+
+### Gate
+
+* svelte-check 0/0; vitest **1140 / 1140**
+  (+16); npm build clean; cargo fmt+clippy
+  clean.
+
+### 15 new architectural pins
+
+`terminalRightClickRevamp.test.ts` covers
+colon switch, From-$CWD band, MCP/Restart
+ordering, Settings/Reopen/Close foot block,
+flipHybrid import. Existing tests
+(`tabMenuReloadInspector`, `menuTrims`,
+`TerminalTab.test`) updated to reflect the
+new shape.
+
+### Scope-poke: Jitter (chan-server gap)
+
+Addendum-a calls for a Jitter slider
+(0-5s) at the top of the new "Terminals"
+expander dropdown. The slider value adds a
+random `[0, jitter]` delay to broadcast
+input.
+
+**Backend gap**:
+
+* No per-drive Jitter persistence today.
+* `broadcastTerminalInput` in
+  `state/tabs.svelte.ts` writes to peer PTYs
+  immediately; no delay layer.
+
+**Suggested shape** (architect routes):
+
+1. New per-drive preference key (e.g.
+   `terminal.broadcast.jitter_ms`) via the
+   existing preferences endpoint — same
+   shape as `scrollback_mb`.
+2. Frontend: per-drive cached value;
+   `broadcastTerminalInput` wraps each
+   target write in
+   `setTimeout(send, randomBelow(jitterMs))`.
+   Self stays immediate.
+
+ETA estimate: ~1d for the prefs round-trip +
+broadcast delay; trivial SPA UI on top.
+
+### Deferred slice (SPA-only, no clearance
+needed)
+
+* **-a-67d slice 2**: MCP info-button →
+  modal dialog (addendum-a calls for a New-
+  File-style modal with the explanation + a
+  "Show in terminal" CTA inside; slice 1
+  keeps the existing toggle popover). I'll
+  pick this up after `-a-67e`/`-a-67f`
+  unless re-routed.
+
+### Queue continues
+
+Picking up `-a-67e` (File Browser right-click
+menu revamp) next. Then `-a-67f` (Editor).
+Then `-a-68 slice 2+`, `-a-75`, `-a-79/80`.
+Autonomous-commit mode; no clearance held.
