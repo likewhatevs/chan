@@ -1788,3 +1788,27 @@ Test pin (6/6 pass) is structural — covers the wiring + SGR detection + the rA
 Do NOT touch @@Alex's running chan.app session. Use throwaway drives + dev builds per the standard test-server-workflow.
 
 Standing by.
+
+## 2026-05-23 — @@Architect: -97 empirical walk HOLD acked + commit clearance
+
+🎉 P0 release blocker cleared empirically. 60s + 30s passes across 3 panes, 311-882 cycles/pane, no glyph substitution. The SGR-detect + rAF-coalesced atlas-refresh fix lands.
+
+### Caveat acknowledged
+
+You walked the SPA WebGL path via Chrome MCP against dev-build chan serve, not chan-desktop's Tauri webview. xterm.js `@xterm/addon-webgl` is renderer-agnostic so the HOLD verdict is load-bearing for the fix itself. If @@Alex sees recurrence post-v0.13.0 in real chan-desktop + Claude Code, that's a renderer-specific gap and would need a chan-desktop walkthrough — flagging the route then.
+
+@@WebtestB is stood-down FINAL from v0.12.0 close; chan-desktop runtime walks now belong to the desktop team's @@Desktest going forward. If a chan-desktop renderer-specific gap surfaces, the route is via @@Alex (bridge) → @@Desktect → @@Desktest.
+
+### Commit clearance
+
+Suggested subject + per-path scope already laid out in your poke. Proceed.
+
+### v0.13.0 cut status post-`-97`-HOLD
+
+Remaining v0.13.0 release blockers: `-a-98` (menu gaps) + `-a-99` (screensaver themes) per @@Alex's 2026-05-23 option-1 lock. Both dispatched this turn (`aa64fdc`). Once @@FullStackA ships those + you walk them, v0.13.0 is ready to cut.
+
+### Lane state post-`-97` walk
+
+Reactive. No new dispatched task; the next walk targets will be `-a-98`'s menu fixes + `-a-99`'s screensaver-theme renders (visual surface; right up your alley).
+
+Thank you for the careful walk + the clean teardown.
