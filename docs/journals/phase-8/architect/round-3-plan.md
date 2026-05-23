@@ -22,35 +22,43 @@ Three headline tracks:
    review + release readiness** — added 2026-05-20. Polish
    pass before declaring chan publicly stable.
 
-## Decisions @@Alex needs to confirm before fan-out
+## Decisions (locked 2026-05-23 by @@Alex)
 
-1. **License choice for item 8**: backlog recommends dual
-   MIT + Apache-2.0 (Rust convention). Confirm pick.
-2. **Phase journal handling at public flip**: archive under
-   `docs/journals/private/`, OR keep public with a
-   `docs/coordination.md` explainer of the multi-agent dev
-   pattern? Recommendation: keep public with explainer —
-   the coordination model is itself interesting and the
-   journals are the audit trail.
-3. **Curated model list for the picker**: which models go
-   in? Initial proposal (@@Architect):
-   * `BAAI/bge-small-en-v1.5` (default, ~130 MB) — current.
-   * `BAAI/bge-base-en-v1.5` (~440 MB) — better quality.
-   * `sentence-transformers/all-MiniLM-L6-v2` (~90 MB) —
-     smallest + fastest.
-   * `intfloat/e5-small-v2` (~130 MB) — alternative
-     similar-size option.
-   * @@Alex flags any additions / removals.
-4. **Public-version number**: Round-2-close ships v0.12.0
-   (or whatever); does Round 3 ship v1.0 to signal "public"
-   or just a minor bump (v0.13.0)? Recommendation: v1.0 at
-   the public flip — the version number tells users we
-   consider the surface stable.
-5. **Release-readiness scope cap**: hardening passes can be
-   bottomless. Recommend a time-box (one wave per agent,
-   not until-bug-free) — call it done when no
-   release-blockers remain even if minor polish opportunities
-   exist. @@Alex confirms the bar.
+| # | Decision                | Locked outcome                                                                                                                                                                              |
+|---|-------------------------|----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| 1 | License                 | **Apache-2.0 only** (not dual MIT + Apache). One `LICENSE` file at repo root with the standard Apache-2.0 text + chan copyright line.                                                       |
+| 2 | Journals at flip        | **Keep public** + add `docs/coordination.md` explainer for outside readers. Journals stay under `docs/journals/phase-N/` as the multi-agent audit trail.                                    |
+| 3 | Curated model list      | **Pending** — surveyed separately; default proposal in section "Track 2" below. Track 2 dispatch waits on this answer.                                                                       |
+| 4 | Public-flip version     | **v0.13.0** (not v1.0). Minor bump; v1.0 reserved for post-public-feedback iteration. Keeps the option to make breaking changes during the first public-feedback window.                    |
+| 5 | Hardening scope cap     | **One wave per agent, time-boxed**. Round closes when no P0/P1 release-blockers remain; P2+ defers to v0.14+ / v1.x. Each lane produces a short report ("found X, fixed Y, deferred Z").     |
+
+### Dispatch consequences (vs the original plan)
+
+* `architect-3` drops LICENSE-MIT; ships Apache-only LICENSE
+  + the rest of the docs bundle.
+* No `docs/journals/private/` migration; `docs/coordination.md`
+  is part of `architect-3`'s deliverables.
+* Round-3 close cuts `chan-v0.13.0`, not `chan-v1.0.0`.
+* Each agent's track-3 task gets a one-wave time-box; the
+  report at the task tail is the close signal, not a second
+  pass.
+
+### Pending: Track 2 dispatch
+
+Surveyed separately. Default proposal:
+
+* `BAAI/bge-small-en-v1.5` (default, ~130 MB) — current.
+* `BAAI/bge-base-en-v1.5` (~440 MB) — better quality.
+* `sentence-transformers/all-MiniLM-L6-v2` (~90 MB) —
+  smallest + fastest.
+* `intfloat/e5-small-v2` (~130 MB) — alternative
+  similar-size option.
+
+Architect's read post-decisions-lock: Track 2 is a NEW
+feature, not a public-flip prerequisite. With the
+time-boxed cap + v0.13.0 minor-bump framing, **default
+recommendation is defer Track 2 to a later cut** (v0.14
+or post-flip). Flagged for @@Alex veto.
 
 ## Track 1 — Open-source flip (backlog item 8)
 

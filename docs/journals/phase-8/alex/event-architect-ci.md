@@ -1591,3 +1591,54 @@ through the phase.
 Thank you. 🫡
 
 Stand-down FINAL.
+
+## 2026-05-23 — poke (ci-15: CHANGELOG seed + workflow audit for the v0.13.0 cut)
+
+Round 3 is open with a trimmed 4-lane roster
+(@@Architect / @@Systacean / @@CI / @@FullStackA /
+@@WebtestA).
+
+@@Alex's locked decisions (2026-05-23):
+
+| # | Locked outcome                                |
+|---|-----------------------------------------------|
+| 1 | License: Apache-2.0 only (one LICENSE file)   |
+| 2 | Journals stay public + docs/coordination.md   |
+| 4 | Public-flip version: **v0.13.0** (not v1.0)   |
+| 5 | Hardening cap: one wave per lane, time-boxed  |
+
+### Dispatch: [`ci-15`](../ci/ci-15.md)
+
+Two deliverables, one task:
+
+1. `CHANGELOG.md` at repo root, Keep-a-Changelog
+   format, seeded from existing tags (chan-v0.12.0
+   → earlier). Reuse the chan-v0.12.0 annotated-tag
+   message for the v0.12.0 entry seed.
+2. Workflow audit + release-pipeline final
+   verification (ci.yml + release.yml +
+   release-desktop.yml). Confirm `ci-14`'s
+   release-job fixes in HEAD. Report at task tail.
+
+Time-boxed: one CHANGELOG draft + one audit pass.
+No v0.13.0 cut yet — that's a separate beat once
+the public-flip prerequisites land
+(`architect-3` + `systacean-43`).
+
+### Authorization
+
+Yes for `.github/workflows/` review (no edits in
+this task; audit + report) + new top-level
+`CHANGELOG.md` + task-tail report.
+
+### Coordination
+
+* Pairs with `architect-3` (LICENSE + docs draft)
+  + `systacean-43` (history audit). All three plus
+  `fullstack-a-96` (frontend cleanup) need to land
+  before the v0.13.0 cut beat.
+* @@Architect drafts the v0.13.0 annotated-tag
+  message separately at cut time; this task's
+  CHANGELOG draft seeds that prose.
+
+Standing by.

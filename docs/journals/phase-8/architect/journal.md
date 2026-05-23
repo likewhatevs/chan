@@ -5771,3 +5771,101 @@ enough to chew through the full list.
 |------|--------|
 | `architect/journal.md` | This entry |
 | `alex/event-architect-systacean.md` | -31 commit clearance + lane state |
+
+## 2026-05-23 — ROUND 3 OPEN — Wave-1 fan-out on a trimmed 4-lane roster
+
+v0.12.0 shipped clean (`5ed3c61`, release.yml + release-
+desktop.yml both green on first fire). @@Alex bootstrapped
+me for the next session with an explicit constraint:
+
+> "We're running a tighter session today. The team online
+> here is: @@Architect, @@Systacean, @@CI, @@FullStackA,
+> @@WebtestA. That's it."
+
+Plus a safety guardrail:
+
+> "im running on v0.12.0 right now, let's NOT kill my
+> session please"
+
+So: no @@FullStackB / @@WebtestB this session (both stood
+down FINAL from v0.12.0 round close anyway). No tag pushes.
+No empirical walks against @@Alex's drives. Text-only
+coordination + agent work against throwaway drives on
+separate ports.
+
+### Decisions locked (`round-3-plan.md` § "Decisions")
+
+| # | Outcome                                                                  |
+|---|--------------------------------------------------------------------------|
+| 1 | License: **Apache-2.0 only** (not dual MIT+Apache)                      |
+| 2 | Journals stay public + `docs/coordination.md` explainer                  |
+| 3 | Curated model list: **pending** (Track 2 dispatch waits on the survey) |
+| 4 | Public-flip version: **v0.13.0** (not v1.0)                              |
+| 5 | Hardening cap: **one wave per agent, time-boxed**                       |
+
+Track-2 default recommendation post-lock: **defer to a
+later cut** (v0.14 or post-flip). With the v0.13.0 minor
+bump + time-boxed cap, pulling a new feature in over-extends
+the trim. Flagged for @@Alex veto.
+
+### Wave-1 task fan-out (4 tasks across 4 lanes)
+
+| Task | Lane | Track | Scope |
+|------|------|-------|-------|
+| [`architect-3`](architect-3.md) | @@Architect (self) | 1 | LICENSE (Apache-2.0) + CONTRIBUTING + CODE_OF_CONDUCT + SECURITY + .github/ISSUE_TEMPLATE + PR template + docs/coordination.md |
+| [`systacean-43`](../systacean/systacean-43.md) | @@Systacean | 1 | gitleaks + manual grep + image audit; report on triage at task tail |
+| [`ci-15`](../ci/ci-15.md) | @@CI | 3 | CHANGELOG.md seed + workflow audit + release-pipeline final verification |
+| [`fullstack-a-96`](../fullstack-a/fullstack-a-96.md) | @@FullStackA | 3 | Frontend dead-code sweep + accessibility audit + perf pass; time-boxed |
+
+### Reactive lanes
+
+* **@@WebtestA**: heads-up sent. Walks land as ships
+  arrive. No dispatched task this wave; expected to walk
+  `architect-3` docs (CONTRIBUTING / SECURITY / etc. for
+  outside-reader correctness) + `fullstack-a-96` fixes
+  as they land.
+
+### Stand-down (this session)
+
+* **@@FullStackB**: not online. Track-3 Tauri-side
+  cleanup defers to a session that has B online.
+* **@@WebtestB**: not online. Lane-B walks defer; @@WebtestA
+  covers solo for Round-3 ramp.
+
+### Dependency graph
+
+```
+architect-3 (LICENSE + docs)  systacean-43 (history audit)
+        \                       /
+         +-----------+----------+
+                     ↓
+         GO/NO-GO on public flip (@@Alex)
+                     ↓
+         ci-15 (CHANGELOG seed)  fullstack-a-96 (frontend cleanup report)
+                     \                       /
+                      +-----------+----------+
+                                  ↓
+                    v0.13.0 commit-plan + cut (architect-led)
+                                  ↓
+                          Public flip beat (architect-led)
+```
+
+`ci-15` + `fullstack-a-96` are independent + can land in
+parallel with the Track-1 deliverables. They feed the
+v0.13.0 cut, not the public-flip gate.
+
+### What I'm committing this wave
+
+| File | Reason |
+|------|--------|
+| `architect/journal.md` | This entry |
+| `architect/round-3-plan.md` | Decisions locked + Track-2 defer flag |
+| `architect/architect-3.md` | NEW task |
+| `systacean/systacean-43.md` | NEW task |
+| `ci/ci-15.md` | NEW task |
+| `fullstack-a/fullstack-a-96.md` | NEW task |
+| `alex/event-architect-systacean.md` | -43 dispatch poke |
+| `alex/event-architect-ci.md` | -15 dispatch poke |
+| `alex/event-architect-fullstack-a.md` | -96 dispatch poke |
+| `alex/event-architect-webtest-a.md` | Round-3 heads-up; reactive posture |
+| `alex/event-ci-architect.md` + `ci/ci-14.md` | (separate prior commit `0f150a3`: @@CI teardown-complete docs cleanup) |

@@ -1644,3 +1644,58 @@ PARTIAL across the phase. Heavy carry.
 Thank you for the lane. 🫡
 
 Stand-down FINAL.
+
+## 2026-05-23 — heads-up (Round 3 open; reactive posture; lane-A solo for the trimmed session)
+
+Round 3 is open with a trimmed 4-lane roster
+(@@Architect / @@Systacean / @@CI / @@FullStackA /
+@@WebtestA). @@WebtestB stood down FINAL from
+v0.12.0 round close; lane-A covers walks solo for
+this session.
+
+@@Alex's locked decisions (2026-05-23):
+
+| # | Locked outcome                                |
+|---|-----------------------------------------------|
+| 1 | License: Apache-2.0 only (one LICENSE file)   |
+| 2 | Journals stay public + docs/coordination.md   |
+| 4 | Public-flip version: **v0.13.0** (not v1.0)   |
+| 5 | Hardening cap: one wave per lane, time-boxed  |
+
+### No dispatched task this wave — reactive
+
+Walks land as Wave-1 ships arrive. Expected
+surfaces:
+
+1. **`architect-3`** (LICENSE + CONTRIBUTING +
+   CODE_OF_CONDUCT + SECURITY + .github/templates +
+   `docs/coordination.md`) — outside-reader
+   correctness walk: do the docs render cleanly on
+   GitHub? Is the coordination explainer
+   intelligible to someone landing here cold?
+2. **`fullstack-a-96`** (frontend cleanup) — walk
+   each P0/P1 fix as it lands; smoke the editor +
+   hybrid nav + FB + graph after the dead-code +
+   a11y sweeps complete. Use throwaway drives.
+3. **`ci-15`** (CHANGELOG draft) — accuracy check
+   against the actual phase-8 ship list (your
+   round-45 close + the v0.12.0 annotated-tag
+   message are good cross-references).
+
+### Safety guardrail
+
+**Do NOT touch @@Alex's running chan.app session.**
+@@Alex is on v0.12.0; killing their session is
+explicitly off-limits. Use throwaway drives + dev
+builds per the standard test-server-workflow.
+
+### Coordination
+
+* Per-walk audit-trail at the tail of your task
+  file (`webtest-a-1.md` or a fresh `-13`/`-14`
+  if you prefer per-walk isolation — your call).
+* No proactive task cuts back to me. Scope
+  questions land as a poke; I route into a new
+  task.
+
+Standing by.

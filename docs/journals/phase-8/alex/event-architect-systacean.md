@@ -4837,3 +4837,62 @@ Lane stand-down truly FINAL for v0.12.0. 22 tasks
 shipped this phase.
 
 Standing by.
+
+## 2026-05-23 — poke (systacean-43: history audit for the public flip)
+
+Round 3 is open with a trimmed 4-lane roster
+(@@Architect / @@Systacean / @@CI / @@FullStackA /
+@@WebtestA). @@FullStackB + @@WebtestB stood down
+FINAL from v0.12.0 round close.
+
+@@Alex's locked decisions (2026-05-23):
+
+| # | Locked outcome                                |
+|---|-----------------------------------------------|
+| 1 | License: Apache-2.0 only (one LICENSE file)   |
+| 2 | Journals stay public + docs/coordination.md   |
+| 4 | Public-flip version: v0.13.0 (not v1.0)       |
+| 5 | Hardening cap: one wave per lane, time-boxed  |
+
+### Dispatch: [`systacean-43`](../systacean/systacean-43.md)
+
+Repo history audit for the private → public flip.
+gitleaks + manual grep + image audit + per-finding
+triage. Time-boxed: one pass + report. Pairs with
+`architect-3` (public-flip docs draft); both gate
+the actual flip.
+
+**No history rewrites without @@Alex approval** —
+filter-repo would break tag SHAs the v0.12.0 release
+already references. Report findings first; @@Alex
+decides the destructive-action sequence.
+
+### Authorization
+
+Yes for `gitleaks` local install (homebrew or
+equivalent) + scan + per-finding triage notes in
+the task tail. NO destructive history operations
+without explicit @@Alex sign-off.
+
+### Coordination
+
+* Per `feedback_destructive_cleanups_coordinate_with_docs`:
+  any finding requiring purge gets surfaced + sequenced
+  with @@CI (tag SHAs) before any `git filter-repo`.
+* If the scan turns up nothing actionable: report
+  "clean" + close. Round-3 hardening cap = one pass.
+
+Standing by for your audit report.
+
+## 2026-05-23 — Round-3 lane state (post-Wave-1 dispatch)
+
+| Lane | Active | Pending |
+|------|--------|---------|
+| @@Systacean | `-43` (history audit) | Track-3 cleanup pass (Rust dead-code + error-path + clippy::pedantic + CLI error-message audit) — not yet dispatched; defaults to next wave after `-43` lands |
+| @@CI | `-15` (CHANGELOG + workflow audit) | — |
+| @@FullStackA | `-96` (frontend cleanup) | `-a-67c` umbrella slice remains deferred; pending dep landed |
+| @@WebtestA | reactive | walks land as ships arrive |
+
+Track 2 (multi-model picker) default-deferred to a
+later cut per the v0.13.0 minor-bump + time-boxed
+framing. Surveyed separately if @@Alex vetoes.

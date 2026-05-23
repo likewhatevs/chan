@@ -5708,3 +5708,75 @@ Thank you for the heavy phase-8 carry. 🫡
 Massive carry this phase. Thank you.
 
 Stand-down FINAL.
+
+## 2026-05-23 — poke (fullstack-a-96: frontend cleanup + a11y + perf pass; Round-3 wave 1)
+
+Round 3 is open with a trimmed 4-lane roster
+(@@Architect / @@Systacean / @@CI / @@FullStackA /
+@@WebtestA). Thank you for the heavy phase-8 carry.
+
+@@Alex's locked decisions (2026-05-23):
+
+| # | Locked outcome                                |
+|---|-----------------------------------------------|
+| 1 | License: Apache-2.0 only (one LICENSE file)   |
+| 2 | Journals stay public + docs/coordination.md   |
+| 4 | Public-flip version: **v0.13.0** (not v1.0)   |
+| 5 | Hardening cap: one wave per lane, time-boxed  |
+
+### Dispatch: [`fullstack-a-96`](../fullstack-a/fullstack-a-96.md)
+
+Three sub-passes in this order:
+
+1. Dead-code + deprecated-pattern sweep
+   (`ts-prune` / `knip`; TODO/FIXME triage;
+   leftover Svelte-4 patterns where runes fit).
+2. Accessibility audit (Editor / Hybrid Nav / FB /
+   Graph + Carousel). axe-core DevTools panel +
+   manual keyboard-only walkthroughs.
+3. Performance pass (Editor scroll, Graph open on
+   a large drive, Carousel slide-change, SPA
+   bundle size). devtools Performance traces.
+
+**Time-boxed: ONE pass per sub.** Fix P0/P1 in-task;
+defer P2+ to v0.14+/v1.x with a report at task tail
+(found X, fixed Y, deferred Z).
+
+### Safety guardrail (carries across the session)
+
+**Do NOT touch @@Alex's running chan.app session.**
+Use throwaway drives + dev builds per the standard
+test-server-workflow. @@Alex is running v0.12.0
+chan.app right now; killing their session is
+explicitly off-limits this session.
+
+### Authorization
+
+Yes for SPA-side cleanup edits + tests + new
+`ts-prune` (or equivalent) dev-dep if needed +
+task-tail report.
+
+### Coordination
+
+* Atomic-audit-commit per fix (per-path adds;
+  pre/post `git diff --staged --stat` +
+  `git show --stat HEAD`).
+* If a fix touches a `web/src/state/` data-flow
+  surface that other lanes care about
+  (sessions / preferences / terminal /
+  watcher events), poke first.
+* Subject convention: `web: <area>: <fix> (fullstack-a-96 sub-N)`.
+
+### Note on -a-67c (Hybrid hamburger revamp)
+
+Currently deferred slice under `-a-67`. Its dep
+(`-a-66` New Draft handler) has landed, so the
+slice is no-longer-blocked. @@Alex noted today
+that the slice removes the asymmetric "Light mode"
++ "Flip pane" entries from `Pane.svelte:1167`'s
+`pane.back !== undefined` guard. Not pulled into
+this wave; let me know if you want to bundle
+`-a-67c` with `-96` (small, addresses today's
+@@Alex flag).
+
+Standing by.
