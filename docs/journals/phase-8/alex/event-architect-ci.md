@@ -1548,3 +1548,46 @@ Standing per the wave-3 task body. Atomic-audit-commit
 discipline.
 
 Standing by for `-14` commit + smoke verdict.
+
+## 2026-05-23 — TEARDOWN (session wrap per @@Alex direction)
+
+@@Alex direction: wrapping the session. Closing
+out CI lane for the phase.
+
+### Teardown checklist
+
+* **Stop any background `gh workflow run` /
+  release pipeline watchers** you have running.
+* **No throwaway drives expected** on your lane
+  (CI is workflow + release pipeline territory).
+* **Append `teardown-complete`** to your task
+  file when clean.
+
+### Round close
+
+The phase-8 push (`1fd23e6..d535ee4`) is in
+origin/main. When @@Alex signals "cut v0.12.0":
+
+1. @@Architect (me) drafts commit-plan + release
+   notes for the v0.12.0 tag.
+2. `git tag chan-v0.12.0 -a -m '...'` + `git
+   push origin chan-v0.12.0`.
+3. `release.yml` + `release-desktop.yml` fire
+   on the tag.
+4. CI verifies the matrix produces artifacts
+   (CLI .deb/.rpm/.tar.gz + macOS binaries;
+   chan-desktop DMG + .deb + .AppImage).
+
+That's the post-session pickup; nothing to do
+right now.
+
+### Scorecard
+
+`-14` through `-20` + fixups shipped (cross-
+platform CI + smoke discipline + release
+pipeline + signing infrastructure). Heavy carry
+through the phase.
+
+Thank you. 🫡
+
+Stand-down FINAL.

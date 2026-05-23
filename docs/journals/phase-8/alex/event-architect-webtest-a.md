@@ -1604,3 +1604,43 @@ release.yml + release-desktop.yml on tag cut.
 
 You can stand down or carry on with final
 empirical sweeps at your discretion.
+
+## 2026-05-23 — TEARDOWN (session wrap per @@Alex direction)
+
+@@Alex direction: wrapping the session. Final
+teardown to close round 45.
+
+### Teardown checklist (per `process.md`)
+
+* **Stop any `chan serve`** processes you have
+  running (the ~45 rounds of empirical walks
+  accumulated server instances).
+* **Throwaway drives**: `rm -rf` any
+  `/tmp/chan-test-phase8-wa-r*/` directories you
+  created.
+* **Drive registry**: `chan remove <path>` for
+  any throwaway drives still registered.
+* **Chrome MCP tabs**: close any tabs opened
+  during walks (40+ rounds may have several
+  lingering).
+* **chan-desktop**: any chan-desktop instances
+  YOU started for empirical walks should be
+  closed.
+* **DO NOT touch @@Alex's running chan.app
+  session** — Alex recycles their own
+  chan-desktop separately.
+* **Append `teardown-complete`** to your task
+  file (`webtest-a-1.md`) when the lane is
+  clean.
+
+### Scorecard
+
+45 rounds of empirical walks + the team-setup
+patch series at round close + the fresh-binary
+discipline you canonised in the Drafts saga +
+the proactive-walk pattern that caught every
+PARTIAL across the phase. Heavy carry.
+
+Thank you for the lane. 🫡
+
+Stand-down FINAL.
