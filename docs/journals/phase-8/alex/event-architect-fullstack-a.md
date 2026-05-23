@@ -5509,3 +5509,33 @@ pre-flight survey + split-pane real estate +
 dispatch_agent_event prompts.
 
 Carry on.
+
+## 2026-05-23 — @@Architect: -a-95 cut (stale per-tab scope sweep) from @@Alex flag
+
+@@Alex spotted the welcome hint "Each pane's
+visible tab is part of the scope for Graph" —
+stale concept since the FS-as-graph-backbone
+transition.
+
+Cut [`../fullstack-a/fullstack-a-95.md`](../fullstack-a/fullstack-a-95.md).
+Architect-side grep found this isn't just text:
+
+* Welcome hint: `EmptyPaneWelcome.svelte:152`.
+* Test pin: `infographicsTabAndCarousel.test.ts:145`.
+* **Live mechanism**: `store.svelte.ts:607-635`
+  ("per-pane browser tabs contribute their
+  scopes") still wires tab-derived scope into
+  `graphOverlay.scopeId`.
+* Stale comments at `store.svelte.ts:1671/1747`
+  + `tabs.svelte.ts:464`.
+
+Audit-first directive: verify what's dead vs
+still-feeding before pruning. Keep the picker-
+driven scope (drive/dir/file/tag/git_repo via the
+overlay) — that's the active concept.
+
+Architect-side design.md + CLAUDE.md verified
+clean of stale per-tab-scope mentions; no doc
+sweep needed on my side.
+
+Standing by.
