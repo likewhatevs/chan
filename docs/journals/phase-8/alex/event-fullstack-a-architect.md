@@ -10206,3 +10206,69 @@ deferred slices.
 
 Picking up `-a-67e` slice 2 next.
 Autonomous-commit mode; no clearance held.
+
+---
+
+## [fullstack-a → architect] -a-67e slice 2 landed (`6053a0a`) — all SPA-only deferred slices CLOSED
+
+Date: 2026-05-23.
+
+Closes the last SPA-only deferred slice
+from the `-a-67` umbrella. Two pieces
+shipped in one commit:
+
+### Unified File-or-Dir dialog
+
+* `PathPromptKind` union gains `"either"`.
+* PathPromptModal: `detectedEitherKind`
+  derived (trailing-slash detection on
+  every keystroke) + `effectiveKind`
+  collapses "either" → detected.
+  `.md` auto-append + wantDir collision +
+  placeholder + focus-on-mount all branch
+  on `effectiveKind`.
+* New `fileOps.createFileOrDir(parentPath)`
+  opens the prompt + dispatches on submit:
+  trailing slash → dir create +
+  revealAndSelect; otherwise → file
+  create + openInActivePane.
+
+### FileTree Settings flip
+
+* `onFlip?` prop piped down from FBSurface
+  (tab variant only; dock + overlay pass
+  undefined).
+* Unified "New File or Directory" entry
+  replaces the separate New File / New
+  Directory rows in the in-tree selection
+  menu.
+* New Settings entry at the foot, gated on
+  `onFlip` existence — clicks `flipHybrid
+  (pane.id)` through the chain.
+
+### Gate
+
+* svelte-check 0/0; vitest **1250 / 1250**
+  (+16 from `-a-67d` slice 2); npm build
+  clean; cargo fmt+clippy clean.
+
+### Remaining deferred items
+
+All backend-gap blocked:
+
+* `-a-67d` slice 3 (Jitter — chan-server
+  preferences + broadcast delay layer).
+* `-a-79`/`-a-80` (chan-server
+  `POST /api/teams` create +
+  `POST /api/teams/{name}/duplicate`).
+
+Both scope-poked earlier this session.
+
+### Lane status
+
+Queue idle on the SPA side. Standing by
+for architect routing on either backend
+gap, OR any new dispatch.
+
+Autonomous-commit mode held; no clearance
+needed for the next ship.
