@@ -148,10 +148,13 @@
       </button>
     {/each}
   </div>
-  <p class="welcome-hint">
-    Each pane's visible tab is part of the scope<br />
-    for Graph.
-  </p>
+  <!-- `fullstack-a-95`: per-tab-contributes-Graph-scope
+       welcome hint dropped. @@Alex 2026-05-23: "we no longer
+       have the concept of scope since we transitioned to
+       using the filesystem as the backbone of the graph".
+       Picker-driven scope (drive / dir / file / tag /
+       git_repo) is the active concept; that picker lives in
+       the graph overlay's chrome, not the welcome surface. -->
 </div>
 
 <style>
@@ -249,12 +252,6 @@
     justify-content: center;
     width: auto;
   }
-  .welcome-hint {
-    margin: 0;
-    text-align: center;
-    color: var(--text-secondary);
-    font-size: 13px;
-    line-height: 1.4;
-    max-width: 360px;
-  }
+  /* `fullstack-a-95`: `.welcome-hint` styles dropped along
+     with the stale "scope for Graph" paragraph. */
 </style>

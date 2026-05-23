@@ -132,7 +132,7 @@ describe("fullstack-a-75b: InfographicsTab mounts the carousel", () => {
 });
 
 describe("fullstack-a-75b: EmptyPaneWelcome static spawn surface", () => {
-  test("EmptyPaneWelcome.svelte renders the 5-tile spawn grid + Infographics tile + hint", async () => {
+  test("EmptyPaneWelcome.svelte renders the 5-tile spawn grid + Infographics tile (per -a-95: welcome-hint dropped)", async () => {
     const welcome = (await import("./EmptyPaneWelcome.svelte?raw"))
       .default as string;
     expect(welcome).toMatch(
@@ -141,8 +141,16 @@ describe("fullstack-a-75b: EmptyPaneWelcome static spawn surface", () => {
     expect(welcome).toMatch(
       /const secondaryEntries: SpawnRow\[\] = \[[\s\S]{1,400}label: "Infographics",[\s\S]{1,200}command: "app\.infographics\.open",/,
     );
-    expect(welcome).toMatch(/class="welcome-hint"/);
-    expect(welcome).toMatch(/Each pane's visible tab is part of the scope/);
+    // `fullstack-a-95`: stale per-tab "scope for Graph" hint
+    // dropped. @@Alex flagged the concept as retired after the
+    // FS-backbone graph transition; picker-driven scope is the
+    // active mechanism, surfaced in the graph overlay's chrome.
+    expect(welcome).not.toMatch(/class="welcome-hint"/);
+    expect(welcome).not.toMatch(/Each pane's visible tab is part of the scope/);
+    // No `<p>` paragraph rendering the retired hint in the
+    // markup (matches the user-visible surface only; the
+    // retirement comment in the source is allowed).
+    expect(welcome).not.toMatch(/<p[\s\S]{0,200}scope[\s\S]{0,40}for Graph/);
   });
 
   test("Pane.svelte mounts EmptyPaneWelcome (not EmptyPaneCarousel) on lone-pane empty case", async () => {
