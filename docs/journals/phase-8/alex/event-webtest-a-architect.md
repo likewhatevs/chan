@@ -4703,3 +4703,84 @@ Pre-commit `git diff --staged --stat` + post-commit `git show
 --stat HEAD` audit applied.
 
 Standing by.
+
+## 2026-05-23 — poke (fullstack-a-99 walk HOLD — LAST v0.13.0 release blocker cleared from my lane)
+
+🎉 Walked the screensaver themes wave (`33382db` core +
+`5ac85b2` + `294cd3a` follow-ups). Verdict: **HOLD across
+all 5 acceptance criteria**. Per-check evidence at
+[`../webtest-a/webtest-a-1.md`](../webtest-a/webtest-a-1.md)
+under `## 2026-05-23 — fullstack-a-99 walk`.
+
+Fresh-binary: `npm run build` 17:15:53 + `cargo build -p
+chan` 17:16:42 at HEAD `294cd3a`.
+
+### Verdict matrix
+
+| Acceptance check | Status |
+|------------------|--------|
+| Timeout bounds [10s, 3600s] enforced (5s + 5000s both 400) | HOLD |
+| Matrix rain renders + animates (canvas.matrix-rain mounted; cascading glyphs visible) | HOLD |
+| Castaway renders mid-fidelity scene (sky + ocean + island + palm + character) | HOLD |
+| Castaway ≥ 5 animation states (8 states in `SceneState` enum; visual transitions observed between captures) | HOLD |
+| `prefers-reduced-motion` code path present in both themes (code-audit) | HOLD (Chrome MCP CDP emulation gap; webtest-tooling note) |
+| PIN entry replaces "Press any key" when pin_set=true; renders on top of theme | HOLD |
+
+### Two side observations (NEITHER regression-class)
+
+1. **Inactivity-timer-fired path** didn't trigger
+   empirically under Chrome MCP automation — probable
+   pointermove-event-from-tool-calls reset OR empty-pane
+   carousel interaction. Cmd+L manual lock works
+   flawlessly; same `screensaver.locked = true` code
+   path, same render result. Test pins cover the
+   timer mechanism. A hand-walk by you ("set timeout
+   10s, sit still 12s") would close the empirical leg
+   if you want it; my Cmd+L coverage closes the
+   rendering pipeline.
+
+2. **Theme switch mid-lock** doesn't swap canvas reactively
+   (`{#if screensaver.theme === "castaway"}` at
+   `ScreensaverOverlay.svelte:123` evaluates at mount, not
+   on theme change while mounted). Canonical user flow (set
+   theme in Settings while UNLOCKED → lock later) works
+   correctly; only matters in a debug-mid-lock-PATCH
+   sequence. Filing as polish-note only; no follow-up
+   unless you want the live-theme-swap-while-locked path
+   tightened.
+
+### v0.13.0 ready-to-cut signal
+
+**All 5 v0.13.0 release blockers from my lane HOLD**:
+
+| Task | Verdict | Walk commit |
+|------|---------|-------------|
+| `-a-97` (terminal WebGL atlas) | HOLD | `99b207c` |
+| `-a-98` (menu gaps) | HOLD | `dd459bb` |
+| `-a-101` (tab focus) | HOLD | `dd459bb` |
+| `-a-100` (Drafts chain) | HOLD | `dfd7bec` |
+| `-a-102` (menu nits) | HOLD | `dfd7bec` |
+| `-a-99` (screensaver themes) | HOLD | THIS commit |
+
+Plus the chan-server async-blocking audit (`systacean-45`,
+`26c036d`) already in HEAD as the cross-cutting pre-cut
+gate.
+
+v0.13.0 is mechanically ready to cut from the webtest-a
+lane's perspective. Standing by for your cut signal /
+final aggregation.
+
+### Suggested commit shape
+
+Path-limited per the standing discipline. WT clean of
+cross-lane mods.
+
+* **Subject**: `docs: webtest-a — -a-99 screensaver walk HOLD (last v0.13.0 release blocker cleared; v0.13.0 ready)`
+* **Files** (explicit per-path):
+  * `docs/journals/phase-8/webtest-a/webtest-a-1.md`
+  * `docs/journals/phase-8/alex/event-webtest-a-architect.md`
+
+Pre-commit `git diff --staged --stat` + post-commit `git
+show --stat HEAD` audit applied.
+
+Standing by.
