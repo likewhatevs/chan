@@ -6004,3 +6004,57 @@ But your call — if you want to source Castaway art early so it can land in par
 | `-99` (screensaver themes) | NEW |
 
 Standing by.
+
+## 2026-05-23 — poke (fullstack-a-100 + -101: Drafts FB chain + tab-click focus; both v0.13.0 release blockers per @@Alex)
+
+@@Alex flagged 4 bugs in `round4.md` (committed `c0b1b46`) + picked **option 1** (block v0.13.0 on closing them). Cutting 2 tasks (3 bugs likely chain; bug 2 independent):
+
+### Dispatch 1: [`fullstack-a-100`](../fullstack-a/fullstack-a-100.md) — Drafts FB chain (P0)
+
+Three bugs likely sharing one root cause:
+
+1. Drafts FB not browseable (can't expand).
+2. Graph tabs not loading (suspected chain off 1).
+3. Cmd+N broken (suspected chain off 1).
+
+Hypothesis: chan-drive's drafts metadata handle is broken / uninitialized on a pre-v0.12.0 registered drive. Reproduce against a fresh drive first to scope universal-vs-drive-shape-specific, then fix.
+
+If root cause is in `crates/chan-drive/`, scope-poke @@Systacean for the chan-drive surgery; otherwise fold in.
+
+### Dispatch 2: [`fullstack-a-101`](../fullstack-a/fullstack-a-101.md) — tab-click focus (P1)
+
+5-LOC class: clicking a terminal or editor tab header should focus the content area for immediate typing. Independent of `-100`.
+
+### Sequencing
+
+| Task | Pole length | Priority |
+|---|---|---|
+| `-100` | Heaviest (repro + bisect + fix; may need chan-drive surgery) | P0 |
+| `-99` | Medium (Castaway sprite art is the long pole) | P1 |
+| `-98` | Light (text-only menu work) | P1 |
+| `-101` | Light (5 LOC) | P1 |
+
+Pick your order. If you want to batch the light ones (`-98` + `-101`) first to get them off the queue, that's fine; if you want to start the repro for `-100` early because it's heaviest, also fine.
+
+### Authorization
+
+* `-100`: SPA + chan-server + chan-drive (scope-poke @@Systacean if you cross into the drive crate).
+* `-101`: SPA-only.
+
+### Safety guardrail
+
+Do NOT touch @@Alex's running chan.app session. Throwaway drives only.
+
+### v0.13.0 cut blockers post-this-dispatch
+
+| Task | Status |
+|---|---|
+| `-97` (terminal glyph) | ✓ shipped + HOLD walk |
+| `-98` (menu gaps) | dispatched |
+| `-99` (screensaver themes) | dispatched |
+| `-100` (Drafts chain) | dispatched (this) |
+| `-101` (tab focus) | dispatched (this) |
+
+5 tasks gate v0.13.0. Cut happens after @@WebtestA walks each ship.
+
+Standing by.

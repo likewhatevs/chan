@@ -1,0 +1,70 @@
+# fullstack-a-101 — Tab-click focus on terminal + editor tabs (v0.13.0 release blocker)
+
+Owner: @@FullStackA
+Phase: 8, Round 3
+Date cut: 2026-05-23
+Priority: P1 — release blocker for v0.13.0; small fix (~5-20 LOC)
+
+## Goal
+
+When the user clicks a terminal tab header, the terminal content should receive keyboard focus so the user can start typing immediately. Same for editor tab headers. @@Alex flagged 2026-05-23 (`docs/journals/phase-8/alex/round4.md` bug 2): "Clicking the tab of a terminal tab must place the cursor/focus on the terminal itself, ready to type; same for editor tabs."
+
+## Background
+
+Standard tab-UX expectation: clicking a tab header makes the tab active AND focuses its content area. Today the click only activates the tab but doesn't shift keyboard focus into the tab content — user has to click into the terminal / editor body to start typing.
+
+This is a 5-LOC class of bug (find the tab-click handler, call `.focus()` on the right element after the activate happens, on next tick if needed).
+
+## Scope
+
+### Terminal tab
+
+`web/src/components/TerminalTab.svelte` (or wherever the xterm.js mount happens). The xterm.js `Terminal` instance has a `.focus()` method.
+
+* Find the tab-header click handler that calls `activateTab(...)` or similar.
+* After activation lands (likely on next `tick()`), call `terminal.focus()` on the xterm instance.
+
+### Editor tab
+
+`web/src/components/EditorTab.svelte` (or wherever the contenteditable / Lexical / CodeMirror instance lives).
+
+* Same shape: tab-header click activates the tab; after activation, focus the editor content surface.
+* Editor focus might mean: focus the contenteditable root, or call the editor framework's `.focus()` API.
+
+### Shared pattern
+
+If the tabs route through a common `activateTab(paneId, tabId)` or chord handler, the focus call may be addable in one place with a per-kind branch (terminal vs editor vs FB vs graph vs infographics). For non-content-input tabs (FB, graph, infographics), focus may stay on the tab header — that's fine; focus only the input-able kinds.
+
+## Acceptance criteria
+
+1. **Click terminal tab → cursor focuses the terminal content; user can type immediately.**
+2. **Click editor tab → cursor focuses the editor content; user can type / edit immediately.**
+3. **No regression on other tab kinds** (FB / graph / infographics) — they don't have a meaningful "content focus" target; focus behavior unchanged.
+4. **Test pins**: vitest assertion that the tab-click handler calls the focus method on the right element for terminal + editor.
+5. **Gate**: `npm run check + npm test + npm run build` green.
+
+## How to start
+
+1. Grep for the tab-click handler: `grep -n "activateTab\|onTabClick\|setActiveTab" web/src/components/*.svelte`.
+2. Trace from a tab header click through the activate logic.
+3. Add focus call after activation (on next tick if Svelte's reactive cycle needs it).
+4. Pin with a vitest.
+
+## Coordination
+
+* Safety guardrail: do NOT touch @@Alex's running chan.app session. Use throwaway drives + dev builds.
+* Small fix; standalone task. Doesn't depend on `-98`/`-99`/`-100`.
+
+## Authorization
+
+Yes for SPA-side edits + vitest pins.
+
+## Out of scope
+
+* Reworking the tab-activation pipeline.
+* Auto-focus on tab CREATION (the user already focuses the tab; we're handling re-focus on click).
+* Focus persistence across pane flips or window switches.
+
+## Reference
+
+* `docs/journals/phase-8/alex/round4.md` bug 2.
