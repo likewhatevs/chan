@@ -1058,3 +1058,12 @@
   - 2026-05-23 update from @@Alex: single instance only, single pane (no other terminals affected this session), `Cmd+R` window reload cleared it. Transient, not persistent. Reinforces the glyph-atlas-or-font-load-race shape — both suspects fit "first-render goes wrong, re-init clears it." @@Alex monitoring; will flag if it returns.
   - lane: SPA-side debugging in `web/src/components/TerminalTab.svelte` + the renderer. @@FullStackA territory.
   - NOT YET DISPATCHED — P3 / monitor. Promote to a `fullstack-a` task if it recurs (esp. cross-pane, persists post-reload, or correlates with SCP toggle). Not a v0.13.0 blocker on current evidence.
+
+- chan-server `/api/files/<path>` GET handler blocks the tokio async runtime — 10s timeouts on small files under contention
+  - reported 2026-05-23 by @@Alex via in-session screenshot: `request timed out after 10000 ms: GET /api/files/docs/journals/phase-8/alex/event-desktect-alex.md` (1826-byte file). @@Alex framing: recurring issue ("this is not the first time I notice this kind of issue while loading a .md file from disk into the editor")
+  - root cause: `api_read_file` at `crates/chan-server/src/routes/files.rs:248` calls `state.drive().read_text()` / `state.drive().read()` directly in the async context without wrapping in `tokio::task::spawn_blocking`. Compare `api_write_file` at `:311` which correctly wraps the write at `:318`. Sync FS IO on async worker threads → worker starvation under load
+  - context: bug surfaced when @@Desktect's session landed a burst of new files (contact cards, journal dirs, event channels). The indexer/watcher activity likely pushed the chan-server tokio workers into a contention window; @@Alex's editor request waited for a free worker past the SPA's 10s client timeout
+  - want: wrap `api_read_file` in `spawn_blocking` (mirror `api_write_file:318`); audit other GET handlers in `crates/chan-server/src/routes/*.rs` for the same shape (likely candidates: `search/files`, `search/content`, `link-targets`, anything reading drive state in an axum `get(...)`)
+  - residual concern: even with the wrap, a 10s timeout for a 1826-byte file points to deeper symptom (worker genuinely wedged on something else). Worth a chan-server diagnostics pass later; NOT in scope for the fix
+  - lane: @@FullStackA (chan-server backend Rust)
+  - DISPATCHED — bundled into `fullstack-a-96` as sub-pass 4 per @@Alex 2026-05-23 (release-class polish; Round-3 hardening cap absorbs it)

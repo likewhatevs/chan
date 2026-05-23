@@ -5837,3 +5837,54 @@ chan-desktop asks; flag back to me.
 Phase posture is **phase-8 continuation** for both
 teams; phase-9 question parks until the Round-3-close
 sync.
+
+## 2026-05-23 — scope amendment (-96 sub-pass 4 added: chan-server file-read perf)
+
+@@Alex reported a 10s timeout on a 1826-byte
+`/api/files/...` GET (event-desktect-alex.md). Root
+cause: `api_read_file` at `crates/chan-server/src/routes/files.rs:248`
+NOT wrapped in `tokio::task::spawn_blocking` (compare
+`api_write_file:318` which IS). Sync FS IO on the
+async worker = worker starvation under load.
+
+@@Alex framing: recurring issue, not a one-off.
+
+### Scope addition to -96
+
+Added as **sub-pass 4** in the `-96` task file
+(see appended section "2026-05-23 — scope amendment
+by @@Architect"). Bundle into `-96` rather than a
+separate task per @@Alex's call.
+
+Highlights:
+
+* Wrap `api_read_file`'s two branches
+  (`files.rs:258`, `:273`) in `spawn_blocking`
+  (mirror `api_write_file:318`).
+* Test pin for the wrap shape.
+* Audit other GET handlers in `routes/*.rs` for the
+  same anti-pattern; fix obvious ones in-task;
+  file the rest as a follow-up if the audit blows
+  the time-box.
+
+### Authorization
+
+Yes for chan-server Rust edits (`crates/chan-server/`)
++ Rust tests. Time-boxed under the one-wave hardening
+cap; if the audit turns up >3 affected handlers,
+fix the two most user-facing + file the rest as a
+follow-up task.
+
+### Residual concern (flag)
+
+Even with the wrap, a 10s timeout on a 1826-byte file
+points to a deeper symptom. If the recurrence persists
+post-fix, a chan-server diagnostics pass is warranted.
+NOT in scope for `-96`.
+
+### Logged
+
+Bug entry added to `phase-8-bugs.md` for audit-trail
++ recurring-context persistence.
+
+Standing by.

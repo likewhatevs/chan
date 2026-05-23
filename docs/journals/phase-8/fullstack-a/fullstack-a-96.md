@@ -148,3 +148,77 @@ P0/P1 (visible jank with reasonable input) vs P2+.
 If a fix touches @@Systacean or @@CI surface
 (unlikely for pure frontend work), poke first
 before editing.
+
+## 2026-05-23 — scope amendment by @@Architect: sub-pass 4 added (chan-server file-read perf)
+
+@@Alex reported (2026-05-23) a 10s timeout on
+`GET /api/files/docs/journals/phase-8/alex/event-desktect-alex.md`
+(1826-byte file). Root cause traced to chan-server's
+`api_read_file` (`crates/chan-server/src/routes/files.rs:248`):
+the handler calls `state.drive().read_text()` /
+`state.drive().read()` directly in the async context,
+**without** `tokio::task::spawn_blocking`. By contrast,
+`api_write_file` at `:311` wraps the write at `:318`.
+
+Symptom: blocking FS IO on the async worker thread.
+Under contention (concurrent reads, fresh indexer
+activity from another session's writes) workers
+starve and small-file reads can blow past the SPA's
+10s client timeout.
+
+@@Alex framing: "this is not the first time I notice
+this kind of issue while loading a .md file from disk
+into the editor.. and it shocks me that we cannot
+instantly open a 21k bytes file and it times out with
+10s". Recurring; promoted to fix-in-Round-3.
+
+### Sub-pass 4 (added)
+
+**chan-server file-read perf — `spawn_blocking` wrap +
+GET-handler audit.**
+
+1. Wrap `api_read_file`'s editable-text branch
+   (`files.rs:258`) and binary branch (`:273`) in
+   `tokio::task::spawn_blocking`, mirroring
+   `api_write_file:318`.
+2. Test pin for the wrap shape (Rust-side; or a
+   smoke verifying read-handler doesn't block the
+   runtime under concurrent load — judgment call on
+   what's tractable to test).
+3. Audit `crates/chan-server/src/routes/*.rs` for
+   other GET handlers that call sync chan-drive
+   methods directly without `spawn_blocking`. Likely
+   candidates: `search/files`, `search/content`,
+   `link-targets`, anything reading drive state in
+   an axum `get(...)`. Fix obvious ones in-task; if
+   the audit turns up >3 affected handlers, fix the
+   two most user-facing + file the rest as a
+   follow-up task.
+
+### Acceptance criteria (additions to original)
+
+6. **chan-server reads don't block the async
+   runtime.** Concurrent file-read load doesn't stall
+   other endpoints.
+7. **Audit report at task tail**: which other GET
+   handlers had the same shape + which got fixed
+   in-task + which deferred.
+
+### Residual concern (flag, not in this sub-pass)
+
+Even with the `spawn_blocking` wrap, a 10s timeout on a
+1826-byte file points to a deeper symptom (worker
+genuinely wedged on something else, not just blocked).
+The wrap is necessary but may not be sufficient. If the
+recurrence persists post-fix, a chan-server diagnostics
+pass is warranted (instrumented logging on request
+arrival / departure; lock contention probes). NOT in
+scope for `-96`'s time-boxed cap.
+
+### Coordination
+
+* Release-class fix; bundles cleanly into `-96`'s
+  perf-pass sub-pass per @@Alex's call (vs cutting a
+  separate task).
+* Per the time-boxed hardening cap, the audit doesn't
+  recurse: one pass, file findings, fix obvious ones.
