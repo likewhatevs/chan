@@ -611,9 +611,20 @@ export function terminalTabName(t: TerminalTab): string {
   return t.title.trim() || "Terminal";
 }
 
-function nextTerminalTitle(): string {
+function terminalTabsIn(state: LayoutState): TerminalTab[] {
+  const out: TerminalTab[] = [];
+  for (const node of Object.values(state.nodes)) {
+    if (node.kind !== "leaf") continue;
+    for (const tab of node.tabs) {
+      if (tab.kind === "terminal") out.push(tab);
+    }
+  }
+  return out;
+}
+
+function nextTerminalTitle(state: LayoutState = layout): string {
   let max = 0;
-  for (const tab of allTerminalTabs()) {
+  for (const tab of terminalTabsIn(state)) {
     const title = terminalTabName(tab);
     const match = /^Terminal(?:-(\d+))?$/.exec(title);
     if (!match) continue;
@@ -1341,14 +1352,7 @@ export function clearTerminalSession(tab: TerminalTab): void {
 }
 
 export function allTerminalTabs(): TerminalTab[] {
-  const out: TerminalTab[] = [];
-  for (const node of Object.values(layout.nodes)) {
-    if (node.kind !== "leaf") continue;
-    for (const tab of node.tabs) {
-      if (tab.kind === "terminal") out.push(tab);
-    }
-  }
-  return out;
+  return terminalTabsIn(layout);
 }
 
 /// `fullstack-a-79` slice 2: find a TerminalTab by its
@@ -2308,7 +2312,7 @@ export function paneModeOpenTerminal(ctx?: SpawnContext): void {
   const tab: TerminalTab = {
     kind: "terminal",
     id: id("term"),
-    title: nextTerminalTitle(),
+    title: nextTerminalTitle(draft),
     createdAt: Date.now(),
     broadcastEnabled: false,
     broadcastTargetIds: [],
@@ -2421,7 +2425,7 @@ export function paneModeOpenRichPromptTerminal(ctx?: SpawnContext): void {
   const tab: TerminalTab = {
     kind: "terminal",
     id: id("term"),
-    title: nextTerminalTitle(),
+    title: nextTerminalTitle(draft),
     createdAt: Date.now(),
     broadcastEnabled: false,
     broadcastTargetIds: [],

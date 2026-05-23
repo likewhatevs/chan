@@ -36,6 +36,7 @@ import {
   paneModeMoveFocus,
   paneModeOpenBrowser,
   paneModeOpenGraph,
+  paneModeOpenRichPromptTerminal,
   paneModeOpenTerminal,
   paneModeResize,
   paneModeSetGrab,
@@ -659,6 +660,55 @@ describe("pane state", () => {
     expect(committed.activeTabId).toBe(
       committed.tabs.find((t) => t.kind === "browser")?.id,
     );
+  });
+
+  test("pane mode terminal spawns get distinct names across draft panes", () => {
+    resetLayout([]);
+
+    enterPaneMode();
+    paneModeSplit("row");
+    paneModeSplit("row");
+    paneModeOpenTerminal();
+    paneModeMoveFocus("left");
+    paneModeOpenTerminal();
+    paneModeMoveFocus("left");
+    paneModeOpenTerminal();
+    commitPaneMode();
+
+    const terminals = Object.values(layout.nodes)
+      .filter((node): node is LeafNode => node.kind === "leaf")
+      .flatMap((node) => node.tabs)
+      .filter((tab): tab is TerminalTab => tab.kind === "terminal");
+
+    expect(terminals.map((tab) => tab.title).sort()).toEqual([
+      "Terminal-1",
+      "Terminal-2",
+      "Terminal-3",
+    ]);
+    expect(new Set(terminals.map((tab) => tab.id)).size).toBe(3);
+    expect(terminals.every((tab) => tab.broadcastEnabled === false)).toBe(true);
+  });
+
+  test("pane mode rich-prompt terminals share the draft title allocator", () => {
+    resetLayout([]);
+
+    enterPaneMode();
+    paneModeSplit("row");
+    paneModeOpenRichPromptTerminal();
+    paneModeMoveFocus("left");
+    paneModeOpenRichPromptTerminal();
+    commitPaneMode();
+
+    const terminals = Object.values(layout.nodes)
+      .filter((node): node is LeafNode => node.kind === "leaf")
+      .flatMap((node) => node.tabs)
+      .filter((tab): tab is TerminalTab => tab.kind === "terminal");
+
+    expect(terminals.map((tab) => tab.title).sort()).toEqual([
+      "Terminal-1",
+      "Terminal-2",
+    ]);
+    expect(terminals.every((tab) => tab.richPrompt?.open === true)).toBe(true);
   });
 
   test("File Browser and Graph spawns always add a new tab (fullstack-47)", () => {
