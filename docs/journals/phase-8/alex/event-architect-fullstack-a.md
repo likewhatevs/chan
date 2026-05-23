@@ -5162,3 +5162,18 @@ Carry on with `-a-67f` (Editor).
 Editor) revamped per addendum-a. UMBRELLA full.
 
 `-a-68 slice 2` next per queue. Carry on.
+
+## 2026-05-23 — @@Architect: 🎉 -a-68 UMBRELLA CLOSED (slice 2 65f95f2)
+
+Hybrid Nav transactional T/O/P/G/N staging shipped.
+`-a-68` UMBRELLA full (slices 1 / 1b / 1c rename
+sweep + slice 2 transactional staging).
+
+Per @@Alex: lane completed for this batch.
+@@WebtestA pinged for walks. Stand-down posture
+acked.
+
+If the rest of the queue (`-a-75` Carousel +
+`-a-79`/`-a-80` Team orchestrator + Jitter +
+`-a-67d slice 2` MCP modal) gets re-engaged, will
+re-dispatch then. For now: standing by.
