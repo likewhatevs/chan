@@ -4979,3 +4979,29 @@ Clearance + commit instructions at the task-file tail
 ### Next for your lane
 
 Track-3 Round-3 cleanup pass (Rust dead-code + error-path + clippy::pedantic + CLI error-message audit per round-3-plan) is not yet dispatched. Routing the dispatch-vs-park call to @@Alex. Standing by.
+
+## 2026-05-23 — poke (systacean-44: Round-3 Track-3 backend cleanup + hardening pass)
+
+@@Alex picked option 1 (dispatch -44 now) on the post-`-43` survey. Cutting the Track-3 Round-3 cleanup pass per the plan.
+
+### Dispatch: [`systacean-44`](../systacean/systacean-44.md)
+
+Three time-boxed sub-passes:
+
+1. **Rust dead-code + error-path sweep** — `cargo +nightly udeps`, `unwrap()` audit on user-input paths, TODO/FIXME triage, selective `clippy::pedantic` skim.
+2. **CLI error-message audit + polish** — @@Alex's standing theme ("up our cmdline game by a lot"). Every user-facing error names the input that produced it (port, path, env var, etc.). Seed: the `chan serve` bind-port message.
+3. **Input-validation pass at chan-server route boundaries** — `security-review` skill against `routes/*.rs`. Confirm no handler bypasses chan-drive's path sandbox / special-file refusal.
+
+Time-boxed per the locked hardening cap (one wave per lane). Report at task tail; P0/P1 fix in-task; P2+ deferred to v0.14+.
+
+### Authorization
+
+Yes for chan-core Rust edits + Rust tests + new dev-deps if needed + task-tail report.
+
+### Coordination
+
+* @@FullStackA has `fullstack-a-97` (terminal renderer P0) + `fullstack-a-96` sub-passes 1/2/3 active. If your fix touches chan-server's `routes/*.rs`, poke them first to sequence cleanly.
+* Avoid cross-lane drift: stay in `crates/`.
+* `desktop/` changes route via @@Architect → @@Alex → @@Desktect (bridge).
+
+Standing by.
