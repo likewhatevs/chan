@@ -24,7 +24,6 @@
     BuildInfo,
     GlobalConfig,
     Preferences,
-    SemanticState,
   } from "../api/types";
   import { Maximize2, Minimize2, X } from "lucide-svelte";
   import {
@@ -52,8 +51,8 @@
   //
   // `fullstack-a-48` (Task F option B) moved the Semantic search
   // section out of this overlay into `HybridFileBrowserConfig.svelte`
-  // alongside the new chan-reports toggle + the future multi-model
-  // picker placeholder.
+  // alongside report indexing + the future multi-model picker
+  // placeholder.
   //
   // `fullstack-a-53` reverts the Appearance section from
   // `HybridEditorConfig.svelte` back here. Appearance is a GLOBAL
@@ -111,8 +110,7 @@
   /// normalization (line_spacing / date_format defaults) to
   /// `HybridEditorConfig.svelte`. This overlay passes both
   /// subtrees through untouched as part of the GlobalConfig
-  /// round-trip; only the semantic-search and about sections
-  /// remain.
+  /// round-trip.
   function normalizePrefs(p: Preferences): Preferences {
     return p;
   }
@@ -233,10 +231,7 @@
 
   // `fullstack-a-46` Task C moved the editor-theme attribute and
   // editorToolsPrefs side-effects into `HybridEditorConfig.svelte`
-  // alongside the matching editor settings. SettingsPanel only
-  // owns semantic-search + about now, neither of which needs
-  // the editor-theme DOM attribute or the strip-trailing
-  // editor-tools snapshot.
+  // alongside the matching editor settings.
 
   async function loadBuildInfo(): Promise<void> {
     try {
@@ -247,40 +242,10 @@
     }
   }
 
-  // `fullstack-a-48` (Task F option B) moved the Semantic-search
-  // state machine + helpers into `HybridFileBrowserConfig.svelte`.
-  // The semantic-search state (semanticState, semanticDownloading,
-  // semanticEnabling, semanticError, polling timer), the
-  // semanticToggle / loadSemanticState helpers, formatModelSize,
-  // and the SemanticState import all live there now. This overlay
-  // keeps only the GlobalConfig autosave plumbing + the About
-  // section.
-
-  // `fullstack-a-76` slice 2: Features section pairs the
-  // chan-reports + BGE (semantic) per-drive toggles. State
-  // mirrors `HybridFileBrowserConfig.svelte`'s semantic-toggle
-  // shape (load on mount; optimistic flip with rollback on
-  // error); the simpler "model present?" hint defers the
-  // full download flow to the FB config surface so the
-  // Settings overlay stays a single-screen feature toggle
-  // rather than re-implementing the BGE model-download state
-  // machine.
-  //
-  // `fullstack-a-77` slice 3 extends the Features section
-  // with the screensaver controls (enable + timeout + PIN
-  // setup/clear). State machine lives in
-  // `state/screensaver.svelte.ts`; Settings is the
-  // configuration surface.
-  let reportsEnabled = $state<boolean | null>(null);
-  let reportsBusy = $state(false);
-  let reportsError = $state<string | null>(null);
-  let semanticState = $state<SemanticState | null>(null);
-  let semanticBusy = $state(false);
-  let semanticError = $state<string | null>(null);
-  // `fullstack-a-77` slice 3 screensaver state. Mirrors
-  // `screensaver` singleton's wire shape; Settings owns the
-  // edit buffer (timeout slider + PIN entry) before the
-  // commit fires.
+  // Settings owns the screen-lock controls. Search/report feature
+  // toggles live in `HybridFileBrowserConfig.svelte`, where their
+  // file-browser ownership and richer download/reporting flows are
+  // visible.
   let screensaverEnabled = $state<boolean | null>(null);
   let screensaverTimeoutSecs = $state<number>(300);
   let screensaverTheme = $state<ScreensaverTheme>("matrix");
@@ -291,22 +256,7 @@
   /// otherwise carries the pin1/pin2 confirm pair.
   let pinDialog = $state<{ pin1: string; pin2: string } | null>(null);
 
-  async function loadFeaturesState(): Promise<void> {
-    try {
-      const r = await api.reportsState();
-      reportsEnabled = r.enabled;
-    } catch (err) {
-      reportsError = `reports: ${(err as Error).message ?? err}`;
-    }
-    try {
-      semanticState = await api.semanticState();
-    } catch {
-      // Semantic endpoint is gated on the `embeddings` feature
-      // flag in the chan-server binary. A 404 here means the
-      // build doesn't ship embeddings; we surface that as an
-      // explanatory hint rather than an error.
-      semanticState = null;
-    }
+  async function loadScreenLockState(): Promise<void> {
     try {
       const s = await api.screensaverState();
       screensaverEnabled = s.enabled;
@@ -315,44 +265,6 @@
       screensaverPinSet = s.pin_set;
     } catch (err) {
       screensaverError = `screensaver: ${(err as Error).message ?? err}`;
-    }
-  }
-
-  async function toggleReports(): Promise<void> {
-    if (reportsEnabled === null || reportsBusy) return;
-    reportsBusy = true;
-    reportsError = null;
-    const target = !reportsEnabled;
-    try {
-      const r = target ? await api.reportsEnable() : await api.reportsDisable();
-      reportsEnabled = r.enabled;
-    } catch (err) {
-      reportsError = `${target ? "enable" : "disable"} failed: ${(err as Error).message ?? err}`;
-    } finally {
-      reportsBusy = false;
-    }
-  }
-
-  async function toggleSemantic(): Promise<void> {
-    if (!semanticState || semanticBusy) return;
-    semanticBusy = true;
-    semanticError = null;
-    try {
-      if (semanticState.semantic_enabled) {
-        semanticState = await api.semanticDisable();
-      } else if (semanticState.model_present) {
-        semanticState = await api.semanticEnable();
-      } else {
-        // Model not on disk yet. Settings UI doesn't run the
-        // download itself — defer to the FB config surface
-        // which already implements the polling + progress UX.
-        semanticError =
-          "BGE model not downloaded yet. Open the Hybrid File Browser back-side to download.";
-      }
-    } catch (err) {
-      semanticError = `toggle failed: ${(err as Error).message ?? err}`;
-    } finally {
-      semanticBusy = false;
     }
   }
 
@@ -495,7 +407,7 @@
     void refreshDrive();
     void loadGlobalConfig();
     void loadBuildInfo();
-    void loadFeaturesState();
+    void loadScreenLockState();
     screensaverPauseRelease = pauseScreensaverTimer();
     return () => {
       screensaverPauseRelease?.();
@@ -547,10 +459,11 @@
 {:else}
   <div class="settings">
     <!-- `fullstack-a-45` Terminal, `-a-46` Editor settings,
-         `-a-48` Semantic search migrations — see component-level
+         `-a-48` Semantic search migrations: see component-level
          comments in `HybridTerminalConfig` / `HybridEditorConfig`
          / `HybridFileBrowserConfig`. Only the Appearance (global
-         theme) section + About live here after the wave.
+         theme), Screen lock, and About sections live here after
+         the wave.
 
          `fullstack-a-53` Appearance revert: this section MOVED
          briefly to HybridEditorConfig in `-a-46`; @@Alex's design
@@ -595,96 +508,11 @@
       </div>
     </section>
 
-    <!-- `fullstack-a-76` slice 2: Features section pairs the
-         chan-reports + BGE (semantic) per-drive toggles. Both
-         hit per-drive endpoints (`/api/index/reports/*` and
-         `/api/index/semantic/*`); the existing
-         `HybridFileBrowserConfig.svelte` keeps its richer
-         per-feature controls (BGE model download + download
-         progress; reports global-preferences mirror). This
-         section is the single-screen "quick toggle" surface;
-         users who need the full per-feature controls open the
-         FB back-side. -->
-    <section class="features">
-      <h3>Features</h3>
-      <p class="hint">
-        Per-drive feature toggles. Mirrors the pre-flight
-        toggles from chan-desktop's launcher.
-      </p>
-      <div class="feature-row">
-        <div class="feature-meta">
-          <div class="feature-title">chan-reports</div>
-          <div class="feature-sub">
-            Code-stats indexing (SLOC + COCOMO + per-language
-            breakdown).
-          </div>
-          {#if reportsError}
-            <div class="err" role="alert">{reportsError}</div>
-          {/if}
-        </div>
-        <label class="feature-switch">
-          <input
-            type="checkbox"
-            checked={reportsEnabled === true}
-            disabled={reportsEnabled === null || reportsBusy}
-            onchange={toggleReports}
-          />
-          <span>
-            {#if reportsEnabled === null}
-              loading…
-            {:else if reportsBusy}
-              flipping…
-            {:else if reportsEnabled}
-              On
-            {:else}
-              Off
-            {/if}
-          </span>
-        </label>
-      </div>
-      <div class="feature-row">
-        <div class="feature-meta">
-          <div class="feature-title">BGE semantic search</div>
-          <div class="feature-sub">
-            Hybrid BM25 + embeddings. Requires the BGE-small
-            model on disk (download from the File Browser
-            back-side).
-          </div>
-          {#if semanticError}
-            <div class="err" role="alert">{semanticError}</div>
-          {/if}
-        </div>
-        <label class="feature-switch">
-          <input
-            type="checkbox"
-            checked={semanticState?.semantic_enabled === true}
-            disabled={semanticState === null || semanticBusy}
-            onchange={toggleSemantic}
-          />
-          <span>
-            {#if semanticState === null}
-              n/a
-            {:else if semanticBusy}
-              flipping…
-            {:else if semanticState.semantic_enabled}
-              On
-            {:else if !semanticState.model_present}
-              Model not downloaded
-            {:else}
-              Off
-            {/if}
-          </span>
-        </label>
-      </div>
-      <!-- `fullstack-a-77` slice 3: screensaver controls.
-           Enable toggle on top; timeout + PIN management
-           inside a sub-block that shows only when enabled
-           (no point in configuring a screensaver that's
-           off). -->
-      <div class="feature-row screensaver-row">
-        <div class="feature-meta">
-          <div class="feature-title">Screen lock</div>
-          <div class="feature-sub">
+    <section class="screen-lock">
+      <h3>Screen lock</h3>
+      <div class="screen-lock-row">
+        <div class="screen-lock-meta">
+          <div class="screen-lock-sub">
             Auto-lock the drive view after inactivity.
             Local-only PIN protection (Mod+L locks now).
           </div>
@@ -729,7 +557,7 @@
                     <button type="button" onclick={openPinDialog} disabled={screensaverBusy}>
                       Set PIN
                     </button>
-                    <span class="muted">No PIN yet — lockout informational only.</span>
+                    <span class="muted">No PIN yet; lockout informational only.</span>
                   {/if}
                 {:else}
                   <input
@@ -757,7 +585,7 @@
             </div>
           {/if}
         </div>
-        <label class="feature-switch">
+        <label class="screen-lock-switch">
           <input
             type="checkbox"
             checked={screensaverEnabled === true}
@@ -896,9 +724,7 @@
   section:last-of-type { border-bottom: 0; }
   /* `fullstack-a-46` removed the two-column .section-row layout
      that paired (Editor theme + Appearance) and (Layout + Date
-     pills). Both pairs migrated to `HybridEditorConfig.svelte`;
-     the remaining sections (Semantic search, About) stack
-     single-column. */
+     pills). The remaining sections stack single-column. */
   h3 {
     margin: 0;
     font-size: 15px;
@@ -907,12 +733,8 @@
     text-transform: uppercase;
     letter-spacing: 0.05em;
   }
-  /* `fullstack-a-48` (Task F option B): the generic `label`,
-     `label > span`, `input`, `input:focus` rules went unused
-     after the Semantic search section migrated to
-     `HybridFileBrowserConfig.svelte`. No form controls remain in
-     this overlay — only the About <div class="grid"> read-only
-     view. Dropped to keep svelte-check clean. */
+  /* About uses a compact read-only grid; screen-lock controls own
+     their narrower form styles below. */
   .grid {
     display: grid;
     grid-template-columns: 7em 1fr;
@@ -958,17 +780,12 @@
     color: var(--text-secondary);
     font-size: 13px;
   }
-  /* `fullstack-a-76` slice 2: Features section rows. Each row
-     is a metadata block (title + sub + optional error) on the
-     left and a checkbox-styled switch on the right. Width-
-     constrained so a 4040+ component tree's layout stability
-     pin isn't disturbed. */
-  .features {
+  .screen-lock {
     display: flex;
     flex-direction: column;
     gap: 0.5rem;
   }
-  .feature-row {
+  .screen-lock-row {
     display: flex;
     align-items: flex-start;
     gap: 1rem;
@@ -977,25 +794,21 @@
     border-radius: 4px;
     background: var(--bg);
   }
-  .feature-meta {
+  .screen-lock-meta {
     flex: 1;
     min-width: 0;
   }
-  .feature-title {
-    font-weight: 600;
-    margin-bottom: 0.15rem;
-  }
-  .feature-sub {
+  .screen-lock-sub {
     font-size: 12.5px;
     color: var(--text-secondary);
     line-height: 1.35;
   }
-  .feature-meta .err {
+  .screen-lock-meta .err {
     margin-top: 0.3rem;
     font-size: 12.5px;
     color: var(--warn-text);
   }
-  .feature-switch {
+  .screen-lock-switch {
     display: inline-flex;
     align-items: center;
     gap: 0.4rem;
@@ -1005,7 +818,7 @@
     user-select: none;
     white-space: nowrap;
   }
-  .feature-switch input[disabled] {
+  .screen-lock-switch input[disabled] {
     cursor: wait;
   }
   .screensaver-config {

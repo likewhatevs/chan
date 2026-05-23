@@ -92,41 +92,38 @@ describe("fullstack-a-48: HybridFileBrowserConfig wiring", () => {
 });
 
 describe("fullstack-a-48: rich Semantic search state machine removed from SettingsPanel", () => {
-  // `fullstack-a-76` slice 2 RE-INTRODUCES a simple
-  // BGE toggle in SettingsPanel's new Features section, but
-  // the FULL model-download state machine (download progress,
-  // polling, model-size formatting) stays exclusive to
-  // HybridFileBrowserConfig. These pins assert the
-  // *specific* removed helpers stay gone in Settings, while
-  // the new simpler toggle introduced in `-a-76` slice 2 is
-  // permitted.
-
-  test("section header for the OLD `Semantic search` section is gone", () => {
-    // The new `-a-76` slice 2 section is `<h3>Features</h3>`
-    // pairing BGE + reports; the OLD `<h3>Semantic search</h3>`
-    // standalone block stays removed.
+  test("semantic search section stays gone from SettingsPanel", () => {
     expect(panel).not.toMatch(/<h3>Semantic search<\/h3>/);
+    expect(panel).not.toMatch(/BGE semantic search/);
   });
 
   test("rich model-download state machine helpers stay gone", () => {
-    // These are the FULL HybridFileBrowserConfig-only
-    // helpers (model download + polling); the simpler
-    // `toggleSemantic` in `-a-76` slice 2 is allowed.
+    // These helpers belong to HybridFileBrowserConfig, not the
+    // global Settings overlay.
+    expect(panel).not.toMatch(/async function toggleSemantic\b/);
     expect(panel).not.toMatch(/async function semanticToggle\b/);
     expect(panel).not.toMatch(/async function loadSemanticState/);
     expect(panel).not.toMatch(/function formatModelSize/);
-    // `api.semanticDownload()` belongs to the FB config
-    // download flow; Settings's toggle defers to it via a
-    // hint rather than re-implementing the download.
+    expect(panel).not.toMatch(/api\.semantic(State|Enable|Disable)\(\)/);
     expect(panel).not.toMatch(/api\.semanticDownload\(\)/);
   });
 
   test("download-state variables stay gone", () => {
-    // The download-flow state (downloading flag + polling
-    // timer + enabling-distinct-from-state) stays in
-    // HybridFileBrowserConfig.
+    expect(panel).not.toMatch(/let\s+semanticState\s*=/);
+    expect(panel).not.toMatch(/let\s+semanticBusy\s*=/);
+    expect(panel).not.toMatch(/let\s+semanticError\s*=/);
     expect(panel).not.toMatch(/let\s+semanticDownloading\s*=/);
     expect(panel).not.toMatch(/let\s+semanticEnabling\s*=/);
     expect(panel).not.toMatch(/let\s+semanticPollTimer\s*=/);
+  });
+});
+
+describe("Wave 2: reports controls removed from SettingsPanel", () => {
+  test("chan-reports controls stay owned by HybridFileBrowserConfig", () => {
+    expect(source).toMatch(/<h3>chan-reports<\/h3>/);
+    expect(panel).not.toContain("chan-reports");
+    expect(panel).not.toMatch(/api\.reports(State|Enable|Disable)\(\)/);
+    expect(panel).not.toMatch(/toggleReports/);
+    expect(panel).not.toMatch(/reportsEnabled|reportsBusy|reportsError/);
   });
 });

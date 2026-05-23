@@ -110,9 +110,9 @@ describe("fullstack-a-77 slice 3: Settings UI", () => {
     );
   });
 
-  test("markup renders the feature-row with the enable toggle", () => {
+  test("markup renders the screen-lock row with the enable toggle", () => {
     expect(panel).toMatch(
-      /<div class="feature-row screensaver-row">[\s\S]{1,2000}<div class="feature-title">Screen lock<\/div>/,
+      /<section class="screen-lock">[\s\S]{1,2000}<h3>Screen lock<\/h3>/,
     );
     expect(panel).toMatch(
       /onchange=\{toggleScreensaverEnabled\}/,
