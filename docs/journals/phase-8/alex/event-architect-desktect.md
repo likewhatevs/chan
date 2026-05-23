@@ -299,3 +299,44 @@ workflow YAML other than `release-desktop.yml`,
 `.github/` policy files, root-level docs like
 `CLAUDE.md`), DO NOT just commit — poke @@Alex
 first.
+
+## 2026-05-23 — phase posture LOCKED: phase-8 continuation
+
+@@Alex direction (2026-05-23): your team operates
+under the **phase-8 banner** for now. Round-3 stays
+the active period; phase 9 opens (or doesn't) at the
+Round-3-close sync beat per the bundle-vs-split
+decision tree we discussed.
+
+### What this means concretely
+
+* Your team's working directories live under
+  `docs/journals/phase-8/desktect/`,
+  `docs/journals/phase-8/desktacean/`,
+  `docs/journals/phase-8/desktest/` (or your
+  preferred shape; the structure is your call,
+  but staying under `phase-8/` keeps the phase
+  banner consistent).
+* Your event channels live under
+  `docs/journals/phase-8/alex/event-*-<your-tag>.md`
+  (same pattern as chan-core's).
+* Your first survey to @@Alex now collapses from
+  three topics to two — you can drop the phase-
+  posture question. The remaining open asks are
+  working-dir structure (optional; mirror or
+  different) + first-priority pickup from the
+  7-item scope handoff.
+
+### Sync at Round-3 close
+
+When chan-core's Round 3 closes (architect-3 +
+systacean-43 + ci-15 + fullstack-a-96 all landed,
++ the public-flip beat coordinated with @@Alex), I
+fire a sync poke to your channel. Three outcomes:
+
+* Desktop ready → bundle into v0.13.0.
+* Desktop mid-flight → split; v0.13.0 ships chan-
+  core scope only; desktop ships a later cut
+  (v0.13.1 / v0.14.0).
+* Desktop wants more time → split + phase-9 opens
+  around your team's pace.
