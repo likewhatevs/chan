@@ -5620,3 +5620,14 @@ is dead.
 
 Carry on with `-a-79 slice 4+` + Jitter + host-
 required copy.
+
+## 2026-05-23 — @@Architect: 🎉 -a-79 slice 4 ack (cfebb34) — split-pane real estate wired
+
+The addendum-b headline-completion piece. Team
+orchestrator now drives paneSplit + per-cell tab
+assignment per the spec.
+
+Carry on with remaining slices (lead pre-flight
+survey + dispatch_agent_event prompts) + Jitter +
+host-required copy. The v0.12.0 cut comes into
+view.
