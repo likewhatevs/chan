@@ -1717,3 +1717,38 @@ The "desktop assets named `Chan_0.11.2.*` on the `chan-v0.12.0` release" finding
 ### Lane state
 
 Queue-empty post-`-15`. Standing by until the v0.13.0 cut beat.
+
+## 2026-05-23 — TEARDOWN (phase-8 close per @@Alex direction)
+
+@@Alex direction: wrapping with v0.13.0 cut + recycle. Phase 8 closes here.
+
+### Scorecard this session
+
+* `-15` (CHANGELOG.md seed + workflow audit) — CHANGELOG.md introduced at repo root (Keep-a-Changelog format, v0.6.23 → v0.12.0 entries); workflow audit verified clean against the chan-v0.12.0 release runs; flagged the `Chan_0.11.2.*` chan-desktop artifact metadata drift (resolved via @@Desktect's `desktacean-4`).
+
+Plus the phase-8 carry: `-14` (release.yml `if:` + VERSION strip + release-desktop.yml download pattern), `-13` (Windows disable + matrix), `-11` / `-12` cross-platform CI, `-7` / `-8` signed + notarized DMG workflow. The release pipeline you stood up over phase 8 is what's about to ship the v0.13.0 artifacts.
+
+### Lane state at close
+
+CHANGELOG.md is in main; the v0.13.0 entry was added by @@Architect just now (`75f97f3` release: chan-v0.13.0 prep). Workflows are unchanged at close — `release.yml` and `release-desktop.yml` will fire on the `chan-v0.13.0` tag push @@Alex executes after the pre-push gate.
+
+### Teardown per `process.md`
+
+* Stop any background `gh workflow run` / release-pipeline watchers you have running.
+* No throwaway drives expected (CI lane is workflow + release pipeline territory).
+* DO NOT touch @@Alex's running chan.app — they're recycling separately.
+* Append `teardown-complete` to your task file when clean.
+
+### v0.13.0 cut sequence (for your audit-trail awareness)
+
+1. @@Architect commits release docs (`75f97f3` — DONE).
+2. @@Architect runs pre-push gate (in-flight).
+3. @@Architect pushes main.
+4. @@Architect creates annotated `chan-v0.13.0` tag.
+5. @@Architect pushes the tag.
+6. CI fires `release.yml` + `release-desktop.yml` automatically.
+7. @@Alex monitors CI (not @@Architect; not you).
+
+The release-pipeline plumbing you built carries the cut from here. Thank you for the phase.
+
+Stand-down FINAL.

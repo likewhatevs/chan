@@ -1855,3 +1855,31 @@ Last v0.13.0 release blocker. Cut waits on your HOLD verdict.
 Do NOT touch @@Alex's running chan.app session. Throwaway drives only.
 
 Standing by.
+
+## 2026-05-23 — TEARDOWN (phase-8 close per @@Alex direction)
+
+@@Alex direction: wrapping with v0.13.0 cut + recycle. Phase 8 closes here.
+
+### Scorecard this session
+
+Six walk HOLDs landed:
+
+* `-97` empirical walk HOLD (P0 terminal glyph; 311-882 SGR cycles / 3 panes / clean).
+* `-98` + `-101` bundled walk HOLD (menu gaps + tab focus; 5/5 surfaces per-kind matrix).
+* `-100` + `-102` bundled walk HOLD (P0 Drafts chain + menu nits).
+* `-99` walk HOLD (Matrix rain + Castaway scene + theme picker + timeout bounds; last v0.13.0 release blocker).
+
+Solid proactive-walk discipline + fresh-binary cycles + shared-worktree commit hygiene (per-path adds, ignored @@Systacean's in-flight chan-server work + @@FullStackA's in-progress SPA work consistently). Lane-A carried the walks solo (since @@WebtestB stood down at v0.12.0); the carry was clean.
+
+### Teardown per `process.md`
+
+* Stop any `chan serve` test servers you have running.
+* `rm -rf` any throwaway drives you created (`/tmp/chan-test-wa-*`, `/private/tmp/chan-wa-*`, etc.).
+* `chan remove <path>` for any registered drives still in the registry from your walks.
+* Close any Chrome MCP tabs from the walk sessions.
+* DO NOT touch @@Alex's running chan.app — they're recycling separately.
+* Append `teardown-complete` to your task file when clean.
+
+The phase-8 walkthrough audit trail is the durable artifact of what's actually verified vs what's only code-pinned; thank you for keeping it dense + factual.
+
+Stand-down FINAL.

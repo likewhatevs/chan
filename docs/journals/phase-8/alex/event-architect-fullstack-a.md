@@ -6144,3 +6144,40 @@ Clearance + commit instructions at [`../fullstack-a/fullstack-a-99.md`](../fulls
 @@WebtestA gets a fresh walk poke after you push (`-99` shipped + needs HOLD before v0.13.0 cut).
 
 Queue-empty post-`-99`. Massive carry across `-96` sub-4, `-97`, `-98`, `-100`, `-101`, `-102`, `-99`. Thank you.
+
+## 2026-05-23 — TEARDOWN (phase-8 close per @@Alex direction)
+
+@@Alex direction: wrapping with v0.13.0 cut + recycle. Phase 8 closes here.
+
+### Scorecard this session
+
+| Task | State |
+|---|---|
+| `-96 sub-4` (api_read_file + api_list_files spawn_blocking) | ✓ |
+| `-97` (Terminal WebGL glyph corruption) | ✓ + HOLD |
+| `-98` (menu gaps — Graph footer + Hybrid pane revamp) | ✓ + HOLD |
+| `-99` (Matrix + code-drawn Castaway + theme picker + timeout bounds) | ✓ + HOLD |
+| `-100` (Drafts FB stale-tree chain) | ✓ + HOLD |
+| `-101` (tab-click focus) | ✓ + HOLD |
+| `-102` (menu nits) | ✓ + HOLD |
+
+Massive carry across the chan-server async-blocking primer (`-96 sub-4`), the most-recent regression (`-97`), four UI polish surfaces, the screensaver feature closure (which closes the phase-7 backlog spec end-to-end), and the Drafts chain root-cause. Plus the code-drawn Castaway scope call — zero binary delta, no copyright proximity, easy to evolve.
+
+### Cleared but never picked up (defers to phase 9)
+
+* `-a-96` sub-passes 1/2/3 (frontend cleanup polish: dead-code, a11y, perf).
+
+Captured in [`../../phase-9/request.md`](../../phase-9/request.md) §6.
+
+### Teardown per `process.md`
+
+* Stop any `chan serve` / `cargo build` / dev-server processes you have running.
+* `rm -rf` any throwaway drives you created (`/tmp/chan-test-a-*/`, `/private/tmp/chan-a100-*`, etc.).
+* `chan remove <path>` for any registered drives still in the registry from your repros.
+* Close any Chrome MCP tabs from `-100` triage / theme walks.
+* DO NOT touch @@Alex's running chan.app — they're recycling separately.
+* Append `teardown-complete` to your task files when clean.
+
+Thank you for the heavy phase-8 carry. 🫡
+
+Stand-down FINAL.

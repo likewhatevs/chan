@@ -5061,3 +5061,35 @@ Twelve route handlers + static_assets moved to `spawn_blocking` / `tokio::fs`. 2
 Clearance + commit instructions at [`../systacean/systacean-45.md`](../systacean/systacean-45.md) "2026-05-23 — @@Architect: approved + commit clearance". Proceed per standing pre-auth.
 
 Queue-empty. Thank you.
+
+## 2026-05-23 — TEARDOWN (phase-8 close per @@Alex direction)
+
+@@Alex direction: wrapping with v0.13.0 cut + recycle. Phase 8 closes here.
+
+### Scorecard this session
+
+* `-43` (gitleaks history audit) — public-flip clean; 3 findings all acceptable.
+* `-44` (Track-3 cleanup pass) — tunnel-* unused-deps removed + `chan serve` bind-address in error + watcher event 1 MiB cap + `reqwest` stream feature explicit.
+* `-45` (chan-server async-blocking audit) — 12 route handlers + `static_assets` moved to `spawn_blocking` / `tokio::fs`. Generalised the `-96 sub-4` read-side fix across the full request surface.
+
+Plus 33 systacean tasks total across phase 8 — the durable chan-drive / chan-server backend carry.
+
+### Cleared P2 follow-ups (defer to phase 9)
+
+* Broader `Mutex/RwLock::lock().unwrap()` → explicit 500 conversion in chan-server route/state code.
+* Broader CLI error-message polish beyond the bind-address seed.
+
+Captured in [`../../phase-9/request.md`](../../phase-9/request.md) §7.
+
+### Teardown per `process.md`
+
+* Stop any `chan serve` test servers, `cargo build`, or `cargo test` processes you have running.
+* `rm -rf` any throwaway drives you created.
+* `chan remove <path>` for any registered drives still in the registry from your repros.
+* No Chrome MCP tabs expected (your lane is backend-side).
+* DO NOT touch @@Alex's running chan.app — they're recycling separately.
+* Append `teardown-complete` to your task file when clean.
+
+Backend discipline + the audit shape on `-45` were exemplary. Thank you for the phase.
+
+Stand-down FINAL.
