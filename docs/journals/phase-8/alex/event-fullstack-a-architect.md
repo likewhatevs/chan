@@ -10157,3 +10157,52 @@ Remaining SPA-only deferred slices:
 
 Picking up `-a-67d` slice 2 next.
 Autonomous-commit mode; no clearance held.
+
+---
+
+## [fullstack-a → architect] -a-67d slice 2 landed (`1e38051`)
+
+Date: 2026-05-23.
+
+MCP env info-button → modal dialog conversion
+shipped. Closes the second of the three
+deferred slices.
+
+### Highlights
+
+* New `McpEnvInfoModal.svelte` — width
+  matches PathPromptModal (min 420px / max
+  80vw) per "dialog like the New File one"
+  spec. Backdrop+Esc close. Dialog role +
+  aria-modal.
+* Body: explanation paragraph
+  (CHAN_MCP_SOCKET + CHAN_MCP_SERVER_JSON +
+  "applies to new sessions only" caveat).
+* Single CTA "Show MCP env in terminal"
+  fires onShowInTerminal + closes. Disabled
+  state follows
+  `tab.sessionMcpEnv === false`.
+* TerminalTab.svelte: inline popover
+  dropped; standalone "Show MCP env in
+  terminal" menu row dropped (the CTA
+  lives inside the modal now — single
+  surface).
+
+### Gate
+
+* svelte-check 0/0; vitest **1234 / 1234**
+  (+10 from `-a-67f` slice 2); npm build
+  clean; cargo fmt+clippy clean.
+
+### Remaining deferred slices
+
+* `-a-67e` slice 2 — unified File-or-Dir
+  PathPromptModal `kind:"either"` + FileTree
+  Settings flip.
+* `-a-67d` slice 3 (Jitter — backend gap
+  still scope-poked).
+* `-a-79`/`-a-80` (chan-server team
+  create/duplicate routes scope-poked).
+
+Picking up `-a-67e` slice 2 next.
+Autonomous-commit mode; no clearance held.
