@@ -296,3 +296,182 @@ Per the memory rule. Per-path staging only.
 Push held. Standing by for the chan-drive +
 chan-server endpoints + then the SPA-side
 implementation.
+
+## 2026-05-23 — SPA slice 1 ready for review (client methods + PBKDF2 helper)
+
+Three-file change. SPA-only. Slice 1 of the
+multi-slice screensaver pickup. State
+machine + overlay component + Settings UI
+defer to slices 2 / 3.
+
+### What landed
+
+`web/src/api/client.ts`:
+* New `api.screensaverState()` →
+  `GET /api/screensaver/state` →
+  `{ enabled, timeout_secs, pin_set }`.
+* New `api.screensaverPatch(body)` →
+  `PATCH /api/screensaver/state` with
+  partial `{ enabled?, timeout_secs? }`.
+* New `api.screensaverSetPin(hash_b64)` →
+  `POST /api/screensaver/pin` body
+  `{ hash }`. Hash composed client-side
+  per the PBKDF2 helper below.
+* New `api.screensaverClearPin()` →
+  `DELETE /api/screensaver/pin`.
+* New `api.screensaverVerify(hash_b64)` →
+  `POST /api/screensaver/verify` →
+  `{ verified: boolean }`.
+* Doc-comment cross-references
+  `systacean-40` + the hash-on-wire
+  contract.
+
+`web/src/state/screensaver.ts` (new):
+* `hashPin(pin, driveSalt)` — PBKDF2 +
+  SHA-256 via `crypto.subtle.deriveBits`.
+  100_000 iterations (OWASP minimum
+  circa 2023). 32-byte output → 44-char
+  base64.
+* Salt derivation: SHA-256 of the
+  caller-supplied `driveSalt` (typical:
+  `drive.info?.root`) so the same PIN
+  against two drives produces distinct
+  hashes. The pre-hash collapses
+  arbitrarily-long paths into 32 bytes
+  before feeding PBKDF2.
+* `base64Encode(bytes)` —
+  byte-safe wrapper around `btoa` so
+  raw PBKDF2 digest bytes round-trip
+  cleanly (some have non-UTF8 byte
+  values).
+* Module-level constants:
+  `SCREENSAVER_DEFAULT_TIMEOUT_SECS = 300`
+  (matches `systacean-40`'s chan-drive
+  default); `SCREENSAVER_MIN_TIMEOUT_SECS
+  = 30`; `SCREENSAVER_MAX_TIMEOUT_SECS =
+  14400` (4h). The chan-drive layer
+  doesn't clamp; the SPA enforces a
+  reasonable range so a typo of `1`
+  doesn't lock the user out
+  mid-keystroke.
+
+`web/src/state/screensaver.test.ts` (new):
+14 pins across:
+* 6 raw-source pins on the client
+  methods (one per endpoint + the
+  doc-comment cross-reference).
+* 4 behavioral pins on `hashPin`:
+  deterministic for same inputs;
+  different salts diverge; different
+  PINs diverge; empty salt
+  fall-through.
+* 2 constant-value pins (default + min/max
+  bracket).
+* 2 raw-source pins on the rationale +
+  iteration-count documentation.
+
+### Slice plan (post slice 1)
+
+* **Slice 2**: `state/screensaver.svelte.ts`
+  state machine (inactivity timer +
+  lock event bus) +
+  `components/ScreensaverOverlay.svelte`
+  overlay (full-window cover + PIN
+  entry + shake on wrong PIN). The
+  longer-window timer + the right
+  event set (keydown + scroll +
+  pointer events; opposite of
+  `idle.svelte.ts`'s short-window
+  trigger set).
+* **Slice 3**: Settings overlay
+  Features section extension (pair
+  with `-a-76` slice 2's reports +
+  BGE toggles). PIN setup dialog.
+  Manual "Lock now" chord
+  (suggested `Mod+L`).
+
+### Acceptance (slice 1 — client + helper only)
+
+1. **5 client methods exposed** ✓ —
+   state / patch / setPin / clearPin /
+   verify. Each mirrors the
+   systacean-40 contract.
+2. **PBKDF2 hash produces deterministic
+   digests** ✓ — same inputs → same
+   output (pinned).
+3. **Different salts diverge** ✓ —
+   PIN reuse across drives doesn't
+   collide.
+4. **Crypto availability checked** ✓
+   — throws an explanatory error if
+   `crypto.subtle` is missing (older
+   browsers; should never fire on
+   chan's supported targets but the
+   guard's free).
+5. **Timeout constants exposed** ✓ —
+   default matches chan-drive
+   default; min/max bracket the
+   configurable range.
+
+### Gate
+
+* vitest **1078 / 1078** (+14 net from
+  `-a-76` slice 2's 1064).
+* svelte-check 0 errors / 0 warnings
+  across 4043 files.
+* npm build clean.
+* Rust gate not re-run (no Rust touched;
+  systacean-40 already shipped chan-drive
+  + chan-server).
+
+### Decisions
+
+* **Crypto.subtle PBKDF2** vs adding an
+  argon2/scrypt dep — task body framed
+  the threat model as local-only;
+  PBKDF2 + SHA-256 + 100k iterations is
+  sufficient. Built-in to every browser
+  chan supports; no new deps.
+* **Per-drive salt via `drive.info?.root`**
+  — the same PIN across two drives
+  produces distinct hashes. SPA passes
+  the salt explicitly (not implicit on
+  some global state) so the helper
+  stays testable + the salt source is
+  the caller's choice.
+* **Salt pre-hash** — SHA-256 the salt
+  source first to bound the PBKDF2
+  salt-buffer size regardless of path
+  length.
+* **Slice-by-slice ship** — client
+  methods + helper are small (~150 LOC
+  + tests) and the state machine
+  + overlay are substantial enough to
+  ship as separate slices. Each is
+  independently reviewable +
+  empirically walkable.
+
+### Suggested commit subject
+
+```
+Screensaver: api.screensaver* client methods + PBKDF2 PIN-hash helper (fullstack-a-77 slice 1)
+```
+
+Single commit. Client methods + helper +
+14 test pins.
+
+### Files for `git add` (per-path discipline)
+
+* `web/src/api/client.ts`
+* `web/src/state/screensaver.ts` (new)
+* `web/src/state/screensaver.test.ts` (new)
+* `docs/journals/phase-8/fullstack-a/fullstack-a-77.md`
+* `docs/journals/phase-8/fullstack-a/journal.md`
+* `docs/journals/phase-8/alex/event-fullstack-a-architect.md`
+
+### Atomic-audit-commit
+
+Per the memory rule. Per-path staging only.
+
+Push held. Standing by for clearance +
+slice 2 (state machine + overlay) pickup.

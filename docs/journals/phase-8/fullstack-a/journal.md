@@ -3228,3 +3228,36 @@ config via an error-message hint.
 Impl note at [fullstack-a-76.md](fullstack-a-76.md)
 "## 2026-05-23 — SPA slice 2".
 Outbound poke fired.
+
+## 2026-05-23 — -a-77 SPA slice 1 (client methods + PBKDF2 helper) ready for review
+
+Three-file change. Slice 1 of the
+multi-slice screensaver pickup.
+
+* `api/client.ts`: 5 new client methods
+  for the `systacean-40` endpoints.
+* `state/screensaver.ts` (new):
+  `hashPin(pin, driveSalt)` PBKDF2 +
+  SHA-256 helper via `crypto.subtle`.
+  100k iterations. Per-drive salt
+  pre-hashed for length safety.
+  Timeout constants matching chan-drive
+  defaults + reasonable SPA-side bracket.
+* `state/screensaver.test.ts` (new): 14
+  pins (6 client + 4 hash behavior + 2
+  constants + 2 rationale).
+
+Slice 2 (state machine + overlay) +
+slice 3 (Settings UI + manual lock
+chord) follow.
+
+### Gate
+
+* vitest **1078 / 1078** (+14 net from
+  -a-76 slice 2's 1064).
+* svelte-check 0/0 across 4043 files.
+* npm build clean.
+
+Impl note at [fullstack-a-77.md](fullstack-a-77.md)
+"## 2026-05-23 — SPA slice 1". Outbound
+poke fired.

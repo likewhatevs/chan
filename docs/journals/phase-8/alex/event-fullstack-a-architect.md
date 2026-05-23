@@ -9320,3 +9320,100 @@ Single bash invocation per discipline.
 
 Push held. Standing by for clearance +
 @@WebtestA empirical walk.
+
+## 2026-05-23 — poke (fullstack-a-77 SPA slice 1 ready for review)
+
+Three-file change. SPA-only.
+`systacean-40` shipped; this is slice 1 of
+the multi-slice screensaver pickup.
+
+### What landed
+
+`api/client.ts`:
+* 5 client methods —
+  `screensaverState` / `screensaverPatch` /
+  `screensaverSetPin` /
+  `screensaverClearPin` /
+  `screensaverVerify`. Each mirrors the
+  `systacean-40` endpoint contract.
+
+`state/screensaver.ts` (new):
+* `hashPin(pin, driveSalt)` — PBKDF2 +
+  SHA-256 via `crypto.subtle.deriveBits`.
+  100k iterations. Per-drive salt
+  pre-hashed for length safety.
+* `SCREENSAVER_DEFAULT_TIMEOUT_SECS = 300`
+  matches chan-drive default;
+  `MIN_TIMEOUT_SECS = 30` /
+  `MAX_TIMEOUT_SECS = 14400` (SPA-side
+  range clamp so a typo doesn't lock
+  the user mid-keystroke).
+
+`state/screensaver.test.ts` (new): 14
+pins covering client methods + hash
+behavior + constants + rationale.
+
+### Slice plan
+
+* Slice 1 (this): client methods +
+  helper.
+* Slice 2: `state/screensaver.svelte.ts`
+  state machine + `ScreensaverOverlay.svelte`
+  overlay (full-window cover + PIN
+  entry + shake-on-wrong).
+* Slice 3: Settings Features-section
+  extension (PIN setup; pairs with -a-76
+  slice 2's reports + BGE toggles) +
+  manual "Lock now" chord.
+
+### Acceptance (slice 1)
+
+1. 5 client methods exposed ✓.
+2. PBKDF2 hash deterministic ✓.
+3. Different salts diverge ✓.
+4. Crypto guard ✓.
+5. Timeout constants exposed ✓.
+
+### Gate
+
+* vitest **1078 / 1078** (+14 net from
+  -a-76 slice 2's 1064).
+* svelte-check 0 errors / 0 warnings
+  across 4043 files.
+* npm build clean.
+
+### Decisions
+
+* **PBKDF2 + SHA-256** via crypto.subtle
+  vs argon2 dep — task body's local-only
+  threat model permits it; no new deps.
+* **Per-drive salt** via `drive.info?.root`
+  — PIN reuse across drives doesn't
+  collide.
+* **Salt pre-hash** for length safety.
+* **Slice-by-slice ship** — client +
+  helper independently reviewable + the
+  state machine / overlay each warrant
+  their own slice.
+
+### Suggested commit subject
+
+```
+Screensaver: api.screensaver* client methods + PBKDF2 PIN-hash helper (fullstack-a-77 slice 1)
+```
+
+### Files for `git add`
+
+* `web/src/api/client.ts`
+* `web/src/state/screensaver.ts` (new)
+* `web/src/state/screensaver.test.ts` (new)
+* `docs/journals/phase-8/fullstack-a/fullstack-a-77.md`
+* `docs/journals/phase-8/fullstack-a/journal.md`
+* `docs/journals/phase-8/alex/event-fullstack-a-architect.md`
+  (this append)
+
+### Atomic-audit-commit applied
+
+Single bash invocation per discipline.
+
+Push held. Standing by for clearance + slice 2.

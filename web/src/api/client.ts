@@ -518,6 +518,42 @@ export const api = {
     req<{ enabled: boolean }>("POST", "/api/index/reports/enable"),
   reportsDisable: () =>
     req<{ enabled: boolean }>("POST", "/api/index/reports/disable"),
+  /// `fullstack-a-77`: screensaver state + PIN endpoints. Backed
+  /// by `systacean-40` (`crates/chan-server/src/routes/screensaver.rs`).
+  /// The PIN hash never appears in the response body — the
+  /// state shape carries `pin_set: bool` instead, and `verify`
+  /// returns a single `verified: bool` from a server-side
+  /// constant-time compare. PBKDF2 happens client-side via
+  /// `state/screensaver.ts::hashPin`; payload field
+  /// `{ hash: base64 }`.
+  screensaverState: () =>
+    req<{ enabled: boolean; timeout_secs: number; pin_set: boolean }>(
+      "GET",
+      "/api/screensaver/state",
+    ),
+  screensaverPatch: (body: { enabled?: boolean; timeout_secs?: number }) =>
+    req<{ enabled: boolean; timeout_secs: number; pin_set: boolean }>(
+      "PATCH",
+      "/api/screensaver/state",
+      body,
+    ),
+  screensaverSetPin: (hash_b64: string) =>
+    req<{ enabled: boolean; timeout_secs: number; pin_set: boolean }>(
+      "POST",
+      "/api/screensaver/pin",
+      { hash: hash_b64 },
+    ),
+  screensaverClearPin: () =>
+    req<{ enabled: boolean; timeout_secs: number; pin_set: boolean }>(
+      "DELETE",
+      "/api/screensaver/pin",
+    ),
+  screensaverVerify: (hash_b64: string) =>
+    req<{ verified: boolean }>(
+      "POST",
+      "/api/screensaver/verify",
+      { hash: hash_b64 },
+    ),
   /// `fullstack-b-30` slice b: download Source Code Pro Regular +
   /// OFL.txt into `<user-config>/chan/fonts/`. Idempotent server-
   /// side; safe to call from a click handler without guarding.
