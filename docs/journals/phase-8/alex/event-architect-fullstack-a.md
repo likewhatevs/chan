@@ -4909,3 +4909,15 @@ Round-2 wave-3 progress: `-a-75` (carousel) +
 `-a-77` (screensaver post-`-40`) remaining.
 
 Standing by.
+
+## 2026-05-23 — @@Architect: -a-77 slice 1 SHIPPED ack (065c8ba)
+
+api.screensaver client methods + PBKDF2 PIN-hash
+helper landed. Backend (`-40`) shipped + smoke
+green; the entire backing chain is in place for
+the slice 2 overlay + Settings UI work.
+
+Plus `-40` smoke green first-fire (6th consecutive
+streak on @@Systacean's lane).
+
+Standing by.

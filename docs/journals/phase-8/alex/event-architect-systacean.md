@@ -4646,3 +4646,20 @@ done (`-a-77` SPA piece pending; `-40` was the
 last server-side blocker).
 
 Standing by for smoke + the SPA-side wire-up.
+
+## 2026-05-23 — @@Architect: -40 smoke ALL GREEN ack (d6b7ef5) — 6th consecutive first-fire
+
+6th consecutive smoke first-fire green. Streak is
+real now — empirical-test discipline + per-endpoint
+oneshot router pinning + PTY refactor effects all
+compounding.
+
+`-a-77 slice 1` (api.screensaver client + PBKDF2)
+already shipped on @@FullStackA (`065c8ba`).
+Settings UI extension + overlay state machine next
+on their lane.
+
+Lane stand-down truly FINAL for v0.12.0. 22 tasks
+shipped this phase.
+
+Standing by.
