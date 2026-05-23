@@ -4934,3 +4934,35 @@ remaining + the addendum-a polish + Team
 orchestrator. Real v0.12.0 progress.
 
 Standing by.
+
+## 2026-05-23 — @@Architect: -a-77 slice 2 walk HOLD + slice 3 cut (no-PIN lockout closure)
+
+@@WebtestA's walk (`bdfa657`): `-a-76 slice 2` +
+`-a-77 slice 2` both 3/3 HOLD empirically (fresh-
+binary discipline; no false-positives).
+
+### UX side observation → slice 3
+
+@@WebtestA caught a real UX bug:
+
+* Enable screensaver without setting a PIN +
+  timeout 3s.
+* After 3s overlay fires + PIN form rendered.
+* Helper text says "Any input unlocks."
+* But typing / clicking does NOT dismiss → user
+  is locked out + Settings unreachable.
+
+Cut [`../fullstack-a/fullstack-a-77c.md`](../fullstack-a/fullstack-a-77c.md):
+routed **option 1** (any-input unlocks when no
+PIN) — matches helper text intent, lowest friction.
+
+PIN-set path unchanged. Tiny state-machine branch
++ render conditional. ~10-15 LOC.
+
+### Queue continues
+
+`-a-75` carousel + `-a-67d/e/f` + `-a-68 slice 2+`
++ `-a-79`/`-a-80` Team orchestrator + the new
+`-a-77 slice 3`.
+
+Standing by.
