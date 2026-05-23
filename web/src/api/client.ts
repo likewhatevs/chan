@@ -19,6 +19,7 @@ import type {
   IndexStatus,
   IndexingStateResponse,
   LanguageGraphResponse,
+  LinkTarget,
   MoveResponse,
   ReportFileStats,
   ReportPrefix,
@@ -318,6 +319,14 @@ export const api = {
     const params = new URLSearchParams({ q, limit: String(limit) });
     if (prefix) params.set("prefix", prefix);
     return req<SearchHit[]>("GET", `/api/search/files?${params}`);
+  },
+  /// Wiki-link target search. Unlike /api/search/files, this is
+  /// backed by the graph and matches file basename, indexed title,
+  /// and heading text. Wiki file mode consumes both row kinds:
+  /// file rows insert paths; heading rows insert anchored links.
+  linkTargets: (q: string, limit = 10) => {
+    const params = new URLSearchParams({ q, limit: String(limit) });
+    return req<LinkTarget[]>("GET", `/api/link-targets?${params}`);
   },
   /// Hybrid (BM25 + dense) content search. The backend silently
   /// picks hybrid (or BM25 when built without the `embeddings`

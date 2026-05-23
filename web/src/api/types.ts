@@ -252,6 +252,16 @@ export type FileResponse = {
 
 export type SearchHit = { path: string; score: number };
 
+export type LinkTarget = {
+  kind: "File" | "Heading";
+  path: string;
+  title?: string | null;
+  heading?: string | null;
+  anchor?: string | null;
+  level?: number | null;
+  mtime?: number | null;
+};
+
 export type LinkEdge = {
   source: string;
   target: string;

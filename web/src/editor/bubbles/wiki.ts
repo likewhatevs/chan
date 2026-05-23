@@ -7,8 +7,9 @@
 // (in-memory filter on subsequent typing). When the user backspaces
 // past the `#` the bubble drops back to file mode.
 //
-// File mode: /api/search/files for the query (debounced), top
-// SEARCH_LIMIT results, commit replaces `[[query` with `[[target]]`.
+// File mode: /api/link-targets for the query (debounced), top
+// file/heading results. File hits commit `[[target]]`; heading hits
+// commit `[[target#anchor]]`.
 // Heading mode: filtered headings list, commit replaces `[[query`
 // with `[[target#anchor]]` where anchor is the slug returned by the
 // server (so the on-disk link survives a heading rename without
@@ -25,6 +26,7 @@ import { openBubbleShell } from "../bubble";
 import type { BubbleHandle } from "./types";
 import { createCaretAnchor } from "./anchor";
 import { api } from "../../api/client";
+import type { LinkTarget } from "../../api/types";
 import { indexStatus } from "../../state/store.svelte";
 import {
   filterBlocks,
@@ -40,8 +42,8 @@ export interface WikiBubbleOpts {
   triggerStart: number;
   triggerEnd: number;
   initialQuery: string;
-  /// Optional path scope passed through to /api/search/files (project-
-  /// bound suggestions). null for unscoped global search.
+  /// Reserved path scope from the host. File mode currently uses
+  /// /api/link-targets globally so title/heading matches are visible.
   prefix: string | null;
   /// "wrap" (default): commit inserts `[[path]]`. Used when the user
   /// typed `[[` from scratch.
@@ -51,7 +53,7 @@ export interface WikiBubbleOpts {
   /// Cmd+Enter handler. Called with the currently-selected hit's
   /// target (or the trigger's parsed target if no hit is selected).
   /// Returns the navigation surface to the host (FileEditorTab calls
-  /// openInActivePane). Optional — when omitted, Cmd+Enter is a no-op.
+  /// openInActivePane). Optional; when omitted, Cmd+Enter is a no-op.
   onOpenLink?: (target: string, anchor: string | null) => void;
   onDismiss: () => void;
 }
@@ -61,9 +63,6 @@ const HEADING_LIMIT = 8;
 const BLOCK_LIMIT = 8;
 const FETCH_DEBOUNCE_MS = 60;
 
-interface SearchHit {
-  path: string;
-}
 interface HeadingHit {
   level: number;
   text: string;
@@ -115,7 +114,7 @@ export function openWikiBubble(opts: WikiBubbleOpts): WikiBubbleHandle {
   let triggerEnd = opts.triggerEnd;
   let mode: Mode = classifyQuery(query);
   // File-mode results.
-  let fileHits: SearchHit[] = [];
+  let fileHits: LinkTarget[] = [];
   // Heading-mode all-headings cache (keyed by target so target switch
   // re-fetches only when needed) + filtered display list.
   let headingTarget: string | null = null;
@@ -141,7 +140,7 @@ export function openWikiBubble(opts: WikiBubbleOpts): WikiBubbleHandle {
   status.className = "md-bubble-status";
   shell.wrap.appendChild(status);
 
-  function activeHits(): Array<SearchHit | HeadingHit | ParsedBlock> {
+  function activeHits(): Array<LinkTarget | HeadingHit | ParsedBlock> {
     if (mode.kind === "heading") return headingHits;
     if (mode.kind === "block") return blockHits;
     return fileHits;
@@ -207,7 +206,23 @@ export function openWikiBubble(opts: WikiBubbleOpts): WikiBubbleHandle {
         row.appendChild(tag);
         row.appendChild(text);
       } else {
-        row.textContent = (hit as SearchHit).path;
+        const t = hit as LinkTarget;
+        if (t.kind === "Heading") {
+          const level = document.createElement("span");
+          level.className = "md-bubble-row-level";
+          level.textContent = t.level ? `H${t.level}` : "H";
+          const text = document.createElement("span");
+          text.textContent = t.heading ?? t.path;
+          const path = document.createElement("span");
+          path.className = "md-bubble-row-sub";
+          path.textContent = ` ${t.path}`;
+          row.appendChild(level);
+          row.appendChild(text);
+          row.appendChild(path);
+        } else {
+          const title = t.title?.trim();
+          row.textContent = title && title !== t.path ? `${title} · ${t.path}` : t.path;
+        }
       }
       row.addEventListener("mousedown", (e) => {
         e.preventDefault();
@@ -224,10 +239,10 @@ export function openWikiBubble(opts: WikiBubbleOpts): WikiBubbleHandle {
     const seq = ++reqSeq;
     debounceTimer = window.setTimeout(() => {
       api
-        .search(query, SEARCH_LIMIT, opts.prefix)
+        .linkTargets(query, SEARCH_LIMIT)
         .then((results) => {
           if (!alive || seq !== reqSeq || mode.kind !== "file") return;
-          fileHits = results as SearchHit[];
+          fileHits = results;
           if (selectedIndex >= fileHits.length) selectedIndex = 0;
           render();
         })
@@ -241,7 +256,7 @@ export function openWikiBubble(opts: WikiBubbleOpts): WikiBubbleHandle {
 
   function fetchHeadings(target: string): void {
     if (headingTarget === target) {
-      // Cache hit — just re-filter.
+      // Cache hit; just re-filter.
       filterHeadings();
       return;
     }
@@ -330,7 +345,7 @@ export function openWikiBubble(opts: WikiBubbleOpts): WikiBubbleHandle {
     }
   }
 
-  function commit(hit: SearchHit | HeadingHit | ParsedBlock): void {
+  function commit(hit: LinkTarget | HeadingHit | ParsedBlock): void {
     const raw = opts.templateMode === "raw";
     if (mode.kind === "block") {
       // Block commit may need a fresh `^id` written to the target file.
@@ -346,14 +361,21 @@ export function openWikiBubble(opts: WikiBubbleOpts): WikiBubbleHandle {
       const ref = `${mode.target}#${h.anchor}`;
       insert = raw ? ref : `[[${ref}]]`;
     } else {
-      const path = (hit as SearchHit).path;
-      insert = raw ? path : `[[${path}]]`;
+      const ref = linkTargetRef(hit as LinkTarget);
+      insert = raw ? ref : `[[${ref}]]`;
     }
     opts.view.dispatch({
       changes: { from: opts.triggerStart, to: triggerEnd, insert },
       selection: { anchor: opts.triggerStart + insert.length },
     });
     dismiss();
+  }
+
+  function linkTargetRef(hit: LinkTarget): string {
+    if (hit.kind === "Heading" && hit.anchor) {
+      return `${hit.path}#${hit.anchor}`;
+    }
+    return hit.path;
   }
 
   async function commitBlock(
@@ -364,7 +386,7 @@ export function openWikiBubble(opts: WikiBubbleOpts): WikiBubbleHandle {
     const target = mode.target;
     let anchorId: string;
     if (block.existingAnchor) {
-      // Strip leading `^` — we store the anchor as `^id` in
+      // Strip leading `^`: we store the anchor as `^id` in
       // ParsedBlock but the link form is `target^id` (no double ^).
       anchorId = block.existingAnchor.replace(/^\^/, "");
     } else {
@@ -410,12 +432,14 @@ export function openWikiBubble(opts: WikiBubbleOpts): WikiBubbleHandle {
       if (hit) {
         const b = hit as ParsedBlock;
         if (b.existingAnchor) anchor = b.existingAnchor; // includes leading ^
-        // No anchor write happens on Cmd+Enter — opening doesn't
+        // No anchor write happens on Cmd+Enter; opening doesn't
         // mutate the target file. The host just navigates to the
         // file (anchor scroll TBD).
       }
     } else if (hit) {
-      target = (hit as SearchHit).path;
+      const linkTarget = hit as LinkTarget;
+      target = linkTarget.path;
+      if (linkTarget.kind === "Heading") anchor = linkTarget.anchor ?? null;
     } else {
       target = query;
     }
@@ -490,13 +514,19 @@ export function openWikiBubble(opts: WikiBubbleOpts): WikiBubbleHandle {
         newMode.kind === "heading" &&
         mode.kind === "heading" &&
         newMode.target !== mode.target;
+      const blockTargetChanged =
+        newMode.kind === "block" &&
+        mode.kind === "block" &&
+        newMode.target !== mode.target;
       mode = newMode;
       selectedIndex = 0;
-      if (modeChanged || targetChanged) {
+      if (modeChanged || targetChanged || blockTargetChanged) {
         refetchForMode();
       } else if (mode.kind === "heading") {
-        // Same target, filter changed — local re-filter only.
+        // Same target, filter changed: local re-filter only.
         filterHeadings();
+      } else if (mode.kind === "block") {
+        filterBlocksLocal();
       } else {
         fetchFile();
       }
