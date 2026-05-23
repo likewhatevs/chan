@@ -250,26 +250,24 @@ under the new identity is accepted by clients that had the old one.
 ## Auto-upgrade signing (tauri-plugin-updater)
 
 The desktop app verifies update bundles with a minisign signature.
-Pubkey is embedded in `src-tauri/tauri.conf.json` under
-`plugins.updater.pubkey`. Matching private key lives outside the
-repo at `~/.tauri/chan-desktop.key`.
+The production pubkey is embedded in `src-tauri/tauri.conf.json`
+under `plugins.updater.pubkey`. Matching private key material lives
+outside the repo in the release owner's secret store.
 
-### Current key is a DEV key
+### Bridge release required after key rotation
 
-Generated with `cargo tauri signer generate --ci ...` on
-2026-05-11. No password. Unencrypted on disk. Anyone with read
-access to the dev box's `~/.tauri/` can sign a "valid" update.
+The configured pubkey was rotated from the phase-8 DEV updater key
+to the production updater key on 2026-05-23. Existing installs that
+already trust the old DEV pubkey need a bridge release:
 
-### Rotate before any public release
-
-1. On a secure machine, run:
-   `cargo tauri signer generate -w <newkey>`
-   Set a strong password when prompted.
-2. Replace `plugins.updater.pubkey` in `tauri.conf.json` with the
-   contents of `<newkey>.pub` and ship a "bridge" release still
-   signed with the OLD key (so existing installs accept it). The
-   bridge release embeds the NEW pubkey in the binary.
-3. Every release after the bridge is signed with the NEW key.
+1. Ship one bridge release that embeds the NEW production pubkey but
+   signs the update bundle with the OLD DEV private key, so existing
+   installs accept it.
+2. Sign every release after the bridge with the NEW production
+   private key.
+3. If the OLD DEV private key is unavailable, existing installs
+   cannot auto-update across this key rotation. Users need a manual
+   DMG install for the first production-key release.
 4. Old installs that never picked up the bridge release will fail
    to verify NEW-key-signed bundles and stall on their last good
    version until the user manually reinstalls. Plan the bridge

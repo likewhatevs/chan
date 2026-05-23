@@ -36,12 +36,15 @@ it is the source of several subtle issues below.
 
 ## P0: fix before public DMG
 
-### P0.1 Updater pubkey is a DEV key, no password
+### P0.1 Updater key bridge release still required
 
-Already noted in `CLAUDE.md`. `tauri.conf.json:41` ships an
-unpassworded dev keypair. Anyone with read access to the build host
-can sign a "valid" update for every install. Run the bridge-release
-rotation from `CLAUDE.md` before announcing the build.
+`tauri.conf.json:41` now embeds the production updater pubkey. The
+remaining release-blocker is bridge sequencing: existing installs
+that trust the old DEV pubkey need one bridge release that embeds
+the production pubkey while the update bundle is still signed with
+the old DEV private key. If the old DEV private key is unavailable,
+existing installs cannot auto-update across the rotation and need a
+manual DMG install for the first production-key release.
 
 ### P0.2 CI is disabled
 
