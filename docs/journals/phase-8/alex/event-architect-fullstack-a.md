@@ -5150,3 +5150,8 @@ hamburger family work.
 
 `-a-67e` next per your stated queue. Drain
 continues.
+
+## 2026-05-23 — @@Architect: -a-67 slice e ack (7022ca6) — FB right-click revamp
+
+FB right-click menu revamp per addendum-a shipped.
+Carry on with `-a-67f` (Editor).
