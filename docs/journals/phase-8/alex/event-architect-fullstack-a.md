@@ -5040,3 +5040,79 @@ slices (1 + 2 + 3 + 3c).
 v0.12.0 progress.
 
 Standing by.
+
+## 2026-05-23 — BATCH DISPATCH: 7 remaining v0.12.0 tasks + autonomous-commit mode
+
+@@Alex direction: drop the per-task clearance
+cycle — too slow for them. Switching the
+remaining @@FullStackA queue to autonomous-commit
+mode.
+
+### Standing authorization for ALL 7 remaining tasks
+
+Pre-authorized:
+
+* [`-a-67d`](../fullstack-a/fullstack-a-67d.md) —
+  Terminal right-click menu revamp.
+* [`-a-67e`](../fullstack-a/fullstack-a-67e.md) —
+  FB right-click menu revamp.
+* [`-a-67f`](../fullstack-a/fullstack-a-67f.md) —
+  Editor right-click menu revamp.
+* [`-a-68 slice 2`](../fullstack-a/fullstack-a-68.md)
+  — Hybrid Nav transactional T/O/P/G/E.
+* [`-a-75`](../fullstack-a/fullstack-a-75.md) —
+  Carousel + Infographics tab container.
+* [`-a-79`](../fullstack-a/fullstack-a-79.md) —
+  Team Bootstrap orchestrator.
+* [`-a-80`](../fullstack-a/fullstack-a-80.md) —
+  Team Load flow.
+
+### Autonomous-commit mode
+
+* **Ship each task as it completes**. Don't wait
+  for per-task architect clearance unless you hit
+  a real blocker.
+* **Pre-push gate per task** (fmt + clippy +
+  test + svelte-check + npm build) — same
+  discipline as today, just no clearance roundtrip.
+* **Atomic-audit-commit per memory rule** — `git
+  add` + `git diff --staged --stat` + `git commit`
+  + `git show --stat HEAD` in one bash invocation.
+* **Scope-poke immediately** if a task reveals a
+  chan-server / chan-drive gap (same shape as
+  `-a-70`/`-a-76`/`-a-77`'s audit-only round).
+* **Stop + flag me** ONLY for: cross-cutting
+  changes, scope ambiguity, architectural decisions,
+  user-facing copy I should review, or anything
+  that smells like it needs alignment.
+
+### Pick order suggestion (not prescriptive)
+
+1. `-a-67d/e/f` together — sibling shape (right-
+   click menus); shared audit-grep + common
+   helpers; ride as a triplet.
+2. `-a-68 slice 2` — transactional staging is
+   its own architectural shape; standalone.
+3. `-a-75` — Carousel + Infographics; substantial
+   visual work; ride solo.
+4. `-a-79`/`-a-80` — Team Bootstrap + Load flow;
+   paired (Bootstrap composes the orchestrated
+   spawn; Load is the re-attach path). Closes the
+   addendum-b headline.
+
+### Webtest coordination
+
+@@WebtestA is also batch-dispatched to walk on
+its own cadence (fresh-binary discipline). Walks
+will land behind your ships; per-task clearance
+not required.
+
+### Architect default
+
+I'll ack ships in batches (sweep N commits at a
+time) rather than per-commit. You'll see a HOLD /
+PARTIAL routing from @@WebtestA + my batch ack on
+the event-channel; no need for per-commit
+back-and-forth.
+
+Standing by. Drain the queue.

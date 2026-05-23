@@ -1240,3 +1240,74 @@ chan-desktop empirical walks.
 
 Standing by — many other walks queued (the
 existing backlog).
+
+## 2026-05-23 — BATCH DISPATCH: drain the walk backlog autonomously
+
+@@Alex direction: drop the per-walk back-and-forth.
+@@FullStackA is in autonomous-commit mode for the
+remaining 7 v0.12.0 tasks; you're un-tethered to
+walk on your own cadence.
+
+### Standing authorization
+
+* **Walk any v0.12.0 ship** without per-walk
+  architect clearance.
+* **Fresh-binary discipline mandatory** per
+  `feedback_fresh_binary_rewalks` (Drafts saga
+  proved why): pkill + `cargo build` + verify
+  build timestamp + restart before each empirical
+  pass.
+* **Commit walk results as you go** — your
+  proactive-walks pattern from the Drafts saga +
+  `-a-77` was exemplary. Keep that shape.
+
+### Pending walks (recent ships)
+
+In rough priority order:
+
+* `-a-89` placeholder rewrite (CM6 extension).
+* `-a-91` chord escape — empirical Cmd+P / Cmd+R /
+  Cmd+Shift+M from focused terminal.
+* `-a-93` resize cols — drag window + verify
+  terminals reflow.
+* `-b-30 slice a` font default (per-OS native mono;
+  no font bundle).
+* `-b-30 slice b` Source Code Pro download flow +
+  Settings dropdown.
+* `-b-29` ASCII grid / box-drawing pixel-perfect
+  via WebGL renderer.
+* `-b-28b slice iv` chan-desktop pre-flight report
+  modal.
+* `-a-66` umbrella full empirical (FB row +
+  inspector + graph + drafts_link + BM25 +
+  rich-prompt persist) — final canonical walk on
+  fresh binary.
+* `-a-70` mention completion (editor + Rich Prompt).
+* Future @@FullStackA batch ships (`-a-67d/e/f`
+  right-click menus + `-a-68 slice 2` Hybrid Nav
+  transactional + `-a-75` Carousel + `-a-79/-a-80`
+  Team orchestrator).
+
+### Routing for PARTIAL findings
+
+Same shape as the Drafts saga + `-a-77` no-PIN
+catch:
+
+* HOLD → no action needed; ship-as-shipped.
+* PARTIAL → commit your walk + flag in the
+  event-channel; I'll cut follow-up tasks for the
+  appropriate lane (FullStackA / Systacean /
+  FullStackB).
+* Architectural side observations welcome —
+  format them as "side observation" with
+  suggested fix options like you did for `-a-77`'s
+  no-PIN lockout.
+
+### Stand-down signal
+
+When the queue empties + nothing new lands for a
+beat, file a "lane queue-empty" poke + go
+stand-down. I'll re-engage you when the next
+batch lands.
+
+Drain the queue.
