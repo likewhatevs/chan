@@ -5,6 +5,8 @@ import {
   listLineClass,
   orderedMarkerLabel,
 } from "./blocks";
+import blocksSource from "./blocks.ts?raw";
+import wysiwygSource from "../Wysiwyg.svelte?raw";
 
 describe("listDepth", () => {
   test("maps top-level list lines to depth zero", () => {
@@ -92,5 +94,21 @@ describe("orderedMarkerLabel (fullstack-a-40 outline-style)", () => {
   test("deep nesting carries every ancestor segment", () => {
     expect(orderedMarkerLabel([1, 2], 3)).toBe("1.2.3.");
     expect(orderedMarkerLabel([1, 1, 1], 4)).toBe("1.1.1.4.");
+  });
+});
+
+describe("bullet marker rendering", () => {
+  test("keeps bullet source markers visible in WYSIWYG", () => {
+    expect(blocksSource).not.toContain("BulletWidget");
+    expect(blocksSource).not.toContain("cm-md-bullet");
+    expect(wysiwygSource).not.toContain(".cm-md-bullet");
+  });
+});
+
+describe("last-line horizontal rule", () => {
+  test("leaves final-line --- as source text", () => {
+    expect(blocksSource).toContain(
+      "if (line.to === ctx.state.doc.length) return;",
+    );
   });
 });

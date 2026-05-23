@@ -22,10 +22,8 @@
 //   - Task (GFM task-list item): TaskMarker `[ ]` / `[x]` is replaced
 //     by the CheckboxWidget from widgets/checkbox.ts. The replace is
 //     boundary-inclusive — clicking the box edits the source.
-//   - BulletList: each item's ListMark (`-` / `*` / `+`) is replaced
-//     by a `•` widget. Items that carry a TaskMarker keep their
-//     source marker so the checkbox handler stays in charge of the
-//     visual.
+//   - BulletList: source markers (`-` / `*` / `+`) stay visible so
+//     the user can see the exact markdown marker they typed.
 //   - OrderedList: source markers stay as typed for portability;
 //     a Widget overlay replaces each rendered ListMark with the
 //     outline-style dotted chain (`1.`, `1.1.`, `1.1.1.`, ...) so
@@ -226,6 +224,7 @@ const handleBlockquote: TokenHandler = (ctx) => {
 
 const handleHorizontalRule: TokenHandler = (ctx) => {
   const line = ctx.state.doc.lineAt(ctx.node.from);
+  if (line.to === ctx.state.doc.length) return;
   // While the caret sits on this line, skip the rule entirely:
   // the `cm-md-hr` class paints a transparent-foreground horizontal
   // rule (border-bottom + color: transparent), which means the
@@ -431,43 +430,6 @@ const handleTask: TokenHandler = (ctx) => {
   } while (cursor.nextSibling());
 };
 
-/// Replaces a bullet-list ListMark (`-` / `*` / `+`) with a centered
-/// `•` glyph. Pure visual: the underlying source character stays
-/// unchanged, so toolbar toggles + Enter/Tab list editing see the
-/// raw markdown they expect.
-class BulletWidget extends WidgetType {
-  eq(_other: BulletWidget): boolean {
-    return true;
-  }
-
-  toDOM(): HTMLElement {
-    const el = document.createElement("span");
-    el.className = "cm-md-bullet";
-    el.textContent = "•";
-    return el;
-  }
-
-  ignoreEvent(): boolean {
-    return true;
-  }
-}
-
-const BULLET_DECO = Decoration.replace({ widget: new BulletWidget() });
-
-/// True when the ListItem's direct children include a TaskMarker —
-/// i.e. this item is actually a task. The GFM extension emits the
-/// TaskMarker as a sibling of ListMark inside the same ListItem,
-/// so a single shallow walk is enough; we don't descend into
-/// Paragraph etc.
-function itemHasTaskMarker(item: import("@lezer/common").SyntaxNode): boolean {
-  const cursor = item.cursor();
-  if (!cursor.firstChild()) return false;
-  do {
-    if (cursor.name === "TaskMarker") return true;
-  } while (cursor.nextSibling());
-  return false;
-}
-
 const handleBulletList: TokenHandler = (ctx) => {
   // Per-line indent decoration. Walking the BulletList's full line
   // range also covers nested lists; CM6 dedupes identical line
@@ -480,36 +442,6 @@ const handleBulletList: TokenHandler = (ctx) => {
     const line = ctx.state.doc.line(n);
     ctx.push(listLineDecoration(line.text), line.from, line.from);
   }
-  // Replace `*` markers with a • glyph so the asterisk reads as a
-  // proper bullet; leave `-` and `+` literal so the rendered text
-  // still tells the user exactly what's in the source. Skip task
-  // items either way: the checkbox handler owns their visual.
-  const cursor = ctx.node.node.cursor();
-  if (!cursor.firstChild()) return;
-  do {
-    if (cursor.name !== "ListItem") continue;
-    const item = cursor.node;
-    if (itemHasTaskMarker(item)) continue;
-    const sub = item.cursor();
-    if (!sub.firstChild()) continue;
-    do {
-      if (sub.name === "ListMark") {
-        const mark = ctx.state.doc.sliceString(sub.from, sub.to);
-        // Require a trailing whitespace after the marker. lezer-markdown
-        // tentatively flags a lone `*` on an empty line as a ListMark
-        // while the user is still typing; without this gate the
-        // asterisk flips to • before the user even hits space, which
-        // reads as the editor "swallowing" the keystroke.
-        const next = sub.to < ctx.state.doc.length
-          ? ctx.state.doc.sliceString(sub.to, sub.to + 1)
-          : "";
-        if (mark === "*" && (next === " " || next === "\t")) {
-          ctx.push(BULLET_DECO, sub.from, sub.to);
-        }
-        break;
-      }
-    } while (sub.nextSibling());
-  } while (cursor.nextSibling());
 };
 
 /// Outline-style dotted marker for nested ordered lists. The source

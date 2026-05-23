@@ -925,17 +925,6 @@
     vertical-align: middle;
     cursor: pointer;
   }
-  /* Bullet glyph that replaces `-` / `*` / `+` for non-task items.
-     Width matches the source char so the trailing text doesn't
-     reflow; centred via inline-block. Slightly bolder than the
-     ambient text so the bullet reads clearly at small sizes. */
-  :global(.md-wysiwyg-cm6 .cm-md-bullet) {
-    display: inline-block;
-    width: 1ch;
-    text-align: center;
-    color: var(--text-secondary, #888);
-    font-weight: 700;
-  }
   /* Outline-style ordered-list marker that replaces the source
      `1.` / `2.` text in the wysiwyg render. Inherits text colour
      + font from the surrounding line so it sits with the rest

@@ -32,6 +32,15 @@ describe("fullstack-a-71: image-load scroll restore", () => {
     );
   });
 
+  test("recent user scroll intent suppresses image-load recovery", () => {
+    expect(imageModule).toMatch(/const USER_SCROLL_QUIET_MS = 900;/);
+    expect(imageModule).toMatch(/scrollDOM\.addEventListener\("wheel", mark, \{ passive: true \}\)/);
+    expect(imageModule).toMatch(/function userScrollIntentActive\(scrollDOM: HTMLElement\): boolean/);
+    expect(imageModule).toMatch(
+      /installUserScrollIntentTracker\(view\.scrollDOM\);[\s\S]*?if \(userScrollIntentActive\(view\.scrollDOM\)\) return;[\s\S]*?const head = view\.state\.selection\.main\.head;/,
+    );
+  });
+
   test("rationale comment cites @@Alex's repro pattern", () => {
     // The new comment block documents the "list at bottom + image
     // above" repro so future readers know why the gate was

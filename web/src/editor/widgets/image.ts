@@ -42,6 +42,35 @@ import {
 } from "../extensions/image";
 
 const MIN_IMG_WIDTH = 40;
+const USER_SCROLL_QUIET_MS = 900;
+const scrollIntentUntil = new WeakMap<HTMLElement, number>();
+const scrollIntentInstalled = new WeakSet<HTMLElement>();
+
+function installUserScrollIntentTracker(scrollDOM: HTMLElement): void {
+  if (scrollIntentInstalled.has(scrollDOM)) return;
+  scrollIntentInstalled.add(scrollDOM);
+  const mark = () => {
+    scrollIntentUntil.set(scrollDOM, Date.now() + USER_SCROLL_QUIET_MS);
+  };
+  scrollDOM.addEventListener("wheel", mark, { passive: true });
+  scrollDOM.addEventListener("touchmove", mark, { passive: true });
+  scrollDOM.addEventListener("keydown", (event) => {
+    if (
+      event.key === "PageUp" ||
+      event.key === "PageDown" ||
+      event.key === "Home" ||
+      event.key === "End" ||
+      event.key === "ArrowUp" ||
+      event.key === "ArrowDown"
+    ) {
+      mark();
+    }
+  });
+}
+
+function userScrollIntentActive(scrollDOM: HTMLElement): boolean {
+  return Date.now() < (scrollIntentUntil.get(scrollDOM) ?? 0);
+}
 
 /// Strict-interior selection test for image edit-mode entry.
 /// `selectionInRange` (the inline-mark helper) treats caret AT a
@@ -185,6 +214,7 @@ class ImageWidget extends WidgetType {
 
   toDOM(view: EditorView): HTMLElement {
     ensureDeselectListener(view);
+    installUserScrollIntentTracker(view.scrollDOM);
     const wrap = document.createElement("span");
     wrap.className = "cm-md-image-wrap";
     // Stamp the source position on the wrap so the document-level
@@ -276,6 +306,8 @@ class ImageWidget extends WidgetType {
         "load",
         () => {
           if (!wrap.isConnected) return;
+          installUserScrollIntentTracker(view.scrollDOM);
+          if (userScrollIntentActive(view.scrollDOM)) return;
           const head = view.state.selection.main.head;
           // `fullstack-a-71`: the original gate
           // `Math.abs(headLine - imgLine) > 1 return` was too
