@@ -4377,3 +4377,69 @@ Flagging here so the next ship cycle picks them up.
 Local main 263+ ahead of origin/main. Not pushing.
 
 Standing by.
+
+---
+
+## 2026-05-23 — team-setup patch series COMPLETE; round close signal
+
+Per your "when you signal complete, I'll start the commit-plan +
+release-notes draft" prompt. My team-setup patch series is
+landed empirically:
+
+### Closed this round series
+
+| Walk / Patch                                          | Status  | Commit |
+|-------------------------------------------------------|---------|--------|
+| `-a-95` welcome pane stale hint drop                  | HOLD    | walk-only |
+| `-a-79 slice 3` template placement via vite ?raw      | HOLD    | walk-only |
+| `-a-79 slice 4` split-pane real estate (2x2 grid)     | HOLD    | walk-only |
+| `-a-79 slice 5` rename + restart lead terminal        | HOLD    | `69980ed` (FullStackA) |
+| `-a-79 slice 5b` close+spawn lead (lead runs claude)  | HOLD    | `7e3e0ce` (me) |
+| chan-server restart command/env override primitive    | landed  | `7fb7cab` (me) |
+| Terminal right-click Show/Hide Rich Prompt entry      | HOLD    | `21b3e6d` (me) |
+| Identity-prompt 3-arg rewrite (host/lead asymmetry)   | HOLD    | `2460305` (me) |
+
+### Transferred items NOT shippable this round (backend gap)
+
+* **Lead pre-flight survey trigger** — needs the chan-server team
+  event channel consumer for `dispatch_agent_event` to feed the
+  survey shape. Per `-a-79` spec line 397-402: "needs the team
+  event channel consumer in chan-server" — pure SPA path can't
+  pin this without survey-shape data flow.
+* **`dispatch_agent_event`-driven identity prompts** — closes
+  the seedInput-visibility note. Same dependency: team event
+  channel in chan-server.
+* **Jitter slider** — per `TerminalTab.svelte:1323-1326` inline
+  comment: "Jitter persistence + broadcast-delay logic is a
+  chan-server gap; scope-poked as a follow-up". Backend
+  primitive missing.
+
+These three items collapse into a single backend-cut task
+("team event channel consumer for survey/dispatch + Jitter
+persistence prefs") that should land in a future round, NOT
+v0.12.0. Surfacing here so they don't disappear from the
+roadmap.
+
+### Deferred but mechanism-verified
+
+* `-a-80 slice 2` Load Team dialog populated from config —
+  backend `GET /api/teams/{name}/config` verified at API level
+  (round 44 walk). FB right-click empirical walk hit a separate
+  FB-render layout-state race that's worth investigating in its
+  own session. Not blocking v0.12.0 since the mechanism is
+  covered by `teamLoadDialog.test.ts` (11 architectural pins).
+
+### Git state — STILL UNRESOLVED
+
+Local main is 265+ ahead of `origin/main`. PR #1 merge dropped
+225 phase-8 commits at remote. **NOT pushing.** Need your
+direction on a/b/c routing from round 41 message before any
+release-cut work can happen — origin/main literally doesn't
+have the phase-8 commits the v0.12.0 release notes will
+reference.
+
+### Ready for v0.12.0 commit-plan + release-notes draft
+
+Pending only your git-state routing decision.
+
+Standing by.
