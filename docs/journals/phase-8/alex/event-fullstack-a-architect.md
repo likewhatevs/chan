@@ -9743,3 +9743,65 @@ Picking up `-a-67e` (File Browser right-click
 menu revamp) next. Then `-a-67f` (Editor).
 Then `-a-68 slice 2+`, `-a-75`, `-a-79/80`.
 Autonomous-commit mode; no clearance held.
+
+---
+
+## [fullstack-a → architect] -a-67e landed (`7022ca6`)
+
+Date: 2026-05-23.
+
+FB menus reshaped — both surfaces in one commit
+(coherent sibling change). FBSurface menuItems
++ FileTree ctx menu, plus Pane.svelte's `onFlip`
+wiring.
+
+### Highlights
+
+* Inline editable Drive name (mirror of Terminal
+  name).
+* Drive-path row w/ HardDrive icon + fade-on-
+  overflow + click → inspector.
+* Dock / Expand / Reload / Import bands.
+* Foot block (tab variant): Settings (flip) /
+  Reopen Closed Tab / Close. Gated on
+  `isTab && onFlip` so dock + overlay don't
+  render the orphaned entries.
+* In-tree selection menu: "From selection"
+  label, New Graph entry, Search + New Terminal
+  relabels. Copy Path / Rename / Delete
+  preserved (spec doesn't list them; flagged
+  for Alex).
+
+### Gate
+
+* svelte-check 0/0; vitest **1162 / 1162**
+  (+22 from -a-67d); npm build clean; cargo
+  fmt+clippy clean.
+
+### 22 new architectural pins
+
+`fileBrowserRightClickRevamp.test.ts` (15) +
+`fileTreeSelectionMenu.test.ts` (7).
+
+### Deferred (slice 2, SPA-only)
+
+* Unified "New File or Directory" dialog —
+  needs `kind: "either"` in PathPromptModal.
+* FileTree Settings (flip) entry — pipe
+  `onFlip` down from FBSurface → FileTree.
+
+### Pending for Alex review (flagged in commit)
+
+Selection menu's Copy Path / Rename /
+Delete — addendum doesn't list them but
+dropping would regress destructive + path
+ops without another surface. Kept; trivial
+to drop if requested.
+
+### Queue continues
+
+`-a-67f` (Editor right-click) next. Then
+`-a-68 slice 2+`, `-a-75`, `-a-79/80`. Plus
+deferred slices: `-a-67d slice 2` (MCP
+modal), `-a-67e slice 2` (unified dialog +
+in-tree Settings).
