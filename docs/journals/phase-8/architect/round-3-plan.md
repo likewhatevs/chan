@@ -348,6 +348,30 @@ that don't block the cut but should land in Round-3:
   (chan-server graph route) depending on which layer
   fails. Audit-then-route.
 
+* **Axum route path-param syntax audit** (added
+  2026-05-23 by @@Systacean via `-41` finding). The
+  `-31` team load/unload routes registered with axum
+  0.8 syntax (`{name}`) but the repo runs axum 0.7
+  which uses `:name`. axum 0.7 treated `{name}` as a
+  literal path segment → routes returned 404 since
+  `-31` shipped. Fixed inline in `-41` for team
+  routes. **Round-3 sweep**: grep `lib.rs` route
+  registrations for any remaining `{<name>}` patterns
+  (already verified clean for semantic/reports/
+  screensaver; worth a defensive re-grep). Class of
+  bug: `cargo build` + clippy can't catch it; only
+  integration tests exercising the wildcard route do.
+  Consider a CI-time route-shape lint to prevent
+  regression. Lane: @@Systacean.
+
+* **Team mutation routes lane reconciliation** (added
+  2026-05-23 by @@Systacean via `-41` finding). `-41`
+  put new create/duplicate routes in the OPEN lane
+  for symmetry with `-31`'s existing load/unload,
+  not the settings-writes lane the task body
+  specified. Round-3: reconcile ALL team mutations
+  to settings-writes uniformly. Lane: @@Systacean.
+
 ## Track 5 — Per-agent submit-chord encoding map (LOCKED 2026-05-20)
 
 Promoted from parking-lot to confirmed Round-3 track on
