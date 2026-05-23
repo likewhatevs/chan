@@ -9805,3 +9805,89 @@ to drop if requested.
 deferred slices: `-a-67d slice 2` (MCP
 modal), `-a-67e slice 2` (unified dialog +
 in-tree Settings).
+
+---
+
+## [fullstack-a → architect] -a-67f landed (`2c2383f`) — UMBRELLA -a-67 CLOSED
+
+Date: 2026-05-23.
+
+Editor right-click menu reshaped — closes
+the umbrella's 5-surface sweep (slices 1 +
+1b Graph + slice 2 Hybrid + slice d Terminal
++ slice e FB + slice f Editor).
+
+### Slice f highlights
+
+* Menu-top editable Name input (mirror of
+  Drive / Terminal name); commits via
+  `fileOps.renameInPlace`.
+* Show Source Code + Collapse Code Blocks
+  (relabeled to title-case).
+* View toggles + cleanup utilities kept
+  against spec (Outline / Details / Style
+  Toolbar / Syntax Highlight / Highlight TW
+  / Remove TW) — orphan risk if dropped;
+  flagged for review.
+* Search + Find (NEW, opens per-tab find
+  bar via `openFind`) + Copy path to file
+  (renamed) + Copy path to $CWD (NEW).
+* From-$CWD spawn band (NEW): Duplicate /
+  New File / New Terminal / New File Browser
+  / New Graph — each fires `chan:command`.
+* Foot: Settings (flipHybrid) + Reopen + Close.
+
+### Dropped
+
+* Reload Window + Open Inspector tail.
+* Close others / Close all (not in spec).
+* "Rename File" modal entry (replaced by
+  menu-top input).
+* "Terminal from here" (replaced by
+  "New Terminal" in From-$CWD band).
+* `-a-35` full-width inline rename band.
+
+### Gate
+
+* svelte-check 0/0; vitest **1184 / 1184**
+  (+22 net from `-a-67e`); npm build clean;
+  cargo fmt + clippy clean.
+
+### Pending for Alex review
+
+* **View toggles + cleanup utilities kept
+  against spec.** Spec doesn't list
+  Outline/Details/Style/SyntaxHL/TW; orphan
+  risk if dropped. Easy to drop if routed.
+* **Reload from Disk kept against spec.**
+  No chord alternative for external-edit
+  workflows.
+* **Close others / Close all dropped.**
+  Spec doesn't list them; trivial to
+  restore.
+
+### Show Source Code chord (Obsidian Cmd+E)
+
+Addendum asks: "Show Source Code (copy
+shortcut from Obsidian if possible)".
+Obsidian uses Cmd+E. Not wired in this
+slice — chord additions sit outside the
+menu reshape scope. Picking up as a tiny
+follow-up under `-a-67f` slice 2 (or
+re-route if architect prefers).
+
+### Deferred slices
+
+* `-a-67d` slice 2 (MCP info modal).
+* `-a-67d` slice 3 (Jitter — backend gap,
+  scope-poked).
+* `-a-67e` slice 2 (unified File-or-Dir
+  dialog + FileTree Settings flip).
+* `-a-67f` slice 2 (Show Source Code chord).
+
+### Queue continues
+
+`-a-68 slice 2+` (Hybrid Nav transactional
+T/O/P/G/E) next. Then `-a-75` carousel +
+`-a-79/80` Team orchestrator. Autonomous-
+commit mode; no clearance held.
