@@ -17,6 +17,7 @@ enum ReadFileResult {
     Text {
         content: String,
         mtime: Option<i64>,
+        mtime_ns: Option<i64>,
         writable: bool,
         path_class: Option<chan_drive::PathClass>,
     },
@@ -226,6 +227,8 @@ struct FileResponse {
     content: String,
     mtime: Option<i64>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    mtime_ns: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     path_class: Option<chan_drive::PathClass>,
     /// Filesystem-level writability. False when the path lacks the
     /// user-write bit (e.g. `chmod -w`); the editor uses this to
@@ -265,11 +268,14 @@ fn fs_writable(drive: &chan_drive::Drive, rel: &str) -> bool {
 fn read_file_sync(drive: &chan_drive::Drive, path: &str) -> chan_drive::Result<ReadFileResult> {
     if chan_drive::fs_ops::is_editable_text(path) {
         let content = drive.read_text(path)?;
-        let mtime = drive.stat(path).ok().and_then(|s| s.mtime);
+        let stat = drive.stat(path).ok();
+        let mtime = stat.as_ref().and_then(|s| s.mtime);
+        let mtime_ns = stat.as_ref().and_then(|s| s.mtime_ns);
         let writable = fs_writable(drive, path);
         return Ok(ReadFileResult::Text {
             content,
             mtime,
+            mtime_ns,
             writable,
             path_class: path_class_for_wire(drive, path),
         });
@@ -294,6 +300,7 @@ pub async fn api_read_file(
         Ok(Ok(ReadFileResult::Text {
             content,
             mtime,
+            mtime_ns,
             writable,
             path_class,
         })) => Json(FileResponse {
@@ -301,6 +308,7 @@ pub async fn api_read_file(
             path,
             content,
             mtime,
+            mtime_ns: mtime_ns.map(|ns| ns.to_string()),
             writable,
         })
         .into_response(),
@@ -324,6 +332,11 @@ pub struct WriteBody {
     /// (bulk imports, scripts).
     #[serde(default)]
     expected_mtime: Option<i64>,
+    /// Nanosecond CAS token as a decimal string. Preferred over
+    /// `expected_mtime` when present, because JSON numbers cannot
+    /// represent nanosecond mtimes exactly in browser clients.
+    #[serde(default)]
+    expected_mtime_ns: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -332,6 +345,8 @@ struct WriteResponse {
     /// CAS token for subsequent saves so the client and disk stay
     /// in lock-step without an extra stat round-trip.
     mtime: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    mtime_ns: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -342,6 +357,8 @@ struct WriteConflictBody {
     /// the client's last fetch and now (rare; treat as "create
     /// fresh" on the retry).
     current_mtime: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    current_mtime_ns: Option<String>,
 }
 
 pub async fn api_write_file(
@@ -349,14 +366,24 @@ pub async fn api_write_file(
     AxumPath(path): AxumPath<String>,
     Json(body): Json<WriteBody>,
 ) -> Response {
+    let expected_mtime_ns = match parse_optional_mtime_ns(body.expected_mtime_ns.as_deref()) {
+        Ok(mtime_ns) => mtime_ns,
+        Err(message) => return err(StatusCode::BAD_REQUEST, message),
+    };
     let drive = state.drive().clone();
     let path_for_write = path.clone();
     let result = tokio::task::spawn_blocking(move || {
-        write_file_sync(&drive, &path_for_write, body.expected_mtime, &body.content)
+        write_file_sync(
+            &drive,
+            &path_for_write,
+            body.expected_mtime,
+            expected_mtime_ns,
+            &body.content,
+        )
     })
     .await;
 
-    let mtime = match result {
+    let (mtime, mtime_ns) = match result {
         Ok(Ok(mtime)) => mtime,
         Ok(Err(e)) => {
             if let chan_drive::ChanError::WriteConflict { current_mtime_ns } = e {
@@ -364,6 +391,7 @@ pub async fn api_write_file(
                     StatusCode::CONFLICT,
                     Json(WriteConflictBody {
                         current_mtime: current_mtime_ns.map(|ns| ns / 1_000_000_000),
+                        current_mtime_ns: current_mtime_ns.map(|ns| ns.to_string()),
                     }),
                 )
                     .into_response();
@@ -373,27 +401,23 @@ pub async fn api_write_file(
         Err(join) => return err(StatusCode::INTERNAL_SERVER_ERROR, join.to_string()),
     };
     state.self_writes.note(&path);
-    Json(WriteResponse { mtime }).into_response()
+    Json(WriteResponse {
+        mtime,
+        mtime_ns: mtime_ns.map(|ns| ns.to_string()),
+    })
+    .into_response()
 }
 
 fn write_file_sync(
     drive: &chan_drive::Drive,
     path: &str,
     expected_mtime: Option<i64>,
+    expected_mtime_ns: Option<i64>,
     content: &str,
-) -> chan_drive::Result<Option<i64>> {
-    // chan-drive moved the CAS check to nanosecond precision
-    // (`expected_mtime_ns`) to catch sub-second races between two
-    // writers. Our wire format still surfaces seconds-precision
-    // mtimes to the editor (an i64-as-JSON-number representation
-    // for nanoseconds would lose precision past 2^53). We do the
-    // seconds-precision compare ourselves here, then defer to
-    // `write_text_if_unchanged` with the freshly-stat'd ns so the
-    // actual rename is still gated atomically inside chan-drive.
-    // Sub-second race protection is therefore a TODO until the
-    // wire moves to ns-as-string; document the regression here so
-    // the next reader knows it's a known gap, not a bug.
-    if expected_mtime.is_some() {
+) -> chan_drive::Result<(Option<i64>, Option<i64>)> {
+    if let Some(ns) = expected_mtime_ns {
+        drive.write_text_if_unchanged(path, Some(ns), content)?;
+    } else if expected_mtime.is_some() {
         let pre = drive.stat(path).ok();
         let cur_secs = pre.as_ref().and_then(|s| s.mtime);
         let cur_ns = pre.as_ref().and_then(|s| s.mtime_ns);
@@ -406,7 +430,25 @@ fn write_file_sync(
     } else {
         drive.write_text(path, content)?;
     }
-    Ok(drive.stat(path).ok().and_then(|s| s.mtime))
+    let stat = drive.stat(path).ok();
+    Ok((
+        stat.as_ref().and_then(|s| s.mtime),
+        stat.as_ref().and_then(|s| s.mtime_ns),
+    ))
+}
+
+fn parse_optional_mtime_ns(value: Option<&str>) -> Result<Option<i64>, String> {
+    let Some(value) = value else {
+        return Ok(None);
+    };
+    let value = value.trim();
+    if value.is_empty() {
+        return Err("expected_mtime_ns must be a decimal nanosecond timestamp".into());
+    }
+    value
+        .parse::<i64>()
+        .map(Some)
+        .map_err(|_| "expected_mtime_ns must be a decimal nanosecond timestamp".into())
 }
 
 #[derive(Deserialize)]
@@ -534,11 +576,13 @@ mod write_tests {
             ReadFileResult::Text {
                 content,
                 mtime,
+                mtime_ns,
                 writable,
                 path_class,
             } => {
                 assert_eq!(content, "hello");
                 assert!(mtime.is_some());
+                assert!(mtime_ns.is_some());
                 assert!(writable);
                 assert_eq!(
                     path_class.map(|class| class.kind),
@@ -595,7 +639,28 @@ mod write_tests {
         let drive = lib.open_drive(root.path()).unwrap();
         drive.write_text("note.md", "v1").unwrap();
 
-        let err = write_file_sync(&drive, "note.md", Some(0), "v2").unwrap_err();
+        let err = write_file_sync(&drive, "note.md", Some(0), None, "v2").unwrap_err();
+
+        assert!(matches!(
+            err,
+            chan_drive::ChanError::WriteConflict {
+                current_mtime_ns: Some(_)
+            }
+        ));
+        assert_eq!(drive.read_text("note.md").unwrap(), "v1");
+    }
+
+    #[test]
+    fn write_file_sync_reports_nanosecond_conflict() {
+        let cfg = tempfile::TempDir::new().unwrap();
+        let root = tempfile::TempDir::new().unwrap();
+        let lib = chan_drive::Library::open_at(cfg.path().join("config.toml")).unwrap();
+        lib.register_drive(root.path(), Some("files-write-test".into()))
+            .unwrap();
+        let drive = lib.open_drive(root.path()).unwrap();
+        drive.write_text("note.md", "v1").unwrap();
+
+        let err = write_file_sync(&drive, "note.md", None, Some(0), "v2").unwrap_err();
 
         assert!(matches!(
             err,
@@ -615,10 +680,37 @@ mod write_tests {
             .unwrap();
         let drive = lib.open_drive(root.path()).unwrap();
 
-        let mtime = write_file_sync(&drive, "note.md", None, "v1").unwrap();
+        let (mtime, mtime_ns) = write_file_sync(&drive, "note.md", None, None, "v1").unwrap();
 
         assert!(mtime.is_some());
+        assert!(mtime_ns.is_some());
         assert_eq!(drive.read_text("note.md").unwrap(), "v1");
+    }
+
+    #[test]
+    fn write_file_sync_accepts_matching_nanosecond_token() {
+        let cfg = tempfile::TempDir::new().unwrap();
+        let root = tempfile::TempDir::new().unwrap();
+        let lib = chan_drive::Library::open_at(cfg.path().join("config.toml")).unwrap();
+        lib.register_drive(root.path(), Some("files-write-test".into()))
+            .unwrap();
+        let drive = lib.open_drive(root.path()).unwrap();
+        drive.write_text("note.md", "v1").unwrap();
+        let ns = drive.stat("note.md").unwrap().mtime_ns.unwrap();
+
+        let (_mtime, mtime_ns) =
+            write_file_sync(&drive, "note.md", Some(0), Some(ns), "v2").unwrap();
+
+        assert!(mtime_ns.is_some());
+        assert_eq!(drive.read_text("note.md").unwrap(), "v2");
+    }
+
+    #[test]
+    fn parse_optional_mtime_ns_rejects_bad_values() {
+        assert_eq!(parse_optional_mtime_ns(None).unwrap(), None);
+        assert_eq!(parse_optional_mtime_ns(Some("123")).unwrap(), Some(123));
+        assert!(parse_optional_mtime_ns(Some("")).is_err());
+        assert!(parse_optional_mtime_ns(Some("nope")).is_err());
     }
 }
 
@@ -696,6 +788,7 @@ mod tests {
             path: "notes/a.md".to_string(),
             content: "hello".to_string(),
             mtime: Some(1),
+            mtime_ns: Some("1000000000".to_string()),
             path_class: Some(chan_drive::PathClass {
                 kind: chan_drive::PathKind::RegularFile,
                 permission: chan_drive::PathPermission::ReadWrite,
