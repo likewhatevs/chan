@@ -228,6 +228,7 @@
     // DOM focus and the next keystroke damages the doc.
     tabFocusPulse.value;
     queueFit();
+    refreshTerminalRenderer();
     setTerminalActivity(tab, false);
     sendFocusState();
     queueMicrotask(() => {
@@ -347,6 +348,20 @@
   function applyTerminalTheme(): void {
     if (!term) return;
     term.options.theme = terminalTheme();
+  }
+
+  function refreshTerminalRenderer(): void {
+    if (!term) return;
+    requestAnimationFrame(() => {
+      if (!term) return;
+      if (webglRendererActive) term.clearTextureAtlas();
+      term.refresh(0, Math.max(0, term.rows - 1));
+    });
+    void document.fonts?.ready.then(() => {
+      if (!term) return;
+      if (webglRendererActive) term.clearTextureAtlas();
+      term.refresh(0, Math.max(0, term.rows - 1));
+    });
   }
 
   function bytesContainSgrSequence(bytes: Uint8Array): boolean {
@@ -476,6 +491,7 @@
         err,
       );
     }
+    refreshTerminalRenderer();
     term.attachCustomKeyEventHandler(handleTerminalKeyEvent);
     term.onData(sendUserInput);
     term.onResize(({ cols, rows }) => send({ type: "resize", cols, rows }));

@@ -61,4 +61,13 @@ describe("fullstack-b-29: TerminalTab WebGL renderer", () => {
       /event\.data instanceof Blob[\s\S]*?term\?\.write\(bytes\);[\s\S]*?maybeRefreshWebglAtlas\(bytes\);/,
     );
   });
+
+  test("refreshes renderer on focus and after font readiness", () => {
+    expect(tab).toMatch(/function refreshTerminalRenderer\(\): void/);
+    expect(tab).toMatch(/if \(webglRendererActive\) term\.clearTextureAtlas\(\)/);
+    expect(tab).toMatch(/document\.fonts\?\.ready\.then/);
+    expect(tab).toMatch(
+      /if \(!focused\) return;[\s\S]*?queueFit\(\);[\s\S]*?refreshTerminalRenderer\(\);/,
+    );
+  });
 });
