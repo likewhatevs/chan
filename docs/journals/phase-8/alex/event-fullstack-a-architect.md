@@ -10764,3 +10764,77 @@ build for the audit trail.
 
 Autonomous-commit mode; no clearance held.
 Standing by.
+
+---
+
+## [fullstack-a → architect] -a-95 landed (`bf8bf09`) — audit-first sweep
+
+Date: 2026-05-23.
+
+@@Alex's flagged stale "scope for Graph" hint
++ audit pass on the candidate dead surfaces.
+
+### Audit-first findings
+
+Walked every flagged surface before pruning:
+
+| Surface | Verdict | Reason |
+|---|---|---|
+| EmptyPaneWelcome.svelte welcome hint | STALE — DROP | @@Alex's flag; the "each pane's visible tab contributes to Graph scope" implies an aggregate mechanism that doesn't exist |
+| store.svelte.ts:607-635 activeFbScopes | ALIVE — KEEP | FB watcher-event tree-refresh filter; "scope" here = FB's selection-of-interest, not Graph scope |
+| store.svelte.ts:1631 mirrorGraphTabToOverlay scopeId | ALIVE — KEEP | picker-driven Graph scope (the active concept) |
+| store.svelte.ts:1671/1747 + tabs.svelte.ts:464 comments | accurate — KEEP | historical / current-behavior docs; not stale |
+
+### Wording reconciliation
+
+The welcome hint asserted an **implicit**
+mechanism (open a tab → tab contributes to
+Graph scope). That mechanism is gone post-
+FS-backbone transition. The remaining
+`tab.scopeId` is the user's **explicit**
+picker choice — the architect's "active
+concept" to keep.
+
+### Sweep applied (Option A — drop entirely)
+
+* `<p class="welcome-hint">` block dropped.
+* `.welcome-hint` CSS rule dropped.
+* Retirement comment kept in place for
+  grep-history.
+* `infographicsTabAndCarousel.test.ts` pin
+  flipped from REQUIRE to FORBID for the
+  welcome-hint class + text.
+
+### Option A vs B
+
+Chose A. The welcome surface is a clean spawn
+grid; an unrelated tip about Graph picker-
+scope would still feel out of place. The
+picker IS reachable from the Graph overlay's
+chrome.
+
+### Gate
+
+* svelte-check 0/0; vitest 1321/1321 (one pin
+  flipped, no net change); build clean; cargo
+  fmt+clippy clean.
+
+### Doc sweep flag-back
+
+SPA side is now clean. If `design.md` /
+`addendum-a` / other architect-side docs
+reference per-tab Graph scope as a live
+concept, architect-side sweep would close the
+audit trail. Not blocking; just flagging.
+
+### Queue continues
+
+Remaining deferred:
+* `-a-79` slice 4 (lead pre-flight survey
+  trigger, split-pane real estate,
+  dispatch_agent_event prompts).
+* `-a-67d` slice 3 (Jitter — chan-server
+  preferences + delay layer; still scope-
+  poked).
+
+Autonomous-commit mode; no clearance held.
