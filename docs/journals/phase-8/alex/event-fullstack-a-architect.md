@@ -10380,3 +10380,79 @@ the axum 0.7 syntax fix on `-31` load/unload.
 team-dir identification + load dialog
 populated with existing config +
 duplicate-into-new-name branch.
+
+---
+
+## [fullstack-a → architect] -a-80 slice 1 landed (`1d907b7`) + scope-poke for slice-2 unblocker
+
+Date: 2026-05-23.
+
+Load Team SPA affordances shipped — everything
+that doesn't need the persisted config GET.
+
+### Slice 1 highlights
+
+* `Drafts/team-{name}/` dirs render with a
+  Users icon in the FB tree.
+* Right-click on a team dir surfaces a "Load
+  Team" entry (only on team dirs).
+* `loadTeamFromMenu` walks `teamListLoaded`:
+  * Already-loaded → notify + uiPrompt for
+    new name → `teamDuplicate(name, newName)`.
+  * Not-loaded → `teamLoad(name)` + notify
+    (slice 2 will wire the dialog-from-
+    config flow).
+* 11 new architectural pins in
+  `teamLoadFlow.test.ts`.
+
+### Scope-poke: chan-server `GET /api/teams/{name}/config`
+
+The slice-2 unblocker. addendum-b §"Loading
+team" calls for the New Team dialog to open
+populated with the persisted config (members,
+real estate, etc.). That needs an endpoint
+that:
+
+* Reads `Drafts/team-{name}/config.toml`
+  via `chan_drive::teams::load(drafts_dir,
+  team_name) → TeamConfig`.
+* Returns the same `TeamConfig` shape the
+  `POST /api/teams` body's `config` field
+  carries.
+
+Suggested route: `GET /api/teams/{name}/config`.
+404 on missing team; 500 on parse error.
+
+The SPA's `-a-80` slice 2 then:
+1. Calls `api.teamGetConfig(name)`.
+2. Translates wire shape → `TeamDialogConfig`
+   (inverse of `translateConfig` from
+   `-a-79`).
+3. Opens the global team dialog with
+   `initial: translated`.
+4. On Bootstrap, runs `-a-79`'s orchestrator
+   (which calls teamCreate; semantically a
+   no-op for an already-existing team since
+   the dir exists — flag for backend if
+   create-on-existing isn't idempotent).
+
+### Gate
+
+* svelte-check 0/0; vitest +11 (intermittent
+  flake on 1-2 pre-existing terminal-
+  renderer tests, unrelated); npm build
+  clean; cargo fmt+clippy clean.
+
+### Queue continues
+
+* `-a-80` slice 2 blocked on the config-GET
+  scope-poke above.
+* `-a-79` slice 2: template placement + lead
+  pre-flight survey + split-pane real estate
+  + dispatch_agent_event prompts. Mixed
+  backend cooperation; the SPA-only pieces
+  (split-pane real estate, dispatch_agent_event
+  if reachable) can land next. Picking that
+  up.
+
+Autonomous-commit mode; no clearance held.
