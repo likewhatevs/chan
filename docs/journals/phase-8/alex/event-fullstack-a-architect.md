@@ -9891,3 +9891,74 @@ re-route if architect prefers).
 T/O/P/G/E) next. Then `-a-75` carousel +
 `-a-79/80` Team orchestrator. Autonomous-
 commit mode; no clearance held.
+
+---
+
+## [fullstack-a → architect] -a-68 slice 2 landed (`65f95f2`) — UMBRELLA -a-68 CLOSED
+
+Date: 2026-05-23.
+
+Hybrid Nav transactional staging shipped per
+addendum-a's "back to transactional mode"
+framing. Final chord mapping:
+
+* T → stage Terminal
+* O → stage File Browser
+* P → stage Smart Prompt Terminal (replaces
+  pre-slice-2 rich-prompt toggle; the toggle
+  is still reachable outside Hybrid Nav via
+  Cmd+P / terminal hamburger)
+* G → stage Graph (V aliased)
+* N → stage New Draft (was E in my first
+  pass; **@@Alex mid-flight ask** swapped to
+  N to mirror the top-level Cmd+N chord
+  mnemonic — both routes share
+  `api.createDraft()`)
+* Enter → materialize + commit
+* Esc → cancel + discard (no orphan drafts)
+
+### State + visuals
+
+* `paneMode.stagedDraftEditors: { paneId }[]`
+  queue resets on enter/commit/cancel.
+* Three new helpers:
+  `paneModeOpenRichPromptTerminal`,
+  `paneModeStageDraftEditor`,
+  `paneModeStagedTabIds`.
+* `materializeStagedDraftEditors()` in
+  App.svelte fires `api.createDraft()` +
+  `openInPane` per entry in parallel; queue
+  snapshotted before `commitPaneMode` clears
+  it.
+* `.tab.staged` CSS (opacity 0.65 + dashed
+  border) renders ghost tabs in the tab
+  strip while pane mode is active.
+
+### Gate
+
+* svelte-check 0/0; vitest **1198 / 1198**
+  (+14 net from `-a-67f`'s 1184); npm build
+  clean; cargo fmt + clippy clean.
+
+### 10 new architectural pins
+
+`paneModeStaging.test.ts` covers paneMode
+field + reset symmetry + 3 helpers + ghost-
+row rendering. `paneModeKeymap.test.ts` +
+`paneModeHelpClickable.test.ts` rewritten
+for the new chord table.
+
+### Queue continues
+
+`-a-75` (Carousel + Infographics tab
+container) next. Then `-a-79`/`-a-80` Team
+orchestrator. Plus the deferred:
+* `-a-67d` slice 2 (MCP info modal)
+* `-a-67d` slice 3 (Jitter — backend
+  scope-poked)
+* `-a-67e` slice 2 (unified File-or-Dir
+  dialog + FileTree Settings flip)
+* `-a-67f` slice 2 (Show Source Code chord
+  — Obsidian Cmd+E)
+
+Autonomous-commit mode; no clearance held.
