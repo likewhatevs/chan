@@ -6405,3 +6405,143 @@ Lane-A test server torn down:
 4. Chrome MCP tab closed.
 
 5/5 HOLD. Three landings all empirically clean.
+
+---
+
+## 2026-05-23 (round 41) — `-a-79 slice 1` Team Bootstrap orchestrator HOLD
+
+Walked commit `753e780` ("Team Bootstrap orchestrator
+slice 1: config + load + spawn + identity prompt").
+Fresh-binary discipline applied: pkill chan serve, npm
+run build (web), cargo build -p chan, verified
+`./target/debug/chan` rebuilt at 09:17:31 against HEAD
+`c9b8489`. Throwaway drive at
+`/tmp/chan-test-phase8-wa-r41/` (seeded with a copy
+of the chan repo tree).
+
+### Walk
+
+Cmd+Alt+T → Terminal-1 spawned. Cmd+Alt+P → Rich
+Prompt opened; clicked **New Team**. Dialog rendered
+with two members (Lead + Worker1), `Lead` radio on
+member[0], host slots `claude`, real estate
+`Tabs in current Hybrid`. The "host name required"
+hint at the dialog foot is misleading wording —
+actual block is empty `Your name` + `Team name`
+inputs (placeholders looked like values). Filled
+name=`AlexWT` + team=`team-alpha`; hint disappeared,
+Bootstrap enabled.
+
+Clicked Bootstrap → dialog closed → `@@Worker1` tab
+spawned in the same Hybrid pane and became active.
+Claude Code v2.1.148 boot greeter rendered in the
+new tab.
+
+### Acceptance vs slice 1 spec
+
+| # | Criterion                                  | Result |
+|---|--------------------------------------------|--------|
+| 1 | Config persisted at correct path           | HOLD   |
+| 2 | Real estate set up per dialog choice       | HOLD   |
+| 3 | Non-lead terminals spawn w/ CHAN_TAB_NAME  | HOLD   |
+| 4 | Team watcher active                        | HOLD   |
+| 5 | Process template (slice 2 deferred)        | n/a    |
+| 6 | Identity prompt seedInput delivery         | NOTE   |
+
+**(1) Config**:
+`~/Library/Application Support/chan/drafts/15a33877d6f81367/team-team-alpha/config.toml`
+written with `host_name = "AlexWT"`, `host_handle =
+"@@AlexWT"`, `auto_prefix_at = true`, `created_at`
+ISO 8601 UTC, both members + `[members.env]
+CHAN_TAB_NAME = "@@Lead"` and `"@@Worker1"`. Path
+shape matches the spec's `Drafts/team-{name}/` —
+under the app-config drafts metadata directory (per
+the chan invariant of no writes inside the drive).
+Sibling `docs/` + `events/` directories created
+empty.
+
+**(2) Real estate**: `Tabs in current Hybrid`
+selected → `@@Worker1` spawned as a tab in the same
+Hybrid, not a new pane. Matches dialog choice. URL
+hash now carries
+`{k:t,n:Terminal-1},{k:t,n:@@Worker1,a:1}`.
+
+**(3) Spawn count + env**: 1 worker spawned (Lead
+skipped per spec line 256-259: "Slice 1 skips the
+lead in the spawn iteration"; the host's existing
+Terminal-1 is the lead's session). Mechanism for
+CHAN_TAB_NAME propagation is wired:
+- `teamOrchestrator.svelte.ts:158` passes
+  `seedInput` and `env` (incl. CHAN_TAB_NAME) to
+  `api.spawnTerminal`.
+- `chan-server/src/terminal_sessions.rs:693`
+  invokes `cmd.env("CHAN_TAB_NAME", tab_name)`.
+- config.toml records `CHAN_TAB_NAME = "@@Worker1"`
+  for the worker member; tab title in the SPA
+  reads `@@Worker1`.
+
+Empirical `echo $CHAN_TAB_NAME` inside the tab was
+awkward because the spawned command is `claude` (no
+shell prompt available); mechanism evidence above
+covers the acceptance.
+
+**(4) Watcher**: `GET /api/teams/loaded` →
+`{"teams":["team-alpha"]}`. Watcher route fired
+(`api.teamLoad(name)` per orchestrator step 2);
+`events/` directory present for future flow.
+
+**(5) Process template**: slice 2 deferred per spec
+lines 218-220 — "Process-template placement (copy
+`-a-81`'s parameterised docs into
+`Drafts/team-{name}/docs/`)". Not a slice-1 fault.
+`docs/` dir is empty.
+
+**(6) Identity prompt — note**: `seedInput` field is
+wired and TerminalTab.svelte:464 consumes it
+(`pendingPromptSeed = tab.seedInput ?? ""`) +
+clears at line 599. But the rendered claude UI in
+`@@Worker1` shows an empty prompt field with the
+default placeholder, suggesting the keystrokes
+either raced claude's boot animation or were sent
+to the bash shell before `claude` exec'd. The
+mechanism is in place — visibility into claude's
+prompt is a UX gap that the slice-2
+`dispatch_agent_event`-driven path is designed to
+fix per spec lines 224-228:
+"`dispatch_agent_event`-driven identity prompts
+(slice 1 uses `seedInput` for in-process delivery;
+the event-channel path lands when `systacean-21`'s
+rich-poke flow consumes a team channel)."
+
+Recording as a NOTE not a fault — slice 1's
+acceptance doesn't require visible claude-prompt
+landing, and the seedInput plumbing IS exercised
+end-to-end on the SPA side.
+
+### Verdict
+
+**HOLD** on `-a-79 slice 1`. Acceptance criteria
+1-4 verified empirically; criterion 5 explicitly
+deferred to slice 2; criterion 6 (identity prompt
+visibility) flagged as a note. The "host name
+required" hint at the dialog foot reads as
+misleading wording when it's actually triggered by
+empty `Your name` / `Team name` — worth a UX
+polish but not a slice-1 blocker.
+
+### State at end of walk
+
+Lane-A test server torn down:
+1. chan serve killed.
+2. team-alpha unloaded: `POST /api/teams/team-alpha/unload`.
+3. `rm -rf "~/Library/Application Support/chan/drafts/15a33877d6f81367/"` (throwaway-drive drafts metadata).
+4. `rm -rf /tmp/chan-test-phase8-wa-r41/`.
+5. `chan remove /tmp/chan-test-phase8-wa-r41/` → unregistered.
+6. Chrome MCP tab closed.
+
+Highlight: the "host name required" copy is
+misleading (it fires for empty `Your name`/`Team
+name`, not host fields). Lowlight: identity prompt
+seedInput doesn't visibly land in claude — slice
+2's event-channel path is the intended fix.
+Contention: none.

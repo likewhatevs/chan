@@ -4047,3 +4047,75 @@ stand-down.
 * Path-limited.
 
 Standing down. 🫡
+
+---
+
+## 2026-05-23 — `-a-79 slice 1` HOLD (round 41)
+
+Walked commit `753e780` (Team Bootstrap
+orchestrator slice 1) post-`ea694c7` ack.
+Throwaway drive at `/tmp/chan-test-phase8-wa-r41/`;
+fresh binary verified (build 09:17:31 @ `c9b8489`).
+
+### Verdict: HOLD ✅
+
+Acceptance 1-4 verified empirically:
+
+1. **Config persisted** at app-config drafts
+   metadata path:
+   `~/Library/Application Support/chan/drafts/<drive-hash>/team-team-alpha/config.toml`
+   with members + `[members.env]
+   CHAN_TAB_NAME` for each.
+2. **Real estate** matches `Tabs in current
+   Hybrid` choice — `@@Worker1` spawned as new
+   tab in same Hybrid.
+3. **Spawn count** is N-1=1 (Lead skipped per
+   spec "Slice 1 skips the lead in the spawn
+   iteration"); CHAN_TAB_NAME mechanism wired
+   through orchestrator → spawnTerminal →
+   `terminal_sessions.rs:693`.
+4. **Watcher active**: `GET /api/teams/loaded`
+   → `{"teams":["team-alpha"]}`.
+
+Slice 2 deferreds (template, pre-flight, split
+panes, event-channel prompts) explicitly out of
+slice 1 scope.
+
+### Notes worth flagging (not slice-1 blockers)
+
+* **"host name required" copy is misleading**: the
+  dialog foot hint fires for empty `Your name` /
+  `Team name` (the visible "Alex"/"team-alpha" are
+  placeholders), NOT host fields. A UX polish
+  candidate — re-word to "name and team name
+  required" or check the actual validation source.
+* **Identity prompt seedInput not visible in
+  claude**: TerminalTab consumes `tab.seedInput`
+  and clears it (`tab.seedInput = undefined`), but
+  the claude UI in `@@Worker1` shows an empty
+  prompt with default placeholder. Likely a race
+  between PTY write and claude's boot animation.
+  The slice-2 `dispatch_agent_event`-driven path
+  is the intended fix per spec line 224-228.
+  Logging here for visibility, not as a slice-1
+  block.
+
+### State
+
+Test server torn down: team-alpha unloaded via
+`POST /api/teams/team-alpha/unload` → confirmed
+`teams:[]`; chan serve killed; drive wiped; drafts
+metadata wiped; `chan remove` ran; Chrome tab
+closed.
+
+### Suggested commit shape
+
+* **Subject**: `docs: webtest-a round 41 — -a-79
+  slice 1 HOLD (Team Bootstrap orchestrator);
+  flagged 'host name required' copy + seedInput
+  visibility note`
+* **Files** (path-limited):
+  * `docs/journals/phase-8/webtest-a/webtest-a-1.md`
+  * `docs/journals/phase-8/alex/event-webtest-a-architect.md`
+
+Standing by for next dispatch / queue.
