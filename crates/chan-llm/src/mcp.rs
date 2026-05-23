@@ -291,7 +291,7 @@ where
                 "mcp frame header too large",
             ));
         }
-        if header.ends_with(b"\r\n\r\n") {
+        if header.ends_with(b"\r\n\r\n") || header.ends_with(b"\n\n") {
             return Ok(Some(header));
         }
     }
@@ -994,6 +994,48 @@ mod tests {
         write_content_length_frame(&mut client_write, init.as_bytes())
             .await
             .unwrap();
+
+        let header = read_frame_header(&mut client_read)
+            .await
+            .unwrap()
+            .expect("response header");
+        let len = parse_content_length(&header).unwrap();
+        let mut body = vec![0u8; len];
+        client_read.read_exact(&mut body).await.unwrap();
+        let response: serde_json::Value = serde_json::from_slice(&body).unwrap();
+
+        assert_eq!(response["jsonrpc"], "2.0");
+        assert_eq!(response["id"], 1);
+        assert_eq!(response["result"]["serverInfo"]["name"], "chan");
+
+        drop(client_write);
+        server_task.abort();
+    }
+
+    #[tokio::test]
+    async fn lf_content_length_initialize_roundtrips() {
+        let (_cfg, _root, server) = fixture();
+        let (client_io, server_io) = tokio::io::duplex(64 * 1024);
+        let (server_read, server_write) = tokio::io::split(server_io);
+        let server_task =
+            tokio::spawn(async move { server.serve_io(server_read, server_write).await });
+
+        let (mut client_read, mut client_write) = tokio::io::split(client_io);
+        let init = serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "initialize",
+            "params": {
+                "protocolVersion": "2024-11-05",
+                "capabilities": {},
+                "clientInfo": {"name": "codex-probe", "version": "0"}
+            }
+        })
+        .to_string();
+        let header = format!("Content-Length: {}\n\n", init.len());
+        client_write.write_all(header.as_bytes()).await.unwrap();
+        client_write.write_all(init.as_bytes()).await.unwrap();
+        client_write.flush().await.unwrap();
 
         let header = read_frame_header(&mut client_read)
             .await
