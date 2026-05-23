@@ -4119,3 +4119,63 @@ closed.
   * `docs/journals/phase-8/alex/event-webtest-a-architect.md`
 
 Standing by for next dispatch / queue.
+
+---
+
+## 2026-05-23 — `-a-79 slice 2` HOLD (round 42)
+
+Walked commit `a680db6` (Team orchestrator slice 2)
+post-`662e133` ack. Throwaway drive at
+`/tmp/chan-test-phase8-wa-r42/`, port 8788; fresh
+binary verified (build 09:53:33 @ `662e133`).
+
+### Verdict: HOLD ✅ — round-41 seedInput note CLOSED
+
+Bootstrap fired → Terminal-1 + @@Worker1 tabs;
+click Terminal-1 → **rich-prompt buffer open and
+primed** with identity prompt:
+
+```
+I'm @@AlexWT. You're $CHAN_TAB_NAME. Identify
+yourself, and then read docs/agents/bootstrap.md
+```
+
+* `@@AlexWT` rendered as contact bubble.
+* `$CHAN_TAB_NAME` verbatim.
+* Workers still spawn (slice 1 chain intact).
+* JS-probed `cm.textContent` matches
+  `identityPrompt(host_handle)` exactly.
+
+Acceptance 1-4 verified empirically. Acceptance 5
+(notify fires after lead staged) — toast had auto-
+dismissed by JS probe time but mechanism source
+verifies (`teamOrchestrator.svelte.ts:344-352`).
+
+### Round-41 NOTE closure
+
+The seedInput visibility gap I flagged in round 41
+is closed by slice 2's design choice: rich-prompt
+buffer for the lead (live host session) rather
+than seedInput (fresh terminal opens). Slice 3+
+will address the worker side via the
+`dispatch_agent_event` path per spec line 400-402.
+
+### Git state — still unresolved (round 41 carry-over)
+
+Reminder: local main remains 233+ ahead of
+origin/main (PR #1 merge dropped 225 phase-8
+commits at remote). My round-42 commit will land
+on top of the locally-rebased pile. **Not pushing
+to remote.** Waiting on @@Alex direction (options
+a/b/c from round 41 message).
+
+### Suggested commit shape
+
+* **Subject**: `docs: webtest-a round 42 — -a-79
+  slice 2 HOLD (lead identity prompt via rich-
+  prompt buffer; round-41 seedInput NOTE closed)`
+* **Files** (path-limited):
+  * `docs/journals/phase-8/webtest-a/webtest-a-1.md`
+  * `docs/journals/phase-8/alex/event-webtest-a-architect.md`
+
+Standing by for next ship.

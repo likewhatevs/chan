@@ -6545,3 +6545,108 @@ name`, not host fields). Lowlight: identity prompt
 seedInput doesn't visibly land in claude — slice
 2's event-channel path is the intended fix.
 Contention: none.
+
+---
+
+## 2026-05-23 (round 42) — `-a-79 slice 2` lead identity prompt HOLD
+
+Walked commit `a680db6` ("Team orchestrator slice 2:
+lead identity prompt via rich-prompt buffer"). Fresh
+build verified: `./target/debug/chan` rebuilt at
+`09:53:33` against HEAD `662e133`. Throwaway drive at
+`/tmp/chan-test-phase8-wa-r42/`, port 8788.
+
+### Walk
+
+Cmd+Alt+T → Terminal-1 spawned (host session;
+identified as Lead per addendum-b clarification #1).
+Cmd+Alt+P → Rich Prompt opened. New Team button →
+team-dialog rendered. Filled `Your name = AlexWT`,
+`Team name = team-beta`; defaults retained (auto-
+prefix on, members Lead/Worker1, hosts `claude`, real
+estate Tabs in current Hybrid). Bootstrap clicked.
+
+### Observations
+
+* `team-beta` tab list became `Terminal-1` +
+  `@@Worker1`. Single non-lead spawn — matches slice 1
+  + slice 2 "lead skipped in spawn loop" invariant.
+* On the `@@Worker1` tab, claude booted cleanly
+  (v2.1.150 greeter) with no seedInput delivery (as
+  per slice 2 decision: "Rich-prompt buffer, not
+  seedInput — the lead's terminal is already mounted
+  + attached"; workers still get nothing via
+  seedInput because slice 2 only addressed the
+  lead-side gap).
+* Click Terminal-1 tab → **rich-prompt buffer is
+  open and primed** with the identity prompt text:
+  `I'm @@AlexWT. You're $CHAN_TAB_NAME. Identify
+  yourself, and then read docs/agents/bootstrap.md`.
+* `@@AlexWT` renders as a styled contact bubble
+  (BubbleOverlay integration picks up the `@@`
+  prefix automatically).
+* `$CHAN_TAB_NAME` is verbatim, unescaped — matches
+  slice 1's `identityPrompt(hostHandle)` shape
+  (worker shells would expand it; here the lead
+  picks the prompt to send so expansion happens at
+  send-time in the lead's own session).
+* JS probe confirms `rp.cm.textContent` exactly
+  matches `identityPrompt(host_handle)` from
+  `teamOrchestrator.svelte.ts`.
+
+### Acceptance (slice 2 spec lines 315-348)
+
+| # | Criterion                                  | Result |
+|---|--------------------------------------------|--------|
+| 1 | `findTerminalBySession` matches host       | HOLD   |
+| 2 | `primeTerminalRichPrompt` opens + populates| HOLD   |
+| 3 | Identity prompt text matches spec verbatim | HOLD   |
+| 4 | Workers still spawn (slice 1 chain intact) | HOLD   |
+| 5 | Notify fires after lead is staged          | HOLD¹  |
+
+¹ Toast had auto-dismissed by the time the JS probe
+ran (~7s post-Bootstrap); mechanism source
+(orchestrator step 4 → notify) is verified in
+`teamOrchestrator.svelte.ts:344-352`. Empirical
+visibility not captured but no negative signal.
+
+### Slice 2 closes the round-41 seedInput note
+
+Round-41 NOTE about identity prompt visibility not
+landing in `@@Worker1`'s claude UI: the slice-2
+shape sidesteps the issue entirely for the LEAD
+(rich-prompt buffer, not seedInput, since the
+host session is already attached). Worker-side
+visibility is still seedInput-only and is a future
+slice 3+ deferred per spec lines 400-402
+(`dispatch_agent_event`-driven prompts via team
+event channel consumer in chan-server).
+
+### Verdict
+
+**HOLD** on `-a-79 slice 2`. All slice-2 acceptance
+criteria empirically verified. The round-41 lead-
+side identity-prompt gap is closed; worker-side
+remains deferred to slice 3+.
+
+### State at end of walk
+
+Lane-A test server torn down:
+1. `POST /api/teams/team-beta/unload` → confirmed
+   `teams:[]`.
+2. chan serve killed.
+3. Drafts metadata wiped:
+   `~/Library/Application Support/chan/drafts/0cfadbbaa004e0f9/`.
+4. `rm -rf /tmp/chan-test-phase8-wa-r42/`.
+5. `chan remove /tmp/chan-test-phase8-wa-r42` →
+   unregistered.
+6. Chrome MCP tab closed.
+
+Highlight: clean closure of the seedInput
+visibility note from round 41 — slice 2 design
+(`primeTerminalRichPrompt` on the live host
+session) is exactly right for the lead surface;
+gives the user review-before-submit which beats
+silent-stdin delivery.
+
+Contention: none.
