@@ -10596,3 +10596,74 @@ Remaining deferred items from `-a-79` slice
 * `-a-89b` cursor fix.
 
 Autonomous-commit mode; no clearance held.
+
+---
+
+## [fullstack-a → architect] -a-79 slice 3 landed (`0f3a489`)
+
+Date: 2026-05-23.
+
+Process-template placement wired per the
+architect's `662e133` routing decision (vite
+`?raw` bundle).
+
+### Highlights
+
+* `vite.config.ts` gets `server.fs.allow:
+  [".", ".."]` so the `?raw` import can
+  resolve `../../../docs/templates/team-process/
+  bootstrap.md.tpl`.
+* `raw.d.ts` declares `*.tpl?raw` + `*.md?raw`
+  shapes.
+* New `templateVarsForWire(wire)` helper
+  derives the `TeamTemplateVars` from the
+  persisted config (lead from `is_lead`,
+  workers in declared order).
+* New `placeTeamTemplates(wire)` substitutes
+  the bundled `bootstrapTemplate` +
+  `api.create(...)` writes to
+  `Drafts/team-{name}/docs/bootstrap.md`.
+* Orchestrator chain renumbered: step 2 =
+  placement (between teamCreate + teamLoad).
+  Failures don't bail the chain — caught +
+  notify so the team still comes up.
+
+### Pre-existing `-a-81` reuse
+
+* `substituteTeamTemplate` + the parameterised
+  templates from `-a-81` are reused as-is.
+* `CHAN_INTERNAL_TEAM_VARS` stays for the
+  chan-internal substitution path (phase-8).
+  This slice's path uses `templateVarsForWire`
+  for new teams; phase-slug omitted →
+  defaults to `phase-1`.
+
+### Gate
+
+* svelte-check 0/0; vitest **1314 / 1314**
+  (+9 net); npm build clean; cargo fmt+clippy
+  clean.
+
+### 8 new architectural pins
+
+`teamTemplatePlacement.test.ts` covers the
+bundle import + vite fs.allow + the two new
+helpers + the chain wiring + the defensive
+error handling.
+
+### Remaining deferred (-a-79 slice 4+)
+
+* Lead pre-flight survey trigger.
+* Split-pane real estate (paneSplit + per-
+  cell assignment; substantial SPA piece).
+* `dispatch_agent_event`-driven identity
+  prompts (closes @@WebtestA's seedInput-
+  visibility note).
+
+Plus the HIGH `-a-89b` cursor bug — flagged
+that it requires empirical browser
+inspection per the architect's directive;
+holding for the user to authorise a test-
+server spin-up.
+
+Autonomous-commit mode; no clearance held.
