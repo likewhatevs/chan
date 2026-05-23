@@ -108,6 +108,50 @@ export function translateConfig(config: TeamDialogConfig): TeamConfigWire {
   };
 }
 
+/// `fullstack-a-80` slice 2: inverse of `translateConfig`.
+/// Maps the chan-drive snake_case wire shape back into the
+/// SPA's camelCase `TeamDialogConfig` so the Load Team flow
+/// can open the dialog populated from
+/// `Drafts/team-{name}/config.toml`. The user edits, hits
+/// Bootstrap, and the standard `runTeamBootstrap` chain runs
+/// (teamCreate is idempotent per systacean-42 — re-running it
+/// for an existing team replaces the config in place).
+///
+/// `env` Records get serialised back to "KEY=VALUE\n" lines
+/// so the dialog's free-form textarea round-trips cleanly.
+/// `CHAN_TAB_NAME` is dropped from the visible env field —
+/// `translateConfig` auto-injects it on submit, so showing it
+/// here would create user confusion + a duplicate entry on
+/// the next round-trip.
+export function wireToDialog(wire: TeamConfigWire): TeamDialogConfig {
+  const members: TeamMemberDraft[] = wire.members.map((m) => {
+    const visibleEntries = Object.entries(m.env).filter(
+      ([k]) => k !== "CHAN_TAB_NAME",
+    );
+    const envText = visibleEntries
+      .map(([k, v]) => `${k}=${v}`)
+      .join("\n");
+    return {
+      name: m.handle,
+      command: m.command,
+      env: envText,
+      isLead: m.is_lead,
+    };
+  });
+  return {
+    hostName: wire.host_name,
+    teamName: wire.team_name,
+    size: Math.max(members.length, 1),
+    autoPrefix: wire.auto_prefix_at,
+    members,
+    // chan-drive's Member doesn't persist real-estate today
+    // (per systacean-30); default to tabs so the dialog opens
+    // in a sane state. The user can switch to split + assign
+    // members in slice 3+ once paneSplit lands.
+    realEstate: { kind: "tabs" },
+  };
+}
+
 /// `fullstack-a-79`: assemble the identity prompt addendum-b
 /// clarification #4 calls for. `$CHAN_TAB_NAME` is intentionally
 /// NOT escaped — the worker's shell expands it to the env-var

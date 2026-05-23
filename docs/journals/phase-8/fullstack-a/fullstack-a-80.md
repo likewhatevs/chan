@@ -221,3 +221,147 @@ scope-poke. Picking up `-a-79` slice 2 next
 (template placement + lead pre-flight survey
 + split-pane real estate) per the original
 addendum-b sequence.
+
+## 2026-05-23 — slice 2 (dialog populated from persisted config)
+
+SPA-only. Unblocked by `systacean-42`'s
+`GET /api/teams/:name/config` endpoint.
+Bundles in @@WebtestA's round-41 copy-fix
+note ("host name required" → "Your name
+required" to match the dialog's field
+label).
+
+### Shape applied
+
+**API client**
+
+* `api.teamGetConfig(name)` — GETs
+  `/api/teams/${name}/config`; returns the
+  `TeamConfigWire` shape directly (no
+  wrapper).
+
+**`wireToDialog(wire)` translator**
+
+* Inverse of `translateConfig`: chan-drive
+  snake_case → SPA camelCase. Maps
+  `team_name`/`host_name`/`auto_prefix_at`/
+  `host_handle` + `members[]` → SPA
+  `TeamDialogConfig` shape.
+* `env` Record → "KEY=VALUE\n" string;
+  `CHAN_TAB_NAME` stripped from the visible
+  env field (translateConfig auto-injects
+  it on submit; showing it would create a
+  duplicate entry on the next round-trip).
+* `realEstate` defaults to `{ kind: "tabs" }`
+  — chan-drive's `Member` doesn't persist
+  real-estate today (per `systacean-30`).
+  User picks split + assigns members at
+  Load time if needed.
+
+**FileTree `loadTeamFromMenu` rewire**
+
+* Not-loaded branch swapped from the slice-
+  1 placeholder (teamLoad + notify) to:
+  1. `api.teamGetConfig(name)` reads
+     persisted config.
+  2. `wireToDialog(wire)` translates.
+  3. `openTeamDialog({ initial,
+     onBootstrap: runTeamBootstrap })`
+     opens the dialog pre-populated.
+* `onBootstrap` calls the standard
+  `-a-79` orchestrator chain. `teamCreate`
+  is idempotent on existing teams (per
+  `systacean-42`'s documented contract);
+  the GET → mutate → POST flow round-trips
+  cleanly.
+* Already-loaded branch (slice 1) preserved:
+  notify + uiPrompt → teamDuplicate.
+
+**Copy fix: "host name required" → "Your name required"**
+
+* Per @@WebtestA's round-41 note. The
+  validator used "host name" but the
+  dialog labels the field "Your name";
+  the mismatch made the error read as a
+  stale reference. Updated the validator
+  + the matching pins in
+  `teamDialog.test.ts`.
+
+### Files touched
+
+* `web/src/api/client.ts`
+  * `teamGetConfig` endpoint.
+* `web/src/state/teamOrchestrator.svelte.ts`
+  * `wireToDialog` translator.
+* `web/src/components/FileTree.svelte`
+  * `loadTeamFromMenu` rewire + imports.
+* `web/src/state/teamDialog.svelte.ts`
+  * Copy fix on the validator messages.
+* `web/src/state/teamDialog.test.ts`
+  * Pin updates for the new copy.
+* `web/src/components/teamLoadFlow.test.ts`
+  * Slice-1 "not-loaded branch" pin
+    flipped to assert the slice-2 dialog
+    flow.
+* `web/src/state/teamLoadDialog.test.ts`
+  (new) — 11 architectural pins:
+  api.teamGetConfig signature; wireToDialog
+  round-trip + CHAN_TAB_NAME stripping +
+  env serialization + autoPrefix
+  preservation; FileTree wiring; already-
+  loaded branch unchanged.
+
+### Decisions
+
+* **`CHAN_TAB_NAME` strip on inbound**, not
+  preserve. The user's view stays clean
+  (one env field, one set of vars). On
+  submit, `translateConfig` auto-injects
+  per `-a-79`'s slice-1 logic, so the
+  round-trip is symmetric.
+* **`realEstate: { kind: "tabs" }` default**
+  on inbound. chan-drive doesn't persist
+  real-estate. Future slice could store
+  per-team real-estate in the config
+  schema; for now the user re-picks at
+  Load time.
+* **Copy fix bundled in slice 2**, not a
+  separate task. Single-LOC change adjacent
+  to the rest of the dialog work; doesn't
+  warrant its own slice.
+
+### Gate
+
+* `svelte-check` → 0/0.
+* `vitest` → +12 new pins (11 in
+  teamLoadDialog.test.ts, +1 net from the
+  flipped slice-1 pin). Total varies by
+  run between 1303-1305 / 1305 due to
+  pre-existing intermittent flake on
+  Pane.test + TerminalTab activity tests
+  (jsdom WebGL stub instability; passes in
+  isolation, unrelated to this slice).
+* `npm run build` → clean.
+* `cargo fmt --check` + `clippy
+  --all-targets -- -D warnings` → clean
+  (Rust gate green now that `systacean-42`
+  landed).
+
+### Suggested commit subject
+
+```
+File Browser: Load Team dialog populated from config (fullstack-a-80 slice 2)
+```
+
+### Files (per-path)
+
+* `web/src/api/client.ts`
+* `web/src/state/teamOrchestrator.svelte.ts`
+* `web/src/components/FileTree.svelte`
+* `web/src/state/teamDialog.svelte.ts`
+* `web/src/state/teamDialog.test.ts`
+* `web/src/components/teamLoadFlow.test.ts`
+* `web/src/state/teamLoadDialog.test.ts` (new)
+* `docs/journals/phase-8/fullstack-a/fullstack-a-80.md`
+
+Autonomous-commit mode. No clearance held.

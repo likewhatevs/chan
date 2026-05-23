@@ -62,9 +62,15 @@ describe("fullstack-a-80 slice 1: loadTeamFromMenu handler", () => {
     );
   });
 
-  test("not-loaded branch: teamLoad + notify (slice 2 scope-poke)", () => {
+  test("not-loaded branch (slice 2): teamGetConfig + openTeamDialog with wireToDialog(...) initial", () => {
+    // `fullstack-a-80` slice 2 replaced the slice-1
+    // teamLoad-and-notify placeholder with the real
+    // dialog-from-config flow. The handler now reads the
+    // persisted TeamConfig, translates it back to the SPA
+    // shape, and opens the global team dialog. Bootstrap
+    // runs the standard `-a-79` orchestrator chain.
     expect(tree).toMatch(
-      /await api\.teamLoad\(name\);[\s\S]{1,400}notify\([\s\S]{1,400}Slice 2 will wire/,
+      /const wire = await api\.teamGetConfig\(name\);[\s\S]{1,400}const initial = wireToDialog\(wire\);[\s\S]{1,400}openTeamDialog\(\{[\s\S]{1,800}initial,/,
     );
   });
 

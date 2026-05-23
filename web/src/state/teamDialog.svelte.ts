@@ -183,8 +183,14 @@ export function validateTeamConfig(
   cfg: TeamDialogConfig,
   existingTeamNames: ReadonlySet<string> = new Set(),
 ): string | null {
-  if (!cfg.hostName.trim()) return "host name required";
-  if (!cfg.teamName.trim()) return "team name required";
+  // `fullstack-a-80` slice 2: copy fix per @@WebtestA's
+  // round 41 note. The validator message used "host name"
+  // but the dialog labels the field "Your name"; the
+  // mismatch reads as a stale error reference. Use the
+  // dialog-visible labels so the user knows which input to
+  // fix.
+  if (!cfg.hostName.trim()) return "Your name required";
+  if (!cfg.teamName.trim()) return "Team name required";
   if (cfg.size < TEAM_MIN_SIZE) {
     return `team size must be at least ${TEAM_MIN_SIZE}`;
   }

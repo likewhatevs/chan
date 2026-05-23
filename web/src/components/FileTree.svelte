@@ -24,6 +24,11 @@
   } from "lucide-svelte";
   import { api } from "../api/client";
   import { uiPrompt } from "../state/store.svelte";
+  import { openTeamDialog } from "../state/teamDialog.svelte";
+  import {
+    runTeamBootstrap,
+    wireToDialog,
+  } from "../state/teamOrchestrator.svelte";
   import { clampMenu } from "./menuClamp";
   import type { TreeEntry } from "../api/types";
   import { isEditableText } from "../state/fileTypes";
@@ -457,13 +462,21 @@
         }
         return;
       }
-      // Not loaded yet. Slice 1 only spins up the watcher;
-      // slice 2 will pre-populate the dialog with the stored
-      // config + run the bootstrap chain.
-      await api.teamLoad(name);
-      notify(
-        `Loaded team "${name}". Slice 2 will wire the dialog-from-config flow.`,
-      );
+      // `fullstack-a-80` slice 2: not-loaded branch now reads
+      // the persisted config + opens the team dialog populated
+      // with the stored shape. The user edits anything they
+      // want then hits Bootstrap; the orchestrator runs the
+      // standard chain (teamCreate idempotent on existing
+      // teams per systacean-42, then teamLoad + worker spawn
+      // + lead identity prompt).
+      const wire = await api.teamGetConfig(name);
+      const initial = wireToDialog(wire);
+      openTeamDialog({
+        initial,
+        onBootstrap: async (config) => {
+          await runTeamBootstrap(config);
+        },
+      });
     } catch (err) {
       notify(`Load Team failed: ${(err as Error).message ?? err}`);
     }

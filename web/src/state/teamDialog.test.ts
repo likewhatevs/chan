@@ -36,14 +36,14 @@ describe("fullstack-a-78: defaultTeamConfig", () => {
 });
 
 describe("fullstack-a-78: validateTeamConfig", () => {
-  test("requires non-empty host name", () => {
+  test("requires non-empty Your name (per -a-80 slice 2 copy fix matching the field label)", () => {
     const cfg = { ...defaultTeamConfig(), hostName: "" };
-    expect(validateTeamConfig(cfg)).toBe("host name required");
+    expect(validateTeamConfig(cfg)).toBe("Your name required");
   });
 
-  test("requires non-empty team name", () => {
+  test("requires non-empty Team name (per -a-80 slice 2 copy fix matching the field label)", () => {
     const cfg = { ...defaultTeamConfig(), hostName: "Alex", teamName: "" };
-    expect(validateTeamConfig(cfg)).toBe("team name required");
+    expect(validateTeamConfig(cfg)).toBe("Team name required");
   });
 
   test("rejects size below TEAM_MIN_SIZE", () => {

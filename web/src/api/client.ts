@@ -574,6 +574,17 @@ export const api = {
   /// `TeamConfig` (snake_case per serde default).
   teamCreate: (name: string, config: TeamConfigWire) =>
     req<TeamRefView>("POST", "/api/teams", { name, config }),
+  /// `fullstack-a-80` slice 2: read the persisted TeamConfig
+  /// for a team. Backs the Load Team dialog's populate-from-
+  /// config flow. Surfaces the same shape `POST /api/teams`'s
+  /// `config` field accepts so `GET → mutate → POST` round-
+  /// trip works without an adapter (systacean-42 +
+  /// teamCreate idempotency).
+  teamGetConfig: (name: string) =>
+    req<TeamConfigWire>(
+      "GET",
+      `/api/teams/${encodeURIComponent(name)}/config`,
+    ),
   teamLoad: (name: string) =>
     req<TeamLoadResponse>(
       "POST",
