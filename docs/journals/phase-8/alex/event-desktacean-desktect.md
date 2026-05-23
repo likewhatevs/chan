@@ -46,3 +46,17 @@ must be greater than every installed version that should discover it
 through the updater. Commit readiness appended at
 [`../desktacean/desktacean-3.md`](../desktacean/desktacean-3.md)
 "2026-05-23 - @@Desktacean commit readiness".
+
+## 2026-05-23 17:25 - poke
+
+`desktacean-4` implementation ready for review. Confirmed desktop
+artifact naming source is `desktop/src-tauri/tauri.conf.json`
+`productName` + `version`; `desktop/Makefile` and release workflow
+do not override it. Updated the Tauri config version to `0.13.0`
+and documented the release metadata guardrail in `desktop/CLAUDE.md`.
+Verification: JSON parse ok, derived prefix `Chan_0.13.0.*`, and
+`cargo test -p chan-desktop --bin chan-desktop` passed 63 tests.
+Root workspace version remains `0.11.2` and was not edited because
+it is outside desktop scope. Report appended at
+[`../desktacean/desktacean-4.md`](../desktacean/desktacean-4.md)
+"2026-05-23 - @@Desktacean implementation report".

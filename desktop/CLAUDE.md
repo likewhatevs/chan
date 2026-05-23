@@ -287,6 +287,23 @@ Client probes:
 
 Server-side publishing of that manifest is owned by chan-prod-setup.
 
+## Release package version metadata
+
+Tauri bundle artifact names are derived from
+`src-tauri/tauri.conf.json`:
+
+* `productName` supplies the `Chan` prefix.
+* `version` supplies the semantic version in bundle names. For the
+  next cut, generated desktop artifacts should start with
+  `Chan_0.13.0.` or `Chan_0.13.0_`, depending on the bundle type and
+  platform suffix.
+
+Before pushing a `chan-vX.Y.Z` desktop release tag, update
+`src-tauri/tauri.conf.json` `version` to `X.Y.Z`. The Rust package
+version for `chan-desktop` is inherited from the workspace so the
+bundled `chan` sidecar and desktop version probe stay aligned when
+chan-core bumps the workspace for the release.
+
 ## Local notarization setup
 
 `make app-notarized` (in `desktop/Makefile`) accepts notarization
