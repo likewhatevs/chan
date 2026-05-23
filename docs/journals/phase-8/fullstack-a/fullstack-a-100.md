@@ -88,3 +88,74 @@ Yes for:
 * `crates/chan-server/src/routes/drafts.rs` — Cmd+N endpoint.
 * `web/src/components/FileTree.svelte:891` — Drafts row rendering.
 * `web/src/state/store.svelte.ts:545` — loadTreeDir.
+
+---
+
+## 2026-05-23 - candidate fix ready: Drafts stale-tree refresh after New Draft
+
+Repro / falsification pass:
+
+* Fresh throwaway drive under `/private/tmp/chan-a100-fresh`,
+  isolated registry via `HOME=/private/tmp/chan-a100-home`,
+  served on `127.0.0.1:8799` with `--no-token`.
+* API probes on current HEAD:
+  * `GET /api/files?dir=` returned synthetic `Drafts`.
+  * `GET /api/files?dir=Drafts` returned `[]` on fresh drive.
+  * `POST /api/drafts/new` returned
+    `{"path":"Drafts/untitled/draft.md","name":"untitled"}`.
+  * `GET /api/files?dir=Drafts` then returned
+    `Drafts/untitled`.
+  * `GET /api/files?dir=Drafts/untitled` returned
+    `Drafts/untitled/draft.md`.
+  * `GET /api/files/Drafts/untitled/draft.md` returned the
+    empty editable file.
+  * `GET /api/graph?scope=drive&depth=1` and filesystem graph
+    endpoints returned valid payloads.
+
+Root cause found in SPA state, not chan-drive bootstrap:
+
+* `Drive::open` already eagerly creates/opens the per-drive
+  drafts directory, and fresh-drive API paths work.
+* The failing shape is stale client state: if the File Browser had
+  loaded `Drafts` while empty, `tree.loadedDirs["Drafts"]` stayed
+  true after `api.createDraft()`.
+* `/api/drafts/new` calls `self_writes.note(path)`, so the SPA does
+  not get a normal watcher echo to refresh the tree.
+* The scoped watcher refresh only refreshed the immediate parent
+  of a changed path. For `Drafts/untitled/draft.md`, that parent is
+  `Drafts/untitled`, which usually is not loaded yet, so the
+  already-loaded `Drafts` listing stayed stale.
+* Graph tabs were not failing at the server layer in the fresh
+  repro; the visible graph issue is the same missing post-create
+  invalidation/reload path when graph tabs are open.
+
+Fix:
+
+* `refreshTreeForPath(path)` now climbs to the nearest loaded
+  ancestor instead of no-oping when the immediate parent is not
+  loaded. `Drafts/untitled/draft.md` refreshes `Drafts` when that
+  subtree is the loaded ancestor.
+* Added `noteDraftCreated(path)` to mirror the watcher-side
+  invalidation after same-SPA draft creation: refresh nearest tree
+  ancestor, schedule drive refresh, invalidate graph data, and bump
+  `graphReloadSignal` when graph tabs/overlay are present.
+* `createDraftAndOpen()` and staged Hybrid Nav draft materialization
+  now call `noteDraftCreated(path)` before opening the file.
+* Draft-create failures now surface a transient status message
+  instead of only logging to console.
+
+Verification:
+
+* `npm test -- --run src/state/watcherScope.test.ts src/components/newDraftCmdN.test.ts`
+  - 2 files passed, 18 tests passed.
+* `npm run check`
+  - svelte-check 0 errors / 0 warnings.
+* `npm test -- --run`
+  - 127 files passed, 1 skipped; 1341 tests passed, 11 skipped.
+* `npm run build`
+  - passed; existing chunk-size / ineffective dynamic import
+    warnings only.
+
+No Rust edits in this slice; chan-drive/server API repro on the
+throwaway drive passed, so no cargo gate was run for the SPA-only
+fix.

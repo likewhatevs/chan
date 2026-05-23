@@ -31,13 +31,19 @@ describe("fullstack-a-66 slice 1: Cmd+N keymap branch", () => {
 
   test("createDraftAndOpen calls api.createDraft then openInActivePane", () => {
     expect(app).toMatch(
-      /async function createDraftAndOpen\(\): Promise<void> \{[\s\S]*?const \{ path \} = await api\.createDraft\(\);[\s\S]*?await openInActivePane\(path\);/,
+      /async function createDraftAndOpen\(\): Promise<void> \{[\s\S]*?const \{ path \} = await api\.createDraft\(\);[\s\S]*?await noteDraftCreated\(path\);[\s\S]*?await openInActivePane\(path\);/,
     );
   });
 
-  test("createDraftAndOpen swallows errors via try/catch (UX: don't blow up on failed draft creation)", () => {
+  test("createDraftAndOpen surfaces errors via transient status", () => {
     expect(app).toMatch(
-      /async function createDraftAndOpen\(\)[\s\S]*?try \{[\s\S]*?\} catch \(err\) \{[\s\S]*?console\.warn\(/,
+      /async function createDraftAndOpen\(\)[\s\S]*?catch \(err\) \{[\s\S]*?console\.warn\([\s\S]*?setTransientStatus\(`New draft failed:/,
+    );
+  });
+
+  test("staged draft materialization also refreshes Drafts state before opening", () => {
+    expect(app).toMatch(
+      /const \{ path \} = await api\.createDraft\(\);[\s\S]*?await noteDraftCreated\(path\);[\s\S]*?await openInPane\(entry\.paneId, path\);/,
     );
   });
 

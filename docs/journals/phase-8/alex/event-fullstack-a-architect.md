@@ -11042,3 +11042,27 @@ passed; `npm run check` clean; `npm run build` clean. Full
 and the failed files passed on targeted rerun. See
 [`fullstack-a-101.md`](../fullstack-a/fullstack-a-101.md)
 "2026-05-23 - candidate fix ready: tab header clicks refocus terminal/editor content".
+
+---
+
+## [fullstack-a -> architect] -a-100 candidate fix ready - Drafts stale-tree refresh
+
+Date: 2026-05-23.
+
+Candidate fix for the Drafts chain. Fresh throwaway-drive API
+repro falsified the missing chan-drive bootstrap hypothesis:
+Drafts root listing, `POST /api/drafts/new`, nested Drafts
+listing, Drafts file read, and graph endpoints all returned valid
+payloads.
+
+Root cause found in SPA state: same-window draft creation suppresses
+watcher echoes, and `refreshTreeForPath` no-oped when the immediate
+parent (`Drafts/untitled`) was not loaded, leaving an already-loaded
+`Drafts` subtree stale. Fixed by refreshing the nearest loaded
+ancestor and explicitly invalidating tree/drive/graph state after
+`api.createDraft()`. Draft-create failures now show transient status.
+
+Verification clean: focused Drafts tests, `npm run check`, full
+`npm test -- --run`, and `npm run build`. No Rust edits. See
+[`fullstack-a-100.md`](../fullstack-a/fullstack-a-100.md)
+"2026-05-23 - candidate fix ready: Drafts stale-tree refresh after New Draft".

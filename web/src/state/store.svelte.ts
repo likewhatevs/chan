@@ -653,15 +653,40 @@ export function pathInAnyScope(path: string, scopes: string[]): boolean {
 /// `fullstack-b-6`; that path lives on as `refreshTree` for
 /// callers that genuinely need a full re-fetch.
 export async function refreshTreeForPath(path: string): Promise<void> {
-  const slash = path.lastIndexOf("/");
-  const parent = slash > 0 ? path.slice(0, slash) : "";
-  if (!tree.loadedDirs[parent]) return;
+  const parent = nearestLoadedParentDir(path);
+  if (parent === null) return;
   try {
     const entries = await api.list(parent);
     tree.entries = sortTreeEntries(mergeDirEntries(tree.entries, parent, entries));
   } catch {
     // Best-effort: a transient list error doesn't surface as toast;
     // the user retries on next interaction.
+  }
+}
+
+function parentDir(path: string): string {
+  const slash = path.lastIndexOf("/");
+  return slash > 0 ? path.slice(0, slash) : "";
+}
+
+function nearestLoadedParentDir(path: string): string | null {
+  let dir = parentDir(path);
+  for (;;) {
+    if (tree.loadedDirs[dir]) return dir;
+    if (dir === "") return null;
+    dir = parentDir(dir);
+  }
+}
+
+export async function noteDraftCreated(path: string): Promise<void> {
+  await refreshTreeForPath(path);
+  scheduleDriveRefresh();
+  invalidateGraph();
+  if (browserOverlay.open || graphOverlay.open || hasBrowserTab() || hasGraphTab()) {
+    void ensureGraphLoaded();
+  }
+  if (graphOverlay.open || hasGraphTab()) {
+    graphReloadSignal.nonce += 1;
   }
 }
 

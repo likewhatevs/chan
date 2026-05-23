@@ -31,6 +31,7 @@
     openGraphWithContext,
     openSettings,
     pathPromptState,
+    noteDraftCreated,
     persistLayoutToHash,
     promptState,
     reconnectWatcher,
@@ -41,6 +42,7 @@
     scheduleSessionSave,
     searchStatusOverlay,
     searchPanel,
+    setTransientStatus,
     settingsOverlay,
     syncOverlayStack,
     toggleBrowserSidePane,
@@ -792,9 +794,11 @@
   async function createDraftAndOpen(): Promise<void> {
     try {
       const { path } = await api.createDraft();
+      await noteDraftCreated(path);
       await openInActivePane(path);
     } catch (err) {
       console.warn("[chan] createDraft failed", err);
+      setTransientStatus(`New draft failed: ${(err as Error).message}`);
     }
   }
 
@@ -813,9 +817,11 @@
       void (async () => {
         try {
           const { path } = await api.createDraft();
+          await noteDraftCreated(path);
           await openInPane(entry.paneId, path);
         } catch (err) {
           console.warn("[chan] paneMode stagedDraftEditor failed", err);
+          setTransientStatus(`New draft failed: ${(err as Error).message}`);
         }
       })();
     }

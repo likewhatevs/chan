@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, test } from "vitest";
+import { beforeEach, describe, expect, test, vi } from "vitest";
 import {
   activeFbScopes,
   browserOverlay,
@@ -8,6 +8,7 @@ import {
   tree,
 } from "./store.svelte";
 import { layout, openBrowserInActivePane } from "./tabs.svelte";
+import { api } from "../api/client";
 
 // `fullstack-b-6`: the File Browser used to react to every fs
 // event on the drive (the chan-server WS stream is unscoped). We
@@ -104,5 +105,26 @@ describe("fullstack-b-6: refreshTreeForPath", () => {
     // Should not throw and should not touch tree.entries.
     await refreshTreeForPath("crates/lib.rs");
     expect(tree.entries).toEqual([]);
+  });
+
+  test("refreshes the nearest loaded ancestor for newly-created Drafts descendants", async () => {
+    tree.loadedDirs = { "": true, Drafts: true };
+    tree.entries = [
+      { path: "Drafts", is_dir: true, is_editable_text: false, missing: false } as never,
+    ];
+    const list = vi.spyOn(api, "list").mockResolvedValue([
+      {
+        path: "Drafts/untitled",
+        is_dir: true,
+        is_editable_text: false,
+        missing: false,
+      } as never,
+    ]);
+
+    await refreshTreeForPath("Drafts/untitled/draft.md");
+
+    expect(list).toHaveBeenCalledWith("Drafts");
+    expect(tree.entries.some((e) => e.path === "Drafts/untitled")).toBe(true);
+    list.mockRestore();
   });
 });
