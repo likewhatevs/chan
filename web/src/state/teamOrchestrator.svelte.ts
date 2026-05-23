@@ -28,9 +28,12 @@
 import { api, type TeamConfigWire, type TeamMemberWire } from "../api/client";
 import { notify } from "./notify.svelte";
 import {
+  buildSplitGrid,
   findTerminalBySession,
-  openTerminalInActivePane,
+  layout,
+  openTerminalInPane,
   primeTerminalRichPrompt,
+  setActivePane,
 } from "./tabs.svelte";
 import type {
   TeamDialogConfig,
@@ -222,6 +225,58 @@ export async function placeTeamTemplates(wire: TeamConfigWire): Promise<void> {
   );
 }
 
+/// `fullstack-a-79` slice 4: derive per-member target pane
+/// IDs from the dialog's real-estate. Two shapes:
+///
+/// * `tabs`: every member targets the currently-active pane.
+///   The orchestrator runs from the user's rich-prompt
+///   terminal (the lead's host session); spawning into the
+///   active pane stacks the workers as tabs next to the lead.
+///
+/// * `split`: walks `realEstate.slots[]` (row-major; one entry
+///   per grid cell, each entry is the list of member indexes
+///   assigned to that cell), builds the R×C grid via
+///   `buildSplitGrid`, and maps each member-index → pane-id.
+///   Unassigned members fall back to the starting pane
+///   (= grid cell 0) so they're never lost; the user can
+///   move them with the standard tab-drag flow after
+///   bootstrap. The lead's pane is always the starting pane
+///   per addendum-b clarification #1 — even if the user
+///   assigned the lead to a different cell on the dialog, the
+///   lead's terminal is the host session and stays put.
+export function resolveMemberPaneIds(
+  config: TeamDialogConfig,
+): { lead: string; workers: (string | undefined)[] } {
+  const startId = layout.activePaneId;
+  if (config.realEstate.kind === "tabs") {
+    // All members → starting pane. The orchestrator uses
+    // `openTerminalInPane(startId, …)` for each worker.
+    return {
+      lead: startId,
+      workers: config.members.map(() => startId),
+    };
+  }
+  // Split-pane: materialise the grid + invert slots.
+  const { grid, slots } = config.realEstate;
+  const cells = buildSplitGrid(startId, grid.rows, grid.cols);
+  const fallback = cells[0] ?? startId;
+  const workers: (string | undefined)[] = new Array(
+    config.members.length,
+  ).fill(undefined);
+  for (let cellIdx = 0; cellIdx < slots.length; cellIdx += 1) {
+    const memberIdxs = slots[cellIdx] ?? [];
+    for (const memberIdx of memberIdxs) {
+      if (memberIdx < 0 || memberIdx >= config.members.length) continue;
+      workers[memberIdx] = cells[cellIdx] ?? fallback;
+    }
+  }
+  // Fill gaps + lead with the starting pane.
+  for (let i = 0; i < workers.length; i += 1) {
+    if (!workers[i]) workers[i] = fallback;
+  }
+  return { lead: fallback, workers };
+}
+
 /// `fullstack-a-79` slice 1: run the bootstrap chain. Throws
 /// (returns rejected promise) on any step's failure so the
 /// dialog can surface the error inline. The caller closes the
@@ -231,17 +286,6 @@ export async function runTeamBootstrap(
   hostSessionId?: string,
 ): Promise<void> {
   const wire = translateConfig(config);
-  if (config.realEstate.kind === "split") {
-    // Slice 1 routes everything through tabs-in-current-Hybrid.
-    // Split-pane real estate (paneSplit + per-cell assignment)
-    // is slice 2. Flag explicitly so callers can decide whether
-    // to bail or continue with the tab fallback; today the
-    // dialog only offers tabs by default, and slice 2 wiring
-    // lands before users can reach this branch.
-    notify(
-      "Split-pane real estate not yet wired — falling back to tabs (slice 1).",
-    );
-  }
   // 1. Persist config.
   await api.teamCreate(wire.team_name, wire);
   // 2. Place process templates. Per addendum-b's
@@ -263,10 +307,23 @@ export async function runTeamBootstrap(
   }
   // 3. Load watcher.
   await api.teamLoad(wire.team_name);
-  // 4. Spawn worker terminals (lead is the host session — see
+  // 4. Materialise real-estate. For tabs-in-current-Hybrid the
+  //    spawn loop drops every worker into the active pane. For
+  //    split-pane, build the airplane-grid via paneSplit + map
+  //    each worker to the cell the user assigned via the dialog.
+  //    `fullstack-a-79` slice 4: per-cell assignment honors the
+  //    `slots[][]` array on `realEstate`. Lead's pane stays the
+  //    starting pane (= cells[0]) since the lead IS the host
+  //    session per addendum-b clarification #1; we don't move it
+  //    even if the user assigned the lead to another cell (slice
+  //    5 could add the moveTab step if needed).
+  const memberPaneIds = resolveMemberPaneIds(config);
+  const leadPaneId = memberPaneIds.lead;
+  // 5. Spawn worker terminals (lead is the host session — see
   //    addendum-b clarification #1).
   const prompt = identityPrompt(wire.host_handle);
-  for (const m of wire.members) {
+  for (let i = 0; i < wire.members.length; i += 1) {
+    const m = wire.members[i];
     if (m.is_lead) continue;
     try {
       const response = await api.spawnTerminal({
@@ -275,7 +332,8 @@ export async function runTeamBootstrap(
         env: m.env,
         ...(hostSessionId ? { orchestrator_session: hostSessionId } : {}),
       });
-      openTerminalInActivePane({
+      const paneId = memberPaneIds.workers[i] ?? layout.activePaneId;
+      openTerminalInPane(paneId, {
         sessionId: response.session,
         title: response.tab_label,
         seedInput: prompt,
@@ -286,7 +344,10 @@ export async function runTeamBootstrap(
       );
     }
   }
-  // 5. Deliver the identity prompt to the lead's terminal (the
+  // Restore focus to the lead's pane so the rich-prompt buffer
+  // step lands there.
+  if (leadPaneId) setActivePane(leadPaneId);
+  // 6. Deliver the identity prompt to the lead's terminal (the
   //    host session) via the rich-prompt buffer. Per addendum-b
   //    clarification #1 the lead IS the user's current rich-
   //    prompt terminal; we don't respawn it, just stage the

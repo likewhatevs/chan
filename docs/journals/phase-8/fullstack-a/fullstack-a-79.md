@@ -586,3 +586,177 @@ Team orchestrator slice 3: process-template placement via vite ?raw (fullstack-a
 * `docs/journals/phase-8/fullstack-a/fullstack-a-79.md`
 
 Autonomous-commit mode. No clearance held.
+
+## 2026-05-23 — slice 4 (split-pane real estate wired)
+
+SPA-only. Closes the slice-1 scope-poke
+("split-pane real estate not yet wired —
+falling back to tabs"). The dialog's
+airplane-grid + drag&drop slot assignment from
+`-a-78` slice 2 is now respected end-to-end.
+
+### Shape applied
+
+**New `buildSplitGrid(startPaneId, rows, cols)`
+helper in `tabs.svelte.ts`**
+
+* Materialises an R×C grid of panes starting
+  from a given pane id.
+* Strategy:
+  1. Build a top row of `cols` panes by
+     splitting horizontally (`direction:
+     "row"`) from the starting pane
+     `cols - 1` times.
+  2. For each of the `cols` column-heads,
+     split vertically (`direction: "column"`)
+     `rows - 1` times to populate the rest.
+* Returns pane IDs in **row-major** order
+  matching the dialog's `slots[i]` cell
+  numbering.
+* 1×1 short-circuits — no splits, returns
+  `[startPaneId]`.
+* Side effect: `layout.activePaneId` ends on
+  the bottom-right pane after construction;
+  callers restore focus afterwards.
+
+**New `resolveMemberPaneIds(config)` in
+`teamOrchestrator.svelte.ts`**
+
+* Returns `{ lead, workers: (string |
+  undefined)[] }` — one pane id per member,
+  plus the lead's pane separately.
+* `tabs` mode: every member → starting pane
+  (where the user's rich-prompt terminal
+  lives = lead's pane).
+* `split` mode: walks `realEstate.slots[]`
+  (row-major; one entry per cell, each
+  entry the list of member-indexes assigned
+  to that cell), inverts to per-member pane
+  assignment.
+* Gaps + invalid slot entries fall back to
+  cells[0] (= starting pane) so no member
+  is silently dropped.
+* The lead's pane is ALWAYS the starting
+  pane per addendum-b clarification #1 —
+  even if the user assigned the lead to a
+  different cell on the dialog, the lead's
+  terminal IS the host session and isn't
+  moved. Slice 5 could add a `moveTab` step
+  if lead-relocation becomes a real
+  workflow.
+
+**Orchestrator chain extension**
+
+* New step 4 (between teamLoad + spawn loop):
+  call `resolveMemberPaneIds(config)`. For
+  split mode this triggers `buildSplitGrid`
+  side effects (the layout splits before the
+  spawn loop runs).
+* Spawn loop: indexed walk (`for (let i = 0;
+  …)`) instead of `for (const m of …)` so
+  each member can look up its assigned pane.
+  `openTerminalInActivePane` swap to
+  `openTerminalInPane(paneId, …)`.
+* After the spawn loop: `setActivePane
+  (leadPaneId)` restores focus to the
+  lead's pane (otherwise the bottom-right
+  grid pane would be active from the last
+  split / spawn).
+* The slice-1 scope-poke notify ("Split-pane
+  real estate not yet wired") is gone.
+
+### Files touched
+
+* `web/src/state/tabs.svelte.ts`
+  * `buildSplitGrid` exported.
+* `web/src/state/teamOrchestrator.svelte.ts`
+  * Imports: added `buildSplitGrid`, `layout`,
+    `openTerminalInPane`, `setActivePane`.
+    Removed `openTerminalInActivePane`.
+  * `resolveMemberPaneIds` exported.
+  * `runTeamBootstrap` step 4 added (real-
+    estate materialisation); spawn loop
+    indexed-walk + per-pane open; focus
+    restore after spawn. Step renumber: lead
+    prompt is now step 6.
+* `web/src/state/teamSplitPaneRealEstate.test.ts`
+  (new) — 14 architectural pins for
+  `buildSplitGrid` shape, `resolveMemberPaneIds`
+  tabs/split branches, orchestrator imports +
+  wiring + the gone scope-poke.
+* `web/src/components/teamBootstrapOrchestrator.test.ts`
+  * "spawn loop walks each member" pin
+    updated to the new indexed-walk shape.
+  * "opens in active pane" pin updated to
+    "opens in the resolved pane".
+  * "split-pane scope-poked" pin flipped to
+    assert the scope-poke is GONE +
+    `resolveMemberPaneIds` is wired.
+  * New "focus restored to lead's pane" pin.
+* `web/src/state/teamLeadPrompt.test.ts`
+  * Step renumber 5 → 6.
+  * Imports pin loosened (orchestrator now
+    imports more helpers from tabs.svelte).
+
+### Decisions
+
+* **Lead pane immutable** — addendum-b
+  clarification #1's "lead = host session"
+  framing means the lead's terminal can't be
+  moved by the orchestrator. If the user
+  drags the lead to a different cell on the
+  dialog, the workers see the cells as drawn
+  but the lead stays at cells[0]. Slice 5
+  could add `moveTab` if the workflow
+  surfaces. Documented inline.
+* **Row-major slots** match
+  `emptySlotsForGrid(grid).length === rows *
+  cols`. Cells are numbered left-to-right,
+  top-to-bottom. The buildSplitGrid result
+  is also row-major so indexes line up
+  without translation.
+* **Fallback to cells[0]** on gap /
+  out-of-range slot entries instead of
+  throwing. Cleaner UX: if the user leaves a
+  member unassigned, the orchestrator drops
+  them next to the lead rather than failing
+  the whole bootstrap.
+
+### Remaining deferred (slice 5+)
+
+* Lead pre-flight survey trigger.
+* `dispatch_agent_event`-driven identity
+  prompts (closes @@WebtestA's seedInput-
+  visibility note; needs the team event
+  channel consumer in chan-server).
+* `moveTab` for lead-relocation when the
+  user assigns the lead to a non-starting
+  cell.
+
+### Gate
+
+* `svelte-check` → 0/0.
+* `vitest` → **1336 / 1336** (+15 net from
+  `-a-95`'s 1321; 14 new pins + 1 from the
+  flipped scope-poke pin).
+* `npm run build` → clean.
+* `cargo fmt --check` + `clippy
+  --all-targets -- -D warnings` → clean
+  (no Rust delta).
+
+### Suggested commit subject
+
+```
+Team orchestrator slice 4: split-pane real estate (fullstack-a-79 slice 4)
+```
+
+### Files (per-path)
+
+* `web/src/state/tabs.svelte.ts`
+* `web/src/state/teamOrchestrator.svelte.ts`
+* `web/src/state/teamSplitPaneRealEstate.test.ts` (new)
+* `web/src/components/teamBootstrapOrchestrator.test.ts`
+* `web/src/state/teamLeadPrompt.test.ts`
+* `docs/journals/phase-8/fullstack-a/fullstack-a-79.md`
+
+Autonomous-commit mode. No clearance held.

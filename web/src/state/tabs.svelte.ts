@@ -2622,6 +2622,57 @@ export function splitActive(direction: "row" | "column"): void {
   splitPane(layout.activePaneId, direction, "after");
 }
 
+/// `fullstack-a-79` slice 4: materialise an R×C grid of panes
+/// starting from `startPaneId`. Returns the pane IDs in
+/// row-major order (`cells[r * cols + c]`).
+///
+/// Strategy:
+///   1. Build a top row of `cols` panes by splitting horizontally
+///      (`direction: "row"`) from the starting pane `cols - 1`
+///      times. Each split adds the new pane to the RIGHT.
+///   2. For each of the `cols` column-heads, split vertically
+///      (`direction: "column"`) `rows - 1` times. Each split
+///      adds the new pane BELOW.
+///
+/// Side effect: `layout.activePaneId` ends up on the bottom-
+/// right pane. Callers that care (e.g. team-orchestrator
+/// keeping focus on the lead's pane) restore it afterwards.
+///
+/// For `1×1` grids the helper short-circuits — no splits, the
+/// returned cells array is `[startPaneId]`.
+export function buildSplitGrid(
+  startPaneId: string,
+  rows: number,
+  cols: number,
+): string[] {
+  if (rows <= 1 && cols <= 1) return [startPaneId];
+  // Step 1: top row of column-heads.
+  const columnHeads: string[] = [startPaneId];
+  for (let c = 1; c < cols; c += 1) {
+    splitPane(columnHeads[c - 1], "row", "after");
+    columnHeads.push(layout.activePaneId);
+  }
+  // Step 2: build down each column to populate the rest of the
+  // grid. `grid[r][c]` is the pane at row r, column c.
+  const grid: string[][] = Array.from({ length: rows }, () =>
+    Array<string>(cols).fill(""),
+  );
+  for (let c = 0; c < cols; c += 1) {
+    grid[0][c] = columnHeads[c];
+    for (let r = 1; r < rows; r += 1) {
+      splitPane(grid[r - 1][c], "column", "after");
+      grid[r][c] = layout.activePaneId;
+    }
+  }
+  // Flatten row-major to match the dialog's slot ordering
+  // (`TeamRealEstate.slots[i]` is cell i in row-major).
+  const flat: string[] = [];
+  for (let r = 0; r < rows; r += 1) {
+    for (let c = 0; c < cols; c += 1) flat.push(grid[r][c]);
+  }
+  return flat;
+}
+
 export function splitPane(
   paneId: string,
   direction: "row" | "column",

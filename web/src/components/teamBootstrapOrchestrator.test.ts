@@ -29,20 +29,42 @@ describe("fullstack-a-79 slice 1: orchestrator bootstrap chain", () => {
   });
 
   test("lead member is skipped from spawn loop (host session is the lead's terminal)", () => {
+    // `fullstack-a-79` slice 4: loop now uses an indexed walk
+    // (`for (let i = 0; …)`) to look up the member's assigned
+    // pane id from the resolved real-estate map. The lead skip
+    // stays — host session IS the lead's terminal per
+    // addendum-b clarification #1.
     expect(orchestrator).toMatch(
-      /for \(const m of wire\.members\) \{[\s\S]{1,400}if \(m\.is_lead\) continue;/,
+      /for \(let i = 0; i < wire\.members\.length; i \+= 1\) \{[\s\S]{1,800}if \(m\.is_lead\) continue;/,
     );
   });
 
-  test("each worker terminal opens in the active pane with the identity prompt as seedInput", () => {
+  test("each worker terminal opens in its resolved pane (cell from split, or active pane for tabs) with the identity prompt as seedInput", () => {
+    // `fullstack-a-79` slice 4: split-pane real estate honored.
+    // openTerminalInPane(paneId, …) replaces
+    // openTerminalInActivePane so workers land in their
+    // assigned cells.
     expect(orchestrator).toMatch(
-      /openTerminalInActivePane\(\{[\s\S]{1,400}sessionId: response\.session,[\s\S]{1,200}title: response\.tab_label,[\s\S]{1,200}seedInput: prompt,/,
+      /const paneId = memberPaneIds\.workers\[i\] \?\? layout\.activePaneId;[\s\S]{1,400}openTerminalInPane\(paneId, \{[\s\S]{1,400}sessionId: response\.session,[\s\S]{1,200}title: response\.tab_label,[\s\S]{1,200}seedInput: prompt,/,
     );
   });
 
-  test("split-pane real estate scope-poked via notify (slice 1 falls back to tabs)", () => {
+  test("split-pane real estate now WIRED (slice 4 — was scope-poked in slice 1)", () => {
+    // The slice-1 notify("Split-pane real estate not yet
+    // wired") is gone now that the orchestrator builds the
+    // grid via buildSplitGrid + maps members through
+    // resolveMemberPaneIds.
+    expect(orchestrator).not.toMatch(
+      /Split-pane real estate not yet wired/,
+    );
     expect(orchestrator).toMatch(
-      /if \(config\.realEstate\.kind === "split"\) \{[\s\S]{1,600}notify\([\s\S]{1,200}Split-pane real estate not yet wired/,
+      /const memberPaneIds = resolveMemberPaneIds\(config\);/,
+    );
+  });
+
+  test("focus restored to the lead's pane after the spawn loop", () => {
+    expect(orchestrator).toMatch(
+      /if \(leadPaneId\) setActivePane\(leadPaneId\);/,
     );
   });
 });
