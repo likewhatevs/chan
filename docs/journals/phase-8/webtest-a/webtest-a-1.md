@@ -6650,3 +6650,159 @@ gives the user review-before-submit which beats
 silent-stdin delivery.
 
 Contention: none.
+
+---
+
+## 2026-05-23 (round 43) — autonomous batch + 2 user-driven patches
+
+Fresh-binary build at `662e133` (later rebuilt twice at `081fd60`
+then post-patch); throwaway drive `/tmp/chan-test-phase8-wa-r43/`
+across ports 8789 → 8790 → 8791. Walked 3 ships; user redirected
+mid-walk with 2 patch asks.
+
+### `-a-95` (welcome pane: drop stale "scope for Graph" hint) — HOLD
+
+Loaded fresh drive at port 8789. Welcome pane renders with chord
+hint grid: New Draft / Terminal / File Browser / Rich Prompt /
+Graph / Infographics — no "scope for Graph" copy anywhere in
+body. JS probe of `document.body.innerHTML` for the literal
+string returned `false`. Bundle `web/dist/assets/index-*.js`
+confirms 0 occurrences.
+
+### `-a-79 slice 3` (process-template placement via vite ?raw) — HOLD
+
+Cmd+Alt+T → Terminal-1. Cmd+Alt+P → Rich Prompt. New Team →
+`AlexWT` / `gamma` → Bootstrap. Verified on disk:
+`~/Library/Application Support/chan/drafts/<drive-hash>/team-gamma/docs/bootstrap.md`
+exists with substitutions applied (`@@AlexWT` for `{host-handle}`,
+`gamma` for `{team-name}`, `@@Worker1` for `{worker-1-handle}`,
+`phase-1` for the phase slug per the new-team default).
+
+The path the orchestrator writes through is `Drafts/team-gamma/docs/bootstrap.md`
+(unified-path prefix per the systacean-26/29/32/34/36/37 saga);
+chan-drive routes it to the app-config metadata location. Drive's
+own `Drafts/` subtree untouched. Matches the chan invariant ("no
+writes inside the drive") + slice-3 design.
+
+Unsubstituted `{worker-2-handle}` … `{worker-6-handle}` remain
+literal in the bundled-template substitution table at the bottom
+of bootstrap.md — expected behavior since this team only has
+1 worker; substitution helper only fills positions that have a
+mapping member.
+
+### Two user-driven patches (slice 5 + menu)
+
+#### Patch 1 — `-a-79 slice 5`: rename + restart lead terminal
+
+@@Alex direct ask: "the terminal running the rich prompt to
+setup the team is the one that *becomes* the terminal running
+with the lead; once the user confirms the team setup, we will
+set the current terminal name to the lead's name and restart
+that terminal so it picks up on the name". Plus: "about the
+host: we tell them the name of the host, that's it; we don't
+need a terminal for the host. The host will use the lead's
+and other worker's terminal to talk to them."
+
+Diagnosis: pre-patch, after Bootstrap the host terminal stayed
+as `Terminal-1` with `CHAN_TAB_NAME=Terminal-1` and the lead's
+shell would expand `$CHAN_TAB_NAME` to that — not to the lead
+handle. Per addendum-b clarification #1, the lead IS the host
+session, so the terminal should be renamed + restarted to the
+lead handle on bootstrap.
+
+Patch (`web/src/state/teamOrchestrator.svelte.ts`):
+
+* Imports: added `sessionWindowId`, `renameTerminalTab`,
+  `markTerminalEnvNameRestarted` from existing modules.
+* New step 7 in `runTeamBootstrap` (after step 6 lead prompt
+  prime): find the host terminal via `findTerminalBySession`,
+  read the lead member from `wire.members.find(m => m.is_lead)`,
+  call `renameTerminalTab(leadTab, leadHandle)` then
+  `api.restartTerminal(sessionId, { name: leadHandle, window_id })`,
+  then `markTerminalEnvNameRestarted(leadTab)`.
+* Defensive no-op when host session is missing, terminal is
+  closed, or config has no `is_lead` member (matches step 6's
+  shape).
+* Restart failures emit notify without bailing the chain — the
+  team-load + worker spawn already happened.
+
+Walk: Bootstrap fired with `AlexWT` / `delta`. Top-bar tabs
+became `@@Lead` + `@@Worker1` (no `Terminal-1`). Clicked
+`@@Lead` → terminal area shows `session ended (explicit)` (old
+shell killed) followed by a fresh prompt; rich-prompt buffer
+survived the restart (`I'm @@AlexWT. You're $CHAN_TAB_NAME...`)
+since the buffer is SPA-side, not PTY-side. URL hash:
+`{n:@@Lead,a:1},{n:@@Worker1}`.
+
+#### Patch 2 — terminal right-click menu: Show/Hide Rich Prompt
+
+@@Alex direct ask: "in the terminal's right click menu: after
+the 'New Graph' option we will add a separator, 'Show/Hide
+Rich Prompt Cmd+P', separator again, then the rest of
+broadcast, as-is".
+
+Patch (`web/src/components/TerminalTab.svelte`):
+
+* Lucide import: added `MessageSquare`.
+* New `toggleRichPromptFromMenu()` function (closes the menu,
+  toggles `tab.richPrompt?.open` via existing open/close
+  helpers).
+* Inserted menu entry after the existing `New Graph` button +
+  separator, with another separator after it before the
+  broadcast section. Dynamic label: `Show Rich Prompt` when
+  closed, `Hide Rich Prompt` when open. Chord:
+  `chordFor("app.terminal.richPrompt")` resolves to
+  `Cmd+Alt+P` on this platform (Cmd+P alone is browser-owned;
+  the universal chord lives at Mod+. P + Cmd+Alt+P on web Mac
+  per shortcuts.ts:110).
+
+Walk: right-clicked terminal area → context menu showed entries
+in the correct order:
+1. (header / connected line)
+2. Set MCP env vars · Restart
+3. Find · Copy · Paste · Copy path to $CWD · Copy Scrollback
+4. from $cwd: New File · New Terminal · New File Browser · New Graph
+5. ─── separator ───
+6. **Show Rich Prompt  Cmd+Alt+P** (with MessageSquare icon)
+7. ─── separator ───
+8. broadcast input on/off: Select All · Terminal-1 (self)
+9. Settings · Reopen Closed Tab · Close
+
+Clicked the menu entry → rich-prompt panel opened at the bottom
+(empty buffer with "Write a multi-line command and Cmd+Enter"
+placeholder). Re-opened the menu → label correctly flipped to
+**Hide Rich Prompt**. Clicked → rich-prompt closed.
+
+### Verdict
+
+* `-a-95` HOLD.
+* `-a-79 slice 3` HOLD.
+* `-a-79 slice 5` (new) HOLD — patch by @@WebtestA at @@Alex's
+  direct ask.
+* Terminal right-click menu Show/Hide Rich Prompt entry HOLD —
+  patch by @@WebtestA at @@Alex's direct ask.
+
+### Still in queue (deferred to next session)
+
+* `-a-80 slice 2` Load Team dialog populated from config (FB
+  right-click on `Drafts/team-{name}` → "Load Team" → dialog
+  pre-populates from `api.teamGetConfig`).
+* `-a-79 slice 4` split-pane real estate (Split panes option +
+  airplane-grid + drag&drop slot assignment).
+
+### State at end of walk
+
+Lane-A test server torn down: team `delta` unloaded; chan serve
+killed; drive + drafts metadata wiped; chan remove ran; Chrome
+tab closed.
+
+Highlight: closed @@WebtestA's seedInput-visibility note from
+round 41 (slice 2 was the design fix) PLUS @@Alex's terminal-
+rename gap (new slice 5 patch). The two patches compose: lead's
+shell now has `CHAN_TAB_NAME=@@Lead`, so the identity prompt's
+`$CHAN_TAB_NAME` expands to `@@Lead` on submit.
+
+Contention: the round-41 git-state issue (local main 232+
+ahead of origin/main due to PR #1 dropping 225 phase-8 commits)
+remains UNRESOLVED. Round 43 lands 2 more local commits on top.
+Not pushing.

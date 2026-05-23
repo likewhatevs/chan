@@ -4179,3 +4179,101 @@ a/b/c from round 41 message).
   * `docs/journals/phase-8/alex/event-webtest-a-architect.md`
 
 Standing by for next ship.
+
+---
+
+## 2026-05-23 — round 43: 2 walks HOLD + 2 user-driven patches
+
+### Autonomous walks: HOLD ✅✅
+
+* `-a-95` welcome pane stale "scope for Graph" hint removed —
+  JS-probed body + bundle, both clean.
+* `-a-79 slice 3` process-template placement — `bootstrap.md`
+  lands at `<app-config>/<drive-hash>/team-{name}/docs/bootstrap.md`
+  with substitutions (`@@AlexWT`, `gamma`, `@@Worker1`, `phase-1`).
+
+### Patch 1 by @@WebtestA at @@Alex's direct ask: `-a-79 slice 5`
+
+@@Alex: "the terminal running the rich prompt to setup the team
+is the one that *becomes* the terminal running with the lead;
+once the user confirms the team setup, we will set the current
+terminal name to the lead's name and restart that terminal so
+it picks up on the name". Plus: "about the host: we tell them
+the name of the host, that's it; we don't need a terminal for
+the host."
+
+Diagnosis: pre-patch, host's `Terminal-1` stayed as-is after
+Bootstrap. `$CHAN_TAB_NAME` in lead's shell expanded to
+`Terminal-1`, not the lead handle. Slice 4 inline comment had
+flagged the gap ("Slice 5 could add a `moveTab` step if lead-
+relocation becomes a real workflow") but rename + restart was
+the cleaner fix per addendum-b clarification #1.
+
+Patch: `web/src/state/teamOrchestrator.svelte.ts` (35 net
+LOC). New step 7 in `runTeamBootstrap` after lead prompt prime:
+find host terminal → `renameTerminalTab(leadTab, leadHandle)`
+→ `api.restartTerminal(sessionId, {name, window_id})` →
+`markTerminalEnvNameRestarted`. Lead-entry sourced from
+`wire.members.find(m => m.is_lead)`. Defensive no-op when host
+session missing, terminal closed, or no `is_lead` member.
+Restart failures notify-only (chain keeps going).
+
+Empirical walk: top-bar tabs became `@@Lead` + `@@Worker1`
+(no `Terminal-1`). Click `@@Lead` → `session ended (explicit)`
++ fresh shell prompt + rich-prompt buffer survived restart.
+
+### Patch 2 by @@WebtestA at @@Alex's direct ask: Show/Hide Rich Prompt menu entry
+
+@@Alex: "in the terminal's right click menu: after the 'New
+Graph' option we will add a separator, 'Show/Hide Rich Prompt
+Cmd+P', separator again, then the rest of broadcast, as-is".
+
+Patch: `web/src/components/TerminalTab.svelte` (19 net LOC).
+Added `MessageSquare` lucide import +
+`toggleRichPromptFromMenu()` helper + menu button between the
+existing New-Graph-separator and the broadcast-section-label.
+Dynamic label `Show Rich Prompt` ↔ `Hide Rich Prompt` based
+on `tab.richPrompt?.open`. Chord
+`chordFor("app.terminal.richPrompt")` → `Cmd+Alt+P` on web
+Mac (per shortcuts.ts:110 — Cmd+P alone is browser-owned).
+
+Empirical walk: right-click terminal → menu shows the entries
+in the correct order (New File / New Terminal / New File
+Browser / New Graph → separator → **Show Rich Prompt
+Cmd+Alt+P** → separator → broadcast input on/off). Clicked
+the entry → rich-prompt opens; re-opened menu → label flipped
+to **Hide Rich Prompt**; clicked → rich-prompt closes.
+
+### Suggested commit shape
+
+Two commits, path-limited:
+
+1. **Subject**: `Team orchestrator slice 5: rename + restart
+   lead terminal (fullstack-a-79 slice 5)`
+   * `web/src/state/teamOrchestrator.svelte.ts`
+2. **Subject**: `Terminal: Show/Hide Rich Prompt entry in
+   right-click menu (per @@Alex direct ask)`
+   * `web/src/components/TerminalTab.svelte`
+3. **Subject**: `docs: webtest-a round 43 - a-95 + a-79 s3
+   HOLD + a-79 s5 patch + menu patch`
+   * `docs/journals/phase-8/webtest-a/webtest-a-1.md`
+   * `docs/journals/phase-8/alex/event-webtest-a-architect.md`
+
+Vitest pins for the new behavior are NOT added in this round
+(I'm webtest, not fullstack-a). @@FullStackA can pick up the
+test-pin work if needed; patches are wired correctly and walk
+HOLD.
+
+### Still pending (deferred next session)
+
+* `-a-80 slice 2` Load Team dialog populated from config.
+* `-a-79 slice 4` split-pane real estate.
+
+### Git state — STILL unresolved
+
+Local main was 232 ahead after round 42; round 43 lands 3 more
+(2 code patches + 1 docs). Now 235+ ahead. PR #1 merge at
+`1fd23e6` dropped 225 phase-8 commits at remote. **Not
+pushing** until @@Alex routes a/b/c from round 41 message.
+
+Standing by.
