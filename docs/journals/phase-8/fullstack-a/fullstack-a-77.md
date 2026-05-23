@@ -656,3 +656,121 @@ Per the memory rule. Per-path staging only.
 
 Push held. Standing by for clearance +
 slice 3 (Settings UI + Mod+L chord).
+
+---
+
+## Slice 3 (Settings UI + Mod+L chord)
+
+Date: 2026-05-23.
+
+### Scope
+
+Settings Features section extension:
+screensaver enable/disable toggle,
+inactivity-timeout input (clamped to
+SCREENSAVER_MIN/MAX), PIN setup +
+change/clear flow. Manual "Lock now"
+chord on `Mod+L` (web + native);
+escapeTerminal=true so it works even
+from inside an xterm.
+
+### Files touched
+
+* `web/src/components/SettingsPanel.svelte`
+  * Imported `hashPin`,
+    `SCREENSAVER_MAX_TIMEOUT_SECS`,
+    `SCREENSAVER_MIN_TIMEOUT_SECS` from
+    `./state/screensaver`.
+  * Imported `loadScreensaverState`,
+    `pauseScreensaverTimer` from
+    `./state/screensaver.svelte`.
+  * Added 6 reactive state vars:
+    `screensaverEnabled` (null sentinel
+    for pre-load), `screensaverTimeoutSecs`,
+    `screensaverPinSet`, `screensaverBusy`,
+    `screensaverError`, `pinDialog`.
+  * Extended `loadFeaturesState()` to
+    fetch `api.screensaverState()` +
+    capture errors into the section's
+    error pin (mirrors the BGE +
+    reports patterns from slice 2 of
+    `-a-76`).
+  * Added handlers:
+    `toggleScreensaverEnabled`,
+    `commitTimeout`,
+    `openPinDialog`/`cancelPinDialog`,
+    `commitPin` (validates match +
+    hashes via PBKDF2 with the drive
+    root as salt), `clearPin`. Each
+    refreshes the singleton via
+    `loadScreensaverState()` so the
+    App-root tracker re-arms with the
+    new shape.
+  * Markup: `.feature-row.screensaver-row`
+    with enable toggle on the right;
+    sub-block (timeout input + PIN
+    controls + inline PIN dialog)
+    rendered only when
+    `screensaverEnabled === true`.
+  * `onMount` now grabs a
+    `pauseScreensaverTimer()` release fn
+    + fires it on destroy, so a long
+    Settings session doesn't trigger
+    the lock mid-config.
+* `web/src/state/shortcuts.ts`
+  * Added `id: "app.screensaver.lock",
+    label: "Lock screen", web: "Mod+L",
+    native: "Mod+L", group: "App",
+    escapeTerminal: true`.
+* `web/src/App.svelte`
+  * Imported `lockNow` from
+    `./state/screensaver.svelte`.
+  * Added `case "app.screensaver.lock":
+    lockNow(); return;` branch in
+    `runCommand`.
+  * Added Mod+L hotkey detection in
+    `onWindowKey` (also covers the
+    desktop bridge path that replays
+    via `chan:command`).
+* `web/src/state/screensaverSettings.test.ts`
+  (new) — 13 architectural pins for:
+  shortcut entry shape + group +
+  escapeTerminal, App.svelte chord
+  routing + runCommand branch +
+  lockNow import, Settings imports +
+  state vars + loadFeaturesState
+  fetch, toggle/timeout/PIN/clear
+  handlers, pauseScreensaverTimer
+  mount/unmount wiring, markup
+  structure.
+
+### Run gate
+
+* `npx svelte-check --tsconfig
+  tsconfig.json` → 0 errors, 0
+  warnings.
+* `npx vitest run` → 109 files, 1115
+  tests, all passing.
+* `npm run build` → clean (web bundle
+  fresh).
+* `cargo fmt --check` → clean.
+* `cargo clippy --all-targets -- -D
+  warnings` → clean.
+* `cargo test --workspace` → green.
+
+### Suggested commit subject
+
+```
+Screensaver: Settings UI + Mod+L lock chord (fullstack-a-77 slice 3)
+```
+
+### Files for `git add` (per-path)
+
+* `web/src/components/SettingsPanel.svelte`
+* `web/src/state/shortcuts.ts`
+* `web/src/App.svelte`
+* `web/src/state/screensaverSettings.test.ts`
+* `docs/journals/phase-8/fullstack-a/fullstack-a-77.md`
+
+Auth held. Standing by for cleared push
++ next dispatched task.

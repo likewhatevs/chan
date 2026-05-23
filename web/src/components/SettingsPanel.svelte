@@ -10,6 +10,15 @@
 
   import { onMount } from "svelte";
   import { api } from "../api/client";
+  import {
+    hashPin,
+    SCREENSAVER_MAX_TIMEOUT_SECS,
+    SCREENSAVER_MIN_TIMEOUT_SECS,
+  } from "../state/screensaver";
+  import {
+    loadScreensaverState,
+    pauseScreensaverTimer,
+  } from "../state/screensaver.svelte";
   import type {
     BuildInfo,
     GlobalConfig,
@@ -255,12 +264,30 @@
   // Settings overlay stays a single-screen feature toggle
   // rather than re-implementing the BGE model-download state
   // machine.
+  //
+  // `fullstack-a-77` slice 3 extends the Features section
+  // with the screensaver controls (enable + timeout + PIN
+  // setup/clear). State machine lives in
+  // `state/screensaver.svelte.ts`; Settings is the
+  // configuration surface.
   let reportsEnabled = $state<boolean | null>(null);
   let reportsBusy = $state(false);
   let reportsError = $state<string | null>(null);
   let semanticState = $state<SemanticState | null>(null);
   let semanticBusy = $state(false);
   let semanticError = $state<string | null>(null);
+  // `fullstack-a-77` slice 3 screensaver state. Mirrors
+  // `screensaver` singleton's wire shape; Settings owns the
+  // edit buffer (timeout slider + PIN entry) before the
+  // commit fires.
+  let screensaverEnabled = $state<boolean | null>(null);
+  let screensaverTimeoutSecs = $state<number>(300);
+  let screensaverPinSet = $state(false);
+  let screensaverBusy = $state(false);
+  let screensaverError = $state<string | null>(null);
+  /// PIN edit buffer. `null` when not showing the dialog;
+  /// otherwise carries the pin1/pin2 confirm pair.
+  let pinDialog = $state<{ pin1: string; pin2: string } | null>(null);
 
   async function loadFeaturesState(): Promise<void> {
     try {
@@ -277,6 +304,14 @@
       // build doesn't ship embeddings; we surface that as an
       // explanatory hint rather than an error.
       semanticState = null;
+    }
+    try {
+      const s = await api.screensaverState();
+      screensaverEnabled = s.enabled;
+      screensaverTimeoutSecs = s.timeout_secs;
+      screensaverPinSet = s.pin_set;
+    } catch (err) {
+      screensaverError = `screensaver: ${(err as Error).message ?? err}`;
     }
   }
 
@@ -318,12 +353,124 @@
     }
   }
 
+  // `fullstack-a-77` slice 3: screensaver toggle handlers +
+  // PIN setup flow. Each handler calls the matching api
+  // method + refreshes the screensaver singleton via
+  // `loadScreensaverState()` so the App-root tracker
+  // re-arms with the new state.
+
+  async function toggleScreensaverEnabled(): Promise<void> {
+    if (screensaverEnabled === null || screensaverBusy) return;
+    screensaverBusy = true;
+    screensaverError = null;
+    try {
+      const target = !screensaverEnabled;
+      const s = await api.screensaverPatch({ enabled: target });
+      screensaverEnabled = s.enabled;
+      screensaverTimeoutSecs = s.timeout_secs;
+      screensaverPinSet = s.pin_set;
+      await loadScreensaverState();
+    } catch (err) {
+      screensaverError = `toggle failed: ${(err as Error).message ?? err}`;
+    } finally {
+      screensaverBusy = false;
+    }
+  }
+
+  async function commitTimeout(): Promise<void> {
+    if (screensaverBusy) return;
+    if (screensaverTimeoutSecs < SCREENSAVER_MIN_TIMEOUT_SECS) {
+      screensaverTimeoutSecs = SCREENSAVER_MIN_TIMEOUT_SECS;
+    }
+    if (screensaverTimeoutSecs > SCREENSAVER_MAX_TIMEOUT_SECS) {
+      screensaverTimeoutSecs = SCREENSAVER_MAX_TIMEOUT_SECS;
+    }
+    screensaverBusy = true;
+    screensaverError = null;
+    try {
+      const s = await api.screensaverPatch({ timeout_secs: screensaverTimeoutSecs });
+      screensaverEnabled = s.enabled;
+      screensaverTimeoutSecs = s.timeout_secs;
+      screensaverPinSet = s.pin_set;
+      await loadScreensaverState();
+    } catch (err) {
+      screensaverError = `timeout save failed: ${(err as Error).message ?? err}`;
+    } finally {
+      screensaverBusy = false;
+    }
+  }
+
+  function openPinDialog(): void {
+    pinDialog = { pin1: "", pin2: "" };
+  }
+
+  function cancelPinDialog(): void {
+    pinDialog = null;
+  }
+
+  async function commitPin(): Promise<void> {
+    if (!pinDialog || screensaverBusy) return;
+    const { pin1, pin2 } = pinDialog;
+    if (!pin1) {
+      screensaverError = "Enter a PIN";
+      return;
+    }
+    if (pin1 !== pin2) {
+      screensaverError = "PINs don't match";
+      return;
+    }
+    screensaverBusy = true;
+    screensaverError = null;
+    try {
+      const salt = drive.info?.root ?? "";
+      const hash = await hashPin(pin1, salt);
+      const s = await api.screensaverSetPin(hash);
+      screensaverEnabled = s.enabled;
+      screensaverTimeoutSecs = s.timeout_secs;
+      screensaverPinSet = s.pin_set;
+      pinDialog = null;
+      await loadScreensaverState();
+    } catch (err) {
+      screensaverError = `PIN save failed: ${(err as Error).message ?? err}`;
+    } finally {
+      screensaverBusy = false;
+    }
+  }
+
+  async function clearPin(): Promise<void> {
+    if (screensaverBusy) return;
+    screensaverBusy = true;
+    screensaverError = null;
+    try {
+      const s = await api.screensaverClearPin();
+      screensaverEnabled = s.enabled;
+      screensaverTimeoutSecs = s.timeout_secs;
+      screensaverPinSet = s.pin_set;
+      await loadScreensaverState();
+    } catch (err) {
+      screensaverError = `PIN clear failed: ${(err as Error).message ?? err}`;
+    } finally {
+      screensaverBusy = false;
+    }
+  }
+
+  /// `fullstack-a-77` slice 3: pause the screensaver
+  /// inactivity timer while Settings is open so a long
+  /// configuration session doesn't trigger the lock
+  /// mid-edit. Released on close.
+  let screensaverPauseRelease: (() => void) | null = null;
+
   onMount(() => {
     // Make sure we have the latest server state when the tab opens.
     void refreshDrive();
     void loadGlobalConfig();
     void loadBuildInfo();
     void loadFeaturesState();
+    screensaverPauseRelease = pauseScreensaverTimer();
+    return () => {
+      screensaverPauseRelease?.();
+      screensaverPauseRelease = null;
+    };
   });
 </script>
 
@@ -493,6 +640,96 @@
               On
             {:else if !semanticState.model_present}
               Model not downloaded
+            {:else}
+              Off
+            {/if}
+          </span>
+        </label>
+      </div>
+      <!-- `fullstack-a-77` slice 3: screensaver controls.
+           Enable toggle on top; timeout + PIN management
+           inside a sub-block that shows only when enabled
+           (no point in configuring a screensaver that's
+           off). -->
+      <div class="feature-row screensaver-row">
+        <div class="feature-meta">
+          <div class="feature-title">Screen lock</div>
+          <div class="feature-sub">
+            Auto-lock the drive view after inactivity.
+            Local-only PIN protection (Mod+L locks now).
+          </div>
+          {#if screensaverError}
+            <div class="err" role="alert">{screensaverError}</div>
+          {/if}
+          {#if screensaverEnabled === true}
+            <div class="screensaver-config">
+              <label class="screensaver-timeout">
+                <span>Inactivity timeout (seconds):</span>
+                <input
+                  type="number"
+                  bind:value={screensaverTimeoutSecs}
+                  onchange={commitTimeout}
+                  min={SCREENSAVER_MIN_TIMEOUT_SECS}
+                  max={SCREENSAVER_MAX_TIMEOUT_SECS}
+                  step="30"
+                  disabled={screensaverBusy}
+                />
+              </label>
+              <div class="screensaver-pin-controls">
+                {#if pinDialog === null}
+                  {#if screensaverPinSet}
+                    <button type="button" onclick={openPinDialog} disabled={screensaverBusy}>
+                      Change PIN
+                    </button>
+                    <button type="button" onclick={clearPin} disabled={screensaverBusy}>
+                      Clear PIN
+                    </button>
+                  {:else}
+                    <button type="button" onclick={openPinDialog} disabled={screensaverBusy}>
+                      Set PIN
+                    </button>
+                    <span class="muted">No PIN yet — lockout informational only.</span>
+                  {/if}
+                {:else}
+                  <input
+                    type="password"
+                    bind:value={pinDialog.pin1}
+                    placeholder="PIN"
+                    autocomplete="off"
+                    disabled={screensaverBusy}
+                  />
+                  <input
+                    type="password"
+                    bind:value={pinDialog.pin2}
+                    placeholder="Confirm"
+                    autocomplete="off"
+                    disabled={screensaverBusy}
+                  />
+                  <button type="button" onclick={commitPin} disabled={screensaverBusy}>
+                    Save
+                  </button>
+                  <button type="button" onclick={cancelPinDialog} disabled={screensaverBusy}>
+                    Cancel
+                  </button>
+                {/if}
+              </div>
+            </div>
+          {/if}
+        </div>
+        <label class="feature-switch">
+          <input
+            type="checkbox"
+            checked={screensaverEnabled === true}
+            disabled={screensaverEnabled === null || screensaverBusy}
+            onchange={toggleScreensaverEnabled}
+          />
+          <span>
+            {#if screensaverEnabled === null}
+              loading…
+            {:else if screensaverBusy}
+              flipping…
+            {:else if screensaverEnabled}
+              On
             {:else}
               Off
             {/if}

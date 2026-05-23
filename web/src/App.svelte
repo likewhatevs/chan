@@ -97,6 +97,7 @@
   import {
     installScreensaverTracker,
     loadScreensaverState,
+    lockNow,
   } from "./state/screensaver.svelte";
   import ScreensaverOverlay from "./components/ScreensaverOverlay.svelte";
 
@@ -738,6 +739,18 @@
       void createDraftAndOpen();
       return;
     }
+    // `fullstack-a-77` slice 3: Mod+L → lock screen. On web
+    // Mac the browser owns Cmd+L (address bar focus); the
+    // chord fires only on platforms where the browser
+    // doesn't reserve it. chan-desktop's KEY_BRIDGE_JS
+    // intercepts the native Cmd+L + replays as
+    // `chan:command app.screensaver.lock`, which the
+    // runCommand switch routes through `lockNow()`.
+    if (meta && !e.altKey && !e.shiftKey && !e.ctrlKey && e.code === "KeyL") {
+      e.preventDefault();
+      lockNow();
+      return;
+    }
   }
 
   async function createDraftAndOpen(): Promise<void> {
@@ -825,6 +838,14 @@
       // handler.
       case "app.draft.new":
         void createDraftAndOpen();
+        return;
+      // `fullstack-a-77` slice 3: manual screensaver lock.
+      // Routes both the SPA chord (`Mod+L` via onWindowKey
+      // when the browser doesn't reserve it) AND the
+      // chan-desktop KEY_BRIDGE_JS replay through the same
+      // handler.
+      case "app.screensaver.lock":
+        lockNow();
         return;
       case "app.pane.next":
         selectNextPane();
