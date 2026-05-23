@@ -21,7 +21,7 @@
   //     parent's `oncontextmenu` so right-click feels native.
 
   import type { Snippet } from "svelte";
-  import { clampToViewport } from "./menuClamp";
+  import { clampToViewport, triggerMenuX } from "./menuClamp";
 
   /// Move the element out to <body> so its `position: fixed` resolves
   /// against the viewport even when an ancestor has a transform set
@@ -77,8 +77,7 @@
   /// bottom of the window).
   function placeUnderTrigger(r: DOMRect): void {
     const gap = 6;
-    // Default: align right edge of bubble with right edge of trigger.
-    const desiredX = r.right - width;
+    const desiredX = triggerMenuX(r, width);
     const desiredY = r.bottom + gap;
     pos = clampToViewport(width, height, { x: desiredX, y: desiredY });
     refineAfterMount(desiredX, desiredY);

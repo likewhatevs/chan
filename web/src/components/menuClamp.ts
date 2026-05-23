@@ -52,6 +52,21 @@ export function clampToViewport(
   return { left, top };
 }
 
+/// Initial X anchor for a trigger-opened menu. Menus on the normal
+/// right-side chrome align their right edge to the trigger. When
+/// Hybrid is flipped, the trigger sits on the left edge, so aligning
+/// right would start the first frame off-screen before the clamp
+/// refinement runs. In that case, open to the right of the trigger.
+export function triggerMenuX(
+  trigger: Pick<DOMRect, "left" | "right">,
+  menuWidth: number,
+  margin = 8,
+): number {
+  const alignRight = trigger.right - menuWidth;
+  if (alignRight < margin) return trigger.left;
+  return alignRight;
+}
+
 /// Svelte action: place the element near (x, y), clamping into the
 /// viewport using the element's ACTUAL rendered size. Re-runs when
 /// the params change so the menu re-clamps if the caller moves it.
