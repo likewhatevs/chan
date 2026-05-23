@@ -921,27 +921,43 @@
 
 {#if menu}
   <div class="ctx" use:portal use:clampMenu={{ x: menu.x, y: menu.y }}>
+    <!-- `fullstack-a-67e`: in-tree selection menu reshape per
+         addendum-a's File Browser spec. Section label first
+         ("From selection"), workflow entries (New File / New
+         Dir / Search / New Terminal / New Graph), then a
+         separator and the per-row ops (Copy Path / Rename /
+         Delete) preserved.
+         Addendum-a doesn't explicitly list Copy Path / Rename
+         / Delete; keeping them avoids regressing destructive +
+         path ops with no other surface. Flag in journal.
+         The "New File or Directory" unified dialog (spec
+         calls for one input that detects file-vs-dir) is
+         deferred to slice 2 — needs a `kind: "either"`
+         extension to PathPromptModal. -->
+    <div class="from-selection-label">From selection</div>
     {#if menu.isDir}
       <button onclick={() => newFile(menu!.path)}>
         <FilePlus size={16} strokeWidth={1.75} aria-hidden="true" />
-        <span>New file</span>
+        <span>New File</span>
       </button>
       <button onclick={() => newDir(menu!.path)}>
         <FolderPlus size={16} strokeWidth={1.75} aria-hidden="true" />
-        <span>New directory</span>
+        <span>New Directory</span>
       </button>
     {/if}
-    <!-- `fullstack-42`: dropped "Graph from here"; Pane Mode
-         + context-aware spawn (`fullstack-43`) covers it via
-         Cmd+K 3 with the selected node as context. -->
     <button onclick={() => searchThis(menu!.path, menu!.isDir)}>
       <Search size={16} strokeWidth={1.75} aria-hidden="true" />
-      <span>Search this</span>
+      <span>Search</span>
     </button>
     <button onclick={() => terminalFromHere(menu!.path, menu!.isDir)}>
       <TerminalIcon size={16} strokeWidth={1.75} aria-hidden="true" />
-      <span>Terminal from here</span>
+      <span>New Terminal</span>
     </button>
+    <button onclick={() => graphThis(menu!.path, menu!.isDir)}>
+      <Network size={16} strokeWidth={1.75} aria-hidden="true" />
+      <span>New Graph</span>
+    </button>
+    <div class="ctx-sep" role="separator"></div>
     <button onclick={() => copyPath(menu!.path)}>
       <Copy size={16} strokeWidth={1.75} aria-hidden="true" />
       <span>Copy Path</span>
@@ -1220,6 +1236,20 @@
   }
   .ctx button:hover { background: var(--hover-bg); }
   .ctx button.danger { color: var(--warn-text); }
+  /* `fullstack-a-67e`: "From selection" section label.
+     Subdued style mirroring TerminalTab's `.from-cwd-label`. */
+  .from-selection-label {
+    padding: 4px 8px 2px;
+    color: var(--text-secondary);
+    font-size: 11px;
+    text-transform: lowercase;
+    letter-spacing: 0.02em;
+  }
+  .ctx-sep {
+    height: 1px;
+    background: var(--border);
+    margin: 4px 6px;
+  }
   .ctx :global(svg) {
     width: 14px;
     height: 14px;

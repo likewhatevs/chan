@@ -3,16 +3,18 @@
   import {
     ArrowLeft,
     ArrowRight,
-    FilePlus,
     FolderOpen,
-    FolderPlus,
+    HardDrive,
+    History,
     Maximize2,
     Minimize2,
     Network,
     PanelLeftOpen,
     PanelRightOpen,
     Pencil,
+    Settings2,
     Users,
+    X,
   } from "lucide-svelte";
   import {
     overlayMaximized,
@@ -37,7 +39,6 @@
     isFullyExpanded,
     openFsGraphForDirectory,
     openFsGraphForFile,
-    openGraphForDrive,
     paneWidths,
     persistPaneWidths,
     refreshTree,
@@ -45,9 +46,15 @@
     tree,
     treeExpanded,
     drive,
+    ui,
   } from "../state/store.svelte";
-  import { openInActivePane } from "../state/tabs.svelte";
+  import {
+    canReopenClosedTab,
+    openInActivePane,
+    reopenClosedTab,
+  } from "../state/tabs.svelte";
   import type { BrowserTab } from "../state/tabs.svelte";
+  import { api } from "../api/client";
 
   type Variant = "overlay" | "dock" | "tab";
   type Side = "left" | "right";
@@ -57,11 +64,18 @@
     side,
     tab,
     onClose,
+    onFlip,
   }: {
     variant?: Variant;
     side?: Side;
     tab?: BrowserTab;
     onClose?: () => void;
+    // `fullstack-a-67e`: parent (Pane.svelte) supplies the flip
+    // callback for the tab variant. Dock + overlay variants
+    // don't pass one — the Settings (flip) entry hides for
+    // those variants since there's no Hybrid back-side to flip
+    // to.
+    onFlip?: () => void;
   } = $props();
 
   const isOverlay = $derived(variant === "overlay");
@@ -283,24 +297,29 @@
     await refreshTree();
   }
 
-  async function newFileHere(): Promise<void> {
-    menu?.close();
-    await fileOps.createFile("");
-  }
+  /// `fullstack-a-67e`: dropped `newFileHere` / `newDirHere` /
+  /// `graphDrive` / `renameDrive` (modal) — the addendum-a spec
+  /// moves New File / New Dir to the selection menu (where they
+  /// can root under the selected directory) and replaces the
+  /// modal "Rename drive..." entry with an inline editable
+  /// input in the menu header. `openGraphForDrive` is still
+  /// reachable via the empty-pane spawn grid + Cmd+Shift+M.
 
-  async function newDirHere(): Promise<void> {
-    menu?.close();
-    await fileOps.createDir("");
-  }
-
-  function graphDrive(): void {
-    menu?.close();
-    openGraphForDrive();
-  }
-
-  async function renameDrive(): Promise<void> {
-    menu?.close();
-    await fileOps.renameDrive();
+  /// `fullstack-a-67e`: inline drive-rename per addendum-a's
+  /// "editable like Terminal name" spec. Mirrors
+  /// `renameTerminalTab`'s shape — oninput → PATCH on every
+  /// keystroke + write the fresh DriveInfo back into the
+  /// store.
+  async function commitDriveName(next: string): Promise<void> {
+    const trimmed = next.trim();
+    if (!trimmed) return;
+    if (trimmed === drive.info?.name) return;
+    try {
+      const info = await api.updatePreferences({ name: trimmed });
+      drive.info = info;
+    } catch (err) {
+      ui.status = `rename failed: ${(err as Error).message ?? err}`;
+    }
   }
 
   function showDriveInfo(): void {
@@ -308,6 +327,33 @@
     browserSelection.path = null;
     browserSelection.showDrive = true;
     browserState.inspectorOpen = true;
+  }
+
+  /// `fullstack-a-67e`: flip to back-side config view. Routes
+  /// through the `onFlip` callback the tab variant's parent
+  /// (Pane.svelte) supplies. The menu entry is gated on
+  /// `isTab && onFlip` so dock + overlay variants don't render
+  /// a Settings entry that would no-op.
+  function flipToSettings(): void {
+    menu?.close();
+    onFlip?.();
+  }
+
+  /// `fullstack-a-67e`: Reopen Closed Tab — parity with the
+  /// terminal + editor menus. Available regardless of variant
+  /// since the closed-tab stack is window-global; the entry
+  /// disables when the stack is empty.
+  function doReopenClosedTab(): void {
+    menu?.close();
+    reopenClosedTab();
+  }
+
+  /// `fullstack-a-67e`: Close — only renders in the tab variant
+  /// where there's a tab to close. Routes through `onClose`
+  /// (which Pane.svelte wires to `closeTab(pane.id, tab.id)`).
+  function closeFromMenu(): void {
+    menu?.close();
+    onClose?.();
   }
 
   function openImportContacts(): void {
@@ -471,6 +517,47 @@
 </div>
 
 {#snippet menuItems()}
+  <!-- `fullstack-a-67e`: addendum-a File Browser menu spec.
+       Header: editable Drive name (mirror of Terminal name) +
+       full-path row (drive icon, grey, fade-on-overflow, click
+       → drive inspector). Body: dock toggles, expand/collapse +
+       reload, import contacts. Foot: Settings (flipHybrid)
+       + Reopen Closed Tab + Close.
+       Selection menu (rename/delete/etc.) lives on FileTree's
+       row right-click; this menu is the FB tab right-click +
+       hamburger. New file / New directory entries moved to the
+       selection menu where they're CWD-aware. -->
+  <li class="drive-rename-row" role="none">
+    <label class="drive-rename-label">
+      <Pencil size={15} strokeWidth={1.75} aria-hidden="true" />
+      <span>Drive</span>
+    </label>
+    <input
+      class="drive-rename-input"
+      value={drive.info?.name ?? ""}
+      spellcheck="false"
+      oninput={(e) => void commitDriveName((e.currentTarget as HTMLInputElement).value)}
+      onkeydown={(e) => {
+        if (e.key === "Enter") {
+          e.preventDefault();
+          (e.currentTarget as HTMLInputElement).blur();
+        }
+      }}
+    />
+  </li>
+  <li>
+    <button
+      role="menuitem"
+      class="drive-path-row"
+      onclick={showDriveInfo}
+      title={drive.info?.root}
+      disabled={!drive.info?.root}
+    >
+      <HardDrive size={16} strokeWidth={1.75} aria-hidden="true" />
+      <span class="drive-path-text">{drive.info?.root ?? ""}</span>
+    </button>
+  </li>
+  <li class="sep" role="separator"></li>
   <li>
     <button role="menuitem" onclick={() => toggleStick("left")}>
       <PanelLeftOpen size={16} strokeWidth={1.75} aria-hidden="true" />
@@ -491,31 +578,6 @@
   </li>
   <li class="sep" role="separator"></li>
   <li>
-    <button role="menuitem" onclick={newFileHere}>
-      <FilePlus size={16} strokeWidth={1.75} aria-hidden="true" />
-      <span class="menu-row-label">New file</span>
-      <span class="menu-row-chord">{chordFor("app.file.new") ?? ""}</span>
-    </button>
-  </li>
-  <li>
-    <button role="menuitem" onclick={newDirHere}>
-      <FolderPlus size={16} strokeWidth={1.75} aria-hidden="true" />
-      <span class="menu-row-label">New directory</span>
-      <span class="menu-row-chord"></span>
-    </button>
-  </li>
-  <li>
-    <button role="menuitem" onclick={openImportContacts}>
-      <Users size={16} strokeWidth={1.75} aria-hidden="true" />
-      <span class="menu-row-label">Import contacts...</span>
-      <span class="menu-row-chord"></span>
-    </button>
-  </li>
-  <!-- `fullstack-42`: dropped "Graph from here" — Pane Mode covers
-       it via Cmd+K 3 with the current browser scope / selection as
-       context (`fullstack-43`). -->
-  <li class="sep" role="separator"></li>
-  <li>
     <button role="menuitem" onclick={toggleAll}>
       <span class="glyph" aria-hidden="true">⇅</span>
       <span class="menu-row-label">
@@ -533,27 +595,43 @@
   </li>
   <li class="sep" role="separator"></li>
   <li>
-    <button role="menuitem" onclick={renameDrive}>
-      <Pencil size={16} strokeWidth={1.75} aria-hidden="true" />
-      <span class="menu-row-label">Rename drive...</span>
+    <button role="menuitem" onclick={openImportContacts}>
+      <Users size={16} strokeWidth={1.75} aria-hidden="true" />
+      <span class="menu-row-label">Import contacts...</span>
       <span class="menu-row-chord"></span>
     </button>
   </li>
-  <li>
-    <button
-      role="menuitem"
-      class="folder-row"
-      onclick={showDriveInfo}
-      title={drive.info?.root}
-      disabled={!drive.info?.root}
-    >
-      <FolderOpen size={16} strokeWidth={1.75} aria-hidden="true" />
-      <span class="folder-text">
-        <span class="folder-label">Directory</span>
-        <span class="folder-path mono">{drive.info?.root ?? ""}</span>
-      </span>
-    </button>
-  </li>
+  {#if isTab && onFlip}
+    <li class="sep" role="separator"></li>
+    <li>
+      <button role="menuitem" onclick={flipToSettings}>
+        <Settings2 size={16} strokeWidth={1.75} aria-hidden="true" />
+        <span class="menu-row-label">Settings</span>
+        <span class="menu-row-chord"></span>
+      </button>
+    </li>
+  {/if}
+  {#if isTab}
+    <li class="sep" role="separator"></li>
+    <li>
+      <button
+        role="menuitem"
+        onclick={doReopenClosedTab}
+        disabled={!canReopenClosedTab()}
+      >
+        <History size={16} strokeWidth={1.75} aria-hidden="true" />
+        <span class="menu-row-label">Reopen Closed Tab</span>
+        <span class="menu-row-chord">{chordFor("app.tab.reopenClosed") ?? ""}</span>
+      </button>
+    </li>
+    <li>
+      <button role="menuitem" onclick={closeFromMenu}>
+        <X size={16} strokeWidth={1.75} aria-hidden="true" />
+        <span class="menu-row-label">Close</span>
+        <span class="menu-row-chord">{chordFor("app.tab.close") ?? ""}</span>
+      </button>
+    </li>
+  {/if}
 {/snippet}
 
 <ImportContactsModal
@@ -610,30 +688,76 @@
     color: var(--text);
     border-color: var(--btn-hover);
   }
-  :global(.hamburger-menu .folder-row) { align-items: flex-start; }
-  .folder-text {
+  /* `fullstack-a-67e`: inline drive-rename row + drive-path
+     row at the head of the FB tab right-click menu. Mirror of
+     Terminal's name input + status row (TerminalTab.svelte
+     `rename-row` + `terminal-status-row`).
+     The :global wrapper drops the `<li>` selectors through to
+     the portal'd menu, which renders into <body>. */
+  :global(.hamburger-menu li.drive-rename-row) {
     display: flex;
-    flex-direction: column;
-    gap: 1px;
-    min-width: 0;
+    align-items: center;
+    gap: 8px;
+    padding: 6px 8px;
+  }
+  :global(.hamburger-menu .drive-rename-label) {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    color: var(--text-secondary);
+    font-size: 12px;
+    text-transform: lowercase;
+    letter-spacing: 0.02em;
+    flex-shrink: 0;
+  }
+  :global(.hamburger-menu .drive-rename-input) {
     flex: 1;
+    min-width: 0;
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    color: var(--text);
+    font: inherit;
+    font-size: 13px;
+    padding: 3px 6px;
   }
-  .folder-label {
-    font-size: 12px;
-    color: var(--text-secondary);
-    text-transform: uppercase;
-    letter-spacing: 0.04em;
+  :global(.hamburger-menu .drive-rename-input:focus) {
+    outline: none;
+    border-color: var(--accent);
   }
-  .folder-path {
-    font-size: 12px;
+  :global(.hamburger-menu .drive-path-row) {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    width: 100%;
+    background: none;
+    border: 0;
     color: var(--text-secondary);
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    direction: rtl;
+    cursor: pointer;
+    padding: 6px 8px;
     text-align: left;
   }
-  .mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+  :global(.hamburger-menu .drive-path-row:hover) {
+    color: var(--text);
+  }
+  :global(.hamburger-menu .drive-path-row:disabled) {
+    cursor: default;
+  }
+  :global(.hamburger-menu .drive-path-text) {
+    flex: 1;
+    min-width: 0;
+    white-space: nowrap;
+    overflow: hidden;
+    font-size: 12px;
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    mask-image: linear-gradient(to right, black calc(100% - 1.25rem), transparent);
+    -webkit-mask-image: linear-gradient(to right, black calc(100% - 1.25rem), transparent);
+  }
+  /* `fullstack-a-67e`: `.folder-text` / `.folder-label` /
+     `.folder-path` / `.mono` selectors dropped along with the
+     "Rename drive..." + "Directory" rows they styled. The new
+     drive-rename + drive-path rows have their own selectors
+     above. */
   .body {
     flex: 1;
     display: flex;

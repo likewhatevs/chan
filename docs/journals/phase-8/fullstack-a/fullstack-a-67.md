@@ -691,3 +691,173 @@ Autonomous-commit mode. No clearance held.
 Next: -a-67e (File Browser) + -a-67f (Editor),
 plus the -a-67d slice-2 (MCP modal) + slice-3
 (Jitter backend scope-poke).
+
+## 2026-05-23 — slice -a-67e (File Browser menus revamp)
+
+SPA-only. Two FB menus reshaped per addendum-a:
+the FB tab right-click / hamburger
+(FileBrowserSurface.svelte) and the in-tree
+selection menu (FileTree.svelte).
+
+### FB tab right-click (FileBrowserSurface)
+
+Header:
+* Inline editable Drive name (mirror of Terminal
+  name input). Oninput → PATCH preferences
+  via the new `commitDriveName` helper +
+  echo fresh DriveInfo back into the store.
+* Drive-path row with HardDrive icon, monospace
+  text, fade-on-overflow (same `mask-image`
+  pattern as `-a-67 slice 1`'s graph-scope-row).
+  Click → drive inspector.
+
+Body (in order):
+* SEP → (Un)Dock left / (Un)Dock right.
+* SEP → Expand/Collapse all directories / Reload.
+* SEP → Import Contacts.
+
+Foot (tab variant only):
+* Settings (flipHybrid via new `onFlip` callback
+  prop). Pane.svelte wires
+  `onFlip={() => flipHybrid(pane.id)}` for tab
+  variant; dock + overlay variants don't pass
+  it so the entry hides.
+* Reopen Closed Tab (disabled when stack
+  empty).
+* Close (routes through `onClose` —
+  Pane.svelte's existing wiring covers it).
+
+Dropped:
+* `Rename drive...` modal entry — replaced by
+  the inline input.
+* `New file` / `New directory` entries — moved
+  to the selection menu where they're rooted
+  under the selected directory.
+
+### FB in-tree selection menu (FileTree)
+
+* New `"From selection"` label at the top.
+* `New File` / `New Directory` (kept; gated on
+  `isDir`).
+* `Search` (was "Search this") — relabel.
+* `New Terminal` (was "Terminal from here") —
+  relabel.
+* `New Graph` — NEW entry; routes through
+  the existing `graphThis` helper.
+* SEP (`.ctx-sep`).
+* Copy Path / Rename / Move / Delete —
+  preserved.
+
+### Decisions
+
+* **Copy Path / Rename / Delete kept** even
+  though addendum-a doesn't explicitly list
+  them in the selection menu spec. Dropping
+  destructive + path-copy ops without
+  another surface would regress critical
+  workflows. Flagged for @@Alex review;
+  trivial to drop if requested.
+* **Unified `New File or Directory` dialog**
+  deferred to slice 2. The spec calls for one
+  input that detects file-vs-dir from path
+  shape; that needs a `kind: "either"`
+  extension to `PathPromptModal` + a
+  per-typestroke detector. Slice 1 keeps
+  the two existing entries.
+* **Settings (flip) entry in FileTree** —
+  spec lists it; deferred to slice 2.
+  FileTree is shared across dock / overlay /
+  tab variants. The cleanest wire is to pipe
+  `onFlip` down from FBSurface → FileTree as
+  a prop. Slice 1 lands the FBSurface flip
+  entry (the substantial change); the
+  in-tree flip is a small follow-up.
+* **`onFlip` callback prop** (not paneId
+  prop) — same shape as the existing
+  `onClose` callback. Keeps Pane.svelte as
+  the only consumer of `flipHybrid` for the
+  FB tab; the surface stays paneId-agnostic.
+
+### Files touched
+
+* `web/src/components/FileBrowserSurface.svelte`
+  * Imports: dropped `FilePlus` / `FolderPlus`;
+    added `HardDrive` / `History` /
+    `Settings2` / `X`. Added `ui` + `api` +
+    `canReopenClosedTab` + `reopenClosedTab`.
+    Dropped `openGraphForDrive`.
+  * Props: added `onFlip?: () => void`.
+  * Helpers: added `commitDriveName`,
+    `flipToSettings`, `doReopenClosedTab`,
+    `closeFromMenu`. Dropped `newFileHere`,
+    `newDirHere`, `graphDrive`, the modal
+    `renameDrive` (the helper stays in
+    `fileOps` for other callers; this menu
+    no longer surfaces it).
+  * Markup: full `menuItems` snippet
+    rewrite per the new shape.
+  * CSS: new `:global(.hamburger-menu
+    li.drive-rename-row)` + .drive-rename-
+    input + .drive-path-row + .drive-path-
+    text. Dropped `.folder-row` / .folder-
+    text / .folder-label / .folder-path /
+    .mono selectors that styled the
+    retired rows.
+* `web/src/components/FileTree.svelte`
+  * Markup: ctx menu reshape per new shape.
+  * CSS: new `.from-selection-label` +
+    `.ctx-sep` selectors.
+* `web/src/components/Pane.svelte`
+  * Passes `onFlip={() => flipHybrid(pane.id)}`
+    to the FBSurface tab variant.
+* `web/src/components/fileBrowserRightClickRevamp.test.ts`
+  (new): 15 architectural pins for the
+  FBSurface menu shape — drive-rename input
+  + commitDriveName + path row with mask-image
+  + dock/expand/reload/import ordering +
+  Settings/Reopen/Close foot block gated on
+  isTab + the Pane.svelte onFlip wiring +
+  the dropped entries.
+* `web/src/components/fileTreeSelectionMenu.test.ts`
+  (new): 7 pins for FileTree's selection
+  menu — From-selection label, relabels,
+  New Graph entry, ctx-sep separator, per-row
+  ops preserved.
+
+### Deferred / scope-pokes
+
+* **`-a-67e` slice 2** (SPA-only, no clearance
+  needed): unified "New File or Directory"
+  dialog (`kind: "either"` for PathPromptModal
+  + per-keystroke detect) + Settings entry in
+  the FileTree selection menu (pipe down
+  onFlip).
+* No new chan-server gaps.
+
+### Gate
+
+* `svelte-check` → 0/0.
+* `vitest` → **1162 / 1162** (+22 net from
+  `-a-67d`'s 1140; 22 new pins in 2 new test
+  files).
+* `npm run build` → clean.
+* `cargo fmt --check` + `clippy --all-targets
+  -- -D warnings` → clean (no Rust delta).
+
+### Suggested commit subject
+
+```
+File Browser: right-click menu revamp per addendum-a (fullstack-a-67 slice e)
+```
+
+### Files (per-path)
+
+* `web/src/components/FileBrowserSurface.svelte`
+* `web/src/components/FileTree.svelte`
+* `web/src/components/Pane.svelte`
+* `web/src/components/fileBrowserRightClickRevamp.test.ts` (new)
+* `web/src/components/fileTreeSelectionMenu.test.ts` (new)
+* `docs/journals/phase-8/fullstack-a/fullstack-a-67.md`
+
+Autonomous-commit mode. No clearance held.
+Next: -a-67f (Editor).

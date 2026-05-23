@@ -1291,6 +1291,7 @@
         onClose={() => {
           void closeTab(pane.id, active.id);
         }}
+        onFlip={() => flipHybrid(pane.id)}
       />
     {:else if !active}
       <div
