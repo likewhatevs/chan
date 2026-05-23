@@ -71,8 +71,12 @@ describe("fullstack-a-77 slice 2: overlay component", () => {
   });
 
   test("overlay has aria-modal + role=dialog", () => {
+    // `fullstack-a-77c`: backdrop now carries any-input
+    // dismiss handlers (onkeydown/onclick/tabindex) for the
+    // no-PIN branch. Match the role + aria attrs without
+    // pinning the rest of the opening tag.
     expect(overlay).toMatch(
-      /<div class="screensaver-backdrop" role="dialog" aria-modal="true" aria-label="Screen locked">/,
+      /class="screensaver-backdrop"[\s\S]{0,400}role="dialog"[\s\S]{0,80}aria-modal="true"[\s\S]{0,80}aria-label="Screen locked"/,
     );
   });
 

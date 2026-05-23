@@ -97,3 +97,108 @@ filename clarity.
   any-input unlock lands.
 * Helper text rewording (current text is correct
   once the mechanism matches).
+
+---
+
+## Implementation log
+
+Date: 2026-05-23.
+
+### Shape applied (option 1)
+
+* New `unlockWithoutPin()` exported from
+  `web/src/state/screensaver.svelte.ts`.
+  Guards on `screensaver.pin_set` (no-op
+  when a PIN is set, so the helper is
+  safe to wire unconditionally), flips
+  `screensaver.locked = false`, rearms
+  the inactivity timer.
+* `ScreensaverOverlay.svelte`:
+  * Imported `unlockWithoutPin`.
+  * Added `onBackdropKey(e)` +
+    `onBackdropPointer()` — both gate on
+    `pin_set` + dispatch
+    `unlockWithoutPin()`.
+  * Backdrop opener now carries
+    `onkeydown` + `onclick` + `tabindex=-1`.
+    Svelte's a11y warnings for non-
+    interactive elements with handlers
+    suppressed via `svelte-ignore`
+    comments (the dialog role + aria
+    attrs already telegraph the
+    interactive intent).
+  * Markup branches on
+    `{#if screensaver.pin_set}`: PIN form
+    (input + Unlock button + error pin)
+    on the true arm; "Press any key or
+    click to unlock" message on the
+    false arm. No PIN entry rendered
+    when there's no PIN.
+
+### Tests
+
+New file `web/src/state/screensaverNoPin.test.ts`
+with 8 architectural pins:
+
+* `unlockWithoutPin` exported.
+* Guards on `pin_set` truthy.
+* Flips locked + rearms timer.
+* Overlay imports the helper.
+* `onBackdropKey` + `onBackdropPointer`
+  guard + dispatch.
+* `onkeydown` + `onclick` wired on the
+  backdrop.
+* Markup branches on `pin_set` inside
+  the locked block, with the no-PIN
+  message present.
+* PIN input lives inside the
+  `pin_set === true` arm only (no
+  PIN form rendered without a PIN).
+
+Updated slice-2 pin in
+`screensaverMachine.test.ts` to allow
+the new backdrop attrs (the strict
+literal opening-tag regex would have
+failed otherwise).
+
+### Acceptance walk (architectural)
+
+| Case                         | Behavior        |
+|------------------------------|-----------------|
+| `pin_set=false`, keydown     | dismiss         |
+| `pin_set=false`, click       | dismiss         |
+| `pin_set=true`, backdrop key | PIN form owns input |
+| `pin_set=true`, PIN entry    | unchanged       |
+
+Behavioral walk handed back to
+@@WebtestA (the original
+finder).
+
+### Gate
+
+* `svelte-check` → 0/0.
+* `vitest` → 110 files, **1124 passing**
+  (+9 from the slice-3 baseline; 8 new
+  no-PIN pins + 1 updated slice-2 pin).
+* `npm run build` → clean.
+* `cargo fmt --check` + `clippy
+  --all-targets -- -D warnings` → clean
+  (no Rust delta this slice; ran for
+  pre-push hygiene).
+
+### Suggested commit subject
+
+```
+Screensaver: any-input unlocks when no PIN set (fullstack-a-77c)
+```
+
+### Files (per-path)
+
+* `web/src/state/screensaver.svelte.ts`
+* `web/src/components/ScreensaverOverlay.svelte`
+* `web/src/state/screensaverNoPin.test.ts` (new)
+* `web/src/state/screensaverMachine.test.ts`
+* `docs/journals/phase-8/fullstack-a/fullstack-a-77c.md`
+
+Auth held. Standing by for cleared
+push + next dispatched task.

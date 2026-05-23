@@ -134,6 +134,21 @@ export async function unlockWithPin(
   }
 }
 
+/// `fullstack-a-77c`: dismiss the lock without going
+/// through the PIN verify endpoint. Called by the
+/// overlay's any-input handler when the drive has no
+/// PIN set — the helper text already promises "any
+/// input unlocks", and there's nothing to verify. The
+/// `pin_set === false` branch is the gate; callers MUST
+/// check before invoking. Server-side state is
+/// untouched (there is no server-side "locked" view —
+/// lock state is purely client-side).
+export function unlockWithoutPin(): void {
+  if (screensaver.pin_set) return;
+  screensaver.locked = false;
+  armInactivityTimer();
+}
+
 /// Caller-side pause for modals / dialogs. Returns a
 /// release fn; the timer rearms when every pauser has
 /// released. Mirrors `pinAccessory()` from

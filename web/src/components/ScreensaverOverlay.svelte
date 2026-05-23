@@ -28,6 +28,7 @@
   import {
     screensaver,
     unlockWithPin,
+    unlockWithoutPin,
   } from "../state/screensaver.svelte";
   import { drive } from "../state/store.svelte";
 
@@ -39,7 +40,9 @@
 
   /// `fullstack-a-77`: focus the PIN input the moment the
   /// overlay mounts. Tick first so the contenteditable
-  /// transition lands; then focus + select.
+  /// transition lands; then focus + select. The no-PIN
+  /// branch (`fullstack-a-77c`) has no input element, so
+  /// the focus call no-ops there.
   $effect(() => {
     if (!screensaver.locked) return;
     pin = "";
@@ -49,6 +52,22 @@
       inputEl?.select();
     });
   });
+
+  /// `fullstack-a-77c`: no-PIN branch. Dismiss on any
+  /// key / pointer event anywhere on the backdrop. The
+  /// `pin_set` gate inside `unlockWithoutPin()` makes
+  /// this safe to wire unconditionally — when a PIN is
+  /// set the helper bails out + the existing PIN form
+  /// owns input.
+  function onBackdropKey(e: KeyboardEvent): void {
+    if (screensaver.pin_set) return;
+    e.preventDefault();
+    unlockWithoutPin();
+  }
+  function onBackdropPointer(): void {
+    if (screensaver.pin_set) return;
+    unlockWithoutPin();
+  }
 
   async function submit(): Promise<void> {
     if (busy) return;
@@ -88,44 +107,57 @@
 </script>
 
 {#if screensaver.locked}
-  <div class="screensaver-backdrop" role="dialog" aria-modal="true" aria-label="Screen locked">
+  <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
+  <!-- svelte-ignore a11y_no_static_element_interactions -->
+  <div
+    class="screensaver-backdrop"
+    role="dialog"
+    aria-modal="true"
+    aria-label="Screen locked"
+    onkeydown={onBackdropKey}
+    onclick={onBackdropPointer}
+    tabindex="-1"
+  >
     <div class="screensaver-card" class:shake>
       <div class="screensaver-icon" aria-hidden="true">
         <Lock size={32} strokeWidth={1.5} />
       </div>
       <h2 class="screensaver-title">Screen locked</h2>
-      <p class="screensaver-sub">
-        {#if screensaver.pin_set}
-          Enter your PIN to unlock.
-        {:else}
-          No PIN set on this drive. The lockout is informational
-          only — any input unlocks.
+      {#if screensaver.pin_set}
+        <p class="screensaver-sub">Enter your PIN to unlock.</p>
+        <input
+          bind:this={inputEl}
+          bind:value={pin}
+          type="password"
+          class="screensaver-pin"
+          autocomplete="off"
+          autocapitalize="off"
+          spellcheck="false"
+          disabled={busy}
+          onkeydown={onKey}
+          placeholder="PIN"
+          aria-label="PIN"
+        />
+        {#if errorMessage}
+          <div class="screensaver-error" role="alert">{errorMessage}</div>
         {/if}
-      </p>
-      <input
-        bind:this={inputEl}
-        bind:value={pin}
-        type="password"
-        class="screensaver-pin"
-        autocomplete="off"
-        autocapitalize="off"
-        spellcheck="false"
-        disabled={busy}
-        onkeydown={onKey}
-        placeholder="PIN"
-        aria-label="PIN"
-      />
-      {#if errorMessage}
-        <div class="screensaver-error" role="alert">{errorMessage}</div>
+        <button
+          type="button"
+          class="screensaver-unlock"
+          onclick={submit}
+          disabled={busy}
+        >
+          {busy ? "Unlocking…" : "Unlock"}
+        </button>
+      {:else}
+        <!-- `fullstack-a-77c`: no-PIN branch. Helper text
+             promises "any input unlocks"; the backdrop's
+             onkeydown + onclick handlers fulfill it. -->
+        <p class="screensaver-sub">
+          No PIN set on this drive. Press any key or click to
+          unlock.
+        </p>
       {/if}
-      <button
-        type="button"
-        class="screensaver-unlock"
-        onclick={submit}
-        disabled={busy}
-      >
-        {busy ? "Unlocking…" : "Unlock"}
-      </button>
     </div>
   </div>
 {/if}
