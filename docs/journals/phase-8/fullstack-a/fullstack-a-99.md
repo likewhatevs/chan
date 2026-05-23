@@ -138,3 +138,23 @@ Yes for:
 * Storage: chan-server `routes/screensaver.rs` + chan-drive screensaver primitives from `systacean-40`.
 * Matrix-rain algorithm reference: `https://github.com/dcragusa/MatrixScreensaver` (Python; algorithm only).
 * Castaway visual reference (DO NOT copy art): the Windows 3.1 "Johnny Castaway" screensaver. Aesthetic, not assets.
+
+## 2026-05-23 — scope amendment by @@Architect: screensaver timeout bounds
+
+@@Alex 2026-05-23: "about the screensaver / screen lock: minimum time must be 10s, maximum 3600s".
+
+### Add to -99 scope
+
+Clamp the screensaver inactivity-timeout input to **[10s, 3600s]** (1 hour). Defense in depth:
+
+1. **SPA-side** (`SettingsPanel.svelte` screensaver row): input element `min={10} max={3600}`; on-submit clamp + user-visible validation message if out of range. The existing timeout-input field needs the bounds adding.
+2. **chan-server-side** (`crates/chan-server/src/routes/screensaver.rs` — the PATCH endpoint that stores timeout): reject `timeout_secs < 10 || timeout_secs > 3600` with `400 Bad Request` + a structured error message. Pin with a route-level test.
+3. **(Optional) chan-drive-side**: chan-drive's screensaver storage doesn't need to validate (the boundary is at the API surface), but if there's a deserialization path that could ingest out-of-bounds data from disk (e.g., a manually-edited config file), consider clamping on read. Implementer's call.
+
+### Acceptance addition
+
+8. Screensaver inactivity timeout cannot be set below 10s or above 3600s via the UI; the chan-server PATCH endpoint rejects out-of-bounds writes with 400.
+
+### Coordination
+
+If chan-server validation is fastest as a fold-in alongside the `theme: ScreensaverTheme` extension you'll already be doing, bundle. If you'd prefer scope-poke @@Systacean for the chan-server piece, fine — small either way.

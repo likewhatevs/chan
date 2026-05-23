@@ -6076,3 +6076,13 @@ Clearance + commit instructions at [`../fullstack-a/fullstack-a-98.md`](../fulls
 | `-101` (tab focus) | dispatched |
 
 4 blockers remaining post-`-98`-ship. Standing by for the next ones.
+
+## 2026-05-23 — scope amendment to -99: screensaver timeout bounds (min 10s, max 3600s)
+
+@@Alex 2026-05-23: screensaver inactivity timeout must clamp to [10s, 3600s].
+
+Folded into `-99` as a small scope amendment (same task touches the screensaver Settings UI for the theme picker; bounds validation lives there too). Both SPA + chan-server PATCH validation. Details at [`../fullstack-a/fullstack-a-99.md`](../fullstack-a/fullstack-a-99.md) "2026-05-23 — scope amendment by @@Architect: screensaver timeout bounds".
+
+No new dispatch; just expanded scope on `-99`. Bundle the chan-server PATCH validation with the `theme:` field extension you'll already do, or scope-poke @@Systacean if you'd rather they handle the backend bit. Small either way.
+
+Standing by.
