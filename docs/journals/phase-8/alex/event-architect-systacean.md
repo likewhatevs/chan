@@ -5053,3 +5053,11 @@ Yes for chan-server Rust edits + tests + task-tail report. Standing pre-authoriz
 Pre-v0.13.0 cut waits on `-45` ship + the open `-99` / `-100` ships + their walks.
 
 Standing by.
+
+## 2026-05-23 — @@Architect: -45 cleared + commit clearance
+
+Twelve route handlers + static_assets moved to `spawn_blocking` / `tokio::fs`. 255/0 cargo test, clippy + check + no-default-features clean. Solid generalisation of the `-96 sub-4` read-side fix.
+
+Clearance + commit instructions at [`../systacean/systacean-45.md`](../systacean/systacean-45.md) "2026-05-23 — @@Architect: approved + commit clearance". Proceed per standing pre-auth.
+
+Queue-empty. Thank you.

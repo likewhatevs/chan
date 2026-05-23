@@ -36,14 +36,33 @@ fn default_link_limit() -> u32 {
     20
 }
 
+async fn blocking_response(
+    f: impl FnOnce() -> Response + Send + 'static,
+    label: &'static str,
+) -> Response {
+    match tokio::task::spawn_blocking(f).await {
+        Ok(response) => response,
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("{label} task panicked: {e}"),
+        )
+            .into_response(),
+    }
+}
+
 pub async fn api_link_targets(
     State(state): State<Arc<AppState>>,
     Query(p): Query<LinkTargetsParams>,
 ) -> Response {
-    match state.drive().link_targets(&p.q, p.limit) {
-        Ok(targets) => Json(targets).into_response(),
-        Err(e) => err_from(&e),
-    }
+    let drive = state.drive();
+    blocking_response(
+        move || match drive.link_targets(&p.q, p.limit) {
+            Ok(targets) => Json(targets).into_response(),
+            Err(e) => err_from(&e),
+        },
+        "link targets",
+    )
+    .await
 }
 
 #[derive(Deserialize)]
@@ -62,10 +81,15 @@ pub async fn api_resolve_link(
     State(state): State<Arc<AppState>>,
     Query(p): Query<ResolveLinkParams>,
 ) -> Response {
-    match state.drive().resolve_link(&p.target) {
-        Some(resolved) => Json(resolved).into_response(),
-        None => StatusCode::NOT_FOUND.into_response(),
-    }
+    let drive = state.drive();
+    blocking_response(
+        move || match drive.resolve_link(&p.target) {
+            Some(resolved) => Json(resolved).into_response(),
+            None => StatusCode::NOT_FOUND.into_response(),
+        },
+        "resolve link",
+    )
+    .await
 }
 
 pub async fn api_headings(
@@ -73,14 +97,20 @@ pub async fn api_headings(
     AxumPath(path): AxumPath<String>,
 ) -> Response {
     let drive = state.drive();
-    let graph = match drive.graph() {
-        Ok(g) => g,
-        Err(e) => return err_from(&e),
-    };
-    match graph.headings_of(&path) {
-        Ok(headings) => Json(headings).into_response(),
-        Err(e) => err_from(&e),
-    }
+    blocking_response(
+        move || {
+            let graph = match drive.graph() {
+                Ok(g) => g,
+                Err(e) => return err_from(&e),
+            };
+            match graph.headings_of(&path) {
+                Ok(headings) => Json(headings).into_response(),
+                Err(e) => err_from(&e),
+            }
+        },
+        "headings",
+    )
+    .await
 }
 
 // chan-drive's GraphView exposes per-file accessors (neighbors,
@@ -96,22 +126,30 @@ pub async fn api_headings(
 /// view without a follow-up request.
 pub async fn api_links(State(state): State<Arc<AppState>>) -> Response {
     let drive = state.drive();
-    let graph = match drive.graph() {
-        Ok(g) => g,
-        Err(e) => return err_from(&e),
-    };
-    let files = match graph.files() {
-        Ok(f) => f,
-        Err(e) => return err_from(&e),
-    };
-    let mut edges = Vec::new();
-    for f in &files {
-        match graph.neighbors(f) {
-            Ok(es) => edges.extend(es.into_iter().filter(|e| matches!(e.kind, EdgeKind::Link))),
-            Err(e) => return err_from(&e),
-        }
-    }
-    Json(edges).into_response()
+    blocking_response(
+        move || {
+            let graph = match drive.graph() {
+                Ok(g) => g,
+                Err(e) => return err_from(&e),
+            };
+            let files = match graph.files() {
+                Ok(f) => f,
+                Err(e) => return err_from(&e),
+            };
+            let mut edges = Vec::new();
+            for f in &files {
+                match graph.neighbors(f) {
+                    Ok(es) => {
+                        edges.extend(es.into_iter().filter(|e| matches!(e.kind, EdgeKind::Link)))
+                    }
+                    Err(e) => return err_from(&e),
+                }
+            }
+            Json(edges).into_response()
+        },
+        "links",
+    )
+    .await
 }
 
 /// `/api/graph` view. Frontend's `GraphView` type is unified
@@ -858,16 +896,23 @@ pub async fn api_language_graph(
     State(state): State<Arc<AppState>>,
     Query(p): Query<LanguageGraphParams>,
 ) -> Response {
-    let report = match state.drive().report() {
-        Ok(r) => r,
-        Err(e) => return err_from(&e),
-    };
-    Json(build_language_graph(
-        &report.files,
-        p.depth,
-        p.language.as_deref(),
-    ))
-    .into_response()
+    let drive = state.drive();
+    blocking_response(
+        move || {
+            let report = match drive.report() {
+                Ok(r) => r,
+                Err(e) => return err_from(&e),
+            };
+            Json(build_language_graph(
+                &report.files,
+                p.depth,
+                p.language.as_deref(),
+            ))
+            .into_response()
+        },
+        "language graph",
+    )
+    .await
 }
 
 pub async fn api_graph(
@@ -875,6 +920,10 @@ pub async fn api_graph(
     Query(p): Query<GraphParams>,
 ) -> Response {
     let drive = state.drive();
+    blocking_response(move || api_graph_sync(drive, p), "graph").await
+}
+
+fn api_graph_sync(drive: Arc<chan_drive::Drive>, p: GraphParams) -> Response {
     let graph = match drive.graph() {
         Ok(g) => g,
         Err(e) => return err_from(&e),
@@ -1295,6 +1344,10 @@ pub async fn api_backlinks(
     AxumPath(path): AxumPath<String>,
 ) -> Response {
     let drive = state.drive();
+    blocking_response(move || api_backlinks_sync(drive, path), "backlinks").await
+}
+
+fn api_backlinks_sync(drive: Arc<chan_drive::Drive>, path: String) -> Response {
     let graph = match drive.graph() {
         Ok(g) => g,
         Err(e) => return err_from(&e),

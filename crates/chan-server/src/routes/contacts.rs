@@ -48,7 +48,9 @@ use axum::response::{IntoResponse, Response};
 use axum::Json;
 use serde::Deserialize;
 
-use chan_drive::contacts::{google::parse_google_csv, ImportOpts, ImportOutcome, ProviderKind};
+use chan_drive::contacts::{
+    google::parse_google_csv, ImportOpts, ImportOutcome, ImportSummary, ProviderKind,
+};
 
 use crate::error::{err, err_from};
 use crate::state::AppState;
@@ -74,32 +76,45 @@ pub async fn api_get_contacts(
     State(state): State<Arc<AppState>>,
     Query(q): Query<ContactsListQuery>,
 ) -> Response {
-    let needle = q.q.as_deref().map(str::trim).filter(|s| !s.is_empty());
-    let rows = match state.drive().contacts_filtered(needle, q.limit) {
-        Ok(v) => v,
-        Err(e) => return err_from(&e),
-    };
-    let out: Vec<serde_json::Value> = rows
-        .into_iter()
-        .map(|c| {
-            // Picker rows show the title primarily; basename is the
-            // fallback when the imported file has no `# H1` (rare,
-            // but possible if the user edited the markdown). Emails
-            // ride along so the picker can render the first one as a
-            // secondary line and so the caller can confirm an
-            // email-substring match. Aliases ride along so the picker
-            // can show `@@<alias>` shortcuts and so the editor's
-            // `@@` trigger (phase 5) can pick the alias to insert.
-            let label = c.title.unwrap_or(c.basename);
-            serde_json::json!({
-                "path": c.rel_path,
-                "label": label,
-                "emails": c.emails,
-                "aliases": c.aliases,
+    let drive = state.drive();
+    let needle = q.q;
+    match tokio::task::spawn_blocking(move || {
+        let needle = needle.as_deref().map(str::trim).filter(|s| !s.is_empty());
+        let rows = match drive.contacts_filtered(needle, q.limit) {
+            Ok(v) => v,
+            Err(e) => return err_from(&e),
+        };
+        let out: Vec<serde_json::Value> = rows
+            .into_iter()
+            .map(|c| {
+                // Picker rows show the title primarily; basename is the
+                // fallback when the imported file has no `# H1` (rare,
+                // but possible if the user edited the markdown). Emails
+                // ride along so the picker can render the first one as a
+                // secondary line and so the caller can confirm an
+                // email-substring match. Aliases ride along so the picker
+                // can show `@@<alias>` shortcuts and so the editor's
+                // `@@` trigger (phase 5) can pick the alias to insert.
+                let label = c.title.unwrap_or(c.basename);
+                serde_json::json!({
+                    "path": c.rel_path,
+                    "label": label,
+                    "emails": c.emails,
+                    "aliases": c.aliases,
+                })
             })
-        })
-        .collect();
-    Json(out).into_response()
+            .collect();
+        Json(out).into_response()
+    })
+    .await
+    {
+        Ok(response) => response,
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("contacts list task panicked: {e}"),
+        )
+            .into_response(),
+    }
 }
 
 pub async fn api_post_contacts_import(
@@ -215,18 +230,34 @@ pub async fn api_post_contacts_import(
         );
     }
 
-    let contacts = match parse_google_csv(bytes.as_slice()) {
-        Ok(v) => v,
-        Err(e) => return err(StatusCode::BAD_REQUEST, format!("csv parse: {e}")),
-    };
-
-    let summary = match state
-        .drive()
-        .import_contacts(&dest_dir, contacts, ImportOpts { overwrite })
-    {
-        Ok(s) => s,
-        Err(e) => return err_from(&e),
-    };
+    let drive = state.drive();
+    let summary =
+        match tokio::task::spawn_blocking(move || -> Result<ImportSummary, Box<Response>> {
+            let contacts = match parse_google_csv(bytes.as_slice()) {
+                Ok(v) => v,
+                Err(e) => {
+                    return Err(Box::new(err(
+                        StatusCode::BAD_REQUEST,
+                        format!("csv parse: {e}"),
+                    )))
+                }
+            };
+            drive
+                .import_contacts(&dest_dir, contacts, ImportOpts { overwrite })
+                .map_err(|e| Box::new(err_from(&e)))
+        })
+        .await
+        {
+            Ok(Ok(summary)) => summary,
+            Ok(Err(response)) => return *response,
+            Err(e) => {
+                return (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    format!("contacts import task panicked: {e}"),
+                )
+                    .into_response()
+            }
+        };
 
     // Tell the watcher these paths were our own writes so the editor
     // doesn't see a flood of "external edit" events, and collect them

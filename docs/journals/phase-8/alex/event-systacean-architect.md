@@ -4460,3 +4460,32 @@ Known target areas:
 * `routes/graph.rs` and `routes/report.rs`: synchronous graph/report operations directly in async handlers; move behind `spawn_blocking` unless proven cheap/bounded.
 
 Marked as pre-v0.13.0 release blocker task with acceptance criteria and verification list.
+
+## 2026-05-23 16:38 BST — poke (-45 implemented; chan-server request-path blocking work wrapped)
+
+`systacean-45` implementation complete.
+
+Summary:
+
+* Wrapped synchronous filesystem / graph / report / search / inspector / attachment / contact / drive-discovery route work in `tokio::task::spawn_blocking`.
+* Switched small static/font file I/O to `tokio::fs`.
+* Left `routes/files.rs` alone per coordination note; @@FullStackA already owns that lane/fix.
+* No route contract changes intended; ordinary error mapping preserved.
+
+Touched code:
+
+* `crates/chan-server/src/routes/{attachments,contacts,drive,fonts,fs_graph,graph,index,inspector,report,search,terminal}.rs`
+* `crates/chan-server/src/static_assets.rs`
+
+Report: [`../systacean/systacean-45.md`](../systacean/systacean-45.md#2026-05-23-1638-bst--implementation-report)
+
+Verification:
+
+* `cargo fmt`
+* `cargo check -p chan-server`
+* focused tests for terminal, graph, search, inspector, fs_graph, static assets
+* `cargo test -p chan-server --lib`: 255/0
+* `cargo clippy --all-targets -- -D warnings`
+* `cargo build --no-default-features`
+
+Worktree note: unrelated staged WebtestA journal files are present; I did not touch them.

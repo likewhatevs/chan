@@ -53,6 +53,20 @@ pub struct PrefixReport {
     cocomo: CocomoSummary,
 }
 
+async fn blocking_response(
+    f: impl FnOnce() -> Response + Send + 'static,
+    label: &'static str,
+) -> Response {
+    match tokio::task::spawn_blocking(f).await {
+        Ok(response) => response,
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("{label} task panicked: {e}"),
+        )
+            .into_response(),
+    }
+}
+
 /// Per-file report row. 404 when the file is not indexed; an empty
 /// `path` is rejected with 400 since the file endpoint is path-keyed
 /// (use `/api/report/prefix` with an empty path for the whole-drive
@@ -64,17 +78,21 @@ pub async fn api_report_file(
     if p.path.trim().is_empty() {
         return StatusCode::BAD_REQUEST.into_response();
     }
-    let report = match state
-        .drive()
-        .report_for_files(std::slice::from_ref(&p.path))
-    {
-        Ok(r) => r,
-        Err(e) => return err_from(&e),
-    };
-    match report.files.into_iter().find(|f| f.path == p.path) {
-        Some(stats) => Json(stats).into_response(),
-        None => StatusCode::NOT_FOUND.into_response(),
-    }
+    let drive = state.drive();
+    blocking_response(
+        move || {
+            let report = match drive.report_for_files(std::slice::from_ref(&p.path)) {
+                Ok(r) => r,
+                Err(e) => return err_from(&e),
+            };
+            match report.files.into_iter().find(|f| f.path == p.path) {
+                Some(stats) => Json(stats).into_response(),
+                None => StatusCode::NOT_FOUND.into_response(),
+            }
+        },
+        "report file",
+    )
+    .await
 }
 
 /// Directory roll-up: totals + per-language + COCOMO. The per-file
@@ -85,20 +103,27 @@ pub async fn api_report_prefix(
     State(state): State<Arc<AppState>>,
     Query(p): Query<ReportPathParams>,
 ) -> Response {
-    let report = match if p.path.is_empty() {
-        state.drive().report()
-    } else {
-        state.drive().report_for_prefix(&p.path)
-    } {
-        Ok(r) => r,
-        Err(e) => return err_from(&e),
-    };
-    Json(PrefixReport {
-        totals: report.totals,
-        by_language: report.by_language,
-        cocomo: report.cocomo,
-    })
-    .into_response()
+    let drive = state.drive();
+    blocking_response(
+        move || {
+            let report = match if p.path.is_empty() {
+                drive.report()
+            } else {
+                drive.report_for_prefix(&p.path)
+            } {
+                Ok(r) => r,
+                Err(e) => return err_from(&e),
+            };
+            Json(PrefixReport {
+                totals: report.totals,
+                by_language: report.by_language,
+                cocomo: report.cocomo,
+            })
+            .into_response()
+        },
+        "report prefix",
+    )
+    .await
 }
 
 /// Per-directory roll-up via the maintained O(1) cache. Same
@@ -109,15 +134,22 @@ pub async fn api_report_dir(
     State(state): State<Arc<AppState>>,
     Query(p): Query<ReportPathParams>,
 ) -> Response {
-    let report = match state.drive().report_for_dir(&p.path) {
-        Ok(Some(r)) => r,
-        Ok(None) => return StatusCode::NOT_FOUND.into_response(),
-        Err(e) => return err_from(&e),
-    };
-    Json(PrefixReport {
-        totals: report.totals,
-        by_language: report.by_language,
-        cocomo: report.cocomo,
-    })
-    .into_response()
+    let drive = state.drive();
+    blocking_response(
+        move || {
+            let report = match drive.report_for_dir(&p.path) {
+                Ok(Some(r)) => r,
+                Ok(None) => return StatusCode::NOT_FOUND.into_response(),
+                Err(e) => return err_from(&e),
+            };
+            Json(PrefixReport {
+                totals: report.totals,
+                by_language: report.by_language,
+                cocomo: report.cocomo,
+            })
+            .into_response()
+        },
+        "report dir",
+    )
+    .await
 }

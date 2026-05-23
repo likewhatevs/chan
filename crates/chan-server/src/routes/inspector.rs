@@ -4,6 +4,7 @@ use std::collections::{BTreeMap, HashSet};
 use std::sync::Arc;
 
 use axum::extract::{Query, State};
+use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use axum::Json;
 use chan_drive::{FileClass, PathClass, ReportFileStats, ReportLanguageStats, ReportTotals};
@@ -72,9 +73,14 @@ pub async fn api_inspector(
     Query(params): Query<InspectorParams>,
 ) -> Response {
     let drive = state.drive();
-    match build_inspector_payload(&drive, &params.path) {
-        Ok(payload) => Json(payload).into_response(),
-        Err(e) => err_from(&e),
+    match tokio::task::spawn_blocking(move || build_inspector_payload(&drive, &params.path)).await {
+        Ok(Ok(payload)) => Json(payload).into_response(),
+        Ok(Err(e)) => err_from(&e),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("inspector task panicked: {e}"),
+        )
+            .into_response(),
     }
 }
 

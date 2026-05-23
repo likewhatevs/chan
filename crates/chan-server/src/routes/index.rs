@@ -90,12 +90,9 @@ fn dir_total_size(dir: &std::path::Path) -> u64 {
     total
 }
 
-fn build_state(state: &Arc<AppState>) -> Result<SemanticState, Box<Response>> {
-    let drive = state.drive();
-    let model_name = drive.semantic_model().map_err(|e| Box::new(err_from(&e)))?;
-    let semantic_enabled = drive
-        .semantic_enabled()
-        .map_err(|e| Box::new(err_from(&e)))?;
+fn build_state(drive: &chan_drive::Drive) -> Result<SemanticState, chan_drive::ChanError> {
+    let model_name = drive.semantic_model()?;
+    let semantic_enabled = drive.semantic_enabled()?;
     let expected_dir = global_models_dir().join(repo_dir_name(&model_name));
     let model_present = resolve_model(&model_name).is_ok();
     let model_size_bytes = if model_present {
@@ -125,9 +122,15 @@ fn build_state(state: &Arc<AppState>) -> Result<SemanticState, Box<Response>> {
 
 /// `GET /api/index/semantic/state`. Read-only snapshot.
 pub async fn api_semantic_state(State(state): State<Arc<AppState>>) -> Response {
-    match build_state(&state) {
-        Ok(s) => Json(s).into_response(),
-        Err(resp) => *resp,
+    let drive = state.drive();
+    match tokio::task::spawn_blocking(move || build_state(&drive)).await {
+        Ok(Ok(s)) => Json(s).into_response(),
+        Ok(Err(e)) => err_from(&e),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("semantic state task panicked: {e}"),
+        )
+            .into_response(),
     }
 }
 
@@ -148,37 +151,49 @@ struct ModelNotDownloadedBody {
 /// the `/download` endpoint.
 pub async fn api_semantic_enable(State(state): State<Arc<AppState>>) -> Response {
     let drive = state.drive();
-    let model_name = match drive.semantic_model() {
-        Ok(m) => m,
-        Err(e) => return err_from(&e),
-    };
-    if let Err(e) = resolve_model(&model_name) {
-        let expected_dir = match &e {
-            chan_drive::index::embeddings::EmbedError::ModelNotDownloaded {
-                expected_dir, ..
-            } => expected_dir.to_string_lossy().into_owned(),
-            _ => global_models_dir()
-                .join(repo_dir_name(&model_name))
-                .to_string_lossy()
-                .into_owned(),
+    match tokio::task::spawn_blocking(move || {
+        let model_name = match drive.semantic_model() {
+            Ok(m) => m,
+            Err(e) => return err_from(&e),
         };
-        return (
-            StatusCode::CONFLICT,
-            Json(ModelNotDownloadedBody {
-                error: "model_not_downloaded",
-                model_id: model_name,
-                expected_dir,
-                download_endpoint: "/api/index/semantic/download",
-            }),
+        if let Err(e) = resolve_model(&model_name) {
+            let expected_dir = match &e {
+                chan_drive::index::embeddings::EmbedError::ModelNotDownloaded {
+                    expected_dir,
+                    ..
+                } => expected_dir.to_string_lossy().into_owned(),
+                _ => global_models_dir()
+                    .join(repo_dir_name(&model_name))
+                    .to_string_lossy()
+                    .into_owned(),
+            };
+            return (
+                StatusCode::CONFLICT,
+                Json(ModelNotDownloadedBody {
+                    error: "model_not_downloaded",
+                    model_id: model_name,
+                    expected_dir,
+                    download_endpoint: "/api/index/semantic/download",
+                }),
+            )
+                .into_response();
+        }
+        if let Err(e) = drive.set_semantic_enabled(true) {
+            return err_from(&e);
+        }
+        match build_state(&drive) {
+            Ok(s) => Json(s).into_response(),
+            Err(e) => err_from(&e),
+        }
+    })
+    .await
+    {
+        Ok(response) => response,
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("semantic enable task panicked: {e}"),
         )
-            .into_response();
-    }
-    if let Err(e) = drive.set_semantic_enabled(true) {
-        return err_from(&e);
-    }
-    match build_state(&state) {
-        Ok(s) => Json(s).into_response(),
-        Err(resp) => *resp,
+            .into_response(),
     }
 }
 
@@ -186,12 +201,23 @@ pub async fn api_semantic_enable(State(state): State<Arc<AppState>>) -> Response
 /// at the `set_semantic_enabled` layer (no-op when already off).
 pub async fn api_semantic_disable(State(state): State<Arc<AppState>>) -> Response {
     let drive = state.drive();
-    if let Err(e) = drive.set_semantic_enabled(false) {
-        return err_from(&e);
-    }
-    match build_state(&state) {
-        Ok(s) => Json(s).into_response(),
-        Err(resp) => *resp,
+    match tokio::task::spawn_blocking(move || {
+        if let Err(e) = drive.set_semantic_enabled(false) {
+            return err_from(&e);
+        }
+        match build_state(&drive) {
+            Ok(s) => Json(s).into_response(),
+            Err(e) => err_from(&e),
+        }
+    })
+    .await
+    {
+        Ok(response) => response,
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("semantic disable task panicked: {e}"),
+        )
+            .into_response(),
     }
 }
 
@@ -207,31 +233,36 @@ pub async fn api_semantic_disable(State(state): State<Arc<AppState>>) -> Respons
 /// async runtime.
 pub async fn api_semantic_download(State(state): State<Arc<AppState>>) -> Response {
     let drive = state.drive();
-    let model_name = match drive.semantic_model() {
-        Ok(m) => m,
-        Err(e) => return err_from(&e),
-    };
-    let cache_dir = global_models_dir();
-    let model_for_blocking = model_name.clone();
     let result = tokio::task::spawn_blocking(move || {
-        std::fs::create_dir_all(&cache_dir)?;
-        Embedder::open(&model_for_blocking, &cache_dir).map(|_| ())
-    })
-    .await;
-    match result {
-        Ok(Ok(())) => match build_state(&state) {
-            Ok(s) => Json(s).into_response(),
-            Err(resp) => *resp,
-        },
-        Ok(Err(e)) => {
+        let model_name = match drive.semantic_model() {
+            Ok(m) => m,
+            Err(e) => return err_from(&e),
+        };
+        let cache_dir = global_models_dir();
+        if let Err(e) = std::fs::create_dir_all(&cache_dir) {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("creating model cache {}: {e}", cache_dir.display()),
+            )
+                .into_response();
+        }
+        if let Err(e) = Embedder::open(&model_name, &cache_dir).map(|_| ()) {
             // EmbedError → IndexError::Embed → ChanError → `err_from`
             // funnels every model-side failure (network, hf-hub
             // checksum, candle load) through the same error
             // rendering as the rest of the search surface. The
             // bridge is feature-gated alongside this whole module.
             let chan_err: chan_drive::ChanError = chan_drive::index::IndexError::Embed(e).into();
-            err_from(&chan_err)
+            return err_from(&chan_err);
         }
+        match build_state(&drive) {
+            Ok(s) => Json(s).into_response(),
+            Err(e) => err_from(&e),
+        }
+    })
+    .await;
+    match result {
+        Ok(response) => response,
         Err(join_err) => (
             StatusCode::INTERNAL_SERVER_ERROR,
             format!("download task panicked: {join_err}"),

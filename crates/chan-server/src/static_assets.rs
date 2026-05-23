@@ -206,10 +206,9 @@ pub async fn serve_font(Path(name): Path<String>) -> Response {
     if let Some(body) = bundled_font_bytes(&name) {
         return font_response(&name, body);
     }
-    match user_config_font_bytes(&name) {
-        Ok(Some(bytes)) => font_response(&name, bytes),
-        Ok(None) => (StatusCode::NOT_FOUND, "font not bundled").into_response(),
-        Err(_) => (StatusCode::NOT_FOUND, "font not bundled").into_response(),
+    match user_config_font_bytes(&name).await {
+        Some(bytes) => font_response(&name, bytes),
+        None => (StatusCode::NOT_FOUND, "font not bundled").into_response(),
     }
 }
 
@@ -228,21 +227,13 @@ fn bundled_font_bytes(name: &str) -> Option<Vec<u8>> {
     }
 }
 
-/// User-config-dir fallback. Reads `<config>/chan/fonts/<name>`
-/// if it exists. Returns `Ok(None)` when the file is missing so
-/// the caller can render a 404; `Err` propagates real I/O errors
-/// for the caller to surface (still as 404 since `serve_font`'s
-/// public contract is bundle-or-missing).
-fn user_config_font_bytes(name: &str) -> std::io::Result<Option<Vec<u8>>> {
-    let Some(dir) = chan_fonts_user_dir() else {
-        return Ok(None);
-    };
+/// User-config-dir fallback. Reads `<config>/chan/fonts/<name>` if
+/// it exists. Missing files and I/O failures both fall back to 404:
+/// `serve_font`'s public contract is bundle-or-missing.
+async fn user_config_font_bytes(name: &str) -> Option<Vec<u8>> {
+    let dir = chan_fonts_user_dir()?;
     let path = dir.join(name);
-    match std::fs::read(&path) {
-        Ok(bytes) => Ok(Some(bytes)),
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
-        Err(e) => Err(e),
-    }
+    tokio::fs::read(&path).await.ok()
 }
 
 /// `<user-config>/chan/fonts/`. None on platforms / accounts

@@ -68,12 +68,13 @@ pub fn chan_fonts_user_dir() -> Option<PathBuf> {
     Some(dirs::config_dir()?.join("chan").join("fonts"))
 }
 
-/// `POST /api/fonts/source-code-pro/download`. Synchronous download
-/// (matches `api_semantic_download`'s shape from `systacean-7`).
+/// `POST /api/fonts/source-code-pro/download`. The response arrives
+/// when the download completes (matches `api_semantic_download`'s
+/// caller-visible shape from `systacean-7`).
 /// Idempotent — if the target files already exist + have non-zero
-/// size the endpoint short-circuits without re-fetching. Heavy
-/// network work runs on a Tokio blocking thread to keep the async
-/// runtime responsive.
+/// size the endpoint short-circuits without re-fetching. Network and
+/// filesystem work use async APIs so the route doesn't tie up the
+/// Tokio runtime worker while waiting on I/O.
 pub async fn api_fonts_source_code_pro_download() -> Response {
     let dir = match chan_fonts_user_dir() {
         Some(d) => d,
@@ -104,7 +105,7 @@ pub async fn api_fonts_source_code_pro_download() -> Response {
 /// crash mid-download doesn't leave a half-file the next launch
 /// would happily serve.
 async fn download_font_files(dir: &Path) -> io::Result<Vec<FontDownloadFile>> {
-    std::fs::create_dir_all(dir)?;
+    tokio::fs::create_dir_all(dir).await?;
     let client = reqwest::Client::builder()
         .timeout(Duration::from_secs(60))
         .build()
@@ -112,7 +113,7 @@ async fn download_font_files(dir: &Path) -> io::Result<Vec<FontDownloadFile>> {
     let mut results = Vec::with_capacity(SOURCE_CODE_PRO_FILES.len());
     for (name, url) in SOURCE_CODE_PRO_FILES {
         let target = dir.join(name);
-        if let Ok(meta) = std::fs::metadata(&target) {
+        if let Ok(meta) = tokio::fs::metadata(&target).await {
             if meta.len() > 1024 {
                 // Idempotency: a previous download already
                 // produced a non-trivial file; skip the network
@@ -135,8 +136,8 @@ async fn download_font_files(dir: &Path) -> io::Result<Vec<FontDownloadFile>> {
         // Atomic write: stage in `.partial`, fsync optional (rely on
         // rename's atomicity on POSIX + ReplaceFileW on Windows).
         let staging = dir.join(format!("{name}.partial"));
-        std::fs::write(&staging, &bytes)?;
-        std::fs::rename(&staging, &target)?;
+        tokio::fs::write(&staging, &bytes).await?;
+        tokio::fs::rename(&staging, &target).await?;
         results.push(FontDownloadFile {
             name: (*name).to_string(),
             bytes: bytes.len() as u64,

@@ -3,6 +3,7 @@
 use std::sync::Arc;
 
 use axum::extract::State;
+use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use axum::Json;
 use serde::{Deserialize, Serialize};
@@ -51,13 +52,28 @@ pub async fn api_patch_drive(
 ) -> Response {
     // The `tunnel_guard::settings_guard` middleware already refused
     // this call when settings are disabled; no per-handler gate.
-    if let Some(name) = body.name {
-        let new_name = if name.is_empty() { None } else { Some(name) };
-        if let Err(e) = state.library.rename_drive(state.drive().root(), new_name) {
-            return err_from(&e);
+    let state_for_task = state.clone();
+    match tokio::task::spawn_blocking(move || {
+        if let Some(name) = body.name {
+            let new_name = if name.is_empty() { None } else { Some(name) };
+            if let Err(e) = state_for_task
+                .library
+                .rename_drive(state_for_task.drive().root(), new_name)
+            {
+                return err_from(&e);
+            }
         }
+        Json(drive_info(&state_for_task)).into_response()
+    })
+    .await
+    {
+        Ok(response) => response,
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("drive patch task panicked: {e}"),
+        )
+            .into_response(),
     }
-    Json(drive_info(&state)).into_response()
 }
 
 #[derive(Serialize)]
@@ -78,15 +94,26 @@ pub async fn api_cloud_drives(State(state): State<Arc<AppState>>) -> Response {
     if state.tunnel_public {
         return Json(Vec::<CloudDriveJson>::new()).into_response();
     }
-    let out: Vec<CloudDriveJson> = chan_drive::paths::detected_cloud_drives()
-        .into_iter()
-        .map(|c| CloudDriveJson {
-            provider: c.provider,
-            provider_root: c.provider_root.to_string_lossy().into_owned(),
-            suggested_root: c.suggested_root.to_string_lossy().into_owned(),
-        })
-        .collect();
-    Json(out).into_response()
+    match tokio::task::spawn_blocking(move || {
+        let out: Vec<CloudDriveJson> = chan_drive::paths::detected_cloud_drives()
+            .into_iter()
+            .map(|c| CloudDriveJson {
+                provider: c.provider,
+                provider_root: c.provider_root.to_string_lossy().into_owned(),
+                suggested_root: c.suggested_root.to_string_lossy().into_owned(),
+            })
+            .collect();
+        Json(out).into_response()
+    })
+    .await
+    {
+        Ok(response) => response,
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("cloud drives task panicked: {e}"),
+        )
+            .into_response(),
+    }
 }
 
 /// Build a `DriveInfo` from current registry state. Re-reads the

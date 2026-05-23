@@ -21,6 +21,20 @@ use crate::error::err_from;
 use crate::indexer::IndexStatus;
 use crate::state::AppState;
 
+async fn blocking_response(
+    f: impl FnOnce() -> Response + Send + 'static,
+    label: &'static str,
+) -> Response {
+    match tokio::task::spawn_blocking(f).await {
+        Ok(response) => response,
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("{label} task panicked: {e}"),
+        )
+            .into_response(),
+    }
+}
+
 /// Filename search params. Empty `q` returns the first `limit`
 /// files in the tree, mirroring the [[ picker's empty state.
 #[derive(Deserialize)]
@@ -45,60 +59,66 @@ pub async fn api_search_files(
     Query(p): Query<FileSearchParams>,
 ) -> Response {
     let drive = state.drive();
-    let tree = match drive.list_tree() {
-        Ok(t) => t,
-        Err(e) => return err_from(&e),
-    };
-    // Contact-kind notes have their own picker (`@<query>`), so skip
-    // them from the `[[` autocomplete. `graph()` may be unavailable
-    // very early in the lifecycle (index not yet open); in that case
-    // we fall back to returning all matches rather than blocking the
-    // search.
-    let graph = drive.graph().ok();
-    let needle = p.q.to_lowercase();
-    let mut hits = Vec::new();
-    // Two-pass collection so editable-text notes (.md / .txt) sort
-    // ahead of binary assets. Linking a `[](image.png)` is legal
-    // markdown and we allow it, but the [[ picker's primary use is
-    // navigating between notes; surfacing those first keeps the
-    // picker feeling note-shaped without hiding any file.
-    let mut notes = Vec::new();
-    let mut others = Vec::new();
-    for entry in tree {
-        if entry.is_dir {
-            continue;
-        }
-        // Match against the full path (lowercased) so directory names
-        // count as a prefix the user can type. Typing "reci" finds
-        // every file under "Recipes/" even when the basename doesn't
-        // contain "reci".
-        let full = entry.path.to_lowercase();
-        if !needle.is_empty() && !full.contains(&needle) {
-            continue;
-        }
-        if let Some(g) = &graph {
-            if let Ok(Some(NodeKind::Contact)) = g.node_kind(&entry.path) {
-                continue;
+    blocking_response(
+        move || {
+            let tree = match drive.list_tree() {
+                Ok(t) => t,
+                Err(e) => return err_from(&e),
+            };
+            // Contact-kind notes have their own picker (`@<query>`), so skip
+            // them from the `[[` autocomplete. `graph()` may be unavailable
+            // very early in the lifecycle (index not yet open); in that case
+            // we fall back to returning all matches rather than blocking the
+            // search.
+            let graph = drive.graph().ok();
+            let needle = p.q.to_lowercase();
+            let mut hits = Vec::new();
+            // Two-pass collection so editable-text notes (.md / .txt) sort
+            // ahead of binary assets. Linking a `[](image.png)` is legal
+            // markdown and we allow it, but the [[ picker's primary use is
+            // navigating between notes; surfacing those first keeps the
+            // picker feeling note-shaped without hiding any file.
+            let mut notes = Vec::new();
+            let mut others = Vec::new();
+            for entry in tree {
+                if entry.is_dir {
+                    continue;
+                }
+                // Match against the full path (lowercased) so directory names
+                // count as a prefix the user can type. Typing "reci" finds
+                // every file under "Recipes/" even when the basename doesn't
+                // contain "reci".
+                let full = entry.path.to_lowercase();
+                if !needle.is_empty() && !full.contains(&needle) {
+                    continue;
+                }
+                if let Some(g) = &graph {
+                    if let Ok(Some(NodeKind::Contact)) = g.node_kind(&entry.path) {
+                        continue;
+                    }
+                }
+                if matches!(classify(&entry.path), FileClass::EditableText) {
+                    notes.push(entry);
+                } else if others.len() < p.limit {
+                    // Once we have `limit` non-note candidates buffered there
+                    // is no way more of them survive the final truncate, so
+                    // skip buffering further to bound memory.
+                    others.push(entry);
+                }
+                if notes.len() >= p.limit {
+                    // Enough notes to fill the response on their own; no need
+                    // to keep scanning for fallback candidates.
+                    break;
+                }
             }
-        }
-        if matches!(classify(&entry.path), FileClass::EditableText) {
-            notes.push(entry);
-        } else if others.len() < p.limit {
-            // Once we have `limit` non-note candidates buffered there
-            // is no way more of them survive the final truncate, so
-            // skip buffering further to bound memory.
-            others.push(entry);
-        }
-        if notes.len() >= p.limit {
-            // Enough notes to fill the response on their own; no need
-            // to keep scanning for fallback candidates.
-            break;
-        }
-    }
-    hits.extend(notes);
-    hits.extend(others);
-    hits.truncate(p.limit);
-    Json(hits).into_response()
+            hits.extend(notes);
+            hits.extend(others);
+            hits.truncate(p.limit);
+            Json(hits).into_response()
+        },
+        "file search",
+    )
+    .await
 }
 
 #[derive(Deserialize)]
@@ -165,20 +185,28 @@ pub async fn api_search_content(
         // without `embeddings`.
         ..Default::default()
     };
-    let results = match state.drive().search(&p.q, &opts) {
-        Ok(r) => r,
-        Err(e) => return err_from(&e),
-    };
-    let hits = collapse_hits_by_file(
-        results.hits.into_iter().map(ContentHit::from),
-        response_limit,
-    );
-    Json(ContentSearchResponse {
-        ready: results.ready,
-        mode: results.mode,
-        hits,
-    })
-    .into_response()
+    let drive = state.drive();
+    let query = p.q;
+    blocking_response(
+        move || {
+            let results = match drive.search(&query, &opts) {
+                Ok(r) => r,
+                Err(e) => return err_from(&e),
+            };
+            let hits = collapse_hits_by_file(
+                results.hits.into_iter().map(ContentHit::from),
+                response_limit,
+            );
+            Json(ContentSearchResponse {
+                ready: results.ready,
+                mode: results.mode,
+                hits,
+            })
+            .into_response()
+        },
+        "content search",
+    )
+    .await
 }
 
 impl From<chan_drive::Hit> for ContentHit {
@@ -271,24 +299,30 @@ struct DirectoryStateAccum {
 /// work on the request path.
 pub async fn api_indexing_state(State(state): State<Arc<AppState>>) -> Response {
     let drive = state.drive();
-    let entries = match fs_ops::list_tree_filtered(drive.root(), drive.walk_filter()) {
-        Ok(entries) => entries,
-        Err(e) => return err_from(&e),
-    };
-    let indexed_paths = match drive.indexed_paths() {
-        Ok(paths) => paths.into_iter().collect::<BTreeSet<_>>(),
-        Err(e) => {
-            tracing::warn!(error = %e, "indexing-state: failed to snapshot indexed paths");
-            BTreeSet::new()
-        }
-    };
     let current_file = current_index_file(state.indexer().snapshot());
-    Json(build_indexing_state(
-        &entries,
-        &indexed_paths,
-        current_file.as_deref(),
-    ))
-    .into_response()
+    blocking_response(
+        move || {
+            let entries = match fs_ops::list_tree_filtered(drive.root(), drive.walk_filter()) {
+                Ok(entries) => entries,
+                Err(e) => return err_from(&e),
+            };
+            let indexed_paths = match drive.indexed_paths() {
+                Ok(paths) => paths.into_iter().collect::<BTreeSet<_>>(),
+                Err(e) => {
+                    tracing::warn!(error = %e, "indexing-state: failed to snapshot indexed paths");
+                    BTreeSet::new()
+                }
+            };
+            Json(build_indexing_state(
+                &entries,
+                &indexed_paths,
+                current_file.as_deref(),
+            ))
+            .into_response()
+        },
+        "indexing state",
+    )
+    .await
 }
 
 fn current_index_file(status: IndexStatus) -> Option<String> {

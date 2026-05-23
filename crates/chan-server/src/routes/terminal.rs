@@ -195,9 +195,21 @@ pub async fn api_terminal_ws(
     let cwd = if query.session.is_some() {
         None
     } else {
-        match resolve_terminal_cwd(&state.drive_root, query.cwd.as_deref()) {
-            Ok(cwd) => cwd,
-            Err(message) => return (StatusCode::BAD_REQUEST, message).into_response(),
+        let drive_root = state.drive_root.clone();
+        let cwd = query.cwd.clone();
+        let result =
+            tokio::task::spawn_blocking(move || resolve_terminal_cwd(&drive_root, cwd.as_deref()))
+                .await;
+        match result {
+            Ok(Ok(cwd)) => cwd,
+            Ok(Err(message)) => return (StatusCode::BAD_REQUEST, message).into_response(),
+            Err(e) => {
+                return (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    format!("terminal cwd task panicked: {e}"),
+                )
+                    .into_response()
+            }
         }
     };
     let opts = TerminalWsOptions {
@@ -221,9 +233,20 @@ pub async fn api_set_terminal_watcher(
     if state.tunnel_public {
         return err_tunnel_public_locked();
     }
-    let dir = match resolve_watcher_dir(&state.drive_root, &body.path) {
-        Ok(dir) => dir,
-        Err(message) => return (StatusCode::BAD_REQUEST, message).into_response(),
+    let drive_root = state.drive_root.clone();
+    let watcher_path = body.path;
+    let result =
+        tokio::task::spawn_blocking(move || resolve_watcher_dir(&drive_root, &watcher_path)).await;
+    let dir = match result {
+        Ok(Ok(dir)) => dir,
+        Ok(Err(message)) => return (StatusCode::BAD_REQUEST, message).into_response(),
+        Err(e) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("terminal watcher task panicked: {e}"),
+            )
+                .into_response()
+        }
     };
     match state.terminal_sessions.set_watcher(&session, dir) {
         Ok(true) => StatusCode::NO_CONTENT.into_response(),
@@ -449,11 +472,17 @@ pub async fn api_terminal_watcher_events(
         )
             .into_response();
     };
-    match list_watcher_events(&dir) {
-        Ok(entries) => Json(entries).into_response(),
-        Err(e) => (
+    let result = tokio::task::spawn_blocking(move || list_watcher_events(&dir)).await;
+    match result {
+        Ok(Ok(entries)) => Json(entries).into_response(),
+        Ok(Err(e)) => (
             StatusCode::INTERNAL_SERVER_ERROR,
             format!("failed to read watcher events: {e}"),
+        )
+            .into_response(),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("terminal watcher events task panicked: {e}"),
         )
             .into_response(),
     }

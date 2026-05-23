@@ -207,9 +207,17 @@ pub async fn api_fs_graph(
     Query(p): Query<FsGraphParams>,
 ) -> Response {
     let drive = state.drive();
-    match build_fs_graph(&drive, p.scope, &p.path, p.depth) {
-        Ok(response) => Json(response).into_response(),
-        Err(e) => err(e.status, e.message),
+    let result =
+        tokio::task::spawn_blocking(move || build_fs_graph(&drive, p.scope, &p.path, p.depth))
+            .await;
+    match result {
+        Ok(Ok(response)) => Json(response).into_response(),
+        Ok(Err(e)) => err(e.status, e.message),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("filesystem graph task panicked: {e}"),
+        )
+            .into_response(),
     }
 }
 

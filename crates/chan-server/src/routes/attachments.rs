@@ -100,55 +100,68 @@ pub async fn api_post_attachment(
     let (stem, ext) = split_filename(&original);
     let stem_slug = slugify_for_filename(stem);
     let stem_or_default = if stem_slug.is_empty() {
-        "file"
+        "file".to_string()
     } else {
-        &stem_slug
+        stem_slug
     };
     let ext = ext.map(|e| e.to_ascii_lowercase()).unwrap_or_default();
-    let join_filename = |name: &str| -> String {
-        if dir.is_empty() {
-            name.to_owned()
-        } else {
-            format!("{dir}/{name}")
-        }
-    };
-    let build_name = |suffix: Option<u32>| -> String {
-        let base = match suffix {
-            None => stem_or_default.to_owned(),
-            Some(n) => format!("{stem_or_default}-{n}"),
-        };
-        if ext.is_empty() {
-            base
-        } else {
-            format!("{base}.{ext}")
-        }
-    };
 
     let drive = state.drive();
-    let mut rel = join_filename(&build_name(None));
-    let mut attempt: u32 = 1;
-    // Hard cap on retries: if a thousand suffixes are taken the
-    // user has bigger problems than this loop; bail to a unique
-    // timestamp fallback rather than spinning forever.
-    while drive.exists(&rel) {
-        if attempt > 1000 {
-            let ts = now_unix_secs();
-            let base = format!("{stem_or_default}-{ts}");
-            let name = if ext.is_empty() {
+    let result = tokio::task::spawn_blocking(move || {
+        let join_filename = |name: &str| -> String {
+            if dir.is_empty() {
+                name.to_owned()
+            } else {
+                format!("{dir}/{name}")
+            }
+        };
+        let build_name = |suffix: Option<u32>| -> String {
+            let base = match suffix {
+                None => stem_or_default.clone(),
+                Some(n) => format!("{stem_or_default}-{n}"),
+            };
+            if ext.is_empty() {
                 base
             } else {
                 format!("{base}.{ext}")
-            };
-            rel = join_filename(&name);
-            break;
+            }
+        };
+        let mut rel = join_filename(&build_name(None));
+        let mut attempt: u32 = 1;
+        // Hard cap on retries: if a thousand suffixes are taken the
+        // user has bigger problems than this loop; bail to a unique
+        // timestamp fallback rather than spinning forever.
+        while drive.exists(&rel) {
+            if attempt > 1000 {
+                let ts = now_unix_secs();
+                let base = format!("{stem_or_default}-{ts}");
+                let name = if ext.is_empty() {
+                    base
+                } else {
+                    format!("{base}.{ext}")
+                };
+                rel = join_filename(&name);
+                break;
+            }
+            rel = join_filename(&build_name(Some(attempt)));
+            attempt += 1;
         }
-        rel = join_filename(&build_name(Some(attempt)));
-        attempt += 1;
-    }
 
-    if let Err(e) = drive.write_bytes(&rel, &bytes) {
-        return err_from(&e);
-    }
+        drive.write_bytes(&rel, &bytes)?;
+        Ok::<_, chan_drive::ChanError>(rel)
+    })
+    .await;
+    let rel = match result {
+        Ok(Ok(rel)) => rel,
+        Ok(Err(e)) => return err_from(&e),
+        Err(e) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("attachment write task panicked: {e}"),
+            )
+                .into_response()
+        }
+    };
     state.self_writes.note(&rel);
     Json(serde_json::json!({ "path": rel })).into_response()
 }
