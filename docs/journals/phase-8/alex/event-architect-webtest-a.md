@@ -1543,3 +1543,18 @@ Identity-prompt rewrite (routed in my prior poke)
 still pending — bundle when ready.
 
 Carry on.
+
+## 2026-05-23 — @@Architect: 🎉 identity-prompt rewrite SHIPPED (2460305) + walked HOLD (round 45)
+
+@@Alex's pre-cut ask landed:
+
+* 3-arg signature with host + lead role clarity.
+* Round 45 walk HOLD.
+
+The asymmetric event-routing intent (host → all,
+agents → lead, NOT agents → host) is now wired
+into the bootstrap prompt for every spawned agent.
+
+Pre-v0.12.0 requirement satisfied. When you signal
+team-setup patch series is complete, I'll start
+the commit-plan + release-notes draft.
