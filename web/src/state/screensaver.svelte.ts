@@ -33,7 +33,12 @@
 // `pinAccessory()` pattern from `idle.svelte.ts`.
 
 import { api } from "../api/client";
-import { hashPin, SCREENSAVER_DEFAULT_TIMEOUT_SECS } from "./screensaver";
+import {
+  hashPin,
+  SCREENSAVER_DEFAULT_THEME,
+  SCREENSAVER_DEFAULT_TIMEOUT_SECS,
+  type ScreensaverTheme,
+} from "./screensaver";
 
 export interface ScreensaverState {
   /// Drive-level enabled flag (server-side; sourced from
@@ -42,6 +47,8 @@ export interface ScreensaverState {
   enabled: boolean;
   /// Drive-level inactivity timeout in seconds.
   timeout_secs: number;
+  /// Visual theme rendered behind the unlock card.
+  theme: ScreensaverTheme;
   /// Whether a PIN hash is stored on the drive. The PIN
   /// itself never crosses the wire; this flag tells the
   /// SPA whether to show a PIN-setup prompt vs a regular
@@ -58,6 +65,7 @@ export interface ScreensaverState {
 export const screensaver = $state<ScreensaverState>({
   enabled: false,
   timeout_secs: SCREENSAVER_DEFAULT_TIMEOUT_SECS,
+  theme: SCREENSAVER_DEFAULT_THEME,
   pin_set: false,
   locked: false,
   loaded: false,
@@ -75,6 +83,7 @@ export async function loadScreensaverState(): Promise<void> {
     const s = await api.screensaverState();
     screensaver.enabled = s.enabled;
     screensaver.timeout_secs = s.timeout_secs;
+    screensaver.theme = s.theme;
     screensaver.pin_set = s.pin_set;
     screensaver.loaded = true;
     armInactivityTimer();

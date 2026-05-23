@@ -15,13 +15,13 @@ import sourceText from "./screensaver.ts?raw";
 describe("fullstack-a-77 slice 1: api.screensaver* client methods", () => {
   test("screensaverState hits GET /api/screensaver/state", () => {
     expect(clientSource).toMatch(
-      /screensaverState: \(\) =>[\s\S]*?req<\{ enabled: boolean; timeout_secs: number; pin_set: boolean \}>\([\s\S]*?"GET",[\s\S]*?"\/api\/screensaver\/state"/,
+      /screensaverState: \(\) =>[\s\S]*?req<\{ enabled: boolean; timeout_secs: number; theme: "matrix" \| "castaway"; pin_set: boolean \}>\([\s\S]*?"GET",[\s\S]*?"\/api\/screensaver\/state"/,
     );
   });
 
-  test("screensaverPatch hits PATCH /api/screensaver/state with partial body", () => {
+  test("screensaverPatch hits PATCH /api/screensaver/state with partial body including theme", () => {
     expect(clientSource).toMatch(
-      /screensaverPatch: \(body: \{ enabled\?: boolean; timeout_secs\?: number \}\) =>[\s\S]*?"PATCH",[\s\S]*?"\/api\/screensaver\/state",[\s\S]*?body,/,
+      /screensaverPatch: \(body: \{[\s\S]*?enabled\?: boolean;[\s\S]*?timeout_secs\?: number;[\s\S]*?theme\?: "matrix" \| "castaway";[\s\S]*?\}\) =>[\s\S]*?"PATCH",[\s\S]*?"\/api\/screensaver\/state",[\s\S]*?body,/,
     );
   });
 
@@ -83,8 +83,8 @@ describe("fullstack-a-77 slice 1: timeout constants", () => {
   });
 
   test("min + max bracket the configurable range", () => {
-    expect(SCREENSAVER_MIN_TIMEOUT_SECS).toBe(30);
-    expect(SCREENSAVER_MAX_TIMEOUT_SECS).toBe(4 * 60 * 60);
+    expect(SCREENSAVER_MIN_TIMEOUT_SECS).toBe(10);
+    expect(SCREENSAVER_MAX_TIMEOUT_SECS).toBe(60 * 60);
   });
 });
 

@@ -14,6 +14,7 @@
     hashPin,
     SCREENSAVER_MAX_TIMEOUT_SECS,
     SCREENSAVER_MIN_TIMEOUT_SECS,
+    type ScreensaverTheme,
   } from "../state/screensaver";
   import {
     loadScreensaverState,
@@ -282,6 +283,7 @@
   // commit fires.
   let screensaverEnabled = $state<boolean | null>(null);
   let screensaverTimeoutSecs = $state<number>(300);
+  let screensaverTheme = $state<ScreensaverTheme>("matrix");
   let screensaverPinSet = $state(false);
   let screensaverBusy = $state(false);
   let screensaverError = $state<string | null>(null);
@@ -309,6 +311,7 @@
       const s = await api.screensaverState();
       screensaverEnabled = s.enabled;
       screensaverTimeoutSecs = s.timeout_secs;
+      screensaverTheme = s.theme;
       screensaverPinSet = s.pin_set;
     } catch (err) {
       screensaverError = `screensaver: ${(err as Error).message ?? err}`;
@@ -368,6 +371,7 @@
       const s = await api.screensaverPatch({ enabled: target });
       screensaverEnabled = s.enabled;
       screensaverTimeoutSecs = s.timeout_secs;
+      screensaverTheme = s.theme;
       screensaverPinSet = s.pin_set;
       await loadScreensaverState();
     } catch (err) {
@@ -379,22 +383,46 @@
 
   async function commitTimeout(): Promise<void> {
     if (screensaverBusy) return;
+    screensaverError = null;
     if (screensaverTimeoutSecs < SCREENSAVER_MIN_TIMEOUT_SECS) {
       screensaverTimeoutSecs = SCREENSAVER_MIN_TIMEOUT_SECS;
+      screensaverError = `Timeout must be at least ${SCREENSAVER_MIN_TIMEOUT_SECS}s`;
     }
     if (screensaverTimeoutSecs > SCREENSAVER_MAX_TIMEOUT_SECS) {
       screensaverTimeoutSecs = SCREENSAVER_MAX_TIMEOUT_SECS;
+      screensaverError = `Timeout must be at most ${SCREENSAVER_MAX_TIMEOUT_SECS}s`;
     }
     screensaverBusy = true;
-    screensaverError = null;
+    const validationMessage = screensaverError;
     try {
       const s = await api.screensaverPatch({ timeout_secs: screensaverTimeoutSecs });
       screensaverEnabled = s.enabled;
       screensaverTimeoutSecs = s.timeout_secs;
+      screensaverTheme = s.theme;
       screensaverPinSet = s.pin_set;
+      screensaverError = validationMessage;
       await loadScreensaverState();
     } catch (err) {
       screensaverError = `timeout save failed: ${(err as Error).message ?? err}`;
+    } finally {
+      screensaverBusy = false;
+    }
+  }
+
+  async function commitScreensaverTheme(e: Event): Promise<void> {
+    if (screensaverBusy) return;
+    const theme = (e.currentTarget as HTMLSelectElement).value as ScreensaverTheme;
+    screensaverBusy = true;
+    screensaverError = null;
+    try {
+      const s = await api.screensaverPatch({ theme });
+      screensaverEnabled = s.enabled;
+      screensaverTimeoutSecs = s.timeout_secs;
+      screensaverTheme = s.theme;
+      screensaverPinSet = s.pin_set;
+      await loadScreensaverState();
+    } catch (err) {
+      screensaverError = `theme save failed: ${(err as Error).message ?? err}`;
     } finally {
       screensaverBusy = false;
     }
@@ -427,6 +455,7 @@
       const s = await api.screensaverSetPin(hash);
       screensaverEnabled = s.enabled;
       screensaverTimeoutSecs = s.timeout_secs;
+      screensaverTheme = s.theme;
       screensaverPinSet = s.pin_set;
       pinDialog = null;
       await loadScreensaverState();
@@ -445,6 +474,7 @@
       const s = await api.screensaverClearPin();
       screensaverEnabled = s.enabled;
       screensaverTimeoutSecs = s.timeout_secs;
+      screensaverTheme = s.theme;
       screensaverPinSet = s.pin_set;
       await loadScreensaverState();
     } catch (err) {
@@ -663,6 +693,17 @@
           {/if}
           {#if screensaverEnabled === true}
             <div class="screensaver-config">
+              <label class="screensaver-theme">
+                <span>Theme:</span>
+                <select
+                  bind:value={screensaverTheme}
+                  onchange={commitScreensaverTheme}
+                  disabled={screensaverBusy}
+                >
+                  <option value="matrix">Matrix</option>
+                  <option value="castaway">Castaway</option>
+                </select>
+              </label>
               <label class="screensaver-timeout">
                 <span>Inactivity timeout (seconds):</span>
                 <input
@@ -965,6 +1006,53 @@
     white-space: nowrap;
   }
   .feature-switch input[disabled] {
+    cursor: wait;
+  }
+  .screensaver-config {
+    display: grid;
+    gap: 0.5rem;
+    margin-top: 0.5rem;
+  }
+  .screensaver-theme,
+  .screensaver-timeout {
+    display: grid;
+    grid-template-columns: minmax(9rem, auto) minmax(8rem, 1fr);
+    align-items: center;
+    gap: 0.5rem;
+    max-width: 28rem;
+    font-size: 13px;
+  }
+  .screensaver-theme select,
+  .screensaver-timeout input,
+  .screensaver-pin-controls input {
+    min-width: 0;
+    background: var(--bg);
+    color: var(--text);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    padding: 5px 7px;
+    font: inherit;
+  }
+  .screensaver-pin-controls {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    flex-wrap: wrap;
+  }
+  .screensaver-pin-controls button {
+    background: var(--btn-bg);
+    color: var(--text);
+    border: 1px solid var(--btn-border);
+    border-radius: 4px;
+    padding: 5px 9px;
+    font: inherit;
+    cursor: pointer;
+  }
+  .screensaver-pin-controls button:hover:not(:disabled) {
+    border-color: var(--btn-hover);
+  }
+  .screensaver-pin-controls button:disabled {
+    opacity: 0.6;
     cursor: wait;
   }
   /* Tab-bar autosave indicator. Sits between the title and the
