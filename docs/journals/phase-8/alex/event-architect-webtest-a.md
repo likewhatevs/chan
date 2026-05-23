@@ -1415,3 +1415,112 @@ the transferred @@FullStackA queue items. When
 you signal complete, I'll start the commit-plan
 + release-notes draft for v0.12.0; @@CI fires
 release.yml + release-desktop.yml on tag.
+
+## 2026-05-23 — @@Alex direct: identity-prompt template rewrite (bundle with current team-setup patches)
+
+@@Alex flagged this before v0.12.0 ships. Since
+you're mid-flight on `teamOrchestrator.svelte.ts`
+(I see the worktree mod), please bundle.
+
+### Current shape (`teamOrchestrator.svelte.ts:178-183`)
+
+```ts
+export function identityPrompt(hostHandle: string): string {
+  return (
+    `I'm ${hostHandle}. You're $CHAN_TAB_NAME. ` +
+    `Identify yourself, and then read docs/agents/bootstrap.md`
+  );
+}
+```
+
+### New shape per @@Alex literal
+
+> Hello, I am {Host} and you are {Name}. Our team lead is {Lead}. Identify yourself and read {bootstrap-doc}.
+
+### Why the change (verbatim @@Alex)
+
+> "In our template process, we have to be clear
+> about the roles of the Host (in our project this
+> is me, @@Alex.. I speak to all of you but mostly
+> the lead, our @@Architect in this project).
+>
+> I think having clarity about the role of the
+> host and the role of the lead will make the
+> agents focus on sending the events to the lead
+> while still open to direct inquiries from the
+> host, but not the other way around - they
+> shouldn't reach out to the host, always to the
+> lead."
+
+The asymmetry is intentional: host → all (read +
+direct queries OK), agents → lead (default event
+target), agents NOT → host (host is observer +
+direct-query source only).
+
+### Suggested implementation
+
+```ts
+export function identityPrompt(
+  hostHandle: string,
+  leadHandle: string,
+  bootstrapDoc: string,
+): string {
+  return (
+    `Hello, I am ${hostHandle} and you are $CHAN_TAB_NAME. ` +
+    `Our team lead is ${leadHandle}. ` +
+    `Identify yourself and read ${bootstrapDoc}.`
+  );
+}
+```
+
+`$CHAN_TAB_NAME` literal preserved (worker's shell
+expands; matches existing pattern).
+
+### Callers + values
+
+* Line 326 (`const prompt = identityPrompt(wire.host_handle);`)
+  needs the two new args:
+  * `leadHandle`: derive from
+    `wire.members.find((m) => m.is_lead)?.handle`
+    (same shape as in `templateVarsForWire`).
+  * `bootstrapDoc`: pick the canonical path. Two
+    options worth comparing:
+    * `Drafts/team-${wire.team_name}/docs/bootstrap.md`
+      — the actual placed bootstrap path from
+      `placeTeamTemplates`. Most accurate.
+    * `docs/agents/bootstrap.md` — the existing
+      reference. May be stale but matches what
+      workers' agents have been told today.
+
+Pick the one that resolves correctly for the
+worker's CWD/MCP context. If unclear, use the
+placed-bootstrap path (`Drafts/team-${name}/docs/bootstrap.md`)
+since `-a-79 slice 3` actually writes it there.
+
+### Lead variant
+
+The lead reads the same prompt (line 363 primes
+the lead's rich-prompt buffer with `prompt`). The
+literal "Our team lead is {Lead}" applied to the
+lead = "Our team lead is @@Architect" which they
+parse as "I am the lead" — uniform template is
+fine + explicit self-affirmation of role.
+
+If you want a cleaner lead-specific message, fork
+into `workerIdentityPrompt` + `leadIdentityPrompt`
+— implementer's call.
+
+### Tests
+
+Vitest pins for:
+* New 3-arg signature.
+* Template substring matches Alex's spec verbatim.
+* Caller passes leadHandle + bootstrapDoc.
+
+### Bundling
+
+Tiny — ~15 LOC. Bundle with whatever you're
+currently editing in `teamOrchestrator.svelte.ts`
+(saves a separate commit). Pre-v0.12.0 ship.
+
+Standing by.
