@@ -55,6 +55,8 @@ Follow-up in this wave:
 - `npm run bundle:manual` packages `chan-manual-<version>.tar.gz` from
   generated manual pages and shared site assets. The release workflow uses
   this script instead of hand-rolled inline copy/tar commands.
+- Manual navigation now follows the manual landing page links first, with
+  path-order fallback for pages not linked from `docs/manual/index.md`.
 
 Latest local checks:
 

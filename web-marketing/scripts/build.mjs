@@ -203,6 +203,7 @@ async function readManualPages() {
   }
 
   const pages = [];
+  let indexLinkOrder = new Map();
   for (const file of files) {
     const source = path.relative(repoRoot, file);
     const raw = await fs.readFile(file, "utf8");
@@ -210,6 +211,9 @@ async function readManualPages() {
     const title = firstH1(body, source);
     const rel = path.relative(manualRoot, file).split(path.sep).join("/");
     const url = manualUrlFor(rel);
+    if (rel === "index.md") {
+      indexLinkOrder = manualIndexLinkOrder(body);
+    }
     pages.push({
       attrs,
       depth: url.split("/").filter(Boolean).length - 1,
@@ -225,14 +229,33 @@ async function readManualPages() {
   pages.sort((a, b) => {
     if (a.rel === "index.md") return -1;
     if (b.rel === "index.md") return 1;
-    const aOrder = Number(a.attrs.order ?? Number.NaN);
-    const bOrder = Number(b.attrs.order ?? Number.NaN);
+    const aOrder = manualSortOrder(a, indexLinkOrder);
+    const bOrder = manualSortOrder(b, indexLinkOrder);
     if (Number.isFinite(aOrder) && Number.isFinite(bOrder) && aOrder !== bOrder) {
       return aOrder - bOrder;
+    }
+    if (Number.isFinite(aOrder) !== Number.isFinite(bOrder)) {
+      return Number.isFinite(aOrder) ? -1 : 1;
     }
     return a.rel.localeCompare(b.rel);
   });
   return pages;
+}
+
+function manualIndexLinkOrder(markdown) {
+  const order = new Map();
+  for (const match of markdown.matchAll(/\]\((\/manual\/[^)#?]*\/)\)/g)) {
+    const url = match[1];
+    if (url === "/manual/" || order.has(url)) continue;
+    order.set(url, order.size + 1);
+  }
+  return order;
+}
+
+function manualSortOrder(page, indexLinkOrder) {
+  const explicit = Number(page.attrs.order ?? Number.NaN);
+  if (Number.isFinite(explicit)) return explicit;
+  return indexLinkOrder.get(page.url) ?? Number.NaN;
 }
 
 async function walkMarkdown(dir) {

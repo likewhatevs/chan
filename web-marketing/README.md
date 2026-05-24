@@ -24,7 +24,9 @@ web-marketing/
 ```
 
 Manual source lives in `docs/manual/`. The site build renders that tree to
-`/manual/` and nested clean URLs.
+`/manual/` and nested clean URLs. Manual navigation starts with the links in
+`docs/manual/index.md`, then falls back to path order for pages not linked
+from the manual landing page.
 
 ## Build
 
