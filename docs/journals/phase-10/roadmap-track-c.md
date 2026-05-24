@@ -43,6 +43,9 @@ Progress:
   hover/focus/wobble scale animation off the pane element and onto a
   pointer-transparent chrome layer so xterm WebGL canvases are not transformed
   during focus changes.
+- 2026-05-24: queued File Browser drag-and-drop transfer work: browser-side
+  drop-to-upload, status-bar progress and cancel, plus native desktop
+  drag-out/download follow-up in Track A.
 
 ## Objectives
 
@@ -68,6 +71,8 @@ Progress:
   focus transitions.
 - Ensure Draft writes travel through chan-drive, chan-server watchers, and UI
   tree refresh so saved Drafts appear in docked File Browser without reload.
+- Add File Browser drag-and-drop upload and download flows without toolbar
+  buttons.
 
 ## 1. Terminal pane rendering bugs
 
@@ -410,6 +415,70 @@ Smoke:
   expanded state.
 - Repeat after collapsing and expanding parent directories.
 
+## 12. File Browser drag-and-drop transfer
+
+Current issue:
+
+- File Browser has no direct drag-and-drop transfer path for moving local files
+  into a drive or dragging drive files back to the user's desktop.
+- The desired UI should avoid extra toolbar buttons and use the existing File
+  Browser and status bar surfaces.
+
+Target behavior:
+
+- Dropping a file onto a docked File Browser or File Browser tab uploads it
+  into the drive.
+- Dropping onto a folder row uploads into that folder.
+- Dropping onto the root or empty browser area uploads into the current visible
+  root.
+- Uploads use the normal chan-server and chan-drive write path, including path
+  sandboxing, editable-text rules where applicable, and special-file refusal.
+- Conflict behavior must be explicit. Do not silently overwrite an existing
+  file.
+- The status bar shows active upload progress, including filename or count,
+  bytes where available, completion, and failure.
+- The status bar exposes a cancel affordance for active uploads.
+- Cancelling an upload leaves no visible partial file, or cleans up any staged
+  temporary file before the tree refreshes.
+- File Browser refreshes after upload while preserving expanded/collapsed
+  directory state.
+- Dragging a file from File Browser toward the OS desktop should download or
+  export that file where the browser or native host supports drag-out.
+- Dragging a directory from File Browser toward the OS desktop should export
+  that directory where supported. The export format can be a real directory or
+  an archive, but it must preserve the tree and names.
+
+Investigation notes:
+
+- Use standard browser drag/drop `DataTransfer` for inbound file drops where
+  possible.
+- Treat File System Access APIs as optional capability checks, not a required
+  dependency for the embedded app.
+- Upload progress may require an XHR path or a fetch streaming path with
+  `AbortController` cancellation, depending on browser and webview support.
+- Directory upload can be a later expansion if it requires non-standard
+  browser entry APIs.
+- Browser drag-out/download feasibility is uncertain, especially for
+  directories. Native desktop support is tracked in Track A.
+- Keep any temporary upload or export staging outside the user-content tree
+  until the final chan-drive write or explicit desktop export step.
+
+Smoke:
+
+- Drop a small text file onto the File Browser root and confirm it appears
+  without reload.
+- Drop an image or other binary file onto a nested folder and confirm it
+  appears in that folder.
+- Start a large upload, cancel it from the status bar, and confirm no partial
+  file remains.
+- Drop a file that conflicts with an existing path and confirm the UI does not
+  silently overwrite.
+- Repeat upload smoke in docked File Browser and File Browser tabs.
+- Drag a file from File Browser to the desktop where supported and confirm the
+  exported file bytes match.
+- In the desktop build, drag a directory from File Browser to the desktop and
+  confirm the exported tree or archive preserves names and contents.
+
 ## Test plan
 
 - Hybrid menu tests:
@@ -492,10 +561,20 @@ Smoke:
   - Watcher or explicit invalidation events fire for same-process Draft saves.
   - Draft UI paths and physical metadata paths resolve to the same visible
     File Browser entry.
+- File Browser transfer tests:
+  - Drop-to-upload works in docked File Browser and File Browser tabs.
+  - Upload progress appears in the status bar.
+  - Upload cancel stops transfer and leaves no partial visible file.
+  - Conflict handling does not silently overwrite existing files.
+  - File Browser refresh preserves expanded/collapsed state after upload.
+  - Browser drag-out either downloads the selected file or reports unsupported
+    behavior cleanly.
+  - Desktop drag-out coverage is verified through Track A.
 
 ## Assumptions and non-goals
 
 - Track C is web and embedded app work, not desktop-native shell work.
 - Linux desktop launch failures live in Track A.
+- Native desktop drag-out/download support for File Browser lives in Track A.
 - Terminal renderer stability is tested visually in Browser/iab and, when
   useful, through automated DOM or canvas checks.

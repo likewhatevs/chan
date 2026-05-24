@@ -116,6 +116,10 @@ Default `Chan` drive:
 - Seed the drive with the full `docs/manual/` tree embedded at build time.
   Done for fresh metadata.
 - For existing users with metadata but no default `Chan` drive, prompt to
+  designate an existing drive or create a new one. Do not wipe existing
+  metadata during migration. Done.
+- If the registered default `Chan` drive is missing on launch, enter a
+  factory-reset confirmation flow before wiping chan metadata. Done.
 
 Desktop File Browser drag-out/download:
 
@@ -137,10 +141,6 @@ Desktop File Browser drag-out/download:
 - Cancelled drags should not leave user-visible temporary files behind.
 - Verify browser-only drag-out first. Keep this task scoped to gaps that need
   native desktop help.
-  designate an existing drive or create a new one. Do not wipe existing
-  metadata during migration. Done.
-- If the registered default `Chan` drive is missing on launch, enter a
-  factory-reset confirmation flow before wiping chan metadata. Done.
 
 ## 3. Manual, docs, and site
 
@@ -238,14 +238,14 @@ Operational release checks:
   - Build the Tauri app.
   - Open two embedded local drives.
   - Edit both drives.
+  - Run terminals in both drives.
+  - Verify no cross-drive state bleed.
   - Drag a File Browser file to the desktop and verify name and bytes.
   - Drag a File Browser directory to the desktop and verify tree or archive
     contents.
   - Cancel a File Browser drag-out and verify temporary export cleanup.
   - Repeat drag-out smoke on macOS and Linux where desktop builds are
     available.
-  - Run terminals in both drives.
-  - Verify no cross-drive state bleed.
 - CLI compatibility:
 - Standalone `chan serve <path>` with no desktop running.
 - Handoff with desktop running.
