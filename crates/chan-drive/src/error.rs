@@ -34,6 +34,10 @@ pub enum ChanError {
     DriveAlreadyRegistered(PathBuf),
     #[error("write conflict: file changed on disk (current mtime ns: {current_mtime_ns:?})")]
     WriteConflict { current_mtime_ns: Option<i64> },
+    #[error("path already exists: {0}")]
+    PathAlreadyExists(String),
+    #[error("draft `{name}` is broken: {message}")]
+    DraftBroken { name: String, message: String },
     #[error("write too large: {size} bytes exceeds {limit} byte cap for {kind}")]
     WriteTooLarge {
         kind: &'static str,

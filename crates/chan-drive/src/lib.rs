@@ -53,7 +53,7 @@ pub use contacts::{
     Contact, EmailAddress, ImportCounts, ImportOpts, ImportOutcome, ImportSummary, Organization,
     PhoneNumber, ProviderKind,
 };
-pub use drafts::DraftRef;
+pub use drafts::{DraftInspection, DraftPromoteMode, DraftPromoteReport, DraftRef};
 pub use drive::ReconcileReport;
 pub use drive::{
     DirEntry, Drive, FileStat, RenameOutcome, ResolvedLink, SearchOpts, TreeEntry,

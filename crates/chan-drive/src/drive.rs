@@ -1273,18 +1273,32 @@ impl Drive {
         drafts::list(&self.paths.drafts)
     }
 
-    /// Promote a draft into the drive root by atomic rename.
-    /// `name` is the leaf inside drafts (e.g. `"untitled-1"`);
-    /// `target_rel` is the relative path inside the drive that
-    /// should receive the directory (e.g. `"notes/published"`).
-    /// Errors when the source is missing, the target already
-    /// exists, or the target's parent doesn't exist. Same-
-    /// filesystem promotion is atomic; cross-filesystem
-    /// promotion fails (caller's problem to retry as
-    /// copy-then-delete; chan-drive doesn't paper over that).
-    pub fn promote_draft(&self, name: &str, target_rel: &str) -> Result<()> {
-        let target_abs = self.root().join(target_rel);
-        drafts::promote(&self.paths.drafts, name, &target_abs)
+    /// Inspect a draft workspace before save or discard.
+    pub fn inspect_draft(&self, name: &str) -> Result<drafts::DraftInspection> {
+        drafts::inspect(&self.paths.drafts, name)
+    }
+
+    /// Move a draft workspace to metadata trash.
+    pub fn discard_draft(&self, name: &str) -> Result<()> {
+        drafts::discard(&self.paths.drafts, &self.paths.trash.join("drafts"), name)
+    }
+
+    /// Promote a draft into the drive root with no-clobber
+    /// semantics. Single-file drafts move `draft.md` to
+    /// `target_rel`; workspaces move or merge the whole draft
+    /// directory into the target directory.
+    pub fn promote_draft(
+        &self,
+        name: &str,
+        target_rel: &str,
+    ) -> Result<drafts::DraftPromoteReport> {
+        drafts::promote(
+            &self.paths.drafts,
+            self.root(),
+            &self.root_canon,
+            name,
+            target_rel,
+        )
     }
 
     // ---- teams (systacean-30) ----
@@ -5499,9 +5513,10 @@ mod tests {
         assert!(a.abs.is_dir());
         assert!(b.abs.is_dir());
 
-        // Seed a draft.md inside untitled-1 so we can confirm the
-        // promote rename carries companion content.
+        // Seed a draft.md plus companion content so promotion treats
+        // this as a workspace directory.
         std::fs::write(a.abs.join("draft.md"), b"# hello\n").unwrap();
+        std::fs::write(a.abs.join("pasted.png"), [1, 2, 3]).unwrap();
 
         let listed = drive.list_drafts().unwrap();
         assert_eq!(listed.len(), 2);
@@ -5513,6 +5528,7 @@ mod tests {
         drive.promote_draft("untitled-1", "untitled-1").unwrap();
         assert!(root.path().join("untitled-1").is_dir());
         assert!(root.path().join("untitled-1").join("draft.md").is_file());
+        assert!(root.path().join("untitled-1").join("pasted.png").is_file());
         assert!(!drive.drafts_dir().join("untitled-1").exists());
 
         // rich-prompt-2 still listed; untitled-1 gone.
@@ -6145,7 +6161,14 @@ mod tests {
         // target.
         let (_cfg, root, drive) = fixture();
         drive.create_draft_dir("untitled-1").unwrap();
+        drive
+            .write_text("Drafts/untitled-1/draft.md", "# draft\n")
+            .unwrap();
+        drive
+            .write_bytes("Drafts/untitled-1/pasted.png", &[1, 2, 3])
+            .unwrap();
         drive.write_text("untitled-1/sentinel.md", "x").unwrap();
+        drive.write_text("untitled-1/draft.md", "existing").unwrap();
         assert!(drive.promote_draft("untitled-1", "untitled-1").is_err());
         // Draft still exists; nothing in the drive's untitled-1
         // dir was disturbed.

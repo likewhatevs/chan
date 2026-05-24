@@ -68,7 +68,8 @@ pub fn err_from(e: &chan_drive::ChanError) -> Response {
         C::NotEditableText(_) => (StatusCode::UNSUPPORTED_MEDIA_TYPE, e.to_string()),
         C::SpecialFile { .. } => (StatusCode::UNSUPPORTED_MEDIA_TYPE, e.to_string()),
         C::DriveNotRegistered(_) | C::DriveRootMissing(_) => (StatusCode::NOT_FOUND, e.to_string()),
-        C::DriveLocked => (StatusCode::CONFLICT, e.to_string()),
+        C::DriveLocked | C::PathAlreadyExists(_) => (StatusCode::CONFLICT, e.to_string()),
+        C::DraftBroken { .. } => (StatusCode::BAD_REQUEST, e.to_string()),
         C::Io(s) if s.contains("No such file") || s.contains("not found") => {
             (StatusCode::NOT_FOUND, e.to_string())
         }
@@ -88,6 +89,18 @@ mod tests {
         // Sanity: error bodies are tiny, way under 8 KiB.
         assert_eq!(parts.status, StatusCode::FORBIDDEN);
         serde_json::from_slice(&bytes).expect("error body is JSON")
+    }
+
+    async fn status_and_error(r: Response) -> (StatusCode, String) {
+        let (parts, body) = r.into_parts();
+        let bytes = to_bytes(body, 8192).await.expect("read body");
+        let value: serde_json::Value = serde_json::from_slice(&bytes).expect("error body is JSON");
+        let message = value
+            .get("error")
+            .and_then(|x| x.as_str())
+            .expect("error field")
+            .to_string();
+        (parts.status, message)
     }
 
     #[tokio::test]
@@ -115,5 +128,27 @@ mod tests {
         // MUST carry a `error` string field at 403 — that's the
         // wire contract every chan-server refusal shares.
         assert!(!msg.is_empty());
+    }
+
+    #[tokio::test]
+    async fn err_from_maps_path_already_exists_to_conflict() {
+        let (status, msg) = status_and_error(err_from(&chan_drive::ChanError::PathAlreadyExists(
+            "notes/draft.md".to_string(),
+        )))
+        .await;
+        assert_eq!(status, StatusCode::CONFLICT);
+        assert!(msg.contains("notes/draft.md"));
+    }
+
+    #[tokio::test]
+    async fn err_from_maps_broken_draft_to_bad_request() {
+        let (status, msg) = status_and_error(err_from(&chan_drive::ChanError::DraftBroken {
+            name: "untitled-1".to_string(),
+            message: "missing draft.md".to_string(),
+        }))
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        assert!(msg.contains("untitled-1"));
+        assert!(msg.contains("missing draft.md"));
     }
 }

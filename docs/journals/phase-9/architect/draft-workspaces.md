@@ -166,3 +166,9 @@ MCP. The Svelte tree refresh path now ignores Drafts watcher events because
 Drafts are no longer visible in File Browser. chan-llm prompts and tool
 descriptions now describe `Drafts/...` as uncommitted metadata-backed
 workspaces rather than committed drive content.
+
+2026-05-24: The chan-drive draft lifecycle core now has explicit inspect,
+discard, and no-clobber promote primitives. Promotion validates the draft
+workspace, rejects path escapes and occupied destinations, saves single-file
+drafts as a final markdown/text file, and saves workspace drafts by creating
+or merging a target directory without overwriting existing files.
