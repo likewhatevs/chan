@@ -31,6 +31,10 @@ Progress:
 - 2026-05-24: fixed Draft promotion refresh for docked File Browsers by
   including docked browsers in watcher scopes and explicitly refreshing the
   promoted drive path after same-process Draft saves.
+- 2026-05-24: tightened the Graph filesystem spine so scoped filesystem
+  graph responses emit ancestor chains to the drive root, and the semantic
+  graph fills filesystem nodes from the unified tree independent of visual
+  depth.
 
 ## Objectives
 

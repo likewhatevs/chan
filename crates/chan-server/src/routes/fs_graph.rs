@@ -501,11 +501,12 @@ impl FsGraphWalker {
         self.nodes.entry(node.id.clone()).or_insert(node);
     }
 
-    /// File-scope walk: emit the requested path, its parent directory
-    /// (when not at drive root), and, if the path is a symlink,
-    /// classify its target. Directory targets are NOT walked here; we
-    /// stay shallow so `scope=file` is cheap.
+    /// File-scope walk: emit the requested path, its ancestor
+    /// directory chain up to the drive root, and, if the path is a
+    /// symlink, classify its target. Directory targets are NOT walked
+    /// here; we stay shallow so `scope=file` is cheap.
     fn walk_file(&mut self, rel: &str, abs: &Path, meta: &Metadata) {
+        self.emit_ancestor_chain(rel);
         self.visit_entry(rel, abs, meta);
         if !rel.is_empty() {
             let parent_rel = parent_rel(rel);
@@ -526,6 +527,7 @@ impl FsGraphWalker {
     /// route enforces this before invoking the walker.
     fn walk_directory(&mut self, rel: &str, abs: &Path, meta: &Metadata, depth: usize) {
         debug_assert!(meta.is_dir(), "walk_directory called on non-directory");
+        self.emit_ancestor_chain(rel);
         self.visit_entry(rel, abs, meta);
         if meta.permissions().readonly() {
             return;
@@ -535,6 +537,30 @@ impl FsGraphWalker {
             visited_dirs.insert(key);
         }
         self.walk_dir(rel, abs, depth, &mut visited_dirs);
+    }
+
+    /// Emit the root-to-leaf `contains` chain for a scoped file or
+    /// directory before walking its local neighbourhood. The normal
+    /// depth walk expands downward from the scope; this pass supplies
+    /// the upstream filesystem spine so callers can always show how a
+    /// scoped node attaches back to the drive root.
+    fn emit_ancestor_chain(&mut self, rel: &str) {
+        let root_abs = self.root.clone();
+        if let Ok(root_meta) = std::fs::symlink_metadata(&root_abs) {
+            self.visit_entry("", &root_abs, &root_meta);
+        }
+
+        let parts: Vec<&str> = rel.split('/').filter(|part| !part.is_empty()).collect();
+        let mut parent_rel = String::new();
+        for idx in 0..parts.len() {
+            let child_rel = parts[..=idx].join("/");
+            let child_abs = self.root.join(&child_rel);
+            if let Ok(child_meta) = std::fs::symlink_metadata(&child_abs) {
+                self.visit_entry(&child_rel, &child_abs, &child_meta);
+                self.push_edge(parent_rel.clone(), child_rel.clone(), "contains");
+            }
+            parent_rel = child_rel;
+        }
     }
 
     fn walk_dir(
@@ -1180,9 +1206,43 @@ mod tests {
         write(&tmp.path().join("sub/nested.md"), "# n");
 
         let resp = walk(tmp.path(), FsGraphScope::File, "sub/nested.md", 0);
+        assert_eq!(node_kind(&resp, ""), Some("directory"));
         assert_eq!(node_kind(&resp, "sub/nested.md"), Some("file"));
         assert_eq!(node_kind(&resp, "sub"), Some("directory"));
+        assert!(has_edge(&resp, "", "sub", "contains"));
         assert!(has_edge(&resp, "sub", "sub/nested.md", "contains"));
+    }
+
+    #[test]
+    fn file_scope_emits_full_ancestor_chain() {
+        let tmp = TempDir::new().unwrap();
+        write(&tmp.path().join("a/b/c/deep.md"), "# deep");
+
+        let resp = walk(tmp.path(), FsGraphScope::File, "a/b/c/deep.md", 0);
+        assert_eq!(node_kind(&resp, ""), Some("directory"));
+        assert_eq!(node_kind(&resp, "a"), Some("directory"));
+        assert_eq!(node_kind(&resp, "a/b"), Some("directory"));
+        assert_eq!(node_kind(&resp, "a/b/c"), Some("directory"));
+        assert_eq!(node_kind(&resp, "a/b/c/deep.md"), Some("file"));
+        assert!(has_edge(&resp, "", "a", "contains"));
+        assert!(has_edge(&resp, "a", "a/b", "contains"));
+        assert!(has_edge(&resp, "a/b", "a/b/c", "contains"));
+        assert!(has_edge(&resp, "a/b/c", "a/b/c/deep.md", "contains"));
+    }
+
+    #[test]
+    fn directory_scope_emits_full_ancestor_chain() {
+        let tmp = TempDir::new().unwrap();
+        write(&tmp.path().join("a/b/c/deep.md"), "# deep");
+
+        let resp = walk(tmp.path(), FsGraphScope::Directory, "a/b/c", 1);
+        assert_eq!(node_kind(&resp, ""), Some("directory"));
+        assert_eq!(node_kind(&resp, "a"), Some("directory"));
+        assert_eq!(node_kind(&resp, "a/b"), Some("directory"));
+        assert_eq!(node_kind(&resp, "a/b/c"), Some("directory"));
+        assert!(has_edge(&resp, "", "a", "contains"));
+        assert!(has_edge(&resp, "a", "a/b", "contains"));
+        assert!(has_edge(&resp, "a/b", "a/b/c", "contains"));
     }
 
     #[test]

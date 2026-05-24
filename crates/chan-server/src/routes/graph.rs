@@ -17,7 +17,9 @@ use axum::extract::{Path as AxumPath, Query, State};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use axum::Json;
-use chan_drive::{EdgeKind, FileClass, PathClass, ReportFileBucket, ReportFileStats};
+use chan_drive::{
+    EdgeKind, FileClass, PathClass, PathPermission, ReportFileBucket, ReportFileStats,
+};
 use serde::{Deserialize, Serialize};
 
 use crate::error::err_from;
@@ -494,7 +496,11 @@ fn language_node_id(language: &str) -> String {
 }
 
 fn directory_node_id(path: &str) -> String {
-    format!("directory:{path}")
+    if path.is_empty() {
+        String::new()
+    } else {
+        format!("directory:{path}")
+    }
 }
 
 fn directory_label(path: &str) -> String {
@@ -742,6 +748,166 @@ fn merge_directory_node(
     );
 }
 
+fn contains_edge_key(source: &str, target: &str) -> (String, String, &'static str) {
+    (source.to_string(), target.to_string(), "contains")
+}
+
+fn push_contains_edge(
+    edges: &mut Vec<GraphEdgeView>,
+    edge_set: &mut std::collections::BTreeSet<(String, String, &'static str)>,
+    source: String,
+    target: String,
+) {
+    if edge_set.insert(contains_edge_key(&source, &target)) {
+        edges.push(GraphEdgeView {
+            source,
+            target,
+            kind: "contains",
+            broken: None,
+            rank: None,
+            files: None,
+            code: None,
+        });
+    }
+}
+
+fn ensure_directory_path(
+    drive: &chan_drive::Drive,
+    nodes: &mut std::collections::BTreeMap<String, GraphNodeView>,
+    edges: &mut Vec<GraphEdgeView>,
+    edge_set: &mut std::collections::BTreeSet<(String, String, &'static str)>,
+    path: &str,
+) {
+    let clean = path.trim_matches('/');
+    let id = directory_node_id(clean);
+    merge_directory_node(
+        nodes,
+        id.clone(),
+        directory_label(clean),
+        clean.to_string(),
+        path_class_for_graph(drive, clean),
+        0,
+        0,
+    );
+    if clean.is_empty() {
+        return;
+    }
+    let parent = parent_directory(clean);
+    ensure_directory_path(drive, nodes, edges, edge_set, &parent);
+    push_contains_edge(edges, edge_set, directory_node_id(&parent), id);
+}
+
+fn merge_tree_file_node(
+    drive: &chan_drive::Drive,
+    nodes: &mut std::collections::BTreeMap<String, GraphNodeView>,
+    report_buckets: &std::collections::HashMap<String, ReportFileBucket>,
+    path: &str,
+) {
+    let id = path.to_string();
+    let label = file_label(path);
+    let path_class = path_class_for_graph(drive, path);
+    if is_media_graph_path(path) {
+        nodes.entry(id.clone()).or_insert(GraphNodeView::Media {
+            id,
+            label,
+            path: path.to_string(),
+            path_class,
+            missing: false,
+        });
+        return;
+    }
+
+    nodes.entry(id.clone()).or_insert(GraphNodeView::File {
+        id,
+        label,
+        path: path.to_string(),
+        path_class,
+        node_kind: None,
+        bucket: report_buckets.get(path).cloned(),
+        missing: false,
+    });
+}
+
+fn merge_tree_entry(
+    drive: &chan_drive::Drive,
+    nodes: &mut std::collections::BTreeMap<String, GraphNodeView>,
+    edges: &mut Vec<GraphEdgeView>,
+    edge_set: &mut std::collections::BTreeSet<(String, String, &'static str)>,
+    report_buckets: &std::collections::HashMap<String, ReportFileBucket>,
+    entry: &chan_drive::TreeEntry,
+) {
+    let path = entry.path.trim_matches('/');
+    if path.is_empty() {
+        ensure_directory_path(drive, nodes, edges, edge_set, "");
+        return;
+    }
+    let parent = parent_directory(path);
+    ensure_directory_path(drive, nodes, edges, edge_set, &parent);
+    if entry.is_dir {
+        ensure_directory_path(drive, nodes, edges, edge_set, path);
+    } else {
+        merge_tree_file_node(drive, nodes, report_buckets, path);
+        push_contains_edge(
+            edges,
+            edge_set,
+            directory_node_id(&parent),
+            path.to_string(),
+        );
+    }
+}
+
+fn merge_unified_tree_layer(
+    drive: &chan_drive::Drive,
+    p: &GraphParams,
+    nodes: &mut std::collections::BTreeMap<String, GraphNodeView>,
+    edges: &mut Vec<GraphEdgeView>,
+) {
+    let path = graph_scope_path(p);
+    let entries = match p.scope {
+        GraphScope::Drive => drive.list_tree_unified(),
+        GraphScope::Directory | GraphScope::File => drive.list_tree_prefix_unified(path),
+    };
+    let Ok(mut entries) = entries else {
+        return;
+    };
+    entries.sort_by(|a, b| a.path.cmp(&b.path));
+
+    let report_buckets: std::collections::HashMap<String, ReportFileBucket> = drive
+        .report()
+        .map(|r| {
+            r.files
+                .into_iter()
+                .filter_map(|f| f.bucket.map(|b| (f.path, b)))
+                .collect()
+        })
+        .unwrap_or_default();
+    let mut edge_set: std::collections::BTreeSet<(String, String, &'static str)> = edges
+        .iter()
+        .map(|edge| (edge.source.clone(), edge.target.clone(), edge.kind))
+        .collect();
+
+    ensure_directory_path(drive, nodes, edges, &mut edge_set, "");
+    let mut blocked_dirs: Vec<String> = Vec::new();
+    for entry in &entries {
+        let entry_path = entry.path.trim_matches('/');
+        if blocked_dirs
+            .iter()
+            .any(|dir| entry_path != dir && entry_path.starts_with(&format!("{dir}/")))
+        {
+            continue;
+        }
+        merge_tree_entry(drive, nodes, edges, &mut edge_set, &report_buckets, entry);
+        if entry.is_dir
+            && matches!(
+                path_class_for_graph(drive, entry_path),
+                Some(class) if class.permission == PathPermission::ReadOnly
+            )
+        {
+            blocked_dirs.push(entry_path.to_string());
+        }
+    }
+}
+
 fn merge_filesystem_layer(
     drive: &chan_drive::Drive,
     p: &GraphParams,
@@ -753,6 +919,7 @@ fn merge_filesystem_layer(
         // Drafts lives in chan metadata. build_fs_graph intentionally
         // walks the drive root, so virtual draft nodes come from the
         // graph/index layer rather than a metadata filesystem walk.
+        merge_unified_tree_layer(drive, p, nodes, edges);
         return Ok(());
     }
     let scope = match p.scope {
@@ -816,6 +983,13 @@ fn merge_filesystem_layer(
             code: None,
         });
     }
+
+    // The scoped fs_graph walk gives us rich symlink and permission
+    // details for the requested neighbourhood. The unified tree pass
+    // then fills in the full public namespace so the semantic graph
+    // keeps the same file coverage as the File Browser, regardless
+    // of the current visual depth.
+    merge_unified_tree_layer(drive, p, nodes, edges);
 
     Ok(())
 }
@@ -1781,11 +1955,11 @@ mod tests {
             other => panic!("expected Directory variant, got {other:?}"),
         }
 
-        // Exactly one `drafts_link` edge from drive-root
-        // (`directory:`) → Drafts root.
+        // Exactly one `drafts_link` edge from drive-root to
+        // Drafts root.
         assert_eq!(edges.len(), 1, "got {edges:?}");
         let edge = &edges[0];
-        assert_eq!(edge.source, "directory:");
+        assert_eq!(edge.source, "");
         assert_eq!(edge.target, "directory:Drafts");
         assert_eq!(edge.kind, "drafts_link");
     }
@@ -1904,6 +2078,77 @@ mod tests {
         assert!(nodes.values().any(
             |node| matches!(node, GraphNodeView::Language { language, .. } if language == "Rust")
         ));
+    }
+
+    #[test]
+    fn merged_graph_filesystem_layer_uses_full_tree_spine() {
+        let (_cfg, root, drive) = open_drive();
+        put(root.path(), "notes/deep/a.md", b"# A\n");
+        put(root.path(), "notes/deep/raw.bin", &[1, 2, 3]);
+        put(root.path(), "top.md", b"# Top\n");
+
+        let params = GraphParams {
+            scope: GraphScope::Drive,
+            path: String::new(),
+            depth: 1,
+        };
+        let mut nodes = std::collections::BTreeMap::new();
+        let mut edges = Vec::new();
+        merge_filesystem_layer(&drive, &params, &mut nodes, &mut edges).unwrap();
+
+        assert!(nodes.values().any(
+            |node| matches!(node, GraphNodeView::Directory { id, path, .. } if id == "" && path == "")
+        ));
+        assert!(nodes.contains_key("directory:notes"));
+        assert!(nodes.contains_key("directory:notes/deep"));
+        assert!(nodes.contains_key("notes/deep/a.md"));
+        assert!(nodes.contains_key("notes/deep/raw.bin"));
+        assert!(edges.iter().any(|edge| edge.source == ""
+            && edge.target == "directory:notes"
+            && edge.kind == "contains"));
+        assert!(edges.iter().any(|edge| {
+            edge.source == "directory:notes"
+                && edge.target == "directory:notes/deep"
+                && edge.kind == "contains"
+        }));
+        assert!(edges.iter().any(|edge| {
+            edge.source == "directory:notes/deep"
+                && edge.target == "notes/deep/a.md"
+                && edge.kind == "contains"
+        }));
+    }
+
+    #[test]
+    fn merged_graph_file_scope_includes_ancestor_chain() {
+        let (_cfg, root, drive) = open_drive();
+        put(root.path(), "notes/deep/a.md", b"# A\n");
+
+        let params = GraphParams {
+            scope: GraphScope::File,
+            path: "notes/deep/a.md".to_string(),
+            depth: 1,
+        };
+        let mut nodes = std::collections::BTreeMap::new();
+        let mut edges = Vec::new();
+        merge_filesystem_layer(&drive, &params, &mut nodes, &mut edges).unwrap();
+
+        assert!(nodes.contains_key(""));
+        assert!(nodes.contains_key("directory:notes"));
+        assert!(nodes.contains_key("directory:notes/deep"));
+        assert!(nodes.contains_key("notes/deep/a.md"));
+        assert!(edges.iter().any(|edge| edge.source == ""
+            && edge.target == "directory:notes"
+            && edge.kind == "contains"));
+        assert!(edges.iter().any(|edge| {
+            edge.source == "directory:notes"
+                && edge.target == "directory:notes/deep"
+                && edge.kind == "contains"
+        }));
+        assert!(edges.iter().any(|edge| {
+            edge.source == "directory:notes/deep"
+                && edge.target == "notes/deep/a.md"
+                && edge.kind == "contains"
+        }));
     }
 
     #[cfg(unix)]
@@ -2164,7 +2409,7 @@ mod tests {
         let graph = build_language_graph(&[report_file("lib.rs", "Rust", 12)], 0, None);
 
         assert!(graph.nodes.contains(&LanguageGraphNode::Directory {
-            id: "directory:".to_string(),
+            id: "".to_string(),
             label: "/".to_string(),
             path: "".to_string(),
             files: 1,
@@ -2172,7 +2417,7 @@ mod tests {
         }));
         assert!(graph.edges.contains(&LanguageGraphEdge {
             source: "language:Rust".to_string(),
-            target: "directory:".to_string(),
+            target: "".to_string(),
             kind: "language",
             rank: 1,
             files: 1,
