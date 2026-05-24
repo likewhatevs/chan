@@ -64,6 +64,19 @@ describe("fullstack-b-29: TerminalTab WebGL renderer", () => {
     );
   });
 
+  test("passes binary terminal output to xterm without string coercion", () => {
+    // UTF-8 sequences such as U+2014 must reach xterm as bytes.
+    // Coercing ArrayBuffer or Blob output through String() before
+    // write would corrupt non-ASCII glyphs.
+    expect(tab).toMatch(
+      /event\.data instanceof ArrayBuffer[\s\S]*?const bytes = new Uint8Array\(event\.data\);[\s\S]*?term\?\.write\(bytes\);/,
+    );
+    expect(tab).toMatch(
+      /event\.data instanceof Blob[\s\S]*?const bytes = new Uint8Array\(await event\.data\.arrayBuffer\(\)\);[\s\S]*?term\?\.write\(bytes\);/,
+    );
+    expect(tab).not.toMatch(/term\?\.write\(String\(event\.data\)\)/);
+  });
+
   test("refreshes renderer on focus and after font readiness", () => {
     expect(tab).toMatch(/function refreshTerminalRenderer\(\): void/);
     expect(tab).toMatch(/clearTextureAtlas\(\);[\s\S]*?refreshTerminalRows\(\);/);
@@ -71,5 +84,11 @@ describe("fullstack-b-29: TerminalTab WebGL renderer", () => {
     expect(tab).toMatch(
       /if \(!focused\) return;[\s\S]*?queueFit\(\);[\s\S]*?refreshTerminalRenderer\(\);/,
     );
+  });
+
+  test("prefers server-provided virtual cwd when present", () => {
+    expect(tab).toMatch(/cwd_rel\?: string \| null/);
+    expect(tab).toMatch(/terminalCwdVirtual = frame\.cwd_rel \?\? null/);
+    expect(tab).toMatch(/if \(terminalCwdVirtual !== null\) return terminalCwdVirtual/);
   });
 });
