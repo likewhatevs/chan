@@ -1,3 +1,7 @@
+// @vitest-environment jsdom
+
+import { EditorState } from "@codemirror/state";
+import { EditorView } from "@codemirror/view";
 import { describe, expect, test } from "vitest";
 import {
   listDepth,
@@ -5,6 +9,8 @@ import {
   listLineClass,
   orderedMarkerLabel,
 } from "./blocks";
+import { chanMarkdown } from "../markdown/grammar";
+import { chanDecorations } from ".";
 import blocksSource from "./blocks.ts?raw";
 import wysiwygSource from "../Wysiwyg.svelte?raw";
 
@@ -98,10 +104,54 @@ describe("orderedMarkerLabel (fullstack-a-40 outline-style)", () => {
 });
 
 describe("bullet marker rendering", () => {
-  test("keeps bullet source markers visible in WYSIWYG", () => {
-    expect(blocksSource).not.toContain("BulletWidget");
-    expect(blocksSource).not.toContain("cm-md-bullet");
-    expect(wysiwygSource).not.toContain(".cm-md-bullet");
+  test("renders bullet source markers as consistent glyphs in WYSIWYG", () => {
+    expect(blocksSource).toContain("class BulletMarkerWidget");
+    expect(blocksSource).toContain(
+      "Decoration.replace({ widget: new BulletMarkerWidget() })",
+    );
+    expect(blocksSource).toContain("cm-md-ul-marker");
+    expect(wysiwygSource).toContain(".cm-md-ul-marker");
+  });
+
+  test("replaces dash markers in the rendered editor DOM only", () => {
+    const parent = document.createElement("div");
+    document.body.appendChild(parent);
+
+    const view = new EditorView({
+      parent,
+      state: EditorState.create({
+        doc: "- item",
+        extensions: [chanMarkdown(), chanDecorations()],
+      }),
+    });
+
+    expect(parent.querySelector(".cm-md-ul-marker")?.textContent).toBe("•");
+    expect(parent.textContent).toContain("• item");
+    expect(parent.textContent).not.toContain("- item");
+    expect(view.state.doc.toString()).toBe("- item");
+
+    view.destroy();
+    parent.remove();
+  });
+
+  test("does not add a bullet glyph before task-list checkboxes", () => {
+    const parent = document.createElement("div");
+    document.body.appendChild(parent);
+
+    const view = new EditorView({
+      parent,
+      state: EditorState.create({
+        doc: "- [ ] task",
+        extensions: [chanMarkdown(), chanDecorations()],
+      }),
+    });
+
+    expect(parent.querySelector(".cm-md-ul-marker")).toBeNull();
+    expect(parent.querySelector(".cm-md-task-checkbox")).toBeTruthy();
+    expect(view.state.doc.toString()).toBe("- [ ] task");
+
+    view.destroy();
+    parent.remove();
   });
 });
 

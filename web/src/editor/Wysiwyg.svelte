@@ -935,6 +935,9 @@
     color: var(--text-secondary, #888);
     font-variant-numeric: tabular-nums;
   }
+  :global(.md-wysiwyg-cm6 .cm-md-ul-marker) {
+    color: var(--text-secondary, #888);
+  }
   /* Left indent and guides on every line of every list (bullet,
      ordered, task). Three-class chain matches the fence-row pattern
      so the rule beats CM6's `.cm-line` default cascade.

@@ -22,8 +22,9 @@
 //   - Task (GFM task-list item): TaskMarker `[ ]` / `[x]` is replaced
 //     by the CheckboxWidget from widgets/checkbox.ts. The replace is
 //     boundary-inclusive — clicking the box edits the source.
-//   - BulletList: source markers (`-` / `*` / `+`) stay visible so
-//     the user can see the exact markdown marker they typed.
+//   - BulletList: source markers (`-` / `*` / `+`) render as a
+//     consistent bullet glyph. Source-mode view + external markdown
+//     tools see the unmodified marker.
 //   - OrderedList: source markers stay as typed for portability;
 //     a Widget overlay replaces each rendered ListMark with the
 //     outline-style dotted chain (`1.`, `1.1.`, `1.1.1.`, ...) so
@@ -442,7 +443,58 @@ const handleBulletList: TokenHandler = (ctx) => {
     const line = ctx.state.doc.line(n);
     ctx.push(listLineDecoration(line.text), line.from, line.from);
   }
+  decorateBulletList(ctx, ctx.node.node);
 };
+
+class BulletMarkerWidget extends WidgetType {
+  eq(_other: BulletMarkerWidget): boolean {
+    return true;
+  }
+
+  toDOM(): HTMLElement {
+    const el = document.createElement("span");
+    el.className = "cm-md-ul-marker";
+    el.textContent = "•";
+    return el;
+  }
+
+  ignoreEvent(): boolean {
+    return true;
+  }
+}
+
+function decorateBulletList(
+  ctx: TokenContext,
+  list: import("@lezer/common").SyntaxNode,
+): void {
+  const cursor = list.cursor();
+  if (!cursor.firstChild()) return;
+  do {
+    if (cursor.name !== "ListItem") continue;
+    const item = cursor.node;
+    const sub = item.cursor();
+    let markFrom = -1;
+    let markTo = -1;
+    let hasTask = false;
+    if (sub.firstChild()) {
+      do {
+        if (sub.name === "ListMark") {
+          markFrom = sub.from;
+          markTo = sub.to;
+        } else if (sub.name === "Task") {
+          hasTask = true;
+        }
+      } while (sub.nextSibling());
+    }
+    if (!hasTask && markFrom !== -1 && markTo !== -1) {
+      ctx.push(
+        Decoration.replace({ widget: new BulletMarkerWidget() }),
+        markFrom,
+        markTo,
+      );
+    }
+  } while (cursor.nextSibling());
+}
 
 /// Outline-style dotted marker for nested ordered lists. The source
 /// markdown stays standard (each line typed by the user keeps its
