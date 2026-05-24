@@ -187,6 +187,22 @@ setNotifyHandler((msg) => {
   setTransientStatus(msg);
 });
 
+function surfaceDriveWarnings(info: DriveInfo): void {
+  const warnings = info.warnings ?? [];
+  const brokenDrafts = warnings.filter(
+    (warning) => warning.kind === "broken_draft",
+  );
+  if (brokenDrafts.length === 0) return;
+  if (brokenDrafts.length === 1) {
+    const warning = brokenDrafts[0]!;
+    ui.status = `Broken draft ${warning.path}: ${warning.message}`;
+    ui.statusKind = "persistent";
+    return;
+  }
+  ui.status = `${brokenDrafts.length} broken drafts found in metadata`;
+  ui.statusKind = "persistent";
+}
+
 /** Apply the resolved theme to the DOM. Idempotent; safe to call
  *  before mount (used as the App's first-paint sync). */
 function applyResolvedTheme(): void {
@@ -446,8 +462,10 @@ export function reconnectWatcher(): void {
 
 export async function bootstrap(): Promise<void> {
   try {
-    drive.info = await api.drive();
+    const info = await api.drive();
+    drive.info = info;
     applyServerPreferences();
+    surfaceDriveWarnings(info);
     await refreshTree();
     // Restore prior layout, in priority order:
     //   1. URL hash: explicit ad-hoc state (copy-paste a URL).

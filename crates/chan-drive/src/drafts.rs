@@ -76,6 +76,12 @@ pub struct DraftPromoteReport {
     pub mode: DraftPromoteMode,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DraftIssue {
+    pub name: String,
+    pub message: String,
+}
+
 #[derive(Debug, Clone)]
 struct DraftScan {
     inspection: DraftInspection,
@@ -99,6 +105,70 @@ pub(crate) fn ensure_root(drafts_dir: &Path) -> Result<()> {
             drafts_dir.display()
         ))
     })
+}
+
+/// Inspect every draft workspace and return non-fatal problems.
+///
+/// This is intentionally a report, not a hard failure: a single
+/// broken draft should warn the user on drive boot without blocking
+/// access to the rest of the drive.
+pub fn preflight(drafts_dir: &Path) -> Result<Vec<DraftIssue>> {
+    let rd = match fs::read_dir(drafts_dir) {
+        Ok(rd) => rd,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(e) => {
+            return Err(ChanError::Io(format!(
+                "failed to read drafts dir {}: {e}",
+                drafts_dir.display()
+            )))
+        }
+    };
+    let mut issues = Vec::new();
+    for entry in rd {
+        let entry = match entry {
+            Ok(entry) => entry,
+            Err(e) => {
+                issues.push(DraftIssue {
+                    name: "<unknown>".to_string(),
+                    message: format!("failed to read drafts entry: {e}"),
+                });
+                continue;
+            }
+        };
+        let name = entry.file_name().to_string_lossy().into_owned();
+        let path = entry.path();
+        let meta = match fs::symlink_metadata(&path) {
+            Ok(meta) => meta,
+            Err(e) => {
+                issues.push(DraftIssue {
+                    name,
+                    message: format!("failed to inspect {}: {e}", path.display()),
+                });
+                continue;
+            }
+        };
+        if !meta.is_dir() || meta.file_type().is_symlink() {
+            issues.push(DraftIssue {
+                name,
+                message: "draft root is not a directory".to_string(),
+            });
+            continue;
+        }
+        match scan_draft(drafts_dir, &name) {
+            Ok(_) => {}
+            Err(ChanError::DraftBroken { message, .. }) => {
+                issues.push(DraftIssue { name, message });
+            }
+            Err(e) => {
+                issues.push(DraftIssue {
+                    name,
+                    message: e.to_string(),
+                });
+            }
+        }
+    }
+    issues.sort_by(|a, b| a.name.cmp(&b.name));
+    Ok(issues)
 }
 
 /// Create a draft directory by name. Returns the `DraftRef` for
@@ -669,6 +739,43 @@ mod tests {
         ensure_root(&root).unwrap();
         create_dir(&root, "untitled-1").unwrap();
         assert!(create_dir(&root, "untitled-1").is_err());
+    }
+
+    #[test]
+    fn preflight_reports_missing_draft_file() {
+        let td = TempDir::new().unwrap();
+        let root = td.path().join("drafts");
+        ensure_root(&root).unwrap();
+        let draft = create_dir(&root, "untitled-1").unwrap();
+        fs::write(draft.abs.join("note.md"), "not the main draft").unwrap();
+
+        let issues = preflight(&root).unwrap();
+
+        assert_eq!(
+            issues,
+            vec![DraftIssue {
+                name: "untitled-1".to_string(),
+                message: "missing draft.md".to_string(),
+            }]
+        );
+    }
+
+    #[test]
+    fn preflight_reports_non_directory_draft_root() {
+        let td = TempDir::new().unwrap();
+        let root = td.path().join("drafts");
+        ensure_root(&root).unwrap();
+        fs::write(root.join("stray"), "not a draft").unwrap();
+
+        let issues = preflight(&root).unwrap();
+
+        assert_eq!(
+            issues,
+            vec![DraftIssue {
+                name: "stray".to_string(),
+                message: "draft root is not a directory".to_string(),
+            }]
+        );
     }
 
     #[test]

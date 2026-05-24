@@ -31,6 +31,15 @@ struct DriveInfo {
     /// `GlobalConfig.preferences`; assembled by joining EditorPrefs
     /// and ServerConfig.
     preferences: PreferencesView,
+    /// Non-fatal drive boot warnings. Empty on healthy drives.
+    warnings: Vec<DriveWarning>,
+}
+
+#[derive(Serialize)]
+struct DriveWarning {
+    kind: &'static str,
+    path: String,
+    message: String,
 }
 
 pub async fn api_get_drive(State(state): State<Arc<AppState>>) -> Response {
@@ -126,5 +135,47 @@ fn drive_info(state: &AppState) -> Result<DriveInfo, String> {
             .map(str::to_string),
         metadata_key: entry.map(|e| e.metadata_key.clone()),
         preferences: preferences_view(state).map_err(|e| e.to_string())?,
+        warnings: drive_warnings(&drive),
     })
+}
+
+fn drive_warnings(drive: &chan_drive::Drive) -> Vec<DriveWarning> {
+    match drive.draft_preflight() {
+        Ok(issues) => issues
+            .into_iter()
+            .map(|issue| DriveWarning {
+                kind: "broken_draft",
+                path: format!("Drafts/{}", issue.name),
+                message: issue.message,
+            })
+            .collect(),
+        Err(e) => vec![DriveWarning {
+            kind: "draft_preflight_failed",
+            path: "Drafts".to_string(),
+            message: e.to_string(),
+        }],
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::drive_warnings;
+
+    #[test]
+    fn drive_warnings_report_broken_drafts() {
+        let cfg = tempfile::TempDir::new().unwrap();
+        let root = tempfile::TempDir::new().unwrap();
+        let lib = chan_drive::Library::open_at(cfg.path().join("config.toml")).unwrap();
+        lib.register_drive(root.path()).unwrap();
+        let drive = lib.open_drive(root.path()).unwrap();
+        let draft = drive.create_draft_dir("untitled-1").unwrap();
+        std::fs::write(draft.abs.join("note.md"), "not draft.md").unwrap();
+
+        let warnings = drive_warnings(&drive);
+
+        assert_eq!(warnings.len(), 1);
+        assert_eq!(warnings[0].kind, "broken_draft");
+        assert_eq!(warnings[0].path, "Drafts/untitled-1");
+        assert_eq!(warnings[0].message, "missing draft.md");
+    }
 }

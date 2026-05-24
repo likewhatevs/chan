@@ -194,3 +194,10 @@ confirmation that the backend cannot honor. File Browser create and move
 prompts also reject `Drafts/...` paths; Drafts remain writable through editor,
 draft lifecycle, terminal, Team Work, Rich Prompt, and MCP flows that address
 draft workspaces intentionally.
+
+2026-05-24: Drive boot now reports broken draft workspaces. chan-drive scans
+the per-drive metadata drafts root for non-directory roots, missing `draft.md`,
+unsafe entries, and unreadable workspaces without blocking the rest of the
+drive. `/api/drive` returns non-fatal warning records, and the SPA surfaces
+broken draft warnings as persistent boot status until the metadata issue is
+resolved.

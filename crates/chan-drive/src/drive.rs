@@ -1273,6 +1273,12 @@ impl Drive {
         drafts::list(&self.paths.drafts)
     }
 
+    /// Inspect metadata draft workspaces and report non-fatal
+    /// problems that should be surfaced on drive boot.
+    pub fn draft_preflight(&self) -> Result<Vec<drafts::DraftIssue>> {
+        drafts::preflight(&self.paths.drafts)
+    }
+
     /// Inspect a draft workspace before save or discard.
     pub fn inspect_draft(&self, name: &str) -> Result<drafts::DraftInspection> {
         drafts::inspect(&self.paths.drafts, name)

@@ -13,6 +13,15 @@ export type DriveInfo = {
   /// render the editor with the right fonts without a follow-up
   /// `/api/config` fetch.
   preferences: Preferences;
+  /// Non-fatal boot warnings, currently used for broken draft
+  /// workspaces under metadata.
+  warnings: DriveWarning[];
+};
+
+export type DriveWarning = {
+  kind: string;
+  path: string;
+  message: string;
 };
 
 /// Global per-user config. Lives at `paths::global_config_path()`
