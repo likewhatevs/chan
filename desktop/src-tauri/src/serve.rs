@@ -154,15 +154,15 @@ fn drive_title(key: &str) -> String {
 
 /// Resolve the absolute path of the bundled `chan` binary.
 ///
-/// Tauri's `externalBin` mechanism in `tauri.conf.json` declares
-/// `binaries/chan` at build time and the bundler stages a copy of
-/// the per-target-triple binary next to chan-desktop's own
-/// executable with the triple suffix stripped:
+/// The helper binary is for CLI-owned surfaces, not local serving.
+/// Normal local drives run through the embedded chan-server host.
+/// `desktop/Makefile` stages the per-target-triple binary under
+/// `src-tauri/binaries/`; the Tauri bundle config copies it next to
+/// chan-desktop's own executable with the triple suffix stripped:
 ///
-///   * dev (`cargo tauri dev`):    `target/debug/chan`
+///   * dev (`make run`):           staged before `cargo tauri dev`
 ///   * release bundle on macOS:    `Chan.app/Contents/MacOS/chan`
-///   * release on Linux/Windows:   sibling of `chan-desktop` in the
-///     packaged binary directory.
+///   * release on Linux/Windows:   pending per-platform bundle files
 ///
 /// The resolver is pure path math over `current_exe()`; it does NOT
 /// check that the binary actually exists on disk. The boot-time
@@ -239,8 +239,8 @@ pub fn probe_chan_version(bin: &Path) -> Result<(), String> {
 /// Why PATH-first: a power user who runs their own chan build
 /// from this checkout and `cargo install --path crates/chan`
 /// expects chan-desktop to use their build. Why exact-match: a
-/// stale PATH chan (vN-1) running against chan-desktop vN — or a
-/// vN+1 prerelease — produces weird-state crashes the locked
+/// stale PATH chan (vN-1) running against chan-desktop vN, or a
+/// vN+1 prerelease, produces weird-state crashes the locked
 /// decision was designed to prevent; falling back to bundled
 /// keeps the app launchable.
 ///
@@ -549,7 +549,7 @@ fn build_drive_window(
                 // the popped WindowConfig (if any). 1.0 is the chan-
                 // desktop default; skip the IPC round-trip when there's
                 // nothing to apply. Best-effort: a Tauri set_zoom error
-                // here just leaves the new window at default zoom — the
+                // here just leaves the new window at default zoom; the
                 // user can re-press Cmd++/Cmd+- to recover.
                 if (zoom_seed - 1.0).abs() > f64::EPSILON {
                     if let Err(e) = window.set_zoom(zoom_seed) {
@@ -654,7 +654,7 @@ pub fn close_local_drive_windows(app: &AppHandle, key: &str) {
 
 /// Destroy every webview window opened for this tunneled drive.
 /// Used by the tunnel supervisor when a (label, drive) pair drops
-/// out of the registry — the remote has gone away, so the per-tenant
+/// out of the registry; the remote has gone away, so the per-tenant
 /// listener no longer routes for it and any open window now points
 /// at nothing useful.
 pub fn close_tunneled_drive_windows(app: &AppHandle, tenant_label: &str, drive: &str) {
@@ -700,7 +700,7 @@ fn close_windows_with_prefix(app: &AppHandle, prefix: &str) {
 /// into the host-agnostic `chan:command` window event that chan's
 /// App.svelte listens for. Runs before any page script, in capture
 /// phase with stopImmediatePropagation, so this script is the sole
-/// authority on every chord it claims — chan's onWindowKey doesn't
+/// authority on every chord it claims, so chan's onWindowKey doesn't
 /// fire for these even if its keymap drifts.
 ///
 /// Layout mirrors VS Code; chords that browsers reserve at OS level
@@ -941,7 +941,7 @@ mod tests {
     #[test]
     fn preflight_dialog_carries_round2_plan_explanatory_copy() {
         // `fullstack-b-28b` slice iii: the round-2-plan flagged
-        // the explanatory copy as "load-bearing — @@Alex wants
+        // the explanatory copy as "load-bearing"; @@Alex wants
         // users to understand the baseline before they choose
         // what to layer on". Pin the load-bearing phrases so a
         // future refactor can't silently drop them.
@@ -1199,7 +1199,7 @@ mod tests {
         // The `invokeIpc` helper grabs `window.__TAURI__.core.invoke`
         // (Tauri 2's invoke surface; was `window.__TAURI__.invoke`
         // in Tauri 1). Pin so a future bridge rewrite doesn't
-        // silently regress to the v1 shape — the new shape returns
+        // silently regress to the v1 shape. The new shape returns
         // undefined from a webview without the v2 IPC surface
         // attached, which silently swallows the Cmd+R / Cmd+Opt+I
         // accelerators.
@@ -1292,7 +1292,7 @@ mod tests {
     #[test]
     fn resolve_chan_binary_falls_back_when_path_version_mismatches() {
         // PATH chan exists but version probe errors (mismatch, or
-        // failed `--version` invocation — same outward shape). Must
+        // failed `--version` invocation, same outward shape). Must
         // fall through to the bundled path.
         let path_chan = PathBuf::from("/usr/local/bin/chan");
         let bundled = PathBuf::from("/Applications/Chan.app/Contents/MacOS/chan");
@@ -1393,7 +1393,7 @@ mod tests {
             "/Users/alex/dev/github.com/fiorix/chan",
         );
         // Trailing slash, edge case, etc. are passed through; we
-        // don't sanitize — the caller's path is the source of truth.
+        // don't sanitize; the caller's path is the source of truth.
         assert_eq!(drive_title("/tmp/scratch/"), "/tmp/scratch/");
         assert_eq!(drive_title(""), "");
     }

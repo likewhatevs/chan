@@ -155,8 +155,11 @@ Desktop File Browser drag-out/download:
   `docs/manual/` under `/manual/`.
 - Add CI for manual and site builds. Done: `pages.yml` runs the marketing
   site check when `docs/manual/**` or `web-marketing/**` changes.
+- Manual/site local gate verified on 2026-05-25 with
+  `cd web-marketing && npm run check`.
 - Update stale desktop docs to describe the Tauri webview, embedded server,
-  and attach modes. Done for `desktop/README.md`.
+  and attach modes. Done for `desktop/README.md`, `desktop/CLAUDE.md`,
+  `desktop/Makefile`, and `desktop/src-tauri/src/serve.rs`.
 - Keep design docs factual. Remove old claims that desktop is only a thin
   shell around an external browser and per-drive `chan serve` child process.
 
@@ -311,6 +314,7 @@ Operational release checks:
 6. Implement missing-default factory-reset confirmation. Done.
 7. Browser-level File Browser drag-out and right-click Download. Done:
    `d11eef5`.
-8. Refresh stale desktop README embedded-server docs. Done.
-9. Current next remains open for selection. CLI handoff is deferred until
+8. Refresh stale desktop embedded-server docs. Done.
+9. Verify manual/site local gate. Done.
+10. Current next remains open for selection. CLI handoff is deferred until
    its design checkpoint.

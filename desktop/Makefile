@@ -20,8 +20,11 @@ tauri-cli:
 	        --root "$(TAURI_CLI_ROOT)"; \
 	fi
 
-# Stage chan as the bundled sidecar. Rebuilds every invocation so
-# in-progress chan edits flow into `make run` without a separate
+# Stage chan as the bundled helper binary for CLI-owned surfaces.
+# Local drive serving is embedded in chan-desktop; this binary is
+# still needed for registry mutations and other CLI paths until
+# those APIs move into the desktop host. Rebuilds every invocation
+# so in-progress chan edits flow into `make run` without a separate
 # step; cargo's own incremental build keeps the cost small when
 # nothing changed.
 #

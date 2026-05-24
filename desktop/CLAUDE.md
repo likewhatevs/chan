@@ -1,20 +1,26 @@
 # chan-desktop notes
 
-## Bundled chan sidecar
+## Local serving and bundled chan helper
 
-chan-desktop ships with a copy of the `chan` binary inside the
-packaged app so the user does not need a separate `cargo install` /
-`brew install` to run drives. `desktop/Makefile`'s `chan-bin` recipe
+Normal local drives do not spawn `chan serve`. chan-desktop links
+`chan-drive` and `chan-server` and opens local drives through the
+embedded multi-drive host. External `chan serve` processes are still
+supported, but desktop treats them as explicit remote attachments.
+
+chan-desktop still ships with a copy of the `chan` binary for
+CLI-owned surfaces that have not moved behind desktop-native APIs:
+registry mutations, version/status probing, feature toggles, and
+hidden MCP proxy plumbing. `desktop/Makefile`'s `chan-bin` recipe
 stages `target/release/chan` to
 `src-tauri/binaries/chan-<target-triple>` before every build; the
-copy into the bundle is configured via Tauri's
-`bundle.macOS.files` map in `src-tauri/tauri.conf.json`.
+macOS bundle copy is configured through Tauri's `bundle.macOS.files`
+map in `src-tauri/tauri.conf.json`.
 
-### Bundle layout
+### Helper binary layout
 
-| Build              | Sidecar path                                 |
+| Build              | Helper path                                  |
 |--------------------|----------------------------------------------|
-| `cargo tauri dev`  | `target/debug/chan` (see "Dev-mode" below)   |
+| `make run`         | staged under `src-tauri/binaries/` first     |
 | Packaged macOS     | `Chan.app/Contents/MacOS/chan`               |
 | Packaged Linux     | not bundled in v0.11.2 (see below)           |
 | Packaged Windows   | not bundled in v0.11.2 (see below)           |
@@ -48,7 +54,7 @@ expectation by:
 
 `fullstack-b-21` (notarization fix for the same v0.11.2 hotfix
 path) adds a codesign step to the `chan-bin` Makefile recipe.
-Reason: `bundle.macOS.files` is a "copy verbatim" primitive —
+Reason: `bundle.macOS.files` is a "copy verbatim" primitive.
 Tauri's signing pass walks the binaries it knows about
 (`chan-desktop`, `externalBin` entries, the `.app` wrapper) but
 does NOT route the `files` map through that pass. The
@@ -59,7 +65,7 @@ no secure timestamp). Tested option C
 (`bundle.macOS.externalBin`) first; Tauri 2's per-platform
 `macOS` config does NOT support an `externalBin` field (only
 `frameworks`, `files`, `signing-identity`, etc.). Falling back
-to Option A — Makefile codesign before staging:
+to Option A: Makefile codesign before staging:
 
 ```make
 @if [ -n "$$APPLE_SIGNING_IDENTITY" ]; then \
@@ -79,7 +85,7 @@ verbatim, preserving the signature. Verified locally:
 
 Two known regressions from the externalBin drop:
 
-1. **Dev-mode auto-copy gone** — `cargo tauri dev` previously
+1. **Dev-mode auto-copy gone**: `cargo tauri dev` previously
    relied on Tauri's externalBin auto-copy to drop `chan` into
    `target/debug/` so `bundled_chan_path()` resolves. With
    externalBin removed, the bundled sidecar doesn't exist in dev.
@@ -90,7 +96,7 @@ Two known regressions from the externalBin drop:
    `BinStatus::missing` and disables spawn paths. Documented
    trade-off until the Makefile gains a manual `target/debug/`
    copy step (post-v0.11.2 follow-up).
-2. **Linux + Windows bundling no longer ships chan** —
+2. **Linux + Windows bundling no longer ships chan**:
    `bundle.macOS.files` is macOS-only. On Linux, the .deb / .appimage
    produced by `make build` no longer includes chan. Users on Linux
    need to install chan separately via `cargo install --path
@@ -104,9 +110,10 @@ post-v0.11.2 `ci-N` task that pairs with the universal2 work.
 ### Resolution helpers
 
 `crates/chan-desktop/src/serve.rs` exposes three helpers used by
-every spawn site:
+every CLI spawn site. These helpers are not part of local serving:
+embedded local drives use chan-server's in-process host.
 
-* `resolve_chan_binary() -> Result<PathBuf, String>` — the
+* `resolve_chan_binary() -> Result<PathBuf, String>`: the
   PATH-first picker. Walks `PATH` for a `chan` (or `chan.exe`)
   binary; if found, probes its `--version` and accepts only an
   EXACT semver match against chan-desktop's own
@@ -117,12 +124,12 @@ every spawn site:
   this helper so a power user who runs `cargo install --path
   crates/chan` against the matching version gets to use their
   own build through chan-desktop without rebuilding chan-desktop.
-* `bundled_chan_path() -> Result<PathBuf, String>` — pure path
+* `bundled_chan_path() -> Result<PathBuf, String>`: pure path
   math over `current_exe()`. Returns the expected sidecar path
   without checking that the file exists. Cheap, infallible at
   runtime in practice (only fails if `current_exe()` itself
   fails).
-* `probe_chan_version(bin: &Path) -> Result<(), String>` — runs
+* `probe_chan_version(bin: &Path) -> Result<(), String>`: runs
   `<bin> --version` and asserts an EXACT semver match against
   `env!("CARGO_PKG_VERSION")`. Used by both the boot-time
   preflight (validating whatever `resolve_chan_binary()` picks)
@@ -155,7 +162,7 @@ their own chan build install it to PATH at the matching version
 (`cargo install --path crates/chan` from the same checkout), and
 chan-desktop picks it up automatically on next launch. A
 mismatched PATH install (older or newer than chan-desktop) is
-ignored cleanly — the app keeps working via the bundled binary.
+ignored cleanly; the app keeps working via the bundled binary.
 
 ### Architecture handling
 
@@ -360,7 +367,7 @@ fails on a bad / non-existent profile. Useful as an end-to-end
 `codesign`, driven by `APPLE_SIGNING_IDENTITY`) and packages the
 `.dmg`. Tauri's bundler can ALSO notarize as part of that single
 command, but only when `APPLE_ID` + `APPLE_PASSWORD` +
-`APPLE_TEAM_ID` are present in the env — `tauri-bundler` 2.x does
+`APPLE_TEAM_ID` are present in the env. `tauri-bundler` 2.x does
 not consume `notarytool` Keychain profiles directly. To support
 the local Keychain-profile path AND the CI env-var path under one
 recipe, the Makefile unsets the three notarize env vars during the
