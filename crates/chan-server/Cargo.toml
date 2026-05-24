@@ -26,7 +26,7 @@ embeddings = ["chan-drive/embeddings"]
 # `resources/models.tar.zst` and the seeder extracts it into the
 # per-machine cache on first server launch. Implies `embeddings`:
 # bundling a model is meaningless without the embedding code.
-embed-model = ["embeddings", "dep:tar", "dep:zstd"]
+embed-model = ["embeddings", "dep:zstd"]
 # Bundle Source Code Pro Regular into the binary via rust-embed.
 # Opt-in (default-off) so a plain `cargo build` produces a lean
 # binary that uses the per-OS native mono font (SF Mono / Cascadia
@@ -45,7 +45,7 @@ cuda = ["chan-drive/cuda"]
 
 [dependencies]
 chan-drive = { workspace = true, default-features = false }
-tar = { workspace = true, optional = true }
+tar = { workspace = true }
 zstd = { workspace = true, optional = true }
 chan-llm = { workspace = true, features = ["mcp"] }
 chan-tunnel-client = { workspace = true }

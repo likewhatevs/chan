@@ -411,6 +411,7 @@ export const api = {
   promoteDraft: (path: string, target: string) =>
     req<DraftPromoteResponse>("POST", "/api/drafts/promote", { path, target }),
   remove: (path: string) => req<void>("DELETE", `/api/files/${encPath(path)}`),
+  downloadUrl: (path: string) => withTokenQuery(`/api/files/${encPath(path)}?download=1`),
   move: (from: string, to: string) =>
     req<MoveResponse>("POST", "/api/move", { from, to }),
   /// Filename fuzzy search (the [[ autocomplete in the editor).

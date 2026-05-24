@@ -1,7 +1,7 @@
 //! Per-file CRUD: list, read (text or binary), write (with optional
 //! CAS), create (file or dir), delete, move.
 
-use std::sync::Arc;
+use std::{io::Cursor, sync::Arc};
 
 use axum::extract::{Path as AxumPath, Query, State};
 use axum::http::{header, StatusCode};
@@ -244,15 +244,168 @@ fn read_file_sync(drive: &chan_drive::Drive, path: &str) -> chan_drive::Result<R
     drive.read(path).map(ReadFileResult::Binary)
 }
 
+enum DownloadPayload {
+    File(Vec<u8>),
+    DirectoryTar(Vec<u8>),
+}
+
+fn download_path_sync(
+    drive: &chan_drive::Drive,
+    path: &str,
+) -> chan_drive::Result<DownloadPayload> {
+    let stat = drive.stat(path)?;
+    if stat.is_dir {
+        let bytes = archive_directory_sync(drive, path)?;
+        Ok(DownloadPayload::DirectoryTar(bytes))
+    } else {
+        drive.read(path).map(DownloadPayload::File)
+    }
+}
+
+fn download_filename(path: &str) -> String {
+    let raw = path
+        .rsplit('/')
+        .find(|segment| !segment.is_empty())
+        .unwrap_or("download");
+    let mut out = String::with_capacity(raw.len());
+    for ch in raw.chars() {
+        if ch == '"' || ch == '\\' || ch == ':' || ch.is_control() {
+            out.push('_');
+        } else {
+            out.push(ch);
+        }
+    }
+    if out.trim().is_empty() {
+        "download".to_string()
+    } else {
+        out
+    }
+}
+
+fn content_disposition_attachment(path: &str) -> String {
+    format!("attachment; filename=\"{}\"", download_filename(path))
+}
+
+fn download_archive_filename(path: &str) -> String {
+    let name = download_filename(path);
+    if name.to_ascii_lowercase().ends_with(".tar") {
+        name
+    } else {
+        format!("{name}.tar")
+    }
+}
+
+fn content_disposition_archive(path: &str) -> String {
+    format!(
+        "attachment; filename=\"{}\"",
+        download_archive_filename(path)
+    )
+}
+
+fn archive_directory_sync(drive: &chan_drive::Drive, path: &str) -> chan_drive::Result<Vec<u8>> {
+    let root_name = download_filename(path);
+    let mut builder = tar::Builder::new(Vec::new());
+    append_dir_to_archive(&mut builder, drive, path, &root_name)?;
+    builder.finish()?;
+    Ok(builder.into_inner()?)
+}
+
+fn append_dir_to_archive(
+    builder: &mut tar::Builder<Vec<u8>>,
+    drive: &chan_drive::Drive,
+    source_rel: &str,
+    archive_rel: &str,
+) -> chan_drive::Result<()> {
+    append_archive_dir(builder, archive_rel)?;
+    for child in drive.list(source_rel)? {
+        let child_source = join_rel(source_rel.trim_matches('/'), &child.name);
+        let child_archive = join_rel(archive_rel, &child.name);
+        if child.is_dir {
+            append_dir_to_archive(builder, drive, &child_source, &child_archive)?;
+        } else {
+            let bytes = drive.read(&child_source)?;
+            append_archive_file(builder, &child_archive, bytes)?;
+        }
+    }
+    Ok(())
+}
+
+fn append_archive_dir(
+    builder: &mut tar::Builder<Vec<u8>>,
+    archive_rel: &str,
+) -> chan_drive::Result<()> {
+    let mut header = tar::Header::new_gnu();
+    header.set_entry_type(tar::EntryType::Directory);
+    header.set_size(0);
+    header.set_mode(0o755);
+    header.set_cksum();
+    builder.append_data(&mut header, archive_rel, std::io::empty())?;
+    Ok(())
+}
+
+fn append_archive_file(
+    builder: &mut tar::Builder<Vec<u8>>,
+    archive_rel: &str,
+    bytes: Vec<u8>,
+) -> chan_drive::Result<()> {
+    let mut header = tar::Header::new_gnu();
+    header.set_size(bytes.len() as u64);
+    header.set_mode(0o644);
+    header.set_cksum();
+    builder.append_data(&mut header, archive_rel, Cursor::new(bytes))?;
+    Ok(())
+}
+
+#[derive(Default, Deserialize)]
+pub struct ReadFileQuery {
+    #[serde(default)]
+    download: bool,
+}
+
 pub async fn api_read_file(
     State(state): State<Arc<AppState>>,
     AxumPath(path): AxumPath<String>,
+    Query(query): Query<ReadFileQuery>,
 ) -> Response {
     // Editable-text files (.md / .txt) come back as FileResponse
     // JSON since the frontend's editor wants the content as a
     // string. Anything else (images, attachments) comes back as
     // raw bytes with a sniffed Content-Type so `<img src=...>`
     // pointing at /api/files/<path> resolves correctly.
+    let drive = state.drive().clone();
+    if query.download {
+        let path_for_download = path.clone();
+        let result =
+            tokio::task::spawn_blocking(move || download_path_sync(&drive, &path_for_download))
+                .await;
+        return match result {
+            Ok(Ok(DownloadPayload::File(bytes))) => (
+                [
+                    (header::CONTENT_TYPE, content_type_for(&path).to_string()),
+                    (
+                        header::CONTENT_DISPOSITION,
+                        content_disposition_attachment(&path),
+                    ),
+                ],
+                bytes,
+            )
+                .into_response(),
+            Ok(Ok(DownloadPayload::DirectoryTar(bytes))) => (
+                [
+                    (header::CONTENT_TYPE, "application/x-tar".to_string()),
+                    (
+                        header::CONTENT_DISPOSITION,
+                        content_disposition_archive(&path),
+                    ),
+                ],
+                bytes,
+            )
+                .into_response(),
+            Ok(Err(e)) => err_from(&e),
+            Err(join) => err(StatusCode::INTERNAL_SERVER_ERROR, join.to_string()),
+        };
+    }
+
     let drive = state.drive().clone();
     let path_for_read = path.clone();
     let result = tokio::task::spawn_blocking(move || read_file_sync(&drive, &path_for_read)).await;
@@ -570,11 +723,90 @@ mod write_tests {
     }
 
     #[test]
+    fn download_path_sync_returns_editable_text_bytes() {
+        let cfg = tempfile::TempDir::new().unwrap();
+        let root = tempfile::TempDir::new().unwrap();
+        let lib = chan_drive::Library::open_at(cfg.path().join("config.toml")).unwrap();
+        lib.register_drive(root.path()).unwrap();
+        let drive = lib.open_drive(root.path()).unwrap();
+        drive.write_text("notes/readme.md", "hello\n").unwrap();
+
+        let payload = download_path_sync(&drive, "notes/readme.md").unwrap();
+
+        match payload {
+            DownloadPayload::File(bytes) => assert_eq!(bytes, b"hello\n"),
+            DownloadPayload::DirectoryTar(_) => panic!("expected file download"),
+        }
+    }
+
+    #[test]
+    fn download_path_sync_archives_directory_tree() {
+        use std::collections::BTreeMap;
+        use std::io::Read;
+
+        let cfg = tempfile::TempDir::new().unwrap();
+        let root = tempfile::TempDir::new().unwrap();
+        let lib = chan_drive::Library::open_at(cfg.path().join("config.toml")).unwrap();
+        lib.register_drive(root.path()).unwrap();
+        let drive = lib.open_drive(root.path()).unwrap();
+        drive.create_dir("notes").unwrap();
+        drive.create_dir("notes/deep").unwrap();
+        drive.write_text("notes/readme.md", "hello\n").unwrap();
+        drive.write_text("notes/deep/todo.txt", "todo\n").unwrap();
+
+        let payload = download_path_sync(&drive, "notes").unwrap();
+
+        let DownloadPayload::DirectoryTar(bytes) = payload else {
+            panic!("expected directory archive");
+        };
+        let mut archive = tar::Archive::new(std::io::Cursor::new(bytes));
+        let mut files = BTreeMap::new();
+        for entry in archive.entries().unwrap() {
+            let mut entry = entry.unwrap();
+            if !entry.header().entry_type().is_file() {
+                continue;
+            }
+            let path = entry.path().unwrap().to_string_lossy().into_owned();
+            let mut body = String::new();
+            entry.read_to_string(&mut body).unwrap();
+            files.insert(path, body);
+        }
+
+        assert_eq!(
+            files.get("notes/readme.md").map(String::as_str),
+            Some("hello\n")
+        );
+        assert_eq!(
+            files.get("notes/deep/todo.txt").map(String::as_str),
+            Some("todo\n")
+        );
+    }
+
+    #[test]
+    fn download_content_disposition_uses_safe_basename() {
+        assert_eq!(
+            content_disposition_attachment("notes/readme.md"),
+            "attachment; filename=\"readme.md\"",
+        );
+        assert_eq!(
+            content_disposition_attachment("notes/bad\"name.md"),
+            "attachment; filename=\"bad_name.md\"",
+        );
+        assert_eq!(
+            content_disposition_archive("notes/bad:name"),
+            "attachment; filename=\"bad_name.tar\"",
+        );
+    }
+
+    #[test]
     fn api_read_file_wraps_sync_drive_reads_in_spawn_blocking() {
         let source = include_str!("files.rs");
 
         assert!(source.contains(
             "tokio::task::spawn_blocking(move || read_file_sync(&drive, &path_for_read))"
+        ));
+        assert!(source.contains(
+            "tokio::task::spawn_blocking(move || download_path_sync(&drive, &path_for_download))"
         ));
     }
 

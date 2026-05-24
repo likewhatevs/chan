@@ -127,10 +127,13 @@ Desktop File Browser drag-out/download:
   progress/cancel flow.
 - Track A owns native desktop integration when dragging files or directories
   from File Browser out to the OS desktop or file manager.
-- File drag-out should preserve the original basename and bytes.
+- File drag-out and the right-click Download action preserve the original
+  basename and bytes through a token-bearing `/api/files/<path>?download=1`
+  URL.
 - Directory drag-out should preserve the directory tree. If the platform or
   webview cannot expose a live directory drag payload, stage an archive export
-  with clear naming.
+  with clear naming. Browser-level directory drag-out and right-click Download
+  use the same `download=1` URL and return a `.tar` archive.
 - Use an OS-native drag payload or a temporary desktop export provider from
   the Tauri layer.
 - Do not add direct desktop filesystem reads of drive content. Route export

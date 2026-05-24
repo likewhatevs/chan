@@ -43,13 +43,14 @@ describe("fullstack-a-67e: FileTree selection menu header + new entries", () => 
 
   test("ctx-sep separator between workflow + per-row ops", () => {
     expect(tree).toMatch(
-      /<span>New Graph<\/span>[\s\S]{1,400}<div class="ctx-sep" role="separator"><\/div>[\s\S]{1,400}<span>Copy Path<\/span>/,
+      /<span>New Graph<\/span>[\s\S]{1,400}<div class="ctx-sep" role="separator"><\/div>[\s\S]{1,400}<span>Download<\/span>[\s\S]{1,400}<span>Copy Path<\/span>/,
     );
   });
 });
 
-describe("fullstack-a-67e: per-row ops kept (Copy Path / Rename / Delete)", () => {
-  test("Copy Path / Rename / Move / Delete labels preserved", () => {
+describe("fullstack-a-67e: per-row ops kept (Download / Copy Path / Rename / Delete)", () => {
+  test("Download / Copy Path / Rename / Move / Delete labels preserved", () => {
+    expect(tree).toMatch(/<span>Download<\/span>/);
     expect(tree).toMatch(/<span>Copy Path<\/span>/);
     expect(tree).toMatch(/<span>Rename \/ Move<\/span>/);
     expect(tree).toMatch(/<span>Delete<\/span>/);

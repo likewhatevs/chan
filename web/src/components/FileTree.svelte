@@ -10,6 +10,7 @@
     ChevronLeft,
     ChevronRight,
     Copy,
+    Download,
     FilePlus,
     Folder,
     FolderOpen,
@@ -112,11 +113,41 @@
   // no row is being hovered.
   let dropTarget = $state<string | null>(null);
 
+  function downloadFilename(path: string, isDir: boolean): string {
+    const name = path.split("/").filter(Boolean).pop() || "download";
+    const safe = name.replace(/[:\r\n]/g, "_");
+    if (isDir && !safe.toLowerCase().endsWith(".tar")) return `${safe}.tar`;
+    return safe;
+  }
+
+  function downloadMime(path: string, isDir: boolean): string {
+    if (isDir) return "application/x-tar";
+    const lower = path.toLowerCase();
+    if (lower.endsWith(".md") || lower.endsWith(".txt")) return "text/plain";
+    if (lower.endsWith(".png")) return "image/png";
+    if (lower.endsWith(".jpg") || lower.endsWith(".jpeg")) return "image/jpeg";
+    if (lower.endsWith(".gif")) return "image/gif";
+    if (lower.endsWith(".webp")) return "image/webp";
+    if (lower.endsWith(".pdf")) return "application/pdf";
+    return "application/octet-stream";
+  }
+
+  function setDownloadDragData(e: DragEvent, path: string, isDir: boolean): void {
+    if (!e.dataTransfer) return;
+    const url = api.downloadUrl(path);
+    e.dataTransfer.setData(
+      "DownloadURL",
+      `${downloadMime(path, isDir)}:${downloadFilename(path, isDir)}:${url}`,
+    );
+    e.dataTransfer.setData("text/uri-list", url);
+  }
+
   function onFileDragStart(e: DragEvent, path: string, isDir: boolean): void {
     if (!e.dataTransfer) return;
-    e.dataTransfer.effectAllowed = isDir ? "move" : "copyMove";
+    e.dataTransfer.effectAllowed = "copyMove";
     const payload = JSON.stringify({ path, isDir });
     e.dataTransfer.setData(TREE_MOVE_MIME, payload);
+    setDownloadDragData(e, path, isDir);
     if (!isDir) {
       // Files are also droppable into editor panes (open in tab).
       // Directories are not, so they only carry the tree-move mime.
@@ -505,6 +536,17 @@
     } finally {
       clearTreeLoadingForPath(path);
     }
+    menu = null;
+  }
+  function downloadSelection(path: string, isDir: boolean): void {
+    const link = document.createElement("a");
+    link.href = api.downloadUrl(path);
+    link.download = downloadFilename(path, isDir);
+    link.rel = "noopener";
+    link.style.display = "none";
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
     menu = null;
   }
   async function remove(path: string, isDir: boolean): Promise<void> {
@@ -1028,8 +1070,8 @@
          addendum-a's File Browser spec. Section label first
          ("From selection"), workflow entries (New File / New
          Dir / Search / New Terminal / New Graph), then a
-         separator and the per-row ops (Copy Path / Rename /
-         Delete) preserved.
+         separator and the per-row ops (Download / Copy Path /
+         Rename / Delete) preserved.
          Addendum-a doesn't explicitly list Copy Path / Rename
          / Delete; keeping them avoids regressing destructive +
          path ops with no other surface. Flag in journal.
@@ -1070,6 +1112,10 @@
       <span>New Graph</span>
     </button>
     <div class="ctx-sep" role="separator"></div>
+    <button onclick={() => downloadSelection(menu!.path, menu!.isDir)}>
+      <Download size={16} strokeWidth={1.75} aria-hidden="true" />
+      <span>Download</span>
+    </button>
     <button onclick={() => copyPath(menu!.path)}>
       <Copy size={16} strokeWidth={1.75} aria-hidden="true" />
       <span>Copy Path</span>
