@@ -113,9 +113,12 @@ describe("fullstack-a-77 slice 3: Settings UI", () => {
     );
   });
 
-  test("Settings overlay pauses the screensaver timer on mount + releases on destroy", () => {
+  test("Settings overlay pauses the screensaver timer only while visible", () => {
     expect(panel).toMatch(
-      /screensaverPauseRelease = pauseScreensaverTimer\(\);[\s\S]{1,400}return \(\) => \{[\s\S]{1,200}screensaverPauseRelease\?\.\(\);[\s\S]{1,80}screensaverPauseRelease = null;/,
+      /\$effect\(\(\) => \{[\s\S]{1,120}if \(visible\) \{[\s\S]{1,160}screensaverPauseRelease = pauseScreensaverTimer\(\);[\s\S]{1,260}screensaverPauseRelease\?\.\(\);[\s\S]{1,80}screensaverPauseRelease = null;/,
+    );
+    expect(panel).toMatch(
+      /return \(\) => \{[\s\S]{1,200}screensaverPauseRelease\?\.\(\);[\s\S]{1,80}screensaverPauseRelease = null;/,
     );
   });
 

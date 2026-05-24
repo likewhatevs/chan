@@ -409,11 +409,22 @@
     lockNow();
   }
 
-  /// `fullstack-a-77` slice 3: pause the screensaver
-  /// inactivity timer while Settings is open so a long
-  /// configuration session doesn't trigger the lock
-  /// mid-edit. Released on close.
+  /// Pause the screensaver inactivity timer while Settings is open
+  /// so a long configuration session doesn't trigger the lock
+  /// mid-edit. Settings stays mounted after the overlay closes, so
+  /// this follows `visible` rather than component mount lifetime.
   let screensaverPauseRelease: (() => void) | null = null;
+
+  $effect(() => {
+    if (visible) {
+      if (!screensaverPauseRelease) {
+        screensaverPauseRelease = pauseScreensaverTimer();
+      }
+      return;
+    }
+    screensaverPauseRelease?.();
+    screensaverPauseRelease = null;
+  });
 
   onMount(() => {
     // Make sure we have the latest server state when the tab opens.
@@ -421,7 +432,6 @@
     void loadGlobalConfig();
     void loadBuildInfo();
     void loadScreenLockState();
-    screensaverPauseRelease = pauseScreensaverTimer();
     return () => {
       screensaverPauseRelease?.();
       screensaverPauseRelease = null;
