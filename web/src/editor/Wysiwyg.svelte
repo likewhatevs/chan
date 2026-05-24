@@ -60,6 +60,10 @@
   import type { BlockKind } from "./commands/format";
   import { expandDateMacro, openDateAtCaret } from "./commands/date_macros";
   import {
+    expandPageBreakMacro,
+    pageBreakDecorations,
+  } from "./commands/page_break";
+  import {
     continueListOnEnter,
     indentListItem,
     listCaretGuard,
@@ -398,6 +402,7 @@
         listCaretGuard(),
         findField,
         chanDecorations(),
+        pageBreakDecorations(),
         tagDecorations({ onTagClick }),
         mentionDecorations({ onMentionClick }),
         dateDecorations(),
@@ -471,11 +476,12 @@
             // user typing `>` mid-paragraph still gets a literal `>`.
             { key: ">", run: (view) => fmt.quoteLines(view) },
             { key: "<", run: (view) => fmt.unquoteLines(view) },
-            // `@today` and `@date` expand to a date when the user
-            // commits with Space or Enter. Returns false on no
-            // match so the typed Space/Enter falls through to
-            // normal input.
+            // `@today`, `@date`, and page-break macros expand
+            // when the user commits with Space or Enter. Returns
+            // false on no match so the typed Space/Enter falls
+            // through to normal input.
             { key: " ", run: (view) => expandDateMacro(view) },
+            { key: " ", run: (view) => expandPageBreakMacro(view) },
             // Enter on the closing fence line at doc-end exits the
             // block. Mobile keyboards typically lack a reliable
             // Mod modifier and may not surface ArrowDown, so this
@@ -487,6 +493,7 @@
               run: (view) => fmt.escapeFenceOnEnterAtCloser(view),
             },
             { key: "Enter", run: (view) => expandDateMacro(view) },
+            { key: "Enter", run: (view) => expandPageBreakMacro(view) },
             { key: "Enter", run: (view) => stripUnusedInlineImageSpaceOnEnter(view) },
             // List continuation: at end of a `- ` / `1. ` / `- [ ] `
             // line, Enter inserts a fresh marker on the next line;
@@ -996,6 +1003,34 @@
     font-family: var(--chan-editor-code-family, monospace);
     font-size: 0.88em;
     opacity: 0.7;
+  }
+  :global(.md-wysiwyg-cm6 .cm-md-page-break) {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    color: var(--text-secondary);
+    font-family: var(--chan-editor-body-family);
+    font-size: 12px;
+    line-height: 1;
+    padding: 12px 0;
+    user-select: none;
+  }
+  :global(.md-wysiwyg-cm6 .cm-md-page-break-rule) {
+    height: 1px;
+    flex: 1;
+    background: repeating-linear-gradient(
+      to right,
+      var(--chan-editor-hr-color, var(--border, #ddd)) 0,
+      var(--chan-editor-hr-color, var(--border, #ddd)) 6px,
+      transparent 6px,
+      transparent 10px
+    );
+  }
+  :global(.md-wysiwyg-cm6 .cm-md-page-break-label) {
+    border: 1px solid var(--chan-editor-hr-color, var(--border, #ddd));
+    border-radius: 999px;
+    padding: 3px 8px;
+    background: var(--chan-editor-bg, var(--bg));
   }
   :global(.md-wysiwyg-cm6 .cm-md-tag) {
     background: var(--pill-tag-bg);

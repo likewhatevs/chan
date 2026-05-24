@@ -34,6 +34,7 @@
     Network,
     Pencil,
     Pilcrow,
+    Printer,
     RotateCw,
     Search as SearchIcon,
     Settings2,
@@ -109,6 +110,7 @@
     pageWidth,
     setPageWidth,
   } from "../state/pageWidth.svelte";
+  import { printMarkdownDocument } from "../editor/print";
   import {
     tabMenu,
     closeTabMenu,
@@ -122,6 +124,7 @@
   // `-a-67d` (Terminal).
 
   let { tab }: { tab: FileTab } = $props();
+  let editorTabEl: HTMLDivElement | undefined = $state();
 
   // Editor refs so the outline body can call scrollToHeading /
   // scrollToLine on whichever editor variant is showing, and so
@@ -659,6 +662,22 @@
     openGraphForFile(tab.path);
   }
 
+  async function doExportPdf(): Promise<void> {
+    if (!markdownToolsEnabled) return;
+    closeTabMenu();
+    try {
+      await printMarkdownDocument({
+        title: tab.path,
+        path: tab.path,
+        markdown: tab.content,
+        pageWidthRatio: pageWidth.ratio,
+        styleSource: editorTabEl,
+      });
+    } catch (err) {
+      ui.status = `export failed: ${(err as Error).message}`;
+    }
+  }
+
   function doTerminalFromHere(): void {
     closeTabMenu();
     openTerminalInPane(layout.activePaneId, terminalFromHereTarget(tab.path, false));
@@ -697,7 +716,7 @@
 
 <svelte:window onkeydown={onMenuKeydown} onpointerdown={onDocPointerDown} />
 
-<div class="editor-tab">
+<div class="editor-tab" bind:this={editorTabEl}>
   {#if recoveredBuffer}
     <!-- `fullstack-a-72`: hang-recovery banner. Surfaces when
          localStorage has unsaved content for this tab that
@@ -952,6 +971,15 @@
           <span class="mbtn-label">Reload from Disk</span>
           <span class="mbtn-chord"></span>
         </button>
+        {#if markdownToolsEnabled}
+          <button class="mbtn" onclick={doExportPdf}>
+            <span class="mbtn-icon">
+              <Printer size={16} strokeWidth={1.75} aria-hidden="true" />
+            </span>
+            <span class="mbtn-label">Export to PDF</span>
+            <span class="mbtn-chord"></span>
+          </button>
+        {/if}
         <div class="msep" role="separator"></div>
         <!-- `fullstack-a-67f`: From-$CWD spawn band per addendum-a.
              Mirror of the `-a-67d` Terminal pattern: New File

@@ -106,6 +106,16 @@ describe("fullstack-a-67f: Find / Copy paths", () => {
     );
   });
 
+  test("Export to PDF entry routes through the print helper", () => {
+    expect(editor).toMatch(/import \{ printMarkdownDocument \} from "\.\.\/editor\/print";/);
+    expect(editor).toMatch(
+      /async function doExportPdf\(\): Promise<void> \{[\s\S]{1,500}printMarkdownDocument\(\{[\s\S]{1,400}markdown: tab\.content/,
+    );
+    expect(editor).toMatch(
+      /onclick=\{doExportPdf\}[\s\S]{1,400}<span class="mbtn-label">Export to PDF<\/span>/,
+    );
+  });
+
   test("Copy path to file (renamed) + Copy path to $CWD (new) entries", () => {
     expect(editor).toMatch(
       /<span class="mbtn-label">Copy path to file<\/span>/,
