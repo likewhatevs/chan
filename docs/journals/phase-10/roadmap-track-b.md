@@ -30,6 +30,9 @@ Follow-up in this wave:
   `chan-v*` tags only, no Windows or zip release path, no old `/dl/` mirror
   contract, and a `chan-manual-<version>.tar.gz` bundle built from
   `web-marketing/dist/`.
+- The public desktop asset names were checked against the existing
+  `chan-v0.14.0` GitHub Release, and `release-desktop.yml` now verifies those
+  names before upload.
 
 Latest local checks:
 
@@ -37,11 +40,14 @@ Latest local checks:
 - `sh -n web-marketing/dist/install.sh`
 - `git diff --check` on the Track B follow-up files
 - YAML parse of `.github/workflows/release.yml`
+- YAML parse of `.github/workflows/release-desktop.yml`
 - Local manual-bundle tar smoke using `web-marketing/dist/`
+- `gh api` asset-name check against `chan-v0.14.0`
 
 Next wave:
 
-- Recheck release asset names after Track A finalizes desktop artifact names.
+- Recheck public release assets after the next `chan-v*` tag includes the
+  manual bundle.
 
 ## Objectives
 

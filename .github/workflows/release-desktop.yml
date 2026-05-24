@@ -415,6 +415,24 @@ jobs:
       - name: List artifacts
         run: find artifacts -type f
 
+      - name: Verify public desktop asset names
+        run: |
+          set -e
+          version=${GITHUB_REF#refs/tags/chan-v}
+          for name in \
+            "Chan_${version}.dmg" \
+            "Chan_${version}_amd64.AppImage" \
+            "Chan_${version}_amd64.deb"
+          do
+            match=$(find artifacts -type f -name "$name" -print -quit)
+            if [ -z "$match" ]; then
+              echo "::error::missing public desktop asset: $name"
+              find artifacts -type f
+              exit 1
+            fi
+            echo "found $name at $match"
+          done
+
       # Ships .dmg + .deb + .AppImage to the release. The .app
       # inside the macOS bundle dir is a build intermediate; users
       # install via the .dmg. fail_on_unmatched_files: true catches
