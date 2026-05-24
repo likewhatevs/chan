@@ -70,13 +70,13 @@ describe("fullstack-a-77 slice 3: Settings UI", () => {
     );
   });
 
-  test("theme picker persists plain/matrix/castaway through screensaverPatch", () => {
+  test("theme picker persists plain/matrix through screensaverPatch", () => {
     expect(panel).toMatch(/type ScreensaverTheme/);
     expect(panel).toMatch(
       /async function commitScreensaverTheme\(e: Event\): Promise<void> \{[\s\S]{1,700}api\.screensaverPatch\(\{ theme \}\);[\s\S]{1,300}await loadScreensaverState\(\);/,
     );
     expect(panel).toMatch(
-      /<select[\s\S]{1,300}bind:value=\{screensaverTheme\}[\s\S]{1,200}onchange=\{commitScreensaverTheme\}[\s\S]{1,300}<option value="plain">Plain<\/option>[\s\S]{1,120}<option value="matrix">Matrix<\/option>[\s\S]{1,120}<option value="castaway">Castaway<\/option>/,
+      /<select[\s\S]{1,300}bind:value=\{screensaverTheme\}[\s\S]{1,200}onchange=\{commitScreensaverTheme\}[\s\S]{1,300}<option value="plain">Plain<\/option>[\s\S]{1,120}<option value="matrix">Matrix<\/option>/,
     );
   });
 

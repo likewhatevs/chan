@@ -15,13 +15,13 @@ import sourceText from "./screensaver.ts?raw";
 describe("fullstack-a-77 slice 1: api.screensaver* client methods", () => {
   test("screensaverState hits GET /api/screensaver/state", () => {
     expect(clientSource).toMatch(
-      /screensaverState: \(\) =>[\s\S]*?req<\{ enabled: boolean; timeout_secs: number; theme: "plain" \| "matrix" \| "castaway"; pin_set: boolean \}>\([\s\S]*?"GET",[\s\S]*?"\/api\/screensaver\/state"/,
+      /screensaverState: \(\) =>[\s\S]*?req<\{ enabled: boolean; timeout_secs: number; theme: "plain" \| "matrix"; pin_set: boolean \}>\([\s\S]*?"GET",[\s\S]*?"\/api\/screensaver\/state"/,
     );
   });
 
   test("screensaverPatch hits PATCH /api/screensaver/state with partial body including theme", () => {
     expect(clientSource).toMatch(
-      /screensaverPatch: \(body: \{[\s\S]*?enabled\?: boolean;[\s\S]*?timeout_secs\?: number;[\s\S]*?theme\?: "plain" \| "matrix" \| "castaway";[\s\S]*?\}\) =>[\s\S]*?"PATCH",[\s\S]*?"\/api\/screensaver\/state",[\s\S]*?body,/,
+      /screensaverPatch: \(body: \{[\s\S]*?enabled\?: boolean;[\s\S]*?timeout_secs\?: number;[\s\S]*?theme\?: "plain" \| "matrix";[\s\S]*?\}\) =>[\s\S]*?"PATCH",[\s\S]*?"\/api\/screensaver\/state",[\s\S]*?body,/,
     );
   });
 
@@ -89,9 +89,9 @@ describe("fullstack-a-77 slice 1: timeout constants", () => {
 });
 
 describe("Wave 3: plain screen-lock theme", () => {
-  test("ScreensaverTheme accepts plain alongside scene themes", () => {
+  test("ScreensaverTheme accepts plain and matrix only", () => {
     expect(sourceText).toMatch(
-      /export type ScreensaverTheme = "plain" \| "matrix" \| "castaway";/,
+      /export type ScreensaverTheme = "plain" \| "matrix";/,
     );
   });
 });

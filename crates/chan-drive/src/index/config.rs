@@ -52,7 +52,6 @@ pub enum ScreensaverTheme {
     #[default]
     Plain,
     Matrix,
-    Castaway,
 }
 
 /// On-disk shape of `<index_dir>/config.toml`.
@@ -360,6 +359,22 @@ mod tests {
         );
         let loaded = load(tmp.path()).unwrap();
         assert_eq!(loaded.screensaver_theme, ScreensaverTheme::Plain);
+    }
+
+    #[test]
+    fn screensaver_theme_castaway_is_rejected() {
+        let tmp = TempDir::new().unwrap();
+        std::fs::write(
+            config_path(tmp.path()),
+            "schema_version = 3\nmodel = \"BAAI/bge-small-en-v1.5\"\nscreensaver_theme = \"castaway\"\n",
+        )
+        .unwrap();
+
+        let err = load(tmp.path()).unwrap_err();
+        assert!(
+            err.to_string().contains("unknown variant `castaway`"),
+            "castaway must not deserialize as a valid theme: {err}"
+        );
     }
 
     #[test]

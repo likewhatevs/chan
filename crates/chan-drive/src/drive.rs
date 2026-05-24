@@ -5976,12 +5976,9 @@ mod tests {
 
         // Update theme.
         drive
-            .set_screensaver_theme(ScreensaverTheme::Castaway)
+            .set_screensaver_theme(ScreensaverTheme::Matrix)
             .unwrap();
-        assert_eq!(
-            drive.screensaver_theme().unwrap(),
-            ScreensaverTheme::Castaway
-        );
+        assert_eq!(drive.screensaver_theme().unwrap(), ScreensaverTheme::Matrix);
 
         // Set PIN.
         let pin_bytes = vec![0xDE, 0xAD, 0xBE, 0xEF, 0x42];
@@ -5998,7 +5995,7 @@ mod tests {
         drive.set_screensaver_enabled(true).unwrap();
         drive.set_screensaver_timeout_secs(60).unwrap();
         drive
-            .set_screensaver_theme(ScreensaverTheme::Castaway)
+            .set_screensaver_theme(ScreensaverTheme::Matrix)
             .unwrap();
         drive.set_screensaver_pin_hash(None).unwrap();
     }

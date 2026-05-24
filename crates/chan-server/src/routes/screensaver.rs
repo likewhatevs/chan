@@ -350,13 +350,13 @@ mod tests {
             &router,
             "PATCH",
             "/api/screensaver/state",
-            Some(r#"{"enabled":true,"timeout_secs":60,"theme":"castaway"}"#),
+            Some(r#"{"enabled":true,"timeout_secs":60,"theme":"matrix"}"#),
         )
         .await;
         assert_eq!(status, StatusCode::OK);
         assert_eq!(body["enabled"], true);
         assert_eq!(body["timeout_secs"], 60);
-        assert_eq!(body["theme"], "castaway");
+        assert_eq!(body["theme"], "matrix");
         assert_eq!(body["pin_set"], false);
 
         // Partial: only update timeout; enabled stays true.
@@ -370,7 +370,7 @@ mod tests {
         assert_eq!(status, StatusCode::OK);
         assert_eq!(body["enabled"], true);
         assert_eq!(body["timeout_secs"], 120);
-        assert_eq!(body["theme"], "castaway");
+        assert_eq!(body["theme"], "matrix");
     }
 
     #[tokio::test]
@@ -393,14 +393,14 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn screensaver_patch_rejects_invalid_theme() {
+    async fn screensaver_patch_rejects_castaway_theme() {
         let app = route_test_app();
         let router = crate::router(app.state);
         let (status, _) = request(
             &router,
             "PATCH",
             "/api/screensaver/state",
-            Some(r#"{"theme":"unknown"}"#),
+            Some(r#"{"theme":"castaway"}"#),
         )
         .await;
         assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);

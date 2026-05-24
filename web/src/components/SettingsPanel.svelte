@@ -553,7 +553,6 @@
                 >
                   <option value="plain">Plain</option>
                   <option value="matrix">Matrix</option>
-                  <option value="castaway">Castaway</option>
                 </select>
               </label>
               <label class="screensaver-timeout">

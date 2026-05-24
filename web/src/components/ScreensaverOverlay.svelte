@@ -32,7 +32,6 @@
   } from "../state/screensaver.svelte";
   import { drive } from "../state/store.svelte";
   import MatrixRain from "./screensaver/MatrixRain.svelte";
-  import Castaway from "./screensaver/Castaway.svelte";
 
   let pin = $state("");
   let busy = $state(false);
@@ -120,9 +119,7 @@
     onclick={onBackdropPointer}
     tabindex="-1"
   >
-    {#if screensaver.theme === "castaway"}
-      <Castaway />
-    {:else if screensaver.theme === "matrix"}
+    {#if screensaver.theme === "matrix"}
       <MatrixRain />
     {/if}
     <div class="screensaver-card" class:shake>

@@ -115,11 +115,10 @@ describe("fullstack-a-77 slice 2: overlay component", () => {
     expect(overlay).toMatch(/z-index: 2000;/);
   });
 
-  test("overlay switches scenes by theme and leaves plain unrendered", () => {
+  test("overlay renders Matrix only when the matrix theme is active", () => {
     expect(overlay).toMatch(/import MatrixRain from "\.\/screensaver\/MatrixRain\.svelte";/);
-    expect(overlay).toMatch(/import Castaway from "\.\/screensaver\/Castaway\.svelte";/);
     expect(overlay).toMatch(
-      /\{#if screensaver\.theme === "castaway"\}[\s\S]{1,80}<Castaway \/>[\s\S]{1,80}\{:else if screensaver\.theme === "matrix"\}[\s\S]{1,80}<MatrixRain \/>[\s\S]{1,80}\{\/if\}/,
+      /\{#if screensaver\.theme === "matrix"\}[\s\S]{1,80}<MatrixRain \/>[\s\S]{1,80}\{\/if\}/,
     );
   });
 });

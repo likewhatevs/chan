@@ -102,5 +102,5 @@ export const SCREENSAVER_DEFAULT_TIMEOUT_SECS = 300;
 export const SCREENSAVER_MIN_TIMEOUT_SECS = 10;
 export const SCREENSAVER_MAX_TIMEOUT_SECS = 60 * 60; // 1h
 
-export type ScreensaverTheme = "plain" | "matrix" | "castaway";
+export type ScreensaverTheme = "plain" | "matrix";
 export const SCREENSAVER_DEFAULT_THEME: ScreensaverTheme = "plain";
