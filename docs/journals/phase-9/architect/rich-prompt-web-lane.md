@@ -20,8 +20,9 @@ Audited:
 - `web/src/components/TerminalTab.svelte`
 - `web/src/api/client.ts`
 
-Page-break integration remains blocked on owner confirmation. Current
-worktree has no page-break edits, but ownership is still treated as external.
+Page-break integration was external to this Rich Prompt lane during the Web
+slice. On 2026-05-24 @@CoreArchitect accepted release ownership after
+confirming the feature is already merged in `b0869b1`.
 
 ## Baseline Before Implementation
 
@@ -383,5 +384,7 @@ Remaining follow-up:
 
 - Optional native/desktop validation for literal Cmd+P. Browser/iab validation
   should use Cmd+Alt+P or Mod+. p.
-- Core should decide whether the path-less watcher rebuild warnings are
-  expected noise or need filtering in the Rich Prompt workspace path.
+- Non-empty CodeMirror submit and full Spawn agents preflight visual checks in
+  a browser environment that can type into CodeMirror and use clipboard APIs.
+- Core classified path-less watcher rebuild warnings as notify noise and
+  closed the follow-up in `affe1e7`.
