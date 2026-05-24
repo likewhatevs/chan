@@ -1022,6 +1022,7 @@
         }}
         role="tab"
         tabindex="0"
+        aria-selected={t.id === pane.activeTabId}
         title={tabTooltip(t)}
         draggable="true"
         ondragstart={(e) => onDragStart(e, t.id)}
@@ -1113,6 +1114,7 @@
             closeTab(pane.id, t.id);
           }}
           title="close"
+          aria-label={`close ${tabLabelInPane(t, pane.tabs, browserCtxFor(t))}`}
         >×</button>
       </div>
     {/each}

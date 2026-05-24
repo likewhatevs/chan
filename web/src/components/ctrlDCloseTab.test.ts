@@ -61,18 +61,6 @@ function fileTab(partial: Partial<FileTab> = {}): FileTab {
   };
 }
 
-function terminalTab(partial: Partial<TerminalTab> = {}): TerminalTab {
-  return {
-    kind: "terminal",
-    id: "t1",
-    title: "Terminal",
-    createdAt: 1,
-    broadcastEnabled: false,
-    broadcastTargetIds: [],
-    ...partial,
-  };
-}
-
 function resetLayout(tabs: Array<FileTab | TerminalTab>): LeafNode {
   const paneId = "pane-1";
   const node: LeafNode = {

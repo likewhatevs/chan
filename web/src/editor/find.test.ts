@@ -7,7 +7,7 @@
 // so Enter / Shift+Enter inside the FindBar leaves the caret on
 // the navigated match for the user to land on after Esc.
 
-import { describe, expect, test, beforeEach, afterEach } from "vitest";
+import { describe, expect, test, afterEach } from "vitest";
 import { EditorState } from "@codemirror/state";
 import { EditorView } from "@codemirror/view";
 import { findField, makeFindAdapter, setFindEffect } from "./base";

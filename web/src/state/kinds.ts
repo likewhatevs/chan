@@ -15,7 +15,7 @@
 // chan-drive's classifier via `classifyPath` so the editor and the
 // drive agree on what counts as text.
 
-import { FileText, User, FileCode, Image, File, Hash, AtSign, Calendar, Folder } from "lucide-svelte";
+import { FileText, User, FileCode, Image, File, Hash, Calendar, Folder } from "lucide-svelte";
 
 import type { TreeEntry } from "../api/types";
 import { classifyPath } from "./fileTypes";

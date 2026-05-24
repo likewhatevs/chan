@@ -84,6 +84,26 @@ function menuLabels(): string[] {
 }
 
 describe("Pane terminal tab activity marker", () => {
+  test("tabs expose selected state and labelled close buttons", async () => {
+    const active = terminalTab({ id: "term-active", title: "Active" });
+    const inactive = terminalTab({ id: "term-bg", title: "Background" });
+    const pane: LeafNode = {
+      kind: "leaf",
+      id: "pane-tabs-a11y",
+      tabs: [active, inactive],
+      activeTabId: active.id,
+    };
+
+    const target = await renderPane(pane, { paneMode: false });
+    const tabs = target.querySelectorAll<HTMLElement>('[role="tab"]');
+
+    expect(tabs[0]?.getAttribute("aria-selected")).toBe("true");
+    expect(tabs[1]?.getAttribute("aria-selected")).toBe("false");
+    expect(
+      tabs[0]?.querySelector<HTMLButtonElement>(".close")?.getAttribute("aria-label"),
+    ).toBe("close Active");
+  }, 15000);
+
   test("renders output-since-focus marker for inactive terminal tabs", async () => {
     const active = terminalTab({ id: "term-active", title: "Active" });
     const inactive = terminalTab({

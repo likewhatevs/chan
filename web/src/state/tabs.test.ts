@@ -283,7 +283,7 @@ describe("tab drag and drop", () => {
 
 describe("pane state", () => {
   test("serializes window focus color with layout state", async () => {
-    const pane = resetLayout([terminalTab()]);
+    resetLayout([terminalTab()]);
     setWindowFocusColor("pink");
 
     const snapshot = serializeLayout();
@@ -421,7 +421,7 @@ describe("pane state", () => {
   });
 
   test("opens graph and file browser as first-class tabs", () => {
-    const pane = resetLayout([]);
+    resetLayout([]);
 
     const graph = openGraphInActivePane({
       mode: "filesystem",

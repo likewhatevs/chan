@@ -53,7 +53,7 @@ export function bubbleKeymap(
   return Prec.highest(
     keymap.of([
       {
-        any: (view, event) => {
+        any: (_view, event) => {
           const handle = getActive();
           if (!handle) return false;
           return handle.handleKey(event);

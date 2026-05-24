@@ -72,8 +72,7 @@ export function parseWatcherEvent(path: string, content: string): WatcherEvent |
 /// Replaces the prior `api.list(dir) + api.read(path)` composition,
 /// which routed both calls through `/api/files` and ENOENT-ed on
 /// any path outside the drive's `validate_rel` boundary. Server
-/// pre-filters the event-name regex (matches `eventFilename`
-/// below) and sorts deterministically.
+/// pre-filters event filenames and sorts deterministically.
 export async function readWatcherEvents(sessionId: string): Promise<WatcherEvent[]> {
   const entries = await api.terminalWatcherEvents(sessionId);
   const out: WatcherEvent[] = [];
@@ -100,11 +99,6 @@ export async function writeSurveyReply(
     scope_grant: scopeGrant,
     ...(followUp ? { follow_up: true } : {}),
   });
-}
-
-function eventFilename(path: string): boolean {
-  const name = path.split("/").pop() ?? path;
-  return /^(event|pre-flight)-.+\.(md|json)$/.test(name);
 }
 
 function parseQuestion(value: unknown): SurveyQuestion | null {

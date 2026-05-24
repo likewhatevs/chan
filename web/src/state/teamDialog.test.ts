@@ -10,7 +10,6 @@ import {
   reshapeSplitGrid,
   resizeTeamMembers,
   switchRealEstate,
-  TEAM_MAX_SIZE,
   TEAM_MIN_SIZE,
   teamDialogState,
   unassignMember,
