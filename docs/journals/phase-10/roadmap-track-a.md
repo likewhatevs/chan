@@ -179,7 +179,10 @@ Product contracts:
   Done: UI uses `/api/link-targets` and server tests pin that body text
   does not match link-target results.
 - Add endpoint and UI tests for that contract. Done.
-- Fix or close the File Browser duplicate-key smoke failure.
+- Fix or close the File Browser duplicate-key smoke failure. Closed:
+  FileTree already dedupes repeated paths and explicit directory entries
+  that duplicate placeholder parents; `fileTreeDuplicatePaths.test.ts`
+  pins both guards.
 
 Config cleanup:
 
