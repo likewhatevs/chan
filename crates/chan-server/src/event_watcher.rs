@@ -43,6 +43,9 @@ use serde::{Deserialize, Serialize};
 const SEEN_EVENT_IDS_CAP: usize = 1024;
 
 pub(crate) type EventDispatch = dyn Fn(AgentEvent) + Send + Sync + 'static;
+pub(crate) type WatcherFailure = dyn Fn(String) + Send + Sync + 'static;
+
+const EVENT_FILE_MAX_BYTES: u64 = 1024 * 1024;
 
 #[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
 pub(crate) struct AgentEvent {
@@ -123,6 +126,7 @@ impl EventWatcherHandle {
         dir: PathBuf,
         dispatch: Arc<EventDispatch>,
         dropped_events: Arc<AtomicU64>,
+        on_failure: Option<Arc<WatcherFailure>>,
     ) -> anyhow::Result<Self> {
         let seen = Arc::new(Mutex::new(SeenEventIds::default()));
         let callback_dir = dir.clone();
@@ -143,9 +147,14 @@ impl EventWatcherHandle {
                         "notify event"
                     );
                     match event_final_path(&event) {
-                        Some(path) => {
-                            ingest_once(&callback_dir, path, &dispatch, &dropped_events, &seen)
-                        }
+                        Some(path) => ingest_once(
+                            &callback_dir,
+                            path,
+                            &dispatch,
+                            &dropped_events,
+                            &seen,
+                            on_failure.as_deref(),
+                        ),
                         None => {
                             // systacean-14: kinds the matcher in
                             // `event_final_path` doesn't accept are
@@ -169,7 +178,14 @@ impl EventWatcherHandle {
                 }
                 Err(e) => {
                     dropped_events.fetch_add(1, Ordering::Relaxed);
-                    tracing::warn!("event watcher error for {}: {e}", callback_dir.display());
+                    let message = e.to_string();
+                    if let Some(on_failure) = on_failure.as_deref() {
+                        on_failure(message.clone());
+                    }
+                    tracing::warn!(
+                        "event watcher error for {}: {message}",
+                        callback_dir.display()
+                    );
                 }
             })
             .with_context(|| format!("start event watcher for {}", dir.display()))?;
@@ -196,6 +212,7 @@ fn ingest_once(
     dispatch: &Arc<EventDispatch>,
     dropped_events: &AtomicU64,
     seen: &Mutex<SeenEventIds>,
+    on_failure: Option<&WatcherFailure>,
 ) {
     // notify (FSEvents on macOS, inotify on Linux) can deliver events
     // whose path is a directory rather than a regular file:
@@ -209,10 +226,6 @@ fn ingest_once(
     // a red toast in the rich-prompt UI on a perfectly valid attach.
     // Skip directory paths silently: they aren't event-file payloads,
     // so dropping them isn't a dropped event. systacean-5.
-    if std::fs::metadata(&path).is_ok_and(|m| m.is_dir()) {
-        tracing::debug!(path = %path.display(), "event watcher: skipping directory path");
-        return;
-    }
     // systacean-10: the SPA filter + the systacean-9 server read
     // endpoint both apply the regex `^(event|pre-flight)-.+\.(md|json)$`.
     // Mirror it here so non-event files (and hidden files, which the
@@ -233,11 +246,55 @@ fn ingest_once(
         );
         return;
     }
+    let meta = match std::fs::symlink_metadata(&path) {
+        Ok(meta) => meta,
+        Err(e) => {
+            dropped_events.fetch_add(1, Ordering::Relaxed);
+            let message = format!("failed to inspect event file {}: {e}", path.display());
+            if let Some(on_failure) = on_failure {
+                on_failure(message.clone());
+            }
+            tracing::warn!("{message}");
+            return;
+        }
+    };
+    let ft = meta.file_type();
+    if ft.is_dir() {
+        tracing::debug!(path = %path.display(), "event watcher: skipping directory path");
+        return;
+    }
+    if !ft.is_file() || ft.is_symlink() {
+        dropped_events.fetch_add(1, Ordering::Relaxed);
+        let message = format!("refusing unsafe event file {}", path.display());
+        if let Some(on_failure) = on_failure {
+            on_failure(message.clone());
+        }
+        tracing::warn!("{message}");
+        return;
+    }
+    if meta.len() > EVENT_FILE_MAX_BYTES {
+        dropped_events.fetch_add(1, Ordering::Relaxed);
+        let message = format!(
+            "refusing oversized event file {}: {} bytes exceeds {} byte cap",
+            path.display(),
+            meta.len(),
+            EVENT_FILE_MAX_BYTES
+        );
+        if let Some(on_failure) = on_failure {
+            on_failure(message.clone());
+        }
+        tracing::warn!("{message}");
+        return;
+    }
     let text = match std::fs::read_to_string(&path) {
         Ok(text) => text,
         Err(e) => {
             dropped_events.fetch_add(1, Ordering::Relaxed);
-            tracing::warn!("failed to read event file {}: {e}", path.display());
+            let message = format!("failed to read event file {}: {e}", path.display());
+            if let Some(on_failure) = on_failure {
+                on_failure(message.clone());
+            }
+            tracing::warn!("{message}");
             return;
         }
     };
@@ -462,9 +519,10 @@ mod tests {
             &dispatch,
             &dropped,
             &seen,
+            None,
         );
         // Case 2: a subdirectory inside the watch root.
-        ingest_once(dir.path(), subdir, &dispatch, &dropped, &seen);
+        ingest_once(dir.path(), subdir, &dispatch, &dropped, &seen, None);
 
         assert_eq!(
             dropped.load(Ordering::Relaxed),
@@ -529,7 +587,7 @@ mod tests {
             tx.send(event).expect("send event");
         });
 
-        ingest_once(dir.path(), stray, &dispatch, &dropped, &seen);
+        ingest_once(dir.path(), stray, &dispatch, &dropped, &seen, None);
 
         assert_eq!(
             dropped.load(Ordering::Relaxed),
@@ -560,7 +618,7 @@ mod tests {
             tx.send(event).expect("send event");
         });
 
-        ingest_once(dir.path(), bad, &dispatch, &dropped, &seen);
+        ingest_once(dir.path(), bad, &dispatch, &dropped, &seen, None);
 
         assert_eq!(
             dropped.load(Ordering::Relaxed),
@@ -589,7 +647,7 @@ mod tests {
             tx.send(event).expect("send event");
         });
         let _watcher =
-            EventWatcherHandle::start(dir.path().to_path_buf(), dispatch, dropped.clone())
+            EventWatcherHandle::start(dir.path().to_path_buf(), dispatch, dropped.clone(), None)
                 .expect("start watcher");
         // Give the watcher a beat to attach before producing.
         std::thread::sleep(Duration::from_millis(150));
@@ -646,7 +704,7 @@ mod tests {
             tx.send(event).expect("send event");
         });
         let _watcher =
-            EventWatcherHandle::start(dir.path().to_path_buf(), dispatch, dropped.clone())
+            EventWatcherHandle::start(dir.path().to_path_buf(), dispatch, dropped.clone(), None)
                 .expect("start watcher");
         std::thread::sleep(Duration::from_millis(150));
 
@@ -700,8 +758,9 @@ mod tests {
             tx.send(event).expect("send event");
         });
         // Watch the symlink path (/tmp/...) just like @@WebtestB did.
-        let _watcher = EventWatcherHandle::start(symlink_dir.clone(), dispatch, dropped.clone())
-            .expect("start watcher");
+        let _watcher =
+            EventWatcherHandle::start(symlink_dir.clone(), dispatch, dropped.clone(), None)
+                .expect("start watcher");
         std::thread::sleep(Duration::from_millis(150));
 
         const N: usize = 8;
@@ -743,7 +802,7 @@ mod tests {
             tx.send(event).expect("send event");
         });
         let _watcher =
-            EventWatcherHandle::start(dir.path().to_path_buf(), dispatch, dropped.clone())
+            EventWatcherHandle::start(dir.path().to_path_buf(), dispatch, dropped.clone(), None)
                 .expect("start watcher");
         std::thread::sleep(Duration::from_millis(100));
 

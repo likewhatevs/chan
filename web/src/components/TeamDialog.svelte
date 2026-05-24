@@ -5,7 +5,9 @@
     assignMemberToCell,
     closeTeamDialog,
     defaultTeamConfig,
+    exportTeamDialogConfig,
     gridShapesForSize,
+    importTeamDialogConfig,
     reshapeSplitGrid,
     resizeTeamMembers,
     switchRealEstate,
@@ -19,7 +21,7 @@
     validateTeamConfig,
   } from "../state/teamDialog.svelte";
 
-  /// `fullstack-a-78` slice 1: New Team dialog shell. Inputs
+  /// `fullstack-a-78` slice 1: Spawn agents dialog shell. Inputs
   /// + per-member rows + Bootstrap button. Airplane-grid
   /// drag&drop deferred to slice 2; the real-estate selector
   /// renders a placeholder for `split` until slice 2 ships.
@@ -39,6 +41,7 @@
   );
   let busy = $state(false);
   let submitError = $state<string | null>(null);
+  let configStatus = $state<string | null>(null);
   let nameInputEl = $state<HTMLInputElement | undefined>();
 
   // `fullstack-a-78`: focus the host-name input on mount so
@@ -175,6 +178,38 @@
     }
   }
 
+  async function onCopyConfig(): Promise<void> {
+    submitError = null;
+    configStatus = null;
+    const clipboard = navigator.clipboard;
+    if (!clipboard?.writeText) {
+      submitError = "clipboard write is unavailable";
+      return;
+    }
+    try {
+      await clipboard.writeText(exportTeamDialogConfig(config));
+      configStatus = "Configuration copied";
+    } catch (err) {
+      submitError = `copy failed: ${(err as Error).message}`;
+    }
+  }
+
+  async function onPasteConfig(): Promise<void> {
+    submitError = null;
+    configStatus = null;
+    const clipboard = navigator.clipboard;
+    if (!clipboard?.readText) {
+      submitError = "clipboard read is unavailable";
+      return;
+    }
+    try {
+      config = importTeamDialogConfig(await clipboard.readText());
+      configStatus = "Configuration pasted";
+    } catch (err) {
+      submitError = `paste failed: ${(err as Error).message}`;
+    }
+  }
+
   function onCancel(): void {
     closeTeamDialog();
   }
@@ -203,7 +238,7 @@
     aria-labelledby="team-dialog-title"
   >
     <header class="team-dialog-header">
-      <h2 id="team-dialog-title">New Team</h2>
+      <h2 id="team-dialog-title">Spawn agents</h2>
       <button
         type="button"
         class="team-dialog-close"
@@ -245,9 +280,18 @@
         <span>Auto-prefix names with <code>@@</code></span>
       </label>
 
+      <div class="team-config-actions">
+        <button type="button" onclick={() => void onCopyConfig()} disabled={busy}>
+          Copy config
+        </button>
+        <button type="button" onclick={() => void onPasteConfig()} disabled={busy}>
+          Paste config
+        </button>
+      </div>
+
       <label class="team-field">
         <span class="team-field-label">
-          Team size (excluding you): {config.size}
+          Agents (excluding you): {config.size}
         </span>
         <input
           type="range"
@@ -409,6 +453,8 @@
 
       {#if submitError}
         <p class="team-dialog-error" role="alert">{submitError}</p>
+      {:else if configStatus}
+        <p class="team-dialog-status" role="status">{configStatus}</p>
       {:else if issue}
         <p class="team-dialog-hint">{issue}</p>
       {/if}
@@ -507,6 +553,21 @@
     align-items: center;
     gap: 8px;
     font-size: 0.875rem;
+  }
+  .team-config-actions {
+    display: flex;
+    gap: 8px;
+    flex-wrap: wrap;
+  }
+  .team-config-actions button {
+    padding: 5px 10px;
+    background: var(--btn-bg);
+    border: 1px solid var(--btn-border);
+    border-radius: 4px;
+    color: var(--text);
+    cursor: pointer;
+    font: inherit;
+    font-size: 0.8rem;
   }
   .team-members {
     border: 1px solid var(--border);
@@ -680,6 +741,11 @@
   .team-dialog-error {
     margin: 0;
     color: var(--danger-text);
+    font-size: 0.875rem;
+  }
+  .team-dialog-status {
+    margin: 0;
+    color: var(--text-secondary);
     font-size: 0.875rem;
   }
   .team-dialog-hint {

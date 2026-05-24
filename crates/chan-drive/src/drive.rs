@@ -217,6 +217,10 @@ pub struct Drive {
     paths: DrivePaths,
     /// Held for the lifetime of the Drive. Released on drop.
     _lock: DriveLock,
+    /// Keeps live Drive count bounded under descriptor pressure.
+    /// This leaves room for editor reads, writes, PTYs, and watchers
+    /// even when tests or callers try to open many drives at once.
+    _fd_permit: crate::fd_budget::DrivePermit,
     /// Lazily constructed; held in an Option so the field can be
     /// observed via `index()` / `graph()` accessors that initialize
     /// on first call.
@@ -330,6 +334,7 @@ impl Drive {
             .root_path
             .canonicalize()
             .map_err(|e| ChanError::Io(format!("canonicalize drive root: {e}")))?;
+        let fd_permit = crate::fd_budget::acquire_drive_permit();
         let dir =
             cap_std::fs::Dir::open_ambient_dir(&entry.root_path, cap_std::ambient_authority())
                 .map_err(|e| ChanError::Io(format!("open drive root: {e}")))?;
@@ -416,6 +421,7 @@ impl Drive {
             drafts_dir_handle,
             paths,
             _lock: lock,
+            _fd_permit: fd_permit,
             index: std::sync::OnceLock::new(),
             graph: std::sync::OnceLock::new(),
             rename_log: std::sync::Mutex::new(rename_log),
@@ -1305,6 +1311,57 @@ impl Drive {
             name,
             target_rel,
         )
+    }
+
+    /// Create an active Rich Prompt workspace under Drafts metadata.
+    /// The active marker is written last so reload/preflight never
+    /// treats a partially-created directory as an active prompt.
+    pub fn create_rich_prompt_workspace(
+        &self,
+        requested_name: Option<&str>,
+    ) -> Result<crate::rich_prompts::RichPromptWorkspace> {
+        crate::rich_prompts::create(
+            &self.paths.drafts,
+            requested_name,
+            crate::rich_prompts::DEFAULT_PROCESS_TEXT,
+        )
+    }
+
+    /// Inspect one active Rich Prompt workspace.
+    pub fn inspect_rich_prompt_workspace(
+        &self,
+        name: &str,
+    ) -> Result<crate::rich_prompts::RichPromptWorkspace> {
+        crate::rich_prompts::inspect(&self.paths.drafts, name)
+    }
+
+    /// Inspect active Rich Prompt workspaces and report non-fatal
+    /// problems that should be surfaced on drive boot.
+    pub fn rich_prompt_preflight(&self) -> Result<Vec<crate::rich_prompts::RichPromptIssue>> {
+        crate::rich_prompts::preflight(&self.paths.drafts)
+    }
+
+    /// Archive a submitted prompt buffer into `prompt-N.md` and
+    /// reset `draft.md` to a fresh blank buffer.
+    pub fn submit_rich_prompt_workspace(
+        &self,
+        name: &str,
+        content: &str,
+        expected_sequence: u64,
+        expected_mtime_ns: Option<i64>,
+    ) -> Result<crate::rich_prompts::RichPromptSubmitReport> {
+        crate::rich_prompts::submit(
+            &self.paths.drafts,
+            name,
+            content,
+            expected_sequence,
+            expected_mtime_ns,
+        )
+    }
+
+    /// Move an active Rich Prompt workspace to metadata trash.
+    pub fn discard_rich_prompt_workspace(&self, name: &str) -> Result<()> {
+        crate::rich_prompts::discard(&self.paths.drafts, &self.paths.trash.join("drafts"), name)
     }
 
     // ---- teams (systacean-30) ----

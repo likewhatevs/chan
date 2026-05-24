@@ -2,43 +2,55 @@ import { describe, expect, test } from "vitest";
 import terminal from "./TerminalTab.svelte?raw";
 import client from "../api/client.ts?raw";
 
-// `fullstack-a-66` slice d: every Cmd+Enter submit persists
-// the Rich Prompt source as `Drafts/rich-prompt-N/prompt.md`
-// so the user has GitHub-style FB access to their history.
+// Phase 9: Rich Prompt submits archive through Core-owned
+// workspaces instead of the legacy history-only draft endpoint.
 
-describe("fullstack-a-66 slice d: api.createRichPromptDraft", () => {
-  test("api client exposes createRichPromptDraft hitting /api/drafts/rich-prompt", () => {
+describe("phase 9 rich prompt workspace API", () => {
+  test("api client exposes the Core workspace routes", () => {
     expect(client).toMatch(
-      /createRichPromptDraft: \(content: string\) =>[\s\S]*?req<\{ path: string; name: string \}>\("POST", "\/api\/drafts\/rich-prompt", \{[\s\S]*?content,/,
+      /createRichPromptWorkspace: \(session: string, name\?: string\) =>[\s\S]*?"\/api\/rich-prompts"/,
     );
+    expect(client).toMatch(/richPromptStatus: \(name: string, session\?: string\) =>/);
+    expect(client).toMatch(/submitRichPromptWorkspace: \(/);
+    expect(client).toMatch(/closeRichPromptWorkspace: \(name: string, session: string\) =>/);
   });
 
-  test("client doc-comment cross-references slice d + the `rich-prompt-N` naming", () => {
-    expect(client).toMatch(/`fullstack-a-66` slice d/);
-    expect(client).toMatch(/rich-prompt-N\/prompt\.md/);
+  test("status route passes the terminal session as query state", () => {
+    expect(client).toMatch(
+      /params\.set\("session", session\);[\s\S]*?\/api\/rich-prompts\/\$\{encodeURIComponent\(name\)\}\/status\$\{suffix\}/,
+    );
   });
 });
 
-describe("fullstack-a-66 slice d: TerminalTab submit hook", () => {
-  test("submitRichPrompt calls persistRichPromptHistory(source)", () => {
+describe("phase 9 rich prompt submit hook", () => {
+  test("submitRichPrompt archives through persistRichPromptSubmission(source)", () => {
     expect(terminal).toMatch(
-      /function submitRichPrompt\(source: string\): void \{[\s\S]*?void persistRichPromptHistory\(source\);/,
+      /function submitRichPrompt\(source: string\): void \{[\s\S]*?void persistRichPromptSubmission\(source\);/,
     );
   });
 
-  test("persistRichPromptHistory skips empty/whitespace-only sources", () => {
+  test("shell mode appends a missing newline before sending to the PTY", () => {
     expect(terminal).toMatch(
-      /async function persistRichPromptHistory\(source: string\): Promise<void> \{[\s\S]*?const trimmed = source\.trim\(\);[\s\S]*?if \(!trimmed\) return;/,
+      /sendUserInput\(source\.endsWith\("\\n"\) \? source : `\$\{source\}\\n`\);/,
     );
   });
 
-  test("persist failures surface via setTransientStatus (non-fatal)", () => {
+  test("persistRichPromptSubmission skips empty/whitespace-only sources", () => {
     expect(terminal).toMatch(
-      /} catch \(err\) \{[\s\S]*?setTransientStatus\(\s*`rich-prompt history save failed:/,
+      /async function persistRichPromptSubmission\(source: string\): Promise<void> \{[\s\S]*?const trimmed = source\.trim\(\);[\s\S]*?if \(!trimmed\) return;/,
     );
   });
 
-  test("persist call routes through api.createRichPromptDraft", () => {
-    expect(terminal).toMatch(/await api\.createRichPromptDraft\(source\)/);
+  test("persist call routes through api.submitRichPromptWorkspace", () => {
+    expect(terminal).toMatch(
+      /await api\.submitRichPromptWorkspace\(name, \{[\s\S]*?content: source,[\s\S]*?expected_sequence: rp\.submissionSequence \?\? 0,/,
+    );
+  });
+
+  test("terminal close sink routes Rich Prompt teardown through Core close", () => {
+    expect(terminal).toMatch(
+      /registerTerminalCloseSink\(tab\.id, closeTerminalForTab\)/,
+    );
+    expect(terminal).toMatch(/await api\.closeRichPromptWorkspace\(name, tab\.terminalSessionId \?\? ""\)/);
   });
 });

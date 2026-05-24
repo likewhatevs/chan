@@ -1,4 +1,4 @@
-// `fullstack-a-78`: global "New Team" dialog request bus.
+// `fullstack-a-78`: global Spawn agents dialog request bus.
 //
 // Mirrors the spawnDialog pattern (`-a-4`): a state singleton +
 // open/close helpers, dialog rendered at App root so it's free
@@ -110,8 +110,7 @@ export function emptySlotsForGrid(grid: GridShape): number[][] {
 export interface TeamDialogConfig {
   hostName: string;
   teamName: string;
-  /// Total agents (lead + workers). Min 2, max 16 per
-  /// addendum-b clarification #3.
+  /// Total agents (lead + workers). Phase 9 uses min 1 and max 9.
   size: number;
   /// When true, all member names render with `@@` prefix.
   /// Toggled by the host via a checkbox; defaults to true.
@@ -127,13 +126,13 @@ export interface TeamDialogRequest {
   /// (`-a-79`) uses this as the "host" terminal.
   hostSessionId?: string;
   /// Pre-populated config for the Load Team flow (`-a-80`).
-  /// Undefined for the bare New Team flow.
+  /// Undefined for the bare Spawn agents flow.
   initial?: Partial<TeamDialogConfig>;
   /// Called when the user clicks Bootstrap with the final
   /// config. The orchestrator (`-a-79`) is the consumer; this
   /// task's scope ends at the handoff.
   onBootstrap: (config: TeamDialogConfig) => void | Promise<void>;
-  /// Called after a host terminal is spawned for the new team
+  /// Called after a host terminal is spawned for the new agent group
   /// (slice 2+ — orchestrator-driven; passed through for
   /// API symmetry with the spawn dialog).
   onSpawned?: (response: TerminalSpawnResponse, name: string) => void;
@@ -151,14 +150,14 @@ export function closeTeamDialog(): void {
   teamDialogState.request = null;
 }
 
-/// Smallest valid team: lead + 1 worker. Per addendum-b
-/// clarification #3 the user is NOT counted; they sit in the
+/// Phase 9 Spawn agents limits: one agent is allowed and is the
+/// lead by definition. The user is not counted; they sit in the
 /// rich-prompt host terminal.
-export const TEAM_MIN_SIZE = 2;
-export const TEAM_MAX_SIZE = 16;
+export const TEAM_MIN_SIZE = 1;
+export const TEAM_MAX_SIZE = 9;
 
 /// Default team config used as the dialog's initial state.
-/// Two members; first is the lead. Auto-prefix on. Real estate
+/// One lead member. Auto-prefix on. Real estate
 /// defaults to tabs (split-pane is opt-in via the selector;
 /// slice 2 lands the airplane-grid for split).
 export function defaultTeamConfig(): TeamDialogConfig {
@@ -169,7 +168,6 @@ export function defaultTeamConfig(): TeamDialogConfig {
     autoPrefix: true,
     members: [
       { name: "Lead", command: "claude", env: "", isLead: true },
-      { name: "Worker1", command: "claude", env: "", isLead: false },
     ],
     realEstate: { kind: "tabs" },
   };
@@ -192,13 +190,13 @@ export function validateTeamConfig(
   if (!cfg.hostName.trim()) return "Your name required";
   if (!cfg.teamName.trim()) return "Team name required";
   if (cfg.size < TEAM_MIN_SIZE) {
-    return `team size must be at least ${TEAM_MIN_SIZE}`;
+    return `agent count must be at least ${TEAM_MIN_SIZE}`;
   }
   if (cfg.size > TEAM_MAX_SIZE) {
-    return `team size must be at most ${TEAM_MAX_SIZE}`;
+    return `agent count must be at most ${TEAM_MAX_SIZE}`;
   }
   if (cfg.members.length !== cfg.size) {
-    return "member count must match team size";
+    return "member count must match agent count";
   }
   const leadCount = cfg.members.filter((m) => m.isLead).length;
   if (leadCount === 0) return "one member must be marked as lead";
@@ -210,6 +208,104 @@ export function validateTeamConfig(
     return `team name "${cfg.teamName.trim()}" already exists`;
   }
   return null;
+}
+
+export function exportTeamDialogConfig(cfg: TeamDialogConfig): string {
+  return JSON.stringify(cfg, null, 2);
+}
+
+export function importTeamDialogConfig(text: string): TeamDialogConfig {
+  let raw: unknown;
+  try {
+    raw = JSON.parse(text);
+  } catch (err) {
+    throw new Error(`config is not valid JSON: ${(err as Error).message}`);
+  }
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
+    throw new Error("config must be a JSON object");
+  }
+  const obj = raw as Record<string, unknown>;
+  const rawMembers = Array.isArray(obj.members) ? obj.members : [];
+  const requestedSize =
+    typeof obj.size === "number" && Number.isFinite(obj.size)
+      ? Math.trunc(obj.size)
+      : rawMembers.length || TEAM_MIN_SIZE;
+  const size = Math.max(TEAM_MIN_SIZE, Math.min(TEAM_MAX_SIZE, requestedSize));
+  const base = defaultTeamConfig();
+  const members = rawMembers
+    .slice(0, size)
+    .map((member, idx) => normalizeImportedMember(member, idx));
+  const cfg: TeamDialogConfig = {
+    ...base,
+    hostName: stringField(obj.hostName, base.hostName),
+    teamName: stringField(obj.teamName, base.teamName),
+    size,
+    autoPrefix:
+      typeof obj.autoPrefix === "boolean" ? obj.autoPrefix : base.autoPrefix,
+    members: members.length > 0 ? members : base.members,
+    realEstate: importedRealEstate(obj.realEstate, size),
+  };
+  return resizeTeamMembers(cfg);
+}
+
+function stringField(value: unknown, fallback: string): string {
+  return typeof value === "string" ? value : fallback;
+}
+
+function normalizeImportedMember(value: unknown, idx: number): TeamMemberDraft {
+  const base: TeamMemberDraft = {
+    name: idx === 0 ? "Lead" : `Worker${idx}`,
+    command: "claude",
+    env: "",
+    isLead: idx === 0,
+  };
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return base;
+  }
+  const obj = value as Record<string, unknown>;
+  return {
+    name: stringField(obj.name, base.name),
+    command: stringField(obj.command, base.command),
+    env: stringField(obj.env, base.env),
+    isLead: typeof obj.isLead === "boolean" ? obj.isLead : base.isLead,
+  };
+}
+
+function importedRealEstate(value: unknown, size: number): TeamRealEstate {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return { kind: "tabs" };
+  }
+  const obj = value as Record<string, unknown>;
+  if (obj.kind !== "split") return { kind: "tabs" };
+  const gridObj = obj.grid;
+  if (!gridObj || typeof gridObj !== "object" || Array.isArray(gridObj)) {
+    const grid = defaultGridForSize(size);
+    return { kind: "split", grid, slots: emptySlotsForGrid(grid) };
+  }
+  const gridRecord = gridObj as Record<string, unknown>;
+  const rows = positiveInt(gridRecord.rows);
+  const cols = positiveInt(gridRecord.cols);
+  const grid = rows && cols ? { rows, cols } : defaultGridForSize(size);
+  const slots = importedSlots(obj.slots, grid, size);
+  return { kind: "split", grid, slots };
+}
+
+function positiveInt(value: unknown): number | null {
+  if (typeof value !== "number" || !Number.isFinite(value)) return null;
+  const n = Math.trunc(value);
+  return n > 0 ? n : null;
+}
+
+function importedSlots(value: unknown, grid: GridShape, size: number): number[][] {
+  const cells = grid.rows * grid.cols;
+  if (!Array.isArray(value)) return emptySlotsForGrid(grid);
+  return Array.from({ length: cells }, (_, cellIdx) => {
+    const rawCell = value[cellIdx];
+    if (!Array.isArray(rawCell)) return [];
+    return rawCell
+      .map((idx) => (typeof idx === "number" ? Math.trunc(idx) : -1))
+      .filter((idx) => idx >= 0 && idx < size);
+  });
 }
 
 /// `fullstack-a-78` slice 2: switch the real-estate strategy

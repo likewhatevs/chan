@@ -54,12 +54,13 @@ use crate::markdown;
 type ReaderPool = r2d2::Pool<SqliteConnectionManager>;
 type ReaderConn = r2d2::PooledConnection<SqliteConnectionManager>;
 
-/// Reader-pool size. SQLite under WAL serves concurrent readers
+/// Default reader-pool size. SQLite under WAL serves concurrent readers
 /// with no inter-reader blocking. The hot path is the editor's
 /// `[[` typeahead, which fires per-keystroke; 4 connections covers
 /// a single user's typeahead + status endpoint + an ad-hoc query
-/// without queueing. The writer is single-threaded by SQLite
-/// contract and lives on its own Mutex<Connection> outside the pool.
+/// without queueing on hosts with enough descriptor headroom. The
+/// writer is single-threaded by SQLite contract and lives on its own
+/// Mutex<Connection> outside the pool.
 const READER_POOL_SIZE: u32 = 4;
 
 /// Node kind. Distinguishes a regular markdown file from one that
@@ -267,13 +268,15 @@ impl GraphView {
             )?;
             Ok(())
         });
+        let reader_pool_size = crate::fd_budget::graph_reader_pool_size(READER_POOL_SIZE);
         let readers = r2d2::Pool::builder()
-            .max_size(READER_POOL_SIZE)
+            .max_size(reader_pool_size)
+            .min_idle(Some(0))
             .build(manager)
             .map_err(|e| ChanError::Graph(format!("graph reader pool: {e}")))?;
         tracing::debug!(
             db = %graph_db_path.display(),
-            pool = READER_POOL_SIZE,
+            pool = reader_pool_size,
             "graph: opened",
         );
         Ok(Self {

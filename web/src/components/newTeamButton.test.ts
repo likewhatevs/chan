@@ -20,10 +20,10 @@ describe("fullstack-a-78 slice 1: App.svelte mounts TeamDialog at root", () => {
   });
 });
 
-describe("fullstack-a-78 slice 1: Rich Prompt button repurpose", () => {
+describe("fullstack-a-78 slice 1: Rich Prompt Spawn agents button", () => {
   test("imports openTeamDialog from state/teamDialog", () => {
     expect(prompt).toMatch(
-      /import \{ openTeamDialog as openGlobalTeamDialog \} from "\.\.\/state\/teamDialog\.svelte";/,
+      /import \{[\s\S]*?openTeamDialog as openGlobalTeamDialog,[\s\S]*?\} from "\.\.\/state\/teamDialog\.svelte";/,
     );
   });
 
@@ -33,16 +33,19 @@ describe("fullstack-a-78 slice 1: Rich Prompt button repurpose", () => {
     );
   });
 
-  test("icon-btn switched from watchDirectory to openNewTeamDialog", () => {
+  test("plus menu opens the Spawn agents dialog", () => {
     expect(prompt).toMatch(
-      /class:on=\{Boolean\(watcherPath\)\}\s+onclick=\{openNewTeamDialog\}[\s\S]*?title="New Team"[\s\S]*?aria-label="New Team"/,
+      /onclick=\{openMenuFromButton\}[\s\S]*?aria-label="Rich Prompt actions"/,
+    );
+    expect(prompt).toMatch(
+      /<button type="button" onclick=\{openNewTeamDialog\}>[\s\S]*?<span>Spawn agents<\/span>/,
     );
   });
 
-  test("the watchDirectory dropdown entry stays for now (legacy attach-watcher flow)", () => {
-    // Slice 1 leaves the dropdown entry; the icon-btn is the
-    // load-bearing repurposed button.
-    expect(prompt).toMatch(/<button type="button" onclick=\{watchDirectory\}>/);
+  test("legacy file and manual watcher actions are gone", () => {
+    expect(prompt).not.toMatch(/New File from here/);
+    expect(prompt).not.toMatch(/function watchDirectory/);
+    expect(prompt).not.toMatch(/Stop watching/);
   });
 });
 
@@ -57,6 +60,13 @@ describe("fullstack-a-78 slice 1: TeamDialog component shell", () => {
     expect(dialog).toMatch(/bind:value=\{config\.teamName\}/);
     expect(dialog).toMatch(/bind:checked=\{config\.autoPrefix\}/);
     expect(dialog).toMatch(/type="range"[\s\S]*?min=\{TEAM_MIN_SIZE\}[\s\S]*?max=\{TEAM_MAX_SIZE\}/);
+  });
+
+  test("renders copy/paste config actions", () => {
+    expect(dialog).toMatch(/onclick=\{\(\) => void onCopyConfig\(\)\}/);
+    expect(dialog).toMatch(/onclick=\{\(\) => void onPasteConfig\(\)\}/);
+    expect(dialog).toMatch(/Copy config/);
+    expect(dialog).toMatch(/Paste config/);
   });
 
   test("per-member row renders name + command + env + lead radio", () => {

@@ -20,7 +20,7 @@ use tokio::sync::{broadcast, watch};
 use tokio::task::JoinHandle;
 
 use crate::config::TerminalConfig;
-use crate::event_watcher::{AgentEvent, EventWatcherHandle};
+use crate::event_watcher::{AgentEvent, EventWatcherHandle, WatcherFailure};
 use crate::signal::now_unix_secs;
 
 #[cfg(target_os = "macos")]
@@ -162,6 +162,20 @@ impl CloseReason {
             CloseReason::Capped => "capped",
         }
     }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(tag = "state", rename_all = "snake_case")]
+pub enum WatcherStatus {
+    Detached,
+    Attached {
+        dir: String,
+    },
+    Failed {
+        #[serde(skip_serializing_if = "Option::is_none")]
+        dir: Option<String>,
+        message: String,
+    },
 }
 
 #[derive(Debug, Clone)]
@@ -425,12 +439,23 @@ impl Registry {
                 registry.dispatch_agent_event(event);
             }
         });
-        let watcher =
-            EventWatcherHandle::start(dir.clone(), dispatch, self.watcher_dropped_events.clone())?;
+        let session_for_failure = Arc::downgrade(&session);
+        let on_failure: Arc<WatcherFailure> = Arc::new(move |message: String| {
+            if let Some(session) = session_for_failure.upgrade() {
+                session.mark_watcher_failed(message);
+            }
+        });
+        let watcher = EventWatcherHandle::start(
+            dir.clone(),
+            dispatch,
+            self.watcher_dropped_events.clone(),
+            Some(on_failure),
+        )?;
         *session
             .watcher_dir
             .lock()
             .expect("terminal watcher dir poisoned") = Some(dir);
+        session.clear_watcher_error();
         *session.watcher.lock().expect("terminal watcher poisoned") = Some(watcher);
         Ok(true)
     }
@@ -454,10 +479,21 @@ impl Registry {
                 .lock()
                 .expect("terminal watcher dir poisoned")
                 .take();
+            session.clear_watcher_error();
             had_watcher
         } else {
             false
         }
+    }
+
+    pub fn watcher_status(&self, id: &str) -> Option<WatcherStatus> {
+        let session = self
+            .sessions
+            .lock()
+            .expect("terminal registry poisoned")
+            .get(id)
+            .cloned()?;
+        Some(session.watcher_status())
     }
 
     pub fn watcher_dir(&self, id: &str) -> Option<PathBuf> {
@@ -729,6 +765,7 @@ struct Session {
     alt_screen_tail: Mutex<Vec<u8>>,
     watcher: Mutex<Option<EventWatcherHandle>>,
     watcher_dir: Mutex<Option<PathBuf>>,
+    watcher_error: Mutex<Option<String>>,
     preflight: Mutex<Option<PreflightMonitor>>,
     closed: AtomicBool,
     /// `fullstack-b-13`: per-session shell-vs-agent submit-mode
@@ -826,6 +863,7 @@ impl Session {
             alt_screen_tail: Mutex::new(Vec::new()),
             watcher: Mutex::new(None),
             watcher_dir: Mutex::new(None),
+            watcher_error: Mutex::new(None),
             preflight: Mutex::new(opts.preflight.map(PreflightMonitor::new)),
             closed: AtomicBool::new(false),
             agent_mode: AtomicBool::new(false),
@@ -1011,6 +1049,7 @@ impl Session {
             .lock()
             .expect("terminal watcher dir poisoned")
             .take();
+        self.clear_watcher_error();
         self.broadcast(SessionEvent::Closed(reason));
         let _ = self.command_tx.send(PtyCommand::Kill);
     }
@@ -1063,6 +1102,52 @@ impl Session {
 
     fn broadcast(&self, event: SessionEvent) {
         let _ = self.output_tx.send(event);
+    }
+
+    fn watcher_status(&self) -> WatcherStatus {
+        let dir = self
+            .watcher_dir
+            .lock()
+            .expect("terminal watcher dir poisoned")
+            .clone();
+        if let Some(message) = self
+            .watcher_error
+            .lock()
+            .expect("terminal watcher error poisoned")
+            .clone()
+        {
+            return WatcherStatus::Failed {
+                dir: dir.map(|dir| dir.to_string_lossy().into_owned()),
+                message,
+            };
+        }
+        if self
+            .watcher
+            .lock()
+            .expect("terminal watcher poisoned")
+            .is_some()
+        {
+            return WatcherStatus::Attached {
+                dir: dir
+                    .map(|dir| dir.to_string_lossy().into_owned())
+                    .unwrap_or_default(),
+            };
+        }
+        WatcherStatus::Detached
+    }
+
+    fn mark_watcher_failed(&self, message: String) {
+        *self
+            .watcher_error
+            .lock()
+            .expect("terminal watcher error poisoned") = Some(message);
+    }
+
+    fn clear_watcher_error(&self) {
+        self.watcher_error
+            .lock()
+            .expect("terminal watcher error poisoned")
+            .take();
     }
 
     fn update_alt_screen(&self, bytes: &[u8]) {
@@ -1558,6 +1643,7 @@ mod tests {
             alt_screen_tail: Mutex::new(Vec::new()),
             watcher: Mutex::new(None),
             watcher_dir: Mutex::new(None),
+            watcher_error: Mutex::new(None),
             preflight: Mutex::new(None),
             closed: AtomicBool::new(false),
             agent_mode: AtomicBool::new(false),
@@ -1963,13 +2049,34 @@ mod tests {
         let dir = tempfile::tempdir().expect("watch dir");
 
         assert!(registry.watcher_dir(&id).is_none());
+        assert_eq!(registry.watcher_status(&id), Some(WatcherStatus::Detached));
         assert!(registry
             .set_watcher(&id, dir.path().to_path_buf())
             .expect("set watcher"));
         assert_eq!(registry.watcher_dir(&id), Some(dir.path().to_path_buf()));
+        assert!(matches!(
+            registry.watcher_status(&id),
+            Some(WatcherStatus::Attached { .. })
+        ));
         assert!(registry.clear_watcher(&id));
         assert!(registry.watcher_dir(&id).is_none());
+        assert_eq!(registry.watcher_status(&id), Some(WatcherStatus::Detached));
         registry.close(&id, CloseReason::Explicit);
+        assert!(registry.watcher_status(&id).is_none());
+    }
+
+    #[test]
+    fn watcher_status_reports_session_failure() {
+        let session = test_session_with_ring(1024);
+        session.mark_watcher_failed("provider error".into());
+
+        assert_eq!(
+            session.watcher_status(),
+            WatcherStatus::Failed {
+                dir: None,
+                message: "provider error".into(),
+            }
+        );
     }
 
     #[tokio::test]

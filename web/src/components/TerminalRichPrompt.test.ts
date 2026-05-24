@@ -11,8 +11,6 @@ import {
   type TerminalRichPromptState,
 } from "../state/tabs.svelte";
 import {
-  pathPromptState,
-  resolvePathPrompt,
   ui,
 } from "../state/store.svelte";
 import { closeSpawnDialog } from "../state/spawnDialog.svelte";
@@ -22,7 +20,6 @@ const mounted: Array<Record<string, any>> = [];
 afterEach(() => {
   for (const component of mounted.splice(0)) unmount(component);
   document.body.innerHTML = "";
-  resolvePathPrompt(null);
   ui.status = null;
   resetLayout();
   closeSpawnDialog();
@@ -84,23 +81,28 @@ async function renderPrompt(prompt: TerminalRichPromptState) {
   document.body.append(target);
 
   const onSubmit = vi.fn();
-  const onClose = vi.fn(() => {
-    prompt.open = false;
-  });
   const component = mount(TerminalRichPrompt, {
     target,
-    props: { prompt, onSubmit, onClose },
+    props: { prompt, onSubmit },
   });
   mounted.push(component);
   await tick();
   const root = target.querySelector<HTMLElement>(".rich-prompt");
   if (!root) throw new Error("rich prompt not mounted");
-  return { target, root, onSubmit, onClose };
+  return { target, root, onSubmit };
 }
 
 function button(target: ParentNode, label: string): HTMLButtonElement {
   const el = target.querySelector<HTMLButtonElement>(`button[aria-label='${label}']`);
   if (!el) throw new Error(`button not found: ${label}`);
+  return el;
+}
+
+function buttonByText(target: ParentNode, text: string): HTMLButtonElement {
+  const el = [...target.querySelectorAll<HTMLButtonElement>("button")].find((btn) =>
+    btn.textContent?.includes(text),
+  );
+  if (!el) throw new Error(`button text not found: ${text}`);
   return el;
 }
 
@@ -113,21 +115,25 @@ async function waitFor(condition: () => boolean): Promise<void> {
 }
 
 describe("TerminalRichPrompt", () => {
-  test("Escape hides without clearing the draft", async () => {
+  test("Escape closes the action menu without closing the prompt", async () => {
     const prompt: TerminalRichPromptState = {
       buffer: "## keep\n\nthis draft",
       heightPx: 320,
       open: true,
       mode: "source",
     };
-    const { root, onClose } = await renderPrompt(prompt);
+    const { target, root } = await renderPrompt(prompt);
+
+    button(target, "Rich Prompt actions").click();
+    await tick();
+    expect(target.querySelector(".ctx")).not.toBeNull();
 
     root.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
     await tick();
 
-    expect(onClose).toHaveBeenCalledTimes(1);
-    expect(prompt.open).toBe(false);
+    expect(prompt.open).toBe(true);
     expect(prompt.buffer).toBe("## keep\n\nthis draft");
+    expect(target.querySelector(".ctx")).toBeNull();
   });
 
   test("Cmd/Ctrl+Enter submits raw markdown and keeps the overlay state", async () => {
@@ -137,7 +143,7 @@ describe("TerminalRichPrompt", () => {
       open: true,
       mode: "source",
     };
-    const { root, onSubmit, onClose } = await renderPrompt(prompt);
+    const { root, onSubmit } = await renderPrompt(prompt);
 
     root.dispatchEvent(
       new KeyboardEvent("keydown", {
@@ -149,7 +155,6 @@ describe("TerminalRichPrompt", () => {
     await tick();
 
     expect(onSubmit).toHaveBeenCalledWith("one **two**\n![alt](attachments/a.png)");
-    expect(onClose).not.toHaveBeenCalled();
     expect(prompt.open).toBe(true);
     expect(prompt.buffer).toBe("one **two**\n![alt](attachments/a.png)");
   });
@@ -272,16 +277,7 @@ describe("TerminalRichPrompt", () => {
     expect(second.buffer).toBe("second draft");
   });
 
-  test("New File from here seeds the create prompt and writes the draft", async () => {
-    const create = vi.spyOn(api, "create").mockResolvedValue(undefined);
-    vi.spyOn(api, "list").mockResolvedValue([]);
-    vi.spyOn(api, "read").mockResolvedValue({
-      content: "persisted",
-      mtime: 12,
-      repo_root: null,
-      writable: true,
-    } as Awaited<ReturnType<typeof api.read>>);
-    resetLayout();
+  test("action menu drops prompt-local file and watcher controls", async () => {
     const prompt: TerminalRichPromptState = {
       buffer: "# reusable prompt\n\nbody",
       heightPx: 320,
@@ -290,27 +286,18 @@ describe("TerminalRichPrompt", () => {
     };
     const { target } = await renderPrompt(prompt);
 
-    button(target, "New file from here").click();
+    button(target, "Rich Prompt actions").click();
     await tick();
-    expect(pathPromptState.open).toBe(true);
-    expect(pathPromptState.defaultValue).toBe("prompt.md");
-    expect(pathPromptState.kind).toBe("file");
-    expect(pathPromptState.mode).toBe("create");
 
-    resolvePathPrompt("saved-prompt");
-    await waitFor(() => ui.status === "Created saved-prompt.md");
-
-    expect(create).toHaveBeenCalledWith("saved-prompt.md", false, "# reusable prompt\n\nbody");
-    expect(ui.status).toBe("Created saved-prompt.md");
-    const pane = layout.nodes[layout.activePaneId];
-    expect(pane?.kind).toBe("leaf");
-    if (pane?.kind !== "leaf") return;
-    expect(pane.tabs.some((tab) => tab.kind === "file" && tab.path === "saved-prompt.md")).toBe(true);
+    expect(target.textContent).not.toContain("New File from here");
+    expect(target.textContent).not.toContain("Watch directory");
+    expect(target.textContent).not.toContain("Stop watching");
+    expect(target.querySelector("button[aria-label='Close']")).toBeNull();
   });
 
-  test("`-a-78` slice 1: New Team icon-btn opens the global team dialog", async () => {
+  test("Spawn agents action opens the global team dialog", async () => {
     // `fullstack-a-78` repurposed the icon-btn from "Watch
-    // directory" → "New Team". The dialog's bootstrap flow
+    // directory" to Spawn agents. The dialog's bootstrap flow
     // lives in `-a-79` (orchestrator); slice 1 just opens the
     // dialog + hands off via the request bus.
     const { teamDialogState, closeTeamDialog } = await import(
@@ -332,16 +319,16 @@ describe("TerminalRichPrompt", () => {
       props: {
         prompt,
         onSubmit: vi.fn(),
-        onClose: vi.fn(),
         terminalSessionId: "term_123",
         watcherPath: null,
-        onWatcherStarted: vi.fn(),
       },
     });
     mounted.push(component);
     await tick();
 
-    button(target, "New Team").click();
+    button(target, "Rich Prompt actions").click();
+    await tick();
+    buttonByText(target, "Spawn agents").click();
     await tick();
     expect(teamDialogState.request).not.toBeNull();
     expect(teamDialogState.request?.hostSessionId).toBe("term_123");
@@ -369,13 +356,24 @@ describe("TerminalRichPrompt", () => {
       props: {
         prompt,
         onSubmit: vi.fn(),
-        onClose: vi.fn(),
         terminalSessionId: "orchestrator_session",
         onSpawned,
       },
     });
     mounted.push(component);
     await tick();
+
+    const setSubmitMode = vi
+      .spyOn(api, "setTerminalSubmitMode")
+      .mockResolvedValue(undefined);
+    const picker = target.querySelector<HTMLSelectElement>(".agent-picker");
+    if (!picker) throw new Error("agent picker not found");
+    picker.value = "codex";
+    picker.dispatchEvent(new Event("change", { bubbles: true }));
+    await waitFor(() => setSubmitMode.mock.calls.length === 1);
+    expect(prompt.agentTarget).toBe("codex");
+    expect(prompt.submitMode).toBe("agent");
+    expect(setSubmitMode).toHaveBeenCalledWith("orchestrator_session", "agent");
 
     // `fullstack-a-4`: SpawnDialog mounts at the App root in
     // real life; in this test we mount it as a sibling so the
@@ -387,7 +385,9 @@ describe("TerminalRichPrompt", () => {
     mounted.push(dialogComponent);
     await tick();
 
-    button(target, "Spawn agent").click();
+    button(target, "Rich Prompt actions").click();
+    await tick();
+    buttonByText(target, "Spawn agent").click();
     await tick();
     const dialog = document.body.querySelector<HTMLElement>(".spawn-dialog");
     if (!dialog) throw new Error("spawn dialog not mounted");

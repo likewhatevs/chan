@@ -39,14 +39,21 @@ describe("fullstack-a-79 slice 1: orchestrator bootstrap chain", () => {
     );
   });
 
-  test("each worker terminal opens in its resolved pane (cell from split, or active pane for tabs) with the identity prompt as seedInput", () => {
-    // `fullstack-a-79` slice 4: split-pane real estate honored.
-    // openTerminalInPane(paneId, …) replaces
-    // openTerminalInActivePane so workers land in their
-    // assigned cells.
+  test("each worker terminal opens in its resolved pane and is primed after preflight", () => {
+    // Phase 9 preflight spawns terminals first, then primes the
+    // rich prompt after the user confirms agents are ready.
     expect(orchestrator).toMatch(
-      /const paneId = memberPaneIds\.workers\[i\] \?\? layout\.activePaneId;[\s\S]{1,400}openTerminalInPane\(paneId, \{[\s\S]{1,400}sessionId: response\.session,[\s\S]{1,200}title: response\.tab_label,[\s\S]{1,200}seedInput: prompt,/,
+      /const paneId = memberPaneIds\.workers\[i\] \?\? layout\.activePaneId;[\s\S]{1,400}const tab = openTerminalInPane\(paneId, \{[\s\S]{1,400}sessionId: response\.session,[\s\S]{1,200}title: response\.tab_label,[\s\S]{1,400}if \(tab\) spawnedWorkerTabs\.push\(tab\);/,
     );
+    expect(orchestrator).toMatch(
+      /await confirmTeamPreflight\(wire\);[\s\S]{1,200}for \(const tab of spawnedWorkerTabs\) \{[\s\S]{1,120}primeTerminalRichPrompt\(tab, prompt\);/,
+    );
+  });
+
+  test("preflight confirmation is required before prompt staging", () => {
+    expect(orchestrator).toMatch(/import \{ uiConfirm \} from "\.\/confirm\.svelte";/);
+    expect(orchestrator).toMatch(/export async function confirmTeamPreflight/);
+    expect(orchestrator).toMatch(/confirmLabel: "Stage prompts"/);
   });
 
   test("split-pane real estate now WIRED (slice 4 — was scope-poked in slice 1)", () => {

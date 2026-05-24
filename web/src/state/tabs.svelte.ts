@@ -360,6 +360,17 @@ export type TerminalRichPromptState = {
   buffer: string;
   heightPx?: number;
   open?: boolean;
+  phase?: "active" | "broken" | "submitted" | "discarded";
+  workspaceName?: string;
+  draftPath?: string;
+  workspacePath?: string;
+  eventsPath?: string;
+  processPath?: string;
+  workspaceAbs?: string;
+  eventsAbs?: string;
+  submissionSequence?: number;
+  workspaceBusy?: boolean;
+  workspaceError?: string | null;
   mode?: "wysiwyg" | "source";
   styleToolbarOpen?: boolean;
   /// `fullstack-79`: bumped on every `openActiveTerminalRichPrompt`
@@ -408,6 +419,10 @@ export type TerminalRichPromptState = {
   /// reply echoes ("poke" notifications) also pick the right
   /// trailing bytes.
   submitMode?: "shell" | "agent";
+  /// Phase 9 agent picker. `"none"` maps to shell submit-mode;
+  /// named agents map to agent submit-mode while preserving which
+  /// runtime the user selected.
+  agentTarget?: "none" | "claude" | "codex" | "gemini";
 };
 
 /// `fullstack-a-75`: Infographics tab — read-only surface that
@@ -995,49 +1010,16 @@ function blurTerminalHelperTextarea(): void {
   }
 }
 
-/// `fullstack-50` Cmd+K p binding: show the rich prompt on the
-/// focused pane's terminal.
-///
-/// `fullstack-a-56` canonical 3-state contract (per @@Alex):
-///
-/// 1. Current tab IS a terminal + prompt NOT showing → open
-///    prompt on the current terminal (NOT the first terminal
-///    in the pane — the previous implementation assumed at
-///    most one terminal per pane + always picked
-///    `p.tabs.find(kind === "terminal")` which is the FIRST
-///    one).
-/// 2. Current tab IS a terminal + prompt IS showing → HIDE
-///    the prompt (toggle off). This semantic was missing
-///    pre-`-a-56`.
-/// 3. Current tab is NOT a terminal → spawn a fresh
-///    terminal + open the prompt on it. Spawn rather than
-///    switch-to-existing so the user's spatial model isn't
-///    disrupted by an unexpected tab switch.
-///
-/// Caller is responsible for committing any active Pane Mode
-/// draft beforehand so the spawned terminal lands in the
-/// committed layout rather than evaporating on Esc.
-export function showOrSpawnRichPromptInFocusedPane(): void {
+/// Phase 9 Rich Prompt rule: every top-level invocation creates a
+/// fresh terminal and opens the prompt on that new tab. The old
+/// terminal-local toggle made Cmd+P behave differently depending on
+/// focus and left it out of sync with Hybrid Nav `P`, which already
+/// stages a fresh rich-prompt terminal.
+export function showOrSpawnRichPromptInFocusedPane(
+  opts: OpenTerminalOptions = {},
+): void {
   const p = activePane();
-  const activeTab = p.tabs.find((t) => t.id === p.activeTabId);
-  if (activeTab?.kind === "terminal") {
-    if (activeTab.richPrompt?.open) {
-      // Case 2: toggle off.
-      activeTab.richPrompt.open = false;
-      return;
-    }
-    // Case 1: open on the current terminal (NOT the first one
-    // in the pane). `openActiveTerminalRichPrompt` reads
-    // `p.activeTabId` so just calling it is enough; no need
-    // to mutate activeTabId.
-    openActiveTerminalRichPrompt();
-    return;
-  }
-  // Case 3: active tab is not a terminal — spawn a fresh one,
-  // then open the prompt on it. `openTerminalInPane` makes
-  // the new terminal the active tab so
-  // `openActiveTerminalRichPrompt` lands on it.
-  openTerminalInPane(p.id, {});
+  openTerminalInPane(p.id, opts);
   openActiveTerminalRichPrompt();
 }
 
@@ -1409,7 +1391,7 @@ export function hasBrowserTab(): boolean {
 
 type TerminalInputSink = (data: string) => void;
 const terminalInputSinks = new Map<string, TerminalInputSink>();
-type TerminalCloseSink = () => void;
+type TerminalCloseSink = () => boolean | void | Promise<boolean | void>;
 const terminalCloseSinks = new Map<string, TerminalCloseSink>();
 
 export function registerTerminalInputSink(tabId: string, sink: TerminalInputSink): () => void {
@@ -1424,6 +1406,13 @@ export function registerTerminalCloseSink(tabId: string, sink: TerminalCloseSink
   return () => {
     if (terminalCloseSinks.get(tabId) === sink) terminalCloseSinks.delete(tabId);
   };
+}
+
+async function runTerminalCloseSink(tab: TerminalTab): Promise<boolean> {
+  const sink = terminalCloseSinks.get(tab.id);
+  if (!sink) return true;
+  const result = await sink();
+  return result !== false;
 }
 
 /// Broadcast input is deliberately window-scoped. The target ids in
@@ -1840,7 +1829,7 @@ async function closeTabAsync(
     return;
   }
   if (tab.kind === "terminal") {
-    terminalCloseSinks.get(tab.id)?.();
+    if (!(await runTerminalCloseSink(tab))) return;
   }
   rememberClosedTab(paneId, tab);
   p.tabs.splice(idx, 1);
@@ -1914,12 +1903,14 @@ export async function closeOtherTabsInPane(
   const closing = p.tabs.filter((t) => t.id !== keepTabId);
   if (closing.length === 0) return;
   if (!(await confirmCloseTabs(closing, opts))) return;
+  const closeIds = new Set<string>();
   for (const tab of closing) {
-    if (tab.kind === "terminal") terminalCloseSinks.get(tab.id)?.();
+    if (tab.kind === "terminal" && !(await runTerminalCloseSink(tab))) continue;
     rememberClosedTab(paneId, tab);
+    closeIds.add(tab.id);
   }
-  p.tabs = p.tabs.filter((t) => t.id === keepTabId);
-  p.activeTabId = p.tabs[0]?.id ?? null;
+  p.tabs = p.tabs.filter((t) => t.id === keepTabId || !closeIds.has(t.id));
+  p.activeTabId = p.tabs.find((t) => t.id === keepTabId)?.id ?? p.tabs[0]?.id ?? null;
 }
 
 export async function closeTabsInPane(
@@ -1928,12 +1919,17 @@ export async function closeTabsInPane(
 ): Promise<void> {
   const p = pane(paneId);
   if (!(await confirmCloseTabs(p.tabs, opts))) return;
+  const kept: Tab[] = [];
   for (const tab of p.tabs) {
-    if (tab.kind === "terminal") terminalCloseSinks.get(tab.id)?.();
+    if (tab.kind === "terminal" && !(await runTerminalCloseSink(tab))) {
+      kept.push(tab);
+      continue;
+    }
     rememberClosedTab(paneId, tab);
   }
-  p.tabs.length = 0;
-  p.activeTabId = null;
+  p.tabs = kept;
+  p.activeTabId = kept[0]?.id ?? null;
+  if (kept.length > 0) return;
   if (paneId !== layout.rootId) collapseEmptyPane(paneId);
 }
 
@@ -3239,6 +3235,10 @@ type SerTab = {
   /// Terminal PTY session id. Only emitted in the per-window
   /// session payload, never in the shareable URL hash.
   tsid?: string;
+  /// Active Rich Prompt workspace identity. Only emitted in the
+  /// per-window session payload, alongside `tsid`.
+  rpn?: string;
+  rpsq?: number;
   /// Terminal was created through the HTTP control channel; restart
   /// uses the server-side restart endpoint.
   tc?: 1;
@@ -3272,6 +3272,7 @@ type SerTab = {
   /// spread on serialize so the default case keeps the persisted
   /// shape short.
   rpsm?: "a";
+  rpa?: "c" | "x" | "g";
   /// Terminal watcher path + unread bit. Session-scoped like the
   /// terminal id; the server owns the real watcher lifecycle.
   twp?: string;
@@ -3453,6 +3454,21 @@ function serializeTab(
               ? { rppw: t.richPrompt.pageWidthRatio }
               : {}),
             ...(t.richPrompt.submitMode === "agent" ? { rpsm: "a" as const } : {}),
+            ...(t.richPrompt.agentTarget && t.richPrompt.agentTarget !== "none"
+              ? {
+                  rpa:
+                    t.richPrompt.agentTarget === "codex"
+                      ? "x"
+                      : t.richPrompt.agentTarget === "gemini"
+                        ? "g"
+                        : "c",
+                }
+              : {}),
+            ...(t.richPrompt.workspaceName ? { rpn: t.richPrompt.workspaceName } : {}),
+            ...(typeof t.richPrompt.submissionSequence === "number" &&
+            Number.isFinite(t.richPrompt.submissionSequence)
+              ? { rpsq: Math.max(0, Math.floor(t.richPrompt.submissionSequence)) }
+              : {}),
           }
         : {}),
       ...(opts.terminalSessions && t.watcher
@@ -3709,7 +3725,12 @@ export async function restoreLayout(
           // after restore so the visible state matches reality. Fire-
           // and-forget: a 404 (stale session id) or 5xx is logged and
           // the user can re-toggle via the toolbar to retry.
-          if (terminalSessionId && richPrompt?.submitMode === "agent") {
+          if (
+            terminalSessionId &&
+            (richPrompt?.submitMode === "agent" ||
+              (richPrompt?.agentTarget !== undefined &&
+                richPrompt.agentTarget !== "none"))
+          ) {
             void api
               .setTerminalSubmitMode(terminalSessionId, "agent")
               .catch((err) => {
@@ -3887,7 +3908,10 @@ function richPromptFromSer(
     tab?.rpm ||
     tab?.rpc ||
     tab?.rppw !== undefined ||
-    tab?.rpsm
+    tab?.rpsm ||
+    tab?.rpa ||
+    tab?.rpn ||
+    tab?.rpsq !== undefined
       ? tab
       : fallback;
   if (!src) return undefined;
@@ -3898,7 +3922,10 @@ function richPromptFromSer(
     !src.rpm &&
     !src.rpc &&
     src.rppw === undefined &&
-    !src.rpsm
+    !src.rpsm &&
+    !src.rpa &&
+    !src.rpn &&
+    src.rpsq === undefined
   ) {
     return undefined;
   }
@@ -3927,6 +3954,21 @@ function richPromptFromSer(
     // Agent. Absence reads as Shell, matching the conditional
     // spread on serialize.
     ...(src.rpsm === "a" ? { submitMode: "agent" as const } : {}),
+    ...(src.rpa
+      ? {
+          agentTarget:
+            src.rpa === "x"
+              ? "codex" as const
+              : src.rpa === "g"
+                ? "gemini" as const
+                : "claude" as const,
+          submitMode: "agent" as const,
+        }
+      : {}),
+    ...(src.rpn ? { workspaceName: src.rpn } : {}),
+    ...(typeof src.rpsq === "number" && Number.isFinite(src.rpsq)
+      ? { submissionSequence: Math.max(0, Math.floor(src.rpsq)) }
+      : {}),
   };
 }
 

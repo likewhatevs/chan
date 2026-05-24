@@ -47,10 +47,11 @@ pub use routes::{build_fs_graph, FsGraphResponse, FsGraphScope};
 use auth::{auth_middleware, load_or_create_token};
 use bus::{make_progress_broadcast, make_watch_bridge};
 use routes::{
-    api_backlinks, api_build_info, api_cloud_drives, api_create_draft, api_create_file,
-    api_create_rich_prompt, api_create_terminal, api_delete_file, api_delete_session,
-    api_delete_terminal, api_discard_draft, api_fonts_source_code_pro_download, api_fs_graph,
-    api_get_config, api_get_contacts, api_get_drive, api_get_mentions, api_get_server_config,
+    api_backlinks, api_build_info, api_close_rich_prompt, api_cloud_drives, api_create_draft,
+    api_create_file, api_create_rich_prompt, api_create_rich_prompt_workspace, api_create_terminal,
+    api_delete_file, api_delete_session, api_delete_terminal, api_discard_draft,
+    api_fonts_source_code_pro_download, api_fs_graph, api_get_config, api_get_contacts,
+    api_get_drive, api_get_mentions, api_get_rich_prompt_status, api_get_server_config,
     api_get_session, api_graph, api_headings, api_health, api_index_rebuild, api_index_status,
     api_indexing_state, api_inspect_draft, api_inspector, api_language_graph, api_link_targets,
     api_links, api_list_files, api_list_sessions, api_metadata_export, api_metadata_import,
@@ -60,9 +61,10 @@ use routes::{
     api_resolve_link, api_restart_terminal, api_screensaver_clear_pin, api_screensaver_patch,
     api_screensaver_set_pin, api_screensaver_state, api_screensaver_verify, api_search_content,
     api_search_files, api_set_terminal_submit_mode, api_set_terminal_watcher, api_storage_reset,
-    api_team_create, api_team_duplicate, api_team_get_config, api_team_list_loaded, api_team_load,
-    api_team_unload, api_terminal_event_reply, api_terminal_watcher_events, api_terminal_ws,
-    api_unset_terminal_watcher, api_write_file, ws_upgrade,
+    api_submit_rich_prompt, api_team_create, api_team_duplicate, api_team_get_config,
+    api_team_list_loaded, api_team_load, api_team_unload, api_terminal_event_reply,
+    api_terminal_watcher_events, api_terminal_ws, api_unset_terminal_watcher, api_write_file,
+    ws_upgrade,
 };
 #[cfg(feature = "embeddings")]
 use routes::{
@@ -866,6 +868,16 @@ fn router(state: Arc<AppState>) -> Router {
         .route("/api/drafts/inspect", post(api_inspect_draft))
         .route("/api/drafts/discard", post(api_discard_draft))
         .route("/api/drafts/promote", post(api_promote_draft))
+        .route("/api/rich-prompts", post(api_create_rich_prompt_workspace))
+        .route(
+            "/api/rich-prompts/:name/status",
+            get(api_get_rich_prompt_status),
+        )
+        .route(
+            "/api/rich-prompts/:name/submit",
+            post(api_submit_rich_prompt),
+        )
+        .route("/api/rich-prompts/:name/close", post(api_close_rich_prompt))
         // systacean-31: per-team watcher lifecycle. Load spins up
         // a `Drive::watch_team` handle; unload drops it
         // (non-destructive; workspace persists on disk).

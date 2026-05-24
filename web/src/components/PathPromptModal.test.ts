@@ -11,8 +11,8 @@ import terminalRichPrompt from "./TerminalRichPrompt.svelte?raw";
 // backend creates on demand). The new `attach` mode handles both.
 //
 // These checks pin the source so a future refactor that drops the
-// branch — or accidentally routes the watcher dialog back through
-// `mode: "move"` — trips the test.
+// branch, or accidentally routes the watcher dialog back through
+// `mode: "move"`, trips the test.
 
 describe("fullstack-b-3: PathPromptModal attach mode", () => {
   test("modal renders 'attach watcher to' label in attach mode", () => {
@@ -28,7 +28,7 @@ describe("fullstack-b-3: PathPromptModal attach mode", () => {
   });
 
   test("absolute-path branch suppresses the ancestor preamble", () => {
-    // Absolute paths bypass tree.entries — we don't fabricate a
+    // Absolute paths bypass tree.entries, so we don't fabricate a
     // mint-green ancestor chain that doesn't correspond to drive
     // state.
     expect(modal).toMatch(
@@ -43,22 +43,10 @@ describe("fullstack-b-3: PathPromptModal attach mode", () => {
   });
 });
 
-describe("fullstack-b-10: TerminalRichPrompt watcher dialog uses attach mode", () => {
-  test("watchDirectory passes mode: 'attach' to uiPathPrompt", () => {
-    // `fullstack-b-3` introduced the `PathPromptMode = "attach"`
-    // branches in PathPromptModal but the watcher-dialog call
-    // site still passed `mode: "move"`, leaving the misleading
-    // `⚠ overwrites existing directory <name>/` warning live for
-    // existing in-drive dirs (@@WebtestB wave-1 verification on
-    // 2026-05-20). The fix flips the call site so the new
-    // branches are actually reached.
-    expect(terminalRichPrompt).toMatch(
-      /async function watchDirectory\(\): Promise<void> \{[\s\S]*?title: "watch directory",[\s\S]*?mode: "attach",[\s\S]*?\}\);/,
-    );
-    // Belt-and-suspenders: the old `mode: "move"` must not be
-    // back in the watcher-dialog block.
-    expect(terminalRichPrompt).not.toMatch(
-      /async function watchDirectory\(\): Promise<void> \{[\s\S]*?mode: "move"/,
-    );
+describe("Phase 9: TerminalRichPrompt removed the manual watcher dialog", () => {
+  test("Rich Prompt no longer opens PathPromptModal for watcher attach", () => {
+    expect(terminalRichPrompt).not.toMatch(/function watchDirectory/);
+    expect(terminalRichPrompt).not.toMatch(/uiPathPrompt/);
+    expect(terminalRichPrompt).not.toMatch(/mode: "attach"/);
   });
 });

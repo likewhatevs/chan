@@ -2,54 +2,25 @@ import { describe, expect, test } from "vitest";
 import tabs from "../state/tabs.svelte.ts?raw";
 import graph from "./GraphPanel.svelte?raw";
 
-// `fullstack-a-56` — bundled UX papercut:
+// Phase 9 Rich Prompt entrypoint check:
 //
-// 1. Cmd+P 3-state contract in `showOrSpawnRichPromptInFocusedPane`:
-//    pre-`-a-56` the function picked the FIRST terminal in the
-//    pane (`p.tabs.find((t) => t.kind === "terminal")`) regardless
-//    of which tab was active + always set richPrompt.open = true
-//    (no toggle-off path). Rewrite reads p.activeTabId + branches
-//    on (terminal vs not) and (open vs closed).
+// 1. Cmd+P always creates a fresh terminal with Rich Prompt open.
+//    It no longer toggles a prompt on the current terminal.
 //
 // 2. Depth slider shallow-scope cue: when depthCap <= 1, render
 //    a `[max]` suffix so the user sees the slider is already at
 //    max without needing to drag.
 
-describe("fullstack-a-56 Cmd+P 3-state contract", () => {
-  test("function reads p.activeTabId rather than picking the first terminal", () => {
-    // Pre-`-a-56` shape (removed):
-    //   const terminal = p.tabs.find((t) => t.kind === "terminal");
-    // New shape: look up the ACTIVE tab + branch on its kind.
+describe("Phase 9 Cmd+P fresh Rich Prompt terminal", () => {
+  test("helper always opens a new terminal in the active pane", () => {
     expect(tabs).toMatch(
-      /export function showOrSpawnRichPromptInFocusedPane\(\): void \{[\s\S]*?const activeTab = p\.tabs\.find\(\(t\) => t\.id === p\.activeTabId\);/,
+      /export function showOrSpawnRichPromptInFocusedPane\([\s\S]*?opts: OpenTerminalOptions = \{\},[\s\S]*?\): void \{[\s\S]*?const p = activePane\(\);[\s\S]*?openTerminalInPane\(p\.id, opts\);[\s\S]*?openActiveTerminalRichPrompt\(\);/,
     );
   });
 
-  test("case 1: active terminal + prompt closed → open on current", () => {
-    expect(tabs).toMatch(
-      /if \(activeTab\?\.kind === "terminal"\) \{[\s\S]*?if \(activeTab\.richPrompt\?\.open\) \{[\s\S]*?\}[\s\S]*?openActiveTerminalRichPrompt\(\);/,
-    );
-  });
-
-  test("case 2: active terminal + prompt open → toggle off (richPrompt.open = false)", () => {
-    expect(tabs).toMatch(
-      /if \(activeTab\.richPrompt\?\.open\) \{[\s\S]*?activeTab\.richPrompt\.open = false;[\s\S]*?return;/,
-    );
-  });
-
-  test("case 3: active tab not a terminal → spawn fresh + open", () => {
-    // After the terminal branch returns, the fallback path spawns
-    // a fresh terminal in the pane then opens the rich prompt on
-    // the newly active tab.
-    expect(tabs).toMatch(
-      /openTerminalInPane\(p\.id, \{\}\);\s*\n\s*openActiveTerminalRichPrompt\(\);/,
-    );
-  });
-
-  test("pre-`-a-56` first-terminal lookup is gone (no `p.tabs.find((t): t is TerminalTab => t.kind === \"terminal\")`)", () => {
-    expect(tabs).not.toMatch(
-      /const terminal = p\.tabs\.find\(\s*\(t\): t is TerminalTab => t\.kind === "terminal",?\s*\);/,
-    );
+  test("old active-terminal toggle branch is gone", () => {
+    expect(tabs).not.toMatch(/activeTab\.richPrompt\?\.open/);
+    expect(tabs).not.toMatch(/richPrompt\.open = false/);
   });
 });
 

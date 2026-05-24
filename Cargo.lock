@@ -1014,6 +1014,7 @@ dependencies = [
  "r2d2",
  "r2d2_sqlite",
  "rusqlite",
+ "rustix 1.1.4",
  "serde",
  "serde_json",
  "sha2",

@@ -23,6 +23,7 @@ mod metadata;
 mod preferences;
 mod report;
 mod reports_toggle;
+mod rich_prompts;
 mod screensaver;
 mod search;
 mod sessions;
@@ -62,6 +63,10 @@ pub use preferences::{
 };
 pub use report::{api_report_dir, api_report_file, api_report_prefix};
 pub use reports_toggle::{api_reports_disable, api_reports_enable, api_reports_state};
+pub use rich_prompts::{
+    api_close_rich_prompt, api_create_rich_prompt_workspace, api_get_rich_prompt_status,
+    api_submit_rich_prompt,
+};
 pub use screensaver::{
     api_screensaver_clear_pin, api_screensaver_patch, api_screensaver_set_pin,
     api_screensaver_state, api_screensaver_verify,

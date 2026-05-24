@@ -1095,7 +1095,7 @@ fn balanced_workers() -> usize {
     let cores = std::thread::available_parallelism()
         .map(|n| n.get())
         .unwrap_or(2);
-    cores.saturating_sub(2).clamp(1, 6)
+    crate::fd_budget::cap_index_read_workers(cores.saturating_sub(2).clamp(1, 6))
 }
 
 /// Search indexer resource profile. The enum is intentionally small:
@@ -1139,7 +1139,7 @@ impl SearchAggression {
                 let cores = std::thread::available_parallelism()
                     .map(|n| n.get())
                     .unwrap_or(2);
-                cores.saturating_sub(1).clamp(1, 8)
+                crate::fd_budget::cap_index_read_workers(cores.saturating_sub(1).clamp(1, 8))
             }
         };
         let queue_multiplier = match self {

@@ -1,15 +1,15 @@
 // `fullstack-a-79` slice 1: Team Bootstrap orchestrator.
 //
-// Walks the steps the addendum-b spec lays out for the New Team
+// Walks the steps the addendum-b spec laid out for the Spawn agents
 // dialog's Bootstrap action. Slice 1 lands the core chain:
 //
-//   1. Persist config — `api.teamCreate(name, configWire)`.
-//   2. Load the watcher — `api.teamLoad(name)`.
+//   1. Persist config: `api.teamCreate(name, configWire)`.
+//   2. Load the watcher: `api.teamLoad(name)`.
 //   3. Spawn one terminal per non-lead member with
-//      `CHAN_TAB_NAME=<handle>` env + the agent's command. Each
-//      worker's TerminalTab is seeded with the identity prompt so
-//      the agent reads it on first mount.
-//   4. Surface a notify() on success so the user sees the team
+//      `CHAN_TAB_NAME=<handle>` env + the agent's command.
+//   4. Ask the user to confirm the terminals are ready, then stage
+//      the identity prompt in each rich prompt.
+//   5. Surface a notify() on success so the user sees the team
 //      came up.
 //
 // Slice 2+ items deferred:
@@ -21,11 +21,12 @@
 //     tabs-in-current-Hybrid; the split-pane branch is just a
 //     scope-poke today).
 //   * `dispatch_agent_event`-driven identity prompts (slice 1
-//     uses `seedInput` for the in-process delivery; the
+//     stages rich-prompt buffers for in-process delivery; the
 //     event-channel path is wired in `-a-79` slice 2 when
 //     `systacean-21`'s rich-poke flow consumes a team channel).
 
 import { api, type TeamConfigWire, type TeamMemberWire } from "../api/client";
+import { uiConfirm } from "./confirm.svelte";
 import { notify } from "./notify.svelte";
 import {
   buildSplitGrid,
@@ -77,7 +78,7 @@ export function parseEnvLines(text: string): Record<string, string> {
 }
 
 /// `fullstack-a-79`: compute the handle the way the dialog's
-/// `handleOf` helper does — `@@<name>` when `autoPrefix` is on
+/// `handleOf` helper does, `@@<name>` when `autoPrefix` is on
 /// AND the name doesn't already start with `@@`; raw otherwise.
 /// Mirrors `TeamDialog.svelte`'s helper so the persisted config
 /// matches what the user saw at submit time.
@@ -130,12 +131,12 @@ export function translateConfig(config: TeamDialogConfig): TeamConfigWire {
 /// can open the dialog populated from
 /// `Drafts/team-{name}/config.toml`. The user edits, hits
 /// Bootstrap, and the standard `runTeamBootstrap` chain runs
-/// (teamCreate is idempotent per systacean-42 — re-running it
+/// (teamCreate is idempotent per systacean-42, re-running it
 /// for an existing team replaces the config in place).
 ///
 /// `env` Records get serialised back to "KEY=VALUE\n" lines
 /// so the dialog's free-form textarea round-trips cleanly.
-/// `CHAN_TAB_NAME` is dropped from the visible env field —
+/// `CHAN_TAB_NAME` is dropped from the visible env field,
 /// `translateConfig` auto-injects it on submit, so showing it
 /// here would create user confusion + a duplicate entry on
 /// the next round-trip.
@@ -171,7 +172,7 @@ export function wireToDialog(wire: TeamConfigWire): TeamDialogConfig {
 /// `fullstack-a-79`: assemble the identity prompt addendum-b
 /// clarification #4 calls for, rewritten per @@Alex's 2026-05-
 /// 23 spec to make host vs lead roles explicit. `$CHAN_TAB_NAME`
-/// is intentionally NOT escaped — the worker's shell expands it
+/// is intentionally NOT escaped, the worker's shell expands it
 /// to the env-var value when the agent reads the prompt. The
 /// host-handle + lead-handle + bootstrap-doc substitute in
 /// literally.
@@ -254,7 +255,7 @@ export async function placeTeamTemplates(wire: TeamConfigWire): Promise<void> {
 ///   (= grid cell 0) so they're never lost; the user can
 ///   move them with the standard tab-drag flow after
 ///   bootstrap. The lead's pane is always the starting pane
-///   per addendum-b clarification #1 — even if the user
+///   per addendum-b clarification #1, even if the user
 ///   assigned the lead to a different cell on the dialog, the
 ///   lead's terminal is the host session and stays put.
 export function resolveMemberPaneIds(
@@ -290,6 +291,18 @@ export function resolveMemberPaneIds(
   return { lead: fallback, workers };
 }
 
+export async function confirmTeamPreflight(wire: TeamConfigWire): Promise<void> {
+  const handles = wire.members.map((m) => m.handle).join(", ");
+  const confirmed = await uiConfirm({
+    title: "Agents ready?",
+    message: `Confirm spawned agents are ready before staging the identity prompt for ${handles}.`,
+    confirmLabel: "Stage prompts",
+    cancelLabel: "Keep dialog open",
+    destructive: false,
+  });
+  if (!confirmed) throw new Error("preflight cancelled");
+}
+
 /// `fullstack-a-79` slice 1: run the bootstrap chain. Throws
 /// (returns rejected promise) on any step's failure so the
 /// dialog can surface the error inline. The caller closes the
@@ -308,7 +321,7 @@ export async function runTeamBootstrap(
   //    `read docs/agents/bootstrap.md` directive resolves to a
   //    pre-substituted file. `Drive::create_team` already
   //    materialised `Drafts/team-{name}/docs/` in step 1.
-  //    Failures don't bail the whole chain — the watcher load
+  //    Failures don't bail the whole chain, the watcher load
   //    + worker spawn still bring up a working team; just
   //    flag in notify so the user can re-run / inspect.
   try {
@@ -332,7 +345,7 @@ export async function runTeamBootstrap(
   //    5 could add the moveTab step if needed).
   const memberPaneIds = resolveMemberPaneIds(config);
   const leadPaneId = memberPaneIds.lead;
-  // 5. Spawn worker terminals (lead is the host session — see
+  // 5. Spawn worker terminals (lead is the host session, see
   //    addendum-b clarification #1).
   const leadHandle =
     wire.members.find((m) => m.is_lead)?.handle ?? wire.host_handle;
@@ -345,6 +358,7 @@ export async function runTeamBootstrap(
   // chan-drive routing.
   const bootstrapDoc = `Drafts/team-${wire.team_name}/docs/bootstrap.md`;
   const prompt = identityPrompt(wire.host_handle, leadHandle, bootstrapDoc);
+  const spawnedWorkerTabs: NonNullable<ReturnType<typeof openTerminalInPane>>[] = [];
   for (let i = 0; i < wire.members.length; i += 1) {
     const m = wire.members[i];
     if (m.is_lead) continue;
@@ -356,16 +370,20 @@ export async function runTeamBootstrap(
         ...(hostSessionId ? { orchestrator_session: hostSessionId } : {}),
       });
       const paneId = memberPaneIds.workers[i] ?? layout.activePaneId;
-      openTerminalInPane(paneId, {
+      const tab = openTerminalInPane(paneId, {
         sessionId: response.session,
         title: response.tab_label,
-        seedInput: prompt,
       });
+      if (tab) spawnedWorkerTabs.push(tab);
     } catch (err) {
       notify(
         `spawn failed for ${m.handle}: ${(err as Error).message ?? err}`,
       );
     }
+  }
+  await confirmTeamPreflight(wire);
+  for (const tab of spawnedWorkerTabs) {
+    primeTerminalRichPrompt(tab, prompt);
   }
   // Restore focus to the lead's pane so the rich-prompt buffer
   // step lands there.
@@ -382,7 +400,7 @@ export async function runTeamBootstrap(
   // 6. Promote the host's pre-bootstrap terminal into the lead's
   //    terminal. Per addendum-b clarification #1 + @@Alex's
   //    2026-05-23 follow-up: the host's rich-prompt terminal IS
-  //    the lead's terminal — but the lead's shell needs to run
+  //    the lead's terminal, but the lead's shell needs to run
   //    the lead member's COMMAND (e.g. `claude`), not the host's
   //    pre-bootstrap default shell. The cleanest shape is
   //    close-the-host-session + spawn the lead's PTY fresh in

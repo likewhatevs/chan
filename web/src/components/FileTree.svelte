@@ -435,7 +435,7 @@
   ///      surface a notify + prompt for "Duplicate into new
   ///      name?" → teamDuplicate.
   ///   2. Otherwise teamLoad spins up the per-team watcher.
-  ///      Slice 2 will populate the New Team dialog with the
+  ///      Slice 2 will populate the Spawn agents dialog with the
   ///      persisted config + run the full bootstrap chain
   ///      (`-a-79`'s entry point) — that path is blocked on a
   ///      `GET /api/teams/{name}/config` endpoint that

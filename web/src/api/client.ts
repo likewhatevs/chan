@@ -29,6 +29,9 @@ import type {
   ReportPrefix,
   ResetMode,
   ResetResponse,
+  RichPromptCloseResponse,
+  RichPromptResponse,
+  RichPromptSubmitResponse,
   SearchHit,
   SemanticState,
   SemanticModelRegistry,
@@ -368,6 +371,39 @@ export const api = {
     req<{ path: string; name: string }>("POST", "/api/drafts/rich-prompt", {
       content,
     }),
+  createRichPromptWorkspace: (session: string, name?: string) =>
+    req<RichPromptResponse>("POST", "/api/rich-prompts", {
+      session,
+      ...(name ? { name } : {}),
+    }),
+  richPromptStatus: (name: string, session?: string) => {
+    const params = new URLSearchParams();
+    if (session) params.set("session", session);
+    const suffix = params.size > 0 ? `?${params.toString()}` : "";
+    return req<RichPromptResponse>(
+      "GET",
+      `/api/rich-prompts/${encodeURIComponent(name)}/status${suffix}`,
+    );
+  },
+  submitRichPromptWorkspace: (
+    name: string,
+    body: {
+      content: string;
+      expected_sequence: number;
+      expected_mtime_ns?: number | null;
+    },
+  ) =>
+    req<RichPromptSubmitResponse>(
+      "POST",
+      `/api/rich-prompts/${encodeURIComponent(name)}/submit`,
+      body,
+    ),
+  closeRichPromptWorkspace: (name: string, session: string) =>
+    req<RichPromptCloseResponse>(
+      "POST",
+      `/api/rich-prompts/${encodeURIComponent(name)}/close`,
+      { session },
+    ),
   inspectDraft: (path: string) =>
     req<DraftInspectResponse>("POST", "/api/drafts/inspect", { path }),
   discardDraft: (path: string) =>

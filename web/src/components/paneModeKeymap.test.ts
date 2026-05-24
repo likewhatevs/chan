@@ -183,9 +183,8 @@ describe("Cmd+K pane mode rich-prompt binding (fullstack-a-68 slice 2 — retire
   });
 
   test("showOrSpawnRichPromptInFocusedPane still imported (top-level Cmd+P chord uses it)", () => {
-    // The toggle behavior remains reachable from outside
-    // Hybrid Nav via `spawnRichPromptFromContext` →
-    // `showOrSpawnRichPromptInFocusedPane`.
+    // The top-level Cmd+P path now shares the same fresh-terminal
+    // behavior as Hybrid Nav `P`.
     expect(app).toMatch(
       /import \{[\s\S]{1,4000}showOrSpawnRichPromptInFocusedPane,/,
     );

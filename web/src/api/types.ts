@@ -152,6 +152,42 @@ export type TerminalSpawnResponse = {
   tab_label: string;
 };
 
+export type RichPromptPhase = "active" | "broken" | "submitted" | "discarded";
+
+export type RichPromptWatcherView =
+  | { state: "missing_session" }
+  | { state: "detached" }
+  | { state: "attached"; dir: string }
+  | { state: "failed"; dir?: string | null; message: string };
+
+export type RichPromptResponse = {
+  phase: RichPromptPhase;
+  name: string;
+  draft_path: string;
+  workspace_path: string;
+  events_path: string;
+  process_path: string;
+  workspace_abs: string;
+  events_abs: string;
+  submission_sequence: number;
+  watcher: RichPromptWatcherView;
+  error?: string | null;
+};
+
+export type RichPromptSubmitResponse = {
+  phase: "submitted";
+  name: string;
+  archived_path: string;
+  draft_path: string;
+  submission_sequence: number;
+};
+
+export type RichPromptCloseResponse = {
+  phase: "discarded" | "broken";
+  name: string;
+  error?: string | null;
+};
+
 export type TerminalRestartRequest = {
   name?: string;
   window_id?: string;

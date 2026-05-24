@@ -5,7 +5,9 @@ import {
   defaultGridForSize,
   defaultTeamConfig,
   emptySlotsForGrid,
+  exportTeamDialogConfig,
   gridShapesForSize,
+  importTeamDialogConfig,
   openTeamDialog,
   reshapeSplitGrid,
   resizeTeamMembers,
@@ -23,10 +25,10 @@ import {
 // open/close bus shape.
 
 describe("fullstack-a-78: defaultTeamConfig", () => {
-  test("default config has lead + 1 worker (TEAM_MIN_SIZE)", () => {
+  test("default config has one lead agent (TEAM_MIN_SIZE)", () => {
     const cfg = defaultTeamConfig();
     expect(cfg.size).toBe(TEAM_MIN_SIZE);
-    expect(cfg.members).toHaveLength(2);
+    expect(cfg.members).toHaveLength(1);
     expect(cfg.members.filter((m) => m.isLead)).toHaveLength(1);
     expect(cfg.members[0].isLead).toBe(true);
     expect(cfg.autoPrefix).toBe(true);
@@ -50,7 +52,7 @@ describe("fullstack-a-78: validateTeamConfig", () => {
       ...defaultTeamConfig(),
       hostName: "Alex",
       teamName: "a",
-      size: 1,
+      size: 0,
     };
     expect(validateTeamConfig(cfg)).toContain("at least");
   });
@@ -75,7 +77,13 @@ describe("fullstack-a-78: validateTeamConfig", () => {
     const twoLeads = defaultTeamConfig();
     twoLeads.hostName = "Alex";
     twoLeads.teamName = "a";
-    twoLeads.members[1].isLead = true;
+    twoLeads.size = 2;
+    twoLeads.members.push({
+      name: "Worker1",
+      command: "claude",
+      env: "",
+      isLead: true,
+    });
     expect(validateTeamConfig(twoLeads)).toBe(
       "exactly one member can be marked as lead",
     );
@@ -85,7 +93,7 @@ describe("fullstack-a-78: validateTeamConfig", () => {
     const cfg = defaultTeamConfig();
     cfg.hostName = "Alex";
     cfg.teamName = "a";
-    cfg.members[1].name = "";
+    cfg.members[0].name = "";
     expect(validateTeamConfig(cfg)).toBe("every member needs a name");
   });
 
@@ -98,6 +106,48 @@ describe("fullstack-a-78: validateTeamConfig", () => {
   test("returns null for valid config", () => {
     const cfg = { ...defaultTeamConfig(), hostName: "Alex", teamName: "alpha" };
     expect(validateTeamConfig(cfg)).toBeNull();
+  });
+});
+
+describe("Phase 9 Spawn agents config copy/paste", () => {
+  test("export/import round-trips the dialog config", () => {
+    const cfg = resizeTeamMembers({
+      ...defaultTeamConfig(),
+      hostName: "Alex",
+      teamName: "alpha",
+      size: 2,
+    });
+    cfg.members[1].command = "codex";
+    cfg.members[1].env = "DEBUG=1";
+
+    const imported = importTeamDialogConfig(exportTeamDialogConfig(cfg));
+
+    expect(imported).toEqual(cfg);
+  });
+
+  test("import clamps old oversized configs to the Phase 9 maximum", () => {
+    const imported = importTeamDialogConfig(
+      JSON.stringify({
+        hostName: "Alex",
+        teamName: "oversized",
+        size: 16,
+        members: Array.from({ length: 16 }, (_, idx) => ({
+          name: idx === 0 ? "Lead" : `Worker${idx}`,
+          command: "claude",
+          env: "",
+          isLead: idx === 0,
+        })),
+      }),
+    );
+
+    expect(imported.size).toBe(9);
+    expect(imported.members).toHaveLength(9);
+  });
+
+  test("import rejects invalid JSON", () => {
+    expect(() => importTeamDialogConfig("{nope")).toThrow(
+      /not valid JSON/,
+    );
   });
 });
 
@@ -245,7 +295,10 @@ describe("fullstack-a-78 slice 2: assignMemberToCell + unassignMember", () => {
   });
 
   test("re-assigning to a different cell removes from the prior cell", () => {
-    let cfg = switchRealEstate(defaultTeamConfig(), "split");
+    let cfg = switchRealEstate(
+      resizeTeamMembers({ ...defaultTeamConfig(), size: 2 }),
+      "split",
+    );
     cfg = assignMemberToCell(cfg, 0, 0);
     cfg = assignMemberToCell(cfg, 0, 1);
     if (cfg.realEstate.kind === "split") {
@@ -255,7 +308,10 @@ describe("fullstack-a-78 slice 2: assignMemberToCell + unassignMember", () => {
   });
 
   test("multiple members in same cell stack as tabs (no replacement)", () => {
-    let cfg = switchRealEstate(defaultTeamConfig(), "split");
+    let cfg = switchRealEstate(
+      resizeTeamMembers({ ...defaultTeamConfig(), size: 2 }),
+      "split",
+    );
     cfg = assignMemberToCell(cfg, 0, 0);
     cfg = assignMemberToCell(cfg, 1, 0);
     if (cfg.realEstate.kind === "split") {
@@ -284,7 +340,10 @@ describe("fullstack-a-78 slice 2: assignMemberToCell + unassignMember", () => {
 
 describe("fullstack-a-78 slice 2: resize preserves the split mode", () => {
   test("resize from 2 → 4 keeps split mode + picks new default grid", () => {
-    const cfg = switchRealEstate(defaultTeamConfig(), "split");
+    const cfg = switchRealEstate(
+      resizeTeamMembers({ ...defaultTeamConfig(), size: 2 }),
+      "split",
+    );
     const grown = resizeTeamMembers({ ...cfg, size: 4 });
     expect(grown.realEstate.kind).toBe("split");
     if (grown.realEstate.kind === "split") {

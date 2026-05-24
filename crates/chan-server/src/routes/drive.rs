@@ -140,7 +140,7 @@ fn drive_info(state: &AppState) -> Result<DriveInfo, String> {
 }
 
 fn drive_warnings(drive: &chan_drive::Drive) -> Vec<DriveWarning> {
-    match drive.draft_preflight() {
+    let mut warnings = match drive.draft_preflight() {
         Ok(issues) => issues
             .into_iter()
             .map(|issue| DriveWarning {
@@ -154,7 +154,20 @@ fn drive_warnings(drive: &chan_drive::Drive) -> Vec<DriveWarning> {
             path: "Drafts".to_string(),
             message: e.to_string(),
         }],
+    };
+    match drive.rich_prompt_preflight() {
+        Ok(issues) => warnings.extend(issues.into_iter().map(|issue| DriveWarning {
+            kind: "broken_rich_prompt",
+            path: format!("Drafts/{}", issue.name),
+            message: issue.message,
+        })),
+        Err(e) => warnings.push(DriveWarning {
+            kind: "rich_prompt_preflight_failed",
+            path: "Drafts".to_string(),
+            message: e.to_string(),
+        }),
     }
+    warnings
 }
 
 #[cfg(test)]

@@ -9,9 +9,15 @@ import terminal from "./TerminalTab.svelte?raw";
 // + directive surfaces stay persistent.
 
 describe("fullstack-a-86: confirmed same-shape success swaps", () => {
-  test("TerminalRichPrompt `Created ${target}` uses setTransientStatus", () => {
+  test("TerminalRichPrompt metadata copy uses setTransientStatus", () => {
     expect(richPrompt).toMatch(
-      /setTransientStatus\(`Created \$\{target\}`\)/,
+      /setTransientStatus\("copied metadata dir"\)/,
+    );
+  });
+
+  test("TerminalRichPrompt Spawn agents config copy uses setTransientStatus", () => {
+    expect(richPrompt).toMatch(
+      /setTransientStatus\("copied spawn agents config"\)/,
     );
   });
 
@@ -23,12 +29,6 @@ describe("fullstack-a-86: confirmed same-shape success swaps", () => {
 });
 
 describe("fullstack-a-86: debatable info swaps (watcher detached on reload)", () => {
-  test("TerminalRichPrompt watcher-detached toast auto-dismisses", () => {
-    expect(richPrompt).toMatch(
-      /setTransientStatus\("watcher detached on reload"\)/,
-    );
-  });
-
   test("TerminalTab watcher-detached toast auto-dismisses", () => {
     expect(terminal).toMatch(
       /setTransientStatus\("watcher detached on reload"\)/,
@@ -37,9 +37,9 @@ describe("fullstack-a-86: debatable info swaps (watcher detached on reload)", ()
 });
 
 describe("fullstack-a-86: error paths stay persistent", () => {
-  test("TerminalRichPrompt create-failed stays persistent", () => {
+  test("TerminalRichPrompt copy-failed stays persistent", () => {
     expect(richPrompt).toMatch(
-      /ui\.status = `create failed: \$\{\(err as Error\)\.message\}`;/,
+      /ui\.status = `copy failed: \$\{\(err as Error\)\.message\}`;/,
     );
   });
 

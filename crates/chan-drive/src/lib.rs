@@ -26,6 +26,7 @@ pub mod contacts;
 pub mod drafts;
 pub mod drive;
 pub mod error;
+pub(crate) mod fd_budget;
 pub mod fs_ops;
 pub mod graph;
 pub mod index;
@@ -38,6 +39,7 @@ pub mod paths;
 pub mod progress;
 pub mod registry;
 mod report;
+pub mod rich_prompts;
 pub mod teams;
 pub mod trash;
 pub mod vcs;
@@ -82,6 +84,7 @@ pub use progress::{
     eta_secs_from, progress_fn, NoProgress, ProgressCallback, ProgressEvent, ProgressStage,
 };
 pub use registry::{KnownDrive, Registry};
+pub use rich_prompts::{RichPromptSubmitReport, RichPromptWorkspace};
 pub use teams::{Member, Position, TeamConfig, TeamRef};
 pub use trash::{TrashEntry, TRASH_RETENTION_SECS};
 pub use vcs::{detect_drive_vcs, detect_parent_vcs, is_vcs_control_path, VcsKind, VcsParent};

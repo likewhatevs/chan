@@ -85,6 +85,11 @@
   import McpEnvInfoModal from "./McpEnvInfoModal.svelte";
   import TerminalRichPrompt from "./TerminalRichPrompt.svelte";
   import { readWatcherEvents } from "../state/watcherEvents";
+  import type {
+    RichPromptCloseResponse,
+    RichPromptResponse,
+    RichPromptSubmitResponse,
+  } from "../api/types";
 
   let {
     tab,
@@ -153,6 +158,9 @@
   let terminalCwdAbs: string | null = $state(null);
   let terminalCwdVirtual: string | null = $state(null);
   let watcherPollTimer: ReturnType<typeof setInterval> | null = null;
+  let richPromptWorkspaceRequest: Promise<void> | null = null;
+  let richPromptWorkspaceCreateKey = "";
+  let richPromptWorkspaceStatusKey = "";
   const outputDecoder = new TextDecoder();
   const WEBGL_ATLAS_SCAN_TAIL_BYTES = 32;
   let webglRendererActive = false;
@@ -212,11 +220,29 @@
 
   $effect(() => {
     const unregisterInput = registerTerminalInputSink(tab.id, (data) => sendInput(data));
-    const unregisterClose = registerTerminalCloseSink(tab.id, explicitCloseSession);
+    const unregisterClose = registerTerminalCloseSink(tab.id, closeTerminalForTab);
     return () => {
       unregisterInput();
       unregisterClose();
     };
+  });
+
+  $effect(() => {
+    const rp = tab.richPrompt;
+    const session = tab.terminalSessionId;
+    if (!rp || !session) return;
+    if (!rp.open && !rp.workspaceName) return;
+    if (!rp.workspaceName) {
+      const key = `${tab.id}:${session}`;
+      if (richPromptWorkspaceCreateKey === key) return;
+      richPromptWorkspaceCreateKey = key;
+      void ensureRichPromptWorkspace(session);
+      return;
+    }
+    const key = `${rp.workspaceName}:${session}`;
+    if (richPromptWorkspaceStatusKey === key) return;
+    richPromptWorkspaceStatusKey = key;
+    void refreshRichPromptWorkspace(session, rp.workspaceName);
   });
 
   $effect(() => {
@@ -847,6 +873,14 @@
     }
   }
 
+  async function closeTerminalForTab(): Promise<boolean> {
+    if (tab.richPrompt?.workspaceName) {
+      return discardRichPromptWorkspace();
+    }
+    explicitCloseSession();
+    return true;
+  }
+
   async function copyScrollback(): Promise<void> {
     closeTabMenu();
     const text = serialize?.serialize({ scrollback: scrollbackLines }) ?? "";
@@ -996,6 +1030,97 @@
     return tab.richPrompt;
   }
 
+  function richPromptErrorMessage(err: unknown): string {
+    return (err as Error)?.message || String(err);
+  }
+
+  function applyRichPromptWorkspace(resp: RichPromptResponse): void {
+    const rp = tab.richPrompt;
+    if (!rp) return;
+    rp.phase = resp.phase;
+    rp.workspaceName = resp.name;
+    rp.draftPath = resp.draft_path;
+    rp.workspacePath = resp.workspace_path;
+    rp.eventsPath = resp.events_path;
+    rp.processPath = resp.process_path;
+    rp.workspaceAbs = resp.workspace_abs;
+    rp.eventsAbs = resp.events_abs;
+    rp.submissionSequence = resp.submission_sequence;
+    rp.workspaceError = resp.error ?? null;
+    if (resp.watcher.state === "attached") {
+      if (tab.watcher?.path !== resp.events_path) watcherStarted(resp.events_path);
+    } else {
+      if (resp.watcher.state === "failed") {
+        rp.workspaceError = resp.error ?? resp.watcher.message;
+      }
+      watcherStopped();
+    }
+    scheduleTerminalSessionSave();
+  }
+
+  async function ensureRichPromptWorkspace(session: string): Promise<void> {
+    if (richPromptWorkspaceRequest) return richPromptWorkspaceRequest;
+    richPromptWorkspaceRequest = (async () => {
+      const rp = tab.richPrompt;
+      if (!rp) return;
+      rp.workspaceBusy = true;
+      rp.workspaceError = null;
+      try {
+        const resp = await api.createRichPromptWorkspace(session);
+        if (tab.terminalSessionId !== session) return;
+        applyRichPromptWorkspace(resp);
+      } catch (err) {
+        const live = tab.richPrompt;
+        if (live) {
+          live.phase = "broken";
+          live.workspaceError = richPromptErrorMessage(err);
+        }
+        setTransientStatus(`rich-prompt workspace failed: ${richPromptErrorMessage(err)}`);
+      } finally {
+        const live = tab.richPrompt;
+        if (live) live.workspaceBusy = false;
+        richPromptWorkspaceRequest = null;
+        scheduleTerminalSessionSave();
+      }
+    })();
+    return richPromptWorkspaceRequest;
+  }
+
+  async function refreshRichPromptWorkspace(session: string, name: string): Promise<void> {
+    const rp = tab.richPrompt;
+    if (!rp) return;
+    rp.workspaceBusy = true;
+    try {
+      const resp = await api.richPromptStatus(name, session);
+      if (tab.terminalSessionId !== session || tab.richPrompt?.workspaceName !== name) return;
+      applyRichPromptWorkspace(resp);
+    } catch (err) {
+      const live = tab.richPrompt;
+      if (live && live.workspaceName === name) {
+        live.phase = "broken";
+        live.workspaceError = richPromptErrorMessage(err);
+      }
+    } finally {
+      const live = tab.richPrompt;
+      if (live && live.workspaceName === name) live.workspaceBusy = false;
+      scheduleTerminalSessionSave();
+    }
+  }
+
+  function applyRichPromptSubmit(
+    resp: RichPromptSubmitResponse,
+    bufferAtSubmit: string,
+  ): void {
+    const rp = tab.richPrompt;
+    if (!rp || rp.workspaceName !== resp.name) return;
+    rp.phase = resp.phase;
+    rp.draftPath = resp.draft_path;
+    rp.submissionSequence = resp.submission_sequence;
+    rp.workspaceError = null;
+    if (rp.buffer === bufferAtSubmit) rp.buffer = "";
+    scheduleTerminalSessionSave();
+  }
+
   function openRichPrompt(): void {
     closeTabMenu();
     ensureRichPrompt().open = true;
@@ -1032,20 +1157,26 @@
     scheduleTerminalSessionSave();
   }
 
+  function richPromptUsesAgentSubmit(): boolean {
+    const rp = tab.richPrompt;
+    if (!rp) return false;
+    if (rp.agentTarget && rp.agentTarget !== "none") return true;
+    return rp.submitMode === "agent";
+  }
+
   function submitRichPrompt(source: string): void {
     // `fullstack-b-13`: when the prompt is in Agent submit-mode,
     // strip any trailing newline the editor left on the buffer
     // and append the agent-submit chord. Claude Code v2.1.145
     // reads `\x1b[27;9;13~` (xterm modifyOtherKeys Cmd+Enter)
     // as submit; a stray `\n` before the chord would land as a
-    // newline in the agent's multi-line draft. Shell mode keeps
-    // the buffer byte-for-byte (today's behaviour: the shell
-    // sees the editor's trailing `\n` as Enter).
-    if (tab.richPrompt?.submitMode === "agent") {
+    // newline in the agent's multi-line draft. Shell mode appends
+    // a missing trailing newline so the command actually executes.
+    if (richPromptUsesAgentSubmit()) {
       const stripped = source.replace(/\n+$/, "");
       sendUserInput(stripped + AGENT_SUBMIT_CHORD);
     } else {
-      sendUserInput(source);
+      sendUserInput(source.endsWith("\n") ? source : `${source}\n`);
     }
     scheduleTerminalSessionSave();
     // `fullstack-a-4`: caret stays in the rich prompt after
@@ -1053,30 +1184,91 @@
     // refocused the terminal here, which forced the user to
     // click back into the prompt for every entry.
     if (tab.richPrompt) tab.richPrompt.focusNonce = (tab.richPrompt.focusNonce ?? 0) + 1;
-    // `fullstack-a-66` slice d: persist the submitted source as
-    // `Drafts/rich-prompt-N/prompt.md` so the user has
-    // GitHub-style FB access to their history. Best-effort:
-    // a failure here doesn't unwind the send (the terminal
-    // already received the input); we surface it as a
-    // transient status so the user knows the history entry
-    // didn't land but their command still ran.
-    void persistRichPromptHistory(source);
+    // Archive the exact editor buffer through Core's Rich Prompt
+    // workspace. This stays best-effort because the terminal has
+    // already received the input.
+    void persistRichPromptSubmission(source);
   }
 
-  async function persistRichPromptHistory(source: string): Promise<void> {
+  async function persistRichPromptSubmission(source: string): Promise<void> {
     const trimmed = source.trim();
     if (!trimmed) return;
+    const session = tab.terminalSessionId;
+    if (!tab.richPrompt?.workspaceName) {
+      if (!session) {
+        setTransientStatus("rich-prompt workspace not ready");
+        return;
+      }
+      await ensureRichPromptWorkspace(session);
+    }
+    const rp = tab.richPrompt;
+    const name = rp?.workspaceName;
+    if (!rp || !name) {
+      setTransientStatus("rich-prompt workspace not ready");
+      return;
+    }
+    const bufferAtSubmit = rp.buffer;
     try {
-      await api.createRichPromptDraft(source);
+      const resp = await api.submitRichPromptWorkspace(name, {
+        content: source,
+        expected_sequence: rp.submissionSequence ?? 0,
+      });
+      applyRichPromptSubmit(resp, bufferAtSubmit);
     } catch (err) {
-      // Persist failures are non-fatal — the prompt already
-      // ran. Status pill auto-dismisses (per `-a-86`'s
-      // setTransientStatus pattern) so the user gets a brief
-      // heads-up without sticky UI.
+      if (tab.richPrompt?.workspaceName === name) {
+        tab.richPrompt.phase = "broken";
+        tab.richPrompt.workspaceError = richPromptErrorMessage(err);
+      }
       setTransientStatus(
-        `rich-prompt history save failed: ${(err as Error).message}`,
+        `rich-prompt submit archive failed: ${richPromptErrorMessage(err)}`,
       );
     }
+  }
+
+  async function discardRichPromptWorkspace(): Promise<boolean> {
+    const name = tab.richPrompt?.workspaceName;
+    if (!name) {
+      explicitCloseSession();
+      return true;
+    }
+    const rp = tab.richPrompt;
+    if (rp) {
+      rp.workspaceBusy = true;
+      rp.workspaceError = null;
+    }
+    let resp: RichPromptCloseResponse;
+    try {
+      resp = await api.closeRichPromptWorkspace(name, tab.terminalSessionId ?? "");
+    } catch (err) {
+      if (tab.richPrompt?.workspaceName === name) {
+        tab.richPrompt.phase = "broken";
+        tab.richPrompt.workspaceError = richPromptErrorMessage(err);
+        tab.richPrompt.workspaceBusy = false;
+      }
+      setTransientStatus(`rich-prompt close failed: ${richPromptErrorMessage(err)}`);
+      scheduleTerminalSessionSave();
+      return false;
+    }
+    if (resp.phase !== "discarded") {
+      if (tab.richPrompt?.workspaceName === name) {
+        tab.richPrompt.phase = "broken";
+        tab.richPrompt.workspaceError = resp.error ?? "rich prompt close failed";
+        tab.richPrompt.workspaceBusy = false;
+      }
+      setTransientStatus(`rich-prompt close failed: ${resp.error ?? "unknown error"}`);
+      scheduleTerminalSessionSave();
+      return false;
+    }
+    if (tab.richPrompt?.workspaceName === name) {
+      tab.richPrompt.phase = "discarded";
+      tab.richPrompt.open = false;
+      tab.richPrompt.workspaceBusy = false;
+      tab.richPrompt.workspaceError = null;
+    }
+    tab.watcher = undefined;
+    clearTerminalSession(tab);
+    scheduleTerminalSessionSave();
+    return true;
   }
 
   function watcherStarted(path: string): void {
@@ -1644,11 +1836,8 @@
     <TerminalRichPrompt
       prompt={tab.richPrompt}
       onSubmit={submitRichPrompt}
-      onClose={closeRichPrompt}
       terminalSessionId={tab.terminalSessionId}
       watcherPath={tab.watcher?.path ?? null}
-      onWatcherStarted={watcherStarted}
-      onWatcherStopped={watcherStopped}
       onSpawned={spawnCreated}
       {bubbleCount}
     />

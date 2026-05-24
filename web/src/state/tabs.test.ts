@@ -47,6 +47,7 @@ import {
   paneModeSwap,
   paneModeSwapWith,
   removeTerminalFromBroadcastGroup,
+  registerTerminalCloseSink,
   registerTerminalInputSink,
   resolveDraftClose,
   markLocalTabDrop,
@@ -184,6 +185,19 @@ describe("tab close confirmation", () => {
     await close;
 
     unregister();
+    expect(activePane().tabs).toHaveLength(1);
+  });
+
+  test("keeps a terminal open when its close sink returns false", async () => {
+    const tab = terminalTab();
+    const pane = resetLayout([tab]);
+    const closeSink = vi.fn().mockResolvedValue(false);
+    const unregister = registerTerminalCloseSink(tab.id, closeSink);
+
+    await closeTab(pane.id, tab.id, { force: true });
+
+    unregister();
+    expect(closeSink).toHaveBeenCalledTimes(1);
     expect(activePane().tabs).toHaveLength(1);
   });
 
@@ -954,13 +968,11 @@ describe("pane state", () => {
     expect(pane.activeTabId).toBe(terminal.id);
   });
 
-  test("showOrSpawnRichPromptInFocusedPane spawns fresh when active tab is not a terminal even if one exists elsewhere (fullstack-a-56)", () => {
-    // `fullstack-a-56` replaced the "find first terminal in pane"
-    // behaviour with a strict 3-state contract keyed off the
-    // ACTIVE tab. Case 3: active tab is NOT a terminal, so
-    // spawn a fresh one + open the prompt. The pre-existing
-    // terminal further down the tab list is left untouched
-    // (don't surprise the user with a tab-switch).
+  test("showOrSpawnRichPromptInFocusedPane spawns fresh when active tab is not a terminal even if one exists elsewhere", () => {
+    // Phase 9 keeps the useful non-surprise part of the old
+    // contract: a pre-existing terminal elsewhere in the tab list
+    // is left untouched. Cmd+P opens a fresh rich-prompt terminal
+    // instead of switching to it.
     const doc = fileTab({ id: "doc-1", path: "notes/x.md" });
     const terminal: TerminalTab = {
       kind: "terminal",
@@ -985,7 +997,7 @@ describe("pane state", () => {
     expect((active as TerminalTab).richPrompt?.open).toBe(true);
   });
 
-  test("showOrSpawnRichPromptInFocusedPane reveals the prompt on an already-open prompt (fullstack-50)", () => {
+  test("showOrSpawnRichPromptInFocusedPane always spawns a fresh rich-prompt terminal", () => {
     const terminal: TerminalTab = {
       kind: "terminal",
       id: "term-1",
@@ -993,19 +1005,24 @@ describe("pane state", () => {
       createdAt: 1,
       broadcastEnabled: false,
       broadcastTargetIds: [],
-      richPrompt: { buffer: "draft", heightPx: 200, open: false, mode: "source" },
+      richPrompt: { buffer: "draft", heightPx: 200, open: true, mode: "source" },
     };
     const seed = resetLayout([terminal]);
     (layout.nodes[seed.id] as LeafNode).activeTabId = "term-1";
 
-    showOrSpawnRichPromptInFocusedPane();
+    showOrSpawnRichPromptInFocusedPane({ cwd: "notes" });
 
     const pane = layout.nodes[seed.id] as LeafNode;
+    expect(pane.tabs).toHaveLength(2);
     const live = pane.tabs.find((t) => t.id === "term-1") as TerminalTab;
-    expect(live.richPrompt?.open).toBe(true);
-    // Existing mode + buffer preserved; the helper only opens.
-    expect(live.richPrompt?.mode).toBe("source");
     expect(live.richPrompt?.buffer).toBe("draft");
+    expect(live.richPrompt?.mode).toBe("source");
+    const spawned = pane.tabs.find((t) => t.id === pane.activeTabId) as TerminalTab;
+    expect(spawned.id).not.toBe("term-1");
+    expect(spawned.kind).toBe("terminal");
+    expect(spawned.cwd).toBe("notes");
+    expect(spawned.richPrompt?.open).toBe(true);
+    expect(spawned.richPrompt?.mode).toBe("wysiwyg");
   });
 
   test("openActiveTerminalRichPrompt blurs the focused xterm helper textarea (fullstack-b-8)", () => {
@@ -1701,6 +1718,35 @@ describe("terminal session serialization", () => {
     });
   });
 
+  test("round-trips rich prompt workspace identity via session layout", async () => {
+    resetLayout([
+      terminalTab({
+        title: "prompt",
+        richPrompt: {
+          buffer: "",
+          open: true,
+          workspaceName: "rich-prompt-2",
+          submissionSequence: 3,
+        },
+      }),
+    ]);
+
+    const shareable = serializeLayout();
+    expect(JSON.stringify(shareable)).not.toContain("rich-prompt-2");
+
+    const sessionSnapshot = serializeLayout({ terminalSessions: true });
+    expect(JSON.stringify(sessionSnapshot)).toContain("\"rpn\":\"rich-prompt-2\"");
+    expect(JSON.stringify(sessionSnapshot)).toContain("\"rpsq\":3");
+
+    await restoreLayout(sessionSnapshot!);
+
+    const [tab] = activePane().tabs;
+    expect(tab?.kind).toBe("terminal");
+    if (tab?.kind !== "terminal") return;
+    expect(tab.richPrompt?.workspaceName).toBe("rich-prompt-2");
+    expect(tab.richPrompt?.submissionSequence).toBe(3);
+  });
+
   test("round-trips watcher dismissedIds via SerTab.dbi (fullstack-a-28)", async () => {
     // Explicit-close dismissals on bubble overlay survive session
     // restore so the user does not have to re-dismiss the same
@@ -1757,6 +1803,33 @@ describe("terminal session serialization", () => {
     const [tab] = activePane().tabs;
     expect(tab?.kind).toBe("terminal");
     if (tab?.kind !== "terminal") return;
+    expect(tab.richPrompt?.submitMode).toBe("agent");
+  });
+
+  test("round-trips rich-prompt agent picker via SerTab.rpa", async () => {
+    resetLayout([
+      terminalTab({
+        terminalSessionId: "term_rpa",
+        richPrompt: {
+          buffer: "ship it",
+          heightPx: 200,
+          open: true,
+          mode: "wysiwyg",
+          agentTarget: "codex",
+          submitMode: "agent",
+        },
+      }),
+    ]);
+
+    const sessionSnapshot = serializeLayout({ terminalSessions: true });
+    expect(JSON.stringify(sessionSnapshot)).toContain("\"rpa\":\"x\"");
+
+    await restoreLayout(sessionSnapshot!);
+
+    const [tab] = activePane().tabs;
+    expect(tab?.kind).toBe("terminal");
+    if (tab?.kind !== "terminal") return;
+    expect(tab.richPrompt?.agentTarget).toBe("codex");
     expect(tab.richPrompt?.submitMode).toBe("agent");
   });
 
@@ -1820,7 +1893,7 @@ describe("terminal session serialization", () => {
   test("skips submit-mode resync when no terminalSessionId is present (fullstack-b-18)", async () => {
     // Pre-attach tabs carry no server-side session id; the PUT would
     // 404 unconditionally. Skip until the session attaches (the next
-    // toggleSubmitMode call propagates manually).
+    // agent picker change propagates manually).
     const setMode = vi
       .spyOn(api, "setTerminalSubmitMode")
       .mockResolvedValue(undefined);

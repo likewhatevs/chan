@@ -1,6 +1,6 @@
 <script lang="ts">
   import { tick } from "svelte";
-  import { Bot, ChevronDown, ChevronUp, Code2, FilePlus, FolderSearch, GripHorizontal, Pilcrow, Send, Terminal, Type, X } from "lucide-svelte";
+  import { Bot, ChevronDown, ChevronUp, Code2, Copy, GripHorizontal, Pilcrow, Plus, Send, Type } from "lucide-svelte";
   import {
     PAGE_WIDTH_MAX_PCT,
     PAGE_WIDTH_MIN_PCT,
@@ -11,39 +11,32 @@
   import StyleToolbar from "./StyleToolbar.svelte";
   import type { TerminalRichPromptState } from "../state/tabs.svelte";
   import { api } from "../api/client";
-  import { appendDefaultMd } from "../state/pathValidate";
-  import { isEditableText } from "../state/fileTypes";
   import {
     drive,
-    refreshTree,
     setTransientStatus,
     ui,
-    uiPathPrompt,
   } from "../state/store.svelte";
-  import { openInActivePane } from "../state/tabs.svelte";
   import type { TerminalSpawnResponse } from "../api/types";
   import { openSpawnDialog as openGlobalSpawnDialog } from "../state/spawnDialog.svelte";
-  import { openTeamDialog as openGlobalTeamDialog } from "../state/teamDialog.svelte";
+  import {
+    defaultTeamConfig,
+    exportTeamDialogConfig,
+    openTeamDialog as openGlobalTeamDialog,
+  } from "../state/teamDialog.svelte";
   import { runTeamBootstrap } from "../state/teamOrchestrator.svelte";
 
   let {
     prompt,
     onSubmit,
-    onClose,
     terminalSessionId,
     watcherPath,
-    onWatcherStarted,
-    onWatcherStopped,
     onSpawned,
     bubbleCount = 0,
   }: {
     prompt: TerminalRichPromptState;
     onSubmit: (source: string) => void;
-    onClose: () => void;
     terminalSessionId?: string;
     watcherPath?: string | null;
-    onWatcherStarted?: (path: string) => void;
-    onWatcherStopped?: () => void;
     onSpawned?: (response: TerminalSpawnResponse, name: string) => void;
     /// `fullstack-a-4`: number of unanswered survey bubbles
     /// currently rendered above the prompt. When > 0, the prompt
@@ -71,9 +64,10 @@
   let sourceRef: Source | undefined = $state();
   let selVer = $state(0);
   let menu = $state<{ x: number; y: number } | null>(null);
-  let watcherError = $state("");
-  let watcherBusy = $state(false);
+  let agentModeBusy = $state(false);
   let dragging = false;
+  const workspaceRow = $derived(workspaceStatus());
+  const eventCount = $derived(Math.max(0, bubbleCount));
 
   // `fullstack-79`: auto-focus the input on every `openActiveTerminalRichPrompt`
   // call. The `focusNonce` is bumped by the open helper even when the prompt
@@ -108,7 +102,7 @@
   //     TerminalTab.svelte (covers the `fullstack-a-24` collapse
   //     transition where `heightPx` is stale).
   //   - width feeds the per-prompt page-width clamp in
-  //     `richPromptPageWidthPx` below — needed so the cap is
+  //     `richPromptPageWidthPx` below, needed so the cap is
   //     relative to THIS prompt's painted width, not the pane's
   //     editor wrapper.
   // ResizeObserver is the natural source of truth here; both
@@ -132,7 +126,7 @@
   // OVERRIDES the inherited `--chan-page-max-width` set by
   // Pane.svelte on the editor wrapper. Result: narrowing the
   // editor's page-width slider in pane A no longer cascades onto
-  // pane B's rich prompt — each prompt carries its own.
+  // pane B's rich prompt, each prompt carries its own.
   //
   // Absent / undefined ratio reads as "no cap" (the prompt's
   // composer uses 100% of the painted width). Explicit ratio in
@@ -141,7 +135,7 @@
   function richPromptPageWidthPx(): string {
     // `none` is the documented sentinel both Wysiwyg.svelte and
     // Source.svelte recognise via `max-width: var(--chan-page-max-width, none);`
-    // — overriding the pane-level value with `none` is what
+    // Overriding the pane-level value with `none` is what
     // achieves the cross-tile decoupling. Default = `none`
     // (composer fills the prompt's painted width) so the prompt
     // does not inherit the editor's narrow cap. The explicit
@@ -202,6 +196,56 @@
     menu = null;
   }
 
+  type AgentTarget = "none" | "claude" | "codex" | "gemini";
+
+  function agentTarget(): AgentTarget {
+    return prompt.agentTarget ?? (prompt.submitMode === "agent" ? "claude" : "none");
+  }
+
+  async function setAgentTarget(next: AgentTarget): Promise<void> {
+    const previousTarget = agentTarget();
+    const previousMode = prompt.submitMode;
+    prompt.agentTarget = next;
+    prompt.submitMode = next === "none" ? "shell" : "agent";
+    if (!terminalSessionId) return;
+    agentModeBusy = true;
+    try {
+      await api.setTerminalSubmitMode(terminalSessionId, prompt.submitMode);
+    } catch (err) {
+      prompt.agentTarget = previousTarget;
+      prompt.submitMode = previousMode;
+      ui.status = `submit-mode flip failed: ${(err as Error).message}`;
+    } finally {
+      agentModeBusy = false;
+    }
+  }
+
+  function workspaceStatus(): { text: string; error: boolean } | null {
+    if (prompt.workspaceError) return { text: prompt.workspaceError, error: true };
+    if (prompt.workspaceBusy) return { text: "preparing workspace", error: false };
+    if (prompt.phase === "broken") return { text: "workspace broken", error: true };
+    if (prompt.phase === "submitted") return { text: "prompt archived", error: false };
+    if (prompt.workspacePath) return { text: `workspace ${prompt.workspacePath}`, error: false };
+    return null;
+  }
+
+  async function copyWorkspacePath(): Promise<void> {
+    menu = null;
+    const path = prompt.workspaceAbs || prompt.workspacePath;
+    if (!path) return;
+    const clipboard = navigator.clipboard;
+    if (!clipboard?.writeText) {
+      ui.status = "clipboard write is unavailable";
+      return;
+    }
+    try {
+      await clipboard.writeText(path);
+      setTransientStatus("copied metadata dir");
+    } catch (err) {
+      ui.status = `copy failed: ${(err as Error).message}`;
+    }
+  }
+
   function submit(): void {
     onSubmit(prompt.buffer);
   }
@@ -212,7 +256,7 @@
     // (`fullstack-a-18` threaded `onSubmit` to it), and CM's keymap
     // runner calls `preventDefault()` when its handler returns true.
     // Without this guard the chord triggers submit twice: once from
-    // the CM keymap, once from the wrapper after the event bubbles —
+    // the CM keymap, once from the wrapper after the event bubbles,
     // `pwd` arrives in the PTY as `pwdpwd`. Source mode has no
     // Mod-Enter binding so it still reaches this wrapper unhandled
     // and dispatches once.
@@ -220,7 +264,7 @@
     if (e.key === "Escape") {
       e.preventDefault();
       e.stopPropagation();
-      onClose();
+      menu = null;
       return;
     }
     if (e.key === "Enter" && (e.metaKey || e.ctrlKey) && !e.altKey && !e.shiftKey) {
@@ -260,6 +304,12 @@
     menu = { x: e.clientX, y: e.clientY };
   }
 
+  function openMenuFromButton(e: MouseEvent): void {
+    e.stopPropagation();
+    const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
+    menu = { x: Math.round(rect.left), y: Math.round(rect.bottom + 6) };
+  }
+
   function onWindowPointerDown(e: PointerEvent): void {
     if (!menu) return;
     const target = e.target as HTMLElement | null;
@@ -267,74 +317,11 @@
     menu = null;
   }
 
-  async function newFileFromHere(): Promise<void> {
-    menu = null;
-    const path = await uiPathPrompt({
-      title: "new file from prompt",
-      defaultValue: "prompt.md",
-      kind: "file",
-      mode: "create",
-      validate: (value) =>
-        isEditableText(value)
-          ? null
-          : `'${value}' is not an editable text file (only .md and .txt)`,
-    });
-    if (!path) return;
-    const target = appendDefaultMd(path);
-    try {
-      await api.create(target, false, prompt.buffer);
-      await refreshTree();
-      await openInActivePane(target);
-      // `fullstack-a-86`: success toast auto-dismisses (3s)
-      // — same shape as `-a-85`'s move-success fix. Error
-      // path stays persistent so the user notices failures.
-      setTransientStatus(`Created ${target}`);
-    } catch (err) {
-      ui.status = `create failed: ${(err as Error).message}`;
-    }
-  }
-
-  async function watchDirectory(): Promise<void> {
-    menu = null;
-    watcherError = "";
-    if (!terminalSessionId) {
-      watcherError = "terminal session is not ready";
-      return;
-    }
-    const path = await uiPathPrompt({
-      title: "watch directory",
-      defaultValue: watcherPath ?? "",
-      kind: "folder",
-      // `fullstack-b-10`: the watcher dialog ATTACHES an event-file
-      // listener; it never overwrites the target dir. Passing
-      // `mode: "attach"` routes the modal through the
-      // `PathPromptMode = "attach"` branches landed in
-      // `fullstack-b-3` so the misleading
-      // `⚠ overwrites existing directory <name>/` warning stays
-      // hidden and the hint reads "attach watcher to X/" instead
-      // of "moves to X/".
-      mode: "attach",
-      allowAbsolute: true,
-    });
-    if (!path) return;
-    watcherBusy = true;
-    try {
-      await api.setTerminalWatcher(terminalSessionId, path);
-      onWatcherStarted?.(path);
-    } catch (err) {
-      watcherError = `watch failed: ${(err as Error).message}`;
-    } finally {
-      watcherBusy = false;
-    }
-  }
-
-  /// `fullstack-a-78`: repurpose the "Watch directory" / now
-  /// "New Team" affordance to open the global TeamDialog.
-  /// The dialog's Bootstrap button hands off to the orchestrator
-  /// (`fullstack-a-79`) which persists the team config, loads
-  /// the per-team watcher, and spawns worker terminals seeded
-  /// with the identity prompt. The dialog auto-closes on
-  /// Bootstrap so the Rich Prompt regains focus.
+  /// Phase 9: Spawn agents moved into the prompt action menu. The
+  /// dialog's Bootstrap button hands off to the orchestrator, which
+  /// persists the team config, loads the per-team watcher, spawns
+  /// terminals, and waits for preflight confirmation before prompt
+  /// staging.
   function openNewTeamDialog(): void {
     menu = null;
     openGlobalTeamDialog({
@@ -354,66 +341,18 @@
     });
   }
 
-  async function stopWatching(): Promise<void> {
+  async function copySpawnAgentsConfig(): Promise<void> {
     menu = null;
-    watcherError = "";
-    if (!terminalSessionId) {
-      onWatcherStopped?.();
+    const clipboard = navigator.clipboard;
+    if (!clipboard?.writeText) {
+      ui.status = "clipboard write is unavailable";
       return;
     }
-    watcherBusy = true;
     try {
-      await api.clearTerminalWatcher(terminalSessionId);
-      onWatcherStopped?.();
+      await clipboard.writeText(exportTeamDialogConfig(defaultTeamConfig()));
+      setTransientStatus("copied spawn agents config");
     } catch (err) {
-      if (/409|404|watcher|not found|not attached|conflict/i.test((err as Error).message || "")) {
-        onWatcherStopped?.();
-        // `fullstack-a-86`: auto-dismiss the reload-detected
-        // "watcher detached" toast — it's informational and
-        // doesn't require user action.
-        setTransientStatus("watcher detached on reload");
-        return;
-      }
-      watcherError = `stop failed: ${(err as Error).message}`;
-    } finally {
-      watcherBusy = false;
-    }
-  }
-
-  /// `fullstack-b-13`: read the per-prompt submit-mode with a
-  /// safe default of `"shell"` for the absent / new-prompt case.
-  function submitMode(): "shell" | "agent" {
-    return prompt.submitMode ?? "shell";
-  }
-
-  let submitModeBusy = $state(false);
-
-  /// `fullstack-b-13`: flip the per-prompt submit-mode AND
-  /// propagate the new mode to chan-server via
-  /// `PUT /api/terminal/:session/submit-mode`. The server uses
-  /// the value in `dispatch_agent_event` so the survey-reply
-  /// "poke" notification picks the right trailing chord bytes
-  /// for THIS session. If the PUT fails (404 stale session,
-  /// 5xx server error), the SPA-side flip is rolled back so
-  /// the toggle matches reality.
-  async function toggleSubmitMode(): Promise<void> {
-    menu = null;
-    const next = submitMode() === "agent" ? "shell" : "agent";
-    const previous = submitMode();
-    prompt.submitMode = next;
-    if (!terminalSessionId) {
-      // No live session yet — the SPA-side flip is the source
-      // of truth until the next attach + propagation.
-      return;
-    }
-    submitModeBusy = true;
-    try {
-      await api.setTerminalSubmitMode(terminalSessionId, next);
-    } catch (err) {
-      prompt.submitMode = previous;
-      ui.status = `submit-mode flip failed: ${(err as Error).message}`;
-    } finally {
-      submitModeBusy = false;
+      ui.status = `copy failed: ${(err as Error).message}`;
     }
   }
 
@@ -471,74 +410,45 @@
       />
     {/if}
     <div class="spacer"></div>
-    <button type="button" class="icon-btn" onclick={newFileFromHere} title="New file from here" aria-label="New file from here">
-      <FilePlus size={16} strokeWidth={1.75} aria-hidden="true" />
-    </button>
     <button
       type="button"
       class="icon-btn"
-      onclick={openSpawnDialog}
-      title="Spawn agent"
-      aria-label="Spawn agent"
+      onclick={openMenuFromButton}
+      title="Rich Prompt actions"
+      aria-label="Rich Prompt actions"
+      aria-haspopup="menu"
+      aria-expanded={menu ? "true" : "false"}
     >
-      <Bot size={16} strokeWidth={1.75} aria-hidden="true" />
+      <Plus size={16} strokeWidth={1.75} aria-hidden="true" />
     </button>
-    <!-- `fullstack-a-78` slice 1: repurposed from "Watch directory"
-         to "New Team" per addendum-b. The watcher backend is
-         still used internally — the TeamDialog → -a-79
-         orchestrator wires watcher attachment as part of the
-         team bootstrap chain. The dropdown's "Watch directory"
-         entry stays for now (legacy attach-watcher flow); slice
-         2 may collapse it. -->
-    <button
-      type="button"
-      class="icon-btn"
-      class:on={Boolean(watcherPath)}
-      onclick={openNewTeamDialog}
-      title="New Team"
-      aria-label="New Team"
+    <span
+      class="event-pill"
+      title={watcherPath ? `Watching ${watcherPath}` : "No event watcher"}
+      aria-label={`${eventCount} visible events`}
     >
-      <FolderSearch size={16} strokeWidth={1.75} aria-hidden="true" />
-    </button>
+      {eventCount}
+    </span>
+    <select
+      class="agent-picker"
+      value={agentTarget()}
+      disabled={agentModeBusy}
+      aria-label="Agent picker"
+      title="Agent picker"
+      onchange={(e) => void setAgentTarget((e.currentTarget as HTMLSelectElement).value as AgentTarget)}
+    >
+      <option value="none">none</option>
+      <option value="claude">claude</option>
+      <option value="codex">codex</option>
+      <option value="gemini">gemini</option>
+    </select>
     <button type="button" class="icon-btn" onclick={submit} title="Send prompt" aria-label="Send prompt">
       <Send size={16} strokeWidth={1.75} aria-hidden="true" />
-    </button>
-    <!-- `fullstack-b-13`: shell-vs-agent submit-mode toggle.
-         Shell mode (default; button off): Cmd+Enter sends the
-         buffer as-is, the shell sees the editor's trailing
-         newline as Enter. Agent mode (button on): Cmd+Enter
-         strips trailing newlines, appends the agent-submit
-         chord so a Claude Code / codex / gemini session running
-         in the terminal treats the buffer as a submitted
-         message instead of multi-line draft input. The same
-         toggle drives chan-server's `dispatch_agent_event`
-         path so survey-reply "poke" notifications pick the
-         right trailing bytes. -->
-    <button
-      type="button"
-      class="icon-btn"
-      class:on={submitMode() === "agent"}
-      onclick={toggleSubmitMode}
-      disabled={submitModeBusy}
-      title={submitMode() === "agent"
-        ? "Submit mode: agent (Cmd+Enter sends Claude Code's submit chord)"
-        : "Submit mode: shell (default; Cmd+Enter submits the buffer verbatim)"}
-      aria-label={submitMode() === "agent"
-        ? "Switch submit mode to shell"
-        : "Switch submit mode to agent"}
-      aria-pressed={submitMode() === "agent"}
-    >
-      {#if submitMode() === "agent"}
-        <Bot size={16} strokeWidth={1.75} aria-hidden="true" />
-      {:else}
-        <Terminal size={16} strokeWidth={1.75} aria-hidden="true" />
-      {/if}
     </button>
     <!-- `fullstack-a-24`: collapse/expand the prompt to a minimal
          bar so chat / survey bubbles above get more vertical room.
          Distinct from Close (dismiss); collapse keeps the prompt
          attached, just smaller. Chevron orientation flips with the
-         state — down to collapse-toward-bottom, up to expand. -->
+         state, down to collapse-toward-bottom, up to expand. -->
     <button
       type="button"
       class="icon-btn"
@@ -553,15 +463,12 @@
         <ChevronDown size={16} strokeWidth={1.75} aria-hidden="true" />
       {/if}
     </button>
-    <button type="button" class="icon-btn" onclick={onClose} title="Close" aria-label="Close">
-      <X size={16} strokeWidth={1.75} aria-hidden="true" />
-    </button>
   </header>
-  {#if watcherPath || watcherError}
-    <div class="watcher-row" class:error={Boolean(watcherError)}>
-      <span>{watcherError || `watching ${watcherPath}`}</span>
-      {#if watcherPath}
-        <button type="button" onclick={stopWatching} disabled={watcherBusy}>Stop watching</button>
+  {#if workspaceRow}
+    <div class="workspace-row" class:error={workspaceRow.error}>
+      <span>{workspaceRow.text}</span>
+      {#if prompt.workspaceAbs || prompt.workspacePath}
+        <button type="button" onclick={copyWorkspacePath}>Copy path</button>
       {/if}
     </div>
   {/if}
@@ -602,10 +509,10 @@
          (overlay vs in-editor) was misaligned. -->
   </div>
   {#if menu}
-    <div class="ctx" style:left={`${menu.x}px`} style:top={`${menu.y}px`}>
+    <div class="ctx" style:left={`${menu.x}px`} style:top={`${menu.y}px`} role="menu">
       <!-- `fullstack-a-30`: per-prompt page-width slider, mirrors
            the editor's tab-menu slider. Sets `prompt.pageWidthRatio`
-           directly — does not touch the global `pageWidth.ratio`,
+           directly, does not touch the global `pageWidth.ratio`,
            so narrowing this prompt does not cascade onto the
            editor's wrap or onto sibling tiles. 100 % unsets the
            per-prompt ratio (rounds to absent on serialize). -->
@@ -637,24 +544,33 @@
         <Type size={15} strokeWidth={1.75} aria-hidden="true" />
         <span>{toolbarOpen() ? "Hide style toolbar" : "Show style toolbar"}</span>
       </button>
-      <button type="button" onclick={newFileFromHere}>
-        <FilePlus size={15} strokeWidth={1.75} aria-hidden="true" />
-        <span>New File from here</span>
-      </button>
-      <button type="button" onclick={watchDirectory}>
-        <FolderSearch size={15} strokeWidth={1.75} aria-hidden="true" />
-        <span>Watch directory</span>
-      </button>
       <button type="button" onclick={openSpawnDialog}>
         <Bot size={15} strokeWidth={1.75} aria-hidden="true" />
         <span>Spawn agent</span>
       </button>
-      {#if watcherPath}
-        <button type="button" onclick={stopWatching}>
-          <FolderSearch size={15} strokeWidth={1.75} aria-hidden="true" />
-          <span>Stop watching</span>
+      <button type="button" onclick={openNewTeamDialog}>
+        <Bot size={15} strokeWidth={1.75} aria-hidden="true" />
+        <span>Spawn agents</span>
+      </button>
+      {#if prompt.workspaceAbs || prompt.workspacePath}
+        <button type="button" onclick={copyWorkspacePath}>
+          <Copy size={15} strokeWidth={1.75} aria-hidden="true" />
+          <span>Copy metadata dir</span>
         </button>
       {/if}
+      <button type="button" onclick={copySpawnAgentsConfig}>
+        <Copy size={15} strokeWidth={1.75} aria-hidden="true" />
+        <span>Copy Spawn agents config</span>
+      </button>
+      <button type="button" onclick={toggleCollapsed}>
+        {#if collapsed()}
+          <ChevronUp size={15} strokeWidth={1.75} aria-hidden="true" />
+          <span>Expand prompt</span>
+        {:else}
+          <ChevronDown size={15} strokeWidth={1.75} aria-hidden="true" />
+          <span>Collapse prompt</span>
+        {/if}
+      </button>
       <button type="button" onclick={() => void setBubbleMode("stack")}>
         <Type size={15} strokeWidth={1.75} aria-hidden="true" />
         <span>Bubble stack</span>
@@ -703,7 +619,7 @@
     min-height: 0;
     height: auto;
   }
-  .rich-prompt.collapsed .watcher-row,
+  .rich-prompt.collapsed .workspace-row,
   .rich-prompt.collapsed .composer-editor {
     display: none;
   }
@@ -761,15 +677,40 @@
     color: var(--text);
     border-color: var(--btn-hover);
   }
-  .icon-btn.on {
-    color: var(--link);
-    border-color: var(--link);
-  }
   .icon-btn:disabled {
     cursor: default;
     opacity: .55;
   }
-  .watcher-row {
+  .event-pill {
+    min-width: 28px;
+    height: 26px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    background: var(--bg);
+    color: var(--text-secondary);
+    font-size: 12px;
+    font-variant-numeric: tabular-nums;
+    flex-shrink: 0;
+  }
+  .agent-picker {
+    height: 26px;
+    max-width: 92px;
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    background: var(--btn-bg);
+    color: var(--text);
+    font: inherit;
+    font-size: 12px;
+    padding: 0 6px;
+    flex-shrink: 0;
+  }
+  .agent-picker:disabled {
+    opacity: .55;
+  }
+  .workspace-row {
     display: flex;
     align-items: center;
     gap: 8px;
@@ -780,16 +721,16 @@
     background: var(--bg-card);
     border-bottom: 1px solid var(--border);
   }
-  .watcher-row.error {
+  .workspace-row.error {
     color: var(--danger-text);
   }
-  .watcher-row span {
+  .workspace-row span {
     min-width: 0;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
   }
-  .watcher-row button {
+  .workspace-row button {
     flex-shrink: 0;
     min-height: 24px;
     border: 1px solid var(--border);
@@ -816,7 +757,7 @@
      Root cause: CM6 sizes the cursor from the font's natural
      line-box (~1.2 × font-size = 19.2px for 16px font), but the
      placeholder span inherits `.cm-line`'s `line-height: 1.8`
-     (28.8px) and vertically aligns to `top` — so its text
+     (28.8px) and vertically aligns to `top`, so its text
      glyphs sit lower than the cursor's bounding box.
      Fix: collapse the placeholder's box to match the cursor's
      natural line-box (`line-height: 1.2`) + center-align vertically

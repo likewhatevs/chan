@@ -16,6 +16,7 @@ use std::sync::Mutex;
 
 use serde::Serialize;
 use tantivy::collector::TopDocs;
+use tantivy::indexer::IndexWriterOptions;
 use tantivy::query::{BooleanQuery, Occur, Query, QueryParser, RegexQuery};
 use tantivy::schema::{Field, Schema, SchemaBuilder, Value, FAST, INDEXED, STORED, STRING, TEXT};
 use tantivy::snippet::SnippetGenerator;
@@ -28,6 +29,8 @@ use super::config::Chunking;
 /// Memory budget per writer batch. tantivy's recommendation is
 /// 50 MB minimum; our corpora are small so this is more than enough.
 const WRITER_BUDGET: usize = 50_000_000;
+const TANTIVY_MIN_MEMORY_PER_THREAD: usize = 15_000_000;
+const TANTIVY_MAX_AUTO_THREADS: usize = 8;
 
 /// One search hit. Field naming matches the API response shape so
 /// the server layer can serialize these directly.
@@ -93,7 +96,13 @@ impl Bm25Index {
         // bump => full rebuild); the caller (index::Index) is
         // responsible for clearing the dir before bumps.
         let index = Index::open_or_create(tantivy::directory::MmapDirectory::open(&dir)?, schema)?;
-        let writer = index.writer(WRITER_BUDGET)?;
+        let writer_budget = crate::fd_budget::tantivy_writer_budget(default_writer_threads());
+        let writer_options = IndexWriterOptions::builder()
+            .num_worker_threads(writer_budget.worker_threads)
+            .num_merge_threads(writer_budget.merge_threads)
+            .memory_budget_per_thread(WRITER_BUDGET / writer_budget.worker_threads)
+            .build();
+        let writer = index.writer_with_options(writer_options)?;
         let reader = index
             .reader_builder()
             .reload_policy(ReloadPolicy::OnCommitWithDelay)
@@ -317,6 +326,17 @@ impl Bm25Index {
         }
         Ok(Some(Box::new(BooleanQuery::new(top))))
     }
+}
+
+fn default_writer_threads() -> usize {
+    let mut threads = std::thread::available_parallelism()
+        .map(|n| n.get())
+        .unwrap_or(2)
+        .min(TANTIVY_MAX_AUTO_THREADS);
+    if WRITER_BUDGET / threads < TANTIVY_MIN_MEMORY_PER_THREAD {
+        threads = (WRITER_BUDGET / TANTIVY_MIN_MEMORY_PER_THREAD).max(1);
+    }
+    threads
 }
 
 /// Whether `tok` should bypass the prefix-match path and route

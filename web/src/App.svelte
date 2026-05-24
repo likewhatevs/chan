@@ -360,7 +360,8 @@
     scheduleSessionSave();
   }
   function spawnRichPromptFromContext(): void {
-    showOrSpawnRichPromptInFocusedPane();
+    const ctx = resolveSpawnContext();
+    showOrSpawnRichPromptInFocusedPane({ cwd: ctx.dir });
     scheduleSessionSave();
   }
   function spawnGraphFromContext(): void {
@@ -577,10 +578,8 @@
       // `fullstack-a-68 slice 2`: `P` now stages a fresh smart-
       // prompt terminal (a terminal tab with the rich-prompt
       // overlay armed open) instead of toggling the overlay on
-      // the focused pane's existing terminal. The pre-`-a-68
-      // slice 2` toggle behavior (`fullstack-50`) is reachable
-      // outside Hybrid Nav via the terminal hamburger / Cmd+P
-      // native chord.
+      // the focused pane's existing terminal. Phase 9 applies
+      // the same fresh-terminal rule to top-level Cmd+P.
       case "p":
       case "P":
         paneModeOpenRichPromptTerminal(resolveSpawnContext());
@@ -1128,7 +1127,7 @@
      a `filter` to unfocused panes; the rich prompt itself is a
      positioned z-index: 20 stacking context). -->
 <SpawnDialog />
-<!-- `fullstack-a-78`: New Team dialog mounted at App root for
+<!-- `fullstack-a-78`: Spawn agents dialog mounted at App root for
      the same stacking-context reasons as SpawnDialog. Renders
      only when a request is pending; closes itself on
      Bootstrap / Cancel / Escape / backdrop click. -->
