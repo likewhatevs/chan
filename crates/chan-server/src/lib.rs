@@ -293,7 +293,7 @@ async fn build_app(
     // Seed the per-machine model cache from the embedded bundle if
     // this build shipped one (`--features embed-model`). Cheap on
     // every launch: skipped if the default model is already laid out
-    // at the target. No-op (compile-gated out) on default builds —
+    // at the target. No-op (compile-gated out) on default builds;
     // they ship without the bundle and rely on the chan-drive
     // runtime resolver + the systacean-7 download flow instead.
     #[cfg(feature = "embed-model")]
@@ -666,7 +666,13 @@ pub async fn serve_via_tunnel(
                     // WebSocket URLs. The router itself is mounted at
                     // root: the public gateway strips the prefix before
                     // forwarding into the tunnel substream.
-                    *prefix_handle.write().unwrap() = reg.prefix.clone();
+                    match prefix_handle.write() {
+                        Ok(mut prefix) => *prefix = reg.prefix.clone(),
+                        Err(_) => {
+                            tracing::warn!("prefix lock poisoned; tunnel prefix update skipped");
+                            continue;
+                        }
+                    }
                     if production_public {
                         // Wildcard-subdomain shape on drive.chan.app:
                         // `{user}.drive.chan.app/{drive}/`. User is in
@@ -698,7 +704,7 @@ pub async fn serve_via_tunnel(
                         // server (e.g. chan-desktop maps each label to a
                         // per-tenant loopback port the desktop chose).
                         // Print identity only and skip the QR / browser
-                        // open — those would point at a wrong URL.
+                        // open; those would point at a wrong URL.
                         eprintln!(
                             "chan tunnel connected as {user}/{drive}",
                             user = reg.user,
@@ -790,7 +796,7 @@ fn router(state: Arc<AppState>) -> Router {
         .route("/api/index/semantic/download", post(api_semantic_download))
         .route("/api/index/semantic/model", patch(api_semantic_model_patch));
     // systacean-39: reports feature toggle endpoints. Mirror the
-    // semantic shape but NOT gated on `embeddings` — reports are
+    // semantic shape but NOT gated on `embeddings`; reports are
     // part of the BM25-only baseline. Settings-writes lane because
     // flipping the toggle is a settings change.
     let settings_writes = settings_writes
@@ -799,7 +805,7 @@ fn router(state: Arc<AppState>) -> Router {
     // systacean-40: screensaver overlay state + PIN endpoints.
     // PATCH/state, POST/pin, DELETE/pin land in settings-writes.
     // POST/verify is a read-side action (checks the stored hash)
-    // so it stays in the unrestricted lane below — non-owners
+    // so it stays in the unrestricted lane below; non-owners
     // can still trigger the verify path to dismiss the overlay.
     let settings_writes = settings_writes
         .route("/api/screensaver/state", patch(api_screensaver_patch))
@@ -849,13 +855,13 @@ fn router(state: Arc<AppState>) -> Router {
         .route("/api/drafts/promote", post(api_promote_draft))
         // systacean-31: per-team watcher lifecycle. Load spins up
         // a `Drive::watch_team` handle; unload drops it
-        // (non-destructive — workspace persists on disk).
+        // (non-destructive; workspace persists on disk).
         // `/loaded` is read-only for the SPA to know which teams
         // are active.
         // systacean-41 follow-up: axum 0.7 path-param syntax is
         // `:name`, NOT `{name}`. The original `-31` routes used
         // `{name}` (axum 0.8 shape) which axum 0.7 treats as a
-        // literal segment — these routes have never actually
+        // literal segment; these routes have never actually
         // matched real team names in production. Fixed here as
         // adjacent scope.
         .route("/api/teams/:name/load", post(api_team_load))

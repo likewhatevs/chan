@@ -19,7 +19,12 @@ and chan-drive error mappings.
 drive-cell lock is poisoned or unavailable. `chan open` style requests now get
 a structured control-socket error instead of taking down the server task.
 
+2026-05-24: the tunnel event task no longer unwraps the SPA prefix lock while
+processing a Connected event. A poisoned prefix lock now logs a warning and
+skips that event instead of unwinding the background task.
+
 Evidence:
 
 - `cargo test -p chan-server routes::storage::tests::err_from_reset_maps_poisoned_locks_to_500`
 - `cargo test -p chan-server control_socket::tests`
+- `cargo test -p chan-server --lib`
