@@ -19,9 +19,9 @@ Progress:
 - 2026-05-24: retuned Matrix screen-lock rain toward the dcragusa
   MatrixScreensaver reference.
 - 2026-05-24: added visible MatrixScreensaver attribution in Settings About.
-- 2026-05-24: started per-surface Hybrid body theme overrides for Editor,
+- 2026-05-24: verified per-surface Hybrid body theme overrides for Editor,
   Terminal, File Browser, Graph, and Infographics back-side settings.
-- 2026-05-24: queued screen saver presentation state machine cleanup for
+- 2026-05-24: verified screen saver presentation state machine cleanup for
   Settings Test and first-input unlock reveal.
 - 2026-05-24: queued right-click menu placement and hover/focus motion polish
   from manual screenshots.
@@ -35,6 +35,10 @@ Progress:
   graph responses emit ancestor chains to the drive root, and the semantic
   graph fills filesystem nodes from the unified tree independent of visual
   depth.
+- 2026-05-24: verified Terminal renderer stability guards, Hybrid menu
+  transactions, empty-pane close shortcuts, File Browser expansion
+  persistence, right-click chrome, and Draft promotion refresh with focused
+  frontend tests.
 
 ## Objectives
 
