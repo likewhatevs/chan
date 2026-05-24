@@ -360,18 +360,15 @@ jobs:
           cat release-extras/SHA256SUMS
 
       - name: Stage manual bundle
+        working-directory: chan/web-marketing
         run: |
           set -e
           tag=${GITHUB_REF#refs/tags/}
           version=${tag#chan-v}
-          mkdir -p release-extras/manual-bundle
-          cp -R chan/web-marketing/dist/manual release-extras/manual-bundle/manual
-          cp -R chan/web-marketing/dist/assets release-extras/manual-bundle/assets
-          cp chan/web-marketing/dist/favicon.ico release-extras/manual-bundle/
-          cp chan/web-marketing/dist/chan-mark.png release-extras/manual-bundle/
-          tar -czf "release-extras/chan-manual-${version}.tar.gz" \
-            -C release-extras/manual-bundle .
-          tar -tzf "release-extras/chan-manual-${version}.tar.gz" | LC_ALL=C sort | head -50
+          npm run bundle:manual -- \
+            --version "$version" \
+            --out "../../release-extras/chan-manual-${version}.tar.gz" \
+            --list
 
       - uses: softprops/action-gh-release@v2
         with:

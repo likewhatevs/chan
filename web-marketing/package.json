@@ -6,8 +6,9 @@
     "node": ">=20"
   },
   "scripts": {
+    "bundle:manual": "node scripts/bundle-manual.mjs",
     "build": "node scripts/build.mjs",
-    "check": "node --check scripts/build.mjs && node --check scripts/verify-release-assets.mjs && node --check scripts/smoke-dist.mjs && node scripts/build.mjs && node scripts/smoke-dist.mjs && sh -n dist/install.sh",
+    "check": "node --check scripts/build.mjs && node --check scripts/bundle-manual.mjs && node --check scripts/verify-release-assets.mjs && node --check scripts/smoke-dist.mjs && node scripts/build.mjs && node scripts/bundle-manual.mjs --check && node scripts/smoke-dist.mjs && sh -n dist/install.sh",
     "smoke:dist": "node scripts/smoke-dist.mjs",
     "verify:release": "node scripts/verify-release-assets.mjs"
   }

@@ -41,6 +41,7 @@ npm run check
 The build/check gate:
 
 - renders `/`, `/install/`, `/manual/`, nested manual pages, and `/install.sh`
+- packages the release manual bundle from generated manual pages
 - writes `CNAME` for `chan.app`
 - copies static assets into `dist/`
 - fails on missing required inputs
@@ -74,6 +75,13 @@ npm run verify:release
 The verifier checks the latest GitHub Release for the desktop downloads,
 standalone CLI tarballs, `VERSION`, `SHA256SUMS`, the manual bundle, and the
 GitHub latest-download URLs used by the public site.
+
+Build the release manual bundle locally:
+
+```sh
+npm run build
+npm run bundle:manual
+```
 
 While `github.com/fiorix/chan` is still private during pre-release work, use
 `--skip-latest-download-heads` for asset-shape checks. The public launch

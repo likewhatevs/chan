@@ -52,6 +52,9 @@ Follow-up in this wave:
 - The generated `dist/` artifact now has a loopback HTTP smoke for `/`,
   `/install/`, `/manual/`, `/manual/install/`, `/install.sh`, and the removed
   `/install.ps1` route.
+- `npm run bundle:manual` packages `chan-manual-<version>.tar.gz` from
+  generated manual pages and shared site assets. The release workflow uses
+  this script instead of hand-rolled inline copy/tar commands.
 
 Latest local checks:
 
@@ -69,6 +72,7 @@ Latest local checks:
 - `npm run build` verifies the stale-copy guards against generated output.
 - `npm run check` in `web-marketing/`
 - `npm run smoke:dist` in `web-marketing/`
+- `npm run bundle:manual -- --check` in `web-marketing/`
 
 Next wave:
 
