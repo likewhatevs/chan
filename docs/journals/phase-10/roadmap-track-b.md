@@ -45,6 +45,9 @@ Follow-up in this wave:
 - `npm run check` is now the single local and CI site gate: script syntax
   checks, static site build, generated link/copy/release-contract validation,
   and shell syntax for `dist/install.sh`.
+- Committed follow-up checkpoints:
+  - `7b6167f` guards generated public copy against stale claims.
+  - `f949bcd` routes CI and Pages through `npm run check`.
 
 Latest local checks:
 
@@ -64,6 +67,8 @@ Latest local checks:
 
 Next wave:
 
+- Add a local HTTP smoke for the generated `web-marketing/dist/` routes in
+  the Track B test plan.
 - Run `npm run verify:release` without `--allow-missing-manual` and without
   `--skip-latest-download-heads` after the next `chan-v*` tag includes the
   manual bundle and the repo is public.
