@@ -616,9 +616,12 @@ fn classify_watch_event(event: &WatchEvent, context: WatchContext) -> WatchActio
         },
         WatchKind::Created | WatchKind::Modified | WatchKind::Removed => {
             let Some(path) = event.path.as_deref() else {
-                return WatchAction::Rebuild {
-                    reason: "path-less event",
-                };
+                // macOS FSEvents can emit ordinary path-less
+                // create/modify/remove notifications during metadata
+                // churn. ProviderError and channel lag are the actual
+                // loss-of-scope signals; rebuilding here makes normal
+                // Rich Prompt workspace activity look broken.
+                return WatchAction::Ignore;
             };
             if !chan_drive::fs_ops::is_indexable_text(path) {
                 return WatchAction::Ignore;
@@ -650,9 +653,7 @@ fn classify_watch_event(event: &WatchEvent, context: WatchContext) -> WatchActio
                 }
             }
             if event.path.is_none() && event.to.is_none() {
-                WatchAction::Rebuild {
-                    reason: "path-less rename",
-                }
+                WatchAction::Ignore
             } else if changes.is_empty() {
                 WatchAction::Ignore
             } else {
@@ -860,24 +861,24 @@ mod tests {
     }
 
     #[test]
-    fn classify_watch_event_requests_rebuild_on_lost_scope() {
+    fn classify_watch_event_requests_rebuild_on_provider_loss() {
         assert!(matches!(
             classify(&ev(WatchKind::ProviderError, Some("overflow"), None)),
             WatchAction::Rebuild {
                 reason: "provider-error"
             }
         ));
+    }
+
+    #[test]
+    fn classify_watch_event_ignores_pathless_non_provider_noise() {
         assert!(matches!(
             classify(&ev(WatchKind::Modified, None, None)),
-            WatchAction::Rebuild {
-                reason: "path-less event"
-            }
+            WatchAction::Ignore
         ));
         assert!(matches!(
             classify(&ev(WatchKind::Renamed, None, None)),
-            WatchAction::Rebuild {
-                reason: "path-less rename"
-            }
+            WatchAction::Ignore
         ));
     }
 

@@ -463,3 +463,20 @@ Verification:
 The isolated repo rebuild indexed 714 files and 14917 chunks with zero errors
 under a 256 FD soft limit. After adding the live-drive permit, the artificial
 `--test-threads=32` stress also passes under the same low limit.
+
+2026-05-24 Rich Prompt watcher warning follow-up:
+
+- Web browser validation reported repeated
+  `watcher event stream lost scope; requesting rebuild` warnings during normal
+  Rich Prompt workspace activity.
+- Core classified path-less non-provider watcher events as notify noise for
+  metadata churn, not a real loss-of-scope signal.
+- The server indexer now ignores path-less create, modify, remove, and rename
+  events. Provider errors and broadcast lag still request a rebuild.
+
+Verification:
+
+- `cargo test -p chan-server indexer::tests::classify_watch_event --lib`
+- `cargo test -p chan-server --lib`
+- `cargo fmt --check`
+- `git diff --check`

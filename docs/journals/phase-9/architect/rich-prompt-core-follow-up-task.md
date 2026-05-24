@@ -2,7 +2,7 @@
 
 Date: 2026-05-24
 Owner: Core Architect
-Status: Open
+Status: Closed
 
 ## Task
 
@@ -64,3 +64,22 @@ Pick one and document the result:
   path-less event or rename case.
 - Do not change Web shortcut semantics. Browser validation should use Cmd+Alt+P
   or Mod+. p; native/desktop may validate literal Cmd+P.
+
+## Resolution
+
+Core classified path-less non-provider watcher events as macOS notify noise for
+normal metadata activity. The indexer now ignores path-less create, modify,
+remove, and rename events instead of treating them as lost scope. Provider
+errors and broadcast lag still request a full rebuild.
+
+Regression coverage:
+
+- `indexer::tests::classify_watch_event_ignores_pathless_non_provider_noise`
+- `indexer::tests::classify_watch_event_requests_rebuild_on_provider_loss`
+
+Verification:
+
+- `cargo test -p chan-server indexer::tests::classify_watch_event --lib`
+- `cargo test -p chan-server --lib`
+- `cargo fmt --check`
+- `git diff --check`

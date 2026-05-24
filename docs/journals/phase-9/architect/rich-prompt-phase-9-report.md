@@ -2,7 +2,7 @@
 
 Date: 2026-05-24
 Owners: Core Architect, Web Architect
-Status: Integrated slice complete
+Status: Integrated slice complete, Core warning follow-up closed
 
 ## Summary
 
@@ -11,9 +11,9 @@ server-owned Rich Prompt workspaces, wires watcher-backed status into the
 terminal UI, archives submitted prompts through Core, and tears down workspace
 state from terminal close.
 
-The Web lane is complete from implementation and validation perspective. The
-remaining follow-up is Core classification of path-less watcher rebuild
-warnings observed during browser validation.
+The Web lane is complete from implementation and validation perspective. Core
+has closed the path-less watcher warning follow-up by treating non-provider
+path-less events as notify noise rather than rebuild signals.
 
 ## Implemented
 
@@ -75,6 +75,6 @@ warnings observed during browser validation.
 
 ## Follow-Up
 
-Core should inspect and classify the path-less watcher rebuild warnings. See:
+Core inspected the path-less watcher rebuild warnings. See:
 
 - `docs/journals/phase-9/architect/rich-prompt-core-follow-up-task.md`
