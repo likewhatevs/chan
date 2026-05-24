@@ -142,6 +142,19 @@ function responseTextError(res: Response): Promise<never> {
     });
 }
 
+function xhrTextError(status: number, statusText: string, text: string): never {
+  let message = text || statusText || "request failed";
+  try {
+    const body = JSON.parse(text) as { error?: unknown };
+    if (typeof body.error === "string" && body.error.trim()) {
+      message = body.error;
+    }
+  } catch {
+    // Keep the raw text fallback.
+  }
+  throw new ApiError(status, message);
+}
+
 function contentDispositionFilename(value: string | null): string | null {
   if (!value) return null;
   const match = /filename="([^"]+)"/i.exec(value) ?? /filename=([^;]+)/i.exec(value);
@@ -350,6 +363,64 @@ export const api = {
   },
   create: (path: string, isDir: boolean, content?: string) =>
     req<void>("POST", "/api/files", { path, is_dir: isDir, content }),
+  uploadFile: (
+    file: File,
+    dir: string,
+    opts: {
+      signal?: AbortSignal;
+      onProgress?: (progress: {
+        loaded: number;
+        total: number | null;
+        lengthComputable: boolean;
+      }) => void;
+    } = {},
+  ): Promise<{ path: string; size: number }> =>
+    new Promise((resolve, reject) => {
+      const form = new FormData();
+      form.append("file", file);
+      form.append("dir", dir);
+      const xhr = new XMLHttpRequest();
+      xhr.open("POST", apiPath("/api/files/upload"));
+      for (const [name, value] of Object.entries(directAuthHeaders())) {
+        xhr.setRequestHeader(name, value);
+      }
+      xhr.upload.onprogress = (event) => {
+        opts.onProgress?.({
+          loaded: event.loaded,
+          total: event.lengthComputable ? event.total : null,
+          lengthComputable: event.lengthComputable,
+        });
+      };
+      xhr.onload = () => {
+        if (xhr.status < 200 || xhr.status >= 300) {
+          try {
+            xhrTextError(xhr.status, xhr.statusText, xhr.responseText);
+          } catch (err) {
+            reject(err);
+          }
+          return;
+        }
+        try {
+          resolve(JSON.parse(xhr.responseText) as { path: string; size: number });
+        } catch (err) {
+          reject(err);
+        }
+      };
+      xhr.onerror = () => reject(new ApiError(xhr.status || 0, "upload failed"));
+      xhr.onabort = () => {
+        const err = new Error("upload cancelled");
+        err.name = "AbortError";
+        reject(err);
+      };
+      const abort = () => xhr.abort();
+      opts.signal?.addEventListener("abort", abort, { once: true });
+      xhr.onloadend = () => opts.signal?.removeEventListener("abort", abort);
+      if (opts.signal?.aborted) {
+        xhr.abort();
+        return;
+      }
+      xhr.send(form);
+    }),
   /// `fullstack-a-66`: create a new draft directory + draft.md
   /// inside via the dedicated /api/drafts/new route. Picks the
   /// next `untitled` / `untitled-N` name server-side via

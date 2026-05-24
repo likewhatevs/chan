@@ -3,7 +3,7 @@
 
 use std::{io::Cursor, sync::Arc};
 
-use axum::extract::{Path as AxumPath, Query, State};
+use axum::extract::{Multipart, Path as AxumPath, Query, State};
 use axum::http::{header, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::Json;
@@ -608,9 +608,122 @@ fn create_target_exists(drive: &chan_drive::Drive, path: &str) -> bool {
     drive.stat(path).is_ok()
 }
 
+#[derive(Debug, Serialize)]
+struct UploadFileResponse {
+    path: String,
+    size: u64,
+}
+
+pub async fn api_upload_file(
+    State(state): State<Arc<AppState>>,
+    mut multipart: Multipart,
+) -> Response {
+    let mut chosen: Option<(String, Vec<u8>)> = None;
+    let mut dir = String::new();
+    loop {
+        match multipart.next_field().await {
+            Ok(Some(field)) => {
+                let name = field.name().unwrap_or("").to_owned();
+                match name.as_str() {
+                    "file" if chosen.is_none() => {
+                        let filename = field.file_name().unwrap_or("").to_owned();
+                        let bytes = match field.bytes().await {
+                            Ok(b) => b.to_vec(),
+                            Err(e) => {
+                                return err(
+                                    StatusCode::BAD_REQUEST,
+                                    format!("multipart read: {e}"),
+                                );
+                            }
+                        };
+                        chosen = Some((filename, bytes));
+                    }
+                    "dir" => match field.text().await {
+                        Ok(s) => dir = s,
+                        Err(e) => {
+                            return err(StatusCode::BAD_REQUEST, format!("multipart read: {e}"));
+                        }
+                    },
+                    _ => {}
+                }
+            }
+            Ok(None) => break,
+            Err(e) => return err(StatusCode::BAD_REQUEST, format!("multipart parse: {e}")),
+        }
+    }
+
+    let Some((filename, bytes)) = chosen else {
+        return err(
+            StatusCode::BAD_REQUEST,
+            "missing `file` part in multipart body".into(),
+        );
+    };
+
+    let drive = state.drive().clone();
+    let result =
+        tokio::task::spawn_blocking(move || upload_file_sync(&drive, &dir, &filename, &bytes))
+            .await;
+    match result {
+        Ok(Ok(upload)) => {
+            state.self_writes.note(&upload.path);
+            Json(upload).into_response()
+        }
+        Ok(Err(e)) => err_from(&e),
+        Err(e) => err(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("file upload task panicked: {e}"),
+        ),
+    }
+}
+
+fn upload_file_sync(
+    drive: &chan_drive::Drive,
+    dir: &str,
+    original_name: &str,
+    bytes: &[u8],
+) -> chan_drive::Result<UploadFileResponse> {
+    let dir = normalize_dir_query(dir)?;
+    if !dir.is_empty() {
+        let stat = drive.stat(&dir)?;
+        if !stat.is_dir {
+            return Err(chan_drive::ChanError::Io(format!("not a directory: {dir}")));
+        }
+    }
+    let filename = upload_leaf_filename(original_name)?;
+    let rel = join_rel(&dir, &filename);
+    if create_target_exists(drive, &rel) {
+        return Err(chan_drive::ChanError::PathAlreadyExists(rel));
+    }
+    drive.write_bytes(&rel, bytes)?;
+    Ok(UploadFileResponse {
+        path: rel,
+        size: bytes.len() as u64,
+    })
+}
+
+fn upload_leaf_filename(original_name: &str) -> chan_drive::Result<String> {
+    let leaf = original_name
+        .trim()
+        .rsplit(|c| c == '/' || c == '\\')
+        .next()
+        .unwrap_or("")
+        .trim();
+    if leaf.is_empty() {
+        return Err(chan_drive::ChanError::PathEmpty);
+    }
+    if leaf == "." || leaf == ".." || leaf.contains('\0') {
+        return Err(chan_drive::ChanError::PathEscape);
+    }
+    chan_drive::fs_ops::validate_rel(leaf)?;
+    Ok(leaf.to_string())
+}
+
 #[cfg(test)]
 mod file_browser_listing_tests {
-    use super::{create_target_exists, list_dir_entries, list_files_sync, ListFilesQuery};
+    use super::{
+        create_target_exists, list_dir_entries, list_files_sync, upload_file_sync,
+        upload_leaf_filename, ListFilesQuery,
+    };
 
     #[test]
     fn list_files_sync_keeps_drafts_out_of_root_dir_query() {
@@ -666,6 +779,53 @@ mod file_browser_listing_tests {
 
         assert!(create_target_exists(&drive, "notes"));
         assert!(!create_target_exists(&drive, "missing"));
+    }
+
+    #[test]
+    fn upload_file_sync_writes_binary_with_original_leaf_name() {
+        let cfg = tempfile::TempDir::new().unwrap();
+        let root = tempfile::TempDir::new().unwrap();
+        let lib = chan_drive::Library::open_at(cfg.path().join("config.toml")).unwrap();
+        lib.register_drive(root.path()).unwrap();
+        let drive = lib.open_drive(root.path()).unwrap();
+        drive.create_dir("assets").unwrap();
+
+        let uploaded = upload_file_sync(&drive, "assets", "photo 1.PNG", &[1, 2, 3]).unwrap();
+
+        assert_eq!(uploaded.path, "assets/photo 1.PNG");
+        assert_eq!(uploaded.size, 3);
+        assert_eq!(drive.read("assets/photo 1.PNG").unwrap(), vec![1, 2, 3]);
+    }
+
+    #[test]
+    fn upload_file_sync_rejects_existing_target() {
+        let cfg = tempfile::TempDir::new().unwrap();
+        let root = tempfile::TempDir::new().unwrap();
+        let lib = chan_drive::Library::open_at(cfg.path().join("config.toml")).unwrap();
+        lib.register_drive(root.path()).unwrap();
+        let drive = lib.open_drive(root.path()).unwrap();
+        drive.write_bytes("same.bin", b"old").unwrap();
+
+        let err = upload_file_sync(&drive, "", "same.bin", b"new").unwrap_err();
+
+        assert!(matches!(err, chan_drive::ChanError::PathAlreadyExists(p) if p == "same.bin"));
+        assert_eq!(drive.read("same.bin").unwrap(), b"old");
+    }
+
+    #[test]
+    fn upload_leaf_filename_uses_basename_and_rejects_empty_names() {
+        assert_eq!(
+            upload_leaf_filename(r"C:\tmp\report.pdf").unwrap(),
+            "report.pdf"
+        );
+        assert!(matches!(
+            upload_leaf_filename(""),
+            Err(chan_drive::ChanError::PathEmpty)
+        ));
+        assert!(matches!(
+            upload_leaf_filename(".."),
+            Err(chan_drive::ChanError::PathEscape)
+        ));
     }
 }
 

@@ -66,8 +66,8 @@ use routes::{
     api_search_files, api_set_terminal_submit_mode, api_set_terminal_watcher, api_storage_reset,
     api_submit_rich_prompt, api_team_create, api_team_duplicate, api_team_get_config,
     api_team_list_loaded, api_team_load, api_team_unload, api_terminal_event_reply,
-    api_terminal_watcher_events, api_terminal_ws, api_unset_terminal_watcher, api_write_file,
-    ws_upgrade,
+    api_terminal_watcher_events, api_terminal_ws, api_unset_terminal_watcher, api_upload_file,
+    api_write_file, ws_upgrade,
 };
 #[cfg(feature = "embeddings")]
 use routes::{
@@ -856,6 +856,10 @@ fn router(state: Arc<AppState>) -> Router {
         .route("/api/drive", get(api_get_drive))
         .route("/api/cloud-drives", get(api_cloud_drives))
         .route("/api/files", get(api_list_files).post(api_create_file))
+        .route(
+            "/api/files/upload",
+            post(api_upload_file).layer(DefaultBodyLimit::max(50 * 1024 * 1024)),
+        )
         // `fullstack-a-66`: New Draft action. Creates
         // `Drafts/<next-untitled>/draft.md` + indexes via the
         // chan-drive unified-path API (`systacean-25`/`-26`).

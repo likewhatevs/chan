@@ -9,6 +9,7 @@
   //                when nothing's happening.
   //   - import   : long-running import progress (contacts today;
   //                others slot in via the same `importStatus` store).
+  //   - transfer : File Browser uploads with a cancel affordance.
   //   - status   : transient `ui.status` messages (move/rename/delete
   //                failures, etc).
   //
@@ -21,6 +22,7 @@
   // Position: fixed bottom-left so it's independent of the workspace
   // layout, matching how BottomPill is anchored.
   import {
+    fileTransferStatus,
     indexStatus,
     importStatus,
     ui,
@@ -43,10 +45,11 @@
     indexStatus.value !== null && indexStatus.value.state !== "idle",
   );
   const importVisible = $derived(importStatus.value !== null);
+  const transferVisible = $derived(fileTransferStatus.value !== null);
   const statusVisible = $derived(!!ui.status);
   const paneModeVisible = $derived(paneMode.active);
   const anyVisible = $derived(
-    indexVisible || importVisible || statusVisible || paneModeVisible,
+    indexVisible || importVisible || transferVisible || statusVisible || paneModeVisible,
   );
 
   function toggleCollapse(): void {
@@ -96,13 +99,32 @@
             {importStatus.value!.label}
           </span>
         {/if}
-        {#if (indexVisible || importVisible) && statusVisible}
+        {#if (indexVisible || importVisible) && transferVisible}
+          <span class="sep">·</span>
+        {/if}
+        {#if transferVisible}
+          {@const transfer = fileTransferStatus.value!}
+          <span class="section" aria-label="file transfer status">
+            <span class="dot working"></span>
+            {transfer.label}
+            {#if transfer.cancel}
+              <button
+                type="button"
+                class="transfer-cancel"
+                onclick={transfer.cancel}
+                title="cancel upload"
+                aria-label="cancel upload"
+              >×</button>
+            {/if}
+          </span>
+        {/if}
+        {#if (indexVisible || importVisible || transferVisible) && statusVisible}
           <span class="sep">·</span>
         {/if}
         {#if statusVisible}
           <span class="section status-msg" aria-label="status message">{ui.status}</span>
         {/if}
-        {#if (indexVisible || importVisible || statusVisible) && paneModeVisible}
+        {#if (indexVisible || importVisible || transferVisible || statusVisible) && paneModeVisible}
           <span class="sep">·</span>
         {/if}
         {#if paneModeVisible}
@@ -231,6 +253,25 @@
   }
   .collapse:hover {
     color: var(--text);
+  }
+  .transfer-cancel {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 16px;
+    height: 16px;
+    border: 1px solid var(--border);
+    border-radius: 50%;
+    background: var(--bg);
+    color: var(--text);
+    cursor: pointer;
+    font: inherit;
+    line-height: 1;
+    padding: 0;
+  }
+  .transfer-cancel:hover {
+    border-color: var(--warn-text);
+    color: var(--warn-text);
   }
   @media (prefers-reduced-motion: reduce) {
     .app-statusbar,

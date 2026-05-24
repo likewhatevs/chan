@@ -46,6 +46,9 @@ Progress:
 - 2026-05-24: queued File Browser drag-and-drop transfer work: browser-side
   drop-to-upload, status-bar progress and cancel, plus native desktop
   drag-out/download follow-up in Track A.
+- 2026-05-24: implemented File Browser drop-to-upload with an exact-name
+  `/api/files/upload` route, status-bar progress and cancel, conflict refusal,
+  and visible tree refresh after successful uploads.
 
 Current wave:
 

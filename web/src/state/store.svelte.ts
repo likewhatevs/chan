@@ -1362,6 +1362,16 @@ export const importStatus = $state<{ value: { label: string } | null }>({
   value: null,
 });
 
+export const fileTransferStatus = $state<{
+  value: {
+    label: string;
+    progress: number | null;
+    cancel: (() => void) | null;
+  } | null;
+}>({
+  value: null,
+});
+
 /// Open/closed state of the content-search command palette
 /// (`SearchPanel.svelte`). Toggled by Cmd/Ctrl+K and by the
 /// search button in the toolbar.
@@ -2696,7 +2706,123 @@ async function performMove(path: string, target: string): Promise<void> {
   }
 }
 
+function uploadCancelledError(): Error {
+  const err = new Error("upload cancelled");
+  err.name = "AbortError";
+  return err;
+}
+
+function uploadLeafName(name: string): string {
+  return name.trim().split(/[\\/]/).pop()?.trim() ?? "";
+}
+
+function uploadTargetPath(dir: string, name: string): string {
+  const leaf = uploadLeafName(name);
+  return dir ? `${dir}/${leaf}` : leaf;
+}
+
+function uploadNameReason(name: string): string | null {
+  const leaf = uploadLeafName(name);
+  if (!leaf) return "file has no name";
+  if (leaf === "." || leaf === "..") return "file name is not allowed";
+  return null;
+}
+
 export const fileOps = {
+  async uploadFilesTo(destDir: string, dropped: FileList | File[]): Promise<void> {
+    if (fileTransferStatus.value) {
+      ui.status = "upload already in progress";
+      ui.statusKind = "persistent";
+      return;
+    }
+    const files = Array.from(dropped);
+    if (files.length === 0) return;
+    const seen = new Set<string>();
+    for (const file of files) {
+      const reason = uploadNameReason(file.name);
+      if (reason) {
+        ui.status = `upload failed: ${reason}`;
+        ui.statusKind = "persistent";
+        return;
+      }
+      const target = uploadTargetPath(destDir, file.name);
+      const draftsReason = fileBrowserDraftsPathReason(target);
+      if (draftsReason) {
+        ui.status = `upload failed: ${draftsReason}`;
+        ui.statusKind = "persistent";
+        return;
+      }
+      if (seen.has(target) || tree.entries.some((entry) => entry.path === target)) {
+        ui.status = `upload failed: '${target}' already exists`;
+        ui.statusKind = "persistent";
+        return;
+      }
+      seen.add(target);
+    }
+
+    let cancelRequested = false;
+    let activeAbort: AbortController | null = null;
+    const totalBytes = files.reduce((sum, file) => sum + file.size, 0);
+    let completedBytes = 0;
+    const cancel = (): void => {
+      cancelRequested = true;
+      activeAbort?.abort();
+    };
+    const setUploadStatus = (file: File, index: number, loaded: number): void => {
+      const currentLoaded = Math.min(Math.max(loaded, 0), file.size);
+      const progress =
+        totalBytes > 0
+          ? Math.min(100, Math.round(((completedBytes + currentLoaded) / totalBytes) * 100))
+          : 100;
+      fileTransferStatus.value = {
+        label: `uploading ${index + 1}/${files.length}: ${file.name} ${progress}%`,
+        progress,
+        cancel,
+      };
+    };
+
+    fileTransferStatus.value = {
+      label: `preparing ${files.length} upload${files.length === 1 ? "" : "s"}`,
+      progress: totalBytes > 0 ? 0 : 100,
+      cancel,
+    };
+    const uploaded: string[] = [];
+    try {
+      for (let i = 0; i < files.length; i++) {
+        if (cancelRequested) throw uploadCancelledError();
+        const file = files[i]!;
+        activeAbort = new AbortController();
+        setUploadStatus(file, i, 0);
+        const result = await api.uploadFile(file, destDir, {
+          signal: activeAbort.signal,
+          onProgress: (progress) => setUploadStatus(file, i, progress.loaded),
+        });
+        activeAbort = null;
+        if (cancelRequested) throw uploadCancelledError();
+        completedBytes += file.size;
+        uploaded.push(result.path);
+        await refreshTreeForPath(result.path);
+      }
+      if (uploaded.length > 0) {
+        revealAndSelect(uploaded[uploaded.length - 1]!);
+        setTransientStatus(
+          uploaded.length === 1
+            ? `Uploaded '${uploaded[0]}'`
+            : `Uploaded ${uploaded.length} files`,
+        );
+      }
+    } catch (e) {
+      if ((e as Error).name === "AbortError") {
+        setTransientStatus("Upload cancelled");
+      } else {
+        ui.status = `upload failed: ${(e as Error).message}`;
+        ui.statusKind = "persistent";
+      }
+    } finally {
+      activeAbort = null;
+      fileTransferStatus.value = null;
+    }
+  },
   async createFile(parentPath: string): Promise<void> {
     // Start directly on a concrete editable target. The modal
     // selects only the stem, so typing replaces "untitled" while

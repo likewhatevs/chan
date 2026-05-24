@@ -172,6 +172,14 @@
     return null;
   }
 
+  function hasTreeMove(e: DragEvent): boolean {
+    return !!e.dataTransfer?.types.includes(TREE_MOVE_MIME);
+  }
+
+  function hasExternalFiles(e: DragEvent): boolean {
+    return !!e.dataTransfer?.types.includes("Files");
+  }
+
   /// True when dropping `src` into `destDir` is a no-op or invalid:
   /// same parent already, dropping a directory into itself or a
   /// descendant, or dropping at the same location.
@@ -194,15 +202,14 @@
   }
 
   function onRowDragOver(e: DragEvent, destDir: string): void {
-    // Only react if the drag contains our tree-move payload. We can't
-    // call getData() in dragover (only in drop), so probe types[] for
-    // the mime we set in dragstart.
-    if (!e.dataTransfer?.types.includes(TREE_MOVE_MIME)) return;
+    const treeMove = hasTreeMove(e);
+    const externalFiles = hasExternalFiles(e);
+    if (!treeMove && !externalFiles) return;
     e.preventDefault();
     // Stop the event from bubbling to the root <ul>'s ondragover,
     // which would otherwise overwrite our selection with the root.
     e.stopPropagation();
-    e.dataTransfer.dropEffect = "move";
+    if (e.dataTransfer) e.dataTransfer.dropEffect = treeMove ? "move" : "copy";
     dropTarget = destDir;
   }
 
@@ -215,12 +222,19 @@
   async function onRowDrop(e: DragEvent, destDir: string): Promise<void> {
     dropTarget = null;
     const src = readTreeDrag(e);
-    if (!src) return;
+    const files = e.dataTransfer?.files;
+    if (!src && (!hasExternalFiles(e) || !files || files.length === 0)) return;
     e.preventDefault();
     e.stopPropagation();
-    if (isInvalidDrop(src, destDir)) return;
-    const target = dropTargetPath(src.path, destDir);
-    await fileOps.moveTo(src.path, target);
+    if (src) {
+      if (isInvalidDrop(src, destDir)) return;
+      const target = dropTargetPath(src.path, destDir);
+      await fileOps.moveTo(src.path, target);
+      return;
+    }
+    if (files && files.length > 0) {
+      await fileOps.uploadFilesTo(destDir, files);
+    }
   }
 
   type Folder = {
@@ -1034,6 +1048,9 @@
         aria-selected={browserSelection.path === node.path}
         draggable="true"
         ondragstart={(e) => onFileDragStart(e, node.path, false)}
+        ondragover={(e) => onRowDragOver(e, parentOf(node.path))}
+        ondragleave={() => onRowDragLeave(parentOf(node.path))}
+        ondrop={(e) => onRowDrop(e, parentOf(node.path))}
         title={fullPath(node.path) + (contact ? " (contact)" : editable ? "" : " (view-only)")}
         use:trackRow={node.path}
       >
