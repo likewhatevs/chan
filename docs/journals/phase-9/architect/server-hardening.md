@@ -23,8 +23,15 @@ a structured control-socket error instead of taking down the server task.
 processing a Connected event. A poisoned prefix lock now logs a warning and
 skips that event instead of unwinding the background task.
 
+2026-05-24: session blob routes no longer run chan-drive session I/O on tokio
+worker threads. `GET /api/session`, `PUT /api/session`, `DELETE /api/session`,
+and `GET /api/sessions` now execute the synchronous drive calls behind
+`spawn_blocking`, matching the file, search, graph, report, and inspector
+route shape.
+
 Evidence:
 
 - `cargo test -p chan-server routes::storage::tests::err_from_reset_maps_poisoned_locks_to_500`
 - `cargo test -p chan-server control_socket::tests`
+- `cargo test -p chan-server routes::sessions`
 - `cargo test -p chan-server --lib`

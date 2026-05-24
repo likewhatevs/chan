@@ -6,6 +6,7 @@
 
 use std::sync::Arc;
 
+use axum::body::Bytes;
 use axum::extract::{Query, State};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
@@ -22,44 +23,95 @@ pub struct SessionQuery {
     w: String,
 }
 
+async fn blocking_response(
+    f: impl FnOnce() -> Response + Send + 'static,
+    label: &'static str,
+) -> Response {
+    match tokio::task::spawn_blocking(f).await {
+        Ok(response) => response,
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("{label} task panicked: {e}"),
+        )
+            .into_response(),
+    }
+}
+
 pub async fn api_get_session(
     State(state): State<Arc<AppState>>,
     Query(q): Query<SessionQuery>,
 ) -> Response {
-    match state.drive().get_session(&q.w) {
-        Ok(Some(bytes)) => raw_json_response(bytes),
-        // 204 NO_CONTENT, not 404: "no session yet" is the normal
-        // first-launch state. transport.ts treats an empty 2xx body
-        // as `undefined`; the api wrapper coerces that to `null`.
-        Ok(None) => StatusCode::NO_CONTENT.into_response(),
-        Err(e) => err_from(&e),
-    }
+    let drive = state.drive();
+    let key = q.w;
+    blocking_response(
+        move || match drive.get_session(&key) {
+            Ok(Some(bytes)) => raw_json_response(bytes),
+            // 204 NO_CONTENT, not 404: "no session yet" is the normal
+            // first-launch state. transport.ts treats an empty 2xx body
+            // as `undefined`; the api wrapper coerces that to `null`.
+            Ok(None) => StatusCode::NO_CONTENT.into_response(),
+            Err(e) => err_from(&e),
+        },
+        "get session",
+    )
+    .await
 }
 
 pub async fn api_put_session(
     State(state): State<Arc<AppState>>,
     Query(q): Query<SessionQuery>,
-    body: axum::body::Bytes,
+    body: Bytes,
 ) -> Response {
-    match state.drive().put_session(&q.w, &body) {
-        Ok(()) => StatusCode::NO_CONTENT.into_response(),
-        Err(e) => err_from(&e),
-    }
+    let drive = state.drive();
+    let key = q.w;
+    blocking_response(
+        move || match drive.put_session(&key, &body) {
+            Ok(()) => StatusCode::NO_CONTENT.into_response(),
+            Err(e) => err_from(&e),
+        },
+        "put session",
+    )
+    .await
 }
 
 pub async fn api_delete_session(
     State(state): State<Arc<AppState>>,
     Query(q): Query<SessionQuery>,
 ) -> Response {
-    match state.drive().delete_session(&q.w) {
-        Ok(()) => StatusCode::NO_CONTENT.into_response(),
-        Err(e) => err_from(&e),
-    }
+    let drive = state.drive();
+    let key = q.w;
+    blocking_response(
+        move || match drive.delete_session(&key) {
+            Ok(()) => StatusCode::NO_CONTENT.into_response(),
+            Err(e) => err_from(&e),
+        },
+        "delete session",
+    )
+    .await
 }
 
 pub async fn api_list_sessions(State(state): State<Arc<AppState>>) -> Response {
-    match state.drive().list_sessions() {
-        Ok(keys) => Json(keys).into_response(),
-        Err(e) => err_from(&e),
+    let drive = state.drive();
+    blocking_response(
+        move || match drive.list_sessions() {
+            Ok(keys) => Json(keys).into_response(),
+            Err(e) => err_from(&e),
+        },
+        "list sessions",
+    )
+    .await
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn session_routes_wrap_sync_drive_io_in_spawn_blocking() {
+        let source = include_str!("sessions.rs");
+
+        assert!(source.contains("tokio::task::spawn_blocking(f)"));
+        assert!(source.contains("move || match drive.get_session(&key)"));
+        assert!(source.contains("move || match drive.put_session(&key, &body)"));
+        assert!(source.contains("move || match drive.delete_session(&key)"));
+        assert!(source.contains("move || match drive.list_sessions()"));
     }
 }
