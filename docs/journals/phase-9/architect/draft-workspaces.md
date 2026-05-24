@@ -172,3 +172,9 @@ discard, and no-clobber promote primitives. Promotion validates the draft
 workspace, rejects path escapes and occupied destinations, saves single-file
 drafts as a final markdown/text file, and saves workspace drafts by creating
 or merging a target directory without overwriting existing files.
+
+2026-05-24: chan-server now exposes Drafts lifecycle routes:
+`POST /api/drafts/inspect`, `POST /api/drafts/discard`, and
+`POST /api/drafts/promote`. The routes accept unified `Drafts/...` paths,
+delegate all filesystem policy to chan-drive, and return the promoted drive
+path plus promotion mode for web callers.

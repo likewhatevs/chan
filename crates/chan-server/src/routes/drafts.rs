@@ -28,6 +28,22 @@ use serde::{Deserialize, Serialize};
 use crate::error::{err, err_from};
 use crate::state::AppState;
 
+#[derive(Deserialize)]
+pub struct DraftPathPayload {
+    /// Any unified path inside the draft workspace, usually
+    /// `Drafts/<name>/draft.md`.
+    pub path: String,
+}
+
+#[derive(Deserialize)]
+pub struct DraftPromotePayload {
+    /// Any unified path inside the draft workspace.
+    pub path: String,
+    /// Drive-relative destination. Single-file drafts save to this
+    /// file; workspace drafts save to this directory.
+    pub target: String,
+}
+
 #[derive(Serialize)]
 pub struct DraftCreateResponse {
     /// Unified-path for the new draft.md: `Drafts/<name>/draft.md`.
@@ -38,6 +54,23 @@ pub struct DraftCreateResponse {
     /// Bare draft name (e.g. `"untitled"` or `"untitled-3"`), in
     /// case the SPA wants to show it separately from the path.
     pub name: String,
+}
+
+#[derive(Serialize, PartialEq, Eq, Debug)]
+pub struct DraftInspectResponse {
+    pub path: String,
+    pub name: String,
+    pub file_count: usize,
+    pub dir_count: usize,
+    pub total_size: u64,
+    pub has_attachments: bool,
+}
+
+#[derive(Serialize, PartialEq, Eq, Debug)]
+pub struct DraftPromoteResponse {
+    pub path: String,
+    pub name: String,
+    pub mode: &'static str,
 }
 
 /// `fullstack-a-66` slice d: payload for the Rich Prompt
@@ -100,6 +133,63 @@ pub async fn api_create_draft(State(state): State<Arc<AppState>>) -> Response {
     let path = format!("Drafts/{name}/draft.md");
     state.self_writes.note(&path);
     Json(DraftCreateResponse { path, name }).into_response()
+}
+
+pub async fn api_inspect_draft(
+    State(state): State<Arc<AppState>>,
+    Json(payload): Json<DraftPathPayload>,
+) -> Response {
+    let drive = state.drive().clone();
+    let result =
+        tokio::task::spawn_blocking(move || inspect_draft_sync(&drive, &payload.path)).await;
+
+    match result {
+        Ok(Ok(out)) => Json(out).into_response(),
+        Ok(Err(e)) => err_from(&e),
+        Err(join) => err(StatusCode::INTERNAL_SERVER_ERROR, join.to_string()),
+    }
+}
+
+pub async fn api_discard_draft(
+    State(state): State<Arc<AppState>>,
+    Json(payload): Json<DraftPathPayload>,
+) -> Response {
+    let drive = state.drive().clone();
+    let path = payload.path.clone();
+    let result =
+        tokio::task::spawn_blocking(move || discard_draft_sync(&drive, &payload.path)).await;
+
+    match result {
+        Ok(Ok(())) => {
+            state.self_writes.note(&path);
+            StatusCode::NO_CONTENT.into_response()
+        }
+        Ok(Err(e)) => err_from(&e),
+        Err(join) => err(StatusCode::INTERNAL_SERVER_ERROR, join.to_string()),
+    }
+}
+
+pub async fn api_promote_draft(
+    State(state): State<Arc<AppState>>,
+    Json(payload): Json<DraftPromotePayload>,
+) -> Response {
+    let drive = state.drive().clone();
+    let source_path = payload.path.clone();
+    let target_path = payload.target.clone();
+    let result = tokio::task::spawn_blocking(move || {
+        promote_draft_sync(&drive, &payload.path, &payload.target)
+    })
+    .await;
+
+    match result {
+        Ok(Ok(out)) => {
+            state.self_writes.note(&source_path);
+            state.self_writes.note(&target_path);
+            Json(out).into_response()
+        }
+        Ok(Err(e)) => err_from(&e),
+        Err(join) => err(StatusCode::INTERNAL_SERVER_ERROR, join.to_string()),
+    }
 }
 
 /// `fullstack-a-66` slice d: persist a Rich Prompt submission
@@ -174,6 +264,49 @@ fn next_rich_prompt_name(drive: &chan_drive::Drive) -> Result<String, chan_drive
     }
 }
 
+fn inspect_draft_sync(
+    drive: &chan_drive::Drive,
+    path: &str,
+) -> Result<DraftInspectResponse, chan_drive::ChanError> {
+    let name = chan_drive::drafts::name_from_unified_path(path)?;
+    let info = drive.inspect_draft(&name)?;
+    Ok(DraftInspectResponse {
+        path: format!("Drafts/{name}/draft.md"),
+        name,
+        file_count: info.file_count,
+        dir_count: info.dir_count,
+        total_size: info.total_size,
+        has_attachments: info.has_attachments,
+    })
+}
+
+fn discard_draft_sync(drive: &chan_drive::Drive, path: &str) -> Result<(), chan_drive::ChanError> {
+    let name = chan_drive::drafts::name_from_unified_path(path)?;
+    drive.discard_draft(&name)
+}
+
+fn promote_draft_sync(
+    drive: &chan_drive::Drive,
+    path: &str,
+    target: &str,
+) -> Result<DraftPromoteResponse, chan_drive::ChanError> {
+    let name = chan_drive::drafts::name_from_unified_path(path)?;
+    let report = drive.promote_draft(&name, target)?;
+    Ok(DraftPromoteResponse {
+        path: report.target_path,
+        name: report.name,
+        mode: promote_mode_label(report.mode),
+    })
+}
+
+fn promote_mode_label(mode: chan_drive::DraftPromoteMode) -> &'static str {
+    match mode {
+        chan_drive::DraftPromoteMode::File => "file",
+        chan_drive::DraftPromoteMode::DirectoryCreated => "directory_created",
+        chan_drive::DraftPromoteMode::DirectoryMerged => "directory_merged",
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -231,5 +364,58 @@ mod tests {
         // Gap at `rich-prompt-1` is reused (picker walks from
         // 1 upward, returns the first missing slot).
         assert_eq!(next_rich_prompt_name(&drive).unwrap(), "rich-prompt-1");
+    }
+
+    #[test]
+    fn inspect_draft_sync_reports_workspace_shape() {
+        let (_cfg, _root, drive) = make_drive();
+        drive.create_draft_dir("untitled-1").unwrap();
+        drive
+            .write_text("Drafts/untitled-1/draft.md", "# draft\n")
+            .unwrap();
+        drive
+            .write_bytes("Drafts/untitled-1/pasted.png", &[1, 2, 3])
+            .unwrap();
+
+        let out = inspect_draft_sync(&drive, "Drafts/untitled-1/draft.md").unwrap();
+
+        assert_eq!(out.name, "untitled-1");
+        assert_eq!(out.path, "Drafts/untitled-1/draft.md");
+        assert_eq!(out.file_count, 2);
+        assert!(out.has_attachments);
+    }
+
+    #[test]
+    fn promote_draft_sync_returns_target_path_and_mode() {
+        let (_cfg, root, drive) = make_drive();
+        std::fs::create_dir_all(root.path().join("notes")).unwrap();
+        drive.create_draft_dir("untitled-1").unwrap();
+        drive
+            .write_text("Drafts/untitled-1/draft.md", "# draft\n")
+            .unwrap();
+
+        let out =
+            promote_draft_sync(&drive, "Drafts/untitled-1/draft.md", "notes/draft.md").unwrap();
+
+        assert_eq!(out.name, "untitled-1");
+        assert_eq!(out.path, "notes/draft.md");
+        assert_eq!(out.mode, "file");
+        assert_eq!(
+            std::fs::read_to_string(root.path().join("notes/draft.md")).unwrap(),
+            "# draft\n"
+        );
+    }
+
+    #[test]
+    fn discard_draft_sync_removes_workspace() {
+        let (_cfg, _root, drive) = make_drive();
+        drive.create_draft_dir("untitled-1").unwrap();
+        drive
+            .write_text("Drafts/untitled-1/draft.md", "# draft\n")
+            .unwrap();
+
+        discard_draft_sync(&drive, "Drafts/untitled-1/draft.md").unwrap();
+
+        assert!(!drive.drafts_dir().join("untitled-1").exists());
     }
 }

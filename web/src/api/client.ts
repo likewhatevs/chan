@@ -7,6 +7,8 @@
 import type {
   BuildInfo,
   ContentSearchResponse,
+  DraftInspectResponse,
+  DraftPromoteResponse,
   FileResponse,
   FsGraphResponse,
   GlobalConfig,
@@ -307,6 +309,12 @@ export const api = {
     req<{ path: string; name: string }>("POST", "/api/drafts/rich-prompt", {
       content,
     }),
+  inspectDraft: (path: string) =>
+    req<DraftInspectResponse>("POST", "/api/drafts/inspect", { path }),
+  discardDraft: (path: string) =>
+    req<void>("POST", "/api/drafts/discard", { path }),
+  promoteDraft: (path: string, target: string) =>
+    req<DraftPromoteResponse>("POST", "/api/drafts/promote", { path, target }),
   remove: (path: string) => req<void>("DELETE", `/api/files/${encPath(path)}`),
   move: (from: string, to: string) =>
     req<MoveResponse>("POST", "/api/move", { from, to }),

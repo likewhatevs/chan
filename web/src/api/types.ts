@@ -231,6 +231,21 @@ export type MoveResponse = {
   conflicts: string[];
 };
 
+export type DraftInspectResponse = {
+  path: string;
+  name: string;
+  file_count: number;
+  dir_count: number;
+  total_size: number;
+  has_attachments: boolean;
+};
+
+export type DraftPromoteResponse = {
+  path: string;
+  name: string;
+  mode: "file" | "directory_created" | "directory_merged";
+};
+
 export type FileResponse = {
   path: string;
   content: string;

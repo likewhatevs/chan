@@ -33,7 +33,10 @@ mod ws;
 pub use attachments::api_post_attachment;
 pub use build_info::api_build_info;
 pub use contacts::{api_get_contacts, api_post_contacts_import};
-pub use drafts::{api_create_draft, api_create_rich_prompt};
+pub use drafts::{
+    api_create_draft, api_create_rich_prompt, api_discard_draft, api_inspect_draft,
+    api_promote_draft,
+};
 pub use drive::{api_cloud_drives, api_get_drive, api_patch_drive};
 pub use files::{
     api_create_file, api_delete_file, api_list_files, api_move, api_read_file, api_write_file,
