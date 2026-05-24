@@ -4,6 +4,7 @@
   import ConfirmModal from "./components/ConfirmModal.svelte";
   import ConflictModal from "./components/ConflictModal.svelte";
   import DisconnectOverlay from "./components/DisconnectOverlay.svelte";
+  import DraftCloseModal from "./components/DraftCloseModal.svelte";
   import SpawnDialog from "./components/SpawnDialog.svelte";
   import TeamDialog from "./components/TeamDialog.svelte";
   import { teamDialogState } from "./state/teamDialog.svelte";
@@ -59,6 +60,7 @@
     closeTabsInPane,
     cancelPaneMode,
     commitPaneMode,
+    draftCloseState,
     enterPaneMode,
     isWindowFullyReadOnly,
     layout,
@@ -846,7 +848,9 @@
     if (e.code !== "KeyD") return;
     // In-house modals + the Cmd+K pane-mode dispatcher own their
     // own keyboard contexts; never close a tab from under them.
-    if (promptState.open || pathPromptState.open || confirmState.open) return;
+    if (promptState.open || pathPromptState.open || confirmState.open || draftCloseState.open) {
+      return;
+    }
     if (paneMode.active) return;
     const p = activePane();
     const active = p.tabs.find((t) => t.id === p.activeTabId);
@@ -1109,6 +1113,7 @@
 <PromptModal />
 <PathPromptModal />
 <ConfirmModal />
+<DraftCloseModal />
 <SearchPanel />
 <SearchStatusOverlay />
 <SettingsPanel />

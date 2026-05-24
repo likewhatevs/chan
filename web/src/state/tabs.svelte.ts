@@ -1447,12 +1447,86 @@ type CloseTabsOptions = {
   force?: boolean;
 };
 
+type DraftCloseDecision =
+  | { action: "cancel" }
+  | { action: "discard" }
+  | { action: "save"; target: string };
+
+export const draftCloseState = $state<{
+  open: boolean;
+  path: string;
+  name: string;
+  target: string;
+  targetKind: "file" | "folder";
+  hasAttachments: boolean;
+  error: string | null;
+  resolve: ((value: DraftCloseDecision) => void) | null;
+}>({
+  open: false,
+  path: "",
+  name: "",
+  target: "",
+  targetKind: "file",
+  hasAttachments: false,
+  error: null,
+  resolve: null,
+});
+
+function uiDraftClose(opts: {
+  path: string;
+  name: string;
+  target: string;
+  targetKind: "file" | "folder";
+  hasAttachments: boolean;
+}): Promise<DraftCloseDecision> {
+  return new Promise((resolve) => {
+    draftCloseState.resolve?.({ action: "cancel" });
+    draftCloseState.path = opts.path;
+    draftCloseState.name = opts.name;
+    draftCloseState.target = opts.target;
+    draftCloseState.targetKind = opts.targetKind;
+    draftCloseState.hasAttachments = opts.hasAttachments;
+    draftCloseState.error = null;
+    draftCloseState.resolve = resolve;
+    draftCloseState.open = true;
+  });
+}
+
+export function resolveDraftClose(action: "cancel" | "discard" | "save"): void {
+  const r = draftCloseState.resolve;
+  if (!r) return;
+  const target = draftCloseState.target.trim();
+  if (action === "save" && target.length === 0) {
+    draftCloseState.error = "Choose a destination path";
+    return;
+  }
+  draftCloseState.resolve = null;
+  draftCloseState.open = false;
+  draftCloseState.error = null;
+  if (action === "save") {
+    r({ action: "save", target });
+  } else {
+    r({ action });
+  }
+}
+
 function isLiveTerminal(t: Tab): boolean {
   return t.kind === "terminal" && terminalInputSinks.has(t.id);
 }
 
-function closeRisk(t: Tab): "dirty-file" | "live-terminal" | null {
-  if (isDirty(t)) return "dirty-file";
+function isDraftPath(path: string): boolean {
+  return path === "Drafts" || path.startsWith("Drafts/");
+}
+
+function isDraftTab(t: Tab): t is FileTab {
+  return t.kind === "file" && isDraftPath(t.path);
+}
+
+function draftDefaultTarget(info: { name: string; has_attachments: boolean }): string {
+  return info.has_attachments ? info.name : `${info.name}.md`;
+}
+
+function closeRisk(t: Tab): "live-terminal" | null {
   if (isLiveTerminal(t)) return "live-terminal";
   return null;
 }
@@ -1462,15 +1536,25 @@ async function confirmCloseTabs(
   opts?: CloseTabsOptions,
 ): Promise<boolean> {
   if (opts?.force) return true;
+  if (tabs.some(isDraftTab)) {
+    notify("Close Drafts individually to save or discard them");
+    return false;
+  }
+  for (const tab of tabs) {
+    if (tab.kind !== "file") continue;
+    if (!isDirty(tab)) continue;
+    try {
+      await performSave(tab);
+    } catch (e) {
+      tab.error = `save failed: ${(e as Error).message}`;
+      return false;
+    }
+    if (isDirty(tab)) return false;
+  }
   const risky = tabs.filter((t) => closeRisk(t) !== null);
   if (risky.length === 0) return true;
-  const dirty = risky.filter((t) => closeRisk(t) === "dirty-file");
   const terminals = risky.filter((t) => closeRisk(t) === "live-terminal");
   const parts: string[] = [];
-  if (dirty.length > 0) {
-    const label = dirty.length === 1 ? tabLabel(dirty[0]!) : `${dirty.length} unsaved files`;
-    parts.push(`${label} has unsaved changes`);
-  }
   if (terminals.length > 0) {
     const label =
       terminals.length === 1
@@ -1482,7 +1566,7 @@ async function confirmCloseTabs(
     title: "Close tab?",
     message: `${parts.join(" and ")}. Close anyway?`,
     confirmLabel: "Close",
-    destructive: dirty.length > 0,
+    destructive: false,
   });
 }
 
@@ -1750,7 +1834,11 @@ async function closeTabAsync(
   const idx = p.tabs.findIndex((t) => t.id === tabId);
   if (idx < 0) return;
   const tab = p.tabs[idx];
-  if (!(await confirmCloseTabs([tab], opts))) return;
+  if (isDraftTab(tab) && !opts?.force) {
+    if (!(await handleDraftTabClose(tab))) return;
+  } else if (!(await confirmCloseTabs([tab], opts))) {
+    return;
+  }
   if (tab.kind === "terminal") {
     terminalCloseSinks.get(tab.id)?.();
   }
@@ -1765,6 +1853,39 @@ async function closeTabAsync(
   // landing (chan logo + Cmd+K hint) so the Hybrid structure
   // survives a transient empty state. Use the explicit
   // `closePane` action to dismiss the pane.
+}
+
+async function handleDraftTabClose(tab: FileTab): Promise<boolean> {
+  try {
+    if (isDirty(tab)) {
+      await performSave(tab);
+      if (isDirty(tab)) return false;
+    }
+    const info = await api.inspectDraft(tab.path);
+    const decision = await uiDraftClose({
+      path: tab.path,
+      name: info.name,
+      target: draftDefaultTarget(info),
+      targetKind: info.has_attachments ? "folder" : "file",
+      hasAttachments: info.has_attachments,
+    });
+    if (decision.action === "cancel") return false;
+    if (decision.action === "discard") {
+      await api.discardDraft(tab.path);
+      notify("Draft discarded");
+      return true;
+    }
+    if (isDirty(tab)) {
+      await performSave(tab);
+      if (isDirty(tab)) return false;
+    }
+    const promoted = await api.promoteDraft(tab.path, decision.target);
+    notify(`Draft saved to ${promoted.path}`);
+    return true;
+  } catch (e) {
+    tab.error = `draft close failed: ${(e as Error).message}`;
+    return false;
+  }
 }
 
 /// Drop every tab in every pane. Used by the M4-D mobile reset

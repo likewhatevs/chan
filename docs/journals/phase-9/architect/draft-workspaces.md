@@ -178,3 +178,10 @@ or merging a target directory without overwriting existing files.
 `POST /api/drafts/promote`. The routes accept unified `Drafts/...` paths,
 delegate all filesystem policy to chan-drive, and return the promoted drive
 path plus promotion mode for web callers.
+
+2026-05-24: The web tab close path now treats draft tabs as lifecycle-managed.
+Closing a draft opens an in-app modal with Save to Drive, Discard Draft, and
+Cancel choices. Save flushes the draft buffer before promotion, and Discard
+moves the metadata workspace through the new server route. Dirty committed
+file tabs now attempt an immediate save before closing and remain open on save
+failure or CAS conflict.

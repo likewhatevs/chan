@@ -16,6 +16,7 @@ import {
   commitPaneMode,
   detachTabToPaneEdge,
   dismissTerminalEnvNamePrompt,
+  draftCloseState,
   enterPaneMode,
   enterPaneModeTransaction,
   flipHybrid,
@@ -47,6 +48,7 @@ import {
   paneModeSwapWith,
   removeTerminalFromBroadcastGroup,
   registerTerminalInputSink,
+  resolveDraftClose,
   markLocalTabDrop,
   markTerminalEnvNameRestarted,
   openActiveTerminalRichPrompt,
@@ -134,6 +136,7 @@ afterEach(() => {
   vi.restoreAllMocks();
   vi.useRealTimers();
   resolveConfirm(false);
+  resolveDraftClose("cancel");
   resetLayout([]);
   cancelPaneMode();
   clearRecentlyClosedTabsForTest();
@@ -141,29 +144,32 @@ afterEach(() => {
 });
 
 describe("tab close confirmation", () => {
-  test("keeps a dirty file tab open when confirmation is cancelled", async () => {
+  test("saves a dirty file tab before closing", async () => {
     const tab = fileTab({ content: "unsaved" });
     const pane = resetLayout([tab]);
+    const write = vi
+      .spyOn(api, "write")
+      .mockResolvedValue({ mtime: 2, mtime_ns: "2" });
 
-    const close = closeTab(pane.id, tab.id);
-    expect(confirmState.open).toBe(true);
-    expect(confirmState.message).toContain("unsaved changes");
-    resolveConfirm(false);
-    await close;
+    await closeTab(pane.id, tab.id);
 
-    expect(activePane().tabs).toHaveLength(1);
+    expect(write).toHaveBeenCalledWith("notes/a.md", "unsaved", null, 1);
+    expect(confirmState.open).toBe(false);
+    expect(activePane().tabs).toHaveLength(0);
   });
 
-  test("closes a dirty file tab after confirmation", async () => {
+  test("keeps a dirty file tab open when save fails", async () => {
     const tab = fileTab({ content: "unsaved" });
     const pane = resetLayout([tab]);
+    vi.spyOn(api, "write").mockRejectedValue(new Error("disk full"));
 
-    const close = closeTab(pane.id, tab.id);
-    expect(confirmState.open).toBe(true);
-    resolveConfirm(true);
-    await close;
+    await closeTab(pane.id, tab.id);
 
-    expect(activePane().tabs).toHaveLength(0);
+    expect(activePane().tabs).toHaveLength(1);
+    const live = activePane().tabs[0];
+    expect(live?.kind).toBe("file");
+    if (live?.kind !== "file") return;
+    expect(live.error).toContain("save failed");
   });
 
   test("prompts for live terminal tabs", async () => {
@@ -179,6 +185,32 @@ describe("tab close confirmation", () => {
 
     unregister();
     expect(activePane().tabs).toHaveLength(1);
+  });
+
+  test("draft tab close prompts for discard or save", async () => {
+    const tab = fileTab({
+      id: "draft-tab",
+      path: "Drafts/untitled-1/draft.md",
+    });
+    const pane = resetLayout([tab]);
+    vi.spyOn(api, "inspectDraft").mockResolvedValue({
+      path: "Drafts/untitled-1/draft.md",
+      name: "untitled-1",
+      file_count: 1,
+      dir_count: 0,
+      total_size: 7,
+      has_attachments: false,
+    });
+    const discard = vi.spyOn(api, "discardDraft").mockResolvedValue(undefined);
+
+    const close = closeTab(pane.id, tab.id);
+    await vi.waitFor(() => expect(draftCloseState.open).toBe(true));
+    expect(draftCloseState.target).toBe("untitled-1.md");
+    resolveDraftClose("discard");
+    await close;
+
+    expect(discard).toHaveBeenCalledWith("Drafts/untitled-1/draft.md");
+    expect(activePane().tabs).toHaveLength(0);
   });
 
   test("reopens a closed dirty file tab with its in-memory buffer", async () => {

@@ -118,9 +118,7 @@ describe("Ctrl+D dispatcher (App.svelte raw-source guards)", () => {
   });
 
   test("skips when in-house modals are open or pane mode is active", () => {
-    expect(app).toContain(
-      "if (promptState.open || pathPromptState.open || confirmState.open) return;",
-    );
+    expect(app).toMatch(/draftCloseState\.open/);
     expect(app).toContain("if (paneMode.active) return;");
   });
 
