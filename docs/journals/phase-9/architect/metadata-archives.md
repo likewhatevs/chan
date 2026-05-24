@@ -67,3 +67,26 @@ Build follow-up:
 - WebtestLive caught that the new runtime routes used `tempfile` while
   `chan-server` declared it only as a dev-dependency. Moved `tempfile` into
   runtime dependencies and verified `cargo build -p chan`.
+
+Live import follow-up:
+
+- WebtestLive found that importing an exported archive returned `drive busy`
+  even after closing the app tab. Root cause: `AppArtifacts` held a second
+  `Arc<Indexer>` for shutdown cancellation and `Indexer` did not abort its
+  spawned tasks on drop, so old indexer tasks could keep the old `Drive` Arc
+  alive after the metadata import route removed the drive cell.
+- Fixed by making shutdown cancellation read the current drive cell instead
+  of retaining a stale indexer handle, and by giving `Indexer` an explicit
+  `Drop` that sets cancellation and aborts its task handles.
+- Live API smoke exported metadata from a throwaway drive, imported the same
+  archive through `POST /api/metadata/import`, and received a 200 response with
+  `rescanned:true`.
+
+Additional evidence:
+
+- `cargo test -p chan-server`
+  `indexer::tests::dropping_indexer_releases_drive_handle`
+- `cargo test -p chan-server routes::metadata`
+- `cargo test -p chan-server --lib`
+- `cargo build -p chan`
+- `cargo build -p chan --no-default-features`

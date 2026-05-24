@@ -245,10 +245,10 @@ struct AppArtifacts {
     app: Router,
     token: Option<String>,
     last_activity: Arc<AtomicU64>,
-    /// Live indexer handle so `serve()` can cancel an in-flight
-    /// rebuild on shutdown. The Arc also lives inside the router's
-    /// DriveCell; this is just a second pointer to the same thing.
-    indexer: Arc<indexer::Indexer>,
+    /// Live drive cell so the serve loop can cancel the current
+    /// indexer on shutdown without keeping stale indexer handles
+    /// alive across storage reset or metadata import swaps.
+    drive_cell: Arc<RwLock<Option<DriveCell>>>,
     /// Background idle-prune/shutdown task for long-lived terminal
     /// sessions. Held so dropping AppArtifacts aborts it if serve()
     /// exits without the shutdown channel firing.
@@ -346,8 +346,6 @@ async fn build_app(
         search_aggression,
         progress_sink,
     ));
-    let indexer_handle = indexer.clone();
-
     // Editor preferences: fonts / theme / pane widths / line spacing /
     // date format. The unified view returned over /api/drive and
     // /api/config joins these with ServerConfig.
@@ -420,7 +418,7 @@ async fn build_app(
     let state = Arc::new(AppState {
         library,
         drive_root,
-        drive_cell: state_for_bridge,
+        drive_cell: state_for_bridge.clone(),
         token: token.clone(),
         prefix: prefix.clone(),
         settings_disabled: config.settings_disabled,
@@ -450,7 +448,7 @@ async fn build_app(
         app,
         token,
         last_activity,
-        indexer: indexer_handle,
+        drive_cell: state_for_bridge.clone(),
         _terminal_pruner: terminal_pruner,
         prefix,
         mcp_bridge,
@@ -486,7 +484,7 @@ pub async fn serve(library: Library, drive: Arc<Drive>, config: ServeConfig) -> 
 
     let app = artifacts.app;
     let last_activity = artifacts.last_activity;
-    let indexer = artifacts.indexer;
+    let drive_cell = artifacts.drive_cell.clone();
     // Keep the MCP bridge alive for the duration of `serve()`. Dropping
     // it at the end of this function unlinks the socket and aborts the
     // accept loop. Bound to a `let _` so clippy doesn't warn on
@@ -512,11 +510,15 @@ pub async fn serve(library: Library, drive: Arc<Drive>, config: ServeConfig) -> 
     // reindex. The flag is checked at per-file boundaries inside
     // `Drive::reindex`, so the blocking task lands within at most one
     // file's worth of work and the runtime drop can return cleanly.
-    let cancel_indexer = indexer.clone();
+    let cancel_drive_cell = drive_cell.clone();
     let mut cancel_rx = signal_rx.clone();
     tokio::spawn(async move {
         let _ = cancel_rx.changed().await;
-        cancel_indexer.cancel();
+        if let Ok(cell) = cancel_drive_cell.read() {
+            if let Some(cell) = cell.as_ref() {
+                cell.indexer.cancel();
+            }
+        }
     });
 
     let mut graceful_rx = signal_rx.clone();
@@ -620,7 +622,7 @@ pub async fn serve_via_tunnel(
     // so the socket file is unlinked when serve_via_tunnel returns.
     let _mcp_bridge = artifacts.mcp_bridge;
     let _control_socket = artifacts.control_socket;
-    let indexer = artifacts.indexer;
+    let drive_cell = artifacts.drive_cell.clone();
 
     // Same shutdown wiring as `serve()`: signal_watcher drives a
     // tokio::watch channel, and a side task cancels any in-flight
@@ -631,11 +633,15 @@ pub async fn serve_via_tunnel(
     let mut signal_rx = signal_tx.subscribe();
     spawn_signal_watcher(signal_tx.clone());
 
-    let cancel_indexer = indexer.clone();
+    let cancel_drive_cell = drive_cell.clone();
     let mut cancel_rx = signal_rx.clone();
     tokio::spawn(async move {
         let _ = cancel_rx.changed().await;
-        cancel_indexer.cancel();
+        if let Ok(cell) = cancel_drive_cell.read() {
+            if let Some(cell) = cell.as_ref() {
+                cell.indexer.cancel();
+            }
+        }
     });
 
     // Lifecycle events from chan-tunnel-client: drained on a side

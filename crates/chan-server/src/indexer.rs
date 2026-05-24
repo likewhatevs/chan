@@ -114,6 +114,14 @@ impl std::fmt::Debug for Indexer {
     }
 }
 
+impl Drop for Indexer {
+    fn drop(&mut self) {
+        self.cancel.store(true, Ordering::Relaxed);
+        self._watcher_task.abort();
+        self._coordinator_task.abort();
+    }
+}
+
 impl Indexer {
     /// Spawn the indexer over `drive`, tied to `watch_events`. If
     /// `initial_build` is true and the drive's index reports zero
@@ -195,7 +203,7 @@ impl Indexer {
             // never runs at boot. Drafts content authored
             // pre-`-36` (when watcher events were silently
             // dropped) stays absent from BM25 + graph. Walk
-            // drafts unconditionally on every boot — idempotent
+            // drafts unconditionally on every boot; idempotent
             // (`index_draft_file` overwrites both backends) and
             // O(N) per draft so the cost is bounded by how
             // many drafts the user keeps around. Runs on the
@@ -519,7 +527,7 @@ enum ApplyOutcome {
 /// Per-file watch apply. Performs an explicit `std::fs::symlink_metadata`
 /// check on the drive-relative path and dispatches accordingly.
 ///
-/// Symmetric with `chan_drive::fs_ops::walk_drive_with` — the cold-
+/// Symmetric with `chan_drive::fs_ops::walk_drive_with`; the cold-
 /// boot walker drops symlinks/specials, and this helper does the
 /// same for the watch path. Without this gate a single user-created
 /// symlink would surface `Drive::index_file`'s `SpecialFile` error
@@ -540,7 +548,7 @@ fn apply_watch_change(
     // `Drafts/` prefix already applied; without this branch the
     // `resolve_safe(drive.root(), ...)` below would error
     // (drafts dir is at `<state>/drafts/<uuid>/`, NOT under drive
-    // root) + the event would be silently dropped — the root
+    // root) + the event would be silently dropped; the root
     // cause of the recurring `-a-66 slice e` PARTIAL despite
     // `-34`'s boot walker.
     if let Some(sub) = path.strip_prefix("Drafts/") {
@@ -743,7 +751,7 @@ fn update_queue_depth(
 /// subscribing to /ws) AND a forwarded sink (the WS broadcast). The
 /// status flips to `Building` on file / graph stages; other stages
 /// (model load, contact import, reset) are forwarded to /ws but
-/// don't override the indexer status — they live on their own
+/// don't override the indexer status; they live on their own
 /// frontend surfaces.
 struct StatusUpdater {
     status: Arc<Mutex<IndexStatus>>,
@@ -1014,6 +1022,30 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn dropping_indexer_releases_drive_handle() {
+        let (_cfg, _dir, drive) = setup_drive();
+        let (_events_tx, events_rx) = tokio::sync::broadcast::channel(1);
+        let indexer = super::Indexer::spawn(
+            drive.clone(),
+            events_rx,
+            false,
+            chan_drive::SearchAggression::Conservative,
+            Arc::new(chan_drive::NoProgress),
+        );
+        assert!(Arc::strong_count(&drive) > 1);
+
+        drop(indexer);
+        for _ in 0..20 {
+            if Arc::strong_count(&drive) == 1 {
+                return;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+
+        assert_eq!(Arc::strong_count(&drive), 1);
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn webtest_a_repro_drafts_via_write_text_then_boot_walk() {
         // systacean-38: empirical reproduction of @@WebtestA's
         // 5th-round PARTIAL. Uses `Drive::write_text` (the actual
@@ -1139,7 +1171,7 @@ mod tests {
             progress,
         );
 
-        // Boot walk is `tokio::task::spawn_blocking`'d — give it
+        // Boot walk is `tokio::task::spawn_blocking`'d; give it
         // a window to complete + BM25 to commit + reader to
         // refresh.
         let opts = chan_drive::SearchOpts {
