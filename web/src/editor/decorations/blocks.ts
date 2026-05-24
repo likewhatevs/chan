@@ -11,10 +11,9 @@
 //     paint a left border + indent. Quote markers stay visible (per
 //     Obsidian convention — the `>` IS the visual cue that the line
 //     is quoted; hiding it removes meaning).
-//   - HorizontalRule: line decoration `cm-md-hr` for the rule
-//     styling; replace-decoration over the source text (`---` etc.)
-//     when caret line doesn't intersect, so the rule looks like an
-//     actual horizontal line.
+//   - HorizontalRule: leave source text visible. Many notes use
+//     `---` as an authoring separator, and replacing it with a
+//     rendered rule makes the markdown harder to edit.
 //   - FencedCode: per-line decoration distinguishing opener row,
 //     content rows, closer row, plus a mark for the language info
 //     (CodeInfo). No hide — the fences stay visible (we want the
@@ -137,7 +136,6 @@ function flashCopied(btn: HTMLButtonElement, kind: "ok" | "fail" = "ok"): void {
 }
 
 const LINE_QUOTE = Decoration.line({ attributes: { class: "cm-md-quote" } });
-const LINE_HR = Decoration.line({ attributes: { class: "cm-md-hr" } });
 const LINE_FENCE_OPENER = Decoration.line({
   attributes: { class: "cm-md-fence-opener" },
 });
@@ -224,18 +222,7 @@ const handleBlockquote: TokenHandler = (ctx) => {
 };
 
 const handleHorizontalRule: TokenHandler = (ctx) => {
-  const line = ctx.state.doc.lineAt(ctx.node.from);
-  if (line.to === ctx.state.doc.length) return;
-  // While the caret sits on this line, skip the rule entirely:
-  // the `cm-md-hr` class paints a transparent-foreground horizontal
-  // rule (border-bottom + color: transparent), which means the
-  // `---` source becomes both unreadable and visually fused with
-  // the rendered rule the moment the user tries to edit it. Showing
-  // raw source while editing matches the other block widgets'
-  // "click-to-edit reveals the literal markdown" pattern.
-  if (ctx.lineIntersect(ctx.node.from, ctx.node.to)) return;
-  ctx.push(LINE_HR, line.from, line.from);
-  if (line.from < line.to) ctx.push(HIDE, line.from, line.to);
+  void ctx;
 };
 
 const handleFencedCode: TokenHandler = (ctx) => {

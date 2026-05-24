@@ -155,10 +155,25 @@ describe("bullet marker rendering", () => {
   });
 });
 
-describe("last-line horizontal rule", () => {
-  test("leaves final-line --- as source text", () => {
-    expect(blocksSource).toContain(
-      "if (line.to === ctx.state.doc.length) return;",
-    );
+describe("horizontal rule source visibility", () => {
+  test("leaves --- source text visible anywhere in the document", () => {
+    const parent = document.createElement("div");
+    document.body.appendChild(parent);
+
+    const view = new EditorView({
+      parent,
+      state: EditorState.create({
+        doc: "one\n---\ntwo",
+        extensions: [chanMarkdown(), chanDecorations()],
+      }),
+    });
+
+    expect(parent.textContent).toContain("---");
+    expect(parent.querySelector(".cm-md-hr")).toBeNull();
+    expect(view.state.doc.toString()).toBe("one\n---\ntwo");
+    expect(wysiwygSource).not.toContain(".cm-md-hr");
+
+    view.destroy();
+    parent.remove();
   });
 });

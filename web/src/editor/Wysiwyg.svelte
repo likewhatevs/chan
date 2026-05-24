@@ -797,12 +797,6 @@
     color: var(--chan-editor-quote-color, var(--text-secondary, #888));
     font-style: italic;
   }
-  :global(.md-wysiwyg-cm6 .cm-md-hr) {
-    border-bottom: 1px solid var(--chan-editor-hr-color, var(--border, #ddd));
-    margin: 0.5em 0;
-    height: 0.5em;
-    color: transparent;
-  }
   /* Opener / closer / content rows share the code-block background
      so the whole fenced block reads as one continuous slab.
      `position: relative` anchors the floating badge widget on the
