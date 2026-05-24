@@ -7,6 +7,9 @@
 //! - `drives`: per-drive desktop cache, keyed by canonical drive
 //!   path so a `mv` on disk doesn't silently revive stale state for
 //!   a different drive.
+//! - `outbound`: remote-drive URLs the user explicitly attached.
+//!   The desktop owns only the webview/window state for these
+//!   entries, not the remote process or token lifecycle.
 //! - `window_configs`: LRU stack of closed-window labels + URL hashes
 //!   so a freshly-opened drive window picks up the panes / tabs /
 //!   selections / overlay state of the previous window for that
@@ -96,6 +99,26 @@ pub struct TunnelConfig {
     pub preferred_drive: String,
 }
 
+/// An already-running chan server that chan-desktop opens by URL.
+/// The URL may carry a bearer token. It is persisted verbatim after
+/// validation because the remote server owns token rotation and
+/// shutdown; desktop owns only the attachment row and webview
+/// window state.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct OutboundDrive {
+    /// Stable desktop-local identifier used for row actions and
+    /// window restore. Not sent to the remote server.
+    pub id: String,
+    /// User-pasted HTTP(S) URL, including any bearer token.
+    pub url: String,
+    /// Optional user label for the launcher row and window title.
+    #[serde(default)]
+    pub label: String,
+    /// Wall-clock millis when the attachment was created.
+    #[serde(default)]
+    pub added_at: u64,
+}
+
 /// Per-window layout snapshot pushed when a drive webview closes,
 /// popped when the same drive opens its next webview. The Tauri
 /// window label is the join key: reusing it forwards the SPA's
@@ -112,6 +135,8 @@ pub struct WindowConfig {
     ///   * tunneled drives: `"tunnel:<label>/<drive>"`, namespaced
     ///     to keep local and remote drives with colliding names
     ///     distinct.
+    ///   * outbound drives: `"outbound:<id>"`, namespaced by the
+    ///     desktop-local attachment id because the URL can change.
     pub key: String,
     /// Tauri window label this config was last bound to. The label
     /// is hash-prefixed (`drive-<16hex>-<seq>` /
@@ -147,6 +172,10 @@ pub struct Config {
     /// Per-drive UI state, keyed by canonical drive path.
     #[serde(default)]
     pub drives: HashMap<String, DriveSettings>,
+    /// Explicit outbound URL attachments. These are non-owned
+    /// remote drives that desktop opens by URL.
+    #[serde(default)]
+    pub outbound: Vec<OutboundDrive>,
     /// Tunnel listener preferences. Defaults to `preferred_port = 0`
     /// (OS-assigned) until the user types a specific number.
     #[serde(default)]
@@ -209,6 +238,11 @@ pub fn tunnel_window_key(tenant_label: &str, drive: &str) -> String {
     format!("tunnel:{tenant_label}/{drive}")
 }
 
+/// Identity key for an outbound URL attachment.
+pub fn outbound_window_key(id: &str) -> String {
+    format!("outbound:{id}")
+}
+
 /// Push a window config to the top of the LRU stack and persist.
 /// Older entries with the same `window_label` are dropped so the
 /// stack stays compact (one entry per label across all keys).
@@ -237,6 +271,10 @@ fn now_millis() -> u64 {
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_millis() as u64)
         .unwrap_or(0)
+}
+
+pub fn current_millis() -> u64 {
+    now_millis()
 }
 
 fn config_path() -> io::Result<PathBuf> {
@@ -364,6 +402,31 @@ mod tests {
             local_window_key("/home/alex/notes"),
             tunnel_window_key("alice", "notes"),
         );
+    }
+
+    #[test]
+    fn outbound_window_key_namespaced_apart_from_local_and_tunnel() {
+        let outbound = outbound_window_key("remote-1");
+        assert_ne!(local_window_key("remote-1"), outbound);
+        assert_ne!(tunnel_window_key("remote", "1"), outbound);
+    }
+
+    #[test]
+    fn config_defaults_outbound_empty() {
+        let cfg = Config::default();
+        assert!(cfg.outbound.is_empty());
+    }
+
+    #[test]
+    fn outbound_drive_label_defaults_empty() {
+        let raw = r#"{
+            "id": "remote-1",
+            "url": "http://127.0.0.1:4000/?t=abc"
+        }"#;
+        let drive: OutboundDrive = serde_json::from_str(raw).expect("legacy load");
+        assert_eq!(drive.id, "remote-1");
+        assert_eq!(drive.label, "");
+        assert_eq!(drive.added_at, 0);
     }
 
     #[test]

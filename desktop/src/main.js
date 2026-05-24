@@ -535,6 +535,26 @@ function render(drives) {
         </td>
       </tr>`;
     }
+    if (d.kind === 'outbound') {
+      const display = d.label || d.url || 'Remote drive';
+      return `
+      <tr data-kind="outbound"
+          data-outbound-id="${escapeAttr(d.id || '')}"
+          data-url="${urlAttr}">
+        <td><span class="tag tag-outbound" title="Attached URL">url</span></td>
+        <td class="path-cell remote-cell" title="${escapeAttr(d.url || '')}">${escapeHtml(display)}</td>
+        <td>
+          <div class="row-actions">
+            ${renderOpenSplit({
+              hasUrl,
+              includeForget: true,
+              forgetDisabledAttr: '',
+              forgetLabel: 'Forget URL',
+            })}
+          </div>
+        </td>
+      </tr>`;
+    }
     return `
     <tr data-path="${escapeAttr(d.path)}" data-url="${urlAttr}">
       <td>
@@ -640,12 +660,12 @@ function renderFeaturesPanel(path) {
 /// are both gated by `hasUrl` so a drive that isn't running can't
 /// be opened; Forget stays enabled regardless of URL state since
 /// it just removes the registry entry.
-function renderOpenSplit({ hasUrl, includeForget, forgetDisabledAttr }) {
+function renderOpenSplit({ hasUrl, includeForget, forgetDisabledAttr, forgetLabel = 'Forget Drive' }) {
   const openDisabled = hasUrl ? '' : 'disabled';
   const forgetDisabled = forgetDisabledAttr || '';
   const caretDisabled = hasUrl || (includeForget && !forgetDisabled) ? '' : 'disabled';
   const forgetItem = includeForget
-    ? `<li><button class="menu-item" data-act="remove" role="menuitem" ${forgetDisabled}>Forget Drive</button></li>`
+    ? `<li><button class="menu-item" data-act="remove" role="menuitem" ${forgetDisabled}>${escapeHtml(forgetLabel)}</button></li>`
     : '';
   return `
     <div class="split-btn">
@@ -680,6 +700,35 @@ function bindRowEvents() {
         } catch (e) {
           showError(e);
         }
+      });
+    }
+    bindSplitMenu(tr);
+  });
+
+  main.querySelectorAll('tr[data-kind="outbound"]').forEach((tr) => {
+    const id = tr.dataset.outboundId || '';
+    const launch = tr.querySelector('[data-act="launch"]');
+    if (launch) {
+      launch.addEventListener('click', async () => {
+        if (!id) return;
+        try {
+          await invoke('open_outbound_drive', { id });
+        } catch (e) {
+          showError(e);
+        }
+      });
+    }
+    const forget = tr.querySelector('[data-act="remove"]');
+    if (forget) {
+      forget.addEventListener('click', async () => {
+        if (!id) return;
+        closeAllSplitMenus();
+        try {
+          await invoke('remove_outbound_drive', { id });
+        } catch (err) {
+          showError(err);
+        }
+        await refresh();
       });
     }
     bindSplitMenu(tr);
@@ -1004,6 +1053,7 @@ function renderTunnelPanelHtml(status) {
          <p class="muted">Then on the remote run:</p>`
       : `<p class="muted">On this machine, run:</p>`;
     return `
+      ${renderOutboundAttachForm()}
       <section class="tunnel-panel">
         <header>
           <strong>Listening on 127.0.0.1:${status.port}</strong>
@@ -1021,6 +1071,7 @@ function renderTunnelPanelHtml(status) {
       </section>`;
   }
   return `
+    ${renderOutboundAttachForm()}
     <section class="tunnel-panel">
       <header><strong>Receive a remote drive</strong></header>
       <p class="muted">Bind a loopback port to accept incoming <code>chan serve --tunnel-url</code> from another machine over an SSH reverse forward.</p>
@@ -1040,6 +1091,23 @@ function renderTunnelPanelHtml(status) {
         <button class="btn primary" data-act="tunnel-start">Start listening</button>
       </div>
       <p class="muted">Port 0 / empty lets the OS pick. Label appears as the first URL segment. Drive name is lowercase ASCII + hyphens.</p>
+    </section>`;
+}
+
+function renderOutboundAttachForm() {
+  return `
+    <section class="tunnel-panel outbound-panel">
+      <header><strong>Open by URL</strong></header>
+      <div class="tunnel-row outbound-row">
+        <label class="outbound-url-field">URL
+          <input id="outbound-url-input" type="url" autocomplete="off" spellcheck="false"
+                 placeholder="http://127.0.0.1:4000/?t=..."/>
+        </label>
+        <label>Name
+          <input id="outbound-label-input" type="text" maxlength="120" autocomplete="off"/>
+        </label>
+        <button class="btn primary" data-act="outbound-add">Attach URL</button>
+      </div>
     </section>`;
 }
 
@@ -1071,6 +1139,22 @@ function bindTunnelPanelEvents(_status) {
       await renderTunnelPanel();
     });
   }
+  const outboundBtn = document.querySelector('[data-act="outbound-add"]');
+  if (outboundBtn) {
+    outboundBtn.addEventListener('click', attachOutboundUrl);
+    for (const input of [
+      document.getElementById('outbound-url-input'),
+      document.getElementById('outbound-label-input'),
+    ]) {
+      if (!input) continue;
+      input.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter') {
+          e.preventDefault();
+          outboundBtn.click();
+        }
+      });
+    }
+  }
   const stopBtn = document.querySelector('[data-act="tunnel-stop"]');
   if (stopBtn) {
     stopBtn.addEventListener('click', async () => {
@@ -1096,6 +1180,27 @@ function bindTunnelPanelEvents(_status) {
       }
     });
   });
+}
+
+async function attachOutboundUrl() {
+  const urlInput = document.getElementById('outbound-url-input');
+  const labelInput = document.getElementById('outbound-label-input');
+  const url = (urlInput && urlInput.value || '').trim();
+  const label = (labelInput && labelInput.value || '').trim();
+  if (!url) {
+    if (urlInput) urlInput.focus();
+    showError('Remote URL is required.');
+    return;
+  }
+  try {
+    await invoke('add_outbound_drive', { url, label });
+  } catch (e) {
+    showError(e);
+    return;
+  }
+  if (urlInput) urlInput.value = '';
+  if (labelInput) labelInput.value = '';
+  await refresh();
 }
 
 tunnelBtn.addEventListener('click', toggleTunnelPanel);

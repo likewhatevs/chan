@@ -193,6 +193,26 @@ table.drives tbody tr:hover { background: var(--hover-bg); }
   opacity: 0.6;
 }
 .path-cell:hover .path-sep { color: var(--brand); }
+.remote-cell {
+  cursor: default;
+  user-select: text;
+}
+.remote-cell:hover { color: var(--text-secondary); }
+.tag {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 42px;
+  padding: 2px 6px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  color: var(--text-secondary);
+  font-size: 11px;
+  line-height: 1.4;
+  text-transform: uppercase;
+}
+.tag-tunnel { color: var(--accent); }
+.tag-outbound { color: var(--link); }
 
 /* Split button: primary "Open" + caret that toggles a small menu
    anchored to the row. The menu is absolutely positioned to the
@@ -278,6 +298,7 @@ table.drives tbody tr:hover { background: var(--hover-bg); }
   display: inline-flex; align-items: center; gap: 6px; color: var(--text-secondary);
 }
 .tunnel-panel .tunnel-row input[type="number"],
+.tunnel-panel .tunnel-row input[type="url"],
 .tunnel-panel .tunnel-row input[type="text"] {
   width: 100px;
   padding: 4px 6px;
@@ -286,6 +307,16 @@ table.drives tbody tr:hover { background: var(--hover-bg); }
   border: 1px solid var(--border);
   border-radius: 4px;
   font: inherit;
+}
+.tunnel-panel .outbound-url-field {
+  flex: 1 1 320px;
+}
+.tunnel-panel .outbound-url-field input[type="url"] {
+  width: 100%;
+  min-width: 220px;
+}
+.tunnel-panel .outbound-row {
+  flex-wrap: wrap;
 }
 .tunnel-panel .seg-toggle {
   display: inline-flex;

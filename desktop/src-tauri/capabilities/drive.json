@@ -1,8 +1,8 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "drive",
-  "description": "Capabilities for per-drive webview windows: drive-* are locally-supervised chan serves, tunnel-* are remote drives reached over chan-tunnel.",
-  "windows": ["drive-*", "tunnel-*"],
+  "description": "Capabilities for per-drive webview windows: drive-* are locally-supervised chan serves, tunnel-* are remote drives reached over chan-tunnel, outbound-* are explicit URL attachments.",
+  "windows": ["drive-*", "tunnel-*", "outbound-*"],
   "permissions": [
     "core:webview:allow-set-webview-zoom",
     "opener:default",

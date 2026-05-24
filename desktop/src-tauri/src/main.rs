@@ -19,7 +19,7 @@ use tauri::menu::{Menu, MenuItemBuilder, MenuItemKind, PredefinedMenuItem, WINDO
 use tauri::{Emitter, Manager, RunEvent, State, WebviewUrl, WebviewWindowBuilder, WindowEvent};
 use tokio::process::Command;
 
-use config::{Config, ConfigStore, DriveFeatures, WindowConfig};
+use config::{Config, ConfigStore, DriveFeatures, OutboundDrive, WindowConfig};
 use serve::ServeHandle;
 use tunnel::TunnelState;
 
@@ -144,6 +144,9 @@ impl AppState {
 /// * `kind = "tunneled"`: a remote `chan serve` that dialed into
 ///   the embedded tunnel server. No path; `url` points at the
 ///   per-tenant loopback listener.
+/// * `kind = "outbound"`: a remote `chan serve` explicitly attached
+///   by URL. No desktop-owned lifecycle; `id` points at the stored
+///   attachment row.
 ///
 /// Fields specific to tunneled rows are optional so the JSON shape
 /// is a strict superset of the local row; the renderer reads `kind`
@@ -151,6 +154,8 @@ impl AppState {
 #[derive(Debug, Clone, Serialize)]
 struct Drive {
     kind: &'static str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    id: Option<String>,
     path: String,
     on: bool,
     url: String,
@@ -186,6 +191,7 @@ fn list_drives(state: State<Arc<AppState>>) -> Result<Vec<Drive>, String> {
             let url = handle.and_then(|h| h.url.clone()).unwrap_or_default();
             Drive {
                 kind: "local",
+                id: None,
                 path: display_path,
                 on,
                 url,
@@ -206,6 +212,7 @@ fn list_drives(state: State<Arc<AppState>>) -> Result<Vec<Drive>, String> {
     for t in state.tunnel.snapshot() {
         merged.push(Drive {
             kind: "tunneled",
+            id: None,
             path: String::new(),
             on: true,
             url: t.url,
@@ -214,6 +221,25 @@ fn list_drives(state: State<Arc<AppState>>) -> Result<Vec<Drive>, String> {
             public: Some(t.public),
             peer_addr: t.peer_addr,
             connected_at: Some(t.connected_at),
+        });
+    }
+
+    let outbound_drives = state.store.lock().unwrap().get().map_err(err)?.outbound;
+    for outbound in outbound_drives {
+        let label = outbound_label(&outbound);
+        let id = outbound.id;
+        let url = outbound.url;
+        merged.push(Drive {
+            kind: "outbound",
+            id: Some(id),
+            path: url.clone(),
+            on: true,
+            url,
+            label,
+            drive: None,
+            public: None,
+            peer_addr: None,
+            connected_at: None,
         });
     }
 
@@ -919,6 +945,161 @@ fn tunnel_stop(app: tauri::AppHandle, state: State<Arc<AppState>>) {
     tunnel::stop_listening(&app, &state.tunnel);
 }
 
+const OUTBOUND_LABEL_MAX_CHARS: usize = 120;
+
+/// Persist an explicit outbound URL attachment and open it in a
+/// drive webview. The remote server owns its own lifecycle; desktop
+/// only stores enough state to show and reopen the row.
+#[tauri::command]
+fn add_outbound_drive(
+    app: tauri::AppHandle,
+    state: State<Arc<AppState>>,
+    url: String,
+    label: String,
+) -> Result<String, String> {
+    let url = normalize_outbound_url(&url)?;
+    let label = normalize_outbound_label(&label)?;
+    let (id, title, stored_url) = {
+        let mut store = state.store.lock().unwrap();
+        let mut cfg = store.get().map_err(err)?;
+        let (id, title, stored_url) = match cfg.outbound.iter_mut().find(|d| d.url == url) {
+            Some(existing) => {
+                if !label.is_empty() {
+                    existing.label = label.clone();
+                }
+                (
+                    existing.id.clone(),
+                    outbound_title(&existing.label, &existing.url),
+                    existing.url.clone(),
+                )
+            }
+            None => {
+                let entry = OutboundDrive {
+                    id: uuid::Uuid::new_v4().to_string(),
+                    url: url.clone(),
+                    label,
+                    added_at: config::current_millis(),
+                };
+                let id = entry.id.clone();
+                let title = outbound_title(&entry.label, &entry.url);
+                cfg.outbound.push(entry);
+                (id, title, url)
+            }
+        };
+        store.save(&cfg).map_err(err)?;
+        (id, title, stored_url)
+    };
+    serve::spawn_outbound_drive_window(&app, &id, &title, &stored_url)?;
+    let _ = app.emit(serve::SERVES_CHANGED, ());
+    Ok(id)
+}
+
+/// Open another webview for a stored outbound URL attachment.
+#[tauri::command]
+fn open_outbound_drive(
+    app: tauri::AppHandle,
+    state: State<Arc<AppState>>,
+    id: String,
+) -> Result<(), String> {
+    let (title, url) = {
+        let cfg = state.store.lock().unwrap().get().map_err(err)?;
+        let outbound = cfg
+            .outbound
+            .iter()
+            .find(|d| d.id == id)
+            .ok_or_else(|| format!("no outbound drive attachment {id}"))?;
+        (
+            outbound_title(&outbound.label, &outbound.url),
+            outbound.url.clone(),
+        )
+    };
+    serve::spawn_outbound_drive_window(&app, &id, &title, &url)
+}
+
+/// Forget an outbound URL attachment. The remote server is not
+/// stopped; only desktop config and open webviews for this
+/// attachment are removed.
+#[tauri::command]
+fn remove_outbound_drive(
+    app: tauri::AppHandle,
+    state: State<Arc<AppState>>,
+    id: String,
+) -> Result<(), String> {
+    {
+        let mut store = state.store.lock().unwrap();
+        let mut cfg = store.get().map_err(err)?;
+        let before = cfg.outbound.len();
+        cfg.outbound.retain(|d| d.id != id);
+        if cfg.outbound.len() != before {
+            store.save(&cfg).map_err(err)?;
+        }
+    }
+    serve::close_outbound_drive_windows(&app, &id);
+    let _ = app.emit(serve::SERVES_CHANGED, ());
+    Ok(())
+}
+
+fn normalize_outbound_url(raw: &str) -> Result<String, String> {
+    let raw = raw.trim();
+    if raw.is_empty() {
+        return Err("remote URL is required".to_string());
+    }
+    let mut parsed =
+        url::Url::parse(raw).map_err(|e| format!("invalid remote URL {raw:?}: {e}"))?;
+    if !matches!(parsed.scheme(), "http" | "https") {
+        return Err("remote URL must use http:// or https://".to_string());
+    }
+    if parsed.host_str().is_none() {
+        return Err("remote URL must include a host".to_string());
+    }
+    strip_query_param(&mut parsed, "w");
+    Ok(parsed.to_string())
+}
+
+fn strip_query_param(parsed: &mut url::Url, name: &str) {
+    if !parsed.query_pairs().any(|(key, _)| key == name) {
+        return;
+    }
+    let pairs: Vec<(String, String)> = parsed
+        .query_pairs()
+        .filter(|(key, _)| key != name)
+        .map(|(key, value)| (key.into_owned(), value.into_owned()))
+        .collect();
+    let mut query = parsed.query_pairs_mut();
+    query.clear();
+    for (key, value) in pairs {
+        query.append_pair(&key, &value);
+    }
+}
+
+fn normalize_outbound_label(raw: &str) -> Result<String, String> {
+    let label = raw.trim().to_string();
+    if label.chars().count() > OUTBOUND_LABEL_MAX_CHARS {
+        return Err(format!(
+            "remote label must be {OUTBOUND_LABEL_MAX_CHARS} characters or fewer",
+        ));
+    }
+    Ok(label)
+}
+
+fn outbound_title(label: &str, url: &str) -> String {
+    let label = label.trim();
+    if label.is_empty() {
+        url.to_string()
+    } else {
+        label.to_string()
+    }
+}
+
+fn outbound_label(outbound: &OutboundDrive) -> Option<String> {
+    let label = outbound.label.trim();
+    if label.is_empty() {
+        None
+    } else {
+        Some(label.to_string())
+    }
+}
+
 /// Open an additional in-app Tauri webview for a running local
 /// drive. The first window is auto-opened by the serve supervisor
 /// when chan prints its URL; subsequent clicks on Launch reach
@@ -1389,6 +1570,9 @@ fn main() {
             tunnel_stop,
             open_local_drive,
             open_tunneled_drive,
+            add_outbound_drive,
+            open_outbound_drive,
+            remove_outbound_drive,
             chan_bin_status,
             auth::auth_status,
             auth::open_signin,
@@ -1571,7 +1755,7 @@ fn dispatch_to_focused_drive(app: &tauri::AppHandle, command: &str) {
     let Some(w) = app
         .webview_windows()
         .into_values()
-        .find(|w| w.label().starts_with("drive-") && w.is_focused().unwrap_or(false))
+        .find(|w| serve::is_drive_webview_label(w.label()) && w.is_focused().unwrap_or(false))
     else {
         return;
     };
@@ -1594,6 +1778,29 @@ mod tests {
         assert!(MAIN_RS.contains("\"__mcp-proxy\""));
         assert!(MAIN_RS.contains("run_hidden_mcp_proxy_if_requested"));
         assert!(MAIN_RS.contains("run_mcp_proxy(socket)"));
+    }
+
+    #[test]
+    fn normalize_outbound_url_accepts_http_and_strips_window_param() {
+        let url = normalize_outbound_url(" http://127.0.0.1:4000/drive/?t=abc&w=old#files ")
+            .expect("valid url");
+        assert_eq!(url, "http://127.0.0.1:4000/drive/?t=abc#files");
+    }
+
+    #[test]
+    fn normalize_outbound_url_rejects_non_http() {
+        let err = normalize_outbound_url("file:///tmp/foo").expect_err("rejected");
+        assert!(err.contains("http:// or https://"));
+    }
+
+    #[test]
+    fn normalize_outbound_label_trims_and_caps() {
+        assert_eq!(
+            normalize_outbound_label("  Remote notes  ").expect("label"),
+            "Remote notes",
+        );
+        let too_long = "x".repeat(OUTBOUND_LABEL_MAX_CHARS + 1);
+        assert!(normalize_outbound_label(&too_long).is_err());
     }
 
     /// `fullstack-b-28b` slice iv: extension classifier maps the

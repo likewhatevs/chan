@@ -343,6 +343,23 @@ pub fn new_tunnel_window_label(tenant_label: &str, drive: &str) -> String {
     )
 }
 
+/// Stable window-label prefix for an outbound URL attachment.
+pub fn outbound_window_prefix(id: &str) -> String {
+    let mut h = DefaultHasher::new();
+    id.hash(&mut h);
+    format!("outbound-{:016x}", h.finish())
+}
+
+/// Fresh, unique window label for an outbound URL webview.
+pub fn new_outbound_window_label(id: &str) -> String {
+    format!("{}-{}", outbound_window_prefix(id), next_window_seq())
+}
+
+/// True when a Tauri label belongs to a per-drive webview.
+pub fn is_drive_webview_label(label: &str) -> bool {
+    label.starts_with("drive-") || label.starts_with("tunnel-") || label.starts_with("outbound-")
+}
+
 /// Spawn a new local-drive webview window pointing at `url`. Each
 /// call opens an independent window; multiple windows per drive are
 /// supported. Pops the most-recent WindowConfig for this drive (if
@@ -399,6 +416,31 @@ pub fn spawn_tunneled_drive_window(
     build_drive_window(app, &label, &title, url, &url_hash, config_key, zoom_level)
 }
 
+/// Spawn a new outbound URL webview window. The desktop does not own
+/// the remote process; this only creates another webview pointed at
+/// the persisted URL.
+pub fn spawn_outbound_drive_window(
+    app: &AppHandle,
+    id: &str,
+    title: &str,
+    url: &str,
+) -> Result<(), String> {
+    ensure_window_capacity(app, &outbound_window_prefix(id))?;
+    let config_key = config::outbound_window_key(id);
+    let prefix = outbound_window_prefix(id);
+    let restore = pop_compatible_config(app, &config_key, &prefix);
+    let label = match restore.as_ref() {
+        Some(c) => c.window_label.clone(),
+        None => new_outbound_window_label(id),
+    };
+    let url_hash = restore
+        .as_ref()
+        .map(|c| c.url_hash.clone())
+        .unwrap_or_default();
+    let zoom_level = restore.as_ref().map(|c| c.zoom_level).unwrap_or(1.0);
+    build_drive_window(app, &label, title, url, &url_hash, config_key, zoom_level)
+}
+
 /// Pop the top-of-stack window config for `config_key` only if the
 /// stored label is safe to reuse. The label must still match the
 /// drive's current hash prefix (defends against the drive key
@@ -434,8 +476,9 @@ fn pop_compatible_config(
 }
 
 /// Build and show a chan-style drive webview window on the main
-/// thread. Internal — call `spawn_local_drive_window` /
-/// `spawn_tunneled_drive_window` from outside. Centralising the
+/// thread. Internal: call `spawn_local_drive_window` /
+/// `spawn_tunneled_drive_window` / `spawn_outbound_drive_window`
+/// from outside. Centralising the
 /// key-bridge JS, the size defaults, the zoom-hotkey polyfill, and
 /// the drag-drop handler off in one place means drive UX changes
 /// don't fork between the local and tunneled paths.
@@ -491,7 +534,8 @@ fn build_drive_window(
             // phase listener calls preventDefault before the
             // polyfill's bubble-phase listener sees the keydown).
             // Requires `core:webview:allow-set-webview-zoom` on
-            // drive-* / tunnel-* windows per capabilities/drive.json.
+            // drive-* / tunnel-* / outbound-* windows per
+            // capabilities/drive.json.
             .zoom_hotkeys_enabled(true)
             // Hand HTML5 drag-and-drop to the page. Tauri's OS-level
             // drag handler swallows dragover events otherwise, so
@@ -615,6 +659,12 @@ pub fn close_local_drive_windows(app: &AppHandle, key: &str) {
 /// at nothing useful.
 pub fn close_tunneled_drive_windows(app: &AppHandle, tenant_label: &str, drive: &str) {
     close_windows_with_prefix(app, &tunnel_window_prefix(tenant_label, drive))
+}
+
+/// Destroy every webview window opened for this outbound URL
+/// attachment. Used when the user forgets the attachment row.
+pub fn close_outbound_drive_windows(app: &AppHandle, id: &str) {
+    close_windows_with_prefix(app, &outbound_window_prefix(id))
 }
 
 /// Destroy every tunneled-drive webview window in the process,
@@ -821,6 +871,17 @@ mod tests {
         assert!(MAIN_RS.contains("set_drive_features,"));
         assert!(MAIN_RS.contains("fn get_drive_features("));
         assert!(MAIN_RS.contains("fn set_drive_features("));
+    }
+
+    #[test]
+    fn invoke_handler_registers_outbound_attach_ipcs() {
+        const MAIN_RS: &str = include_str!("main.rs");
+        assert!(MAIN_RS.contains("add_outbound_drive,"));
+        assert!(MAIN_RS.contains("open_outbound_drive,"));
+        assert!(MAIN_RS.contains("remove_outbound_drive,"));
+        assert!(MAIN_RS.contains("fn add_outbound_drive("));
+        assert!(MAIN_RS.contains("fn open_outbound_drive("));
+        assert!(MAIN_RS.contains("fn remove_outbound_drive("));
     }
 
     #[test]
@@ -1327,7 +1388,7 @@ mod tests {
     }
 
     #[test]
-    fn drive_capability_grants_opener_to_drive_and_tunnel_windows() {
+    fn drive_capability_grants_opener_to_drive_tunnel_and_outbound_windows() {
         let windows = capability_windows(DRIVE_CAPABILITY_JSON);
         assert!(
             windows.iter().any(|w| w == "drive-*"),
@@ -1336,6 +1397,10 @@ mod tests {
         assert!(
             windows.iter().any(|w| w == "tunnel-*"),
             "drive capability must target tunnel-* windows: {windows:?}",
+        );
+        assert!(
+            windows.iter().any(|w| w == "outbound-*"),
+            "drive capability must target outbound-* windows: {windows:?}",
         );
         let perms = capability_permissions(DRIVE_CAPABILITY_JSON);
         assert!(

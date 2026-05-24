@@ -24,6 +24,8 @@ Current state:
 - Local child-process serving has been removed from desktop. There is no
   sidecar fallback mode.
 - The embedded desktop tunnel server remains inbound attach plumbing.
+- Desktop can persist and open explicit outbound URL attachments for
+  already-running `chan serve` instances.
 
 Target state:
 
@@ -81,8 +83,8 @@ Attach modes:
 
 - Keep local embedded drives as the default desktop mode.
 - Preserve attached inbound mode through the existing tunnel listener path.
-- Add attached outbound mode: desktop can open an already-running `chan
-  serve` URL as a non-owned remote drive.
+- Attached outbound mode lets desktop open an already-running `chan serve`
+  URL as a non-owned remote drive.
 - Document the three modes: local embedded, attached inbound, attached
   outbound.
 - Outbound attach should accept token-bearing URLs as pasted. The desktop
@@ -249,8 +251,10 @@ Operational release checks:
 
 ## Immediate sequence
 
-1. Commit the embedded-local desktop merge and documentation cleanup.
-2. Implement outbound URL attach in chan-desktop.
-3. Pause before CLI handoff to settle the IPC contract, no-handoff escape
-   hatch, and which `chan serve` flags force standalone behavior.
+1. Commit the embedded-local desktop merge and documentation cleanup. Done:
+   `04e9a83`.
+2. Implement outbound URL attach in chan-desktop. Done.
+3. Current next: pause before CLI handoff to settle the IPC contract,
+   no-handoff escape hatch, and which `chan serve` flags force standalone
+   behavior.
 4. Continue with CLI handoff only after that design checkpoint.
