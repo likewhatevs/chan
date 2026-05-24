@@ -9,7 +9,7 @@
   //    disable flow).
   // 2. Drive-wide multi-model picker backed by the semantic model
   //    registry endpoints.
-  // 3. chan-reports toggle (G1 regression fix — toggle was
+  // 3. chan-reports toggle (G1 regression fix: toggle was
   //    specced in round-2-plan §"Pre-flight feature toggles"
   //    but never landed in v1; option B routed by @@Architect
   //    lands the SPA wiring + default ON behaviourally matching
@@ -40,7 +40,7 @@
   type SaveStatus = "idle" | "saving" | "saved" | { error: string };
 
   /// Local edit buffer for the reports slice. The semantic-search
-  /// state machine owns its own (semanticState etc.) — those
+  /// state machine owns its own (semanticState etc.), those
   /// endpoints are stateful POSTs against the chan-server, not
   /// preferences.
   let editing = $state<Preferences | null>(null);
@@ -157,7 +157,7 @@
     scheduleSave();
   });
 
-  // Semantic search state — same shape as the SettingsPanel
+  // Semantic search state, same shape as the SettingsPanel
   // `-a-21` original. Endpoints are stateful POSTs on the server;
   // the SPA owns the downloading + enabling spinners (we don't
   // round-trip those flags through preferences).
@@ -253,8 +253,8 @@
     return semanticModels?.models.find((model) => model.id === semanticModels?.current_model);
   }
 
-  function formatModelSize(bytes: number | null): string {
-    if (bytes === null || bytes <= 0) return "size unknown";
+  function formatModelSize(bytes: number | null | undefined): string {
+    if (bytes == null || !Number.isFinite(bytes) || bytes <= 0) return "size unknown";
     const mb = bytes / (1024 * 1024);
     return `${mb.toFixed(1)} MB`;
   }
@@ -407,7 +407,7 @@
       {/if}
     </section>
 
-    <!-- `fullstack-a-48` chan-reports toggle (option B landing —
+    <!-- `fullstack-a-48` chan-reports toggle (option B landing:
          user-visible toggle + Preferences wire-up; backend gating
          + default flip to OFF + destructive-on-disable modal
          deferred to a follow-up task). -->

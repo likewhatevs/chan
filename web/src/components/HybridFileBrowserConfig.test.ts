@@ -8,7 +8,7 @@ import panel from "./SettingsPanel.svelte?raw";
 // search (moved verbatim from `-a-21`), multi-model picker
 // placeholder (Round-3 Track 2 future slot), chan-reports
 // (G1 regression-fix toggle wired to a new Preferences.reports
-// shape — backend gating + default-flip-to-OFF + destructive-on-
+// shape: backend gating + default-flip-to-OFF + destructive-on-
 // disable modal are a follow-up task per option (B) routing).
 
 describe("fullstack-a-48: HybridFileBrowserConfig wiring", () => {
@@ -42,7 +42,10 @@ describe("fullstack-a-48: HybridFileBrowserConfig wiring", () => {
   });
 
   test("formatModelSize helper carries over from SettingsPanel", () => {
-    expect(source).toMatch(/function formatModelSize\(bytes: number \| null\)/);
+    expect(source).toMatch(
+      /function formatModelSize\(bytes: number \| null \| undefined\)/,
+    );
+    expect(source).toMatch(/bytes == null \|\| !Number\.isFinite\(bytes\)/);
     expect(source).toMatch(/\.toFixed\(1\)/);
   });
 
