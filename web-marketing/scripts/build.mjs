@@ -429,6 +429,7 @@ async function validateDist(version) {
     const text = await fs.readFile(file, "utf8");
     textByDistPath.set(path.relative(distRoot, file).split(path.sep).join("/"), text);
     validateNoRemovedInstallSurface(file, text);
+    validateNoStalePublicCopy(file, text);
   }
 
   for (const required of ["index.html", "install/index.html", "manual/index.html", "install.sh", "CNAME"]) {
@@ -516,6 +517,22 @@ function validateNoRemovedInstallSurface(file, text) {
   for (const pattern of forbidden) {
     if (pattern.test(text)) {
       throw new Error(`${path.relative(repoRoot, file)} contains removed install surface: ${pattern}`);
+    }
+  }
+}
+
+function validateNoStalePublicCopy(file, text) {
+  const forbidden = [
+    /\bCLI[- ]only\b/i,
+    /assistant pane/i,
+    /in-app assistant/i,
+    /no telemetry/i,
+    /github\.com\/chan-writer\/chan/i,
+    /chan\.app\/dl\/(?:latest|v[0-9])/i,
+  ];
+  for (const pattern of forbidden) {
+    if (pattern.test(text)) {
+      throw new Error(`${path.relative(repoRoot, file)} contains stale public copy: ${pattern}`);
     }
   }
 }

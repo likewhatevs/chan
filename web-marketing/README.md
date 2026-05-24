@@ -42,6 +42,7 @@ The build:
 - fails if generated release links drift away from GitHub latest-download
   URLs
 - fails if removed installer references reappear in generated public files
+- fails if stale public copy claims reappear in generated output
 
 ## Preview
 

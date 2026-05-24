@@ -39,6 +39,9 @@ Follow-up in this wave:
 - Because `github.com/fiorix/chan` is still private during pre-release work,
   current unauthenticated latest-download URL checks return 404. Use
   `--skip-latest-download-heads` only for private-repo asset-shape checks.
+- The site generator now rejects stale generated public copy for CLI-only
+  status, assistant-pane language, unaudited "no telemetry" claims, old org
+  links, and old `/dl/` release routes.
 
 Latest local checks:
 
@@ -53,6 +56,7 @@ Latest local checks:
   --skip-latest-download-heads` against current latest release. This passes
   the release asset checks and reports the expected missing manual bundle
   because `chan-v0.14.0` predates this wave.
+- `npm run build` verifies the stale-copy guards against generated output.
 
 Next wave:
 
@@ -70,7 +74,7 @@ Next wave:
 
 ## 1. Static site build
 
-Current state:
+Starting state:
 
 - `web-marketing/` is a copied static site with one `index.html`.
 - There is no build step, no generated `dist/`, and no Pages workflow.
