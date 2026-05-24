@@ -39,6 +39,8 @@ The build:
 - copies static assets into `dist/`
 - fails on missing required inputs
 - fails on broken local links
+- fails if generated release links drift away from GitHub latest-download
+  URLs
 - fails if removed installer references reappear in generated public files
 
 ## Preview
@@ -63,6 +65,11 @@ only the active standalone CLI release targets:
 
 Desktop packages are downloaded directly as release artifacts. They are not
 installed by `install.sh`.
+
+`install.sh` defaults to GitHub's real latest-release asset URLs under
+`https://github.com/fiorix/chan/releases/latest/download/`. GitHub Pages does
+not proxy release artifacts, so the public site must not depend on a
+`chan.app/dl/latest/` route unless a static mirror is deliberately added later.
 
 ## Workspace boundary
 

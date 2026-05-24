@@ -17,7 +17,8 @@ installer does not install desktop packages.
 
 ## Standalone CLI
 
-The POSIX installer installs only the `chan` CLI:
+The POSIX installer installs only the `chan` CLI. The script is served from
+`chan.app`, but release tarballs are downloaded from GitHub Releases:
 
 ```sh
 curl -fsSL https://chan.app/install.sh | sh
@@ -35,10 +36,10 @@ Use `PREFIX` to choose the install prefix:
 PREFIX=/usr/local sudo sh install.sh
 ```
 
-Use `BASE` to point at another mirror:
+Use `BASE` to point at another directory containing release assets:
 
 ```sh
-BASE=https://staging.chan.app sh install.sh
+BASE=https://github.com/fiorix/chan/releases/download/chan-v0.14.0 sh install.sh
 ```
 
 Unsupported OS and architecture pairs fail explicitly.

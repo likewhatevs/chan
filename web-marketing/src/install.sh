@@ -3,15 +3,16 @@
 #
 #   curl -fsSL https://chan.app/install.sh | sh
 #
-# Downloads the matching standalone CLI tarball from chan.app and
-# installs `chan` into PREFIX/bin. Defaults:
+# Downloads the matching standalone CLI tarball from GitHub Releases
+# and installs `chan` into PREFIX/bin. Defaults:
 #
 #   PREFIX=$HOME/.local
-#   BASE=https://chan.app
+#   BASE=https://github.com/fiorix/chan/releases/latest/download
 
 set -eu
 
-BASE="${BASE:-https://chan.app}"
+BASE="${BASE:-https://github.com/fiorix/chan/releases/latest/download}"
+BASE="${BASE%/}"
 PREFIX="${PREFIX:-$HOME/.local}"
 
 err() { printf 'install: %s\n' "$1" >&2; exit 1; }
@@ -36,7 +37,7 @@ case "$os" in
     *) err "Unsupported OS: $os." ;;
 esac
 
-url="$BASE/dl/latest/$asset"
+url="$BASE/$asset"
 bindir="$PREFIX/bin"
 mkdir -p "$bindir"
 

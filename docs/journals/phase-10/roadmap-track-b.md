@@ -1,10 +1,42 @@
 # Phase 10 Roadmap Track B: Public Site, Manual Pages, Install Split
 
-Status: planning.
+Status: in progress.
 
 Track B turns `web-marketing` into the public site source of truth,
 publishes `docs/manual/` as public documentation, and cleans up the
 install surface now that desktop and CLI have different release shapes.
+
+## Current wave record
+
+Landed in `915f5d9`:
+
+- Added the `web-marketing` static generator and GitHub Pages workflow.
+- Added the initial public manual under `docs/manual/`.
+- Removed the public Windows installer surface.
+- Rewired `chan upgrade` to GitHub Releases under `github.com/fiorix/chan`.
+
+Follow-up in this wave:
+
+- `chan.app` is a static GitHub Pages site. It serves the generated site and
+  `/install.sh`.
+- First-install binaries are fetched from GitHub Releases via
+  `https://github.com/fiorix/chan/releases/latest/download/<asset>`.
+- `/dl/latest/` is not part of the current public contract. Add it only if a
+  generated static mirror becomes a deliberate later choice.
+- The site generator validates generated release links, rejects stale
+  `/dl/latest/` and `chan-writer/chan` public links, and verifies the
+  `install.sh` default `BASE`.
+
+Latest local checks:
+
+- `npm run build` in `web-marketing/`
+- `sh -n web-marketing/dist/install.sh`
+- `git diff --check` on the Track B follow-up files
+
+Next wave:
+
+- Decide how the release-tag manual bundle is produced from `docs/manual/`.
+- Recheck release asset names after Track A finalizes desktop artifact names.
 
 ## Objectives
 
@@ -99,8 +131,12 @@ Desktop install:
 CLI install:
 
 - Keep `/install.sh` as the POSIX installer for the standalone `chan` CLI.
-- `/install.sh` is first-install only and downloads from
-  `https://chan.app/dl/latest/`.
+- `/install.sh` is first-install only. It is served by `chan.app`, but its
+  default binary download base is GitHub's native latest-release asset route:
+  `https://github.com/fiorix/chan/releases/latest/download/`.
+- `BASE` overrides point at a directory containing release assets, for
+  example
+  `https://github.com/fiorix/chan/releases/download/chan-v0.14.0`.
 - Support only active standalone CLI release targets:
   - Linux x86_64
   - Linux aarch64
@@ -145,6 +181,10 @@ GitHub Pages:
 - Publish `web-marketing/dist/` to GitHub Pages.
 - Include `CNAME` for `chan.app` in the published artifact.
 - Keep Pages hosting as the only new hosting dependency.
+- GitHub Pages serves the static site and `/install.sh`; it does not proxy
+  GitHub Release assets.
+- Do not depend on `/dl/latest/` under `chan.app` unless a static mirror is
+  explicitly generated later.
 - DNS cutover remains an operational step, not a build-script side effect.
 
 Release integration:
@@ -153,6 +193,9 @@ Release integration:
   `github.com/fiorix/chan`, not the old `chan-writer` org.
 - Keep `.github/workflows/release.yml` for standalone CLI artifacts.
 - Keep `.github/workflows/release-desktop.yml` for desktop artifacts.
+- First-install direct links and `install.sh` use GitHub's latest-download
+  route:
+  `https://github.com/fiorix/chan/releases/latest/download/<asset>`.
 - `chan upgrade` uses GitHub Releases directly:
   - latest probe: `https://api.github.com/repos/fiorix/chan/releases/latest`
   - download base:
@@ -164,7 +207,7 @@ Release integration:
 - Add a release-tag manual bundle generated from the same `docs/manual/`
   source, either attached to the GitHub release or published as part of the
   Pages artifact.
-- Verify that `chan.app/dl/latest/` URLs used by the site match the active
+- Verify that latest-download GitHub URLs used by the site match the active
   first-install artifacts.
 - Verify that GitHub Release URLs used by `chan upgrade` match the active
   standalone CLI artifacts.
@@ -214,7 +257,7 @@ Release checks:
 - Verify desktop links resolve to DMG, AppImage, and deb artifacts.
 - Verify CLI links resolve to Linux x86_64, Linux aarch64, and macOS
   aarch64 artifacts.
-- Verify `install.sh` installs the CLI from `/dl/latest/`.
+- Verify `install.sh` installs the CLI from GitHub's latest-download route.
 - Verify `chan upgrade` resolves `chan-v<version>` GitHub Release assets,
   verifies `SHA256SUMS`, and rejects unsupported targets.
 - Verify the manual bundle is generated from the same `docs/manual/`

@@ -9,6 +9,8 @@ const repoRoot = path.resolve(siteRoot, "..");
 const srcRoot = path.join(siteRoot, "src");
 const distRoot = path.join(siteRoot, "dist");
 const manualRoot = path.join(repoRoot, "docs", "manual");
+const githubRepoUrl = "https://github.com/fiorix/chan";
+const latestDownloadBase = `${githubRepoUrl}/releases/latest/download`;
 
 const requiredInputs = [
   path.join(srcRoot, "templates", "base.html"),
@@ -77,7 +79,7 @@ async function main() {
     );
   }
 
-  await validateDist();
+  await validateDist(version);
   console.log(`built web-marketing/dist for chan ${version}`);
 }
 
@@ -99,13 +101,28 @@ async function readWorkspaceVersion() {
 
 function releaseUrls(version) {
   return {
-    desktopDmgUrl: `/dl/latest/Chan_${version}.dmg`,
-    desktopAppImageUrl: `/dl/latest/Chan_${version}_amd64.AppImage`,
-    desktopDebUrl: `/dl/latest/Chan_${version}_amd64.deb`,
-    cliLinuxX64Url: "/dl/latest/chan-x86_64-unknown-linux-gnu.tar.gz",
-    cliLinuxArm64Url: "/dl/latest/chan-aarch64-unknown-linux-gnu.tar.gz",
-    cliMacArm64Url: "/dl/latest/chan-aarch64-apple-darwin.tar.gz",
+    desktopDmgUrl: latestDownloadUrl(`Chan_${version}.dmg`),
+    desktopAppImageUrl: latestDownloadUrl(`Chan_${version}_amd64.AppImage`),
+    desktopDebUrl: latestDownloadUrl(`Chan_${version}_amd64.deb`),
+    cliLinuxX64Url: latestDownloadUrl("chan-x86_64-unknown-linux-gnu.tar.gz"),
+    cliLinuxArm64Url: latestDownloadUrl("chan-aarch64-unknown-linux-gnu.tar.gz"),
+    cliMacArm64Url: latestDownloadUrl("chan-aarch64-apple-darwin.tar.gz"),
   };
+}
+
+function releaseAssets(version) {
+  return [
+    `Chan_${version}.dmg`,
+    `Chan_${version}_amd64.AppImage`,
+    `Chan_${version}_amd64.deb`,
+    "chan-x86_64-unknown-linux-gnu.tar.gz",
+    "chan-aarch64-unknown-linux-gnu.tar.gz",
+    "chan-aarch64-apple-darwin.tar.gz",
+  ];
+}
+
+function latestDownloadUrl(asset) {
+  return `${latestDownloadBase}/${asset}`;
 }
 
 async function copyStaticAssets() {
@@ -159,7 +176,7 @@ function renderSiteNav(active) {
     ["home", "/", "Home"],
     ["install", "/install/", "Install"],
     ["manual", "/manual/", "Manual"],
-    ["github", "https://github.com/fiorix/chan", "GitHub"],
+    ["github", githubRepoUrl, "GitHub"],
   ];
   return links
     .map(([key, href, label]) => {
@@ -396,10 +413,11 @@ function escapeAttribute(value) {
   return escapeHtml(value).replaceAll("'", "&#39;");
 }
 
-async function validateDist() {
+async function validateDist(version) {
   const files = await collectFiles(distRoot);
   const htmlFiles = files.filter((file) => file.endsWith(".html"));
   const allDistPaths = new Set(files.map((file) => path.relative(distRoot, file).split(path.sep).join("/")));
+  const textByDistPath = new Map();
 
   for (const htmlFile of htmlFiles) {
     const html = await fs.readFile(htmlFile, "utf8");
@@ -409,12 +427,15 @@ async function validateDist() {
   const textFiles = files.filter((file) => /\.(html|css|js|sh|txt|xml)$/.test(file) || path.basename(file) === "CNAME");
   for (const file of textFiles) {
     const text = await fs.readFile(file, "utf8");
+    textByDistPath.set(path.relative(distRoot, file).split(path.sep).join("/"), text);
     validateNoRemovedInstallSurface(file, text);
   }
 
   for (const required of ["index.html", "install/index.html", "manual/index.html", "install.sh", "CNAME"]) {
     if (!allDistPaths.has(required)) throw new Error(`dist is missing ${required}`);
   }
+
+  validateReleaseDownloadContract(textByDistPath, version);
 }
 
 async function collectFiles(dir) {
@@ -435,12 +456,24 @@ function validateLocalLinks(htmlFile, html, allDistPaths) {
   const pageUrl = urlForOutput(path.relative(distRoot, htmlFile).split(path.sep).join("/"));
   const attrPattern = /\b(?:href|src)="([^"]+)"/g;
   for (const match of html.matchAll(attrPattern)) {
+    validatePublicLink(htmlFile, match[1]);
     const target = normalizeLink(pageUrl, match[1]);
     if (!target) continue;
-    if (target.startsWith("/dl/")) continue;
     const distPath = distPathForUrl(target);
     if (!allDistPaths.has(distPath)) {
       throw new Error(`${path.relative(repoRoot, htmlFile)} links to missing ${match[1]}`);
+    }
+  }
+}
+
+function validatePublicLink(htmlFile, raw) {
+  const forbidden = [
+    /(?:https?:\/\/chan\.app)?\/dl\/latest\//i,
+    /github\.com\/chan-writer\/chan/i,
+  ];
+  for (const pattern of forbidden) {
+    if (pattern.test(raw)) {
+      throw new Error(`${path.relative(repoRoot, htmlFile)} links to stale release route: ${raw}`);
     }
   }
 }
@@ -484,6 +517,29 @@ function validateNoRemovedInstallSurface(file, text) {
     if (pattern.test(text)) {
       throw new Error(`${path.relative(repoRoot, file)} contains removed install surface: ${pattern}`);
     }
+  }
+}
+
+function validateReleaseDownloadContract(textByDistPath, version) {
+  const html = [...textByDistPath.entries()]
+    .filter(([file]) => file.endsWith(".html"))
+    .map(([, text]) => text)
+    .join("\n");
+
+  for (const asset of releaseAssets(version)) {
+    const url = latestDownloadUrl(asset);
+    if (!html.includes(url)) {
+      throw new Error(`generated pages are missing release URL: ${url}`);
+    }
+  }
+
+  const installer = textByDistPath.get("install.sh") ?? "";
+  const expectedBase = `BASE="\${BASE:-${latestDownloadBase}}"`;
+  if (!installer.includes(expectedBase)) {
+    throw new Error(`install.sh must default BASE to ${latestDownloadBase}`);
+  }
+  if (installer.includes("/dl/latest/")) {
+    throw new Error("install.sh must not depend on /dl/latest/");
   }
 }
 
