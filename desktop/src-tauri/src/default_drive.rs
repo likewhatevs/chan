@@ -2,8 +2,8 @@
 //!
 //! Fresh desktop installs get a user-owned `Chan` drive under the
 //! platform Documents directory, seeded from `docs/manual/`. This
-//! path is intentionally narrow: existing registries are left alone
-//! until the explicit migration UX lands.
+//! path is intentionally narrow: existing registries are migrated only
+//! through explicit user choices in the launcher.
 
 use std::borrow::Cow;
 use std::path::{Component, Path, PathBuf};
@@ -30,7 +30,9 @@ pub struct DefaultDriveCandidate {
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 pub struct DefaultDriveStatus {
     pub needs_prompt: bool,
+    pub needs_factory_reset: bool,
     pub default_root: Option<String>,
+    pub missing_default_root: Option<String>,
     pub suggested_root: String,
     pub drives: Vec<DefaultDriveCandidate>,
 }
@@ -65,6 +67,14 @@ pub fn create_default_drive() -> Result<CreatedDefaultDrive, String> {
     let root = desktop_default_drive_root();
     let files = embedded_manual_files();
     create_default_drive_at(&config_path, &root, files)
+}
+
+pub fn factory_reset_default_drive() -> Result<CreatedDefaultDrive, String> {
+    let config_path = chan_drive::paths::global_config_path();
+    let metadata_dir = chan_drive::paths::config_dir();
+    let root = desktop_default_drive_root();
+    let files = embedded_manual_files();
+    factory_reset_default_drive_at(&config_path, &metadata_dir, &root, files)
 }
 
 fn ensure_fresh_default_drive_at(
@@ -115,22 +125,67 @@ fn create_default_drive_at(
 fn status_at(config_path: &Path, suggested_root: &Path) -> Result<DefaultDriveStatus, String> {
     let registry = Registry::load_from(config_path)
         .map_err(|e| format!("loading chan registry {}: {e}", config_path.display()))?;
+    let missing_default = registry
+        .default_drive_root
+        .as_ref()
+        .filter(|root| !drive_root_available(root));
+    let needs_factory_reset = missing_default
+        .map(|root| same_path(root, suggested_root))
+        .unwrap_or(false);
+    let needs_prompt = if needs_factory_reset {
+        false
+    } else if registry.default_drive_root.is_none() {
+        !registry.drives.is_empty()
+    } else {
+        missing_default.is_some()
+    };
     let drives: Vec<DefaultDriveCandidate> = registry
         .drives
         .iter()
+        .filter(|d| drive_root_available(&d.root_path))
         .map(|d| DefaultDriveCandidate {
             path: d.root_path.display().to_string(),
         })
         .collect();
     Ok(DefaultDriveStatus {
-        needs_prompt: registry.default_drive_root.is_none() && !registry.drives.is_empty(),
+        needs_prompt,
+        needs_factory_reset,
         default_root: registry
             .default_drive_root
             .as_ref()
             .map(|p| p.display().to_string()),
+        missing_default_root: missing_default.map(|p| p.display().to_string()),
         suggested_root: suggested_root.display().to_string(),
         drives,
     })
+}
+
+fn factory_reset_default_drive_at(
+    config_path: &Path,
+    metadata_dir: &Path,
+    root: &Path,
+    files: Vec<ManualSeedFile>,
+) -> Result<CreatedDefaultDrive, String> {
+    let registry = Registry::load_from(config_path)
+        .map_err(|e| format!("loading chan registry {}: {e}", config_path.display()))?;
+    let Some(default_root) = registry.default_drive_root else {
+        return Err("factory reset requires a configured default drive".into());
+    };
+    if drive_root_available(&default_root) {
+        return Err(format!(
+            "default drive {} still exists; factory reset is not needed",
+            default_root.display()
+        ));
+    }
+    if !same_path(&default_root, root) {
+        return Err(format!(
+            "missing default drive {} is not the desktop Chan drive {}",
+            default_root.display(),
+            root.display()
+        ));
+    }
+    wipe_chan_metadata_contents(metadata_dir)?;
+    create_default_drive_at(config_path, root, files)
 }
 
 fn choose_existing_at(config_path: &Path, path: &Path) -> Result<PathBuf, String> {
@@ -149,6 +204,53 @@ fn choose_existing_at(config_path: &Path, path: &Path) -> Result<PathBuf, String
 
 fn is_fresh_registry(registry: &Registry) -> bool {
     registry.drives.is_empty() && registry.default_drive_root.is_none()
+}
+
+fn drive_root_available(root: &Path) -> bool {
+    std::fs::metadata(root).map(|m| m.is_dir()).unwrap_or(false)
+}
+
+fn same_path(a: &Path, b: &Path) -> bool {
+    match (a.canonicalize(), b.canonicalize()) {
+        (Ok(a), Ok(b)) => a == b,
+        _ => a == b,
+    }
+}
+
+fn wipe_chan_metadata_contents(dir: &Path) -> Result<(), String> {
+    match std::fs::symlink_metadata(dir) {
+        Ok(meta) if !meta.is_dir() || meta.file_type().is_symlink() => {
+            return Err(format!(
+                "refusing to wipe chan metadata path {}; it is not a directory",
+                dir.display()
+            ));
+        }
+        Ok(_) => {}
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            std::fs::create_dir_all(dir)
+                .map_err(|e| format!("creating chan metadata dir {}: {e}", dir.display()))?;
+            return Ok(());
+        }
+        Err(e) => return Err(format!("checking chan metadata dir {}: {e}", dir.display())),
+    }
+
+    for entry in std::fs::read_dir(dir)
+        .map_err(|e| format!("reading chan metadata dir {}: {e}", dir.display()))?
+    {
+        let entry =
+            entry.map_err(|e| format!("reading chan metadata dir {}: {e}", dir.display()))?;
+        let path = entry.path();
+        let meta = std::fs::symlink_metadata(&path)
+            .map_err(|e| format!("checking chan metadata entry {}: {e}", path.display()))?;
+        if meta.is_dir() && !meta.file_type().is_symlink() {
+            std::fs::remove_dir_all(&path)
+                .map_err(|e| format!("removing chan metadata dir {}: {e}", path.display()))?;
+        } else {
+            std::fs::remove_file(&path)
+                .map_err(|e| format!("removing chan metadata file {}: {e}", path.display()))?;
+        }
+    }
+    Ok(())
 }
 
 fn desktop_default_drive_root() -> PathBuf {
@@ -257,8 +359,52 @@ mod tests {
 
         let status = status_at(&config_path, &cfg.path().join("Chan")).unwrap();
         assert!(status.needs_prompt);
+        assert!(!status.needs_factory_reset);
         assert_eq!(status.default_root, None);
         assert_eq!(status.drives.len(), 1);
+    }
+
+    #[test]
+    fn status_requests_factory_reset_when_default_chan_root_is_missing() {
+        let cfg = TempDir::new().unwrap();
+        let root = cfg.path().join("Documents").join("Chan");
+        let config_path = cfg.path().join("config.toml");
+        let mut registry = Registry::default();
+        registry.default_drive_root = Some(root.clone());
+        registry.touch(&root);
+        registry.save_to(&config_path).unwrap();
+
+        let status = status_at(&config_path, &root).unwrap();
+        assert!(!status.needs_prompt);
+        assert!(status.needs_factory_reset);
+        assert_eq!(status.default_root, Some(root.display().to_string()));
+        assert_eq!(
+            status.missing_default_root,
+            Some(root.display().to_string()),
+        );
+        assert!(status.drives.is_empty());
+    }
+
+    #[test]
+    fn status_prompts_when_non_chan_default_root_is_missing() {
+        let cfg = TempDir::new().unwrap();
+        let root = cfg.path().join("somewhere-else");
+        let suggested = cfg.path().join("Documents").join("Chan");
+        let config_path = cfg.path().join("config.toml");
+        let mut registry = Registry::default();
+        registry.default_drive_root = Some(root.clone());
+        registry.touch(&root);
+        registry.save_to(&config_path).unwrap();
+
+        let status = status_at(&config_path, &suggested).unwrap();
+        assert!(status.needs_prompt);
+        assert!(!status.needs_factory_reset);
+        assert_eq!(status.default_root, Some(root.display().to_string()));
+        assert_eq!(
+            status.missing_default_root,
+            Some(root.display().to_string()),
+        );
+        assert!(status.drives.is_empty());
     }
 
     #[test]
@@ -294,5 +440,50 @@ mod tests {
         let registry = Registry::load_from(&config_path).unwrap();
         assert_eq!(registry.drives.len(), 2);
         assert_eq!(registry.default_drive_root, Some(created.root));
+    }
+
+    #[test]
+    fn factory_reset_refuses_existing_default_drive() {
+        let cfg = TempDir::new().unwrap();
+        let root = TempDir::new().unwrap();
+        let config_path = cfg.path().join("config.toml");
+        let mut registry = Registry::default();
+        registry.default_drive_root = Some(root.path().to_path_buf());
+        registry.touch(root.path());
+        registry.save_to(&config_path).unwrap();
+
+        let err = factory_reset_default_drive_at(&config_path, cfg.path(), root.path(), Vec::new())
+            .unwrap_err();
+        assert!(err.contains("still exists"));
+    }
+
+    #[test]
+    fn factory_reset_refuses_missing_non_chan_default_drive() {
+        let cfg = TempDir::new().unwrap();
+        let root = cfg.path().join("somewhere-else");
+        let suggested = cfg.path().join("Documents").join("Chan");
+        let config_path = cfg.path().join("config.toml");
+        let mut registry = Registry::default();
+        registry.default_drive_root = Some(root.clone());
+        registry.touch(&root);
+        registry.save_to(&config_path).unwrap();
+
+        let err = factory_reset_default_drive_at(&config_path, cfg.path(), &suggested, Vec::new())
+            .unwrap_err();
+        assert!(err.contains("is not the desktop Chan drive"));
+    }
+
+    #[test]
+    fn wipe_chan_metadata_contents_keeps_root_and_removes_children() {
+        let cfg = TempDir::new().unwrap();
+        let dir = cfg.path().join(".chan");
+        std::fs::create_dir_all(dir.join("drives").join("old")).unwrap();
+        std::fs::write(dir.join("config.toml"), "old").unwrap();
+        std::fs::write(dir.join("drives").join("old").join("index"), "old").unwrap();
+
+        wipe_chan_metadata_contents(&dir).unwrap();
+
+        assert!(dir.is_dir());
+        assert!(std::fs::read_dir(&dir).unwrap().next().is_none());
     }
 }

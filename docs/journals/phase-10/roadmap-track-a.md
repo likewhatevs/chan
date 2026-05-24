@@ -13,6 +13,8 @@ leaving them as intent in prior docs.
 - Close the desktop-native gaps that did not materialize in phase 9.
 - Sweep the highest-risk phase 9 validation, docs, config, and release
   hygiene gaps into named tasks.
+- Own native desktop File Browser drag-out/download support if browser-only
+  drag-out is not sufficient.
 
 ## 1. Desktop server merge
 
@@ -32,6 +34,9 @@ Current state:
 - Existing desktop users with registered drives but no default drive
   get a non-destructive prompt to choose an existing drive or create
   `Documents/Chan`.
+- If the registered default `Documents/Chan` drive is missing,
+  desktop requires a factory-reset confirmation before clearing chan
+  metadata and recreating the seeded default drive.
 
 Target state:
 
@@ -111,10 +116,31 @@ Default `Chan` drive:
 - Seed the drive with the full `docs/manual/` tree embedded at build time.
   Done for fresh metadata.
 - For existing users with metadata but no default `Chan` drive, prompt to
+
+Desktop File Browser drag-out/download:
+
+- Track C owns browser File Browser drop-to-upload and the web status-bar
+  progress/cancel flow.
+- Track A owns native desktop integration when dragging files or directories
+  from File Browser out to the OS desktop or file manager.
+- File drag-out should preserve the original basename and bytes.
+- Directory drag-out should preserve the directory tree. If the platform or
+  webview cannot expose a live directory drag payload, stage an archive export
+  with clear naming.
+- Use an OS-native drag payload or a temporary desktop export provider from
+  the Tauri layer.
+- Do not add direct desktop filesystem reads of drive content. Route export
+  data through the embedded server or another chan-drive-backed boundary.
+- Clean temporary exports after the drag lifecycle finishes, or through a
+  bounded cleanup pass if the platform does not provide a reliable completion
+  callback.
+- Cancelled drags should not leave user-visible temporary files behind.
+- Verify browser-only drag-out first. Keep this task scoped to gaps that need
+  native desktop help.
   designate an existing drive or create a new one. Do not wipe existing
   metadata during migration. Done.
 - If the registered default `Chan` drive is missing on launch, enter a
-  factory-reset confirmation flow before wiping chan metadata.
+  factory-reset confirmation flow before wiping chan metadata. Done.
 
 ## 3. Manual, docs, and site
 
@@ -212,6 +238,12 @@ Operational release checks:
   - Build the Tauri app.
   - Open two embedded local drives.
   - Edit both drives.
+  - Drag a File Browser file to the desktop and verify name and bytes.
+  - Drag a File Browser directory to the desktop and verify tree or archive
+    contents.
+  - Cancel a File Browser drag-out and verify temporary export cleanup.
+  - Repeat drag-out smoke on macOS and Linux where desktop builds are
+    available.
   - Run terminals in both drives.
   - Verify no cross-drive state bleed.
 - CLI compatibility:
@@ -265,5 +297,6 @@ Operational release checks:
 3. Implement fresh first-launch default `Chan` drive plus manual seed. Done.
 4. Implement existing-user default-drive prompt. Done.
 5. Remove stale server-wide reports config. Done.
-6. Current next remains open for selection. CLI handoff is deferred until
+6. Implement missing-default factory-reset confirmation. Done.
+7. Current next remains open for selection. CLI handoff is deferred until
    its design checkpoint.

@@ -890,9 +890,11 @@ mod tests {
         assert!(MAIN_RS.contains("default_drive_status,"));
         assert!(MAIN_RS.contains("choose_default_drive,"));
         assert!(MAIN_RS.contains("create_default_drive,"));
+        assert!(MAIN_RS.contains("factory_reset_default_drive,"));
         assert!(MAIN_RS.contains("fn default_drive_status("));
         assert!(MAIN_RS.contains("fn choose_default_drive("));
         assert!(MAIN_RS.contains("fn create_default_drive("));
+        assert!(MAIN_RS.contains("fn factory_reset_default_drive("));
     }
 
     #[test]
@@ -1116,6 +1118,14 @@ mod tests {
         assert!(
             MAIN_JS.contains("invoke('create_default_drive'"),
             "launcher must let users create Documents/Chan as default",
+        );
+        assert!(
+            MAIN_JS.contains("showMissingDefaultDriveDialog"),
+            "launcher must confirm before factory-resetting missing default drive metadata",
+        );
+        assert!(
+            MAIN_JS.contains("invoke('factory_reset_default_drive'"),
+            "launcher must route confirmed missing-default reset to Rust",
         );
     }
 

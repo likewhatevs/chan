@@ -966,6 +966,16 @@ async fn create_default_drive(
     serve::start(app, Arc::clone(&state), key).await
 }
 
+#[tauri::command]
+async fn factory_reset_default_drive(
+    app: tauri::AppHandle,
+    state: State<'_, Arc<AppState>>,
+) -> Result<(), String> {
+    let created = default_drive::factory_reset_default_drive()?;
+    let key = canonical_key(&created.root);
+    serve::start(app, Arc::clone(&state), key).await
+}
+
 const OUTBOUND_LABEL_MAX_CHARS: usize = 120;
 
 /// Persist an explicit outbound URL attachment and open it in a
@@ -1624,6 +1634,7 @@ fn main() {
             default_drive_status,
             choose_default_drive,
             create_default_drive,
+            factory_reset_default_drive,
             open_local_drive,
             open_tunneled_drive,
             add_outbound_drive,

@@ -132,7 +132,14 @@ launcher prompts once per process to choose an existing registered
 drive or create `Documents/Chan`. Choosing an existing drive only
 sets `default_drive_root`; it does not start, stop, move, or delete
 anything. Creating `Documents/Chan` registers and opens that new
-drive. The missing-default factory-reset path is still deferred.
+drive.
+
+When the registered default `Documents/Chan` path is missing, the
+launcher requires an explicit factory-reset confirmation before it
+clears chan metadata on this machine. The reset keeps user note
+folders outside chan metadata untouched, recreates `Documents/Chan`,
+seeds the manual, registers it, and opens it through the embedded
+local server.
 
 The "Open drive" button still registers a user-chosen folder.
 

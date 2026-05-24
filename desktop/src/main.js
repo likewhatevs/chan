@@ -168,7 +168,23 @@ async function maybePromptDefaultDrive() {
     showError(e);
     return;
   }
-  if (!status || !status.needs_prompt) return;
+  if (!status) return;
+  if (status.needs_factory_reset) {
+    const confirmed = await showMissingDefaultDriveDialog(status);
+    if (!confirmed) {
+      defaultDrivePromptDismissed = true;
+      return;
+    }
+    try {
+      await invoke('factory_reset_default_drive');
+    } catch (e) {
+      showError(e);
+      return;
+    }
+    await refresh();
+    return;
+  }
+  if (!status.needs_prompt) return;
   const choice = await showDefaultDriveDialog(status);
   if (!choice.accepted) {
     defaultDrivePromptDismissed = true;
@@ -185,6 +201,78 @@ async function maybePromptDefaultDrive() {
     return;
   }
   await refresh();
+}
+
+function showMissingDefaultDriveDialog(status) {
+  return new Promise((resolve) => {
+    const overlay = document.createElement('div');
+    overlay.className = 'preflight-overlay';
+    overlay.setAttribute('role', 'dialog');
+    overlay.setAttribute('aria-modal', 'true');
+    overlay.setAttribute('aria-labelledby', 'missing-default-title');
+
+    const dialog = document.createElement('div');
+    dialog.className = 'preflight-dialog default-drive-dialog';
+
+    const title = document.createElement('h2');
+    title.id = 'missing-default-title';
+    title.textContent = 'Default Chan drive missing';
+    dialog.appendChild(title);
+
+    const intro = document.createElement('p');
+    intro.className = 'preflight-intro';
+    intro.textContent =
+      'The default Chan drive path no longer exists. To continue with a fresh default drive, confirm a factory reset of chan metadata on this machine.';
+    dialog.appendChild(intro);
+
+    const pathEl = document.createElement('p');
+    pathEl.className = 'preflight-path';
+    pathEl.textContent =
+      status.missing_default_root || status.default_root || status.suggested_root || '';
+    dialog.appendChild(pathEl);
+
+    const detail = document.createElement('p');
+    detail.className = 'preflight-intro';
+    detail.textContent =
+      'Factory reset clears the chan registry, indexes, sessions, tokens, drafts, and generated reports. It does not delete note folders outside chan metadata. A new Documents/Chan drive will be created and seeded with the manual.';
+    dialog.appendChild(detail);
+
+    const buttons = document.createElement('div');
+    buttons.className = 'preflight-buttons';
+    const cancelBtn = document.createElement('button');
+    cancelBtn.className = 'btn';
+    cancelBtn.type = 'button';
+    cancelBtn.textContent = 'Cancel';
+    const resetBtn = document.createElement('button');
+    resetBtn.className = 'btn danger';
+    resetBtn.type = 'button';
+    resetBtn.textContent = 'Factory reset';
+    buttons.appendChild(cancelBtn);
+    buttons.appendChild(resetBtn);
+    dialog.appendChild(buttons);
+
+    overlay.appendChild(dialog);
+    document.body.appendChild(overlay);
+
+    function close(confirmed) {
+      document.removeEventListener('keydown', onKey);
+      overlay.remove();
+      resolve(confirmed);
+    }
+    function onKey(e) {
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        close(false);
+      }
+    }
+    cancelBtn.addEventListener('click', () => close(false));
+    resetBtn.addEventListener('click', () => close(true));
+    overlay.addEventListener('click', (e) => {
+      if (e.target === overlay) close(false);
+    });
+    document.addEventListener('keydown', onKey);
+    cancelBtn.focus();
+  });
 }
 
 function showDefaultDriveDialog(status) {
