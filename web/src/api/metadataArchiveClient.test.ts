@@ -25,4 +25,18 @@ describe("metadata archive api client", () => {
     expect(client).toMatch(/numericHeader\(res, "x-chan-metadata-files"\)/);
     expect(client).toMatch(/numericHeader\(res, "x-chan-metadata-bytes"\)/);
   });
+
+  test("metadataImport posts multipart options to the import endpoint", () => {
+    expect(types).toMatch(/export type MetadataImportReport = \{/);
+    expect(types).toMatch(/manifest: MetadataManifest;/);
+    expect(client).toMatch(
+      /metadataImport: async \([\s\S]{1,220}Promise<MetadataImportReport> => \{/,
+    );
+    expect(client).toMatch(/form\.append\("file", file\)/);
+    expect(client).toMatch(/form\.append\("rescan", opts\.rescan === false \? "false" : "true"\)/);
+    expect(client).toMatch(/form\.append\("force_scm", opts\.forceScm \? "true" : "false"\)/);
+    expect(client).toMatch(
+      /fetch\(apiPath\("\/api\/metadata\/import"\), \{[\s\S]{1,180}method: "POST"/,
+    );
+  });
 });

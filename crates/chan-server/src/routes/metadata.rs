@@ -1,20 +1,26 @@
 //! Chan metadata archive routes.
 //!
 //! The CLI owns path-based import/export commands. The web surface
-//! exposes a browser-safe export endpoint so users can download a
-//! manifest-first `.tar.zst` archive without giving the browser host
-//! filesystem paths.
+//! exposes browser-safe archive endpoints without giving the browser
+//! host filesystem paths.
 
 use std::path::Path;
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 
-use axum::extract::State;
+use axum::extract::{Multipart, State};
 use axum::http::{header, HeaderValue, StatusCode};
 use axum::response::{IntoResponse, Response};
-use chan_drive::{Library, MetadataExportOptions};
+use axum::Json;
+use chan_drive::{
+    Drive, Library, MetadataExportOptions, MetadataImportOptions, MetadataImportReport,
+};
 
+use crate::bus::{make_progress_broadcast, make_watch_bridge};
 use crate::error::{err, err_from};
-use crate::state::AppState;
+use crate::indexer::Indexer;
+use crate::state::{AppState, DriveCell};
+use crate::terminal_sessions::CloseReason;
 
 struct MetadataExportDownload {
     bytes: Vec<u8>,
@@ -32,6 +38,69 @@ pub async fn api_metadata_export(State(state): State<Arc<AppState>>) -> Response
     match result {
         Ok(Ok(download)) => metadata_download_response(download),
         Ok(Err(e)) => err_from(&e),
+        Err(join) => err(StatusCode::INTERNAL_SERVER_ERROR, join.to_string()),
+    }
+}
+
+pub async fn api_metadata_import(
+    State(state): State<Arc<AppState>>,
+    mut multipart: Multipart,
+) -> Response {
+    let mut archive_bytes: Option<Vec<u8>> = None;
+    let mut rescan = true;
+    let mut force_scm = false;
+
+    loop {
+        match multipart.next_field().await {
+            Ok(Some(field)) => {
+                let name = field.name().unwrap_or("").to_owned();
+                match name.as_str() {
+                    "file" if archive_bytes.is_none() => match field.bytes().await {
+                        Ok(bytes) => archive_bytes = Some(bytes.to_vec()),
+                        Err(e) => {
+                            return err(StatusCode::BAD_REQUEST, format!("multipart read: {e}"));
+                        }
+                    },
+                    "rescan" => match field.text().await {
+                        Ok(value) => rescan = parse_bool_field(&value),
+                        Err(e) => {
+                            return err(StatusCode::BAD_REQUEST, format!("multipart read: {e}"));
+                        }
+                    },
+                    "force_scm" => match field.text().await {
+                        Ok(value) => force_scm = parse_bool_field(&value),
+                        Err(e) => {
+                            return err(StatusCode::BAD_REQUEST, format!("multipart read: {e}"));
+                        }
+                    },
+                    _ => {
+                        let _ = field.bytes().await;
+                    }
+                }
+            }
+            Ok(None) => break,
+            Err(e) => return err(StatusCode::BAD_REQUEST, format!("multipart parse: {e}")),
+        }
+    }
+
+    let Some(bytes) = archive_bytes else {
+        return err(
+            StatusCode::BAD_REQUEST,
+            "missing `file` part in multipart body".into(),
+        );
+    };
+    if bytes.is_empty() {
+        return err(StatusCode::BAD_REQUEST, "empty metadata archive".into());
+    }
+
+    let state_clone = state.clone();
+    let result = tokio::task::spawn_blocking(move || {
+        perform_metadata_import(&state_clone, bytes, rescan, force_scm)
+    })
+    .await;
+    match result {
+        Ok(Ok(report)) => Json(report).into_response(),
+        Ok(Err(e)) => err_from_metadata_import(&e),
         Err(join) => err(StatusCode::INTERNAL_SERVER_ERROR, join.to_string()),
     }
 }
@@ -80,6 +149,122 @@ fn metadata_download_response(download: MetadataExportDownload) -> Response {
         headers.insert("x-chan-metadata-bytes", value);
     }
     response
+}
+
+const IMPORT_DRAIN_DEADLINE: Duration = Duration::from_secs(5);
+
+#[derive(Debug)]
+enum MetadataImportError {
+    Busy,
+    Core(chan_drive::ChanError),
+    Poisoned(&'static str),
+}
+
+fn err_from_metadata_import(e: &MetadataImportError) -> Response {
+    match e {
+        MetadataImportError::Busy => err(
+            StatusCode::CONFLICT,
+            "drive busy: in-flight requests still hold the writer lock; retry in a moment".into(),
+        ),
+        MetadataImportError::Core(c) => err_from(c),
+        MetadataImportError::Poisoned(what) => err(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("{what} poisoned"),
+        ),
+    }
+}
+
+fn parse_bool_field(value: &str) -> bool {
+    let value = value.trim().to_ascii_lowercase();
+    matches!(value.as_str(), "true" | "1" | "yes" | "on")
+}
+
+fn perform_metadata_import(
+    state: &AppState,
+    archive_bytes: Vec<u8>,
+    rescan: bool,
+    force_scm: bool,
+) -> Result<MetadataImportReport, MetadataImportError> {
+    let archive = tempfile::Builder::new()
+        .prefix("chan-metadata-import-")
+        .suffix(".tar.zst")
+        .tempfile()
+        .map_err(|e| MetadataImportError::Core(e.into()))?;
+    std::fs::write(archive.path(), archive_bytes)
+        .map_err(|e| MetadataImportError::Core(e.into()))?;
+
+    let mut cell_guard = state
+        .drive_cell
+        .write()
+        .map_err(|_| MetadataImportError::Poisoned("drive cell lock"))?;
+    state.terminal_sessions.close_all(CloseReason::Drive);
+    state
+        .loaded_teams
+        .lock()
+        .map_err(|_| MetadataImportError::Poisoned("loaded teams lock"))?
+        .clear();
+    let mut cell = cell_guard
+        .take()
+        .expect("drive cell missing outside metadata import window");
+    cell.indexer.cancel();
+    cell.watch_handle.take();
+    let drive_strong = cell.drive.clone();
+    drop(cell);
+
+    let deadline = Instant::now() + IMPORT_DRAIN_DEADLINE;
+    while Arc::strong_count(&drive_strong) > 1 && Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(25));
+    }
+    if Arc::strong_count(&drive_strong) > 1 {
+        install_drive_cell(state, &mut cell_guard, drive_strong)?;
+        return Err(MetadataImportError::Busy);
+    }
+    drop(drive_strong);
+
+    let import_result = state
+        .library
+        .import_metadata_archive(
+            &state.drive_root,
+            archive.path(),
+            MetadataImportOptions { rescan, force_scm },
+        )
+        .map_err(MetadataImportError::Core);
+    let restore_result = state
+        .library
+        .open_drive(&state.drive_root)
+        .map_err(MetadataImportError::Core)
+        .and_then(|drive| install_drive_cell(state, &mut cell_guard, drive));
+
+    restore_result?;
+    import_result
+}
+
+fn install_drive_cell(
+    state: &AppState,
+    cell_guard: &mut Option<DriveCell>,
+    drive: Arc<Drive>,
+) -> Result<(), MetadataImportError> {
+    let bridge = make_watch_bridge(&state.events_tx, &state.index_events_tx, &state.self_writes);
+    let watch_handle = drive.watch(bridge).map_err(MetadataImportError::Core)?;
+    let search_aggression = state
+        .server_config
+        .lock()
+        .map_err(|_| MetadataImportError::Poisoned("server config lock"))?
+        .search
+        .aggression;
+    let indexer = Arc::new(Indexer::spawn(
+        drive.clone(),
+        state.index_events_tx.subscribe(),
+        true,
+        search_aggression,
+        make_progress_broadcast(&state.events_tx),
+    ));
+    *cell_guard = Some(DriveCell {
+        drive,
+        watch_handle: Some(watch_handle),
+        indexer,
+    });
+    Ok(())
 }
 
 fn safe_filename_fragment(value: &str) -> String {

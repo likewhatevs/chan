@@ -157,9 +157,13 @@ describe("Wave 4: Infographics settings", () => {
     expect(infographics).toMatch(/import \{ formatSize \} from "\.\.\/state\/format";/);
     expect(infographics).toMatch(/async function exportMetadataArchive\(\): Promise<void>/);
     expect(infographics).toMatch(/await api\.metadataExport\(\)/);
+    expect(infographics).toMatch(/await api\.metadataImport\(metadataImportFile/);
     expect(infographics).toMatch(/URL\.createObjectURL\(download\.blob\)/);
     expect(infographics).toContain("Metadata archive");
     expect(infographics).toContain("Export metadata archive");
+    expect(infographics).toContain("Import metadata archive");
+    expect(infographics).toContain("Force SCM mismatch");
+    expect(infographics).toContain("Rescan after import");
   });
 });
 

@@ -23,6 +23,7 @@ import type {
   LanguageGraphResponse,
   LinkTarget,
   MetadataExportDownload,
+  MetadataImportReport,
   MoveResponse,
   ReportFileStats,
   ReportPrefix,
@@ -244,6 +245,24 @@ export const api = {
       files: numericHeader(res, "x-chan-metadata-files"),
       bytes: numericHeader(res, "x-chan-metadata-bytes"),
     };
+  },
+  metadataImport: async (
+    file: File,
+    opts: { rescan?: boolean; forceScm?: boolean } = {},
+  ): Promise<MetadataImportReport> => {
+    const form = new FormData();
+    form.append("file", file);
+    form.append("rescan", opts.rescan === false ? "false" : "true");
+    form.append("force_scm", opts.forceScm ? "true" : "false");
+    const res = await fetch(apiPath("/api/metadata/import"), {
+      method: "POST",
+      headers: directAuthHeaders(),
+      body: form,
+    });
+    if (!res.ok) {
+      await responseTextError(res);
+    }
+    return (await res.json()) as MetadataImportReport;
   },
   /** List contact-kind notes for the editor `@` picker. Optional
    *  `q` is a case-insensitive substring filter against the

@@ -43,12 +43,17 @@ The server route is settings-gated at `POST /api/metadata/export`, builds the
 archive through `chan_drive::Library::export_metadata_archive`, and returns a
 download with file and byte counts in response headers.
 
-Live import is deliberately left out of this slice. The existing CLI import
-replaces metadata subtrees on disk. Doing that inside a running server needs a
-drive-cell swap like storage reset, otherwise search, graph, sessions, MCP, or
-draft handles can observe replaced metadata under active state. The next import
-slice should either reuse the reset swap path or stay preflight-only in the UI
-until the swap is implemented.
+The follow-up web import slice adds `POST /api/metadata/import` as a
+settings-gated multipart route. It closes terminal sessions and loaded team
+watchers, drops the live watcher and indexer, waits for outstanding `Drive`
+clones to drain, runs `Library::import_metadata_archive`, and then reopens the
+drive cell with a fresh watcher and indexer. This mirrors the storage reset
+swap pattern so imported metadata is not replaced under active handles.
+
+Infographics now stages a selected `.tar.zst` archive behind an explicit
+Import action, defaults to rescan, exposes the SCM-force escape hatch, and
+reloads the app after successful import so restored session and draft metadata
+become authoritative.
 
 Additional evidence:
 

@@ -11,7 +11,7 @@
   // ASCII shortcut table; that table is now slide 1 of the
   // carousel below.
 
-  import { Download, Settings2 } from "lucide-svelte";
+  import { Download, Settings2, Upload } from "lucide-svelte";
   import { api } from "../api/client";
   import { formatSize } from "../state/format";
   import EmptyPaneCarousel from "./EmptyPaneCarousel.svelte";
@@ -26,6 +26,11 @@
   let metadataBusy = $state(false);
   let metadataStatus = $state<string | null>(null);
   let metadataError = $state<string | null>(null);
+  let importInput: HTMLInputElement | undefined = $state();
+  let metadataImportFile = $state<File | null>(null);
+  let metadataImportBusy = $state(false);
+  let metadataImportRescan = $state(true);
+  let metadataImportForceScm = $state(false);
 
   const effectiveTheme = $derived(
     appearance === "inherit" ? undefined : appearance,
@@ -75,6 +80,48 @@
       metadataError = e instanceof Error ? e.message : String(e);
     } finally {
       metadataBusy = false;
+    }
+  }
+
+  function chooseMetadataImportFile(): void {
+    metadataError = null;
+    importInput?.click();
+  }
+
+  function onMetadataImportFileChange(e: Event): void {
+    const input = e.currentTarget as HTMLInputElement;
+    metadataImportFile = input.files?.[0] ?? null;
+    metadataStatus = null;
+    metadataError = null;
+  }
+
+  function clearMetadataImport(): void {
+    metadataImportFile = null;
+    metadataImportForceScm = false;
+    metadataImportRescan = true;
+    if (importInput) importInput.value = "";
+  }
+
+  async function importMetadataArchive(): Promise<void> {
+    if (!metadataImportFile || metadataImportBusy) return;
+    metadataImportBusy = true;
+    metadataStatus = null;
+    metadataError = null;
+    try {
+      const report = await api.metadataImport(metadataImportFile, {
+        rescan: metadataImportRescan,
+        forceScm: metadataImportForceScm,
+      });
+      const details: string[] = [`${report.files} ${report.files === 1 ? "file" : "files"}`];
+      details.push(formatSize(report.bytes));
+      if (report.rescanned) details.push("rescanned");
+      metadataStatus = `Imported ${details.join(", ")}; reloading...`;
+      clearMetadataImport();
+      window.setTimeout(() => window.location.reload(), 700);
+    } catch (e) {
+      metadataError = e instanceof Error ? e.message : String(e);
+    } finally {
+      metadataImportBusy = false;
     }
   }
 </script>
@@ -139,12 +186,71 @@
               type="button"
               class="metadata-action"
               onclick={exportMetadataArchive}
-              disabled={metadataBusy}
+              disabled={metadataBusy || metadataImportBusy}
             >
               <Download size={16} strokeWidth={1.75} aria-hidden="true" />
               <span>{metadataBusy ? "Exporting..." : "Export metadata archive"}</span>
             </button>
+            <input
+              bind:this={importInput}
+              class="metadata-file-input"
+              type="file"
+              accept=".tar.zst,application/zstd"
+              onchange={onMetadataImportFileChange}
+            />
+            <button
+              type="button"
+              class="metadata-action"
+              onclick={chooseMetadataImportFile}
+              disabled={metadataBusy || metadataImportBusy}
+            >
+              <Upload size={16} strokeWidth={1.75} aria-hidden="true" />
+              <span>Import metadata archive</span>
+            </button>
           </div>
+          {#if metadataImportFile}
+            <div class="metadata-import-panel">
+              <div class="metadata-import-file">{metadataImportFile.name}</div>
+              <p class="metadata-warning">
+                Import replaces index, graph, report, sessions, and drafts metadata.
+              </p>
+              <label class="metadata-check">
+                <input
+                  type="checkbox"
+                  bind:checked={metadataImportRescan}
+                  disabled={metadataImportBusy}
+                />
+                <span>Rescan after import</span>
+              </label>
+              <label class="metadata-check">
+                <input
+                  type="checkbox"
+                  bind:checked={metadataImportForceScm}
+                  disabled={metadataImportBusy}
+                />
+                <span>Force SCM mismatch</span>
+              </label>
+              <div class="metadata-import-actions">
+                <button
+                  type="button"
+                  class="metadata-action"
+                  onclick={importMetadataArchive}
+                  disabled={metadataImportBusy}
+                >
+                  <Upload size={16} strokeWidth={1.75} aria-hidden="true" />
+                  <span>{metadataImportBusy ? "Importing..." : "Import"}</span>
+                </button>
+                <button
+                  type="button"
+                  class="metadata-action subtle"
+                  onclick={clearMetadataImport}
+                  disabled={metadataImportBusy}
+                >
+                  Cancel
+                </button>
+              </div>
+            </div>
+          {/if}
           {#if metadataStatus}
             <p class="metadata-status ok">{metadataStatus}</p>
           {/if}
@@ -279,6 +385,50 @@
   .metadata-action:disabled {
     opacity: 0.6;
     cursor: default;
+  }
+  .metadata-action.subtle {
+    background: transparent;
+  }
+  .metadata-file-input {
+    display: none;
+  }
+  .metadata-import-panel {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    max-width: 560px;
+    padding: 10px;
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    background: var(--panel-bg, transparent);
+  }
+  .metadata-import-file {
+    font-size: 13px;
+    color: var(--text);
+    overflow-wrap: anywhere;
+  }
+  .metadata-warning {
+    margin: 0;
+    font-size: 12px;
+    color: var(--muted);
+  }
+  .metadata-check {
+    display: inline-flex;
+    align-items: center;
+    gap: 7px;
+    width: fit-content;
+    font-size: 13px;
+    color: var(--text);
+  }
+  .metadata-check input[type="checkbox"] {
+    width: auto;
+    margin: 0;
+  }
+  .metadata-import-actions {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-wrap: wrap;
   }
   .metadata-status {
     margin: 0;

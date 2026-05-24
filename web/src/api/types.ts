@@ -31,6 +31,35 @@ export type MetadataExportDownload = {
   bytes: number | null;
 };
 
+export type MetadataImportReport = {
+  manifest: MetadataManifest;
+  imported_subtrees: string[];
+  files: number;
+  bytes: number;
+  rescanned: boolean;
+};
+
+export type MetadataManifest = {
+  archive_format_version: number;
+  chan_version: string;
+  created_at: string;
+  source_root: string;
+  source_metadata_key: string;
+  metadata_schema: {
+    path_key_scheme: string;
+    index_schema_version: number;
+    graph_user_version?: number | null;
+    vector_shard_format_version?: number | null;
+    report_schema_version?: number | null;
+  };
+  scm?: {
+    remotes: string[];
+    head?: string | null;
+  } | null;
+  included_subtrees: string[];
+  excluded_subtrees: string[];
+};
+
 /// Global per-user config. Lives at `paths::global_config_path()`
 /// on the server side and applies to every drive (no per-
 /// drive override anymore; settings are always device-global).
