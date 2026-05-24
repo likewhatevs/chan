@@ -1,12 +1,11 @@
 import { describe, expect, test } from "vitest";
 import dirInfo from "./DirectoryInfoBody.svelte?raw";
 
-// `fullstack-a-66` slice c: when the synthetic Drafts row is
-// selected in the FB, the inspector renders a notice
-// explaining that Drafts lives in chan-drive's metadata
-// folder (NOT under the drive root), plus a Drafts-tinted
-// kind chip so the inspector header reads as "different
-// category" at a glance.
+// `fullstack-a-66` slice c: when the graph inspector points at
+// Drafts, it renders a notice explaining that Drafts lives in
+// chan-drive's metadata folder, plus a Drafts-tinted kind chip
+// so the inspector header reads as "different category" at a
+// glance.
 
 describe("fullstack-a-66 slice c: Drafts inspector notice", () => {
   test("kind chip swaps to DRAFTS label when path === 'Drafts'", () => {

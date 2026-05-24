@@ -7,7 +7,8 @@
 //!   submitted Rich Prompt source; route picks the next
 //!   `rich-prompt-N` slot under `Drafts/` + writes the source
 //!   as `prompt.md` inside. Each submission lands as a fresh
-//!   history entry the user can browse via the FB Drafts row.
+//!   history entry that graph, search, editor, terminal, and MCP
+//!   can address through the `Drafts/...` namespace.
 //!
 //! Drafts live in chan-drive metadata (`drafts_dir()`), OUTSIDE
 //! the drive root, but appear in the wire under the `Drafts/`

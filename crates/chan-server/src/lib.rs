@@ -835,8 +835,8 @@ fn router(state: Arc<AppState>) -> Router {
         // `fullstack-a-66` slice d: Rich Prompt submission
         // history. Each Cmd+Enter submit POSTs the source +
         // server writes `Drafts/rich-prompt-N/prompt.md`. SPA
-        // gets the unified path back; FB Drafts row + the
-        // graph drafts root surface it naturally.
+        // gets the unified path back; graph, search, editor,
+        // terminal, and MCP can address it as Drafts content.
         .route("/api/drafts/rich-prompt", post(api_create_rich_prompt))
         // systacean-31: per-team watcher lifecycle. Load spins up
         // a `Drive::watch_team` handle; unload drops it

@@ -446,13 +446,10 @@
   <div class="info">
     <header class="head">
       {#if entry.path === "Drafts"}
-        <!-- `fullstack-a-66` slice c (follow-up): FB-selected
-             Drafts row routes through THIS component (not
-             DirectoryInfoBody, which renders for Graph
-             directory nodes). Render the same DRAFTS chip +
-             tint that DirectoryInfoBody got so the slice-c
-             shape surfaces at the actual FB inspector entry
-             point. -->
+        <!-- `fullstack-a-66` slice c (follow-up): keep the
+             file-inspector Drafts copy aligned with the graph
+             directory inspector in case a caller passes the
+             metadata-backed Drafts root through this component. -->
         <span class="kind-chip drafts-chip">DRAFTS</span>
       {:else}
         <KindChip kind="folder" block />

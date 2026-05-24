@@ -98,9 +98,8 @@
   {#if path === "Drafts"}
     <!-- `fullstack-a-66` slice c: Drafts lives in chan-drive's
          metadata folder (drafts_dir handle), NOT under the
-         drive root. The synthetic FB row + the unified
-         `Drive::list` make it appear in the wire keyspace as
-         `Drafts/...`, but every Drafts/ path routes through
+         drive root. Graph and MCP expose it in the wire keyspace
+         as `Drafts/...`, but every Drafts/ path routes through
          the drafts cap-std handle (-26 read/write + -29 list).
          The notice tells users why their `crates/` or `docs/`
          aren't sibling to Drafts on disk. -->

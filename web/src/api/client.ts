@@ -301,8 +301,8 @@ export const api = {
   /// editor source + the chan-server route picks the next slot
   /// (first is `rich-prompt`; subsequent are `rich-prompt-1`,
   /// `rich-prompt-2`, ...). The returned path is the unified
-  /// shape so the FB Drafts row + the graph drafts root surface
-  /// the history entries without further plumbing.
+  /// shape so graph, search, editor, terminal, and MCP can
+  /// address the history entries without further plumbing.
   createRichPromptDraft: (content: string) =>
     req<{ path: string; name: string }>("POST", "/api/drafts/rich-prompt", {
       content,

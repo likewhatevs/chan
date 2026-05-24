@@ -117,7 +117,7 @@ fn list_files_sync(
         Ok(rows) => rows.into_iter().map(|c| c.rel_path).collect(),
         Err(_) => std::collections::HashSet::new(),
     };
-    let mut out: Vec<TreeEntryView> = tree
+    let out: Vec<TreeEntryView> = tree
         .into_iter()
         .map(|e| TreeEntryView {
             kind: project_kind(&e.path, e.is_dir, contact_paths.contains(&e.path)),
@@ -128,32 +128,6 @@ fn list_files_sync(
             size: e.size,
         })
         .collect();
-    // `fullstack-a-66b`: when listing the drive root, inject a
-    // synthetic `Drafts` directory entry at position 0 so the
-    // file browser renders it as the first row. `Drafts`
-    // lives in chan-drive metadata (drafts_dir), NOT under
-    // the drive root, but appears in the wire under the
-    // `Drafts/` keyspace per `systacean-25` / `-26` / `-29`.
-    // Listing under `dir=Drafts/...` already routes through
-    // the unified `Drive::list` thanks to `-29`.
-    //
-    // **Webtest-a triage (5dffa09 follow-up)**: the initial
-    // implementation gated on `query.dir.is_none()` only, but
-    // the SPA's `api.list` sends `?dir=` (empty string) for
-    // root listings — that branch silently dropped Drafts.
-    // Match both shapes: no `dir` param OR `dir` normalises
-    // to root (empty / `.` / `/` after trimming).
-    if is_root_listing(query.dir.as_deref()) {
-        let drafts_entry = TreeEntryView {
-            kind: None,
-            path_class: None,
-            path: "Drafts".to_string(),
-            is_dir: true,
-            mtime: None,
-            size: 0,
-        };
-        out.insert(0, drafts_entry);
-    }
     Ok(out)
 }
 
@@ -162,6 +136,11 @@ fn list_dir_entries(
     dir: &str,
 ) -> chan_drive::Result<Vec<chan_drive::TreeEntry>> {
     let rel = normalize_dir_query(dir)?;
+    if chan_drive::drafts::is_unified_drafts_path(&rel) {
+        return Err(chan_drive::ChanError::Io(
+            "not found: Drafts is hidden from File Browser".to_string(),
+        ));
+    }
     let children = drive.list(&rel)?;
     let mut out = Vec::with_capacity(children.len());
     for child in children {
@@ -184,24 +163,6 @@ fn list_dir_entries(
         });
     }
     Ok(out)
-}
-
-/// `fullstack-a-66b` follow-up: classify the `?dir=` query
-/// param as a root listing (used by `api_list_files` to gate
-/// the synthetic Drafts injection). Matches every shape the
-/// SPA + curl could send for "list the drive root":
-///   * absent: `None`
-///   * empty string: `Some("")`
-///   * "/" or "./": trims to `""`
-///   * "." literal: explicit current-dir form.
-fn is_root_listing(dir: Option<&str>) -> bool {
-    match dir {
-        None => true,
-        Some(s) => {
-            let trimmed = s.trim_matches('/');
-            trimmed.is_empty() || trimmed == "."
-        }
-    }
 }
 
 fn normalize_dir_query(dir: &str) -> chan_drive::Result<String> {
@@ -491,53 +452,20 @@ pub async fn api_create_file(
 }
 
 #[cfg(test)]
-mod is_root_listing_tests {
-    use super::{is_root_listing, list_files_sync, ListFilesQuery};
-
-    // `fullstack-a-66b` follow-up: the SPA's `api.list("")`
-    // sends `?dir=` (empty string) — pre-fix the gate matched
-    // only `None`, so the synthetic Drafts injection silently
-    // dropped. Pin every shape the SPA / curl / tests could
-    // produce.
+mod file_browser_listing_tests {
+    use super::{list_dir_entries, list_files_sync, ListFilesQuery};
 
     #[test]
-    fn matches_absent_dir_param() {
-        assert!(is_root_listing(None));
-    }
-
-    #[test]
-    fn matches_empty_string_dir() {
-        assert!(is_root_listing(Some("")));
-    }
-
-    #[test]
-    fn matches_slash_only() {
-        assert!(is_root_listing(Some("/")));
-        assert!(is_root_listing(Some("//")));
-    }
-
-    #[test]
-    fn matches_dot_form() {
-        assert!(is_root_listing(Some(".")));
-        assert!(is_root_listing(Some("./")));
-    }
-
-    #[test]
-    fn rejects_non_root_dirs() {
-        assert!(!is_root_listing(Some("docs")));
-        assert!(!is_root_listing(Some("Drafts")));
-        assert!(!is_root_listing(Some("Drafts/untitled-1")));
-        assert!(!is_root_listing(Some("crates/chan-drive")));
-    }
-
-    #[test]
-    fn list_files_sync_injects_drafts_for_root_dir_query() {
+    fn list_files_sync_keeps_drafts_out_of_root_dir_query() {
         let cfg = tempfile::TempDir::new().unwrap();
         let root = tempfile::TempDir::new().unwrap();
         let lib = chan_drive::Library::open_at(cfg.path().join("config.toml")).unwrap();
         lib.register_drive(root.path()).unwrap();
         let drive = lib.open_drive(root.path()).unwrap();
         std::fs::write(root.path().join("note.md"), "hi").unwrap();
+        drive
+            .write_text("Drafts/untitled-1/draft.md", "# draft\n")
+            .unwrap();
 
         let entries = list_files_sync(
             &drive,
@@ -547,11 +475,27 @@ mod is_root_listing_tests {
         )
         .unwrap();
 
-        assert_eq!(
-            entries.first().map(|entry| entry.path.as_str()),
-            Some("Drafts")
-        );
+        assert!(!entries.iter().any(|entry| entry.path == "Drafts"));
         assert!(entries.iter().any(|entry| entry.path == "note.md"));
+    }
+
+    #[test]
+    fn list_dir_entries_rejects_drafts_namespace_for_file_browser() {
+        let cfg = tempfile::TempDir::new().unwrap();
+        let root = tempfile::TempDir::new().unwrap();
+        let lib = chan_drive::Library::open_at(cfg.path().join("config.toml")).unwrap();
+        lib.register_drive(root.path()).unwrap();
+        let drive = lib.open_drive(root.path()).unwrap();
+        drive
+            .write_text("Drafts/untitled-1/draft.md", "# draft\n")
+            .unwrap();
+
+        let err = list_dir_entries(&drive, "Drafts").unwrap_err();
+
+        assert!(
+            err.to_string().contains("hidden from File Browser"),
+            "unexpected error: {err:?}"
+        );
     }
 }
 

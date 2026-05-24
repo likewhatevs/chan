@@ -107,24 +107,17 @@ describe("fullstack-b-6: refreshTreeForPath", () => {
     expect(tree.entries).toEqual([]);
   });
 
-  test("refreshes the nearest loaded ancestor for newly-created Drafts descendants", async () => {
+  test("ignores Drafts descendants because File Browser does not expose Drafts", async () => {
     tree.loadedDirs = { "": true, Drafts: true };
     tree.entries = [
       { path: "Drafts", is_dir: true, is_editable_text: false, missing: false } as never,
     ];
-    const list = vi.spyOn(api, "list").mockResolvedValue([
-      {
-        path: "Drafts/untitled",
-        is_dir: true,
-        is_editable_text: false,
-        missing: false,
-      } as never,
-    ]);
+    const list = vi.spyOn(api, "list").mockResolvedValue([]);
 
     await refreshTreeForPath("Drafts/untitled/draft.md");
 
-    expect(list).toHaveBeenCalledWith("Drafts");
-    expect(tree.entries.some((e) => e.path === "Drafts/untitled")).toBe(true);
+    expect(list).not.toHaveBeenCalled();
+    expect(tree.entries.some((e) => e.path === "Drafts/untitled")).toBe(false);
     list.mockRestore();
   });
 });

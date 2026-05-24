@@ -359,7 +359,7 @@ pub struct SearchContentParams {
 pub struct ListFilesParams {
     /// Optional POSIX rel-path prefix to scope the listing to a
     /// subdirectory. Empty / omitted lists the whole drive (capped).
-    /// `Drafts/...` is the metadata-backed virtual drafts namespace.
+    /// `Drafts/...` points at uncommitted metadata-backed draft workspaces.
     #[serde(default)]
     pub prefix: Option<String>,
 }
@@ -471,9 +471,9 @@ write_file call.")]
 List files in the active drive as { entries, count, total }. \
 Pass an optional `prefix` (POSIX rel-path) to scope the listing to \
 a subdirectory; omit it to list the whole drive. Includes the \
-metadata-backed virtual `Drafts/...` namespace. Listings are capped \
-at 2,000 entries; if `truncated` is true, narrow with a prefix or \
-call search_content instead.")]
+metadata-backed `Drafts/...` namespace for uncommitted draft \
+workspaces. Listings are capped at 2,000 entries; if `truncated` \
+is true, narrow with a prefix or call search_content instead.")]
     fn list_files(
         &self,
         Parameters(p): Parameters<ListFilesParams>,
@@ -491,7 +491,7 @@ when you need a real path for shell tools or terminal cwd. Normal \
 content operations should keep using read_file, write_file, and \
 list_files with chan paths. The path argument is POSIX-style in \
 chan's public namespace, including `Drafts/...`; Drafts paths \
-resolve to chan metadata outside the drive root.")]
+resolve to uncommitted chan metadata outside the drive root.")]
     fn resolve_path(
         &self,
         Parameters(p): Parameters<ResolvePathParams>,
@@ -654,7 +654,7 @@ need to drill in. The per-file array is capped at 200 entries; if \
 
 #[tool_handler(
     name = "chan",
-    instructions = "Tools for reading, writing, listing, searching, and resolving paths in a chan markdown drive. Content operations are sandboxed by chan-drive; Drafts paths are a virtual namespace that may resolve to chan metadata outside the drive root."
+    instructions = "Tools for reading, writing, listing, searching, and resolving paths in a chan markdown drive. Content operations are sandboxed by chan-drive; Drafts paths are uncommitted workspaces that may resolve to chan metadata outside the drive root."
 )]
 impl ServerHandler for Server {}
 

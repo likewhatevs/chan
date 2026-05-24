@@ -155,3 +155,14 @@ server returns.
 
 MCP descriptions and prompts live with chan-llm and should be updated in the
 same wave that changes Drafts visibility.
+
+## Implementation Log
+
+2026-05-24: First implementation slice landed the visibility split. The
+File Browser `/api/files` route no longer injects `Drafts` into root listings
+and rejects direct `dir=Drafts` expansion, while `/api/files/Drafts/...`
+read/write behavior remains available for editor tabs, graph, terminals, and
+MCP. The Svelte tree refresh path now ignores Drafts watcher events because
+Drafts are no longer visible in File Browser. chan-llm prompts and tool
+descriptions now describe `Drafts/...` as uncommitted metadata-backed
+workspaces rather than committed drive content.

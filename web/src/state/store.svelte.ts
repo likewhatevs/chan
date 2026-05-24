@@ -649,6 +649,7 @@ export function pathInAnyScope(path: string, scopes: string[]): boolean {
 /// `fullstack-b-6`; that path lives on as `refreshTree` for
 /// callers that genuinely need a full re-fetch.
 export async function refreshTreeForPath(path: string): Promise<void> {
+  if (isDraftsPath(path)) return;
   const parent = nearestLoadedParentDir(path);
   if (parent === null) return;
   try {
@@ -658,6 +659,10 @@ export async function refreshTreeForPath(path: string): Promise<void> {
     // Best-effort: a transient list error doesn't surface as toast;
     // the user retries on next interaction.
   }
+}
+
+function isDraftsPath(path: string): boolean {
+  return path === "Drafts" || path.startsWith("Drafts/");
 }
 
 function parentDir(path: string): string {

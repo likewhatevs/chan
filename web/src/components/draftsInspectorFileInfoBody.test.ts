@@ -1,13 +1,10 @@
 import { describe, expect, test } from "vitest";
 import fileInfo from "./FileInfoBody.svelte?raw";
 
-// `fullstack-a-66` slice c follow-up: webtest-a's walk
-// (`b2dfead`) flagged slice c PARTIAL — DirectoryInfoBody.svelte
-// got the chip + notice, but the FB-selected Drafts row
-// routes through FileInfoBody.svelte (NOT DirectoryInfoBody;
-// the dispatcher uses FileInfoBody for both files + dirs).
-// Mirror the slice-c markup at the actual FB inspector entry
-// point.
+// `fullstack-a-66` slice c follow-up: keep FileInfoBody's
+// Drafts copy aligned with DirectoryInfoBody in case a caller
+// passes the metadata-backed Drafts root through the file
+// inspector path.
 
 describe("fullstack-a-66 slice c follow-up: FileInfoBody Drafts header", () => {
   test("dir branch renders DRAFTS chip when entry.path === 'Drafts'", () => {
@@ -42,9 +39,9 @@ describe("fullstack-a-66 slice c follow-up: FileInfoBody Drafts header", () => {
     );
   });
 
-  test("rationale comment explains why FileInfoBody (not DirectoryInfoBody)", () => {
+  test("rationale comment explains why FileInfoBody keeps Drafts copy", () => {
     expect(fileInfo).toMatch(
-      /FB-selected\s+Drafts row routes through THIS component \(not[\s\S]*?DirectoryInfoBody/i,
+      /file-inspector Drafts copy aligned with the graph[\s\S]*?directory inspector/i,
     );
   });
 });

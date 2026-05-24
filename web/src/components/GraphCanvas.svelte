@@ -49,8 +49,7 @@
     | "group"
     /// `fullstack-a-66` slice e: drive-root → Drafts-root edge.
     /// Styled distinctly in the canvas to read as a "different
-    /// category" connector matching the FB Drafts row's yellow
-    /// tint.
+    /// category" connector with the shared Drafts tint.
     | "drafts_link";
   type RenderedEdge = GraphViewEdge & { kind: RenderedEdgeKind };
   type RenderedNode = Extract<

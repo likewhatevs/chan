@@ -308,8 +308,9 @@ fn exec_list_files(args: &Json, ctx: &ToolContext) -> Result<Json> {
     let prefix = args.get("prefix").and_then(|v| v.as_str());
     // Push prefix scoping into chan-drive so a narrow `prefix` on a
     // 500k-file drive walks only the relevant subtree instead of the
-    // full root. Use the unified variant so Drafts is visible as
-    // `Drafts/...` even though it lives in chan metadata.
+    // full root. Use the unified variant so agents can see
+    // uncommitted draft workspaces even though they live in chan
+    // metadata.
     let mut entries: Vec<_> = match prefix {
         Some(p) if !p.is_empty() => ctx
             .drive
@@ -351,8 +352,9 @@ fn exec_resolve_path(args: &Json, ctx: &ToolContext) -> Result<Json> {
         "is_dir": meta.as_ref().is_some_and(|m| m.is_dir()),
     });
     if chan_drive::drafts::is_unified_drafts_path(path) {
-        out["note"] =
-            serde_json::json!("Drafts paths resolve to chan metadata outside the drive root.");
+        out["note"] = serde_json::json!(
+            "Drafts paths resolve to uncommitted chan metadata outside the drive root."
+        );
     }
     Ok(out)
 }

@@ -52,13 +52,14 @@ diffs are not supported. Editable text in the drive is .md and \
 the notes are reachable via read_image but cannot be edited through \
 these tools.
 
-Paths: every content tool `path` argument is a drive-rooted POSIX \
-path relative to the drive root (no leading slash, no `..`, no \
-host filesystem paths). `Drafts/...` is a virtual namespace stored \
-in chan metadata outside the drive root; read_file, write_file, \
-list_files, search_content, and graph tools still address it as \
-`Drafts/...`. Use resolve_path only when you need a real host path \
-or shell cwd for a chan path. When you write markdown content, keep \
+Paths: every content tool `path` argument is a POSIX path in chan's \
+public namespace (no leading slash, no `..`, no host filesystem \
+paths). Normal paths are drive content. `Drafts/...` points at \
+uncommitted draft workspaces stored in chan metadata outside the \
+drive root; read_file, write_file, list_files, search_content, and \
+graph tools still address them as `Drafts/...`. Use resolve_path \
+only when you need a real host path or shell cwd for a chan path. \
+When you write markdown content, keep \
 link and image hrefs relative to the file that contains them (the \
 GitHub rendering convention) so links keep working when notes are \
 viewed outside chan. The drive's link normalizer accepts ./foo, \
@@ -130,8 +131,8 @@ they go through chan-drive's sandbox and graph index, which match the \
 user's visible scope exactly.\n\
   - If an MCP result points at `Drafts/...` and you need to run a \
 shell command there, call `mcp__chan__resolve_path` first. Drafts \
-is metadata-backed and does not exist as a `Drafts` directory under \
-the drive root.\n\
+is an uncommitted metadata-backed workspace and does not exist as a \
+`Drafts` directory under the drive root.\n\
   - Even when the user explicitly says \"let me review\", \
 \"don't auto-apply\", or \"show me the proposal first\", you \
 should still emit the tool call. Those phrasings describe the \
@@ -173,9 +174,9 @@ pub const LIST_FILES_DESC: &str = "\
 List files in the active drive as { entries, count, total }. \
 Pass an optional `prefix` (POSIX rel-path) to scope the listing to \
 a subdirectory; omit it to list the whole drive. Includes the \
-metadata-backed virtual `Drafts/...` namespace. Listings are capped \
-at 2,000 entries; if `truncated` is true, narrow with a prefix or \
-call search_content instead.";
+metadata-backed `Drafts/...` namespace for uncommitted draft \
+workspaces. Listings are capped at 2,000 entries; if `truncated` \
+is true, narrow with a prefix or call search_content instead.";
 
 /// Description of the resolve_path tool.
 pub const RESOLVE_PATH_DESC: &str = "\
@@ -184,7 +185,7 @@ when you need a real path for shell tools or terminal cwd. Normal \
 content operations should keep using read_file, write_file, and \
 list_files with chan paths. The path argument is POSIX-style in \
 chan's public namespace, including `Drafts/...`; Drafts paths \
-resolve to chan metadata outside the drive root.";
+resolve to uncommitted chan metadata outside the drive root.";
 
 /// Description of the search_content tool.
 pub const SEARCH_CONTENT_DESC: &str = "\
