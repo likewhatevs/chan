@@ -665,6 +665,11 @@ function isDraftsPath(path: string): boolean {
   return path === "Drafts" || path.startsWith("Drafts/");
 }
 
+function fileBrowserDraftsPathReason(path: string): string | null {
+  if (!isDraftsPath(path)) return null;
+  return "Drafts are saved or discarded from editor tabs";
+}
+
 function parentDir(path: string): string {
   const slash = path.lastIndexOf("/");
   return slash > 0 ? path.slice(0, slash) : "";
@@ -2402,9 +2407,10 @@ export function resolvePathPrompt(value: string | null): void {
 
 /// Perform a move from `path` -> `target`. Shared by rename (CLI-style
 /// prompt) and drag-and-drop. No-ops if source == target. Prompts for
-/// overwrite confirmation if target already exists. Refreshes the tree
-/// and re-keys open tabs so in-memory state follows the rename without
-/// a refetch round-trip.
+/// overwrite confirmation when the target is a file; existing
+/// directories are rejected because chan-drive will not replace them.
+/// Refreshes the tree and re-keys open tabs so in-memory state follows
+/// the rename without a refetch round-trip.
 ///
 /// The server runs the rename + link-rewrite pass synchronously. For a
 /// single-file rename with few backlinks this is sub-100ms; for a
@@ -2415,12 +2421,21 @@ export function resolvePathPrompt(value: string | null): void {
 const MOVING_STATUS_DELAY_MS = 200;
 async function performMove(path: string, target: string): Promise<void> {
   if (target === path) return;
+  const draftsReason =
+    fileBrowserDraftsPathReason(path) ?? fileBrowserDraftsPathReason(target);
+  if (draftsReason) {
+    ui.status = `move failed: ${draftsReason}`;
+    return;
+  }
   const existing = tree.entries.find((e) => e.path === target);
   if (existing) {
-    const what = existing.is_dir ? "directory" : "file";
+    if (existing.is_dir) {
+      ui.status = `rename failed: '${target}' is an existing directory`;
+      return;
+    }
     const confirmed = await uiConfirm({
-      title: `Overwrite existing ${what}?`,
-      message: `'${target}' already exists. The current ${what} will be replaced.`,
+      title: "Overwrite existing file?",
+      message: `'${target}' already exists. The current file will be replaced.`,
       confirmLabel: "Overwrite",
       destructive: true,
     });
@@ -2510,9 +2525,10 @@ export const fileOps = {
       // and can correct it, instead of submitting and getting a
       // status-bar error after the prompt closes.
       validate: (path) =>
-        isEditableText(path)
+        fileBrowserDraftsPathReason(path) ??
+        (isEditableText(path)
           ? null
-          : `'${path}' is not an editable text file (only .md and .txt)`,
+          : `'${path}' is not an editable text file (only .md and .txt)`),
     });
     if (!name) return;
     // The modal already validated against `isEditableText`, but
@@ -2540,6 +2556,7 @@ export const fileOps = {
       defaultValue,
       kind: "folder",
       mode: "create",
+      validate: fileBrowserDraftsPathReason,
     });
     if (!path) return;
     try {
@@ -2573,6 +2590,7 @@ export const fileOps = {
       defaultValue,
       kind: "either",
       mode: "create",
+      validate: fileBrowserDraftsPathReason,
     });
     if (!next) return;
     const isDir = next.endsWith("/");
@@ -2607,11 +2625,12 @@ export const fileOps = {
   /// through the editor's text gate. Directories don't have
   /// extensions so the input is taken verbatim.
   ///
-  /// If the resolved target collides with an existing entry, we
-  /// stop for a uiConfirm before issuing the move. The PathPrompt
-  /// modal already shows a warning row, but the user might commit
-  /// past it on Enter, so the confirm dialog is the second gate
-  /// before any destructive overwrite.
+  /// If the resolved target collides with an existing file, we
+  /// stop for a uiConfirm before issuing the move. Existing directory
+  /// targets are refused because chan-drive will not replace them.
+  /// The PathPrompt modal already shows a warning row, but the user
+  /// might commit past it on Enter, so the confirm dialog is the
+  /// second gate before any destructive overwrite.
   async rename(path: string, isDir = false): Promise<void> {
     const next = await uiPathPrompt({
       title: "new path",
@@ -2625,8 +2644,8 @@ export const fileOps = {
     await performMove(path, target);
   },
   /// Move a file or directory to a new path without prompting. Used
-  /// by drag-and-drop in the file browser. Same overwrite-confirm and
-  /// post-move bookkeeping as rename.
+  /// by drag-and-drop in the file browser. Same file overwrite
+  /// confirm and post-move bookkeeping as rename.
   async moveTo(from: string, to: string): Promise<void> {
     await performMove(from, to);
   },

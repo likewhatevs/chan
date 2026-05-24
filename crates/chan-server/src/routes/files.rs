@@ -424,7 +424,7 @@ pub async fn api_create_file(
     State(state): State<Arc<AppState>>,
     Json(body): Json<CreateBody>,
 ) -> Response {
-    if state.drive().exists(&body.path) {
+    if create_target_exists(state.drive().as_ref(), &body.path) {
         return err(StatusCode::CONFLICT, "already exists".into());
     }
     if body.is_dir {
@@ -451,9 +451,13 @@ pub async fn api_create_file(
     }
 }
 
+fn create_target_exists(drive: &chan_drive::Drive, path: &str) -> bool {
+    drive.stat(path).is_ok()
+}
+
 #[cfg(test)]
 mod file_browser_listing_tests {
-    use super::{list_dir_entries, list_files_sync, ListFilesQuery};
+    use super::{create_target_exists, list_dir_entries, list_files_sync, ListFilesQuery};
 
     #[test]
     fn list_files_sync_keeps_drafts_out_of_root_dir_query() {
@@ -496,6 +500,19 @@ mod file_browser_listing_tests {
             err.to_string().contains("hidden from File Browser"),
             "unexpected error: {err:?}"
         );
+    }
+
+    #[test]
+    fn create_target_exists_counts_directories_as_collisions() {
+        let cfg = tempfile::TempDir::new().unwrap();
+        let root = tempfile::TempDir::new().unwrap();
+        let lib = chan_drive::Library::open_at(cfg.path().join("config.toml")).unwrap();
+        lib.register_drive(root.path()).unwrap();
+        let drive = lib.open_drive(root.path()).unwrap();
+        drive.create_dir("notes").unwrap();
+
+        assert!(create_target_exists(&drive, "notes"));
+        assert!(!create_target_exists(&drive, "missing"));
     }
 }
 

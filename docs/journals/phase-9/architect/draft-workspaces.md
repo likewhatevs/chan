@@ -185,3 +185,12 @@ Cancel choices. Save flushes the draft buffer before promotion, and Discard
 moves the metadata workspace through the new server route. Dirty committed
 file tabs now attempt an immediate save before closing and remain open on save
 failure or CAS conflict.
+
+2026-05-24: File Browser collision behavior now matches the chan-drive
+contract. Server create checks treat existing directories as occupied paths,
+not as successful idempotent directory creation. The File Browser move and
+rename path refuses existing directory targets instead of offering an overwrite
+confirmation that the backend cannot honor. File Browser create and move
+prompts also reject `Drafts/...` paths; Drafts remain writable through editor,
+draft lifecycle, terminal, Team Work, Rich Prompt, and MCP flows that address
+draft workspaces intentionally.

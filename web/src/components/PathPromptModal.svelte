@@ -286,9 +286,9 @@
     if (path === "") return { kind: "empty" };
     if (!validation.ok) return { kind: "invalid", reason: validation.reason };
 
-    // Existing entry at the exact typed path: overwrite (move) or
-    // kind-mismatch (target is a file but we're creating a directory,
-    // or vice versa).
+    // Existing entry at the exact typed path: file overwrite (move)
+    // or kind-mismatch. Directory overwrite is also a mismatch because
+    // chan-drive refuses to replace directory targets.
     const targetEntry = entryByPath.get(path);
     const wantDir = effectiveKind === "folder";
     if (targetEntry) {
@@ -309,6 +309,12 @@
       if (pathPromptState.mode === "move") {
         if (pathPromptState.sourcePath === path) {
           return { kind: "no-op" };
+        }
+        if (targetEntry.is_dir) {
+          return {
+            kind: "kind-mismatch",
+            reason: `'${path}' is an existing directory; choose a new path`,
+          };
         }
         return { kind: "overwrites", path, isFolder: wantDir };
       }
