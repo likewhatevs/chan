@@ -652,9 +652,7 @@ fn classify_watch_event(event: &WatchEvent, context: WatchContext) -> WatchActio
                     });
                 }
             }
-            if event.path.is_none() && event.to.is_none() {
-                WatchAction::Ignore
-            } else if changes.is_empty() {
+            if changes.is_empty() {
                 WatchAction::Ignore
             } else {
                 WatchAction::Changes(changes)

@@ -6,6 +6,56 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [v0.14.0] - 2026-05-24
+
+Phase 9 release. Rich Prompt workspaces, metadata archive import/export,
+Drafts lifecycle cleanup, editor page breaks plus PDF export, and several
+server hot-path and file-watcher fixes landed.
+
+### Added
+
+- Rich Prompt workspaces with Core-owned workspace and spool creation, active
+  workspace markers, session-aware status, exact-buffer submit archival, and a
+  single close route for terminal/workspace cleanup.
+- Rich Prompt UI workflow with draft editing, submit/preflight confirmation,
+  prompt history, session status, close/discard handling, and Hybrid Nav
+  `P`/`Mod+. p` entry points.
+- Editor page-break command and print/PDF export support.
+- chan metadata archive export/import core plus CLI import and Infographics
+  import/export UI.
+- Drafts lifecycle routes and UI for close, discard, no-clobber creation, and
+  boot-time broken-workspace reporting.
+- Post-release parking-lot record for skipped native `Cmd+P` validation,
+  Rich Prompt visual follow-up, low-FD live stress, and mtime CAS status.
+
+### Changed
+
+- Drive metadata is keyed by canonical drive path and local drive-name surfaces
+  were removed from the registry/API flow.
+- Terminals and MCP now resolve Drafts paths consistently.
+- File Browser hides inactive Drafts internals while preserving Drafts-aware
+  graph, inspector, indexer, and watcher behavior.
+- Server state, file routes, sessions, storage reset, and tunnel prefix paths
+  now return explicit errors on lock poisoning instead of panicking.
+- File and session hot paths were moved off async workers where needed.
+- Indexers release old drive handles during metadata import.
+- Semantic model size copy checks avoid oversize copies.
+- Rich Prompt process guidance now lives in static spool/process.md.
+
+### Fixed
+
+- Pathless watcher events are classified as noise, removing noisy
+  `unhandled file event with no path` warnings seen during live validation.
+- Low file-descriptor pressure now caps terminal spawning before starving
+  editor/indexer work.
+- Editor markdown source handling keeps horizontal rules, bullets, and markers
+  visible without rewriting source unexpectedly.
+- Terminal renderer refresh hooks cover tab restore and styled output refresh
+  regressions.
+- File Browser collision handling and tree de-duplication were tightened.
+- Hybrid pane backsides exit explicitly and left-edge hamburger menus open
+  inward.
+
 ## [v0.13.0] - 2026-05-23
 
 Phase-8 closing release. Public-flip pre-flight docs landed, screensaver themes shipped, terminal renderer regression fixed, chan-server async-blocking cleanup, plus a number of UI polish and bug fixes.
@@ -212,7 +262,8 @@ Phase-8 closing release. Public-flip pre-flight docs landed, screensaver themes 
 
 - Final v0.6.x maintenance release before the v0.7 line.
 
-[Unreleased]: https://github.com/fiorix/chan/compare/chan-v0.13.0...HEAD
+[Unreleased]: https://github.com/fiorix/chan/compare/chan-v0.14.0...HEAD
+[v0.14.0]: https://github.com/fiorix/chan/compare/chan-v0.13.0...chan-v0.14.0
 [v0.13.0]: https://github.com/fiorix/chan/compare/chan-v0.12.0...chan-v0.13.0
 [v0.12.0]: https://github.com/fiorix/chan/compare/chan-v0.11.2...chan-v0.12.0
 [v0.11.2]: https://github.com/fiorix/chan/compare/chan-v0.11.1...chan-v0.11.2

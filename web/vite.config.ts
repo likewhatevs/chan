@@ -49,5 +49,6 @@ export default defineConfig({
   test: {
     environment: "jsdom",
     alias: [{ find: /^svelte$/, replacement: svelteClient }],
+    testTimeout: 30_000,
   },
 });

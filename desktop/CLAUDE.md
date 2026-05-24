@@ -295,7 +295,7 @@ Tauri bundle artifact names are derived from
 * `productName` supplies the `Chan` prefix.
 * `version` supplies the semantic version in bundle names. For the
   next cut, generated desktop artifacts should start with
-  `Chan_0.13.0.` or `Chan_0.13.0_`, depending on the bundle type and
+  `Chan_0.14.0.` or `Chan_0.14.0_`, depending on the bundle type and
   platform suffix.
 
 Before pushing a `chan-vX.Y.Z` desktop release tag, update

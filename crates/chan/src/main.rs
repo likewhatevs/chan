@@ -1801,7 +1801,7 @@ async fn connect_mcp_socket_in(
     fallback_dir: &Path,
 ) -> Result<tokio::net::UnixStream, std::io::Error> {
     match tokio::net::UnixStream::connect(socket).await {
-        Ok(stream) => return Ok(stream),
+        Ok(stream) => Ok(stream),
         Err(primary) if should_try_mcp_socket_fallback(&primary) => {
             for candidate in mcp_socket_fallback_candidates_in(fallback_dir, socket) {
                 match tokio::net::UnixStream::connect(&candidate).await {
