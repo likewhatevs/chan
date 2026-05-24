@@ -1,8 +1,11 @@
 //! systacean-7: per-drive semantic-search state + enablement.
 //!
-//! Four endpoints under `/api/index/semantic/`:
+//! Endpoints under `/api/index/semantic/`:
 //!
 //! * `GET /state` — model + drive preference snapshot.
+//! * `GET /models` - curated model list + per-machine download
+//!   flags for the picker.
+//! * `PATCH /model` - persist the drive's configured model.
 //! * `POST /download` — synchronously fetch the model into the
 //!   per-machine cache (hf-hub). v1 is blocking; progress-streaming
 //!   is a follow-up.
@@ -26,10 +29,13 @@ use axum::extract::State;
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use axum::Json;
-use chan_drive::index::embeddings::{global_models_dir, repo_dir_name, resolve_model, Embedder};
-use serde::Serialize;
+use chan_drive::index::config::{self, EmbeddingModelInfo};
+use chan_drive::index::embeddings::{
+    global_models_dir, model_downloaded, repo_dir_name, resolve_model, Embedder,
+};
+use serde::{Deserialize, Serialize};
 
-use crate::error::err_from;
+use crate::error::{err, err_from};
 use crate::state::AppState;
 
 /// Snapshot of the per-drive semantic-search state. Settings UI +
@@ -62,6 +68,45 @@ pub struct SemanticState {
     /// so this state only arises if the model is deleted out from
     /// under us).
     pub semantic_enabled: bool,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct SemanticModelOption {
+    pub id: &'static str,
+    pub label: &'static str,
+    pub dim: u32,
+    pub size_label: &'static str,
+    pub note: &'static str,
+    #[serde(rename = "default")]
+    pub is_default: bool,
+    pub downloaded: bool,
+    pub current: bool,
+}
+
+impl SemanticModelOption {
+    fn from_info(info: &'static EmbeddingModelInfo, current_model: &str) -> Self {
+        Self {
+            id: info.id,
+            label: info.label,
+            dim: info.dim,
+            size_label: info.size_label,
+            note: info.note,
+            is_default: info.is_default,
+            downloaded: model_downloaded(info.id).unwrap_or(false),
+            current: info.id == current_model,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct SemanticModelsResponse {
+    pub current_model: String,
+    pub models: Vec<SemanticModelOption>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct PatchSemanticModel {
+    pub model: String,
 }
 
 /// Recursive size of every regular file under `dir`. Used for the
@@ -129,6 +174,68 @@ pub async fn api_semantic_state(State(state): State<Arc<AppState>>) -> Response 
         Err(e) => (
             StatusCode::INTERNAL_SERVER_ERROR,
             format!("semantic state task panicked: {e}"),
+        )
+            .into_response(),
+    }
+}
+
+/// `GET /api/index/semantic/models`. Curated picker state.
+pub async fn api_semantic_models(State(state): State<Arc<AppState>>) -> Response {
+    let drive = state.drive();
+    match tokio::task::spawn_blocking(move || {
+        let current_model = match drive.semantic_model() {
+            Ok(model) => model,
+            Err(e) => return err_from(&e),
+        };
+        let models = config::embedding_models()
+            .iter()
+            .map(|info| SemanticModelOption::from_info(info, &current_model))
+            .collect();
+        Json(SemanticModelsResponse {
+            current_model,
+            models,
+        })
+        .into_response()
+    })
+    .await
+    {
+        Ok(response) => response,
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("semantic models task panicked: {e}"),
+        )
+            .into_response(),
+    }
+}
+
+/// `PATCH /api/index/semantic/model`. Persist the per-drive model.
+pub async fn api_semantic_model_patch(
+    State(state): State<Arc<AppState>>,
+    Json(req): Json<PatchSemanticModel>,
+) -> Response {
+    let model = req.model.trim().to_owned();
+    if config::embedding_model(&model).is_none() {
+        return err(
+            StatusCode::BAD_REQUEST,
+            format!("unknown embedding model: {model}"),
+        );
+    }
+    let drive = state.drive();
+    match tokio::task::spawn_blocking(move || {
+        if let Err(e) = drive.set_semantic_model(&model) {
+            return err_from(&e);
+        }
+        match build_state(&drive) {
+            Ok(s) => Json(s).into_response(),
+            Err(e) => err_from(&e),
+        }
+    })
+    .await
+    {
+        Ok(response) => response,
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("semantic model patch task panicked: {e}"),
         )
             .into_response(),
     }
@@ -268,5 +375,179 @@ pub async fn api_semantic_download(State(state): State<Arc<AppState>>) -> Respon
             format!("download task panicked: {join_err}"),
         )
             .into_response(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::atomic::AtomicU64;
+    use std::sync::{Mutex, RwLock};
+
+    use axum::body::Body;
+    use axum::http::{header, Request, StatusCode};
+    use chan_drive::SearchAggression;
+    use tempfile::TempDir;
+    use tokio::sync::{broadcast, watch};
+    use tower::ServiceExt;
+
+    use crate::self_writes::SelfWrites;
+    use crate::state::DriveCell;
+    use crate::terminal_sessions::{Registry as TerminalRegistry, RegistryConfig};
+    use crate::{EditorPrefs, ServerConfig};
+
+    struct RouteTestApp {
+        _cfg: TempDir,
+        _root: TempDir,
+        state: Arc<AppState>,
+    }
+
+    fn route_test_app() -> RouteTestApp {
+        let cfg = TempDir::new().unwrap();
+        let root = TempDir::new().unwrap();
+        let lib = chan_drive::Library::open_at(cfg.path().join("config.toml")).unwrap();
+        lib.register_drive(root.path()).unwrap();
+        let drive = lib.open_drive(root.path()).unwrap();
+
+        let (events_tx, _) = broadcast::channel::<String>(1);
+        let (index_events_tx, _) = broadcast::channel::<chan_drive::WatchEvent>(1);
+        let indexer = Arc::new(crate::indexer::Indexer::spawn(
+            drive.clone(),
+            index_events_tx.subscribe(),
+            false,
+            SearchAggression::Conservative,
+            Arc::new(chan_drive::NoProgress),
+        ));
+        let (shutdown_tx, shutdown_rx) = watch::channel(false);
+        std::mem::forget(shutdown_tx);
+
+        let state = Arc::new(AppState {
+            library: lib,
+            drive_root: root.path().to_path_buf(),
+            drive_cell: Arc::new(RwLock::new(Some(DriveCell {
+                drive,
+                watch_handle: None,
+                indexer,
+            }))),
+            token: Some("secret".to_string()),
+            prefix: Arc::new(RwLock::new(String::new())),
+            settings_disabled: false,
+            tunnel_public: false,
+            last_activity: Arc::new(AtomicU64::new(0)),
+            events_tx,
+            index_events_tx,
+            server_config: Mutex::new(ServerConfig::default()),
+            editor_prefs: Mutex::new(EditorPrefs::default()),
+            self_writes: Arc::new(SelfWrites::new()),
+            terminal_sessions: Arc::new(TerminalRegistry::new(RegistryConfig {
+                drive_root: root.path().to_path_buf(),
+                mcp_socket_path: None,
+                control_socket_path: None,
+                terminal: ServerConfig::default().terminal,
+            })),
+            shutdown_rx,
+            loaded_teams: std::sync::Mutex::new(std::collections::HashMap::new()),
+        });
+
+        RouteTestApp {
+            _cfg: cfg,
+            _root: root,
+            state,
+        }
+    }
+
+    async fn request(
+        router: &axum::Router,
+        method: &str,
+        uri: &str,
+        body: Option<&str>,
+    ) -> (StatusCode, serde_json::Value) {
+        let mut req = Request::builder()
+            .method(method)
+            .uri(uri)
+            .header(header::AUTHORIZATION, "Bearer secret");
+        let body = if let Some(b) = body {
+            req = req.header(header::CONTENT_TYPE, "application/json");
+            Body::from(b.to_string())
+        } else {
+            Body::empty()
+        };
+        let response = router
+            .clone()
+            .oneshot(req.body(body).unwrap())
+            .await
+            .unwrap();
+        let status = response.status();
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let json = serde_json::from_slice(&body).unwrap_or(serde_json::Value::Null);
+        (status, json)
+    }
+
+    #[tokio::test]
+    async fn semantic_models_returns_curated_model_picker_state() {
+        let app = route_test_app();
+        let router = crate::router(app.state);
+        let (status, body) = request(&router, "GET", "/api/index/semantic/models", None).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["current_model"], "BAAI/bge-small-en-v1.5");
+        let models = body["models"].as_array().unwrap();
+        assert_eq!(models.len(), 4);
+        assert_eq!(models[0]["id"], "BAAI/bge-small-en-v1.5");
+        assert_eq!(models[0]["label"], "BGE Small EN v1.5");
+        assert_eq!(models[0]["dim"], 384);
+        assert_eq!(models[0]["default"], true);
+        assert_eq!(models[0]["current"], true);
+        assert!(models[0]["downloaded"].is_boolean());
+    }
+
+    #[tokio::test]
+    async fn semantic_model_patch_updates_current_model() {
+        let app = route_test_app();
+        let router = crate::router(app.state);
+        let (status, body) = request(
+            &router,
+            "PATCH",
+            "/api/index/semantic/model",
+            Some(r#"{"model":"BAAI/bge-base-en-v1.5"}"#),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["model_name"], "BAAI/bge-base-en-v1.5");
+        assert_eq!(body["semantic_enabled"], false);
+        assert_eq!(body["mode"], "bm25");
+
+        let (status, body) = request(&router, "GET", "/api/index/semantic/models", None).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["current_model"], "BAAI/bge-base-en-v1.5");
+        let current = body["models"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|model| model["current"] == true)
+            .unwrap();
+        assert_eq!(current["id"], "BAAI/bge-base-en-v1.5");
+    }
+
+    #[tokio::test]
+    async fn semantic_model_patch_rejects_unknown_model() {
+        let app = route_test_app();
+        let router = crate::router(app.state);
+        let (status, body) = request(
+            &router,
+            "PATCH",
+            "/api/index/semantic/model",
+            Some(r#"{"model":"not-a-model"}"#),
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        assert!(
+            body["error"]
+                .as_str()
+                .unwrap()
+                .contains("unknown embedding model"),
+            "unexpected error body: {body}",
+        );
     }
 }

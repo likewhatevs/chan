@@ -2184,6 +2184,14 @@ impl Drive {
         Ok(self.index()?.config().model)
     }
 
+    /// Phase 9 carry-over: persist the per-drive embedding model.
+    /// The index layer validates the curated model id, clears stale
+    /// vector metadata, and preserves BM25.
+    pub fn set_semantic_model(&self, model: &str) -> Result<()> {
+        self.index()?.set_model(model.to_owned())?;
+        Ok(())
+    }
+
     /// systacean-27: read the per-drive chan-report opt-in flag.
     /// Mirrors `IndexConfig::reports_enabled`; default-false on a
     /// drive that has never been touched by the pre-flight UI / CLI
@@ -5998,6 +6006,39 @@ mod tests {
             .set_screensaver_theme(ScreensaverTheme::Matrix)
             .unwrap();
         drive.set_screensaver_pin_hash(None).unwrap();
+    }
+
+    #[test]
+    fn semantic_model_setter_rejects_unknown_and_preserves_bm25() {
+        let (_cfg, _root, drive) = fixture();
+        drive.write_text("note.md", "alpha beta\n").unwrap();
+        drive.reindex(None).unwrap();
+        let opts = SearchOpts {
+            mode: SearchMode::Bm25,
+            limit: 10,
+            scope: None,
+        };
+        assert_eq!(drive.search("alpha", &opts).unwrap().hits.len(), 1);
+
+        let embeddings_dir = drive.paths.index.join("embeddings");
+        std::fs::create_dir_all(&embeddings_dir).unwrap();
+        std::fs::write(embeddings_dir.join("stale.bin"), b"stale").unwrap();
+
+        let before = drive.semantic_model().unwrap();
+        let err = drive.set_semantic_model("not-a-model").unwrap_err();
+        assert!(
+            err.to_string().contains("unknown embedding model"),
+            "unexpected error: {err}",
+        );
+        assert_eq!(drive.semantic_model().unwrap(), before);
+
+        drive.set_semantic_model("BAAI/bge-base-en-v1.5").unwrap();
+        assert_eq!(drive.semantic_model().unwrap(), "BAAI/bge-base-en-v1.5");
+        assert!(
+            !embeddings_dir.join("stale.bin").exists(),
+            "switching models must clear stale embeddings",
+        );
+        assert_eq!(drive.search("alpha", &opts).unwrap().hits.len(), 1);
     }
 
     #[test]

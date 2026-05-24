@@ -7,8 +7,8 @@
   // 1. Semantic search (moved verbatim from -a-21; same state
   //    machine, same polling cadence, same enable/download/
   //    disable flow).
-  // 2. Multi-model picker placeholder (Round-3 Track 2; future
-  //    slot, disabled until backend ships a model registry).
+  // 2. Drive-wide multi-model picker backed by the semantic model
+  //    registry endpoints.
   // 3. chan-reports toggle (G1 regression fix — toggle was
   //    specced in round-2-plan §"Pre-flight feature toggles"
   //    but never landed in v1; option B routed by @@Architect
@@ -30,6 +30,7 @@
     BuildInfo,
     GlobalConfig,
     Preferences,
+    SemanticModelRegistry,
     SemanticState,
   } from "../api/types";
   import { drive } from "../state/store.svelte";
@@ -164,6 +165,8 @@
   let semanticState = $state<SemanticState | null>(null);
   let semanticDownloading = $state(false);
   let semanticEnabling = $state(false);
+  let semanticModelBusy = $state(false);
+  let semanticModels = $state<SemanticModelRegistry | null>(null);
   let semanticError = $state<string | null>(null);
   let semanticPollTimer: ReturnType<typeof setInterval> | null = null;
   const SEMANTIC_POLL_INTERVAL_MS = 3000;
@@ -184,6 +187,14 @@
     }
   }
 
+  async function loadSemanticModels(): Promise<void> {
+    try {
+      semanticModels = await api.semanticModels();
+    } catch {
+      semanticModels = null;
+    }
+  }
+
   function stopSemanticPoll(): void {
     if (semanticPollTimer !== null) {
       clearInterval(semanticPollTimer);
@@ -195,7 +206,8 @@
     if (!semanticState) return;
     semanticError = null;
     if (next) {
-      if (semanticState.model_present) {
+      const selected = selectedModel();
+      if (selected?.downloaded || semanticState.model_present) {
         semanticEnabling = true;
         try {
           semanticState = await api.semanticEnable();
@@ -209,10 +221,11 @@
       semanticDownloading = true;
       stopSemanticPoll();
       semanticPollTimer = setInterval(() => {
-        void loadSemanticState();
+        void refreshSemanticSearchState();
       }, SEMANTIC_POLL_INTERVAL_MS);
       try {
         semanticState = await api.semanticDownload();
+        await refreshSemanticSearchState();
         stopSemanticPoll();
         semanticEnabling = true;
         try {
@@ -223,7 +236,7 @@
       } catch (err) {
         stopSemanticPoll();
         semanticError = (err as Error).message;
-        await loadSemanticState();
+        await refreshSemanticSearchState();
       } finally {
         semanticDownloading = false;
       }
@@ -236,15 +249,47 @@
     }
   }
 
+  function selectedModel(): SemanticModelRegistry["models"][number] | undefined {
+    return semanticModels?.models.find((model) => model.id === semanticModels?.current_model);
+  }
+
   function formatModelSize(bytes: number | null): string {
     if (bytes === null || bytes <= 0) return "size unknown";
     const mb = bytes / (1024 * 1024);
     return `${mb.toFixed(1)} MB`;
   }
 
+  function formatModelMeta(model: SemanticModelRegistry["models"][number]): string {
+    const parts: string[] = [];
+    parts.push(`${model.dim}d`);
+    parts.push(model.size_label);
+    parts.push(model.downloaded ? "downloaded" : "not downloaded");
+    return parts.join(" · ");
+  }
+
+  async function changeSemanticModel(e: Event): Promise<void> {
+    const model = (e.currentTarget as HTMLSelectElement).value;
+    if (!model || model === semanticModels?.current_model || semanticModelBusy) return;
+    semanticModelBusy = true;
+    semanticError = null;
+    try {
+      semanticState = await api.semanticModelPatch(model);
+      await refreshSemanticSearchState();
+    } catch (err) {
+      semanticError = (err as Error).message;
+      await loadSemanticModels();
+    } finally {
+      semanticModelBusy = false;
+    }
+  }
+
+  async function refreshSemanticSearchState(): Promise<void> {
+    await Promise.all([loadSemanticState(), loadSemanticModels()]);
+  }
+
   onMount(() => {
     void loadBuildInfo();
-    void loadSemanticState();
+    void refreshSemanticSearchState();
   });
 
   onDestroy(() => {
@@ -328,32 +373,38 @@
       {/if}
     </section>
 
-    <!-- Round-3 Track 2: multi-model picker. Placeholder slot
-         (disabled until the backend ships a model registry). The
-         element is present here so the user can see the future
-         capability + so the Round-3 task lands as a strict
-         addition rather than a structural change. -->
     <section>
       <h3>Embedding model</h3>
       <p class="hint">
-        Pick which embedding model the indexer uses for dense
-        vectors. A curated list ships in Round-3; the default is
-        <code>BAAI/bge-small-en-v1.5</code>.
+        Pick the drive-wide embedding model used for dense-vector
+        indexing. Changing it persists immediately; enabling Hybrid
+        search downloads the selected model first when needed.
       </p>
       <label class="font-row">
         <span>Model</span>
         <select
           class="config-select family"
-          disabled
-          aria-label="Embedding model picker (placeholder)"
+          disabled={semanticModels === null || semanticModelBusy || semanticDownloading || semanticEnabling}
+          value={semanticModels?.current_model ?? ""}
+          onchange={changeSemanticModel}
+          aria-label="Embedding model picker"
         >
-          <option>BAAI/bge-small-en-v1.5 (default)</option>
+          {#if semanticModels === null}
+            <option value="">Loading models...</option>
+          {:else}
+            {#each semanticModels.models as model (model.id)}
+              <option value={model.id}>
+                {model.label} · {formatModelMeta(model)}
+              </option>
+            {/each}
+          {/if}
         </select>
       </label>
-      <p class="hint muted sub-hint">
-        Picker placeholder; lands with the Round-3 multi-model
-        registry.
-      </p>
+      {#if semanticModels !== null && selectedModel()}
+        <p class="hint muted sub-hint">
+          Selected: <code>{selectedModel()!.id}</code>.
+        </p>
+      {/if}
     </section>
 
     <!-- `fullstack-a-48` chan-reports toggle (option B landing —
@@ -488,7 +539,7 @@
     cursor: not-allowed;
     opacity: 0.7;
   }
-  /* Picker placeholder. Same shape as `-a-46`'s Date pills layout. */
+  /* Model picker. Same shape as `-a-46`'s Date pills layout. */
   .font-row {
     display: flex;
     align-items: center;

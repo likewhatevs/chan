@@ -65,7 +65,8 @@ use routes::{
 };
 #[cfg(feature = "embeddings")]
 use routes::{
-    api_semantic_disable, api_semantic_download, api_semantic_enable, api_semantic_state,
+    api_semantic_disable, api_semantic_download, api_semantic_enable, api_semantic_model_patch,
+    api_semantic_models, api_semantic_state,
 };
 use signal::{now_unix_secs, print_qr_if_tty, spawn_idle_watcher, spawn_signal_watcher};
 use state::{AppState, DriveCell};
@@ -785,7 +786,8 @@ fn router(state: Arc<AppState>) -> Router {
     let settings_writes = settings_writes
         .route("/api/index/semantic/enable", post(api_semantic_enable))
         .route("/api/index/semantic/disable", post(api_semantic_disable))
-        .route("/api/index/semantic/download", post(api_semantic_download));
+        .route("/api/index/semantic/download", post(api_semantic_download))
+        .route("/api/index/semantic/model", patch(api_semantic_model_patch));
     // systacean-39: reports feature toggle endpoints. Mirror the
     // semantic shape but NOT gated on `embeddings` — reports are
     // part of the BM25-only baseline. Settings-writes lane because
@@ -960,7 +962,9 @@ fn router(state: Arc<AppState>) -> Router {
     // stack compiles in. Write routes (`enable` / `disable` /
     // `download`) sit in `settings_writes` and merge below.
     #[cfg(feature = "embeddings")]
-    let api = api.route("/api/index/semantic/state", get(api_semantic_state));
+    let api = api
+        .route("/api/index/semantic/state", get(api_semantic_state))
+        .route("/api/index/semantic/models", get(api_semantic_models));
     // systacean-39: reports state is read-only + not settings-
     // gated (read-only views can land in any lane).
     let api = api.route("/api/index/reports/state", get(api_reports_state));

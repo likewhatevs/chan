@@ -14,6 +14,62 @@ use crate::error::ChanError;
 /// Default embedding model. Small (~130 MB), English-only, fast.
 pub const DEFAULT_MODEL: &str = "BAAI/bge-small-en-v1.5";
 
+/// Curated embedding model exposed to the CLI and Settings UI.
+/// The embedder accepts exactly this list.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+pub struct EmbeddingModelInfo {
+    pub id: &'static str,
+    pub label: &'static str,
+    pub dim: u32,
+    pub size_label: &'static str,
+    pub note: &'static str,
+    #[serde(rename = "default")]
+    pub is_default: bool,
+}
+
+const EMBEDDING_MODELS: &[EmbeddingModelInfo] = &[
+    EmbeddingModelInfo {
+        id: DEFAULT_MODEL,
+        label: "BGE Small EN v1.5",
+        dim: 384,
+        size_label: "~130 MB",
+        note: "Small English model; fastest curated option.",
+        is_default: true,
+    },
+    EmbeddingModelInfo {
+        id: "BAAI/bge-base-en-v1.5",
+        label: "BGE Base EN v1.5",
+        dim: 768,
+        size_label: "~440 MB",
+        note: "Medium English model with higher recall than small.",
+        is_default: false,
+    },
+    EmbeddingModelInfo {
+        id: "BAAI/bge-large-en-v1.5",
+        label: "BGE Large EN v1.5",
+        dim: 1024,
+        size_label: "~1.3 GB",
+        note: "Large English model; highest-capacity English option.",
+        is_default: false,
+    },
+    EmbeddingModelInfo {
+        id: "BAAI/bge-m3",
+        label: "BGE M3",
+        dim: 1024,
+        size_label: "~2.3 GB",
+        note: "Multilingual BGE model for mixed-language drives.",
+        is_default: false,
+    },
+];
+
+pub fn embedding_models() -> &'static [EmbeddingModelInfo] {
+    EMBEDDING_MODELS
+}
+
+pub fn embedding_model(id: &str) -> Option<&'static EmbeddingModelInfo> {
+    EMBEDDING_MODELS.iter().find(|model| model.id == id)
+}
+
 /// Current on-disk schema version. Bumping this forces a rebuild on
 /// next index open; the indexer compares against the value loaded
 /// from disk and clears `bm25/` + `embeddings/` on mismatch.
@@ -375,6 +431,30 @@ mod tests {
             err.to_string().contains("unknown variant `castaway`"),
             "castaway must not deserialize as a valid theme: {err}"
         );
+    }
+
+    #[test]
+    fn model_registry_contains_curated_models_and_marks_default() {
+        let models = embedding_models();
+        let ids: Vec<&str> = models.iter().map(|model| model.id).collect();
+        assert_eq!(
+            ids,
+            vec![
+                "BAAI/bge-small-en-v1.5",
+                "BAAI/bge-base-en-v1.5",
+                "BAAI/bge-large-en-v1.5",
+                "BAAI/bge-m3",
+            ]
+        );
+        assert_eq!(
+            models.iter().filter(|model| model.is_default).count(),
+            1,
+            "exactly one embedding model must be marked default",
+        );
+        let default = embedding_model(DEFAULT_MODEL).unwrap();
+        assert_eq!(default.dim, 384);
+        assert!(default.is_default);
+        assert!(embedding_model("not-a-model").is_none());
     }
 
     #[test]

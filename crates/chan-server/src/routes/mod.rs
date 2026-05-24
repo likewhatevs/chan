@@ -47,7 +47,8 @@ pub use graph::{
 pub use health::api_health;
 #[cfg(feature = "embeddings")]
 pub use index::{
-    api_semantic_disable, api_semantic_download, api_semantic_enable, api_semantic_state,
+    api_semantic_disable, api_semantic_download, api_semantic_enable, api_semantic_model_patch,
+    api_semantic_models, api_semantic_state,
 };
 pub use inspector::api_inspector;
 pub use mentions::api_get_mentions;

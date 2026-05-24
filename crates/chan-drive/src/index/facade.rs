@@ -69,6 +69,8 @@ pub enum IndexError {
     Chan(#[from] ChanError),
     #[error("operation cancelled")]
     Cancelled,
+    #[error("unknown embedding model: {0}")]
+    UnknownModel(String),
 }
 
 /// Which retrieval mode to run.
@@ -377,7 +379,9 @@ impl Index {
     /// the user passes `--model X`. Switching model invalidates the
     /// existing vectors (different dim / different semantics) so
     /// we wipe the vector dir; BM25 is unaffected.
-    pub fn set_model(&mut self, model: String) -> Result<(), IndexError> {
+    pub fn set_model(&self, model: String) -> Result<(), IndexError> {
+        let _ = config::embedding_model(&model)
+            .ok_or_else(|| IndexError::UnknownModel(model.clone()))?;
         let to_save = {
             let mut cfg = self.config.lock().unwrap();
             if model == cfg.model {
@@ -398,11 +402,11 @@ impl Index {
         {
             *self.embedder.lock().unwrap() = None;
         }
-        let vec_dir = self.index_dir.join("embeddings");
-        if vec_dir.exists() {
-            std::fs::remove_dir_all(&vec_dir)?;
+        for rel in self.vectors.known_paths() {
+            self.vectors.delete_file(&rel)?;
         }
-        self.vectors = VectorStore::open(&self.index_dir)?;
+        wipe_vectors_dir(&self.index_dir)?;
+        std::fs::create_dir_all(self.index_dir.join("embeddings"))?;
         Ok(())
     }
 

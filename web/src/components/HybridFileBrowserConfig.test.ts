@@ -46,12 +46,18 @@ describe("fullstack-a-48: HybridFileBrowserConfig wiring", () => {
     expect(source).toMatch(/\.toFixed\(1\)/);
   });
 
-  test("Multi-model picker renders as a disabled placeholder slot", () => {
+  test("Multi-model picker renders the loaded registry as an enabled drive-wide picker", () => {
     expect(source).toMatch(/<h3>Embedding model<\/h3>/);
+    expect(source).toMatch(/let semanticModels = \$state<SemanticModelRegistry \| null>\(null\)/);
+    expect(source).toMatch(/api\.semanticModels\(\)/);
+    expect(source).toMatch(/api\.semanticModelPatch\(model\)/);
     expect(source).toMatch(
-      /<select[\s\S]{1,160}class="config-select family"[\s\S]{1,120}disabled[\s\S]{1,120}aria-label="Embedding model picker \(placeholder\)"/,
+      /<select[\s\S]{1,160}class="config-select family"[\s\S]{1,200}disabled=\{semanticModels === null \|\| semanticModelBusy \|\| semanticDownloading \|\| semanticEnabling\}[\s\S]{1,200}value=\{semanticModels\?\.current_model \?\? ""\}[\s\S]{1,160}onchange=\{changeSemanticModel\}[\s\S]{1,120}aria-label="Embedding model picker"/,
     );
-    expect(source).toContain("BAAI/bge-small-en-v1.5");
+    expect(source).toMatch(/\{#each semanticModels\.models as model \(model\.id\)\}/);
+    expect(source).toMatch(/formatModelMeta\(model\)/);
+    expect(source).not.toMatch(/Picker placeholder/);
+    expect(source).not.toMatch(/backend ships a model registry/);
   });
 
   test("chan-reports toggle writes through editing.reports.enabled", () => {
@@ -89,6 +95,19 @@ describe("fullstack-a-48: HybridFileBrowserConfig wiring", () => {
   test("polling timer is cleaned up on destroy", () => {
     expect(source).toMatch(/onDestroy\(\(\) => \{\s*stopSemanticPoll\(\)/);
   });
+
+  test("enable flow refreshes model registry after download", () => {
+    expect(source).toMatch(/semanticState = await api\.semanticDownload\(\)/);
+    expect(source).toMatch(/await refreshSemanticSearchState\(\)/);
+    expect(source).toMatch(/semanticState = await api\.semanticEnable\(\)/);
+  });
+
+  test("model label metadata includes dimensions, size, and download state", () => {
+    expect(source).toMatch(/function formatModelMeta\(model: SemanticModelRegistry\["models"\]\[number\]\): string/);
+    expect(source).toMatch(/`\$\{model\.dim\}d`/);
+    expect(source).toMatch(/model\.size_label/);
+    expect(source).toMatch(/model\.downloaded \? "downloaded" : "not downloaded"/);
+  });
 });
 
 describe("Wave 4: File Browser back-side controls", () => {
@@ -99,7 +118,7 @@ describe("Wave 4: File Browser back-side controls", () => {
     );
   });
 
-  test("placeholder dropdown uses the polished config-select style", () => {
+  test("model dropdown uses the polished config-select style", () => {
     expect(source).toMatch(/class="config-select family"/);
     expect(source).toMatch(/\.config-select \{[\s\S]{1,300}border: 1px solid var\(--border\)/);
   });

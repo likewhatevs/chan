@@ -38,6 +38,8 @@ use hf_hub::api::sync::ApiBuilder;
 use thiserror::Error;
 use tokenizers::{PaddingParams, PaddingStrategy, Tokenizer, TruncationParams, TruncationStrategy};
 
+use super::config;
+
 #[derive(Debug, Error)]
 pub enum EmbedError {
     #[error("unknown embedding model: {0}")]
@@ -372,26 +374,10 @@ fn select_device() -> Device {
     Device::Cpu
 }
 
-/// Models we explicitly accept. The dim column is informational
-/// (we read the real value from each model's config.json at load)
-/// but kept here so unknown-model errors can hint at the right
-/// spelling. Add a row to support a new BGE variant without
-/// touching the rest of the file.
-const MODELS: &[(&str, usize)] = &[
-    ("BAAI/bge-small-en-v1.5", 384),
-    ("BAAI/bge-base-en-v1.5", 768),
-    ("BAAI/bge-large-en-v1.5", 1024),
-    // BGE-M3 is multilingual; useful when notes mix languages.
-    ("BAAI/bge-m3", 1024),
-];
-
 fn lookup_model(id: &str) -> Result<usize, EmbedError> {
-    for (name, dim) in MODELS {
-        if *name == id {
-            return Ok(*dim);
-        }
-    }
-    Err(EmbedError::UnknownModel(id.to_owned()))
+    config::embedding_model(id)
+        .map(|model| model.dim as usize)
+        .ok_or_else(|| EmbedError::UnknownModel(id.to_owned()))
 }
 
 /// Per-machine model cache. macOS: `~/Library/Caches/chan/models`;
@@ -468,6 +454,10 @@ pub fn resolve_model(model_id: &str) -> Result<PathBuf, EmbedError> {
     resolve_model_in(model_id, &global_models_dir())
 }
 
+pub fn model_downloaded(model_id: &str) -> Result<bool, EmbedError> {
+    model_downloaded_in(model_id, &global_models_dir())
+}
+
 /// `resolve_model` against an explicit cache root. Production callers
 /// use the no-arg `resolve_model`; tests inject a tempdir so they
 /// don't read or mutate the user's real cache.
@@ -484,6 +474,12 @@ fn resolve_model_in(model_id: &str, cache_dir: &Path) -> Result<PathBuf, EmbedEr
     }
 }
 
+fn model_downloaded_in(model_id: &str, cache_dir: &Path) -> Result<bool, EmbedError> {
+    let _ = lookup_model(model_id)?;
+    let repo_dir = cache_dir.join(repo_dir_name(model_id));
+    Ok(model_files_present(&repo_dir))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -498,6 +494,19 @@ mod tests {
     fn known_models_resolve() {
         assert!(lookup_model("BAAI/bge-small-en-v1.5").is_ok());
         assert!(lookup_model("BAAI/bge-m3").is_ok());
+    }
+
+    #[test]
+    fn model_downloaded_flag_uses_cache_layout() {
+        let tmp = tempfile::tempdir().unwrap();
+        assert!(!model_downloaded_in("BAAI/bge-small-en-v1.5", tmp.path()).unwrap());
+
+        let repo = tmp.path().join(repo_dir_name("BAAI/bge-small-en-v1.5"));
+        seeded_repo(&repo);
+        assert!(model_downloaded_in("BAAI/bge-small-en-v1.5", tmp.path()).unwrap());
+
+        let err = model_downloaded_in("not-a-model", tmp.path()).unwrap_err();
+        assert!(matches!(err, EmbedError::UnknownModel(_)));
     }
 
     fn seeded_repo(repo: &Path) {

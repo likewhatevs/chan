@@ -548,6 +548,22 @@ export type SemanticState = {
   semantic_enabled: boolean;
 };
 
+export type SemanticModelEntry = {
+  id: string;
+  label: string;
+  dim: number;
+  size_label: string;
+  note: string;
+  default: boolean;
+  downloaded: boolean;
+  current: boolean;
+};
+
+export type SemanticModelRegistry = {
+  current_model: string;
+  models: SemanticModelEntry[];
+};
+
 /// Drive reset modes, in increasing destructiveness. See
 /// `crates/chan-core/src/storage.rs` for the per-mode contract.
 export type ResetMode = "drive" | "everything";

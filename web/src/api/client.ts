@@ -27,6 +27,7 @@ import type {
   ResetResponse,
   SearchHit,
   SemanticState,
+  SemanticModelRegistry,
   TerminalRestartRequest,
   TerminalSpawnRequest,
   TerminalSpawnResponse,
@@ -522,6 +523,10 @@ export const api = {
   /// `model_present` transition without depending on per-byte
   /// progress events.
   semanticState: () => req<SemanticState>("GET", "/api/index/semantic/state"),
+  semanticModels: () =>
+    req<SemanticModelRegistry>("GET", "/api/index/semantic/models"),
+  semanticModelPatch: (model: string) =>
+    req<SemanticState>("PATCH", "/api/index/semantic/model", { model }),
   semanticDownload: () => req<SemanticState>("POST", "/api/index/semantic/download"),
   semanticEnable: () => req<SemanticState>("POST", "/api/index/semantic/enable"),
   semanticDisable: () => req<SemanticState>("POST", "/api/index/semantic/disable"),

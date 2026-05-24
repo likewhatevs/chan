@@ -515,6 +515,21 @@ enum IndexAction {
         #[arg(long, default_value = "BAAI/bge-small-en-v1.5")]
         model: String,
     },
+    /// List curated embedding models accepted by chan.
+    ListModels {
+        /// Emit machine-readable JSON.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Set the embedding model configured for a drive.
+    SetModel {
+        /// Drive root. Defaults to the registered default drive.
+        #[arg(long)]
+        path: Option<PathBuf>,
+        /// Curated HuggingFace model id.
+        #[arg(long)]
+        model: String,
+    },
     /// Flip the drive's Hybrid-search opt-in. Refuses if the model
     /// isn't downloaded; the error points at `chan index
     /// download-model`. The flag persists in
@@ -1208,6 +1223,8 @@ fn cmd_index(action: IndexAction) -> Result<()> {
             cmd_index_rebuild(resolved)
         }
         IndexAction::DownloadModel { model } => cmd_index_download_model(&model),
+        IndexAction::ListModels { json } => cmd_index_list_models(json),
+        IndexAction::SetModel { path, model } => cmd_index_set_model(path, &model),
         IndexAction::EnableSemantic { path } => cmd_index_set_semantic(path, true),
         IndexAction::DisableSemantic { path } => cmd_index_set_semantic(path, false),
         IndexAction::Status { path, json } => cmd_index_status(path, json),
@@ -1288,6 +1305,22 @@ fn cmd_index_rebuild(path: PathBuf) -> Result<()> {
     Ok(())
 }
 
+fn cmd_index_list_models(json: bool) -> Result<()> {
+    let models = chan_drive::index::config::embedding_models();
+    if json {
+        println!("{}", serde_json::to_string_pretty(models)?);
+    } else {
+        for model in models {
+            let marker = if model.is_default { "default" } else { "" };
+            println!(
+                "{:<28} {:<19} dim={:<4} {:<8} {:<7} {}",
+                model.id, model.label, model.dim, model.size_label, marker, model.note
+            );
+        }
+    }
+    Ok(())
+}
+
 /// systacean-7: stub when the binary is built without
 /// `--features embeddings`. The candle + hf-hub stack is gated
 /// behind that feature; without it there's nothing to download.
@@ -1299,6 +1332,11 @@ fn cmd_index_download_model(_model: &str) -> Result<()> {
 
 #[cfg(not(feature = "embeddings"))]
 fn cmd_index_set_semantic(_path: Option<PathBuf>, _enabled: bool) -> Result<()> {
+    anyhow::bail!("chan was built without `--features embeddings`; semantic search is unavailable")
+}
+
+#[cfg(not(feature = "embeddings"))]
+fn cmd_index_set_model(_path: Option<PathBuf>, _model: &str) -> Result<()> {
     anyhow::bail!("chan was built without `--features embeddings`; semantic search is unavailable")
 }
 
@@ -1316,6 +1354,9 @@ fn cmd_index_download_model(model: &str) -> Result<()> {
     use chan_drive::index::embeddings::{
         global_models_dir, repo_dir_name, resolve_model, Embedder,
     };
+    if chan_drive::index::config::embedding_model(model).is_none() {
+        anyhow::bail!("unknown embedding model: {model}");
+    }
     let cache_dir = global_models_dir();
     let expected_dir = cache_dir.join(repo_dir_name(model));
     if resolve_model(model).is_ok() {
@@ -1335,6 +1376,28 @@ fn cmd_index_download_model(model: &str) -> Result<()> {
     );
     Embedder::open(model, &cache_dir).with_context(|| format!("download model {model}"))?;
     println!("downloaded {} into {}", model, expected_dir.display());
+    Ok(())
+}
+
+#[cfg(feature = "embeddings")]
+fn cmd_index_set_model(path: Option<PathBuf>, model: &str) -> Result<()> {
+    if chan_drive::index::config::embedding_model(model).is_none() {
+        anyhow::bail!("unknown embedding model: {model}");
+    }
+    let lib = library()?;
+    let root = path
+        .or_else(|| lib.default_drive_root())
+        .unwrap_or_else(|| lib.effective_default_drive_root());
+    let drive = lib
+        .open_drive(&root)
+        .with_context(|| not_a_chan_drive_hint(&root))?;
+    drive
+        .set_semantic_model(model)
+        .context("persisting semantic model")?;
+    println!(
+        "semantic model set to {model} for drive at {}",
+        drive.root().display()
+    );
     Ok(())
 }
 
@@ -2667,6 +2730,47 @@ mod tests {
         }
         assert!(filter.is_excluded("NODE_MODULES"));
         assert!(!filter.is_excluded("notes"));
+    }
+
+    #[test]
+    fn index_model_subcommands_parse() {
+        let cli = Cli::try_parse_from(["chan", "index", "list-models", "--json"]).unwrap();
+        match cli.command {
+            Command::Index {
+                action: IndexAction::ListModels { json },
+            } => assert!(json),
+            other => panic!("unexpected command: {other:?}"),
+        }
+
+        let cli = Cli::try_parse_from([
+            "chan",
+            "index",
+            "set-model",
+            "--path",
+            "/tmp/drive",
+            "--model",
+            "BAAI/bge-base-en-v1.5",
+        ])
+        .unwrap();
+        match cli.command {
+            Command::Index {
+                action: IndexAction::SetModel { path, model },
+            } => {
+                assert_eq!(path, Some(PathBuf::from("/tmp/drive")));
+                assert_eq!(model, "BAAI/bge-base-en-v1.5");
+            }
+            other => panic!("unexpected command: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn embedding_model_registry_json_uses_default_key() {
+        let body = serde_json::to_value(chan_drive::index::config::embedding_models()).unwrap();
+        let first = &body.as_array().unwrap()[0];
+        assert_eq!(first["id"], "BAAI/bge-small-en-v1.5");
+        assert_eq!(first["default"], true);
+        assert_eq!(first["dim"], 384);
+        assert!(first.get("is_default").is_none());
     }
 
     #[test]
