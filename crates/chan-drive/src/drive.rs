@@ -475,10 +475,10 @@ impl Drive {
     /// what callers pass into editable-text gates + journaling +
     /// graph/index keys.
     fn resolve_io(&self, rel: &str) -> Result<(&cap_std::fs::Dir, std::path::PathBuf)> {
-        if let Some(sub) = rel.strip_prefix("Drafts/") {
+        if let Some(sub) = drafts::strip_unified_prefix(rel) {
             if sub.is_empty() {
                 return Err(ChanError::Io(
-                    "rel `Drafts/` cannot be the drafts root itself; pass `Drafts/<name>/<file>`"
+                    "rel `Drafts` cannot be the drafts root itself; pass `Drafts/<name>/<file>`"
                         .into(),
                 ));
             }
@@ -488,6 +488,70 @@ impl Drive {
             let validated = fs_ops::validate_rel(rel)?;
             Ok((&self.dir, validated))
         }
+    }
+
+    /// Resolve a public chan path to the real host filesystem path.
+    ///
+    /// Most paths map under `Drive::root()`. The `Drafts/` namespace
+    /// is virtual: it maps into this drive's metadata drafts dir so
+    /// callers that truly need a real cwd (terminal, external shell
+    /// agents) can opt into that physical location without pretending
+    /// Drafts lives in the user's notes tree.
+    pub fn resolve_physical_path(&self, rel: &str) -> Result<std::path::PathBuf> {
+        let trimmed = rel.trim_matches('/');
+        if trimmed.is_empty() || trimmed == "." {
+            return Ok(self.root_canon.clone());
+        }
+        if let Some(sub) = drafts::strip_unified_prefix(trimmed) {
+            if sub.is_empty() {
+                return Ok(self.paths.drafts.clone());
+            }
+            let drafts_canon = self
+                .paths
+                .drafts
+                .canonicalize()
+                .map_err(|e| ChanError::Io(format!("canonicalize drafts root: {e}")))?;
+            return fs_ops::resolve_safe_strict_canon(&self.paths.drafts, &drafts_canon, sub);
+        }
+        fs_ops::resolve_safe_strict_canon(self.root(), &self.root_canon, trimmed)
+    }
+
+    /// Resolve a public chan path to an existing real directory.
+    pub fn resolve_physical_dir(&self, rel: &str) -> Result<std::path::PathBuf> {
+        let abs = self.resolve_physical_path(rel)?;
+        let meta = std::fs::metadata(&abs).map_err(|e| ChanError::Io(e.to_string()))?;
+        if !meta.is_dir() {
+            return Err(ChanError::Io("path is not a directory".into()));
+        }
+        Ok(abs)
+    }
+
+    /// Convert a real filesystem path back to chan's public path
+    /// namespace when it is inside the drive root or Drafts metadata.
+    pub fn physical_path_to_virtual(&self, path: &std::path::Path) -> Option<String> {
+        let path = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
+        if path == self.root_canon {
+            return Some(String::new());
+        }
+        if let Ok(rel) = path.strip_prefix(&self.root_canon) {
+            return Some(posix_path(rel));
+        }
+        let drafts_canon = self
+            .paths
+            .drafts
+            .canonicalize()
+            .unwrap_or_else(|_| self.paths.drafts.clone());
+        if path == drafts_canon {
+            return Some(drafts::UNIFIED_DRAFTS_ROOT.to_string());
+        }
+        if let Ok(rel) = path.strip_prefix(&drafts_canon) {
+            let rel = posix_path(rel);
+            if rel.is_empty() {
+                return Some(drafts::UNIFIED_DRAFTS_ROOT.to_string());
+            }
+            return Some(format!("{}/{rel}", drafts::UNIFIED_DRAFTS_ROOT));
+        }
+        None
     }
 
     pub fn root(&self) -> &std::path::Path {
@@ -691,15 +755,15 @@ impl Drive {
     /// that surface this to the editor must apply their own gate.
     /// Same special-file refusal as `write_text`.
     pub fn write_bytes(&self, rel: &str, content: &[u8]) -> Result<()> {
-        let rel_path = self.rel(rel)?;
-        let prev = ensure_writable_in(&self.dir, &rel_path)?;
+        let (dir, rel_path) = self.resolve_io(rel)?;
+        let prev = ensure_writable_in(dir, &rel_path)?;
         check_size(
             "bytes",
             content.len(),
             BYTES_WRITE_LIMIT,
             prev.as_ref().map(|m| m.len()),
         )?;
-        fs_ops::atomic_write_in(&self.dir, &rel_path, content)
+        fs_ops::atomic_write_in(dir, &rel_path, content)
     }
 
     /// True iff the path resolves under the drive and refers to a
@@ -732,6 +796,18 @@ impl Drive {
     /// `list_dir_entries` enumeration — the recurring `-a-66 b/c/d`
     /// data-flow gap @@WebtestA caught.
     pub fn stat(&self, rel: &str) -> Result<FileStat> {
+        if drafts::strip_unified_prefix(rel) == Some("") {
+            let meta = self
+                .drafts_dir_handle
+                .symlink_metadata(".")
+                .map_err(|e| ChanError::Io(e.to_string()))?;
+            return Ok(FileStat {
+                size: 0,
+                mtime: mtime_secs_cap(&meta),
+                mtime_ns: mtime_ns_cap(&meta),
+                is_dir: meta.is_dir(),
+            });
+        }
         let (dir, rel_path) = self.resolve_io(rel)?;
         let meta = dir
             .symlink_metadata(&rel_path)
@@ -847,6 +923,20 @@ impl Drive {
         fs_ops::list_tree(self.root())
     }
 
+    /// Recursive listing in chan's public namespace, including the
+    /// virtual `Drafts` root backed by this drive's metadata dir.
+    pub fn list_tree_unified(&self) -> Result<Vec<TreeEntry>> {
+        let mut entries = self.list_tree()?;
+        entries.extend(self.list_tree_drafts_prefix(drafts::UNIFIED_DRAFTS_ROOT)?);
+        if entries.len() > fs_ops::LIST_TREE_LIMIT {
+            return Err(ChanError::ListingTooLarge {
+                observed: entries.len(),
+                limit: fs_ops::LIST_TREE_LIMIT,
+            });
+        }
+        Ok(entries)
+    }
+
     /// Subtree variant of `list_tree`: walk only the descendants of
     /// `prefix` instead of the entire drive. Returned `TreeEntry.path`
     /// values stay relative to the drive root, so the caller sees the
@@ -867,6 +957,87 @@ impl Drive {
     pub fn list_tree_prefix(&self, prefix: &str) -> Result<Vec<TreeEntry>> {
         let resolved = fs_ops::resolve_safe_strict(self.root(), prefix)?;
         fs_ops::list_tree_prefix(self.root(), &resolved)
+    }
+
+    /// Subtree variant of `list_tree_unified`. `Drafts` prefixes
+    /// walk the metadata-backed draft tree and return public
+    /// `Drafts/...` paths; every other prefix stays rooted at the
+    /// drive.
+    pub fn list_tree_prefix_unified(&self, prefix: &str) -> Result<Vec<TreeEntry>> {
+        let trimmed = prefix.trim_matches('/');
+        if drafts::is_unified_drafts_path(trimmed) {
+            self.list_tree_drafts_prefix(trimmed)
+        } else {
+            self.list_tree_prefix(trimmed)
+        }
+    }
+
+    fn list_tree_drafts_prefix(&self, prefix: &str) -> Result<Vec<TreeEntry>> {
+        let Some(sub) = drafts::strip_unified_prefix(prefix) else {
+            return Ok(Vec::new());
+        };
+        let walk_from = if sub.is_empty() {
+            self.paths.drafts.clone()
+        } else {
+            self.paths.drafts.join(fs_ops::validate_rel(sub)?)
+        };
+        if !walk_from.exists() {
+            return Ok(Vec::new());
+        }
+
+        let mut out = Vec::new();
+        let walker = walkdir::WalkDir::new(&walk_from)
+            .min_depth(0)
+            .follow_links(false)
+            .same_file_system(true)
+            .into_iter()
+            .filter_entry(|entry| {
+                let ft = entry.file_type();
+                ft.is_dir() || ft.is_file()
+            });
+        for entry in walker {
+            if out.len() >= fs_ops::LIST_TREE_LIMIT {
+                return Err(ChanError::ListingTooLarge {
+                    observed: out.len(),
+                    limit: fs_ops::LIST_TREE_LIMIT,
+                });
+            }
+            let entry = match entry {
+                Ok(entry) => entry,
+                Err(e) => {
+                    tracing::warn!("drafts walkdir error: {e}");
+                    continue;
+                }
+            };
+            let ft = entry.file_type();
+            if !(ft.is_dir() || ft.is_file()) {
+                continue;
+            }
+            let rel = entry
+                .path()
+                .strip_prefix(&self.paths.drafts)
+                .map_err(|_| ChanError::PathEscape)?;
+            let suffix = posix_path(rel);
+            let path = if suffix.is_empty() {
+                drafts::UNIFIED_DRAFTS_ROOT.to_string()
+            } else {
+                format!("{}/{suffix}", drafts::UNIFIED_DRAFTS_ROOT)
+            };
+            let meta = match entry.metadata() {
+                Ok(meta) => meta,
+                Err(e) => {
+                    tracing::warn!(?path, ?e, "drafts metadata failed; skipping");
+                    continue;
+                }
+            };
+            out.push(TreeEntry {
+                path,
+                is_dir: meta.is_dir(),
+                mtime: mtime_secs_std(&meta),
+                size: if meta.is_dir() { 0 } else { meta.len() },
+            });
+        }
+        Ok(out)
     }
 
     pub fn create_dir(&self, rel: &str) -> Result<()> {
@@ -2924,6 +3095,13 @@ fn mtime_secs_cap(meta: &cap_std::fs::Metadata) -> Option<i64> {
         .map(|d| d.as_secs() as i64)
 }
 
+fn mtime_secs_std(meta: &std::fs::Metadata) -> Option<i64> {
+    meta.modified()
+        .ok()
+        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+        .map(|d| d.as_secs() as i64)
+}
+
 /// cap-std variant of `mtime_ns` for `cap_std::fs::Metadata`.
 fn mtime_ns_cap(meta: &cap_std::fs::Metadata) -> Option<i64> {
     meta.modified()
@@ -3146,6 +3324,10 @@ fn path_under(path: &str, prefix: &str) -> bool {
 fn canonical_posix(p: &str) -> String {
     let s = p.strip_prefix("./").unwrap_or(p);
     s.trim_end_matches('/').to_string()
+}
+
+fn posix_path(path: &std::path::Path) -> String {
+    path.to_string_lossy().replace('\\', "/")
 }
 
 /// Read the persisted rename log from `graph_dir/rename_log.json`.
@@ -4860,6 +5042,22 @@ mod tests {
     }
 
     #[test]
+    fn write_bytes_routes_drafts_binary_to_metadata_dir() {
+        let (_cfg, root, drive) = fixture();
+        drive.create_draft_dir("untitled-1").unwrap();
+        drive
+            .write_bytes("Drafts/untitled-1/pasted.png", &[0x89, b'P', b'N', b'G'])
+            .unwrap();
+
+        assert_eq!(
+            drive.read("Drafts/untitled-1/pasted.png").unwrap(),
+            vec![0x89, b'P', b'N', b'G']
+        );
+        assert!(drive.drafts_dir().join("untitled-1/pasted.png").is_file());
+        assert!(!root.path().join("Drafts/untitled-1/pasted.png").exists());
+    }
+
+    #[test]
     fn write_text_rejects_oversize_content_for_new_file() {
         let (_cfg, _root, drive) = fixture();
         // One byte over the cap. Allocating 2 MiB+1 is fine; the
@@ -5148,6 +5346,48 @@ mod tests {
         let (_cfg, _root, drive) = fixture();
         let err = drive.list_tree_prefix("../escape").unwrap_err();
         assert!(matches!(err, ChanError::PathEscape), "got {err:?}");
+    }
+
+    #[test]
+    fn list_tree_unified_includes_drafts_metadata_namespace() {
+        let (_cfg, _root, drive) = fixture();
+        drive.write_text("notes/intro.md", "# intro\n").unwrap();
+        drive.create_draft_dir("untitled-1").unwrap();
+        drive
+            .write_text("Drafts/untitled-1/draft.md", "# draft\n")
+            .unwrap();
+        drive
+            .write_bytes("Drafts/untitled-1/pasted.png", &[1, 2, 3])
+            .unwrap();
+
+        let entries = drive.list_tree_unified().unwrap();
+        let paths: Vec<_> = entries.iter().map(|entry| entry.path.as_str()).collect();
+        assert!(paths.contains(&"notes/intro.md"));
+        assert!(paths.contains(&"Drafts"));
+        assert!(paths.contains(&"Drafts/untitled-1"));
+        assert!(paths.contains(&"Drafts/untitled-1/draft.md"));
+        assert!(paths.contains(&"Drafts/untitled-1/pasted.png"));
+    }
+
+    #[test]
+    fn list_tree_prefix_unified_scopes_drafts_metadata_namespace() {
+        let (_cfg, _root, drive) = fixture();
+        drive.create_draft_dir("untitled-1").unwrap();
+        drive.create_draft_dir("untitled-2").unwrap();
+        drive
+            .write_text("Drafts/untitled-1/draft.md", "# draft\n")
+            .unwrap();
+        drive
+            .write_text("Drafts/untitled-2/draft.md", "# other\n")
+            .unwrap();
+
+        let entries = drive.list_tree_prefix_unified("Drafts/untitled-1").unwrap();
+        let paths: Vec<_> = entries.iter().map(|entry| entry.path.as_str()).collect();
+        assert!(paths.contains(&"Drafts/untitled-1"));
+        assert!(paths.contains(&"Drafts/untitled-1/draft.md"));
+        assert!(!paths
+            .iter()
+            .any(|path| path.starts_with("Drafts/untitled-2")));
     }
 
     #[cfg(unix)]
@@ -5542,6 +5782,9 @@ mod tests {
             .unwrap();
 
         // Stat the draft directory.
+        let root_stat = drive.stat("Drafts").unwrap();
+        assert!(root_stat.is_dir, "drafts root should stat as is_dir");
+
         let dir_stat = drive.stat("Drafts/untitled-1").unwrap();
         assert!(dir_stat.is_dir, "draft directory should stat as is_dir");
 
@@ -5557,6 +5800,41 @@ mod tests {
         let drive_stat = drive.stat("notes/intro.md").unwrap();
         assert!(!drive_stat.is_dir);
         assert_eq!(drive_stat.size, 6);
+    }
+
+    #[test]
+    fn physical_path_resolution_maps_drafts_namespace() {
+        let (_cfg, _root, drive) = fixture();
+        drive.create_draft_dir("untitled-1").unwrap();
+        drive
+            .write_text("Drafts/untitled-1/draft.md", "# hello\n")
+            .unwrap();
+        drive.write_text("notes/intro.md", "# intro\n").unwrap();
+
+        assert_eq!(
+            drive.resolve_physical_path("").unwrap(),
+            drive.root().canonicalize().unwrap()
+        );
+        assert_eq!(
+            drive.resolve_physical_path("Drafts").unwrap(),
+            drive.drafts_dir().to_path_buf()
+        );
+        assert_eq!(
+            drive.resolve_physical_dir("Drafts/untitled-1").unwrap(),
+            drive.drafts_dir().join("untitled-1")
+        );
+        assert_eq!(
+            drive
+                .physical_path_to_virtual(&drive.drafts_dir().join("untitled-1"))
+                .unwrap(),
+            "Drafts/untitled-1"
+        );
+        assert_eq!(
+            drive
+                .physical_path_to_virtual(&drive.root().join("notes"))
+                .unwrap(),
+            "notes"
+        );
     }
 
     #[test]

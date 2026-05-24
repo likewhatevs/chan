@@ -11,8 +11,9 @@
 //!     reopening the drive.
 //!
 //! Tools exposed: `read_file`, `write_file`, `list_files`,
-//! `search_content`, and `read_image`. The first four route through
-//! `tools::execute` (text-only JSON results); `read_image` is the
+//! `resolve_path`, `search_content`, graph/report tools, and
+//! `read_image`. The JSON tools route through `tools::execute`;
+//! `read_image` is the
 //! binary read path: it pulls bytes through `Drive::read` (path
 //! sandbox, regular-file gate, lstat) and returns base64-encoded
 //! image content as an MCP `image` content block, capped at
@@ -325,14 +326,14 @@ fn parse_content_length(header: &[u8]) -> std::io::Result<usize> {
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 pub struct ReadFileParams {
-    /// POSIX-style relative path under the drive root.
+    /// POSIX-style path in chan's public namespace.
     pub path: String,
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 pub struct WriteFileParams {
-    /// POSIX-style relative path under the drive root. Must end in
-    /// `.md` or `.txt`; chan-drive's editable-text gate refuses other
+    /// POSIX-style path in chan's public namespace. Must end in `.md`
+    /// or `.txt`; chan-drive's editable-text gate refuses other
     /// extensions.
     pub path: String,
     /// Full new file content. Partial diffs are not supported.
@@ -358,8 +359,16 @@ pub struct SearchContentParams {
 pub struct ListFilesParams {
     /// Optional POSIX rel-path prefix to scope the listing to a
     /// subdirectory. Empty / omitted lists the whole drive (capped).
+    /// `Drafts/...` is the metadata-backed virtual drafts namespace.
     #[serde(default)]
     pub prefix: Option<String>,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct ResolvePathParams {
+    /// POSIX-style path in chan's public namespace, including
+    /// `Drafts/...` when resolving a draft metadata location.
+    pub path: String,
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
@@ -367,8 +376,8 @@ pub struct EmptyParams {}
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 pub struct ReadImageParams {
-    /// POSIX-style relative path under the drive root. Must end in
-    /// one of: .png, .jpg, .jpeg, .webp, .gif.
+    /// POSIX-style path in chan's public namespace. Must end in one
+    /// of: .png, .jpg, .jpeg, .webp, .gif.
     pub path: String,
 }
 
@@ -421,12 +430,13 @@ pub struct RepoReportParams {
 impl Server {
     #[tool(description = "\
 Read the UTF-8 content of a file in the active drive. The path is \
-POSIX-style relative to the drive root. Returns { path, content, \
-size, mtime_ns }. Files larger than 256 KiB are truncated and the \
-response includes `truncated: true` plus a `note` describing the \
-cap; in that case re-issue with a smaller scope (or open the file \
-in the editor if you need the full thing). Pass `mtime_ns` back \
-on `write_file` as `expected_mtime_ns` to detect concurrent edits.")]
+POSIX-style in chan's public namespace, including `Drafts/...` \
+when needed. Returns { path, content, size, mtime_ns }. Files \
+larger than 256 KiB are truncated and the response includes \
+`truncated: true` plus a `note` describing the cap; in that case \
+re-issue with a smaller scope (or open the file in the editor if \
+you need the full thing). Pass `mtime_ns` back on `write_file` as \
+`expected_mtime_ns` to detect concurrent edits.")]
     fn read_file(
         &self,
         Parameters(p): Parameters<ReadFileParams>,
@@ -436,15 +446,16 @@ on `write_file` as `expected_mtime_ns` to detect concurrent edits.")]
 
     #[tool(description = "\
 Replace the content of a file in the active drive (creates the \
-parent directory if needed). The path is POSIX-style relative to \
-the drive root and must end in .md or .txt. New files are capped \
-at 2 MiB; existing files can be edited up to their current size. \
-Pass `expected_mtime_ns` (from your earlier read_file response) \
-to make the write a compare-and-swap; on conflict the call \
-errors and you can re-read before retrying. Writes apply \
-immediately. When a request touches multiple files or feels \
-destructive, call AskUserQuestion first with a numbered plan and \
-wait for the user's answer before any write_file call.")]
+parent directory if needed). The path is POSIX-style in chan's \
+public namespace, including `Drafts/...` when needed, and must end \
+in .md or .txt. New files are capped at 2 MiB; existing files can \
+be edited up to their current size. Pass `expected_mtime_ns` (from \
+your earlier read_file response) to make the write a \
+compare-and-swap; on conflict the call errors and you can re-read \
+before retrying. Writes apply immediately. When a request touches \
+multiple files or feels destructive, call AskUserQuestion first \
+with a numbered plan and wait for the user's answer before any \
+write_file call.")]
     fn write_file(
         &self,
         Parameters(p): Parameters<WriteFileParams>,
@@ -459,9 +470,10 @@ wait for the user's answer before any write_file call.")]
     #[tool(description = "\
 List files in the active drive as { entries, count, total }. \
 Pass an optional `prefix` (POSIX rel-path) to scope the listing to \
-a subdirectory; omit it to list the whole drive. Listings are \
-capped at 2,000 entries; if `truncated` is true, narrow with a \
-prefix or call search_content instead.")]
+a subdirectory; omit it to list the whole drive. Includes the \
+metadata-backed virtual `Drafts/...` namespace. Listings are capped \
+at 2,000 entries; if `truncated` is true, narrow with a prefix or \
+call search_content instead.")]
     fn list_files(
         &self,
         Parameters(p): Parameters<ListFilesParams>,
@@ -471,6 +483,24 @@ prefix or call search_content instead.")]
             args["prefix"] = serde_json::Value::String(prefix);
         }
         run_tool("list_files", &args, &self.ctx)
+    }
+
+    #[tool(description = "\
+Resolve a chan public path to a host filesystem path. Use this only \
+when you need a real path for shell tools or terminal cwd. Normal \
+content operations should keep using read_file, write_file, and \
+list_files with chan paths. The path argument is POSIX-style in \
+chan's public namespace, including `Drafts/...`; Drafts paths \
+resolve to chan metadata outside the drive root.")]
+    fn resolve_path(
+        &self,
+        Parameters(p): Parameters<ResolvePathParams>,
+    ) -> std::result::Result<String, ErrorData> {
+        run_tool(
+            "resolve_path",
+            &serde_json::json!({"path": p.path}),
+            &self.ctx,
+        )
     }
 
     #[tool(description = "\
@@ -492,8 +522,8 @@ at 100.")]
 
     #[tool(description = "\
 Read a raster image from the active drive and return it as an MCP \
-image content block. The path is POSIX-style relative to the drive \
-root and must end in .png, .jpg, .jpeg, .webp, or .gif; other \
+image content block. The path is POSIX-style in chan's public \
+namespace and must end in .png, .jpg, .jpeg, .webp, or .gif; other \
 extensions are refused (text files use read_file). The response is \
 the raw image bytes base64-encoded with the matching MIME type. \
 Single-call cap defaults to 10 MiB; oversized files error with \
@@ -624,7 +654,7 @@ need to drill in. The per-file array is capped at 200 entries; if \
 
 #[tool_handler(
     name = "chan",
-    instructions = "Tools for reading, writing, listing, and searching files in a chan markdown drive. All file operations are sandboxed under the drive root by chan-drive."
+    instructions = "Tools for reading, writing, listing, searching, and resolving paths in a chan markdown drive. Content operations are sandboxed by chan-drive; Drafts paths are a virtual namespace that may resolve to chan metadata outside the drive root."
 )]
 impl ServerHandler for Server {}
 
@@ -712,6 +742,11 @@ mod tests {
             list.description.as_deref(),
             Some(crate::prompts::LIST_FILES_DESC)
         );
+        let resolve = Server::resolve_path_tool_attr();
+        assert_eq!(
+            resolve.description.as_deref(),
+            Some(crate::prompts::RESOLVE_PATH_DESC)
+        );
         let search = Server::search_content_tool_attr();
         assert_eq!(
             search.description.as_deref(),
@@ -793,6 +828,36 @@ mod tests {
             .list_files(Parameters(ListFilesParams { prefix: None }))
             .unwrap();
         assert!(out.contains("a.md"), "got: {out}");
+    }
+
+    #[test]
+    fn resolve_path_maps_drafts_to_metadata_dir() {
+        let (_cfg, _root, server) = fixture();
+        server.ctx.drive.create_draft_dir("untitled-1").unwrap();
+        server
+            .ctx
+            .drive
+            .write_text("Drafts/untitled-1/draft.md", "# draft\n")
+            .unwrap();
+
+        let out = server
+            .resolve_path(Parameters(ResolvePathParams {
+                path: "Drafts/untitled-1".into(),
+            }))
+            .unwrap();
+        let body: serde_json::Value = serde_json::from_str(&out).unwrap();
+        assert_eq!(body["path"], "Drafts/untitled-1");
+        assert_eq!(body["virtual"], true);
+        assert_eq!(
+            body["physical_path"].as_str().unwrap(),
+            server
+                .ctx
+                .drive
+                .drafts_dir()
+                .join("untitled-1")
+                .to_string_lossy()
+                .into_owned()
+        );
     }
 
     #[test]

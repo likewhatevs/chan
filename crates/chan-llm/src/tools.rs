@@ -5,16 +5,16 @@
 //   read_file(path)       -> string
 //   write_file(path, ...) -> { path, bytes_written }
 //   list_files()          -> tree
+//   resolve_path(path)    -> physical path metadata
 //   search_content(query) -> hits
 //
-// All route through `chan_drive::Drive` so the filesystem
+// Content tools route through `chan_drive::Drive` so the filesystem
 // invariants (path sandbox, special-file refusal, atomic writes)
-// apply automatically. There's no escape hatch from chan-drive's
-// gates: even if a backend invents a novel tool call, our
-// `StandardTool::execute` never bypasses Drive. Writes apply
-// immediately; permission gating for destructive batch work is
-// the model's responsibility (it calls `AskUserQuestion` before
-// the writes).
+// apply automatically. `resolve_path` is metadata only: it reveals
+// the real path behind a public chan path when a shell tool needs a
+// cwd, but does not read or write content. Writes apply immediately;
+// permission gating for destructive batch work is the model's
+// responsibility (it calls `AskUserQuestion` before the writes).
 
 use std::sync::Arc;
 
@@ -89,6 +89,7 @@ pub enum StandardTool {
     ReadFile,
     WriteFile,
     ListFiles,
+    ResolvePath,
     SearchContent,
     RepoReport,
     /// Graph adjacency for a single file: outbound links / tags /
@@ -111,6 +112,7 @@ impl StandardTool {
             StandardTool::ReadFile => "read_file",
             StandardTool::WriteFile => "write_file",
             StandardTool::ListFiles => "list_files",
+            StandardTool::ResolvePath => "resolve_path",
             StandardTool::SearchContent => "search_content",
             StandardTool::RepoReport => "repo_report",
             StandardTool::GraphNeighbors => "graph_neighbors",
@@ -124,6 +126,7 @@ impl StandardTool {
             "read_file" => Some(StandardTool::ReadFile),
             "write_file" => Some(StandardTool::WriteFile),
             "list_files" => Some(StandardTool::ListFiles),
+            "resolve_path" => Some(StandardTool::ResolvePath),
             "search_content" => Some(StandardTool::SearchContent),
             "repo_report" => Some(StandardTool::RepoReport),
             "graph_neighbors" => Some(StandardTool::GraphNeighbors),
@@ -143,6 +146,7 @@ pub fn execute(name: &str, args: &Json, ctx: &ToolContext) -> Result<Json> {
     match tool {
         StandardTool::ReadFile => exec_read_file(args, ctx),
         StandardTool::ListFiles => exec_list_files(args, ctx),
+        StandardTool::ResolvePath => exec_resolve_path(args, ctx),
         StandardTool::SearchContent => exec_search_content(args, ctx),
         StandardTool::RepoReport => exec_repo_report(args, ctx),
         StandardTool::GraphNeighbors => exec_graph_neighbors(args, ctx),
@@ -304,11 +308,13 @@ fn exec_list_files(args: &Json, ctx: &ToolContext) -> Result<Json> {
     let prefix = args.get("prefix").and_then(|v| v.as_str());
     // Push prefix scoping into chan-drive so a narrow `prefix` on a
     // 500k-file drive walks only the relevant subtree instead of the
-    // full root. An empty / missing prefix still walks the whole
-    // drive, same as before.
+    // full root. Use the unified variant so Drafts is visible as
+    // `Drafts/...` even though it lives in chan metadata.
     let mut entries: Vec<_> = match prefix {
-        Some(p) if !p.is_empty() => ctx.drive.list_tree_prefix(p.trim_end_matches('/'))?,
-        _ => ctx.drive.list_tree()?,
+        Some(p) if !p.is_empty() => ctx
+            .drive
+            .list_tree_prefix_unified(p.trim_end_matches('/'))?,
+        _ => ctx.drive.list_tree_unified()?,
     };
     let total = entries.len();
     let truncated = total > LIST_FILES_CAP_ENTRIES;
@@ -329,6 +335,24 @@ fn exec_list_files(args: &Json, ctx: &ToolContext) -> Result<Json> {
             "listing capped at {LIST_FILES_CAP_ENTRIES} of {total}; \
              call again with a `prefix` to narrow."
         ));
+    }
+    Ok(out)
+}
+
+fn exec_resolve_path(args: &Json, ctx: &ToolContext) -> Result<Json> {
+    let path = arg_string(args, "path")?;
+    let physical = ctx.drive.resolve_physical_path(path)?;
+    let meta = std::fs::symlink_metadata(&physical).ok();
+    let mut out = serde_json::json!({
+        "path": path,
+        "physical_path": physical.to_string_lossy(),
+        "virtual": chan_drive::drafts::is_unified_drafts_path(path),
+        "exists": meta.is_some(),
+        "is_dir": meta.as_ref().is_some_and(|m| m.is_dir()),
+    });
+    if chan_drive::drafts::is_unified_drafts_path(path) {
+        out["note"] =
+            serde_json::json!("Drafts paths resolve to chan metadata outside the drive root.");
     }
     Ok(out)
 }
@@ -486,7 +510,7 @@ pub fn standard_tool_schemas() -> Vec<ToolSchema> {
                 "properties": {
                     "path": {
                         "type": "string",
-                        "description": "POSIX rel path under the drive root."
+                        "description": "POSIX rel path in chan's public namespace, including Drafts/..."
                     }
                 },
                 "required": ["path"],
@@ -519,6 +543,20 @@ pub fn standard_tool_schemas() -> Vec<ToolSchema> {
                         "description": "Optional POSIX rel-path prefix to scope the listing. Empty / omitted lists the whole drive (capped)."
                     }
                 }
+            }),
+        },
+        ToolSchema {
+            name: "resolve_path",
+            description: crate::prompts::RESOLVE_PATH_DESC,
+            parameters: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "path": {
+                        "type": "string",
+                        "description": "POSIX rel path in chan's public namespace, including Drafts/... when needed."
+                    }
+                },
+                "required": ["path"],
             }),
         },
         ToolSchema {
@@ -687,6 +725,81 @@ mod tests {
     }
 
     #[test]
+    fn list_files_includes_and_filters_drafts_namespace() {
+        let (_cfg, _root, ctx) = fixture();
+        ctx.drive.create_draft_dir("untitled-1").unwrap();
+        ctx.drive
+            .write_text("Drafts/untitled-1/draft.md", "# draft\n")
+            .unwrap();
+
+        let v = execute("list_files", &serde_json::json!({}), &ctx).unwrap();
+        let paths: Vec<&str> = v["entries"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|entry| entry["path"].as_str().unwrap())
+            .collect();
+        assert!(paths.contains(&"Drafts"));
+        assert!(paths.contains(&"Drafts/untitled-1/draft.md"));
+
+        let v = execute(
+            "list_files",
+            &serde_json::json!({"prefix": "Drafts/untitled-1"}),
+            &ctx,
+        )
+        .unwrap();
+        let paths: Vec<&str> = v["entries"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|entry| entry["path"].as_str().unwrap())
+            .collect();
+        assert!(paths.contains(&"Drafts/untitled-1"));
+        assert!(paths.contains(&"Drafts/untitled-1/draft.md"));
+    }
+
+    #[test]
+    fn resolve_path_maps_drafts_to_metadata_dir() {
+        let (_cfg, root, ctx) = fixture();
+        ctx.drive.create_draft_dir("untitled-1").unwrap();
+        ctx.drive
+            .write_text("Drafts/untitled-1/draft.md", "# draft\n")
+            .unwrap();
+
+        let draft = execute(
+            "resolve_path",
+            &serde_json::json!({"path": "Drafts/untitled-1"}),
+            &ctx,
+        )
+        .unwrap();
+        assert_eq!(draft["path"], "Drafts/untitled-1");
+        assert_eq!(draft["virtual"], true);
+        assert_eq!(draft["exists"], true);
+        assert_eq!(draft["is_dir"], true);
+        assert_eq!(
+            draft["physical_path"].as_str().unwrap(),
+            ctx.drive
+                .drafts_dir()
+                .join("untitled-1")
+                .to_string_lossy()
+                .into_owned()
+        );
+
+        let drive_path =
+            execute("resolve_path", &serde_json::json!({"path": "notes"}), &ctx).unwrap();
+        assert_eq!(drive_path["virtual"], false);
+        assert_eq!(
+            drive_path["physical_path"].as_str().unwrap(),
+            root.path()
+                .canonicalize()
+                .unwrap()
+                .join("notes")
+                .to_string_lossy()
+                .into_owned()
+        );
+    }
+
+    #[test]
     fn search_content_clamps_limit() {
         let (_cfg, _root, ctx) = fixture();
         // Doesn't actually run a real search beyond the engine's
@@ -818,6 +931,7 @@ mod tests {
     fn repo_report_appears_in_standard_schemas() {
         let schemas = standard_tool_schemas();
         assert!(schemas.iter().any(|s| s.name == "repo_report"));
+        assert!(schemas.iter().any(|s| s.name == "resolve_path"));
     }
 
     #[test]

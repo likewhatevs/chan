@@ -150,11 +150,15 @@ enum ServerFrame {
         rows: u16,
         #[serde(skip_serializing_if = "Option::is_none")]
         cwd: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        cwd_rel: Option<String>,
     },
     #[serde(rename = "cwd")]
     Cwd {
         #[serde(skip_serializing_if = "Option::is_none")]
         cwd: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        cwd_rel: Option<String>,
     },
     #[serde(rename = "resize")]
     Resize { cols: u16, rows: u16 },
@@ -195,11 +199,10 @@ pub async fn api_terminal_ws(
     let cwd = if query.session.is_some() {
         None
     } else {
-        let drive_root = state.drive_root.clone();
+        let drive = state.drive();
         let cwd = query.cwd.clone();
         let result =
-            tokio::task::spawn_blocking(move || resolve_terminal_cwd(&drive_root, cwd.as_deref()))
-                .await;
+            tokio::task::spawn_blocking(move || resolve_terminal_cwd(&drive, cwd.as_deref())).await;
         match result {
             Ok(Ok(cwd)) => cwd,
             Ok(Err(message)) => return (StatusCode::BAD_REQUEST, message).into_response(),
@@ -772,12 +775,14 @@ async fn terminal_ws(mut socket: WebSocket, state: Arc<AppState>, opts: Terminal
         return;
     }
     session.request_redraw();
+    let (cwd, cwd_rel) = terminal_cwd_payload(&state.drive(), session.cwd());
     let _ = send_frame(
         &mut socket,
         ServerFrame::Ready {
             cols: opts.size.cols,
             rows: opts.size.rows,
-            cwd: session.cwd().map(path_to_wire),
+            cwd,
+            cwd_rel,
         },
     )
     .await;
@@ -810,8 +815,9 @@ async fn terminal_ws(mut socket: WebSocket, state: Arc<AppState>, opts: Terminal
                                 state.last_activity.store(now_unix_secs(), Ordering::Relaxed);
                             }
                             Ok(ClientFrame::Cwd) => {
-                                let cwd = session.cwd().map(path_to_wire);
-                                let _ = send_frame(&mut socket, ServerFrame::Cwd { cwd }).await;
+                                let (cwd, cwd_rel) =
+                                    terminal_cwd_payload(&state.drive(), session.cwd());
+                                let _ = send_frame(&mut socket, ServerFrame::Cwd { cwd, cwd_rel }).await;
                             }
                             Ok(ClientFrame::Focus { focused }) => {
                                 session.set_focused(focused);
@@ -911,6 +917,19 @@ fn path_to_wire(path: PathBuf) -> String {
     path.to_string_lossy().into_owned()
 }
 
+fn terminal_cwd_payload(
+    drive: &chan_drive::Drive,
+    cwd: Option<PathBuf>,
+) -> (Option<String>, Option<String>) {
+    match cwd {
+        Some(path) => {
+            let rel = drive.physical_path_to_virtual(&path);
+            (Some(path_to_wire(path)), rel)
+        }
+        None => (None, None),
+    }
+}
+
 fn pty_size(cols: Option<u16>, rows: Option<u16>) -> PtySize {
     PtySize {
         cols: cols.unwrap_or(DEFAULT_COLS).clamp(1, MAX_COLS),
@@ -936,22 +955,18 @@ fn normalize_window_id(id: &str) -> Option<String> {
     Some(trimmed.chars().take(256).collect())
 }
 
-fn resolve_terminal_cwd(drive_root: &Path, cwd: Option<&str>) -> Result<Option<PathBuf>, String> {
+fn resolve_terminal_cwd(
+    drive: &chan_drive::Drive,
+    cwd: Option<&str>,
+) -> Result<Option<PathBuf>, String> {
     let Some(raw) = cwd else {
         return Ok(None);
     };
     let rel = raw.trim();
-    let abs = if rel.is_empty() {
-        drive_root.to_path_buf()
-    } else {
-        chan_drive::fs_ops::resolve_safe_strict(drive_root, rel)
-            .map_err(|e| format!("invalid terminal cwd: {e}"))?
-    };
-    let meta = std::fs::metadata(&abs).map_err(|e| format!("invalid terminal cwd: {e}"))?;
-    if !meta.is_dir() {
-        return Err("invalid terminal cwd: path is not a directory".into());
-    }
-    Ok(Some(abs))
+    drive
+        .resolve_physical_dir(rel)
+        .map(Some)
+        .map_err(|e| format!("invalid terminal cwd: {e}"))
 }
 
 /// Resolve the user-supplied watcher path to an absolute directory,
@@ -1071,26 +1086,57 @@ mod tests {
             .unwrap_or(false)
     }
 
+    fn terminal_drive_fixture() -> (tempfile::TempDir, tempfile::TempDir, Arc<chan_drive::Drive>) {
+        let cfg = tempfile::TempDir::new().expect("temp config");
+        let root = tempfile::TempDir::new().expect("temp drive");
+        let lib = chan_drive::Library::open_at(cfg.path().join("config.toml")).unwrap();
+        lib.register_drive(root.path()).unwrap();
+        let drive = lib.open_drive(root.path()).unwrap();
+        (cfg, root, drive)
+    }
+
     #[test]
     fn resolve_terminal_cwd_allows_drive_relative_directory() {
-        let tmp = tempfile::tempdir().expect("temp drive");
-        fs::create_dir_all(tmp.path().join("notes/work")).expect("create dir");
+        let (_cfg, root, drive) = terminal_drive_fixture();
+        fs::create_dir_all(root.path().join("notes/work")).expect("create dir");
 
-        let cwd = resolve_terminal_cwd(tmp.path(), Some("notes/work"))
+        let cwd = resolve_terminal_cwd(&drive, Some("notes/work"))
             .expect("valid cwd")
             .expect("cwd set");
 
-        assert_eq!(cwd, tmp.path().join("notes/work"));
+        assert_eq!(cwd, root.path().canonicalize().unwrap().join("notes/work"));
+    }
+
+    #[test]
+    fn resolve_terminal_cwd_maps_drafts_namespace_to_metadata_dir() {
+        let (_cfg, _root, drive) = terminal_drive_fixture();
+        drive.create_draft_dir("untitled-1").unwrap();
+
+        let cwd = resolve_terminal_cwd(&drive, Some("Drafts/untitled-1"))
+            .expect("valid cwd")
+            .expect("cwd set");
+
+        assert_eq!(cwd, drive.drafts_dir().join("untitled-1"));
+        assert_eq!(
+            drive.physical_path_to_virtual(&cwd),
+            Some("Drafts/untitled-1".to_string())
+        );
+
+        let (cwd_abs, cwd_rel) = terminal_cwd_payload(&drive, Some(cwd));
+        assert!(cwd_abs
+            .as_deref()
+            .is_some_and(|path| path.ends_with("untitled-1")));
+        assert_eq!(cwd_rel.as_deref(), Some("Drafts/untitled-1"));
     }
 
     #[test]
     fn resolve_terminal_cwd_rejects_escape_and_files() {
-        let tmp = tempfile::tempdir().expect("temp drive");
-        fs::create_dir_all(tmp.path().join("notes")).expect("create dir");
-        fs::write(tmp.path().join("notes/today.md"), "x").expect("create file");
+        let (_cfg, root, drive) = terminal_drive_fixture();
+        fs::create_dir_all(root.path().join("notes")).expect("create dir");
+        fs::write(root.path().join("notes/today.md"), "x").expect("create file");
 
-        assert!(resolve_terminal_cwd(tmp.path(), Some("../outside")).is_err());
-        assert!(resolve_terminal_cwd(tmp.path(), Some("notes/today.md")).is_err());
+        assert!(resolve_terminal_cwd(&drive, Some("../outside")).is_err());
+        assert!(resolve_terminal_cwd(&drive, Some("notes/today.md")).is_err());
     }
 
     #[test]

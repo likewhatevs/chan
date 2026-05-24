@@ -28,6 +28,8 @@ You can call tools to interact with the drive:
                               .jpeg, .webp, .gif) so you can see \
                               what it contains
   - list_files()             enumerate every file in the drive
+  - resolve_path(path)       translate a chan path to a host \
+                              filesystem path for shell tools
   - search_content(query)    BM25 search across the drive
   - repo_report(...)         per-file language / SLOC counts plus \
                               per-language roll-ups and a COCOMO \
@@ -50,15 +52,19 @@ diffs are not supported. Editable text in the drive is .md and \
 the notes are reachable via read_image but cannot be edited through \
 these tools.
 
-Paths: every tool `path` argument is a drive-rooted POSIX path \
-relative to the drive root (no leading slash, no `..`, no host \
-filesystem paths). When you write markdown content, keep link and \
-image hrefs relative to the file that contains them (the GitHub \
-rendering convention) so links keep working when notes are viewed \
-outside chan. The drive's link normalizer accepts ./foo, ../bar, \
-/baz, or bare foo and resolves them all to the same drive-rooted \
-destination for the internal graph; the on-disk text stays as you \
-wrote it.
+Paths: every content tool `path` argument is a drive-rooted POSIX \
+path relative to the drive root (no leading slash, no `..`, no \
+host filesystem paths). `Drafts/...` is a virtual namespace stored \
+in chan metadata outside the drive root; read_file, write_file, \
+list_files, search_content, and graph tools still address it as \
+`Drafts/...`. Use resolve_path only when you need a real host path \
+or shell cwd for a chan path. When you write markdown content, keep \
+link and image hrefs relative to the file that contains them (the \
+GitHub rendering convention) so links keep working when notes are \
+viewed outside chan. The drive's link normalizer accepts ./foo, \
+../bar, /baz, or bare foo and resolves them all to the same \
+drive-rooted destination for the internal graph; the on-disk text \
+stays as you wrote it.
 
 Read-only files: some files in the drive are marked read-only on \
 disk (the user removed the user-write bit, or the file is \
@@ -122,6 +128,10 @@ content as text, or propose alternatives.\n\
 your own Read / Glob / Grep when the target is in the user's drive; \
 they go through chan-drive's sandbox and graph index, which match the \
 user's visible scope exactly.\n\
+  - If an MCP result points at `Drafts/...` and you need to run a \
+shell command there, call `mcp__chan__resolve_path` first. Drafts \
+is metadata-backed and does not exist as a `Drafts` directory under \
+the drive root.\n\
   - Even when the user explicitly says \"let me review\", \
 \"don't auto-apply\", or \"show me the proposal first\", you \
 should still emit the tool call. Those phrasings describe the \
@@ -132,12 +142,13 @@ verbal exchange.";
 /// the backend sees.
 pub const READ_FILE_DESC: &str = "\
 Read the UTF-8 content of a file in the active drive. The path is \
-POSIX-style relative to the drive root. Returns { path, content, \
-size, mtime_ns }. Files larger than 256 KiB are truncated and the \
-response includes `truncated: true` plus a `note` describing the \
-cap; in that case re-issue with a smaller scope (or open the file \
-in the editor if you need the full thing). Pass `mtime_ns` back \
-on `write_file` as `expected_mtime_ns` to detect concurrent edits.";
+POSIX-style in chan's public namespace, including `Drafts/...` \
+when needed. Returns { path, content, size, mtime_ns }. Files \
+larger than 256 KiB are truncated and the response includes \
+`truncated: true` plus a `note` describing the cap; in that case \
+re-issue with a smaller scope (or open the file in the editor if \
+you need the full thing). Pass `mtime_ns` back on `write_file` as \
+`expected_mtime_ns` to detect concurrent edits.";
 
 /// Description of the write_file tool. Writes apply immediately
 /// through chan-drive's sandbox; if the user's intent looks
@@ -146,23 +157,34 @@ on `write_file` as `expected_mtime_ns` to detect concurrent edits.";
 /// confirmation BEFORE issuing the writes.
 pub const WRITE_FILE_DESC: &str = "\
 Replace the content of a file in the active drive (creates the \
-parent directory if needed). The path is POSIX-style relative to \
-the drive root and must end in .md or .txt. New files are capped \
-at 2 MiB; existing files can be edited up to their current size. \
-Pass `expected_mtime_ns` (from your earlier read_file response) \
-to make the write a compare-and-swap; on conflict the call \
-errors and you can re-read before retrying. Writes apply \
-immediately. When a request touches multiple files or feels \
-destructive, call AskUserQuestion first with a numbered plan and \
-wait for the user's answer before any write_file call.";
+parent directory if needed). The path is POSIX-style in chan's \
+public namespace, including `Drafts/...` when needed, and must end \
+in .md or .txt. New files are capped at 2 MiB; existing files can \
+be edited up to their current size. Pass `expected_mtime_ns` (from \
+your earlier read_file response) to make the write a \
+compare-and-swap; on conflict the call errors and you can re-read \
+before retrying. Writes apply immediately. When a request touches \
+multiple files or feels destructive, call AskUserQuestion first \
+with a numbered plan and wait for the user's answer before any \
+write_file call.";
 
 /// Description of the list_files tool.
 pub const LIST_FILES_DESC: &str = "\
 List files in the active drive as { entries, count, total }. \
 Pass an optional `prefix` (POSIX rel-path) to scope the listing to \
-a subdirectory; omit it to list the whole drive. Listings are \
-capped at 2,000 entries; if `truncated` is true, narrow with a \
-prefix or call search_content instead.";
+a subdirectory; omit it to list the whole drive. Includes the \
+metadata-backed virtual `Drafts/...` namespace. Listings are capped \
+at 2,000 entries; if `truncated` is true, narrow with a prefix or \
+call search_content instead.";
+
+/// Description of the resolve_path tool.
+pub const RESOLVE_PATH_DESC: &str = "\
+Resolve a chan public path to a host filesystem path. Use this only \
+when you need a real path for shell tools or terminal cwd. Normal \
+content operations should keep using read_file, write_file, and \
+list_files with chan paths. The path argument is POSIX-style in \
+chan's public namespace, including `Drafts/...`; Drafts paths \
+resolve to chan metadata outside the drive root.";
 
 /// Description of the search_content tool.
 pub const SEARCH_CONTENT_DESC: &str = "\
@@ -220,8 +242,8 @@ file with search_content when the user has a specific tag in mind.";
 /// `mcp_descriptions_match_prompts`.
 pub const READ_IMAGE_DESC: &str = "\
 Read a raster image from the active drive and return it as an MCP \
-image content block. The path is POSIX-style relative to the drive \
-root and must end in .png, .jpg, .jpeg, .webp, or .gif; other \
+image content block. The path is POSIX-style in chan's public \
+namespace and must end in .png, .jpg, .jpeg, .webp, or .gif; other \
 extensions are refused (text files use read_file). The response is \
 the raw image bytes base64-encoded with the matching MIME type. \
 Single-call cap defaults to 10 MiB; oversized files error with \

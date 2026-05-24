@@ -19,6 +19,28 @@ use std::path::{Path, PathBuf};
 
 use crate::error::{ChanError, Result};
 
+pub const UNIFIED_DRAFTS_ROOT: &str = "Drafts";
+
+/// True when `rel` is inside the public `Drafts/` namespace.
+///
+/// Draft files live in chan metadata, outside the user's drive root,
+/// but the rest of chan addresses them as `Drafts/<name>/...`.
+/// Centralizing the test keeps callers from inventing inconsistent
+/// metadata escape hatches.
+pub fn is_unified_drafts_path(rel: &str) -> bool {
+    strip_unified_prefix(rel).is_some()
+}
+
+/// Strip the public `Drafts` prefix. Returns an empty string for
+/// the Drafts root itself.
+pub fn strip_unified_prefix(rel: &str) -> Option<&str> {
+    let trimmed = rel.trim_matches('/');
+    if trimmed == UNIFIED_DRAFTS_ROOT {
+        return Some("");
+    }
+    trimmed.strip_prefix("Drafts/")
+}
+
 /// Handle to a single draft directory under `drafts_dir`. `name`
 /// is the leaf component (e.g. `"untitled-1"`); `abs` is the
 /// absolute path on disk so callers can read / write entries
@@ -193,6 +215,21 @@ mod tests {
         assert!(create_dir(&root, "..").is_err());
         assert!(create_dir(&root, "a/b").is_err());
         assert!(create_dir(&root, "a\\b").is_err());
+    }
+
+    #[test]
+    fn unified_drafts_path_gate_matches_public_namespace() {
+        assert!(is_unified_drafts_path("Drafts"));
+        assert!(is_unified_drafts_path("/Drafts/"));
+        assert!(is_unified_drafts_path("Drafts/untitled/draft.md"));
+        assert_eq!(strip_unified_prefix("Drafts"), Some(""));
+        assert_eq!(
+            strip_unified_prefix("Drafts/untitled/draft.md"),
+            Some("untitled/draft.md")
+        );
+        assert!(!is_unified_drafts_path(""));
+        assert!(!is_unified_drafts_path("Draftsman/note.md"));
+        assert!(!is_unified_drafts_path("notes/Drafts/file.md"));
     }
 
     #[test]

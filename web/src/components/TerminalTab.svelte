@@ -99,7 +99,7 @@
   } = $props();
 
   type ServerFrame =
-    | { type: "ready"; cols: number; rows: number; cwd?: string | null }
+    | { type: "ready"; cols: number; rows: number; cwd?: string | null; cwd_rel?: string | null }
     | {
         type: "session";
         id: string;
@@ -108,7 +108,7 @@
         bytes_since_focus?: number;
       }
     | { type: "activity"; bytes_since_focus: number }
-    | { type: "cwd"; cwd?: string | null }
+    | { type: "cwd"; cwd?: string | null; cwd_rel?: string | null }
     | { type: "resize_other"; cols: number; rows: number }
     | { type: "closed"; reason: CloseReason }
     | { type: "exit"; code: number }
@@ -151,6 +151,7 @@
   let pendingPromptSeed = "";
   let promptSeedSent = false;
   let terminalCwdAbs: string | null = $state(null);
+  let terminalCwdVirtual: string | null = $state(null);
   let watcherPollTimer: ReturnType<typeof setInterval> | null = null;
   const outputDecoder = new TextDecoder();
   const WEBGL_ATLAS_SCAN_TAIL_BYTES = 32;
@@ -577,6 +578,7 @@
       if (frame.type === "ready") {
         statusDetail = `${frame.cols}x${frame.rows}`;
         terminalCwdAbs = frame.cwd ?? null;
+        terminalCwdVirtual = frame.cwd_rel ?? null;
       } else if (frame.type === "session") {
         sawSessionControl = true;
         setTerminalSession(tab, frame.id, frame.seq, mcpEnvOn);
@@ -593,6 +595,7 @@
         statusDetail = `${frame.cols}x${frame.rows}`;
       } else if (frame.type === "cwd") {
         terminalCwdAbs = frame.cwd ?? null;
+        terminalCwdVirtual = frame.cwd_rel ?? null;
       } else if (frame.type === "activity") {
         setTerminalActivity(tab, !focused && frame.bytes_since_focus > 0);
       } else if (frame.type === "closed") {
@@ -944,6 +947,7 @@
   }
 
   function terminalCwdRel(): string | null {
+    if (terminalCwdVirtual !== null) return terminalCwdVirtual;
     const abs = terminalCwdAbs;
     const root = drive.info?.root;
     if (!abs || !root) return null;

@@ -437,7 +437,7 @@ fn normalize_drive_rel(p: &std::path::Path) -> Option<String> {
 /// the previous graph-files-only behaviour instead of failing the
 /// request.
 fn drive_disk_files(drive: &chan_drive::Drive) -> std::collections::BTreeSet<String> {
-    match drive.list_tree() {
+    match drive.list_tree_unified() {
         Ok(entries) => entries
             .into_iter()
             .filter(|e| !e.is_dir)
@@ -458,7 +458,7 @@ fn drive_disk_files(drive: &chan_drive::Drive) -> std::collections::BTreeSet<Str
 /// to "no directory filtering" — i.e. the pre-fix behaviour — rather
 /// than failing the request.
 fn drive_disk_dirs(drive: &chan_drive::Drive) -> std::collections::BTreeSet<String> {
-    match drive.list_tree() {
+    match drive.list_tree_unified() {
         Ok(entries) => entries
             .into_iter()
             .filter(|e| e.is_dir)
@@ -482,15 +482,11 @@ fn image_subset(
         .collect()
 }
 
-/// True only for regular files under the drive root.
-///
-/// In-drive symlinks, even healthy ones, are treated as missing so
-/// the graph's display truth matches what `chan-drive` would re-index
-/// on the next pass under its lstat semantics.
-fn indexed_file_exists(root: &std::path::Path, rel: &str) -> bool {
-    std::fs::symlink_metadata(root.join(rel))
-        .map(|m| m.file_type().is_file())
-        .unwrap_or(false)
+/// True only for regular files in chan's public namespace.
+/// Uses Drive so virtual Drafts paths share the same truth as
+/// `/api/files` and MCP content tools.
+fn indexed_file_exists(drive: &chan_drive::Drive, rel: &str) -> bool {
+    drive.exists(rel)
 }
 
 fn language_node_id(language: &str) -> String {
@@ -753,6 +749,12 @@ fn merge_filesystem_layer(
     edges: &mut Vec<GraphEdgeView>,
 ) -> Result<(), super::fs_graph::FsGraphError> {
     let path = graph_scope_path(p);
+    if chan_drive::drafts::is_unified_drafts_path(path) {
+        // Drafts lives in chan metadata. build_fs_graph intentionally
+        // walks the drive root, so virtual draft nodes come from the
+        // graph/index layer rather than a metadata filesystem walk.
+        return Ok(());
+    }
     let scope = match p.scope {
         GraphScope::File => FsGraphScope::File,
         GraphScope::Drive | GraphScope::Directory => FsGraphScope::Directory,
@@ -964,7 +966,7 @@ fn api_graph_sync(drive: Arc<chan_drive::Drive>, p: GraphParams) -> Response {
     let disk_dirs = drive_disk_dirs(&drive);
     let present_files: std::collections::BTreeSet<&str> = files
         .iter()
-        .filter(|path| indexed_file_exists(drive.root(), path))
+        .filter(|path| indexed_file_exists(&drive, path))
         .map(String::as_str)
         .collect();
 
@@ -1804,6 +1806,24 @@ mod tests {
     }
 
     #[test]
+    fn api_graph_file_scope_accepts_virtual_draft_paths() {
+        let (_cfg, _root, drive) = open_drive();
+        drive.create_draft_dir("untitled").unwrap();
+        drive
+            .write_text("Drafts/untitled/draft.md", "# Draft\n")
+            .unwrap();
+
+        let params = GraphParams {
+            scope: GraphScope::File,
+            path: "Drafts/untitled/draft.md".to_string(),
+            depth: 1,
+        };
+        let response = api_graph_sync(drive, params);
+
+        assert_eq!(response.status(), StatusCode::OK);
+    }
+
+    #[test]
     fn should_emit_contact_file_drops_unreferenced_keeps_referenced_and_non_contacts() {
         // systacean-22: the contact-file emit filter pins the
         // graph view to "who-mentions-whom". Pre-fix behaviour
@@ -2023,14 +2043,14 @@ mod tests {
 
     #[test]
     fn indexed_file_exists_requires_regular_file() {
-        let tmp = tempfile::TempDir::new().unwrap();
-        std::fs::create_dir_all(tmp.path().join("notes")).unwrap();
-        std::fs::write(tmp.path().join("notes/live.md"), "# live\n").unwrap();
-        std::fs::create_dir(tmp.path().join("notes/dir.md")).unwrap();
+        let (_cfg, root, drive) = open_drive();
+        std::fs::create_dir_all(root.path().join("notes")).unwrap();
+        std::fs::write(root.path().join("notes/live.md"), "# live\n").unwrap();
+        std::fs::create_dir(root.path().join("notes/dir.md")).unwrap();
 
-        assert!(indexed_file_exists(tmp.path(), "notes/live.md"));
-        assert!(!indexed_file_exists(tmp.path(), "notes/missing.md"));
-        assert!(!indexed_file_exists(tmp.path(), "notes/dir.md"));
+        assert!(indexed_file_exists(&drive, "notes/live.md"));
+        assert!(!indexed_file_exists(&drive, "notes/missing.md"));
+        assert!(!indexed_file_exists(&drive, "notes/dir.md"));
     }
 
     #[cfg(unix)]
@@ -2038,11 +2058,11 @@ mod tests {
     fn indexed_file_exists_treats_symlink_as_missing() {
         use std::os::unix::fs::symlink;
 
-        let tmp = tempfile::TempDir::new().unwrap();
-        std::fs::write(tmp.path().join("target.md"), "# target\n").unwrap();
-        symlink("target.md", tmp.path().join("alias.md")).unwrap();
+        let (_cfg, root, drive) = open_drive();
+        std::fs::write(root.path().join("target.md"), "# target\n").unwrap();
+        symlink("target.md", root.path().join("alias.md")).unwrap();
 
-        assert!(!indexed_file_exists(tmp.path(), "alias.md"));
+        assert!(!indexed_file_exists(&drive, "alias.md"));
     }
 
     #[test]
