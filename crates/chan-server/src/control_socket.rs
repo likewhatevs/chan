@@ -182,11 +182,20 @@ fn handle_request(
                 };
             }
             let drive = {
-                let cell = drive_cell.read().expect("drive_cell poisoned");
-                cell.as_ref()
-                    .expect("drive_cell present for the lifetime of the server")
-                    .drive
-                    .clone()
+                let cell = match drive_cell.read() {
+                    Ok(cell) => cell,
+                    Err(_) => {
+                        return ControlResponse::Error {
+                            message: "drive cell lock poisoned".into(),
+                        };
+                    }
+                };
+                let Some(cell) = cell.as_ref() else {
+                    return ControlResponse::Error {
+                        message: "drive cell unavailable".into(),
+                    };
+                };
+                cell.drive.clone()
             };
             match open_path(&drive, self_writes, &window_id, &path, events_tx) {
                 Ok(message) => ControlResponse::Ok { message },
@@ -321,6 +330,36 @@ mod tests {
     fn parent_rel_returns_empty_for_root_file() {
         assert_eq!(parent_rel("a.png"), "");
         assert_eq!(parent_rel("notes/a.png"), "notes");
+    }
+
+    #[test]
+    fn handle_request_reports_poisoned_drive_cell() {
+        let drive_cell: Arc<RwLock<Option<DriveCell>>> = Arc::new(RwLock::new(None));
+        let poisoned = drive_cell.clone();
+        let _ = std::thread::spawn(move || {
+            let _guard = poisoned.write().expect("poison setup");
+            panic!("poison drive cell");
+        })
+        .join();
+        let self_writes = crate::self_writes::SelfWrites::new();
+        let (tx, _) = broadcast::channel(1);
+
+        let response = handle_request(
+            ControlRequest::OpenPath {
+                window_id: "window-a".to_string(),
+                path: PathBuf::from("/tmp/note.md"),
+            },
+            &drive_cell,
+            &tx,
+            &self_writes,
+        );
+
+        match response {
+            ControlResponse::Error { message } => {
+                assert_eq!(message, "drive cell lock poisoned");
+            }
+            ControlResponse::Ok { message } => panic!("unexpected ok response: {message}"),
+        }
     }
 
     #[test]

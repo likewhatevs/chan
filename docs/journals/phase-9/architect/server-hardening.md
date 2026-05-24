@@ -15,6 +15,11 @@ route paths.
 500 response through its existing `ResetError` path, preserving the normal busy
 and chan-drive error mappings.
 
+2026-05-24: the first-party control socket no longer panics when the live
+drive-cell lock is poisoned or unavailable. `chan open` style requests now get
+a structured control-socket error instead of taking down the server task.
+
 Evidence:
 
 - `cargo test -p chan-server routes::storage::tests::err_from_reset_maps_poisoned_locks_to_500`
+- `cargo test -p chan-server control_socket::tests`
