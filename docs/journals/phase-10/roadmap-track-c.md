@@ -39,6 +39,10 @@ Progress:
   transactions, empty-pane close shortcuts, File Browser expansion
   persistence, right-click chrome, and Draft promotion refresh with focused
   frontend tests.
+- 2026-05-24: fixed the live Terminal pane-switch repro by moving pane
+  hover/focus/wobble scale animation off the pane element and onto a
+  pointer-transparent chrome layer so xterm WebGL canvases are not transformed
+  during focus changes.
 
 ## Objectives
 

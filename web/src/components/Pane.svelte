@@ -1454,10 +1454,28 @@
     border-radius: 6px;
     overflow: hidden;
     box-shadow: var(--pane-shadow);
-    transform-origin: center center;
     transition:
       border-color 100ms ease,
-      box-shadow 120ms ease,
+      box-shadow 120ms ease;
+  }
+  /* Pane focus motion must not transform the pane itself. xterm's
+     WebGL renderer paints terminal glyphs into canvases, and scaling
+     the ancestor pane during focus changes can corrupt the inactive
+     terminal's glyph atlas. Keep the motion on a pointer-transparent
+     chrome layer so the terminal pixels stay in device space. */
+  .pane::before {
+    content: "";
+    position: absolute;
+    inset: 0;
+    z-index: 3;
+    pointer-events: none;
+    border-radius: inherit;
+    box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--pane-active-focus) 34%, transparent);
+    opacity: 0;
+    transform: scale(0.994);
+    transform-origin: center center;
+    transition:
+      opacity 120ms ease,
       transform 260ms cubic-bezier(0.34, 1.56, 0.64, 1);
   }
   .pane[data-focus-color="blue"] { --pane-active-focus: var(--pane-focus); }
@@ -1477,8 +1495,9 @@
       inset 0 0 0 2px var(--pane-active-focus),
       var(--pane-shadow);
   }
-  .pane:hover,
-  .pane.focused {
+  .pane:hover::before,
+  .pane.focused::before {
+    opacity: 1;
     transform: scale(1.006);
   }
   /* Single-fire structural wobble. Triggered by tabs.svelte's
@@ -1489,11 +1508,12 @@
      a one-shot bounce instead of a hover transition. The 1.012
      scale is deliberately gentler than the tab's 1.04 because
      the pane is several hundred px across. */
-  .pane.wobble {
+  .pane.wobble::before {
+    opacity: 1;
     animation: pane-wobble-once 360ms cubic-bezier(0.34, 1.56, 0.64, 1);
   }
   @keyframes pane-wobble-once {
-    0%   { transform: scale(1); }
+    0%   { transform: scale(0.994); }
     40%  { transform: scale(1.012); }
     100% { transform: scale(1); }
   }
@@ -1931,11 +1951,15 @@
     .pane {
       transition: border-color 100ms ease, box-shadow 120ms ease;
     }
-    .pane:hover,
-    .pane.focused {
+    .pane::before {
+      transition: opacity 120ms linear;
       transform: none;
     }
-    .pane.wobble {
+    .pane:hover::before,
+    .pane.focused::before {
+      transform: none;
+    }
+    .pane.wobble::before {
       animation: none;
     }
     .tab,

@@ -41,10 +41,11 @@ describe("context menu chrome", () => {
 
   test("pane hover and focus use the same in-out motion channel", () => {
     expect(pane).toMatch(
-      /\.pane \{[\s\S]*?transform 260ms cubic-bezier\(0\.34, 1\.56, 0\.64, 1\)/,
+      /\.pane::before \{[\s\S]*?transform 260ms cubic-bezier\(0\.34, 1\.56, 0\.64, 1\)/,
     );
     expect(pane).toMatch(
-      /\.pane:hover,\s*\.pane\.focused \{[\s\S]*?transform: scale\(1\.006\)/,
+      /\.pane:hover::before,\s*\.pane\.focused::before \{[\s\S]*?transform: scale\(1\.006\)/,
     );
+    expect(pane).not.toMatch(/\.pane:hover,\s*\.pane\.focused \{[\s\S]*?transform: scale/);
   });
 });
