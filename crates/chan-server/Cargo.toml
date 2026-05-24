@@ -35,7 +35,7 @@ embed-model = ["embeddings", "dep:tar", "dep:zstd"]
 # `<user-config>/chan/fonts/SourceCodePro-Regular.otf.woff2`; the
 # Settings UI's "Source Code Pro" opt-in downloads the woff2 +
 # OFL.txt into that directory on enable (slice b follow-up).
-# Implies nothing — the bundle is purely additive.
+# Implies nothing; the bundle is purely additive.
 embed-font = []
 # Pass-throughs for chan-drive's GPU backends. The chan binary's
 # target-conditional dep wiring auto-flips `metal` on macOS; `cuda`
@@ -74,9 +74,7 @@ tower = { workspace = true }
 tower-http = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
+tempfile = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }
 url = "2"
-
-[dev-dependencies]
-tempfile = { workspace = true }

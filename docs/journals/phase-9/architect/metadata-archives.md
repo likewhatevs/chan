@@ -61,3 +61,9 @@ Additional evidence:
 - `npm run test -- --run src/components/infographicsTabAndCarousel.test.ts
   src/api/metadataArchiveClient.test.ts`
 - `npm run check`
+
+Build follow-up:
+
+- WebtestLive caught that the new runtime routes used `tempfile` while
+  `chan-server` declared it only as a dev-dependency. Moved `tempfile` into
+  runtime dependencies and verified `cargo build -p chan`.
