@@ -129,11 +129,13 @@ Desktop File Browser drag-out/download:
   from File Browser out to the OS desktop or file manager.
 - File drag-out and the right-click Download action preserve the original
   basename and bytes through a token-bearing `/api/files/<path>?download=1`
-  URL.
+  URL. Done for browser-level drag-out and context-menu download in
+  `d11eef5`.
 - Directory drag-out should preserve the directory tree. If the platform or
   webview cannot expose a live directory drag payload, stage an archive export
   with clear naming. Browser-level directory drag-out and right-click Download
-  use the same `download=1` URL and return a `.tar` archive.
+  use the same `download=1` URL and return a `.tar` archive. Done in
+  `d11eef5`.
 - Use an OS-native drag payload or a temporary desktop export provider from
   the Tauri layer.
 - Do not add direct desktop filesystem reads of drive content. Route export
@@ -148,12 +150,13 @@ Desktop File Browser drag-out/download:
 ## 3. Manual, docs, and site
 
 - Create `docs/manual/` as the canonical user manual source.
-- Make the desktop first-launch seed consume the same manual source. The
-  source tree exists; Track A still owns desktop seeding from it.
-- Publish the manual through the static site.
-- Add CI for manual and site builds.
+- Make the desktop first-launch seed consume the same manual source. Done.
+- Publish the manual through the static site. Done: `web-marketing` renders
+  `docs/manual/` under `/manual/`.
+- Add CI for manual and site builds. Done: `pages.yml` runs the marketing
+  site check when `docs/manual/**` or `web-marketing/**` changes.
 - Update stale desktop docs to describe the Tauri webview, embedded server,
-  and attach modes.
+  and attach modes. Done for `desktop/README.md`.
 - Keep design docs factual. Remove old claims that desktop is only a thin
   shell around an external browser and per-drive `chan serve` child process.
 
@@ -306,5 +309,8 @@ Operational release checks:
 4. Implement existing-user default-drive prompt. Done.
 5. Remove stale server-wide reports config. Done.
 6. Implement missing-default factory-reset confirmation. Done.
-7. Current next remains open for selection. CLI handoff is deferred until
+7. Browser-level File Browser drag-out and right-click Download. Done:
+   `d11eef5`.
+8. Refresh stale desktop README embedded-server docs. Done.
+9. Current next remains open for selection. CLI handoff is deferred until
    its design checkpoint.
