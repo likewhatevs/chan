@@ -35,6 +35,21 @@ pub struct MetadataExportReport {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct MetadataImportOptions {
+    pub rescan: bool,
+    pub force_scm: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct MetadataImportReport {
+    pub manifest: MetadataManifest,
+    pub imported_subtrees: Vec<String>,
+    pub files: usize,
+    pub bytes: u64,
+    pub rescanned: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct MetadataManifest {
     pub archive_format_version: u32,
     pub chan_version: String,
@@ -102,6 +117,15 @@ impl Library {
 
     pub fn inspect_metadata_archive(&self, archive: &Path) -> Result<MetadataManifest> {
         inspect_metadata_archive(archive)
+    }
+
+    pub fn import_metadata_archive(
+        &self,
+        root: &Path,
+        archive: &Path,
+        opts: MetadataImportOptions,
+    ) -> Result<MetadataImportReport> {
+        import_metadata_archive(self, root, archive, opts)
     }
 }
 
@@ -228,6 +252,57 @@ fn inspect_metadata_archive(archive: &Path) -> Result<MetadataManifest> {
         .map_err(|e| ChanError::Io(format!("decode metadata archive manifest: {e}")))
 }
 
+fn import_metadata_archive(
+    lib: &Library,
+    root: &Path,
+    archive: &Path,
+    opts: MetadataImportOptions,
+) -> Result<MetadataImportReport> {
+    let manifest = inspect_metadata_archive(archive)?;
+    if manifest.archive_format_version != ARCHIVE_FORMAT_VERSION {
+        return Err(ChanError::Io(format!(
+            "unsupported metadata archive format version: {}",
+            manifest.archive_format_version
+        )));
+    }
+
+    let (entry, drive_paths) = registered_drive(lib, root)?;
+    if !opts.force_scm {
+        guard_scm_identity(&manifest, detect_scm_identity(&entry.root_path).as_ref())?;
+    }
+
+    let staging = drive_paths
+        .root
+        .join("staging")
+        .join(format!("metadata-import-{}", std::process::id()));
+    if staging.exists() {
+        return Err(ChanError::Io(format!(
+            "metadata import staging path already exists: {}",
+            staging.display()
+        )));
+    }
+    let payload = staging.join("payload");
+    std::fs::create_dir_all(&payload)?;
+    let result = extract_payload(archive, &payload).and_then(|(files, bytes)| {
+        for subtree in INCLUDED_SUBTREES {
+            replace_subtree(&drive_paths, &payload, subtree)?;
+        }
+        if opts.rescan {
+            let drive = lib.open_drive(root)?;
+            drive.reindex(None)?;
+        }
+        Ok(MetadataImportReport {
+            manifest,
+            imported_subtrees: INCLUDED_SUBTREES.iter().map(|s| (*s).to_string()).collect(),
+            files,
+            bytes,
+            rescanned: opts.rescan,
+        })
+    });
+    let _ = std::fs::remove_dir_all(&staging);
+    result
+}
+
 fn registered_drive(lib: &Library, root: &Path) -> Result<(KnownDrive, DrivePaths)> {
     let paths = lib
         .drive_paths_for(root)
@@ -330,6 +405,76 @@ fn source_subtree(paths: &DrivePaths, subtree: &str) -> PathBuf {
         "drafts" => paths.drafts.clone(),
         _ => paths.root.join(subtree),
     }
+}
+
+fn replace_subtree(paths: &DrivePaths, payload: &Path, subtree: &str) -> Result<()> {
+    let source = payload.join(subtree);
+    let target = source_subtree(paths, subtree);
+    if target.exists() {
+        std::fs::remove_dir_all(&target)?;
+    }
+    if let Some(parent) = target.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    if source.exists() {
+        std::fs::rename(&source, &target)?;
+    } else {
+        std::fs::create_dir_all(&target)?;
+    }
+    Ok(())
+}
+
+fn extract_payload(archive: &Path, payload: &Path) -> Result<(usize, u64)> {
+    let file = File::open(archive)?;
+    let decoder = zstd::stream::read::Decoder::new(BufReader::new(file))
+        .map_err(|e| ChanError::Io(format!("open zstd archive {}: {e}", archive.display())))?;
+    let mut archive = Archive::new(decoder);
+    let mut stats = ArchiveStats::default();
+    for entry in archive.entries()? {
+        let mut entry = entry?;
+        let entry_path = entry.path()?.into_owned();
+        let kind = archive_entry_kind(entry.header().entry_type());
+        validate_archive_entry_path(&entry_path, kind)
+            .map_err(|e| ChanError::Io(format!("unsafe metadata archive path: {e}")))?;
+        if entry_path == Path::new(MANIFEST_PATH) {
+            continue;
+        }
+        let Ok(rel) = entry_path.strip_prefix(PAYLOAD_ROOT) else {
+            return Err(ChanError::Io(format!(
+                "metadata archive entry outside payload: {}",
+                entry_path.display()
+            )));
+        };
+        if rel.as_os_str().is_empty() {
+            std::fs::create_dir_all(payload)?;
+            continue;
+        }
+        validate_archive_entry_path(rel, kind)
+            .map_err(|e| ChanError::Io(format!("unsafe metadata archive payload path: {e}")))?;
+        let dest = payload.join(rel);
+        match kind {
+            ArchiveEntryKind::Directory => {
+                std::fs::create_dir_all(&dest)?;
+                stats.files += 1;
+            }
+            ArchiveEntryKind::Regular => {
+                if let Some(parent) = dest.parent() {
+                    std::fs::create_dir_all(parent)?;
+                }
+                let mut out = File::create(&dest)?;
+                let bytes = std::io::copy(&mut entry, &mut out)?;
+                stats.files += 1;
+                stats.bytes += bytes;
+            }
+            ArchiveEntryKind::Symlink | ArchiveEntryKind::Hardlink | ArchiveEntryKind::Special => {
+                return Err(ChanError::Io(format!(
+                    "metadata archive refuses unsafe entry: {}",
+                    entry_path.display()
+                )));
+            }
+        }
+    }
+    Ok((stats.files, stats.bytes))
 }
 
 fn append_tree(
@@ -476,6 +621,32 @@ fn archive_entry_kind(entry_type: EntryType) -> ArchiveEntryKind {
     } else {
         ArchiveEntryKind::Special
     }
+}
+
+fn guard_scm_identity(manifest: &MetadataManifest, target: Option<&ScmIdentity>) -> Result<()> {
+    let Some(source) = manifest.scm.as_ref() else {
+        return Ok(());
+    };
+    let Some(target) = target else {
+        return Err(ChanError::Io(
+            "metadata archive was exported from an SCM-backed drive, but target has no SCM identity"
+                .into(),
+        ));
+    };
+    if !source.remotes.is_empty() || !target.remotes.is_empty() {
+        if source.remotes != target.remotes {
+            return Err(ChanError::Io(
+                "metadata archive SCM remotes do not match target drive".into(),
+            ));
+        }
+        return Ok(());
+    }
+    if source.head.is_some() && target.head.is_some() && source.head != target.head {
+        return Err(ChanError::Io(
+            "metadata archive SCM head does not match target drive".into(),
+        ));
+    }
+    Ok(())
 }
 
 fn detect_scm_identity(root: &Path) -> Option<ScmIdentity> {
@@ -744,6 +915,80 @@ mod tests {
         let inspected = lib.inspect_metadata_archive(&out).unwrap();
         assert_eq!(inspected, exported.manifest);
         assert_eq!(inspected.chan_version, "inspect-test");
+    }
+
+    #[test]
+    fn metadata_archive_import_restores_payload_subtrees() {
+        let (lib, _cfg, root) = archive_fixture();
+        let paths = lib.drive_paths_for(root.path()).unwrap();
+        std::fs::create_dir_all(paths.drafts.join("untitled")).unwrap();
+        std::fs::write(paths.drafts.join("untitled").join("draft.md"), b"draft").unwrap();
+        std::fs::write(paths.sessions.join("session.json"), b"session").unwrap();
+        let out_dir = TempDir::new().unwrap();
+        let out = out_dir.path().join("metadata.tar.zst");
+        lib.export_metadata_archive(
+            root.path(),
+            &out,
+            MetadataExportOptions {
+                chan_version: "test-version".into(),
+            },
+        )
+        .unwrap();
+        std::fs::remove_dir_all(&paths.drafts).unwrap();
+        std::fs::remove_dir_all(&paths.sessions).unwrap();
+
+        let report = lib
+            .import_metadata_archive(
+                root.path(),
+                &out,
+                MetadataImportOptions {
+                    rescan: false,
+                    force_scm: false,
+                },
+            )
+            .unwrap();
+
+        assert!(!report.rescanned);
+        assert!(report.imported_subtrees.contains(&"drafts".to_string()));
+        assert_eq!(
+            std::fs::read_to_string(paths.drafts.join("untitled").join("draft.md")).unwrap(),
+            "draft"
+        );
+        assert_eq!(
+            std::fs::read_to_string(paths.sessions.join("session.json")).unwrap(),
+            "session"
+        );
+    }
+
+    #[test]
+    fn metadata_archive_import_rejects_scm_mismatch_without_force() {
+        let manifest = MetadataManifest {
+            archive_format_version: ARCHIVE_FORMAT_VERSION,
+            chan_version: "test".into(),
+            created_at: "2026-05-24T00:00:00Z".into(),
+            source_root: "/tmp/source".into(),
+            source_metadata_key: "source".into(),
+            metadata_schema: MetadataSchema {
+                path_key_scheme: PATH_KEY_SCHEME.into(),
+                index_schema_version: config::SCHEMA_VERSION,
+                graph_user_version: None,
+                vector_shard_format_version: None,
+                report_schema_version: Some(chan_report::SCHEMA_VERSION),
+            },
+            scm: Some(ScmIdentity {
+                remotes: vec!["github.com/example/source".into()],
+                head: None,
+            }),
+            included_subtrees: INCLUDED_SUBTREES.iter().map(|s| (*s).into()).collect(),
+            excluded_subtrees: EXCLUDED_SUBTREES.iter().map(|s| (*s).into()).collect(),
+        };
+        let target = ScmIdentity {
+            remotes: vec!["github.com/example/target".into()],
+            head: None,
+        };
+
+        assert!(guard_scm_identity(&manifest, Some(&target)).is_err());
+        assert!(guard_scm_identity(&manifest, manifest.scm.as_ref()).is_ok());
     }
 
     #[test]

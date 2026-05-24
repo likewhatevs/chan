@@ -22,6 +22,10 @@
 //   chan status [path]              report drive/index/graph health
 //   chan config get [KEY]           print a preference value
 //   chan config set KEY=VALUE       update a preference
+//   chan metadata export PATH ARCHIVE.tar.zst
+//                                   export chan metadata for a drive
+//   chan metadata import PATH ARCHIVE.tar.zst [--rescan]
+//                                   import metadata with SCM guard
 //   chan contacts import csv FILE --into DIR
 //                                   import a Google Contacts CSV
 //                                   as one markdown note per
@@ -41,7 +45,10 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use anyhow::{Context, Result};
-use chan_drive::{EdgeKind, KnownDrive, Library, SearchAggression, SearchOpts, WalkFilter};
+use chan_drive::{
+    EdgeKind, KnownDrive, Library, MetadataExportOptions, MetadataImportOptions, SearchAggression,
+    SearchOpts, WalkFilter,
+};
 use chan_server::{
     build_fs_graph, EditorPrefs, EditorTheme, FsGraphResponse, FsGraphScope as ServerFsGraphScope,
     LineSpacing, ServeConfig, ServerConfig, ThemeChoice, TunnelServeConfig,
@@ -354,6 +361,11 @@ enum Command {
         #[command(subcommand)]
         action: ConfigAction,
     },
+    /// Import and export chan metadata for a registered drive.
+    Metadata {
+        #[command(subcommand)]
+        action: MetadataAction,
+    },
     /// Self-upgrade: download the latest release from chan.app/dl,
     /// verify SHA256, and atomically replace the running binary.
     /// URLs are hardcoded; the only knobs are `-y` (skip prompt),
@@ -476,6 +488,38 @@ enum ConfigAction {
         key: String,
         /// Value to assign. Omit when `key` already contains `=value`.
         value: Option<String>,
+    },
+}
+
+#[derive(Subcommand, Debug)]
+enum MetadataAction {
+    /// Export metadata for a registered drive to a .tar.zst archive.
+    Export {
+        /// Drive root.
+        path: PathBuf,
+        /// Output archive path. Must end in .tar.zst and not exist.
+        archive: PathBuf,
+    },
+    /// Import metadata into a registered drive from a .tar.zst archive.
+    Import {
+        /// Drive root.
+        path: PathBuf,
+        /// Archive path created by `chan metadata export`.
+        archive: PathBuf,
+        /// Rebuild the drive index and graph after import.
+        #[arg(long)]
+        rescan: bool,
+        /// Import even when archive SCM identity does not match.
+        #[arg(long = "force-scm")]
+        force_scm: bool,
+    },
+    /// Print the archive manifest without importing it.
+    Inspect {
+        /// Archive path created by `chan metadata export`.
+        archive: PathBuf,
+        /// Emit machine-readable JSON.
+        #[arg(long)]
+        json: bool,
     },
 }
 
@@ -676,6 +720,7 @@ fn main() -> Result<()> {
         } => cmd_graph(path, scope, target, depth, limit, json),
         Command::Status { path, json } => cmd_status(path, json),
         Command::Config { action } => cmd_config(action),
+        Command::Metadata { action } => cmd_metadata(action),
         Command::Upgrade {
             yes,
             check,
@@ -2277,6 +2322,83 @@ fn cmd_config(action: ConfigAction) -> Result<()> {
     }
 }
 
+fn cmd_metadata(action: MetadataAction) -> Result<()> {
+    match action {
+        MetadataAction::Export { path, archive } => {
+            let lib = library()?;
+            let report = lib
+                .export_metadata_archive(
+                    &path,
+                    &archive,
+                    MetadataExportOptions {
+                        chan_version: env!("CARGO_PKG_VERSION").to_string(),
+                    },
+                )
+                .context("exporting metadata archive")?;
+            println!(
+                "exported {} files ({} bytes) to {}",
+                report.files,
+                report.bytes,
+                report.archive_path.display()
+            );
+            println!("source metadata: {}", report.manifest.source_metadata_key);
+            Ok(())
+        }
+        MetadataAction::Import {
+            path,
+            archive,
+            rescan,
+            force_scm,
+        } => {
+            let lib = library()?;
+            ensure_drive_registered(&lib, &path)?;
+            let report = lib
+                .import_metadata_archive(
+                    &path,
+                    &archive,
+                    MetadataImportOptions { rescan, force_scm },
+                )
+                .context("importing metadata archive")?;
+            println!(
+                "imported {} files ({} bytes) from {}",
+                report.files,
+                report.bytes,
+                archive.display()
+            );
+            println!("subtrees: {}", report.imported_subtrees.join(", "));
+            if report.rescanned {
+                println!("rescan: completed");
+            }
+            Ok(())
+        }
+        MetadataAction::Inspect { archive, json } => {
+            let lib = library()?;
+            let manifest = lib
+                .inspect_metadata_archive(&archive)
+                .context("inspecting metadata archive")?;
+            if json {
+                println!("{}", serde_json::to_string_pretty(&manifest)?);
+            } else {
+                println!("format: {}", manifest.archive_format_version);
+                println!("chan: {}", manifest.chan_version);
+                println!("created: {}", manifest.created_at);
+                println!("source root: {}", manifest.source_root);
+                println!("source metadata: {}", manifest.source_metadata_key);
+                println!("subtrees: {}", manifest.included_subtrees.join(", "));
+                if let Some(scm) = manifest.scm {
+                    if !scm.remotes.is_empty() {
+                        println!("scm remotes: {}", scm.remotes.join(", "));
+                    }
+                    if let Some(head) = scm.head {
+                        println!("scm head: {head}");
+                    }
+                }
+            }
+            Ok(())
+        }
+    }
+}
+
 /// Accept both `chan config set k=v` and `chan config set k v`.
 /// Returns `(key, value)`. Bails with a clear message on empty values
 /// so a typo doesn't silently wipe a preference.
@@ -2762,6 +2884,55 @@ mod tests {
             } => {
                 assert_eq!(path, Some(PathBuf::from("/tmp/drive")));
                 assert_eq!(model, "BAAI/bge-base-en-v1.5");
+            }
+            other => panic!("unexpected command: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn metadata_subcommands_parse() {
+        let cli = Cli::try_parse_from([
+            "chan",
+            "metadata",
+            "export",
+            "/tmp/drive",
+            "/tmp/meta.tar.zst",
+        ])
+        .unwrap();
+        match cli.command {
+            Command::Metadata {
+                action: MetadataAction::Export { path, archive },
+            } => {
+                assert_eq!(path, PathBuf::from("/tmp/drive"));
+                assert_eq!(archive, PathBuf::from("/tmp/meta.tar.zst"));
+            }
+            other => panic!("unexpected command: {other:?}"),
+        }
+
+        let cli = Cli::try_parse_from([
+            "chan",
+            "metadata",
+            "import",
+            "/tmp/drive",
+            "/tmp/meta.tar.zst",
+            "--rescan",
+            "--force-scm",
+        ])
+        .unwrap();
+        match cli.command {
+            Command::Metadata {
+                action:
+                    MetadataAction::Import {
+                        path,
+                        archive,
+                        rescan,
+                        force_scm,
+                    },
+            } => {
+                assert_eq!(path, PathBuf::from("/tmp/drive"));
+                assert_eq!(archive, PathBuf::from("/tmp/meta.tar.zst"));
+                assert!(rescan);
+                assert!(force_scm);
             }
             other => panic!("unexpected command: {other:?}"),
         }

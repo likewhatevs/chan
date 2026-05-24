@@ -75,7 +75,8 @@ pub use indexer::{GraphIndexer, DEFAULT_DEBOUNCE_MS};
 pub use library::{Library, ResetMode, ResetReport, SweepReport};
 pub use metadata_archive::{
     validate_archive_entry_path, ArchiveEntryKind, MetadataArchivePathError, MetadataExportOptions,
-    MetadataExportReport, MetadataManifest, MetadataSchema, ScmIdentity,
+    MetadataExportReport, MetadataImportOptions, MetadataImportReport, MetadataManifest,
+    MetadataSchema, ScmIdentity,
 };
 pub use progress::{
     eta_secs_from, progress_fn, NoProgress, ProgressCallback, ProgressEvent, ProgressStage,
