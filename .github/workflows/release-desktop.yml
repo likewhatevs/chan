@@ -6,16 +6,16 @@ name: Release (chan-desktop)
 # stapled). On tag push, the signed macOS .dmg + the unsigned
 # Linux .deb + .AppImage are uploaded to a GitHub Release (the
 # Linux unsigned upload was added 2026-05-22 per ci-14; Linux
-# signing is a Round-3 polish item). Trigger pattern is
-# distinct from release.yml's `v*` tags so the chan CLI release
-# flow stays untouched.
+# signing is a Round-3 polish item). Trigger pattern matches
+# release.yml's `chan-v*` tags, but desktop packaging stays in
+# this separate workflow.
 #
 # Build path (Linux) mirrors `desktop/Makefile`'s `build`:
-#   1. `npm ci` + `npm run build` (web bundle) — implicit via
+#   1. `npm ci` + `npm run build` (web bundle), implicit via
 #      `make build` -> `chan-bin`.
-#   2. `cargo build --release --bin chan` (sidecar) — implicit via
+#   2. `cargo build --release --bin chan` (helper), implicit via
 #      `make build` -> `chan-bin`.
-#   3. `cargo tauri build` (chan-desktop + installers) — implicit
+#   3. `cargo tauri build` (chan-desktop + installers), implicit
 #      via `make build`.
 #
 # Build path (macOS) mirrors `desktop/Makefile`'s `app-notarized`:
@@ -37,7 +37,7 @@ name: Release (chan-desktop)
 #   APPLE_ID                     developer account email
 #   APPLE_PASSWORD               app-specific password
 #
-# Missing secrets → the verify-secrets step fails fast on macOS
+# Missing secrets make the verify-secrets step fail fast on macOS
 # with a named message pointing at the ci-3 brief; values never
 # echo (GitHub masks secret values + we check via `[ -n "$VAR" ]`
 # only). On notarization rejection, the build log captures
@@ -153,7 +153,7 @@ jobs:
       # source + DEFAULT_MODEL constant site.
       #
       # Gated on `--features embed-model` (systacean-6 made the
-      # model embed opt-in). The chan-desktop sidecar builds
+      # model embed opt-in). The chan-desktop helper binary builds
       # default-feature today, so this step + the fetcher
       # invocation below are hardcoded-skipped. When the desktop
       # bundle starts shipping the embedded model (offline-install
@@ -168,7 +168,7 @@ jobs:
           key: bge-bundle-${{ hashFiles('chan/crates/fetch-models/**', 'chan/crates/chan-drive/src/index/config.rs') }}
 
       # Pre-fetch the BGE-small embedding model so chan-server's
-      # rust-embed bakes it into the sidecar chan binary. Adds
+      # rust-embed bakes it into the helper chan binary. Adds
       # ~140 MB to the artifact but matches release.yml's chan
       # CLI behaviour: end users get hybrid search with no
       # network round-trip on first launch.
@@ -234,7 +234,7 @@ jobs:
       # Linux: `make build` (unsigned bundle).
       # macOS: `make app-notarized` (sign + notarytool roundtrip
       # + ticket staple + .dmg packaging). Both paths invoke the
-      # same chan-bin → cargo tauri build chain; differ only in
+      # same chan-bin to cargo tauri build chain; differ only in
       # the `--bundles` flag + the post-sign notary steps that
       # the Tauri CLI runs when APPLE_* env vars are present.
       #
@@ -292,7 +292,7 @@ jobs:
       # suffix is misleading today (the binary is aarch64) and will
       # stay misleading once universal2 lands per the post-v0.11.2
       # ci-N follow-up. Drop the suffix here so the GH Release
-      # artifact is `Chan_<version>.dmg` — arch-agnostic, matches
+      # artifact is `Chan_<version>.dmg`, arch-agnostic, matches
       # the universal2 future state. Done as a workflow-side rename
       # because tauri-bundler 2.x does not expose a filename
       # template knob; revisit if tauri-bundler grows one.
@@ -317,7 +317,7 @@ jobs:
       # Apple's transporter logs (~/Library/Logs/...), and Apple's
       # notary log JSON for the failed submission. The notary log
       # is the load-bearing artifact for triaging "why did Apple
-      # reject" — without it, the human round-trip is @@Alex
+      # reject"; without it, the human round-trip is @@Alex
       # running `xcrun notarytool log` against the local Keychain
       # profile. Capturing it in CI removes that round-trip.
       - if: matrix.os == 'macos-latest' && failure()
@@ -327,7 +327,7 @@ jobs:
           APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         # Best-effort: never propagate failures from this diagnostic
-        # step — the upload step that follows still needs to run so
+        # step. The upload step that follows still needs to run so
         # the rest of the diagnostic surface (build log, bundle dir,
         # transporter logs) lands in the artifact. notarytool's
         # submission id appears in the build log as `id: <uuid>` on
@@ -438,7 +438,7 @@ jobs:
       # install via the .dmg. fail_on_unmatched_files: true catches
       # the case where the build job succeeded but didn't actually
       # produce one of the expected artifact shapes (workflow
-      # regression — every successful tag run should produce all
+      # regression. Every successful tag run should produce all
       # three on the active matrix).
       - uses: softprops/action-gh-release@v2
         with:

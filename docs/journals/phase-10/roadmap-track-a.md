@@ -220,6 +220,10 @@ Desktop release:
 - Keep desktop app packaging, signing, notarization, and installer artifacts
   in `release-desktop.yml`.
 - Do not make Track A's binary release work depend on desktop packaging.
+- Release workflow comment audit done on 2026-05-25: standalone
+  `release.yml` and desktop `release-desktop.yml` both trigger on
+  `chan-v*`, stay separate, and desktop docs call the bundled `chan`
+  binary a helper, not a local serving fallback.
 
 Operational release checks:
 
@@ -316,5 +320,6 @@ Operational release checks:
    `d11eef5`.
 8. Refresh stale desktop embedded-server docs. Done.
 9. Verify manual/site local gate. Done.
-10. Current next remains open for selection. CLI handoff is deferred until
+10. Refresh release workflow comments for embedded desktop mode. Done.
+11. Current next remains open for selection. CLI handoff is deferred until
    its design checkpoint.
