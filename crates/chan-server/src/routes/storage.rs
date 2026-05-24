@@ -90,6 +90,7 @@ pub async fn api_storage_reset(
 enum ResetError {
     Busy,
     Core(chan_drive::ChanError),
+    Poisoned(&'static str),
 }
 
 fn err_from_reset(e: &ResetError) -> Response {
@@ -101,6 +102,10 @@ fn err_from_reset(e: &ResetError) -> Response {
                 .into(),
         ),
         ResetError::Core(c) => err_from(c),
+        ResetError::Poisoned(what) => err(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("{what} poisoned"),
+        ),
     }
 }
 
@@ -121,7 +126,10 @@ fn err_from_reset(e: &ResetError) -> Response {
 /// which would race the lingering Arc on the per-drive flock and fail
 /// with `DriveLocked`.
 fn perform_reset(state: &AppState, mode: ResetMode) -> Result<chan_drive::ResetReport, ResetError> {
-    let mut cell_guard = state.drive_cell.write().expect("drive cell poisoned");
+    let mut cell_guard = state
+        .drive_cell
+        .write()
+        .map_err(|_| ResetError::Poisoned("drive cell lock"))?;
     state.terminal_sessions.close_all(CloseReason::Drive);
     let mut cell = cell_guard
         .take()
@@ -155,7 +163,7 @@ fn perform_reset(state: &AppState, mode: ResetMode) -> Result<chan_drive::ResetR
         let search_aggression = state
             .server_config
             .lock()
-            .expect("server config poisoned")
+            .map_err(|_| ResetError::Poisoned("server config lock"))?
             .search
             .aggression;
         let indexer = Arc::new(Indexer::spawn(
@@ -189,7 +197,7 @@ fn perform_reset(state: &AppState, mode: ResetMode) -> Result<chan_drive::ResetR
     let search_aggression = state
         .server_config
         .lock()
-        .expect("server config poisoned")
+        .map_err(|_| ResetError::Poisoned("server config lock"))?
         .search
         .aggression;
     // Fresh indexer pinned to the new Drive Arc. Reset wiped the
@@ -208,4 +216,17 @@ fn perform_reset(state: &AppState, mode: ResetMode) -> Result<chan_drive::ResetR
         indexer,
     });
     Ok(report)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn err_from_reset_maps_poisoned_locks_to_500() {
+        let response = err_from_reset(&ResetError::Poisoned("drive cell lock"));
+        let status = response.into_response().into_parts().0.status;
+
+        assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
+    }
 }
