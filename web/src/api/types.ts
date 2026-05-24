@@ -90,6 +90,14 @@ export type KnownDrive = {
 export type EditorTheme = "github" | "google_docs" | "word";
 
 export type ThemeChoice = "system" | "light" | "dark";
+export type SurfaceThemeChoice = "light" | "dark";
+export type HybridSurfaceKind =
+  | "editor"
+  | "terminal"
+  | "browser"
+  | "graph"
+  | "infographics";
+export type HybridSurfaceThemes = Partial<Record<HybridSurfaceKind, SurfaceThemeChoice>>;
 
 export type PaneWidths = {
   inspector: number;
@@ -212,6 +220,9 @@ export type Preferences = {
   /// Editor theme. Lives server-side so changes propagate to every
   /// open window over the WS config_changed event.
   theme: ThemeChoice;
+  /// Optional body-theme overrides for Hybrid element families.
+  /// Missing entries inherit the global `theme` above.
+  hybrid_surface_themes?: HybridSurfaceThemes;
   /// Sidebar widths shared across all panes (file editor inspector,
   /// graph details, file browser). Per-machine.
   pane_widths: PaneWidths;

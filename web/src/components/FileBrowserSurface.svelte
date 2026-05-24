@@ -40,7 +40,9 @@
     openFsGraphForFile,
     paneWidths,
     persistPaneWidths,
+    persistLayoutToHash,
     refreshTree,
+    surfaceThemeOverride,
     toggleBrowserSidePane,
     tree,
     treeExpanded,
@@ -158,6 +160,7 @@
     const expanded = Object.keys(map).filter((p) => p.length > 0 && map[p]);
     untrack(() => {
       captured.expanded = expanded.length > 0 ? expanded : undefined;
+      persistLayoutToHash();
     });
   });
 
@@ -357,6 +360,7 @@
 <div
   class="browser"
   class:dock={variant === "dock"}
+  data-theme={isTab ? surfaceThemeOverride("browser") : undefined}
   oncontextmenu={onBrowserContextMenu}
   onkeydown={onBrowserKeydown}
   role="presentation"

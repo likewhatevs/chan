@@ -75,13 +75,13 @@
  * #151b23 is GitHub's current dark fenced-block color (older
  * builds used #161b22).
  *
- * `fullstack-b-5` paired the per-pane selector with the root one
- * so a Hybrid flipped to its dark side inside a globally-light
- * app re-asserts these tokens for the pane's subtree. The pane
+ * Surface body theme overrides pair their selector with the root one
+ * so a Hybrid Editor switched to dark inside a globally-light
+ * app re-asserts these tokens for the editor subtree. The surface
  * selector wins by specificity over the global default block.
  */
 :root[data-editor-theme="github"][data-theme="dark"],
-:root[data-editor-theme="github"] .pane[data-theme="dark"] {
+:root[data-editor-theme="github"] [data-theme="dark"] {
   --chan-editor-body-color: #f0f6fc;
 
   --chan-editor-heading-color: #f0f6fc;
@@ -103,16 +103,16 @@
 }
 
 /*
- * `fullstack-b-5`: per-pane light override. Re-asserts the light
- * editor tokens for a Hybrid pane flipped to its light side
+ * Surface light override. Re-asserts the light editor tokens for a
+ * Hybrid Editor switched to light
  * inside a globally-dark app. Without this block the dark-variant
- * rule above cascades into the pane and the editor renders with
+ * rule above cascades into the surface and the editor renders with
  * dark-palette text on the light pane background (the visible
  * "white on white" repro). Values mirror the base block above so
- * `.pane[data-theme="light"]` always lands at the same look as
+ * `[data-theme="light"]` always lands at the same look as
  * the global-light render.
  */
-:root[data-editor-theme="github"] .pane[data-theme="light"] {
+:root[data-editor-theme="github"] [data-theme="light"] {
   --chan-editor-body-color: #1f2328;
 
   --chan-editor-heading-color: #1f2328;

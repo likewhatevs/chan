@@ -3,16 +3,10 @@
   // `SettingsPanel.svelte` into the Hybrid back-side mount point
   // introduced by `-a-43` Task A. Four sections live here:
   // Editor theme, Layout (line spacing), Date pills (date format),
-  // On save (strip trailing whitespace).
-  //
-  // `fullstack-a-53` reverted the Appearance section back to
-  // SettingsPanel — Appearance is a GLOBAL default with per-Hybrid
-  // OVERRIDES (added below as a new 3-option toggle), not a
-  // per-Hybrid-only setting. The 3-option Inherit / Light / Dark
-  // override toggle writes to `pane.theme` (the existing per-
-  // Hybrid override slot from `-b-5`/`-a-47`). Resolution at
-  // render: `pane.theme` wins if set; else the global
-  // `ui.themeChoice` from Settings.
+  // On save (strip trailing whitespace). Appearance stays in the
+  // main Settings overlay as the global default. This back side
+  // only offers the top-bar body theme switch shared by all
+  // Hybrid Editor tabs.
   //
   // Same self-contained / merge-against-current-server save shape
   // as `HybridTerminalConfig.svelte` (-a-45). The dirty comparator
@@ -27,32 +21,12 @@
     LineSpacing,
     Preferences,
   } from "../api/types";
-  import { drive, ui } from "../state/store.svelte";
-  import type { HybridTheme, LeafNode } from "../state/tabs.svelte";
-
-  /// `fullstack-a-53` per-Hybrid theme override toggle.
-  /// `pane` is the Hybrid pane this back-side surface belongs to.
-  /// The override radios (Inherit / Light / Dark) write to
-  /// `pane.theme` (the existing per-Hybrid override slot from
-  /// `-b-5`/`-a-47`). Resolution at render time:
-  /// `pane.theme ?? ui.theme`.
-  let { pane, onDone }: { pane: LeafNode; onDone?: () => void } = $props();
-
-  type OverrideChoice = "inherit" | HybridTheme;
-  const overrideValue = $derived<OverrideChoice>(
-    pane.theme ?? "inherit",
-  );
-
-  function setOverrideChoice(next: OverrideChoice): void {
-    if (next === "inherit") {
-      pane.theme = undefined;
-    } else {
-      pane.theme = next;
-    }
-  }
+  import { drive } from "../state/store.svelte";
   import { DATE_FORMATS } from "../editor/dateFormats";
   import { editorToolsPrefs } from "../state/editorTools.svelte";
+  import HybridSurfaceConfigShell from "./HybridSurfaceConfigShell.svelte";
 
+  let { onDone }: { onDone?: () => void } = $props();
   type SaveStatus = "idle" | "saving" | "saved" | { error: string };
 
   /// Local edit buffer for the editor-related preference slice.
@@ -221,58 +195,16 @@
   });
 </script>
 
-<section class="hybrid-config" aria-label="Hybrid Editor configuration">
-  <header class="config-header">
-    <h2 class="config-title">Hybrid Editor</h2>
-    <div class="save-status" aria-live="polite">
-      {#if saveStatus === "saving"}
-        <span class="muted">saving…</span>
-      {:else if saveStatus === "saved"}
-        <span class="ok">saved</span>
-      {:else if typeof saveStatus === "object"}
-        <span class="err" title={saveStatus.error}>save failed</span>
-      {/if}
-    </div>
-    <button type="button" class="config-ok" onclick={() => onDone?.()}>OK</button>
-  </header>
-  <div class="config-body">
+<HybridSurfaceConfigShell
+  title="Hybrid Editor"
+  surface="editor"
+  saveStatus={saveStatus}
+  {onDone}
+>
     <p class="hint warning">
-      Most settings here apply to ALL editors on this device; the
-      Appearance override below applies only to THIS Hybrid pane.
+      Most settings here apply to ALL editors on this device. The
+      top-bar theme switch applies to ALL editor bodies.
     </p>
-
-    <!-- `fullstack-a-53` per-Hybrid Appearance override. The
-         global Appearance default lives in the Settings overlay;
-         this toggle layers an explicit Light / Dark per-Hybrid
-         override on top, or falls through to Inherit. Render
-         resolution: `pane.theme ?? ui.theme`. -->
-    <section>
-      <h3>Appearance (this Hybrid)</h3>
-      <p class="hint">
-        Override the global Appearance default for just this
-        Hybrid pane. Inherit follows the global Settings choice
-        (currently
-        <strong>{ui.themeChoice}</strong>).
-      </p>
-      <div class="theme-row" role="radiogroup" aria-label="Per-Hybrid Appearance override">
-        {#each [
-          { value: "inherit" as const, label: "Inherit" },
-          { value: "light" as const, label: "Light" },
-          { value: "dark" as const, label: "Dark" },
-        ] as opt (opt.value)}
-          <label class="theme-opt" class:on={overrideValue === opt.value}>
-            <input
-              type="radio"
-              name="hybrid-editor-theme-override"
-              value={opt.value}
-              checked={overrideValue === opt.value}
-              onchange={() => setOverrideChoice(opt.value)}
-            />
-            <span>{opt.label}</span>
-          </label>
-        {/each}
-      </div>
-    </section>
 
     {#if editing}
     <section>
@@ -369,55 +301,9 @@
       </label>
     </section>
     {/if}
-  </div>
-</section>
+</HybridSurfaceConfigShell>
 
 <style>
-  .hybrid-config {
-    display: flex;
-    flex-direction: column;
-    flex: 1;
-    min-width: 0;
-    min-height: 0;
-  }
-  .config-header {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 12px;
-    padding: 16px 20px;
-    border-bottom: 1px solid var(--border);
-  }
-  .config-title {
-    margin: 0;
-    font-size: 18px;
-    font-weight: 600;
-    color: var(--text);
-  }
-  .save-status { font-size: 14px; min-width: 60px; text-align: right; }
-  .save-status .ok { color: var(--accent); }
-  .save-status .err { color: #d33; }
-  .save-status .muted { color: var(--text-secondary); }
-  .config-ok {
-    background: var(--btn-bg);
-    color: var(--text);
-    border: 1px solid var(--btn-border);
-    border-radius: 4px;
-    padding: 5px 12px;
-    font: inherit;
-    cursor: pointer;
-  }
-  .config-ok:hover {
-    border-color: var(--btn-hover);
-  }
-  .config-body {
-    flex: 1;
-    overflow: auto;
-    padding: 16px 20px;
-    display: flex;
-    flex-direction: column;
-    gap: 1.25rem;
-  }
   .hint {
     margin: 0;
     color: var(--text-secondary);
@@ -429,20 +315,7 @@
     background: color-mix(in srgb, var(--accent, #f97316) 6%, transparent);
     border-radius: 4px;
   }
-  /* Per-section vertical grouping. Each <section> hosts a header,
-     a hint paragraph, and one control row (radios or select). */
-  .config-body :global(section) {
-    display: flex;
-    flex-direction: column;
-    gap: 0.5rem;
-  }
-  .config-body :global(section h3) {
-    margin: 0;
-    font-size: 14px;
-    font-weight: 600;
-    color: var(--text);
-  }
-  /* Theme + Layout + Appearance + Date pills + On save share the
+  /* Theme + Layout + Date pills + On save share the
      same theme-row / theme-opt pill shape from SettingsPanel.
      Copied locally so this back-side surface doesn't depend on
      SettingsPanel CSS being mounted. */

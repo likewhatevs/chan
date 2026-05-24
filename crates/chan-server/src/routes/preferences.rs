@@ -21,7 +21,9 @@ use crate::config::{
 use crate::error::{err, Error};
 use crate::preferences::BubbleOverlayMode;
 use crate::state::AppState;
-use crate::{BrowserSidePanes, EditorTheme, LineSpacing, PaneWidths, ThemeChoice};
+use crate::{
+    BrowserSidePanes, EditorTheme, HybridSurfaceThemes, LineSpacing, PaneWidths, ThemeChoice,
+};
 
 /// Unified preferences shape returned over /api/drive and /api/config.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -39,6 +41,8 @@ pub struct PreferencesView {
     pub terminal: TerminalConfig,
     #[serde(default)]
     pub bubble_overlay_mode: BubbleOverlayMode,
+    #[serde(default)]
+    pub hybrid_surface_themes: HybridSurfaceThemes,
     #[serde(default = "default_empty_pane_carousel_cycling")]
     pub empty_pane_carousel_cycling: bool,
     /// `fullstack-a-48` Task F (option B): chan-reports toggle.
@@ -76,6 +80,7 @@ pub(super) fn preferences_view(state: &AppState) -> Result<PreferencesView, Erro
         search_aggression: server.search.aggression,
         terminal: server.terminal.clone(),
         bubble_overlay_mode: editor.bubble_overlay_mode,
+        hybrid_surface_themes: editor.hybrid_surface_themes.clone(),
         empty_pane_carousel_cycling: editor.empty_pane_carousel_cycling,
         reports: server.reports.clone(),
     })
@@ -262,6 +267,7 @@ fn apply_preferences(state: &AppState, view: PreferencesView) -> Result<(), Erro
         editor.date_format = view.date_format;
         editor.strip_trailing_whitespace_on_save = view.strip_trailing_whitespace_on_save;
         editor.bubble_overlay_mode = view.bubble_overlay_mode;
+        editor.hybrid_surface_themes = view.hybrid_surface_themes;
         editor.empty_pane_carousel_cycling = view.empty_pane_carousel_cycling;
         editor.save()?;
     }

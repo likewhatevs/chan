@@ -11,7 +11,9 @@ import {
   canReopenClosedTab,
   clearTerminalSession,
   clearRecentlyClosedTabsForTest,
+  closePane,
   closeTab,
+  closeTabsInPane,
   cancelPaneMode,
   commitPaneMode,
   detachTabToPaneEdge,
@@ -227,6 +229,37 @@ describe("tab close confirmation", () => {
     expect(activePane().tabs).toHaveLength(0);
   });
 
+  test("whitespace-only draft closes as empty without save prompt", async () => {
+    const tab = fileTab({
+      id: "draft-tab",
+      path: "Drafts/untitled-empty/draft.md",
+      content: " \n\n\t",
+      saved: "",
+      savedMtime: null,
+    });
+    const pane = resetLayout([tab]);
+    const write = vi.spyOn(api, "write").mockResolvedValue({
+      mtime: 2,
+      mtime_ns: "2",
+    });
+    vi.spyOn(api, "inspectDraft").mockResolvedValue({
+      path: "Drafts/untitled-empty/draft.md",
+      name: "untitled-empty",
+      file_count: 1,
+      dir_count: 0,
+      total_size: 4,
+      has_attachments: false,
+    });
+    const discard = vi.spyOn(api, "discardDraft").mockResolvedValue(undefined);
+
+    await closeTab(pane.id, tab.id);
+
+    expect(write).not.toHaveBeenCalled();
+    expect(draftCloseState.open).toBe(false);
+    expect(discard).toHaveBeenCalledWith("Drafts/untitled-empty/draft.md");
+    expect(activePane().tabs).toHaveLength(0);
+  });
+
   test("reopens a closed dirty file tab with its in-memory buffer", async () => {
     const tab = fileTab({ content: "unsaved", saved: "saved", caret: { from: 3, to: 3 } });
     const pane = resetLayout([tab]);
@@ -389,6 +422,63 @@ describe("pane state", () => {
     expect(left.tabs.map((tab) => tab.id)).toEqual([first.id]);
     expect(right.tabs.map((tab) => tab.id)).toEqual([second.id]);
     expect(layout.activePaneId).toBe(right.id);
+  });
+
+  test("closeTabsInPane leaves every tab when a terminal close sink fails", async () => {
+    const terminal = terminalTab({ id: "term-a" });
+    const file = fileTab({ id: "file-a", path: "notes/a.md" });
+    const pane = resetLayout([terminal, file]);
+    const closeSink = vi.fn().mockResolvedValue(false);
+    const unregister = registerTerminalCloseSink(terminal.id, closeSink);
+
+    const closed = await closeTabsInPane(pane.id, { force: true });
+
+    unregister();
+    expect(closed).toBe(false);
+    expect(closeSink).toHaveBeenCalledTimes(1);
+    expect(activePane().tabs.map((tab) => tab.id)).toEqual(["term-a", "file-a"]);
+    expect(activePane().activeTabId).toBe("term-a");
+  });
+
+  test("closeTabsInPane clears tabs without killing a non-root pane", async () => {
+    const left = fileTab({ id: "file-a", path: "notes/a.md" });
+    const leftPane = resetLayout([left]);
+    splitPane(leftPane.id, "row", "after");
+    const root = layout.nodes[layout.rootId];
+    expect(root?.kind).toBe("split");
+    if (root?.kind !== "split") return;
+
+    const closed = await closeTabsInPane(leftPane.id, { force: true });
+
+    expect(closed).toBe(true);
+    expect(layout.nodes[layout.rootId]?.kind).toBe("split");
+    const leftAfter = layout.nodes[leftPane.id];
+    expect(leftAfter?.kind).toBe("leaf");
+    if (leftAfter?.kind !== "leaf") return;
+    expect(leftAfter.tabs).toHaveLength(0);
+    expect(leftAfter.activeTabId).toBeNull();
+  });
+
+  test("closePane leaves the split tree intact when a terminal close sink fails", async () => {
+    const terminal = terminalTab({ id: "term-a" });
+    const leftPane = resetLayout([terminal]);
+    splitPane(leftPane.id, "row", "after");
+    const rootBefore = layout.nodes[layout.rootId];
+    expect(rootBefore?.kind).toBe("split");
+    if (rootBefore?.kind !== "split") return;
+    const closeSink = vi.fn().mockResolvedValue(false);
+    const unregister = registerTerminalCloseSink(terminal.id, closeSink);
+
+    const closed = await closePane(leftPane.id, { force: true });
+
+    unregister();
+    expect(closed).toBe(false);
+    expect(closeSink).toHaveBeenCalledTimes(1);
+    expect(layout.nodes[layout.rootId]?.kind).toBe("split");
+    const left = layout.nodes[leftPane.id];
+    expect(left?.kind).toBe("leaf");
+    if (left?.kind !== "leaf") return;
+    expect(left.tabs.map((tab) => tab.id)).toEqual(["term-a"]);
   });
 
   test("detachTabToPaneEdge moves a browser or graph tab end-to-end (fullstack-47)", () => {

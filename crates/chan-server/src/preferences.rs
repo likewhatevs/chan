@@ -21,6 +21,8 @@
 //!   - bubble_overlay_mode (stack / tray for watcher notifications)
 //!   - empty_pane_carousel_cycling (auto-rotate the empty-pane
 //!     carousel; per-user toggle, default true)
+//!   - hybrid_surface_themes (optional body-theme overrides for
+//!     Hybrid Editor / Terminal / File Browser / Graph / Infographics)
 //!
 //! The Preferences view returned over /api/drive and /api/config is
 //! assembled in lib.rs by joining EditorPrefs with ServerConfig.
@@ -55,6 +57,8 @@ pub struct EditorPrefs {
     pub strip_trailing_whitespace_on_save: bool,
     #[serde(default)]
     pub bubble_overlay_mode: BubbleOverlayMode,
+    #[serde(default)]
+    pub hybrid_surface_themes: HybridSurfaceThemes,
     /// Auto-rotate the empty-pane carousel introduced in
     /// `fullstack-35`. Default true so first-launch behaviour matches
     /// the original implementation; users who want a stationary
@@ -79,6 +83,7 @@ impl Default for EditorPrefs {
             date_format: default_date_format(),
             strip_trailing_whitespace_on_save: false,
             bubble_overlay_mode: BubbleOverlayMode::default(),
+            hybrid_surface_themes: HybridSurfaceThemes::default(),
             empty_pane_carousel_cycling: default_empty_pane_carousel_cycling(),
         }
     }
@@ -105,6 +110,27 @@ pub enum ThemeChoice {
     System,
     Light,
     Dark,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum SurfaceThemeChoice {
+    Light,
+    Dark,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct HybridSurfaceThemes {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub editor: Option<SurfaceThemeChoice>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub terminal: Option<SurfaceThemeChoice>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub browser: Option<SurfaceThemeChoice>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub graph: Option<SurfaceThemeChoice>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub infographics: Option<SurfaceThemeChoice>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

@@ -115,6 +115,10 @@ export type Shortcut = {
 /// `f/F` (Search) and `h/H` (Help) stay. The Cmd+K entry chord
 /// itself was already swapped to Cmd+. by `fullstack-a-7`.
 ///
+/// Track C wires `app.pane.prev/next` back as direct `Mod+[` /
+/// `Mod+]` commands because the Hybrid hamburger exposes those
+/// labels and users expect the labels to fire.
+///
 /// `app.tab.close` was rewired to `Ctrl+D` on both web and native
 /// (a different action than Pane Mode's `x` / `k`, per
 /// `fullstack-41`); the native `Mod+W` fallback still fires through
@@ -257,6 +261,36 @@ export const SHORTCUTS: readonly Shortcut[] = [
     label: "Flip Hybrid",
     web: "Mod+. Tab",
     native: "Mod+. Tab",
+    group: "Panes",
+  },
+  {
+    id: "app.pane.prev",
+    label: "Previous pane",
+    web: "Mod+[",
+    native: "Mod+[",
+    group: "Panes",
+    escapeTerminal: true,
+  },
+  {
+    id: "app.pane.next",
+    label: "Next pane",
+    web: "Mod+]",
+    native: "Mod+]",
+    group: "Panes",
+    escapeTerminal: true,
+  },
+  {
+    id: "app.pane.closeTabs",
+    label: "Close all tabs in pane",
+    web: "Mod+. x",
+    native: "Mod+. x",
+    group: "Panes",
+  },
+  {
+    id: "app.pane.kill",
+    label: "Kill pane",
+    web: "Mod+. Backspace",
+    native: "Mod+. Backspace",
     group: "Panes",
   },
   {

@@ -59,6 +59,7 @@ describe("fullstack-a-77 slice 3: Settings UI", () => {
     expect(panel).toMatch(/let screensaverPinSet = \$state\(false\);/);
     expect(panel).toMatch(/let screensaverBusy = \$state\(false\);/);
     expect(panel).toMatch(/let screensaverError = \$state<string \| null>\(null\);/);
+    expect(panel).toMatch(/let returnToSettingsAfterTest = \$state\(false\);/);
     expect(panel).toMatch(
       /let pinDialog = \$state<\{ pin1: string; pin2: string \} \| null>\(null\);/,
     );
@@ -82,10 +83,16 @@ describe("fullstack-a-77 slice 3: Settings UI", () => {
 
   test("Test button reloads state and locks immediately", () => {
     expect(panel).toMatch(
-      /async function testScreenLock\(\): Promise<void> \{[\s\S]{1,400}await loadScreensaverState\(\);[\s\S]{1,200}if \(!screensaver\.loaded\) \{[\s\S]{1,200}screen lock state unavailable[\s\S]{1,200}lockNow\(\);/,
+      /async function testScreenLock\(\): Promise<void> \{[\s\S]{1,400}await loadScreensaverState\(\);[\s\S]{1,200}if \(!screensaver\.loaded\) \{[\s\S]{1,200}screen lock state unavailable[\s\S]{1,200}returnToSettingsAfterTest = true;[\s\S]{1,120}settingsOverlay\.open = false;[\s\S]{1,120}lockNow\(\);/,
     );
     expect(panel).toMatch(
       /<button type="button" onclick=\{testScreenLock\} disabled=\{screensaverBusy\}>[\s\S]{1,80}Test[\s\S]{1,80}<\/button>/,
+    );
+  });
+
+  test("test mode restores Settings after unlock", () => {
+    expect(panel).toMatch(
+      /\$effect\(\(\) => \{[\s\S]{1,120}if \(!returnToSettingsAfterTest\) return;[\s\S]{1,80}if \(screensaver\.locked\) return;[\s\S]{1,120}returnToSettingsAfterTest = false;[\s\S]{1,80}settingsOverlay\.open = true;/,
     );
   });
 

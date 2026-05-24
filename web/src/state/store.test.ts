@@ -2,6 +2,7 @@
 
 import { afterEach, describe, expect, test, vi } from "vitest";
 import {
+  __testApplyTreeExpandedReloadSnapshot,
   __testSetBootstrapHydrated,
   __testApplyOverlaysFromHash,
   browserOverlay,
@@ -12,6 +13,7 @@ import {
   openFsGraphForDirectory,
   openFsGraphForFile,
   persistStateToHash,
+  persistTreeExpanded,
   resolveSpawnContext,
   revealPathInBrowser,
   scheduleSessionSave,
@@ -84,6 +86,7 @@ afterEach(() => {
   tree.loadingDirs = {};
   tree.dirErrors = {};
   treeExpanded.map = { "": true };
+  window.sessionStorage.clear();
   window.history.replaceState(null, "", "/");
 });
 
@@ -113,6 +116,32 @@ describe("session persistence bootstrap guard", () => {
     expect(String(init?.body)).toContain("term_after_hydrate");
 
     fetchSpy.mockRestore();
+    vi.useRealTimers();
+  });
+});
+
+describe("file browser expansion reload persistence", () => {
+  test("mirrors expanded directories into sessionStorage for same-screen reload", () => {
+    vi.useFakeTimers();
+    window.history.replaceState(null, "", "/");
+    treeExpanded.map = {
+      "": true,
+      docs: true,
+      "docs/api": true,
+      collapsed: false,
+    };
+
+    persistTreeExpanded();
+    treeExpanded.map = { "": true };
+
+    expect(__testApplyTreeExpandedReloadSnapshot()).toBe(true);
+    expect(treeExpanded.map).toEqual({
+      "": true,
+      docs: true,
+      "docs/api": true,
+    });
+
+    vi.clearAllTimers();
     vi.useRealTimers();
   });
 });

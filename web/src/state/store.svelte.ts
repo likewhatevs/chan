@@ -3,7 +3,10 @@
 
 import type {
   DriveInfo,
+  HybridSurfaceKind,
+  HybridSurfaceThemes,
   IndexStatus,
+  SurfaceThemeChoice,
   TreeEntry,
 } from "../api/types";
 import {
@@ -150,6 +153,76 @@ export const ui = $state<{
   authMissing: false,
 });
 
+export const HYBRID_SURFACE_KINDS: readonly HybridSurfaceKind[] = [
+  "editor",
+  "terminal",
+  "browser",
+  "graph",
+  "infographics",
+];
+
+export const hybridSurfaceThemes = $state<HybridSurfaceThemes>({});
+
+function normalizeHybridSurfaceThemes(
+  raw: HybridSurfaceThemes | null | undefined,
+): HybridSurfaceThemes {
+  const next: HybridSurfaceThemes = {};
+  for (const kind of HYBRID_SURFACE_KINDS) {
+    const value = raw?.[kind];
+    if (value === "light" || value === "dark") next[kind] = value;
+  }
+  return next;
+}
+
+function applyHybridSurfaceThemes(raw: HybridSurfaceThemes | null | undefined): void {
+  const next = normalizeHybridSurfaceThemes(raw);
+  for (const kind of HYBRID_SURFACE_KINDS) {
+    const value = next[kind];
+    if (value) hybridSurfaceThemes[kind] = value;
+    else delete hybridSurfaceThemes[kind];
+  }
+}
+
+function hybridSurfaceThemesSnapshot(): HybridSurfaceThemes {
+  return normalizeHybridSurfaceThemes(hybridSurfaceThemes);
+}
+
+export function surfaceThemeOverride(
+  kind: HybridSurfaceKind,
+): SurfaceThemeChoice | undefined {
+  return hybridSurfaceThemes[kind];
+}
+
+export function effectiveHybridSurfaceTheme(kind: HybridSurfaceKind): SurfaceThemeChoice {
+  return hybridSurfaceThemes[kind] ?? ui.theme;
+}
+
+export function setHybridSurfaceTheme(
+  kind: HybridSurfaceKind,
+  choice: SurfaceThemeChoice,
+): void {
+  hybridSurfaceThemes[kind] = choice;
+  void persistHybridSurfaceThemes();
+}
+
+let hybridSurfaceThemePersistInflight: Promise<void> = Promise.resolve();
+function persistHybridSurfaceThemes(): Promise<void> {
+  const next = hybridSurfaceThemesSnapshot();
+  hybridSurfaceThemePersistInflight = hybridSurfaceThemePersistInflight
+    .catch(() => {})
+    .then(async () => {
+      const cfg = await api.config();
+      await api.updateConfig({
+        ...cfg,
+        preferences: {
+          ...cfg.preferences,
+          hybrid_surface_themes: next,
+        },
+      });
+    });
+  return hybridSurfaceThemePersistInflight;
+}
+
 const TRANSIENT_STATUS_DEFAULT_MS = 3000;
 let transientStatusTimer: ReturnType<typeof setTimeout> | null = null;
 
@@ -256,6 +329,7 @@ export function applyServerPreferences(): void {
   if (prefs.theme && prefs.theme !== ui.themeChoice) {
     setThemeLocal(prefs.theme);
   }
+  applyHybridSurfaceThemes(prefs.hybrid_surface_themes);
   if (prefs.pane_widths) {
     paneWidths.inspector = prefs.pane_widths.inspector;
     paneWidths.graph = prefs.pane_widths.graph;
@@ -512,6 +586,7 @@ export async function bootstrap(): Promise<void> {
           await restoreSession(remote as SessionPayload);
         }
       }
+      if (!fresh) applyTreeExpandedReloadSnapshot();
       // Per-overlay state from the hash lands on top of any
       // session-restored knobs so a shared URL always wins. Skipped
       // in fresh windows so the New-Window menu starts truly clean.
@@ -1135,6 +1210,8 @@ export function scheduleSessionSave(): void {
 export function __testSetBootstrapHydrated(value: boolean): void {
   bootstrapHydrated = value;
 }
+
+export const __testApplyTreeExpandedReloadSnapshot = applyTreeExpandedReloadSnapshot;
 
 /// Fire any pending session save synchronously via `fetch({ keepalive:
 /// true })` so the request survives the page unload. Without this,
@@ -2113,10 +2190,61 @@ export const treeExpanded = $state<{ map: Record<string, boolean> }>({
   map: { "": true },
 });
 
+type TreeExpandedReloadSnapshot = {
+  map: Record<string, boolean>;
+};
+
+const TREE_EXPANDED_RELOAD_KEY = "chan.fileBrowser.treeExpanded";
+
+function treeExpandedReloadKey(): string {
+  const driveKey = drive.info?.root ?? window.location.pathname;
+  return `${TREE_EXPANDED_RELOAD_KEY}:${sessionWindowId()}:${driveKey}`;
+}
+
+function treeExpandedPayload(): Record<string, boolean> {
+  const map: Record<string, boolean> = {};
+  for (const [k, v] of Object.entries(treeExpanded.map)) {
+    if (v) map[k] = true;
+  }
+  map[""] = true;
+  return map;
+}
+
+function writeTreeExpandedReloadSnapshot(): void {
+  if (typeof window === "undefined") return;
+  const payload: TreeExpandedReloadSnapshot = { map: treeExpandedPayload() };
+  try {
+    window.sessionStorage.setItem(treeExpandedReloadKey(), JSON.stringify(payload));
+  } catch {
+    // Server-side session persistence remains the canonical path.
+  }
+}
+
+function applyTreeExpandedReloadSnapshot(): boolean {
+  if (typeof window === "undefined") return false;
+  let raw: string | null = null;
+  try {
+    raw = window.sessionStorage.getItem(treeExpandedReloadKey());
+  } catch {
+    return false;
+  }
+  if (!raw) return false;
+  try {
+    const parsed = JSON.parse(raw) as Partial<TreeExpandedReloadSnapshot>;
+    if (!parsed.map || typeof parsed.map !== "object") return false;
+    treeExpanded.map = { "": true, ...parsed.map };
+    markTreeExpansionRestored();
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 /// Trigger a session save so the change reaches disk. Pane / tab
 /// edits already call `scheduleSessionSave`; this thin wrapper keeps
 /// the call site at the toggle point semantically clear.
 export function persistTreeExpanded(): void {
+  writeTreeExpandedReloadSnapshot();
   scheduleSessionSave();
 }
 

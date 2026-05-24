@@ -6,35 +6,16 @@
 
   import { api } from "../api/client";
   import type { GlobalConfig, Preferences } from "../api/types";
-  import { drive, ui } from "../state/store.svelte";
-  import type { HybridTheme, LeafNode } from "../state/tabs.svelte";
-
-  /// `fullstack-a-53` per-Hybrid theme override toggle.
-  /// `pane` is the Hybrid pane this back-side surface belongs to.
-  /// The override radios (Inherit / Light / Dark) write to
-  /// `pane.theme` (the existing per-Hybrid override slot from
-  /// `-b-5`/`-a-47`). Resolution at render time:
-  /// `pane.theme ?? ui.theme`.
-  let { pane, onDone }: { pane: LeafNode; onDone?: () => void } = $props();
-
-  type OverrideChoice = "inherit" | HybridTheme;
-  const overrideValue = $derived<OverrideChoice>(
-    pane.theme ?? "inherit",
-  );
-
-  function setOverrideChoice(next: OverrideChoice): void {
-    if (next === "inherit") {
-      pane.theme = undefined;
-    } else {
-      pane.theme = next;
-    }
-  }
+  import { drive } from "../state/store.svelte";
   import {
     clampScrollbackMb,
     SCROLLBACK_MB_DEFAULT,
     SCROLLBACK_MB_MAX,
     SCROLLBACK_MB_MIN,
   } from "../terminal/scrollback";
+  import HybridSurfaceConfigShell from "./HybridSurfaceConfigShell.svelte";
+
+  let { onDone }: { onDone?: () => void } = $props();
 
   /// `fullstack-b-11` TERM dropdown set. Known terminfo entries
   /// most users either want by default or fall back to from a
@@ -300,65 +281,23 @@
   });
 </script>
 
-<section class="hybrid-config" aria-label="Hybrid Terminal configuration">
-  <header class="config-header">
-    <h2 class="config-title">Hybrid Terminal</h2>
-    <div class="save-status" aria-live="polite">
-      {#if saveStatus === "saving"}
-        <span class="muted">saving…</span>
-      {:else if saveStatus === "saved"}
-        <span class="ok">saved</span>
-      {:else if typeof saveStatus === "object"}
-        <span class="err" title={saveStatus.error}>save failed</span>
-      {/if}
-    </div>
-    <button type="button" class="config-ok" onclick={() => onDone?.()}>OK</button>
-  </header>
-  <div class="config-body">
+<HybridSurfaceConfigShell
+  title="Hybrid Terminal"
+  surface="terminal"
+  saveStatus={saveStatus}
+  {onDone}
+>
     <!-- `fullstack-a-45`: warning copy carried over from the
          round-2-plan Hybrid back-side scope note. These settings
          are device-wide, not per-pane; every terminal in the
-         drive picks them up on next spawn. The Appearance
-         override below is the only per-Hybrid setting on this
-         surface (`-a-53`). -->
+         drive picks them up on next spawn. The top-bar body theme
+         applies to every terminal body on this device. -->
     <p class="hint warning">
-      Scrollback and TERM apply to ALL terminals on this device.
-      The Appearance override below applies only to THIS Hybrid
-      pane. Existing terminals keep their current scrollback and
-      <code>TERM</code> value until the chan session restarts.
+      Scrollback, TERM, and font apply to ALL terminals on this
+      device. The top-bar theme switch applies to ALL terminal
+      bodies. Existing terminals keep their current scrollback,
+      <code>TERM</code>, and font until the chan session restarts.
     </p>
-
-    <!-- `fullstack-a-53` per-Hybrid Appearance override. Layered
-         on top of the global Settings Appearance default;
-         resolution at render: `pane.theme ?? ui.theme`. -->
-    <section class="terminal-field">
-      <h3 class="terminal-label">
-        <span>Appearance (this Hybrid)</span>
-      </h3>
-      <p class="hint sub-hint">
-        Override the global Appearance default for just this
-        Hybrid pane. Inherit follows the global Settings choice
-        (currently <strong>{ui.themeChoice}</strong>).
-      </p>
-      <div class="theme-row" role="radiogroup" aria-label="Per-Hybrid Appearance override">
-        {#each [
-          { value: "inherit" as const, label: "Inherit" },
-          { value: "light" as const, label: "Light" },
-          { value: "dark" as const, label: "Dark" },
-        ] as opt (opt.value)}
-          <label class="theme-opt" class:on={overrideValue === opt.value}>
-            <input
-              type="radio"
-              name="hybrid-terminal-theme-override"
-              value={opt.value}
-              checked={overrideValue === opt.value}
-              onchange={() => setOverrideChoice(opt.value)}
-            />
-            <span>{opt.label}</span>
-          </label>
-        {/each}
-      </div>
-    </section>
 
     <div class="terminal-field">
       <label class="terminal-label" for="hybrid-terminal-scrollback-mb">
@@ -467,55 +406,9 @@
         <p class="hint sub-hint" role="status">{fontStatusMessage}</p>
       {/if}
     </div>
-  </div>
-</section>
+</HybridSurfaceConfigShell>
 
 <style>
-  .hybrid-config {
-    display: flex;
-    flex-direction: column;
-    flex: 1;
-    min-width: 0;
-    min-height: 0;
-  }
-  .config-header {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 12px;
-    padding: 16px 20px;
-    border-bottom: 1px solid var(--border);
-  }
-  .config-title {
-    margin: 0;
-    font-size: 18px;
-    font-weight: 600;
-    color: var(--text);
-  }
-  .save-status { font-size: 14px; min-width: 60px; text-align: right; }
-  .save-status .ok { color: var(--accent); }
-  .save-status .err { color: #d33; }
-  .save-status .muted { color: var(--text-secondary); }
-  .config-ok {
-    background: var(--btn-bg);
-    color: var(--text);
-    border: 1px solid var(--btn-border);
-    border-radius: 4px;
-    padding: 5px 12px;
-    font: inherit;
-    cursor: pointer;
-  }
-  .config-ok:hover {
-    border-color: var(--btn-hover);
-  }
-  .config-body {
-    flex: 1;
-    overflow: auto;
-    padding: 16px 20px;
-    display: flex;
-    flex-direction: column;
-    gap: 0.75rem;
-  }
   /* `fullstack-a-45`: warning copy that distinguishes this surface
      from per-pane settings. The warning class adds a subtle
      border-left + tinted background so the all-terminals scope
@@ -584,43 +477,6 @@
   .terminal-field .sub-hint {
     margin: 0;
     font-size: 11.5px;
-  }
-  /* `fullstack-a-53` per-Hybrid Appearance override chips.
-     Same shape as `HybridEditorConfig.svelte` (and SettingsPanel
-     after the Appearance revert). The override section reuses
-     the existing `.terminal-field` wrapper for vertical layout
-     consistency; the .theme-row chip group lives inside. */
-  .theme-row { display: flex; gap: 4px; flex-wrap: wrap; }
-  .theme-opt {
-    display: inline-flex;
-    align-items: center;
-    gap: 6px;
-    padding: 4px 10px;
-    border: 1px solid var(--btn-border);
-    border-radius: 4px;
-    background: var(--btn-bg);
-    cursor: pointer;
-    font-size: 14px;
-  }
-  .theme-opt input[type="radio"] {
-    width: auto;
-    margin: 0;
-    padding: 0;
-    border: 0;
-    background: transparent;
-  }
-  .theme-opt > span { color: var(--text); }
-  .theme-opt:hover { border-color: var(--btn-hover); }
-  .theme-opt.on { border-color: var(--link); background: var(--hover-bg); }
-  /* Override-section header lives inside .terminal-field so the
-     section heading aligns vertically with the surrounding
-     Scrollback / Default TERM labels. `h3.terminal-label` keeps
-     the typography consistent with the rest of the labels in
-     this surface. */
-  h3.terminal-label {
-    margin: 0;
-    font-size: 14px;
-    font-weight: 600;
   }
   .hint {
     margin: 0;

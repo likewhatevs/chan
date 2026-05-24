@@ -18,7 +18,7 @@
     indentWithTab,
   } from "@codemirror/commands";
   import { markdown } from "@codemirror/lang-markdown";
-  import { drive, ui } from "../state/store.svelte";
+  import { drive, effectiveHybridSurfaceTheme } from "../state/store.svelte";
   import {
     createValueSync,
     findField,
@@ -94,7 +94,7 @@
   let host: HTMLDivElement | undefined;
   let view: EditorView | undefined;
   const sync = createValueSync();
-  const theme = makeThemeCompartment(ui.theme);
+  const theme = makeThemeCompartment(effectiveHybridSurfaceTheme("editor"));
   // Language compartment lets the syntax-highlight toggle + per-tab
   // path change re-pick the active language pack without rebuilding
   // the editor. Initial extension covers the synchronous cases
@@ -302,10 +302,11 @@
     maybeRestoreCaret();
   });
 
-  // Reconfigure the theme compartment whenever the app theme flips.
+  // Reconfigure the theme compartment whenever the editor body
+  // theme flips.
   $effect(() => {
     if (!view) return;
-    theme.reconfigure(view, ui.theme);
+    theme.reconfigure(view, effectiveHybridSurfaceTheme("editor"));
   });
 
   // Re-pick the language pack when either the file path (different

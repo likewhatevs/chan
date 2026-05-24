@@ -1243,18 +1243,15 @@
     if (!canvas || !containerEl) return;
     resizeObs = new ResizeObserver(() => resize());
     resizeObs.observe(containerEl);
-    // Theme tracker: re-read CSS variables when the document's
-    // `data-theme` attribute flips so light/dark switches without
-    // a remount. `fullstack-78`: also watch the nearest `.pane`
-    // ancestor's `data-theme` so per-pane theme overrides (from
-    // `-59`) propagate to the canvas without a remount.
+    // Theme tracker: re-read CSS variables when the document's or
+    // graph surface's `data-theme` attribute flips.
     const themeObs = new MutationObserver(() => refreshTheme());
     themeObs.observe(document.documentElement, {
       attributes: true, attributeFilter: ["data-theme"],
     });
-    const paneEl = containerEl.closest(".pane");
-    if (paneEl) {
-      themeObs.observe(paneEl, {
+    const graphEl = containerEl.closest(".graph-tab");
+    if (graphEl) {
+      themeObs.observe(graphEl, {
         attributes: true, attributeFilter: ["data-theme"],
       });
     }

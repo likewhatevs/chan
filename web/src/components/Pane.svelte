@@ -56,6 +56,7 @@
     Settings,
     Terminal,
     User,
+    X,
   } from "lucide-svelte";
 
   import HybridTerminalConfig from "./HybridTerminalConfig.svelte";
@@ -543,6 +544,28 @@
       },
     },
   ];
+  const paneCloseActions: PaneMenuRow[] = [
+    {
+      label: "Close all tabs",
+      icon: X,
+      command: "app.pane.closeTabs",
+      chord: chordLabel("app.pane.closeTabs"),
+      action: () => {
+        dispatchCommand("app.pane.closeTabs");
+        closePaneHamburgerMenu();
+      },
+    },
+    {
+      label: "Kill pane",
+      icon: LayoutGrid,
+      command: "app.pane.kill",
+      chord: chordLabel("app.pane.kill"),
+      action: () => {
+        dispatchCommand("app.pane.kill");
+        closePaneHamburgerMenu();
+      },
+    },
+  ];
   // Single-pane layouts hide the focus highlight: it's only useful
   // when there's more than one pane to disambiguate. Re-derives on
   // every layout mutation so the highlight reappears the moment a
@@ -941,7 +964,6 @@
   class:transaction-grab={isTransactionGrab}
   class:transaction-drop-target={isTransactionDropTarget}
   data-focus-color={focusColorForWindow()}
-  data-theme={pane.theme}
   data-pane-id={pane.id}
   onmousedown={(e) => {
     setActivePane(pane.id);
@@ -1186,6 +1208,17 @@
           </li>
         {/each}
         <li class="sep" role="separator"></li>
+        {#each paneCloseActions as row (row.command)}
+          {@const Icon = row.icon}
+          <li>
+            <button role="menuitem" onclick={row.action}>
+              <Icon size={16} strokeWidth={1.75} aria-hidden="true" />
+              <span class="menu-row-label">{row.label}</span>
+              <span class="menu-row-chord">{row.chord}</span>
+            </button>
+          </li>
+        {/each}
+        <li class="sep" role="separator"></li>
         <li class="menu-label">
           <Palette size={16} strokeWidth={1.75} aria-hidden="true" />
           <span>Focus border colour</span>
@@ -1255,9 +1288,9 @@
            Task A ships title-band stubs. -->
       <div class="back-side" role="region" aria-label="hybrid back side">
         {#if active?.kind === "terminal"}
-          <HybridTerminalConfig {pane} onDone={() => flipHybrid(pane.id)} />
+          <HybridTerminalConfig onDone={() => flipHybrid(pane.id)} />
         {:else if active?.kind === "file"}
-          <HybridEditorConfig {pane} onDone={() => flipHybrid(pane.id)} />
+          <HybridEditorConfig onDone={() => flipHybrid(pane.id)} />
         {:else if active?.kind === "graph"}
           <HybridGraphConfig onDone={() => flipHybrid(pane.id)} />
         {:else if active?.kind === "browser"}

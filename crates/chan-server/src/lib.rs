@@ -40,7 +40,8 @@ mod util;
 pub use config::ServerConfig;
 pub use error::Error;
 pub use preferences::{
-    BrowserSidePanes, EditorPrefs, EditorTheme, LineSpacing, PaneWidths, ThemeChoice,
+    BrowserSidePanes, EditorPrefs, EditorTheme, HybridSurfaceThemes, LineSpacing, PaneWidths,
+    SurfaceThemeChoice, ThemeChoice,
 };
 pub use routes::{build_fs_graph, FsGraphResponse, FsGraphScope};
 

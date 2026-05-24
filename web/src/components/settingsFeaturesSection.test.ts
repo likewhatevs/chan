@@ -36,3 +36,11 @@ describe("Wave 2: Settings screen lock remains global", () => {
     );
   });
 });
+
+describe("Settings About attributions", () => {
+  test("Matrix screen lock credits the upstream visual reference", () => {
+    expect(settings).toContain("dcragusa/MatrixScreensaver");
+    expect(settings).toContain("https://github.com/dcragusa/MatrixScreensaver");
+    expect(settings).toMatch(/matrix screen lock[\s\S]*?MIT/);
+  });
+});

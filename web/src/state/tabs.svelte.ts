@@ -1415,6 +1415,15 @@ async function runTerminalCloseSink(tab: TerminalTab): Promise<boolean> {
   return result !== false;
 }
 
+async function runTerminalCloseSinks(tabs: Tab[]): Promise<boolean> {
+  for (const tab of tabs) {
+    if (tab.kind === "terminal" && !(await runTerminalCloseSink(tab))) {
+      return false;
+    }
+  }
+  return true;
+}
+
 /// Broadcast input is deliberately window-scoped. The target ids in
 /// `broadcastTargetIds` are resolved only through this JS window's
 /// `layout` registry (`allTerminalTabs()`), even though terminal
@@ -1846,11 +1855,17 @@ async function closeTabAsync(
 
 async function handleDraftTabClose(tab: FileTab): Promise<boolean> {
   try {
-    if (isDirty(tab)) {
+    const contentIsEmpty = tab.content.trim().length === 0;
+    if (!contentIsEmpty && isDirty(tab)) {
       await performSave(tab);
       if (isDirty(tab)) return false;
     }
     const info = await api.inspectDraft(tab.path);
+    if (contentIsEmpty && !info.has_attachments) {
+      await api.discardDraft(tab.path);
+      notify("Draft discarded");
+      return true;
+    }
     const decision = await uiDraftClose({
       path: tab.path,
       name: info.name,
@@ -1916,21 +1931,17 @@ export async function closeOtherTabsInPane(
 export async function closeTabsInPane(
   paneId: string,
   opts?: CloseTabsOptions,
-): Promise<void> {
+): Promise<boolean> {
   const p = pane(paneId);
-  if (!(await confirmCloseTabs(p.tabs, opts))) return;
-  const kept: Tab[] = [];
-  for (const tab of p.tabs) {
-    if (tab.kind === "terminal" && !(await runTerminalCloseSink(tab))) {
-      kept.push(tab);
-      continue;
-    }
+  const closing = [...p.tabs];
+  if (!(await confirmCloseTabs(closing, opts))) return false;
+  if (!(await runTerminalCloseSinks(closing))) return false;
+  for (const tab of closing) {
     rememberClosedTab(paneId, tab);
   }
-  p.tabs = kept;
-  p.activeTabId = kept[0]?.id ?? null;
-  if (kept.length > 0) return;
-  if (paneId !== layout.rootId) collapseEmptyPane(paneId);
+  p.tabs = [];
+  p.activeTabId = null;
+  return true;
 }
 
 /// "Close pane" button. Two cases:
@@ -1941,15 +1952,18 @@ export async function closeTabsInPane(
 export async function closePane(
   paneId: string,
   opts?: CloseTabsOptions,
-): Promise<void> {
+): Promise<boolean> {
   const p = pane(paneId);
-  if (!(await confirmCloseTabs(p.tabs, opts))) return;
-  for (const tab of p.tabs) rememberClosedTab(paneId, tab);
+  const closing = [...p.tabs];
+  if (!(await confirmCloseTabs(closing, opts))) return false;
+  if (!(await runTerminalCloseSinks(closing))) return false;
+  for (const tab of closing) rememberClosedTab(paneId, tab);
   p.tabs.length = 0;
   p.activeTabId = null;
   if (paneId !== layout.rootId) {
     collapseEmptyPane(paneId);
   }
+  return true;
 }
 
 /// Reorder a tab within its pane. `toIndex` is the destination index

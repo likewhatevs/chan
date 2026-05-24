@@ -7,7 +7,7 @@
   // * PIN input is the only focusable surface (the overlay's
   //   role="dialog" + aria-modal="true" telegraphs that to
   //   ATs).
-  // * Esc / clicking the backdrop do NOT dismiss — the only
+  // * Esc / clicking the backdrop do NOT dismiss. The only
   //   way out is a correct PIN (or no-PIN drives where the
   //   chan-drive layer returns `verified: false` regardless,
   //   matching the "lockout is moot" framing).
@@ -16,7 +16,7 @@
   //   body).
   //
   // Mount strategy: rendered at App root (after every other
-  // overlay) so the z-index is unambiguous — the screensaver
+  // overlay) so the z-index is unambiguous. The screensaver
   // sits over the disconnect overlay, the missing-token
   // overlay, the spawn dialog, etc. If those fire while the
   // user is away they may still surface visibility cues
@@ -38,34 +38,68 @@
   let shake = $state(false);
   let errorMessage = $state<string | null>(null);
   let inputEl = $state<HTMLInputElement | undefined>();
+  let backdropEl = $state<HTMLDivElement | undefined>();
+  let cardVisible = $state(false);
+  let wasLocked = false;
 
-  /// `fullstack-a-77`: focus the PIN input the moment the
-  /// overlay mounts. Tick first so the contenteditable
-  /// transition lands; then focus + select. The no-PIN
-  /// branch (`fullstack-a-77c`) has no input element, so
-  /// the focus call no-ops there.
+  /// Reset the unlock prompt on each fresh lock. The first
+  /// key or click wakes the prompt; later input follows the
+  /// PIN / no-PIN unlock paths.
   $effect(() => {
-    if (!screensaver.locked) return;
+    const locked = screensaver.locked;
+    if (locked === wasLocked) return;
+    wasLocked = locked;
+    if (!locked) {
+      cardVisible = false;
+      pin = "";
+      errorMessage = null;
+      return;
+    }
+    cardVisible = false;
     pin = "";
     errorMessage = null;
     void tick().then(() => {
-      inputEl?.focus();
-      inputEl?.select();
+      backdropEl?.focus();
+    });
+  });
+
+  /// Focus the unlock surface only after the wake input has
+  /// revealed it. PIN drives focus the password field; no-PIN
+  /// drives keep focus on the backdrop so any later input can
+  /// dismiss.
+  $effect(() => {
+    if (!screensaver.locked || !cardVisible) return;
+    void tick().then(() => {
+      if (screensaver.pin_set) {
+        inputEl?.focus();
+        inputEl?.select();
+      } else {
+        backdropEl?.focus();
+      }
     });
   });
 
   /// `fullstack-a-77c`: no-PIN branch. Dismiss on any
   /// key / pointer event anywhere on the backdrop. The
   /// `pin_set` gate inside `unlockWithoutPin()` makes
-  /// this safe to wire unconditionally — when a PIN is
+  /// this safe to wire unconditionally. When a PIN is
   /// set the helper bails out + the existing PIN form
   /// owns input.
   function onBackdropKey(e: KeyboardEvent): void {
+    if (!cardVisible) {
+      e.preventDefault();
+      cardVisible = true;
+      return;
+    }
     if (screensaver.pin_set) return;
     e.preventDefault();
     unlockWithoutPin();
   }
   function onBackdropPointer(): void {
+    if (!cardVisible) {
+      cardVisible = true;
+      return;
+    }
     if (screensaver.pin_set) return;
     unlockWithoutPin();
   }
@@ -111,6 +145,7 @@
   <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
   <!-- svelte-ignore a11y_no_static_element_interactions -->
   <div
+    bind:this={backdropEl}
     class="screensaver-backdrop"
     role="dialog"
     aria-modal="true"
@@ -122,47 +157,49 @@
     {#if screensaver.theme === "matrix"}
       <MatrixRain />
     {/if}
-    <div class="screensaver-card" class:shake>
-      <div class="screensaver-icon" aria-hidden="true">
-        <Lock size={32} strokeWidth={1.5} />
-      </div>
-      <h2 class="screensaver-title">Screen locked</h2>
-      {#if screensaver.pin_set}
-        <p class="screensaver-sub">Enter your PIN to unlock.</p>
-        <input
-          bind:this={inputEl}
-          bind:value={pin}
-          type="password"
-          class="screensaver-pin"
-          autocomplete="off"
-          autocapitalize="off"
-          spellcheck="false"
-          disabled={busy}
-          onkeydown={onKey}
-          placeholder="PIN"
-          aria-label="PIN"
-        />
-        {#if errorMessage}
-          <div class="screensaver-error" role="alert">{errorMessage}</div>
+    {#if cardVisible}
+      <div class="screensaver-card" class:shake>
+        <div class="screensaver-icon" aria-hidden="true">
+          <Lock size={32} strokeWidth={1.5} />
+        </div>
+        <h2 class="screensaver-title">Screen locked</h2>
+        {#if screensaver.pin_set}
+          <p class="screensaver-sub">Enter your PIN to unlock.</p>
+          <input
+            bind:this={inputEl}
+            bind:value={pin}
+            type="password"
+            class="screensaver-pin"
+            autocomplete="off"
+            autocapitalize="off"
+            spellcheck="false"
+            disabled={busy}
+            onkeydown={onKey}
+            placeholder="PIN"
+            aria-label="PIN"
+          />
+          {#if errorMessage}
+            <div class="screensaver-error" role="alert">{errorMessage}</div>
+          {/if}
+          <button
+            type="button"
+            class="screensaver-unlock"
+            onclick={submit}
+            disabled={busy}
+          >
+            {busy ? "Unlocking…" : "Unlock"}
+          </button>
+        {:else}
+          <!-- `fullstack-a-77c`: no-PIN branch. Helper text
+               promises "any input unlocks"; after the wake input,
+               the backdrop's onkeydown + onclick handlers fulfill it. -->
+          <p class="screensaver-sub">
+            No PIN set on this drive. Press any key or click to
+            unlock.
+          </p>
         {/if}
-        <button
-          type="button"
-          class="screensaver-unlock"
-          onclick={submit}
-          disabled={busy}
-        >
-          {busy ? "Unlocking…" : "Unlock"}
-        </button>
-      {:else}
-        <!-- `fullstack-a-77c`: no-PIN branch. Helper text
-             promises "any input unlocks"; the backdrop's
-             onkeydown + onclick handlers fulfill it. -->
-        <p class="screensaver-sub">
-          No PIN set on this drive. Press any key or click to
-          unlock.
-        </p>
-      {/if}
-    </div>
+      </div>
+    {/if}
   </div>
 {/if}
 

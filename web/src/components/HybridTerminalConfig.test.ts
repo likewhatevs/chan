@@ -1,5 +1,6 @@
 import { describe, expect, test } from "vitest";
 import source from "./HybridTerminalConfig.svelte?raw";
+import shell from "./HybridSurfaceConfigShell.svelte?raw";
 
 // `fullstack-a-45` (Task B): the Terminal preferences UI migrated
 // out of SettingsPanel into HybridTerminalConfig. These pins
@@ -11,13 +12,11 @@ import source from "./HybridTerminalConfig.svelte?raw";
 // for the warning copy required by `-a-45`.
 
 describe("fullstack-a-45: HybridTerminalConfig wiring", () => {
-  test("warning copy distinguishes device-wide scope from per-pane", () => {
-    // `-a-53` updated the warning copy when the Appearance
-    // override toggle joined this surface — Scrollback + TERM
-    // are device-wide; Appearance is per-Hybrid.
+  test("warning copy distinguishes device-wide settings from body theme scope", () => {
     expect(source).toMatch(
-      /Scrollback and TERM apply to ALL terminals on this device/,
+      /Scrollback, TERM, and font apply to ALL terminals on this\s+device/,
     );
+    expect(source).toMatch(/top-bar theme switch applies to ALL terminal\s+bodies/);
     expect(source).toMatch(/class="hint warning"/);
   });
 
@@ -86,20 +85,18 @@ describe("fullstack-a-45: HybridTerminalConfig wiring", () => {
   });
 });
 
-describe("fullstack-a-53: HybridTerminalConfig per-Hybrid override + custom-TERM fix", () => {
-  test("per-Hybrid Appearance override radios bind pane.theme", () => {
-    expect(source).toMatch(/name="hybrid-terminal-theme-override"/);
-    expect(source).toContain('"inherit"');
-    expect(source).toContain('"light"');
-    expect(source).toContain('"dark"');
-    expect(source).toMatch(/setOverrideChoice\(opt\.value\)/);
-    expect(source).toMatch(/pane\.theme = next/);
-    expect(source).toMatch(/pane\.theme = undefined/);
+describe("fullstack-a-53: HybridTerminalConfig surface theme + custom-TERM fix", () => {
+  test("top-bar body theme is delegated to the shared surface shell", () => {
+    expect(source).toMatch(
+      /<HybridSurfaceConfigShell[\s\S]{1,160}title="Hybrid Terminal"[\s\S]{1,120}surface="terminal"/,
+    );
+    expect(source).not.toMatch(/<h3>Appearance<\/h3>/);
+    expect(source).not.toMatch(/name="hybrid-terminal-theme-override"/);
   });
 
-  test("pane and onDone props are accepted via $props", () => {
+  test("onDone prop is accepted via $props", () => {
     expect(source).toMatch(
-      /let \{ pane, onDone \}: \{ pane: LeafNode; onDone\?: \(\) => void \} = \$props\(\)/,
+      /let \{ onDone \}: \{ onDone\?: \(\) => void \} = \$props\(\)/,
     );
   });
 
@@ -177,7 +174,8 @@ describe("fullstack-b-30 slice b: terminal-font dropdown + download flow", () =>
 
 describe("Wave 4: Terminal back-side controls", () => {
   test("OK button routes through onDone", () => {
-    expect(source).toMatch(
+    expect(source).toMatch(/<HybridSurfaceConfigShell[\s\S]*?\{onDone\}/);
+    expect(shell).toMatch(
       /<button type="button" class="config-ok" onclick=\{\(\) => onDone\?\.\(\)\}>OK<\/button>/,
     );
   });

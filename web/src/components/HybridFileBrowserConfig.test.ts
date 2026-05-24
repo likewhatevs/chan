@@ -1,6 +1,7 @@
 import { describe, expect, test } from "vitest";
 import source from "./HybridFileBrowserConfig.svelte?raw";
 import panel from "./SettingsPanel.svelte?raw";
+import shell from "./HybridSurfaceConfigShell.svelte?raw";
 
 // `fullstack-a-48` Task F (option B): Search / Indexing / Reports
 // settings UI migrated out of SettingsPanel into
@@ -117,6 +118,9 @@ describe("Wave 4: File Browser back-side controls", () => {
   test("onDone prop is accepted and OK button routes through it", () => {
     expect(source).toMatch(/let \{ onDone \}: \{ onDone\?: \(\) => void \} = \$props\(\)/);
     expect(source).toMatch(
+      /<HybridSurfaceConfigShell[\s\S]{1,180}title="Hybrid File Browser"[\s\S]{1,120}surface="browser"[\s\S]*?\{onDone\}/,
+    );
+    expect(shell).toMatch(
       /<button type="button" class="config-ok" onclick=\{\(\) => onDone\?\.\(\)\}>OK<\/button>/,
     );
   });

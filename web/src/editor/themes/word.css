@@ -73,7 +73,7 @@
  * dark-mode accent.
  */
 :root[data-editor-theme="word"][data-theme="dark"],
-:root[data-editor-theme="word"] .pane[data-theme="dark"] {
+:root[data-editor-theme="word"] [data-theme="dark"] {
   --chan-editor-body-color: #ededed;
 
   --chan-editor-heading-color: #8ab4f8;
@@ -96,12 +96,12 @@
 }
 
 /*
- * `fullstack-b-5`: per-pane light override — see github.css for
- * the design rationale. Mirrors the light values from the base
- * block so a Hybrid flipped to light inside a globally-dark app
- * re-asserts these tokens for the pane's subtree.
+ * Surface light override. See github.css for the design rationale.
+ * Mirrors the light values from the base block so a Hybrid Editor
+ * switched to light inside a globally-dark app re-asserts these
+ * tokens for the editor subtree.
  */
-:root[data-editor-theme="word"] .pane[data-theme="light"] {
+:root[data-editor-theme="word"] [data-theme="light"] {
   --chan-editor-body-color: #000000;
 
   --chan-editor-heading-color: #2f5496;

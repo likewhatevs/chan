@@ -1,38 +1,53 @@
 import { describe, expect, test } from "vitest";
-import pane from "./Pane.svelte?raw";
 import app from "../App.svelte?raw";
+import sourceEditor from "../editor/Source.svelte?raw";
+import wysiwygEditor from "../editor/Wysiwyg.svelte?raw";
+import shell from "./HybridSurfaceConfigShell.svelte?raw";
+import pane from "./Pane.svelte?raw";
+import fileEditor from "./FileEditorTab.svelte?raw";
+import terminal from "./TerminalTab.svelte?raw";
+import browser from "./FileBrowserSurface.svelte?raw";
+import graph from "./GraphPanel.svelte?raw";
+import infographics from "./InfographicsTab.svelte?raw";
 
-// fullstack-59: wire per-Hybrid `node.theme` into render. The model
-// + URL hash layer already round-trips `ht` / `hb` (fullstack-48
-// phase A); this test pins the render wiring so a future refactor
-// can't silently unhook it.
-describe("fullstack-59: per-Hybrid theme render wiring", () => {
-  test("Pane root carries data-theme bound to pane.theme", () => {
-    expect(pane).toContain("data-theme={pane.theme}");
+describe("Track C: Hybrid surface body themes", () => {
+  test("Pane no longer themes the whole Hybrid chrome", () => {
+    expect(pane).not.toContain("data-theme={pane.theme}");
+    expect(pane).toContain("<HybridTerminalConfig onDone=");
+    expect(pane).toContain("<HybridEditorConfig onDone=");
   });
 
-  test("Pane hamburger no longer renders the old theme-toggle entry", () => {
-    // `fullstack-a-98`: addendum-a routes Settings through the
-    // pane footer; the stale Light/Dark hamburger row is gone.
-    expect(pane).not.toContain("togglePaneTheme");
-    expect(pane).not.toContain("paneThemeTooltip");
-    expect(pane).not.toContain("Light mode");
-    expect(pane).not.toContain("Dark mode");
+  test("CSS token blocks can apply to any themed surface subtree", () => {
+    expect(app).toContain(":global([data-theme=\"dark\"])");
+    expect(app).toContain(":global([data-theme=\"light\"])");
+    expect(app).not.toContain(":global(.pane[data-theme=\"dark\"])");
+    expect(app).not.toContain(":global(.pane[data-theme=\"light\"])");
   });
 
-  test("Settings remains the pane footer action", () => {
-    expect(pane).toContain('dispatchCommand("app.settings.toggle")');
-    expect(pane).toMatch(
-      /dispatchCommand\("app\.settings\.toggle"\)[\s\S]*?<span class="menu-row-label">Settings<\/span>/,
+  test("front-side Hybrid bodies opt into their surface override only", () => {
+    expect(fileEditor).toContain('data-theme={surfaceThemeOverride("editor")}');
+    expect(terminal).toContain('data-theme={surfaceThemeOverride("terminal")}');
+    expect(browser).toContain(
+      'data-theme={isTab ? surfaceThemeOverride("browser") : undefined}',
+    );
+    expect(graph).toContain(
+      'data-theme={tab ? surfaceThemeOverride("graph") : undefined}',
+    );
+    expect(infographics).toContain(
+      'data-theme={surfaceThemeOverride("infographics")}',
     );
   });
 
-  test("CSS cascade re-applies token blocks at pane scope", () => {
-    // The `:global(.pane[data-theme="dark"])` and matching light
-    // selector are what take the data-theme attribute and apply the
-    // token palette at pane scope. Without these the attribute is
-    // inert and the global theme keeps winning.
-    expect(app).toContain(":global(.pane[data-theme=\"dark\"])");
-    expect(app).toContain(":global(.pane[data-theme=\"light\"])");
+  test("terminal and CodeMirror palettes follow surface theme resolution", () => {
+    expect(terminal).toContain('effectiveHybridSurfaceTheme("terminal")');
+    expect(sourceEditor).toContain('effectiveHybridSurfaceTheme("editor")');
+    expect(wysiwygEditor).toContain('effectiveHybridSurfaceTheme("editor")');
+  });
+
+  test("shared back-side shell owns the per-surface switch and footer OK", () => {
+    expect(shell).toContain("setHybridSurfaceTheme(surface, choice)");
+    expect(shell).toContain("effectiveHybridSurfaceTheme(surface)");
+    expect(shell).toContain('class="config-footer"');
+    expect(shell).toContain('class="config-ok"');
   });
 });

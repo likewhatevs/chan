@@ -2,13 +2,15 @@
   // `fullstack-a-51` Task D (bundled with G6): legend grid for the
   // Hybrid Graph back-side. Renders the G6 colour palette as
   // `[label] [colour swatch]` rows. Each swatch reads its colour
-  // from the central CSS palette so light / dark mode + per-Hybrid
-  // theme override (`-a-53`) all cascade through automatically.
+  // from the central CSS palette so light / dark mode and the
+  // Graph body theme override cascade through automatically.
   //
   // Source of truth for the palette is `App.svelte`'s `:root` (and
   // `[data-theme="light"]` override). The CSS variables consumed
   // here mirror what `GraphCanvas.svelte`'s theme reader picks up,
   // so the swatch hue + the actual node colour stay in lockstep.
+
+  import HybridSurfaceConfigShell from "./HybridSurfaceConfigShell.svelte";
 
   let { onDone }: { onDone?: () => void } = $props();
 
@@ -90,16 +92,11 @@
   ];
 </script>
 
-<section class="hybrid-config" aria-label="Hybrid Graph configuration">
-  <header class="config-header">
-    <h2 class="config-title">Hybrid Graph</h2>
-    <button type="button" class="config-ok" onclick={() => onDone?.()}>OK</button>
-  </header>
-  <div class="config-body">
+<HybridSurfaceConfigShell title="Hybrid Graph" surface="graph" {onDone}>
     <p class="hint">
       Colour scheme for graph nodes. Same palette renders on the
-      graph canvas + here; per-Hybrid Appearance overrides cascade
-      through automatically.
+      graph canvas + here; the top-bar theme switch applies to
+      ALL graph tab bodies.
     </p>
 
     {#each groups as group (group.title)}
@@ -124,51 +121,9 @@
         </ul>
       </section>
     {/each}
-  </div>
-</section>
+</HybridSurfaceConfigShell>
 
 <style>
-  .hybrid-config {
-    display: flex;
-    flex-direction: column;
-    flex: 1;
-    min-width: 0;
-    min-height: 0;
-  }
-  .config-header {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 12px;
-    padding: 16px 20px;
-    border-bottom: 1px solid var(--border);
-  }
-  .config-title {
-    margin: 0;
-    font-size: 18px;
-    font-weight: 600;
-    color: var(--text);
-  }
-  .config-ok {
-    background: var(--btn-bg);
-    color: var(--text);
-    border: 1px solid var(--btn-border);
-    border-radius: 4px;
-    padding: 5px 12px;
-    font: inherit;
-    cursor: pointer;
-  }
-  .config-ok:hover {
-    border-color: var(--btn-hover);
-  }
-  .config-body {
-    flex: 1;
-    overflow: auto;
-    padding: 16px 20px;
-    display: flex;
-    flex-direction: column;
-    gap: 1rem;
-  }
   .hint {
     margin: 0;
     color: var(--text-secondary);

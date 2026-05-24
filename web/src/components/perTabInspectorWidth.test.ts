@@ -24,6 +24,12 @@ describe("fullstack-84: FileBrowserSurface binds inspector width per-tab", () =>
     expect(fileBrowserSurface).toContain("paneWidths.browser");
     expect(fileBrowserSurface).not.toContain("bind:width={paneWidths.browser}");
   });
+
+  test("tab expansion changes refresh the URL hash for reload restore", () => {
+    expect(fileBrowserSurface).toMatch(
+      /captured\.expanded = expanded\.length > 0 \? expanded : undefined;[\s\S]*?persistLayoutToHash\(\);/,
+    );
+  });
 });
 
 describe("fullstack-84: GraphPanel binds inspector width per-tab", () => {

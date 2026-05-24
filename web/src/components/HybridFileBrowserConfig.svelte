@@ -34,6 +34,7 @@
     SemanticState,
   } from "../api/types";
   import { drive } from "../state/store.svelte";
+  import HybridSurfaceConfigShell from "./HybridSurfaceConfigShell.svelte";
 
   let { onDone }: { onDone?: () => void } = $props();
 
@@ -297,24 +298,16 @@
   });
 </script>
 
-<section class="hybrid-config" aria-label="Hybrid File Browser configuration">
-  <header class="config-header">
-    <h2 class="config-title">Hybrid File Browser</h2>
-    <div class="save-status" aria-live="polite">
-      {#if saveStatus === "saving"}
-        <span class="muted">saving…</span>
-      {:else if saveStatus === "saved"}
-        <span class="ok">saved</span>
-      {:else if typeof saveStatus === "object"}
-        <span class="err" title={saveStatus.error}>save failed</span>
-      {/if}
-    </div>
-    <button type="button" class="config-ok" onclick={() => onDone?.()}>OK</button>
-  </header>
-  <div class="config-body">
+<HybridSurfaceConfigShell
+  title="Hybrid File Browser"
+  surface="browser"
+  saveStatus={saveStatus}
+  {onDone}
+>
     <p class="hint warning">
       These settings apply to ALL file-browser surfaces on this
-      drive, not just this one.
+      drive, not just this one. The top-bar theme switch applies
+      to all Hybrid File Browser tab bodies.
     </p>
 
     <!-- `fullstack-a-21` semantic-search opt-in (migrated from
@@ -436,55 +429,9 @@
       </p>
       {/if}
     </section>
-  </div>
-</section>
+</HybridSurfaceConfigShell>
 
 <style>
-  .hybrid-config {
-    display: flex;
-    flex-direction: column;
-    flex: 1;
-    min-width: 0;
-    min-height: 0;
-  }
-  .config-header {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 12px;
-    padding: 16px 20px;
-    border-bottom: 1px solid var(--border);
-  }
-  .config-title {
-    margin: 0;
-    font-size: 18px;
-    font-weight: 600;
-    color: var(--text);
-  }
-  .save-status { font-size: 14px; min-width: 60px; text-align: right; }
-  .save-status .ok { color: var(--accent); }
-  .save-status .err { color: #d33; }
-  .save-status .muted { color: var(--text-secondary); }
-  .config-ok {
-    background: var(--btn-bg);
-    color: var(--text);
-    border: 1px solid var(--btn-border);
-    border-radius: 4px;
-    padding: 5px 12px;
-    font: inherit;
-    cursor: pointer;
-  }
-  .config-ok:hover {
-    border-color: var(--btn-hover);
-  }
-  .config-body {
-    flex: 1;
-    overflow: auto;
-    padding: 16px 20px;
-    display: flex;
-    flex-direction: column;
-    gap: 1.25rem;
-  }
   .hint {
     margin: 0;
     color: var(--text-secondary);
@@ -499,17 +446,6 @@
   .hint.muted { color: var(--text-secondary); font-style: italic; }
   .hint.err { color: #d33; }
   .hint.sub-hint { font-size: 11.5px; margin: 0; }
-  .config-body :global(section) {
-    display: flex;
-    flex-direction: column;
-    gap: 0.5rem;
-  }
-  .config-body :global(section h3) {
-    margin: 0;
-    font-size: 14px;
-    font-weight: 600;
-    color: var(--text);
-  }
   /* `.theme-opt` chip + `.strip-toggle` checkbox affordance
      carried over from `-a-45` / `-a-46` so the toggles in this
      back-side surface match the rest of the Hybrid back chrome. */

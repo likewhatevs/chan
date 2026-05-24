@@ -58,11 +58,13 @@
   } from "../state/tabs.svelte";
   import {
     drive,
+    effectiveHybridSurfaceTheme,
     fileOps,
     openFsGraphForDirectory,
     revealPathInBrowser,
     scheduleSessionSave,
     setTransientStatus,
+    surfaceThemeOverride,
     ui,
   } from "../state/store.svelte";
   import { terminalWsPath } from "../terminal/session";
@@ -297,28 +299,20 @@
     };
   });
 
-  // `fullstack-78`: track both the global theme AND the pane-local
-  // override so xterm.js' theme (rendered to its own canvas — CSS
-  // cascade doesn't reach inside) re-applies on per-pane flip.
+  // Track the resolved terminal body theme so xterm.js' canvas
+  // palette follows the per-surface override.
   $effect(() => {
-    ui.theme;
-    const node = layout.nodes[paneId];
-    if (node?.kind === "leaf") {
-      void node.theme;
-    }
+    effectiveHybridSurfaceTheme("terminal");
     applyTerminalTheme();
   });
 
-  function effectivePaneTheme(): "dark" | "light" {
-    const node = layout.nodes[paneId];
-    if (node?.kind === "leaf" && node.theme) return node.theme;
-    return ui.theme;
+  function effectiveTerminalTheme(): "dark" | "light" {
+    return effectiveHybridSurfaceTheme("terminal");
   }
 
   function terminalTheme() {
-    // Read CSS variables from `host` (inside the pane) rather than
-    // `document.documentElement` so the `.pane[data-theme="..."]`
-    // cascade from `-59` resolves to per-pane overrides.
+    // Read CSS variables from `host` so the terminal surface's
+    // `data-theme` override resolves before xterm paints.
     const styles = getComputedStyle(host ?? document.documentElement);
     const bg = styles.getPropertyValue("--bg").trim() || "#1c1c1e";
     const text = styles.getPropertyValue("--text").trim() || "#ebebf0";
@@ -329,7 +323,7 @@
       cursor,
       selectionBackground: "rgba(88, 166, 255, 0.35)",
     };
-    const effective = effectivePaneTheme();
+    const effective = effectiveTerminalTheme();
     if (effective === "light") {
       return {
         ...base,
@@ -1526,6 +1520,7 @@
 <div
   class="terminal-tab"
   class:active
+  data-theme={surfaceThemeOverride("terminal")}
   data-terminal-tab-id={tab.id}
   role="tabpanel"
   aria-hidden={!active}

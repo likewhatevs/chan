@@ -47,8 +47,8 @@
   // of this overlay into `HybridTerminalConfig.svelte`.
   //
   // `fullstack-a-46` (Task C) moved the Editor settings
-  // (Editor theme, Appearance, Layout / line spacing, Date pills /
-  // date format, On save / strip trailing whitespace) out of this
+  // (Editor theme, Layout / line spacing, Date pills / date
+  // format, On save / strip trailing whitespace) out of this
   // overlay into `HybridEditorConfig.svelte`.
   //
   // `fullstack-a-48` (Task F option B) moved the Semantic search
@@ -56,13 +56,9 @@
   // alongside report indexing + the future multi-model picker
   // placeholder.
   //
-  // `fullstack-a-53` reverts the Appearance section from
-  // `HybridEditorConfig.svelte` back here. Appearance is a GLOBAL
-  // default; the per-Hybrid override toggle (Inherit / Light /
-  // Dark) lives in BOTH Hybrid Editor + Hybrid Terminal back-sides
-  // and writes to `pane.theme` (the existing override slot from
-  // `-b-5`/`-a-47`). Render resolution: pane.theme wins if set;
-  // else this overlay's `ui.themeChoice`.
+  // Appearance stays here as the global default. Hybrid back-side
+  // settings now expose only a per-surface body theme switch, stored
+  // in preferences.hybrid_surface_themes.
 
   function doToggleOverlayMaximized(): void {
     setOverlayMaximized(!overlayMaximized.on);
@@ -254,6 +250,7 @@
   let screensaverPinSet = $state(false);
   let screensaverBusy = $state(false);
   let screensaverError = $state<string | null>(null);
+  let returnToSettingsAfterTest = $state(false);
   /// PIN edit buffer. `null` when not showing the dialog;
   /// otherwise carries the pin1/pin2 confirm pair.
   let pinDialog = $state<{ pin1: string; pin2: string } | null>(null);
@@ -406,6 +403,8 @@
       screensaverError = "screen lock state unavailable";
       return;
     }
+    returnToSettingsAfterTest = true;
+    settingsOverlay.open = false;
     lockNow();
   }
 
@@ -424,6 +423,13 @@
     }
     screensaverPauseRelease?.();
     screensaverPauseRelease = null;
+  });
+
+  $effect(() => {
+    if (!returnToSettingsAfterTest) return;
+    if (screensaver.locked) return;
+    returnToSettingsAfterTest = false;
+    settingsOverlay.open = true;
   });
 
   onMount(() => {
@@ -657,6 +663,17 @@
           Source Code Pro Regular
           <span class="muted">
             (<a href="/static/fonts/OFL.txt" target="_blank" rel="noopener">SIL OFL 1.1</a>)
+          </span>
+        </span>
+        <!-- Matrix screen-lock visual reference attribution. The
+             renderer is self-contained, but its rain cadence, color
+             tiers, and glyph geometry are adapted from the MIT-licensed
+             dcragusa/MatrixScreensaver project. -->
+        <span class="k">matrix screen lock</span>
+        <span class="v">
+          dcragusa/MatrixScreensaver
+          <span class="muted">
+            (<a href="https://github.com/dcragusa/MatrixScreensaver" target="_blank" rel="noopener">MIT</a>)
           </span>
         </span>
       </div>

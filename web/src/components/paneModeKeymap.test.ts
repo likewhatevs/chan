@@ -197,10 +197,45 @@ describe("Cmd+K Backspace kill-pane (fullstack-77)", () => {
     // `Backspace`. The old letter is unbound (not repurposed) so
     // the previous case block disappears from the dispatch.
     expect(app).toMatch(
-      /case "Backspace":[\s\S]*?commitPaneMode\(\);[\s\S]*?closePane\(layout\.activePaneId\);/,
+      /case "Backspace":[\s\S]*?commitPaneMode\(\);[\s\S]*?killActivePane\(\);/,
     );
     expect(app).not.toMatch(
-      /case "k":\s*\n\s*case "K":\s*\n\s*commitPaneMode\(\);[\s\S]*?closePane\(layout\.activePaneId\);/,
+      /case "k":\s*\n\s*case "K":\s*\n\s*commitPaneMode\(\);[\s\S]*?killActivePane\(\);/,
+    );
+  });
+});
+
+describe("Track C pane shortcut wiring", () => {
+  test("Mod+[ and Mod+] dispatch previous/next pane directly", () => {
+    expect(app).toMatch(
+      /meta && !e\.altKey && !e\.shiftKey && e\.code === "BracketLeft"[\s\S]*?selectPrevPane\(\);/,
+    );
+    expect(app).toMatch(
+      /meta && !e\.altKey && !e\.shiftKey && e\.code === "BracketRight"[\s\S]*?selectNextPane\(\);/,
+    );
+  });
+
+  test("close-all and kill-pane command ids route through transactional helpers", () => {
+    expect(app).toMatch(
+      /case "app\.pane\.closeTabs":[\s\S]*?closeTabsInActivePane\(\);/,
+    );
+    expect(app).toMatch(
+      /case "app\.pane\.kill":[\s\S]*?killActivePane\(\);/,
+    );
+    expect(app).toMatch(
+      /function closeTabsInActivePane\(\): void \{[\s\S]*?closeTabsInPane\(paneId\)\.then\(\(closed\) => \{[\s\S]*?if \(closed\) scheduleSessionSave\(\);/,
+    );
+    expect(app).toMatch(
+      /function killActivePane\(opts\?: \{ force\?: boolean \}\): void \{[\s\S]*?closePane\(paneId, opts\)\.then\(\(closed\) => \{[\s\S]*?if \(closed\) scheduleSessionSave\(\);/,
+    );
+  });
+
+  test("empty-pane close is wired through Ctrl+D and app.tab.close", () => {
+    expect(app).toMatch(
+      /if \(!active\) \{[\s\S]*?if \(closeActiveEmptyPane\(\)\) \{[\s\S]*?e\.preventDefault\(\);[\s\S]*?e\.stopPropagation\(\);/,
+    );
+    expect(app).toMatch(
+      /case "app\.tab\.close": \{[\s\S]*?else closeActiveEmptyPane\(\);/,
     );
   });
 });

@@ -93,6 +93,7 @@
     persistPaneWidths,
     revealPathInBrowser,
     setTransientStatus,
+    surfaceThemeOverride,
     ui,
   } from "../state/store.svelte";
   import {
@@ -716,7 +717,11 @@
 
 <svelte:window onkeydown={onMenuKeydown} onpointerdown={onDocPointerDown} />
 
-<div class="editor-tab" bind:this={editorTabEl}>
+<div
+  class="editor-tab"
+  bind:this={editorTabEl}
+  data-theme={surfaceThemeOverride("editor")}
+>
   {#if recoveredBuffer}
     <!-- `fullstack-a-72`: hang-recovery banner. Surfaces when
          localStorage has unsaved content for this tab that

@@ -1,25 +1,23 @@
 import { describe, expect, test } from "vitest";
 import source from "./HybridEditorConfig.svelte?raw";
 import panel from "./SettingsPanel.svelte?raw";
+import shell from "./HybridSurfaceConfigShell.svelte?raw";
 
 // `fullstack-a-46` Task C: Editor settings UI migrated out of
-// SettingsPanel into HybridEditorConfig. Five sections move:
-// Editor theme, Appearance, Layout (line spacing), Date pills
-// (date format), On save (strip trailing whitespace). Settings
+// SettingsPanel into HybridEditorConfig. Four sections move:
+// Editor theme, Layout (line spacing), Date pills (date format),
+// On save (strip trailing whitespace). Settings
 // storage shape unchanged; both surfaces still PATCH the same
 // `GlobalConfig.preferences`. The dirty comparator + save are
 // scoped to the editor-related fields so SettingsPanel-owned
 // edits (semantic-search) don't trigger spurious PATCHes.
 
 describe("fullstack-a-46: HybridEditorConfig wiring", () => {
-  test("warning copy distinguishes device-wide scope from per-Hybrid override", () => {
-    // `-a-53` updated the warning copy when the Appearance
-    // section reverted to SettingsPanel — the Appearance
-    // override is the only per-Hybrid setting on this surface
-    // now; the rest are device-wide.
+  test("warning copy distinguishes device-wide settings from body theme scope", () => {
     expect(source).toMatch(
       /Most settings here apply to ALL editors on this device/,
     );
+    expect(source).toMatch(/top-bar theme switch applies to ALL editor bodies/);
     expect(source).toMatch(/class="hint warning"/);
   });
 
@@ -32,18 +30,12 @@ describe("fullstack-a-46: HybridEditorConfig wiring", () => {
     );
   });
 
-  test("per-Hybrid Appearance override radios bind pane.theme (-a-53)", () => {
-    // `-a-53` replaced the moved-out Appearance section with an
-    // Inherit / Light / Dark override layer that writes to
-    // `pane.theme`. Three radios under the same `.theme-row`
-    // chip layout SettingsPanel uses for the global default.
-    expect(source).toMatch(/name="hybrid-editor-theme-override"/);
-    expect(source).toContain('"inherit"');
-    expect(source).toContain('"light"');
-    expect(source).toContain('"dark"');
-    expect(source).toMatch(/setOverrideChoice\(opt\.value\)/);
-    expect(source).toMatch(/pane\.theme = next/);
-    expect(source).toMatch(/pane\.theme = undefined/);
+  test("top-bar body theme is delegated to the shared surface shell", () => {
+    expect(source).toMatch(
+      /<HybridSurfaceConfigShell[\s\S]{1,160}title="Hybrid Editor"[\s\S]{1,120}surface="editor"/,
+    );
+    expect(source).not.toMatch(/<h3>Appearance<\/h3>/);
+    expect(source).not.toMatch(/name="hybrid-editor-theme-override"/);
   });
 
   test("Layout radios cover standard + compact + bind line_spacing", () => {
@@ -125,9 +117,10 @@ describe("fullstack-a-46: HybridEditorConfig wiring", () => {
 describe("Wave 4: Editor back-side controls", () => {
   test("onDone prop is accepted and OK button routes through it", () => {
     expect(source).toMatch(
-      /let \{ pane, onDone \}: \{ pane: LeafNode; onDone\?: \(\) => void \} = \$props\(\)/,
+      /let \{ onDone \}: \{ onDone\?: \(\) => void \} = \$props\(\)/,
     );
-    expect(source).toMatch(
+    expect(source).toMatch(/<HybridSurfaceConfigShell[\s\S]*?\{onDone\}/);
+    expect(shell).toMatch(
       /<button type="button" class="config-ok" onclick=\{\(\) => onDone\?\.\(\)\}>OK<\/button>/,
     );
   });

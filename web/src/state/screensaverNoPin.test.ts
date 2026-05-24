@@ -33,15 +33,15 @@ describe("fullstack-a-77c: overlay branching", () => {
     );
   });
 
-  test("onBackdropKey guards on pin_set + calls unlockWithoutPin", () => {
+  test("onBackdropKey wakes first, then guards on pin_set + calls unlockWithoutPin", () => {
     expect(overlay).toMatch(
-      /function onBackdropKey\(e: KeyboardEvent\): void \{[\s\S]{1,400}if \(screensaver\.pin_set\) return;[\s\S]{1,200}unlockWithoutPin\(\);/,
+      /function onBackdropKey\(e: KeyboardEvent\): void \{[\s\S]{1,200}if \(!cardVisible\) \{[\s\S]{1,120}cardVisible = true;[\s\S]{1,400}if \(screensaver\.pin_set\) return;[\s\S]{1,200}unlockWithoutPin\(\);/,
     );
   });
 
-  test("onBackdropPointer guards on pin_set + calls unlockWithoutPin", () => {
+  test("onBackdropPointer wakes first, then guards on pin_set + calls unlockWithoutPin", () => {
     expect(overlay).toMatch(
-      /function onBackdropPointer\(\): void \{[\s\S]{1,400}if \(screensaver\.pin_set\) return;[\s\S]{1,200}unlockWithoutPin\(\);/,
+      /function onBackdropPointer\(\): void \{[\s\S]{1,200}if \(!cardVisible\) \{[\s\S]{1,120}cardVisible = true;[\s\S]{1,400}if \(screensaver\.pin_set\) return;[\s\S]{1,200}unlockWithoutPin\(\);/,
     );
   });
 
@@ -52,7 +52,7 @@ describe("fullstack-a-77c: overlay branching", () => {
 
   test("markup branches on screensaver.pin_set inside the locked block", () => {
     expect(overlay).toMatch(
-      /\{#if screensaver\.locked\}[\s\S]{1,800}\{#if screensaver\.pin_set\}[\s\S]{1,4000}\{:else\}[\s\S]{1,800}No PIN set on this drive\. Press any key or click to[\s\S]{1,40}unlock\./,
+      /\{#if screensaver\.locked\}[\s\S]{1,1200}\{#if cardVisible\}[\s\S]{1,800}\{#if screensaver\.pin_set\}[\s\S]{1,4000}\{:else\}[\s\S]{1,800}No PIN set on this drive\. Press any key or click to[\s\S]{1,40}unlock\./,
     );
   });
 

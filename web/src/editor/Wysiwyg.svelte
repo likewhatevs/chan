@@ -21,7 +21,7 @@
   import { EditorView, drawSelection, keymap, placeholder } from "@codemirror/view";
   import { syntaxTree } from "@codemirror/language";
   import { defaultKeymap, history, historyKeymap } from "@codemirror/commands";
-  import { drive, ui } from "../state/store.svelte";
+  import { drive, effectiveHybridSurfaceTheme } from "../state/store.svelte";
   import {
     createValueSync,
     findField,
@@ -155,7 +155,7 @@
   let host: HTMLDivElement | undefined;
   let view: EditorView | undefined;
   const sync = createValueSync();
-  const theme = makeThemeCompartment(ui.theme);
+  const theme = makeThemeCompartment(effectiveHybridSurfaceTheme("editor"));
   const editableCompartment = new Compartment();
   const trailingWhitespace = new Compartment();
   /// Compartment for the write-side bundle (bubble listener / bubble
@@ -559,7 +559,7 @@
 
   $effect(() => {
     if (!view) return;
-    theme.reconfigure(view, ui.theme);
+    theme.reconfigure(view, effectiveHybridSurfaceTheme("editor"));
   });
 
   $effect(() => {

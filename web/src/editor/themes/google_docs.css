@@ -66,7 +66,7 @@
  * tokens shift.
  */
 :root[data-editor-theme="google_docs"][data-theme="dark"],
-:root[data-editor-theme="google_docs"] .pane[data-theme="dark"] {
+:root[data-editor-theme="google_docs"] [data-theme="dark"] {
   --chan-editor-body-color: #e8eaed;
 
   --chan-editor-heading-color: #e8eaed;
@@ -88,12 +88,12 @@
 }
 
 /*
- * `fullstack-b-5`: per-pane light override — see github.css for
- * the design rationale. Mirrors the light values from the base
- * block so a Hybrid flipped to light inside a globally-dark app
- * re-asserts these tokens for the pane's subtree.
+ * Surface light override. See github.css for the design rationale.
+ * Mirrors the light values from the base block so a Hybrid Editor
+ * switched to light inside a globally-dark app re-asserts these
+ * tokens for the editor subtree.
  */
-:root[data-editor-theme="google_docs"] .pane[data-theme="light"] {
+:root[data-editor-theme="google_docs"] [data-theme="light"] {
   --chan-editor-body-color: #202124;
 
   --chan-editor-heading-color: #202124;

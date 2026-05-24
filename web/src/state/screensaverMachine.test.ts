@@ -80,10 +80,17 @@ describe("fullstack-a-77 slice 2: overlay component", () => {
     );
   });
 
-  test("PIN input is password-type + auto-focused on lock", () => {
+  test("PIN input is password-type + auto-focused after wake", () => {
     expect(overlay).toMatch(/type="password"/);
     expect(overlay).toMatch(
-      /\$effect\(\(\) => \{[\s\S]*?if \(!screensaver\.locked\) return;[\s\S]*?inputEl\?\.focus\(\);[\s\S]*?inputEl\?\.select\(\);/,
+      /\$effect\(\(\) => \{[\s\S]*?if \(!screensaver\.locked \|\| !cardVisible\) return;[\s\S]*?inputEl\?\.focus\(\);[\s\S]*?inputEl\?\.select\(\);/,
+    );
+  });
+
+  test("fresh lock hides the card and focuses the backdrop", () => {
+    expect(overlay).toMatch(/let cardVisible = \$state\(false\);/);
+    expect(overlay).toMatch(
+      /if \(!locked\) \{[\s\S]{1,200}cardVisible = false;[\s\S]{1,400}cardVisible = false;[\s\S]{1,200}backdropEl\?\.focus\(\);/,
     );
   });
 

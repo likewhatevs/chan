@@ -36,6 +36,7 @@
     paneWidths,
     persistPaneWidths,
     revealPathInBrowser,
+    surfaceThemeOverride,
     tree,
   } from "../state/store.svelte";
   import { onDestroy } from "svelte";
@@ -1407,7 +1408,12 @@
 {/if}
 
 {#snippet graphContent()}
-  <div class="graph-tab" oncontextmenu={onGraphContextMenu} role="presentation">
+  <div
+    class="graph-tab"
+    data-theme={tab ? surfaceThemeOverride("graph") : undefined}
+    oncontextmenu={onGraphContextMenu}
+    role="presentation"
+  >
   {#if !tab}
     <!-- Overlay variant keeps the bar — there's no tab-strip
          right-click affordance available in the overlay shell.

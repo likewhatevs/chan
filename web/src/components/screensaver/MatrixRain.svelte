@@ -1,7 +1,10 @@
 <script lang="ts">
   import { onMount } from "svelte";
 
-  const GLYPHS = "ｱｲｳｴｵｶｷｸｹｺｻｼｽｾｿﾀﾁﾂﾃﾄﾅﾆﾇﾈﾉ0123456789#$%&*+-";
+  // Matrix rain cadence, color tiers, and cell geometry are adapted
+  // from the MIT-licensed dcragusa/MatrixScreensaver project:
+  // https://github.com/dcragusa/MatrixScreensaver
+  const GLYPHS = "abcdefghijklmnopqrstuvwxyz123456789890~!#$%^&*()-_=+[]{};:'\",.<>/?\\|";
   const INTRO_MESSAGES = ["Wake up, Neo...", "The Matrix has you..."] as const;
   const INTRO_START_DELAY_MS = 500;
   const INTRO_HOLD_MS = 2000;
@@ -10,11 +13,17 @@
   const DRAW_INTERVAL_MS = 40;
   const COLUMN_SPACING_PX = 11;
   const ROW_SPACING_PX = 19;
-  const FONT_SIZE_PX = 18;
+  const INTRO_FONT_SIZE_PX = 22;
+  const RAIN_FONT_SIZE_PX = 20;
+  const RAIN_DENSITY = 4;
+  const HEAD_COLOR = "#f6f6f4";
+  const LEAD_COLOR = "#c9cfb9";
+  const MID_COLOR = "#95a297";
+  const BODY_COLOR = "#2cb231";
 
   type Column = {
-    head: number;
-    length: number;
+    position: number;
+    delay: number;
     speed: number;
     glyphs: string[];
   };
@@ -31,6 +40,7 @@
     let width = 0;
     let height = 0;
     let rowCount = 0;
+    let columnCount = 0;
     let columns: Column[] = [];
     let drawTimer: ReturnType<typeof setInterval> | null = null;
     const timeouts: ReturnType<typeof setTimeout>[] = [];
@@ -40,12 +50,12 @@
     }
 
     function randomColumn(): Column {
-      const length = 8 + Math.floor(Math.random() * 24);
+      const glyphCount = Math.max(rowCount + 20, columnCount);
       return {
-        head: -Math.floor(Math.random() * Math.max(1, rowCount)),
-        length,
-        speed: 0.35 + Math.random() * 0.9,
-        glyphs: Array.from({ length: rowCount + length + 4 }, glyph),
+        position: 0,
+        delay: Math.floor(Math.random() * Math.max(1, rowCount * RAIN_DENSITY * 2)),
+        speed: Math.random() < 0.25 ? 1 : 0,
+        glyphs: Array.from({ length: glyphCount }, glyph),
       };
     }
 
@@ -64,26 +74,24 @@
       ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
       ctx.textBaseline = "top";
       rowCount = Math.ceil(height / ROW_SPACING_PX) + 2;
-      const columnCount = Math.ceil(width / COLUMN_SPACING_PX);
+      columnCount = Math.ceil(width / COLUMN_SPACING_PX) + 1;
       columns = Array.from({ length: columnCount }, randomColumn);
       clear();
       if (reduced.matches) drawStaticMatrix();
     }
 
     function introDelay(index: number): number {
-      return index % 7 === 5 || Math.random() < 0.16
+      return index % 7 === 5 || Math.random() < 1 / 3
         ? TYPE_DELAY_FAST_MS
         : TYPE_DELAY_SLOW_MS;
     }
 
     function drawIntroText(text: string): void {
       clear();
-      ctx.font = `${FONT_SIZE_PX}px "Courier New", ui-monospace, monospace`;
-      ctx.fillStyle = "#b8f7c1";
-      ctx.shadowColor = "rgba(128, 255, 160, 0.5)";
-      ctx.shadowBlur = 4;
-      ctx.fillText(text, 30, 40);
+      ctx.font = `${INTRO_FONT_SIZE_PX}px "Courier New", ui-monospace, monospace`;
+      ctx.fillStyle = "#7bff8d";
       ctx.shadowBlur = 0;
+      ctx.fillText(text, 30, 40);
     }
 
     function scheduleTimeout(fn: () => void, ms: number): void {
@@ -110,54 +118,92 @@
       }, INTRO_HOLD_MS);
     }
 
-    function mutateColumn(column: Column): void {
-      for (let i = 0; i < column.glyphs.length; i += 1) {
-        if (Math.random() < 0.025) column.glyphs[i] = glyph();
-      }
+    function clearCell(x: number, y: number): void {
+      ctx.clearRect(x, y, COLUMN_SPACING_PX, ROW_SPACING_PX);
     }
 
     function drawRainFrame(): void {
-      ctx.fillStyle = "rgba(0, 0, 0, 0.16)";
-      ctx.fillRect(0, 0, width, height);
-      ctx.font = `${FONT_SIZE_PX}px "Courier New", ui-monospace, monospace`;
+      ctx.font = `${RAIN_FONT_SIZE_PX}px "Courier New", ui-monospace, monospace`;
 
       for (let xIndex = 0; xIndex < columns.length; xIndex += 1) {
         const column = columns[xIndex]!;
-        mutateColumn(column);
-        const headRow = Math.floor(column.head);
         const x = xIndex * COLUMN_SPACING_PX;
-        for (let trail = 0; trail < column.length; trail += 1) {
-          const row = headRow - trail;
-          if (row < 0 || row >= rowCount) continue;
-          const y = row * ROW_SPACING_PX;
-          const g = column.glyphs[(row + trail) % column.glyphs.length] ?? glyph();
-          if (trail === 0) {
-            ctx.fillStyle = "#f2fff2";
-          } else if (trail < 3) {
-            ctx.fillStyle = `rgba(150, 185, 150, ${0.82 - trail * 0.14})`;
-          } else {
-            const alpha = Math.max(0.08, 0.78 - trail / column.length);
-            ctx.fillStyle = `rgba(0, 205, 55, ${alpha * (0.7 + Math.random() * 0.3)})`;
-          }
-          ctx.fillText(g, x, y);
+        if (column.delay > 0) {
+          column.delay -= 1;
+          continue;
         }
-        column.head += column.speed;
-        if (column.head - column.length > rowCount + 2) {
-          columns[xIndex] = randomColumn();
+        for (let row = 0; row < column.glyphs.length; row += 1) {
+          if (row > column.position) break;
+          const y = row * ROW_SPACING_PX;
+          const outY = y + ROW_SPACING_PX;
+          const g = column.glyphs[row] ?? glyph();
+          if (row === column.position) {
+            clearCell(x, y);
+            ctx.fillStyle = HEAD_COLOR;
+            ctx.fillText(g, x, outY);
+          } else if (row === column.position - 1) {
+            clearCell(x, y);
+            ctx.fillStyle = LEAD_COLOR;
+            ctx.fillText(g, x, outY);
+          } else if (row === column.position - 2) {
+            clearCell(x, y);
+            ctx.fillStyle = MID_COLOR;
+            ctx.fillText(g, x, outY);
+          } else if (row === column.position - 3) {
+            clearCell(x, y);
+            ctx.fillStyle = BODY_COLOR;
+            ctx.fillText(g, x, outY);
+          } else if (
+            row < column.position - 3 &&
+            row >= column.position - rowCount + 10 &&
+            Math.random() < 1 / 15
+          ) {
+            clearCell(x, y);
+            ctx.fillStyle = BODY_COLOR;
+            ctx.fillText(glyph(), x, outY);
+          } else if (
+            row < column.position - rowCount + 10 &&
+            row > column.position - rowCount - 10
+          ) {
+            ctx.fillStyle =
+              Math.random() < 0.2 ? "rgba(0, 0, 0, 0.30)" : "rgba(0, 0, 0, 0.05)";
+            ctx.fillRect(x, y, COLUMN_SPACING_PX, ROW_SPACING_PX);
+          } else if (row === column.position - rowCount - 10) {
+            clearCell(x, y);
+          }
+        }
+        column.delay = column.speed;
+        column.position += 1;
+        if (column.position > rowCount * 2 + 10) {
+          column.glyphs = Array.from(
+            { length: Math.max(rowCount + 20, columnCount) },
+            glyph,
+          );
+          column.position = 0;
+          column.delay = Math.floor(
+            Math.random() * Math.max(1, (columnCount * RAIN_DENSITY) / 2),
+          );
+          column.speed = Math.random() < 0.25 ? 1 : 0;
         }
       }
     }
 
     function drawStaticMatrix(): void {
       clear();
-      ctx.font = `${FONT_SIZE_PX}px "Courier New", ui-monospace, monospace`;
+      ctx.font = `${RAIN_FONT_SIZE_PX}px "Courier New", ui-monospace, monospace`;
       for (let x = 0; x < width; x += COLUMN_SPACING_PX) {
         for (let y = 0; y < height; y += ROW_SPACING_PX) {
-          const head = Math.random() < 0.08;
-          ctx.fillStyle = head
-            ? "rgba(242, 255, 242, 0.9)"
-            : `rgba(0, 205, 55, ${0.12 + Math.random() * 0.28})`;
-          ctx.fillText(glyph(), x, y);
+          const r = Math.random();
+          if (r < 0.04) {
+            ctx.fillStyle = HEAD_COLOR;
+          } else if (r < 0.08) {
+            ctx.fillStyle = LEAD_COLOR;
+          } else if (r < 0.12) {
+            ctx.fillStyle = MID_COLOR;
+          } else {
+            ctx.fillStyle = BODY_COLOR;
+          }
+          ctx.fillText(glyph(), x, y + ROW_SPACING_PX);
         }
       }
     }

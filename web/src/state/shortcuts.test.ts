@@ -51,4 +51,19 @@ describe("shortcut table", () => {
     expect(web).toMatch(/^Close tab\s+Ctrl\+D/m);
     expect(native).toMatch(/^Close tab\s+Ctrl\+D/m);
   });
+
+  test("advertises direct previous and next pane chords", () => {
+    const web = renderTable("web", "mac");
+    const native = renderTable("native", "mac");
+    expect(web).toMatch(/^Previous pane\s+Cmd\+\[/m);
+    expect(web).toMatch(/^Next pane\s+Cmd\+\]/m);
+    expect(native).toMatch(/^Previous pane\s+Cmd\+\[/m);
+    expect(native).toMatch(/^Next pane\s+Cmd\+\]/m);
+  });
+
+  test("advertises Hybrid Nav close-all and kill-pane chords", () => {
+    const table = renderTable("web", "mac");
+    expect(table).toMatch(/^Close all tabs in pane\s+Cmd\+\. x/m);
+    expect(table).toMatch(/^Kill pane\s+Cmd\+\. Backspace/m);
+  });
 });

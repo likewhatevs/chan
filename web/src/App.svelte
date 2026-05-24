@@ -641,13 +641,11 @@
       case "x":
       case "X":
         commitPaneMode();
-        scheduleSessionSave();
-        void closeTabsInPane(layout.activePaneId);
+        closeTabsInActivePane();
         return;
       case "Backspace":
         commitPaneMode();
-        scheduleSessionSave();
-        void closePane(layout.activePaneId);
+        killActivePane();
         return;
     }
   }
@@ -705,6 +703,23 @@
       e.preventDefault();
       spawnGraphFromContext();
       return;
+    }
+    if (meta && !e.altKey && !e.shiftKey && e.code === "BracketLeft") {
+      e.preventDefault();
+      selectPrevPane();
+      return;
+    }
+    if (meta && !e.altKey && !e.shiftKey && e.code === "BracketRight") {
+      e.preventDefault();
+      selectNextPane();
+      return;
+    }
+    if (meta && !e.altKey && !e.shiftKey && e.code === "KeyW") {
+      if (closeActiveEmptyPane()) {
+        e.preventDefault();
+        e.stopPropagation();
+        return;
+      }
     }
     if (e.altKey && e.shiftKey && !meta) {
       // e.code is layout-and-modifier-independent, so this branch
@@ -827,6 +842,28 @@
       })();
     }
   }
+  function leafPaneCount(): number {
+    return Object.values(layout.nodes).filter((node) => node.kind === "leaf").length;
+  }
+  function closeTabsInActivePane(): void {
+    const paneId = layout.activePaneId;
+    void closeTabsInPane(paneId).then((closed) => {
+      if (closed) scheduleSessionSave();
+    });
+  }
+  function killActivePane(opts?: { force?: boolean }): void {
+    const paneId = layout.activePaneId;
+    void closePane(paneId, opts).then((closed) => {
+      if (closed) scheduleSessionSave();
+    });
+  }
+  function closeActiveEmptyPane(): boolean {
+    const p = activePane();
+    if (p.tabs.length !== 0) return false;
+    if (leafPaneCount() <= 1) return false;
+    killActivePane({ force: true });
+    return true;
+  }
   onMount(() => document.addEventListener("keydown", onWindowKey));
   onDestroy(() => document.removeEventListener("keydown", onWindowKey));
 
@@ -853,7 +890,13 @@
     if (paneMode.active) return;
     const p = activePane();
     const active = p.tabs.find((t) => t.id === p.activeTabId);
-    if (!active) return;
+    if (!active) {
+      if (closeActiveEmptyPane()) {
+        e.preventDefault();
+        e.stopPropagation();
+      }
+      return;
+    }
     // Terminal: leave the event alone so xterm forwards Ctrl+D
     // (EOF) to the shell. The shell exit collapses the tab through
     // the existing terminal-session lifecycle.
@@ -938,6 +981,12 @@
       case "app.pane.prev":
         selectPrevPane();
         return;
+      case "app.pane.closeTabs":
+        closeTabsInActivePane();
+        return;
+      case "app.pane.kill":
+        killActivePane();
+        return;
       case "app.tab.next":
         selectNextTabInActivePane();
         return;
@@ -952,6 +1001,7 @@
       case "app.tab.close": {
         const p = activePane();
         if (p.activeTabId) closeTab(p.id, p.activeTabId);
+        else closeActiveEmptyPane();
         return;
       }
       // `fullstack-56`: dropped `app.save` — autosave covers the
@@ -1154,12 +1204,11 @@
      as "the markdown notes app" rather than "GitHub Dark with our
      stuff in it"; functional colors (link blue, accent green, warn
      amber, pane focus) are kept distinct. */
-  /* `fullstack-59`: pane-scoped theme overrides re-apply the same
-     token block at `.pane[data-theme="..."]` so a per-Hybrid theme
-     pick cascades to the pane's subtree without touching the root.
-     A pane with no `data-theme` attribute inherits from the root. */
+  /* Surface-scoped theme overrides re-apply the same token block at
+     `[data-theme="..."]` so a Hybrid body theme pick cascades only
+     through that surface subtree without touching the root. */
   :global(:root),
-  :global(.pane[data-theme="dark"]) {
+  :global([data-theme="dark"]) {
     --bg: #1c1c1e;
     --bg-card: #232325;
     --bg-elev: #2a2a2c;
@@ -1271,8 +1320,7 @@
        into the background). */
     --pane-shadow: 0 1px 6px rgba(255, 255, 255, 0.08);
   }
-  :global([data-theme="light"]),
-  :global(.pane[data-theme="light"]) {
+  :global([data-theme="light"]) {
     --bg: #ffffff;
     --bg-card: #f5f5f7;
     --bg-elev: #ffffff;

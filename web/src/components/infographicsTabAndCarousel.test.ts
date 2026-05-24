@@ -4,6 +4,7 @@ import pane from "./Pane.svelte?raw";
 import carousel from "./EmptyPaneCarousel.svelte?raw";
 import infographics from "./InfographicsTab.svelte?raw";
 import app from "../App.svelte?raw";
+import shell from "./HybridSurfaceConfigShell.svelte?raw";
 
 // `fullstack-a-75`: Infographics tab kind + carousel redesign.
 // Tests pin: new tab type + helpers, the Pane.svelte render
@@ -140,15 +141,19 @@ describe("Wave 4: Infographics settings", () => {
     expect(infographics).toMatch(/<span class="menu-row-label">Settings<\/span>/);
   });
 
-  test("settings view exposes appearance radios and an OK button", () => {
-    expect(infographics).toMatch(/type InfographicsAppearance = "inherit" \| "light" \| "dark"/);
-    expect(infographics).toMatch(/data-theme=\{effectiveTheme\}/);
-    expect(infographics).toMatch(/aria-label="Infographics settings"/);
-    expect(infographics).toMatch(/name="infographics-appearance"/);
-    expect(infographics).toContain('"light"');
-    expect(infographics).toContain('"dark"');
+  test("settings view uses the shared surface theme shell and OK button", () => {
     expect(infographics).toMatch(
-      /<button type="button" class="config-ok" onclick=\{closeSettings\}>OK<\/button>/,
+      /import \{ surfaceThemeOverride \} from "\.\.\/state\/store\.svelte";/,
+    );
+    expect(infographics).toMatch(/data-theme=\{surfaceThemeOverride\("infographics"\)\}/);
+    expect(infographics).toMatch(/ariaLabel="Infographics settings"/);
+    expect(infographics).toMatch(
+      /<HybridSurfaceConfigShell[\s\S]{1,220}title="Infographics"[\s\S]{1,120}surface="infographics"[\s\S]{1,160}onDone=\{closeSettings\}/,
+    );
+    expect(infographics).not.toMatch(/type InfographicsAppearance/);
+    expect(infographics).not.toMatch(/name="infographics-appearance"/);
+    expect(shell).toMatch(
+      /<button type="button" class="config-ok" onclick=\{\(\) => onDone\?\.\(\)\}>OK<\/button>/,
     );
   });
 

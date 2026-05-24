@@ -2,6 +2,7 @@ import { describe, expect, test } from "vitest";
 import source from "./HybridGraphConfig.svelte?raw";
 import canvas from "./GraphCanvas.svelte?raw";
 import app from "../App.svelte?raw";
+import shell from "./HybridSurfaceConfigShell.svelte?raw";
 
 // `fullstack-a-51` G6 + Task D (bundled): markdown / source /
 // binary / media colour scheme + Hybrid Graph legend grid.
@@ -122,6 +123,9 @@ describe("fullstack-a-51 Task D: Hybrid Graph legend grid", () => {
   test("Wave 4 OK button routes through onDone", () => {
     expect(source).toMatch(/let \{ onDone \}: \{ onDone\?: \(\) => void \} = \$props\(\)/);
     expect(source).toMatch(
+      /<HybridSurfaceConfigShell title="Hybrid Graph" surface="graph" \{onDone\}>/,
+    );
+    expect(shell).toMatch(
       /<button type="button" class="config-ok" onclick=\{\(\) => onDone\?\.\(\)\}>OK<\/button>/,
     );
   });

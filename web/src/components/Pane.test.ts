@@ -153,6 +153,8 @@ describe("Pane right-click menus", () => {
       "Split bottom",
       "Next pane",
       "Previous pane",
+      "Close all tabs",
+      "Kill pane",
       "blue",
       "orange",
       "green",
@@ -167,7 +169,7 @@ describe("Pane right-click menus", () => {
     expect(target.querySelector(".pane")?.getAttribute("data-focus-color")).toBe("orange");
   }, 15000);
 
-  test("pane hamburger keeps roadmap actions without old destructive pane rows", async () => {
+  test("pane hamburger keeps roadmap actions without the old close-pane row", async () => {
     const pane: LeafNode = {
       kind: "leaf",
       id: "pane-trim",
@@ -184,8 +186,9 @@ describe("Pane right-click menus", () => {
     expect(labels).toContain("Previous pane");
     expect(labels).toContain("Split right");
     expect(labels).toContain("Split bottom");
+    expect(labels).toContain("Close all tabs");
+    expect(labels).toContain("Kill pane");
     expect(labels).not.toContain("Flip Hybrid");
-    expect(labels).not.toContain("Close all tabs");
     expect(labels).not.toContain("Close pane");
   }, 15000);
 
@@ -201,6 +204,12 @@ describe("Pane right-click menus", () => {
     );
     expect(paneSource).toMatch(
       /label: "Previous pane"[\s\S]*?command: "app\.pane\.prev"[\s\S]*?chord: formatChord\("Mod\+\["/,
+    );
+    expect(paneSource).toMatch(
+      /label: "Close all tabs"[\s\S]*?command: "app\.pane\.closeTabs"[\s\S]*?chord: chordLabel\("app\.pane\.closeTabs"\)/,
+    );
+    expect(paneSource).toMatch(
+      /label: "Kill pane"[\s\S]*?command: "app\.pane\.kill"[\s\S]*?chord: chordLabel\("app\.pane\.kill"\)/,
     );
   });
 
@@ -301,10 +310,10 @@ describe("Pane right-click menus", () => {
 describe("Pane back-side configuration view (fullstack-a-43)", () => {
   test("passes the flip callback into every back-side config OK button", () => {
     expect(paneSource).toMatch(
-      /<HybridTerminalConfig \{pane\} onDone=\{\(\) => flipHybrid\(pane\.id\)\} \/>/,
+      /<HybridTerminalConfig onDone=\{\(\) => flipHybrid\(pane\.id\)\} \/>/,
     );
     expect(paneSource).toMatch(
-      /<HybridEditorConfig \{pane\} onDone=\{\(\) => flipHybrid\(pane\.id\)\} \/>/,
+      /<HybridEditorConfig onDone=\{\(\) => flipHybrid\(pane\.id\)\} \/>/,
     );
     expect(paneSource).toMatch(
       /<HybridGraphConfig onDone=\{\(\) => flipHybrid\(pane\.id\)\} \/>/,
