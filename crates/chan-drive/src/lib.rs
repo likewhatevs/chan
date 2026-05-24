@@ -33,6 +33,7 @@ pub mod indexer;
 pub mod library;
 pub mod lock;
 pub mod markdown;
+pub mod metadata_archive;
 pub mod paths;
 pub mod progress;
 pub mod registry;
@@ -72,6 +73,10 @@ pub use index::{
 };
 pub use indexer::{GraphIndexer, DEFAULT_DEBOUNCE_MS};
 pub use library::{Library, ResetMode, ResetReport, SweepReport};
+pub use metadata_archive::{
+    validate_archive_entry_path, ArchiveEntryKind, MetadataArchivePathError, MetadataExportOptions,
+    MetadataExportReport, MetadataManifest, MetadataSchema, ScmIdentity,
+};
 pub use progress::{
     eta_secs_from, progress_fn, NoProgress, ProgressCallback, ProgressEvent, ProgressStage,
 };

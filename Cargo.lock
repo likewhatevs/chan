@@ -1018,6 +1018,7 @@ dependencies = [
  "serde_json",
  "sha2",
  "tantivy",
+ "tar",
  "tempfile",
  "thiserror 1.0.69",
  "tokenizers 0.21.4",
@@ -1025,6 +1026,7 @@ dependencies = [
  "tracing",
  "walkdir",
  "xattr",
+ "zstd",
 ]
 
 [[package]]
