@@ -38,7 +38,7 @@ Run the full local site gate:
 npm run check
 ```
 
-The build:
+The build/check gate:
 
 - renders `/`, `/install/`, `/manual/`, nested manual pages, and `/install.sh`
 - writes `CNAME` for `chan.app`
@@ -49,6 +49,8 @@ The build:
   URLs
 - fails if removed installer references reappear in generated public files
 - fails if stale public copy claims reappear in generated output
+- serves `dist/` on loopback and smokes `/`, `/install/`, `/manual/`,
+  `/manual/install/`, `/install.sh`, and `/install.ps1` absence
 
 ## Preview
 

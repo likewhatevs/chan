@@ -7,7 +7,8 @@
   },
   "scripts": {
     "build": "node scripts/build.mjs",
-    "check": "node --check scripts/build.mjs && node --check scripts/verify-release-assets.mjs && node scripts/build.mjs && sh -n dist/install.sh",
+    "check": "node --check scripts/build.mjs && node --check scripts/verify-release-assets.mjs && node --check scripts/smoke-dist.mjs && node scripts/build.mjs && node scripts/smoke-dist.mjs && sh -n dist/install.sh",
+    "smoke:dist": "node scripts/smoke-dist.mjs",
     "verify:release": "node scripts/verify-release-assets.mjs"
   }
 }

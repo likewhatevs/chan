@@ -48,6 +48,10 @@ Follow-up in this wave:
 - Committed follow-up checkpoints:
   - `7b6167f` guards generated public copy against stale claims.
   - `f949bcd` routes CI and Pages through `npm run check`.
+  - `1d3d750` records this checkpoint and queues the dist HTTP smoke.
+- The generated `dist/` artifact now has a loopback HTTP smoke for `/`,
+  `/install/`, `/manual/`, `/manual/install/`, `/install.sh`, and the removed
+  `/install.ps1` route.
 
 Latest local checks:
 
@@ -64,11 +68,10 @@ Latest local checks:
   because `chan-v0.14.0` predates this wave.
 - `npm run build` verifies the stale-copy guards against generated output.
 - `npm run check` in `web-marketing/`
+- `npm run smoke:dist` in `web-marketing/`
 
 Next wave:
 
-- Add a local HTTP smoke for the generated `web-marketing/dist/` routes in
-  the Track B test plan.
 - Run `npm run verify:release` without `--allow-missing-manual` and without
   `--skip-latest-download-heads` after the next `chan-v*` tag includes the
   manual bundle and the repo is public.
