@@ -63,18 +63,14 @@ toml = { workspace = true }
 reqwest = { workspace = true, features = ["stream"] }
 sha2 = "0.10"
 
-# Archive extraction for the upgrade flow. Linux + macOS releases
-# ship as `.tar.gz`; Windows releases ship as `.zip`. Pure-Rust
-# crates so the static-binary story holds.
+# Archive extraction for the upgrade flow. Published standalone CLI
+# releases ship as `.tar.gz` on Linux and macOS.
 [target.'cfg(not(target_os = "windows"))'.dependencies]
 tar = { workspace = true }
 flate2 = "1"
 
 [dev-dependencies]
 tempfile = { workspace = true }
-
-[target.'cfg(target_os = "windows")'.dependencies]
-zip = { version = "2", default-features = false, features = ["deflate"] }
 
 # macOS auto-wires candle's Metal backend so the default release
 # binary uses the GPU for embeddings without a feature flag. The

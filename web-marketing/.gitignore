@@ -1,10 +1,10 @@
-# Local preview tools that might land in this dir (npx serve etc).
+# Local preview tools that might land in this dir.
 node_modules/
 
 # macOS Finder cruft.
 .DS_Store
 
-# Any future build output. Site has no build step today, but reserve
-# the path in case a renderer is added later.
+# Generated static site. This is the only publishable artifact, but it is
+# rebuilt by CI and Pages jobs.
 dist/
 build/

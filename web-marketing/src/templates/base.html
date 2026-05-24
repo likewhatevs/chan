@@ -1,0 +1,39 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>{{title}}</title>
+<meta name="description" content="{{description}}" />
+<link rel="icon" href="/favicon.ico" />
+<link rel="stylesheet" href="/assets/site.css" />
+<script src="/assets/site.js" defer></script>
+</head>
+<body class="{{bodyClass}}" data-mode="light">
+<div class="site-shell">
+  <header class="site-header">
+    <a class="brand" href="/" aria-label="Chan home">
+      <span class="brand-mark" aria-hidden="true"></span>
+      <span>chan</span>
+    </a>
+    <nav class="site-nav" aria-label="Site">
+        {{siteNav}}
+    </nav>
+    <button class="theme-button" id="theme-toggle" type="button" aria-label="Toggle theme">
+      <span class="theme-sun" aria-hidden="true">sun</span>
+      <span class="theme-moon" aria-hidden="true">moon</span>
+    </button>
+  </header>
+
+  <main>
+{{content}}
+  </main>
+
+  <footer class="site-footer">
+    <span>chan</span>
+    <a href="mailto:hello@chan.app">hello@chan.app</a>
+    <a href="https://github.com/fiorix/chan">github.com/fiorix/chan</a>
+  </footer>
+</div>
+</body>
+</html>

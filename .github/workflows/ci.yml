@@ -148,3 +148,18 @@ jobs:
         working-directory: chan/web
       - run: npm run build
         working-directory: chan/web
+
+  site:
+    name: web-marketing (build)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: chan
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - run: npm run build
+        working-directory: chan/web-marketing
+      - run: sh -n dist/install.sh
+        working-directory: chan/web-marketing

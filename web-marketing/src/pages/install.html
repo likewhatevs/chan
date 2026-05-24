@@ -1,0 +1,69 @@
+<section class="page-head">
+  <p class="eyebrow">install</p>
+  <h1>Install Chan</h1>
+  <p>
+    Use Chan Desktop for the normal editor experience. Use the standalone CLI
+    when you want <code>chan serve</code>, shell-first workflows, or a server
+    binary without the desktop shell.
+  </p>
+</section>
+
+<section class="install-section">
+  <div class="section-heading">
+    <h2>Desktop</h2>
+    <p>Desktop packages are built by the desktop release workflow.</p>
+  </div>
+  <div class="download-cards">
+    <a class="download-card" href="{{desktopDmgUrl}}">
+      <strong>macOS</strong>
+      <span>DMG</span>
+    </a>
+    <a class="download-card" href="{{desktopAppImageUrl}}">
+      <strong>Linux</strong>
+      <span>AppImage</span>
+    </a>
+    <a class="download-card" href="{{desktopDebUrl}}">
+      <strong>Linux</strong>
+      <span>deb</span>
+    </a>
+  </div>
+</section>
+
+<section class="install-section">
+  <div class="section-heading">
+    <h2>Standalone CLI</h2>
+    <p>
+      The shell installer installs only the <code>chan</code> CLI. It does not
+      install desktop packages.
+    </p>
+  </div>
+
+  <div class="command-copy" data-copy-block>
+    <code><span>$</span><b data-copy-value>curl -fsSL https://chan.app/install.sh | sh</b></code>
+    <button type="button">Copy</button>
+  </div>
+  <p class="minor">
+    Set <code>PREFIX</code> to change the install directory. Set
+    <code>BASE</code> to test another release mirror.
+  </p>
+
+  <div class="download-list">
+    <a href="{{cliLinuxX64Url}}">Linux x86_64 tarball</a>
+    <a href="{{cliLinuxArm64Url}}">Linux aarch64 tarball</a>
+    <a href="{{cliMacArm64Url}}">macOS aarch64 tarball</a>
+    <a href="/install.sh">Read install.sh</a>
+  </div>
+</section>
+
+<section class="install-section">
+  <div class="section-heading">
+    <h2>After install</h2>
+  </div>
+  <div class="command-copy static">
+    <code><span>$</span><b>chan serve ~/notes</b></code>
+  </div>
+  <p>
+    The CLI starts a loopback server, prints the per-launch URL with its bearer
+    token, and serves the editor from the embedded web bundle.
+  </p>
+</section>

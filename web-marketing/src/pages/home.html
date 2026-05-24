@@ -1,0 +1,94 @@
+<section class="hero">
+  <div class="hero-copy">
+    <p class="eyebrow">local-first markdown drives</p>
+    <h1>chan</h1>
+    <p class="lede">
+      A desktop and CLI editor for plain markdown folders. Open a drive,
+      write in tabs and panes, link files by path, and keep the source of
+      truth on disk.
+    </p>
+    <div class="button-row">
+      <a class="button primary" href="/install/">Install</a>
+      <a class="button secondary" href="/manual/">Read the manual</a>
+    </div>
+  </div>
+  <figure class="hero-shot">
+    <img src="/assets/editor-recipes.png" alt="Chan editor with markdown files open in several tabs" />
+    <figcaption>Chan running against a local notes drive.</figcaption>
+  </figure>
+</section>
+
+<section class="feature-grid" aria-label="Core behavior">
+  <article>
+    <h2>Plain files</h2>
+    <p>
+      Markdown files stay under the drive folder. Edits from other tools are
+      picked up by the running app.
+    </p>
+  </article>
+  <article>
+    <h2>Path links</h2>
+    <p>
+      Type <code>[[</code> to pick a file path from the drive. Wiki-links
+      resolve relative paths instead of hiding data in an app database.
+    </p>
+  </article>
+  <article>
+    <h2>Search and graph</h2>
+    <p>
+      Search, backlinks, tags, mentions, and graph views are built from the
+      files in the drive.
+    </p>
+  </article>
+  <article>
+    <h2>Terminal and MCP</h2>
+    <p>
+      Embedded terminals start at the drive root and export
+      <code>CHAN_MCP_*</code> discovery variables for external agent CLIs.
+    </p>
+  </article>
+</section>
+
+<section class="split-section">
+  <div>
+    <p class="eyebrow">install</p>
+    <h2>Desktop first, CLI when you want a server</h2>
+    <p>
+      The public install path starts with Chan Desktop for local editing. The
+      standalone <code>chan</code> binary remains available for terminal users,
+      remote shells, and explicit <code>chan serve</code> workflows.
+    </p>
+  </div>
+  <div class="download-list">
+    <a href="{{desktopDmgUrl}}">macOS DMG</a>
+    <a href="{{desktopAppImageUrl}}">Linux AppImage</a>
+    <a href="{{desktopDebUrl}}">Linux deb</a>
+  </div>
+</section>
+
+<section class="split-section">
+  <div>
+    <p class="eyebrow">local-first</p>
+    <h2>Local by default, tunnel by choice</h2>
+    <p>
+      Local use needs no account. The HTTP server binds to loopback by
+      default. Tunnel mode is opt-in and publishes the drive through
+      <code>drive.chan.app</code> only when you configure it.
+    </p>
+  </div>
+  <figure class="inline-shot">
+    <img src="/assets/editor-dark.png" alt="Chan editor in dark mode" />
+  </figure>
+</section>
+
+<section class="support-section">
+  <div>
+    <p class="eyebrow">support</p>
+    <h2>Fund the work</h2>
+    <p>
+      Chan is independent software. Small tips help cover time spent on
+      releases, packaging, and documentation.
+    </p>
+  </div>
+  <img src="/qr-donate.png" alt="Donation QR code" width="700" height="700" />
+</section>

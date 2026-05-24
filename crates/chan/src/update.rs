@@ -5,22 +5,20 @@
 //      newer release is known. No network access; the probe is what
 //      populates the cache.
 //   2. Probe. [`run_probe`] is spawned as a tokio task at the start
-//      of `chan serve`. It hits `https://chan.app/dl/latest/VERSION`
-//      with a short timeout, writes the result to the state file,
+//      of `chan serve`. It hits GitHub's latest-release JSON with a
+//      short timeout, writes the result to the state file,
 //      and prints the banner inline if the just-fetched version is
 //      newer than the running binary's. Throttled to once per
 //      [`PROBE_INTERVAL_HOURS`] across `chan serve` restarts.
 //   3. `chan upgrade`. [`run_upgrade`] resolves the running binary
 //      via [`std::env::current_exe`], downloads the release archive
 //      for the current target into a sibling temp file, verifies
-//      SHA-256 against `chan.app/dl/v{version}/SHA256SUMS`,
+//      SHA-256 against the release's `SHA256SUMS`,
 //      extracts the `chan` binary out of the archive into a second
 //      temp file, and atomically renames it over the running
-//      executable. Windows parks the running binary at a sibling
-//      `.chan.upgrade-old.*` path first because the active `.exe`
-//      cannot be replaced in place.
+//      executable.
 //
-// URLs are hardcoded to `https://chan.app/dl/...`. Self-hosted /
+// URLs are hardcoded to GitHub Releases. Self-hosted /
 // mirrored deployments are not supported. Offline / proxy hosts:
 // reqwest honors HTTP_PROXY / HTTPS_PROXY / ALL_PROXY / NO_PROXY
 // from the environment, and probe failures are swallowed (verbose
@@ -28,7 +26,7 @@
 
 use std::env;
 use std::fs;
-use std::io::{Read, Write};
+use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime};
 
@@ -36,8 +34,8 @@ use anyhow::{bail, Context, Result};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
-const DL_BASE: &str = "https://chan.app/dl";
-const VERSION_URL: &str = "https://chan.app/dl/latest/VERSION";
+const LATEST_RELEASE_URL: &str = "https://api.github.com/repos/fiorix/chan/releases/latest";
+const RELEASE_DOWNLOAD_BASE: &str = "https://github.com/fiorix/chan/releases/download";
 
 /// Disable the probe (banner still prints from cached state).
 const ENV_DISABLE: &str = "CHAN_UPDATE_CHECK";
@@ -106,32 +104,90 @@ fn write_state(path: &Path, state: &State) -> Result<()> {
     chan_drive::fs_ops::atomic_write(path, &body).context("writing state file")
 }
 
-/// Match the artifact triple to release.yml.
+/// Match the standalone CLI tarballs published by release.yml and install.sh.
 ///
 /// Returns `(target_triple, archive_extension, binary_filename)`.
-/// `binary_filename` is the name of the chan binary inside the
-/// extracted archive (`chan` everywhere except Windows).
 pub fn current_target() -> Result<(&'static str, &'static str, &'static str)> {
-    match (env::consts::OS, env::consts::ARCH) {
+    release_target_for(env::consts::OS, env::consts::ARCH)
+}
+
+fn release_target_for(os: &str, arch: &str) -> Result<(&'static str, &'static str, &'static str)> {
+    match (os, arch) {
         ("linux", "x86_64") => Ok(("x86_64-unknown-linux-gnu", "tar.gz", "chan")),
         ("linux", "aarch64") => Ok(("aarch64-unknown-linux-gnu", "tar.gz", "chan")),
         ("macos", "aarch64") => Ok(("aarch64-apple-darwin", "tar.gz", "chan")),
-        ("windows", "x86_64") => Ok(("x86_64-pc-windows-msvc", "zip", "chan.exe")),
-        ("windows", "aarch64") => Ok(("aarch64-pc-windows-msvc", "zip", "chan.exe")),
         (os, arch) => bail!(
-            "no published chan release for {os}/{arch}. \
-             Supported targets: linux x86_64/aarch64, macos aarch64, \
-             windows x86_64/aarch64."
+            "no published standalone chan CLI release for {os}/{arch}. \
+             Supported targets: linux x86_64/aarch64, macos aarch64."
         ),
     }
 }
 
-fn archive_url(version: &str, target: &str, ext: &str) -> String {
-    format!("{DL_BASE}/v{version}/chan-{target}.{ext}")
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ReleaseVersion {
+    /// GitHub Release tag, matching release.yml's `chan-v*` trigger.
+    tag: String,
+    /// Bare semver used for comparisons and user-facing messages.
+    version: String,
 }
 
-fn checksums_url(version: &str) -> String {
-    format!("{DL_BASE}/v{version}/SHA256SUMS")
+#[derive(Debug, Deserialize)]
+struct GithubRelease {
+    tag_name: String,
+}
+
+fn release_from_tag(tag: &str) -> Result<ReleaseVersion> {
+    let tag = tag.trim();
+    if tag.is_empty() {
+        bail!("release tag cannot be empty");
+    }
+    let version = tag
+        .strip_prefix("chan-v")
+        .context("GitHub release tag must use the chan-v<version> form")?
+        .to_string();
+    validate_version(&version)?;
+    Ok(ReleaseVersion {
+        tag: tag.to_string(),
+        version,
+    })
+}
+
+fn release_from_version_override(version: &str) -> Result<ReleaseVersion> {
+    let version = version.trim();
+    if version.is_empty() {
+        bail!("--version cannot be empty");
+    }
+    // Keep the CLI surface clean: users type versions, release.yml
+    // owns the `chan-v` tag convention.
+    if version.starts_with("chan-v") || version.starts_with('v') {
+        bail!("--version expects a bare version such as 0.14.0");
+    }
+    validate_version(version)?;
+    Ok(ReleaseVersion {
+        tag: format!("chan-v{version}"),
+        version: version.to_string(),
+    })
+}
+
+fn validate_version(version: &str) -> Result<()> {
+    if version.is_empty() {
+        bail!("release version cannot be empty");
+    }
+    if !version
+        .chars()
+        .all(|c| c.is_ascii_alphanumeric() || c == '.' || c == '-' || c == '+')
+    {
+        bail!("release version contains suspicious characters: {version:?}");
+    }
+    Ok(())
+}
+
+fn archive_url(tag: &str, target: &str, ext: &str) -> String {
+    format!("{RELEASE_DOWNLOAD_BASE}/{tag}/chan-{target}.{ext}")
+}
+
+fn checksums_url(tag: &str) -> String {
+    format!("{RELEASE_DOWNLOAD_BASE}/{tag}/SHA256SUMS")
 }
 
 fn ensure_https_url(url: &str) -> Result<()> {
@@ -142,7 +198,11 @@ fn ensure_https_url(url: &str) -> Result<()> {
 }
 
 fn parse_semver(s: &str) -> Option<(u32, u32, u32)> {
-    let s = s.trim().trim_start_matches('v');
+    let s = s
+        .trim()
+        .strip_prefix("chan-v")
+        .unwrap_or(s.trim())
+        .trim_start_matches('v');
     let mut parts = s.split('.');
     let major: u32 = parts.next()?.parse().ok()?;
     let minor: u32 = parts.next()?.parse().ok()?;
@@ -222,20 +282,19 @@ async fn fetch_text(client: &reqwest::Client, url: &str) -> Result<String> {
     String::from_utf8(bytes.to_vec()).with_context(|| format!("decoding utf-8 body of {url}"))
 }
 
-/// Fetch and trim the latest version string from `chan.app/dl/latest/VERSION`.
-async fn fetch_latest_version(client: &reqwest::Client) -> Result<String> {
-    let body = fetch_text(client, VERSION_URL).await?;
-    let v = body.trim().trim_start_matches('v').to_string();
-    if v.is_empty() {
-        bail!("VERSION endpoint returned empty body");
-    }
-    if !v
-        .chars()
-        .all(|c| c.is_ascii_alphanumeric() || c == '.' || c == '-' || c == '+')
-    {
-        bail!("VERSION endpoint returned suspicious payload: {v:?}");
-    }
-    Ok(v)
+fn parse_latest_release(body: &str) -> Result<ReleaseVersion> {
+    let release: GithubRelease =
+        serde_json::from_str(body).context("latest release response is not JSON")?;
+    // This is intentionally strict. Phase 10 is pre-release work, so
+    // the new public contract starts with `chan-v*` and no legacy
+    // tag spelling needs to survive.
+    release_from_tag(&release.tag_name).context("latest release JSON has invalid tag_name")
+}
+
+/// Fetch and normalize the latest version from GitHub Releases.
+async fn fetch_latest_release(client: &reqwest::Client) -> Result<ReleaseVersion> {
+    let body = fetch_text(client, LATEST_RELEASE_URL).await?;
+    parse_latest_release(&body)
 }
 
 /// Print the banner if a newer release is cached. Stderr-only,
@@ -290,21 +349,22 @@ pub async fn run_probe() {
     };
     let checked_version = env!("CARGO_PKG_VERSION").to_string();
     let now = now_unix();
-    let state = match fetch_latest_version(&client).await {
+    let state = match fetch_latest_release(&client).await {
         Ok(latest) => {
             // Print the banner inline so the user sees it on the
             // session that triggered the probe, not just the next
             // restart. Only when strictly newer.
-            if semver_newer(&latest, &checked_version) {
+            if semver_newer(&latest.version, &checked_version) {
                 eprintln!(
-                    "chan: update available: {latest} (you have {checked_version}). \
-                     Run `chan upgrade` to update, or set CHAN_UPDATE_CHECK=0 to silence."
+                    "chan: update available: {} (you have {checked_version}). \
+                     Run `chan upgrade` to update, or set CHAN_UPDATE_CHECK=0 to silence.",
+                    latest.version
                 );
             }
             State {
                 checked_at: now,
                 checked_version,
-                latest_version: Some(latest),
+                latest_version: Some(latest.version),
             }
         }
         Err(e) => {
@@ -383,21 +443,16 @@ pub async fn run_upgrade(opts: UpgradeOptions) -> Result<()> {
 
     let client = http_client(UPGRADE_CONNECT_TIMEOUT, UPGRADE_TOTAL_TIMEOUT)?;
 
-    let target_version = match opts.version_override.as_deref() {
-        Some(v) => {
-            let v = v.trim().trim_start_matches('v').to_string();
-            if v.is_empty() {
-                bail!("--version cannot be empty");
-            }
-            v
-        }
+    let target_release = match opts.version_override.as_deref() {
+        Some(v) => release_from_version_override(v)?,
         None => {
             if opts.verbose {
-                eprintln!("chan: checking latest version at {VERSION_URL}");
+                eprintln!("chan: checking latest release at {LATEST_RELEASE_URL}");
             }
-            fetch_latest_version(&client).await?
+            fetch_latest_release(&client).await?
         }
     };
+    let target_version = target_release.version.clone();
 
     if target_version == current {
         println!("chan: already at version {current}");
@@ -419,11 +474,10 @@ pub async fn run_upgrade(opts: UpgradeOptions) -> Result<()> {
         .parent()
         .context("current executable has no parent directory")?
         .to_path_buf();
-    cleanup_upgrade_backups(&binary_dir, exe_path.file_name().and_then(|s| s.to_str()));
 
     let archive_name = format!("chan-{target}.{ext}");
-    let archive_url = archive_url(&target_version, target, ext);
-    let checksums_url = checksums_url(&target_version);
+    let archive_url = archive_url(&target_release.tag, target, ext);
+    let checksums_url = checksums_url(&target_release.tag);
 
     let (gerund, participle) = action_words(&target_version, &current);
     println!(
@@ -448,7 +502,7 @@ pub async fn run_upgrade(opts: UpgradeOptions) -> Result<()> {
 
     // Pre-flight writability check on the binary's directory.
     // Writing a probe file is more reliable than checking mode bits
-    // because of ACLs, bind mounts, and Windows.
+    // because of ACLs and bind mounts.
     {
         let probe = binary_dir.join(format!(".chan.upgrade-probe.{}", std::process::id()));
         fs::File::create(&probe).with_context(|| {
@@ -541,49 +595,10 @@ fn extract_binary(
     }
     match ext {
         "tar.gz" => extract_tar_gz(archive, out, bin_name),
-        "zip" => extract_zip(archive, out, bin_name),
         other => bail!("unsupported archive extension: {other}"),
     }
 }
 
-const UPGRADE_BACKUP_PREFIX: &str = ".chan.upgrade-old.";
-
-#[cfg(any(test, target_os = "windows"))]
-fn upgrade_backup_file_name(exe_file_name: &str) -> String {
-    format!(
-        "{UPGRADE_BACKUP_PREFIX}{exe_file_name}.{}",
-        std::process::id()
-    )
-}
-
-#[cfg(any(test, target_os = "windows"))]
-fn upgrade_backup_path(exe_path: &Path) -> PathBuf {
-    let exe_file_name = exe_path
-        .file_name()
-        .and_then(|s| s.to_str())
-        .unwrap_or("chan");
-    exe_path.with_file_name(upgrade_backup_file_name(exe_file_name))
-}
-
-fn cleanup_upgrade_backups(binary_dir: &Path, exe_file_name: Option<&str>) {
-    let Some(exe_file_name) = exe_file_name else {
-        return;
-    };
-    let prefix = format!("{UPGRADE_BACKUP_PREFIX}{exe_file_name}.");
-    let Ok(entries) = fs::read_dir(binary_dir) else {
-        return;
-    };
-    for entry in entries.flatten() {
-        let Some(name) = entry.file_name().to_str().map(str::to_owned) else {
-            continue;
-        };
-        if name.starts_with(&prefix) {
-            let _ = fs::remove_file(entry.path());
-        }
-    }
-}
-
-#[cfg(not(target_os = "windows"))]
 fn install_replacement(new_bin: &Path, exe_path: &Path) -> Result<()> {
     fs::rename(new_bin, exe_path).with_context(|| {
         format!(
@@ -592,48 +607,6 @@ fn install_replacement(new_bin: &Path, exe_path: &Path) -> Result<()> {
             new_bin.display()
         )
     })
-}
-
-#[cfg(target_os = "windows")]
-fn install_replacement(new_bin: &Path, exe_path: &Path) -> Result<()> {
-    let backup_path = upgrade_backup_path(exe_path);
-    fs::rename(exe_path, &backup_path).with_context(|| {
-        format!(
-            "parking current binary {} at {}",
-            exe_path.display(),
-            backup_path.display()
-        )
-    })?;
-
-    match fs::rename(new_bin, exe_path) {
-        Ok(()) => {
-            let _ = fs::remove_file(&backup_path);
-            Ok(())
-        }
-        Err(install_err) => {
-            match fs::rename(&backup_path, exe_path) {
-                Ok(()) => {}
-                Err(restore_err) => {
-                    bail!(
-                        "replacing {} with {} failed: {}; restoring {} from {} failed: {}",
-                        exe_path.display(),
-                        new_bin.display(),
-                        install_err,
-                        exe_path.display(),
-                        backup_path.display(),
-                        restore_err
-                    );
-                }
-            }
-            Err(install_err).with_context(|| {
-                format!(
-                    "replacing {} with {}",
-                    exe_path.display(),
-                    new_bin.display()
-                )
-            })
-        }
-    }
 }
 
 #[cfg(not(target_os = "windows"))]
@@ -663,39 +636,7 @@ fn extract_tar_gz(archive: &Path, out: &Path, bin_name: &str) -> Result<()> {
 
 #[cfg(target_os = "windows")]
 fn extract_tar_gz(_archive: &Path, _out: &Path, _bin_name: &str) -> Result<()> {
-    bail!("tar.gz extraction is not compiled in on Windows builds")
-}
-
-#[cfg(target_os = "windows")]
-fn extract_zip(archive: &Path, out: &Path, bin_name: &str) -> Result<()> {
-    let f = fs::File::open(archive).with_context(|| format!("opening {}", archive.display()))?;
-    let mut zip =
-        zip::ZipArchive::new(f).with_context(|| format!("opening {} as zip", archive.display()))?;
-    for i in 0..zip.len() {
-        let mut entry = zip.by_index(i).context("indexing zip entry")?;
-        if !entry.is_file() {
-            continue;
-        }
-        let name = entry
-            .enclosed_name()
-            .and_then(|p| p.file_name().map(|s| s.to_string_lossy().into_owned()))
-            .unwrap_or_default();
-        if name != bin_name {
-            continue;
-        }
-        let mut out_file =
-            fs::File::create(out).with_context(|| format!("creating {}", out.display()))?;
-        std::io::copy(&mut entry, &mut out_file)
-            .with_context(|| format!("extracting {bin_name}"))?;
-        out_file.flush()?;
-        return Ok(());
-    }
-    bail!("archive {} does not contain {bin_name}", archive.display())
-}
-
-#[cfg(not(target_os = "windows"))]
-fn extract_zip(_archive: &Path, _out: &Path, _bin_name: &str) -> Result<()> {
-    bail!("zip extraction is not compiled in on this build")
+    bail!("chan upgrade is not published for Windows")
 }
 
 #[cfg(unix)]
@@ -707,7 +648,6 @@ fn set_executable_mode(path: &Path) -> Result<()> {
 
 #[cfg(not(unix))]
 fn set_executable_mode(_path: &Path) -> Result<()> {
-    // Windows has no executable bit; .exe is determined by extension.
     Ok(())
 }
 
@@ -725,11 +665,6 @@ fn confirm(prompt: &str, default_yes: bool) -> Result<bool> {
     }
     Ok(matches!(answer.as_str(), "y" | "yes"))
 }
-
-// Silences `unused` when no `Read` callers compile in (tar path on
-// windows). Keeps the import survivable across the cfg-fence.
-#[allow(dead_code)]
-fn _read_assert(_: &dyn Read) {}
 
 #[cfg(test)]
 mod tests {
@@ -774,69 +709,56 @@ feedface00feedface00feedface00feedface00feedface00feedface00feed  unrelated.deb
 
     #[test]
     fn test_archive_url_shape() {
-        let url = archive_url("0.7.0", "x86_64-unknown-linux-gnu", "tar.gz");
+        let url = archive_url("chan-v0.14.0", "x86_64-unknown-linux-gnu", "tar.gz");
         assert_eq!(
             url,
-            "https://chan.app/dl/v0.7.0/chan-x86_64-unknown-linux-gnu.tar.gz"
+            "https://github.com/fiorix/chan/releases/download/chan-v0.14.0/chan-x86_64-unknown-linux-gnu.tar.gz"
         );
         assert_eq!(
-            checksums_url("0.7.0"),
-            "https://chan.app/dl/v0.7.0/SHA256SUMS"
+            checksums_url("chan-v0.14.0"),
+            "https://github.com/fiorix/chan/releases/download/chan-v0.14.0/SHA256SUMS"
         );
+    }
+
+    #[test]
+    fn test_parse_latest_release_requires_chan_tag() {
+        let release = parse_latest_release(r#"{"tag_name":"chan-v0.14.0"}"#).unwrap();
+        assert_eq!(
+            release,
+            ReleaseVersion {
+                tag: "chan-v0.14.0".into(),
+                version: "0.14.0".into(),
+            }
+        );
+        assert!(parse_latest_release(r#"{"tag_name":"v0.14.0"}"#).is_err());
+        assert!(parse_latest_release(r#"{"name":"chan-v0.14.0"}"#).is_err());
+    }
+
+    #[test]
+    fn test_version_override_renders_fresh_release_tag() {
+        let release = release_from_version_override("0.14.0").unwrap();
+        assert_eq!(
+            release,
+            ReleaseVersion {
+                tag: "chan-v0.14.0".into(),
+                version: "0.14.0".into(),
+            }
+        );
+        assert!(release_from_version_override("chan-v0.14.0").is_err());
     }
 
     #[test]
     fn test_ensure_https_url_rejects_plain_http() {
-        assert!(ensure_https_url("https://chan.app/dl/latest/VERSION").is_ok());
-        assert!(ensure_https_url("http://chan.app/dl/latest/VERSION").is_err());
+        assert!(ensure_https_url(LATEST_RELEASE_URL).is_ok());
+        assert!(
+            ensure_https_url("http://api.github.com/repos/fiorix/chan/releases/latest").is_err()
+        );
     }
 
     #[test]
-    fn test_upgrade_backup_path_shape() {
-        let exe = Path::new("/tmp/chan.exe");
-        let backup = upgrade_backup_path(exe);
-        assert_eq!(backup.parent(), Some(Path::new("/tmp")));
-        let name = backup.file_name().and_then(|s| s.to_str()).unwrap();
-        assert!(name.starts_with(".chan.upgrade-old.chan.exe."));
-    }
-
-    #[test]
-    fn test_cleanup_upgrade_backups_only_removes_matching_files() {
-        let dir = tempfile::tempdir().unwrap();
-        let matching = dir.path().join(".chan.upgrade-old.chan.exe.123");
-        let other_binary = dir.path().join(".chan.upgrade-old.other.exe.123");
-        let unrelated = dir.path().join("notes.md");
-        fs::write(&matching, b"old").unwrap();
-        fs::write(&other_binary, b"other").unwrap();
-        fs::write(&unrelated, b"keep").unwrap();
-
-        cleanup_upgrade_backups(dir.path(), Some("chan.exe"));
-
-        assert!(!matching.exists());
-        assert!(other_binary.exists());
-        assert!(unrelated.exists());
-    }
-
-    #[cfg(not(target_os = "windows"))]
-    #[test]
-    fn test_install_replacement_renames_on_non_windows() {
+    fn test_install_replacement_renames() {
         let dir = tempfile::tempdir().unwrap();
         let exe = dir.path().join("chan");
-        let new_bin = dir.path().join(".chan.upgrade-bin.test");
-        fs::write(&exe, b"old").unwrap();
-        fs::write(&new_bin, b"new").unwrap();
-
-        install_replacement(&new_bin, &exe).unwrap();
-
-        assert_eq!(fs::read(&exe).unwrap(), b"new");
-        assert!(!new_bin.exists());
-    }
-
-    #[cfg(target_os = "windows")]
-    #[test]
-    fn test_install_replacement_parks_old_binary_on_windows() {
-        let dir = tempfile::tempdir().unwrap();
-        let exe = dir.path().join("chan.exe");
         let new_bin = dir.path().join(".chan.upgrade-bin.test");
         fs::write(&exe, b"old").unwrap();
         fs::write(&new_bin, b"new").unwrap();
@@ -889,9 +811,40 @@ feedface00feedface00feedface00feedface00feedface00feedface00feed  unrelated.deb
     }
 
     #[test]
-    fn test_current_target_supported_pairs() {
-        // Only assert the running build's target resolves; the
-        // exhaustive matrix is enforced by the match.
+    fn test_release_target_for_active_public_artifacts() {
+        assert_eq!(
+            release_target_for("linux", "x86_64").unwrap(),
+            ("x86_64-unknown-linux-gnu", "tar.gz", "chan")
+        );
+        assert_eq!(
+            release_target_for("linux", "aarch64").unwrap(),
+            ("aarch64-unknown-linux-gnu", "tar.gz", "chan")
+        );
+        assert_eq!(
+            release_target_for("macos", "aarch64").unwrap(),
+            ("aarch64-apple-darwin", "tar.gz", "chan")
+        );
+    }
+
+    #[test]
+    fn test_release_target_for_inactive_public_artifacts() {
+        let windows = release_target_for("windows", "x86_64")
+            .unwrap_err()
+            .to_string();
+        assert!(windows.contains("no published standalone chan CLI release for windows/x86_64"));
+        assert!(windows.contains("linux x86_64/aarch64, macos aarch64"));
+        assert!(!windows.contains("windows x86_64/aarch64"));
+
+        let mac_intel = release_target_for("macos", "x86_64")
+            .unwrap_err()
+            .to_string();
+        assert!(mac_intel.contains("no published standalone chan CLI release for macos/x86_64"));
+    }
+
+    #[test]
+    fn test_current_target_supported_pair() {
+        // Only assert the running build's target resolves; the public
+        // release matrix is tested above.
         let _ = current_target().expect("target supported");
     }
 }

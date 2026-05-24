@@ -102,7 +102,7 @@ Useful flags:
 - `--no-token`: skip the bearer-token gate (loopback bind only).
 
 `chan upgrade` self-replaces the running binary against
-`https://chan.app/dl/...`, with SHA-256 verification. Set
+GitHub Releases at `github.com/fiorix/chan`, with SHA-256 verification. Set
 `CHAN_UPDATE_CHECK=0` to silence the once-per-day banner.
 
 Other subcommands: `chan list`, `chan remove`, `chan rename`, `chan

@@ -366,7 +366,7 @@ enum Command {
         #[command(subcommand)]
         action: MetadataAction,
     },
-    /// Self-upgrade: download the latest release from chan.app/dl,
+    /// Self-upgrade: download the latest GitHub Release,
     /// verify SHA256, and atomically replace the running binary.
     /// URLs are hardcoded; the only knobs are `-y` (skip prompt),
     /// `--check` (report only), and `--version` (pin a release).
@@ -380,8 +380,8 @@ enum Command {
         /// binary. Returns success in both directions.
         #[arg(long)]
         check: bool,
-        /// Pin a specific version instead of querying chan.app/dl.
-        /// Useful for downgrading or pinning to a tested release.
+        /// Pin a specific version instead of querying GitHub Releases.
+        /// Pass a bare version, for example `0.14.0`.
         #[arg(long)]
         version: Option<String>,
     },

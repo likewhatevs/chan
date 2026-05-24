@@ -1,14 +1,13 @@
 #!/bin/sh
-# chan installer for macOS and Linux.
+# chan CLI installer for macOS and Linux.
 #
 #   curl -fsSL https://chan.app/install.sh | sh
 #
-# Detects OS + arch, downloads the matching tarball from chan.app,
-# extracts the `chan` binary into PREFIX/bin (default
-# $HOME/.local/bin). Override with env:
+# Downloads the matching standalone CLI tarball from chan.app and
+# installs `chan` into PREFIX/bin. Defaults:
 #
-#   PREFIX=/usr/local sudo sh install.sh
-#   BASE=https://staging.chan.app sh install.sh
+#   PREFIX=$HOME/.local
+#   BASE=https://chan.app
 
 set -eu
 
@@ -34,7 +33,7 @@ case "$os" in
             *) err "Linux on $arch is not published." ;;
         esac
         ;;
-    *) err "Unsupported OS: $os. Try the Windows installer or download manually." ;;
+    *) err "Unsupported OS: $os." ;;
 esac
 
 url="$BASE/dl/latest/$asset"
@@ -55,8 +54,6 @@ fi
 
 tar -xzf "$tmp/chan.tar.gz" -C "$tmp"
 
-# Tarball layout is just the `chan` binary at the top level. Be
-# defensive: search in case future releases nest it under a dir.
 bin=$(find "$tmp" -type f -name chan -perm -u+x | head -n1 || true)
 [ -n "$bin" ] || err "binary 'chan' not found inside $asset"
 
