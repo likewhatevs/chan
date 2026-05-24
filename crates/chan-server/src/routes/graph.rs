@@ -57,14 +57,14 @@ pub async fn api_link_targets(
     Query(p): Query<LinkTargetsParams>,
 ) -> Response {
     let drive = state.drive();
-    blocking_response(
-        move || match drive.link_targets(&p.q, p.limit) {
-            Ok(targets) => Json(targets).into_response(),
-            Err(e) => err_from(&e),
-        },
-        "link targets",
-    )
-    .await
+    blocking_response(move || api_link_targets_sync(drive, p), "link targets").await
+}
+
+fn api_link_targets_sync(drive: Arc<chan_drive::Drive>, p: LinkTargetsParams) -> Response {
+    match drive.link_targets(&p.q, p.limit) {
+        Ok(targets) => Json(targets).into_response(),
+        Err(e) => err_from(&e),
+    }
 }
 
 #[derive(Deserialize)]
@@ -1995,6 +1995,58 @@ mod tests {
         let response = api_graph_sync(drive, params);
 
         assert_eq!(response.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn link_targets_endpoint_is_path_title_heading_picker_not_body_search() {
+        let (_cfg, _root, drive) = open_drive();
+        drive
+            .write_text(
+                "notes/carbonara.md",
+                "# Carbonara\n\nsecret-body-token\n\n## Ingredients\n",
+            )
+            .unwrap();
+        drive
+            .write_text("notes/unrelated.md", "# Unrelated\n\nsecret-body-token\n")
+            .unwrap();
+        drive.index_file("notes/carbonara.md").unwrap();
+        drive.index_file("notes/unrelated.md").unwrap();
+
+        let body_response = api_link_targets_sync(
+            drive.clone(),
+            LinkTargetsParams {
+                q: "secret-body-token".to_string(),
+                limit: 10,
+            },
+        );
+        assert_eq!(body_response.status(), StatusCode::OK);
+        let body_bytes = axum::body::to_bytes(body_response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let body_hits: Vec<chan_drive::LinkTarget> = serde_json::from_slice(&body_bytes).unwrap();
+        assert!(
+            body_hits.is_empty(),
+            "link targets must not search body text: {body_hits:?}",
+        );
+
+        let heading_response = api_link_targets_sync(
+            drive,
+            LinkTargetsParams {
+                q: "ingredients".to_string(),
+                limit: 10,
+            },
+        );
+        assert_eq!(heading_response.status(), StatusCode::OK);
+        let heading_bytes = axum::body::to_bytes(heading_response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let heading_hits: Vec<chan_drive::LinkTarget> =
+            serde_json::from_slice(&heading_bytes).unwrap();
+        assert!(heading_hits.iter().any(|hit| {
+            hit.kind == chan_drive::LinkTargetKind::Heading
+                && hit.path == "notes/carbonara.md"
+                && hit.heading.as_deref() == Some("Ingredients")
+        }));
     }
 
     #[test]

@@ -176,7 +176,9 @@ Server and editor consistency:
 Product contracts:
 
 - Codify `[[` as a file/path link picker, not global content search.
-- Add endpoint and UI tests for that contract.
+  Done: UI uses `/api/link-targets` and server tests pin that body text
+  does not match link-target results.
+- Add endpoint and UI tests for that contract. Done.
 - Fix or close the File Browser duplicate-key smoke failure.
 
 Config cleanup:
