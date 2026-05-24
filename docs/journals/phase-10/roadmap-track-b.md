@@ -33,6 +33,12 @@ Follow-up in this wave:
 - The public desktop asset names were checked against the existing
   `chan-v0.14.0` GitHub Release, and `release-desktop.yml` now verifies those
   names before upload.
+- `npm run verify:release` verifies the latest GitHub Release after a tag
+  completes, including desktop downloads, standalone CLI tarballs, `VERSION`,
+  `SHA256SUMS`, the manual bundle, and latest-download URLs.
+- Because `github.com/fiorix/chan` is still private during pre-release work,
+  current unauthenticated latest-download URL checks return 404. Use
+  `--skip-latest-download-heads` only for private-repo asset-shape checks.
 
 Latest local checks:
 
@@ -43,11 +49,16 @@ Latest local checks:
 - YAML parse of `.github/workflows/release-desktop.yml`
 - Local manual-bundle tar smoke using `web-marketing/dist/`
 - `gh api` asset-name check against `chan-v0.14.0`
+- `npm run verify:release -- --allow-missing-manual
+  --skip-latest-download-heads` against current latest release. This passes
+  the release asset checks and reports the expected missing manual bundle
+  because `chan-v0.14.0` predates this wave.
 
 Next wave:
 
-- Recheck public release assets after the next `chan-v*` tag includes the
-  manual bundle.
+- Run `npm run verify:release` without `--allow-missing-manual` and without
+  `--skip-latest-download-heads` after the next `chan-v*` tag includes the
+  manual bundle and the repo is public.
 
 ## Objectives
 

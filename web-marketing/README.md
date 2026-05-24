@@ -54,6 +54,23 @@ python3 -m http.server 8080 -d dist
 
 Then open `http://localhost:8080/`.
 
+## Release verification
+
+After a `chan-v*` tag release completes, verify the public release assets:
+
+```sh
+npm run verify:release
+```
+
+The verifier checks the latest GitHub Release for the desktop downloads,
+standalone CLI tarballs, `VERSION`, `SHA256SUMS`, the manual bundle, and the
+GitHub latest-download URLs used by the public site.
+
+While `github.com/fiorix/chan` is still private during pre-release work, use
+`--skip-latest-download-heads` for asset-shape checks. The public launch
+requires that flag to be absent so unauthenticated latest-download URLs are
+checked.
+
 ## Install surface
 
 `/install/` is desktop-first. The shell installer is CLI-only and supports
