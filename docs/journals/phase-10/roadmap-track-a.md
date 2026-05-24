@@ -26,6 +26,12 @@ Current state:
 - The embedded desktop tunnel server remains inbound attach plumbing.
 - Desktop can persist and open explicit outbound URL attachments for
   already-running `chan serve` instances.
+- On a fresh desktop launch with empty chan metadata, desktop creates
+  `Documents/Chan`, seeds it from `docs/manual/`, registers it, and
+  opens it through the embedded local server.
+- Existing desktop users with registered drives but no default drive
+  get a non-destructive prompt to choose an existing drive or create
+  `Documents/Chan`.
 
 Target state:
 
@@ -97,15 +103,16 @@ Attach modes:
 Default `Chan` drive:
 
 - On first desktop launch with fresh metadata, create a default drive named
-  `Chan`.
+  `Chan`. Done.
 - Store the drive under the platform Documents location:
   - macOS: `~/Documents/Chan`
   - Linux: XDG Documents directory, falling back to `~/Documents/Chan`
   - Windows: `Documents\Chan`
 - Seed the drive with the full `docs/manual/` tree embedded at build time.
+  Done for fresh metadata.
 - For existing users with metadata but no default `Chan` drive, prompt to
   designate an existing drive or create a new one. Do not wipe existing
-  metadata during migration.
+  metadata during migration. Done.
 - If the registered default `Chan` drive is missing on launch, enter a
   factory-reset confirmation flow before wiping chan metadata.
 
@@ -254,7 +261,7 @@ Operational release checks:
 1. Commit the embedded-local desktop merge and documentation cleanup. Done:
    `04e9a83`.
 2. Implement outbound URL attach in chan-desktop. Done.
-3. Current next: pause before CLI handoff to settle the IPC contract,
-   no-handoff escape hatch, and which `chan serve` flags force standalone
-   behavior.
-4. Continue with CLI handoff only after that design checkpoint.
+3. Implement fresh first-launch default `Chan` drive plus manual seed. Done.
+4. Implement existing-user default-drive prompt. Done.
+5. Current next remains open for selection. CLI handoff is deferred until
+   its design checkpoint.

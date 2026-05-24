@@ -2,6 +2,7 @@
 
 mod auth;
 mod config;
+mod default_drive;
 mod embedded;
 mod registry;
 mod serve;
@@ -945,6 +946,26 @@ fn tunnel_stop(app: tauri::AppHandle, state: State<Arc<AppState>>) {
     tunnel::stop_listening(&app, &state.tunnel);
 }
 
+#[tauri::command]
+fn default_drive_status() -> Result<default_drive::DefaultDriveStatus, String> {
+    default_drive::status()
+}
+
+#[tauri::command]
+fn choose_default_drive(path: String) -> Result<(), String> {
+    default_drive::choose_existing(Path::new(&path)).map(|_| ())
+}
+
+#[tauri::command]
+async fn create_default_drive(
+    app: tauri::AppHandle,
+    state: State<'_, Arc<AppState>>,
+) -> Result<(), String> {
+    let created = default_drive::create_default_drive()?;
+    let key = canonical_key(&created.root);
+    serve::start(app, Arc::clone(&state), key).await
+}
+
 const OUTBOUND_LABEL_MAX_CHARS: usize = 120;
 
 /// Persist an explicit outbound URL attachment and open it in a
@@ -1457,6 +1478,13 @@ fn main() {
         }
     }
     init_tracing();
+    let default_drive_boot = match default_drive::ensure_fresh_default_drive() {
+        Ok(created) => created,
+        Err(e) => {
+            tracing::warn!(error = %e, "first-launch default drive setup failed");
+            None
+        }
+    };
     let store = ConfigStore::new().expect("failed to init config store");
     let embedded = match embedded::EmbeddedServer::start() {
         Ok(server) => Some(server),
@@ -1547,6 +1575,31 @@ fn main() {
             // 127.0.0.1 happens on the IPC `tunnel_start` call.
             let _ = state_for_setup.tunnel.clone();
 
+            if let Some(created) = default_drive_boot.clone() {
+                let app_for_default = app.handle().clone();
+                let state_for_default = Arc::clone(&state_for_setup);
+                tauri::async_runtime::spawn(async move {
+                    let key = canonical_key(&created.root);
+                    if let Err(e) =
+                        serve::start(app_for_default.clone(), state_for_default, key).await
+                    {
+                        tracing::warn!(
+                            root = %created.root.display(),
+                            error = %e,
+                            "starting first-launch default drive failed",
+                        );
+                        emit_system_notice(
+                            &app_for_default,
+                            "warning",
+                            format!(
+                                "Created the default Chan drive at {}, but opening it failed: {e}",
+                                created.root.display(),
+                            ),
+                        );
+                    }
+                });
+            }
+
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -1568,6 +1621,9 @@ fn main() {
             tunnel_status,
             tunnel_start,
             tunnel_stop,
+            default_drive_status,
+            choose_default_drive,
+            create_default_drive,
             open_local_drive,
             open_tunneled_drive,
             add_outbound_drive,

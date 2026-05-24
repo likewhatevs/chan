@@ -885,6 +885,17 @@ mod tests {
     }
 
     #[test]
+    fn invoke_handler_registers_default_drive_ipcs() {
+        const MAIN_RS: &str = include_str!("main.rs");
+        assert!(MAIN_RS.contains("default_drive_status,"));
+        assert!(MAIN_RS.contains("choose_default_drive,"));
+        assert!(MAIN_RS.contains("create_default_drive,"));
+        assert!(MAIN_RS.contains("fn default_drive_status("));
+        assert!(MAIN_RS.contains("fn choose_default_drive("));
+        assert!(MAIN_RS.contains("fn create_default_drive("));
+    }
+
+    #[test]
     fn add_drive_passes_feature_flags_to_chan_cli() {
         // `fullstack-b-28b` slice iii: the pre-flight modal
         // collects feature choices BEFORE registration; `add_drive`
@@ -1084,6 +1095,27 @@ mod tests {
         assert!(
             MAIN_JS.contains("invoke('set_drive_features'"),
             "main.js must invoke set_drive_features on checkbox change"
+        );
+    }
+
+    #[test]
+    fn launcher_prompts_for_existing_user_default_drive() {
+        const MAIN_JS: &str = include_str!("../../src/main.js");
+        assert!(
+            MAIN_JS.contains("invoke('default_drive_status'"),
+            "launcher must query default-drive migration status",
+        );
+        assert!(
+            MAIN_JS.contains("showDefaultDriveDialog"),
+            "launcher must prompt when a default drive choice is needed",
+        );
+        assert!(
+            MAIN_JS.contains("invoke('choose_default_drive'"),
+            "launcher must let users choose an existing default drive",
+        );
+        assert!(
+            MAIN_JS.contains("invoke('create_default_drive'"),
+            "launcher must let users create Documents/Chan as default",
         );
     }
 

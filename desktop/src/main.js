@@ -97,6 +97,7 @@ let homeDir = '';
 /// "version-mismatch".
 let chanBinStatus = { ok: true, kind: 'ok', reason: '' };
 let chanBusy = false;
+let defaultDrivePromptDismissed = false;
 // Last rendered drives payload as a JSON string. The backend fires
 // `serves-changed` / `registry-changed` whenever the chan registry
 // is touched, which a running serve does often (timestamps, etc.).
@@ -143,7 +144,9 @@ function renderPath(full) {
 
 async function boot() {
   await checkChanBin();
-  const drives = await refresh();
+  let drives = await refresh();
+  await maybePromptDefaultDrive();
+  drives = await refresh();
   // When chan is unavailable, suppress the first-run "no drives →
   // open picker" prompt. The picker would either fail outright
   // (translocated / missing binary) or, worse, succeed and leave
@@ -154,6 +157,144 @@ async function boot() {
   } else {
     booted = true;
   }
+}
+
+async function maybePromptDefaultDrive() {
+  if (defaultDrivePromptDismissed) return;
+  let status;
+  try {
+    status = await invoke('default_drive_status');
+  } catch (e) {
+    showError(e);
+    return;
+  }
+  if (!status || !status.needs_prompt) return;
+  const choice = await showDefaultDriveDialog(status);
+  if (!choice.accepted) {
+    defaultDrivePromptDismissed = true;
+    return;
+  }
+  try {
+    if (choice.mode === 'create') {
+      await invoke('create_default_drive');
+    } else {
+      await invoke('choose_default_drive', { path: choice.path });
+    }
+  } catch (e) {
+    showError(e);
+    return;
+  }
+  await refresh();
+}
+
+function showDefaultDriveDialog(status) {
+  return new Promise((resolve) => {
+    const overlay = document.createElement('div');
+    overlay.className = 'preflight-overlay';
+    overlay.setAttribute('role', 'dialog');
+    overlay.setAttribute('aria-modal', 'true');
+    overlay.setAttribute('aria-labelledby', 'default-drive-title');
+
+    const dialog = document.createElement('div');
+    dialog.className = 'preflight-dialog default-drive-dialog';
+
+    const title = document.createElement('h2');
+    title.id = 'default-drive-title';
+    title.textContent = 'Choose default drive';
+    dialog.appendChild(title);
+
+    const intro = document.createElement('p');
+    intro.className = 'preflight-intro';
+    intro.textContent =
+      'Pick the drive Chan should open by default, or create a new Chan drive under Documents.';
+    dialog.appendChild(intro);
+
+    const form = document.createElement('div');
+    form.className = 'default-drive-options';
+
+    const drives = Array.isArray(status.drives) ? status.drives : [];
+    drives.forEach((drive, index) => {
+      const label = document.createElement('label');
+      label.className = 'default-drive-option';
+      const input = document.createElement('input');
+      input.type = 'radio';
+      input.name = 'default-drive-choice';
+      input.value = drive.path || '';
+      input.dataset.mode = 'existing';
+      input.checked = index === 0;
+      const span = document.createElement('span');
+      span.className = 'default-drive-path';
+      span.textContent = drive.path || '';
+      label.appendChild(input);
+      label.appendChild(span);
+      form.appendChild(label);
+    });
+
+    const createLabel = document.createElement('label');
+    createLabel.className = 'default-drive-option';
+    const createInput = document.createElement('input');
+    createInput.type = 'radio';
+    createInput.name = 'default-drive-choice';
+    createInput.value = status.suggested_root || '';
+    createInput.dataset.mode = 'create';
+    createInput.checked = drives.length === 0;
+    const createText = document.createElement('span');
+    createText.className = 'default-drive-path';
+    createText.textContent = `Create ${status.suggested_root || 'Documents/Chan'}`;
+    createLabel.appendChild(createInput);
+    createLabel.appendChild(createText);
+    form.appendChild(createLabel);
+
+    dialog.appendChild(form);
+
+    const buttons = document.createElement('div');
+    buttons.className = 'preflight-buttons';
+    const laterBtn = document.createElement('button');
+    laterBtn.className = 'btn';
+    laterBtn.type = 'button';
+    laterBtn.textContent = 'Later';
+    const continueBtn = document.createElement('button');
+    continueBtn.className = 'btn primary';
+    continueBtn.type = 'button';
+    continueBtn.textContent = 'Continue';
+    buttons.appendChild(laterBtn);
+    buttons.appendChild(continueBtn);
+    dialog.appendChild(buttons);
+
+    overlay.appendChild(dialog);
+    document.body.appendChild(overlay);
+
+    function close(result) {
+      document.removeEventListener('keydown', onKey);
+      overlay.remove();
+      resolve(result);
+    }
+    function selectedChoice() {
+      const selected = dialog.querySelector('input[name="default-drive-choice"]:checked');
+      if (!selected) return { accepted: false };
+      return {
+        accepted: true,
+        mode: selected.dataset.mode || 'existing',
+        path: selected.value || '',
+      };
+    }
+    function onKey(e) {
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        close({ accepted: false });
+      } else if (e.key === 'Enter') {
+        e.preventDefault();
+        close(selectedChoice());
+      }
+    }
+    laterBtn.addEventListener('click', () => close({ accepted: false }));
+    continueBtn.addEventListener('click', () => close(selectedChoice()));
+    overlay.addEventListener('click', (e) => {
+      if (e.target === overlay) close({ accepted: false });
+    });
+    document.addEventListener('keydown', onKey);
+    continueBtn.focus();
+  });
 }
 
 /// Call the Rust preflight, store the result, mirror it onto the

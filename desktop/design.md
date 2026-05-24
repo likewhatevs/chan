@@ -79,9 +79,11 @@ server is on the same machine.
 
 The `chan` registry at `~/.chan/config.toml` is the single source of
 truth for the set of known drives and their display names.
-chan-desktop is a read-only consumer of the drive set; mutation
-happens exclusively through `chan add` / `chan remove` (and, later,
-`chan rename`).
+chan-desktop treats that registry as the source of truth. Normal
+user-driven mutations go through `chan add` / `chan remove` (and,
+later, `chan rename`). The first-launch default-drive path is the
+only current exception: it calls `chan-drive` directly to create and
+register `Documents/Chan` before the launcher UI renders.
 
 The desktop owns a small config of its own at the
 platform-appropriate path. It holds desktop-only state such as
@@ -105,13 +107,11 @@ explicit refresh.
 A "drive" in chan-desktop maps 1:1 to a known drive in the `chan`
 registry. Visible state per drive in the inventory:
 
-| column | meaning                                                  |
-|--------|----------------------------------------------------------|
-| On     | toggle: is this drive's local runtime active?            |
-| Path   | canonical absolute path from the chan registry           |
-| Name   | display name from the chan registry; read-only in the UI |
-| URL    | the active local URL once the runtime is up              |
-| Close  | unregister: stop + `chan remove`                         |
+| column  | meaning                                             |
+|---------|-----------------------------------------------------|
+| On/type | local On toggle, `tunnel` tag, or outbound URL tag  |
+| Path    | local path, inbound label, or outbound URL label    |
+| Actions | Open split, feature toggle, browser open, forget    |
 
 Names are deliberately read-only in the desktop. Renaming a drive is
 done by running `chan rename` from a terminal; the watcher reflects
@@ -120,10 +120,21 @@ write-through to `chan rename` from the desktop UI, which we
 rejected for now to keep the registry-as-SoT contract one-way and
 the data flow obvious.
 
-### 3.2 Open drive
+### 3.2 First launch and Open drive
 
-Triggered by the "Open drive" button, and automatically on first
-launch when the chan registry is empty.
+On a fresh desktop launch with empty chan metadata, chan-desktop
+creates the platform default drive at `Documents/Chan`, seeds the
+embedded `docs/manual/` tree into it, registers it through
+`chan-drive`, and opens it through the embedded local server.
+
+When an existing registry has drives but no default drive, the
+launcher prompts once per process to choose an existing registered
+drive or create `Documents/Chan`. Choosing an existing drive only
+sets `default_drive_root`; it does not start, stop, move, or delete
+anything. Creating `Documents/Chan` registers and opens that new
+drive. The missing-default factory-reset path is still deferred.
+
+The "Open drive" button still registers a user-chosen folder.
 
 1. Tauri opens a native folder picker.
 2. The selected path is canonicalised and validated (see

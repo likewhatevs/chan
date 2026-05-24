@@ -53,6 +53,7 @@ tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 url = { workspace = true }
 semver = { workspace = true }
+rust-embed = "8"
 
 [dev-dependencies]
 chan-tunnel-client = { workspace = true }

@@ -6,9 +6,10 @@ terminal work.
 
 ## Desktop
 
-Open Chan Desktop and choose an existing folder or create a new drive from
-the drives window. Track A will use this manual tree as the first-launch seed
-for the default `Chan` drive.
+On a fresh install, Chan Desktop creates a `Chan` drive under your Documents
+folder and seeds it with this manual. From the drives window you can also
+open an existing folder, attach a running `chan serve` URL, or receive a
+remote drive through the listener.
 
 ## CLI
 
