@@ -78,6 +78,7 @@
   } from "../terminal/scrollback";
   import { uiConfirm } from "../state/confirm.svelte";
   import { clampMenu } from "./menuClamp";
+  import { portal } from "./portal";
   import {
     closeTabMenu,
     openTabMenu,
@@ -1533,6 +1534,7 @@
       role="menu"
       tabindex="-1"
       aria-label="terminal tab menu"
+      use:portal
       use:clampMenu={menuPos}
       onmousedown={(e) => e.stopPropagation()}
     >
@@ -1933,7 +1935,7 @@
   }
   .terminal-tab-menu-bubble {
     position: fixed;
-    z-index: 50;
+    z-index: 25500;
     background: var(--bg-card);
     border: 1px solid var(--border);
     border-radius: 8px;
@@ -1947,13 +1949,23 @@
     font-size: 13px;
     transform-origin: top left;
     animation: bubble-pop 260ms cubic-bezier(0.34, 1.56, 0.64, 1);
+    transition: transform 200ms cubic-bezier(0.34, 1.56, 0.64, 1);
+  }
+  .terminal-tab-menu-bubble:hover {
+    transform: scale(1.015);
   }
   @keyframes bubble-pop {
     0% { opacity: 0; transform: scale(0.92); }
     100% { opacity: 1; transform: scale(1); }
   }
   @media (prefers-reduced-motion: reduce) {
-    .terminal-tab-menu-bubble { animation: none; }
+    .terminal-tab-menu-bubble {
+      animation: none;
+      transition: none;
+    }
+    .terminal-tab-menu-bubble:hover {
+      transform: none;
+    }
   }
   .rename-row {
     display: grid;
@@ -2047,10 +2059,18 @@
     font-size: 13px;
     padding: 6px 8px;
     text-align: left;
+    transform-origin: left center;
+    transition:
+      background 80ms ease,
+      color 80ms ease,
+      transform 260ms cubic-bezier(0.34, 1.56, 0.64, 1);
   }
   .mbtn:hover,
   .mbtn.on {
     background: var(--hover-bg);
+  }
+  .mbtn:hover:not(:disabled) {
+    transform: scale(1.02);
   }
   .mbtn:disabled {
     color: var(--text-secondary);
@@ -2059,6 +2079,15 @@
   }
   .mbtn:disabled:hover {
     background: none;
+    transform: none;
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .mbtn {
+      transition: background 80ms ease, color 80ms ease;
+    }
+    .mbtn:hover {
+      transform: none;
+    }
   }
   /* `fullstack-a-67d`: destructive hint for Restart per
      addendum-a spec. Color-only; no background change so the

@@ -30,6 +30,7 @@
     wireToDialog,
   } from "../state/teamOrchestrator.svelte";
   import { clampMenu } from "./menuClamp";
+  import { portal } from "./portal";
   import type { TreeEntry } from "../api/types";
   import { isEditableText } from "../state/fileTypes";
   import { classifyFile, iconFor } from "../state/kinds";
@@ -817,23 +818,6 @@
     };
   }
 
-  /// Move the context-menu element out to <body> so its `position:
-  /// fixed` resolves against the viewport. OverlayShell's `.panel`
-  /// gets a transform on hover (and during the open animation), and
-  /// any non-`none` transform on an ancestor reparents fixed-
-  /// positioned descendants to that ancestor instead of the viewport
-  /// — without this portal the right-click menu visibly drifts away
-  /// from the click point, especially with the inspector pane open
-  /// (per Alex's phase-3 screenshot). Mirrors HamburgerMenu's portal.
-  function portal(node: HTMLElement): { destroy(): void } {
-    document.body.appendChild(node);
-    return {
-      destroy() {
-        node.parentNode?.removeChild(node);
-      },
-    };
-  }
-
   /// Dismiss the context menu on any click outside it. Registered in
   /// the capture phase on `window` so we observe the click before
   /// `OverlayShell`'s bubble-phase `stopPropagation` swallows it
@@ -1332,13 +1316,23 @@
        phase-7 right-click rework dropped the wobble here. */
     transform-origin: top left;
     animation: ctx-pop 260ms cubic-bezier(0.34, 1.56, 0.64, 1);
+    transition: transform 200ms cubic-bezier(0.34, 1.56, 0.64, 1);
+  }
+  .ctx:hover {
+    transform: scale(1.015);
   }
   @keyframes ctx-pop {
     0%   { opacity: 0; transform: scale(0.92); }
     100% { opacity: 1; transform: scale(1); }
   }
   @media (prefers-reduced-motion: reduce) {
-    .ctx { animation: none; }
+    .ctx {
+      animation: none;
+      transition: none;
+    }
+    .ctx:hover {
+      transform: none;
+    }
   }
   .ctx button {
     display: flex;
@@ -1351,8 +1345,24 @@
     cursor: pointer;
     color: inherit;
     font: inherit;
+    transform-origin: left center;
+    transition:
+      background 80ms ease,
+      color 80ms ease,
+      transform 260ms cubic-bezier(0.34, 1.56, 0.64, 1);
   }
-  .ctx button:hover { background: var(--hover-bg); }
+  .ctx button:hover {
+    background: var(--hover-bg);
+    transform: scale(1.02);
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .ctx button {
+      transition: background 80ms ease, color 80ms ease;
+    }
+    .ctx button:hover {
+      transform: none;
+    }
+  }
   .ctx button.danger { color: var(--warn-text); }
   /* `fullstack-a-67e`: "From selection" section label.
      Subdued style mirroring TerminalTab's `.from-cwd-label`. */

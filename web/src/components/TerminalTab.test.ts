@@ -199,7 +199,7 @@ describe("TerminalTab menu", () => {
       await tick();
       await tick();
 
-      const labels = Array.from(target.querySelectorAll(".mbtn-label")).map(
+      const labels = Array.from(document.body.querySelectorAll(".mbtn-label")).map(
         (el) => (el.textContent || "").trim(),
       );
       // Sanity check: the menu actually rendered.

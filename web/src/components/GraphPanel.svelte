@@ -44,6 +44,7 @@
   import ResizeHandle from "./ResizeHandle.svelte";
   import HamburgerMenu from "./HamburgerMenu.svelte";
   import { clampMenu } from "./menuClamp";
+  import { portal } from "./portal";
   import { tabMenu, closeTabMenu } from "../state/tabMenu.svelte";
   import {
     FileText,
@@ -1454,6 +1455,7 @@
       role="menu"
       tabindex="-1"
       aria-label="graph tab menu"
+      use:portal
       use:clampMenu={tabMenuPos}
       onmousedown={(e) => e.stopPropagation()}
     >
@@ -2150,7 +2152,7 @@
      count on the right. */
   .tab-menu-bubble {
     position: fixed;
-    z-index: 50;
+    z-index: 25500;
     background: var(--bg-card);
     border: 1px solid var(--border);
     border-radius: 8px;
@@ -2170,13 +2172,23 @@
        dropped the wobble here; @@Alex never asked for that. */
     transform-origin: top left;
     animation: graph-tab-menu-pop 260ms cubic-bezier(0.34, 1.56, 0.64, 1);
+    transition: transform 200ms cubic-bezier(0.34, 1.56, 0.64, 1);
+  }
+  .tab-menu-bubble:hover {
+    transform: scale(1.015);
   }
   @keyframes graph-tab-menu-pop {
     0%   { opacity: 0; transform: scale(0.92); }
     100% { opacity: 1; transform: scale(1); }
   }
   @media (prefers-reduced-motion: reduce) {
-    .tab-menu-bubble { animation: none; }
+    .tab-menu-bubble {
+      animation: none;
+      transition: none;
+    }
+    .tab-menu-bubble:hover {
+      transform: none;
+    }
   }
   .tab-menu-bubble .mbtn {
     display: flex;
@@ -2191,10 +2203,26 @@
     font-size: 13px;
     padding: 6px 8px;
     text-align: left;
+    transform-origin: left center;
+    transition:
+      background 80ms ease,
+      color 80ms ease,
+      transform 260ms cubic-bezier(0.34, 1.56, 0.64, 1);
   }
   .tab-menu-bubble .mbtn:hover,
   .tab-menu-bubble .mbtn.on {
     background: var(--hover-bg);
+  }
+  .tab-menu-bubble .mbtn:hover:not(.disabled) {
+    transform: scale(1.02);
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .tab-menu-bubble .mbtn {
+      transition: background 80ms ease, color 80ms ease;
+    }
+    .tab-menu-bubble .mbtn:hover {
+      transform: none;
+    }
   }
   .tab-menu-bubble .mbtn.disabled {
     color: var(--text-secondary);

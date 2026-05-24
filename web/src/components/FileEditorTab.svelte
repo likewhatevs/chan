@@ -56,6 +56,7 @@
   import FileInfoBody from "./FileInfoBody.svelte";
   import StyleToolbar from "./StyleToolbar.svelte";
   import { clampMenu } from "./menuClamp";
+  import { portal } from "./portal";
   import {
     layout,
     attemptInPlaceReopen,
@@ -759,6 +760,7 @@
       role="menu"
       tabindex="-1"
       aria-label="tab menu"
+      use:portal
       use:clampMenu={menuPos}
       onmousedown={(e) => e.stopPropagation()}
     >
@@ -1369,7 +1371,7 @@
      mechanical). Hover gives a tiny scale-up for the same reason. */
   .tab-menu-bubble {
     position: fixed;
-    z-index: 50;
+    z-index: 25500;
     background: var(--bg-card);
     border: 1px solid var(--border);
     border-radius: 8px;
@@ -1454,9 +1456,25 @@
     font-size: 13px;
     padding: 6px 8px;
     text-align: left;
+    transform-origin: left center;
+    transition:
+      background 80ms ease,
+      color 80ms ease,
+      transform 260ms cubic-bezier(0.34, 1.56, 0.64, 1);
   }
-  .mbtn:hover { background: var(--hover-bg); }
+  .mbtn:hover {
+    background: var(--hover-bg);
+    transform: scale(1.02);
+  }
   .mbtn.on { color: var(--text); background: var(--hover-bg); }
+  @media (prefers-reduced-motion: reduce) {
+    .mbtn {
+      transition: background 80ms ease, color 80ms ease;
+    }
+    .mbtn:hover {
+      transform: none;
+    }
+  }
   .mbtn-icon {
     width: 18px;
     text-align: center;

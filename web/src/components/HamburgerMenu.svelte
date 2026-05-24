@@ -22,20 +22,7 @@
 
   import type { Snippet } from "svelte";
   import { clampToViewport, triggerMenuX } from "./menuClamp";
-
-  /// Move the element out to <body> so its `position: fixed` resolves
-  /// against the viewport even when an ancestor has a transform set
-  /// (the OverlayShell's .panel does, both via the open animation
-  /// and the :hover scale; without this portal the bubble lands
-  /// relative to the panel and visibly drifts away from the click).
-  function portal(node: HTMLElement) {
-    document.body.appendChild(node);
-    return {
-      destroy() {
-        node.parentNode?.removeChild(node);
-      },
-    };
-  }
+  import { portal } from "./portal";
 
   let {
     open = $bindable(false),
@@ -241,14 +228,28 @@
     cursor: pointer;
     font: inherit;
     font-size: 13px;
+    transform-origin: left center;
+    transition:
+      background 80ms ease,
+      color 80ms ease,
+      transform 260ms cubic-bezier(0.34, 1.56, 0.64, 1);
   }
   :global(.hamburger-menu button:hover:not(:disabled)) {
     background: var(--hover-bg);
     color: var(--text);
+    transform: scale(1.02);
   }
   :global(.hamburger-menu button:disabled) {
     cursor: default;
     opacity: 0.6;
+  }
+  @media (prefers-reduced-motion: reduce) {
+    :global(.hamburger-menu button) {
+      transition: background 80ms ease, color 80ms ease;
+    }
+    :global(.hamburger-menu button:hover:not(:disabled)) {
+      transform: none;
+    }
   }
   :global(.hamburger-menu svg) {
     width: 14px;

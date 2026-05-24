@@ -1454,6 +1454,11 @@
     border-radius: 6px;
     overflow: hidden;
     box-shadow: var(--pane-shadow);
+    transform-origin: center center;
+    transition:
+      border-color 100ms ease,
+      box-shadow 120ms ease,
+      transform 260ms cubic-bezier(0.34, 1.56, 0.64, 1);
   }
   .pane[data-focus-color="blue"] { --pane-active-focus: var(--pane-focus); }
   .pane[data-focus-color="orange"] { --pane-active-focus: #f97316; }
@@ -1471,6 +1476,10 @@
     box-shadow:
       inset 0 0 0 2px var(--pane-active-focus),
       var(--pane-shadow);
+  }
+  .pane:hover,
+  .pane.focused {
+    transform: scale(1.006);
   }
   /* Single-fire structural wobble. Triggered by tabs.svelte's
      paneWobble bus on split / close / pane-move; the .wobble
@@ -1919,6 +1928,16 @@
     opacity: 0.45;
   }
   @media (prefers-reduced-motion: reduce) {
+    .pane {
+      transition: border-color 100ms ease, box-shadow 120ms ease;
+    }
+    .pane:hover,
+    .pane.focused {
+      transform: none;
+    }
+    .pane.wobble {
+      animation: none;
+    }
     .tab,
     .tab:hover {
       transition: background 80ms ease, color 80ms ease;
