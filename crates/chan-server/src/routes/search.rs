@@ -17,7 +17,7 @@ use axum::Json;
 use chan_drive::{classify, fs_ops, FileClass, NodeKind, SearchOpts, TreeEntry};
 use serde::{Deserialize, Serialize};
 
-use crate::error::err_from;
+use crate::error::{err_from, err_state};
 use crate::indexer::IndexStatus;
 use crate::state::AppState;
 
@@ -261,7 +261,10 @@ where
 /// flight and to Idle (with chunk + vector counts plus the
 /// embedding model id) when it settles.
 pub async fn api_index_status(State(state): State<Arc<AppState>>) -> Response {
-    Json(state.indexer().snapshot()).into_response()
+    match state.try_indexer() {
+        Ok(indexer) => Json(indexer.snapshot()).into_response(),
+        Err(e) => err_state(&e),
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -298,8 +301,15 @@ struct DirectoryStateAccum {
 /// plus the persisted BM25 path snapshot, avoiding any parse/embed
 /// work on the request path.
 pub async fn api_indexing_state(State(state): State<Arc<AppState>>) -> Response {
-    let drive = state.drive();
-    let current_file = current_index_file(state.indexer().snapshot());
+    let drive = match state.try_drive() {
+        Ok(drive) => drive,
+        Err(e) => return err_state(&e),
+    };
+    let indexer = match state.try_indexer() {
+        Ok(indexer) => indexer,
+        Err(e) => return err_state(&e),
+    };
+    let current_file = current_index_file(indexer.snapshot());
     blocking_response(
         move || {
             let entries = match fs_ops::list_tree_filtered(drive.root(), drive.walk_filter()) {
@@ -408,12 +418,17 @@ fn parent_dir(path: &str) -> &str {
 /// Returns 202 Accepted: the work runs in the background and
 /// progress is observable via `/api/index/status`.
 pub async fn api_index_rebuild(State(state): State<Arc<AppState>>) -> Response {
-    state.indexer().request_rebuild();
-    (
-        StatusCode::ACCEPTED,
-        Json(serde_json::json!({"queued": true})),
-    )
-        .into_response()
+    match state.try_indexer() {
+        Ok(indexer) => {
+            indexer.request_rebuild();
+            (
+                StatusCode::ACCEPTED,
+                Json(serde_json::json!({"queued": true})),
+            )
+                .into_response()
+        }
+        Err(e) => err_state(&e),
+    }
 }
 
 #[cfg(test)]

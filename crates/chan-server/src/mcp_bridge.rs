@@ -84,7 +84,7 @@ impl Drop for BridgeHandle {
 #[cfg(unix)]
 pub fn start<DF>(socket_path: PathBuf, drive_for: DF) -> std::io::Result<BridgeHandle>
 where
-    DF: Fn() -> Arc<chan_drive::Drive> + Send + Sync + 'static,
+    DF: Fn() -> Option<Arc<chan_drive::Drive>> + Send + Sync + 'static,
 {
     // Stale socket from a previous run that didn't get to clean up
     // (kill -9, panic in Drop): unlink so bind doesn't EADDRINUSE.
@@ -104,7 +104,10 @@ where
                     continue;
                 }
             };
-            let drive = drive_for();
+            let Some(drive) = drive_for() else {
+                tracing::warn!("mcp bridge session refused: drive state unavailable");
+                continue;
+            };
             tokio::spawn(async move {
                 let (read, write) = stream.into_split();
                 let server = chan_llm::mcp::Server::new(drive);
@@ -124,7 +127,7 @@ where
 #[cfg(not(unix))]
 pub fn start<DF>(_socket_path: PathBuf, _drive_for: DF) -> std::io::Result<BridgeHandle>
 where
-    DF: Fn() -> Arc<chan_drive::Drive> + Send + Sync + 'static,
+    DF: Fn() -> Option<Arc<chan_drive::Drive>> + Send + Sync + 'static,
 {
     Err(std::io::Error::new(
         std::io::ErrorKind::Unsupported,

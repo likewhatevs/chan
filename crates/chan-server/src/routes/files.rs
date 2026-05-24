@@ -9,7 +9,7 @@ use axum::response::{IntoResponse, Response};
 use axum::Json;
 use serde::{Deserialize, Serialize};
 
-use crate::error::{err, err_from};
+use crate::error::{err, err_from, err_state};
 use crate::state::AppState;
 use crate::static_assets::content_type_for;
 
@@ -424,30 +424,30 @@ pub async fn api_create_file(
     State(state): State<Arc<AppState>>,
     Json(body): Json<CreateBody>,
 ) -> Response {
-    if create_target_exists(state.drive().as_ref(), &body.path) {
-        return err(StatusCode::CONFLICT, "already exists".into());
+    let drive = match state.try_drive() {
+        Ok(drive) => drive,
+        Err(e) => return err_state(&e),
+    };
+    let path = body.path.clone();
+    let result = tokio::task::spawn_blocking(move || create_file_sync(&drive, body)).await;
+    match result {
+        Ok(Ok(())) => {
+            state.self_writes.note(&path);
+            StatusCode::CREATED.into_response()
+        }
+        Ok(Err(e)) => err_from(&e),
+        Err(join) => err(StatusCode::INTERNAL_SERVER_ERROR, join.to_string()),
+    }
+}
+
+fn create_file_sync(drive: &chan_drive::Drive, body: CreateBody) -> chan_drive::Result<()> {
+    if create_target_exists(drive, &body.path) {
+        return Err(chan_drive::ChanError::PathAlreadyExists(body.path));
     }
     if body.is_dir {
-        match state.drive().create_dir(&body.path) {
-            Ok(()) => {
-                state.self_writes.note(&body.path);
-                StatusCode::CREATED.into_response()
-            }
-            Err(e) => err_from(&e),
-        }
+        drive.create_dir(&body.path)
     } else {
-        let content = body.content.unwrap_or_default();
-        let drive = state.drive().clone();
-        let path = body.path.clone();
-        let result = tokio::task::spawn_blocking(move || drive.write_text(&path, &content)).await;
-        match result {
-            Ok(Ok(())) => {
-                state.self_writes.note(&body.path);
-                StatusCode::CREATED.into_response()
-            }
-            Ok(Err(e)) => err_from(&e),
-            Err(join) => err(StatusCode::INTERNAL_SERVER_ERROR, join.to_string()),
-        }
+        drive.write_text(&body.path, &body.content.unwrap_or_default())
     }
 }
 
@@ -588,6 +588,40 @@ mod write_tests {
     }
 
     #[test]
+    fn api_create_and_delete_wrap_sync_drive_io_in_spawn_blocking() {
+        let source = include_str!("files.rs");
+
+        assert!(
+            source.contains("tokio::task::spawn_blocking(move || create_file_sync(&drive, body))")
+        );
+        assert!(
+            source.contains("tokio::task::spawn_blocking(move || drive.remove(&path_for_remove))")
+        );
+    }
+
+    #[test]
+    fn create_file_sync_rejects_existing_directory_collision() {
+        let cfg = tempfile::TempDir::new().unwrap();
+        let root = tempfile::TempDir::new().unwrap();
+        let lib = chan_drive::Library::open_at(cfg.path().join("config.toml")).unwrap();
+        lib.register_drive(root.path()).unwrap();
+        let drive = lib.open_drive(root.path()).unwrap();
+        drive.create_dir("notes").unwrap();
+
+        let err = create_file_sync(
+            &drive,
+            CreateBody {
+                path: "notes".to_string(),
+                is_dir: false,
+                content: Some("body".to_string()),
+            },
+        )
+        .unwrap_err();
+
+        assert!(matches!(err, chan_drive::ChanError::PathAlreadyExists(_)));
+    }
+
+    #[test]
     fn write_file_sync_reports_seconds_conflict() {
         let cfg = tempfile::TempDir::new().unwrap();
         let root = tempfile::TempDir::new().unwrap();
@@ -678,12 +712,18 @@ pub async fn api_delete_file(
     // chan-drive API (`Drive::remove_recursive`) or a server-side walk
     // that issues per-leaf removes. Tracked for a follow-up; current
     // behavior is "error out, frontend resolves the leaves itself".
-    match state.drive().remove(&path) {
-        Ok(()) => {
+    let drive = match state.try_drive() {
+        Ok(drive) => drive,
+        Err(e) => return err_state(&e),
+    };
+    let path_for_remove = path.clone();
+    match tokio::task::spawn_blocking(move || drive.remove(&path_for_remove)).await {
+        Ok(Ok(())) => {
             state.self_writes.note(&path);
             StatusCode::NO_CONTENT.into_response()
         }
-        Err(e) => err_from(&e),
+        Ok(Err(e)) => err_from(&e),
+        Err(join) => err(StatusCode::INTERNAL_SERVER_ERROR, join.to_string()),
     }
 }
 

@@ -127,6 +127,14 @@ pub struct DriveCell {
     pub indexer: Arc<indexer::Indexer>,
 }
 
+#[derive(Debug, thiserror::Error)]
+pub enum StateAccessError {
+    #[error("drive cell lock poisoned")]
+    DriveCellPoisoned,
+    #[error("drive cell missing outside reset window")]
+    DriveCellMissing,
+}
+
 impl AppState {
     /// Snapshot the current drive Arc. Acquires the RwLock read
     /// guard for the duration of the clone (microseconds). The
@@ -134,30 +142,35 @@ impl AppState {
     /// the cell out a moment later, so callers don't need to hold
     /// the lock through their I/O.
     ///
-    /// Panics if called while the cell is in the brief
-    /// "between drop and reopen" state inside reset itself; the
-    /// reset path holds the write lock end-to-end so handlers can
-    /// never observe `None` (they wait on the read lock).
-    pub fn drive(&self) -> Arc<Drive> {
-        self.drive_cell
+    pub fn try_drive(&self) -> Result<Arc<Drive>, StateAccessError> {
+        let cell = self
+            .drive_cell
             .read()
-            .expect("drive cell poisoned")
-            .as_ref()
-            .expect("drive cell missing outside reset window")
-            .drive
-            .clone()
+            .map_err(|_| StateAccessError::DriveCellPoisoned)?;
+        let Some(cell) = cell.as_ref() else {
+            return Err(StateAccessError::DriveCellMissing);
+        };
+        Ok(cell.drive.clone())
+    }
+
+    /// Legacy infallible accessor for call sites that have not yet
+    /// been converted to explicit HTTP errors. New route code should
+    /// prefer `try_drive`.
+    pub fn drive(&self) -> Arc<Drive> {
+        self.try_drive().expect("drive state unavailable")
     }
 
     /// Snapshot the live indexer Arc. Same RwLock pattern as
     /// `drive()`: held only for the duration of the clone.
-    pub fn indexer(&self) -> Arc<indexer::Indexer> {
-        self.drive_cell
+    pub fn try_indexer(&self) -> Result<Arc<indexer::Indexer>, StateAccessError> {
+        let cell = self
+            .drive_cell
             .read()
-            .expect("drive cell poisoned")
-            .as_ref()
-            .expect("drive cell missing outside reset window")
-            .indexer
-            .clone()
+            .map_err(|_| StateAccessError::DriveCellPoisoned)?;
+        let Some(cell) = cell.as_ref() else {
+            return Err(StateAccessError::DriveCellMissing);
+        };
+        Ok(cell.indexer.clone())
     }
 }
 
@@ -235,5 +248,31 @@ pub(crate) mod test_support {
             shutdown_rx,
             loaded_teams: Mutex::new(std::collections::HashMap::new()),
         })
+    }
+
+    #[test]
+    fn try_drive_reports_missing_cell() {
+        let state = make_test_state(false, false);
+
+        assert!(matches!(
+            state.try_drive(),
+            Err(super::StateAccessError::DriveCellMissing)
+        ));
+    }
+
+    #[test]
+    fn try_indexer_reports_poisoned_drive_cell() {
+        let state = make_test_state(false, false);
+        let drive_cell = state.drive_cell.clone();
+        let _ = std::thread::spawn(move || {
+            let _guard = drive_cell.write().expect("poison setup");
+            panic!("poison drive cell");
+        })
+        .join();
+
+        assert!(matches!(
+            state.try_indexer(),
+            Err(super::StateAccessError::DriveCellPoisoned)
+        ));
     }
 }

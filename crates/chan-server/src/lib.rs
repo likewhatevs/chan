@@ -374,11 +374,18 @@ async fn build_app(
     })));
     let bridge_drive_cell = state_for_bridge.clone();
     let bridge = mcp_bridge::start(socket_path.clone(), move || {
-        let cell = bridge_drive_cell.read().expect("drive_cell poisoned");
-        cell.as_ref()
-            .expect("drive_cell present for the lifetime of the server")
-            .drive
-            .clone()
+        let cell = match bridge_drive_cell.read() {
+            Ok(cell) => cell,
+            Err(_) => {
+                tracing::warn!("mcp bridge cannot snapshot drive: drive_cell poisoned");
+                return None;
+            }
+        };
+        let Some(cell) = cell.as_ref() else {
+            tracing::warn!("mcp bridge cannot snapshot drive: drive_cell missing");
+            return None;
+        };
+        Some(cell.drive.clone())
     });
     let (mcp_socket_path, mcp_bridge) = match bridge {
         Ok(handle) => (Some(handle.socket_path().to_path_buf()), Some(handle)),

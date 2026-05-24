@@ -10,6 +10,8 @@ use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use axum::Json;
 
+use crate::state::StateAccessError;
+
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
     #[error("chan-drive: {0}")]
@@ -41,6 +43,10 @@ pub fn err_settings_locked() -> Response {
          serve or an OAuth-gated tunnel"
             .into(),
     )
+}
+
+pub fn err_state(e: &StateAccessError) -> Response {
+    err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string())
 }
 
 /// Refusal returned by public-tunnel-locked routes that must not be
@@ -125,7 +131,7 @@ mod tests {
             .and_then(|x| x.as_str())
             .expect("error field");
         // The exact text is a UX choice and can drift, but the body
-        // MUST carry a `error` string field at 403 — that's the
+        // MUST carry a `error` string field at 403; that's the
         // wire contract every chan-server refusal shares.
         assert!(!msg.is_empty());
     }

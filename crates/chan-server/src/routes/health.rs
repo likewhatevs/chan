@@ -8,7 +8,7 @@ use axum::Json;
 use serde::Serialize;
 
 use crate::indexer::IndexerHealth;
-use crate::state::AppState;
+use crate::{error::err_state, state::AppState};
 
 #[derive(Debug, Serialize)]
 struct HealthResponse {
@@ -23,9 +23,13 @@ struct TerminalEventWatcherHealth {
 }
 
 pub async fn api_health(State(state): State<Arc<AppState>>) -> Response {
+    let indexer = match state.try_indexer() {
+        Ok(indexer) => indexer,
+        Err(e) => return err_state(&e),
+    };
     Json(HealthResponse {
         status: "ok",
-        indexer: state.indexer().health_snapshot(),
+        indexer: indexer.health_snapshot(),
         terminal_event_watcher: TerminalEventWatcherHealth {
             dropped_events: state.terminal_sessions.watcher_dropped_events(),
         },
