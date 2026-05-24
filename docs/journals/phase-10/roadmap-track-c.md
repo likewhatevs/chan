@@ -49,6 +49,9 @@ Progress:
 - 2026-05-24: implemented File Browser drop-to-upload with an exact-name
   `/api/files/upload` route, status-bar progress and cancel, conflict refusal,
   and visible tree refresh after successful uploads.
+- 2026-05-25: queued actionable persistent drive warnings after live IAB showed
+  `Broken draft Drafts/team-phase-10: missing draft.md` as a passive status-bar
+  label with no click target, dialog, repair path, or delete path.
 
 Current wave:
 
@@ -89,6 +92,8 @@ Current wave:
   tree refresh so saved Drafts appear in docked File Browser without reload.
 - Add File Browser drag-and-drop upload and download flows without toolbar
   buttons.
+- Make persistent drive warnings actionable instead of passive status text,
+  starting with broken Draft metadata warnings.
 
 ## 1. Terminal pane rendering bugs
 
@@ -495,6 +500,47 @@ Smoke:
 - In the desktop build, drag a directory from File Browser to the desktop and
   confirm the exported tree or archive preserves names and contents.
 
+## 13. Actionable persistent drive warnings
+
+Current issue:
+
+- Drive boot can surface broken Draft metadata through a persistent status-bar
+  message.
+- Live IAB evidence on 2026-05-25:
+  `Broken draft Drafts/team-phase-10: missing draft.md`.
+- The message renders as a passive status-bar label.
+- The user cannot click it to inspect, fix, dismiss, or delete the broken
+  Draft metadata.
+- This makes the notification non-actionable and leaves the recovery path
+  implicit.
+
+Target behavior:
+
+- Persistent drive warnings use a typed status action, not only a string.
+- Clicking or keyboard-activating the warning opens a dialog.
+- The dialog lists each warning with path, reason, and available safe actions.
+- Broken Draft warnings should offer at least:
+  - inspect or copy the metadata path.
+  - discard/delete the broken Draft metadata when the server can verify it is
+    safe.
+  - dismiss only for the current session if deletion is not desired.
+- Repair/delete actions must route through chan-server and the existing Draft
+  metadata boundary. Do not delete arbitrary filesystem paths from the
+  frontend.
+- Generic status messages remain passive unless they carry an explicit typed
+  action.
+
+Smoke:
+
+- Create or seed a drive with a broken Draft metadata entry.
+- Load the app and confirm the status bar shows the warning.
+- Confirm the warning is reachable by pointer and keyboard.
+- Open the warning dialog and verify path and reason text.
+- Dismiss the dialog and confirm the warning remains or clears according to the
+  chosen action.
+- Delete or discard the broken Draft metadata through the dialog, reload, and
+  confirm the warning is gone.
+
 ## Test plan
 
 - Hybrid menu tests:
@@ -586,6 +632,12 @@ Smoke:
   - Browser drag-out either downloads the selected file or reports unsupported
     behavior cleanly.
   - Desktop drag-out coverage is verified through Track A.
+- Persistent warning tests:
+  - Broken Draft warning status is clickable and keyboard reachable.
+  - Warning dialog lists path and reason.
+  - Safe discard/delete clears the warning after reload.
+  - Session dismiss does not delete metadata.
+  - Generic transient status messages remain passive.
 
 ## Assumptions and non-goals
 
