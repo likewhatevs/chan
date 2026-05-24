@@ -32,7 +32,7 @@ crates/
                         lib.rs holds ServeConfig + build_app + serve
                         + serve_via_tunnel + router(). Top-level
                         modules: auth, bus, config, embed_seed,
-                        error, indexer, mcp_bridge, preferences,
+                        error, host, indexer, mcp_bridge, preferences,
                         qr, self_writes, signal, state,
                         static_assets, store, tunnel_guard, util.
   chan-drive            filesystem boundary, drive registry, search
@@ -60,9 +60,11 @@ web/                    Svelte frontend, embedded into the binary
                         at build time via rust-embed.
 
 desktop/                Tauri shell. Cross-platform desktop wrapper
-                        (`chan-desktop`) that launches `chan serve`
-                        per drive and mounts the editor in a
-                        webview window. Per-window state is keyed
+                        (`chan-desktop`) that embeds chan-server
+                        for normal local drives and mounts the
+                        editor in a webview window. Remote drives
+                        are explicit attach modes, not local
+                        fallback behavior. Per-window state is keyed
                         by a `w=<window-label>` URL parameter.
 ```
 

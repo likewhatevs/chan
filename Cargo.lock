@@ -957,6 +957,8 @@ version = "0.14.0"
 dependencies = [
  "async-trait",
  "axum",
+ "chan-drive",
+ "chan-server",
  "chan-tunnel-client",
  "chan-tunnel-proto",
  "chan-tunnel-server",
@@ -965,7 +967,6 @@ dependencies = [
  "getrandom 0.2.17",
  "http",
  "keyring",
- "nix 0.29.0",
  "notify",
  "notify-debouncer-mini",
  "reqwest 0.12.28",
@@ -4400,18 +4401,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "nix"
-version = "0.29.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "71e2746dc3a24dd78b3cfcb7be93368c6de9963d30f43a6a73998a9cf4b17b46"
-dependencies = [
- "bitflags 2.11.1",
- "cfg-if",
- "cfg_aliases",
- "libc",
-]
-
-[[package]]
 name = "no-std-compat"
 version = "0.4.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5324,7 +5313,7 @@ dependencies = [
  "lazy_static",
  "libc",
  "log",
- "nix 0.25.1",
+ "nix",
  "serial",
  "shared_library",
  "shell-words",

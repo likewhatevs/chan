@@ -1,12 +1,12 @@
-//! Desktop-only sidecar config.
+//! Desktop-only config.
 //!
 //! The chan registry (`~/.chan/config.toml`) is the source of truth
 //! for which drives exist. This file holds only desktop-specific
 //! state that has no place in chan proper:
 //!
-//! - `sidecar`: per-drive UI state (currently just the last bound
-//!   port), keyed by canonical drive path so a `mv` on disk doesn't
-//!   silently revive stale state for a different drive.
+//! - `drives`: per-drive desktop cache, keyed by canonical drive
+//!   path so a `mv` on disk doesn't silently revive stale state for
+//!   a different drive.
 //! - `window_configs`: LRU stack of closed-window labels + URL hashes
 //!   so a freshly-opened drive window picks up the panes / tabs /
 //!   selections / overlay state of the previous window for that
@@ -34,14 +34,9 @@ use serde::{Deserialize, Serialize};
 pub const MAX_WINDOW_CONFIGS: usize = 20;
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
-pub struct DriveSidecar {
-    /// Port the drive's `chan serve` last bound to, persisted so a
-    /// stop-then-start cycle reuses the same port and any browser
-    /// tabs the user has open keep their URL valid.
-    #[serde(default)]
-    pub last_port: Option<u16>,
+pub struct DriveSettings {
     /// `fullstack-b-28a`: per-drive feature toggle stub. Persisted
-    /// in chan-desktop's sidecar config until `systacean-27` lands
+    /// in chan-desktop's config until `systacean-27` lands
     /// the chan-drive-side config API; `-b-28b` will swap this stub
     /// for the real API call without changing the SPA-facing IPC
     /// shape.
@@ -151,7 +146,7 @@ fn default_zoom() -> f64 {
 pub struct Config {
     /// Per-drive UI state, keyed by canonical drive path.
     #[serde(default)]
-    pub sidecar: HashMap<String, DriveSidecar>,
+    pub drives: HashMap<String, DriveSettings>,
     /// Tunnel listener preferences. Defaults to `preferred_port = 0`
     /// (OS-assigned) until the user types a specific number.
     #[serde(default)]
@@ -382,47 +377,42 @@ mod tests {
     }
 
     #[test]
-    fn drive_sidecar_features_missing_field_defaults_off() {
+    fn drive_settings_features_missing_field_defaults_off() {
         // `fullstack-b-28a`: existing `config.json` predates the
         // `features` field. The serde-default keeps legacy entries
         // loadable as `{bge: false, reports: false}` instead of
-        // failing the load and dropping the entire sidecar map.
-        let pre_b28 = r#"{
-            "last_port": 49991
-        }"#;
-        let cfg: DriveSidecar = serde_json::from_str(pre_b28).expect("legacy load");
-        assert_eq!(cfg.last_port, Some(49991));
+        // failing the load and dropping the entire per-drive map.
+        let pre_b28 = r#"{}"#;
+        let cfg: DriveSettings = serde_json::from_str(pre_b28).expect("legacy load");
         assert!(!cfg.features.bge);
         assert!(!cfg.features.reports);
     }
 
     #[test]
-    fn drive_sidecar_features_round_trip() {
+    fn drive_settings_features_round_trip() {
         // The toggle pair survives a save+load cycle so a flip in
         // the launcher panel sticks across desktop restarts.
-        let sidecar = DriveSidecar {
-            last_port: Some(50000),
+        let settings = DriveSettings {
             features: DriveFeatures {
                 bge: true,
                 reports: false,
             },
         };
-        let json = serde_json::to_string(&sidecar).expect("serialize");
-        let back: DriveSidecar = serde_json::from_str(&json).expect("deserialize");
+        let json = serde_json::to_string(&settings).expect("serialize");
+        let back: DriveSettings = serde_json::from_str(&json).expect("deserialize");
         assert!(back.features.bge);
         assert!(!back.features.reports);
-        assert_eq!(back.last_port, Some(50000));
     }
 
     #[test]
-    fn drive_sidecar_features_missing_partial_field_defaults() {
+    fn drive_settings_features_missing_partial_field_defaults() {
         // Partial migration: a future config might carry `bge: true`
         // but not `reports`. The serde-default on each field keeps
         // the missing one as false rather than failing the load.
         let partial = r#"{
             "features": { "bge": true }
         }"#;
-        let cfg: DriveSidecar = serde_json::from_str(partial).expect("partial load");
+        let cfg: DriveSettings = serde_json::from_str(partial).expect("partial load");
         assert!(cfg.features.bge);
         assert!(!cfg.features.reports);
     }

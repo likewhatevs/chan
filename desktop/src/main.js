@@ -90,11 +90,11 @@ listen('auth-error', (e) => {
 let booted = false;
 let homeDir = '';
 /// Boot-time preflight result from the Rust side. While `ok=false`,
-/// every action that would invoke chan (Open drive, the per-row On
-/// toggles, Forget, the tunnel Listen button) is disabled and a
-/// persistent banner explains why. `kind` is one of "ok" |
-/// "translocated" | "missing" | "version-mismatch"; the renderer
-/// keys disabled state off `ok` alone and the banner copy off `reason`.
+/// actions that invoke the bundled chan CLI (Open drive, Forget,
+/// feature toggles) are disabled and a persistent banner explains
+/// why. Local embedded On and tunnel Listen do not require this
+/// binary. `kind` is one of "ok" | "translocated" | "missing" |
+/// "version-mismatch".
 let chanBinStatus = { ok: true, kind: 'ok', reason: '' };
 let chanBusy = false;
 // Last rendered drives payload as a JSON string. The backend fires
@@ -177,7 +177,7 @@ async function checkChanBin() {
 function applyChanBinStatus() {
   const ok = chanBinStatus.ok;
   openBtn.disabled = !ok || chanBusy;
-  tunnelBtn.disabled = !ok || chanBusy;
+  tunnelBtn.disabled = chanBusy;
   document.body.classList.toggle('chan-bin-unavailable', !ok);
 
   let banner = document.getElementById('chan-bin-banner');
@@ -186,7 +186,7 @@ function applyChanBinStatus() {
     return;
   }
   const msg = chanBinStatus.reason
-    || 'Chan command-line tool is unavailable. Drive management is disabled.';
+    || 'Chan command-line tool is unavailable. Open, Forget, and feature changes are disabled.';
   if (!banner) {
     banner = document.createElement('div');
     banner.id = 'chan-bin-banner';
@@ -199,7 +199,7 @@ function applyChanBinStatus() {
 function applyChanBusyState(payload) {
   chanBusy = !!(payload && payload.busy);
   openBtn.disabled = !chanBinStatus.ok || chanBusy;
-  tunnelBtn.disabled = !chanBinStatus.ok || chanBusy;
+  tunnelBtn.disabled = chanBusy;
   document.body.classList.toggle('chan-busy', chanBusy);
 
   let banner = document.getElementById('chan-busy-banner');
@@ -254,9 +254,7 @@ async function pickAndAdd() {
 /// first open.
 ///
 /// Backdrop click + Escape cancel; Open button gets initial
-/// focus + Enter triggers it. Same modal shape as the reclaim
-/// dialog from `-b-22` so the UX feels consistent across the
-/// chan-desktop launcher.
+/// focus + Enter triggers it.
 function showPreflightDialog(path) {
   return new Promise((resolve) => {
     const overlay = document.createElement('div');
@@ -491,12 +489,8 @@ function formatPreflightBytes(bytes) {
 }
 
 function render(drives) {
-  // Single source of truth for the row-level disabled attribute.
-  // Every control that would spawn chan (toggle, Forget) is keyed
-  // off this. Launch and Reveal stay live because they don't
-  // depend on the binary — Launch needs a URL (which is gated by
-  // the running serve anyway) and Reveal just opens Finder.
-  const disabledAttr = chanBinStatus.ok && !chanBusy ? '' : 'disabled';
+  const chanCommandDisabledAttr = chanBinStatus.ok && !chanBusy ? '' : 'disabled';
+  const localRuntimeDisabledAttr = chanBusy ? 'disabled' : '';
 
   if (!drives.length) {
     main.innerHTML = `
@@ -504,7 +498,7 @@ function render(drives) {
         <h2>No drives yet</h2>
         <p>A <em>drive</em> is a local folder with your markdown files.
            Pick one to get started.</p>
-        <button class="btn primary" id="empty-pick" ${disabledAttr}>Open drive</button>
+        <button class="btn primary" id="empty-pick" ${chanCommandDisabledAttr}>Open drive</button>
       </div>`;
     document.getElementById('empty-pick').onclick = pickAndAdd;
     return;
@@ -536,7 +530,7 @@ function render(drives) {
         <td class="path-cell muted">${escapeHtml(d.label || '')}</td>
         <td>
           <div class="row-actions">
-            ${renderOpenSplit({ hasUrl, includeForget: false, disabledAttr })}
+            ${renderOpenSplit({ hasUrl, includeForget: false, forgetDisabledAttr: 'disabled' })}
           </div>
         </td>
       </tr>`;
@@ -545,15 +539,15 @@ function render(drives) {
     <tr data-path="${escapeAttr(d.path)}" data-url="${urlAttr}">
       <td>
         <label class="switch">
-          <input type="checkbox" data-act="toggle-on" ${d.on ? 'checked' : ''} ${disabledAttr}/>
+          <input type="checkbox" data-act="toggle-on" ${d.on ? 'checked' : ''} ${localRuntimeDisabledAttr}/>
           <span class="slider"></span>
         </label>
       </td>
       <td class="path-cell" data-act="reveal" title="${escapeAttr(d.path)} — click to open in Finder">${renderPath(d.path)}</td>
       <td>
         <div class="row-actions">
-          ${renderFeaturesToggle(d.path)}
-          ${renderOpenSplit({ hasUrl, includeForget: true, disabledAttr })}
+          ${renderFeaturesToggle(d.path, chanCommandDisabledAttr)}
+          ${renderOpenSplit({ hasUrl, includeForget: true, forgetDisabledAttr: chanCommandDisabledAttr })}
         </div>
       </td>
     </tr>
@@ -579,14 +573,15 @@ function render(drives) {
 /// "⚙" expand button shown alongside the Open split. Clicking
 /// expands the sibling feature-panel row showing the BGE +
 /// reports checkboxes. Stub-persisted via chan-desktop's
-/// sidecar config until `systacean-27` lands the chan-drive
+/// desktop config until `systacean-27` lands the chan-drive
 /// config API + `-b-28b` swaps the IPC body.
-function renderFeaturesToggle(path) {
+function renderFeaturesToggle(path, disabledAttr = '') {
   return `
     <button class="btn features-toggle" data-act="toggle-features"
             data-features-path="${escapeAttr(path)}"
             aria-expanded="false"
             aria-controls="features-${escapeAttr(path)}"
+            ${disabledAttr}
             title="Per-drive feature toggles">
       <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor"
            stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
@@ -645,16 +640,18 @@ function renderFeaturesPanel(path) {
 /// are both gated by `hasUrl` so a drive that isn't running can't
 /// be opened; Forget stays enabled regardless of URL state since
 /// it just removes the registry entry.
-function renderOpenSplit({ hasUrl, includeForget, disabledAttr }) {
+function renderOpenSplit({ hasUrl, includeForget, forgetDisabledAttr }) {
   const openDisabled = hasUrl ? '' : 'disabled';
+  const forgetDisabled = forgetDisabledAttr || '';
+  const caretDisabled = hasUrl || (includeForget && !forgetDisabled) ? '' : 'disabled';
   const forgetItem = includeForget
-    ? `<li><button class="menu-item" data-act="remove" role="menuitem" ${disabledAttr}>Forget Drive</button></li>`
+    ? `<li><button class="menu-item" data-act="remove" role="menuitem" ${forgetDisabled}>Forget Drive</button></li>`
     : '';
   return `
     <div class="split-btn">
       <button class="btn primary" data-act="launch" ${openDisabled}>Open</button>
       <button class="btn primary split-caret" data-act="menu-toggle"
-              aria-haspopup="true" aria-expanded="false" aria-label="More actions">
+              aria-haspopup="true" aria-expanded="false" aria-label="More actions" ${caretDisabled}>
         <svg viewBox="0 0 12 12" width="10" height="10" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M2 4l4 4 4-4"/></svg>
       </button>
       <ul class="split-menu" hidden role="menu">
@@ -941,264 +938,6 @@ listen('chan-busy', (e) => {
   lastDrivesJson = '';
   refresh().catch(showError);
 });
-
-// `chan serve` exited before printing the URL banner — the toggle
-// would have silently flipped back to off otherwise. Pop a modal
-// with the captured stderr so the user can see *why* instead of
-// guessing. Serialized so two near-simultaneous failures don't
-// stack two dialogs on top of each other.
-let serveFailedPending = Promise.resolve();
-listen('serve-failed', (e) => {
-  serveFailedPending = serveFailedPending.then(() => showServeFailed(e.payload || {}));
-});
-
-listen('serve-crashed', (e) => {
-  showServeCrashed(e.payload || {});
-  refresh().catch(showError);
-});
-
-async function showServeFailed(p) {
-  const driveLabel = p.key ? p.key : 'this drive';
-  const tailLines = Array.isArray(p.stderr_tail) ? p.stderr_tail : [];
-  // `fullstack-b-22`: chan-desktop sets `drive_lock_conflict: true`
-  // on the payload when the stderr tail matched the
-  // "drive is locked by another process" marker. Route into the
-  // takeover prompt instead of the generic error modal so the
-  // user sees the actionable path first. The detection lives in
-  // serve.rs::stderr_indicates_drive_lock_conflict; keep the
-  // branch shape additive — never silence the generic modal for
-  // a non-lock failure.
-  if (p.key && p.drive_lock_conflict === true) {
-    await promptDriveLockTakeover(p.key);
-    return;
-  }
-  let exitDesc;
-  if (typeof p.exit_signal === 'number') {
-    exitDesc = `chan was killed by signal ${p.exit_signal}.`;
-  } else if (typeof p.exit_code === 'number') {
-    exitDesc = `chan exited with code ${p.exit_code}.`;
-  } else {
-    exitDesc = 'chan exited without reporting a status.';
-  }
-  // Keep the dialog body bounded: native message dialogs don't
-  // scroll on every platform, so trim to the last 20 lines.
-  const trimmed = tailLines.slice(-20);
-  const tail = trimmed.length ? trimmed.join('\n') : '(no output captured)';
-  const body =
-    `Failed to start ${driveLabel}.\n\n` +
-    `${exitDesc}\n\n` +
-    `Last output:\n${tail}`;
-  try {
-    await message(body, { title: 'Drive failed to start', kind: 'error' });
-  } catch {
-    // Dialog plugin not available or denied: fall back to the
-    // inline banner so the user still sees something.
-    showError(body);
-  }
-}
-
-/// `fullstack-b-25`: bespoke reclaim modal. Tauri's `ask()` only
-/// renders a body string + yes/no, so the user couldn't see what
-/// the Reclaim button was about to SIGTERM. This modal lists each
-/// PID + command line so the destructive action is auditable
-/// before the user commits.
-///
-/// Backdrop click + Escape resolve as Cancel. The Reclaim button
-/// gets initial focus so a clicked-into-empty-pane keyboard can
-/// confirm without mousing.
-function showReclaimDialog(key, candidates) {
-  return new Promise((resolve) => {
-    const overlay = document.createElement('div');
-    overlay.className = 'reclaim-overlay';
-    overlay.setAttribute('role', 'dialog');
-    overlay.setAttribute('aria-modal', 'true');
-    overlay.setAttribute('aria-labelledby', 'reclaim-title');
-
-    const dialog = document.createElement('div');
-    dialog.className = 'reclaim-dialog';
-
-    const title = document.createElement('h2');
-    title.id = 'reclaim-title';
-    title.textContent = 'Drive lock held by orphan process';
-    dialog.appendChild(title);
-
-    const intro = document.createElement('p');
-    intro.className = 'reclaim-intro';
-    intro.textContent = `An orphan chan sidecar is holding the lock for:`;
-    dialog.appendChild(intro);
-
-    const keyEl = document.createElement('p');
-    keyEl.className = 'reclaim-key';
-    keyEl.textContent = key;
-    dialog.appendChild(keyEl);
-
-    const explain = document.createElement('p');
-    explain.className = 'reclaim-explain';
-    explain.textContent =
-      'This usually means a previous Chan Desktop session was killed without a chance to clean up its background processes. ' +
-      'Reclaim will SIGTERM the following process(es) and re-open the drive:';
-    dialog.appendChild(explain);
-
-    const list = document.createElement('ul');
-    list.className = 'reclaim-candidates';
-    for (const c of candidates) {
-      const li = document.createElement('li');
-      const pidEl = document.createElement('span');
-      pidEl.className = 'reclaim-pid';
-      pidEl.textContent = `PID ${c.pid}`;
-      const cmdEl = document.createElement('code');
-      cmdEl.className = 'reclaim-command';
-      cmdEl.textContent = c.command;
-      li.appendChild(pidEl);
-      li.appendChild(cmdEl);
-      list.appendChild(li);
-    }
-    dialog.appendChild(list);
-
-    const buttons = document.createElement('div');
-    buttons.className = 'reclaim-buttons';
-
-    const cancelBtn = document.createElement('button');
-    cancelBtn.className = 'btn';
-    cancelBtn.type = 'button';
-    cancelBtn.textContent = 'Cancel';
-
-    const reclaimBtn = document.createElement('button');
-    reclaimBtn.className = 'btn primary';
-    reclaimBtn.type = 'button';
-    reclaimBtn.textContent = 'Reclaim';
-
-    buttons.appendChild(cancelBtn);
-    buttons.appendChild(reclaimBtn);
-    dialog.appendChild(buttons);
-
-    overlay.appendChild(dialog);
-    document.body.appendChild(overlay);
-
-    function close(result) {
-      document.removeEventListener('keydown', onKey);
-      overlay.remove();
-      resolve(result);
-    }
-    function onKey(e) {
-      if (e.key === 'Escape') {
-        e.preventDefault();
-        close(false);
-      } else if (e.key === 'Enter' && document.activeElement === reclaimBtn) {
-        e.preventDefault();
-        close(true);
-      }
-    }
-
-    cancelBtn.addEventListener('click', () => close(false));
-    reclaimBtn.addEventListener('click', () => close(true));
-    overlay.addEventListener('click', (e) => {
-      if (e.target === overlay) close(false);
-    });
-    document.addEventListener('keydown', onKey);
-
-    reclaimBtn.focus();
-  });
-}
-
-/// `fullstack-b-22`: minimum-viable lock-takeover prompt.
-/// `fullstack-b-25`: pre-confirmation candidate list, so the
-/// destructive Reclaim button is no longer opaque about what it
-/// will SIGTERM.
-///
-/// Surfaces when chan-desktop hits a "drive is locked by another
-/// process" failure from a previous chan-desktop session's orphan
-/// sidecar. Enumerates the orphan candidates via
-/// `find_drive_lock_candidates`, renders a custom modal with the
-/// PIDs + command lines, then calls `reclaim_drive_lock` on
-/// confirm.
-async function promptDriveLockTakeover(key) {
-  let candidates;
-  try {
-    candidates = await invoke('find_drive_lock_candidates', { path: key });
-  } catch (e) {
-    const msg = (e && e.message) || String(e);
-    showError(
-      `Could not enumerate orphan chan serve processes for ${key}: ${msg}\n` +
-        `Manual cleanup: \`pkill -f "chan serve ${key}"\` from a terminal.`,
-    );
-    return;
-  }
-  if (!Array.isArray(candidates) || candidates.length === 0) {
-    // No matches: the lock may be held by an unrelated process,
-    // or the orphan exited between detection and now. Surface a
-    // non-destructive notice; the existing message() fallback
-    // keeps the user in the loop without offering a Reclaim
-    // button that would no-op.
-    try {
-      await message(
-        `No orphan chan serve process matched ${key}. The drive lock may be held by an unrelated process; manual \`pkill chan\` may be needed.`,
-        { title: 'Drive lock', kind: 'warning' },
-      );
-    } catch {
-      showError(`No orphan chan serve process matched ${key}.`);
-    }
-    return;
-  }
-  const accepted = await showReclaimDialog(key, candidates);
-  if (!accepted) return;
-  let result;
-  try {
-    result = await invoke('reclaim_drive_lock', { path: key });
-  } catch (e) {
-    const msg = (e && e.message) || String(e);
-    try {
-      await message(
-        `Reclaim failed: ${msg}\n\nManual cleanup: \`pkill -f "chan serve ${key}"\` from a terminal.`,
-        { title: 'Drive lock reclaim failed', kind: 'error' },
-      );
-    } catch {
-      showError(`Reclaim failed: ${msg}`);
-    }
-    return;
-  }
-  if (result && result.retry_succeeded) {
-    // Success path: the new chan serve fires `serves-changed` once
-    // it prints its URL banner, which the existing listener already
-    // turns into a `refresh()`. Surface a transient inline banner
-    // so the user sees the reclaim message even before the table
-    // re-renders.
-    const okMsg = result.message || `Reclaimed ${key}.`;
-    const banner = document.createElement('div');
-    banner.className = 'error-banner';
-    banner.style.background = 'var(--ok-bg, #1e4620)';
-    banner.style.borderColor = 'var(--ok-border, #3a7d44)';
-    banner.textContent = okMsg;
-    main.prepend(banner);
-    setTimeout(() => banner.remove(), 5000);
-    refresh().catch(showError);
-    return;
-  }
-  const tail = result && result.message ? result.message : 'Reclaim did not complete.';
-  try {
-    await message(
-      `${tail}\n\nIf the drive still won't open, try \`pkill -f "chan serve ${key}"\` from a terminal.`,
-      { title: 'Drive lock reclaim incomplete', kind: 'warning' },
-    );
-  } catch {
-    showError(tail);
-  }
-}
-
-function showServeCrashed(p) {
-  const driveLabel = p.key ? p.key : 'this drive';
-  let exitDesc;
-  if (typeof p.exit_signal === 'number') {
-    exitDesc = `chan was killed by signal ${p.exit_signal}`;
-  } else if (typeof p.exit_code === 'number') {
-    exitDesc = `chan exited with code ${p.exit_code}`;
-  } else {
-    exitDesc = 'chan exited without reporting a status';
-  }
-  const tailLines = Array.isArray(p.stderr_tail) ? p.stderr_tail.slice(-5) : [];
-  const tail = tailLines.length ? `\n${tailLines.join('\n')}` : '';
-  showError(`Drive stopped unexpectedly: ${driveLabel}. ${exitDesc}.${tail}`);
-}
 
 /// Tunnel panel. Hidden until the user clicks "Attach", then
 /// rendered inline above the drives table. Two states:

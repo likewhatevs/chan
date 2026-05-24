@@ -1,0 +1,256 @@
+# Phase 10 Roadmap Track A: Desktop Merge and Carryover Closure
+
+Status: in progress.
+
+Track A makes the desktop merge the first dependency-bearing item, then
+turns the phase 8 and phase 9 carryovers into explicit work instead of
+leaving them as intent in prior docs.
+
+## Objectives
+
+- Embed `chan-server` in `chan-desktop` for normal local drives.
+- Preserve `chan serve` as a standalone CLI/server path.
+- Close the desktop-native gaps that did not materialize in phase 9.
+- Sweep the highest-risk phase 9 validation, docs, config, and release
+  hygiene gaps into named tasks.
+
+## 1. Desktop server merge
+
+Current state:
+
+- `chan-server` now exposes a multi-drive host API for in-process desktop
+  use.
+- `chan-desktop` starts normal local drives through the embedded host.
+- Local child-process serving has been removed from desktop. There is no
+  sidecar fallback mode.
+- The embedded desktop tunnel server remains inbound attach plumbing.
+
+Target state:
+
+- `chan-server` exposes a multi-drive host API that can open, close,
+  route, and isolate multiple drives in one process.
+- `chan-desktop` links that host API and starts local drives in-process by
+  default. This is the only local desktop serve mode.
+- `chan serve <path>` remains as a compatibility wrapper around the same
+  runtime.
+- External `chan serve` processes remain valid as standalone servers and
+  explicit attach endpoints.
+
+Implementation notes:
+
+- Keep edit, terminal, search, watch, session, and WebSocket state scoped by
+  drive.
+- Avoid direct filesystem access outside `chan-drive`.
+- Keep request routing explicit enough that accidental cross-drive state
+  bleed is testable.
+- Audit async server paths while changing the host shape. No synchronous
+  filesystem, graph, report, search, or inspector work should block the
+  tokio runtime.
+
+## 2. Desktop-native carryovers
+
+Linux desktop launch blocker:
+
+- Current Linux desktop app is unusable for at least one manual tester.
+- Symptoms:
+  - App opens only a white window with no rendered content.
+  - Menus are `Edit` and `Window`; no `File` menu is present.
+  - `Window -> Drives` opens another empty white window with the same menu.
+- Expected:
+  - Linux desktop launches the drive/onboarding surface.
+  - Menus expose the expected desktop actions for the current platform.
+  - Opening the drives window shows the drive list or first-run flow, not a
+    blank duplicate window.
+- Treat this as a launch-blocking desktop smoke failure before broader
+  desktop merge work is called done.
+
+Bidirectional discovery:
+
+- Add same-user desktop discovery so a bare local `chan serve <path>` can
+  hand off to an already-running desktop instance.
+- Use Unix-domain socket discovery on Unix. Use the equivalent same-user IPC
+  on Windows when Windows desktop support returns.
+- If desktop accepts the handoff, open the drive in the existing desktop
+  window and make the CLI exit cleanly.
+- If desktop is missing, incompatible, or declines, fall back to standalone
+  `chan serve` behavior.
+- Add a no-handoff escape hatch. Explicit host, port, tunnel, or other
+  standalone flags should preserve standalone behavior.
+
+Attach modes:
+
+- Keep local embedded drives as the default desktop mode.
+- Preserve attached inbound mode through the existing tunnel listener path.
+- Add attached outbound mode: desktop can open an already-running `chan
+  serve` URL as a non-owned remote drive.
+- Document the three modes: local embedded, attached inbound, attached
+  outbound.
+- Outbound attach should accept token-bearing URLs as pasted. The desktop
+  owns only the window, not the remote process, token lifecycle, or server
+  shutdown.
+- Inbound attach should continue to support local testing with a command such
+  as `chan serve /tmp/foo --tunnel-url=http://127.0.0.1:9999` against a
+  desktop listener on `127.0.0.1:9999`.
+
+Default `Chan` drive:
+
+- On first desktop launch with fresh metadata, create a default drive named
+  `Chan`.
+- Store the drive under the platform Documents location:
+  - macOS: `~/Documents/Chan`
+  - Linux: XDG Documents directory, falling back to `~/Documents/Chan`
+  - Windows: `Documents\Chan`
+- Seed the drive with the full `docs/manual/` tree embedded at build time.
+- For existing users with metadata but no default `Chan` drive, prompt to
+  designate an existing drive or create a new one. Do not wipe existing
+  metadata during migration.
+- If the registered default `Chan` drive is missing on launch, enter a
+  factory-reset confirmation flow before wiping chan metadata.
+
+## 3. Manual, docs, and site
+
+- Create `docs/manual/` as the canonical user manual source.
+- Make the desktop first-launch seed consume the same manual source. The
+  source tree exists; Track A still owns desktop seeding from it.
+- Publish the manual through the static site.
+- Add CI for manual and site builds.
+- Update stale desktop docs to describe the Tauri webview, embedded server,
+  and attach modes.
+- Keep design docs factual. Remove old claims that desktop is only a thin
+  shell around an external browser and per-drive `chan serve` child process.
+
+## 4. Phase 9 hardening carryovers
+
+Rich Prompt:
+
+- Validate non-empty CodeMirror prompt submit in a browser environment that
+  can type into CodeMirror.
+- Verify archive contents, clear-on-submit behavior, and the edited-during-
+  submit race.
+- Validate clipboard-dependent Spawn agents preflight.
+
+Server and editor consistency:
+
+- Run low-file-descriptor stress under `ulimit -n 256` with many terminals
+  and active indexing.
+- Reproduce rapid-edit stale editor/index races.
+- Decide whether background search and indexing need further throttling
+  beyond current file-descriptor budgets and terminal admission.
+- Audit remaining direct sync calls from async server paths.
+
+Product contracts:
+
+- Codify `[[` as a file/path link picker, not global content search.
+- Add endpoint and UI tests for that contract.
+- Fix or close the File Browser duplicate-key smoke failure.
+
+Config cleanup:
+
+- Remove or deprecate stale `ServerConfig.reports.enabled`.
+- Keep drive-scoped report config as the source of truth.
+- Update config reference docs after the code path is simplified.
+
+## 5. Release and CI hygiene
+
+Standalone `chan` binary:
+
+- Keep `.github/workflows/release.yml` as the standalone binary release
+  workflow.
+- Keep it separate from `.github/workflows/release-desktop.yml`.
+- Accepted release matrix:
+  - Linux x86_64
+  - Linux aarch64
+  - macOS aarch64
+- Do not add macOS x86_64 support.
+- Verify that tag pushes still attach standalone binary artifacts plus
+  `VERSION` and `SHA256SUMS` to the GitHub release.
+
+Desktop release:
+
+- Keep desktop app packaging, signing, notarization, and installer artifacts
+  in `release-desktop.yml`.
+- Do not make Track A's binary release work depend on desktop packaging.
+
+Operational release checks:
+
+- Verify current desktop artifact launch.
+- Verify current standalone `chan` artifact launch.
+- Verify docs, changelog, release notes, and issue tracker links before the
+  phase 10 release cut.
+
+## Interfaces
+
+- `chan-server` adds a multi-drive host API.
+- Existing single-drive `serve()` behavior remains available for the CLI.
+- `chan-desktop` state stores embedded local-drive handles plus explicit
+  external attachments.
+- CLI handoff sends drive path, requested action, client version, and
+  capability set.
+- Desktop replies with accepted/opened or declined/standalone reason.
+- Desktop outbound attach accepts a full server URL with bearer token.
+  Token persistence is out of scope unless separately approved.
+
+## Test plan
+
+- Rust gates:
+  - `cargo test`
+  - `cargo test -p chan-server`
+  - `cargo test -p chan`
+  - `cargo test -p chan-drive`
+  - `cargo clippy --all-targets -- -D warnings`
+- Desktop gates:
+  - Build the Tauri app.
+  - Open two embedded local drives.
+  - Edit both drives.
+  - Run terminals in both drives.
+  - Verify no cross-drive state bleed.
+- CLI compatibility:
+- Standalone `chan serve <path>` with no desktop running.
+- Handoff with desktop running.
+- No-handoff standalone path.
+- Explicit host, port, and tunnel behavior.
+- Attach matrix:
+  - Local embedded drive.
+  - Attached inbound tunnel drive.
+  - Attached outbound URL drive.
+  - Remote disconnect and reconnect.
+  - Invalid token.
+  - Version mismatch.
+- First-launch matrix:
+  - Fresh metadata.
+  - Existing metadata without `Chan`.
+  - Missing registered default drive.
+  - Manual seed present.
+  - Reset confirmation path.
+- Web and product regressions:
+  - Rich Prompt submit, archive, clear, clipboard, and Spawn agents preflight.
+  - File Browser duplicate-key case.
+  - `[[` picker contract.
+  - Rapid-edit stale index repro.
+- Release gates:
+  - Manual and site build.
+  - Desktop artifact launch.
+  - Standalone `chan` artifact launch.
+  - `VERSION` and `SHA256SUMS` release artifacts.
+  - Docs/config consistency.
+
+## Assumptions and non-goals
+
+- Track A is a full carryover sweep, with desktop merge first.
+- Embedded `chan-server` is the target architecture.
+- Desktop local serving is embedded-only. Child-process local serving is not
+  a desktop fallback mode.
+- `~/.chan` remains the shared chan metadata root.
+- The default `Chan` drive is user content and lives under Documents.
+- The full manual is embedded and seeded.
+- `[[` remains a link/file picker. Global Search remains the content and
+  graph search surface.
+- No macOS x86_64 release target is required for phase 10.
+
+## Immediate sequence
+
+1. Commit the embedded-local desktop merge and documentation cleanup.
+2. Implement outbound URL attach in chan-desktop.
+3. Pause before CLI handoff to settle the IPC contract, no-handoff escape
+   hatch, and which `chan serve` flags force standalone behavior.
+4. Continue with CLI handoff only after that design checkpoint.

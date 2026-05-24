@@ -30,6 +30,8 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 toml = { workspace = true }
 dirs = { workspace = true }
+chan-drive = { workspace = true, default-features = false }
+chan-server = { path = "../../crates/chan-server" }
 notify = { workspace = true }
 notify-debouncer-mini = { workspace = true }
 keyring = { workspace = true }
@@ -51,9 +53,6 @@ tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 url = { workspace = true }
 semver = { workspace = true }
-
-[target.'cfg(unix)'.dependencies]
-nix = { version = "0.29", default-features = false, features = ["signal"] }
 
 [dev-dependencies]
 chan-tunnel-client = { workspace = true }

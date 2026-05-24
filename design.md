@@ -34,9 +34,11 @@ crates/
 web/                    Svelte frontend, embedded into the binary
                         at build time via rust-embed.
 
-desktop/                Tauri shell (`chan-desktop`). Launches
-                        `chan serve` per drive and renders the
-                        editor in a webview window. Per-window
+desktop/                Tauri shell (`chan-desktop`). Embeds
+                        chan-server for normal local drives and
+                        renders the editor in a webview window.
+                        Remote drives are explicit attach modes,
+                        not local fallback behavior. Per-window
                         state is keyed by `w=<window-label>`.
 ```
 
@@ -114,6 +116,7 @@ bus.rs           watcher event bridge into the WS broadcast
 config.rs        ServerConfig (server.toml)
 embed_seed.rs    extract the baked-in model bundle on first launch
 error.rs         Error + err_*() response builders
+host.rs          in-process multi-drive host runtime
 indexer.rs       background search/graph indexer (boot + per-event)
 mcp_bridge.rs    Unix-socket MCP server for external agent CLIs
 preferences.rs   EditorPrefs (preferences.toml)

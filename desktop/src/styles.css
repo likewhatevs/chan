@@ -405,94 +405,6 @@ button.btn.icon {
 .is-dark #theme-toggle .ic-sun { display: inline-block; }
 .is-light #theme-toggle .ic-moon { display: inline-block; }
 
-/* fullstack-b-25: drive-lock reclaim modal. Custom dialog because
-   Tauri's `ask()` plugin only renders a body string + yes/no; the
-   user needs to see PID + command line per candidate before
-   confirming the SIGTERM. */
-.reclaim-overlay {
-  position: fixed;
-  inset: 0;
-  background: rgba(0, 0, 0, 0.55);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  z-index: 1000;
-  padding: 24px;
-}
-.reclaim-dialog {
-  background: var(--surface, var(--bg));
-  color: var(--text);
-  border: 1px solid var(--border);
-  border-radius: 10px;
-  padding: 20px 22px 18px;
-  max-width: 640px;
-  width: 100%;
-  max-height: calc(100vh - 80px);
-  overflow-y: auto;
-  box-shadow: 0 16px 48px rgba(0, 0, 0, 0.35);
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-}
-.reclaim-dialog h2 {
-  margin: 0;
-  font-size: 16px;
-  font-weight: 600;
-}
-.reclaim-intro,
-.reclaim-explain {
-  margin: 0;
-  font-size: 13px;
-  line-height: 1.45;
-  color: var(--text-secondary, var(--text));
-}
-.reclaim-key {
-  margin: 0;
-  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-  font-size: 13px;
-  background: var(--btn-bg);
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  padding: 6px 10px;
-  word-break: break-all;
-}
-.reclaim-candidates {
-  list-style: none;
-  margin: 0;
-  padding: 0;
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-}
-.reclaim-candidates li {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-  padding: 8px 10px;
-  background: var(--btn-bg);
-  border: 1px solid var(--border);
-  border-radius: 6px;
-}
-.reclaim-pid {
-  font-size: 12px;
-  font-weight: 600;
-  color: var(--brand);
-}
-.reclaim-command {
-  display: block;
-  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-  font-size: 12px;
-  white-space: pre-wrap;
-  word-break: break-all;
-  color: var(--text);
-}
-.reclaim-buttons {
-  margin-top: 4px;
-  display: flex;
-  justify-content: flex-end;
-  gap: 8px;
-}
-
 /* fullstack-b-28a: per-drive features expand button + sibling
    panel. The ⚙ button lives in the row-actions area; clicking it
    flips the sibling `features-panel` row's hidden attribute. The
@@ -556,9 +468,7 @@ tr.features-panel > td {
 }
 
 /* fullstack-b-28b slice iii: pre-flight modal shown between
-   the directory picker and add_drive. Visually mirrors the
-   reclaim dialog from -b-22 so the launcher's two modals
-   feel consistent. The toggle rows are wider than the
+   the directory picker and add_drive. The toggle rows are wider than the
    per-row expand panel from -b-28a because the pre-flight
    carries the full round-2-plan explanatory copy. */
 .preflight-overlay {

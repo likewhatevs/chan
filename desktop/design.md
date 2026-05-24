@@ -7,51 +7,71 @@ of the two.
 
 ## 1. Purpose
 
-chan-desktop is a thin desktop shell around the `chan` CLI. The CLI
-already does the actual work: it indexes a markdown folder ("drive")
-and serves a Svelte web editor on a local HTTP port. The desktop app
+chan-desktop is the native desktop shell for chan. For normal local
+drives it embeds chan-server in the desktop process and serves the
+same Svelte editor on a loopback HTTP port. The `chan` CLI remains
+the compatibility path for registry mutations and feature toggles
+until those surfaces have desktop-native APIs. The desktop app
 exists so that:
 
 - a non-CLI user can install one signed bundle and open a folder
   through a familiar OS dialog instead of a terminal,
 - multiple drives can be supervised at once, with one app window
   acting as the inventory and on/off control,
-- the `chan` binary lifecycle (process, port, URL, token) is hidden
-  behind buttons.
+- local embedded drives and explicit remote attachments share the
+  same editor window model.
 
 Non-goals:
 
 - chan-desktop is not a second editor. The editor is the web app
-  served by `chan serve`. The desktop window only manages drives.
+  served by chan-server. The desktop window manages drives and opens
+  the editor in a Tauri webview.
 - chan-desktop is not a packaging tool for `chan`. It bundles a
   pinned `chan` binary and treats it as an internal dependency, not
   a user-facing CLI install path.
-- chan-desktop is not a web browser. The drive itself is opened in
-  the user's default browser, not in the Tauri webview.
+- chan-desktop is not a general web browser. Drive windows are
+  dedicated Tauri webviews pointed at local or attached chan URLs.
 
 ## 2. Mental model
 
-Two processes per running drive:
+One desktop process can host many running local drives:
 
 ```
                 +-------------------+
-   user -->     |  chan-desktop     |   single Tauri window per
+   user -->     |  chan-desktop     |   launcher plus drive
                 |  (supervisor)     |   user session
                 +---------+---------+
-                          | spawns / signals
+                          | embeds
                           v
                 +-------------------+
-                |  chan serve PATH  |   one per "on" drive
+                |  DriveHost        |   many local drives
                 |  (HTTP + WS)      |
                 +---------+---------+
                           | http://127.0.0.1:PORT/?t=TOKEN
                           v
-                  default OS browser
+                    Tauri webview
 ```
 
-chan-desktop's window never embeds the editor itself. The Launch
-button on each row opens the captured URL in the system browser via
-the Tauri opener plugin.
+There are three drive attachment modes:
+
+- **Local embedded**: a local registry entry opened by
+  chan-desktop. The desktop mounts the drive into its embedded
+  `DriveHost` and owns the runtime.
+- **Remote outbound**: an already-running chan server that
+  chan-desktop opens by URL. Example: the user runs
+  `chan serve /tmp/foo`, then adds that token-bearing URL to the
+  desktop's remote-drive outbound config. The desktop owns only the
+  window, not the server.
+- **Remote inbound**: chan-desktop listens on a loopback tunnel
+  endpoint and an external `chan serve` connects to it. Example:
+  the desktop listens on `127.0.0.1:9999`, then the user runs
+  `chan serve /tmp/foo --tunnel-url=http://127.0.0.1:9999`. The
+  desktop owns the listener and per-drive webview, not the remote
+  server.
+
+There is no fallback serve mode. If a user wants to run
+`chan serve` directly, that is a remote attachment, even when the
+server is on the same machine.
 
 ## 3. Drive lifecycle
 
@@ -63,14 +83,14 @@ chan-desktop is a read-only consumer of the drive set; mutation
 happens exclusively through `chan add` / `chan remove` (and, later,
 `chan rename`).
 
-The desktop owns a small sidecar config of its own at the
-platform-appropriate path. It holds the global `dev_mode` flag and,
-per drive (keyed by canonical path), the last port that drive's
-`chan serve` bound to. Nothing about whether a drive is currently
+The desktop owns a small config of its own at the
+platform-appropriate path. It holds desktop-only state such as
+feature-toggle cache, tunnel preferences, and closed-window
+restore data. Nothing about whether a local drive is currently
 *running* is persisted: the On column in the UI is derived live
-from the in-memory map of supervised serves, so a desktop restart
-comes up with everything off and there is no chance of a stale
-on=true sticking after chan died unexpectedly.
+from the in-memory map of active local runtimes, so a desktop
+restart comes up with everything off and there is no chance of a
+stale on=true sticking after a crash.
 
 A filesystem watcher (`notify` + 150ms debounce) runs over
 `~/.chan/` for the lifetime of the process and emits a
@@ -87,10 +107,10 @@ registry. Visible state per drive in the inventory:
 
 | column | meaning                                                  |
 |--------|----------------------------------------------------------|
-| On     | toggle: is `chan serve` running for this drive?          |
+| On     | toggle: is this drive's local runtime active?            |
 | Path   | canonical absolute path from the chan registry           |
 | Name   | display name from the chan registry; read-only in the UI |
-| URL    | the URL printed by `chan serve` once it is up            |
+| URL    | the active local URL once the runtime is up              |
 | Close  | unregister: stop + `chan remove`                         |
 
 Names are deliberately read-only in the desktop. Renaming a drive is
@@ -110,10 +130,10 @@ launch when the chan registry is empty.
    section 4).
 3. chan-desktop runs `chan add <path>`. On non-zero exit, the stderr
    is surfaced as an inline error banner.
-4. On success the desktop immediately spawns `chan serve` for the
-   new drive (see section 3.3). The registry watcher fires, the UI
-   re-fetches, the new row appears with **On = on**, and the URL
-   column populates as soon as chan prints its ready banner.
+4. On success the desktop immediately starts the local runtime for
+   the new drive (see section 3.3). The registry watcher fires, the
+   UI re-fetches, the new row appears with **On = on**, and the URL
+   column populates from the embedded handle.
 
 The auto-start is specific to "Open drive" from the desktop UI:
 the user's intent there is "make this drive usable now". Adding a
@@ -124,76 +144,30 @@ in the model; we just don't make the desktop pick it.
 
 ### 3.3 Toggle On (serve)
 
-Toggling On spawns `chan serve <path> --host 127.0.0.1 --port N` as
-a child process owned by chan-desktop. Port `N` is allocated as
-follows:
+Toggling On opens the drive through the embedded chan-server
+`DriveHost`. The desktop owns one loopback listener and mounts each
+drive under a distinct path prefix. Each mounted drive gets
+isolated AppState, watcher, indexer, terminal registry, MCP bridge,
+control socket, and token state.
 
-1. If the drive's sidecar has a `last_port` from an earlier serve,
-   we try to bind `127.0.0.1:last_port` first. On success we drop
-   the probe socket and reuse that port. The point is to keep any
-   browser tabs the user already has open on a URL that is still
-   routable across a stop-then-start cycle.
-2. Otherwise (or if the preferred port is taken), we bind
-   `127.0.0.1:0` and let the OS assign one, then close the probe.
+Embedded local serving keeps chan-server's bearer token gate
+enabled. The desktop webview receives the token-bearing URL and
+the SPA stores the token in sessionStorage.
 
-Either way, we persist the chosen port back into the sidecar
-before spawning chan. There is a TOCTOU window between close and
-chan's bind which we accept: a foreign process grabbing the port
-in that window surfaces as chan exiting non-zero, which the
-reader thread already handles by flipping the toggle back to off.
+The local runtime:
 
-We pass `--no-token` to every `chan serve` the desktop spawns. The
-serve binds to 127.0.0.1, the desktop user already trusts every
-process on their own machine, and the rotating bearer token only
-bought us URL churn that broke browser tabs on every restart.
-Combined with port reuse this means a tab kept open across a
-toggle-Off / toggle-On lands on a still-routable URL and chan's
-WebSocket reconnect succeeds.
-
-This applies only to desktop-spawned serves. A terminal-initiated
-`chan serve` is outside our control and keeps chan's default
-token-issuing behaviour.
-
-The supervisor:
-
-- pipes stderr and tails it line by line on a dedicated thread
-  per running drive,
-- watches for chan's `chan is ready:` banner and captures the URL
-  printed on the following line,
-- stores the URL in `AppState.serves` (in-memory only; the bearer
-  token rotates on every `chan serve` so a saved URL would decay
-  to garbage between launches),
+- stores the URL in `AppState.serves` in memory only,
 - emits a `serves-changed` Tauri event so the row re-renders with
   the URL field populated and the Launch button enabled,
-- when the reader hits EOF (chan exited, intentionally or not),
-  reaps the child, flips the sidecar `on` flag back to false, and
-  emits another `serves-changed`.
-
-When dev mode is on, the supervisor also forwards every captured
-line to the frontend as a `chan-log` event with the drive's
-canonical path and the line. The console window subscribes to that
-stream. See section 9 (Settings).
+- opens one Tauri drive webview automatically, with additional
+  Launch clicks opening more windows for the same runtime,
+- closes all drive windows when the local runtime is toggled off.
 
 ### 3.4 Toggle Off (stop)
 
-Calls `Child::kill`, which is SIGKILL on Unix and `TerminateProcess`
-on Windows. chan does not get a chance to flush logs or unbind its
-listening socket cleanly; the OS reclaims the port within seconds.
-
-This is deliberately the prototype version. The intended endgame is
-SIGTERM with a 10s grace period (what chan's own signal handler
-already implements), then SIGKILL on timeout. That needs either
-`libc::kill` on Unix and the win32 equivalent on Windows, or the
-`nix` / `windows-sys` crates. We will pull one in when graceful
-shutdown actually matters; until then, the cost is "chan's last
-log line is missing" and "the listening socket sits in TIME_WAIT
-for ~10s after stop".
-
-App exit triggers a SIGKILL of every running serve via the Tauri
-`RunEvent::Exit` hook, so children do not outlive the desktop
-process under normal exit. Hard crashes can still orphan children;
-a chan-side parent-death watchdog or a per-child PID file would
-close that gap.
+Toggle Off closes the mounted drive in DriveHost and tears down its
+drive windows. App exit calls the same stop path for every active
+local runtime.
 
 ### 3.5 Close drive (remove)
 
@@ -215,18 +189,17 @@ Anything that mutates `~/.chan/config.toml` shows up in the UI:
 
 For external `chan serve` (somebody runs `chan serve ~/notes` from a
 terminal, bypassing the desktop), the registry only records that
-the drive *exists*; it does not record that a serve is running. So
-the desktop's On toggle will not flip to on, and no URL will appear.
-Detecting external serves would need either a process scan
-(cross-platform PITA) or a chan-side change to write a per-drive
-status file. We accept this gap rather than pay for it now.
+the drive exists; it does not record that a serve is running. The
+desktop's local On toggle will not flip to on, and no URL will
+appear. A user who wants that server in the desktop adds it through
+the remote outbound config using the server's URL.
 
 ## 4. Validation
 
-The desktop app does not invent its own validation. It defers to
-chan-core / chan helpers, both to avoid drift and so that anything
-the desktop app accepts is also accepted by every other chan
-surface.
+The desktop app avoids inventing durable validation rules. It
+defers to chan-drive or the `chan` CLI where those surfaces already
+own a contract, both to avoid drift and so that anything the desktop
+app accepts is also accepted by every other chan surface.
 
 - **Drive name**: not validated by the desktop at all. Names are
   read-only in the UI, so the only writer is `chan rename`, which
@@ -234,37 +207,31 @@ surface.
   pre-existing registry entry has a name that no longer validates,
   the desktop displays it as-is rather than rewriting it.
 - **Path**: canonicalised via `std::fs::canonicalize` before being
-  passed to `chan add` / `chan remove` / `chan serve`. We always
-  invoke chan with argv as a slice (`Command::new("chan").args([...])`),
-  never as a single shell-quoted string, so quoting is a non-issue;
-  the remaining concern is just that we hand chan the same path the
-  user sees in the UI. When canonicalisation fails (broken symlink,
-  asleep network mount), we fall back to the literal path.
+  passed to `chan add` / `chan remove` / embedded open. We always
+  invoke chan with argv as a slice
+  (`Command::new("chan").args([...])`), never as a single
+  shell-quoted string, so quoting is a non-issue; the remaining
+  concern is just that we hand chan the same path the user sees in
+  the UI. When canonicalisation fails (broken symlink, asleep
+  network mount), we fall back to the literal path.
 - **Relative path arguments inside a drive** (used later, not by the
   current UI) reuse `chan_drive::fs_ops::validate_rel`.
 
-We will pull chan-core in as a path dep when the desktop starts
-linking it directly (e.g. for the bundled-chan model in section 5.2).
-Until then, validation responsibility lives entirely on the chan
-side and the desktop just forwards user input.
+Desktop now links chan-drive and chan-server for embedded local
+serving. Registry mutations and feature flips still go through the
+`chan` CLI until their desktop-native replacements land.
 
 ## 5. The chan binary
 
-chan-desktop does not implement any drive logic. It calls out to a
-`chan` executable. There are two phases:
-
-### 5.1 Prototype (now)
-
-The supervisor spawns whatever `chan` is on `$PATH`. Developers and
-early testers are expected to have a working `chan` install. There is
-no version pinning. This is fine for iteration but unacceptable for
-end-user releases.
-
-### 5.2 Production (target)
+chan-desktop links `chan-drive` and `chan-server` for embedded local
+serving. It still calls out to a pinned `chan` executable for CLI
+surfaces that remain owned by the binary: registry mutations,
+feature toggles, update checks, and the hidden MCP proxy command.
 
 The release `.app` / `.exe` / Linux bundle ships a pinned `chan`
-binary inside the bundle. The supervisor resolves it relative to the
-running executable, never `$PATH`. This is a deliberate choice:
+binary inside the bundle. Runtime resolution is PATH-first only when
+the PATH binary's version matches chan-desktop exactly; otherwise it
+uses the bundled binary. This is a deliberate choice:
 
 - Pro: deterministic. One desktop release pairs with exactly one
   `chan` build. The test matrix is "did this DMG work" rather than
@@ -275,15 +242,16 @@ running executable, never `$PATH`. This is a deliberate choice:
   the desktop UI did not change. Acceptable while both are
   pre-1.0 and ship together.
 
-The `chan` binary lives at:
+The bundled `chan` binary lives at:
 
 - macOS:   `ChanDesktop.app/Contents/Resources/bin/chan`
 - Linux:   alongside the desktop binary (`/usr/lib/chan-desktop/chan`
            when packaged, or next to the binary in a tarball)
 - Windows: `chan.exe` in the install directory
 
-Resolution order at runtime: bundled binary first, fall back to
-`$PATH` only in dev builds (`#[cfg(debug_assertions)]`).
+The binary is not a local serving fallback. Running `chan serve`
+directly is an explicit remote attachment from the desktop's point
+of view.
 
 ## 6. Power users and the CLI tool
 
@@ -359,53 +327,69 @@ The plan:
 
 This whole section becomes urgent once the first end-user DMG ships.
 
-## 9. Settings and developer mode
+## 9. Settings and developer controls
 
-The Settings window is intentionally empty apart from one toggle:
-**Developer mode**. When on:
+chan owns the Settings surface per drive. The desktop menu item
+dispatches `app.settings.toggle` into the focused drive webview; it
+is a no-op when focus is not inside a drive window.
 
-- every `chan serve` chan-desktop spawns gets `-vv` (debug-level
-  tracing) appended to its argv,
-- the **console window** is shown. The console window is a third
-  Tauri window (label `console`, hidden by default) that subscribes
-  to the `chan-log` event stream and appends every captured line,
-  prefixed with the drive's basename. Auto-scroll pins to the bottom
-  unless the user has scrolled up. There is a Clear button.
-- when dev mode is toggled off, the console window is hidden but
-  not destroyed, and the supervisor stops emitting `chan-log`
-  events. Already-running serves continue with whatever verbosity
-  they were started with; the user has to toggle Off / On to pick
-  up a verbosity change.
+Maintainer controls stay native:
 
-This is deliberately not browser DevTools. Browser-level debugging
-the desktop UI itself is a maintainer concern, not an end-user one,
-and is reachable through the standard Tauri / WebKit Inspector when
-needed for development.
+- Cmd+R / Ctrl+R reloads the focused drive webview.
+- Cmd+Opt+I / Ctrl+Alt+I opens webview DevTools.
+- Cmd+Shift+N opens another launcher window.
 
-Future settings additions are deferred until they have concrete
-demand: tunnel publishing (`--tunnel-token`, `--public`) probably
-belongs in a per-drive "Share" panel rather than a global setting.
+Future global settings additions are deferred until they have
+concrete demand. Tunnel publishing belongs in the drive attachment
+surface rather than a generic app settings page.
 
-## 10. Tunneled drives
+## 10. Remote drives
+
+Remote drives are explicit attachments. They are not a fallback for
+failed embedded local serving.
+
+### 10.1 Outbound URL attach
+
+Outbound attach means the server already exists and chan-desktop
+opens it by URL. Example:
+
+```
+chan serve /tmp/foo
+```
+
+The user copies the printed URL, including the bearer token, into a
+remote-drive outbound config in chan-desktop. The desktop opens that
+URL in a drive webview and does not try to start, stop, reclaim, or
+inspect the server process. This works whether the URL points at
+another machine or at `127.0.0.1` on the same machine.
+
+### 10.2 Inbound tunnel attach
 
 chan-desktop embeds `chan-tunnel-server` from chan-core so a remote
 `chan serve` can register a drive over an SSH tunnel and show up in
-Drive Manager alongside locally-supervised drives. The remote drive
+Drive Manager alongside embedded local drives. The remote drive
 opens in a regular drive webview window pointed at a loopback URL on
 the laptop; the request body rides yamux substreams back through the
 SSH tunnel to the remote `chan serve`.
 
-### 10.1 Topology
+The same shape also works on one machine for local testing:
+
+```
+# in chan-desktop: listen on 127.0.0.1:9999
+chan serve /tmp/foo --tunnel-url=http://127.0.0.1:9999
+```
+
+### 10.3 Topology
 
 ```
 laptop (chan-desktop)               remote host
-─────────────────────               ───────────
-tunnel listener   127.0.0.1:7777  <── ssh -R 7777:localhost:7777
-   │
-   ├─ Arc<Registry>: (label, drive) → TunnelHandle
-   │
-   └─ per-tenant axum listener  127.0.0.1:<port>
-        GET /<drive>/...  →  PrependPathLayer  →  public_router
+---------------------               -----------
+tunnel listener   127.0.0.1:7777  <- ssh -R 7777:localhost:7777
+   |
+   +-- Arc<Registry>: (label, drive) -> TunnelHandle
+   |
+   +-- per-tenant axum listener  127.0.0.1:<port>
+        GET /<drive>/...  ->  PrependPathLayer  ->  public_router
                               (sees /<label>/<drive>/...)
 ```
 
@@ -425,9 +409,9 @@ verbatim as the validated username and renders it in Drive Manager.
 A natural convention is `<hostname>-<osuser>` (e.g. `alex-laptop`),
 which keeps multiple machines distinguishable. Charset is
 `chan_tunnel_proto::is_valid_username`: ASCII alphanumeric plus
-`-` and `_`, ≤64, first char alphanumeric.
+`-` and `_`, <=64, first char alphanumeric.
 
-### 10.2 Security boundary
+### 10.4 Security boundary
 
 Both the tunnel listener and every per-tenant listener bind
 `127.0.0.1` only. There is no config knob to change the bind host.
@@ -458,17 +442,17 @@ Both the tunnel listener and every per-tenant listener bind
   desktop's tenant string; it is never derived from any request
   byte.
 
-### 10.3 Lifecycle
+### 10.5 Lifecycle
 
 - Explicit start. Boot does not bind anything; the user clicks
-  "Listen…" in the Drive Manager header to open a panel that
+  "Listen..." in the Drive Manager header to open a panel that
   accepts an optional port (`0` / blank = OS-assigned). Clicking
   Start invokes `tunnel_start`, which binds `127.0.0.1:<port>`
   and spawns both the tunnel accept loop and the supervisor.
   The actual bound port plus a `ssh -R` snippet and a sample
   `chan serve` command appear in the same panel.
 - Persistence is limited to the user's preferred port (saved in
-  the sidecar config so the input is pre-filled on next launch).
+  desktop config so the input is pre-filled on next launch).
   The listening state itself is NOT persisted: every desktop
   start comes up off.
 - A supervisor task polls the registry every 500 ms and reconciles
@@ -489,12 +473,11 @@ Both the tunnel listener and every per-tenant listener bind
 - Stop tears down the tunnel listener, the supervisor, and every
   per-tenant listener via a cascading cancel token. The registry
   empties as yamux connections close. On app exit the same
-  shutdown runs unconditionally so children don't outlive the
-  desktop process.
+  shutdown runs unconditionally.
 
-### 10.4 UI
+### 10.6 UI
 
-Header strip: a "Listen…" button toggles an inline tunnel panel
+Header strip: a "Listen..." button toggles an inline tunnel panel
 above the drives table. While idle the panel offers a port input
 and Start button; while listening it shows the bound port, a
 copy-on-click `ssh -R` snippet, a copy-on-click `chan serve`
@@ -515,7 +498,7 @@ Newly-registered drives auto-open in the system browser via the
 `tunneled-drive-ready` event so the user doesn't have to click
 Launch for the first registration.
 
-### 10.5 Deferred
+### 10.7 Deferred
 
 - Per-tenant listener port persistence across Stop/Start cycles
   within one session, and across desktop restarts. Open browser
@@ -527,17 +510,10 @@ Launch for the first registration.
   row tooltip only).
 - In-app Tauri WebviewWindow for tunneled drives (currently the
   auto-launch and Launch button open the system browser, while
-  locally-supervised drives get an in-app webview).
+  embedded local drives get an in-app webview).
 
 ## 11. Open questions
 
-- (resolved) `chan serve` token: desktop-spawned serves pass
-  `--no-token`. See section 3.3.
 - Multiple desktop windows vs one window: current design is one
   window with a drives table. Adding per-drive child windows is a
   later concern.
-- Graceful stop: see section 3.4. Worth doing once we hit the first
-  user-visible cost.
-- Cross-platform child reaping on hard crash: see section 3.4.
-  Probably solved by chan growing a parent-death watchdog rather
-  than chan-desktop tracking PIDs in a sidecar file.

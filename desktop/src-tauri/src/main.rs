@@ -2,12 +2,15 @@
 
 mod auth;
 mod config;
+mod embedded;
 mod registry;
 mod serve;
 mod tunnel;
 mod watcher;
 
 use std::collections::HashMap;
+#[cfg(unix)]
+use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
@@ -23,13 +26,14 @@ use tunnel::TunnelState;
 const CHAN_BUSY_CHANGED: &str = "chan-busy";
 const SYSTEM_NOTICE: &str = "system-notice";
 
-/// Process-wide state. Shared via `Arc` because the serve supervisor
-/// hands clones to per-drive reader threads.
+/// Process-wide state. Shared via `Arc` because Tauri commands and
+/// background runtime owners need the same state handle.
 pub struct AppState {
     store: Mutex<ConfigStore>,
-    /// Live `chan serve` children keyed by canonical drive path.
-    /// Holds the captured URL once chan prints it.
+    /// Live embedded local drives keyed by canonical drive path.
     serves: Mutex<HashMap<String, ServeHandle>>,
+    /// In-process chan-server host for normal local drives.
+    embedded: Option<embedded::EmbeddedServer>,
     /// Embedded chan-tunnel-server. Owns the tunnel listener on
     /// 127.0.0.1:7777, the shared registry, and the per-tenant
     /// loopback listeners that proxy into registered remote
@@ -52,13 +56,11 @@ pub struct AppState {
     pub live_window_zooms: Mutex<HashMap<String, f64>>,
 }
 
-/// Defense-in-depth sidecar reap: `RunEvent::Exit` is the primary
-/// teardown path, but a panic unwinding through `tauri::App` can
-/// bypass it entirely. Dropping the last `Arc<AppState>` (which
-/// includes panic unwind on the runtime, since chan-desktop builds
-/// with the default `unwind` panic strategy) signals every running
-/// chan serve via `serve::stop_all`. Idempotent: stop_all drains
-/// the serves map, so a normal-exit run followed by Drop is a
+/// Defense-in-depth local runtime teardown: `RunEvent::Exit` is the
+/// primary path, but a panic unwinding through `tauri::App` can
+/// bypass it. Dropping the last `Arc<AppState>` signals every
+/// running local drive via `serve::stop_all`. Idempotent: stop_all
+/// drains the serves map, so a normal-exit run followed by Drop is a
 /// no-op on the second pass.
 impl Drop for AppState {
     fn drop(&mut self) {
@@ -71,9 +73,10 @@ impl Drop for AppState {
 ///   * `"ok"`          — binary found, environment is fine.
 ///   * `"translocated"` — macOS App Translocation detected; the app
 ///     is running from a randomized read-only path because it was
-///     launched from outside `/Applications`. `chan serve` would
-///     fail silently. User must move the bundle.
-///   * `"missing"`     — bundled sidecar not next to chan-desktop.
+///     launched from outside `/Applications`. User must move the
+///     bundle.
+///   * `"missing"`     — bundled chan binary not next to
+///     chan-desktop.
 ///     Corrupt install; should never happen in a packaged build.
 #[derive(Debug, Clone, Serialize)]
 pub struct BinStatus {
@@ -93,43 +96,6 @@ impl BinStatus {
 }
 
 impl AppState {
-    /// Set the URL on a running serve handle. Returns `true` on a
-    /// real change so the caller can decide whether to emit an
-    /// event. Caller must NOT hold `serves` lock.
-    pub fn set_serve_url(&self, key: &str, url: &str) -> bool {
-        let mut serves = self.serves.lock().unwrap();
-        let Some(h) = serves.get_mut(key) else {
-            return false;
-        };
-        if h.url.as_deref() == Some(url) {
-            return false;
-        }
-        h.url = Some(url.to_string());
-        true
-    }
-
-    /// Last port this drive's `chan serve` bound to, if any. Used
-    /// by the supervisor to prefer the same port across restarts so
-    /// open browser tabs don't permanently dead-end on reconnect.
-    pub fn drive_port(&self, key: &str) -> Option<u16> {
-        self.store
-            .lock()
-            .unwrap()
-            .get()
-            .ok()?
-            .sidecar
-            .get(key)
-            .and_then(|s| s.last_port)
-    }
-
-    /// Persist the port chosen for this drive's serve.
-    pub fn set_drive_port(&self, key: &str, port: u16) -> std::io::Result<()> {
-        let mut store = self.store.lock().unwrap();
-        let mut cfg = store.get()?;
-        cfg.sidecar.entry(key.to_string()).or_default().last_port = Some(port);
-        store.save(&cfg)
-    }
-
     /// Push a closing window's layout onto the LRU stack. Best
     /// effort: any I/O error is logged and dropped so a flaky
     /// config disk doesn't leak through the WindowEvent handler.
@@ -173,7 +139,7 @@ impl AppState {
 /// the wire shape so the existing renderer can iterate one list:
 ///
 /// * `kind = "local"`: a chan-registry entry, backed by a
-///   `chan serve` child the desktop spawned. Includes the canonical
+///   drive mounted into the embedded server. Includes the canonical
 ///   filesystem path and live URL.
 /// * `kind = "tunneled"`: a remote `chan serve` that dialed into
 ///   the embedded tunnel server. No path; `url` points at the
@@ -301,13 +267,13 @@ async fn add_drive(
     }
 
     // `fullstack-b-28b` slice iii: mirror the chosen features into
-    // the sidecar mirror so `get_drive_features` returns the
+    // the desktop cache so `get_drive_features` returns the
     // authoritative state immediately, before the user toggles
     // anything in the launcher row.
     if features != DriveFeatures::default() {
         let mut store = state.store.lock().unwrap();
         let mut cfg = store.get().map_err(err)?;
-        cfg.sidecar.entry(path.clone()).or_default().features = features;
+        cfg.drives.entry(path.clone()).or_default().features = features;
         store.save(&cfg).map_err(err)?;
     }
 
@@ -316,7 +282,7 @@ async fn add_drive(
     // serve immediately is what they expect; otherwise the freshly
     // added row sits there with On=off and Launch disabled, which
     // looks broken.
-    serve::start(app, Arc::clone(&state), path, &bin)?;
+    serve::start(app, Arc::clone(&state), path).await?;
     Ok(())
 }
 
@@ -328,7 +294,7 @@ async fn remove_drive(
 ) -> Result<(), String> {
     require_bin(&state.bin_status)?;
     let key = canonical_key(Path::new(&path));
-    serve::stop(&state, &key);
+    serve::stop(Some(&app), &state, &key);
 
     emit_chan_busy(&app, true, "remove", &key);
     let out = Command::new(serve::resolve_chan_binary()?)
@@ -348,112 +314,25 @@ async fn remove_drive(
 
     let mut store = state.store.lock().unwrap();
     let mut cfg = store.get().map_err(err)?;
-    cfg.sidecar.remove(&key);
+    cfg.drives.remove(&key);
     store.save(&cfg).map_err(err)?;
     Ok(())
 }
 
 #[tauri::command]
-fn set_drive_on(
+async fn set_drive_on(
     app: tauri::AppHandle,
-    state: State<Arc<AppState>>,
+    state: State<'_, Arc<AppState>>,
     path: String,
     on: bool,
 ) -> Result<(), String> {
     let key = canonical_key(Path::new(&path));
     if on {
-        require_bin(&state.bin_status)?;
-        serve::start(app, Arc::clone(&state), key, &serve::resolve_chan_binary()?)?;
+        serve::start(app, Arc::clone(&state), key).await?;
     } else {
-        serve::stop(&state, &key);
+        serve::stop(Some(&app), &state, &key);
     }
     Ok(())
-}
-
-/// `fullstack-b-22`: result returned by [`reclaim_drive_lock`].
-/// Frontend reads the fields to decide whether to show a success
-/// toast, a "killed but retry failed" warning, or a "no orphan
-/// found, you may need to `pkill chan`" surface.
-#[derive(Debug, Clone, Serialize)]
-struct ReclaimResult {
-    /// Pids that were signaled (SIGTERM, escalated to SIGKILL).
-    /// Empty when no orphan was found that matches the drive key.
-    killed_pids: Vec<u32>,
-    /// True when the retry `serve::start` after the kill succeeded
-    /// (chan serve handed off to the supervisor; the SPA will pick
-    /// up the URL via the usual `serves-changed` event).
-    retry_succeeded: bool,
-    /// Pre-formatted line for the frontend to render in a toast /
-    /// status message. Already contains drive key context.
-    message: String,
-}
-
-/// `fullstack-b-22`: minimum-viable lock-takeover for orphan
-/// `chan serve` sidecars. When chan-desktop is killed ungracefully
-/// (SIGKILL, panic that bypasses the unwind, OS reboot mid-run),
-/// the bundled chan children get reparented to PID 1 and continue
-/// holding the per-drive flock. A fresh chan-desktop launch sees
-/// `serve-failed` with `"drive is locked by another process"` in
-/// the stderr tail; the SPA then prompts the user and routes here
-/// to reclaim.
-///
-/// Skips elaborate detection heuristics per the task body's
-/// minimum-viable framing: any process whose argv contains `chan`,
-/// ` serve `, and the drive key is treated as a takeover
-/// candidate. The Reclaim button is the user's opt-in.
-#[tauri::command]
-fn reclaim_drive_lock(
-    app: tauri::AppHandle,
-    state: State<Arc<AppState>>,
-    path: String,
-) -> Result<ReclaimResult, String> {
-    let key = canonical_key(Path::new(&path));
-    let candidates = serve::find_orphan_chan_serve_candidates(&key)?;
-    if candidates.is_empty() {
-        return Ok(ReclaimResult {
-            killed_pids: vec![],
-            retry_succeeded: false,
-            message: format!(
-                "No orphan `chan serve` process matched {key}. The drive lock may be \
-                 held by an unrelated process; manual `pkill chan` may be needed."
-            ),
-        });
-    }
-    let pids: Vec<u32> = candidates.iter().map(|c| c.pid).collect();
-    for pid in &pids {
-        serve::kill_orphan_with_grace(*pid);
-    }
-    require_bin(&state.bin_status)?;
-    match serve::start(
-        app,
-        Arc::clone(&state),
-        key.clone(),
-        &serve::resolve_chan_binary()?,
-    ) {
-        Ok(()) => Ok(ReclaimResult {
-            killed_pids: pids,
-            retry_succeeded: true,
-            message: format!("Reclaimed {key} from orphan sidecar."),
-        }),
-        Err(e) => Ok(ReclaimResult {
-            killed_pids: pids,
-            retry_succeeded: false,
-            message: format!("Killed orphan sidecar(s) for {key} but the retry start failed: {e}"),
-        }),
-    }
-}
-
-/// `fullstack-b-25`: surface the candidate set to the SPA so the
-/// reclaim dialog can render PID + command line per row. The user
-/// only confirms the kill after seeing what would be SIGTERM'd.
-/// Race window between this call and the `reclaim_drive_lock`
-/// follow-up is acceptable: a stale-but-recent candidate list is
-/// fine; the reclaim path re-enumerates internally before the
-/// kill.
-#[tauri::command]
-fn find_drive_lock_candidates(path: String) -> Result<Vec<serve::OrphanCandidate>, String> {
-    let key = canonical_key(Path::new(&path));
-    serve::find_orphan_chan_serve_candidates(&key)
 }
 
 #[tauri::command]
@@ -463,7 +342,7 @@ fn get_config(state: State<Arc<AppState>>) -> Result<Config, String> {
 
 /// `fullstack-b-28a` + `-b-28b` slice ii: read the persisted
 /// feature toggles for a drive. Returns the default `{bge:
-/// false, reports: false}` for any drive that has no sidecar
+/// false, reports: false}` for any drive that has no desktop cache
 /// entry yet — the launcher's expand panel calls this on render
 /// so first-time drives show up with both toggles off as the
 /// round-2-plan specifies.
@@ -473,9 +352,9 @@ fn get_config(state: State<Arc<AppState>>) -> Result<Config, String> {
 /// `semantic_enabled` + `reports_enabled` — the latter was
 /// added in slice ii's chan-CLI extension). On any CLI error
 /// (drive not yet registered, chan binary unavailable, JSON
-/// parse failure, etc.) the IPC falls back to the sidecar
-/// mirror so the launcher row's expand panel still renders.
-/// On a successful CLI read the sidecar mirror updates if the
+/// parse failure, etc.) the IPC falls back to the desktop
+/// cache so the launcher row's expand panel still renders.
+/// On a successful CLI read the desktop cache updates if the
 /// CLI state differs — picks up out-of-band changes (e.g. user
 /// ran `chan reports enable` from a terminal) so the launcher
 /// reflects truth on the next render without a manual refresh.
@@ -490,7 +369,7 @@ async fn get_drive_features(
             if let Ok(features) = read_features_via_chan_index_status(&bin, &key).await {
                 let mut store = state.store.lock().unwrap();
                 let mut cfg = store.get().map_err(err)?;
-                let entry = cfg.sidecar.entry(key).or_default();
+                let entry = cfg.drives.entry(key).or_default();
                 if entry.features != features {
                     entry.features = features;
                     // Best-effort cache update: a save failure here
@@ -503,13 +382,9 @@ async fn get_drive_features(
         }
     }
     // Fall-through: chan binary unavailable OR CLI read failed.
-    // Sidecar mirror is the best available source.
+    // The desktop cache is the best available source.
     let cfg = state.store.lock().unwrap().get().map_err(err)?;
-    Ok(cfg
-        .sidecar
-        .get(&key)
-        .map(|s| s.features)
-        .unwrap_or_default())
+    Ok(cfg.drives.get(&key).map(|s| s.features).unwrap_or_default())
 }
 
 /// `fullstack-b-28b` slice ii: parse chan-drive's authoritative
@@ -620,8 +495,8 @@ const MAX_PREFLIGHT_SECS: u64 = 5;
 ///
 /// `chan_drive::indexer` uses a near-identical excluded-dirs
 /// set + extension-classification map; replicating the small
-/// surface here keeps chan-desktop independent of the chan-drive
-/// linkage we deliberately don't have at this layer.
+/// surface here keeps the pre-flight report cheap and independent
+/// from opening the drive through the embedded server.
 fn walk_drive_preflight(root: &Path) -> WalkOutcome {
     use std::collections::VecDeque;
     use std::time::Instant;
@@ -819,11 +694,11 @@ async fn check_drive_already_registered(bin: &Path, key: &str) -> bool {
 ///
 /// Calls are sequential so a failure on the first leaves the
 /// second un-touched (matches the user's expectation that
-/// "Reclaim semantic, that failed, didn't touch reports"). On
-/// success the sidecar mirror updates so subsequent
+/// "enable semantic, that failed, didn't touch reports"). On
+/// success the desktop cache updates so subsequent
 /// `get_drive_features` reads return the authoritative state
 /// without a fresh CLI round-trip. On any CLI failure the
-/// sidecar stays untouched and the error propagates to the SPA
+/// desktop cache stays untouched and the error propagates to the SPA
 /// (the launcher's `bindFeaturesToggle` reverts the checkbox).
 #[tauri::command]
 async fn set_drive_features(
@@ -835,10 +710,7 @@ async fn set_drive_features(
     let key = canonical_key(Path::new(&path));
     let current = {
         let cfg = state.store.lock().unwrap().get().map_err(err)?;
-        cfg.sidecar
-            .get(&key)
-            .map(|s| s.features)
-            .unwrap_or_default()
+        cfg.drives.get(&key).map(|s| s.features).unwrap_or_default()
     };
     let bin = serve::resolve_chan_binary()?;
     if current.bge != features.bge {
@@ -865,7 +737,7 @@ async fn set_drive_features(
     }
     let mut store = state.store.lock().unwrap();
     let mut cfg = store.get().map_err(err)?;
-    cfg.sidecar.entry(key).or_default().features = features;
+    cfg.drives.entry(key).or_default().features = features;
     store.save(&cfg).map_err(err)
 }
 
@@ -899,7 +771,7 @@ struct TunnelStatus {
     listening: bool,
     /// Actual bound port (only populated while `listening`).
     port: Option<u16>,
-    /// User's preferred port from the sidecar config. `0` means
+    /// User's preferred port from desktop config. `0` means
     /// "let the OS assign one". UI uses this to populate the port
     /// input field.
     preferred_port: u16,
@@ -1223,7 +1095,7 @@ fn zoom_reset(window: tauri::WebviewWindow, state: State<Arc<AppState>>) -> Resu
     apply_zoom(&window, &state, 1.0)
 }
 
-/// Canonical-path key used for sidecar lookups, serve identity, and
+/// Canonical-path key used for desktop config, serve identity, and
 /// the displayed path. `canonicalize` falls back to the input on
 /// error so we still produce a stable key for not-yet-existing or
 /// asleep paths.
@@ -1239,10 +1111,10 @@ fn canonical_key(p: &Path) -> String {
 /// double-clicked inside a mounted .dmg), it runs the bundle from a
 /// randomized read-only path under
 /// `/private/var/folders/.../AppTranslocation/<UUID>/d/...`. The
-/// bundled `chan` sidecar is found at that path, but the runtime
-/// environment is hostile enough that `chan serve` exits without
-/// printing its ready banner, producing the silent-toggle-flip bug.
-/// We treat this as "binary unusable" and refuse to spawn anything.
+/// bundled `chan` binary is found at that path, but the runtime
+/// environment is hostile enough that subprocess behavior is not a
+/// release surface we want to support. We treat this as "binary
+/// unusable" and refuse to spawn anything.
 #[cfg(target_os = "macos")]
 fn is_app_translocated() -> bool {
     std::env::current_exe()
@@ -1252,7 +1124,7 @@ fn is_app_translocated() -> bool {
 
 /// Boot-time preflight. Runs once before `AppState` is built and the
 /// result is stored verbatim. Order matters: translocation is
-/// checked first because the bundled sidecar is found at the
+/// checked first because the bundled binary is found at the
 /// translocated path but the broader runtime environment is hostile
 /// regardless of which `chan` we'd pick; a PATH-installed `chan`
 /// doesn't rescue a translocated install. After that we let
@@ -1268,7 +1140,7 @@ fn compute_bin_status() -> BinStatus {
                 kind: "translocated",
                 reason: "Chan is running from a disk image. macOS App \
                          Translocation puts the app in a randomized \
-                         read-only path that breaks the drive service. \
+                         read-only path that breaks Chan's bundled CLI. \
                          Drag Chan.app to your Applications folder, then \
                          reopen it from there."
                     .to_string(),
@@ -1289,7 +1161,7 @@ fn compute_bin_status() -> BinStatus {
         return BinStatus {
             ok: false,
             kind: "missing",
-            reason: format!("chan sidecar not found at {}", bin.display()),
+            reason: format!("chan binary not found at {}", bin.display()),
         };
     }
     match serve::probe_chan_version(&bin) {
@@ -1348,13 +1220,75 @@ fn init_tracing() {
         .init();
 }
 
+#[cfg(unix)]
+fn run_hidden_mcp_proxy_if_requested() -> Result<bool, String> {
+    let mut args = std::env::args_os();
+    let _program = args.next();
+    if args.next().as_deref() != Some(OsStr::new("__mcp-proxy")) {
+        return Ok(false);
+    }
+    let socket = args
+        .next()
+        .map(PathBuf::from)
+        .ok_or_else(|| "__mcp-proxy requires a socket path".to_string())?;
+    let rt = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+        .map_err(|e| format!("building MCP proxy runtime: {e}"))?;
+    rt.block_on(run_mcp_proxy(socket))?;
+    Ok(true)
+}
+
+#[cfg(not(unix))]
+fn run_hidden_mcp_proxy_if_requested() -> Result<bool, String> {
+    Ok(false)
+}
+
+#[cfg(unix)]
+async fn run_mcp_proxy(socket: PathBuf) -> Result<(), String> {
+    use tokio::io::{stdin, stdout};
+    let stream = tokio::net::UnixStream::connect(&socket)
+        .await
+        .map_err(|e| format!("connecting to MCP socket {}: {e}", socket.display()))?;
+    let (mut read_sock, mut write_sock) = stream.into_split();
+    let mut stdin = stdin();
+    let mut stdout = stdout();
+    let to_socket = tokio::io::copy(&mut stdin, &mut write_sock);
+    let from_socket = tokio::io::copy(&mut read_sock, &mut stdout);
+    tokio::select! {
+        r = to_socket => {
+            r.map_err(|e| format!("piping stdin to MCP socket: {e}"))?;
+        }
+        r = from_socket => {
+            r.map_err(|e| format!("piping MCP socket to stdout: {e}"))?;
+        }
+    }
+    Ok(())
+}
+
 fn main() {
+    match run_hidden_mcp_proxy_if_requested() {
+        Ok(true) => return,
+        Ok(false) => {}
+        Err(e) => {
+            eprintln!("{e}");
+            std::process::exit(1);
+        }
+    }
     init_tracing();
     let store = ConfigStore::new().expect("failed to init config store");
+    let embedded = match embedded::EmbeddedServer::start() {
+        Ok(server) => Some(server),
+        Err(e) => {
+            tracing::warn!(error = %e, "embedded local server disabled");
+            None
+        }
+    };
     let bin_status = compute_bin_status();
     let state = Arc::new(AppState {
         store: Mutex::new(store),
         serves: Mutex::new(HashMap::new()),
+        embedded,
         tunnel: TunnelState::new(),
         bin_status,
         live_window_zooms: Mutex::new(HashMap::new()),
@@ -1439,8 +1373,6 @@ fn main() {
             add_drive,
             remove_drive,
             set_drive_on,
-            reclaim_drive_lock,
-            find_drive_lock_candidates,
             get_drive_features,
             set_drive_features,
             compute_drive_preflight,
@@ -1468,9 +1400,8 @@ fn main() {
     app.run(move |_app, event| {
         match event {
             RunEvent::Exit => {
-                // Best-effort: SIGKILL every running chan child so
-                // they don't outlive the desktop. The OS reclaims
-                // the ports within seconds.
+                // Best-effort: unmount every embedded local drive
+                // before the desktop runtime exits.
                 serve::stop_all(&state_for_exit);
                 // Cancel the tunnel listener (if active) and every
                 // per-tenant listener. Tasks exit when their cancel
@@ -1656,6 +1587,14 @@ mod tests {
     use super::*;
     use std::fs;
     use tempfile::TempDir;
+
+    #[test]
+    fn desktop_binary_accepts_hidden_mcp_proxy_command() {
+        const MAIN_RS: &str = include_str!("main.rs");
+        assert!(MAIN_RS.contains("\"__mcp-proxy\""));
+        assert!(MAIN_RS.contains("run_hidden_mcp_proxy_if_requested"));
+        assert!(MAIN_RS.contains("run_mcp_proxy(socket)"));
+    }
 
     /// `fullstack-b-28b` slice iv: extension classifier maps the
     /// expected file types into the three media buckets + the

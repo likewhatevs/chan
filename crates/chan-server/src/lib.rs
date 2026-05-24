@@ -22,6 +22,7 @@ mod control_socket;
 mod embed_seed;
 mod error;
 mod event_watcher;
+mod host;
 mod indexer;
 mod mcp_bridge;
 mod mcp_discovery;
@@ -39,6 +40,7 @@ mod util;
 
 pub use config::ServerConfig;
 pub use error::Error;
+pub use host::{DriveHost, HostedDrive};
 pub use preferences::{
     BrowserSidePanes, EditorPrefs, EditorTheme, HybridSurfaceThemes, LineSpacing, PaneWidths,
     SurfaceThemeChoice, ThemeChoice,

@@ -1,47 +1,16 @@
-//! Per-drive `chan serve` supervisor.
+//! Local-drive runtime and drive-window helpers.
 //!
-//! For each drive the user toggles On, we spawn `chan serve <path>
-//! --host 127.0.0.1 --port N` as a child process, pipe its stderr,
-//! and tail it line by line on a dedicated thread. We need the
-//! tail thread for two unrelated reasons:
-//!
-//! 1. chan prints the bound URL on stderr ("chan is ready:" then a
-//!    line with the URL). We capture that and stash it in
-//!    `AppState.serves` so `list_drives` can hand it to the UI and
-//!    the row's Launch button comes alive.
-//! 2. When dev mode is on, every line is also forwarded to the
-//!    frontend as a `chan-log` event so the console window can
-//!    display it.
-//!
-//! Stop sends SIGTERM with a five-second grace deadline before
-//! falling back to SIGKILL (`stop_child`). On Unix every child is
-//! placed in its own process group via `CommandExt::process_group`
-//! and `stop_child` signals the group so any helper subprocesses
-//! chan serve may have spawned die alongside the parent. On
-//! Windows the equivalent is the `CREATE_NEW_PROCESS_GROUP`
-//! creation flag.
-//!
-//! `AppState::drop` also calls `stop_all` as a defense-in-depth
-//! reap path: panics that unwind through `tauri::App` (or any
-//! other holder of the Arc) still tear children down even when the
-//! Tauri `RunEvent::Exit` hook never fires.
+//! chan-desktop opens local drives through the embedded chan-server
+//! `DriveHost`. Each running drive is tracked in `AppState.serves`
+//! with its route prefix and token-bearing URL. The bundled `chan`
+//! binary remains available for registry mutations, feature
+//! toggles, upgrades, and the hidden MCP proxy, but local desktop
+//! serving does not spawn `chan serve`.
 
-use std::collections::VecDeque;
 use std::hash::{DefaultHasher, Hash, Hasher};
-use std::io::{BufRead, BufReader};
-use std::net::TcpListener;
-#[cfg(unix)]
-use std::os::unix::process::CommandExt;
-#[cfg(windows)]
-use std::os::windows::process::CommandExt;
 use std::path::{Path, PathBuf};
-use std::process::{Child, Command, ExitStatus, Stdio};
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
-use std::thread;
-use std::time::{Duration, Instant};
-
-use serde::Serialize;
 
 /// Per-process monotonic counter appended to every drive-window
 /// label so the user can open more than one window for the same
@@ -59,477 +28,100 @@ use tauri::{AppHandle, Emitter, Manager, WebviewUrl, WebviewWindowBuilder, Windo
 use crate::config::{self, WindowConfig};
 use crate::AppState;
 
-/// Tauri event emitted when any serve's state changes (started,
-/// URL discovered, exited). The frontend reacts by re-fetching the
-/// drive list.
+/// Tauri event emitted when any local runtime starts or stops. The
+/// frontend reacts by re-fetching the drive list.
 pub const SERVES_CHANGED: &str = "serves-changed";
 
-/// Tauri event emitted when a `chan serve` exits before printing
-/// the URL banner, i.e. failed to start. Payload is
-/// `ServeFailedPayload`. The frontend uses this to pop a modal
-/// dialog with the captured stderr so the user can tell why instead
-/// of just seeing the On toggle flip back to off.
-pub const SERVE_FAILED: &str = "serve-failed";
-
-/// Tauri event emitted when a `chan serve` exits abnormally after
-/// it had already printed a URL and was therefore visible to the
-/// user. Payload is `ServeFailedPayload`; the frontend shows it as
-/// a soft inline notice rather than a startup-failure modal.
-pub const SERVE_CRASHED: &str = "serve-crashed";
-
-/// Cap on stderr lines retained for the serve-failed payload. Chan's
-/// startup output is short; 50 lines is enough to capture the
-/// failure context without unbounded memory growth if the child
-/// crashes mid-stream.
-const STDERR_TAIL_MAX: usize = 50;
-const STARTUP_TIMEOUT: Duration = Duration::from_secs(15);
-const STOP_GRACE: Duration = Duration::from_secs(5);
 const MAX_WINDOWS_PER_DRIVE: usize = 10;
-
-#[derive(Debug, Clone, Serialize)]
-pub struct ServeFailedPayload {
-    pub key: String,
-    /// Process exit code if the child terminated normally. `None` on
-    /// platforms or paths where we couldn't reap it.
-    pub exit_code: Option<i32>,
-    /// Unix signal number if the child was killed by a signal.
-    /// Always `None` on non-Unix.
-    pub exit_signal: Option<i32>,
-    /// Last `STDERR_TAIL_MAX` stderr lines, oldest first. Empty when
-    /// the child died before writing anything.
-    pub stderr_tail: Vec<String>,
-    /// `fullstack-b-22`: true when `stderr_tail` contains the
-    /// "drive is locked by another process" marker chan serve emits
-    /// when the per-drive flock is already held. Routes the SPA
-    /// into the lock-takeover prompt + `reclaim_drive_lock` IPC
-    /// instead of the generic "drive failed to start" modal.
-    pub drive_lock_conflict: bool,
-}
 
 /// Live state for one running serve. Held in `AppState.serves`
 /// keyed by canonical drive path.
 pub struct ServeHandle {
-    pub child: Child,
+    prefix: String,
     pub url: Option<String>,
 }
 
-/// Spawn `chan serve` for a drive. On success the child is inserted
-/// into `state.serves` under `key`; the URL is filled in
-/// asynchronously by the stderr-tailing thread once chan prints it.
-pub fn start(
-    app: AppHandle,
-    state: Arc<AppState>,
-    key: String,
-    chan_bin: &Path,
-) -> Result<(), String> {
+impl ServeHandle {
+    fn embedded(prefix: String, url: String) -> Self {
+        Self {
+            prefix,
+            url: Some(url),
+        }
+    }
+}
+
+/// Open a local drive through the embedded chan-server host.
+pub async fn start(app: AppHandle, state: Arc<AppState>, key: String) -> Result<(), String> {
     if state.serves.lock().unwrap().contains_key(&key) {
         return Ok(());
     }
-    let preferred = state.drive_port(&key);
-    let port = pick_port_preferring(preferred).map_err(|e| format!("allocating port: {e}"))?;
-    if let Err(e) = state.set_drive_port(&key, port) {
-        tracing::warn!(key = %key, error = %e, "persisting serve port failed");
-    }
-
-    let mut cmd = Command::new(chan_bin);
-    cmd.args([
-        "serve",
-        &key,
-        "--host",
-        "127.0.0.1",
-        "--port",
-        &port.to_string(),
-        // chan-desktop owns the window: the webview loads the
-        // token-bearing URL once and the SPA caches the token in
-        // sessionStorage, so the across-restart breakage that
-        // motivated --no-token is moot here. Keeping the token
-        // shuts out localhost-fingerprinting from web pages and
-        // other local processes that can reach 127.0.0.1.
-        "--no-browser",
-    ])
-    .stdout(Stdio::null())
-    .stderr(Stdio::piped());
-
-    // Detach into a fresh process group so `stop_child` can signal
-    // every descendant chan may have spawned, not just the direct
-    // child. The group is keyed by the child's own PID once it
-    // execs (Unix: setpgid(0,0); Windows: CREATE_NEW_PROCESS_GROUP).
-    #[cfg(unix)]
-    cmd.process_group(0);
-    #[cfg(windows)]
+    let Some(embedded) = state.embedded.as_ref() else {
+        return Err("embedded local server is unavailable".to_string());
+    };
+    let url = embedded.open_drive(&key).await?;
+    let prefix = url_prefix_from_local_url(&url)?;
     {
-        // CREATE_NEW_PROCESS_GROUP from winapi. Hard-coded constant
-        // avoids pulling a winapi crate just for this flag.
-        const CREATE_NEW_PROCESS_GROUP: u32 = 0x0000_0200;
-        cmd.creation_flags(CREATE_NEW_PROCESS_GROUP);
+        let mut serves = state.serves.lock().unwrap();
+        if serves.contains_key(&key) {
+            drop(serves);
+            if let Err(e) = embedded.close_prefix(&prefix) {
+                tracing::warn!(key = %key, error = %e, "closing duplicate embedded drive failed");
+            }
+            return Ok(());
+        }
+        serves.insert(key.clone(), ServeHandle::embedded(prefix, url.clone()));
     }
-
-    let mut child = cmd
-        .spawn()
-        .map_err(|e| format!("spawning `chan serve`: {e}"))?;
-    let stderr = child
-        .stderr
-        .take()
-        .ok_or_else(|| "no stderr handle".to_string())?;
-
-    state
-        .serves
-        .lock()
-        .unwrap()
-        .insert(key.clone(), ServeHandle { child, url: None });
     let _ = app.emit(SERVES_CHANGED, ());
-
-    // Reader thread. Owns the stderr pipe; on EOF the child has
-    // exited (or has been killed), so we reap and clean up state.
-    // We also keep a rolling tail of stderr lines so a startup
-    // failure (EOF before the URL banner) can be surfaced to the
-    // user with context instead of just flipping the toggle off.
-    let app2 = app.clone();
-    let state2 = state.clone();
-    let key2 = key.clone();
-    let startup_complete = Arc::new(AtomicBool::new(false));
-    let startup_complete_for_reader = startup_complete.clone();
-    thread::spawn(move || {
-        let reader = BufReader::new(stderr);
-        let mut saw_ready_banner = false;
-        let mut saw_url = false;
-        let mut tail: VecDeque<String> = VecDeque::with_capacity(STDERR_TAIL_MAX + 1);
-        for line in reader.lines() {
-            let Ok(line) = line else { break };
-
-            if tail.len() == STDERR_TAIL_MAX {
-                tail.pop_front();
-            }
-            tail.push_back(line.clone());
-
-            // chan's banner: "chan is ready:" then a line with the
-            // URL. The URL line is the first non-empty line after
-            // the banner. We're forgiving about exact match because
-            // the banner format is owned by chan, not us.
-            if !saw_ready_banner {
-                if line.contains("chan is ready") {
-                    saw_ready_banner = true;
-                }
-            } else if !line.trim().is_empty() && state2.set_serve_url(&key2, line.trim()) {
-                saw_url = true;
-                startup_complete_for_reader.store(true, Ordering::Release);
-                let _ = app2.emit(SERVES_CHANGED, ());
-                saw_ready_banner = false; // only capture the first URL
-                let _ = spawn_local_drive_window(&app2, &key2, line.trim());
-            }
+    if let Err(e) = spawn_local_drive_window(&app, &key, &url) {
+        if let Some(handle) = state.serves.lock().unwrap().remove(&key) {
+            stop_handle(None, &state, &key, handle);
         }
-
-        // Reader hit EOF: chan exited (intentional kill or crash).
-        // Reap and remove from the live map. `list_drives` derives
-        // the row's On state from this map, so removal alone is
-        // enough to bring the toggle back to off on the next render.
-        let handle = state2.serves.lock().unwrap().remove(&key2);
-        let was_tracked = handle.is_some();
-        let exit_status = handle.and_then(|mut h| h.child.wait().ok());
-
-        // Startup failure: EOF before we ever captured the URL. The
-        // toggle would silently revert to off otherwise; emit a
-        // structured event so the renderer can show the captured
-        // stderr in a modal. A mid-flight crash gets a softer inline
-        // event because the drive had been working previously.
-        let (exit_code, exit_signal) = exit_info(exit_status.as_ref());
-        if !was_tracked {
-            // `stop` / `stop_all` removes the handle before
-            // terminating the child, so this EOF is intentional.
-        } else if !saw_url {
-            let stderr_tail: Vec<String> = tail.into_iter().collect();
-            let drive_lock_conflict = stderr_indicates_drive_lock_conflict(&stderr_tail);
-            let _ = app2.emit(
-                SERVE_FAILED,
-                ServeFailedPayload {
-                    key: key2.clone(),
-                    exit_code,
-                    exit_signal,
-                    stderr_tail,
-                    drive_lock_conflict,
-                },
-            );
-        } else if !normal_termination(exit_code, exit_signal) {
-            let _ = app2.emit(
-                SERVE_CRASHED,
-                ServeFailedPayload {
-                    key: key2.clone(),
-                    exit_code,
-                    exit_signal,
-                    stderr_tail: tail.into_iter().collect(),
-                    // `drive_lock_conflict` only meaningful on the
-                    // SERVE_FAILED path (where chan serve exited
-                    // before printing the URL banner); a post-URL
-                    // crash with the marker in the tail is an
-                    // unrelated coincidence.
-                    drive_lock_conflict: false,
-                },
-            );
-        }
-
-        // Tear down every drive window we opened for this key.
-        // Window CloseRequested is a no-op now (multi-window means
-        // closing one window must NOT stop the serve), so this is
-        // the single point where on-exit cleanup happens.
-        close_local_drive_windows(&app2, &key2);
-        let _ = app2.emit(SERVES_CHANGED, ());
-    });
-
-    let state_for_watchdog = state.clone();
-    let key_for_watchdog = key;
-    thread::spawn(move || {
-        thread::sleep(STARTUP_TIMEOUT);
-        if startup_complete.load(Ordering::Acquire) {
-            return;
-        }
-        let mut serves = state_for_watchdog.serves.lock().unwrap();
-        if let Some(handle) = serves.get_mut(&key_for_watchdog) {
-            if handle.url.is_none() {
-                tracing::warn!(key = %key_for_watchdog, "chan serve startup timed out");
-                let _ = handle.child.kill();
-            }
-        }
-    });
-
+        let _ = app.emit(SERVES_CHANGED, ());
+        return Err(e);
+    }
     Ok(())
+}
+
+fn url_prefix_from_local_url(url: &str) -> Result<String, String> {
+    let parsed = url
+        .parse::<url::Url>()
+        .map_err(|e| format!("parsing embedded drive URL: {e}"))?;
+    let path = parsed.path().trim_end_matches('/');
+    if path.is_empty() {
+        Ok(String::new())
+    } else {
+        Ok(path.to_string())
+    }
 }
 
 /// Stop a running serve. No-op if the drive isn't running. Removes
 /// the live entry before waiting so an immediate stop -> start can
-/// spawn a fresh child instead of observing stale map state.
-pub fn stop(state: &AppState, key: &str) {
+/// mount a fresh runtime instead of observing stale map state.
+pub fn stop(app: Option<&AppHandle>, state: &AppState, key: &str) {
     let handle = state.serves.lock().unwrap().remove(key);
     if let Some(h) = handle {
-        stop_child(h.child, Instant::now() + STOP_GRACE);
+        stop_handle(app, state, key, h);
     }
 }
 
 /// Stop every running serve. Called from the Tauri Exit hook so
-/// chan children don't outlive the desktop process.
+/// embedded drive state shuts down before the desktop exits.
 pub fn stop_all(state: &AppState) {
-    let handles: Vec<ServeHandle> = state
-        .serves
-        .lock()
-        .unwrap()
-        .drain()
-        .map(|(_, h)| h)
-        .collect();
-    let deadline = Instant::now() + STOP_GRACE;
-    for h in handles {
-        stop_child(h.child, deadline);
+    let handles: Vec<(String, ServeHandle)> = state.serves.lock().unwrap().drain().collect();
+    for (key, h) in handles {
+        stop_handle(None, state, &key, h);
     }
 }
 
-fn stop_child(mut child: Child, deadline: Instant) {
-    #[cfg(unix)]
-    {
-        // `start` placed the child in its own process group (pgid =
-        // child PID); signal the whole group so any helpers chan
-        // spawned die alongside the leader. `killpg` matches POSIX
-        // semantics; a stale group is a no-op (ESRCH).
-        let pgid = nix::unistd::Pid::from_raw(child.id() as i32);
-        let _ = nix::sys::signal::killpg(pgid, nix::sys::signal::Signal::SIGTERM);
-    }
-    #[cfg(not(unix))]
-    {
-        let _ = child.kill();
-    }
-
-    loop {
-        match child.try_wait() {
-            Ok(Some(_)) => return,
-            Ok(None) if Instant::now() < deadline => thread::sleep(Duration::from_millis(50)),
-            Ok(None) => break,
-            Err(e) => {
-                tracing::warn!(pid = child.id(), error = %e, "waiting for chan serve failed");
-                break;
-            }
+fn stop_handle(app: Option<&AppHandle>, state: &AppState, key: &str, handle: ServeHandle) {
+    if let Some(embedded) = state.embedded.as_ref() {
+        if let Err(e) = embedded.close_prefix(&handle.prefix) {
+            tracing::warn!(key = %key, error = %e, "closing embedded drive failed");
         }
     }
-    // Grace expired. Escalate to SIGKILL on the group on Unix; the
-    // direct `child.kill()` is sufficient on Windows.
-    #[cfg(unix)]
-    {
-        let pgid = nix::unistd::Pid::from_raw(child.id() as i32);
-        let _ = nix::sys::signal::killpg(pgid, nix::sys::signal::Signal::SIGKILL);
-    }
-    let _ = child.kill();
-    let _ = child.wait();
-}
-
-/// Substring chan serve writes to stderr when the per-drive flock
-/// is already held (see `chan_drive::error::ChanError::DriveLocked`).
-/// Matched as a free-text substring rather than via a structured
-/// exit code because chan serve's stderr is the only signal that
-/// reaches chan-desktop today; the next chan-server release could
-/// promote this to a stable exit code without breaking the SPA-side
-/// lock-takeover prompt (the SPA fall-through still works on the
-/// substring match).
-pub const DRIVE_LOCKED_MARKER: &str = "drive is locked by another process";
-
-/// True if any of the captured stderr lines contains the
-/// drive-locked marker chan serve emits when the per-drive flock is
-/// already held. Used by chan-desktop's `serve-failed` listener to
-/// branch into the lock-takeover UI instead of the generic error
-/// modal.
-pub fn stderr_indicates_drive_lock_conflict(stderr_tail: &[String]) -> bool {
-    stderr_tail
-        .iter()
-        .any(|line| line.contains(DRIVE_LOCKED_MARKER))
-}
-
-/// Find pids of orphan `chan serve` processes whose argv contains
-/// the given drive key. Used by the lock-takeover IPC after a
-/// `serve-failed` payload was recognised as a drive-lock conflict.
-///
-/// `fullstack-b-25`: orphan-detect candidate surfaced to the
-/// SPA via the `find_drive_lock_candidates` IPC. The dialog
-/// renders one row per entry so the destructive Reclaim confirm
-/// shows the user exactly which processes the button will
-/// SIGTERM. Always serialised as `{pid, command}`; `command` is
-/// the trimmed `ps -ax -o command=` line for that pid.
-#[derive(Debug, Clone, Serialize)]
-pub struct OrphanCandidate {
-    pub pid: u32,
-    pub command: String,
-}
-
-/// Find every `chan serve <key>` process holding the drive lock.
-///
-/// `fullstack-b-25` tightened the heuristic from "substring of
-/// `chan` + ` serve ` + key anywhere in the argv" to a positional
-/// argv check: argv[0]'s basename must be exactly `chan`, argv[1]
-/// must be `serve`, and `key` must appear as a standalone token in
-/// argv[2..]. The old loose match could be tripped by wrappers
-/// (`strace chan serve <key>`, `lldb -p N chan serve <key>`),
-/// log-tailing on the drive path, and other coincidental
-/// substring overlap; the user couldn't see which PIDs were
-/// being killed either, so a stray match meant silent collateral.
-/// The positional check accepts only genuine `chan serve`
-/// processes and the dialog now shows the matched candidates by
-/// PID + command line.
-///
-/// Implementation: shell out to `ps -ax -o pid=,command=` and
-/// run the testable core [`parse_ps_lines_for_chan_serve`].
-#[cfg(unix)]
-pub fn find_orphan_chan_serve_candidates(key: &str) -> Result<Vec<OrphanCandidate>, String> {
-    let out = std::process::Command::new("ps")
-        .args(["-ax", "-o", "pid=,command="])
-        .output()
-        .map_err(|e| format!("invoking `ps`: {e}"))?;
-    if !out.status.success() {
-        return Err(format!(
-            "`ps` exited with {}: {}",
-            out.status,
-            String::from_utf8_lossy(&out.stderr).trim(),
-        ));
-    }
-    let our_pid = std::process::id();
-    let stdout = String::from_utf8_lossy(&out.stdout);
-    Ok(parse_ps_lines_for_chan_serve(&stdout, key, our_pid))
-}
-
-#[cfg(not(unix))]
-pub fn find_orphan_chan_serve_candidates(_key: &str) -> Result<Vec<OrphanCandidate>, String> {
-    Err("orphan `chan serve` reclaim is not implemented on this platform".to_string())
-}
-
-/// Testable core of [`find_orphan_chan_serve_candidates`]. Walks
-/// the `ps -ax -o pid=,command=` output, requires argv[0]'s
-/// basename to be exactly `chan`, argv[1] to be `serve`, and
-/// `key` to appear as a standalone token in argv[2..]. Skips
-/// `self_pid` so the current chan-desktop process never
-/// nominates itself.
-#[cfg(unix)]
-fn parse_ps_lines_for_chan_serve(
-    ps_output: &str,
-    key: &str,
-    self_pid: u32,
-) -> Vec<OrphanCandidate> {
-    let mut candidates = Vec::new();
-    for line in ps_output.lines() {
-        let line = line.trim_start();
-        let Some((pid_str, rest)) = line.split_once(char::is_whitespace) else {
-            continue;
-        };
-        let Ok(pid) = pid_str.parse::<u32>() else {
-            continue;
-        };
-        if pid == self_pid {
-            continue;
-        }
-        let tokens: Vec<&str> = rest.split_whitespace().collect();
-        if tokens.len() < 3 {
-            continue;
-        }
-        let prog_basename = Path::new(tokens[0])
-            .file_name()
-            .and_then(|s| s.to_str())
-            .unwrap_or(tokens[0]);
-        if prog_basename != "chan" || tokens[1] != "serve" {
-            continue;
-        }
-        if !tokens[2..].contains(&key) {
-            continue;
-        }
-        candidates.push(OrphanCandidate {
-            pid,
-            command: rest.to_string(),
-        });
-    }
-    candidates
-}
-
-/// SIGTERM the given pid, wait up to one second for it to exit,
-/// then escalate to SIGKILL. Best-effort: a missing process (ESRCH)
-/// is treated as success.
-#[cfg(unix)]
-pub fn kill_orphan_with_grace(pid: u32) {
-    use nix::sys::signal::{kill, Signal};
-    use nix::unistd::Pid;
-    let pid_t = Pid::from_raw(pid as i32);
-    let _ = kill(pid_t, Signal::SIGTERM);
-    for _ in 0..10 {
-        thread::sleep(Duration::from_millis(100));
-        if kill(pid_t, None).is_err() {
-            return;
-        }
-    }
-    let _ = kill(pid_t, Signal::SIGKILL);
-}
-
-#[cfg(not(unix))]
-pub fn kill_orphan_with_grace(_pid: u32) {}
-
-fn exit_info(status: Option<&ExitStatus>) -> (Option<i32>, Option<i32>) {
-    let Some(status) = status else {
-        return (None, None);
-    };
-    let code = status.code();
-    #[cfg(unix)]
-    let signal = {
-        use std::os::unix::process::ExitStatusExt;
-        status.signal()
-    };
-    #[cfg(not(unix))]
-    let signal: Option<i32> = None;
-    (code, signal)
-}
-
-fn normal_termination(exit_code: Option<i32>, _exit_signal: Option<i32>) -> bool {
-    if exit_code == Some(0) {
-        return true;
-    }
-    #[cfg(unix)]
-    {
-        matches!(
-            _exit_signal,
-            Some(x) if x == nix::libc::SIGTERM || x == nix::libc::SIGINT
-        )
-    }
-    #[cfg(not(unix))]
-    {
-        false
+    if let Some(app) = app {
+        close_local_drive_windows(app, key);
+        let _ = app.emit(SERVES_CHANGED, ());
     }
 }
 
@@ -560,7 +152,7 @@ fn drive_title(key: &str) -> String {
     key.to_string()
 }
 
-/// Resolve the absolute path of the bundled `chan` sidecar binary.
+/// Resolve the absolute path of the bundled `chan` binary.
 ///
 /// Tauri's `externalBin` mechanism in `tauri.conf.json` declares
 /// `binaries/chan` at build time and the bundler stages a copy of
@@ -573,7 +165,7 @@ fn drive_title(key: &str) -> String {
 ///     packaged binary directory.
 ///
 /// The resolver is pure path math over `current_exe()`; it does NOT
-/// check that the sidecar actually exists on disk. The boot-time
+/// check that the binary actually exists on disk. The boot-time
 /// preflight in `crate::compute_bin_status` performs the existence
 /// and version check exactly once and stores the verdict in
 /// `AppState::bin_status`, gating every IPC that would spawn chan.
@@ -594,7 +186,7 @@ pub fn bundled_chan_path() -> Result<PathBuf, String> {
 /// matches chan-desktop's own version exactly.
 ///
 /// Used by both the boot-time preflight (validating the bundled
-/// sidecar at `bundled_chan_path()`) and the PATH-first resolver
+/// binary at `bundled_chan_path()`) and the PATH-first resolver
 /// (deciding whether a `chan` on the user's `PATH` is usable as a
 /// substitute for the bundled binary). The exact-match contract
 /// is the locked Round-2 decision 3 (round-2-plan decisions
@@ -642,7 +234,7 @@ pub fn probe_chan_version(bin: &Path) -> Result<(), String> {
 ///      match, return the resolved PATH path.
 ///   2. Any failure (no chan on `PATH`, spawn error, `--version`
 ///      error, version mismatch) falls through to the bundled
-///      sidecar at `bundled_chan_path()`.
+///      binary at `bundled_chan_path()`.
 ///
 /// Why PATH-first: a power user who runs their own chan build
 /// from this checkout and `cargo install --path crates/chan`
@@ -759,8 +351,8 @@ pub fn new_tunnel_window_label(tenant_label: &str, drive: &str) -> String {
 /// state across the close/reopen cycle. A user-initiated close
 /// pushes the closing window's state back to the stack so the next
 /// open repeats the restore. The Tauri close handler does NOT stop
-/// the underlying `chan serve`; the On toggle (plus
-/// `close_local_drive_windows` on serve EOF) remains the single
+/// the underlying local runtime; the On toggle (plus
+/// `close_local_drive_windows` on runtime teardown) remains the single
 /// authority on drive lifecycle.
 pub fn spawn_local_drive_window(app: &AppHandle, key: &str, url: &str) -> Result<(), String> {
     ensure_window_capacity(app, &drive_window_prefix(key))?;
@@ -1008,11 +600,10 @@ fn ensure_window_capacity(app: &AppHandle, prefix: &str) -> Result<(), String> {
     Ok(())
 }
 
-/// Destroy every webview window opened for this local drive. Used
-/// by the reader thread when the serve has gone away (intentional
-/// kill or crash) so stale windows don't linger pointing at a dead
-/// port. Walks `webview_windows()` and matches by prefix because
-/// the user may have opened several windows for the same drive.
+/// Destroy every webview window opened for this local drive when
+/// the local runtime is closed. Walks `webview_windows()` and
+/// matches by prefix because the user may have opened several
+/// windows for the same drive.
 pub fn close_local_drive_windows(app: &AppHandle, key: &str) {
     close_windows_with_prefix(app, &drive_window_prefix(key))
 }
@@ -1144,6 +735,8 @@ const KEY_BRIDGE_JS: &str = r#"
         case 'KeyW': fire(e, 'app.tab.close');        return;
         case 'KeyF': fire(e, 'app.find.open');        return;
         case 'KeyG': fire(e, 'app.find.next');        return;
+        case 'BracketLeft':  fire(e, 'app.pane.prev'); return;
+        case 'BracketRight': fire(e, 'app.pane.next'); return;
       }
       const m = code.match(/^Digit([1-9])$/);
       if (m) {
@@ -1164,45 +757,9 @@ const KEY_BRIDGE_JS: &str = r#"
 })();
 "#;
 
-/// Bind 127.0.0.1:0 to let the OS hand us a free port, then close
-/// the listener and return the number. Classic TOCTOU: another
-/// process could grab the port between close and `chan serve`'s
-/// bind. Acceptable for a desktop app launching its own children.
-fn pick_port() -> std::io::Result<u16> {
-    let l = TcpListener::bind("127.0.0.1:0")?;
-    Ok(l.local_addr()?.port())
-}
-
-/// Try to bind a previously-used port for this drive so a
-/// stop-then-start cycle leaves any open browser tabs on a URL that
-/// is still routable. Falls back to a fresh OS-assigned port when
-/// the preferred port is taken or when there is no preference yet.
-fn pick_port_preferring(preferred: Option<u16>) -> std::io::Result<u16> {
-    if let Some(p) = preferred {
-        if TcpListener::bind(("127.0.0.1", p)).is_ok() {
-            return Ok(p);
-        }
-    }
-    pick_port()
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn normal_termination_accepts_zero_exit() {
-        assert!(normal_termination(Some(0), None));
-        assert!(!normal_termination(Some(70), None));
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn normal_termination_accepts_sigterm_and_sigint() {
-        assert!(normal_termination(None, Some(nix::libc::SIGTERM)));
-        assert!(normal_termination(None, Some(nix::libc::SIGINT)));
-        assert!(!normal_termination(None, Some(nix::libc::SIGKILL)));
-    }
 
     #[test]
     fn invoke_handler_registers_reload_window_and_open_devtools() {
@@ -1254,36 +811,11 @@ mod tests {
     }
 
     #[test]
-    fn invoke_handler_registers_reclaim_drive_lock() {
-        // `fullstack-b-22`: the lock-takeover dialog in
-        // `desktop/src/main.js` invokes `reclaim_drive_lock` via
-        // tauri-plugin invoke when the user clicks Reclaim. Same
-        // pin-against-generate_handler! shape as the reload /
-        // zoom tests above.
-        const MAIN_RS: &str = include_str!("main.rs");
-        assert!(MAIN_RS.contains("reclaim_drive_lock,"));
-        assert!(MAIN_RS.contains("fn reclaim_drive_lock("));
-    }
-
-    #[test]
-    fn invoke_handler_registers_find_drive_lock_candidates() {
-        // `fullstack-b-25`: the reclaim dialog enumerates orphan
-        // candidates via `find_drive_lock_candidates` before the
-        // user confirms the SIGTERM. Mirrors the
-        // `reclaim_drive_lock` registration pin above so a future
-        // rename of either side without the other gets caught.
-        const MAIN_RS: &str = include_str!("main.rs");
-        assert!(MAIN_RS.contains("find_drive_lock_candidates,"));
-        assert!(MAIN_RS.contains("fn find_drive_lock_candidates("));
-    }
-
-    #[test]
     fn invoke_handler_registers_drive_features_ipcs() {
         // `fullstack-b-28a`: the launcher's expand panel calls
         // `get_drive_features` on first open + `set_drive_features`
-        // on every checkbox flip. Mirrors the `reclaim_drive_lock`
-        // pin shape so a future rename of either side without the
-        // other gets caught.
+        // on every checkbox flip. Pin both sides so a future rename
+        // gets caught.
         const MAIN_RS: &str = include_str!("main.rs");
         assert!(MAIN_RS.contains("get_drive_features,"));
         assert!(MAIN_RS.contains("set_drive_features,"));
@@ -1407,11 +939,11 @@ mod tests {
     #[test]
     fn get_drive_features_reads_chan_index_status_after_b28b_ii() {
         // `fullstack-b-28b` slice ii: `get_drive_features` swaps
-        // from sidecar-only to a `chan index status --json` CLI
+        // from desktop-cache-only to a `chan index status --json` CLI
         // round-trip, picking up out-of-band feature flips (e.g.
         // a user toggling via terminal). Pin the subprocess
         // argument shape so a refactor can't silently revert to
-        // the slice-i sidecar-only read path.
+        // the slice-i cache-only read path.
         const MAIN_RS: &str = include_str!("main.rs");
         assert!(
             MAIN_RS.contains("read_features_via_chan_index_status"),
@@ -1439,7 +971,7 @@ mod tests {
         // the field name in the chan binary's source so a rename
         // / removal on the chan side fails this test loudly +
         // forces a coordinated cross-lane fix instead of a
-        // silent regression to sidecar-only reads.
+        // silent regression to cache-only reads.
         const CHAN_MAIN_RS: &str = include_str!("../../../crates/chan/src/main.rs");
         assert!(
             CHAN_MAIN_RS.contains("\"reports_enabled\": cfg.reports_enabled"),
@@ -1450,10 +982,10 @@ mod tests {
     #[test]
     fn set_drive_features_calls_chan_cli_after_b28b() {
         // `fullstack-b-28b-i`: `set_drive_features` no longer
-        // writes the sidecar in isolation. It first invokes the
+        // writes the desktop cache in isolation. It first invokes the
         // `chan` CLI for each changed flag (so chan-drive's
         // authoritative state matches what the user clicked),
-        // then mirrors the result into the sidecar. Pin the CLI
+        // then mirrors the result into the cache. Pin the CLI
         // subcommand names so a rename in chan's CLI surface
         // (or an architectural swap to a different transport)
         // can't silently revert chan-desktop to the old stub
@@ -1538,32 +1070,6 @@ mod tests {
     }
 
     #[test]
-    fn serve_failed_payload_drive_lock_field_is_consumed_by_launcher() {
-        // `fullstack-b-22`: the SPA-side branch into the lock
-        // takeover prompt reads `p.drive_lock_conflict` straight
-        // from the serve-failed payload. Pin the field name on
-        // both ends so renaming one side without the other gets
-        // caught by tests rather than as a silent regression to
-        // the generic error modal.
-        // `fullstack-b-25` adds the candidate-enumeration IPC
-        // pin so the SPA always calls find_drive_lock_candidates
-        // before reclaim_drive_lock.
-        const MAIN_JS: &str = include_str!("../../src/main.js");
-        assert!(
-            MAIN_JS.contains("drive_lock_conflict"),
-            "main.js must read payload.drive_lock_conflict"
-        );
-        assert!(
-            MAIN_JS.contains("invoke('reclaim_drive_lock'"),
-            "main.js must invoke the reclaim_drive_lock IPC"
-        );
-        assert!(
-            MAIN_JS.contains("invoke('find_drive_lock_candidates'"),
-            "main.js must invoke find_drive_lock_candidates before reclaim_drive_lock so the dialog can render PIDs",
-        );
-    }
-
-    #[test]
     fn key_bridge_wires_reload_and_devtools_ipc() {
         // `fullstack-b-17`: Cmd+R fires the `reload_window` IPC and
         // Cmd+Opt+I fires `open_devtools`, bypassing the SPA event
@@ -1576,6 +1082,13 @@ mod tests {
         assert!(KEY_BRIDGE_JS.contains("invokeIpc(e, 'open_devtools')"));
         assert!(KEY_BRIDGE_JS.contains("case 'KeyR': invokeIpc"));
         assert!(KEY_BRIDGE_JS.contains("code === 'KeyI'"));
+    }
+
+    #[test]
+    fn embedded_url_prefix_parser_strips_query_and_trailing_slash() {
+        let prefix =
+            url_prefix_from_local_url("http://127.0.0.1:1234/drive-abcd/?t=token").expect("prefix");
+        assert_eq!(prefix, "/drive-abcd");
     }
 
     #[test]
@@ -1603,8 +1116,6 @@ mod tests {
         // chords that should still go through Pane Mode only.
         assert!(!KEY_BRIDGE_JS.contains("app.search.toggle"));
         assert!(!KEY_BRIDGE_JS.contains("app.file.new"));
-        assert!(!KEY_BRIDGE_JS.contains("app.pane.prev"));
-        assert!(!KEY_BRIDGE_JS.contains("app.pane.next"));
         assert!(!KEY_BRIDGE_JS.contains("Backquote"));
     }
 
@@ -1618,6 +1129,8 @@ mod tests {
         assert!(KEY_BRIDGE_JS.contains("app.terminal.toggle"));
         assert!(KEY_BRIDGE_JS.contains("app.files.toggle"));
         assert!(KEY_BRIDGE_JS.contains("app.terminal.richPrompt"));
+        assert!(KEY_BRIDGE_JS.contains("app.pane.prev"));
+        assert!(KEY_BRIDGE_JS.contains("app.pane.next"));
         assert!(KEY_BRIDGE_JS.contains("app.graph.toggle"));
         assert!(KEY_BRIDGE_JS.contains("app.tab.close"));
         assert!(KEY_BRIDGE_JS.contains("app.tab.reopenClosed"));
@@ -1630,10 +1143,10 @@ mod tests {
     #[test]
     fn bundled_chan_path_is_sibling_of_chan_desktop_executable() {
         // `fullstack-b-15`: Tauri's `externalBin` stages the chan
-        // sidecar next to chan-desktop's own binary, with the
+        // chan binary next to chan-desktop's own binary, with the
         // per-target-triple suffix stripped. Pin that contract here
         // so a future capability or layout change can't silently
-        // shift where chan-desktop expects to find the sidecar.
+        // shift where chan-desktop expects to find the bundled binary.
         // Pure path math: the helper does NOT touch the filesystem,
         // so the test passes even when target/debug/chan does not
         // exist (e.g. on a fresh CI checkout that has not built
@@ -1780,149 +1293,6 @@ mod tests {
         // don't sanitize — the caller's path is the source of truth.
         assert_eq!(drive_title("/tmp/scratch/"), "/tmp/scratch/");
         assert_eq!(drive_title(""), "");
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn stop_child_reaps_process() {
-        let child = Command::new("sh")
-            .args(["-c", "sleep 30"])
-            .spawn()
-            .expect("spawn sleep");
-        let pid = child.id() as i32;
-        stop_child(child, Instant::now() + Duration::from_secs(1));
-        let still_alive = nix::sys::signal::kill(nix::unistd::Pid::from_raw(pid), None).is_ok();
-        assert!(!still_alive, "child process should be gone");
-    }
-
-    #[test]
-    fn stderr_drive_lock_marker_detection_is_substring_match() {
-        // Producer side is `chan_drive::ChanError::DriveLocked`'s
-        // Display: "drive is locked by another process". The
-        // chan-desktop side recognises it via a substring scan
-        // across the captured stderr tail, so a leading "Error: "
-        // prefix or trailing context don't defeat it.
-        let tail = vec![
-            "starting chan serve".to_string(),
-            "Error: drive is locked by another process".to_string(),
-            "exiting".to_string(),
-        ];
-        assert!(stderr_indicates_drive_lock_conflict(&tail));
-        let no_lock_tail = vec![
-            "starting chan serve".to_string(),
-            "bind failed: address already in use".to_string(),
-        ];
-        assert!(!stderr_indicates_drive_lock_conflict(&no_lock_tail));
-        assert!(!stderr_indicates_drive_lock_conflict(&[]));
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn parse_ps_lines_picks_chan_serve_against_key_but_skips_self() {
-        // Synthetic `ps -ax -o pid=,command=` output. Mix of:
-        // * a chan serve against the target key (should match)
-        // * the running chan-desktop pid (should be skipped)
-        // * a chan serve against a different key (should skip)
-        // * an unrelated process containing the key substring (no
-        //   chan basename ⇒ should skip)
-        // * a chan process without the `serve` subcommand (should skip)
-        let ps = "  100 /Applications/Chan.app/Contents/MacOS/chan-desktop\n\
-                  200 /Applications/Chan.app/Contents/MacOS/chan serve /tmp/notes --host 127.0.0.1 --port 49991 --no-browser\n\
-                  300 /Applications/Chan.app/Contents/MacOS/chan serve /tmp/other --host 127.0.0.1 --port 49992 --no-browser\n\
-                  400 /usr/bin/grep -r foo /tmp/notes\n\
-                  500 /Applications/Chan.app/Contents/MacOS/chan add /tmp/notes\n";
-        // self_pid = 100 (chan-desktop) so it must be filtered out.
-        let candidates = parse_ps_lines_for_chan_serve(ps, "/tmp/notes", 100);
-        assert_eq!(candidates.len(), 1);
-        assert_eq!(candidates[0].pid, 200);
-        assert!(
-            candidates[0]
-                .command
-                .starts_with("/Applications/Chan.app/Contents/MacOS/chan serve /tmp/notes"),
-            "command field must carry the raw argv for the dialog: {}",
-            candidates[0].command,
-        );
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn parse_ps_lines_returns_empty_when_no_match() {
-        let ps = "  100 /Applications/Chan.app/Contents/MacOS/chan-desktop\n\
-                  300 /Applications/Chan.app/Contents/MacOS/chan serve /tmp/other --host 127.0.0.1 --port 49992\n";
-        assert!(parse_ps_lines_for_chan_serve(ps, "/tmp/notes", 100).is_empty());
-    }
-
-    /// `fullstack-b-25`: tightened heuristic rejects non-`chan`
-    /// programs even when their argv tokens line up. Wrappers like
-    /// `strace chan serve <key>`, `lldb -p N chan serve <key>`, or
-    /// shell wrappers whose argv contains the canonical chan serve
-    /// sequence used to trip the old substring-based heuristic and
-    /// would have been SIGTERM'd by the reclaim path.
-    #[cfg(unix)]
-    #[test]
-    fn parse_ps_lines_rejects_wrapper_programs_running_chan_serve() {
-        let ps = "  600 /usr/bin/strace -e openat chan serve /tmp/notes\n\
-                  700 /usr/bin/lldb -p 12345 chan serve /tmp/notes\n\
-                  800 /usr/local/bin/wrapper-chan-serve.sh /tmp/notes\n\
-                  900 /bin/sh -c chan serve /tmp/notes\n";
-        let candidates = parse_ps_lines_for_chan_serve(ps, "/tmp/notes", 100);
-        assert!(
-            candidates.is_empty(),
-            "tightened heuristic must reject wrapper invocations: {candidates:?}",
-        );
-    }
-
-    /// `fullstack-b-25`: heuristic requires the drive key as a
-    /// standalone argv token, not a substring inside another
-    /// token. Without this, paths that contain the key as a
-    /// prefix (e.g. `chan serve /tmp/notes-other`) would be
-    /// reclaimed by mistake.
-    #[cfg(unix)]
-    #[test]
-    fn parse_ps_lines_rejects_path_substring_only_match() {
-        let ps = "  1000 /Applications/Chan.app/Contents/MacOS/chan serve /tmp/notes-other --host 127.0.0.1\n\
-                  1100 /Applications/Chan.app/Contents/MacOS/chan serve /tmp/notes/sub-drive --host 127.0.0.1\n";
-        let candidates = parse_ps_lines_for_chan_serve(ps, "/tmp/notes", 100);
-        assert!(
-            candidates.is_empty(),
-            "drive key must match as a whole argv token, not a substring: {candidates:?}",
-        );
-    }
-
-    /// `fullstack-b-25`: the candidate's `command` field
-    /// surfaces the full `ps` argv so the reclaim dialog can
-    /// show the user exactly what is about to be SIGTERM'd.
-    #[cfg(unix)]
-    #[test]
-    fn parse_ps_lines_carries_command_line_into_candidate() {
-        let ps = "  1234 /Applications/Chan.app/Contents/MacOS/chan serve /tmp/notes --host 127.0.0.1 --port 49991 --no-browser\n";
-        let candidates = parse_ps_lines_for_chan_serve(ps, "/tmp/notes", 100);
-        assert_eq!(candidates.len(), 1);
-        assert_eq!(
-            candidates[0].command,
-            "/Applications/Chan.app/Contents/MacOS/chan serve /tmp/notes --host 127.0.0.1 --port 49991 --no-browser",
-        );
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn spawn_command_with_process_group_makes_child_group_leader() {
-        // `fullstack-b-22`: every `chan serve` is detached into its
-        // own process group so a stop signal can reach helper
-        // subprocesses chan may have spawned, not just the direct
-        // child. Validates the `process_group(0)` shape used in
-        // `start`. Spawning chan directly is heavy; we mirror the
-        // same `CommandExt` call against `sh -c sleep` so the
-        // assertion is cheap.
-        let child = Command::new("sh")
-            .args(["-c", "sleep 30"])
-            .process_group(0)
-            .spawn()
-            .expect("spawn sleep");
-        let pid = child.id() as i32;
-        let pgid = unsafe { nix::libc::getpgid(pid) };
-        stop_child(child, Instant::now() + Duration::from_secs(1));
-        assert_eq!(pid, pgid, "child should be its own process-group leader");
     }
 
     // `fullstack-b-7`: drive and tunnel webviews host the SPA, which
