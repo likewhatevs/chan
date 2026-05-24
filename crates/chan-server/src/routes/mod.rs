@@ -19,6 +19,7 @@ mod health;
 mod index;
 mod inspector;
 mod mentions;
+mod metadata;
 mod preferences;
 mod report;
 mod reports_toggle;
@@ -55,6 +56,7 @@ pub use index::{
 };
 pub use inspector::api_inspector;
 pub use mentions::api_get_mentions;
+pub use metadata::api_metadata_export;
 pub use preferences::{
     api_get_config, api_get_server_config, api_patch_config, api_patch_server_config,
 };

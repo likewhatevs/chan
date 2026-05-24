@@ -22,6 +22,7 @@ import type {
   IndexingStateResponse,
   LanguageGraphResponse,
   LinkTarget,
+  MetadataExportDownload,
   MoveResponse,
   ReportFileStats,
   ReportPrefix,
@@ -122,6 +123,34 @@ function req<T>(
   return request<T>(method, path, body, signal, timeoutMs);
 }
 
+function directAuthHeaders(): Record<string, string> {
+  const headers: Record<string, string> = {};
+  const tk = transportAuthToken();
+  if (tk) headers.authorization = `Bearer ${tk}`;
+  return headers;
+}
+
+function responseTextError(res: Response): Promise<never> {
+  return res.text()
+    .catch(() => res.statusText)
+    .then((text) => {
+      throw new ApiError(res.status, text || res.statusText);
+    });
+}
+
+function contentDispositionFilename(value: string | null): string | null {
+  if (!value) return null;
+  const match = /filename="([^"]+)"/i.exec(value) ?? /filename=([^;]+)/i.exec(value);
+  return match?.[1]?.trim() || null;
+}
+
+function numericHeader(res: Response, name: string): number | null {
+  const raw = res.headers.get(name);
+  if (!raw) return null;
+  const parsed = Number(raw);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
 export const api = {
   drive: () => req<DriveInfo>("GET", "/api/drive"),
   /// Read the global per-user config (registry of known drives,
@@ -148,13 +177,10 @@ export const api = {
     const form = new FormData();
     form.append("file", file);
     if (dir !== null) form.append("dir", dir);
-    const headers: Record<string, string> = {};
-    const tk = transportAuthToken();
-    if (tk) headers.authorization = `Bearer ${tk}`;
+    const headers = directAuthHeaders();
     const res = await fetch(apiPath("/api/attachments"), { method: "POST", headers, body: form });
     if (!res.ok) {
-      const text = await res.text().catch(() => res.statusText);
-      throw new ApiError(res.status, text || res.statusText);
+      await responseTextError(res);
     }
     return (await res.json()) as { path: string };
   },
@@ -182,17 +208,14 @@ export const api = {
     form.append("dest_dir", destDir);
     form.append("provider", opts.provider ?? "google");
     form.append("overwrite", opts.overwrite ? "true" : "false");
-    const headers: Record<string, string> = {};
-    const tk = transportAuthToken();
-    if (tk) headers.authorization = `Bearer ${tk}`;
+    const headers = directAuthHeaders();
     const res = await fetch(apiPath("/api/contacts/import"), {
       method: "POST",
       headers,
       body: form,
     });
     if (!res.ok) {
-      const text = await res.text().catch(() => res.statusText);
-      throw new ApiError(res.status, text || res.statusText);
+      await responseTextError(res);
     }
     const body = (await res.json()) as {
       wrote: string[];
@@ -204,6 +227,23 @@ export const api = {
     // `warnings` was added after the initial route shipped; tolerate
     // older servers that don't send it by defaulting to empty.
     return { ...body, warnings: body.warnings ?? [] };
+  },
+  metadataExport: async (): Promise<MetadataExportDownload> => {
+    const res = await fetch(apiPath("/api/metadata/export"), {
+      method: "POST",
+      headers: directAuthHeaders(),
+    });
+    if (!res.ok) {
+      await responseTextError(res);
+    }
+    return {
+      blob: await res.blob(),
+      filename:
+        contentDispositionFilename(res.headers.get("content-disposition")) ??
+        "chan-metadata.tar.zst",
+      files: numericHeader(res, "x-chan-metadata-files"),
+      bytes: numericHeader(res, "x-chan-metadata-bytes"),
+    };
   },
   /** List contact-kind notes for the editor `@` picker. Optional
    *  `q` is a case-insensitive substring filter against the
@@ -362,7 +402,7 @@ export const api = {
     req<GraphEdge[]>("GET", `/api/backlinks/${encPath(path)}`),
   /// chan-report per-file stats: language, SLOC, comments, blanks,
   /// complexity. 404 when the path isn't in the index (binary file,
-  /// gitignored, or unknown language) — callers treat that as
+  /// gitignored, or unknown language); callers treat that as
   /// "no report for this file" rather than an error.
   reportFile: (path: string) =>
     req<ReportFileStats>(
@@ -467,7 +507,7 @@ export const api = {
     req<void>("DELETE", `/api/terminal/${encodeURIComponent(sessionId)}/watcher`),
   /// `fullstack-b-13`: flip the receiving session's submit-mode
   /// (drives the trailing chord bytes after a "poke" notification
-  /// from `dispatch_agent_event`). Mirrors `setTerminalWatcher` —
+  /// from `dispatch_agent_event`). Mirrors `setTerminalWatcher`;
   /// 204 on success, 404 on unknown session, 400 on bad mode.
   setTerminalSubmitMode: (sessionId: string, mode: "shell" | "agent") =>
     req<void>("PUT", `/api/terminal/${encodeURIComponent(sessionId)}/submit-mode`, { mode }),
@@ -525,7 +565,7 @@ export const api = {
   },
   /// `systacean-7` semantic-search endpoints. Surface is open-read
   /// (state) + settings-gated mutations (download / enable / disable).
-  /// The download endpoint is synchronous in v1 — the POST blocks
+  /// The download endpoint is synchronous in v1; the POST blocks
   /// until the resolver has the bytes on disk, then returns. The
   /// Settings UI polls `/state` in parallel to detect the
   /// `model_present` transition without depending on per-byte
@@ -553,7 +593,7 @@ export const api = {
     req<{ enabled: boolean }>("POST", "/api/index/reports/disable"),
   /// `fullstack-a-77`: screensaver state + PIN endpoints. Backed
   /// by `systacean-40` (`crates/chan-server/src/routes/screensaver.rs`).
-  /// The PIN hash never appears in the response body — the
+  /// The PIN hash never appears in the response body; the
   /// state shape carries `pin_set: bool` instead, and `verify`
   /// returns a single `verified: bool` from a server-side
   /// constant-time compare. PBKDF2 happens client-side via

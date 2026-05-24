@@ -53,11 +53,11 @@ use routes::{
     api_get_config, api_get_contacts, api_get_drive, api_get_mentions, api_get_server_config,
     api_get_session, api_graph, api_headings, api_health, api_index_rebuild, api_index_status,
     api_indexing_state, api_inspect_draft, api_inspector, api_language_graph, api_link_targets,
-    api_links, api_list_files, api_list_sessions, api_move, api_patch_config, api_patch_drive,
-    api_patch_server_config, api_post_attachment, api_post_contacts_import, api_promote_draft,
-    api_put_session, api_read_file, api_report_dir, api_report_file, api_report_prefix,
-    api_reports_disable, api_reports_enable, api_reports_state, api_resolve_link,
-    api_restart_terminal, api_screensaver_clear_pin, api_screensaver_patch,
+    api_links, api_list_files, api_list_sessions, api_metadata_export, api_move, api_patch_config,
+    api_patch_drive, api_patch_server_config, api_post_attachment, api_post_contacts_import,
+    api_promote_draft, api_put_session, api_read_file, api_report_dir, api_report_file,
+    api_report_prefix, api_reports_disable, api_reports_enable, api_reports_state,
+    api_resolve_link, api_restart_terminal, api_screensaver_clear_pin, api_screensaver_patch,
     api_screensaver_set_pin, api_screensaver_state, api_screensaver_verify, api_search_content,
     api_search_files, api_set_terminal_submit_mode, api_set_terminal_watcher, api_storage_reset,
     api_team_create, api_team_duplicate, api_team_get_config, api_team_list_loaded, api_team_load,
@@ -813,6 +813,7 @@ fn router(state: Arc<AppState>) -> Router {
         "/api/fonts/source-code-pro/download",
         post(api_fonts_source_code_pro_download),
     );
+    let settings_writes = settings_writes.route("/api/metadata/export", post(api_metadata_export));
     let settings_writes = settings_writes.route_layer(middleware::from_fn_with_state(
         state.clone(),
         tunnel_guard::settings_guard,

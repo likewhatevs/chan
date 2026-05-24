@@ -24,9 +24,16 @@ export type DriveWarning = {
   message: string;
 };
 
+export type MetadataExportDownload = {
+  blob: Blob;
+  filename: string;
+  files: number | null;
+  bytes: number | null;
+};
+
 /// Global per-user config. Lives at `paths::global_config_path()`
 /// on the server side and applies to every drive (no per-
-/// drive override anymore — settings are always device-global).
+/// drive override anymore; settings are always device-global).
 export type GlobalConfig = {
   preferences: Preferences;
   /// When set, the resolver's fallback path becomes this; when

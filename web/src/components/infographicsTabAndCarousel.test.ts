@@ -151,6 +151,16 @@ describe("Wave 4: Infographics settings", () => {
       /<button type="button" class="config-ok" onclick=\{closeSettings\}>OK<\/button>/,
     );
   });
+
+  test("settings view exposes metadata archive export through the typed API", () => {
+    expect(infographics).toMatch(/import \{ api \} from "\.\.\/api\/client";/);
+    expect(infographics).toMatch(/import \{ formatSize \} from "\.\.\/state\/format";/);
+    expect(infographics).toMatch(/async function exportMetadataArchive\(\): Promise<void>/);
+    expect(infographics).toMatch(/await api\.metadataExport\(\)/);
+    expect(infographics).toMatch(/URL\.createObjectURL\(download\.blob\)/);
+    expect(infographics).toContain("Metadata archive");
+    expect(infographics).toContain("Export metadata archive");
+  });
 });
 
 describe("fullstack-a-75b: EmptyPaneWelcome static spawn surface", () => {

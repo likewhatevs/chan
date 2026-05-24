@@ -4,14 +4,16 @@
   // moves OUT of the welcome surface (which becomes a static
   // spawn grid via EmptyPaneWelcome.svelte) and lives only
   // INSIDE this tab. The full carousel widget (rotation +
-  // play/pause + pagination + 3 slides — Shortcuts / Drive
+  // play/pause + pagination + 3 slides: Shortcuts / Drive
   // metadata / Indexing graph) renders here.
   //
   // Earlier slice (-a-75 slice 1) shipped this tab as a static
   // ASCII shortcut table; that table is now slide 1 of the
   // carousel below.
 
-  import { Settings2 } from "lucide-svelte";
+  import { Download, Settings2 } from "lucide-svelte";
+  import { api } from "../api/client";
+  import { formatSize } from "../state/format";
   import EmptyPaneCarousel from "./EmptyPaneCarousel.svelte";
   import HamburgerMenu from "./HamburgerMenu.svelte";
 
@@ -21,6 +23,9 @@
   let menuOpen = $state(false);
   let settingsOpen = $state(false);
   let appearance = $state<InfographicsAppearance>("inherit");
+  let metadataBusy = $state(false);
+  let metadataStatus = $state<string | null>(null);
+  let metadataError = $state<string | null>(null);
 
   const effectiveTheme = $derived(
     appearance === "inherit" ? undefined : appearance,
@@ -38,6 +43,39 @@
 
   function closeSettings(): void {
     settingsOpen = false;
+  }
+
+  async function exportMetadataArchive(): Promise<void> {
+    if (metadataBusy) return;
+    metadataBusy = true;
+    metadataStatus = null;
+    metadataError = null;
+    try {
+      const download = await api.metadataExport();
+      const href = URL.createObjectURL(download.blob);
+      const a = document.createElement("a");
+      a.href = href;
+      a.download = download.filename;
+      a.rel = "noopener";
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      window.setTimeout(() => URL.revokeObjectURL(href), 0);
+
+      const details: string[] = [];
+      if (download.files !== null) {
+        details.push(`${download.files} ${download.files === 1 ? "file" : "files"}`);
+      }
+      if (download.bytes !== null) {
+        details.push(formatSize(download.bytes));
+      }
+      metadataStatus =
+        details.length > 0 ? `Exported ${details.join(", ")}` : "Archive exported";
+    } catch (e) {
+      metadataError = e instanceof Error ? e.message : String(e);
+    } finally {
+      metadataBusy = false;
+    }
   }
 </script>
 
@@ -93,6 +131,26 @@
               </label>
             {/each}
           </div>
+        </section>
+        <section>
+          <h3>Metadata archive</h3>
+          <div class="metadata-row">
+            <button
+              type="button"
+              class="metadata-action"
+              onclick={exportMetadataArchive}
+              disabled={metadataBusy}
+            >
+              <Download size={16} strokeWidth={1.75} aria-hidden="true" />
+              <span>{metadataBusy ? "Exporting..." : "Export metadata archive"}</span>
+            </button>
+          </div>
+          {#if metadataStatus}
+            <p class="metadata-status ok">{metadataStatus}</p>
+          {/if}
+          {#if metadataError}
+            <p class="metadata-status error">{metadataError}</p>
+          {/if}
         </section>
       </div>
     </section>
@@ -195,5 +253,41 @@
   .theme-opt.on {
     border-color: var(--link);
     background: var(--hover-bg);
+  }
+  .metadata-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-wrap: wrap;
+  }
+  .metadata-action {
+    display: inline-flex;
+    align-items: center;
+    gap: 7px;
+    min-height: 30px;
+    padding: 5px 10px;
+    border: 1px solid var(--btn-border);
+    border-radius: 4px;
+    background: var(--btn-bg);
+    color: var(--text);
+    font: inherit;
+    cursor: pointer;
+  }
+  .metadata-action:hover:not(:disabled) {
+    border-color: var(--btn-hover);
+  }
+  .metadata-action:disabled {
+    opacity: 0.6;
+    cursor: default;
+  }
+  .metadata-status {
+    margin: 0;
+    font-size: 12px;
+  }
+  .metadata-status.ok {
+    color: var(--muted);
+  }
+  .metadata-status.error {
+    color: var(--danger, #b42318);
   }
 </style>

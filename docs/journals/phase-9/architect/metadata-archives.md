@@ -35,3 +35,24 @@ Remote mismatch blocks import unless the caller passes `--force-scm`.
 
 - `cargo test -p chan-drive metadata_archive`
 - `cargo test -p chan metadata_subcommands_parse`
+
+## Web Export Slice
+
+The web app now exposes metadata archive export from Infographics settings.
+The server route is settings-gated at `POST /api/metadata/export`, builds the
+archive through `chan_drive::Library::export_metadata_archive`, and returns a
+download with file and byte counts in response headers.
+
+Live import is deliberately left out of this slice. The existing CLI import
+replaces metadata subtrees on disk. Doing that inside a running server needs a
+drive-cell swap like storage reset, otherwise search, graph, sessions, MCP, or
+draft handles can observe replaced metadata under active state. The next import
+slice should either reuse the reset swap path or stay preflight-only in the UI
+until the swap is implemented.
+
+Additional evidence:
+
+- `cargo test -p chan-server routes::metadata`
+- `npm run test -- --run src/components/infographicsTabAndCarousel.test.ts
+  src/api/metadataArchiveClient.test.ts`
+- `npm run check`
