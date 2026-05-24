@@ -42,6 +42,9 @@ Follow-up in this wave:
 - The site generator now rejects stale generated public copy for CLI-only
   status, assistant-pane language, unaudited "no telemetry" claims, old org
   links, and old `/dl/` release routes.
+- `npm run check` is now the single local and CI site gate: script syntax
+  checks, static site build, generated link/copy/release-contract validation,
+  and shell syntax for `dist/install.sh`.
 
 Latest local checks:
 
@@ -57,6 +60,7 @@ Latest local checks:
   the release asset checks and reports the expected missing manual bundle
   because `chan-v0.14.0` predates this wave.
 - `npm run build` verifies the stale-copy guards against generated output.
+- `npm run check` in `web-marketing/`
 
 Next wave:
 

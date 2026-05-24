@@ -32,6 +32,12 @@ Manual source lives in `docs/manual/`. The site build renders that tree to
 npm run build
 ```
 
+Run the full local site gate:
+
+```sh
+npm run check
+```
+
 The build:
 
 - renders `/`, `/install/`, `/manual/`, nested manual pages, and `/install.sh`
