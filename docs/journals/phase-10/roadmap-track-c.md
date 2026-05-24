@@ -25,7 +25,12 @@ Progress:
   Settings Test and first-input unlock reveal.
 - 2026-05-24: queued right-click menu placement and hover/focus motion polish
   from manual screenshots.
-- 2026-05-24: queued Draft save to docked File Browser refresh regression.
+- 2026-05-24: fixed right-click menu placement by portaling custom Terminal,
+  Editor, and Graph menus to the document body; shared row hover motion across
+  menus and pane focus.
+- 2026-05-24: fixed Draft promotion refresh for docked File Browsers by
+  including docked browsers in watcher scopes and explicitly refreshing the
+  promoted drive path after same-process Draft saves.
 
 ## Objectives
 

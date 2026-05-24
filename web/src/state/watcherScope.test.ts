@@ -1,8 +1,10 @@
 import { beforeEach, describe, expect, test, vi } from "vitest";
 import {
   activeFbScopes,
+  browserSidePanes,
   browserOverlay,
   browserSelection,
+  handleDraftPromoted,
   pathInAnyScope,
   refreshTreeForPath,
   tree,
@@ -27,6 +29,8 @@ function resetLayout() {
 }
 
 beforeEach(() => {
+  browserSidePanes.left = false;
+  browserSidePanes.right = false;
   browserOverlay.open = false;
   browserSelection.path = null;
   tree.entries = [];
@@ -97,6 +101,16 @@ describe("fullstack-b-6: activeFbScopes", () => {
     tab.selected = "tasks";
     expect(activeFbScopes()).toContain("tasks");
   });
+
+  test("docked file browser contributes its scope", () => {
+    tree.entries = [
+      { path: "tasks", is_dir: true, is_editable_text: false, missing: false } as never,
+    ];
+    browserSidePanes.left = true;
+    browserSelection.path = "tasks";
+
+    expect(activeFbScopes()).toContain("tasks");
+  });
 });
 
 describe("fullstack-b-6: refreshTreeForPath", () => {
@@ -118,6 +132,62 @@ describe("fullstack-b-6: refreshTreeForPath", () => {
 
     expect(list).not.toHaveBeenCalled();
     expect(tree.entries.some((e) => e.path === "Drafts/untitled")).toBe(false);
+    list.mockRestore();
+  });
+});
+
+describe("Track C: draft promotion refresh", () => {
+  test("refreshes and selects a promoted root file", async () => {
+    tree.loadedDirs = { "": true };
+    const list = vi.spyOn(api, "list").mockResolvedValue([
+      {
+        path: "untitled-1.md",
+        is_dir: false,
+        is_editable_text: true,
+        missing: false,
+      } as never,
+    ]);
+
+    await handleDraftPromoted("untitled-1.md");
+
+    expect(list).toHaveBeenCalledWith("");
+    expect(tree.entries.some((e) => e.path === "untitled-1.md")).toBe(true);
+    expect(browserSelection.path).toBe("untitled-1.md");
+    list.mockRestore();
+  });
+
+  test("loads promoted file ancestors before refreshing a nested target", async () => {
+    tree.loadedDirs = { "": true };
+    const list = vi.spyOn(api, "list").mockImplementation(async (dir?: string | null) => {
+      if (dir === "") {
+        return [
+          {
+            path: "notes",
+            is_dir: true,
+            is_editable_text: false,
+            missing: false,
+          } as never,
+        ];
+      }
+      if (dir === "notes") {
+        return [
+          {
+            path: "notes/draft.md",
+            is_dir: false,
+            is_editable_text: true,
+            missing: false,
+          } as never,
+        ];
+      }
+      return [];
+    });
+
+    await handleDraftPromoted("notes/draft.md");
+
+    expect(list).toHaveBeenCalledWith("");
+    expect(list).toHaveBeenCalledWith("notes");
+    expect(tree.entries.some((e) => e.path === "notes/draft.md")).toBe(true);
+    expect(browserSelection.path).toBe("notes/draft.md");
     list.mockRestore();
   });
 });

@@ -29,6 +29,7 @@ import {
   scheduleMissingFileCheck,
   openGraphInActivePane,
   openInActivePane,
+  registerDraftPromotionSink,
   restoreLayout,
   serializeLayout,
   type BrowserTab,
@@ -714,6 +715,9 @@ function fbScopeForSelection(selected: string | null | undefined): string {
 /// state to leak.
 export function activeFbScopes(): string[] {
   const scopes: string[] = [];
+  if (browserSidePanes.left || browserSidePanes.right) {
+    scopes.push(fbScopeForSelection(browserSelection.path));
+  }
   if (browserOverlay.open) {
     scopes.push(fbScopeForSelection(browserSelection.path));
   }
@@ -753,6 +757,44 @@ export async function refreshTreeForPath(path: string): Promise<void> {
     // the user retries on next interaction.
   }
 }
+
+function treeAncestorDirs(path: string): string[] {
+  const parts = path.split("/").filter(Boolean);
+  const dirs: string[] = [];
+  let acc = "";
+  for (let i = 0; i < parts.length - 1; i++) {
+    acc = acc ? `${acc}/${parts[i]}` : parts[i]!;
+    dirs.push(acc);
+  }
+  return dirs;
+}
+
+export async function handleDraftPromoted(path: string): Promise<void> {
+  if (isDraftsPath(path)) return;
+  await refreshTreeForPath(path);
+  for (const dir of treeAncestorDirs(path)) {
+    try {
+      await loadTreeDir(dir);
+    } catch {
+      // Best effort; the explicit parent refresh below will retry
+      // the visible directory if it is already loaded.
+    }
+  }
+  await refreshTreeForPath(path);
+  revealAndSelect(path);
+  scheduleDriveRefresh();
+  invalidateGraph();
+  if (browserOverlay.open || graphOverlay.open || hasBrowserTab() || hasGraphTab()) {
+    void ensureGraphLoaded();
+  }
+  if (graphOverlay.open || hasGraphTab()) {
+    graphReloadSignal.nonce += 1;
+  }
+}
+
+registerDraftPromotionSink((path) => {
+  void handleDraftPromoted(path);
+});
 
 function isDraftsPath(path: string): boolean {
   return path === "Drafts" || path.startsWith("Drafts/");

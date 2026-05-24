@@ -1449,6 +1449,24 @@ type DraftCloseDecision =
   | { action: "cancel" }
   | { action: "discard" }
   | { action: "save"; target: string };
+type DraftPromotionSink = (path: string) => void | Promise<void>;
+
+const draftPromotionSinks = new Set<DraftPromotionSink>();
+
+export function registerDraftPromotionSink(
+  sink: DraftPromotionSink,
+): () => void {
+  draftPromotionSinks.add(sink);
+  return () => {
+    draftPromotionSinks.delete(sink);
+  };
+}
+
+function notifyDraftPromoted(path: string): void {
+  for (const sink of draftPromotionSinks) {
+    void sink(path);
+  }
+}
 
 export const draftCloseState = $state<{
   open: boolean;
@@ -1884,6 +1902,7 @@ async function handleDraftTabClose(tab: FileTab): Promise<boolean> {
       if (isDirty(tab)) return false;
     }
     const promoted = await api.promoteDraft(tab.path, decision.target);
+    notifyDraftPromoted(promoted.path);
     notify(`Draft saved to ${promoted.path}`);
     return true;
   } catch (e) {
