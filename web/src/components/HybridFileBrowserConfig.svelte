@@ -34,6 +34,8 @@
   } from "../api/types";
   import { drive } from "../state/store.svelte";
 
+  let { onDone }: { onDone?: () => void } = $props();
+
   type SaveStatus = "idle" | "saving" | "saved" | { error: string };
 
   /// Local edit buffer for the reports slice. The semantic-search
@@ -262,6 +264,7 @@
         <span class="err" title={saveStatus.error}>save failed</span>
       {/if}
     </div>
+    <button type="button" class="config-ok" onclick={() => onDone?.()}>OK</button>
   </header>
   <div class="config-body">
     <p class="hint warning">
@@ -339,7 +342,11 @@
       </p>
       <label class="font-row">
         <span>Model</span>
-        <select class="family" disabled aria-label="Embedding model picker (placeholder)">
+        <select
+          class="config-select family"
+          disabled
+          aria-label="Embedding model picker (placeholder)"
+        >
           <option>BAAI/bge-small-en-v1.5 (default)</option>
         </select>
       </label>
@@ -407,6 +414,18 @@
   .save-status .ok { color: var(--accent); }
   .save-status .err { color: #d33; }
   .save-status .muted { color: var(--text-secondary); }
+  .config-ok {
+    background: var(--btn-bg);
+    color: var(--text);
+    border: 1px solid var(--btn-border);
+    border-radius: 4px;
+    padding: 5px 12px;
+    font: inherit;
+    cursor: pointer;
+  }
+  .config-ok:hover {
+    border-color: var(--btn-hover);
+  }
   .config-body {
     flex: 1;
     overflow: auto;
@@ -477,6 +496,14 @@
   }
   .font-row > span { color: var(--text-secondary); font-size: 14px; min-width: 5em; }
   .font-row select.family { flex: 1; min-width: 12em; }
+  .config-select {
+    background: var(--bg);
+    color: var(--text);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    padding: 5px 7px;
+    font: inherit;
+  }
   /* Semantic-search info grid carried over verbatim from
      SettingsPanel so the Active / Stored-at rows render with the
      same affordances. */

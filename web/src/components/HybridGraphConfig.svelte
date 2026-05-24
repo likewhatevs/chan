@@ -10,6 +10,8 @@
   // here mirror what `GraphCanvas.svelte`'s theme reader picks up,
   // so the swatch hue + the actual node colour stay in lockstep.
 
+  let { onDone }: { onDone?: () => void } = $props();
+
   /// Node-class rows in render order. Top-level groups (Files,
   /// Containers, Graph relations) are visual organizers; each
   /// `kind` row hosts the label + swatch. The palette token is the
@@ -91,6 +93,7 @@
 <section class="hybrid-config" aria-label="Hybrid Graph configuration">
   <header class="config-header">
     <h2 class="config-title">Hybrid Graph</h2>
+    <button type="button" class="config-ok" onclick={() => onDone?.()}>OK</button>
   </header>
   <div class="config-body">
     <p class="hint">
@@ -133,6 +136,10 @@
     min-height: 0;
   }
   .config-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
     padding: 16px 20px;
     border-bottom: 1px solid var(--border);
   }
@@ -141,6 +148,18 @@
     font-size: 18px;
     font-weight: 600;
     color: var(--text);
+  }
+  .config-ok {
+    background: var(--btn-bg);
+    color: var(--text);
+    border: 1px solid var(--btn-border);
+    border-radius: 4px;
+    padding: 5px 12px;
+    font: inherit;
+    cursor: pointer;
+  }
+  .config-ok:hover {
+    border-color: var(--btn-hover);
   }
   .config-body {
     flex: 1;

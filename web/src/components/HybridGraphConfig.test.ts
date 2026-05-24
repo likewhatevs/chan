@@ -118,4 +118,11 @@ describe("fullstack-a-51 Task D: Hybrid Graph legend grid", () => {
   test("swatch CSS reads var() inline so the SPA theme cascade works", () => {
     expect(source).toMatch(/style="background: var\(\{row\.cssVar\}\)"/);
   });
+
+  test("Wave 4 OK button routes through onDone", () => {
+    expect(source).toMatch(/let \{ onDone \}: \{ onDone\?: \(\) => void \} = \$props\(\)/);
+    expect(source).toMatch(
+      /<button type="button" class="config-ok" onclick=\{\(\) => onDone\?\.\(\)\}>OK<\/button>/,
+    );
+  });
 });

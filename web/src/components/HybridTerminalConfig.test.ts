@@ -97,8 +97,10 @@ describe("fullstack-a-53: HybridTerminalConfig per-Hybrid override + custom-TERM
     expect(source).toMatch(/pane\.theme = undefined/);
   });
 
-  test("pane prop is accepted via $props", () => {
-    expect(source).toMatch(/let \{ pane \}: \{ pane: LeafNode \} = \$props\(\)/);
+  test("pane and onDone props are accepted via $props", () => {
+    expect(source).toMatch(
+      /let \{ pane, onDone \}: \{ pane: LeafNode; onDone\?: \(\) => void \} = \$props\(\)/,
+    );
   });
 
   test("custom-TERM fix: customMode state tracks dropdown choice (-a-53)", () => {
@@ -170,5 +172,23 @@ describe("fullstack-b-30 slice b: terminal-font dropdown + download flow", () =>
     expect(source).toMatch(/Cascadia on[\s\S]*?Windows/);
     expect(source).toMatch(/DejaVu on[\s\S]*?Linux/);
     expect(source).toMatch(/Spawn-time-only/);
+  });
+});
+
+describe("Wave 4: Terminal back-side controls", () => {
+  test("OK button routes through onDone", () => {
+    expect(source).toMatch(
+      /<button type="button" class="config-ok" onclick=\{\(\) => onDone\?\.\(\)\}>OK<\/button>/,
+    );
+  });
+
+  test("TERM and font dropdowns use the polished config-select style", () => {
+    expect(source).toMatch(
+      /id="hybrid-terminal-default-term"[\s\S]{1,120}class="config-select family"/,
+    );
+    expect(source).toMatch(
+      /id="hybrid-terminal-font"[\s\S]{1,120}class="config-select family"/,
+    );
+    expect(source).toMatch(/\.config-select \{[\s\S]{1,300}border: 1px solid var\(--border\)/);
   });
 });

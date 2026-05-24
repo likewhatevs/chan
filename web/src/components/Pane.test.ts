@@ -279,6 +279,21 @@ describe("Pane right-click menus", () => {
 });
 
 describe("Pane back-side configuration view (fullstack-a-43)", () => {
+  test("passes the flip callback into every back-side config OK button", () => {
+    expect(paneSource).toMatch(
+      /<HybridTerminalConfig \{pane\} onDone=\{\(\) => flipHybrid\(pane\.id\)\} \/>/,
+    );
+    expect(paneSource).toMatch(
+      /<HybridEditorConfig \{pane\} onDone=\{\(\) => flipHybrid\(pane\.id\)\} \/>/,
+    );
+    expect(paneSource).toMatch(
+      /<HybridGraphConfig onDone=\{\(\) => flipHybrid\(pane\.id\)\} \/>/,
+    );
+    expect(paneSource).toMatch(
+      /<HybridFileBrowserConfig onDone=\{\(\) => flipHybrid\(pane\.id\)\} \/>/,
+    );
+  });
+
   test("renders HybridTerminalConfig when active front tab is terminal", async () => {
     const front = terminalTab({ id: "front-term", title: "front" });
     const pane: LeafNode = {

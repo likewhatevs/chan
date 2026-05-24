@@ -122,6 +122,24 @@ describe("fullstack-a-46: HybridEditorConfig wiring", () => {
   });
 });
 
+describe("Wave 4: Editor back-side controls", () => {
+  test("onDone prop is accepted and OK button routes through it", () => {
+    expect(source).toMatch(
+      /let \{ pane, onDone \}: \{ pane: LeafNode; onDone\?: \(\) => void \} = \$props\(\)/,
+    );
+    expect(source).toMatch(
+      /<button type="button" class="config-ok" onclick=\{\(\) => onDone\?\.\(\)\}>OK<\/button>/,
+    );
+  });
+
+  test("Date pills dropdown uses the polished config-select style", () => {
+    expect(source).toMatch(
+      /<select class="config-select family" bind:value=\{editing\.date_format\}>/,
+    );
+    expect(source).toMatch(/\.config-select \{[\s\S]{1,300}border: 1px solid var\(--border\)/);
+  });
+});
+
 describe("fullstack-a-46 + fullstack-a-53: Editor section trim in SettingsPanel", () => {
   test("editor section headers for migrated subsections are gone", () => {
     // `-a-46` migrated Editor theme, Layout, Date pills, On

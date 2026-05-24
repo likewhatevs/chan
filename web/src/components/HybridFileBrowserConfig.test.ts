@@ -49,7 +49,7 @@ describe("fullstack-a-48: HybridFileBrowserConfig wiring", () => {
   test("Multi-model picker renders as a disabled placeholder slot", () => {
     expect(source).toMatch(/<h3>Embedding model<\/h3>/);
     expect(source).toMatch(
-      /<select[^>]*disabled[^>]*aria-label="Embedding model picker \(placeholder\)"/,
+      /<select[\s\S]{1,160}class="config-select family"[\s\S]{1,120}disabled[\s\S]{1,120}aria-label="Embedding model picker \(placeholder\)"/,
     );
     expect(source).toContain("BAAI/bge-small-en-v1.5");
   });
@@ -88,6 +88,20 @@ describe("fullstack-a-48: HybridFileBrowserConfig wiring", () => {
 
   test("polling timer is cleaned up on destroy", () => {
     expect(source).toMatch(/onDestroy\(\(\) => \{\s*stopSemanticPoll\(\)/);
+  });
+});
+
+describe("Wave 4: File Browser back-side controls", () => {
+  test("onDone prop is accepted and OK button routes through it", () => {
+    expect(source).toMatch(/let \{ onDone \}: \{ onDone\?: \(\) => void \} = \$props\(\)/);
+    expect(source).toMatch(
+      /<button type="button" class="config-ok" onclick=\{\(\) => onDone\?\.\(\)\}>OK<\/button>/,
+    );
+  });
+
+  test("placeholder dropdown uses the polished config-select style", () => {
+    expect(source).toMatch(/class="config-select family"/);
+    expect(source).toMatch(/\.config-select \{[\s\S]{1,300}border: 1px solid var\(--border\)/);
   });
 });
 

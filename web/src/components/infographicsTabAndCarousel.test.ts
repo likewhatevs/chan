@@ -126,7 +126,29 @@ describe("fullstack-a-75b: InfographicsTab mounts the carousel", () => {
 
   test("body wraps the carousel in a labeled region", () => {
     expect(infographics).toMatch(
-      /<div class="infographics" aria-label="Infographics">/,
+      /class="infographics"[\s\S]{1,120}aria-label="Infographics"[\s\S]{1,120}role="region"/,
+    );
+  });
+});
+
+describe("Wave 4: Infographics settings", () => {
+  test("right-click Settings menu uses the shared HamburgerMenu primitive", () => {
+    expect(infographics).toMatch(/import HamburgerMenu from "\.\/HamburgerMenu\.svelte";/);
+    expect(infographics).toMatch(/function onContextMenu\(e: MouseEvent\): void/);
+    expect(infographics).toMatch(/menu\?\.openAtCursor\(e\.clientX, e\.clientY\)/);
+    expect(infographics).toMatch(/<Settings2 size=\{16\}/);
+    expect(infographics).toMatch(/<span class="menu-row-label">Settings<\/span>/);
+  });
+
+  test("settings view exposes appearance radios and an OK button", () => {
+    expect(infographics).toMatch(/type InfographicsAppearance = "inherit" \| "light" \| "dark"/);
+    expect(infographics).toMatch(/data-theme=\{effectiveTheme\}/);
+    expect(infographics).toMatch(/aria-label="Infographics settings"/);
+    expect(infographics).toMatch(/name="infographics-appearance"/);
+    expect(infographics).toContain('"light"');
+    expect(infographics).toContain('"dark"');
+    expect(infographics).toMatch(
+      /<button type="button" class="config-ok" onclick=\{closeSettings\}>OK<\/button>/,
     );
   });
 });

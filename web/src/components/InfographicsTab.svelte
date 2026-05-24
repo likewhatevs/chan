@@ -11,11 +11,94 @@
   // ASCII shortcut table; that table is now slide 1 of the
   // carousel below.
 
+  import { Settings2 } from "lucide-svelte";
   import EmptyPaneCarousel from "./EmptyPaneCarousel.svelte";
+  import HamburgerMenu from "./HamburgerMenu.svelte";
+
+  type InfographicsAppearance = "inherit" | "light" | "dark";
+
+  let menu: HamburgerMenu | undefined = $state();
+  let menuOpen = $state(false);
+  let settingsOpen = $state(false);
+  let appearance = $state<InfographicsAppearance>("inherit");
+
+  const effectiveTheme = $derived(
+    appearance === "inherit" ? undefined : appearance,
+  );
+
+  function onContextMenu(e: MouseEvent): void {
+    e.preventDefault();
+    menu?.openAtCursor(e.clientX, e.clientY);
+  }
+
+  function openSettings(): void {
+    menu?.close();
+    settingsOpen = true;
+  }
+
+  function closeSettings(): void {
+    settingsOpen = false;
+  }
 </script>
 
-<div class="infographics" aria-label="Infographics">
-  <EmptyPaneCarousel />
+<div
+  class="infographics"
+  aria-label="Infographics"
+  data-theme={effectiveTheme}
+  oncontextmenu={onContextMenu}
+  role="region"
+>
+  <HamburgerMenu
+    bind:this={menu}
+    bind:open={menuOpen}
+    showTrigger={false}
+    width={220}
+    height={58}
+  >
+    <li>
+      <button role="menuitem" onclick={openSettings}>
+        <Settings2 size={16} strokeWidth={1.75} aria-hidden="true" />
+        <span class="menu-row-label">Settings</span>
+        <span class="menu-row-chord"></span>
+      </button>
+    </li>
+  </HamburgerMenu>
+
+  {#if settingsOpen}
+    <section class="infographics-settings" aria-label="Infographics settings">
+      <header class="config-header">
+        <h2 class="config-title">Infographics</h2>
+        <button type="button" class="config-ok" onclick={closeSettings}>OK</button>
+      </header>
+      <div class="config-body">
+        <section>
+          <h3>Appearance</h3>
+          <div class="theme-row" role="radiogroup" aria-label="Infographics appearance">
+            {#each [
+              { value: "inherit" as const, label: "Inherit" },
+              { value: "light" as const, label: "Light" },
+              { value: "dark" as const, label: "Dark" },
+            ] as opt (opt.value)}
+              <label class="theme-opt" class:on={appearance === opt.value}>
+                <input
+                  type="radio"
+                  name="infographics-appearance"
+                  value={opt.value}
+                  checked={appearance === opt.value}
+                  onchange={() => {
+                    appearance = opt.value;
+                  }}
+                />
+                <span>{opt.label}</span>
+              </label>
+            {/each}
+          </div>
+        </section>
+      </div>
+    </section>
+  {:else}
+    <EmptyPaneCarousel />
+  {/if}
 </div>
 
 <style>
@@ -27,5 +110,90 @@
     flex-direction: column;
     background: var(--bg);
     color: var(--text);
+  }
+  .infographics-settings {
+    display: flex;
+    flex-direction: column;
+    flex: 1;
+    min-width: 0;
+    min-height: 0;
+  }
+  .config-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    padding: 16px 20px;
+    border-bottom: 1px solid var(--border);
+  }
+  .config-title {
+    margin: 0;
+    font-size: 18px;
+    font-weight: 600;
+    color: var(--text);
+  }
+  .config-ok {
+    background: var(--btn-bg);
+    color: var(--text);
+    border: 1px solid var(--btn-border);
+    border-radius: 4px;
+    padding: 5px 12px;
+    font: inherit;
+    cursor: pointer;
+  }
+  .config-ok:hover {
+    border-color: var(--btn-hover);
+  }
+  .config-body {
+    flex: 1;
+    overflow: auto;
+    padding: 16px 20px;
+    display: flex;
+    flex-direction: column;
+    gap: 1.25rem;
+  }
+  .config-body :global(section) {
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+  }
+  .config-body :global(section h3) {
+    margin: 0;
+    font-size: 14px;
+    font-weight: 600;
+    color: var(--text);
+  }
+  .theme-row {
+    display: flex;
+    gap: 4px;
+    flex-wrap: wrap;
+  }
+  .theme-opt {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 4px 10px;
+    border: 1px solid var(--btn-border);
+    border-radius: 4px;
+    background: var(--btn-bg);
+    cursor: pointer;
+    font-size: 14px;
+  }
+  .theme-opt input[type="radio"] {
+    width: auto;
+    margin: 0;
+    padding: 0;
+    border: 0;
+    background: transparent;
+  }
+  .theme-opt > span {
+    color: var(--text);
+  }
+  .theme-opt:hover {
+    border-color: var(--btn-hover);
+  }
+  .theme-opt.on {
+    border-color: var(--link);
+    background: var(--hover-bg);
   }
 </style>

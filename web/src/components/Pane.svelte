@@ -1253,13 +1253,13 @@
            Task A ships title-band stubs. -->
       <div class="back-side" role="region" aria-label="hybrid back side">
         {#if active?.kind === "terminal"}
-          <HybridTerminalConfig {pane} />
+          <HybridTerminalConfig {pane} onDone={() => flipHybrid(pane.id)} />
         {:else if active?.kind === "file"}
-          <HybridEditorConfig {pane} />
+          <HybridEditorConfig {pane} onDone={() => flipHybrid(pane.id)} />
         {:else if active?.kind === "graph"}
-          <HybridGraphConfig />
+          <HybridGraphConfig onDone={() => flipHybrid(pane.id)} />
         {:else if active?.kind === "browser"}
-          <HybridFileBrowserConfig />
+          <HybridFileBrowserConfig onDone={() => flipHybrid(pane.id)} />
         {:else}
           <!-- Empty pane (no active front tab). Open a front tab
                and flip again to see its configuration surface. -->

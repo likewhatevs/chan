@@ -36,7 +36,7 @@
   /// `pane.theme` (the existing per-Hybrid override slot from
   /// `-b-5`/`-a-47`). Resolution at render time:
   /// `pane.theme ?? ui.theme`.
-  let { pane }: { pane: LeafNode } = $props();
+  let { pane, onDone }: { pane: LeafNode; onDone?: () => void } = $props();
 
   type OverrideChoice = "inherit" | HybridTheme;
   const overrideValue = $derived<OverrideChoice>(
@@ -233,6 +233,7 @@
         <span class="err" title={saveStatus.error}>save failed</span>
       {/if}
     </div>
+    <button type="button" class="config-ok" onclick={() => onDone?.()}>OK</button>
   </header>
   <div class="config-body">
     <p class="hint warning">
@@ -343,7 +344,7 @@
       </p>
       <label class="font-row">
         <span>Default</span>
-        <select class="family" bind:value={editing.date_format}>
+        <select class="config-select family" bind:value={editing.date_format}>
           {#each DATE_FORMATS as f (f.id)}
             <option value={f.id}>{f.label}</option>
           {/each}
@@ -397,6 +398,18 @@
   .save-status .ok { color: var(--accent); }
   .save-status .err { color: #d33; }
   .save-status .muted { color: var(--text-secondary); }
+  .config-ok {
+    background: var(--btn-bg);
+    color: var(--text);
+    border: 1px solid var(--btn-border);
+    border-radius: 4px;
+    padding: 5px 12px;
+    font: inherit;
+    cursor: pointer;
+  }
+  .config-ok:hover {
+    border-color: var(--btn-hover);
+  }
   .config-body {
     flex: 1;
     overflow: auto;
@@ -482,5 +495,13 @@
   .font-row select.family {
     flex: 1;
     min-width: 12em;
+  }
+  .config-select {
+    background: var(--bg);
+    color: var(--text);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    padding: 5px 7px;
+    font: inherit;
   }
 </style>
