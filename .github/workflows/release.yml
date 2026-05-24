@@ -1,29 +1,19 @@
 name: Release
 
-# Triggered on `v*` and `chan-v*` tag pushes (e.g. `v0.1.0`,
-# `chan-v0.11.2`) and via manual dispatch for testing. Builds
-# five static-leaning binaries + .deb + .rpm + .pkg, attaches
-# all artifacts to a GitHub release on tag push.
+# Triggered on `chan-v*` tag pushes, for example `chan-v0.14.0`,
+# and via manual dispatch for testing. Builds the active standalone
+# CLI release targets and attaches artifacts to the GitHub Release.
 #
-# The `chan-v*` pattern was added 2026-05-21 (ci-11) to restore
-# intended behaviour. Phase-8 adopted the `chan-v*` tagging
-# convention (chan-v0.11.0, chan-v0.11.1, chan-v0.11.2); the
-# original `v*`-only glob silently skipped every phase-8
-# release tag, so chan CLI binaries never shipped to the
-# corresponding GitHub Releases. Pre-existing `v*` tags
-# (v0.6.x through v0.11.0) stay matched for back-compat.
+# Phase 10 is pre-release work. The fresh public contract starts at
+# `github.com/fiorix/chan` with `chan-v*` tags. This workflow does
+# not keep legacy `v*` tag support, old `chan.app/dl/` paths,
+# Windows artifacts, or zip archives.
 #
 # Targets:
 #   linux x86_64       glibc dynamic
 #   linux aarch64      glibc dynamic
 #   macos aarch64      Apple Silicon native (Intel intentionally
 #                                            excluded)
-#
-# Windows targets deferred 2026-05-21 per ci-13 / @@Alex scope
-# decision. Restore the two `windows-latest` matrix entries +
-# the Authenticode signing path when Windows comes back online.
-# See `docs/journals/phase-8/phase-8-bugs.md` "Windows support
-# — full re-enable" for the Round-3 follow-up.
 #
 # Artifacts are unsigned on Linux. Apple Gatekeeper will warn
 # on the .pkg until you sign + notarize it with a Developer ID;
@@ -33,7 +23,6 @@ name: Release
 on:
   push:
     tags:
-      - 'v*'
       - 'chan-v*'
   workflow_dispatch:
 
@@ -122,12 +111,6 @@ jobs:
             binname: chan
             deb_arch: arm64
             rpm: true
-          # Windows entries dropped 2026-05-21 per ci-13 / @@Alex
-          # scope decision. Restore `x86_64-pc-windows-msvc` +
-          # `aarch64-pc-windows-msvc` (+ cross_windows_arm flag)
-          # when Windows comes back online. The Archive (zip)
-          # step below still handles `archive: zip` for any
-          # future restored entry.
           - os: macos-latest
             target: aarch64-apple-darwin
             archive: tar.gz
@@ -220,7 +203,7 @@ jobs:
         working-directory: chan
 
       # ----- archive -----
-      # tar.gz on linux/mac, zip on windows. Bundle the binary
+      # tar.gz on Linux and macOS. Bundle the binary
       # plus LICENSE + README so the user has the legal +
       # quickstart text alongside.
       - name: Archive (tar.gz)
@@ -230,16 +213,6 @@ jobs:
           cp chan/target/${{ matrix.target }}/release/${{ matrix.binname }} staging/
           cp chan/LICENSE chan/README.md staging/
           tar -czf chan-${{ matrix.target }}.tar.gz -C staging .
-
-      - name: Archive (zip)
-        if: matrix.archive == 'zip'
-        shell: pwsh
-        run: |
-          New-Item -ItemType Directory -Force -Path staging | Out-Null
-          Copy-Item chan/target/${{ matrix.target }}/release/${{ matrix.binname }} staging/
-          Copy-Item chan/LICENSE staging/
-          Copy-Item chan/README.md staging/
-          Compress-Archive -Path staging/* -DestinationPath chan-${{ matrix.target }}.zip
 
       # ----- linux .deb -----
       # Prebuilt binary; `cargo install cargo-deb` was a few minutes
@@ -343,47 +316,37 @@ jobs:
   # Tag-pushed runs end with a GitHub release. workflow_dispatch
   # runs skip this so manual tests don't cut releases.
   #
-  # The trigger glob (lines 33-37) accepts both `v*` (legacy
-  # v0.6.x..v0.11.0) and `chan-v*` (phase-8 convention). The
-  # release job's `if:` must match BOTH; the original `v*`-only
-  # check silently skipped this job on every phase-8 release tag.
-  # ci-11 fixed the trigger glob but missed this gate, so chan CLI
-  # binaries built (the build job runs) but never shipped to the
-  # GH Release (this job skipped).
   release:
     name: github release
-    if: startsWith(github.ref, 'refs/tags/v') || startsWith(github.ref, 'refs/tags/chan-v')
+    if: startsWith(github.ref, 'refs/tags/chan-v')
     needs: build
     runs-on: ubuntu-latest
     permissions:
       contents: write
     steps:
+      - uses: actions/checkout@v4
+        with:
+          path: chan
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - run: npm run build
+        working-directory: chan/web-marketing
+
       - uses: actions/download-artifact@v4
         with:
           path: artifacts
       - name: List artifacts
         run: find artifacts -type f
 
-      # The self-upgrade flow in `chan serve` / `chan upgrade` reads
-      # `chan.app/dl/latest/VERSION` (text) to discover the current
-      # release and `chan.app/dl/v<version>/SHA256SUMS` to verify the
-      # downloaded archive. Both files have to be in the GitHub
-      # release so chan-prod-setup's bin/fetch-chan-dl.sh can mirror
-      # them onto chan.app/dl/. The text file holds the tag stripped
-      # of its leading `v`; the SHA256SUMS lines name each artifact
-      # as `<hash>  <basename>`.
+      # Keep release metadata in GitHub Releases. `chan upgrade`
+      # verifies standalone CLI tarballs against SHA256SUMS.
       - name: Stage VERSION + SHA256SUMS
         run: |
           set -e
           mkdir -p release-extras
           tag=${GITHUB_REF#refs/tags/}
-          # Strip both `chan-v` (phase-8 convention) and `v`
-          # (legacy v0.6.x..v0.11.0) prefixes so VERSION holds
-          # just the semver (e.g. 0.12.0). Matches the contract
-          # `chan upgrade` expects when reading the file from
-          # chan.app/dl/latest/VERSION.
-          version=${tag#chan-}
-          version=${version#v}
+          version=${tag#chan-v}
           printf '%s\n' "$version" > release-extras/VERSION
 
           # Flatten artifact subdirs so the checksum file lists
@@ -396,11 +359,26 @@ jobs:
           ls -la release-extras
           cat release-extras/SHA256SUMS
 
+      - name: Stage manual bundle
+        run: |
+          set -e
+          tag=${GITHUB_REF#refs/tags/}
+          version=${tag#chan-v}
+          mkdir -p release-extras/manual-bundle
+          cp -R chan/web-marketing/dist/manual release-extras/manual-bundle/manual
+          cp -R chan/web-marketing/dist/assets release-extras/manual-bundle/assets
+          cp chan/web-marketing/dist/favicon.ico release-extras/manual-bundle/
+          cp chan/web-marketing/dist/chan-mark.png release-extras/manual-bundle/
+          tar -czf "release-extras/chan-manual-${version}.tar.gz" \
+            -C release-extras/manual-bundle .
+          tar -tzf "release-extras/chan-manual-${version}.tar.gz" | LC_ALL=C sort | head -50
+
       - uses: softprops/action-gh-release@v2
         with:
           files: |
             artifacts/**/*
             release-extras/VERSION
             release-extras/SHA256SUMS
+            release-extras/chan-manual-*.tar.gz
           generate_release_notes: true
           fail_on_unmatched_files: false

@@ -26,16 +26,21 @@ Follow-up in this wave:
 - The site generator validates generated release links, rejects stale
   `/dl/latest/` and `chan-writer/chan` public links, and verifies the
   `install.sh` default `BASE`.
+- `.github/workflows/release.yml` now follows the fresh release contract:
+  `chan-v*` tags only, no Windows or zip release path, no old `/dl/` mirror
+  contract, and a `chan-manual-<version>.tar.gz` bundle built from
+  `web-marketing/dist/`.
 
 Latest local checks:
 
 - `npm run build` in `web-marketing/`
 - `sh -n web-marketing/dist/install.sh`
 - `git diff --check` on the Track B follow-up files
+- YAML parse of `.github/workflows/release.yml`
+- Local manual-bundle tar smoke using `web-marketing/dist/`
 
 Next wave:
 
-- Decide how the release-tag manual bundle is produced from `docs/manual/`.
 - Recheck release asset names after Track A finalizes desktop artifact names.
 
 ## Objectives
@@ -204,9 +209,8 @@ Release integration:
   - `chan upgrade --version` takes a bare version such as `0.14.0`.
 - Do not keep pre-release compatibility paths for old tag names, Windows
   release artifacts, or `/dl/v<version>/` upgrade URLs.
-- Add a release-tag manual bundle generated from the same `docs/manual/`
-  source, either attached to the GitHub release or published as part of the
-  Pages artifact.
+- Attach a release-tag manual bundle generated from the same `docs/manual/`
+  source as `chan-manual-<version>.tar.gz`.
 - Verify that latest-download GitHub URLs used by the site match the active
   first-install artifacts.
 - Verify that GitHub Release URLs used by `chan upgrade` match the active
