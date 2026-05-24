@@ -47,6 +47,19 @@ Progress:
   drop-to-upload, status-bar progress and cancel, plus native desktop
   drag-out/download follow-up in Track A.
 
+Current wave:
+
+- Implement File Browser drop-to-upload for docked File Browsers and File
+  Browser tabs.
+- Route uploads through chan-server and chan-drive, with explicit conflict
+  handling instead of silent overwrite.
+- Surface upload progress, completion, failure, and cancellation through the
+  status bar.
+- Refresh visible File Browser trees after upload while preserving expansion
+  state.
+- Leave drag-out/download to a feasibility pass after the upload path lands;
+  native desktop drag-out remains tracked in Track A.
+
 ## Objectives
 
 - Keep terminal rendering stable across Hybrid pane focus changes.
