@@ -55,10 +55,16 @@ fn default_empty_pane_carousel_cycling() -> bool {
     true
 }
 
-pub(super) fn preferences_view(state: &AppState) -> PreferencesView {
-    let editor = state.editor_prefs.lock().expect("editor prefs poisoned");
-    let server = state.server_config.lock().expect("server config poisoned");
-    PreferencesView {
+pub(super) fn preferences_view(state: &AppState) -> Result<PreferencesView, Error> {
+    let editor = state
+        .editor_prefs
+        .lock()
+        .map_err(|_| Error::Config("editor prefs lock poisoned".into()))?;
+    let server = state
+        .server_config
+        .lock()
+        .map_err(|_| Error::Config("server config lock poisoned".into()))?;
+    Ok(PreferencesView {
         editor_theme: editor.editor_theme,
         attachments_dir: server.attachments_dir.clone(),
         theme: editor.theme,
@@ -72,13 +78,21 @@ pub(super) fn preferences_view(state: &AppState) -> PreferencesView {
         bubble_overlay_mode: editor.bubble_overlay_mode,
         empty_pane_carousel_cycling: editor.empty_pane_carousel_cycling,
         reports: server.reports.clone(),
-    }
+    })
 }
 
 // ----- /api/server/config ------------------------------------------------
 
 pub async fn api_get_server_config(State(state): State<Arc<AppState>>) -> Response {
-    let cfg = state.server_config.lock().unwrap().clone();
+    let cfg = match state.server_config.lock() {
+        Ok(cfg) => cfg.clone(),
+        Err(_) => {
+            return err(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "server config lock poisoned".into(),
+            );
+        }
+    };
     Json(cfg).into_response()
 }
 
@@ -99,7 +113,15 @@ pub async fn api_patch_server_config(
     State(state): State<Arc<AppState>>,
     Json(body): Json<PatchServerConfigBody>,
 ) -> Response {
-    let mut cfg = state.server_config.lock().unwrap();
+    let mut cfg = match state.server_config.lock() {
+        Ok(cfg) => cfg,
+        Err(_) => {
+            return err(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "server config lock poisoned".into(),
+            );
+        }
+    };
     if let Some(p) = body.attachments_dir {
         if p.is_empty() {
             return err(
@@ -156,16 +178,16 @@ pub struct PatchConfigBody {
     drives: Option<serde_json::Value>,
 }
 
-fn global_config_view(state: &AppState) -> GlobalConfigView {
+fn global_config_view(state: &AppState) -> Result<GlobalConfigView, Error> {
     // On `--tunnel-public` runs we strip the whole "host machine"
     // dimension of the response: anonymous visitors must not see
     // `default_drive_root` or the registry of other drives on the host.
     if state.tunnel_public {
-        return GlobalConfigView {
-            preferences: preferences_view(state),
+        return Ok(GlobalConfigView {
+            preferences: preferences_view(state)?,
             default_drive_root: None,
             drives: Vec::new(),
-        };
+        });
     }
     let drives = state
         .library
@@ -177,18 +199,21 @@ fn global_config_view(state: &AppState) -> GlobalConfigView {
             last_seen_at: d.last_seen_at.to_rfc3339(),
         })
         .collect();
-    GlobalConfigView {
-        preferences: preferences_view(state),
+    Ok(GlobalConfigView {
+        preferences: preferences_view(state)?,
         default_drive_root: state
             .library
             .default_drive_root()
             .map(|p| p.to_string_lossy().into_owned()),
         drives,
-    }
+    })
 }
 
 pub async fn api_get_config(State(state): State<Arc<AppState>>) -> Response {
-    Json(global_config_view(&state)).into_response()
+    match global_config_view(&state) {
+        Ok(view) => Json(view).into_response(),
+        Err(e) => err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
+    }
 }
 
 pub async fn api_patch_config(
@@ -217,12 +242,18 @@ pub async fn api_patch_config(
             return err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string());
         }
     }
-    Json(global_config_view(&state)).into_response()
+    match global_config_view(&state) {
+        Ok(view) => Json(view).into_response(),
+        Err(e) => err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
+    }
 }
 
 fn apply_preferences(state: &AppState, view: PreferencesView) -> Result<(), Error> {
     {
-        let mut editor = state.editor_prefs.lock().expect("editor prefs poisoned");
+        let mut editor = state
+            .editor_prefs
+            .lock()
+            .map_err(|_| Error::Config("editor prefs lock poisoned".into()))?;
         editor.editor_theme = view.editor_theme;
         editor.theme = view.theme;
         editor.pane_widths = view.pane_widths;
@@ -235,7 +266,10 @@ fn apply_preferences(state: &AppState, view: PreferencesView) -> Result<(), Erro
         editor.save()?;
     }
     {
-        let mut server = state.server_config.lock().expect("server config poisoned");
+        let mut server = state
+            .server_config
+            .lock()
+            .map_err(|_| Error::Config("server config lock poisoned".into()))?;
         if !view.attachments_dir.is_empty() {
             server.attachments_dir = view.attachments_dir;
         }
@@ -294,7 +328,7 @@ mod tests {
     #[test]
     fn global_config_view_redacts_host_paths_on_public_tunnel() {
         let state = make_test_state(true, true);
-        let view = global_config_view(&state);
+        let view = global_config_view(&state).expect("global config view");
         let json = to_json(&view);
         assert_eq!(json["default_drive_root"], serde_json::Value::Null);
         assert_eq!(json["drives"], serde_json::json!([]));
@@ -303,7 +337,7 @@ mod tests {
     #[test]
     fn preferences_view_has_no_assistant_subtree() {
         let state = make_test_state(false, false);
-        let view = preferences_view(&state);
+        let view = preferences_view(&state).expect("preferences view");
         let json = serde_json::to_value(view).expect("serialize");
         assert!(json.get("assistant").is_none());
     }
@@ -346,7 +380,7 @@ mod tests {
     #[test]
     fn global_config_view_keeps_host_fields_on_local_serve() {
         let state = make_test_state(false, false);
-        let view = global_config_view(&state);
+        let view = global_config_view(&state).expect("global config view");
         let json = to_json(&view);
         assert!(json["drives"].is_array());
     }

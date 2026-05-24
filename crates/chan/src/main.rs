@@ -1355,7 +1355,9 @@ fn cmd_index_download_model(model: &str) -> Result<()> {
         global_models_dir, repo_dir_name, resolve_model, Embedder,
     };
     if chan_drive::index::config::embedding_model(model).is_none() {
-        anyhow::bail!("unknown embedding model: {model}");
+        anyhow::bail!(
+            "unknown embedding model: {model} (run `chan index list-models` to list supported models)"
+        );
     }
     let cache_dir = global_models_dir();
     let expected_dir = cache_dir.join(repo_dir_name(model));
@@ -1382,7 +1384,9 @@ fn cmd_index_download_model(model: &str) -> Result<()> {
 #[cfg(feature = "embeddings")]
 fn cmd_index_set_model(path: Option<PathBuf>, model: &str) -> Result<()> {
     if chan_drive::index::config::embedding_model(model).is_none() {
-        anyhow::bail!("unknown embedding model: {model}");
+        anyhow::bail!(
+            "unknown embedding model: {model} (run `chan index list-models` to list supported models)"
+        );
     }
     let lib = library()?;
     let root = path

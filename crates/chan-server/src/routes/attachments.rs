@@ -87,7 +87,15 @@ pub async fn api_post_attachment(
     // configured attachments_dir.
     let dir = match dir_override {
         Some(d) => d,
-        None => state.server_config.lock().unwrap().attachments_dir.clone(),
+        None => match state.server_config.lock() {
+            Ok(cfg) => cfg.attachments_dir.clone(),
+            Err(_) => {
+                return err(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "server config lock poisoned".into(),
+                );
+            }
+        },
     };
 
     // Filename: <slugified-stem>.<ext>, kept close to what the user
@@ -159,7 +167,7 @@ pub async fn api_post_attachment(
                 StatusCode::INTERNAL_SERVER_ERROR,
                 format!("attachment write task panicked: {e}"),
             )
-                .into_response()
+                .into_response();
         }
     };
     state.self_writes.note(&rel);

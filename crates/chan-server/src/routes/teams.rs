@@ -133,7 +133,15 @@ pub async fn api_team_load(
         Err(e) => return err_from(&e),
     };
 
-    let mut loaded = state.loaded_teams.lock().unwrap();
+    let mut loaded = match state.loaded_teams.lock() {
+        Ok(loaded) => loaded,
+        Err(_) => {
+            return err(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "loaded teams lock poisoned".into(),
+            );
+        }
+    };
     // Replace any existing handle for this team (drops + closes
     // the old watcher cleanly).
     loaded.insert(team_name.clone(), watch_handle);
@@ -153,7 +161,15 @@ pub async fn api_team_unload(
     State(state): State<Arc<AppState>>,
     Path(team_name): Path<String>,
 ) -> Response {
-    let mut loaded = state.loaded_teams.lock().unwrap();
+    let mut loaded = match state.loaded_teams.lock() {
+        Ok(loaded) => loaded,
+        Err(_) => {
+            return err(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "loaded teams lock poisoned".into(),
+            );
+        }
+    };
     match loaded.remove(&team_name) {
         Some(_handle) => {
             // Dropping the handle releases the notify watcher
@@ -280,7 +296,15 @@ pub async fn api_team_get_config(
 
 /// `GET /api/teams/loaded` — list currently loaded teams.
 pub async fn api_team_list_loaded(State(state): State<Arc<AppState>>) -> Response {
-    let loaded = state.loaded_teams.lock().unwrap();
+    let loaded = match state.loaded_teams.lock() {
+        Ok(loaded) => loaded,
+        Err(_) => {
+            return err(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "loaded teams lock poisoned".into(),
+            );
+        }
+    };
     let mut teams: Vec<String> = loaded.keys().cloned().collect();
     drop(loaded);
     teams.sort();

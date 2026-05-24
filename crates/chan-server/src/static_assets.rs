@@ -70,7 +70,12 @@ pub async fn serve_static(State(state): State<Arc<AppState>>, uri: axum::http::U
     } else {
         candidate
     };
-    let prefix = state.prefix.read().unwrap().clone();
+    let prefix = match state.prefix.read() {
+        Ok(prefix) => prefix.clone(),
+        Err(_) => {
+            return (StatusCode::INTERNAL_SERVER_ERROR, "prefix lock poisoned").into_response();
+        }
+    };
     let settings_disabled = state.settings_disabled;
     if let Some(file) = WebAssets::get(candidate) {
         let body = if is_index {

@@ -9,6 +9,7 @@ use axum::Json;
 use serde::Serialize;
 
 use super::preferences::{preferences_view, PreferencesView};
+use crate::error::err;
 use crate::state::AppState;
 
 #[derive(Serialize)]
@@ -33,7 +34,10 @@ struct DriveInfo {
 }
 
 pub async fn api_get_drive(State(state): State<Arc<AppState>>) -> Response {
-    Json(drive_info(&state)).into_response()
+    match drive_info(&state) {
+        Ok(info) => Json(info).into_response(),
+        Err(message) => err(StatusCode::INTERNAL_SERVER_ERROR, message),
+    }
 }
 
 pub async fn api_patch_drive(
@@ -46,7 +50,10 @@ pub async fn api_patch_drive(
     if body.get("name").is_some() {
         return (StatusCode::BAD_REQUEST, "drive names are not supported").into_response();
     }
-    Json(drive_info(&state)).into_response()
+    match drive_info(&state) {
+        Ok(info) => Json(info).into_response(),
+        Err(message) => err(StatusCode::INTERNAL_SERVER_ERROR, message),
+    }
 }
 
 #[derive(Serialize)]
@@ -96,7 +103,7 @@ pub async fn api_cloud_drives(State(state): State<Arc<AppState>>) -> Response {
 /// The SPA tolerates an empty `root`: it only uses the field for
 /// the Settings panel's "Drive root" line, which is unreachable
 /// in tunnel mode anyway.
-fn drive_info(state: &AppState) -> DriveInfo {
+fn drive_info(state: &AppState) -> Result<DriveInfo, String> {
     let drives = state.library.list_drives();
     // Snapshot the live drive once: each call to `state.drive()`
     // takes the `drive_cell` RwLock and clones the Arc. Two calls
@@ -111,13 +118,13 @@ fn drive_info(state: &AppState) -> DriveInfo {
     } else {
         drive_root.to_string_lossy().into_owned()
     };
-    DriveInfo {
+    Ok(DriveInfo {
         root,
         label: entry
             .and_then(|e| e.root_path.file_name())
             .and_then(|name| name.to_str())
             .map(str::to_string),
         metadata_key: entry.map(|e| e.metadata_key.clone()),
-        preferences: preferences_view(state),
-    }
+        preferences: preferences_view(state).map_err(|e| e.to_string())?,
+    })
 }
