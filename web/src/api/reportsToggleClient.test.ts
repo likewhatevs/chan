@@ -2,11 +2,9 @@ import { describe, expect, test } from "vitest";
 import client from "./client.ts?raw";
 
 // `fullstack-a-76` SPA wiring slice 1: client methods for the
-// `systacean-39` per-drive reports endpoints. The Settings UI
-// section that consumes them lands in slice 2 once the
-// dual-toggle question (this per-drive flag vs the existing
-// global `Preferences.reports` field via /api/config) is
-// resolved by the architect.
+// `systacean-39` per-drive reports endpoints. Track A removed
+// the stale global `Preferences.reports` field, so the Hybrid File
+// Browser config consumes these endpoints directly.
 
 describe("fullstack-a-76: reports client methods", () => {
   test("api.reportsState hits GET /api/index/reports/state", () => {

@@ -27,7 +27,10 @@ Source: `crates/chan-server/src/config.rs`.
 | `terminal.ring_bytes` | `usize` | `1 << 20` (1 MB) | `PATCH /api/server/config` | terminal ring buffer alloc |
 | `terminal.scrollback_mb` | `u32` | `50` (clamped `10..=500`) | `PATCH /api/server/config` | SPA xterm.js scrollback line cap |
 | `terminal.default_term` | `String` | `"xterm-256color"` | `PATCH /api/server/config` | PTY spawn `TERM` env |
-| `reports.enabled` | `bool` | `true` | `PATCH /api/server/config` | ⚠ **STALE** — round-trips only; per-drive `IndexConfig.reports_enabled` is the real source post-`systacean-27`. See systacean-28 finding 1. |
+
+Legacy `[reports] enabled = ...` blocks in `server.toml` are ignored
+on load and omitted on the next save. Per-drive
+`IndexConfig.reports_enabled` is the only reports toggle source.
 
 ### `~/.chan/preferences.toml` — `EditorPrefs`
 
@@ -99,16 +102,23 @@ Source: `crates/chan-drive/src/teams.rs` (post-`systacean-30`).
 
 ## chan-desktop
 
-### `<config>/chan/chan-desktop.json` — `Config`
+### Desktop `Config`
+
+Paths: `<config>/chan-desktop/config.json` on Linux and
+`<config>/Chan Desktop/config.json` elsewhere.
 
 Source: `desktop/src-tauri/src/config.rs`.
 
 | Field | Type | Default | Reachability | Consumers |
 |-------|------|---------|--------------|-----------|
-| `sidecar` | `HashMap<String, DriveSidecar>` | empty | (auto-populated on drive interactions) | per-drive UI state |
-| `sidecar.{key}.last_port` | `Option<u16>` | `None` | (auto on serve) | port-reuse on serve restart |
-| `sidecar.{key}.features.bge` | `bool` | `false` | Launcher row expand panel (`-b-28a + b`) | ⚠ **MIRROR / DRIFT-PRONE** — chan-drive's `IndexConfig.semantic_enabled` is the real source. See systacean-28 finding 2. |
-| `sidecar.{key}.features.reports` | `bool` | `false` | Launcher row expand panel | Same. Per-drive `IndexConfig.reports_enabled` is the real source. |
+| `drives` | `HashMap<String, DriveSettings>` | empty | launcher feature panel cache | per-local-drive desktop cache keyed by canonical path |
+| `drives.{path}.features.bge` | `bool` | `false` | Launcher row expand panel | Mirror of chan-drive's `IndexConfig.semantic_enabled`; refreshed on read through CLI when available |
+| `drives.{path}.features.reports` | `bool` | `false` | Launcher row expand panel | Mirror of chan-drive's `IndexConfig.reports_enabled`; refreshed on read through CLI when available |
+| `outbound[]` | `Vec<OutboundDrive>` | empty | Attach URL panel | explicit non-owned remote URL attachments |
+| `outbound[].id` | `String` | generated UUID | Attach URL panel | row actions + outbound window restore key |
+| `outbound[].url` | `String` | required | Attach URL panel | token-bearing HTTP(S) URL opened by desktop |
+| `outbound[].label` | `String` | `""` | Attach URL panel | optional launcher/window label |
+| `outbound[].added_at` | `u64` | current millis | Attach URL panel | diagnostics and future sorting |
 | `tunnel.preferred_port` | `u16` | `0` (OS-assigned) | Tunnel listener UI | tunnel listen-bind hint |
 | `tunnel.preferred_label` | `String` | `""` | Tunnel listener UI | bearer/label default |
 | `tunnel.preferred_drive` | `String` | `""` | Tunnel listener UI | drive name default |
@@ -120,10 +130,11 @@ Source: `desktop/src-tauri/src/config.rs`.
 
 | # | Finding | Recommended action | Owner | Priority |
 |---|---------|---------------------|-------|----------|
-| 1 | `ServerConfig.reports.enabled` is round-trip only — UI exists, no backend gating; per-drive `IndexConfig.reports_enabled` (post-`systacean-27`) is the real source. | Remove field; route SPA toggle through `chan reports enable/disable --path <drive>` or chan-server passthrough; observe per-drive state. | chan-server + SPA | Low (harmless round-trip; not data-damage) |
-| 2 | `DriveFeatures` mirror in chan-desktop sidecar drifts when users bypass chan-desktop's UI for feature toggles (e.g. `chan index enable-semantic` from terminal). | Replace mirror with on-read pass-through to chan-drive's `IndexConfig`, OR refresh-on-read. | chan-desktop + chan-drive | Low (corner case for power users) |
+| 1 | `DriveFeatures` mirror in chan-desktop config can drift when users bypass chan-desktop's UI for feature toggles (e.g. `chan index enable-semantic` from terminal). | Keep the current refresh-on-read path or replace the mirror with a direct chan-drive config API. | chan-desktop + chan-drive | Low (corner case for power users) |
 
-Both findings need cross-lane coordination. Recommend filing as routed follow-up tasks when the architect compiles the Round-3 polish backlog.
+The removed `ServerConfig.reports.enabled` finding is closed in
+Track A. The SPA reports toggle now uses
+`/api/index/reports/{state,enable,disable}`.
 
 ## Layout pointers
 

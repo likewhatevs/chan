@@ -252,18 +252,6 @@ export type Preferences = {
   /// trip the type contract; the UI treats `undefined` as the
   /// default-true.
   empty_pane_carousel_cycling?: boolean;
-  /// `fullstack-a-48` Task F: chan-reports toggle. Round-tripped
-  /// through /api/config. Default ON (matches today's
-  /// unconditional chan-report behaviour). The backend gating
-  /// (route + indexer pass + destructive-on-disable modal) is a
-  /// follow-up task per option (B) routing. Optional in the wire
-  /// form so older servers that don't yet emit the field don't
-  /// trip the type contract.
-  reports?: ReportsPreferences;
-};
-
-export type ReportsPreferences = {
-  enabled: boolean;
 };
 
 export type TreeEntry = {

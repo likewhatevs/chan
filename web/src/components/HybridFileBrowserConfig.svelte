@@ -9,154 +9,80 @@
   //    disable flow).
   // 2. Drive-wide multi-model picker backed by the semantic model
   //    registry endpoints.
-  // 3. chan-reports toggle (G1 regression fix: toggle was
-  //    specced in round-2-plan §"Pre-flight feature toggles"
-  //    but never landed in v1; option B routed by @@Architect
-  //    lands the SPA wiring + default ON behaviourally matching
-  //    today's unconditional chan-report. Backend gating + the
-  //    destructive-on-disable modal + the default-flip to OFF
-  //    are a follow-up task).
+  // 3. chan-reports toggle backed by the per-drive reports
+  //    endpoints. The stale server-wide Preferences.reports path
+  //    was removed in Track A because IndexConfig.reports_enabled
+  //    is the source of truth.
   //
-  // Save shape mirrors `-a-45` / `-a-46`: self-contained editing
-  // buffer, merge-against-current-server PATCH (re-fetches
-  // GlobalConfig before overlaying just the reports subtree),
-  // dirty comparator scoped to the reports field so a parallel
-  // SettingsPanel autosave (residual fields) doesn't trigger
-  // spurious PATCHes here, and vice versa.
+  // Reports writes are immediate per-drive endpoint calls; semantic
+  // search and model selection keep their existing endpoint-owned
+  // state machines.
 
   import { onDestroy, onMount } from "svelte";
   import { api } from "../api/client";
   import type {
     BuildInfo,
-    GlobalConfig,
-    Preferences,
     SemanticModelRegistry,
     SemanticState,
   } from "../api/types";
-  import { drive } from "../state/store.svelte";
   import HybridSurfaceConfigShell from "./HybridSurfaceConfigShell.svelte";
 
   let { onDone }: { onDone?: () => void } = $props();
 
   type SaveStatus = "idle" | "saving" | "saved" | { error: string };
 
-  /// Local edit buffer for the reports slice. The semantic-search
-  /// state machine owns its own (semanticState etc.), those
-  /// endpoints are stateful POSTs against the chan-server, not
-  /// preferences.
-  let editing = $state<Preferences | null>(null);
   let saveStatus = $state<SaveStatus>("idle");
 
-  const AUTOSAVE_DELAY_MS = 500;
   const SAVED_FLASH_MS = 1500;
-  let autosaveTimer: ReturnType<typeof setTimeout> | null = null;
   let savedFlashTimer: ReturnType<typeof setTimeout> | null = null;
-  let inflight = false;
-  let lastSentSnapshot: string | null = null;
-  let failedSaveSnap: string | null = null;
+  let reportsState = $state<{ enabled: boolean } | null>(null);
+  let reportsBusy = $state(false);
+  let reportsError = $state<string | null>(null);
 
-  function clone(p: Preferences): Preferences {
-    return JSON.parse(JSON.stringify(p));
-  }
+  const reportsEnabled = $derived(reportsState?.enabled ?? false);
 
-  /// Normalize the reports subtree. Pre-`-a-48` servers don't ship
-  /// the `reports` field; backfill with `{ enabled: true }` to
-  /// match the option (B) default and keep dirty()-stable across
-  /// a server re-fetch.
-  function normalizeReports(p: Preferences): Preferences {
-    if (!p.reports) p.reports = { enabled: true };
-    return p;
-  }
-
-  function reportsSnapshot(): string {
-    return JSON.stringify(editing?.reports ?? null);
-  }
-
-  $effect(() => {
-    const info = drive.info;
-    if (!info) return;
-    if (editing && reportsSnapshot() !== lastSentSnapshot) {
-      if (lastSentSnapshot === null) return;
-    }
-    editing = normalizeReports(clone(info.preferences));
-  });
-
-  const reportsEnabled = $derived(editing?.reports?.enabled ?? true);
-
-  function setReportsEnabled(next: boolean): void {
-    if (!editing) return;
-    editing.reports = { enabled: next };
-  }
-
-  function reportsDirty(): boolean {
-    if (!editing || !drive.info) return false;
-    const server = drive.info.preferences.reports ?? { enabled: true };
-    return (editing.reports?.enabled ?? true) !== server.enabled;
-  }
-
-  function scheduleSave(): void {
-    if (autosaveTimer) clearTimeout(autosaveTimer);
-    autosaveTimer = setTimeout(() => {
-      autosaveTimer = null;
-      void save();
-    }, AUTOSAVE_DELAY_MS);
-  }
-
-  /// Save the reports slice via the merge-against-current-server
-  /// pattern from `-a-45`. Re-fetches the latest GlobalConfig
-  /// before PATCHing so a parallel SettingsPanel autosave (residual
-  /// fields after `-a-46` trim) can't be clobbered.
-  async function save(): Promise<void> {
-    if (!editing || inflight) return;
-    if (!reportsDirty()) return;
-    inflight = true;
-    saveStatus = "saving";
+  function markSaveComplete(): void {
     if (savedFlashTimer) {
       clearTimeout(savedFlashTimer);
       savedFlashTimer = null;
     }
-    const sent = reportsSnapshot();
-    lastSentSnapshot = sent;
+    saveStatus = "saved";
+    savedFlashTimer = setTimeout(() => {
+      if (saveStatus === "saved") saveStatus = "idle";
+      savedFlashTimer = null;
+    }, SAVED_FLASH_MS);
+  }
+
+  async function loadReportsState(): Promise<void> {
     try {
-      const current = await api.config();
-      const cfgBody: GlobalConfig = {
-        preferences: {
-          ...current.preferences,
-          reports: editing.reports,
-        },
-        default_drive_root: current.default_drive_root,
-        drives: current.drives,
-      };
-      await api.updateConfig(cfgBody);
-      const info = await api.drive();
-      drive.info = info;
-      editing = normalizeReports(clone(info.preferences));
-      lastSentSnapshot = reportsSnapshot();
-      failedSaveSnap = null;
-      saveStatus = "saved";
-      savedFlashTimer = setTimeout(() => {
-        if (saveStatus === "saved") saveStatus = "idle";
-        savedFlashTimer = null;
-      }, SAVED_FLASH_MS);
-    } catch (e) {
-      const message = (e as Error).message;
-      failedSaveSnap = sent;
-      saveStatus = { error: message };
-    } finally {
-      inflight = false;
-      if (reportsDirty() && reportsSnapshot() !== failedSaveSnap) {
-        scheduleSave();
-      }
+      reportsState = await api.reportsState();
+      reportsError = null;
+    } catch (err) {
+      reportsError = (err as Error).message;
     }
   }
 
-  $effect(() => {
-    if (!editing) return;
-    const snap = reportsSnapshot();
-    if (!reportsDirty()) return;
-    if (snap === failedSaveSnap) return;
-    scheduleSave();
-  });
+  async function setReportsEnabled(next: boolean): Promise<void> {
+    if (reportsBusy) return;
+    reportsBusy = true;
+    reportsError = null;
+    saveStatus = "saving";
+    try {
+      reportsState = next ? await api.reportsEnable() : await api.reportsDisable();
+      markSaveComplete();
+    } catch (err) {
+      const message = (err as Error).message;
+      reportsError = message;
+      saveStatus = { error: message };
+      try {
+        reportsState = await api.reportsState();
+      } catch {
+        // Keep the original write error visible.
+      }
+    } finally {
+      reportsBusy = false;
+    }
+  }
 
   // Semantic search state, same shape as the SettingsPanel
   // `-a-21` original. Endpoints are stateful POSTs on the server;
@@ -291,10 +217,12 @@
   onMount(() => {
     void loadBuildInfo();
     void refreshSemanticSearchState();
+    void loadReportsState();
   });
 
   onDestroy(() => {
     stopSemanticPoll();
+    if (savedFlashTimer) clearTimeout(savedFlashTimer);
   });
 </script>
 
@@ -400,10 +328,8 @@
       {/if}
     </section>
 
-    <!-- `fullstack-a-48` chan-reports toggle (option B landing:
-         user-visible toggle + Preferences wire-up; backend gating
-         + default flip to OFF + destructive-on-disable modal
-         deferred to a follow-up task). -->
+    <!-- Track A: chan-reports uses the per-drive reports endpoints.
+         ServerConfig.reports.enabled was removed as stale config. -->
     <section>
       <h3>chan-reports</h3>
       <p class="hint">
@@ -411,22 +337,29 @@
         <code>chan-report</code>). Aggregated stats surface in the
         file inspector + the graph directory inspector.
       </p>
-      {#if editing}
-      <label class="theme-opt strip-toggle" class:on={reportsEnabled}>
-        <input
-          type="checkbox"
-          checked={reportsEnabled}
-          onchange={(e) =>
-            setReportsEnabled((e.currentTarget as HTMLInputElement).checked)}
-        />
-        <span>Enable chan-reports indexing</span>
-      </label>
-      <p class="hint muted sub-hint">
-        Toggle persists via <code>/api/config</code>; backend
-        gating + the destructive-on-disable confirmation modal
-        land in a follow-up task. Default is ON to match today's
-        unconditional behaviour.
-      </p>
+      {#if reportsState === null}
+        <p class="hint muted">Loading chan-reports state...</p>
+      {:else}
+        <label class="theme-opt strip-toggle" class:on={reportsEnabled}>
+          <input
+            type="checkbox"
+            checked={reportsEnabled}
+            disabled={reportsBusy}
+            onchange={(e) =>
+              void setReportsEnabled((e.currentTarget as HTMLInputElement).checked)}
+          />
+          <span>Enable chan-reports indexing</span>
+        </label>
+        <p class="hint muted sub-hint">
+          Per-drive setting. Disabling drops generated report data;
+          re-enable to rebuild it.
+        </p>
+        {#if reportsBusy}
+          <p class="hint muted">Updating...</p>
+        {/if}
+        {#if reportsError}
+          <p class="hint err" role="alert">{reportsError}</p>
+        {/if}
       {/if}
     </section>
 </HybridSurfaceConfigShell>

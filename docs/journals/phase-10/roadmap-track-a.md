@@ -155,9 +155,10 @@ Product contracts:
 
 Config cleanup:
 
-- Remove or deprecate stale `ServerConfig.reports.enabled`.
+- Remove or deprecate stale `ServerConfig.reports.enabled`. Done:
+  removed from server config and SPA now uses per-drive reports endpoints.
 - Keep drive-scoped report config as the source of truth.
-- Update config reference docs after the code path is simplified.
+- Update config reference docs after the code path is simplified. Done.
 
 ## 5. Release and CI hygiene
 
@@ -263,5 +264,6 @@ Operational release checks:
 2. Implement outbound URL attach in chan-desktop. Done.
 3. Implement fresh first-launch default `Chan` drive plus manual seed. Done.
 4. Implement existing-user default-drive prompt. Done.
-5. Current next remains open for selection. CLI handoff is deferred until
+5. Remove stale server-wide reports config. Done.
+6. Current next remains open for selection. CLI handoff is deferred until
    its design checkpoint.

@@ -15,9 +15,7 @@ use axum::Json;
 use chan_drive::SearchAggression;
 use serde::{Deserialize, Serialize};
 
-use crate::config::{
-    ReportsConfig, TerminalConfig, TERMINAL_SCROLLBACK_MB_MAX, TERMINAL_SCROLLBACK_MB_MIN,
-};
+use crate::config::{TerminalConfig, TERMINAL_SCROLLBACK_MB_MAX, TERMINAL_SCROLLBACK_MB_MIN};
 use crate::error::{err, Error};
 use crate::preferences::BubbleOverlayMode;
 use crate::state::AppState;
@@ -45,14 +43,6 @@ pub struct PreferencesView {
     pub hybrid_surface_themes: HybridSurfaceThemes,
     #[serde(default = "default_empty_pane_carousel_cycling")]
     pub empty_pane_carousel_cycling: bool,
-    /// `fullstack-a-48` Task F (option B): chan-reports toggle.
-    /// Round-tripped through `/api/config`; the SPA writes this
-    /// field from the Hybrid FB back-side. Default ON; the
-    /// backend gating (route + indexer pass + destructive-on-
-    /// disable modal) is deferred to a follow-up task per the
-    /// architect's option (B) routing.
-    #[serde(default)]
-    pub reports: ReportsConfig,
 }
 
 fn default_empty_pane_carousel_cycling() -> bool {
@@ -82,7 +72,6 @@ pub(super) fn preferences_view(state: &AppState) -> Result<PreferencesView, Erro
         bubble_overlay_mode: editor.bubble_overlay_mode,
         hybrid_surface_themes: editor.hybrid_surface_themes.clone(),
         empty_pane_carousel_cycling: editor.empty_pane_carousel_cycling,
-        reports: server.reports.clone(),
     })
 }
 
@@ -281,7 +270,6 @@ fn apply_preferences(state: &AppState, view: PreferencesView) -> Result<(), Erro
         }
         server.search.aggression = view.search_aggression;
         server.terminal = sanitize_terminal_config(view.terminal);
-        server.reports = view.reports;
         server.save()?;
     }
     Ok(())

@@ -7,10 +7,8 @@ import shell from "./HybridSurfaceConfigShell.svelte?raw";
 // settings UI migrated out of SettingsPanel into
 // HybridFileBrowserConfig. Three toggles ship in v1: Semantic
 // search (moved verbatim from `-a-21`), multi-model picker
-// placeholder (Round-3 Track 2 future slot), chan-reports
-// (G1 regression-fix toggle wired to a new Preferences.reports
-// shape: backend gating + default-flip-to-OFF + destructive-on-
-// disable modal are a follow-up task per option (B) routing).
+// placeholder (Round-3 Track 2 future slot), chan-reports through
+// the per-drive reports endpoints.
 
 describe("fullstack-a-48: HybridFileBrowserConfig wiring", () => {
   test("warning copy distinguishes drive-wide scope from per-FB-pane", () => {
@@ -64,36 +62,20 @@ describe("fullstack-a-48: HybridFileBrowserConfig wiring", () => {
     expect(source).not.toMatch(/backend ships a model registry/);
   });
 
-  test("chan-reports toggle writes through editing.reports.enabled", () => {
+  test("chan-reports toggle uses per-drive reports endpoints", () => {
     expect(source).toMatch(/<h3>chan-reports<\/h3>/);
     expect(source).toMatch(/function setReportsEnabled\(next: boolean\)/);
-    expect(source).toMatch(/editing\.reports = \{ enabled: next \}/);
+    expect(source).toMatch(/api\.reportsEnable\(\)/);
+    expect(source).toMatch(/api\.reportsDisable\(\)/);
     expect(source).toMatch(/checked=\{reportsEnabled\}/);
   });
 
-  test("normalizeReports backfills default ON for pre-a-48 servers", () => {
-    // Pre-`-a-48` servers don't ship the `reports` field. Backfill
-    // with `{ enabled: true }` so dirty() doesn't trigger an
-    // immediate spurious PATCH after the post-save re-clone.
-    expect(source).toMatch(/if \(!p\.reports\) p\.reports = \{ enabled: true \}/);
-  });
-
-  test("save merges only reports field onto the server's current GlobalConfig", () => {
-    // Race safety: parallel SettingsPanel autosave (residual fields
-    // after `-a-46` trim) can't be clobbered by a HybridFileBrowser
-    // autosave, and vice versa.
-    expect(source).toMatch(/const current = await api\.config\(\)/);
-    expect(source).toMatch(
-      /preferences:\s*\{\s*\.\.\.current\.preferences,\s*reports: editing\.reports/,
-    );
-    expect(source).toMatch(/await api\.updateConfig\(cfgBody\)/);
-  });
-
-  test("dirty check is scoped to the reports.enabled field", () => {
-    expect(source).toMatch(/function reportsDirty\(\): boolean/);
-    expect(source).toMatch(
-      /\(editing\.reports\?\.enabled \?\? true\) !== server\.enabled/,
-    );
+  test("chan-reports state loads independently from /api/config", () => {
+    expect(source).toMatch(/let reportsState = \$state<\{ enabled: boolean \} \| null>/);
+    expect(source).toMatch(/async function loadReportsState\(\)/);
+    expect(source).toMatch(/reportsState = await api\.reportsState\(\)/);
+    expect(source).not.toMatch(/reportsDirty/);
+    expect(source).not.toMatch(/api\.updateConfig\(cfgBody\)/);
   });
 
   test("polling timer is cleaned up on destroy", () => {
@@ -161,6 +143,7 @@ describe("fullstack-a-48: rich Semantic search state machine removed from Settin
 describe("Wave 2: reports controls removed from SettingsPanel", () => {
   test("chan-reports controls stay owned by HybridFileBrowserConfig", () => {
     expect(source).toMatch(/<h3>chan-reports<\/h3>/);
+    expect(source).toMatch(/api\.reports(State|Enable|Disable)\(/);
     expect(panel).not.toContain("chan-reports");
     expect(panel).not.toMatch(/api\.reports(State|Enable|Disable)\(\)/);
     expect(panel).not.toMatch(/toggleReports/);
