@@ -1,8 +1,9 @@
-.PHONY: run build check fmt fmt-check lint test clean chan-bin tauri-cli \
+.PHONY: run build check fmt fmt-check lint test clean web chan-bin tauri-cli \
         app-signed app-notarized sign-prereqs notarize-prereqs
 
 # Monorepo root. Override via CHAN_REPO=/path on CI.
 CHAN_REPO ?= ..
+NPM ?= npm
 TARGET_TRIPLE := $(shell rustc -vV | sed -n 's/host: //p')
 CHAN_BIN := src-tauri/binaries/chan-$(TARGET_TRIPLE)
 TAURI_CLI_VERSION ?= ^2
@@ -19,6 +20,9 @@ tauri-cli:
 	    cargo install tauri-cli --locked --version "$(TAURI_CLI_VERSION)" \
 	        --root "$(TAURI_CLI_ROOT)"; \
 	fi
+
+web:
+	cd $(CHAN_REPO)/web && $(NPM) install && $(NPM) run build
 
 # Stage chan as the bundled helper binary for CLI-owned surfaces.
 # Local drive serving is embedded in chan-desktop; this binary is
@@ -42,8 +46,7 @@ tauri-cli:
 # unsigned-build path); the signed targets (app-signed /
 # app-notarized) gate on `sign-prereqs` which already enforces
 # the identity is set.
-chan-bin:
-	cd $(CHAN_REPO)/web && npm run build
+chan-bin: web
 	cd $(CHAN_REPO) && cargo build --release --bin chan
 	mkdir -p src-tauri/binaries
 	cp $(CHAN_REPO)/target/release/chan $(CHAN_BIN)
