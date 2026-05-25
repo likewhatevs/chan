@@ -1,0 +1,209 @@
+[[set]]
+identifier = "main-window"
+description = "Allows the launcher window to call Chan Desktop app commands."
+permissions = [
+  "allow-list-drives",
+  "allow-add-drive",
+  "allow-remove-drive",
+  "allow-set-drive-on",
+  "allow-get-drive-features",
+  "allow-set-drive-features",
+  "allow-compute-drive-preflight",
+  "allow-get-config",
+  "allow-home-dir",
+  "allow-reveal-in-finder",
+  "allow-reload-window",
+  "allow-open-devtools",
+  "allow-start-file-browser-drag-out",
+  "allow-zoom-in",
+  "allow-zoom-out",
+  "allow-zoom-reset",
+  "allow-tunnel-status",
+  "allow-tunnel-start",
+  "allow-tunnel-stop",
+  "allow-default-drive-status",
+  "allow-choose-default-drive",
+  "allow-create-default-drive",
+  "allow-factory-reset-default-drive",
+  "allow-open-local-drive",
+  "allow-open-tunneled-drive",
+  "allow-add-outbound-drive",
+  "allow-open-outbound-drive",
+  "allow-remove-outbound-drive",
+  "allow-chan-bin-status",
+  "allow-auth-status",
+  "allow-open-signin",
+  "allow-signout",
+]
+
+[[set]]
+identifier = "drive-window"
+description = "Allows per-drive windows to call their app commands."
+permissions = [
+  "allow-reload-window",
+  "allow-open-devtools",
+  "allow-start-file-browser-drag-out",
+  "allow-zoom-in",
+  "allow-zoom-out",
+  "allow-zoom-reset",
+]
+
+[[permission]]
+identifier = "allow-list-drives"
+description = "Enables the list_drives command."
+commands.allow = ["list_drives"]
+
+[[permission]]
+identifier = "allow-add-drive"
+description = "Enables the add_drive command."
+commands.allow = ["add_drive"]
+
+[[permission]]
+identifier = "allow-remove-drive"
+description = "Enables the remove_drive command."
+commands.allow = ["remove_drive"]
+
+[[permission]]
+identifier = "allow-set-drive-on"
+description = "Enables the set_drive_on command."
+commands.allow = ["set_drive_on"]
+
+[[permission]]
+identifier = "allow-get-drive-features"
+description = "Enables the get_drive_features command."
+commands.allow = ["get_drive_features"]
+
+[[permission]]
+identifier = "allow-set-drive-features"
+description = "Enables the set_drive_features command."
+commands.allow = ["set_drive_features"]
+
+[[permission]]
+identifier = "allow-compute-drive-preflight"
+description = "Enables the compute_drive_preflight command."
+commands.allow = ["compute_drive_preflight"]
+
+[[permission]]
+identifier = "allow-get-config"
+description = "Enables the get_config command."
+commands.allow = ["get_config"]
+
+[[permission]]
+identifier = "allow-home-dir"
+description = "Enables the home_dir command."
+commands.allow = ["home_dir"]
+
+[[permission]]
+identifier = "allow-reveal-in-finder"
+description = "Enables the reveal_in_finder command."
+commands.allow = ["reveal_in_finder"]
+
+[[permission]]
+identifier = "allow-reload-window"
+description = "Enables the reload_window command."
+commands.allow = ["reload_window"]
+
+[[permission]]
+identifier = "allow-open-devtools"
+description = "Enables the open_devtools command."
+commands.allow = ["open_devtools"]
+
+[[permission]]
+identifier = "allow-start-file-browser-drag-out"
+description = "Enables the start_file_browser_drag_out command."
+commands.allow = ["start_file_browser_drag_out"]
+
+[[permission]]
+identifier = "allow-zoom-in"
+description = "Enables the zoom_in command."
+commands.allow = ["zoom_in"]
+
+[[permission]]
+identifier = "allow-zoom-out"
+description = "Enables the zoom_out command."
+commands.allow = ["zoom_out"]
+
+[[permission]]
+identifier = "allow-zoom-reset"
+description = "Enables the zoom_reset command."
+commands.allow = ["zoom_reset"]
+
+[[permission]]
+identifier = "allow-tunnel-status"
+description = "Enables the tunnel_status command."
+commands.allow = ["tunnel_status"]
+
+[[permission]]
+identifier = "allow-tunnel-start"
+description = "Enables the tunnel_start command."
+commands.allow = ["tunnel_start"]
+
+[[permission]]
+identifier = "allow-tunnel-stop"
+description = "Enables the tunnel_stop command."
+commands.allow = ["tunnel_stop"]
+
+[[permission]]
+identifier = "allow-default-drive-status"
+description = "Enables the default_drive_status command."
+commands.allow = ["default_drive_status"]
+
+[[permission]]
+identifier = "allow-choose-default-drive"
+description = "Enables the choose_default_drive command."
+commands.allow = ["choose_default_drive"]
+
+[[permission]]
+identifier = "allow-create-default-drive"
+description = "Enables the create_default_drive command."
+commands.allow = ["create_default_drive"]
+
+[[permission]]
+identifier = "allow-factory-reset-default-drive"
+description = "Enables the factory_reset_default_drive command."
+commands.allow = ["factory_reset_default_drive"]
+
+[[permission]]
+identifier = "allow-open-local-drive"
+description = "Enables the open_local_drive command."
+commands.allow = ["open_local_drive"]
+
+[[permission]]
+identifier = "allow-open-tunneled-drive"
+description = "Enables the open_tunneled_drive command."
+commands.allow = ["open_tunneled_drive"]
+
+[[permission]]
+identifier = "allow-add-outbound-drive"
+description = "Enables the add_outbound_drive command."
+commands.allow = ["add_outbound_drive"]
+
+[[permission]]
+identifier = "allow-open-outbound-drive"
+description = "Enables the open_outbound_drive command."
+commands.allow = ["open_outbound_drive"]
+
+[[permission]]
+identifier = "allow-remove-outbound-drive"
+description = "Enables the remove_outbound_drive command."
+commands.allow = ["remove_outbound_drive"]
+
+[[permission]]
+identifier = "allow-chan-bin-status"
+description = "Enables the chan_bin_status command."
+commands.allow = ["chan_bin_status"]
+
+[[permission]]
+identifier = "allow-auth-status"
+description = "Enables the auth_status command."
+commands.allow = ["auth_status"]
+
+[[permission]]
+identifier = "allow-open-signin"
+description = "Enables the open_signin command."
+commands.allow = ["open_signin"]
+
+[[permission]]
+identifier = "allow-signout"
+description = "Enables the signout command."
+commands.allow = ["signout"]

@@ -1417,6 +1417,7 @@ mod tests {
     // the permissions without the test catching it.
     const DRIVE_CAPABILITY_JSON: &str = include_str!("../capabilities/drive.json");
     const DEFAULT_CAPABILITY_JSON: &str = include_str!("../capabilities/default.json");
+    const APP_PERMISSIONS_TOML: &str = include_str!("../permissions/app.toml");
 
     fn capability_permissions(raw: &str) -> Vec<String> {
         let v: serde_json::Value = serde_json::from_str(raw).expect("capability JSON parses");
@@ -1438,6 +1439,50 @@ mod tests {
             .collect()
     }
 
+    fn capability_remote_urls(raw: &str) -> Vec<String> {
+        let v: serde_json::Value = serde_json::from_str(raw).expect("capability JSON parses");
+        v["remote"]["urls"]
+            .as_array()
+            .expect("remote urls is an array")
+            .iter()
+            .map(|u| {
+                u.as_str()
+                    .expect("remote URL pattern is a string")
+                    .to_string()
+            })
+            .collect()
+    }
+
+    fn app_permission_set(id: &str) -> Vec<String> {
+        let v: toml::Value = toml::from_str(APP_PERMISSIONS_TOML).expect("app permissions parse");
+        v["set"]
+            .as_array()
+            .expect("permission sets is an array")
+            .iter()
+            .find(|set| set["identifier"].as_str() == Some(id))
+            .unwrap_or_else(|| panic!("missing app permission set {id}"))["permissions"]
+            .as_array()
+            .expect("permission set entries are an array")
+            .iter()
+            .map(|p| p.as_str().expect("permission id is a string").to_string())
+            .collect()
+    }
+
+    fn app_permission_allows(id: &str) -> Vec<String> {
+        let v: toml::Value = toml::from_str(APP_PERMISSIONS_TOML).expect("app permissions parse");
+        v["permission"]
+            .as_array()
+            .expect("permissions is an array")
+            .iter()
+            .find(|permission| permission["identifier"].as_str() == Some(id))
+            .unwrap_or_else(|| panic!("missing app permission {id}"))["commands"]["allow"]
+            .as_array()
+            .expect("allowed commands is an array")
+            .iter()
+            .map(|cmd| cmd.as_str().expect("command is a string").to_string())
+            .collect()
+    }
+
     #[test]
     fn drive_capability_grants_opener_to_drive_tunnel_and_outbound_windows() {
         let windows = capability_windows(DRIVE_CAPABILITY_JSON);
@@ -1455,8 +1500,51 @@ mod tests {
         );
         let perms = capability_permissions(DRIVE_CAPABILITY_JSON);
         assert!(
+            perms.iter().any(|p| p == "drive-window"),
+            "drive capability must include drive-window app commands: {perms:?}",
+        );
+        assert!(
             perms.iter().any(|p| p == "opener:allow-open-url"),
             "drive capability must include opener:allow-open-url: {perms:?}",
+        );
+    }
+
+    #[test]
+    fn drive_capability_covers_loopback_server_urls() {
+        // Drive windows load chan-server through loopback HTTP
+        // origins. Without a remote URL match, Tauri omits the IPC
+        // bridge and drive-window app commands such as native
+        // File Browser drag-out never reach Rust.
+        let remote_urls = capability_remote_urls(DRIVE_CAPABILITY_JSON);
+        assert!(
+            remote_urls.iter().any(|u| u == "http://127.0.0.1:*"),
+            "drive capability must include 127.0.0.1 loopback: {remote_urls:?}",
+        );
+        assert!(
+            remote_urls.iter().any(|u| u == "http://localhost:*"),
+            "drive capability must include localhost loopback: {remote_urls:?}",
+        );
+    }
+
+    #[test]
+    fn app_acl_allows_drive_window_commands() {
+        let drive_set = app_permission_set("drive-window");
+        for expected in [
+            "allow-reload-window",
+            "allow-open-devtools",
+            "allow-start-file-browser-drag-out",
+            "allow-zoom-in",
+            "allow-zoom-out",
+            "allow-zoom-reset",
+        ] {
+            assert!(
+                drive_set.iter().any(|p| p == expected),
+                "drive-window app permission set must include {expected}: {drive_set:?}",
+            );
+        }
+        assert_eq!(
+            app_permission_allows("allow-start-file-browser-drag-out"),
+            vec!["start_file_browser_drag_out".to_string()],
         );
     }
 
@@ -1476,6 +1564,10 @@ mod tests {
             "default capability must target additional main-N launchers: {windows:?}",
         );
         let perms = capability_permissions(DEFAULT_CAPABILITY_JSON);
+        assert!(
+            perms.iter().any(|p| p == "main-window"),
+            "default capability must include main-window app commands: {perms:?}",
+        );
         assert!(
             perms.iter().any(|p| p == "opener:allow-open-url"),
             "default capability must include opener:allow-open-url: {perms:?}",

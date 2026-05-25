@@ -4,6 +4,7 @@
   "description": "Default capability for the singleton main launcher plus any additional main-N launchers spawned via File > New Window (fullstack-83).",
   "windows": ["main", "main-*"],
   "permissions": [
+    "main-window",
     "core:default",
     "dialog:default",
     "dialog:allow-open",

@@ -166,17 +166,26 @@ Desktop File Browser drag-out/download:
   - Failed or cancelled native drags remove the staged export immediately.
     Accepted drags use a bounded cleanup task, and later drags sweep stale
     export directories.
+- Round-2 macOS smoke on 2026-05-25 found the drive window needed explicit
+  Tauri ACL coverage before the native bridge could run from the loopback
+  drive URL. Drive capabilities now cover `http://127.0.0.1:*` and
+  `http://localhost:*`, and the app ACL grants drive windows only reload,
+  devtools, zoom, and native File Browser drag-out commands.
+- Round-2 macOS manual Finder drag-out smoke passed on 2026-05-25:
+  - File drag exported `drag-file.md`; bytes matched the authenticated
+    `/api/files/drag-file.md?download=1` server response.
+  - Directory drag exported `drag-dir.tar`; bytes and tar entries matched the
+    authenticated `/api/files/drag-dir?download=1` server response.
+  - Escape-cancelled drag left the Finder drop folder unchanged and did not
+    leave an extra staging directory. A rejected in-app release produced no
+    Finder-visible file; AppKit treated that release as accepted, so its
+    private staging directory followed the accepted-drag cleanup path.
 - Automated verification in this handoff:
   - `cargo check -p chan-desktop`
   - `cargo test -p chan-desktop`
   - `cargo test -p chan-server download_path_sync`
   - `npm --prefix web run test -- fileTreeDragOut.test.ts`
   - `npm --prefix web run check`
-- macOS manual Finder drag-out smoke was not run in this handoff. The
-  session had no reliable interactive Tauri-to-Finder drag control, and an
-  existing `/Applications/Chan.app` process was already running. Manual
-  checks still needed: file name and bytes, directory archive contents, and
-  cancelled-drag cleanup.
 - Linux native drag-out remains unsmoked and is queued separately with the
   Linux desktop launch blocker.
 
@@ -452,8 +461,9 @@ Operational release checks:
 17. Fix embedded desktop startup and prefixed launch URL blockers found during
     native drag-out smoke. Done on 2026-05-25.
 18. Implement native desktop File Browser drag-out bridge using the same
-    `download=1` URL path. Done on 2026-05-25. Automated checks passed;
-    macOS manual Finder drag-out smoke remains pending.
+    `download=1` URL path. Done on 2026-05-25. Automated checks passed.
+    Round-2 macOS manual Finder smoke passed after the drive-window Tauri ACL
+    fix.
 19. Harden async upload/download, desktop export staging, and MCP media.
     Done on 2026-05-25. Verification recorded in the hardening note above.
 20. Current next remains open for selection. CLI handoff is deferred until
