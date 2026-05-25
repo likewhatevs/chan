@@ -128,6 +128,14 @@ describe("fullstack-a-77 slice 2: overlay component", () => {
       /\{#if screensaver\.theme === "matrix"\}[\s\S]{1,80}<MatrixRain \/>[\s\S]{1,80}\{\/if\}/,
     );
   });
+
+  test("plain theme renders the same masked chan mark as the empty pane", () => {
+    expect(overlay).toMatch(
+      /\{#if screensaver\.theme !== "matrix"\}[\s\S]{1,120}class="screensaver-mark"/,
+    );
+    expect(overlay).toContain("url('/chan-mark.png') center / contain no-repeat");
+    expect(overlay).toMatch(/background-color: var\(--text-secondary\);/);
+  });
 });
 
 describe("fullstack-a-77 slice 2: App.svelte wiring", () => {

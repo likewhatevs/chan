@@ -245,3 +245,122 @@ Added on 2026-05-25 for Track C transfer regression context:
   temp export file instead of buffering before staging.
 - No Track C UI change is required for MCP `read_media`; it is external-agent
   surface only.
+
+## 2026-05-25 Live Regression Completion
+
+Report for @@Alex.
+
+Commit:
+
+- `9e16a4b` (`Harden async file paths and MCP media`).
+
+Build and focused tests:
+
+- `npm run test -- src/components/fileBrowserRightClickRevamp.test.ts
+  src/api/client.test.ts src/components/graphParentEdgeInvariant.test.ts
+  src/components/graphScopeHeaderRow.test.ts
+  src/components/draftsInspectorFileInfoBody.test.ts
+  src/components/revealBrowserActions.test.ts src/state/tabs.test.ts`
+  passed, 210 tests.
+- `npm run check` passed.
+- `npm run build` passed with the existing Vite warnings for SourceCodePro,
+  large chunks, and unchanged dynamic imports.
+- `cargo build -p chan` passed.
+
+Live server:
+
+- Throwaway HOME: `/tmp/chan-track-c-home`.
+- Throwaway drive: `/tmp/chan-track-c-drive`.
+- Served with `HOME=/tmp/chan-track-c-home ./target/debug/chan serve
+  --no-token --no-browser /tmp/chan-track-c-drive`.
+- Browser viewport: 868x559.
+
+Passed live checks:
+
+- File replace, directory upload, file download, and directory `.tar`
+  download.
+- Non-UTF-8 replace into `notes/alpha.md` returned HTTP 415.
+- Inspector report, references, and backlinks streamed without stuck partial
+  state.
+- Graph from `CHANGELOG.md` streamed nodes and edges, then reloaded cleanly.
+- Docked File Browser no-selection drive row and Open in File Browser opened
+  a normal File Browser tab with drive Details. Row-selected Open in File
+  Browser opened Details for the selected path.
+- Docked and tab File Browser expansion restored after reload.
+- Terminal ANSI plus scroll-heavy output survived pane switching.
+- Graph filesystem spine worked from drive, file, and directory roots.
+- Matrix lock covered status chrome, rendered the ported rain, and did not
+  leak the warning overlay.
+- Broken Draft metadata warning opened the actionable Drive warnings dialog.
+- Rich Prompt submit archived `prompt-1.md` and cleared the composer.
+- Rich Prompt submit race archived the submitted text while preserving text
+  typed immediately after submit in the live composer.
+- Spawn agents clipboard export produced the config JSON, and the bootstrap
+  path reached the preflight confirmation dialog without staging prompts.
+- Rapid editor edits coalesced to the final browser buffer. `/api/files/plain.txt`
+  returned `rapid edit TRACKC_FINAL_C`, content search found `plain.txt` for
+  `TRACKC` and `FINAL`, and old payload terms no longer hit `plain.txt`.
+  Reload restored the editor with `TRACKC_FINAL_C`, so this was not a stale
+  editor buffer or stale server index.
+
+Notes:
+
+- A transient console burst of `Drafts is hidden from File Browser` came from
+  an accidental physical `Drafts/` directory created in the throwaway drive
+  before switching to the correct metadata-backed broken Draft fixture. Removing
+  the physical fixture and opening a fresh app state produced no new browser
+  warnings or errors.
+- Metadata-backed broken Draft warning coverage used
+  `/tmp/chan-track-c-home/.chan/drives/-private-tmp-chan-track-c-drive-3d6f4f54/drafts/broken-draft`
+  with no `draft.md`.
+- The in-app browser download event surface is still unavailable, so file and
+  directory downloads were verified with direct HTTP bytes and headers rather
+  than a Browser download event.
+- Native desktop drag-out manual smoke remains Track A-owned.
+
+Current status:
+
+- No Track C code follow-up was cut from this pass.
+- This handoff is docs-only and append-only.
+
+## 2026-05-25 Plain Screen-Lock Logo Follow-up
+
+Report for @@Alex.
+
+Scope:
+
+- Track C web follow-up requested after the live pass.
+- Plain screen-lock theme now reuses the same grey masked `chan-mark.png`
+  treatment as the empty Hybrid welcome surface.
+- Matrix screen-lock rendering is unchanged.
+
+Implementation:
+
+- `web/src/components/ScreensaverOverlay.svelte` renders a non-interactive
+  `.screensaver-mark` only when `screensaver.theme !== "matrix"`.
+- The mark uses `/chan-mark.png` as a CSS mask, `var(--text-secondary)` as the
+  fill, and sits behind the unlock card.
+- `web/src/state/screensaverMachine.test.ts` pins the plain-theme mark source
+  shape.
+
+Verification:
+
+- `npm run test -- src/state/screensaverMachine.test.ts` passed.
+- `npm run check` passed.
+- `npm run build` passed with the existing Vite warnings for SourceCodePro,
+  large chunks, unchanged dynamic imports, and the current plugin timing
+  warning.
+- `cargo build -p chan` passed after the production web build.
+- Browser/Vite smoke passed: the plain lock showed `.screensaver-mark`, no
+  `.matrix-rain`, mask URL resolved to `/chan-mark.png`, and the mark used
+  `rgb(142, 142, 147)` at `0.38` opacity.
+- Embedded Browser smoke passed against `./target/debug/chan serve
+  --no-token --no-browser /tmp/chan-plain-saver-drive`: the plain lock showed
+  `.screensaver-mark`, no `.matrix-rain`, mask URL resolved to
+  `http://127.0.0.1:8787/chan-mark.png`, and current-run browser warnings or
+  errors were empty after filtering the known SourceCodePro font warning.
+
+Current status:
+
+- Throwaway server was stopped and `/tmp/chan-plain-saver-*` was removed.
+- Ready to commit only Track C web and docs files.

@@ -110,6 +110,25 @@ Progress:
 - 2026-05-25: fixed docked File Browser empty-menu drive path click. The drive
   row now opens a normal File Browser tab with drive Details, matching the
   docked-only Open in File Browser action when there is no selection.
+- 2026-05-25: completed the next live Track C regression pass on top of
+  Track A `9e16a4b`. Focused web tests, `npm run check`, `npm run build`,
+  and `cargo build -p chan` passed. Live Browser smoke passed for transfer
+  endpoints, streaming inspector/report/backlink/graph intake, graph reload
+  cancellation, docked File Browser drive-row actions, Terminal ANSI
+  scroll-heavy pane switching, Graph filesystem spine, File Browser expansion
+  restore, Matrix lock coverage, broken Draft warning dialog, Rich Prompt
+  submit/archive/clear/race behavior, Spawn agents clipboard/preflight, and
+  rapid editor autosave/index convergence.
+- 2026-05-25: rechecked the prior Track A transfer gap after `9e16a4b`.
+  Non-UTF-8 replacement into editable markdown now returns HTTP 415 with the
+  expected upload failure path.
+- 2026-05-25: rapid-edit validation showed the editor buffer, saved file bytes,
+  and BM25 index all converging on the final browser edit. Search hit the final
+  `TRACKC_FINAL_C` content and did not retain the old payload terms for
+  `plain.txt` after reload.
+- 2026-05-25: added the empty-Hybrid masked `chan-mark.png` treatment to the
+  plain screen-lock theme so the plain lock no longer reads as a blank grey
+  cover. Matrix lock rendering remains unchanged.
 
 Current wave:
 
@@ -132,6 +151,8 @@ Current wave:
   restore have current live pass coverage on the throwaway browser server.
 - Docked File Browser empty-menu drive action has source coverage and needs a
   quick live click check in the next browser pass.
+- Plain screen-lock logo treatment has focused test, build, embedded Browser
+  smoke, and journal coverage.
 - Cut follow-up implementation only for live regressions found in that pass.
 
 ## Objectives
@@ -143,6 +164,7 @@ Current wave:
 - Verify the Graph is always rooted in the filesystem hierarchy.
 - Persist File Browser expanded/collapsed directory state across reloads.
 - Match Matrix screen-lock rain to the dcragusa MatrixScreensaver reference.
+- Reuse the empty-Hybrid grey logo treatment in the plain screen-lock theme.
 - Credit the MatrixScreensaver source repo wherever the screen-lock rain is
   documented or exposed to users.
 - Make screen saver Test mode cover or hide Settings correctly, and reveal the

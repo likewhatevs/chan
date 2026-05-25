@@ -154,6 +154,9 @@
     onclick={onBackdropPointer}
     tabindex="-1"
   >
+    {#if screensaver.theme !== "matrix"}
+      <div class="screensaver-mark" aria-hidden="true"></div>
+    {/if}
     {#if screensaver.theme === "matrix"}
       <MatrixRain />
     {/if}
@@ -216,6 +219,17 @@
     align-items: center;
     justify-content: center;
     overflow: hidden;
+  }
+  .screensaver-mark {
+    position: absolute;
+    width: min(42vmin, 320px);
+    height: min(42vmin, 320px);
+    background-color: var(--text-secondary);
+    -webkit-mask: url('/chan-mark.png') center / contain no-repeat;
+            mask: url('/chan-mark.png') center / contain no-repeat;
+    opacity: 0.38;
+    pointer-events: none;
+    transform: translateY(-2vh);
   }
   .screensaver-card {
     position: relative;
