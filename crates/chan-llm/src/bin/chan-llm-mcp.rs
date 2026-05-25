@@ -7,14 +7,14 @@
 //! Usage:
 //!
 //!     chan-llm-mcp --drive /path/to/drive [--config /path/to/config.toml]
-//!                  [--max-image-bytes N]
+//!                  [--max-media-bytes N]
 //!
 //! `write_file` writes apply immediately through chan-drive's
 //! sandbox; the MCP client is responsible for any user
 //! confirmation before invoking the tool.
 //!
-//! `--max-image-bytes N` overrides the per-response cap on
-//! `read_image` (default 10 MiB). The standalone binary keeps this
+//! `--max-media-bytes N` overrides the per-response cap on
+//! `read_media` (default 10 MiB). The standalone binary keeps this
 //! as a CLI flag so it can stay independent of app settings.
 
 use std::path::PathBuf;
@@ -88,8 +88,8 @@ fn main() -> ExitCode {
     };
 
     let mut server = Server::new(drive);
-    if let Some(cap) = args.max_image_bytes {
-        server = server.with_max_image_bytes(cap);
+    if let Some(cap) = args.max_media_bytes {
+        server = server.with_max_media_bytes(cap);
     }
     if let Err(e) = runtime.block_on(server.serve_stdio()) {
         eprintln!("chan-llm-mcp: {e}");
@@ -103,7 +103,7 @@ chan-llm-mcp - MCP server exposing chan drive tools over stdio
 
 USAGE:
     chan-llm-mcp --drive <path> [--config <path>]
-                 [--max-image-bytes <N>]
+                 [--max-media-bytes <N>]
 
 OPTIONS:
     --drive <path>           Absolute path of the chan drive to expose.
@@ -111,9 +111,9 @@ OPTIONS:
                              (use `chan drive add`).
     --config <path>          Override for the chan-drive registry config
                              (defaults to ~/.chan/config.toml).
-    --max-image-bytes <N>    Hard cap on a single read_image response,
+    --max-media-bytes <N>    Hard cap on a single read_media response,
                              in bytes. Default 10 MiB. Oversized files
-                             error with `image too large` instead of
+                             error with `media too large` instead of
                              being silently downscaled.
     -h, --help               Print this help.
 ";
@@ -122,7 +122,7 @@ OPTIONS:
 struct Args {
     drive: Option<PathBuf>,
     config: Option<PathBuf>,
-    max_image_bytes: Option<u64>,
+    max_media_bytes: Option<u64>,
     help: bool,
 }
 
@@ -139,12 +139,12 @@ impl Args {
                     let v = it.next().ok_or("--config needs a value")?;
                     out.config = Some(PathBuf::from(v));
                 }
-                "--max-image-bytes" => {
-                    let v = it.next().ok_or("--max-image-bytes needs a value")?;
+                "--max-media-bytes" => {
+                    let v = it.next().ok_or("--max-media-bytes needs a value")?;
                     let n: u64 = v
                         .parse()
-                        .map_err(|_| format!("--max-image-bytes: not a u64: {v}"))?;
-                    out.max_image_bytes = Some(n);
+                        .map_err(|_| format!("--max-media-bytes: not a u64: {v}"))?;
+                    out.max_media_bytes = Some(n);
                 }
                 "-h" | "--help" => out.help = true,
                 other => return Err(format!("unknown argument: {other}")),

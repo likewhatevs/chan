@@ -164,12 +164,23 @@ routes/
   ws.rs            GET /ws (watcher side channel)
 ```
 
+Async HTTP handlers treat chan-drive as a synchronous filesystem
+boundary. Routes snapshot the live `Arc<Drive>` with `try_drive()`,
+return a retryable drive-busy response while metadata import has
+temporarily removed the drive cell, and run filesystem, graph,
+report, search, archive, and upload/download work on blocking
+threads.
+
 ### chan-llm
 
 Owns: the chan MCP server (`chan_llm::mcp::Server`), tool schemas
 exposed over MCP, embedded prompt text, and MCP key resolution.
 Tool reads / writes always go through `chan_drive::Drive` so the
-filesystem gates apply.
+filesystem gates apply. MCP handlers also move synchronous
+chan-drive work onto blocking threads. `read_file` and `write_file`
+cover editable UTF-8 text, including source and config files.
+`read_media` covers chan-drive Image and Pdf classes: images return
+MCP image content, PDFs return MCP blob resources.
 
 Phase 5 narrowed chan-llm to this MCP-only surface. The in-app
 `LlmSession`, CLI backends (`claude_cli`, `codex_cli`,

@@ -193,19 +193,13 @@ fn perform_metadata_import(
     std::fs::write(archive.path(), archive_bytes)
         .map_err(|e| MetadataImportError::Core(e.into()))?;
 
-    let mut cell_guard = state
-        .drive_cell
-        .write()
-        .map_err(|_| MetadataImportError::Poisoned("drive cell lock"))?;
+    let mut cell = take_drive_cell(state)?;
     state.terminal_sessions.close_all(CloseReason::Drive);
     state
         .loaded_teams
         .lock()
         .map_err(|_| MetadataImportError::Poisoned("loaded teams lock"))?
         .clear();
-    let mut cell = cell_guard
-        .take()
-        .expect("drive cell missing outside metadata import window");
     cell.indexer.cancel();
     cell.watch_handle.take();
     let drive_strong = cell.drive.clone();
@@ -216,7 +210,7 @@ fn perform_metadata_import(
         std::thread::sleep(Duration::from_millis(25));
     }
     if Arc::strong_count(&drive_strong) > 1 {
-        install_drive_cell(state, &mut cell_guard, drive_strong)?;
+        install_drive_cell(state, drive_strong)?;
         return Err(MetadataImportError::Busy);
     }
     drop(drive_strong);
@@ -233,17 +227,31 @@ fn perform_metadata_import(
         .library
         .open_drive(&state.drive_root)
         .map_err(MetadataImportError::Core)
-        .and_then(|drive| install_drive_cell(state, &mut cell_guard, drive));
+        .and_then(|drive| install_drive_cell(state, drive));
 
     restore_result?;
     import_result
 }
 
-fn install_drive_cell(
-    state: &AppState,
-    cell_guard: &mut Option<DriveCell>,
-    drive: Arc<Drive>,
-) -> Result<(), MetadataImportError> {
+fn take_drive_cell(state: &AppState) -> Result<DriveCell, MetadataImportError> {
+    let mut cell_guard = state
+        .drive_cell
+        .write()
+        .map_err(|_| MetadataImportError::Poisoned("drive cell lock"))?;
+    cell_guard.take().ok_or(MetadataImportError::Busy)
+}
+
+fn install_drive_cell(state: &AppState, drive: Arc<Drive>) -> Result<(), MetadataImportError> {
+    let cell = build_drive_cell(state, drive)?;
+    let mut cell_guard = state
+        .drive_cell
+        .write()
+        .map_err(|_| MetadataImportError::Poisoned("drive cell lock"))?;
+    *cell_guard = Some(cell);
+    Ok(())
+}
+
+fn build_drive_cell(state: &AppState, drive: Arc<Drive>) -> Result<DriveCell, MetadataImportError> {
     let bridge = make_watch_bridge(&state.events_tx, &state.index_events_tx, &state.self_writes);
     let watch_handle = drive.watch(bridge).map_err(MetadataImportError::Core)?;
     let search_aggression = state
@@ -259,12 +267,11 @@ fn install_drive_cell(
         search_aggression,
         make_progress_broadcast(&state.events_tx),
     ));
-    *cell_guard = Some(DriveCell {
+    Ok(DriveCell {
         drive,
         watch_handle: Some(watch_handle),
         indexer,
-    });
-    Ok(())
+    })
 }
 
 fn safe_filename_fragment(value: &str) -> String {

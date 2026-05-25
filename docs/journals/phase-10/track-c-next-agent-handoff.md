@@ -227,3 +227,21 @@ Follow-up tasks cut:
   asks for a handoff or coordination note.
 - Keep handoffs factual and scoped. Include exact repro steps, expected
   behavior, observed behavior, and owner rationale.
+
+## Track A Backend Acceptance Notes
+
+Added on 2026-05-25 for Track C transfer regression context:
+
+- File Browser and inspector upload/download still use the same
+  chan-drive-backed `/api/files` routes and the same
+  `/api/files/<path>?download=1` download contract.
+- File downloads preserve basename and bytes. Directory downloads preserve the
+  existing `.tar` archive contract.
+- During metadata import, file and attachment routes may now return a
+  retryable drive-busy response while the drive cell is temporarily absent.
+  Treat this as transient if it appears during live UI smoke.
+- Native desktop drag-out still uses the same download URL. Track A changed
+  only the desktop staging implementation so the HTTP body streams into the
+  temp export file instead of buffering before staging.
+- No Track C UI change is required for MCP `read_media`; it is external-agent
+  surface only.

@@ -12,13 +12,12 @@
 //!
 //! Tools exposed: `read_file`, `write_file`, `list_files`,
 //! `resolve_path`, `search_content`, graph/report tools, and
-//! `read_image`. The JSON tools route through `tools::execute`;
-//! `read_image` is the
-//! binary read path: it pulls bytes through `Drive::read` (path
-//! sandbox, regular-file gate, lstat) and returns base64-encoded
-//! image content as an MCP `image` content block, capped at
-//! `max_image_bytes` (default 10 MiB, configurable by the server
-//! builder or `--max-image-bytes`).
+//! `read_media`. The JSON tools route through `tools::execute`;
+//! `read_media` is the binary media read path: it pulls bytes
+//! through `Drive::read` (path sandbox, regular-file gate, lstat)
+//! and returns base64-encoded MCP image content or PDF blob
+//! resources, capped at `max_media_bytes` (default 10 MiB,
+//! configurable by the server builder or `--max-media-bytes`).
 
 use std::io::Cursor;
 use std::sync::Arc;
@@ -27,7 +26,7 @@ use base64::engine::Engine as _;
 use chan_drive::Drive;
 use rmcp::{
     handler::server::wrapper::Parameters,
-    model::{Content, ErrorData},
+    model::{Content, ErrorData, ResourceContents},
     schemars, tool, tool_handler, tool_router,
     transport::stdio,
     ServerHandler, ServiceExt,
@@ -41,34 +40,39 @@ use crate::tools::{self, ToolContext};
 const MCP_FRAME_HEADER_LIMIT: usize = 8192;
 const MCP_FRAME_BODY_LIMIT: usize = 16 * 1024 * 1024;
 
-/// Default hard cap on a single `read_image` response, in bytes.
-/// 10 MiB covers the typical image attachment ceiling of frontier
-/// vision models with margin for base64's ~33% inflation; oversized
-/// images surface as an `invalid_params` error so the model can
-/// recover instead of bloating a single tool turn. Overridable via
-/// `Server::with_max_image_bytes` or `--max-image-bytes` on the
+/// Default hard cap on a single `read_media` response, in bytes.
+/// 10 MiB covers common image and PDF attachment reads with margin
+/// for base64's ~33% inflation; oversized media surfaces as an
+/// `invalid_params` error so the model can recover instead of
+/// bloating a single tool turn. Overridable via
+/// `Server::with_max_media_bytes` or `--max-media-bytes` on the
 /// standalone binary.
-pub const DEFAULT_MCP_IMAGE_MAX_BYTES: u64 = 10 * 1024 * 1024;
+pub const DEFAULT_MCP_MEDIA_MAX_BYTES: u64 = 10 * 1024 * 1024;
 
-/// Extension -> MIME table for `read_image`. We keep the set narrow
-/// on purpose: anything outside this list is either not renderable by
-/// frontier vision models (BMP, TIFF) or carries enough sharp edges
-/// (SVG's inline script, AVIF's still-patchy decoder support) that
-/// the user is better served opening the file in a real viewer.
-/// Comparison is case-insensitive.
+/// Extension -> MIME table for `read_media` image responses. This
+/// mirrors chan-drive's `FileClass::Image` set; BMP remains outside
+/// the media class and is refused by classification.
 const IMAGE_EXTENSIONS: &[(&str, &str)] = &[
     ("png", "image/png"),
     ("jpg", "image/jpeg"),
     ("jpeg", "image/jpeg"),
     ("webp", "image/webp"),
     ("gif", "image/gif"),
+    ("svg", "image/svg+xml"),
+    ("avif", "image/avif"),
 ];
 
-/// Returns the MIME type for `rel` when its extension is in the
-/// `read_image` allowlist, else `None`. The comparison strips an
-/// optional leading dot and lowercases; `image.PNG` and `image.png`
-/// both match. Does not touch the filesystem.
-pub fn is_supported_image(rel: &str) -> Option<&'static str> {
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum MediaKind {
+    Image(&'static str),
+    Pdf,
+}
+
+/// Returns the image MIME type for `rel` when its extension is in
+/// chan-drive's Image class. The comparison lowercases;
+/// `image.PNG` and `image.png` both match. Does not touch the
+/// filesystem.
+pub fn supported_image_mime(rel: &str) -> Option<&'static str> {
     let dot = rel.rfind('.')?;
     let ext = &rel[dot + 1..];
     if ext.is_empty() {
@@ -78,6 +82,14 @@ pub fn is_supported_image(rel: &str) -> Option<&'static str> {
     IMAGE_EXTENSIONS
         .iter()
         .find_map(|(e, m)| if *e == lower { Some(*m) } else { None })
+}
+
+fn media_kind_for_path(rel: &str) -> Option<MediaKind> {
+    match chan_drive::fs_ops::classify(rel) {
+        chan_drive::FileClass::Image => supported_image_mime(rel).map(MediaKind::Image),
+        chan_drive::FileClass::Pdf => Some(MediaKind::Pdf),
+        _ => None,
+    }
 }
 
 // Note: we deliberately do NOT bring `crate::error::Result` into scope.
@@ -97,29 +109,29 @@ pub fn is_supported_image(rel: &str) -> Option<&'static str> {
 #[derive(Clone)]
 pub struct Server {
     ctx: ToolContext,
-    /// Hard cap on a single `read_image` response, in bytes. Set via
-    /// `with_max_image_bytes`; defaults to
-    /// `DEFAULT_MCP_IMAGE_MAX_BYTES`. Lives on the server (not the
+    /// Hard cap on a single `read_media` response, in bytes. Set via
+    /// `with_max_media_bytes`; defaults to
+    /// `DEFAULT_MCP_MEDIA_MAX_BYTES`. Lives on the server (not the
     /// `ToolContext`) because it's an MCP-surface policy, not a
     /// chan-drive invariant: the same `Drive` can host a server with
     /// a different cap.
-    max_image_bytes: u64,
+    max_media_bytes: u64,
 }
 
 impl Server {
     pub fn new(drive: Arc<Drive>) -> Self {
         Self {
             ctx: ToolContext::new(drive),
-            max_image_bytes: DEFAULT_MCP_IMAGE_MAX_BYTES,
+            max_media_bytes: DEFAULT_MCP_MEDIA_MAX_BYTES,
         }
     }
 
-    /// Override the per-response `read_image` byte cap. Mirrors the
+    /// Override the per-response `read_media` byte cap. Mirrors the
     /// caller that doesn't care about the cap keeps the default;
     /// chan-server and the standalone binary can set it from their
     /// own configuration surfaces.
-    pub fn with_max_image_bytes(mut self, n: u64) -> Self {
-        self.max_image_bytes = n;
+    pub fn with_max_media_bytes(mut self, n: u64) -> Self {
+        self.max_media_bytes = n;
         self
     }
 
@@ -332,9 +344,8 @@ pub struct ReadFileParams {
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 pub struct WriteFileParams {
-    /// POSIX-style path in chan's public namespace. Must end in `.md`
-    /// or `.txt`; chan-drive's editable-text gate refuses other
-    /// extensions.
+    /// POSIX-style path in chan's public namespace. Must be
+    /// editable UTF-8 text according to chan-drive.
     pub path: String,
     /// Full new file content. Partial diffs are not supported.
     pub content: String,
@@ -375,9 +386,9 @@ pub struct ResolvePathParams {
 pub struct EmptyParams {}
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
-pub struct ReadImageParams {
-    /// POSIX-style path in chan's public namespace. Must end in one
-    /// of: .png, .jpg, .jpeg, .webp, .gif.
+pub struct ReadMediaParams {
+    /// POSIX-style path in chan's public namespace. Must be an image
+    /// or PDF class path according to chan-drive.
     pub path: String,
 }
 
@@ -437,26 +448,33 @@ larger than 256 KiB are truncated and the response includes \
 re-issue with a smaller scope (or open the file in the editor if \
 you need the full thing). Pass `mtime_ns` back on `write_file` as \
 `expected_mtime_ns` to detect concurrent edits.")]
-    fn read_file(
+    async fn read_file(
         &self,
         Parameters(p): Parameters<ReadFileParams>,
     ) -> std::result::Result<String, ErrorData> {
-        run_tool("read_file", &serde_json::json!({"path": p.path}), &self.ctx)
+        run_tool(
+            "read_file",
+            serde_json::json!({"path": p.path}),
+            self.ctx.clone(),
+        )
+        .await
     }
 
     #[tool(description = "\
 Replace the content of a file in the active drive (creates the \
 parent directory if needed). The path is POSIX-style in chan's \
-public namespace, including `Drafts/...` when needed, and must end \
-in .md or .txt. New files are capped at 2 MiB; existing files can \
-be edited up to their current size. Pass `expected_mtime_ns` (from \
+public namespace, including `Drafts/...` when needed, and must be \
+classified by chan-drive as editable UTF-8 text (.md, .txt, source \
+and config text such as .rs or .json, or known text basenames like \
+Makefile). New files are capped at 2 MiB; existing files can be \
+edited up to their current size. Pass `expected_mtime_ns` (from \
 your earlier read_file response) to make the write a \
 compare-and-swap; on conflict the call errors and you can re-read \
 before retrying. Writes apply immediately. When a request touches \
 multiple files or feels destructive, call AskUserQuestion first \
 with a numbered plan and wait for the user's answer before any \
 write_file call.")]
-    fn write_file(
+    async fn write_file(
         &self,
         Parameters(p): Parameters<WriteFileParams>,
     ) -> std::result::Result<String, ErrorData> {
@@ -464,7 +482,7 @@ write_file call.")]
         if let Some(mtime_ns) = p.expected_mtime_ns {
             args["expected_mtime_ns"] = serde_json::json!(mtime_ns);
         }
-        run_tool("write_file", &args, &self.ctx)
+        run_tool("write_file", args, self.ctx.clone()).await
     }
 
     #[tool(description = "\
@@ -474,7 +492,7 @@ a subdirectory; omit it to list the whole drive. Includes the \
 metadata-backed `Drafts/...` namespace for uncommitted draft \
 workspaces. Listings are capped at 2,000 entries; if `truncated` \
 is true, narrow with a prefix or call search_content instead.")]
-    fn list_files(
+    async fn list_files(
         &self,
         Parameters(p): Parameters<ListFilesParams>,
     ) -> std::result::Result<String, ErrorData> {
@@ -482,7 +500,7 @@ is true, narrow with a prefix or call search_content instead.")]
         if let Some(prefix) = p.prefix {
             args["prefix"] = serde_json::Value::String(prefix);
         }
-        run_tool("list_files", &args, &self.ctx)
+        run_tool("list_files", args, self.ctx.clone()).await
     }
 
     #[tool(description = "\
@@ -492,15 +510,16 @@ content operations should keep using read_file, write_file, and \
 list_files with chan paths. The path argument is POSIX-style in \
 chan's public namespace, including `Drafts/...`; Drafts paths \
 resolve to uncommitted chan metadata outside the drive root.")]
-    fn resolve_path(
+    async fn resolve_path(
         &self,
         Parameters(p): Parameters<ResolvePathParams>,
     ) -> std::result::Result<String, ErrorData> {
         run_tool(
             "resolve_path",
-            &serde_json::json!({"path": p.path}),
-            &self.ctx,
+            serde_json::json!({"path": p.path}),
+            self.ctx.clone(),
         )
+        .await
     }
 
     #[tool(description = "\
@@ -509,7 +528,7 @@ with relative paths, relevance scores, and short snippets around \
 the match. Useful for finding which file mentions a topic before \
 issuing read_file on it. `limit` defaults to 20 and is hard-capped \
 at 100.")]
-    fn search_content(
+    async fn search_content(
         &self,
         Parameters(p): Parameters<SearchContentParams>,
     ) -> std::result::Result<String, ErrorData> {
@@ -517,55 +536,25 @@ at 100.")]
         if let Some(limit) = p.limit {
             args["limit"] = serde_json::json!(limit);
         }
-        run_tool("search_content", &args, &self.ctx)
+        run_tool("search_content", args, self.ctx.clone()).await
     }
 
     #[tool(description = "\
-Read a raster image from the active drive and return it as an MCP \
-image content block. The path is POSIX-style in chan's public \
-namespace and must end in .png, .jpg, .jpeg, .webp, or .gif; other \
-extensions are refused (text files use read_file). The response is \
-the raw image bytes base64-encoded with the matching MIME type. \
-Single-call cap defaults to 10 MiB; oversized files error with \
-`image too large` so you can pick a smaller file (the host may \
-have widened or narrowed this cap via config).")]
-    fn read_image(
+Read a media file from the active drive and return it as MCP media \
+content. The path is POSIX-style in chan's public namespace and \
+must be classified by chan-drive as Image (.png, .jpg, .jpeg, \
+.gif, .webp, .svg, .avif) or Pdf (.pdf); other extensions are \
+refused (text files use read_file). Image responses are MCP image \
+content blocks. PDF responses are MCP blob resources with \
+application/pdf MIME type. Single-call cap defaults to 10 MiB; \
+oversized files error with `media too large` so you can pick a \
+smaller file (the host may have widened or narrowed this cap via \
+config).")]
+    async fn read_media(
         &self,
-        Parameters(p): Parameters<ReadImageParams>,
+        Parameters(p): Parameters<ReadMediaParams>,
     ) -> std::result::Result<Content, ErrorData> {
-        let mime = is_supported_image(&p.path).ok_or_else(|| {
-            // Mirror the "path refused" wording the other handlers
-            // use after the chan-drive scrub: the model recovers by
-            // listing the drive and picking a supported extension.
-            ErrorData::invalid_params(
-                "path refused: unsupported image extension (expected png/jpg/jpeg/webp/gif)"
-                    .to_string(),
-                None,
-            )
-        })?;
-        // Drive::read handles the path sandbox, regular-file gate,
-        // and lstat refusal; it does NOT apply is_editable_text
-        // (that's the text-only gate). Image extensions are the
-        // sole policy we add on top.
-        let bytes =
-            self.ctx.drive.read(&p.path).map_err(|e| {
-                ErrorData::internal_error(mcp_safe_message(&LlmError::from(e)), None)
-            })?;
-        // Cap before base64 so we don't pay the allocation on
-        // oversized files. Base64 inflates by ~4/3, so the
-        // post-encode payload is at most `max_image_bytes * 4 / 3`.
-        if (bytes.len() as u64) > self.max_image_bytes {
-            return Err(ErrorData::invalid_params(
-                format!(
-                    "image too large: {} bytes exceeds {} byte cap",
-                    bytes.len(),
-                    self.max_image_bytes
-                ),
-                None,
-            ));
-        }
-        let b64 = base64::engine::general_purpose::STANDARD.encode(&bytes);
-        Ok(Content::image(b64, mime))
+        read_media_content(self.ctx.clone(), p.path, self.max_media_bytes).await
     }
 
     #[tool(description = "\
@@ -577,7 +566,7 @@ to discover a tag's neighbourhood without reading every file, or to \
 plan an edit that should also touch the files that reference this \
 one. Optional `direction` (`out` / `in` / `both`, default `both`) \
 and `kinds` (subset of `link`/`tag`/`mention`) narrow the response.")]
-    fn graph_neighbors(
+    async fn graph_neighbors(
         &self,
         Parameters(p): Parameters<GraphNeighborsParams>,
     ) -> std::result::Result<String, ErrorData> {
@@ -588,7 +577,7 @@ and `kinds` (subset of `link`/`tag`/`mention`) narrow the response.")]
         if let Some(kinds) = p.kinds {
             args["kinds"] = serde_json::json!(kinds);
         }
-        run_tool("graph_neighbors", &args, &self.ctx)
+        run_tool("graph_neighbors", args, self.ctx.clone()).await
     }
 
     #[tool(description = "\
@@ -597,11 +586,11 @@ of files that carry it. No arguments. Use it when the user asks \
 about tag usage, before a rename / merge, or to discover the actual \
 taxonomy instead of guessing. Pair with `graph_files_with_tag` to \
 expand a tag into its file list.")]
-    fn graph_tags(
+    async fn graph_tags(
         &self,
         Parameters(_): Parameters<EmptyParams>,
     ) -> std::result::Result<String, ErrorData> {
-        run_tool("graph_tags", &serde_json::json!({}), &self.ctx)
+        run_tool("graph_tags", serde_json::json!({}), self.ctx.clone()).await
     }
 
     #[tool(description = "\
@@ -609,15 +598,16 @@ Return every file that carries the given `#tag`. The argument \
 includes the leading `#`. Cheap: the graph index keeps this \
 membership as a direct lookup, so it's preferable to scanning every \
 file with search_content when the user has a specific tag in mind.")]
-    fn graph_files_with_tag(
+    async fn graph_files_with_tag(
         &self,
         Parameters(p): Parameters<GraphFilesWithTagParams>,
     ) -> std::result::Result<String, ErrorData> {
         run_tool(
             "graph_files_with_tag",
-            &serde_json::json!({"tag": p.tag}),
-            &self.ctx,
+            serde_json::json!({"tag": p.tag}),
+            self.ctx.clone(),
         )
+        .await
     }
 
     #[tool(description = "\
@@ -634,7 +624,7 @@ explicit file list. When both are present, `paths` wins. \
 are returned; leave it off for an overview, set true when you \
 need to drill in. The per-file array is capped at 200 entries; if \
 `truncated` is true, scope further with `prefix` or `paths`.")]
-    fn repo_report(
+    async fn repo_report(
         &self,
         Parameters(p): Parameters<RepoReportParams>,
     ) -> std::result::Result<String, ErrorData> {
@@ -648,7 +638,7 @@ need to drill in. The per-file array is capped at 200 entries; if \
         if let Some(b) = p.include_files {
             args["include_files"] = serde_json::Value::Bool(b);
         }
-        run_tool("repo_report", &args, &self.ctx)
+        run_tool("repo_report", args, self.ctx.clone()).await
     }
 }
 
@@ -667,16 +657,87 @@ impl ServerHandler for Server {}
 /// MCP boundary. The MCP client may be a third-party process; we
 /// surface the variant kind and the model-actionable bits, no host
 /// filesystem layout.
-fn run_tool(
-    name: &str,
-    args: &serde_json::Value,
-    ctx: &ToolContext,
+async fn run_tool(
+    name: &'static str,
+    args: serde_json::Value,
+    ctx: ToolContext,
 ) -> std::result::Result<String, ErrorData> {
-    match tools::execute(name, args, ctx) {
+    let result = tokio::task::spawn_blocking(move || tools::execute(name, &args, &ctx))
+        .await
+        .map_err(|e| ErrorData::internal_error(format!("tool task failed: {e}"), None))?;
+    match result {
         Ok(v) => serde_json::to_string(&v)
             .map_err(|e| ErrorData::internal_error(format!("serialize result: {e}"), None)),
         Err(e) => Err(ErrorData::internal_error(mcp_safe_message(&e), None)),
     }
+}
+
+async fn read_media_content(
+    ctx: ToolContext,
+    path: String,
+    max_media_bytes: u64,
+) -> std::result::Result<Content, ErrorData> {
+    tokio::task::spawn_blocking(move || read_media_content_sync(&ctx, path, max_media_bytes))
+        .await
+        .map_err(|e| ErrorData::internal_error(format!("read_media task failed: {e}"), None))?
+}
+
+fn read_media_content_sync(
+    ctx: &ToolContext,
+    path: String,
+    max_media_bytes: u64,
+) -> std::result::Result<Content, ErrorData> {
+    let kind = media_kind_for_path(&path).ok_or_else(|| {
+        ErrorData::invalid_params(
+            "path refused: unsupported media extension (expected png/jpg/jpeg/gif/webp/svg/avif/pdf)"
+                .to_string(),
+            None,
+        )
+    })?;
+    let bytes = ctx
+        .drive
+        .read(&path)
+        .map_err(|e| ErrorData::internal_error(mcp_safe_message(&LlmError::from(e)), None))?;
+    if (bytes.len() as u64) > max_media_bytes {
+        return Err(ErrorData::invalid_params(
+            format!(
+                "media too large: {} bytes exceeds {} byte cap",
+                bytes.len(),
+                max_media_bytes
+            ),
+            None,
+        ));
+    }
+    let b64 = base64::engine::general_purpose::STANDARD.encode(&bytes);
+    match kind {
+        MediaKind::Image(mime) => Ok(Content::image(b64, mime)),
+        MediaKind::Pdf => Ok(Content::resource(
+            ResourceContents::blob(b64, media_resource_uri(&path))
+                .with_mime_type("application/pdf"),
+        )),
+    }
+}
+
+fn media_resource_uri(path: &str) -> String {
+    format!("chan://media/{}", percent_encode_path(path))
+}
+
+fn percent_encode_path(path: &str) -> String {
+    let mut out = String::with_capacity(path.len());
+    for byte in path.bytes() {
+        match byte {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'.' | b'_' | b'~' | b'/' => {
+                out.push(byte as char)
+            }
+            _ => {
+                const HEX: &[u8; 16] = b"0123456789ABCDEF";
+                out.push('%');
+                out.push(HEX[(byte >> 4) as usize] as char);
+                out.push(HEX[(byte & 0x0f) as usize] as char);
+            }
+        }
+    }
+    out
 }
 
 /// Build an MCP-safe error message for `err`. Strips host paths and
@@ -752,10 +813,10 @@ mod tests {
             search.description.as_deref(),
             Some(crate::prompts::SEARCH_CONTENT_DESC)
         );
-        let image = Server::read_image_tool_attr();
+        let image = Server::read_media_tool_attr();
         assert_eq!(
             image.description.as_deref(),
-            Some(crate::prompts::READ_IMAGE_DESC)
+            Some(crate::prompts::READ_MEDIA_DESC)
         );
         let neighbors = Server::graph_neighbors_tool_attr();
         assert_eq!(
@@ -789,22 +850,23 @@ mod tests {
         (cfg, drive_dir, server)
     }
 
-    #[test]
-    fn read_file_dispatches_to_drive() {
+    #[tokio::test]
+    async fn read_file_dispatches_to_drive() {
         let (_cfg, root, server) = fixture();
         std::fs::write(root.path().join("a.md"), "hello").unwrap();
         let out = server
             .read_file(Parameters(ReadFileParams {
                 path: "a.md".into(),
             }))
+            .await
             .unwrap();
         // tools::execute returns {"path": ..., "content": ...} as JSON;
         // we serialize that to a string for the MCP response.
         assert!(out.contains("hello"), "got: {out}");
     }
 
-    #[test]
-    fn write_file_applies_immediately() {
+    #[tokio::test]
+    async fn write_file_applies_immediately() {
         let (_cfg, root, server) = fixture();
         let out = server
             .write_file(Parameters(WriteFileParams {
@@ -812,6 +874,7 @@ mod tests {
                 content: "hi".into(),
                 expected_mtime_ns: None,
             }))
+            .await
             .unwrap();
         assert!(out.contains("a.md"), "got: {out}");
         assert_eq!(
@@ -820,18 +883,47 @@ mod tests {
         );
     }
 
-    #[test]
-    fn list_files_returns_tree() {
+    #[tokio::test]
+    async fn read_write_file_accepts_source_config_and_makefile_text() {
+        let (_cfg, root, server) = fixture();
+        for (path, body) in [
+            ("src/lib.rs", "pub fn answer() -> u8 { 42 }\n"),
+            ("config.json", "{\"ok\":true}\n"),
+            ("Makefile", "all:\n\t@true\n"),
+        ] {
+            if let Some(parent) = std::path::Path::new(path).parent() {
+                std::fs::create_dir_all(root.path().join(parent)).unwrap();
+            }
+            server
+                .write_file(Parameters(WriteFileParams {
+                    path: path.into(),
+                    content: body.into(),
+                    expected_mtime_ns: None,
+                }))
+                .await
+                .unwrap();
+            let out = server
+                .read_file(Parameters(ReadFileParams { path: path.into() }))
+                .await
+                .unwrap();
+            let value: serde_json::Value = serde_json::from_str(&out).unwrap();
+            assert_eq!(value["content"], body);
+        }
+    }
+
+    #[tokio::test]
+    async fn list_files_returns_tree() {
         let (_cfg, root, server) = fixture();
         std::fs::write(root.path().join("a.md"), "x").unwrap();
         let out = server
             .list_files(Parameters(ListFilesParams { prefix: None }))
+            .await
             .unwrap();
         assert!(out.contains("a.md"), "got: {out}");
     }
 
-    #[test]
-    fn resolve_path_maps_drafts_to_metadata_dir() {
+    #[tokio::test]
+    async fn resolve_path_maps_drafts_to_metadata_dir() {
         let (_cfg, _root, server) = fixture();
         server.ctx.drive.create_draft_dir("untitled-1").unwrap();
         server
@@ -844,6 +936,7 @@ mod tests {
             .resolve_path(Parameters(ResolvePathParams {
                 path: "Drafts/untitled-1".into(),
             }))
+            .await
             .unwrap();
         let body: serde_json::Value = serde_json::from_str(&out).unwrap();
         assert_eq!(body["path"], "Drafts/untitled-1");
@@ -860,8 +953,8 @@ mod tests {
         );
     }
 
-    #[test]
-    fn write_file_rejects_non_text_via_chan_drive() {
+    #[tokio::test]
+    async fn write_file_rejects_non_text_via_chan_drive() {
         let (_cfg, _root, server) = fixture();
         let err = server
             .write_file(Parameters(WriteFileParams {
@@ -869,6 +962,7 @@ mod tests {
                 content: "x".into(),
                 expected_mtime_ns: None,
             }))
+            .await
             .unwrap_err();
         // chan-drive's editable-text gate fires; the MCP surface
         // returns the scrubbed kind ("path refused"), not the
@@ -881,8 +975,8 @@ mod tests {
         );
     }
 
-    #[test]
-    fn mcp_error_message_does_not_leak_host_paths() {
+    #[tokio::test]
+    async fn mcp_error_message_does_not_leak_host_paths() {
         // Trigger a path refusal that, prior to the scrub, would
         // echo "img.png" and any chan-drive Display detail. After
         // the scrub the message is category-only.
@@ -893,6 +987,7 @@ mod tests {
                 content: "x".into(),
                 expected_mtime_ns: None,
             }))
+            .await
             .unwrap_err();
         assert!(
             !err.message.contains("img.png"),
@@ -907,34 +1002,36 @@ mod tests {
     }
 
     #[test]
-    fn is_supported_image_extension_table() {
-        assert_eq!(is_supported_image("a.png"), Some("image/png"));
-        assert_eq!(is_supported_image("a.PNG"), Some("image/png"));
-        assert_eq!(is_supported_image("a.jpg"), Some("image/jpeg"));
-        assert_eq!(is_supported_image("a.jpeg"), Some("image/jpeg"));
-        assert_eq!(is_supported_image("a.webp"), Some("image/webp"));
-        assert_eq!(is_supported_image("a.gif"), Some("image/gif"));
-        assert_eq!(is_supported_image("a.md"), None);
-        assert_eq!(is_supported_image("a.bmp"), None);
-        assert_eq!(is_supported_image("a.svg"), None);
-        assert_eq!(is_supported_image("a"), None);
-        assert_eq!(is_supported_image(""), None);
-        assert_eq!(is_supported_image("a."), None);
+    fn supported_image_mime_extension_table() {
+        assert_eq!(supported_image_mime("a.png"), Some("image/png"));
+        assert_eq!(supported_image_mime("a.PNG"), Some("image/png"));
+        assert_eq!(supported_image_mime("a.jpg"), Some("image/jpeg"));
+        assert_eq!(supported_image_mime("a.jpeg"), Some("image/jpeg"));
+        assert_eq!(supported_image_mime("a.webp"), Some("image/webp"));
+        assert_eq!(supported_image_mime("a.gif"), Some("image/gif"));
+        assert_eq!(supported_image_mime("a.svg"), Some("image/svg+xml"));
+        assert_eq!(supported_image_mime("a.avif"), Some("image/avif"));
+        assert_eq!(supported_image_mime("a.md"), None);
+        assert_eq!(supported_image_mime("a.bmp"), None);
+        assert_eq!(supported_image_mime("a"), None);
+        assert_eq!(supported_image_mime(""), None);
+        assert_eq!(supported_image_mime("a."), None);
     }
 
-    #[test]
-    fn read_image_returns_base64_image_content() {
+    #[tokio::test]
+    async fn read_media_returns_base64_image_content() {
         let (_cfg, root, server) = fixture();
         // Minimal valid PNG: the 8-byte signature is enough to
         // verify round-trip; we don't care that it's a parseable
-        // image, only that read_image reads the bytes verbatim and
+        // image, only that read_media reads the bytes verbatim and
         // hands them to base64 with the right MIME.
         let bytes = b"\x89PNG\r\n\x1a\n";
         std::fs::write(root.path().join("a.png"), bytes).unwrap();
         let content = server
-            .read_image(Parameters(ReadImageParams {
+            .read_media(Parameters(ReadMediaParams {
                 path: "a.png".into(),
             }))
+            .await
             .unwrap();
         let img = content.as_image().expect("expected ImageContent");
         assert_eq!(img.mime_type, "image/png");
@@ -944,38 +1041,92 @@ mod tests {
         assert_eq!(decoded, bytes);
     }
 
-    #[test]
-    fn read_image_refuses_unsupported_extension() {
+    #[tokio::test]
+    async fn read_media_returns_pdf_blob_resource() {
+        let (_cfg, root, server) = fixture();
+        let bytes = b"%PDF-1.7\n";
+        std::fs::write(root.path().join("docs spec.pdf"), bytes).unwrap();
+        let content = server
+            .read_media(Parameters(ReadMediaParams {
+                path: "docs spec.pdf".into(),
+            }))
+            .await
+            .unwrap();
+        let resource = content.as_resource().expect("expected resource content");
+        let ResourceContents::BlobResourceContents {
+            uri,
+            mime_type,
+            blob,
+            ..
+        } = &resource.resource
+        else {
+            panic!("expected blob resource");
+        };
+        assert_eq!(uri, "chan://media/docs%20spec.pdf");
+        assert_eq!(mime_type.as_deref(), Some("application/pdf"));
+        let decoded = base64::engine::general_purpose::STANDARD
+            .decode(blob)
+            .unwrap();
+        assert_eq!(decoded, bytes);
+    }
+
+    #[tokio::test]
+    async fn read_media_accepts_svg_and_avif_image_class() {
+        let (_cfg, root, server) = fixture();
+        std::fs::write(root.path().join("icon.svg"), b"<svg/>").unwrap();
+        std::fs::write(root.path().join("photo.avif"), b"avif").unwrap();
+
+        let svg = server
+            .read_media(Parameters(ReadMediaParams {
+                path: "icon.svg".into(),
+            }))
+            .await
+            .unwrap();
+        let avif = server
+            .read_media(Parameters(ReadMediaParams {
+                path: "photo.avif".into(),
+            }))
+            .await
+            .unwrap();
+
+        assert_eq!(svg.as_image().unwrap().mime_type, "image/svg+xml");
+        assert_eq!(avif.as_image().unwrap().mime_type, "image/avif");
+    }
+
+    #[tokio::test]
+    async fn read_media_refuses_unsupported_extension() {
         let (_cfg, root, server) = fixture();
         std::fs::write(root.path().join("a.bmp"), b"BMP").unwrap();
         let err = server
-            .read_image(Parameters(ReadImageParams {
+            .read_media(Parameters(ReadMediaParams {
                 path: "a.bmp".into(),
             }))
+            .await
             .unwrap_err();
         assert!(
             err.message
                 .to_lowercase()
-                .contains("unsupported image extension"),
+                .contains("unsupported media extension"),
             "msg={}",
             err.message
         );
     }
 
-    #[test]
-    fn read_image_caps_response_size() {
+    #[tokio::test]
+    async fn read_media_caps_response_size() {
         let (_cfg, root, server_default) = fixture();
         // Override the cap to 4 bytes so a 5-byte file overflows;
-        // exercises with_max_image_bytes alongside the cap check.
-        let server = server_default.with_max_image_bytes(4);
+        // exercises with_max_media_bytes alongside the cap check.
+        let server = server_default.with_max_media_bytes(4);
         std::fs::write(root.path().join("a.png"), b"\x89PNG\r").unwrap();
         let err = server
-            .read_image(Parameters(ReadImageParams {
+            .read_media(Parameters(ReadMediaParams {
                 path: "a.png".into(),
             }))
+            .await
             .unwrap_err();
         assert!(
-            err.message.contains("image too large"),
+            err.message.contains("media too large"),
             "msg={}",
             err.message
         );
@@ -986,16 +1137,17 @@ mod tests {
         assert!(err.message.contains("4"), "msg={}", err.message);
     }
 
-    #[test]
-    fn read_image_path_sandbox_error_is_scrubbed() {
+    #[tokio::test]
+    async fn read_media_path_sandbox_error_is_scrubbed() {
         let (_cfg, _root, server) = fixture();
         // Path escape: chan-drive's path-resolver refuses this; the
         // error surfaces through mcp_safe_message as the scrubbed
         // category, no host filesystem detail.
         let err = server
-            .read_image(Parameters(ReadImageParams {
+            .read_media(Parameters(ReadMediaParams {
                 path: "../escape.png".into(),
             }))
+            .await
             .unwrap_err();
         assert!(
             err.message.to_lowercase().contains("path refused"),
@@ -1010,16 +1162,16 @@ mod tests {
     }
 
     #[test]
-    fn server_with_max_image_bytes_overrides_default() {
+    fn server_with_max_media_bytes_overrides_default() {
         let (_cfg, _root, server_default) = fixture();
-        let server = server_default.with_max_image_bytes(123);
-        assert_eq!(server.max_image_bytes, 123);
+        let server = server_default.with_max_media_bytes(123);
+        assert_eq!(server.max_media_bytes, 123);
     }
 
     #[test]
-    fn server_defaults_to_default_image_cap() {
+    fn server_defaults_to_default_media_cap() {
         let (_cfg, _root, server) = fixture();
-        assert_eq!(server.max_image_bytes, DEFAULT_MCP_IMAGE_MAX_BYTES);
+        assert_eq!(server.max_media_bytes, DEFAULT_MCP_MEDIA_MAX_BYTES);
     }
 
     #[test]

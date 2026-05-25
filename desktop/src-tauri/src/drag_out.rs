@@ -1,5 +1,6 @@
 use std::{
     fs,
+    io::Write,
     path::PathBuf,
     time::{Duration, SystemTime},
 };
@@ -7,6 +8,7 @@ use std::{
 use reqwest::header::CONTENT_DISPOSITION;
 use serde::Serialize;
 use tauri::WebviewWindow;
+use tokio::sync::mpsc;
 use uuid::Uuid;
 
 const EXPORT_ROOT_DIR: &str = "chan-desktop-drag-out";
@@ -54,12 +56,7 @@ pub async fn start_file_browser_drag_out(
         .and_then(|value| value.to_str().ok())
         .and_then(content_disposition_filename);
     let export_filename = export_filename(header_filename.or(filename), &path, is_dir);
-    let bytes = response
-        .bytes()
-        .await
-        .map_err(|e| format!("reading export bytes failed: {e}"))?
-        .to_vec();
-    let staged = stage_export(export_filename, bytes).await?;
+    let staged = stage_export_response(export_filename, response).await?;
 
     match start_native_drag(window, staged.file_path.clone(), client_x, client_y).await {
         Ok(true) => {
@@ -171,22 +168,78 @@ struct StagedExport {
     file_path: PathBuf,
 }
 
-async fn stage_export(filename: String, bytes: Vec<u8>) -> Result<StagedExport, String> {
-    tauri::async_runtime::spawn_blocking(move || stage_export_sync(&filename, &bytes))
+async fn stage_export_response(
+    filename: String,
+    mut response: reqwest::Response,
+) -> Result<StagedExport, String> {
+    let staged = tauri::async_runtime::spawn_blocking(move || create_staged_export_sync(&filename))
         .await
-        .map_err(|e| format!("staging export task failed: {e}"))?
+        .map_err(|e| format!("staging export task failed: {e}"))??;
+    let (tx, rx) = mpsc::channel::<Vec<u8>>(4);
+    let file_path = staged.file_path.clone();
+    let writer =
+        tauri::async_runtime::spawn_blocking(move || write_export_stream_sync(file_path, rx));
+
+    while let Some(chunk) = match response.chunk().await {
+        Ok(chunk) => chunk,
+        Err(e) => {
+            drop(tx);
+            let _ = writer.await;
+            remove_export_dir(staged.dir_path).await;
+            return Err(format!("reading export bytes failed: {e}"));
+        }
+    } {
+        if tx.send(chunk.to_vec()).await.is_err() {
+            drop(tx);
+            let result = writer
+                .await
+                .map_err(|e| format!("export writer task failed: {e}"))?;
+            remove_export_dir(staged.dir_path).await;
+            return match result {
+                Ok(()) => Err("export writer stopped before download completed".to_string()),
+                Err(e) => Err(e),
+            };
+        }
+    }
+    drop(tx);
+    match writer.await {
+        Ok(Ok(())) => Ok(staged),
+        Ok(Err(e)) => {
+            remove_export_dir(staged.dir_path).await;
+            Err(e)
+        }
+        Err(e) => {
+            remove_export_dir(staged.dir_path).await;
+            Err(format!("export writer task failed: {e}"))
+        }
+    }
 }
 
-fn stage_export_sync(filename: &str, bytes: &[u8]) -> Result<StagedExport, String> {
+fn create_staged_export_sync(filename: &str) -> Result<StagedExport, String> {
     let dir_path = export_root().join(Uuid::new_v4().to_string());
     fs::create_dir_all(&dir_path)
         .map_err(|e| format!("creating export staging directory failed: {e}"))?;
     let file_path = dir_path.join(filename);
-    fs::write(&file_path, bytes).map_err(|e| format!("writing export staging file failed: {e}"))?;
+    fs::File::create(&file_path)
+        .map_err(|e| format!("creating export staging file failed: {e}"))?;
     Ok(StagedExport {
         dir_path,
         file_path,
     })
+}
+
+fn write_export_stream_sync(
+    file_path: PathBuf,
+    mut rx: mpsc::Receiver<Vec<u8>>,
+) -> Result<(), String> {
+    let mut file = fs::File::create(file_path)
+        .map_err(|e| format!("opening export staging file failed: {e}"))?;
+    while let Some(chunk) = rx.blocking_recv() {
+        file.write_all(&chunk)
+            .map_err(|e| format!("writing export staging file failed: {e}"))?;
+    }
+    file.flush()
+        .map_err(|e| format!("flushing export staging file failed: {e}"))
 }
 
 fn export_root() -> PathBuf {
@@ -471,5 +524,19 @@ mod tests {
     #[test]
     fn export_root_is_system_temp_scoped() {
         assert_eq!(export_root().file_name(), Some(OsStr::new(EXPORT_ROOT_DIR)));
+    }
+
+    #[test]
+    fn write_export_stream_sync_writes_chunks() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let path = tmp.path().join("out.bin");
+        let (tx, rx) = mpsc::channel(2);
+        tx.blocking_send(b"ab".to_vec()).unwrap();
+        tx.blocking_send(b"cd".to_vec()).unwrap();
+        drop(tx);
+
+        write_export_stream_sync(path.clone(), rx).unwrap();
+
+        assert_eq!(std::fs::read(path).unwrap(), b"abcd");
     }
 }

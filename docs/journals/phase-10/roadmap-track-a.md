@@ -180,6 +180,51 @@ Desktop File Browser drag-out/download:
 - Linux native drag-out remains unsmoked and is queued separately with the
   Linux desktop launch blocker.
 
+Async file and MCP media hardening on 2026-05-25:
+
+- File Browser list, read, download, write, upload, move, and editor
+  attachment upload now snapshot the drive with `try_drive()`. If metadata
+  import temporarily removes the drive cell, these routes return a retryable
+  drive-busy response instead of panicking on `state.drive()`.
+- Metadata import no longer holds the `drive_cell` write lock while closing
+  terminal/team state, dropping the watcher/indexer, waiting for old drive
+  refs, importing the archive, or reopening the drive. The lock is held only
+  while taking the old cell and installing the rebuilt cell.
+- Desktop native drag-out still fetches the existing authenticated
+  `/api/files/<path>?download=1` route. The bridge now streams the HTTP body
+  into the private temp export file instead of buffering the whole response
+  before staging.
+- chan-llm replaced MCP `read_image` with `read_media` without an alias.
+  `read_media` accepts chan-drive Image and Pdf classes. Images return MCP
+  image content for `.png`, `.jpg`, `.jpeg`, `.gif`, `.webp`, `.svg`, and
+  `.avif`; PDFs return an MCP blob resource with `application/pdf`.
+- MCP tool handlers now run synchronous chan-drive work through
+  `spawn_blocking`, including JSON tools and `read_media`.
+- CLI/config names for the standalone MCP cap changed from
+  `--max-image-bytes` / `with_max_image_bytes` to
+  `--max-media-bytes` / `with_max_media_bytes`. No compatibility path was
+  added, per Track A scope.
+- Verification in this handoff:
+  - `cargo check -p chan-llm --features mcp`
+  - `cargo test -p chan-llm --features mcp`
+  - `cargo check -p chan-server`
+  - `cargo test -p chan-server download_path_sync`
+  - `cargo test -p chan-server metadata`
+  - `cargo test -p chan-server err_state_maps_missing_drive_to_retryable_busy`
+  - `cargo test -p chan-server err_from_maps_non_utf8_editable_upload_to_415`
+  - `cargo check -p chan-desktop`
+  - `cargo test -p chan-desktop drag_out`
+  - `cargo build -p chan`
+  - standalone throwaway-drive API smoke with `--no-token --no-browser`:
+    text upload, text replacement, binary upload, non-UTF-8 editable-text
+    replacement rejected with 415, file download basename and bytes, binary
+    download bytes, and directory `.tar` filename plus entries.
+- Known gaps:
+  - Native desktop drag-out still needs manual Finder/file-manager smoke for
+    accepted drag, cancelled drag cleanup, and directory archive contents.
+  - Track A did not run browser/IAB smoke. Track C keeps the transfer and
+    streaming UI live regression pass.
+
 ## 3. Manual, docs, and site
 
 - Create `docs/manual/` as the canonical user manual source.
@@ -409,5 +454,7 @@ Operational release checks:
 18. Implement native desktop File Browser drag-out bridge using the same
     `download=1` URL path. Done on 2026-05-25. Automated checks passed;
     macOS manual Finder drag-out smoke remains pending.
-19. Current next remains open for selection. CLI handoff is deferred until
-   its design checkpoint.
+19. Harden async upload/download, desktop export staging, and MCP media.
+    Done on 2026-05-25. Verification recorded in the hardening note above.
+20. Current next remains open for selection. CLI handoff is deferred until
+    its design checkpoint.

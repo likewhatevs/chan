@@ -1,4 +1,4 @@
-//! POST /api/attachments — multipart upload from the editor.
+//! POST /api/attachments: multipart upload from the editor.
 //!
 //! The frontend sends one part named `file`; we slugify the original
 //! filename, prefix with the unix timestamp (collision resistance),
@@ -20,7 +20,7 @@ use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use axum::Json;
 
-use crate::error::{err, err_from};
+use crate::error::{err, err_from, err_state};
 use crate::signal::now_unix_secs;
 use crate::state::AppState;
 use crate::util::{slugify_for_filename, split_filename};
@@ -114,7 +114,10 @@ pub async fn api_post_attachment(
     };
     let ext = ext.map(|e| e.to_ascii_lowercase()).unwrap_or_default();
 
-    let drive = state.drive();
+    let drive = match state.try_drive() {
+        Ok(drive) => drive,
+        Err(e) => return err_state(&e),
+    };
     let result = tokio::task::spawn_blocking(move || {
         let join_filename = |name: &str| -> String {
             if dir.is_empty() {

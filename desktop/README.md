@@ -57,8 +57,8 @@ Drive webviews keep the browser drag payloads used by normal web and
 in-app drops. In chan-desktop, File Browser drag start also invokes the
 `start_file_browser_drag_out` Tauri command. That command downloads the
 existing token-bearing `/api/files/<path>?download=1` URL from the
-embedded or attached server, stages the returned bytes under the OS temp
-directory, and starts a native file drag from that staged export on
+embedded or attached server, streams the response into a file under the
+OS temp directory, and starts a native file drag from that staged export on
 macOS.
 
 File exports preserve the server-provided basename. Directory exports

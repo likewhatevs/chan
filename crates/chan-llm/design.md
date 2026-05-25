@@ -12,7 +12,7 @@ In scope:
   - Shared prompt and tool descriptions for chan drive access.
   - Direct tool dispatch through `tools::execute`.
   - MCP stdio / async-I/O hosting behind the optional `mcp` feature.
-  - Image reads for MCP clients, capped by server policy.
+  - Media reads for MCP clients, capped by server policy.
   - Typed error passthroughs for chan-drive write conflicts,
     write-size limits, listing limits, and refused paths.
 
@@ -39,10 +39,12 @@ chan_drive::Drive
 ```
 
 `mcp::Server` owns a `ToolContext`, which is just an `Arc<Drive>`.
-Each tool call goes through `tools::execute` unless it is the MCP-only
-`read_image` path. This keeps the same path sandbox, regular-file
-checks, editable-text checks, atomic writes, and graph/search access
-that the editor uses.
+Each JSON tool call goes through `tools::execute`. MCP handlers run
+drive work on `spawn_blocking` so synchronous chan-drive reads,
+writes, graph, search, and report work do not pin the async transport
+worker. The MCP-only `read_media` path still reads through
+`Drive::read`, so it keeps the same path sandbox and regular-file
+checks that the editor uses.
 
 `serve_stdio` is used by the standalone `chan-llm-mcp` binary and by
 `chan __mcp`. `serve_io` is used by chan-server's MCP bridge: the
@@ -63,9 +65,11 @@ Text tools are defined as `StandardTool` and dispatched by name:
   - `graph_tags`
   - `graph_files_with_tag`
 
-`read_image` is exposed only by the MCP server because it returns an
-MCP image content block rather than a JSON text result. Supported
-extensions are `.png`, `.jpg`, `.jpeg`, `.webp`, and `.gif`.
+`read_media` is exposed only by the MCP server because it returns
+MCP image content blocks or embedded PDF blob resources rather than
+a JSON text result. Supported media matches chan-drive's Image and
+Pdf classes: `.png`, `.jpg`, `.jpeg`, `.gif`, `.webp`, `.svg`,
+`.avif`, and `.pdf`.
 
 Writes are full-file replacements. `write_file` accepts
 `expected_mtime_ns` for compare-and-swap semantics and maps
@@ -73,12 +77,12 @@ chan-drive conflicts into `LlmError::WriteConflict`.
 
 ## Configuration
 
-The library has no model/provider config. MCP image size is server
+The library has no model/provider config. MCP media size is server
 policy:
 
-  - default: `DEFAULT_MCP_IMAGE_MAX_BYTES` (10 MiB)
-  - override: `Server::with_max_image_bytes(bytes)`
-  - standalone binary: `--max-image-bytes <N>`
+  - default: `DEFAULT_MCP_MEDIA_MAX_BYTES` (10 MiB)
+  - override: `Server::with_max_media_bytes(bytes)`
+  - standalone binary: `--max-media-bytes <N>`
 
 `chan-llm-mcp --config <path>` points at the chan-drive registry
 config, not an LLM settings file.

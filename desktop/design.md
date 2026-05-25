@@ -221,11 +221,11 @@ also calls the `start_file_browser_drag_out` Tauri command.
 The command treats the server as the content boundary. It fetches
 the token-bearing `/api/files/<path>?download=1` URL that the web
 client already uses for right-click Download and browser drag-out,
-then stages the response bytes under the OS temp directory. Files use
-the basename reported by the server download header, with the
-frontend fallback name as a backup. Directories stage the server's
-`.tar` archive so the exported tree shape is preserved inside the
-archive.
+then streams the response into a staged file under the OS temp
+directory. Files use the basename reported by the server download
+header, with the frontend fallback name as a backup. Directories
+stage the server's `.tar` archive so the exported tree shape is
+preserved inside the archive.
 
 On macOS the staged file is passed to AppKit as a native file drag.
 Tauri filesystem code does not read the drive root. Failed or

@@ -89,7 +89,10 @@ pub async fn api_list_files(
     State(state): State<Arc<AppState>>,
     Query(query): Query<ListFilesQuery>,
 ) -> Response {
-    let drive = state.drive().clone();
+    let drive = match state.try_drive() {
+        Ok(drive) => drive,
+        Err(e) => return err_state(&e),
+    };
     let result = tokio::task::spawn_blocking(move || list_files_sync(&drive, query)).await;
 
     match result {
@@ -470,7 +473,10 @@ pub async fn api_read_file(
     // string. Anything else (images, attachments) comes back as
     // raw bytes with a sniffed Content-Type so `<img src=...>`
     // pointing at /api/files/<path> resolves correctly.
-    let drive = state.drive().clone();
+    let drive = match state.try_drive() {
+        Ok(drive) => drive,
+        Err(e) => return err_state(&e),
+    };
     if query_flag(&query.download) {
         let path_for_download = path.clone();
         let result =
@@ -508,7 +514,6 @@ pub async fn api_read_file(
         return stream_read_file_response(drive, path).await;
     }
 
-    let drive = state.drive().clone();
     let path_for_read = path.clone();
     let result = tokio::task::spawn_blocking(move || read_file_sync(&drive, &path_for_read)).await;
 
@@ -622,7 +627,10 @@ pub async fn api_write_file(
         Ok(mtime_ns) => mtime_ns,
         Err(message) => return err(StatusCode::BAD_REQUEST, message),
     };
-    let drive = state.drive().clone();
+    let drive = match state.try_drive() {
+        Ok(drive) => drive,
+        Err(e) => return err_state(&e),
+    };
     let path_for_write = path.clone();
     let result = tokio::task::spawn_blocking(move || {
         write_file_sync(
@@ -804,7 +812,10 @@ pub async fn api_upload_file(
         );
     };
 
-    let drive = state.drive().clone();
+    let drive = match state.try_drive() {
+        Ok(drive) => drive,
+        Err(e) => return err_state(&e),
+    };
     let result = tokio::task::spawn_blocking(move || {
         if let Some(path) = replace_path {
             replace_file_sync(&drive, &path, &bytes)
@@ -1400,7 +1411,10 @@ pub async fn api_move(State(state): State<Arc<AppState>>, Json(body): Json<MoveB
     // rewrite walks N source files synchronously and can take a few
     // hundred ms on big directory moves. Keeping it off the tokio
     // worker pool avoids blocking other requests during the walk.
-    let drive = state.drive().clone();
+    let drive = match state.try_drive() {
+        Ok(drive) => drive,
+        Err(e) => return err_state(&e),
+    };
     let from = body.from.clone();
     let to = body.to.clone();
     let outcome =

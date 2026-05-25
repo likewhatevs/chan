@@ -46,7 +46,15 @@ pub fn err_settings_locked() -> Response {
 }
 
 pub fn err_state(e: &StateAccessError) -> Response {
-    err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string())
+    match e {
+        StateAccessError::DriveCellMissing => err(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "drive busy: drive state is temporarily unavailable; retry in a moment".into(),
+        ),
+        StateAccessError::DriveCellPoisoned => {
+            err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string())
+        }
+    }
 }
 
 /// Refusal returned by public-tunnel-locked routes that must not be
@@ -78,6 +86,9 @@ pub fn err_from(e: &chan_drive::ChanError) -> Response {
         C::DraftBroken { .. } => (StatusCode::BAD_REQUEST, e.to_string()),
         C::Io(s) if s.contains("No such file") || s.contains("not found") => {
             (StatusCode::NOT_FOUND, e.to_string())
+        }
+        C::Io(s) if s.contains("refusing to write non-UTF-8 bytes to editable text file") => {
+            (StatusCode::UNSUPPORTED_MEDIA_TYPE, e.to_string())
         }
         _ => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
     };
@@ -156,5 +167,24 @@ mod tests {
         assert_eq!(status, StatusCode::BAD_REQUEST);
         assert!(msg.contains("untitled-1"));
         assert!(msg.contains("missing draft.md"));
+    }
+
+    #[tokio::test]
+    async fn err_state_maps_missing_drive_to_retryable_busy() {
+        let (status, msg) = status_and_error(err_state(&StateAccessError::DriveCellMissing)).await;
+
+        assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
+        assert!(msg.contains("drive busy"));
+    }
+
+    #[tokio::test]
+    async fn err_from_maps_non_utf8_editable_upload_to_415() {
+        let (status, msg) = status_and_error(err_from(&chan_drive::ChanError::Io(
+            "refusing to write non-UTF-8 bytes to editable text file: note.md".to_string(),
+        )))
+        .await;
+
+        assert_eq!(status, StatusCode::UNSUPPORTED_MEDIA_TYPE);
+        assert!(msg.contains("non-UTF-8"));
     }
 }

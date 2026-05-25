@@ -31,12 +31,12 @@ prompts::*           Shared MCP prompt/tool descriptions.
 
 feature "mcp":
   mcp::Server::new(Arc<Drive>)
-  mcp::Server::with_max_image_bytes(bytes)
+  mcp::Server::with_max_media_bytes(bytes)
   mcp::Server::serve_stdio()
   mcp::Server::serve_io(reader, writer)
 ```
 
-`read_image` is MCP-only. Text tools are also available through
+`read_media` is MCP-only. Text tools are also available through
 `tools::execute` for tests and hosts that need direct dispatch.
 
 ## Contacts and the graph

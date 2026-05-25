@@ -12,7 +12,7 @@
 ///
 /// The prompt enumerates the standard tools inline (read /
 /// write / list / search plus repo_report and the graph_* tools,
-/// and read_image for MCP clients). Hosts can swap in
+/// and read_media for MCP clients). Hosts can swap in
 /// `SYSTEM_PROMPT_NO_TOOLS` when chan's standard tool schemas are
 /// not advertised directly.
 pub const SYSTEM_PROMPT: &str = "\
@@ -24,9 +24,9 @@ You can call tools to interact with the drive:
   - write_file(path, content) replace a file's content (the host \
                               may surface a confirmation UI before \
                               the write hits disk)
-  - read_image(path)         fetch a raster image (.png, .jpg, \
-                              .jpeg, .webp, .gif) so you can see \
-                              what it contains
+  - read_media(path)         fetch an image (.png, .jpg, .jpeg, \
+                              .gif, .webp, .svg, .avif) or PDF \
+                              so you can inspect it
   - list_files()             enumerate every file in the drive
   - resolve_path(path)       translate a chan path to a host \
                               filesystem path for shell tools
@@ -47,10 +47,11 @@ You can call tools to interact with the drive:
 
 Use the tools rather than guessing at content. When you propose \
 an edit, return the FULL new file content via write_file; partial \
-diffs are not supported. Editable text in the drive is .md and \
-.txt; write_file refuses other extensions. Images stored alongside \
-the notes are reachable via read_image but cannot be edited through \
-these tools.
+diffs are not supported. Editable text includes markdown, plain \
+text, source, config, and known text basenames such as Makefile; \
+write_file refuses media and opaque binary paths. Images and PDFs \
+stored alongside the notes are reachable via read_media but cannot \
+be edited through these tools.
 
 Paths: every content tool `path` argument is a POSIX path in chan's \
 public namespace (no leading slash, no `..`, no host filesystem \
@@ -125,7 +126,8 @@ content as text, or propose alternatives.\n\
   - For investigation, prefer the MCP tools (`mcp__chan__read_file`, \
 `mcp__chan__list_files`, `mcp__chan__search_content`, \
 `mcp__chan__graph_neighbors`, `mcp__chan__graph_tags`, \
-`mcp__chan__graph_files_with_tag`, `mcp__chan__repo_report`) over \
+`mcp__chan__graph_files_with_tag`, `mcp__chan__repo_report`, \
+`mcp__chan__read_media`) over \
 your own Read / Glob / Grep when the target is in the user's drive; \
 they go through chan-drive's sandbox and graph index, which match the \
 user's visible scope exactly.\n\
@@ -159,9 +161,11 @@ you need the full thing). Pass `mtime_ns` back on `write_file` as \
 pub const WRITE_FILE_DESC: &str = "\
 Replace the content of a file in the active drive (creates the \
 parent directory if needed). The path is POSIX-style in chan's \
-public namespace, including `Drafts/...` when needed, and must end \
-in .md or .txt. New files are capped at 2 MiB; existing files can \
-be edited up to their current size. Pass `expected_mtime_ns` (from \
+public namespace, including `Drafts/...` when needed, and must be \
+classified by chan-drive as editable UTF-8 text (.md, .txt, source \
+and config text such as .rs or .json, or known text basenames like \
+Makefile). New files are capped at 2 MiB; existing files can be \
+edited up to their current size. Pass `expected_mtime_ns` (from \
 your earlier read_file response) to make the write a \
 compare-and-swap; on conflict the call errors and you can re-read \
 before retrying. Writes apply immediately. When a request touches \
@@ -237,16 +241,18 @@ includes the leading `#`. Cheap: the graph index keeps this \
 membership as a direct lookup, so it's preferable to scanning every \
 file with search_content when the user has a specific tag in mind.";
 
-/// Description of the read_image tool. MCP-only: not surfaced
+/// Description of the read_media tool. MCP-only: not surfaced
 /// through `tools::standard_tool_schemas()`. Pinned against the
 /// inlined `#[tool]` literal in `mcp.rs` via
 /// `mcp_descriptions_match_prompts`.
-pub const READ_IMAGE_DESC: &str = "\
-Read a raster image from the active drive and return it as an MCP \
-image content block. The path is POSIX-style in chan's public \
-namespace and must end in .png, .jpg, .jpeg, .webp, or .gif; other \
-extensions are refused (text files use read_file). The response is \
-the raw image bytes base64-encoded with the matching MIME type. \
-Single-call cap defaults to 10 MiB; oversized files error with \
-`image too large` so you can pick a smaller file (the host may \
-have widened or narrowed this cap via config).";
+pub const READ_MEDIA_DESC: &str = "\
+Read a media file from the active drive and return it as MCP media \
+content. The path is POSIX-style in chan's public namespace and \
+must be classified by chan-drive as Image (.png, .jpg, .jpeg, \
+.gif, .webp, .svg, .avif) or Pdf (.pdf); other extensions are \
+refused (text files use read_file). Image responses are MCP image \
+content blocks. PDF responses are MCP blob resources with \
+application/pdf MIME type. Single-call cap defaults to 10 MiB; \
+oversized files error with `media too large` so you can pick a \
+smaller file (the host may have widened or narrowed this cap via \
+config).";
