@@ -466,5 +466,6 @@ Operational release checks:
     fix.
 19. Harden async upload/download, desktop export staging, and MCP media.
     Done on 2026-05-25. Verification recorded in the hardening note above.
-20. Current next remains open for selection. CLI handoff is deferred until
-    its design checkpoint.
+20. Round-2 work queue captured in
+    `docs/journals/phase-10/track-a-round-2-handoff.md`. Current next remains
+    open for selection. CLI handoff is deferred until its design checkpoint.
