@@ -364,3 +364,48 @@ Current status:
 
 - Throwaway server was stopped and `/tmp/chan-plain-saver-*` was removed.
 - Ready to commit only Track C web and docs files.
+
+## 2026-05-25 Track C Closeout
+
+Report for @@Alex.
+
+Final Track C commits:
+
+- `80350d3` consumed relationship streams in the Track C UI.
+- `b845531` added the plain screen-lock mark and committed the final Track C
+  web/docs follow-up.
+
+Closed coverage:
+
+- Shared inspector Upload/Download.
+- Draft explicit Save.
+- File Browser expansion restore.
+- Docked File Browser drive-row actions.
+- Streaming inspector/report/backlink/graph UI.
+- Rich Prompt submit/archive/clear/race validation.
+- Spawn agents clipboard/preflight validation.
+- Rapid editor autosave and search-index convergence.
+- Terminal ANSI and scroll-heavy pane switching.
+- Graph filesystem spine.
+- Matrix lock and plain lock visual coverage.
+- Persistent broken Draft warning dialog.
+
+Verification already recorded above:
+
+- Focused Vitest suites for File Browser, API client, graph, inspector, reveal
+  actions, tabs, and screen lock.
+- `npm run check`.
+- `npm run build`.
+- `cargo build -p chan`.
+- Embedded Browser smokes on throwaway drives.
+
+Current status:
+
+- Track C is complete.
+- No Track C-owned code, docs, browser-smoke, or teardown item remains.
+- Throwaway Track C servers and drives were stopped and removed.
+- Remaining dirty workspace files are Track A or desktop-owned:
+  `desktop/src-tauri/capabilities/drive.json`,
+  `desktop/src-tauri/src/serve.rs`,
+  `docs/journals/phase-10/roadmap-track-a.md`, and
+  `docs/journals/phase-10/track-a-round-2-handoff.md`.

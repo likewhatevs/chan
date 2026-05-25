@@ -1,6 +1,6 @@
 # Phase 10 Roadmap Track C: Hybrid Pane and Editor Polish
 
-Status: in progress.
+Status: complete.
 
 Track C collects the Hybrid pane, terminal rendering, and editor-close
 polish that should land after the phase 9 validation waves.
@@ -129,31 +129,24 @@ Progress:
 - 2026-05-25: added the empty-Hybrid masked `chan-mark.png` treatment to the
   plain screen-lock theme so the plain lock no longer reads as a blank grey
   cover. Matrix lock rendering remains unchanged.
+- 2026-05-25: wrapped Track C. The final plain screen-lock follow-up landed in
+  `b845531`, all Track C-owned focused tests, builds, and embedded Browser
+  smokes passed, and no Track C-owned code or validation item remains open.
 
-Current wave:
+Closeout status:
 
-- Next-agent continuation plan:
+- Final handoff and verification log:
   `docs/journals/phase-10/track-c-next-agent-handoff.md`.
-- Live-regress shared inspector Upload/Download across File Browser, Graph,
-  and Editor details.
-- Live-regress Draft explicit Save for single-file Drafts and Draft
-  workspaces with attachments.
+- Shared inspector Upload/Download, Draft explicit Save, File Browser expansion
+  restore, docked File Browser drive-row actions, streaming inspector/graph UI,
+  Rich Prompt browser validation, rapid-edit validation, Matrix lock, plain
+  screen-lock mark, persistent drive warnings, Terminal pane switching, and
+  Graph filesystem spine all have current Track C coverage.
 - Keep native desktop drag-out/download scoped to Track A.
-- Run a broader live visual regression pass over the completed Track C chrome:
-  Terminal scroll-heavy/ANSI pane switching, Graph filesystem spine, File
-  Browser expansion restore, Matrix lock, and actionable drive-warning dialog.
-- Keep the Matrix lock in the broader live visual regression pass, now focused
-  on comparing the source-port result against the upstream reference and
-  catching integration leaks.
-- Streaming inspector/graph intake is implemented and needs only broader
-  regression alongside the rest of the chrome pass.
-- Shared inspector transfer, Draft explicit Save, and File Browser expansion
-  restore have current live pass coverage on the throwaway browser server.
-- Docked File Browser empty-menu drive action has source coverage and needs a
-  quick live click check in the next browser pass.
-- Plain screen-lock logo treatment has focused test, build, embedded Browser
-  smoke, and journal coverage.
-- Cut follow-up implementation only for live regressions found in that pass.
+- No Track C teardown action remains beyond leaving the workspace clean of
+  Track C temp drives and servers.
+- Any future findings should be cut as new follow-up work with explicit owner
+  scope.
 
 ## Objectives
 
