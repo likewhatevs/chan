@@ -58,16 +58,13 @@ Progress:
 
 Current wave:
 
-- Implement File Browser drop-to-upload for docked File Browsers and File
-  Browser tabs.
-- Route uploads through chan-server and chan-drive, with explicit conflict
-  handling instead of silent overwrite.
-- Surface upload progress, completion, failure, and cancellation through the
-  status bar.
-- Refresh visible File Browser trees after upload while preserving expansion
-  state.
-- Leave drag-out/download to a feasibility pass after the upload path lands;
-  native desktop drag-out remains tracked in Track A.
+- Run the File Browser drag-out/download feasibility pass for browser and
+  embedded WebView behavior.
+- Keep native desktop drag-out/download scoped to Track A.
+- Run a broader live visual regression pass over the completed Track C chrome:
+  Terminal scroll-heavy/ANSI pane switching, Graph filesystem spine, File
+  Browser expansion restore, Matrix lock, and actionable drive-warning dialog.
+- Cut follow-up implementation only for live regressions found in that pass.
 
 ## Objectives
 
