@@ -36,7 +36,7 @@ cuda = ["chan-drive/cuda", "chan-server/cuda"]
 
 [dependencies]
 chan-drive = { workspace = true, default-features = false }
-chan-server = { path = "../chan-server", default-features = false }
+chan-server = { workspace = true, default-features = false }
 # Pulled in directly (not just transitively through chan-server) so
 # the `__mcp` subcommand can run chan-llm's MCP server in-process.
 # The `mcp` feature pulls rmcp + schemars; that's the cost of paying
@@ -79,7 +79,7 @@ tempfile = { workspace = true }
 # while macOS gets it transparently.
 [target.'cfg(target_os = "macos")'.dependencies]
 chan-drive = { workspace = true, default-features = false, features = ["metal"] }
-chan-server = { path = "../chan-server", default-features = false, features = ["metal"] }
+chan-server = { workspace = true, default-features = false, features = ["metal"] }
 
 # ----- packaging metadata --------------------------------------
 #

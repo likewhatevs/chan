@@ -8,7 +8,7 @@ repository.workspace = true
 description = "Filesystem, search, and graph primitives for chan-writer drives"
 
 [dependencies]
-chan-report = { path = "../chan-report" }
+chan-report = { workspace = true }
 bincode = { version = "2", features = ["serde"] }
 chrono = { version = "0.4", features = ["serde"] }
 csv = "1"

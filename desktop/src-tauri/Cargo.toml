@@ -31,7 +31,7 @@ serde_json = { workspace = true }
 toml = { workspace = true }
 dirs = { workspace = true }
 chan-drive = { workspace = true, default-features = false }
-chan-server = { path = "../../crates/chan-server" }
+chan-server = { workspace = true, features = ["embeddings"] }
 notify = { workspace = true }
 notify-debouncer-mini = { workspace = true }
 keyring = { workspace = true }

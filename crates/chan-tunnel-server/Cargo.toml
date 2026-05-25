@@ -8,7 +8,7 @@ repository.workspace = true
 description = "Server-side of the chan-tunnel implementation; library that terminates tunnels from `chan serve`."
 
 [dev-dependencies]
-chan-tunnel-client = { path = "../chan-tunnel-client" }
+chan-tunnel-client = { workspace = true }
 futures = { workspace = true }
 reqwest = { workspace = true, features = ["stream"] }
 url = { workspace = true }

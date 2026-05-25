@@ -15,7 +15,7 @@ default = []
 mcp = ["dep:rmcp", "dep:schemars", "dep:base64"]
 
 [dependencies]
-chan-drive = { path = "../chan-drive" }
+chan-drive = { workspace = true }
 
 serde = { workspace = true }
 serde_json = { workspace = true }
