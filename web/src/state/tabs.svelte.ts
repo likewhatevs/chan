@@ -144,6 +144,7 @@ export type FileTab = {
   savedMtimeNs?: string | null;
   mode: Mode;
   loading: boolean;
+  loadProgress?: { loadedBytes: number; totalBytes: number | null };
   error: string | null;
   /// Structured recovery state for an open file whose backing path
   /// disappeared. Kept separate from `error` so the UI can offer
@@ -1618,19 +1619,65 @@ async function confirmCloseTabs(
 /// (proxied) pane state. Resolves the proxied reference each time it
 /// touches the tab: in Svelte 5, mutations through the original
 /// object literal don't propagate to the array element.
+const tabLoadVersions = new Map<string, number>();
+const tabLoadControllers = new Map<string, AbortController>();
+
 async function loadTabContent(
   paneId: string,
   tabId: string,
   path: string,
 ): Promise<void> {
+  const loadVersion = (tabLoadVersions.get(tabId) ?? 0) + 1;
+  tabLoadVersions.set(tabId, loadVersion);
+  tabLoadControllers.get(tabId)?.abort();
+  const controller = new AbortController();
+  tabLoadControllers.set(tabId, controller);
   const live = (): FileTab | undefined => {
+    if (tabLoadVersions.get(tabId) !== loadVersion) return undefined;
     const node = layout.nodes[paneId];
     if (!node || node.kind !== "leaf") return undefined;
     const t = node.tabs.find((tab) => tab.id === tabId);
     return t && t.kind === "file" ? t : undefined;
   };
   try {
-    const r = await api.read(path);
+    const start = live();
+    if (start) {
+      start.content = "";
+      start.saved = "";
+      start.savedMtime = null;
+      start.savedMtimeNs = null;
+      start.loading = true;
+      start.loadProgress = { loadedBytes: 0, totalBytes: null };
+      start.error = null;
+      start.fileMissing = null;
+    }
+    const r = await api.readStream(path, {
+      signal: controller.signal,
+      onMeta(meta) {
+        const t = live();
+        if (!t) {
+          controller.abort();
+          return;
+        }
+        t.savedMtime = meta.mtime ?? null;
+        t.savedMtimeNs = meta.mtime_ns ?? null;
+        t.repoRoot = meta.repo_root ?? null;
+        t.fsWritable = meta.writable ?? true;
+        t.loadProgress = {
+          loadedBytes: 0,
+          totalBytes: meta.size ?? null,
+        };
+      },
+      onChunk(chunk, progress) {
+        const t = live();
+        if (!t) {
+          controller.abort();
+          return;
+        }
+        t.content += chunk;
+        t.loadProgress = progress;
+      },
+    });
     const t = live();
     if (t) {
       t.content = r.content;
@@ -1645,6 +1692,9 @@ async function loadTabContent(
       t.fsWritable = r.writable ?? true;
     }
   } catch (e) {
+    if (controller.signal.aborted && tabLoadVersions.get(tabId) !== loadVersion) {
+      return;
+    }
     const t = live();
     if (t) {
       if (isMissingFileError(e)) {
@@ -1652,11 +1702,18 @@ async function loadTabContent(
       } else {
         t.error = (e as Error).message;
         t.fileMissing = null;
+        t.saved = t.content;
       }
     }
   } finally {
-    const t = live();
-    if (t) t.loading = false;
+    if (tabLoadVersions.get(tabId) === loadVersion) {
+      tabLoadControllers.delete(tabId);
+      const t = live();
+      if (t) {
+        t.loading = false;
+        t.loadProgress = undefined;
+      }
+    }
   }
 }
 
@@ -3034,6 +3091,7 @@ export function setTabCodeBlocksCollapsed(tab: FileTab, collapsed: boolean): voi
 /// Whether a tab represents an unsaved buffer.
 export function isDirty(t: Tab): boolean {
   if (t.kind !== "file") return false;
+  if (t.loading) return false;
   return t.content !== t.saved;
 }
 
@@ -3142,6 +3200,10 @@ async function performSave(t: FileTab): Promise<void> {
 }
 
 async function performSaveOnce(t: FileTab): Promise<void> {
+  if (t.loading) {
+    t.error = "file is still loading";
+    return;
+  }
   if (isJson(t.path)) {
     const reason = validateJsonBuffer(t.content);
     if (reason !== null) {
@@ -3279,7 +3341,7 @@ export function dirtyPaths(): Set<string> {
   for (const node of Object.values(layout.nodes)) {
     if (node.kind !== "leaf") continue;
     for (const t of node.tabs) {
-      if (t.kind === "file" && t.content !== t.saved) out.add(t.path);
+      if (t.kind === "file" && !t.loading && t.content !== t.saved) out.add(t.path);
     }
   }
   return out;
@@ -4264,6 +4326,12 @@ export async function refreshTabFromDisk(tabId: string): Promise<void> {
   const found = findFileTabById(tabId);
   if (!found) return;
   if (found.tab.content !== found.tab.saved) return;
+  await loadTabContent(found.paneId, found.tab.id, found.tab.path);
+}
+
+export async function reloadTabFromDisk(tabId: string): Promise<void> {
+  const found = findFileTabById(tabId);
+  if (!found) return;
   await loadTabContent(found.paneId, found.tab.id, found.tab.path);
 }
 

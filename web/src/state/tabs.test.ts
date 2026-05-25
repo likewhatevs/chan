@@ -297,7 +297,7 @@ describe("tab close confirmation", () => {
       name: "final",
       mode: "file",
     });
-    vi.spyOn(api, "read").mockResolvedValue({
+    vi.spyOn(api, "readStream").mockResolvedValue({
       path: "notes/final.md",
       content: "# promoted\n",
       mtime: 3,
@@ -345,7 +345,7 @@ describe("tab close confirmation", () => {
       name: "final",
       mode: "directory_created",
     });
-    const read = vi.spyOn(api, "read").mockResolvedValue({
+    const read = vi.spyOn(api, "readStream").mockResolvedValue({
       path: "notes/final/draft.md",
       content: "# promoted\n",
       mtime: 3,
@@ -359,7 +359,7 @@ describe("tab close confirmation", () => {
     resolveDraftClose("save");
     await save;
 
-    expect(read).toHaveBeenCalledWith("notes/final/draft.md");
+    expect(read.mock.calls[0][0]).toBe("notes/final/draft.md");
     const live = activePane().tabs[0];
     if (live?.kind !== "file") throw new Error("expected file tab");
     expect(live.path).toBe("notes/final/draft.md");
@@ -2350,8 +2350,8 @@ describe("tab labels", () => {
 describe("file tab loading", () => {
   test("focuses a loading tab before the file fetch resolves", async () => {
     resetLayout([]);
-    let resolveRead: (value: Awaited<ReturnType<typeof api.read>>) => void = () => {};
-    vi.spyOn(api, "read").mockReturnValue(
+    let resolveRead: (value: Awaited<ReturnType<typeof api.readStream>>) => void = () => {};
+    vi.spyOn(api, "readStream").mockReturnValue(
       new Promise((resolve) => {
         resolveRead = resolve;
       }),
@@ -2380,9 +2380,53 @@ describe("file tab loading", () => {
     expect(tab.error).toBeNull();
   });
 
+  test("accumulates streamed chunks while keeping the tab loading", async () => {
+    resetLayout([]);
+    let finish: () => void = () => {};
+    vi.spyOn(api, "readStream").mockImplementation(async (_path, opts) => {
+      opts?.onMeta?.({
+        path: "notes/slow.md",
+        mtime: 10,
+        mtime_ns: "10",
+        writable: true,
+        size: 9,
+      });
+      opts?.onChunk?.("# part", { loadedBytes: 6, totalBytes: 9 });
+      await new Promise<void>((resolve) => {
+        finish = resolve;
+      });
+      opts?.onChunk?.("ial", { loadedBytes: 9, totalBytes: 9 });
+      return {
+        path: "notes/slow.md",
+        content: "# partial",
+        mtime: 10,
+        mtime_ns: "10",
+        writable: true,
+      };
+    });
+
+    const opened = openInPane(activePane().id, "notes/slow.md");
+    const pane = activePane();
+    const [tab] = pane.tabs;
+    expect(tab?.kind).toBe("file");
+    if (tab?.kind !== "file") return;
+
+    await vi.waitFor(() => expect(tab.content).toBe("# part"));
+    expect(tab.loading).toBe(true);
+    expect(tab.loadProgress).toEqual({ loadedBytes: 6, totalBytes: 9 });
+
+    finish();
+    await opened;
+    expect(tab.loading).toBe(false);
+    expect(tab.content).toBe("# partial");
+    expect(tab.saved).toBe("# partial");
+    expect(tab.savedMtimeNs).toBe("10");
+    expect(tab.loadProgress).toBeUndefined();
+  });
+
   test("keeps load failures inside the destination tab", async () => {
     resetLayout([]);
-    vi.spyOn(api, "read").mockRejectedValue(new Error("read failed"));
+    vi.spyOn(api, "readStream").mockRejectedValue(new Error("read failed"));
 
     await openInPane(activePane().id, "notes/bad.md");
     const pane = activePane();
@@ -2398,7 +2442,7 @@ describe("file tab loading", () => {
 
   test("classifies missing files as a recovery state", async () => {
     resetLayout([]);
-    vi.spyOn(api, "read").mockRejectedValue(
+    vi.spyOn(api, "readStream").mockRejectedValue(
       new Error("io error: No such file or directory (os error 2)"),
     );
 
@@ -2429,7 +2473,7 @@ describe("file tab loading", () => {
       fileMissing: { path: "notes/old.md", fragment: "old content" },
     });
     resetLayout([tab]);
-    vi.spyOn(api, "read").mockResolvedValue({
+    vi.spyOn(api, "readStream").mockResolvedValue({
       path: "notes/new.md",
       content: "new content",
       mtime: 22,
@@ -2492,6 +2536,25 @@ describe("terminal tab naming", () => {
 });
 
 describe("autosave", () => {
+  test("does not save partial content while a stream is loading", async () => {
+    vi.useFakeTimers();
+    const tab = fileTab({
+      content: "# partial",
+      saved: "",
+      loading: true,
+    });
+    const pane = resetLayout([tab]);
+    const write = vi.spyOn(api, "write").mockResolvedValue({
+      mtime: 2,
+      mtime_ns: "2000000002",
+    });
+
+    scheduleAutosave(pane.id, tab.id);
+    await vi.advanceTimersByTimeAsync(800);
+
+    expect(write).not.toHaveBeenCalled();
+  });
+
   test("strips trailing whitespace on save when the preference is enabled", async () => {
     editorToolsPrefs.stripTrailingWhitespaceOnSave = true;
     const tab = fileTab({

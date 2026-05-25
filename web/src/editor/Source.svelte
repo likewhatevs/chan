@@ -4,7 +4,7 @@
   // extension (markdown for .md/.txt; lazy-loaded language packs for
   // .py / .rs / .json / ... via `editor/markdown/code_languages.ts`).
   //
-  // Two compartments keep us from rebuilding the editor across toggles:
+  // Compartments keep us from rebuilding the editor across toggles:
   //   - theme: app theme flips (light <-> dark).
   //   - language: syntax-highlight toggle + per-tab path change.
 
@@ -48,6 +48,7 @@
   let {
     value = $bindable(""),
     path = "",
+    readonly = false,
     syntaxHighlight = true,
     highlightTrailingWhitespace = false,
     initialCaret = null,
@@ -59,6 +60,7 @@
     /// Drive-relative file path. Drives the language pack picked for
     /// syntax highlighting. Empty / pathless callers get plain text.
     path?: string;
+    readonly?: boolean;
     /// User-toggled syntax highlighting. When false the language
     /// compartment reconfigures to an empty extension array so CM
     /// renders plain text. Default true.
@@ -102,6 +104,8 @@
   // an async reconfigure after mount.
   const language = new Compartment();
   const trailingWhitespace = new Compartment();
+  const editableCompartment = new Compartment();
+  const readOnlyCompartment = new Compartment();
   // Track the language we last asked for; used to dedupe redundant
   // reconfigures when reactive deps re-fire without an actual change
   // (Svelte runs $effect on any prop touch).
@@ -185,6 +189,8 @@
         keymap.of([indentWithTab, ...defaultKeymap, ...historyKeymap]),
         language.of(initialLang),
         trailingWhitespace.of(highlightTrailingWhitespace ? trailingWhitespaceHighlight() : []),
+        editableCompartment.of(EditorView.editable.of(!readonly)),
+        readOnlyCompartment.of(EditorState.readOnly.of(readonly)),
         theme.extension,
         EditorView.lineWrapping,
         // `fullstack-a-89`: optional empty-state placeholder.
@@ -326,6 +332,16 @@
       effects: trailingWhitespace.reconfigure(
         highlightTrailingWhitespace ? trailingWhitespaceHighlight() : [],
       ),
+    });
+  });
+
+  $effect(() => {
+    if (!view) return;
+    view.dispatch({
+      effects: [
+        editableCompartment.reconfigure(EditorView.editable.of(!readonly)),
+        readOnlyCompartment.reconfigure(EditorState.readOnly.of(readonly)),
+      ],
     });
   });
 </script>

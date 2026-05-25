@@ -55,6 +55,7 @@ axum = { workspace = true }
 base64 = { workspace = true }
 chrono = { workspace = true }
 dirs = { workspace = true }
+futures = { workspace = true }
 notify = { workspace = true }
 open = "5"
 percent-encoding = "2"

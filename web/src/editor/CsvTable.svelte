@@ -17,6 +17,7 @@
   let {
     value = $bindable(""),
     delimiter = ",",
+    readonly = false,
   }: {
     /// The tab's content buffer. Bidirectional: cell commits
     /// re-serialize and write back here, which the host (FileTab)
@@ -25,6 +26,7 @@
     /// Field separator. "," for .csv, "\t" for .tsv. The host
     /// derives this from the file extension via `csvDelimiter`.
     delimiter?: string;
+    readonly?: boolean;
   } = $props();
 
   // Local model. We parse `value` once at mount + whenever the
@@ -66,11 +68,17 @@
   });
 
   function startEdit(r: number, c: number, current: string): void {
+    if (readonly) return;
     editing = { row: r, col: c };
     draft = current;
   }
 
   function commitEdit(): void {
+    if (readonly) {
+      editing = null;
+      draft = "";
+      return;
+    }
     if (!editing) return;
     const { row, col } = editing;
     // Pad short rows up to the column index so an edit into an

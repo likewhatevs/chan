@@ -191,6 +191,15 @@ Rich Prompt:
 
 Server and editor consistency:
 
+- Add streaming or progressive results for relationship-heavy inspector and
+  graph surfaces. New report from 2026-05-25: opening `CHANGELOG.md` in a
+  repo drive showed `GET /api/report/file?path=CHANGELOG.md` timing out after
+  10 seconds while the inspector waited on tags, dates, links, backlinks, and
+  references. Treat this like large editor opens: show partial relationship
+  data as it arrives, avoid all-or-nothing request buffers, and keep graph
+  nodes/edges appearing progressively instead of waiting for the full graph.
+  Keep all reads behind `chan-drive` and run blocking report/graph work off
+  the Tokio runtime.
 - Run low-file-descriptor stress under `ulimit -n 256` with many terminals
   and active indexing. Done on 2026-05-25 with an isolated `/tmp`
   config/home: `chan serve` stayed healthy at a 256 fd soft limit,

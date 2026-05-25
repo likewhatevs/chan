@@ -168,7 +168,8 @@ Two gates guard the text-class APIs:
     Covers markdown-class `.md` / `.txt` plus the wider
     `FileClass::Text` set (source code, configs, shell scripts,
     well-known no-extension files). Used by `read_text` /
-    `read_text_with_stat` / `write_text` / `write_text_if_unchanged`.
+    `read_text_with_stat` / `read_text_with_stat_chunked` /
+    `write_text` / `write_text_if_unchanged`.
   - **Indexer gate** (`fs_ops::is_indexable_text`): true only
     for `FileClass::EditableText` (markdown-class). Used by the
     indexer, graph rebuild, link-rewrite on rename, and reindex-
@@ -207,7 +208,9 @@ Behaviour by class:
     embeddings are enabled). Parsed for graph edges, headings,
     tags, mentions. The CAS pair `read_text_with_stat` +
     `write_text_if_unchanged` is available for editor-style
-    optimistic concurrency.
+    optimistic concurrency. Large editor opens can use
+    `read_text_with_stat_chunked` to receive the same open-handle
+    stat before the UTF-8 body chunks.
   - **Text**: full read / write through `read_text` and
     `write_text` (same UTF-8 gate as EditableText). **Not**
     indexed and **not** a graph node: the indexer parses
@@ -279,6 +282,16 @@ LLM-tool calls where last-write-wins is the intent. Residual
 race: between the mtime check and the atomic rename a foreign
 write can land; the watcher event for the foreign change fires
 on the next dispatch and the editor re-prompts.
+
+`read_text_with_stat_chunked` is the streaming form for large
+editor opens. It applies the same editable-text gate, sandbox
+resolution, regular-file refusal, symlink refusal, and open-handle
+stat semantics as `read_text_with_stat`. Events are ordered as
+`Meta(&FileStat)`, zero or more UTF-8 `Chunk(&str)` events, then
+`Done`. UTF-8 code points are never split across chunk events; an
+invalid byte sequence fails the read. If the callback returns
+false, the read stops early with `Ok(())` so transports can stop
+work after client disconnect.
 
 `remove` is a soft-delete: it moves the entry into the per-drive
 Trash. Recursive directory removal is allowed because the
@@ -694,6 +707,8 @@ Drive::read(rel: &str) -> Result<Vec<u8>>
 Drive::read_text(rel: &str) -> Result<String>                  // gated
 Drive::read_text_with_stat(rel: &str)                          // gated
     -> Result<(String, FileStat)>
+Drive::read_text_with_stat_chunked(rel, chunk_size, callback)  // gated
+    -> Result<()>
 Drive::write_text(rel: &str, content: &str) -> Result<()>      // gated
 Drive::write_text_if_unchanged(rel: &str,                      // gated, CAS
     expected_mtime: Option<i64>,

@@ -168,6 +168,112 @@ function numericHeader(res: Response, name: string): number | null {
   return Number.isFinite(parsed) ? parsed : null;
 }
 
+type FileStreamMeta = Omit<FileResponse, "content"> & { size?: number };
+
+export type FileReadStreamProgress = {
+  loadedBytes: number;
+  totalBytes: number | null;
+};
+
+type FileReadStreamOptions = {
+  signal?: AbortSignal;
+  onMeta?: (meta: FileStreamMeta) => void;
+  onChunk?: (chunk: string, progress: FileReadStreamProgress) => void;
+};
+
+function recordValue(value: unknown): Record<string, unknown> {
+  if (value && typeof value === "object") return value as Record<string, unknown>;
+  throw new Error("invalid file stream event");
+}
+
+async function readFileStream(
+  path: string,
+  opts: FileReadStreamOptions = {},
+): Promise<FileResponse> {
+  const headers = directAuthHeaders();
+  const res = await fetch(apiPath(`/api/files/${encPath(path)}?stream=1`), {
+    method: "GET",
+    headers,
+    signal: opts.signal,
+  });
+  if (!res.ok) {
+    await responseTextError(res);
+  }
+  if (!res.body) {
+    throw new Error("streaming response has no body");
+  }
+
+  const reader = res.body.getReader();
+  const decoder = new TextDecoder();
+  let buffered = "";
+  let content = "";
+  let meta: FileStreamMeta = { path, mtime: null, mtime_ns: null, writable: true };
+  let done = false;
+  let loadedBytes = 0;
+
+  const processLine = (line: string): void => {
+    const trimmed = line.trim();
+    if (!trimmed) return;
+    const event = recordValue(JSON.parse(trimmed));
+    const type = event.type;
+    if (type === "meta") {
+      const nextMeta: FileStreamMeta = {
+        path: typeof event.path === "string" ? event.path : path,
+        mtime: typeof event.mtime === "number" ? event.mtime : null,
+        mtime_ns: typeof event.mtime_ns === "string" ? event.mtime_ns : null,
+        path_class: event.path_class as FileResponse["path_class"],
+        writable: typeof event.writable === "boolean" ? event.writable : true,
+        size: typeof event.size === "number" ? event.size : undefined,
+      };
+      meta = nextMeta;
+      opts.onMeta?.(nextMeta);
+      return;
+    }
+    if (type === "chunk") {
+      const chunk = typeof event.content === "string" ? event.content : "";
+      content += chunk;
+      loadedBytes +=
+        typeof event.bytes === "number" ? event.bytes : chunk.length;
+      opts.onChunk?.(chunk, {
+        loadedBytes,
+        totalBytes: meta.size ?? null,
+      });
+      return;
+    }
+    if (type === "done") {
+      done = true;
+      return;
+    }
+    if (type === "error") {
+      throw new ApiError(0, String(event.error ?? "file stream failed"));
+    }
+    throw new Error(`unknown file stream event: ${String(type)}`);
+  };
+
+  for (;;) {
+    const { done: streamDone, value } = await reader.read();
+    if (streamDone) break;
+    buffered += decoder.decode(value, { stream: true });
+    for (;;) {
+      const nl = buffered.indexOf("\n");
+      if (nl < 0) break;
+      processLine(buffered.slice(0, nl));
+      buffered = buffered.slice(nl + 1);
+    }
+  }
+  buffered += decoder.decode();
+  if (buffered.trim()) processLine(buffered);
+  if (!done) throw new Error("file stream ended before done");
+  return {
+    path: meta.path,
+    content,
+    mtime: meta.mtime ?? null,
+    mtime_ns: meta.mtime_ns ?? null,
+    path_class: meta.path_class,
+    writable: meta.writable ?? true,
+  };
+}
+
 export const api = {
   drive: () => req<DriveInfo>("GET", "/api/drive"),
   /// Read the global per-user config (registry of known drives,
@@ -334,6 +440,7 @@ export const api = {
     return req<TreeEntry[]>("GET", `/api/files${suffix}`);
   },
   read: (path: string) => req<FileResponse>("GET", `/api/files/${encPath(path)}`),
+  readStream: readFileStream,
   /// Persist `content` at `path`. When `expectedMtimeNs` is provided,
   /// the server CAS-writes via Drive::write_text_if_unchanged and
   /// rejects with 409 + { current_mtime_ns } if the on-disk mtime

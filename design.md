@@ -136,7 +136,10 @@ routes/
   build_info.rs    GET /api/build-info
   contacts.rs      POST /api/contacts/import (multipart CSV)
   drive.rs         GET/PATCH /api/drive, GET /api/cloud-drives
-  files.rs         /api/files, /api/files/*path, /api/move
+  files.rs         /api/files, /api/files/*path, /api/move.
+                   Editable file opens support JSON reads and
+                   NDJSON streaming reads through
+                   `GET /api/files/*path?stream=1`.
   fs_graph.rs      GET /api/fs-graph (filesystem-shaped scopes)
   graph.rs         /api/links, /api/graph, /api/graph/languages,
                    /api/backlinks/*path, /api/link-targets,

@@ -67,6 +67,7 @@
     flipHybrid,
     openFind,
     reopenClosedTab,
+    reloadTabFromDisk,
     setMode,
     setTabCaret,
     setTabInspectorOpen,
@@ -106,7 +107,6 @@
   } from "../state/tabs.svelte";
   import { terminalFromHereTarget } from "../terminal/fromHere";
   import { csvDelimiter, isCsv, isJson } from "../state/fileTypes";
-  import { api } from "../api/client";
   import {
     PAGE_WIDTH_MAX_PCT,
     PAGE_WIDTH_MIN_PCT,
@@ -233,7 +233,7 @@
     // branch + clear normally.
     const content = tab.content;
     const saved = tab.saved;
-    if (saved === undefined) return;
+    if (tab.loading || saved === undefined) return;
     if (content === saved) {
       if (recoveredBuffer !== null) {
         // Banner is up — leave the buffer in place so the
@@ -278,7 +278,12 @@
   /// and overrides the lamp so the user can't try to write.
   /// Per-tab so multi-pane layouts can mix read/write without
   /// a global signal fighting between panes.
-  const readOnly = $derived(tab.readMode || !tab.fsWritable);
+  const readOnly = $derived(tab.loading || tab.readMode || !tab.fsWritable);
+  const loadingText = $derived(
+    tab.loadProgress?.totalBytes
+      ? `loading ${formatBytes(tab.loadProgress.loadedBytes)} / ${formatBytes(tab.loadProgress.totalBytes)}`
+      : "loading...",
+  );
 
   /// 0-indexed source line under the caret. Drives the outline's
   /// active-heading marker (Google-Docs-style "you are here" bar
@@ -502,6 +507,12 @@
     closeTabMenu();
   }
 
+  function formatBytes(n: number): string {
+    if (n < 1024) return `${n} B`;
+    if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`;
+    return `${(n / (1024 * 1024)).toFixed(1)} MB`;
+  }
+
   function doToggleSyntaxHighlight(): void {
     setTabSyntaxHighlight(tab, !tab.syntaxHighlight);
     closeTabMenu();
@@ -556,15 +567,7 @@
 
   async function doReload(): Promise<void> {
     closeTabMenu();
-    try {
-      const res = await api.read(tab.path);
-      tab.content = res.content;
-      tab.saved = res.content;
-      tab.savedMtime = res.mtime;
-      tab.savedMtimeNs = res.mtime_ns ?? null;
-    } catch (err) {
-      console.error("[chan] reload failed", err);
-    }
+    await reloadTabFromDisk(tab.id);
   }
 
   /// `fullstack-a-67f`: dropped `doReloadWindow` + `doOpenInspector`
@@ -1090,15 +1093,18 @@
     <div class="editor-toolbar missing-toolbar">
       <span>File moved or deleted</span>
     </div>
+  {:else if tab.loading}
+    <div class="editor-toolbar loading-toolbar">
+      <span>{loadingText}</span>
+      <button type="button" onclick={doReload}>Reload</button>
+    </div>
   {:else if tab.error}
     <div class="editor-toolbar">
       <span class="error">{tab.error}</span>
     </div>
   {/if}
   {#key tab.id}
-    {#if tab.loading}
-      <div class="placeholder">loading…</div>
-    {:else if tab.fileMissing}
+    {#if tab.fileMissing}
       <div class="missing-file-state">
         <div class="missing-title">File moved or deleted</div>
         <div class="missing-path">{tab.fileMissing.path}</div>
@@ -1243,6 +1249,7 @@
           <CsvTable
             bind:value={tab.content}
             delimiter={csvDelimiter(tab.path)}
+            readonly={readOnly}
           />
         </div>
       {:else}
@@ -1258,6 +1265,7 @@
             bind:this={sourceRef}
             bind:value={tab.content}
             path={tab.path}
+            readonly={readOnly}
             syntaxHighlight={tab.syntaxHighlight}
             highlightTrailingWhitespace={tab.highlightTrailingWhitespace}
             initialCaret={tab.caret ?? null}
@@ -1535,6 +1543,22 @@
   .missing-toolbar {
     color: var(--text-primary);
     font-weight: 600;
+  }
+  .loading-toolbar {
+    color: var(--muted);
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.75rem;
+  }
+  .loading-toolbar button {
+    border: 1px solid var(--border);
+    background: transparent;
+    color: var(--text-primary);
+    border-radius: 6px;
+    padding: 0.2rem 0.6rem;
+    font: inherit;
+    cursor: pointer;
   }
   /* `fullstack-a-67f`: the `-a-35` `.rename-band` styles
      dropped along with the full-width inline rename band.

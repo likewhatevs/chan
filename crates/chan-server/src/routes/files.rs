@@ -1,13 +1,16 @@
 //! Per-file CRUD: list, read (text or binary), write (with optional
 //! CAS), create (file or dir), delete, move.
 
-use std::{io::Cursor, sync::Arc};
+use std::{convert::Infallible, io::Cursor, sync::Arc};
 
+use axum::body::{Body, Bytes};
 use axum::extract::{Multipart, Path as AxumPath, Query, State};
 use axum::http::{header, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::Json;
+use futures::{stream, StreamExt};
 use serde::{Deserialize, Serialize};
+use tokio::sync::mpsc;
 
 use crate::error::{err, err_from, err_state};
 use crate::state::AppState;
@@ -200,6 +203,34 @@ struct FileResponse {
     writable: bool,
 }
 
+#[derive(Serialize)]
+#[serde(tag = "type", rename_all = "lowercase")]
+enum FileStreamEvent<'a> {
+    Meta {
+        path: &'a str,
+        size: u64,
+        mtime: Option<i64>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        mtime_ns: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        path_class: Option<chan_drive::PathClass>,
+        writable: bool,
+    },
+    Chunk {
+        content: &'a str,
+        bytes: usize,
+    },
+    Done,
+    Error {
+        error: String,
+    },
+}
+
+enum FileStreamMessage {
+    Data(Bytes),
+    Error(chan_drive::ChanError),
+}
+
 fn path_class_for_wire(drive: &chan_drive::Drive, rel: &str) -> Option<chan_drive::PathClass> {
     match chan_drive::fs_ops::classify_path(drive.root(), rel) {
         Ok(class) => Some(class),
@@ -228,10 +259,9 @@ fn fs_writable(drive: &chan_drive::Drive, rel: &str) -> bool {
 
 fn read_file_sync(drive: &chan_drive::Drive, path: &str) -> chan_drive::Result<ReadFileResult> {
     if chan_drive::fs_ops::is_editable_text(path) {
-        let content = drive.read_text(path)?;
-        let stat = drive.stat(path).ok();
-        let mtime = stat.as_ref().and_then(|s| s.mtime);
-        let mtime_ns = stat.as_ref().and_then(|s| s.mtime_ns);
+        let (content, stat) = drive.read_text_with_stat(path)?;
+        let mtime = stat.mtime;
+        let mtime_ns = stat.mtime_ns;
         let writable = fs_writable(drive, path);
         return Ok(ReadFileResult::Text {
             content,
@@ -242,6 +272,65 @@ fn read_file_sync(drive: &chan_drive::Drive, path: &str) -> chan_drive::Result<R
         });
     }
     drive.read(path).map(ReadFileResult::Binary)
+}
+
+fn ndjson_bytes(event: &FileStreamEvent<'_>) -> Result<Bytes, serde_json::Error> {
+    let mut line = serde_json::to_vec(event)?;
+    line.push(b'\n');
+    Ok(Bytes::from(line))
+}
+
+fn ndjson_error_bytes(error: String) -> Bytes {
+    match ndjson_bytes(&FileStreamEvent::Error { error }) {
+        Ok(bytes) => bytes,
+        Err(e) => Bytes::from(format!(
+            "{{\"type\":\"error\",\"error\":\"failed to encode stream error: {e}\"}}\n"
+        )),
+    }
+}
+
+fn stream_read_file_sync<F>(
+    drive: &chan_drive::Drive,
+    path: &str,
+    mut emit: F,
+) -> chan_drive::Result<()>
+where
+    F: FnMut(Bytes) -> bool,
+{
+    let mut encode_error = None;
+    let result =
+        drive.read_text_with_stat_chunked(path, chan_drive::TEXT_READ_CHUNK_SIZE, |event| {
+            let event = match event {
+                chan_drive::TextReadEvent::Meta(stat) => FileStreamEvent::Meta {
+                    path,
+                    size: stat.size,
+                    mtime: stat.mtime,
+                    mtime_ns: stat.mtime_ns.map(|ns| ns.to_string()),
+                    path_class: path_class_for_wire(drive, path),
+                    writable: fs_writable(drive, path),
+                },
+                chan_drive::TextReadEvent::Chunk(content) => FileStreamEvent::Chunk {
+                    content,
+                    bytes: content.len(),
+                },
+                chan_drive::TextReadEvent::Done => FileStreamEvent::Done,
+            };
+            match ndjson_bytes(&event) {
+                Ok(bytes) => emit(bytes),
+                Err(e) => {
+                    encode_error = Some(chan_drive::ChanError::Io(format!(
+                        "failed to encode file stream event: {e}"
+                    )));
+                    false
+                }
+            }
+        });
+    result?;
+    if let Some(e) = encode_error {
+        Err(e)
+    } else {
+        Ok(())
+    }
 }
 
 enum DownloadPayload {
@@ -359,7 +448,16 @@ fn append_archive_file(
 #[derive(Default, Deserialize)]
 pub struct ReadFileQuery {
     #[serde(default)]
-    download: bool,
+    download: Option<String>,
+    #[serde(default)]
+    stream: Option<String>,
+}
+
+fn query_flag(value: &Option<String>) -> bool {
+    matches!(
+        value.as_deref(),
+        Some("1" | "true" | "TRUE" | "yes" | "YES" | "on" | "ON")
+    )
 }
 
 pub async fn api_read_file(
@@ -373,7 +471,7 @@ pub async fn api_read_file(
     // raw bytes with a sniffed Content-Type so `<img src=...>`
     // pointing at /api/files/<path> resolves correctly.
     let drive = state.drive().clone();
-    if query.download {
+    if query_flag(&query.download) {
         let path_for_download = path.clone();
         let result =
             tokio::task::spawn_blocking(move || download_path_sync(&drive, &path_for_download))
@@ -406,6 +504,10 @@ pub async fn api_read_file(
         };
     }
 
+    if query_flag(&query.stream) {
+        return stream_read_file_response(drive, path).await;
+    }
+
     let drive = state.drive().clone();
     let path_for_read = path.clone();
     let result = tokio::task::spawn_blocking(move || read_file_sync(&drive, &path_for_read)).await;
@@ -432,6 +534,42 @@ pub async fn api_read_file(
         Ok(Err(e)) => err_from(&e),
         Err(join) => err(StatusCode::INTERNAL_SERVER_ERROR, join.to_string()),
     }
+}
+
+async fn stream_read_file_response(drive: Arc<chan_drive::Drive>, path: String) -> Response {
+    let (tx, mut rx) = mpsc::channel::<FileStreamMessage>(8);
+    let path_for_read = path.clone();
+    tokio::task::spawn_blocking(move || {
+        let result = stream_read_file_sync(&drive, &path_for_read, |bytes| {
+            tx.blocking_send(FileStreamMessage::Data(bytes)).is_ok()
+        });
+        if let Err(e) = result {
+            let _ = tx.blocking_send(FileStreamMessage::Error(e));
+        }
+    });
+
+    let first = match rx.recv().await {
+        Some(FileStreamMessage::Data(bytes)) => bytes,
+        Some(FileStreamMessage::Error(e)) => return err_from(&e),
+        None => {
+            return err(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "file stream ended before metadata".into(),
+            )
+        }
+    };
+    let rest = stream::unfold(rx, |mut rx| async {
+        rx.recv().await.map(|message| {
+            let bytes = match message {
+                FileStreamMessage::Data(bytes) => bytes,
+                FileStreamMessage::Error(e) => ndjson_error_bytes(e.to_string()),
+            };
+            (Ok::<Bytes, Infallible>(bytes), rx)
+        })
+    });
+    let body =
+        Body::from_stream(stream::once(async move { Ok::<Bytes, Infallible>(first) }).chain(rest));
+    ([(header::CONTENT_TYPE, "application/x-ndjson")], body).into_response()
 }
 
 #[derive(Deserialize)]
@@ -957,6 +1095,61 @@ mod write_tests {
             ReadFileResult::Binary(bytes) => assert_eq!(bytes, vec![0, 1, 2, 3]),
             ReadFileResult::Text { .. } => panic!("expected binary result"),
         }
+    }
+
+    #[test]
+    fn stream_read_file_sync_emits_meta_chunks_done_in_order() {
+        let cfg = tempfile::TempDir::new().unwrap();
+        let root = tempfile::TempDir::new().unwrap();
+        let lib = chan_drive::Library::open_at(cfg.path().join("config.toml")).unwrap();
+        lib.register_drive(root.path()).unwrap();
+        let drive = lib.open_drive(root.path()).unwrap();
+        drive.write_text("note.md", "hello").unwrap();
+        let mut lines = Vec::new();
+
+        stream_read_file_sync(&drive, "note.md", |bytes| {
+            lines.push(String::from_utf8(bytes.to_vec()).unwrap());
+            true
+        })
+        .unwrap();
+
+        let events: Vec<serde_json::Value> = lines
+            .iter()
+            .map(|line| serde_json::from_str(line).unwrap())
+            .collect();
+        assert_eq!(events[0]["type"], "meta");
+        assert_eq!(events[0]["path"], "note.md");
+        assert_eq!(events[0]["size"], 5);
+        assert_eq!(events[1]["type"], "chunk");
+        assert_eq!(events[1]["content"], "hello");
+        assert_eq!(events[2]["type"], "done");
+    }
+
+    #[test]
+    fn stream_read_file_sync_stops_when_emit_returns_false() {
+        let cfg = tempfile::TempDir::new().unwrap();
+        let root = tempfile::TempDir::new().unwrap();
+        let lib = chan_drive::Library::open_at(cfg.path().join("config.toml")).unwrap();
+        lib.register_drive(root.path()).unwrap();
+        let drive = lib.open_drive(root.path()).unwrap();
+        drive.write_text("note.md", "hello").unwrap();
+        let mut lines = 0usize;
+
+        stream_read_file_sync(&drive, "note.md", |_| {
+            lines += 1;
+            false
+        })
+        .unwrap();
+
+        assert_eq!(lines, 1);
+    }
+
+    #[test]
+    fn query_flag_accepts_stream_one() {
+        assert!(query_flag(&Some("1".to_string())));
+        assert!(query_flag(&Some("true".to_string())));
+        assert!(!query_flag(&None));
+        assert!(!query_flag(&Some("0".to_string())));
     }
 
     #[test]

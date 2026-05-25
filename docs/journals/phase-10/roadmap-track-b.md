@@ -81,6 +81,16 @@ Next wave:
 - Run `npm run verify:release` without `--allow-missing-manual` and without
   `--skip-latest-download-heads` after the next `chan-v*` tag includes the
   manual bundle and the repo is public.
+- After Track A lands editor streaming opens, update `docs/manual/` and the
+  generated public manual for large editable files:
+  - partial read-only content appears while the file is still loading;
+  - editing is enabled only after the full file and CAS metadata arrive;
+  - Reload starts a fresh read when a file is still loading;
+  - slow-read bug reports should include path, size, drive type, and whether
+    inspector/report/graph panes were also loading;
+  - include Track C inspector Upload/Download buttons once that work lands.
+- Run `cd web-marketing && npm run check` after those manual edits and keep
+  desktop-seeded manual content identical to the public manual source.
 
 ## Objectives
 

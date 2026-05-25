@@ -1,9 +1,10 @@
 // @vitest-environment jsdom
 
-import { afterEach, describe, expect, test } from "vitest";
-import { sessionPath, sessionWindowId } from "./client";
+import { afterEach, describe, expect, test, vi } from "vitest";
+import { api, sessionPath, sessionWindowId } from "./client";
 
 afterEach(() => {
+  vi.restoreAllMocks();
   window.history.replaceState(null, "", "/");
   window.sessionStorage.clear();
 });
@@ -40,5 +41,61 @@ describe("sessionWindowId", () => {
 
     expect(sessionWindowId()).toBe("tunnel a/drive 1");
     expect(sessionPath()).toBe("/api/session?w=tunnel%20a%2Fdrive%201");
+  });
+});
+
+describe("file read streaming", () => {
+  test("parses meta, chunks, progress, and done from NDJSON", async () => {
+    const body = new ReadableStream<Uint8Array>({
+      start(controller) {
+        const enc = new TextEncoder();
+        controller.enqueue(enc.encode(
+          [
+            '{"type":"meta","path":"CHANGELOG.md","size":10,"mtime":1,"mtime_ns":"100","writable":true}',
+            '{"type":"chunk","content":"hello","bytes":5}',
+            '{"type":"chunk","content":"world","bytes":5}',
+            '{"type":"done"}',
+            "",
+          ].join("\n"),
+        ));
+        controller.close();
+      },
+    });
+    const fetchMock = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValue(new Response(body, { status: 200 }));
+    const chunks: Array<{ chunk: string; loaded: number; total: number | null }> = [];
+
+    const file = await api.readStream("CHANGELOG.md", {
+      onChunk(chunk, progress) {
+        chunks.push({
+          chunk,
+          loaded: progress.loadedBytes,
+          total: progress.totalBytes,
+        });
+      },
+    });
+
+    expect(fetchMock.mock.calls[0][0]).toContain("/api/files/CHANGELOG.md?stream=1");
+    expect(file.content).toBe("helloworld");
+    expect(file.mtime_ns).toBe("100");
+    expect(chunks).toEqual([
+      { chunk: "hello", loaded: 5, total: 10 },
+      { chunk: "world", loaded: 10, total: 10 },
+    ]);
+  });
+
+  test("turns stream error events into ApiError failures", async () => {
+    const body = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(new TextEncoder().encode(
+          '{"type":"meta","path":"a.md","size":1,"mtime":1}\n{"type":"error","error":"bad read"}\n',
+        ));
+        controller.close();
+      },
+    });
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(body, { status: 200 }));
+
+    await expect(api.readStream("a.md")).rejects.toThrow("bad read");
   });
 });

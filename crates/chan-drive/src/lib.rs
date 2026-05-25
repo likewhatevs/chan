@@ -58,8 +58,8 @@ pub use contacts::{
 pub use drafts::{DraftInspection, DraftPromoteMode, DraftPromoteReport, DraftRef};
 pub use drive::ReconcileReport;
 pub use drive::{
-    DirEntry, Drive, FileStat, RenameOutcome, ResolvedLink, SearchOpts, TreeEntry,
-    BYTES_WRITE_LIMIT, TEXT_WRITE_LIMIT,
+    DirEntry, Drive, FileStat, RenameOutcome, ResolvedLink, SearchOpts, TextReadEvent, TreeEntry,
+    BYTES_WRITE_LIMIT, TEXT_READ_CHUNK_SIZE, TEXT_WRITE_LIMIT,
 };
 pub use error::{ChanError, Result};
 pub use fs_ops::{

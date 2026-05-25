@@ -42,6 +42,10 @@ pub const TEXT_WRITE_LIMIT: u64 = 2 * 1024 * 1024;
 /// case appears.
 pub const BYTES_WRITE_LIMIT: u64 = 50 * 1024 * 1024;
 
+/// Chunk size for streaming editable text reads. Large enough to amortize
+/// syscalls, small enough that the editor can paint early on large files.
+pub const TEXT_READ_CHUNK_SIZE: usize = 64 * 1024;
+
 /// File written to `paths.graph_dir` before `rebuild_graph` starts
 /// and removed after `Index::build_all` commits. Its presence at
 /// `Drive::open` time means a previous reindex did not run to
@@ -130,6 +134,18 @@ pub struct FileStat {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub mtime_ns: Option<i64>,
     pub is_dir: bool,
+}
+
+/// Ordered events produced by `Drive::read_text_with_stat_chunked`.
+pub enum TextReadEvent<'a> {
+    /// Metadata from the open file handle. This is emitted before
+    /// chunks so editor callers can keep the CAS token tied to the
+    /// bytes being streamed.
+    Meta(&'a FileStat),
+    /// A valid UTF-8 chunk from the file.
+    Chunk(&'a str),
+    /// The file was read to EOF.
+    Done,
 }
 
 /// A wiki-link resolved to an actual drive file. `path` is the
@@ -662,6 +678,60 @@ impl Drive {
             is_dir: false,
         };
         Ok((content, stat))
+    }
+
+    /// Stream UTF-8 text in chunks and include the open-handle stat.
+    /// Returns early with `Ok(())` when the callback returns false,
+    /// which lets HTTP callers stop disk reads after the client
+    /// disconnects without treating it as a storage failure.
+    pub fn read_text_with_stat_chunked<F>(
+        &self,
+        rel: &str,
+        chunk_size: usize,
+        mut on_event: F,
+    ) -> Result<()>
+    where
+        F: FnMut(TextReadEvent<'_>) -> bool,
+    {
+        use std::io::Read;
+        if !fs_ops::is_editable_text(rel) {
+            return Err(ChanError::NotEditableText(rel.to_string()));
+        }
+        let (dir, rel_path) = self.resolve_io(rel)?;
+        ensure_regular_file_in(dir, &rel_path)?;
+        let mut f = dir
+            .open(&rel_path)
+            .map_err(|e| ChanError::Io(e.to_string()))?;
+        let meta = f.metadata()?;
+        let stat = FileStat {
+            size: meta.len(),
+            mtime: mtime_secs_cap(&meta),
+            mtime_ns: mtime_ns_cap(&meta),
+            is_dir: false,
+        };
+        if !on_event(TextReadEvent::Meta(&stat)) {
+            return Ok(());
+        }
+
+        let mut read_buf = vec![0u8; chunk_size.max(1)];
+        let mut pending = Vec::new();
+        loop {
+            let n = f.read(&mut read_buf)?;
+            if n == 0 {
+                break;
+            }
+            pending.extend_from_slice(&read_buf[..n]);
+            if !emit_valid_utf8_chunks(rel, &mut pending, &mut on_event)? {
+                return Ok(());
+            }
+        }
+        if !pending.is_empty() {
+            return Err(ChanError::Io(format!(
+                "invalid UTF-8 in editable text file: {rel}"
+            )));
+        }
+        let _ = on_event(TextReadEvent::Done);
+        Ok(())
     }
 
     /// Atomically write UTF-8 text. Editable-text gate applies.
@@ -3122,6 +3192,48 @@ fn check_size(kind: &'static str, size: usize, limit: u64, prev_size: Option<u64
     Ok(())
 }
 
+fn emit_valid_utf8_chunks<F>(rel: &str, pending: &mut Vec<u8>, on_event: &mut F) -> Result<bool>
+where
+    F: FnMut(TextReadEvent<'_>) -> bool,
+{
+    if pending.is_empty() {
+        return Ok(true);
+    }
+    match std::str::from_utf8(pending) {
+        Ok(s) => {
+            let keep_going = s.is_empty() || on_event(TextReadEvent::Chunk(s));
+            pending.clear();
+            Ok(keep_going)
+        }
+        Err(e) => {
+            if e.error_len().is_some() {
+                return Err(ChanError::Io(format!(
+                    "invalid UTF-8 in editable text file: {rel}"
+                )));
+            }
+            let valid_up_to = e.valid_up_to();
+            if valid_up_to > 0 {
+                let keep_going = {
+                    let valid = std::str::from_utf8(&pending[..valid_up_to]).map_err(|e| {
+                        ChanError::Io(format!("invalid UTF-8 in editable text file: {rel}: {e}"))
+                    })?;
+                    on_event(TextReadEvent::Chunk(valid))
+                };
+                if !keep_going {
+                    return Ok(false);
+                }
+                pending.drain(..valid_up_to);
+            }
+            if pending.len() > 4 {
+                return Err(ChanError::Io(format!(
+                    "invalid UTF-8 in editable text file: {rel}"
+                )));
+            }
+            Ok(true)
+        }
+    }
+}
+
 /// `u64` byte counts (from `Metadata::len()` / `TreeEntry.size`)
 /// projected into the `i64` column the graph uses for `size`.
 /// Saturates instead of wrapping; a real-world file will never come
@@ -5017,6 +5129,93 @@ mod tests {
         assert!(stat.mtime.is_some());
         assert!(stat.mtime_ns.is_some());
         assert!(!stat.is_dir);
+    }
+
+    #[test]
+    fn read_text_with_stat_chunked_preserves_utf8_boundaries() {
+        let (_cfg, _root, drive) = fixture();
+        drive.write_text("a.md", "aé€𐍈z").unwrap();
+        let mut saw_meta = false;
+        let mut saw_done = false;
+        let mut chunks = Vec::new();
+
+        drive
+            .read_text_with_stat_chunked("a.md", 1, |event| {
+                match event {
+                    TextReadEvent::Meta(stat) => {
+                        saw_meta = true;
+                        assert_eq!(stat.size, "aé€𐍈z".len() as u64);
+                        assert!(stat.mtime_ns.is_some());
+                    }
+                    TextReadEvent::Chunk(chunk) => chunks.push(chunk.to_string()),
+                    TextReadEvent::Done => saw_done = true,
+                }
+                true
+            })
+            .unwrap();
+
+        assert!(saw_meta);
+        assert!(saw_done);
+        assert_eq!(chunks.concat(), "aé€𐍈z");
+    }
+
+    #[test]
+    fn read_text_with_stat_chunked_rejects_invalid_utf8() {
+        let (_cfg, root, drive) = fixture();
+        std::fs::write(root.path().join("bad.md"), [b'a', 0xff]).unwrap();
+
+        let err = drive
+            .read_text_with_stat_chunked("bad.md", 1, |_| true)
+            .unwrap_err();
+
+        assert!(err.to_string().contains("invalid UTF-8"));
+    }
+
+    #[test]
+    fn read_text_with_stat_chunked_rejects_non_editable_paths() {
+        let (_cfg, root, drive) = fixture();
+        std::fs::write(root.path().join("image.bin"), [0, 1, 2, 3]).unwrap();
+
+        let err = drive
+            .read_text_with_stat_chunked("image.bin", TEXT_READ_CHUNK_SIZE, |_| true)
+            .unwrap_err();
+
+        assert!(matches!(err, ChanError::NotEditableText(_)));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn read_text_with_stat_chunked_rejects_symlink_target() {
+        use std::os::unix::fs::symlink;
+        let (_cfg, root, drive) = fixture();
+        std::fs::write(root.path().join("real.md"), "hi").unwrap();
+        symlink("real.md", root.path().join("alias.md")).unwrap();
+
+        let err = drive
+            .read_text_with_stat_chunked("alias.md", TEXT_READ_CHUNK_SIZE, |_| true)
+            .unwrap_err();
+
+        assert!(matches!(err, ChanError::SpecialFile { .. }));
+    }
+
+    #[test]
+    fn read_text_with_stat_chunked_stops_when_callback_returns_false() {
+        let (_cfg, _root, drive) = fixture();
+        drive.write_text("a.md", "abcdef").unwrap();
+        let mut chunks = 0usize;
+
+        drive
+            .read_text_with_stat_chunked("a.md", 1, |event| match event {
+                TextReadEvent::Meta(_) => true,
+                TextReadEvent::Chunk(_) => {
+                    chunks += 1;
+                    false
+                }
+                TextReadEvent::Done => panic!("done should not be emitted after cancellation"),
+            })
+            .unwrap();
+
+        assert_eq!(chunks, 1);
     }
 
     #[test]
