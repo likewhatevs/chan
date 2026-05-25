@@ -1331,7 +1331,7 @@ async function restoreSession(p: SessionPayload): Promise<void> {
 /// layout came from.
 function applySessionSidecars(p: SessionPayload): void {
   if (p.treeExpanded && typeof p.treeExpanded === "object") {
-    treeExpanded.map = { "": true, ...p.treeExpanded };
+    restoreTreeExpandedMap(p.treeExpanded);
     markTreeExpansionRestored();
   }
   const ov = p.overlays ?? {};
@@ -2372,6 +2372,17 @@ export const treeExpanded = $state<{ map: Record<string, boolean> }>({
   map: { "": true },
 });
 
+export function restoreTreeExpandedMap(next: Record<string, boolean>): void {
+  for (const k of Object.keys(treeExpanded.map)) {
+    delete treeExpanded.map[k];
+  }
+  treeExpanded.map[""] = true;
+  for (const [k, v] of Object.entries(next)) {
+    if (v) treeExpanded.map[k] = true;
+  }
+  treeExpanded.map[""] = true;
+}
+
 type TreeExpandedReloadSnapshot = {
   map: Record<string, boolean>;
 };
@@ -2414,7 +2425,7 @@ function applyTreeExpandedReloadSnapshot(): boolean {
   try {
     const parsed = JSON.parse(raw) as Partial<TreeExpandedReloadSnapshot>;
     if (!parsed.map || typeof parsed.map !== "object") return false;
-    treeExpanded.map = { "": true, ...parsed.map };
+    restoreTreeExpandedMap(parsed.map);
     markTreeExpansionRestored();
     return true;
   } catch {

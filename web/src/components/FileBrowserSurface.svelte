@@ -42,6 +42,7 @@
     persistPaneWidths,
     persistLayoutToHash,
     refreshTree,
+    restoreTreeExpandedMap,
     surfaceThemeOverride,
     toggleBrowserSidePane,
     tree,
@@ -127,7 +128,7 @@
     browserSelection.showDrive = source.showDrive ?? false;
     const map: Record<string, boolean> = { "": true };
     for (const p of source.expanded ?? []) map[p] = true;
-    treeExpanded.map = map;
+    restoreTreeExpandedMap(map);
     const target = source.scroll ?? 0;
     queueMicrotask(() => {
       if (treeWrapEl) treeWrapEl.scrollTop = target;

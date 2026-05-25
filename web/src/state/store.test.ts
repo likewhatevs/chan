@@ -144,6 +144,21 @@ describe("file browser expansion reload persistence", () => {
     vi.clearAllTimers();
     vi.useRealTimers();
   });
+
+  test("reload restore mutates the existing expansion map in place", () => {
+    window.history.replaceState(null, "", "/");
+    treeExpanded.map = { "": true, docs: true };
+    persistTreeExpanded();
+
+    const captured = treeExpanded.map;
+    delete captured.docs;
+    captured[""] = true;
+
+    expect(__testApplyTreeExpandedReloadSnapshot()).toBe(true);
+    expect(treeExpanded.map).toBe(captured);
+    expect(captured[""]).toBe(true);
+    expect(captured.docs).toBe(true);
+  });
 });
 
 function activeTerminal(): TerminalTab {
