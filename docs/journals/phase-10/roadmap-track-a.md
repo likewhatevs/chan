@@ -150,18 +150,35 @@ Desktop File Browser drag-out/download:
 - After those fixes, Tauri/WKWebView did not produce a Finder file from the
   browser `DownloadURL` payload in repeated macOS drag-out attempts. Treat the
   native bridge below as required, not optional, for desktop drag-out.
-- Use an OS-native drag payload or a temporary desktop export provider from
-  the Tauri layer.
-- The native bridge must fetch the same token-bearing download URL, stage a
-  temporary file or archive, and start the OS drag from that staged export.
-- Do not add direct desktop filesystem reads of drive content. Route export
-  data through the embedded server or another chan-drive-backed boundary.
-- Clean temporary exports after the drag lifecycle finishes, or through a
-  bounded cleanup pass if the platform does not provide a reliable completion
-  callback.
-- Cancelled drags should not leave user-visible temporary files behind.
-- Verify browser-only drag-out first. Keep this task scoped to gaps that need
-  native desktop help.
+- Native macOS bridge implemented on 2026-05-25:
+  - `FileTree.svelte` still sets browser `DownloadURL`, `text/uri-list`,
+    and tree-move payloads, then calls the Tauri
+    `start_file_browser_drag_out` IPC when running under chan-desktop.
+  - The IPC fetches the same token-bearing
+    `/api/files/<path>?download=1` URL, stages the returned bytes under
+    the OS temp directory, and starts an AppKit file drag from the staged
+    export.
+  - File exports use the original basename from the server download
+    header or the frontend fallback name. Directory exports stage the
+    server's `.tar` archive with archive naming.
+  - Desktop Tauri code does not read drive content directly. Export bytes
+    come through the embedded or attached HTTP server boundary.
+  - Failed or cancelled native drags remove the staged export immediately.
+    Accepted drags use a bounded cleanup task, and later drags sweep stale
+    export directories.
+- Automated verification in this handoff:
+  - `cargo check -p chan-desktop`
+  - `cargo test -p chan-desktop`
+  - `cargo test -p chan-server download_path_sync`
+  - `npm --prefix web run test -- fileTreeDragOut.test.ts`
+  - `npm --prefix web run check`
+- macOS manual Finder drag-out smoke was not run in this handoff. The
+  session had no reliable interactive Tauri-to-Finder drag control, and an
+  existing `/Applications/Chan.app` process was already running. Manual
+  checks still needed: file name and bytes, directory archive contents, and
+  cancelled-drag cleanup.
+- Linux native drag-out remains unsmoked and is queued separately with the
+  Linux desktop launch blocker.
 
 ## 3. Manual, docs, and site
 
@@ -313,7 +330,7 @@ Operational release checks:
     `cargo test -p chan-server download_path_sync`. Done on 2026-05-25.
   - Drag a File Browser file to the desktop and verify name and bytes.
     macOS browser-payload smoke did not create a Finder file on 2026-05-25;
-    native bridge pending.
+    native bridge implemented, manual smoke pending after this handoff.
   - Drag a File Browser directory to the desktop and verify tree or archive
     contents.
   - Cancel a File Browser drag-out and verify temporary export cleanup.
@@ -390,6 +407,7 @@ Operational release checks:
 17. Fix embedded desktop startup and prefixed launch URL blockers found during
     native drag-out smoke. Done on 2026-05-25.
 18. Implement native desktop File Browser drag-out bridge using the same
-    `download=1` URL path. Pending.
+    `download=1` URL path. Done on 2026-05-25. Automated checks passed;
+    macOS manual Finder drag-out smoke remains pending.
 19. Current next remains open for selection. CLI handoff is deferred until
    its design checkpoint.

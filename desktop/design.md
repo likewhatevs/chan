@@ -212,6 +212,27 @@ desktop's local On toggle will not flip to on, and no URL will
 appear. A user who wants that server in the desktop adds it through
 the remote outbound config using the server's URL.
 
+### 3.7 File Browser export drag-out
+
+The File Browser keeps its browser drag payloads so web use and
+in-app tree moves keep working. In chan-desktop, the same drag start
+also calls the `start_file_browser_drag_out` Tauri command.
+
+The command treats the server as the content boundary. It fetches
+the token-bearing `/api/files/<path>?download=1` URL that the web
+client already uses for right-click Download and browser drag-out,
+then stages the response bytes under the OS temp directory. Files use
+the basename reported by the server download header, with the
+frontend fallback name as a backup. Directories stage the server's
+`.tar` archive so the exported tree shape is preserved inside the
+archive.
+
+On macOS the staged file is passed to AppKit as a native file drag.
+Tauri filesystem code does not read the drive root. Failed or
+cancelled drags remove the staging directory immediately. Accepted
+drags use bounded cleanup, and later drag starts sweep stale staging
+directories.
+
 ## 4. Validation
 
 The desktop app avoids inventing durable validation rules. It

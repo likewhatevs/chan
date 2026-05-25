@@ -51,6 +51,22 @@ The desktop app stores its config at:
 There is no local sidecar fallback mode. Running `chan serve` directly
 is still supported, but desktop treats it as a remote attachment.
 
+## File Browser Drag-out
+
+Drive webviews keep the browser drag payloads used by normal web and
+in-app drops. In chan-desktop, File Browser drag start also invokes the
+`start_file_browser_drag_out` Tauri command. That command downloads the
+existing token-bearing `/api/files/<path>?download=1` URL from the
+embedded or attached server, stages the returned bytes under the OS temp
+directory, and starts a native file drag from that staged export on
+macOS.
+
+File exports preserve the server-provided basename. Directory exports
+stage the server-provided `.tar` archive. Tauri code does not read drive
+content directly. Failed or cancelled drags remove their staging
+directory immediately; accepted drags use bounded cleanup and later drag
+starts sweep stale export directories.
+
 ## Layout
 
 ```

@@ -25,6 +25,7 @@
     Users,
   } from "lucide-svelte";
   import { api } from "../api/client";
+  import { isTauriDesktop, tauriInvoke } from "../api/desktop";
   import { uiPrompt } from "../state/store.svelte";
   import { openTeamDialog } from "../state/teamDialog.svelte";
   import {
@@ -145,6 +146,24 @@
     e.dataTransfer.setData("text/uri-list", url);
   }
 
+  function absoluteDownloadUrl(path: string): string {
+    return new URL(api.downloadUrl(path), window.location.href).toString();
+  }
+
+  function startNativeDragOut(e: DragEvent, path: string, isDir: boolean): void {
+    if (!isTauriDesktop()) return;
+    void tauriInvoke("start_file_browser_drag_out", {
+      path,
+      isDir,
+      downloadUrl: absoluteDownloadUrl(path),
+      filename: downloadFilename(path, isDir),
+      clientX: e.clientX,
+      clientY: e.clientY,
+    }).catch((err) => {
+      console.warn("native File Browser drag-out failed", err);
+    });
+  }
+
   function onFileDragStart(e: DragEvent, path: string, isDir: boolean): void {
     if (!e.dataTransfer) return;
     e.dataTransfer.effectAllowed = "copyMove";
@@ -159,6 +178,7 @@
     // A plain-text fallback is friendly to other drop targets (e.g.
     // pasting the path into a code editor outside the app).
     e.dataTransfer.setData("text/plain", path);
+    startNativeDragOut(e, path, isDir);
   }
 
   /// Resolve the move source from a DragEvent. Returns null if the

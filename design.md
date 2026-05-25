@@ -40,6 +40,11 @@ desktop/                Tauri shell (`chan-desktop`). Embeds
                         Remote drives are explicit attach modes,
                         not local fallback behavior. Per-window
                         state is keyed by `w=<window-label>`.
+                        Desktop-only native bridges, such as File
+                        Browser drag-out export, call existing
+                        chan-server HTTP routes and stage temporary
+                        OS payloads instead of reading drive content
+                        directly from Tauri filesystem code.
 ```
 
 Phase 5 collapsed the historical `chan-writer/chan-core` sibling

@@ -829,6 +829,15 @@ mod tests {
     }
 
     #[test]
+    fn invoke_handler_registers_file_browser_drag_out_ipc() {
+        const MAIN_RS: &str = include_str!("main.rs");
+        const DRAG_OUT_RS: &str = include_str!("drag_out.rs");
+        assert!(MAIN_RS.contains("mod drag_out;"));
+        assert!(MAIN_RS.contains("drag_out::start_file_browser_drag_out,"));
+        assert!(DRAG_OUT_RS.contains("pub async fn start_file_browser_drag_out("));
+    }
+
+    #[test]
     fn key_bridge_wires_zoom_chords_to_ipc() {
         // `fullstack-b-19`: Cmd+= / Cmd+- / Cmd+0 (and their
         // Numpad variants) route directly to the chan-desktop

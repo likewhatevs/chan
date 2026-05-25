@@ -37,6 +37,7 @@ notify-debouncer-mini = { workspace = true }
 keyring = { workspace = true }
 getrandom = { workspace = true }
 gethostname = { workspace = true }
+reqwest = { workspace = true }
 
 # Embed chan-tunnel-server so a remote `chan serve --tunnel-url`
 # registers as a drive in the desktop Drives window.
@@ -55,7 +56,11 @@ url = { workspace = true }
 semver = { workspace = true }
 rust-embed = "8"
 
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2 = "0.6"
+objc2-app-kit = { version = "0.3", default-features = false, features = ["std", "NSApplication", "NSEvent", "NSGraphicsContext", "NSResponder", "NSView", "NSWindow"] }
+objc2-foundation = { version = "0.3", default-features = false, features = ["std", "NSGeometry", "NSString", "objc2-core-foundation"] }
+
 [dev-dependencies]
 chan-tunnel-client = { workspace = true }
-reqwest = { workspace = true }
 tempfile = { workspace = true }

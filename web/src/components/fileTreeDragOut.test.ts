@@ -26,6 +26,16 @@ describe("FileTree browser drag-out", () => {
     expect(fileTree).toMatch(/setDownloadDragData\(e, path, isDir\)/);
   });
 
+  test("Tauri desktop drag-out uses the token-bearing download route", () => {
+    expect(fileTree).toMatch(
+      /import \{ isTauriDesktop, tauriInvoke \} from "\.\.\/api\/desktop"/,
+    );
+    expect(fileTree).toMatch(/new URL\(api\.downloadUrl\(path\), window\.location\.href\)/);
+    expect(fileTree).toMatch(/tauriInvoke\("start_file_browser_drag_out"/);
+    expect(fileTree).toMatch(/downloadUrl: absoluteDownloadUrl\(path\)/);
+    expect(fileTree).toMatch(/filename: downloadFilename\(path, isDir\)/);
+  });
+
   test("docked selection context menu uses Upload and Download transfer rows", () => {
     expect(fileTree).toMatch(/const docked = \$derived\(dockSide !== undefined\)/);
     expect(fileTree).toMatch(/function downloadSelection\(path: string, isDir: boolean\): void/);
