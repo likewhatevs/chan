@@ -1055,7 +1055,7 @@ fn merge_unified_tree_layer(
         {
             continue;
         }
-        merge_tree_entry(drive, nodes, edges, &mut edge_set, &report_buckets, entry);
+        merge_tree_entry(drive, nodes, edges, &mut edge_set, report_buckets, entry);
         if entry.is_dir
             && matches!(
                 path_class_for_graph(drive, entry_path),
@@ -2614,13 +2614,13 @@ mod tests {
         merge_filesystem_layer(&drive, &params, &mut nodes, &mut edges).unwrap();
 
         assert!(nodes.values().any(
-            |node| matches!(node, GraphNodeView::Directory { id, path, .. } if id == "" && path == "")
+            |node| matches!(node, GraphNodeView::Directory { id, path, .. } if id.is_empty() && path.is_empty())
         ));
         assert!(nodes.contains_key("directory:notes"));
         assert!(nodes.contains_key("directory:notes/deep"));
         assert!(nodes.contains_key("notes/deep/a.md"));
         assert!(nodes.contains_key("notes/deep/raw.bin"));
-        assert!(edges.iter().any(|edge| edge.source == ""
+        assert!(edges.iter().any(|edge| edge.source.is_empty()
             && edge.target == "directory:notes"
             && edge.kind == "contains"));
         assert!(edges.iter().any(|edge| {
@@ -2653,7 +2653,7 @@ mod tests {
         assert!(nodes.contains_key("directory:notes"));
         assert!(nodes.contains_key("directory:notes/deep"));
         assert!(nodes.contains_key("notes/deep/a.md"));
-        assert!(edges.iter().any(|edge| edge.source == ""
+        assert!(edges.iter().any(|edge| edge.source.is_empty()
             && edge.target == "directory:notes"
             && edge.kind == "contains"));
         assert!(edges.iter().any(|edge| {

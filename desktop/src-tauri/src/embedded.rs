@@ -63,7 +63,7 @@ impl EmbeddedServer {
 
     pub fn close_prefix(&self, prefix: &str) -> Result<(), String> {
         self.host
-            .close_drive(&prefix)
+            .close_drive(prefix)
             .map_err(|e| format!("closing embedded route {prefix}: {e}"))?;
         Ok(())
     }

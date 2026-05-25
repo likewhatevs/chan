@@ -883,7 +883,7 @@ fn upload_file_sync(
 fn upload_leaf_filename(original_name: &str) -> chan_drive::Result<String> {
     let leaf = original_name
         .trim()
-        .rsplit(|c| c == '/' || c == '\\')
+        .rsplit(['/', '\\'])
         .next()
         .unwrap_or("")
         .trim();

@@ -369,8 +369,10 @@ mod tests {
         let cfg = TempDir::new().unwrap();
         let root = cfg.path().join("Documents").join("Chan");
         let config_path = cfg.path().join("config.toml");
-        let mut registry = Registry::default();
-        registry.default_drive_root = Some(root.clone());
+        let mut registry = Registry {
+            default_drive_root: Some(root.clone()),
+            ..Registry::default()
+        };
         registry.touch(&root);
         registry.save_to(&config_path).unwrap();
 
@@ -391,8 +393,10 @@ mod tests {
         let root = cfg.path().join("somewhere-else");
         let suggested = cfg.path().join("Documents").join("Chan");
         let config_path = cfg.path().join("config.toml");
-        let mut registry = Registry::default();
-        registry.default_drive_root = Some(root.clone());
+        let mut registry = Registry {
+            default_drive_root: Some(root.clone()),
+            ..Registry::default()
+        };
         registry.touch(&root);
         registry.save_to(&config_path).unwrap();
 
@@ -447,8 +451,10 @@ mod tests {
         let cfg = TempDir::new().unwrap();
         let root = TempDir::new().unwrap();
         let config_path = cfg.path().join("config.toml");
-        let mut registry = Registry::default();
-        registry.default_drive_root = Some(root.path().to_path_buf());
+        let mut registry = Registry {
+            default_drive_root: Some(root.path().to_path_buf()),
+            ..Registry::default()
+        };
         registry.touch(root.path());
         registry.save_to(&config_path).unwrap();
 
@@ -463,8 +469,10 @@ mod tests {
         let root = cfg.path().join("somewhere-else");
         let suggested = cfg.path().join("Documents").join("Chan");
         let config_path = cfg.path().join("config.toml");
-        let mut registry = Registry::default();
-        registry.default_drive_root = Some(root.clone());
+        let mut registry = Registry {
+            default_drive_root: Some(root.clone()),
+            ..Registry::default()
+        };
         registry.touch(&root);
         registry.save_to(&config_path).unwrap();
 
