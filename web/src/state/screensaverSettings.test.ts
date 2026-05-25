@@ -3,21 +3,22 @@ import shortcuts from "./shortcuts.ts?raw";
 import app from "../App.svelte?raw";
 import panel from "../components/SettingsPanel.svelte?raw";
 
-// `fullstack-a-77` slice 3: Settings UI + Mod+L lock chord.
+// `fullstack-a-77` slice 3: Settings UI + Hybrid Nav lock chord.
 // Tests pin the architectural shape; behavioral testing of
 // the timeout slider + PIN flow happens via @@WebtestA's
 // empirical walk.
 
-describe("fullstack-a-77 slice 3: Mod+L chord", () => {
-  test("shortcuts entry exists for app.screensaver.lock", () => {
+describe("fullstack-a-77 slice 3: Hybrid Nav lock chord", () => {
+  test("shortcut registry advertises only Cmd+. L for screen lock", () => {
     expect(shortcuts).toMatch(
-      /id: "app\.screensaver\.lock",[\s\S]{1,60}label: "Lock screen",[\s\S]{1,200}web: "Mod\+L",[\s\S]{1,80}native: "Mod\+L",/,
+      /id: "app\.screensaver\.lock",[\s\S]{1,60}label: "Lock screen",[\s\S]{1,200}web: "Mod\+\. L",[\s\S]{1,80}native: "Mod\+\. L",/,
     );
+    expect(shortcuts).not.toMatch(/web: "Mod\+L"[\s\S]{1,80}native: "Mod\+L"/);
   });
 
-  test("shortcut group + escapeTerminal pinned", () => {
+  test("shortcut group pinned", () => {
     expect(shortcuts).toMatch(
-      /id: "app\.screensaver\.lock",[\s\S]{1,400}group: "App",[\s\S]{1,80}escapeTerminal: true,/,
+      /id: "app\.screensaver\.lock",[\s\S]{1,400}group: "App",/,
     );
   });
 
@@ -27,9 +28,13 @@ describe("fullstack-a-77 slice 3: Mod+L chord", () => {
     );
   });
 
-  test("App.svelte onWindowKey handler fires lockNow on Mod+L", () => {
+  test("App.svelte does not claim plain Mod+L", () => {
+    expect(app).not.toMatch(/e\.code === "KeyL"[\s\S]{1,160}lockNow\(\);/);
+  });
+
+  test("App.svelte Hybrid Nav L handler fires lockNow", () => {
     expect(app).toMatch(
-      /if \(meta && !e\.altKey && !e\.shiftKey && !e\.ctrlKey && e\.code === "KeyL"\) \{[\s\S]{1,160}lockNow\(\);/,
+      /case "l":[\s\S]{1,40}case "L":[\s\S]{1,220}lockNow\(\);/,
     );
   });
 

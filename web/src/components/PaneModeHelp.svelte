@@ -147,6 +147,7 @@
         { caps: [{ label: "Esc", key: "Escape" }], action: "Discard draft" },
         { caps: [{ label: "h", key: "h" }], action: "Toggle this help" },
         { caps: [{ label: "Tab", key: "Tab" }], action: "Flip Hybrid" },
+        { caps: [{ label: "L", key: "l" }], action: "Lock screen" },
       ],
     },
   ];

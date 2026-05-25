@@ -93,50 +93,36 @@ In-app keybindings (Cmd = Ctrl on Linux / Windows):
 
   App
   ---
-  Settings                Cmd+,
-  Terminal rich prompt    Cmd+Alt+P   (macOS web + native everywhere; all platforms via Mod+. p (Hybrid NAV); legacy Alt+Space alias still bound)
-  File browser            Cmd+Alt+O   (macOS web + native everywhere; all platforms via Mod+. o (Hybrid NAV))
-  Graph                   Cmd+Shift+M   (or Mod+. v (Hybrid NAV))
-  New terminal            Cmd+Alt+T   (macOS web + native everywhere; all platforms via Mod+. t (Hybrid NAV))
-  Dismiss overlay         Esc
-
+  Settings                                     Cmd+,
+  Terminal rich prompt                         Cmd+Alt+P   (macOS web + native everywhere; all platforms via Mod+. p (Hybrid Nav))
+  File browser                                 Cmd+Alt+O   (macOS web + native everywhere; all platforms via Mod+. o (Hybrid Nav))
+  Graph                                        Cmd+Shift+M   (or Mod+. v (Hybrid Nav))
+  New terminal                                 Cmd+Alt+T   (macOS web + native everywhere; all platforms via Mod+. t (Hybrid Nav))
+  Reload window                                Cmd+R
+  New draft                                    Cmd+N
+  Lock screen                                  Cmd+. L
+  Dismiss overlay                              Esc
+  
   Panes
   -----
-  Enter Hybrid NAV        Cmd+.
-  Flip Hybrid             Cmd+. Tab
-
+  Enter Hybrid Nav                             Cmd+.
+  Flip Hybrid                                  Cmd+. Tab
+  Previous pane                                Cmd+[
+  Next pane                                    Cmd+]
+  Close all tabs in pane                       Cmd+. x
+  Kill pane                                    Cmd+. Backspace
+  
   Tabs
   ----
-  Close tab               Ctrl+D   (Cmd+W also closes the tab on native)
-  Reopen closed tab       Ctrl+Alt+T
-  Next tab                Alt+Shift+]
-  Previous tab            Alt+Shift+[
-  Jump to tab N           Ctrl+Alt+1..9
-
-Hybrid NAV (Cmd+.), keys are unprefixed:
-
-  Arrows                  Move focus
-  W A S D                 Swap with neighbour
-  t / o / p / v           Spawn Terminal / File Browser / Rich Prompt / Graph
-  f                       Search overlay
-  h                       Help (this list, in-app overlay)
-  /                       Split focused pane right
-  \\                       Split focused pane down
-  < / >                   Toggle right- / left-side file browser dock
-  [ ] - =                 Resize focused pane (Shift = larger nudge)
-  0                       Equalize siblings
-  x                       Close all tabs in focused pane
-  Backspace               Close (kill) focused pane
-  Tab                     Flip Hybrid
-  Enter                   Commit draft
-  Esc                     Discard draft
-
-Handled by the browser:
-
-  Find on page           Cmd+F
-  Find next              Cmd+G
-  Find previous          Cmd+Shift+G
-  Zoom in / out / reset  Cmd+= / Cmd+- / Cmd+0
+  Close tab                                    Ctrl+D   (Cmd+W also closes the tab on native)
+  Reopen closed tab                            Ctrl+Alt+T
+  Next tab                                     Alt+Shift+]
+  Previous tab                                 Alt+Shift+[
+  Jump to tab N                                Ctrl+Alt+1..9
+  
+  Editor
+  ------
+  Show Source Code (toggle rendered/source)    Cmd+E
 ";
 
 #[derive(Parser, Debug)]

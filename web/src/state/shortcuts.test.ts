@@ -66,4 +66,10 @@ describe("shortcut table", () => {
     expect(table).toMatch(/^Close all tabs in pane\s+Cmd\+\. x/m);
     expect(table).toMatch(/^Kill pane\s+Cmd\+\. Backspace/m);
   });
+
+  test("advertises screen lock only through Hybrid Nav", () => {
+    const table = renderTable("web", "mac");
+    expect(table).toMatch(/^Lock screen\s+Cmd\+\. L/m);
+    expect(table).not.toMatch(/^Lock screen\s+Cmd\+L/m);
+  });
 });

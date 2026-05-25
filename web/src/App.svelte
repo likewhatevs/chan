@@ -385,6 +385,7 @@
   /// Other app chords:
   ///
   ///   Cmd/Ctrl+,             -> Settings (open)
+  ///   Cmd+. L                -> Lock screen
   ///   Alt+Shift+[ / ]        -> previous / next tab       (web fallback)
   ///   Ctrl+Alt+1..9          -> jump to tab N             (web fallback)
   ///
@@ -575,6 +576,16 @@
       case "h":
       case "H":
         paneModeHelpVisible = !paneModeHelpVisible;
+        return;
+      // Screen lock is intentionally only reachable through the
+      // Hybrid Nav chain. Plain Cmd+L must stay available for the
+      // browser location bar in web builds.
+      case "l":
+      case "L":
+        commitPaneMode();
+        scheduleSessionSave();
+        paneModeHelpVisible = false;
+        lockNow();
         return;
       // `fullstack-a-68 slice 2`: `P` now stages a fresh smart-
       // prompt terminal (a terminal tab with the rich-prompt
@@ -782,18 +793,6 @@
       void createDraftAndOpen();
       return;
     }
-    // `fullstack-a-77` slice 3: Mod+L → lock screen. On web
-    // Mac the browser owns Cmd+L (address bar focus); the
-    // chord fires only on platforms where the browser
-    // doesn't reserve it. chan-desktop's KEY_BRIDGE_JS
-    // intercepts the native Cmd+L + replays as
-    // `chan:command app.screensaver.lock`, which the
-    // runCommand switch routes through `lockNow()`.
-    if (meta && !e.altKey && !e.shiftKey && !e.ctrlKey && e.code === "KeyL") {
-      e.preventDefault();
-      lockNow();
-      return;
-    }
     // `fullstack-a-67f` slice 2: Mod+E (Obsidian-style "Show
     // Source Code") flips the active file tab's mode between
     // source and the rendered surface. No-op when the active
@@ -952,10 +951,9 @@
         void createDraftAndOpen();
         return;
       // `fullstack-a-77` slice 3: manual screensaver lock.
-      // Routes both the SPA chord (`Mod+L` via onWindowKey
-      // when the browser doesn't reserve it) AND the
-      // chan-desktop KEY_BRIDGE_JS replay through the same
-      // handler.
+      // Routes command-event callers through the same handler as
+      // Hybrid Nav `L`. Plain Cmd+L is deliberately not claimed by
+      // App.svelte so the browser location bar keeps working.
       case "app.screensaver.lock":
         lockNow();
         return;

@@ -242,19 +242,15 @@ export const SHORTCUTS: readonly Shortcut[] = [
   // `fullstack-a-77` slice 3: manual screensaver lock.
   // Routes through `screensaver.svelte::lockNow()` which sets
   // `locked=true` + the App-root `ScreensaverOverlay`
-  // component covers the SPA. Web Mod+L is reserved by the
-  // browser as "focus address bar" — the chord still works on
-  // chan-desktop (KEY_BRIDGE_JS) and on web where the
-  // platform doesn't reserve it; on web Mac it falls through
-  // to the browser, matching every other browser-reserved
-  // chord chan ships.
+  // component covers the SPA. The only user-facing chord is the
+  // Hybrid Nav chain so plain Cmd+L stays available for the
+  // browser location bar.
   {
     id: "app.screensaver.lock",
     label: "Lock screen",
-    web: "Mod+L",
-    native: "Mod+L",
+    web: "Mod+. L",
+    native: "Mod+. L",
     group: "App",
-    escapeTerminal: true,
   },
   {
     id: "app.pane.flip",
