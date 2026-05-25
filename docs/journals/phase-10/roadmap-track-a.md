@@ -167,11 +167,11 @@ Desktop File Browser drag-out/download:
 
 Rich Prompt:
 
-- Validate non-empty CodeMirror prompt submit in a browser environment that
-  can type into CodeMirror.
-- Verify archive contents, clear-on-submit behavior, and the edited-during-
-  submit race.
-- Validate clipboard-dependent Spawn agents preflight.
+- Browser validation moved to Track C on 2026-05-25. Rationale: the
+  remaining work is CodeMirror/browser interaction, archive UI behavior,
+  and clipboard-dependent Spawn agents preflight. Track A keeps server and
+  desktop ownership only. Details live in
+  `docs/journals/phase-10/track-c-handoff-from-track-a.md`.
 
 Server and editor consistency:
 
@@ -184,7 +184,8 @@ Server and editor consistency:
 - Reproduce rapid-edit stale editor/index races. Server-side watch/index
   guard added on 2026-05-25: `rapid_modify_burst_indexes_latest_file_body`
   pins that a burst of rewrites indexes the final body and drops stale
-  search tokens. Browser/editor stale-buffer reproduction remains open.
+  search tokens. Browser/editor stale-buffer reproduction moved to Track C
+  on 2026-05-25 because the remaining surface is editor buffer behavior.
 - Decide whether background search and indexing need further throttling
   beyond current file-descriptor budgets and terminal admission. Decision
   on 2026-05-25: no new fd throttle for this wave. Existing index worker
@@ -300,10 +301,12 @@ Operational release checks:
   - Manual seed present.
   - Reset confirmation path.
 - Web and product regressions:
-  - Rich Prompt submit, archive, clear, clipboard, and Spawn agents preflight.
+  - Rich Prompt submit, archive, clear, clipboard, and Spawn agents preflight
+    moved to Track C handoff.
   - File Browser duplicate-key case.
   - `[[` picker contract.
-  - Rapid-edit stale index repro.
+  - Rapid-edit server stale-index guard done; browser/editor stale-buffer
+    repro moved to Track C handoff.
 - Release gates:
   - Manual and site build.
   - Desktop artifact launch.
@@ -343,5 +346,7 @@ Operational release checks:
 13. Decide background indexing throttle scope. Done: no new fd throttle
     after the low-FD smoke.
 14. Add server-side rapid-edit stale-index guard. Done.
-15. Current next remains open for selection. CLI handoff is deferred until
+15. Cut browser/editor Rich Prompt and rapid-edit validation to Track C.
+    Done, without editing Track C's main roadmap.
+16. Current next remains open for selection. CLI handoff is deferred until
    its design checkpoint.
