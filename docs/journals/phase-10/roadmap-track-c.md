@@ -81,6 +81,10 @@ Progress:
 - 2026-05-25: implemented Draft editor explicit Save-to-drive action. Draft
   tabs replace the menu-top `Name` row with Save, reuse the existing Draft
   promotion dialog, and continue on the promoted drive path after Save.
+- 2026-05-25: tightened docked File Browser context menus. Upload and Download
+  are docked-only right-click rows, Open in File Browser opens a normal File
+  Browser tab with Details focused on the selected row, and the no-selection
+  fallback opens Details for the drive itself.
 
 Current wave:
 
@@ -518,6 +522,17 @@ Target behavior:
   - directory upload adds the uploaded file inside that directory;
   - file download returns that file's bytes;
   - directory download returns the existing directory archive flow.
+- File Browser right-click menus should expose Upload and Download only in the
+  docked File Browser, because docked mode has no inspector panel. Tab and
+  overlay File Browser menus should not show those transfer rows.
+- Docked File Browser right-click menus should not expose Settings. They should
+  expose Open in File Browser, which creates a normal File Browser tab with the
+  selected file or directory selected and the inspector open.
+- If the docked File Browser has no selected file or directory, Open in File
+  Browser should create a normal File Browser tab with the drive itself
+  selected in the inspector.
+- The docked File Browser right-click transfer block order is separator,
+  Upload, Download, separator.
 - Upload and Download actions should include an info affordance or hover text
   explaining that File Browser also supports drag/drop where the platform
   allows it.
@@ -556,6 +571,13 @@ Smoke:
 - Drop a file that conflicts with an existing path and confirm the UI does not
   silently overwrite.
 - Repeat upload smoke in docked File Browser and File Browser tabs.
+- Confirm docked File Browser right-click menus show separator, Upload,
+  Download, separator, while File Browser tab and overlay right-click menus
+  omit Upload and Download.
+- From docked File Browser, use Open in File Browser on a file and a directory.
+  Confirm the new File Browser tab selects that row and opens Details.
+- From docked File Browser with no row selected, use Open in File Browser and
+  confirm the new File Browser tab opens Details for the drive itself.
 - From a file inspector in File Browser, Graph, and Editor details, use Upload
   to replace the selected file and Download to retrieve it.
 - From a directory inspector in File Browser and Graph, use Upload to add a

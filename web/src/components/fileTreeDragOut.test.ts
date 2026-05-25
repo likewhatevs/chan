@@ -26,11 +26,12 @@ describe("FileTree browser drag-out", () => {
     expect(fileTree).toMatch(/setDownloadDragData\(e, path, isDir\)/);
   });
 
-  test("selection context menu uses the same download URL helper", () => {
+  test("docked selection context menu uses Upload and Download transfer rows", () => {
+    expect(fileTree).toMatch(/const docked = \$derived\(dockSide !== undefined\)/);
     expect(fileTree).toMatch(/function downloadSelection\(path: string, isDir: boolean\): void/);
     expect(fileTree).toMatch(/link\.href = api\.downloadUrl\(path\)/);
     expect(fileTree).toMatch(
-      /onclick=\{\(\) => downloadSelection\(menu!\.path, menu!\.isDir\)\}[\s\S]{1,160}<span>Download<\/span>/,
+      /\{#if docked\}[\s\S]{1,500}<span>Open in File Browser<\/span>[\s\S]{1,300}<div class="ctx-sep" role="separator"><\/div>[\s\S]{1,500}<span>Upload<\/span>[\s\S]{1,500}<span>Download<\/span>[\s\S]{1,300}\{\/if\}[\s\S]{1,120}<div class="ctx-sep" role="separator"><\/div>/,
     );
   });
 
@@ -46,6 +47,8 @@ describe("FileTree browser drag-out", () => {
   test("file replacement uses upload replace mode and refreshes open tabs", () => {
     expect(client).toMatch(/replaceFile: \(/);
     expect(client).toMatch(/form\.append\("path", path\)/);
+    expect(fileTree).toMatch(/fileOps\.replaceFileAt\(target\.path, input\.files\[0\]!\)/);
+    expect(fileTree).toMatch(/fileOps\.uploadFilesTo\(target\.path, input\.files\)/);
     expect(store).toMatch(/replaceFileAt\(targetPath: string, picked: File\)/);
     expect(store).toMatch(/api\.replaceFile\(picked, targetPath/);
     expect(store).toMatch(/tabsForPath\(targetPath\)/);

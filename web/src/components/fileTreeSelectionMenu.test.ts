@@ -41,16 +41,25 @@ describe("fullstack-a-67e: FileTree selection menu header + new entries", () => 
     );
   });
 
-  test("ctx-sep separator between workflow + per-row ops", () => {
+  test("docked transfer rows sit between separators", () => {
     expect(tree).toMatch(
-      /<span>New Graph<\/span>[\s\S]{1,400}<div class="ctx-sep" role="separator"><\/div>[\s\S]{1,400}<span>Download<\/span>[\s\S]{1,400}<span>Copy Path<\/span>/,
+      /<span>New Graph<\/span>[\s\S]{1,500}\{#if docked\}[\s\S]{1,500}<span>Open in File Browser<\/span>[\s\S]{1,300}<div class="ctx-sep" role="separator"><\/div>[\s\S]{1,500}<span>Upload<\/span>[\s\S]{1,500}<span>Download<\/span>[\s\S]{1,300}\{\/if\}[\s\S]{1,120}<div class="ctx-sep" role="separator"><\/div>[\s\S]{1,400}<span>Copy Path<\/span>/,
     );
+  });
+
+  test("Open in File Browser spawns a selected tab with inspector open", () => {
+    expect(tree).toMatch(/function openSelectionInFileBrowser\(path: string\): void/);
+    expect(tree).toMatch(/const tab = openBrowserInActivePane\(\{ select: path \}\)/);
+    expect(tree).toMatch(/tab\.inspectorOpen = true/);
+    expect(tree).toMatch(/tab\.expanded = ancestors\.length > 0 \? ancestors : undefined/);
   });
 });
 
-describe("fullstack-a-67e: per-row ops kept (Download / Copy Path / Rename / Delete)", () => {
-  test("Download / Copy Path / Rename / Move / Delete labels preserved", () => {
-    expect(tree).toMatch(/<span>Download<\/span>/);
+describe("fullstack-a-67e: transfer rows gated, per-row ops kept", () => {
+  test("Open in File Browser / Upload / Download are docked-only and row ops stay available", () => {
+    expect(tree).toMatch(/\{#if docked\}[\s\S]{1,1000}<span>Open in File Browser<\/span>/);
+    expect(tree).toMatch(/\{#if docked\}[\s\S]{1,1000}<span>Upload<\/span>/);
+    expect(tree).toMatch(/\{#if docked\}[\s\S]{1,1000}<span>Download<\/span>/);
     expect(tree).toMatch(/<span>Copy Path<\/span>/);
     expect(tree).toMatch(/<span>Rename \/ Move<\/span>/);
     expect(tree).toMatch(/<span>Delete<\/span>/);

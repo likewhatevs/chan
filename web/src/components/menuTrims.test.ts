@@ -94,7 +94,7 @@ describe("fullstack-82: FB dock menu drops the Open overlay entry", () => {
 
   test("openOverlay handler dropped (only consumer was the removed entry)", () => {
     expect(fileBrowserSurface).not.toContain("function openOverlay()");
-    expect(fileBrowserSurface).not.toContain("openBrowserInActivePane");
+    expect(fileBrowserSurface).toContain("function openCurrentInFileBrowser()");
   });
 });
 

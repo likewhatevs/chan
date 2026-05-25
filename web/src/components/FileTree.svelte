@@ -21,6 +21,7 @@
     Settings2,
     Terminal as TerminalIcon,
     Trash2,
+    Upload,
     Users,
   } from "lucide-svelte";
   import { api } from "../api/client";
@@ -38,6 +39,7 @@
   import {
     dirtyPaths,
     layout,
+    openBrowserInActivePane,
     openInActivePane,
     openTerminalInPane,
   } from "../state/tabs.svelte";
@@ -96,6 +98,7 @@
     onFlip?: () => void;
   } = $props();
   const rightDock = $derived(dockSide === "right");
+  const docked = $derived(dockSide !== undefined);
 
   // Mime type recognized by Pane.onDrop. Keep in sync with Pane.svelte.
   const FILE_DRAG_MIME = "application/x-md-file";
@@ -256,6 +259,8 @@
   // store module for the rationale.
   const expanded = treeExpanded.map;
   let menu = $state<{ x: number; y: number; path: string; isDir: boolean } | null>(null);
+  let uploadInput = $state<HTMLInputElement | null>(null);
+  let uploadTarget = $state<{ path: string; isDir: boolean } | null>(null);
 
   /// `<ul>` element handles keyboard navigation. Focused at mount
   /// so arrows / Enter are live as soon as the browser opens; the
@@ -448,6 +453,30 @@
     menu = null;
     await fileOps.createFileOrDir(parentPath);
   }
+  function expandedAncestors(path: string): string[] {
+    const parts = path.split("/");
+    const ancestors: string[] = [];
+    let acc = "";
+    for (let i = 0; i < parts.length - 1; i++) {
+      acc = acc ? `${acc}/${parts[i]}` : parts[i];
+      if (acc) ancestors.push(acc);
+    }
+    return ancestors;
+  }
+  function openSelectionInFileBrowser(path: string): void {
+    const ancestors = expandedAncestors(path);
+    const tab = openBrowserInActivePane({ select: path });
+    tab.inspectorOpen = true;
+    tab.showDrive = false;
+    tab.expanded = ancestors.length > 0 ? ancestors : undefined;
+    browserSelection.path = path;
+    browserSelection.showDrive = false;
+    const map = treeExpanded.map;
+    map[""] = true;
+    for (const ancestor of ancestors) map[ancestor] = true;
+    persistTreeExpanded();
+    menu = null;
+  }
   /// Settings (flip) — routes through the surface-supplied
   /// `onFlip` callback (FBSurface → Pane.svelte →
   /// `flipHybrid(pane.id)`). Gated on `onFlip` existence so
@@ -562,6 +591,26 @@
     link.click();
     link.remove();
     menu = null;
+  }
+  function uploadSelection(path: string, isDir: boolean): void {
+    uploadTarget = { path, isDir };
+    uploadInput?.click();
+    menu = null;
+  }
+  async function onUploadPicked(e: Event): Promise<void> {
+    const input = e.currentTarget as HTMLInputElement;
+    const target = uploadTarget;
+    uploadTarget = null;
+    try {
+      if (!target || !input.files || input.files.length === 0) return;
+      if (target.isDir) {
+        await fileOps.uploadFilesTo(target.path, input.files);
+      } else {
+        await fileOps.replaceFileAt(target.path, input.files[0]!);
+      }
+    } finally {
+      input.value = "";
+    }
   }
   async function remove(path: string, isDir: boolean): Promise<void> {
     await fileOps.remove(path, isDir);
@@ -1086,9 +1135,7 @@
     <!-- `fullstack-a-67e`: in-tree selection menu reshape per
          addendum-a's File Browser spec. Section label first
          ("From selection"), workflow entries (New File / New
-         Dir / Search / New Terminal / New Graph), then a
-         separator and the per-row ops (Download / Copy Path /
-         Rename / Delete) preserved.
+         Dir / Search / New Terminal / New Graph), then row ops.
          Addendum-a doesn't explicitly list Copy Path / Rename
          / Delete; keeping them avoids regressing destructive +
          path ops with no other surface. Flag in journal.
@@ -1098,7 +1145,9 @@
          from the path's trailing slash. Settings (flip)
          entry added at the foot when `onFlip` is wired
          (tab variant only; dock + overlay variants pass no
-         onFlip so the entry hides). -->
+         onFlip so the entry hides). Transfer rows are docked
+         only because tab and overlay variants expose the shared
+         inspector actions. -->
     <div class="from-selection-label">From selection</div>
     {#if menu.isDir}
       <button onclick={() => newFileOrDir(menu!.path)}>
@@ -1128,11 +1177,22 @@
       <Network size={16} strokeWidth={1.75} aria-hidden="true" />
       <span>New Graph</span>
     </button>
+    {#if docked}
+      <button onclick={() => openSelectionInFileBrowser(menu!.path)}>
+        <FolderOpen size={16} strokeWidth={1.75} aria-hidden="true" />
+        <span>Open in File Browser</span>
+      </button>
+      <div class="ctx-sep" role="separator"></div>
+      <button onclick={() => uploadSelection(menu!.path, menu!.isDir)}>
+        <Upload size={16} strokeWidth={1.75} aria-hidden="true" />
+        <span>Upload</span>
+      </button>
+      <button onclick={() => downloadSelection(menu!.path, menu!.isDir)}>
+        <Download size={16} strokeWidth={1.75} aria-hidden="true" />
+        <span>Download</span>
+      </button>
+    {/if}
     <div class="ctx-sep" role="separator"></div>
-    <button onclick={() => downloadSelection(menu!.path, menu!.isDir)}>
-      <Download size={16} strokeWidth={1.75} aria-hidden="true" />
-      <span>Download</span>
-    </button>
     <button onclick={() => copyPath(menu!.path)}>
       <Copy size={16} strokeWidth={1.75} aria-hidden="true" />
       <span>Copy Path</span>
@@ -1154,6 +1214,16 @@
     {/if}
   </div>
 {/if}
+
+<input
+  bind:this={uploadInput}
+  class="file-picker"
+  type="file"
+  multiple
+  onchange={onUploadPicked}
+  aria-hidden="true"
+  tabindex="-1"
+/>
 
 <style>
   .tree, .children {
@@ -1427,6 +1497,13 @@
     }
   }
   .ctx button.danger { color: var(--warn-text); }
+  .file-picker {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    opacity: 0;
+    pointer-events: none;
+  }
   /* `fullstack-a-67e`: "From selection" section label.
      Subdued style mirroring TerminalTab's `.from-cwd-label`. */
   .from-selection-label {

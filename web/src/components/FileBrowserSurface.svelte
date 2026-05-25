@@ -41,6 +41,7 @@
     paneWidths,
     persistPaneWidths,
     persistLayoutToHash,
+    persistTreeExpanded,
     refreshTree,
     restoreTreeExpandedMap,
     surfaceThemeOverride,
@@ -51,6 +52,7 @@
   } from "../state/store.svelte";
   import {
     canReopenClosedTab,
+    openBrowserInActivePane,
     openInActivePane,
     reopenClosedTab,
   } from "../state/tabs.svelte";
@@ -81,6 +83,7 @@
 
   const isOverlay = $derived(variant === "overlay");
   const isTab = $derived(variant === "tab");
+  const isDock = $derived(variant === "dock");
   const isWideSurface = $derived(isOverlay || isTab);
   const browserState = $derived(tab ?? browserOverlay);
   const fullyExpanded = $derived.by(() => {
@@ -314,6 +317,39 @@
     browserState.inspectorOpen = true;
   }
 
+  function expandedAncestors(path: string): string[] {
+    const parts = path.split("/");
+    const ancestors: string[] = [];
+    let acc = "";
+    for (let i = 0; i < parts.length - 1; i++) {
+      acc = acc ? `${acc}/${parts[i]}` : parts[i];
+      if (acc) ancestors.push(acc);
+    }
+    return ancestors;
+  }
+
+  function openCurrentInFileBrowser(): void {
+    menu?.close();
+    const path = browserSelection.path;
+    const tab = openBrowserInActivePane(path ? { select: path } : {});
+    tab.inspectorOpen = true;
+    if (path) {
+      const ancestors = expandedAncestors(path);
+      tab.showDrive = false;
+      tab.expanded = ancestors.length > 0 ? ancestors : undefined;
+      browserSelection.path = path;
+      browserSelection.showDrive = false;
+      const map: Record<string, boolean> = { "": true };
+      for (const ancestor of ancestors) map[ancestor] = true;
+      restoreTreeExpandedMap(map);
+      persistTreeExpanded();
+      return;
+    }
+    tab.showDrive = true;
+    browserSelection.path = null;
+    browserSelection.showDrive = true;
+  }
+
   /// `fullstack-a-67e`: flip to back-side config view. Routes
   /// through the `onFlip` callback the tab variant's parent
   /// (Pane.svelte) supplies. The menu entry is gated on
@@ -530,6 +566,15 @@
       <span class="drive-path-text">{drive.info?.root ?? ""}</span>
     </button>
   </li>
+  {#if isDock}
+    <li>
+      <button role="menuitem" onclick={openCurrentInFileBrowser}>
+        <FolderOpen size={16} strokeWidth={1.75} aria-hidden="true" />
+        <span class="menu-row-label">Open in File Browser</span>
+        <span class="menu-row-chord"></span>
+      </button>
+    </li>
+  {/if}
   <li class="sep" role="separator"></li>
   <li>
     <button role="menuitem" onclick={() => toggleStick("left")}>

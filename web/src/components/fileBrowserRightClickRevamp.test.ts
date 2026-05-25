@@ -32,6 +32,18 @@ describe("fullstack-a-67e: FBSurface menu header — path-derived drive label + 
 });
 
 describe("fullstack-a-67e: FBSurface menu body — dock / expand / reload / import in order", () => {
+  test("dock variant can open a File Browser tab for current selection or drive", () => {
+    expect(surface).toMatch(
+      /function openCurrentInFileBrowser\(\): void \{[\s\S]{1,300}const path = browserSelection\.path;[\s\S]{1,200}const tab = openBrowserInActivePane\(path \? \{ select: path \} : \{\}\);[\s\S]{1,200}tab\.inspectorOpen = true;/,
+    );
+    expect(surface).toMatch(
+      /if \(path\) \{[\s\S]{1,400}tab\.showDrive = false;[\s\S]{1,200}browserSelection\.path = path;[\s\S]{1,200}browserSelection\.showDrive = false;[\s\S]{1,600}tab\.showDrive = true;[\s\S]{1,200}browserSelection\.path = null;[\s\S]{1,200}browserSelection\.showDrive = true;/,
+    );
+    expect(surface).toMatch(
+      /\{#if isDock\}[\s\S]{1,400}onclick=\{openCurrentInFileBrowser\}[\s\S]{1,400}<span class="menu-row-label">Open in File Browser<\/span>/,
+    );
+  });
+
   test("dock toggles come after the SEP that follows the path row", () => {
     expect(surface).toMatch(
       /class="drive-path-text">[\s\S]{1,400}<li class="sep" role="separator"><\/li>[\s\S]{1,400}toggleStick\("left"\)[\s\S]{1,400}toggleStick\("right"\)/,
