@@ -14,8 +14,8 @@
 #                  Idempotent; reads HTTPS_PROXY / HTTP_PROXY.
 #                  ONLY needed for `make build-release`; plain
 #                  `make build` skips the bundle (systacean-6 split).
-#   make build     cargo build --release -p chan (~26 MB; no embedded
-#                  model — runtime resolver looks for one at
+#   make build     web + cargo build --release -p chan (~26 MB; no
+#                  embedded model. Runtime resolver looks for one at
 #                  <user-config>/chan/models/ or surfaces a
 #                  "model not downloaded" error on Hybrid search)
 #   make build-release  models + web + `cargo build --release
@@ -53,6 +53,7 @@ NPM ?= npm
 RPM_TARGET ?= x86_64-unknown-linux-musl
 
 BIN := target/release/chan
+WEB_BUILD_STAMP := web/.chan-build-stamp
 
 .PHONY: all
 all: web build
@@ -60,9 +61,10 @@ all: web build
 .PHONY: web
 web:
 	cd web && $(NPM) install && $(NPM) run build
+	@date -u '+%Y-%m-%dT%H:%M:%SZ' > "$(WEB_BUILD_STAMP)"
 
 .PHONY: build
-build:
+build: web
 	$(CARGO) build --release -p chan
 
 # Pre-fetch the default embedding model into chan-server's

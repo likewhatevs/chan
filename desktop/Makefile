@@ -22,7 +22,7 @@ tauri-cli:
 	fi
 
 web:
-	cd $(CHAN_REPO)/web && $(NPM) install && $(NPM) run build
+	$(MAKE) -C $(CHAN_REPO) web
 
 # Stage chan as the bundled helper binary for CLI-owned surfaces.
 # Local drive serving is embedded in chan-desktop; this binary is

@@ -24,6 +24,15 @@ fn main() {
     println!("cargo:rerun-if-changed={}", dist.display());
     walk(dist);
 
+    // Makefile rewrites this after every frontend build. Tracking
+    // it forces release binaries to relink even when the generated
+    // asset names and contents happen to be unchanged.
+    let web_build_stamp = Path::new("../../web/.chan-build-stamp");
+    if !web_build_stamp.exists() {
+        let _ = std::fs::write(web_build_stamp, b"not-built\n");
+    }
+    println!("cargo:rerun-if-changed={}", web_build_stamp.display());
+
     // Embedded model bundle. Only consumed when the `embed-model`
     // cargo feature is on (systacean-6): the `include_bytes!` in
     // `src/embed_seed.rs` is `#![cfg(feature = "embed-model")]`, so
