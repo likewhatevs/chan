@@ -1,5 +1,6 @@
 //! Rich Prompt workspace lifecycle routes.
 
+use std::path::Path as FsPath;
 use std::sync::Arc;
 
 use axum::extract::{Path, Query, State};
@@ -168,7 +169,8 @@ pub async fn api_get_rich_prompt_status(
         Err(join) => return err(StatusCode::INTERNAL_SERVER_ERROR, join.to_string()),
     };
 
-    let (watcher, phase, error) = session_status(query.session, &state);
+    let (watcher, phase, error) =
+        session_status_for_workspace(query.session, &state, &workspace.events_abs);
     Json(workspace_response(workspace, watcher, phase, error)).into_response()
 }
 
@@ -278,6 +280,44 @@ fn session_status(
     watcher_view(state.terminal_sessions.watcher_status(&session))
 }
 
+fn session_status_for_workspace(
+    session: Option<String>,
+    state: &Arc<AppState>,
+    events_abs: &FsPath,
+) -> (RichPromptWatcherView, RichPromptPhase, Option<String>) {
+    let Some(session) = session.filter(|s| !s.trim().is_empty()) else {
+        return (
+            RichPromptWatcherView::MissingSession,
+            RichPromptPhase::Broken,
+            Some("terminal session is required".into()),
+        );
+    };
+    let current = state.terminal_sessions.watcher_status(&session);
+    match current {
+        Some(WatcherStatus::Attached { ref dir }) if FsPath::new(dir) == events_abs => {
+            watcher_view(current)
+        }
+        Some(WatcherStatus::Failed { .. }) | None => watcher_view(current),
+        Some(WatcherStatus::Detached) | Some(WatcherStatus::Attached { .. }) => {
+            match state
+                .terminal_sessions
+                .set_watcher(&session, events_abs.to_path_buf())
+            {
+                Ok(true) => watcher_view(state.terminal_sessions.watcher_status(&session)),
+                Ok(false) => watcher_view(None),
+                Err(e) => (
+                    RichPromptWatcherView::Failed {
+                        dir: Some(events_abs.to_string_lossy().into_owned()),
+                        message: e.to_string(),
+                    },
+                    RichPromptPhase::Broken,
+                    Some(format!("failed to start terminal watcher: {e}")),
+                ),
+            }
+        }
+    }
+}
+
 fn watcher_view(
     status: Option<WatcherStatus>,
 ) -> (RichPromptWatcherView, RichPromptPhase, Option<String>) {
@@ -358,6 +398,8 @@ fn broken_status_response(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::terminal_sessions::{CloseReason, CreateOptions};
+    use portable_pty::PtySize;
 
     #[test]
     fn watcher_view_maps_missing_session_to_broken() {
@@ -377,5 +419,42 @@ mod tests {
         assert!(matches!(watcher, RichPromptWatcherView::Attached { .. }));
         assert_eq!(phase, RichPromptPhase::Active);
         assert!(error.is_none());
+    }
+
+    #[test]
+    fn status_refresh_reattaches_detached_workspace_watcher() {
+        let state = crate::state::test_support::make_test_state(false, false);
+        let handle = state
+            .terminal_sessions
+            .create(CreateOptions {
+                size: PtySize {
+                    rows: 24,
+                    cols: 80,
+                    pixel_width: 0,
+                    pixel_height: 0,
+                },
+                tab_name: Some("@@Architect".into()),
+                window_id: None,
+                mcp_env: false,
+                cwd: None,
+                command: Some("sleep 5".into()),
+                env: Default::default(),
+                preflight: None,
+            })
+            .expect("terminal session");
+        let id = handle.id().to_string();
+        let events = tempfile::tempdir().expect("events dir");
+
+        let (watcher, phase, error) =
+            session_status_for_workspace(Some(id.clone()), &state, events.path());
+
+        assert!(matches!(watcher, RichPromptWatcherView::Attached { .. }));
+        assert_eq!(phase, RichPromptPhase::Active);
+        assert!(error.is_none());
+        assert_eq!(
+            state.terminal_sessions.watcher_dir(&id),
+            Some(events.path().to_path_buf())
+        );
+        state.terminal_sessions.close(&id, CloseReason::Explicit);
     }
 }

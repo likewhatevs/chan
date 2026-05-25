@@ -245,6 +245,7 @@ export type TerminalTab = {
   terminalSessionId?: string;
   controlledTerminal?: boolean;
   lastSeq?: number;
+  lastAgentEchoSeq?: number;
   terminalActivity?: boolean;
   cwd?: string;
   seedInput?: string;
@@ -905,6 +906,7 @@ function tabForReopen(src: Tab): Tab {
     tab.terminalSessionId = undefined;
     tab.controlledTerminal = undefined;
     tab.lastSeq = undefined;
+    tab.lastAgentEchoSeq = undefined;
     tab.sessionMcpEnv = undefined;
     tab.terminalEnvTabName = undefined;
     tab.terminalEnvNamePromptDismissed = undefined;
@@ -1316,6 +1318,7 @@ export function setTerminalSession(
   tab.terminalSessionId = sessionId;
   tab.lastSeq = Math.max(0, Math.floor(lastSeq));
   if (wasFresh) {
+    tab.lastAgentEchoSeq = undefined;
     tab.sessionMcpEnv = sessionMcpEnv ?? terminalMcpEnvEnabled(tab);
     tab.terminalEnvTabName = terminalTabName(tab);
     tab.terminalEnvNamePromptDismissed = false;
@@ -1334,6 +1337,7 @@ export function setTerminalActivity(tab: TerminalTab, active: boolean): void {
 export function clearTerminalSession(tab: TerminalTab): void {
   tab.terminalSessionId = undefined;
   tab.lastSeq = undefined;
+  tab.lastAgentEchoSeq = undefined;
   tab.terminalActivity = undefined;
   tab.sessionMcpEnv = undefined;
   tab.terminalEnvTabName = undefined;
@@ -2155,6 +2159,7 @@ function cloneTab(src: Tab): Tab {
       terminalSessionId: src.terminalSessionId,
       controlledTerminal: src.controlledTerminal,
       lastSeq: src.lastSeq,
+      lastAgentEchoSeq: src.lastAgentEchoSeq,
       cwd: src.cwd,
       seedInput: src.seedInput,
       richPrompt: src.richPrompt ? { ...src.richPrompt } : undefined,
@@ -3410,6 +3415,9 @@ type SerTab = {
   /// ring into a fresh xterm buffer instead of asking for only bytes
   /// after the pre-reload cursor.
   tseq?: number;
+  /// Last injected agent-event echo sequence the browser handled.
+  /// Used only for replaying missed Rich Prompt watcher dispatches.
+  tae?: number;
   /// Desired MCP env injection for fresh terminal sessions. Default on.
   me?: 0;
   /// MCP env mode used by the persisted PTY session. Default on.
@@ -3599,6 +3607,11 @@ function serializeTab(
             tsid: t.terminalSessionId,
             ...(t.sessionMcpEnv === false ? { sme: 0 as const } : {}),
             ...(t.controlledTerminal ? { tc: 1 as const } : {}),
+            ...(typeof t.lastAgentEchoSeq === "number" &&
+            Number.isFinite(t.lastAgentEchoSeq) &&
+            t.lastAgentEchoSeq > 0
+              ? { tae: Math.floor(t.lastAgentEchoSeq) }
+              : {}),
           }
         : {}),
       ...(opts.terminalSessions && t.richPrompt
@@ -3915,6 +3928,12 @@ export async function restoreLayout(
             terminalSessionId,
             controlledTerminal: sertab.tc === 1 || savedTerm?.tc === 1,
             lastSeq: undefined,
+            lastAgentEchoSeq:
+              terminalSessionId &&
+              typeof (sertab.tae ?? savedTerm?.tae) === "number" &&
+              Number.isFinite(sertab.tae ?? savedTerm?.tae)
+                ? Math.max(0, Math.floor((sertab.tae ?? savedTerm?.tae)!))
+                : undefined,
             richPrompt,
             watcher: terminalSessionId && (sertab.twp ?? savedTerm?.twp)
               ? {
@@ -4157,6 +4176,10 @@ export function hydrateTerminalSessionsFromLayout(sessionLayout: SerNode | null)
         liveTerms[j]!.mcpEnv = savedTerm.me === 0 ? false : true;
         liveTerms[j]!.sessionMcpEnv = savedTerm.sme === 0 ? false : true;
         liveTerms[j]!.lastSeq = undefined;
+        liveTerms[j]!.lastAgentEchoSeq =
+          typeof savedTerm.tae === "number" && Number.isFinite(savedTerm.tae)
+            ? Math.max(0, Math.floor(savedTerm.tae))
+            : undefined;
       }
       const richPrompt = richPromptFromSer(savedTerm);
       if (richPrompt) liveTerms[j]!.richPrompt = richPrompt;

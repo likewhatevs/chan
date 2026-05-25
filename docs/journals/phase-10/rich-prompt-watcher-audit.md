@@ -345,3 +345,22 @@ Current Track C state:
    - release validation.
 5. Separately schedule the Track B to Track A desktop icon and desktop
    docs/config audit tasks.
+
+## 2026-05-25 Selected Track A Follow-Up Plan
+
+Rich Prompt watcher audit follow-ups selected for Track A Round 3:
+
+1. Reattach detached Rich Prompt watchers on status refresh when the workspace
+   inspect result is valid and the terminal session still exists.
+2. Treat `pre-flight` as an explicit backend event type, but keep it
+   UI-polled only. It should parse cleanly and should not inject text into the
+   target terminal.
+3. Add `AgentEventEcho` replay on terminal WebSocket reattach using a
+   per-session sequence cursor persisted with the terminal tab session state.
+
+Out of scope for this pass:
+
+- Backfilling old event files already present before watcher attach.
+- Supporting producer modify-only writes to final event filenames.
+- Retrying partial final-file reads. Producers still own the temp-write plus
+  rename contract documented in `crates/chan-server/src/event_watcher.rs`.

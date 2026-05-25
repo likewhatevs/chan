@@ -84,6 +84,7 @@ pub(crate) enum AgentEventType {
     Survey,
     SurveyReply,
     Poke,
+    PreFlight,
     #[serde(other)]
     Unknown,
 }
@@ -453,6 +454,23 @@ mod tests {
         assert_eq!(event.event_type, AgentEventType::SurveyReply);
         assert_eq!(event.answers.expect("answers")[0].key, "1");
         assert_eq!(event.scope_grant, Some(SurveyScope::TopicSession));
+    }
+
+    #[test]
+    fn parse_event_accepts_preflight_shape() {
+        let event = parse_agent_event(
+            r#"{
+              "id": "pre-flight-1",
+              "type": "pre-flight",
+              "from": "@@Spawned",
+              "to": "@@Architect",
+              "note": "please log in first"
+            }"#,
+        )
+        .expect("parse pre-flight event");
+
+        assert_eq!(event.event_type, AgentEventType::PreFlight);
+        assert_eq!(event.note.as_deref(), Some("please log in first"));
     }
 
     #[test]

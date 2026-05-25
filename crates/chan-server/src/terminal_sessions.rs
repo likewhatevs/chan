@@ -27,6 +27,7 @@ use crate::signal::now_unix_secs;
 use std::process::Command;
 
 const BROADCAST_CAP: usize = 1024;
+const AGENT_ECHO_REPLAY_CAP: usize = 128;
 const ALT_SCREEN_ENTER: &[u8] = b"\x1b[?1049h";
 const ALT_SCREEN_EXIT: &[u8] = b"\x1b[?1049l";
 const ALT_SCREEN_TAIL_BYTES: usize = ALT_SCREEN_ENTER.len() - 1;
@@ -188,17 +189,17 @@ pub enum SessionEvent {
     Exit(u32),
     Error(String),
     Closed(CloseReason),
-    /// systacean-33: an agent_event_echo frame. Carries the raw
-    /// bytes that the legacy code path used to write directly to
-    /// the PTY via `session.send_input` (poke text + submit
-    /// chord). The WS layer serializes via `ServerFrame::AgentEventEcho`
-    /// with a base64-encoded payload; the SPA decodes + routes
-    /// through the existing `-a-31` broadcast layer per `-a-92`.
-    /// Connection-drop window: the broadcast channel drops events
-    /// for non-receivers; a brief disconnect loses the echo.
-    /// Mitigation deferred to Round-3 (per-session replay buffer
-    /// or a polling `recent_events` endpoint).
-    AgentEventEcho(Vec<u8>),
+    /// Agent event payload that the terminal WebSocket serializes
+    /// as `agent_event_echo`. The SPA decodes the bytes and routes
+    /// them through the existing input/broadcast path.
+    AgentEventEcho(AgentEventEcho),
+}
+
+#[derive(Debug, Clone)]
+pub struct AgentEventEcho {
+    pub seq: u64,
+    pub event_id: String,
+    pub bytes: Vec<u8>,
 }
 
 #[derive(Debug)]
@@ -210,6 +211,7 @@ pub struct AttachHandle {
     pub seq: u64,
     pub missed_bytes: u64,
     pub alt_screen: bool,
+    pub agent_echo_replay: Vec<AgentEventEcho>,
 }
 
 impl AttachHandle {
@@ -267,7 +269,7 @@ impl Registry {
         let session =
             Session::spawn(id.clone(), self.config.clone(), opts).map_err(CreateError::Spawn)?;
         sessions.insert(id.clone(), session.clone());
-        Ok(session.attach(Some(0)))
+        Ok(session.attach(Some(0), None))
     }
 
     pub fn restart(
@@ -324,7 +326,17 @@ impl Registry {
         }
     }
 
+    #[cfg(test)]
     pub fn attach(&self, id: &str, since: Option<u64>) -> Option<AttachHandle> {
+        self.attach_for_ws(id, since, None)
+    }
+
+    pub fn attach_for_ws(
+        &self,
+        id: &str,
+        since: Option<u64>,
+        agent_echo_since: Option<u64>,
+    ) -> Option<AttachHandle> {
         let session = self
             .sessions
             .lock()
@@ -334,17 +346,28 @@ impl Registry {
         if session.closed.load(Ordering::Relaxed) {
             return None;
         }
-        Some(session.attach(since))
+        Some(session.attach(since, agent_echo_since))
     }
 
+    #[cfg(test)]
     pub fn get_or_create(
         &self,
         id: Option<&str>,
         since: Option<u64>,
         opts: CreateOptions,
     ) -> Result<AttachHandle, CreateError> {
+        self.get_or_create_for_ws(id, since, None, opts)
+    }
+
+    pub fn get_or_create_for_ws(
+        &self,
+        id: Option<&str>,
+        since: Option<u64>,
+        agent_echo_since: Option<u64>,
+        opts: CreateOptions,
+    ) -> Result<AttachHandle, CreateError> {
         if let Some(id) = id {
-            if let Some(handle) = self.attach(id, since) {
+            if let Some(handle) = self.attach_for_ws(id, since, agent_echo_since) {
                 return Ok(handle);
             }
         }
@@ -573,6 +596,18 @@ impl Registry {
     }
 
     fn dispatch_agent_event(&self, event: AgentEvent) {
+        if matches!(
+            event.event_type,
+            crate::event_watcher::AgentEventType::PreFlight
+        ) {
+            tracing::debug!(
+                id = %event.id,
+                from = %event.from,
+                to = %event.to,
+                "pre-flight event is UI-polled only"
+            );
+            return;
+        }
         let Some(session) = self.find_agent_session(&event.to) else {
             self.watcher_dropped_events.fetch_add(1, Ordering::Relaxed);
             tracing::warn!(
@@ -615,7 +650,7 @@ impl Registry {
         let mut bytes = Vec::with_capacity(poke_text.len() + chord.len());
         bytes.extend_from_slice(poke_text.as_bytes());
         bytes.extend_from_slice(chord);
-        session.broadcast(SessionEvent::AgentEventEcho(bytes));
+        session.emit_agent_event_echo(event.id, bytes);
     }
 
     /// `fullstack-b-13`: SPA-driven flip of a session's submit-mode.
@@ -726,6 +761,8 @@ struct Session {
     output_tx: broadcast::Sender<SessionEvent>,
     ring: Mutex<RingBuffer>,
     seq: AtomicU64,
+    agent_echo_ring: Mutex<VecDeque<AgentEventEcho>>,
+    agent_echo_seq: AtomicU64,
     last_activity: AtomicI64,
     attach_count: AtomicUsize,
     winsize: Mutex<PtySize>,
@@ -824,6 +861,8 @@ impl Session {
             output_tx,
             ring: Mutex::new(RingBuffer::new(config.terminal.ring_bytes)),
             seq: AtomicU64::new(0),
+            agent_echo_ring: Mutex::new(VecDeque::new()),
+            agent_echo_seq: AtomicU64::new(0),
             last_activity: AtomicI64::new(now_unix_secs() as i64),
             attach_count: AtomicUsize::new(0),
             winsize: Mutex::new(opts.size),
@@ -929,7 +968,7 @@ impl Session {
         Ok(session)
     }
 
-    fn attach(self: Arc<Self>, since: Option<u64>) -> AttachHandle {
+    fn attach(self: Arc<Self>, since: Option<u64>, agent_echo_since: Option<u64>) -> AttachHandle {
         self.attach_count.fetch_add(1, Ordering::Relaxed);
         let rx = self.output_tx.subscribe();
         let alt_screen = self.in_alt_screen.load(Ordering::Relaxed);
@@ -942,6 +981,7 @@ impl Session {
                 .snapshot_since(since)
         };
         let seq = self.seq.load(Ordering::Relaxed);
+        let agent_echo_replay = self.agent_echo_replay_since(agent_echo_since);
         AttachHandle {
             id: self.id.clone(),
             session: self,
@@ -950,6 +990,7 @@ impl Session {
             seq,
             missed_bytes,
             alt_screen,
+            agent_echo_replay,
         }
     }
 
@@ -1072,6 +1113,37 @@ impl Session {
 
     fn broadcast(&self, event: SessionEvent) {
         let _ = self.output_tx.send(event);
+    }
+
+    fn emit_agent_event_echo(&self, event_id: String, bytes: Vec<u8>) {
+        let seq = self.agent_echo_seq.fetch_add(1, Ordering::Relaxed) + 1;
+        let echo = AgentEventEcho {
+            seq,
+            event_id,
+            bytes,
+        };
+        {
+            let mut ring = self
+                .agent_echo_ring
+                .lock()
+                .expect("terminal agent echo ring poisoned");
+            ring.push_back(echo.clone());
+            while ring.len() > AGENT_ECHO_REPLAY_CAP {
+                ring.pop_front();
+            }
+        }
+        self.broadcast(SessionEvent::AgentEventEcho(echo));
+    }
+
+    fn agent_echo_replay_since(&self, since: Option<u64>) -> Vec<AgentEventEcho> {
+        let since = since.unwrap_or(0);
+        self.agent_echo_ring
+            .lock()
+            .expect("terminal agent echo ring poisoned")
+            .iter()
+            .filter(|echo| echo.seq > since)
+            .cloned()
+            .collect()
     }
 
     fn watcher_status(&self) -> WatcherStatus {
@@ -1604,6 +1676,8 @@ mod tests {
             output_tx,
             ring: Mutex::new(RingBuffer::new(ring_bytes)),
             seq: AtomicU64::new(0),
+            agent_echo_ring: Mutex::new(VecDeque::new()),
+            agent_echo_seq: AtomicU64::new(0),
             last_activity: AtomicI64::new(now_unix_secs() as i64),
             attach_count: AtomicUsize::new(0),
             winsize: Mutex::new(test_size()),
@@ -1646,7 +1720,7 @@ mod tests {
     async fn collect_agent_event_echo(
         session: &mut AttachHandle,
         timeout: Duration,
-    ) -> Option<Vec<u8>> {
+    ) -> Option<AgentEventEcho> {
         let deadline = tokio::time::Instant::now() + timeout;
         loop {
             if tokio::time::Instant::now() >= deadline {
@@ -1654,7 +1728,7 @@ mod tests {
             }
             let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
             match tokio::time::timeout(remaining, session.rx.recv()).await {
-                Ok(Ok(SessionEvent::AgentEventEcho(bytes))) => return Some(bytes),
+                Ok(Ok(SessionEvent::AgentEventEcho(echo))) => return Some(echo),
                 Ok(Ok(_)) => {}
                 Ok(Err(_)) | Err(_) => return None,
             }
@@ -1711,7 +1785,7 @@ mod tests {
     #[tokio::test]
     async fn activity_event_fires_on_first_unfocused_output_and_clears_on_focus() {
         let session = test_session_with_ring(1024);
-        let mut attached = session.clone().attach(Some(0));
+        let mut attached = session.clone().attach(Some(0), None);
 
         session.record_output(b"one");
         let event = tokio::time::timeout(Duration::from_secs(1), attached.rx.recv())
@@ -1772,18 +1846,18 @@ mod tests {
     fn alt_screen_active_skips_replay_until_exit() {
         let session = test_session_with_ring(1024);
         session.record_output(b"before alt\n");
-        let attached = session.clone().attach(Some(0));
+        let attached = session.clone().attach(Some(0), None);
         assert_eq!(attached.replay.concat(), b"before alt\n");
         drop(attached);
 
         session.record_output(b"\x1b[?1049hdraw tui frame");
-        let attached = session.clone().attach(Some(0));
+        let attached = session.clone().attach(Some(0), None);
         assert!(attached.replay.is_empty());
         assert_eq!(attached.missed_bytes, 0);
         drop(attached);
 
         session.record_output(b"\x1b[?1049lback to shell\n");
-        let attached = session.attach(Some(0));
+        let attached = session.attach(Some(0), None);
         assert!(!attached.replay.is_empty());
         assert!(String::from_utf8_lossy(&attached.replay.concat()).contains("back to shell"));
     }
@@ -2115,10 +2189,12 @@ mod tests {
         // systacean-33: the dispatch path now broadcasts an
         // AgentEventEcho event instead of writing to the PTY. The
         // SPA receives the WS frame + routes it through `-a-31`.
-        let bytes = collect_agent_event_echo(&mut handle, Duration::from_secs(5))
+        let echo = collect_agent_event_echo(&mut handle, Duration::from_secs(5))
             .await
             .expect("agent_event_echo not emitted");
-        let text = String::from_utf8_lossy(&bytes);
+        let text = String::from_utf8_lossy(&echo.bytes);
+        assert_eq!(echo.event_id, "event-1");
+        assert_eq!(echo.seq, 1);
         assert!(
             text.contains("poke"),
             "agent_event_echo payload missing `poke`: {text:?}"
@@ -2237,22 +2313,116 @@ mod tests {
         // against-shell-echo. Bonus: kills the macOS-specific
         // PTY soft-wrap + caret-notation flakiness from prior
         // smokes.
-        let bytes = collect_agent_event_echo(&mut handle, Duration::from_secs(5))
+        let echo = collect_agent_event_echo(&mut handle, Duration::from_secs(5))
             .await
             .expect("agent_event_echo not emitted");
         assert!(
-            bytes
+            echo.bytes
                 .windows(b"\x1b[27;9;13~".len())
                 .any(|w| w == b"\x1b[27;9;13~"),
-            "agent-mode dispatch did not include the chord bytes; got {bytes:?}",
+            "agent-mode dispatch did not include the chord bytes; got {:?}",
+            echo.bytes,
         );
         // Verify shell-mode `\n` did NOT slip in (chord replaces
         // the newline, doesn't append to it).
         assert!(
-            !bytes.contains(&b'\n'),
-            "agent-mode dispatch still emitted a trailing \\n; got {bytes:?}",
+            !echo.bytes.contains(&b'\n'),
+            "agent-mode dispatch still emitted a trailing \\n; got {:?}",
+            echo.bytes,
         );
         assert_eq!(registry.watcher_dropped_events(), 0);
+        registry.close(&id, CloseReason::Explicit);
+    }
+
+    #[tokio::test]
+    async fn dispatch_agent_event_treats_preflight_as_poll_only() {
+        let registry = Arc::new(Registry::new(test_config(4096, 4, 60)));
+        let mut handle = registry
+            .create(CreateOptions {
+                size: test_size(),
+                tab_name: Some("Architect".into()),
+                window_id: None,
+                mcp_env: true,
+                cwd: None,
+                command: None,
+                env: Default::default(),
+                preflight: None,
+            })
+            .unwrap();
+
+        registry.dispatch_agent_event(AgentEvent {
+            id: "pre-flight-1".into(),
+            event_type: crate::event_watcher::AgentEventType::PreFlight,
+            from: "@@Spawned".into(),
+            to: "@@Architect".into(),
+            topic: None,
+            questions: None,
+            standing_options: None,
+            scope: None,
+            answers: None,
+            scope_grant: None,
+            note: Some("please log in".into()),
+            path: None,
+            heading: None,
+        });
+
+        assert_eq!(registry.watcher_dropped_events(), 0);
+        assert!(
+            collect_agent_event_echo(&mut handle, Duration::from_millis(100))
+                .await
+                .is_none(),
+            "pre-flight events should remain UI-polled and not inject into the PTY"
+        );
+        registry.close(handle.id(), CloseReason::Explicit);
+    }
+
+    #[test]
+    fn agent_event_echo_replays_for_late_attach() {
+        let registry = Arc::new(Registry::new(test_config(4096, 4, 60)));
+        let handle = registry
+            .create(CreateOptions {
+                size: test_size(),
+                tab_name: Some("Systacean".into()),
+                window_id: None,
+                mcp_env: true,
+                cwd: None,
+                command: None,
+                env: Default::default(),
+                preflight: None,
+            })
+            .unwrap();
+        let id = handle.id().to_string();
+        drop(handle);
+
+        registry.dispatch_agent_event(AgentEvent {
+            id: "event-replay".into(),
+            event_type: crate::event_watcher::AgentEventType::Poke,
+            from: "@@Architect".into(),
+            to: "@@Systacean".into(),
+            topic: None,
+            questions: None,
+            standing_options: None,
+            scope: None,
+            answers: None,
+            scope_grant: None,
+            note: None,
+            path: None,
+            heading: None,
+        });
+
+        let replay_handle = registry
+            .attach_for_ws(&id, Some(0), Some(0))
+            .expect("reattach");
+        let replay = &replay_handle.agent_echo_replay;
+        assert_eq!(replay.len(), 1);
+        assert_eq!(replay[0].seq, 1);
+        assert_eq!(replay[0].event_id, "event-replay");
+        assert!(String::from_utf8_lossy(&replay[0].bytes).contains("poke"));
+
+        let replay_after_seen_handle = registry
+            .attach_for_ws(&id, Some(0), Some(replay[0].seq))
+            .expect("reattach after seen");
+        assert!(replay_after_seen_handle.agent_echo_replay.is_empty());
         registry.close(&id, CloseReason::Explicit);
     }
 
@@ -2357,10 +2527,10 @@ mod tests {
         // + read bytes directly. As a bonus, the cross-platform
         // PTY-flake pattern that bit smokes -27/-29/-31/-32
         // goes away for this test.
-        let bytes = collect_agent_event_echo(&mut handle, Duration::from_secs(5))
+        let echo = collect_agent_event_echo(&mut handle, Duration::from_secs(5))
             .await
             .expect("agent_event_echo not emitted");
-        let text = String::from_utf8_lossy(&bytes);
+        let text = String::from_utf8_lossy(&echo.bytes);
         assert!(
             text.contains("Poke, it's "),
             "rich template missing prefix; got {text:?}"
@@ -2413,10 +2583,10 @@ mod tests {
         });
 
         // systacean-33: read AgentEventEcho directly (no PTY echo).
-        let bytes = collect_agent_event_echo(&mut handle, Duration::from_secs(5))
+        let echo = collect_agent_event_echo(&mut handle, Duration::from_secs(5))
             .await
             .expect("agent_event_echo not emitted");
-        let text = String::from_utf8_lossy(&bytes);
+        let text = String::from_utf8_lossy(&echo.bytes);
         assert!(
             text.contains("poke"),
             "legacy fallback should emit bare poke; got {text:?}"

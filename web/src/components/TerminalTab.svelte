@@ -132,7 +132,12 @@
     /// the raw bytes (chord may include non-UTF8 bytes per
     /// `fullstack-b-13`'s submit-mode chord; base64 round-trips
     /// the whole sequence without escape-string contortions).
-    | { type: "agent_event_echo"; payload_b64: string };
+    | {
+        type: "agent_event_echo";
+        seq: number;
+        event_id: string;
+        payload_b64: string;
+      };
 
   type CloseReason = "idle" | "drive" | "shutdown" | "explicit" | "capped" | "error";
 
@@ -606,6 +611,7 @@
         windowId: sessionWindowId(),
         sessionId: tab.terminalSessionId,
         lastSeq: tab.lastSeq,
+        agentEchoSince: tab.lastAgentEchoSeq,
         mcpEnv: mcpEnvOn,
         cwd: reattaching ? undefined : tab.cwd,
       }),
@@ -704,7 +710,16 @@
         // `tab.broadcastEnabled` + the broadcast-member set
         // that the SPA already owns.
         const payload = decodeAgentEventEcho(frame.payload_b64);
-        if (payload) sendUserInput(payload);
+        if (payload) {
+          sendUserInput(payload);
+          if (Number.isFinite(frame.seq)) {
+            tab.lastAgentEchoSeq = Math.max(
+              Math.floor(tab.lastAgentEchoSeq ?? 0),
+              Math.floor(frame.seq),
+            );
+            scheduleTerminalSessionSave();
+          }
+        }
       }
     };
     ws.onclose = () => {

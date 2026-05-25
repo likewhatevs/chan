@@ -12,7 +12,7 @@ import terminal from "./TerminalTab.svelte?raw";
 describe("fullstack-a-92: ServerFrame discriminator", () => {
   test("ServerFrame union includes `agent_event_echo` variant", () => {
     expect(terminal).toMatch(
-      /\| \{ type: "agent_event_echo"; payload_b64: string \};/,
+      /type: "agent_event_echo";[\s\S]*?seq: number;[\s\S]*?event_id: string;[\s\S]*?payload_b64: string;/,
     );
   });
 
@@ -26,7 +26,13 @@ describe("fullstack-a-92: ServerFrame discriminator", () => {
 describe("fullstack-a-92: WS handler routes the payload through sendUserInput", () => {
   test("agent_event_echo branch decodes + calls sendUserInput", () => {
     expect(terminal).toMatch(
-      /else if \(frame\.type === "agent_event_echo"\) \{[\s\S]*?const payload = decodeAgentEventEcho\(frame\.payload_b64\);[\s\S]*?if \(payload\) sendUserInput\(payload\);/,
+      /else if \(frame\.type === "agent_event_echo"\) \{[\s\S]*?const payload = decodeAgentEventEcho\(frame\.payload_b64\);[\s\S]*?if \(payload\) \{[\s\S]*?sendUserInput\(payload\);/,
+    );
+  });
+
+  test("agent_event_echo branch records replay sequence after injection", () => {
+    expect(terminal).toMatch(
+      /tab\.lastAgentEchoSeq = Math\.max\([\s\S]*?Math\.floor\(tab\.lastAgentEchoSeq \?\? 0\),[\s\S]*?Math\.floor\(frame\.seq\),/,
     );
   });
 

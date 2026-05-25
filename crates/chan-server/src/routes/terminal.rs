@@ -30,6 +30,7 @@ const MAX_ROWS: u16 = 200;
 pub struct TerminalQuery {
     session: Option<String>,
     since: Option<u64>,
+    agent_echo_since: Option<u64>,
     cols: Option<u16>,
     rows: Option<u16>,
     tab_name: Option<String>,
@@ -175,12 +176,16 @@ enum ServerFrame {
     /// systacean-33: agent_event_echo frame. The
     /// `dispatch_agent_event` path used to write the poke
     /// bytes straight to the PTY; now it broadcasts a
-    /// `SessionEvent::AgentEventEcho(bytes)` which serializes to
+    /// `SessionEvent::AgentEventEcho` which serializes to
     /// this frame, and the SPA decodes + routes through its
     /// `-a-31` broadcast layer per `-a-92`. Payload is base64-
     /// encoded raw bytes (poke text + submit-mode chord).
     #[serde(rename = "agent_event_echo")]
-    AgentEventEcho { payload_b64: String },
+    AgentEventEcho {
+        seq: u64,
+        event_id: String,
+        payload_b64: String,
+    },
 }
 
 pub async fn api_terminal_ws(
@@ -218,6 +223,7 @@ pub async fn api_terminal_ws(
     let opts = TerminalWsOptions {
         session_id: query.session,
         since: query.since,
+        agent_echo_since: query.agent_echo_since,
         size,
         tab_name,
         window_id,
@@ -597,6 +603,7 @@ pub async fn api_terminal_event_reply(
 struct TerminalWsOptions {
     session_id: Option<String>,
     since: Option<u64>,
+    agent_echo_since: Option<u64>,
     size: PtySize,
     tab_name: Option<String>,
     window_id: Option<String>,
@@ -696,9 +703,10 @@ async fn terminal_ws(mut socket: WebSocket, state: Arc<AppState>, opts: Terminal
         env: Default::default(),
         preflight: None,
     };
-    let mut session = match state.terminal_sessions.get_or_create(
+    let mut session = match state.terminal_sessions.get_or_create_for_ws(
         opts.session_id.as_deref(),
         opts.since,
+        opts.agent_echo_since,
         create_opts,
     ) {
         Ok(session) => session,
@@ -773,6 +781,23 @@ async fn terminal_ws(mut socket: WebSocket, state: Arc<AppState>, opts: Terminal
             .is_err()
     {
         return;
+    }
+    for echo in &session.agent_echo_replay {
+        use base64::Engine;
+        let payload_b64 = base64::engine::general_purpose::STANDARD.encode(&echo.bytes);
+        if send_frame(
+            &mut socket,
+            ServerFrame::AgentEventEcho {
+                seq: echo.seq,
+                event_id: echo.event_id.clone(),
+                payload_b64,
+            },
+        )
+        .await
+        .is_err()
+        {
+            return;
+        }
     }
     session.request_redraw();
     let (cwd, cwd_rel) = terminal_cwd_payload(&state.drive(), session.cwd());
@@ -877,14 +902,18 @@ async fn terminal_ws(mut socket: WebSocket, state: Arc<AppState>, opts: Terminal
                         let _ = send_frame(&mut socket, ServerFrame::Closed { reason }).await;
                         break;
                     }
-                    Ok(SessionEvent::AgentEventEcho(bytes)) => {
+                    Ok(SessionEvent::AgentEventEcho(echo)) => {
                         // systacean-33: serialize the raw bytes as
                         // a base64 payload + emit the
                         // `agent_event_echo` frame; SPA decodes +
                         // routes through `-a-31` per `-a-92`.
                         use base64::Engine;
-                        let payload_b64 = base64::engine::general_purpose::STANDARD.encode(&bytes);
-                        if send_frame(&mut socket, ServerFrame::AgentEventEcho { payload_b64 }).await.is_err() {
+                        let payload_b64 = base64::engine::general_purpose::STANDARD.encode(&echo.bytes);
+                        if send_frame(&mut socket, ServerFrame::AgentEventEcho {
+                            seq: echo.seq,
+                            event_id: echo.event_id,
+                            payload_b64,
+                        }).await.is_err() {
                             break;
                         }
                     }
