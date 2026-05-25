@@ -55,6 +55,15 @@ Progress:
 - 2026-05-25: implemented typed drive-warning status actions and a Drive
   Warnings dialog with copy path, session dismiss, and safe broken Draft
   metadata discard through `/api/drafts/discard`.
+- 2026-05-25: confirmed the live Terminal pane-switch font/glyph bug is gone
+  after retesting two split panes with terminal output, ANSI-colored output,
+  and focus changes.
+- 2026-05-25: restored browser ownership of plain `Cmd+L`; chan screen lock is
+  only `Cmd+. L`.
+- 2026-05-25: tightened the Matrix follow-up scope: replace the local
+  approximation with a high-fidelity port or adaptation of the MIT-licensed
+  `dcragusa/MatrixScreensaver` source code, preserving visible credit and
+  license attribution.
 
 Current wave:
 
@@ -64,6 +73,8 @@ Current wave:
 - Run a broader live visual regression pass over the completed Track C chrome:
   Terminal scroll-heavy/ANSI pane switching, Graph filesystem spine, File
   Browser expansion restore, Matrix lock, and actionable drive-warning dialog.
+- Port or adapt the Matrix lock rain from the upstream
+  `dcragusa/MatrixScreensaver` source before marking screen-lock visuals done.
 - Cut follow-up implementation only for live regressions found in that pass.
 
 ## Objectives
@@ -241,20 +252,27 @@ Current issue:
 Target behavior:
 
 - Keep the existing Matrix intro text and timing.
-- Use the reference rain cadence and cell geometry:
+- Do not keep tuning a hand-rolled lookalike. Port or adapt the upstream
+  `matrix.js` and `matrix.css` behavior into the Svelte component unless an
+  app-shell constraint requires a small wrapper.
+- Keep upstream rain cadence and cell geometry as the source of truth:
   - 40 ms draw interval.
   - 11 px horizontal spacing.
   - 19 px vertical spacing.
   - dense staggered columns with randomized delays.
-- Use the reference color tiers:
+- Keep upstream color tiers:
   - near-white head glyph.
   - pale lead glyphs.
   - green body glyphs.
   - black per-cell fade and clear behind the trail.
+- Prefer the upstream Matrix font assets when bundling and licensing are
+  acceptable. If a font asset cannot be bundled, document the fallback and
+  verify the visual delta.
 - Keep the implementation self-contained inside the app bundle. Do not add a
   runtime dependency on the external reference site.
 - Show a user-visible credit for `dcragusa/MatrixScreensaver` in Settings
-  About.
+  About, and include the MIT license notice with any copied or substantially
+  adapted source.
 
 ## 8b. Screen saver presentation state machine
 
