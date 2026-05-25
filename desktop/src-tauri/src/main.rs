@@ -13,7 +13,7 @@ use std::collections::HashMap;
 #[cfg(unix)]
 use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, OnceLock};
 
 use serde::Serialize;
 use tauri::menu::{Menu, MenuItemBuilder, MenuItemKind, PredefinedMenuItem, WINDOW_SUBMENU_ID};
@@ -34,7 +34,9 @@ pub struct AppState {
     /// Live embedded local drives keyed by canonical drive path.
     serves: Mutex<HashMap<String, ServeHandle>>,
     /// In-process chan-server host for normal local drives.
-    embedded: Option<embedded::EmbeddedServer>,
+    /// Initialized during Tauri setup, after the async runtime is
+    /// available for Tokio listener registration.
+    embedded: OnceLock<embedded::EmbeddedServer>,
     /// Embedded chan-tunnel-server. Owns the tunnel listener on
     /// 127.0.0.1:7777, the shared registry, and the per-tenant
     /// loopback listeners that proxy into registered remote
@@ -1496,18 +1498,11 @@ fn main() {
         }
     };
     let store = ConfigStore::new().expect("failed to init config store");
-    let embedded = match embedded::EmbeddedServer::start() {
-        Ok(server) => Some(server),
-        Err(e) => {
-            tracing::warn!(error = %e, "embedded local server disabled");
-            None
-        }
-    };
     let bin_status = compute_bin_status();
     let state = Arc::new(AppState {
         store: Mutex::new(store),
         serves: Mutex::new(HashMap::new()),
-        embedded,
+        embedded: OnceLock::new(),
         tunnel: TunnelState::new(),
         bin_status,
         live_window_zooms: Mutex::new(HashMap::new()),
@@ -1524,6 +1519,17 @@ fn main() {
         .manage(state)
         .setup(move |app| {
             install_app_menu(app.handle())?;
+
+            match tauri::async_runtime::block_on(embedded::EmbeddedServer::start()) {
+                Ok(server) => {
+                    if state_for_setup.embedded.set(server).is_err() {
+                        tracing::warn!("embedded local server initialized more than once");
+                    }
+                }
+                Err(e) => {
+                    tracing::warn!(error = %e, "embedded local server disabled");
+                }
+            }
 
             // Deep-link callbacks from the system browser
             // (`chan://auth/callback#...`). Cold-start URLs and

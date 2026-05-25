@@ -55,7 +55,7 @@ pub async fn start(app: AppHandle, state: Arc<AppState>, key: String) -> Result<
     if state.serves.lock().unwrap().contains_key(&key) {
         return Ok(());
     }
-    let Some(embedded) = state.embedded.as_ref() else {
+    let Some(embedded) = state.embedded.get() else {
         return Err("embedded local server is unavailable".to_string());
     };
     let url = embedded.open_drive(&key).await?;
@@ -114,7 +114,7 @@ pub fn stop_all(state: &AppState) {
 }
 
 fn stop_handle(app: Option<&AppHandle>, state: &AppState, key: &str, handle: ServeHandle) {
-    if let Some(embedded) = state.embedded.as_ref() {
+    if let Some(embedded) = state.embedded.get() {
         if let Err(e) = embedded.close_prefix(&handle.prefix) {
             tracing::warn!(key = %key, error = %e, "closing embedded drive failed");
         }

@@ -140,13 +140,20 @@ Desktop File Browser drag-out/download:
   code path: File Browser drag payloads and right-click Download use
   `api.downloadUrl`, and `/api/files/<path>?download=1` returns file bytes or
   directory tar archives through `chan-drive`.
+- macOS desktop smoke on 2026-05-25 found and fixed two launch blockers
+  before native drag-out could be tested:
+  - embedded local server startup now runs during Tauri setup after the async
+    runtime exists;
+  - prefixed desktop drive launch URLs now open
+    `/drive-*/index.html?t=<token>` instead of `/drive-*/?t=<token>`, which
+    returned 404 under the multi-drive host.
+- After those fixes, Tauri/WKWebView did not produce a Finder file from the
+  browser `DownloadURL` payload in repeated macOS drag-out attempts. Treat the
+  native bridge below as required, not optional, for desktop drag-out.
 - Use an OS-native drag payload or a temporary desktop export provider from
   the Tauri layer.
-- Desktop native OS drag-out is not yet proven by this automated coverage.
-  If Tauri/WebKit cannot export the browser `DownloadURL` payload to the
-  file manager, add a small native bridge that fetches the same download URL,
-  stages a temporary file or archive, and starts the OS drag from that staged
-  export.
+- The native bridge must fetch the same token-bearing download URL, stage a
+  temporary file or archive, and start the OS drag from that staged export.
 - Do not add direct desktop filesystem reads of drive content. Route export
   data through the embedded server or another chan-drive-backed boundary.
 - Clean temporary exports after the drag lifecycle finishes, or through a
@@ -289,6 +296,8 @@ Operational release checks:
     `cd web && npm run test -- fileTreeDragOut.test.ts` and
     `cargo test -p chan-server download_path_sync`. Done on 2026-05-25.
   - Drag a File Browser file to the desktop and verify name and bytes.
+    macOS browser-payload smoke did not create a Finder file on 2026-05-25;
+    native bridge pending.
   - Drag a File Browser directory to the desktop and verify tree or archive
     contents.
   - Cancel a File Browser drag-out and verify temporary export cleanup.
@@ -362,5 +371,9 @@ Operational release checks:
     Done, without editing Track C's main roadmap.
 16. Verify the File Browser download code path for drag-out and right-click
     Download. Done on 2026-05-25.
-17. Current next remains open for selection. CLI handoff is deferred until
+17. Fix embedded desktop startup and prefixed launch URL blockers found during
+    native drag-out smoke. Done on 2026-05-25.
+18. Implement native desktop File Browser drag-out bridge using the same
+    `download=1` URL path. Pending.
+19. Current next remains open for selection. CLI handoff is deferred until
    its design checkpoint.

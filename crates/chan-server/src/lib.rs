@@ -168,9 +168,14 @@ pub struct ServeHandle {
 
 impl ServeHandle {
     pub fn launch_url(&self) -> String {
+        let path = if self.prefix.is_empty() {
+            "/".to_string()
+        } else {
+            format!("{}/index.html", self.prefix)
+        };
         match &self.token {
-            Some(t) => format!("http://{}{}/?t={}", self.addr, self.prefix, t),
-            None => format!("http://{}{}/", self.addr, self.prefix),
+            Some(t) => format!("http://{}{}?t={}", self.addr, path, t),
+            None => format!("http://{}{}", self.addr, path),
         }
     }
 }
@@ -1078,5 +1083,28 @@ mod tests {
         ] {
             assert!(sanitize_prefix(bad).is_err(), "expected error for {bad:?}");
         }
+    }
+
+    #[test]
+    fn launch_url_uses_index_for_prefixed_serves() {
+        let handle = ServeHandle {
+            addr: "127.0.0.1:1234".parse().unwrap(),
+            prefix: "/drive-abcd".to_string(),
+            token: Some("token".to_string()),
+        };
+        assert_eq!(
+            handle.launch_url(),
+            "http://127.0.0.1:1234/drive-abcd/index.html?t=token"
+        );
+    }
+
+    #[test]
+    fn launch_url_preserves_root_for_unprefixed_serves() {
+        let handle = ServeHandle {
+            addr: "127.0.0.1:1234".parse().unwrap(),
+            prefix: String::new(),
+            token: Some("token".to_string()),
+        };
+        assert_eq!(handle.launch_url(), "http://127.0.0.1:1234/?t=token");
     }
 }

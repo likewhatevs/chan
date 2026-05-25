@@ -19,7 +19,7 @@ pub struct EmbeddedServer {
 }
 
 impl EmbeddedServer {
-    pub fn start() -> Result<Self, String> {
+    pub async fn start() -> Result<Self, String> {
         let library = chan_drive::Library::open()
             .map_err(|e| format!("opening chan drive registry for embedded server: {e}"))?;
         let host = Arc::new(chan_server::DriveHost::new(library));
