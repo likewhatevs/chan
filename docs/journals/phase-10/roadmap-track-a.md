@@ -176,7 +176,11 @@ Rich Prompt:
 Server and editor consistency:
 
 - Run low-file-descriptor stress under `ulimit -n 256` with many terminals
-  and active indexing.
+  and active indexing. Done on 2026-05-25 with an isolated `/tmp`
+  config/home: `chan serve` stayed healthy at a 256 fd soft limit,
+  created 32 live `sleep 45` terminals, rejected 3 extras at the
+  configured session cap, rebuilt a 600-note drive, and settled back to
+  idle with 600 indexed docs.
 - Reproduce rapid-edit stale editor/index races.
 - Decide whether background search and indexing need further throttling
   beyond current file-descriptor budgets and terminal admission.
@@ -328,5 +332,6 @@ Operational release checks:
 9. Verify manual/site local gate. Done.
 10. Refresh release workflow comments for embedded desktop mode. Done.
 11. Audit async server sync-I/O boundaries. Done.
-12. Current next remains open for selection. CLI handoff is deferred until
+12. Low-file-descriptor stress with terminals and active indexing. Done.
+13. Current next remains open for selection. CLI handoff is deferred until
    its design checkpoint.
