@@ -196,6 +196,19 @@ pub fn list(drafts_dir: &Path) -> Result<Vec<TeamRef>> {
     Ok(out)
 }
 
+/// True when a Drafts metadata entry belongs to the team subsystem.
+pub fn owns_preflight(name: &str, path: &Path) -> bool {
+    let Some(team_name) = name.strip_prefix(TEAM_DIR_PREFIX) else {
+        return false;
+    };
+    if team_name.is_empty() {
+        return false;
+    }
+    fs::symlink_metadata(path)
+        .map(|meta| meta.is_dir() && !meta.file_type().is_symlink())
+        .unwrap_or(false)
+}
+
 /// Verbatim-copy a team workspace under a new name. All files +
 /// subdirectories are copied byte-for-byte (per addendum-b
 /// clarification #10); the new team's `config.toml` then has its

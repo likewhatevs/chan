@@ -139,6 +139,7 @@ pub fn preflight(drafts_dir: &Path) -> Result<Vec<DraftIssue>> {
         let path = entry.path();
         if crate::rich_prompts::owns_preflight(&name, &path)
             || crate::rich_prompts::is_legacy_history_dir(&name, &path)
+            || crate::teams::owns_preflight(&name, &path)
         {
             continue;
         }
@@ -763,6 +764,29 @@ mod tests {
                 message: "missing draft.md".to_string(),
             }]
         );
+    }
+
+    #[test]
+    fn preflight_skips_team_workspaces() {
+        let td = TempDir::new().unwrap();
+        let root = td.path().join("drafts");
+        ensure_root(&root).unwrap();
+        crate::teams::create(
+            &root,
+            &crate::teams::TeamConfig {
+                team_name: "Footer".to_string(),
+                host_name: "Alex".to_string(),
+                host_handle: "@@Alex".to_string(),
+                auto_prefix_at: true,
+                created_at: "2026-05-25T00:00:00Z".to_string(),
+                members: vec![],
+            },
+        )
+        .unwrap();
+
+        let issues = preflight(&root).unwrap();
+
+        assert!(issues.is_empty());
     }
 
     #[test]
