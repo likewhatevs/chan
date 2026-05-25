@@ -88,6 +88,8 @@ Progress:
 
 Current wave:
 
+- Next-agent continuation plan:
+  `docs/journals/phase-10/track-c-next-agent-handoff.md`.
 - Live-regress shared inspector Upload/Download across File Browser, Graph,
   and Editor details.
 - Live-regress Draft explicit Save for single-file Drafts and Draft
