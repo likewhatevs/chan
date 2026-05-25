@@ -70,7 +70,7 @@ describe("fullstack-a-67 slice 2: App.svelte runCommand routes app.draft.new", (
 
   test("createDraftAndOpen helper is preserved (the routing target)", () => {
     expect(app).toMatch(
-      /async function createDraftAndOpen\(\): Promise<void> \{[\s\S]*?const \{ path \} = await api\.createDraft\(\);[\s\S]*?await openInActivePane\(path\);/,
+      /async function createDraftAndOpen\(\): Promise<void> \{[\s\S]*?const \{ path \} = await api\.createDraft\(\);[\s\S]*?await openInActivePane\(path, \{/,
     );
   });
 });

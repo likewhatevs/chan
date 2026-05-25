@@ -28,6 +28,8 @@ use serde::{Deserialize, Serialize};
 use crate::error::{err, err_from};
 use crate::state::AppState;
 
+const NEW_DRAFT_CONTENT: &str = "# Draft\n";
+
 #[derive(Deserialize)]
 pub struct DraftPathPayload {
     /// Any unified path inside the draft workspace, usually
@@ -94,7 +96,7 @@ pub struct RichPromptCreateResponse {
     pub name: String,
 }
 
-/// Create a fresh draft directory + an empty `draft.md` inside.
+/// Create a fresh draft directory + a seeded `draft.md` inside.
 ///
 /// Race-window note: `next_untitled_draft_name` + `create_draft_dir`
 /// can race against another concurrent creator; if `create_draft_dir`
@@ -103,26 +105,7 @@ pub struct RichPromptCreateResponse {
 /// the retry keeps the contract clean.
 pub async fn api_create_draft(State(state): State<Arc<AppState>>) -> Response {
     let drive = state.drive().clone();
-    let result = tokio::task::spawn_blocking(move || -> Result<String, chan_drive::ChanError> {
-        for _ in 0..2 {
-            let name = drive.next_untitled_draft_name()?;
-            match drive.create_draft_dir(&name) {
-                Ok(_) => {
-                    let unified = format!("Drafts/{name}/draft.md");
-                    drive.write_text(&unified, "")?;
-                    return Ok(name);
-                }
-                Err(chan_drive::ChanError::Io(msg)) if msg.contains("already exists") => {
-                    continue;
-                }
-                Err(e) => return Err(e),
-            }
-        }
-        Err(chan_drive::ChanError::Io(
-            "race condition picking next untitled draft name (retried 2x)".to_string(),
-        ))
-    })
-    .await;
+    let result = tokio::task::spawn_blocking(move || create_draft_sync(&drive)).await;
 
     let name = match result {
         Ok(Ok(name)) => name,
@@ -133,6 +116,26 @@ pub async fn api_create_draft(State(state): State<Arc<AppState>>) -> Response {
     let path = format!("Drafts/{name}/draft.md");
     state.self_writes.note(&path);
     Json(DraftCreateResponse { path, name }).into_response()
+}
+
+fn create_draft_sync(drive: &chan_drive::Drive) -> Result<String, chan_drive::ChanError> {
+    for _ in 0..2 {
+        let name = drive.next_untitled_draft_name()?;
+        match drive.create_draft_dir(&name) {
+            Ok(_) => {
+                let unified = format!("Drafts/{name}/draft.md");
+                drive.write_text(&unified, NEW_DRAFT_CONTENT)?;
+                return Ok(name);
+            }
+            Err(chan_drive::ChanError::Io(msg)) if msg.contains("already exists") => {
+                continue;
+            }
+            Err(e) => return Err(e),
+        }
+    }
+    Err(chan_drive::ChanError::Io(
+        "race condition picking next untitled draft name (retried 2x)".to_string(),
+    ))
 }
 
 pub async fn api_inspect_draft(
@@ -364,6 +367,17 @@ mod tests {
         // Gap at `rich-prompt-1` is reused (picker walks from
         // 1 upward, returns the first missing slot).
         assert_eq!(next_rich_prompt_name(&drive).unwrap(), "rich-prompt-1");
+    }
+
+    #[test]
+    fn create_draft_sync_seeds_title() {
+        let (_cfg, _root, drive) = make_drive();
+
+        let name = create_draft_sync(&drive).unwrap();
+        let path = format!("Drafts/{name}/draft.md");
+
+        assert_eq!(name, "untitled");
+        assert_eq!(drive.read_text(&path).unwrap(), NEW_DRAFT_CONTENT);
     }
 
     #[test]

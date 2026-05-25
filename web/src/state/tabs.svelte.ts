@@ -36,6 +36,10 @@ function id(prefix: string): string {
 ///   - `table`: tabular renderer with click-to-edit cells. CSV /
 ///     TSV only today.
 export type Mode = "wysiwyg" | "source" | "pretty" | "table";
+export type EditorSelection = { from: number; to: number };
+export type OpenFileOptions = {
+  initialSelection?: EditorSelection;
+};
 
 /// Default mode for a freshly opened file. JSON tabs land in
 /// "pretty"; CSV/TSV tabs land in "table"; markdown-class tabs
@@ -1718,7 +1722,11 @@ async function loadTabContent(
 }
 
 /// Open a file in a specific pane. If already open there, just focus.
-export async function openInPane(paneId: string, path: string): Promise<void> {
+export async function openInPane(
+  paneId: string,
+  path: string,
+  opts: OpenFileOptions = {},
+): Promise<void> {
   if (!isEditableText(path)) {
     notify(`'${path}' is not an editable text file`);
     return;
@@ -1749,13 +1757,17 @@ export async function openInPane(paneId: string, path: string): Promise<void> {
     pendingReopen.fileMissing = null;
     pendingReopen.repoRoot = null;
     pendingReopen.fsWritable = true;
+    if (opts.initialSelection) pendingReopen.caret = { ...opts.initialSelection };
     p.activeTabId = pendingReopen.id;
     layout.activePaneId = paneId;
     await loadTabContent(paneId, pendingReopen.id, path);
     return;
   }
-  const existing = p.tabs.find((t) => t.kind === "file" && t.path === path);
+  const existing = p.tabs.find(
+    (t): t is FileTab => t.kind === "file" && t.path === path,
+  );
   if (existing) {
+    if (opts.initialSelection) existing.caret = { ...opts.initialSelection };
     p.activeTabId = existing.id;
     layout.activePaneId = paneId;
     return;
@@ -1791,14 +1803,18 @@ export async function openInPane(paneId: string, path: string): Promise<void> {
     highlightTrailingWhitespace: false,
     codeBlocksCollapsed: false,
   };
+  if (opts.initialSelection) newTab.caret = { ...opts.initialSelection };
   p.tabs.push(newTab);
   p.activeTabId = newTab.id;
   layout.activePaneId = paneId;
   await loadTabContent(paneId, newTab.id, path);
 }
 
-export function openInActivePane(path: string): Promise<void> {
-  return openInPane(layout.activePaneId, path);
+export function openInActivePane(
+  path: string,
+  opts: OpenFileOptions = {},
+): Promise<void> {
+  return openInPane(layout.activePaneId, path, opts);
 }
 
 /// Move the active pane's selection to the previous tab. Wraps from

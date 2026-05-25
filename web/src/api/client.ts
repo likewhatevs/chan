@@ -679,8 +679,8 @@ export const api = {
       }
       xhr.send(form);
     }),
-  /// `fullstack-a-66`: create a new draft directory + draft.md
-  /// inside via the dedicated /api/drafts/new route. Picks the
+  /// `fullstack-a-66`: create a new draft directory + seeded
+  /// draft.md inside via the dedicated /api/drafts/new route. Picks the
   /// next `untitled` / `untitled-N` name server-side via
   /// `Drive::next_untitled_draft_name`. Returns the unified-path
   /// `Drafts/<name>/draft.md` which the SPA opens via the

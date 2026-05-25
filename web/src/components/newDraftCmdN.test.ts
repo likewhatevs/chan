@@ -2,6 +2,7 @@ import { describe, expect, test } from "vitest";
 import app from "../App.svelte?raw";
 import client from "../api/client.ts?raw";
 import shortcuts from "../state/shortcuts.ts?raw";
+import tabs from "../state/tabs.svelte.ts?raw";
 
 // `fullstack-a-66` slice 1: SPA Cmd+N → /api/drafts/new →
 // open in active pane.
@@ -29,9 +30,9 @@ describe("fullstack-a-66 slice 1: Cmd+N keymap branch", () => {
     );
   });
 
-  test("createDraftAndOpen calls api.createDraft then openInActivePane", () => {
+  test("createDraftAndOpen calls api.createDraft then opens with title selected", () => {
     expect(app).toMatch(
-      /async function createDraftAndOpen\(\): Promise<void> \{[\s\S]*?const \{ path \} = await api\.createDraft\(\);[\s\S]*?await noteDraftCreated\(path\);[\s\S]*?await openInActivePane\(path\);/,
+      /async function createDraftAndOpen\(\): Promise<void> \{[\s\S]*?const \{ path \} = await api\.createDraft\(\);[\s\S]*?await noteDraftCreated\(path\);[\s\S]*?await openInActivePane\(path, \{[\s\S]*?initialSelection: NEW_DRAFT_TITLE_SELECTION,/,
     );
   });
 
@@ -43,7 +44,22 @@ describe("fullstack-a-66 slice 1: Cmd+N keymap branch", () => {
 
   test("staged draft materialization also refreshes Drafts state before opening", () => {
     expect(app).toMatch(
-      /const \{ path \} = await api\.createDraft\(\);[\s\S]*?await noteDraftCreated\(path\);[\s\S]*?await openInPane\(entry\.paneId, path\);/,
+      /const \{ path \} = await api\.createDraft\(\);[\s\S]*?await noteDraftCreated\(path\);[\s\S]*?await openInPane\(entry\.paneId, path, \{[\s\S]*?initialSelection: NEW_DRAFT_TITLE_SELECTION,/,
+    );
+  });
+
+  test("new draft selection spans the seeded Draft heading text", () => {
+    expect(app).toMatch(
+      /const NEW_DRAFT_TITLE_SELECTION = \{[\s\S]*?from: "# "\.length,[\s\S]*?to: "# Draft"\.length,/,
+    );
+  });
+
+  test("openInPane applies optional initial selection to new tabs", () => {
+    expect(tabs).toMatch(
+      /type OpenFileOptions = \{[\s\S]*?initialSelection\?: EditorSelection;/,
+    );
+    expect(tabs).toMatch(
+      /if \(opts\.initialSelection\) newTab\.caret = \{ \.\.\.opts\.initialSelection \};/,
     );
   });
 

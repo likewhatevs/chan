@@ -117,6 +117,10 @@
   // serializeLayout() already does that, but the function is called
   // synchronously, and Svelte only tracks reads that happen *during*
   // the effect's run.
+  const NEW_DRAFT_TITLE_SELECTION = {
+    from: "# ".length,
+    to: "# Draft".length,
+  };
   let bootstrapped = $state(false);
   // `fullstack-42`: `h` inside Pane Mode toggles a cheatsheet
   // overlay that lists every Cmd+K binding. The flag stays inside
@@ -811,7 +815,9 @@
     try {
       const { path } = await api.createDraft();
       await noteDraftCreated(path);
-      await openInActivePane(path);
+      await openInActivePane(path, {
+        initialSelection: NEW_DRAFT_TITLE_SELECTION,
+      });
     } catch (err) {
       console.warn("[chan] createDraft failed", err);
       setTransientStatus(`New draft failed: ${(err as Error).message}`);
@@ -834,7 +840,9 @@
         try {
           const { path } = await api.createDraft();
           await noteDraftCreated(path);
-          await openInPane(entry.paneId, path);
+          await openInPane(entry.paneId, path, {
+            initialSelection: NEW_DRAFT_TITLE_SELECTION,
+          });
         } catch (err) {
           console.warn("[chan] paneMode stagedDraftEditor failed", err);
           setTransientStatus(`New draft failed: ${(err as Error).message}`);
