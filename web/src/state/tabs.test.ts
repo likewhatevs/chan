@@ -60,6 +60,7 @@ import {
   reopenClosedTab,
   reorderTab,
   restoreLayout,
+  saveDraftTabToDrive,
   saveTab,
   scheduleAutosave,
   serializeLayout,
@@ -272,6 +273,96 @@ describe("tab close confirmation", () => {
     );
     expect(promotedPaths).toEqual(["untitled-1.md"]);
     expect(activePane().tabs).toHaveLength(0);
+  });
+
+  test("explicit draft save promotes and keeps the tab open on the drive file", async () => {
+    const tab = fileTab({
+      id: "draft-tab",
+      path: "Drafts/untitled-1/draft.md",
+      content: "# draft\n",
+      saved: "# draft\n",
+      savedMtime: 1,
+    });
+    resetLayout([tab]);
+    vi.spyOn(api, "inspectDraft").mockResolvedValue({
+      path: "Drafts/untitled-1/draft.md",
+      name: "untitled-1",
+      file_count: 1,
+      dir_count: 0,
+      total_size: 8,
+      has_attachments: false,
+    });
+    const promote = vi.spyOn(api, "promoteDraft").mockResolvedValue({
+      path: "notes/final.md",
+      name: "final",
+      mode: "file",
+    });
+    vi.spyOn(api, "read").mockResolvedValue({
+      path: "notes/final.md",
+      content: "# promoted\n",
+      mtime: 3,
+      mtime_ns: "3",
+      writable: true,
+    });
+
+    const save = saveDraftTabToDrive(tab);
+    await vi.waitFor(() => expect(draftCloseState.open).toBe(true));
+    expect(draftCloseState.intent).toBe("save");
+    resolveDraftClose("save");
+    await save;
+
+    expect(promote).toHaveBeenCalledWith(
+      "Drafts/untitled-1/draft.md",
+      "untitled-1.md",
+    );
+    expect(activePane().tabs).toHaveLength(1);
+    const live = activePane().tabs[0];
+    if (live?.kind !== "file") throw new Error("expected file tab");
+    expect(live.path).toBe("notes/final.md");
+    expect(live.content).toBe("# promoted\n");
+    expect(live.saved).toBe("# promoted\n");
+  });
+
+  test("explicit draft workspace save reopens the promoted draft file", async () => {
+    const tab = fileTab({
+      id: "draft-tab",
+      path: "Drafts/untitled-1/draft.md",
+      content: "# draft\n",
+      saved: "# draft\n",
+      savedMtime: 1,
+    });
+    resetLayout([tab]);
+    vi.spyOn(api, "inspectDraft").mockResolvedValue({
+      path: "Drafts/untitled-1/draft.md",
+      name: "untitled-1",
+      file_count: 2,
+      dir_count: 0,
+      total_size: 12,
+      has_attachments: true,
+    });
+    vi.spyOn(api, "promoteDraft").mockResolvedValue({
+      path: "notes/final",
+      name: "final",
+      mode: "directory_created",
+    });
+    const read = vi.spyOn(api, "read").mockResolvedValue({
+      path: "notes/final/draft.md",
+      content: "# promoted\n",
+      mtime: 3,
+      mtime_ns: "3",
+      writable: true,
+    });
+
+    const save = saveDraftTabToDrive(tab);
+    await vi.waitFor(() => expect(draftCloseState.open).toBe(true));
+    expect(draftCloseState.target).toBe("untitled-1");
+    resolveDraftClose("save");
+    await save;
+
+    expect(read).toHaveBeenCalledWith("notes/final/draft.md");
+    const live = activePane().tabs[0];
+    if (live?.kind !== "file") throw new Error("expected file tab");
+    expect(live.path).toBe("notes/final/draft.md");
   });
 
   test("whitespace-only draft closes as empty without save prompt", async () => {

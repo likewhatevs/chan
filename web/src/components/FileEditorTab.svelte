@@ -36,6 +36,7 @@
     Pilcrow,
     Printer,
     RotateCw,
+    Save,
     Search as SearchIcon,
     Settings2,
     Square,
@@ -100,6 +101,7 @@
   import {
     openInActivePane,
     openTerminalInPane,
+    saveDraftTabToDrive,
     tabFocusPulse,
   } from "../state/tabs.svelte";
   import { terminalFromHereTarget } from "../terminal/fromHere";
@@ -438,6 +440,9 @@
   /// (`../other/dir/`), extension preservation, and link
   /// rewriting.
   let nameDraft = $state("");
+  const isDraftEditorTab = $derived(
+    tab.path === "Drafts" || tab.path.startsWith("Drafts/"),
+  );
   $effect(() => {
     // Sync the draft to the tab path when the underlying file
     // changes (e.g. external rename, or another menu surface).
@@ -462,6 +467,10 @@
       nameDraft = tab.path;
       (e.currentTarget as HTMLInputElement).blur();
     }
+  }
+  async function doSaveDraftToDrive(): Promise<void> {
+    closeTabMenu();
+    await saveDraftTabToDrive(tab);
   }
 
   /// True for tabs that have a structured render mode alongside
@@ -776,27 +785,36 @@
            per the addendum spec; Cmd+R + pane hamburger still
            cover them. -->
       <div class="action-list">
-        <!-- Editable Name input (addendum: "editable like
-             Terminal's"). Commits on Enter/blur via
-             fileOps.renameInPlace which handles path traversal,
-             extension preservation, and link rewriting. -->
-        <label class="name-row">
-          <span class="name-label">
-            <Pencil size={15} strokeWidth={1.75} aria-hidden="true" />
-            <span>Name</span>
-          </span>
-          <input
-            class="name-input"
-            bind:value={nameDraft}
-            spellcheck="false"
-            autocomplete="off"
-            autocorrect="off"
-            autocapitalize="off"
-            onkeydown={onTabNameKey}
-            onblur={commitTabName}
-            aria-label="file path"
-          />
-        </label>
+        {#if isDraftEditorTab}
+          <button class="mbtn" type="button" onclick={doSaveDraftToDrive}>
+            <span class="mbtn-icon">
+              <Save size={18} strokeWidth={1.75} aria-hidden="true" />
+            </span>
+            <span class="mbtn-label">Save to Drive</span>
+          </button>
+        {:else}
+          <!-- Editable Name input (addendum: "editable like
+               Terminal's"). Commits on Enter/blur via
+               fileOps.renameInPlace which handles path traversal,
+               extension preservation, and link rewriting. -->
+          <label class="name-row">
+            <span class="name-label">
+              <Pencil size={15} strokeWidth={1.75} aria-hidden="true" />
+              <span>Name</span>
+            </span>
+            <input
+              class="name-input"
+              bind:value={nameDraft}
+              spellcheck="false"
+              autocomplete="off"
+              autocorrect="off"
+              autocapitalize="off"
+              onkeydown={onTabNameKey}
+              onblur={commitTabName}
+              aria-label="file path"
+            />
+          </label>
+        {/if}
         <div class="msep" role="separator"></div>
         <!-- Page-width slider: ratio of the current window width.
              100 % is the "no cap" sentinel (drag all the way right).

@@ -26,7 +26,7 @@ describe("fullstack-a-67f: menu-top Name input", () => {
 
   test("Page width follows Name after the first separator", () => {
     expect(editor).toMatch(
-      /<div class="action-list">[\s\S]{1,800}<label class="name-row">[\s\S]{1,1400}<\/label>\s*<div class="msep" role="separator"><\/div>\s*<!-- Page-width slider:[\s\S]{1,400}<div class="page-width-row">/,
+      /<div class="action-list">[\s\S]{1,1200}<label class="name-row">[\s\S]{1,1400}<\/label>[\s\S]{1,120}<div class="msep" role="separator"><\/div>\s*<!-- Page-width slider:[\s\S]{1,400}<div class="page-width-row">/,
     );
   });
 
@@ -34,6 +34,14 @@ describe("fullstack-a-67f: menu-top Name input", () => {
     expect(editor).toMatch(
       /bind:value=\{nameDraft\}[\s\S]{1,400}onkeydown=\{onTabNameKey\}[\s\S]{1,200}onblur=\{commitTabName\}/,
     );
+  });
+
+  test("Draft tabs replace the Name row with Save to Drive", () => {
+    expect(editor).toMatch(/const isDraftEditorTab = \$derived/);
+    expect(editor).toMatch(
+      /\{#if isDraftEditorTab\}[\s\S]{1,500}onclick=\{doSaveDraftToDrive\}[\s\S]{1,300}<span class="mbtn-label">Save to Drive<\/span>/,
+    );
+    expect(editor).toMatch(/saveDraftTabToDrive\(tab\)/);
   });
 });
 

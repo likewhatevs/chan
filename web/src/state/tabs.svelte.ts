@@ -13,6 +13,7 @@
 
 import { api } from "../api/client";
 import { ApiError } from "../api/errors";
+import type { DraftPromoteResponse } from "../api/types";
 import type { FindRange } from "../editor/find";
 import { stripTrailingWhitespaceText } from "../editor/tools";
 import { uiConfirm } from "./confirm.svelte";
@@ -1449,6 +1450,7 @@ type DraftCloseDecision =
   | { action: "cancel" }
   | { action: "discard" }
   | { action: "save"; target: string };
+type DraftCloseIntent = "close" | "save";
 type DraftPromotionSink = (path: string) => void | Promise<void>;
 
 const draftPromotionSinks = new Set<DraftPromotionSink>();
@@ -1474,6 +1476,7 @@ export const draftCloseState = $state<{
   name: string;
   target: string;
   targetKind: "file" | "folder";
+  intent: DraftCloseIntent;
   hasAttachments: boolean;
   error: string | null;
   resolve: ((value: DraftCloseDecision) => void) | null;
@@ -1483,6 +1486,7 @@ export const draftCloseState = $state<{
   name: "",
   target: "",
   targetKind: "file",
+  intent: "close",
   hasAttachments: false,
   error: null,
   resolve: null,
@@ -1494,6 +1498,7 @@ function uiDraftClose(opts: {
   target: string;
   targetKind: "file" | "folder";
   hasAttachments: boolean;
+  intent?: DraftCloseIntent;
 }): Promise<DraftCloseDecision> {
   return new Promise((resolve) => {
     draftCloseState.resolve?.({ action: "cancel" });
@@ -1501,6 +1506,7 @@ function uiDraftClose(opts: {
     draftCloseState.name = opts.name;
     draftCloseState.target = opts.target;
     draftCloseState.targetKind = opts.targetKind;
+    draftCloseState.intent = opts.intent ?? "close";
     draftCloseState.hasAttachments = opts.hasAttachments;
     draftCloseState.error = null;
     draftCloseState.resolve = resolve;
@@ -1540,6 +1546,28 @@ function isDraftTab(t: Tab): t is FileTab {
 
 function draftDefaultTarget(info: { name: string; has_attachments: boolean }): string {
   return info.has_attachments ? info.name : `${info.name}.md`;
+}
+
+function promotedEditorPath(promoted: DraftPromoteResponse): string {
+  if (promoted.mode === "file") return promoted.path;
+  const dir = promoted.path.replace(/\/+$/, "");
+  return dir ? `${dir}/draft.md` : "draft.md";
+}
+
+async function reloadPromotedDraftTab(tab: FileTab, path: string): Promise<void> {
+  const found = findFileTabById(tab.id);
+  if (!found) return;
+  const pathKind = classifyPath(path);
+  found.tab.fileKind =
+    pathKind === "document" || pathKind === "text" ? pathKind : "document";
+  found.tab.path = path;
+  found.tab.mode = defaultModeForPath(path, found.tab.fileKind);
+  found.tab.loading = true;
+  found.tab.error = null;
+  found.tab.fileMissing = null;
+  found.tab.repoRoot = null;
+  found.tab.fsWritable = true;
+  await loadTabContent(found.paneId, found.tab.id, path);
 }
 
 function closeRisk(t: Tab): "live-terminal" | null {
@@ -1907,6 +1935,38 @@ async function handleDraftTabClose(tab: FileTab): Promise<boolean> {
     return true;
   } catch (e) {
     tab.error = `draft close failed: ${(e as Error).message}`;
+    return false;
+  }
+}
+
+export async function saveDraftTabToDrive(tab: FileTab): Promise<boolean> {
+  if (!isDraftTab(tab)) return false;
+  try {
+    if (isDirty(tab)) {
+      await performSave(tab);
+      if (isDirty(tab)) return false;
+    }
+    const info = await api.inspectDraft(tab.path);
+    const decision = await uiDraftClose({
+      path: tab.path,
+      name: info.name,
+      target: draftDefaultTarget(info),
+      targetKind: info.has_attachments ? "folder" : "file",
+      hasAttachments: info.has_attachments,
+      intent: "save",
+    });
+    if (decision.action !== "save") return false;
+    if (isDirty(tab)) {
+      await performSave(tab);
+      if (isDirty(tab)) return false;
+    }
+    const promoted = await api.promoteDraft(tab.path, decision.target);
+    notifyDraftPromoted(promoted.path);
+    await reloadPromotedDraftTab(tab, promotedEditorPath(promoted));
+    notify(`Draft saved to ${promoted.path}`);
+    return true;
+  } catch (e) {
+    tab.error = `draft save failed: ${(e as Error).message}`;
     return false;
   }
 }

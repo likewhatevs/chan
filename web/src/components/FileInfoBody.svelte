@@ -40,6 +40,7 @@
   import { openPdfViewer } from "../state/pdfViewer";
   import {
     drive,
+    fileOps,
     loadTreeDir,
     openGraphAtNode,
     openGraphForFile,
@@ -346,6 +347,40 @@
     onNavigate?.(targetPath);
   }
 
+  let uploadInput = $state<HTMLInputElement | null>(null);
+
+  function triggerUpload(): void {
+    uploadInput?.click();
+  }
+
+  async function onUploadPicked(e: Event): Promise<void> {
+    const input = e.currentTarget as HTMLInputElement;
+    const files = input.files;
+    if (!entry || !files || files.length === 0) return;
+    if (entry.is_dir) {
+      await fileOps.uploadFilesTo(entry.path, files);
+    } else {
+      await fileOps.replaceFileAt(entry.path, files[0]!);
+    }
+    input.value = "";
+  }
+
+  function downloadSelection(): void {
+    if (!entry) return;
+    fileOps.downloadPath(entry.path, entry.is_dir);
+  }
+
+  const uploadTitle = $derived(
+    entry?.is_dir
+      ? "Upload adds the selected file to this directory. You can also drop files onto File Browser rows."
+      : "Upload replaces this file. Text-class files reject non-UTF-8 bytes.",
+  );
+  const downloadTitle = $derived(
+    entry?.is_dir
+      ? "Download this directory as a tar archive. You can also drag rows out of the File Browser where supported."
+      : "Download this file. You can also drag rows out of the File Browser where supported.",
+  );
+
   /// chan-report integration. The "Code" section shows language /
   /// SLOC / complexity for files, and the per-directory roll-up
   /// (totals + top languages + COCOMO) for directories. Fetched
@@ -560,6 +595,23 @@
     {:else if reportError}
       <div class="refs-error">report unavailable: {reportError}</div>
     {/if}
+    <div class="transfer-actions">
+      <button class="open" type="button" onclick={triggerUpload} title={uploadTitle}>
+        Upload
+      </button>
+      <button class="open" type="button" onclick={downloadSelection} title={downloadTitle}>
+        Download
+      </button>
+    </div>
+    <input
+      bind:this={uploadInput}
+      class="file-picker"
+      type="file"
+      multiple
+      onchange={onUploadPicked}
+      aria-hidden="true"
+      tabindex="-1"
+    />
     {#if onReveal}
       <!-- "Show Directory": jump to a file browser tab with this directory
            selected. Hosted by surfaces that don't already live inside
@@ -663,6 +715,22 @@
     {:else if reportError}
       <div class="refs-error">report unavailable: {reportError}</div>
     {/if}
+    <div class="transfer-actions">
+      <button class="open" type="button" onclick={triggerUpload} title={uploadTitle}>
+        Upload
+      </button>
+      <button class="open" type="button" onclick={downloadSelection} title={downloadTitle}>
+        Download
+      </button>
+    </div>
+    <input
+      bind:this={uploadInput}
+      class="file-picker"
+      type="file"
+      onchange={onUploadPicked}
+      aria-hidden="true"
+      tabindex="-1"
+    />
     {#if image}
       {#if onReveal}
         <button class="open" onclick={onReveal}>Show in file browser</button>
@@ -985,6 +1053,24 @@
   }
   .open + .open { margin-top: 0.35rem; }
   .open:hover { border-color: var(--btn-hover); }
+  .transfer-actions {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+    gap: 0.35rem;
+  }
+  .transfer-actions .open {
+    margin-top: 0.6rem;
+  }
+  .transfer-actions .open + .open {
+    margin-top: 0.6rem;
+  }
+  .file-picker {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    opacity: 0;
+    pointer-events: none;
+  }
   /* Reference sections (tags / mentions / dates / links / backlinks).
      Visual style mirrors the graph panel's aside so the two
      inspectors feel like one feature. */

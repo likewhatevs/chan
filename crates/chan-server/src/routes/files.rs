@@ -620,6 +620,7 @@ pub async fn api_upload_file(
 ) -> Response {
     let mut chosen: Option<(String, Vec<u8>)> = None;
     let mut dir = String::new();
+    let mut replace_path: Option<String> = None;
     loop {
         match multipart.next_field().await {
             Ok(Some(field)) => {
@@ -644,6 +645,12 @@ pub async fn api_upload_file(
                             return err(StatusCode::BAD_REQUEST, format!("multipart read: {e}"));
                         }
                     },
+                    "path" => match field.text().await {
+                        Ok(s) => replace_path = Some(s),
+                        Err(e) => {
+                            return err(StatusCode::BAD_REQUEST, format!("multipart read: {e}"));
+                        }
+                    },
                     _ => {}
                 }
             }
@@ -660,9 +667,14 @@ pub async fn api_upload_file(
     };
 
     let drive = state.drive().clone();
-    let result =
-        tokio::task::spawn_blocking(move || upload_file_sync(&drive, &dir, &filename, &bytes))
-            .await;
+    let result = tokio::task::spawn_blocking(move || {
+        if let Some(path) = replace_path {
+            replace_file_sync(&drive, &path, &bytes)
+        } else {
+            upload_file_sync(&drive, &dir, &filename, &bytes)
+        }
+    })
+    .await;
     match result {
         Ok(Ok(upload)) => {
             state.self_writes.note(&upload.path);
@@ -674,6 +686,24 @@ pub async fn api_upload_file(
             format!("file upload task panicked: {e}"),
         ),
     }
+}
+
+fn replace_file_sync(
+    drive: &chan_drive::Drive,
+    path: &str,
+    bytes: &[u8],
+) -> chan_drive::Result<UploadFileResponse> {
+    let trimmed = path.trim_matches('/');
+    chan_drive::fs_ops::validate_rel(trimmed)?;
+    let stat = drive.stat(trimmed)?;
+    if stat.is_dir {
+        return Err(chan_drive::ChanError::Io(format!("not a file: {trimmed}")));
+    }
+    drive.write_bytes(trimmed, bytes)?;
+    Ok(UploadFileResponse {
+        path: trimmed.to_string(),
+        size: bytes.len() as u64,
+    })
 }
 
 fn upload_file_sync(
@@ -721,8 +751,8 @@ fn upload_leaf_filename(original_name: &str) -> chan_drive::Result<String> {
 #[cfg(test)]
 mod file_browser_listing_tests {
     use super::{
-        create_target_exists, list_dir_entries, list_files_sync, upload_file_sync,
-        upload_leaf_filename, ListFilesQuery,
+        create_target_exists, list_dir_entries, list_files_sync, replace_file_sync,
+        upload_file_sync, upload_leaf_filename, ListFilesQuery,
     };
 
     #[test]
@@ -810,6 +840,53 @@ mod file_browser_listing_tests {
 
         assert!(matches!(err, chan_drive::ChanError::PathAlreadyExists(p) if p == "same.bin"));
         assert_eq!(drive.read("same.bin").unwrap(), b"old");
+    }
+
+    #[test]
+    fn replace_file_sync_overwrites_existing_file() {
+        let cfg = tempfile::TempDir::new().unwrap();
+        let root = tempfile::TempDir::new().unwrap();
+        let lib = chan_drive::Library::open_at(cfg.path().join("config.toml")).unwrap();
+        lib.register_drive(root.path()).unwrap();
+        let drive = lib.open_drive(root.path()).unwrap();
+        drive.write_text("same.md", "old").unwrap();
+
+        let uploaded = replace_file_sync(&drive, "same.md", b"new").unwrap();
+
+        assert_eq!(uploaded.path, "same.md");
+        assert_eq!(uploaded.size, 3);
+        assert_eq!(drive.read_text("same.md").unwrap(), "new");
+    }
+
+    #[test]
+    fn replace_file_sync_rejects_non_utf8_for_text_file() {
+        let cfg = tempfile::TempDir::new().unwrap();
+        let root = tempfile::TempDir::new().unwrap();
+        let lib = chan_drive::Library::open_at(cfg.path().join("config.toml")).unwrap();
+        lib.register_drive(root.path()).unwrap();
+        let drive = lib.open_drive(root.path()).unwrap();
+        drive.write_text("same.md", "old").unwrap();
+
+        let err = replace_file_sync(&drive, "same.md", &[0xff, 0xfe]).unwrap_err();
+
+        assert!(err
+            .to_string()
+            .contains("non-UTF-8 bytes to editable text file"));
+        assert_eq!(drive.read_text("same.md").unwrap(), "old");
+    }
+
+    #[test]
+    fn replace_file_sync_rejects_directory_target() {
+        let cfg = tempfile::TempDir::new().unwrap();
+        let root = tempfile::TempDir::new().unwrap();
+        let lib = chan_drive::Library::open_at(cfg.path().join("config.toml")).unwrap();
+        lib.register_drive(root.path()).unwrap();
+        let drive = lib.open_drive(root.path()).unwrap();
+        drive.create_dir("notes").unwrap();
+
+        let err = replace_file_sync(&drive, "notes", b"new").unwrap_err();
+
+        assert!(err.to_string().contains("not a file: notes"));
     }
 
     #[test]

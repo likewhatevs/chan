@@ -1,6 +1,9 @@
 import { describe, expect, test } from "vitest";
 import client from "../api/client.ts?raw";
 import fileTree from "./FileTree.svelte?raw";
+import fileInfo from "./FileInfoBody.svelte?raw";
+import dirInfo from "./DirectoryInfoBody.svelte?raw";
+import store from "../state/store.svelte.ts?raw";
 
 describe("FileTree browser drag-out", () => {
   test("api exposes token-bearing download URLs", () => {
@@ -29,5 +32,23 @@ describe("FileTree browser drag-out", () => {
     expect(fileTree).toMatch(
       /onclick=\{\(\) => downloadSelection\(menu!\.path, menu!\.isDir\)\}[\s\S]{1,160}<span>Download<\/span>/,
     );
+  });
+
+  test("shared inspectors expose Upload and Download transfer actions", () => {
+    expect(fileInfo).toMatch(/<button class="open" type="button" onclick=\{triggerUpload\}/);
+    expect(fileInfo).toMatch(/<button class="open" type="button" onclick=\{downloadSelection\}/);
+    expect(fileInfo).toMatch(/fileOps\.replaceFileAt\(entry\.path, files\[0\]!\)/);
+    expect(fileInfo).toMatch(/fileOps\.uploadFilesTo\(entry\.path, files\)/);
+    expect(dirInfo).toMatch(/onclick=\{triggerUpload\}/);
+    expect(dirInfo).toMatch(/onclick=\{downloadDirectory\}/);
+  });
+
+  test("file replacement uses upload replace mode and refreshes open tabs", () => {
+    expect(client).toMatch(/replaceFile: \(/);
+    expect(client).toMatch(/form\.append\("path", path\)/);
+    expect(store).toMatch(/replaceFileAt\(targetPath: string, picked: File\)/);
+    expect(store).toMatch(/api\.replaceFile\(picked, targetPath/);
+    expect(store).toMatch(/tabsForPath\(targetPath\)/);
+    expect(store).toMatch(/refreshTabFromDisk\(tab\.tabId\)/);
   });
 });

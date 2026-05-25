@@ -69,11 +69,25 @@ Progress:
   font assets and MIT notice, and raised the lock layer above ambient status
   chrome after live IAB showed a drive-warning pill leaking over the
   screensaver.
+- 2026-05-25: scoped the next transfer wave after Track A's desktop smoke:
+  browser/right-click download paths exist, native desktop drag-out still
+  needs Track A's bridge, and Track C should add Upload/Download actions to
+  the shared file/directory inspector.
+- 2026-05-25: implemented the initial shared-inspector transfer wave:
+  file/directory inspectors expose Upload and Download, file Upload replaces
+  the selected file through the multipart upload route, directory Upload adds
+  into the selected directory, and chan-drive rejects non-UTF-8 raw bytes for
+  editable text targets.
+- 2026-05-25: implemented Draft editor explicit Save-to-drive action. Draft
+  tabs replace the menu-top `Name` row with Save, reuse the existing Draft
+  promotion dialog, and continue on the promoted drive path after Save.
 
 Current wave:
 
-- Run the File Browser drag-out/download feasibility pass for browser and
-  embedded WebView behavior.
+- Live-regress shared inspector Upload/Download across File Browser, Graph,
+  and Editor details.
+- Live-regress Draft explicit Save for single-file Drafts and Draft
+  workspaces with attachments.
 - Keep native desktop drag-out/download scoped to Track A.
 - Run a broader live visual regression pass over the completed Track C chrome:
   Terminal scroll-heavy/ANSI pane switching, Graph filesystem spine, File
@@ -109,6 +123,12 @@ Current wave:
   tree refresh so saved Drafts appear in docked File Browser without reload.
 - Add File Browser drag-and-drop upload and download flows without toolbar
   buttons.
+- Add Upload and Download actions to shared file and directory inspectors so
+  File Browser, Graph, and Editor details surfaces expose the same transfer
+  controls.
+- Replace the Draft editor menu's file-path `Name` row with an explicit
+  Save-to-drive action that uses the same Draft promotion workflow as closing
+  a Draft and choosing Save.
 - Make persistent drive warnings actionable instead of passive status text,
   starting with broken Draft metadata warnings.
 
@@ -492,6 +512,20 @@ Target behavior:
 - Dragging a directory from File Browser toward the OS desktop should export
   that directory where supported. The export format can be a real directory or
   an archive, but it must preserve the tree and names.
+- Shared inspectors for files and directories should expose Upload and
+  Download buttons:
+  - file upload replaces that file's bytes through a chan-drive-backed route;
+  - directory upload adds the uploaded file inside that directory;
+  - file download returns that file's bytes;
+  - directory download returns the existing directory archive flow.
+- Upload and Download actions should include an info affordance or hover text
+  explaining that File Browser also supports drag/drop where the platform
+  allows it.
+- Uploading binary bytes over a `.md` or other editable text path must not
+  let the rendered editor interpret arbitrary binary as markdown. The
+  chan-drive boundary should reject or classify such content more effectively;
+  the frontend must show a binary/non-renderable state instead of rendering
+  unsafe text if such content already exists.
 
 Investigation notes:
 
@@ -505,6 +539,9 @@ Investigation notes:
   browser entry APIs.
 - Browser drag-out/download feasibility is uncertain, especially for
   directories. Native desktop support is tracked in Track A.
+- Track A's 2026-05-25 macOS smoke found that WKWebView did not create a
+  Finder file from the browser `DownloadURL` drag payload. Track A owns the
+  native bridge using the same `download=1` URL.
 - Keep any temporary upload or export staging outside the user-content tree
   until the final chan-drive write or explicit desktop export step.
 
@@ -519,10 +556,50 @@ Smoke:
 - Drop a file that conflicts with an existing path and confirm the UI does not
   silently overwrite.
 - Repeat upload smoke in docked File Browser and File Browser tabs.
+- From a file inspector in File Browser, Graph, and Editor details, use Upload
+  to replace the selected file and Download to retrieve it.
+- From a directory inspector in File Browser and Graph, use Upload to add a
+  file to the selected directory and Download to retrieve the directory
+  archive.
+- Upload binary bytes to a markdown path and confirm the editor does not
+  render the file as markdown.
 - Drag a file from File Browser to the desktop where supported and confirm the
   exported file bytes match.
 - In the desktop build, drag a directory from File Browser to the desktop and
   confirm the exported tree or archive preserves names and contents.
+
+## 12b. Draft editor explicit Save action
+
+Current issue:
+
+- Draft editor tab menus show the same editable `Name` row as regular files,
+  so `Drafts/untitled/draft.md` looks like a direct rename target.
+- Drafts are promoted into the drive through the Draft close Save workflow,
+  not by renaming the metadata path in place.
+
+Target behavior:
+
+- For Draft file tabs only, replace the menu-top `Name` row with a Save
+  button.
+- Pressing Save opens the same destination workflow as closing a Draft and
+  choosing Save.
+- Single-file Drafts save to a drive file.
+- Draft workspaces with attachments save to or merge into a drive directory.
+- After a successful explicit save, the tab should continue on the promoted
+  drive path instead of leaving the user on the stale `Drafts/...` metadata
+  path.
+- Regular non-Draft file tabs keep the editable `Name` row.
+
+Smoke:
+
+- Create a Draft with `Cmd+N`, open the editor menu, and confirm the top row
+  is Save, not `Name`.
+- Click Save, choose a destination, and confirm the Draft promotes into the
+  drive and the tab now points at the promoted path.
+- Repeat with a Draft workspace that has an attachment and confirm the
+  destination is a directory.
+- Open a normal markdown file and confirm the editable `Name` row still
+  appears.
 
 ## 13. Actionable persistent drive warnings
 

@@ -69,6 +69,14 @@ describe("fullstack-a-50: DirectoryInfoBody wiring", () => {
     expect(source).toMatch(/Graph from here/);
   });
 
+  test("DirectoryInfoBody exposes directory upload and download actions", () => {
+    expect(source).toMatch(/import \{ fileOps \} from "\.\.\/state\/store\.svelte"/);
+    expect(source).toMatch(/fileOps\.uploadFilesTo\(path, input\.files\)/);
+    expect(source).toMatch(/fileOps\.downloadPath\(path, true\)/);
+    expect(source).toMatch(/title="Upload adds the selected file to this directory/);
+    expect(source).toMatch(/title="Download this directory as a tar archive/);
+  });
+
   test("DirectoryInfoBody renders the no-stats branch when /api/report/dir 404s", () => {
     // Empty directory or chan-reports indexing not run → 404. The
     // body falls through to a "no chan-report data" affordance

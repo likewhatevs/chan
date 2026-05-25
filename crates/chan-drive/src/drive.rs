@@ -756,11 +756,16 @@ impl Drive {
         fs_ops::atomic_write_in(dir, &rel_path, content.as_bytes())
     }
 
-    /// Atomically write raw bytes. NOT gated by editable-text;
-    /// used by attachments and the future media browser. Callers
-    /// that surface this to the editor must apply their own gate.
-    /// Same special-file refusal as `write_text`.
+    /// Atomically write raw bytes. Text-class targets still require
+    /// valid UTF-8 so a binary upload cannot later be rendered by
+    /// the editor as markdown or source text. Same special-file
+    /// refusal as `write_text`.
     pub fn write_bytes(&self, rel: &str, content: &[u8]) -> Result<()> {
+        if fs_ops::is_editable_text(rel) && std::str::from_utf8(content).is_err() {
+            return Err(ChanError::Io(format!(
+                "refusing to write non-UTF-8 bytes to editable text file: {rel}"
+            )));
+        }
         let (dir, rel_path) = self.resolve_io(rel)?;
         let prev = ensure_writable_in(dir, &rel_path)?;
         check_size(
@@ -5124,6 +5129,18 @@ mod tests {
         let (_cfg, _root, drive) = fixture();
         drive.write_bytes("img.png", &[0xff, 0xd8, 0xff]).unwrap();
         assert_eq!(drive.read("img.png").unwrap(), vec![0xff, 0xd8, 0xff]);
+    }
+
+    #[test]
+    fn write_bytes_rejects_binary_for_editable_text_path() {
+        let (_cfg, _root, drive) = fixture();
+
+        let err = drive.write_bytes("note.md", &[0xff, 0xfe]).unwrap_err();
+
+        assert!(err
+            .to_string()
+            .contains("non-UTF-8 bytes to editable text file"));
+        assert!(!drive.exists("note.md"));
     }
 
     #[test]

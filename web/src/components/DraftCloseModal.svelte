@@ -31,12 +31,18 @@
       onkeydown={onKeydown}
     >
       <header>
-        <div id="draft-close-title" class="title">Close Draft</div>
+        <div id="draft-close-title" class="title">
+          {draftCloseState.intent === "save" ? "Save Draft to Drive" : "Close Draft"}
+        </div>
         <div class="path">{draftCloseState.path}</div>
       </header>
 
       <p>
-        {#if draftCloseState.hasAttachments}
+        {#if draftCloseState.intent === "save" && draftCloseState.hasAttachments}
+          Choose where to save this draft workspace in the drive.
+        {:else if draftCloseState.intent === "save"}
+          Choose where to save this draft file in the drive.
+        {:else if draftCloseState.hasAttachments}
           Save this draft workspace as a drive folder, or discard it.
         {:else}
           Save this draft as a drive file, or discard it.
@@ -57,9 +63,11 @@
       {/if}
 
       <footer>
-        <button type="button" class="danger" onclick={() => resolveDraftClose("discard")}>
-          Discard Draft
-        </button>
+        {#if draftCloseState.intent !== "save"}
+          <button type="button" class="danger" onclick={() => resolveDraftClose("discard")}>
+            Discard Draft
+          </button>
+        {/if}
         <div class="spacer"></div>
         <button type="button" onclick={() => resolveDraftClose("cancel")}>Cancel</button>
         <button type="button" class="primary" onclick={() => resolveDraftClose("save")}>

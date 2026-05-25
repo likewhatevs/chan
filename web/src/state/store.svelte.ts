@@ -2862,6 +2862,11 @@ function uploadTargetPath(dir: string, name: string): string {
   return dir ? `${dir}/${leaf}` : leaf;
 }
 
+function downloadFilename(path: string, isDir: boolean): string {
+  const name = path.split("/").filter(Boolean).pop() || "download";
+  return isDir ? `${name}.tar` : name;
+}
+
 function uploadNameReason(name: string): string | null {
   const leaf = uploadLeafName(name);
   if (!leaf) return "file has no name";
@@ -2870,6 +2875,68 @@ function uploadNameReason(name: string): string | null {
 }
 
 export const fileOps = {
+  downloadPath(path: string, isDir: boolean): void {
+    const link = document.createElement("a");
+    link.href = api.downloadUrl(path);
+    link.download = downloadFilename(path, isDir);
+    link.rel = "noopener";
+    link.style.display = "none";
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+  },
+  async replaceFileAt(targetPath: string, picked: File): Promise<void> {
+    if (fileTransferStatus.value) {
+      ui.status = "upload already in progress";
+      ui.statusKind = "persistent";
+      return;
+    }
+    const draftsReason = fileBrowserDraftsPathReason(targetPath);
+    if (draftsReason) {
+      ui.status = `upload failed: ${draftsReason}`;
+      ui.statusKind = "persistent";
+      return;
+    }
+    const activeAbort = new AbortController();
+    const cancel = (): void => activeAbort.abort();
+    const setUploadStatus = (loaded: number): void => {
+      const currentLoaded = Math.min(Math.max(loaded, 0), picked.size);
+      const progress =
+        picked.size > 0 ? Math.min(100, Math.round((currentLoaded / picked.size) * 100)) : 100;
+      fileTransferStatus.value = {
+        label: `replacing ${targetPath} ${progress}%`,
+        progress,
+        cancel,
+      };
+    };
+    fileTransferStatus.value = {
+      label: `replacing ${targetPath}`,
+      progress: picked.size > 0 ? 0 : 100,
+      cancel,
+    };
+    try {
+      setUploadStatus(0);
+      await api.replaceFile(picked, targetPath, {
+        signal: activeAbort.signal,
+        onProgress: (progress) => setUploadStatus(progress.loaded),
+      });
+      await refreshTreeForPath(targetPath);
+      for (const tab of tabsForPath(targetPath)) {
+        await refreshTabFromDisk(tab.tabId);
+      }
+      revealAndSelect(targetPath);
+      setTransientStatus(`Replaced '${targetPath}'`);
+    } catch (e) {
+      if ((e as Error).name === "AbortError") {
+        setTransientStatus("Upload cancelled");
+      } else {
+        ui.status = `upload failed: ${(e as Error).message}`;
+        ui.statusKind = "persistent";
+      }
+    } finally {
+      fileTransferStatus.value = null;
+    }
+  },
   async uploadFilesTo(destDir: string, dropped: FileList | File[]): Promise<void> {
     if (fileTransferStatus.value) {
       ui.status = "upload already in progress";

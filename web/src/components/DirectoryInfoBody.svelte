@@ -14,6 +14,7 @@
   import { onMount } from "svelte";
   import { api } from "../api/client";
   import type { ReportPrefix } from "../api/types";
+  import { fileOps } from "../state/store.svelte";
 
   let {
     path,
@@ -78,6 +79,24 @@
     }).format(n);
   }
 
+  let uploadInput = $state<HTMLInputElement | null>(null);
+
+  function triggerUpload(): void {
+    uploadInput?.click();
+  }
+
+  async function onUploadPicked(e: Event): Promise<void> {
+    const input = e.currentTarget as HTMLInputElement;
+    if (input.files && input.files.length > 0) {
+      await fileOps.uploadFilesTo(path, input.files);
+    }
+    input.value = "";
+  }
+
+  function downloadDirectory(): void {
+    fileOps.downloadPath(path, true);
+  }
+
   onMount(() => {
     // Initial load handled by the $effect above; placeholder
     // so `onMount` consumers (Svelte's lifecycle hooks) can
@@ -113,13 +132,38 @@
     </div>
   {/if}
 
-  {#if onSetAsScope}
-    <div class="actions">
+  <div class="actions">
+    <button
+      class="set-as-scope"
+      type="button"
+      onclick={triggerUpload}
+      title="Upload adds the selected file to this directory. You can also drop files onto File Browser rows."
+    >
+      Upload
+    </button>
+    <button
+      class="set-as-scope"
+      type="button"
+      onclick={downloadDirectory}
+      title="Download this directory as a tar archive. You can also drag rows out of the File Browser where supported."
+    >
+      Download
+    </button>
+    {#if onSetAsScope}
       <button class="set-as-scope" onclick={onSetAsScope} type="button">
         Graph from here
       </button>
-    </div>
-  {/if}
+    {/if}
+  </div>
+  <input
+    bind:this={uploadInput}
+    class="file-picker"
+    type="file"
+    multiple
+    onchange={onUploadPicked}
+    aria-hidden="true"
+    tabindex="-1"
+  />
 
   {#if loading}
     <div class="muted">loading directory stats…</div>
@@ -272,6 +316,13 @@
   }
   .set-as-scope:hover {
     background: var(--hover-bg);
+  }
+  .file-picker {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    opacity: 0;
+    pointer-events: none;
   }
   .stats {
     margin: 0.7rem 0 0 0;
