@@ -233,7 +233,8 @@
     // branch + clear normally.
     const content = tab.content;
     const saved = tab.saved;
-    if (tab.loading || saved === undefined) return;
+    if (saved === undefined) return;
+    if (tab.loading) return;
     if (content === saved) {
       if (recoveredBuffer !== null) {
         // Banner is up — leave the buffer in place so the

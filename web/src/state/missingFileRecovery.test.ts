@@ -85,7 +85,7 @@ describe("scheduleMissingFileCheck — debounced watcher reaction", () => {
     const seed = fileTab({ id: "tab-a", path: "notes/a.md" });
     resetLayout([seed]);
     const readSpy = vi
-      .spyOn(api, "read")
+      .spyOn(api, "readStream")
       .mockResolvedValue({ path: seed.path, content: "still here", mtime: 7, writable: true });
     // Search spy so the suggest path doesn't fire unrelated.
     vi.spyOn(api, "search").mockResolvedValue([]);
@@ -95,7 +95,8 @@ describe("scheduleMissingFileCheck — debounced watcher reaction", () => {
 
     await flushDebounce();
 
-    expect(readSpy).toHaveBeenCalledWith(seed.path);
+    expect(readSpy).toHaveBeenCalledTimes(1);
+    expect(readSpy.mock.calls[0]?.[0]).toBe(seed.path);
     const after = readTab(seed.id);
     expect(after?.fileMissing).toBeNull();
     expect(after?.content).toBe("still here");
@@ -104,7 +105,7 @@ describe("scheduleMissingFileCheck — debounced watcher reaction", () => {
   test("marks fileMissing only AFTER the debounce confirms the file is gone", async () => {
     const seed = fileTab({ id: "tab-b", path: "notes/gone.md", content: "x", saved: "x" });
     resetLayout([seed]);
-    vi.spyOn(api, "read").mockRejectedValue(ENOENT);
+    vi.spyOn(api, "readStream").mockRejectedValue(ENOENT);
     vi.spyOn(api, "search").mockResolvedValue([]);
 
     scheduleMissingFileCheck(seed.id, seed.path);
@@ -121,7 +122,7 @@ describe("scheduleMissingFileCheck — debounced watcher reaction", () => {
     const seed = fileTab({ id: "tab-c", path: "notes/spammy.md" });
     resetLayout([seed]);
     const readSpy = vi
-      .spyOn(api, "read")
+      .spyOn(api, "readStream")
       .mockResolvedValue({ path: seed.path, content: "ok", mtime: 1, writable: true });
     vi.spyOn(api, "search").mockResolvedValue([]);
 
@@ -181,7 +182,7 @@ describe("Find-suggest lookup", () => {
   test("populates suggestedPath with a unique basename match at a different path", async () => {
     const seed = fileTab({ id: "tab-f", path: "notes/a.md" });
     resetLayout([seed]);
-    vi.spyOn(api, "read").mockRejectedValue(ENOENT);
+    vi.spyOn(api, "readStream").mockRejectedValue(ENOENT);
     const searchSpy = vi
       .spyOn(api, "search")
       .mockResolvedValue([{ path: "archive/a.md", score: 0.9 }]);
@@ -196,7 +197,7 @@ describe("Find-suggest lookup", () => {
   test("leaves suggestedPath null when multiple basename matches exist (ambiguous)", async () => {
     const seed = fileTab({ id: "tab-g", path: "notes/a.md" });
     resetLayout([seed]);
-    vi.spyOn(api, "read").mockRejectedValue(ENOENT);
+    vi.spyOn(api, "readStream").mockRejectedValue(ENOENT);
     vi.spyOn(api, "search").mockResolvedValue([
       { path: "archive/a.md", score: 0.8 },
       { path: "drafts/a.md", score: 0.7 },
@@ -213,7 +214,7 @@ describe("Find-suggest lookup", () => {
   test("ignores search results that share path but differ in basename", async () => {
     const seed = fileTab({ id: "tab-h", path: "notes/specific.md" });
     resetLayout([seed]);
-    vi.spyOn(api, "read").mockRejectedValue(ENOENT);
+    vi.spyOn(api, "readStream").mockRejectedValue(ENOENT);
     vi.spyOn(api, "search").mockResolvedValue([
       { path: "notes/other.md", score: 0.9 },
     ]);
@@ -235,7 +236,7 @@ describe("attemptInPlaceReopen — Re-open button behaviour", () => {
       fileMissing: { path: "notes/recovered.md", fragment: null },
     });
     resetLayout([seed]);
-    vi.spyOn(api, "read").mockResolvedValue({
+    vi.spyOn(api, "readStream").mockResolvedValue({
       path: seed.path,
       content: "back from the dead",
       mtime: 11,
@@ -258,7 +259,7 @@ describe("attemptInPlaceReopen — Re-open button behaviour", () => {
       fileMissing: { path: "notes/still-gone.md", fragment: null },
     });
     resetLayout([seed]);
-    vi.spyOn(api, "read").mockRejectedValue(ENOENT);
+    vi.spyOn(api, "readStream").mockRejectedValue(ENOENT);
 
     const ok = await attemptInPlaceReopen(seed.id);
 
