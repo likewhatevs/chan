@@ -99,3 +99,105 @@ describe("file read streaming", () => {
     await expect(api.readStream("a.md")).rejects.toThrow("bad read");
   });
 });
+
+describe("relationship streaming", () => {
+  test("parses report file stream events", async () => {
+    const body = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(new TextEncoder().encode(
+          [
+            '{"type":"meta","path":"CHANGELOG.md"}',
+            '{"type":"report","stats":{"language":"Markdown","code":10,"comments":0,"blanks":2,"complexity":0}}',
+            '{"type":"done"}',
+            "",
+          ].join("\n"),
+        ));
+        controller.close();
+      },
+    });
+    const fetchMock = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValue(new Response(body, { status: 200 }));
+    const seen: string[] = [];
+
+    const report = await api.reportFileStream("CHANGELOG.md", {
+      onReport(stats) {
+        seen.push(stats.language);
+      },
+    });
+
+    expect(fetchMock.mock.calls[0][0]).toContain(
+      "/api/report/file?path=CHANGELOG.md&stream=1",
+    );
+    expect(report?.language).toBe("Markdown");
+    expect(seen).toEqual(["Markdown"]);
+  });
+
+  test("parses backlinks stream edges as they arrive", async () => {
+    const body = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(new TextEncoder().encode(
+          [
+            '{"type":"meta","path":"b.md"}',
+            '{"type":"edge","edge":{"src":"a.md","dst":"b.md","kind":"link","anchor":null}}',
+            '{"type":"done"}',
+            "",
+          ].join("\n"),
+        ));
+        controller.close();
+      },
+    });
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(body, { status: 200 }));
+    const edges: string[] = [];
+
+    const result = await api.backlinksStream("b.md", {
+      onEdge(edge) {
+        edges.push(edge.src);
+      },
+    });
+
+    expect(result).toHaveLength(1);
+    expect(edges).toEqual(["a.md"]);
+  });
+
+  test("parses graph stream batches with node upserts and edge dedupe", async () => {
+    const body = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(new TextEncoder().encode(
+          [
+            '{"type":"meta","scope":"file","path":"a.md","depth":1}',
+            '{"type":"nodes","nodes":[{"kind":"file","id":"file:a.md","label":"a.md","path":"a.md"}]}',
+            '{"type":"nodes","nodes":[{"kind":"file","id":"file:a.md","label":"A","path":"a.md"}]}',
+            '{"type":"edges","edges":[{"source":"file:a.md","target":"tag:x","kind":"tag","rank":1}]}',
+            '{"type":"edges","edges":[{"source":"file:a.md","target":"tag:x","kind":"tag","rank":1}]}',
+            '{"type":"done"}',
+            "",
+          ].join("\n"),
+        ));
+        controller.close();
+      },
+    });
+    const fetchMock = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValue(new Response(body, { status: 200 }));
+    const partialNodeCounts: number[] = [];
+
+    const graph = await api.graphStream(
+      { scope: "file", path: "a.md", depth: 1 },
+      {
+        onNodes(_nodes, view) {
+          partialNodeCounts.push(view.nodes.length);
+        },
+      },
+    );
+
+    expect(fetchMock.mock.calls[0][0]).toContain(
+      "/api/graph?scope=file&path=a.md&depth=1&stream=1",
+    );
+    expect(graph.nodes).toEqual([
+      { kind: "file", id: "file:a.md", label: "A", path: "a.md" },
+    ]);
+    expect(graph.edges).toHaveLength(1);
+    expect(partialNodeCounts).toEqual([1, 1]);
+  });
+});

@@ -85,6 +85,31 @@ Progress:
   are docked-only right-click rows, Open in File Browser opens a normal File
   Browser tab with Details focused on the selected row, and the no-selection
   fallback opens Details for the drive itself.
+- 2026-05-25: consumed Track A's relationship NDJSON streams in the browser:
+  typed report/backlink/graph readers, streaming FileInfoBody report/backlink
+  state, graph node upserts, graph edge dedupe, and in-flight reload
+  cancellation guards.
+- 2026-05-25: live-smoked the streaming UI on a throwaway drive. Editor load,
+  editor Details for `CHANGELOG.md`, backlinks, semantic Graph from the active
+  file, graph reload, and the three stream endpoints all passed with no
+  current-run console errors.
+- 2026-05-25: live-regressed shared inspector transfer affordances across
+  Editor details, File Browser tab file and directory details, and Graph file
+  and directory node details. Direct endpoint smoke passed for file replace,
+  directory upload, file download, and directory archive download.
+- 2026-05-25: live-regressed Draft explicit Save-to-drive. Save replaced the
+  Draft path row, the promotion dialog saved to `notes/track-c-saved-draft.md`,
+  the tab continued on the promoted path, and the docked File Browser showed
+  the saved file without reload.
+- 2026-05-25: live-regressed File Browser expansion restore after window
+  reload. Docked and tab File Browsers restored expanded `nested/` and
+  `notes/` state.
+- 2026-05-25: noted a backend-owned transfer gap for Track A coordination:
+  replacing a text-class markdown file with non-UTF-8 bytes is rejected, but
+  the route currently returns HTTP 500 instead of a user/actionable 4xx.
+- 2026-05-25: fixed docked File Browser empty-menu drive path click. The drive
+  row now opens a normal File Browser tab with drive Details, matching the
+  docked-only Open in File Browser action when there is no selection.
 
 Current wave:
 
@@ -101,6 +126,12 @@ Current wave:
 - Keep the Matrix lock in the broader live visual regression pass, now focused
   on comparing the source-port result against the upstream reference and
   catching integration leaks.
+- Streaming inspector/graph intake is implemented and needs only broader
+  regression alongside the rest of the chrome pass.
+- Shared inspector transfer, Draft explicit Save, and File Browser expansion
+  restore have current live pass coverage on the throwaway browser server.
+- Docked File Browser empty-menu drive action has source coverage and needs a
+  quick live click check in the next browser pass.
 - Cut follow-up implementation only for live regressions found in that pass.
 
 ## Objectives

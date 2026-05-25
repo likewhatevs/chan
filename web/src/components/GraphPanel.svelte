@@ -247,6 +247,8 @@
   let error: string | null = $state(null);
   let watchReloadTimer: ReturnType<typeof setTimeout> | null = null;
   let seenGraphReloadNonce = graphReloadSignal.nonce;
+  let graphLoadAbort: AbortController | null = null;
+  let graphLoadSeq = 0;
 
   /// Chip toggles live on `graphState.filters` (module state) so
   /// they round-trip through the URL hash. Local proxy aliases keep
@@ -1118,7 +1120,28 @@
   /// (files + tags + mentions). Date nodes / edges are dropped:
   /// chan-drive's index has stopped emitting them (issue #17), but
   /// stale indexes may still contain them.
+  function renderableGraphEdge(e: GraphViewEdge): RenderedEdge | null {
+    if (
+      e.kind === "link" ||
+      e.kind === "tag" ||
+      e.kind === "mention" ||
+      e.kind === "contains" ||
+      e.kind === "language"
+    ) {
+      return e as RenderedEdge;
+    }
+    return null;
+  }
+
+  function graphEdgeKey(e: GraphViewEdge): string {
+    return `${e.source}\u0000${e.target}\u0000${e.kind}\u0000${e.rank ?? ""}`;
+  }
+
   async function load(): Promise<void> {
+    const seq = ++graphLoadSeq;
+    graphLoadAbort?.abort();
+    const controller = new AbortController();
+    graphLoadAbort = controller;
     loading = true;
     error = null;
     try {
@@ -1135,6 +1158,7 @@
           path: fsPath,
           depth: graphState.depth,
         });
+        if (seq !== graphLoadSeq) return;
         fsNodes = fs.nodes;
         fsTruncated = fs.truncated;
         nodes = mapFsNodes(fs);
@@ -1155,6 +1179,7 @@
         const g: LanguageGraphResponse = await api.languageGraph({
           depth: graphState.depth,
         });
+        if (seq !== graphLoadSeq) return;
         languageMaxDepth = g.max_depth;
         nodes = mapLanguageNodes(g.nodes);
         edges = mapLanguageEdges(g.edges);
@@ -1171,47 +1196,66 @@
           : currentScope?.kind === "dir"
             ? { scope: "directory" as const, path: currentScope.path }
             : { scope: "drive" as const, path: "" };
-      const g = await api.graph({
-        ...graphScope,
-        depth: Math.max(graphState.depth, 1),
-      });
-      const seenIds = new Set<string>();
-      const renderedNodes: RenderedNode[] = [];
-      const renderedEdges: RenderedEdge[] = [];
+      const renderedNodesById = new Map<string, RenderedNode>();
+      const renderedEdgesByKey = new Map<string, RenderedEdge>();
       fsNodes = [];
       fsTruncated = false;
-      for (const n of g.nodes) {
-        const mapped = mapGraphNode(n);
-        if (mapped && !seenIds.has(mapped.id)) {
-          renderedNodes.push(mapped);
-          seenIds.add(mapped.id);
+      nodes = [];
+      edges = [];
+      const publish = (): void => {
+        if (seq !== graphLoadSeq) return;
+        nodes = [...renderedNodesById.values()];
+        edges = [...renderedEdgesByKey.values()];
+        const pending = graphState.pendingSelectId;
+        if (pending !== null && renderedNodesById.has(pending)) {
+          selectedId = pending;
+          graphState.inspectorOpen = true;
+          graphState.pendingSelectId = null;
         }
-      }
-      for (const e of g.edges) {
-        if (
-          e.kind === "link" ||
-          e.kind === "tag" ||
-          e.kind === "mention" ||
-          e.kind === "contains" ||
-          e.kind === "language"
-        ) {
-          renderedEdges.push(e as RenderedEdge);
-        }
-      }
-      nodes = renderedNodes;
-      edges = renderedEdges;
+      };
+      await api.graphStream(
+        {
+          ...graphScope,
+          depth: Math.max(graphState.depth, 1),
+        },
+        {
+          signal: controller.signal,
+          onNodes(batch) {
+            for (const n of batch) {
+              const mapped = mapGraphNode(n);
+              if (mapped) renderedNodesById.set(mapped.id, mapped);
+            }
+            publish();
+          },
+          onEdges(batch) {
+            for (const e of batch) {
+              const mapped = renderableGraphEdge(e);
+              if (mapped) renderedEdgesByKey.set(graphEdgeKey(e), mapped);
+            }
+            publish();
+          },
+        },
+      );
+      if (seq !== graphLoadSeq) return;
+      publish();
       // Honour any selection openGraphAtNode pre-loaded into the
       // overlay state so the inspector opens on the right node.
       const pending = graphState.pendingSelectId;
-      if (pending !== null && renderedNodes.some((n) => n.id === pending)) {
+      if (pending !== null && renderedNodesById.has(pending)) {
         selectedId = pending;
         graphState.inspectorOpen = true;
+      } else if (pending !== null) {
+        graphState.pendingSelectId = null;
       }
-      graphState.pendingSelectId = null;
     } catch (e) {
-      error = (e as Error).message;
+      if (seq === graphLoadSeq && (e as DOMException).name !== "AbortError") {
+        error = (e as Error).message;
+      }
     } finally {
-      loading = false;
+      if (seq === graphLoadSeq) {
+        loading = false;
+        graphLoadAbort = null;
+      }
     }
   }
 
@@ -1363,6 +1407,7 @@
 
   onDestroy(() => {
     if (watchReloadTimer) clearTimeout(watchReloadTimer);
+    graphLoadAbort?.abort();
   });
 
   /// Selection callback handed to GraphCanvas. Tapping a node
@@ -1616,16 +1661,19 @@
 
   <div class="body">
   <div class="canvas">
-    {#if loading}
+    {#if loading && nodes.length === 0}
       <div class="placeholder">loading graph…</div>
     {:else if error}
       <div class="placeholder error">{error}</div>
-    {:else if nodes.length === 0}
+    {:else if !loading && nodes.length === 0}
       <div class="placeholder">
         {filesystemMode ? "no filesystem graph nodes for this scope" : languageMode ? "no language graph nodes for this drive yet" : "no markdown files in this drive yet"}
       </div>
     {/if}
-    <div class="cy" class:dim={loading || !!error}>
+    {#if loading && nodes.length > 0}
+      <div class="stream-status">loading graph… {nodes.length} nodes, {edges.length} edges</div>
+    {/if}
+    <div class="cy" class:dim={!!error}>
       <GraphCanvas
         open={visible}
         {nodes}
@@ -2142,6 +2190,19 @@
   .placeholder.error {
     color: #d33;
     font-style: normal;
+  }
+  .stream-status {
+    position: absolute;
+    left: 12px;
+    top: 12px;
+    z-index: 2;
+    padding: 4px 8px;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    background: var(--bg-card);
+    color: var(--text-secondary);
+    font-size: 12px;
+    pointer-events: none;
   }
 
   /* `fullstack-68`: tab right-click bubble.

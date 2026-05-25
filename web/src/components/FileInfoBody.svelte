@@ -20,7 +20,6 @@
   // tracking does the gating).
 
   import { api, withTokenQuery } from "../api/client";
-  import { ApiError } from "../api/errors";
   import type {
     GraphEdge,
     InspectorPayload,
@@ -325,21 +324,32 @@
     void ensureGraphLoaded();
     const req = ++backlinkReq;
     const target = entry.path;
+    const controller = new AbortController();
+    backlinks = [];
     backlinksLoading = true;
     backlinksError = null;
     void api
-      .backlinks(target)
-      .then((edges) => {
+      .backlinksStream(target, {
+        signal: controller.signal,
+        onEdge(edge) {
+          if (req !== backlinkReq || edge.kind !== "link") return;
+          backlinks = [...backlinks, edge];
+        },
+      })
+      .then(() => {
         if (req !== backlinkReq) return;
-        backlinks = edges.filter((e) => e.kind === "link");
         backlinksLoading = false;
       })
       .catch((err: unknown) => {
         if (req !== backlinkReq) return;
+        if ((err as DOMException).name === "AbortError") return;
         backlinks = [];
         backlinksLoading = false;
         backlinksError = (err as Error).message;
       });
+    return () => {
+      controller.abort();
+    };
   });
 
   function navigate(targetPath: string): void {
@@ -417,14 +427,20 @@
     }
     const req = ++reportReq;
     const target = entry;
+    const controller = new AbortController();
     reportLoading = true;
     const fetcher: Promise<ReportFileStats | ReportPrefix | null> = target.is_dir
       ? api.reportPrefix(target.path)
-      : api.reportFile(target.path).catch((err: unknown) => {
-          // 404 is the "no report row" case; treat it as an empty
-          // result rather than an error so the section just hides.
-          if (err instanceof ApiError && err.status === 404) return null;
-          throw err;
+      : api.reportFileStream(target.path, {
+          signal: controller.signal,
+          onReport(stats) {
+            if (req !== reportReq) return;
+            fileReport = stats;
+          },
+          onMissing() {
+            if (req !== reportReq) return;
+            fileReport = null;
+          },
         });
     void fetcher
       .then((res) => {
@@ -438,9 +454,13 @@
       })
       .catch((err: unknown) => {
         if (req !== reportReq) return;
+        if ((err as DOMException).name === "AbortError") return;
         reportError = (err as Error).message;
         reportLoading = false;
       });
+    return () => {
+      controller.abort();
+    };
   });
 
   /// Per-language roll-up sliced for display: collapse to top N by
@@ -686,14 +706,14 @@
         <span class="k">links out</span>
         <span class="v">{refs ? nonContactLinks.length : "…"}</span>
         <span class="k">backlinks</span>
-        <span class="v">{backlinksLoading ? "…" : backlinks.length}</span>
+        <span class="v">{backlinksLoading ? `${backlinks.length}…` : backlinks.length}</span>
       {:else if showRefs && (image || pdf)}
         <!-- Media files (images and PDFs) can be link targets but
              carry no outgoing references of their own. Show just
              the "linked from" count; tags / contacts / dates would
              always be zero. -->
         <span class="k">linked from</span>
-        <span class="v">{backlinksLoading ? "…" : backlinks.length}</span>
+        <span class="v">{backlinksLoading ? `${backlinks.length}…` : backlinks.length}</span>
       {/if}
     </div>
     {#if fileReport}
@@ -712,6 +732,8 @@
           <span class="v">{fileReport.complexity.toLocaleString()}</span>
         </div>
       </section>
+    {:else if reportLoading}
+      <div class="refs-loading">loading report…</div>
     {:else if reportError}
       <div class="refs-error">report unavailable: {reportError}</div>
     {/if}

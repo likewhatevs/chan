@@ -44,6 +44,12 @@ describe("fullstack-a-67e: FBSurface menu body — dock / expand / reload / impo
     );
   });
 
+  test("dock drive path row matches Open in File Browser for drive details", () => {
+    expect(surface).toMatch(
+      /function showDriveInfo\(\): void \{[\s\S]{1,120}if \(isDock\) \{[\s\S]{1,120}openCurrentInFileBrowser\(\);[\s\S]{1,120}return;/,
+    );
+  });
+
   test("dock toggles come after the SEP that follows the path row", () => {
     expect(surface).toMatch(
       /class="drive-path-text">[\s\S]{1,400}<li class="sep" role="separator"><\/li>[\s\S]{1,400}toggleStick\("left"\)[\s\S]{1,400}toggleStick\("right"\)/,

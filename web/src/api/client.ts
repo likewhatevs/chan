@@ -15,6 +15,8 @@ import type {
   GraphEdge,
   GraphSnapshot,
   GraphView,
+  GraphViewEdge,
+  GraphViewNode,
   HeadingRow,
   HealthResponse,
   InspectorPayload,
@@ -181,9 +183,100 @@ type FileReadStreamOptions = {
   onChunk?: (chunk: string, progress: FileReadStreamProgress) => void;
 };
 
+export type ReportFileStreamEvent =
+  | { type: "meta"; path: string }
+  | { type: "report"; stats: ReportFileStats }
+  | { type: "missing" }
+  | { type: "done" }
+  | { type: "error"; error: string };
+
+export type BacklinksStreamEvent =
+  | { type: "meta"; path: string }
+  | { type: "edge"; edge: GraphEdge }
+  | { type: "done" }
+  | { type: "error"; error: string };
+
+export type GraphStreamEvent =
+  | {
+      type: "meta";
+      scope: "drive" | "directory" | "file";
+      path: string;
+      depth: number;
+    }
+  | { type: "nodes"; nodes: GraphViewNode[] }
+  | { type: "edges"; edges: GraphViewEdge[] }
+  | { type: "done" }
+  | { type: "error"; error: string };
+
+type ReportFileStreamOptions = {
+  signal?: AbortSignal;
+  onMeta?: (path: string) => void;
+  onReport?: (stats: ReportFileStats) => void;
+  onMissing?: () => void;
+  onDone?: () => void;
+};
+
+type BacklinksStreamOptions = {
+  signal?: AbortSignal;
+  onMeta?: (path: string) => void;
+  onEdge?: (edge: GraphEdge) => void;
+  onDone?: () => void;
+};
+
+type GraphStreamOptions = {
+  signal?: AbortSignal;
+  onMeta?: (meta: Extract<GraphStreamEvent, { type: "meta" }>) => void;
+  onNodes?: (nodes: GraphViewNode[], view: GraphView) => void;
+  onEdges?: (edges: GraphViewEdge[], view: GraphView) => void;
+  onDone?: (view: GraphView) => void;
+};
+
 function recordValue(value: unknown): Record<string, unknown> {
   if (value && typeof value === "object") return value as Record<string, unknown>;
   throw new Error("invalid file stream event");
+}
+
+async function readNdjsonStream<TEvent>(
+  path: string,
+  opts: {
+    signal?: AbortSignal;
+    onEvent: (event: TEvent) => void;
+  },
+): Promise<void> {
+  const res = await fetch(apiPath(path), {
+    method: "GET",
+    headers: directAuthHeaders(),
+    signal: opts.signal,
+  });
+  if (!res.ok) {
+    await responseTextError(res);
+  }
+  if (!res.body) {
+    throw new Error("streaming response has no body");
+  }
+
+  const reader = res.body.getReader();
+  const decoder = new TextDecoder();
+  let buffered = "";
+  const processLine = (line: string): void => {
+    const trimmed = line.trim();
+    if (!trimmed) return;
+    opts.onEvent(recordValue(JSON.parse(trimmed)) as TEvent);
+  };
+
+  for (;;) {
+    const { done: streamDone, value } = await reader.read();
+    if (streamDone) break;
+    buffered += decoder.decode(value, { stream: true });
+    for (;;) {
+      const nl = buffered.indexOf("\n");
+      if (nl < 0) break;
+      processLine(buffered.slice(0, nl));
+      buffered = buffered.slice(nl + 1);
+    }
+  }
+  buffered += decoder.decode();
+  if (buffered.trim()) processLine(buffered);
 }
 
 async function readFileStream(
@@ -692,6 +785,41 @@ export const api = {
   /// available for future "linked from" panels.
   backlinks: (path: string) =>
     req<GraphEdge[]>("GET", `/api/backlinks/${encPath(path)}`),
+  backlinksStream: async (
+    path: string,
+    opts: BacklinksStreamOptions = {},
+  ): Promise<GraphEdge[]> => {
+    const edges: GraphEdge[] = [];
+    let done = false;
+    await readNdjsonStream<BacklinksStreamEvent>(
+      `/api/backlinks/${encPath(path)}?stream=1`,
+      {
+        signal: opts.signal,
+        onEvent(event) {
+          if (event.type === "meta") {
+            opts.onMeta?.(event.path);
+            return;
+          }
+          if (event.type === "edge") {
+            edges.push(event.edge);
+            opts.onEdge?.(event.edge);
+            return;
+          }
+          if (event.type === "done") {
+            done = true;
+            opts.onDone?.();
+            return;
+          }
+          if (event.type === "error") {
+            throw new ApiError(0, event.error);
+          }
+          throw new Error(`unknown backlinks stream event: ${String((event as { type?: unknown }).type)}`);
+        },
+      },
+    );
+    if (!done) throw new Error("backlinks stream ended before done");
+    return edges;
+  },
   /// chan-report per-file stats: language, SLOC, comments, blanks,
   /// complexity. 404 when the path isn't in the index (binary file,
   /// gitignored, or unknown language); callers treat that as
@@ -701,6 +829,46 @@ export const api = {
       "GET",
       `/api/report/file?path=${encodeURIComponent(path)}`,
     ),
+  reportFileStream: async (
+    path: string,
+    opts: ReportFileStreamOptions = {},
+  ): Promise<ReportFileStats | null> => {
+    let stats: ReportFileStats | null = null;
+    let done = false;
+    await readNdjsonStream<ReportFileStreamEvent>(
+      `/api/report/file?path=${encodeURIComponent(path)}&stream=1`,
+      {
+        signal: opts.signal,
+        onEvent(event) {
+          if (event.type === "meta") {
+            opts.onMeta?.(event.path);
+            return;
+          }
+          if (event.type === "report") {
+            stats = event.stats;
+            opts.onReport?.(event.stats);
+            return;
+          }
+          if (event.type === "missing") {
+            stats = null;
+            opts.onMissing?.();
+            return;
+          }
+          if (event.type === "done") {
+            done = true;
+            opts.onDone?.();
+            return;
+          }
+          if (event.type === "error") {
+            throw new ApiError(0, event.error);
+          }
+          throw new Error(`unknown report stream event: ${String((event as { type?: unknown }).type)}`);
+        },
+      },
+    );
+    if (!done) throw new Error("report stream ended before done");
+    return stats;
+  },
   /// chan-report directory roll-up: totals, by-language, and COCOMO.
   /// Empty `path` returns the whole-drive roll-up. The per-file
   /// array is dropped server-side; only the summary fields come
@@ -777,6 +945,58 @@ export const api = {
     if (opts.depth !== undefined) params.set("depth", String(opts.depth));
     const suffix = params.size > 0 ? `?${params.toString()}` : "";
     return req<GraphView>("GET", `/api/graph${suffix}`);
+  },
+  graphStream: async (
+    opts: { scope?: "drive" | "directory" | "file"; path?: string; depth?: number } = {},
+    streamOpts: GraphStreamOptions = {},
+  ): Promise<GraphView> => {
+    const params = new URLSearchParams();
+    if (opts.scope) params.set("scope", opts.scope);
+    if (opts.path) params.set("path", opts.path);
+    if (opts.depth !== undefined) params.set("depth", String(opts.depth));
+    params.set("stream", "1");
+    const nodesById = new Map<string, GraphViewNode>();
+    const edgesByKey = new Map<string, GraphViewEdge>();
+    let done = false;
+    const view = (): GraphView => ({
+      nodes: [...nodesById.values()],
+      edges: [...edgesByKey.values()],
+    });
+    const edgeKey = (e: GraphViewEdge): string =>
+      `${e.source}\u0000${e.target}\u0000${e.kind}\u0000${e.rank ?? ""}`;
+    await readNdjsonStream<GraphStreamEvent>(
+      `/api/graph?${params.toString()}`,
+      {
+        signal: streamOpts.signal,
+        onEvent(event) {
+          if (event.type === "meta") {
+            streamOpts.onMeta?.(event);
+            return;
+          }
+          if (event.type === "nodes") {
+            for (const node of event.nodes) nodesById.set(node.id, node);
+            streamOpts.onNodes?.(event.nodes, view());
+            return;
+          }
+          if (event.type === "edges") {
+            for (const edge of event.edges) edgesByKey.set(edgeKey(edge), edge);
+            streamOpts.onEdges?.(event.edges, view());
+            return;
+          }
+          if (event.type === "done") {
+            done = true;
+            streamOpts.onDone?.(view());
+            return;
+          }
+          if (event.type === "error") {
+            throw new ApiError(0, event.error);
+          }
+          throw new Error(`unknown graph stream event: ${String((event as { type?: unknown }).type)}`);
+        },
+      },
+    );
+    if (!done) throw new Error("graph stream ended before done");
+    return view();
   },
   /// Language graph payload: language nodes connected to directory nodes.
   languageGraph: (opts: { depth?: number; language?: string } = {}) => {

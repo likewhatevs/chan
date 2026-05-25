@@ -24,6 +24,19 @@ export const graphData = $state<GraphState>({
 });
 
 let inflight: Promise<void> | null = null;
+let inflightAbort: AbortController | null = null;
+let inflightSeq = 0;
+
+function edgeKey(e: GraphViewEdge): string {
+  return `${e.source}\u0000${e.target}\u0000${e.kind}\u0000${e.rank ?? ""}`;
+}
+
+function publishGraphView(view: GraphView): void {
+  graphData.view = {
+    nodes: [...view.nodes],
+    edges: [...view.edges],
+  };
+}
 
 /// Fetch the graph if we don't already have it. Idempotent;
 /// concurrent callers share a single network round-trip. After a
@@ -33,16 +46,45 @@ let inflight: Promise<void> | null = null;
 export function ensureGraphLoaded(): Promise<void> {
   if (graphData.view && !graphData.error) return Promise.resolve();
   if (inflight) return inflight;
+  const seq = ++inflightSeq;
+  inflightAbort = new AbortController();
   graphData.loading = true;
   graphData.error = null;
   inflight = (async () => {
     try {
-      graphData.view = await api.graph();
+      const nodesById = new Map<string, GraphViewNode>();
+      const edgesByKey = new Map<string, GraphViewEdge>();
+      const view = (): GraphView => ({
+        nodes: [...nodesById.values()],
+        edges: [...edgesByKey.values()],
+      });
+      graphData.view = { nodes: [], edges: [] };
+      graphData.view = await api.graphStream(
+        {},
+        {
+          signal: inflightAbort?.signal,
+          onNodes(nodes) {
+            if (seq !== inflightSeq) return;
+            for (const node of nodes) nodesById.set(node.id, node);
+            publishGraphView(view());
+          },
+          onEdges(edges) {
+            if (seq !== inflightSeq) return;
+            for (const edge of edges) edgesByKey.set(edgeKey(edge), edge);
+            publishGraphView(view());
+          },
+        },
+      );
     } catch (e) {
-      graphData.error = (e as Error).message;
+      if (seq === inflightSeq && (e as DOMException).name !== "AbortError") {
+        graphData.error = (e as Error).message;
+      }
     } finally {
-      graphData.loading = false;
-      inflight = null;
+      if (seq === inflightSeq) {
+        graphData.loading = false;
+        inflightAbort = null;
+        inflight = null;
+      }
     }
   })();
   return inflight;
@@ -52,6 +94,10 @@ export function ensureGraphLoaded(): Promise<void> {
 /// `reloadGraph`) re-fetches. Called from the watcher on filesystem
 /// events.
 export function invalidateGraph(): void {
+  inflightSeq++;
+  inflightAbort?.abort();
+  inflightAbort = null;
+  inflight = null;
   graphData.view = null;
   graphData.error = null;
 }

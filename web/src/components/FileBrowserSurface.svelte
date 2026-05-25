@@ -311,6 +311,10 @@
   /// reachable via the empty-pane spawn grid + Cmd+Shift+M.
 
   function showDriveInfo(): void {
+    if (isDock) {
+      openCurrentInFileBrowser();
+      return;
+    }
     menu?.close();
     browserSelection.path = null;
     browserSelection.showDrive = true;
