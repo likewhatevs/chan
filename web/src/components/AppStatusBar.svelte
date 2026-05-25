@@ -25,19 +25,16 @@
     fileTransferStatus,
     indexStatus,
     importStatus,
+    openDriveWarningsDialog,
     ui,
   } from "../state/store.svelte";
   import { paneMode } from "../state/tabs.svelte";
 
   let collapsed = $state(false);
 
-  // `fullstack-a-2`: status-bar sections are ambient state, not
-  // navigation. Per the phase-8 bug list, clicking the index /
-  // import / status pills should NOT open Settings, Files, or
-  // dismiss the message — clicks were too easy to land by
-  // accident and bled into the Settings overlay. The only click
-  // surface left is the collapse handle that toggles the pill's
-  // visibility.
+  // `fullstack-a-2`: status-bar sections are ambient state. Only
+  // statuses that carry an explicit typed action become buttons;
+  // generic status text stays passive.
 
   /// Indexer section: hidden when idle (steady state should be
   /// quiet) and when the poller hasn't replied yet (`null`).
@@ -47,6 +44,11 @@
   const importVisible = $derived(importStatus.value !== null);
   const transferVisible = $derived(fileTransferStatus.value !== null);
   const statusVisible = $derived(!!ui.status);
+  const statusActionVisible = $derived(
+    statusVisible &&
+      ui.statusAction?.kind === "drive-warnings" &&
+      ui.statusAction.label === ui.status,
+  );
   const paneModeVisible = $derived(paneMode.active);
   const anyVisible = $derived(
     indexVisible || importVisible || transferVisible || statusVisible || paneModeVisible,
@@ -54,6 +56,10 @@
 
   function toggleCollapse(): void {
     collapsed = !collapsed;
+  }
+
+  function activateStatus(): void {
+    if (statusActionVisible) openDriveWarningsDialog();
   }
 </script>
 
@@ -122,7 +128,16 @@
           <span class="sep">·</span>
         {/if}
         {#if statusVisible}
-          <span class="section status-msg" aria-label="status message">{ui.status}</span>
+          {#if statusActionVisible}
+            <button
+              type="button"
+              class="section status-msg status-action"
+              aria-label="open drive warnings"
+              onclick={activateStatus}
+            >{ui.status}</button>
+          {:else}
+            <span class="section status-msg" aria-label="status message">{ui.status}</span>
+          {/if}
         {/if}
         {#if (indexVisible || importVisible || transferVisible || statusVisible) && paneModeVisible}
           <span class="sep">·</span>
@@ -198,10 +213,8 @@
     color: var(--text);
     font-variant-numeric: tabular-nums;
   }
-  /* `fullstack-a-2`: status-bar sections are ambient labels now;
-     the click affordances + hover/focus chrome that used to wrap
-     each pill in a `<button>` are gone. The collapse handle
-     stays interactive. */
+  /* Most status-bar sections are ambient labels. Typed actions get
+     their own button styling below. */
   .section.err {
     color: var(--warn-text);
   }
@@ -220,6 +233,23 @@
   }
   .status-msg {
     color: var(--warn-text);
+  }
+  .status-action {
+    border: 0;
+    background: transparent;
+    padding: 0;
+    cursor: pointer;
+    font: inherit;
+  }
+  .status-action:hover {
+    color: var(--text);
+    text-decoration: underline;
+    text-underline-offset: 2px;
+  }
+  .status-action:focus-visible {
+    outline: 2px solid var(--link);
+    outline-offset: 3px;
+    border-radius: 4px;
   }
   .sep {
     color: var(--border);

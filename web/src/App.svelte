@@ -5,6 +5,7 @@
   import ConflictModal from "./components/ConflictModal.svelte";
   import DisconnectOverlay from "./components/DisconnectOverlay.svelte";
   import DraftCloseModal from "./components/DraftCloseModal.svelte";
+  import DriveWarningsModal from "./components/DriveWarningsModal.svelte";
   import SpawnDialog from "./components/SpawnDialog.svelte";
   import TeamDialog from "./components/TeamDialog.svelte";
   import { teamDialogState } from "./state/teamDialog.svelte";
@@ -1163,6 +1164,7 @@
 <PathPromptModal />
 <ConfirmModal />
 <DraftCloseModal />
+<DriveWarningsModal />
 <SearchPanel />
 <SearchStatusOverlay />
 <SettingsPanel />

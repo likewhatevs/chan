@@ -52,6 +52,9 @@ Progress:
 - 2026-05-25: queued actionable persistent drive warnings after live IAB showed
   `Broken draft Drafts/team-phase-10: missing draft.md` as a passive status-bar
   label with no click target, dialog, repair path, or delete path.
+- 2026-05-25: implemented typed drive-warning status actions and a Drive
+  Warnings dialog with copy path, session dismiss, and safe broken Draft
+  metadata discard through `/api/drafts/discard`.
 
 Current wave:
 

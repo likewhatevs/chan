@@ -3,6 +3,7 @@
 
 import type {
   DriveInfo,
+  DriveWarning,
   HybridSurfaceKind,
   HybridSurfaceThemes,
   IndexStatus,
@@ -130,6 +131,7 @@ export const ui = $state<{
   /// writes go through `setTransientStatus` (or `notify()` which
   /// routes through that helper).
   statusKind: "transient" | "persistent" | null;
+  statusAction: { kind: "drive-warnings"; label: string } | null;
   /// Used to nudge tabs to reload on external changes.
   lastWatch: number;
   ws: WsStatus;
@@ -147,6 +149,7 @@ export const ui = $state<{
 }>({
   status: null,
   statusKind: null,
+  statusAction: null,
   lastWatch: 0,
   ws: "connecting",
   themeChoice: "system",
@@ -161,6 +164,20 @@ export const HYBRID_SURFACE_KINDS: readonly HybridSurfaceKind[] = [
   "graph",
   "infographics",
 ];
+
+export const driveWarningsDialog = $state<{
+  open: boolean;
+  warnings: DriveWarning[];
+  busyKey: string | null;
+  error: string | null;
+  notice: string | null;
+}>({
+  open: false,
+  warnings: [],
+  busyKey: null,
+  error: null,
+  notice: null,
+});
 
 export const hybridSurfaceThemes = $state<HybridSurfaceThemes>({});
 
@@ -241,6 +258,7 @@ export function setTransientStatus(
   }
   ui.status = msg;
   ui.statusKind = "transient";
+  ui.statusAction = null;
   transientStatusTimer = setTimeout(() => {
     transientStatusTimer = null;
     // Only clear if the message hasn't been overwritten by a newer
@@ -250,6 +268,7 @@ export function setTransientStatus(
     if (ui.status === msg && ui.statusKind === "transient") {
       ui.status = null;
       ui.statusKind = null;
+      ui.statusAction = null;
     }
   }, ms);
 }
@@ -261,20 +280,129 @@ setNotifyHandler((msg) => {
   setTransientStatus(msg);
 });
 
-function surfaceDriveWarnings(info: DriveInfo): void {
-  const warnings = info.warnings ?? [];
-  const brokenDrafts = warnings.filter(
-    (warning) => warning.kind === "broken_draft",
+const dismissedDriveWarningKeys = new Set<string>();
+
+function driveWarningKey(warning: DriveWarning): string {
+  return `${warning.kind}\u0000${warning.path}\u0000${warning.message}`;
+}
+
+function activeDriveWarnings(info: DriveInfo): DriveWarning[] {
+  return (info.warnings ?? []).filter(
+    (warning) => !dismissedDriveWarningKeys.has(driveWarningKey(warning)),
   );
-  if (brokenDrafts.length === 0) return;
-  if (brokenDrafts.length === 1) {
-    const warning = brokenDrafts[0]!;
-    ui.status = `Broken draft ${warning.path}: ${warning.message}`;
-    ui.statusKind = "persistent";
+}
+
+function driveWarningStatusLabel(warnings: DriveWarning[]): string {
+  if (warnings.length === 1) return driveWarningLabel(warnings[0]!);
+  return `${warnings.length} drive warnings found`;
+}
+
+export function driveWarningLabel(warning: DriveWarning): string {
+  const prefix =
+    warning.kind === "broken_draft"
+      ? "Broken draft"
+      : warning.kind === "broken_rich_prompt"
+        ? "Broken Rich Prompt"
+        : "Drive warning";
+  return `${prefix} ${warning.path}: ${warning.message}`;
+}
+
+export function canDiscardDriveWarning(warning: DriveWarning): boolean {
+  if (warning.kind !== "broken_draft" && warning.kind !== "broken_rich_prompt") {
+    return false;
+  }
+  return /^Drafts\/[^/]+$/.test(warning.path);
+}
+
+function surfaceDriveWarnings(info: DriveInfo): void {
+  const warnings = activeDriveWarnings(info);
+  driveWarningsDialog.warnings = warnings;
+  if (warnings.length === 0) {
+    if (
+      ui.statusAction?.kind === "drive-warnings" &&
+      ui.statusAction.label === ui.status
+    ) {
+      ui.status = null;
+      ui.statusKind = null;
+    }
+    ui.statusAction = null;
+    if (driveWarningsDialog.open) {
+      driveWarningsDialog.open = false;
+    }
     return;
   }
-  ui.status = `${brokenDrafts.length} broken drafts found in metadata`;
+  const label = driveWarningStatusLabel(warnings);
+  ui.status = label;
   ui.statusKind = "persistent";
+  ui.statusAction = { kind: "drive-warnings", label };
+}
+
+export function openDriveWarningsDialog(): void {
+  driveWarningsDialog.error = null;
+  driveWarningsDialog.notice = null;
+  driveWarningsDialog.open = true;
+}
+
+export function closeDriveWarningsDialog(): void {
+  if (driveWarningsDialog.busyKey !== null) return;
+  driveWarningsDialog.open = false;
+}
+
+export async function copyDriveWarningPath(warning: DriveWarning): Promise<void> {
+  try {
+    if (!navigator.clipboard) {
+      throw new Error("Clipboard unavailable");
+    }
+    await navigator.clipboard.writeText(warning.path);
+    driveWarningsDialog.error = null;
+    driveWarningsDialog.notice = "Copied path";
+  } catch (e) {
+    driveWarningsDialog.notice = null;
+    driveWarningsDialog.error =
+      e instanceof Error ? e.message : "Failed to copy warning path";
+  }
+}
+
+export function dismissDriveWarning(warning: DriveWarning): void {
+  dismissedDriveWarningKeys.add(driveWarningKey(warning));
+  driveWarningsDialog.error = null;
+  driveWarningsDialog.notice = "Dismissed for this session";
+  if (drive.info) {
+    surfaceDriveWarnings(drive.info);
+  }
+}
+
+export async function discardDriveWarning(warning: DriveWarning): Promise<void> {
+  if (!canDiscardDriveWarning(warning)) return;
+  const confirmed = await uiConfirm({
+    title: "Discard broken Draft metadata?",
+    message: `Move ${warning.path} to metadata trash?`,
+    confirmLabel: "Discard",
+    destructive: true,
+  });
+  if (!confirmed) return;
+
+  const key = driveWarningKey(warning);
+  driveWarningsDialog.busyKey = key;
+  driveWarningsDialog.error = null;
+  driveWarningsDialog.notice = null;
+  try {
+    await api.discardDraft(warning.path);
+    const info = await api.drive();
+    drive.info = info;
+    applyServerPreferences();
+    surfaceDriveWarnings(info);
+    if (driveWarningsDialog.warnings.length === 0) {
+      setTransientStatus(`Discarded ${warning.path}`);
+    } else {
+      driveWarningsDialog.notice = `Discarded ${warning.path}`;
+    }
+  } catch (e) {
+    driveWarningsDialog.error =
+      e instanceof Error ? e.message : `Failed to discard ${warning.path}`;
+  } finally {
+    driveWarningsDialog.busyKey = null;
+  }
 }
 
 /** Apply the resolved theme to the DOM. Idempotent; safe to call
@@ -832,8 +960,10 @@ export async function noteDraftCreated(path: string): Promise<void> {
 }
 
 export async function refreshDrive(): Promise<void> {
-  drive.info = await api.drive();
+  const info = await api.drive();
+  drive.info = info;
   applyServerPreferences();
+  surfaceDriveWarnings(info);
 }
 
 /// Debounced refresh of the drive payload (preferences + name).

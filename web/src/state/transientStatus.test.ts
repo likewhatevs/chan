@@ -8,6 +8,7 @@ beforeEach(() => {
   // Reset between tests; store.svelte.ts default is null/null.
   ui.status = null;
   ui.statusKind = null;
+  ui.statusAction = null;
   vi.useFakeTimers();
 });
 
@@ -15,6 +16,7 @@ afterEach(() => {
   vi.useRealTimers();
   ui.status = null;
   ui.statusKind = null;
+  ui.statusAction = null;
 });
 
 describe("setTransientStatus", () => {
@@ -22,6 +24,7 @@ describe("setTransientStatus", () => {
     setTransientStatus("Copied path");
     expect(ui.status).toBe("Copied path");
     expect(ui.statusKind).toBe("transient");
+    expect(ui.statusAction).toBeNull();
 
     vi.advanceTimersByTime(2999);
     expect(ui.status).toBe("Copied path");
@@ -29,6 +32,13 @@ describe("setTransientStatus", () => {
     vi.advanceTimersByTime(2);
     expect(ui.status).toBeNull();
     expect(ui.statusKind).toBeNull();
+    expect(ui.statusAction).toBeNull();
+  });
+
+  test("clears any previous typed action", () => {
+    ui.statusAction = { kind: "drive-warnings", label: "Broken draft x" };
+    setTransientStatus("Copied path");
+    expect(ui.statusAction).toBeNull();
   });
 
   test("a newer transient stomps the prior timer (latest wins)", () => {
