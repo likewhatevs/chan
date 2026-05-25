@@ -136,8 +136,17 @@ Desktop File Browser drag-out/download:
   with clear naming. Browser-level directory drag-out and right-click Download
   use the same `download=1` URL and return a `.tar` archive. Done in
   `d11eef5`.
+- Automated verification on 2026-05-25 confirmed the shared browser/server
+  code path: File Browser drag payloads and right-click Download use
+  `api.downloadUrl`, and `/api/files/<path>?download=1` returns file bytes or
+  directory tar archives through `chan-drive`.
 - Use an OS-native drag payload or a temporary desktop export provider from
   the Tauri layer.
+- Desktop native OS drag-out is not yet proven by this automated coverage.
+  If Tauri/WebKit cannot export the browser `DownloadURL` payload to the
+  file manager, add a small native bridge that fetches the same download URL,
+  stages a temporary file or archive, and starts the OS drag from that staged
+  export.
 - Do not add direct desktop filesystem reads of drive content. Route export
   data through the embedded server or another chan-drive-backed boundary.
 - Clean temporary exports after the drag lifecycle finishes, or through a
@@ -276,6 +285,9 @@ Operational release checks:
   - Edit both drives.
   - Run terminals in both drives.
   - Verify no cross-drive state bleed.
+  - Verify web/server File Browser download path:
+    `cd web && npm run test -- fileTreeDragOut.test.ts` and
+    `cargo test -p chan-server download_path_sync`. Done on 2026-05-25.
   - Drag a File Browser file to the desktop and verify name and bytes.
   - Drag a File Browser directory to the desktop and verify tree or archive
     contents.
@@ -348,5 +360,7 @@ Operational release checks:
 14. Add server-side rapid-edit stale-index guard. Done.
 15. Cut browser/editor Rich Prompt and rapid-edit validation to Track C.
     Done, without editing Track C's main roadmap.
-16. Current next remains open for selection. CLI handoff is deferred until
+16. Verify the File Browser download code path for drag-out and right-click
+    Download. Done on 2026-05-25.
+17. Current next remains open for selection. CLI handoff is deferred until
    its design checkpoint.
