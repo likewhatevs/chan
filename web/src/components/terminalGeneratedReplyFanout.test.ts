@@ -1,0 +1,27 @@
+import { describe, expect, test } from "vitest";
+import terminal from "./TerminalTab.svelte?raw";
+
+describe("TerminalTab generated reply routing", () => {
+  test("installs xterm OSC color report guards", () => {
+    expect(terminal).toContain(
+      'import { installTerminalReportGuards } from "../terminal/xtermReports";',
+    );
+    expect(terminal).toMatch(
+      /term = new Terminal\([\s\S]*?\);\s*installTerminalReportGuards\(term\);/,
+    );
+  });
+
+  test("PTY output uses a tracked xterm write", () => {
+    expect(terminal).toMatch(
+      /function writePtyOutput\(bytes: Uint8Array\): void \{[\s\S]*?ptyOutputWriteDepth \+= 1;[\s\S]*?term\.write\(bytes, \(\) => \{[\s\S]*?ptyOutputWriteDepth = Math\.max\(0, ptyOutputWriteDepth - 1\);/,
+    );
+    expect(terminal).toMatch(/const bytes = new Uint8Array\(event\.data\);[\s\S]*?writePtyOutput\(bytes\);/);
+  });
+
+  test("xterm-generated replies bypass broadcast fan-out", () => {
+    expect(terminal).toContain("term.onData(handleXtermData);");
+    expect(terminal).toMatch(
+      /function handleXtermData\(data: string\): void \{[\s\S]*?if \(ptyOutputWriteDepth > 0\) \{[\s\S]*?sendInput\(data\);[\s\S]*?return;[\s\S]*?\}[\s\S]*?sendUserInput\(data\);/,
+    );
+  });
+});

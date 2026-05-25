@@ -70,6 +70,7 @@
   import { terminalWsPath } from "../terminal/session";
   import { handleTerminalMetaKey } from "../terminal/keymap";
   import { injectShowMcpEnvCommand } from "../terminal/mcpEnv";
+  import { installTerminalReportGuards } from "../terminal/xtermReports";
   import { AGENT_SUBMIT_CHORD } from "../terminal/submitMode";
   import {
     clampScrollbackMb,
@@ -170,6 +171,7 @@
   let webglRendererActive = false;
   let webglAtlasRefreshQueued = false;
   let webglAtlasScanTail: number[] = [];
+  let ptyOutputWriteDepth = 0;
   let hostResumeTimers: ReturnType<typeof setTimeout>[] = [];
   let hostResumeListenerCleanup: (() => void) | null = null;
   let lastSessionSave = 0;
@@ -529,6 +531,7 @@
       tabStopWidth: 8,
       theme: terminalTheme(),
     });
+    installTerminalReportGuards(term);
     fit = new FitAddon();
     search = new SearchAddon({ highlightLimit: 1000 });
     serialize = new SerializeAddon();
@@ -574,7 +577,7 @@
     refreshTerminalRenderer();
     installHostResumeListeners();
     term.attachCustomKeyEventHandler(handleTerminalKeyEvent);
-    term.onData(sendUserInput);
+    term.onData(handleXtermData);
     term.onResize(({ cols, rows }) => send({ type: "resize", cols, rows }));
     resizeObserver = new ResizeObserver(queueFit);
     resizeObserver.observe(host);
@@ -618,7 +621,7 @@
     ws.onmessage = async (event) => {
       if (event.data instanceof ArrayBuffer) {
         const bytes = new Uint8Array(event.data);
-        term?.write(bytes);
+        writePtyOutput(bytes);
         maybeRefreshWebglAtlas(bytes);
         recordOutputBytes(bytes.byteLength);
         maybeRefreshWatcher(bytes);
@@ -627,7 +630,7 @@
       }
       if (event.data instanceof Blob) {
         const bytes = new Uint8Array(await event.data.arrayBuffer());
-        term?.write(bytes);
+        writePtyOutput(bytes);
         maybeRefreshWebglAtlas(bytes);
         recordOutputBytes(bytes.byteLength);
         maybeRefreshWatcher(bytes);
@@ -767,6 +770,19 @@
     send({ type: "input", data });
   }
 
+  function writePtyOutput(bytes: Uint8Array): void {
+    if (!term) return;
+    ptyOutputWriteDepth += 1;
+    try {
+      term.write(bytes, () => {
+        ptyOutputWriteDepth = Math.max(0, ptyOutputWriteDepth - 1);
+      });
+    } catch (err) {
+      ptyOutputWriteDepth = Math.max(0, ptyOutputWriteDepth - 1);
+      throw err;
+    }
+  }
+
   /// `fullstack-a-92`: decode a base64 agent-event payload
   /// into the string `sendUserInput` expects. Returns null on
   /// malformed base64 so the WS handler can short-circuit
@@ -789,6 +805,17 @@
   function sendUserInput(data: string): void {
     sendInput(data);
     broadcastTerminalInput(tab, data);
+  }
+
+  function handleXtermData(data: string): void {
+    // xterm emits onData for user input and terminal-generated
+    // replies. Replies belong only to the PTY that requested them;
+    // they must not enter chan's broadcast fan-out.
+    if (ptyOutputWriteDepth > 0) {
+      sendInput(data);
+      return;
+    }
+    sendUserInput(data);
   }
 
   function queueFit(): void {
@@ -870,6 +897,7 @@
     resizeObserver = null;
     term?.dispose();
     term = null;
+    ptyOutputWriteDepth = 0;
     webglRendererActive = false;
     webglAtlasRefreshQueued = false;
     webglAtlasScanTail = [];

@@ -57,10 +57,10 @@ describe("fullstack-b-29: TerminalTab WebGL renderer", () => {
 
   test("checks ArrayBuffer and Blob terminal output for SGR atlas refresh", () => {
     expect(tab).toMatch(
-      /event\.data instanceof ArrayBuffer[\s\S]*?term\?\.write\(bytes\);[\s\S]*?maybeRefreshWebglAtlas\(bytes\);/,
+      /event\.data instanceof ArrayBuffer[\s\S]*?writePtyOutput\(bytes\);[\s\S]*?maybeRefreshWebglAtlas\(bytes\);/,
     );
     expect(tab).toMatch(
-      /event\.data instanceof Blob[\s\S]*?term\?\.write\(bytes\);[\s\S]*?maybeRefreshWebglAtlas\(bytes\);/,
+      /event\.data instanceof Blob[\s\S]*?writePtyOutput\(bytes\);[\s\S]*?maybeRefreshWebglAtlas\(bytes\);/,
     );
   });
 
@@ -69,10 +69,10 @@ describe("fullstack-b-29: TerminalTab WebGL renderer", () => {
     // Coercing ArrayBuffer or Blob output through String() before
     // write would corrupt non-ASCII glyphs.
     expect(tab).toMatch(
-      /event\.data instanceof ArrayBuffer[\s\S]*?const bytes = new Uint8Array\(event\.data\);[\s\S]*?term\?\.write\(bytes\);/,
+      /event\.data instanceof ArrayBuffer[\s\S]*?const bytes = new Uint8Array\(event\.data\);[\s\S]*?writePtyOutput\(bytes\);/,
     );
     expect(tab).toMatch(
-      /event\.data instanceof Blob[\s\S]*?const bytes = new Uint8Array\(await event\.data\.arrayBuffer\(\)\);[\s\S]*?term\?\.write\(bytes\);/,
+      /event\.data instanceof Blob[\s\S]*?const bytes = new Uint8Array\(await event\.data\.arrayBuffer\(\)\);[\s\S]*?writePtyOutput\(bytes\);/,
     );
     expect(tab).not.toMatch(/term\?\.write\(String\(event\.data\)\)/);
   });
