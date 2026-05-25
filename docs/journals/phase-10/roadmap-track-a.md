@@ -181,7 +181,10 @@ Server and editor consistency:
   created 32 live `sleep 45` terminals, rejected 3 extras at the
   configured session cap, rebuilt a 600-note drive, and settled back to
   idle with 600 indexed docs.
-- Reproduce rapid-edit stale editor/index races.
+- Reproduce rapid-edit stale editor/index races. Server-side watch/index
+  guard added on 2026-05-25: `rapid_modify_burst_indexes_latest_file_body`
+  pins that a burst of rewrites indexes the final body and drops stale
+  search tokens. Browser/editor stale-buffer reproduction remains open.
 - Decide whether background search and indexing need further throttling
   beyond current file-descriptor budgets and terminal admission. Decision
   on 2026-05-25: no new fd throttle for this wave. Existing index worker
@@ -339,5 +342,6 @@ Operational release checks:
 12. Low-file-descriptor stress with terminals and active indexing. Done.
 13. Decide background indexing throttle scope. Done: no new fd throttle
     after the low-FD smoke.
-14. Current next remains open for selection. CLI handoff is deferred until
+14. Add server-side rapid-edit stale-index guard. Done.
+15. Current next remains open for selection. CLI handoff is deferred until
    its design checkpoint.

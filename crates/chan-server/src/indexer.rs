@@ -1135,7 +1135,7 @@ mod tests {
         // must return a hit.
         //
         // Pre-`-37` this would fail: reindex skipped (drive
-        // non-empty) → `-34`'s walker never runs → drafts not
+        // non-empty) -> `-34`'s walker never runs -> drafts not
         // in BM25.
         let (_cfg, drive_dir, drive) = setup_drive();
 
@@ -1203,8 +1203,8 @@ mod tests {
         // events with the `Drafts/` prefix. Pre-`-36`, this
         // function ran `resolve_safe(drive.root(), path)` for
         // ALL paths including the prefixed ones; drafts live
-        // outside drive root → resolve_safe failed → events
-        // silently dropped → graph + BM25 empty under `Drafts/`
+        // outside drive root -> resolve_safe failed -> events
+        // silently dropped -> graph + BM25 empty under `Drafts/`
         // despite the watcher being correctly attached.
         //
         // After `-36`, prefixed paths route through
@@ -1294,6 +1294,43 @@ mod tests {
             .hits
             .iter()
             .any(|hit| hit.path == "brand.txt"));
+    }
+
+    #[test]
+    fn rapid_modify_burst_indexes_latest_file_body() {
+        let (_cfg, dir, drive) = setup_drive();
+        let path = dir.path().join("rapid.md");
+        fs::write(&path, "# Rapid\n\nrapid-token-00\n").unwrap();
+        assert_eq!(
+            apply_watch_change(&drive, "rapid.md", false).unwrap(),
+            ApplyOutcome::Indexed
+        );
+
+        for n in 1..=5 {
+            fs::write(&path, format!("# Rapid\n\nrapid-token-{n:02}\n")).unwrap();
+        }
+        assert_eq!(
+            apply_watch_change(&drive, "rapid.md", false).unwrap(),
+            ApplyOutcome::Indexed
+        );
+
+        let opts = SearchOpts {
+            mode: SearchMode::Bm25,
+            limit: 10,
+            scope: None,
+        };
+        let latest = drive.search("rapid-token-05", &opts).unwrap();
+        assert!(
+            latest.hits.iter().any(|hit| hit.path == "rapid.md"),
+            "latest rapid edit should be searchable; got {:?}",
+            latest.hits
+        );
+        let stale = drive.search("rapid-token-00", &opts).unwrap();
+        assert!(
+            stale.hits.is_empty(),
+            "stale rapid edit token should not survive; got {:?}",
+            stale.hits
+        );
     }
 
     #[test]
