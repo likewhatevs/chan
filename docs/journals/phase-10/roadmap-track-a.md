@@ -183,7 +183,11 @@ Server and editor consistency:
   idle with 600 indexed docs.
 - Reproduce rapid-edit stale editor/index races.
 - Decide whether background search and indexing need further throttling
-  beyond current file-descriptor budgets and terminal admission.
+  beyond current file-descriptor budgets and terminal admission. Decision
+  on 2026-05-25: no new fd throttle for this wave. Existing index worker
+  budgets plus terminal fd admission held under the 256 fd smoke above.
+  Revisit only if the rapid-edit stale-index repro shows queue churn rather
+  than descriptor pressure.
 - Audit remaining direct sync calls from async server paths. Done on
   2026-05-25: drive info/warnings, config PATCH saves, reports
   state/update, screensaver state/update/verify, and team watcher attach
@@ -333,5 +337,7 @@ Operational release checks:
 10. Refresh release workflow comments for embedded desktop mode. Done.
 11. Audit async server sync-I/O boundaries. Done.
 12. Low-file-descriptor stress with terminals and active indexing. Done.
-13. Current next remains open for selection. CLI handoff is deferred until
+13. Decide background indexing throttle scope. Done: no new fd throttle
+    after the low-FD smoke.
+14. Current next remains open for selection. CLI handoff is deferred until
    its design checkpoint.
