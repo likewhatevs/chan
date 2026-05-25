@@ -19,7 +19,7 @@ describe("fullstack-a-94: 3rd Alt+Space handler removed from handleTerminalKeyEv
     // delegation that handles the legitimate terminal-side
     // keymap surfaces (Cmd+K leader chord, etc.).
     expect(terminal).toMatch(
-      /function handleTerminalKeyEvent\(e: KeyboardEvent\): boolean \{[\s\S]*?return handleTerminalMetaKey\(e, sendUserInput\);/,
+      /function handleTerminalKeyEvent\(e: KeyboardEvent\): boolean \{[\s\S]*?return handleTerminalMetaKey\(e, sendUserInput, keyboardProtocol\);/,
     );
   });
 

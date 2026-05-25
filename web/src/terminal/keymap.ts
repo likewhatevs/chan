@@ -1,9 +1,63 @@
-export function terminalMetaKeyBytes(ev: KeyboardEvent): string | null {
+import type { Terminal } from "@xterm/xterm";
+
+type CsiParam = number | number[];
+type FunctionIdentifier = {
+  prefix?: string;
+  intermediates?: string;
+  final: string;
+};
+type ParserLike = {
+  registerCsiHandler?: (
+    id: FunctionIdentifier,
+    callback: (params: CsiParam[]) => boolean | Promise<boolean>,
+  ) => { dispose(): void };
+  registerEscHandler?: (
+    id: FunctionIdentifier,
+    callback: () => boolean | Promise<boolean>,
+  ) => { dispose(): void };
+};
+
+const KITTY_REPORT_ALL_KEYS = 8;
+const XTERM_MODIFY_OTHER_KEYS = 4;
+const STACK_LIMIT = 32;
+
+export type TerminalKeyboardProtocolState = {
+  xtermModifyOtherKeys: number;
+  kitty: {
+    screen: "main" | "alternate";
+    mainFlags: number;
+    alternateFlags: number;
+    mainStack: number[];
+    alternateStack: number[];
+  };
+};
+
+export function createTerminalKeyboardProtocolState(): TerminalKeyboardProtocolState {
+  return {
+    xtermModifyOtherKeys: 0,
+    kitty: {
+      screen: "main",
+      mainFlags: 0,
+      alternateFlags: 0,
+      mainStack: [],
+      alternateStack: [],
+    },
+  };
+}
+
+export function terminalMetaKeyBytes(
+  ev: KeyboardEvent,
+  protocol?: TerminalKeyboardProtocolState,
+): string | null {
   if (ev.type !== "keydown") return null;
   if (ev.key === "Enter" && !ev.altKey) {
-    if (ev.shiftKey && !ev.ctrlKey && !ev.metaKey) return "\x1b[13;2u";
-    if (ev.ctrlKey && !ev.shiftKey && !ev.metaKey) return "\x1b[13;5u";
-    if (ev.metaKey && !ev.shiftKey && !ev.ctrlKey) return "\x1b[13;9u";
+    const modifier = enterModifier(ev);
+    if (modifier !== null) {
+      if (protocol?.xtermModifyOtherKeys) return `\x1b[27;${modifier};13~`;
+      if ((currentKittyFlags(protocol) & KITTY_REPORT_ALL_KEYS) !== 0) {
+        return `\x1b[13;${modifier}u`;
+      }
+    }
   }
   if (!ev.altKey || ev.ctrlKey || ev.metaKey) return null;
   switch (ev.key) {
@@ -23,10 +77,205 @@ export function terminalMetaKeyBytes(ev: KeyboardEvent): string | null {
 export function handleTerminalMetaKey(
   ev: KeyboardEvent,
   sendInput: (data: string) => void,
+  protocol?: TerminalKeyboardProtocolState,
 ): boolean {
-  const bytes = terminalMetaKeyBytes(ev);
+  const bytes = terminalMetaKeyBytes(ev, protocol);
   if (bytes === null) return true;
   sendInput(bytes);
   ev.preventDefault();
   return false;
+}
+
+export function installKeyboardProtocolHandlers(
+  term: Terminal,
+  protocol: TerminalKeyboardProtocolState,
+  sendGeneratedInput: (data: string) => void,
+): void {
+  const parser = (term as Terminal & { parser?: ParserLike }).parser;
+  if (!parser?.registerCsiHandler) return;
+
+  parser.registerCsiHandler({ prefix: ">", final: "m" }, (params) => {
+    applyXtermModifierKeys(protocol, params);
+    return true;
+  });
+  parser.registerCsiHandler({ prefix: ">", final: "n" }, (params) => {
+    disableXtermModifierKeys(protocol, params);
+    return true;
+  });
+  parser.registerCsiHandler({ prefix: "?", final: "m" }, (params) => {
+    const reply = queryXtermModifierKeys(protocol, params);
+    if (reply) sendGeneratedInput(reply);
+    return true;
+  });
+
+  parser.registerCsiHandler({ prefix: ">", final: "u" }, (params) => {
+    applyKittyKeyboardProtocol(protocol, "push", params);
+    return true;
+  });
+  parser.registerCsiHandler({ prefix: "<", final: "u" }, (params) => {
+    applyKittyKeyboardProtocol(protocol, "pop", params);
+    return true;
+  });
+  parser.registerCsiHandler({ prefix: "=", final: "u" }, (params) => {
+    applyKittyKeyboardProtocol(protocol, "set", params);
+    return true;
+  });
+  parser.registerCsiHandler({ prefix: "?", final: "u" }, () => {
+    sendGeneratedInput(`\x1b[?${currentKittyFlags(protocol)}u`);
+    return true;
+  });
+
+  parser.registerCsiHandler({ prefix: "?", final: "h" }, (params) => {
+    updateKittyScreen(protocol, params, "alternate");
+    return false;
+  });
+  parser.registerCsiHandler({ prefix: "?", final: "l" }, (params) => {
+    updateKittyScreen(protocol, params, "main");
+    return false;
+  });
+  parser.registerCsiHandler({ intermediates: "!", final: "p" }, () => {
+    resetTerminalKeyboardProtocolState(protocol);
+    return false;
+  });
+  parser.registerEscHandler?.({ final: "c" }, () => {
+    resetTerminalKeyboardProtocolState(protocol);
+    return false;
+  });
+}
+
+export function applyXtermModifierKeys(
+  protocol: TerminalKeyboardProtocolState,
+  params: CsiParam[],
+): void {
+  if (params.length === 0) {
+    protocol.xtermModifyOtherKeys = 0;
+    return;
+  }
+  if (numberParam(params[0]) !== XTERM_MODIFY_OTHER_KEYS) return;
+  protocol.xtermModifyOtherKeys = Math.max(0, numberParam(params[1]) ?? 0);
+}
+
+export function disableXtermModifierKeys(
+  protocol: TerminalKeyboardProtocolState,
+  params: CsiParam[],
+): void {
+  if (params.length === 0 || numberParam(params[0]) === XTERM_MODIFY_OTHER_KEYS) {
+    protocol.xtermModifyOtherKeys = 0;
+  }
+}
+
+export function queryXtermModifierKeys(
+  protocol: TerminalKeyboardProtocolState,
+  params: CsiParam[],
+): string | null {
+  if (numberParam(params[0]) !== XTERM_MODIFY_OTHER_KEYS) return null;
+  return `\x1b[>${XTERM_MODIFY_OTHER_KEYS};${protocol.xtermModifyOtherKeys}m`;
+}
+
+export function applyKittyKeyboardProtocol(
+  protocol: TerminalKeyboardProtocolState,
+  op: "push" | "pop" | "set",
+  params: CsiParam[],
+): void {
+  if (op === "push") {
+    pushKittyFlags(protocol);
+    setCurrentKittyFlags(protocol, Math.max(0, numberParam(params[0]) ?? 0));
+    return;
+  }
+  if (op === "pop") {
+    const count = Math.max(1, numberParam(params[0]) ?? 1);
+    popKittyFlags(protocol, count);
+    return;
+  }
+
+  const flags = Math.max(0, numberParam(params[0]) ?? 0);
+  const mode = numberParam(params[1]) ?? 1;
+  const current = currentKittyFlags(protocol);
+  if (mode === 2) {
+    setCurrentKittyFlags(protocol, current | flags);
+  } else if (mode === 3) {
+    setCurrentKittyFlags(protocol, current & ~flags);
+  } else {
+    setCurrentKittyFlags(protocol, flags);
+  }
+}
+
+export function resetTerminalKeyboardProtocolState(
+  protocol: TerminalKeyboardProtocolState,
+): void {
+  protocol.xtermModifyOtherKeys = 0;
+  protocol.kitty.screen = "main";
+  protocol.kitty.mainFlags = 0;
+  protocol.kitty.alternateFlags = 0;
+  protocol.kitty.mainStack = [];
+  protocol.kitty.alternateStack = [];
+}
+
+function enterModifier(ev: KeyboardEvent): number | null {
+  if (ev.shiftKey && !ev.ctrlKey && !ev.metaKey) return 2;
+  if (ev.ctrlKey && !ev.shiftKey && !ev.metaKey) return 5;
+  if (ev.metaKey && !ev.shiftKey && !ev.ctrlKey) return 9;
+  return null;
+}
+
+function currentKittyFlags(protocol?: TerminalKeyboardProtocolState): number {
+  if (!protocol) return 0;
+  return protocol.kitty.screen === "alternate"
+    ? protocol.kitty.alternateFlags
+    : protocol.kitty.mainFlags;
+}
+
+function setCurrentKittyFlags(
+  protocol: TerminalKeyboardProtocolState,
+  flags: number,
+): void {
+  if (protocol.kitty.screen === "alternate") {
+    protocol.kitty.alternateFlags = flags;
+  } else {
+    protocol.kitty.mainFlags = flags;
+  }
+}
+
+function currentKittyStack(protocol: TerminalKeyboardProtocolState): number[] {
+  return protocol.kitty.screen === "alternate"
+    ? protocol.kitty.alternateStack
+    : protocol.kitty.mainStack;
+}
+
+function pushKittyFlags(protocol: TerminalKeyboardProtocolState): void {
+  const stack = currentKittyStack(protocol);
+  stack.push(currentKittyFlags(protocol));
+  if (stack.length > STACK_LIMIT) stack.shift();
+}
+
+function popKittyFlags(
+  protocol: TerminalKeyboardProtocolState,
+  count: number,
+): void {
+  const stack = currentKittyStack(protocol);
+  let restored: number | null = null;
+  for (let i = 0; i < count; i += 1) {
+    const next = stack.pop();
+    if (next === undefined) {
+      restored = 0;
+      break;
+    }
+    restored = next;
+  }
+  setCurrentKittyFlags(protocol, restored ?? currentKittyFlags(protocol));
+}
+
+function updateKittyScreen(
+  protocol: TerminalKeyboardProtocolState,
+  params: CsiParam[],
+  screen: "main" | "alternate",
+): void {
+  if (params.some((param) => [47, 1047, 1049].includes(numberParam(param) ?? -1))) {
+    protocol.kitty.screen = screen;
+  }
+}
+
+function numberParam(param: CsiParam | undefined): number | null {
+  if (typeof param === "number" && Number.isFinite(param)) return param;
+  return null;
 }

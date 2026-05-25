@@ -7,7 +7,13 @@ describe("TerminalTab generated reply routing", () => {
       'import { installTerminalReportGuards } from "../terminal/xtermReports";',
     );
     expect(terminal).toMatch(
-      /term = new Terminal\([\s\S]*?\);\s*installTerminalReportGuards\(term\);/,
+      /term = new Terminal\([\s\S]*?\);\s*resetTerminalKeyboardProtocolState\(keyboardProtocol\);\s*installTerminalReportGuards\(term\);/,
+    );
+  });
+
+  test("installs keyboard protocol tracking before xterm input handlers", () => {
+    expect(terminal).toMatch(
+      /installKeyboardProtocolHandlers\(term, keyboardProtocol, sendInput\);[\s\S]*?term\.attachCustomKeyEventHandler\(handleTerminalKeyEvent\);/,
     );
   });
 

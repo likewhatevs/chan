@@ -68,7 +68,12 @@
     ui,
   } from "../state/store.svelte";
   import { terminalWsPath } from "../terminal/session";
-  import { handleTerminalMetaKey } from "../terminal/keymap";
+  import {
+    createTerminalKeyboardProtocolState,
+    handleTerminalMetaKey,
+    installKeyboardProtocolHandlers,
+    resetTerminalKeyboardProtocolState,
+  } from "../terminal/keymap";
   import { injectShowMcpEnvCommand } from "../terminal/mcpEnv";
   import { installTerminalReportGuards } from "../terminal/xtermReports";
   import { AGENT_SUBMIT_CHORD } from "../terminal/submitMode";
@@ -178,6 +183,7 @@
   let webglAtlasScanTail: number[] = [];
   let ptyOutputWriteDepth = 0;
   let hostResumeTimers: ReturnType<typeof setTimeout>[] = [];
+  const keyboardProtocol = createTerminalKeyboardProtocolState();
   let hostResumeListenerCleanup: (() => void) | null = null;
   let lastSessionSave = 0;
   let sessionSaveTimer: ReturnType<typeof setTimeout> | null = null;
@@ -536,7 +542,9 @@
       tabStopWidth: 8,
       theme: terminalTheme(),
     });
+    resetTerminalKeyboardProtocolState(keyboardProtocol);
     installTerminalReportGuards(term);
+    installKeyboardProtocolHandlers(term, keyboardProtocol, sendInput);
     fit = new FitAddon();
     search = new SearchAddon({ highlightLimit: 1000 });
     serialize = new SerializeAddon();
@@ -1490,7 +1498,7 @@
     // would be swallowed by xterm + written to the PTY as
     // escape sequences.
     if (shouldEscapeTerminal(e)) return false;
-    return handleTerminalMetaKey(e, sendUserInput);
+    return handleTerminalMetaKey(e, sendUserInput, keyboardProtocol);
   }
 
   function onShellKeydown(e: KeyboardEvent): void {
