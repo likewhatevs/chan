@@ -428,13 +428,14 @@ check; the field stays in `BuildSummary` and reads zero.
 #### Walk filter
 
 `WalkFilter` (in `fs_ops`) is a caller-supplied list of directory
-basenames that the reindex walks should not descend into. Empty
-by default; consumers (the chan binary) populate it with a noise
-list (`node_modules`, `target`, `__pycache__`, ...) via
-`Library::set_walk_filter`, which propagates to every drive
-opened against that Library and forwards into `Index` for the
-search side. `.git` and `.chan` stay hardcoded in `walk_drive`:
-those are invariants of the on-disk layout, not policy.
+basenames that the reindex walks should not descend into. The
+default list lives in `Registry::index_excluded_dirs` and is
+persisted to `~/.chan/config.toml` so CLI and desktop use the same
+policy (`node_modules`, `target`, `__pycache__`, ...). `Library`
+loads that list on open, propagates it to every drive opened
+against that Library, and forwards it into `Index` for the search
+side. `.git` and `.chan` stay hardcoded in `walk_drive`: those are
+invariants of the on-disk layout, not policy.
 
 The filter is honored by the indexing pipeline only:
 `rebuild_graph` and `Index::build_all` use `list_tree_filtered`

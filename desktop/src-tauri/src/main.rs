@@ -523,11 +523,11 @@ const MAX_PREFLIGHT_SECS: u64 = 5;
 /// the modal communicates the cap to the user via the
 /// `truncated` flag.
 ///
-/// `chan_drive::indexer` uses a near-identical excluded-dirs
-/// set + extension-classification map; replicating the small
-/// surface here keeps the pre-flight report cheap and independent
-/// from opening the drive through the embedded server.
-fn walk_drive_preflight(root: &Path) -> WalkOutcome {
+/// `chan_drive::indexer` uses the same excluded-dirs set. The
+/// extension-classification map is intentionally local to keep the
+/// pre-flight report cheap and independent from opening the drive
+/// through the embedded server.
+fn walk_drive_preflight(root: &Path, filter: &chan_drive::WalkFilter) -> WalkOutcome {
     use std::collections::VecDeque;
     use std::time::Instant;
     let start = Instant::now();
@@ -549,7 +549,7 @@ fn walk_drive_preflight(root: &Path) -> WalkOutcome {
             };
             let name = entry.file_name();
             if meta.is_dir() {
-                if should_skip_preflight_dir(&name) {
+                if should_skip_preflight_dir(&name, filter) {
                     continue;
                 }
                 queue.push_back(entry.path());
@@ -578,27 +578,23 @@ struct WalkOutcome {
     truncated: bool,
 }
 
-/// Mirrors `chan/src/main.rs::DEFAULT_INDEX_EXCLUDED_DIRS` so the
-/// pre-flight count + bytes line up with what chan-drive will
-/// actually index. Drift between the two lists would surprise
-/// the user ("preflight said 12K files; chan reports 8K?"); if
-/// chan-drive's defaults change, this list moves alongside.
-fn should_skip_preflight_dir(name: &std::ffi::OsStr) -> bool {
-    matches!(
-        name.to_str(),
-        Some(
-            ".git"
-                | ".hg"
-                | ".svn"
-                | ".chan"
-                | "node_modules"
-                | "target"
-                | ".next"
-                | ".vercel"
-                | "dist"
-                | "build"
-        )
-    )
+fn preflight_walk_filter() -> chan_drive::WalkFilter {
+    chan_drive::Registry::load()
+        .map(|registry| chan_drive::WalkFilter::new(registry.index_excluded_dirs))
+        .unwrap_or_else(|_| {
+            chan_drive::WalkFilter::new(chan_drive::DEFAULT_INDEX_EXCLUDED_DIRS.iter().copied())
+        })
+}
+
+/// Mirrors chan-drive's configured excludes so the pre-flight count
+/// and bytes line up with what chan-drive will actually index.
+fn should_skip_preflight_dir(name: &std::ffi::OsStr, filter: &chan_drive::WalkFilter) -> bool {
+    let Some(name) = name.to_str() else {
+        return false;
+    };
+    name.eq_ignore_ascii_case(".chan")
+        || name.eq_ignore_ascii_case(".git")
+        || filter.is_excluded(name)
 }
 
 /// Extension → media-class bucket. Mirrors chan-drive's
@@ -652,7 +648,8 @@ async fn compute_drive_preflight(
     let writable = std::fs::metadata(&root)
         .map(|m| !m.permissions().readonly())
         .unwrap_or(false);
-    let walk = walk_drive_preflight(&root);
+    let filter = preflight_walk_filter();
+    let walk = walk_drive_preflight(&root, &filter);
     let scm = detect_drive_scm(&root);
     let already_registered = if state.bin_status.ok {
         if let Ok(bin) = serve::resolve_chan_binary() {
@@ -1922,29 +1919,33 @@ mod tests {
 
     #[test]
     fn should_skip_preflight_dir_matches_chan_drive_defaults() {
-        // Mirrors `chan/src/main.rs::DEFAULT_INDEX_EXCLUDED_DIRS`
-        // so the pre-flight count stays consistent with what
-        // chan-drive will actually index.
-        for skip in [
-            ".git",
-            ".hg",
-            ".svn",
-            ".chan",
-            "node_modules",
-            "target",
-            ".next",
-            ".vercel",
-            "dist",
-            "build",
-        ] {
+        let filter =
+            chan_drive::WalkFilter::new(chan_drive::DEFAULT_INDEX_EXCLUDED_DIRS.iter().copied());
+        for skip in [".chan"]
+            .into_iter()
+            .chain(chan_drive::DEFAULT_INDEX_EXCLUDED_DIRS.iter().copied())
+        {
             assert!(
-                should_skip_preflight_dir(std::ffi::OsStr::new(skip)),
+                should_skip_preflight_dir(std::ffi::OsStr::new(skip), &filter),
                 "{skip} must be skipped",
             );
         }
+        assert!(should_skip_preflight_dir(
+            std::ffi::OsStr::new("NODE_MODULES"),
+            &filter
+        ));
+        let empty = chan_drive::WalkFilter::default();
+        assert!(should_skip_preflight_dir(
+            std::ffi::OsStr::new(".git"),
+            &empty
+        ));
+        assert!(!should_skip_preflight_dir(
+            std::ffi::OsStr::new("node_modules"),
+            &empty
+        ));
         for keep in ["notes", "drafts", "src", "assets", ".github", "docs"] {
             assert!(
-                !should_skip_preflight_dir(std::ffi::OsStr::new(keep)),
+                !should_skip_preflight_dir(std::ffi::OsStr::new(keep), &filter),
                 "{keep} must NOT be skipped",
             );
         }
@@ -1976,7 +1977,9 @@ mod tests {
         fs::create_dir_all(root.join("notes")).unwrap();
         fs::write(root.join("notes/deep.md"), b"deep").unwrap();
 
-        let out = walk_drive_preflight(root);
+        let filter =
+            chan_drive::WalkFilter::new(chan_drive::DEFAULT_INDEX_EXCLUDED_DIRS.iter().copied());
+        let out = walk_drive_preflight(root, &filter);
         assert_eq!(out.file_count, 3, "must skip node_modules + .git");
         assert_eq!(out.markdown_count, 2);
         assert_eq!(out.image_count, 1);

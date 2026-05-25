@@ -15,7 +15,7 @@ use crate::error::{ChanError, Result};
 use crate::fs_ops::WalkFilter;
 use crate::lock::DriveLock;
 use crate::paths;
-use crate::registry::{KnownDrive, Registry};
+use crate::registry::{config_declares_index_excluded_dirs, KnownDrive, Registry};
 
 /// Selects how aggressive `Library::reset_drive` is.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -59,14 +59,11 @@ struct LibraryInner {
     /// mutation. The Mutex serializes registry writes so
     /// `register_drive` calls from concurrent threads don't race.
     registry: Mutex<Registry>,
-    /// Caller-supplied directory-name blocklist for indexing walks.
-    /// Default is empty in chan-core; the chan binary populates it
-    /// from its config so noise dirs (`node_modules`, `target`, ...)
-    /// are pruned before the indexer descends into them. The Mutex
-    /// lets the consumer swap the filter at runtime (e.g. after the
-    /// user edits chan's config). Drives capture a snapshot at
-    /// `open_drive` time; a swap here affects subsequent opens and
-    /// the next reindex on already-open drives that re-read it.
+    /// Directory-name blocklist for indexing walks. Loaded from
+    /// the registry config so CLI and desktop share the same noise
+    /// policy (`node_modules`, `target`, ...). The Mutex lets the
+    /// consumer swap the filter at runtime after config changes.
+    /// Drives capture a snapshot at `open_drive` time.
     walk_filter: Mutex<Arc<WalkFilter>>,
     /// In-process map of currently-open Drives, keyed by canonical
     /// path. Each entry is a `Weak<Drive>` so the map doesn't
@@ -101,25 +98,30 @@ impl Library {
     /// tests and by callers that want a non-default location.
     pub fn open_at(config_path: PathBuf) -> Result<Self> {
         let registry = Registry::load_from(&config_path)?;
+        if config_path.exists() && !config_declares_index_excluded_dirs(&config_path) {
+            if let Err(e) = registry.save_to(&config_path) {
+                tracing::warn!(
+                    error = %e,
+                    path = %config_path.display(),
+                    "open library: failed to persist default index_excluded_dirs"
+                );
+            }
+        }
+        let walk_filter = Arc::new(WalkFilter::new(registry.index_excluded_dirs.clone()));
         Ok(Self {
             inner: Arc::new(LibraryInner {
                 config_path,
                 registry: Mutex::new(registry),
                 live_drives: Mutex::new(HashMap::new()),
-                walk_filter: Mutex::new(Arc::new(WalkFilter::default())),
+                walk_filter: Mutex::new(walk_filter),
             }),
         })
     }
 
     /// Replace the directory-name blocklist applied to reindex
-    /// walks for drives opened against this Library. Empty filter
-    /// is the chan-core default (only `.git` / `.chan` are skipped,
-    /// hardcoded in `walk_drive`). The chan binary calls this once
-    /// at startup with its noise list (`node_modules`, `target`,
-    /// `__pycache__`, ...) so the indexer never wastes cycles on
-    /// dependency directories. Live drives that re-read the filter
-    /// on their next reindex pick up the change; in-flight reindexes
-    /// keep their snapshot (no mid-walk reconfiguration).
+    /// walks for drives opened against this Library. This is mainly
+    /// for tests and future config reloads; ordinary callers get
+    /// the value loaded from `~/.chan/config.toml`.
     pub fn set_walk_filter(&self, filter: WalkFilter) {
         *self.inner.walk_filter.lock().unwrap() = Arc::new(filter);
     }
@@ -598,6 +600,40 @@ mod tests {
         assert_eq!(lib.default_drive_root(), Some(drive.path().to_path_buf()));
         lib.set_default_drive_root(None).unwrap();
         assert!(lib.default_drive_root().is_none());
+    }
+
+    #[test]
+    fn open_uses_default_index_excluded_dirs() {
+        let (lib, _cfg, _drive) = lib();
+        let filter = lib.walk_filter();
+        assert!(filter.is_excluded("node_modules"));
+        assert!(filter.is_excluded("NODE_MODULES"));
+        assert!(filter.is_excluded("target"));
+        assert!(!filter.is_excluded("notes"));
+    }
+
+    #[test]
+    fn open_preserves_user_empty_index_excluded_dirs() {
+        let cfg = TempDir::new().unwrap();
+        let config_path = cfg.path().join("config.toml");
+        std::fs::write(&config_path, "index_excluded_dirs = []\ndrives = []\n").unwrap();
+
+        let lib = Library::open_at(config_path).unwrap();
+        let filter = lib.walk_filter();
+        assert!(!filter.is_excluded("node_modules"));
+    }
+
+    #[test]
+    fn open_persists_default_index_excluded_dirs_into_existing_config() {
+        let cfg = TempDir::new().unwrap();
+        let config_path = cfg.path().join("config.toml");
+        std::fs::write(&config_path, "drives = []\n").unwrap();
+
+        let lib = Library::open_at(config_path.clone()).unwrap();
+        assert!(lib.walk_filter().is_excluded("node_modules"));
+        let raw = std::fs::read_to_string(config_path).unwrap();
+        assert!(raw.contains("index_excluded_dirs"));
+        assert!(raw.contains("node_modules"));
     }
 
     #[test]

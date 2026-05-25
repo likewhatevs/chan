@@ -168,10 +168,8 @@ pub struct Index {
     #[cfg(feature = "embeddings")]
     embedder: Mutex<Option<Arc<Embedder>>>,
     /// Directory-name blocklist applied by `build_all`'s tree walk.
-    /// Updated via `set_walk_filter`. Default is empty; the chan
-    /// binary populates the noise list (`node_modules`, `target`,
-    /// ...) via `Library::set_walk_filter` which Drive forwards
-    /// here before each reindex.
+    /// Drive forwards the Library filter here before each reindex
+    /// so search and graph rebuilds use the same exclusions.
     walk_filter: Mutex<Arc<WalkFilter>>,
 }
 

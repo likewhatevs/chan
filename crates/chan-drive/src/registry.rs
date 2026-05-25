@@ -15,17 +15,61 @@ use crate::error::{ChanError, Result};
 use crate::fs_ops;
 use crate::paths;
 
+/// Default directory basenames excluded from indexing and graph rebuild walks.
+///
+/// Stored in `~/.chan/config.toml` as `index_excluded_dirs` so users can
+/// add or remove names without rebuilding chan. `.git` and `.chan` are still
+/// hard-skipped by the drive walker as internal invariants.
+pub const DEFAULT_INDEX_EXCLUDED_DIRS: &[&str] = &[
+    ".git",
+    ".hg",
+    ".svn",
+    "node_modules",
+    "target",
+    "__pycache__",
+    ".venv",
+    "venv",
+    ".tox",
+    ".pytest_cache",
+    ".mypy_cache",
+    ".ruff_cache",
+    ".cache",
+    "dist",
+    "build",
+];
+
 /// On-disk shape of the chan-drive config TOML.
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Registry {
     /// Default drive root for the no-arg launch. When None, the
     /// resolver falls back to `paths::default_drive_root()`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub default_drive_root: Option<PathBuf>,
+    /// Directory basenames skipped by index and graph rebuild walks.
+    /// Matched at any depth by exact basename, case-insensitive.
+    #[serde(default = "default_index_excluded_dirs")]
+    pub index_excluded_dirs: Vec<String>,
     /// Known drives the user has opened on this machine. Sorted
     /// most-recent first by `last_seen_at`.
     #[serde(default)]
     pub drives: Vec<KnownDrive>,
+}
+
+impl Default for Registry {
+    fn default() -> Self {
+        Self {
+            default_drive_root: None,
+            index_excluded_dirs: default_index_excluded_dirs(),
+            drives: Vec::new(),
+        }
+    }
+}
+
+fn default_index_excluded_dirs() -> Vec<String> {
+    DEFAULT_INDEX_EXCLUDED_DIRS
+        .iter()
+        .map(|name| (*name).to_owned())
+        .collect()
 }
 
 /// One entry in the registry.
@@ -207,6 +251,16 @@ pub fn effective_default_drive_root() -> PathBuf {
         .unwrap_or_else(paths::default_drive_root)
 }
 
+pub(crate) fn config_declares_index_excluded_dirs(path: &Path) -> bool {
+    let Ok(raw) = std::fs::read_to_string(path) else {
+        return false;
+    };
+    let Ok(value) = raw.parse::<toml::Value>() else {
+        return false;
+    };
+    value.get("index_excluded_dirs").is_some()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -249,14 +303,40 @@ mod tests {
         let key = reg.drives[0].metadata_key.clone();
         reg.save_to(&cfg_path).unwrap();
         let raw = std::fs::read_to_string(&cfg_path).unwrap();
+        assert!(raw.contains("index_excluded_dirs"));
         assert!(raw.contains("root_path"));
         assert!(raw.contains("metadata_key"));
         assert!(!raw.lines().any(|line| line.starts_with("path =")));
         assert!(!raw.lines().any(|line| line.starts_with("uuid =")));
         assert!(!raw.lines().any(|line| line.starts_with("name =")));
         let loaded = Registry::load_from(&cfg_path).unwrap();
+        assert!(loaded
+            .index_excluded_dirs
+            .iter()
+            .any(|name| name == "node_modules"));
         assert_eq!(loaded.drives.len(), 1);
         assert_eq!(loaded.drives[0].metadata_key, key);
+    }
+
+    #[test]
+    fn load_missing_index_excluded_dirs_uses_default() {
+        let tmp = TempDir::new().unwrap();
+        let cfg_path = tmp.path().join("config.toml");
+        std::fs::write(&cfg_path, "drives = []\n").unwrap();
+        let loaded = Registry::load_from(&cfg_path).unwrap();
+        assert!(loaded
+            .index_excluded_dirs
+            .iter()
+            .any(|name| name == "node_modules"));
+    }
+
+    #[test]
+    fn load_empty_index_excluded_dirs_preserves_user_choice() {
+        let tmp = TempDir::new().unwrap();
+        let cfg_path = tmp.path().join("config.toml");
+        std::fs::write(&cfg_path, "index_excluded_dirs = []\ndrives = []\n").unwrap();
+        let loaded = Registry::load_from(&cfg_path).unwrap();
+        assert!(loaded.index_excluded_dirs.is_empty());
     }
 
     #[test]

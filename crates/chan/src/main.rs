@@ -47,7 +47,7 @@ use std::time::Duration;
 use anyhow::{Context, Result};
 use chan_drive::{
     EdgeKind, KnownDrive, Library, MetadataExportOptions, MetadataImportOptions, SearchAggression,
-    SearchOpts, WalkFilter,
+    SearchOpts,
 };
 use chan_server::{
     build_fs_graph, EditorPrefs, EditorTheme, FsGraphResponse, FsGraphScope as ServerFsGraphScope,
@@ -60,24 +60,6 @@ use serde::Deserialize;
 use serde::Serialize;
 
 mod update;
-
-const DEFAULT_INDEX_EXCLUDED_DIRS: &[&str] = &[
-    ".git",
-    ".hg",
-    ".svn",
-    "node_modules",
-    "target",
-    "__pycache__",
-    ".venv",
-    "venv",
-    ".tox",
-    ".pytest_cache",
-    ".mypy_cache",
-    ".ruff_cache",
-    ".cache",
-    "dist",
-    "build",
-];
 
 /// Extended description for `chan serve`. The keybindings list is
 /// generated from `web/src/state/shortcuts.ts` (the single source of
@@ -775,13 +757,7 @@ fn init_tracing(verbosity: u8) {
 }
 
 fn library() -> Result<Library> {
-    let lib = Library::open().context("opening chan registry")?;
-    lib.set_walk_filter(default_index_walk_filter());
-    Ok(lib)
-}
-
-fn default_index_walk_filter() -> WalkFilter {
-    WalkFilter::new(DEFAULT_INDEX_EXCLUDED_DIRS.iter().copied())
+    Library::open().context("opening chan registry")
 }
 
 fn same_path(a: &Path, b: &Path) -> bool {
@@ -2832,16 +2808,6 @@ mod tests {
             SearchAggression::Aggressive
         );
         assert!(parse_search_aggression("turbo").is_err());
-    }
-
-    #[test]
-    fn default_index_walk_filter_skips_common_noise_dirs() {
-        let filter = default_index_walk_filter();
-        for name in [".git", "node_modules", "target", "__pycache__", ".venv"] {
-            assert!(filter.is_excluded(name), "{name} should be excluded");
-        }
-        assert!(filter.is_excluded("NODE_MODULES"));
-        assert!(!filter.is_excluded("notes"));
     }
 
     #[test]

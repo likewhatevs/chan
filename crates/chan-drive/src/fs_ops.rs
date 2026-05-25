@@ -395,12 +395,10 @@ fn classify_basename(name: &str) -> Option<FileClass> {
 
 /// Caller-supplied list of directory names that the indexing /
 /// graph-rebuild walks should not descend into. Matched at any
-/// depth by exact basename (case-sensitive on Unix, case-folded
-/// on Windows via `eq_ignore_ascii_case`). Empty by default in
-/// chan-core; the chan binary populates it with a noise list
-/// (`node_modules`, `target`, `__pycache__`, ...) read from its
-/// config so a user pointing chan at a source tree doesn't burn
-/// CPU indexing dependencies.
+/// depth by exact basename, case-insensitive. `Library` loads the
+/// default noise list (`node_modules`, `target`, `__pycache__`,
+/// ...) from the registry config so a user pointing chan at a
+/// source tree doesn't burn CPU indexing dependencies.
 ///
 /// What this is NOT:
 ///   - Glob matching. A future variant can grow that. v1 is

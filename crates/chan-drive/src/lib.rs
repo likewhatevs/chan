@@ -83,7 +83,7 @@ pub use metadata_archive::{
 pub use progress::{
     eta_secs_from, progress_fn, NoProgress, ProgressCallback, ProgressEvent, ProgressStage,
 };
-pub use registry::{KnownDrive, Registry};
+pub use registry::{KnownDrive, Registry, DEFAULT_INDEX_EXCLUDED_DIRS};
 pub use rich_prompts::{RichPromptSubmitReport, RichPromptWorkspace};
 pub use teams::{Member, Position, TeamConfig, TeamRef};
 pub use trash::{TrashEntry, TRASH_RETENTION_SECS};
