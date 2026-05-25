@@ -9,18 +9,24 @@
 //!
 //! The graph endpoints (links / graph / backlinks) walk chan-drive's
 //! per-file accessors and stitch them into the unified `{ nodes,
-//! edges }` shape the frontend visualization expects.
+//! edges }` shape the frontend visualization expects. `/api/graph`
+//! and `/api/backlinks/*path` also expose `?stream=1` NDJSON forms
+//! so the UI can render partial relationship data while the full
+//! graph is still being composed.
 
-use std::sync::Arc;
+use std::{convert::Infallible, sync::Arc};
 
+use axum::body::{Body, Bytes};
 use axum::extract::{Path as AxumPath, Query, State};
-use axum::http::StatusCode;
+use axum::http::{header, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::Json;
 use chan_drive::{
     EdgeKind, FileClass, PathClass, PathPermission, ReportFileBucket, ReportFileStats,
 };
+use futures::{stream, StreamExt};
 use serde::{Deserialize, Serialize};
+use tokio::sync::mpsc;
 
 use crate::error::err_from;
 use crate::routes::fs_graph::{build_fs_graph, FsGraphScope};
@@ -50,6 +56,72 @@ async fn blocking_response(
         )
             .into_response(),
     }
+}
+
+fn query_flag(value: &Option<String>) -> bool {
+    matches!(
+        value.as_deref(),
+        Some("1" | "true" | "TRUE" | "yes" | "YES" | "on" | "ON")
+    )
+}
+
+fn graph_ndjson_bytes(event: &GraphStreamEvent) -> Result<Bytes, serde_json::Error> {
+    let mut line = serde_json::to_vec(event)?;
+    line.push(b'\n');
+    Ok(Bytes::from(line))
+}
+
+fn graph_ndjson_error_bytes(error: String) -> Bytes {
+    match graph_ndjson_bytes(&GraphStreamEvent::Error { error }) {
+        Ok(bytes) => bytes,
+        Err(e) => Bytes::from(format!(
+            "{{\"type\":\"error\",\"error\":\"failed to encode graph stream error: {e}\"}}\n"
+        )),
+    }
+}
+
+fn emit_graph_event(
+    emit: &mut Option<&mut dyn FnMut(GraphStreamEvent) -> bool>,
+    event: GraphStreamEvent,
+) -> Result<(), GraphBuildError> {
+    if let Some(emit) = emit.as_deref_mut() {
+        if !emit(event) {
+            return Err(GraphBuildError::Cancelled);
+        }
+    }
+    Ok(())
+}
+
+fn emit_graph_nodes(
+    emit: &mut Option<&mut dyn FnMut(GraphStreamEvent) -> bool>,
+    nodes: Vec<GraphNodeView>,
+) -> Result<(), GraphBuildError> {
+    const BATCH_SIZE: usize = 128;
+    for batch in nodes.chunks(BATCH_SIZE) {
+        emit_graph_event(
+            emit,
+            GraphStreamEvent::Nodes {
+                nodes: batch.to_vec(),
+            },
+        )?;
+    }
+    Ok(())
+}
+
+fn emit_graph_edges(
+    emit: &mut Option<&mut dyn FnMut(GraphStreamEvent) -> bool>,
+    edges: Vec<GraphEdgeView>,
+) -> Result<(), GraphBuildError> {
+    const BATCH_SIZE: usize = 256;
+    for batch in edges.chunks(BATCH_SIZE) {
+        emit_graph_event(
+            emit,
+            GraphStreamEvent::Edges {
+                edges: batch.to_vec(),
+            },
+        )?;
+    }
+    Ok(())
 }
 
 pub async fn api_link_targets(
@@ -169,6 +241,72 @@ struct GraphViewResponse {
     edges: Vec<GraphEdgeView>,
 }
 
+#[derive(Debug)]
+enum GraphBuildError {
+    Drive(chan_drive::ChanError),
+    Fs(super::fs_graph::FsGraphError),
+    Cancelled,
+}
+
+impl GraphBuildError {
+    fn into_response(self) -> Response {
+        match self {
+            GraphBuildError::Drive(e) => err_from(&e),
+            GraphBuildError::Fs(e) => e.into_response(),
+            GraphBuildError::Cancelled => {
+                (StatusCode::INTERNAL_SERVER_ERROR, "graph stream cancelled").into_response()
+            }
+        }
+    }
+}
+
+impl std::fmt::Display for GraphBuildError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            GraphBuildError::Drive(e) => write!(f, "{e}"),
+            GraphBuildError::Fs(e) => write!(f, "{e}"),
+            GraphBuildError::Cancelled => write!(f, "graph stream cancelled"),
+        }
+    }
+}
+
+impl From<chan_drive::ChanError> for GraphBuildError {
+    fn from(value: chan_drive::ChanError) -> Self {
+        GraphBuildError::Drive(value)
+    }
+}
+
+impl From<super::fs_graph::FsGraphError> for GraphBuildError {
+    fn from(value: super::fs_graph::FsGraphError) -> Self {
+        GraphBuildError::Fs(value)
+    }
+}
+
+#[derive(Serialize)]
+#[serde(tag = "type", rename_all = "lowercase")]
+enum GraphStreamEvent {
+    Meta {
+        scope: GraphScope,
+        path: String,
+        depth: usize,
+    },
+    Nodes {
+        nodes: Vec<GraphNodeView>,
+    },
+    Edges {
+        edges: Vec<GraphEdgeView>,
+    },
+    Done,
+    Error {
+        error: String,
+    },
+}
+
+enum GraphStreamMessage {
+    Data(Bytes),
+    Error(GraphBuildError),
+}
+
 #[derive(Debug, Clone, Serialize)]
 #[serde(tag = "kind", rename_all = "lowercase")]
 enum GraphNodeView {
@@ -256,7 +394,7 @@ struct GraphEdgeView {
     code: Option<u64>,
 }
 
-#[derive(Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 pub struct GraphParams {
     #[serde(default = "default_graph_scope")]
     scope: GraphScope,
@@ -266,7 +404,29 @@ pub struct GraphParams {
     depth: usize,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
+pub struct GraphQuery {
+    #[serde(default = "default_graph_scope")]
+    scope: GraphScope,
+    #[serde(default)]
+    path: String,
+    #[serde(default = "default_graph_depth")]
+    depth: usize,
+    #[serde(default)]
+    stream: Option<String>,
+}
+
+impl GraphQuery {
+    fn into_params(self) -> GraphParams {
+        GraphParams {
+            scope: self.scope,
+            path: self.path,
+            depth: self.depth,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "lowercase")]
 enum GraphScope {
     Drive,
@@ -457,7 +617,7 @@ fn drive_disk_files(drive: &chan_drive::Drive) -> std::collections::BTreeSet<Str
 /// `kind: file` missing nodes.
 ///
 /// Returns an empty set on `list_tree` failure so callers degrade
-/// to "no directory filtering" — i.e. the pre-fix behaviour — rather
+/// to "no directory filtering", i.e. the pre-fix behaviour, rather
 /// than failing the request.
 fn drive_disk_dirs(drive: &chan_drive::Drive) -> std::collections::BTreeSet<String> {
     match drive.list_tree_unified() {
@@ -817,6 +977,13 @@ fn merge_tree_file_node(
         return;
     }
 
+    if let Some(GraphNodeView::File { bucket, .. }) = nodes.get_mut(&id) {
+        if bucket.is_none() {
+            *bucket = report_buckets.get(path).cloned();
+        }
+        return;
+    }
+
     nodes.entry(id.clone()).or_insert(GraphNodeView::File {
         id,
         label,
@@ -861,6 +1028,7 @@ fn merge_unified_tree_layer(
     p: &GraphParams,
     nodes: &mut std::collections::BTreeMap<String, GraphNodeView>,
     edges: &mut Vec<GraphEdgeView>,
+    report_buckets: &std::collections::HashMap<String, ReportFileBucket>,
 ) {
     let path = graph_scope_path(p);
     let entries = match p.scope {
@@ -872,15 +1040,6 @@ fn merge_unified_tree_layer(
     };
     entries.sort_by(|a, b| a.path.cmp(&b.path));
 
-    let report_buckets: std::collections::HashMap<String, ReportFileBucket> = drive
-        .report()
-        .map(|r| {
-            r.files
-                .into_iter()
-                .filter_map(|f| f.bucket.map(|b| (f.path, b)))
-                .collect()
-        })
-        .unwrap_or_default();
     let mut edge_set: std::collections::BTreeSet<(String, String, &'static str)> = edges
         .iter()
         .map(|edge| (edge.source.clone(), edge.target.clone(), edge.kind))
@@ -908,18 +1067,30 @@ fn merge_unified_tree_layer(
     }
 }
 
+#[cfg(test)]
 fn merge_filesystem_layer(
     drive: &chan_drive::Drive,
     p: &GraphParams,
     nodes: &mut std::collections::BTreeMap<String, GraphNodeView>,
     edges: &mut Vec<GraphEdgeView>,
 ) -> Result<(), super::fs_graph::FsGraphError> {
+    let report_buckets = report_buckets_for_graph(drive);
+    merge_filesystem_layer_with_buckets(drive, p, nodes, edges, &report_buckets)
+}
+
+fn merge_filesystem_layer_with_buckets(
+    drive: &chan_drive::Drive,
+    p: &GraphParams,
+    nodes: &mut std::collections::BTreeMap<String, GraphNodeView>,
+    edges: &mut Vec<GraphEdgeView>,
+    report_buckets: &std::collections::HashMap<String, ReportFileBucket>,
+) -> Result<(), super::fs_graph::FsGraphError> {
     let path = graph_scope_path(p);
     if chan_drive::drafts::is_unified_drafts_path(path) {
         // Drafts lives in chan metadata. build_fs_graph intentionally
         // walks the drive root, so virtual draft nodes come from the
         // graph/index layer rather than a metadata filesystem walk.
-        merge_unified_tree_layer(drive, p, nodes, edges);
+        merge_unified_tree_layer(drive, p, nodes, edges, report_buckets);
         return Ok(());
     }
     let scope = match p.scope {
@@ -989,7 +1160,7 @@ fn merge_filesystem_layer(
     // then fills in the full public namespace so the semantic graph
     // keeps the same file coverage as the File Browser, regardless
     // of the current visual depth.
-    merge_unified_tree_layer(drive, p, nodes, edges);
+    merge_unified_tree_layer(drive, p, nodes, edges, report_buckets);
 
     Ok(())
 }
@@ -1005,6 +1176,31 @@ fn scoped_report_files(
         GraphScope::File => drive.report_for_files(&[path.to_string()])?,
     };
     Ok(report.files)
+}
+
+fn report_buckets_for_graph(
+    drive: &chan_drive::Drive,
+) -> std::collections::HashMap<String, ReportFileBucket> {
+    drive
+        .report()
+        .map(|r| {
+            r.files
+                .into_iter()
+                .filter_map(|f| f.bucket.map(|b| (f.path, b)))
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+fn apply_report_buckets(
+    nodes: &mut std::collections::BTreeMap<String, GraphNodeView>,
+    report_buckets: &std::collections::HashMap<String, ReportFileBucket>,
+) {
+    for (path, bucket_value) in report_buckets {
+        if let Some(GraphNodeView::File { bucket, .. }) = nodes.get_mut(path) {
+            *bucket = Some(bucket_value.clone());
+        }
+    }
 }
 
 fn merge_language_layer(
@@ -1093,31 +1289,112 @@ pub async fn api_language_graph(
 
 pub async fn api_graph(
     State(state): State<Arc<AppState>>,
-    Query(p): Query<GraphParams>,
+    Query(q): Query<GraphQuery>,
 ) -> Response {
     let drive = state.drive();
-    blocking_response(move || api_graph_sync(drive, p), "graph").await
+    let stream = query_flag(&q.stream);
+    let params = q.into_params();
+    if stream {
+        return stream_graph_response(drive, params).await;
+    }
+    blocking_response(move || api_graph_sync(drive, params), "graph").await
 }
 
 fn api_graph_sync(drive: Arc<chan_drive::Drive>, p: GraphParams) -> Response {
-    let graph = match drive.graph() {
-        Ok(g) => g,
-        Err(e) => return err_from(&e),
+    let mut emit = None;
+    match build_graph_view(drive, p, &mut emit) {
+        Ok(view) => Json(view).into_response(),
+        Err(e) => e.into_response(),
+    }
+}
+
+fn stream_graph_sync<F>(
+    drive: Arc<chan_drive::Drive>,
+    p: GraphParams,
+    mut emit: F,
+) -> Result<(), GraphBuildError>
+where
+    F: FnMut(Bytes) -> bool,
+{
+    let mut send_event = |event: GraphStreamEvent| -> bool {
+        match graph_ndjson_bytes(&event) {
+            Ok(bytes) => emit(bytes),
+            Err(e) => emit(graph_ndjson_error_bytes(format!(
+                "failed to encode graph stream event: {e}"
+            ))),
+        }
     };
-    let files = match graph.files() {
-        Ok(f) => f,
-        Err(e) => return err_from(&e),
+
+    if !send_event(GraphStreamEvent::Meta {
+        scope: p.scope,
+        path: p.path.clone(),
+        depth: p.depth,
+    }) {
+        return Err(GraphBuildError::Cancelled);
+    }
+
+    {
+        let mut event_emit = |event| send_event(event);
+        let mut event_emit = Some(&mut event_emit as &mut dyn FnMut(GraphStreamEvent) -> bool);
+        build_graph_view(drive, p, &mut event_emit)?;
+    }
+
+    if !send_event(GraphStreamEvent::Done) {
+        return Err(GraphBuildError::Cancelled);
+    }
+    Ok(())
+}
+
+async fn stream_graph_response(drive: Arc<chan_drive::Drive>, p: GraphParams) -> Response {
+    let (tx, mut rx) = mpsc::channel::<GraphStreamMessage>(8);
+    tokio::task::spawn_blocking(move || {
+        let result = stream_graph_sync(drive, p, |bytes| {
+            tx.blocking_send(GraphStreamMessage::Data(bytes)).is_ok()
+        });
+        match result {
+            Ok(()) | Err(GraphBuildError::Cancelled) => {}
+            Err(e) => {
+                let _ = tx.blocking_send(GraphStreamMessage::Error(e));
+            }
+        }
+    });
+
+    let first = match rx.recv().await {
+        Some(GraphStreamMessage::Data(bytes)) => bytes,
+        Some(GraphStreamMessage::Error(e)) => return e.into_response(),
+        None => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "graph stream ended before metadata",
+            )
+                .into_response()
+        }
     };
-    let tags = match graph.tags() {
-        Ok(t) => t,
-        Err(e) => return err_from(&e),
-    };
+    let rest = stream::unfold(rx, |mut rx| async {
+        rx.recv().await.map(|message| {
+            let bytes = match message {
+                GraphStreamMessage::Data(bytes) => bytes,
+                GraphStreamMessage::Error(e) => graph_ndjson_error_bytes(e.to_string()),
+            };
+            (Ok::<Bytes, Infallible>(bytes), rx)
+        })
+    });
+    let body =
+        Body::from_stream(stream::once(async move { Ok::<Bytes, Infallible>(first) }).chain(rest));
+    ([(header::CONTENT_TYPE, "application/x-ndjson")], body).into_response()
+}
+
+fn build_graph_view(
+    drive: Arc<chan_drive::Drive>,
+    p: GraphParams,
+    emit: &mut Option<&mut dyn FnMut(GraphStreamEvent) -> bool>,
+) -> Result<GraphViewResponse, GraphBuildError> {
+    let graph = drive.graph()?;
+    let files = graph.files()?;
+    let tags = graph.tags()?;
     let mut all_edges = Vec::new();
     for f in &files {
-        match graph.neighbors(f) {
-            Ok(es) => all_edges.extend(es),
-            Err(e) => return err_from(&e),
-        }
+        all_edges.extend(graph.neighbors(f)?);
     }
 
     // Image files (and other non-markdown regular files: LICENSE,
@@ -1155,7 +1432,7 @@ fn api_graph_sync(drive: Arc<chan_drive::Drive>, p: GraphParams) -> Response {
     // mention name (case-insensitive) gets its rel_path stamped on
     // the mention edge's dst, so `@@alice` no longer renders as a
     // standalone yellow text node alongside the Contacts/alice.md
-    // file node — the two collapse into one.
+    // file node, so the two collapse into one.
     let contact_rows = drive.contacts().unwrap_or_default();
     let contact_paths: std::collections::HashSet<String> =
         contact_rows.iter().map(|c| c.rel_path.clone()).collect();
@@ -1218,7 +1495,7 @@ fn api_graph_sync(drive: Arc<chan_drive::Drive>, p: GraphParams) -> Response {
     //
     // systacean-22: track the set of contact file paths that ARE
     // referenced by some mention edge. This drives the per-file
-    // emit filter below — contact-frontmatter files that aren't
+    // emit filter below: contact-frontmatter files that aren't
     // referenced anywhere get skipped from the graph (vs the prior
     // behaviour where every imported contact became a node, which
     // exploded the graph to 1973 contact nodes against ~49 unique
@@ -1246,7 +1523,7 @@ fn api_graph_sync(drive: Arc<chan_drive::Drive>, p: GraphParams) -> Response {
     // Track which image / other-disk files are actually referenced
     // by a link edge so we only emit nodes for ones that participate
     // in the graph. Unreferenced files would inflate the node count
-    // without adding any edges — purely visual noise.
+    // without adding any edges, which is purely visual noise.
     //
     // `referenced_disk_files` covers the bug repro from
     // docs/journals/phase-8/systacean/systacean-2.md: a markdown link
@@ -1283,27 +1560,15 @@ fn api_graph_sync(drive: Arc<chan_drive::Drive>, p: GraphParams) -> Response {
     // Before the filter @@Alex's seed surfaced 1973 contact nodes;
     // after, only the ~49 referenced ones.
     //
-    // systacean-22 (bucket emit): per-file `bucket` from chan-
-    // report is looked up via `path -> Option<FileBucket>` so the
-    // SPA's G6 colour scheme reads the truth from the server
-    // instead of running client-side regex classification.
-    // Building the lookup is a single `drive.report()` call +
-    // HashMap construction; downstream files in the per-file emit
-    // loop pay an O(1) lookup each.
-    let report_buckets: std::collections::HashMap<String, ReportFileBucket> = drive
-        .report()
-        .map(|r| {
-            r.files
-                .into_iter()
-                .filter_map(|f| f.bucket.map(|b| (f.path, b)))
-                .collect()
-        })
-        .unwrap_or_default();
+    // The first node batch intentionally skips chan-report buckets
+    // so streaming callers can draw the semantic graph before the
+    // report layer finishes. A later node batch re-sends final node
+    // values with bucket metadata filled in.
     let mut nodes: std::collections::BTreeMap<String, GraphNodeView> =
         std::collections::BTreeMap::new();
     for path in &files {
         if !should_emit_contact_file(path, &contact_paths, &referenced_contact_paths) {
-            // Imported but unreferenced contact — skip. See
+            // Imported but unreferenced contact: skip. See
             // `should_emit_contact_file` for the audit framing.
             continue;
         }
@@ -1316,7 +1581,7 @@ fn api_graph_sync(drive: Arc<chan_drive::Drive>, p: GraphParams) -> Response {
                 path: path.clone(),
                 path_class: path_class_for_graph(&drive, path),
                 node_kind: if is_contact { Some("contact") } else { None },
-                bucket: report_buckets.get(path).cloned(),
+                bucket: None,
                 missing: !present_files.contains(path.as_str()),
             },
         );
@@ -1349,7 +1614,7 @@ fn api_graph_sync(drive: Arc<chan_drive::Drive>, p: GraphParams) -> Response {
                 path: f.clone(),
                 path_class: path_class_for_graph(&drive, f),
                 node_kind: None,
-                bucket: report_buckets.get(f).cloned(),
+                bucket: None,
                 missing: false,
             },
         );
@@ -1428,6 +1693,7 @@ fn api_graph_sync(drive: Arc<chan_drive::Drive>, p: GraphParams) -> Response {
     // differently from regular `contains` edges (per
     // addendun-a.md's spec).
     let drafts_link_edges = synthesize_drafts_layer(&files, &mut nodes);
+    emit_graph_nodes(emit, nodes.values().cloned().collect())?;
 
     let mut edges: Vec<GraphEdgeView> = all_edges
         .iter()
@@ -1447,8 +1713,8 @@ fn api_graph_sync(drive: Arc<chan_drive::Drive>, p: GraphParams) -> Response {
             if e.src.is_empty() || e.dst.is_empty() {
                 return false;
             }
-            // systacean-4: drop link edges whose dst is a directory
-            // — they have no node to point at after the ghost-set
+            // systacean-4: drop link edges whose dst is a directory.
+            // They have no node to point at after the ghost-set
             // guard above.
             if matches!(e.kind, EdgeKind::Link) && disk_dirs.contains(&e.dst) {
                 return false;
@@ -1476,25 +1742,26 @@ fn api_graph_sync(drive: Arc<chan_drive::Drive>, p: GraphParams) -> Response {
             code: None,
         })
         .collect();
+    let emitted_edge_len = edges.len();
+    emit_graph_edges(emit, edges.clone())?;
 
-    if let Err(e) = merge_filesystem_layer(&drive, &p, &mut nodes, &mut edges) {
-        return e.into_response();
-    }
-    if let Err(e) = merge_language_layer(&drive, &p, &mut nodes, &mut edges) {
-        return err_from(&e);
-    }
+    let report_buckets = report_buckets_for_graph(&drive);
+    apply_report_buckets(&mut nodes, &report_buckets);
+    merge_filesystem_layer_with_buckets(&drive, &p, &mut nodes, &mut edges, &report_buckets)?;
+    merge_language_layer(&drive, &p, &mut nodes, &mut edges)?;
 
     // systacean-25: append the synthesized drafts-link edges (if
     // any) AFTER the filesystem + language layers merge their own
     // edges. The Drafts root node was already inserted into
     // `nodes` above.
     edges.extend(drafts_link_edges);
+    emit_graph_nodes(emit, nodes.values().cloned().collect())?;
+    emit_graph_edges(emit, edges[emitted_edge_len..].to_vec())?;
 
-    Json(GraphViewResponse {
+    Ok(GraphViewResponse {
         nodes: nodes.into_values().collect(),
         edges,
     })
-    .into_response()
 }
 
 /// Incoming link edges for one file. The frontend uses this for
@@ -1505,8 +1772,8 @@ fn api_graph_sync(drive: Arc<chan_drive::Drive>, p: GraphParams) -> Response {
 /// PascalCase versus lowercase across endpoints. `Edge.kind`'s
 /// default `Serialize` would emit `"Link"` / `"Mention"` / `"Tag"`,
 /// which `FileInfoBody`'s `kind === "link"` filter then rejects
-/// — surfacing as "0 linked from" in the inspector.
-#[derive(serde::Serialize)]
+/// and surfaced as "0 linked from" in the inspector.
+#[derive(Debug, Clone, serde::Serialize)]
 struct ApiBacklinkEdge {
     src: String,
     dst: String,
@@ -1515,19 +1782,153 @@ struct ApiBacklinkEdge {
     anchor: Option<String>,
 }
 
+#[derive(Deserialize)]
+pub struct BacklinksQuery {
+    #[serde(default)]
+    stream: Option<String>,
+}
+
+#[derive(Serialize)]
+#[serde(tag = "type", rename_all = "lowercase")]
+enum BacklinksStreamEvent<'a> {
+    Meta { path: &'a str },
+    Edge { edge: ApiBacklinkEdge },
+    Done,
+    Error { error: String },
+}
+
+enum BacklinksStreamMessage {
+    Data(Bytes),
+    Error(chan_drive::ChanError),
+}
+
 pub async fn api_backlinks(
     State(state): State<Arc<AppState>>,
     AxumPath(path): AxumPath<String>,
+    Query(query): Query<BacklinksQuery>,
 ) -> Response {
     let drive = state.drive();
+    if query_flag(&query.stream) {
+        return stream_backlinks_response(drive, path).await;
+    }
     blocking_response(move || api_backlinks_sync(drive, path), "backlinks").await
 }
 
 fn api_backlinks_sync(drive: Arc<chan_drive::Drive>, path: String) -> Response {
-    let graph = match drive.graph() {
-        Ok(g) => g,
-        Err(e) => return err_from(&e),
+    match backlinks_for_path(&drive, &path, |_| true) {
+        Ok(edges) => Json(edges).into_response(),
+        Err(e) => err_from(&e),
+    }
+}
+
+fn backlinks_ndjson_bytes(event: &BacklinksStreamEvent<'_>) -> Result<Bytes, serde_json::Error> {
+    let mut line = serde_json::to_vec(event)?;
+    line.push(b'\n');
+    Ok(Bytes::from(line))
+}
+
+fn backlinks_ndjson_error_bytes(error: String) -> Bytes {
+    match backlinks_ndjson_bytes(&BacklinksStreamEvent::Error { error }) {
+        Ok(bytes) => bytes,
+        Err(e) => Bytes::from(format!(
+            "{{\"type\":\"error\",\"error\":\"failed to encode backlinks stream error: {e}\"}}\n"
+        )),
+    }
+}
+
+fn emit_backlinks_event<F>(
+    emit: &mut F,
+    event: BacklinksStreamEvent<'_>,
+) -> chan_drive::Result<bool>
+where
+    F: FnMut(Bytes) -> bool,
+{
+    let bytes = backlinks_ndjson_bytes(&event).map_err(|e| {
+        chan_drive::ChanError::Io(format!("failed to encode backlinks stream event: {e}"))
+    })?;
+    Ok(emit(bytes))
+}
+
+fn stream_backlinks_sync<F>(
+    drive: &chan_drive::Drive,
+    path: &str,
+    mut emit: F,
+) -> chan_drive::Result<()>
+where
+    F: FnMut(Bytes) -> bool,
+{
+    if !emit_backlinks_event(&mut emit, BacklinksStreamEvent::Meta { path })? {
+        return Ok(());
+    }
+
+    let mut encode_error = None;
+    let result = backlinks_for_path(drive, path, |edge| {
+        match emit_backlinks_event(&mut emit, BacklinksStreamEvent::Edge { edge: edge.clone() }) {
+            Ok(keep_going) => keep_going,
+            Err(e) => {
+                encode_error = Some(e);
+                false
+            }
+        }
+    });
+    if let Some(e) = encode_error {
+        return Err(e);
+    }
+    result?;
+
+    emit_backlinks_event(&mut emit, BacklinksStreamEvent::Done)?;
+    Ok(())
+}
+
+async fn stream_backlinks_response(drive: Arc<chan_drive::Drive>, path: String) -> Response {
+    let (tx, mut rx) = mpsc::channel::<BacklinksStreamMessage>(8);
+    tokio::task::spawn_blocking(move || {
+        let result = stream_backlinks_sync(&drive, &path, |bytes| {
+            tx.blocking_send(BacklinksStreamMessage::Data(bytes))
+                .is_ok()
+        });
+        match result {
+            Ok(()) | Err(chan_drive::ChanError::Cancelled) => {}
+            Err(e) => {
+                let _ = tx.blocking_send(BacklinksStreamMessage::Error(e));
+            }
+        }
+    });
+
+    let first = match rx.recv().await {
+        Some(BacklinksStreamMessage::Data(bytes)) => bytes,
+        Some(BacklinksStreamMessage::Error(e)) => return err_from(&e),
+        None => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "backlinks stream ended before metadata",
+            )
+                .into_response()
+        }
     };
+    let rest = stream::unfold(rx, |mut rx| async {
+        rx.recv().await.map(|message| {
+            let bytes = match message {
+                BacklinksStreamMessage::Data(bytes) => bytes,
+                BacklinksStreamMessage::Error(e) => backlinks_ndjson_error_bytes(e.to_string()),
+            };
+            (Ok::<Bytes, Infallible>(bytes), rx)
+        })
+    });
+    let body =
+        Body::from_stream(stream::once(async move { Ok::<Bytes, Infallible>(first) }).chain(rest));
+    ([(header::CONTENT_TYPE, "application/x-ndjson")], body).into_response()
+}
+
+fn backlinks_for_path<F>(
+    drive: &chan_drive::Drive,
+    path: &str,
+    mut emit: F,
+) -> chan_drive::Result<Vec<ApiBacklinkEdge>>
+where
+    F: FnMut(&ApiBacklinkEdge) -> bool,
+{
+    let graph = drive.graph()?;
 
     // chan-drive stores the verbatim authored target on each link
     // edge ("./img.png", "attachments/pic.png", "../foo/x.md"), so
@@ -1537,15 +1938,12 @@ fn api_backlinks_sync(drive: Arc<chan_drive::Drive>, path: String) -> Response {
     // set, then keep the ones that land on `path`. Slightly more
     // expensive than the SQL filter, but on the same order as the
     // graph load the inspector just ran.
-    let files = match graph.files() {
-        Ok(f) => f,
-        Err(e) => return err_from(&e),
-    };
+    let files = graph.files()?;
     // Same resolver universe as `api_graph`: graph files + every
     // regular on-disk file. Without this, `[link](LICENSE)` from a
     // README would not show up in LICENSE's backlinks because the
     // resolver couldn't tell that "LICENSE" was a real file.
-    let disk_files = drive_disk_files(&drive);
+    let disk_files = drive_disk_files(drive);
     let mut file_set: std::collections::BTreeSet<&str> = files.iter().map(String::as_str).collect();
     for f in &disk_files {
         file_set.insert(f.as_str());
@@ -1553,27 +1951,28 @@ fn api_backlinks_sync(drive: Arc<chan_drive::Drive>, path: String) -> Response {
 
     let mut out: Vec<ApiBacklinkEdge> = Vec::new();
     for f in &files {
-        let edges = match graph.neighbors(f) {
-            Ok(es) => es,
-            Err(e) => return err_from(&e),
-        };
+        let edges = graph.neighbors(f)?;
         for e in edges {
             if !matches!(e.kind, EdgeKind::Link) {
                 continue;
             }
             let resolved = resolve_link_dst(&e.src, &e.dst, &file_set);
             if resolved == path {
-                out.push(ApiBacklinkEdge {
+                let edge = ApiBacklinkEdge {
                     src: e.src,
                     dst: resolved,
                     kind: edge_kind_tag(e.kind),
                     anchor: e.anchor,
-                });
+                };
+                if !emit(&edge) {
+                    return Err(chan_drive::ChanError::Cancelled);
+                }
+                out.push(edge);
             }
         }
     }
     out.sort_by(|a, b| a.src.cmp(&b.src));
-    Json(out).into_response()
+    Ok(out)
 }
 
 #[cfg(test)]
@@ -1615,6 +2014,20 @@ mod tests {
         std::fs::write(path, body).unwrap();
     }
 
+    fn event_types(lines: &[Bytes]) -> Vec<String> {
+        lines
+            .iter()
+            .map(|line| {
+                let value: serde_json::Value = serde_json::from_slice(line).unwrap();
+                value
+                    .get("type")
+                    .and_then(|v| v.as_str())
+                    .unwrap()
+                    .to_string()
+            })
+            .collect()
+    }
+
     fn has_node_kind(
         nodes: &std::collections::BTreeMap<String, GraphNodeView>,
         kind: &str,
@@ -1630,6 +2043,58 @@ mod tests {
                     | ("mention", GraphNodeView::Mention { .. })
             )
         })
+    }
+
+    #[test]
+    fn graph_stream_emits_meta_batches_and_done() {
+        let (_cfg, root, drive) = open_drive();
+        put(
+            root.path(),
+            "notes/a.md",
+            b"# A\n\n[[notes/b.md]]\n#topic\n",
+        );
+        put(root.path(), "notes/b.md", b"# B\n");
+        drive.index_file("notes/a.md").unwrap();
+        drive.index_file("notes/b.md").unwrap();
+
+        let params = GraphParams {
+            scope: GraphScope::Drive,
+            path: String::new(),
+            depth: 2,
+        };
+        let mut lines = Vec::new();
+        stream_graph_sync(drive, params, |bytes| {
+            lines.push(bytes);
+            true
+        })
+        .unwrap();
+
+        let types = event_types(&lines);
+        assert_eq!(types.first().map(String::as_str), Some("meta"));
+        assert!(types.iter().any(|t| t == "nodes"), "got {types:?}");
+        assert!(types.iter().any(|t| t == "edges"), "got {types:?}");
+        assert_eq!(types.last().map(String::as_str), Some("done"));
+    }
+
+    #[test]
+    fn backlinks_stream_emits_meta_edges_and_done() {
+        let (_cfg, root, drive) = open_drive();
+        put(root.path(), "notes/a.md", b"# A\n\n[[notes/b.md]]\n");
+        put(root.path(), "notes/b.md", b"# B\n");
+        drive.index_file("notes/a.md").unwrap();
+        drive.index_file("notes/b.md").unwrap();
+
+        let mut lines = Vec::new();
+        stream_backlinks_sync(&drive, "notes/b.md", |bytes| {
+            lines.push(bytes);
+            true
+        })
+        .unwrap();
+
+        let types = event_types(&lines);
+        assert_eq!(types.first().map(String::as_str), Some("meta"));
+        assert!(types.iter().any(|t| t == "edge"), "got {types:?}");
+        assert_eq!(types.last().map(String::as_str), Some("done"));
     }
 
     #[test]
@@ -1728,7 +2193,7 @@ mod tests {
         assert!(!dirs.contains("docs/intro.md"));
         assert!(!dirs.contains("docs/agents/alice.md"));
 
-        // Files set stays clean of directories — the two helpers split
+        // Files set stays clean of directories. The two helpers split
         // the same walk; pin that the split is exclusive.
         let files = drive_disk_files(&drive);
         assert!(files.contains("docs/intro.md"));
@@ -1771,7 +2236,7 @@ mod tests {
         let disk_dirs = drive_disk_dirs(&drive);
         assert!(disk_dirs.contains("some-dir"), "got {disk_dirs:?}");
         // The link target is NOT a file on disk (it's the directory)
-        // — pinning this rules out the systacean-2 path accidentally
+        // Pinning this rules out the systacean-2 path accidentally
         // covering the symptom.
         assert!(!disk_files.contains("some-dir"));
 
@@ -1919,7 +2384,7 @@ mod tests {
             &contact_paths,
             &referenced_contact_paths
         ));
-        // notes/intro.md is not a contact — emits regardless.
+        // notes/intro.md is not a contact, so it emits regardless.
         assert!(super::should_emit_contact_file(
             "notes/intro.md",
             &contact_paths,
@@ -2066,13 +2531,13 @@ mod tests {
         let mut referenced = std::collections::HashSet::new();
         referenced.insert("contacts/alice.md".to_string());
 
-        // alice IS referenced — emit.
+        // alice IS referenced, so emit.
         assert!(super::should_emit_contact_file(
             "contacts/alice.md",
             &contacts,
             &referenced
         ));
-        // bob is a contact but NOT referenced — drop.
+        // bob is a contact but NOT referenced, so drop.
         assert!(!super::should_emit_contact_file(
             "contacts/bob.md",
             &contacts,
@@ -2084,13 +2549,13 @@ mod tests {
             &contacts,
             &referenced
         ));
-        // Plain markdown (not a contact) — always emit.
+        // Plain markdown (not a contact) always emits.
         assert!(super::should_emit_contact_file(
             "notes/intro.md",
             &contacts,
             &referenced
         ));
-        // Source file — always emit.
+        // Source file always emits.
         assert!(super::should_emit_contact_file(
             "src/lib.rs",
             &contacts,

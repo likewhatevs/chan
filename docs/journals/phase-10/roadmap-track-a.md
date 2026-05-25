@@ -200,6 +200,13 @@ Server and editor consistency:
   nodes/edges appearing progressively instead of waiting for the full graph.
   Keep all reads behind `chan-drive` and run blocking report/graph work off
   the Tokio runtime.
+  API side landed on 2026-05-25: `GET /api/report/file?path=...&stream=1`
+  emits `meta`, `report` or `missing`, then `done`; `GET
+  /api/backlinks/*path?stream=1` emits `meta`, per-edge `edge`, then `done`;
+  and `GET /api/graph?stream=1` emits `meta`, batched `nodes` upserts,
+  batched `edges`, then `done`. Late failures are NDJSON `error` events.
+  UI consumption and IAB smoke are handed off in
+  `docs/journals/phase-10/track-c-handoff-streaming-ui-iab.md`.
 - Run low-file-descriptor stress under `ulimit -n 256` with many terminals
   and active indexing. Done on 2026-05-25 with an isolated `/tmp`
   config/home: `chan serve` stayed healthy at a 256 fd soft limit,

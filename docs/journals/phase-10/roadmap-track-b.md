@@ -82,10 +82,15 @@ Next wave:
   `--skip-latest-download-heads` after the next `chan-v*` tag includes the
   manual bundle and the repo is public.
 - After Track A lands editor streaming opens, update `docs/manual/` and the
-  generated public manual for large editable files:
+  generated public manual for large editable files and slow relationship
+  loads:
   - partial read-only content appears while the file is still loading;
   - editing is enabled only after the full file and CAS metadata arrive;
   - Reload starts a fresh read when a file is still loading;
+  - inspector report, backlinks, and reference sections may fill
+    progressively while the file remains usable;
+  - graph views may draw nodes and edges in batches before the full
+    graph stream completes;
   - slow-read bug reports should include path, size, drive type, and whether
     inspector/report/graph panes were also loading;
   - include Track C inspector Upload/Download buttons once that work lands.

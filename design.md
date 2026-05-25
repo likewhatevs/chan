@@ -143,10 +143,14 @@ routes/
   fs_graph.rs      GET /api/fs-graph (filesystem-shaped scopes)
   graph.rs         /api/links, /api/graph, /api/graph/languages,
                    /api/backlinks/*path, /api/link-targets,
-                   /api/resolve-link, /api/headings
+                   /api/resolve-link, /api/headings. `/api/graph`
+                   and `/api/backlinks/*path` also expose NDJSON
+                   streams with `?stream=1`.
   health.rs        GET /api/health
   preferences.rs   /api/server/config + /api/config (unified view)
-  report.rs        /api/report/{file,prefix}
+  report.rs        /api/report/{file,prefix}. Per-file reports also
+                   expose NDJSON with
+                   `GET /api/report/file?path=...&stream=1`.
   search.rs        /api/search/{files,content}, /api/index/*
   sessions.rs      /api/session* (per-window editor session blob)
   storage.rs       POST /api/storage/reset
