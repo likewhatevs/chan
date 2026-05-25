@@ -2141,15 +2141,7 @@ function cloneTab(src: Tab): Tab {
       lastSeq: src.lastSeq,
       cwd: src.cwd,
       seedInput: src.seedInput,
-      richPrompt: src.richPrompt
-        ? {
-            buffer: src.richPrompt.buffer,
-            heightPx: src.richPrompt.heightPx,
-            open: src.richPrompt.open,
-            mode: src.richPrompt.mode,
-            styleToolbarOpen: src.richPrompt.styleToolbarOpen,
-          }
-        : undefined,
+      richPrompt: src.richPrompt ? { ...src.richPrompt } : undefined,
       watcher: src.watcher
         ? {
             path: src.watcher.path,

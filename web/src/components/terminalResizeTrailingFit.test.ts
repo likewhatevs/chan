@@ -60,4 +60,16 @@ describe("fullstack-a-93: PTY resize propagation preserved", () => {
       /if \(term\) send\(\{ type: "resize", cols: term\.cols, rows: term\.rows \}\);/,
     );
   });
+
+  test("server resize frames update only hidden terminal instances", () => {
+    expect(terminal).toMatch(
+      /\| \{ type: "resize"; cols: number; rows: number \}/,
+    );
+    expect(terminal).toMatch(
+      /frame\.type === "resize" \|\| frame\.type === "resize_other"/,
+    );
+    expect(terminal).toMatch(
+      /!active && term && \(term\.cols !== frame\.cols \|\| term\.rows !== frame\.rows\)[\s\S]*?term\.resize\(frame\.cols, frame\.rows\)/,
+    );
+  });
 });

@@ -55,6 +55,7 @@ import {
   resolveDraftClose,
   markLocalTabDrop,
   markTerminalEnvNameRestarted,
+  moveTab,
   openActiveTerminalRichPrompt,
   renameTerminalTab,
   reopenClosedTab,
@@ -558,6 +559,55 @@ describe("pane state", () => {
     expect(left.tabs.map((tab) => tab.id)).toEqual([first.id]);
     expect(right.tabs.map((tab) => tab.id)).toEqual([second.id]);
     expect(layout.activePaneId).toBe(right.id);
+  });
+
+  test("moving a terminal preserves rich prompt workspace state", () => {
+    const terminal = terminalTab({
+      id: "term-a",
+      title: "@@Agent",
+      terminalSessionId: "session-a",
+      richPrompt: {
+        buffer: "queued prompt",
+        open: true,
+        phase: "active",
+        workspaceName: "rich-prompt-2",
+        draftPath: "Drafts/rich-prompt-2/draft.md",
+        workspacePath: "Drafts/rich-prompt-2",
+        eventsPath: "Drafts/rich-prompt-2/spool/events",
+        processPath: "Drafts/rich-prompt-2/spool/process.md",
+        workspaceAbs: "/tmp/drive/.chan/rich-prompt-2",
+        eventsAbs: "/tmp/drive/.chan/rich-prompt-2/spool/events",
+        submissionSequence: 7,
+        submitMode: "agent",
+        agentTarget: "claude",
+        collapsed: true,
+        pageWidthRatio: 0.7,
+      },
+    });
+    const pane = resetLayout([terminal]);
+    splitPane(pane.id, "row", "after");
+    const root = layout.nodes[layout.rootId];
+    expect(root?.kind).toBe("split");
+    if (root?.kind !== "split") return;
+
+    moveTab(pane.id, terminal.id, root.b);
+
+    const target = layout.nodes[root.b];
+    expect(target?.kind).toBe("leaf");
+    if (target?.kind !== "leaf") return;
+    const moved = target.tabs[0];
+    expect(moved?.kind).toBe("terminal");
+    if (moved?.kind !== "terminal") return;
+    expect(moved.richPrompt).toMatchObject({
+      buffer: "queued prompt",
+      workspaceName: "rich-prompt-2",
+      eventsPath: "Drafts/rich-prompt-2/spool/events",
+      submissionSequence: 7,
+      submitMode: "agent",
+      agentTarget: "claude",
+      collapsed: true,
+      pageWidthRatio: 0.7,
+    });
   });
 
   test("closeTabsInPane leaves every tab when a terminal close sink fails", async () => {

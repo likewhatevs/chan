@@ -117,6 +117,7 @@
       }
     | { type: "activity"; bytes_since_focus: number }
     | { type: "cwd"; cwd?: string | null; cwd_rel?: string | null }
+    | { type: "resize"; cols: number; rows: number }
     | { type: "resize_other"; cols: number; rows: number }
     | { type: "closed"; reason: CloseReason }
     | { type: "exit"; code: number }
@@ -612,8 +613,10 @@
         if (missedBytes > 0) {
           term?.writeln(`\r\nterminal replay missed ${missedBytes} bytes`);
         }
-      } else if (frame.type === "resize_other") {
-        term?.resize(frame.cols, frame.rows);
+      } else if (frame.type === "resize" || frame.type === "resize_other") {
+        if (!active && term && (term.cols !== frame.cols || term.rows !== frame.rows)) {
+          term.resize(frame.cols, frame.rows);
+        }
         statusDetail = `${frame.cols}x${frame.rows}`;
       } else if (frame.type === "cwd") {
         terminalCwdAbs = frame.cwd ?? null;

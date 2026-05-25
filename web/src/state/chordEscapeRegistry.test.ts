@@ -9,7 +9,7 @@ import {
 
 // `fullstack-a-91`: chord-escape registry. Global App-group
 // chords (Settings, RichPrompt, Reload, FB, Graph, NewDraft,
-// New Terminal) carry `escapeTerminal: true`. The
+// New Terminal, Hybrid Nav) carry `escapeTerminal: true`. The
 // `handleTerminalKeyEvent` xterm-`customKeyEventHandler` callback
 // consults the registry: matched events return false so the
 // chord bubbles out of xterm to the App-level keymap.
@@ -26,6 +26,7 @@ describe("fullstack-a-91: registry shape", () => {
       "app.files.toggle",
       "app.graph.toggle",
       "app.terminal.toggle",
+      "app.pane.mode",
       "app.window.reload",
       "app.draft.new",
     ];
@@ -36,14 +37,11 @@ describe("fullstack-a-91: registry shape", () => {
   });
 
   test("non-flagged chords default to undefined (xterm consumes)", () => {
-    // app.tab.close (Ctrl+D) and Hybrid NAV entry chord aren't
-    // listed as escapes — the former goes through different
-    // dispatch paths and the latter is owned by App-level
-    // higher-priority handlers.
+    // app.tab.close (Ctrl+D) is intentionally not listed: it goes
+    // through a different dispatch path and must still reach shells
+    // as EOF when a terminal is focused.
     const close = SHORTCUTS.find((s) => s.id === "app.tab.close");
-    const hybridNav = SHORTCUTS.find((s) => s.id === "app.pane.mode");
     expect(close?.escapeTerminal).toBeUndefined();
-    expect(hybridNav?.escapeTerminal).toBeUndefined();
   });
 });
 
@@ -119,6 +117,11 @@ describe("fullstack-a-91: shouldEscapeTerminal lookup", () => {
 
   test("Cmd+, (settings) escapes", () => {
     const e = new KeyboardEvent("keydown", { key: ",", metaKey: true });
+    expect(shouldEscapeTerminal(e)).toBe(true);
+  });
+
+  test("Cmd+. (Hybrid Nav) escapes", () => {
+    const e = new KeyboardEvent("keydown", { key: ".", metaKey: true });
     expect(shouldEscapeTerminal(e)).toBe(true);
   });
 

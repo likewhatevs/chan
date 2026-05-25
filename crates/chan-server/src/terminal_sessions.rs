@@ -348,44 +348,7 @@ impl Registry {
                 return Ok(handle);
             }
         }
-        if let Some(handle) =
-            self.attach_by_identity(opts.window_id.as_deref(), opts.tab_name.as_deref(), since)
-        {
-            return Ok(handle);
-        }
         self.create(opts)
-    }
-
-    fn attach_by_identity(
-        &self,
-        window_id: Option<&str>,
-        tab_name: Option<&str>,
-        since: Option<u64>,
-    ) -> Option<AttachHandle> {
-        let window_id = window_id?.trim();
-        let tab_name = tab_name?.trim();
-        if window_id.is_empty() || tab_name.is_empty() {
-            return None;
-        }
-        let session = {
-            let sessions = self.sessions.lock().expect("terminal registry poisoned");
-            let mut matches = sessions.values().filter(|session| {
-                !session.closed.load(Ordering::Relaxed)
-                    && session.window_id.as_deref() == Some(window_id)
-                    && session.tab_name.as_deref() == Some(tab_name)
-            });
-            let first = matches.next()?.clone();
-            if matches.next().is_some() {
-                tracing::warn!(
-                    window_id,
-                    tab_name,
-                    "refusing terminal reattach by ambiguous window/tab identity"
-                );
-                return None;
-            }
-            first
-        };
-        Some(session.attach(since))
     }
 
     pub fn close(&self, id: &str, reason: CloseReason) -> bool {
@@ -673,17 +636,24 @@ impl Registry {
     fn find_agent_session(&self, target: &str) -> Option<Arc<Session>> {
         let normalized_target = normalize_agent_target(target)?;
         let sessions = self.sessions.lock().expect("terminal registry poisoned");
-        sessions
-            .values()
-            .find(|session| {
-                session
-                    .tab_name
-                    .as_deref()
-                    .and_then(normalize_agent_target)
-                    .as_deref()
-                    == Some(normalized_target.as_str())
-            })
-            .cloned()
+        let mut matches = sessions.values().filter(|session| {
+            session
+                .tab_name
+                .as_deref()
+                .and_then(normalize_agent_target)
+                .as_deref()
+                == Some(normalized_target.as_str())
+        });
+        let first = matches.next()?.clone();
+        if matches.next().is_some() {
+            tracing::warn!(
+                target,
+                normalized_target,
+                "dropping agent event with ambiguous terminal target"
+            );
+            return None;
+        }
+        Some(first)
     }
 }
 
@@ -1939,7 +1909,7 @@ mod tests {
     }
 
     #[test]
-    fn get_or_create_reattaches_by_window_and_tab_name_when_session_id_missing() {
+    fn get_or_create_without_session_id_creates_fresh_even_for_same_window_and_tab_name() {
         let registry = Registry::new(test_config(1024, 4, 10));
         let first = registry
             .create(CreateOptions {
@@ -1972,13 +1942,14 @@ mod tests {
             )
             .unwrap();
 
-        assert_eq!(second.id(), first_id);
-        assert_eq!(registry.len(), 1);
+        assert_ne!(second.id(), first_id);
+        assert_eq!(registry.len(), 2);
         registry.close(&first_id, CloseReason::Explicit);
+        registry.close(second.id(), CloseReason::Explicit);
     }
 
     #[test]
-    fn get_or_create_does_not_reattach_ambiguous_window_tab_identity() {
+    fn get_or_create_without_session_id_does_not_match_ambiguous_window_tab_identity() {
         let registry = Registry::new(test_config(1024, 4, 10));
         let first = registry
             .create(CreateOptions {
@@ -2154,6 +2125,67 @@ mod tests {
         );
         assert_eq!(registry.watcher_dropped_events(), 0);
         registry.close(handle.id(), CloseReason::Explicit);
+    }
+
+    #[tokio::test]
+    async fn dispatch_agent_event_drops_ambiguous_tab_name_targets() {
+        let registry = Arc::new(Registry::new(test_config(4096, 4, 60)));
+        let mut first = registry
+            .create(CreateOptions {
+                size: test_size(),
+                tab_name: Some("@@Agent".into()),
+                window_id: None,
+                mcp_env: true,
+                cwd: None,
+                command: None,
+                env: Default::default(),
+                preflight: None,
+            })
+            .unwrap();
+        let mut second = registry
+            .create(CreateOptions {
+                size: test_size(),
+                tab_name: Some("Agent".into()),
+                window_id: None,
+                mcp_env: true,
+                cwd: None,
+                command: None,
+                env: Default::default(),
+                preflight: None,
+            })
+            .unwrap();
+
+        registry.dispatch_agent_event(AgentEvent {
+            id: "event-ambiguous".into(),
+            event_type: crate::event_watcher::AgentEventType::Poke,
+            from: "@@Architect".into(),
+            to: "@@Agent".into(),
+            topic: None,
+            questions: None,
+            standing_options: None,
+            scope: None,
+            answers: None,
+            scope_grant: None,
+            note: None,
+            path: None,
+            heading: None,
+        });
+
+        assert_eq!(registry.watcher_dropped_events(), 1);
+        assert!(
+            collect_agent_event_echo(&mut first, Duration::from_millis(100))
+                .await
+                .is_none(),
+            "ambiguous target must not inject into first match"
+        );
+        assert!(
+            collect_agent_event_echo(&mut second, Duration::from_millis(100))
+                .await
+                .is_none(),
+            "ambiguous target must not inject into second match"
+        );
+        registry.close(first.id(), CloseReason::Explicit);
+        registry.close(second.id(), CloseReason::Explicit);
     }
 
     #[tokio::test]

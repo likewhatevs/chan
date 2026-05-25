@@ -69,13 +69,8 @@ export type Shortcut = {
   /// event bubbles out of xterm to the App-level keymap. Default
   /// false (xterm consumes the keystroke as a shell input). Set
   /// true on App-group chords (Settings, RichPrompt, Reload,
-  /// FB toggle, Graph, NewDraft, etc.) that must reach
-  /// App.svelte regardless of terminal focus. Pane-Mode entry
-  /// (Cmd+. / Cmd+K) + tab navigation chords stay false: those
-  /// are handled by chan-desktop's KEY_BRIDGE_JS (native) or
-  /// App.svelte's higher-priority handlers BEFORE xterm sees
-  /// the event, so the registry hint doesn't need to fire for
-  /// them.
+  /// FB toggle, Graph, NewDraft, Hybrid Nav, etc.) that must
+  /// reach App.svelte regardless of terminal focus.
   escapeTerminal?: boolean;
 };
 
@@ -213,6 +208,7 @@ export const SHORTCUTS: readonly Shortcut[] = [
     web: "Mod+.",
     native: "Mod+.",
     group: "Panes",
+    escapeTerminal: true,
   },
   // `fullstack-a-73`: window-level reload, like a browser Cmd+R.
   // SPA chord routes through `reloadWindow()` (chan-desktop IPC
