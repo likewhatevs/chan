@@ -3,7 +3,9 @@
 Date: 2026-05-25.
 
 This handoff is for the next Track C agent continuing the browser and Hybrid
-polish lane after commit `f5696db Tighten docked file browser actions`.
+polish lane after commit `f5696db Tighten docked file browser actions`, plus
+Track A's streaming relationship API handoff from commit
+`36af846 Stream relationship APIs`.
 
 ## Opening Prompt
 
@@ -18,6 +20,7 @@ Start by reading:
 - docs/journals/phase-10/roadmap-track-c.md
 - docs/journals/phase-10/track-c-next-agent-handoff.md
 - docs/journals/phase-10/track-c-handoff-from-track-a.md
+- docs/journals/phase-10/track-c-handoff-streaming-ui-iab.md
 
 Do not use docs/agents/bootstrap.md unless @@Alex explicitly asks.
 
@@ -58,6 +61,7 @@ Recently completed:
 Latest relevant commit:
 
 - `f5696db Tighten docked file browser actions`
+- `36af846 Stream relationship APIs`
 
 ## Next Tasks
 
@@ -121,6 +125,40 @@ Track C:
 - If validation shows server queue churn instead of editor state drift, cut a
   minimal repro back to Track A.
 
+### 5. Streaming Inspector And Graph Intake
+
+Read `docs/journals/phase-10/track-c-handoff-streaming-ui-iab.md` before the
+live browser pass.
+
+Track A added API streams:
+
+- `GET /api/report/file?path=<rel>&stream=1`
+- `GET /api/backlinks/<rel>?stream=1`
+- `GET /api/graph?scope=drive|directory|file&path=<rel>&depth=<n>&stream=1`
+
+Track C owns the browser consumption:
+
+- typed NDJSON readers in `web/src/api/client.ts`;
+- inspector report, references, and backlinks partial loading in
+  `FileInfoBody.svelte`;
+- graph node upserts and edge batch appends in `graphData.svelte.ts` and
+  `GraphPanel.svelte`;
+- reload/cancel behavior for in-flight relationship streams.
+
+Browser/IAB smoke to include in the live pass:
+
+- Build and serve the current repo as a drive with `--no-token --no-browser`.
+- Open `CHANGELOG.md` in the editor.
+- Confirm editor content appears before the full file stream completes and
+  editing is disabled until full load.
+- Open the inspector for `CHANGELOG.md`.
+- Confirm report, references, and backlinks show loading or partial state
+  without a 10 second timeout.
+- Open Graph from the same file.
+- Confirm nodes and edges appear before the graph stream reaches `done`.
+- Trigger Reload in the inspector and graph UI, then confirm a fresh stream
+  starts and the partial state resets cleanly.
+
 ## Suggested Verification Setup
 
 Use a throwaway HOME and drive:
@@ -137,6 +175,8 @@ Use the printed bearer URL in Browser/iab.
 Seed enough content for the pass:
 
 - a markdown file with links, tags, and headings;
+- a root markdown file large enough to exercise streaming open and inspector
+  relationships, for example repo `CHANGELOG.md`;
 - a nested directory with at least one markdown file and one binary file;
 - a Draft with non-whitespace content;
 - an optional Draft workspace with an attachment;
@@ -166,6 +206,7 @@ PASS/FAIL:
 - Drive warnings:
 - Docked File Browser context actions:
 - Track A handoff items:
+- Streaming inspector/graph UI:
 
 Screenshots:
 - Only failures or suspicious visuals.
