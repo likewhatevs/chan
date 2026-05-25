@@ -204,14 +204,13 @@
 {/if}
 
 <style>
-  /* Full-window cover. z-index above every other chan overlay
-     (the spawn dialog sits at z=50 per `-a-78`; team dialog
-     same; disconnect / missing-token overlays use 1500+).
-     2000 puts the screensaver above all of them. */
+  /* Full-window cover above chan chrome, dialogs, and the ambient
+     status bar. Missing-token stays higher so auth failure can still
+     explain why the app cannot run. */
   .screensaver-backdrop {
     position: fixed;
     inset: 0;
-    z-index: 2000;
+    z-index: 39000;
     background: var(--bg);
     display: flex;
     align-items: center;

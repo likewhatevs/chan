@@ -7,6 +7,9 @@ describe("fullstack-a-99: screensaver canvas themes", () => {
     expect(matrix).toMatch(/prefers-reduced-motion: reduce/);
     expect(matrix).toMatch(/drawStaticMatrix\(\)/);
     expect(matrix).toMatch(/abcdefghijklmnopqrstuvwxyz123456789890/);
+    expect(matrix).toMatch(/font-family: "matrix_code"/);
+    expect(matrix).toMatch(/font-family: "matrix_courier"/);
+    expect(matrix).toMatch(/LICENSE-MatrixScreensaver\.txt/);
   });
 
   test("Matrix intro matches the reference message sequence and timing", () => {
@@ -16,7 +19,9 @@ describe("fullstack-a-99: screensaver canvas themes", () => {
     expect(matrix).toMatch(/TYPE_DELAY_SLOW_MS = 300/);
     expect(matrix).toMatch(/TYPE_DELAY_FAST_MS = 100/);
     expect(matrix).toMatch(/INTRO_FONT_SIZE_PX = 22/);
-    expect(matrix).toMatch(/ctx\.fillText\(text, 30, 40\)/);
+    expect(matrix).toMatch(/document\.fonts\.load\(`\$\{INTRO_FONT_SIZE_PX\}px matrix_courier`\)/);
+    expect(matrix).toMatch(/index \* \(COLUMN_SPACING_PX \+ 2\) \+ 30/);
+    expect(matrix).toMatch(/outputChar\([\s\S]{1,120}40,/);
   });
 
   test("Matrix rain follows the dcragusa reference spacing, cadence, and color tiers", () => {
@@ -29,7 +34,8 @@ describe("fullstack-a-99: screensaver canvas themes", () => {
     expect(matrix).toMatch(/LEAD_COLOR = "#c9cfb9"/);
     expect(matrix).toMatch(/MID_COLOR = "#95a297"/);
     expect(matrix).toMatch(/BODY_COLOR = "#2cb231"/);
-    expect(matrix).toMatch(/Math\.random\(\) < 1 \/ 15/);
+    expect(matrix).toMatch(/document\.fonts\.load\(`\$\{RAIN_FONT_SIZE_PX\}px matrix_code`\)/);
+    expect(matrix).toMatch(/!randInt\(15\)/);
     expect(matrix).toMatch(/rgba\(0, 0, 0, 0\.30\)/);
     expect(matrix).toMatch(/rgba\(0, 0, 0, 0\.05\)/);
   });

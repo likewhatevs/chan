@@ -64,6 +64,11 @@ Progress:
   approximation with a high-fidelity port or adaptation of the MIT-licensed
   `dcragusa/MatrixScreensaver` source code, preserving visible credit and
   license attribution.
+- 2026-05-25: ported the Matrix lock closer to the upstream
+  `dcragusa/MatrixScreensaver` implementation, bundled the upstream Matrix
+  font assets and MIT notice, and raised the lock layer above ambient status
+  chrome after live IAB showed a drive-warning pill leaking over the
+  screensaver.
 
 Current wave:
 
@@ -73,8 +78,9 @@ Current wave:
 - Run a broader live visual regression pass over the completed Track C chrome:
   Terminal scroll-heavy/ANSI pane switching, Graph filesystem spine, File
   Browser expansion restore, Matrix lock, and actionable drive-warning dialog.
-- Port or adapt the Matrix lock rain from the upstream
-  `dcragusa/MatrixScreensaver` source before marking screen-lock visuals done.
+- Keep the Matrix lock in the broader live visual regression pass, now focused
+  on comparing the source-port result against the upstream reference and
+  catching integration leaks.
 - Cut follow-up implementation only for live regressions found in that pass.
 
 ## Objectives

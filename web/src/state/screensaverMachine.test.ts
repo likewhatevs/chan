@@ -119,7 +119,7 @@ describe("fullstack-a-77 slice 2: overlay component", () => {
   });
 
   test("backdrop z-index is 2000 (above every other overlay)", () => {
-    expect(overlay).toMatch(/z-index: 2000;/);
+    expect(overlay).toMatch(/z-index: 39000;/);
   });
 
   test("overlay renders Matrix only when the matrix theme is active", () => {

@@ -665,15 +665,15 @@
             (<a href="/static/fonts/OFL.txt" target="_blank" rel="noopener">SIL OFL 1.1</a>)
           </span>
         </span>
-        <!-- Matrix screen-lock visual reference attribution. The
-             renderer is self-contained, but its rain cadence, color
-             tiers, and glyph geometry are adapted from the MIT-licensed
-             dcragusa/MatrixScreensaver project. -->
+        <!-- Matrix screen-lock attribution. The renderer and font
+             assets are adapted from the MIT-licensed
+             dcragusa/MatrixScreensaver project; the license notice
+             ships in the embedded app bundle. -->
         <span class="k">matrix screen lock</span>
         <span class="v">
-          dcragusa/MatrixScreensaver
+          <a href="https://github.com/dcragusa/MatrixScreensaver" target="_blank" rel="noopener">dcragusa/MatrixScreensaver</a>
           <span class="muted">
-            (<a href="https://github.com/dcragusa/MatrixScreensaver" target="_blank" rel="noopener">MIT</a>)
+            (<a href="/static/matrix/LICENSE-MatrixScreensaver.txt" target="_blank" rel="noopener">MIT</a>)
           </span>
         </span>
       </div>
