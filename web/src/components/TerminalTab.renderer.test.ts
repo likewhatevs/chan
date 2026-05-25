@@ -87,6 +87,17 @@ describe("fullstack-b-29: TerminalTab WebGL renderer", () => {
     expect(tab).toMatch(/if \(focused\) return;[\s\S]*?refreshTerminalRenderer\(\);[\s\S]*?sendFocusState\(\);/);
   });
 
+  test("refreshes renderer after native host resume", () => {
+    expect(tab).toMatch(/function recoverTerminalRendererAfterHostResume\(\): void/);
+    expect(tab).toMatch(/clearHostResumeTimers\(\);[\s\S]*?queueFit\(\);[\s\S]*?refreshTerminalRenderer\(\);/);
+    expect(tab).toMatch(/for \(const delay of \[50, 250\]\)/);
+    expect(tab).toMatch(/window\.addEventListener\("focus", onHostResume\)/);
+    expect(tab).toMatch(/window\.addEventListener\("pageshow", onHostResume\)/);
+    expect(tab).toMatch(/document\.addEventListener\("visibilitychange", onVisibility\)/);
+    expect(tab).toMatch(/frame\.type === "ready"[\s\S]*?recoverTerminalRendererAfterHostResume\(\);/);
+    expect(tab).toMatch(/hostResumeListenerCleanup\?\.\(\)/);
+  });
+
   test("prefers server-provided virtual cwd when present", () => {
     expect(tab).toMatch(/cwd_rel\?: string \| null/);
     expect(tab).toMatch(/terminalCwdVirtual = frame\.cwd_rel \?\? null/);

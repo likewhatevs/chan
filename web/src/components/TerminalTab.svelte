@@ -170,6 +170,8 @@
   let webglRendererActive = false;
   let webglAtlasRefreshQueued = false;
   let webglAtlasScanTail: number[] = [];
+  let hostResumeTimers: ReturnType<typeof setTimeout>[] = [];
+  let hostResumeListenerCleanup: (() => void) | null = null;
   let lastSessionSave = 0;
   let sessionSaveTimer: ReturnType<typeof setTimeout> | null = null;
   const menuOpen = $derived(tabMenu.openForTabId === tab.id);
@@ -403,6 +405,45 @@
     });
   }
 
+  function recoverTerminalRendererAfterHostResume(): void {
+    if (!term) return;
+    clearHostResumeTimers();
+    queueFit();
+    refreshTerminalRenderer();
+    for (const delay of [50, 250]) {
+      const timer = setTimeout(() => {
+        hostResumeTimers = hostResumeTimers.filter(
+          (candidate) => candidate !== timer,
+        );
+        queueFit();
+        refreshTerminalRenderer();
+      }, delay);
+      hostResumeTimers.push(timer);
+    }
+  }
+
+  function clearHostResumeTimers(): void {
+    for (const timer of hostResumeTimers) clearTimeout(timer);
+    hostResumeTimers = [];
+  }
+
+  function installHostResumeListeners(): void {
+    if (hostResumeListenerCleanup) return;
+    const onHostResume = () => recoverTerminalRendererAfterHostResume();
+    const onVisibility = () => {
+      if (document.visibilityState === "visible") onHostResume();
+    };
+    window.addEventListener("focus", onHostResume);
+    window.addEventListener("pageshow", onHostResume);
+    document.addEventListener("visibilitychange", onVisibility);
+    hostResumeListenerCleanup = () => {
+      window.removeEventListener("focus", onHostResume);
+      window.removeEventListener("pageshow", onHostResume);
+      document.removeEventListener("visibilitychange", onVisibility);
+      hostResumeListenerCleanup = null;
+    };
+  }
+
   function bytesContainSgrSequence(bytes: Uint8Array): boolean {
     const scan = [...webglAtlasScanTail, ...bytes];
     webglAtlasScanTail = scan.slice(-WEBGL_ATLAS_SCAN_TAIL_BYTES);
@@ -531,6 +572,7 @@
       );
     }
     refreshTerminalRenderer();
+    installHostResumeListeners();
     term.attachCustomKeyEventHandler(handleTerminalKeyEvent);
     term.onData(sendUserInput);
     term.onResize(({ cols, rows }) => send({ type: "resize", cols, rows }));
@@ -602,6 +644,7 @@
         statusDetail = `${frame.cols}x${frame.rows}`;
         terminalCwdAbs = frame.cwd ?? null;
         terminalCwdVirtual = frame.cwd_rel ?? null;
+        recoverTerminalRendererAfterHostResume();
       } else if (frame.type === "session") {
         sawSessionControl = true;
         setTerminalSession(tab, frame.id, frame.seq, mcpEnvOn);
@@ -820,6 +863,8 @@
       clearTimeout(trailingFitTimer);
       trailingFitTimer = null;
     }
+    clearHostResumeTimers();
+    hostResumeListenerCleanup?.();
     closeSocket();
     resizeObserver?.disconnect();
     resizeObserver = null;
