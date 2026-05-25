@@ -550,8 +550,13 @@ function validateNoStalePublicCopy(file, text) {
     /assistant pane/i,
     /in-app assistant/i,
     /no telemetry/i,
+    /\blegacy\b/i,
+    /\bmigrations?\b/i,
+    /backward[- ]compatibility/i,
+    /\bbackcompat\b/i,
     /github\.com\/chan-writer\/chan/i,
     /chan\.app\/dl\/(?:latest|v[0-9])/i,
+    /(?:^|[\s"'(])\/dl\/(?:latest|v[0-9][^\s"'<>)]*)/i,
   ];
   for (const pattern of forbidden) {
     if (pattern.test(text)) {

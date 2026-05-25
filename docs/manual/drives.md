@@ -27,3 +27,16 @@ browser on the same machine.
 Chan watches the drive tree for external edits. The files are still yours:
 edit them with another program, commit them to git, or move the folder as a
 normal directory.
+
+## File transfers
+
+File Browser inspectors expose Upload and Download for selected files and
+directories. Graph inspectors expose the same actions for file and directory
+nodes where the action applies.
+
+- For a file, Upload replaces the selected file. Text-class paths reject
+  uploaded bytes that are not valid UTF-8.
+- For a directory, Upload adds the selected files inside that directory.
+  Existing target paths are refused.
+- Download retrieves the selected file as-is. Downloading a directory
+  retrieves a tar archive rooted at that directory name.
