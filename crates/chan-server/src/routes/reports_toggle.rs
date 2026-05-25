@@ -2,10 +2,10 @@
 //!
 //! Three endpoints under `/api/index/reports/`:
 //!
-//! * `GET /state` — `{ enabled: bool }` snapshot.
-//! * `POST /enable` — flip `reports_enabled` to true. Triggers the
+//! * `GET /state` - `{ enabled: bool }` snapshot.
+//! * `POST /enable` - flip `reports_enabled` to true. Triggers the
 //!   incremental indexing pass per chan-drive's existing behavior.
-//! * `POST /disable` — flip to false. Idempotent at the
+//! * `POST /disable` - flip to false. Idempotent at the
 //!   `set_reports_enabled` layer.
 //!
 //! Unblocks `fullstack-a-76` (SPA Settings overlay's Features
@@ -35,10 +35,25 @@ pub struct ReportsState {
 /// `GET /api/index/reports/state`. Read-only snapshot of the
 /// per-drive reports toggle.
 pub async fn api_reports_state(State(state): State<Arc<AppState>>) -> Response {
-    let drive = state.drive();
-    match drive.reports_enabled() {
-        Ok(enabled) => Json(ReportsState { enabled }).into_response(),
-        Err(e) => err_from(&e),
+    let drive = state.drive().clone();
+    let result = tokio::task::spawn_blocking(move || drive.reports_enabled()).await;
+    match result {
+        Ok(Ok(enabled)) => Json(ReportsState { enabled }).into_response(),
+        Ok(Err(e)) => err_from(&e),
+        Err(join) => err_from(&chan_drive::ChanError::Io(join.to_string())),
+    }
+}
+
+async fn reports_state_after_set(drive: Arc<chan_drive::Drive>, enabled: bool) -> Response {
+    let result = tokio::task::spawn_blocking(move || {
+        drive.set_reports_enabled(enabled)?;
+        drive.reports_enabled()
+    })
+    .await;
+    match result {
+        Ok(Ok(enabled)) => Json(ReportsState { enabled }).into_response(),
+        Ok(Err(e)) => err_from(&e),
+        Err(join) => err_from(&chan_drive::ChanError::Io(join.to_string())),
     }
 }
 
@@ -60,21 +75,7 @@ async fn set_reports(state: Arc<AppState>, enabled: bool) -> Response {
     // set_reports_enabled may do non-trivial work (kicks off
     // indexing); run on the blocking pool to keep the async
     // runtime responsive.
-    let result = tokio::task::spawn_blocking(move || drive.set_reports_enabled(enabled)).await;
-    match result {
-        Ok(Ok(())) => {
-            // Return the freshly-updated state, mirroring the
-            // semantic endpoints' shape so the SPA can update its
-            // cache from the response body directly.
-            let drive = state.drive();
-            match drive.reports_enabled() {
-                Ok(enabled) => Json(ReportsState { enabled }).into_response(),
-                Err(e) => err_from(&e),
-            }
-        }
-        Ok(Err(e)) => err_from(&e),
-        Err(join) => err_from(&chan_drive::ChanError::Io(join.to_string())),
-    }
+    reports_state_after_set(drive, enabled).await
 }
 
 #[cfg(test)]
@@ -196,7 +197,7 @@ mod tests {
 
     #[tokio::test]
     async fn reports_state_endpoint_requires_auth() {
-        // systacean-39: parity with the semantic endpoints —
+        // systacean-39: parity with the semantic endpoints -
         // /state is read-only but still gated by the per-launch
         // token. Anonymous request gets 401.
         let app = route_test_app();
@@ -207,7 +208,7 @@ mod tests {
 
     #[tokio::test]
     async fn reports_round_trip_state_enable_disable() {
-        // systacean-39: full round-trip — initial state, flip
+        // systacean-39: full round-trip - initial state, flip
         // enable, re-check, flip disable, re-check. Mirrors the
         // shape FullStackA's `-a-76` Settings UI will exercise.
         let app = route_test_app();

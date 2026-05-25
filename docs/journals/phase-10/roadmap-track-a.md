@@ -180,7 +180,13 @@ Server and editor consistency:
 - Reproduce rapid-edit stale editor/index races.
 - Decide whether background search and indexing need further throttling
   beyond current file-descriptor budgets and terminal admission.
-- Audit remaining direct sync calls from async server paths.
+- Audit remaining direct sync calls from async server paths. Done on
+  2026-05-25: drive info/warnings, config PATCH saves, reports
+  state/update, screensaver state/update/verify, and team watcher attach
+  now route lazy drive/config filesystem work through `spawn_blocking`.
+  Search, graph, files, reports, metadata, inspector, drafts, rich prompt,
+  contacts, storage reset, and semantic endpoints were already wrapped.
+  Startup-only config loads remain outside request hot paths.
 
 Product contracts:
 
@@ -321,5 +327,6 @@ Operational release checks:
 8. Refresh stale desktop embedded-server docs. Done.
 9. Verify manual/site local gate. Done.
 10. Refresh release workflow comments for embedded desktop mode. Done.
-11. Current next remains open for selection. CLI handoff is deferred until
+11. Audit async server sync-I/O boundaries. Done.
+12. Current next remains open for selection. CLI handoff is deferred until
    its design checkpoint.

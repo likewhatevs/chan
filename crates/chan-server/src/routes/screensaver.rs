@@ -2,17 +2,17 @@
 //!
 //! Five endpoints under `/api/screensaver/`:
 //!
-//! * `GET /state` — `{ enabled, timeout_secs, theme, pin_set }`. The
-//!   PIN hash itself never appears on the wire — `pin_set` is a
+//! * `GET /state` - `{ enabled, timeout_secs, theme, pin_set }`. The
+//!   PIN hash itself never appears on the wire - `pin_set` is a
 //!   `bool` derived from whether `Drive::screensaver_pin_hash()`
 //!   returns `Some(_)`.
-//! * `PATCH /state` body `{ enabled?, timeout_secs?, theme? }` — partial
+//! * `PATCH /state` body `{ enabled?, timeout_secs?, theme? }` - partial
 //!   update.
-//! * `POST /pin` body `{ hash: base64 }` — set the PIN hash.
+//! * `POST /pin` body `{ hash: base64 }` - set the PIN hash.
 //!   Server stores the base64-decoded bytes verbatim. PBKDF2 is
 //!   client-side (`-a-77`).
-//! * `DELETE /pin` — clear the PIN.
-//! * `POST /verify` body `{ hash: base64 }` — returns
+//! * `DELETE /pin` - clear the PIN.
+//! * `POST /verify` body `{ hash: base64 }` - returns
 //!   `{ verified: bool }` from a byte-equality compare against
 //!   the stored hash. Returns `verified: false` when no PIN is
 //!   set (the overlay still arms but the lockout is moot).
@@ -64,30 +64,26 @@ pub struct VerifyResult {
 
 /// `GET /api/screensaver/state`.
 pub async fn api_screensaver_state(State(state): State<Arc<AppState>>) -> Response {
-    let drive = state.drive();
-    let enabled = match drive.screensaver_enabled() {
-        Ok(v) => v,
-        Err(e) => return err_from(&e),
-    };
-    let timeout_secs = match drive.screensaver_timeout_secs() {
-        Ok(v) => v,
-        Err(e) => return err_from(&e),
-    };
-    let pin_set = match drive.screensaver_pin_hash() {
-        Ok(v) => v.is_some(),
-        Err(e) => return err_from(&e),
-    };
-    let theme = match drive.screensaver_theme() {
-        Ok(v) => v,
-        Err(e) => return err_from(&e),
-    };
-    Json(ScreensaverState {
-        enabled,
-        timeout_secs,
-        theme,
-        pin_set,
+    let drive = state.drive().clone();
+    screensaver_state_response(drive).await
+}
+
+async fn screensaver_state_response(drive: Arc<chan_drive::Drive>) -> Response {
+    let result = tokio::task::spawn_blocking(move || screensaver_state_sync(&drive)).await;
+    match result {
+        Ok(Ok(state)) => Json(state).into_response(),
+        Ok(Err(e)) => err_from(&e),
+        Err(join) => err_from(&chan_drive::ChanError::Io(join.to_string())),
+    }
+}
+
+fn screensaver_state_sync(drive: &chan_drive::Drive) -> chan_drive::Result<ScreensaverState> {
+    Ok(ScreensaverState {
+        enabled: drive.screensaver_enabled()?,
+        timeout_secs: drive.screensaver_timeout_secs()?,
+        theme: drive.screensaver_theme()?,
+        pin_set: drive.screensaver_pin_hash()?.is_some(),
     })
-    .into_response()
 }
 
 /// `PATCH /api/screensaver/state`. Partial update: only the
@@ -107,8 +103,8 @@ pub async fn api_screensaver_patch(
         }
     }
     let drive = state.drive().clone();
-    let result = tokio::task::spawn_blocking(
-        move || -> Result<(bool, u32, chan_drive::ScreensaverTheme, bool), chan_drive::ChanError> {
+    let result =
+        tokio::task::spawn_blocking(move || -> Result<ScreensaverState, chan_drive::ChanError> {
             if let Some(enabled) = payload.enabled {
                 drive.set_screensaver_enabled(enabled)?;
             }
@@ -118,23 +114,11 @@ pub async fn api_screensaver_patch(
             if let Some(theme) = payload.theme {
                 drive.set_screensaver_theme(theme)?;
             }
-            Ok((
-                drive.screensaver_enabled()?,
-                drive.screensaver_timeout_secs()?,
-                drive.screensaver_theme()?,
-                drive.screensaver_pin_hash()?.is_some(),
-            ))
-        },
-    )
-    .await;
-    match result {
-        Ok(Ok((enabled, timeout_secs, theme, pin_set))) => Json(ScreensaverState {
-            enabled,
-            timeout_secs,
-            theme,
-            pin_set,
+            screensaver_state_sync(&drive)
         })
-        .into_response(),
+        .await;
+    match result {
+        Ok(Ok(state)) => Json(state).into_response(),
         Ok(Err(e)) => err_from(&e),
         Err(join) => err_from(&chan_drive::ChanError::Io(join.to_string())),
     }
@@ -154,10 +138,13 @@ pub async fn api_screensaver_set_pin(
         return err(StatusCode::BAD_REQUEST, "empty hash".to_string());
     }
     let drive = state.drive().clone();
-    let result =
-        tokio::task::spawn_blocking(move || drive.set_screensaver_pin_hash(Some(bytes))).await;
+    let result = tokio::task::spawn_blocking(move || {
+        drive.set_screensaver_pin_hash(Some(bytes))?;
+        screensaver_state_sync(&drive)
+    })
+    .await;
     match result {
-        Ok(Ok(())) => api_screensaver_state(State(state)).await,
+        Ok(Ok(state)) => Json(state).into_response(),
         Ok(Err(e)) => err_from(&e),
         Err(join) => err_from(&chan_drive::ChanError::Io(join.to_string())),
     }
@@ -166,9 +153,13 @@ pub async fn api_screensaver_set_pin(
 /// `DELETE /api/screensaver/pin`. Clear the PIN.
 pub async fn api_screensaver_clear_pin(State(state): State<Arc<AppState>>) -> Response {
     let drive = state.drive().clone();
-    let result = tokio::task::spawn_blocking(move || drive.set_screensaver_pin_hash(None)).await;
+    let result = tokio::task::spawn_blocking(move || {
+        drive.set_screensaver_pin_hash(None)?;
+        screensaver_state_sync(&drive)
+    })
+    .await;
     match result {
-        Ok(Ok(())) => api_screensaver_state(State(state)).await,
+        Ok(Ok(state)) => Json(state).into_response(),
         Ok(Err(e)) => err_from(&e),
         Err(join) => err_from(&chan_drive::ChanError::Io(join.to_string())),
     }
@@ -187,26 +178,32 @@ pub async fn api_screensaver_verify(
         Ok(b) => b,
         Err(e) => return err(StatusCode::BAD_REQUEST, format!("invalid base64: {e}")),
     };
-    let stored = match state.drive().screensaver_pin_hash() {
-        Ok(v) => v,
-        Err(e) => return err_from(&e),
-    };
-    let verified = match stored {
-        // Constant-time compare to avoid leaking PIN length /
-        // prefix matches through response-timing. `subtle` is a
-        // workspace dep candidate but for v1 the manual loop is
-        // sufficient: both inputs are short fixed-length hashes
-        // so timing differences are below the WS-layer noise
-        // floor anyway. Document the constraint so a future
-        // bcrypt-style migration knows to keep this property.
-        Some(stored_bytes) => constant_time_eq(&candidate, &stored_bytes),
-        None => false,
-    };
-    Json(VerifyResult { verified }).into_response()
+    let drive = state.drive().clone();
+    let result = tokio::task::spawn_blocking(move || {
+        let stored = drive.screensaver_pin_hash()?;
+        let verified = match stored {
+            // Constant-time compare to avoid leaking PIN length /
+            // prefix matches through response-timing. `subtle` is a
+            // workspace dep candidate but for v1 the manual loop is
+            // sufficient: both inputs are short fixed-length hashes
+            // so timing differences are below the WS-layer noise
+            // floor anyway. Document the constraint so a future
+            // bcrypt-style migration knows to keep this property.
+            Some(stored_bytes) => constant_time_eq(&candidate, &stored_bytes),
+            None => false,
+        };
+        Ok::<_, chan_drive::ChanError>(verified)
+    })
+    .await;
+    match result {
+        Ok(Ok(verified)) => Json(VerifyResult { verified }).into_response(),
+        Ok(Err(e)) => err_from(&e),
+        Err(join) => err_from(&chan_drive::ChanError::Io(join.to_string())),
+    }
 }
 
 /// Constant-time byte-equality. Returns false immediately on
-/// length mismatch (length is not a secret — the SPA controls
+/// length mismatch (length is not a secret - the SPA controls
 /// the hash length client-side via PBKDF2 output size).
 fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
     if a.len() != b.len() {
@@ -425,7 +422,7 @@ mod tests {
 
     #[tokio::test]
     async fn screensaver_pin_set_verify_clear_round_trip() {
-        // systacean-40: full PIN lifecycle — set, verify (positive
+        // systacean-40: full PIN lifecycle - set, verify (positive
         // + negative), clear, verify (always false). PIN hash
         // never appears in any response body.
         let app = route_test_app();
@@ -504,7 +501,7 @@ mod tests {
 
     #[tokio::test]
     async fn screensaver_endpoints_require_auth() {
-        // systacean-40: parity with other settings endpoints —
+        // systacean-40: parity with other settings endpoints -
         // all routes are gated by the per-launch token.
         let app = route_test_app();
         let router = crate::router(app.state);

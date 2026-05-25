@@ -14,7 +14,7 @@
 //! normal Load Team flow at any time.
 //!
 //! Per-team isolated `WatchHandle` rather than a single shared
-//! handle with multi-roots — the architect's spec called out
+//! handle with multi-roots - the architect's spec called out
 //! either as acceptable; isolated handles read cleaner for
 //! lifecycle (drop = unwatch).
 
@@ -36,7 +36,7 @@ use crate::state::AppState;
 /// chan-drive layer returns `ChanError::Io` with descriptive
 /// messages for each validation failure; this matcher promotes
 /// the relevant variants to 400 per the task spec (`Invalid name
-/// (empty, traversal, collision) → 400`). Falls through to the
+/// (empty, traversal, collision) -> 400`). Falls through to the
 /// generic `err_from` for everything else.
 fn map_team_error(e: &ChanError) -> Response {
     if let ChanError::Io(msg) = e {
@@ -57,7 +57,7 @@ fn map_team_error(e: &ChanError) -> Response {
 }
 
 /// systacean-41: `POST /api/teams` request body. The outer
-/// `name` is authoritative — if `config.team_name` disagrees,
+/// `name` is authoritative - if `config.team_name` disagrees,
 /// the server overwrites `config.team_name` with `name` before
 /// calling `Drive::create_team`. Avoids "which one wins?"
 /// ambiguity in `-a-79`'s SPA orchestrator.
@@ -92,7 +92,7 @@ pub struct TeamLoadedListResponse {
     pub teams: Vec<String>,
 }
 
-/// `POST /api/teams/{name}/load` — spin up the per-team watcher.
+/// `POST /api/teams/{name}/load` - spin up the per-team watcher.
 ///
 /// Idempotent: re-loading an already-loaded team replaces the
 /// existing handle (effectively a refresh). The team must already
@@ -102,22 +102,6 @@ pub async fn api_team_load(
     State(state): State<Arc<AppState>>,
     Path(team_name): Path<String>,
 ) -> Response {
-    let drive = state.drive().clone();
-    let team_name_for_task = team_name.clone();
-    let result = tokio::task::spawn_blocking(
-        move || -> Result<std::path::PathBuf, chan_drive::ChanError> {
-            // Validate the team exists + resolve the events dir.
-            let events_dir = drive.team_events_dir(&team_name_for_task)?;
-            Ok(events_dir)
-        },
-    )
-    .await;
-    let events_dir = match result {
-        Ok(Ok(p)) => p,
-        Ok(Err(e)) => return err_from(&e),
-        Err(join) => return err(StatusCode::INTERNAL_SERVER_ERROR, join.to_string()),
-    };
-
     // Build the watch bridge (re-uses the same events_tx /
     // index_events_tx fan-out as the drive-root watcher).
     let bridge = make_watch_bridge(&state.events_tx, &state.index_events_tx, &state.self_writes);
@@ -128,9 +112,19 @@ pub async fn api_team_load(
     // `team-{name}/events/` so the SPA event stream routes
     // per-team.
     let drive = state.drive().clone();
-    let watch_handle = match drive.watch_team(&team_name, bridge) {
-        Ok(h) => h,
-        Err(e) => return err_from(&e),
+    let team_name_for_task = team_name.clone();
+    let result = tokio::task::spawn_blocking(
+        move || -> Result<(std::path::PathBuf, chan_drive::WatchHandle), chan_drive::ChanError> {
+            let events_dir = drive.team_events_dir(&team_name_for_task)?;
+            let watch_handle = drive.watch_team(&team_name_for_task, bridge)?;
+            Ok((events_dir, watch_handle))
+        },
+    )
+    .await;
+    let (events_dir, watch_handle) = match result {
+        Ok(Ok(pair)) => pair,
+        Ok(Err(e)) => return err_from(&e),
+        Err(join) => return err(StatusCode::INTERNAL_SERVER_ERROR, join.to_string()),
     };
 
     let mut loaded = match state.loaded_teams.lock() {
@@ -154,7 +148,7 @@ pub async fn api_team_load(
     .into_response()
 }
 
-/// `POST /api/teams/{name}/unload` — tear down the per-team
+/// `POST /api/teams/{name}/unload` - tear down the per-team
 /// watcher. Non-destructive: workspace + terminals persist.
 /// Returns 404 if the team isn't currently loaded.
 pub async fn api_team_unload(
@@ -188,7 +182,7 @@ pub async fn api_team_unload(
     }
 }
 
-/// systacean-41: `POST /api/teams` — create a new team workspace.
+/// systacean-41: `POST /api/teams` - create a new team workspace.
 ///
 /// The outer `name` is authoritative; if the inbound config's
 /// `team_name` differs, we overwrite it before calling
@@ -197,8 +191,8 @@ pub async fn api_team_unload(
 /// `load` call.
 ///
 /// Errors:
-/// * empty / traversal / collision → 400 (per task spec).
-/// * other I/O failure → 500 via `err_from`.
+/// * empty / traversal / collision -> 400 (per task spec).
+/// * other I/O failure -> 500 via `err_from`.
 ///
 /// systacean-42: **idempotency contract for the SPA orchestrator.**
 /// Calling `POST /api/teams` for a name that ALREADY exists
@@ -232,7 +226,7 @@ pub async fn api_team_create(
     }
 }
 
-/// systacean-41: `POST /api/teams/{name}/duplicate` — copy an
+/// systacean-41: `POST /api/teams/{name}/duplicate` - copy an
 /// existing team workspace.
 ///
 /// The path `{name}` is the source; the request body's
@@ -243,8 +237,8 @@ pub async fn api_team_create(
 ///
 /// Errors:
 /// * empty / traversal / collision / identical source-and-new
-///   → 400 (per task spec).
-/// * source team not found → 404 via `err_from`'s "not found"
+///   -> 400 (per task spec).
+/// * source team not found -> 404 via `err_from`'s "not found"
 ///   detector.
 pub async fn api_team_duplicate(
     State(state): State<Arc<AppState>>,
@@ -266,20 +260,20 @@ pub async fn api_team_duplicate(
     }
 }
 
-/// systacean-42: `GET /api/teams/:name/config` — read the
+/// systacean-42: `GET /api/teams/:name/config` - read the
 /// persisted `TeamConfig` for a team. Backs @@FullStackA's
 /// `-a-80 slice 2` Load Team dialog (the dialog populates from
 /// this endpoint before the user confirms Bootstrap).
 ///
 /// Returns the same `TeamConfig` JSON shape that `POST
-/// /api/teams`'s `config` field expects, so a `GET → mutate →
+/// /api/teams`'s `config` field expects, so a `GET -> mutate ->
 /// POST` round-trip pipeline (e.g. "edit existing team") works
 /// without any client-side adapter layer.
 ///
 /// Errors:
-/// * Team directory missing → 404 via `err_from`'s "not found"
+/// * Team directory missing -> 404 via `err_from`'s "not found"
 ///   detector on the underlying `chan_drive::teams::load` error.
-/// * Malformed config.toml → 500 via the generic `err_from`
+/// * Malformed config.toml -> 500 via the generic `err_from`
 ///   fallback.
 pub async fn api_team_get_config(
     State(state): State<Arc<AppState>>,
@@ -294,7 +288,7 @@ pub async fn api_team_get_config(
     }
 }
 
-/// `GET /api/teams/loaded` — list currently loaded teams.
+/// `GET /api/teams/loaded` - list currently loaded teams.
 pub async fn api_team_list_loaded(State(state): State<Arc<AppState>>) -> Response {
     let loaded = match state.loaded_teams.lock() {
         Ok(loaded) => loaded,
@@ -491,7 +485,7 @@ mod tests {
         assert_eq!(status, StatusCode::OK);
         assert_eq!(body["name"], "beta");
 
-        // Load both — they should be independent.
+        // Load both - they should be independent.
         let (status, _) = request(&router, "POST", "/api/teams/alpha/load", None).await;
         assert_eq!(status, StatusCode::OK);
         let (status, _) = request(&router, "POST", "/api/teams/beta/load", None).await;
@@ -528,7 +522,7 @@ mod tests {
 
     #[tokio::test]
     async fn create_team_rejects_path_traversal() {
-        // systacean-41: names containing path separators → 400.
+        // systacean-41: names containing path separators -> 400.
         let app = route_test_app();
         let router = crate::router(app.state);
         let (status, _) = request(
@@ -546,7 +540,7 @@ mod tests {
 
     #[tokio::test]
     async fn create_team_rejects_collision() {
-        // systacean-41: creating a team that already exists → 400.
+        // systacean-41: creating a team that already exists -> 400.
         let app = route_test_app();
         let router = crate::router(app.state);
         let _ = request(
@@ -601,7 +595,7 @@ mod tests {
 
     #[tokio::test]
     async fn duplicate_team_rejects_missing_source() {
-        // systacean-41: duplicate of a non-existent source → 404
+        // systacean-41: duplicate of a non-existent source -> 404
         // via err_from's "not found" detector.
         let app = route_test_app();
         let router = crate::router(app.state);
@@ -649,7 +643,7 @@ mod tests {
 
     #[tokio::test]
     async fn get_team_config_returns_404_when_missing() {
-        // systacean-42: missing team → 404 via err_from's "not
+        // systacean-42: missing team -> 404 via err_from's "not
         // found" detector on the underlying teams::load message.
         let app = route_test_app();
         let router = crate::router(app.state);
@@ -702,7 +696,7 @@ mod tests {
     #[tokio::test]
     async fn outer_name_overrides_config_team_name() {
         // systacean-41: per the route doc-comment, the outer
-        // `name` is authoritative — if the inbound config's
+        // `name` is authoritative - if the inbound config's
         // `team_name` disagrees, the server overwrites it. Avoids
         // SPA-side "which one wins?" ambiguity in `-a-79`.
         let app = route_test_app();

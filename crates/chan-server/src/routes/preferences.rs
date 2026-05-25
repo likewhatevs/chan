@@ -20,7 +20,8 @@ use crate::error::{err, Error};
 use crate::preferences::BubbleOverlayMode;
 use crate::state::AppState;
 use crate::{
-    BrowserSidePanes, EditorTheme, HybridSurfaceThemes, LineSpacing, PaneWidths, ThemeChoice,
+    BrowserSidePanes, EditorTheme, HybridSurfaceThemes, LineSpacing, PaneWidths, ServerConfig,
+    ThemeChoice,
 };
 
 /// Unified preferences shape returned over /api/drive and /api/config.
@@ -107,21 +108,27 @@ pub async fn api_patch_server_config(
     State(state): State<Arc<AppState>>,
     Json(body): Json<PatchServerConfigBody>,
 ) -> Response {
+    let result = tokio::task::spawn_blocking(move || patch_server_config(&state, body)).await;
+    match result {
+        Ok(Ok(cfg)) => Json(cfg).into_response(),
+        Ok(Err(e)) => err(status_for_error(&e), e.to_string()),
+        Err(join) => err(StatusCode::INTERNAL_SERVER_ERROR, join.to_string()),
+    }
+}
+
+fn patch_server_config(
+    state: &AppState,
+    body: PatchServerConfigBody,
+) -> Result<ServerConfig, Error> {
     let mut cfg = match state.server_config.lock() {
         Ok(cfg) => cfg,
-        Err(_) => {
-            return err(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "server config lock poisoned".into(),
-            );
-        }
+        Err(_) => return Err(Error::Config("server config lock poisoned".into())),
     };
     if let Some(p) = body.attachments_dir {
         if p.is_empty() {
-            return err(
-                StatusCode::BAD_REQUEST,
+            return Err(Error::BadRequest(
                 "attachments_dir must be non-empty".into(),
-            );
+            ));
         }
         cfg.attachments_dir = p;
     }
@@ -131,10 +138,8 @@ pub async fn api_patch_server_config(
     if let Some(terminal) = body.terminal {
         cfg.terminal = sanitize_terminal_config(terminal);
     }
-    if let Err(e) = cfg.save() {
-        return err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string());
-    }
-    Json(cfg.clone()).into_response()
+    cfg.save()?;
+    Ok(cfg.clone())
 }
 
 // ----- /api/config (unified GlobalConfig) --------------------------------
@@ -214,14 +219,24 @@ pub async fn api_patch_config(
     State(state): State<Arc<AppState>>,
     Json(body): Json<PatchConfigBody>,
 ) -> Response {
+    let result = tokio::task::spawn_blocking(move || patch_config(&state, body)).await;
+    match result {
+        Ok(Ok(view)) => Json(view).into_response(),
+        Ok(Err(e)) => err(status_for_error(&e), e.to_string()),
+        Err(join) => err(StatusCode::INTERNAL_SERVER_ERROR, join.to_string()),
+    }
+}
+
+fn status_for_error(e: &Error) -> StatusCode {
+    match e {
+        Error::BadRequest(_) => StatusCode::BAD_REQUEST,
+        _ => StatusCode::INTERNAL_SERVER_ERROR,
+    }
+}
+
+fn patch_config(state: &AppState, body: PatchConfigBody) -> Result<GlobalConfigView, Error> {
     if let Some(prefs) = body.preferences {
-        if let Err(e) = apply_preferences(&state, prefs) {
-            let status = match e {
-                Error::BadRequest(_) => StatusCode::BAD_REQUEST,
-                _ => StatusCode::INTERNAL_SERVER_ERROR,
-            };
-            return err(status, e.to_string());
-        }
+        apply_preferences(state, prefs)?;
     }
     if let Some(opt) = body.default_drive_root {
         let trimmed = opt.as_ref().map(|s| s.trim().to_string());
@@ -229,17 +244,11 @@ pub async fn api_patch_config(
             Some(s) if s.is_empty() => None,
             other => other,
         };
-        if let Err(e) = state
+        state
             .library
-            .set_default_drive_root(value.map(std::path::PathBuf::from))
-        {
-            return err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string());
-        }
+            .set_default_drive_root(value.map(std::path::PathBuf::from))?;
     }
-    match global_config_view(&state) {
-        Ok(view) => Json(view).into_response(),
-        Err(e) => err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
-    }
+    global_config_view(state)
 }
 
 fn apply_preferences(state: &AppState, view: PreferencesView) -> Result<(), Error> {

@@ -1,4 +1,4 @@
-//! `/api/drive` — drive metadata + the cloud-drives detection helper.
+//! `/api/drive` - drive metadata + the cloud-drives detection helper.
 
 use std::sync::Arc;
 
@@ -43,9 +43,18 @@ struct DriveWarning {
 }
 
 pub async fn api_get_drive(State(state): State<Arc<AppState>>) -> Response {
-    match drive_info(&state) {
-        Ok(info) => Json(info).into_response(),
-        Err(message) => err(StatusCode::INTERNAL_SERVER_ERROR, message),
+    drive_info_response(state, "drive info").await
+}
+
+async fn drive_info_response(state: Arc<AppState>, label: &'static str) -> Response {
+    let result = tokio::task::spawn_blocking(move || drive_info(&state)).await;
+    match result {
+        Ok(Ok(info)) => Json(info).into_response(),
+        Ok(Err(message)) => err(StatusCode::INTERNAL_SERVER_ERROR, message),
+        Err(e) => err(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("{label} task panicked: {e}"),
+        ),
     }
 }
 
@@ -59,10 +68,7 @@ pub async fn api_patch_drive(
     if body.get("name").is_some() {
         return (StatusCode::BAD_REQUEST, "drive names are not supported").into_response();
     }
-    match drive_info(&state) {
-        Ok(info) => Json(info).into_response(),
-        Err(message) => err(StatusCode::INTERNAL_SERVER_ERROR, message),
-    }
+    drive_info_response(state, "drive patch").await
 }
 
 #[derive(Serialize)]
