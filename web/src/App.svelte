@@ -1175,8 +1175,7 @@
 <!-- `fullstack-a-4`: Spawn agent dialog. Mounted at the App
      root rather than inside the rich prompt so its `position:
      fixed` backdrop is never clipped by an ancestor's stacking
-     context (the pane has `overflow: hidden`; Hybrid Nav adds
-     a `filter` to unfocused panes; the rich prompt itself is a
+     context (the pane has `overflow: hidden`; the rich prompt itself is a
      positioned z-index: 20 stacking context). -->
 <SpawnDialog />
 <!-- `fullstack-a-78`: Spawn agents dialog mounted at App root for
@@ -1447,14 +1446,7 @@
   }
   .app.pane-mode :global(.pane) {
     position: relative;
-    transition:
-      opacity 90ms ease,
-      box-shadow 90ms ease,
-      filter 90ms ease;
-  }
-  .app.pane-mode :global(.pane:not(.focused)) {
-    opacity: 0.72;
-    filter: saturate(0.8);
+    transition: box-shadow 90ms ease;
   }
   .app.pane-mode :global(.pane.focused) {
     box-shadow:

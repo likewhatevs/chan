@@ -283,6 +283,7 @@
 
   $effect(() => {
     if (focused) return;
+    refreshTerminalRenderer();
     sendFocusState();
   });
 

@@ -84,6 +84,7 @@ describe("fullstack-b-29: TerminalTab WebGL renderer", () => {
     expect(tab).toMatch(
       /if \(!focused\) return;[\s\S]*?queueFit\(\);[\s\S]*?refreshTerminalRenderer\(\);/,
     );
+    expect(tab).toMatch(/if \(focused\) return;[\s\S]*?refreshTerminalRenderer\(\);[\s\S]*?sendFocusState\(\);/);
   });
 
   test("prefers server-provided virtual cwd when present", () => {

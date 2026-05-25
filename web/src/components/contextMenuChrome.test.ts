@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 
 import { describe, expect, test } from "vitest";
+import app from "../App.svelte?raw";
 import editor from "./FileEditorTab.svelte?raw";
 import fileTree from "./FileTree.svelte?raw";
 import graph from "./GraphPanel.svelte?raw";
@@ -47,5 +48,10 @@ describe("context menu chrome", () => {
       /\.pane:hover::before,\s*\.pane\.focused::before \{[\s\S]*?transform: scale\(1\.006\)/,
     );
     expect(pane).not.toMatch(/\.pane:hover,\s*\.pane\.focused \{[\s\S]*?transform: scale/);
+  });
+
+  test("Hybrid Nav focus chrome does not composite pane bodies", () => {
+    expect(app).not.toMatch(/\.app\.pane-mode\s+:global\(\.pane:not\(\.focused\)\)\s*\{[\s\S]*?filter:/);
+    expect(app).not.toMatch(/\.app\.pane-mode\s+:global\(\.pane:not\(\.focused\)\)\s*\{[\s\S]*?opacity:/);
   });
 });
