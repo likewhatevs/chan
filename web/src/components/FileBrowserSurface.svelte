@@ -57,6 +57,11 @@
     reopenClosedTab,
   } from "../state/tabs.svelte";
   import type { BrowserTab } from "../state/tabs.svelte";
+  import {
+    fbWatchRegister,
+    fbWatchReconcile,
+    fbWatchDispose,
+  } from "../state/fbWatch.svelte";
   import { api } from "../api/client";
 
   type Variant = "overlay" | "dock" | "tab";
@@ -89,6 +94,40 @@
   const fullyExpanded = $derived.by(() => {
     void tree.entries;
     return isFullyExpanded();
+  });
+
+  // ---- per-instance scoped /ws subscriptions (phase-11 Slice E) ----------
+  //
+  // Each File Browser surface is one watcher-scope instance. A stable id
+  // keys its subscription bookkeeping in the `fbTreeInstances` registry:
+  // the tab variant uses its tab id; the overlay and the two dock sides
+  // are singletons. On mount the instance subscribes to the drive root
+  // (so root-level fs changes broadcast to it); as directories expand /
+  // collapse it subscribes / unsubscribes the matching dir scopes, with
+  // the LAST instance to drop a dir tearing the server watcher down. The
+  // expanded-dir set is read from the rendered `treeExpanded.map` the
+  // tree walks today; per-instance independence is in the subscription
+  // bookkeeping, not a per-instance render (that stays shared, matching
+  // the existing model).
+  const instanceId = $derived(
+    isTab && tab ? `fb-tab-${tab.id}` : isDock ? `fb-dock-${side ?? "left"}` : "fb-overlay",
+  );
+
+  $effect(() => {
+    const id = instanceId;
+    untrack(() => fbWatchRegister(id));
+    return () => untrack(() => fbWatchDispose(id));
+  });
+
+  // Reconcile this instance's dir subscriptions against the directories
+  // currently expanded in the tree it renders. `treeExpanded.map` is the
+  // reactive source; recompute the expanded-dir list (root excluded) and
+  // let the manager diff it against what this instance already holds.
+  $effect(() => {
+    const id = instanceId;
+    const map = treeExpanded.map;
+    const dirs = Object.keys(map).filter((p) => p.length > 0 && map[p]);
+    untrack(() => fbWatchReconcile(id, dirs));
   });
 
   interface TreeRef {

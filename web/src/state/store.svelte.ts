@@ -59,6 +59,7 @@ import { graphData, invalidateGraph, ensureGraphLoaded } from "./graphData.svelt
 import { SETTINGS_DISABLED, withTokenQuery } from "../api/transport";
 import { uiConfirm } from "./confirm.svelte";
 import { applyEditorToolPreferences } from "./editorTools.svelte";
+import { fbWatchResyncAll } from "./fbWatch.svelte";
 export const drive = $state<{ info: DriveInfo | null }>({ info: null });
 
 /// Display name for the active drive. The server computes this from
@@ -670,6 +671,17 @@ function onWatchStatus(status: WsStatus): void {
   ui.ws = status;
 }
 
+/// Fires on every (re)connect of the watcher socket. The server's
+/// scope registry is per-socket, so a fresh socket has no
+/// subscriptions; replay every live File Browser / Graph instance's
+/// desired scopes so the tree keeps receiving scoped `fs` frames after
+/// a transient disconnect. The reference into `fbWatch` is resolved at
+/// call time (both modules are loaded by then), so the static circular
+/// import between store and fbWatch is benign.
+function onWatchReady(): void {
+  fbWatchResyncAll();
+}
+
 /// Tear down the existing watch subscription and start a new one.
 /// Used by the disconnect overlay's manual retry button to skip the
 /// reconnect backoff. Idempotent: a no-op if nothing is connected.
@@ -678,7 +690,7 @@ export function reconnectWatcher(): void {
     unwatch();
     unwatch = null;
   }
-  unwatch = openWatchSocket(onWatchEvent, onWatchStatus);
+  unwatch = openWatchSocket(onWatchEvent, onWatchStatus, onWatchReady);
 }
 
 export async function bootstrap(): Promise<void> {
@@ -744,7 +756,7 @@ export async function bootstrap(): Promise<void> {
       bootstrapHydrated = true;
     }
     if (!unwatch) {
-      unwatch = openWatchSocket(onWatchEvent, onWatchStatus);
+      unwatch = openWatchSocket(onWatchEvent, onWatchStatus, onWatchReady);
     }
     startIndexStatusPoller();
   } catch (e) {
