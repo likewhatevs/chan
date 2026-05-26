@@ -21,19 +21,32 @@
 #   make build-release  models + web + `cargo build --release
 #                  --features embed-model` (~89 MB; bundles the
 #                  default BGE-small model so search works offline
-#                  out of the box; matches pre-systacean-6 behaviour)
+#                  out of the box; matches pre-systacean-6 behaviour).
+#                  Opt-in only: use it when you need an
+#                  offline-from-first-launch binary to hand off. The
+#                  shipped CI artifacts (release.yml /
+#                  release-desktop.yml) are the lean `make build`
+#                  path; `make install` is lean too (below).
 #   make test      cargo test --workspace
 #   make lint      cargo fmt + cargo clippy (mirrors pre-push)
 #   make hooks     install the pre-push git hook (one-time)
-#   make install   build-release + copy the binary to PREFIX/bin
+#   make install   build (lean ~28 MB) + copy the binary to PREFIX/bin
 #                  (default PREFIX = $XDG_BIN_HOME or ~/.local; no
-#                  sudo). Override for a system-wide install:
+#                  sudo). Matches the CI-shipped artifact: no model
+#                  baked, Hybrid search fetches the model on first use
+#                  via `chan index download-model`. For an
+#                  offline-from-first-launch install, build the bundled
+#                  variant then copy it onto PATH yourself:
+#                    make build-release
+#                    install -m 755 target/release/chan $(PREFIX)/bin/chan
+#                  Override PREFIX for a system-wide install:
 #                    make install PREFIX=/usr/local
 #   make uninstall remove it from PREFIX/bin
-#   make rpm       build an .rpm for RPM_TARGET (default
-#                  x86_64-unknown-linux-musl, matches release.yml).
-#                  Uses cargo-zigbuild so the host arch doesn't have
-#                  to match the target arch. One-time setup:
+#   make rpm       build a lean .rpm for RPM_TARGET (default
+#                  x86_64-unknown-linux-musl, matches release.yml's
+#                  lean artifact). Uses cargo-zigbuild so the host
+#                  arch doesn't have to match the target arch.
+#                  One-time setup:
 #                    rustup target add $(RPM_TARGET)
 #                    cargo install cargo-zigbuild cargo-generate-rpm
 #                    # plus zig in PATH (https://ziglang.org)
@@ -104,8 +117,14 @@ lint:
 hooks:
 	./scripts/install-hooks
 
+# Lean local install: matches the CI-shipped artifact (no model baked,
+# ~28 MB). systacean-6 made the model embed opt-in; keeping `make
+# install` on the lean `make build` path means a `make install` binary
+# is byte-comparable in feature shape to what users get from the
+# release. For offline-from-first-launch, run `make build-release` and
+# copy the binary by hand (see the header doc).
 .PHONY: install
-install: build-release
+install: build
 	install -d $(PREFIX)/bin
 	install -m 755 $(BIN) $(PREFIX)/bin/chan
 	@echo "installed to $(PREFIX)/bin/chan"
@@ -118,9 +137,15 @@ uninstall:
 	rm -f $(PREFIX)/bin/chan
 	@echo "removed $(PREFIX)/bin/chan"
 
+# Lean .rpm: matches release.yml's shipped .rpm (no model baked).
+# Dropped the `models` prereq + `--features embed-model` so the local
+# rpm is the same feature shape as the released one; Hybrid search
+# fetches the model on first use. For an offline-bundle rpm, add
+# `models` back to the prereqs and `--features embed-model` to the
+# zigbuild line.
 .PHONY: rpm
-rpm: models web
-	$(CARGO) zigbuild --release --features embed-model --target $(RPM_TARGET) -p chan
+rpm: web
+	$(CARGO) zigbuild --release --target $(RPM_TARGET) -p chan
 	# cargo-generate-rpm reads asset paths verbatim from the
 	# [package.metadata.generate-rpm] block (../../target/release/chan)
 	# and does not rewrite them when --target is passed, so stage
