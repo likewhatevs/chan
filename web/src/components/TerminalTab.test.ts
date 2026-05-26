@@ -3,6 +3,14 @@
 import { mount, tick, unmount } from "svelte";
 import { afterEach, describe, expect, test, vi } from "vitest";
 
+// Static top-level component import (not a per-test `await import(...)`).
+// The flake was the dynamic import inside `renderTerminal` timing out
+// (30s) under the full parallel suite (contended Svelte transform/import
+// across workers), not an xterm-mock or shared-state race. The `vi.mock`
+// calls below are hoisted by vitest above ALL imports, so this static
+// import still sees the mocked xterm modules. Matches the non-flaky
+// TerminalRichPrompt.test.ts pattern.
+import TerminalTab from "./TerminalTab.svelte";
 import type { TerminalTab as TerminalTabState } from "../state/tabs.svelte";
 import { closeTabMenu, openTabMenu } from "../state/tabMenu.svelte";
 
@@ -120,7 +128,6 @@ function terminalTab(partial: Partial<TerminalTabState> = {}): TerminalTabState 
 async function renderTerminal(tab: TerminalTabState, focused: boolean) {
   const target = document.createElement("div");
   document.body.append(target);
-  const { default: TerminalTab } = await import("./TerminalTab.svelte");
   const component = mount(TerminalTab, {
     target,
     props: { tab, paneId: "pane-1", active: true, focused },
