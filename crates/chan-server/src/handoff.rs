@@ -334,6 +334,15 @@ where
                     desktop_protocol: PROTOCOL_VERSION,
                 };
             }
+            // Log the accepted open so the socket -> handler ->
+            // window-spawn chain is observable in the desktop log
+            // (the CLI prints its own "opened ... in chan-desktop"
+            // line; this is the matching desktop-side breadcrumb).
+            tracing::info!(
+                cli_version = %cli_version,
+                drive_path = %drive_path,
+                "handoff: opening drive from CLI request",
+            );
             match open_drive(PathBuf::from(drive_path)) {
                 Ok(()) => Response::Opened {
                     desktop_version: CHAN_VERSION.into(),
@@ -341,7 +350,10 @@ where
                         open_local_drive: true,
                     },
                 },
-                Err(message) => Response::Error { message },
+                Err(message) => {
+                    tracing::warn!(%message, "handoff: open_drive callback failed");
+                    Response::Error { message }
+                }
             }
         }
     }
