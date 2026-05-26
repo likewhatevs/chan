@@ -1171,6 +1171,7 @@ mod tests {
         for expected in [
             "allow-reload-window",
             "allow-open-devtools",
+            "allow-save-file-to-downloads",
             "allow-zoom-in",
             "allow-zoom-out",
             "allow-zoom-reset",
