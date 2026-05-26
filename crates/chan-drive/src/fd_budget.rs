@@ -51,6 +51,26 @@ const LOW_LIMIT_ACTIVE_DRIVES: usize = 8;
 const TIGHT_HEADROOM_ACTIVE_DRIVES: usize = 4;
 const MODEST_HEADROOM_ACTIVE_DRIVES: usize = 8;
 
+/// Descriptors a reindex pass keeps in reserve for interactive work
+/// (editor reads/writes, terminal PTYs + their pipes, watcher handles).
+/// The other budget knobs above are sized ONCE when an index opens;
+/// they cannot react to terminals or editor handles that appear AFTER
+/// a long reindex has already committed to its worker count. This
+/// reserve is the mid-flight piece: the reindex read loop re-samples
+/// the live descriptor count between files and backs off when fewer
+/// than this many descriptors remain, so a rebuild can never starve a
+/// concurrent autosave or terminal spawn of the handles they need.
+/// Bug 7: "Too Many Open Files" during autosave while indexing + two
+/// terminals run.
+const REINDEX_RESERVE: u64 = 64;
+
+/// Spacing between back-off probes while a reindex waits for headroom.
+/// Short enough that the rebuild resumes promptly once interactive work
+/// releases descriptors, long enough that the probe loop is not a busy
+/// spin. The probe itself is a `read_dir("/dev/fd")` count, so we keep
+/// the cadence modest.
+const REINDEX_BACKOFF_STEP: std::time::Duration = std::time::Duration::from_millis(25);
+
 static DRIVE_GATE: OnceLock<DriveGate> = OnceLock::new();
 
 pub(crate) fn snapshot() -> Option<FdSnapshot> {
@@ -95,6 +115,43 @@ pub(crate) fn acquire_drive_permit() -> DrivePermit {
         }
         state = gate.ready.wait(state).unwrap_or_else(|e| e.into_inner());
     }
+}
+
+/// Block a reindex worker until at least `REINDEX_RESERVE` descriptors
+/// are free, re-sampling the live count each step. Returns immediately
+/// when headroom is clear (the common case) or when the platform can't
+/// report descriptor pressure (`fd_snapshot` is `None`, e.g. non-Unix);
+/// pacing is best-effort and never blocks indefinitely on a stuck
+/// probe. `cancel` lets a shutdown abort the wait promptly instead of
+/// parking through it. Returns the number of back-off steps taken so
+/// callers can surface pacing in diagnostics/tests.
+///
+/// This is the mid-flight counterpart to the open-time budget knobs:
+/// those size the pools when the index opens; this keeps a long
+/// rebuild from holding fds an interactive autosave or terminal spawn
+/// needs RIGHT NOW.
+pub(crate) fn pace_reindex_worker(cancel: Option<&std::sync::atomic::AtomicBool>) -> u32 {
+    let mut steps = 0u32;
+    loop {
+        if cancel.is_some_and(|c| c.load(std::sync::atomic::Ordering::Relaxed)) {
+            return steps;
+        }
+        match snapshot() {
+            Some(snap) if reindex_should_pace(snap) => {
+                steps = steps.saturating_add(1);
+                std::thread::sleep(REINDEX_BACKOFF_STEP);
+            }
+            // Clear headroom, or no probe available: don't pace.
+            _ => return steps,
+        }
+    }
+}
+
+/// Pure decision the pacing loop is built on: should a reindex worker
+/// back off at this snapshot? Split out so the policy is unit-testable
+/// without touching the real `/dev/fd` count or sleeping.
+fn reindex_should_pace(snap: FdSnapshot) -> bool {
+    snap.remaining() < REINDEX_RESERVE
 }
 
 fn graph_reader_pool_size_for(default: u32, snap: FdSnapshot) -> u32 {
@@ -279,5 +336,50 @@ mod tests {
             effective_nofile_limit(Some(EFFECTIVE_NOFILE_CEILING * 4)),
             EFFECTIVE_NOFILE_CEILING
         );
+    }
+
+    #[test]
+    fn reindex_paces_when_headroom_drops_below_reserve() {
+        // Editor + two terminals + watcher handles have eaten into a
+        // 256-fd table: only 32 descriptors remain, under the
+        // REINDEX_RESERVE floor. The reindex must yield.
+        let tight = FdSnapshot {
+            open: 256 - 32,
+            limit: 256,
+        };
+        assert!(reindex_should_pace(tight));
+    }
+
+    #[test]
+    fn reindex_does_not_pace_with_clear_headroom() {
+        // A roomy table: a rebuild runs full-tilt without yielding.
+        let clear = FdSnapshot {
+            open: 100,
+            limit: 4096,
+        };
+        assert!(!reindex_should_pace(clear));
+    }
+
+    #[test]
+    fn reindex_pace_boundary_is_inclusive_of_the_reserve() {
+        // Exactly REINDEX_RESERVE free is enough; one fewer pages out.
+        let at_reserve = FdSnapshot {
+            open: 256 - REINDEX_RESERVE,
+            limit: 256,
+        };
+        assert!(!reindex_should_pace(at_reserve));
+        let just_under = FdSnapshot {
+            open: 256 - (REINDEX_RESERVE - 1),
+            limit: 256,
+        };
+        assert!(reindex_should_pace(just_under));
+    }
+
+    #[test]
+    fn pace_reindex_worker_returns_immediately_when_cancelled() {
+        // A cancel flag set before the call short-circuits the wait so
+        // a shutdown is never delayed by pacing, even under pressure.
+        let cancel = std::sync::atomic::AtomicBool::new(true);
+        assert_eq!(pace_reindex_worker(Some(&cancel)), 0);
     }
 }

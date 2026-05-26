@@ -537,6 +537,14 @@ impl Index {
                 let next = &next;
                 let chunking_cfg = chunking_cfg.clone();
                 s.spawn(move || loop {
+                    // Bug 7: yield the read slot when the descriptor
+                    // table is tight so a concurrent autosave or
+                    // terminal spawn keeps the headroom it needs. The
+                    // open-time worker count was sized when fds were
+                    // free; this re-checks the LIVE count between
+                    // files, the piece the one-shot budget can't do.
+                    // Cancellation aborts the wait promptly.
+                    crate::fd_budget::pace_reindex_worker(cancel);
                     let i = next.fetch_add(1, Ordering::Relaxed);
                     if i >= files_ref.len() {
                         break;

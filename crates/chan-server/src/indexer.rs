@@ -320,17 +320,27 @@ fn spawn_coordinator(
                 drive_w.reindex_with_aggression(Some(&cancel_w), &progress, aggression)
             })
             .await;
+            // Bug 9: every resolution of a build MUST move the status
+            // out of `Building`, or the status pill is stuck forever
+            // (it hides only on `Idle`). The success and cancel arms
+            // both reconcile to `Idle` against the live index stats:
+            // a cancelled rebuild leaves whatever committed, and the
+            // honest steady-state is "idle showing what's indexed",
+            // not a frozen progress counter. The error arms set
+            // `Error`. The only way to stay `Building` now is an
+            // in-flight build that has genuinely not resolved.
             match result {
                 Ok(Ok(_summary)) => {
-                    if let Some(drive) = drive.upgrade() {
-                        set_idle(&drive, &status, &telemetry);
-                    }
+                    reconcile_idle(&drive, &status, &telemetry);
                 }
                 Ok(Err(chan_drive::ChanError::Cancelled)) => {
-                    // Shutdown path: don't surface a user-visible
-                    // error; the next boot will pick up the empty
-                    // index and rebuild.
+                    // Shutdown / reset path: don't surface a
+                    // user-visible error; the next boot picks up the
+                    // (possibly empty) index and rebuilds. Still clear
+                    // the pill so a cancel that leaves the process
+                    // running does not park `Building` forever.
                     tracing::info!("indexer: rebuild cancelled");
+                    reconcile_idle(&drive, &status, &telemetry);
                 }
                 Ok(Err(e)) => {
                     *status.lock().unwrap() = IndexStatus::Error {
@@ -796,15 +806,72 @@ impl ProgressCallback for StatusUpdater {
                     };
                 }
             }
-            // Embed batch, model load, contact import, reset, rename
-            // rewrite, heartbeat: WS subscribers see the event; the
-            // local index status mutex stays where it is. Imports
-            // have their own status field on the frontend (driven by
-            // the import wizard); embed batches are part of an
-            // already-Building indexer state.
+            // Bug 9: the embed phase runs AFTER every IndexFile tick has
+            // fired (read+chunk+BM25-enqueue first, then the cross-file
+            // embedding flushes, then the final commit). Without
+            // reflecting EmbedBatch here the pill froze on the last
+            // IndexFile label (`total-1/total`) for the entire embed
+            // phase, which on a large drive is minutes and looks exactly
+            // like a stuck reindex. Surface the embed progress so the
+            // pill keeps moving until the build actually finishes and
+            // `set_idle` clears it. `current/total` here are chunk
+            // counts within a batch; the label carries the file context
+            // (`files=N last=...`). We keep `total` as the batch's
+            // chunk total so the bar reads as ongoing work rather than
+            // a frozen file counter.
+            ProgressStage::EmbedBatch => {
+                // The pill template wraps `file` in parens, so keep the
+                // embed label a bare phrase ("embedding") rather than
+                // re-wrapping the producer's `files=N last=...` blob
+                // (which would render as nested parens). The chunk
+                // counters still animate the bar; the phrase tells the
+                // user this is the embed phase, not a stuck file
+                // counter.
+                let current = event.current as usize;
+                let total = event.total as usize;
+                if let Ok(mut s) = self.status.lock() {
+                    *s = IndexStatus::Building {
+                        current,
+                        total,
+                        file: "embedding".to_owned(),
+                    };
+                }
+            }
+            // Model load, contact import, reset, rename rewrite,
+            // heartbeat: WS subscribers see the event; the local index
+            // status mutex stays where it is. Imports have their own
+            // status field on the frontend (driven by the import
+            // wizard).
             _ => {}
         }
         self.forward.on_progress(event);
+    }
+}
+
+/// Bug 9 clear-path helper for the coordinator: move the status out of
+/// `Building` when a rebuild resolves, whether or not the drive `Weak`
+/// still upgrades. With a live drive this reads fresh stats via
+/// `set_idle`. If the drive was dropped (reset/shutdown swapped the
+/// cell), there is nothing to query, but we still must not leave the
+/// pill frozen on `Building` for the brief window before the indexer
+/// itself is dropped, so we stamp a zeroed idle. Either way the pill
+/// hides (it is visible only on non-idle states).
+fn reconcile_idle(
+    drive: &Weak<Drive>,
+    status: &Mutex<IndexStatus>,
+    telemetry: &Mutex<IndexerTelemetry>,
+) {
+    match drive.upgrade() {
+        Some(drive) => set_idle(&drive, status, telemetry),
+        None => {
+            if let Ok(mut s) = status.lock() {
+                *s = IndexStatus::Idle {
+                    indexed_docs: 0,
+                    indexed_vectors: 0,
+                    model: chan_drive::DEFAULT_MODEL.to_owned(),
+                };
+            }
+        }
     }
 }
 
@@ -1042,6 +1109,133 @@ mod tests {
         fs::write(dir.path().join("a.md"), "# A\n\nbody\n").unwrap();
         let outcome = apply_watch_change(&drive, "a.md", false).unwrap();
         assert_eq!(outcome, ApplyOutcome::Indexed);
+    }
+
+    fn progress_event(
+        stage: ProgressStage,
+        current: u64,
+        total: u64,
+        label: &str,
+    ) -> ProgressEvent {
+        ProgressEvent {
+            stage,
+            current,
+            total,
+            label: Some(label.to_owned()),
+            eta_secs: None,
+        }
+    }
+
+    #[test]
+    fn embed_batch_progress_keeps_the_pill_moving() {
+        // Bug 9: the embed phase fires AFTER the last IndexFile tick.
+        // Pre-fix it hit the `_ => {}` arm so the status froze at the
+        // final `IndexFile` label (`total-1/total`) for the whole embed
+        // pass, which looks like a stuck reindex. The fix maps
+        // EmbedBatch onto `Building` so the pill animates until the
+        // build resolves to Idle.
+        let status = Arc::new(Mutex::new(IndexStatus::Building {
+            current: 1999,
+            total: 2000,
+            file: "notes/note-999.md".to_owned(),
+        }));
+        let updater = StatusUpdater {
+            status: status.clone(),
+            forward: Arc::new(chan_drive::NoProgress),
+        };
+        updater.on_progress(progress_event(
+            ProgressStage::EmbedBatch,
+            4096,
+            8192,
+            "files=512 last=notes/note-1999.md",
+        ));
+        let snapshot = status.lock().unwrap().clone();
+        match snapshot {
+            IndexStatus::Building {
+                current,
+                total,
+                file,
+            } => {
+                assert_eq!(current, 4096);
+                assert_eq!(total, 8192);
+                assert_eq!(file, "embedding", "embed phase label");
+            }
+            other => panic!("expected Building during embed, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn model_load_progress_does_not_clobber_the_index_status() {
+        // ModelLoad is a phase boundary on its own surface; it must not
+        // overwrite an in-flight Building status.
+        let status = Arc::new(Mutex::new(IndexStatus::Building {
+            current: 10,
+            total: 100,
+            file: "x.md".to_owned(),
+        }));
+        let updater = StatusUpdater {
+            status: status.clone(),
+            forward: Arc::new(chan_drive::NoProgress),
+        };
+        updater.on_progress(progress_event(ProgressStage::ModelLoad, 1, 3, "resolve"));
+        assert!(matches!(
+            &*status.lock().unwrap(),
+            IndexStatus::Building {
+                current: 10,
+                total: 100,
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn reconcile_idle_clears_pill_when_drive_is_gone() {
+        // Bug 9 clear path: a rebuild that resolves after the drive
+        // cell was swapped out (reset/shutdown) must still leave the
+        // status out of `Building`, or the pill is stuck forever.
+        let status = Arc::new(Mutex::new(IndexStatus::Building {
+            current: 5,
+            total: 10,
+            file: "y.md".to_owned(),
+        }));
+        let telemetry = Arc::new(Mutex::new(IndexerTelemetry {
+            queue_depth: 0,
+            last_event_at: None,
+            last_settled_at: None,
+            coalesced_rebuild: true,
+        }));
+        // A Weak that never upgrades: nothing to query, but the status
+        // must not stay Building.
+        let dead: Weak<Drive> = Weak::new();
+        reconcile_idle(&dead, &status, &telemetry);
+        assert!(matches!(&*status.lock().unwrap(), IndexStatus::Idle { .. }));
+    }
+
+    #[test]
+    fn reconcile_idle_reads_live_stats_when_drive_present() {
+        let (_cfg, dir, drive) = setup_drive();
+        fs::write(dir.path().join("a.md"), "# A\n\nbody token\n").unwrap();
+        apply_watch_change(&drive, "a.md", false).unwrap();
+        let status = Arc::new(Mutex::new(IndexStatus::Building {
+            current: 0,
+            total: 1,
+            file: String::new(),
+        }));
+        let telemetry = Arc::new(Mutex::new(IndexerTelemetry {
+            queue_depth: 3,
+            last_event_at: Some(1),
+            last_settled_at: None,
+            coalesced_rebuild: true,
+        }));
+        let weak = Arc::downgrade(&drive);
+        reconcile_idle(&weak, &status, &telemetry);
+        let snapshot = status.lock().unwrap().clone();
+        match snapshot {
+            IndexStatus::Idle { indexed_docs, .. } => assert!(indexed_docs >= 1),
+            other => panic!("expected Idle, got {other:?}"),
+        }
+        // set_idle also resets the coalesced-rebuild flag.
+        assert!(!telemetry.lock().unwrap().coalesced_rebuild);
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

@@ -3120,6 +3120,14 @@ impl Drive {
         if let Some(s) = self.report.get() {
             return Ok(s);
         }
+        // Bug 7: the report's initial `Index::scan` walks the drive and
+        // reads every file (one descriptor at a time, but a full pass).
+        // When it warms concurrently with a cold-boot search reindex it
+        // adds to the descriptor pressure. Gate the scan start behind
+        // the same reserve the reindex workers honor so the report walk
+        // yields the table to editing + the terminal when fds are
+        // tight. Cheap and best-effort: clear headroom returns at once.
+        crate::fd_budget::pace_reindex_worker(None);
         let state = ReportState::open(self.root(), &self.paths.report)?;
         // OnceLock::set is racy with a concurrent caller; the
         // loser drops its state cleanly, which terminates its
