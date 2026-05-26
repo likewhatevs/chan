@@ -1448,6 +1448,130 @@ struct MoveResponse {
     conflicts: Vec<String>,
 }
 
+/// Multi-entry move/copy for the File Browser clipboard + multi-drag
+/// (FB capabilities). `op` selects move (cut/paste, drag) vs copy
+/// (copy/paste); `sources` are the drive-rooted POSIX paths of the
+/// selection; `dest_dir` is the target directory ("" = drive root).
+#[derive(Deserialize)]
+pub struct TransferBody {
+    op: TransferOp,
+    sources: Vec<String>,
+    dest_dir: String,
+}
+
+#[derive(Deserialize, Clone, Copy, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum TransferOp {
+    Move,
+    Copy,
+}
+
+#[derive(Serialize, Default)]
+struct TransferResponse {
+    /// Per-source outcome, in request order: the final destination path
+    /// each source landed at (after collision suffixing) plus the op.
+    moved: Vec<TransferItem>,
+    /// Sources skipped because the destination equals the source's
+    /// current parent (a no-op move) or the source escaped the drive.
+    skipped: Vec<String>,
+    /// Link-rewrite CAS conflicts accumulated across all moved entries.
+    conflicts: Vec<String>,
+}
+
+#[derive(Serialize)]
+struct TransferItem {
+    from: String,
+    to: String,
+}
+
+/// Basename of a drive-rooted POSIX path.
+fn basename(path: &str) -> &str {
+    path.rsplit('/').next().unwrap_or(path)
+}
+
+/// Parent dir of a drive-rooted POSIX path ("" for a top-level entry).
+fn parent_dir(path: &str) -> &str {
+    match path.rfind('/') {
+        Some(i) => &path[..i],
+        None => "",
+    }
+}
+
+pub async fn api_fs_transfer(
+    State(state): State<Arc<AppState>>,
+    Json(body): Json<TransferBody>,
+) -> Response {
+    let drive = match state.try_drive() {
+        Ok(drive) => drive,
+        Err(e) => return err_state(&e),
+    };
+    let dest_dir = body.dest_dir.trim_end_matches('/').to_string();
+    let op = body.op;
+    let sources = body.sources.clone();
+
+    // The whole batch runs on a blocking thread: each move does a
+    // synchronous link-rewrite walk and each copy reads + writes N
+    // files, both off the tokio worker pool.
+    let dest_for_task = dest_dir.clone();
+    let result = tokio::task::spawn_blocking(move || {
+        let mut resp = TransferResponse::default();
+        let mut self_writes: Vec<String> = Vec::new();
+        for src in &sources {
+            let name = basename(src);
+            // A move into the source's own current parent is a no-op
+            // (and would otherwise resolve a needless " copy" suffix).
+            if op == TransferOp::Move && parent_dir(src) == dest_for_task {
+                resp.skipped.push(src.clone());
+                continue;
+            }
+            // Resolve a non-colliding destination name; both copy and a
+            // cut-into-a-collision get a Finder-style " copy" suffix so
+            // we never overwrite.
+            let dest = match drive.resolve_free_name(&dest_for_task, name) {
+                Ok(d) => d,
+                Err(e) => return Err(e),
+            };
+            match op {
+                TransferOp::Move => {
+                    let outcome = drive.rename_with_link_rewrite(src, &dest)?;
+                    for (from, to) in &outcome.renamed {
+                        self_writes.push(from.clone());
+                        self_writes.push(to.clone());
+                    }
+                    self_writes.extend(outcome.rewritten.iter().cloned());
+                    resp.conflicts.extend(outcome.conflicts);
+                }
+                TransferOp::Copy => {
+                    let outcome = drive.copy(src, &dest)?;
+                    self_writes.extend(outcome.created);
+                }
+            }
+            self_writes.push(src.clone());
+            self_writes.push(dest.clone());
+            resp.moved.push(TransferItem {
+                from: src.clone(),
+                to: dest,
+            });
+        }
+        Ok::<_, chan_drive::ChanError>((resp, self_writes))
+    })
+    .await;
+
+    let (resp, self_writes) = match result {
+        Ok(Ok(v)) => v,
+        Ok(Err(e)) => return err_from(&e),
+        Err(join) => return err(StatusCode::INTERNAL_SERVER_ERROR, join.to_string()),
+    };
+    // Note every created/moved/rewritten path so neither half of any
+    // notify pair fires an external-edit prompt. The watcher still
+    // emits the Created/Removed events, which the scoped `fs` registry
+    // routes to every subscribed File Browser instance + the Graph.
+    for path in &self_writes {
+        state.self_writes.note(path);
+    }
+    Json(resp).into_response()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1496,6 +1620,37 @@ mod tests {
         assert_eq!(value["path_class"]["kind"], "symlink");
         assert_eq!(value["path_class"]["target"], "/etc/hosts");
         assert_eq!(value["path_class"]["target_escapes_drive"], true);
+    }
+
+    #[test]
+    fn transfer_body_deserializes_the_fb_clipboard_wire_shape() {
+        // The FB clipboard + multi-drag posts this shape; pin it so a
+        // wire change is an explicit edit, not silent client breakage.
+        let body: TransferBody = serde_json::from_value(serde_json::json!({
+            "op": "copy",
+            "sources": ["notes/a.md", "notes/sub"],
+            "dest_dir": "archive"
+        }))
+        .unwrap();
+        assert!(matches!(body.op, TransferOp::Copy));
+        assert_eq!(body.sources, vec!["notes/a.md", "notes/sub"]);
+        assert_eq!(body.dest_dir, "archive");
+
+        let mv: TransferBody = serde_json::from_value(serde_json::json!({
+            "op": "move",
+            "sources": ["x.md"],
+            "dest_dir": ""
+        }))
+        .unwrap();
+        assert!(matches!(mv.op, TransferOp::Move));
+    }
+
+    #[test]
+    fn basename_and_parent_dir_split_drive_rooted_paths() {
+        assert_eq!(basename("notes/sub/a.md"), "a.md");
+        assert_eq!(basename("top.md"), "top.md");
+        assert_eq!(parent_dir("notes/sub/a.md"), "notes/sub");
+        assert_eq!(parent_dir("top.md"), "");
     }
 
     #[cfg(unix)]

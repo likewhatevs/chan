@@ -316,6 +316,11 @@ export type BrowserTab = {
   /// Populated by `FileBrowserSurface.svelte` on tab activate (mount /
   /// `tab.id` swap) and snapshot-back on deactivate.
   selected?: string | null;
+  /// Multi-selection set (FB capabilities: shift/cmd-click, shift+arrows,
+  /// cmd+A, rubber-band). Per-tab alongside `selected` (the active
+  /// cursor) so selecting in one File Browser tab does not leak into
+  /// another. Unset / empty means a single-entry (or no) selection.
+  selectedPaths?: string[];
   showDrive?: boolean;
   expanded?: string[];
   scroll?: number;

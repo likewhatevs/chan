@@ -3,6 +3,14 @@
 import { mount, tick, unmount } from "svelte";
 import { afterEach, describe, expect, test } from "vitest";
 
+// Static top-level component import (not a per-test `await import(...)`).
+// The flake was the dynamic import inside `renderPane` timing out (30s)
+// under the full parallel suite, where Svelte-component transform/import
+// is contended across workers - not an assertion or shared-state race.
+// Resolving the module once at module-eval matches the non-flaky
+// TerminalRichPrompt.test.ts pattern and takes the import off the timed
+// path.
+import Pane from "./Pane.svelte";
 import paneSource from "./Pane.svelte?raw";
 import {
   cancelPaneMode,
@@ -64,7 +72,6 @@ async function renderPane(pane: LeafNode, options: { paneMode?: boolean } = {}) 
   else cancelPaneMode();
   const target = document.createElement("div");
   document.body.append(target);
-  const { default: Pane } = await import("./Pane.svelte");
   const component = mount(Pane, { target, props: { pane } });
   mounted.push(component);
   await tick();
@@ -601,7 +608,6 @@ describe("Pane Hybrid NAV transaction mode (fullstack-a-44)", () => {
     cancelPaneMode();
     const target = document.createElement("div");
     document.body.append(target);
-    const { default: Pane } = await import("./Pane.svelte");
     const component = mount(Pane, { target, props: { pane: leftPane } });
     mounted.push(component);
     await tick();

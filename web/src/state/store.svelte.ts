@@ -1185,7 +1185,7 @@ function applyOverlaysFromHash(): void {
     // the auto-expansion via persistTreeExpanded). If the selected
     // row isn't visible because an ancestor is collapsed, opening
     // that ancestor reveals it — the saved collapse wins.
-    browserSelection.path = path || null;
+    fbSelectSingle(path || null);
     const tab = openBrowser();
     if (ins !== null) tab.inspectorOpen = ins;
   }
@@ -2319,13 +2319,150 @@ export const browserSidePanes = $state<{
 /// Currently inspected entry in the File Browser tab. Module-level
 /// (shared across browser tabs); selection is ephemeral so the
 /// minor cross-tab leakage is acceptable and avoids per-tab plumbing.
+/// File Browser selection. `path` is the ACTIVE/cursor entry the
+/// inspector + single-target actions key off (kept for zero churn to
+/// those consumers); `paths` is the full multi-selection set (the FB
+/// capabilities feature: shift/cmd-click, shift+arrows, cmd+A,
+/// rubber-band). Invariants the helpers below maintain:
+///   - `path` is always a member of `paths`, or both are empty/null.
+///   - `anchor` is the range pivot for shift-extend; it tracks the last
+///     plain/cmd click (the "from" of a future shift+click range).
+/// A plain click sets `paths=[path]`, `anchor=path`. Selection is
+/// per-FB-instance via the snapshot/restore seam (FileBrowserSurface);
+/// dock + overlay intentionally share this singleton (drive-wide intent).
 export const browserSelection = $state<{
   path: string | null;
+  paths: string[];
+  anchor: string | null;
   showDrive: boolean;
 }>({
   path: null,
+  paths: [],
+  anchor: null,
   showDrive: false,
 });
+
+/// Set the selection to a single entry (a plain click / programmatic
+/// reveal). Resets the multi-set and the range anchor to that entry so a
+/// subsequent shift+click ranges from here. `null` clears the selection.
+export function fbSelectSingle(path: string | null): void {
+  browserSelection.path = path;
+  browserSelection.paths = path ? [path] : [];
+  browserSelection.anchor = path;
+}
+
+/// Toggle one entry in the multi-selection (cmd/ctrl+click). The toggled
+/// entry becomes the active cursor + the new range anchor; removing the
+/// active entry promotes the last remaining member (or null) to active.
+export function fbToggle(path: string): void {
+  const set = browserSelection.paths;
+  const at = set.indexOf(path);
+  if (at === -1) {
+    browserSelection.paths = [...set, path];
+    browserSelection.path = path;
+    browserSelection.anchor = path;
+  } else {
+    const next = set.filter((p) => p !== path);
+    browserSelection.paths = next;
+    // Keep a coherent cursor: if we just deselected the active entry,
+    // fall back to the last remaining member.
+    if (browserSelection.path === path) {
+      browserSelection.path = next.length ? next[next.length - 1] : null;
+    }
+    browserSelection.anchor = browserSelection.path;
+  }
+}
+
+/// Select the inclusive range of `ordered` (the visible-row paths, in
+/// display order) between the current anchor and `path` (shift+click /
+/// shift+arrow). The anchor is preserved so successive shift gestures
+/// pivot from the SAME origin (desktop range semantics); `path` becomes
+/// the active cursor. Falls back to a single select if there is no anchor
+/// or either endpoint is off the visible list.
+export function fbSelectRange(path: string, ordered: string[]): void {
+  const anchor = browserSelection.anchor ?? browserSelection.path;
+  if (!anchor) {
+    fbSelectSingle(path);
+    return;
+  }
+  const a = ordered.indexOf(anchor);
+  const b = ordered.indexOf(path);
+  if (a === -1 || b === -1) {
+    fbSelectSingle(path);
+    return;
+  }
+  const lo = Math.min(a, b);
+  const hi = Math.max(a, b);
+  browserSelection.paths = ordered.slice(lo, hi + 1);
+  browserSelection.path = path;
+  // Anchor stays put: shift again pivots from the original origin.
+  browserSelection.anchor = anchor;
+}
+
+/// Replace the multi-selection with `paths` (rubber-band / select-all).
+/// `active` becomes the cursor (defaults to the last entry); the anchor
+/// is set to the first entry so a following shift gesture has an origin.
+export function fbSelectSet(paths: string[], active?: string): void {
+  browserSelection.paths = paths;
+  browserSelection.path = active ?? (paths.length ? paths[paths.length - 1] : null);
+  browserSelection.anchor = paths.length ? paths[0] : null;
+}
+
+/// Clear the whole selection (e.g. clicking empty tree space).
+export function fbClearSelection(): void {
+  browserSelection.path = null;
+  browserSelection.paths = [];
+  browserSelection.anchor = null;
+}
+
+/// File Browser clipboard (FB2). Module-level (NOT per-instance) so a
+/// copy/cut in one File Browser can be pasted into another - the spec
+/// explicitly allows cross-instance paste on the same drive. `mode`
+/// distinguishes copy (duplicate) from cut (move on paste). `paths` is
+/// the snapshot of the selection at copy/cut time, so a later selection
+/// change does not retarget a pending paste. A cut's source rows render
+/// dimmed (\"marked for move\") until the paste lands or the clipboard is
+/// replaced.
+export const fbClipboard = $state<{
+  mode: "copy" | "cut" | null;
+  paths: string[];
+}>({ mode: null, paths: [] });
+
+/// Capture the current multi-selection into the clipboard as a copy or
+/// a cut. A no-op when nothing is selected.
+export function fbClipboardSet(mode: "copy" | "cut", paths: string[]): void {
+  if (paths.length === 0) return;
+  fbClipboard.mode = mode;
+  fbClipboard.paths = [...paths];
+}
+
+/// Clear the clipboard (after a successful cut+paste, or on Escape).
+export function fbClipboardClear(): void {
+  fbClipboard.mode = null;
+  fbClipboard.paths = [];
+}
+
+/// Paste the clipboard into `destDir` (drive-rooted POSIX, "" = root).
+/// copy duplicates; cut moves (and clears the clipboard on success so a
+/// second paste does not move-from-a-now-empty source). Routes through
+/// POST /api/fs/transfer, which resolves name collisions to a " copy"
+/// suffix and emits watcher events so every FB instance + the Graph
+/// refresh. Returns the destination paths the entries landed at.
+export async function fbClipboardPaste(destDir: string): Promise<string[]> {
+  const mode = fbClipboard.mode;
+  const sources = [...fbClipboard.paths];
+  if (!mode || sources.length === 0) return [];
+  const op = mode === "cut" ? "move" : "copy";
+  try {
+    const resp = await api.fsTransfer(op, sources, destDir);
+    // A cut is a one-shot move: clear so the source can't be re-moved.
+    if (mode === "cut") fbClipboardClear();
+    return resp.moved.map((m) => m.to);
+  } catch (err) {
+    ui.status = `paste failed: ${(err as Error).message}`;
+    return [];
+  }
+}
 
 let widthsPersistTimer: ReturnType<typeof setTimeout> | null = null;
 let widthsPersistInflight: Promise<void> = Promise.resolve();
@@ -2685,7 +2822,9 @@ export function revealAndSelect(path: string): void {
     treeExpanded.map[acc] = true;
   }
   treeExpanded.map[""] = true;
-  browserSelection.path = path;
+  // Programmatic reveal is a single-select: reset the multi-set + anchor
+  // so a later shift+click ranges from the revealed entry.
+  fbSelectSingle(path);
   browserSelection.showDrive = false;
   // The expansion change counts as a user action — persist it so
   // the next launch keeps the new entry in view.
@@ -2703,7 +2842,7 @@ export function revealAndEnterDirectory(path: string): void {
     acc = acc ? `${acc}/${part}` : part;
     treeExpanded.map[acc] = true;
   }
-  browserSelection.path = path || null;
+  fbSelectSingle(path || null);
   browserSelection.showDrive = false;
   if (path) void loadTreeDir(path);
   persistTreeExpanded();

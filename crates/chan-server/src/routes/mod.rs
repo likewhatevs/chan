@@ -41,8 +41,8 @@ pub use drafts::{
 };
 pub use drive::{api_cloud_drives, api_drive_bootstrap, api_get_drive, api_patch_drive};
 pub use files::{
-    api_create_file, api_delete_file, api_list_files, api_move, api_read_file, api_upload_file,
-    api_write_file,
+    api_create_file, api_delete_file, api_fs_transfer, api_list_files, api_move, api_read_file,
+    api_upload_file, api_write_file,
 };
 pub use fonts::api_fonts_source_code_pro_download;
 pub use fs_graph::{api_fs_graph, build_fs_graph, FsGraphResponse, FsGraphScope};

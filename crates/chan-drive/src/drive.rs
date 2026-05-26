@@ -189,6 +189,15 @@ pub struct RenameOutcome {
     pub conflicts: Vec<String>,
 }
 
+/// Result of `Drive::copy`.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct CopyOutcome {
+    /// Every destination path created by the copy (drive-rooted POSIX),
+    /// sorted lexicographically. One entry for a file copy; one per
+    /// copied regular-file descendant for a subtree copy.
+    pub created: Vec<String>,
+}
+
 /// What `Drive::reconcile` did.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct ReconcileReport {
@@ -1702,6 +1711,208 @@ impl Drive {
             .rename(&from_rel, &self.dir, &to_rel)
             .map_err(|e| ChanError::Io(e.to_string()))?;
         Ok(())
+    }
+
+    /// Copy a regular file or a directory subtree from `from` to `to`,
+    /// both drive-rooted POSIX paths. Unlike `rename` this DUPLICATES:
+    /// the source is left untouched and no inbound links are rewritten
+    /// (a copy creates new files with their own future identity; the
+    /// next reindex picks up whatever links the copies carry).
+    ///
+    /// Invariants matched to `rename`:
+    ///   * Source must be a regular file or a directory; a symlink or
+    ///     other special file is refused (`SpecialFile`). Inside a
+    ///     subtree copy, any special-file descendant is refused too, so
+    ///     a copy can never materialize a symlink/device under the
+    ///     drive.
+    ///   * `.chan/`, `.git/`, `.hg/` are skipped inside a subtree copy
+    ///     (the same control dirs the walk filter and rename never
+    ///     touch); copying them would duplicate VCS / app metadata.
+    ///   * Each file write goes through `atomic_write_in` (the same
+    ///     atomic + parent-fsync path every user write uses) and honors
+    ///     the editable-text UTF-8 gate.
+    ///
+    /// `to` must NOT already exist (the caller resolves a free name
+    /// first via `resolve_free_name` for paste-collision handling).
+    ///
+    /// Returns the list of created destination paths (drive-rooted
+    /// POSIX), so the server can note them as self-writes and the UI /
+    /// graph can react. Sorted for stable diffs.
+    pub fn copy(&self, from: &str, to: &str) -> Result<CopyOutcome> {
+        let from_rel = self.rel(from)?;
+        let to_rel = self.rel(to)?;
+        let src_meta = self
+            .dir
+            .symlink_metadata(&from_rel)
+            .map_err(|e| ChanError::Io(e.to_string()))?;
+        let src_ft = src_meta.file_type();
+        if src_ft.is_symlink() || !(src_ft.is_dir() || src_ft.is_file()) {
+            return Err(ChanError::SpecialFile {
+                kind: describe_cap_file_kind(&src_ft).to_string(),
+                path: self.entry.root_path.join(&from_rel),
+            });
+        }
+        // Refuse to clobber: paste-collision resolution happens in the
+        // server (it picks a free name); a bare copy onto an existing
+        // path is a programming error, not a silent overwrite.
+        if self.dir.symlink_metadata(&to_rel).is_ok() {
+            return Err(ChanError::Io(format!(
+                "copy destination already exists: {to}"
+            )));
+        }
+        let to_canon = canonical_posix(to);
+        let mut created = Vec::new();
+        if src_ft.is_file() {
+            self.copy_one_file(&from_rel, &to_rel, &to_canon, &mut created)?;
+        } else {
+            // Create the destination root dir, then walk descendants.
+            self.dir
+                .create_dir_all(&to_rel)
+                .map_err(|e| ChanError::Io(e.to_string()))?;
+            self.copy_subtree(&from_rel, &to_rel, &to_canon, &mut created)?;
+        }
+        created.sort();
+        Ok(CopyOutcome { created })
+    }
+
+    /// Copy one regular file from `src_rel` to `dst_rel` (both relative
+    /// to `self.dir`), recording the destination's drive-rooted POSIX
+    /// path in `created`.
+    fn copy_one_file(
+        &self,
+        src_rel: &std::path::Path,
+        dst_rel: &std::path::Path,
+        dst_canon: &str,
+        created: &mut Vec<String>,
+    ) -> Result<()> {
+        let bytes = {
+            use std::io::Read;
+            let mut f = self
+                .dir
+                .open(src_rel)
+                .map_err(|e| ChanError::Io(e.to_string()))?;
+            let mut buf = Vec::new();
+            f.read_to_end(&mut buf)?;
+            buf
+        };
+        // Mirror write_bytes' editable-text UTF-8 gate so a copy can
+        // never land non-UTF-8 bytes in an editable-text path.
+        let dst_str = dst_rel.to_string_lossy();
+        if fs_ops::is_editable_text(&dst_str) && std::str::from_utf8(&bytes).is_err() {
+            return Err(ChanError::Io(format!(
+                "refusing to copy non-UTF-8 bytes to editable text file: {dst_str}"
+            )));
+        }
+        if let Some(parent) = dst_rel.parent() {
+            if !parent.as_os_str().is_empty() {
+                self.dir
+                    .create_dir_all(parent)
+                    .map_err(|e| ChanError::Io(e.to_string()))?;
+            }
+        }
+        fs_ops::atomic_write_in(&self.dir, dst_rel, &bytes)?;
+        created.push(dst_canon.to_string());
+        Ok(())
+    }
+
+    /// Recursively copy the contents of directory `src_rel` into the
+    /// already-created `dst_rel`. Skips control dirs; refuses special
+    /// files; recreates child directories before copying their files.
+    fn copy_subtree(
+        &self,
+        src_rel: &std::path::Path,
+        dst_rel: &std::path::Path,
+        dst_canon: &str,
+        created: &mut Vec<String>,
+    ) -> Result<()> {
+        let read = self
+            .dir
+            .read_dir(src_rel)
+            .map_err(|e| ChanError::Io(e.to_string()))?;
+        for entry in read {
+            let entry = entry.map_err(|e| ChanError::Io(e.to_string()))?;
+            let name = entry.file_name();
+            let name_str = name.to_string_lossy().to_string();
+            // Skip VCS / app control dirs: never duplicate them.
+            if matches!(name_str.as_str(), ".chan" | ".git" | ".hg") {
+                continue;
+            }
+            let ft = entry
+                .file_type()
+                .map_err(|e| ChanError::Io(e.to_string()))?;
+            let child_src = src_rel.join(&name);
+            let child_dst = dst_rel.join(&name);
+            let child_dst_canon = format!("{dst_canon}/{name_str}");
+            if ft.is_symlink() || !(ft.is_dir() || ft.is_file()) {
+                return Err(ChanError::SpecialFile {
+                    kind: describe_cap_file_kind(&ft).to_string(),
+                    path: self.entry.root_path.join(&child_src),
+                });
+            }
+            if ft.is_dir() {
+                self.dir
+                    .create_dir_all(&child_dst)
+                    .map_err(|e| ChanError::Io(e.to_string()))?;
+                self.copy_subtree(&child_src, &child_dst, &child_dst_canon, created)?;
+            } else {
+                self.copy_one_file(&child_src, &child_dst, &child_dst_canon, created)?;
+            }
+        }
+        Ok(())
+    }
+
+    /// Resolve a non-colliding destination path for pasting `name` into
+    /// directory `dest_dir` (drive-rooted POSIX). If `dest_dir/name` is
+    /// free it is returned as-is; otherwise a Finder-style " copy" /
+    /// " copy 2" suffix is inserted before the extension until a free
+    /// name is found. Used by the server's paste handler so copy AND
+    /// cut-into-a-name-collision both resolve to a fresh name rather
+    /// than overwriting (we never silently clobber).
+    ///
+    /// The check is best-effort against the live tree; the actual write
+    /// (copy / rename) is the TOCTOU-authoritative step and will fail on
+    /// a lost race, at which point the caller can retry with the next
+    /// suffix.
+    pub fn resolve_free_name(&self, dest_dir: &str, name: &str) -> Result<String> {
+        let base_dir = canonical_posix(dest_dir);
+        let prefix = if base_dir.is_empty() {
+            String::new()
+        } else {
+            format!("{base_dir}/")
+        };
+        let (stem, ext) = split_name_ext(name);
+        let mut candidate = format!("{prefix}{name}");
+        if !self.path_exists_any(&candidate) {
+            return Ok(candidate);
+        }
+        // First collision uses " copy", then " copy 2", " copy 3", ...
+        let mut n = 1u32;
+        loop {
+            let suffixed = if n == 1 {
+                format!("{stem} copy{ext}")
+            } else {
+                format!("{stem} copy {n}{ext}")
+            };
+            candidate = format!("{prefix}{suffixed}");
+            if !self.path_exists_any(&candidate) {
+                return Ok(candidate);
+            }
+            n += 1;
+            if n > 10_000 {
+                return Err(ChanError::Io(format!(
+                    "could not find a free name for {name} in {dest_dir}"
+                )));
+            }
+        }
+    }
+
+    /// Existence check for collision resolution: true if a file OR
+    /// directory (or any non-regular node) occupies `rel`.
+    fn path_exists_any(&self, rel: &str) -> bool {
+        let Ok(rel_path) = self.rel(rel) else {
+            return false;
+        };
+        self.dir.symlink_metadata(&rel_path).is_ok()
     }
 
     /// Rename a file or directory and rewrite every inbound link
@@ -3599,6 +3810,22 @@ fn path_under(path: &str, prefix: &str) -> bool {
 fn canonical_posix(p: &str) -> String {
     let s = p.strip_prefix("./").unwrap_or(p);
     s.trim_end_matches('/').to_string()
+}
+
+/// Split a basename into `(stem, ext)` where `ext` includes the leading
+/// dot, for collision-suffix insertion ("foo.md" -> ("foo", ".md") so a
+/// collision becomes "foo copy.md"). A dotfile with no other extension
+/// ("`.gitignore`") or a name with no dot keeps the whole name as stem
+/// and an empty ext, so the suffix appends at the end ("`.gitignore`" ->
+/// "`.gitignore copy`"). A trailing dot is treated as part of the stem.
+fn split_name_ext(name: &str) -> (String, String) {
+    match name.rfind('.') {
+        // A leading dot at index 0 is a dotfile prefix, not an ext.
+        Some(idx) if idx > 0 && idx < name.len() - 1 => {
+            (name[..idx].to_string(), name[idx..].to_string())
+        }
+        _ => (name.to_string(), String::new()),
+    }
 }
 
 fn posix_path(path: &std::path::Path) -> String {
@@ -7184,5 +7411,102 @@ mod tests {
         assert_eq!(outcome.renamed, vec![("old.md".into(), "new.md".into())]);
         assert!(outcome.rewritten.is_empty());
         assert!(outcome.conflicts.is_empty());
+    }
+
+    // ---- FB capabilities: copy + collision resolution -------------------
+
+    #[test]
+    fn copy_duplicates_a_file_and_leaves_the_source() {
+        let (_cfg, _root, drive) = fixture();
+        drive.write_text("notes/a.md", "hello").unwrap();
+        let out = drive.copy("notes/a.md", "notes/b.md").unwrap();
+        assert_eq!(out.created, vec!["notes/b.md".to_string()]);
+        // Source untouched, destination a faithful duplicate.
+        assert_eq!(drive.read_text("notes/a.md").unwrap(), "hello");
+        assert_eq!(drive.read_text("notes/b.md").unwrap(), "hello");
+    }
+
+    #[test]
+    fn copy_duplicates_a_directory_subtree_skipping_control_dirs() {
+        let (_cfg, root, drive) = fixture();
+        drive.write_text("proj/a.md", "a").unwrap();
+        drive.write_text("proj/sub/b.md", "b").unwrap();
+        // A .git control dir inside the source must NOT be duplicated.
+        // Seed it directly on disk (write_text refuses control-dir
+        // paths, which is exactly the gate we are NOT testing here).
+        let git_dir = root.path().join("proj/.git");
+        std::fs::create_dir_all(&git_dir).unwrap();
+        std::fs::write(git_dir.join("HEAD"), "ref: x").unwrap();
+        let out = drive.copy("proj", "proj-copy").unwrap();
+        assert_eq!(
+            out.created,
+            vec![
+                "proj-copy/a.md".to_string(),
+                "proj-copy/sub/b.md".to_string()
+            ],
+        );
+        assert_eq!(drive.read_text("proj-copy/a.md").unwrap(), "a");
+        assert_eq!(drive.read_text("proj-copy/sub/b.md").unwrap(), "b");
+        // The control dir was skipped: its file does not exist in the copy.
+        assert!(!drive.exists("proj-copy/.git/HEAD"));
+        // Source subtree is intact.
+        assert_eq!(drive.read_text("proj/a.md").unwrap(), "a");
+    }
+
+    #[test]
+    fn copy_refuses_an_existing_destination() {
+        let (_cfg, _root, drive) = fixture();
+        drive.write_text("a.md", "x").unwrap();
+        drive.write_text("b.md", "y").unwrap();
+        let err = drive.copy("a.md", "b.md").unwrap_err();
+        assert!(matches!(err, ChanError::Io(_)));
+        // b.md was not clobbered.
+        assert_eq!(drive.read_text("b.md").unwrap(), "y");
+    }
+
+    #[test]
+    fn resolve_free_name_suffixes_on_collision_before_extension() {
+        let (_cfg, _root, drive) = fixture();
+        drive.write_text("notes/a.md", "x").unwrap();
+        // No collision: returns the bare path.
+        assert_eq!(
+            drive.resolve_free_name("notes", "new.md").unwrap(),
+            "notes/new.md"
+        );
+        // First collision -> " copy" before the extension.
+        assert_eq!(
+            drive.resolve_free_name("notes", "a.md").unwrap(),
+            "notes/a copy.md"
+        );
+        // Second collision -> " copy 2".
+        drive.write_text("notes/a copy.md", "x").unwrap();
+        assert_eq!(
+            drive.resolve_free_name("notes", "a.md").unwrap(),
+            "notes/a copy 2.md"
+        );
+    }
+
+    #[test]
+    fn resolve_free_name_at_drive_root_has_no_prefix() {
+        let (_cfg, _root, drive) = fixture();
+        assert_eq!(drive.resolve_free_name("", "top.md").unwrap(), "top.md");
+    }
+
+    #[test]
+    fn split_name_ext_handles_dotfiles_and_no_extension() {
+        assert_eq!(split_name_ext("foo.md"), ("foo".into(), ".md".into()));
+        assert_eq!(
+            split_name_ext("archive.tar.gz"),
+            ("archive.tar".into(), ".gz".into())
+        );
+        // Dotfile: the leading dot is a prefix, not an extension.
+        assert_eq!(
+            split_name_ext(".gitignore"),
+            (".gitignore".into(), String::new())
+        );
+        // No dot: whole name is the stem.
+        assert_eq!(split_name_ext("README"), ("README".into(), String::new()));
+        // Trailing dot stays part of the stem.
+        assert_eq!(split_name_ext("weird."), ("weird.".into(), String::new()));
     }
 }
