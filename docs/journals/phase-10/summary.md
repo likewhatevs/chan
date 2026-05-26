@@ -28,6 +28,32 @@ Verification:
 - `cargo test -p chan-server`
 - `git diff --check` on the touched files
 
+### Website Fixups: Relative Manual Links + DNS Cutover Doc
+
+Detailed note:
+`docs/journals/phase-10/website-fixups.md`
+
+Status: implemented and verified.
+
+Summary:
+
+- `docs/manual/index.md` cross-page links are now drive-relative `.md`
+  siblings, so they resolve in the seeded desktop drive (flat files at
+  root) where the old root-absolute `/manual/.../` URLs dead-ended.
+- `web-marketing/scripts/build.mjs` rewrites those relative `.md` links
+  back into the clean `/manual/.../` URLs on the public website, so
+  published HTML and the link/nav gates stay byte-identical.
+- Added `docs/release/dns-cutover.md`, the manual runbook to repoint
+  chan.app DNS from the VPS to GitHub Pages (Cloudflare, DNS-only). No
+  DNS change was executed.
+
+Verification:
+
+- `cd web-marketing && npm run check` (build + bundle-manual --check +
+  smoke-dist + install.sh syntax)
+- dist spot-check: 8 clean `/manual/.../` URLs, nav in index.md order
+- seeded-drive fix traced through `web/src/editor/links.ts::normalizeHref`
+
 ### Desktop In-Process Registry
 
 Detailed note:

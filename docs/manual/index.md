@@ -6,14 +6,14 @@ command.
 
 Start here:
 
-- [Install choices](/manual/install/)
-- [Creating or opening a drive](/manual/drives/)
-- [Editing markdown](/manual/editing-markdown/)
-- [Wiki-links](/manual/wiki-links/)
-- [Search and graph basics](/manual/search-and-graph/)
-- [Terminal and MCP discovery](/manual/terminal-and-mcp/)
-- [Tunnel basics](/manual/tunnel/)
-- [Upgrade and troubleshooting](/manual/upgrade-and-troubleshooting/)
+- [Install choices](install.md)
+- [Creating or opening a drive](drives.md)
+- [Editing markdown](editing-markdown.md)
+- [Wiki-links](wiki-links.md)
+- [Search and graph basics](search-and-graph.md)
+- [Terminal and MCP discovery](terminal-and-mcp.md)
+- [Tunnel basics](tunnel.md)
+- [Upgrade and troubleshooting](upgrade-and-troubleshooting.md)
 
 ## What stays on disk
 

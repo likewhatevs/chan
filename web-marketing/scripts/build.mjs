@@ -217,7 +217,7 @@ async function readManualPages() {
     pages.push({
       attrs,
       depth: url.split("/").filter(Boolean).length - 1,
-      html: renderMarkdown(body, source),
+      html: renderMarkdown(body, source, rel),
       output: outputForUrl(url),
       rel,
       source,
@@ -244,9 +244,9 @@ async function readManualPages() {
 
 function manualIndexLinkOrder(markdown) {
   const order = new Map();
-  for (const match of markdown.matchAll(/\]\((\/manual\/[^)#?]*\/)\)/g)) {
-    const url = match[1];
-    if (url === "/manual/" || order.has(url)) continue;
+  for (const m of markdown.matchAll(/\[[^\]]+]\(([^)#?]+\.md(?:#[^)]*)?)\)/g)) {
+    const url = manualHrefToCleanUrl(m[1], "index.md");
+    if (!url || url === "/manual/" || order.has(url)) continue;
     order.set(url, order.size + 1);
   }
   return order;
@@ -308,6 +308,24 @@ function manualUrlFor(rel) {
   return `/manual/${withoutExt}/`;
 }
 
+// Maps a drive-relative `.md` link (as authored in docs/manual) to the
+// clean published URL. Returns null for hrefs that are not drive-relative
+// .md targets (external, root-absolute, anchor-only) so callers leave
+// them untouched. Manual pages are flat siblings today, but this resolves
+// against the source page's dir so nested pages would work too.
+function manualHrefToCleanUrl(href, pageRel) {
+  if (/^[a-z][a-z0-9+.-]*:/i.test(href)) return null; // scheme (http:, mailto:)
+  if (href.startsWith("#") || href.startsWith("/")) return null;
+  const hash = href.indexOf("#");
+  const pathPart = hash === -1 ? href : href.slice(0, hash);
+  const anchor = hash === -1 ? "" : href.slice(hash);
+  if (!/\.md$/.test(pathPart)) return null;
+  const pageDir = path.posix.dirname(pageRel); // "." for root pages
+  const base = pageDir === "." ? "" : `${pageDir}/`;
+  const targetRel = path.posix.normalize(`${base}${pathPart}`);
+  return `${manualUrlFor(targetRel)}${anchor}`;
+}
+
 function outputForUrl(url) {
   if (!url.startsWith("/") || !url.endsWith("/")) throw new Error(`invalid clean URL: ${url}`);
   return path.posix.join(url.slice(1), "index.html");
@@ -332,7 +350,7 @@ ${page.html}
 </div>`;
 }
 
-function renderMarkdown(markdown, source) {
+function renderMarkdown(markdown, source, pageRel) {
   const lines = markdown.replace(/\r\n/g, "\n").trimEnd().split("\n");
   const html = [];
   const usedIds = new Map();
@@ -364,7 +382,7 @@ function renderMarkdown(markdown, source) {
       const level = heading[1].length;
       const text = heading[2].trim();
       const id = uniqueId(slugify(stripMarkdown(text)), usedIds);
-      html.push(`<h${level} id="${id}">${renderInline(text)}</h${level}>`);
+      html.push(`<h${level} id="${id}">${renderInline(text, pageRel)}</h${level}>`);
       i += 1;
       continue;
     }
@@ -372,7 +390,7 @@ function renderMarkdown(markdown, source) {
     if (/^-\s+/.test(line)) {
       const items = [];
       while (i < lines.length && /^-\s+/.test(lines[i])) {
-        items.push(`<li>${renderInline(lines[i].replace(/^-\s+/, ""))}</li>`);
+        items.push(`<li>${renderInline(lines[i].replace(/^-\s+/, ""), pageRel)}</li>`);
         i += 1;
       }
       html.push(`<ul>\n${items.join("\n")}\n</ul>`);
@@ -391,17 +409,18 @@ function renderMarkdown(markdown, source) {
       paragraph.push(lines[i].trim());
       i += 1;
     }
-    html.push(`<p>${renderInline(paragraph.join(" "))}</p>`);
+    html.push(`<p>${renderInline(paragraph.join(" "), pageRel)}</p>`);
   }
   return html.join("\n");
 }
 
-function renderInline(text) {
+function renderInline(text, pageRel) {
   let rendered = escapeHtml(text);
   rendered = rendered.replace(/`([^`]+)`/g, "<code>$1</code>");
   rendered = rendered.replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>");
   rendered = rendered.replace(/\[([^\]]+)]\(([^)]+)\)/g, (_match, label, href) => {
-    return `<a href="${escapeAttribute(href)}">${label}</a>`;
+    const finalHref = manualHrefToCleanUrl(href, pageRel) ?? href;
+    return `<a href="${escapeAttribute(finalHref)}">${label}</a>`;
   });
   return rendered;
 }
