@@ -17,6 +17,30 @@ describe("validatePath", () => {
     expect(r.ok).toBe(false);
     if (!r.ok) expect(r.reason).toMatch(/type a name/);
   });
+  test("trailing slash is accepted when allowTrailingSlash (directory)", () => {
+    expect(validatePath("Recipes/", { allowTrailingSlash: true })).toEqual({
+      ok: true,
+    });
+    expect(
+      validatePath("a/b/c/", { allowTrailingSlash: true }),
+    ).toEqual({ ok: true });
+  });
+  test("allowTrailingSlash still rejects a bare slash (nothing to name)", () => {
+    // allowAbsolute so the bare "/" reaches the trailing-slash branch
+    // (otherwise the absolute-path guard rejects it first).
+    const r = validatePath("/", {
+      allowTrailingSlash: true,
+      allowAbsolute: true,
+    });
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.reason).toMatch(/type a name/);
+  });
+  test("allowTrailingSlash still validates the stripped segments", () => {
+    // A `.` segment is illegal whether or not the path ends in `/`.
+    expect(
+      validatePath("a/./", { allowTrailingSlash: true }).ok,
+    ).toBe(false);
+  });
   test("absolute path is rejected", () => {
     const r = validatePath("/etc/passwd");
     expect(r.ok).toBe(false);

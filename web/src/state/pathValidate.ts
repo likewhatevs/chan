@@ -26,7 +26,10 @@ const WIN_RESERVED = new Set([
 /// Validate a relative path that the user typed for create / move
 /// / rename. Returns a structured result so the caller can show
 /// the reason inline instead of a generic "invalid".
-export function validatePath(raw: string, opts: { allowAbsolute?: boolean } = {}): PathCheck {
+export function validatePath(
+  raw: string,
+  opts: { allowAbsolute?: boolean; allowTrailingSlash?: boolean } = {},
+): PathCheck {
   if (raw === "") return { ok: false, reason: "path is empty" };
   const trimmed = raw.trim();
   if (trimmed === "") return { ok: false, reason: "path is empty" };
@@ -42,15 +45,24 @@ export function validatePath(raw: string, opts: { allowAbsolute?: boolean } = {}
   if (trimmed.startsWith("/") && !opts.allowAbsolute) {
     return { ok: false, reason: "absolute paths are not allowed" };
   }
+  // A trailing `/` normally means an unfinished basename and is
+  // rejected with a name-prompt hint (file create, move/rename). But
+  // when the caller is creating a directory (`allowTrailingSlash`),
+  // `foo/` is the natural way to say "make the directory foo" — the
+  // New File or Directory dialog's caption invites exactly that. In
+  // that mode we strip one trailing slash and validate the remaining
+  // path as the directory name. A bare "/" (or "" after stripping)
+  // still has nothing to name, so it stays rejected.
+  let pathForSegments = trimmed;
   if (trimmed.endsWith("/")) {
-    // Path ends with the directory separator: the user picked a
-    // directory via autocomplete and hasn't typed the basename yet, or
-    // typed `foo/` literally. Either way, submitting now would create
-    // an entity with an empty basename (and for files, a stray .md
-    // would land as `foo/.md`). Reject pre-flight with a clearer
-    // message than the generic "empty segment" the loop below would
-    // otherwise produce.
-    return { ok: false, reason: "path ends with /, type a name" };
+    if (!opts.allowTrailingSlash) {
+      return { ok: false, reason: "path ends with /, type a name" };
+    }
+    const stripped = trimmed.replace(/\/+$/, "");
+    if (stripped === "") {
+      return { ok: false, reason: "path ends with /, type a name" };
+    }
+    pathForSegments = stripped;
   }
   if (/[\x00-\x1f]/.test(trimmed)) {
     return { ok: false, reason: "control characters are not allowed" };
@@ -61,7 +73,9 @@ export function validatePath(raw: string, opts: { allowAbsolute?: boolean } = {}
   if (trimmed.includes("\\")) {
     return { ok: false, reason: "use / as the path separator" };
   }
-  const segments = trimmed.startsWith("/") ? trimmed.slice(1).split("/") : trimmed.split("/");
+  const segments = pathForSegments.startsWith("/")
+    ? pathForSegments.slice(1).split("/")
+    : pathForSegments.split("/");
   for (const seg of segments) {
     const segCheck = validateSegment(seg);
     if (!segCheck.ok) return segCheck;

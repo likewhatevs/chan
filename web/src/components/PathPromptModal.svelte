@@ -133,6 +133,15 @@
   });
   const effectiveValue = $derived(resolved.path);
   const autoSuffix = $derived(resolved.autoSuffix);
+  /// Effective value without a trailing slash. The submitted value
+  /// (`effectiveValue`) keeps the slash for a directory because the
+  /// store dispatches on `endsWith("/")` (the `either` flow) and the
+  /// folder API takes the path verbatim. But every drive-relative
+  /// computation here (existing-entry lookup, missing-ancestor walk,
+  /// per-segment render) needs the bare path: tree entries carry no
+  /// trailing slash, and a trailing `/` would otherwise split into a
+  /// stray empty segment.
+  const normalizedPath = $derived(effectiveValue.replace(/\/+$/, ""));
 
   /// Validation result for the current input. Empty input still
   /// validates so the placeholder modal isn't immediately red.
@@ -148,11 +157,21 @@
   const validation = $derived.by(() => {
     const trimmed = value.trim();
     if (trimmed === "") return { ok: true as const };
-    const rawCheck = validatePath(trimmed, { allowAbsolute: pathPromptState.allowAbsolute });
+    // A directory target may legitimately end in `/` (the "New File
+    // or Directory" caption invites it, and an explicit New Directory
+    // dialog produces it once the user types `name/`). Only allow the
+    // trailing slash through when we've resolved the kind to a folder;
+    // file create / move / rename still reject it with a name hint.
+    const allowTrailingSlash = effectiveKind === "folder";
+    const rawCheck = validatePath(trimmed, {
+      allowAbsolute: pathPromptState.allowAbsolute,
+      allowTrailingSlash,
+    });
     if (!rawCheck.ok) return rawCheck;
     if (effectiveValue && effectiveValue !== trimmed) {
       const effCheck = validatePath(effectiveValue, {
         allowAbsolute: pathPromptState.allowAbsolute,
+        allowTrailingSlash,
       });
       if (!effCheck.ok) return effCheck;
     }
@@ -282,7 +301,10 @@
       };
 
   const status = $derived.by<Status>(() => {
-    const path = effectiveValue;
+    // Use the bare (no trailing slash) path for all drive-relative
+    // reasoning; the submit value with the slash lives in
+    // `effectiveValue` and is what `ok()` sends.
+    const path = normalizedPath;
     if (path === "") return { kind: "empty" };
     if (!validation.ok) return { kind: "invalid", reason: validation.reason };
 
