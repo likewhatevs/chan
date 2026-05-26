@@ -9,10 +9,10 @@ of the two.
 
 chan-desktop is the native desktop shell for chan. For normal local
 drives it embeds chan-server in the desktop process and serves the
-same Svelte editor on a loopback HTTP port. The `chan` CLI remains
-the compatibility path for registry mutations and feature toggles
-until those surfaces have desktop-native APIs. The desktop app
-exists so that:
+same Svelte editor on a loopback HTTP port. It links `chan-drive` and
+`chan-server` directly and ships no `chan` binary; registry mutations
+and feature toggles run in-process against the embedded `chan-drive`
+`Library`. The desktop app exists so that:
 
 - a non-CLI user can install one signed bundle and open a folder
   through a familiar OS dialog instead of a terminal,
@@ -26,9 +26,9 @@ Non-goals:
 - chan-desktop is not a second editor. The editor is the web app
   served by chan-server. The desktop window manages drives and opens
   the editor in a Tauri webview.
-- chan-desktop is not a packaging tool for `chan`. It bundles a
-  pinned `chan` binary and treats it as an internal dependency, not
-  a user-facing CLI install path.
+- chan-desktop is not a `chan` CLI installer. It links `chan-drive`
+  and `chan-server` directly rather than shipping a `chan` binary, so
+  installing the desktop does not put `chan` on your `$PATH`.
 - chan-desktop is not a general web browser. Drive windows are
   dedicated Tauri webviews pointed at local or attached chan URLs.
 
@@ -146,8 +146,8 @@ The "Open drive" button still registers a user-chosen folder.
 1. Tauri opens a native folder picker.
 2. The selected path is canonicalised and validated (see
    section 4).
-3. chan-desktop runs `chan add <path>`. On non-zero exit, the stderr
-   is surfaced as an inline error banner.
+3. chan-desktop registers the path through `chan-drive` in-process.
+   On failure the error is surfaced as an inline banner.
 4. On success the desktop immediately starts the local runtime for
    the new drive (see section 3.3). The registry watcher fires, the
    UI re-fetches, the new row appears with **On = on**, and the URL
@@ -189,9 +189,9 @@ local runtime.
 
 ### 3.5 Close drive (remove)
 
-Stops the serve (if running), then runs `chan remove <path>`. The
-filesystem is untouched. The watcher fires and the row disappears
-from the UI.
+Stops the serve (if running), then unregisters the drive through
+`chan-drive` in-process. The filesystem is untouched. The watcher
+fires and the row disappears from the UI.
 
 "Close" deliberately leaves the user's markdown folder alone. There
 is no "delete drive" action in the desktop UI.
@@ -256,115 +256,94 @@ app accepts is also accepted by every other chan surface.
 - **Relative path arguments inside a drive** (used later, not by the
   current UI) reuse `chan_drive::fs_ops::validate_rel`.
 
-Desktop now links chan-drive and chan-server for embedded local
-serving. Registry mutations and feature flips still go through the
-`chan` CLI until their desktop-native replacements land.
+Desktop links chan-drive and chan-server for embedded local serving.
+Registry mutations and feature flips run in-process against the same
+embedded `chan-drive` `Library`, not through a separate `chan` CLI.
 
-## 5. The chan binary
+## 5. Self-contained runtime
 
-chan-desktop links `chan-drive` and `chan-server` for embedded local
-serving. It still calls out to a pinned `chan` executable for CLI
-surfaces that remain owned by the binary: registry mutations,
-feature toggles, update checks, and the hidden MCP proxy command.
+chan-desktop is self-contained. It links `chan-drive` and
+`chan-server` directly and embeds the web bundle (`web/dist`) via
+rust-embed at build time. No `chan` binary is shipped in the app
+bundle, and none is required at runtime.
 
-The release `.app` / `.exe` / Linux bundle ships a pinned `chan`
-binary inside the bundle. Runtime resolution is PATH-first only when
-the PATH binary's version matches chan-desktop exactly; otherwise it
-uses the bundled binary. This is a deliberate choice:
+Local drives open through the embedded chan-server `DriveHost`, which
+owns a single `chan_drive::Library`. Every registry mutation (add,
+remove, default-drive reconciliation) and feature toggle (semantic
+search, reports) runs in-process against that `Library`, or against
+the live `Arc<Drive>` the host already holds for a mounted drive.
+Routing through one shared registry is what keeps a freshly-added
+drive openable immediately: a subprocess `chan add` would mutate only
+the on-disk registry and leave the host's in-memory snapshot stale.
 
-- Pro: deterministic. One desktop release pairs with exactly one
-  `chan` build. The test matrix is "did this DMG work" rather than
-  "what version of `chan` does the user have".
-- Pro: signed and notarised together; macOS Gatekeeper sees one
-  bundle.
-- Con: every chan release requires a new desktop release, even if
-  the desktop UI did not change. Acceptable while both are
-  pre-1.0 and ship together.
-
-The bundled `chan` binary lives at:
-
-- macOS:   `ChanDesktop.app/Contents/Resources/bin/chan`
-- Linux:   alongside the desktop binary (`/usr/lib/chan-desktop/chan`
-           when packaged, or next to the binary in a tarball)
-- Windows: `chan.exe` in the install directory
-
-The binary is not a local serving fallback. Running `chan serve`
-directly is an explicit remote attachment from the desktop's point
-of view.
+The single codesigned and notarised artifact is the chan-desktop
+`.app` itself; there is no second binary to sign. External
+`chan serve` processes are still supported, but as explicit remote
+attachments over a separate transport (see section 10), not as a
+local serving dependency.
 
 ## 6. Power users and the CLI tool
 
-Non-goal: chan-desktop installation should be "drag ChanDesktop.app
-to /Applications". No installer, no scripts.
+Non-goal: chan-desktop installation should be "drag Chan.app to
+/Applications". No installer, no scripts.
 
-That conflicts with power users who want `chan` on their `$PATH`. The
-current thinking, in order of preference:
+chan-desktop ships no `chan` binary, so installing it does not put
+the CLI on your `$PATH`. Power users who want `chan serve` or
+shell-first workflows install the standalone `chan` separately (the
+`chan.app/install.sh` installer or a release tarball). The desktop
+app and the standalone CLI are independent installs that share the
+same `~/.chan` registry, so a drive added by one shows up in the
+other.
 
-1. **Settings button: "Install command line tool"**. Symlinks the
-   bundled `chan` to `/usr/local/bin/chan` (or `~/.local/bin/chan`
-   if the user lacks write access). Off by default. Removable. This
-   is what Xcode does. It keeps the default install dead simple and
-   makes the CLI an explicit, reversible choice.
-2. **First-run prompt** offering the same. Probably too much for
-   regular users who do not know what a CLI is. Skip unless data
-   from real users says otherwise.
-
-Linux: distros generally expect packaging to put binaries on `$PATH`
-for them, so the dpkg / rpm bundle should `Conflicts:` / `Replaces:`
-the standalone `chan` package and install both. That keeps the test
-matrix concern from section 5 intact.
-
-Windows: add the install directory to PATH during MSI install, with
-an opt-out checkbox. Same reasoning as macOS.
+Windows: deferred with the rest of Windows desktop support (see
+section 7). When Windows desktop support returns, the installer can
+offer to add the CLI to PATH with an opt-out checkbox.
 
 ## 7. Distribution
 
-Primary channel is https://chan.app. The release flow on the maintainer's
-machine produces:
+The download entry point is https://chan.app/install, which links to
+release assets hosted on GitHub Releases. The desktop release workflow
+(`.github/workflows/release-desktop.yml`) produces:
 
-- macOS arm64: notarised DMG containing `ChanDesktop.app`. Drag to
+- macOS arm64: notarised DMG containing `Chan.app`. Drag to
   /Applications.
-- Linux amd64 / arm64: `.deb` and `.AppImage`.
-- Windows amd64 / arm64: signed MSI.
+- Linux x86_64: `.deb` and `.AppImage`.
 
-Cargo install (`cargo install chan-desktop`) is a supported but
-secondary path: it builds without the bundled `chan`, so it falls
-back to `$PATH` lookup like the prototype. This is for contributors
-and packagers, not end users. The README points end users at
-chan.app.
+Both are built in CI: the Linux artifacts on an Ubuntu runner
+(unsigned), the macOS DMG on a macOS runner where the Developer ID
+identity is imported from secrets and the bundle is signed and
+notarised.
 
-Cross-bundling from a single host is painful (webkit2gtk on Linux,
-MSVC on Windows, codesigning on macOS). The Linux and Windows
-artifacts will be built in CI; only the macOS DMG is built locally
-on the maintainer's machine where the signing identity lives.
+Windows desktop builds are deferred. The bundler config still carries
+a Windows target, but no Windows artifact is built or published yet
+and the Authenticode signing lane is not open; Windows returns as a
+distribution channel when that lane lands.
+
+Cargo install (`cargo install chan-desktop`) builds the self-contained
+desktop from source, for contributors and packagers rather than end
+users. The README points end users at chan.app.
 
 ## 8. Self-upgrade
 
-Deferred. `chan` already implements self-upgrade
-(`crates/chan/src/update.rs`): fetch
-`https://chan.app/dl/latest/VERSION`, download an archive matching
-the current target triple, verify SHA-256, atomically replace the
-running executable. chan-desktop wants the same.
+chan-desktop updates itself through `tauri-plugin-updater`. The plugin
+is wired in `src-tauri/src/main.rs` and gated by the `updater:*`
+capabilities; it can check for, download, and install a newer signed
+bundle.
 
-The plan:
+- Update bundles are verified with a minisign signature. The
+  production public key is embedded in `src-tauri/tauri.conf.json`
+  under `plugins.updater.pubkey`; the matching private key lives
+  outside the repo in the release owner's secret store.
+- The client probes the manifest endpoint
+  `https://chan.app/dl/desktop/{{target}}/{{current_version}}/latest.json`.
+  Server-side publishing of that manifest is owned by chan-prod-setup.
+- Because the desktop ships no separate `chan` binary, there is no
+  second executable to upgrade and no in-bundle update banner to
+  suppress.
 
-1. Generalise the upgrade module out of `chan` into chan-core (new
-   crate, e.g. `chan-self-update`), parameterised over the target
-   binary name and the download URL prefix. The current code is
-   already mostly generic; the chan.app URLs are the main
-   chan-specific thing.
-2. chan-desktop links that crate and uses it to upgrade itself. On
-   macOS, "atomic replace" inside a signed bundle is more involved
-   than swapping a single binary; the desktop case may need to
-   download and stage a new `.app` and prompt the user to relaunch.
-   That is the part that needs design work.
-3. Because chan is bundled with chan-desktop (section 5.2), the
-   bundled `chan` upgrades when the desktop upgrades. The bundled
-   `chan` therefore does not need its own auto-update banner.
-   Disable the banner when run from inside the bundle (env var or
-   parent-process check).
-
-This whole section becomes urgent once the first end-user DMG ships.
+Key rotation and the bridge-release procedure are documented in
+`desktop/CLAUDE.md` ("Auto-upgrade signing") and the
+[`updater-bridge.md`](updater-bridge.md) runbook.
 
 ## 9. Settings and developer controls
 
@@ -404,8 +383,8 @@ another machine or at `127.0.0.1` on the same machine.
 
 ### 10.2 Inbound tunnel attach
 
-chan-desktop embeds `chan-tunnel-server` from chan-core so a remote
-`chan serve` can register a drive over an SSH tunnel and show up in
+chan-desktop embeds the `chan-tunnel-server` workspace crate so a
+remote `chan serve` can register a drive over an SSH tunnel and show up in
 Drive Manager alongside embedded local drives. The remote drive
 opens in a regular drive webview window pointed at a loopback URL on
 the laptop; the request body rides yamux substreams back through the

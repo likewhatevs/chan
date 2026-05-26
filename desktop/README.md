@@ -13,9 +13,10 @@ embedded server or by explicit remote attachments.
 
 ## Download
 
-Notarized macOS builds (and, later, Linux and Windows builds) are
-published on https://chan.app. End users should grab the build from
-there rather than building from source.
+Notarized macOS builds and Linux builds (`.deb` and `.AppImage`) are
+published on https://chan.app. Windows builds are not published yet.
+End users should grab the build from there rather than building from
+source.
 
 ## Build and run
 
