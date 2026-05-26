@@ -98,17 +98,28 @@ describe("no inline close affordance on first-class surfaces", () => {
     expect(graph).not.toMatch(/<DriveInfoBody\s+onSetAsScope=/);
   });
 
-  test("GraphPanel passes onSetAsScope on InspectorBody only for directory selections (-a-50)", () => {
-    // The fs-mode and semantic-mode branches both used to wire
-    // `onSetAsScope` against `scopeFsGraphFromHere` / inline
-    // `graphState.scopeId = ...` blocks. `fullstack-a-33` dropped
-    // both. `fullstack-a-50` re-adds it scoped to
-    // `inspectorSelection?.kind === "directory"` → re-roots via
-    // `rescopeFromHere("dir:<path>")`. Non-directory selections
-    // still skip the prop (the breadcrumb covers them).
+  test("GraphPanel wires 'Graph from here' for file + directory selections (I4)", () => {
+    // inspector-spec.md I4 re-adds the explicit "Graph from here"
+    // action to the graph inspector for BOTH file and folder nodes
+    // (fullstack-a-33 had dropped it for files; a-50 only re-added the
+    // directory case). Re-rooting goes through `graphFromHere(path)`,
+    // which always shows the node's PARENT folder (or the drive root
+    // when the node is top-level). The semantic-mode branch binds it
+    // for file + directory selections; the fs-mode branch binds it for
+    // the selected fs path.
     expect(graph).toMatch(
-      /onSetAsScope=\{[\s\S]*?inspectorSelection\?\.kind === "directory"[\s\S]*?rescopeFromHere\(/,
+      /onSetAsScope=\{[\s\S]*?inspectorSelection\?\.kind === "file" \|\|[\s\S]*?=== "directory"[\s\S]*?graphFromHere\(inspectorSelection\.path\)/,
     );
+    expect(graph).toMatch(/onSetAsScope=\{\(\) => graphFromHere\(fsPath\)\}/);
+  });
+
+  test("graphFromHere re-roots in place to the node's parent folder (I4)", () => {
+    // The helper computes the parent dir (drive root when top-level),
+    // re-scopes the CURRENT tab (no new spawn), and pins the node.
+    expect(graph).toContain("function graphFromHere(path: string)");
+    expect(graph).toMatch(/const parent = slash > 0 \? path\.slice\(0, slash\) : ""/);
+    expect(graph).toMatch(/const scopeId = parent \? `dir:\$\{parent\}` : "drive"/);
+    expect(graph).toMatch(/graphState\.pendingSelectId = path/);
   });
 
   test("GraphPanel renders the scope-crumbs ancestor breadcrumb", () => {
