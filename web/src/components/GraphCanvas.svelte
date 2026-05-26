@@ -135,6 +135,10 @@
   /// is applied on top in `renderRadius`.
   const RADIUS_BASE = 5;
   const RADIUS_DOC = 7;
+  /// GI-4: directory nodes sit a notch above the leaf base (but below
+  /// the doc/drive hub size) so they read as clearly clickable folder
+  /// targets without dominating the graph. Slightly bigger, not much.
+  const RADIUS_DIR = 6;
   const RADIUS_HUB_SCALE = 1.4;
 
   /// Icon glyph occupies this fraction of the rendered diameter.
@@ -480,7 +484,12 @@
     // Drive root is the structural anchor of the whole graph — size
     // it like the doc nodes so it reads as a primary hub instead of
     // a leaf directory.
-    const base = kind === "doc" || kind === "drive" ? RADIUS_DOC : RADIUS_BASE;
+    const base =
+      kind === "doc" || kind === "drive"
+        ? RADIUS_DOC
+        : kind === "folder"
+          ? RADIUS_DIR
+          : RADIUS_BASE;
     if (maxBacklinks <= 0) return base;
     const bl = backlinks.get(id) ?? 0;
     // Linear ramp from base to base*RADIUS_HUB_SCALE across the
