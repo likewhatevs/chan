@@ -537,6 +537,9 @@
   <div class="overlay" onclick={cancel}>
     <div class="modal" onclick={(e) => e.stopPropagation()} role="dialog" tabindex="-1">
       <div class="title">{pathPromptState.title}</div>
+      {#if pathPromptState.notice}
+        <div class="notice">{pathPromptState.notice}</div>
+      {/if}
       <input
         bind:this={inputEl}
         bind:value
@@ -647,6 +650,15 @@
   .title {
     font-size: 15px;
     color: var(--text-secondary);
+  }
+  /* Informational line above the input (e.g. the save-from-draft
+     "the whole draft directory is saved as a directory" notice). It
+     is non-blocking context, so it reads as a muted info hue rather
+     than the red error / amber warn the status row uses. */
+  .notice {
+    font-size: 12px;
+    line-height: 1.4;
+    color: var(--info-text, var(--text-secondary));
   }
   input {
     background: var(--bg);

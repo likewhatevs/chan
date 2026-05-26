@@ -43,6 +43,25 @@ describe("fullstack-b-3: PathPromptModal attach mode", () => {
   });
 });
 
+describe("new-file-and-draft-spec item 3: PathPromptModal notice line", () => {
+  // The save-from-draft flow passes a `notice` to explain that the
+  // whole draft directory is being saved as a directory (the Dir-only
+  // `folder` mode). The modal renders it above the input as a
+  // non-blocking info line (never gates submit). These checks pin the
+  // render branch + the muted-info styling so a refactor that drops
+  // the notice trips the test.
+  test("modal renders the notice above the input when present", () => {
+    expect(modal).toMatch(/\{#if pathPromptState\.notice\}/);
+    expect(modal).toMatch(/<div class="notice">\{pathPromptState\.notice\}<\/div>/);
+  });
+
+  test("notice uses the muted info hue, not the error/warn colours", () => {
+    // The status row owns err (red) / warn (amber); the notice is
+    // context, so it reads as info-muted.
+    expect(modal).toMatch(/\.notice \{[\s\S]{0,120}var\(--info-text/);
+  });
+});
+
 describe("Phase 9: TerminalRichPrompt removed the manual watcher dialog", () => {
   test("Rich Prompt no longer opens PathPromptModal for watcher attach", () => {
     expect(terminalRichPrompt).not.toMatch(/function watchDirectory/);

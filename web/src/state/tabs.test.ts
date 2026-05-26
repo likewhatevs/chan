@@ -3,6 +3,7 @@
 import { afterEach, describe, expect, test, vi } from "vitest";
 import { api } from "../api/client";
 import { confirmState, resolveConfirm } from "./confirm.svelte";
+import { pathPromptState, resolvePathPrompt } from "./store.svelte";
 import { editorToolsPrefs } from "./editorTools.svelte";
 import {
   activePane,
@@ -306,10 +307,15 @@ describe("tab close confirmation", () => {
       writable: true,
     });
 
+    // `new-file-and-draft-spec.md` item 3: a lone draft.md routes
+    // through the SAME PathPromptModal as New File, in file mode
+    // (kind "file"), defaulting to `<name>.md`.
     const save = saveDraftTabToDrive(tab);
-    await vi.waitFor(() => expect(draftCloseState.open).toBe(true));
-    expect(draftCloseState.intent).toBe("save");
-    resolveDraftClose("save");
+    await vi.waitFor(() => expect(pathPromptState.open).toBe(true));
+    expect(pathPromptState.kind).toBe("file");
+    expect(pathPromptState.defaultValue).toBe("untitled-1.md");
+    expect(pathPromptState.notice).toBeNull();
+    resolvePathPrompt("untitled-1.md");
     await save;
 
     expect(promote).toHaveBeenCalledWith(
@@ -324,7 +330,7 @@ describe("tab close confirmation", () => {
     expect(live.saved).toBe("# promoted\n");
   });
 
-  test("explicit draft workspace save reopens the promoted draft file", async () => {
+  test("explicit draft workspace save uses the dir-only prompt + notice", async () => {
     const tab = fileTab({
       id: "draft-tab",
       path: "Drafts/untitled-1/draft.md",
@@ -341,7 +347,7 @@ describe("tab close confirmation", () => {
       total_size: 12,
       has_attachments: true,
     });
-    vi.spyOn(api, "promoteDraft").mockResolvedValue({
+    const promote = vi.spyOn(api, "promoteDraft").mockResolvedValue({
       path: "notes/final",
       name: "final",
       mode: "directory_created",
@@ -354,12 +360,21 @@ describe("tab close confirmation", () => {
       writable: true,
     });
 
+    // A draft with attachments routes through PathPromptModal's
+    // Dir-only (folder) mode, defaulting to `<name>/`, and carries the
+    // notice telling the user the whole directory is saved as a dir.
     const save = saveDraftTabToDrive(tab);
-    await vi.waitFor(() => expect(draftCloseState.open).toBe(true));
-    expect(draftCloseState.target).toBe("untitled-1");
-    resolveDraftClose("save");
+    await vi.waitFor(() => expect(pathPromptState.open).toBe(true));
+    expect(pathPromptState.kind).toBe("folder");
+    expect(pathPromptState.defaultValue).toBe("untitled-1/");
+    expect(pathPromptState.notice).toContain("whole draft directory");
+    resolvePathPrompt("notes/final/");
     await save;
 
+    expect(promote).toHaveBeenCalledWith(
+      "Drafts/untitled-1/draft.md",
+      "notes/final/",
+    );
     expect(read.mock.calls[0][0]).toBe("notes/final/draft.md");
     const live = activePane().tabs[0];
     if (live?.kind !== "file") throw new Error("expected file tab");
