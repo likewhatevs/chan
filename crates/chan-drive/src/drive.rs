@@ -1073,6 +1073,38 @@ impl Drive {
         }
     }
 
+    /// Filtered counterpart of `list_tree_unified`. Applies the
+    /// per-drive `WalkFilter` so blocklisted dirs (`node_modules/`,
+    /// `target/`, `venv/`, ...) are excluded, matching the index and
+    /// the File Browser spine. The graph layer uses this so the
+    /// semantic graph does not surface dependency trees as nodes. The
+    /// raw `list_tree_unified` stays unfiltered for the editor's
+    /// on-demand open-inside-a-noisy-dir path.
+    pub fn list_tree_filtered_unified(&self) -> Result<Vec<TreeEntry>> {
+        let mut entries = fs_ops::list_tree_filtered(self.root(), &self.walk_filter)?;
+        entries.extend(self.list_tree_drafts_prefix(drafts::UNIFIED_DRAFTS_ROOT)?);
+        if entries.len() > fs_ops::LIST_TREE_LIMIT {
+            return Err(ChanError::ListingTooLarge {
+                observed: entries.len(),
+                limit: fs_ops::LIST_TREE_LIMIT,
+            });
+        }
+        Ok(entries)
+    }
+
+    /// Filtered counterpart of `list_tree_prefix_unified`. Drafts
+    /// prefixes are unaffected (chan metadata, no blocklist); every
+    /// other prefix prunes the per-drive `WalkFilter` dirs.
+    pub fn list_tree_prefix_filtered_unified(&self, prefix: &str) -> Result<Vec<TreeEntry>> {
+        let trimmed = prefix.trim_matches('/');
+        if drafts::is_unified_drafts_path(trimmed) {
+            self.list_tree_drafts_prefix(trimmed)
+        } else {
+            let resolved = fs_ops::resolve_safe_strict(self.root(), trimmed)?;
+            fs_ops::list_tree_prefix_filtered(self.root(), &resolved, &self.walk_filter)
+        }
+    }
+
     fn list_tree_drafts_prefix(&self, prefix: &str) -> Result<Vec<TreeEntry>> {
         let Some(sub) = drafts::strip_unified_prefix(prefix) else {
             return Ok(Vec::new());
@@ -1223,7 +1255,10 @@ impl Drive {
             };
         }
         let mut out = Vec::new();
-        for entry in fs_ops::walk_drive(abs) {
+        // Filtered so we don't waste time collecting paths under
+        // `node_modules/` etc. that were never indexed in the first
+        // place; symmetric with the filtered index/graph build.
+        for entry in fs_ops::walk_drive_filtered(abs, &self.walk_filter) {
             if !entry.file_type().is_file() {
                 continue;
             }
@@ -1317,7 +1352,10 @@ impl Drive {
             }
             return;
         }
-        for entry in fs_ops::walk_drive(&abs) {
+        // Filtered so restoring a directory that happens to contain a
+        // `node_modules/` / `target/` subtree does not re-index a
+        // dependency tree the index deliberately excludes.
+        for entry in fs_ops::walk_drive_filtered(&abs, &self.walk_filter) {
             if !entry.file_type().is_file() {
                 continue;
             }
@@ -3131,7 +3169,11 @@ impl Drive {
         // yields the table to editing + the terminal when fds are
         // tight. Cheap and best-effort: clear headroom returns at once.
         crate::fd_budget::pace_reindex_worker(None);
-        let state = ReportState::open(self.root(), &self.paths.report)?;
+        let state = ReportState::open(
+            self.root(),
+            &self.paths.report,
+            &self.walk_filter.excluded_dir_names,
+        )?;
         // OnceLock::set is racy with a concurrent caller; the
         // loser drops its state cleanly, which terminates its
         // writer thread via Drop. The winner's state stays.
