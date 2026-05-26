@@ -5,8 +5,8 @@ as an orchestration host: a single-machine surface where
 agents (claude, codex, gemini, custom) can be spawned into
 named terminal tabs, exchange typed events with each
 other and with the user through an fsnotify-driven
-watcher, and reach chan's MCP server without manual
-configuration.
+watcher, and reach chan's MCP server through `CHAN_MCP_*`
+terminal environment variables.
 
 This SKILL documents the contracts external authors need
 to integrate with that surface.
@@ -17,8 +17,8 @@ to integrate with that surface.
   routed through chan" → [atomic-writes.md](./atomic-writes.md).
 * "I want chan to spawn an agent CLI for me" →
   [spawn-protocol.md](./spawn-protocol.md).
-* "I want claude / codex / gemini to discover chan's MCP
-  server automatically" → [mcp-discovery.md](./mcp-discovery.md).
+* "I want claude / codex / gemini launched in a chan terminal
+  to use chan's MCP server" -> [mcp-discovery.md](./mcp-discovery.md).
 
 ## What chan provides
 

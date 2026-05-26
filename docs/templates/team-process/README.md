@@ -54,7 +54,7 @@ docs that every agent in a team reads:
 * `orchestration/README.md.tpl` — subdir index.
 * `orchestration/atomic-writes.md.tpl` — atomic-write
   discipline; 1 handle substitution.
-* `orchestration/mcp-discovery.md.tpl` — MCP discovery flow;
+* `orchestration/mcp-discovery.md.tpl` - MCP terminal env flow;
   no handle substitutions.
 * `orchestration/spawn-protocol.md.tpl` — spawn-agent IPC
   contract; 2 handle substitutions. Remaining `@@<Name>`
