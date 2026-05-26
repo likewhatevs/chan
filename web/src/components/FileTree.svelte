@@ -50,6 +50,10 @@
     clearTreeLoadingForPath,
     drive,
     fbClearSelection,
+    fbClipboard,
+    fbClipboardClear,
+    fbClipboardPaste,
+    fbClipboardSet,
     fbSelectRange,
     fbSelectSet,
     fbSelectSingle,
@@ -142,7 +146,21 @@
   function onFileDragStart(e: DragEvent, path: string, isDir: boolean): void {
     if (!e.dataTransfer) return;
     e.dataTransfer.effectAllowed = "move";
-    const payload = JSON.stringify({ path, isDir });
+    // Multi-drag (FB3): if the grabbed row is part of the current
+    // multi-selection, drag the WHOLE selection; otherwise the drag
+    // implicitly selects just this row (desktop behavior - grabbing an
+    // unselected row drops the old selection).
+    let dragPaths: string[];
+    if (browserSelection.paths.includes(path) && browserSelection.paths.length > 1) {
+      dragPaths = [...browserSelection.paths];
+    } else {
+      fbSelectSingle(path);
+      dragPaths = [path];
+    }
+    // Carry the full set; the single-entry {path,isDir} stays for the
+    // editor-pane drop target (one file opens; a multi-drag into a pane
+    // still resolves the primary file).
+    const payload = JSON.stringify({ path, isDir, paths: dragPaths });
     e.dataTransfer.setData(TREE_MOVE_MIME, payload);
     if (!isDir) {
       // Files are also droppable into editor panes (open in tab).
@@ -153,16 +171,54 @@
     // friendly to internal drop targets and pasting the path into a
     // code editor. It does not trigger an OS file download.
     e.dataTransfer.setData("text/plain", path);
+    // Drag image: when moving many, show the count so the user knows
+    // the whole selection travels. Built off-screen and revoked next tick.
+    if (dragPaths.length > 1) setMultiDragImage(e, dragPaths.length);
   }
 
-  /// Resolve the move source from a DragEvent. Returns null if the
-  /// drag did not originate in the tree (e.g. external file drop).
-  function readTreeDrag(e: DragEvent): { path: string; isDir: boolean } | null {
+  /// Build a small "N items" drag image so a multi-drag reads as the
+  /// whole selection moving, not just the grabbed row.
+  function setMultiDragImage(e: DragEvent, count: number): void {
+    const ghost = document.createElement("div");
+    ghost.textContent = `${count} items`;
+    // Inline styles: the ghost lives on document.body, outside this
+    // component's scoped CSS, so a scoped class would not apply.
+    ghost.style.cssText = [
+      "position:absolute",
+      "top:-1000px",
+      "left:-1000px",
+      "padding:2px 8px",
+      "font-size:13px",
+      "border-radius:4px",
+      "background:var(--accent, #3b82f6)",
+      "color:#fff",
+      "pointer-events:none",
+    ].join(";");
+    document.body.append(ghost);
+    e.dataTransfer?.setDragImage(ghost, 10, 10);
+    requestAnimationFrame(() => ghost.remove());
+  }
+
+  /// Resolve the move source(s) from a DragEvent. Returns null if the
+  /// drag did not originate in the tree (e.g. external file drop). The
+  /// `paths` array carries the full multi-selection (FB3); it falls back
+  /// to the single `path` for a drag started before the multi-drag
+  /// payload existed.
+  function readTreeDrag(
+    e: DragEvent,
+  ): { path: string; isDir: boolean; paths: string[] } | null {
     const raw = e.dataTransfer?.getData(TREE_MOVE_MIME);
     if (!raw) return null;
     try {
-      const v = JSON.parse(raw) as { path: string; isDir: boolean };
-      if (typeof v.path === "string") return v;
+      const v = JSON.parse(raw) as {
+        path: string;
+        isDir: boolean;
+        paths?: string[];
+      };
+      if (typeof v.path === "string") {
+        const paths = Array.isArray(v.paths) && v.paths.length > 0 ? v.paths : [v.path];
+        return { path: v.path, isDir: v.isDir, paths };
+      }
     } catch {
       // fall through
     }
@@ -223,9 +279,38 @@
     if (!src) return;
     e.preventDefault();
     e.stopPropagation();
-    if (isInvalidDrop(src, destDir)) return;
-    const target = dropTargetPath(src.path, destDir);
-    await fileOps.moveTo(src.path, target);
+    // Multi-drag (FB3): move every dragged entry that is a valid drop
+    // into destDir. A directory cannot drop into itself or a descendant;
+    // an entry already in destDir is a no-op the server skips. We map
+    // each path to its isDir via the visible rows for the self/descendant
+    // guard (the payload only carries the grabbed row's isDir bit).
+    const candidates = src.paths.filter((p) => {
+      const isDir = p === src.path ? src.isDir : isDirPath(p);
+      return !isInvalidDrop({ path: p, isDir }, destDir);
+    });
+    if (candidates.length === 0) return;
+    if (candidates.length === 1) {
+      // Single move keeps the link-rewrite move path with its richer
+      // outcome (fileOps.moveTo notifies on conflicts).
+      const target = dropTargetPath(candidates[0], destDir);
+      await fileOps.moveTo(candidates[0], target);
+      return;
+    }
+    // Many: one atomic multi-entry move through the transfer route.
+    try {
+      const resp = await api.fsTransfer("move", candidates, destDir);
+      if (resp.moved.length > 0) fbSelectSet(resp.moved.map((m) => m.to));
+    } catch (err) {
+      notify(`move failed: ${(err as Error).message}`);
+    }
+  }
+
+  /// Best-effort isDir lookup for a path from the visible rows (used by
+  /// the multi-drop self/descendant guard). Unknown paths (not currently
+  /// rendered) are treated as files, which is safe: the server still
+  /// sandboxes and the self/descendant guard is the only consumer.
+  function isDirPath(path: string): boolean {
+    return visibleRows.find((r) => r.path === path)?.isDir ?? false;
   }
 
   type Folder = {
@@ -267,6 +352,14 @@
   /// .path`) additionally gets `.active-cursor` so it reads as the
   /// keyboard/inspector focus within a multi-select.
   const selectedSet = $derived(new Set(browserSelection.paths));
+
+  /// Rows marked for a pending CUT render dimmed ("marked for move")
+  /// until the paste lands or the clipboard is replaced. Copy is not
+  /// dimmed (the source stays put). Empty when the clipboard is empty
+  /// or holds a copy.
+  const cutSet = $derived(
+    fbClipboard.mode === "cut" ? new Set(fbClipboard.paths) : new Set<string>(),
+  );
 
   /// Paths of contact-kind files (those with `chan.kind: contact`
   /// frontmatter). The server sets the discriminator on the listing
@@ -757,8 +850,29 @@
       return;
     }
 
-    // Clipboard chords (cmd/ctrl+C/X/V) are handled in FB2; let them
-    // fall through to the document-level handler for now.
+    // Clipboard chords (cmd/ctrl+C copy, +X cut, +V paste), scoped to
+    // this focused tree. Caught before the generic modifier early-return.
+    if ((e.metaKey || e.ctrlKey) && !e.altKey) {
+      const k = e.key.toLowerCase();
+      if (k === "c" || k === "x") {
+        if (browserSelection.paths.length > 0) {
+          e.preventDefault();
+          fbClipboardSet(k === "c" ? "copy" : "cut", browserSelection.paths);
+        }
+        return;
+      }
+      if (k === "v") {
+        e.preventDefault();
+        void pasteIntoTarget();
+        return;
+      }
+    }
+    // Escape clears a pending cut/copy marker.
+    if (e.key === "Escape" && fbClipboard.mode) {
+      e.preventDefault();
+      fbClipboardClear();
+      return;
+    }
 
     // Shift+Arrow extends the selection range from the anchor. Plain
     // arrows are a single-select move (reset set + anchor). Other
@@ -848,6 +962,37 @@
         void remove(curRow.path, curRow.isDir);
         break;
       }
+    }
+  }
+
+  /// Resolve the directory a paste should land in: the active selection
+  /// if it is a directory; otherwise the parent directory of the active
+  /// selection; otherwise the drive root. Mirrors how a desktop file
+  /// browser pastes "into the current folder".
+  function pasteTargetDir(): string {
+    const cur = browserSelection.path;
+    if (!cur) return "";
+    const row = visibleRows.find((r) => r.path === cur);
+    if (row?.isDir) return cur;
+    return parentOf(cur);
+  }
+
+  /// Paste the clipboard into the resolved target dir, then select the
+  /// landed entries so the user sees the result (and a cut's dimming
+  /// clears as the clipboard empties).
+  async function pasteIntoTarget(): Promise<void> {
+    if (!fbClipboard.mode) return;
+    const dest = pasteTargetDir();
+    const landed = await fbClipboardPaste(dest);
+    if (landed.length > 0) {
+      // Make sure the destination dir is expanded so the new entries
+      // are visible, then select them.
+      if (dest) {
+        const map = treeExpanded.map;
+        map[dest] = true;
+        persistTreeExpanded();
+      }
+      fbSelectSet(landed);
     }
   }
 
@@ -1137,6 +1282,7 @@
         class={`row dir ${rowMatchClass(node.path)}`}
         class:selected={selectedSet.has(node.path)}
         class:active-cursor={browserSelection.path === node.path}
+        class:cut={cutSet.has(node.path)}
         class:zebra={rowIndex % 2 === 1}
         class:drop-target={dropTarget === node.path}
         style={rightDock
@@ -1246,6 +1392,7 @@
         class={`row file ${rowMatchClass(node.path)}`}
         class:selected={selectedSet.has(node.path)}
         class:active-cursor={browserSelection.path === node.path}
+        class:cut={cutSet.has(node.path)}
         class:non-editable={!editable}
         class:contact
         class:zebra={rowIndex % 2 === 1}
@@ -1578,6 +1725,10 @@
   .tree:focus-visible .row.active-cursor {
     box-shadow: inset 2px 0 0 var(--accent);
   }
+  /* A row marked for a pending CUT: dimmed + italic, the standard
+     "this will move away on paste" affordance. Copy is not dimmed. */
+  .row.cut { opacity: 0.5; }
+  .row.cut .name { font-style: italic; }
   /* Same look as the tab-strip dirty indicator so the two views agree. */
   .dirty-dot {
     font-size: 16px;

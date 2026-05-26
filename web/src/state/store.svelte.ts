@@ -2415,6 +2415,55 @@ export function fbClearSelection(): void {
   browserSelection.anchor = null;
 }
 
+/// File Browser clipboard (FB2). Module-level (NOT per-instance) so a
+/// copy/cut in one File Browser can be pasted into another - the spec
+/// explicitly allows cross-instance paste on the same drive. `mode`
+/// distinguishes copy (duplicate) from cut (move on paste). `paths` is
+/// the snapshot of the selection at copy/cut time, so a later selection
+/// change does not retarget a pending paste. A cut's source rows render
+/// dimmed (\"marked for move\") until the paste lands or the clipboard is
+/// replaced.
+export const fbClipboard = $state<{
+  mode: "copy" | "cut" | null;
+  paths: string[];
+}>({ mode: null, paths: [] });
+
+/// Capture the current multi-selection into the clipboard as a copy or
+/// a cut. A no-op when nothing is selected.
+export function fbClipboardSet(mode: "copy" | "cut", paths: string[]): void {
+  if (paths.length === 0) return;
+  fbClipboard.mode = mode;
+  fbClipboard.paths = [...paths];
+}
+
+/// Clear the clipboard (after a successful cut+paste, or on Escape).
+export function fbClipboardClear(): void {
+  fbClipboard.mode = null;
+  fbClipboard.paths = [];
+}
+
+/// Paste the clipboard into `destDir` (drive-rooted POSIX, "" = root).
+/// copy duplicates; cut moves (and clears the clipboard on success so a
+/// second paste does not move-from-a-now-empty source). Routes through
+/// POST /api/fs/transfer, which resolves name collisions to a " copy"
+/// suffix and emits watcher events so every FB instance + the Graph
+/// refresh. Returns the destination paths the entries landed at.
+export async function fbClipboardPaste(destDir: string): Promise<string[]> {
+  const mode = fbClipboard.mode;
+  const sources = [...fbClipboard.paths];
+  if (!mode || sources.length === 0) return [];
+  const op = mode === "cut" ? "move" : "copy";
+  try {
+    const resp = await api.fsTransfer(op, sources, destDir);
+    // A cut is a one-shot move: clear so the source can't be re-moved.
+    if (mode === "cut") fbClipboardClear();
+    return resp.moved.map((m) => m.to);
+  } catch (err) {
+    ui.status = `paste failed: ${(err as Error).message}`;
+    return [];
+  }
+}
+
 let widthsPersistTimer: ReturnType<typeof setTimeout> | null = null;
 let widthsPersistInflight: Promise<void> = Promise.resolve();
 const PANE_WIDTHS_DEBOUNCE_MS = 200;
