@@ -536,10 +536,21 @@ fn is_image_path(rel: &str) -> bool {
 ///
 /// Resolution order, first hit wins:
 ///   1. Decoded target as drive-relative (with `.md` / `.txt` /
-///      exact tries), matching wiki-style link semantics.
+///      exact tries), matching wiki-style link semantics: chan-drive
+///      normalizes a bare `[[a/b]]` as drive-rooted.
 ///   2. Decoded target joined to the source file's parent directory
 ///      (handles `./peer.md`, `../sibling/note.md`, and bare leaves
 ///      authored relative to the source).
+///   3. Decoded target joined to each higher ANCESTOR directory of the
+///      source, walking up toward the drive root. This rescues drive-
+///      rooted wiki-links authored with a partial prefix: chan-drive
+///      stores bare `[[phase-2/frontend-3.md]]` as the drive-rooted
+///      `phase-2/frontend-3.md`, but when the drive root is a repo root
+///      the real file lives at `docs/journals/phase-2/frontend-3.md`.
+///      Joining the prefix to the ancestor base `docs/journals` lands
+///      on the real file instead of a false "does not exist" ghost
+///      (GI-3). Tried after the drive-root + immediate-parent bases so
+///      it only acts as a fallback and a sibling/root match still wins.
 ///
 /// On miss, returns the percent-decoded target so the ghost node
 /// gets a clean label ("my note") instead of "my%20note".
@@ -550,15 +561,22 @@ fn resolve_link_dst(src: &str, target: &str, files: &std::collections::BTreeSet<
     let decoded = percent_decode_str(target).decode_utf8_lossy().into_owned();
     let stripped = decoded.trim_start_matches('/');
 
+    // 1. Drive-root-relative first (the wiki-rooted + absolute-`/path`
+    //    convention). 2. The source's immediate parent. 3. Then each
+    //    higher ancestor toward the drive root, so a partial-prefix
+    //    wiki-link still lands on its real file. Most-specific bases
+    //    (root, then parent) take priority over the ancestor fallback.
     let mut candidates: Vec<String> = vec![stripped.to_string()];
-    if let Some(parent) = Path::new(src).parent() {
-        if !parent.as_os_str().is_empty() {
-            let joined = parent.join(stripped);
-            if let Some(norm) = normalize_drive_rel(&joined) {
+    let mut base = Path::new(src).parent();
+    while let Some(dir) = base {
+        if !dir.as_os_str().is_empty() {
+            if let Some(norm) = normalize_drive_rel(&dir.join(stripped)) {
                 candidates.push(norm);
             }
         }
+        base = dir.parent();
     }
+
     for cand in &candidates {
         for try_path in [cand.clone(), format!("{cand}.md"), format!("{cand}.txt")] {
             if files.contains(try_path.as_str()) {
@@ -2719,6 +2737,44 @@ mod tests {
             resolve_link_dst("recipes/intro.md", "pasta", &files),
             "pasta.md",
         );
+    }
+
+    #[test]
+    fn resolve_link_dst_partial_prefix_wikilink_lands_on_ancestor_file() {
+        // GI-3: a drive-rooted wiki-link `[[phase-2/frontend-3.md]]`
+        // authored in a doc deep under the drive (repo root drive) is
+        // stored verbatim as `phase-2/frontend-3.md`. The real file is
+        // `docs/journals/phase-2/frontend-3.md`. Neither the drive-root
+        // candidate (`phase-2/frontend-3.md`) nor the immediate-parent
+        // join (`docs/journals/phase-2/phase-2/frontend-3.md`) exists;
+        // the ancestor base `docs/journals` rescues it. Without the
+        // ancestor walk this rendered a false "file does not exist"
+        // ghost even though the file is right there.
+        let files: std::collections::BTreeSet<&str> = [
+            "docs/journals/phase-2/frontend-3.md",
+            "docs/journals/phase-2/journal.md",
+        ]
+        .into_iter()
+        .collect();
+        assert_eq!(
+            resolve_link_dst(
+                "docs/journals/phase-2/journal.md",
+                "phase-2/frontend-3.md",
+                &files,
+            ),
+            "docs/journals/phase-2/frontend-3.md",
+        );
+    }
+
+    #[test]
+    fn resolve_link_dst_ancestor_fallback_does_not_beat_drive_root() {
+        // The ancestor fallback must not shadow a genuine drive-root
+        // match: when both the drive-root file and an ancestor-relative
+        // file exist, drive-root still wins (preserves the wiki-rooted
+        // convention asserted by resolve_link_dst_drive_relative_match_wins).
+        let files: std::collections::BTreeSet<&str> =
+            ["x/y.md", "a/b/x/y.md", "a/b/c.md"].into_iter().collect();
+        assert_eq!(resolve_link_dst("a/b/c.md", "x/y.md", &files), "x/y.md",);
     }
 
     #[test]
