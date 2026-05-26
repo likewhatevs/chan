@@ -14,7 +14,6 @@ permissions = [
   "allow-reveal-in-finder",
   "allow-reload-window",
   "allow-open-devtools",
-  "allow-start-file-browser-drag-out",
   "allow-zoom-in",
   "allow-zoom-out",
   "allow-zoom-reset",
@@ -42,7 +41,6 @@ description = "Allows per-drive windows to call their app commands."
 permissions = [
   "allow-reload-window",
   "allow-open-devtools",
-  "allow-start-file-browser-drag-out",
   "allow-zoom-in",
   "allow-zoom-out",
   "allow-zoom-reset",
@@ -107,11 +105,6 @@ commands.allow = ["reload_window"]
 identifier = "allow-open-devtools"
 description = "Enables the open_devtools command."
 commands.allow = ["open_devtools"]
-
-[[permission]]
-identifier = "allow-start-file-browser-drag-out"
-description = "Enables the start_file_browser_drag_out command."
-commands.allow = ["start_file_browser_drag_out"]
 
 [[permission]]
 identifier = "allow-zoom-in"

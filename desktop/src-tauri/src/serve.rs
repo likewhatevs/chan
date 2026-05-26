@@ -659,15 +659,6 @@ mod tests {
     }
 
     #[test]
-    fn invoke_handler_registers_file_browser_drag_out_ipc() {
-        const MAIN_RS: &str = include_str!("main.rs");
-        const DRAG_OUT_RS: &str = include_str!("drag_out.rs");
-        assert!(MAIN_RS.contains("mod drag_out;"));
-        assert!(MAIN_RS.contains("drag_out::start_file_browser_drag_out,"));
-        assert!(DRAG_OUT_RS.contains("pub async fn start_file_browser_drag_out("));
-    }
-
-    #[test]
     fn key_bridge_wires_zoom_chords_to_ipc() {
         // `fullstack-b-19`: Cmd+= / Cmd+- / Cmd+0 (and their
         // Numpad variants) route directly to the chan-desktop
@@ -1131,21 +1122,6 @@ mod tests {
             .collect()
     }
 
-    fn app_permission_allows(id: &str) -> Vec<String> {
-        let v: toml::Value = toml::from_str(APP_PERMISSIONS_TOML).expect("app permissions parse");
-        v["permission"]
-            .as_array()
-            .expect("permissions is an array")
-            .iter()
-            .find(|permission| permission["identifier"].as_str() == Some(id))
-            .unwrap_or_else(|| panic!("missing app permission {id}"))["commands"]["allow"]
-            .as_array()
-            .expect("allowed commands is an array")
-            .iter()
-            .map(|cmd| cmd.as_str().expect("command is a string").to_string())
-            .collect()
-    }
-
     #[test]
     fn drive_capability_grants_opener_to_drive_tunnel_and_outbound_windows() {
         let windows = capability_windows(DRIVE_CAPABILITY_JSON);
@@ -1176,8 +1152,8 @@ mod tests {
     fn drive_capability_covers_loopback_server_urls() {
         // Drive windows load chan-server through loopback HTTP
         // origins. Without a remote URL match, Tauri omits the IPC
-        // bridge and drive-window app commands such as native
-        // File Browser drag-out never reach Rust.
+        // bridge and drive-window app commands such as reload_window
+        // or the zoom chords never reach Rust.
         let remote_urls = capability_remote_urls(DRIVE_CAPABILITY_JSON);
         assert!(
             remote_urls.iter().any(|u| u == "http://127.0.0.1:*"),
@@ -1195,7 +1171,6 @@ mod tests {
         for expected in [
             "allow-reload-window",
             "allow-open-devtools",
-            "allow-start-file-browser-drag-out",
             "allow-zoom-in",
             "allow-zoom-out",
             "allow-zoom-reset",
@@ -1205,10 +1180,6 @@ mod tests {
                 "drive-window app permission set must include {expected}: {drive_set:?}",
             );
         }
-        assert_eq!(
-            app_permission_allows("allow-start-file-browser-drag-out"),
-            vec!["start_file_browser_drag_out".to_string()],
-        );
     }
 
     #[test]

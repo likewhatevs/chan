@@ -5,35 +5,39 @@ import fileInfo from "./FileInfoBody.svelte?raw";
 import dirInfo from "./DirectoryInfoBody.svelte?raw";
 import store from "../state/store.svelte.ts?raw";
 
-describe("FileTree browser drag-out", () => {
-  test("api exposes token-bearing download URLs", () => {
+// Bug 2 / round-1: File Browser native drag IN and OUT is removed. The
+// macOS native drag-out crashed; the user now exports via the Download
+// button and imports via the Upload button. These tests assert the
+// drag-out payloads + the native Tauri command are GONE, while the
+// app-internal tree-move drag and the Download/Upload buttons stay.
+describe("FileTree browser drag-out removed", () => {
+  test("api still exposes token-bearing download URLs (for the Download button)", () => {
     expect(client).toMatch(/downloadUrl: \(path: string\) =>/);
     expect(client).toMatch(
       /withTokenQuery\(`\/api\/files\/\$\{encPath\(path\)\}\?download=1`\)/,
     );
   });
 
-  test("file and directory drags carry DownloadURL and uri-list payloads", () => {
-    expect(fileTree).toMatch(/e\.dataTransfer\.setData\(\s*"DownloadURL"/);
-    expect(fileTree).toMatch(/api\.downloadUrl\(path\)/);
-    expect(fileTree).toMatch(/e\.dataTransfer\.setData\("text\/uri-list", url\)/);
+  test("file drags no longer carry DownloadURL / uri-list drag-out payloads", () => {
+    expect(fileTree).not.toMatch(/setData\(\s*"DownloadURL"/);
+    expect(fileTree).not.toMatch(/setData\("text\/uri-list"/);
+    // The drag-out helpers are gone entirely.
+    expect(fileTree).not.toContain("setDownloadDragData");
+    expect(fileTree).not.toContain("function downloadMime");
+    expect(fileTree).not.toContain("absoluteDownloadUrl");
   });
 
-  test("directory drags download archives while keeping tree move payload", () => {
-    expect(fileTree).toMatch(/if \(isDir\) return "application\/x-tar"/);
-    expect(fileTree).toMatch(/e\.dataTransfer\.effectAllowed = "copyMove"/);
+  test("dragstart keeps the app-internal tree-move + editor-open payloads only", () => {
+    expect(fileTree).toMatch(/e\.dataTransfer\.effectAllowed = "move"/);
     expect(fileTree).toMatch(/e\.dataTransfer\.setData\(TREE_MOVE_MIME, payload\)/);
-    expect(fileTree).toMatch(/setDownloadDragData\(e, path, isDir\)/);
+    expect(fileTree).toMatch(/e\.dataTransfer\.setData\(FILE_DRAG_MIME/);
+    expect(fileTree).not.toContain("setDownloadDragData(e, path, isDir)");
   });
 
-  test("Tauri desktop drag-out uses the token-bearing download route", () => {
-    expect(fileTree).toMatch(
-      /import \{ isTauriDesktop, tauriInvoke \} from "\.\.\/api\/desktop"/,
-    );
-    expect(fileTree).toMatch(/new URL\(api\.downloadUrl\(path\), window\.location\.href\)/);
-    expect(fileTree).toMatch(/tauriInvoke\("start_file_browser_drag_out"/);
-    expect(fileTree).toMatch(/downloadUrl: absoluteDownloadUrl\(path\)/);
-    expect(fileTree).toMatch(/filename: downloadFilename\(path, isDir\)/);
+  test("the native Tauri drag-out command + its desktop import are gone", () => {
+    expect(fileTree).not.toContain("start_file_browser_drag_out");
+    expect(fileTree).not.toContain("startNativeDragOut");
+    expect(fileTree).not.toMatch(/from "\.\.\/api\/desktop"/);
   });
 
   test("docked selection context menu uses Upload and Download transfer rows", () => {
