@@ -58,6 +58,31 @@ async fn drive_info_response(state: Arc<AppState>, label: &'static str) -> Respo
     }
 }
 
+/// `GET /api/drive/bootstrap` - the structural spine the SPA renders
+/// before any index / report job runs. Stat-only filtered walk of the
+/// drive root: immediate files + directories, each directory carrying
+/// its recursive subtree file count and byte total, plus the
+/// whole-drive aggregate. Deeper levels load lazily via the existing
+/// `/api/files?dir=` path on File Browser expand / Graph depth.
+///
+/// Runs on the blocking pool: the walk is synchronous filesystem I/O
+/// and must not block the async runtime (a large drive is a non-
+/// trivial stat sweep).
+pub async fn api_drive_bootstrap(State(state): State<Arc<AppState>>) -> Response {
+    let drive = match state.try_drive() {
+        Ok(drive) => drive,
+        Err(e) => return err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
+    };
+    match tokio::task::spawn_blocking(move || drive.bootstrap()).await {
+        Ok(Ok(tree)) => Json(tree).into_response(),
+        Ok(Err(e)) => err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
+        Err(e) => err(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("bootstrap task panicked: {e}"),
+        ),
+    }
+}
+
 pub async fn api_patch_drive(
     State(state): State<Arc<AppState>>,
     Json(body): Json<serde_json::Value>,

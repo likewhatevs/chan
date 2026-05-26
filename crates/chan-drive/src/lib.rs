@@ -22,6 +22,7 @@
 //   - Editor preferences (fonts, theme). App-level concern.
 
 mod blob;
+pub mod bootstrap;
 pub mod contacts;
 pub mod drafts;
 pub mod drive;
@@ -44,6 +45,8 @@ pub mod teams;
 pub mod trash;
 pub mod vcs;
 pub mod watch;
+
+pub use bootstrap::{BootstrapDir, BootstrapFile, BootstrapTree, FileClassWire, SubtreeStats};
 
 pub use chan_report::{
     CocomoModel, CocomoParams, CocomoSummary, FileBucket as ReportFileBucket,
