@@ -1536,7 +1536,7 @@ impl Drive {
             abs: events_dir,
             prefix: Some(prefix),
         };
-        crate::watch::WatchHandle::start(&[root], cb)
+        crate::watch::WatchHandle::start(&[root], Arc::clone(&self.walk_filter), cb)
     }
 
     /// systacean-26: pick the smallest unused `untitled-N` name
@@ -3047,7 +3047,10 @@ impl Drive {
             crate::watch::WatchRoot::drive(self.root()),
             crate::watch::WatchRoot::drafts(self.drafts_dir()),
         ];
-        WatchHandle::start(&roots, fan)
+        // Same unified ignore set the bootstrap/index walk uses, so a
+        // node_modules/target/venv/.git storm never reaches the
+        // broadcast bus or the indexer.
+        WatchHandle::start(&roots, Arc::clone(&self.walk_filter), fan)
     }
 
     /// Start the built-in graph indexer on this drive. Returns a

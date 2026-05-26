@@ -44,7 +44,7 @@ use notify::{RecommendedWatcher, RecursiveMode, Watcher};
 use serde::{Deserialize, Serialize};
 
 use crate::error::Result;
-use crate::fs_ops::is_chan_internal;
+use crate::fs_ops::{is_chan_internal, WalkFilter};
 use crate::vcs::is_vcs_control_path;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -129,7 +129,21 @@ impl WatchHandle {
     /// (`<rel>` for drive-root events; `Drafts/<rel>` for
     /// drafts-root events). Existing single-root callers pass
     /// `&[WatchRoot::drive(drive_root)]`.
-    pub(crate) fn start(roots: &[WatchRoot], cb: Arc<dyn WatchCallback>) -> Result<Self> {
+    ///
+    /// `filter` is the SAME unified ignore set the bootstrap walk
+    /// uses (`Drive::walk_filter`): events whose relative path runs
+    /// through an excluded directory (`node_modules`, `target`,
+    /// `venv`, ... and the VCS dirs `.git`/`.hg`/`.svn`) are dropped
+    /// here, in the watcher worker thread, BEFORE the consumer's
+    /// callback runs. Filtering at this boundary keeps a git checkout
+    /// storm under `node_modules`/`target` from ever reaching the
+    /// broadcast bus or the indexer (the earliest possible drop, and
+    /// the same ignore policy as the walk, not a second list).
+    pub(crate) fn start(
+        roots: &[WatchRoot],
+        filter: Arc<WalkFilter>,
+        cb: Arc<dyn WatchCallback>,
+    ) -> Result<Self> {
         if roots.is_empty() {
             return Err(crate::error::ChanError::Io(
                 "WatchHandle::start: at least one root required".into(),
@@ -138,9 +152,10 @@ impl WatchHandle {
         let dispatch_roots: Arc<Vec<WatchRoot>> = Arc::new(roots.to_vec());
         let cb_clone = cb.clone();
         let dispatch_roots_for_cb = Arc::clone(&dispatch_roots);
+        let filter_for_cb = Arc::clone(&filter);
         let mut watcher =
             notify::recommended_watcher(move |res: notify::Result<notify::Event>| match res {
-                Ok(event) => dispatch(&dispatch_roots_for_cb, event, &*cb_clone),
+                Ok(event) => dispatch(&dispatch_roots_for_cb, &filter_for_cb, event, &*cb_clone),
                 Err(e) => {
                     // notify backend errors (inotify queue overflow,
                     // fseventsd disconnect, watch path vanishing)
@@ -193,7 +208,12 @@ fn apply_prefix(prefix: Option<&str>, rel: String) -> String {
     }
 }
 
-fn dispatch(roots: &[WatchRoot], event: notify::Event, cb: &dyn WatchCallback) {
+fn dispatch(
+    roots: &[WatchRoot],
+    filter: &WalkFilter,
+    event: notify::Event,
+    cb: &dyn WatchCallback,
+) {
     use notify::EventKind;
     let kind = match event.kind {
         EventKind::Create(_) => WatchKind::Created,
@@ -221,14 +241,14 @@ fn dispatch(roots: &[WatchRoot], event: notify::Event, cb: &dyn WatchCallback) {
     // the indexer consumes downstream.
     if from_resolved
         .as_ref()
-        .map(|(_, rel)| is_filtered(rel))
+        .map(|(_, rel)| is_filtered(rel, filter))
         .unwrap_or(false)
     {
         return;
     }
     if to_resolved
         .as_ref()
-        .map(|(_, rel)| is_filtered(rel))
+        .map(|(_, rel)| is_filtered(rel, filter))
         .unwrap_or(false)
     {
         return;
@@ -287,15 +307,37 @@ fn panic_message(payload: &Box<dyn std::any::Any + Send>) -> String {
     }
 }
 
-fn is_filtered(rel: &str) -> bool {
+/// Drop policy for a drive-relative watcher path. Mirrors the
+/// bootstrap/index walk's pruning so the watcher feed and the walk
+/// honor ONE ignore set, with two watcher-specific deviations:
+///
+///   - VCS control files (`.git/HEAD`, `.git/index`, `.hg/dirstate`)
+///     are FORWARDED even though `.git`/`.hg` are excluded dirs: the
+///     indexer keys checkout-storm detection off them. The walk has
+///     no such need and prunes `.git`/`.hg` wholesale.
+///   - `.chan/` is always dropped via `is_chan_internal` regardless
+///     of the configurable filter set: it is chan's own state, an
+///     internal invariant the user cannot un-exclude.
+///
+/// Everything else routes through the SAME `WalkFilter` the bootstrap
+/// walk uses: a path is dropped when any of its directory components
+/// is an excluded basename (`node_modules`, `target`, `venv`,
+/// `.git`, `.hg`, `.svn`, ... per `DEFAULT_INDEX_EXCLUDED_DIRS` plus
+/// any user additions). Basename match at any depth matches
+/// `walk_drive_filtered`'s `filter_entry`.
+fn is_filtered(rel: &str, filter: &WalkFilter) -> bool {
     if is_vcs_control_path(rel) {
         return false;
     }
-    is_chan_internal(rel)
-        || rel == ".git"
-        || rel.starts_with(".git/")
-        || rel == ".hg"
-        || rel.starts_with(".hg/")
+    if is_chan_internal(rel) {
+        return true;
+    }
+    // Any path component that is an excluded directory basename prunes
+    // the event, exactly as the walk prunes that directory's subtree.
+    // The final component is included: a top-level `node_modules`
+    // create/remove is itself noise the index does not want.
+    rel.split('/')
+        .any(|component| filter.is_excluded(component))
 }
 
 fn relativize(root: &Path, p: &Path) -> Option<String> {
@@ -396,12 +438,110 @@ mod tests {
         assert_eq!(events.last().unwrap().path.as_deref(), Some("b.md"));
     }
 
+    /// Mirror the registry's DEFAULT_INDEX_EXCLUDED_DIRS so the test
+    /// exercises the exact set the walk uses at runtime.
+    fn default_filter() -> WalkFilter {
+        WalkFilter::new(crate::registry::DEFAULT_INDEX_EXCLUDED_DIRS.iter().copied())
+    }
+
     #[test]
     fn filter_allows_vcs_control_paths_but_hides_other_vcs_noise() {
-        assert!(!is_filtered(".git/HEAD"));
-        assert!(!is_filtered(".git/index"));
-        assert!(!is_filtered(".hg/dirstate"));
-        assert!(is_filtered(".git/objects/pack/foo"));
-        assert!(is_filtered(".hg/store/data/foo"));
+        let f = default_filter();
+        // VCS control files forwarded (checkout-storm detection).
+        assert!(!is_filtered(".git/HEAD", &f));
+        assert!(!is_filtered(".git/index", &f));
+        assert!(!is_filtered(".hg/dirstate", &f));
+        // The rest of the VCS dirs are dropped via the excluded-dir set.
+        assert!(is_filtered(".git/objects/pack/foo", &f));
+        assert!(is_filtered(".hg/store/data/foo", &f));
+        // The dir entries themselves are noise too.
+        assert!(is_filtered(".git", &f));
+        assert!(is_filtered(".hg", &f));
+    }
+
+    #[test]
+    fn filter_drops_unified_ignore_set_at_any_depth() {
+        let f = default_filter();
+        // node_modules / target / venv at the top level.
+        assert!(is_filtered("node_modules", &f));
+        assert!(is_filtered("node_modules/react/index.js", &f));
+        assert!(is_filtered("target", &f));
+        assert!(is_filtered("target/debug/build/foo.rs", &f));
+        assert!(is_filtered("venv", &f));
+        assert!(is_filtered("venv/lib/python3.11/site-packages/x.py", &f));
+        assert!(is_filtered(".venv/pyvenv.cfg", &f));
+        // Nested deeper than the top level: a node_modules under a
+        // subproject must also prune (basename match at any depth).
+        assert!(is_filtered("frontend/node_modules/pkg/dist/a.js", &f));
+        assert!(is_filtered("a/b/target/release/x", &f));
+        assert!(is_filtered("svc/__pycache__/mod.cpython-311.pyc", &f));
+        // .chan is always dropped regardless of the filter set.
+        assert!(is_filtered(".chan/index/meta.json", &f));
+    }
+
+    #[test]
+    fn filter_keeps_real_notes_and_source() {
+        let f = default_filter();
+        // Real content must pass through untouched.
+        assert!(!is_filtered("README.md", &f));
+        assert!(!is_filtered("docs/design.md", &f));
+        assert!(!is_filtered("src/main.rs", &f));
+        // A file merely NAMED like an excluded dir (but a file, not a
+        // dir-in-the-path) only prunes when the basename matches; that
+        // is intended -- a file literally named `target` is index noise
+        // the same way the dir is. A file whose name CONTAINS the token
+        // but is not equal (e.g. `targeting.md`) is kept.
+        assert!(!is_filtered("notes/targeting.md", &f));
+        assert!(!is_filtered("node_modules_notes.md", &f));
+    }
+
+    #[test]
+    fn dispatch_drops_excluded_subtree_events() {
+        use std::sync::Mutex;
+        struct Collect(Mutex<Vec<WatchEvent>>);
+        impl WatchCallback for Collect {
+            fn on_event(&self, e: WatchEvent) {
+                self.0.lock().unwrap().push(e);
+            }
+        }
+        let cb = Collect(Mutex::new(Vec::new()));
+        let filter = default_filter();
+        let root = PathBuf::from("/drive");
+        let roots = [WatchRoot::drive(&root)];
+
+        // A modify under node_modules: dropped, callback never fires.
+        dispatch(
+            &roots,
+            &filter,
+            notify::Event {
+                kind: notify::EventKind::Modify(notify::event::ModifyKind::Data(
+                    notify::event::DataChange::Content,
+                )),
+                paths: vec![root.join("node_modules/react/index.js")],
+                attrs: Default::default(),
+            },
+            &cb,
+        );
+        assert!(
+            cb.0.lock().unwrap().is_empty(),
+            "node_modules event should be dropped before the callback"
+        );
+
+        // A modify on a real note: forwarded.
+        dispatch(
+            &roots,
+            &filter,
+            notify::Event {
+                kind: notify::EventKind::Modify(notify::event::ModifyKind::Data(
+                    notify::event::DataChange::Content,
+                )),
+                paths: vec![root.join("notes/today.md")],
+                attrs: Default::default(),
+            },
+            &cb,
+        );
+        let events = cb.0.lock().unwrap();
+        assert_eq!(events.len(), 1, "real note event should be forwarded");
+        assert_eq!(events[0].path.as_deref(), Some("notes/today.md"));
     }
 }
