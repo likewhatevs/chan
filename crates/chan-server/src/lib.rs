@@ -22,6 +22,10 @@ mod control_socket;
 mod embed_seed;
 mod error;
 mod event_watcher;
+/// macOS CLI-to-desktop drive handoff over a well-known per-user UDS.
+/// Public so both the `chan` CLI (client) and `chan-desktop`
+/// (listener) consume it; both already depend on chan-server.
+pub mod handoff;
 mod host;
 mod indexer;
 mod mcp_bridge;

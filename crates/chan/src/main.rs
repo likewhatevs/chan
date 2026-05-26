@@ -225,6 +225,17 @@ enum Command {
         /// headless / scripted invocations.
         #[arg(long)]
         no_browser: bool,
+        /// Always own the server; never hand off to a running
+        /// chan-desktop. By default, when a same-user chan-desktop is
+        /// running in a GUI session, `chan serve <drive>` asks it to
+        /// open the drive in a native window and exits. `--standalone`
+        /// forces this CLI to bind its own loopback listener and print
+        /// the URL, exactly as a no-desktop run. Required for headless
+        /// / SSH / scripted use where the handoff is unwanted (the env
+        /// var `CHAN_NO_DESKTOP_HANDOFF=1` does the same). Tunnel mode
+        /// already implies standalone.
+        #[arg(long)]
+        standalone: bool,
         /// Search indexer resource profile. Overrides
         /// `server.search.aggression` for this run.
         #[arg(long, value_parser = parse_search_aggression)]
@@ -635,6 +646,7 @@ fn main() -> Result<()> {
             timeout,
             no_token,
             no_browser,
+            standalone,
             search_aggression,
             no_settings,
             tunnel_url,
@@ -659,6 +671,7 @@ fn main() -> Result<()> {
                 here,
                 no_token,
                 no_browser,
+                standalone,
                 search_aggression,
                 no_settings,
                 tunnel_url,
@@ -1027,6 +1040,7 @@ async fn cmd_serve(
     here: bool,
     no_token: bool,
     no_browser: bool,
+    standalone: bool,
     search_aggression: Option<SearchAggression>,
     no_settings: bool,
     tunnel_url: String,
@@ -1058,6 +1072,23 @@ async fn cmd_serve(
         std::fs::create_dir_all(&root)
             .with_context(|| format!("creating drive root {}", root.display()))?;
     }
+
+    // macOS CLI-to-desktop handoff (ratified Option B). When a
+    // same-user chan-desktop is running in a GUI session and no
+    // standalone/tunnel flag is set, ask it to open this drive in a
+    // native window and EXIT. The desktop then owns the drive's flock;
+    // the CLI must NOT also open the drive (the single-writer
+    // invariant). This runs BEFORE `open_drive` so a successful
+    // handoff never double-opens. Every fallback (no desktop, refused,
+    // stale socket, bad handshake, version skew, GUI-absent, opted
+    // out, tunnel) drops through to the unchanged standalone path
+    // below: own the server, print the URL, exactly as today.
+    if !standalone && tunnel_token.is_none() {
+        if let Some(outcome) = maybe_handoff_to_desktop(&root).await {
+            return outcome;
+        }
+    }
+
     ensure_drive_registered(&lib, &root)?;
     let drive = lib.open_drive(&root)?;
 
@@ -1150,6 +1181,67 @@ async fn cmd_serve(
     chan_server::serve(lib, drive, config)
         .await
         .with_context(|| format!("running server on {addr}"))
+}
+
+/// Try to hand `root` off to a running same-user chan-desktop.
+///
+/// Returns:
+/// - `Some(Ok(()))` when the desktop opened the drive window: the CLI
+///   exits cleanly WITHOUT opening the drive (the desktop owns the
+///   flock).
+/// - `None` in every fallback case (no desktop, refused, stale
+///   socket, bad handshake, version skew, no GUI session, opted out):
+///   the caller continues to the unchanged standalone server path.
+///
+/// The caller already excluded tunnel mode and `--standalone`. Here we
+/// add the GUI-session + explicit-opt-out gates, then attempt the UDS
+/// handoff and translate the outcome into a user-facing note.
+async fn maybe_handoff_to_desktop(root: &Path) -> Option<Result<()>> {
+    // Explicit opt-out for automation, and the headless auto-skip: a
+    // drive handed to a desktop the user can't see is worse than a
+    // printed URL. Both keep the load-bearing standalone path.
+    if chan_server::handoff::handoff_opt_out() {
+        return None;
+    }
+    if !chan_server::handoff::gui_session_present() {
+        return None;
+    }
+
+    match chan_server::handoff::try_handoff(root).await {
+        chan_server::handoff::Outcome::HandedOff => {
+            // The desktop owns the drive from here; the CLI is just a
+            // launcher. Print a short note to stdout (where the URL
+            // would otherwise go) and exit 0.
+            println!(
+                "chan: opened {} in chan-desktop. Use --standalone to run your own server.",
+                root.display()
+            );
+            Some(Ok(()))
+        }
+        chan_server::handoff::Outcome::VersionSkew {
+            desktop_version,
+            desktop_protocol: _,
+        } => {
+            // No silent cross-version IPC: name the versions and fall
+            // back to standalone.
+            eprintln!(
+                "chan: chan-desktop is version {desktop_version}, CLI is {}; \
+                 cannot hand off. Starting a standalone server.",
+                chan_server::handoff::CHAN_VERSION,
+            );
+            None
+        }
+        chan_server::handoff::Outcome::DesktopError { message } => {
+            eprintln!(
+                "chan: chan-desktop could not open the drive ({message}); \
+                 starting a standalone server."
+            );
+            None
+        }
+        // No desktop / refused / stale socket / bad handshake: silent
+        // fall-through to the standalone path, exactly like today.
+        chan_server::handoff::Outcome::NoDesktop => None,
+    }
 }
 
 /// systacean-27: dispatch the `chan reports {enable,disable}`
