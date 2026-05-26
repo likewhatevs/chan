@@ -51,7 +51,11 @@ describe("FileTree browser drag-out removed", () => {
 
   test("shared inspectors expose Upload and Download transfer actions", () => {
     expect(fileInfo).toMatch(/<button class="open" type="button" onclick=\{triggerUpload\}/);
-    expect(fileInfo).toMatch(/<button class="open" type="button" onclick=\{downloadSelection\}/);
+    // I1: the Download button gained a `disabled={downloadBusy}` attr +
+    // multiline markup when wired to the desktop progress capability; it
+    // still binds downloadSelection.
+    expect(fileInfo).toMatch(/onclick=\{downloadSelection\}/);
+    expect(fileInfo).toMatch(/disabled=\{downloadBusy\}/);
     expect(fileInfo).toMatch(/fileOps\.replaceFileAt\(entry\.path, files\[0\]!\)/);
     expect(fileInfo).toMatch(/fileOps\.uploadFilesTo\(entry\.path, files\)/);
     expect(dirInfo).toMatch(/onclick=\{triggerUpload\}/);
