@@ -337,7 +337,12 @@ async fn build_app(
     // editor. Indexer is NOT subject to this gate; in-app saves
     // must reindex.
     let self_writes = Arc::new(SelfWrites::new());
-    let bridge = make_watch_bridge(&events_tx, &index_events_tx, &self_writes);
+    // phase-11 Slice C: the scoped pub/sub registry is created here so
+    // the watcher bridge can route scoped `fs` frames into it; the same
+    // Arc is stored on AppState for the /ws handler and survives a
+    // storage reset (the rebuilt bridge re-references it).
+    let scope_registry = Arc::new(bus::ScopeRegistry::new());
+    let bridge = make_watch_bridge(&events_tx, &index_events_tx, &self_writes, &scope_registry);
     let watch_handle = drive.watch(bridge)?;
     let drive_root = drive.root().to_path_buf();
     // Background indexer: subscribes to index_events_tx, runs the
@@ -446,6 +451,7 @@ async fn build_app(
         terminal_sessions,
         shutdown_rx,
         loaded_teams: Mutex::new(std::collections::HashMap::new()),
+        scope_registry,
     });
     // Nest under the prefix so `--prefix=/foo` makes every existing
     // route reachable at `/foo<route>` without changing any handler.

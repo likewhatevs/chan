@@ -21,6 +21,11 @@ import {
   settingsOverlay,
   tree,
   treeExpanded,
+  fbTreeInstances,
+  ensureFbTreeInstance,
+  fbTreeInstance,
+  disposeFbTreeInstance,
+  fbDirSubscriberCount,
 } from "./store.svelte";
 import {
   activePane,
@@ -86,6 +91,7 @@ afterEach(() => {
   tree.loadingDirs = {};
   tree.dirErrors = {};
   treeExpanded.map = { "": true };
+  fbTreeInstances.byId = {};
   window.sessionStorage.clear();
   window.history.replaceState(null, "", "/");
 });
@@ -626,5 +632,67 @@ describe("resolveSpawnContext (fullstack-43)", () => {
       },
     ]);
     expect(resolveSpawnContext()).toEqual({ dir: "" });
+  });
+});
+
+// Phase-11 Slice A: per-File-Browser-instance tree metadata. The registry is
+// the keyed structure that lets two simultaneously-visible instances keep
+// independent expand/collapse state (round-1 ask). These tests pin the
+// create/read/dispose contract and the cross-instance subscription refcount.
+describe("per-instance file browser tree registry", () => {
+  test("ensureFbTreeInstance creates a root-expanded record, idempotent", () => {
+    const a = ensureFbTreeInstance("pane-1");
+    expect(a.expanded).toEqual({ "": true });
+    expect(a.subscribedDirs).toEqual({ "": true });
+    expect(a.selected).toBeNull();
+
+    a.expanded["notes"] = true;
+    // Re-ensure returns the SAME record (no clobber on remount).
+    const again = ensureFbTreeInstance("pane-1");
+    expect(again).toBe(a);
+    expect(again.expanded["notes"]).toBe(true);
+  });
+
+  test("instances are independent: expanding one does not touch another", () => {
+    const a = ensureFbTreeInstance("pane-1");
+    const b = ensureFbTreeInstance("pane-2");
+    a.expanded["docs"] = true;
+    expect(b.expanded["docs"]).toBeUndefined();
+    expect(fbTreeInstance("pane-2")?.expanded).toEqual({ "": true });
+  });
+
+  test("fbTreeInstance returns null for an unknown id", () => {
+    expect(fbTreeInstance("nope")).toBeNull();
+  });
+
+  test("disposeFbTreeInstance forgets the record", () => {
+    ensureFbTreeInstance("pane-1");
+    expect(fbTreeInstance("pane-1")).not.toBeNull();
+    disposeFbTreeInstance("pane-1");
+    expect(fbTreeInstance("pane-1")).toBeNull();
+    // Disposing an unknown id is a safe no-op.
+    expect(() => disposeFbTreeInstance("pane-1")).not.toThrow();
+  });
+
+  test("fbDirSubscriberCount is the cross-instance refcount", () => {
+    const a = ensureFbTreeInstance("pane-1");
+    const b = ensureFbTreeInstance("pane-2");
+    // Both implicitly subscribe to the root scope.
+    expect(fbDirSubscriberCount("")).toBe(2);
+    expect(fbDirSubscriberCount("notes")).toBe(0);
+
+    a.subscribedDirs["notes"] = true;
+    expect(fbDirSubscriberCount("notes")).toBe(1);
+    b.subscribedDirs["notes"] = true;
+    expect(fbDirSubscriberCount("notes")).toBe(2);
+
+    // Last instance to drop the dir takes the count back to zero (the
+    // transition Slice E maps to an `unsub` frame).
+    delete a.subscribedDirs["notes"];
+    delete b.subscribedDirs["notes"];
+    expect(fbDirSubscriberCount("notes")).toBe(0);
+
+    disposeFbTreeInstance("pane-2");
+    expect(fbDirSubscriberCount("")).toBe(1);
   });
 });

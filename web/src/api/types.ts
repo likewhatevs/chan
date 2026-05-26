@@ -519,6 +519,62 @@ export type FsGraphResponse = {
   truncated: boolean;
 };
 
+// ---------------------------------------------------------------------------
+// /ws message-type catalog (phase-11 spine contract, Part 3).
+//
+// The watcher socket carries both directions. Server -> client frames are a
+// tagged union on `type`; client -> server frames are the scope sub/unsub
+// path. The legacy global `watch` frame stays for the editor's open-document
+// external-edit toast (a single-file concern); the new scoped `fs` frame
+// drives the per-directory File Browser / Graph tree (D2: two frames, two
+// consumers). The server-side serialization in chan-server must stay in
+// lockstep with these shapes; both sides pin them with a test.
+// ---------------------------------------------------------------------------
+
+/// A single filesystem change as chan-drive's watcher actually serializes it
+/// on the wire. Capitalized kinds plus the rename destination `to`, matching
+/// the verbatim `chan_drive::WatchEvent` serialization the store dispatcher
+/// already reads (it branches on `"Removed"` / `"Renamed"`). Distinct from
+/// the older, narrower `WatchEvent` type below (lowercase kinds, no rename
+/// destination), which predates the rename support and does not match the
+/// live frame; new code should use `WatchEventWire`. Reconciling / retiring
+/// the stale `WatchEvent` is deferred to the File Browser slice that touches
+/// every consumer.
+export type WatchEventWire = {
+  kind: "Created" | "Modified" | "Removed" | "Renamed";
+  path: string;
+  to?: string | null;
+};
+
+/// Drive-relative POSIX directory path used as a watcher scope key. The
+/// empty string is the drive root (always implicitly watched). Mirrors the
+/// server-side `ScopeRegistry` keyspace.
+export type WatchScopeDir = string;
+
+/// Server -> client: the legacy global filesystem frame. Fans out to every
+/// connected socket regardless of scope. Kept for the editor external-edit
+/// toast; the tree should prefer the scoped `fs` frame.
+export type WsWatchFrame = { type: "watch"; event: WatchEventWire };
+
+/// Server -> client: a scoped filesystem frame, delivered only to sockets
+/// subscribed to `dir`. Carries the originating directory so a client that
+/// subscribed to several dirs can route the event to the right pane / node.
+export type WsFsFrame = { type: "fs"; dir: WatchScopeDir; event: WatchEventWire };
+
+/// Client -> server: subscribe / unsubscribe this socket to a directory
+/// scope. `dir: ""` is the drive root (idempotent no-op refcount the server
+/// accepts). The server routes these to its `ScopeRegistry` against this
+/// socket's subscriber id; a socket close implicitly unsubscribes all.
+export type WsSubFrame = { type: "sub"; dir: WatchScopeDir };
+export type WsUnsubFrame = { type: "unsub"; dir: WatchScopeDir };
+
+/// The client -> server frame union. Other server -> client frames
+/// (`progress`, `window_command`, `config_changed`, ...) are handled
+/// structurally in the store dispatcher and are intentionally not enumerated
+/// here; this union is only the outbound scope-control path the transport
+/// stub serializes.
+export type WsClientFrame = WsSubFrame | WsUnsubFrame;
+
 export type InspectorKind =
   | "drive"
   | "directory"

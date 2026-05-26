@@ -17,6 +17,7 @@ import {
   openWatchSocket,
   sessionPath,
   sessionWindowId,
+  type WatchSubscription,
   type WsStatus,
 } from "../api/client";
 import {
@@ -493,7 +494,24 @@ export function watchSystemTheme(): () => void {
   return () => mq.removeEventListener("change", handler);
 }
 
-let unwatch: (() => void) | null = null;
+/// The live watcher socket handle. Callable as the disposer (the
+/// existing reconnect/teardown call sites use `unwatch()`); the
+/// `subscribeDir` / `unsubscribeDir` methods are the per-directory
+/// scope-subscription path that Slice E (File Browser) and Slice F
+/// (Graph) drive. `watchSubscription()` exposes it to those surfaces
+/// without re-opening a second socket.
+let unwatch: WatchSubscription | null = null;
+
+/// Accessor for the live watcher subscription so File Browser / Graph
+/// instances can push `sub` / `unsub` frames for the directories they
+/// have expanded. Returns null before bootstrap opens the socket and
+/// after teardown. The per-instance subscription bookkeeping (refcount
+/// across instances) lives client-side in the FB instance registry
+/// (`fbTreeInstances`) and is mirrored to the server, which keeps its
+/// own per-socket refcount.
+export function watchSubscription(): WatchSubscription | null {
+  return unwatch;
+}
 
 /// Paths currently mid-rename. The watcher fires "Renamed" events
 /// while `api.move` is still awaiting, which races with our own
@@ -2371,6 +2389,111 @@ function persistBrowserSidePanes(): void {
 export const treeExpanded = $state<{ map: Record<string, boolean> }>({
   map: { "": true },
 });
+
+// ---------------------------------------------------------------------------
+// Per-File-Browser-instance tree metadata (phase-11 Slice A scaffolding).
+//
+// The round-1 ask: "expanding/collapsing in one instance must not affect
+// others." Today `treeExpanded` above is a single window-shared singleton; two
+// simultaneously-visible File Browser instances (a dock pane plus an overlay,
+// or two split panes) fight over it. The per-tab snapshot/restore in
+// `FileBrowserSurface.svelte` (fullstack-58) only swaps the singleton on tab
+// activation, so it does not cover concurrently-visible instances.
+//
+// This registry is the keyed structure those instances will own. Each File
+// Browser instance gets its own `FbTreeInstance` keyed by a stable id; the
+// instance owns its expand/collapse map, selection, scroll, and the set of
+// directory scopes it has subscribed to over `/ws`. Slice E (File Browser)
+// migrates `FileTree.svelte` / `FileBrowserSurface.svelte` off the singleton
+// onto these instances and drives the scope subscriptions; Slice F (Graph)
+// reuses the same instance + subscription mechanism. The legacy
+// `treeExpanded` singleton stays as the back-compat default until that
+// migration lands, so this addition is structural only and changes no
+// current behavior.
+//
+// Subscription refcounting: each instance records the dirs IT subscribed to
+// in `subscribedDirs`. The client-side cross-instance refcount (so the second
+// instance to expand a dir reuses the subscription and the last to collapse
+// it unsubscribes) is derived from the union of all instances'
+// `subscribedDirs`; the server keeps its own authoritative per-socket
+// refcount in the `ScopeRegistry` (Slice C). See `fbDirSubscriberCount`.
+
+/// Per-instance File Browser / Graph tree metadata. Owned by exactly one
+/// instance id; never shared. The drive root (`""`) is always conceptually
+/// expanded, so `expanded[""]` is kept true.
+export interface FbTreeInstance {
+  /// Drive-relative dir path -> expanded. `""` (root) stays true.
+  expanded: Record<string, boolean>;
+  /// The instance's current selection (drive-relative path) or null.
+  selected: string | null;
+  /// Whether the synthetic "drive" row is selected (vs a real entry).
+  showDrive: boolean;
+  /// Last known scroll offset of the instance's tree viewport, in px.
+  scrollTop: number;
+  /// Directory scopes this instance has an active `/ws` subscription on.
+  /// Used to derive the cross-instance refcount and to unsubscribe on
+  /// dispose. Always contains `""` (the implicit root scope) once the
+  /// instance is registered.
+  subscribedDirs: Record<string, boolean>;
+}
+
+/// Registry of live File Browser / Graph tree instances, keyed by a stable
+/// per-instance id (a pane id, tab id, or graph-panel id chosen by the
+/// caller). `$state` so component effects react to instance create/dispose
+/// and to per-instance metadata changes.
+export const fbTreeInstances = $state<{ byId: Record<string, FbTreeInstance> }>({
+  byId: {},
+});
+
+/// Get-or-create the metadata for a File Browser / Graph instance. Idempotent:
+/// returns the existing record if the id is already registered, so a
+/// component effect can call it on every (re)mount without clobbering state.
+export function ensureFbTreeInstance(id: string): FbTreeInstance {
+  const existing = fbTreeInstances.byId[id];
+  if (existing) return existing;
+  const created: FbTreeInstance = {
+    expanded: { "": true },
+    selected: null,
+    showDrive: false,
+    scrollTop: 0,
+    subscribedDirs: { "": true },
+  };
+  fbTreeInstances.byId = { ...fbTreeInstances.byId, [id]: created };
+  // Return the registry's proxied record, not the raw literal: `$state`
+  // deep-proxies on assignment, so callers must mutate the proxy in the
+  // map for reactivity (and for `fbDirSubscriberCount`) to see it.
+  return fbTreeInstances.byId[id];
+}
+
+/// Read an instance's metadata without creating it. Null when the id is not
+/// registered (e.g. before mount or after dispose).
+export function fbTreeInstance(id: string): FbTreeInstance | null {
+  return fbTreeInstances.byId[id] ?? null;
+}
+
+/// Dispose an instance: drop its record from the registry. Callers should
+/// unsubscribe the instance's `subscribedDirs` from the watcher socket
+/// BEFORE calling this (Slice E wires that in); this only forgets the
+/// client-side metadata so a closed pane / collapsed graph stops counting
+/// toward the cross-instance refcount.
+export function disposeFbTreeInstance(id: string): void {
+  if (!(id in fbTreeInstances.byId)) return;
+  const { [id]: _gone, ...rest } = fbTreeInstances.byId;
+  fbTreeInstances.byId = rest;
+}
+
+/// How many live instances currently subscribe to `dir`. This is the
+/// client-side cross-instance refcount: the first instance to reach 1
+/// triggers a `sub` frame, and the transition back to 0 triggers `unsub`
+/// (Slice E owns those transitions). The server keeps its own per-socket
+/// refcount, so this is purely a client-side dedupe of redundant frames.
+export function fbDirSubscriberCount(dir: string): number {
+  let n = 0;
+  for (const inst of Object.values(fbTreeInstances.byId)) {
+    if (inst.subscribedDirs[dir]) n += 1;
+  }
+  return n;
+}
 
 export function restoreTreeExpandedMap(next: Record<string, boolean>): void {
   for (const k of Object.keys(treeExpanded.map)) {

@@ -110,6 +110,14 @@ pub struct AppState {
     /// is non-destructive: `team_unload` drops the entry (releases
     /// the watcher) but the on-disk workspace + terminals persist.
     pub loaded_teams: Mutex<std::collections::HashMap<String, WatchHandle>>,
+    /// phase-11 Slice C: per-directory scoped watcher pub/sub. The
+    /// File Browser / Graph send `sub`/`unsub` frames over `/ws`; this
+    /// registry refcounts subscribers per directory and the watcher
+    /// bridge routes scoped `fs` frames here (derived from the single
+    /// recursive feed, Decision D1(b)). Survives `/api/storage/reset`:
+    /// the rebuilt bridge re-references the same registry so live
+    /// subscriptions keep flowing onto the new drive's events.
+    pub scope_registry: Arc<crate::bus::ScopeRegistry>,
 }
 
 /// Drive + its notify watcher. Replaced wholesale by /api/storage/
@@ -247,6 +255,7 @@ pub(crate) mod test_support {
             })),
             shutdown_rx,
             loaded_teams: Mutex::new(std::collections::HashMap::new()),
+            scope_registry: Arc::new(crate::bus::ScopeRegistry::new()),
         })
     }
 

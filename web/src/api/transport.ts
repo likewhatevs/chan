@@ -23,8 +23,22 @@
 // the open port. We stay on plain loopback everywhere.
 
 import { ApiError } from "./errors";
+import type { WsClientFrame } from "./types";
 
 export type WsStatus = "connecting" | "open" | "reconnecting" | "closed";
+
+/// Handle for the watcher socket. `send` pushes a client -> server frame
+/// (the scope sub/unsub path); it is best-effort: a frame queued while the
+/// socket is connecting or reconnecting is dropped, so subscription state is
+/// re-established on reconnect by the owner, not buffered here. `close`
+/// closes the socket and stops reconnecting. The handle is also directly
+/// callable as the disposer for backward compatibility with the original
+/// `() => void` return.
+export interface WatchSocket {
+  (): void;
+  send(frame: WsClientFrame): void;
+  close(): void;
+}
 
 const TOKEN_KEY = "chan.token";
 
@@ -210,7 +224,8 @@ const REQUEST_TIMEOUT_MS = 10_000;
 export function openWatch(
   onEvent: (e: unknown) => void,
   onStatus: (s: WsStatus) => void = () => {},
-): () => void {
+  onOpen: () => void = () => {},
+): WatchSocket {
   let closed = false;
   let ws: WebSocket | null = null;
   let backoff = 500;
@@ -227,6 +242,11 @@ export function openWatch(
     ws.onopen = () => {
       backoff = 500;
       onStatus("open");
+      // The server's scope registry is per-socket, so a fresh socket
+      // starts with no subscriptions. The owner re-establishes its
+      // active scopes here (Slice E wires the FB instances in); the
+      // transport does not buffer pre-open frames.
+      onOpen();
     };
     ws.onmessage = (m) => {
       try {
@@ -243,8 +263,8 @@ export function openWatch(
       setTimeout(connect, delay);
     };
   };
-  connect();
-  return () => {
+
+  const close = () => {
     closed = true;
     const w = ws;
     ws = null;
@@ -264,4 +284,29 @@ export function openWatch(
       }
     }
   };
+
+  const send = (frame: WsClientFrame) => {
+    // Best-effort: only push on an OPEN socket. A sub/unsub queued
+    // while connecting/reconnecting is dropped on purpose; the owner
+    // re-subscribes from `onOpen` after the reconnect, so buffering
+    // here would risk replaying stale subscription intent.
+    if (ws && ws.readyState === WebSocket.OPEN) {
+      try {
+        ws.send(JSON.stringify(frame));
+      } catch {
+        // A send can throw if the socket flipped to CLOSING between
+        // the readyState check and here; the reconnect path will
+        // re-establish subscriptions.
+      }
+    }
+  };
+
+  connect();
+
+  // Callable disposer (back-compat with the original `() => void`
+  // return) plus the typed scope-control methods.
+  const handle = (() => close()) as WatchSocket;
+  handle.send = send;
+  handle.close = close;
+  return handle;
 }

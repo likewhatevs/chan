@@ -252,7 +252,12 @@ fn install_drive_cell(state: &AppState, drive: Arc<Drive>) -> Result<(), Metadat
 }
 
 fn build_drive_cell(state: &AppState, drive: Arc<Drive>) -> Result<DriveCell, MetadataImportError> {
-    let bridge = make_watch_bridge(&state.events_tx, &state.index_events_tx, &state.self_writes);
+    let bridge = make_watch_bridge(
+        &state.events_tx,
+        &state.index_events_tx,
+        &state.self_writes,
+        &state.scope_registry,
+    );
     let watch_handle = drive.watch(bridge).map_err(MetadataImportError::Core)?;
     let search_aggression = state
         .server_config
