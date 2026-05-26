@@ -1433,11 +1433,33 @@
     return null;
   }
 
-  /// Refetch the graph whenever the overlay opens, plus once on
-  /// mount so the first open after a window reload has data ready.
-  /// Idle overlays don't pay for an /api/graph round-trip.
+  /// The stable identity of "what graph to show": the scope id, the
+  /// depth, and the mode. A reload is warranted only when ONE OF THESE
+  /// changes. We track THIS key in the reload effect rather than letting
+  /// the effect track `load()`'s internal reads, because `load()` reads
+  /// the `currentScope` $derived, whose object identity is recomputed by
+  /// `availableGraphScopes()` whenever the WORKSPACE LAYOUT changes (a
+  /// new editor tab, a File Browser reveal). Tracking the object made the
+  /// inspector's "Open" / "Show File" actions reload the graph (GI-1 /
+  /// GI-2): they open a tab / reveal in the browser, the layout shifts,
+  /// `currentScope` recomputes to an equal-but-new object, and the effect
+  /// re-fired. The logical scope did NOT change, so anchoring on this
+  /// value key keeps those actions from triggering a spurious reload.
+  const loadKey = $derived(
+    `${graphState.scopeId}|${graphState.depth}|${graphState.mode}`,
+  );
+
+  /// Refetch the graph whenever the overlay opens or the load key
+  /// changes, plus once on mount so the first open after a window reload
+  /// has data ready. Idle overlays don't pay for an /api/graph
+  /// round-trip. `load()` runs untracked so its internal reads (the
+  /// layout-churny `currentScope` object, filters, etc.) don't register
+  /// as reload triggers; only `visible` + `loadKey` do.
   $effect(() => {
-    if (visible) void load();
+    // Read both triggers up front so the effect tracks exactly them.
+    const show = visible;
+    void loadKey;
+    if (show) untrack(() => void load());
   });
 
   $effect(() => {
