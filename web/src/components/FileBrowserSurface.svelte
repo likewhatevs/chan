@@ -34,6 +34,8 @@
     browserSidePanes,
     collapseAllFolders,
     expandAllFolders,
+    fbSelectSet,
+    fbSelectSingle,
     fileOps,
     isFullyExpanded,
     openFsGraphForDirectory,
@@ -157,6 +159,11 @@
   /// + expansion is the intent there).
   function snapshotIntoTab(target: BrowserTab): void {
     target.selected = browserSelection.path ?? undefined;
+    // The multi-selection travels with the tab too (FB capabilities).
+    // Only persist when it's a genuine multi-set; a single/empty
+    // selection is fully described by `selected` and restores from it.
+    const multi = browserSelection.paths;
+    target.selectedPaths = multi.length > 1 ? [...multi] : undefined;
     target.showDrive = browserSelection.showDrive ? true : undefined;
     const map = treeExpanded.map;
     const expanded = Object.keys(map).filter((p) => p.length > 0 && map[p]);
@@ -166,7 +173,14 @@
   }
 
   function restoreFromTab(source: BrowserTab): void {
-    browserSelection.path = source.selected ?? null;
+    const active = source.selected ?? null;
+    const multi = source.selectedPaths;
+    if (multi && multi.length > 1) {
+      // Restore the full multi-set with the saved active entry as cursor.
+      fbSelectSet(multi, active ?? undefined);
+    } else {
+      fbSelectSingle(active);
+    }
     browserSelection.showDrive = source.showDrive ?? false;
     const map: Record<string, boolean> = { "": true };
     for (const p of source.expanded ?? []) map[p] = true;
@@ -190,8 +204,10 @@
     const captured = tab;
     const path = browserSelection.path;
     const showDrive = browserSelection.showDrive;
+    const multi = browserSelection.paths;
     untrack(() => {
       captured.selected = path ?? undefined;
+      captured.selectedPaths = multi.length > 1 ? [...multi] : undefined;
       captured.showDrive = showDrive ? true : undefined;
     });
   });

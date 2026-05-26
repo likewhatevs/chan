@@ -49,6 +49,11 @@
     browserSelection,
     clearTreeLoadingForPath,
     drive,
+    fbClearSelection,
+    fbSelectRange,
+    fbSelectSet,
+    fbSelectSingle,
+    fbToggle,
     fileOps,
     loadTreeDir,
     openFsGraphForDirectory,
@@ -257,6 +262,12 @@
 
   const root = $derived<Folder>(buildTree(tree.entries));
 
+  /// Membership set for the multi-selection, O(1) per row. The whole
+  /// set highlights as `.selected`; the active cursor (`browserSelection
+  /// .path`) additionally gets `.active-cursor` so it reads as the
+  /// keyboard/inspector focus within a multi-select.
+  const selectedSet = $derived(new Set(browserSelection.paths));
+
   /// Paths of contact-kind files (those with `chan.kind: contact`
   /// frontmatter). The server sets the discriminator on the listing
   /// payload; we lift it into a set so the row renderer doesn't have
@@ -413,8 +424,21 @@
   /// URL hash). `fullstack-80`: the inspector-open call moved
   /// behind `onClickRow` so the surface can gate it per variant
   /// (tab + overlay auto-open; dock doesn't).
-  function selectPath(path: string): void {
-    browserSelection.path = path;
+  function selectPath(path: string, ev?: MouseEvent): void {
+    // Desktop-file-browser click semantics:
+    //   - cmd/ctrl+click toggles one entry in the set.
+    //   - shift+click extends the range from the anchor over the
+    //     visible rows (display order).
+    //   - plain click = single select (resets set + anchor).
+    // `path` always becomes the active cursor the inspector + single-
+    // target actions read off `browserSelection.path`.
+    if (ev?.metaKey || ev?.ctrlKey) {
+      fbToggle(path);
+    } else if (ev?.shiftKey) {
+      fbSelectRange(path, visibleRows.map((r) => r.path));
+    } else {
+      fbSelectSingle(path);
+    }
     onClickRow?.(path);
   }
 
@@ -452,7 +476,7 @@
     tab.inspectorOpen = true;
     tab.showDrive = false;
     tab.expanded = ancestors.length > 0 ? ancestors : undefined;
-    browserSelection.path = path;
+    fbSelectSingle(path);
     browserSelection.showDrive = false;
     const map = treeExpanded.map;
     map[""] = true;
@@ -634,21 +658,43 @@
     }
     const target = rows[next];
     if (!target) return;
-    browserSelection.path = target.path;
+    // A plain arrow move collapses any multi-selection to the new cursor.
+    fbSelectSingle(target.path);
     queueScrollIntoView(target.path);
+  }
+
+  /// Shift+Arrow: extend the selection range from the anchor toward the
+  /// row one step (delta) past the current cursor, in visible-row order.
+  /// The anchor is held fixed so the range grows/shrinks from the same
+  /// origin (desktop shift-extend semantics).
+  function extendSelection(delta: number): void {
+    const rows = visibleRows;
+    if (rows.length === 0) return;
+    const order = rows.map((r) => r.path);
+    const cur = browserSelection.path;
+    const idx = cur ? order.indexOf(cur) : -1;
+    if (idx === -1) {
+      // No cursor yet: seed a single selection at an end and anchor it.
+      fbSelectSingle(delta > 0 ? order[0] : order[order.length - 1]);
+      queueScrollIntoView(browserSelection.path!);
+      return;
+    }
+    const next = Math.max(0, Math.min(order.length - 1, idx + delta));
+    fbSelectRange(order[next], order);
+    queueScrollIntoView(order[next]);
   }
 
   function moveToFirst(): void {
     const rows = visibleRows;
     if (rows.length === 0) return;
-    browserSelection.path = rows[0].path;
+    fbSelectSingle(rows[0].path);
     queueScrollIntoView(rows[0].path);
   }
 
   function moveToLast(): void {
     const rows = visibleRows;
     if (rows.length === 0) return;
-    browserSelection.path = rows[rows.length - 1].path;
+    fbSelectSingle(rows[rows.length - 1].path);
     queueScrollIntoView(rows[rows.length - 1].path);
   }
 
@@ -695,21 +741,42 @@
   }
 
   function onTreeKeydown(e: KeyboardEvent): void {
-    // Ignore composing IME input and any modifier-laden chord we
-    // don't bind: lets ⌘/Ctrl+arrow combos fall through to the
-    // browser / OS.
-    if (e.isComposing || e.metaKey || e.ctrlKey || e.altKey) return;
+    if (e.isComposing) return;
     const rows = visibleRows;
     const cur = browserSelection.path;
     const curRow = cur ? rows.find((r) => r.path === cur) : undefined;
+
+    // Select-all-visible (cmd/ctrl+A), scoped to THIS focused tree.
+    // Caught before the generic modifier early-return below.
+    if ((e.metaKey || e.ctrlKey) && !e.altKey && (e.key === "a" || e.key === "A")) {
+      e.preventDefault();
+      if (rows.length > 0) {
+        fbSelectSet(rows.map((r) => r.path));
+        queueScrollIntoView(rows[rows.length - 1].path);
+      }
+      return;
+    }
+
+    // Clipboard chords (cmd/ctrl+C/X/V) are handled in FB2; let them
+    // fall through to the document-level handler for now.
+
+    // Shift+Arrow extends the selection range from the anchor. Plain
+    // arrows are a single-select move (reset set + anchor). Other
+    // modifier-laden chords we don't bind fall through to the OS.
+    if (e.altKey || ((e.metaKey || e.ctrlKey) && e.key !== "ArrowUp" && e.key !== "ArrowDown")) {
+      return;
+    }
+    const extend = e.shiftKey && (e.key === "ArrowDown" || e.key === "ArrowUp");
     switch (e.key) {
       case "ArrowDown":
         e.preventDefault();
-        moveSelection(1);
+        if (extend) extendSelection(1);
+        else moveSelection(1);
         break;
       case "ArrowUp":
         e.preventDefault();
-        moveSelection(-1);
+        if (extend) extendSelection(-1);
+        else moveSelection(-1);
         break;
       case "ArrowRight": {
         if (!curRow) {
@@ -724,7 +791,7 @@
           } else {
             const child = findFirstChildOf(curRow.path);
             if (child) {
-              browserSelection.path = child;
+              fbSelectSingle(child);
               queueScrollIntoView(child);
             }
           }
@@ -744,7 +811,7 @@
           e.preventDefault();
           const parent = parentOf(curRow.path);
           if (parent) {
-            browserSelection.path = parent;
+            fbSelectSingle(parent);
             queueScrollIntoView(parent);
           }
         }
@@ -844,7 +911,7 @@
         findCurrentIndex = -1;
       } else {
         findCurrentIndex = 0;
-        browserSelection.path = paths[0]!;
+        fbSelectSingle(paths[0]!);
         queueScrollIntoView(paths[0]!);
       }
       findOnCount?.(n, findCurrentIndex);
@@ -876,7 +943,7 @@
     const cur = findCurrentIndex < 0 ? 0 : findCurrentIndex;
     findCurrentIndex = (cur + direction + n) % n;
     const path = findMatchPaths[findCurrentIndex]!;
-    browserSelection.path = path;
+    fbSelectSingle(path);
     queueScrollIntoView(path);
     findOnCount?.(n, findCurrentIndex);
   }
@@ -906,6 +973,101 @@
     };
   }
 
+  // ---- rubber-band (click-drag) multi-select ---------------------------------
+  // A mousedown on the tree's empty space (not on a row's interactive
+  // name target) begins a selection rectangle. While dragging, every row
+  // whose DOM rect intersects the band is selected (contiguous run in
+  // display order). The band is rendered as an absolutely-positioned
+  // overlay inside the scrolling `<ul>`, so its geometry is in the same
+  // client-rect space as the rows. A drag below the threshold is treated
+  // as a plain click on empty space (clears the selection).
+  const RUBBER_BAND_THRESHOLD_PX = 4;
+  let band = $state<{ x: number; y: number; w: number; h: number } | null>(
+    null,
+  );
+  let bandActive = false;
+  let bandStartClientX = 0;
+  let bandStartClientY = 0;
+  let bandAdditive = false;
+  let bandBaseSelection: string[] = [];
+
+  function onTreeMouseDown(e: MouseEvent): void {
+    // Left button only; ignore clicks that land on a row's interactive
+    // controls (name button/span, dirty dot) - those own their own
+    // select/toggle gesture. The empty gutter and inter-row space start
+    // a band.
+    if (e.button !== 0) return;
+    const t = e.target as HTMLElement | null;
+    if (t && t.closest(".name, .row-icon, .dirty-dot, .empty")) return;
+    // Don't start a band from a modifier-less click that is really a row
+    // background click; we still allow it (it becomes a clear on mouseup
+    // if no drag happens).
+    bandActive = true;
+    bandStartClientX = e.clientX;
+    bandStartClientY = e.clientY;
+    // cmd/ctrl held: ADD the banded rows to the existing selection
+    // (desktop additive rubber-band). Otherwise the band REPLACES it.
+    bandAdditive = e.metaKey || e.ctrlKey;
+    bandBaseSelection = bandAdditive ? [...browserSelection.paths] : [];
+    band = null;
+    window.addEventListener("mousemove", onBandMove, true);
+    window.addEventListener("mouseup", onBandUp, true);
+  }
+
+  function onBandMove(e: MouseEvent): void {
+    if (!bandActive) return;
+    const root = treeRootEl;
+    if (!root) return;
+    const dx = e.clientX - bandStartClientX;
+    const dy = e.clientY - bandStartClientY;
+    if (band === null && Math.hypot(dx, dy) < RUBBER_BAND_THRESHOLD_PX) {
+      return; // below threshold: not yet a drag
+    }
+    e.preventDefault();
+    const rootRect = root.getBoundingClientRect();
+    // Band rectangle in the root's local (scrolled) coordinate space so
+    // the overlay div lines up with the rows even when the list scrolls.
+    const x0 = Math.min(bandStartClientX, e.clientX) - rootRect.left + root.scrollLeft;
+    const y0 = Math.min(bandStartClientY, e.clientY) - rootRect.top + root.scrollTop;
+    const x1 = Math.max(bandStartClientX, e.clientX) - rootRect.left + root.scrollLeft;
+    const y1 = Math.max(bandStartClientY, e.clientY) - rootRect.top + root.scrollTop;
+    band = { x: x0, y: y0, w: x1 - x0, h: y1 - y0 };
+
+    // Hit-test rows against the band in CLIENT coordinates (getBounding
+    // ClientRect is already viewport-relative, same as the mouse).
+    const bandTop = Math.min(bandStartClientY, e.clientY);
+    const bandBottom = Math.max(bandStartClientY, e.clientY);
+    const hits: string[] = [];
+    for (const row of visibleRows) {
+      const el = rowEls.get(row.path);
+      if (!el) continue;
+      const r = el.getBoundingClientRect();
+      // Vertical intersection only: the tree is a single column, so a
+      // band that overlaps a row's vertical extent selects it.
+      if (r.bottom >= bandTop && r.top <= bandBottom) hits.push(row.path);
+    }
+    const union = bandAdditive
+      ? [...new Set([...bandBaseSelection, ...hits])]
+      : hits;
+    if (union.length > 0) {
+      fbSelectSet(union, hits[hits.length - 1] ?? union[union.length - 1]);
+    } else if (!bandAdditive) {
+      fbClearSelection();
+    }
+  }
+
+  function onBandUp(): void {
+    const wasDrag = band !== null;
+    bandActive = false;
+    band = null;
+    bandBaseSelection = [];
+    window.removeEventListener("mousemove", onBandMove, true);
+    window.removeEventListener("mouseup", onBandUp, true);
+    // A click on empty space with no drag clears the selection (matches
+    // a desktop file browser); an additive (cmd) click leaves it alone.
+    if (!wasDrag && !bandAdditive) fbClearSelection();
+  }
+
   /// Dismiss the context menu on any click outside it. Registered in
   /// the capture phase on `window` so we observe the click before
   /// `OverlayShell`'s bubble-phase `stopPropagation` swallows it
@@ -927,14 +1089,23 @@
   class="tree"
   class:drop-root={dropTarget === ""}
   class:right-dock={rightDock}
+  class:banding={band !== null}
   role="tree"
   tabindex="0"
   bind:this={treeRootEl}
   onkeydown={onTreeKeydown}
+  onmousedown={onTreeMouseDown}
   ondragover={(e) => onRowDragOver(e, "")}
   ondragleave={() => onRowDragLeave("")}
   ondrop={(e) => onRowDrop(e, "")}
 >
+  {#if band !== null}
+    <div
+      class="rubber-band"
+      aria-hidden="true"
+      style={`left:${band.x}px; top:${band.y}px; width:${band.w}px; height:${band.h}px;`}
+    ></div>
+  {/if}
   {#each root.children as node (node.path)}
     {@render renderNode(node, 0)}
   {/each}
@@ -964,7 +1135,8 @@
     {#if node.kind === "dir"}
       <div
         class={`row dir ${rowMatchClass(node.path)}`}
-        class:selected={browserSelection.path === node.path}
+        class:selected={selectedSet.has(node.path)}
+        class:active-cursor={browserSelection.path === node.path}
         class:zebra={rowIndex % 2 === 1}
         class:drop-target={dropTarget === node.path}
         style={rightDock
@@ -1025,10 +1197,15 @@
         <!-- Click on directory name: toggle expand AND select. Selecting
              keeps the side panel synced with what the user is
              investigating; toggling preserves the existing browse
-             affordance. -->
+             affordance. A modifier click (shift/cmd/ctrl) is a
+             multi-SELECT gesture, not a browse gesture, so it must NOT
+             also toggle expansion (that would surprise a range/toggle). -->
         <span
           class="name"
-          onclick={() => { toggle(node.path); selectPath(node.path); }}
+          onclick={(e) => {
+            if (!(e.shiftKey || e.metaKey || e.ctrlKey)) toggle(node.path);
+            selectPath(node.path, e);
+          }}
           onkeydown={() => {}}
           role="button"
           tabindex="0"
@@ -1067,7 +1244,8 @@
       {@const Icon = iconFor(kind)}
       <div
         class={`row file ${rowMatchClass(node.path)}`}
-        class:selected={browserSelection.path === node.path}
+        class:selected={selectedSet.has(node.path)}
+        class:active-cursor={browserSelection.path === node.path}
         class:non-editable={!editable}
         class:contact
         class:zebra={rowIndex % 2 === 1}
@@ -1102,7 +1280,7 @@
              can't even attempt to open a binary file in the editor. -->
         <button
           class="name"
-          onclick={() => selectPath(node.path)}
+          onclick={(e) => selectPath(node.path, e)}
           ondblclick={editable ? () => void onOpen(node.path) : undefined}
         >{node.name}</button>
         {#if editorDirty.has(node.path)}
@@ -1213,6 +1391,27 @@
     list-style: none;
     margin: 0;
     padding: 0;
+  }
+  /* `position: relative` anchors the absolutely-positioned rubber-band
+     overlay to the scrolling tree container so the band geometry shares
+     the rows' coordinate space. */
+  .tree {
+    position: relative;
+  }
+  /* While a band drag is in progress, suppress native text selection so
+     the drag reads as a selection rectangle, not a text highlight. */
+  .tree.banding {
+    user-select: none;
+  }
+  /* The rubber-band selection rectangle. Pointer-events:none so it never
+     intercepts the rows it is being dragged over. */
+  .rubber-band {
+    position: absolute;
+    pointer-events: none;
+    z-index: 2;
+    background: var(--accent-bg, rgba(120, 170, 255, 0.15));
+    border: 1px solid var(--accent);
+    border-radius: 2px;
   }
   .tree:focus {
     outline: none;
@@ -1370,6 +1569,15 @@
      that share the row. */
   .row.selected { background: var(--hover-bg); }
   .row.selected > .name { color: var(--text); font-weight: 600; }
+  /* Active cursor within a multi-selection: a slightly stronger tint +
+     an inset accent rail so the user can tell which entry the keyboard
+     and the inspector are pointed at while several rows are selected.
+     A single selection is both .selected and .active-cursor, so the
+     solo look is unchanged from before the multi-select feature. */
+  .row.active-cursor { background: var(--accent-bg, var(--hover-bg)); }
+  .tree:focus-visible .row.active-cursor {
+    box-shadow: inset 2px 0 0 var(--accent);
+  }
   /* Same look as the tab-strip dirty indicator so the two views agree. */
   .dirty-dot {
     font-size: 16px;
