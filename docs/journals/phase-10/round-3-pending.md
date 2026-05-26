@@ -2,6 +2,16 @@
 
 Date: 2026-05-25.
 
+> Migrated 2026-05-26: the remaining open items in this index moved to
+> `docs/journals/phase-11/phase-11-round-2.md`. Track A item 4 (Tauri icon +
+> desktop docs/config audit) closed in phase 10. Of the rest: Linux desktop
+> launch and the macOS CLI-to-desktop handoff carry forward; Linux native
+> drag-out is superseded (drag in/out removed in phase 11); release
+> verification is no longer blocked now that the repo is public and the
+> release process is ironed out; the manual/site streaming-copy update is
+> deferred behind the phase-11 partial-load rework. See that file for the
+> decisions. The text below is the historical round-3 snapshot.
+
 Snapshot code baseline: `454bfa2` (`fix(desktop): install web deps before
 build`).
 
