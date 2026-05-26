@@ -595,6 +595,26 @@ impl Drive {
         &self.walk_filter
     }
 
+    /// Structural bootstrap snapshot of the drive root: the immediate
+    /// files + directories, each directory carrying its recursive
+    /// (filtered) subtree file count and byte total, plus the
+    /// whole-drive aggregate. Stat-only (no content read), filtered by
+    /// the same `WalkFilter` the indexer uses. This is the spine the
+    /// UI renders before the paced index / report jobs run; deeper
+    /// levels load lazily on File Browser expand / Graph depth.
+    pub fn bootstrap(&self) -> Result<crate::bootstrap::BootstrapTree> {
+        crate::bootstrap::bootstrap_root(self.root(), &self.walk_filter)
+    }
+
+    /// Bootstrap snapshot for a nested directory at drive-relative
+    /// `rel` ("" is the root, equivalent to `bootstrap()`). Same
+    /// eager-level shape as `bootstrap`; used when a caller wants the
+    /// subtree-stats shape for an expanded directory rather than the
+    /// plain per-file listing.
+    pub fn bootstrap_dir(&self, rel: &str) -> Result<crate::bootstrap::BootstrapTree> {
+        crate::bootstrap::bootstrap_dir(self.root(), rel, &self.walk_filter)
+    }
+
     // ---- filesystem primitives (path-based, rel-only) ----
     //
     // Every entry point here routes through the cap-std `Dir`
