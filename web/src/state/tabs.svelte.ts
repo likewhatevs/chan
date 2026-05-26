@@ -21,6 +21,17 @@ import { editorToolsPrefs } from "./editorTools.svelte";
 import { classifyPath, isCsv, isEditableText, isJson } from "./fileTypes";
 import type { FileKind } from "./kinds";
 import { notify } from "./notify.svelte";
+// `uiPathPrompt` lives in store.svelte, which has a TOP-LEVEL side
+// effect (`registerDraftPromotionSink(...)`) that calls back into THIS
+// module. A static `import { uiPathPrompt } from "./store.svelte"`
+// here would force store's module body to run during tabs' own
+// module-eval (whenever a file imports tabs first), and store's eager
+// sink registration would touch `draftPromotionSinks` before it is
+// initialised -> a fatal init-order crash in every tabs-first test.
+// So we import it LAZILY inside `saveDraftTabToDrive` (a dynamic
+// import resolved at user-action time, long after both modules have
+// finished initialising). This is the correct way to consume a
+// cyclic dependency whose other side has an eager side effect.
 
 let nextId = 1;
 function id(prefix: string): string {
@@ -1459,7 +1470,6 @@ type DraftCloseDecision =
   | { action: "cancel" }
   | { action: "discard" }
   | { action: "save"; target: string };
-type DraftCloseIntent = "close" | "save";
 type DraftPromotionSink = (path: string) => void | Promise<void>;
 
 const draftPromotionSinks = new Set<DraftPromotionSink>();
@@ -1479,13 +1489,17 @@ function notifyDraftPromoted(path: string): void {
   }
 }
 
+// The draft-CLOSE modal (close a draft tab: name a destination + Save,
+// or Discard). The explicit "Save to Drive" action moved to
+// PathPromptModal (`new-file-and-draft-spec.md` item 3,
+// `saveDraftTabToDrive` below), so this modal is now the close path
+// only and always renders the close copy + the Discard button.
 export const draftCloseState = $state<{
   open: boolean;
   path: string;
   name: string;
   target: string;
   targetKind: "file" | "folder";
-  intent: DraftCloseIntent;
   hasAttachments: boolean;
   error: string | null;
   resolve: ((value: DraftCloseDecision) => void) | null;
@@ -1495,7 +1509,6 @@ export const draftCloseState = $state<{
   name: "",
   target: "",
   targetKind: "file",
-  intent: "close",
   hasAttachments: false,
   error: null,
   resolve: null,
@@ -1507,7 +1520,6 @@ function uiDraftClose(opts: {
   target: string;
   targetKind: "file" | "folder";
   hasAttachments: boolean;
-  intent?: DraftCloseIntent;
 }): Promise<DraftCloseDecision> {
   return new Promise((resolve) => {
     draftCloseState.resolve?.({ action: "cancel" });
@@ -1515,7 +1527,6 @@ function uiDraftClose(opts: {
     draftCloseState.name = opts.name;
     draftCloseState.target = opts.target;
     draftCloseState.targetKind = opts.targetKind;
-    draftCloseState.intent = opts.intent ?? "close";
     draftCloseState.hasAttachments = opts.hasAttachments;
     draftCloseState.error = null;
     draftCloseState.resolve = resolve;
@@ -2019,25 +2030,63 @@ async function handleDraftTabClose(tab: FileTab): Promise<boolean> {
 export async function saveDraftTabToDrive(tab: FileTab): Promise<boolean> {
   if (!isDraftTab(tab)) return false;
   try {
+    // Lazy import to break the eager cyclic dependency with
+    // store.svelte (see the import-site comment at the top of this
+    // module). Resolved at user-action time, never at module-eval.
+    const { uiPathPrompt } = await import("./store.svelte");
     if (isDirty(tab)) {
       await performSave(tab);
       if (isDirty(tab)) return false;
     }
     const info = await api.inspectDraft(tab.path);
-    const decision = await uiDraftClose({
-      path: tab.path,
-      name: info.name,
-      target: draftDefaultTarget(info),
-      targetKind: info.has_attachments ? "folder" : "file",
-      hasAttachments: info.has_attachments,
-      intent: "save",
-    });
-    if (decision.action !== "save") return false;
+    // `new-file-and-draft-spec.md` item 3: the draft Save reuses the
+    // SAME PathPromptModal as New File (autocomplete, live status row,
+    // pre-flight validation). The draft's shape decides the dialog
+    // kind, detected server-side via `has_attachments`:
+    //   - lone draft.md  -> a FILE target, gated like New File
+    //     (`.md` auto-append + the editable-text check).
+    //   - a draft workspace (the user pasted images / opened a
+    //     terminal / wrote files in the draft dir) -> a DIRECTORY
+    //     target (the modal's `folder` Dir-only mode: no `.md`
+    //     append, trailing `/` allowed) PLUS a notice telling the
+    //     user the whole directory is being saved as a directory,
+    //     since the path field alone can't convey "the entire
+    //     workspace moves here".
+    const target = info.has_attachments
+      ? await uiPathPrompt({
+          title: "save draft to drive (directory)",
+          defaultValue: info.name ? `${info.name}/` : "",
+          kind: "folder",
+          mode: "create",
+          notice:
+            "This draft has attachments, so the whole draft directory " +
+            "is saved as a directory at the path below.",
+        })
+      : await uiPathPrompt({
+          title: "save draft to drive (.md added if no extension)",
+          defaultValue: draftDefaultTarget(info),
+          kind: "file",
+          mode: "create",
+          // Same editable-text gate as `fileOps.createFile`: the
+          // backend refuses to promote a single-file draft to a
+          // non-editable target, so reject it in the dialog instead
+          // of bouncing through a post-close error.
+          validate: (path) =>
+            isEditableText(path)
+              ? null
+              : `'${path}' is not an editable text file (only .md and .txt)`,
+        });
+    if (target === null) return false;
+    // The modal already resolved + validated the path (`.md` append
+    // for the file case, trailing-slash folder for the dir case).
+    // `promoteDraft` takes the path verbatim; the trailing slash on a
+    // directory target is harmless (the backend validates the
+    // relative path either way).
     if (isDirty(tab)) {
       await performSave(tab);
       if (isDirty(tab)) return false;
     }
-    const promoted = await api.promoteDraft(tab.path, decision.target);
+    const promoted = await api.promoteDraft(tab.path, target);
     notifyDraftPromoted(promoted.path);
     await reloadPromotedDraftTab(tab, promotedEditorPath(promoted));
     notify(`Draft saved to ${promoted.path}`);

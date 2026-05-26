@@ -2860,6 +2860,14 @@ type PathPromptState = {
   /// editable-text gate up front.
   validate: ((effectivePath: string) => string | null) | null;
   allowAbsolute: boolean;
+  /// Optional informational line rendered above the input. Unlike the
+  /// caller `validate` (which can reject), this never gates submit; it
+  /// just explains an intent the path alone can't convey. Used by the
+  /// save-from-draft flow to tell the user the WHOLE draft directory is
+  /// being saved as a directory (the `folder` Dir-only mode), since the
+  /// path field only shows the destination, not "the entire workspace
+  /// moves here".
+  notice: string | null;
   resolve: ((value: string | null) => void) | null;
 };
 
@@ -2872,6 +2880,7 @@ export const pathPromptState = $state<PathPromptState>({
   sourcePath: null,
   validate: null,
   allowAbsolute: false,
+  notice: null,
   resolve: null,
 });
 
@@ -2883,6 +2892,7 @@ export function uiPathPrompt(opts: {
   sourcePath?: string | null;
   validate?: (effectivePath: string) => string | null;
   allowAbsolute?: boolean;
+  notice?: string | null;
 }): Promise<string | null> {
   return new Promise((resolve) => {
     pathPromptState.resolve?.(null);
@@ -2893,6 +2903,7 @@ export function uiPathPrompt(opts: {
     pathPromptState.sourcePath = opts.sourcePath ?? null;
     pathPromptState.validate = opts.validate ?? null;
     pathPromptState.allowAbsolute = opts.allowAbsolute ?? false;
+    pathPromptState.notice = opts.notice ?? null;
     pathPromptState.resolve = resolve;
     pathPromptState.open = true;
   });
@@ -2903,6 +2914,7 @@ export function resolvePathPrompt(value: string | null): void {
   pathPromptState.resolve = null;
   pathPromptState.validate = null;
   pathPromptState.allowAbsolute = false;
+  pathPromptState.notice = null;
   pathPromptState.open = false;
   r?.(value);
 }
