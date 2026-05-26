@@ -2,13 +2,13 @@
 //!
 //! chan-desktop opens local drives through the embedded chan-server
 //! `DriveHost`. Each running drive is tracked in `AppState.serves`
-//! with its route prefix and token-bearing URL. The bundled `chan`
-//! binary remains available for registry mutations, feature
-//! toggles, upgrades, and the hidden MCP proxy, but local desktop
-//! serving does not spawn `chan serve`.
+//! with its route prefix and token-bearing URL. chan-desktop links
+//! `chan-drive` and `chan-server` directly; there is no `chan`
+//! binary at runtime. Registry mutations and feature toggles run
+//! in-process against the embedded host's shared `Library`, and
+//! local serving never spawns `chan serve`.
 
 use std::hash::{DefaultHasher, Hash, Hasher};
-use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 
@@ -151,177 +151,6 @@ pub fn new_drive_window_label(key: &str) -> String {
 /// signal in the OS window switcher than the prefix + basename.
 fn drive_title(key: &str) -> String {
     key.to_string()
-}
-
-/// Resolve the absolute path of the bundled `chan` binary.
-///
-/// The helper binary is for CLI-owned surfaces, not local serving.
-/// Normal local drives run through the embedded chan-server host.
-/// `desktop/Makefile` stages the per-target-triple binary under
-/// `src-tauri/binaries/`; the Tauri bundle config copies it next to
-/// chan-desktop's own executable with the triple suffix stripped:
-///
-///   * dev (`make run`):           staged before `cargo tauri dev`
-///   * release bundle on macOS:    `Chan.app/Contents/MacOS/chan`
-///   * release on Linux/Windows:   pending per-platform bundle files
-///
-/// The resolver is pure path math over `current_exe()`; it does NOT
-/// check that the binary actually exists on disk. The boot-time
-/// preflight in `crate::compute_bin_status` performs the existence
-/// and version check exactly once and stores the verdict in
-/// `AppState::bin_status`, gating every IPC that would spawn chan.
-pub fn bundled_chan_path() -> Result<PathBuf, String> {
-    let exe = std::env::current_exe().map_err(|e| format!("locating chan-desktop binary: {e}"))?;
-    let dir = exe
-        .parent()
-        .ok_or_else(|| "chan-desktop binary has no parent directory".to_string())?;
-    let name = if cfg!(target_os = "windows") {
-        "chan.exe"
-    } else {
-        "chan"
-    };
-    Ok(dir.join(name))
-}
-
-/// Probe a `chan` binary's `--version` output and confirm it
-/// matches chan-desktop's own version exactly.
-///
-/// Used by both the boot-time preflight (validating the bundled
-/// binary at `bundled_chan_path()`) and the PATH-first resolver
-/// (deciding whether a `chan` on the user's `PATH` is usable as a
-/// substitute for the bundled binary). The exact-match contract
-/// is the locked Round-2 decision 3 (round-2-plan decisions
-/// table): bundled chan ships from the same workspace checkout
-/// as chan-desktop so the versions are always identical in a
-/// clean build, and any PATH chan that doesn't match the same
-/// version is rejected in favour of the bundled fallback.
-pub fn probe_chan_version(bin: &Path) -> Result<(), String> {
-    let out = std::process::Command::new(bin)
-        .arg("--version")
-        .output()
-        .map_err(|e| format!("probing chan version at {}: {e}", bin.display()))?;
-    if !out.status.success() {
-        return Err(format!(
-            "chan at {} failed `--version`: {}",
-            bin.display(),
-            String::from_utf8_lossy(&out.stderr).trim()
-        ));
-    }
-    let stdout = String::from_utf8_lossy(&out.stdout);
-    let version = stdout
-        .split_whitespace()
-        .find_map(|part| semver::Version::parse(part.trim_start_matches('v')).ok())
-        .ok_or_else(|| format!("could not parse chan version from {:?}", stdout.trim()))?;
-    let expected = semver::Version::parse(env!("CARGO_PKG_VERSION"))
-        .map_err(|e| format!("invalid chan-desktop version: {e}"))?;
-    if version != expected {
-        return Err(format!(
-            "chan at {} reports v{version}, but Chan Desktop expects v{expected}.",
-            bin.display()
-        ));
-    }
-    Ok(())
-}
-
-/// Resolve which `chan` binary chan-desktop should spawn.
-///
-/// PATH-first with bundled fallback. Locked Round-2 decision 3
-/// (`docs/journals/phase-8/architect/round-2-plan.md`).
-///
-/// Algorithm:
-///   1. Look up `chan` (or `chan.exe`) on the user's `PATH`. If
-///      found, probe its `--version` and check it matches
-///      chan-desktop's `env!("CARGO_PKG_VERSION")` exactly. On
-///      match, return the resolved PATH path.
-///   2. Any failure (no chan on `PATH`, spawn error, `--version`
-///      error, version mismatch) falls through to the bundled
-///      binary at `bundled_chan_path()`.
-///
-/// Why PATH-first: a power user who runs their own chan build
-/// from this checkout and `cargo install --path crates/chan`
-/// expects chan-desktop to use their build. Why exact-match: a
-/// stale PATH chan (vN-1) running against chan-desktop vN, or a
-/// vN+1 prerelease, produces weird-state crashes the locked
-/// decision was designed to prevent; falling back to bundled
-/// keeps the app launchable.
-///
-/// The resolver does NOT existence-check the bundled fallback;
-/// the boot-time preflight in `crate::compute_bin_status` owns
-/// the file + version check on whatever path is picked, and
-/// surfaces "bundled missing AND PATH missing" via the
-/// `BinStatus::missing` kind that the frontend already handles.
-pub fn resolve_chan_binary() -> Result<PathBuf, String> {
-    resolve_chan_binary_with(which_chan(), probe_chan_version, bundled_chan_path)
-}
-
-/// Testable core of `resolve_chan_binary`. The `path_candidate`
-/// is the `which`-style lookup result; `probe` is the
-/// `--version`-and-exact-match check (real implementation:
-/// `probe_chan_version`); `bundled_fn` is the fallback path
-/// resolver (real implementation: `bundled_chan_path`). Pure
-/// composition over its three inputs so the five acceptance
-/// branches in `fullstack-b-16` can be covered by unit tests
-/// without spawning real binaries.
-fn resolve_chan_binary_with<P, B>(
-    path_candidate: Option<PathBuf>,
-    probe: P,
-    bundled_fn: B,
-) -> Result<PathBuf, String>
-where
-    P: FnOnce(&Path) -> Result<(), String>,
-    B: FnOnce() -> Result<PathBuf, String>,
-{
-    if let Some(path_chan) = path_candidate {
-        if probe(&path_chan).is_ok() {
-            return Ok(path_chan);
-        }
-    }
-    bundled_fn()
-}
-
-/// `which chan` for the current process: walk `PATH` and return
-/// the first executable entry named `chan` (or `chan.exe` on
-/// Windows). Returns None when `PATH` is unset, empty, or has
-/// no matching entry. Pure-environment lookup; does not spawn a
-/// subprocess.
-fn which_chan() -> Option<PathBuf> {
-    let path_var = std::env::var_os("PATH")?;
-    let exe_name = if cfg!(target_os = "windows") {
-        "chan.exe"
-    } else {
-        "chan"
-    };
-    which_chan_in(&path_var, exe_name)
-}
-
-/// `which_chan` factored over the `PATH` value + binary name so
-/// tests can drive it with synthetic fixtures without mutating
-/// the live process environment (which would race across the
-/// test binary's threads).
-fn which_chan_in(path_var: &std::ffi::OsStr, name: &str) -> Option<PathBuf> {
-    for dir in std::env::split_paths(path_var) {
-        let candidate = dir.join(name);
-        if is_executable_file(&candidate) {
-            return Some(candidate);
-        }
-    }
-    None
-}
-
-#[cfg(unix)]
-fn is_executable_file(path: &Path) -> bool {
-    use std::os::unix::fs::PermissionsExt;
-    match path.metadata() {
-        Ok(meta) => meta.is_file() && (meta.permissions().mode() & 0o111 != 0),
-        Err(_) => false,
-    }
-}
-
-#[cfg(not(unix))]
-fn is_executable_file(path: &Path) -> bool {
-    // Windows: PATHEXT decides what counts as executable. We only
-    // ever look for `chan.exe`, so file-exists is sufficient.
-    path.is_file()
 }
 
 /// Stable window-label prefix for a tunneled drive, namespaced
@@ -908,30 +737,6 @@ mod tests {
     }
 
     #[test]
-    fn add_drive_passes_feature_flags_to_chan_cli() {
-        // `fullstack-b-28b` slice iii: the pre-flight modal
-        // collects feature choices BEFORE registration; `add_drive`
-        // must forward them as `--semantic-search` /
-        // `--reports` flags to `chan add`. systacean-27's
-        // BOOT process picks the flags up + activates the layers
-        // on the first open, so the user doesn't need to toggle
-        // post-add to get the chosen state.
-        const MAIN_RS: &str = include_str!("main.rs");
-        assert!(
-            MAIN_RS.contains("features: Option<DriveFeatures>"),
-            "add_drive must accept the pre-flight feature pair as an optional arg",
-        );
-        assert!(
-            MAIN_RS.contains("\"--semantic-search\""),
-            "add_drive must pass --semantic-search to chan add when bge is enabled",
-        );
-        assert!(
-            MAIN_RS.contains("\"--reports\""),
-            "add_drive must pass --reports to chan add when reports is enabled",
-        );
-    }
-
-    #[test]
     fn pick_and_add_shows_preflight_dialog_before_add_drive() {
         // `fullstack-b-28b` slice iii: pickAndAdd MUST gate the
         // add_drive invocation behind the pre-flight modal so the
@@ -1021,75 +826,63 @@ mod tests {
     }
 
     #[test]
-    fn get_drive_features_reads_chan_index_status_after_b28b_ii() {
-        // `fullstack-b-28b` slice ii: `get_drive_features` swaps
-        // from desktop-cache-only to a `chan index status --json` CLI
-        // round-trip, picking up out-of-band feature flips (e.g.
-        // a user toggling via terminal). Pin the subprocess
-        // argument shape so a refactor can't silently revert to
-        // the slice-i cache-only read path.
+    fn registry_and_feature_commands_run_in_process_not_via_chan_cli() {
+        // The in-process registry refactor dropped the `chan`
+        // binary entirely: `add_drive`, `remove_drive`, and the
+        // feature commands route through the embedded host's shared
+        // `Library` / live `Arc<Drive>` rather than spawning chan.
+        // Pin the in-process call shape so a future change can't
+        // silently reintroduce a subprocess dependency, and assert
+        // the deleted subprocess argument shapes are gone.
         const MAIN_RS: &str = include_str!("main.rs");
         assert!(
-            MAIN_RS.contains("read_features_via_chan_index_status"),
-            "get_drive_features must call read_features_via_chan_index_status as the authoritative read path",
+            MAIN_RS.contains("embedded.library()"),
+            "registry commands must route through the embedded shared Library",
         );
         assert!(
-            MAIN_RS.contains("[\"index\", \"status\", \"--json\", \"--path\", key]"),
-            "the CLI read must use `chan index status --json --path <path>`",
+            MAIN_RS.contains("register_drive") && MAIN_RS.contains("unregister_drive"),
+            "add_drive/remove_drive must use Library register/unregister in-process",
         );
         assert!(
-            MAIN_RS.contains("\"semantic_enabled\""),
-            "the JSON parser must pull semantic_enabled from chan index status output",
+            MAIN_RS.contains("set_semantic_enabled") && MAIN_RS.contains("set_reports_enabled"),
+            "feature toggles must call chan-drive set_* in-process",
         );
         assert!(
-            MAIN_RS.contains("\"reports_enabled\""),
-            "the JSON parser must pull reports_enabled from chan index status output",
+            !MAIN_RS.contains("read_features_via_chan_index_status"),
+            "the `chan index status --json` read path must be gone",
+        );
+        assert!(
+            !MAIN_RS.contains("\"--semantic-search\"") && !MAIN_RS.contains("\"enable-semantic\""),
+            "no chan CLI feature-flag arguments may remain",
         );
     }
 
     #[test]
-    fn chan_index_status_json_carries_reports_enabled_after_b28b_ii() {
-        // `fullstack-b-28b` slice ii: chan-desktop's CLI read
-        // depends on `chan index status --json` emitting
-        // `reports_enabled` alongside `semantic_enabled`. Pin
-        // the field name in the chan binary's source so a rename
-        // / removal on the chan side fails this test loudly +
-        // forces a coordinated cross-lane fix instead of a
-        // silent regression to cache-only reads.
-        const CHAN_MAIN_RS: &str = include_str!("../../../crates/chan/src/main.rs");
-        assert!(
-            CHAN_MAIN_RS.contains("\"reports_enabled\": cfg.reports_enabled"),
-            "chan index status --json must emit reports_enabled for the chan-desktop get_drive_features IPC",
-        );
-    }
-
-    #[test]
-    fn set_drive_features_calls_chan_cli_after_b28b() {
-        // `fullstack-b-28b-i`: `set_drive_features` no longer
-        // writes the desktop cache in isolation. It first invokes the
-        // `chan` CLI for each changed flag (so chan-drive's
-        // authoritative state matches what the user clicked),
-        // then mirrors the result into the cache. Pin the CLI
-        // subcommand names so a rename in chan's CLI surface
-        // (or an architectural swap to a different transport)
-        // can't silently revert chan-desktop to the old stub
-        // behaviour.
+    fn bin_status_machinery_is_gone() {
+        // The bundled-binary preflight + gating was deleted with the
+        // subprocess paths. Pin the absence so a future change can't
+        // quietly re-add a `chan` binary dependency or its gating.
         const MAIN_RS: &str = include_str!("main.rs");
         assert!(
-            MAIN_RS.contains("\"enable-semantic\""),
-            "set_drive_features must shell out to `chan index enable-semantic` when bge flips ON"
+            !MAIN_RS.contains("chan_bin_status"),
+            "chan_bin_status command + registration must be gone",
         );
         assert!(
-            MAIN_RS.contains("\"disable-semantic\""),
-            "set_drive_features must shell out to `chan index disable-semantic` when bge flips OFF"
+            !MAIN_RS.contains("fn require_bin"),
+            "require_bin gating helper must be gone",
         );
         assert!(
-            MAIN_RS.contains("\"reports\""),
-            "set_drive_features must invoke `chan reports {{enable,disable}}` for the reports flag"
+            !MAIN_RS.contains("struct BinStatus"),
+            "BinStatus struct must be gone",
         );
+        // serve.rs must no longer carry the binary resolver. Build
+        // the needle at runtime so this assertion's own source text
+        // doesn't satisfy the `contains` check it performs.
+        let serve_rs = include_str!("serve.rs");
+        let resolver_sig = format!("fn resolve{}binary", "_chan_");
         assert!(
-            MAIN_RS.contains("\"-y\""),
-            "chan reports disable prompts for confirmation; -y must be passed so chan-desktop's checkbox click doesn't deadlock"
+            !serve_rs.contains(&resolver_sig),
+            "binary resolution helpers must be gone from serve.rs",
         );
     }
 
@@ -1259,145 +1052,6 @@ mod tests {
         assert!(KEY_BRIDGE_JS.contains("app.tab.jump"));
         assert!(KEY_BRIDGE_JS.contains("app.tab.next"));
         assert!(KEY_BRIDGE_JS.contains("app.tab.prev"));
-    }
-
-    #[test]
-    fn bundled_chan_path_is_sibling_of_chan_desktop_executable() {
-        // `fullstack-b-15`: Tauri's `externalBin` stages the chan
-        // chan binary next to chan-desktop's own binary, with the
-        // per-target-triple suffix stripped. Pin that contract here
-        // so a future capability or layout change can't silently
-        // shift where chan-desktop expects to find the bundled binary.
-        // Pure path math: the helper does NOT touch the filesystem,
-        // so the test passes even when target/debug/chan does not
-        // exist (e.g. on a fresh CI checkout that has not built
-        // `cargo build --release --bin chan` yet).
-        let path = bundled_chan_path().expect("bundled_chan_path resolves");
-        let exe = std::env::current_exe().expect("current_exe");
-        assert_eq!(
-            path.parent(),
-            exe.parent(),
-            "bundled chan must sit next to chan-desktop's binary",
-        );
-        let expected_name = if cfg!(target_os = "windows") {
-            "chan.exe"
-        } else {
-            "chan"
-        };
-        assert_eq!(
-            path.file_name().and_then(|n| n.to_str()),
-            Some(expected_name),
-        );
-    }
-
-    #[test]
-    fn resolve_chan_binary_picks_path_when_version_matches() {
-        // `fullstack-b-16`: PATH chan exists + version matches → use
-        // PATH path. Tested via dependency injection (no real
-        // subprocess spawn). The probe argument simulates a
-        // successful version match; the bundled-fn argument is a
-        // sentinel that must NOT be called when PATH succeeds.
-        let path_chan = PathBuf::from("/usr/local/bin/chan");
-        let resolved = resolve_chan_binary_with(
-            Some(path_chan.clone()),
-            |_| Ok(()),
-            || panic!("bundled fallback must not run when PATH chan matches"),
-        )
-        .expect("resolves successfully");
-        assert_eq!(resolved, path_chan);
-    }
-
-    #[test]
-    fn resolve_chan_binary_falls_back_when_path_version_mismatches() {
-        // PATH chan exists but version probe errors (mismatch, or
-        // failed `--version` invocation, same outward shape). Must
-        // fall through to the bundled path.
-        let path_chan = PathBuf::from("/usr/local/bin/chan");
-        let bundled = PathBuf::from("/Applications/Chan.app/Contents/MacOS/chan");
-        let resolved = resolve_chan_binary_with(
-            Some(path_chan),
-            |_| Err("v0.10.0 != v0.11.1".to_string()),
-            || Ok(bundled.clone()),
-        )
-        .expect("resolves successfully via bundled");
-        assert_eq!(resolved, bundled);
-    }
-
-    #[test]
-    fn resolve_chan_binary_falls_back_when_no_chan_on_path() {
-        // PATH lookup turned up empty (no chan binary in any entry
-        // of `$PATH`). Resolver returns the bundled path without
-        // attempting a version probe.
-        let bundled = PathBuf::from("/Applications/Chan.app/Contents/MacOS/chan");
-        let resolved = resolve_chan_binary_with(
-            None,
-            |_| panic!("probe must not run when there is no PATH candidate"),
-            || Ok(bundled.clone()),
-        )
-        .expect("resolves successfully via bundled");
-        assert_eq!(resolved, bundled);
-    }
-
-    #[test]
-    fn resolve_chan_binary_surfaces_error_when_bundled_also_missing() {
-        // Edge case from the task spec: no chan on PATH AND
-        // `bundled_chan_path()` errors (e.g. `current_exe()` failed).
-        // The helper propagates the bundled error so the boot-time
-        // preflight can map it to `BinStatus::missing`.
-        let resolved = resolve_chan_binary_with(
-            None,
-            |_| panic!("probe must not run when there is no PATH candidate"),
-            || Err("locating chan-desktop binary: io error".to_string()),
-        );
-        let err = resolved.expect_err("must propagate the bundled error");
-        assert!(err.contains("locating chan-desktop binary"));
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn which_chan_in_finds_chan_in_first_matching_path_entry() {
-        // `which_chan_in` is the testable seam for the `PATH`
-        // lookup. Synthesize a temp directory containing an
-        // executable `chan`, point PATH at it, and confirm the
-        // helper returns that path. Then drop a SECOND temp dir
-        // also containing chan and confirm first-match-wins.
-        use std::fs;
-        use std::os::unix::fs::PermissionsExt;
-
-        let tmp_root =
-            std::env::temp_dir().join(format!("chan-fullstack-b-16-which-{}", std::process::id()));
-        let first = tmp_root.join("first");
-        let second = tmp_root.join("second");
-        fs::create_dir_all(&first).expect("create first PATH dir");
-        fs::create_dir_all(&second).expect("create second PATH dir");
-        for dir in [&first, &second] {
-            let bin = dir.join("chan");
-            fs::write(&bin, b"#!/bin/sh\necho stub\n").expect("write stub chan");
-            fs::set_permissions(&bin, fs::Permissions::from_mode(0o755))
-                .expect("mark stub executable");
-        }
-
-        let path_var = std::env::join_paths([&first, &second]).expect("join PATH");
-        let resolved = which_chan_in(&path_var, "chan").expect("resolves PATH chan");
-        assert_eq!(resolved, first.join("chan"));
-
-        // No matching binary anywhere on PATH → None.
-        let empty_dir = tmp_root.join("empty");
-        fs::create_dir_all(&empty_dir).expect("create empty PATH dir");
-        let empty_path = std::env::join_paths([&empty_dir]).expect("join PATH");
-        assert!(which_chan_in(&empty_path, "chan").is_none());
-
-        // Non-executable file is rejected (Unix-only branch; the
-        // Windows fall-through accepts any matching name).
-        let no_exec_dir = tmp_root.join("no-exec");
-        fs::create_dir_all(&no_exec_dir).expect("create no-exec PATH dir");
-        let no_exec = no_exec_dir.join("chan");
-        fs::write(&no_exec, b"not executable\n").expect("write non-exec stub");
-        fs::set_permissions(&no_exec, fs::Permissions::from_mode(0o644)).expect("mark non-exec");
-        let no_exec_path = std::env::join_paths([&no_exec_dir]).expect("join PATH");
-        assert!(which_chan_in(&no_exec_path, "chan").is_none());
-
-        fs::remove_dir_all(&tmp_root).expect("cleanup temp PATH fixtures");
     }
 
     #[test]

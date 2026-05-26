@@ -363,17 +363,11 @@ table.drives tbody tr:hover { background: var(--hover-bg); }
   padding: 8px 14px;
   font-size: 13px;
 }
+/* Persistent variant for the add/remove progress banner. Lives at
+   the top of <body> (above the sticky header) so it does not
+   disappear with the next list re-render while the embedded host
+   registers or forgets a drive. */
 .status-banner.persistent {
-  position: sticky;
-  top: 0;
-  z-index: 20;
-  font-weight: 500;
-}
-/* Persistent variant for the boot-time chan-binary preflight.
-   Lives at the top of <body> (above the sticky header) so it does
-   not disappear with the next list re-render and is the first
-   thing the user sees on launch. */
-.error-banner.persistent {
   position: sticky;
   top: 0;
   z-index: 20;

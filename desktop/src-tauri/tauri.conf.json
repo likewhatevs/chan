@@ -55,10 +55,7 @@
     "longDescription": "Chan Desktop — markdown editor with local drives.",
     "macOS": {
       "minimumSystemVersion": "11.0",
-      "signingIdentity": "Developer ID Application: Alexandre Fiori (W73XV5CK3N)",
-      "files": {
-        "MacOS/chan": "binaries/chan-aarch64-apple-darwin"
-      }
+      "signingIdentity": "Developer ID Application: Alexandre Fiori (W73XV5CK3N)"
     },
     "linux": {
       "deb": {

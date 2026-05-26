@@ -89,13 +89,11 @@ listen('auth-error', (e) => {
 
 let booted = false;
 let homeDir = '';
-/// Boot-time preflight result from the Rust side. While `ok=false`,
-/// actions that invoke the bundled chan CLI (Open drive, Forget,
-/// feature toggles) are disabled and a persistent banner explains
-/// why. Local embedded On and tunnel Listen do not require this
-/// binary. `kind` is one of "ok" | "translocated" | "missing" |
-/// "version-mismatch".
-let chanBinStatus = { ok: true, kind: 'ok', reason: '' };
+/// True while a registry add/remove is running in the embedded
+/// host. Add/remove and feature toggles run in-process now (no
+/// `chan` binary), but `boot()` can still take a moment on a large
+/// drive, so the launcher disables the relevant controls and shows
+/// a progress banner while busy.
 let chanBusy = false;
 let defaultDrivePromptDismissed = false;
 // Last rendered drives payload as a JSON string. The backend fires
@@ -143,15 +141,10 @@ function renderPath(full) {
 }
 
 async function boot() {
-  await checkChanBin();
   let drives = await refresh();
   await maybePromptDefaultDrive();
   drives = await refresh();
-  // When chan is unavailable, suppress the first-run "no drives →
-  // open picker" prompt. The picker would either fail outright
-  // (translocated / missing binary) or, worse, succeed and leave
-  // the user looking at an empty registry they can't use.
-  if (!booted && drives.length === 0 && chanBinStatus.ok) {
+  if (!booted && drives.length === 0) {
     booted = true;
     await pickAndAdd();
   } else {
@@ -385,49 +378,9 @@ function showDefaultDriveDialog(status) {
   });
 }
 
-/// Call the Rust preflight, store the result, mirror it onto the
-/// chrome (Open drive / Listen / banner). Called once on boot; if
-/// future work needs a re-check (e.g. user moved the app and we
-/// want to detect it without a restart) the same function is the
-/// hook.
-async function checkChanBin() {
-  try {
-    chanBinStatus = await invoke('chan_bin_status');
-  } catch (e) {
-    chanBinStatus = {
-      ok: false,
-      kind: 'missing',
-      reason: typeof e === 'string' ? e : 'Chan command-line tool is unavailable.',
-    };
-  }
-  applyChanBinStatus();
-}
-
-function applyChanBinStatus() {
-  const ok = chanBinStatus.ok;
-  openBtn.disabled = !ok || chanBusy;
-  tunnelBtn.disabled = chanBusy;
-  document.body.classList.toggle('chan-bin-unavailable', !ok);
-
-  let banner = document.getElementById('chan-bin-banner');
-  if (ok) {
-    if (banner) banner.remove();
-    return;
-  }
-  const msg = chanBinStatus.reason
-    || 'Chan command-line tool is unavailable. Open, Forget, and feature changes are disabled.';
-  if (!banner) {
-    banner = document.createElement('div');
-    banner.id = 'chan-bin-banner';
-    banner.className = 'error-banner persistent';
-    document.body.insertBefore(banner, document.body.firstChild);
-  }
-  banner.textContent = msg;
-}
-
 function applyChanBusyState(payload) {
   chanBusy = !!(payload && payload.busy);
-  openBtn.disabled = !chanBinStatus.ok || chanBusy;
+  openBtn.disabled = chanBusy;
   tunnelBtn.disabled = chanBusy;
   document.body.classList.toggle('chan-busy', chanBusy);
 
@@ -718,7 +671,7 @@ function formatPreflightBytes(bytes) {
 }
 
 function render(drives) {
-  const chanCommandDisabledAttr = chanBinStatus.ok && !chanBusy ? '' : 'disabled';
+  const chanCommandDisabledAttr = chanBusy ? 'disabled' : '';
   const localRuntimeDisabledAttr = chanBusy ? 'disabled' : '';
 
   if (!drives.length) {

@@ -57,8 +57,25 @@ impl EmbeddedServer {
             .host
             .open_registered_drive(Path::new(key), serve_config(self.addr, &prefix))
             .await
-            .map_err(|e| format!("opening embedded drive {key}: {e}"))?;
+            .map_err(|e| map_open_error(key, e))?;
         Ok(hosted.handle.launch_url())
+    }
+
+    /// Shared drive registry handle owned by the embedded host.
+    /// Every desktop registry mutation and feature toggle routes
+    /// through this single `Library` so the in-memory registry the
+    /// host opens drives against never goes stale relative to disk.
+    pub fn library(&self) -> &chan_drive::Library {
+        self.host.library()
+    }
+
+    /// Live `Arc<Drive>` for a mounted drive, or `None` when the
+    /// path isn't currently mounted. Feature toggles use this to
+    /// reach the SAME handle the runtime holds instead of re-opening
+    /// (which would hit `DriveAlreadyOpen` against the lifetime
+    /// flock).
+    pub fn live_drive(&self, root: &Path) -> Option<Arc<chan_drive::Drive>> {
+        self.host.live_drive(root)
     }
 
     pub fn close_prefix(&self, prefix: &str) -> Result<(), String> {
@@ -72,6 +89,23 @@ impl EmbeddedServer {
 impl Drop for EmbeddedServer {
     fn drop(&mut self) {
         let _ = self.shutdown_tx.send(true);
+    }
+}
+
+/// Map an embedded open error to a user-facing string. A drive
+/// already held by another chan process (typically a standalone
+/// `chan serve <drive>` started before the desktop tried to mount
+/// it) surfaces as `DriveLocked`; an in-process handle that hasn't
+/// dropped yet surfaces as `DriveAlreadyOpen`. Both reach the SPA
+/// verbatim and revert the row's On toggle, so they must read as a
+/// clear, non-fatal instruction rather than a raw error chain.
+fn map_open_error(key: &str, e: chan_server::Error) -> String {
+    use chan_drive::ChanError;
+    match e {
+        chan_server::Error::Core(ChanError::DriveLocked | ChanError::DriveAlreadyOpen) => {
+            "This drive is open in another chan process. Quit it and try again.".to_string()
+        }
+        other => format!("opening embedded drive {key}: {other}"),
     }
 }
 

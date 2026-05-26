@@ -188,6 +188,29 @@ impl DriveHost {
         Router::new().fallback(host_dispatch).with_state(self)
     }
 
+    /// Return the live `Arc<Drive>` for a mounted drive whose root
+    /// matches `root`, or `None` when no mounted runtime owns that
+    /// path.
+    ///
+    /// Desktop feature toggles need the SAME handle the runtime
+    /// holds: a second `Library::open_drive` for a mounted path
+    /// returns `DriveAlreadyOpen` because `Drive::open` keeps a
+    /// lifetime flock. Comparison is by canonical form so a
+    /// symlinked or non-normalized caller path still matches the
+    /// canonical root the runtime stored at mount time. Lock
+    /// poisoning and a drained drive cell both read as "not live"
+    /// (mirrors `AppState::try_drive`); the caller then falls back
+    /// to a transient open against the registry.
+    pub fn live_drive(&self, root: &Path) -> Option<Arc<Drive>> {
+        let target = canonical_key(root);
+        let drives = self.drives.read().ok()?;
+        let runtime = drives
+            .values()
+            .find(|runtime| canonical_key(&runtime.root) == target)?;
+        let cell = runtime.artifacts.drive_cell.read().ok()?;
+        Some(cell.as_ref()?.drive.clone())
+    }
+
     fn router_for_path(&self, path: &str) -> Result<Option<Router>, Error> {
         let drives = self
             .drives
@@ -223,6 +246,15 @@ fn path_matches_prefix(path: &str, prefix: &str) -> bool {
         || path
             .strip_prefix(prefix)
             .is_some_and(|rest| rest.starts_with('/'))
+}
+
+/// Canonical-form key for matching a caller path against a mounted
+/// runtime's root. Falls back to the input path when the filesystem
+/// can't canonicalize (drive root missing or asleep), so the match
+/// still works on the exact request path. Mirrors the private
+/// `canonical_key` in `chan_drive::library`.
+fn canonical_key(root: &Path) -> PathBuf {
+    root.canonicalize().unwrap_or_else(|_| root.to_path_buf())
 }
 
 fn display_prefix(prefix: &str) -> &str {
@@ -371,6 +403,33 @@ mod tests {
         host.open_registered_drive(root.path(), serve_config("/second"))
             .await
             .expect("reopen after close");
+    }
+
+    #[tokio::test]
+    async fn live_drive_returns_the_mounted_runtime_handle() {
+        let cfg = tempfile::tempdir().expect("config dir");
+        let root = tempfile::tempdir().expect("drive");
+        let lib = Library::open_at(cfg.path().join("config.toml")).expect("library");
+        lib.register_drive(root.path()).expect("register");
+        let host = Arc::new(DriveHost::new(lib.clone()));
+        host.open_registered_drive(root.path(), serve_config("/drive"))
+            .await
+            .expect("open");
+
+        // The live handle must be the SAME Arc the runtime holds, so a
+        // feature toggle off it reaches the flock-holding drive rather
+        // than tripping DriveAlreadyOpen on a re-open.
+        let live = host.live_drive(root.path()).expect("live drive present");
+        let canonical = root.path().canonicalize().expect("canonical root");
+        assert_eq!(live.root(), canonical.as_path());
+
+        // A path that no runtime mounts reads as not live.
+        let other = tempfile::tempdir().expect("other dir");
+        assert!(host.live_drive(other.path()).is_none());
+
+        // After close, the handle is no longer live.
+        assert!(host.close_drive("/drive").expect("close"));
+        assert!(host.live_drive(root.path()).is_none());
     }
 
     #[test]

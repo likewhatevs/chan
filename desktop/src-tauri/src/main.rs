@@ -19,7 +19,6 @@ use std::sync::{Arc, Mutex, OnceLock};
 use serde::Serialize;
 use tauri::menu::{Menu, MenuItemBuilder, MenuItemKind, PredefinedMenuItem, WINDOW_SUBMENU_ID};
 use tauri::{Emitter, Manager, RunEvent, State, WebviewUrl, WebviewWindowBuilder, WindowEvent};
-use tokio::process::Command;
 
 use config::{Config, ConfigStore, DriveFeatures, OutboundDrive, WindowConfig};
 use serve::ServeHandle;
@@ -43,12 +42,6 @@ pub struct AppState {
     /// loopback listeners that proxy into registered remote
     /// `chan serve` instances.
     tunnel: Arc<TunnelState>,
-    /// Result of the boot-time check that the bundled `chan` binary
-    /// is present and the desktop is running from a real install
-    /// location. Frozen for the life of the process. When `!ok`, the
-    /// frontend disables every action that would try to spawn chan,
-    /// and the mutating IPC commands short-circuit with `reason`.
-    bin_status: BinStatus,
     /// `fullstack-b-19`: per-live-window zoom level. Tracks the
     /// current zoom for every open webview keyed by window label so
     /// `zoom_in` / `zoom_out` / `zoom_reset` can compute the next
@@ -69,33 +62,6 @@ pub struct AppState {
 impl Drop for AppState {
     fn drop(&mut self) {
         serve::stop_all(self);
-    }
-}
-
-/// Frontend-visible verdict from the boot-time `chan` preflight.
-/// `kind` discriminates the error so the UI can choose copy:
-///   * `"ok"`          — binary found, environment is fine.
-///   * `"translocated"` — macOS App Translocation detected; the app
-///     is running from a randomized read-only path because it was
-///     launched from outside `/Applications`. User must move the
-///     bundle.
-///   * `"missing"`     — bundled chan binary not next to
-///     chan-desktop.
-///     Corrupt install; should never happen in a packaged build.
-#[derive(Debug, Clone, Serialize)]
-pub struct BinStatus {
-    pub ok: bool,
-    pub kind: &'static str,
-    pub reason: String,
-}
-
-impl BinStatus {
-    fn ok_status() -> Self {
-        Self {
-            ok: true,
-            kind: "ok",
-            reason: String::new(),
-        }
     }
 }
 
@@ -269,31 +235,29 @@ async fn add_drive(
     path: String,
     features: Option<DriveFeatures>,
 ) -> Result<(), String> {
-    require_bin(&state.bin_status)?;
     let path = canonical_key(Path::new(&path));
-    let bin = serve::resolve_chan_binary()?;
     let features = features.unwrap_or_default();
-    let mut args: Vec<&str> = vec!["add", &path];
-    if features.bge {
-        args.push("--semantic-search");
-    }
-    if features.reports {
-        args.push("--reports");
-    }
+    let Some(embedded) = state.embedded.get() else {
+        return Err("embedded local server is unavailable".to_string());
+    };
+    // Route through the SINGLE embedded Library so the in-memory
+    // registry the host opens drives against learns about the new
+    // row immediately. A subprocess `chan add` would mutate only
+    // the on-disk registry, leaving the host's boot-time snapshot
+    // stale, which is the "drive not registered" bug this replaces.
+    let library = embedded.library().clone();
+    let path_for_block = path.clone();
+
     emit_chan_busy(&app, true, "add", &path);
-    let out = Command::new(&bin)
-        .args(&args)
-        .kill_on_drop(true)
-        .output()
-        .await
-        .map_err(|e| format!("running `chan add`: {e}"));
+    // register_drive + boot run off the async executor: boot can
+    // walk a large drive on first reports activation.
+    let result =
+        tokio::task::spawn_blocking(move || register_and_boot(&library, &path_for_block, features))
+            .await;
     emit_chan_busy(&app, false, "add", &path);
-    let out = out?;
-    if !out.status.success() {
-        return Err(format!(
-            "`chan add` failed: {}",
-            String::from_utf8_lossy(&out.stderr).trim()
-        ));
+    match result {
+        Ok(inner) => inner?,
+        Err(e) => return Err(format!("registering drive panicked: {e}")),
     }
 
     // `fullstack-b-28b` slice iii: mirror the chosen features into
@@ -316,30 +280,76 @@ async fn add_drive(
     Ok(())
 }
 
+/// Register `path` with the shared embedded Library and, if any
+/// optional feature was requested, open the drive once to persist
+/// the flags and kick the BOOT scan. Mirrors `chan/src/main.rs`'s
+/// `cmd_add`. The transient `Arc<Drive>` is dropped before this
+/// returns so the immediately-following `serve::start` can mount
+/// the drive without tripping `DriveAlreadyOpen` against the
+/// lifetime flock. Blocking: `register_drive` writes the registry
+/// and `boot()` can run a slow initial scan, so callers invoke it
+/// via `spawn_blocking`.
+fn register_and_boot(
+    library: &chan_drive::Library,
+    path: &str,
+    features: DriveFeatures,
+) -> Result<(), String> {
+    let root = Path::new(path);
+    if !root.exists() {
+        std::fs::create_dir_all(root).map_err(|e| format!("creating drive root {path}: {e}"))?;
+    }
+    let entry = library
+        .register_drive(root)
+        .map_err(|e| format!("registering drive {path}: {e}"))?;
+    if features.bge || features.reports {
+        let drive = library
+            .open_drive(&entry.root_path)
+            .map_err(|e| format!("opening drive {}: {e}", entry.root_path.display()))?;
+        if features.bge {
+            drive
+                .set_semantic_enabled(true)
+                .map_err(|e| format!("enabling semantic search: {e}"))?;
+        }
+        if features.reports {
+            drive
+                .set_reports_enabled(true)
+                .map_err(|e| format!("enabling reports: {e}"))?;
+        }
+        drive
+            .boot()
+            .map_err(|e| format!("boot after enabling features: {e}"))?;
+        // Drop the transient handle before serve::start re-opens it.
+        drop(drive);
+    }
+    Ok(())
+}
+
 #[tauri::command]
 async fn remove_drive(
     app: tauri::AppHandle,
     state: State<'_, Arc<AppState>>,
     path: String,
 ) -> Result<(), String> {
-    require_bin(&state.bin_status)?;
     let key = canonical_key(Path::new(&path));
+    // Stop the serve first: this removes the runtime synchronously
+    // and drops the host's Arc<Drive>, but background indexer /
+    // request tasks may briefly keep their own clone, so the
+    // unregister below tolerates a short contention window.
     serve::stop(Some(&app), &state, &key);
 
+    let Some(embedded) = state.embedded.get() else {
+        return Err("embedded local server is unavailable".to_string());
+    };
+    let library = embedded.library().clone();
+    let key_for_block = key.clone();
+
     emit_chan_busy(&app, true, "remove", &key);
-    let out = Command::new(serve::resolve_chan_binary()?)
-        .args(["remove", &key])
-        .kill_on_drop(true)
-        .output()
-        .await
-        .map_err(|e| format!("running `chan remove`: {e}"));
+    let result =
+        tokio::task::spawn_blocking(move || unregister_with_retry(&library, &key_for_block)).await;
     emit_chan_busy(&app, false, "remove", &key);
-    let out = out?;
-    if !out.status.success() {
-        return Err(format!(
-            "`chan remove` failed: {}",
-            String::from_utf8_lossy(&out.stderr).trim()
-        ));
+    match result {
+        Ok(inner) => inner?,
+        Err(e) => return Err(format!("unregistering drive panicked: {e}")),
     }
 
     let mut store = state.store.lock().unwrap();
@@ -347,6 +357,41 @@ async fn remove_drive(
     cfg.drives.remove(&key);
     store.save(&cfg).map_err(err)?;
     Ok(())
+}
+
+/// Drop a drive from the shared registry after its serve has been
+/// stopped. `serve::stop` removes the runtime synchronously, but a
+/// background indexer rebuild or an in-flight HTTP/WS handler can
+/// still hold an `Arc<Drive>` for a moment. `unregister_drive`
+/// wipes per-drive state and so needs exclusive access; until the
+/// last handle drops it returns `DriveAlreadyOpen` (this process)
+/// or `DriveLocked` (the flock). `reset_drive` takes the flock
+/// before any registry mutation, so a failed attempt leaves no
+/// half-state and a retry is safe. Any other error surfaces
+/// immediately. Blocking: sleeps between attempts, so callers
+/// invoke it via `spawn_blocking`.
+fn unregister_with_retry(library: &chan_drive::Library, key: &str) -> Result<(), String> {
+    use chan_drive::ChanError;
+    const MAX_ATTEMPTS: usize = 20;
+    const BACKOFF: std::time::Duration = std::time::Duration::from_millis(150);
+    let root = Path::new(key);
+    for attempt in 1..=MAX_ATTEMPTS {
+        match library.unregister_drive(root) {
+            // Ok(false) means it was already absent; both forms are
+            // success for a Forget action.
+            Ok(_) => return Ok(()),
+            Err(e @ (ChanError::DriveAlreadyOpen | ChanError::DriveLocked)) => {
+                if attempt == MAX_ATTEMPTS {
+                    return Err(format!(
+                        "drive {key} is still shutting down ({e}); try Forget again in a moment"
+                    ));
+                }
+                std::thread::sleep(BACKOFF);
+            }
+            Err(e) => return Err(format!("unregistering drive {key}: {e}")),
+        }
+    }
+    unreachable!("retry loop returns on the final attempt")
 }
 
 #[tauri::command]
@@ -377,80 +422,92 @@ fn get_config(state: State<Arc<AppState>>) -> Result<Config, String> {
 /// so first-time drives show up with both toggles off as the
 /// round-2-plan specifies.
 ///
-/// Slice ii reads from chan-drive's authoritative state via
-/// `chan index status --json --path <path>` (which carries
-/// `semantic_enabled` + `reports_enabled` — the latter was
-/// added in slice ii's chan-CLI extension). On any CLI error
-/// (drive not yet registered, chan binary unavailable, JSON
-/// parse failure, etc.) the IPC falls back to the desktop
-/// cache so the launcher row's expand panel still renders.
-/// On a successful CLI read the desktop cache updates if the
-/// CLI state differs — picks up out-of-band changes (e.g. user
-/// ran `chan reports enable` from a terminal) so the launcher
-/// reflects truth on the next render without a manual refresh.
+/// Reads chan-drive's authoritative state in-process: if the drive
+/// is mounted, off the live `Arc<Drive>` the host holds; else via a
+/// transient `open_drive` against the shared registry. On any read
+/// failure (drive not registered, drive busy, etc.) the IPC falls
+/// back to the desktop cache so the launcher row's expand panel
+/// still renders. On a successful read the desktop cache updates if
+/// the state differs, picking up out-of-band changes (e.g. a flag
+/// flipped from a terminal) so the launcher reflects truth on the
+/// next render without a manual refresh.
 #[tauri::command]
 async fn get_drive_features(
     state: State<'_, Arc<AppState>>,
     path: String,
 ) -> Result<DriveFeatures, String> {
     let key = canonical_key(Path::new(&path));
-    if state.bin_status.ok {
-        if let Ok(bin) = serve::resolve_chan_binary() {
-            if let Ok(features) = read_features_via_chan_index_status(&bin, &key).await {
-                let mut store = state.store.lock().unwrap();
-                let mut cfg = store.get().map_err(err)?;
-                let entry = cfg.drives.entry(key).or_default();
-                if entry.features != features {
-                    entry.features = features;
-                    // Best-effort cache update: a save failure here
-                    // doesn't change the value returned to the SPA;
-                    // the next read will retry the CLI.
-                    let _ = store.save(&cfg);
-                }
-                return Ok(features);
+    if let Some(embedded) = state.embedded.get() {
+        let library = embedded.library().clone();
+        let live = embedded.live_drive(Path::new(&key));
+        let key_for_block = key.clone();
+        // A transient open touches the index config on disk; keep it
+        // off the async executor.
+        let read = tokio::task::spawn_blocking(move || {
+            read_drive_features_blocking(&library, live, &key_for_block)
+        })
+        .await
+        .unwrap_or_else(|e| Err(format!("reading drive features panicked: {e}")));
+        if let Ok(features) = read {
+            let mut store = state.store.lock().unwrap();
+            let mut cfg = store.get().map_err(err)?;
+            let entry = cfg.drives.entry(key).or_default();
+            if entry.features != features {
+                entry.features = features;
+                // Best-effort cache update: a save failure here
+                // doesn't change the value returned to the SPA; the
+                // next read retries chan-drive.
+                let _ = store.save(&cfg);
             }
+            return Ok(features);
         }
     }
-    // Fall-through: chan binary unavailable OR CLI read failed.
+    // Fall-through: embedded host unavailable OR the read failed.
     // The desktop cache is the best available source.
     let cfg = state.store.lock().unwrap().get().map_err(err)?;
     Ok(cfg.drives.get(&key).map(|s| s.features).unwrap_or_default())
 }
 
-/// `fullstack-b-28b` slice ii: parse chan-drive's authoritative
-/// feature state from `chan index status --json --path <path>`.
-/// `semantic_enabled` has been emitted since `systacean-7`;
-/// `reports_enabled` was added by this slice. Missing/unparseable
-/// fields default to false so a partial JSON shape doesn't
-/// silently flip a toggle ON.
-async fn read_features_via_chan_index_status(
-    bin: &Path,
+/// Read the authoritative feature flags for `key` from chan-drive.
+/// Prefers the live mounted handle (no re-open, so the lifetime
+/// flock isn't contended); falls back to a transient `open_drive`
+/// for a registered-but-stopped drive. Returns `Err` when the drive
+/// isn't registered or a read fails so the caller can fall back to
+/// the desktop cache. Blocking: a transient open initializes the
+/// index, so callers invoke it via `spawn_blocking`.
+fn read_drive_features_blocking(
+    library: &chan_drive::Library,
+    live: Option<Arc<chan_drive::Drive>>,
     key: &str,
 ) -> Result<DriveFeatures, String> {
-    let out = Command::new(bin)
-        .args(["index", "status", "--json", "--path", key])
-        .kill_on_drop(true)
-        .output()
-        .await
-        .map_err(|e| format!("running `chan index status`: {e}"))?;
-    if !out.status.success() {
-        return Err(format!(
-            "`chan index status` failed: {}",
-            String::from_utf8_lossy(&out.stderr).trim()
-        ));
+    let drive = resolve_drive_for_features(library, live, key)?;
+    let bge = drive
+        .semantic_enabled()
+        .map_err(|e| format!("reading semantic_enabled: {e}"))?;
+    let reports = drive
+        .reports_enabled()
+        .map_err(|e| format!("reading reports_enabled: {e}"))?;
+    Ok(DriveFeatures { bge, reports })
+}
+
+/// Resolve the `Arc<Drive>` a feature read/write should act on: the
+/// live mounted handle when present, otherwise a transient open of
+/// a registered drive. Errors when the drive isn't registered.
+fn resolve_drive_for_features(
+    library: &chan_drive::Library,
+    live: Option<Arc<chan_drive::Drive>>,
+    key: &str,
+) -> Result<Arc<chan_drive::Drive>, String> {
+    if let Some(drive) = live {
+        return Ok(drive);
     }
-    let body: serde_json::Value = serde_json::from_slice(&out.stdout)
-        .map_err(|e| format!("parsing `chan index status` JSON: {e}"))?;
-    Ok(DriveFeatures {
-        bge: body
-            .get("semantic_enabled")
-            .and_then(|v| v.as_bool())
-            .unwrap_or(false),
-        reports: body
-            .get("reports_enabled")
-            .and_then(|v| v.as_bool())
-            .unwrap_or(false),
-    })
+    let root = Path::new(key);
+    if library.drive_paths_for(root).is_none() {
+        return Err(format!("drive {key} is not registered"));
+    }
+    library
+        .open_drive(root)
+        .map_err(|e| format!("opening drive {key}: {e}"))
 }
 
 /// `fullstack-b-28b` slice iv: the pre-flight report displayed in
@@ -466,11 +523,10 @@ async fn read_features_via_chan_index_status(
 /// seconds; on cap `truncated = true` so the modal can render
 /// "100,000+" instead of a misleading exact number.
 ///
-/// `already_registered` is checked via `chan list --json` — if
-/// the canonical path is already in the registry, the modal
-/// flags the duplicate so the user doesn't accidentally re-add
-/// the same drive. The chan CLI is the authority; we don't
-/// duplicate registry-parsing logic in chan-desktop.
+/// `already_registered` is checked against the shared embedded
+/// registry — if the canonical path is already registered, the
+/// modal flags the duplicate so the user doesn't accidentally
+/// re-add the same drive.
 #[derive(Debug, Clone, Serialize)]
 struct PreflightReport {
     /// Canonical drive path. Mirrors what `add_drive` will
@@ -504,9 +560,9 @@ struct PreflightReport {
     /// means no SCM was detected; the modal stays silent in that
     /// case.
     scm: Option<String>,
-    /// True iff the canonical path already appears in `chan list
-    /// --json`. The modal renders a duplicate-registration
-    /// warning so the user can cancel before chan errors on add.
+    /// True iff the canonical path is already registered. The modal
+    /// renders a duplicate-registration warning so the user can
+    /// cancel before chan errors on add.
     already_registered: bool,
     /// True when the walker hit `MAX_PREFLIGHT_FILES` or
     /// `MAX_PREFLIGHT_SECS`. Modal renders the counts with a
@@ -633,11 +689,11 @@ fn detect_drive_scm(root: &Path) -> Option<String> {
 }
 
 /// `fullstack-b-28b` slice iv: assemble the pre-flight report.
-/// Walks the drive + checks SCM + shells out to `chan list
-/// --json` for the duplicate-registration check. Tolerates a
-/// missing chan binary (returns `already_registered = false`)
-/// so the modal still renders something useful when the boot-
-/// time preflight has failed.
+/// Walks the drive + checks SCM + checks the shared embedded
+/// registry for the duplicate-registration flag. Tolerates the
+/// embedded host not being up yet (returns
+/// `already_registered = false`) so the modal still renders
+/// something useful.
 #[tauri::command]
 async fn compute_drive_preflight(
     state: State<'_, Arc<AppState>>,
@@ -651,15 +707,14 @@ async fn compute_drive_preflight(
     let filter = preflight_walk_filter();
     let walk = walk_drive_preflight(&root, &filter);
     let scm = detect_drive_scm(&root);
-    let already_registered = if state.bin_status.ok {
-        if let Ok(bin) = serve::resolve_chan_binary() {
-            check_drive_already_registered(&bin, &key).await
-        } else {
-            false
-        }
-    } else {
-        false
-    };
+    // Duplicate-registration check against the shared embedded
+    // registry: a quick in-memory lookup, no subprocess. Defaults
+    // to false when the embedded host isn't up yet.
+    let already_registered = state
+        .embedded
+        .get()
+        .map(|embedded| embedded.library().drive_paths_for(&root).is_some())
+        .unwrap_or(false);
     Ok(PreflightReport {
         path: key,
         writable,
@@ -675,92 +730,50 @@ async fn compute_drive_preflight(
     })
 }
 
-/// `fullstack-b-28b` slice iv: parse `chan list --json` and
-/// check whether the canonical path is already a registered
-/// drive. Returns `false` on any error (chan unavailable, JSON
-/// parse failure, etc.) — the modal's duplicate warning is a
-/// nicety, not a load-bearing gate. Worst case the user
-/// double-adds; `chan add` itself rejects duplicates so no data
-/// is corrupted.
-async fn check_drive_already_registered(bin: &Path, key: &str) -> bool {
-    let Ok(out) = Command::new(bin)
-        .args(["list", "--json"])
-        .kill_on_drop(true)
-        .output()
-        .await
-    else {
-        return false;
-    };
-    if !out.status.success() {
-        return false;
-    }
-    let Ok(body): Result<serde_json::Value, _> = serde_json::from_slice(&out.stdout) else {
-        return false;
-    };
-    let Some(drives) = body.get("drives").and_then(|v| v.as_array()) else {
-        return false;
-    };
-    drives
-        .iter()
-        .any(|d| d.get("path").and_then(|v| v.as_str()) == Some(key))
-}
-
 /// `fullstack-b-28a` + `-b-28b-i`: write the feature toggle pair
 /// for a drive. Both fields land together so a partial flip
 /// doesn't leave a half-state on disk; the SPA always sends the
 /// current full state on every change.
 ///
-/// `-b-28b-i` swaps the stub body to drive the real chan-drive
-/// state via the `chan` CLI subprocess. Each changed flag fires
-/// one CLI call:
-///
-///   * `bge`     → `chan index enable-semantic|disable-semantic
-///                 --path <path>`
-///   * `reports` → `chan reports enable|disable --path <path>
-///                 [-y]`
-///
-/// Calls are sequential so a failure on the first leaves the
-/// second un-touched (matches the user's expectation that
-/// "enable semantic, that failed, didn't touch reports"). On
+/// `-b-28b-i` drove the real chan-drive state via the `chan` CLI;
+/// this routes in-process instead. Each changed flag is applied to
+/// the same `Arc<Drive>` the host holds when the drive is mounted
+/// (so the lifetime flock isn't contended), or to a transient
+/// handle for a registered-but-stopped drive. Enabling reports
+/// also runs `boot()` to kick the initial scan, mirroring
+/// `chan/src/main.rs`'s `cmd_reports_set`. Flags are applied in
+/// order so a failure on the first leaves the second untouched. On
 /// success the desktop cache updates so subsequent
 /// `get_drive_features` reads return the authoritative state
-/// without a fresh CLI round-trip. On any CLI failure the
-/// desktop cache stays untouched and the error propagates to the SPA
-/// (the launcher's `bindFeaturesToggle` reverts the checkbox).
+/// without re-reading chan-drive. On any failure the desktop cache
+/// stays untouched and the error propagates to the SPA (the
+/// launcher's `bindFeaturesToggle` reverts the checkbox).
 #[tauri::command]
 async fn set_drive_features(
     state: State<'_, Arc<AppState>>,
     path: String,
     features: DriveFeatures,
 ) -> Result<(), String> {
-    require_bin(&state.bin_status)?;
     let key = canonical_key(Path::new(&path));
     let current = {
         let cfg = state.store.lock().unwrap().get().map_err(err)?;
         cfg.drives.get(&key).map(|s| s.features).unwrap_or_default()
     };
-    let bin = serve::resolve_chan_binary()?;
-    if current.bge != features.bge {
-        let action = if features.bge {
-            "enable-semantic"
-        } else {
-            "disable-semantic"
-        };
-        run_chan_feature_subcommand(&bin, &["index", action, "--path", &key], "chan index").await?;
-    }
-    if current.reports != features.reports {
-        let mut args = vec!["reports"];
-        if features.reports {
-            args.push("enable");
-        } else {
-            args.push("disable");
-            // chan reports disable prompts for confirmation; -y
-            // skips so the desktop dialog (which already
-            // confirmed via the checkbox) doesn't deadlock.
-            args.push("-y");
-        }
-        args.extend_from_slice(&["--path", &key]);
-        run_chan_feature_subcommand(&bin, &args, "chan reports").await?;
+    let Some(embedded) = state.embedded.get() else {
+        return Err("embedded local server is unavailable".to_string());
+    };
+    let library = embedded.library().clone();
+    let live = embedded.live_drive(Path::new(&key));
+    let key_for_block = key.clone();
+    // set_reports_enabled(false) drops report.jsonl and boot() can
+    // run a scan; keep both off the async executor.
+    let result = tokio::task::spawn_blocking(move || {
+        apply_drive_features_blocking(&library, live, &key_for_block, current, features)
+    })
+    .await;
+    match result {
+        Ok(inner) => inner?,
+        Err(e) => return Err(format!("applying drive features panicked: {e}")),
     }
     let mut store = state.store.lock().unwrap();
     let mut cfg = store.get().map_err(err)?;
@@ -768,26 +781,37 @@ async fn set_drive_features(
     store.save(&cfg).map_err(err)
 }
 
-/// `fullstack-b-28b-i`: invoke a `chan` CLI subcommand for one
-/// feature flip + surface stderr verbatim on non-zero exit. Used
-/// by `set_drive_features`; pulled into its own helper so the
-/// two flag paths share the spawn shape + the error formatting.
-async fn run_chan_feature_subcommand(
-    bin: &Path,
-    args: &[&str],
-    surface: &str,
+/// Apply the changed feature flags to the resolved `Arc<Drive>`.
+/// Only flags that differ from `current` are touched, so a no-op
+/// re-set doesn't reinitialize anything. Enabling reports also
+/// boots the initial scan so the flag flip produces visible data
+/// immediately (mirrors `cmd_reports_set`). Blocking; run via
+/// `spawn_blocking`.
+fn apply_drive_features_blocking(
+    library: &chan_drive::Library,
+    live: Option<Arc<chan_drive::Drive>>,
+    key: &str,
+    current: DriveFeatures,
+    desired: DriveFeatures,
 ) -> Result<(), String> {
-    let out = Command::new(bin)
-        .args(args)
-        .kill_on_drop(true)
-        .output()
-        .await
-        .map_err(|e| format!("running `{surface}`: {e}"))?;
-    if !out.status.success() {
-        return Err(format!(
-            "`{surface}` failed: {}",
-            String::from_utf8_lossy(&out.stderr).trim()
-        ));
+    if current == desired {
+        return Ok(());
+    }
+    let drive = resolve_drive_for_features(library, live, key)?;
+    if current.bge != desired.bge {
+        drive
+            .set_semantic_enabled(desired.bge)
+            .map_err(|e| format!("setting semantic search: {e}"))?;
+    }
+    if current.reports != desired.reports {
+        drive
+            .set_reports_enabled(desired.reports)
+            .map_err(|e| format!("setting reports: {e}"))?;
+        if desired.reports {
+            drive
+                .boot()
+                .map_err(|e| format!("boot after enabling reports: {e}"))?;
+        }
     }
     Ok(())
 }
@@ -914,7 +938,6 @@ async fn tunnel_start(
     label: String,
     drive: String,
 ) -> Result<u16, String> {
-    require_bin(&state.bin_status)?;
     let label = label.trim().to_string();
     let drive = drive.trim().to_string();
     if !chan_tunnel_proto::is_valid_username(&label) {
@@ -962,6 +985,7 @@ async fn create_default_drive(
     state: State<'_, Arc<AppState>>,
 ) -> Result<(), String> {
     let created = default_drive::create_default_drive()?;
+    reconcile_default_drive(&state, &created.root)?;
     let key = canonical_key(&created.root);
     serve::start(app, Arc::clone(&state), key).await
 }
@@ -972,8 +996,35 @@ async fn factory_reset_default_drive(
     state: State<'_, Arc<AppState>>,
 ) -> Result<(), String> {
     let created = default_drive::factory_reset_default_drive()?;
+    reconcile_default_drive(&state, &created.root)?;
     let key = canonical_key(&created.root);
     serve::start(app, Arc::clone(&state), key).await
+}
+
+/// `default_drive` registers + seeds through its own throwaway
+/// `Library` handle. Mirror that registration into the embedded
+/// host's in-memory `Library` so the immediately-following
+/// `serve::start` opens against an up-to-date registry rather than
+/// the host's stale boot-time snapshot (the same staleness class as
+/// the "drive not registered" bug). `register_drive` is idempotent
+/// (touch + persist), so re-registering the row default_drive just
+/// wrote is safe, and `set_default_drive_root` keeps the in-memory
+/// default aligned with what default_drive persisted.
+fn reconcile_default_drive(state: &AppState, root: &Path) -> Result<(), String> {
+    let Some(embedded) = state.embedded.get() else {
+        // No embedded host (e.g. it failed to start at boot);
+        // default_drive already persisted to disk, so a later serve
+        // through a fresh handle still sees the row.
+        return Ok(());
+    };
+    let library = embedded.library();
+    library
+        .register_drive(root)
+        .map_err(|e| format!("reconciling default drive {}: {e}", root.display()))?;
+    library
+        .set_default_drive_root(Some(root.to_path_buf()))
+        .map_err(|e| format!("persisting default drive root {}: {e}", root.display()))?;
+    Ok(())
 }
 
 const OUTBOUND_LABEL_MAX_CHARS: usize = 120;
@@ -1318,92 +1369,6 @@ fn canonical_key(p: &Path) -> String {
         .to_string()
 }
 
-/// Detect macOS App Translocation. When Gatekeeper sees an unsigned
-/// or quarantined app launched from outside `/Applications` (e.g.
-/// double-clicked inside a mounted .dmg), it runs the bundle from a
-/// randomized read-only path under
-/// `/private/var/folders/.../AppTranslocation/<UUID>/d/...`. The
-/// bundled `chan` binary is found at that path, but the runtime
-/// environment is hostile enough that subprocess behavior is not a
-/// release surface we want to support. We treat this as "binary
-/// unusable" and refuse to spawn anything.
-#[cfg(target_os = "macos")]
-fn is_app_translocated() -> bool {
-    std::env::current_exe()
-        .map(|p| p.to_string_lossy().contains("/AppTranslocation/"))
-        .unwrap_or(false)
-}
-
-/// Boot-time preflight. Runs once before `AppState` is built and the
-/// result is stored verbatim. Order matters: translocation is
-/// checked first because the bundled binary is found at the
-/// translocated path but the broader runtime environment is hostile
-/// regardless of which `chan` we'd pick; a PATH-installed `chan`
-/// doesn't rescue a translocated install. After that we let
-/// `resolve_chan_binary` pick PATH or bundled per the locked
-/// Round-2 decision 3 (PATH-first w/ bundled fallback) and validate
-/// the resolved path's existence + exact version match.
-fn compute_bin_status() -> BinStatus {
-    #[cfg(target_os = "macos")]
-    {
-        if is_app_translocated() {
-            return BinStatus {
-                ok: false,
-                kind: "translocated",
-                reason: "Chan is running from a disk image. macOS App \
-                         Translocation puts the app in a randomized \
-                         read-only path that breaks Chan's bundled CLI. \
-                         Drag Chan.app to your Applications folder, then \
-                         reopen it from there."
-                    .to_string(),
-            };
-        }
-    }
-    let bin = match serve::resolve_chan_binary() {
-        Ok(p) => p,
-        Err(e) => {
-            return BinStatus {
-                ok: false,
-                kind: "missing",
-                reason: e,
-            };
-        }
-    };
-    if !bin.exists() {
-        return BinStatus {
-            ok: false,
-            kind: "missing",
-            reason: format!("chan binary not found at {}", bin.display()),
-        };
-    }
-    match serve::probe_chan_version(&bin) {
-        Ok(()) => BinStatus::ok_status(),
-        Err(e) => BinStatus {
-            ok: false,
-            kind: "version-mismatch",
-            reason: e,
-        },
-    }
-}
-
-#[tauri::command]
-fn chan_bin_status(state: State<Arc<AppState>>) -> BinStatus {
-    state.bin_status.clone()
-}
-
-/// Short-circuit guard for any IPC command that would spawn chan.
-/// Frontend disables the corresponding controls, but a determined
-/// caller (or a stale event handler) could still reach the command;
-/// returning the human-readable reason here keeps the UX consistent
-/// with the persistent banner shown by the renderer.
-fn require_bin(s: &BinStatus) -> Result<(), String> {
-    if s.ok {
-        Ok(())
-    } else {
-        Err(s.reason.clone())
-    }
-}
-
 fn err<E: std::fmt::Display>(e: E) -> String {
     e.to_string()
 }
@@ -1496,13 +1461,11 @@ fn main() {
         }
     };
     let store = ConfigStore::new().expect("failed to init config store");
-    let bin_status = compute_bin_status();
     let state = Arc::new(AppState {
         store: Mutex::new(store),
         serves: Mutex::new(HashMap::new()),
         embedded: OnceLock::new(),
         tunnel: TunnelState::new(),
-        bin_status,
         live_window_zooms: Mutex::new(HashMap::new()),
     });
     let state_for_exit = Arc::clone(&state);
@@ -1645,7 +1608,6 @@ fn main() {
             add_outbound_drive,
             open_outbound_drive,
             remove_outbound_drive,
-            chan_bin_status,
             auth::auth_status,
             auth::open_signin,
             auth::signout,
