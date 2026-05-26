@@ -73,7 +73,7 @@ export function imageDropHandlers(opts: ImageDropOptions): Extension {
       }
       if (images.length === 0) return false;
       event.preventDefault();
-      const pos = view.state.selection.main.head;
+      const pos = pasteInsertPos(view);
       uploadAndInsertAll(
         view,
         images,
@@ -84,6 +84,19 @@ export function imageDropHandlers(opts: ImageDropOptions): Extension {
       return true;
     },
   });
+}
+
+/// Where a pasted image should land. A paste carries no coordinates,
+/// so the natural target is the caret. But `selection.main.head` is 0
+/// for a freshly-opened document the user hasn't clicked into yet —
+/// pasting a screenshot right after opening a note would drop the image
+/// at the very top, above the title (the reported bug). Only trust the
+/// caret when the editor actually has focus; otherwise append at the
+/// end of the document, which is the least-surprising landing spot for
+/// "paste with no active caret" and never clobbers the first row.
+export function pasteInsertPos(view: EditorView): number {
+  if (view.hasFocus) return view.state.selection.main.head;
+  return view.state.doc.length;
 }
 
 function posFromEvent(view: EditorView, event: DragEvent): number {
