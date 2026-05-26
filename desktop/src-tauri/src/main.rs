@@ -1205,6 +1205,91 @@ fn open_local_drive(
     Ok(())
 }
 
+/// Open a drive in a native window in response to a CLI handoff
+/// request (`chan serve <drive>` while this desktop is running).
+///
+/// Mirrors the `add_drive` flow: register + boot the drive through the
+/// shared embedded Library, then `serve::start` (mount + spawn the
+/// first window). If the drive is ALREADY running, `serve::start`
+/// returns early without spawning a window, so we raise an additional
+/// window via `spawn_local_drive_window` to match the user's intent
+/// ("show me this drive now").
+///
+/// The slow work (registry write, boot scan, mount) runs on a spawned
+/// task so the callback returns promptly and the CLI doesn't block on
+/// the handshake. The synchronous return therefore reports only that
+/// the request was accepted, not that the window is fully up; on a
+/// genuine mount failure the desktop emits a system notice (same as
+/// the first-launch default-drive path) rather than blocking the CLI.
+#[cfg(unix)]
+fn open_drive_from_handoff(
+    app: tauri::AppHandle,
+    state: Arc<AppState>,
+    path: PathBuf,
+) -> Result<(), String> {
+    let key = canonical_key(&path);
+
+    // Already running: raise an additional window immediately. This is
+    // synchronous and gives the user the window without a mount cycle.
+    let running_url = state
+        .serves
+        .lock()
+        .unwrap()
+        .get(&key)
+        .and_then(|h| h.url.clone());
+    if let Some(url) = running_url {
+        return serve::spawn_local_drive_window(&app, &key, &url);
+    }
+
+    // Not running: register (creating the dir for a fresh path) + boot
+    // through the shared Library, then mount + spawn the window. Off
+    // the listener task so the CLI gets a prompt response.
+    let Some(embedded) = state.embedded.get() else {
+        return Err("embedded local server is unavailable".to_string());
+    };
+    let library = embedded.library().clone();
+    let key_for_block = key.clone();
+    tauri::async_runtime::spawn(async move {
+        let library_for_register = library.clone();
+        let key_for_register = key_for_block.clone();
+        let registered = tokio::task::spawn_blocking(move || {
+            register_and_boot(
+                &library_for_register,
+                &key_for_register,
+                DriveFeatures::default(),
+            )
+        })
+        .await;
+        match registered {
+            Ok(Ok(())) => {}
+            Ok(Err(e)) => {
+                emit_system_notice(
+                    &app,
+                    "warning",
+                    format!("Could not open {key_for_block} from chan serve: {e}"),
+                );
+                return;
+            }
+            Err(e) => {
+                emit_system_notice(
+                    &app,
+                    "warning",
+                    format!("Opening {key_for_block} from chan serve panicked: {e}"),
+                );
+                return;
+            }
+        }
+        if let Err(e) = serve::start(app.clone(), Arc::clone(&state), key_for_block.clone()).await {
+            emit_system_notice(
+                &app,
+                "warning",
+                format!("Could not open {key_for_block} from chan serve: {e}"),
+            );
+        }
+    });
+    Ok(())
+}
+
 /// Open an additional in-app Tauri webview for a tunneled drive.
 /// Each call yields a NEW window — the first one is opened by the
 /// supervisor on registration, and the Launch button calls this
@@ -1551,6 +1636,35 @@ fn main() {
             // construct the empty TunnelState during boot; binding
             // 127.0.0.1 happens on the IPC `tunnel_start` call.
             let _ = state_for_setup.tunnel.clone();
+
+            // macOS CLI-to-desktop handoff listener (ratified Option
+            // B). Binds the well-known per-user UDS so a `chan serve
+            // <drive>` in a terminal hands the drive to this desktop
+            // window instead of failing on the per-drive flock. Leaked
+            // for the process lifetime (the registry watcher above uses
+            // the same Box::leak pattern; the handle's Drop unlinks the
+            // socket but we want it live until exit, and RunEvent::Exit
+            // tears the process down anyway). A bind failure is
+            // non-fatal: the CLI just falls back to its own server.
+            #[cfg(unix)]
+            if let Some(sock) = chan_server::handoff::well_known_socket_path() {
+                let app_for_handoff = app.handle().clone();
+                let state_for_handoff = Arc::clone(&state_for_setup);
+                match chan_server::handoff::start_listener(sock, move |path| {
+                    open_drive_from_handoff(
+                        app_for_handoff.clone(),
+                        Arc::clone(&state_for_handoff),
+                        path,
+                    )
+                }) {
+                    Ok(handle) => {
+                        Box::leak(Box::new(handle));
+                    }
+                    Err(e) => {
+                        tracing::warn!(error = %e, "CLI-to-desktop handoff listener disabled");
+                    }
+                }
+            }
 
             if let Some(created) = default_drive_boot.clone() {
                 let app_for_default = app.handle().clone();
