@@ -300,6 +300,27 @@
     sendFocusState();
   });
 
+  // Bug 6: an idle terminal (visible in its pane but NOT focused, or a
+  // tab just switched to in a non-active pane) renders garbled until
+  // the user clicks or resizes it. The tab uses `visibility: hidden`
+  // (not `display: none`) while inactive, so the host keeps layout
+  // dimensions, but xterm.js / the WebGL renderer can paint at a stale
+  // size (or skip painting) while hidden and there is nothing to force
+  // a re-fit + repaint when the tab becomes ACTIVE without also
+  // becoming focused. The focus effect (above) covers focus changes
+  // and the ResizeObserver covers size changes, but a pure
+  // visibility flip on a tab switch hits neither. React to `active`
+  // here: when it flips true and the terminal is live, run the same
+  // fit + texture-atlas-clear + delayed re-fit recovery used for a
+  // host resume, so the terminal converges on its real dimensions and
+  // repaints clean. `active` is read first so the effect tracks it;
+  // the `term` gate skips the initial mount (start() already fits).
+  $effect(() => {
+    if (!active) return;
+    if (!term) return;
+    recoverTerminalRendererAfterHostResume();
+  });
+
   $effect(() => {
     if (!watcherPath) {
       if (watcherPollTimer) clearInterval(watcherPollTimer);
