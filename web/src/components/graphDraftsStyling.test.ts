@@ -26,9 +26,13 @@ describe("fullstack-a-66 slice e: GraphCanvas RenderedEdgeKind", () => {
     );
   });
 
+  // `phase-11` Slice F split `link` edges into their own
+  // per-source-document-kind pass, so the single-stroke-per-kind
+  // iteration no longer lists `link`; `drafts_link` still rides this
+  // loop.
   test("kind-iteration order includes `drafts_link`", () => {
     expect(canvas).toMatch(
-      /\["link", "tag", "mention", "contains", "language", "group", "drafts_link"\] as const/,
+      /\["tag", "mention", "contains", "language", "group", "drafts_link"\] as const/,
     );
   });
 });
@@ -40,9 +44,12 @@ describe("fullstack-a-66 slice e: drafts_link edge styling", () => {
     );
   });
 
+  // `phase-11` Slice F relocated the alpha bump into the `strokePass`
+  // call: drafts_link is the one kind passed 0.4 instead of the 0.18
+  // base, preserving the category-boundary emphasis.
   test("alpha is bumped from 0.18 to 0.4 for `drafts_link`", () => {
     expect(canvas).toMatch(
-      /ctx\.globalAlpha = kind === "drafts_link" \? 0\.4 : 0\.18;/,
+      /strokePass\(edgesByKind\[kind\], strokeForKind\(kind\), kind === "drafts_link" \? 0\.4 : 0\.18\);/,
     );
   });
 });

@@ -39,7 +39,12 @@
     surfaceThemeOverride,
     tree,
   } from "../state/store.svelte";
-  import { onDestroy } from "svelte";
+  import { onDestroy, untrack } from "svelte";
+  import {
+    fbWatchRegister,
+    fbWatchReconcile,
+    fbWatchDispose,
+  } from "../state/fbWatch.svelte";
   import { type ScopeOption } from "../state/scope.svelte";
   import ResizeHandle from "./ResizeHandle.svelte";
   import HamburgerMenu from "./HamburgerMenu.svelte";
@@ -249,6 +254,57 @@
   let seenGraphReloadNonce = graphReloadSignal.nonce;
   let graphLoadAbort: AbortController | null = null;
   let graphLoadSeq = 0;
+
+  // ---- per-instance scoped /ws subscriptions (phase-11 Slice F) ----------
+  //
+  // The Graph is a watcher-scope instance just like a File Browser
+  // surface (round-1: "subscribe to that directory's watcher, reuse the
+  // FB pub/sub"). It registers in the shared `fbTreeInstances` registry
+  // and subscribes to the directory scopes it currently displays; as the
+  // depth slider loads the next degree the new directory nodes appear in
+  // the rendered set and the reconcile effect subscribes them, and as
+  // depth decreases (or the scope narrows / the panel closes) the dropped
+  // directories are unsubscribed, with the LAST instance to release a dir
+  // tearing the server watcher down. This shares the exact refcounted
+  // mechanism File Browser drives via `fbWatch`; the actual redraw still
+  // runs through the existing `graphReloadSignal` reload path.
+  const graphInstanceId = $derived(tab ? `graph-tab-${tab.id}` : "graph-overlay");
+
+  /// Directory scopes the currently-loaded graph displays. In
+  /// filesystem mode this is the set of `directory` fs-graph nodes; in
+  /// the semantic/drive view it is the scope directory plus the parent
+  /// directories of the rendered file nodes. Root (`""`) is excluded
+  /// (always implicitly watched). Recomputes as nodes / depth / scope
+  /// change so the reconcile effect tracks the visible degree.
+  const displayedDirs = $derived.by<string[]>(() => {
+    const dirs = new Set<string>();
+    for (const n of fsNodes) {
+      if (n.kind === "directory" && n.path) dirs.add(n.path);
+    }
+    if (currentScope?.kind === "dir" && currentScope.path) dirs.add(currentScope.path);
+    // Semantic file nodes don't carry a directory node; add their parent
+    // dirs so a save inside a shown document's folder reaches this graph.
+    for (const n of nodes) {
+      if (n.kind !== "file") continue;
+      const slash = n.path.lastIndexOf("/");
+      if (slash > 0) dirs.add(n.path.slice(0, slash));
+    }
+    dirs.delete("");
+    return [...dirs];
+  });
+
+  $effect(() => {
+    const id = graphInstanceId;
+    untrack(() => fbWatchRegister(id));
+    return () => untrack(() => fbWatchDispose(id));
+  });
+
+  $effect(() => {
+    if (!visible) return;
+    const id = graphInstanceId;
+    const dirs = displayedDirs;
+    untrack(() => fbWatchReconcile(id, dirs));
+  });
 
   /// Chip toggles live on `graphState.filters` (module state) so
   /// they round-trip through the URL hash. Local proxy aliases keep

@@ -396,6 +396,31 @@
     rebuildIcons(next.bg, next.textSec);
   }
 
+  /// Palette colour for a file/document node kind. Mirrors the
+  /// node-fill mapping in the paint pass so `link` edges (Slice F)
+  /// can be stroked in the SOURCE document's hue: a markdown link is
+  /// orange (--g-doc), a source-file link royalblue (--g-source), and
+  /// so on. Non-file kinds (tag / mention / language / folder / drive)
+  /// fall back to the doc colour, since a `link` edge should originate
+  /// from a document; the fallback keeps a stray edge visible rather
+  /// than invisible.
+  function fileKindColor(kind: DKind): string {
+    switch (kind) {
+      case "doc":
+        return theme.doc;
+      case "img":
+        return theme.img;
+      case "source":
+        return theme.source;
+      case "binary":
+        return theme.binary;
+      case "contact":
+        return theme.mention;
+      default:
+        return theme.doc;
+    }
+  }
+
   // ---- node classification + data assembly -----------------------------
 
   /// `fullstack-a-51` G6 file-class buckets. Markdown / source /
@@ -839,28 +864,38 @@
 
     // Edges first so nodes paint on top. Group by kind so we only
     // change strokeStyle once per kind.
+    //
+    // `phase-11` Slice F edge palette (round-1 spec): directory->dir
+    // and directory->file containment edges stay GREY (the `contains`
+    // kind, stroked in `theme.folder`); every other edge matches its
+    // DOCUMENT TYPE rather than a single connector colour. `tag`,
+    // `mention`, and `language` already carry their own palette hue;
+    // the `link` (wiki/markdown reference) edge is the one that needs
+    // its colour derived from the SOURCE document's kind so a markdown
+    // link reads orange (--g-doc), a source-file link royalblue
+    // (--g-source), and so on, honouring the Graph settings palette.
     ctx.lineWidth = 1 / Math.max(0.5, transform.k);
     const edgesByKind: Record<RenderedEdgeKind, DEdge[]> = {
       link: [], tag: [], mention: [], contains: [], language: [], group: [], drafts_link: [],
     };
     for (const e of visibleEdgeRefs) edgesByKind[e.kind].push(e);
-    for (const kind of ["link", "tag", "mention", "contains", "language", "group", "drafts_link"] as const) {
-      const list = edgesByKind[kind];
-      if (list.length === 0) continue;
-      // `fullstack-a-66` slice e: `drafts_link` renders at the
-      // same low base alpha as the other connectors but uses the
-      // Drafts yellow tint (--fb-drafts-fg) so the
-      // drive-root → Drafts edge reads as a category boundary
-      // crossing, not a regular contains edge.
-      ctx.globalAlpha = kind === "drafts_link" ? 0.4 : 0.18;
-      ctx.strokeStyle =
-        kind === "link" ? theme.text
-        : kind === "tag" ? theme.tag
-        : kind === "mention" ? theme.mention
-        : kind === "contains" ? theme.folder
-        : kind === "language" ? theme.language
-        : kind === "drafts_link" ? theme.drafts
-        : theme.accent;
+
+    // `link` edges are coloured per source document type, so they are
+    // sub-grouped by the source node's kind and stroked in their own
+    // pass below. The other kinds keep the single-stroke-per-kind fast
+    // path. `group` (synthetic scope-hub) keeps the accent colour.
+    const strokeForKind = (kind: RenderedEdgeKind): string =>
+      kind === "tag" ? theme.tag
+      : kind === "mention" ? theme.mention
+      : kind === "contains" ? theme.folder
+      : kind === "language" ? theme.language
+      : kind === "drafts_link" ? theme.drafts
+      : theme.accent;
+
+    const strokePass = (list: DEdge[], color: string, alpha: number): void => {
+      if (list.length === 0) return;
+      ctx.globalAlpha = alpha;
+      ctx.strokeStyle = color;
       ctx.beginPath();
       for (const e of list) {
         const s = e.source as DNode;
@@ -888,6 +923,30 @@
         ctx.stroke();
         ctx.restore();
       }
+    };
+
+    for (const kind of ["tag", "mention", "contains", "language", "group", "drafts_link"] as const) {
+      // `drafts_link` renders at a higher base alpha so the
+      // drive-root → Drafts edge reads as a category boundary crossing.
+      strokePass(edgesByKind[kind], strokeForKind(kind), kind === "drafts_link" ? 0.4 : 0.18);
+    }
+
+    // `link` edges grouped by source-document kind. Resolving the
+    // colour from the source node mirrors the node-fill palette so a
+    // doc's outgoing links share the doc's hue. Falls back to the doc
+    // colour when the source kind isn't a recognised file class (e.g.
+    // a tag/mention source, which shouldn't originate a `link` but is
+    // handled defensively).
+    const linkByKind = new Map<string, DEdge[]>();
+    for (const e of edgesByKind.link) {
+      const src = e.source as DNode;
+      const key = typeof src === "object" ? src.kind : "doc";
+      const bucket = linkByKind.get(key);
+      if (bucket) bucket.push(e);
+      else linkByKind.set(key, [e]);
+    }
+    for (const [kind, list] of linkByKind) {
+      strokePass(list, fileKindColor(kind as DKind), 0.18);
     }
     ctx.globalAlpha = 1;
 
