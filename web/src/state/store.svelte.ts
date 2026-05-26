@@ -681,9 +681,49 @@ export function reconnectWatcher(): void {
   unwatch = openWatchSocket(onWatchEvent, onWatchStatus);
 }
 
+/// True when a bootstrap failure is transient and worth retrying:
+/// the loopback server is briefly unreachable rather than returning
+/// a real error. A `fetch` to a refused/dropped socket throws a bare
+/// `TypeError` (not an `ApiError`); our transport maps a timeout to
+/// `ApiError(0)`; a server still spinning up its routes can answer
+/// 502/503/504. A 401 (missing token) or any other 4xx is NOT
+/// transient and must surface immediately (the 401 path drives the
+/// missing-token overlay). This matters on chan-desktop: WKWebView
+/// can recycle a drive window's web-content process under memory or
+/// file-descriptor pressure, which reloads the SPA; if that reload
+/// races the embedded server recovering, a single-shot bootstrap
+/// sticks on "loading..." forever. A short bounded retry lets the
+/// reloaded window heal itself instead.
+function isTransientBootstrapError(e: unknown): boolean {
+  if (e instanceof ApiError) {
+    return e.status === 0 || e.status === 502 || e.status === 503 || e.status === 504;
+  }
+  // A connection-refused / dropped-socket fetch rejects with a
+  // TypeError; treat any non-ApiError throwable as transient.
+  return e instanceof Error;
+}
+
+/// Initial `api.drive()` with a short bounded retry on transient
+/// loopback failures. Caps at 5 attempts with linear backoff (250ms
+/// step, ~3.75s total) so a wedged-but-recovering server heals the
+/// window without an indefinite spinner, while a genuine error
+/// (401, 404, malformed drive) still throws out to the bootstrap
+/// catch on the first non-transient response.
+async function driveWithRetry(): ReturnType<typeof api.drive> {
+  const maxAttempts = 5;
+  for (let attempt = 1; ; attempt += 1) {
+    try {
+      return await api.drive();
+    } catch (e) {
+      if (attempt >= maxAttempts || !isTransientBootstrapError(e)) throw e;
+      await new Promise((r) => setTimeout(r, 250 * attempt));
+    }
+  }
+}
+
 export async function bootstrap(): Promise<void> {
   try {
-    const info = await api.drive();
+    const info = await driveWithRetry();
     drive.info = info;
     applyServerPreferences();
     surfaceDriveWarnings(info);
@@ -1402,6 +1442,8 @@ export function __testSetBootstrapHydrated(value: boolean): void {
 }
 
 export const __testApplyTreeExpandedReloadSnapshot = applyTreeExpandedReloadSnapshot;
+
+export const __testIsTransientBootstrapError = isTransientBootstrapError;
 
 /// Fire any pending session save synchronously via `fetch({ keepalive:
 /// true })` so the request survives the page unload. Without this,
