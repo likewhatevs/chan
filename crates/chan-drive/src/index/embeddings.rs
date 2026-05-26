@@ -5,16 +5,21 @@
 // next to the binary at runtime, and no rpath / install_name_tool
 // post-processing.
 //
-// Backends:
+// Backends (CPU is the default; GPU is opt-in via CHAN_ENABLE_GPU=1):
 //   - macOS: candle's Metal backend (objc2-metal -> Metal.framework).
-//     Always linked when the `metal` feature is on, which the
-//     chan binary forwards automatically on macOS targets.
-//   - Linux + `--features cuda`: candle's CUDA backend (cudarc).
+//     Linked when the `metal` feature is on, which the chan binary
+//     forwards automatically on macOS targets, but only selected at
+//     runtime when CHAN_ENABLE_GPU=1.
+//   - Linux + `--features cuda`: candle's CUDA backend (cudarc),
+//     likewise selected only under CHAN_ENABLE_GPU=1.
 //   - everything else: CPU.
 //
-// `CHAN_DISABLE_GPU=1` forces CPU at runtime without rebuilding,
-// useful for benchmarking or for working around a flaky GPU path
-// on a particular machine.
+// CPU is the default because the Metal path hangs in
+// `[_MTLCommandBuffer waitUntilCompleted]` on at least one machine;
+// see `select_device` and docs/journals/phase-11/gpu-embed-followup.md.
+// `CHAN_ENABLE_GPU=1` opts back into the accelerator at runtime
+// without rebuilding. `CHAN_DISABLE_GPU` is still accepted (now a
+// no-op, since CPU is already the default) for back-compat.
 //
 // Models we accept are listed in `MODELS`. Unknown ids are rejected
 // at open time so the user gets a clear error instead of a panic
@@ -339,19 +344,57 @@ fn l2_normalize(t: &Tensor) -> Result<Tensor, EmbedError> {
     t.broadcast_div(&norms).map_err(candle_err)
 }
 
-/// Pick the best available accelerator. CHAN_DISABLE_GPU=1 forces
-/// CPU at runtime. macOS uses Metal, Linux + `cuda` feature uses
-/// CUDA, everything else is CPU.
+/// Pick the best available accelerator. CPU is the default; GPU is
+/// opt-in via `CHAN_ENABLE_GPU=1`. When opted in, macOS uses Metal,
+/// Linux + `cuda` feature uses CUDA, everything else is CPU.
+///
+/// WHY default to CPU: the candle Metal backend hangs indefinitely
+/// in `[_MTLCommandBuffer waitUntilCompleted]` on at least one Apple
+/// Silicon machine during BGE indexing, wedging `chan serve` with no
+/// progress and no error. Until that command-buffer usage is fixed
+/// (proper future work: a forward-pass timeout with CPU fallback, or
+/// correcting how we submit/await the Metal command buffer), the GPU
+/// path must not be reachable out of the box. The code path is kept
+/// intact behind the opt-in so machines with a working Metal/CUDA
+/// stack can still use it for benchmarking. See
+/// docs/journals/phase-11/gpu-embed-followup.md.
+///
+/// `CHAN_DISABLE_GPU` is accepted for back-compat. CPU is already the
+/// default, so it is now a no-op, but honoring it means existing
+/// scripts and docs that set it keep working without surprises.
+/// Pure policy: should the accelerator (Metal/CUDA) be attempted?
+/// Split out from `select_device` so the env-var contract is unit
+/// testable without touching real device init or process-global env.
+///
+/// `disable_gpu` is the presence of `CHAN_DISABLE_GPU` (back-compat,
+/// now redundant since CPU is the default). `enable_gpu` is the
+/// presence of the `CHAN_ENABLE_GPU` opt-in. GPU is attempted only
+/// when the opt-in is set and the (now redundant) disable flag is
+/// not, so `CHAN_DISABLE_GPU` still wins if someone sets both.
+fn want_gpu(disable_gpu: bool, enable_gpu: bool) -> bool {
+    !disable_gpu && enable_gpu
+}
+
 fn select_device() -> Device {
-    if std::env::var_os("CHAN_DISABLE_GPU").is_some() {
-        tracing::info!("embedder: GPU disabled via CHAN_DISABLE_GPU, using CPU");
+    let disable_gpu = std::env::var_os("CHAN_DISABLE_GPU").is_some();
+    let enable_gpu = std::env::var_os("CHAN_ENABLE_GPU").is_some();
+    if !want_gpu(disable_gpu, enable_gpu) {
+        if disable_gpu {
+            // Back-compat: CPU is the default now, so this is a no-op,
+            // but we still recognize the variable so it is not unhandled.
+            tracing::info!("embedder: CHAN_DISABLE_GPU set (no-op; CPU is the default), using CPU");
+        } else {
+            tracing::info!(
+                "embedder: using CPU (GPU is opt-in; set CHAN_ENABLE_GPU=1 to enable Metal/CUDA)"
+            );
+        }
         return Device::Cpu;
     }
     #[cfg(all(target_os = "macos", feature = "metal"))]
     {
         match Device::new_metal(0) {
             Ok(d) => {
-                tracing::info!("embedder: Metal backend enabled");
+                tracing::info!("embedder: Metal backend enabled via CHAN_ENABLE_GPU");
                 return d;
             }
             Err(e) => {
@@ -363,7 +406,7 @@ fn select_device() -> Device {
     {
         match Device::new_cuda(0) {
             Ok(d) => {
-                tracing::info!("embedder: CUDA backend enabled");
+                tracing::info!("embedder: CUDA backend enabled via CHAN_ENABLE_GPU");
                 return d;
             }
             Err(e) => {
@@ -488,6 +531,19 @@ mod tests {
     fn unknown_model_is_error() {
         let err = lookup_model("not-a-model").unwrap_err();
         assert!(matches!(err, EmbedError::UnknownModel(_)));
+    }
+
+    #[test]
+    fn gpu_is_opt_in_and_disable_wins() {
+        // Default (neither var): CPU, because the Metal path hangs in
+        // [_MTLCommandBuffer waitUntilCompleted] out of the box.
+        assert!(!want_gpu(false, false));
+        // Opt-in only: attempt the accelerator.
+        assert!(want_gpu(false, true));
+        // Back-compat disable alone: still CPU (and a no-op anyway).
+        assert!(!want_gpu(true, false));
+        // Both set: the explicit disable wins over the opt-in.
+        assert!(!want_gpu(true, true));
     }
 
     #[test]
