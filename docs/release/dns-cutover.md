@@ -12,11 +12,19 @@ Current live state (verified via dig): Cloudflare nameservers
 Repo is `fiorix/chan`; Pages host is `fiorix.github.io`; the deploy
 workflow already writes `CNAME` = `chan.app` into the artifact.
 
-**Step 0 — Pre-flight (no DNS change yet)**
+**Step 0 — Pre-flight: set the custom domain (no DNS change yet)**
 - Confirm the Pages workflow is green on `main` (Actions tab) and that
-  repo **Settings -> Pages** shows source = GitHub Actions. The custom
-  domain field will read `chan.app` (auto-set by the `CNAME` artifact)
-  and show a **DNS check failing** warning — expected until step 4.
+  repo **Settings -> Pages** shows source = GitHub Actions.
+- Set the custom domain explicitly: **Settings -> Pages -> Custom
+  domain**, enter `chan.app`, Save. This step is required and is easy to
+  miss. Under Actions-based publishing the `CNAME` file in the build
+  artifact does NOT auto-set the domain; that auto-set only happens with
+  legacy branch-based Pages publishing. Until the domain is set here,
+  GitHub's edge has no mapping for `chan.app` and serves "Site not found"
+  with no certificate.
+- Once set, the custom-domain field shows a **DNS check failing** warning.
+  That is expected until step 4, since DNS still points at the VPS.
+  GitHub issues the Let's Encrypt cert after the DNS check passes.
 - Leave TTL at 300 (already low enough).
 
 **Step 1 — In Cloudflare DNS, replace the apex `A` record**
