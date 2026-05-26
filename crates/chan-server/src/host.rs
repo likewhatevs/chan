@@ -432,6 +432,32 @@ mod tests {
         assert!(host.live_drive(root.path()).is_none());
     }
 
+    #[tokio::test]
+    async fn fresh_in_process_register_opens_without_drive_not_registered() {
+        // Regression guard for the desktop "drive not registered" bug:
+        // chan-desktop used to register a brand-new directory by
+        // spawning `chan add` in a SEPARATE process, which mutated only
+        // the on-disk registry. The embedded host's `Library` snapshot
+        // never saw the row, so the immediately-following open returned
+        // DriveNotRegistered. Registering in-process through the SAME
+        // `Library` the host owns makes the row visible at once: this
+        // test registers a never-before-seen dir, then opens it on the
+        // same handle with no intervening reload.
+        let cfg = tempfile::tempdir().expect("config dir");
+        let fresh = tempfile::tempdir().expect("fresh drive dir");
+        let lib = Library::open_at(cfg.path().join("config.toml")).expect("library");
+        lib.register_drive(fresh.path())
+            .expect("register fresh dir");
+        let host = Arc::new(DriveHost::new(lib));
+
+        let hosted = host
+            .open_registered_drive(fresh.path(), serve_config("/fresh"))
+            .await
+            .expect("fresh dir opens immediately after in-process register");
+        let canonical = fresh.path().canonicalize().expect("canonical root");
+        assert_eq!(hosted.root, canonical);
+    }
+
     #[test]
     fn path_prefix_matching_uses_segment_boundaries() {
         assert!(path_matches_prefix("/drive", "/drive"));

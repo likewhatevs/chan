@@ -25,7 +25,7 @@ the embedded web build. The Makefile builds `chan` and installs
 on `$PATH`.
 
 ```bash
-make run      # cargo tauri dev
+make dev      # cargo tauri dev (launch the desktop app in dev mode)
 make build    # cargo tauri build (release bundle for the host platform)
 make check    # cargo check
 make clean    # cargo clean

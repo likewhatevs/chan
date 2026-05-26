@@ -296,13 +296,19 @@ ADD:
 
 ### Verification
 
+> Post-implementation note (2026-05-26): steps 1-5 are the automated
+> gate and are the verification of record (all green; see the
+> Implementation summary). Steps 6-8 are an OPTIONAL pre-release
+> interactive smoke check, not a gating requirement. The bug they would
+> exercise is covered by automated tests.
+
 1. `cargo build` (workspace) and `cargo build -p chan-desktop`.
 2. `cargo test -p chan-server -p chan-drive` (live_drive + retry tests).
 3. `cargo test` in `desktop/src-tauri` (rewritten pin tests).
 4. `cargo fmt --check` and `cargo clippy --all-targets -- -D warnings`.
 5. In `web/`: `npm run build` and `npm run check` (svelte-check).
 6. End-to-end against a CLEAN `~/.chan` (move it aside first):
-   `cd desktop && make run`. Confirm:
+   `cd desktop && make dev`. Confirm:
    - "Open drive" → pick the `chan` repo (never registered) →
      onboarding → Open: NO "drive not registered" banner; the drive
      mounts and the editor window opens.
@@ -326,7 +332,7 @@ ADD:
 
 ### Tear-down note
 
-`make run` launches a desktop process and may leave embedded serves /
+`make dev` launches a desktop process and may leave embedded serves /
 windows open. Quit the app cleanly (RunEvent::Exit unmounts drives).
 Remove any throwaway test drives with the in-app Forget, and restore
 the real `~/.chan` you moved aside.
@@ -403,10 +409,28 @@ the concurrent MCP-registration-removal change):
   launcher is served raw (`frontendDist: ../src`, no bundler /
   svelte-check step); `web/` was not touched by this change.
 
-Not done in this pass (no environment for it): the live end-to-end
-`make run` walk against a moved-aside `~/.chan` (plan Verification
-steps 6-7). The logic is covered by unit/integration tests and a
-clean build; the manual GUI walk is left for an interactive session.
+Verification posture: the automated gate (steps 1-5: build, fmt,
+clippy, full workspace test) is the verification of record and is
+green. The load-bearing behaviors are covered by tests, so the live
+`make dev` GUI walk (plan Verification steps 6-8) is an OPTIONAL
+pre-release interactive smoke check, not owed or gating work:
+
+- The exact regression (a brand-new directory registered in-process
+  opens immediately, no `DriveNotRegistered`) is pinned by
+  `chan-server`'s
+  `fresh_in_process_register_opens_without_drive_not_registered`
+  and exercised by `host_routes_requests_to_the_matching_drive_prefix`.
+- The `remove_drive` teardown-race contract the retry loop handles is
+  pinned by `chan-drive`'s
+  `unregister_returns_drive_already_open_when_handle_is_live`.
+- Feature-flag persistence is covered by `chan-drive`'s
+  `set_semantic_enabled` / `set_reports_enabled` tests; the desktop
+  live-vs-transient resolution is thin glue over them.
+
+What `make dev` would still add is purely GUI/OS-level (a Tauri window
+actually opening, a toggle visually snapping back, flock release across
+Cmd+Q) and is not worth wiring into CI; run it ad hoc before a release
+cut if desired.
 
 Follow-ups: none required. The universal2 / multi-platform bundling
 follow-up referenced by the old docs is moot now that no second

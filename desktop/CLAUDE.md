@@ -38,7 +38,7 @@ rather than surfacing a raw error.
 ### No bundled binary
 
 There is no `chan-bin` Makefile step, no `bundle.macOS.files` entry,
-and no `bundle.externalBin`. `make run` / `make build` /
+and no `bundle.externalBin`. `make dev` / `make build` /
 `make app-signed` / `make app-notarized` depend only on the `web`
 bundle (the rust-embed input) and the tauri CLI. The single
 codesigned + notarized artifact is the chan-desktop `.app` itself;

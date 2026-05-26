@@ -1,4 +1,4 @@
-.PHONY: run build check fmt fmt-check lint test clean web tauri-cli \
+.PHONY: dev build check fmt fmt-check lint test clean web tauri-cli \
         app-signed app-notarized sign-prereqs notarize-prereqs
 
 # Monorepo root. Override via CHAN_REPO=/path on CI.
@@ -27,7 +27,10 @@ tauri-cli:
 web:
 	$(MAKE) -C $(CHAN_REPO) web
 
-run: tauri-cli web
+# Launch the desktop app in dev mode (cargo tauri dev). Matches the
+# root Makefile's `make dev` convention: each launches its component
+# in dev mode.
+dev: tauri-cli web
 	cd src-tauri && $(TAURI) dev
 
 build: tauri-cli web
