@@ -38,6 +38,7 @@ import {
   type SpawnContext,
 } from "./tabs.svelte";
 import { isEditableText } from "./fileTypes";
+import { isTauriDesktop, runDesktopDownload } from "../api/desktop";
 import {
   appendDefaultMd,
   preserveExtension,
@@ -3061,6 +3062,26 @@ export const fileOps = {
     document.body.appendChild(link);
     link.click();
     link.remove();
+  },
+  /// Inspector Download action. In the browser the native download
+  /// manager handles progress + the Downloads folder + reveal, so we
+  /// keep the `<a download>` path. chan-desktop's webview has no such
+  /// manager, so on desktop we route through @@LaneB's
+  /// `runDesktopDownload` capability (api/desktop.ts): it fetches over
+  /// the loopback connection with XHR progress and saves through a
+  /// Tauri command, driving the shared `downloadTransfer` store the
+  /// inspector indicator binds to. Fire-and-forget: the store carries
+  /// progress / error / savedPath so callers don't await.
+  downloadPathWithProgress(path: string, isDir: boolean): void {
+    if (isTauriDesktop()) {
+      const url = new URL(
+        api.downloadUrl(path),
+        window.location.href,
+      ).toString();
+      void runDesktopDownload(url, downloadFilename(path, isDir));
+      return;
+    }
+    this.downloadPath(path, isDir);
   },
   async replaceFileAt(targetPath: string, picked: File): Promise<void> {
     if (fileTransferStatus.value) {

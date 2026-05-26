@@ -185,6 +185,27 @@
     selectedId = null;
   }
 
+  /// "Graph from here" on a selected file or folder node. Per
+  /// inspector-spec.md the re-rooted graph always shows the node's
+  /// PARENT folder (or the drive root when the node is top-level), with
+  /// the node itself pinned + re-selected so the inspector stays on it.
+  /// Re-scopes IN PLACE (the graph tab the user is in) rather than
+  /// spawning a new tab; the filesystem scope keeps the folder cohort
+  /// in view. Mirrors openFsGraphForFile's parent-folder rule but for
+  /// the in-graph re-root affordance the spec wants back on the
+  /// inspector body.
+  function graphFromHere(path: string): void {
+    const slash = path.lastIndexOf("/");
+    const parent = slash > 0 ? path.slice(0, slash) : "";
+    const scopeId = parent ? `dir:${parent}` : "drive";
+    graphState.scopeId = scopeId;
+    graphState.depth = 1;
+    // Pin + select the node so the re-rooted graph lands on it. Setting
+    // pendingSelectId routes through the canvas's post-load selection.
+    graphState.pendingSelectId = path;
+    selectedId = path;
+  }
+
   function close(): void {
     if (onClose) onClose();
     else graphOverlay.open = false;
@@ -1819,6 +1840,7 @@
               graphState.inspectorOpen = true;
             }
           }}
+          onSetAsScope={() => graphFromHere(fsPath)}
         />
       {:else if selectedFsNode}
         <div class="ghost-body">
@@ -1898,8 +1920,9 @@
           onNavigate={selectByPath}
           onContactNavigate={selectByPath}
           onSetAsScope={
+            inspectorSelection?.kind === "file" ||
             inspectorSelection?.kind === "directory"
-              ? () => rescopeFromHere(`dir:${inspectorSelection.path}`)
+              ? () => graphFromHere(inspectorSelection.path)
               : undefined
           }
           documentsOverride={selectionDocumentsInScope}

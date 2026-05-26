@@ -2,7 +2,6 @@ import { describe, expect, test } from "vitest";
 import client from "../api/client.ts?raw";
 import fileTree from "./FileTree.svelte?raw";
 import fileInfo from "./FileInfoBody.svelte?raw";
-import dirInfo from "./DirectoryInfoBody.svelte?raw";
 import store from "../state/store.svelte.ts?raw";
 
 // Bug 2 / round-1: File Browser native drag IN and OUT is removed. The
@@ -50,12 +49,18 @@ describe("FileTree browser drag-out removed", () => {
   });
 
   test("shared inspectors expose Upload and Download transfer actions", () => {
-    expect(fileInfo).toMatch(/<button class="open" type="button" onclick=\{triggerUpload\}/);
-    expect(fileInfo).toMatch(/<button class="open" type="button" onclick=\{downloadSelection\}/);
+    // I1/I2: the Upload + Download buttons live in the shared
+    // actionsSection (multiline markup); Download gained a
+    // disabled={downloadBusy} attr for the desktop progress path.
+    expect(fileInfo).toMatch(/onclick=\{triggerUpload\}/);
+    expect(fileInfo).toMatch(/onclick=\{downloadSelection\}/);
+    expect(fileInfo).toMatch(/disabled=\{downloadBusy\}/);
     expect(fileInfo).toMatch(/fileOps\.replaceFileAt\(entry\.path, files\[0\]!\)/);
     expect(fileInfo).toMatch(/fileOps\.uploadFilesTo\(entry\.path, files\)/);
-    expect(dirInfo).toMatch(/onclick=\{triggerUpload\}/);
-    expect(dirInfo).toMatch(/onclick=\{downloadDirectory\}/);
+    // I3: the divergent DirectoryInfoBody was retired; the folder
+    // inspector is now FileInfoBody's dir branch, which uploads to the
+    // directory + downloads it as a tar through the same handlers.
+    expect(fileInfo).toMatch(/fileOps\.uploadFilesTo\(entry\.path, files\)/);
   });
 
   test("file replacement uses upload replace mode and refreshes open tabs", () => {

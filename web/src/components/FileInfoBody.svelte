@@ -38,6 +38,11 @@
   import { openImageZoom } from "../state/imageZoom";
   import { openPdfViewer } from "../state/pdfViewer";
   import {
+    downloadTransfer,
+    downloadTransferActive,
+    clearDownloadTransfer,
+  } from "../state/downloadTransfer.svelte";
+  import {
     drive,
     fileOps,
     loadTreeDir,
@@ -68,6 +73,7 @@
 
   let {
     path,
+    label,
     onOpen,
     onReveal,
     onClose,
@@ -77,6 +83,11 @@
     onSetAsScope,
   }: {
     path: string | null;
+    /// Optional display name for the header. The graph passes the
+    /// node's human label (e.g. "docs") so a folder inspected from the
+    /// graph reads the same name the canvas shows. Files / FB folders
+    /// leave it undefined and fall back to the basename.
+    label?: string;
     onOpen?: () => void;
     /// Image / directory counterpart to `onOpen`. Renders a
     /// "Show in file browser" button on image entries and a
@@ -377,8 +388,28 @@
 
   function downloadSelection(): void {
     if (!entry) return;
-    fileOps.downloadPath(entry.path, entry.is_dir);
+    // Desktop routes through @@LaneB's progress-tracked capability
+    // (downloadTransfer store drives the indicator below); the browser
+    // hands off to its native download manager.
+    fileOps.downloadPathWithProgress(entry.path, entry.is_dir);
   }
+
+  /// Live desktop-download indicator (browser path leaves this null --
+  /// the browser's own download manager owns the progress UI). Mirrors
+  /// the shape @@LaneB's store exposes: progress 0..1 or null
+  /// (indeterminate), savedPath on success, error on failure.
+  const transfer = $derived(downloadTransfer.value);
+  const downloadBusy = $derived(downloadTransferActive());
+
+  /// Full-path toggle for the actions section. The header shows the
+  /// basename; this reveals the drive-relative path. Resets to hidden
+  /// whenever the selection changes so a new entry doesn't inherit the
+  /// previous one's expand state. Drive root ("") has no path to show.
+  let showFullPath = $state(false);
+  $effect(() => {
+    void path;
+    showFullPath = false;
+  });
 
   const uploadTitle = $derived(
     entry?.is_dir
@@ -430,7 +461,17 @@
     const controller = new AbortController();
     reportLoading = true;
     const fetcher: Promise<ReportFileStats | ReportPrefix | null> = target.is_dir
-      ? api.reportPrefix(target.path)
+      ? // Prefer the O(1) /api/report/dir cache (what the graph folder
+        // inspector used) and fall back to the walking /api/report/prefix
+        // when the cache has no entry yet, so a folder inspected on any
+        // surface gets the same cheap path.
+        api.reportDir(target.path).catch((e) => {
+          const msg = (e as Error)?.message ?? "";
+          if (/404/.test(msg) || /not found/i.test(msg)) {
+            return api.reportPrefix(target.path);
+          }
+          throw e;
+        })
       : api.reportFileStream(target.path, {
           signal: controller.signal,
           onReport(stats) {
@@ -492,6 +533,159 @@
   }
 </script>
 
+<!-- Desktop-download indicator. Browser downloads hand off to the
+     native download manager (no in-app indicator); on desktop
+     @@LaneB's runDesktopDownload drives the downloadTransfer store and
+     this snippet mirrors its progress / success / error. Rendered once
+     per body branch via {@render downloadIndicator()}. -->
+{#snippet downloadIndicator()}
+  {#if transfer}
+    <div
+      class="dl-indicator"
+      class:err={!!transfer.error}
+      role="status"
+      aria-live="polite"
+    >
+      {#if transfer.error}
+        <div class="dl-line">Download failed: {transfer.error}</div>
+        <button
+          class="dl-dismiss"
+          type="button"
+          onclick={clearDownloadTransfer}>Dismiss</button
+        >
+      {:else if transfer.savedPath}
+        <div class="dl-line" title={transfer.savedPath}>
+          Saved to {transfer.savedPath}
+        </div>
+        <button
+          class="dl-dismiss"
+          type="button"
+          onclick={clearDownloadTransfer}>Dismiss</button
+        >
+      {:else}
+        <div class="dl-progress" aria-hidden="true">
+          <div
+            class="dl-bar"
+            class:indeterminate={transfer.progress === null}
+            style={transfer.progress !== null
+              ? `width: ${Math.round(transfer.progress * 100)}%`
+              : ""}
+          ></div>
+        </div>
+        <div class="dl-row">
+          <span class="dl-line"
+            >Downloading {transfer.filename}{transfer.progress !== null
+              ? ` (${Math.round(transfer.progress * 100)}%)`
+              : "…"}</span
+          >
+          {#if transfer.cancel}
+            <button
+              class="dl-dismiss"
+              type="button"
+              onclick={() => transfer.cancel?.()}>Cancel</button
+            >
+          {/if}
+        </div>
+      {/if}
+    </div>
+  {/if}
+{/snippet}
+
+<!-- Shared ACTIONS section. Rendered directly under the filename header
+     on every surface (File Browser, editor, Graph) so the inspector has
+     one consistent layout: header -> actions -> lazy content. Per
+     inspector-spec.md the actions move up here from the old bottom-of-
+     body placement. The contextual actions differ by entry kind:
+       - editable file: Open (gated on isEditableText, even read-only);
+       - media (image): View/Zoom; (pdf): View PDF;
+       - every entry: Upload + Download (+ progress indicator);
+       - host-provided: Show File/Directory (onReveal), Graph from here
+         (onSetAsScope).
+     A full-path toggle reveals the drive-relative path (header shows
+     the basename). -->
+{#snippet actionsSection()}
+  {#if entry}
+    {@const isDir = entry.is_dir}
+    {@const image = !isDir && isImage(entry.path)}
+    {@const pdf = !isDir && isPdf(entry.path)}
+    {@const editable = !isDir && isEditableText(entry.path)}
+    <div class="actions-section">
+      {#if entry.path}
+        <button
+          type="button"
+          class="path-toggle"
+          aria-expanded={showFullPath}
+          onclick={() => (showFullPath = !showFullPath)}
+          title={showFullPath ? "Hide full path" : "Show full path"}
+        >
+          {showFullPath ? "Hide path" : "Show path"}
+        </button>
+        {#if showFullPath}
+          <div class="path-row mono" title={entry.path}>{entry.path}</div>
+        {/if}
+      {/if}
+      <div class="action-buttons">
+        {#if !isDir && onOpen}
+          {#if editable}
+            <button class="open" type="button" onclick={onOpen}>Open</button>
+          {/if}
+        {/if}
+        {#if image}
+          <button
+            class="open"
+            type="button"
+            onclick={() => openImageZoom(entry.path)}>View / Zoom</button
+          >
+        {:else if pdf}
+          <button
+            class="open"
+            type="button"
+            onclick={() => openPdfViewer(entry.path)}>View PDF</button
+          >
+        {/if}
+        <div class="transfer-actions">
+          <button
+            class="open"
+            type="button"
+            onclick={triggerUpload}
+            title={uploadTitle}>Upload</button
+          >
+          <button
+            class="open"
+            type="button"
+            onclick={downloadSelection}
+            disabled={downloadBusy}
+            title={downloadTitle}>Download</button
+          >
+        </div>
+        {#if onReveal}
+          <button class="open" type="button" onclick={onReveal}>
+            {isDir ? "Show Directory" : "Show File"}
+          </button>
+        {/if}
+        {#if onSetAsScope}
+          <button class="open" type="button" onclick={onSetAsScope}
+            >Graph from here</button
+          >
+        {/if}
+      </div>
+      {@render downloadIndicator()}
+      <input
+        bind:this={uploadInput}
+        class="file-picker"
+        type="file"
+        multiple={isDir}
+        onchange={onUploadPicked}
+        aria-hidden="true"
+        tabindex="-1"
+      />
+      {#if !isDir && onOpen && !editable && !image && !pdf}
+        <p class="view-only-hint">Not an editable file.</p>
+      {/if}
+    </div>
+  {/if}
+{/snippet}
+
 {#if !entry}
   <div class="empty">
     <div class="empty-title">Details</div>
@@ -511,7 +705,7 @@
       {/if}
     </header>
     <h3 class="title" title={entry.path || "/"}>
-      {basename(entry.path) || drive.info?.label || "(root)"}
+      {label || basename(entry.path) || drive.info?.label || "(root)"}
     </h3>
     {#if entry.path === "Drafts"}
       <!-- `fullstack-a-66` slice c (follow-up): "outside drive's
@@ -533,6 +727,7 @@
         {/each}
       </div>
     {/if}
+    {@render actionsSection()}
     {#if dirStats}
       <div class="meta-grid">
         <span class="k">files</span>
@@ -615,38 +810,9 @@
     {:else if reportError}
       <div class="refs-error">report unavailable: {reportError}</div>
     {/if}
-    <div class="transfer-actions">
-      <button class="open" type="button" onclick={triggerUpload} title={uploadTitle}>
-        Upload
-      </button>
-      <button class="open" type="button" onclick={downloadSelection} title={downloadTitle}>
-        Download
-      </button>
-    </div>
-    <input
-      bind:this={uploadInput}
-      class="file-picker"
-      type="file"
-      multiple
-      onchange={onUploadPicked}
-      aria-hidden="true"
-      tabindex="-1"
-    />
-    {#if onReveal}
-      <!-- "Show Directory": jump to a file browser tab with this directory
-           selected. Hosted by surfaces that don't already live inside
-           the browser (graph fs-mode inspector). The file browser
-           itself leaves this prop unbound so the button doesn't
-           render twice on its own surface. -->
-      <button class="open" onclick={onReveal}>Show Directory</button>
-    {/if}
-    {#if onSetAsScope}
-      <button class="open" onclick={onSetAsScope}>Graph from here</button>
-    {/if}
-    <!-- `fullstack-42` refined: inspector buttons stay; the menu-
-         level duplicates were dropped instead. Pane Mode's Cmd+K 2
-         / 3 (with `fullstack-43`'s context) is the keyboard
-         equivalent of these affordances. -->
+    <!-- Actions moved up to the actionsSection directly under the
+         filename (inspector-spec.md). Show Directory / Graph from here /
+         Upload / Download all live there now. -->
   </div>
 {:else}
   {@const editable = isEditableText(entry.path)}
@@ -687,6 +853,7 @@
         />
       </button>
     {/if}
+    {@render actionsSection()}
     <div class="meta-grid">
       <span class="k">size</span>
       <span class="v">{formatSize(entry.size)}</span>
@@ -737,62 +904,9 @@
     {:else if reportError}
       <div class="refs-error">report unavailable: {reportError}</div>
     {/if}
-    <div class="transfer-actions">
-      <button class="open" type="button" onclick={triggerUpload} title={uploadTitle}>
-        Upload
-      </button>
-      <button class="open" type="button" onclick={downloadSelection} title={downloadTitle}>
-        Download
-      </button>
-    </div>
-    <input
-      bind:this={uploadInput}
-      class="file-picker"
-      type="file"
-      onchange={onUploadPicked}
-      aria-hidden="true"
-      tabindex="-1"
-    />
-    {#if image}
-      {#if onReveal}
-        <button class="open" onclick={onReveal}>Show in file browser</button>
-      {/if}
-    {:else if pdf}
-      <!-- PDFs ride the same `media` kind on the wire as images but
-           render via `<embed type="application/pdf">` (browser's
-           built-in viewer) instead of `<img>`. The fullscreen
-           overlay is the equivalent of openImageZoom for PDFs. -->
-      <button class="open" onclick={() => openPdfViewer(entry.path)}>
-        View PDF
-      </button>
-      {#if onReveal}
-        <button class="open" onclick={onReveal}>Show in file browser</button>
-      {/if}
-    {:else if onOpen}
-      {#if editable}
-        <button class="open" onclick={onOpen}>Open</button>
-      {:else}
-        <p class="view-only-hint">
-          Not an editable file.
-        </p>
-      {/if}
-    {/if}
-    {#if onReveal && !image && !pdf}
-      <!-- "Show File": reveal this file in the file browser. The
-           editor binds this so its details panel mirrors the tab
-           menu's reveal action; image / pdf entries render their
-           own "Show in file browser" variant a few lines above. -->
-      <button class="open" onclick={onReveal}>Show File</button>
-    {/if}
-    {#if onSetAsScope}
-      <!-- "Graph from here" re-scopes the current graph to this file (or
-           image) and re-pins it as the focal node. Only rendered
-           when the host wires it up (today: the graph surface). -->
-      <button class="open" onclick={onSetAsScope}>Graph from here</button>
-    {/if}
-    <!-- `fullstack-42` refined: inspector buttons stay; the menu-
-         level duplicates (doc-tab right-click "Show File", terminal
-         right-click "Show Dir", etc.) were dropped instead. -->
+    <!-- Actions (Open / View+Zoom / Upload / Download / Show File /
+         Graph from here) moved up to the actionsSection directly under
+         the filename header (inspector-spec.md). -->
     {#if showRefs}
       {#if !graphData.view && graphData.loading}
         <div class="refs-loading">loading references…</div>
@@ -1056,6 +1170,41 @@
     text-overflow: ellipsis;
     white-space: nowrap;
   }
+  /* ACTIONS section: sits directly under the filename header on every
+     surface. The buttons stack in a single column with a tight,
+     consistent gap so the whole block reads as one action group; the
+     full-path toggle + revealed path sit above the buttons. */
+  .actions-section {
+    margin: 0.2rem 0 0.6rem 0;
+  }
+  .action-buttons {
+    display: flex;
+    flex-direction: column;
+    gap: 0.35rem;
+  }
+  /* Inside the action group the per-button margin-top from `.open`
+     would double the gap; the flex `gap` owns the spacing here. */
+  .action-buttons .open,
+  .action-buttons .open + .open {
+    margin-top: 0;
+  }
+  .path-toggle {
+    background: none;
+    border: none;
+    color: var(--link);
+    cursor: pointer;
+    font: inherit;
+    font-size: 12px;
+    padding: 0;
+    margin: 0 0 0.35rem 0;
+  }
+  .path-toggle:hover { text-decoration: underline; }
+  .path-row {
+    font-size: 11.5px;
+    color: var(--text-secondary);
+    margin: 0 0 0.45rem 0;
+    word-break: break-all;
+  }
   .open {
     width: 100%;
     background: var(--btn-bg);
@@ -1075,16 +1224,87 @@
   }
   .open + .open { margin-top: 0.35rem; }
   .open:hover { border-color: var(--btn-hover); }
+  .open:disabled {
+    opacity: 0.55;
+    cursor: default;
+  }
+  .open:disabled:hover { border-color: var(--btn-border); }
   .transfer-actions {
     display: grid;
     grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
     gap: 0.35rem;
   }
-  .transfer-actions .open {
-    margin-top: 0.6rem;
+  /* Desktop-download indicator (browser path stays null -> not
+     rendered). Mirrors the browser's progress chrome inside the
+     inspector so the desktop webview, which has no native download
+     manager, still shows progress + the saved path. */
+  .dl-indicator {
+    margin-top: 0.5rem;
+    padding: 0.4rem 0.5rem;
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    background: var(--bg-elev);
+    font-size: 12px;
+    display: flex;
+    flex-direction: column;
+    gap: 0.3rem;
   }
+  .dl-indicator.err {
+    border-color: var(--warn-text);
+    color: var(--warn-text);
+  }
+  .dl-line {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    color: var(--text);
+  }
+  .dl-indicator.err .dl-line { color: var(--warn-text); }
+  .dl-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.4rem;
+  }
+  .dl-progress {
+    height: 4px;
+    border-radius: 2px;
+    background: var(--border);
+    overflow: hidden;
+  }
+  .dl-bar {
+    height: 100%;
+    background: var(--accent);
+    transition: width 0.15s linear;
+  }
+  /* Indeterminate: no Content-Length, so animate a sliding chunk
+     instead of faking a ratio. */
+  .dl-bar.indeterminate {
+    width: 40%;
+    animation: dl-slide 1.1s ease-in-out infinite;
+  }
+  @keyframes dl-slide {
+    0% { margin-left: -40%; }
+    100% { margin-left: 100%; }
+  }
+  .dl-dismiss {
+    flex-shrink: 0;
+    background: transparent;
+    border: 1px solid var(--btn-border);
+    border-radius: 3px;
+    color: var(--text);
+    cursor: pointer;
+    font: inherit;
+    font-size: 12px;
+    padding: 1px 8px;
+    align-self: flex-start;
+  }
+  .dl-dismiss:hover { border-color: var(--btn-hover); }
+  /* Inside the action group the flex `gap` owns vertical spacing;
+     the grid's own column gap handles Upload<->Download. */
+  .transfer-actions .open,
   .transfer-actions .open + .open {
-    margin-top: 0.6rem;
+    margin-top: 0;
   }
   .file-picker {
     position: absolute;
