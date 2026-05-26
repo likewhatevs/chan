@@ -8,7 +8,7 @@
 import { describe, expect, test } from "vitest";
 import { EditorState } from "@codemirror/state";
 import { EditorView } from "@codemirror/view";
-import { pasteInsertPos } from "./image_drop";
+import { moveImageSource, pasteInsertPos } from "./image_drop";
 
 /// Build a view over `doc` with the caret at `head` and a forced
 /// `hasFocus`. CM6's `hasFocus` reads the DOM in jsdom; we override it
@@ -50,6 +50,95 @@ describe("pasteInsertPos (bug 5)", () => {
     // the caret is not a reliable signal when focus is elsewhere.
     const view = viewWith(doc, 5, false);
     expect(pasteInsertPos(view)).toBe(doc.length);
+    view.destroy();
+  });
+});
+
+/// Plain view over `doc`; the move feature does not depend on focus.
+function plainView(doc: string): EditorView {
+  return new EditorView({ state: EditorState.create({ doc }) });
+}
+
+describe("moveImageSource (image drag across rows)", () => {
+  test("move a standalone image down to a later row, no blank gap", () => {
+    // Line 1: image (standalone). Line 3: target paragraph.
+    const md = "![](a.png#w=250)\n\nlast line\n";
+    const view = plainView(md);
+    const imgFrom = 0;
+    const imgTo = "![](a.png#w=250)".length;
+    // Drop onto "last line" (offset within line 3).
+    const dropPos = md.indexOf("last");
+    moveImageSource(
+      view,
+      JSON.stringify({ from: imgFrom, to: imgTo }),
+      dropPos,
+    );
+    const out = view.state.doc.toString();
+    // The standalone image line (and its newline) is gone; the image
+    // now sits on its own row at the former "last line" position.
+    expect(out).toBe("\n![](a.png#w=250)\nlast line\n");
+    expect(out).not.toContain("![](a.png#w=250)\n\n"); // no double-source
+    view.destroy();
+  });
+
+  test("move an image up to an earlier row", () => {
+    const md = "first\n\n![](b.png)\n";
+    const view = plainView(md);
+    const imgFrom = md.indexOf("![](b.png)");
+    const imgTo = imgFrom + "![](b.png)".length;
+    const dropPos = 0; // onto "first"
+    moveImageSource(
+      view,
+      JSON.stringify({ from: imgFrom, to: imgTo }),
+      dropPos,
+    );
+    const out = view.state.doc.toString();
+    expect(out.startsWith("![](b.png)\nfirst")).toBe(true);
+    // Source line removed; no stray "![](b.png)" left at the bottom.
+    expect(out.match(/!\[\]\(b\.png\)/g)?.length).toBe(1);
+    view.destroy();
+  });
+
+  test("dropping inside the source range is a no-op", () => {
+    const md = "![](c.png)\n\nbody\n";
+    const view = plainView(md);
+    const imgFrom = 0;
+    const imgTo = "![](c.png)".length;
+    const before = view.state.doc.toString();
+    moveImageSource(
+      view,
+      JSON.stringify({ from: imgFrom, to: imgTo }),
+      3, // inside the source range
+    );
+    expect(view.state.doc.toString()).toBe(before);
+    view.destroy();
+  });
+
+  test("target list line keeps the image inline (trailing space)", () => {
+    const md = "- a bullet\n\n![](d.png)\n";
+    const view = plainView(md);
+    const imgFrom = md.indexOf("![](d.png)");
+    const imgTo = imgFrom + "![](d.png)".length;
+    const dropPos = 2; // onto the bullet line
+    moveImageSource(
+      view,
+      JSON.stringify({ from: imgFrom, to: imgTo }),
+      dropPos,
+    );
+    const out = view.state.doc.toString();
+    // Inserted at the bullet line start with a trailing space (inline),
+    // not a newline.
+    expect(out.startsWith("![](d.png) - a bullet")).toBe(true);
+    view.destroy();
+  });
+
+  test("malformed move payload is ignored", () => {
+    const md = "![](e.png)\nbody\n";
+    const view = plainView(md);
+    const before = view.state.doc.toString();
+    moveImageSource(view, "not json", 12);
+    moveImageSource(view, JSON.stringify({ from: 5, to: 5 }), 12);
+    expect(view.state.doc.toString()).toBe(before);
     view.destroy();
   });
 });

@@ -43,6 +43,46 @@ import {
 
 const MIN_IMG_WIDTH = 40;
 const USER_SCROLL_QUIET_MS = 900;
+
+/// Custom dataTransfer MIME for the image drag-to-move gesture. The
+/// editor-level `drop` handler (image_drop.ts) keys off this type to
+/// tell an internal image move apart from an OS image-file drop. The
+/// payload is the JSON `{ from, to }` source range of the dragged
+/// `![alt](src)` node, captured fresh from the syntax tree at
+/// dragstart.
+export const IMAGE_MOVE_MIME = "application/x-chan-image-move";
+
+/// Start an internal image-move drag from an image atom widget. Reads
+/// the live Image node range (positions drift as the doc changes, so
+/// we resolve from the stamped nodePos rather than trusting a cached
+/// range) and stashes it on the dataTransfer so the drop handler can
+/// relocate the source. Sets a `data-dragging` marker for styling.
+function beginImageDrag(
+  e: DragEvent,
+  view: EditorView,
+  nodePos: number,
+  wrap: HTMLElement,
+): void {
+  const range = imageNodeRange(view, nodePos);
+  if (!range || !e.dataTransfer) {
+    // No resolvable source range -> let the browser do its default
+    // (which for an <img> with a real src is a normal image drag); we
+    // simply don't tag it as an internal move.
+    return;
+  }
+  e.dataTransfer.setData(
+    IMAGE_MOVE_MIME,
+    JSON.stringify({ from: range.from, to: range.to }),
+  );
+  // `move` so the cursor shows the move affordance, not copy.
+  e.dataTransfer.effectAllowed = "move";
+  // Drag the image as the drag image so the user sees what they grab.
+  const img = wrap.querySelector("img");
+  if (img instanceof HTMLImageElement && img.complete) {
+    e.dataTransfer.setDragImage(img, img.width / 2, img.height / 2);
+  }
+  wrap.dataset.dragging = "true";
+}
 const scrollIntentUntil = new WeakMap<HTMLElement, number>();
 const scrollIntentInstalled = new WeakSet<HTMLElement>();
 
@@ -197,6 +237,17 @@ class ImageWidget extends WidgetType {
     /// In edit mode the float-around-text layout doesn't apply —
     /// the preview is a sibling to the source row, not a replacement.
     readonly editing: boolean,
+    /// True when the editor's `EditorView.editable` facet is on at
+    /// scan time. Captured here (rather than read live inside toDOM)
+    /// and folded into `eq()` so a read-only -> writable flip forces a
+    /// re-render. Without this the drag-to-move affordance (set in
+    /// toDOM) sticks at whatever the facet was when the widget first
+    /// rendered: the value prop arrives async, so the first render can
+    /// land before editability settles, and `eq()` would then keep the
+    /// stale non-draggable DOM forever. Named `writable` (not
+    /// `editable`) because `WidgetType` exposes a getter-only
+    /// `editable` member — assigning to a field of that name throws.
+    readonly writable: boolean,
     readonly onClick: ((args: ImageClickArgs) => void) | undefined,
   ) {
     super();
@@ -208,7 +259,8 @@ class ImageWidget extends WidgetType {
       this.src === other.src &&
       this.fromPath === other.fromPath &&
       this.standalone === other.standalone &&
-      this.editing === other.editing
+      this.editing === other.editing &&
+      this.writable === other.writable
     );
   }
 
@@ -222,6 +274,9 @@ class ImageWidget extends WidgetType {
     // round-trip back into the syntax tree without holding a
     // reference to `this`.
     wrap.dataset.imagePos = String(this.nodePos);
+    // `writable` is captured at scan time and carried on the widget so
+    // a read-only <-> writable flip re-renders (see the eq() note).
+    const editable = this.writable;
     // Wrap-level mousedown catches clicks that don't land on a
     // child with its own handler (img, handle, action buttons,
     // broken-image badge). For a normal image the img covers the
@@ -250,7 +305,25 @@ class ImageWidget extends WidgetType {
     const resolved = resolveImageSrc(this.src, this.fromPath);
     if (resolved) img.src = resolved;
     if (width != null) img.style.width = `${width}px`;
-    img.draggable = false;
+    // Drag-to-move: in writable mode the rendered image is a drag
+    // handle. Dragging it to a different row relocates its
+    // `![alt](src)` markdown (the editor-level `drop` handler in
+    // image_drop.ts reads the source range from dataTransfer and moves
+    // it). Left/center/right + width ride in the src fragment and move
+    // verbatim; this only changes the ROW. The draggable lives on the
+    // IMG, not the wrap: CodeMirror manages (and resets) the
+    // draggable property on the widget root DOM, but leaves the child
+    // img alone, so the img is the reliable drag source. Read-only
+    // mode keeps the img non-draggable (no source edits there).
+    img.draggable = editable;
+    if (editable) {
+      img.addEventListener("dragstart", (e) => {
+        beginImageDrag(e, view, this.nodePos, wrap);
+      });
+      img.addEventListener("dragend", () => {
+        wrap.removeAttribute("data-dragging");
+      });
+    }
     // Broken-image placeholder: when the resolved URL 404s or
     // resolution itself returned empty (relative path against a
     // null fromPath in chat bubbles, etc.), swap in a visible
@@ -339,7 +412,14 @@ class ImageWidget extends WidgetType {
     }
     img.addEventListener("mousedown", (e) => {
       if (e.button !== 0) return;
-      e.preventDefault();
+      // Preventing default on the img mousedown blocks the native
+      // HTML5 drag the draggable img relies on (write mode), so only
+      // do it in read-only mode. `stopPropagation` still stops CM6
+      // from placing a caret. A modifier-click (zoom) is handled below
+      // and never starts a drag; a plain press that turns into a drag
+      // fires dragstart (relocate), a plain press that stays put fires
+      // the select ring on mouseup.
+      if (!editable) e.preventDefault();
       e.stopPropagation();
       // Cmd/Ctrl-click -> trigger the host's onClick handler (zoom).
       // Plain click -> mark the wrap as selected (visual ring; no
@@ -364,12 +444,10 @@ class ImageWidget extends WidgetType {
     wrap.appendChild(img);
 
     // Read-only contexts (user-toggled read mode, fs-locked file)
-    // suppress the write-side chrome:
-    // no resize handle and no Edit button. The View / zoom button
-    // stays so the user can fullscreen the image. Same live-facet
-    // check the date / wiki widgets use.
-    const editable = view.state.facet(EditorView.editable);
-
+    // suppress the write-side chrome: no resize handle and no Edit
+    // button. The View / zoom button stays so the user can fullscreen
+    // the image. `editable` was resolved once at the top of toDOM
+    // (same live-facet check the date / wiki widgets use).
     if (editable) {
       const handle = document.createElement("span");
       handle.className = "cm-md-image-handle";
@@ -764,7 +842,21 @@ export function imageDecorations(opts: ImageOptions): Extension {
       }
 
       update(u: ViewUpdate): void {
-        if (u.docChanged || u.viewportChanged || u.selectionSet) {
+        // Re-scan on a read-only <-> writable flip too: the editable
+        // state is baked into each ImageWidget (drag-to-move
+        // affordance), so a facet reconfigure that doesn't otherwise
+        // touch doc / selection / viewport must still rebuild the
+        // widgets, or the affordance stays stuck at the pre-flip
+        // value.
+        const editableChanged =
+          u.startState.facet(EditorView.editable) !==
+          u.state.facet(EditorView.editable);
+        if (
+          u.docChanged ||
+          u.viewportChanged ||
+          u.selectionSet ||
+          editableChanged
+        ) {
           this.decorations = scanImagesInline(u.view, opts);
         }
       }
@@ -802,6 +894,7 @@ function scanImagesInline(view: EditorView, opts: ImageOptions): DecorationSet {
   const { from, to } = view.viewport;
   const decos: Array<{ from: number; to: number; deco: Decoration }> = [];
   const fromPath = opts.getCurrentPath();
+  const editable = state.facet(EditorView.editable);
   syntaxTree(state).iterate({
     from,
     to,
@@ -845,6 +938,7 @@ function scanImagesInline(view: EditorView, opts: ImageOptions): DecorationSet {
         outerFrom,
         standalone,
         false,
+        editable,
         opts.onImageClick,
       );
       decos.push({
@@ -886,6 +980,7 @@ function scanImagesBlock(
   const sel = state.selection;
   const decos: Array<{ from: number; to: number; deco: Decoration }> = [];
   const fromPath = opts.getCurrentPath();
+  const editable = state.facet(EditorView.editable);
   // Doc-wide tree walk. StateFields don't see viewport, but the doc-
   // wide pass emits widgets only for selection-intersected images, so
   // the cost is bounded by selection count, not doc size.
@@ -925,6 +1020,7 @@ function scanImagesBlock(
         outerFrom,
         standalone,
         true,
+        editable,
         opts.onImageClick,
       );
       decos.push({

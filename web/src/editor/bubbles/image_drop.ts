@@ -16,6 +16,7 @@ import { convertHeicForUpload, isHeicFile } from "./heic";
 import { invalidateImageCatalog } from "./image";
 import { relativizePath } from "../links";
 import { listLineAt } from "../commands/list";
+import { IMAGE_MOVE_MIME } from "../widgets/image";
 
 const MAX_UPLOAD_BYTES = 50 * 1024 * 1024;
 const DEFAULT_INSERT_WIDTH_PX = 250;
@@ -33,7 +34,29 @@ export interface ImageDropOptions {
 
 export function imageDropHandlers(opts: ImageDropOptions): Extension {
   return EditorView.domEventHandlers({
+    dragover(event, _view) {
+      // An internal image-move drag must show the move cursor and,
+      // crucially, the editor must accept the drop (the default is to
+      // reject). Without preventDefault on dragover the `drop` never
+      // fires. We only opt in for our own move type; OS file drags
+      // keep CM6's / the browser's default handling.
+      if (event.dataTransfer?.types?.includes(IMAGE_MOVE_MIME)) {
+        event.preventDefault();
+        event.dataTransfer.dropEffect = "move";
+        return true;
+      }
+      return false;
+    },
     drop(event, view) {
+      // Internal image-move: a rendered image atom was dragged to a
+      // new row. Relocate its `![alt](src)` source to the drop row;
+      // the image dropdown still owns left/center/right.
+      const moveData = event.dataTransfer?.getData(IMAGE_MOVE_MIME);
+      if (moveData) {
+        event.preventDefault();
+        moveImageSource(view, moveData, posFromEvent(view, event));
+        return true;
+      }
       const files = event.dataTransfer?.files;
       if (!files || files.length === 0) return false;
       // HEIC drops from Chrome / Firefox on non-Apple OSes often
@@ -97,6 +120,90 @@ export function imageDropHandlers(opts: ImageDropOptions): Extension {
 export function pasteInsertPos(view: EditorView): number {
   if (view.hasFocus) return view.state.selection.main.head;
   return view.state.doc.length;
+}
+
+/// Relocate a dragged image's `![alt](src)` source to the drop row.
+/// `moveData` is the JSON `{from,to}` source range captured at
+/// dragstart; `dropPos` is the document offset under the cursor at
+/// drop. Left/center/right alignment is unchanged (it rides in the
+/// `src` fragment, which moves verbatim). Width (`#w=N`) likewise
+/// round-trips.
+export function moveImageSource(
+  view: EditorView,
+  moveData: string,
+  dropPos: number,
+): void {
+  let range: { from: number; to: number };
+  try {
+    const parsed = JSON.parse(moveData) as { from: number; to: number };
+    if (
+      typeof parsed.from !== "number" ||
+      typeof parsed.to !== "number" ||
+      parsed.from >= parsed.to
+    ) {
+      return;
+    }
+    range = parsed;
+  } catch {
+    return;
+  }
+  const doc = view.state.doc;
+  if (range.to > doc.length) return;
+  // Dropping back inside (or immediately adjacent to) the source is a
+  // no-op; nothing moved.
+  if (dropPos >= range.from && dropPos <= range.to) return;
+
+  const markdown = doc.sliceString(range.from, range.to);
+
+  // Land the image at the START of the drop row so it reads as "moved
+  // to this line". On a list line, mirror the paste/drop convention
+  // (trailing space, no newline) so the image flows inline with the
+  // bullet; otherwise give it its own line with a trailing newline.
+  const targetLine = doc.lineAt(dropPos);
+  const onListLine = listLineAt(view.state, dropPos) !== null;
+  const insertText = onListLine ? `${markdown} ` : `${markdown}\n`;
+
+  // Insert at the start of the target line, but compute that line's
+  // start relative to the post-deletion document. CM6 applies all
+  // changes in a single transaction against the ORIGINAL positions,
+  // so we express both the deletion and the insertion in original
+  // coordinates and let CM6 reconcile. To avoid leaving a blank line
+  // where the image used to be, also swallow one trailing newline
+  // that belonged to the image's own line when the image was the only
+  // content there.
+  const srcLine = doc.lineAt(range.from);
+  const imageWasStandalone =
+    doc.sliceString(srcLine.from, srcLine.to).trim() === markdown.trim();
+  let delFrom = range.from;
+  let delTo = range.to;
+  if (imageWasStandalone) {
+    // Remove the whole source line including its line break so we
+    // don't strand an empty row.
+    delFrom = srcLine.from;
+    delTo = Math.min(srcLine.to + 1, doc.length);
+  }
+
+  const insertAt = targetLine.from;
+  // If the insertion point sits inside the deletion span (can't here
+  // because we no-op when dropPos is within the source range, but the
+  // standalone-line widening could pull delFrom/delTo around the
+  // insert), guard it.
+  if (insertAt >= delFrom && insertAt < delTo) return;
+
+  view.dispatch({
+    changes: [
+      { from: delFrom, to: delTo, insert: "" },
+      { from: insertAt, to: insertAt, insert: insertText },
+    ],
+    // Place the caret just after the moved markdown at its new home.
+    selection: {
+      anchor:
+        insertAt < delFrom
+          ? insertAt + insertText.length
+          : insertAt + insertText.length - (delTo - delFrom),
+    },
+    scrollIntoView: true,
+  });
 }
 
 function posFromEvent(view: EditorView, event: DragEvent): number {
