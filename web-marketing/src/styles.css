@@ -301,6 +301,7 @@ code {
   background: #fff;
   border: 1px solid var(--rule);
   border-radius: 8px;
+  height: auto;
   justify-self: start;
   max-width: 180px;
   padding: 10px;
