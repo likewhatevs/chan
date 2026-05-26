@@ -157,8 +157,12 @@ fn perform_reset(state: &AppState, mode: ResetMode) -> Result<chan_drive::ResetR
         // caller retries the reset. Reusing `drive_strong` instead
         // of reopening sidesteps chan-drive's per-drive flock (which
         // a lingering Arc still holds).
-        let bridge =
-            make_watch_bridge(&state.events_tx, &state.index_events_tx, &state.self_writes);
+        let bridge = make_watch_bridge(
+            &state.events_tx,
+            &state.index_events_tx,
+            &state.self_writes,
+            &state.scope_registry,
+        );
         let watch_handle = drive_strong.watch(bridge).map_err(ResetError::Core)?;
         let search_aggression = state
             .server_config
@@ -192,7 +196,12 @@ fn perform_reset(state: &AppState, mode: ResetMode) -> Result<chan_drive::ResetR
         .library
         .open_drive(&state.drive_root)
         .map_err(ResetError::Core)?;
-    let bridge = make_watch_bridge(&state.events_tx, &state.index_events_tx, &state.self_writes);
+    let bridge = make_watch_bridge(
+        &state.events_tx,
+        &state.index_events_tx,
+        &state.self_writes,
+        &state.scope_registry,
+    );
     let watch_handle = drive.watch(bridge).map_err(ResetError::Core)?;
     let search_aggression = state
         .server_config

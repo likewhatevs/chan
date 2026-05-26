@@ -104,7 +104,12 @@ pub async fn api_team_load(
 ) -> Response {
     // Build the watch bridge (re-uses the same events_tx /
     // index_events_tx fan-out as the drive-root watcher).
-    let bridge = make_watch_bridge(&state.events_tx, &state.index_events_tx, &state.self_writes);
+    let bridge = make_watch_bridge(
+        &state.events_tx,
+        &state.index_events_tx,
+        &state.self_writes,
+        &state.scope_registry,
+    );
 
     // `Drive::watch_team` wraps the WatchRoot construction +
     // path-prefix logic so chan-server doesn't construct
@@ -374,6 +379,7 @@ mod tests {
             })),
             shutdown_rx,
             loaded_teams: std::sync::Mutex::new(std::collections::HashMap::new()),
+            scope_registry: std::sync::Arc::new(crate::bus::ScopeRegistry::new()),
         });
 
         RouteTestApp {
