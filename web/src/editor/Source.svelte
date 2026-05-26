@@ -296,6 +296,19 @@
     });
     caretRestored = true;
     caretPending = null;
+    // `bug 10` (mirror of Wysiwyg): the mount-time `view.focus()` runs on
+    // an empty doc; content arrives async so focus has fallen back to
+    // <body> by the time it lands. Re-assert focus once the caret is
+    // placed so a freshly-opened source-mode file is typeable right away.
+    // Deferred past the current frame so it lands after any same-tick
+    // blur in the open path. Gated on `autoFocus` to respect hosts that
+    // own their focus policy.
+    if (autoFocus) {
+      requestAnimationFrame(() => {
+        if (!view) return;
+        view.focus();
+      });
+    }
   }
 
   onDestroy(() => view?.destroy());

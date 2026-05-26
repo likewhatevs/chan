@@ -545,6 +545,22 @@
     });
     caretRestored = true;
     caretPending = null;
+    // `bug 10`: the mount-time `view.focus()` (line ~520) runs while the
+    // doc is still empty — content arrives async via the `value` prop, so
+    // by the time it lands the editor has lost focus back to <body> (the
+    // Cmd+N path opens the draft after the chord handler parks focus on
+    // body). Re-assert focus once the caret is actually placed so a
+    // freshly-opened note (New Draft, file open) is typeable immediately.
+    // Defer past the current frame so the focus lands after any
+    // same-tick blur in the open path and after layout settles (the
+    // pane may still be animating in). Gated on `autoFocus` so hosts
+    // that own their focus policy (rich prompt) stay unfocused.
+    if (autoFocus) {
+      requestAnimationFrame(() => {
+        if (!view) return;
+        view.focus();
+      });
+    }
   }
 
   onDestroy(() => {
