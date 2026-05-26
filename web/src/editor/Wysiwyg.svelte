@@ -1142,6 +1142,18 @@
     line-height: 0;
     max-width: 100%;
   }
+  /* Drag-to-move affordance: a writable image atom is draggable to a
+     different row (the source markdown relocates; alignment + width
+     ride along). The draggable lives on the IMG (CodeMirror resets the
+     property on the widget root). Grab cursor signals it; the source
+     dims while a drag is in flight so the user sees what they picked
+     up. */
+  :global(.md-wysiwyg-cm6 .cm-md-image-wrap img[draggable="true"]) {
+    cursor: grab;
+  }
+  :global(.md-wysiwyg-cm6 .cm-md-image-wrap[data-dragging="true"]) {
+    opacity: 0.4;
+  }
   /* Selected ring: lit by clicking on the image (sets
      data-selected on the wrap). Click-outside clears it. The ring
      is a 2px outline so it sits on top of the image without

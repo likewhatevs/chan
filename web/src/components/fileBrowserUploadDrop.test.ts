@@ -4,12 +4,19 @@ import tree from "./FileTree.svelte?raw";
 import client from "../api/client.ts?raw";
 import store from "../state/store.svelte.ts?raw";
 
-describe("File Browser drop-to-upload", () => {
-  test("FileTree routes external file drops to uploadFilesTo", () => {
-    expect(tree).toContain('types.includes("Files")');
-    expect(tree).toContain("fileOps.uploadFilesTo(destDir, files)");
+describe("File Browser upload via the Upload button", () => {
+  // Bug 2 / round-1: external OS file drops (drag-IN) are no longer
+  // accepted by the tree; importing files is now the Upload button's
+  // job. The drop handlers only resolve the app-internal tree-move.
+  test("FileTree no longer routes external file drops to upload", () => {
+    expect(tree).not.toContain('types.includes("Files")');
+    expect(tree).not.toContain("fileOps.uploadFilesTo(destDir, files)");
+    expect(tree).not.toContain("hasExternalFiles");
+    // The internal tree-move drop wiring stays on the rows.
     expect(tree).toContain("ondrop={(e) => onRowDrop(e, node.path)}");
     expect(tree).toContain("ondrop={(e) => onRowDrop(e, parentOf(node.path))}");
+    // The Upload button still drives uploadFilesTo at the picked target.
+    expect(tree).toContain("fileOps.uploadFilesTo(target.path");
   });
 
   test("store upload flow exposes progress, cancel, and tree refresh", () => {

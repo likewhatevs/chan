@@ -3,7 +3,7 @@
 mod auth;
 mod config;
 mod default_drive;
-mod drag_out;
+mod download;
 mod embedded;
 mod registry;
 mod serve;
@@ -1592,7 +1592,7 @@ fn main() {
             reveal_in_finder,
             reload_window,
             open_devtools,
-            drag_out::start_file_browser_drag_out,
+            download::save_file_to_downloads,
             zoom_in,
             zoom_out,
             zoom_reset,

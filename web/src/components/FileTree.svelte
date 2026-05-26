@@ -25,7 +25,6 @@
     Users,
   } from "lucide-svelte";
   import { api } from "../api/client";
-  import { isTauriDesktop, tauriInvoke } from "../api/desktop";
   import { uiPrompt } from "../state/store.svelte";
   import { openTeamDialog } from "../state/teamDialog.svelte";
   import {
@@ -124,61 +123,31 @@
     return safe;
   }
 
-  function downloadMime(path: string, isDir: boolean): string {
-    if (isDir) return "application/x-tar";
-    const lower = path.toLowerCase();
-    if (lower.endsWith(".md") || lower.endsWith(".txt")) return "text/plain";
-    if (lower.endsWith(".png")) return "image/png";
-    if (lower.endsWith(".jpg") || lower.endsWith(".jpeg")) return "image/jpeg";
-    if (lower.endsWith(".gif")) return "image/gif";
-    if (lower.endsWith(".webp")) return "image/webp";
-    if (lower.endsWith(".pdf")) return "application/pdf";
-    return "application/octet-stream";
-  }
-
-  function setDownloadDragData(e: DragEvent, path: string, isDir: boolean): void {
-    if (!e.dataTransfer) return;
-    const url = api.downloadUrl(path);
-    e.dataTransfer.setData(
-      "DownloadURL",
-      `${downloadMime(path, isDir)}:${downloadFilename(path, isDir)}:${url}`,
-    );
-    e.dataTransfer.setData("text/uri-list", url);
-  }
-
-  function absoluteDownloadUrl(path: string): string {
-    return new URL(api.downloadUrl(path), window.location.href).toString();
-  }
-
-  function startNativeDragOut(e: DragEvent, path: string, isDir: boolean): void {
-    if (!isTauriDesktop()) return;
-    void tauriInvoke("start_file_browser_drag_out", {
-      path,
-      isDir,
-      downloadUrl: absoluteDownloadUrl(path),
-      filename: downloadFilename(path, isDir),
-      clientX: e.clientX,
-      clientY: e.clientY,
-    }).catch((err) => {
-      console.warn("native File Browser drag-out failed", err);
-    });
-  }
-
+  // Bug 2 / round-1: File Browser native drag IN and OUT is removed.
+  // The macOS native drag-out crashed and Linux/Windows were already
+  // no-ops; the user now exports via the Download button and imports
+  // via the Upload button. So `onFileDragStart` no longer writes the
+  // `DownloadURL` / `text/uri-list` browser drag-out payload, does NOT
+  // invoke the (now removed) desktop native drag-out Tauri command, and
+  // the row drop handlers no longer accept external OS files. What
+  // stays is the APP-INTERNAL
+  // drag: tree-move (relocate a node within the tree) and the
+  // file-into-editor-pane open. Those never cross the OS boundary and
+  // never hit the crashing native path.
   function onFileDragStart(e: DragEvent, path: string, isDir: boolean): void {
     if (!e.dataTransfer) return;
-    e.dataTransfer.effectAllowed = "copyMove";
+    e.dataTransfer.effectAllowed = "move";
     const payload = JSON.stringify({ path, isDir });
     e.dataTransfer.setData(TREE_MOVE_MIME, payload);
-    setDownloadDragData(e, path, isDir);
     if (!isDir) {
       // Files are also droppable into editor panes (open in tab).
       // Directories are not, so they only carry the tree-move mime.
       e.dataTransfer.setData(FILE_DRAG_MIME, JSON.stringify({ path }));
     }
-    // A plain-text fallback is friendly to other drop targets (e.g.
-    // pasting the path into a code editor outside the app).
+    // A plain-text fallback (the path string, not a file export) is
+    // friendly to internal drop targets and pasting the path into a
+    // code editor. It does not trigger an OS file download.
     e.dataTransfer.setData("text/plain", path);
-    startNativeDragOut(e, path, isDir);
   }
 
   /// Resolve the move source from a DragEvent. Returns null if the
@@ -197,10 +166,6 @@
 
   function hasTreeMove(e: DragEvent): boolean {
     return !!e.dataTransfer?.types.includes(TREE_MOVE_MIME);
-  }
-
-  function hasExternalFiles(e: DragEvent): boolean {
-    return !!e.dataTransfer?.types.includes("Files");
   }
 
   /// True when dropping `src` into `destDir` is a no-op or invalid:
@@ -225,14 +190,16 @@
   }
 
   function onRowDragOver(e: DragEvent, destDir: string): void {
-    const treeMove = hasTreeMove(e);
-    const externalFiles = hasExternalFiles(e);
-    if (!treeMove && !externalFiles) return;
+    // Only the app-internal tree-move is a valid drop now; external OS
+    // file drops (drag-IN) are no longer accepted (use the Upload
+    // button). So we only opt in when the drag carries the tree-move
+    // mime.
+    if (!hasTreeMove(e)) return;
     e.preventDefault();
     // Stop the event from bubbling to the root <ul>'s ondragover,
     // which would otherwise overwrite our selection with the root.
     e.stopPropagation();
-    if (e.dataTransfer) e.dataTransfer.dropEffect = treeMove ? "move" : "copy";
+    if (e.dataTransfer) e.dataTransfer.dropEffect = "move";
     dropTarget = destDir;
   }
 
@@ -244,20 +211,16 @@
 
   async function onRowDrop(e: DragEvent, destDir: string): Promise<void> {
     dropTarget = null;
+    // External OS file drops (drag-IN) are no longer accepted; only the
+    // app-internal tree-move resolves. Importing files is the Upload
+    // button's job now.
     const src = readTreeDrag(e);
-    const files = e.dataTransfer?.files;
-    if (!src && (!hasExternalFiles(e) || !files || files.length === 0)) return;
+    if (!src) return;
     e.preventDefault();
     e.stopPropagation();
-    if (src) {
-      if (isInvalidDrop(src, destDir)) return;
-      const target = dropTargetPath(src.path, destDir);
-      await fileOps.moveTo(src.path, target);
-      return;
-    }
-    if (files && files.length > 0) {
-      await fileOps.uploadFilesTo(destDir, files);
-    }
+    if (isInvalidDrop(src, destDir)) return;
+    const target = dropTargetPath(src.path, destDir);
+    await fileOps.moveTo(src.path, target);
   }
 
   type Folder = {
