@@ -34,6 +34,46 @@ function runEnterAt(seed: string, caret: number, addKeymap: boolean): string {
   }
 }
 
+/// Mounts the same minimal source-mode editor, then types `text`
+/// one character at a time through the `input.type` user-event path
+/// (the path CM6 routes real keystrokes through, and the only path a
+/// markdown input rule could hook via `EditorView.inputHandler`).
+/// Returns the resulting doc. This exercises the TYPING side of the
+/// source-mode contract: typing a list marker (`* `, `- `, `1. `)
+/// must stay raw text, never transform into list mode.
+function typeInto(seed: string, caret: number, text: string, addKeymap: boolean): string {
+  const target = document.createElement("div");
+  document.body.append(target);
+  try {
+    const state = EditorState.create({
+      doc: seed,
+      selection: { anchor: caret },
+      extensions: [
+        keymap.of(defaultKeymap),
+        markdown({ addKeymap }),
+      ],
+    });
+    const view = new EditorView({ state, parent: target });
+    try {
+      for (const ch of text) {
+        const head = view.state.selection.main.head;
+        view.dispatch(
+          view.state.update({
+            changes: { from: head, insert: ch },
+            selection: { anchor: head + ch.length },
+            userEvent: "input.type",
+          }),
+        );
+      }
+      return view.state.doc.toString();
+    } finally {
+      view.destroy();
+    }
+  } finally {
+    target.remove();
+  }
+}
+
 afterEach(() => {
   document.body.innerHTML = "";
 });
@@ -71,5 +111,33 @@ describe("source-mode markdown extension (fullstack-a-41)", () => {
     const seed = "1) item";
     const after = runEnterAt(seed, seed.length, false);
     expect(after).toBe("1) item\n");
+  });
+});
+
+// New-file-and-draft-spec item 1: typing a list marker in SOURCE-CODE
+// mode must not trigger any markdown list transform. Source.svelte runs
+// no markdown input rules and seeds the language with `addKeymap: false`,
+// so typing `* `, `- `, `1. ` at line start leaves the literal text in
+// the buffer. These pin the TYPING path (the existing block pins Enter).
+describe("source-mode list-marker typing (new-file-and-draft-spec item 1)", () => {
+  test("typing `* ` at line start stays raw, no bullet transform", () => {
+    // Caret on a fresh blank line; type the marker plus content.
+    const after = typeInto("a\n", 2, "* hello", false);
+    expect(after).toBe("a\n* hello");
+  });
+
+  test("typing `- ` at line start stays raw, no bullet transform", () => {
+    const after = typeInto("a\n", 2, "- hello", false);
+    expect(after).toBe("a\n- hello");
+  });
+
+  test("typing `1. ` at line start stays raw, no ordered-list transform", () => {
+    const after = typeInto("a\n", 2, "1. hello", false);
+    expect(after).toBe("a\n1. hello");
+  });
+
+  test("typing the marker into an empty doc stays raw", () => {
+    const after = typeInto("", 0, "* x", false);
+    expect(after).toBe("* x");
   });
 });
