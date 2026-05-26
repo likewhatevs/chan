@@ -15,10 +15,9 @@ name: Release
 #   macos aarch64      Apple Silicon native (Intel intentionally
 #                                            excluded)
 #
-# Artifacts are unsigned on Linux. Apple Gatekeeper will warn
-# on the .pkg until you sign + notarize it with a Developer ID;
-# signing is a separate post-build step gated on having the
-# certificates loaded as repo secrets.
+# Artifacts are unsigned. The macOS CLI ships as a tar.gz only
+# (no native installer); install it via the shell installer at
+# chan.app/install.sh or by extracting the binary onto $PATH.
 
 on:
   push:
@@ -115,7 +114,6 @@ jobs:
             target: aarch64-apple-darwin
             archive: tar.gz
             binname: chan
-            pkg: true
     runs-on: ${{ matrix.os }}
     env:
       RUSTFLAGS: ${{ matrix.rustflags }}
@@ -281,27 +279,6 @@ jobs:
           cp "$file" "./chan-${{ matrix.deb_arch }}.rpm"
           echo "path=chan-${{ matrix.deb_arch }}.rpm" >> "$GITHUB_OUTPUT"
 
-      # ----- macOS .pkg -----
-      # Plain pkgbuild with no signing. Lands the binary at
-      # /usr/local/bin/chan and the docs under
-      # /usr/local/share/doc/chan/. Identifier is reverse-DNS so
-      # a future signed/notarized version can replace this one
-      # cleanly.
-      - name: Build .pkg
-        if: matrix.pkg
-        run: |
-          mkdir -p pkgroot/usr/local/bin pkgroot/usr/local/share/doc/chan
-          cp chan/target/${{ matrix.target }}/release/${{ matrix.binname }} pkgroot/usr/local/bin/chan
-          chmod 755 pkgroot/usr/local/bin/chan
-          cp chan/LICENSE chan/README.md pkgroot/usr/local/share/doc/chan/
-          version=$(awk -F'"' '/^version/ {print $2; exit}' chan/Cargo.toml)
-          pkgbuild \
-            --root pkgroot \
-            --identifier app.chan.cli \
-            --version "$version" \
-            --install-location / \
-            chan-aarch64-macos.pkg
-
       # ----- upload -----
       - uses: actions/upload-artifact@v4
         with:
@@ -310,7 +287,6 @@ jobs:
             chan-${{ matrix.target }}.${{ matrix.archive }}
             chan-${{ matrix.deb_arch }}.deb
             chan-${{ matrix.deb_arch }}.rpm
-            chan-aarch64-macos.pkg
           if-no-files-found: ignore
 
   # Tag-pushed runs end with a GitHub release. workflow_dispatch

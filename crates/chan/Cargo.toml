@@ -84,8 +84,8 @@ chan-server = { workspace = true, default-features = false, features = ["metal"]
 # ----- packaging metadata --------------------------------------
 #
 # Linux .deb (cargo-deb) and .rpm (cargo-generate-rpm) bake from
-# these blocks. macOS .pkg is built ad-hoc in the release
-# workflow via pkgbuild; no Cargo metadata for it.
+# these blocks. macOS ships the CLI as a tar.gz only; there is no
+# native macOS package, so no Cargo metadata for one.
 
 [package.metadata.deb]
 maintainer = "Alexandre Fiori <fiorix@gmail.com>"
