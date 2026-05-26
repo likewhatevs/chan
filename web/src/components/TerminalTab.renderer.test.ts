@@ -40,28 +40,27 @@ describe("fullstack-b-29: TerminalTab WebGL renderer", () => {
     expect(tab).toMatch(/falling back to DOM/);
   });
 
-  test("refreshes the WebGL texture atlas after animated SGR output", () => {
-    // `fullstack-a-97`: xterm.js documents clearTextureAtlas as
-    // the workaround for corrupted WebGL texture atlases. Claude
-    // Code's animated ANSI status lines churn SGR color/style
-    // sequences; coalescing an atlas clear on those chunks keeps
-    // the renderer from substituting glyphs across panes.
-    expect(tab).toMatch(/function bytesContainSgrSequence\(bytes: Uint8Array\)/);
-    expect(tab).toMatch(/if \(b === 0x6d\) return true/);
-    expect(tab).toMatch(/function maybeRefreshWebglAtlas\(bytes: Uint8Array\)/);
+  test("keeps event-driven atlas refresh helpers wired", () => {
+    // `clearTextureAtlas` + `refreshTerminalRows` survive as the
+    // event-driven renderer-refresh primitives (mount / focus / blur
+    // / host-resume). Their per-data-chunk caller was removed; see
+    // the negative pin below.
     expect(tab).toMatch(/function clearTextureAtlas\(\): void/);
     expect(tab).toMatch(/maybeClear\?\.call\(term\)/);
     expect(tab).toMatch(/function refreshTerminalRows\(\): void/);
     expect(tab).toMatch(/maybeRefresh\?\.call\(term, 0, Math\.max\(0, term\.rows - 1\)\)/);
   });
 
-  test("checks ArrayBuffer and Blob terminal output for SGR atlas refresh", () => {
-    expect(tab).toMatch(
-      /event\.data instanceof ArrayBuffer[\s\S]*?writePtyOutput\(bytes\);[\s\S]*?maybeRefreshWebglAtlas\(bytes\);/,
-    );
-    expect(tab).toMatch(
-      /event\.data instanceof Blob[\s\S]*?writePtyOutput\(bytes\);[\s\S]*?maybeRefreshWebglAtlas\(bytes\);/,
-    );
+  test("does not clear the texture atlas per PTY data chunk", () => {
+    // `fullstack-a-97` removed: the old per-frame SGR-triggered atlas
+    // clear force-repainted every terminal pane sharing the addon's
+    // process-global TextureAtlas (~60x/sec under animated TUIs),
+    // which is itself the source of the cross-pane glyph glitches.
+    // xterm 6.0.0 / addon-webgl 0.19.0 handle color/DPR/options
+    // changes natively, so the workaround is gone. This pin keeps it
+    // from silently returning.
+    expect(tab).not.toMatch(/maybeRefreshWebglAtlas/);
+    expect(tab).not.toMatch(/bytesContainSgrSequence/);
   });
 
   test("passes binary terminal output to xterm without string coercion", () => {

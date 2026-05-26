@@ -177,10 +177,7 @@
   let richPromptWorkspaceCreateKey = "";
   let richPromptWorkspaceStatusKey = "";
   const outputDecoder = new TextDecoder();
-  const WEBGL_ATLAS_SCAN_TAIL_BYTES = 32;
   let webglRendererActive = false;
-  let webglAtlasRefreshQueued = false;
-  let webglAtlasScanTail: number[] = [];
   let ptyOutputWriteDepth = 0;
   let hostResumeTimers: ReturnType<typeof setTimeout>[] = [];
   const keyboardProtocol = createTerminalKeyboardProtocolState();
@@ -457,31 +454,6 @@
     };
   }
 
-  function bytesContainSgrSequence(bytes: Uint8Array): boolean {
-    const scan = [...webglAtlasScanTail, ...bytes];
-    webglAtlasScanTail = scan.slice(-WEBGL_ATLAS_SCAN_TAIL_BYTES);
-    for (let i = 0; i < scan.length - 2; i++) {
-      if (scan[i] !== 0x1b || scan[i + 1] !== 0x5b) continue;
-      for (let j = i + 2; j < Math.min(scan.length, i + 34); j++) {
-        const b = scan[j];
-        if (b === 0x6d) return true;
-        if (b >= 0x40 && b <= 0x7e) break;
-      }
-    }
-    return false;
-  }
-
-  function maybeRefreshWebglAtlas(bytes: Uint8Array): void {
-    if (!term || !webglRendererActive || webglAtlasRefreshQueued) return;
-    if (!bytesContainSgrSequence(bytes)) return;
-    webglAtlasRefreshQueued = true;
-    requestAnimationFrame(() => {
-      webglAtlasRefreshQueued = false;
-      clearTextureAtlas();
-      refreshTerminalRows();
-    });
-  }
-
   function start(): void {
     if (!host || term) return;
     // `fullstack-b-11`: scrollback honors the Settings MB budget.
@@ -636,7 +608,6 @@
       if (event.data instanceof ArrayBuffer) {
         const bytes = new Uint8Array(event.data);
         writePtyOutput(bytes);
-        maybeRefreshWebglAtlas(bytes);
         recordOutputBytes(bytes.byteLength);
         maybeRefreshWatcher(bytes);
         maybeSeedPrompt();
@@ -645,7 +616,6 @@
       if (event.data instanceof Blob) {
         const bytes = new Uint8Array(await event.data.arrayBuffer());
         writePtyOutput(bytes);
-        maybeRefreshWebglAtlas(bytes);
         recordOutputBytes(bytes.byteLength);
         maybeRefreshWatcher(bytes);
         maybeSeedPrompt();
@@ -922,8 +892,6 @@
     term = null;
     ptyOutputWriteDepth = 0;
     webglRendererActive = false;
-    webglAtlasRefreshQueued = false;
-    webglAtlasScanTail = [];
     fit = null;
     search = null;
     serialize = null;
