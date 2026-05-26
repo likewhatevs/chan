@@ -279,7 +279,7 @@ pub fn build_fs_graph(
         ));
     }
 
-    let mut walker = FsGraphWalker::new(root.clone());
+    let mut walker = FsGraphWalker::new(root.clone(), drive.walk_filter().clone());
     match scope {
         FsGraphScope::File => walker.walk_file(&rel, &abs, &meta),
         FsGraphScope::Directory => walker.walk_directory(&rel, &abs, &meta, depth),
@@ -440,6 +440,12 @@ fn node_kind_from_class(
 struct FsGraphWalker {
     root: PathBuf,
     root_canon: Option<PathBuf>,
+    /// Directory-name blocklist (the per-drive `WalkFilter`). The
+    /// child walk skips any directory whose basename is excluded, at
+    /// any depth, so the filesystem graph never plots `node_modules/`
+    /// / `target/` / `venv/` dependency trees. Matches the index and
+    /// File Browser spine, which exclude the same set.
+    filter: chan_drive::fs_ops::WalkFilter,
     nodes: BTreeMap<String, NodeView>,
     edges: Vec<EdgeView>,
     edge_set: HashSet<(String, String, &'static str)>,
@@ -451,11 +457,12 @@ struct FsGraphWalker {
 }
 
 impl FsGraphWalker {
-    fn new(root: PathBuf) -> Self {
+    fn new(root: PathBuf, filter: chan_drive::fs_ops::WalkFilter) -> Self {
         let root_canon = root.canonicalize().ok();
         Self {
             root,
             root_canon,
+            filter,
             nodes: BTreeMap::new(),
             edges: Vec::new(),
             edge_set: HashSet::new(),
@@ -590,10 +597,17 @@ impl FsGraphWalker {
 
         for (name, child_abs) in entries {
             let name_str = name.to_string_lossy();
-            // Skip drive-internal state. Mirrors chan-drive's walker
-            // exclusions so the graph view doesn't surface `.chan/`
-            // / `.git/` machinery.
-            if parent_rel.is_empty() && (name_str == ".chan" || name_str == ".git") {
+            // Skip drive-internal state and the per-drive blocklist
+            // dirs at ANY depth. Mirrors chan-drive's `walk_drive`
+            // (`.chan`/`.git` invariants) plus the `WalkFilter`
+            // (`node_modules`, `target`, `venv`, ...) so the
+            // filesystem graph excludes the same set the index, the
+            // File Browser spine, and the watcher feed exclude. A
+            // repo-root drive otherwise plots its whole dependency
+            // tree (60K-131K nodes). The skip applies regardless of
+            // the entry's file type so a `.git` symlink can't slip a
+            // dependency tree back in.
+            if name_str == ".chan" || name_str == ".git" || self.filter.is_excluded(&name_str) {
                 continue;
             }
             let child_rel = if parent_rel.is_empty() {
@@ -927,7 +941,23 @@ mod tests {
     }
 
     fn walk(root: &Path, scope: FsGraphScope, rel: &str, depth: usize) -> FsGraphResponse {
-        let mut walker = FsGraphWalker::new(root.to_path_buf());
+        walk_with_filter(
+            root,
+            scope,
+            rel,
+            depth,
+            chan_drive::fs_ops::WalkFilter::default(),
+        )
+    }
+
+    fn walk_with_filter(
+        root: &Path,
+        scope: FsGraphScope,
+        rel: &str,
+        depth: usize,
+        filter: chan_drive::fs_ops::WalkFilter,
+    ) -> FsGraphResponse {
+        let mut walker = FsGraphWalker::new(root.to_path_buf(), filter);
         let abs = if rel.is_empty() {
             root.to_path_buf()
         } else {
@@ -1005,6 +1035,52 @@ mod tests {
         );
         assert!(has_edge(&resp, "", "top.md", "contains"));
         assert!(has_edge(&resp, "", "sub", "contains"));
+    }
+
+    #[test]
+    fn walk_filter_excludes_blocklisted_dirs_at_any_depth() {
+        let tmp = TempDir::new().unwrap();
+        write(&tmp.path().join("real.md"), "# real");
+        write(&tmp.path().join("notes/today.md"), "# today");
+        // Dependency-tree noise the graph must never plot.
+        write(&tmp.path().join("node_modules/pkg/index.js"), "x");
+        write(&tmp.path().join("target/debug/build.rs"), "x");
+        write(&tmp.path().join(".venv/lib/site.py"), "x");
+        // Nested blocklist dir below a real dir (any depth).
+        write(&tmp.path().join("notes/node_modules/dep/a.js"), "x");
+
+        let filter = chan_drive::fs_ops::WalkFilter::new([
+            "node_modules".to_string(),
+            "target".to_string(),
+            ".venv".to_string(),
+        ]);
+        let resp = walk_with_filter(tmp.path(), FsGraphScope::Directory, "", 6, filter);
+
+        // Real content present.
+        assert_eq!(node_kind(&resp, "real.md"), Some("file"));
+        assert_eq!(node_kind(&resp, "notes"), Some("directory"));
+        assert_eq!(node_kind(&resp, "notes/today.md"), Some("file"));
+
+        // Blocklisted dirs and everything under them are absent, at
+        // top level and nested.
+        for absent in [
+            "node_modules",
+            "node_modules/pkg",
+            "node_modules/pkg/index.js",
+            "target",
+            "target/debug",
+            "target/debug/build.rs",
+            ".venv",
+            ".venv/lib/site.py",
+            "notes/node_modules",
+            "notes/node_modules/dep/a.js",
+        ] {
+            assert!(
+                node_kind(&resp, absent).is_none(),
+                "blocklisted path leaked into fs-graph: {absent}; nodes={:?}",
+                resp.nodes.iter().map(|n| &n.id).collect::<Vec<_>>()
+            );
+        }
     }
 
     #[test]

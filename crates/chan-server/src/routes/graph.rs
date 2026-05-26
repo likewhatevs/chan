@@ -599,7 +599,7 @@ fn normalize_drive_rel(p: &std::path::Path) -> Option<String> {
 /// the previous graph-files-only behaviour instead of failing the
 /// request.
 fn drive_disk_files(drive: &chan_drive::Drive) -> std::collections::BTreeSet<String> {
-    match drive.list_tree_unified() {
+    match drive.list_tree_filtered_unified() {
         Ok(entries) => entries
             .into_iter()
             .filter(|e| !e.is_dir)
@@ -620,7 +620,7 @@ fn drive_disk_files(drive: &chan_drive::Drive) -> std::collections::BTreeSet<Str
 /// to "no directory filtering", i.e. the pre-fix behaviour, rather
 /// than failing the request.
 fn drive_disk_dirs(drive: &chan_drive::Drive) -> std::collections::BTreeSet<String> {
-    match drive.list_tree_unified() {
+    match drive.list_tree_filtered_unified() {
         Ok(entries) => entries
             .into_iter()
             .filter(|e| e.is_dir)
@@ -1031,9 +1031,14 @@ fn merge_unified_tree_layer(
     report_buckets: &std::collections::HashMap<String, ReportFileBucket>,
 ) {
     let path = graph_scope_path(p);
+    // Filtered listing so the semantic graph's tree layer excludes the
+    // same blocklist dirs (`node_modules/`, `target/`, ...) the index,
+    // the File Browser spine, and the fs-graph walker exclude. The
+    // comment below ("same file coverage as the File Browser") holds
+    // because the File Browser spine is itself filtered (bootstrap).
     let entries = match p.scope {
-        GraphScope::Drive => drive.list_tree_unified(),
-        GraphScope::Directory | GraphScope::File => drive.list_tree_prefix_unified(path),
+        GraphScope::Drive => drive.list_tree_filtered_unified(),
+        GraphScope::Directory | GraphScope::File => drive.list_tree_prefix_filtered_unified(path),
     };
     let Ok(mut entries) = entries else {
         return;
@@ -2633,6 +2638,56 @@ mod tests {
                 && edge.target == "notes/deep/a.md"
                 && edge.kind == "contains"
         }));
+    }
+
+    #[test]
+    fn merged_graph_layer_excludes_ignored_dirs() {
+        // ignore-consistency-spec.md: a drive pointed at a source tree
+        // must not plot node_modules/target/venv/.git in the graph. The
+        // default registry index_excluded_dirs is sane, so this holds
+        // with no config. Drives the runaway-node-count fix.
+        let (_cfg, root, drive) = open_drive();
+        put(root.path(), "top.md", b"# Top\n");
+        put(root.path(), "notes/today.md", b"# Today\n");
+        // Dependency / VCS noise at top level AND nested under a real dir.
+        put(root.path(), "node_modules/pkg/index.js", b"x");
+        put(root.path(), "target/debug/build.rs", b"x");
+        put(root.path(), ".venv/lib/site.py", b"x");
+        put(root.path(), ".git/HEAD", b"ref: x");
+        put(root.path(), "notes/node_modules/dep/a.js", b"x");
+
+        let params = GraphParams {
+            scope: GraphScope::Drive,
+            path: String::new(),
+            depth: 6,
+        };
+        let mut nodes = std::collections::BTreeMap::new();
+        let mut edges = Vec::new();
+        merge_filesystem_layer(&drive, &params, &mut nodes, &mut edges).unwrap();
+
+        // Real content present.
+        assert!(nodes.contains_key("top.md"));
+        assert!(nodes.contains_key("directory:notes"));
+        assert!(nodes.contains_key("notes/today.md"));
+
+        // No ignored dir appears as a directory node or a file node, at
+        // any depth. Directory nodes are keyed "directory:<rel>"; file /
+        // media nodes are keyed by the raw rel path.
+        for ignored in ["node_modules", "target", ".venv", ".git"] {
+            for (id, _) in nodes.iter() {
+                let rel = id.strip_prefix("directory:").unwrap_or(id);
+                assert!(
+                    rel != ignored && !rel.starts_with(&format!("{ignored}/")),
+                    "ignored dir leaked into the semantic graph: node id={id}"
+                );
+                // Nested case: notes/node_modules/...
+                assert!(
+                    !rel.contains(&format!("/{ignored}/"))
+                        && !rel.ends_with(&format!("/{ignored}")),
+                    "nested ignored dir leaked into the semantic graph: node id={id}"
+                );
+            }
+        }
     }
 
     #[test]

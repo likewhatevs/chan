@@ -51,8 +51,26 @@ impl ReportState {
     /// back to a full scan on missing-or-corrupt. Spawns the
     /// writer thread. Caller wraps the returned value in an
     /// `Arc` for shared ownership with the watcher fanout.
-    pub(crate) fn open(drive_root: &Path, jsonl_path: &Path) -> Result<Arc<Self>> {
-        let opts = ReportOptions::new(drive_root);
+    pub(crate) fn open(
+        drive_root: &Path,
+        jsonl_path: &Path,
+        excluded_dirs: &[String],
+    ) -> Result<Arc<Self>> {
+        let mut opts = ReportOptions::new(drive_root);
+        // Mirror the index/graph WalkFilter: the report's language
+        // analysis must not walk `node_modules/` / `target/` / `venv/`
+        // etc., so a source-tree drive doesn't roll up its dependency
+        // trees. chan-report's exclude_globs are gitignore-style ignore
+        // patterns applied to the walk AND to incremental updates; a
+        // bare dir basename with a trailing slash excludes that dir at
+        // any depth, matching `WalkFilter::is_excluded`. (Hidden dirs
+        // like `.git`/`.venv` are already dropped by the default
+        // include_hidden=false, but we list them too for parity and in
+        // case a future config flips include_hidden on.)
+        opts.exclude_globs = excluded_dirs
+            .iter()
+            .map(|name| format!("{}/", name.trim_end_matches('/')))
+            .collect();
 
         // Try the persisted form first. Any error (missing file,
         // schema mismatch, parse error, partial write) falls

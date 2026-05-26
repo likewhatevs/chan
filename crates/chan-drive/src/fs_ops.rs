@@ -1219,6 +1219,23 @@ pub fn list_tree_prefix(root: &Path, subtree_abs: &Path) -> Result<Vec<TreeEntry
     list_tree_inner(root, subtree_abs, 0, None)
 }
 
+/// `list_tree_prefix` variant that also applies the directory-name
+/// blocklist. Used by the graph layer's presence pass so the
+/// semantic graph excludes the same `node_modules/` / `target/` dirs
+/// the index and the File Browser spine already exclude. The
+/// editor's on-demand `list_tree_prefix` stays unfiltered so a user
+/// can still open a file inside a noisy dir.
+pub fn list_tree_prefix_filtered(
+    root: &Path,
+    subtree_abs: &Path,
+    filter: &WalkFilter,
+) -> Result<Vec<TreeEntry>> {
+    if !subtree_abs.exists() {
+        return Ok(Vec::new());
+    }
+    list_tree_inner(root, subtree_abs, 0, Some(filter))
+}
+
 fn list_tree_inner(
     root: &Path,
     walk_from: &Path,
@@ -1237,18 +1254,29 @@ fn list_tree_inner(
     } else {
         // Subtree walk. Inline the same filter chain `walk_drive`
         // applies, with `min_depth` overridden so the prefix entry
-        // itself is included for callers that want to see it.
+        // itself is included for callers that want to see it. When a
+        // `WalkFilter` is supplied it also prunes the blocklisted dir
+        // basenames at any depth, matching `walk_drive_filtered`.
+        let filter = filter.cloned();
         let walker = WalkDir::new(walk_from)
             .min_depth(min_depth)
             .follow_links(false)
             .same_file_system(true)
             .into_iter()
-            .filter_entry(|e| {
+            .filter_entry(move |e| {
                 if !e.file_type().is_dir() {
                     return true;
                 }
                 let n = e.file_name().to_string_lossy();
-                n != ".git" && n != ".chan"
+                if n == ".git" || n == ".chan" {
+                    return false;
+                }
+                if let Some(f) = &filter {
+                    if f.is_excluded(&n) {
+                        return false;
+                    }
+                }
+                true
             })
             .filter_map(|res| match res {
                 Ok(e) => Some(e),
