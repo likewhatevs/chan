@@ -27,6 +27,8 @@ import type {
   MetadataExportDownload,
   MetadataImportReport,
   MoveResponse,
+  TransferOp,
+  TransferResponse,
   ReportFileStats,
   ReportPrefix,
   ResetMode,
@@ -745,6 +747,16 @@ export const api = {
   downloadUrl: (path: string) => withTokenQuery(`/api/files/${encPath(path)}?download=1`),
   move: (from: string, to: string) =>
     req<MoveResponse>("POST", "/api/move", { from, to }),
+  /// Multi-entry move/copy for the File Browser clipboard + multi-drag.
+  /// `op` move = cut/paste + drag (rename + link rewrite per source);
+  /// copy = copy/paste (duplicate). Collisions resolve to a " copy"
+  /// suffix server-side; a move into a source's own parent is skipped.
+  fsTransfer: (op: TransferOp, sources: string[], destDir: string) =>
+    req<TransferResponse>("POST", "/api/fs/transfer", {
+      op,
+      sources,
+      dest_dir: destDir,
+    }),
   /// Filename fuzzy search (the [[ autocomplete in the editor).
   /// Hits the renamed /api/search/files endpoint; the legacy
   /// /api/search alias still exists server-side for back-compat.

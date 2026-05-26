@@ -311,6 +311,19 @@ export type MoveResponse = {
   conflicts: string[];
 };
 
+/// FB clipboard + multi-drag multi-entry move/copy (POST /api/fs/transfer).
+export type TransferOp = "move" | "copy";
+
+export type TransferResponse = {
+  /// Per-source final destination (after collision suffixing), in
+  /// request order.
+  moved: Array<{ from: string; to: string }>;
+  /// Sources skipped (no-op move into the same parent, or escaped drive).
+  skipped: string[];
+  /// Link-rewrite CAS conflicts accumulated across moved entries.
+  conflicts: string[];
+};
+
 export type DraftInspectResponse = {
   path: string;
   name: string;

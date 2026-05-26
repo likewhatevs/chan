@@ -56,8 +56,8 @@ use routes::{
     api_backlinks, api_build_info, api_close_rich_prompt, api_cloud_drives, api_create_draft,
     api_create_file, api_create_rich_prompt, api_create_rich_prompt_workspace, api_create_terminal,
     api_delete_file, api_delete_session, api_delete_terminal, api_discard_draft,
-    api_drive_bootstrap, api_fonts_source_code_pro_download, api_fs_graph, api_get_config,
-    api_get_contacts, api_get_drive, api_get_mentions, api_get_rich_prompt_status,
+    api_drive_bootstrap, api_fonts_source_code_pro_download, api_fs_graph, api_fs_transfer,
+    api_get_config, api_get_contacts, api_get_drive, api_get_mentions, api_get_rich_prompt_status,
     api_get_server_config, api_get_session, api_graph, api_headings, api_health, api_index_rebuild,
     api_index_status, api_indexing_state, api_inspect_draft, api_inspector, api_language_graph,
     api_link_targets, api_links, api_list_files, api_list_sessions, api_metadata_export,
@@ -924,6 +924,7 @@ fn router(state: Arc<AppState>) -> Router {
                 .delete(api_delete_file),
         )
         .route("/api/move", post(api_move))
+        .route("/api/fs/transfer", post(api_fs_transfer))
         .route("/api/search/files", get(api_search_files))
         .route("/api/search/content", get(api_search_content))
         .route("/api/index/status", get(api_index_status))
