@@ -73,6 +73,7 @@
 
   let {
     path,
+    label,
     onOpen,
     onReveal,
     onClose,
@@ -82,6 +83,11 @@
     onSetAsScope,
   }: {
     path: string | null;
+    /// Optional display name for the header. The graph passes the
+    /// node's human label (e.g. "docs") so a folder inspected from the
+    /// graph reads the same name the canvas shows. Files / FB folders
+    /// leave it undefined and fall back to the basename.
+    label?: string;
     onOpen?: () => void;
     /// Image / directory counterpart to `onOpen`. Renders a
     /// "Show in file browser" button on image entries and a
@@ -455,7 +461,17 @@
     const controller = new AbortController();
     reportLoading = true;
     const fetcher: Promise<ReportFileStats | ReportPrefix | null> = target.is_dir
-      ? api.reportPrefix(target.path)
+      ? // Prefer the O(1) /api/report/dir cache (what the graph folder
+        // inspector used) and fall back to the walking /api/report/prefix
+        // when the cache has no entry yet, so a folder inspected on any
+        // surface gets the same cheap path.
+        api.reportDir(target.path).catch((e) => {
+          const msg = (e as Error)?.message ?? "";
+          if (/404/.test(msg) || /not found/i.test(msg)) {
+            return api.reportPrefix(target.path);
+          }
+          throw e;
+        })
       : api.reportFileStream(target.path, {
           signal: controller.signal,
           onReport(stats) {
@@ -689,7 +705,7 @@
       {/if}
     </header>
     <h3 class="title" title={entry.path || "/"}>
-      {basename(entry.path) || drive.info?.label || "(root)"}
+      {label || basename(entry.path) || drive.info?.label || "(root)"}
     </h3>
     {#if entry.path === "Drafts"}
       <!-- `fullstack-a-66` slice c (follow-up): "outside drive's

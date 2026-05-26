@@ -11,7 +11,6 @@
 
   import FileInfoBody from "./FileInfoBody.svelte";
   import TagInfoBody from "./TagInfoBody.svelte";
-  import DirectoryInfoBody from "./DirectoryInfoBody.svelte";
   import type { GraphViewNode } from "../state/graphData.svelte";
 
   export type InspectorSelection =
@@ -81,11 +80,21 @@
     {showRefs}
   />
 {:else if selection.kind === "directory"}
-  <DirectoryInfoBody
+  <!-- Folder parity (inspector-spec.md I3): route directory selections
+       through FileInfoBody (its is_dir branch) so the graph folder
+       inspector renders the SAME body as the File Browser folder
+       inspector. FileInfoBody looks the entry up from the tree (loading
+       the parent dir if needed) and prefers the O(1) /api/report/dir
+       cache the old DirectoryInfoBody used. `label` carries the graph
+       node's display name. `onReveal` spawns/focuses a File Browser tab
+       for the folder on non-browser surfaces. -->
+  <FileInfoBody
     path={selection.path}
     label={selection.label}
+    {onReveal}
     {onSetAsScope}
     {onClose}
+    {onNavigate}
   />
 {:else}
   <TagInfoBody
