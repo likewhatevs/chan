@@ -1650,13 +1650,26 @@ fn main() {
             if let Some(sock) = chan_server::handoff::well_known_socket_path() {
                 let app_for_handoff = app.handle().clone();
                 let state_for_handoff = Arc::clone(&state_for_setup);
-                match chan_server::handoff::start_listener(sock, move |path| {
-                    open_drive_from_handoff(
-                        app_for_handoff.clone(),
-                        Arc::clone(&state_for_handoff),
-                        path,
-                    )
-                }) {
+                // `start_listener` binds a tokio `UnixListener` and
+                // `tokio::spawn`s the accept loop, so it MUST run inside
+                // a tokio runtime context. The Tauri `setup` closure runs
+                // on the main thread OUTSIDE any runtime, so calling it
+                // directly panics ("there is no reactor running"), which
+                // aborts the whole desktop on launch. Enter the Tauri-
+                // managed runtime via `block_on` (the same runtime the
+                // embedded server above and every `async_runtime::spawn`
+                // below use) so the bind + the spawned accept loop attach
+                // to it and survive after this returns.
+                let listener = tauri::async_runtime::block_on(async {
+                    chan_server::handoff::start_listener(sock, move |path| {
+                        open_drive_from_handoff(
+                            app_for_handoff.clone(),
+                            Arc::clone(&state_for_handoff),
+                            path,
+                        )
+                    })
+                });
+                match listener {
                     Ok(handle) => {
                         Box::leak(Box::new(handle));
                     }

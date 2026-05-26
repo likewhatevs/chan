@@ -209,7 +209,14 @@ fn run_loop(
             None => Duration::from_secs(60),
         };
         match rx.recv_timeout(timeout) {
-            Ok(event) => apply_event(event, &mut pending, &drive, &state, debounce),
+            Ok(event) => apply_event(
+                event,
+                &mut pending,
+                &drive,
+                &state,
+                debounce,
+                Instant::now(),
+            ),
             Err(RecvTimeoutError::Timeout) => {}
             Err(RecvTimeoutError::Disconnected) => break,
         }
@@ -217,12 +224,7 @@ fn run_loop(
         // Process matured pending entries. We collect then mutate
         // so the iterator doesn't borrow `pending` across the
         // mutate-and-call sequence.
-        let now = Instant::now();
-        let ready: Vec<String> = pending
-            .iter()
-            .filter(|(_, deadline)| **deadline <= now)
-            .map(|(k, _)| k.clone())
-            .collect();
+        let ready = collect_matured(&pending, Instant::now());
         for path in &ready {
             pending.remove(path);
             // Best-effort per-file: a failure to index leaves the
@@ -256,12 +258,40 @@ fn run_loop(
     tracing::debug!("graph indexer loop exiting");
 }
 
+/// Trailing-edge debounce scheduling for one path. Repeated calls for
+/// the same path before its deadline matures overwrite the SAME map
+/// entry, pushing the deadline forward; that single-entry-per-path
+/// invariant is what coalesces a burst of events into one index pass.
+/// `now` is injected (rather than read from `Instant::now()` inside)
+/// so the coalescing logic is deterministically testable without a
+/// real watcher or wall-clock sleeps.
+fn schedule_pending(
+    pending: &mut HashMap<String, Instant>,
+    path: String,
+    now: Instant,
+    debounce: Duration,
+) {
+    pending.insert(path, now + debounce);
+}
+
+/// Collect the paths whose debounce deadline has matured at `now`.
+/// Pure (no mutation, no I/O) so `run_loop` can drain them and the
+/// debounce tests can assert maturity at controlled clock points.
+fn collect_matured(pending: &HashMap<String, Instant>, now: Instant) -> Vec<String> {
+    pending
+        .iter()
+        .filter(|(_, deadline)| **deadline <= now)
+        .map(|(k, _)| k.clone())
+        .collect()
+}
+
 fn apply_event(
     event: WatchEvent,
     pending: &mut HashMap<String, Instant>,
     drive: &Arc<Drive>,
     state: &GraphIndexerInner,
     debounce: Duration,
+    now: Instant,
 ) {
     match event.kind {
         WatchKind::ProviderError => {
@@ -272,7 +302,7 @@ fn apply_event(
         }
         WatchKind::Modified | WatchKind::Created => match event.path {
             Some(p) => {
-                pending.insert(p, Instant::now() + debounce);
+                schedule_pending(pending, p, now, debounce);
             }
             None => {
                 pending.clear();
@@ -305,7 +335,7 @@ fn apply_event(
                 }
             }
             if let Some(to) = event.to {
-                pending.insert(to, Instant::now() + debounce);
+                schedule_pending(pending, to, now, debounce);
             }
         }
     }
@@ -334,6 +364,7 @@ mod tests {
     use super::*;
     use crate::library::Library;
     use crate::SearchMode;
+    use std::sync::{Mutex, MutexGuard, OnceLock};
     use std::time::Duration;
     use tempfile::TempDir;
 
@@ -341,6 +372,35 @@ mod tests {
     /// callers use `DEFAULT_DEBOUNCE_MS` or whatever their UX
     /// requires.
     const DEBOUNCE_TEST_MS: u64 = 30;
+
+    /// Process-wide lock serializing the real-watcher / real-FSEvent
+    /// tests. These spin up a notify backend and an indexer worker
+    /// thread and assert delivery within a bounded poll window. Under
+    /// the FULL `cargo test` run (CI) the other ~530 chan-drive tests
+    /// saturate every core, so FSEvent delivery + the indexer thread's
+    /// scheduling can slip past the poll deadline and the test flakes.
+    /// Holding this lock makes only ONE such test run at a time, so it
+    /// gets the CPU it needs while the rest of the suite still runs in
+    /// parallel around it. We poison-recover the guard so one panicking
+    /// test does not cascade-fail the others.
+    fn fs_test_lock() -> MutexGuard<'static, ()> {
+        static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+        LOCK.get_or_init(|| Mutex::new(()))
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+    }
+
+    /// Poll budget for the real-FS tests. On an idle host the watcher
+    /// delivers + the indexer fires in well under 100ms, so this
+    /// ceiling is never approached; it only governs the worst case
+    /// under the full parallel suite, where FSEvent delivery and the
+    /// worker thread's turn on the CPU can be delayed by seconds. The
+    /// old 5s budget was too tight for that worst case (it flaked on
+    /// macOS CI under 12-way contention); 30s absorbs it without
+    /// slowing the common path, since `wait_for` returns as soon as
+    /// the condition holds. The serialize lock keeps these tests from
+    /// stacking their own watcher + reindex load on top of each other.
+    const FS_DELIVERY_BUDGET: Duration = Duration::from_secs(30);
 
     /// Poll a closure until it returns true or `timeout` elapses.
     /// Returns true on success, false on timeout. FS watcher delivery
@@ -369,6 +429,7 @@ mod tests {
 
     #[test]
     fn writes_to_disk_get_indexed_after_debounce() {
+        let _serial = fs_test_lock();
         let (_cfg, drive_dir, drive) = setup_drive();
         let indexer = GraphIndexer::start_on(Arc::clone(&drive), DEBOUNCE_TEST_MS).unwrap();
 
@@ -385,7 +446,7 @@ mod tests {
         // Wait for the indexer to pick the event up and clear the
         // debounce window. 5s is generous against macOS FSEvents
         // latency; locally this typically lands in <100 ms.
-        let saw = wait_for(Duration::from_secs(5), || indexer.indexed_total() >= 1);
+        let saw = wait_for(FS_DELIVERY_BUDGET, || indexer.indexed_total() >= 1);
         assert!(saw, "indexer did not pick up the file write");
 
         // systacean-23: poll the BM25 search until watched.md
@@ -407,7 +468,7 @@ mod tests {
             limit: 10,
             scope: None,
         };
-        let visible = wait_for(Duration::from_secs(5), || {
+        let visible = wait_for(FS_DELIVERY_BUDGET, || {
             drive
                 .search("watcher-token", &opts)
                 .map(|hits| hits.hits.iter().any(|h| h.path == "watched.md"))
@@ -431,6 +492,7 @@ mod tests {
         // through Drive::index_draft_file, which stores the BM25
         // entry under `Drafts/<name>/...` so the unified keyspace
         // returns drafts hits from regular drive search.
+        let _serial = fs_test_lock();
         let (_cfg, _drive_dir, drive) = setup_drive();
         let indexer = GraphIndexer::start_on(Arc::clone(&drive), DEBOUNCE_TEST_MS).unwrap();
 
@@ -453,7 +515,7 @@ mod tests {
         // wait_for the indexer to fire (proves the watcher
         // dispatched a drafts event + the indexer routed to
         // index_draft_file).
-        let saw = wait_for(Duration::from_secs(5), || indexer.indexed_total() >= 1);
+        let saw = wait_for(FS_DELIVERY_BUDGET, || indexer.indexed_total() >= 1);
         assert!(saw, "indexer did not pick up the drafts file write");
 
         // Poll BM25 outcome per the systacean-23 pattern.
@@ -463,7 +525,7 @@ mod tests {
             scope: None,
         };
         let expected_path = "Drafts/untitled-1/draft.md";
-        let visible = wait_for(Duration::from_secs(5), || {
+        let visible = wait_for(FS_DELIVERY_BUDGET, || {
             drive
                 .search("draft-marker-systacean-25", &opts)
                 .map(|hits| hits.hits.iter().any(|h| h.path == expected_path))
@@ -481,6 +543,7 @@ mod tests {
 
     #[test]
     fn delete_from_disk_drops_file_from_index() {
+        let _serial = fs_test_lock();
         let (_cfg, drive_dir, drive) = setup_drive();
         // Pre-populate via the API + reindex; the indexer starts
         // up afterwards and only needs to handle the delete.
@@ -491,7 +554,7 @@ mod tests {
         let indexer = GraphIndexer::start_on(Arc::clone(&drive), DEBOUNCE_TEST_MS).unwrap();
 
         std::fs::remove_file(drive_dir.path().join("doomed.md")).unwrap();
-        let saw = wait_for(Duration::from_secs(5), || indexer.forgotten_total() >= 1);
+        let saw = wait_for(FS_DELIVERY_BUDGET, || indexer.forgotten_total() >= 1);
         assert!(saw, "indexer did not pick up the delete");
 
         let opts = crate::drive::SearchOpts {
@@ -512,31 +575,83 @@ mod tests {
     #[test]
     fn debounce_coalesces_rapid_writes_into_one_index() {
         // Multiple Modified events on the same path inside the
-        // debounce window must collapse into a single index_file.
-        // Without this, every keystroke on a never-saved file
-        // would re-index, which is exactly the kind of churn the
-        // debounce exists to prevent.
-        let (_cfg, drive_dir, drive) = setup_drive();
-        let indexer = GraphIndexer::start_on(Arc::clone(&drive), DEBOUNCE_TEST_MS).unwrap();
-        let file = drive_dir.path().join("rapid.md");
-        for i in 0..5 {
-            std::fs::write(&file, format!("# rapid\nbody {i}\n")).unwrap();
-            std::thread::sleep(Duration::from_millis(DEBOUNCE_TEST_MS / 3));
+        // debounce window must collapse into a single index pass.
+        // Without this, every keystroke on a never-saved file would
+        // re-index, which is exactly the kind of churn the debounce
+        // exists to prevent.
+        //
+        // This drives the debounce decision logic directly with an
+        // INJECTED clock instead of a real watcher + wall-clock
+        // sleeps. The earlier version wrote the file five times with
+        // `sleep(DEBOUNCE_TEST_MS/3)` between writes and asserted
+        // `indexed_total <= 3`; that invariant only holds if the
+        // writes genuinely arrive faster than the debounce matures,
+        // which the full parallel `cargo test` (CI) breaks: under
+        // 12-way CPU contention the sub-30ms sleeps and the indexer
+        // thread's scheduling both stretch, so the window matures
+        // mid-burst and the test flaked. Modeling the burst against a
+        // controlled `Instant` proves the SAME coalescing property
+        // deterministically, with no FS, no watcher, and no sleep.
+        let debounce = Duration::from_millis(DEBOUNCE_TEST_MS);
+        let mut pending: HashMap<String, Instant> = HashMap::new();
+        let base = Instant::now();
+
+        // Five rapid events for the same path, each strictly inside
+        // the prior deadline (10ms apart, 30ms window). Each call
+        // overwrites the same map key and pushes the deadline forward.
+        for i in 0..5u32 {
+            let t = base + Duration::from_millis(u64::from(i) * 10);
+            schedule_pending(&mut pending, "rapid.md".to_string(), t, debounce);
+            // One map entry the entire burst: the coalescing invariant.
+            assert_eq!(pending.len(), 1, "burst must not fan out pending entries");
+            // Nothing matures during the burst: the last event keeps
+            // pushing the deadline out, so at the moment of the i-th
+            // write nothing is ready to index yet.
+            assert!(
+                collect_matured(&pending, t).is_empty(),
+                "no path should mature mid-burst (i={i})",
+            );
         }
-        // After the burst, give the watcher time to flush and the
-        // worker time to settle. We assert that the indexed total
-        // is small (1-3, not 5), not that it is exactly 1: notify
-        // can split a single write into two events on some
-        // backends.
-        let saw = wait_for(Duration::from_secs(5), || indexer.indexed_total() >= 1);
-        assert!(saw);
-        std::thread::sleep(Duration::from_millis(DEBOUNCE_TEST_MS * 3));
-        let total = indexer.indexed_total();
+
+        // The final event was at base+40ms with a 30ms window, so the
+        // deadline is base+70ms. Just before it, still nothing matures.
+        let last_deadline = base + Duration::from_millis(40) + debounce;
         assert!(
-            total <= 3,
-            "5 rapid writes should debounce to at most a few index passes; got {total}",
+            collect_matured(&pending, last_deadline - Duration::from_millis(1)).is_empty(),
+            "deadline should not mature one ms early",
         );
-        indexer.stop();
+
+        // Once the window finally elapses, exactly ONE path matures:
+        // the five rapid writes collapsed into a single index pass.
+        let matured = collect_matured(&pending, last_deadline);
+        assert_eq!(
+            matured,
+            vec!["rapid.md".to_string()],
+            "five rapid writes must coalesce to exactly one index pass",
+        );
+    }
+
+    #[test]
+    fn distinct_paths_do_not_coalesce_with_each_other() {
+        // Coalescing is PER PATH: two different files written in the
+        // same window each keep their own pending entry and each
+        // matures independently. Guards against a future refactor
+        // accidentally keying the debounce on something coarser than
+        // the path.
+        let debounce = Duration::from_millis(DEBOUNCE_TEST_MS);
+        let mut pending: HashMap<String, Instant> = HashMap::new();
+        let base = Instant::now();
+        schedule_pending(&mut pending, "a.md".to_string(), base, debounce);
+        schedule_pending(
+            &mut pending,
+            "b.md".to_string(),
+            base + Duration::from_millis(5),
+            debounce,
+        );
+        assert_eq!(pending.len(), 2);
+        let mut matured = collect_matured(&pending, base + Duration::from_millis(5) + debounce);
+        matured.sort();
+        assert_eq!(matured, vec!["a.md".to_string(), "b.md".to_string()]);
     }
 
     #[test]
