@@ -52,6 +52,8 @@ import {
   request,
   withTokenQuery as transportWithTokenQuery,
 } from "./transport";
+import type { WatchSocket } from "./transport";
+import type { WatchScopeDir } from "./types";
 
 export { ApiError } from "./errors";
 
@@ -1236,12 +1238,41 @@ function encPath(p: string): string {
 
 export type { WsStatus } from "./transport";
 
+/// Handle for the live watcher subscription. Callable as the disposer
+/// (back-compat) and also exposes the per-directory scope-subscription
+/// path: `subscribeDir` / `unsubscribeDir` push `sub` / `unsub` frames
+/// to the server's `ScopeRegistry`. `onReady` (passed to
+/// `openWatchSocket`) fires on every (re)connect so the owner can
+/// re-establish its active scopes, since the server's registry is
+/// per-socket and a fresh socket starts empty.
+export interface WatchSubscription {
+  (): void;
+  /// Subscribe this socket to a directory scope. `dir: ""` is the drive
+  /// root (idempotent server-side). Best-effort while the socket is
+  /// connecting; the owner re-subscribes from `onReady`.
+  subscribeDir(dir: WatchScopeDir): void;
+  /// Unsubscribe this socket from a directory scope. Last unsubscribe
+  /// across all sockets tears the server-side watcher down.
+  unsubscribeDir(dir: WatchScopeDir): void;
+  /// Close the socket and stop reconnecting.
+  close(): void;
+}
+
 /// Open the watcher subscription. Auto-reconnects with capped
 /// exponential backoff; the status callback drives the disconnect
-/// overlay. Returns a disposer that closes the socket.
+/// overlay. `onReady` fires on each (re)connect so the caller can
+/// re-establish per-directory scope subscriptions (the server registry
+/// is per-socket). Returns a `WatchSubscription`: callable as the
+/// disposer, plus typed `subscribeDir` / `unsubscribeDir` helpers.
 export function openWatchSocket(
   onEvent: (e: unknown) => void,
   onStatus?: (s: import("./transport").WsStatus) => void,
-): () => void {
-  return openWatch(onEvent, onStatus);
+  onReady?: () => void,
+): WatchSubscription {
+  const socket: WatchSocket = openWatch(onEvent, onStatus, onReady);
+  const sub = (() => socket.close()) as WatchSubscription;
+  sub.subscribeDir = (dir: WatchScopeDir) => socket.send({ type: "sub", dir });
+  sub.unsubscribeDir = (dir: WatchScopeDir) => socket.send({ type: "unsub", dir });
+  sub.close = () => socket.close();
+  return sub;
 }
