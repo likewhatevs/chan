@@ -3,14 +3,15 @@ import source from "./GraphCanvas.svelte?raw";
 
 // `fullstack-a-49` (G2): filesystem-hierarchy as graph spine.
 // Layout transform added to GraphCanvas's d3-force simulation so
-// every plotted node sits below its ancestor-chain to the drive
-// root. Three load-bearing pieces:
+// every plotted node sits ABOVE its ancestor-chain to the drive
+// root (GI-10: drive root anchors the bottom, the spine grows up).
+// Three load-bearing pieces:
 //
 // 1. `DNode` extended with `depth` + `parentId`.
 // 2. `nodeHierarchy()` helper derives depth + parentId from
 //    kind + path.
 // 3. `buildSim()` wires a depth-aware `forceY` + a custom
-//    `parentXForce` so files sit BELOW their parent dir + siblings
+//    `parentXForce` so files sit ABOVE their parent dir + siblings
 //    cluster horizontally under the same parent.
 //
 // Tests pin the wiring shape so a future refactor can't silently
@@ -77,10 +78,11 @@ describe("fullstack-a-49: filesystem-hierarchy layout shape", () => {
 
   test("buildSim wires depth-aware forceY for hierarchical nodes", () => {
     // The original `forceY<DNode>(0)` is replaced. Hierarchical
-    // nodes (depth >= 0) target `depth * hierarchyYSpacing`;
-    // non-hierarchical (depth < 0) fall back to centerStrength.
+    // nodes (depth >= 0) target `-depth * hierarchyYSpacing` (GI-10:
+    // negative so the spine grows UP from the drive root at the
+    // bottom); non-hierarchical (depth < 0) fall back to centerStrength.
     expect(source).toMatch(
-      /forceY<DNode>\(\(d\) => \{[\s\S]*?return d\.depth \* FORCE\.hierarchyYSpacing/,
+      /forceY<DNode>\(\(d\) => \{[\s\S]*?return -d\.depth \* FORCE\.hierarchyYSpacing/,
     );
     expect(source).toMatch(
       /\.strength\(\(d\) =>[\s\S]*?d\.depth < 0 \? FORCE\.centerStrength : FORCE\.hierarchyYStrength/,
