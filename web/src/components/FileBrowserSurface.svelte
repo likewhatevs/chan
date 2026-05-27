@@ -29,7 +29,6 @@
   import { chordFor } from "../state/shortcuts";
   import { isEditableText } from "../state/fileTypes";
   import {
-    browserOverlay,
     browserSelection,
     browserSidePanes,
     collapseAllFolders,
@@ -92,20 +91,16 @@
   const isTab = $derived(variant === "tab");
   const isDock = $derived(variant === "dock");
   const isWideSurface = $derived(isOverlay || isTab);
-  /// `lane-a A4` (scope-concept wipe W4): the dock variant does NOT render
-  /// the inspector (`isWideSurface` is false for docks), so it has no need
-  /// for the shared `browserOverlay` singleton - `inspectorOpen` /
-  /// `inspectorWidth` are write-only here and nothing reads them back.
-  /// Giving the dock its own minimal local state decouples it from
-  /// `browserOverlay` so the wipe can delete that state in A5/W6. The tab
-  /// variant uses its tab; the (never-mounted) overlay variant keeps the
-  /// browserOverlay fallback until A5 removes it.
+  /// The dock variant does NOT render the inspector (`isWideSurface` is
+  /// false for docks), so its inspectorOpen / inspectorWidth are
+  /// write-only and unread; it uses this minimal local state. The tab
+  /// variant uses its tab. The browser overlay variant + its shared
+  /// `browserOverlay` singleton were retired by the scope-concept wipe
+  /// (A5/W6), so non-tab surfaces fall back to the local dock state.
   const dockBrowserState = $state<{ inspectorOpen: boolean; inspectorWidth?: number }>(
     { inspectorOpen: false },
   );
-  const browserState = $derived(
-    tab ?? (isDock ? dockBrowserState : browserOverlay),
-  );
+  const browserState = $derived(tab ?? dockBrowserState);
   const fullyExpanded = $derived.by(() => {
     void tree.entries;
     return isFullyExpanded();
@@ -261,7 +256,7 @@
   const POPOVER_WIDTH = 240;
 
   $effect(() => {
-    if ((isOverlay && browserOverlay.open) || isTab) {
+    if (isTab) {
       void tick().then(() => treeRef?.focusTree());
     }
   });

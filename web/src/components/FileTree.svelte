@@ -45,7 +45,6 @@
   } from "../state/tabs.svelte";
   import { terminalFromHereTarget } from "../terminal/fromHere";
   import {
-    browserOverlay,
     browserSelection,
     clearTreeLoadingForPath,
     drive,
@@ -500,9 +499,6 @@
 
   function onOpen(path: string): void {
     void openInActivePane(path);
-    // The user wanted to read or edit the file, not keep the legacy
-    // picker hovering over the editor.
-    if (browserOverlay.open) browserOverlay.open = false;
   }
 
   /// Single-click selects an entry; the FileBrowserTab side panel
@@ -733,7 +729,6 @@
     const target = terminalFromHereTarget(path, isDir);
     openTerminalInPane(layout.activePaneId, target);
     menu = null;
-    if (browserOverlay.open) browserOverlay.open = false;
   }
 
   /// Move the selection by one row in the visible list. Wraps

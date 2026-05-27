@@ -20,17 +20,17 @@
 //
 // The id format is the discriminator the consumer stores:
 // `file:<path>`, `group:<key>`, `dir:<path>`, `git_repo:<root>`,
-// `drive`, or `global`. Per-surface state objects such as
-// `graphOverlay.scopeId` hold the chosen id; the helpers here turn
-// it into a typed ScopeOption.
+// `drive`, or `global`. Each consumer holds the chosen id (e.g. a
+// graph tab's `scopeId`); the helpers here turn it into a typed
+// ScopeOption.
 
 import { layout } from "./tabs.svelte";
-// The `dir` scope reads the file browser overlay's current
-// selection and looks the entry up in the tree to distinguish
-// directory from file. store.svelte imports from this module too, so
-// the cycle is real; both reads happen lazily inside functions
-// (not at module init), which Vite resolves cleanly.
-import { browserOverlay, browserSelection, tree } from "./store.svelte";
+// The `dir` scope reads the file browser's current selection and looks
+// the entry up in the tree to distinguish directory from file.
+// store.svelte imports from this module too, so the cycle is real;
+// both reads happen lazily inside functions (not at module init),
+// which Vite resolves cleanly.
+import { browserSelection, tree } from "./store.svelte";
 
 /// Picker option, as a discriminated union so consumers can
 /// pattern-match on `kind` and access the kind-specific fields
@@ -153,13 +153,13 @@ function pathIsReadOnly(path: string): boolean {
   return false;
 }
 
-/// Path of the directory the file browser overlay has selected,
-/// or `null` if the overlay is closed, has no selection, or the
+/// Path of the directory currently selected in the file browser
+/// (dock or tab), or `null` when there's no selection or the
 /// selection is a file rather than a directory. Drives the
 /// `dir:<path>` scope option and `defaultScopeId`'s browser-aware
-/// branch.
+/// branch. (The browser overlay was retired; the shared
+/// `browserSelection` is the selection signal now.)
 export function selectedDirPath(): string | null {
-  if (!browserOverlay.open) return null;
   const path = browserSelection.path;
   if (!path) return null;
   // The tree entry tells us whether the selection is a directory.
@@ -293,9 +293,15 @@ export function availableScopeOptions(opts: {
 /// open-from-toolbar entry point and global keybinding so both
 /// snap to the same pick.
 export function defaultScopeId(): string {
-  // File browser overlay open: its selection wins (the user just
-  // picked something, so route the next overlay action at it).
-  if (browserOverlay.open) {
+  // Active pane is a file browser: its current selection wins (the
+  // user is looking at the tree, so route the next overlay action at
+  // the selected dir/file).
+  const activeNode = layout.nodes[layout.activePaneId];
+  const activeTab =
+    activeNode && activeNode.kind === "leaf"
+      ? activeNode.tabs.find((tab) => tab.id === activeNode.activeTabId)
+      : undefined;
+  if (activeTab?.kind === "browser") {
     const sel = browserSelection.path;
     if (sel) {
       const entry = tree.entries.find((e) => e.path === sel);
@@ -311,10 +317,6 @@ export function defaultScopeId(): string {
   const visible = visibleFilePaths();
   if (visible.length >= 2) return `group:${scopeKey(visible)}`;
   // Otherwise: the active pane's active file.
-  const node = layout.nodes[layout.activePaneId];
-  if (node && node.kind === "leaf") {
-    const t = node.tabs.find((tab) => tab.id === node.activeTabId);
-    if (t?.kind === "file" && t.path) return `file:${t.path}`;
-  }
+  if (activeTab?.kind === "file" && activeTab.path) return `file:${activeTab.path}`;
   return "drive";
 }

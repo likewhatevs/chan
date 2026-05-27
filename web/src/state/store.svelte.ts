@@ -596,10 +596,10 @@ export function onWatchEvent(e: unknown): void {
   // updates without re-clicking. The fetch is idempotent and
   // de-duped via `ensureGraphLoaded`.
   invalidateGraph();
-  if (browserOverlay.open || graphOverlay.open || hasBrowserTab() || hasGraphTab()) {
+  if (hasBrowserTab() || hasGraphTab()) {
     void ensureGraphLoaded();
   }
-  if (graphOverlay.open || hasGraphTab()) {
+  if (hasGraphTab()) {
     graphReloadSignal.nonce += 1;
   }
   const inner = (e as { event?: { kind?: string; path?: string; to?: string } } | null)?.event;
@@ -908,16 +908,12 @@ function fbScopeForSelection(selected: string | null | undefined): string {
   return slash > 0 ? selected.slice(0, slash) : "";
 }
 
-/// Snapshot every open FB's current scope: the global overlay (if
-/// open) plus every browser-kind tab in any pane. Closed tabs drop
-/// out of the snapshot naturally; no per-tab subscribe/unsubscribe
-/// state to leak.
+/// Snapshot every open FB's current scope: the dock side panes plus
+/// every browser-kind tab in any pane. Closed tabs drop out of the
+/// snapshot naturally; no per-tab subscribe/unsubscribe state to leak.
 export function activeFbScopes(): string[] {
   const scopes: string[] = [];
   if (browserSidePanes.left || browserSidePanes.right) {
-    scopes.push(fbScopeForSelection(browserSelection.path));
-  }
-  if (browserOverlay.open) {
     scopes.push(fbScopeForSelection(browserSelection.path));
   }
   for (const node of Object.values(layout.nodes)) {
@@ -983,10 +979,10 @@ export async function handleDraftPromoted(path: string): Promise<void> {
   revealAndSelect(path);
   scheduleDriveRefresh();
   invalidateGraph();
-  if (browserOverlay.open || graphOverlay.open || hasBrowserTab() || hasGraphTab()) {
+  if (hasBrowserTab() || hasGraphTab()) {
     void ensureGraphLoaded();
   }
-  if (graphOverlay.open || hasGraphTab()) {
+  if (hasGraphTab()) {
     graphReloadSignal.nonce += 1;
   }
 }
@@ -1022,10 +1018,10 @@ export async function noteDraftCreated(path: string): Promise<void> {
   await refreshTreeForPath(path);
   scheduleDriveRefresh();
   invalidateGraph();
-  if (browserOverlay.open || graphOverlay.open || hasBrowserTab() || hasGraphTab()) {
+  if (hasBrowserTab() || hasGraphTab()) {
     void ensureGraphLoaded();
   }
-  if (graphOverlay.open || hasGraphTab()) {
+  if (hasGraphTab()) {
     graphReloadSignal.nonce += 1;
   }
 }
@@ -1261,13 +1257,6 @@ function serializeSession(): SessionPayload | null {
   for (const [k, v] of Object.entries(treeExpanded.map)) {
     if (v) treeMap[k] = true;
   }
-  const overlays = {
-    graph: {
-      scopeId: graphOverlay.scopeId,
-      depth: graphOverlay.depth,
-      mode: graphOverlay.mode,
-    },
-  };
   // Skip when there's literally nothing worth persisting.
   if (!layout && Object.keys(treeMap).length === 0) {
     return null;
@@ -1275,7 +1264,6 @@ function serializeSession(): SessionPayload | null {
   return {
     ...(layout ? { layout } : {}),
     ...(Object.keys(treeMap).length > 0 ? { treeExpanded: treeMap } : {}),
-    overlays,
   };
 }
 
@@ -1292,28 +1280,17 @@ async function restoreSession(p: SessionPayload): Promise<void> {
 }
 
 /// Apply the non-layout slices of a session payload: file-browser
-/// tree-expansion + per-overlay scope/context. Pulled out of
-/// `restoreSession` so the URL-hash bootstrap path (which owns the
-/// layout but not the personal UI prefs) can still load these from
-/// session.json. The hash is meant to be shareable; directory
-/// open/closed state stays in session.json regardless of where the
-/// layout came from.
+/// tree-expansion. Pulled out of `restoreSession` so the URL-hash
+/// bootstrap path (which owns the layout but not the personal UI
+/// prefs) can still load these from session.json. The hash is meant
+/// to be shareable; directory open/closed state stays in session.json
+/// regardless of where the layout came from. (The graph/browser
+/// overlay scope was retired with the overlay state - graph + browser
+/// are tabs persisted in the layout now.)
 function applySessionSidecars(p: SessionPayload): void {
   if (p.treeExpanded && typeof p.treeExpanded === "object") {
     restoreTreeExpandedMap(p.treeExpanded);
     markTreeExpansionRestored();
-  }
-  const ov = p.overlays ?? {};
-  if (ov.graph?.scopeId) graphOverlay.scopeId = ov.graph.scopeId;
-  if (ov.graph && typeof ov.graph.depth === "number") {
-    graphOverlay.depth = ov.graph.depth;
-  }
-  if (
-    ov.graph?.mode === "filesystem" ||
-    ov.graph?.mode === "semantic" ||
-    ov.graph?.mode === "language"
-  ) {
-    graphOverlay.mode = ov.graph.mode;
   }
 }
 
@@ -1595,40 +1572,6 @@ export const DEFAULT_GRAPH_FILTERS: GraphFilters = {
   source: true,
 };
 
-export const graphOverlay = $state<{
-  open: boolean;
-  mode: "semantic" | "filesystem" | "language";
-  /** Scope id encoding: `file:<path>` | `group:<key>` | `drive`. */
-  scopeId: string;
-  /** Hop radius from the scope's seed paths. 1 = the seed plus its
-   *  immediate neighbors; 2 = neighbors-of-neighbors; etc. Drive
-   *  scope ignores depth (it's the whole graph). */
-  depth: number;
-  /** Per-edge-kind / per-node-kind chip toggles. */
-  filters: GraphFilters;
-  /** Right-side details panel toggle. Lifted out of GraphPanel so
-   *  it round-trips through the URL hash. */
-  inspectorOpen: boolean;
-  /** One-shot pre-selected node id, consumed by GraphPanel on the
-   *  next open. Set by openGraphAtNode when launching the overlay
-   *  from a tag/mention/date chip elsewhere in the UI. Cleared once
-   *  the panel applies it. Not persisted in session. */
-  pendingSelectId: string | null;
-  // `fullstack-84`: per-tab inspector width also applies to the
-  // overlay-variant graph so its resize is independent of the
-  // dock-singleton `paneWidths.graph`. Optional; falls back to
-  // `paneWidths.graph` when unset.
-  inspectorWidth?: number;
-}>({
-  open: false,
-  mode: "semantic",
-  scopeId: "drive",
-  depth: 1,
-  filters: { ...DEFAULT_GRAPH_FILTERS },
-  inspectorOpen: false,
-  pendingSelectId: null,
-});
-
 /// Incremented by watcher events while the graph overlay is open.
 /// GraphPanel consumes this as a lightweight reload signal and
 /// debounces the actual `/api/graph` request locally.
@@ -1642,7 +1585,6 @@ export function openGraph(): void {
     scopeId: defaultScopeId(),
     pendingSelectId: null,
   });
-  mirrorGraphTabToOverlay(tab);
   scheduleSessionSave();
 }
 
@@ -1669,7 +1611,6 @@ export function openGraphWithContext(ctx: SpawnContext): void {
     depth: 1,
     pendingSelectId,
   });
-  mirrorGraphTabToOverlay(tab);
   scheduleSessionSave();
 }
 
@@ -1682,7 +1623,6 @@ export function openGraphForDrive(): void {
     depth: 1,
     pendingSelectId: null,
   });
-  mirrorGraphTabToOverlay(tab);
   scheduleSessionSave();
 }
 
@@ -1695,7 +1635,6 @@ export function openLanguageGraphForDrive(): void {
     title: "Languages",
   });
   tab.filters.language = true;
-  mirrorGraphTabToOverlay(tab);
   scheduleSessionSave();
 }
 
@@ -1712,7 +1651,6 @@ export function openGraphAtNode(nodeId: string): void {
     depth: 1,
     pendingSelectId: nodeId,
   });
-  mirrorGraphTabToOverlay(tab);
   // Stack on top of whatever overlay invoked us (typically the
   // file browser via a tag chip). OverlayShell's z-index follows
   // `overlayStack.ids`, so the graph paints above and Escape
@@ -1734,7 +1672,6 @@ export function openGraphForFile(path: string): void {
     depth: 1,
     pendingSelectId: path,
   });
-  mirrorGraphTabToOverlay(tab);
   scheduleSessionSave();
 }
 
@@ -1751,7 +1688,6 @@ export function openFsGraphForFile(path: string): void {
     depth: 1,
     pendingSelectId: path,
   });
-  mirrorGraphTabToOverlay(tab);
   scheduleSessionSave();
 }
 
@@ -1767,7 +1703,6 @@ export function openGraphForDirectory(path: string): void {
     depth: 1,
     pendingSelectId: null,
   });
-  mirrorGraphTabToOverlay(tab);
   scheduleSessionSave();
 }
 
@@ -1781,7 +1716,6 @@ export function openFsGraphForDirectory(path: string): void {
     depth: 1,
     pendingSelectId: path || null,
   });
-  mirrorGraphTabToOverlay(tab);
   scheduleSessionSave();
 }
 
@@ -1792,7 +1726,6 @@ export function scopeFsGraphFromHere(path: string, isDir: boolean): void {
     depth: 1,
     pendingSelectId: path,
   });
-  mirrorGraphTabToOverlay(tab);
   scheduleSessionSave();
 }
 
@@ -1810,32 +1743,7 @@ export function openGraphForTag(nodeId: string, _label: string): void {
     pendingSelectId: nodeId,
     title: "Tag Graph",
   });
-  mirrorGraphTabToOverlay(tab);
   scheduleSessionSave();
-}
-
-function mirrorGraphTabToOverlay(tab: {
-  mode: "semantic" | "filesystem" | "language";
-  scopeId: string;
-  depth: number;
-  pendingSelectId: string | null;
-  filters: GraphFilters;
-  inspectorOpen: boolean;
-}): void {
-  graphOverlay.mode = tab.mode;
-  graphOverlay.scopeId = tab.scopeId;
-  graphOverlay.depth = tab.depth;
-  graphOverlay.pendingSelectId = tab.pendingSelectId;
-  graphOverlay.filters.link = tab.filters.link;
-  graphOverlay.filters.tag = tab.filters.tag;
-  graphOverlay.filters.mention = tab.filters.mention;
-  graphOverlay.filters.language = tab.filters.language;
-  graphOverlay.filters.img = tab.filters.img;
-  graphOverlay.filters.folder = tab.filters.folder;
-  graphOverlay.filters.markdown = tab.filters.markdown;
-  graphOverlay.filters.source = tab.filters.source;
-  graphOverlay.inspectorOpen = tab.inspectorOpen;
-  graphOverlay.open = false;
 }
 
 // ---- settings overlay --------------------------------------------------
@@ -1876,20 +1784,8 @@ function defaultInspectorOpen(): boolean {
   return window.innerWidth >= BROWSER_INSPECTOR_BREAKPOINT_PX;
 }
 
-export const browserOverlay = $state<{
-  open: boolean;
-  inspectorOpen: boolean;
-  // `fullstack-84`: per-tab inspector width also applies to the
-  // overlay-variant browser so its resize is independent of the
-  // dock-singleton `paneWidths.browser`. Optional; falls back to
-  // `paneWidths.browser` when unset (initial open inherits the
-  // current default).
-  inspectorWidth?: number;
-}>({ open: false, inspectorOpen: defaultInspectorOpen() });
-
 export function openBrowser(): BrowserTab {
   const tab = focusExistingBrowserTab() ?? openBrowserInActivePane();
-  browserOverlay.open = false;
   scheduleSessionSave();
   return tab;
 }
@@ -2040,12 +1936,7 @@ function resolveGraphSpawnContext(scopeId: string): SpawnContext {
 // the topmost overlay is visually accessible, the scrim target is
 // naturally the same as the stack top.
 
-export type OverlayId =
-  | "browser"
-  | "search"
-  | "search-status"
-  | "graph"
-  | "settings";
+export type OverlayId = "search" | "search-status" | "settings";
 
 export const overlayStack = $state<{ ids: OverlayId[] }>({ ids: [] });
 
@@ -2068,17 +1959,11 @@ export function topOverlay(): OverlayId | null {
 /// drops it from the stack.
 export function closeOverlay(id: OverlayId): void {
   switch (id) {
-    case "browser":
-      browserOverlay.open = false;
-      return;
     case "search":
       searchPanel.open = false;
       return;
     case "search-status":
       searchStatusOverlay.open = false;
-      return;
-    case "graph":
-      graphOverlay.open = false;
       return;
     case "settings":
       settingsOverlay.open = false;
@@ -2094,10 +1979,8 @@ export function closeOverlay(id: OverlayId): void {
 /// Called from a single $effect in App.svelte.
 export function syncOverlayStack(): void {
   const open = new Set<OverlayId>();
-  if (browserOverlay.open) open.add("browser");
   if (searchPanel.open) open.add("search");
   if (searchStatusOverlay.open) open.add("search-status");
-  if (graphOverlay.open) open.add("graph");
   if (settingsOverlay.open) open.add("settings");
   // Drop closed entries while preserving the existing relative
   // order of those that remain.
@@ -3252,11 +3135,6 @@ export const fileOps = {
       await api.create(path, false, "");
       await refreshTree();
       await openInActivePane(path);
-      // Editor took over; close the file browser so the user lands
-      // on the new tab instead of seeing the tree above the editor.
-      // Mirrors the close-on-open behavior the inspector's Open
-      // button uses.
-      browserOverlay.open = false;
     } catch (e) {
       ui.status = `create failed: ${(e as Error).message}`;
     }
@@ -3325,7 +3203,6 @@ export const fileOps = {
       await api.create(path, false, "");
       await refreshTree();
       await openInActivePane(path);
-      browserOverlay.open = false;
     } catch (e) {
       ui.status = `create failed: ${(e as Error).message}`;
     }

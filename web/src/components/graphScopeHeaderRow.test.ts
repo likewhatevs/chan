@@ -22,10 +22,11 @@ describe("fullstack-a-67 (Graph slice): scope-header row", () => {
   });
 
   test("icon dispatch covers drive / dir / tag / file at minimum", () => {
-    expect(graph).toMatch(/currentScope\.kind === "drive" \|\| currentScope\.kind === "global"[\s\S]*?<HardDrive/);
+    expect(graph).toMatch(/currentScope\.kind === "drive"[\s\S]*?<HardDrive/);
     expect(graph).toMatch(/currentScope\.kind === "dir"[\s\S]*?<Folder/);
     expect(graph).toMatch(/currentScope\.kind === "tag"[\s\S]*?<Hash/);
-    // File / git_repo / group fall through to FileText / Folder.
+    // The remaining live scope kind (file) falls through to FileText.
+    // (global / git_repo / group were retired by the scope-concept wipe.)
     expect(graph).toMatch(/<FileText/);
   });
 
@@ -67,9 +68,9 @@ describe("fullstack-a-67 (slice 1b): scope-header click → inspector", () => {
     );
   });
 
-  test("openScopeHeaderInspector maps dir/git_repo → folder node lookup by path", () => {
+  test("openScopeHeaderInspector maps dir → folder node lookup by path", () => {
     expect(graph).toMatch(
-      /currentScope\.kind === "dir" \|\| currentScope\.kind === "git_repo" \|\| currentScope\.kind === "group"[\s\S]*?nodes\.find\(\s*\(n\) => n\.kind === "folder" && n\.path === path,?\s*\)/,
+      /currentScope\.kind === "dir"[\s\S]*?nodes\.find\(\s*\(n\) => n\.kind === "folder" && n\.path === currentScope\.path,?\s*\)/,
     );
   });
 
