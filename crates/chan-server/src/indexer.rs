@@ -900,7 +900,54 @@ mod tests {
     use super::*;
     use chan_drive::{Library, SearchMode, SearchOpts};
     use std::fs;
+    use std::sync::OnceLock;
     use tempfile::TempDir;
+
+    /// Process-wide async lock serializing the real-FS boot-walk tests.
+    /// Each spins a fresh `Indexer` whose boot walk is a
+    /// `spawn_blocking` re-index + a Tantivy commit + a reader refresh,
+    /// then polls BM25 for the result. Under the FULL parallel
+    /// `cargo test` run (CI) every core is saturated by the rest of the
+    /// suite, so the boot walk's turn on the CPU and the commit/refresh
+    /// cycle slip past a tight poll deadline and the tests flake. Holding
+    /// this lock makes only ONE boot-walk test run at a time so it gets
+    /// the CPU it needs, while the rest of the suite still runs in
+    /// parallel around it. A `tokio::sync::Mutex` (not `std`) is used
+    /// because the guard is held across `.await` points; it is
+    /// `Send`-safe on the multi-thread runtime and not poisoned by a
+    /// panicking test, so one failure does not cascade.
+    fn boot_walk_test_lock() -> &'static tokio::sync::Mutex<()> {
+        static LOCK: OnceLock<tokio::sync::Mutex<()>> = OnceLock::new();
+        LOCK.get_or_init(|| tokio::sync::Mutex::new(()))
+    }
+
+    /// Poll budget for the real-FS boot-walk tests. On an idle host the
+    /// boot walk completes and BM25 is queryable in well under a second,
+    /// so this ceiling is never approached; it only governs the worst
+    /// case under the full parallel suite, where the `spawn_blocking`
+    /// walk + commit + reader refresh can be delayed by seconds under
+    /// CPU contention. The old 5s budget was too tight for that worst
+    /// case (it flaked on macOS CI under 12-way contention); 30s absorbs
+    /// it without slowing the common path, since `poll_until` returns as
+    /// soon as the condition holds. The serialize lock keeps these tests
+    /// from stacking their own boot-walk load on top of each other.
+    const BOOT_WALK_BUDGET: Duration = Duration::from_secs(30);
+
+    /// Poll a closure until it returns true or `timeout` elapses, yielding
+    /// to the runtime between checks. Returns true on success. The boot
+    /// walk is asynchronous (`spawn_blocking` + commit + reader refresh);
+    /// tests need a bounded wait rather than a fixed sleep so they pass
+    /// quickly on fast hosts and tolerate slower CI.
+    async fn poll_until(timeout: Duration, mut check: impl FnMut() -> bool) -> bool {
+        let deadline = Instant::now() + timeout;
+        while Instant::now() < deadline {
+            if check() {
+                return true;
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+        check()
+    }
 
     fn setup_drive() -> (TempDir, TempDir, Arc<Drive>) {
         let cfg = TempDir::new().unwrap();
@@ -1270,6 +1317,11 @@ mod tests {
         // If this test FAILS, we've reproduced the 5th-round gap
         // in-tree + can probe the failure mode without needing
         // a live chan serve.
+        //
+        // Serialize against the sibling boot-walk test so the two
+        // do not stack their `spawn_blocking` re-index load on each
+        // other under the full parallel `cargo test` run.
+        let _serial = boot_walk_test_lock().lock().await;
         let (_cfg, drive_dir, drive) = setup_drive();
 
         // Seed drive root to force the ELSE IF branch on the
@@ -1303,24 +1355,23 @@ mod tests {
             progress,
         );
 
-        // Poll BM25 outcome up to 5s for the boot walk + commit
-        // + reader refresh cycle to complete.
+        // Poll BM25 outcome for the boot walk + commit + reader
+        // refresh cycle to complete. Bounded by BOOT_WALK_BUDGET;
+        // returns as soon as the hit lands, so the common path is
+        // fast and only the worst case under parallel load waits.
         let opts = chan_drive::SearchOpts {
             mode: chan_drive::SearchMode::Bm25,
             limit: 10,
             scope: None,
         };
         let expected = "Drafts/untitled/draft.md";
-        let mut seen = false;
-        for _ in 0..50 {
-            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
-            if let Ok(hits) = drive.search("UNIQUEMARKER38BM25CLOSURE", &opts) {
-                if hits.hits.iter().any(|h| h.path == expected) {
-                    seen = true;
-                    break;
-                }
-            }
-        }
+        let seen = poll_until(BOOT_WALK_BUDGET, || {
+            matches!(
+                drive.search("UNIQUEMARKER38BM25CLOSURE", &opts),
+                Ok(hits) if hits.hits.iter().any(|h| h.path == expected)
+            )
+        })
+        .await;
         if !seen {
             // Empirical-audit failure mode: capture diagnostic
             // state for the task tail. Probe the graph + index
@@ -1348,6 +1399,11 @@ mod tests {
         // Pre-`-37` this would fail: reindex skipped (drive
         // non-empty) -> `-34`'s walker never runs -> drafts not
         // in BM25.
+        //
+        // Serialize against the sibling boot-walk test so the two
+        // do not stack their `spawn_blocking` re-index load on each
+        // other under the full parallel `cargo test` run.
+        let _serial = boot_walk_test_lock().lock().await;
         let (_cfg, drive_dir, drive) = setup_drive();
 
         // Seed drive root with content so `indexed_docs > 0`
@@ -1381,28 +1437,25 @@ mod tests {
             progress,
         );
 
-        // Boot walk is `tokio::task::spawn_blocking`'d; give it
-        // a window to complete + BM25 to commit + reader to
-        // refresh.
+        // Boot walk is `tokio::task::spawn_blocking`'d; poll for it
+        // to complete + BM25 to commit + reader to refresh. Bounded
+        // by BOOT_WALK_BUDGET; returns as soon as the hit lands.
         let opts = chan_drive::SearchOpts {
             mode: chan_drive::SearchMode::Bm25,
             limit: 10,
             scope: None,
         };
         let expected = "Drafts/untitled/draft.md";
-        let mut seen = false;
-        for _ in 0..50 {
-            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
-            if let Ok(hits) = drive.search("UNIQUEMARKER37BM25CLOSURE", &opts) {
-                if hits.hits.iter().any(|h| h.path == expected) {
-                    seen = true;
-                    break;
-                }
-            }
-        }
+        let seen = poll_until(BOOT_WALK_BUDGET, || {
+            matches!(
+                drive.search("UNIQUEMARKER37BM25CLOSURE", &opts),
+                Ok(hits) if hits.hits.iter().any(|h| h.path == expected)
+            )
+        })
+        .await;
         assert!(
             seen,
-            "boot walk did not land the Drafts file in BM25 within 5s; \
+            "boot walk did not land the Drafts file in BM25 within the budget; \
              search for UNIQUEMARKER37BM25CLOSURE returned no hit"
         );
     }

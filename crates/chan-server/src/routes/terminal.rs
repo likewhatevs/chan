@@ -1115,6 +1115,36 @@ mod tests {
             .unwrap_or(false)
     }
 
+    /// Process-wide async lock serializing the real-PTY shell-probe
+    /// tests. Each spawns a real shell on a PTY, sends commands, and
+    /// asserts on the shell's output within a bounded window. Under the
+    /// FULL parallel `cargo test` run (CI) every core is saturated by
+    /// the rest of the workspace, so the shell's startup, `stty -echo`
+    /// settling, and command output all slip past a tight window; the
+    /// probe then returns only the echoed command line (which itself
+    /// contains tokens like `CHAN_MCP_`), tripping the assertions.
+    /// Holding this lock makes only ONE real-PTY test drive a shell at a
+    /// time so it gets the CPU it needs, while the rest of the suite
+    /// still runs in parallel around it. A `tokio::sync::Mutex` (not
+    /// `std`) is used because the guard is held across `.await`; it is
+    /// `Send`-safe and not poisoned by a panicking test, so one failure
+    /// does not cascade.
+    fn pty_test_lock() -> &'static tokio::sync::Mutex<()> {
+        static LOCK: std::sync::OnceLock<tokio::sync::Mutex<()>> = std::sync::OnceLock::new();
+        LOCK.get_or_init(|| tokio::sync::Mutex::new(()))
+    }
+
+    /// Wait budget for a real-PTY shell probe to emit its end marker. On
+    /// an idle host the shell echoes the marker in well under a second,
+    /// so this ceiling is never approached; it only governs the worst
+    /// case under the full parallel suite, where shell scheduling slips
+    /// by seconds. The old 5s window was too tight for that worst case
+    /// (it flaked on macOS CI under heavy contention); 30s absorbs it
+    /// without slowing the common path, since `collect_until` returns as
+    /// soon as the marker arrives. The serialize lock keeps these probes
+    /// from stacking real-shell load on top of each other.
+    const PROBE_BUDGET: Duration = Duration::from_secs(30);
+
     fn terminal_drive_fixture() -> (tempfile::TempDir, tempfile::TempDir, Arc<chan_drive::Drive>) {
         let cfg = tempfile::TempDir::new().expect("temp config");
         let root = tempfile::TempDir::new().expect("temp drive");
@@ -1420,7 +1450,7 @@ mod tests {
             .terminal_sessions
             .attach(session, Some(0))
             .expect("spawned session");
-        let out = collect_until(&mut handle, "hi from spawn", Duration::from_secs(5)).await;
+        let out = collect_until(&mut handle, "hi from spawn", PROBE_BUDGET).await;
         assert!(out.contains("hi from spawn"), "missing output: {out:?}");
         state
             .terminal_sessions
@@ -1468,7 +1498,7 @@ mod tests {
             .terminal_sessions
             .attach(&session, Some(0))
             .expect("spawned session");
-        let out = collect_until(&mut handle, "restart-one", Duration::from_secs(5)).await;
+        let out = collect_until(&mut handle, "restart-one", PROBE_BUDGET).await;
         assert!(out.contains("restart-one"), "missing first output: {out:?}");
 
         let response =
@@ -1478,7 +1508,7 @@ mod tests {
             .terminal_sessions
             .attach(&session, Some(0))
             .expect("restarted session");
-        let out = collect_until(&mut restarted, "restart-one", Duration::from_secs(5)).await;
+        let out = collect_until(&mut restarted, "restart-one", PROBE_BUDGET).await;
         assert!(
             out.contains("restart-one"),
             "missing restarted output: {out:?}"
@@ -1501,12 +1531,7 @@ mod tests {
             .terminal_sessions
             .attach(&session, Some(0))
             .expect("spawned session");
-        let out = collect_until(
-            &mut handle,
-            "<CHAN_TAB_NAME=@@First>",
-            Duration::from_secs(5),
-        )
-        .await;
+        let out = collect_until(&mut handle, "<CHAN_TAB_NAME=@@First>", PROBE_BUDGET).await;
         assert!(
             out.contains("<CHAN_TAB_NAME=@@First>"),
             "missing first tab name: {out:?}"
@@ -1528,12 +1553,7 @@ mod tests {
             .terminal_sessions
             .attach(&session, Some(0))
             .expect("restarted session");
-        let out = collect_until(
-            &mut restarted,
-            "<CHAN_TAB_NAME=@@Second>",
-            Duration::from_secs(5),
-        )
-        .await;
+        let out = collect_until(&mut restarted, "<CHAN_TAB_NAME=@@Second>", PROBE_BUDGET).await;
         assert!(
             out.contains("<CHAN_TAB_NAME=@@Second>"),
             "missing restarted tab name: {out:?}"
@@ -1592,7 +1612,7 @@ mod tests {
         let response = api_create_terminal(State(state.clone()), Ok(Json(body))).await;
 
         assert_eq!(response.status(), StatusCode::CREATED);
-        let deadline = Instant::now() + Duration::from_secs(5);
+        let deadline = Instant::now() + PROBE_BUDGET;
         let mut found = None;
         while Instant::now() < deadline {
             found = std::fs::read_dir(dir.path())
@@ -1797,7 +1817,7 @@ mod tests {
         terminal
             .handle
             .send_input(format!("{command}\r").as_bytes());
-        let mut out = collect_until(&mut terminal.handle, end, Duration::from_secs(5)).await;
+        let mut out = collect_until(&mut terminal.handle, end, PROBE_BUDGET).await;
         out.push_str(
             &collect_until_idle(
                 &mut terminal.handle,
@@ -1812,6 +1832,9 @@ mod tests {
     #[cfg(any(target_os = "linux", target_os = "macos"))]
     #[tokio::test]
     async fn terminal_session_reports_live_cwd() {
+        // Serialize against the sibling real-PTY tests so they do not
+        // stack real-shell load on each other under the full parallel run.
+        let _serial = pty_test_lock().lock().await;
         let tmp = tempfile::tempdir().expect("temp drive");
         let subdir = tmp.path().join("work");
         fs::create_dir_all(&subdir).expect("create subdir");
@@ -1837,7 +1860,7 @@ mod tests {
         );
 
         terminal.handle.send_input(b"cd work\r");
-        let deadline = Instant::now() + Duration::from_secs(3);
+        let deadline = Instant::now() + PROBE_BUDGET;
         loop {
             if terminal.handle.cwd().and_then(|p| p.canonicalize().ok()) == Some(subdir.clone()) {
                 break;
@@ -1853,6 +1876,9 @@ mod tests {
 
     #[tokio::test]
     async fn conditional_pty_programs_validate_real_terminal() {
+        // Serialize against the sibling real-PTY tests so they do not
+        // stack real-shell load on each other under the full parallel run.
+        let _serial = pty_test_lock().lock().await;
         let mut ran = 0usize;
         let mut passed = 0usize;
 
@@ -1926,12 +1952,7 @@ mod tests {
             terminal.handle.send_input(
                 b"printf '\\n__CWD_HOME_BEGIN__\\n'; pwd; printf '<HOME=%s>\\n' \"$HOME\"; printf '<CHAN_TAB_NAME=%s>\\n' \"$CHAN_TAB_NAME\"; printf '<CHAN_WINDOW_ID=%s>\\n' \"$CHAN_WINDOW_ID\"; printf '<CHAN_CONTROL_SOCKET=%s>\\n' \"$CHAN_CONTROL_SOCKET\"; env | grep -E '^(CHAN|CLAUDE|CODEX|GEMINI)_MCP_' | sort; printf '\\n__CWD_HOME_END__\\n'\r",
             );
-            let out = collect_until(
-                &mut terminal.handle,
-                "__CWD_HOME_END__",
-                Duration::from_secs(5),
-            )
-            .await;
+            let out = collect_until(&mut terminal.handle, "__CWD_HOME_END__", PROBE_BUDGET).await;
             assert!(
                 out.contains(&cwd.display().to_string()),
                 "terminal should start at drive root cwd, got {out:?}"
@@ -2012,15 +2033,14 @@ mod tests {
             terminal
                 .handle
                 .send_input(b"printf 'alpha\\nbeta\\n' | less\r");
-            let out = collect_until(&mut terminal.handle, "alpha", Duration::from_secs(5)).await;
+            let out = collect_until(&mut terminal.handle, "alpha", PROBE_BUDGET).await;
             assert!(
                 out.contains("alpha"),
                 "less should render piped text, got {out:?}"
             );
             terminal.handle.send_input(b"q");
             terminal.handle.send_input(b"printf '\\n__LESS_END__\\n'\r");
-            let out =
-                collect_until(&mut terminal.handle, "__LESS_END__", Duration::from_secs(5)).await;
+            let out = collect_until(&mut terminal.handle, "__LESS_END__", PROBE_BUDGET).await;
             assert!(
                 out.contains("__LESS_END__"),
                 "shell should remain usable after quitting less, got {out:?}"
@@ -2040,6 +2060,9 @@ mod tests {
         if !command_available("env") {
             return;
         }
+        // Serialize against the sibling real-PTY tests so they do not
+        // stack real-shell load on each other under the full parallel run.
+        let _serial = pty_test_lock().lock().await;
         let tmp = tempfile::tempdir().expect("temp drive");
         let mut terminal = TestTerminal::spawn_with_mcp_env(
             tmp.path().to_path_buf(),
@@ -2066,12 +2089,7 @@ mod tests {
         terminal.handle.send_input(
             b"printf '\\n__MCP_ENV_OFF_BEGIN__\\n'; env | grep '^CHAN_MCP_' || true; printf '<CHAN_TAB_NAME=%s>\\n' \"$CHAN_TAB_NAME\"; printf '<CHAN_WINDOW_ID=%s>\\n' \"$CHAN_WINDOW_ID\"; printf '<CHAN_CONTROL_SOCKET=%s>\\n' \"$CHAN_CONTROL_SOCKET\"; printf '\\n__MCP_ENV_OFF_END__\\n'\r",
         );
-        let out = collect_until(
-            &mut terminal.handle,
-            "__MCP_ENV_OFF_END__",
-            Duration::from_secs(5),
-        )
-        .await;
+        let out = collect_until(&mut terminal.handle, "__MCP_ENV_OFF_END__", PROBE_BUDGET).await;
         assert!(
             !out.contains("CHAN_MCP_"),
             "mcp_env=false should omit CHAN_MCP_* env vars, got {out:?}"
