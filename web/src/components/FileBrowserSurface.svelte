@@ -92,7 +92,20 @@
   const isTab = $derived(variant === "tab");
   const isDock = $derived(variant === "dock");
   const isWideSurface = $derived(isOverlay || isTab);
-  const browserState = $derived(tab ?? browserOverlay);
+  /// `lane-a A4` (scope-concept wipe W4): the dock variant does NOT render
+  /// the inspector (`isWideSurface` is false for docks), so it has no need
+  /// for the shared `browserOverlay` singleton - `inspectorOpen` /
+  /// `inspectorWidth` are write-only here and nothing reads them back.
+  /// Giving the dock its own minimal local state decouples it from
+  /// `browserOverlay` so the wipe can delete that state in A5/W6. The tab
+  /// variant uses its tab; the (never-mounted) overlay variant keeps the
+  /// browserOverlay fallback until A5 removes it.
+  const dockBrowserState = $state<{ inspectorOpen: boolean; inspectorWidth?: number }>(
+    { inspectorOpen: false },
+  );
+  const browserState = $derived(
+    tab ?? (isDock ? dockBrowserState : browserOverlay),
+  );
   const fullyExpanded = $derived.by(() => {
     void tree.entries;
     return isFullyExpanded();
