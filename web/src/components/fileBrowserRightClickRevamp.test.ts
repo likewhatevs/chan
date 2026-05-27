@@ -8,51 +8,51 @@ import pane from "./Pane.svelte?raw";
 // The in-tree selection menu (FileTree.svelte row right-click)
 // is a sibling slice — separate pins land with that change.
 
-describe("fullstack-a-67e: FBSurface menu header — path-derived drive label + path row", () => {
-  test("drive-label-row renders the API label without an editable input", () => {
-    expect(surface).toMatch(/<li class="drive-label-row" role="none" title=\{drive\.info\?\.root\}>/);
-    expect(surface).toMatch(/class="drive-label-text">\{drive\.info\?\.label \?\? ""\}/);
-    expect(surface).not.toContain("drive-rename-input");
-    expect(surface).not.toContain("commitDriveName");
+describe("fullstack-a-67e: FBSurface menu header — path-derived workspace label + path row", () => {
+  test("workspace-label-row renders the API label without an editable input", () => {
+    expect(surface).toMatch(/<li class="workspace-label-row" role="none" title=\{workspace\.info\?\.root\}>/);
+    expect(surface).toMatch(/class="workspace-label-text">\{workspace\.info\?\.label \?\? ""\}/);
+    expect(surface).not.toContain("workspace-rename-input");
+    expect(surface).not.toContain("commitWorkspaceName");
     expect(surface).not.toContain("api.updatePreferences");
   });
 
-  test("drive-path-row renders with HardDrive icon + click → showDriveInfo + fade-on-overflow", () => {
+  test("workspace-path-row renders with HardDrive icon + click → showWorkspaceInfo + fade-on-overflow", () => {
     expect(surface).toMatch(
-      /class="drive-path-row"[\s\S]{1,200}onclick=\{showDriveInfo\}[\s\S]{1,400}<HardDrive size=\{16\}/,
+      /class="workspace-path-row"[\s\S]{1,200}onclick=\{showWorkspaceInfo\}[\s\S]{1,400}<HardDrive size=\{16\}/,
     );
     expect(surface).toMatch(
-      /class="drive-path-text">\{drive\.info\?\.root \?\? ""\}/,
+      /class="workspace-path-text">\{workspace\.info\?\.root \?\? ""\}/,
     );
     // The fade pattern from `-a-67 slice 1b` (Graph) ports over.
     expect(surface).toMatch(
-      /\.drive-path-text\)[\s\S]{1,800}mask-image: linear-gradient\(to right, black calc\(100% - 1\.25rem\), transparent\);/,
+      /\.workspace-path-text\)[\s\S]{1,800}mask-image: linear-gradient\(to right, black calc\(100% - 1\.25rem\), transparent\);/,
     );
   });
 });
 
 describe("fullstack-a-67e: FBSurface menu body — dock / expand / reload / import in order", () => {
-  test("dock variant can open a File Browser tab for current selection or drive", () => {
+  test("dock variant can open a File Browser tab for current selection or workspace", () => {
     expect(surface).toMatch(
       /function openCurrentInFileBrowser\(\): void \{[\s\S]{1,300}const path = browserSelection\.path;[\s\S]{1,200}const tab = openBrowserInActivePane\(path \? \{ select: path \} : \{\}\);[\s\S]{1,200}tab\.inspectorOpen = true;/,
     );
     expect(surface).toMatch(
-      /if \(path\) \{[\s\S]{1,400}tab\.showDrive = false;[\s\S]{1,200}browserSelection\.path = path;[\s\S]{1,200}browserSelection\.showDrive = false;[\s\S]{1,600}tab\.showDrive = true;[\s\S]{1,200}browserSelection\.path = null;[\s\S]{1,200}browserSelection\.showDrive = true;/,
+      /if \(path\) \{[\s\S]{1,400}tab\.showWorkspace = false;[\s\S]{1,200}browserSelection\.path = path;[\s\S]{1,200}browserSelection\.showWorkspace = false;[\s\S]{1,600}tab\.showWorkspace = true;[\s\S]{1,200}browserSelection\.path = null;[\s\S]{1,200}browserSelection\.showWorkspace = true;/,
     );
     expect(surface).toMatch(
       /\{#if isDock\}[\s\S]{1,400}onclick=\{openCurrentInFileBrowser\}[\s\S]{1,400}<span class="menu-row-label">Open in File Browser<\/span>/,
     );
   });
 
-  test("dock drive path row matches Open in File Browser for drive details", () => {
+  test("dock workspace path row matches Open in File Browser for workspace details", () => {
     expect(surface).toMatch(
-      /function showDriveInfo\(\): void \{[\s\S]{1,120}if \(isDock\) \{[\s\S]{1,120}openCurrentInFileBrowser\(\);[\s\S]{1,120}return;/,
+      /function showWorkspaceInfo\(\): void \{[\s\S]{1,120}if \(isDock\) \{[\s\S]{1,120}openCurrentInFileBrowser\(\);[\s\S]{1,120}return;/,
     );
   });
 
   test("dock toggles come after the SEP that follows the path row", () => {
     expect(surface).toMatch(
-      /class="drive-path-text">[\s\S]{1,400}<li class="sep" role="separator"><\/li>[\s\S]{1,400}toggleStick\("left"\)[\s\S]{1,400}toggleStick\("right"\)/,
+      /class="workspace-path-text">[\s\S]{1,400}<li class="sep" role="separator"><\/li>[\s\S]{1,400}toggleStick\("left"\)[\s\S]{1,400}toggleStick\("right"\)/,
     );
   });
 
@@ -96,8 +96,8 @@ describe("fullstack-a-67e: FBSurface menu foot — Settings / Reopen / Close (ta
 });
 
 describe("fullstack-a-67e: dropped entries", () => {
-  test("Rename drive... (modal) entry no longer rendered", () => {
-    expect(surface).not.toMatch(/<span class="menu-row-label">Rename drive\.\.\.<\/span>/);
+  test("Rename workspace... (modal) entry no longer rendered", () => {
+    expect(surface).not.toMatch(/<span class="menu-row-label">Rename workspace\.\.\.<\/span>/);
   });
 
   test("New file / New directory entries no longer in this menu (moved to selection menu)", () => {

@@ -29,7 +29,7 @@ describe("fullstack-b-3: PathPromptModal attach mode", () => {
 
   test("absolute-path branch suppresses the ancestor preamble", () => {
     // Absolute paths bypass tree.entries, so we don't fabricate a
-    // mint-green ancestor chain that doesn't correspond to drive
+    // mint-green ancestor chain that doesn't correspond to workspace
     // state.
     expect(modal).toMatch(
       /pathPromptState\.mode === "attach" && path\.startsWith\("\/"\)/,

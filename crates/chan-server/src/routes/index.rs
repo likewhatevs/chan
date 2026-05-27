@@ -1,15 +1,15 @@
-//! systacean-7: per-drive semantic-search state + enablement.
+//! systacean-7: per-workspace semantic-search state + enablement.
 //!
 //! Endpoints under `/api/index/semantic/`:
 //!
-//! * `GET /state` — model + drive preference snapshot.
+//! * `GET /state` — model + workspace preference snapshot.
 //! * `GET /models` - curated model list + per-machine download
 //!   flags for the picker.
-//! * `PATCH /model` - persist the drive's configured model.
+//! * `PATCH /model` - persist the workspace's configured model.
 //! * `POST /download` — synchronously fetch the model into the
 //!   per-machine cache (hf-hub). v1 is blocking; progress-streaming
 //!   is a follow-up.
-//! * `POST /enable` — flip the drive's `semantic_enabled` to true.
+//! * `POST /enable` — flip the workspace's `semantic_enabled` to true.
 //!   Refuses with 409 if the model isn't on disk.
 //! * `POST /disable` — flip back to BM25-only.
 //!
@@ -38,12 +38,12 @@ use serde::{Deserialize, Serialize};
 use crate::error::{err, err_from};
 use crate::state::AppState;
 
-/// Snapshot of the per-drive semantic-search state. Settings UI +
+/// Snapshot of the per-workspace semantic-search state. Settings UI +
 /// `chan index status` consume this. Shape is stable for `--json`
 /// scripting; new fields land as additive options.
 #[derive(Debug, Clone, Serialize)]
 pub struct SemanticState {
-    /// "bm25" or "hybrid". Derived from the drive's
+    /// "bm25" or "hybrid". Derived from the workspace's
     /// `semantic_enabled` flag AND whether the model is on disk —
     /// the field is "hybrid" only when BOTH are true.
     pub mode: &'static str,
@@ -61,8 +61,8 @@ pub struct SemanticState {
     /// `model_present` is false (no files to measure).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub model_size_bytes: Option<u64>,
-    /// Per-drive opt-in flag (`IndexConfig::semantic_enabled`).
-    /// Independent from `model_present`: a drive can be opted in
+    /// Per-workspace opt-in flag (`IndexConfig::semantic_enabled`).
+    /// Independent from `model_present`: a workspace can be opted in
     /// without a downloaded model (mode falls back to bm25 until
     /// the model lands; enable refuses to flip without the model
     /// so this state only arises if the model is deleted out from
@@ -136,10 +136,10 @@ fn dir_total_size(dir: &std::path::Path) -> u64 {
 }
 
 fn build_state(
-    drive: &chan_workspace::Workspace,
+    workspace: &chan_workspace::Workspace,
 ) -> Result<SemanticState, chan_workspace::ChanError> {
-    let model_name = drive.semantic_model()?;
-    let semantic_enabled = drive.semantic_enabled()?;
+    let model_name = workspace.semantic_model()?;
+    let semantic_enabled = workspace.semantic_enabled()?;
     let expected_dir = global_models_dir().join(repo_dir_name(&model_name));
     let model_present = resolve_model(&model_name).is_ok();
     let model_size_bytes = if model_present {
@@ -169,8 +169,8 @@ fn build_state(
 
 /// `GET /api/index/semantic/state`. Read-only snapshot.
 pub async fn api_semantic_state(State(state): State<Arc<AppState>>) -> Response {
-    let drive = state.drive();
-    match tokio::task::spawn_blocking(move || build_state(&drive)).await {
+    let workspace = state.workspace();
+    match tokio::task::spawn_blocking(move || build_state(&workspace)).await {
         Ok(Ok(s)) => Json(s).into_response(),
         Ok(Err(e)) => err_from(&e),
         Err(e) => (
@@ -183,9 +183,9 @@ pub async fn api_semantic_state(State(state): State<Arc<AppState>>) -> Response 
 
 /// `GET /api/index/semantic/models`. Curated picker state.
 pub async fn api_semantic_models(State(state): State<Arc<AppState>>) -> Response {
-    let drive = state.drive();
+    let workspace = state.workspace();
     match tokio::task::spawn_blocking(move || {
-        let current_model = match drive.semantic_model() {
+        let current_model = match workspace.semantic_model() {
             Ok(model) => model,
             Err(e) => return err_from(&e),
         };
@@ -210,7 +210,7 @@ pub async fn api_semantic_models(State(state): State<Arc<AppState>>) -> Response
     }
 }
 
-/// `PATCH /api/index/semantic/model`. Persist the per-drive model.
+/// `PATCH /api/index/semantic/model`. Persist the per-workspace model.
 pub async fn api_semantic_model_patch(
     State(state): State<Arc<AppState>>,
     Json(req): Json<PatchSemanticModel>,
@@ -222,12 +222,12 @@ pub async fn api_semantic_model_patch(
             format!("unknown embedding model: {model}"),
         );
     }
-    let drive = state.drive();
+    let workspace = state.workspace();
     match tokio::task::spawn_blocking(move || {
-        if let Err(e) = drive.set_semantic_model(&model) {
+        if let Err(e) = workspace.set_semantic_model(&model) {
             return err_from(&e);
         }
-        match build_state(&drive) {
+        match build_state(&workspace) {
             Ok(s) => Json(s).into_response(),
             Err(e) => err_from(&e),
         }
@@ -254,14 +254,14 @@ struct ModelNotDownloadedBody {
     download_endpoint: &'static str,
 }
 
-/// `POST /api/index/semantic/enable`. Flip the drive to Hybrid.
+/// `POST /api/index/semantic/enable`. Flip the workspace to Hybrid.
 /// Refuses with 409 if the model isn't on disk; payload carries
 /// the structured `ModelNotDownloaded` hint pointing the caller at
 /// the `/download` endpoint.
 pub async fn api_semantic_enable(State(state): State<Arc<AppState>>) -> Response {
-    let drive = state.drive();
+    let workspace = state.workspace();
     match tokio::task::spawn_blocking(move || {
-        let model_name = match drive.semantic_model() {
+        let model_name = match workspace.semantic_model() {
             Ok(m) => m,
             Err(e) => return err_from(&e),
         };
@@ -287,10 +287,10 @@ pub async fn api_semantic_enable(State(state): State<Arc<AppState>>) -> Response
             )
                 .into_response();
         }
-        if let Err(e) = drive.set_semantic_enabled(true) {
+        if let Err(e) = workspace.set_semantic_enabled(true) {
             return err_from(&e);
         }
-        match build_state(&drive) {
+        match build_state(&workspace) {
             Ok(s) => Json(s).into_response(),
             Err(e) => err_from(&e),
         }
@@ -309,12 +309,12 @@ pub async fn api_semantic_enable(State(state): State<Arc<AppState>>) -> Response
 /// `POST /api/index/semantic/disable`. Always succeeds; idempotent
 /// at the `set_semantic_enabled` layer (no-op when already off).
 pub async fn api_semantic_disable(State(state): State<Arc<AppState>>) -> Response {
-    let drive = state.drive();
+    let workspace = state.workspace();
     match tokio::task::spawn_blocking(move || {
-        if let Err(e) = drive.set_semantic_enabled(false) {
+        if let Err(e) = workspace.set_semantic_enabled(false) {
             return err_from(&e);
         }
-        match build_state(&drive) {
+        match build_state(&workspace) {
             Ok(s) => Json(s).into_response(),
             Err(e) => err_from(&e),
         }
@@ -341,9 +341,9 @@ pub async fn api_semantic_disable(State(state): State<Arc<AppState>>) -> Respons
 /// runs on a Tokio blocking thread so it doesn't tie up the
 /// async runtime.
 pub async fn api_semantic_download(State(state): State<Arc<AppState>>) -> Response {
-    let drive = state.drive();
+    let workspace = state.workspace();
     let result = tokio::task::spawn_blocking(move || {
-        let model_name = match drive.semantic_model() {
+        let model_name = match workspace.semantic_model() {
             Ok(m) => m,
             Err(e) => return err_from(&e),
         };
@@ -365,7 +365,7 @@ pub async fn api_semantic_download(State(state): State<Arc<AppState>>) -> Respon
                 chan_workspace::index::IndexError::Embed(e).into();
             return err_from(&chan_err);
         }
-        match build_state(&drive) {
+        match build_state(&workspace) {
             Ok(s) => Json(s).into_response(),
             Err(e) => err_from(&e),
         }
@@ -410,12 +410,12 @@ mod tests {
         let root = TempDir::new().unwrap();
         let lib = chan_workspace::Library::open_at(cfg.path().join("config.toml")).unwrap();
         lib.register_workspace(root.path()).unwrap();
-        let drive = lib.open_workspace(root.path()).unwrap();
+        let workspace = lib.open_workspace(root.path()).unwrap();
 
         let (events_tx, _) = broadcast::channel::<String>(1);
         let (index_events_tx, _) = broadcast::channel::<chan_workspace::WatchEvent>(1);
         let indexer = Arc::new(crate::indexer::Indexer::spawn(
-            drive.clone(),
+            workspace.clone(),
             index_events_tx.subscribe(),
             false,
             SearchAggression::Conservative,
@@ -428,7 +428,7 @@ mod tests {
             library: lib,
             drive_root: root.path().to_path_buf(),
             drive_cell: Arc::new(RwLock::new(Some(WorkspaceCell {
-                drive,
+                workspace,
                 watch_handle: None,
                 indexer,
             }))),

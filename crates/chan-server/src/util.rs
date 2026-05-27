@@ -19,7 +19,7 @@ pub fn raw_json_response(bytes: Vec<u8>) -> Response {
 
 /// Strip a string into a filesystem-safe slug. Keeps ASCII alnum,
 /// '-', '_'; collapses everything else to '-'; trims leading and
-/// trailing dashes; clamps to 80 chars (safe under chan-drive's
+/// trailing dashes; clamps to 80 chars (safe under chan-workspace's
 /// blob key length and most filesystems' name limits).
 pub fn slugify_for_filename(s: &str) -> String {
     let mut out = String::with_capacity(s.len().min(80));

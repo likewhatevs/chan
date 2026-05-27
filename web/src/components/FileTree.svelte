@@ -1,5 +1,5 @@
 <script lang="ts">
-  // Recursive tree view of the drive.
+  // Recursive tree view of the workspace.
   //
   // Builds a nested directory structure from the flat tree the API returns,
   // then renders rows with expand/collapse, click-to-open, and a context
@@ -47,7 +47,7 @@
   import {
     browserSelection,
     clearTreeLoadingForPath,
-    drive,
+    workspace,
     fbClearSelection,
     fbClipboard,
     fbClipboardClear,
@@ -71,11 +71,11 @@
   import { notify } from "../state/notify.svelte";
 
   // `fullstack-a-10`: full filesystem path for a tree entry,
-  // for the row hover tooltip. Falls back to the drive-relative
+  // for the row hover tooltip. Falls back to the workspace-relative
   // path when the server hasn't surfaced a root (tunnel-public
   // mode) so the title is never empty.
   function fullPath(relPath: string): string {
-    const root = drive.info?.root?.replace(/\/+$/, "") ?? "";
+    const root = workspace.info?.root?.replace(/\/+$/, "") ?? "";
     if (!root) return relPath;
     return `${root}/${relPath}`;
   }
@@ -127,7 +127,7 @@
   const editorDirty = $derived(dirtyPaths());
 
   // Path of the row currently highlighted as a drop target during DnD.
-  // Empty string means the root <ul> (drop at drive root). null means
+  // Empty string means the root <ul> (drop at workspace root). null means
   // no row is being hovered.
   let dropTarget = $state<string | null>(null);
 
@@ -250,7 +250,7 @@
   }
 
   /// Compute the target path for dropping `src` into `destDir`.
-  /// destDir == "" means the drive root.
+  /// destDir == "" means the workspace root.
   function dropTargetPath(src: string, destDir: string): string {
     const base = src.split("/").pop() ?? src;
     return destDir === "" ? base : `${destDir}/${base}`;
@@ -341,7 +341,7 @@
   // mutates $state, which is illegal inside a $derived - it throws
   // state_unsafe_mutation); the $derived only READS it (reactively
   // re-pointing once the effect registers the instance, and on remount
-  // under a different id). The drive root (`""`) is kept expanded.
+  // under a different id). The workspace root (`""`) is kept expanded.
   $effect(() => {
     ensureFbTreeInstance(instanceId);
   });
@@ -407,7 +407,7 @@
 
   /// Visible row index by path, in display order. Walked the same
   /// way the renderer walks (pre-order, recursing into directories that
-  /// are currently expanded). Drives zebra striping: even rows get
+  /// are currently expanded). Workspaces zebra striping: even rows get
   /// the default background, odd rows pick up `--zebra-bg`. The map
   /// rebuilds whenever the tree or the expansion set changes; for
   /// thousands of nodes this is still cheaper than the layout pass
@@ -512,7 +512,7 @@
     // Persist this surface's expansion (tab variant writes through to the
     // layout tab's `expanded` field for reload restore; dock/overlay is
     // session-scoped). FileBrowserSurface's per-instance effects mirror
-    // the map into the tab record; this just drives the reload snapshot.
+    // the map into the tab record; this just workspaces the reload snapshot.
     persistFbTreeInstanceExpansion(instanceId);
     if (value) void loadTreeDir(path);
   }
@@ -583,13 +583,13 @@
     const ancestors = expandedAncestors(path);
     const tab = openBrowserInActivePane({ select: path });
     tab.inspectorOpen = true;
-    tab.showDrive = false;
+    tab.showWorkspace = false;
     // The new tab's surface seeds its own per-instance expansion from
     // `tab.expanded` on mount, so there is no global singleton to prime
     // here anymore.
     tab.expanded = ancestors.length > 0 ? ancestors : undefined;
     fbSelectSingle(path);
-    browserSelection.showDrive = false;
+    browserSelection.showWorkspace = false;
     menu = null;
   }
   /// Settings (flip) — routes through the surface-supplied
@@ -629,7 +629,7 @@
   ///      persisted config + run the full bootstrap chain
   ///      (`-a-79`'s entry point) — that path is blocked on a
   ///      `GET /api/teams/{name}/config` endpoint that
-  ///      `systacean-30` exposes only at the chan-drive layer
+  ///      `systacean-30` exposes only at the chan-workspace layer
   ///      today.
   async function loadTeamFromMenu(path: string): Promise<void> {
     menu = null;
@@ -981,7 +981,7 @@
 
   /// Resolve the directory a paste should land in: the active selection
   /// if it is a directory; otherwise the parent directory of the active
-  /// selection; otherwise the drive root. Mirrors how a desktop file
+  /// selection; otherwise the workspace root. Mirrors how a desktop file
   /// browser pastes "into the current folder".
   function pasteTargetDir(): string {
     const cur = browserSelection.path;
@@ -1088,7 +1088,7 @@
 
   /// Set the active find query. Empty string clears the highlight.
   /// `onCount` (optional) receives `(total, current0Based)` whenever
-  /// the match set or cursor moves so the host can drive a counter.
+  /// the match set or cursor moves so the host can workspace a counter.
   export function setFindQuery(q: string, onCount?: FindCountCb): void {
     findOnCount = onCount;
     findQueryState = q;
@@ -1600,7 +1600,7 @@
     background: var(--accent-bg, var(--hover-bg));
     box-shadow: inset 0 0 0 1px var(--accent);
   }
-  /* Drop at drive root: outline the whole tree container so the
+  /* Drop at workspace root: outline the whole tree container so the
      user can tell root-drop is a valid target even when the cursor
      is over empty space below the last row. */
   .tree.drop-root {
@@ -1626,7 +1626,7 @@
     margin-right: 2px;
   }
   /* Cmd+F highlight on rows whose filename matches the active find
-     query (FileBrowserSurface drives setFindQuery). The current
+     query (FileBrowserSurface workspaces setFindQuery). The current
      match gets a stronger ring so step-through (Enter / Shift+Enter)
      is visually obvious. Uses --warn-text so the highlight reads as
      "attention" without colliding with selection or hover bands. */

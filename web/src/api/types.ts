@@ -1,24 +1,24 @@
 // API types: the JSON shapes returned by chan-server's HTTP handlers.
 // Keep in lockstep with crates/chan-server/src/routes.
 
-export type DriveInfo = {
+export type WorkspaceInfo = {
   root: string;
   /// Path-derived display label from the server. This is not
   /// persisted user metadata; full root remains authoritative.
   label: string | null;
   metadata_key: string | null;
-  /// Mirror of GlobalConfig.preferences. Per-drive overrides
+  /// Mirror of GlobalConfig.preferences. Per-workspace overrides
   /// were removed; settings are always per-device-global. Carried
-  /// here so a single `/api/drive` round-trip is enough to
+  /// here so a single `/api/workspace` round-trip is enough to
   /// render the editor with the right fonts without a follow-up
   /// `/api/config` fetch.
   preferences: Preferences;
   /// Non-fatal boot warnings, currently used for broken draft
   /// workspaces under metadata.
-  warnings: DriveWarning[];
+  warnings: WorkspaceWarning[];
 };
 
-export type DriveWarning = {
+export type WorkspaceWarning = {
   kind: string;
   path: string;
   message: string;
@@ -61,29 +61,29 @@ export type MetadataManifest = {
 };
 
 /// Global per-user config. Lives at `paths::global_config_path()`
-/// on the server side and applies to every drive (no per-
-/// drive override anymore; settings are always device-global).
+/// on the server side and applies to every workspace (no per-
+/// workspace override anymore; settings are always device-global).
 export type GlobalConfig = {
   preferences: Preferences;
   /// When set, the resolver's fallback path becomes this; when
   /// unset, it falls back to the platform convention
   /// (`~/Documents/Chan` on macOS, `$XDG_DATA_HOME/chan/default`
   /// on Linux, `%USERPROFILE%\Documents\Chan` on Windows).
-  default_drive_root?: string | null;
-  /// Known drives the user has opened on this machine. Updated
+  default_workspace_root?: string | null;
+  /// Known workspaces the user has opened on this machine. Updated
   /// by the server on every spawn (touch existing or append).
   /// Sorted most-recent first.
-  drives?: KnownDrive[];
+  workspaces?: KnownWorkspace[];
 };
 
-export type KnownDrive = {
+export type KnownWorkspace = {
   path: string;
   metadata_key: string;
   /// RFC3339 timestamp.
   last_seen_at: string;
 };
 
-/// Editor theme. Drives the markdown renderer + source view
+/// Editor theme. Workspaces the markdown renderer + source view
 /// typography and chrome. Light/dark variants are selected from
 /// the active ThemeChoice; density from LineSpacing. App chrome
 /// (toolbar, panes, status bar) is not affected.
@@ -212,7 +212,7 @@ export type TerminalRestartRequest = {
 
 export type Preferences = {
   editor_theme: EditorTheme;
-  /// Where image uploads land (relative to drive root). Default
+  /// Where image uploads land (relative to workspace root). Default
   /// `attachments/`. Not exposed in the Settings UI; round-tripped
   /// here so save() doesn't accidentally reset the value when the
   /// user has overridden it via the global config.
@@ -293,7 +293,7 @@ export type PathClass = {
   permission: PathPermission;
   link_count: number;
   target?: string | null;
-  target_escapes_drive?: boolean;
+  target_escapes_workspace?: boolean;
 };
 
 /// Response from POST /api/move. The rename itself always succeeds
@@ -304,7 +304,7 @@ export type MoveResponse = {
   /// entry for a file rename; one per descendant file for a directory.
   renamed: Array<[string, string]>;
   /// Source files whose contents were rewritten to point at the new
-  /// locations. Drive-rooted POSIX paths (post-rename).
+  /// locations. Workspace-rooted POSIX paths (post-rename).
   rewritten: string[];
   /// Source files where the rewrite was abandoned because the file
   /// changed between read and CAS-write. The on-disk rename stands.
@@ -318,7 +318,7 @@ export type TransferResponse = {
   /// Per-source final destination (after collision suffixing), in
   /// request order.
   moved: Array<{ from: string; to: string }>;
-  /// Sources skipped (no-op move into the same parent, or escaped drive).
+  /// Sources skipped (no-op move into the same parent, or escaped workspace).
   skipped: string[];
   /// Link-rewrite CAS conflicts accumulated across moved entries.
   conflicts: string[];
@@ -345,13 +345,13 @@ export type FileResponse = {
   mtime: number | null;
   mtime_ns?: string | null;
   path_class?: PathClass;
-  /// Path of the enclosing git repo, relative to the drive root.
+  /// Path of the enclosing git repo, relative to the workspace root.
   /// Absent when the file is not inside a git repo (or when the
-  /// repo coincides with the drive root). Drives the per-file
+  /// repo coincides with the workspace root). Workspaces the per-file
   /// scope indicator in the overlay picker.
   repo_root?: string | null;
   /// Filesystem-level writability: true when the underlying file
-  /// has user-write bits set on disk, false otherwise. Drives the
+  /// has user-write bits set on disk, false otherwise. Workspaces the
   /// per-tab read-only lock that overrides the user's lamp toggle.
   /// Optional for forward-compat with older servers; absent =
   /// treat as writable to match prior behavior.
@@ -459,7 +459,7 @@ export type GraphViewEdgeKind =
   | "contains"
   | "language"
   | "date"
-  /// `fullstack-a-66` slice e: distinguished edge from drive-root
+  /// `fullstack-a-66` slice e: distinguished edge from workspace-root
   /// → Drafts-root. Emitted by chan-server's
   /// `synthesize_drafts_layer` when any indexed file lives under
   /// the `Drafts/` unified-keyspace prefix. Styled distinctly in
@@ -513,7 +513,7 @@ export type FsGraphNode = {
   target?: string | null;
   outside?: boolean;
   broken?: boolean;
-  target_escapes_drive?: boolean;
+  target_escapes_workspace?: boolean;
 };
 
 export type FsGraphEdge = {
@@ -539,14 +539,14 @@ export type FsGraphResponse = {
 // tagged union on `type`; client -> server frames are the scope sub/unsub
 // path. The legacy global `watch` frame stays for the editor's open-document
 // external-edit toast (a single-file concern); the new scoped `fs` frame
-// drives the per-directory File Browser / Graph tree (D2: two frames, two
+// workspaces the per-directory File Browser / Graph tree (D2: two frames, two
 // consumers). The server-side serialization in chan-server must stay in
 // lockstep with these shapes; both sides pin them with a test.
 // ---------------------------------------------------------------------------
 
-/// A single filesystem change as chan-drive's watcher actually serializes it
+/// A single filesystem change as chan-workspace's watcher actually serializes it
 /// on the wire. Capitalized kinds plus the rename destination `to`, matching
-/// the verbatim `chan_drive::WatchEvent` serialization the store dispatcher
+/// the verbatim `chan_workspace::WatchEvent` serialization the store dispatcher
 /// already reads (it branches on `"Removed"` / `"Renamed"`). Distinct from
 /// the older, narrower `WatchEvent` type below (lowercase kinds, no rename
 /// destination), which predates the rename support and does not match the
@@ -559,8 +559,8 @@ export type WatchEventWire = {
   to?: string | null;
 };
 
-/// Drive-relative POSIX directory path used as a watcher scope key. The
-/// empty string is the drive root (always implicitly watched). Mirrors the
+/// Workspace-relative POSIX directory path used as a watcher scope key. The
+/// empty string is the workspace root (always implicitly watched). Mirrors the
 /// server-side `ScopeRegistry` keyspace.
 export type WatchScopeDir = string;
 
@@ -575,7 +575,7 @@ export type WsWatchFrame = { type: "watch"; event: WatchEventWire };
 export type WsFsFrame = { type: "fs"; dir: WatchScopeDir; event: WatchEventWire };
 
 /// Client -> server: subscribe / unsubscribe this socket to a directory
-/// scope. `dir: ""` is the drive root (idempotent no-op refcount the server
+/// scope. `dir: ""` is the workspace root (idempotent no-op refcount the server
 /// accepts). The server routes these to its `ScopeRegistry` against this
 /// socket's subscriber id; a socket close implicitly unsubscribes all.
 export type WsSubFrame = { type: "sub"; dir: WatchScopeDir };
@@ -589,7 +589,7 @@ export type WsUnsubFrame = { type: "unsub"; dir: WatchScopeDir };
 export type WsClientFrame = WsSubFrame | WsUnsubFrame;
 
 export type InspectorKind =
-  | "drive"
+  | "workspace"
   | "directory"
   | "markdown"
   | "text"
@@ -697,7 +697,7 @@ export type BuildInfo = {
 };
 
 /// Semantic-search state surface. `systacean-7` shape; consumed by
-/// the Settings UI (`fullstack-a-21`) to drive the opt-in toggle +
+/// the Settings UI (`fullstack-a-21`) to workspace the opt-in toggle +
 /// status row. `mode` is derived server-side as `"hybrid"` iff
 /// `semantic_enabled AND model_present`; the
 /// flag-on-but-model-deleted case falls back to `"bm25"`.
@@ -728,9 +728,9 @@ export type SemanticModelRegistry = {
   models: SemanticModelEntry[];
 };
 
-/// Drive reset modes, in increasing destructiveness. See
+/// Workspace reset modes, in increasing destructiveness. See
 /// `crates/chan-core/src/storage.rs` for the per-mode contract.
-export type ResetMode = "drive" | "everything";
+export type ResetMode = "workspace" | "everything";
 
 export type ResetResponse = {
   removed_entries: number;

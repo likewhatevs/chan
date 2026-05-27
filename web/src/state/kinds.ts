@@ -3,7 +3,7 @@
 // inspector, search overlay, graph overlay, and tag inspector.
 //
 // Three families of kind:
-//   - FileKind: things that exist as files in the drive.
+//   - FileKind: things that exist as files in the workspace.
 //   - EntityKind: graph-only entities (tokens extracted from
 //     markdown bodies); no file backing.
 //   - ContainerKind: the lone "folder" kind for directory rows.
@@ -12,8 +12,8 @@
 // `kind` discriminator on every regular file in `/api/files`. The
 // path-only fallback below only runs for paths held outside the
 // tree listing (graph ghost rows, broken-link targets). It mirrors
-// chan-drive's classifier via `classifyPath` so the editor and the
-// drive agree on what counts as text.
+// chan-workspace's classifier via `classifyPath` so the editor and the
+// workspace agree on what counts as text.
 
 import { FileText, User, FileCode, Image, File, Hash, Calendar, Folder } from "lucide-svelte";
 

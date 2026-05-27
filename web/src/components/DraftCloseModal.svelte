@@ -37,14 +37,14 @@
 
       <p>
         {#if draftCloseState.hasAttachments}
-          Save this draft workspace as a drive folder, or discard it.
+          Save this draft workspace as a workspace folder, or discard it.
         {:else}
-          Save this draft as a drive file, or discard it.
+          Save this draft as a workspace file, or discard it.
         {/if}
       </p>
 
       <label>
-        <span>{draftCloseState.targetKind === "folder" ? "Drive folder" : "Drive file"}</span>
+        <span>{draftCloseState.targetKind === "folder" ? "Workspace folder" : "Workspace file"}</span>
         <input
           bind:this={inputEl}
           bind:value={draftCloseState.target}
@@ -63,7 +63,7 @@
         <div class="spacer"></div>
         <button type="button" onclick={() => resolveDraftClose("cancel")}>Cancel</button>
         <button type="button" class="primary" onclick={() => resolveDraftClose("save")}>
-          Save to Drive
+          Save to Workspace
         </button>
       </footer>
     </div>

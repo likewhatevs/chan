@@ -52,33 +52,33 @@ describe("fullstack-a-77 slice 1: api.screensaver* client methods", () => {
 
 describe("fullstack-a-77 slice 1: PBKDF2 hashPin helper", () => {
   test("hashPin produces a deterministic base64 digest for same inputs", async () => {
-    const a = await hashPin("1234", "/tmp/drive-a");
-    const b = await hashPin("1234", "/tmp/drive-a");
+    const a = await hashPin("1234", "/tmp/workspace-a");
+    const b = await hashPin("1234", "/tmp/workspace-a");
     expect(a).toBe(b);
     // Base64 of 32 bytes = 44 chars including padding.
     expect(a).toHaveLength(44);
   });
 
-  test("different drive salts yield different hashes for the same PIN", async () => {
-    const a = await hashPin("1234", "/tmp/drive-a");
-    const b = await hashPin("1234", "/tmp/drive-b");
+  test("different workspace salts yield different hashes for the same PIN", async () => {
+    const a = await hashPin("1234", "/tmp/workspace-a");
+    const b = await hashPin("1234", "/tmp/workspace-b");
     expect(a).not.toBe(b);
   });
 
   test("different PINs yield different hashes for the same salt", async () => {
-    const a = await hashPin("1234", "/tmp/drive-a");
-    const b = await hashPin("1235", "/tmp/drive-a");
+    const a = await hashPin("1234", "/tmp/workspace-a");
+    const b = await hashPin("1235", "/tmp/workspace-a");
     expect(a).not.toBe(b);
   });
 
-  test("empty drive salt falls back to a fixed default + still hashes", async () => {
+  test("empty workspace salt falls back to a fixed default + still hashes", async () => {
     const hash = await hashPin("1234", "");
     expect(hash).toHaveLength(44);
   });
 });
 
 describe("fullstack-a-77 slice 1: timeout constants", () => {
-  test("default matches the chan-drive 300s default", () => {
+  test("default matches the chan-workspace 300s default", () => {
     expect(SCREENSAVER_DEFAULT_TIMEOUT_SECS).toBe(300);
   });
 

@@ -11,7 +11,7 @@
 // preferences (fonts, theme, API keys) live elsewhere and are an
 // app-level concern; chan-drive does not read or write them.
 //
-// Per-drive metadata lives under `~/.chan/drives/<metadata_key>/`.
+// Per-workspace metadata lives under `~/.chan/workspaces/<metadata_key>/`.
 // The key is derived from the canonical drive root at registration
 // time and preserved across `Library::move_workspace`, so moving the
 // drive directory updates only the registry row.
@@ -69,9 +69,9 @@ pub fn global_config_path() -> PathBuf {
     config_dir().join("config.toml")
 }
 
-/// Per-drive metadata parent.
+/// Per-workspace metadata parent.
 pub fn drives_dir() -> PathBuf {
-    config_dir().join("drives")
+    config_dir().join("workspaces")
 }
 
 /// Stable metadata key for a drive root.
@@ -105,7 +105,7 @@ fn metadata_slug(path: &str) -> String {
 /// Per-drive global paths. Computed once per Workspace open.
 #[derive(Debug, Clone)]
 pub struct WorkspacePaths {
-    /// Metadata root for this drive, `~/.chan/drives/<metadata_key>/`.
+    /// Metadata root for this workspace, `~/.chan/workspaces/<metadata_key>/`.
     pub root: PathBuf,
     /// Per-drive sessions directory. Opaque JSON; chan-drive does
     /// not interpret. Apps put window/pane layout files here.
@@ -143,7 +143,7 @@ pub struct WorkspacePaths {
     /// systacean-24: per-drive Drafts dir. Holds in-progress
     /// drafts as `<name>/draft.md + companions` (e.g.
     /// `untitled-1/draft.md` plus pasted images). The Drafts
-    /// subtree sits in `~/.chan/drives/<metadata_key>/drafts/` so
+    /// subtree sits in `~/.chan/workspaces/<metadata_key>/drafts/` so
     /// the user's drive root stays clean of uncommitted scratch
     /// work (SCM-friendly per the addendum-a spec). Rich Prompt
     /// history (`rich-prompt-N/`) lives here too. The watcher +
@@ -189,7 +189,7 @@ pub fn ensure_drive_metadata_dirs(metadata_key: &str) -> std::io::Result<Workspa
     Ok(paths)
 }
 
-/// Per-drive metadata parent directories. Used by the orphan-sweep
+/// Per-workspace metadata parent directories. Used by the orphan-sweep
 /// path to walk metadata roots and reconcile against the registry's
 /// metadata-key set. Returns absolute paths; it may not exist on a
 /// fresh install, callers must handle that.
@@ -317,7 +317,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn default_drive_root_is_non_empty() {
+    fn default_workspace_root_is_non_empty() {
         let p = default_workspace_root();
         assert!(!p.as_os_str().is_empty());
     }

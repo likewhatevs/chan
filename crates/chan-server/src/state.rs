@@ -24,17 +24,17 @@ pub struct AppState {
     /// lifetime even when `drive_cell` is swapped during a reset
     /// (the swap reopens against the same root).
     pub drive_root: PathBuf,
-    /// Live drive + its watcher, behind an RwLock so /api/storage/
+    /// Live workspace + its watcher, behind an RwLock so /api/storage/
     /// reset can drop and reopen them without restarting the
     /// process. Always `Some` outside the brief swap window inside
     /// reset itself; handlers reach the inner Arc<Workspace> via
-    /// `state.drive()` which clones it under a read lock.
+    /// `state.workspace()` which clones it under a read lock.
     pub drive_cell: Arc<RwLock<Option<WorkspaceCell>>>,
     pub token: Option<String>,
     /// Canonical URL prefix the SPA prepends to fetch and WebSocket
     /// URLs, injected into the shell as `<meta name="chan-prefix">`.
     /// Mutable so tunnel mode can swap in the registration prefix
-    /// (`/{user}/{drive}`) on Connected; the local-serve path sets
+    /// (`/{user}/{workspace}`) on Connected; the local-serve path sets
     /// it once at build time from `ServeConfig::prefix` and never
     /// touches it again. Empty when no prefix.
     ///
@@ -57,9 +57,9 @@ pub struct AppState {
     /// where the gateway is NOT authenticating the viewer. Read by:
     ///
     ///   - the read-only handlers that would otherwise leak host
-    ///     state (`api_get_drive`, `api_get_config`,
-    ///     `api_cloud_drives`): they strip absolute paths and the
-    ///     drive registry before serializing.
+    ///     state (`api_get_workspace`, `api_get_config`,
+    ///     `api_cloud_workspaces`): they strip absolute paths and the
+    ///     workspace registry before serializing.
     pub tunnel_public: bool,
     /// Last activity timestamp (unix seconds). Bumped by HTTP
     /// middleware on every request, by `ws_upgrade` on connect,
@@ -93,7 +93,7 @@ pub struct AppState {
     pub self_writes: Arc<SelfWrites>,
     /// Long-lived PTY session registry. WebSocket terminal routes
     /// attach/detach to entries here; the PTY itself outlives a
-    /// browser reload until explicit close, drive close, shutdown,
+    /// browser reload until explicit close, workspace close, shutdown,
     /// cap eviction, or idle prune.
     pub terminal_sessions: Arc<TerminalRegistry>,
     /// Process-wide shutdown signal. Fires once SIGINT/SIGTERM or
@@ -116,37 +116,37 @@ pub struct AppState {
     /// bridge routes scoped `fs` frames here (derived from the single
     /// recursive feed, Decision D1(b)). Survives `/api/storage/reset`:
     /// the rebuilt bridge re-references the same registry so live
-    /// subscriptions keep flowing onto the new drive's events.
+    /// subscriptions keep flowing onto the new workspace's events.
     pub scope_registry: Arc<crate::bus::ScopeRegistry>,
 }
 
 /// Workspace + its notify watcher. Replaced wholesale by /api/storage/
-/// reset: drop the cell, run chan-drive's reset_workspace, reopen, store
+/// reset: drop the cell, run chan-workspace's reset_workspace, reopen, store
 /// a fresh cell. The watch_handle is `Option` only because reset
 /// must take it out before dropping the inner Workspace (the watcher
 /// holds a callback that references the same broadcast channel; we
 /// keep it tidy by dropping the handle first).
 pub struct WorkspaceCell {
-    pub drive: Arc<Workspace>,
+    pub workspace: Arc<Workspace>,
     pub watch_handle: Option<WatchHandle>,
-    /// Background indexer for the live drive. Replaced wholesale
-    /// on /api/storage/reset (the new drive needs a fresh indexer
+    /// Background indexer for the live workspace. Replaced wholesale
+    /// on /api/storage/reset (the new workspace needs a fresh indexer
     /// pinned to its `Arc<Workspace>`). Drop = abort = workers stop.
     pub indexer: Arc<indexer::Indexer>,
 }
 
 #[derive(Debug, thiserror::Error)]
 pub enum StateAccessError {
-    #[error("drive cell lock poisoned")]
+    #[error("workspace cell lock poisoned")]
     WorkspaceCellPoisoned,
-    #[error("drive cell missing outside reset window")]
+    #[error("workspace cell missing outside reset window")]
     WorkspaceCellMissing,
 }
 
 impl AppState {
-    /// Snapshot the current drive Arc. Acquires the RwLock read
+    /// Snapshot the current workspace Arc. Acquires the RwLock read
     /// guard for the duration of the clone (microseconds). The
-    /// returned Arc keeps the drive alive even if a reset swaps
+    /// returned Arc keeps the workspace alive even if a reset swaps
     /// the cell out a moment later, so callers don't need to hold
     /// the lock through their I/O.
     ///
@@ -158,18 +158,18 @@ impl AppState {
         let Some(cell) = cell.as_ref() else {
             return Err(StateAccessError::WorkspaceCellMissing);
         };
-        Ok(cell.drive.clone())
+        Ok(cell.workspace.clone())
     }
 
     /// Legacy infallible accessor for call sites that have not yet
     /// been converted to explicit HTTP errors. New route code should
     /// prefer `try_drive`.
-    pub fn drive(&self) -> Arc<Workspace> {
-        self.try_drive().expect("drive state unavailable")
+    pub fn workspace(&self) -> Arc<Workspace> {
+        self.try_drive().expect("workspace state unavailable")
     }
 
     /// Snapshot the live indexer Arc. Same RwLock pattern as
-    /// `drive()`: held only for the duration of the clone.
+    /// `workspace()`: held only for the duration of the clone.
     pub fn try_indexer(&self) -> Result<Arc<indexer::Indexer>, StateAccessError> {
         let cell = self
             .drive_cell
@@ -185,11 +185,11 @@ impl AppState {
 #[cfg(test)]
 pub(crate) mod test_support {
     //! Minimal `AppState` builder for tests that exercise the
-    //! middleware / handlers but don't need a real drive on disk.
+    //! middleware / handlers but don't need a real workspace on disk.
     //! The `drive_cell` is intentionally left `None`: callers that
     //! try to reach into it will hit the `drive_cell missing` panic
-    //! from `AppState::drive()`, which is the right failure mode
-    //! (the test isn't supposed to touch the drive).
+    //! from `AppState::workspace()`, which is the right failure mode
+    //! (the test isn't supposed to touch the workspace).
     //!
     //! The `Library` is opened against a tempfile so that
     //! `list_workspaces` returns an empty Vec and registry writes don't
@@ -210,11 +210,11 @@ pub(crate) mod test_support {
     /// Build an `AppState` with the two policy bools set to the
     /// requested values and everything else stubbed to defaults.
     /// The returned `AppState` is safe to wrap in `Arc` and hand to
-    /// axum extractors; reading any drive-bearing field will panic
+    /// axum extractors; reading any workspace-bearing field will panic
     /// (by design).
     pub fn make_test_state(settings_disabled: bool, tunnel_public: bool) -> Arc<AppState> {
         // The TempDir's path is what Library::open_at uses for any
-        // later registry writes (register_workspace, set_default_drive_root,
+        // later registry writes (register_workspace, set_default_workspace_root,
         // ...). Letting it drop here would delete the directory and
         // make those writes fail with ENOENT, which is a subtle
         // footgun for any future test that uses make_test_state and
@@ -275,7 +275,7 @@ pub(crate) mod test_support {
         let drive_cell = state.drive_cell.clone();
         let _ = std::thread::spawn(move || {
             let _guard = drive_cell.write().expect("poison setup");
-            panic!("poison drive cell");
+            panic!("poison workspace cell");
         })
         .join();
 

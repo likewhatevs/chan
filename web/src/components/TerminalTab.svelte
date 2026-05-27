@@ -57,7 +57,7 @@
     type TerminalTab as TerminalTabState,
   } from "../state/tabs.svelte";
   import {
-    drive,
+    workspace,
     effectiveHybridSurfaceTheme,
     fileOps,
     openFsGraphForDirectory,
@@ -143,7 +143,7 @@
         payload_b64: string;
       };
 
-  type CloseReason = "idle" | "drive" | "shutdown" | "explicit" | "capped" | "error";
+  type CloseReason = "idle" | "workspace" | "shutdown" | "explicit" | "capped" | "error";
 
   let host: HTMLDivElement | undefined = $state();
   let searchInput: HTMLInputElement | undefined = $state();
@@ -577,7 +577,7 @@
     // through and resize the existing xterm.js buffer; the hint copy
     // under the slider names this spawn-time-only contract.
     scrollbackLines = scrollbackLinesFromMb(
-      clampScrollbackMb(drive.info?.preferences?.terminal?.scrollback_mb),
+      clampScrollbackMb(workspace.info?.preferences?.terminal?.scrollback_mb),
     );
     // `fullstack-b-2`: lineHeight bumped from 1.0 to 1.2 so
     // multi-row ASCII glyphs (e.g. the Claude Code splash cube,
@@ -613,7 +613,7 @@
       '"SF Mono", SFMono-Regular, "Cascadia Code", "DejaVu Sans Mono", ui-monospace, Menlo, Consolas, "Liberation Mono", "Source Code Pro", monospace';
     const FONT_CHAIN_SOURCE_CODE_PRO =
       '"Source Code Pro", "SF Mono", SFMono-Regular, "Cascadia Code", "DejaVu Sans Mono", ui-monospace, Menlo, Consolas, "Liberation Mono", monospace';
-    const fontPref = drive.info?.preferences?.terminal?.font ?? "os-default";
+    const fontPref = workspace.info?.preferences?.terminal?.font ?? "os-default";
     const fontFamily =
       fontPref === "source-code-pro"
         ? FONT_CHAIN_SOURCE_CODE_PRO
@@ -1096,7 +1096,7 @@
   /// pane / tab; the originating terminal's $CWD context isn't
   /// passed through (terminal spawn already inherits the
   /// terminal's CWD via the broker, but the FB / Graph toggles
-  /// open at the drive root — accepted deviation, matches the
+  /// open at the workspace root — accepted deviation, matches the
   /// existing empty-pane spawn-grid behavior).
   function dispatchChanCommand(id: string): void {
     window.dispatchEvent(
@@ -1145,7 +1145,7 @@
   function terminalCwdRel(): string | null {
     if (terminalCwdVirtual !== null) return terminalCwdVirtual;
     const abs = terminalCwdAbs;
-    const root = drive.info?.root;
+    const root = workspace.info?.root;
     if (!abs || !root) return null;
     const normAbs = abs.replace(/\\/g, "/").replace(/\/+$/, "");
     const normRoot = root.replace(/\\/g, "/").replace(/\/+$/, "");

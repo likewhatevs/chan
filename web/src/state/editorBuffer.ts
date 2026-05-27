@@ -4,7 +4,7 @@
 /// doesn't lose unsaved data.
 ///
 /// **`fullstack-a-82` keying fix**: keys on the file's
-/// drive-relative `path`, not the in-memory `tab.id`. Tab ids
+/// workspace-relative `path`, not the in-memory `tab.id`. Tab ids
 /// are module-counter-generated (`tab-<N>` from a `nextId`
 /// counter that resets on every page load), so a pre-`-a-82`
 /// `chan:editor-buffer:<tabId>` key written before a reload
@@ -52,14 +52,14 @@ const MAX_BUFFER_BYTES = 10 * 1024 * 1024;
 export interface EditorBuffer {
   /// Unsaved content as of the last debounced write.
   content: string;
-  /// Wall-clock ms since epoch of the last write. Drives the
+  /// Wall-clock ms since epoch of the last write. Workspaces the
   /// TTL eviction + the restore-banner "from <relative time>"
   /// affordance (future polish).
   updatedAt: number;
-  /// Drive-relative path of the tab when the buffer was
+  /// Workspace-relative path of the tab when the buffer was
   /// written. Used to invalidate buffers if the user reopens
   /// the tab against a different path (unlikely but defensive
-  /// — tab id collisions across drives shouldn't surface
+  /// — tab id collisions across workspaces shouldn't surface
   /// stale content from a different file).
   path: string;
 }

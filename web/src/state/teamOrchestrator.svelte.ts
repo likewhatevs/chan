@@ -88,8 +88,8 @@ export function memberHandle(member: TeamMemberDraft, autoPrefix: boolean): stri
 }
 
 /// `fullstack-a-79`: translate the SPA's camelCase
-/// `TeamDialogConfig` into the chan-drive snake_case
-/// `TeamConfigWire` shape that `Drive::create_team` accepts.
+/// `TeamDialogConfig` into the chan-workspace snake_case
+/// `TeamConfigWire` shape that `Workspace::create_team` accepts.
 /// `created_at` is set to the call time (ISO 8601 UTC) so the
 /// server gets a sortable timestamp. Member env strings are
 /// parsed into Records; CHAN_TAB_NAME gets auto-injected (per
@@ -126,7 +126,7 @@ export function translateConfig(config: TeamDialogConfig): TeamConfigWire {
 }
 
 /// `fullstack-a-80` slice 2: inverse of `translateConfig`.
-/// Maps the chan-drive snake_case wire shape back into the
+/// Maps the chan-workspace snake_case wire shape back into the
 /// SPA's camelCase `TeamDialogConfig` so the Load Team flow
 /// can open the dialog populated from
 /// `Drafts/team-{name}/config.toml`. The user edits, hits
@@ -161,7 +161,7 @@ export function wireToDialog(wire: TeamConfigWire): TeamDialogConfig {
     size: Math.max(members.length, 1),
     autoPrefix: wire.auto_prefix_at,
     members,
-    // chan-drive's Member doesn't persist real-estate today
+    // chan-workspace's Member doesn't persist real-estate today
     // (per systacean-30); default to tabs so the dialog opens
     // in a sane state. The user can switch to split + assign
     // members in slice 3+ once paneSplit lands.
@@ -178,7 +178,7 @@ export function wireToDialog(wire: TeamConfigWire): TeamDialogConfig {
 /// literally.
 ///
 /// Role asymmetry (verbatim @@Alex): the host (e.g. @@Alex)
-/// drives the team but mostly talks to the lead (e.g.
+/// workspaces the team but mostly talks to the lead (e.g.
 /// @@Architect); agents send events to the lead by default +
 /// accept direct queries from the host but never reach out to
 /// the host on their own initiative.
@@ -189,10 +189,10 @@ export function identityPrompt(
 ): string {
   // `Drafts/...` is a path in chan's workspace namespace, NOT a file
   // on the agent's filesystem: draft workspaces live in chan metadata
-  // OUTSIDE the drive root, so a plain read of `Drafts/...` relative to
-  // the agent's cwd (the drive root) finds nothing. Direct the agent to
+  // OUTSIDE the workspace root, so a plain read of `Drafts/...` relative to
+  // the agent's cwd (the workspace root) finds nothing. Direct the agent to
   // the chan MCP read_file tool, which resolves the Drafts/ namespace
-  // (see crates/chan-llm/src/prompts.rs). Plain drive paths are ordinary
+  // (see crates/chan-llm/src/prompts.rs). Plain workspace paths are ordinary
   // content and read as written, so only Drafts refs get the hint.
   const readStep = bootstrapDoc.startsWith("Drafts/")
     ? `read ${bootstrapDoc} with the chan MCP read_file tool ` +
@@ -223,7 +223,7 @@ export function templateVarsForWire(wire: TeamConfigWire): TeamTemplateVars {
     leadHandle,
     workerHandles,
     teamName: wire.team_name,
-    // chan-drive's TeamConfig doesn't persist a phase-slug
+    // chan-workspace's TeamConfig doesn't persist a phase-slug
     // today; new teams default to "phase-1" per
     // `teamTemplate.ts`'s helper. Chan's own bootstrap (the
     // architect-internal case) substitutes `phase-8` via
@@ -239,7 +239,7 @@ export function templateVarsForWire(wire: TeamConfigWire): TeamTemplateVars {
 /// round-trip. Substitutes `{host-handle}` / `{lead-handle}` /
 /// `{worker-N-handle}` / `{team-name}` / `{phase-slug}` via
 /// `substituteTeamTemplate`; writes to the team workspace's
-/// docs/ subdir (materialised by `Drive::create_team` in step
+/// docs/ subdir (materialised by `Workspace::create_team` in step
 /// 1).
 export async function placeTeamTemplates(wire: TeamConfigWire): Promise<void> {
   const vars = templateVarsForWire(wire);
@@ -331,7 +331,7 @@ export async function runTeamBootstrap(
   //    parameterised templates, write the bootstrap doc into
   //    the team workspace's docs/ subdir so each agent's
   //    `read docs/agents/bootstrap.md` directive resolves to a
-  //    pre-substituted file. `Drive::create_team` already
+  //    pre-substituted file. `Workspace::create_team` already
   //    materialised `Drafts/team-{name}/docs/` in step 1.
   //    Failures don't bail the whole chain, the watcher load
   //    + worker spawn still bring up a working team; just
@@ -365,9 +365,9 @@ export async function runTeamBootstrap(
   // `read docs/agents/bootstrap.md` resolves to the actual per-
   // team file written by `placeTeamTemplates` (slice 3), not the
   // stale chan-repo reference. CWD for workers spawned via the
-  // orchestrator is the drive root; the placed-template path is
+  // orchestrator is the workspace root; the placed-template path is
   // `Drafts/team-{name}/docs/bootstrap.md` per the unified-path
-  // chan-drive routing.
+  // chan-workspace routing.
   const bootstrapDoc = `Drafts/team-${wire.team_name}/docs/bootstrap.md`;
   const prompt = identityPrompt(wire.host_handle, leadHandle, bootstrapDoc);
   const spawnedWorkerTabs: NonNullable<ReturnType<typeof openTerminalInPane>>[] = [];

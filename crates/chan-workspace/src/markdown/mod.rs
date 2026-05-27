@@ -4,7 +4,7 @@
 // needs: ATX heading detection, YAML frontmatter, link extraction
 // (markdown + wiki), and reference-token extraction (#tag, @@mention,
 // YYYY-MM-DD). The smart-node serializer and wasm bindings stay in
-// the chan repo's editor-side code; chan-drive only sees plain
+// the chan repo's editor-side code; chan-workspace only sees plain
 // markdown on disk.
 //
 // All parsers are pure functions. They allocate but don't touch

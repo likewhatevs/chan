@@ -31,7 +31,7 @@
 // `<cache_dir>/models--<org>--<name>/snapshots/<rev>/`. We resolve
 // `config.json`, `tokenizer.json`, and `model.safetensors` from
 // there. The cache is per-machine (immutable model files,
-// identical across drives).
+// identical across workspaces).
 
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
@@ -90,7 +90,7 @@ const MAX_SEQ_LEN: usize = 512;
 /// chunks at a time (cross-file batching for throughput); running
 /// them as one tensor would allocate
 /// `[N, 512, hidden] * num_layers * activations` on the device, which
-/// exhausts GPU memory and stalls Metal indefinitely on large drives.
+/// exhausts GPU memory and stalls Metal indefinitely on large workspaces.
 /// 32 keeps activation memory under ~25 MB per layer for bge-small
 /// while still amortizing kernel-launch overhead. Tune up cautiously
 /// on machines with more VRAM.

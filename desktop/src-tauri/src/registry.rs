@@ -1,8 +1,8 @@
-//! Read-only mirror of the chan drive registry.
+//! Read-only mirror of the chan workspace registry.
 //!
-//! chan persists its registry of known drives at `~/.chan/config.toml`
+//! chan persists its registry of known workspaces at `~/.chan/config.toml`
 //! (see `chan_workspace::registry`). chan-desktop treats that file as the
-//! source of truth for which drives exist on this machine. We only
+//! source of truth for which workspaces exist on this machine. We only
 //! parse the subset we need; mutation goes through the `chan` binary.
 
 use std::path::PathBuf;
@@ -11,7 +11,7 @@ use serde::Deserialize;
 
 /// One entry in the chan registry. Mirrors the on-disk shape of
 /// `chan_workspace::registry::KnownWorkspace`. We deliberately keep this
-/// minimal: the desktop only needs the path for local drives.
+/// minimal: the desktop only needs the path for local workspaces.
 #[derive(Debug, Clone, Deserialize)]
 pub struct RegistryEntry {
     pub root_path: PathBuf,
@@ -20,7 +20,7 @@ pub struct RegistryEntry {
 #[derive(Debug, Default, Deserialize)]
 struct RegistryFile {
     #[serde(default)]
-    drives: Vec<RegistryEntry>,
+    workspaces: Vec<RegistryEntry>,
 }
 
 /// Absolute path to the chan registry file. `~/.chan/config.toml` on
@@ -32,7 +32,7 @@ pub fn path() -> PathBuf {
 }
 
 /// Read the registry. Missing file is not an error: it means the
-/// user has not registered any drives yet. A malformed file is an
+/// user has not registered any workspaces yet. A malformed file is an
 /// error: we never silently ignore a parse failure since that would
 /// hide a corrupt user config.
 pub fn read() -> std::io::Result<Vec<RegistryEntry>> {
@@ -44,5 +44,5 @@ pub fn read() -> std::io::Result<Vec<RegistryEntry>> {
     };
     let parsed: RegistryFile = toml::from_str(&raw)
         .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
-    Ok(parsed.drives)
+    Ok(parsed.workspaces)
 }

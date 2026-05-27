@@ -3,13 +3,13 @@
   // + PIN entry. Mounted at App root + gated on
   // `screensaver.locked`. While locked:
   //
-  // * The entire drive view sits behind an opaque overlay.
+  // * The entire workspace view sits behind an opaque overlay.
   // * PIN input is the only focusable surface (the overlay's
   //   role="dialog" + aria-modal="true" telegraphs that to
   //   ATs).
   // * Esc / clicking the backdrop do NOT dismiss. The only
-  //   way out is a correct PIN (or no-PIN drives where the
-  //   chan-drive layer returns `verified: false` regardless,
+  //   way out is a correct PIN (or no-PIN workspaces where the
+  //   chan-workspace layer returns `verified: false` regardless,
   //   matching the "lockout is moot" framing).
   // * Wrong PIN triggers a 400ms shake + clears the input.
   //   No rate limiting (local-only threat model per the task
@@ -30,7 +30,7 @@
     unlockWithPin,
     unlockWithoutPin,
   } from "../state/screensaver.svelte";
-  import { drive } from "../state/store.svelte";
+  import { workspace } from "../state/store.svelte";
   import MatrixRain from "./screensaver/MatrixRain.svelte";
 
   let pin = $state("");
@@ -64,8 +64,8 @@
   });
 
   /// Focus the unlock surface only after the wake input has
-  /// revealed it. PIN drives focus the password field; no-PIN
-  /// drives keep focus on the backdrop so any later input can
+  /// revealed it. PIN workspaces focus the password field; no-PIN
+  /// workspaces keep focus on the backdrop so any later input can
   /// dismiss.
   $effect(() => {
     if (!screensaver.locked || !cardVisible) return;
@@ -112,7 +112,7 @@
     }
     busy = true;
     errorMessage = null;
-    const salt = drive.info?.root ?? "";
+    const salt = workspace.info?.root ?? "";
     const ok = await unlockWithPin(pin, salt);
     busy = false;
     if (!ok) {
@@ -122,7 +122,7 @@
       shake = true;
       errorMessage = screensaver.pin_set
         ? "Wrong PIN"
-        : "No PIN set on this drive. Open Settings to configure.";
+        : "No PIN set on this workspace. Open Settings to configure.";
       pin = "";
       // Reset the shake class after the animation finishes
       // so a subsequent wrong-PIN attempt re-triggers it.
@@ -197,7 +197,7 @@
                promises "any input unlocks"; after the wake input,
                the backdrop's onkeydown + onclick handlers fulfill it. -->
           <p class="screensaver-sub">
-            No PIN set on this drive. Press any key or click to
+            No PIN set on this workspace. Press any key or click to
             unlock.
           </p>
         {/if}

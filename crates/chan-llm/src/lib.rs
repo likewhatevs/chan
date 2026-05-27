@@ -1,4 +1,4 @@
-//! chan-llm: MCP-facing prompts and tool sandbox for chan drives.
+//! chan-llm: MCP-facing prompts and tool sandbox for chan workspaces.
 //!
 //! The in-app Agent session layer was removed in phase 5. The
 //! supported surface is now the MCP server plus the shared tool

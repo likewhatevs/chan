@@ -14,8 +14,8 @@
   // hamburger menu (per the spec).
   //
   // Slide 1 (Welcome) is the pre-fullstack-35 placeholder content
-  // verbatim: chan-mark, drive dashboard header, "scope-for-graph"
-  // hint, and the shortcut table. Slide 2 surfaces drive metadata
+  // verbatim: chan-mark, workspace dashboard header, "scope-for-graph"
+  // hint, and the shortcut table. Slide 2 surfaces workspace metadata
   // (file kind breakdown + total bytes on disk) from the existing
   // tree listing. Slide 3 (Indexing graph) is a directory-only
   // radial layout fed by `GET /api/indexing/state` — colors track
@@ -25,7 +25,7 @@
   import { onDestroy } from "svelte";
   import { api } from "../api/client";
   import type { IndexingStateNode, IndexingStateResponse } from "../api/types";
-  import { drive, indexStatus, tree, ui } from "../state/store.svelte";
+  import { workspace, indexStatus, tree, ui } from "../state/store.svelte";
   import {
     currentOS,
     currentPlatform,
@@ -58,10 +58,10 @@
   const os = currentOS();
   const shortcutTable = renderTable(platform, os);
 
-  // ---- drive summary -----------------------------------------------------
+  // ---- workspace summary -----------------------------------------------------
   //
   // `fullstack-55` dropped the stats row under the brand mark on
-  // slide 1, taking the `driveSummary` derived with it. Slide 2's
+  // slide 1, taking the `workspaceSummary` derived with it. Slide 2's
   // `metadata` derived keeps its own per-kind tallies for the bar
   // chart, so there's no other consumer to feed from here.
 
@@ -127,7 +127,7 @@
 
   /// Single-bar stacked breakdown for the metadata slide. Returns
   /// the file-kind segments only (directories aren't sized so they
-  /// don't fit a "how much space is what" view). Empty drives
+  /// don't fit a "how much space is what" view). Empty workspaces
   /// render as a 100% --bg-elev segment so the bar still draws.
   type Segment = { key: string; label: string; count: number; color: string };
   const fileSegments = $derived.by<Segment[]>(() => {
@@ -187,8 +187,8 @@
   }
 
   /// Build a parent → children adjacency map from the flat node
-  /// list. The endpoint returns drive-relative paths; we keep the
-  /// root sentinel ("" for the drive root) separate so the layout
+  /// list. The endpoint returns workspace-relative paths; we keep the
+  /// root sentinel ("" for the workspace root) separate so the layout
   /// can anchor on it. Path separation is purely string-based to
   /// stay decoupled from the server's filesystem convention.
   type Hierarchy = {
@@ -298,7 +298,7 @@
   /// Same label rule as the main graph (fullstack-32): paint
   /// labels for the selected node plus its immediate neighbors
   /// (parent + direct children). Without a selection we label
-  /// the root only so the user can see they're at the drive
+  /// the root only so the user can see they're at the workspace
   /// origin.
   const labeledPaths = $derived.by<Set<string>>(() => {
     const h = hierarchy;
@@ -330,7 +330,7 @@
   // ---- indexing chart pan / zoom (fullstack-b-4) --------------------------
 
   /// SVG-space transform for the indexing graph. The chart used to
-  /// render at a fixed `viewBox="0 0 280 280"` and clipped any drive
+  /// render at a fixed `viewBox="0 0 280 280"` and clipped any workspace
   /// whose hierarchy extended past the viewport. Wrapping the
   /// edges + nodes groups in a transform-driven `<g>` plus a
   /// pointer drag + wheel zoom on the SVG gives parity with the
@@ -452,7 +452,7 @@
   /// `undefined` (older servers without the field) reads as
   /// "auto-rotate on".
   const cycling = $derived<boolean>(
-    drive.info?.preferences?.empty_pane_carousel_cycling ?? true,
+    workspace.info?.preferences?.empty_pane_carousel_cycling ?? true,
   );
   const paused = $derived(hovering || focused || !cycling);
   let containerEl: HTMLDivElement | undefined = $state();
@@ -473,11 +473,11 @@
 
   async function toggleCycling(): Promise<void> {
     const next = !cycling;
-    if (drive.info) {
-      drive.info = {
-        ...drive.info,
+    if (workspace.info) {
+      workspace.info = {
+        ...workspace.info,
         preferences: {
-          ...drive.info.preferences,
+          ...workspace.info.preferences,
           empty_pane_carousel_cycling: next,
         },
       };
@@ -563,14 +563,14 @@
       </div>
     {:else if slideIndex === 1}
       <!-- Slide 2 — Metadata. Stacked bar of file kinds across
-           the drive plus a small stats footer. Approximate is
+           the workspace plus a small stats footer. Approximate is
            fine per the task spec; this is a UX-experimentation
            surface, not a billing dashboard. -->
-      <div class="slide slide-metadata" aria-label="Drive metadata">
-        <div class="slide-title">Drive metadata</div>
+      <div class="slide slide-metadata" aria-label="Workspace metadata">
+        <div class="slide-title">Workspace metadata</div>
         <div class="metadata-bar" role="img" aria-label="file kind breakdown">
           {#if totalFiles === 0}
-            <div class="bar-empty">empty drive</div>
+            <div class="bar-empty">empty workspace</div>
           {:else}
             {#each fileSegments as seg (seg.key)}
               <div
@@ -823,7 +823,7 @@
      / `.dashboard-header` / `.dashboard-name` selectors along
      with the welcome slide they styled. The static welcome
      surface lives in EmptyPaneWelcome.svelte now; the carousel
-     only renders Shortcuts / Drive metadata / Indexing graph. */
+     only renders Shortcuts / Workspace metadata / Indexing graph. */
   .slide-shortcuts {
     align-items: center;
   }

@@ -1,7 +1,7 @@
-//! Embedded local-drive server for chan-desktop.
+//! Embedded local-workspace server for chan-desktop.
 //!
 //! This owns one loopback listener for the desktop process and
-//! mounts local drives into chan-server's multi-drive host.
+//! mounts local workspaces into chan-server's multi-workspace host.
 
 use std::net::{Ipv4Addr, SocketAddr, TcpListener};
 use std::path::Path;
@@ -21,7 +21,7 @@ pub struct EmbeddedServer {
 impl EmbeddedServer {
     pub async fn start() -> Result<Self, String> {
         let library = chan_workspace::Library::open()
-            .map_err(|e| format!("opening chan drive registry for embedded server: {e}"))?;
+            .map_err(|e| format!("opening chan workspace registry for embedded server: {e}"))?;
         let host = Arc::new(chan_server::WorkspaceHost::new(library));
         let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0))
             .map_err(|e| format!("binding embedded chan server: {e}"))?;
@@ -61,15 +61,15 @@ impl EmbeddedServer {
         Ok(hosted.handle.launch_url())
     }
 
-    /// Shared drive registry handle owned by the embedded host.
+    /// Shared workspace registry handle owned by the embedded host.
     /// Every desktop registry mutation and feature toggle routes
     /// through this single `Library` so the in-memory registry the
-    /// host opens drives against never goes stale relative to disk.
+    /// host opens workspaces against never goes stale relative to disk.
     pub fn library(&self) -> &chan_workspace::Library {
         self.host.library()
     }
 
-    /// Live `Arc<Workspace>` for a mounted drive, or `None` when the
+    /// Live `Arc<Workspace>` for a mounted workspace, or `None` when the
     /// path isn't currently mounted. Feature toggles use this to
     /// reach the SAME handle the runtime holds instead of re-opening
     /// (which would hit `WorkspaceAlreadyOpen` against the lifetime
@@ -92,9 +92,9 @@ impl Drop for EmbeddedServer {
     }
 }
 
-/// Map an embedded open error to a user-facing string. A drive
+/// Map an embedded open error to a user-facing string. A workspace
 /// already held by another chan process (typically a standalone
-/// `chan serve <drive>` started before the desktop tried to mount
+/// `chan serve <workspace>` started before the desktop tried to mount
 /// it) surfaces as `WorkspaceLocked`; an in-process handle that hasn't
 /// dropped yet surfaces as `WorkspaceAlreadyOpen`. Both reach the SPA
 /// verbatim and revert the row's On toggle, so they must read as a
@@ -103,9 +103,9 @@ fn map_open_error(key: &str, e: chan_server::Error) -> String {
     use chan_workspace::ChanError;
     match e {
         chan_server::Error::Core(ChanError::WorkspaceLocked | ChanError::WorkspaceAlreadyOpen) => {
-            "This drive is open in another chan process. Quit it and try again.".to_string()
+            "This workspace is open in another chan process. Quit it and try again.".to_string()
         }
-        other => format!("opening embedded drive {key}: {other}"),
+        other => format!("opening embedded workspace {key}: {other}"),
     }
 }
 
@@ -145,7 +145,7 @@ mod tests {
     fn prefix_for_key_uses_drive_window_prefix() {
         let key = "/tmp/chan notes";
         let prefix = prefix_for_key(key);
-        assert!(prefix.starts_with("/drive-"));
+        assert!(prefix.starts_with("/workspace-"));
         assert_eq!(prefix, format!("/{}", serve::drive_window_prefix(key)));
     }
 }

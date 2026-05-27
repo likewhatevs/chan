@@ -25,7 +25,7 @@
     currentPlatform,
     formatChord,
   } from "../state/shortcuts";
-  import { drive } from "../state/store.svelte";
+  import { workspace } from "../state/store.svelte";
 
   type Props = {
     /// Right-click forwarder. Pane.svelte wires this to the
@@ -112,9 +112,9 @@
   {oncontextmenu}
 >
   <div class="welcome-mark"></div>
-  {#if drive.info}
-    <div class="welcome-header" aria-label="drive summary">
-      <div class="welcome-name" title={drive.info.root}>{drive.info.label ?? "(drive)"}</div>
+  {#if workspace.info}
+    <div class="welcome-header" aria-label="workspace summary">
+      <div class="welcome-name" title={workspace.info.root}>{workspace.info.label ?? "(workspace)"}</div>
     </div>
   {/if}
   <div class="spawn-row" aria-label="spawn">
@@ -152,7 +152,7 @@
        welcome hint dropped. @@Alex 2026-05-23: "we no longer
        have the concept of scope since we transitioned to
        using the filesystem as the backbone of the graph".
-       Picker-driven scope (drive / dir / file / tag /
+       Picker-driven scope (workspace / dir / file / tag /
        git_repo) is the active concept; that picker lives in
        the graph overlay's chrome, not the welcome surface. -->
 </div>

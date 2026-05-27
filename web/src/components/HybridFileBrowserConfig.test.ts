@@ -8,10 +8,10 @@ import shell from "./HybridSurfaceConfigShell.svelte?raw";
 // HybridFileBrowserConfig. Three toggles ship in v1: Semantic
 // search (moved verbatim from `-a-21`), multi-model picker
 // placeholder (Round-3 Track 2 future slot), chan-reports through
-// the per-drive reports endpoints.
+// the per-workspace reports endpoints.
 
 describe("fullstack-a-48: HybridFileBrowserConfig wiring", () => {
-  test("warning copy distinguishes drive-wide scope from per-FB-pane", () => {
+  test("warning copy distinguishes workspace-wide scope from per-FB-pane", () => {
     expect(source).toMatch(
       /These settings apply to ALL file-browser surfaces/,
     );
@@ -48,7 +48,7 @@ describe("fullstack-a-48: HybridFileBrowserConfig wiring", () => {
     expect(source).toMatch(/\.toFixed\(1\)/);
   });
 
-  test("Multi-model picker renders the loaded registry as an enabled drive-wide picker", () => {
+  test("Multi-model picker renders the loaded registry as an enabled workspace-wide picker", () => {
     expect(source).toMatch(/<h3>Embedding model<\/h3>/);
     expect(source).toMatch(/let semanticModels = \$state<SemanticModelRegistry \| null>\(null\)/);
     expect(source).toMatch(/api\.semanticModels\(\)/);
@@ -62,7 +62,7 @@ describe("fullstack-a-48: HybridFileBrowserConfig wiring", () => {
     expect(source).not.toMatch(/backend ships a model registry/);
   });
 
-  test("chan-reports toggle uses per-drive reports endpoints", () => {
+  test("chan-reports toggle uses per-workspace reports endpoints", () => {
     expect(source).toMatch(/<h3>chan-reports<\/h3>/);
     expect(source).toMatch(/function setReportsEnabled\(next: boolean\)/);
     expect(source).toMatch(/api\.reportsEnable\(\)/);

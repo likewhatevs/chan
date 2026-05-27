@@ -5,7 +5,7 @@
   import ConflictModal from "./components/ConflictModal.svelte";
   import DisconnectOverlay from "./components/DisconnectOverlay.svelte";
   import DraftCloseModal from "./components/DraftCloseModal.svelte";
-  import DriveWarningsModal from "./components/DriveWarningsModal.svelte";
+  import WorkspaceWarningsModal from "./components/WorkspaceWarningsModal.svelte";
   import SpawnDialog from "./components/SpawnDialog.svelte";
   import TeamDialog from "./components/TeamDialog.svelte";
   import { teamDialogState } from "./state/teamDialog.svelte";
@@ -25,7 +25,7 @@
     browserSelection,
     browserSidePanes,
     closeOverlay,
-    drive,
+    workspace,
     fileOps,
     openGraph,
     openGraphWithContext,
@@ -35,7 +35,7 @@
     persistLayoutToHash,
     promptState,
     reconnectWatcher,
-    refreshDrive,
+    refreshWorkspace,
     refreshTree,
     resolveSpawnContext,
     revealAndSelect,
@@ -222,15 +222,15 @@
   });
 
   // Push the active editor theme onto the document root whenever
-  // the server-known drive info changes. The CSS in editor/themes/*
+  // the server-known workspace info changes. The CSS in editor/themes/*
   // keys typography + chrome off this attribute.
   $effect(() => {
-    const theme = drive.info?.preferences?.editor_theme;
+    const theme = workspace.info?.preferences?.editor_theme;
     applyEditorTheme(theme ?? DEFAULT_EDITOR_THEME);
   });
 
   // Single-writer bridge from per-tab read mode to the window-level
-  // readMode flag (which drives the bottom pill's grey state and
+  // readMode flag (which workspaces the bottom pill's grey state and
   // the idle tracker's read-mode timing window). Computing this in
   // App.svelte means there's exactly one effect mutating the
   // signal regardless of how many panes are open, which avoids the
@@ -270,7 +270,7 @@
     // floating pills fade. Any input flips them back on.
     installIdleTracker();
     // `fullstack-a-77` slice 2: screensaver inactivity
-    // tracker. Different cadence (default 5 min, per-drive
+    // tracker. Different cadence (default 5 min, per-workspace
     // configurable) + wider event set (keydown + scroll +
     // pointer move; opposite of `installIdleTracker`'s
     // short-window trigger set). Tracker installs the
@@ -292,7 +292,7 @@
     // + shortcut hints carry the empty-state UX.
     bootstrapped = true;
     // `fullstack-a-77` slice 2: fire-and-forget load of the
-    // per-drive screensaver state. Tracker is already
+    // per-workspace screensaver state. Tracker is already
     // installed above; the load populates the singleton with
     // the server-side enabled/timeout/pin_set view. Failure
     // is non-fatal (the singleton stays in its default
@@ -311,7 +311,7 @@
         resumeTimer = null;
         reconnectWatcher();
         void refreshTree();
-        void refreshDrive();
+        void refreshWorkspace();
       }, 300);
     }
     document.addEventListener("visibilitychange", onVisibility);
@@ -733,7 +733,7 @@
       return;
     }
     // `phase-12 lane-e` (addendum-2): Cmd+S (Ctrl+S non-Mac) opens
-    // drive-wide search. Reclaims the chord dropped in fullstack-56
+    // workspace-wide search. Reclaims the chord dropped in fullstack-56
     // (save went autosave-only). @@Alex Q5 explicitly authorizes
     // preventDefault here to suppress the browser save-page dialog.
     // On chan-desktop KEY_BRIDGE_JS replays Cmd+S as app.search.toggle
@@ -795,7 +795,7 @@
     }
     // `fullstack-a-66`: Cmd+N (Ctrl+N on non-Mac) — New Draft.
     // Calls /api/drafts/new which creates a fresh
-    // `Drafts/<untitled-N>/draft.md` via chan-drive's
+    // `Drafts/<untitled-N>/draft.md` via chan-workspace's
     // unified-path API + indexes it. The returned unified path
     // opens in the active pane like any other file (post-`-26`
     // the editor's read/write goes through the same Drafts/-
@@ -899,7 +899,7 @@
     // Desktop only - the browser owns its own window/tab lifecycle on
     // web, where this stays a no-op (Cmd+W falls through to the
     // browser). request_close_window shows the launcher, then closes
-    // this drive window (the launcher's CloseRequested hides rather
+    // this workspace window (the launcher's CloseRequested hides rather
     // than destroys it, so re-showing is instant).
     if (leafPaneCount() <= 1) {
       if (isTauriDesktop()) {
@@ -1228,7 +1228,7 @@
 <PathPromptModal />
 <ConfirmModal />
 <DraftCloseModal />
-<DriveWarningsModal />
+<WorkspaceWarningsModal />
 <SearchPanel />
 <SearchStatusOverlay />
 <SettingsPanel />

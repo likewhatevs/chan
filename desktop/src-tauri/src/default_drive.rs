@@ -1,6 +1,6 @@
-//! First-launch default drive creation.
+//! First-launch default workspace creation.
 //!
-//! Fresh desktop installs get a user-owned `Chan` drive under the
+//! Fresh desktop installs get a user-owned `Chan` workspace under the
 //! platform Documents directory, seeded from `docs/manual/`. This
 //! path is intentionally narrow: existing registries are migrated only
 //! through explicit user choices in the launcher.
@@ -34,7 +34,7 @@ pub struct DefaultWorkspaceStatus {
     pub default_root: Option<String>,
     pub missing_default_root: Option<String>,
     pub suggested_root: String,
-    pub drives: Vec<DefaultWorkspaceCandidate>,
+    pub workspaces: Vec<DefaultWorkspaceCandidate>,
 }
 
 #[derive(Debug, Clone)]
@@ -43,18 +43,18 @@ struct ManualSeedFile {
     bytes: Cow<'static, [u8]>,
 }
 
-/// Create and seed the default drive only when chan metadata has no
-/// registered drives and no configured default root.
+/// Create and seed the default workspace only when chan metadata has no
+/// registered workspaces and no configured default root.
 pub fn ensure_fresh_default_drive() -> Result<Option<CreatedDefaultWorkspace>, String> {
     let config_path = chan_workspace::paths::global_config_path();
-    let root = desktop_default_drive_root();
+    let root = desktop_default_workspace_root();
     let files = embedded_manual_files();
     ensure_fresh_default_drive_at(&config_path, &root, files)
 }
 
 pub fn status() -> Result<DefaultWorkspaceStatus, String> {
     let config_path = chan_workspace::paths::global_config_path();
-    status_at(&config_path, &desktop_default_drive_root())
+    status_at(&config_path, &desktop_default_workspace_root())
 }
 
 pub fn choose_existing(path: &Path) -> Result<PathBuf, String> {
@@ -62,17 +62,17 @@ pub fn choose_existing(path: &Path) -> Result<PathBuf, String> {
     choose_existing_at(&config_path, path)
 }
 
-pub fn create_default_drive() -> Result<CreatedDefaultWorkspace, String> {
+pub fn create_default_workspace() -> Result<CreatedDefaultWorkspace, String> {
     let config_path = chan_workspace::paths::global_config_path();
-    let root = desktop_default_drive_root();
+    let root = desktop_default_workspace_root();
     let files = embedded_manual_files();
     create_default_drive_at(&config_path, &root, files)
 }
 
-pub fn factory_reset_default_drive() -> Result<CreatedDefaultWorkspace, String> {
+pub fn factory_reset_default_workspace() -> Result<CreatedDefaultWorkspace, String> {
     let config_path = chan_workspace::paths::global_config_path();
     let metadata_dir = chan_workspace::paths::config_dir();
-    let root = desktop_default_drive_root();
+    let root = desktop_default_workspace_root();
     let files = embedded_manual_files();
     factory_reset_default_drive_at(&config_path, &metadata_dir, &root, files)
 }
@@ -97,21 +97,24 @@ fn create_default_drive_at(
     files: Vec<ManualSeedFile>,
 ) -> Result<CreatedDefaultWorkspace, String> {
     std::fs::create_dir_all(root)
-        .map_err(|e| format!("creating default drive root {}: {e}", root.display()))?;
+        .map_err(|e| format!("creating default workspace root {}: {e}", root.display()))?;
     let lib = Library::open_at(config_path.to_path_buf())
         .map_err(|e| format!("opening chan library {}: {e}", config_path.display()))?;
     let entry = lib
         .register_workspace(root)
-        .map_err(|e| format!("registering default drive {}: {e}", root.display()))?;
-    let drive = lib
-        .open_workspace(&entry.root_path)
-        .map_err(|e| format!("opening default drive {}: {e}", entry.root_path.display()))?;
-    let seeded_files = seed_manual_files(&drive, files)?;
-    drop(drive);
-    lib.set_default_drive_root(Some(entry.root_path.clone()))
+        .map_err(|e| format!("registering default workspace {}: {e}", root.display()))?;
+    let workspace = lib.open_workspace(&entry.root_path).map_err(|e| {
+        format!(
+            "opening default workspace {}: {e}",
+            entry.root_path.display()
+        )
+    })?;
+    let seeded_files = seed_manual_files(&workspace, files)?;
+    drop(workspace);
+    lib.set_default_workspace_root(Some(entry.root_path.clone()))
         .map_err(|e| {
             format!(
-                "persisting default drive root {}: {e}",
+                "persisting default workspace root {}: {e}",
                 entry.root_path.display()
             )
         })?;
@@ -135,12 +138,12 @@ fn status_at(config_path: &Path, suggested_root: &Path) -> Result<DefaultWorkspa
     let needs_prompt = if needs_factory_reset {
         false
     } else if registry.default_workspace_root.is_none() {
-        !registry.drives.is_empty()
+        !registry.workspaces.is_empty()
     } else {
         missing_default.is_some()
     };
-    let drives: Vec<DefaultWorkspaceCandidate> = registry
-        .drives
+    let workspaces: Vec<DefaultWorkspaceCandidate> = registry
+        .workspaces
         .iter()
         .filter(|d| drive_root_available(&d.root_path))
         .map(|d| DefaultWorkspaceCandidate {
@@ -156,7 +159,7 @@ fn status_at(config_path: &Path, suggested_root: &Path) -> Result<DefaultWorkspa
             .map(|p| p.display().to_string()),
         missing_default_root: missing_default.map(|p| p.display().to_string()),
         suggested_root: suggested_root.display().to_string(),
-        drives,
+        workspaces,
     })
 }
 
@@ -169,17 +172,17 @@ fn factory_reset_default_drive_at(
     let registry = Registry::load_from(config_path)
         .map_err(|e| format!("loading chan registry {}: {e}", config_path.display()))?;
     let Some(default_root) = registry.default_workspace_root else {
-        return Err("factory reset requires a configured default drive".into());
+        return Err("factory reset requires a configured default workspace".into());
     };
     if drive_root_available(&default_root) {
         return Err(format!(
-            "default drive {} still exists; factory reset is not needed",
+            "default workspace {} still exists; factory reset is not needed",
             default_root.display()
         ));
     }
     if !same_path(&default_root, root) {
         return Err(format!(
-            "missing default drive {} is not the desktop Chan drive {}",
+            "missing default workspace {} is not the desktop Chan workspace {}",
             default_root.display(),
             root.display()
         ));
@@ -193,17 +196,17 @@ fn choose_existing_at(config_path: &Path, path: &Path) -> Result<PathBuf, String
         .map_err(|e| format!("loading chan registry {}: {e}", config_path.display()))?;
     let entry = registry
         .find(path)
-        .ok_or_else(|| format!("drive {} is not registered", path.display()))?;
+        .ok_or_else(|| format!("workspace {} is not registered", path.display()))?;
     let root = entry.root_path.clone();
     let lib = Library::open_at(config_path.to_path_buf())
         .map_err(|e| format!("opening chan library {}: {e}", config_path.display()))?;
-    lib.set_default_drive_root(Some(root.clone()))
-        .map_err(|e| format!("persisting default drive root {}: {e}", root.display()))?;
+    lib.set_default_workspace_root(Some(root.clone()))
+        .map_err(|e| format!("persisting default workspace root {}: {e}", root.display()))?;
     Ok(root)
 }
 
 fn is_fresh_registry(registry: &Registry) -> bool {
-    registry.drives.is_empty() && registry.default_workspace_root.is_none()
+    registry.workspaces.is_empty() && registry.default_workspace_root.is_none()
 }
 
 fn drive_root_available(root: &Path) -> bool {
@@ -253,7 +256,7 @@ fn wipe_chan_metadata_contents(dir: &Path) -> Result<(), String> {
     Ok(())
 }
 
-fn desktop_default_drive_root() -> PathBuf {
+fn desktop_default_workspace_root() -> PathBuf {
     if let Some(docs) = dirs::document_dir() {
         return docs.join("Chan");
     }
@@ -276,25 +279,25 @@ fn embedded_manual_files() -> Vec<ManualSeedFile> {
 }
 
 fn seed_manual_files(
-    drive: &chan_workspace::Workspace,
+    workspace: &chan_workspace::Workspace,
     files: Vec<ManualSeedFile>,
 ) -> Result<usize, String> {
     let mut seeded = 0usize;
     for file in files {
         let rel = validate_manual_rel(&file.rel)?;
-        if drive.exists(rel) {
+        if workspace.exists(rel) {
             continue;
         }
         match chan_workspace::classify(rel) {
             FileClass::EditableText | FileClass::Text => match std::str::from_utf8(&file.bytes) {
-                Ok(text) => drive
+                Ok(text) => workspace
                     .write_text(rel, text)
                     .map_err(|e| format!("seeding manual file {rel}: {e}"))?,
-                Err(_) => drive
+                Err(_) => workspace
                     .write_bytes(rel, &file.bytes)
                     .map_err(|e| format!("seeding manual file {rel}: {e}"))?,
             },
-            _ => drive
+            _ => workspace
                 .write_bytes(rel, &file.bytes)
                 .map_err(|e| format!("seeding manual file {rel}: {e}"))?,
         }
@@ -351,17 +354,17 @@ mod tests {
     #[test]
     fn status_prompts_when_drives_exist_without_default() {
         let cfg = TempDir::new().unwrap();
-        let drive = TempDir::new().unwrap();
+        let workspace = TempDir::new().unwrap();
         let config_path = cfg.path().join("config.toml");
         let mut registry = Registry::default();
-        registry.touch(drive.path());
+        registry.touch(workspace.path());
         registry.save_to(&config_path).unwrap();
 
         let status = status_at(&config_path, &cfg.path().join("Chan")).unwrap();
         assert!(status.needs_prompt);
         assert!(!status.needs_factory_reset);
         assert_eq!(status.default_root, None);
-        assert_eq!(status.drives.len(), 1);
+        assert_eq!(status.workspaces.len(), 1);
     }
 
     #[test]
@@ -384,7 +387,7 @@ mod tests {
             status.missing_default_root,
             Some(root.display().to_string()),
         );
-        assert!(status.drives.is_empty());
+        assert!(status.workspaces.is_empty());
     }
 
     #[test]
@@ -408,19 +411,19 @@ mod tests {
             status.missing_default_root,
             Some(root.display().to_string()),
         );
-        assert!(status.drives.is_empty());
+        assert!(status.workspaces.is_empty());
     }
 
     #[test]
     fn choose_existing_sets_default_root_for_registered_drive() {
         let cfg = TempDir::new().unwrap();
-        let drive = TempDir::new().unwrap();
+        let workspace = TempDir::new().unwrap();
         let config_path = cfg.path().join("config.toml");
         let mut registry = Registry::default();
-        registry.touch(drive.path());
+        registry.touch(workspace.path());
         registry.save_to(&config_path).unwrap();
 
-        let chosen = choose_existing_at(&config_path, drive.path()).unwrap();
+        let chosen = choose_existing_at(&config_path, workspace.path()).unwrap();
         let status = status_at(&config_path, &cfg.path().join("Chan")).unwrap();
         assert_eq!(status.default_root, Some(chosen.display().to_string()));
         assert!(!status.needs_prompt);
@@ -442,7 +445,7 @@ mod tests {
 
         let created = create_default_drive_at(&config_path, &root, files).unwrap();
         let registry = Registry::load_from(&config_path).unwrap();
-        assert_eq!(registry.drives.len(), 2);
+        assert_eq!(registry.workspaces.len(), 2);
         assert_eq!(registry.default_workspace_root, Some(created.root));
     }
 
@@ -478,16 +481,16 @@ mod tests {
 
         let err = factory_reset_default_drive_at(&config_path, cfg.path(), &suggested, Vec::new())
             .unwrap_err();
-        assert!(err.contains("is not the desktop Chan drive"));
+        assert!(err.contains("is not the desktop Chan workspace"));
     }
 
     #[test]
     fn wipe_chan_metadata_contents_keeps_root_and_removes_children() {
         let cfg = TempDir::new().unwrap();
         let dir = cfg.path().join(".chan");
-        std::fs::create_dir_all(dir.join("drives").join("old")).unwrap();
+        std::fs::create_dir_all(dir.join("workspaces").join("old")).unwrap();
         std::fs::write(dir.join("config.toml"), "old").unwrap();
-        std::fs::write(dir.join("drives").join("old").join("index"), "old").unwrap();
+        std::fs::write(dir.join("workspaces").join("old").join("index"), "old").unwrap();
 
         wipe_chan_metadata_contents(&dir).unwrap();
 

@@ -20,7 +20,7 @@ use super::Contact;
 /// directory.
 const MAX_BASE_BYTES: usize = 120;
 
-/// Pick a filename for `c`, returning a drive-relative path under
+/// Pick a filename for `c`, returning a workspace-relative path under
 /// `dir`. `taken` is the set of paths already chosen in this batch;
 /// this fn updates it with the chosen path. `unnamed_counter` is a
 /// single monotonic counter the caller threads across all contacts
@@ -34,8 +34,8 @@ const MAX_BASE_BYTES: usize = 120;
 /// so the caller can apply skip/overwrite semantics on the exact name
 /// the contact resolves to.
 ///
-/// `dir` is a drive-relative directory in POSIX form (e.g.,
-/// `"Contacts"`); empty string means the drive root.
+/// `dir` is a workspace-relative directory in POSIX form (e.g.,
+/// `"Contacts"`); empty string means the workspace root.
 pub fn slug_for(
     c: &Contact,
     dir: &str,

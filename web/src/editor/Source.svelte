@@ -18,7 +18,7 @@
     indentWithTab,
   } from "@codemirror/commands";
   import { markdown } from "@codemirror/lang-markdown";
-  import { drive, effectiveHybridSurfaceTheme } from "../state/store.svelte";
+  import { workspace, effectiveHybridSurfaceTheme } from "../state/store.svelte";
   import {
     createValueSync,
     findField,
@@ -43,7 +43,7 @@
     if (value === "compact" || value === "tight") return "compact";
     return "standard";
   }
-  const density = $derived(editorDensity(drive.info?.preferences?.line_spacing));
+  const density = $derived(editorDensity(workspace.info?.preferences?.line_spacing));
 
   let {
     value = $bindable(""),
@@ -57,7 +57,7 @@
     onCaretChange,
   }: {
     value: string;
-    /// Drive-relative file path. Drives the language pack picked for
+    /// Workspace-relative file path. Workspaces the language pack picked for
     /// syntax highlighting. Empty / pathless callers get plain text.
     path?: string;
     readonly?: boolean;
@@ -112,7 +112,7 @@
   let lastLanguageKey: string | null = null;
 
   /// Find-on-page adapter. FileEditorTab passes whichever editor is
-  /// currently visible to FindBar; the bar drives matches + decorations
+  /// currently visible to FindBar; the bar workspaces matches + decorations
   /// through this surface. Shared shape with the WYSIWYG adapter via
   /// editor-cm6/base.ts.
   export const findAdapter: FindAdapter = makeFindAdapter(() => view);
@@ -378,7 +378,7 @@
     background: var(--bg);
     box-sizing: border-box;
   }
-  /* Source mode uses the drive's "code" font preference (it is
+  /* Source mode uses the workspace's "code" font preference (it is
      a code editor, after all). */
   :global(.md-source .cm-editor) {
     height: 100%;

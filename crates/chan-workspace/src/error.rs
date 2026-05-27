@@ -12,25 +12,25 @@ pub type Result<T> = std::result::Result<T, ChanError>;
 pub enum ChanError {
     #[error("path is empty")]
     PathEmpty,
-    #[error("path escapes drive root")]
+    #[error("path escapes workspace root")]
     PathEscape,
     #[error("path is not editable text: {0}")]
     NotEditableText(String),
     #[error("refusing to operate on non-regular file ({kind}): {path}")]
     SpecialFile { kind: String, path: PathBuf },
-    #[error("path resolves through a symlink that escapes drive root: {0}")]
+    #[error("path resolves through a symlink that escapes workspace root: {0}")]
     SymlinkEscape(PathBuf),
     #[error("invalid blob key: {0}")]
     InvalidKey(String),
-    #[error("drive not registered: {0}")]
+    #[error("workspace not registered: {0}")]
     WorkspaceNotRegistered(PathBuf),
-    #[error("drive root does not exist: {0}")]
+    #[error("workspace root does not exist: {0}")]
     WorkspaceRootMissing(PathBuf),
-    #[error("drive is locked by another process")]
+    #[error("workspace is locked by another process")]
     WorkspaceLocked,
-    #[error("drive is already open in this process; drop the existing handle first")]
+    #[error("workspace is already open in this process; drop the existing handle first")]
     WorkspaceAlreadyOpen,
-    #[error("drive is already registered at: {0}")]
+    #[error("workspace is already registered at: {0}")]
     WorkspaceAlreadyRegistered(PathBuf),
     #[error("write conflict: file changed on disk (current mtime ns: {current_mtime_ns:?})")]
     WriteConflict { current_mtime_ns: Option<i64> },

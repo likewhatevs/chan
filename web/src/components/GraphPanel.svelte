@@ -3,7 +3,7 @@
   // payload. fcose handles force-directed layout; pan / zoom / node
   // drag / hover / selection all come from Cytoscape's built-ins.
   //
-  // Scope (top-bar dropdown) drives a BFS over the full graph that
+  // Scope (top-bar dropdown) workspaces a BFS over the full graph that
   // produces a visible-id set; the per-edge-kind chips compose with
   // it. Both filters are applied as a `display: none` toggle on the
   // existing Cytoscape elements, so layout positions are stable
@@ -12,7 +12,7 @@
   // Pinning: in file / group / git_repo / dir scope, the seed file
   // nodes are repositioned to the canvas center (or fanned around
   // it for multi-seed) and locked, then a gentle fcose pass relaxes
-  // neighbours. Drive / global scope leaves all nodes free.
+  // neighbours. Workspace / global scope leaves all nodes free.
 
   import { api } from "../api/client";
   import type {
@@ -62,7 +62,7 @@
     Settings2,
     X,
   } from "lucide-svelte";
-  import DriveInfoBody from "./DriveInfoBody.svelte";
+  import WorkspaceInfoBody from "./WorkspaceInfoBody.svelte";
   import Inspector from "./Inspector.svelte";
   import InspectorBody, { type InspectorSelection } from "./InspectorBody.svelte";
   import GraphCanvas from "./GraphCanvas.svelte";
@@ -100,13 +100,13 @@
     synthesizeScope(graphState.scopeId),
   );
 
-  /// Graph tabs only ever carry drive / dir / file / tag scopeIds (set by
+  /// Graph tabs only ever carry workspace / dir / file / tag scopeIds (set by
   /// the openGraph* entry points). The wiped scope kinds (global, group,
   /// git_repo) are never produced for a graph, so this resolver covers
   /// only the live four; the dead kind-branches that used to handle the
   /// others were removed with the scope-concept wipe.
   function synthesizeScope(scopeId: string): ScopeOption | null {
-    if (scopeId === "drive") return { id: "drive", kind: "drive", label: "drive" };
+    if (scopeId === "workspace") return { id: "workspace", kind: "workspace", label: "workspace" };
     if (scopeId.startsWith("file:")) {
       const path = scopeId.slice("file:".length);
       if (!path) return null;
@@ -128,30 +128,30 @@
   }
 
   /// `fullstack-a-33`: ancestor breadcrumb for the current scope. Each
-  /// entry is one clickable hop in the path from the drive root down
+  /// entry is one clickable hop in the path from the workspace root down
   /// to the current scope's root. Click an ancestor → mutate
   /// `graphState.scopeId` in place (no new tab). The chain renders
-  /// only for path-based scopes (`drive` / `dir:` / `file:`); tag /
+  /// only for path-based scopes (`workspace` / `dir:` / `file:`); tag /
   /// git_repo / global scopes return an empty list so the breadcrumb
   /// band is hidden for those modes.
   ///
-  /// The list always starts with the drive root so the user can hop
-  /// back up to drive scope from anywhere. The final entry is the
+  /// The list always starts with the workspace root so the user can hop
+  /// back up to workspace scope from anywhere. The final entry is the
   /// CURRENT scope, rendered as the active step (not clickable).
   type Crumb = { label: string; scopeId: string; current: boolean };
   const scopeAncestors = $derived.by<Crumb[]>(() => {
     if (!currentScope) return [];
-    if (currentScope.kind === "drive") {
-      return [{ label: "drive", scopeId: "drive", current: true }];
+    if (currentScope.kind === "workspace") {
+      return [{ label: "workspace", scopeId: "workspace", current: true }];
     }
     if (currentScope.kind !== "file" && currentScope.kind !== "dir") {
       return [];
     }
     const path = currentScope.path;
     if (!path) {
-      return [{ label: "drive", scopeId: "drive", current: true }];
+      return [{ label: "workspace", scopeId: "workspace", current: true }];
     }
-    const out: Crumb[] = [{ label: "drive", scopeId: "drive", current: false }];
+    const out: Crumb[] = [{ label: "workspace", scopeId: "workspace", current: false }];
     const segments = path.split("/");
     for (let i = 0; i < segments.length; i++) {
       const sub = segments.slice(0, i + 1).join("/");
@@ -189,9 +189,9 @@
   /// The re-root target differs by kind, matching the canonical
   /// `openFsGraphFor{File,Directory}` helpers:
   ///   - FILE: a file cannot be an fs-graph scope root, so re-root to its
-  ///     PARENT folder (drive root when the file is top-level) and select
+  ///     PARENT folder (workspace root when the file is top-level) and select
   ///     the file inside that cohort.
-  ///   - DIRECTORY (GI-6): re-root to the DIRECTORY ITSELF (drive root for
+  ///   - DIRECTORY (GI-6): re-root to the DIRECTORY ITSELF (workspace root for
   ///     the empty/root path) so its subtree comes into view and the
   ///     directory node stays selected. The previous code applied the
   ///     file (parent) rule to directories too; when the clicked folder's
@@ -201,11 +201,11 @@
   function graphFromHere(path: string, isDir: boolean): void {
     let scopeId: string;
     if (isDir) {
-      scopeId = path ? `dir:${path}` : "drive";
+      scopeId = path ? `dir:${path}` : "workspace";
     } else {
       const slash = path.lastIndexOf("/");
       const parent = slash > 0 ? path.slice(0, slash) : "";
-      scopeId = parent ? `dir:${parent}` : "drive";
+      scopeId = parent ? `dir:${parent}` : "workspace";
     }
     graphState.scopeId = scopeId;
     graphState.depth = 1;
@@ -226,11 +226,11 @@
 
   // The graph view renders documents (files), images (also file
   // nodes, split by extension at element-build time), tags, and
-  // mentions. Dates are still filtered out at load: chan-drive's
+  // mentions. Dates are still filtered out at load: chan-workspace's
   // graph index has stopped emitting date edges (issue #17), but
   // older indexes may still contain them.
   /// `group` is a synthetic edge kind: cytoscape-only, never emitted
-  /// by chan-drive's graph index. It was used to fan `group` edges
+  /// by chan-workspace's graph index. It was used to fan `group` edges
   /// from a synthetic hub node (id `SCOPE_HUB_ID`) to the files in a
   /// multi-file `group` scope. The scope-concept wipe retired the
   /// group scope kind for graphs, so that synthesis is now
@@ -280,15 +280,15 @@
   let edges: RenderedEdge[] = $state([]);
   let fsNodes: FsGraphNode[] = $state([]);
   let fsTruncated = $state(false);
-  let driveDepthProbe: FsGraphResponse | null = $state(null);
-  let driveDepthProbeLoading = $state(false);
+  let workspaceDepthProbe: FsGraphResponse | null = $state(null);
+  let workspaceDepthProbeLoading = $state(false);
   /// GI-7: directory-scope depth probe. The depth slider's cap is the
   /// max relative depth REACHABLE under the scope, which we can only
   /// learn by walking deeper than the currently-loaded slice. At depth
   /// 1 the loaded fs-graph only contains depth-1 nodes, so a cap derived
   /// from it collapses to 1 and the clamp effect snaps the slider back
-  /// the moment the user drags it. The drive scope already solves this
-  /// with `driveDepthProbe` (a full-depth walk of the root); this is the
+  /// the moment the user drags it. The workspace scope already solves this
+  /// with `workspaceDepthProbe` (a full-depth walk of the root); this is the
   /// same probe for an arbitrary directory scope, keyed by the scope
   /// path so it re-probes when the scope changes.
   let dirDepthProbe: FsGraphResponse | null = $state(null);
@@ -313,13 +313,13 @@
   // depth decreases (or the scope narrows / the panel closes) the dropped
   // directories are unsubscribed, with the LAST instance to release a dir
   // tearing the server watcher down. This shares the exact refcounted
-  // mechanism File Browser drives via `fbWatch`; the actual redraw still
+  // mechanism File Browser workspaces via `fbWatch`; the actual redraw still
   // runs through the existing `graphReloadSignal` reload path.
   const graphInstanceId = $derived(tab ? `graph-tab-${tab.id}` : "graph-overlay");
 
   /// Directory scopes the currently-loaded graph displays. In
   /// filesystem mode this is the set of `directory` fs-graph nodes; in
-  /// the semantic/drive view it is the scope directory plus the parent
+  /// the semantic/workspace view it is the scope directory plus the parent
   /// directories of the rendered file nodes. Root (`""`) is excluded
   /// (always implicitly watched). Recomputes as nodes / depth / scope
   /// change so the reconcile effect tracks the visible degree.
@@ -361,11 +361,11 @@
     graphState.mode === "filesystem" &&
       (currentScope?.kind === "file" ||
         currentScope?.kind === "dir" ||
-        currentScope?.kind === "drive"),
+        currentScope?.kind === "workspace"),
   );
   const languageMode = $derived(graphState.mode === "language");
 
-  /// `indexStatus` is the drive-global indexer state. While the index is
+  /// `indexStatus` is the workspace-global indexer state. While the index is
   /// still building/reindexing, the semantic graph may be INCOMPLETE -
   /// link targets that simply aren't indexed yet surface as dead-end
   /// ("missing") nodes. Surface an "indexing" cue so an in-flight graph
@@ -385,10 +385,10 @@
   /// a glance there's nothing more to reveal. Gates: only fires
   /// outside language mode (which has its own depth=0 "max"
   /// affordance) + only when the slider would otherwise be
-  /// enabled (depthDisabled is the drive/global guard).
+  /// enabled (depthDisabled is the workspace/global guard).
   const depthShallow = $derived.by(() => {
     if (languageMode) return false;
-    const disabled = !currentScope || currentScope.kind === "drive";
+    const disabled = !currentScope || currentScope.kind === "workspace";
     if (disabled) return false;
     return depthCap <= 1;
   });
@@ -401,7 +401,7 @@
     // GI-7: for a directory scope the loaded fs-graph only reaches the
     // current depth, so deriving the cap from it pins the slider at the
     // loaded depth (it cannot grow to reveal a deeper layer). Prefer the
-    // full-depth `dirDepthProbe` (mirrors what the drive scope already
+    // full-depth `dirDepthProbe` (mirrors what the workspace scope already
     // does) so the cap is the directory's REACHABLE depth. Until the
     // probe lands, keep DEPTH at least at the loaded slice's depth so
     // the slider never snaps below what's already on screen.
@@ -420,8 +420,8 @@
       nodes,
       fsGraph: filesystemMode
         ? { nodes: fsNodes, truncated: fsTruncated }
-        : currentScope?.kind === "drive"
-          ? driveDepthProbe
+        : currentScope?.kind === "workspace"
+          ? workspaceDepthProbe
           : null,
       hardMax: DEPTH_MAX,
       fsMax: FS_GRAPH_DEPTH_MAX,
@@ -467,15 +467,15 @@
     closeTabMenu();
   }
   /// Cap matches the slider's `max` attribute below. Lifting it past
-  /// 5 gave room for sparse drives where the seed file's neighborhood
+  /// 5 gave room for sparse workspaces where the seed file's neighborhood
   /// fans out wider than the previous limit allowed; 10 is well
-  /// short of the diameter of any realistic drive.
+  /// short of the diameter of any realistic workspace.
   const DEPTH_MAX = 10;
 
   /// Files split into "doc", "img", or "contact" by the same rules
   /// the GraphCanvas renderer uses: image classification is
   /// extension-based, contact comes from the wire `node_kind:
-  /// "contact"` stamp the indexer applies to chan-drive's
+  /// "contact"` stamp the indexer applies to chan-workspace's
   /// `contacts()` set, everything else is a doc. Mirrored here
   /// because `hiddenImageIds` / `counts` / `inspectorSelection`
   /// need the kind upfront for chip filtering.
@@ -510,9 +510,9 @@
   // longer one.
 
   async function reloadGraph(): Promise<void> {
-    if (currentScope?.kind === "drive") {
-      driveDepthProbe = null;
-      await loadDriveDepthProbe();
+    if (currentScope?.kind === "workspace") {
+      workspaceDepthProbe = null;
+      await loadWorkspaceDepthProbe();
     }
     await load();
   }
@@ -532,19 +532,19 @@
     close();
   }
 
-  async function loadDriveDepthProbe(): Promise<void> {
-    if (driveDepthProbeLoading) return;
-    driveDepthProbeLoading = true;
+  async function loadWorkspaceDepthProbe(): Promise<void> {
+    if (workspaceDepthProbeLoading) return;
+    workspaceDepthProbeLoading = true;
     try {
-      driveDepthProbe = await api.fsGraph({
+      workspaceDepthProbe = await api.fsGraph({
         scope: "directory",
         path: "",
         depth: FS_GRAPH_DEPTH_MAX,
       });
     } catch {
-      driveDepthProbe = null;
+      workspaceDepthProbe = null;
     } finally {
-      driveDepthProbeLoading = false;
+      workspaceDepthProbeLoading = false;
     }
   }
 
@@ -584,9 +584,9 @@
   //
   // Two filters compose to decide what's drawn:
   //
-  //   (1) the SCOPE picker in the header (file / group / drive).
+  //   (1) the SCOPE picker in the header (file / group / workspace).
   //       For file and group, BFS out from the seed paths up to
-  //       graphState.depth hops. Drive = no filter.
+  //       graphState.depth hops. Workspace = no filter.
   //   (2) the per-edge-kind chips (link / tag). Edges whose kind
   //       is filtered out are dropped, and any non-file node
   //       attached only via filtered edges drops too.
@@ -596,21 +596,21 @@
   // re-walking the graph.
 
   /// Set of node ids included by the current scope. `null` means
-  /// "no scope filter" — drive scope (current behaviour) or the
-  /// global scope (placeholder; once cross-drive indexing lands
+  /// "no scope filter" — workspace scope (current behaviour) or the
+  /// global scope (placeholder; once cross-workspace indexing lands
   /// it'll need its own logic, but treating it as "no filter"
-  /// today returns the same set as drive since chan only knows
-  /// about one drive at a time).
+  /// today returns the same set as workspace since chan only knows
+  /// about one workspace at a time).
   const scopedNodeIds = $derived.by<Set<string> | null>(() => {
     if (!currentScope) return null;
-    if (currentScope.kind === "drive") {
+    if (currentScope.kind === "workspace") {
       return null;
     }
     // GI-9: in filesystem mode the fs-graph endpoint already returns
     // exactly the in-scope, depth-limited containment spine (the depth
     // slider re-fetches at the new depth via load()), so there is no
     // larger graph to narrow here. The scope BFS below is a SEMANTIC
-    // concept: /api/graph returns the drive's relevant subgraph and the
+    // concept: /api/graph returns the workspace's relevant subgraph and the
     // frontend trims it to the scope + depth. Applying it to fs-mode was
     // the bug: it seeds ONLY from `kind === "file"` nodes (see the dir
     // branch), but a directory's shallow children are DIRECTORIES, so a
@@ -655,7 +655,7 @@
         .map((n) => (n.kind === "file" ? n.path : ""))
         .filter((p) => p);
     } else {
-      // Only `file` scope remains here: drive + tag returned above, and
+      // Only `file` scope remains here: workspace + tag returned above, and
       // the wiped group/global/git_repo kinds never reach a graph.
       seedPaths = currentScope.kind === "file" ? [currentScope.path] : [];
     }
@@ -935,14 +935,14 @@
   const nodeById = $derived(new Map(nodes.map((n) => [n.id, n])));
 
   const selectedNode = $derived<RenderedNode | null>(
-    // `selectedId !== null` (not a truthy test): the drive-root
-    // node carries id="" in the drive-scope merged view, and a
+    // `selectedId !== null` (not a truthy test): the workspace-root
+    // node carries id="" in the workspace-scope merged view, and a
     // truthy test would silently null it out.
     selectedId !== null ? (nodeById.get(selectedId) ?? null) : null,
   );
   const fsNodeById = $derived(new Map(fsNodes.map((n) => [n.id, n])));
   const selectedFsNode = $derived<FsGraphNode | null>(
-    // The drive-root directory has id="" (empty path = drive root), so
+    // The workspace-root directory has id="" (empty path = workspace root), so
     // `selectedId` is checked with `!== null` rather than a truthy
     // test — otherwise clicking the root node silently no-op's the
     // inspector.
@@ -1056,7 +1056,7 @@
 
   /// Path the currently-selected mention/contact node resolves to,
   /// or null when the mention is unresolved (no contact file on
-  /// disk yet). Drives whether the inspector renders the "Open in
+  /// disk yet). Workspaces whether the inspector renders the "Open in
   /// this pane" and "Set as Scope" buttons for mention rows.
   const selectedContactPath = $derived<string | null>(
     selectedNode && selectedNode.kind === "mention"
@@ -1092,10 +1092,10 @@
     const isRoot = path === "";
     const tab = openBrowserInActivePane(isRoot ? {} : { select: path });
     tab.inspectorOpen = true;
-    tab.showDrive = isRoot;
+    tab.showWorkspace = isRoot;
     tab.expanded = expanded.length > 0 ? expanded : undefined;
     fbSelectSingle(isRoot ? null : path);
-    browserSelection.showDrive = isRoot;
+    browserSelection.showWorkspace = isRoot;
     const map = treeExpanded.map;
     map[""] = true;
     for (const e of expanded) map[e] = true;
@@ -1136,15 +1136,15 @@
   /// `fullstack-a-67` slice 1b: click on the scope-header row in the
   /// graph tab-menu opens the inspector for the current scope. Maps
   /// the scope kind to the matching node id in the current graph
-  /// nodes list; drive root + tag have stable ids, file/dir need a
+  /// nodes list; workspace root + tag have stable ids, file/dir need a
   /// path-based lookup. No-op when the scope doesn't have a
   /// corresponding node in this view (e.g. global scope, or a file
   /// scope whose file isn't in the response).
   function openScopeHeaderInspector(): void {
     if (!currentScope) return;
     let nodeId: string | null = null;
-    if (currentScope.kind === "drive") {
-      // Drive root node carries id="" in the filesystem-merged layer.
+    if (currentScope.kind === "workspace") {
+      // Workspace root node carries id="" in the filesystem-merged layer.
       nodeId = "";
     } else if (currentScope.kind === "tag") {
       nodeId = currentScope.nodeId;
@@ -1243,7 +1243,7 @@
     // `fullstack-a-57`: FileBucket chip swatch colours. Markdown
     // tracks `--g-doc` (orange) per `-a-51`'s G6 palette; source
     // tracks `--g-source` (royalblue). Binary nodes have no chip;
-    // the `--g-binary` slot still drives their canvas fill but the
+    // the `--g-binary` slot still workspaces their canvas fill but the
     // user can't toggle them on/off.
     markdown: "var(--g-doc)",
     source: "var(--g-source)",
@@ -1284,7 +1284,7 @@
   }
 
   /// Node ids the canvas should pin at the world origin while the
-  /// initial layout settles. Empty list = no anchor (drive scope);
+  /// initial layout settles. Empty list = no anchor (workspace scope);
   /// the canvas falls back to a free force-directed layout.
   const focalIds = $derived.by<string[]>(() => {
     if (!currentScope) return [];
@@ -1302,7 +1302,7 @@
 
   /// Fetch the graph view and stash the rendered-kind subset
   /// (files + tags + mentions). Date nodes / edges are dropped:
-  /// chan-drive's index has stopped emitting them (issue #17), but
+  /// chan-workspace's index has stopped emitting them (issue #17), but
   /// stale indexes may still contain them.
   function renderableGraphEdge(e: GraphViewEdge): RenderedEdge | null {
     if (
@@ -1379,7 +1379,7 @@
           ? { scope: "file" as const, path: currentScope.path }
           : currentScope?.kind === "dir"
             ? { scope: "directory" as const, path: currentScope.path }
-            : { scope: "drive" as const, path: "" };
+            : { scope: "workspace" as const, path: "" };
       const renderedNodesById = new Map<string, RenderedNode>();
       const renderedEdgesByKey = new Map<string, RenderedEdge>();
       fsNodes = [];
@@ -1466,7 +1466,7 @@
         return {
           kind: "file",
           id: n.id,
-          label: n.name || n.path || "(drive)",
+          label: n.name || n.path || "(workspace)",
           path: n.path,
           missing: Boolean(n.broken),
         };
@@ -1484,7 +1484,7 @@
         return {
           kind: "folder",
           id: n.id,
-          label: `${n.name || "drive"}/`,
+          label: `${n.name || "workspace"}/`,
           path: n.path,
           files: 0,
           code: 0,
@@ -1531,7 +1531,7 @@
       return {
         kind: "folder",
         id: n.id,
-        label: `${n.label || "drive"}/`,
+        label: `${n.label || "workspace"}/`,
         path: n.path,
         files: n.files,
         code: n.code,
@@ -1570,14 +1570,14 @@
   });
 
   $effect(() => {
-    if (!visible) driveDepthProbe = null;
+    if (!visible) workspaceDepthProbe = null;
   });
 
   $effect(() => {
     if (!visible) return;
-    if (currentScope?.kind !== "drive") return;
-    if (driveDepthProbe || driveDepthProbeLoading) return;
-    void loadDriveDepthProbe();
+    if (currentScope?.kind !== "workspace") return;
+    if (workspaceDepthProbe || workspaceDepthProbeLoading) return;
+    void loadWorkspaceDepthProbe();
   });
 
   /// GI-7: keep the directory depth probe in sync with the dir scope.
@@ -1618,9 +1618,9 @@
     watchReloadTimer = setTimeout(() => {
       watchReloadTimer = null;
       if (visible) {
-        if (currentScope?.kind === "drive") {
-          driveDepthProbe = null;
-          void loadDriveDepthProbe();
+        if (currentScope?.kind === "workspace") {
+          workspaceDepthProbe = null;
+          void loadWorkspaceDepthProbe();
         }
         void load();
       }
@@ -1649,7 +1649,7 @@
   }
 
   function graphSelectionLabel(id: string): string | null {
-    // FsGraphNode carries `name` directly — drive root has
+    // FsGraphNode carries `name` directly — workspace root has
     // name="" (empty path), so fall through to the semantic node
     // lookup before declaring no label.
     const fs = fsNodeById.get(id);
@@ -1687,7 +1687,7 @@
          render vertically, one row per kind, with the kind colour as
          a dot + on/off cue via the `.on` class. -->
     {@const depthDisabled =
-      !languageMode && (!currentScope || currentScope.kind === "drive")}
+      !languageMode && (!currentScope || currentScope.kind === "workspace")}
     <div
       class="tab-menu-bubble"
       role="menu"
@@ -1706,13 +1706,13 @@
            to the scope's inspector view. -->
       {#if currentScope}
         {@const scopePath =
-          currentScope.kind === "drive" ? ""
+          currentScope.kind === "workspace" ? ""
           : currentScope.kind === "file" ? currentScope.path
           : currentScope.kind === "dir" ? currentScope.path
           : currentScope.kind === "tag" ? `#${currentScope.label}`
           : ""}
         {@const scopeKindLabel =
-          currentScope.kind === "drive" ? "Drive"
+          currentScope.kind === "workspace" ? "Workspace"
           : currentScope.kind === "tag" ? "Hashtag"
           : currentScope.kind === "file" ? "File"
           : currentScope.kind === "dir" ? "Directory"
@@ -1726,7 +1726,7 @@
           onclick={openScopeHeaderInspector}
         >
           <span class="mbtn-icon" aria-hidden="true">
-            {#if currentScope.kind === "drive"}
+            {#if currentScope.kind === "workspace"}
               <HardDrive size={16} strokeWidth={1.75} />
             {:else if currentScope.kind === "dir"}
               <Folder size={16} strokeWidth={1.75} />
@@ -1780,9 +1780,9 @@
       </button>
       <div class="msep" role="separator"></div>
       {#each ["tag", "mention", "language", "img", "folder", "markdown", "source"] as const as kind (kind)}
-        {@const driveLike =
-          currentScope?.kind === "drive"}
-        {#if (!filesystemMode || (kind !== "img" && kind !== "language")) && (languageMode ? kind === "language" : kind !== "language" || driveLike) && (kind !== "folder" || filesystemMode || driveLike)}
+        {@const workspaceLike =
+          currentScope?.kind === "workspace"}
+        {#if (!filesystemMode || (kind !== "img" && kind !== "language")) && (languageMode ? kind === "language" : kind !== "language" || workspaceLike) && (kind !== "folder" || filesystemMode || workspaceLike)}
           <button
             type="button"
             class="mbtn filter-row"
@@ -1850,7 +1850,7 @@
       <div class="placeholder error">{error}</div>
     {:else if !loading && nodes.length === 0}
       <div class="placeholder">
-        {filesystemMode ? "no filesystem graph nodes for this scope" : languageMode ? "no language graph nodes for this drive yet" : "no markdown files in this drive yet"}
+        {filesystemMode ? "no filesystem graph nodes for this scope" : languageMode ? "no language graph nodes for this workspace yet" : "no markdown files in this workspace yet"}
       </div>
     {/if}
     {#if loading && nodes.length > 0}
@@ -1887,7 +1887,7 @@
              every inspector body. Default render mode is "from
              here", so navigating back up the path is the load-
              bearing affordance; the breadcrumb provides it for
-             every path-based scope (drive / dir: / file:). Click
+             every path-based scope (workspace / dir: / file:). Click
              a prior segment to re-scope in place. -->
         <nav class="scope-crumbs" aria-label="graph scope ancestors">
           {#each scopeAncestors as crumb, i (i + ":" + crumb.scopeId)}
@@ -1907,18 +1907,18 @@
         </nav>
       {/if}
       {#if (selectedFsNode && isFsDirectory(selectedFsNode) && selectedFsNode.id === "") || (selectedNode?.kind === "folder" && selectedNode.id === "")}
-        <!-- Drive root: same body the file browser hamburger
-             menu's Directory row pops (DriveInfoBody) so the
-             whole-drive config lives in one place across surfaces.
+        <!-- Workspace root: same body the file browser hamburger
+             menu's Directory row pops (WorkspaceInfoBody) so the
+             whole-workspace config lives in one place across surfaces.
              Differentiated visually by GraphCanvas painting the
-             "drive" sub-kind in a darker fill with the HardDrive
+             "workspace" sub-kind in a darker fill with the HardDrive
              glyph.
              `fullstack-a-33`: stop passing `onSetAsScope` from
              the graph. The breadcrumb above is the in-graph path
-             to drive-root scope; the button on DriveInfoBody is
+             to workspace-root scope; the button on WorkspaceInfoBody is
              still used by FileBrowserSurface (which spawns a new
              graph instead of re-scoping). -->
-        <DriveInfoBody />
+        <WorkspaceInfoBody />
       {:else if selectedFsNode && (isFsDirectory(selectedFsNode) || selectedFsNode.kind === "file") && selectedFsNode.path !== undefined && !selectedFsNode.broken}
         <!-- Real fs-mode file or directory: render the same body as the
              file browser / editor inspector (counts, size, code
@@ -1959,14 +1959,14 @@
             />
           </header>
           <h3 class="title" title={selectedFsNode.path || selectedFsNode.target || selectedFsNode.id}>
-            {selectedFsNode.name || selectedFsNode.path || selectedFsNode.id || "(drive)"}
+            {selectedFsNode.name || selectedFsNode.path || selectedFsNode.id || "(workspace)"}
           </h3>
           <div class="path mono">{selectedFsNode.path || selectedFsNode.target || selectedFsNode.id}</div>
           {#if selectedFsNode.target}
             <div class="missing">target: {selectedFsNode.target}</div>
           {/if}
           {#if selectedFsNode.outside}
-            <div class="missing">target is outside this drive</div>
+            <div class="missing">target is outside this workspace</div>
           {:else if selectedFsNode.broken}
             <div class="missing">missing or unreadable target</div>
           {/if}
@@ -1980,7 +1980,7 @@
         <!-- Ghost: either an explicit broken-link target, or the
              graph claims the file exists but it's not in the current
              tree listing (stale search index, common after a bulk
-             drive change). FileInfoBody can't render either; surface
+             workspace change). FileInfoBody can't render either; surface
              inline inside the shared Inspector header. -->
         {@const ghostKind = classifyFileKind(
           selectedNode.path,

@@ -1,12 +1,12 @@
 //! HTTP + WebSocket surface for chan.
 //!
-//! Wraps `chan-drive`'s Library / Workspace handles in axum routes,
+//! Wraps `chan-workspace`'s Library / Workspace handles in axum routes,
 //! gates every `/api/*` route behind a per-launch bearer token,
 //! exposes a watcher WebSocket, and serves the embedded
 //! frontend.
 //!
 //! Auth: every `/api/*` route is gated by a per-launch token. The
-//! token is persisted at `<state>/tokens/<drive-key>` (mode 0600 on
+//! token is persisted at `<state>/tokens/<workspace-key>` (mode 0600 on
 //! Unix) so a `cargo build && chan serve` cycle does not invalidate
 //! the browser's cached sessionStorage token. Clients pass it as
 //! `?t=TOKEN` query string or `Authorization: Bearer TOKEN` header.
@@ -22,7 +22,7 @@ mod control_socket;
 mod embed_seed;
 mod error;
 mod event_watcher;
-/// macOS CLI-to-desktop drive handoff over a well-known per-user UDS.
+/// macOS CLI-to-desktop workspace handoff over a well-known per-user UDS.
 /// Public so both the `chan` CLI (client) and `chan-desktop`
 /// (listener) consume it; both already depend on chan-server.
 pub mod handoff;
@@ -53,15 +53,15 @@ pub use routes::{build_fs_graph, FsGraphResponse, FsGraphScope};
 use auth::{auth_middleware, load_or_create_token};
 use bus::{make_progress_broadcast, make_watch_bridge};
 use routes::{
-    api_backlinks, api_build_info, api_close_rich_prompt, api_cloud_drives, api_create_draft,
+    api_backlinks, api_build_info, api_close_rich_prompt, api_cloud_workspaces, api_create_draft,
     api_create_file, api_create_rich_prompt, api_create_rich_prompt_session, api_create_terminal,
     api_delete_file, api_delete_session, api_delete_terminal, api_discard_draft,
-    api_drive_bootstrap, api_fonts_source_code_pro_download, api_fs_graph, api_fs_transfer,
-    api_get_config, api_get_contacts, api_get_drive, api_get_mentions, api_get_rich_prompt_status,
-    api_get_server_config, api_get_session, api_graph, api_headings, api_health, api_index_rebuild,
+    api_fonts_source_code_pro_download, api_fs_graph, api_fs_transfer, api_get_config,
+    api_get_contacts, api_get_mentions, api_get_rich_prompt_status, api_get_server_config,
+    api_get_session, api_get_workspace, api_graph, api_headings, api_health, api_index_rebuild,
     api_index_status, api_indexing_state, api_inspect_draft, api_inspector, api_language_graph,
     api_link_targets, api_links, api_list_files, api_list_sessions, api_metadata_export,
-    api_metadata_import, api_move, api_patch_config, api_patch_drive, api_patch_server_config,
+    api_metadata_import, api_move, api_patch_config, api_patch_server_config, api_patch_workspace,
     api_post_attachment, api_post_contacts_import, api_promote_draft, api_put_session,
     api_read_file, api_report_dir, api_report_file, api_report_prefix, api_reports_disable,
     api_reports_enable, api_reports_state, api_resolve_link, api_restart_terminal,
@@ -71,7 +71,7 @@ use routes::{
     api_submit_rich_prompt, api_team_create, api_team_duplicate, api_team_get_config,
     api_team_list_loaded, api_team_load, api_team_unload, api_terminal_event_reply,
     api_terminal_watcher_events, api_terminal_ws, api_unset_terminal_watcher, api_upload_file,
-    api_write_file, ws_upgrade,
+    api_workspace_bootstrap, api_write_file, ws_upgrade,
 };
 #[cfg(feature = "embeddings")]
 use routes::{
@@ -142,21 +142,21 @@ pub struct ServeConfig {
     /// matching write routes server-side. Set to true on
     /// `--tunnel-public` runs (anonymous viewers must not mutate
     /// owner config) and left false on OAuth-gated tunnel runs (the
-    /// gateway has proven the viewer is the drive owner). The
+    /// gateway has proven the viewer is the workspace owner). The
     /// local-serve path always leaves it false.
     pub settings_disabled: bool,
     /// Treat every inbound request as anonymous: the server is
     /// publicly tunneled (`--tunnel-public`), the gateway is not
-    /// authenticating visitors, and the drive owner cannot be
+    /// authenticating visitors, and the workspace owner cannot be
     /// distinguished from a hostile third party. Stricter than
     /// `settings_disabled`:
     ///
     ///   - read-only handlers that expose host-level data
-    ///     (`GET /api/drive`, `GET /api/config`, `GET /api/cloud-drives`)
+    ///     (`GET /api/workspace`, `GET /api/config`, `GET /api/cloud-workspaces`)
     ///     redact paths before serializing.
     ///
     /// Hosted (OAuth-gated) tunnel runs leave this false: the gateway
-    /// has already proven the viewer is the drive owner, so host-level
+    /// has already proven the viewer is the workspace owner, so host-level
     /// reads stay available.
     pub tunnel_public: bool,
 }
@@ -259,7 +259,7 @@ struct AppArtifacts {
     app: Router,
     token: Option<String>,
     last_activity: Arc<AtomicU64>,
-    /// Live drive cell so the serve loop can cancel the current
+    /// Live workspace cell so the serve loop can cancel the current
     /// indexer on shutdown without keeping stale indexer handles
     /// alive across storage reset or metadata import swaps.
     drive_cell: Arc<RwLock<Option<WorkspaceCell>>>,
@@ -270,7 +270,7 @@ struct AppArtifacts {
     /// Mutable handle to the URL prefix injected into the SPA shell
     /// as `<meta name="chan-prefix">`. Local serve sets it once at
     /// build time from `ServeConfig::prefix`; tunnel mode swaps in
-    /// the registration prefix (`/{user}/{drive}`) on Connected so
+    /// the registration prefix (`/{user}/{workspace}`) on Connected so
     /// the SPA's API calls pick up the public path. Shared with
     /// `AppState::prefix` (same Arc).
     prefix: Arc<RwLock<String>>,
@@ -295,20 +295,20 @@ struct AppArtifacts {
 /// so the two paths serve byte-identical request handling.
 async fn build_app(
     library: Library,
-    drive: Arc<Workspace>,
+    workspace: Arc<Workspace>,
     config: &ServeConfig,
 ) -> Result<AppArtifacts, Error> {
     let token = if config.no_token {
         None
     } else {
-        Some(load_or_create_token(drive.paths())?)
+        Some(load_or_create_token(workspace.paths())?)
     };
 
     // Seed the per-machine model cache from the embedded bundle if
     // this build shipped one (`--features embed-model`). Cheap on
     // every launch: skipped if the default model is already laid out
     // at the target. No-op (compile-gated out) on default builds;
-    // they ship without the bundle and rely on the chan-drive
+    // they ship without the bundle and rely on the chan-workspace
     // runtime resolver + the systacean-7 download flow instead.
     #[cfg(feature = "embed-model")]
     embed_seed::seed_models_from_bundle();
@@ -347,26 +347,26 @@ async fn build_app(
     // storage reset (the rebuilt bridge re-references it).
     let scope_registry = Arc::new(bus::ScopeRegistry::new());
     let bridge = make_watch_bridge(&events_tx, &index_events_tx, &self_writes, &scope_registry);
-    let watch_handle = drive.watch(bridge)?;
-    let drive_root = drive.root().to_path_buf();
+    let watch_handle = workspace.watch(bridge)?;
+    let drive_root = workspace.root().to_path_buf();
     // Background indexer: subscribes to index_events_tx, runs the
     // initial build if the index is empty, debounces incremental
     // reindexes 1s per path. Lives for the server's lifetime.
     // Progress fan-out: every `Workspace::reindex_with` tick (per-file
     // index, graph rebuild, embed batch) lands on the same /ws
     // stream as watch + LLM frames, with `type: "progress"`. The
-    // status bar in the web app subscribes to drive the live
+    // status bar in the web app subscribes to workspace the live
     // indexer pill.
     let progress_sink = make_progress_broadcast(&events_tx);
     let indexer = Arc::new(indexer::Indexer::spawn(
-        drive.clone(),
+        workspace.clone(),
         index_events_tx.subscribe(),
         true,
         search_aggression,
         progress_sink,
     ));
     // Editor preferences: fonts / theme / pane widths / line spacing /
-    // date format. The unified view returned over /api/drive and
+    // date format. The unified view returned over /api/workspace and
     // /api/config joins these with ServerConfig.
     let editor_prefs = EditorPrefs::load().unwrap_or_else(|e| {
         tracing::warn!("malformed editor preferences, falling back to defaults: {e}");
@@ -388,7 +388,7 @@ async fn build_app(
     let socket_path = mcp_bridge::pick_socket_path();
     let state_for_bridge: Arc<RwLock<Option<WorkspaceCell>>> =
         Arc::new(RwLock::new(Some(WorkspaceCell {
-            drive,
+            workspace,
             watch_handle: Some(watch_handle),
             indexer,
         })));
@@ -397,15 +397,15 @@ async fn build_app(
         let cell = match bridge_drive_cell.read() {
             Ok(cell) => cell,
             Err(_) => {
-                tracing::warn!("mcp bridge cannot snapshot drive: drive_cell poisoned");
+                tracing::warn!("mcp bridge cannot snapshot workspace: drive_cell poisoned");
                 return None;
             }
         };
         let Some(cell) = cell.as_ref() else {
-            tracing::warn!("mcp bridge cannot snapshot drive: drive_cell missing");
+            tracing::warn!("mcp bridge cannot snapshot workspace: drive_cell missing");
             return None;
         };
-        Some(cell.drive.clone())
+        Some(cell.workspace.clone())
     });
     let (mcp_socket_path, mcp_bridge) = match bridge {
         Ok(handle) => (Some(handle.socket_path().to_path_buf()), Some(handle)),
@@ -485,17 +485,17 @@ async fn build_app(
 /// Spawn the listener, build the router, and serve forever.
 /// Returns when the server stops (e.g. on SIGINT).
 ///
-/// `library` is held alongside `drive` so handlers that mutate
+/// `library` is held alongside `workspace` so handlers that mutate
 /// the registry (rename, etc.) operate against the same state the
 /// CLI sees. Both are `Arc`-able and cheap to clone.
 pub async fn serve(
     library: Library,
-    drive: Arc<Workspace>,
+    workspace: Arc<Workspace>,
     config: ServeConfig,
 ) -> Result<(), Error> {
     let listener = TcpListener::bind(config.addr).await?;
     let addr = listener.local_addr()?;
-    let artifacts = build_app(library, drive, &config).await?;
+    let artifacts = build_app(library, workspace, &config).await?;
     let handle = ServeHandle {
         addr,
         prefix: config.prefix.clone(),
@@ -586,14 +586,14 @@ pub async fn serve(
 /// drive.chan.app is the trust boundary, and the per-launch bearer
 /// would otherwise have to be embedded in any URL the user shares.
 ///
-/// `public` is forwarded to drive-proxy via the Hello frame. When
-/// false (the default), drive-proxy bounces anonymous visitors to
-/// id.chan.app; only the drive owner's signed-in session can reach
-/// the tunneled drive. When true, drive-proxy skips the OAuth gate
+/// `public` is forwarded to workspace-proxy via the Hello frame. When
+/// false (the default), workspace-proxy bounces anonymous visitors to
+/// id.chan.app; only the workspace owner's signed-in session can reach
+/// the tunneled workspace. When true, workspace-proxy skips the OAuth gate
 /// and anyone with the URL can read/write.
 ///
 /// The Settings panel follows `public`: an OAuth-gated tunnel run
-/// leaves it live (the gateway proves the viewer is the drive owner,
+/// leaves it live (the gateway proves the viewer is the workspace owner,
 /// even on a different device), while `--tunnel-public` greys it out
 /// because anonymous visitors must not mutate owner config.
 #[derive(Debug, Clone)]
@@ -608,7 +608,7 @@ pub struct TunnelServeConfig<'a> {
 
 pub async fn serve_via_tunnel(
     library: Library,
-    drive: Arc<Workspace>,
+    workspace: Arc<Workspace>,
     config: TunnelServeConfig<'_>,
 ) -> Result<(), Error> {
     let TunnelServeConfig {
@@ -621,8 +621,8 @@ pub async fn serve_via_tunnel(
     } = config;
     // The addr field is unused in tunnel mode (no local listener);
     // any parseable SocketAddr works. Prefix is empty: the public
-    // gateway strips /{user}/{drive} before forwarding, so handlers
-    // see drive-relative paths just like the local case.
+    // gateway strips /{user}/{workspace} before forwarding, so handlers
+    // see workspace-relative paths just like the local case.
     let server_config = ServeConfig {
         addr: SocketAddr::from(([127, 0, 0, 1], 0)),
         no_token: true,
@@ -635,7 +635,7 @@ pub async fn serve_via_tunnel(
         open_browser: false,
         search_aggression,
         // Settings track `public`: OAuth-gated runs leave the panel
-        // live (the gateway has proven the viewer is the drive
+        // live (the gateway has proven the viewer is the workspace
         // owner), `--tunnel-public` greys it out so anonymous
         // visitors can't mutate owner config.
         settings_disabled: public,
@@ -645,7 +645,7 @@ pub async fn serve_via_tunnel(
         // redactions).
         tunnel_public: public,
     };
-    let artifacts = build_app(library, drive, &server_config).await?;
+    let artifacts = build_app(library, workspace, &server_config).await?;
     let prefix_handle = artifacts.prefix.clone();
     // Keep the MCP bridge alive for the tunnel session; bound here
     // so the socket file is unlinked when serve_via_tunnel returns.
@@ -653,7 +653,7 @@ pub async fn serve_via_tunnel(
     let _control_socket = artifacts.control_socket;
     let drive_cell = artifacts.drive_cell.clone();
 
-    // Same shutdown wiring as `serve()`: signal_watcher drives a
+    // Same shutdown wiring as `serve()`: signal_watcher workspaces a
     // tokio::watch channel, and a side task cancels any in-flight
     // reindex when shutdown fires so the runtime doesn't have to
     // wait for the rebuild to finish naturally. Channel was created
@@ -674,7 +674,7 @@ pub async fn serve_via_tunnel(
     });
 
     // Lifecycle events from chan-tunnel-client: drained on a side
-    // task so we can print a human-readable "your drive is at ..."
+    // task so we can print a human-readable "your workspace is at ..."
     // line on first connect and a reconnect notice on disconnect.
     // The channel is bounded; chan-tunnel-client uses try_send so a
     // slow drainer drops events instead of stalling the run loop.
@@ -696,7 +696,7 @@ pub async fn serve_via_tunnel(
             match ev {
                 chan_tunnel_client::TunnelEvent::Connected(reg) => {
                     // Update the SPA-facing prefix so /index.html gets a
-                    // <meta name="chan-prefix" content="/{drive}"> tag and
+                    // <meta name="chan-prefix" content="/{workspace}"> tag and
                     // the frontend prepends the public path to its API and
                     // WebSocket URLs. The router itself is mounted at
                     // root: the public gateway strips the prefix before
@@ -711,10 +711,10 @@ pub async fn serve_via_tunnel(
                     if production_public {
                         // Wildcard-subdomain shape on drive.chan.app:
                         // `{user}.drive.chan.app/{drive}/`. User is in
-                        // the host; reg.prefix is `/{drive}`. Trailing
+                        // the host; reg.prefix is `/{workspace}`. Trailing
                         // slash matches the canonical form so the chan
                         // SPA's vite `base: "./"` resolves asset URLs
-                        // relative to the drive.
+                        // relative to the workspace.
                         let public_url = format!(
                             "https://{user}.drive.chan.app{prefix}/",
                             user = reg.user,
@@ -741,9 +741,9 @@ pub async fn serve_via_tunnel(
                         // Print identity only and skip the QR / browser
                         // open; those would point at a wrong URL.
                         eprintln!(
-                            "chan tunnel connected as {user}/{drive}",
+                            "chan tunnel connected as {user}/{workspace}",
                             user = reg.user,
-                            drive = reg.drive,
+                            workspace = reg.drive,
                         );
                         greeted = true;
                     }
@@ -815,14 +815,14 @@ fn router(state: Arc<AppState>) -> Router {
     // this sub-router so it fires before the JSON / query extractors
     // and a malformed body cannot leak the request schema via 422.
     let settings_writes = Router::new()
-        .route("/api/drive", patch(api_patch_drive))
+        .route("/api/workspace", patch(api_patch_workspace))
         .route("/api/config", patch(api_patch_config))
         .route("/api/server/config", patch(api_patch_server_config))
         .route("/api/storage/reset", post(api_storage_reset))
         .route("/api/index/rebuild", post(api_index_rebuild));
-    // systacean-7: per-drive semantic-search write endpoints. Same
+    // systacean-7: per-workspace semantic-search write endpoints. Same
     // settings-gated lane as `/api/index/rebuild` since flipping
-    // the drive's `semantic_enabled` is a settings change and the
+    // the workspace's `semantic_enabled` is a settings change and the
     // download path mutates the per-machine model cache.
     #[cfg(feature = "embeddings")]
     let settings_writes = settings_writes
@@ -867,12 +867,12 @@ fn router(state: Arc<AppState>) -> Router {
     // ---- Open routes ------------------------------------------------
     //
     // Everything not in the gated sub-router above: read-only
-    // endpoints, drive-content writes (allowed in tunnel mode by
+    // endpoints, workspace-content writes (allowed in tunnel mode by
     // design), and per-window session storage.
     let api = Router::new()
-        .route("/api/drive", get(api_get_drive))
-        .route("/api/drive/bootstrap", get(api_drive_bootstrap))
-        .route("/api/cloud-drives", get(api_cloud_drives))
+        .route("/api/workspace", get(api_get_workspace))
+        .route("/api/workspace/bootstrap", get(api_workspace_bootstrap))
+        .route("/api/cloud-workspaces", get(api_cloud_workspaces))
         .route("/api/files", get(api_list_files).post(api_create_file))
         .route(
             "/api/files/upload",
@@ -880,7 +880,7 @@ fn router(state: Arc<AppState>) -> Router {
         )
         // `fullstack-a-66`: New Draft action. Creates
         // `Drafts/<next-untitled>/draft.md` + indexes via the
-        // chan-drive unified-path API (`systacean-25`/`-26`).
+        // chan-workspace unified-path API (`systacean-25`/`-26`).
         // SPA Cmd+N chord routes here; response path opens via
         // the existing /api/files/Drafts/.../draft.md GET path.
         .route("/api/drafts/new", post(api_create_draft))
@@ -1024,7 +1024,7 @@ fn router(state: Arc<AppState>) -> Router {
         .route("/static/fonts/:name", get(serve_font));
     // systacean-7: read-only semantic-search state. Gated on
     // `embeddings` because the SemanticState payload + the
-    // `chan-drive` resolver behind it only exist when the candle
+    // `chan-workspace` resolver behind it only exist when the candle
     // stack compiles in. Write routes (`enable` / `disable` /
     // `download`) sit in `settings_writes` and merge below.
     #[cfg(feature = "embeddings")]
@@ -1103,12 +1103,12 @@ mod tests {
     fn launch_url_uses_index_for_prefixed_serves() {
         let handle = ServeHandle {
             addr: "127.0.0.1:1234".parse().unwrap(),
-            prefix: "/drive-abcd".to_string(),
+            prefix: "/workspace-abcd".to_string(),
             token: Some("token".to_string()),
         };
         assert_eq!(
             handle.launch_url(),
-            "http://127.0.0.1:1234/drive-abcd/index.html?t=token"
+            "http://127.0.0.1:1234/workspace-abcd/index.html?t=token"
         );
     }
 

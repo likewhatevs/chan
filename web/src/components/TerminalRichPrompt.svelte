@@ -12,7 +12,7 @@
   import type { TerminalRichPromptState } from "../state/tabs.svelte";
   import { api } from "../api/client";
   import {
-    drive,
+    workspace,
     setTransientStatus,
     ui,
   } from "../state/store.svelte";
@@ -358,10 +358,10 @@
 
   async function setBubbleMode(mode: "stack" | "tray"): Promise<void> {
     menu = null;
-    if (drive.info) {
-      drive.info = {
-        ...drive.info,
-        preferences: { ...drive.info.preferences, bubble_overlay_mode: mode },
+    if (workspace.info) {
+      workspace.info = {
+        ...workspace.info,
+        preferences: { ...workspace.info.preferences, bubble_overlay_mode: mode },
       };
     }
     try {

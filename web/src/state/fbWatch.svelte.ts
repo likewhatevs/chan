@@ -5,10 +5,10 @@
 // `fbDirSubscriberCount`) and the transport (`watchSubscription()` with
 // `subscribeDir` / `unsubscribeDir`). Slice C built the server-side
 // per-socket `ScopeRegistry` with its own authoritative refcount. This
-// module is the glue: it lets each File Browser / Graph surface drive
+// module is the glue: it lets each File Browser / Graph surface workspace
 // scope subscriptions through the instance registry so that
 //
-//   * on open, an instance subscribes to the drive root (`""`) and the
+//   * on open, an instance subscribes to the workspace root (`""`) and the
 //     server broadcasts root-level fs changes to it,
 //   * on directory expand, the instance subscribes to that dir's scope;
 //     a second instance expanding the same dir REUSES the subscription
@@ -38,14 +38,14 @@ import {
 } from "./store.svelte";
 import type { WatchScopeDir } from "../api/types";
 
-/// The drive root scope. Always implicitly watched by the server; we
+/// The workspace root scope. Always implicitly watched by the server; we
 /// send a `sub` for it once (on the first instance) for symmetry but
 /// never `unsub` it, since every File Browser conceptually watches the
 /// root for its whole lifetime.
 const ROOT: WatchScopeDir = "";
 
 /// Register a File Browser / Graph instance and subscribe it to the
-/// drive root. Idempotent: safe to call on every (re)mount. Returns the
+/// workspace root. Idempotent: safe to call on every (re)mount. Returns the
 /// instance's metadata record (the `$state` proxy) so the caller can read
 /// its expand/selection bookkeeping if needed.
 export function fbWatchRegister(instanceId: string) {

@@ -1,6 +1,6 @@
 //! Suppress watcher events that echo our own writes.
 //!
-//! Every successful chan-server write to the drive (the editor's
+//! Every successful chan-server write to the workspace (the editor's
 //! save, file create, attachment upload, answer save, rename) fires
 //! a notify event right back at us via the watcher. Forwarding those
 //! over the WebSocket would make every save look like an external
@@ -61,10 +61,10 @@ impl SelfWrites {
         }
     }
 
-    /// Record a server-side write. The path is the drive-relative
+    /// Record a server-side write. The path is the workspace-relative
     /// POSIX form returned by Workspace's accessors; the dedupe queue
     /// lives in that same coordinate system since the watcher's
-    /// `WatchEvent.path` is also drive-relative.
+    /// `WatchEvent.path` is also workspace-relative.
     pub fn note(&self, rel: &str) {
         let now = Instant::now();
         let mut q = self.inner.lock().expect("self-writes queue poisoned");

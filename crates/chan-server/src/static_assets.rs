@@ -364,7 +364,7 @@ mod tests {
     #[cfg(feature = "embed-font")]
     #[tokio::test]
     async fn serve_font_returns_bundled_bytes_with_immutable_cache() {
-        // The handler is path-only (no AppState), so we can drive it
+        // The handler is path-only (no AppState), so we can workspace it
         // directly. The `Path<String>` extractor wants the matched
         // segment; we feed the same value axum would.
         //

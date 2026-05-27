@@ -10,8 +10,8 @@
 //!   history entry that graph, search, editor, terminal, and MCP
 //!   can address through the `Drafts/...` namespace.
 //!
-//! Drafts live in chan-drive metadata (`drafts_dir()`), OUTSIDE
-//! the drive root, but appear in the wire under the `Drafts/`
+//! Drafts live in chan-workspace metadata (`drafts_dir()`), OUTSIDE
+//! the workspace root, but appear in the wire under the `Drafts/`
 //! prefix per the keyspace `systacean-25` + `-26` unified.
 //! `Workspace::create_draft_dir`, `next_untitled_draft_name`,
 //! `write_text`, and `index_draft_file` (called via the unified
@@ -104,13 +104,13 @@ pub struct RichPromptCreateResponse {
 /// The race is rare in practice (single-user / single-machine) but
 /// the retry keeps the contract clean.
 pub async fn api_create_draft(State(state): State<Arc<AppState>>) -> Response {
-    let drive = state.drive().clone();
+    let workspace = state.workspace().clone();
     // Note the draft path inside the blocking task, before it returns to
     // the await, so the watcher's Created event for our own draft is
     // suppressed without the post-await race (see files.rs::api_write_file).
     let self_writes = Arc::clone(&state.self_writes);
     let result = tokio::task::spawn_blocking(move || {
-        let name = create_draft_sync(&drive)?;
+        let name = create_draft_sync(&workspace)?;
         self_writes.note(&format!("Drafts/{name}/draft.md"));
         Ok::<_, chan_workspace::ChanError>(name)
     })
@@ -127,14 +127,14 @@ pub async fn api_create_draft(State(state): State<Arc<AppState>>) -> Response {
 }
 
 fn create_draft_sync(
-    drive: &chan_workspace::Workspace,
+    workspace: &chan_workspace::Workspace,
 ) -> Result<String, chan_workspace::ChanError> {
     for _ in 0..2 {
-        let name = drive.next_untitled_draft_name()?;
-        match drive.create_draft_dir(&name) {
+        let name = workspace.next_untitled_draft_name()?;
+        match workspace.create_draft_dir(&name) {
             Ok(_) => {
                 let unified = format!("Drafts/{name}/draft.md");
-                drive.write_text(&unified, NEW_DRAFT_CONTENT)?;
+                workspace.write_text(&unified, NEW_DRAFT_CONTENT)?;
                 return Ok(name);
             }
             Err(chan_workspace::ChanError::Io(msg)) if msg.contains("already exists") => {
@@ -152,9 +152,9 @@ pub async fn api_inspect_draft(
     State(state): State<Arc<AppState>>,
     Json(payload): Json<DraftPathPayload>,
 ) -> Response {
-    let drive = state.drive().clone();
+    let workspace = state.workspace().clone();
     let result =
-        tokio::task::spawn_blocking(move || inspect_draft_sync(&drive, &payload.path)).await;
+        tokio::task::spawn_blocking(move || inspect_draft_sync(&workspace, &payload.path)).await;
 
     match result {
         Ok(Ok(out)) => Json(out).into_response(),
@@ -167,13 +167,13 @@ pub async fn api_discard_draft(
     State(state): State<Arc<AppState>>,
     Json(payload): Json<DraftPathPayload>,
 ) -> Response {
-    let drive = state.drive().clone();
+    let workspace = state.workspace().clone();
     let path = payload.path.clone();
     // Suppress the watcher's Removed event before the blocking discard
     // (see files.rs::api_write_file).
     state.self_writes.note(&path);
     let result =
-        tokio::task::spawn_blocking(move || discard_draft_sync(&drive, &payload.path)).await;
+        tokio::task::spawn_blocking(move || discard_draft_sync(&workspace, &payload.path)).await;
 
     match result {
         Ok(Ok(())) => StatusCode::NO_CONTENT.into_response(),
@@ -186,7 +186,7 @@ pub async fn api_promote_draft(
     State(state): State<Arc<AppState>>,
     Json(payload): Json<DraftPromotePayload>,
 ) -> Response {
-    let drive = state.drive().clone();
+    let workspace = state.workspace().clone();
     let source_path = payload.path.clone();
     let target_path = payload.target.clone();
     // Suppress the discard-at-source + create-at-target events before
@@ -194,7 +194,7 @@ pub async fn api_promote_draft(
     state.self_writes.note(&source_path);
     state.self_writes.note(&target_path);
     let result = tokio::task::spawn_blocking(move || {
-        promote_draft_sync(&drive, &payload.path, &payload.target)
+        promote_draft_sync(&workspace, &payload.path, &payload.target)
     })
     .await;
 
@@ -217,7 +217,7 @@ pub async fn api_create_rich_prompt(
     State(state): State<Arc<AppState>>,
     Json(payload): Json<RichPromptCreatePayload>,
 ) -> Response {
-    let drive = state.drive().clone();
+    let workspace = state.workspace().clone();
     let content = payload.content;
     // Note the prompt path right before the write, inside the blocking
     // task, so the watcher's Created event is suppressed without the
@@ -226,12 +226,12 @@ pub async fn api_create_rich_prompt(
     let result =
         tokio::task::spawn_blocking(move || -> Result<String, chan_workspace::ChanError> {
             for _ in 0..2 {
-                let name = next_rich_prompt_name(&drive)?;
-                match drive.create_draft_dir(&name) {
+                let name = next_rich_prompt_name(&workspace)?;
+                match workspace.create_draft_dir(&name) {
                     Ok(_) => {
                         let unified = format!("Drafts/{name}/prompt.md");
                         self_writes.note(&unified);
-                        drive.write_text(&unified, &content)?;
+                        workspace.write_text(&unified, &content)?;
                         return Ok(name);
                     }
                     Err(chan_workspace::ChanError::Io(msg)) if msg.contains("already exists") => {
@@ -257,9 +257,9 @@ pub async fn api_create_rich_prompt(
 }
 
 /// `fullstack-a-66` slice d: pick the next `rich-prompt-N` slot.
-/// Lives in chan-server (not chan-drive) so the prefix-pickup
+/// Lives in chan-server (not chan-workspace) so the prefix-pickup
 /// loop stays where its consumer is + doesn't drag a
-/// `next_<prefix>_name` API surface into chan-drive. The
+/// `next_<prefix>_name` API surface into chan-workspace. The
 /// existing `Workspace::next_untitled_draft_name` stays untouched.
 ///
 /// Naming: first slot is `rich-prompt`; subsequent are
@@ -267,9 +267,9 @@ pub async fn api_create_rich_prompt(
 /// `untitled` / `untitled-1` shape `next_untitled_draft_name`
 /// uses).
 fn next_rich_prompt_name(
-    drive: &chan_workspace::Workspace,
+    workspace: &chan_workspace::Workspace,
 ) -> Result<String, chan_workspace::ChanError> {
-    let existing = drive.list_drafts()?;
+    let existing = workspace.list_drafts()?;
     let names: std::collections::HashSet<String> = existing.into_iter().map(|d| d.name).collect();
     if !names.contains("rich-prompt") {
         return Ok("rich-prompt".to_string());
@@ -285,11 +285,11 @@ fn next_rich_prompt_name(
 }
 
 fn inspect_draft_sync(
-    drive: &chan_workspace::Workspace,
+    workspace: &chan_workspace::Workspace,
     path: &str,
 ) -> Result<DraftInspectResponse, chan_workspace::ChanError> {
     let name = chan_workspace::drafts::name_from_unified_path(path)?;
-    let info = drive.inspect_draft(&name)?;
+    let info = workspace.inspect_draft(&name)?;
     Ok(DraftInspectResponse {
         path: format!("Drafts/{name}/draft.md"),
         name,
@@ -301,20 +301,20 @@ fn inspect_draft_sync(
 }
 
 fn discard_draft_sync(
-    drive: &chan_workspace::Workspace,
+    workspace: &chan_workspace::Workspace,
     path: &str,
 ) -> Result<(), chan_workspace::ChanError> {
     let name = chan_workspace::drafts::name_from_unified_path(path)?;
-    drive.discard_draft(&name)
+    workspace.discard_draft(&name)
 }
 
 fn promote_draft_sync(
-    drive: &chan_workspace::Workspace,
+    workspace: &chan_workspace::Workspace,
     path: &str,
     target: &str,
 ) -> Result<DraftPromoteResponse, chan_workspace::ChanError> {
     let name = chan_workspace::drafts::name_from_unified_path(path)?;
-    let report = drive.promote_draft(&name, target)?;
+    let report = workspace.promote_draft(&name, target)?;
     Ok(DraftPromoteResponse {
         path: report.target_path,
         name: report.name,
@@ -346,33 +346,33 @@ mod tests {
         let root = TempDir::new().unwrap();
         let lib = chan_workspace::Library::open_at(cfg.path().join("config.toml")).unwrap();
         lib.register_workspace(root.path()).unwrap();
-        let drive = lib.open_workspace(root.path()).unwrap();
-        (cfg, root, drive)
+        let workspace = lib.open_workspace(root.path()).unwrap();
+        (cfg, root, workspace)
     }
 
     #[test]
     fn next_rich_prompt_name_first_slot_is_unsuffixed() {
-        let (_cfg, _root, drive) = make_drive();
-        assert_eq!(next_rich_prompt_name(&drive).unwrap(), "rich-prompt");
+        let (_cfg, _root, workspace) = make_drive();
+        assert_eq!(next_rich_prompt_name(&workspace).unwrap(), "rich-prompt");
     }
 
     #[test]
     fn next_rich_prompt_name_counts_up_through_gaps() {
-        let (_cfg, _root, drive) = make_drive();
-        drive.create_draft_dir("rich-prompt").unwrap();
-        assert_eq!(next_rich_prompt_name(&drive).unwrap(), "rich-prompt-1");
-        drive.create_draft_dir("rich-prompt-1").unwrap();
-        assert_eq!(next_rich_prompt_name(&drive).unwrap(), "rich-prompt-2");
+        let (_cfg, _root, workspace) = make_drive();
+        workspace.create_draft_dir("rich-prompt").unwrap();
+        assert_eq!(next_rich_prompt_name(&workspace).unwrap(), "rich-prompt-1");
+        workspace.create_draft_dir("rich-prompt-1").unwrap();
+        assert_eq!(next_rich_prompt_name(&workspace).unwrap(), "rich-prompt-2");
     }
 
     #[test]
     fn next_rich_prompt_name_ignores_untitled_drafts() {
         // Slice-a `untitled` drafts should not shift the
         // rich-prompt sequence: the picker filters by prefix.
-        let (_cfg, _root, drive) = make_drive();
-        drive.create_draft_dir("untitled").unwrap();
-        drive.create_draft_dir("untitled-1").unwrap();
-        assert_eq!(next_rich_prompt_name(&drive).unwrap(), "rich-prompt");
+        let (_cfg, _root, workspace) = make_drive();
+        workspace.create_draft_dir("untitled").unwrap();
+        workspace.create_draft_dir("untitled-1").unwrap();
+        assert_eq!(next_rich_prompt_name(&workspace).unwrap(), "rich-prompt");
     }
 
     #[test]
@@ -381,37 +381,37 @@ mod tests {
         // still bump past the existing tail (matching the
         // `next_untitled_draft_name` shape, which monotonically
         // climbs rather than reusing released slots).
-        let (_cfg, _root, drive) = make_drive();
-        drive.create_draft_dir("rich-prompt").unwrap();
-        drive.create_draft_dir("rich-prompt-2").unwrap();
+        let (_cfg, _root, workspace) = make_drive();
+        workspace.create_draft_dir("rich-prompt").unwrap();
+        workspace.create_draft_dir("rich-prompt-2").unwrap();
         // Gap at `rich-prompt-1` is reused (picker walks from
         // 1 upward, returns the first missing slot).
-        assert_eq!(next_rich_prompt_name(&drive).unwrap(), "rich-prompt-1");
+        assert_eq!(next_rich_prompt_name(&workspace).unwrap(), "rich-prompt-1");
     }
 
     #[test]
     fn create_draft_sync_seeds_title() {
-        let (_cfg, _root, drive) = make_drive();
+        let (_cfg, _root, workspace) = make_drive();
 
-        let name = create_draft_sync(&drive).unwrap();
+        let name = create_draft_sync(&workspace).unwrap();
         let path = format!("Drafts/{name}/draft.md");
 
         assert_eq!(name, "untitled");
-        assert_eq!(drive.read_text(&path).unwrap(), NEW_DRAFT_CONTENT);
+        assert_eq!(workspace.read_text(&path).unwrap(), NEW_DRAFT_CONTENT);
     }
 
     #[test]
     fn inspect_draft_sync_reports_workspace_shape() {
-        let (_cfg, _root, drive) = make_drive();
-        drive.create_draft_dir("untitled-1").unwrap();
-        drive
+        let (_cfg, _root, workspace) = make_drive();
+        workspace.create_draft_dir("untitled-1").unwrap();
+        workspace
             .write_text("Drafts/untitled-1/draft.md", "# draft\n")
             .unwrap();
-        drive
+        workspace
             .write_bytes("Drafts/untitled-1/pasted.png", &[1, 2, 3])
             .unwrap();
 
-        let out = inspect_draft_sync(&drive, "Drafts/untitled-1/draft.md").unwrap();
+        let out = inspect_draft_sync(&workspace, "Drafts/untitled-1/draft.md").unwrap();
 
         assert_eq!(out.name, "untitled-1");
         assert_eq!(out.path, "Drafts/untitled-1/draft.md");
@@ -421,15 +421,15 @@ mod tests {
 
     #[test]
     fn promote_draft_sync_returns_target_path_and_mode() {
-        let (_cfg, root, drive) = make_drive();
+        let (_cfg, root, workspace) = make_drive();
         std::fs::create_dir_all(root.path().join("notes")).unwrap();
-        drive.create_draft_dir("untitled-1").unwrap();
-        drive
+        workspace.create_draft_dir("untitled-1").unwrap();
+        workspace
             .write_text("Drafts/untitled-1/draft.md", "# draft\n")
             .unwrap();
 
         let out =
-            promote_draft_sync(&drive, "Drafts/untitled-1/draft.md", "notes/draft.md").unwrap();
+            promote_draft_sync(&workspace, "Drafts/untitled-1/draft.md", "notes/draft.md").unwrap();
 
         assert_eq!(out.name, "untitled-1");
         assert_eq!(out.path, "notes/draft.md");
@@ -442,14 +442,14 @@ mod tests {
 
     #[test]
     fn discard_draft_sync_removes_workspace() {
-        let (_cfg, _root, drive) = make_drive();
-        drive.create_draft_dir("untitled-1").unwrap();
-        drive
+        let (_cfg, _root, workspace) = make_drive();
+        workspace.create_draft_dir("untitled-1").unwrap();
+        workspace
             .write_text("Drafts/untitled-1/draft.md", "# draft\n")
             .unwrap();
 
-        discard_draft_sync(&drive, "Drafts/untitled-1/draft.md").unwrap();
+        discard_draft_sync(&workspace, "Drafts/untitled-1/draft.md").unwrap();
 
-        assert!(!drive.drafts_dir().join("untitled-1").exists());
+        assert!(!workspace.drafts_dir().join("untitled-1").exists());
     }
 }

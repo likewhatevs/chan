@@ -7,10 +7,10 @@ use crate::cocomo::CocomoSummary;
 /// source-code files (different colour for each); this enum is
 /// the axis chan-report owns.
 ///
-/// `chan-drive::FileClass` is the orthogonal IO-contract axis
+/// `chan-workspace::FileClass` is the orthogonal IO-contract axis
 /// (Image / Pdf / Other for non-source files); the graph indexer
 /// composes the two: chan-report's `FileBucket` for the files it
-/// tracks (markdown + source code); chan-drive's `FileClass` for
+/// tracks (markdown + source code); chan-workspace's `FileClass` for
 /// everything else (media / binary / unknown). See systacean-16
 /// + the architect's option (c) routing for the design framing.
 ///

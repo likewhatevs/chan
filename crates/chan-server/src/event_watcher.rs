@@ -63,7 +63,7 @@ pub(crate) struct AgentEvent {
     pub note: Option<String>,
     /// systacean-21: relative path to the task file the
     /// receiving agent should walk on the wake. When paired
-    /// with `heading`, drives `dispatch_agent_event`'s rich
+    /// with `heading`, workspaces `dispatch_agent_event`'s rich
     /// template (cache-bust + immediate context). Missing on
     /// pre-`-21` events; the writer (architect-side tooling +
     /// any lane firing pokes) populates it going forward.

@@ -43,7 +43,7 @@
     clearDownloadTransfer,
   } from "../state/downloadTransfer.svelte";
   import {
-    drive,
+    workspace,
     fileOps,
     loadTreeDir,
     openGraphAtNode,
@@ -60,7 +60,7 @@
   /// `chan.kind: contact` frontmatter and open in the editor like
   /// other docs but get their own chip color so a glance distinguishes
   /// them. The contact bit comes off the server-side tree listing
-  /// (which joins chan-drive's node-kind index) rather than a path
+  /// (which joins chan-workspace's node-kind index) rather than a path
   /// heuristic, so contacts located outside `Contacts/` still classify
   /// correctly. Anything else is a doc.
   type RefKind = "doc" | "image" | "contact";
@@ -128,10 +128,10 @@
   const entry = $derived.by(() => {
     if (path === null || path === undefined) return null;
     if (path === "") {
-      // Drive root: no entry exists in tree.entries (the listing only
+      // Workspace root: no entry exists in tree.entries (the listing only
       // contains children). Synthesize a directory-shaped record so the
-      // directory branch renders aggregate stats over the whole drive.
-      // The mtime field stays null because the drive root has no
+      // directory branch renders aggregate stats over the whole workspace.
+      // The mtime field stays null because the workspace root has no
       // intrinsic timestamp; dirStats picks up the latest mtime
       // across descendants instead.
       return {
@@ -216,7 +216,7 @@
       out.push(pathClass.kind.replace(/_/g, " "));
     }
     if (pathClass.link_count > 1) out.push(`${pathClass.link_count} links`);
-    if (pathClass.target_escapes_drive) out.push("outside drive");
+    if (pathClass.target_escapes_workspace) out.push("outside workspace");
     return out;
   });
 
@@ -279,7 +279,7 @@
         });
       } else {
         // Unresolved `@@name` — no matching contact on disk yet.
-        // Falls back to drive-scoped graph with the mention node
+        // Falls back to workspace-scoped graph with the mention node
         // pre-selected (openGraphAtNode), since there's no file
         // to scope to.
         push({
@@ -389,7 +389,7 @@
   function downloadSelection(): void {
     if (!entry) return;
     // Desktop routes through @@LaneB's progress-tracked capability
-    // (downloadTransfer store drives the indicator below); the browser
+    // (downloadTransfer store workspaces the indicator below); the browser
     // hands off to its native download manager.
     fileOps.downloadPathWithProgress(entry.path, entry.is_dir);
   }
@@ -402,9 +402,9 @@
   const downloadBusy = $derived(downloadTransferActive());
 
   /// Full-path toggle for the actions section. The header shows the
-  /// basename; this reveals the drive-relative path. Resets to hidden
+  /// basename; this reveals the workspace-relative path. Resets to hidden
   /// whenever the selection changes so a new entry doesn't inherit the
-  /// previous one's expand state. Drive root ("") has no path to show.
+  /// previous one's expand state. Workspace root ("") has no path to show.
   let showFullPath = $state(false);
   $effect(() => {
     void path;
@@ -506,7 +506,7 @@
 
   /// Per-language roll-up sliced for display: collapse to top N by
   /// SLOC unless the user clicked "see more". The hidden count
-  /// drives the "+N more" affordance label.
+  /// workspaces the "+N more" affordance label.
   const visibleLanguages = $derived.by(() => {
     if (!prefixReport) return [];
     const all = prefixReport.by_language;
@@ -535,7 +535,7 @@
 
 <!-- Desktop-download indicator. Browser downloads hand off to the
      native download manager (no in-app indicator); on desktop
-     @@LaneB's runDesktopDownload drives the downloadTransfer store and
+     @@LaneB's runDesktopDownload workspaces the downloadTransfer store and
      this snippet mirrors its progress / success / error. Rendered once
      per body branch via {@render downloadIndicator()}. -->
 {#snippet downloadIndicator()}
@@ -601,7 +601,7 @@
        - every entry: Upload + Download (+ progress indicator);
        - host-provided: Show File/Directory (onReveal), Graph from here
          (onSetAsScope).
-     A full-path toggle reveals the drive-relative path (header shows
+     A full-path toggle reveals the workspace-relative path (header shows
      the basename). -->
 {#snippet actionsSection()}
   {#if entry}
@@ -705,16 +705,16 @@
       {/if}
     </header>
     <h3 class="title" title={entry.path || "/"}>
-      {label || basename(entry.path) || drive.info?.label || "(root)"}
+      {label || basename(entry.path) || workspace.info?.label || "(root)"}
     </h3>
     {#if entry.path === "Drafts"}
-      <!-- `fullstack-a-66` slice c (follow-up): "outside drive's
+      <!-- `fullstack-a-66` slice c (follow-up): "outside workspace's
            root" notice. Mirrors the copy added to
            DirectoryInfoBody. -->
       <div class="drafts-notice" role="note">
-        <strong>Drafts lives outside the drive's root.</strong>
+        <strong>Drafts lives outside the workspace's root.</strong>
         Files here are stored in chan's metadata folder so they
-        survive drive moves + don't clutter your tree. Cmd+N
+        survive workspace moves + don't clutter your tree. Cmd+N
         creates a fresh draft under <code>Drafts/untitled-N/</code>;
         Rich Prompt submissions persist as
         <code>Drafts/rich-prompt-N/</code>.
@@ -1399,7 +1399,7 @@
   .ref.file[data-refkind="doc"] { border-left-color: var(--g-doc); }
   .ref.file[data-refkind="image"] { border-left-color: var(--g-img); }
   .ref.file[data-refkind="contact"] { border-left-color: var(--warn-text); }
-  /* Broken link target: the linked file no longer exists on the drive.
+  /* Broken link target: the linked file no longer exists on the workspace.
      Distinct color + strikethrough so a glance flags the dangling
      reference; kind accent stripe is kept so the reader still sees
      what was being pointed at. */

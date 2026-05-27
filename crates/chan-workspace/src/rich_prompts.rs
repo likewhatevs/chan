@@ -1,7 +1,7 @@
 //! Rich Prompt metadata sessions.
 //!
 //! Rich Prompts are terminal-owned draft-backed sessions. They live under
-//! the per-drive drafts metadata root as `rich-prompt-N/`, but an
+//! the per-workspace drafts metadata root as `rich-prompt-N/`, but an
 //! active marker distinguishes them from old history-only
 //! `rich-prompt-N/prompt.md` directories and ordinary drafts.
 
@@ -33,7 +33,7 @@ This session is terminal-owned and draft-backed.\n\
 - `spool/tasks/` carries agent task files.\n\
 \n\
 Use `Drafts/...` paths through chan tools. They resolve to uncommitted metadata\n\
-outside the drive root until the host saves or promotes content intentionally.\n";
+outside the workspace root until the host saves or promotes content intentionally.\n";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RichPromptSession {

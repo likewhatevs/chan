@@ -1,12 +1,12 @@
 // Image bubble for the `![query` trigger.
 //
-// Renders two action rows + a filtered list of in-drive image files:
+// Renders two action rows + a filtered list of in-workspace image files:
 //   - "Upload from disk..." opens the OS file picker; on selection,
 //     uploads via api.uploadAttachment and commits the returned path.
 //   - "Paste from clipboard" only enabled when the clipboard contains
 //     an image (we don't pre-check; user-initiated paste handler
 //     elsewhere in the editor is the better path for paste).
-//   - Filtered list of in-drive images (api.list cached, in-memory
+//   - Filtered list of in-workspace images (api.list cached, in-memory
 //     filter by query substring on path).
 //
 // On commit, replaces `![query` with `![](path)`. Alt text is left
@@ -14,7 +14,7 @@
 // (selection-intersect in the image atom widget).
 //
 // Upload errors render in the status footer; the list stays available
-// so the user can fall back to in-drive selection.
+// so the user can fall back to in-workspace selection.
 
 import type { EditorView } from "@codemirror/view";
 import { openBubbleShell } from "../bubble";
@@ -41,10 +41,10 @@ export interface ImageBubbleOpts {
   /// Upload destination; defaults to the editing file's directory if
   /// known, otherwise the server's configured attachments_dir.
   uploadDir: string | null;
-  /// Drive-rooted path of the editing file. Used to relativize the
+  /// Workspace-rooted path of the editing file. Used to relativize the
   /// committed image path so the inserted `![](src)` resolves
   /// correctly through the image widget's resolveImageSrc (which is
-  /// fromPath-aware). null keeps the path drive-rooted (no /` prefix
+  /// fromPath-aware). null keeps the path workspace-rooted (no /` prefix
   /// adjustment).
   currentPath: string | null;
   /// "wrap" -> commit inserts `![](path)`; "raw" -> commit inserts
@@ -224,7 +224,7 @@ export function openImageBubble(opts: ImageBubbleOpts): ImageBubbleHandle {
     if (!src) return;
     // Raw mode passes the live doc URL through here — that text is
     // authored source-relative, so resolve against currentPath.
-    // Catalog hits are already drive-rooted, so pass `null` to skip
+    // Catalog hits are already workspace-rooted, so pass `null` to skip
     // the sourceDir prepend that would turn "attachments/smile.png"
     // for a file at "Contacts/Bob Smith.md" into
     // "Contacts/attachments/smile.png" (404).
@@ -290,11 +290,11 @@ export function openImageBubble(opts: ImageBubbleOpts): ImageBubbleHandle {
   function commitPath(path: string): void {
     // Relativize against the editing file's directory so the inserted
     // `![](src)` resolves correctly. The api.search / api.list /
-    // api.uploadAttachment endpoints all return drive-rooted paths
+    // api.uploadAttachment endpoints all return workspace-rooted paths
     // without leading slash; inserted verbatim those would be
     // interpreted as relative-to-currentPath-dir by the image widget's
     // resolver (resolveImageSrc → normalizeHref), doubling the dir
-    // when the editing file isn't at drive root.
+    // when the editing file isn't at workspace root.
     const pathArg = opts.currentPath
       ? relativizePath(path, opts.currentPath)
       : path;

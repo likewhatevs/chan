@@ -1,6 +1,6 @@
 //! Session blobs (`/api/session*`).
 //!
-//! chan-drive owns the I/O (Workspace::{put,get,list,delete}_session).
+//! chan-workspace owns the I/O (Workspace::{put,get,list,delete}_session).
 //! chan-server is a thin HTTP shell; the JSON schema of session blobs
 //! (window/pane layout) lives in the frontend, not here.
 
@@ -41,10 +41,10 @@ pub async fn api_get_session(
     State(state): State<Arc<AppState>>,
     Query(q): Query<SessionQuery>,
 ) -> Response {
-    let drive = state.drive();
+    let workspace = state.workspace();
     let key = q.w;
     blocking_response(
-        move || match drive.get_session(&key) {
+        move || match workspace.get_session(&key) {
             Ok(Some(bytes)) => raw_json_response(bytes),
             // 204 NO_CONTENT, not 404: "no session yet" is the normal
             // first-launch state. transport.ts treats an empty 2xx body
@@ -62,10 +62,10 @@ pub async fn api_put_session(
     Query(q): Query<SessionQuery>,
     body: Bytes,
 ) -> Response {
-    let drive = state.drive();
+    let workspace = state.workspace();
     let key = q.w;
     blocking_response(
-        move || match drive.put_session(&key, &body) {
+        move || match workspace.put_session(&key, &body) {
             Ok(()) => StatusCode::NO_CONTENT.into_response(),
             Err(e) => err_from(&e),
         },
@@ -78,10 +78,10 @@ pub async fn api_delete_session(
     State(state): State<Arc<AppState>>,
     Query(q): Query<SessionQuery>,
 ) -> Response {
-    let drive = state.drive();
+    let workspace = state.workspace();
     let key = q.w;
     blocking_response(
-        move || match drive.delete_session(&key) {
+        move || match workspace.delete_session(&key) {
             Ok(()) => StatusCode::NO_CONTENT.into_response(),
             Err(e) => err_from(&e),
         },
@@ -91,9 +91,9 @@ pub async fn api_delete_session(
 }
 
 pub async fn api_list_sessions(State(state): State<Arc<AppState>>) -> Response {
-    let drive = state.drive();
+    let workspace = state.workspace();
     blocking_response(
-        move || match drive.list_sessions() {
+        move || match workspace.list_sessions() {
             Ok(keys) => Json(keys).into_response(),
             Err(e) => err_from(&e),
         },
@@ -109,9 +109,9 @@ mod tests {
         let source = include_str!("sessions.rs");
 
         assert!(source.contains("tokio::task::spawn_blocking(f)"));
-        assert!(source.contains("move || match drive.get_session(&key)"));
-        assert!(source.contains("move || match drive.put_session(&key, &body)"));
-        assert!(source.contains("move || match drive.delete_session(&key)"));
-        assert!(source.contains("move || match drive.list_sessions()"));
+        assert!(source.contains("move || match workspace.get_session(&key)"));
+        assert!(source.contains("move || match workspace.put_session(&key, &body)"));
+        assert!(source.contains("move || match workspace.delete_session(&key)"));
+        assert!(source.contains("move || match workspace.list_sessions()"));
     }
 }

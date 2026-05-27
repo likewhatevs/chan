@@ -13,9 +13,9 @@ import graph from "./GraphPanel.svelte?raw";
 //   contains edges, adding `source` for every contains edge
 //   whose `target` is already in scope. Iterated to a fixed
 //   point so ancestor chains pull cleanly.
-// * Drive-scope orphan markdown: chan-server emit appears
+// * Workspace-scope orphan markdown: chan-server emit appears
 //   structurally complete from source reading (`walk_directory`
-//   emits contains edges recursively); drive-scope sets
+//   emits contains edges recursively); workspace-scope sets
 //   `scopedNodeIds = null` so the SPA doesn't filter. The bug
 //   may be transitively fixed by the file-scope fix OR may be a
 //   separate chan-server emit gap. Flagged for empirical

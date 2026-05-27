@@ -15,18 +15,18 @@
 //
 //   * No debouncing. A single editor save typically produces a
 //     burst of events (Modify -> Rename -> Modify(metadata) etc.
-//     on macOS; Create/Modify/Close on Linux). chan-drive forwards
+//     on macOS; Create/Modify/Close on Linux). chan-workspace forwards
 //     every one. Consumers that don't want to re-index per event
 //     (most do) should debounce on their side, keyed by
 //     `event.path`, with a small wall-clock window (50-200 ms is
 //     typical).
 //
 //   * `WatchEvent.path == None` is a hint to drop caches. It only
-//     happens when the backend produced a path the drive can't
+//     happens when the backend produced a path the workspace can't
 //     relativize (the file lives outside the watched root, usually
 //     the source side of a rename across mount points). Treat it
 //     as "something moved, scope unknown" and reindex the whole
-//     drive when feasible.
+//     workspace when feasible.
 //
 //   * `WatchKind::ProviderError` is the watcher's signal that the
 //     event stream is no longer trustworthy: inotify queue
@@ -66,8 +66,8 @@ pub enum WatchKind {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WatchEvent {
     pub kind: WatchKind,
-    /// Path relative to the drive root, POSIX-style. None when the
-    /// event refers to a path outside the drive root (rare; emitted
+    /// Path relative to the workspace root, POSIX-style. None when the
+    /// event refers to a path outside the workspace root (rare; emitted
     /// only on best-effort). For `ProviderError` this carries the
     /// backend error message instead of a path.
     pub path: Option<String>,
@@ -97,7 +97,7 @@ pub struct WatchRoot {
 
 impl WatchRoot {
     /// Workspace-root convenience: no keyspace prefix.
-    pub fn drive(abs: &Path) -> Self {
+    pub fn workspace(abs: &Path) -> Self {
         Self {
             abs: abs.to_path_buf(),
             prefix: None,
@@ -126,9 +126,9 @@ impl WatchHandle {
     /// dispatcher relativizes events against whichever root they
     /// emerge under and prepends the prefix when set so the
     /// indexer sees paths in a unified namespace
-    /// (`<rel>` for drive-root events; `Drafts/<rel>` for
+    /// (`<rel>` for workspace-root events; `Drafts/<rel>` for
     /// drafts-root events). Existing single-root callers pass
-    /// `&[WatchRoot::drive(drive_root)]`.
+    /// `&[WatchRoot::workspace(drive_root)]`.
     ///
     /// `filter` is the SAME unified ignore set the bootstrap walk
     /// uses (`Workspace::walk_filter`): events whose relative path runs
@@ -307,7 +307,7 @@ fn panic_message(payload: &Box<dyn std::any::Any + Send>) -> String {
     }
 }
 
-/// Drop policy for a drive-relative watcher path. Mirrors the
+/// Drop policy for a workspace-relative watcher path. Mirrors the
 /// bootstrap/index walk's pruning so the watcher feed and the walk
 /// honor ONE ignore set, with two watcher-specific deviations:
 ///
@@ -506,8 +506,8 @@ mod tests {
         }
         let cb = Collect(Mutex::new(Vec::new()));
         let filter = default_filter();
-        let root = PathBuf::from("/drive");
-        let roots = [WatchRoot::drive(&root)];
+        let root = PathBuf::from("/workspace");
+        let roots = [WatchRoot::workspace(&root)];
 
         // A modify under node_modules: dropped, callback never fires.
         dispatch(

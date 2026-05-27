@@ -1,4 +1,4 @@
-//! `/api/drive` - drive metadata + the cloud-drives detection helper.
+//! `/api/workspace` - workspace metadata + the cloud-workspaces detection helper.
 
 use std::sync::Arc;
 
@@ -14,16 +14,16 @@ use crate::state::AppState;
 
 #[derive(Serialize)]
 struct WorkspaceInfo {
-    /// Absolute drive root, POSIX-style on every platform so the
+    /// Absolute workspace root, POSIX-style on every platform so the
     /// JSON shape stays stable. Empty string on `--tunnel-public`
-    /// runs: the absolute path of the owner's drive would otherwise
+    /// runs: the absolute path of the owner's workspace would otherwise
     /// reveal the owner's username and filesystem layout to every
     /// anonymous visitor.
     root: String,
     /// Path-derived label for compact UI surfaces. It is not stored
-    /// in the registry and cannot be edited through `/api/drive`.
+    /// in the registry and cannot be edited through `/api/workspace`.
     label: Option<String>,
-    /// Stable metadata storage key under `~/.chan/drives/`.
+    /// Stable metadata storage key under `~/.chan/workspaces/`.
     metadata_key: Option<String>,
     /// Per-device preferences view. The frontend uses this to seed
     /// the editor (fonts, theme, line spacing) without a follow-up
@@ -31,7 +31,7 @@ struct WorkspaceInfo {
     /// `GlobalConfig.preferences`; assembled by joining EditorPrefs
     /// and ServerConfig.
     preferences: PreferencesView,
-    /// Non-fatal drive boot warnings. Empty on healthy drives.
+    /// Non-fatal workspace boot warnings. Empty on healthy workspaces.
     warnings: Vec<WorkspaceWarning>,
 }
 
@@ -42,8 +42,8 @@ struct WorkspaceWarning {
     message: String,
 }
 
-pub async fn api_get_drive(State(state): State<Arc<AppState>>) -> Response {
-    drive_info_response(state, "drive info").await
+pub async fn api_get_workspace(State(state): State<Arc<AppState>>) -> Response {
+    drive_info_response(state, "workspace info").await
 }
 
 async fn drive_info_response(state: Arc<AppState>, label: &'static str) -> Response {
@@ -58,22 +58,22 @@ async fn drive_info_response(state: Arc<AppState>, label: &'static str) -> Respo
     }
 }
 
-/// `GET /api/drive/bootstrap` - the structural spine the SPA renders
+/// `GET /api/workspace/bootstrap` - the structural spine the SPA renders
 /// before any index / report job runs. Stat-only filtered walk of the
-/// drive root: immediate files + directories, each directory carrying
+/// workspace root: immediate files + directories, each directory carrying
 /// its recursive subtree file count and byte total, plus the
-/// whole-drive aggregate. Deeper levels load lazily via the existing
+/// whole-workspace aggregate. Deeper levels load lazily via the existing
 /// `/api/files?dir=` path on File Browser expand / Graph depth.
 ///
 /// Runs on the blocking pool: the walk is synchronous filesystem I/O
-/// and must not block the async runtime (a large drive is a non-
+/// and must not block the async runtime (a large workspace is a non-
 /// trivial stat sweep).
-pub async fn api_drive_bootstrap(State(state): State<Arc<AppState>>) -> Response {
-    let drive = match state.try_drive() {
-        Ok(drive) => drive,
+pub async fn api_workspace_bootstrap(State(state): State<Arc<AppState>>) -> Response {
+    let workspace = match state.try_drive() {
+        Ok(workspace) => workspace,
         Err(e) => return err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
     };
-    match tokio::task::spawn_blocking(move || drive.bootstrap()).await {
+    match tokio::task::spawn_blocking(move || workspace.bootstrap()).await {
         Ok(Ok(tree)) => Json(tree).into_response(),
         Ok(Err(e)) => err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
         Err(e) => err(
@@ -83,17 +83,17 @@ pub async fn api_drive_bootstrap(State(state): State<Arc<AppState>>) -> Response
     }
 }
 
-pub async fn api_patch_drive(
+pub async fn api_patch_workspace(
     State(state): State<Arc<AppState>>,
     Json(body): Json<serde_json::Value>,
 ) -> Response {
     // Kept as a compatibility endpoint while the frontend drops its
-    // former drive-name editor. Local drive names are no longer a
+    // former workspace-name editor. Local workspace names are no longer a
     // mutable registry field.
     if body.get("name").is_some() {
-        return (StatusCode::BAD_REQUEST, "drive names are not supported").into_response();
+        return (StatusCode::BAD_REQUEST, "workspace names are not supported").into_response();
     }
-    drive_info_response(state, "drive patch").await
+    drive_info_response(state, "workspace patch").await
 }
 
 #[derive(Serialize)]
@@ -103,12 +103,12 @@ struct CloudDriveJson {
     suggested_root: String,
 }
 
-pub async fn api_cloud_drives(State(state): State<Arc<AppState>>) -> Response {
+pub async fn api_cloud_workspaces(State(state): State<Arc<AppState>>) -> Response {
     // The detection walks the owner's home dir for Dropbox / iCloud
     // / Google Drive / OneDrive locations. The result reveals which
     // cloud providers the owner is signed into and the absolute
     // paths of their sync roots. Anonymous visitors get an empty
-    // list; the SPA's "register a drive" picker is unreachable
+    // list; the SPA's "register a workspace" picker is unreachable
     // anyway when Settings is locked, so the only consumer is the
     // owner running locally.
     if state.tunnel_public {
@@ -130,7 +130,7 @@ pub async fn api_cloud_drives(State(state): State<Arc<AppState>>) -> Response {
         Ok(response) => response,
         Err(e) => (
             StatusCode::INTERNAL_SERVER_ERROR,
-            format!("cloud drives task panicked: {e}"),
+            format!("cloud workspaces task panicked: {e}"),
         )
             .into_response(),
     }
@@ -144,15 +144,17 @@ pub async fn api_cloud_drives(State(state): State<Arc<AppState>>) -> Response {
 /// the Settings panel's "Workspace root" line, which is unreachable
 /// in tunnel mode anyway.
 fn drive_info(state: &AppState) -> Result<WorkspaceInfo, String> {
-    let drives = state.library.list_workspaces();
-    // Snapshot the live drive once: each call to `state.drive()`
+    let workspaces = state.library.list_workspaces();
+    // Snapshot the live workspace once: each call to `state.workspace()`
     // takes the `drive_cell` RwLock and clones the Arc. Two calls
     // worked fine; one call reads slightly cleaner and survives a
     // hypothetical reset-in-flight where the cell could swap
     // between the registry lookup and the path serialization.
-    let drive = state.drive();
-    let drive_root = drive.root();
-    let entry = drives.iter().find(|d| d.root_path.as_path() == drive_root);
+    let workspace = state.workspace();
+    let drive_root = workspace.root();
+    let entry = workspaces
+        .iter()
+        .find(|d| d.root_path.as_path() == drive_root);
     let root = if state.tunnel_public {
         String::new()
     } else {
@@ -166,12 +168,12 @@ fn drive_info(state: &AppState) -> Result<WorkspaceInfo, String> {
             .map(str::to_string),
         metadata_key: entry.map(|e| e.metadata_key.clone()),
         preferences: preferences_view(state).map_err(|e| e.to_string())?,
-        warnings: drive_warnings(&drive),
+        warnings: drive_warnings(&workspace),
     })
 }
 
-fn drive_warnings(drive: &chan_workspace::Workspace) -> Vec<WorkspaceWarning> {
-    let mut warnings = match drive.draft_preflight() {
+fn drive_warnings(workspace: &chan_workspace::Workspace) -> Vec<WorkspaceWarning> {
+    let mut warnings = match workspace.draft_preflight() {
         Ok(issues) => issues
             .into_iter()
             .map(|issue| WorkspaceWarning {
@@ -186,7 +188,7 @@ fn drive_warnings(drive: &chan_workspace::Workspace) -> Vec<WorkspaceWarning> {
             message: e.to_string(),
         }],
     };
-    match drive.rich_prompt_preflight() {
+    match workspace.rich_prompt_preflight() {
         Ok(issues) => warnings.extend(issues.into_iter().map(|issue| WorkspaceWarning {
             kind: "broken_rich_prompt",
             path: format!("Drafts/{}", issue.name),
@@ -211,11 +213,11 @@ mod tests {
         let root = tempfile::TempDir::new().unwrap();
         let lib = chan_workspace::Library::open_at(cfg.path().join("config.toml")).unwrap();
         lib.register_workspace(root.path()).unwrap();
-        let drive = lib.open_workspace(root.path()).unwrap();
-        let draft = drive.create_draft_dir("untitled-1").unwrap();
+        let workspace = lib.open_workspace(root.path()).unwrap();
+        let draft = workspace.create_draft_dir("untitled-1").unwrap();
         std::fs::write(draft.abs.join("note.md"), "not draft.md").unwrap();
 
-        let warnings = drive_warnings(&drive);
+        let warnings = drive_warnings(&workspace);
 
         assert_eq!(warnings.len(), 1);
         assert_eq!(warnings[0].kind, "broken_draft");

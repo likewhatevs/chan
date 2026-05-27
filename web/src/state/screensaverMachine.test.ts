@@ -42,7 +42,7 @@ describe("fullstack-a-77 slice 2: state machine helpers", () => {
 
   test("unlockWithPin hashes + verifies + flips locked on success", () => {
     expect(source).toMatch(
-      /export async function unlockWithPin\([\s\S]*?const hash = await hashPin\(pin, driveSalt\);[\s\S]*?const result = await api\.screensaverVerify\(hash\);[\s\S]*?if \(result\.verified\) \{[\s\S]*?screensaver\.locked = false;[\s\S]*?armInactivityTimer\(\);/,
+      /export async function unlockWithPin\([\s\S]*?const hash = await hashPin\(pin, workspaceSalt\);[\s\S]*?const result = await api\.screensaverVerify\(hash\);[\s\S]*?if \(result\.verified\) \{[\s\S]*?screensaver\.locked = false;[\s\S]*?armInactivityTimer\(\);/,
     );
   });
 
@@ -100,9 +100,9 @@ describe("fullstack-a-77 slice 2: overlay component", () => {
     );
   });
 
-  test("submit calls unlockWithPin with the drive root salt", () => {
+  test("submit calls unlockWithPin with the workspace root salt", () => {
     expect(overlay).toMatch(
-      /const salt = drive\.info\?\.root \?\? "";[\s\S]*?const ok = await unlockWithPin\(pin, salt\);/,
+      /const salt = workspace\.info\?\.root \?\? "";[\s\S]*?const ok = await unlockWithPin\(pin, salt\);/,
     );
   });
 

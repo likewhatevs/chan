@@ -5,7 +5,7 @@
 //
 // We deliberately avoid a regex dep: the email shape we accept is
 // narrow (RFC 5321-ish dot-atom local-part, dot-atom domain with at
-// least one dot) and a hand-rolled scanner keeps chan-drive's
+// least one dot) and a hand-rolled scanner keeps chan-workspace's
 // dependency footprint flat. The scanner runs once per indexed
 // contact file, not per query, so its cost is amortized to zero on
 // the picker hot path.

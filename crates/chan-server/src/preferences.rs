@@ -4,8 +4,8 @@
 //! existing config files:
 //!
 //! - `attachments_dir`: ServerConfig
-//! - `default_workspace_root`: chan-drive's Registry (config.toml)
-//! - `drives`: chan-drive's Registry
+//! - `default_workspace_root`: chan-workspace's Registry (config.toml)
+//! - `workspaces`: chan-workspace's Registry
 //!
 //! What's left lives here, persisted to
 //! `<config>/chan/preferences.toml`:
@@ -24,7 +24,7 @@
 //!   - hybrid_surface_themes (optional body-theme overrides for
 //!     Hybrid Editor / Terminal / File Browser / Graph / Infographics)
 //!
-//! The Preferences view returned over /api/drive and /api/config is
+//! The Preferences view returned over /api/workspace and /api/config is
 //! assembled in lib.rs by joining EditorPrefs with ServerConfig.
 //! PATCH /api/config splits the incoming body the same way: edits land
 //! in whichever store owns the field.
@@ -89,7 +89,7 @@ impl Default for EditorPrefs {
     }
 }
 
-/// Editor theme. Drives the markdown renderer + source view
+/// Editor theme. Workspaces the markdown renderer + source view
 /// typography and chrome (headings, body, code blocks, blockquotes,
 /// tables). Light/dark variants are picked from the active
 /// `ThemeChoice`; density from `LineSpacing`. App chrome
@@ -202,7 +202,7 @@ pub enum BubbleOverlayMode {
 /// Editor density. `Standard` is the roomier default Google Docs /
 /// Word-style spacing; `Compact` tightens prose + list line-height
 /// for the Google Docs "single" look. The legacy `tight` value that
-/// pre-phase-3 drives wrote to preferences.toml deserializes as
+/// pre-phase-3 workspaces wrote to preferences.toml deserializes as
 /// `Compact` so existing config files load without manual migration;
 /// the next save flushes the canonical `compact` token to disk.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -344,7 +344,7 @@ mod tests {
     #[test]
     fn line_spacing_default_is_standard() {
         // Phase-3 flipped the default from `tight` to `standard`.
-        // The default is observable on a fresh drive that never wrote
+        // The default is observable on a fresh workspace that never wrote
         // a preferences.toml; lock it down so a future refactor that
         // re-orders the variants doesn't silently change behavior.
         let prefs = EditorPrefs::default();
@@ -382,7 +382,7 @@ mod tests {
 
     #[test]
     fn line_spacing_legacy_tight_loads_as_compact() {
-        // Pre-phase-3 drives have `line_spacing = "tight"` on disk.
+        // Pre-phase-3 workspaces have `line_spacing = "tight"` on disk.
         // The serde alias lets those files load without manual
         // migration; the next save flushes the canonical `compact`
         // token, so this compatibility shim self-erodes over time.

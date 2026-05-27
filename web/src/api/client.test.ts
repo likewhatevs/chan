@@ -30,17 +30,17 @@ describe("sessionWindowId", () => {
   });
 
   test("uses the chan-desktop window id from the URL", () => {
-    window.history.replaceState(null, "", "/?t=token&w=drive-notes-7");
+    window.history.replaceState(null, "", "/?t=token&w=workspace-notes-7");
 
-    expect(sessionWindowId()).toBe("drive-notes-7");
-    expect(sessionPath()).toBe("/api/session?w=drive-notes-7");
+    expect(sessionWindowId()).toBe("workspace-notes-7");
+    expect(sessionPath()).toBe("/api/session?w=workspace-notes-7");
   });
 
   test("encodes unusual window labels before calling the session API", () => {
-    window.history.replaceState(null, "", "/?w=tunnel%20a/drive%201");
+    window.history.replaceState(null, "", "/?w=tunnel%20a/workspace%201");
 
-    expect(sessionWindowId()).toBe("tunnel a/drive 1");
-    expect(sessionPath()).toBe("/api/session?w=tunnel%20a%2Fdrive%201");
+    expect(sessionWindowId()).toBe("tunnel a/workspace 1");
+    expect(sessionPath()).toBe("/api/session?w=tunnel%20a%2Fworkspace%201");
   });
 });
 

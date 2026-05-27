@@ -1,7 +1,7 @@
 <script lang="ts">
   // Search-index dashboard. Lives as its own overlay so index state
   // is reachable from Search without burying it in the file-browser
-  // drive inspector. Data is intentionally read-only except for the
+  // workspace inspector. Data is intentionally read-only except for the
   // explicit rebuild action.
 
   import { untrack } from "svelte";
@@ -10,7 +10,7 @@
   import type { ReportPrefix } from "../api/types";
   import {
     indexStatus,
-    openLanguageGraphForDrive,
+    openLanguageGraphForWorkspace,
     searchStatusOverlay,
   } from "../state/store.svelte";
   import {
@@ -49,7 +49,7 @@
 
   function graphCodeReport(): void {
     close();
-    openLanguageGraphForDrive();
+    openLanguageGraphForWorkspace();
   }
 
   async function loadReport(): Promise<void> {

@@ -8,7 +8,7 @@ import graph from "./GraphPanel.svelte?raw";
 // present in the data but not rendered.
 //
 // ROOT CAUSE (empirically confirmed on a fresh binary + a seeded /tmp
-// drive, 2026-05-27): `scopedNodeIds` seeds the scope BFS ONLY from
+// workspace, 2026-05-27): `scopedNodeIds` seeds the scope BFS ONLY from
 // `kind === "file"` nodes under the directory (the dir-scope branch
 // filters `n.kind === "file" && n.path.startsWith(prefix)`). In
 // filesystem mode a directory's shallow children are DIRECTORIES
@@ -21,12 +21,12 @@ import graph from "./GraphPanel.svelte?raw";
 // seeded, dropping sibling directories -> the "27/47" symptom.
 //
 // FIX: filesystem mode returns null (no scope filter), exactly like
-// drive / global already do. The fs-graph endpoint already returns the
+// workspace / global already do. The fs-graph endpoint already returns the
 // in-scope, depth-limited containment spine (the depth slider re-fetches
 // at the new depth via load()), so there is no larger graph to narrow.
 // Returning null renders the full backend spine for ALL branches; the
 // per-kind chip filters still apply via the hidden*Ids sets. The scope
-// BFS stays for the SEMANTIC modes, where /api/graph returns the drive's
+// BFS stays for the SEMANTIC modes, where /api/graph returns the workspace's
 // relevant subgraph and the frontend trims it.
 //
 // These pins live at the source level because scopedNodeIds is a
@@ -44,17 +44,17 @@ describe("GI-9: filesystem-mode graph renders the full containment spine", () =>
   test("the fs-mode null guard sits BEFORE the file-only seeding branch", () => {
     // Ordering is load-bearing: the guard must short-circuit before the
     // dir / file branches that seed only from `kind === "file"` nodes
-    // (the empty-seed bug). Anchor on the drive null (scopedNodeIds),
+    // (the empty-seed bug). Anchor on the workspace null (scopedNodeIds),
     // then the fs-mode null, then the dir-branch file-only seed.
-    const driveNull = graph.search(
-      /currentScope\.kind === "drive"\) \{\s*return null;/,
+    const workspaceNull = graph.search(
+      /currentScope\.kind === "workspace"\) \{\s*return null;/,
     );
     const fsNull = graph.search(/if \(filesystemMode\) return null;/);
     const fileSeed = graph.search(
       /n\.kind === "file" &&\s*\(n\.path === root \|\| n\.path\.startsWith\(prefix\)\)/,
     );
-    expect(driveNull).toBeGreaterThan(-1);
-    expect(fsNull).toBeGreaterThan(driveNull);
+    expect(workspaceNull).toBeGreaterThan(-1);
+    expect(fsNull).toBeGreaterThan(workspaceNull);
     expect(fileSeed).toBeGreaterThan(fsNull);
   });
 

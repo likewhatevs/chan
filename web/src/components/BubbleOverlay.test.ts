@@ -4,7 +4,7 @@ import { mount, tick, unmount } from "svelte";
 import { afterEach, describe, expect, test, vi } from "vitest";
 
 import { api } from "../api/client";
-import { drive } from "../state/store.svelte";
+import { workspace } from "../state/store.svelte";
 import type { TerminalWatcherState } from "../state/tabs.svelte";
 import BubbleOverlay from "./BubbleOverlay.svelte";
 
@@ -14,7 +14,7 @@ afterEach(() => {
   vi.useRealTimers();
   for (const component of mounted.splice(0)) unmount(component);
   document.body.innerHTML = "";
-  drive.info = null;
+  workspace.info = null;
   vi.restoreAllMocks();
 });
 
@@ -23,7 +23,7 @@ async function renderOverlay(
   opts: { onQuoteToPrompt?: (md: string) => void } = {},
 ) {
   const onWatcherDetached = vi.fn();
-  drive.info = {
+  workspace.info = {
     name: "test",
     root: "/tmp/test",
     preferences: { bubble_overlay_mode: "stack" },
@@ -622,7 +622,7 @@ describe("BubbleOverlay", () => {
       ],
     };
     const openTerminal = vi.fn();
-    drive.info = {
+    workspace.info = {
       name: "test",
       root: "/tmp/test",
       preferences: { bubble_overlay_mode: "stack" },

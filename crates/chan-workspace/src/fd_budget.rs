@@ -1,11 +1,11 @@
 //! File-descriptor pressure probes for indexing internals.
 //!
-//! chan-drive runs inside the editor process, so search indexing must
+//! chan-workspace runs inside the editor process, so search indexing must
 //! leave room for ordinary editor reads, writes, terminal PTYs, and
 //! watcher handles. macOS shells commonly start with a soft `nofile`
 //! limit of 256, which is low enough that eager SQLite pools plus
 //! Tantivy worker fanout can exhaust the process table during first
-//! boot on a large drive.
+//! boot on a large workspace.
 
 use std::sync::{Condvar, Mutex, OnceLock};
 

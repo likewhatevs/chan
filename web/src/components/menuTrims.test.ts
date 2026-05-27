@@ -46,7 +46,7 @@ describe("fullstack-80 + fullstack-a-67d: TerminalTab right-click — Search sti
 
 describe("fullstack-80: FileBrowserSurface menu drops Search this + Settings + Show/Hide Details", () => {
   test("no Search this entry", () => {
-    expect(fileBrowserSurface).not.toContain('onclick={searchDrive}');
+    expect(fileBrowserSurface).not.toContain('onclick={searchWorkspace}');
     expect(fileBrowserSurface).not.toContain(">Search this<");
   });
 

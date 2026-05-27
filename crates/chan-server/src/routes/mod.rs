@@ -9,7 +9,6 @@ mod attachments;
 mod build_info;
 mod contacts;
 mod drafts;
-mod drive;
 mod files;
 mod fonts;
 mod fs_graph;
@@ -30,6 +29,7 @@ mod sessions;
 mod storage;
 mod teams;
 mod terminal;
+mod workspace;
 mod ws;
 
 pub use attachments::api_post_attachment;
@@ -39,7 +39,6 @@ pub use drafts::{
     api_create_draft, api_create_rich_prompt, api_discard_draft, api_inspect_draft,
     api_promote_draft,
 };
-pub use drive::{api_cloud_drives, api_drive_bootstrap, api_get_drive, api_patch_drive};
 pub use files::{
     api_create_file, api_delete_file, api_fs_transfer, api_list_files, api_move, api_read_file,
     api_upload_file, api_write_file,
@@ -85,5 +84,8 @@ pub use terminal::{
     api_create_terminal, api_delete_terminal, api_restart_terminal, api_set_terminal_submit_mode,
     api_set_terminal_watcher, api_terminal_event_reply, api_terminal_watcher_events,
     api_terminal_ws, api_unset_terminal_watcher,
+};
+pub use workspace::{
+    api_cloud_workspaces, api_get_workspace, api_patch_workspace, api_workspace_bootstrap,
 };
 pub use ws::ws_upgrade;

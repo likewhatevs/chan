@@ -1,14 +1,14 @@
-// Client-side path validation. Strict subset of what chan-drive
+// Client-side path validation. Strict subset of what chan-workspace
 // will accept: anything we say "ok" to here must round-trip
 // successfully through the API. The reverse isn't required (the
 // server is still the authority), but we want the modal to fail
 // fast on inputs that are obviously going to be rejected so the
 // user gets feedback before the round-trip.
 //
-// Rules mirror the cap-std-backed sandboxing in chan-drive plus
+// Rules mirror the cap-std-backed sandboxing in chan-workspace plus
 // a few cross-platform niceties (Windows reserved names, trailing
 // dot/space in segments) so a path that opens fine on macOS
-// doesn't blow up when the same drive is opened on Windows later.
+// doesn't blow up when the same workspace is opened on Windows later.
 
 export type PathCheck = { ok: true } | { ok: false; reason: string };
 
@@ -67,7 +67,7 @@ export function validatePath(
   if (/[\x00-\x1f]/.test(trimmed)) {
     return { ok: false, reason: "control characters are not allowed" };
   }
-  // Backslash-as-separator is a Windows-ism; chan-drive treats `/`
+  // Backslash-as-separator is a Windows-ism; chan-workspace treats `/`
   // as the only separator so a `\` would either land in a single
   // segment (illegal char) or confuse the user. Reject early.
   if (trimmed.includes("\\")) {
@@ -94,8 +94,8 @@ function validateSegment(seg: string): PathCheck {
   if (seg !== seg.trim()) {
     return { ok: false, reason: `whitespace at edge of '${seg}'` };
   }
-  // Trailing dot/space rejected by Windows; chan-drive accepts them
-  // on Unix today, but a drive opened later on Windows would see the
+  // Trailing dot/space rejected by Windows; chan-workspace accepts them
+  // on Unix today, but a workspace opened later on Windows would see the
   // names get silently mangled. Cheap to reject up front.
   if (seg.endsWith(".") || seg.endsWith(" ")) {
     return { ok: false, reason: `'${seg}' ends in '.' or space (Windows-hostile)` };
@@ -179,7 +179,7 @@ export const DEFAULT_NEW_FILENAME_STEM = "untitled";
 /// level files, or a directory path that should end with `/` (a
 /// missing trailing slash is tolerated so callers don't have to
 /// pre-format). Always returns a path ending in `.md` — that's
-/// the default chan-drive considers editable text.
+/// the default chan-workspace considers editable text.
 export function proposeDefaultFilename(parent: string): string {
   const prefix =
     parent === "" || parent.endsWith("/") ? parent : `${parent}/`;

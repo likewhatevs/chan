@@ -1,24 +1,24 @@
-// Filesystem helpers for the drive:
+// Filesystem helpers for the workspace:
 //   - atomic_write: tmpfile + fsync + rename. Used everywhere that
 //     touches a file on behalf of the user. We never want a half-
 //     written note.
 //   - resolve_safe / resolve_safe_strict: normalize a request path
-//     and reject anything that escapes the drive root via `..` or
+//     and reject anything that escapes the workspace root via `..` or
 //     a symlink pointing outside.
 //   - ensure_regular_file: lstat-based gate that rejects symlinks,
 //     FIFOs, sockets, char/block devices, and directories before
 //     we open a path for read or write. Without it, opening a FIFO
 //     blocks waiting for a writer; opening /dev/zero never returns;
-//     opening through a symlink can escape the drive sandbox.
+//     opening through a symlink can escape the workspace sandbox.
 //   - is_editable_text: extension whitelist gate.
-//   - walk_drive / list_tree: recursive listing scoped to the drive,
+//   - walk_drive / list_tree: recursive listing scoped to the workspace,
 //     skipping `.git/` and `.chan/` at any depth and dropping non-
 //     regular non-dir entries (symlinks, devices, sockets) so the
 //     UI tree and the indexer never see them.
 //
 // Symlink policy: we never traverse a symlink that points outside
-// the drive's canonical root. Symlinks that resolve back inside
-// the drive are also rejected by default for the read/write API
+// the workspace's canonical root. Symlinks that resolve back inside
+// the workspace are also rejected by default for the read/write API
 // (final-component check via lstat) so a user's intentional
 // `today.md -> 2026-05-06.md` doesn't silently get clobbered by
 // atomic_write, and so reads always see real files. A future
@@ -33,8 +33,8 @@ use walkdir::{DirEntry, WalkDir};
 
 use crate::error::{ChanError, Result};
 
-/// True for paths inside the drive-internal `.chan/` dir. chan-drive
-/// never writes there now (per-drive state lives outside the user's
+/// True for paths inside the workspace-internal `.chan/` dir. chan-workspace
+/// never writes there now (per-workspace state lives outside the user's
 /// notes tree). The check stays as a defensive filter so a stray
 /// `.chan/` from an older install or a third-party tool never
 /// surfaces in the file tree or gets indexed.
@@ -59,7 +59,7 @@ pub fn is_editable_text(rel: &str) -> bool {
 
 /// True for paths whose class is markdown-style content the indexer
 /// and graph parse (`.md` / `.txt` today, i.e. `FileClass::EditableText`).
-/// Drives every per-file ingestion path: tantivy index entries,
+/// Workspaces every per-file ingestion path: tantivy index entries,
 /// graph nodes, link / token / heading extraction, link-rewrite on
 /// rename, reindex-after-restore, etc.
 ///
@@ -84,7 +84,7 @@ pub fn is_markdown_file(rel: &str) -> bool {
 }
 
 /// Coarse content class derived from a path's extension and (for
-/// well-known no-extension files) basename. Drives:
+/// well-known no-extension files) basename. Workspaces:
 ///   - which files the editor reads/writes through the UTF-8 gate
 ///     (`read_text` / `write_text`): any `EditableText` or `Text`.
 ///   - which files the search index + graph ingest: `EditableText`
@@ -127,7 +127,7 @@ pub enum FileClass {
     Other,
 }
 
-/// Filesystem-level classification for a drive-relative path.
+/// Filesystem-level classification for a workspace-relative path.
 ///
 /// This is the read/inspector-side twin of the write path's
 /// `ensure_regular_file` guard: it uses lstat semantics, never opens
@@ -142,9 +142,9 @@ pub struct PathClass {
     /// Raw `readlink` target for symlinks.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub target: Option<PathBuf>,
-    /// True when a symlink target resolves outside the drive root.
+    /// True when a symlink target resolves outside the workspace root.
     #[serde(default, skip_serializing_if = "is_false")]
-    pub target_escapes_drive: bool,
+    pub target_escapes_workspace: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -171,8 +171,8 @@ fn is_false(value: &bool) -> bool {
     !*value
 }
 
-/// Classify a drive-relative path without opening it. The path may be
-/// the empty string, which classifies the drive root itself.
+/// Classify a workspace-relative path without opening it. The path may be
+/// the empty string, which classifies the workspace root itself.
 pub fn classify_path(root: &Path, rel: &str) -> Result<PathClass> {
     let abs = if rel.is_empty() {
         root.to_path_buf()
@@ -199,9 +199,9 @@ pub fn classify_abs(root: &Path, abs: &Path) -> Result<PathClass> {
     } else {
         None
     };
-    let target_escapes_drive = target
+    let target_escapes_workspace = target
         .as_deref()
-        .is_some_and(|target| symlink_target_escapes_drive(root, abs, target));
+        .is_some_and(|target| symlink_target_escapes_workspace(root, abs, target));
     Ok(PathClass {
         kind,
         permission,
@@ -211,7 +211,7 @@ pub fn classify_abs(root: &Path, abs: &Path) -> Result<PathClass> {
             1
         },
         target,
-        target_escapes_drive,
+        target_escapes_workspace,
     })
 }
 
@@ -261,7 +261,7 @@ fn ensure_parent_inside_root(root: &Path, abs: &Path) -> Result<()> {
     };
     let root_canon = root
         .canonicalize()
-        .map_err(|e| ChanError::Io(format!("canonicalize drive root: {e}")))?;
+        .map_err(|e| ChanError::Io(format!("canonicalize workspace root: {e}")))?;
     if parent == root || parent == root_canon {
         return Ok(());
     }
@@ -273,7 +273,7 @@ fn ensure_parent_inside_root(root: &Path, abs: &Path) -> Result<()> {
     Ok(())
 }
 
-fn symlink_target_escapes_drive(root: &Path, link_abs: &Path, target: &Path) -> bool {
+fn symlink_target_escapes_workspace(root: &Path, link_abs: &Path, target: &Path) -> bool {
     let target_abs = if target.is_absolute() {
         target.to_path_buf()
     } else {
@@ -705,7 +705,7 @@ pub(crate) fn sync_file(_path: &Path) -> Result<()> {
 /// `root` itself. Used after a recursive copy (trash move / restore
 /// across filesystems) so the whole subtree is durable before we
 /// commit a "this is moved" marker. Symlinks/special files inside
-/// the tree are skipped; chan-drive never creates them.
+/// the tree are skipped; chan-workspace never creates them.
 ///
 /// Best-effort: per-entry walkdir or fsync errors are logged at
 /// warn and the walk continues. The caller already wrote the
@@ -812,9 +812,9 @@ pub fn ensure_regular_file(path: &Path) -> Result<()> {
 
 /// Stricter resolve: lexical `resolve_safe` plus a canonical-form
 /// check that the deepest existing ancestor still lives under the
-/// canonical drive root. Catches the case where a mid-path
-/// component is a symlink pointing outside the drive (e.g. a user
-/// has `Backup -> /Volumes/external` inside their drive, and a
+/// canonical workspace root. Catches the case where a mid-path
+/// component is a symlink pointing outside the workspace (e.g. a user
+/// has `Backup -> /Volumes/external` inside their workspace, and a
 /// caller asks to write `Backup/today.md`; we refuse).
 ///
 /// For paths that don't exist yet (typical for create/write), we
@@ -822,20 +822,20 @@ pub fn ensure_regular_file(path: &Path) -> Result<()> {
 /// This mirrors what the kernel will do when it walks the path
 /// during the actual open call.
 ///
-/// Each call canonicalizes the drive root. Hot-path callers that
+/// Each call canonicalizes the workspace root. Hot-path callers that
 /// hold a long-lived `Workspace` should use `resolve_safe_strict_canon`
-/// with a cached canonical root instead, so cloud-synced drive
-/// roots (iCloud / Google Drive / Dropbox) do not pay an FS-provider
+/// with a cached canonical root instead, so cloud-synced workspace
+/// roots (iCloud / Google Workspace / Dropbox) do not pay an FS-provider
 /// round trip on every read or write.
 pub fn resolve_safe_strict(root: &Path, requested: &str) -> Result<PathBuf> {
     let root_canon = root
         .canonicalize()
-        .map_err(|e| ChanError::Io(format!("canonicalize drive root: {e}")))?;
+        .map_err(|e| ChanError::Io(format!("canonicalize workspace root: {e}")))?;
     resolve_safe_strict_canon(root, &root_canon, requested)
 }
 
 /// Same gate as `resolve_safe_strict` but takes a pre-canonicalized
-/// drive root so the caller doesn't pay a `canonicalize` syscall on
+/// workspace root so the caller doesn't pay a `canonicalize` syscall on
 /// every entry point. The canonical root MUST be the canonicalize
 /// of `root`; passing anything else lets paths escape the sandbox.
 pub fn resolve_safe_strict_canon(
@@ -853,7 +853,7 @@ pub fn resolve_safe_strict_canon(
             Ok(c) => break c,
             Err(_) => match probe.parent() {
                 Some(p) => probe = p,
-                // We walked past the drive root without finding
+                // We walked past the workspace root without finding
                 // anything that canonicalizes; treat as escape.
                 None => return Err(ChanError::SymlinkEscape(joined)),
             },
@@ -914,7 +914,7 @@ pub fn atomic_write_in(dir: &cap_std::fs::Dir, rel: &Path, bytes: &[u8]) -> Resu
     let preserved = capture_metadata_in(dir, rel);
     // cap-tempfile creates the temp file in the same dir as `rel`'s
     // parent so the eventual rename stays same-fs. Pass the parent;
-    // for top-level files that's the drive root itself.
+    // for top-level files that's the workspace root itself.
     let parent = rel.parent().filter(|p| !p.as_os_str().is_empty());
     let parent_dir;
     let target_dir: &cap_std::fs::Dir = match parent {
@@ -940,7 +940,7 @@ pub fn atomic_write_in(dir: &cap_std::fs::Dir, rel: &Path, bytes: &[u8]) -> Resu
 /// Map a cap-std `io::Error` into our error enum, distinguishing
 /// "you tried to escape the sandbox" from generic I/O. cap-std
 /// signals an escape via the message string (see `map_cap_err` in
-/// `drive.rs` for the symmetric mapping on the Workspace side).
+/// `workspace.rs` for the symmetric mapping on the Workspace side).
 fn map_cap(err: std::io::Error, rel: &Path) -> ChanError {
     let msg = err.to_string();
     if msg.contains("outside of the filesystem") || msg.contains("path escape") {
@@ -1126,11 +1126,11 @@ pub(crate) fn sync_dir_handle(_dir: &cap_std::fs::Dir) -> Result<()> {
 }
 
 /// Take an untrusted request path (`notes/x.md` or `../etc/passwd`)
-/// and join it onto the drive root, rejecting any traversal that
+/// and join it onto the workspace root, rejecting any traversal that
 /// escapes the root. Returns the absolute joined path.
 ///
 /// This is a LEXICAL check only: it does not detect mid-path
-/// symlinks pointing outside the drive. Use `resolve_safe_strict`
+/// symlinks pointing outside the workspace. Use `resolve_safe_strict`
 /// for that. We keep this as a fast-path for tests and for the
 /// strict variant's first leg.
 pub fn resolve_safe(root: &Path, requested: &str) -> Result<PathBuf> {
@@ -1150,7 +1150,7 @@ pub fn resolve_safe(root: &Path, requested: &str) -> Result<PathBuf> {
     Ok(joined)
 }
 
-/// One entry in the file tree. Path is relative to the drive root
+/// One entry in the file tree. Path is relative to the workspace root
 /// using `/` separators on all platforms (stable JSON shape).
 #[derive(Debug, Clone, Serialize)]
 pub struct TreeEntry {
@@ -1163,7 +1163,7 @@ pub struct TreeEntry {
 }
 
 /// Hard cap on entries returned by `list_tree`. 500k covers any
-/// realistic notes drive with margin (Obsidian-shaped vaults run a
+/// realistic notes workspace with margin (Obsidian-shaped vaults run a
 /// few thousand files; the largest in-the-wild notes corpora hit
 /// low six figures). Past this we refuse to allocate the result
 /// vec rather than OOM the editor; the user has either pointed
@@ -1178,14 +1178,14 @@ pub const LIST_DIR_LIMIT: usize = 50_000;
 /// Recursively list everything under `root`. Skips `.git/` and
 /// `.chan/` at any depth. Errors with `ListingTooLarge` once the
 /// walker sees more than `LIST_TREE_LIMIT` entries, so a runaway
-/// or mis-pointed drive never OOMs the caller.
+/// or mis-pointed workspace never OOMs the caller.
 pub fn list_tree(root: &Path) -> Result<Vec<TreeEntry>> {
     list_tree_inner(root, root, 1, None)
 }
 
 /// Variant of `list_tree` that also applies a caller-supplied
 /// directory-name blocklist. Used by the reindex paths so a
-/// `node_modules/` under the drive doesn't force the graph
+/// `node_modules/` under the workspace doesn't force the graph
 /// rebuild to walk a hundred thousand README.md files. The
 /// editor's tree view keeps using the unfiltered `list_tree`.
 pub fn list_tree_filtered(root: &Path, filter: &WalkFilter) -> Result<Vec<TreeEntry>> {
@@ -1207,7 +1207,7 @@ pub fn list_tree_filtered(root: &Path, filter: &WalkFilter) -> Result<Vec<TreeEn
 /// failure when a model probes a non-existent prefix.
 ///
 /// `LIST_TREE_LIMIT` still applies, in case a misconfigured prefix
-/// covers the whole drive (e.g. the user pointed chan at `~`).
+/// covers the whole workspace (e.g. the user pointed chan at `~`).
 pub fn list_tree_prefix(root: &Path, subtree_abs: &Path) -> Result<Vec<TreeEntry>> {
     if !subtree_abs.exists() {
         return Ok(Vec::new());
@@ -1346,7 +1346,7 @@ mod tests {
         assert_eq!(file.permission, PathPermission::ReadWrite);
         assert_eq!(file.link_count, 1);
         assert_eq!(file.target, None);
-        assert!(!file.target_escapes_drive);
+        assert!(!file.target_escapes_workspace);
     }
 
     #[cfg(unix)]
@@ -1377,11 +1377,11 @@ mod tests {
         let inside = classify_path(tmp.path(), "alias.md").unwrap();
         assert_eq!(inside.kind, PathKind::Symlink);
         assert_eq!(inside.target.as_deref(), Some(Path::new("a.md")));
-        assert!(!inside.target_escapes_drive);
+        assert!(!inside.target_escapes_workspace);
 
         let outside = classify_path(tmp.path(), "outside.md").unwrap();
         assert_eq!(outside.kind, PathKind::Symlink);
-        assert!(outside.target_escapes_drive);
+        assert!(outside.target_escapes_workspace);
     }
 
     #[cfg(unix)]
@@ -1727,10 +1727,10 @@ mod tests {
     fn resolve_safe_strict_rejects_midpath_symlink_to_outside() {
         use std::os::unix::fs::symlink;
         let outside = TempDir::new().unwrap();
-        let drive = TempDir::new().unwrap();
+        let workspace = TempDir::new().unwrap();
         // Backup -> outside dir.
-        symlink(outside.path(), drive.path().join("Backup")).unwrap();
-        let err = resolve_safe_strict(drive.path(), "Backup/today.md").unwrap_err();
+        symlink(outside.path(), workspace.path().join("Backup")).unwrap();
+        let err = resolve_safe_strict(workspace.path(), "Backup/today.md").unwrap_err();
         assert!(matches!(err, ChanError::SymlinkEscape(_)));
     }
 
@@ -1738,14 +1738,14 @@ mod tests {
     #[test]
     fn resolve_safe_strict_allows_symlink_pointing_inside() {
         use std::os::unix::fs::symlink;
-        let drive = TempDir::new().unwrap();
-        std::fs::create_dir(drive.path().join("real")).unwrap();
-        // alias -> ./real, both under the drive. The strict resolve
-        // doesn't reject in-drive symlinks; the per-path lstat gate
+        let workspace = TempDir::new().unwrap();
+        std::fs::create_dir(workspace.path().join("real")).unwrap();
+        // alias -> ./real, both under the workspace. The strict resolve
+        // doesn't reject in-workspace symlinks; the per-path lstat gate
         // in Workspace::read_text / write_text is what catches them as
         // a final-component policy.
-        symlink("real", drive.path().join("alias")).unwrap();
-        resolve_safe_strict(drive.path(), "alias/x.md").unwrap();
+        symlink("real", workspace.path().join("alias")).unwrap();
+        resolve_safe_strict(workspace.path(), "alias/x.md").unwrap();
     }
 
     #[test]

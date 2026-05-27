@@ -25,7 +25,7 @@
     fileTransferStatus,
     indexStatus,
     importStatus,
-    openDriveWarningsDialog,
+    openWorkspaceWarningsDialog,
     ui,
   } from "../state/store.svelte";
   import { paneMode } from "../state/tabs.svelte";
@@ -46,7 +46,7 @@
   const statusVisible = $derived(!!ui.status);
   const statusActionVisible = $derived(
     statusVisible &&
-      ui.statusAction?.kind === "drive-warnings" &&
+      ui.statusAction?.kind === "workspace-warnings" &&
       ui.statusAction.label === ui.status,
   );
   const paneModeVisible = $derived(paneMode.active);
@@ -59,7 +59,7 @@
   }
 
   function activateStatus(): void {
-    if (statusActionVisible) openDriveWarningsDialog();
+    if (statusActionVisible) openWorkspaceWarningsDialog();
   }
 </script>
 
@@ -132,7 +132,7 @@
             <button
               type="button"
               class="section status-msg status-action"
-              aria-label="open drive warnings"
+              aria-label="open workspace warnings"
               onclick={activateStatus}
             >{ui.status}</button>
           {:else}

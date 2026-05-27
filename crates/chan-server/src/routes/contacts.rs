@@ -8,7 +8,7 @@
 //! display title, basename, and the joined email column inside
 //! SQLite (so a typed `alice` finds `alice@example.com` even when
 //! the contact's display name has nothing to do with the address),
-//! cap at `?limit=` (default 10), and return drive-relative paths,
+//! cap at `?limit=` (default 10), and return workspace-relative paths,
 //! display labels, and the contact's email list. The wiki-link the
 //! picker inserts is what re-resolves to the same Contact node on
 //! the next graph pass, so the round-trip stays consistent.
@@ -17,8 +17,8 @@
 //! `chan contacts import csv` CLI for parity) sends:
 //!
 //!   file       multipart   the CSV bytes
-//!   dest_dir   text        drive-relative directory (created if absent;
-//!                          empty string writes at the drive root)
+//!   dest_dir   text        workspace-relative directory (created if absent;
+//!                          empty string writes at the workspace root)
 //!   provider   text        "google" today; flag is forward-compat
 //!   overwrite  text        "true" / "false" (default false)
 //!
@@ -76,11 +76,11 @@ pub async fn api_get_contacts(
     State(state): State<Arc<AppState>>,
     Query(q): Query<ContactsListQuery>,
 ) -> Response {
-    let drive = state.drive();
+    let workspace = state.workspace();
     let needle = q.q;
     match tokio::task::spawn_blocking(move || {
         let needle = needle.as_deref().map(str::trim).filter(|s| !s.is_empty());
-        let rows = match drive.contacts_filtered(needle, q.limit) {
+        let rows = match workspace.contacts_filtered(needle, q.limit) {
             Ok(v) => v,
             Err(e) => return err_from(&e),
         };
@@ -230,7 +230,7 @@ pub async fn api_post_contacts_import(
         );
     }
 
-    let drive = state.drive();
+    let workspace = state.workspace();
     let self_writes = Arc::clone(&state.self_writes);
     let summary =
         match tokio::task::spawn_blocking(move || -> Result<ImportSummary, Box<Response>> {
@@ -243,7 +243,7 @@ pub async fn api_post_contacts_import(
                     )))
                 }
             };
-            let summary = drive
+            let summary = workspace
                 .import_contacts(&dest_dir, contacts, ImportOpts { overwrite })
                 .map_err(|e| Box::new(err_from(&e)))?;
             // Note our own writes inside the task, before the await
@@ -280,10 +280,10 @@ pub async fn api_post_contacts_import(
         }
     }
     if !to_index.is_empty() {
-        let drive = state.drive();
+        let workspace = state.workspace();
         let _ = tokio::task::spawn_blocking(move || {
             for p in &to_index {
-                if let Err(e) = drive.index_file(p) {
+                if let Err(e) = workspace.index_file(p) {
                     tracing::warn!(path = %p, error = %e, "contacts: post-import index_file failed");
                 }
             }

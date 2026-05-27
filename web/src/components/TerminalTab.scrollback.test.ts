@@ -17,7 +17,7 @@ describe("fullstack-b-11: TerminalTab scrollback wiring", () => {
 
   test("start() recomputes the line cap from current Preferences", () => {
     expect(tab).toMatch(
-      /scrollbackLines = scrollbackLinesFromMb\(\s*clampScrollbackMb\(drive\.info\?\.preferences\?\.terminal\?\.scrollback_mb\),?\s*\)/,
+      /scrollbackLines = scrollbackLinesFromMb\(\s*clampScrollbackMb\(workspace\.info\?\.preferences\?\.terminal\?\.scrollback_mb\),?\s*\)/,
     );
   });
 

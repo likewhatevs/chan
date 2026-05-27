@@ -43,7 +43,7 @@ import type {
   TerminalSpawnRequest,
   TerminalSpawnResponse,
   TreeEntry,
-  DriveInfo,
+  WorkspaceInfo,
   BubbleOverlayMode,
 } from "./types";
 import { ApiError } from "./errors";
@@ -107,7 +107,7 @@ function browserSessionWindowId(): string | null {
 }
 
 /// Session blob key for this browser/webview window. chan-desktop
-/// appends `?w=<window-label>` to each drive window URL; plain browser
+/// appends `?w=<window-label>` to each workspace window URL; plain browser
 /// tabs get a per-tab sessionStorage key so they do not overwrite
 /// each other. If storage is unavailable we fall back to historical
 /// shared `default` behavior.
@@ -203,7 +203,7 @@ export type BacklinksStreamEvent =
 export type GraphStreamEvent =
   | {
       type: "meta";
-      scope: "drive" | "directory" | "file";
+      scope: "workspace" | "directory" | "file";
       path: string;
       depth: number;
     }
@@ -372,18 +372,18 @@ async function readFileStream(
 }
 
 export const api = {
-  drive: () => req<DriveInfo>("GET", "/api/drive"),
-  /// Read the global per-user config (registry of known drives,
-  /// default-drive path, preferences). Mounted by the Settings UI.
+  workspace: () => req<WorkspaceInfo>("GET", "/api/workspace"),
+  /// Read the global per-user config (registry of known workspaces,
+  /// default-workspace path, preferences). Mounted by the Settings UI.
   config: () => req<GlobalConfig>("GET", "/api/config"),
   /// Replace the global config (whole-block PATCH).
   updateConfig: (body: GlobalConfig) =>
     req<GlobalConfig>("PATCH", "/api/config", body),
   /** Upload an image attachment. Multipart POST that the editor's `![`
    *  picker, drag-and-drop, and clipboard paste all funnel through.
-   *  Returns the drive-relative path of the saved file.
+   *  Returns the workspace-relative path of the saved file.
    *
-   *  `dir` is the drive-relative directory to save into. The editor
+   *  `dir` is the workspace-relative directory to save into. The editor
    *  passes the directory of the file being edited so uploads land
    *  next to it (markdown can then reference the file with `./name`).
    *  Null falls back to the server's configured `attachments_dir`. */
@@ -539,7 +539,7 @@ export const api = {
   read: (path: string) => req<FileResponse>("GET", `/api/files/${encPath(path)}`),
   readStream: readFileStream,
   /// Persist `content` at `path`. When `expectedMtimeNs` is provided,
-  /// the server CAS-writes via Drive::write_text_if_unchanged and
+  /// the server CAS-writes via Workspace::write_text_if_unchanged and
   /// rejects with 409 + { current_mtime_ns } if the on-disk mtime
   /// differs (an external edit landed since the client last read).
   /// Returns the new mtime token so callers store it for the next CAS.
@@ -686,10 +686,10 @@ export const api = {
   /// `fullstack-a-66`: create a new draft directory + seeded
   /// draft.md inside via the dedicated /api/drafts/new route. Picks the
   /// next `untitled` / `untitled-N` name server-side via
-  /// `Drive::next_untitled_draft_name`. Returns the unified-path
+  /// `Workspace::next_untitled_draft_name`. Returns the unified-path
   /// `Drafts/<name>/draft.md` which the SPA opens via the
   /// existing /api/files/* GET path (post-`-26` unified-path API
-  /// routes Drafts/-prefixed paths through chan-drive's drafts
+  /// routes Drafts/-prefixed paths through chan-workspace's drafts
   /// dir).
   createDraft: () =>
     req<{ path: string; name: string }>("POST", "/api/drafts/new"),
@@ -884,7 +884,7 @@ export const api = {
     return stats;
   },
   /// chan-report directory roll-up: totals, by-language, and COCOMO.
-  /// Empty `path` returns the whole-drive roll-up. The per-file
+  /// Empty `path` returns the whole-workspace roll-up. The per-file
   /// array is dropped server-side; only the summary fields come
   /// back so big directories stay cheap to fetch.
   reportPrefix: (path: string) =>
@@ -895,14 +895,14 @@ export const api = {
   /// `fullstack-a-50` G3: per-directory roll-up via the O(1) cache
   /// from `systacean-15`. Same response shape as `reportPrefix` but
   /// reads from the maintained cache instead of walking the file map.
-  /// Empty `path` returns the drive root. 404 when the directory
+  /// Empty `path` returns the workspace root. 404 when the directory
   /// has no tracked files (caller treats null as "no report yet").
   reportDir: (path: string) =>
     req<ReportPrefix>(
       "GET",
       `/api/report/dir?path=${encodeURIComponent(path)}`,
     ),
-  /// Resolve a wiki / markdown link target to the actual drive file
+  /// Resolve a wiki / markdown link target to the actual workspace file
   /// + node kind. `target` is the path portion of the link (no
   /// `#anchor`); pass through path-encoded segments verbatim. The
   /// server returns 404 when no file matches any of the
@@ -931,9 +931,9 @@ export const api = {
   /// Compile-time identity (chan version + cargo features). Used by
   /// the Settings "About" footer.
   buildInfo: () => req<BuildInfo>("GET", "/api/build-info"),
-  /// Reset the drive at one of three escalating levels. After a
+  /// Reset the workspace at one of three escalating levels. After a
   /// successful reset the caller should reload the window so cached
-  /// drive info, file tree, and tabs resync; the server has done
+  /// workspace info, file tree, and tabs resync; the server has done
   /// the work but in-app state still references the pre-reset world.
   storageReset: (mode: ResetMode) =>
     req<ResetResponse>("POST", "/api/storage/reset", { mode }),
@@ -952,7 +952,7 @@ export const api = {
     req<void>("PUT", sessionPath(), body),
   links: () => req<GraphSnapshot>("GET", "/api/links"),
   /// Typed graph payload powering the graph view tab.
-  graph: (opts: { scope?: "drive" | "directory" | "file"; path?: string; depth?: number } = {}) => {
+  graph: (opts: { scope?: "workspace" | "directory" | "file"; path?: string; depth?: number } = {}) => {
     const params = new URLSearchParams();
     if (opts.scope) params.set("scope", opts.scope);
     if (opts.path) params.set("path", opts.path);
@@ -961,7 +961,7 @@ export const api = {
     return req<GraphView>("GET", `/api/graph${suffix}`);
   },
   graphStream: async (
-    opts: { scope?: "drive" | "directory" | "file"; path?: string; depth?: number } = {},
+    opts: { scope?: "workspace" | "directory" | "file"; path?: string; depth?: number } = {},
     streamOpts: GraphStreamOptions = {},
   ): Promise<GraphView> => {
     const params = new URLSearchParams();
@@ -1032,7 +1032,7 @@ export const api = {
   clearTerminalWatcher: (sessionId: string) =>
     req<void>("DELETE", `/api/terminal/${encodeURIComponent(sessionId)}/watcher`),
   /// `fullstack-b-13`: flip the receiving session's submit-mode
-  /// (drives the trailing chord bytes after a "poke" notification
+  /// (workspaces the trailing chord bytes after a "poke" notification
   /// from `dispatch_agent_event`). Mirrors `setTerminalWatcher`;
   /// 204 on success, 404 on unknown session, 400 on bad mode.
   setTerminalSubmitMode: (sessionId: string, mode: "shell" | "agent") =>
@@ -1060,8 +1060,8 @@ export const api = {
   /// pairs; the caller parses each via `parseWatcherEvent` from
   /// state/watcherEvents. Replaces the prior `api.list(dir) +
   /// api.read(path)` composition, which routed through the
-  /// drive-sandboxed `/api/files` and ENOENT-ed on absolute
-  /// outside-drive watcher paths.
+  /// workspace-sandboxed `/api/files` and ENOENT-ed on absolute
+  /// outside-workspace watcher paths.
   terminalWatcherEvents: (sessionId: string) =>
     req<Array<{ path: string; content: string }>>(
       "GET",
@@ -1104,13 +1104,13 @@ export const api = {
   semanticDownload: () => req<SemanticState>("POST", "/api/index/semantic/download"),
   semanticEnable: () => req<SemanticState>("POST", "/api/index/semantic/enable"),
   semanticDisable: () => req<SemanticState>("POST", "/api/index/semantic/disable"),
-  /// `fullstack-a-76`: per-drive chan-reports toggle. Mirrors the
+  /// `fullstack-a-76`: per-workspace chan-reports toggle. Mirrors the
   /// semantic-toggle shape (state / enable / disable). Reports
   /// endpoints landed in `systacean-39` at
   /// `crates/chan-server/src/routes/reports_toggle.rs`. The
   /// `enable` call triggers an incremental indexing pass per
   /// `-27`'s contract; `disable` is idempotent at the
-  /// chan-drive layer.
+  /// chan-workspace layer.
   reportsState: () =>
     req<{ enabled: boolean }>("GET", "/api/index/reports/state"),
   reportsEnable: () =>
@@ -1169,11 +1169,11 @@ export const api = {
     ),
 
   /// `fullstack-a-79`: team workspace endpoints from
-  /// `systacean-30` (chan-drive primitives) + `systacean-41`
+  /// `systacean-30` (chan-workspace primitives) + `systacean-41`
   /// (HTTP routes). The orchestrator (`-a-79`) calls
   /// teamCreate → teamLoad → terminal spawn-per-member; the
   /// load flow (`-a-80`) consumes teamListLoaded +
-  /// teamDuplicate. `TeamConfigWire` mirrors chan-drive's
+  /// teamDuplicate. `TeamConfigWire` mirrors chan-workspace's
   /// `TeamConfig` (snake_case per serde default).
   teamCreate: (name: string, config: TeamConfigWire) =>
     req<TeamRefView>("POST", "/api/teams", { name, config }),
@@ -1208,8 +1208,8 @@ export const api = {
     ),
 };
 
-/// `fullstack-a-79`: wire shape for `Drive::create_team` /
-/// `Drive::duplicate_team`. snake_case to match chan-drive's
+/// `fullstack-a-79`: wire shape for `Workspace::create_team` /
+/// `Workspace::duplicate_team`. snake_case to match chan-workspace's
 /// serde-default field naming. The SPA translates its own
 /// camelCase `TeamDialogConfig` into this on submit.
 export interface TeamMemberWire {
@@ -1259,7 +1259,7 @@ export type { WsStatus } from "./transport";
 /// per-socket and a fresh socket starts empty.
 export interface WatchSubscription {
   (): void;
-  /// Subscribe this socket to a directory scope. `dir: ""` is the drive
+  /// Subscribe this socket to a directory scope. `dir: ""` is the workspace
   /// root (idempotent server-side). Best-effort while the socket is
   /// connecting; the owner re-subscribes from `onReady`.
   subscribeDir(dir: WatchScopeDir): void;
@@ -1271,7 +1271,7 @@ export interface WatchSubscription {
 }
 
 /// Open the watcher subscription. Auto-reconnects with capped
-/// exponential backoff; the status callback drives the disconnect
+/// exponential backoff; the status callback workspaces the disconnect
 /// overlay. `onReady` fires on each (re)connect so the caller can
 /// re-establish per-directory scope subscriptions (the server registry
 /// is per-socket). Returns a `WatchSubscription`: callable as the

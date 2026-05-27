@@ -19,9 +19,9 @@ describe("fullstack-a-66 slice c follow-up: FileInfoBody Drafts header", () => {
     );
   });
 
-  test("'outside drive's root' notice renders for Drafts entry", () => {
+  test("'outside workspace's root' notice renders for Drafts entry", () => {
     expect(fileInfo).toMatch(
-      /\{#if entry\.path === "Drafts"\}[\s\S]*?<div class="drafts-notice"[\s\S]*?<strong>Drafts lives outside the drive's root\.<\/strong>/,
+      /\{#if entry\.path === "Drafts"\}[\s\S]*?<div class="drafts-notice"[\s\S]*?<strong>Drafts lives outside the workspace's root\.<\/strong>/,
     );
   });
 

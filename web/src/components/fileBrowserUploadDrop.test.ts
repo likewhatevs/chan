@@ -15,7 +15,7 @@ describe("File Browser upload via the Upload button", () => {
     // The internal tree-move drop wiring stays on the rows.
     expect(tree).toContain("ondrop={(e) => onRowDrop(e, node.path)}");
     expect(tree).toContain("ondrop={(e) => onRowDrop(e, parentOf(node.path))}");
-    // The Upload button still drives uploadFilesTo at the picked target.
+    // The Upload button still workspaces uploadFilesTo at the picked target.
     expect(tree).toContain("fileOps.uploadFilesTo(target.path");
   });
 
@@ -27,7 +27,7 @@ describe("File Browser upload via the Upload button", () => {
     expect(store).toContain("upload failed: '${target}' already exists");
   });
 
-  test("api client uses XHR so upload progress can drive status", () => {
+  test("api client uses XHR so upload progress can workspace status", () => {
     expect(client).toContain("new XMLHttpRequest()");
     expect(client).toContain("xhr.upload.onprogress");
     expect(client).toContain('/api/files/upload');

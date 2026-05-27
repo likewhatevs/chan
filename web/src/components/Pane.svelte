@@ -71,7 +71,7 @@
   import HamburgerMenu from "./HamburgerMenu.svelte";
   import TerminalTab from "./TerminalTab.svelte";
   import {
-    driveDisplayName,
+    workspaceDisplayName,
     tree,
   } from "../state/store.svelte";
   import {
@@ -107,7 +107,7 @@
   // config view component (`HybridXConfig.svelte` stubs from
   // `-a-43`); the tab-strip-level duplicate was unwanted chrome.
 
-  /// Per-row is_dir lookup for the active tree, keyed by path. Drives
+  /// Per-row is_dir lookup for the active tree, keyed by path. Workspaces
   /// the File-Browser tab title which needs to render "the parent
   /// dir of the selected file" or "the selected directory" — and
   /// the only way to disambiguate file vs dir on a `selected` path
@@ -119,10 +119,10 @@
     if (tab.kind !== "browser") return {};
     const sel = tab.selected ?? undefined;
     const selectedIsDir = sel ? treeIsDir.get(sel) : undefined;
-    return { driveName: driveDisplayName(), selectedIsDir };
+    return { workspaceName: workspaceDisplayName(), selectedIsDir };
   }
 
-  /// Per-path "is this file a contact?" lookup. Drives the tab-strip
+  /// Per-path "is this file a contact?" lookup. Workspaces the tab-strip
   /// icon (User glyph for contacts, FileText otherwise) so a row of
   /// tabs reads as "person, file, file, person" rather than a wall
   /// of equally-weighted text. The kind comes from the tree listing's
@@ -387,7 +387,7 @@
     paneModeSetHover(null);
   }
 
-  /// True when this pane is the drop target under a held grab. Drives
+  /// True when this pane is the drop target under a held grab. Workspaces
   /// the outline cue. Distinct from the keyboard-NAV active-pane
   /// highlight so the user can tell drop-target apart from focus.
   const isTransactionGrab = $derived(
@@ -1352,7 +1352,7 @@
         <!-- `fullstack-a-75b`: single-pane lone-pane case renders
              the static welcome surface — 5-tile spawn grid +
              Infographics tile + footer hint. The rotating
-             carousel widget (Shortcuts / Drive metadata /
+             carousel widget (Shortcuts / Workspace metadata /
              Indexing graph) lives inside the Infographics tab
              now per @@Alex's route on the `-a-75` walk.
              Multi-pane empty panes keep the minimal chrome

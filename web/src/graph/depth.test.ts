@@ -70,10 +70,10 @@ describe("graphDepthCap", () => {
     ).toBe(FS_GRAPH_DEPTH_MAX);
   });
 
-  it("uses the drive fs graph probe for drive and global scopes", () => {
+  it("uses the workspace fs graph probe for workspace and global scopes", () => {
     expect(
       graphDepthCap({
-        scope: { kind: "drive" },
+        scope: { kind: "workspace" },
         nodes: [],
         fsGraph: {
           truncated: false,

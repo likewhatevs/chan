@@ -103,7 +103,7 @@
   import {
     openInActivePane,
     openTerminalInPane,
-    saveDraftTabToDrive,
+    saveDraftTabToWorkspace,
     tabFocusPulse,
   } from "../state/tabs.svelte";
   import { terminalFromHereTarget } from "../terminal/fromHere";
@@ -275,7 +275,7 @@
   }
 
   /// Read-only mode for this tab. The status bar's lamp toggle
-  /// drives `tab.readMode` directly; an OS-level read-only file
+  /// workspaces `tab.readMode` directly; an OS-level read-only file
   /// (no user-write bit) is reflected through `tab.fsWritable`
   /// and overrides the lamp so the user can't try to write.
   /// Per-tab so multi-pane layouts can mix read/write without
@@ -287,7 +287,7 @@
       : "loading...",
   );
 
-  /// 0-indexed source line under the caret. Drives the outline's
+  /// 0-indexed source line under the caret. Workspaces the outline's
   /// active-heading marker (Google-Docs-style "you are here" bar
   /// on the guide line). Counts newlines up to tab.caret.from in
   /// O(n) which is fine for the buffer sizes chan deals with.
@@ -313,7 +313,7 @@
 
   // Find-on-page adapter for whichever editor is mounted. Both
   // editors expose `findAdapter` (see editor/find.ts FindAdapter)
-  // with the same shape; FindBar.svelte drives it. We re-derive
+  // with the same shape; FindBar.svelte workspaces it. We re-derive
   // on mode flip so a Wysiwyg <-> Source toggle while the bar is
   // open re-paints highlights against the new view.
   const findAdapter = $derived(
@@ -475,9 +475,9 @@
       (e.currentTarget as HTMLInputElement).blur();
     }
   }
-  async function doSaveDraftToDrive(): Promise<void> {
+  async function doSaveDraftToWorkspace(): Promise<void> {
     closeTabMenu();
-    await saveDraftTabToDrive(tab);
+    await saveDraftTabToWorkspace(tab);
   }
 
   /// True for tabs that have a structured render mode alongside
@@ -488,7 +488,7 @@
     tab.fileKind !== "text" || isJson(tab.path) || isCsv(tab.path),
   );
 
-  /// Which render mode this tab pairs with source mode. Drives the
+  /// Which render mode this tab pairs with source mode. Workspaces the
   /// toggle button copy + the icon picker below.
   const renderedModeForTab = $derived<"wysiwyg" | "pretty" | "table">(
     isJson(tab.path) ? "pretty" : isCsv(tab.path) ? "table" : "wysiwyg",
@@ -613,7 +613,7 @@
   /// `fullstack-a-67f`: "Copy path to $CWD" — addendum-a wants
   /// the editor menu to expose both the file path and the
   /// parent-directory path. Parent dir is `tab.path` up to the
-  /// last `/`; for root-level files the CWD is the drive root.
+  /// last `/`; for root-level files the CWD is the workspace root.
   async function doCopyCwdPath(): Promise<void> {
     closeTabMenu();
     const slash = tab.path.lastIndexOf("/");
@@ -673,8 +673,8 @@
   function doOpenGraph(): void {
     closeTabMenu();
     // "Graph from here" from a file's menu scopes the graph to that
-    // file (file:<path>), not the whole drive. Hashtags etc. still
-    // route through openGraphAtNode at drive scope.
+    // file (file:<path>), not the whole workspace. Hashtags etc. still
+    // route through openGraphAtNode at workspace scope.
     openGraphForFile(tab.path);
   }
 
@@ -795,7 +795,7 @@
   {#if menuOpen}
     <!-- Tab menu bubble. Anchored to the tab title in the pane's
          tab strip; rendered here so it has direct access to the
-         live Wysiwyg ref + selVer signal that drives the
+         live Wysiwyg ref + selVer signal that workspaces the
          formatting buttons' "on" states. -->
     <div
       class="tab-menu-bubble"
@@ -819,11 +819,11 @@
            cover them. -->
       <div class="action-list">
         {#if isDraftEditorTab}
-          <button class="mbtn" type="button" onclick={doSaveDraftToDrive}>
+          <button class="mbtn" type="button" onclick={doSaveDraftToWorkspace}>
             <span class="mbtn-icon">
               <Save size={18} strokeWidth={1.75} aria-hidden="true" />
             </span>
-            <span class="mbtn-label">Save to Drive</span>
+            <span class="mbtn-label">Save to Workspace</span>
           </button>
         {:else}
           <!-- Editable Name input (addendum: "editable like
@@ -1118,7 +1118,7 @@
        Addendum-a moves the rename surface into the menu top as
        a "Name, editable like Terminal's" input. The new in-menu
        input commits on Enter/blur via `fileOps.renameInPlace`
-       (same chan-drive rename + link-rewrite pass as before). -->
+       (same chan-workspace rename + link-rewrite pass as before). -->
   {#if tab.fileMissing}
     <div class="editor-toolbar missing-toolbar">
       <span>File moved or deleted</span>

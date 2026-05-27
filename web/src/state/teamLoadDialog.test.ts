@@ -50,7 +50,7 @@ describe("fullstack-a-80 slice 2: wireToDialog translator", () => {
       { name: "@@Lead", command: "claude", env: "FOO=bar", isLead: true },
       { name: "@@Worker1", command: "claude", env: "", isLead: false },
     ]);
-    // Real estate defaults to tabs — chan-drive's Member
+    // Real estate defaults to tabs — chan-workspace's Member
     // doesn't persist a real-estate field today.
     expect(dialog.realEstate).toEqual({ kind: "tabs" });
   });
@@ -148,7 +148,7 @@ describe("fullstack-a-80 slice 2: FileTree loadTeamFromMenu populates dialog fro
 });
 
 describe("fullstack-a-80 slice 2: orchestrator gates kept", () => {
-  test("wireToDialog default realEstate: tabs (chan-drive doesn't persist real-estate)", () => {
+  test("wireToDialog default realEstate: tabs (chan-workspace doesn't persist real-estate)", () => {
     expect(orchestrator).toMatch(
       /realEstate: \{ kind: "tabs" \},/,
     );

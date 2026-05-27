@@ -223,7 +223,7 @@ export const SHORTCUTS: readonly Shortcut[] = [
     escapeTerminal: true,
   },
   // `fullstack-a-66`: New Draft action — creates a fresh draft
-  // dir under chan-drive's metadata-side Drafts folder + opens
+  // dir under chan-workspace's metadata-side Drafts folder + opens
   // `draft.md` in the Hybrid Editor. chan-desktop's
   // `-b-27` moved its "New Window" accelerator to Cmd+Shift+N
   // so plain Cmd+N is reserved for this SPA handler.
@@ -318,7 +318,7 @@ export const SHORTCUTS: readonly Shortcut[] = [
   // `fullstack-56` dropped `app.save` (Cmd+S) because autosave is the
   // canonical write path (debounced on idle + tab-close + visibility
   // hooks); there was never a File->Save menu item. `phase-12 lane-e`
-  // (addendum-2) reclaims Cmd+S for DRIVE-WIDE SEARCH (the action
+  // (addendum-2) reclaims Cmd+S for WORKSPACE-WIDE SEARCH (the action
   // previously reachable only via Hybrid Nav). @@Alex Q5 authorizes
   // preventDefault on web to suppress the browser save-page dialog.
   // Distinct from Cmd+Shift+S strikethrough (owned by the editor).

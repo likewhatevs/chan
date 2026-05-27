@@ -82,25 +82,25 @@ describe("no inline close affordance on first-class surfaces", () => {
     expect(graph).not.toContain("{#if !tab}");
   });
 
-  // fullstack-73: "Graph from here" affordance on DriveInfoBody so
-  // every inspector surface offers the same action when the drive
+  // fullstack-73: "Graph from here" affordance on WorkspaceInfoBody so
+  // every inspector surface offers the same action when the workspace
   // root is selected.
-  test("DriveInfoBody renders 'Graph from here' only when onSetAsScope is provided", async () => {
-    const driveInfo = (
-      await import("./DriveInfoBody.svelte?raw")
+  test("WorkspaceInfoBody renders 'Graph from here' only when onSetAsScope is provided", async () => {
+    const workspaceInfo = (
+      await import("./WorkspaceInfoBody.svelte?raw")
     ).default as string;
-    expect(driveInfo).toContain("onSetAsScope");
-    expect(driveInfo).toContain(
+    expect(workspaceInfo).toContain("onSetAsScope");
+    expect(workspaceInfo).toContain(
       'onclick={onSetAsScope}>Graph from here',
     );
     // Button is gated on the prop being present, mirroring the
     // FileInfoBody convention.
-    expect(driveInfo).toMatch(/\{#if onSetAsScope\}[\s\S]*?Graph from here/);
+    expect(workspaceInfo).toMatch(/\{#if onSetAsScope\}[\s\S]*?Graph from here/);
   });
 
   // `fullstack-a-33`: the explicit "Graph from here" button on the
   // graph's inspector goes away for file / tag / mention bodies.
-  // DriveInfoBody / FileInfoBody / TagInfoBody still ship the
+  // WorkspaceInfoBody / FileInfoBody / TagInfoBody still ship the
   // button (FileBrowserSurface consumes it), but the GraphPanel
   // no longer passes `onSetAsScope` for those. The ancestor
   // breadcrumb above the inspector body is the in-graph re-scope
@@ -111,8 +111,8 @@ describe("no inline close affordance on first-class surfaces", () => {
   // button targets the SELECTED directory (which may be unrelated
   // to the current scope's ancestor chain, e.g. a directory the
   // user navigated into via cross-link).
-  test("GraphPanel does not pass onSetAsScope to DriveInfoBody", () => {
-    expect(graph).not.toMatch(/<DriveInfoBody\s+onSetAsScope=/);
+  test("GraphPanel does not pass onSetAsScope to WorkspaceInfoBody", () => {
+    expect(graph).not.toMatch(/<WorkspaceInfoBody\s+onSetAsScope=/);
   });
 
   test("GraphPanel wires 'Graph from here' for file + directory selections (I4)", () => {
@@ -129,14 +129,14 @@ describe("no inline close affordance on first-class surfaces", () => {
   });
 
   test("graphFromHere re-roots in place: dir to itself, file to its parent (I4/GI-6)", () => {
-    // GI-6: a directory re-roots to `dir:<path>` (the dir itself, drive
+    // GI-6: a directory re-roots to `dir:<path>` (the dir itself, workspace
     // root for the empty path); a file re-roots to its parent dir. The
     // old always-parent rule made re-rooting a child folder onto its
     // already-current parent a no-op + left the inspector blank.
     expect(graph).toContain("function graphFromHere(path: string, isDir: boolean)");
-    expect(graph).toMatch(/if \(isDir\) \{\s*scopeId = path \? `dir:\$\{path\}` : "drive";/);
+    expect(graph).toMatch(/if \(isDir\) \{\s*scopeId = path \? `dir:\$\{path\}` : "workspace";/);
     expect(graph).toMatch(/const parent = slash > 0 \? path\.slice\(0, slash\) : ""/);
-    expect(graph).toMatch(/scopeId = parent \? `dir:\$\{parent\}` : "drive"/);
+    expect(graph).toMatch(/scopeId = parent \? `dir:\$\{parent\}` : "workspace"/);
     expect(graph).toMatch(/graphState\.pendingSelectId = path/);
   });
 
@@ -148,9 +148,9 @@ describe("no inline close affordance on first-class surfaces", () => {
     expect(graph).toContain("scopeAncestors");
     expect(graph).toMatch(/class="scope-crumbs"/);
     expect(graph).toMatch(/class="crumb"[\s\S]*?onclick=\{\(\) => rescopeFromHere\(crumb\.scopeId\)\}/);
-    // Drive root is always the head of the chain so the user
-    // can hop back to drive scope from any depth.
-    expect(graph).toMatch(/scopeId: "drive", current: true/);
+    // Workspace root is always the head of the chain so the user
+    // can hop back to workspace scope from any depth.
+    expect(graph).toMatch(/scopeId: "workspace", current: true/);
   });
 
   test("GraphPanel rescopeFromHere mutates the current tab (no new spawn)", () => {
@@ -165,7 +165,7 @@ describe("no inline close affordance on first-class surfaces", () => {
     expect(graph).not.toContain("scopeFsGraphFromHere");
   });
 
-  test("FileBrowserSurface spawns a Graph tab from DriveInfoBody", async () => {
+  test("FileBrowserSurface spawns a Graph tab from WorkspaceInfoBody", async () => {
     expect(fileBrowserSurface).toContain(
       'onSetAsScope={() => openFsGraphForDirectory("")}',
     );

@@ -9,7 +9,7 @@ export function terminalFromHereTarget(
   path: string,
   isDir: boolean,
 ): TerminalFromHereTarget {
-  const normalized = normalizeDrivePath(path);
+  const normalized = normalizeWorkspacePath(path);
   if (isDir) return { cwd: normalized };
   const parent = parentDir(normalized);
   const base = basename(normalized);
@@ -22,7 +22,7 @@ export function shellQuotePath(path: string): string {
   return `'${path.replaceAll("'", "'\\''")}'`;
 }
 
-function normalizeDrivePath(path: string): string {
+function normalizeWorkspacePath(path: string): string {
   return path
     .split("/")
     .filter((part) => part !== "" && part !== ".")

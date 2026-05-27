@@ -14,12 +14,12 @@ import { resolveImageSrc } from "../editor/extensions/image";
 
 /// Open the fullscreen viewer.
 ///
-///   src       Markdown-style image src. May be drive-rooted
+///   src       Markdown-style image src. May be workspace-rooted
 ///             ("attachments/pic.png"), source-relative
 ///             ("./img.png"), or an http(s)/data URL.
-///   fromPath  Drive-relative path of the document the src was
+///   fromPath  Workspace-relative path of the document the src was
 ///             authored in. Used to resolve source-relative refs.
-///             Pass null when src is already drive-rooted (the
+///             Pass null when src is already workspace-rooted (the
 ///             inspector's link list passes resolved paths).
 ///
 /// No-op on empty / unresolvable src.

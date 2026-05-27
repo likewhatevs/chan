@@ -3,7 +3,7 @@ import carousel from "./EmptyPaneCarousel.svelte?raw";
 
 // `fullstack-b-4`: the indexing-graph slide in the empty-pane
 // carousel used to render at a fixed `viewBox="0 0 280 280"`,
-// clipping any drive whose hierarchy extended past the
+// clipping any workspace whose hierarchy extended past the
 // viewport with no way to pan or zoom. Parity with
 // `GraphCanvas.svelte`: drag-to-pan, wheel-to-zoom, recenter
 // affordance.

@@ -9,18 +9,18 @@
 //     (group scope; same key for the same set so a re-arrange
 //     doesn't fragment state),
 //   - a "directory" entry when the active browser tab has a
-//     directory selected (dir scope; a subtree of the drive narrower
-//     than the drive but broader than a single file),
+//     directory selected (dir scope; a subtree of the workspace narrower
+//     than the workspace but broader than a single file),
 //   - a "git repo" entry per repo covering visible files (git_repo
-//     scope; a project subset of the drive),
-//   - a "whole drive" entry that always exists (drive scope),
-//   - a "global" entry for cross-drive scope (every chan drive
+//     scope; a project subset of the workspace),
+//   - a "whole workspace" entry that always exists (workspace scope),
+//   - a "global" entry for cross-workspace scope (every chan workspace
 //     this user has touched). Surfaced as a placeholder for now;
-//     enabled flips on once backend cross-drive indexing exists.
+//     enabled flips on once backend cross-workspace indexing exists.
 //
 // The id format is the discriminator the consumer stores:
 // `file:<path>`, `group:<key>`, `dir:<path>`, `git_repo:<root>`,
-// `drive`, or `global`. Each consumer holds the chosen id (e.g. a
+// `workspace`, or `global`. Each consumer holds the chosen id (e.g. a
 // graph tab's `scopeId`); the helpers here turn it into a typed
 // ScopeOption.
 
@@ -35,9 +35,9 @@ import { browserSelection, tree } from "./store.svelte";
 /// Picker option, as a discriminated union so consumers can
 /// pattern-match on `kind` and access the kind-specific fields
 /// (path for file/dir, repo path for git_repo, key+paths for
-/// group, nothing extra for drive or global). `enabled` defaults
+/// group, nothing extra for workspace or global). `enabled` defaults
 /// true; consumers render it as disabled in the dropdown when
-/// false (e.g. global before cross-drive indexing ships).
+/// false (e.g. global before cross-workspace indexing ships).
 export type ScopeOption =
   | {
       id: string;
@@ -54,9 +54,9 @@ export type ScopeOption =
       id: string;
       kind: "dir";
       label: string;
-      /// Directory path relative to the drive root. Empty string
-      /// means the drive root itself; consumers should treat that
-      /// case the same as `drive` scope.
+      /// Directory path relative to the workspace root. Empty string
+      /// means the workspace root itself; consumers should treat that
+      /// case the same as `workspace` scope.
       path: string;
       enabled?: boolean;
     }
@@ -64,7 +64,7 @@ export type ScopeOption =
       id: string;
       kind: "git_repo";
       label: string;
-      /// Repo path relative to the drive root.
+      /// Repo path relative to the workspace root.
       root: string;
       enabled?: boolean;
     }
@@ -86,7 +86,7 @@ export type ScopeOption =
       nodeId: string;
       enabled?: boolean;
     }
-  | { id: "drive"; kind: "drive"; label: string; enabled?: boolean }
+  | { id: "workspace"; kind: "workspace"; label: string; enabled?: boolean }
   | { id: "global"; kind: "global"; label: string; enabled?: boolean };
 
 /// Stable group key from a list of paths: sorted + joined with `|`
@@ -96,19 +96,19 @@ export function scopeKey(paths: readonly string[]): string {
   return [...paths].sort().join("|");
 }
 
-/// Drive-relative parent directory of `path`. Returns "" for paths
-/// at the drive root (no parent) and for the empty string. Directories
+/// Workspace-relative parent directory of `path`. Returns "" for paths
+/// at the workspace root (no parent) and for the empty string. Directories
 /// follow the same rule as files; the caller decides whether to
-/// treat the empty parent as "drive scope" or skip.
+/// treat the empty parent as "workspace scope" or skip.
 export function parentDir(path: string): string {
   const i = path.lastIndexOf("/");
   return i === -1 ? "" : path.slice(0, i);
 }
 
-/// Longest common parent directory across `paths`. Drives the
+/// Longest common parent directory across `paths`. Workspaces the
 /// auto-added "common ancestor" scope option per request.md when
 /// multiple files share an enclosing directory. Returns "" when the
-/// paths have no shared ancestor below the drive root.
+/// paths have no shared ancestor below the workspace root.
 export function commonAncestor(paths: readonly string[]): string {
   if (paths.length === 0) return "";
   const first = paths[0]!.split("/");
@@ -125,7 +125,7 @@ export function commonAncestor(paths: readonly string[]): string {
 }
 
 /// Paths for every file tab currently active in any leaf pane.
-/// Returns each path at most once, sorted alphabetically. Drives
+/// Returns each path at most once, sorted alphabetically. Workspaces
 /// every overlay's "context dropdown" + the cleanup pass that
 /// prunes group state whose context no longer exists.
 export function visibleFilePaths(): string[] {
@@ -141,7 +141,7 @@ export function visibleFilePaths(): string[] {
 /// Lookup the read-only state of a path among the active tabs.
 /// True when at least one open tab on this path is in read mode
 /// (user-toggled or filesystem-locked); false when no open tab
-/// claims the path or every open tab is writable. Drives the
+/// claims the path or every open tab is writable. Workspaces the
 /// `(read-only)` tag on file scope options.
 function pathIsReadOnly(path: string): boolean {
   for (const node of Object.values(layout.nodes)) {
@@ -155,7 +155,7 @@ function pathIsReadOnly(path: string): boolean {
 
 /// Path of the directory currently selected in the file browser
 /// (dock or tab), or `null` when there's no selection or the
-/// selection is a file rather than a directory. Drives the
+/// selection is a file rather than a directory. Workspaces the
 /// `dir:<path>` scope option and `defaultScopeId`'s browser-aware
 /// branch. (The browser overlay was retired; the shared
 /// `browserSelection` is the selection signal now.)
@@ -170,10 +170,10 @@ export function selectedDirPath(): string | null {
 }
 
 /// Distinct git repo roots covered by the currently visible files.
-/// Each entry is a relative path under the drive root. Drives the
+/// Each entry is a relative path under the workspace root. Workspaces the
 /// "git repo: <name>" entry in the overlay scope picker: a file
 /// that lives inside a git repo (Sentinel-only file when the user
-/// has chosen the drive's chan-marked directory, or git-repo files
+/// has chosen the workspace's chan-marked directory, or git-repo files
 /// when nested) gets a project-bound scope option. Files outside
 /// any repo contribute nothing here.
 export function visibleRepoRoots(): string[] {
@@ -189,20 +189,20 @@ export function visibleRepoRoots(): string[] {
 }
 
 /// Build the dropdown options from the current layout. Each
-/// overlay supplies its own label for the "drive" entry (the
+/// overlay supplies its own label for the "workspace" entry (the
 /// other scope kinds are derived from the layout and need no
 /// per-surface customization). Pass a `global` entry to surface
-/// the cross-drive scope as the broadest pick; pass
+/// the cross-workspace scope as the broadest pick; pass
 /// `enabled: false` to render it as a disabled "coming soon"
-/// row until backend cross-drive support lands.
+/// row until backend cross-workspace support lands.
 ///
 /// Order in the returned list (narrow → broad): individual files,
 /// group of all visible files, git repos covering visible files
-/// (when applicable), drive, global. The picker renders them in
+/// (when applicable), workspace, global. The picker renders them in
 /// this order so "narrower" picks land at the top where the
 /// keyboard cursor naturally falls.
 export function availableScopeOptions(opts: {
-  driveLabel: string;
+  workspaceLabel: string;
   global?: { label: string; enabled?: boolean };
 }): ScopeOption[] {
   const files = visibleFilePaths();
@@ -263,8 +263,8 @@ export function availableScopeOptions(opts: {
   if (files.length >= 2) pushDir(commonAncestor(files), "common ancestor");
   for (const root of visibleRepoRoots()) {
     // Display label: just the repo's basename (the rightmost
-    // path segment) since the path is relative to the drive
-    // and the user already knows which drive they're in.
+    // path segment) since the path is relative to the workspace
+    // and the user already knows which workspace they're in.
     const slash = root.lastIndexOf("/");
     const name = slash >= 0 ? root.slice(slash + 1) : root;
     out.push({
@@ -274,7 +274,7 @@ export function availableScopeOptions(opts: {
       root,
     });
   }
-  out.push({ id: "drive", kind: "drive", label: opts.driveLabel });
+  out.push({ id: "workspace", kind: "workspace", label: opts.workspaceLabel });
   if (opts.global) {
     out.push({
       id: "global",
@@ -289,7 +289,7 @@ export function availableScopeOptions(opts: {
 /// Pick a default scope id matching what's "in front of" the user
 /// right now: the active pane's active file when it's a file tab,
 /// the selected file or directory when the active tab is a browser,
-/// else "drive" (always present). Shared between every overlay's
+/// else "workspace" (always present). Shared between every overlay's
 /// open-from-toolbar entry point and global keybinding so both
 /// snap to the same pick.
 export function defaultScopeId(): string {
@@ -318,5 +318,5 @@ export function defaultScopeId(): string {
   if (visible.length >= 2) return `group:${scopeKey(visible)}`;
   // Otherwise: the active pane's active file.
   if (activeTab?.kind === "file" && activeTab.path) return `file:${activeTab.path}`;
-  return "drive";
+  return "workspace";
 }

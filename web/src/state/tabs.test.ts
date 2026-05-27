@@ -62,7 +62,7 @@ import {
   reopenClosedTab,
   reorderTab,
   restoreLayout,
-  saveDraftTabToDrive,
+  saveDraftTabToWorkspace,
   saveTab,
   scheduleAutosave,
   serializeLayout,
@@ -233,7 +233,7 @@ describe("tab close confirmation", () => {
     expect(activePane().tabs).toHaveLength(0);
   });
 
-  test("saving a draft notifies promotion sinks with the drive path", async () => {
+  test("saving a draft notifies promotion sinks with the workspace path", async () => {
     const tab = fileTab({
       id: "draft-tab",
       path: "Drafts/untitled-1/draft.md",
@@ -277,7 +277,7 @@ describe("tab close confirmation", () => {
     expect(activePane().tabs).toHaveLength(0);
   });
 
-  test("explicit draft save promotes and keeps the tab open on the drive file", async () => {
+  test("explicit draft save promotes and keeps the tab open on the workspace file", async () => {
     const tab = fileTab({
       id: "draft-tab",
       path: "Drafts/untitled-1/draft.md",
@@ -310,7 +310,7 @@ describe("tab close confirmation", () => {
     // `new-file-and-draft-spec.md` item 3: a lone draft.md routes
     // through the SAME PathPromptModal as New File, in file mode
     // (kind "file"), defaulting to `<name>.md`.
-    const save = saveDraftTabToDrive(tab);
+    const save = saveDraftTabToWorkspace(tab);
     await vi.waitFor(() => expect(pathPromptState.open).toBe(true));
     expect(pathPromptState.kind).toBe("file");
     expect(pathPromptState.defaultValue).toBe("untitled-1.md");
@@ -363,7 +363,7 @@ describe("tab close confirmation", () => {
     // A draft with attachments routes through PathPromptModal's
     // Dir-only (folder) mode, defaulting to `<name>/`, and carries the
     // notice telling the user the whole directory is saved as a dir.
-    const save = saveDraftTabToDrive(tab);
+    const save = saveDraftTabToWorkspace(tab);
     await vi.waitFor(() => expect(pathPromptState.open).toBe(true));
     expect(pathPromptState.kind).toBe("folder");
     expect(pathPromptState.defaultValue).toBe("untitled-1/");
@@ -590,8 +590,8 @@ describe("pane state", () => {
         workspacePath: "Drafts/rich-prompt-2",
         eventsPath: "Drafts/rich-prompt-2/spool/events",
         processPath: "Drafts/rich-prompt-2/spool/process.md",
-        workspaceAbs: "/tmp/drive/.chan/rich-prompt-2",
-        eventsAbs: "/tmp/drive/.chan/rich-prompt-2/spool/events",
+        workspaceAbs: "/tmp/workspace/.chan/rich-prompt-2",
+        eventsAbs: "/tmp/workspace/.chan/rich-prompt-2/spool/events",
         submissionSequence: 7,
         submitMode: "agent",
         agentTarget: "claude",
@@ -778,7 +778,7 @@ describe("pane state", () => {
     resetLayout([]);
     const graph = openGraphInActivePane({
       mode: "language",
-      scopeId: "drive",
+      scopeId: "workspace",
       depth: 0,
     });
     graph.inspectorOpen = true;
@@ -809,7 +809,7 @@ describe("pane state", () => {
     resetLayout([]);
     const browser = openBrowserInActivePane();
     browser.selected = "notes/today.md";
-    browser.showDrive = false;
+    browser.showWorkspace = false;
     browser.expanded = ["notes", "notes/2026"];
     browser.scroll = 320;
 
@@ -823,9 +823,9 @@ describe("pane state", () => {
     expect(restored.selected).toBe("notes/today.md");
     expect(restored.expanded).toEqual(["notes", "notes/2026"]);
     expect(restored.scroll).toBe(320);
-    // showDrive=false is the default; we omit `bd` in the hash so it
+    // showWorkspace=false is the default; we omit `bd` in the hash so it
     // restores as undefined rather than `false`. Either is fine.
-    expect(restored.showDrive ?? false).toBe(false);
+    expect(restored.showWorkspace ?? false).toBe(false);
   });
 
   test("two BrowserTab records carry independent state without leakage (fullstack-58)", () => {
@@ -837,12 +837,12 @@ describe("pane state", () => {
     tab1.selected = "index.md";
     tab1.expanded = ["docs"];
     tab1.scroll = 80;
-    tab1.showDrive = false;
+    tab1.showWorkspace = false;
 
     tab2.selected = "notes/scratch.md";
     tab2.expanded = ["notes"];
     tab2.scroll = 240;
-    tab2.showDrive = true;
+    tab2.showWorkspace = true;
 
     expect(tab1.selected).toBe("index.md");
     expect(tab2.selected).toBe("notes/scratch.md");
@@ -850,8 +850,8 @@ describe("pane state", () => {
     expect(tab2.expanded).toEqual(["notes"]);
     expect(tab1.scroll).toBe(80);
     expect(tab2.scroll).toBe(240);
-    expect(tab1.showDrive).toBe(false);
-    expect(tab2.showDrive).toBe(true);
+    expect(tab1.showWorkspace).toBe(false);
+    expect(tab2.showWorkspace).toBe(true);
   });
 
   test("hash round-trips both BrowserTab records' per-tab state (fullstack-58)", async () => {
@@ -893,7 +893,7 @@ describe("pane state", () => {
     const browser2 = openBrowserInActivePane();
     const graph1 = openGraphInActivePane({
       mode: "semantic",
-      scopeId: "drive",
+      scopeId: "workspace",
       depth: 1,
     });
     const file1 = fileTab({ id: "f1", path: "notes/a.md" });
@@ -1136,7 +1136,7 @@ describe("pane state", () => {
     }
   });
 
-  test("paneModeOpen* with empty context preserves drive-root defaults (fullstack-43)", () => {
+  test("paneModeOpen* with empty context preserves workspace-root defaults (fullstack-43)", () => {
     const f = fileTab({ id: "f", path: "notes/x.md" });
     resetLayout([f]);
 
@@ -1151,7 +1151,7 @@ describe("pane state", () => {
     expect(terminal.cwd).toBeUndefined();
     expect(graph?.kind).toBe("graph");
     if (graph?.kind === "graph") {
-      expect(graph.scopeId).toBe("drive");
+      expect(graph.scopeId).toBe("workspace");
       expect(graph.pendingSelectId).toBeNull();
     }
   });
@@ -2920,24 +2920,24 @@ describe("truncateTabTitle (fullstack-66)", () => {
 });
 
 describe("graphTitle (fullstack-64)", () => {
-  test("drive scope reads as 'drive'", () => {
-    expect(graphTitle("semantic", "drive")).toBe("drive");
-    expect(graphTitle("filesystem", "drive")).toBe("drive");
-    expect(graphTitle("semantic", "global")).toBe("drive");
+  test("workspace scope reads as 'workspace'", () => {
+    expect(graphTitle("semantic", "workspace")).toBe("workspace");
+    expect(graphTitle("filesystem", "workspace")).toBe("workspace");
+    expect(graphTitle("semantic", "global")).toBe("workspace");
   });
 
   test("file: scope reads as the file basename", () => {
     expect(graphTitle("semantic", "file:notes/sub/foo.md")).toBe("foo.md");
     expect(graphTitle("semantic", "file:README.md")).toBe("README.md");
-    // File at the drive root with no path falls back to 'drive'.
-    expect(graphTitle("semantic", "file:")).toBe("drive");
+    // File at the workspace root with no path falls back to 'workspace'.
+    expect(graphTitle("semantic", "file:")).toBe("workspace");
   });
 
   test("dir: scope reads as the dir basename with a trailing slash", () => {
     expect(graphTitle("semantic", "dir:notes/sub")).toBe("sub/");
     expect(graphTitle("semantic", "dir:notes")).toBe("notes/");
-    // dir: with no path is treated as the drive root.
-    expect(graphTitle("semantic", "dir:")).toBe("drive");
+    // dir: with no path is treated as the workspace root.
+    expect(graphTitle("semantic", "dir:")).toBe("workspace");
   });
 
   test("tag: scope keeps the # prefix", () => {
@@ -2955,7 +2955,7 @@ describe("graphTitle (fullstack-64)", () => {
   });
 
   test("language mode keeps its dedicated label regardless of scope", () => {
-    expect(graphTitle("language", "drive")).toBe("Languages");
+    expect(graphTitle("language", "workspace")).toBe("Languages");
     expect(graphTitle("language", "file:foo.md")).toBe("Languages");
   });
 
@@ -2977,22 +2977,22 @@ describe("browserTabLabel (fullstack-a-1)", () => {
     };
   }
 
-  test("no selection renders drive label + trailing slash", () => {
-    expect(browserTabLabel(browserTab({ selected: null }), { driveName: "chan" })).toBe("chan/");
-    expect(browserTabLabel(browserTab({ selected: undefined }), { driveName: "chan" })).toBe("chan/");
-    expect(browserTabLabel(browserTab({ selected: "" }), { driveName: "chan" })).toBe("chan/");
-    expect(browserTabLabel(browserTab({ selected: "   " }), { driveName: "chan" })).toBe("chan/");
+  test("no selection renders workspace label + trailing slash", () => {
+    expect(browserTabLabel(browserTab({ selected: null }), { workspaceName: "chan" })).toBe("chan/");
+    expect(browserTabLabel(browserTab({ selected: undefined }), { workspaceName: "chan" })).toBe("chan/");
+    expect(browserTabLabel(browserTab({ selected: "" }), { workspaceName: "chan" })).toBe("chan/");
+    expect(browserTabLabel(browserTab({ selected: "   " }), { workspaceName: "chan" })).toBe("chan/");
   });
 
-  test("no selection without drive label falls back to tab title + slash", () => {
+  test("no selection without workspace label falls back to tab title + slash", () => {
     expect(browserTabLabel(browserTab({ selected: null }))).toBe("Files/");
     expect(browserTabLabel(browserTab({ selected: "" }))).toBe("Files/");
   });
 
-  test("file at drive root renders drive label + slash", () => {
+  test("file at workspace root renders workspace label + slash", () => {
     expect(
       browserTabLabel(browserTab({ selected: "README.md" }), {
-        driveName: "notes",
+        workspaceName: "notes",
         selectedIsDir: false,
       }),
     ).toBe("notes/");
@@ -3001,13 +3001,13 @@ describe("browserTabLabel (fullstack-a-1)", () => {
   test("file inside a subdir renders the parent dir + slash", () => {
     expect(
       browserTabLabel(browserTab({ selected: "foo/bar/baz.md" }), {
-        driveName: "notes",
+        workspaceName: "notes",
         selectedIsDir: false,
       }),
     ).toBe("bar/");
     expect(
       browserTabLabel(browserTab({ selected: "notes/today.md" }), {
-        driveName: "drive",
+        workspaceName: "workspace",
         selectedIsDir: false,
       }),
     ).toBe("notes/");
@@ -3016,13 +3016,13 @@ describe("browserTabLabel (fullstack-a-1)", () => {
   test("directory selection renders that dir + slash", () => {
     expect(
       browserTabLabel(browserTab({ selected: "notes/sub" }), {
-        driveName: "drive",
+        workspaceName: "workspace",
         selectedIsDir: true,
       }),
     ).toBe("sub/");
     expect(
       browserTabLabel(browserTab({ selected: "notes/sub/" }), {
-        driveName: "drive",
+        workspaceName: "workspace",
         selectedIsDir: true,
       }),
     ).toBe("sub/");
@@ -3035,18 +3035,18 @@ describe("browserTabLabel (fullstack-a-1)", () => {
   test("two browser tabs with different selections produce different labels", () => {
     const a = browserTab({ id: "br-a", selected: "a.md" });
     const b = browserTab({ id: "br-b", selected: "notes/b.md" });
-    expect(browserTabLabel(a, { driveName: "drive", selectedIsDir: false })).toBe("drive/");
-    expect(browserTabLabel(b, { driveName: "drive", selectedIsDir: false })).toBe("notes/");
+    expect(browserTabLabel(a, { workspaceName: "workspace", selectedIsDir: false })).toBe("workspace/");
+    expect(browserTabLabel(b, { workspaceName: "workspace", selectedIsDir: false })).toBe("notes/");
   });
 
   test("tabLabel routes browser tabs through browserTabLabel", () => {
     expect(
       tabLabel(browserTab({ selected: "notes/today.md" }), {
-        driveName: "drive",
+        workspaceName: "workspace",
         selectedIsDir: false,
       }),
     ).toBe("notes/");
-    expect(tabLabel(browserTab({ selected: null }), { driveName: "drive" })).toBe("drive/");
+    expect(tabLabel(browserTab({ selected: null }), { workspaceName: "workspace" })).toBe("workspace/");
   });
 });
 
@@ -3055,9 +3055,9 @@ describe("graphTabLabel (fullstack-81)", () => {
     return {
       kind: "graph",
       id: "g-1",
-      title: "drive",
+      title: "workspace",
       mode: "semantic",
-      scopeId: "drive",
+      scopeId: "workspace",
       depth: 1,
       filters: {
         link: true,
@@ -3076,17 +3076,17 @@ describe("graphTabLabel (fullstack-81)", () => {
   }
 
   test("no selection falls back to the scope-derived title", () => {
-    expect(graphTabLabel(graphTab({ title: "drive" }))).toBe("drive");
+    expect(graphTabLabel(graphTab({ title: "workspace" }))).toBe("workspace");
     expect(graphTabLabel(graphTab({ title: "foo.md" }))).toBe("foo.md");
-    expect(graphTabLabel(graphTab({ selectedNodeLabel: null }))).toBe("drive");
-    expect(graphTabLabel(graphTab({ selectedNodeLabel: "   " }))).toBe("drive");
+    expect(graphTabLabel(graphTab({ selectedNodeLabel: null }))).toBe("workspace");
+    expect(graphTabLabel(graphTab({ selectedNodeLabel: "   " }))).toBe("workspace");
   });
 
   test("selection label wins over the scope title", () => {
     expect(
       graphTabLabel(
         graphTab({
-          title: "drive",
+          title: "workspace",
           selectedNodeId: "notes/foo.md",
           selectedNodeLabel: "foo.md",
         }),
@@ -3095,7 +3095,7 @@ describe("graphTabLabel (fullstack-81)", () => {
     expect(
       graphTabLabel(
         graphTab({
-          title: "drive",
+          title: "workspace",
           selectedNodeId: "#search",
           selectedNodeLabel: "#search",
         }),
@@ -3105,7 +3105,7 @@ describe("graphTabLabel (fullstack-81)", () => {
 
   test("tabLabel routes graph tabs through graphTabLabel", () => {
     expect(
-      tabLabel(graphTab({ title: "drive", selectedNodeLabel: "Miguel" })),
+      tabLabel(graphTab({ title: "workspace", selectedNodeLabel: "Miguel" })),
     ).toBe("Miguel");
     expect(tabLabel(graphTab({ title: "foo.md" }))).toBe("foo.md");
   });

@@ -8,14 +8,14 @@
 //
 // Threat model is local-only (someone over-the-shoulder while
 // the user steps away) per the task body's framing. PBKDF2 +
-// SHA-256 + a fixed per-drive salt + a moderate iteration
+// SHA-256 + a fixed per-workspace salt + a moderate iteration
 // count is sufficient — argon2/scrypt would be overkill and
 // would force a new dependency.
 //
-// Salt derivation: the chan-drive `drive.info.root` path is
+// Salt derivation: the chan-workspace `workspace.info.root` path is
 // passed in by the caller so the same PIN typed against two
-// drives renders distinct hashes (locks-down PIN reuse
-// across drives without coordinating salts server-side). The
+// workspaces renders distinct hashes (locks-down PIN reuse
+// across workspaces without coordinating salts server-side). The
 // path is hashed itself first (SHA-256) before being used as
 // salt so a long path doesn't blow out the PBKDF2 input
 // buffer.
@@ -36,12 +36,12 @@ const PBKDF2_HASH_BITS = 256; // SHA-256 output size.
 /// base64 length 44). Caller posts this directly as the
 /// `hash` field.
 ///
-/// `driveSalt` is any stable per-drive string the caller has
-/// on hand, typically `drive.info?.root`.
+/// `workspaceSalt` is any stable per-workspace string the caller has
+/// on hand, typically `workspace.info?.root`.
 /// Empty string falls back to a fixed default — usable for
-/// the truly-no-drive case but the SPA shouldn't reach this
-/// helper without a drive loaded anyway.
-export async function hashPin(pin: string, driveSalt: string): Promise<string> {
+/// the truly-no-workspace case but the SPA shouldn't reach this
+/// helper without a workspace loaded anyway.
+export async function hashPin(pin: string, workspaceSalt: string): Promise<string> {
   if (typeof crypto === "undefined" || !crypto.subtle) {
     throw new Error(
       "crypto.subtle unavailable — screensaver PIN hashing requires WebCrypto",
@@ -49,7 +49,7 @@ export async function hashPin(pin: string, driveSalt: string): Promise<string> {
   }
   const encoder = new TextEncoder();
   const pinBytes = encoder.encode(pin);
-  const saltSource = driveSalt.length > 0 ? driveSalt : "chan:screensaver:default";
+  const saltSource = workspaceSalt.length > 0 ? workspaceSalt : "chan:screensaver:default";
   // Hash the salt source once so an arbitrarily long input
   // doesn't blow out the PBKDF2 salt buffer. The output is a
   // fixed 32-byte SHA-256 digest.
@@ -90,13 +90,13 @@ function base64Encode(bytes: Uint8Array): string {
 }
 
 /// Default screensaver inactivity timeout (seconds). Matches
-/// `systacean-40`'s chan-drive default so a fresh drive
-/// without a persisted value renders the same UX as a drive
+/// `systacean-40`'s chan-workspace default so a fresh workspace
+/// without a persisted value renders the same UX as a workspace
 /// that's been touched.
 export const SCREENSAVER_DEFAULT_TIMEOUT_SECS = 300;
 
 /// Minimum + maximum timeout values the Settings UI should
-/// accept. The chan-drive layer doesn't clamp; the SPA
+/// accept. The chan-workspace layer doesn't clamp; the SPA
 /// enforces a reasonable range so a typo of `1` doesn't lock
 /// out the user mid-keystroke.
 export const SCREENSAVER_MIN_TIMEOUT_SECS = 10;

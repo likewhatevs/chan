@@ -11,7 +11,7 @@
 //! consumed by `list_teams` to filter the drafts subtree.
 //!
 //! Parallels the `-24` Drafts foundation: filesystem primitives
-//! at the module level + Workspace methods that thread the per-drive
+//! at the module level + Workspace methods that thread the per-workspace
 //! drafts root path through.
 
 use std::fs;
@@ -274,7 +274,7 @@ fn copy_dir_recursive(src: &Path, dst: &Path) -> Result<()> {
             })?;
         }
         // Symlinks + other special files are skipped silently to
-        // mirror the rest of chan-drive's special-file refusal.
+        // mirror the rest of chan-workspace's special-file refusal.
     }
     Ok(())
 }

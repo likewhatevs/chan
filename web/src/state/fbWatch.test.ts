@@ -13,7 +13,7 @@
 //     pane cannot leak server-side watchers),
 //   * a reconnect replays the union of all instances' scopes.
 // The manager talks to the live watcher socket via `watchSubscription()`;
-// we drive that with the same controllable fake WebSocket the Slice A
+// we workspace that with the same controllable fake WebSocket the Slice A
 // transport test uses (jsdom has no WebSocket).
 
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
@@ -92,7 +92,7 @@ afterEach(() => {
 });
 
 describe("fbWatch scoped subscription manager", () => {
-  test("register subscribes the instance to the drive root", () => {
+  test("register subscribes the instance to the workspace root", () => {
     fbWatchRegister("fb-a");
     expect(frames(socket)).toContainEqual({ type: "sub", dir: "" });
   });

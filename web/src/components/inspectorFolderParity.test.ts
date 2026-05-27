@@ -31,7 +31,7 @@ describe("I3: folder inspector parity (graph == File Browser)", () => {
   test("FileInfoBody accepts the optional label prop for the folder header", () => {
     expect(fileInfo).toMatch(/label\?\: string;/);
     expect(fileInfo).toMatch(
-      /\{label \|\| basename\(entry\.path\) \|\| drive\.info\?\.label/,
+      /\{label \|\| basename\(entry\.path\) \|\| workspace\.info\?\.label/,
     );
   });
 

@@ -1,10 +1,10 @@
-//! systacean-39: per-drive reports feature toggle.
+//! systacean-39: per-workspace reports feature toggle.
 //!
 //! Three endpoints under `/api/index/reports/`:
 //!
 //! * `GET /state` - `{ enabled: bool }` snapshot.
 //! * `POST /enable` - flip `reports_enabled` to true. Triggers the
-//!   incremental indexing pass per chan-drive's existing behavior.
+//!   incremental indexing pass per chan-workspace's existing behavior.
 //! * `POST /disable` - flip to false. Idempotent at the
 //!   `set_reports_enabled` layer.
 //!
@@ -33,10 +33,10 @@ pub struct ReportsState {
 }
 
 /// `GET /api/index/reports/state`. Read-only snapshot of the
-/// per-drive reports toggle.
+/// per-workspace reports toggle.
 pub async fn api_reports_state(State(state): State<Arc<AppState>>) -> Response {
-    let drive = state.drive().clone();
-    let result = tokio::task::spawn_blocking(move || drive.reports_enabled()).await;
+    let workspace = state.workspace().clone();
+    let result = tokio::task::spawn_blocking(move || workspace.reports_enabled()).await;
     match result {
         Ok(Ok(enabled)) => Json(ReportsState { enabled }).into_response(),
         Ok(Err(e)) => err_from(&e),
@@ -44,10 +44,13 @@ pub async fn api_reports_state(State(state): State<Arc<AppState>>) -> Response {
     }
 }
 
-async fn reports_state_after_set(drive: Arc<chan_workspace::Workspace>, enabled: bool) -> Response {
+async fn reports_state_after_set(
+    workspace: Arc<chan_workspace::Workspace>,
+    enabled: bool,
+) -> Response {
     let result = tokio::task::spawn_blocking(move || {
-        drive.set_reports_enabled(enabled)?;
-        drive.reports_enabled()
+        workspace.set_reports_enabled(enabled)?;
+        workspace.reports_enabled()
     })
     .await;
     match result {
@@ -57,25 +60,25 @@ async fn reports_state_after_set(drive: Arc<chan_workspace::Workspace>, enabled:
     }
 }
 
-/// `POST /api/index/reports/enable`. Flip the per-drive reports
+/// `POST /api/index/reports/enable`. Flip the per-workspace reports
 /// toggle to true. Workspace::set_reports_enabled triggers the
 /// incremental indexing pass internally (per `-27`'s contract).
 pub async fn api_reports_enable(State(state): State<Arc<AppState>>) -> Response {
     set_reports(state, true).await
 }
 
-/// `POST /api/index/reports/disable`. Flip the per-drive reports
+/// `POST /api/index/reports/disable`. Flip the per-workspace reports
 /// toggle to false. Idempotent at the set_reports_enabled layer.
 pub async fn api_reports_disable(State(state): State<Arc<AppState>>) -> Response {
     set_reports(state, false).await
 }
 
 async fn set_reports(state: Arc<AppState>, enabled: bool) -> Response {
-    let drive = state.drive().clone();
+    let workspace = state.workspace().clone();
     // set_reports_enabled may do non-trivial work (kicks off
     // indexing); run on the blocking pool to keep the async
     // runtime responsive.
-    reports_state_after_set(drive, enabled).await
+    reports_state_after_set(workspace, enabled).await
 }
 
 #[cfg(test)]
@@ -107,12 +110,12 @@ mod tests {
         let root = TempDir::new().unwrap();
         let lib = chan_workspace::Library::open_at(cfg.path().join("config.toml")).unwrap();
         lib.register_workspace(root.path()).unwrap();
-        let drive = lib.open_workspace(root.path()).unwrap();
+        let workspace = lib.open_workspace(root.path()).unwrap();
 
         let (events_tx, _) = broadcast::channel::<String>(1);
         let (index_events_tx, _) = broadcast::channel::<chan_workspace::WatchEvent>(1);
         let indexer = Arc::new(crate::indexer::Indexer::spawn(
-            drive.clone(),
+            workspace.clone(),
             index_events_tx.subscribe(),
             false,
             SearchAggression::Conservative,
@@ -125,7 +128,7 @@ mod tests {
             library: lib,
             drive_root: root.path().to_path_buf(),
             drive_cell: Arc::new(RwLock::new(Some(WorkspaceCell {
-                drive,
+                workspace,
                 watch_handle: None,
                 indexer,
             }))),
@@ -215,7 +218,7 @@ mod tests {
         let app = route_test_app();
         let router = crate::router(app.state);
 
-        // Initial state: chan-drive default is `false`.
+        // Initial state: chan-workspace default is `false`.
         let (status, body) = fetch_state(&router, true).await;
         assert_eq!(status, StatusCode::OK);
         assert_eq!(body["enabled"], false);
@@ -242,8 +245,8 @@ mod tests {
 
     #[tokio::test]
     async fn reports_disable_is_idempotent_when_already_off() {
-        // systacean-39: chan-drive's set_reports_enabled(false)
-        // on an already-off drive is a no-op + returns Ok. The
+        // systacean-39: chan-workspace's set_reports_enabled(false)
+        // on an already-off workspace is a no-op + returns Ok. The
         // route must surface 200 + the current state, not error.
         let app = route_test_app();
         let router = crate::router(app.state);

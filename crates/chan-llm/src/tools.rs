@@ -33,7 +33,7 @@ use crate::error::{LlmError, Result};
 /// bloat the next turn's request body and the user's token bill.
 pub const READ_FILE_CAP_BYTES: usize = 256 * 1024;
 
-/// Soft cap on `list_files` entries. The drive layer caps the walk
+/// Soft cap on `list_files` entries. The workspace layer caps the walk
 /// at 500k; this layer caps the slice we hand to the model at a
 /// number that fits a model's context plus leaves room for the
 /// rest of the conversation. 2k entries renders as a few hundred
@@ -51,7 +51,7 @@ pub const SEARCH_CONTENT_DEFAULT_LIMIT: u32 = 20;
 /// Cap on per-file rows returned by `repo_report` when
 /// `include_files = true`. The roll-ups and COCOMO summary stay
 /// intact; only the `files` array is truncated past this point. A
-/// drive with ~200 files of code already produces ~50 KB of JSON
+/// workspace with ~200 files of code already produces ~50 KB of JSON
 /// per call, which is the budget we're willing to spend on a
 /// single tool response. The assistant narrows with `prefix` or
 /// `paths` if it needs more detail.
@@ -60,7 +60,7 @@ pub const REPO_REPORT_FILES_CAP: usize = 200;
 /// Hard cap on the `content` arg of `write_file`. Mirrors
 /// `chan_workspace::TEXT_WRITE_LIMIT` (2 MiB) so a runaway model emitting
 /// a multi-GB string fails fast inside chan-llm rather than reaching
-/// chan-drive (which would have rejected it anyway, but only after
+/// chan-workspace (which would have rejected it anyway, but only after
 /// the full string had been deserialized, cloned, and handed across
 /// the tool dispatch boundary). The MCP layer applies the same
 /// check before crossing into chan-llm.
@@ -70,12 +70,12 @@ pub const WRITE_FILE_CONTENT_CAP_BYTES: usize = 2 * 1024 * 1024;
 /// thread boundaries cheaply.
 #[derive(Clone)]
 pub struct ToolContext {
-    pub drive: Arc<Workspace>,
+    pub workspace: Arc<Workspace>,
 }
 
 impl ToolContext {
-    pub fn new(drive: Arc<Workspace>) -> Self {
-        Self { drive }
+    pub fn new(workspace: Arc<Workspace>) -> Self {
+        Self { workspace }
     }
 }
 
@@ -97,7 +97,7 @@ pub enum StandardTool {
     /// "what links here?" and "what does this point at?" without
     /// reading every file.
     GraphNeighbors,
-    /// Global tag census: every `#tag` known to the drive with the
+    /// Global tag census: every `#tag` known to the workspace with the
     /// number of files that carry it. Cheap; useful for the
     /// assistant to plan a tag rename or pivot.
     GraphTags,
@@ -157,9 +157,9 @@ pub fn execute(name: &str, args: &Json, ctx: &ToolContext) -> Result<Json> {
 }
 
 /// `link` / `mention` / `tag` lowercase tag for one edge. The
-/// `EdgeKind::as_str` helper inside chan-drive is private, so we
+/// `EdgeKind::as_str` helper inside chan-workspace is private, so we
 /// mirror the mapping here to keep this crate from reaching into
-/// chan-drive's internals.
+/// chan-workspace's internals.
 fn edge_kind_tag(k: chan_workspace::EdgeKind) -> &'static str {
     match k {
         chan_workspace::EdgeKind::Link => "link",
@@ -189,7 +189,7 @@ fn exec_graph_neighbors(args: &Json, ctx: &ToolContext) -> Result<Json> {
         }
     };
     let graph = ctx
-        .drive
+        .workspace
         .graph()
         .map_err(|e| LlmError::Tool(format!("graph: {e}")))?;
     let want_out = matches!(direction, "out" | "both");
@@ -237,7 +237,7 @@ fn exec_graph_neighbors(args: &Json, ctx: &ToolContext) -> Result<Json> {
 
 fn exec_graph_tags(_args: &Json, ctx: &ToolContext) -> Result<Json> {
     let graph = ctx
-        .drive
+        .workspace
         .graph()
         .map_err(|e| LlmError::Tool(format!("graph: {e}")))?;
     let tags = graph
@@ -253,7 +253,7 @@ fn exec_graph_tags(_args: &Json, ctx: &ToolContext) -> Result<Json> {
 fn exec_graph_files_with_tag(args: &Json, ctx: &ToolContext) -> Result<Json> {
     let tag = arg_string(args, "tag")?;
     let graph = ctx
-        .drive
+        .workspace
         .graph()
         .map_err(|e| LlmError::Tool(format!("graph: {e}")))?;
     let files = graph
@@ -273,7 +273,7 @@ fn exec_read_file(args: &Json, ctx: &ToolContext) -> Result<Json> {
     // read_text_with_stat returns content + ns mtime in one stat
     // (no second-syscall race), so we can echo `mtime_ns` to the
     // model and accept it back on `write_file` for an OCC check.
-    let (content, stat) = ctx.drive.read_text_with_stat(path)?;
+    let (content, stat) = ctx.workspace.read_text_with_stat(path)?;
     let original_len = content.len();
     let (content, truncated) = if original_len > READ_FILE_CAP_BYTES {
         // Truncate at a UTF-8 char boundary so we hand the model a
@@ -306,16 +306,16 @@ fn exec_read_file(args: &Json, ctx: &ToolContext) -> Result<Json> {
 
 fn exec_list_files(args: &Json, ctx: &ToolContext) -> Result<Json> {
     let prefix = args.get("prefix").and_then(|v| v.as_str());
-    // Push prefix scoping into chan-drive so a narrow `prefix` on a
-    // 500k-file drive walks only the relevant subtree instead of the
+    // Push prefix scoping into chan-workspace so a narrow `prefix` on a
+    // 500k-file workspace walks only the relevant subtree instead of the
     // full root. Use the unified variant so agents can see
     // uncommitted draft workspaces even though they live in chan
     // metadata.
     let mut entries: Vec<_> = match prefix {
         Some(p) if !p.is_empty() => ctx
-            .drive
+            .workspace
             .list_tree_prefix_unified(p.trim_end_matches('/'))?,
-        _ => ctx.drive.list_tree_unified()?,
+        _ => ctx.workspace.list_tree_unified()?,
     };
     let total = entries.len();
     let truncated = total > LIST_FILES_CAP_ENTRIES;
@@ -342,7 +342,7 @@ fn exec_list_files(args: &Json, ctx: &ToolContext) -> Result<Json> {
 
 fn exec_resolve_path(args: &Json, ctx: &ToolContext) -> Result<Json> {
     let path = arg_string(args, "path")?;
-    let physical = ctx.drive.resolve_physical_path(path)?;
+    let physical = ctx.workspace.resolve_physical_path(path)?;
     let meta = std::fs::symlink_metadata(&physical).ok();
     let mut out = serde_json::json!({
         "path": path,
@@ -353,7 +353,7 @@ fn exec_resolve_path(args: &Json, ctx: &ToolContext) -> Result<Json> {
     });
     if chan_workspace::drafts::is_unified_drafts_path(path) {
         out["note"] = serde_json::json!(
-            "Drafts paths resolve to uncommitted chan metadata outside the drive root."
+            "Drafts paths resolve to uncommitted chan metadata outside the workspace root."
         );
     }
     Ok(out)
@@ -368,7 +368,7 @@ fn exec_search_content(args: &Json, ctx: &ToolContext) -> Result<Json> {
     // Clamp to u32 max via the hard cap; saturating cast keeps us
     // safe from a u64::MAX -> truncation surprise.
     let limit = raw_limit.min(SEARCH_CONTENT_MAX_LIMIT as u64) as u32;
-    let res = ctx.drive.search(
+    let res = ctx.workspace.search(
         query,
         &chan_workspace::SearchOpts {
             limit,
@@ -394,11 +394,11 @@ fn exec_repo_report(args: &Json, ctx: &ToolContext) -> Result<Json> {
     let prefix = args.get("prefix").and_then(|v| v.as_str()).unwrap_or("");
 
     let mut report = if !paths.is_empty() {
-        ctx.drive.report_for_files(&paths)?
+        ctx.workspace.report_for_files(&paths)?
     } else if !prefix.is_empty() {
-        ctx.drive.report_for_prefix(prefix)?
+        ctx.workspace.report_for_prefix(prefix)?
     } else {
-        ctx.drive.report()?
+        ctx.workspace.report()?
     };
 
     let include_files = args
@@ -455,8 +455,8 @@ fn exec_write_file(args: &Json, ctx: &ToolContext) -> Result<Json> {
     let path = arg_string(args, "path")?;
     let content = arg_string(args, "content")?;
     // Reject oversized payloads before the tool result clones the
-    // content into the next turn's transcript and before chan-drive
-    // gets a chance to allocate the write buffer. chan-drive caps the
+    // content into the next turn's transcript and before chan-workspace
+    // gets a chance to allocate the write buffer. chan-workspace caps the
     // same value (TEXT_WRITE_LIMIT) but only after the string has
     // already crossed into its API; bailing here saves a clone and
     // keeps a runaway model from charging tokens on a write that
@@ -475,14 +475,14 @@ fn exec_write_file(args: &Json, ctx: &ToolContext) -> Result<Json> {
     // edited the file between the assistant's read and its write.
     let expected_mtime_ns = args.get("expected_mtime_ns").and_then(|v| v.as_i64());
     if let Some(expected) = expected_mtime_ns {
-        ctx.drive
+        ctx.workspace
             .write_text_if_unchanged(path, Some(expected), content)?;
     } else {
         // No expected mtime supplied: fall back to a plain write.
         // This is the "the model didn't read first" path and
         // matches the legacy behavior; new flows should always
         // round-trip mtime_ns.
-        ctx.drive.write_text(path, content)?;
+        ctx.workspace.write_text(path, content)?;
     }
     Ok(serde_json::json!({
         "path": path,
@@ -542,7 +542,7 @@ pub fn standard_tool_schemas() -> Vec<ToolSchema> {
                 "properties": {
                     "prefix": {
                         "type": "string",
-                        "description": "Optional POSIX rel-path prefix to scope the listing. Empty / omitted lists the whole drive (capped)."
+                        "description": "Optional POSIX rel-path prefix to scope the listing. Empty / omitted lists the whole workspace (capped)."
                     }
                 }
             }),
@@ -658,8 +658,8 @@ mod tests {
         let drive_dir = TempDir::new().unwrap();
         let lib = Library::open_at(cfg.path().join("config.toml")).unwrap();
         lib.register_workspace(drive_dir.path()).unwrap();
-        let drive = lib.open_workspace(drive_dir.path()).unwrap();
-        let ctx = ToolContext::new(drive);
+        let workspace = lib.open_workspace(drive_dir.path()).unwrap();
+        let ctx = ToolContext::new(workspace);
         (cfg, drive_dir, ctx)
     }
 
@@ -682,7 +682,7 @@ mod tests {
         .unwrap();
         assert_eq!(v["path"], "a.md");
         assert_eq!(v["bytes_written"], 5);
-        assert_eq!(ctx.drive.read_text("a.md").unwrap(), "hello");
+        assert_eq!(ctx.workspace.read_text("a.md").unwrap(), "hello");
     }
 
     #[test]
@@ -729,8 +729,8 @@ mod tests {
     #[test]
     fn list_files_includes_and_filters_drafts_namespace() {
         let (_cfg, _root, ctx) = fixture();
-        ctx.drive.create_draft_dir("untitled-1").unwrap();
-        ctx.drive
+        ctx.workspace.create_draft_dir("untitled-1").unwrap();
+        ctx.workspace
             .write_text("Drafts/untitled-1/draft.md", "# draft\n")
             .unwrap();
 
@@ -763,8 +763,8 @@ mod tests {
     #[test]
     fn resolve_path_maps_drafts_to_metadata_dir() {
         let (_cfg, root, ctx) = fixture();
-        ctx.drive.create_draft_dir("untitled-1").unwrap();
-        ctx.drive
+        ctx.workspace.create_draft_dir("untitled-1").unwrap();
+        ctx.workspace
             .write_text("Drafts/untitled-1/draft.md", "# draft\n")
             .unwrap();
 
@@ -780,7 +780,7 @@ mod tests {
         assert_eq!(draft["is_dir"], true);
         assert_eq!(
             draft["physical_path"].as_str().unwrap(),
-            ctx.drive
+            ctx.workspace
                 .drafts_dir()
                 .join("untitled-1")
                 .to_string_lossy()
@@ -829,7 +829,7 @@ mod tests {
     #[test]
     fn write_file_with_mismatched_mtime_returns_conflict() {
         let (_cfg, _root, ctx) = fixture();
-        ctx.drive.write_text("a.md", "v1").unwrap();
+        ctx.workspace.write_text("a.md", "v1").unwrap();
         // Stale mtime from a parallel-universe earlier write.
         let stale = serde_json::json!({
             "path": "a.md",
@@ -840,14 +840,14 @@ mod tests {
         // Typed passthrough: hosts can branch on the kind without
         // string-matching.
         assert!(matches!(err, LlmError::WriteConflict { .. }));
-        assert_eq!(ctx.drive.read_text("a.md").unwrap(), "v1");
+        assert_eq!(ctx.workspace.read_text("a.md").unwrap(), "v1");
     }
 
     #[test]
     fn write_file_with_matching_mtime_succeeds() {
         let (_cfg, _root, ctx) = fixture();
-        ctx.drive.write_text("a.md", "v1").unwrap();
-        let stat = ctx.drive.stat("a.md").unwrap();
+        ctx.workspace.write_text("a.md", "v1").unwrap();
+        let stat = ctx.workspace.stat("a.md").unwrap();
         let args = serde_json::json!({
             "path": "a.md",
             "content": "v2",
@@ -855,7 +855,7 @@ mod tests {
         });
         let v = execute("write_file", &args, &ctx).unwrap();
         assert_eq!(v["bytes_written"], 2);
-        assert_eq!(ctx.drive.read_text("a.md").unwrap(), "v2");
+        assert_eq!(ctx.workspace.read_text("a.md").unwrap(), "v2");
     }
 
     #[test]
@@ -945,7 +945,7 @@ mod tests {
             &ctx,
         )
         .unwrap_err();
-        // chan-drive's editable-text gate fires; the assistant cannot
+        // chan-workspace's editable-text gate fires; the assistant cannot
         // bypass it through the tool sandbox. Typed PathRefused so
         // hosts can render a specific "wrong extension" message.
         assert!(matches!(err, LlmError::PathRefused(_)));

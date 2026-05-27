@@ -7,14 +7,14 @@
   // 1. Semantic search (moved verbatim from -a-21; same state
   //    machine, same polling cadence, same enable/download/
   //    disable flow).
-  // 2. Drive-wide multi-model picker backed by the semantic model
+  // 2. Workspace-wide multi-model picker backed by the semantic model
   //    registry endpoints.
-  // 3. chan-reports toggle backed by the per-drive reports
+  // 3. chan-reports toggle backed by the per-workspace reports
   //    endpoints. The stale server-wide Preferences.reports path
   //    was removed in Track A because IndexConfig.reports_enabled
   //    is the source of truth.
   //
-  // Reports writes are immediate per-drive endpoint calls; semantic
+  // Reports writes are immediate per-workspace endpoint calls; semantic
   // search and model selection keep their existing endpoint-owned
   // state machines.
 
@@ -234,7 +234,7 @@
 >
     <p class="hint warning">
       These settings apply to ALL file-browser surfaces on this
-      drive, not just this one. The top-bar theme switch applies
+      workspace, not just this one. The top-bar theme switch applies
       to all Hybrid File Browser tab bodies.
     </p>
 
@@ -256,7 +256,7 @@
           similarity from
           <code>{semanticState.model_name}</code>
           ({formatModelSize(semanticState.model_size_bytes)}). The
-          model file is shared across drives.
+          model file is shared across workspaces.
         </p>
         <label class="theme-opt strip-toggle" class:on={semanticState.semantic_enabled}>
           <input
@@ -286,7 +286,7 @@
             {/if}
           </span>
           <span class="k">Stored at</span>
-          <span class="v mono" title="Shared across drives">{semanticState.model_path}</span>
+          <span class="v mono" title="Shared across workspaces">{semanticState.model_path}</span>
         </div>
         {#if semanticError}
           <p class="hint err" role="alert">{semanticError}</p>
@@ -297,7 +297,7 @@
     <section>
       <h3>Embedding model</h3>
       <p class="hint">
-        Pick the drive-wide embedding model used for dense-vector
+        Pick the workspace-wide embedding model used for dense-vector
         indexing. Changing it persists immediately; enabling Hybrid
         search downloads the selected model first when needed.
       </p>
@@ -328,7 +328,7 @@
       {/if}
     </section>
 
-    <!-- Track A: chan-reports uses the per-drive reports endpoints.
+    <!-- Track A: chan-reports uses the per-workspace reports endpoints.
          ServerConfig.reports.enabled was removed as stale config. -->
     <section>
       <h3>chan-reports</h3>
@@ -351,7 +351,7 @@
           <span>Enable chan-reports indexing</span>
         </label>
         <p class="hint muted sub-hint">
-          Per-drive setting. Disabling drops generated report data;
+          Per-workspace setting. Disabling drops generated report data;
           re-enable to rebuild it.
         </p>
         {#if reportsBusy}

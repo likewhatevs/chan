@@ -21,15 +21,15 @@ use std::collections::HashSet;
 
 use chrono::Utc;
 
-use crate::drive::Workspace;
 use crate::error::Result;
+use crate::workspace::Workspace;
 
 use super::emit::{render_markdown, EmitContext};
 use super::slug::slug_for;
 use super::{Contact, ImportOpts, ImportOutcome, ImportSummary};
 
 pub fn run(
-    drive: &Workspace,
+    workspace: &Workspace,
     dir: &str,
     contacts: Vec<Contact>,
     opts: ImportOpts,
@@ -38,7 +38,7 @@ pub fn run(
     use crate::progress::{ProgressEvent, ProgressStage};
     let dir = dir.trim_matches('/').to_string();
     if !dir.is_empty() {
-        drive.create_dir(&dir)?;
+        workspace.create_dir(&dir)?;
     }
 
     let ctx = EmitContext {
@@ -56,7 +56,7 @@ pub fn run(
     let mut taken: HashSet<String> = HashSet::new();
     let mut unnamed = 0usize;
     let mut summary = ImportSummary::default();
-    let on_disk = |p: &str| drive.exists(p);
+    let on_disk = |p: &str| workspace.exists(p);
 
     let total = contacts.len() as u64;
     for (idx, c) in contacts.into_iter().enumerate() {
@@ -72,7 +72,7 @@ pub fn run(
             }),
             eta_secs: None,
         });
-        let exists = drive.exists(&path);
+        let exists = workspace.exists(&path);
 
         if exists && !opts.overwrite {
             summary.outcomes.push(ImportOutcome::Skipped {
@@ -83,7 +83,7 @@ pub fn run(
         }
 
         let body = render_markdown(&c, &ctx);
-        match drive.write_text(&path, &body) {
+        match workspace.write_text(&path, &body) {
             Ok(()) => {
                 if exists {
                     summary.outcomes.push(ImportOutcome::Overwrote { path });

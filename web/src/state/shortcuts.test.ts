@@ -64,7 +64,7 @@ describe("shortcut table", () => {
     expect(native).toMatch(/^Next pane\s+Cmd\+\]/m);
   });
 
-  // `phase-12 lane-e` (addendum-2): Cmd+S = drive-wide search,
+  // `phase-12 lane-e` (addendum-2): Cmd+S = workspace-wide search,
   // reclaimed after fullstack-56 dropped it.
   test("advertises Cmd+S search on both platforms", () => {
     expect(renderTable("web", "mac")).toMatch(/^Search\s+Cmd\+S/m);

@@ -41,11 +41,11 @@ describe("fullstack-b-12 + fullstack-b-30: TerminalTab font + cursor parity", ()
   });
 
   test("fontFamily reads the persisted preference at spawn time", () => {
-    // Spawn-time read of `drive.info.preferences.terminal.font`
+    // Spawn-time read of `workspace.info.preferences.terminal.font`
     // mirrors `-b-11`'s scrollback contract: existing terminals
     // keep their font until session restart.
     expect(tab).toMatch(
-      /drive\.info\?\.preferences\?\.terminal\?\.font\s*\?\?\s*"os-default"/,
+      /workspace\.info\?\.preferences\?\.terminal\?\.font\s*\?\?\s*"os-default"/,
     );
     expect(tab).toMatch(
       /fontPref === "source-code-pro"\s*\?\s*FONT_CHAIN_SOURCE_CODE_PRO\s*:\s*FONT_CHAIN_OS_DEFAULT/,

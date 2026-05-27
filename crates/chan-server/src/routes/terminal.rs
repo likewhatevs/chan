@@ -204,10 +204,11 @@ pub async fn api_terminal_ws(
     let cwd = if query.session.is_some() {
         None
     } else {
-        let drive = state.drive();
+        let workspace = state.workspace();
         let cwd = query.cwd.clone();
         let result =
-            tokio::task::spawn_blocking(move || resolve_terminal_cwd(&drive, cwd.as_deref())).await;
+            tokio::task::spawn_blocking(move || resolve_terminal_cwd(&workspace, cwd.as_deref()))
+                .await;
         match result {
             Ok(Ok(cwd)) => cwd,
             Ok(Err(message)) => return (StatusCode::BAD_REQUEST, message).into_response(),
@@ -464,10 +465,10 @@ const WATCHER_EVENT_MAX_BYTES: u64 = 1024 * 1024;
 /// systacean-9: list event files in the active watcher's directory.
 /// Replaces the prior SPA pattern of `api.list(dir) + api.read(path)`
 /// per file: that composition routed through `/api/files` which
-/// applies the drive-sandbox path-resolution rules, so absolute
-/// outside-drive watcher paths surfaced as ENOENT. The new endpoint
+/// applies the workspace-sandbox path-resolution rules, so absolute
+/// outside-workspace watcher paths surfaced as ENOENT. The new endpoint
 /// reads the watcher's `dir` directly via `std::fs::read_dir` +
-/// `read_to_string`, bypassing the drive sandbox.
+/// `read_to_string`, bypassing the workspace sandbox.
 ///
 /// Security: the watcher attach (`/api/terminal/:session/watcher`) is
 /// settings-gated. Once a session has a `watcher_dir` set, the read
@@ -800,7 +801,7 @@ async fn terminal_ws(mut socket: WebSocket, state: Arc<AppState>, opts: Terminal
         }
     }
     session.request_redraw();
-    let (cwd, cwd_rel) = terminal_cwd_payload(&state.drive(), session.cwd());
+    let (cwd, cwd_rel) = terminal_cwd_payload(&state.workspace(), session.cwd());
     let _ = send_frame(
         &mut socket,
         ServerFrame::Ready {
@@ -841,7 +842,7 @@ async fn terminal_ws(mut socket: WebSocket, state: Arc<AppState>, opts: Terminal
                             }
                             Ok(ClientFrame::Cwd) => {
                                 let (cwd, cwd_rel) =
-                                    terminal_cwd_payload(&state.drive(), session.cwd());
+                                    terminal_cwd_payload(&state.workspace(), session.cwd());
                                 let _ = send_frame(&mut socket, ServerFrame::Cwd { cwd, cwd_rel }).await;
                             }
                             Ok(ClientFrame::Focus { focused }) => {
@@ -947,12 +948,12 @@ fn path_to_wire(path: PathBuf) -> String {
 }
 
 fn terminal_cwd_payload(
-    drive: &chan_workspace::Workspace,
+    workspace: &chan_workspace::Workspace,
     cwd: Option<PathBuf>,
 ) -> (Option<String>, Option<String>) {
     match cwd {
         Some(path) => {
-            let rel = drive.physical_path_to_virtual(&path);
+            let rel = workspace.physical_path_to_virtual(&path);
             (Some(path_to_wire(path)), rel)
         }
         None => (None, None),
@@ -985,14 +986,14 @@ fn normalize_window_id(id: &str) -> Option<String> {
 }
 
 fn resolve_terminal_cwd(
-    drive: &chan_workspace::Workspace,
+    workspace: &chan_workspace::Workspace,
     cwd: Option<&str>,
 ) -> Result<Option<PathBuf>, String> {
     let Some(raw) = cwd else {
         return Ok(None);
     };
     let rel = raw.trim();
-    drive
+    workspace
         .resolve_physical_dir(rel)
         .map(Some)
         .map_err(|e| format!("invalid terminal cwd: {e}"))
@@ -1005,11 +1006,11 @@ fn resolve_terminal_cwd(
 /// `drive_root`" gate. Watcher event files are infrastructure
 /// traffic (per the phase-7 event protocol they go straight through
 /// `tokio::fs` in the event-reply endpoint, bypassing
-/// `chan_workspace::Workspace::write_text`), so the drive-sandbox guard
+/// `chan_workspace::Workspace::write_text`), so the workspace-sandbox guard
 /// that exists for user content does not apply here. The watcher
 /// dialog now accepts arbitrary filesystem paths subject to OS
 /// permissions. Workspace-relative inputs still resolve through
-/// `resolve_safe_strict` so the common in-drive case keeps its
+/// `resolve_safe_strict` so the common in-workspace case keeps its
 /// symlink-escape protection; absolute inputs go straight to the
 /// filesystem.
 ///
@@ -1027,8 +1028,8 @@ fn resolve_watcher_dir(drive_root: &Path, raw: &str) -> Result<PathBuf, String> 
         path.to_path_buf()
     } else {
         // Workspace-relative input: keep the strict resolver so an
-        // in-drive watcher still benefits from the symlink-escape
-        // check. A user who wants a watcher OUTSIDE the drive
+        // in-workspace watcher still benefits from the symlink-escape
+        // check. A user who wants a watcher OUTSIDE the workspace
         // types an absolute path and lands on the branch above.
         chan_workspace::fs_ops::resolve_safe_strict(drive_root, trimmed)
             .map_err(|e| format!("invalid watcher path: {e}"))?
@@ -1134,11 +1135,11 @@ mod tests {
     /// WHY a FILE lock and not a `static`/`tokio` Mutex: a `static` lock
     /// serializes only tests WITHIN this test binary, but `cargo test`
     /// runs each crate's test binary as a SEPARATE PROCESS concurrently,
-    /// so these PTY tests still race chan-drive's FS-watcher tests and
+    /// so these PTY tests still race chan-workspace's FS-watcher tests and
     /// this crate's indexer boot-walk tests for the CPU. An OS advisory
     /// lock on a well-known temp path spans process boundaries; opening
     /// the SAME `FS_TIMING_GATE` path here, in the indexer test module,
-    /// and in chan-drive (`crate::test_gate`) makes one named gate
+    /// and in chan-workspace (`crate::test_gate`) makes one named gate
     /// serialize the entire FS-timing class workspace-wide. The
     /// `std::fs::File` guard is `Send` (held across `.await` on the
     /// multi-thread runtime is fine) and releases on drop / process
@@ -1170,19 +1171,19 @@ mod tests {
         Arc<chan_workspace::Workspace>,
     ) {
         let cfg = tempfile::TempDir::new().expect("temp config");
-        let root = tempfile::TempDir::new().expect("temp drive");
+        let root = tempfile::TempDir::new().expect("temp workspace");
         let lib = chan_workspace::Library::open_at(cfg.path().join("config.toml")).unwrap();
         lib.register_workspace(root.path()).unwrap();
-        let drive = lib.open_workspace(root.path()).unwrap();
-        (cfg, root, drive)
+        let workspace = lib.open_workspace(root.path()).unwrap();
+        (cfg, root, workspace)
     }
 
     #[test]
     fn resolve_terminal_cwd_allows_drive_relative_directory() {
-        let (_cfg, root, drive) = terminal_drive_fixture();
+        let (_cfg, root, workspace) = terminal_drive_fixture();
         fs::create_dir_all(root.path().join("notes/work")).expect("create dir");
 
-        let cwd = resolve_terminal_cwd(&drive, Some("notes/work"))
+        let cwd = resolve_terminal_cwd(&workspace, Some("notes/work"))
             .expect("valid cwd")
             .expect("cwd set");
 
@@ -1191,20 +1192,20 @@ mod tests {
 
     #[test]
     fn resolve_terminal_cwd_maps_drafts_namespace_to_metadata_dir() {
-        let (_cfg, _root, drive) = terminal_drive_fixture();
-        drive.create_draft_dir("untitled-1").unwrap();
+        let (_cfg, _root, workspace) = terminal_drive_fixture();
+        workspace.create_draft_dir("untitled-1").unwrap();
 
-        let cwd = resolve_terminal_cwd(&drive, Some("Drafts/untitled-1"))
+        let cwd = resolve_terminal_cwd(&workspace, Some("Drafts/untitled-1"))
             .expect("valid cwd")
             .expect("cwd set");
 
-        assert_eq!(cwd, drive.drafts_dir().join("untitled-1"));
+        assert_eq!(cwd, workspace.drafts_dir().join("untitled-1"));
         assert_eq!(
-            drive.physical_path_to_virtual(&cwd),
+            workspace.physical_path_to_virtual(&cwd),
             Some("Drafts/untitled-1".to_string())
         );
 
-        let (cwd_abs, cwd_rel) = terminal_cwd_payload(&drive, Some(cwd));
+        let (cwd_abs, cwd_rel) = terminal_cwd_payload(&workspace, Some(cwd));
         assert!(cwd_abs
             .as_deref()
             .is_some_and(|path| path.ends_with("untitled-1")));
@@ -1213,12 +1214,12 @@ mod tests {
 
     #[test]
     fn resolve_terminal_cwd_rejects_escape_and_files() {
-        let (_cfg, root, drive) = terminal_drive_fixture();
+        let (_cfg, root, workspace) = terminal_drive_fixture();
         fs::create_dir_all(root.path().join("notes")).expect("create dir");
         fs::write(root.path().join("notes/today.md"), "x").expect("create file");
 
-        assert!(resolve_terminal_cwd(&drive, Some("../outside")).is_err());
-        assert!(resolve_terminal_cwd(&drive, Some("notes/today.md")).is_err());
+        assert!(resolve_terminal_cwd(&workspace, Some("../outside")).is_err());
+        assert!(resolve_terminal_cwd(&workspace, Some("notes/today.md")).is_err());
     }
 
     #[test]
@@ -1247,12 +1248,12 @@ mod tests {
 
     #[test]
     fn list_watcher_events_reads_outside_drive_dir() {
-        // systacean-9: pin the happy path for the outside-drive
+        // systacean-9: pin the happy path for the outside-workspace
         // watcher read. The endpoint's whole point is that an
-        // absolute outside-drive `watcher_dir` (the case lane-B's
+        // absolute outside-workspace `watcher_dir` (the case lane-B's
         // walkthrough surfaced as broken) lists + reads its event
-        // files without routing through the drive sandbox.
-        let outside = tempfile::tempdir().expect("outside-drive temp");
+        // files without routing through the workspace sandbox.
+        let outside = tempfile::tempdir().expect("outside-workspace temp");
         fs::write(
             outside.path().join("event-1.json"),
             r#"{"id":"e1","type":"poke","from":"@@A","to":"@@B"}"#,
@@ -1290,7 +1291,7 @@ mod tests {
 
     #[test]
     fn list_watcher_events_skips_oversized_event_files() {
-        let outside = tempfile::tempdir().expect("outside-drive temp");
+        let outside = tempfile::tempdir().expect("outside-workspace temp");
         fs::write(outside.path().join("event-small.json"), "{}").expect("write small event");
         fs::write(
             outside.path().join("event-huge.json"),
@@ -1305,7 +1306,7 @@ mod tests {
 
     #[test]
     fn resolve_watcher_dir_allows_absolute_and_drive_relative_directories() {
-        let tmp = tempfile::tempdir().expect("temp drive");
+        let tmp = tempfile::tempdir().expect("temp workspace");
         fs::create_dir_all(tmp.path().join("events")).expect("create dir");
 
         assert_eq!(
@@ -1319,16 +1320,16 @@ mod tests {
         );
     }
 
-    /// `fullstack-b-3` relaxed the drive-root gate on absolute
+    /// `fullstack-b-3` relaxed the workspace-root gate on absolute
     /// watcher paths: event files are infra traffic, not user
-    /// content, and the chan-drive sandbox doesn't apply. A path
-    /// pointing at a real directory outside the drive is now
-    /// accepted; the in-drive sandbox via
+    /// content, and the chan-workspace sandbox doesn't apply. A path
+    /// pointing at a real directory outside the workspace is now
+    /// accepted; the in-workspace sandbox via
     /// `resolve_safe_strict` still applies to relative inputs.
     #[test]
     fn resolve_watcher_dir_allows_absolute_outside_drive_root() {
-        let tmp = tempfile::tempdir().expect("temp drive");
-        let outside = tempfile::tempdir().expect("outside drive");
+        let tmp = tempfile::tempdir().expect("temp workspace");
+        let outside = tempfile::tempdir().expect("outside workspace");
 
         let abs_outside = outside.path().display().to_string();
         let resolved = resolve_watcher_dir(tmp.path(), &abs_outside).expect("outside dir attaches");
@@ -1340,7 +1341,7 @@ mod tests {
     /// (`create_dir_all` is a no-op if the path already exists).
     #[test]
     fn resolve_watcher_dir_creates_missing_path() {
-        let tmp = tempfile::tempdir().expect("temp drive");
+        let tmp = tempfile::tempdir().expect("temp workspace");
         // Workspace-relative path that doesn't exist yet.
         let relative = "events/inbound";
         let resolved = resolve_watcher_dir(tmp.path(), relative).expect("relative dir created");
@@ -1348,7 +1349,7 @@ mod tests {
         assert_eq!(resolved, tmp.path().join("events/inbound"));
 
         // Absolute path that doesn't exist yet, well outside the
-        // drive root.
+        // workspace root.
         let outside_parent = tempfile::tempdir().expect("outside parent");
         let abs_missing = outside_parent.path().join("watcher-inbox");
         assert!(!abs_missing.exists());
@@ -1360,7 +1361,7 @@ mod tests {
 
     #[test]
     fn resolve_watcher_dir_rejects_empty_escape_and_files() {
-        let tmp = tempfile::tempdir().expect("temp drive");
+        let tmp = tempfile::tempdir().expect("temp workspace");
         fs::create_dir_all(tmp.path().join("events")).expect("create dir");
         fs::write(tmp.path().join("events/event.json"), "{}").expect("create file");
 
@@ -1380,11 +1381,11 @@ mod tests {
     #[test]
     fn resolve_watcher_dir_absolute_symlink_accepts_target() {
         // `fullstack-b-3`: an absolute path that happens to traverse
-        // a symlink out of the drive is now accepted — the watcher
-        // is intentionally allowed to live outside the drive. We
+        // a symlink out of the workspace is now accepted — the watcher
+        // is intentionally allowed to live outside the workspace. We
         // still require the resolved target to be a directory.
-        let tmp = tempfile::tempdir().expect("temp drive");
-        let outside = tempfile::tempdir().expect("outside drive");
+        let tmp = tempfile::tempdir().expect("temp workspace");
+        let outside = tempfile::tempdir().expect("outside workspace");
         fs::create_dir_all(tmp.path().join("events")).expect("create dir");
         std::os::unix::fs::symlink(outside.path(), tmp.path().join("events/outside"))
             .expect("symlink escape");
@@ -1815,7 +1816,7 @@ mod tests {
     }
 
     async fn run_shell_probe(command: &str, end: &str) -> String {
-        let tmp = tempfile::tempdir().expect("temp drive");
+        let tmp = tempfile::tempdir().expect("temp workspace");
         let mut terminal = TestTerminal::spawn(
             tmp.path().to_path_buf(),
             pty_size(Some(100), Some(31)),
@@ -1858,7 +1859,7 @@ mod tests {
         // Serialize against the sibling real-PTY tests so they do not
         // stack real-shell load on each other under the full parallel run.
         let _serial = pty_test_lock();
-        let tmp = tempfile::tempdir().expect("temp drive");
+        let tmp = tempfile::tempdir().expect("temp workspace");
         let subdir = tmp.path().join("work");
         fs::create_dir_all(&subdir).expect("create subdir");
         let root = tmp.path().canonicalize().expect("canonical root");
@@ -1879,7 +1880,7 @@ mod tests {
                 .as_ref()
                 .and_then(|p| p.canonicalize().ok()),
             Some(root),
-            "fresh terminal should report drive root cwd"
+            "fresh terminal should report workspace root cwd"
         );
 
         terminal.handle.send_input(b"cd work\r");
@@ -1949,7 +1950,7 @@ mod tests {
 
         if command_available("pwd") {
             ran += 1;
-            let tmp = tempfile::tempdir().expect("temp drive");
+            let tmp = tempfile::tempdir().expect("temp workspace");
             let cwd = tmp.path().to_path_buf();
             let mut terminal = TestTerminal::spawn(
                 cwd.clone(),
@@ -1978,11 +1979,11 @@ mod tests {
             let out = collect_until(&mut terminal.handle, "__CWD_HOME_END__", PROBE_BUDGET).await;
             assert!(
                 out.contains(&cwd.display().to_string()),
-                "terminal should start at drive root cwd, got {out:?}"
+                "terminal should start at workspace root cwd, got {out:?}"
             );
             assert!(
                 !out.contains(&format!("<HOME={}>", cwd.display())),
-                "terminal HOME should not be rewritten to drive root, got {out:?}"
+                "terminal HOME should not be rewritten to workspace root, got {out:?}"
             );
             assert!(
                 out.contains("<CHAN_TAB_NAME=build>"),
@@ -2002,7 +2003,7 @@ mod tests {
             );
             let ws_name = cwd
                 .file_name()
-                .expect("temp drive has a basename")
+                .expect("temp workspace has a basename")
                 .to_string_lossy();
             assert!(
                 out.contains(&format!("<CHAN_WORKSPACE_NAME={ws_name}>")),
@@ -2043,7 +2044,7 @@ mod tests {
 
         if command_available("less") {
             ran += 1;
-            let tmp = tempfile::tempdir().expect("temp drive");
+            let tmp = tempfile::tempdir().expect("temp workspace");
             let mut terminal = TestTerminal::spawn(
                 tmp.path().to_path_buf(),
                 pty_size(Some(100), Some(31)),
@@ -2098,7 +2099,7 @@ mod tests {
         // Serialize against the sibling real-PTY tests so they do not
         // stack real-shell load on each other under the full parallel run.
         let _serial = pty_test_lock();
-        let tmp = tempfile::tempdir().expect("temp drive");
+        let tmp = tempfile::tempdir().expect("temp workspace");
         let mut terminal = TestTerminal::spawn_with_mcp_env(
             tmp.path().to_path_buf(),
             pty_size(Some(100), Some(31)),

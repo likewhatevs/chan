@@ -24,12 +24,12 @@ const ORDER = [
 
 beforeEach(() => {
   fbClearSelection();
-  browserSelection.showDrive = false;
+  browserSelection.showWorkspace = false;
 });
 
 afterEach(() => {
   fbClearSelection();
-  browserSelection.showDrive = false;
+  browserSelection.showWorkspace = false;
 });
 
 describe("FB selection model (FB1)", () => {

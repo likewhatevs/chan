@@ -9,7 +9,7 @@
   //
   // The point is to make the smoothness gap concrete. Drag a node
   // and feel how the simulation reacts; compare to the cytoscape
-  // GraphPanel against the same drive. The FPS readout in the
+  // GraphPanel against the same workspace. The FPS readout in the
   // corner is wall-clock.
   //
   // Mounted from web/d3-compare.html. Reachable at

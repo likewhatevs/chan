@@ -13,7 +13,7 @@ import { withTokenQuery } from "../api/transport";
 
 /// Open the fullscreen viewer.
 ///
-///   path  Drive-rooted path. The PDF bytes come from
+///   path  Workspace-rooted path. The PDF bytes come from
 ///         `/api/files/<path>`; the bearer token rides as a query
 ///         param via `withTokenQuery` because `<embed>` can't carry
 ///         a custom Authorization header. Same trick the inline

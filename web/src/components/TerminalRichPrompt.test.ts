@@ -377,7 +377,7 @@ describe("TerminalRichPrompt", () => {
 
     // `fullstack-a-4`: SpawnDialog mounts at the App root in
     // real life; in this test we mount it as a sibling so the
-    // global state singleton drives it through to render.
+    // global state singleton workspaces it through to render.
     const SpawnDialog = (await import("./SpawnDialog.svelte")).default;
     const dialogHost = document.createElement("div");
     document.body.append(dialogHost);

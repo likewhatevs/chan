@@ -2,7 +2,7 @@ import { describe, expect, test } from "vitest";
 import source from "./screensaver.svelte.ts?raw";
 import overlay from "../components/ScreensaverOverlay.svelte?raw";
 
-// `fullstack-a-77c`: no-PIN lockout fix. When the drive
+// `fullstack-a-77c`: no-PIN lockout fix. When the workspace
 // has no PIN set, any keypress or click on the screensaver
 // backdrop dismisses the lock. The helper text already
 // promised this behavior in slice 2; this slice makes the
@@ -52,7 +52,7 @@ describe("fullstack-a-77c: overlay branching", () => {
 
   test("markup branches on screensaver.pin_set inside the locked block", () => {
     expect(overlay).toMatch(
-      /\{#if screensaver\.locked\}[\s\S]{1,1200}\{#if cardVisible\}[\s\S]{1,800}\{#if screensaver\.pin_set\}[\s\S]{1,4000}\{:else\}[\s\S]{1,800}No PIN set on this drive\. Press any key or click to[\s\S]{1,40}unlock\./,
+      /\{#if screensaver\.locked\}[\s\S]{1,1200}\{#if cardVisible\}[\s\S]{1,800}\{#if screensaver\.pin_set\}[\s\S]{1,4000}\{:else\}[\s\S]{1,800}No PIN set on this workspace\. Press any key or click to[\s\S]{1,40}unlock\./,
     );
   });
 

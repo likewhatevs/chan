@@ -1,73 +1,73 @@
 <script lang="ts">
-  import type { DriveWarning } from "../api/types";
+  import type { WorkspaceWarning } from "../api/types";
   import {
-    canDiscardDriveWarning,
-    closeDriveWarningsDialog,
-    copyDriveWarningPath,
-    discardDriveWarning,
-    dismissDriveWarning,
-    driveWarningLabel,
-    driveWarningsDialog,
+    canDiscardWorkspaceWarning,
+    closeWorkspaceWarningsDialog,
+    copyWorkspaceWarningPath,
+    discardWorkspaceWarning,
+    dismissWorkspaceWarning,
+    workspaceWarningLabel,
+    workspaceWarningsDialog,
   } from "../state/store.svelte";
 
   let dialogEl: HTMLElement | undefined = $state();
 
-  const warnings = $derived(driveWarningsDialog.warnings);
+  const warnings = $derived(workspaceWarningsDialog.warnings);
 
   $effect(() => {
-    if (driveWarningsDialog.open) {
+    if (workspaceWarningsDialog.open) {
       queueMicrotask(() => dialogEl?.focus());
     }
   });
 
-  function keyFor(warning: DriveWarning): string {
+  function keyFor(warning: WorkspaceWarning): string {
     return `${warning.kind}\u0000${warning.path}\u0000${warning.message}`;
   }
 
   function onKey(e: KeyboardEvent): void {
     if (e.key === "Escape") {
       e.preventDefault();
-      closeDriveWarningsDialog();
+      closeWorkspaceWarningsDialog();
     }
   }
 </script>
 
-{#if driveWarningsDialog.open}
+{#if workspaceWarningsDialog.open}
   <!-- svelte-ignore a11y_click_events_have_key_events -->
   <!-- svelte-ignore a11y_no_static_element_interactions -->
-  <div class="drive-warnings-backdrop" onclick={closeDriveWarningsDialog}>
+  <div class="workspace-warnings-backdrop" onclick={closeWorkspaceWarningsDialog}>
     <div
       bind:this={dialogEl}
-      class="drive-warnings-modal"
+      class="workspace-warnings-modal"
       role="dialog"
       aria-modal="true"
-      aria-labelledby="drive-warnings-title"
+      aria-labelledby="workspace-warnings-title"
       tabindex="-1"
       onkeydown={onKey}
       onclick={(e) => e.stopPropagation()}
     >
       <header class="modal-header">
-        <h2 id="drive-warnings-title">Drive warnings</h2>
+        <h2 id="workspace-warnings-title">Workspace warnings</h2>
         <button
           type="button"
           class="icon-button"
-          aria-label="Close drive warnings"
+          aria-label="Close workspace warnings"
           title="Close"
-          onclick={closeDriveWarningsDialog}
-          disabled={driveWarningsDialog.busyKey !== null}
+          onclick={closeWorkspaceWarningsDialog}
+          disabled={workspaceWarningsDialog.busyKey !== null}
         >x</button>
       </header>
 
       <div class="modal-body">
         {#if warnings.length === 0}
-          <p class="empty">No current drive warnings.</p>
+          <p class="empty">No current workspace warnings.</p>
         {:else}
           <ul class="warning-list">
             {#each warnings as warning (keyFor(warning))}
-              {@const busy = driveWarningsDialog.busyKey === keyFor(warning)}
+              {@const busy = workspaceWarningsDialog.busyKey === keyFor(warning)}
               <li class="warning-item">
                 <div class="warning-main">
-                  <div class="warning-title">{driveWarningLabel(warning)}</div>
+                  <div class="warning-title">{workspaceWarningLabel(warning)}</div>
                   <div class="warning-meta">
                     <code>{warning.path}</code>
                     <span>{warning.kind}</span>
@@ -76,20 +76,20 @@
                 <div class="warning-actions">
                   <button
                     type="button"
-                    onclick={() => void copyDriveWarningPath(warning)}
-                    disabled={driveWarningsDialog.busyKey !== null}
+                    onclick={() => void copyWorkspaceWarningPath(warning)}
+                    disabled={workspaceWarningsDialog.busyKey !== null}
                   >Copy path</button>
                   <button
                     type="button"
-                    onclick={() => dismissDriveWarning(warning)}
-                    disabled={driveWarningsDialog.busyKey !== null}
+                    onclick={() => dismissWorkspaceWarning(warning)}
+                    disabled={workspaceWarningsDialog.busyKey !== null}
                   >Dismiss</button>
-                  {#if canDiscardDriveWarning(warning)}
+                  {#if canDiscardWorkspaceWarning(warning)}
                     <button
                       type="button"
                       class="danger"
-                      onclick={() => void discardDriveWarning(warning)}
-                      disabled={driveWarningsDialog.busyKey !== null}
+                      onclick={() => void discardWorkspaceWarning(warning)}
+                      disabled={workspaceWarningsDialog.busyKey !== null}
                     >{busy ? "Discarding..." : "Discard metadata"}</button>
                   {/if}
                 </div>
@@ -98,18 +98,18 @@
           </ul>
         {/if}
 
-        {#if driveWarningsDialog.error}
-          <p class="dialog-error" role="alert">{driveWarningsDialog.error}</p>
-        {:else if driveWarningsDialog.notice}
-          <p class="dialog-notice" role="status">{driveWarningsDialog.notice}</p>
+        {#if workspaceWarningsDialog.error}
+          <p class="dialog-error" role="alert">{workspaceWarningsDialog.error}</p>
+        {:else if workspaceWarningsDialog.notice}
+          <p class="dialog-notice" role="status">{workspaceWarningsDialog.notice}</p>
         {/if}
       </div>
 
       <footer class="modal-footer">
         <button
           type="button"
-          onclick={closeDriveWarningsDialog}
-          disabled={driveWarningsDialog.busyKey !== null}
+          onclick={closeWorkspaceWarningsDialog}
+          disabled={workspaceWarningsDialog.busyKey !== null}
         >OK</button>
       </footer>
     </div>
@@ -117,7 +117,7 @@
 {/if}
 
 <style>
-  .drive-warnings-backdrop {
+  .workspace-warnings-backdrop {
     position: fixed;
     inset: 0;
     z-index: 25500;
@@ -127,7 +127,7 @@
     padding: 24px;
     background: rgba(0, 0, 0, 0.42);
   }
-  .drive-warnings-modal {
+  .workspace-warnings-modal {
     width: min(720px, 92vw);
     max-height: min(640px, 86vh);
     display: flex;
@@ -275,11 +275,11 @@
     border-top: 1px solid var(--border);
   }
   @media (max-width: 640px) {
-    .drive-warnings-backdrop {
+    .workspace-warnings-backdrop {
       padding: 12px;
       align-items: stretch;
     }
-    .drive-warnings-modal {
+    .workspace-warnings-modal {
       width: 100%;
       max-height: none;
     }

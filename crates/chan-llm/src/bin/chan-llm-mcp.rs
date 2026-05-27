@@ -1,15 +1,15 @@
 //! `chan-llm-mcp`: standalone MCP server binary.
 //!
 //! Any MCP client (Claude Desktop, Claude Code, Cursor, Continue,
-//! ...) can spawn this process to gain chan-drive-sandboxed access
-//! to a chan drive's read/write/list/search tools.
+//! ...) can spawn this process to gain chan-workspace-sandboxed access
+//! to a chan workspace's read/write/list/search tools.
 //!
 //! Usage:
 //!
-//!     chan-llm-mcp --drive /path/to/drive [--config /path/to/config.toml]
+//!     chan-llm-mcp --workspace /path/to/workspace [--config /path/to/config.toml]
 //!                  [--max-media-bytes N]
 //!
-//! `write_file` writes apply immediately through chan-drive's
+//! `write_file` writes apply immediately through chan-workspace's
 //! sandbox; the MCP client is responsible for any user
 //! confirmation before invoking the tool.
 //!
@@ -45,8 +45,8 @@ fn main() -> ExitCode {
         return ExitCode::SUCCESS;
     }
 
-    let Some(drive_root) = args.drive else {
-        eprintln!("chan-llm-mcp: --drive is required");
+    let Some(drive_root) = args.workspace else {
+        eprintln!("chan-llm-mcp: --workspace is required");
         eprintln!();
         eprintln!("{USAGE}");
         return ExitCode::from(2);
@@ -64,12 +64,12 @@ fn main() -> ExitCode {
         }
     };
 
-    let drive = match lib.open_workspace(&drive_root) {
+    let workspace = match lib.open_workspace(&drive_root) {
         Ok(d) => d,
         Err(e) => {
-            eprintln!("chan-llm-mcp: open drive {}: {e}", drive_root.display());
+            eprintln!("chan-llm-mcp: open workspace {}: {e}", drive_root.display());
             eprintln!(
-                "(if the path isn't registered yet, run `chan drive add {}` first.)",
+                "(if the path isn't registered yet, run `chan workspace add {}` first.)",
                 drive_root.display()
             );
             return ExitCode::FAILURE;
@@ -87,7 +87,7 @@ fn main() -> ExitCode {
         }
     };
 
-    let mut server = Server::new(drive);
+    let mut server = Server::new(workspace);
     if let Some(cap) = args.max_media_bytes {
         server = server.with_max_media_bytes(cap);
     }
@@ -99,17 +99,17 @@ fn main() -> ExitCode {
 }
 
 const USAGE: &str = "\
-chan-llm-mcp - MCP server exposing chan drive tools over stdio
+chan-llm-mcp - MCP server exposing chan workspace tools over stdio
 
 USAGE:
-    chan-llm-mcp --drive <path> [--config <path>]
+    chan-llm-mcp --workspace <path> [--config <path>]
                  [--max-media-bytes <N>]
 
 OPTIONS:
-    --drive <path>           Absolute path of the chan drive to expose.
+    --workspace <path>           Absolute path of the chan workspace to expose.
                              Must already be registered
-                             (use `chan drive add`).
-    --config <path>          Override for the chan-drive registry config
+                             (use `chan workspace add`).
+    --config <path>          Override for the chan-workspace registry config
                              (defaults to ~/.chan/config.toml).
     --max-media-bytes <N>    Hard cap on a single read_media response,
                              in bytes. Default 10 MiB. Oversized files
@@ -120,7 +120,7 @@ OPTIONS:
 
 #[derive(Default)]
 struct Args {
-    drive: Option<PathBuf>,
+    workspace: Option<PathBuf>,
     config: Option<PathBuf>,
     max_media_bytes: Option<u64>,
     help: bool,
@@ -131,9 +131,9 @@ impl Args {
         let mut out = Args::default();
         while let Some(arg) = it.next() {
             match arg.as_str() {
-                "--drive" => {
-                    let v = it.next().ok_or("--drive needs a value")?;
-                    out.drive = Some(PathBuf::from(v));
+                "--workspace" => {
+                    let v = it.next().ok_or("--workspace needs a value")?;
+                    out.workspace = Some(PathBuf::from(v));
                 }
                 "--config" => {
                     let v = it.next().ok_or("--config needs a value")?;

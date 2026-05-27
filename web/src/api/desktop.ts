@@ -71,7 +71,7 @@ export async function reloadWindow(): Promise<void> {
 }
 
 /// `phase-12 lane-e` (addendum-2 Q6): close-cascade tail. Close the
-/// current drive window and return focus to the launcher (the
+/// current workspace window and return focus to the launcher (the
 /// native-desktop workspace list). Called when the last tab and then
 /// the last empty pane are closed. No-op off-desktop - the browser
 /// owns its own window/tab lifecycle. Best-effort: a failed IPC logs

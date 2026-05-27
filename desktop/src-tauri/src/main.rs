@@ -31,9 +31,9 @@ const SYSTEM_NOTICE: &str = "system-notice";
 /// background runtime owners need the same state handle.
 pub struct AppState {
     store: Mutex<ConfigStore>,
-    /// Live embedded local drives keyed by canonical drive path.
+    /// Live embedded local workspaces keyed by canonical workspace path.
     serves: Mutex<HashMap<String, ServeHandle>>,
-    /// In-process chan-server host for normal local drives.
+    /// In-process chan-server host for normal local workspaces.
     /// Initialized during Tauri setup, after the async runtime is
     /// available for Tokio listener registration.
     embedded: OnceLock<embedded::EmbeddedServer>,
@@ -56,7 +56,7 @@ pub struct AppState {
 /// Defense-in-depth local runtime teardown: `RunEvent::Exit` is the
 /// primary path, but a panic unwinding through `tauri::App` can
 /// bypass it. Dropping the last `Arc<AppState>` signals every
-/// running local drive via `serve::stop_all`. Idempotent: stop_all
+/// running local workspace via `serve::stop_all`. Idempotent: stop_all
 /// drains the serves map, so a normal-exit run followed by Drop is a
 /// no-op on the second pass.
 impl Drop for AppState {
@@ -105,11 +105,11 @@ impl AppState {
     }
 }
 
-/// Merged drive view returned to the frontend. Two flavours share
+/// Merged workspace view returned to the frontend. Two flavours share
 /// the wire shape so the existing renderer can iterate one list:
 ///
 /// * `kind = "local"`: a chan-registry entry, backed by a
-///   drive mounted into the embedded server. Includes the canonical
+///   workspace mounted into the embedded server. Includes the canonical
 ///   filesystem path and live URL.
 /// * `kind = "tunneled"`: a remote `chan serve` that dialed into
 ///   the embedded tunnel server. No path; `url` points at the
@@ -132,7 +132,7 @@ struct Workspace {
     #[serde(skip_serializing_if = "Option::is_none")]
     label: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    drive: Option<String>,
+    workspace: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     public: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -166,7 +166,7 @@ fn list_workspaces(state: State<Arc<AppState>>) -> Result<Vec<Workspace>, String
                 on,
                 url,
                 label: None,
-                drive: None,
+                workspace: None,
                 public: None,
                 peer_addr: None,
                 connected_at: None,
@@ -174,7 +174,7 @@ fn list_workspaces(state: State<Arc<AppState>>) -> Result<Vec<Workspace>, String
         })
         .collect();
 
-    // Tunneled rows: one per registered (label, drive) in the
+    // Tunneled rows: one per registered (label, workspace) in the
     // embedded chan-tunnel-server. URL is populated by the
     // supervisor as soon as the per-tenant listener binds; an
     // empty URL means "just registered, the listener will follow
@@ -187,7 +187,7 @@ fn list_workspaces(state: State<Arc<AppState>>) -> Result<Vec<Workspace>, String
             on: true,
             url: t.url,
             label: Some(t.label),
-            drive: Some(t.drive),
+            workspace: Some(t.drive),
             public: Some(t.public),
             peer_addr: t.peer_addr,
             connected_at: Some(t.connected_at),
@@ -206,7 +206,7 @@ fn list_workspaces(state: State<Arc<AppState>>) -> Result<Vec<Workspace>, String
             on: true,
             url,
             label,
-            drive: None,
+            workspace: None,
             public: None,
             peer_addr: None,
             connected_at: None,
@@ -217,19 +217,19 @@ fn list_workspaces(state: State<Arc<AppState>>) -> Result<Vec<Workspace>, String
 }
 
 /// `fullstack-b-28b` slice iii: the pre-flight modal collects the
-/// user's feature choices BEFORE the drive is registered + passes
+/// user's feature choices BEFORE the workspace is registered + passes
 /// them through to `chan add`. The chan CLI's `--semantic-search`
 /// + `--reports` flags from `systacean-27` are the right
-/// registration-time entry point so chan-drive's BOOT process
+/// registration-time entry point so chan-workspace's BOOT process
 /// picks up the chosen state on the FIRST open (no stub +
 /// re-toggle cycle).
 ///
 /// `features` is optional for SPA-side backward compatibility +
-/// for the CLI-level `add_drive` calls that don't surface the
-/// pre-flight UX. Missing or default `features` opens the drive
+/// for the CLI-level `add_workspace` calls that don't surface the
+/// pre-flight UX. Missing or default `features` opens the workspace
 /// lean (BM25-only, no reports).
 #[tauri::command]
-async fn add_drive(
+async fn add_workspace(
     app: tauri::AppHandle,
     state: State<'_, Arc<AppState>>,
     path: String,
@@ -241,38 +241,38 @@ async fn add_drive(
         return Err("embedded local server is unavailable".to_string());
     };
     // Route through the SINGLE embedded Library so the in-memory
-    // registry the host opens drives against learns about the new
+    // registry the host opens workspaces against learns about the new
     // row immediately. A subprocess `chan add` would mutate only
     // the on-disk registry, leaving the host's boot-time snapshot
-    // stale, which is the "drive not registered" bug this replaces.
+    // stale, which is the "workspace not registered" bug this replaces.
     let library = embedded.library().clone();
     let path_for_block = path.clone();
 
     emit_chan_busy(&app, true, "add", &path);
     // register_workspace + boot run off the async executor: boot can
-    // walk a large drive on first reports activation.
+    // walk a large workspace on first reports activation.
     let result =
         tokio::task::spawn_blocking(move || register_and_boot(&library, &path_for_block, features))
             .await;
     emit_chan_busy(&app, false, "add", &path);
     match result {
         Ok(inner) => inner?,
-        Err(e) => return Err(format!("registering drive panicked: {e}")),
+        Err(e) => return Err(format!("registering workspace panicked: {e}")),
     }
 
     // `fullstack-b-28b` slice iii: mirror the chosen features into
-    // the desktop cache so `get_drive_features` returns the
+    // the desktop cache so `get_workspace_features` returns the
     // authoritative state immediately, before the user toggles
     // anything in the launcher row.
     if features != WorkspaceFeatures::default() {
         let mut store = state.store.lock().unwrap();
         let mut cfg = store.get().map_err(err)?;
-        cfg.drives.entry(path.clone()).or_default().features = features;
+        cfg.workspaces.entry(path.clone()).or_default().features = features;
         store.save(&cfg).map_err(err)?;
     }
 
-    // Auto-start: opening a drive from the desktop is the user's
-    // way of saying "make this drive usable now". Spinning up the
+    // Auto-start: opening a workspace from the desktop is the user's
+    // way of saying "make this workspace usable now". Spinning up the
     // serve immediately is what they expect; otherwise the freshly
     // added row sits there with On=off and Launch disabled, which
     // looks broken.
@@ -281,11 +281,11 @@ async fn add_drive(
 }
 
 /// Register `path` with the shared embedded Library and, if any
-/// optional feature was requested, open the drive once to persist
+/// optional feature was requested, open the workspace once to persist
 /// the flags and kick the BOOT scan. Mirrors `chan/src/main.rs`'s
 /// `cmd_add`. The transient `Arc<Workspace>` is dropped before this
 /// returns so the immediately-following `serve::start` can mount
-/// the drive without tripping `WorkspaceAlreadyOpen` against the
+/// the workspace without tripping `WorkspaceAlreadyOpen` against the
 /// lifetime flock. Blocking: `register_workspace` writes the registry
 /// and `boot()` can run a slow initial scan, so callers invoke it
 /// via `spawn_blocking`.
@@ -296,30 +296,31 @@ fn register_and_boot(
 ) -> Result<(), String> {
     let root = Path::new(path);
     if !root.exists() {
-        std::fs::create_dir_all(root).map_err(|e| format!("creating drive root {path}: {e}"))?;
+        std::fs::create_dir_all(root)
+            .map_err(|e| format!("creating workspace root {path}: {e}"))?;
     }
     let entry = library
         .register_workspace(root)
-        .map_err(|e| format!("registering drive {path}: {e}"))?;
+        .map_err(|e| format!("registering workspace {path}: {e}"))?;
     if features.bge || features.reports {
-        let drive = library
+        let workspace = library
             .open_workspace(&entry.root_path)
-            .map_err(|e| format!("opening drive {}: {e}", entry.root_path.display()))?;
+            .map_err(|e| format!("opening workspace {}: {e}", entry.root_path.display()))?;
         if features.bge {
-            drive
+            workspace
                 .set_semantic_enabled(true)
                 .map_err(|e| format!("enabling semantic search: {e}"))?;
         }
         if features.reports {
-            drive
+            workspace
                 .set_reports_enabled(true)
                 .map_err(|e| format!("enabling reports: {e}"))?;
         }
-        drive
+        workspace
             .boot()
             .map_err(|e| format!("boot after enabling features: {e}"))?;
         // Drop the transient handle before serve::start re-opens it.
-        drop(drive);
+        drop(workspace);
     }
     Ok(())
 }
@@ -349,21 +350,21 @@ async fn remove_workspace(
     emit_chan_busy(&app, false, "remove", &key);
     match result {
         Ok(inner) => inner?,
-        Err(e) => return Err(format!("unregistering drive panicked: {e}")),
+        Err(e) => return Err(format!("unregistering workspace panicked: {e}")),
     }
 
     let mut store = state.store.lock().unwrap();
     let mut cfg = store.get().map_err(err)?;
-    cfg.drives.remove(&key);
+    cfg.workspaces.remove(&key);
     store.save(&cfg).map_err(err)?;
     Ok(())
 }
 
-/// Drop a drive from the shared registry after its serve has been
+/// Drop a workspace from the shared registry after its serve has been
 /// stopped. `serve::stop` removes the runtime synchronously, but a
 /// background indexer rebuild or an in-flight HTTP/WS handler can
 /// still hold an `Arc<Workspace>` for a moment. `unregister_workspace`
-/// wipes per-drive state and so needs exclusive access; until the
+/// wipes per-workspace state and so needs exclusive access; until the
 /// last handle drops it returns `WorkspaceAlreadyOpen` (this process)
 /// or `WorkspaceLocked` (the flock). `reset_workspace` takes the flock
 /// before any registry mutation, so a failed attempt leaves no
@@ -383,19 +384,19 @@ fn unregister_with_retry(library: &chan_workspace::Library, key: &str) -> Result
             Err(e @ (ChanError::WorkspaceAlreadyOpen | ChanError::WorkspaceLocked)) => {
                 if attempt == MAX_ATTEMPTS {
                     return Err(format!(
-                        "drive {key} is still shutting down ({e}); try Forget again in a moment"
+                        "workspace {key} is still shutting down ({e}); try Forget again in a moment"
                     ));
                 }
                 std::thread::sleep(BACKOFF);
             }
-            Err(e) => return Err(format!("unregistering drive {key}: {e}")),
+            Err(e) => return Err(format!("unregistering workspace {key}: {e}")),
         }
     }
     unreachable!("retry loop returns on the final attempt")
 }
 
 #[tauri::command]
-async fn set_drive_on(
+async fn set_workspace_on(
     app: tauri::AppHandle,
     state: State<'_, Arc<AppState>>,
     path: String,
@@ -416,23 +417,23 @@ fn get_config(state: State<Arc<AppState>>) -> Result<Config, String> {
 }
 
 /// `fullstack-b-28a` + `-b-28b` slice ii: read the persisted
-/// feature toggles for a drive. Returns the default `{bge:
-/// false, reports: false}` for any drive that has no desktop cache
+/// feature toggles for a workspace. Returns the default `{bge:
+/// false, reports: false}` for any workspace that has no desktop cache
 /// entry yet — the launcher's expand panel calls this on render
-/// so first-time drives show up with both toggles off as the
+/// so first-time workspaces show up with both toggles off as the
 /// round-2-plan specifies.
 ///
-/// Reads chan-drive's authoritative state in-process: if the drive
+/// Reads chan-workspace's authoritative state in-process: if the workspace
 /// is mounted, off the live `Arc<Workspace>` the host holds; else via a
 /// transient `open_workspace` against the shared registry. On any read
-/// failure (drive not registered, drive busy, etc.) the IPC falls
+/// failure (workspace not registered, workspace busy, etc.) the IPC falls
 /// back to the desktop cache so the launcher row's expand panel
 /// still renders. On a successful read the desktop cache updates if
 /// the state differs, picking up out-of-band changes (e.g. a flag
 /// flipped from a terminal) so the launcher reflects truth on the
 /// next render without a manual refresh.
 #[tauri::command]
-async fn get_drive_features(
+async fn get_workspace_features(
     state: State<'_, Arc<AppState>>,
     path: String,
 ) -> Result<WorkspaceFeatures, String> {
@@ -447,16 +448,16 @@ async fn get_drive_features(
             read_drive_features_blocking(&library, live, &key_for_block)
         })
         .await
-        .unwrap_or_else(|e| Err(format!("reading drive features panicked: {e}")));
+        .unwrap_or_else(|e| Err(format!("reading workspace features panicked: {e}")));
         if let Ok(features) = read {
             let mut store = state.store.lock().unwrap();
             let mut cfg = store.get().map_err(err)?;
-            let entry = cfg.drives.entry(key).or_default();
+            let entry = cfg.workspaces.entry(key).or_default();
             if entry.features != features {
                 entry.features = features;
                 // Best-effort cache update: a save failure here
                 // doesn't change the value returned to the SPA; the
-                // next read retries chan-drive.
+                // next read retries chan-workspace.
                 let _ = store.save(&cfg);
             }
             return Ok(features);
@@ -465,13 +466,17 @@ async fn get_drive_features(
     // Fall-through: embedded host unavailable OR the read failed.
     // The desktop cache is the best available source.
     let cfg = state.store.lock().unwrap().get().map_err(err)?;
-    Ok(cfg.drives.get(&key).map(|s| s.features).unwrap_or_default())
+    Ok(cfg
+        .workspaces
+        .get(&key)
+        .map(|s| s.features)
+        .unwrap_or_default())
 }
 
-/// Read the authoritative feature flags for `key` from chan-drive.
+/// Read the authoritative feature flags for `key` from chan-workspace.
 /// Prefers the live mounted handle (no re-open, so the lifetime
 /// flock isn't contended); falls back to a transient `open_workspace`
-/// for a registered-but-stopped drive. Returns `Err` when the drive
+/// for a registered-but-stopped workspace. Returns `Err` when the workspace
 /// isn't registered or a read fails so the caller can fall back to
 /// the desktop cache. Blocking: a transient open initializes the
 /// index, so callers invoke it via `spawn_blocking`.
@@ -480,11 +485,11 @@ fn read_drive_features_blocking(
     live: Option<Arc<chan_workspace::Workspace>>,
     key: &str,
 ) -> Result<WorkspaceFeatures, String> {
-    let drive = resolve_drive_for_features(library, live, key)?;
-    let bge = drive
+    let workspace = resolve_drive_for_features(library, live, key)?;
+    let bge = workspace
         .semantic_enabled()
         .map_err(|e| format!("reading semantic_enabled: {e}"))?;
-    let reports = drive
+    let reports = workspace
         .reports_enabled()
         .map_err(|e| format!("reading reports_enabled: {e}"))?;
     Ok(WorkspaceFeatures { bge, reports })
@@ -492,29 +497,29 @@ fn read_drive_features_blocking(
 
 /// Resolve the `Arc<Workspace>` a feature read/write should act on: the
 /// live mounted handle when present, otherwise a transient open of
-/// a registered drive. Errors when the drive isn't registered.
+/// a registered workspace. Errors when the workspace isn't registered.
 fn resolve_drive_for_features(
     library: &chan_workspace::Library,
     live: Option<Arc<chan_workspace::Workspace>>,
     key: &str,
 ) -> Result<Arc<chan_workspace::Workspace>, String> {
-    if let Some(drive) = live {
-        return Ok(drive);
+    if let Some(workspace) = live {
+        return Ok(workspace);
     }
     let root = Path::new(key);
     if library.workspace_paths_for(root).is_none() {
-        return Err(format!("drive {key} is not registered"));
+        return Err(format!("workspace {key} is not registered"));
     }
     library
         .open_workspace(root)
-        .map_err(|e| format!("opening drive {key}: {e}"))
+        .map_err(|e| format!("opening workspace {key}: {e}"))
 }
 
 /// `fullstack-b-28b` slice iv: the pre-flight report displayed in
-/// the drive-add modal. Carries the load-bearing facts the
+/// the workspace-add modal. Carries the load-bearing facts the
 /// round-2-plan §"UI surface" calls out so the user can answer
 /// "is this the folder I meant?" + "what am I about to commit
-/// to?" before chan-drive's BOOT starts walking. Strict superset
+/// to?" before chan-workspace's BOOT starts walking. Strict superset
 /// of slice iii's modal — toggles still render at the bottom of
 /// the same dialog.
 ///
@@ -526,23 +531,23 @@ fn resolve_drive_for_features(
 /// `already_registered` is checked against the shared embedded
 /// registry — if the canonical path is already registered, the
 /// modal flags the duplicate so the user doesn't accidentally
-/// re-add the same drive.
+/// re-add the same workspace.
 #[derive(Debug, Clone, Serialize)]
 struct PreflightReport {
-    /// Canonical drive path. Mirrors what `add_drive` will
+    /// Canonical workspace path. Mirrors what `add_workspace` will
     /// pass to `chan add`.
     path: String,
     /// True iff `std::fs::metadata(path).permissions().readonly()`
     /// is false. A read-only mount surfaces an explicit warning
     /// in the modal so the user knows chan can't write notes
-    /// into the drive.
+    /// into the workspace.
     writable: bool,
     /// Files visited under `path` (excluding directories +
     /// SCM-internal / build-output trees). Capped.
     file_count: usize,
     /// Markdown files visited (extensions `.md` / `.markdown`).
     /// The primary content type chan operates on; surfaced
-    /// separately so the modal can read it as "drive readiness"
+    /// separately so the modal can read it as "workspace readiness"
     /// rather than just "total file count".
     markdown_count: usize,
     /// Total byte size of files visited. Capped alongside
@@ -573,15 +578,15 @@ struct PreflightReport {
 const MAX_PREFLIGHT_FILES: usize = 100_000;
 const MAX_PREFLIGHT_SECS: u64 = 5;
 
-/// `fullstack-b-28b` slice iv: walk the drive root + collect
+/// `fullstack-b-28b` slice iv: walk the workspace root + collect
 /// the facts the pre-flight modal needs to render. Capped so a
-/// monster drive doesn't pin the chan-desktop UI for minutes;
+/// monster workspace doesn't pin the chan-desktop UI for minutes;
 /// the modal communicates the cap to the user via the
 /// `truncated` flag.
 ///
 /// `chan_workspace::indexer` uses the same excluded-dirs set. The
 /// extension-classification map is intentionally local to keep the
-/// pre-flight report cheap and independent from opening the drive
+/// pre-flight report cheap and independent from opening the workspace
 /// through the embedded server.
 fn walk_drive_preflight(root: &Path, filter: &chan_workspace::WalkFilter) -> WalkOutcome {
     use std::collections::VecDeque;
@@ -644,8 +649,8 @@ fn preflight_walk_filter() -> chan_workspace::WalkFilter {
         })
 }
 
-/// Mirrors chan-drive's configured excludes so the pre-flight count
-/// and bytes line up with what chan-drive will actually index.
+/// Mirrors chan-workspace's configured excludes so the pre-flight count
+/// and bytes line up with what chan-workspace will actually index.
 fn should_skip_preflight_dir(name: &std::ffi::OsStr, filter: &chan_workspace::WalkFilter) -> bool {
     let Some(name) = name.to_str() else {
         return false;
@@ -655,11 +660,11 @@ fn should_skip_preflight_dir(name: &std::ffi::OsStr, filter: &chan_workspace::Wa
         || filter.is_excluded(name)
 }
 
-/// Extension → media-class bucket. Mirrors chan-drive's
+/// Extension → media-class bucket. Mirrors chan-workspace's
 /// classification at a smaller scope (no Markdown / source-code
 /// breakouts here; only the three media classes the round-2-plan
 /// pre-flight calls out). `markdown_count` is tracked separately
-/// for the "drive readiness" hint.
+/// for the "workspace readiness" hint.
 fn classify_preflight_extension(name: &std::ffi::OsStr, out: &mut WalkOutcome) {
     let Some(ext) = Path::new(name)
         .extension()
@@ -679,7 +684,7 @@ fn classify_preflight_extension(name: &std::ffi::OsStr, out: &mut WalkOutcome) {
 }
 
 /// Return the SCM kind rooted at `root` if any. Only checks the
-/// root level — chan's own walk doesn't climb above the drive
+/// root level — chan's own walk doesn't climb above the workspace
 /// root either, so an SCM in an ancestor dir isn't surfaced.
 fn detect_drive_scm(root: &Path) -> Option<String> {
     for (kind, dir) in [("git", ".git"), ("hg", ".hg"), ("svn", ".svn")] {
@@ -691,13 +696,13 @@ fn detect_drive_scm(root: &Path) -> Option<String> {
 }
 
 /// `fullstack-b-28b` slice iv: assemble the pre-flight report.
-/// Walks the drive + checks SCM + checks the shared embedded
+/// Walks the workspace + checks SCM + checks the shared embedded
 /// registry for the duplicate-registration flag. Tolerates the
 /// embedded host not being up yet (returns
 /// `already_registered = false`) so the modal still renders
 /// something useful.
 #[tauri::command]
-async fn compute_drive_preflight(
+async fn compute_workspace_preflight(
     state: State<'_, Arc<AppState>>,
     path: String,
 ) -> Result<PreflightReport, String> {
@@ -733,25 +738,25 @@ async fn compute_drive_preflight(
 }
 
 /// `fullstack-b-28a` + `-b-28b-i`: write the feature toggle pair
-/// for a drive. Both fields land together so a partial flip
+/// for a workspace. Both fields land together so a partial flip
 /// doesn't leave a half-state on disk; the SPA always sends the
 /// current full state on every change.
 ///
-/// `-b-28b-i` drove the real chan-drive state via the `chan` CLI;
+/// `-b-28b-i` drove the real chan-workspace state via the `chan` CLI;
 /// this routes in-process instead. Each changed flag is applied to
-/// the same `Arc<Workspace>` the host holds when the drive is mounted
+/// the same `Arc<Workspace>` the host holds when the workspace is mounted
 /// (so the lifetime flock isn't contended), or to a transient
-/// handle for a registered-but-stopped drive. Enabling reports
+/// handle for a registered-but-stopped workspace. Enabling reports
 /// also runs `boot()` to kick the initial scan, mirroring
 /// `chan/src/main.rs`'s `cmd_reports_set`. Flags are applied in
 /// order so a failure on the first leaves the second untouched. On
 /// success the desktop cache updates so subsequent
-/// `get_drive_features` reads return the authoritative state
-/// without re-reading chan-drive. On any failure the desktop cache
+/// `get_workspace_features` reads return the authoritative state
+/// without re-reading chan-workspace. On any failure the desktop cache
 /// stays untouched and the error propagates to the SPA (the
 /// launcher's `bindFeaturesToggle` reverts the checkbox).
 #[tauri::command]
-async fn set_drive_features(
+async fn set_workspace_features(
     state: State<'_, Arc<AppState>>,
     path: String,
     features: WorkspaceFeatures,
@@ -759,7 +764,10 @@ async fn set_drive_features(
     let key = canonical_key(Path::new(&path));
     let current = {
         let cfg = state.store.lock().unwrap().get().map_err(err)?;
-        cfg.drives.get(&key).map(|s| s.features).unwrap_or_default()
+        cfg.workspaces
+            .get(&key)
+            .map(|s| s.features)
+            .unwrap_or_default()
     };
     let Some(embedded) = state.embedded.get() else {
         return Err("embedded local server is unavailable".to_string());
@@ -775,11 +783,11 @@ async fn set_drive_features(
     .await;
     match result {
         Ok(inner) => inner?,
-        Err(e) => return Err(format!("applying drive features panicked: {e}")),
+        Err(e) => return Err(format!("applying workspace features panicked: {e}")),
     }
     let mut store = state.store.lock().unwrap();
     let mut cfg = store.get().map_err(err)?;
-    cfg.drives.entry(key).or_default().features = features;
+    cfg.workspaces.entry(key).or_default().features = features;
     store.save(&cfg).map_err(err)
 }
 
@@ -799,18 +807,18 @@ fn apply_drive_features_blocking(
     if current == desired {
         return Ok(());
     }
-    let drive = resolve_drive_for_features(library, live, key)?;
+    let workspace = resolve_drive_for_features(library, live, key)?;
     if current.bge != desired.bge {
-        drive
+        workspace
             .set_semantic_enabled(desired.bge)
             .map_err(|e| format!("setting semantic search: {e}"))?;
     }
     if current.reports != desired.reports {
-        drive
+        workspace
             .set_reports_enabled(desired.reports)
             .map_err(|e| format!("setting reports: {e}"))?;
         if desired.reports {
-            drive
+            workspace
                 .boot()
                 .map_err(|e| format!("boot after enabling reports: {e}"))?;
         }
@@ -833,8 +841,8 @@ struct TunnelStatus {
     /// with labels currently registered in the running tunnel:
     /// "tunnel" → "tunnel-1" → ... up to 999.
     preferred_label: String,
-    /// User's saved drive name or a default ("notes"). No
-    /// collision check — drive uniqueness is scoped per label, and
+    /// User's saved workspace name or a default ("notes"). No
+    /// collision check — workspace uniqueness is scoped per label, and
     /// the desktop doesn't track which labels are remotely
     /// preferred.
     preferred_drive: String,
@@ -842,7 +850,7 @@ struct TunnelStatus {
     /// the tunnel isn't listening (no port to reference yet).
     ssh_snippet: Option<String>,
     /// Pre-formatted `chan serve` command with the bound port,
-    /// canonical TUNNEL_PATH, and the user's chosen label/drive
+    /// canonical TUNNEL_PATH, and the user's chosen label/workspace
     /// already substituted. Copy-paste ready.
     chan_serve_snippet: Option<String>,
 }
@@ -851,16 +859,16 @@ struct TunnelStatus {
 /// panel renders verbatim. Pre-formatting them here means JS does
 /// zero templating — and the canonical URL path (with
 /// `TUNNEL_PATH`) lives in exactly one place in the codebase.
-fn build_snippets(port: u16, label: &str, drive: &str) -> (String, String) {
+fn build_snippets(port: u16, label: &str, workspace: &str) -> (String, String) {
     let ssh = format!("ssh -R {port}:localhost:{port} user@remote");
     // `--no-browser` keeps chan serve from launching the remote's
     // default browser at startup (it has nothing to point at — the
     // visitor URL belongs to chan-desktop, which is what auto-opens
-    // the drive webview on this side instead). `PATH` goes last so
+    // the workspace webview on this side instead). `PATH` goes last so
     // the user only needs to edit one trailing argument.
     let chan = format!(
         "chan serve --tunnel-url=http://127.0.0.1:{port}{path} \
-         --tunnel-token={label} --tunnel-drive={drive} --no-browser PATH",
+         --tunnel-token={label} --tunnel-workspace={workspace} --no-browser PATH",
         path = chan_tunnel_proto::TUNNEL_PATH,
     );
     (ssh, chan)
@@ -929,7 +937,7 @@ fn tunnel_status(state: State<Arc<AppState>>) -> Result<TunnelStatus, String> {
 }
 
 /// Start the tunnel listener with the user's chosen port, label,
-/// and drive. Validates `label` / `drive` against the protocol's
+/// and workspace. Validates `label` / `workspace` against the protocol's
 /// charset rules so the rendered snippet matches what the wire
 /// will actually accept. Persists all three for the next session.
 #[tauri::command]
@@ -938,19 +946,19 @@ async fn tunnel_start(
     state: State<'_, Arc<AppState>>,
     preferred_port: u16,
     label: String,
-    drive: String,
+    workspace: String,
 ) -> Result<u16, String> {
     let label = label.trim().to_string();
-    let drive = drive.trim().to_string();
+    let workspace = workspace.trim().to_string();
     if !chan_tunnel_proto::is_valid_username(&label) {
         return Err(format!(
             "invalid label {label:?}: ASCII alphanumerics plus '-' / '_', \
              first char alphanumeric, ≤64 chars",
         ));
     }
-    if !chan_tunnel_proto::is_valid_drive_name(&drive) {
+    if !chan_tunnel_proto::is_valid_drive_name(&workspace) {
         return Err(format!(
-            "invalid drive name {drive:?}: lowercase ASCII alphanumerics plus '-', \
+            "invalid workspace name {workspace:?}: lowercase ASCII alphanumerics plus '-', \
              first and last char alphanumeric, ≤32 chars",
         ));
     }
@@ -959,7 +967,7 @@ async fn tunnel_start(
         let mut cfg = store.get().map_err(err)?;
         cfg.tunnel.preferred_port = preferred_port;
         cfg.tunnel.preferred_label = label;
-        cfg.tunnel.preferred_drive = drive;
+        cfg.tunnel.preferred_drive = workspace;
         store.save(&cfg).map_err(err)?;
     }
     let tunnel = Arc::clone(&state.tunnel);
@@ -972,32 +980,32 @@ fn tunnel_stop(app: tauri::AppHandle, state: State<Arc<AppState>>) {
 }
 
 #[tauri::command]
-fn default_drive_status() -> Result<default_drive::DefaultWorkspaceStatus, String> {
+fn default_workspace_status() -> Result<default_drive::DefaultWorkspaceStatus, String> {
     default_drive::status()
 }
 
 #[tauri::command]
-fn choose_default_drive(path: String) -> Result<(), String> {
+fn choose_default_workspace(path: String) -> Result<(), String> {
     default_drive::choose_existing(Path::new(&path)).map(|_| ())
 }
 
 #[tauri::command]
-async fn create_default_drive(
+async fn create_default_workspace(
     app: tauri::AppHandle,
     state: State<'_, Arc<AppState>>,
 ) -> Result<(), String> {
-    let created = default_drive::create_default_drive()?;
+    let created = default_drive::create_default_workspace()?;
     reconcile_default_drive(&state, &created.root)?;
     let key = canonical_key(&created.root);
     serve::start(app, Arc::clone(&state), key).await
 }
 
 #[tauri::command]
-async fn factory_reset_default_drive(
+async fn factory_reset_default_workspace(
     app: tauri::AppHandle,
     state: State<'_, Arc<AppState>>,
 ) -> Result<(), String> {
-    let created = default_drive::factory_reset_default_drive()?;
+    let created = default_drive::factory_reset_default_workspace()?;
     reconcile_default_drive(&state, &created.root)?;
     let key = canonical_key(&created.root);
     serve::start(app, Arc::clone(&state), key).await
@@ -1008,9 +1016,9 @@ async fn factory_reset_default_drive(
 /// host's in-memory `Library` so the immediately-following
 /// `serve::start` opens against an up-to-date registry rather than
 /// the host's stale boot-time snapshot (the same staleness class as
-/// the "drive not registered" bug). `register_workspace` is idempotent
+/// the "workspace not registered" bug). `register_workspace` is idempotent
 /// (touch + persist), so re-registering the row default_drive just
-/// wrote is safe, and `set_default_drive_root` keeps the in-memory
+/// wrote is safe, and `set_default_workspace_root` keeps the in-memory
 /// default aligned with what default_drive persisted.
 fn reconcile_default_drive(state: &AppState, root: &Path) -> Result<(), String> {
     let Some(embedded) = state.embedded.get() else {
@@ -1022,17 +1030,17 @@ fn reconcile_default_drive(state: &AppState, root: &Path) -> Result<(), String> 
     let library = embedded.library();
     library
         .register_workspace(root)
-        .map_err(|e| format!("reconciling default drive {}: {e}", root.display()))?;
+        .map_err(|e| format!("reconciling default workspace {}: {e}", root.display()))?;
     library
-        .set_default_drive_root(Some(root.to_path_buf()))
-        .map_err(|e| format!("persisting default drive root {}: {e}", root.display()))?;
+        .set_default_workspace_root(Some(root.to_path_buf()))
+        .map_err(|e| format!("persisting default workspace root {}: {e}", root.display()))?;
     Ok(())
 }
 
 const OUTBOUND_LABEL_MAX_CHARS: usize = 120;
 
 /// Persist an explicit outbound URL attachment and open it in a
-/// drive webview. The remote server owns its own lifecycle; desktop
+/// workspace webview. The remote server owns its own lifecycle; desktop
 /// only stores enough state to show and reopen the row.
 #[tauri::command]
 fn add_outbound_drive(
@@ -1185,12 +1193,12 @@ fn outbound_label(outbound: &OutboundDrive) -> Option<String> {
 }
 
 /// Open an additional in-app Tauri webview for a running local
-/// drive. The first window is auto-opened by the serve supervisor
+/// workspace. The first window is auto-opened by the serve supervisor
 /// when chan prints its URL; subsequent clicks on Launch reach
-/// here and add new windows alongside it. Errors if the drive is
+/// here and add new windows alongside it. Errors if the workspace is
 /// not currently running (no URL captured yet).
 #[tauri::command]
-fn open_local_drive(
+fn open_local_workspace(
     app: tauri::AppHandle,
     state: State<Arc<AppState>>,
     path: String,
@@ -1202,27 +1210,27 @@ fn open_local_drive(
         .unwrap()
         .get(&key)
         .and_then(|h| h.url.clone())
-        .ok_or_else(|| format!("drive {key} is not running"))?;
+        .ok_or_else(|| format!("workspace {key} is not running"))?;
     serve::spawn_local_drive_window(&app, &key, &url)?;
     Ok(())
 }
 
-/// Open a drive in a native window in response to a CLI handoff
-/// request (`chan serve <drive>` while this desktop is running).
+/// Open a workspace in a native window in response to a CLI handoff
+/// request (`chan serve <workspace>` while this desktop is running).
 ///
-/// Mirrors the `add_drive` flow: register + boot the drive through the
+/// Mirrors the `add_workspace` flow: register + boot the workspace through the
 /// shared embedded Library, then `serve::start` (mount + spawn the
-/// first window). If the drive is ALREADY running, `serve::start`
+/// first window). If the workspace is ALREADY running, `serve::start`
 /// returns early without spawning a window, so we raise an additional
 /// window via `spawn_local_drive_window` to match the user's intent
-/// ("show me this drive now").
+/// ("show me this workspace now").
 ///
 /// The slow work (registry write, boot scan, mount) runs on a spawned
 /// task so the callback returns promptly and the CLI doesn't block on
 /// the handshake. The synchronous return therefore reports only that
 /// the request was accepted, not that the window is fully up; on a
 /// genuine mount failure the desktop emits a system notice (same as
-/// the first-launch default-drive path) rather than blocking the CLI.
+/// the first-launch default-workspace path) rather than blocking the CLI.
 #[cfg(unix)]
 fn open_workspace_from_handoff(
     app: tauri::AppHandle,
@@ -1302,25 +1310,25 @@ fn open_tunneled_drive(
     app: tauri::AppHandle,
     state: State<Arc<AppState>>,
     label: String,
-    drive: String,
+    workspace: String,
 ) -> Result<(), String> {
     let url = state
         .tunnel
         .snapshot()
         .into_iter()
-        .find(|d| d.label == label && d.drive == drive)
+        .find(|d| d.label == label && d.drive == workspace)
         .map(|d| d.url)
-        .ok_or_else(|| format!("no tunneled drive {label}/{drive}"))?;
+        .ok_or_else(|| format!("no tunneled drive {label}/{workspace}"))?;
     if url.is_empty() {
         return Err(format!(
-            "tunneled drive {label}/{drive} has no URL yet; per-tenant listener still binding",
+            "tunneled drive {label}/{workspace} has no URL yet; per-tenant listener still binding",
         ));
     }
-    serve::spawn_tunneled_drive_window(&app, &label, &drive, &url)?;
+    serve::spawn_tunneled_drive_window(&app, &label, &workspace, &url)?;
     Ok(())
 }
 
-/// User's home directory as a plain string, for the Drives window
+/// User's home directory as a plain string, for the Workspaces window
 /// to abbreviate paths to `~/...`. Returns an empty string when the
 /// platform can't resolve it.
 #[tauri::command]
@@ -1332,7 +1340,7 @@ fn home_dir() -> String {
 
 /// Open the given folder in the OS file manager. macOS: Finder,
 /// Linux: default file manager, Windows: Explorer. Used by the
-/// Drives window's path cell so users can jump to the drive folder
+/// Workspaces window's path cell so users can jump to the workspace folder
 /// from the row. Trusts the caller to pass a path the user just saw
 /// in the list — paths come from `list_workspaces`, which sources from
 /// the chan registry; no shell interpolation, args are passed as
@@ -1364,7 +1372,7 @@ fn show_window(app: &tauri::AppHandle, label: &str) -> Result<(), String> {
     Ok(())
 }
 
-/// Reload the calling webview window. Drives the SPA's tab
+/// Reload the calling webview window. Workspaces the SPA's tab
 /// context-menu "Reload" entry (via `fullstack-a-36`) AND the
 /// `Cmd+R` accelerator wired in `KEY_BRIDGE_JS`. The accelerator
 /// path bypasses the SPA event bus and invokes this command
@@ -1394,12 +1402,12 @@ fn open_devtools(window: tauri::WebviewWindow) {
 
 /// `phase-12 lane-e` (addendum-2 Q6): close-cascade tail. The SPA
 /// invokes this when the last tab and then the last empty pane of a
-/// drive window are closed: close the window and bring the launcher
+/// workspace window are closed: close the window and bring the launcher
 /// (the native-desktop workspace list) back to the foreground. The
 /// launcher's CloseRequested handler hides rather than destroys it
 /// (see the setup hook), so re-showing is instant. Show the launcher
 /// first so focus lands there without a flash of no-window focus,
-/// then close the calling drive window.
+/// then close the calling workspace window.
 #[tauri::command]
 fn request_close_window(app: tauri::AppHandle, window: tauri::WebviewWindow) -> Result<(), String> {
     let _ = show_window(&app, "main");
@@ -1557,7 +1565,7 @@ fn main() {
     let default_drive_boot = match default_drive::ensure_fresh_default_drive() {
         Ok(created) => created,
         Err(e) => {
-            tracing::warn!(error = %e, "first-launch default drive setup failed");
+            tracing::warn!(error = %e, "first-launch default workspace setup failed");
             None
         }
     };
@@ -1614,7 +1622,7 @@ fn main() {
             // Closing the main window via the red traffic light or
             // Cmd+W should hide it, not destroy it: hidden serve
             // children can still keep the process alive, and
-            // reopening via Dock click or the Window > Drives menu
+            // reopening via Dock click or the Window > Workspaces menu
             // item should be instant. Without this, a closed main
             // window cannot be brought back without quitting and
             // relaunching.
@@ -1648,15 +1656,15 @@ fn main() {
             }
 
             // Tunnel listener is OFF until the user explicitly
-            // clicks "Attach" in the Drives window. We just
+            // clicks "Attach" in the Workspaces window. We just
             // construct the empty TunnelState during boot; binding
             // 127.0.0.1 happens on the IPC `tunnel_start` call.
             let _ = state_for_setup.tunnel.clone();
 
             // macOS CLI-to-desktop handoff listener (ratified Option
             // B). Binds the well-known per-user UDS so a `chan serve
-            // <drive>` in a terminal hands the drive to this desktop
-            // window instead of failing on the per-drive flock. Leaked
+            // <workspace>` in a terminal hands the workspace to this desktop
+            // window instead of failing on the per-workspace flock. Leaked
             // for the process lifetime (the registry watcher above uses
             // the same Box::leak pattern; the handle's Drop unlinks the
             // socket but we want it live until exit, and RunEvent::Exit
@@ -1706,13 +1714,13 @@ fn main() {
                         tracing::warn!(
                             root = %created.root.display(),
                             error = %e,
-                            "starting first-launch default drive failed",
+                            "starting first-launch default workspace failed",
                         );
                         emit_system_notice(
                             &app_for_default,
                             "warning",
                             format!(
-                                "Created the default Chan drive at {}, but opening it failed: {e}",
+                                "Created the default Chan workspace at {}, but opening it failed: {e}",
                                 created.root.display(),
                             ),
                         );
@@ -1724,12 +1732,12 @@ fn main() {
         })
         .invoke_handler(tauri::generate_handler![
             list_workspaces,
-            add_drive,
+            add_workspace,
             remove_workspace,
-            set_drive_on,
-            get_drive_features,
-            set_drive_features,
-            compute_drive_preflight,
+            set_workspace_on,
+            get_workspace_features,
+            set_workspace_features,
+            compute_workspace_preflight,
             get_config,
             home_dir,
             reveal_in_finder,
@@ -1743,11 +1751,11 @@ fn main() {
             tunnel_status,
             tunnel_start,
             tunnel_stop,
-            default_drive_status,
-            choose_default_drive,
-            create_default_drive,
-            factory_reset_default_drive,
-            open_local_drive,
+            default_workspace_status,
+            choose_default_workspace,
+            create_default_workspace,
+            factory_reset_default_workspace,
+            open_local_workspace,
             open_tunneled_drive,
             add_outbound_drive,
             open_outbound_drive,
@@ -1762,7 +1770,7 @@ fn main() {
     app.run(move |_app, event| {
         match event {
             RunEvent::Exit => {
-                // Best-effort: unmount every embedded local drive
+                // Best-effort: unmount every embedded local workspace
                 // before the desktop runtime exits.
                 serve::stop_all(&state_for_exit);
                 // Cancel the tunnel listener (if active) and every
@@ -1773,7 +1781,7 @@ fn main() {
             }
             // macOS: Dock click or `open -a` while the process is
             // still alive. If no windows are visible (main has been
-            // hidden / closed and the user has no drive windows
+            // hidden / closed and the user has no workspace windows
             // open), bring the main window back.
             #[cfg(target_os = "macos")]
             RunEvent::Reopen {
@@ -1791,23 +1799,23 @@ fn main() {
 /// Tauri's `Menu::default` produces the standard macOS menubar
 /// (app / File / Edit / View / Window / Help) but its Window
 /// submenu only has Minimize / Zoom / Close — a closed main
-/// window has no menu path back. We prepend Drives, Settings,
+/// window has no menu path back. We prepend Workspaces, Settings,
 /// and Logs items to that submenu so each app window is
 /// reachable by name.
 ///
 /// Settings has Cmd+, but no chan-desktop-owned UI behind it:
-/// chan owns the Settings concept per-drive. The handler dispatches
-/// `app.settings.toggle` into the focused drive webview, where
+/// chan owns the Settings concept per-workspace. The handler dispatches
+/// `app.settings.toggle` into the focused workspace webview, where
 /// chan's `runCommand` opens its settings overlay. Cmd+, with the
-/// Drives window focused is a no-op.
+/// Workspaces window focused is a no-op.
 fn install_app_menu(app: &tauri::AppHandle) -> tauri::Result<()> {
     let menu = Menu::default(app)?;
 
-    // Drives keeps no accelerator: Cmd+1..9 is reserved for
-    // jump-to-tab in drive windows (handled by the per-drive key
+    // Workspaces keeps no accelerator: Cmd+1..9 is reserved for
+    // jump-to-tab in workspace windows (handled by the per-workspace key
     // bridge script in serve.rs). The menu entry still surfaces the
     // window by name.
-    let drive_manager = MenuItemBuilder::with_id("win-main", "Drives").build(app)?;
+    let drive_manager = MenuItemBuilder::with_id("win-main", "Workspaces").build(app)?;
     // `fullstack-83`: Cmd+N spawns a fresh launcher window. The
     // existing "main" window stays untouched (singleton label);
     // additional launchers land on `main-<N>` so each carries its
@@ -1834,8 +1842,8 @@ fn install_app_menu(app: &tauri::AppHandle) -> tauri::Result<()> {
         let sep = PredefinedMenuItem::separator(app)?;
         window_submenu.prepend_items(&[&drive_manager, &new_window, &settings, &sep])?;
         // Strip the default "Close Window" item so Cmd+W reaches the
-        // drive webview's key bridge (which dispatches `app.tab.close`
-        // to chan). The trade-off: non-drive windows (main, console)
+        // workspace webview's key bridge (which dispatches `app.tab.close`
+        // to chan). The trade-off: non-workspace windows (main, console)
         // lose their Cmd+W shortcut — closing them is still possible
         // via the red traffic light. Match by text since muda assigns
         // predefined items an opaque generated id.
@@ -1870,12 +1878,12 @@ fn install_app_menu(app: &tauri::AppHandle) -> tauri::Result<()> {
     Ok(())
 }
 
-/// `fullstack-83`: spawn a fresh launcher (drive-picker) window via
+/// `fullstack-83`: spawn a fresh launcher (workspace-picker) window via
 /// `WebviewWindowBuilder`. The label is picked from the next free
 /// `main-N` slot so each launcher carries its own per-window state
-/// (mirrors the `drive-N` / `tunnel-N` convention). New windows use
+/// (mirrors the `workspace-N` / `tunnel-N` convention). New windows use
 /// the same `index.html` entry as the singleton `main`, so the
-/// SPA's `boot()` path runs and the user lands on the drive
+/// SPA's `boot()` path runs and the user lands on the workspace
 /// picker — never inheriting any existing launcher's runtime
 /// state.
 fn open_new_launcher_window(app: &tauri::AppHandle) -> Result<(), String> {
@@ -1899,7 +1907,7 @@ fn open_new_launcher_window(app: &tauri::AppHandle) -> Result<(), String> {
 /// Pick the next free `main-N` label. Launchers spawn from the
 /// File → New Window menu item; the singleton `main` from
 /// tauri.conf.json keeps its bare label so existing
-/// `show_window(app, "main")` callers and the `Drives` menu
+/// `show_window(app, "main")` callers and the `Workspaces` menu
 /// entry keep working.
 fn next_launcher_label(app: &tauri::AppHandle) -> String {
     let existing: std::collections::HashSet<String> = app
@@ -1925,9 +1933,9 @@ fn next_launcher_label(app: &tauri::AppHandle) -> String {
     )
 }
 
-/// Eval a `chan:command` dispatch on the currently-focused drive
-/// webview. Used by menu items that should defer to chan's per-drive
-/// behavior (Settings). No-op when the focused window isn't a drive,
+/// Eval a `chan:command` dispatch on the currently-focused workspace
+/// webview. Used by menu items that should defer to chan's per-workspace
+/// behavior (Settings). No-op when the focused window isn't a workspace,
 /// matching the "each window owns its own settings" model.
 fn dispatch_to_focused_drive(app: &tauri::AppHandle, command: &str) {
     let Some(w) = app
@@ -1960,9 +1968,9 @@ mod tests {
 
     #[test]
     fn normalize_outbound_url_accepts_http_and_strips_window_param() {
-        let url = normalize_outbound_url(" http://127.0.0.1:4000/drive/?t=abc&w=old#files ")
+        let url = normalize_outbound_url(" http://127.0.0.1:4000/workspace/?t=abc&w=old#files ")
             .expect("valid url");
-        assert_eq!(url, "http://127.0.0.1:4000/drive/?t=abc#files");
+        assert_eq!(url, "http://127.0.0.1:4000/workspace/?t=abc#files");
     }
 
     #[test]
@@ -1984,7 +1992,7 @@ mod tests {
     /// `fullstack-b-28b` slice iv: extension classifier maps the
     /// expected file types into the three media buckets + the
     /// markdown counter. Pin the mapping so a future drift between
-    /// chan-drive's classification + chan-desktop's pre-flight
+    /// chan-workspace's classification + chan-desktop's pre-flight
     /// doesn't silently mis-count files.
     #[test]
     fn classify_preflight_extension_maps_known_buckets() {

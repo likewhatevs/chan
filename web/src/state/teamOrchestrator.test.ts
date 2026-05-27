@@ -172,7 +172,7 @@ describe("fullstack-a-79: identityPrompt", () => {
     expect(out).toContain("chan MCP read_file tool");
   });
 
-  test("plain drive paths get no MCP hint (they resolve relative to cwd)", () => {
+  test("plain workspace paths get no MCP hint (they resolve relative to cwd)", () => {
     const out = identityPrompt("@@Alice", "@@Lead", "notes/bootstrap.md");
     expect(out).toBe(
       "Hello, I am @@Alice and you are $CHAN_TAB_NAME. Our team lead is @@Lead. Identify yourself and read notes/bootstrap.md.",

@@ -116,7 +116,7 @@ describe("watcher event helpers", () => {
   test("reads pre-flight event files via the watcher-events endpoint", async () => {
     // systacean-9: `readWatcherEvents` now hits the dedicated
     // `/api/terminal/:session/watcher/events` endpoint instead of
-    // composing `api.list` + `api.read` against the drive-sandboxed
+    // composing `api.list` + `api.read` against the workspace-sandboxed
     // `/api/files`. The server pre-filters event-shaped filenames
     // and returns raw `{path, content}` pairs; the client still
     // parses each via `parseWatcherEvent`.

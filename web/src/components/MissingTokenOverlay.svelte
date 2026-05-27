@@ -7,8 +7,8 @@
   // cause, so this surface names the problem in plain language and
   // tells them where the real URL came from.
   //
-  // Visual matches chan-gateway's `drive unavailable` page (see
-  // chan-gateway/crates/drive-proxy/src/proxy.rs::NOT_FOUND_HTML) so
+  // Visual matches chan-gateway's `workspace unavailable` page (see
+  // chan-gateway/crates/workspace-proxy/src/proxy.rs::NOT_FOUND_HTML) so
   // the "something is wrong here" UX is consistent across the two
   // surfaces a user can land on with an unusable URL.
 
@@ -31,7 +31,7 @@
 {/if}
 
 <style>
-  /* Matches chan-gateway's drive-unavailable page: full viewport,
+  /* Matches chan-gateway's workspace-unavailable page: full viewport,
      vertically + horizontally centered, no card chrome, no backdrop
      blur. Sits above every other surface so it can't be hidden
      behind a stray overlay during a failed bootstrap. */

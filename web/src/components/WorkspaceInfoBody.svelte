@@ -1,13 +1,13 @@
 <script lang="ts">
-  // Drive inspector body. Shown in the file browser's Inspector pane
+  // Workspace inspector body. Shown in the file browser's Inspector pane
   // when the user clicks the Directory row in the hamburger menu. Houses
-  // the global Notes Directories config (default root + recent drives list).
+  // the global Notes Directories config (default root + recent workspaces list).
   // Search index status lives in the Search Status overlay.
 
   import { onMount } from "svelte";
   import { api } from "../api/client";
   import type { GlobalConfig } from "../api/types";
-  import { drive } from "../state/store.svelte";
+  import { workspace } from "../state/store.svelte";
 
   /// `fullstack-73`: optional "Graph from here" callback. Consumers
   /// that host this body alongside an existing inspector convention
@@ -32,7 +32,7 @@
   async function loadGlobalConfig(): Promise<void> {
     try {
       globalConfig = await api.config();
-      const cur = globalConfig.default_drive_root ?? "";
+      const cur = globalConfig.default_workspace_root ?? "";
       editedDefaultRoot = cur;
       initialDefaultRoot = cur;
     } catch {
@@ -54,18 +54,18 @@
       const trimmed = sent.trim();
       const body: GlobalConfig = {
         preferences: globalConfig.preferences,
-        default_drive_root: trimmed === "" ? null : trimmed,
-        drives: globalConfig.drives,
+        default_workspace_root: trimmed === "" ? null : trimmed,
+        workspaces: globalConfig.workspaces,
       };
       const cfg = await api.updateConfig(body);
       globalConfig = cfg;
       // Don't clobber further edits the user typed while in flight.
       if (editedDefaultRoot === sent) {
-        const echoed = cfg.default_drive_root ?? "";
+        const echoed = cfg.default_workspace_root ?? "";
         editedDefaultRoot = echoed;
         initialDefaultRoot = echoed;
       } else {
-        initialDefaultRoot = cfg.default_drive_root ?? "";
+        initialDefaultRoot = cfg.default_workspace_root ?? "";
       }
     } catch (e) {
       saveError = (e as Error).message;
@@ -117,14 +117,14 @@
 
 <div class="info">
   <header class="head">
-    <span class="kind-chip drive">drive</span>
+    <span class="kind-chip workspace">workspace</span>
   </header>
-  <h3 class="title" title={drive.info?.root}>
-    {drive.info?.label ?? "(drive)"}
+  <h3 class="title" title={workspace.info?.root}>
+    {workspace.info?.label ?? "(workspace)"}
   </h3>
   <div class="meta-grid">
     <span class="k">directory</span>
-    <span class="v mono path" title={drive.info?.root}>{drive.info?.root ?? ""}</span>
+    <span class="v mono path" title={workspace.info?.root}>{workspace.info?.root ?? ""}</span>
   </div>
 
   {#if onSetAsScope}
@@ -158,10 +158,10 @@
       <div class="err-line">save failed: {saveError}</div>
     {/if}
 
-    {#if globalConfig?.drives && globalConfig.drives.length > 0}
+    {#if globalConfig?.workspaces && globalConfig.workspaces.length > 0}
       <h5 class="recents-head">Recent</h5>
       <ul class="recents">
-        {#each globalConfig.drives as u (u.path)}
+        {#each globalConfig.workspaces as u (u.path)}
           <li>
             <span class="recents-time">{formatLastSeen(u.last_seen_at)}</span>
             <span class="recents-name" title={u.path}>{displayPathLabel(u.path)}</span>
@@ -188,7 +188,7 @@
     gap: 0.4rem;
     margin-bottom: 0.4rem;
   }
-  /* Drive kind chip: black bg, white text. Sits alongside the
+  /* Workspace kind chip: black bg, white text. Sits alongside the
      existing doc / image / contact / view-only chips defined in
      FileInfoBody so the inspector's per-kind cue is consistent
      across selections. */
@@ -203,7 +203,7 @@
     flex: 1;
     text-align: center;
   }
-  .kind-chip.drive {
+  .kind-chip.workspace {
     background: #000;
     color: #fff;
   }

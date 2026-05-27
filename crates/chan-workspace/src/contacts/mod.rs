@@ -1,7 +1,7 @@
 // Contacts: import third-party contact dumps as markdown notes.
 //
 // One file per contact, written into a caller-chosen directory in
-// the drive. Nested `chan: { kind: contact }` frontmatter classifies the file
+// the workspace. Nested `chan: { kind: contact }` frontmatter classifies the file
 // for downstream consumers (graph builder, editor `@` picker).
 //
 // The on-disk file is fully user-owned the moment it lands. chan
@@ -17,7 +17,7 @@
 //
 // The orchestrator that actually writes files lives on `Workspace` so
 // the import flow goes through the same path sandbox + atomic write
-// as every other drive op.
+// as every other workspace op.
 
 pub mod emit;
 pub mod extract;

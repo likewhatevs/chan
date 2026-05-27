@@ -1,10 +1,10 @@
-// VCS-parent detection: is the drive path inside a Git / Mercurial /
+// VCS-parent detection: is the workspace path inside a Git / Mercurial /
 // Subversion working tree?
 //
 // Used by `chan serve` to nudge users toward serving the repo root
-// instead of an arbitrary subdir. If the drive's notes live inside
+// instead of an arbitrary subdir. If the workspace's notes live inside
 // `~/code/myproject/docs/notes`, the user almost always wants
-// `~/code/myproject` as the drive root so cross-file links, graph,
+// `~/code/myproject` as the workspace root so cross-file links, graph,
 // and search cover the whole project.
 //
 // Detection is a pure stat-walk; we never invoke `git`/`hg`/`svn`
@@ -48,7 +48,7 @@ pub struct VcsParent {
 /// Returns `None` when no VCS marker is found, when the walk crosses
 /// a filesystem mount boundary, when it reaches `$HOME`, or when it
 /// reaches the filesystem root. The input path itself is NOT checked:
-/// if the user picks the repo root as the drive root, the function
+/// if the user picks the repo root as the workspace root, the function
 /// returns `None` so the caller can proceed silently.
 ///
 /// Detection looks for, at each strict ancestor:
@@ -59,14 +59,14 @@ pub struct VcsParent {
 ///   - `.svn/` directory (Subversion 1.7+ keeps it at the repo root).
 ///
 /// `$HOME` is deliberately excluded so a dotfiles-managed-as-git
-/// home directory does not block every drive the user has.
+/// home directory does not block every workspace the user has.
 ///
 /// Pure stat calls; never spawns external processes.
 pub fn detect_parent_vcs(path: &Path) -> Option<VcsParent> {
     detect_parent_vcs_with_home(path, dirs::home_dir())
 }
 
-/// Detect whether the drive root itself is a VCS working tree whose
+/// Detect whether the workspace root itself is a VCS working tree whose
 /// control files can signal a bulk checkout/update.
 ///
 /// This is deliberately narrower than [`detect_parent_vcs`]: it only
@@ -89,7 +89,7 @@ pub fn is_vcs_control_path(rel: &str) -> bool {
 }
 
 /// Test seam: the same algorithm as [`detect_parent_vcs`], but with
-/// an explicit `home` override so tests can drive the `$HOME` stop
+/// an explicit `home` override so tests can workspace the `$HOME` stop
 /// without touching the developer's real home directory.
 pub(crate) fn detect_parent_vcs_with_home(path: &Path, home: Option<PathBuf>) -> Option<VcsParent> {
     let start = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
@@ -105,7 +105,7 @@ pub(crate) fn detect_parent_vcs_with_home(path: &Path, home: Option<PathBuf>) ->
     for dir in iter {
         // Mount-boundary stop. If we have a `start_dev` and the
         // ancestor lives on a different filesystem, don't cross it:
-        // a `.git` on the host won't be reachable from a drive
+        // a `.git` on the host won't be reachable from a workspace
         // sitting on a separate mount and suggesting it would just
         // confuse the user.
         if let (Some(a), Some(b)) = (start_dev, dev_of(dir)) {
@@ -114,7 +114,7 @@ pub(crate) fn detect_parent_vcs_with_home(path: &Path, home: Option<PathBuf>) ->
             }
         }
         // `$HOME` stop. Don't inspect home itself; a dotfiles-as-git
-        // setup is unrelated to drive-root selection.
+        // setup is unrelated to workspace-root selection.
         if let Some(h) = &home_canon {
             if dir == h {
                 return None;
@@ -212,18 +212,18 @@ mod tests {
     #[test]
     fn none_when_no_vcs() {
         let tmp = TempDir::new().unwrap();
-        let drive = tmp.path().join("notes");
-        mkdir(&drive);
-        assert!(detect_parent_vcs_with_home(&drive, None).is_none());
+        let workspace = tmp.path().join("notes");
+        mkdir(&workspace);
+        assert!(detect_parent_vcs_with_home(&workspace, None).is_none());
     }
 
     #[test]
     fn detects_git_dir_at_ancestor() {
         let tmp = TempDir::new().unwrap();
         mkdir(&tmp.path().join(".git"));
-        let drive = tmp.path().join("docs/notes");
-        mkdir(&drive);
-        let got = detect_parent_vcs_with_home(&drive, None).unwrap();
+        let workspace = tmp.path().join("docs/notes");
+        mkdir(&workspace);
+        let got = detect_parent_vcs_with_home(&workspace, None).unwrap();
         assert_eq!(got.kind, VcsKind::Git);
         assert_eq!(canon(&got.repo_root), canon(tmp.path()));
     }
@@ -234,9 +234,9 @@ mod tests {
         // containing `gitdir: ...`, not a directory.
         let tmp = TempDir::new().unwrap();
         std::fs::write(tmp.path().join(".git"), b"gitdir: /elsewhere\n").unwrap();
-        let drive = tmp.path().join("docs");
-        mkdir(&drive);
-        let got = detect_parent_vcs_with_home(&drive, None).unwrap();
+        let workspace = tmp.path().join("docs");
+        mkdir(&workspace);
+        let got = detect_parent_vcs_with_home(&workspace, None).unwrap();
         assert_eq!(got.kind, VcsKind::Git);
     }
 
@@ -244,9 +244,9 @@ mod tests {
     fn detects_hg() {
         let tmp = TempDir::new().unwrap();
         mkdir(&tmp.path().join(".hg"));
-        let drive = tmp.path().join("docs");
-        mkdir(&drive);
-        let got = detect_parent_vcs_with_home(&drive, None).unwrap();
+        let workspace = tmp.path().join("docs");
+        mkdir(&workspace);
+        let got = detect_parent_vcs_with_home(&workspace, None).unwrap();
         assert_eq!(got.kind, VcsKind::Mercurial);
     }
 
@@ -287,15 +287,15 @@ mod tests {
     fn detects_svn() {
         let tmp = TempDir::new().unwrap();
         mkdir(&tmp.path().join(".svn"));
-        let drive = tmp.path().join("docs");
-        mkdir(&drive);
-        let got = detect_parent_vcs_with_home(&drive, None).unwrap();
+        let workspace = tmp.path().join("docs");
+        mkdir(&workspace);
+        let got = detect_parent_vcs_with_home(&workspace, None).unwrap();
         assert_eq!(got.kind, VcsKind::Subversion);
     }
 
     #[test]
     fn skips_leaf_when_path_is_repo_root() {
-        // When the drive root is the repo root itself, the function
+        // When the workspace root is the repo root itself, the function
         // must return None: the caller is meant to proceed silently
         // because there's no better parent to suggest.
         let tmp = TempDir::new().unwrap();
@@ -306,30 +306,30 @@ mod tests {
     #[test]
     fn home_stop_filters_dotfiles_as_git() {
         // `.git` at a synthetic "home" must NOT be reported when the
-        // drive is a child of that home: dotfiles-managed-as-git in
+        // workspace is a child of that home: dotfiles-managed-as-git in
         // the user's home directory is common and unrelated to
-        // drive-root selection.
+        // workspace-root selection.
         let tmp = TempDir::new().unwrap();
         let fake_home = tmp.path().join("home");
         mkdir(&fake_home);
         mkdir(&fake_home.join(".git"));
-        let drive = fake_home.join("notes");
-        mkdir(&drive);
-        let got = detect_parent_vcs_with_home(&drive, Some(fake_home));
+        let workspace = fake_home.join("notes");
+        mkdir(&workspace);
+        let got = detect_parent_vcs_with_home(&workspace, Some(fake_home));
         assert!(got.is_none(), "expected None, got {got:?}");
     }
 
     #[test]
     fn finds_repo_below_home() {
-        // Standard case: clone under home, drive is a subdir of the
+        // Standard case: clone under home, workspace is a subdir of the
         // clone. We want the clone reported as the repo root.
         let tmp = TempDir::new().unwrap();
         let fake_home = tmp.path().join("home");
         let clone = fake_home.join("code/myproject");
         mkdir(&clone.join(".git"));
-        let drive = clone.join("docs/notes");
-        mkdir(&drive);
-        let got = detect_parent_vcs_with_home(&drive, Some(fake_home)).unwrap();
+        let workspace = clone.join("docs/notes");
+        mkdir(&workspace);
+        let got = detect_parent_vcs_with_home(&workspace, Some(fake_home)).unwrap();
         assert_eq!(got.kind, VcsKind::Git);
         assert_eq!(canon(&got.repo_root), canon(&clone));
     }
@@ -360,9 +360,9 @@ mod tests {
         let parent = tmp.path().join("parent");
         mkdir(&parent);
         symlink(&real_git, parent.join(".git")).unwrap();
-        let drive = parent.join("docs");
-        mkdir(&drive);
-        let got = detect_parent_vcs_with_home(&drive, None);
+        let workspace = parent.join("docs");
+        mkdir(&workspace);
+        let got = detect_parent_vcs_with_home(&workspace, None);
         assert!(got.is_none(), "expected None, got {got:?}");
     }
 
@@ -376,9 +376,9 @@ mod tests {
         let parent = tmp.path().join("parent");
         mkdir(&parent);
         symlink(&real_hg, parent.join(".hg")).unwrap();
-        let drive = parent.join("docs");
-        mkdir(&drive);
-        let got = detect_parent_vcs_with_home(&drive, None);
+        let workspace = parent.join("docs");
+        mkdir(&workspace);
+        let got = detect_parent_vcs_with_home(&workspace, None);
         assert!(got.is_none(), "expected None, got {got:?}");
     }
 
@@ -398,9 +398,9 @@ mod tests {
         // SAFETY: cpath is a valid NUL-terminated path; no aliasing.
         let rc = unsafe { libc_mkfifo(cpath.as_ptr(), 0o600) };
         assert_eq!(rc, 0, "mkfifo failed: errno may apply");
-        let drive = parent.join("docs");
-        mkdir(&drive);
-        let got = detect_parent_vcs_with_home(&drive, None);
+        let workspace = parent.join("docs");
+        mkdir(&workspace);
+        let got = detect_parent_vcs_with_home(&workspace, None);
         assert!(got.is_none(), "expected None, got {got:?}");
     }
 

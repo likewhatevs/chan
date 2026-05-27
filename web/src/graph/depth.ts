@@ -7,7 +7,7 @@ type GraphDepthScope =
   | { kind: "file" }
   | { kind: "group"; paths: readonly string[] }
   | { kind: "dir"; path: string }
-  | { kind: "drive" }
+  | { kind: "workspace" }
   | { kind: "global" }
   | { kind: "tag" }
   | { kind: "git_repo" };
@@ -67,7 +67,7 @@ export function graphDepthCap({
   if (scope.kind === "file") return 1;
   if (scope.kind === "group") return clampDepth(scope.paths.length, hardMax);
   if (scope.kind === "tag" || scope.kind === "git_repo") return hardMax;
-  if (scope.kind === "drive" || scope.kind === "global") {
+  if (scope.kind === "workspace" || scope.kind === "global") {
     if (!fsGraph) return hardMax;
     if (fsGraph.truncated) return fsMax;
     return clampDepth(maxDepthFromPaths("", fsPaths(fsGraph)), fsMax);

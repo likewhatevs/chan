@@ -5,10 +5,10 @@
 //!
 //!   - The `chan-llm-mcp` binary, which any MCP client (Claude
 //!     Desktop, Claude Code, Cursor, Continue, ...) can spawn against
-//!     a chan drive to gain chan-drive-sandboxed file access.
+//!     a chan workspace to gain chan-workspace-sandboxed file access.
 //!   - The `chan __mcp` subcommand and chan-server MCP bridge, which
 //!     host the same tool service for external agents without
-//!     reopening the drive.
+//!     reopening the workspace.
 //!
 //! Tools exposed: `read_file`, `write_file`, `list_files`,
 //! `resolve_path`, `search_content`, graph/report tools, and
@@ -50,7 +50,7 @@ const MCP_FRAME_BODY_LIMIT: usize = 16 * 1024 * 1024;
 pub const DEFAULT_MCP_MEDIA_MAX_BYTES: u64 = 10 * 1024 * 1024;
 
 /// Extension -> MIME table for `read_media` image responses. This
-/// mirrors chan-drive's `FileClass::Image` set; BMP remains outside
+/// mirrors chan-workspace's `FileClass::Image` set; BMP remains outside
 /// the media class and is refused by classification.
 const IMAGE_EXTENSIONS: &[(&str, &str)] = &[
     ("png", "image/png"),
@@ -69,7 +69,7 @@ enum MediaKind {
 }
 
 /// Returns the image MIME type for `rel` when its extension is in
-/// chan-drive's Image class. The comparison lowercases;
+/// chan-workspace's Image class. The comparison lowercases;
 /// `image.PNG` and `image.png` both match. Does not touch the
 /// filesystem.
 pub fn supported_image_mime(rel: &str) -> Option<&'static str> {
@@ -98,8 +98,8 @@ fn media_kind_for_path(rel: &str) -> Option<MediaKind> {
 // instead of `std::result::Result<T, ErrorData>` and break the trait
 // bound. Use fully qualified `crate::error::Result` where needed.
 
-/// MCP server handle. Owns a `ToolContext` (drive handle); each
-/// tool dispatch routes through `tools::execute`, so chan-drive's
+/// MCP server handle. Owns a `ToolContext` (workspace handle); each
+/// tool dispatch routes through `tools::execute`, so chan-workspace's
 /// path sandbox, special-file refusal, and editable-text gate apply
 /// to MCP-driven calls.
 ///
@@ -113,15 +113,15 @@ pub struct Server {
     /// `with_max_media_bytes`; defaults to
     /// `DEFAULT_MCP_MEDIA_MAX_BYTES`. Lives on the server (not the
     /// `ToolContext`) because it's an MCP-surface policy, not a
-    /// chan-drive invariant: the same `Workspace` can host a server with
+    /// chan-workspace invariant: the same `Workspace` can host a server with
     /// a different cap.
     max_media_bytes: u64,
 }
 
 impl Server {
-    pub fn new(drive: Arc<Workspace>) -> Self {
+    pub fn new(workspace: Arc<Workspace>) -> Self {
         Self {
-            ctx: ToolContext::new(drive),
+            ctx: ToolContext::new(workspace),
             max_media_bytes: DEFAULT_MCP_MEDIA_MAX_BYTES,
         }
     }
@@ -146,8 +146,8 @@ impl Server {
     /// Run the server over an arbitrary async read/write pair. Used
     /// by chan-server to host the MCP service over a Unix-domain
     /// socket so each agent session can connect without trying to
-    /// reopen the drive (which would deadlock against the parent
-    /// process's per-drive flock). Blocks until the client closes
+    /// reopen the workspace (which would deadlock against the parent
+    /// process's per-workspace flock). Blocks until the client closes
     /// its end of the transport.
     pub async fn serve_io<R, W>(self, reader: R, writer: W) -> crate::error::Result<()>
     where
@@ -345,7 +345,7 @@ pub struct ReadFileParams {
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 pub struct WriteFileParams {
     /// POSIX-style path in chan's public namespace. Must be
-    /// editable UTF-8 text according to chan-drive.
+    /// editable UTF-8 text according to chan-workspace.
     pub path: String,
     /// Full new file content. Partial diffs are not supported.
     pub content: String,
@@ -369,7 +369,7 @@ pub struct SearchContentParams {
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 pub struct ListFilesParams {
     /// Optional POSIX rel-path prefix to scope the listing to a
-    /// subdirectory. Empty / omitted lists the whole drive (capped).
+    /// subdirectory. Empty / omitted lists the whole workspace (capped).
     /// `Drafts/...` points at uncommitted metadata-backed draft workspaces.
     #[serde(default)]
     pub prefix: Option<String>,
@@ -388,7 +388,7 @@ pub struct EmptyParams {}
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 pub struct ReadMediaParams {
     /// POSIX-style path in chan's public namespace. Must be an image
-    /// or PDF class path according to chan-drive.
+    /// or PDF class path according to chan-workspace.
     pub path: String,
 }
 
@@ -440,7 +440,7 @@ pub struct RepoReportParams {
 #[tool_router]
 impl Server {
     #[tool(description = "\
-Read the UTF-8 content of a file in the active drive. The path is \
+Read the UTF-8 content of a file in the active workspace. The path is \
 POSIX-style in chan's public namespace, including `Drafts/...` \
 when needed. Returns { path, content, size, mtime_ns }. Files \
 larger than 256 KiB are truncated and the response includes \
@@ -461,10 +461,10 @@ you need the full thing). Pass `mtime_ns` back on `write_file` as \
     }
 
     #[tool(description = "\
-Replace the content of a file in the active drive (creates the \
+Replace the content of a file in the active workspace (creates the \
 parent directory if needed). The path is POSIX-style in chan's \
 public namespace, including `Drafts/...` when needed, and must be \
-classified by chan-drive as editable UTF-8 text (.md, .txt, source \
+classified by chan-workspace as editable UTF-8 text (.md, .txt, source \
 and config text such as .rs or .json, or known text basenames like \
 Makefile). New files are capped at 2 MiB; existing files can be \
 edited up to their current size. Pass `expected_mtime_ns` (from \
@@ -486,9 +486,9 @@ write_file call.")]
     }
 
     #[tool(description = "\
-List files in the active drive as { entries, count, total }. \
+List files in the active workspace as { entries, count, total }. \
 Pass an optional `prefix` (POSIX rel-path) to scope the listing to \
-a subdirectory; omit it to list the whole drive. Includes the \
+a subdirectory; omit it to list the whole workspace. Includes the \
 metadata-backed `Drafts/...` namespace for uncommitted draft \
 workspaces. Listings are capped at 2,000 entries; if `truncated` \
 is true, narrow with a prefix or call search_content instead.")]
@@ -509,7 +509,7 @@ when you need a real path for shell tools or terminal cwd. Normal \
 content operations should keep using read_file, write_file, and \
 list_files with chan paths. The path argument is POSIX-style in \
 chan's public namespace, including `Drafts/...`; Drafts paths \
-resolve to uncommitted chan metadata outside the drive root.")]
+resolve to uncommitted chan metadata outside the workspace root.")]
     async fn resolve_path(
         &self,
         Parameters(p): Parameters<ResolvePathParams>,
@@ -523,7 +523,7 @@ resolve to uncommitted chan metadata outside the drive root.")]
     }
 
     #[tool(description = "\
-Search the drive's BM25 index for the given query. Returns hits \
+Search the workspace's BM25 index for the given query. Returns hits \
 with relative paths, relevance scores, and short snippets around \
 the match. Useful for finding which file mentions a topic before \
 issuing read_file on it. `limit` defaults to 20 and is hard-capped \
@@ -540,9 +540,9 @@ at 100.")]
     }
 
     #[tool(description = "\
-Read a media file from the active drive and return it as MCP media \
+Read a media file from the active workspace and return it as MCP media \
 content. The path is POSIX-style in chan's public namespace and \
-must be classified by chan-drive as Image (.png, .jpg, .jpeg, \
+must be classified by chan-workspace as Image (.png, .jpg, .jpeg, \
 .gif, .webp, .svg, .avif) or Pdf (.pdf); other extensions are \
 refused (text files use read_file). Image responses are MCP image \
 content blocks. PDF responses are MCP blob resources with \
@@ -558,7 +558,7 @@ config).")]
     }
 
     #[tool(description = "\
-Read the drive's link graph for a single file. Returns `out` (this \
+Read the workspace's link graph for a single file. Returns `out` (this \
 file's outbound edges: wiki/markdown `[[links]]`, `#tags`, and \
 `@@mentions`) and `in` (backlinks: every other file that points at \
 this one). Use it for backlink-aware questions ('what links here?'), \
@@ -581,7 +581,7 @@ and `kinds` (subset of `link`/`tag`/`mention`) narrow the response.")]
     }
 
     #[tool(description = "\
-List every `#tag` known to the drive's graph index with the number \
+List every `#tag` known to the workspace's graph index with the number \
 of files that carry it. No arguments. Use it when the user asks \
 about tag usage, before a rename / merge, or to discover the actual \
 taxonomy instead of guessing. Pair with `graph_files_with_tag` to \
@@ -611,10 +611,10 @@ file with search_content when the user has a specific tag in mind.")]
     }
 
     #[tool(description = "\
-Snapshot the drive's code/content report: per-file language, code \
+Snapshot the workspace's code/content report: per-file language, code \
 lines, comments, blanks, a complexity heuristic (keyword count, \
 not cyclomatic), plus per-language roll-ups and a Basic COCOMO \
-cost estimate. The drive maintains this index incrementally as \
+cost estimate. The workspace maintains this index incrementally as \
 files change, so the call is cheap to repeat. Use it when the user \
 asks about repo size, language mix, where the code lives, or to \
 scope a refactor. Optional args: `prefix` (POSIX rel-path) to \
@@ -644,14 +644,14 @@ need to drill in. The per-file array is capped at 200 entries; if \
 
 #[tool_handler(
     name = "chan",
-    instructions = "Tools for reading, writing, listing, searching, and resolving paths in a chan markdown drive. Content operations are sandboxed by chan-drive; Drafts paths are uncommitted workspaces that may resolve to chan metadata outside the drive root."
+    instructions = "Tools for reading, writing, listing, searching, and resolving paths in a chan markdown workspace. Content operations are sandboxed by chan-workspace; Drafts paths are uncommitted workspaces that may resolve to chan metadata outside the workspace root."
 )]
 impl ServerHandler for Server {}
 
 /// Adapter: dispatch into `tools::execute`, then translate the
 /// result `Json` and any `LlmError` into MCP-shaped responses.
 ///
-/// Error messages are run through `mcp_safe_message` so chan-drive's
+/// Error messages are run through `mcp_safe_message` so chan-workspace's
 /// Display strings (which may carry host absolute paths via
 /// `SpecialFile.path` / `SymlinkEscape`) don't leak across the
 /// MCP boundary. The MCP client may be a third-party process; we
@@ -695,7 +695,7 @@ fn read_media_content_sync(
         )
     })?;
     let bytes = ctx
-        .drive
+        .workspace
         .read(&path)
         .map_err(|e| ErrorData::internal_error(mcp_safe_message(&LlmError::from(e)), None))?;
     if (bytes.len() as u64) > max_media_bytes {
@@ -741,7 +741,7 @@ fn percent_encode_path(path: &str) -> String {
 }
 
 /// Build an MCP-safe error message for `err`. Strips host paths and
-/// chan-drive Display details that aren't relevant to the model
+/// chan-workspace Display details that aren't relevant to the model
 /// while preserving the kind and any model-actionable numbers
 /// (sizes, mtimes, limits).
 fn mcp_safe_message(err: &LlmError) -> String {
@@ -756,18 +756,18 @@ fn mcp_safe_message(err: &LlmError) -> String {
             format!("listing too large: {observed} entries (cap {limit})")
         }
         LlmError::PathRefused(_) => {
-            // The chan-drive Display may carry an absolute path
+            // The chan-workspace Display may carry an absolute path
             // (SpecialFile.path, SymlinkEscape); flatten to the
             // category. The model knows which call it issued; the
             // category is enough to recover.
-            "path refused: not editable, not a regular file, or escapes drive root".to_string()
+            "path refused: not editable, not a regular file, or escapes workspace root".to_string()
         }
         LlmError::Core(_) => {
-            // chan-drive errors that didn't get a typed passthrough
+            // chan-workspace errors that didn't get a typed passthrough
             // (WorkspaceLocked, WorkspaceAlreadyOpen, Trash*, Search, Graph,
             // Watch, ConfigDecode, Io). Several include paths or
             // host-specific detail; surface the category only.
-            "drive operation failed".to_string()
+            "workspace operation failed".to_string()
         }
         LlmError::Io(_) => "i/o error".to_string(),
         LlmError::Tool(msg) => format!("tool error: {msg}"),
@@ -845,8 +845,8 @@ mod tests {
         let drive_dir = TempDir::new().unwrap();
         let lib = Library::open_at(cfg.path().join("config.toml")).unwrap();
         lib.register_workspace(drive_dir.path()).unwrap();
-        let drive = lib.open_workspace(drive_dir.path()).unwrap();
-        let server = Server::new(drive);
+        let workspace = lib.open_workspace(drive_dir.path()).unwrap();
+        let server = Server::new(workspace);
         (cfg, drive_dir, server)
     }
 
@@ -925,10 +925,10 @@ mod tests {
     #[tokio::test]
     async fn resolve_path_maps_drafts_to_metadata_dir() {
         let (_cfg, _root, server) = fixture();
-        server.ctx.drive.create_draft_dir("untitled-1").unwrap();
+        server.ctx.workspace.create_draft_dir("untitled-1").unwrap();
         server
             .ctx
-            .drive
+            .workspace
             .write_text("Drafts/untitled-1/draft.md", "# draft\n")
             .unwrap();
 
@@ -945,7 +945,7 @@ mod tests {
             body["physical_path"].as_str().unwrap(),
             server
                 .ctx
-                .drive
+                .workspace
                 .drafts_dir()
                 .join("untitled-1")
                 .to_string_lossy()
@@ -964,9 +964,9 @@ mod tests {
             }))
             .await
             .unwrap_err();
-        // chan-drive's editable-text gate fires; the MCP surface
+        // chan-workspace's editable-text gate fires; the MCP surface
         // returns the scrubbed kind ("path refused"), not the
-        // chan-drive Display string (which would echo "img.png" /
+        // chan-workspace Display string (which would echo "img.png" /
         // host paths). The model gets the category and recovers.
         assert!(
             err.message.to_lowercase().contains("path refused"),
@@ -978,7 +978,7 @@ mod tests {
     #[tokio::test]
     async fn mcp_error_message_does_not_leak_host_paths() {
         // Trigger a path refusal that, prior to the scrub, would
-        // echo "img.png" and any chan-drive Display detail. After
+        // echo "img.png" and any chan-workspace Display detail. After
         // the scrub the message is category-only.
         let (_cfg, _root, server) = fixture();
         let err = server
@@ -1140,7 +1140,7 @@ mod tests {
     #[tokio::test]
     async fn read_media_path_sandbox_error_is_scrubbed() {
         let (_cfg, _root, server) = fixture();
-        // Path escape: chan-drive's path-resolver refuses this; the
+        // Path escape: chan-workspace's path-resolver refuses this; the
         // error surfaces through mcp_safe_message as the scrubbed
         // category, no host filesystem detail.
         let err = server

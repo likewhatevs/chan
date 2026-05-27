@@ -18,17 +18,17 @@
 //!     exists). The per-file `files` array is dropped from the
 //!     response since directories can fan out to thousands of rows;
 //!     the inspector only needs the summary. Empty `path` means the
-//!     entire drive.
+//!     entire workspace.
 //!   - `GET /api/report/dir?path=<rel>` returns the same shape as
 //!     `prefix`, but reads from the O(1) maintained directory
 //!     aggregation cache. Strict directory semantics: only files
 //!     under the directory contribute (a file named identically to
-//!     a directory would not). Empty `path` is the drive root.
+//!     a directory would not). Empty `path` is the workspace root.
 //!     Responds 404 when no tracked file lives at or under `path`.
 //!     This is the endpoint the graph overhaul's directory inspector
 //!     (G3) consumes per-click without re-walking the file map.
 //!
-//! All endpoints lazily trigger chan-drive's initial report scan on
+//! All endpoints lazily trigger chan-workspace's initial report scan on
 //! first call; subsequent calls hit the warm in-memory index.
 
 use std::{convert::Infallible, sync::Arc};
@@ -132,7 +132,7 @@ where
 }
 
 fn stream_report_file_sync<F>(
-    drive: &chan_workspace::Workspace,
+    workspace: &chan_workspace::Workspace,
     path: &str,
     mut emit: F,
 ) -> chan_workspace::Result<()>
@@ -143,7 +143,7 @@ where
         return Ok(());
     }
 
-    let report = drive.report_for_files(&[path.to_string()])?;
+    let report = workspace.report_for_files(&[path.to_string()])?;
     let stats = report.files.into_iter().find(|f| f.path == path);
     match stats {
         Some(stats) => {
@@ -164,7 +164,7 @@ where
 
 /// Per-file report row. 404 when the file is not indexed; an empty
 /// `path` is rejected with 400 since the file endpoint is path-keyed
-/// (use `/api/report/prefix` with an empty path for the whole-drive
+/// (use `/api/report/prefix` with an empty path for the whole-workspace
 /// roll-up).
 pub async fn api_report_file(
     State(state): State<Arc<AppState>>,
@@ -173,13 +173,13 @@ pub async fn api_report_file(
     if p.path.trim().is_empty() {
         return StatusCode::BAD_REQUEST.into_response();
     }
-    let drive = state.drive();
+    let workspace = state.workspace();
     if query_flag(&p.stream) {
-        return stream_report_file_response(drive, p.path).await;
+        return stream_report_file_response(workspace, p.path).await;
     }
     blocking_response(
         move || {
-            let report = match drive.report_for_files(std::slice::from_ref(&p.path)) {
+            let report = match workspace.report_for_files(std::slice::from_ref(&p.path)) {
                 Ok(r) => r,
                 Err(e) => return err_from(&e),
             };
@@ -194,12 +194,12 @@ pub async fn api_report_file(
 }
 
 async fn stream_report_file_response(
-    drive: Arc<chan_workspace::Workspace>,
+    workspace: Arc<chan_workspace::Workspace>,
     path: String,
 ) -> Response {
     let (tx, mut rx) = mpsc::channel::<ReportFileStreamMessage>(8);
     tokio::task::spawn_blocking(move || {
-        let result = stream_report_file_sync(&drive, &path, |bytes| {
+        let result = stream_report_file_sync(&workspace, &path, |bytes| {
             tx.blocking_send(ReportFileStreamMessage::Data(bytes))
                 .is_ok()
         });
@@ -236,18 +236,18 @@ async fn stream_report_file_response(
 /// Directory roll-up: totals + per-language + COCOMO. The per-file
 /// `files` array is dropped since directories can fan out to thousands of
 /// rows and the inspector renders only the summary. Empty `path`
-/// returns the whole-drive roll-up.
+/// returns the whole-workspace roll-up.
 pub async fn api_report_prefix(
     State(state): State<Arc<AppState>>,
     Query(p): Query<ReportPathParams>,
 ) -> Response {
-    let drive = state.drive();
+    let workspace = state.workspace();
     blocking_response(
         move || {
             let report = match if p.path.is_empty() {
-                drive.report()
+                workspace.report()
             } else {
-                drive.report_for_prefix(&p.path)
+                workspace.report_for_prefix(&p.path)
             } {
                 Ok(r) => r,
                 Err(e) => return err_from(&e),
@@ -267,15 +267,15 @@ pub async fn api_report_prefix(
 /// Per-directory roll-up via the maintained O(1) cache. Same
 /// response shape as `api_report_prefix` but reads from the cache
 /// instead of walking the file map. 404 when the directory has no
-/// tracked files. Empty `path` returns the drive root.
+/// tracked files. Empty `path` returns the workspace root.
 pub async fn api_report_dir(
     State(state): State<Arc<AppState>>,
     Query(p): Query<ReportPathParams>,
 ) -> Response {
-    let drive = state.drive();
+    let workspace = state.workspace();
     blocking_response(
         move || {
-            let report = match drive.report_for_dir(&p.path) {
+            let report = match workspace.report_for_dir(&p.path) {
                 Ok(Some(r)) => r,
                 Ok(None) => return StatusCode::NOT_FOUND.into_response(),
                 Err(e) => return err_from(&e),
@@ -305,8 +305,8 @@ mod tests {
         let root = tempfile::TempDir::new().unwrap();
         let lib = chan_workspace::Library::open_at(cfg.path().join("config.toml")).unwrap();
         lib.register_workspace(root.path()).unwrap();
-        let drive = lib.open_workspace(root.path()).unwrap();
-        (cfg, root, drive)
+        let workspace = lib.open_workspace(root.path()).unwrap();
+        (cfg, root, workspace)
     }
 
     fn event_types(lines: &[Bytes]) -> Vec<String> {
@@ -325,11 +325,11 @@ mod tests {
 
     #[test]
     fn report_file_stream_emits_meta_report_done() {
-        let (_cfg, _root, drive) = open_workspace();
-        drive.write_text("CHANGELOG.md", "# Changes\n").unwrap();
+        let (_cfg, _root, workspace) = open_workspace();
+        workspace.write_text("CHANGELOG.md", "# Changes\n").unwrap();
 
         let mut lines = Vec::new();
-        stream_report_file_sync(&drive, "CHANGELOG.md", |bytes| {
+        stream_report_file_sync(&workspace, "CHANGELOG.md", |bytes| {
             lines.push(bytes);
             true
         })

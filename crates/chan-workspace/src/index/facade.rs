@@ -28,7 +28,7 @@ use super::vectors::{VectorError, VectorStore};
 use crate::error::ChanError;
 use crate::fs_ops::{self, WalkFilter};
 
-/// systacean-19: emit a one-shot `tracing::warn!` when chan-drive
+/// systacean-19: emit a one-shot `tracing::warn!` when chan-workspace
 /// falls back to BM25-only because the BGE embedding model isn't
 /// downloaded. The fallback path runs in `write_file` +
 /// `flush_embed_batch`; both share the same warning so the user
@@ -147,7 +147,7 @@ pub struct SearchResult {
     pub hits: Vec<Hit>,
 }
 
-/// The big handle. One per drive per process.
+/// The big handle. One per workspace per process.
 pub struct Index {
     drive_root: PathBuf,
     index_dir: PathBuf,
@@ -198,7 +198,7 @@ impl Index {
     /// rooted at `index_dir`. The two directories are decoupled:
     /// `drive_root` is where the markdown lives (read-only for
     /// the indexer), `index_dir` is where tantivy + vectors live
-    /// (per-drive, in the global cache; resolved by
+    /// (per-workspace, in the global cache; resolved by
     /// `crate::paths::drive_paths`). Tests pass a tempdir for both.
     pub fn open(drive_root: &Path, index_dir: &Path) -> Result<Self, IndexError> {
         std::fs::create_dir_all(index_dir)?;
@@ -271,13 +271,13 @@ impl Index {
         self.config.lock().unwrap().clone()
     }
 
-    /// Sorted drive-relative paths currently known to the persisted
+    /// Sorted workspace-relative paths currently known to the persisted
     /// full-text index.
     pub fn known_paths(&self) -> Result<Vec<String>, IndexError> {
         Ok(self.bm25.known_paths()?)
     }
 
-    /// systacean-7: flip the per-drive Hybrid-search opt-in.
+    /// systacean-7: flip the per-workspace Hybrid-search opt-in.
     /// Idempotent — re-setting to the same value is a no-op (no
     /// config write). On change, writes `<index_dir>/config.toml`
     /// atomically so a `chan serve` restart honours the new
@@ -297,7 +297,7 @@ impl Index {
         Ok(())
     }
 
-    /// systacean-27: flip the per-drive chan-report opt-in.
+    /// systacean-27: flip the per-workspace chan-report opt-in.
     /// Idempotent — re-setting to the same value is a no-op.
     /// Atomic write parallels `set_semantic_enabled`.
     pub fn set_reports_enabled(&self, enabled: bool) -> Result<(), IndexError> {
@@ -313,7 +313,7 @@ impl Index {
         Ok(())
     }
 
-    /// systacean-40: flip the per-drive screensaver-enabled flag.
+    /// systacean-40: flip the per-workspace screensaver-enabled flag.
     /// Idempotent on no-change.
     pub fn set_screensaver_enabled(&self, enabled: bool) -> Result<(), IndexError> {
         let to_save = {
@@ -457,7 +457,7 @@ impl Index {
         }
     }
 
-    /// Walk the drive and re-index everything from scratch. If
+    /// Walk the workspace and re-index everything from scratch. If
     /// `cancel` is set to true mid-build, returns `Cancelled` without
     /// calling `commit()` so tantivy discards every pending write
     /// queued in this run; the on-disk index is left as it was at
@@ -495,7 +495,7 @@ impl Index {
 
         // Embedding throughput is dominated by per-call dispatch
         // and kernel-launch overhead on the GPU side. Per-file
-        // embed calls on a drive of small markdown files (typical:
+        // embed calls on a workspace of small markdown files (typical:
         // ~30 chunks per file) leave that overhead unamortized and
         // run an order of magnitude slower than the hardware can
         // do. Accumulate chunks across files and flush in
@@ -647,7 +647,7 @@ impl Index {
                             // per chunk, so a rate-based ETA across batches
                             // would track GPU step time and not give the UI
                             // anything actionable. Leave it to the
-                            // IndexFile ticks to drive the bar.
+                            // IndexFile ticks to workspace the bar.
                             eta_secs: None,
                         });
                         match self.flush_embed_batch(&mut pending, cancel, &model_at_start) {
@@ -749,7 +749,7 @@ impl Index {
         // subsequent vector build sets them honestly.
         //
         // Dim is read from the embedder when at least one chunk was
-        // embedded this run; if nothing was embedded (empty drive,
+        // embedded this run; if nothing was embedded (empty workspace,
         // every file produced zero chunks) we leave vectors_dim
         // unchanged and stamp vectors_model anyway, because an
         // empty vector store is trivially consistent with the
@@ -1076,7 +1076,7 @@ impl Index {
 // Cross-file embedding batch size, in chunks. Tuned for candle +
 // bge-small on Metal: large enough to amortize forward-pass setup
 // over a useful work unit, small enough that working memory stays
-// modest (~12 MB at 384-dim) on big drives. Only used when the
+// modest (~12 MB at 384-dim) on big workspaces. Only used when the
 // `embeddings` feature is on; harmless otherwise.
 const EMBED_BATCH_CHUNKS: usize = 4096;
 
@@ -1224,7 +1224,7 @@ pub struct BuildSummary {
     /// false. The savings are the dominant cost on a partial-rebuild
     /// resume: BM25 is fast (`chunks` worth of inserts plus a single
     /// commit), embedding scales with chunk count and dominates wall
-    /// clock on real drives.
+    /// clock on real workspaces.
     pub embeds_reused: usize,
     pub errors: Vec<(String, IndexError)>,
 }
@@ -1236,14 +1236,14 @@ pub struct IndexStats {
     pub indexed_docs: u64,
     /// Number of chunks with embeddings on disk. May lag
     /// indexed_docs briefly during a partial build, or be 0 if no
-    /// embedder has run yet for this drive.
+    /// embedder has run yet for this workspace.
     pub indexed_vectors: u64,
     pub model: String,
 }
 
 fn wipe_index_dir(index_dir: &Path) -> Result<(), IndexError> {
     // Model weights live in the per-machine cache (see
-    // `embeddings::global_models_dir`), so a per-drive wipe never
+    // `embeddings::global_models_dir`), so a per-workspace wipe never
     // touches them. We only nuke the indexable state: `bm25/`,
     // `embeddings/`, and the config (recreated on next open).
     for sub in ["bm25", "embeddings"] {
@@ -1271,7 +1271,7 @@ fn wipe_vectors_dir(index_dir: &Path) -> Result<(), IndexError> {
     Ok(())
 }
 
-/// Walk the drive and return every indexable file (`FileClass::EditableText`:
+/// Walk the workspace and return every indexable file (`FileClass::EditableText`:
 /// `.md` + `.txt` today) relative to root, using forward-slash separators
 /// on all platforms (matches the API's shape). Honors the caller-supplied
 /// `WalkFilter` so blocked dir names (`node_modules`, ...) are never
@@ -1666,7 +1666,7 @@ mod tests {
     ///
     /// This is the partial-rebuild resume case in miniature: a prior
     /// run crashed after writing the shard for `a.md`; on restart,
-    /// `build_all` walks the drive, finds the shard still current,
+    /// `build_all` walks the workspace, finds the shard still current,
     /// and avoids paying the embed cost a second time.
     #[cfg(feature = "embeddings")]
     #[test]

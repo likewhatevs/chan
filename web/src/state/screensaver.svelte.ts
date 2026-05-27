@@ -5,7 +5,7 @@
 // Distinct from `idle.svelte.ts` (which fades the floating
 // pills after 5s of UI-pointer-quiet): the screensaver
 // tracker uses a longer window (default 5 min, configurable
-// per-drive via the chan-drive `screensaver_timeout_secs`
+// per-workspace via the chan-workspace `screensaver_timeout_secs`
 // field), and watches a wider event set (keydown + scroll +
 // pointer events — anything that says "user is at the
 // keyboard"). The idle tracker deliberately ignores those.
@@ -13,7 +13,7 @@
 // Lifecycle:
 //
 // 1. App boot calls `loadScreensaverState()` once. Fetches
-//    the per-drive enabled/timeout/pin_set view from
+//    the per-workspace enabled/timeout/pin_set view from
 //    `systacean-40`'s `/api/screensaver/state` endpoint;
 //    populates the singleton; arms the inactivity timer if
 //    enabled.
@@ -41,15 +41,15 @@ import {
 } from "./screensaver";
 
 export interface ScreensaverState {
-  /// Drive-level enabled flag (server-side; sourced from
-  /// `Drive::screensaver_enabled`). When false, the timer
+  /// Workspace-level enabled flag (server-side; sourced from
+  /// `Workspace::screensaver_enabled`). When false, the timer
   /// is disarmed + the overlay never fires.
   enabled: boolean;
-  /// Drive-level inactivity timeout in seconds.
+  /// Workspace-level inactivity timeout in seconds.
   timeout_secs: number;
   /// Visual theme rendered behind the unlock card.
   theme: ScreensaverTheme;
-  /// Whether a PIN hash is stored on the drive. The PIN
+  /// Whether a PIN hash is stored on the workspace. The PIN
   /// itself never crosses the wire; this flag tells the
   /// SPA whether to show a PIN-setup prompt vs a regular
   /// unlock prompt.
@@ -74,7 +74,7 @@ export const screensaver = $state<ScreensaverState>({
 let inactivityTimer: ReturnType<typeof setTimeout> | null = null;
 let pauseCount = 0;
 
-/// Fetch + cache the per-drive screensaver state. Called on
+/// Fetch + cache the per-workspace screensaver state. Called on
 /// app boot AND after any patch (enabled/timeout/pin
 /// changes) so the singleton stays consistent with the
 /// server.
@@ -117,7 +117,7 @@ export function lockNow(): void {
 /// returns false on mismatch (caller surfaces shake / error
 /// feedback).
 ///
-/// When no PIN is set on the drive (`pin_set=false`) the
+/// When no PIN is set on the workspace (`pin_set=false`) the
 /// task body's framing is "screensaver still arms but the
 /// lockout is moot." We verify against the server anyway —
 /// `systacean-40` returns `verified: false` for the no-PIN
@@ -126,11 +126,11 @@ export function lockNow(): void {
 /// the configuration step.
 export async function unlockWithPin(
   pin: string,
-  driveSalt: string,
+  workspaceSalt: string,
 ): Promise<boolean> {
   if (!pin) return false;
   try {
-    const hash = await hashPin(pin, driveSalt);
+    const hash = await hashPin(pin, workspaceSalt);
     const result = await api.screensaverVerify(hash);
     if (result.verified) {
       screensaver.locked = false;
@@ -145,7 +145,7 @@ export async function unlockWithPin(
 
 /// `fullstack-a-77c`: dismiss the lock without going
 /// through the PIN verify endpoint. Called by the
-/// overlay's any-input handler when the drive has no
+/// overlay's any-input handler when the workspace has no
 /// PIN set — the helper text already promises "any
 /// input unlocks", and there's nothing to verify. The
 /// `pin_set === false` branch is the gate; callers MUST

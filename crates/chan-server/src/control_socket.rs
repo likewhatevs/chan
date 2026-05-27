@@ -1,6 +1,6 @@
 //! First-party control socket for local `chan` CLI helpers.
 //!
-//! MCP stays scoped to drive tools for external agents. This socket is
+//! MCP stays scoped to workspace tools for external agents. This socket is
 //! for UI commands from chan-spawned terminals, such as `chan open`,
 //! where the command must target one frontend window in the already
 //! running server process.
@@ -181,23 +181,23 @@ fn handle_request(
                     message: "window_id is required".into(),
                 };
             }
-            let drive = {
+            let workspace = {
                 let cell = match drive_cell.read() {
                     Ok(cell) => cell,
                     Err(_) => {
                         return ControlResponse::Error {
-                            message: "drive cell lock poisoned".into(),
+                            message: "workspace cell lock poisoned".into(),
                         };
                     }
                 };
                 let Some(cell) = cell.as_ref() else {
                     return ControlResponse::Error {
-                        message: "drive cell unavailable".into(),
+                        message: "workspace cell unavailable".into(),
                     };
                 };
-                cell.drive.clone()
+                cell.workspace.clone()
             };
-            match open_path(&drive, self_writes, &window_id, &path, events_tx) {
+            match open_path(&workspace, self_writes, &window_id, &path, events_tx) {
                 Ok(message) => ControlResponse::Ok { message },
                 Err(message) => ControlResponse::Error { message },
             }
@@ -207,13 +207,13 @@ fn handle_request(
 
 #[cfg(unix)]
 fn open_path(
-    drive: &Workspace,
+    workspace: &Workspace,
     self_writes: &crate::self_writes::SelfWrites,
     window_id: &str,
     requested: &Path,
     events_tx: &broadcast::Sender<String>,
 ) -> Result<String, String> {
-    let rel = abs_to_drive_rel(drive.root(), requested)?;
+    let rel = abs_to_drive_rel(workspace.root(), requested)?;
     if rel.is_empty() {
         let frame = WindowCommandFrame {
             frame_type: "window_command",
@@ -229,7 +229,7 @@ fn open_path(
         let _ = events_tx.send(raw);
         return Ok("open request queued for /".into());
     }
-    let stat = drive.stat(&rel).ok();
+    let stat = workspace.stat(&rel).ok();
     let command = if let Some(stat) = stat {
         if stat.is_dir {
             WindowCommand::OpenBrowser {
@@ -251,7 +251,7 @@ fn open_path(
         // Note before the write so the watcher's Created event is in the
         // suppression set before it can fire (see files.rs::api_write_file).
         self_writes.note(&rel);
-        drive
+        workspace
             .write_text(&rel, "")
             .map_err(|e| format!("create {rel}: {e}"))?;
         WindowCommand::OpenFile { path: rel.clone() }
@@ -276,7 +276,7 @@ fn abs_to_drive_rel(root: &Path, requested: &Path) -> Result<String, String> {
     }
     let root_canon = root
         .canonicalize()
-        .map_err(|e| format!("canonicalize drive root: {e}"))?;
+        .map_err(|e| format!("canonicalize workspace root: {e}"))?;
     let existing_or_parent = if requested.exists() {
         requested
     } else {
@@ -288,7 +288,7 @@ fn abs_to_drive_rel(root: &Path, requested: &Path) -> Result<String, String> {
         .canonicalize()
         .map_err(|e| format!("canonicalize path: {e}"))?;
     if !canon.starts_with(&root_canon) {
-        return Err("path escapes drive root".into());
+        return Err("path escapes workspace root".into());
     }
     let candidate = if requested.exists() {
         canon
@@ -301,7 +301,7 @@ fn abs_to_drive_rel(root: &Path, requested: &Path) -> Result<String, String> {
     };
     let rel = candidate
         .strip_prefix(&root_canon)
-        .map_err(|_| "path escapes drive root".to_string())?;
+        .map_err(|_| "path escapes workspace root".to_string())?;
     Ok(path_to_posix(rel))
 }
 
@@ -340,7 +340,7 @@ mod tests {
         let poisoned = drive_cell.clone();
         let _ = std::thread::spawn(move || {
             let _guard = poisoned.write().expect("poison setup");
-            panic!("poison drive cell");
+            panic!("poison workspace cell");
         })
         .join();
         let self_writes = crate::self_writes::SelfWrites::new();
@@ -358,7 +358,7 @@ mod tests {
 
         match response {
             ControlResponse::Error { message } => {
-                assert_eq!(message, "drive cell lock poisoned");
+                assert_eq!(message, "workspace cell lock poisoned");
             }
             ControlResponse::Ok { message } => panic!("unexpected ok response: {message}"),
         }
@@ -367,17 +367,18 @@ mod tests {
     #[test]
     fn open_path_creates_markdown_and_broadcasts_window_command() {
         let cfg = tempfile::tempdir().expect("config dir");
-        let root = tempfile::tempdir().expect("drive root");
+        let root = tempfile::tempdir().expect("workspace root");
         std::fs::create_dir_all(root.path().join("notes")).expect("notes dir");
         let lib =
             chan_workspace::Library::open_at(cfg.path().join("config.toml")).expect("library");
-        lib.register_workspace(root.path()).expect("register drive");
-        let drive = lib.open_workspace(root.path()).expect("open drive");
+        lib.register_workspace(root.path())
+            .expect("register workspace");
+        let workspace = lib.open_workspace(root.path()).expect("open workspace");
         let self_writes = crate::self_writes::SelfWrites::new();
         let (tx, mut rx) = broadcast::channel(4);
 
         let message = open_path(
-            &drive,
+            &workspace,
             &self_writes,
             "window-a",
             &root.path().join("notes/new.md"),
@@ -386,7 +387,7 @@ mod tests {
         .expect("open path");
 
         assert!(message.contains("notes/new.md"));
-        assert!(drive.exists("notes/new.md"));
+        assert!(workspace.exists("notes/new.md"));
         let frame: Value = serde_json::from_str(&rx.try_recv().expect("window command"))
             .expect("window command json");
         assert_eq!(frame["type"], "window_command");
@@ -398,17 +399,18 @@ mod tests {
     #[test]
     fn open_path_enters_existing_directory() {
         let cfg = tempfile::tempdir().expect("config dir");
-        let root = tempfile::tempdir().expect("drive root");
+        let root = tempfile::tempdir().expect("workspace root");
         std::fs::create_dir_all(root.path().join("notes/sub")).expect("sub dir");
         let lib =
             chan_workspace::Library::open_at(cfg.path().join("config.toml")).expect("library");
-        lib.register_workspace(root.path()).expect("register drive");
-        let drive = lib.open_workspace(root.path()).expect("open drive");
+        lib.register_workspace(root.path())
+            .expect("register workspace");
+        let workspace = lib.open_workspace(root.path()).expect("open workspace");
         let self_writes = crate::self_writes::SelfWrites::new();
         let (tx, mut rx) = broadcast::channel(4);
 
         let message = open_path(
-            &drive,
+            &workspace,
             &self_writes,
             "window-a",
             &root.path().join("notes/sub"),
