@@ -2,36 +2,36 @@
 
 ## Local serving and self-contained runtime
 
-chan-desktop is fully self-contained. It links `chan-drive` and
+chan-desktop is fully self-contained. It links `chan-workspace` and
 `chan-server` directly and embeds the web bundle (`web/dist`) via
 rust-embed at build time. There is no `chan` binary at runtime and
 none is shipped in the app bundle.
 
-Local drives open through the embedded chan-server `DriveHost`,
-which owns a single `chan_drive::Library`. Every registry mutation
-(add / remove / default-drive reconciliation) and feature toggle
+Local workspaces open through the embedded chan-server `WorkspaceHost`,
+which owns a single `chan_workspace::Library`. Every registry mutation
+(add / remove / default-workspace reconciliation) and feature toggle
 (semantic search, reports) runs in-process against that same
-`Library`, or against the live `Arc<Drive>` the host already holds
-for a mounted drive. Routing through one shared registry is what
-keeps a freshly-added drive openable immediately: a subprocess
+`Library`, or against the live `Arc<Workspace>` the host already holds
+for a mounted workspace. Routing through one shared registry is what
+keeps a freshly-added workspace openable immediately: a subprocess
 `chan add` used to mutate only the on-disk registry, leaving the
 host's boot-time in-memory snapshot stale, which surfaced as a
-spurious "drive not registered" error on first open.
+spurious "workspace not registered" error on first open.
 
-Blocking chan-drive calls (`register_drive`, `unregister_drive`,
+Blocking chan-workspace calls (`register_drive`, `unregister_drive`,
 `open_drive`, `boot`, the feature setters) run via
 `tokio::task::spawn_blocking` so a slow initial scan never blocks
 the async executor. `remove_drive` runs `unregister_drive` in a
 bounded retry loop: `serve::stop` drops the host's handle
 synchronously, but a background indexer or in-flight request may
-hold the drive's flock for a moment, surfacing as
-`DriveAlreadyOpen` / `DriveLocked` until it releases.
+hold the workspace's flock for a moment, surfacing as
+`WorkspaceAlreadyOpen` / `WorkspaceLocked` until it releases.
 
 External `chan serve` processes are still supported as explicit
 remote attachments, but they are a separate transport, not a local
 serving dependency. When a standalone `chan serve` already holds a
-drive's lock, opening that drive in chan-desktop maps the
-`DriveLocked` / `DriveAlreadyOpen` error to a friendly "open in
+workspace's lock, opening that workspace in chan-desktop maps the
+`WorkspaceLocked` / `WorkspaceAlreadyOpen` error to a friendly "open in
 another chan process" message and reverts the row's On toggle
 rather than surfacing a raw error.
 

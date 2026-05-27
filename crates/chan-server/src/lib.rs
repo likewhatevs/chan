@@ -83,11 +83,13 @@ use state::{AppState, WorkspaceCell};
 use static_assets::{serve_font, serve_static};
 use terminal_sessions::{Registry as TerminalRegistry, RegistryConfig as TerminalRegistryConfig};
 
-/// Tunnel drive-name helpers re-exported from chan-tunnel-proto so
+/// Tunnel workspace-name helpers re-exported from chan-tunnel-proto so
 /// the `chan` binary can pre-validate / pre-sanitize without taking
 /// a direct dep on the tunnel proto crate.
 pub mod tunnel {
-    pub use chan_tunnel_proto::{is_valid_drive_name, sanitize_drive_name, MAX_DRIVE_NAME_LEN};
+    pub use chan_tunnel_proto::{
+        is_valid_workspace_name, sanitize_workspace_name, MAX_WORKSPACE_NAME_LEN,
+    };
 }
 
 use self_writes::SelfWrites;
@@ -262,7 +264,7 @@ struct AppArtifacts {
     /// Live workspace cell so the serve loop can cancel the current
     /// indexer on shutdown without keeping stale indexer handles
     /// alive across storage reset or metadata import swaps.
-    drive_cell: Arc<RwLock<Option<WorkspaceCell>>>,
+    workspace_cell: Arc<RwLock<Option<WorkspaceCell>>>,
     /// Background idle-prune/shutdown task for long-lived terminal
     /// sessions. Held so dropping AppArtifacts aborts it if serve()
     /// exits without the shutdown channel firing.
@@ -348,7 +350,7 @@ async fn build_app(
     let scope_registry = Arc::new(bus::ScopeRegistry::new());
     let bridge = make_watch_bridge(&events_tx, &index_events_tx, &self_writes, &scope_registry);
     let watch_handle = workspace.watch(bridge)?;
-    let drive_root = workspace.root().to_path_buf();
+    let workspace_root = workspace.root().to_path_buf();
     // Background indexer: subscribes to index_events_tx, runs the
     // initial build if the index is empty, debounces incremental
     // reindexes 1s per path. Lives for the server's lifetime.
@@ -392,17 +394,17 @@ async fn build_app(
             watch_handle: Some(watch_handle),
             indexer,
         })));
-    let bridge_drive_cell = state_for_bridge.clone();
+    let bridge_workspace_cell = state_for_bridge.clone();
     let bridge = mcp_bridge::start(socket_path.clone(), move || {
-        let cell = match bridge_drive_cell.read() {
+        let cell = match bridge_workspace_cell.read() {
             Ok(cell) => cell,
             Err(_) => {
-                tracing::warn!("mcp bridge cannot snapshot workspace: drive_cell poisoned");
+                tracing::warn!("mcp bridge cannot snapshot workspace: workspace_cell poisoned");
                 return None;
             }
         };
         let Some(cell) = cell.as_ref() else {
-            tracing::warn!("mcp bridge cannot snapshot workspace: drive_cell missing");
+            tracing::warn!("mcp bridge cannot snapshot workspace: workspace_cell missing");
             return None;
         };
         Some(cell.workspace.clone())
@@ -432,7 +434,7 @@ async fn build_app(
         }
     };
     let terminal_sessions = Arc::new(TerminalRegistry::new(TerminalRegistryConfig {
-        drive_root: drive_root.clone(),
+        workspace_root: workspace_root.clone(),
         mcp_socket_path: mcp_socket_path.clone(),
         control_socket_path: control_socket_path.clone(),
         terminal: server_config.terminal.clone(),
@@ -441,8 +443,8 @@ async fn build_app(
 
     let state = Arc::new(AppState {
         library,
-        drive_root,
-        drive_cell: state_for_bridge.clone(),
+        workspace_root,
+        workspace_cell: state_for_bridge.clone(),
         token: token.clone(),
         prefix: prefix.clone(),
         settings_disabled: config.settings_disabled,
@@ -473,7 +475,7 @@ async fn build_app(
         app,
         token,
         last_activity,
-        drive_cell: state_for_bridge.clone(),
+        workspace_cell: state_for_bridge.clone(),
         _terminal_pruner: terminal_pruner,
         prefix,
         mcp_bridge,
@@ -513,7 +515,7 @@ pub async fn serve(
 
     let app = artifacts.app;
     let last_activity = artifacts.last_activity;
-    let drive_cell = artifacts.drive_cell.clone();
+    let workspace_cell = artifacts.workspace_cell.clone();
     // Keep the MCP bridge alive for the duration of `serve()`. Dropping
     // it at the end of this function unlinks the socket and aborts the
     // accept loop. Bound to a `let _` so clippy doesn't warn on
@@ -539,11 +541,11 @@ pub async fn serve(
     // reindex. The flag is checked at per-file boundaries inside
     // `Workspace::reindex`, so the blocking task lands within at most one
     // file's worth of work and the runtime drop can return cleanly.
-    let cancel_drive_cell = drive_cell.clone();
+    let cancel_workspace_cell = workspace_cell.clone();
     let mut cancel_rx = signal_rx.clone();
     tokio::spawn(async move {
         let _ = cancel_rx.changed().await;
-        if let Ok(cell) = cancel_drive_cell.read() {
+        if let Ok(cell) = cancel_workspace_cell.read() {
             if let Some(cell) = cell.as_ref() {
                 cell.indexer.cancel();
             }
@@ -600,7 +602,7 @@ pub async fn serve(
 pub struct TunnelServeConfig<'a> {
     pub tunnel_url: &'a str,
     pub token: String,
-    pub drive_name: String,
+    pub workspace_name: String,
     pub public: bool,
     pub open_browser: bool,
     pub search_aggression: Option<SearchAggression>,
@@ -614,7 +616,7 @@ pub async fn serve_via_tunnel(
     let TunnelServeConfig {
         tunnel_url,
         token,
-        drive_name,
+        workspace_name,
         public,
         open_browser,
         search_aggression,
@@ -651,7 +653,7 @@ pub async fn serve_via_tunnel(
     // so the socket file is unlinked when serve_via_tunnel returns.
     let _mcp_bridge = artifacts.mcp_bridge;
     let _control_socket = artifacts.control_socket;
-    let drive_cell = artifacts.drive_cell.clone();
+    let workspace_cell = artifacts.workspace_cell.clone();
 
     // Same shutdown wiring as `serve()`: signal_watcher workspaces a
     // tokio::watch channel, and a side task cancels any in-flight
@@ -662,11 +664,11 @@ pub async fn serve_via_tunnel(
     let mut signal_rx = signal_tx.subscribe();
     spawn_signal_watcher(signal_tx.clone());
 
-    let cancel_drive_cell = drive_cell.clone();
+    let cancel_workspace_cell = workspace_cell.clone();
     let mut cancel_rx = signal_rx.clone();
     tokio::spawn(async move {
         let _ = cancel_rx.changed().await;
-        if let Ok(cell) = cancel_drive_cell.read() {
+        if let Ok(cell) = cancel_workspace_cell.read() {
             if let Some(cell) = cell.as_ref() {
                 cell.indexer.cancel();
             }
@@ -710,7 +712,7 @@ pub async fn serve_via_tunnel(
                     }
                     if production_public {
                         // Wildcard-subdomain shape on drive.chan.app:
-                        // `{user}.drive.chan.app/{drive}/`. User is in
+                        // `{user}.drive.chan.app/{workspace}/`. User is in
                         // the host; reg.prefix is `/{workspace}`. Trailing
                         // slash matches the canonical form so the chan
                         // SPA's vite `base: "./"` resolves asset URLs
@@ -734,7 +736,7 @@ pub async fn serve_via_tunnel(
                         }
                     } else {
                         // Non-production terminator: we know `reg.user`
-                        // and `reg.drive` from HelloAck but the visitor
+                        // and `reg.workspace` from HelloAck but the visitor
                         // URL belongs to whoever is hosting the tunnel
                         // server (e.g. chan-desktop maps each label to a
                         // per-tenant loopback port the desktop chose).
@@ -743,7 +745,7 @@ pub async fn serve_via_tunnel(
                         eprintln!(
                             "chan tunnel connected as {user}/{workspace}",
                             user = reg.user,
-                            workspace = reg.drive,
+                            workspace = reg.workspace,
                         );
                         greeted = true;
                     }
@@ -763,7 +765,7 @@ pub async fn serve_via_tunnel(
             .parse()
             .map_err(|e: url::ParseError| Error::Config(format!("invalid tunnel URL: {e}")))?,
         token,
-        drive: drive_name,
+        workspace: workspace_name,
         client_version: format!("chan/{}", env!("CARGO_PKG_VERSION")),
         public,
         initial_backoff: Duration::from_millis(500),

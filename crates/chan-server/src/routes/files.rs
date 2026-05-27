@@ -89,7 +89,7 @@ pub async fn api_list_files(
     State(state): State<Arc<AppState>>,
     Query(query): Query<ListFilesQuery>,
 ) -> Response {
-    let workspace = match state.try_drive() {
+    let workspace = match state.try_workspace() {
         Ok(workspace) => workspace,
         Err(e) => return err_state(&e),
     };
@@ -485,7 +485,7 @@ pub async fn api_read_file(
     // string. Anything else (images, attachments) comes back as
     // raw bytes with a sniffed Content-Type so `<img src=...>`
     // pointing at /api/files/<path> resolves correctly.
-    let workspace = match state.try_drive() {
+    let workspace = match state.try_workspace() {
         Ok(workspace) => workspace,
         Err(e) => return err_state(&e),
     };
@@ -643,7 +643,7 @@ pub async fn api_write_file(
         Ok(mtime_ns) => mtime_ns,
         Err(message) => return err(StatusCode::BAD_REQUEST, message),
     };
-    let workspace = match state.try_drive() {
+    let workspace = match state.try_workspace() {
         Ok(workspace) => workspace,
         Err(e) => return err_state(&e),
     };
@@ -748,7 +748,7 @@ pub async fn api_create_file(
     State(state): State<Arc<AppState>>,
     Json(body): Json<CreateBody>,
 ) -> Response {
-    let workspace = match state.try_drive() {
+    let workspace = match state.try_workspace() {
         Ok(workspace) => workspace,
         Err(e) => return err_state(&e),
     };
@@ -841,7 +841,7 @@ pub async fn api_upload_file(
         );
     };
 
-    let workspace = match state.try_drive() {
+    let workspace = match state.try_workspace() {
         Ok(workspace) => workspace,
         Err(e) => return err_state(&e),
     };
@@ -1281,7 +1281,7 @@ mod write_tests {
     }
 
     #[test]
-    fn api_read_file_wraps_sync_drive_reads_in_spawn_blocking() {
+    fn api_read_file_wraps_sync_workspace_reads_in_spawn_blocking() {
         let source = include_str!("files.rs");
 
         assert!(source.contains(
@@ -1293,7 +1293,7 @@ mod write_tests {
     }
 
     #[test]
-    fn api_list_files_wraps_sync_drive_walk_in_spawn_blocking() {
+    fn api_list_files_wraps_sync_workspace_walk_in_spawn_blocking() {
         let source = include_str!("files.rs");
 
         assert!(source
@@ -1301,7 +1301,7 @@ mod write_tests {
     }
 
     #[test]
-    fn api_create_and_delete_wrap_sync_drive_io_in_spawn_blocking() {
+    fn api_create_and_delete_wrap_sync_workspace_io_in_spawn_blocking() {
         let source = include_str!("files.rs");
 
         assert!(source
@@ -1426,7 +1426,7 @@ pub async fn api_delete_file(
     // chan-workspace API (`Workspace::remove_recursive`) or a server-side walk
     // that issues per-leaf removes. Tracked for a follow-up; current
     // behavior is "error out, frontend resolves the leaves itself".
-    let workspace = match state.try_drive() {
+    let workspace = match state.try_workspace() {
         Ok(workspace) => workspace,
         Err(e) => return err_state(&e),
     };
@@ -1454,7 +1454,7 @@ pub async fn api_move(State(state): State<Arc<AppState>>, Json(body): Json<MoveB
     // rewrite walks N source files synchronously and can take a few
     // hundred ms on big directory moves. Keeping it off the tokio
     // worker pool avoids blocking other requests during the walk.
-    let workspace = match state.try_drive() {
+    let workspace = match state.try_workspace() {
         Ok(workspace) => workspace,
         Err(e) => return err_state(&e),
     };
@@ -1552,7 +1552,7 @@ pub async fn api_fs_transfer(
     State(state): State<Arc<AppState>>,
     Json(body): Json<TransferBody>,
 ) -> Response {
-    let workspace = match state.try_drive() {
+    let workspace = match state.try_workspace() {
         Ok(workspace) => workspace,
         Err(e) => return err_state(&e),
     };

@@ -1,7 +1,7 @@
 # chan-llm
 
-MCP server and tool sandbox for exposing a chan drive to local agent
-tools. Filesystem access routes through `chan-drive`, so the path
+MCP server and tool sandbox for exposing a chan workspace to local agent
+tools. Filesystem access routes through `chan-workspace`, so the path
 sandbox, special-file refusal, atomic writes, and editable-text gate
 apply to every tool call.
 
@@ -23,14 +23,14 @@ chan-llm = { version = "0.11", features = ["mcp"] }
 
 ```text
 StandardTool         ReadFile | WriteFile | ListFiles | SearchContent.
-ToolContext          { drive: Arc<Drive> }
+ToolContext          { workspace: Arc<Workspace> }
 ToolOutcome          Ok(json)
 tools::execute(name, args, &ctx) -> Result<ToolOutcome>
 
 prompts::*           Shared MCP prompt/tool descriptions.
 
 feature "mcp":
-  mcp::Server::new(Arc<Drive>)
+  mcp::Server::new(Arc<Workspace>)
   mcp::Server::with_max_media_bytes(bytes)
   mcp::Server::serve_stdio()
   mcp::Server::serve_io(reader, writer)
@@ -41,12 +41,12 @@ feature "mcp":
 
 ## Contacts and the graph
 
-chan-drive maintains a sqlite link graph next to every drive
+chan-workspace maintains a sqlite link graph next to every workspace
 (nodes, edges, headings, tags, contacts). The editor uses it for
 the `[[` link picker, the `@` contact picker, chip rendering, and
 the graph view. MCP exposes graph tools for note relationships and
 BM25 search for content discovery; typed contact APIs stay in
-chan-drive.
+chan-workspace.
 
 From an agent's perspective:
 

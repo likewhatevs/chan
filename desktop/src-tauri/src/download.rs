@@ -13,10 +13,10 @@
 // command, which writes them to the OS Downloads folder and returns
 // the saved path so the SPA can show "Saved to <path>". Keeping the
 // byte transfer in JS reuses the upload progress pattern and avoids a
-// second loopback fetch from Rust; drive content is notes-scale, so
+// second loopback fetch from Rust; workspace content is notes-scale, so
 // buffering the blob in memory is acceptable. (A "reveal in Finder"
 // action is a future addition: reveal_in_finder is currently only in
-// the launcher window's ACL, not drive windows where the inspector
+// the launcher window's ACL, not workspace windows where the inspector
 // lives.)
 
 use std::{fs, path::PathBuf};

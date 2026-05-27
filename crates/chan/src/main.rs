@@ -207,7 +207,7 @@ enum Command {
         /// `/seg[/seg...]` with `[A-Za-z0-9-]+` segments; trailing
         /// slashes and `//` runs are tolerated. Anything else is
         /// rejected. Mutually exclusive with --tunnel-token (the
-        /// public gateway already strips /{user}/{drive}).
+        /// public gateway already strips /{user}/{workspace}).
         #[arg(long, conflicts_with = "tunnel_token")]
         prefix: Option<String>,
         /// Idle timeout before the server triggers a graceful
@@ -259,19 +259,19 @@ enum Command {
         /// Personal access token (chan_pat_*) from id.chan.app.
         /// Setting this enables tunnel mode: chan serve does not
         /// bind a local TCP listener and instead publishes the
-        /// workspace at {user}.drive.chan.app/{drive}/*. Prefer the
+        /// workspace at {user}.drive.chan.app/{workspace}/*. Prefer the
         /// CHAN_TUNNEL_TOKEN env var so the secret does not appear
         /// in `ps`.
         #[arg(long, env = "CHAN_TUNNEL_TOKEN")]
         tunnel_token: Option<String>,
-        /// Drive URL slug to publish at /{user}/<name>. Must be
+        /// Workspace URL slug to publish at /{user}/<name>. Must be
         /// lowercase [a-z0-9-], 1-32 chars, no leading/trailing
         /// hyphen. Defaults to a sanitized form of the workspace path
         /// basename; chan emits a NOTE when it had to sanitize.
         #[arg(long)]
-        tunnel_drive: Option<String>,
+        tunnel_workspace_name: Option<String>,
         /// Expose the tunneled workspace without an OAuth gate. By
-        /// default, `{user}.drive.chan.app/{drive}/` 404s anonymous
+        /// default, `{user}.drive.chan.app/{workspace}/` 404s anonymous
         /// visitors; the workspace owner opens it from id.chan.app's
         /// dashboard via a short-lived workspace-gate handoff. With
         /// --tunnel-public, anyone with the URL can reach the workspace
@@ -651,7 +651,7 @@ fn main() -> Result<()> {
             no_settings,
             tunnel_url,
             tunnel_token,
-            tunnel_drive,
+            tunnel_workspace_name,
             tunnel_public,
         } => {
             let addr = resolve_listen_addr(host, ipv4, ipv6, port)?;
@@ -676,7 +676,7 @@ fn main() -> Result<()> {
                 no_settings,
                 tunnel_url,
                 tunnel_token,
-                tunnel_drive,
+                tunnel_workspace_name,
                 tunnel_public,
             ));
             // Don't block on blocking-pool tasks (e.g. an in-flight
@@ -783,52 +783,55 @@ fn same_path(a: &Path, b: &Path) -> bool {
 /// `{user}.drive.chan.app/<name>`. This is a tunnel URL concern,
 /// separate from local path-keyed workspace metadata.
 ///
-/// - With `--tunnel-drive`: validate it; bail with a clear
+/// - With `--tunnel-workspace-name`: validate it; bail with a clear
 ///   message + a suggested sanitized form if rejected.
 /// - Without: take the path basename and sanitize. Warn when
 ///   sanitize altered it. Bail when sanitize yields `None` (the
 ///   basename collapses to all punctuation).
-fn resolve_tunnel_drive_name(flag: Option<String>, root: &Path) -> Result<String> {
+fn resolve_tunnel_workspace_name(flag: Option<String>, root: &Path) -> Result<String> {
     if let Some(name) = flag {
-        if chan_server::tunnel::is_valid_drive_name(&name) {
+        if chan_server::tunnel::is_valid_workspace_name(&name) {
             return Ok(name);
         }
-        let suggestion = chan_server::tunnel::sanitize_drive_name(&name);
-        let max = chan_server::tunnel::MAX_DRIVE_NAME_LEN;
+        let suggestion = chan_server::tunnel::sanitize_workspace_name(&name);
+        let max = chan_server::tunnel::MAX_WORKSPACE_NAME_LEN;
         let hint = match suggestion {
-            Some(s) => format!(" Try --tunnel-drive={s}."),
+            Some(s) => format!(" Try --tunnel-workspace-name={s}."),
             None => String::new(),
         };
         anyhow::bail!(
-            "--tunnel-drive {name:?} is not URL-safe (need [a-z0-9-], 1-{max} chars, no leading/trailing hyphen).{hint}"
+            "--tunnel-workspace-name {name:?} is not URL-safe (need [a-z0-9-], 1-{max} chars, no leading/trailing hyphen).{hint}"
         );
     }
     let source = root
         .file_name()
         .map(|s| s.to_string_lossy().into_owned())
         .unwrap_or_default();
-    if chan_server::tunnel::is_valid_drive_name(&source) {
+    if chan_server::tunnel::is_valid_workspace_name(&source) {
         return Ok(source);
     }
-    match chan_server::tunnel::sanitize_drive_name(&source) {
+    match chan_server::tunnel::sanitize_workspace_name(&source) {
         Some(sanitized) => {
             eprintln!(
                 "NOTE: workspace path basename {source:?} sanitized to {sanitized:?} for the tunnel URL. \
-                 Pass --tunnel-drive to override."
+                 Pass --tunnel-workspace-name to override."
             );
             Ok(sanitized)
         }
         None => {
-            let max = chan_server::tunnel::MAX_DRIVE_NAME_LEN;
+            let max = chan_server::tunnel::MAX_WORKSPACE_NAME_LEN;
             anyhow::bail!(
                 "cannot derive a URL-safe tunnel workspace name from {source:?}. \
-                 Pass --tunnel-drive=<name> ([a-z0-9-], 1-{max} chars, no leading/trailing hyphen)."
+                 Pass --tunnel-workspace-name=<name> ([a-z0-9-], 1-{max} chars, no leading/trailing hyphen)."
             );
         }
     }
 }
 
-fn ensure_drive_registered(lib: &Library, root: &Path) -> Result<chan_workspace::KnownWorkspace> {
+fn ensure_workspace_registered(
+    lib: &Library,
+    root: &Path,
+) -> Result<chan_workspace::KnownWorkspace> {
     lib.register_workspace(root)
         .with_context(|| format!("registering {}", root.display()))
 }
@@ -844,7 +847,7 @@ fn cmd_add(path: PathBuf, semantic_search: bool, reports: bool) -> Result<()> {
             .with_context(|| format!("creating workspace root {}", path.display()))?;
     }
     let lib = library()?;
-    let entry = ensure_drive_registered(&lib, &path)?;
+    let entry = ensure_workspace_registered(&lib, &path)?;
     // systacean-27: opt-in feature flags. Persist before
     // boot-time activation so a `chan add --reports` lands the
     // flag immediately + the kickoff scan runs once.
@@ -1045,7 +1048,7 @@ async fn cmd_serve(
     no_settings: bool,
     tunnel_url: String,
     tunnel_token: Option<String>,
-    tunnel_drive: Option<String>,
+    tunnel_workspace_name: Option<String>,
     tunnel_public: bool,
 ) -> Result<()> {
     let lib = library()?;
@@ -1089,7 +1092,7 @@ async fn cmd_serve(
         }
     }
 
-    ensure_drive_registered(&lib, &root)?;
+    ensure_workspace_registered(&lib, &root)?;
     let workspace = lib.open_workspace(&root)?;
 
     // Best-effort update notice. The banner reads cached state
@@ -1112,11 +1115,11 @@ async fn cmd_serve(
                  Prefer CHAN_TUNNEL_TOKEN env var instead."
             );
         }
-        let drive_name = resolve_tunnel_drive_name(tunnel_drive, &root)?;
+        let workspace_name = resolve_tunnel_workspace_name(tunnel_workspace_name, &root)?;
         if tunnel_public {
             eprintln!(
                 "WARNING: --public exposes this workspace at \
-                 drive.chan.app/<user>/{drive_name} with no auth gate. \
+                 drive.chan.app/<user>/{workspace_name} with no auth gate. \
                  Anyone with the URL has read/write access."
             );
         }
@@ -1126,7 +1129,7 @@ async fn cmd_serve(
             TunnelServeConfig {
                 tunnel_url: &tunnel_url,
                 token,
-                drive_name,
+                workspace_name,
                 public: tunnel_public,
                 open_browser: !no_browser,
                 search_aggression,
@@ -1335,7 +1338,7 @@ fn cmd_index_rebuild(path: PathBuf) -> Result<()> {
     // Idempotent: registering an already-known workspace only touches
     // last_seen_at. CLI users expect `chan index rebuild /some/path`
     // to work without a prior `chan add`.
-    ensure_drive_registered(&lib, &path)?;
+    ensure_workspace_registered(&lib, &path)?;
     let workspace = lib.open_workspace(&path)?;
 
     // Live progress on stderr so the user can see the embed pass
@@ -1565,7 +1568,7 @@ fn cmd_index_status(path: Option<PathBuf>, json: bool) -> Result<()> {
     let root = path
         .or_else(|| lib.default_workspace_root())
         .unwrap_or_else(|| lib.effective_default_workspace_root());
-    let drive_paths = lib
+    let workspace_paths = lib
         .workspace_paths_for(&root)
         .ok_or_else(|| anyhow::anyhow!(not_a_chan_workspace_hint(&root)))?;
     // Canonical path comes back from the registry entry; falls back
@@ -1578,8 +1581,12 @@ fn cmd_index_status(path: Option<PathBuf>, json: bool) -> Result<()> {
         .find(|d| same_path(&d.root_path, &root))
         .map(|d| d.root_path)
         .unwrap_or(root);
-    let cfg = chan_workspace::index::config::load(&drive_paths.index)
-        .with_context(|| format!("reading index config at {}", drive_paths.index.display()))?;
+    let cfg = chan_workspace::index::config::load(&workspace_paths.index).with_context(|| {
+        format!(
+            "reading index config at {}",
+            workspace_paths.index.display()
+        )
+    })?;
     let model = cfg.model;
     let semantic_enabled = cfg.semantic_enabled;
     let expected_dir = global_models_dir().join(repo_dir_name(&model));
@@ -1597,7 +1604,7 @@ fn cmd_index_status(path: Option<PathBuf>, json: bool) -> Result<()> {
     if json {
         // `fullstack-b-28b` slice ii: emit `reports_enabled`
         // alongside `semantic_enabled` so chan-desktop's
-        // `get_drive_features` IPC can read both flags from one
+        // `get_workspace_features` IPC can read both flags from one
         // CLI round-trip. `chan_workspace::index::config::load`
         // already populated both fields; this is a strict
         // additive extension (existing JSON consumers ignore
@@ -1925,7 +1932,7 @@ async fn cmd_mcp_proxy(_socket: PathBuf) -> Result<()> {
 
 fn cmd_search(path: PathBuf, query: String, limit: u32) -> Result<()> {
     let lib = library()?;
-    ensure_drive_registered(&lib, &path)?;
+    ensure_workspace_registered(&lib, &path)?;
     let workspace = lib.open_workspace(&path)?;
     let opts = SearchOpts {
         limit,
@@ -2050,7 +2057,7 @@ fn cmd_graph(
     json: bool,
 ) -> Result<()> {
     let lib = library()?;
-    ensure_drive_registered(&lib, &path)?;
+    ensure_workspace_registered(&lib, &path)?;
     let workspace = lib.open_workspace(&path)?;
     if scope != GraphScope::All {
         return cmd_filesystem_graph(&workspace, scope, target, depth, limit, json);
@@ -2158,7 +2165,7 @@ fn cmd_status(path: Option<PathBuf>, json: bool) -> Result<()> {
     let root = path
         .or_else(|| lib.default_workspace_root())
         .unwrap_or_else(|| lib.effective_default_workspace_root());
-    ensure_drive_registered(&lib, &root)?;
+    ensure_workspace_registered(&lib, &root)?;
     let workspace = lib.open_workspace(&root)?;
     let known = lib
         .list_workspaces()
@@ -2408,7 +2415,7 @@ fn cmd_metadata(action: MetadataAction) -> Result<()> {
             force_scm,
         } => {
             let lib = library()?;
-            ensure_drive_registered(&lib, &path)?;
+            ensure_workspace_registered(&lib, &path)?;
             let report = lib
                 .import_metadata_archive(
                     &path,
@@ -2706,7 +2713,7 @@ fn cmd_contacts_import_csv(
         std::fs::create_dir_all(&root)
             .with_context(|| format!("creating workspace root {}", root.display()))?;
     }
-    ensure_drive_registered(&lib, &root)?;
+    ensure_workspace_registered(&lib, &root)?;
     let workspace = lib.open_workspace(&root)?;
 
     if dry_run {
@@ -3012,39 +3019,42 @@ mod tests {
     }
 
     #[test]
-    fn tunnel_drive_flag_passes_through_when_valid() {
+    fn tunnel_workspace_flag_passes_through_when_valid() {
         let root = PathBuf::from("/tmp/whatever");
-        let out = resolve_tunnel_drive_name(Some("notes".into()), &root).unwrap();
+        let out = resolve_tunnel_workspace_name(Some("notes".into()), &root).unwrap();
         assert_eq!(out, "notes");
     }
 
     #[test]
-    fn tunnel_drive_flag_rejected_with_suggestion() {
+    fn tunnel_workspace_flag_rejected_with_suggestion() {
         let root = PathBuf::from("/tmp/whatever");
-        let err = resolve_tunnel_drive_name(Some("My Drive!".into()), &root).unwrap_err();
+        let err = resolve_tunnel_workspace_name(Some("My Workspace!".into()), &root).unwrap_err();
         let msg = err.to_string();
         assert!(msg.contains("not URL-safe"), "{msg}");
-        assert!(msg.contains("--tunnel-drive=my-drive"), "{msg}");
+        assert!(
+            msg.contains("--tunnel-workspace-name=my-workspace"),
+            "{msg}"
+        );
     }
 
     #[test]
-    fn tunnel_drive_flag_rejected_when_unsanitizable() {
+    fn tunnel_workspace_flag_rejected_when_unsanitizable() {
         let root = PathBuf::from("/tmp/whatever");
-        let err = resolve_tunnel_drive_name(Some("---".into()), &root).unwrap_err();
+        let err = resolve_tunnel_workspace_name(Some("---".into()), &root).unwrap_err();
         assert!(err.to_string().contains("not URL-safe"));
     }
 
     #[test]
-    fn tunnel_drive_default_uses_path_basename() {
+    fn tunnel_workspace_default_uses_path_basename() {
         let root = PathBuf::from("/tmp/Daily Journal");
-        let out = resolve_tunnel_drive_name(None, &root).unwrap();
+        let out = resolve_tunnel_workspace_name(None, &root).unwrap();
         assert_eq!(out, "daily-journal");
     }
 
     #[test]
-    fn tunnel_drive_default_bails_when_basename_collapses() {
+    fn tunnel_workspace_default_bails_when_basename_collapses() {
         let root = PathBuf::from("/tmp/---");
-        let err = resolve_tunnel_drive_name(None, &root).unwrap_err();
+        let err = resolve_tunnel_workspace_name(None, &root).unwrap_err();
         assert!(err.to_string().contains("cannot derive"));
     }
 
@@ -3215,27 +3225,27 @@ mod tests {
     // `graph_scope_nodes` now stats the target through chan-workspace and
     // bails on escape / missing / wrong-type; these tests pin that.
 
-    fn open_graph_test_drive() -> (
+    fn open_graph_test_workspace() -> (
         tempfile::TempDir,
         tempfile::TempDir,
         std::sync::Arc<chan_workspace::Workspace>,
     ) {
         let cfg = tempfile::TempDir::new().unwrap();
-        let drive_root = tempfile::TempDir::new().unwrap();
+        let workspace_root = tempfile::TempDir::new().unwrap();
         let lib = chan_workspace::Library::open_at(cfg.path().join("config.toml")).unwrap();
-        lib.register_workspace(drive_root.path()).unwrap();
-        let workspace = lib.open_workspace(drive_root.path()).unwrap();
+        lib.register_workspace(workspace_root.path()).unwrap();
+        let workspace = lib.open_workspace(workspace_root.path()).unwrap();
         // Lay down a couple of files so the graph view has something
         // to read.
         workspace.write_text("notes/a.md", "# A\n").unwrap();
         workspace.write_text("notes/sub/b.md", "# B\n").unwrap();
         workspace.reindex(None).unwrap();
-        (cfg, drive_root, workspace)
+        (cfg, workspace_root, workspace)
     }
 
     #[test]
     fn graph_scope_file_rejects_escape_target() {
-        let (_cfg, _root, workspace) = open_graph_test_drive();
+        let (_cfg, _root, workspace) = open_graph_test_workspace();
         let graph = workspace.graph().unwrap();
         let err = graph_scope_nodes(&workspace, graph, GraphScope::File, Some("../etc/hosts"), 1)
             .unwrap_err();
@@ -3248,7 +3258,7 @@ mod tests {
 
     #[test]
     fn graph_scope_file_rejects_missing_target() {
-        let (_cfg, _root, workspace) = open_graph_test_drive();
+        let (_cfg, _root, workspace) = open_graph_test_workspace();
         let graph = workspace.graph().unwrap();
         let err = graph_scope_nodes(
             &workspace,
@@ -3271,7 +3281,7 @@ mod tests {
     fn graph_scope_file_rejects_directory_target() {
         // --scope file with a directory must surface a clear error,
         // not silently succeed with an empty graph.
-        let (_cfg, _root, workspace) = open_graph_test_drive();
+        let (_cfg, _root, workspace) = open_graph_test_workspace();
         let graph = workspace.graph().unwrap();
         let err =
             graph_scope_nodes(&workspace, graph, GraphScope::File, Some("notes"), 1).unwrap_err();
@@ -3284,7 +3294,7 @@ mod tests {
 
     #[test]
     fn graph_scope_directory_rejects_escape_target() {
-        let (_cfg, _root, workspace) = open_graph_test_drive();
+        let (_cfg, _root, workspace) = open_graph_test_workspace();
         let graph = workspace.graph().unwrap();
         let err = graph_scope_nodes(&workspace, graph, GraphScope::Directory, Some("../etc"), 1)
             .unwrap_err();

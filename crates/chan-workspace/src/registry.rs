@@ -339,7 +339,7 @@ mod tests {
     fn load_empty_index_excluded_dirs_preserves_user_choice() {
         let tmp = TempDir::new().unwrap();
         let cfg_path = tmp.path().join("config.toml");
-        std::fs::write(&cfg_path, "index_excluded_dirs = []\ndrives = []\n").unwrap();
+        std::fs::write(&cfg_path, "index_excluded_dirs = []\nworkspaces = []\n").unwrap();
         let loaded = Registry::load_from(&cfg_path).unwrap();
         assert!(loaded.index_excluded_dirs.is_empty());
     }

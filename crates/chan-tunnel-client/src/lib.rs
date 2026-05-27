@@ -87,16 +87,16 @@ impl From<chan_tunnel_proto::IoFrameError> for ClientError {
 pub struct ClientConfig {
     pub tunnel_url: Url,
     pub token: String,
-    /// Drive name sent in the Hello frame. Combined server-side
+    /// Workspace name sent in the Hello frame. Combined server-side
     /// with the token's user to form the public path
-    /// `/{user}/{drive}/...`. Required.
-    pub drive: String,
+    /// `/{user}/{workspace}/...`. Required.
+    pub workspace: String,
     /// `chan` version reported in the Hello frame; logs only.
     pub client_version: String,
-    /// Expose the drive to anonymous visitors. When false (the
-    /// default), only the drive owner's signed-in id.chan.app
-    /// session can reach `drive.chan.app/{user}/{drive}`. When
-    /// true, the drive-proxy auth gate skips the OAuth bounce.
+    /// Expose the workspace to anonymous visitors. When false (the
+    /// default), only the workspace owner's signed-in id.chan.app
+    /// session can reach `drive.chan.app/{user}/{workspace}`. When
+    /// true, the workspace-proxy auth gate skips the OAuth bounce.
     pub public: bool,
     /// Initial reconnect backoff. Doubled up to `max_backoff`.
     pub initial_backoff: Duration,
@@ -138,7 +138,7 @@ impl Default for ClientConfig {
             tunnel_url: Url::parse("https://drive.chan.app/v1/tunnel")
                 .expect("hard-coded url is valid"),
             token: String::new(),
-            drive: String::new(),
+            workspace: String::new(),
             client_version: format!("chan-tunnel-client/{}", env!("CARGO_PKG_VERSION")),
             public: false,
             initial_backoff: Duration::from_millis(500),
@@ -158,7 +158,7 @@ impl Default for ClientConfig {
 pub struct Registration {
     pub prefix: String,
     pub user: String,
-    pub drive: String,
+    pub workspace: String,
 }
 
 /// Lifecycle events emitted by `run`. Callers subscribe via
@@ -179,7 +179,7 @@ pub enum TunnelEvent {
     DialFailed { error: String, retry_in: Duration },
 }
 
-/// Drive the Hello/HelloAck round-trip over `socket` and return a
+/// Workspace the Hello/HelloAck round-trip over `socket` and return a
 /// yamux client connection ready to accept inbound substreams.
 ///
 /// Generic in `S` so the wire test can pass a `tokio::io::duplex`
@@ -194,17 +194,17 @@ pub async fn handshake<S>(
 where
     S: AsyncRead + AsyncWrite + Unpin + Send + 'static,
 {
-    if !chan_tunnel_proto::is_valid_drive_name(&cfg.drive) {
+    if !chan_tunnel_proto::is_valid_workspace_name(&cfg.workspace) {
         return Err(ClientError::Handshake(format!(
-            "invalid drive name {:?}; expected lowercase [a-z0-9-], 1-{} chars, no leading/trailing hyphen",
-            cfg.drive,
-            chan_tunnel_proto::MAX_DRIVE_NAME_LEN,
+            "invalid workspace name {:?}; expected lowercase [a-z0-9-], 1-{} chars, no leading/trailing hyphen",
+            cfg.workspace,
+            chan_tunnel_proto::MAX_WORKSPACE_NAME_LEN,
         )));
     }
     let hello = Hello {
         protocol: ProtocolVersion::V1,
         client_version: cfg.client_version.clone(),
-        drive: cfg.drive.clone(),
+        workspace: cfg.workspace.clone(),
         public: cfg.public,
     };
     write_frame(&mut socket, &hello).await?;
@@ -229,7 +229,7 @@ where
     let registration = Registration {
         prefix: ok.prefix,
         user: ok.user,
-        drive: ok.drive,
+        workspace: ok.workspace,
     };
     let yamux = YamuxConnection::new(socket.compat(), YamuxConfig::default(), Mode::Client);
     Ok((registration, yamux))
@@ -290,17 +290,17 @@ where
 /// Designed for `chan serve` to call as a long-lived future;
 /// dropping it cancels everything cleanly. Returns only on
 /// configuration errors that retrying cannot recover from
-/// (invalid URL, invalid drive name, missing token).
+/// (invalid URL, invalid workspace name, missing token).
 pub async fn run(cfg: ClientConfig, router: axum::Router) -> Result<(), ClientError> {
     if cfg.token.is_empty() {
         return Err(ClientError::Handshake(
             "ClientConfig.token is empty; nothing to authenticate with".into(),
         ));
     }
-    if !chan_tunnel_proto::is_valid_drive_name(&cfg.drive) {
+    if !chan_tunnel_proto::is_valid_workspace_name(&cfg.workspace) {
         return Err(ClientError::Handshake(format!(
-            "invalid drive name {:?}",
-            cfg.drive
+            "invalid workspace name {:?}",
+            cfg.workspace
         )));
     }
     match cfg.tunnel_url.scheme() {
@@ -361,7 +361,7 @@ pub async fn run(cfg: ClientConfig, router: axum::Router) -> Result<(), ClientEr
             Ok((registration, yconn)) => {
                 tracing::info!(
                     user = %registration.user,
-                    drive = %registration.drive,
+                    workspace = %registration.workspace,
                     prefix = %registration.prefix,
                     "tunnel connected",
                 );

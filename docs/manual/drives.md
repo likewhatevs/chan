@@ -1,15 +1,15 @@
-# Creating Or Opening A Drive
+# Creating Or Opening A Workspace
 
-A drive is a directory that contains markdown and related files. Chan treats
-the drive root as the filesystem boundary for editing, search, graph, and
+A workspace is a directory that contains markdown and related files. Chan treats
+the workspace root as the filesystem boundary for editing, search, graph, and
 terminal work.
 
 ## Desktop
 
-On a fresh install, Chan Desktop creates a `Chan` drive under your Documents
-folder and seeds it with this manual. From the drives window you can also
+On a fresh install, Chan Desktop creates a `Chan` workspace under your Documents
+folder and seeds it with this manual. From the workspaces window you can also
 open an existing folder, attach a running `chan serve` URL, or receive a
-remote drive through the listener.
+remote workspace through the listener.
 
 ## CLI
 
@@ -22,9 +22,9 @@ chan serve ~/notes
 The command prints a loopback URL with a bearer token. Open that URL in a
 browser on the same machine.
 
-## Drive contents
+## Workspace contents
 
-Chan watches the drive tree for external edits. The files are still yours:
+Chan watches the workspace tree for external edits. The files are still yours:
 edit them with another program, commit them to git, or move the folder as a
 normal directory.
 

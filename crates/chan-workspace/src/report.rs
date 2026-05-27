@@ -52,11 +52,11 @@ impl ReportState {
     /// writer thread. Caller wraps the returned value in an
     /// `Arc` for shared ownership with the watcher fanout.
     pub(crate) fn open(
-        drive_root: &Path,
+        workspace_root: &Path,
         jsonl_path: &Path,
         excluded_dirs: &[String],
     ) -> Result<Arc<Self>> {
-        let mut opts = ReportOptions::new(drive_root);
+        let mut opts = ReportOptions::new(workspace_root);
         // Mirror the index/graph WalkFilter: the report's language
         // analysis must not walk `node_modules/` / `target/` / `venv/`
         // etc., so a source-tree workspace doesn't roll up its dependency

@@ -11,7 +11,7 @@ Owns the user-facing surface of chan end-to-end: axum HTTP
 routes in `crates/chan-server`, the Svelte frontend under
 `web/`, the embedded editor, and the embedded terminal.
 Touches the filesystem-facing seams that go through
-`chan_drive::Drive`.
+`chan_workspace::Workspace`.
 
 A handles the smaller / faster-cycling work in the FullStack
 queue; B carries the bigger / cross-stack items. The split is

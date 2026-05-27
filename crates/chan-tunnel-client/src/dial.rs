@@ -9,8 +9,8 @@
 //! cleartext (h2c) directly over the TCP socket. The server side
 //! (chan-tunnel-server) is already h2c-only in production: nginx
 //! terminates TLS at drive.chan.app and `grpc_pass`-es `/v1/tunnel`
-//! as h2c into drive-proxy's tunnel listener. The h2c branch exists
-//! so a local stack can dial the drive-proxy h2c port without
+//! as h2c into workspace-proxy's tunnel listener. The h2c branch exists
+//! so a local stack can dial the workspace-proxy h2c port without
 //! standing up a TLS terminator.
 
 use std::sync::Arc;
@@ -83,7 +83,7 @@ pub async fn dial_with_tls(
     let tcp = open_tcp(&host, port, cfg.proxy.as_ref()).await?;
     tcp.set_nodelay(true).ok();
 
-    // Drive h2 frames in the background; the connection future has
+    // Workspace h2 frames in the background; the connection future has
     // a different type per branch (rustls TlsStream vs raw TcpStream),
     // so spawn inside each arm and only return the SendRequest.
     let mut send_req = if scheme == "https" {

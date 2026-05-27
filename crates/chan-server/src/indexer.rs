@@ -157,7 +157,7 @@ impl Indexer {
             coalesced_rebuild: false,
         }));
         let watch_context = WatchContext {
-            vcs_kind: chan_workspace::detect_drive_vcs(workspace.root()),
+            vcs_kind: chan_workspace::detect_workspace_vcs(workspace.root()),
         };
 
         // Coordinator task: serializes "rebuild now" requests so
@@ -168,9 +168,9 @@ impl Indexer {
         // leave the index stale.
         let cancel = Arc::new(AtomicBool::new(false));
         let (rebuild_tx, rebuild_rx) = mpsc::unbounded_channel::<()>();
-        let drive_weak = Arc::downgrade(&workspace);
+        let workspace_weak = Arc::downgrade(&workspace);
         let coordinator_task = spawn_coordinator(
-            drive_weak.clone(),
+            workspace_weak.clone(),
             status.clone(),
             telemetry.clone(),
             rebuild_rx,
@@ -210,12 +210,12 @@ impl Indexer {
             // many drafts the user keeps around. Runs on the
             // blocking pool so a slow drafts subtree doesn't
             // stall the rest of `Indexer::spawn`.
-            let drive_for_drafts = drive_weak.clone();
+            let workspace_for_drafts = workspace_weak.clone();
             tokio::task::spawn_blocking(move || {
-                let Some(drive_for_drafts) = drive_for_drafts.upgrade() else {
+                let Some(workspace_for_drafts) = workspace_for_drafts.upgrade() else {
                     return;
                 };
-                if let Err(e) = drive_for_drafts.index_drafts_subtree() {
+                if let Err(e) = workspace_for_drafts.index_drafts_subtree() {
                     tracing::warn!(
                         error = %e,
                         "indexer: drafts boot walk failed; drafts may be missing from BM25/graph until next save"
@@ -225,7 +225,7 @@ impl Indexer {
         }
 
         let watcher_task = spawn_watcher_loop(
-            drive_weak,
+            workspace_weak,
             IndexerShared {
                 status: status.clone(),
                 telemetry: telemetry.clone(),
@@ -300,7 +300,7 @@ fn spawn_coordinator(
             if cancel.load(Ordering::Relaxed) {
                 continue;
             }
-            let Some(drive_w) = workspace.upgrade() else {
+            let Some(workspace_w) = workspace.upgrade() else {
                 break;
             };
             let status_w = status.clone();
@@ -317,7 +317,7 @@ fn spawn_coordinator(
                     status: status_w,
                     forward: progress_w,
                 };
-                drive_w.reindex_with_aggression(Some(&cancel_w), &progress, aggression)
+                workspace_w.reindex_with_aggression(Some(&cancel_w), &progress, aggression)
             })
             .await;
             // Bug 9: every resolution of a build MUST move the status
@@ -373,7 +373,7 @@ fn spawn_watcher_loop(
         let pending: Arc<Mutex<HashMap<String, PendingChange>>> =
             Arc::new(Mutex::new(HashMap::new()));
         let pending_w = pending.clone();
-        let drive_w = workspace.clone();
+        let workspace_w = workspace.clone();
         let status_w = shared.status.clone();
         let telemetry_w = shared.telemetry.clone();
         let cancel_w = cancel.clone();
@@ -395,25 +395,25 @@ fn spawn_watcher_loop(
                     *status_w.lock().unwrap() = IndexStatus::Reindexing {
                         file: change.path.clone(),
                     };
-                    let Some(drive2) = drive_w.upgrade() else {
+                    let Some(workspace2) = workspace_w.upgrade() else {
                         return;
                     };
                     let p = change.path.clone();
                     let deleted = change.deleted;
                     let result = tokio::task::spawn_blocking(move || {
-                        apply_watch_change(&drive2, &p, deleted)
+                        apply_watch_change(&workspace2, &p, deleted)
                     })
                     .await;
                     match result {
                         Ok(Ok(ApplyOutcome::Indexed)) => {
-                            if let Some(workspace) = drive_w.upgrade() {
+                            if let Some(workspace) = workspace_w.upgrade() {
                                 set_idle(&workspace, &status_w, &telemetry_w)
                             } else {
                                 return;
                             }
                         }
                         Ok(Ok(ApplyOutcome::Forgotten)) => {
-                            if let Some(workspace) = drive_w.upgrade() {
+                            if let Some(workspace) = workspace_w.upgrade() {
                                 set_idle(&workspace, &status_w, &telemetry_w)
                             } else {
                                 return;
@@ -427,7 +427,7 @@ fn spawn_watcher_loop(
                             // back to Idle so the dashboard does
                             // not flash "search is broken" on a
                             // legitimate watcher event.
-                            if let Some(workspace) = drive_w.upgrade() {
+                            if let Some(workspace) = workspace_w.upgrade() {
                                 set_idle(&workspace, &status_w, &telemetry_w);
                             } else {
                                 return;
@@ -561,7 +561,7 @@ enum ApplyOutcome {
 /// Per-file watch apply. Performs an explicit `std::fs::symlink_metadata`
 /// check on the workspace-relative path and dispatches accordingly.
 ///
-/// Symmetric with `chan_workspace::fs_ops::walk_drive_with`; the cold-
+/// Symmetric with `chan_workspace::fs_ops::walk_workspace_with`; the cold-
 /// boot walker drops symlinks/specials, and this helper does the
 /// same for the watch path. Without this gate a single user-created
 /// symlink would surface `Workspace::index_file`'s `SpecialFile` error
@@ -971,13 +971,13 @@ mod tests {
         check()
     }
 
-    fn setup_drive() -> (TempDir, TempDir, Arc<Workspace>) {
+    fn setup_workspace() -> (TempDir, TempDir, Arc<Workspace>) {
         let cfg = TempDir::new().unwrap();
-        let drive_dir = TempDir::new().unwrap();
+        let workspace_dir = TempDir::new().unwrap();
         let lib = Library::open_at(cfg.path().join("config.toml")).unwrap();
-        lib.register_workspace(drive_dir.path()).unwrap();
-        let workspace = lib.open_workspace(drive_dir.path()).unwrap();
-        (cfg, drive_dir, workspace)
+        lib.register_workspace(workspace_dir.path()).unwrap();
+        let workspace = lib.open_workspace(workspace_dir.path()).unwrap();
+        (cfg, workspace_dir, workspace)
     }
 
     fn ev(kind: WatchKind, path: Option<&str>, to: Option<&str>) -> WatchEvent {
@@ -1075,7 +1075,7 @@ mod tests {
     }
 
     #[test]
-    fn vcs_burst_threshold_only_applies_to_vcs_aware_drives() {
+    fn vcs_burst_threshold_only_applies_to_vcs_aware_workspaces() {
         assert!(!should_rebuild_for_vcs_burst(
             WatchContext::default(),
             VCS_BURST_REBUILD_THRESHOLD
@@ -1174,7 +1174,7 @@ mod tests {
 
     #[test]
     fn apply_watch_change_indexes_regular_file() {
-        let (_cfg, dir, workspace) = setup_drive();
+        let (_cfg, dir, workspace) = setup_workspace();
         fs::write(dir.path().join("a.md"), "# A\n\nbody\n").unwrap();
         let outcome = apply_watch_change(&workspace, "a.md", false).unwrap();
         assert_eq!(outcome, ApplyOutcome::Indexed);
@@ -1258,7 +1258,7 @@ mod tests {
     }
 
     #[test]
-    fn reconcile_idle_clears_pill_when_drive_is_gone() {
+    fn reconcile_idle_clears_pill_when_workspace_is_gone() {
         // Bug 9 clear path: a rebuild that resolves after the workspace
         // cell was swapped out (reset/shutdown) must still leave the
         // status out of `Building`, or the pill is stuck forever.
@@ -1281,8 +1281,8 @@ mod tests {
     }
 
     #[test]
-    fn reconcile_idle_reads_live_stats_when_drive_present() {
-        let (_cfg, dir, workspace) = setup_drive();
+    fn reconcile_idle_reads_live_stats_when_workspace_present() {
+        let (_cfg, dir, workspace) = setup_workspace();
         fs::write(dir.path().join("a.md"), "# A\n\nbody token\n").unwrap();
         apply_watch_change(&workspace, "a.md", false).unwrap();
         let status = Arc::new(Mutex::new(IndexStatus::Building {
@@ -1308,8 +1308,8 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn idle_indexer_does_not_keep_drive_handle_alive() {
-        let (_cfg, _dir, workspace) = setup_drive();
+    async fn idle_indexer_does_not_keep_workspace_handle_alive() {
+        let (_cfg, _dir, workspace) = setup_workspace();
         let (_events_tx, events_rx) = tokio::sync::broadcast::channel(1);
         let indexer = super::Indexer::spawn(
             workspace.clone(),
@@ -1344,12 +1344,12 @@ mod tests {
         // do not stack their `spawn_blocking` re-index load on each
         // other under the full parallel `cargo test` run.
         let _serial = boot_walk_test_lock();
-        let (_cfg, drive_dir, workspace) = setup_drive();
+        let (_cfg, workspace_dir, workspace) = setup_workspace();
 
         // Seed workspace root to force the ELSE IF branch on the
         // SECOND Indexer::spawn (graph + BM25 non-empty after
         // initial reindex).
-        std::fs::write(drive_dir.path().join("seed.md"), "# seed\nbody\n").unwrap();
+        std::fs::write(workspace_dir.path().join("seed.md"), "# seed\nbody\n").unwrap();
         workspace.reindex(None).unwrap();
         assert!(workspace.index_stats().unwrap().indexed_docs > 0);
 
@@ -1410,7 +1410,7 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn indexer_spawn_walks_drafts_on_boot_when_drive_root_has_content() {
+    async fn indexer_spawn_walks_drafts_on_boot_when_workspace_root_has_content() {
         // systacean-38: empirical test of `-37`'s unconditional
         // boot walk. Replicates @@WebtestA's repro: workspace has
         // workspace-root content (so reindex would NOT fire on
@@ -1426,11 +1426,11 @@ mod tests {
         // do not stack their `spawn_blocking` re-index load on each
         // other under the full parallel `cargo test` run.
         let _serial = boot_walk_test_lock();
-        let (_cfg, drive_dir, workspace) = setup_drive();
+        let (_cfg, workspace_dir, workspace) = setup_workspace();
 
         // Seed workspace root with content so `indexed_docs > 0`
         // after we reindex below.
-        std::fs::write(drive_dir.path().join("seed.md"), "# seed\nbody\n").unwrap();
+        std::fs::write(workspace_dir.path().join("seed.md"), "# seed\nbody\n").unwrap();
         workspace.reindex(None).unwrap();
         let stats = workspace.index_stats().unwrap();
         assert!(stats.indexed_docs > 0, "seed not indexed: {stats:?}");
@@ -1497,7 +1497,7 @@ mod tests {
         // `index_draft_file` (parallel to the `Workspace::stat` /
         // `read_text` / `list` unified-path API from
         // `-26`/`-29`/`-32`).
-        let (_cfg, _dir, workspace) = setup_drive();
+        let (_cfg, _dir, workspace) = setup_workspace();
         workspace.create_draft_dir("untitled-1").unwrap();
         fs::write(
             workspace.drafts_dir().join("untitled-1").join("draft.md"),
@@ -1534,7 +1534,7 @@ mod tests {
 
     #[test]
     fn create_event_admits_new_indexable_file_into_bm25() {
-        let (_cfg, dir, workspace) = setup_drive();
+        let (_cfg, dir, workspace) = setup_workspace();
         fs::write(
             dir.path().join("brand.md"),
             "# Brand\n\nnew doc with keyword brandnewprobe\n",
@@ -1584,7 +1584,7 @@ mod tests {
 
     #[test]
     fn rapid_modify_burst_indexes_latest_file_body() {
-        let (_cfg, dir, workspace) = setup_drive();
+        let (_cfg, dir, workspace) = setup_workspace();
         let path = dir.path().join("rapid.md");
         fs::write(&path, "# Rapid\n\nrapid-token-00\n").unwrap();
         assert_eq!(
@@ -1621,14 +1621,14 @@ mod tests {
 
     #[test]
     fn apply_watch_change_forgets_on_delete_flag() {
-        let (_cfg, _dir, workspace) = setup_drive();
+        let (_cfg, _dir, workspace) = setup_workspace();
         let outcome = apply_watch_change(&workspace, "gone.md", true).unwrap();
         assert_eq!(outcome, ApplyOutcome::Forgotten);
     }
 
     #[test]
     fn apply_watch_change_skips_missing_path() {
-        let (_cfg, _dir, workspace) = setup_drive();
+        let (_cfg, _dir, workspace) = setup_workspace();
         let outcome = apply_watch_change(&workspace, "never-existed.md", false).unwrap();
         assert_eq!(outcome, ApplyOutcome::SkippedMissing);
     }
@@ -1636,7 +1636,7 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn apply_watch_change_skips_symlink_to_existing_target() {
-        let (_cfg, dir, workspace) = setup_drive();
+        let (_cfg, dir, workspace) = setup_workspace();
         fs::write(dir.path().join("real.md"), "# Real\n").unwrap();
         std::os::unix::fs::symlink("real.md", dir.path().join("alias.md")).unwrap();
         let outcome = apply_watch_change(&workspace, "alias.md", false).unwrap();
@@ -1646,7 +1646,7 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn apply_watch_change_skips_broken_symlink() {
-        let (_cfg, dir, workspace) = setup_drive();
+        let (_cfg, dir, workspace) = setup_workspace();
         std::os::unix::fs::symlink("does-not-exist.md", dir.path().join("broken.md")).unwrap();
         let outcome = apply_watch_change(&workspace, "broken.md", false).unwrap();
         assert_eq!(outcome, ApplyOutcome::SkippedSpecial);
@@ -1660,7 +1660,7 @@ mod tests {
         // `IndexStatus::Error`. Probe with `mkfifo`; skip the
         // assertion if the binary is unavailable so test runs on
         // minimal containers stay green.
-        let (_cfg, dir, workspace) = setup_drive();
+        let (_cfg, dir, workspace) = setup_workspace();
         let fifo_path = dir.path().join("attach.fifo");
         let status = std::process::Command::new("mkfifo")
             .arg(&fifo_path)
@@ -1679,7 +1679,7 @@ mod tests {
         // Regression: if a user replaces a regular .md with a symlink
         // of the same name, the apply path should clean out the old
         // index row instead of leaving it stale.
-        let (_cfg, dir, workspace) = setup_drive();
+        let (_cfg, dir, workspace) = setup_workspace();
         fs::write(dir.path().join("a.md"), "# A\n").unwrap();
         assert_eq!(
             apply_watch_change(&workspace, "a.md", false).unwrap(),

@@ -87,7 +87,7 @@ pub use registry::{KnownWorkspace, Registry, DEFAULT_INDEX_EXCLUDED_DIRS};
 pub use rich_prompts::{RichPromptSession, RichPromptSubmitReport};
 pub use teams::{Member, Position, TeamConfig, TeamRef};
 pub use trash::{TrashEntry, TRASH_RETENTION_SECS};
-pub use vcs::{detect_drive_vcs, detect_parent_vcs, is_vcs_control_path, VcsKind, VcsParent};
+pub use vcs::{detect_parent_vcs, detect_workspace_vcs, is_vcs_control_path, VcsKind, VcsParent};
 pub use watch::{WatchCallback, WatchEvent, WatchHandle, WatchKind};
 pub use workspace::ReconcileReport;
 pub use workspace::{

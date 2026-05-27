@@ -341,7 +341,7 @@ mod tests {
     // slot. Also test the gap-counting + the first-slot-without-
     // suffix shape.
 
-    fn make_drive() -> (TempDir, TempDir, std::sync::Arc<chan_workspace::Workspace>) {
+    fn make_workspace() -> (TempDir, TempDir, std::sync::Arc<chan_workspace::Workspace>) {
         let cfg = TempDir::new().unwrap();
         let root = TempDir::new().unwrap();
         let lib = chan_workspace::Library::open_at(cfg.path().join("config.toml")).unwrap();
@@ -352,13 +352,13 @@ mod tests {
 
     #[test]
     fn next_rich_prompt_name_first_slot_is_unsuffixed() {
-        let (_cfg, _root, workspace) = make_drive();
+        let (_cfg, _root, workspace) = make_workspace();
         assert_eq!(next_rich_prompt_name(&workspace).unwrap(), "rich-prompt");
     }
 
     #[test]
     fn next_rich_prompt_name_counts_up_through_gaps() {
-        let (_cfg, _root, workspace) = make_drive();
+        let (_cfg, _root, workspace) = make_workspace();
         workspace.create_draft_dir("rich-prompt").unwrap();
         assert_eq!(next_rich_prompt_name(&workspace).unwrap(), "rich-prompt-1");
         workspace.create_draft_dir("rich-prompt-1").unwrap();
@@ -369,7 +369,7 @@ mod tests {
     fn next_rich_prompt_name_ignores_untitled_drafts() {
         // Slice-a `untitled` drafts should not shift the
         // rich-prompt sequence: the picker filters by prefix.
-        let (_cfg, _root, workspace) = make_drive();
+        let (_cfg, _root, workspace) = make_workspace();
         workspace.create_draft_dir("untitled").unwrap();
         workspace.create_draft_dir("untitled-1").unwrap();
         assert_eq!(next_rich_prompt_name(&workspace).unwrap(), "rich-prompt");
@@ -381,7 +381,7 @@ mod tests {
         // still bump past the existing tail (matching the
         // `next_untitled_draft_name` shape, which monotonically
         // climbs rather than reusing released slots).
-        let (_cfg, _root, workspace) = make_drive();
+        let (_cfg, _root, workspace) = make_workspace();
         workspace.create_draft_dir("rich-prompt").unwrap();
         workspace.create_draft_dir("rich-prompt-2").unwrap();
         // Gap at `rich-prompt-1` is reused (picker walks from
@@ -391,7 +391,7 @@ mod tests {
 
     #[test]
     fn create_draft_sync_seeds_title() {
-        let (_cfg, _root, workspace) = make_drive();
+        let (_cfg, _root, workspace) = make_workspace();
 
         let name = create_draft_sync(&workspace).unwrap();
         let path = format!("Drafts/{name}/draft.md");
@@ -402,7 +402,7 @@ mod tests {
 
     #[test]
     fn inspect_draft_sync_reports_workspace_shape() {
-        let (_cfg, _root, workspace) = make_drive();
+        let (_cfg, _root, workspace) = make_workspace();
         workspace.create_draft_dir("untitled-1").unwrap();
         workspace
             .write_text("Drafts/untitled-1/draft.md", "# draft\n")
@@ -421,7 +421,7 @@ mod tests {
 
     #[test]
     fn promote_draft_sync_returns_target_path_and_mode() {
-        let (_cfg, root, workspace) = make_drive();
+        let (_cfg, root, workspace) = make_workspace();
         std::fs::create_dir_all(root.path().join("notes")).unwrap();
         workspace.create_draft_dir("untitled-1").unwrap();
         workspace
@@ -442,7 +442,7 @@ mod tests {
 
     #[test]
     fn discard_draft_sync_removes_workspace() {
-        let (_cfg, _root, workspace) = make_drive();
+        let (_cfg, _root, workspace) = make_workspace();
         workspace.create_draft_dir("untitled-1").unwrap();
         workspace
             .write_text("Drafts/untitled-1/draft.md", "# draft\n")

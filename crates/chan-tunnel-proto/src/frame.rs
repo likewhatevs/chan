@@ -70,7 +70,7 @@ mod tests {
         let h = Hello {
             protocol: ProtocolVersion::V1,
             client_version: "chan/0.4.0".into(),
-            drive: "notes".into(),
+            workspace: "notes".into(),
             public: false,
         };
         let mut buf = BytesMut::new();
@@ -78,7 +78,7 @@ mod tests {
         let got: Hello = decode_frame(&mut buf).unwrap();
         assert_eq!(got.protocol, h.protocol);
         assert_eq!(got.client_version, h.client_version);
-        assert_eq!(got.drive, h.drive);
+        assert_eq!(got.workspace, h.workspace);
         assert!(buf.is_empty());
     }
 
@@ -87,7 +87,7 @@ mod tests {
         let h = Hello {
             protocol: ProtocolVersion::V1,
             client_version: "chan/0.4.0".into(),
-            drive: "notes".into(),
+            workspace: "notes".into(),
             public: false,
         };
         let mut full = BytesMut::new();

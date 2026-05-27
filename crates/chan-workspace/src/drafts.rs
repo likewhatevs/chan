@@ -281,15 +281,16 @@ pub fn discard(drafts_dir: &Path, draft_trash_dir: &Path, name: &str) -> Result<
 /// semantics.
 pub fn promote(
     drafts_dir: &Path,
-    drive_root: &Path,
-    drive_root_canon: &Path,
+    workspace_root: &Path,
+    workspace_root_canon: &Path,
     name: &str,
     target_rel: &str,
 ) -> Result<DraftPromoteReport> {
     let scan = scan_draft(drafts_dir, name)?;
     let target_rel_path = fs_ops::validate_rel(target_rel)?;
     let target_rel_str = posix_path(&target_rel_path);
-    let target_abs = fs_ops::resolve_safe_strict_canon(drive_root, drive_root_canon, target_rel)?;
+    let target_abs =
+        fs_ops::resolve_safe_strict_canon(workspace_root, workspace_root_canon, target_rel)?;
 
     if !fs_ops::is_editable_text(&target_rel_str) && !scan.inspection.has_attachments {
         return Err(ChanError::NotEditableText(target_rel_str));
@@ -866,20 +867,20 @@ mod tests {
     fn promote_moves_directory_atomically() {
         let td = TempDir::new().unwrap();
         let drafts_root = td.path().join("drafts");
-        let drive_root = td.path().join("workspace");
+        let workspace_root = td.path().join("workspace");
         ensure_root(&drafts_root).unwrap();
-        fs::create_dir_all(&drive_root).unwrap();
+        fs::create_dir_all(&workspace_root).unwrap();
         let draft = create_dir(&drafts_root, "untitled-1").unwrap();
         fs::write(draft.abs.join("draft.md"), b"# hello\n").unwrap();
         fs::write(draft.abs.join("image.png"), [1, 2, 3]).unwrap();
 
-        let target = drive_root.join("notes").join("untitled-1");
+        let target = workspace_root.join("notes").join("untitled-1");
         fs::create_dir_all(target.parent().unwrap()).unwrap();
-        let drive_root_canon = drive_root.canonicalize().unwrap();
+        let workspace_root_canon = workspace_root.canonicalize().unwrap();
         let report = promote(
             &drafts_root,
-            &drive_root,
-            &drive_root_canon,
+            &workspace_root,
+            &workspace_root_canon,
             "untitled-1",
             "notes/untitled-1",
         )
@@ -896,17 +897,17 @@ mod tests {
     fn promote_single_file_moves_draft_md_to_target_file() {
         let td = TempDir::new().unwrap();
         let drafts_root = td.path().join("drafts");
-        let drive_root = td.path().join("workspace");
+        let workspace_root = td.path().join("workspace");
         ensure_root(&drafts_root).unwrap();
-        fs::create_dir_all(drive_root.join("notes")).unwrap();
+        fs::create_dir_all(workspace_root.join("notes")).unwrap();
         let draft = create_dir(&drafts_root, "untitled-1").unwrap();
         fs::write(draft.abs.join("draft.md"), b"# hello\n").unwrap();
-        let drive_root_canon = drive_root.canonicalize().unwrap();
+        let workspace_root_canon = workspace_root.canonicalize().unwrap();
 
         let report = promote(
             &drafts_root,
-            &drive_root,
-            &drive_root_canon,
+            &workspace_root,
+            &workspace_root_canon,
             "untitled-1",
             "notes/draft.md",
         )
@@ -915,7 +916,7 @@ mod tests {
         assert_eq!(report.mode, DraftPromoteMode::File);
         assert!(!drafts_root.join("untitled-1").exists());
         assert_eq!(
-            fs::read_to_string(drive_root.join("notes/draft.md")).unwrap(),
+            fs::read_to_string(workspace_root.join("notes/draft.md")).unwrap(),
             "# hello\n"
         );
     }
@@ -924,18 +925,18 @@ mod tests {
     fn promote_draft_merges_into_existing_dir_without_clobber() {
         let td = TempDir::new().unwrap();
         let drafts_root = td.path().join("drafts");
-        let drive_root = td.path().join("workspace");
+        let workspace_root = td.path().join("workspace");
         ensure_root(&drafts_root).unwrap();
-        fs::create_dir_all(drive_root.join("notes")).unwrap();
+        fs::create_dir_all(workspace_root.join("notes")).unwrap();
         let draft = create_dir(&drafts_root, "untitled-1").unwrap();
         fs::write(draft.abs.join("draft.md"), b"# hello\n").unwrap();
         fs::write(draft.abs.join("pasted.png"), [1, 2, 3]).unwrap();
-        let drive_root_canon = drive_root.canonicalize().unwrap();
+        let workspace_root_canon = workspace_root.canonicalize().unwrap();
 
         let report = promote(
             &drafts_root,
-            &drive_root,
-            &drive_root_canon,
+            &workspace_root,
+            &workspace_root_canon,
             "untitled-1",
             "notes",
         )
@@ -943,27 +944,27 @@ mod tests {
 
         assert_eq!(report.mode, DraftPromoteMode::DirectoryMerged);
         assert!(!drafts_root.join("untitled-1").exists());
-        assert!(drive_root.join("notes/draft.md").is_file());
-        assert!(drive_root.join("notes/pasted.png").is_file());
+        assert!(workspace_root.join("notes/draft.md").is_file());
+        assert!(workspace_root.join("notes/pasted.png").is_file());
     }
 
     #[test]
     fn promote_draft_rejects_nested_collision() {
         let td = TempDir::new().unwrap();
         let drafts_root = td.path().join("drafts");
-        let drive_root = td.path().join("workspace");
+        let workspace_root = td.path().join("workspace");
         ensure_root(&drafts_root).unwrap();
-        fs::create_dir_all(drive_root.join("notes")).unwrap();
-        fs::write(drive_root.join("notes/draft.md"), b"existing").unwrap();
+        fs::create_dir_all(workspace_root.join("notes")).unwrap();
+        fs::write(workspace_root.join("notes/draft.md"), b"existing").unwrap();
         let draft = create_dir(&drafts_root, "untitled-1").unwrap();
         fs::write(draft.abs.join("draft.md"), b"# hello\n").unwrap();
         fs::write(draft.abs.join("pasted.png"), [1, 2, 3]).unwrap();
-        let drive_root_canon = drive_root.canonicalize().unwrap();
+        let workspace_root_canon = workspace_root.canonicalize().unwrap();
 
         let err = promote(
             &drafts_root,
-            &drive_root,
-            &drive_root_canon,
+            &workspace_root,
+            &workspace_root_canon,
             "untitled-1",
             "notes",
         )
@@ -977,17 +978,17 @@ mod tests {
     fn promote_rejects_target_escape() {
         let td = TempDir::new().unwrap();
         let drafts_root = td.path().join("drafts");
-        let drive_root = td.path().join("workspace");
+        let workspace_root = td.path().join("workspace");
         ensure_root(&drafts_root).unwrap();
-        fs::create_dir_all(&drive_root).unwrap();
+        fs::create_dir_all(&workspace_root).unwrap();
         let draft = create_dir(&drafts_root, "untitled-1").unwrap();
         fs::write(draft.abs.join("draft.md"), b"# hello\n").unwrap();
-        let drive_root_canon = drive_root.canonicalize().unwrap();
+        let workspace_root_canon = workspace_root.canonicalize().unwrap();
 
         let err = promote(
             &drafts_root,
-            &drive_root,
-            &drive_root_canon,
+            &workspace_root,
+            &workspace_root_canon,
             "untitled-1",
             "../outside.md",
         )
@@ -1018,17 +1019,17 @@ mod tests {
     fn promote_rejects_when_target_exists() {
         let td = TempDir::new().unwrap();
         let drafts_root = td.path().join("drafts");
-        let drive_root = td.path().join("workspace");
+        let workspace_root = td.path().join("workspace");
         ensure_root(&drafts_root).unwrap();
-        fs::create_dir_all(&drive_root).unwrap();
+        fs::create_dir_all(&workspace_root).unwrap();
         create_dir(&drafts_root, "untitled-1").unwrap();
-        let target = drive_root.join("untitled-1");
+        let target = workspace_root.join("untitled-1");
         fs::create_dir_all(&target).unwrap();
-        let drive_root_canon = drive_root.canonicalize().unwrap();
+        let workspace_root_canon = workspace_root.canonicalize().unwrap();
         assert!(promote(
             &drafts_root,
-            &drive_root,
-            &drive_root_canon,
+            &workspace_root,
+            &workspace_root_canon,
             "untitled-1",
             "untitled-1",
         )
@@ -1040,14 +1041,14 @@ mod tests {
     fn promote_rejects_missing_draft() {
         let td = TempDir::new().unwrap();
         let drafts_root = td.path().join("drafts");
-        let drive_root = td.path().join("workspace");
+        let workspace_root = td.path().join("workspace");
         ensure_root(&drafts_root).unwrap();
-        fs::create_dir_all(&drive_root).unwrap();
-        let drive_root_canon = drive_root.canonicalize().unwrap();
+        fs::create_dir_all(&workspace_root).unwrap();
+        let workspace_root_canon = workspace_root.canonicalize().unwrap();
         assert!(promote(
             &drafts_root,
-            &drive_root,
-            &drive_root_canon,
+            &workspace_root,
+            &workspace_root_canon,
             "ghost",
             "untitled-1",
         )

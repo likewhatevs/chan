@@ -2,9 +2,9 @@
 //!
 //! The eventual entry point is an `axum::Router` exposing
 //! `POST /v1/tunnel`; nginx (`grpc_pass`) forwards h2c from
-//! `drive.chan.app/v1/tunnel` to drive-proxy's tunnel listener.
+//! `drive.chan.app/v1/tunnel` to workspace-proxy's tunnel listener.
 //! After the Hello/HelloAck handshake the duplex is handed to
-//! yamux, the registered drive is inserted into the shared
+//! yamux, the registered workspace is inserted into the shared
 //! `Registry`, and the server side opens new substreams to forward
 //! public requests.
 //!
@@ -58,10 +58,10 @@ pub(crate) const MAX_INFLIGHT_HANDSHAKES: usize = 1024;
 pub const TUNNEL_SCOPE: &str = "tunnel";
 
 /// Extra scope required when the client requests `Hello.public =
-/// true` (anonymous-readable drive). Tokens carrying only
-/// `TUNNEL_SCOPE` can still register a drive, but the public bit is
+/// true` (anonymous-readable workspace). Tokens carrying only
+/// `TUNNEL_SCOPE` can still register a workspace, but the public bit is
 /// gated separately so a leaked / lower-privilege token cannot
-/// expose a drive to the open internet on its own. See the
+/// expose a workspace to the open internet on its own. See the
 /// `MissingPublicScope` error and the listener's `pre_ack` hook
 /// (`tunnel.rs`) for enforcement.
 pub const TUNNEL_PUBLIC_SCOPE: &str = "tunnel.public";
@@ -97,8 +97,8 @@ pub enum ServerError {
     #[error("handshake: {0}")]
     Handshake(String),
 
-    #[error("user {user} reached max concurrent drives ({max})")]
-    TooManyDrives { user: String, max: usize },
+    #[error("user {user} reached max concurrent workspaces ({max})")]
+    TooManyWorkspaces { user: String, max: usize },
 }
 
 impl From<chan_tunnel_proto::FrameError> for ServerError {
@@ -119,7 +119,7 @@ impl From<chan_tunnel_proto::IoFrameError> for ServerError {
 /// Result of validating a bearer token. Returned by `Validator`
 /// and used to populate the HelloAck plus the registry key.
 /// Tokens are user-scoped: one validated token can register any
-/// number of `(username, drive)` tunnels, each from a separate
+/// number of `(username, workspace)` tunnels, each from a separate
 /// `chan serve` instance.
 #[derive(Debug, Clone)]
 pub struct Validated {
@@ -150,29 +150,29 @@ pub trait Validator: Send + Sync + 'static {
     async fn validate(&self, token: &str) -> Result<Validated, ServerError>;
 }
 
-/// Public path prefix shape: `/{drive}`. The fronting proxy now
+/// Public path prefix shape: `/{workspace}`. The fronting proxy now
 /// uses wildcard subdomains (`{user}.drive.chan.app`), so the
 /// username lives in the host header, not in the path. The path
-/// prefix is exactly the drive segment so chan-server's
+/// prefix is exactly the workspace segment so chan-server's
 /// `<meta name="chan-prefix">` makes the SPA's relative URLs
-/// resolve correctly under `{user}.drive.chan.app/{drive}/...`. No
-/// trailing slash; rest of the path is the drive-relative request.
-fn make_prefix(_username: &str, drive: &str) -> String {
-    format!("/{drive}")
+/// resolve correctly under `{user}.drive.chan.app/{workspace}/...`. No
+/// trailing slash; rest of the path is the workspace-relative request.
+fn make_prefix(_username: &str, workspace: &str) -> String {
+    format!("/{workspace}")
 }
 
-/// Drive the Hello/HelloAck round-trip over `socket`. Validates
-/// the bearer `token` via `validator` and uses the drive name from
+/// Workspace the Hello/HelloAck round-trip over `socket`. Validates
+/// the bearer `token` via `validator` and uses the workspace name from
 /// the client's Hello to build the public path. Returns the yamux
 /// server connection ready to open outbound substreams.
 ///
 /// `pre_ack` runs after the token is validated and before the
 /// HelloAck is written. Returning an error from it aborts the
 /// handshake without registering anything; the caller uses it for
-/// post-validate policy checks (per-user drive limits, etc.).
+/// post-validate policy checks (per-user workspace limits, etc.).
 ///
 /// Order of operations: validator runs first, *then* the Hello is
-/// read and the drive name validated. The tunnel listener
+/// read and the workspace name validated. The tunnel listener
 /// (`handle_tunnel_conn`) needs that order to send 401 on bad
 /// tokens before committing to the body, and consistency keeps the
 /// two paths from diverging.
@@ -198,7 +198,7 @@ where
 /// by the tunnel listener to validate the token *before* sending
 /// the 200 response so a 401 can come back when validation fails;
 /// once we've replied 200, this finishes the wire dance (Hello in,
-/// drive-name check, pre_ack, HelloAck out, yamux wrap).
+/// workspace-name check, pre_ack, HelloAck out, yamux wrap).
 pub async fn handshake_validated<S, F>(
     mut socket: S,
     validated: Validated,
@@ -210,7 +210,7 @@ where
 {
     // Defense-in-depth: the validator has already authenticated the
     // token, but the username it returns flows into the public URL
-    // path /{user}/{drive}. If the upstream identity service ever
+    // path /{user}/{workspace}. If the upstream identity service ever
     // emits a username with `/`, `..`, whitespace, or other
     // path-affecting bytes, the public router would mis-route or
     // leak the prefix. Refuse here so the rest of the pipeline can
@@ -235,9 +235,9 @@ where
         write_refusal(&mut socket, error_code::UNSUPPORTED_PROTOCOL, &msg).await;
         return Err(ServerError::Handshake(msg));
     }
-    if !chan_tunnel_proto::is_valid_drive_name(&hello.drive) {
-        let msg = format!("invalid drive name {:?}", hello.drive);
-        write_refusal(&mut socket, error_code::INVALID_DRIVE_NAME, &msg).await;
+    if !chan_tunnel_proto::is_valid_workspace_name(&hello.workspace) {
+        let msg = format!("invalid workspace name {:?}", hello.workspace);
+        write_refusal(&mut socket, error_code::INVALID_WORKSPACE_NAME, &msg).await;
         return Err(ServerError::Handshake(msg));
     }
 
@@ -249,9 +249,9 @@ where
 
     let ack = HelloAck::Ok(chan_tunnel_proto::HelloAckOk {
         protocol: ProtocolVersion::V1,
-        prefix: make_prefix(&validated.username, &hello.drive),
+        prefix: make_prefix(&validated.username, &hello.workspace),
         user: validated.username.clone(),
-        drive: hello.drive.clone(),
+        workspace: hello.workspace.clone(),
     });
     write_frame(&mut socket, &ack).await?;
 
@@ -269,9 +269,9 @@ fn refusal_for(e: &ServerError) -> (&'static str, String) {
             error_code::MISSING_PUBLIC_SCOPE,
             "token does not have tunnel.public scope".to_string(),
         ),
-        ServerError::TooManyDrives { user, max } => (
-            error_code::TOO_MANY_DRIVES,
-            format!("user {user} reached max concurrent drives ({max})"),
+        ServerError::TooManyWorkspaces { user, max } => (
+            error_code::TOO_MANY_WORKSPACES,
+            format!("user {user} reached max concurrent workspaces ({max})"),
         ),
         // Other variants (InvalidToken, MissingScope, Identity, Io,
         // Handshake) are handled at the listener layer before
@@ -320,5 +320,5 @@ mod registry;
 mod tunnel;
 
 pub use public::{public_router, public_router_with, PublicConfig, DEFAULT_REQUEST_BODY_CAP};
-pub use registry::{DriveInfo, OpenError, Registry, TunnelHandle, TunnelInfo};
+pub use registry::{OpenError, Registry, TunnelHandle, TunnelInfo, WorkspaceInfo};
 pub use tunnel::serve_tunnel_listener;

@@ -31,16 +31,18 @@ impl ProgressCallback for Collector {
 #[test]
 fn reindex_emits_graph_and_index_stages() {
     let cfg = TempDir::new().unwrap();
-    let drive_root = TempDir::new().unwrap();
+    let workspace_root = TempDir::new().unwrap();
     let lib = Library::open_at(cfg.path().join("config.toml")).unwrap();
-    lib.register_workspace(drive_root.path()).unwrap();
-    let drive = lib.open_workspace(drive_root.path()).unwrap();
-    drive.write_text("intro.md", "# Intro\n\nHello\n").unwrap();
-    drive.write_text("notes/x.md", "# X\n\nhi\n").unwrap();
-    drive.write_text("notes/y.txt", "plain\n").unwrap();
+    lib.register_workspace(workspace_root.path()).unwrap();
+    let workspace = lib.open_workspace(workspace_root.path()).unwrap();
+    workspace
+        .write_text("intro.md", "# Intro\n\nHello\n")
+        .unwrap();
+    workspace.write_text("notes/x.md", "# X\n\nhi\n").unwrap();
+    workspace.write_text("notes/y.txt", "plain\n").unwrap();
 
     let cb = Collector::new();
-    drive.reindex_with(None, &cb).unwrap();
+    workspace.reindex_with(None, &cb).unwrap();
     let stages = cb.stages();
     assert!(
         stages.contains(&ProgressStage::GraphRebuild),
@@ -83,37 +85,37 @@ fn no_progress_passes_through_silently() {
     // same outcome with zero callback overhead (no panics, no
     // observable side effects).
     let cfg = TempDir::new().unwrap();
-    let drive_root = TempDir::new().unwrap();
+    let workspace_root = TempDir::new().unwrap();
     let lib = Library::open_at(cfg.path().join("config.toml")).unwrap();
-    lib.register_workspace(drive_root.path()).unwrap();
-    let drive = lib.open_workspace(drive_root.path()).unwrap();
-    drive.write_text("a.md", "# a\n").unwrap();
-    let s1 = drive.reindex_with(None, &NoProgress).unwrap();
+    lib.register_workspace(workspace_root.path()).unwrap();
+    let workspace = lib.open_workspace(workspace_root.path()).unwrap();
+    workspace.write_text("a.md", "# a\n").unwrap();
+    let s1 = workspace.reindex_with(None, &NoProgress).unwrap();
     assert_eq!(s1.indexed, 1);
 }
 
 #[test]
 fn rename_with_link_rewrite_with_emits_rewrite_progress() {
     let cfg = TempDir::new().unwrap();
-    let drive_root = TempDir::new().unwrap();
+    let workspace_root = TempDir::new().unwrap();
     let lib = Library::open_at(cfg.path().join("config.toml")).unwrap();
-    lib.register_workspace(drive_root.path()).unwrap();
-    let drive = lib.open_workspace(drive_root.path()).unwrap();
+    lib.register_workspace(workspace_root.path()).unwrap();
+    let workspace = lib.open_workspace(workspace_root.path()).unwrap();
     // Two source files reference the target by markdown link so
     // the rewriter has work to do per source.
-    drive
+    workspace
         .write_text("src1.md", "# S1\n\nlink to [target](old/target.md)\n")
         .unwrap();
-    drive
+    workspace
         .write_text("src2.md", "# S2\n\nalso linking [target](old/target.md)\n")
         .unwrap();
-    drive
+    workspace
         .write_text("old/target.md", "# Target\n\nbody\n")
         .unwrap();
-    drive.reindex(None).unwrap();
+    workspace.reindex(None).unwrap();
 
     let cb = Collector::new();
-    drive
+    workspace
         .rename_with_link_rewrite_with("old/target.md", "new/target.md", &cb)
         .unwrap();
     let stages = cb.stages();
@@ -127,10 +129,10 @@ fn rename_with_link_rewrite_with_emits_rewrite_progress() {
 fn import_contacts_with_emits_per_contact_progress() {
     use chan_workspace::{Contact, EmailAddress, ImportOpts};
     let cfg = TempDir::new().unwrap();
-    let drive_root = TempDir::new().unwrap();
+    let workspace_root = TempDir::new().unwrap();
     let lib = Library::open_at(cfg.path().join("config.toml")).unwrap();
-    lib.register_workspace(drive_root.path()).unwrap();
-    let drive = lib.open_workspace(drive_root.path()).unwrap();
+    lib.register_workspace(workspace_root.path()).unwrap();
+    let workspace = lib.open_workspace(workspace_root.path()).unwrap();
 
     let contacts = vec![
         Contact {
@@ -147,7 +149,7 @@ fn import_contacts_with_emits_per_contact_progress() {
         },
     ];
     let cb = Collector::new();
-    let summary = drive
+    let summary = workspace
         .import_contacts_with("Contacts", contacts, ImportOpts { overwrite: false }, &cb)
         .unwrap();
     assert_eq!(summary.outcomes.len(), 2);
@@ -173,19 +175,19 @@ fn import_contacts_with_emits_per_contact_progress() {
 fn reset_workspace_with_emits_one_event_per_subsystem() {
     use chan_workspace::ResetMode;
     let cfg = TempDir::new().unwrap();
-    let drive_root = TempDir::new().unwrap();
+    let workspace_root = TempDir::new().unwrap();
     let lib = Library::open_at(cfg.path().join("config.toml")).unwrap();
-    lib.register_workspace(drive_root.path()).unwrap();
+    lib.register_workspace(workspace_root.path()).unwrap();
     {
-        // Open + write so the per-drive state dirs exist on disk.
-        let drive = lib.open_workspace(drive_root.path()).unwrap();
-        drive.write_text("a.md", "# a\n").unwrap();
-        drive.reindex(None).unwrap();
-        // Drop the drive so the writer flock is released before reset.
+        // Open + write so the per-workspace state dirs exist on disk.
+        let workspace = lib.open_workspace(workspace_root.path()).unwrap();
+        workspace.write_text("a.md", "# a\n").unwrap();
+        workspace.reindex(None).unwrap();
+        // Drop the workspace so the writer flock is released before reset.
     }
 
     let cb = Collector::new();
-    lib.reset_workspace_with(drive_root.path(), ResetMode::State, &cb)
+    lib.reset_workspace_with(workspace_root.path(), ResetMode::State, &cb)
         .unwrap();
     let reset_events: Vec<_> =
         cb.0.lock()
@@ -220,7 +222,7 @@ fn is_reindexing_flips_during_reindex_with() {
     use std::sync::Arc;
 
     struct FlagWatcher {
-        drive: Arc<chan_workspace::Workspace>,
+        workspace: Arc<chan_workspace::Workspace>,
         seen_true: AtomicBool,
     }
     impl ProgressCallback for FlagWatcher {
@@ -229,7 +231,7 @@ fn is_reindexing_flips_during_reindex_with() {
             // If this ever sees false, the guard is broken (cleared
             // too early) or the flag was never set.
             assert!(
-                self.drive.is_reindexing(),
+                self.workspace.is_reindexing(),
                 "is_reindexing() must be true while ProgressCallback fires"
             );
             self.seen_true.store(true, Ordering::Release);
@@ -237,30 +239,30 @@ fn is_reindexing_flips_during_reindex_with() {
     }
 
     let cfg = TempDir::new().unwrap();
-    let drive_root = TempDir::new().unwrap();
+    let workspace_root = TempDir::new().unwrap();
     let lib = Library::open_at(cfg.path().join("config.toml")).unwrap();
-    lib.register_workspace(drive_root.path()).unwrap();
-    let drive = lib.open_workspace(drive_root.path()).unwrap();
-    drive.write_text("a.md", "# A\n\nbody\n").unwrap();
-    drive.write_text("b.md", "# B\n\nbody\n").unwrap();
+    lib.register_workspace(workspace_root.path()).unwrap();
+    let workspace = lib.open_workspace(workspace_root.path()).unwrap();
+    workspace.write_text("a.md", "# A\n\nbody\n").unwrap();
+    workspace.write_text("b.md", "# B\n\nbody\n").unwrap();
 
     assert!(
-        !drive.is_reindexing(),
-        "fresh drive should not report a reindex in progress"
+        !workspace.is_reindexing(),
+        "fresh workspace should not report a reindex in progress"
     );
 
     let watcher = FlagWatcher {
-        drive: drive.clone(),
+        workspace: workspace.clone(),
         seen_true: AtomicBool::new(false),
     };
-    drive.reindex_with(None, &watcher).unwrap();
+    workspace.reindex_with(None, &watcher).unwrap();
 
     assert!(
         watcher.seen_true.load(Ordering::Acquire),
         "expected at least one ProgressEvent so the flag could be observed",
     );
     assert!(
-        !drive.is_reindexing(),
+        !workspace.is_reindexing(),
         "is_reindexing() must clear after reindex_with returns"
     );
 }
@@ -320,11 +322,11 @@ fn progress_event_serializes_for_the_wire() {
 #[test]
 fn progress_fn_adapter_lets_closures_be_callbacks() {
     let cfg = TempDir::new().unwrap();
-    let drive_root = TempDir::new().unwrap();
+    let workspace_root = TempDir::new().unwrap();
     let lib = Library::open_at(cfg.path().join("config.toml")).unwrap();
-    lib.register_workspace(drive_root.path()).unwrap();
-    let drive = lib.open_workspace(drive_root.path()).unwrap();
-    drive.write_text("a.md", "# a\n").unwrap();
+    lib.register_workspace(workspace_root.path()).unwrap();
+    let workspace = lib.open_workspace(workspace_root.path()).unwrap();
+    workspace.write_text("a.md", "# a\n").unwrap();
 
     let counter = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
     let cb = {
@@ -333,7 +335,7 @@ fn progress_fn_adapter_lets_closures_be_callbacks() {
             counter.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         })
     };
-    drive.reindex_with(None, &*cb).unwrap();
+    workspace.reindex_with(None, &*cb).unwrap();
     assert!(
         counter.load(std::sync::atomic::Ordering::SeqCst) > 0,
         "closure-backed callback should have fired at least once",

@@ -7,19 +7,19 @@ use tempfile::TempDir;
 #[test]
 fn end_to_end_register_open_write_index_search_graph() {
     let cfg = TempDir::new().unwrap();
-    let drive_root = TempDir::new().unwrap();
+    let workspace_root = TempDir::new().unwrap();
 
     let lib = Library::open_at(cfg.path().join("config.toml")).unwrap();
-    lib.register_workspace(drive_root.path()).unwrap();
+    lib.register_workspace(workspace_root.path()).unwrap();
 
-    let drive = lib.open_workspace(drive_root.path()).unwrap();
-    drive
+    let workspace = lib.open_workspace(workspace_root.path()).unwrap();
+    workspace
         .write_text(
             "intro.md",
             "# Welcome\n\nSee [[recipes/pasta]] for #cooking inspiration.\n",
         )
         .unwrap();
-    drive
+    workspace
         .write_text(
             "recipes/pasta.md",
             "# Carbonara\n\nClassic #italian recipe; talk to @@alice.\n",
@@ -27,24 +27,26 @@ fn end_to_end_register_open_write_index_search_graph() {
         .unwrap();
 
     // Tree listing returns both files (sans .chan / .git).
-    let entries = drive.list_tree().unwrap();
+    let entries = workspace.list_tree().unwrap();
     let paths: Vec<_> = entries.iter().map(|e| e.path.clone()).collect();
     assert!(paths.iter().any(|p| p == "intro.md"));
     assert!(paths.iter().any(|p| p == "recipes/pasta.md"));
 
     // Reindex builds both the search index and the graph.
-    let summary = drive.reindex(None).unwrap();
+    let summary = workspace.reindex(None).unwrap();
     assert_eq!(summary.files, 2);
     assert_eq!(summary.indexed, 2);
     assert!(summary.errors.is_empty());
 
     // Full-text search hits the body content.
-    let res = drive.search("carbonara", &SearchOpts::default()).unwrap();
+    let res = workspace
+        .search("carbonara", &SearchOpts::default())
+        .unwrap();
     assert_eq!(res.hits.len(), 1);
     assert_eq!(res.hits[0].path, "recipes/pasta.md");
 
     // Scope filter narrows to a subdir.
-    let scoped = drive
+    let scoped = workspace
         .search(
             "italian",
             &SearchOpts {
@@ -56,7 +58,7 @@ fn end_to_end_register_open_write_index_search_graph() {
     assert_eq!(scoped.hits.len(), 1);
 
     // Graph: tags from both files surface; backlinks resolve.
-    let g = drive.graph().unwrap();
+    let g = workspace.graph().unwrap();
     let tags = g.tags().unwrap();
     let names: Vec<_> = tags.iter().map(|t| t.name.as_str()).collect();
     assert!(names.contains(&"cooking"));
@@ -81,16 +83,18 @@ fn end_to_end_register_open_write_index_search_graph() {
     assert_eq!(h[0].anchor, "carbonara");
 
     // Single-file update path: edit intro, re-index just that file.
-    drive
+    workspace
         .write_text("intro.md", "# Welcome\n\nNo more cooking talk.\n")
         .unwrap();
-    drive.index_file("intro.md").unwrap();
+    workspace.index_file("intro.md").unwrap();
     let cooking_files = g.files_with_tag("cooking").unwrap();
     assert!(cooking_files.is_empty(), "tag should drop after re-index");
 
     // Forget a file: drops from index and graph.
-    drive.forget_file("recipes/pasta.md").unwrap();
-    let res = drive.search("carbonara", &SearchOpts::default()).unwrap();
+    workspace.forget_file("recipes/pasta.md").unwrap();
+    let res = workspace
+        .search("carbonara", &SearchOpts::default())
+        .unwrap();
     assert!(res.hits.is_empty());
     let italian_files = g.files_with_tag("italian").unwrap();
     assert!(italian_files.is_empty());

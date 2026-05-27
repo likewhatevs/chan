@@ -31,9 +31,10 @@ struct MetadataExportDownload {
 
 pub async fn api_metadata_export(State(state): State<Arc<AppState>>) -> Response {
     let library = state.library.clone();
-    let drive_root = state.drive_root.clone();
+    let workspace_root = state.workspace_root.clone();
     let result =
-        tokio::task::spawn_blocking(move || export_metadata_download(&library, &drive_root)).await;
+        tokio::task::spawn_blocking(move || export_metadata_download(&library, &workspace_root))
+            .await;
 
     match result {
         Ok(Ok(download)) => metadata_download_response(download),
@@ -107,12 +108,12 @@ pub async fn api_metadata_import(
 
 fn export_metadata_download(
     library: &Library,
-    drive_root: &Path,
+    workspace_root: &Path,
 ) -> chan_workspace::Result<MetadataExportDownload> {
     let tmp = tempfile::tempdir()?;
     let archive = tmp.path().join("chan-metadata.tar.zst");
     let report = library.export_metadata_archive(
-        drive_root,
+        workspace_root,
         &archive,
         MetadataExportOptions {
             chan_version: env!("CARGO_PKG_VERSION").to_string(),
@@ -194,7 +195,7 @@ fn perform_metadata_import(
     std::fs::write(archive.path(), archive_bytes)
         .map_err(|e| MetadataImportError::Core(e.into()))?;
 
-    let mut cell = take_drive_cell(state)?;
+    let mut cell = take_workspace_cell(state)?;
     state.terminal_sessions.close_all(CloseReason::Workspace);
     state
         .loaded_teams
@@ -203,59 +204,59 @@ fn perform_metadata_import(
         .clear();
     cell.indexer.cancel();
     cell.watch_handle.take();
-    let drive_strong = cell.workspace.clone();
+    let workspace_strong = cell.workspace.clone();
     drop(cell);
 
     let deadline = Instant::now() + IMPORT_DRAIN_DEADLINE;
-    while Arc::strong_count(&drive_strong) > 1 && Instant::now() < deadline {
+    while Arc::strong_count(&workspace_strong) > 1 && Instant::now() < deadline {
         std::thread::sleep(Duration::from_millis(25));
     }
-    if Arc::strong_count(&drive_strong) > 1 {
-        install_drive_cell(state, drive_strong)?;
+    if Arc::strong_count(&workspace_strong) > 1 {
+        install_workspace_cell(state, workspace_strong)?;
         return Err(MetadataImportError::Busy);
     }
-    drop(drive_strong);
+    drop(workspace_strong);
 
     let import_result = state
         .library
         .import_metadata_archive(
-            &state.drive_root,
+            &state.workspace_root,
             archive.path(),
             MetadataImportOptions { rescan, force_scm },
         )
         .map_err(MetadataImportError::Core);
     let restore_result = state
         .library
-        .open_workspace(&state.drive_root)
+        .open_workspace(&state.workspace_root)
         .map_err(MetadataImportError::Core)
-        .and_then(|workspace| install_drive_cell(state, workspace));
+        .and_then(|workspace| install_workspace_cell(state, workspace));
 
     restore_result?;
     import_result
 }
 
-fn take_drive_cell(state: &AppState) -> Result<WorkspaceCell, MetadataImportError> {
+fn take_workspace_cell(state: &AppState) -> Result<WorkspaceCell, MetadataImportError> {
     let mut cell_guard = state
-        .drive_cell
+        .workspace_cell
         .write()
         .map_err(|_| MetadataImportError::Poisoned("workspace cell lock"))?;
     cell_guard.take().ok_or(MetadataImportError::Busy)
 }
 
-fn install_drive_cell(
+fn install_workspace_cell(
     state: &AppState,
     workspace: Arc<Workspace>,
 ) -> Result<(), MetadataImportError> {
-    let cell = build_drive_cell(state, workspace)?;
+    let cell = build_workspace_cell(state, workspace)?;
     let mut cell_guard = state
-        .drive_cell
+        .workspace_cell
         .write()
         .map_err(|_| MetadataImportError::Poisoned("workspace cell lock"))?;
     *cell_guard = Some(cell);
     Ok(())
 }
 
-fn build_drive_cell(
+fn build_workspace_cell(
     state: &AppState,
     workspace: Arc<Workspace>,
 ) -> Result<WorkspaceCell, MetadataImportError> {

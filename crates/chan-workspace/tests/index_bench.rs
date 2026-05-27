@@ -1,6 +1,6 @@
 //! End-to-end indexing benchmark (watcher-scalability spec, @@LaneB).
 //!
-//! Measures wall-clock time to index a realistic drive END-TO-END in two
+//! Measures wall-clock time to index a realistic workspace END-TO-END in two
 //! modes, timing the structural index and the chan-report scan separately
 //! so chan-report's marginal cost is isolated (not inferred from the gap
 //! between two whole reindexes, which would also fold in filesystem-cache
@@ -26,13 +26,13 @@
 //! IGNORED by default so it never runs in CI (it copies a real repo tree).
 //! Run it explicitly with embeddings off:
 //!
-//!   cargo test -p chan-drive --no-default-features --test index_bench \
+//!   cargo test -p chan-workspace --no-default-features --test index_bench \
 //!     -- --ignored --nocapture
 //!
-//! `CHAN_BENCH_REPO=/path/to/a/repo` overrides the drive source; with no
-//! env var it defaults to the chan-drive crate's own repo root (the
+//! `CHAN_BENCH_REPO=/path/to/a/repo` overrides the workspace source; with no
+//! env var it defaults to the chan-workspace crate's own repo root (the
 //! workspace this test ships in), benchmarking THIS repo, which is what
-//! the spec asks for (a filtered copy of this repo as the test drive).
+//! the spec asks for (a filtered copy of this repo as the test workspace).
 //!
 //! `CHAN_BENCH_MAX_FILES` caps how many tracked files are copied (default
 //! 250, `0` = the whole tree). With embeddings off (as required) even the
@@ -53,7 +53,7 @@ fn bench_repo() -> PathBuf {
     if let Ok(p) = std::env::var("CHAN_BENCH_REPO") {
         return PathBuf::from(p);
     }
-    // CARGO_MANIFEST_DIR is .../crates/chan-drive; the repo root is two up.
+    // CARGO_MANIFEST_DIR is .../crates/chan-workspace; the repo root is two up.
     let mut dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     while !dir.join(".git").exists() {
         if !dir.pop() {
@@ -63,7 +63,7 @@ fn bench_repo() -> PathBuf {
     dir
 }
 
-/// Cap on how many git-tracked files to copy into the test drive.
+/// Cap on how many git-tracked files to copy into the test workspace.
 /// `CHAN_BENCH_MAX_FILES` overrides; 0 means "no cap (the whole repo)".
 ///
 /// Default 250 indexes a realistic, reproducible slice of THIS repo. With
@@ -120,7 +120,7 @@ fn copy_tracked_files(repo: &Path, dest: &Path, cap: usize) -> usize {
     count
 }
 
-/// One end-to-end index of a freshly-opened drive over `drive_root`.
+/// One end-to-end index of a freshly-opened workspace over `workspace_root`.
 /// The reindex (structural: graph rebuild + BM25 build_all) and the
 /// chan-report language scan are timed SEPARATELY so chan-report's cost
 /// is isolated rather than inferred from the gap between two whole
@@ -134,18 +134,18 @@ struct IndexResult {
     indexed_vectors: u64,
 }
 
-fn index_once(cfg_dir: &Path, drive_root: &Path, with_report: bool) -> IndexResult {
+fn index_once(cfg_dir: &Path, workspace_root: &Path, with_report: bool) -> IndexResult {
     let lib = Library::open_at(cfg_dir.join("config.toml")).unwrap();
-    lib.register_workspace(drive_root).unwrap();
-    let drive = lib.open_workspace(drive_root).unwrap();
+    lib.register_workspace(workspace_root).unwrap();
+    let workspace = lib.open_workspace(workspace_root).unwrap();
 
     if with_report {
-        drive.set_reports_enabled(true).unwrap();
+        workspace.set_reports_enabled(true).unwrap();
     }
 
     // Structural index: this is the same work in both modes.
     let start = Instant::now();
-    let summary = drive.reindex(None).unwrap();
+    let summary = workspace.reindex(None).unwrap();
     let reindex_ms = start.elapsed().as_millis();
 
     // chan-report initial full scan (lazy on first call). Timed on its
@@ -153,13 +153,13 @@ fn index_once(cfg_dir: &Path, drive_root: &Path, with_report: bool) -> IndexResu
     // not a second full reindex.
     let report_ms = if with_report {
         let rs = Instant::now();
-        let _ = drive.report().unwrap();
+        let _ = workspace.report().unwrap();
         Some(rs.elapsed().as_millis())
     } else {
         None
     };
 
-    let stats = drive.index_stats().unwrap();
+    let stats = workspace.index_stats().unwrap();
     IndexResult {
         files: summary.files,
         indexed_md: summary.indexed,
@@ -176,7 +176,7 @@ fn end_to_end_index_with_and_without_report() {
     eprintln!("[bench] repo = {}", repo.display());
 
     // Shallow copy once; reuse the same on-disk tree for both modes (each
-    // mode opens its OWN drive over a fresh COPY so neither warms the
+    // mode opens its OWN workspace over a fresh COPY so neither warms the
     // other's index/report state).
     let staging = TempDir::new().unwrap();
     let src_tree = staging.path().join("tree");
@@ -184,7 +184,7 @@ fn end_to_end_index_with_and_without_report() {
     let cap = max_files();
     let copied = copy_tracked_files(&repo, &src_tree, cap);
     eprintln!(
-        "[bench] copied {copied} git-tracked files into the test drive (cap={})",
+        "[bench] copied {copied} git-tracked files into the test workspace (cap={})",
         if cap == 0 {
             "none".to_string()
         } else {
@@ -198,15 +198,15 @@ fn end_to_end_index_with_and_without_report() {
 
     // Mode 1: WITHOUT chan-report (structural index only).
     let cfg1 = TempDir::new().unwrap();
-    let drive1 = staging.path().join("drive-noreport");
-    fs_copy_dir(&src_tree, &drive1);
-    let r1 = index_once(cfg1.path(), &drive1, false);
+    let workspace1 = staging.path().join("workspace-noreport");
+    fs_copy_dir(&src_tree, &workspace1);
+    let r1 = index_once(cfg1.path(), &workspace1, false);
 
     // Mode 2: WITH chan-report (structural index + language analysis).
     let cfg2 = TempDir::new().unwrap();
-    let drive2 = staging.path().join("drive-report");
-    fs_copy_dir(&src_tree, &drive2);
-    let r2 = index_once(cfg2.path(), &drive2, true);
+    let workspace2 = staging.path().join("workspace-report");
+    fs_copy_dir(&src_tree, &workspace2);
+    let r2 = index_once(cfg2.path(), &workspace2, true);
 
     // Embeddings must NOT have run in either mode.
     assert_eq!(

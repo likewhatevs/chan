@@ -1,7 +1,7 @@
 # chan-tunnel-proto
 
 Wire types and control frames for chan-tunnel: the length-prefixed
-JSON `Hello` / `HelloAck` pair, the drive-name validator, and an
+JSON `Hello` / `HelloAck` pair, the workspace-name validator, and an
 `H2Duplex` adapter that turns an h2 `(SendStream, RecvStream)` pair
 into one `tokio::io` duplex. Pure data plus a minimal codec; no I/O,
 no async, no tokio runtime. Both `chan-tunnel-client` and
@@ -42,7 +42,7 @@ cargo test`.
 
 ## Design
 
-See [`design.md`](design.md) for the wire format, framing, drive-
+See [`design.md`](design.md) for the wire format, framing, workspace-
 name rules, the `MAX_CONTROL_FRAME_BYTES` rationale, the proto-stays-
 pure invariant, and the cross-crate context.
 

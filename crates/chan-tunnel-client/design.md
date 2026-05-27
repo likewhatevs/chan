@@ -5,7 +5,7 @@
 chan-tunnel is split across three crates in `chan-writer/chan-core`:
 
 - `chan-tunnel-proto`: pure wire types (`Hello`, `HelloAck`,
-  `ProtocolVersion`), the framing codec, the drive-name and
+  `ProtocolVersion`), the framing codec, the workspace-name and
   username validators, and `H2Duplex`. See
   [`chan-tunnel-proto/design.md`](../chan-tunnel-proto/design.md)
   for byte-level details.
@@ -21,7 +21,7 @@ router)`. `run` POSTs to `{tunnel-host}/v1/tunnel` over h2/TLS,
 exchanges Hello / HelloAck through the resulting bidirectional
 stream, then yamux-multiplexes per-request substreams. drive-proxy
 on the public side accepts the connection in
-`serve_tunnel_listener`, registers the drive in its `Registry`, and
+`serve_tunnel_listener`, registers the workspace in its `Registry`, and
 opens fresh substreams to forward public requests.
 
 This document is the dial and handshake reference. The wire format
@@ -29,7 +29,7 @@ itself lives in chan-tunnel-proto's design.md.
 
 ## 1. Problem and scope
 
-A user running `chan serve` on a laptop wants their drive at
+A user running `chan serve` on a laptop wants their workspace at
 `drive.chan.app/{user}/{drive}` without opening a port or
 configuring DNS. The constraint is "dial out only, HTTPS only."
 The shape that fits is one long-lived `POST /v1/tunnel` carrying
@@ -60,7 +60,7 @@ Out of scope:
 ```
 +-----------------------+                +--------------------+
 |  ClientConfig         |                |   axum::Router     |
-|  (url, token, drive,  |                |  (provided by the  |
+|  (url, token, workspace,  |                |  (provided by the  |
 |   public, backoff,    |                |   embedder, e.g.   |
 |   timeout, events)    |                |   chan serve's     |
 +-----------------------+                |   inner app)       |
@@ -164,7 +164,7 @@ material for logs and a UI; missing one isn't load-bearing.
 pub struct ClientConfig {
     pub tunnel_url: Url,
     pub token: String,
-    pub drive: String,
+    pub workspace: String,
     pub client_version: String,
     pub public: bool,
     pub initial_backoff: Duration,
@@ -179,7 +179,7 @@ impl Default for ClientConfig { /* drive.chan.app/v1/tunnel */ }
 pub struct Registration {
     pub prefix: String,
     pub user: String,
-    pub drive: String,
+    pub workspace: String,
 }
 
 pub enum TunnelEvent {
@@ -234,7 +234,7 @@ pub async fn run(cfg: ClientConfig, router: axum::Router)
 `run` is the long-lived future. Dropping it cancels everything
 (yamux, the h2 driver task, the in-flight dial). It returns only on
 configuration errors that retrying cannot recover from (empty token,
-invalid drive name, unsupported URL scheme).
+invalid workspace name, unsupported URL scheme).
 
 ## 5. Wire format / framing
 
@@ -271,7 +271,7 @@ Client-specific notes:
   `http://` against a non-loopback host logs a warning (bearer
   token in cleartext); we don't refuse outright because legitimate
   cases exist (private VPN, Tailscale, in-cluster service).
-- **Drive name** (`is_valid_drive_name` from chan-tunnel-proto):
+- **Workspace name** (`is_valid_drive_name` from chan-tunnel-proto):
   checked before sending `Hello`. The server checks again, but
   catching it locally avoids a needless round-trip and surfaces a
   config error to the user.
@@ -300,7 +300,7 @@ non-recoverable misconfiguration; transient failures (TLS, h2,
   surface "connected / retrying" status to the operator.
 - `chan-writer/chan-gateway/drive-proxy`: dev-dependency only. The
   end-to-end test in `drive-proxy/tests/api.rs` uses
-  `handshake` + `serve_substreams` to drive a fake `chan serve`
+  `handshake` + `serve_substreams` to workspace a fake `chan serve`
   against a real `chan_tunnel_server::serve_tunnel_listener`,
   validating the full wire path without needing a separate process.
 

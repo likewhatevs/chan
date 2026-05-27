@@ -1,7 +1,7 @@
 // Report integration: scoped snapshots, JSONL persistence, and
 // incremental updates through the watcher. Uses an isolated
 // config dir so the test never touches the developer's real
-// ~/.chan; the per-drive state path is keyed off the tempdir
+// ~/.chan; the per-workspace state path is keyed off the tempdir
 // root, so multiple test runs don't collide.
 
 // Arc/Mutex/Duration/Instant/WatchCallback/WatchEvent are consumed
@@ -71,18 +71,22 @@ fn wait_for<F: Fn() -> bool>(predicate: F, timeout: Duration) -> bool {
 #[test]
 fn report_initial_scan_picks_up_markdown_and_code() {
     let cfg = TempDir::new().unwrap();
-    let drive_root = TempDir::new().unwrap();
+    let workspace_root = TempDir::new().unwrap();
     let lib = Library::open_at(cfg.path().join("config.toml")).unwrap();
-    lib.register_workspace(drive_root.path()).unwrap();
-    put(drive_root.path(), "notes/today.md", "# today\n\nbody.\n");
+    lib.register_workspace(workspace_root.path()).unwrap();
     put(
-        drive_root.path(),
+        workspace_root.path(),
+        "notes/today.md",
+        "# today\n\nbody.\n",
+    );
+    put(
+        workspace_root.path(),
         "src/lib.rs",
         "fn main() { if true { } }\n",
     );
 
-    let drive = lib.open_workspace(drive_root.path()).unwrap();
-    let report = drive.report().unwrap();
+    let workspace = lib.open_workspace(workspace_root.path()).unwrap();
+    let report = workspace.report().unwrap();
     assert!(report.totals.files >= 2);
     let langs: Vec<_> = report.by_language.iter().map(|l| l.name.clone()).collect();
     assert!(langs.iter().any(|n| n == "Rust"));
@@ -92,22 +96,22 @@ fn report_initial_scan_picks_up_markdown_and_code() {
 #[test]
 fn report_for_prefix_restricts_to_subtree() {
     let cfg = TempDir::new().unwrap();
-    let drive_root = TempDir::new().unwrap();
+    let workspace_root = TempDir::new().unwrap();
     let lib = Library::open_at(cfg.path().join("config.toml")).unwrap();
-    lib.register_workspace(drive_root.path()).unwrap();
-    put(drive_root.path(), "src/a.rs", "fn a() {}\n");
-    put(drive_root.path(), "src/b.rs", "fn b() {}\n");
-    put(drive_root.path(), "README.md", "# x\n");
+    lib.register_workspace(workspace_root.path()).unwrap();
+    put(workspace_root.path(), "src/a.rs", "fn a() {}\n");
+    put(workspace_root.path(), "src/b.rs", "fn b() {}\n");
+    put(workspace_root.path(), "README.md", "# x\n");
 
-    let drive = lib.open_workspace(drive_root.path()).unwrap();
-    let scoped = drive.report_for_prefix("src").unwrap();
+    let workspace = lib.open_workspace(workspace_root.path()).unwrap();
+    let scoped = workspace.report_for_prefix("src").unwrap();
     assert_eq!(scoped.totals.files, 2);
     assert!(scoped.files.iter().all(|f| f.path.starts_with("src/")));
 }
 
 // systacean-20 smoke #2 fixup: gated on Unix because the watcher
 // → ReportFanOut → report-writer chain doesn't deliver fresh
-// file events to drive.report() on Windows within 5s of polling
+// file events to workspace.report() on Windows within 5s of polling
 // (verified empirically on systacean-18-smoke run 26250685864).
 // The wait_for poll body below stays for when the Round-3 polish
 // fix lands (root-cause the notify-crate / report-writer event
@@ -117,19 +121,19 @@ fn report_for_prefix_restricts_to_subtree() {
 #[test]
 fn watcher_keeps_report_current() {
     let cfg = TempDir::new().unwrap();
-    let drive_root = TempDir::new().unwrap();
+    let workspace_root = TempDir::new().unwrap();
     let lib = Library::open_at(cfg.path().join("config.toml")).unwrap();
-    lib.register_workspace(drive_root.path()).unwrap();
-    let drive = lib.open_workspace(drive_root.path()).unwrap();
+    lib.register_workspace(workspace_root.path()).unwrap();
+    let workspace = lib.open_workspace(workspace_root.path()).unwrap();
 
-    drive.write_text("a.md", "# a\n").unwrap();
+    workspace.write_text("a.md", "# a\n").unwrap();
 
     let collector = Collector::new();
     let cb: Arc<dyn WatchCallback> = collector.clone();
-    let _handle = drive.watch(cb).unwrap();
+    let _handle = workspace.watch(cb).unwrap();
 
     // Add a file and wait for the watcher to deliver an event.
-    drive.write_text("b.md", "# b\n").unwrap();
+    workspace.write_text("b.md", "# b\n").unwrap();
     assert!(
         wait_for(|| collector.len() >= 1, Duration::from_secs(5)),
         "watcher did not fire for new file"
@@ -137,14 +141,14 @@ fn watcher_keeps_report_current() {
 
     // Poll the report until b.md lands, instead of a fixed-window
     // sleep. The report writer's debounce (500ms in
-    // chan-drive/src/report.rs) plus the per-platform filesystem-
+    // chan-workspace/src/report.rs) plus the per-platform filesystem-
     // event latency can push the flush past any single short sleep;
     // on a slow Windows runner that drifts well over 700ms. Polling
     // with a generous upper bound is cross-platform-correct and
     // converges as fast as the writer commits.
     let saw_b = wait_for(
         || {
-            drive
+            workspace
                 .report()
                 .map(|r| r.files.iter().any(|f| f.path == "b.md"))
                 .unwrap_or(false)
@@ -154,7 +158,7 @@ fn watcher_keeps_report_current() {
     assert!(saw_b, "report missed b.md within 5s");
 
     // JSONL is now persisted at the advertised path.
-    let path = drive.report_jsonl_path().unwrap();
+    let path = workspace.report_jsonl_path().unwrap();
     assert!(
         wait_for(|| path.exists(), Duration::from_secs(3)),
         "report jsonl never written: {}",
@@ -165,20 +169,20 @@ fn watcher_keeps_report_current() {
 }
 
 #[test]
-fn report_returns_for_empty_drive() {
+fn report_returns_for_empty_workspace() {
     let cfg = TempDir::new().unwrap();
-    let drive_root = TempDir::new().unwrap();
+    let workspace_root = TempDir::new().unwrap();
     let lib = Library::open_at(cfg.path().join("config.toml")).unwrap();
-    lib.register_workspace(drive_root.path()).unwrap();
-    let drive = lib.open_workspace(drive_root.path()).unwrap();
+    lib.register_workspace(workspace_root.path()).unwrap();
+    let workspace = lib.open_workspace(workspace_root.path()).unwrap();
 
-    let r = drive.report().unwrap();
+    let r = workspace.report().unwrap();
     assert_eq!(r.totals.files, 0);
     assert!(r.by_language.is_empty());
     assert_eq!(r.cocomo.effort_person_months, 0.0);
 
-    // ReportScope::All on an empty drive returns the same shape.
-    let r2 = drive.report().unwrap();
+    // ReportScope::All on an empty workspace returns the same shape.
+    let r2 = workspace.report().unwrap();
     assert_eq!(r2.totals.files, r.totals.files);
     let _ = ReportScope::All; // public re-export still exists
 }

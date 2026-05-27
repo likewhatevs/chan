@@ -7,7 +7,7 @@ working on `chan`.
 
 `chan` is the user-facing notes app: a CLI plus an HTTP server
 that serves an embedded Svelte WYSIWYG editor for plain markdown
-drives. The CLI subcommands manage the drive registry, drive
+workspaces. The CLI subcommands manage the workspace registry, workspace
 contents, search, and the running server. The server is loopback-
 only, single-user, single-machine; multi-user collaboration is an
 explicit non-goal.
@@ -22,10 +22,10 @@ crates/
   chan                  the binary. Parses CLI args, dispatches
                         subcommands, mounts the embedded frontend.
                         Self-upgrade lives in src/update.rs.
-  chan-server           HTTP + WebSocket surface. Wraps chan-drive
+  chan-server           HTTP + WebSocket surface. Wraps chan-workspace
                         in axum routes; exposes the in-process MCP
                         server over a Unix-domain socket. Per-area
-                        handlers live in src/routes/{drive, files,
+                        handlers live in src/routes/{workspace, files,
                         search, graph, fs_graph, report, sessions,
                         attachments, storage, preferences, contacts,
                         build_info, terminal, ws, health}.rs;
@@ -35,7 +35,7 @@ crates/
                         error, indexer, mcp_bridge, preferences,
                         qr, self_writes, signal, state,
                         static_assets, store, tunnel_guard, util.
-  chan-drive            filesystem boundary, drive registry, search
+  chan-workspace            filesystem boundary, workspace registry, search
                         + graph indexer, watch, report engine. The
                         only crate that touches user content on
                         disk.
@@ -45,9 +45,9 @@ crates/
                         chan-server consumes only
                         `chan_llm::mcp::Server` via
                         `crates/chan-server/src/mcp_bridge.rs`.
-  chan-report           report engine shared with chan-drive.
+  chan-report           report engine shared with chan-workspace.
   chan-tunnel-{proto,
-    client, server}     h2/yamux drive tunnel. chan-server pulls
+    client, server}     h2/yamux workspace tunnel. chan-server pulls
                         chan-tunnel-client; the standalone tunnel
                         server lives next door for the cloud side.
   fetch-models          build helper. Pre-fetches the BGE-small
@@ -61,15 +61,15 @@ web/                    Svelte frontend, embedded into the binary
 
 desktop/                Tauri shell. Cross-platform desktop wrapper
                         (`chan-desktop`) that launches `chan serve`
-                        per drive and mounts the editor in a
+                        per workspace and mounts the editor in a
                         webview window. Per-window state is keyed
                         by a `w=<window-label>` URL parameter.
 ```
 
 Phase 5 collapsed the chan-core sibling workspace into this repo:
-chan-drive, chan-llm, chan-report, and the three chan-tunnel-*
+chan-workspace, chan-llm, chan-report, and the three chan-tunnel-*
 crates are all workspace members here. Native shells (iOS / Android)
-still link `chan-drive` via uniffi without dragging in this repo's
+still link `chan-workspace` via uniffi without dragging in this repo's
 HTTP stack.
 
 ## Build & Test
@@ -95,9 +95,9 @@ same commit.
 When the user asks for a test server (e.g. "spin up a test
 server", "let's try this in the browser"):
 
-1. **Ask first**: new drive under `/tmp/chan-test-<something>`,
+1. **Ask first**: new workspace under `/tmp/chan-test-<something>`,
    or reuse an existing registered one? `chan list` shows the
-   options. For a new drive, also ask what to seed it with
+   options. For a new workspace, also ask what to seed it with
    (empty, a few sample notes, copy of an existing tree).
 2. **Build + launch**: `cargo build -p chan` rebuilds the binary
    with the current `web/dist/` bundle, then
@@ -110,16 +110,16 @@ server", "let's try this in the browser"):
    also needs a hard reload to pick up the new hashed bundle
    filenames.
 4. **Tear down**: stop the server process, `rm -rf` the temp
-   drive directory if it was a throwaway, then `chan remove
+   workspace directory if it was a throwaway, then `chan remove
    <path>` to drop the registry entry. `chan remove` takes the
    path, not the display name.
 
 ## Project Principles
 
-### Drive is the boundary
+### Workspace is the boundary
 
-All filesystem operations route through `chan_drive::Drive`,
-which sandboxes paths under the registered drive root, refuses
+All filesystem operations route through `chan_workspace::Workspace`,
+which sandboxes paths under the registered workspace root, refuses
 non-regular files (symlinks, FIFOs, sockets, devices), and
 performs atomic writes. Nothing in this repo should ever call
 `std::fs::*` on user content directly.
@@ -137,10 +137,10 @@ No TLS at the local hop.
 
 Tunnel mode (`chan serve --tunnel-token ...`, or `CHAN_TUNNEL_TOKEN`
 env var) replaces the local listener with a `chan-tunnel-client`
-dial to `drive.chan.app/v1/tunnel`. The drive is then published at
+dial to `drive.chan.app/v1/tunnel`. The workspace is then published at
 `{user}.drive.chan.app/{drive}/*` over yamux substreams. The
 single-user, single-machine assumption still holds: one chan serve
-process owns the drive's writes; the tunnel just relocates the
+process owns the workspace's writes; the tunnel just relocates the
 inbound transport. The bearer-token gate is auto-disabled in tunnel
 mode (the gateway in front of drive.chan.app is the trust boundary;
 default behavior 404s anonymous visitors, opt out with
@@ -149,12 +149,12 @@ default behavior 404s anonymous visitors, opt out with
 
 ### App-level vs core
 
-What lives in chan-drive (filesystem, search, graph, watch, report)
+What lives in chan-workspace (filesystem, search, graph, watch, report)
 vs what lives in chan-server (HTTP, editor preferences, sessions,
 attachments, terminal, MCP bridge) is a hard line. Don't push
-library concerns into chan-drive, and don't reimplement library
+library concerns into chan-workspace, and don't reimplement library
 primitives in chan-server. When in doubt, read
-`crates/chan-drive/design.md`.
+`crates/chan-workspace/design.md`.
 
 ### MCP server only, no in-app agent
 
@@ -178,8 +178,8 @@ APIs without a phase-level decision.
 
 ## Contributor Patterns
 
-- **Atomic writes via chan-drive**: every user-content write
-  goes through `Drive::write_text` or `Drive::write_bytes`.
+- **Atomic writes via chan-workspace**: every user-content write
+  goes through `Workspace::write_text` or `Workspace::write_bytes`.
   These enforce the editable-text gate, the path sandbox, and
   the special-file refusal. Don't bypass.
 - **Subcommand parity**: every chan subcommand has a clap
@@ -209,9 +209,9 @@ APIs without a phase-level decision.
 
 - **Design and architecture**: [`design.md`](design.md). Single
   load-bearing reference for the workspace layout and the
-  chan-drive contract.
-- **chan-drive design**: [`crates/chan-drive/design.md`](crates/chan-drive/design.md).
-  Read before proposing chan-drive changes.
+  chan-workspace contract.
+- **chan-workspace design**: [`crates/chan-workspace/design.md`](crates/chan-workspace/design.md).
+  Read before proposing chan-workspace changes.
 - **chan-tunnel-proto design**:
   [`crates/chan-tunnel-proto/design.md`](crates/chan-tunnel-proto/design.md).
 - **Issue tracker**: GitHub repo `chan-writer/chan`.

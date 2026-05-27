@@ -1,35 +1,35 @@
-# chan-drive design
+# chan-workspace design
 
-Canonical design reference for `chan-drive`. Update in the same
+Canonical design reference for `chan-workspace`. Update in the same
 commit as any change that affects the on-disk layout, the public
 API shape, the locking model, or the schema versions.
 
 ## 1. Problem and scope
 
-`chan-drive` is the local-first storage layer for a single-user
-markdown editor. It owns the per-machine registry of known drives,
-exposes a path-based sandboxed filesystem API rooted at each drive,
-and wraps the per-drive search index and link graph. The same
+`chan-workspace` is the local-first storage layer for a single-user
+markdown editor. It owns the per-machine registry of known workspaces,
+exposes a path-based sandboxed filesystem API rooted at each workspace,
+and wraps the per-workspace search index and link graph. The same
 crate backs the `chan` CLI today and is shaped for native iOS /
 Android shells via uniffi later.
 
 In scope:
 
   - Filesystem primitives (`read` / `write` / `stat` / `list` /
-    `rename` / `remove` / `list_tree`) rooted at a drive.
-  - Drive registry persisted to `~/.chan/config.toml` (or the OS
+    `rename` / `remove` / `list_tree`) rooted at a workspace.
+  - Workspace registry persisted to `~/.chan/config.toml` (or the OS
     sandbox equivalent on iOS / Android).
-  - Per-drive search index (tantivy 0.24, BM25; optional dense
+  - Per-workspace search index (tantivy 0.24, BM25; optional dense
     via candle + BGE-small for hybrid).
-  - Per-drive graph database (sqlite, single writer, r2d2 pool
+  - Per-workspace graph database (sqlite, single writer, r2d2 pool
     for readers).
-  - Filesystem watcher (callback-based, drive-scoped, drops
+  - Filesystem watcher (callback-based, workspace-scoped, drops
     `.chan/` and `.git/` noise).
   - Cross-process advisory writer lock (fs4 / flock / LockFileEx).
   - Path-traversal sandboxing and editable-text whitelist.
-  - Atomic writes for every chan-drive-managed file.
-  - Per-drive blob storage for opaque host JSON: pane sessions.
-    chan-drive stores bytes keyed by a flat identifier; the
+  - Atomic writes for every chan-workspace-managed file.
+  - Per-workspace blob storage for opaque host JSON: pane sessions.
+    chan-workspace stores bytes keyed by a flat identifier; the
     schema is the host's choice.
 
 Out of scope:
@@ -41,8 +41,8 @@ Out of scope:
   - Editor preferences (fonts, theme, keybindings, attachments
     dir). App-level; the consumer owns its own config file.
   - User authentication, multi-user collaboration, cloud sync of
-    chan-drive state. Single-user, single-machine, local-first.
-  - Cross-drive linking. One drive at a time; explicit non-goal.
+    chan-workspace state. Single-user, single-machine, local-first.
+  - Cross-workspace linking. One workspace at a time; explicit non-goal.
 
 ## 2. Architecture overview
 
@@ -56,8 +56,8 @@ Out of scope:
                   open_drive |
                              v
               +-----------------------------+
-              |     Drive (per directory)   |
-              |     DriveLock held          |
+              |     Workspace (per directory)   |
+              |     WorkspaceLock held          |
               |  +------+------+----------+ |
               |  | FS   | Idx  | Graph    | |
               |  | ops  | tan- | sqlite   | |
@@ -71,7 +71,7 @@ Out of scope:
   - `Library` is a per-machine handle. Apps construct one at
     startup and keep it alive. It owns the registry and the
     config-file path.
-  - `Drive` is one registered directory. Holds the writer lock
+  - `Workspace` is one registered directory. Holds the writer lock
     for its lifetime; cheap reads (search query, graph
     traversal) do not contend. Lazily initializes search and
     graph state on first use via `OnceLock`.
@@ -86,79 +86,79 @@ Out of scope:
 
 Per-machine singleton-in-practice. Owns the `Registry`
 (`Mutex<Registry>` intra-process), the config-file path, and the
-default drive root. `open_drive` looks up the registry row for the
-caller's path and constructs a `Drive` keyed by the row's
+default workspace root. `open_drive` looks up the registry row for the
+caller's path and constructs a `Workspace` keyed by the row's
 `metadata_key`,
 holding the cross-process writer lock for its lifetime.
 
 Each registry row carries the canonical `root_path`, a stable
 `metadata_key`, and timestamps. The key is derived from the first
 registered path as a readable path slug plus a short hash suffix,
-and is preserved across `Library::move_drive`. All per-drive
+and is preserved across `Library::move_drive`. All per-workspace
 sidecar paths (graph DB, search index, sessions, tokens, trash,
-report) live under `~/.chan/drives/<metadata_key>/`. Consequences:
+report) live under `~/.chan/workspaces/<metadata_key>/`. Consequences:
 
-  - Moving the drive directory (recorded via `move_drive`) is a
+  - Moving the workspace directory (recorded via `move_drive`) is a
     registry-only change, zero file motion on the sidecars.
   - Registering the same canonical path is idempotent and preserves
     the metadata key.
-  - Deleting then re-creating a drive at the same path uses the
+  - Deleting then re-creating a workspace at the same path uses the
     same deterministic key. `unregister_drive` wipes chan-managed
     state so stale sidecars do not reappear by accident.
-  - There is no user-managed drive name in the registry. UIs derive
+  - There is no user-managed workspace name in the registry. UIs derive
     labels from the path and show the full path where identity
     matters.
 
 `Library::sweep_orphans` reconciles the on-disk sidecar tree
-against the registry: any subdirectory under `~/.chan/drives/`
+against the registry: any subdirectory under `~/.chan/workspaces/`
 whose name is not in the current metadata-key set is reclaimed.
 Used to clean up after unregisters that left state behind, or after
 a `move_drive`-then-deleted-at-new-location workflow.
 
-`reset_drive` wipes per-drive chan-managed state (search index,
+`reset_drive` wipes per-workspace chan-managed state (search index,
 graph DB, session blobs, app tokens). It never
 touches the user's notes tree. The trash is preserved (it holds
 user-deleted files, recoverable user data, not chan-managed
 cache). The lock dir is preserved (cross-process coordination, no
 data). `ResetMode::Everything` additionally drops the registry
 entry so the next `open_drive` against the path treats it as a
-fresh, never-seen drive.
+fresh, never-seen workspace.
 
-Precondition: caller must drop any open `Arc<Drive>` for the
+Precondition: caller must drop any open `Arc<Workspace>` for the
 target root first. `reset_drive` acquires the writer lock to
 verify exclusive access; if any process (including the caller)
-holds it, the call fails with `DriveLocked`. On Unix this is
+holds it, the call fails with `WorkspaceLocked`. On Unix this is
 defense-in-depth (open files survive unlink); on Windows it is
 load-bearing because removing files-in-use fails. Skeleton
 recreation happens lazily on the next `open_drive` plus first
 `index()` / `graph()` access; no explicit init step.
 
-Registration is idempotent: re-registering an existing drive only
+Registration is idempotent: re-registering an existing workspace only
 updates `last_seen_at` and preserves the metadata key.
 
 `unregister_drive` is `reset_drive(Everything)` plus a `false`
-return when the drive wasn't in the registry. It drops the
-registry row AND wipes per-drive state in one call so a re-register
+return when the workspace wasn't in the registry. It drops the
+registry row AND wipes per-workspace state in one call so a re-register
 at the same path starts from a clean sidecar even when the row's
 metadata key is deterministic. The trash is preserved (recoverable
-user data, owned by the user even after the drive is forgotten).
-Preconditions match `reset_drive`: any open `Arc<Drive>` for the
+user data, owned by the user even after the workspace is forgotten).
+Preconditions match `reset_drive`: any open `Arc<Workspace>` for the
 root must be dropped first, otherwise the call fails with
-`DriveAlreadyOpen`.
+`WorkspaceAlreadyOpen`.
 
-`move_drive(old, new)` records a moved drive directory: it rewrites
+`move_drive(old, new)` records a moved workspace directory: it rewrites
 the registry row's `root_path` while preserving the metadata key,
 so every sidecar follows the move with zero file motion. Refuses
 when the source is unregistered, when `new` doesn't exist, when
-`new` is already a different drive, or when the source is open.
+`new` is already a different workspace, or when the source is open.
 
-### Drive
+### Workspace
 
 One registered directory. All `rel` arguments are POSIX-style
 relative paths. Path traversal (`..`, absolute roots, Windows
-drive prefixes) is rejected via `fs_ops::resolve_safe`, then
+workspace prefixes) is rejected via `fs_ops::resolve_safe`, then
 `fs_ops::resolve_safe_strict` adds a canonical-form check that
-the deepest existing ancestor stays under the canonical drive
+the deepest existing ancestor stays under the canonical workspace
 root (catches mid-path symlinks escaping the sandbox).
 
 Two gates guard the text-class APIs:
@@ -181,9 +181,9 @@ attachments and the future media browser still need it.
 
 #### Supported file types
 
-A drive is the user's directory tree, untouched. Adding a drive
+A workspace is the user's directory tree, untouched. Adding a workspace
 registers a root and walks everything under it (skipping `.git/`
-and `.chan/`); chan-drive never restricts what can sit on disk.
+and `.chan/`); chan-workspace never restricts what can sit on disk.
 What changes by class is how each file is handled by the API.
 `fs_ops::classify(rel)` is the single predicate; consumers (this
 crate, chan-server, the editor) should switch on `FileClass`
@@ -277,7 +277,7 @@ Some(stat.mtime), new_content)`. If another process (terminal,
 sync daemon, second pane) has since modified the file, the write
 fails with `WriteConflict { current_mtime }` and the editor
 prompts to reload, merge, or overwrite. `write_text` (no CAS)
-remains for chan-drive's own reindex helpers, bulk imports, and
+remains for chan-workspace's own reindex helpers, bulk imports, and
 LLM-tool calls where last-write-wins is the intent. Residual
 race: between the mtime check and the atomic rename a foreign
 write can land; the watcher event for the foreign change fires
@@ -293,13 +293,13 @@ invalid byte sequence fails the read. If the callback returns
 false, the read stops early with `Ok(())` so transports can stop
 work after client disconnect.
 
-`remove` is a soft-delete: it moves the entry into the per-drive
+`remove` is a soft-delete: it moves the entry into the per-workspace
 Trash. Recursive directory removal is allowed because the
 operation is reversible; the foot-gun guard against accidental
 recursive-rm is satisfied by the restore path. Symlinks, FIFOs,
 sockets, and char/block devices are rejected with `SpecialFile`;
 the trash format only models regular files and directories, and
-chan-drive never creates the other types itself.
+chan-workspace never creates the other types itself.
 
 ### Trash
 
@@ -310,7 +310,7 @@ explicitly purges or the retention window elapses.
 ```rust
 pub struct TrashEntry {
     pub id: String,            // opaque, monotone
-    pub original_path: String, // POSIX rel from drive root
+    pub original_path: String, // POSIX rel from workspace root
     pub deleted_at: i64,       // unix seconds
     pub is_dir: bool,
     pub size: u64,             // file len, or summed for dirs
@@ -318,15 +318,15 @@ pub struct TrashEntry {
 ```
 
   - **Location**:
-    `~/.chan/drives/<metadata_key>/trash/<id>/{payload[/], meta.json}`.
-    Trash lives outside the user's drive directory because chan-
-    drive stores zero state inside the drive. Trade-off: the
+    `~/.chan/workspaces/<metadata_key>/trash/<id>/{payload[/], meta.json}`.
+    Trash lives outside the user's workspace directory because chan-
+    workspace stores zero state inside the workspace. Trade-off: the
     trash does not sync via iCloud / Dropbox / git. Acceptable;
     trash is per-machine recovery, not collaboration. A recorded
     `Library::move_drive` preserves `metadata_key`, so trash follows
-    the moved drive without moving files.
+    the moved workspace without moving files.
   - **Atomicity**: same-fs path is one atomic `rename` from
-    drive root into the trash payload. Cross-fs path falls back
+    workspace root into the trash payload. Cross-fs path falls back
     to `copy + remove`, writing `meta.json` AFTER the copy and
     BEFORE the source removal, so a remove failure leaves a
     complete trash entry plus a partial source the user can
@@ -334,7 +334,7 @@ pub struct TrashEntry {
   - **Restore conflicts**: refused with `TrashOccupied`. The
     caller renames the live entry first, or `trash_purge` to
     give up. We never silently overwrite live content.
-  - **Auto-expiration**: lazy GC. `Drive::open` and every
+  - **Auto-expiration**: lazy GC. `Workspace::open` and every
     `trash_*` call sweep entries older than
     `TRASH_RETENTION_SECS` (30 days, `30 * 24 * 60 * 60`). No
     background thread; matches the codebase's sync-only rule.
@@ -345,16 +345,16 @@ pub struct TrashEntry {
 
 What's NOT in v1 (deliberately):
 
-  - Cross-drive trash. Each drive has its own.
+  - Cross-workspace trash. Each workspace has its own.
   - Sync to cloud storage (deliberate; trash is local-only state).
   - Background timer (lazy GC is enough for an editor that opens
-    drives sporadically).
+    workspaces sporadically).
   - Configurable retention. Hardcoded 30 days; revisit if needed.
 
 ### Search index
 
-`tantivy` 0.24 backs the per-drive index at
-`~/.chan/drives/<metadata_key>/index/`. BM25 over `path`, `filename`,
+`tantivy` 0.24 backs the per-workspace index at
+`~/.chan/workspaces/<metadata_key>/index/`. BM25 over `path`, `filename`,
 `headings`, and `body`. Schema version lives in
 `<index_dir>/config.toml` as the `schema_version` field of the
 `IndexConfig` struct (alongside the embedding model id and the
@@ -399,14 +399,14 @@ bounded `sync_channel`; the main thread is the only writer into
 tantivy and the only producer of embed batches, so writer-mutex
 contention and embed ordering stay simple. Two cores are
 deliberately held back so the server's tokio runtime and the OS
-UI thread keep breathing during a reindex of a large drive.
+UI thread keep breathing during a reindex of a large workspace.
 Progress ticks remain monotonic from the consumer's perspective
 even when worker completions land out of order.
 
 #### Embed-phase checkpointing
 
 Embedding dominates the wall-clock cost of a full rebuild on real
-drives (BM25 is a tantivy commit per chunk, cheap; embedding scales
+workspaces (BM25 is a tantivy commit per chunk, cheap; embedding scales
 linearly with chunk count and waits on the model). To avoid throwing
 that work away on a crash, the per-file vector shard carries a
 `body_hash` field (sha256 over the canonical `(chunk_id, body)`
@@ -432,7 +432,7 @@ basenames that the reindex walks should not descend into. The
 default list lives in `Registry::index_excluded_dirs` and is
 persisted to `~/.chan/config.toml` so CLI and desktop use the same
 policy (`node_modules`, `target`, `__pycache__`, ...). `Library`
-loads that list on open, propagates it to every drive opened
+loads that list on open, propagates it to every workspace opened
 against that Library, and forwards it into `Index` for the search
 side. `.git` and `.chan` stay hardcoded in `walk_drive`: those are
 invariants of the on-disk layout, not policy.
@@ -440,14 +440,14 @@ invariants of the on-disk layout, not policy.
 The filter is honored by the indexing pipeline only:
 `rebuild_graph` and `Index::build_all` use `list_tree_filtered`
 and `walk_drive_filtered`. The editor-visible APIs
-(`Drive::list_tree`, `Drive::list`, trash sweeps, restore) stay
+(`Workspace::list_tree`, `Workspace::list`, trash sweeps, restore) stay
 unfiltered so the user can still see and open files inside a
 blocked directory on demand.
 
 ### Graph
 
-`sqlite` (rusqlite, bundled) backs the per-drive graph at
-`~/.chan/drives/<metadata_key>/graph/graph.sqlite`. Schema lives in `nodes`
+`sqlite` (rusqlite, bundled) backs the per-workspace graph at
+`~/.chan/workspaces/<metadata_key>/graph/graph.sqlite`. Schema lives in `nodes`
 (files), `edges` (links + tags + mentions), and `headings`
 (in-file anchors).
 
@@ -465,9 +465,9 @@ and all its edges. `clear` wipes everything for a full rebuild.
 
 #### Link resolution
 
-Two path forms coexist in chan-drive on purpose. The Drive API
+Two path forms coexist in chan-workspace on purpose. The Workspace API
 (`read`, `write_text`, `list`, MCP tool `path` args, graph row
-keys) speaks one canonical form: a drive-rooted POSIX rel path
+keys) speaks one canonical form: a workspace-rooted POSIX rel path
 with no leading slash and no `..`. Inside markdown bodies the
 user (or an agent) writes hrefs in whatever form the renderer
 expects, which for GitHub-style markdown is "relative to the file
@@ -480,9 +480,9 @@ Markdown link hrefs and image embeds (`[label](href)`,
 `![alt](src)`) are run through `markdown::normalize_href` before
 the graph builder writes the edge `dst`. The normalizer is a
 pure function: input is `(href, source_dir)`, output is
-`Option<String>` (clean drive-relative POSIX path; `None` for
+`Option<String>` (clean workspace-relative POSIX path; `None` for
 external schemes, fragment-only refs, empty hrefs, and lexical
-escapes past the drive root).
+escapes past the workspace root).
 
 Resolution rules, in order:
 
@@ -491,14 +491,14 @@ Resolution rules, in order:
    `:` ahead of any `/` `#` `?` return `None`.
 3. Trailing `?query` and `#anchor` are stripped; the anchor is
    preserved separately on the edge's `anchor` column.
-4. Hrefs starting with `/` are drive-rooted (the leading slash
+4. Hrefs starting with `/` are workspace-rooted (the leading slash
    is stripped); otherwise the href is joined to `source_dir`.
-5. `.` / `..` segments collapse lexically. A `..` past the drive
-   root returns `None`; chan-drive's no-symlink sandbox rules
+5. `.` / `..` segments collapse lexically. A `..` past the workspace
+   root returns `None`; chan-workspace's no-symlink sandbox rules
    out symlink chasing here as well.
 
 Wiki-link targets (`[[name]]`) keep the picker's existing
-drive-rooted-by-default convention: bare `[[Contacts/Jane]]`
+workspace-rooted-by-default convention: bare `[[Contacts/Jane]]`
 resolves to `Contacts/Jane`, an explicit `[[/Contacts/Jane]]`
 likewise. Targets prefixed with `./` or `..` opt into source-
 relative resolution (`[[../foo]]` from `notes/x.md` walks up to
@@ -512,7 +512,7 @@ rewrites the table.
 
 #### Link autocomplete (`[[`)
 
-`link_targets` drives the editor's `[[` typeahead: the user types
+`link_targets` workspaces the editor's `[[` typeahead: the user types
 a fragment and gets back files plus headings to anchor a wiki
 link to. The graph DB is the source of truth (`nodes` for files,
 `headings` for in-file anchors); BM25 over filename and heading
@@ -562,7 +562,7 @@ phase from that file alone.
 
 ### Watcher
 
-`Drive::watch` returns a `WatchHandle`; drop to stop. The
+`Workspace::watch` returns a `WatchHandle`; drop to stop. The
 underlying `notify::RecommendedWatcher` runs on its own thread
 and calls into the consumer's `WatchCallback`.
 
@@ -572,8 +572,8 @@ generates a wrapper around a foreign object). No closures cross
 the FFI.
 
 Filter chain in `watch::dispatch` short-circuits both `.chan/`
-and `.git/` subtrees. chan-drive never writes inside the user's
-drive directory, so any `.chan/` activity is foreign noise.
+and `.git/` subtrees. chan-workspace never writes inside the user's
+workspace directory, so any `.chan/` activity is foreign noise.
 
 ### Contacts
 
@@ -592,7 +592,7 @@ Indexer reads the frontmatter in `parse_for_graph` to tag the
 corresponding `nodes` row as `kind = 'contact'`. Same row,
 different kind: backlinks, link-autocomplete, and forget_file
 all keep working unchanged because they key on `rel_path`, not
-`kind`. Downstream consumers (`Drive::contacts`, editor `@`
+`kind`. Downstream consumers (`Workspace::contacts`, editor `@`
 picker, `GET /api/contacts`) filter on `kind = 'contact'` to
 surface contacts as a distinct UI surface.
 
@@ -604,9 +604,9 @@ Pure-function split:
 | `google.rs`       | Google CSV parser; ` ::: ` multi-value form   |
 | `emit.rs`         | `Contact -> markdown`; hand-formatted YAML    |
 | `slug.rs`         | filename derivation, sanitization, collisions |
-| `import.rs`       | orchestrator: writes via `Drive::write_text`  |
+| `import.rs`       | orchestrator: writes via `Workspace::write_text`  |
 
-The orchestrator is exposed as `Drive::import_contacts` so the
+The orchestrator is exposed as `Workspace::import_contacts` so the
 import flow inherits the path sandbox, editable-text gate, and
 atomic-rename rules. One bad contact does not abort a batch: per-
 file errors land in `ImportSummary` as `Failed` outcomes.
@@ -635,7 +635,7 @@ for callers that want the full list.
 
 Discovery is content-driven, not directory-driven. Any `.md` file
 whose frontmatter has nested `chan: { kind: contact }` is classified
-as `NodeKind::Contact` regardless of where it sits in the drive. A
+as `NodeKind::Contact` regardless of where it sits in the workspace. A
 user who hand-rolls a contact note in their own directory and drops
 it in is picked up by the next indexer pass; the `Contacts/`
 directory is just the importer's default destination, not a
@@ -653,7 +653,7 @@ the deduplicated email list back so it can render a secondary line
 under the contact's name.
 
 The `emails` column is populated as contacts are parsed during a
-walk: the indexer's first pass over a fresh drive fills it in for
+walk: the indexer's first pass over a fresh workspace fills it in for
 every contact-kind file, and per-file edits update it through
 `replace_file`. Contacts that lack an email body section keep
 `emails IS NULL` and simply don't match email-substring queries.
@@ -667,7 +667,7 @@ body, and any note that wiki-links to a contact creates a graph
 edge the agent can follow via `read_file` on the linked path.
 Adding a dedicated
 `list_contacts` / `find_contact` tool would just duplicate
-`Drive::contacts_filtered` over a wire the model already has the
+`Workspace::contacts_filtered` over a wire the model already has the
 primitives to traverse.
 
 ## 4. Public API surface
@@ -678,98 +678,98 @@ primitives to traverse.
 Library::open() -> Result<Self>
 Library::open_at(config_path: PathBuf) -> Result<Self>
 
-Library::list_drives() -> Vec<KnownDrive>
+Library::list_drives() -> Vec<KnownWorkspace>
 Library::default_drive_root() -> Option<PathBuf>
 Library::set_default_drive_root(root: Option<PathBuf>) -> Result<()>
 Library::effective_default_drive_root() -> PathBuf
 
-Library::register_drive(root: &Path) -> Result<KnownDrive>
+Library::register_drive(root: &Path) -> Result<KnownWorkspace>
 Library::unregister_drive(root: &Path) -> Result<bool>
 Library::move_drive(old: &Path, new: &Path) -> Result<bool>
 
-Library::open_drive(root: &Path) -> Result<Arc<Drive>>
+Library::open_drive(root: &Path) -> Result<Arc<Workspace>>
 
 Library::reset_drive(root: &Path, mode: ResetMode) -> Result<ResetReport>
 Library::sweep_orphans() -> Result<SweepReport>
 
-Library::drive_paths_for(root: &Path) -> Option<DrivePaths>
+Library::drive_paths_for(root: &Path) -> Option<WorkspacePaths>
 
 Library::set_walk_filter(filter: WalkFilter)
 Library::walk_filter() -> Arc<WalkFilter>
 ```
 
-### Drive: filesystem
+### Workspace: filesystem
 
 ```rust
-Drive::root() -> &Path
-Drive::paths() -> &DrivePaths
+Workspace::root() -> &Path
+Workspace::paths() -> &WorkspacePaths
 
-Drive::read(rel: &str) -> Result<Vec<u8>>
-Drive::read_text(rel: &str) -> Result<String>                  // gated
-Drive::read_text_with_stat(rel: &str)                          // gated
+Workspace::read(rel: &str) -> Result<Vec<u8>>
+Workspace::read_text(rel: &str) -> Result<String>                  // gated
+Workspace::read_text_with_stat(rel: &str)                          // gated
     -> Result<(String, FileStat)>
-Drive::read_text_with_stat_chunked(rel, chunk_size, callback)  // gated
+Workspace::read_text_with_stat_chunked(rel, chunk_size, callback)  // gated
     -> Result<()>
-Drive::write_text(rel: &str, content: &str) -> Result<()>      // gated
-Drive::write_text_if_unchanged(rel: &str,                      // gated, CAS
+Workspace::write_text(rel: &str, content: &str) -> Result<()>      // gated
+Workspace::write_text_if_unchanged(rel: &str,                      // gated, CAS
     expected_mtime: Option<i64>,
     content: &str,
 ) -> Result<()>
-Drive::write_bytes(rel: &str, content: &[u8]) -> Result<()>
+Workspace::write_bytes(rel: &str, content: &[u8]) -> Result<()>
 
-Drive::exists(rel: &str) -> bool
-Drive::stat(rel: &str) -> Result<FileStat>
-Drive::list(rel: &str) -> Result<Vec<DirEntry>>
-Drive::list_tree() -> Result<Vec<TreeEntry>>
-Drive::list_tree_prefix(prefix: &str) -> Result<Vec<TreeEntry>>
-Drive::create_dir(rel: &str) -> Result<()>
-Drive::remove(rel: &str) -> Result<()>                 // soft-delete to trash
-Drive::rename(from: &str, to: &str) -> Result<()>
+Workspace::exists(rel: &str) -> bool
+Workspace::stat(rel: &str) -> Result<FileStat>
+Workspace::list(rel: &str) -> Result<Vec<DirEntry>>
+Workspace::list_tree() -> Result<Vec<TreeEntry>>
+Workspace::list_tree_prefix(prefix: &str) -> Result<Vec<TreeEntry>>
+Workspace::create_dir(rel: &str) -> Result<()>
+Workspace::remove(rel: &str) -> Result<()>                 // soft-delete to trash
+Workspace::rename(from: &str, to: &str) -> Result<()>
 
-Drive::trash_list() -> Result<Vec<TrashEntry>>
-Drive::trash_restore(id: &str) -> Result<()>
-Drive::trash_purge(id: &str) -> Result<()>
-Drive::trash_empty() -> Result<()>
+Workspace::trash_list() -> Result<Vec<TrashEntry>>
+Workspace::trash_restore(id: &str) -> Result<()>
+Workspace::trash_purge(id: &str) -> Result<()>
+Workspace::trash_empty() -> Result<()>
 
-Drive::put_session(key: &str, content: &[u8]) -> Result<()>
-Drive::get_session(key: &str) -> Result<Option<Vec<u8>>>
-Drive::list_sessions() -> Result<Vec<String>>
-Drive::delete_session(key: &str) -> Result<()>
+Workspace::put_session(key: &str, content: &[u8]) -> Result<()>
+Workspace::get_session(key: &str) -> Result<Option<Vec<u8>>>
+Workspace::list_sessions() -> Result<Vec<String>>
+Workspace::delete_session(key: &str) -> Result<()>
 
-Drive::import_contacts(dir: &str,
+Workspace::import_contacts(dir: &str,
     contacts: Vec<Contact>,
     opts: ImportOpts,
 ) -> Result<ImportSummary>
-Drive::contacts() -> Result<Vec<ContactNode>>
-Drive::contacts_filtered(query: Option<&str>, limit: usize)
+Workspace::contacts() -> Result<Vec<ContactNode>>
+Workspace::contacts_filtered(query: Option<&str>, limit: usize)
     -> Result<Vec<ContactNode>>
-Drive::contacts_need_email_backfill() -> Result<bool>
+Workspace::contacts_need_email_backfill() -> Result<bool>
 ```
 
 `BYTES_WRITE_LIMIT` and `TEXT_WRITE_LIMIT` cap a single write
 call; callers exceeding them get `ChanError::TooLarge`.
 
-### Drive: search and graph
+### Workspace: search and graph
 
 ```rust
-Drive::search(query: &str, opts: &SearchOpts) -> Result<SearchResult>
-Drive::reindex(cancel: Option<&AtomicBool>) -> Result<BuildSummary>
-Drive::reindex_with(cancel: Option<&AtomicBool>,
+Workspace::search(query: &str, opts: &SearchOpts) -> Result<SearchResult>
+Workspace::reindex(cancel: Option<&AtomicBool>) -> Result<BuildSummary>
+Workspace::reindex_with(cancel: Option<&AtomicBool>,
     progress: &dyn ProgressCallback) -> Result<BuildSummary>
-Drive::index_file(rel: &str) -> Result<()>
-Drive::forget_file(rel: &str) -> Result<()>
-Drive::num_indexed() -> Result<u64>
-Drive::index_stats() -> Result<IndexStats>
-Drive::needs_rebuild() -> bool
-Drive::is_reindexing() -> bool
-Drive::needs_replay_writes() -> bool
-Drive::pending_writes() -> Vec<(String, &'static str)>
-Drive::replay_pending_writes() -> Result<usize>
-Drive::reconcile() -> Result<ReconcileReport>
-Drive::link_targets(q: &str, limit: u32) -> Result<Vec<LinkTarget>>
-Drive::resolve_link(target: &str) -> Option<ResolvedLink>
+Workspace::index_file(rel: &str) -> Result<()>
+Workspace::forget_file(rel: &str) -> Result<()>
+Workspace::num_indexed() -> Result<u64>
+Workspace::index_stats() -> Result<IndexStats>
+Workspace::needs_rebuild() -> bool
+Workspace::is_reindexing() -> bool
+Workspace::needs_replay_writes() -> bool
+Workspace::pending_writes() -> Vec<(String, &'static str)>
+Workspace::replay_pending_writes() -> Result<usize>
+Workspace::reconcile() -> Result<ReconcileReport>
+Workspace::link_targets(q: &str, limit: u32) -> Result<Vec<LinkTarget>>
+Workspace::resolve_link(target: &str) -> Option<ResolvedLink>
 
-Drive::graph() -> Result<&GraphView>
+Workspace::graph() -> Result<&GraphView>
 GraphView::neighbors(rel: &str) -> Result<Vec<Edge>>
 GraphView::backlinks(rel: &str) -> Result<Vec<Edge>>
 GraphView::tags() -> Result<Vec<Tag>>
@@ -780,20 +780,20 @@ GraphView::forget_file(rel: &str) -> Result<()>
 GraphView::link_targets(q: &str, limit: u32) -> Result<Vec<LinkTarget>>
 ```
 
-### Drive: watch
+### Workspace: watch
 
 ```rust
-Drive::watch(cb: Arc<dyn WatchCallback>) -> Result<WatchHandle>
+Workspace::watch(cb: Arc<dyn WatchCallback>) -> Result<WatchHandle>
 
 trait WatchCallback: Send + Sync {
     fn on_event(&self, event: WatchEvent);
 }
 ```
 
-### Drive: progress and indexing status
+### Workspace: progress and indexing status
 
 Long-running operations (reindex, rename with link rewrite, contacts
-import, drive reset, embedding model load) report progress through
+import, workspace reset, embedding model load) report progress through
 one umbrella callback type. The same sink shape carries every stage,
 so a consumer (chan-server's WebSocket fan-out, the CLI's progress
 bar, future native shells) wires one listener instead of one per op.
@@ -823,8 +823,8 @@ enum ProgressStage {
 }
 
 // In-process pull side of the same signal.
-Drive::is_reindexing(&self) -> bool
-Drive::needs_rebuild(&self) -> bool
+Workspace::is_reindexing(&self) -> bool
+Workspace::needs_rebuild(&self) -> bool
 
 // Helpers for consumers that don't need a full type.
 fn progress_fn<F: Fn(ProgressEvent) + Send + Sync + 'static>(f: F)
@@ -859,17 +859,17 @@ Push vs. pull, and how the three signals relate:
     events per long-running call, fired on the producer's thread.
     Events are best-effort hints, not a stream contract; a slow
     consumer may drop ticks. The on-disk state is the authority.
-  - `Drive::is_reindexing()` is the pull side: true while a
+  - `Workspace::is_reindexing()` is the pull side: true while a
     `reindex_with` is in flight in this process, cleared on every
     exit path (success, error, cancellation, panic) via a RAII
     guard. A Web App / WebSocket client uses this on first connect
     to render "indexing..." without waiting for the next push.
-  - `Drive::needs_rebuild()` is orthogonal: set by `Drive::open`
+  - `Workspace::needs_rebuild()` is orthogonal: set by `Workspace::open`
     when it finds a stale `rebuild.inprogress` marker from a prior
     crashed reindex, cleared after the next successful `reindex_with`
     commits. Survives across process restarts, which the in-memory
     `is_reindexing()` cannot.
-  - `Drive::reconcile()` is the diff-based recovery path. Walks
+  - `Workspace::reconcile()` is the diff-based recovery path. Walks
     the live tree, compares each editable-text file's mtime against
     the graph row, and emits journal-bracketed `index_file` /
     `forget_file` calls only for the deltas. Unchanged files are
@@ -882,13 +882,13 @@ Push vs. pull, and how the three signals relate:
     via the size delta. Legacy rows predating v5 carry `size =
     NULL`, in which case reconcile falls back to mtime-only for
     that row and a subsequent `index_file` backfills size.
-  - `Drive::needs_replay_writes()` is the per-file companion: set
-    by `Drive::open` when it finds a non-empty `pending_writes.json`
+  - `Workspace::needs_replay_writes()` is the per-file companion: set
+    by `Workspace::open` when it finds a non-empty `pending_writes.json`
     journal under `graph_dir/`. Each entry is a `(rel, op)` pair
     written by `index_file` / `forget_file` before either backend
     is touched and removed after both commit. A crash between the
     graph commit and the search-index commit leaves the entry
-    behind; `Drive::replay_pending_writes()` re-runs the journaled
+    behind; `Workspace::replay_pending_writes()` re-runs the journaled
     ops against the current on-disk truth and clears the journal.
     `Index` entries degrade to `forget` when the file no longer
     exists; `forget` entries are idempotent against an already-
@@ -897,7 +897,7 @@ Push vs. pull, and how the three signals relate:
     with the in-flight backend state.
 
 Cardinality is per-file for `IndexFile` / `RenameRewrite` /
-`GraphRebuild` and per-batch for `EmbedBatch`; on a 10k-file drive
+`GraphRebuild` and per-batch for `EmbedBatch`; on a 10k-file workspace
 a full reindex can push tens of thousands of events. Consumers that
 fan out over a transport (chan-server WebSocket, native FFI bridge)
 should coalesce or rate-limit upstream of the socket; the producer
@@ -938,7 +938,7 @@ struct VcsParent { kind: VcsKind, repo_root: PathBuf }
 ```
 
 Pure stat-walk. Used by `chan serve` (and any future shell) to
-decide whether a drive path is inside a Git / Mercurial /
+decide whether a workspace path is inside a Git / Mercurial /
 Subversion working tree and would be better served at the repo
 root instead of an arbitrary subdir.
 
@@ -956,7 +956,7 @@ Algorithm:
     planted symlink or special file can't fool the suggestion.
   - Stop at: a mount boundary (`st_dev` change on Unix; skipped
     on Windows), at `$HOME` (never inspected; dotfiles-as-git is
-    unrelated to drive-root selection), or at the filesystem root.
+    unrelated to workspace-root selection), or at the filesystem root.
 
 The function never invokes `git`/`hg`/`svn` and never reads
 repository contents. The shell layer (`chan serve`, desktop) is
@@ -970,7 +970,7 @@ repo root, present a dialog, accept an explicit override).
 `IndexConfig`, `IndexStats`, `BuildOptions`, `BuildSummary`.
 `ProgressCallback`, `ProgressEvent`, `ProgressStage`, `NoProgress`,
 `progress_fn`. `ResetMode { Cache, Everything }`, `ResetReport`.
-`KnownDrive`, `Registry`. `Edge`, `EdgeKind`, `Tag`, `HeadingRow`,
+`KnownWorkspace`, `Registry`. `Edge`, `EdgeKind`, `Tag`, `HeadingRow`,
 `LinkTarget`, `LinkTargetKind`. `WatchEvent`, `WatchKind`,
 `WatchHandle`, `WatchCallback`. `VcsKind`, `VcsParent`. `ChanError`,
 `Result`.
@@ -984,11 +984,11 @@ across a WebSocket / FFI bridge without an intermediate copy type.
 
 ### Sandbox and path resolution
 
-  - Every Drive entry point uses `fs_ops::resolve_safe_strict`
+  - Every Workspace entry point uses `fs_ops::resolve_safe_strict`
     (lexical sandbox plus a canonical-form check on the deepest
     existing ancestor). New entry points must do the same. The
     strict variant catches mid-path symlinks pointing outside
-    the drive.
+    the workspace.
   - `lstat`, never `stat`, on user paths: `read` / `write` /
     `stat` / `remove` use `fs_ops::ensure_regular_file` or
     `std::fs::symlink_metadata` so a symlink target can't mask
@@ -1006,11 +1006,11 @@ across a WebSocket / FFI bridge without an intermediate copy type.
     Dir-relative atomic writes on hot paths, closing the TOCTOU
     window between resolve and open by anchoring the open at a
     pre-validated `Dir` handle.
-  - **Stat before read in `index_file`**: `Drive::index_file_inner`
+  - **Stat before read in `index_file`**: `Workspace::index_file_inner`
     stats the file (capturing `(mtime, size)`) BEFORE reading its
     content. A concurrent writer that lands in the window between
     the two then leaves the graph holding the older stat tuple with
-    the newer content; `Drive::reconcile`'s next pass sees
+    the newer content; `Workspace::reconcile`'s next pass sees
     `graph.stat != disk.stat` and re-runs the file. Read-then-stat
     would do the opposite, stamping the post-write tuple onto the
     pre-write content; reconcile's diff would match and the drift
@@ -1020,11 +1020,11 @@ across a WebSocket / FFI bridge without an intermediate copy type.
 
 ### Symlink and special-file policy
 
-The Drive entry points enforce three rules so the layer never
+The Workspace entry points enforce three rules so the layer never
 accidentally hangs on, follows, or mutates a non-regular file:
 
 1. **Mid-path symlinks**: rejected when their canonical target
-   leaves the drive. In-drive symlinks (`alias -> ./real`) pass
+   leaves the workspace. In-workspace symlinks (`alias -> ./real`) pass
    the path-resolve leg.
 2. **Final-component symlinks**: rejected by every read / write
    op. Atomic rename would otherwise replace the link with a
@@ -1041,7 +1041,7 @@ accidentally hangs on, follows, or mutates a non-regular file:
 Walker invariants:
 
   - `walkdir::follow_links(false)` and `same_file_system(true)`
-    so symlink loops can't occur and a misregistered drive that
+    so symlink loops can't occur and a misregistered workspace that
     spans onto a network mount won't drag the indexer into it.
   - Iteration drops non-regular non-dir entries, so the UI tree
     and the indexer only ever see real files and dirs.
@@ -1060,7 +1060,7 @@ What's NOT closed today:
 
 ### Atomic writes
 
-Anything chan-drive-managed (registry, sessions, blob storage,
+Anything chan-workspace-managed (registry, sessions, blob storage,
 graph control records, atomic-write user files) routes through
 `fs_ops::atomic_write` (or its cap-std equivalent for sandboxed
 writes): tmpfile in the same directory, fsync the file, rename
@@ -1076,11 +1076,11 @@ previous version.
 ```
 register / open               read                          write
 -----------------             -----------                   ------
-Library::register_drive       Drive::read*                  Drive::write_*
+Library::register_drive       Workspace::read*                  Workspace::write_*
   Mutex<Registry> lock          fs_ops::resolve_safe          fs_ops::atomic_write
   atomic_write registry         (no lock)                     (no lock)
 
-Drive::open                   Drive::search                 Drive::reindex
+Workspace::open                   Workspace::search                 Workspace::reindex
   fs4::try_lock_exclusive       tantivy reader (no lock)      tantivy writer
   on writer.lock                                              (held by lock)
 
@@ -1091,12 +1091,12 @@ Drive::open                   Drive::search                 Drive::reindex
 
 Two distinct concurrency primitives:
 
-  - `DriveLock` (cross-process): held for the lifetime of
-    `Drive`. A second process opening the same drive errors
-    immediately with `ChanError::DriveLocked`; we do NOT block.
+  - `WorkspaceLock` (cross-process): held for the lifetime of
+    `Workspace`. A second process opening the same workspace errors
+    immediately with `ChanError::WorkspaceLocked`; we do NOT block.
     Callers handle the error explicitly (CLI prints a message
     and exits; desktop app falls back to opening another
-    drive).
+    workspace).
   - `Mutex<Registry>`, `Mutex<Connection>` (graph writer), and
     the r2d2 pool (graph readers): intra-process. Cheap.
 
@@ -1104,15 +1104,15 @@ Reading does not take the cross-process lock. tantivy is multi-
 reader-safe by design; sqlite WAL mode plus the r2d2 reader pool
 lets concurrent readers proceed alongside the writer.
 
-### Drive-internal noise filter
+### Workspace-internal noise filter
 
-chan-drive stores ZERO files inside the user's drive directory.
-The drive is purely user content (markdown, attachments). This
-makes it safe to drop a drive inside an existing git repo, an
+chan-workspace stores ZERO files inside the user's workspace directory.
+The workspace is purely user content (markdown, attachments). This
+makes it safe to drop a workspace inside an existing git repo, an
 iCloud / Google Drive / Dropbox directory, or anywhere else. A stray
 `.chan/` left over from an older install or created by a third-
 party tool is filtered out by `walk_drive` and `watch::dispatch`;
-chan-drive never emits events for it or includes it in
+chan-workspace never emits events for it or includes it in
 `list_tree`.
 
 ## 6. On-disk layout
@@ -1121,14 +1121,14 @@ chan-drive never emits events for it or includes it in
 
 ```
 ~/.chan/                          (config_dir on desktop)
-  config.toml                     drive registry + default drive root
-  drives/<metadata_key>/          per-drive metadata root
+  config.toml                     workspace registry + default workspace root
+  workspaces/<metadata_key>/          per-workspace metadata root
     sessions/                     opaque session blobs
     graph/graph.sqlite            graph DB and graph sidecars
     locks/                        cross-process coordination
     tokens/                       bearer-token store allocated for
                                   apps such as chan-server
-    trash/<id>/                   per-drive Trash. Each entry holds
+    trash/<id>/                   per-workspace Trash. Each entry holds
       payload | payload/          the moved file or directory and
       meta.json                   a JSON sidecar (original_path,
                                   deleted_at, is_dir, size). meta is
@@ -1138,7 +1138,7 @@ chan-drive never emits events for it or includes it in
     index/                        tantivy segments + dense vectors +
                                   config.toml
     drafts/                       in-progress drafts outside the
-                                  user drive root
+                                  user workspace root
 ```
 
 `<metadata_key>` is the path slug plus an 8-hex hash of the
@@ -1164,11 +1164,11 @@ visible" argument for `~/.chan/` does not apply on mobile (the
 user cannot browse the sandbox anyway), so the registry lives
 alongside the rest of the per-app state.
 
-### Drive contents
+### Workspace contents
 
 User content only: markdown, attachments, whatever the user puts
-there. chan-drive never writes inside the drive root. This is a
-load-bearing invariant for the "drive a git repo / sync directory"
+there. chan-workspace never writes inside the workspace root. This is a
+load-bearing invariant for the "workspace a git repo / sync directory"
 story.
 
 ## 7. Error model
@@ -1185,7 +1185,7 @@ not round-trip cleanly across the FFI.
 
 Notable variants:
 
-  - `DriveLocked`: another process holds the writer lock.
+  - `WorkspaceLocked`: another process holds the writer lock.
   - `WriteConflict { current_mtime }`: CAS write lost the race.
   - `TrashOccupied`: restore would clobber a live entry.
   - `SpecialFile`: target is a symlink, FIFO, socket, or device.
@@ -1198,7 +1198,7 @@ Notable variants:
     idempotent and applied on every `GraphView::open`. Current
     version: 5 (v2 added basename, v3 added emails, v4 added
     staging tables for resumable reindex, v5 added a `size` column
-    on `nodes` + `staging_nodes` so `Drive::reconcile` can detect
+    on `nodes` + `staging_nodes` so `Workspace::reconcile` can detect
     same-mtime-different-content rewrites that a mtime-only diff
     would miss). Each `v < N` block wraps its schema change and the
     `PRAGMA user_version = N` bump in a single
@@ -1247,7 +1247,7 @@ managed cache is destroyed; the user's notes are untouched.
 
 ## 9. Consumers
 
-`chan-drive` is consumed by the following crates. The first three
+`chan-workspace` is consumed by the following crates. The first three
 live in the sibling repo `chan-writer/chan` and are pulled as
 path deps for now; switch to git or crates.io deps when the
 repos go public. The fourth is forward-looking.
@@ -1257,7 +1257,7 @@ repos go public. The fourth is forward-looking.
 The `chan` binary parses CLI args (clap) and dispatches
 subcommands (`add`, `list`, `remove`, `serve`, `index`,
 `search`, `upgrade`, an internal `__mcp`). It depends on
-`chan-drive` directly with `default-features = false`, then
+`chan-workspace` directly with `default-features = false`, then
 re-enables `embeddings` (and `metal` on macOS, `cuda` opt-in on
 Linux) through its own feature passthroughs so `--no-default-
 features` propagates end-to-end. It also depends on `chan-server`
@@ -1269,44 +1269,44 @@ Usage shape:
   - `Library::open()` once at startup.
   - `library.list_drives()`, `register_drive`, `unregister_drive`
     for the registry subcommands.
-  - `library.open_drive(root)` to get an `Arc<Drive>`, then
-    `drive.search(...)`, `drive.reindex(...)`, `drive.list_tree()`
+  - `library.open_drive(root)` to get an `Arc<Workspace>`, then
+    `workspace.search(...)`, `workspace.reindex(...)`, `workspace.list_tree()`
     for `index` / `search` / direct CLI access.
   - `Library::reset_drive` for `chan reset`.
 
 ### `chan-writer/chan` :: `chan-server` (HTTP + WebSocket)
 
-`chan-server` wraps `chan-drive`'s `Library` / `Drive` handles in
+`chan-server` wraps `chan-workspace`'s `Library` / `Workspace` handles in
 axum routes and serves the embedded Svelte frontend (rust-embed).
 It exposes REST endpoints for filesystem ops, search, graph
 traversal, link autocomplete, and trash management; a WebSocket
 channel for `WatchEvent`s; and session blob endpoints that proxy
 directly to `put_session`.
 
-It depends on `chan-drive` with `default-features = false` and
+It depends on `chan-workspace` with `default-features = false` and
 forwards `embeddings`, `metal`, `cuda` through its own feature
 gates. `chan-server`'s "embeddings on" UI badge reflects the
-chan-drive feature state at compile time.
+chan-workspace feature state at compile time.
 
 Usage shape:
 
   - One `Arc<Library>` in the axum extension state.
-  - `Arc<Drive>` per-drive in a `RwLock<HashMap<DriveKey,
-    Arc<Drive>>>` populated lazily on first request.
+  - `Arc<Workspace>` per-workspace in a `RwLock<HashMap<WorkspaceKey,
+    Arc<Workspace>>>` populated lazily on first request.
   - WebSocket handler installs a `WatchCallback` that
     serializes `WatchEvent`s onto the socket; drops the
     `WatchHandle` on disconnect. The same socket (or a sibling
     one) carries `ProgressEvent`s by installing a
     `ProgressCallback` that forwards each tick as JSON, and
     answers a "status on connect" probe with
-    `Drive::is_reindexing()` / `Drive::needs_rebuild()` /
-    `Drive::index_stats()` so a freshly attached Web App client
+    `Workspace::is_reindexing()` / `Workspace::needs_rebuild()` /
+    `Workspace::index_stats()` so a freshly attached Web App client
     can render the indexing state without waiting for the next
     push.
-  - All HTTP filesystem ops route through `Drive` so the
+  - All HTTP filesystem ops route through `Workspace` so the
     sandbox, special-file refusal, atomic writes, and editable-
     text gate apply automatically. `chan-server` never reads or
-    writes drive contents directly.
+    writes workspace contents directly.
 
 ### `chan-writer/chan` :: `fetch-models` (build helper)
 
@@ -1314,17 +1314,17 @@ Usage shape:
 default embedding model (`BAAI/bge-small-en-v1.5`, ~130 MB) into
 `crates/chan-server/resources/models/` so chan-server's rust-
 embed step bundles it into the release binary. It depends on
-`chan-drive` with the `embeddings` feature explicitly enabled to
+`chan-workspace` with the `embeddings` feature explicitly enabled to
 reuse the same hf-hub + tokenizers stack the runtime uses, so a
 contributor's `cargo build` does not pay the model download
 unless `make models` (or `make build-release`) runs.
 
-The crate uses `chan_drive::DEFAULT_MODEL` and the embedder's
-fetcher entry point; it does not open a `Drive`.
+The crate uses `chan_workspace::DEFAULT_MODEL` and the embedder's
+fetcher entry point; it does not open a `Workspace`.
 
 ### Future native shells (iOS / Android)
 
-`chan-drive`'s public API is shaped to survive a uniffi
+`chan-workspace`'s public API is shaped to survive a uniffi
 boundary: no lifetimes on public types, owned `String` /
 `PathBuf` only, `Arc`-able handles, one umbrella `ChanError`
 enum with primitive payloads, callback-based streaming through
@@ -1350,24 +1350,24 @@ Wired and tested:
     optional candle-backed dense path under the `embeddings`
     feature. `Hybrid` mode runs both and fuses with reciprocal-
     rank fusion. Schema versioned via `<index_dir>/config.toml`;
-    mismatches wipe and rebuild on next open. `Drive::search`,
-    `Drive::index_file`, `Drive::reindex`, `Drive::reindex_with`,
-    `Drive::forget_file`, `Drive::num_indexed`,
-    `Drive::index_stats` all functional.
+    mismatches wipe and rebuild on next open. `Workspace::search`,
+    `Workspace::index_file`, `Workspace::reindex`, `Workspace::reindex_with`,
+    `Workspace::forget_file`, `Workspace::num_indexed`,
+    `Workspace::index_stats` all functional.
   - **Graph reads + writes** (`src/graph.rs`): `neighbors`,
     `backlinks`, `tags`, `files_with_tag`, `files`,
     `headings_of` return real data. `replace_file` inserts
     outgoing edges (links + tag/mention tokens) and headings
     with computed anchors. `clear` wipes everything for a full
     rebuild. WAL plus r2d2 reader pool; writer behind a Mutex.
-  - **Watcher** (`src/watch.rs`): `Drive::watch` is wired and
-    filters drive-internal noise (`.chan/`, `.git/`).
+  - **Watcher** (`src/watch.rs`): `Workspace::watch` is wired and
+    filters workspace-internal noise (`.chan/`, `.git/`).
   - **Built-in graph indexer** (`src/indexer.rs`):
-    `Drive::start_graph_indexer(debounce_ms)` returns a
+    `Workspace::start_graph_indexer(debounce_ms)` returns a
     `GraphIndexer` handle that owns a watcher subscription and a
     worker thread; per-path events are debounced, deletions and
     rename sources flush immediately, and watcher-error / path-
-    less events drive a `Drive::reconcile`. Replaces the
+    less events workspace a `Workspace::reconcile`. Replaces the
     duplicated indexer loop each consumer (chan binary, chan-
     server) previously maintained.
 
@@ -1377,10 +1377,10 @@ Still ahead:
     chunk snippets but the breadcrumb (`heading_path`) is not
     fully populated for every chunking mode. Tightens relevance
     for long files.
-  - **Wiki-link resolution**: `Drive::resolve_link` exists for
+  - **Wiki-link resolution**: `Workspace::resolve_link` exists for
     direct (`recipes/pasta` to `recipes/pasta.md`) lookups.
     Fuzzier resolution (prefix-match, alias table) lives at the
-    consumer layer for now. Could move into chan-drive if every
+    consumer layer for now. Could move into chan-workspace if every
     consumer needs the same logic.
   - **TOCTOU hardening on cold paths**: hot writer paths use
     cap-std; cold paths rely on the strict resolve plus single-
@@ -1392,19 +1392,19 @@ Still ahead:
 
 Sketch only, not committed:
 
-  - (committed) `Drive::start_graph_indexer(debounce_ms)`: returns
+  - (committed) `Workspace::start_graph_indexer(debounce_ms)`: returns
     a `GraphIndexer` handle. The indexer owns a watcher
     subscription and a worker thread; per-path events are debounced
     with a trailing-edge window, deletions and the source side of
     renames are flushed immediately, and `ProviderError` or
-    path-less events drive a full `Drive::reconcile`. Removes the
+    path-less events workspace a full `Workspace::reconcile`. Removes the
     duplicated indexer loop from chan / chan-server. Counters
     (`pending_count`, `indexed_total`, `forgotten_total`,
-    `reconciles_total`) drive the status surface. Drop the handle
+    `reconciles_total`) workspace the status surface. Drop the handle
     (or call `stop()`) to tear down synchronously.
-  - Remote-backed `Drive` impl: a future trait split could let
+  - Remote-backed `Workspace` impl: a future trait split could let
     a thin client call `read` / `write` / `search` against an
-    HTTP endpoint while the server runs the real chan-drive.
+    HTTP endpoint while the server runs the real chan-workspace.
     Not designed for now; the API surface is shaped to allow
     it later. The chan-tunnel crates already give us the
     transport.

@@ -109,19 +109,19 @@ fn err_from_reset(e: &ResetError) -> Response {
     }
 }
 
-/// Replace `state.drive_cell` end-to-end. Holds the write lock the
+/// Replace `state.workspace_cell` end-to-end. Holds the write lock the
 /// entire time so handlers waiting on the read lock see exactly one
 /// transition (old workspace -> new workspace); they never observe the
 /// `None` middle state.
 ///
-/// Drain protocol: we keep one strong `Arc<Workspace>` aside (`drive_strong`)
+/// Drain protocol: we keep one strong `Arc<Workspace>` aside (`workspace_strong`)
 /// after taking the cell out, then poll `Arc::strong_count` until only
 /// our copy remains. Holding the write lock means no NEW handler can
 /// reborrow the workspace, so the count is monotonically non-increasing
 /// once the cell is gone — a `strong_count > 1` deadline expiry is a
 /// genuine "an MCP session / detached task is still pinning the workspace".
 ///
-/// On Busy we restore the original `drive_strong` as the cell (with
+/// On Busy we restore the original `workspace_strong` as the cell (with
 /// fresh watcher + indexer). This avoids reopening through chan-workspace,
 /// which would race the lingering Arc on the per-workspace flock and fail
 /// with `WorkspaceLocked`.
@@ -130,7 +130,7 @@ fn perform_reset(
     mode: ResetMode,
 ) -> Result<chan_workspace::ResetReport, ResetError> {
     let mut cell_guard = state
-        .drive_cell
+        .workspace_cell
         .write()
         .map_err(|_| ResetError::Poisoned("workspace cell lock"))?;
     state.terminal_sessions.close_all(CloseReason::Workspace);
@@ -148,16 +148,16 @@ fn perform_reset(
     // (separately) the cell's own workspace clone; whatever strong refs
     // remain belong to in-flight handlers, MCP sessions, or the
     // detached tokio tasks the dropped Indexer struct left behind.
-    let drive_strong = cell.workspace.clone();
+    let workspace_strong = cell.workspace.clone();
     drop(cell);
     let deadline = Instant::now() + RESET_DRAIN_DEADLINE;
-    while Arc::strong_count(&drive_strong) > 1 && Instant::now() < deadline {
+    while Arc::strong_count(&workspace_strong) > 1 && Instant::now() < deadline {
         std::thread::sleep(Duration::from_millis(25));
     }
-    if Arc::strong_count(&drive_strong) > 1 {
+    if Arc::strong_count(&workspace_strong) > 1 {
         // Outstanding clones never dropped. Restore the original
         // workspace Arc as the cell with a fresh watcher + indexer; the
-        // caller retries the reset. Reusing `drive_strong` instead
+        // caller retries the reset. Reusing `workspace_strong` instead
         // of reopening sidesteps chan-workspace's per-workspace flock (which
         // a lingering Arc still holds).
         let bridge = make_watch_bridge(
@@ -166,7 +166,7 @@ fn perform_reset(
             &state.self_writes,
             &state.scope_registry,
         );
-        let watch_handle = drive_strong.watch(bridge).map_err(ResetError::Core)?;
+        let watch_handle = workspace_strong.watch(bridge).map_err(ResetError::Core)?;
         let search_aggression = state
             .server_config
             .lock()
@@ -174,14 +174,14 @@ fn perform_reset(
             .search
             .aggression;
         let indexer = Arc::new(Indexer::spawn(
-            drive_strong.clone(),
+            workspace_strong.clone(),
             state.index_events_tx.subscribe(),
             true,
             search_aggression,
             make_progress_broadcast(&state.events_tx),
         ));
         *cell_guard = Some(WorkspaceCell {
-            workspace: drive_strong,
+            workspace: workspace_strong,
             watch_handle: Some(watch_handle),
             indexer,
         });
@@ -189,15 +189,15 @@ fn perform_reset(
     }
     // Last strong ref is ours. Drop it so chan-workspace's flock releases
     // before `reset_workspace` tries to verify exclusive access.
-    drop(drive_strong);
+    drop(workspace_strong);
     // Clean. Run the actual wipe, reopen, restart watcher + indexer.
     let report = state
         .library
-        .reset_workspace(&state.drive_root, mode)
+        .reset_workspace(&state.workspace_root, mode)
         .map_err(ResetError::Core)?;
     let workspace = state
         .library
-        .open_workspace(&state.drive_root)
+        .open_workspace(&state.workspace_root)
         .map_err(ResetError::Core)?;
     let bridge = make_watch_bridge(
         &state.events_tx,

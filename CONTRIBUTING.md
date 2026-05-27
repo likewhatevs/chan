@@ -2,11 +2,11 @@
 
 Thanks for the interest. chan is a small, single-binary
 notes app: a CLI plus an HTTP server that serves an
-embedded Svelte editor for plain markdown drives.
+embedded Svelte editor for plain markdown workspaces.
 Contributions are welcome.
 
 This file is the practical guide. For the architectural
-shape (workspace layout, drive boundary, single-binary
+shape (workspace layout, workspace boundary, single-binary
 discipline, MCP-only stance), read
 [`CLAUDE.md`](CLAUDE.md) at the repo root.
 
@@ -87,8 +87,8 @@ amended into the previous one.
 These are load-bearing for chan's identity; PRs that
 breach them get bounced for discussion before merge:
 
-* **Drive boundary**: every user-content filesystem
-  operation routes through `chan_drive::Drive`. No
+* **Workspace boundary**: every user-content filesystem
+  operation routes through `chan_workspace::Workspace`. No
   direct `std::fs::*` on user content from anywhere
   else in the workspace.
 * **Single binary, no runtime deps**: no Node.js,
@@ -111,8 +111,8 @@ Use GitHub Issues. Include:
 
 * `chan --version` output.
 * Platform + OS version (macOS, Linux distro, etc.).
-* Steps to reproduce, including drive path layout when
-  relevant (avoid attaching private drive content).
+* Steps to reproduce, including workspace path layout when
+  relevant (avoid attaching private workspace content).
 * Expected vs actual behavior.
 
 Security-sensitive reports go through
@@ -131,7 +131,7 @@ PR than after.
 We aim for quick turnarounds. Reviews focus on:
 
 * Correctness + safety (esp. anything touching the
-  drive boundary).
+  workspace boundary).
 * Test coverage proportional to the change.
 * Doc updates for user-visible behavior.
 * Simplicity: the smallest change that does the job.

@@ -5,13 +5,13 @@
 //! 1. `serve_tunnel_listener` with chan-desktop's `LocalValidator`
 //!    on `127.0.0.1:0`.
 //! 2. `chan_tunnel_client::dial` + `serve_substreams` registering a
-//!    drive under the bearer-token-as-username, serving a tiny axum
+//!    workspace under the bearer-token-as-username, serving a tiny axum
 //!    upstream that echoes the path it received.
 //! 3. `spawn_tenant_listener` from chan-desktop's tunnel module,
 //!    producing a per-tenant loopback listener.
 //! 4. A plain `reqwest` GET against the per-tenant listener at
-//!    `/{drive}/ping`. Asserts the upstream saw `/ping` (the
-//!    `/{label}/{drive}` prefix was rewritten in and then stripped).
+//!    `/{workspace}/ping`. Asserts the upstream saw `/ping` (the
+//!    `/{label}/{workspace}` prefix was rewritten in and then stripped).
 //!
 //! Guardrail 5 from the design handoff: pin the URL shape so a
 //! future axum bump cannot silently break the rewrite.
@@ -40,7 +40,7 @@ mod desktop_validator;
 #[tokio::test]
 async fn rewritten_path_reaches_registry_looked_up_tunnel() {
     let label = "alex-laptop";
-    let drive_name = "notes";
+    let workspace_name = "notes";
 
     // 1. Tunnel listener with chan-desktop's actual validator.
     let registry = Registry::new();
@@ -60,7 +60,7 @@ async fn rewritten_path_reaches_registry_looked_up_tunnel() {
         tunnel_url: Url::parse(&format!("http://127.0.0.1:{tunnel_port}/v1/tunnel"))
             .expect("hard-coded url"),
         token: label.to_string(),
-        drive: drive_name.to_string(),
+        workspace: workspace_name.to_string(),
         client_version: "chan-desktop/test".into(),
         public: false,
         initial_backoff: Duration::from_millis(50),
@@ -86,7 +86,7 @@ async fn rewritten_path_reaches_registry_looked_up_tunnel() {
     // Wait for registration.
     let mut registered = false;
     for _ in 0..100 {
-        if registry.get(label, drive_name).is_some() {
+        if registry.get(label, workspace_name).is_some() {
             registered = true;
             break;
         }
@@ -106,8 +106,8 @@ async fn rewritten_path_reaches_registry_looked_up_tunnel() {
     // either of them.
     tokio::time::sleep(Duration::from_millis(50)).await;
 
-    // 4. GET /{drive}/ping. Visit URL has no `label` segment.
-    let url = format!("http://127.0.0.1:{port}/{drive_name}/ping");
+    // 4. GET /{workspace}/ping. Visit URL has no `label` segment.
+    let url = format!("http://127.0.0.1:{port}/{workspace_name}/ping");
     let resp = reqwest::Client::builder()
         .build()
         .unwrap()
@@ -120,8 +120,8 @@ async fn rewritten_path_reaches_registry_looked_up_tunnel() {
     assert_eq!(status, reqwest::StatusCode::OK, "url={url}, body={body}");
     // The upstream chan-serve substitute saw `/ping` — i.e. the
     // layer prepended `/{label}` so the inner router matched
-    // `/:user/:drive/*rest` with (`label`, `drive`, `ping`), then
-    // stripped both `/:user/:drive` segments before forwarding.
+    // `/:user/:workspace/*rest` with (`label`, `workspace`, `ping`), then
+    // stripped both `/:user/:workspace` segments before forwarding.
     // Pin the literal string: any future change in axum / upstream
     // proxy that alters the stripped path will trip here.
     assert_eq!(body, "upstream-saw:/ping");

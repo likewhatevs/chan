@@ -55,7 +55,7 @@ impl EmbeddedServer {
         let prefix = prefix_for_key(key);
         let hosted = self
             .host
-            .open_registered_drive(Path::new(key), serve_config(self.addr, &prefix))
+            .open_registered_workspace(Path::new(key), serve_config(self.addr, &prefix))
             .await
             .map_err(|e| map_open_error(key, e))?;
         Ok(hosted.handle.launch_url())
@@ -74,13 +74,13 @@ impl EmbeddedServer {
     /// reach the SAME handle the runtime holds instead of re-opening
     /// (which would hit `WorkspaceAlreadyOpen` against the lifetime
     /// flock).
-    pub fn live_drive(&self, root: &Path) -> Option<Arc<chan_workspace::Workspace>> {
-        self.host.live_drive(root)
+    pub fn live_workspace(&self, root: &Path) -> Option<Arc<chan_workspace::Workspace>> {
+        self.host.live_workspace(root)
     }
 
     pub fn close_prefix(&self, prefix: &str) -> Result<(), String> {
         self.host
-            .close_drive(prefix)
+            .close_workspace(prefix)
             .map_err(|e| format!("closing embedded route {prefix}: {e}"))?;
         Ok(())
     }
@@ -123,7 +123,7 @@ fn serve_config(addr: SocketAddr, prefix: &str) -> chan_server::ServeConfig {
 }
 
 fn prefix_for_key(key: &str) -> String {
-    format!("/{}", serve::drive_window_prefix(key))
+    format!("/{}", serve::workspace_window_prefix(key))
 }
 
 async fn serve_router(
@@ -142,10 +142,10 @@ mod tests {
     use super::*;
 
     #[test]
-    fn prefix_for_key_uses_drive_window_prefix() {
+    fn prefix_for_key_uses_workspace_window_prefix() {
         let key = "/tmp/chan notes";
         let prefix = prefix_for_key(key);
         assert!(prefix.starts_with("/workspace-"));
-        assert_eq!(prefix, format!("/{}", serve::drive_window_prefix(key)));
+        assert_eq!(prefix, format!("/{}", serve::workspace_window_prefix(key)));
     }
 }

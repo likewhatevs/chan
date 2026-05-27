@@ -174,7 +174,7 @@ mod tests {
         fn wake(self: Arc<Self>) {}
     }
 
-    /// Drive an h2 connection to completion in a background task.
+    /// Workspace an h2 connection to completion in a background task.
     /// h2 connections are passive: nothing happens until somebody
     /// awaits them. The test sides each spawn one of these so the
     /// frames actually move while the H2Duplex halves are exercised.
@@ -189,7 +189,7 @@ mod tests {
             let send = respond
                 .send_response(response, false)
                 .expect("send response");
-            // Keep accepting (always Pending here) to drive
+            // Keep accepting (always Pending here) to workspace
             // connection-level I/O while the duplex is in use. The
             // task ends when the peer closes the connection.
             tokio::spawn(async move { while conn.accept().await.is_some() {} });

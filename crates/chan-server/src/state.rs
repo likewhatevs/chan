@@ -21,15 +21,15 @@ use crate::{EditorPrefs, ServerConfig};
 pub struct AppState {
     pub library: Library,
     /// Workspace root resolved at boot. Stays stable for the server's
-    /// lifetime even when `drive_cell` is swapped during a reset
+    /// lifetime even when `workspace_cell` is swapped during a reset
     /// (the swap reopens against the same root).
-    pub drive_root: PathBuf,
+    pub workspace_root: PathBuf,
     /// Live workspace + its watcher, behind an RwLock so /api/storage/
     /// reset can drop and reopen them without restarting the
     /// process. Always `Some` outside the brief swap window inside
     /// reset itself; handlers reach the inner Arc<Workspace> via
     /// `state.workspace()` which clones it under a read lock.
-    pub drive_cell: Arc<RwLock<Option<WorkspaceCell>>>,
+    pub workspace_cell: Arc<RwLock<Option<WorkspaceCell>>>,
     pub token: Option<String>,
     /// Canonical URL prefix the SPA prepends to fetch and WebSocket
     /// URLs, injected into the shell as `<meta name="chan-prefix">`.
@@ -150,9 +150,9 @@ impl AppState {
     /// the cell out a moment later, so callers don't need to hold
     /// the lock through their I/O.
     ///
-    pub fn try_drive(&self) -> Result<Arc<Workspace>, StateAccessError> {
+    pub fn try_workspace(&self) -> Result<Arc<Workspace>, StateAccessError> {
         let cell = self
-            .drive_cell
+            .workspace_cell
             .read()
             .map_err(|_| StateAccessError::WorkspaceCellPoisoned)?;
         let Some(cell) = cell.as_ref() else {
@@ -163,16 +163,16 @@ impl AppState {
 
     /// Legacy infallible accessor for call sites that have not yet
     /// been converted to explicit HTTP errors. New route code should
-    /// prefer `try_drive`.
+    /// prefer `try_workspace`.
     pub fn workspace(&self) -> Arc<Workspace> {
-        self.try_drive().expect("workspace state unavailable")
+        self.try_workspace().expect("workspace state unavailable")
     }
 
     /// Snapshot the live indexer Arc. Same RwLock pattern as
     /// `workspace()`: held only for the duration of the clone.
     pub fn try_indexer(&self) -> Result<Arc<indexer::Indexer>, StateAccessError> {
         let cell = self
-            .drive_cell
+            .workspace_cell
             .read()
             .map_err(|_| StateAccessError::WorkspaceCellPoisoned)?;
         let Some(cell) = cell.as_ref() else {
@@ -186,8 +186,8 @@ impl AppState {
 pub(crate) mod test_support {
     //! Minimal `AppState` builder for tests that exercise the
     //! middleware / handlers but don't need a real workspace on disk.
-    //! The `drive_cell` is intentionally left `None`: callers that
-    //! try to reach into it will hit the `drive_cell missing` panic
+    //! The `workspace_cell` is intentionally left `None`: callers that
+    //! try to reach into it will hit the `workspace_cell missing` panic
     //! from `AppState::workspace()`, which is the right failure mode
     //! (the test isn't supposed to touch the workspace).
     //!
@@ -235,8 +235,8 @@ pub(crate) mod test_support {
         std::mem::forget(shutdown_tx);
         Arc::new(AppState {
             library: lib,
-            drive_root: PathBuf::from("/dev/null"),
-            drive_cell: Arc::new(RwLock::new(None)),
+            workspace_root: PathBuf::from("/dev/null"),
+            workspace_cell: Arc::new(RwLock::new(None)),
             token: None,
             prefix: Arc::new(RwLock::new(String::new())),
             settings_disabled,
@@ -248,7 +248,7 @@ pub(crate) mod test_support {
             self_writes: Arc::new(SelfWrites::new()),
             last_activity: Arc::new(AtomicU64::new(0)),
             terminal_sessions: Arc::new(TerminalRegistry::new(RegistryConfig {
-                drive_root: PathBuf::from("/dev/null"),
+                workspace_root: PathBuf::from("/dev/null"),
                 mcp_socket_path: None,
                 control_socket_path: None,
                 terminal: ServerConfig::default().terminal,
@@ -260,21 +260,21 @@ pub(crate) mod test_support {
     }
 
     #[test]
-    fn try_drive_reports_missing_cell() {
+    fn try_workspace_reports_missing_cell() {
         let state = make_test_state(false, false);
 
         assert!(matches!(
-            state.try_drive(),
+            state.try_workspace(),
             Err(super::StateAccessError::WorkspaceCellMissing)
         ));
     }
 
     #[test]
-    fn try_indexer_reports_poisoned_drive_cell() {
+    fn try_indexer_reports_poisoned_workspace_cell() {
         let state = make_test_state(false, false);
-        let drive_cell = state.drive_cell.clone();
+        let workspace_cell = state.workspace_cell.clone();
         let _ = std::thread::spawn(move || {
-            let _guard = drive_cell.write().expect("poison setup");
+            let _guard = workspace_cell.write().expect("poison setup");
             panic!("poison workspace cell");
         })
         .join();

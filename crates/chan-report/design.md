@@ -11,7 +11,7 @@ the walker applies.
 a directory tree: per-file language, SLOC, comments, blanks, a
 keyword-based complexity score, plus per-language roll-ups and a
 Basic COCOMO summary computed from the totals. It is the data
-backend behind a future "what's in this drive?" view in chan and
+backend behind a future "what's in this workspace?" view in chan and
 a future `repo_report` assistant tool.
 
 In scope:
@@ -31,14 +31,14 @@ In scope:
 Out of scope:
 
   - Persistence. The crate never writes to disk. The consumer
-    (chan-drive) atomically writes the JSONL the crate emits.
+    (chan-workspace) atomically writes the JSONL the crate emits.
   - Filesystem watching. The consumer wires its own watcher to
     `Index::update` / `Index::remove` / `Index::rename`.
   - Cyclomatic or AST-level complexity. The complexity field is
     a keyword count, documented as such.
   - Git metadata (commits, blame, ranges). Walker respects
     `.gitignore` but never inspects git history.
-  - Multi-root or cross-drive aggregation. One root per `Index`.
+  - Multi-root or cross-workspace aggregation. One root per `Index`.
 
 ## 2. Architecture overview
 
@@ -90,7 +90,7 @@ Headline types in `lib.rs`:
     exclude_globs, cocomo.
   - `Scope` selects what a snapshot covers: `All`,
     `Prefix(String)`, or `Files(Vec<String>)`. Paths are
-    drive-relative POSIX strings.
+    workspace-relative POSIX strings.
   - `Index` holds the per-file state plus the cached
     accept-filter (so incremental updates apply the same
     hidden / gitignore / exclude rules as the initial scan).
@@ -109,12 +109,12 @@ Headline types in `lib.rs`:
 `run(opts)` is a one-shot helper equivalent to
 `Index::scan(opts)?.snapshot(&Scope::All, &opts.cocomo)`.
 
-`count_file(root, rel)` is exposed so chan-drive (or tests) can
+`count_file(root, rel)` is exposed so chan-workspace (or tests) can
 re-count without going through `Index`.
 
 ### Subdirectory and per-file queries
 
-`Scope::Prefix("crates/chan-drive")` rolls up every file under
+`Scope::Prefix("crates/chan-workspace")` rolls up every file under
 that prefix; `Scope::Files(...)` rolls up an explicit list. Both
 go through the same `snapshot` path so the same `Report`
 structure is returned regardless of scope, and the
@@ -146,9 +146,9 @@ Rules:
 
   - Schema is integer-versioned. `load_jsonl` rejects files with
     a `meta.schema` that does not match the current build with
-    `ChanReportError::SchemaMismatch`. Consumers (chan-drive)
+    `ChanReportError::SchemaMismatch`. Consumers (chan-workspace)
     treat that as "discard cache, rescan".
-  - Path encoding is POSIX, drive-relative, no leading slash, no
+  - Path encoding is POSIX, workspace-relative, no leading slash, no
     `..`, no embedded `\`. Loader rejects malformed paths.
   - Timestamps are RFC3339 with `Z` suffix.
   - `mtime` is optional on `file` records. When absent, the
@@ -187,7 +187,7 @@ update is `Unchanged` / `Skipped`, the call upgrades the result
 to `Removed` so the consumer's debouncer flushes.
 
 `Unchanged` is the signal that lets the consumer skip writing a
-fresh JSONL. chan-drive will debounce a burst of updates and
+fresh JSONL. chan-workspace will debounce a burst of updates and
 only call `write_jsonl` + `atomic_write` when any outcome was
 non-`Unchanged`.
 
@@ -205,7 +205,7 @@ these settings derived from `ReportOptions`:
   - `exclude_globs`: extra patterns OR'd on top of the gitignore
     rules. Use to drop `target/`, `node_modules/`, vendored
     directories without committing to the project's
-    `.gitignore`. chan-drive will pass `.chan/` and `.git/`
+    `.gitignore`. chan-workspace will pass `.chan/` and `.git/`
     here even though they're typically gitignored, defending
     against repos that vendor them.
 
@@ -271,10 +271,10 @@ trees. Test categories:
 
 ## 10. Out of scope, explicitly
 
-  - File watching. chan-drive owns the watcher.
-  - Atomic write to disk. chan-drive owns persistence.
+  - File watching. chan-workspace owns the watcher.
+  - Atomic write to disk. chan-workspace owns persistence.
   - Cross-process locking. The `Index` is `Send` but not
-    `Sync`; chan-drive serializes writers behind its own lock.
+    `Sync`; chan-workspace serializes writers behind its own lock.
   - Threading model. `Index::scan` may parallelize internally;
     `update` is single-threaded.
   - i18n / non-UTF-8 paths. Walker rejects non-UTF-8 entries

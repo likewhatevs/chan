@@ -126,8 +126,8 @@ mod tests {
 
         let state = Arc::new(AppState {
             library: lib,
-            drive_root: root.path().to_path_buf(),
-            drive_cell: Arc::new(RwLock::new(Some(WorkspaceCell {
+            workspace_root: root.path().to_path_buf(),
+            workspace_cell: Arc::new(RwLock::new(Some(WorkspaceCell {
                 workspace,
                 watch_handle: None,
                 indexer,
@@ -143,7 +143,7 @@ mod tests {
             editor_prefs: Mutex::new(EditorPrefs::default()),
             self_writes: Arc::new(SelfWrites::new()),
             terminal_sessions: Arc::new(TerminalRegistry::new(RegistryConfig {
-                drive_root: root.path().to_path_buf(),
+                workspace_root: root.path().to_path_buf(),
                 mcp_socket_path: None,
                 control_socket_path: None,
                 terminal: ServerConfig::default().terminal,

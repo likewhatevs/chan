@@ -2,7 +2,7 @@
 //!
 //! External MCP agents want to launch the chan MCP server as a
 //! subprocess so writes round-trip through chan-workspace's gates. The
-//! original wiring spawned `chan __mcp <drive_root>`, which then
+//! original wiring spawned `chan __mcp <workspace_root>`, which then
 //! called `Library::open_workspace` a second time. chan-workspace holds a
 //! per-workspace flock for single-writer ownership, so the child failed
 //! with `WorkspaceLocked`.
@@ -82,7 +82,7 @@ impl Drop for BridgeHandle {
 /// gets a fresh `chan_llm::mcp::Server` constructed against the
 /// current workspace Arc.
 #[cfg(unix)]
-pub fn start<DF>(socket_path: PathBuf, drive_for: DF) -> std::io::Result<BridgeHandle>
+pub fn start<DF>(socket_path: PathBuf, workspace_for: DF) -> std::io::Result<BridgeHandle>
 where
     DF: Fn() -> Option<Arc<chan_workspace::Workspace>> + Send + Sync + 'static,
 {
@@ -90,7 +90,7 @@ where
     // (kill -9, panic in Drop): unlink so bind doesn't EADDRINUSE.
     let _ = std::fs::remove_file(&socket_path);
     let listener = UnixListener::bind(&socket_path)?;
-    let drive_for = Arc::new(drive_for);
+    let workspace_for = Arc::new(workspace_for);
 
     let accept_loop = tokio::spawn(async move {
         loop {
@@ -104,7 +104,7 @@ where
                     continue;
                 }
             };
-            let Some(workspace) = drive_for() else {
+            let Some(workspace) = workspace_for() else {
                 tracing::warn!("mcp bridge session refused: workspace state unavailable");
                 continue;
             };
@@ -125,7 +125,7 @@ where
 }
 
 #[cfg(not(unix))]
-pub fn start<DF>(_socket_path: PathBuf, _drive_for: DF) -> std::io::Result<BridgeHandle>
+pub fn start<DF>(_socket_path: PathBuf, _workspace_for: DF) -> std::io::Result<BridgeHandle>
 where
     DF: Fn() -> Option<Arc<chan_workspace::Workspace>> + Send + Sync + 'static,
 {

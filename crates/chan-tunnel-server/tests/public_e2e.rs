@@ -3,7 +3,7 @@
 //! Wires the full proxy path in-process: a tunnel listener with a
 //! stub validator, a chan-tunnel-client registering a chan-serve
 //! router on the other end, and `public_router` mounted on its own
-//! TCP listener. Each test then drives a real `reqwest` client
+//! TCP listener. Each test then workspaces a real `reqwest` client
 //! against the public listener, so request and response shape
 //! match what an internet visitor would see.
 //!
@@ -66,7 +66,7 @@ struct PublicHarness {
 async fn spawn(cfg: PublicConfig, upstream: Router) -> PublicHarness {
     let token = "tok".to_string();
     let username = "alice".to_string();
-    let drive = "notes".to_string();
+    let workspace = "notes".to_string();
 
     let validator: Arc<dyn Validator> = Arc::new(StubValidator {
         token: token.clone(),
@@ -94,7 +94,7 @@ async fn spawn(cfg: PublicConfig, upstream: Router) -> PublicHarness {
         ))
         .unwrap(),
         token,
-        drive: drive.clone(),
+        workspace: workspace.clone(),
         client_version: "chan/test".into(),
         public: false,
         initial_backoff: Duration::from_millis(50),
@@ -112,13 +112,13 @@ async fn spawn(cfg: PublicConfig, upstream: Router) -> PublicHarness {
     // Spin-wait for the registration before binding the public
     // listener so the first GET in the test isn't a 502.
     for _ in 0..100 {
-        if registry.get(&username, &drive).is_some() {
+        if registry.get(&username, &workspace).is_some() {
             break;
         }
         tokio::time::sleep(Duration::from_millis(10)).await;
     }
     assert!(
-        registry.get(&username, &drive).is_some(),
+        registry.get(&username, &workspace).is_some(),
         "tunnel did not register"
     );
 

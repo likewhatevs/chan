@@ -1,4 +1,4 @@
-//! Live tunnel registry keyed by `(user, drive)`.
+//! Live tunnel registry keyed by `(user, workspace)`.
 //!
 //! A registered tunnel exposes one operation: open a fresh
 //! outbound yamux substream against the connected `chan serve`
@@ -12,7 +12,7 @@
 //! tears down the underlying h2 stream; the disconnected peer is
 //! free to reconnect (with backoff) but will boot whoever is
 //! currently registered. This matches a chan-serve restart
-//! reclaiming its drive without waiting for a TCP timeout.
+//! reclaiming its workspace without waiting for a TCP timeout.
 
 use std::collections::HashMap;
 use std::net::SocketAddr;
@@ -29,34 +29,34 @@ pub enum OpenError {
 }
 
 /// Returned by `Registry::register_checked` when registering would
-/// take the user over the per-user drive cap. Carries the username
+/// take the user over the per-user workspace cap. Carries the username
 /// and the cap so the listener can log / report context.
 #[derive(Debug, thiserror::Error)]
-#[error("user {user} reached max concurrent drives ({max})")]
+#[error("user {user} reached max concurrent workspaces ({max})")]
 pub struct RegisterCapped {
     pub user: String,
     pub max: usize,
 }
 
-/// One row of `Registry::list_drives_for`. Pairs the drive name
+/// One row of `Registry::list_workspaces_for`. Pairs the workspace name
 /// with the `public` bit captured at handshake time, plus the
 /// peer address and connection time so admin tools can render a
 /// `ps`-like view without piggybacking on the handshake.
 #[derive(Debug, Clone)]
-pub struct DriveInfo {
-    pub drive: Arc<str>,
+pub struct WorkspaceInfo {
+    pub workspace: Arc<str>,
     pub public: bool,
     pub peer_addr: Option<SocketAddr>,
     pub connected_at: DateTime<Utc>,
 }
 
-/// One row of `Registry::list_all`. Same as `DriveInfo` but also
+/// One row of `Registry::list_all`. Same as `WorkspaceInfo` but also
 /// carries the username so a single call covers the admin
 /// `tunnel ps` view.
 #[derive(Debug, Clone)]
 pub struct TunnelInfo {
     pub user: Arc<str>,
-    pub drive: Arc<str>,
+    pub workspace: Arc<str>,
     pub public: bool,
     pub peer_addr: Option<SocketAddr>,
     pub connected_at: DateTime<Utc>,
@@ -77,8 +77,8 @@ pub(crate) type OpenRequest = OpenReply;
 pub struct TunnelHandle {
     open_tx: mpsc::Sender<OpenRequest>,
     pub user: Arc<str>,
-    pub drive: Arc<str>,
-    /// When true the drive-proxy auth gate skips the OAuth check;
+    pub workspace: Arc<str>,
+    /// When true the workspace-proxy auth gate skips the OAuth check;
     /// the tunneled `chan serve` is exposed to anonymous public
     /// traffic. Set from the client's Hello frame at handshake.
     pub public: bool,
@@ -110,7 +110,7 @@ struct Entry {
     _shutdown_tx: oneshot::Sender<()>,
 }
 
-/// Two-level map keyed `user -> drive -> Entry`. The split lets
+/// Two-level map keyed `user -> workspace -> Entry`. The split lets
 /// `get(&str, &str)` resolve the hash via `Arc<str>: Borrow<str>`
 /// without allocating fresh `Arc<str>` lookups on every public
 /// request, and makes per-user enumeration a direct inner-map
@@ -127,23 +127,23 @@ impl Registry {
         Arc::new(Self::default())
     }
 
-    /// Register a new tunnel and enforce a per-user concurrent-drive
-    /// cap atomically with the insert. `max_drives_per_user == 0`
+    /// Register a new tunnel and enforce a per-user concurrent-workspace
+    /// cap atomically with the insert. `max_workspaces_per_user == 0`
     /// disables the check. The cap is enforced under the same lock
     /// acquisition that performs the eviction + insert, so two
     /// parallel dials from the same user cannot both observe
     /// `count == max - 1` and both succeed.
     ///
-    /// Reconnect of a drive the user already holds is always
+    /// Reconnect of a workspace the user already holds is always
     /// allowed: the same-key entry is evicted and replaced, and the
-    /// user's drive count is unchanged.
+    /// user's workspace count is unchanged.
     pub(crate) fn register_with_cap(
         self: &Arc<Self>,
         user: Arc<str>,
-        drive: Arc<str>,
+        workspace: Arc<str>,
         public: bool,
         peer_addr: Option<SocketAddr>,
-        max_drives_per_user: usize,
+        max_workspaces_per_user: usize,
     ) -> Result<
         (
             TunnelHandle,
@@ -157,7 +157,7 @@ impl Registry {
         let handle = TunnelHandle {
             open_tx,
             user: user.clone(),
-            drive: drive.clone(),
+            workspace: workspace.clone(),
             public,
             peer_addr,
             connected_at: Utc::now(),
@@ -168,28 +168,28 @@ impl Registry {
         };
         let evicted = {
             let mut g = self.inner.lock();
-            let drives = g.entry(user.clone()).or_default();
-            if max_drives_per_user > 0
-                && !drives.contains_key(&drive)
-                && drives.len() >= max_drives_per_user
+            let workspaces = g.entry(user.clone()).or_default();
+            if max_workspaces_per_user > 0
+                && !workspaces.contains_key(&workspace)
+                && workspaces.len() >= max_workspaces_per_user
             {
                 // Clean up the inner map we may have just created
                 // via `or_default` so a capped attempt doesn't leave
                 // an empty user bucket behind.
-                if drives.is_empty() {
+                if workspaces.is_empty() {
                     g.remove(&user);
                 }
                 return Err(RegisterCapped {
                     user: user.to_string(),
-                    max: max_drives_per_user,
+                    max: max_workspaces_per_user,
                 });
             }
-            drives.insert(drive.clone(), entry)
+            workspaces.insert(workspace.clone(), entry)
         };
         if let Some(old) = evicted {
             // Log the eviction with the prior registration's age so
             // an operator can spot flap (two chan-serve instances
-            // fighting over the same drive name) without having to
+            // fighting over the same workspace name) without having to
             // diff connection counts. The Drop on `old` fires the
             // shutdown signal that tells the previous driver to
             // close its yamux connection.
@@ -198,7 +198,7 @@ impl Registry {
                 .num_milliseconds();
             tracing::info!(
                 %user,
-                %drive,
+                %workspace,
                 prior_age_ms = prior_age,
                 "tunnel registration evicted predecessor",
             );
@@ -211,53 +211,57 @@ impl Registry {
     /// if no tunnel is currently registered for that pair. Both
     /// hashmap lookups borrow `&str` straight through to the
     /// `Arc<str>` keys, so no per-call allocation.
-    pub fn get(&self, user: &str, drive: &str) -> Option<TunnelHandle> {
+    pub fn get(&self, user: &str, workspace: &str) -> Option<TunnelHandle> {
         let g = self.inner.lock();
         g.get(user)
-            .and_then(|drives| drives.get(drive))
+            .and_then(|workspaces| workspaces.get(workspace))
             .map(|e| e.handle.clone())
     }
 
-    /// Drives currently registered for `user`, sorted by name.
-    /// Used by the public dashboard to enumerate "drives I have
+    /// Workspaces currently registered for `user`, sorted by name.
+    /// Used by the public dashboard to enumerate "workspaces I have
     /// online" without needing a separate metadata service. Each
     /// entry carries the `public` bit so callers can render the
     /// public/private badge without a second lookup.
-    pub fn list_drives_for(&self, user: &str) -> Vec<DriveInfo> {
+    pub fn list_workspaces_for(&self, user: &str) -> Vec<WorkspaceInfo> {
         let g = self.inner.lock();
-        let Some(drives) = g.get(user) else {
+        let Some(workspaces) = g.get(user) else {
             return Vec::new();
         };
-        let mut out: Vec<DriveInfo> = drives
+        let mut out: Vec<WorkspaceInfo> = workspaces
             .iter()
-            .map(|(d, e)| DriveInfo {
-                drive: d.clone(),
+            .map(|(d, e)| WorkspaceInfo {
+                workspace: d.clone(),
                 public: e.handle.public,
                 peer_addr: e.handle.peer_addr,
                 connected_at: e.handle.connected_at,
             })
             .collect();
-        out.sort_by(|a, b| a.drive.cmp(&b.drive));
+        out.sort_by(|a, b| a.workspace.cmp(&b.workspace));
         out
     }
 
-    /// Snapshot every registered tunnel. Sorted by `(user, drive)`
+    /// Snapshot every registered tunnel. Sorted by `(user, workspace)`
     /// so the admin `tunnel ps` view is stable across calls.
     pub fn list_all(&self) -> Vec<TunnelInfo> {
         let g = self.inner.lock();
         let mut out: Vec<TunnelInfo> = g
             .iter()
-            .flat_map(|(u, drives)| {
-                drives.iter().map(move |(d, e)| TunnelInfo {
+            .flat_map(|(u, workspaces)| {
+                workspaces.iter().map(move |(d, e)| TunnelInfo {
                     user: u.clone(),
-                    drive: d.clone(),
+                    workspace: d.clone(),
                     public: e.handle.public,
                     peer_addr: e.handle.peer_addr,
                     connected_at: e.handle.connected_at,
                 })
             })
             .collect();
-        out.sort_by(|a, b| a.user.cmp(&b.user).then_with(|| a.drive.cmp(&b.drive)));
+        out.sort_by(|a, b| {
+            a.user
+                .cmp(&b.user)
+                .then_with(|| a.workspace.cmp(&b.workspace))
+        });
         out
     }
 
@@ -265,13 +269,13 @@ impl Registry {
     /// fires the per-tunnel driver's shutdown signal and tears
     /// down the yamux connection. Returns `true` if a row was
     /// removed, `false` if nothing was registered for the pair.
-    pub fn evict(&self, user: &str, drive: &str) -> bool {
+    pub fn evict(&self, user: &str, workspace: &str) -> bool {
         let mut g = self.inner.lock();
-        let Some(drives) = g.get_mut(user) else {
+        let Some(workspaces) = g.get_mut(user) else {
             return false;
         };
-        let removed = drives.remove(drive).is_some();
-        if drives.is_empty() {
+        let removed = workspaces.remove(workspace).is_some();
+        if workspaces.is_empty() {
             g.remove(user);
         }
         removed
@@ -283,18 +287,18 @@ impl Registry {
     /// took its slot.
     pub(crate) fn deregister_if_owner(&self, handle: &TunnelHandle) {
         let mut g = self.inner.lock();
-        let Some(drives) = g.get_mut(handle.user.as_ref()) else {
+        let Some(workspaces) = g.get_mut(handle.user.as_ref()) else {
             return;
         };
-        let should_remove = drives
-            .get(handle.drive.as_ref())
+        let should_remove = workspaces
+            .get(handle.workspace.as_ref())
             // Channel identity is a sufficient proxy: only one
             // mpsc::Sender per registration, cloned into the entry.
             .map(|entry| entry.handle.open_tx.same_channel(&handle.open_tx))
             .unwrap_or(false);
         if should_remove {
-            drives.remove(handle.drive.as_ref());
-            if drives.is_empty() {
+            workspaces.remove(handle.workspace.as_ref());
+            if workspaces.is_empty() {
                 g.remove(handle.user.as_ref());
             }
         }
@@ -310,10 +314,10 @@ mod tests {
         use tokio::sync::oneshot::error::TryRecvError;
         let reg = Registry::new();
         let user: Arc<str> = Arc::from("alice");
-        let drive: Arc<str> = Arc::from("notes");
+        let workspace: Arc<str> = Arc::from("notes");
 
         let (_h1, _rx1, mut shutdown1) = reg
-            .register_with_cap(user.clone(), drive.clone(), false, None, 0)
+            .register_with_cap(user.clone(), workspace.clone(), false, None, 0)
             .unwrap();
         // Before the collision, the receiver has no value and the
         // sender is still alive: try_recv must report Empty.
@@ -323,7 +327,7 @@ mod tests {
         // shutdown sender is dropped with it, so the receiver wakes
         // with Closed.
         let (_h2, _rx2, _shutdown2) = reg
-            .register_with_cap(user.clone(), drive.clone(), false, None, 0)
+            .register_with_cap(user.clone(), workspace.clone(), false, None, 0)
             .unwrap();
         match shutdown1.try_recv() {
             Err(TryRecvError::Closed) => {}
@@ -341,10 +345,10 @@ mod tests {
             .register_with_cap(Arc::from("alice"), Arc::from("notes"), false, None, 0)
             .unwrap();
         assert!(reg.evict("alice", "notes"));
-        // After the last drive is removed, the user bucket is
-        // cleaned up so a stale `list_drives_for("alice")` doesn't
+        // After the last workspace is removed, the user bucket is
+        // cleaned up so a stale `list_workspaces_for("alice")` doesn't
         // hold a reference to an empty inner map indefinitely.
-        assert!(reg.list_drives_for("alice").is_empty());
+        assert!(reg.list_workspaces_for("alice").is_empty());
         // Sanity: evict again returns false.
         assert!(!reg.evict("alice", "notes"));
     }
@@ -372,10 +376,10 @@ mod tests {
         let err = reg
             .register_with_cap(Arc::from("alice"), Arc::from("d3"), false, None, 2)
             .err()
-            .expect("third drive should be capped");
+            .expect("third workspace should be capped");
         assert_eq!(err.user, "alice");
         assert_eq!(err.max, 2);
-        // Reconnect of an existing drive bypasses the cap.
+        // Reconnect of an existing workspace bypasses the cap.
         let _a2 = reg
             .register_with_cap(Arc::from("alice"), Arc::from("d1"), false, None, 2)
             .unwrap();
@@ -402,7 +406,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn list_drives_for_returns_sorted_names_per_user() {
+    async fn list_workspaces_for_returns_sorted_names_per_user() {
         let reg = Registry::new();
         let (_h1, _rx1, _sd1) = reg
             .register_with_cap(Arc::from("alice"), Arc::from("notes"), false, None, 0)
@@ -415,9 +419,9 @@ mod tests {
             .unwrap();
 
         let alice: Vec<(String, bool)> = reg
-            .list_drives_for("alice")
+            .list_workspaces_for("alice")
             .into_iter()
-            .map(|d| (d.drive.as_ref().to_string(), d.public))
+            .map(|d| (d.workspace.as_ref().to_string(), d.public))
             .collect();
         assert_eq!(
             alice,
@@ -425,12 +429,12 @@ mod tests {
         );
 
         let bob: Vec<String> = reg
-            .list_drives_for("bob")
+            .list_workspaces_for("bob")
             .into_iter()
-            .map(|d| d.drive.as_ref().to_string())
+            .map(|d| d.workspace.as_ref().to_string())
             .collect();
         assert_eq!(bob, vec!["notes".to_string()]);
 
-        assert!(reg.list_drives_for("nobody").is_empty());
+        assert!(reg.list_workspaces_for("nobody").is_empty());
     }
 }

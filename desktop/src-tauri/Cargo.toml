@@ -40,7 +40,7 @@ gethostname = { workspace = true }
 reqwest = { workspace = true }
 
 # Embed chan-tunnel-server so a remote `chan serve --tunnel-url`
-# registers as a drive in the desktop Drives window.
+# registers as a workspace in the desktop Workspaces window.
 chan-tunnel-server = { workspace = true }
 chan-tunnel-proto = { workspace = true }
 async-trait = { workspace = true }

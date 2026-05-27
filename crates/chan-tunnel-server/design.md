@@ -5,7 +5,7 @@
 chan-tunnel is split across three crates in `chan-writer/chan-core`:
 
 - `chan-tunnel-proto`: pure wire types (`Hello`, `HelloAck`,
-  `ProtocolVersion`), framing codec, drive-name and username
+  `ProtocolVersion`), framing codec, workspace-name and username
   validators, `H2Duplex`. See
   [`chan-tunnel-proto/design.md`](../chan-tunnel-proto/design.md)
   for byte-level details.
@@ -22,7 +22,7 @@ TLS at `drive.chan.app` and `grpc_pass`-es `/v1/tunnel` as h2c to
 session managed by a per-tunnel driver task and indexed in the
 shared `Registry`. The wildcard router (mounted at e.g.
 `*.drive.chan.app`) parses `{user}` out of the host header, looks
-up the `TunnelHandle` for `(user, drive)`, opens a fresh outbound
+up the `TunnelHandle` for `(user, workspace)`, opens a fresh outbound
 substream, and runs hyper h1 client over it to forward the request
 (with WebSocket upgrade bridging).
 
@@ -44,7 +44,7 @@ The terminator side of chan-tunnel needs to:
 - Expose live tunnels to a public-facing axum router so the gateway
   can route `drive.chan.app/{user}/{drive}/...` at the registered
   peer.
-- Tolerate flap (a `chan serve` restart should reclaim its drive
+- Tolerate flap (a `chan serve` restart should reclaim its workspace
   without waiting for a TCP timeout).
 
 Out of scope:
@@ -91,7 +91,7 @@ Out of scope:
               v                                  v
       +---------------+                  +---------------+
       |  Registry     | <----- get ----- |  public_router|
-      | (user, drive) |     TunnelHandle |  on drive.    |
+      | (user, workspace) |     TunnelHandle |  on workspace.    |
       |  -> handle    |                  |  chan.app     |
       +---------------+                  +-------+-------+
                                                  |
@@ -111,7 +111,7 @@ Out of scope:
 |                | `extract_bearer`                                |
 | `driver.rs`    | `drive_tunnel`: per-tunnel task that owns the   |
 |                | yamux connection                                |
-| `registry.rs`  | `Registry`, `TunnelHandle`, `DriveInfo`,        |
+| `registry.rs`  | `Registry`, `TunnelHandle`, `WorkspaceInfo`,        |
 |                | `TunnelInfo`, `OpenError`, eviction policy      |
 | `public.rs`    | `public_router`, `public_router_with`,          |
 |                | `PublicConfig`, request rewriting, upgrade      |
@@ -153,12 +153,12 @@ max_drives_per_user)`:
 10. `handshake_validated(duplex, validated, pre_ack)`:
    - Defense-in-depth username check (`is_valid_username`).
    - `read_frame::<Hello>` with `HELLO_READ_TIMEOUT` (15s) bound.
-   - Reject non-V1 protocol; reject invalid drive name. Each
+   - Reject non-V1 protocol; reject invalid workspace name. Each
      rejection writes a `HelloAck::Refused { code, message }`
      frame before returning so the client receives a structured
      error instead of a transport disconnect.
    - Run `pre_ack(&hello, &validated)` for post-validate policy
-     (e.g. per-user drive cap). On failure, map the
+     (e.g. per-user workspace cap). On failure, map the
      `ServerError` to a refusal code (see
      `chan_tunnel_proto::error_code`) and emit
      `HelloAck::Refused` before returning.
@@ -166,7 +166,7 @@ max_drives_per_user)`:
      `HelloAck::Ok(HelloAckOk { prefix: "/{drive}", ... })`.
    - Wrap the duplex in yamux server mode with
      `tunnel_yamux_config()` (max 256 concurrent substreams).
-11. `registry.register(user, drive, public, peer_addr)` returns
+11. `registry.register(user, workspace, public, peer_addr)` returns
     a `TunnelHandle`, the open-request `mpsc::Receiver`, and the
     eviction `oneshot::Receiver`. The in-flight semaphore permit
     is dropped here: the per-tunnel driver runs without holding
@@ -201,7 +201,7 @@ that borrow conflicts.
   driver's receiver, which closes yamux.
 - Collision: last-writer-wins. `register` evicts any prior entry
   for the same key, logs the prior age, and returns the new
-  handle. This matches "chan-serve restart reclaims its drive."
+  handle. This matches "chan-serve restart reclaims its workspace."
 - `TunnelHandle::open()` sends an `OpenRequest`
   (`oneshot::Sender<Result<yamux::Stream, OpenError>>`) over the
   per-tunnel mpsc and awaits the reply. Returns
@@ -219,7 +219,7 @@ routes (`/{user}/{drive}`, `/{user}/{drive}/`,
 `/{user}/{drive}/*rest`) mounted on `any` method. All three call
 `proxy(...)`:
 
-1. `registry.get(user, drive)` returns a `TunnelHandle`, else 502
+1. `registry.get(user, workspace)` returns a `TunnelHandle`, else 502
    ("tunnel not connected").
 2. `handle.open().await` returns a `yamux::Stream`, else 502
    ("tunnel disconnected").
@@ -333,16 +333,16 @@ pub const DEFAULT_UPSTREAM_REQUEST_TIMEOUT: Duration =
 pub struct Registry { /* ... */ }
 impl Registry {
     pub fn new() -> Arc<Self>;
-    pub fn get(&self, user: &str, drive: &str) -> Option<TunnelHandle>;
-    pub fn list_drives_for(&self, user: &str) -> Vec<DriveInfo>;
+    pub fn get(&self, user: &str, workspace: &str) -> Option<TunnelHandle>;
+    pub fn list_drives_for(&self, user: &str) -> Vec<WorkspaceInfo>;
     pub fn list_all(&self) -> Vec<TunnelInfo>;
-    pub fn evict(&self, user: &str, drive: &str) -> bool;
+    pub fn evict(&self, user: &str, workspace: &str) -> bool;
 }
 
 #[derive(Clone)]
 pub struct TunnelHandle {
     pub user: Arc<str>,
-    pub drive: Arc<str>,
+    pub workspace: Arc<str>,
     pub public: bool,
     pub peer_addr: Option<SocketAddr>,
     pub connected_at: DateTime<Utc>,
@@ -354,8 +354,8 @@ impl TunnelHandle {
 
 pub enum OpenError { Disconnected }
 
-pub struct DriveInfo {
-    pub drive: Arc<str>,
+pub struct WorkspaceInfo {
+    pub workspace: Arc<str>,
     pub public: bool,
     pub peer_addr: Option<SocketAddr>,
     pub connected_at: DateTime<Utc>,
@@ -363,7 +363,7 @@ pub struct DriveInfo {
 
 pub struct TunnelInfo {
     pub user: Arc<str>,
-    pub drive: Arc<str>,
+    pub workspace: Arc<str>,
     pub public: bool,
     pub peer_addr: Option<SocketAddr>,
     pub connected_at: DateTime<Utc>,
@@ -393,9 +393,9 @@ Server-specific notes:
 - `pre_ack(&hello, &validated)` runs after the Hello is read and
   validated and before the `HelloAck` is written. The listener
   uses it to enforce `max_drives_per_user`: if registering this
-  drive would exceed the cap and the user doesn't already have it
+  workspace would exceed the cap and the user doesn't already have it
   registered, return `ServerError::TooManyDrives`. Reconnect of an
-  existing drive always passes (the eviction step removes the old
+  existing workspace always passes (the eviction step removes the old
   entry first).
 
 ## 6. Trust boundaries / validation
@@ -409,23 +409,23 @@ Server-specific notes:
 - **Tunnel scope**: the validator returns scopes; the listener
   refuses tokens missing `TUNNEL_SCOPE` (`"tunnel"`) with 403.
 - **Public scope**: `Hello.public = true` is a privilege-escalation
-  request (the public router skips the OAuth gate for that drive),
+  request (the public router skips the OAuth gate for that workspace),
   so it is gated on a second scope `TUNNEL_PUBLIC_SCOPE`
   (`"tunnel.public"`). Tokens that hold only the base scope can
-  still register a drive but must run it private; if they request
+  still register a workspace but must run it private; if they request
   `public = true` the handshake fails with `MissingPublicScope`
   *before* HelloAck is written, so the client cannot grant the bit
   to itself at runtime. A token carrying both scopes retains
-  per-drive choice: `chan serve --public` (true) or default
+  per-workspace choice: `chan serve --public` (true) or default
   (false) both work on the same token, so one user can host both
-  a public docs drive and a private notes drive.
+  a public docs workspace and a private notes workspace.
 - **Username validation** (`is_valid_username`): defense-in-depth.
   The username flows into the public path `/{user}/{drive}`; if
   the upstream identity service ever emits `..`, slashes, or
   whitespace, the public router would mis-route. The handshake
   refuses any username that wouldn't be URL-safe.
-- **Drive name validation** (`is_valid_drive_name`): every Hello's
-  `drive` field is checked; clients pre-check too but we don't
+- **Workspace name validation** (`is_valid_drive_name`): every Hello's
+  `workspace` field is checked; clients pre-check too but we don't
   trust them.
 - **Method / path gate**: 404 for anything other than `POST
   /v1/tunnel`. The drainer task continues to reject additional
@@ -528,7 +528,7 @@ Public-side callers map both into 502.
     middleware).
 - `chan-writer/chan-gateway/drive-proxy` (dev only): pulls
   `chan-tunnel-client` as a dev-dependency so its end-to-end
-  test can drive a fake `chan serve` against a real listener.
+  test can workspace a fake `chan serve` against a real listener.
 
 ## 9. Open questions / future extensions
 
@@ -536,14 +536,14 @@ Public-side callers map both into 502.
   tunnel and clients reconnect. A small on-disk index would let
   the public router serve `tunnel offline since X` errors with
   context instead of a bare 502 during a restart.
-- Per-tunnel quotas. `max_drives_per_user` caps drive count; it
+- Per-tunnel quotas. `max_drives_per_user` caps workspace count; it
   doesn't cap concurrent in-flight requests, total bandwidth, or
   request rate. `tower-http`'s `RateLimitLayer` would slot in on
   the public router but needs a key strategy (per-tunnel? per-
   visitor?).
-- Multi-drive per tunnel. See chan-tunnel-proto's design.md
+- Multi-workspace per tunnel. See chan-tunnel-proto's design.md
   section 9; would change the registry shape from
-  `(user, drive) -> handle` to `(user, drive) -> (handle,
+  `(user, workspace) -> handle` to `(user, workspace) -> (handle,
   multiplex_id)`.
 - Health probe on the substream. The driver currently learns
   about a dead peer when yamux's keepalive fires or an `open`

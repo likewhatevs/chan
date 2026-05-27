@@ -131,7 +131,7 @@ impl From<FileClass> for FileClassWire {
 /// top-level ancestor directory (and the whole-workspace total). Immediate
 /// children of the root are recorded directly. The walk reuses the
 /// same `.git/` / `.chan/` + `WalkFilter` rules as the indexer's
-/// `walk_drive_filtered`, so the spine and the index agree on what is
+/// `walk_workspace_filtered`, so the spine and the index agree on what is
 /// part of the workspace.
 pub fn bootstrap_root(root: &Path, filter: &WalkFilter) -> Result<BootstrapTree> {
     bootstrap_dir(root, "", filter)
@@ -159,7 +159,7 @@ pub fn bootstrap_dir(root: &Path, rel: &str, filter: &WalkFilter) -> Result<Boot
     let mut total = SubtreeStats::default();
 
     // Walk from `base`, depth >= 1 so we never re-emit `base` itself.
-    // Mirror `walk_drive_filtered`'s filter chain: skip `.git` /
+    // Mirror `walk_workspace_filtered`'s filter chain: skip `.git` /
     // `.chan` and any excluded dir basename at any depth; drop
     // symlinks / specials; never follow links; stay on one fs.
     let walker = WalkDir::new(&base)
@@ -394,7 +394,7 @@ mod tests {
     }
 
     #[test]
-    fn empty_drive_yields_empty_spine() {
+    fn empty_workspace_yields_empty_spine() {
         let tmp = TempDir::new().unwrap();
         let filter = WalkFilter::default();
         let tree = bootstrap_root(tmp.path(), &filter).unwrap();

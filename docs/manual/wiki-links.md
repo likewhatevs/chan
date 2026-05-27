@@ -1,15 +1,15 @@
 # Wiki-links
 
-Wiki-links are file and path links inside the drive.
+Wiki-links are file and path links inside the workspace.
 
 ## Picker contract
 
-Typing `[[` opens a file/path picker. The picker is for drive paths, not
+Typing `[[` opens a file/path picker. The picker is for workspace paths, not
 global content search. Use search when you want to search document contents.
 
 ## Relative paths
 
-Links resolve against paths in the drive. Moving the drive folder does not
+Links resolve against paths in the workspace. Moving the workspace folder does not
 change the link targets because the links are not tied to an external
 database.
 

@@ -11,7 +11,7 @@
 //     blocks waiting for a writer; opening /dev/zero never returns;
 //     opening through a symlink can escape the workspace sandbox.
 //   - is_editable_text: extension whitelist gate.
-//   - walk_drive / list_tree: recursive listing scoped to the workspace,
+//   - walk_workspace / list_tree: recursive listing scoped to the workspace,
 //     skipping `.git/` and `.chan/` at any depth and dropping non-
 //     regular non-dir entries (symlinks, devices, sockets) so the
 //     UI tree and the indexer never see them.
@@ -405,7 +405,7 @@ fn classify_basename(name: &str) -> Option<FileClass> {
 ///     basename equality so the chan config stays simple and
 ///     the walker stays cheap.
 ///   - A trash / lock / sandbox gate. `.git` / `.chan` skip is
-///     hardcoded in `walk_drive`; those are invariants, not
+///     hardcoded in `walk_workspace`; those are invariants, not
 ///     policy. The filter is purely additive on top.
 ///   - A read/write/list gate. `Workspace::list_tree` (the editor's
 ///     file-tree view) stays unfiltered so the user can still
@@ -446,22 +446,22 @@ impl WalkFilter {
 ///     listing and the indexer only ever see real files and dirs.
 ///
 /// Per-entry errors are logged and skipped.
-pub fn walk_drive(root: &Path) -> impl Iterator<Item = DirEntry> {
-    walk_drive_with(root, None)
+pub fn walk_workspace(root: &Path) -> impl Iterator<Item = DirEntry> {
+    walk_workspace_with(root, None)
 }
 
-/// Variant of `walk_drive` that additionally skips any directory
+/// Variant of `walk_workspace` that additionally skips any directory
 /// whose basename is in `filter.excluded_dir_names`. Used by the
 /// reindex paths (graph rebuild + index facade). Pass `None` to
-/// get the same behavior as `walk_drive`.
-pub fn walk_drive_filtered<'a>(
+/// get the same behavior as `walk_workspace`.
+pub fn walk_workspace_filtered<'a>(
     root: &Path,
     filter: &'a WalkFilter,
 ) -> impl Iterator<Item = DirEntry> + 'a {
-    walk_drive_with(root, Some(filter))
+    walk_workspace_with(root, Some(filter))
 }
 
-fn walk_drive_with<'a>(
+fn walk_workspace_with<'a>(
     root: &Path,
     filter: Option<&'a WalkFilter>,
 ) -> impl Iterator<Item = DirEntry> + 'a {
@@ -1244,19 +1244,19 @@ fn list_tree_inner(
 ) -> Result<Vec<TreeEntry>> {
     let mut out = Vec::new();
     let iter: Box<dyn Iterator<Item = DirEntry>> = if walk_from == root {
-        // Same shape the public `walk_drive` / `walk_drive_filtered`
+        // Same shape the public `walk_workspace` / `walk_workspace_filtered`
         // helpers offer; reuse them so the .git / .chan and special-
         // file filters live in one place.
         match filter {
-            Some(f) => Box::new(walk_drive_filtered(root, f)),
-            None => Box::new(walk_drive(root)),
+            Some(f) => Box::new(walk_workspace_filtered(root, f)),
+            None => Box::new(walk_workspace(root)),
         }
     } else {
-        // Subtree walk. Inline the same filter chain `walk_drive`
+        // Subtree walk. Inline the same filter chain `walk_workspace`
         // applies, with `min_depth` overridden so the prefix entry
         // itself is included for callers that want to see it. When a
         // `WalkFilter` is supplied it also prunes the blocklisted dir
-        // basenames at any depth, matching `walk_drive_filtered`.
+        // basenames at any depth, matching `walk_workspace_filtered`.
         let filter = filter.cloned();
         let walker = WalkDir::new(walk_from)
             .min_depth(min_depth)
@@ -1756,7 +1756,7 @@ mod tests {
     }
 
     #[test]
-    fn walk_drive_filtered_skips_named_dirs_at_any_depth() {
+    fn walk_workspace_filtered_skips_named_dirs_at_any_depth() {
         // node_modules at the root and again nested under web/ both
         // get pruned: the indexing walker should never descend into
         // them. .git stays hardcoded in the unfiltered walk, so we
@@ -1771,7 +1771,7 @@ mod tests {
         std::fs::create_dir_all(tmp.path().join(".git")).unwrap();
         std::fs::write(tmp.path().join(".git/HEAD"), b"junk").unwrap();
         let filter = WalkFilter::new(["node_modules"]);
-        let names: Vec<_> = walk_drive_filtered(tmp.path(), &filter)
+        let names: Vec<_> = walk_workspace_filtered(tmp.path(), &filter)
             .map(|e| {
                 e.path()
                     .strip_prefix(tmp.path())
@@ -1794,7 +1794,7 @@ mod tests {
         std::fs::create_dir_all(tmp.path().join("Node_Modules/pkg")).unwrap();
         std::fs::write(tmp.path().join("Node_Modules/pkg/README.md"), b"junk").unwrap();
         let filter = WalkFilter::new(["node_modules"]);
-        let count = walk_drive_filtered(tmp.path(), &filter)
+        let count = walk_workspace_filtered(tmp.path(), &filter)
             .filter(|e| e.file_type().is_file())
             .count();
         assert_eq!(count, 0);
@@ -1802,14 +1802,14 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
-    fn walk_drive_drops_symlinks_and_special_files() {
+    fn walk_workspace_drops_symlinks_and_special_files() {
         use std::os::unix::fs::symlink;
         use std::os::unix::net::UnixListener;
         let tmp = TempDir::new().unwrap();
         std::fs::write(tmp.path().join("note.md"), b"hi").unwrap();
         symlink("note.md", tmp.path().join("alias.md")).unwrap();
         let _l = UnixListener::bind(tmp.path().join("sock")).unwrap();
-        let names: Vec<_> = walk_drive(tmp.path())
+        let names: Vec<_> = walk_workspace(tmp.path())
             .map(|e| e.file_name().to_string_lossy().into_owned())
             .collect();
         assert!(names.contains(&"note.md".to_string()));

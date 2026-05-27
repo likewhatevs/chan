@@ -5,7 +5,7 @@
 // callback trait, no closures across the boundary). The native
 // implementation uses `notify` and runs the watcher on its own
 // thread; events are filtered through `is_chan_internal` and
-// `walk_drive`'s pruning rules so `.chan/` and most `.git/` / `.hg/`
+// `walk_workspace`'s pruning rules so `.chan/` and most `.git/` / `.hg/`
 // activity never reaches the callback. A tiny allowlist of VCS
 // control files (`.git/HEAD`, `.git/index`, `.hg/dirstate`) is
 // forwarded so the server indexer can recognize checkout storms and
@@ -128,7 +128,7 @@ impl WatchHandle {
     /// indexer sees paths in a unified namespace
     /// (`<rel>` for workspace-root events; `Drafts/<rel>` for
     /// drafts-root events). Existing single-root callers pass
-    /// `&[WatchRoot::workspace(drive_root)]`.
+    /// `&[WatchRoot::workspace(workspace_root)]`.
     ///
     /// `filter` is the SAME unified ignore set the bootstrap walk
     /// uses (`Workspace::walk_filter`): events whose relative path runs
@@ -187,7 +187,7 @@ impl WatchHandle {
 /// it (without prefix yet). When several roots could match (one
 /// nested inside another), the longer-path root wins — practical
 /// safeguard against drafts_dir being misconfigured under
-/// drive_root.
+/// workspace_root.
 fn locate_root<'a>(roots: &'a [WatchRoot], abs: &Path) -> Option<(&'a WatchRoot, String)> {
     let mut best: Option<(&'a WatchRoot, String, usize)> = None;
     for root in roots {
@@ -324,7 +324,7 @@ fn panic_message(payload: &Box<dyn std::any::Any + Send>) -> String {
 /// is an excluded basename (`node_modules`, `target`, `venv`,
 /// `.git`, `.hg`, `.svn`, ... per `DEFAULT_INDEX_EXCLUDED_DIRS` plus
 /// any user additions). Basename match at any depth matches
-/// `walk_drive_filtered`'s `filter_entry`.
+/// `walk_workspace_filtered`'s `filter_entry`.
 fn is_filtered(rel: &str, filter: &WalkFilter) -> bool {
     if is_vcs_control_path(rel) {
         return false;

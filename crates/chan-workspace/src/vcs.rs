@@ -72,7 +72,7 @@ pub fn detect_parent_vcs(path: &Path) -> Option<VcsParent> {
 /// This is deliberately narrower than [`detect_parent_vcs`]: it only
 /// checks the root the user chose, and only the mutable control files
 /// the watcher cares about. We do not shell out or parse VCS metadata.
-pub fn detect_drive_vcs(path: &Path) -> Option<VcsKind> {
+pub fn detect_workspace_vcs(path: &Path) -> Option<VcsKind> {
     if is_regular_file(&path.join(".git").join("HEAD")) {
         return Some(VcsKind::Git);
     }
@@ -251,27 +251,27 @@ mod tests {
     }
 
     #[test]
-    fn detects_drive_vcs_from_checkout_control_files() {
+    fn detects_workspace_vcs_from_checkout_control_files() {
         let tmp = TempDir::new().unwrap();
         mkdir(&tmp.path().join(".git"));
         std::fs::write(tmp.path().join(".git/HEAD"), b"ref: refs/heads/main\n").unwrap();
-        assert_eq!(detect_drive_vcs(tmp.path()), Some(VcsKind::Git));
+        assert_eq!(detect_workspace_vcs(tmp.path()), Some(VcsKind::Git));
 
         let hg = TempDir::new().unwrap();
         mkdir(&hg.path().join(".hg"));
         std::fs::write(hg.path().join(".hg/dirstate"), b"state").unwrap();
-        assert_eq!(detect_drive_vcs(hg.path()), Some(VcsKind::Mercurial));
+        assert_eq!(detect_workspace_vcs(hg.path()), Some(VcsKind::Mercurial));
     }
 
     #[cfg(unix)]
     #[test]
-    fn drive_vcs_detection_rejects_symlinked_control_files() {
+    fn workspace_vcs_detection_rejects_symlinked_control_files() {
         let tmp = TempDir::new().unwrap();
         mkdir(&tmp.path().join(".git"));
         let target = tmp.path().join("head-target");
         std::fs::write(&target, b"ref: refs/heads/main\n").unwrap();
         std::os::unix::fs::symlink(&target, tmp.path().join(".git/HEAD")).unwrap();
-        assert_eq!(detect_drive_vcs(tmp.path()), None);
+        assert_eq!(detect_workspace_vcs(tmp.path()), None);
     }
 
     #[test]

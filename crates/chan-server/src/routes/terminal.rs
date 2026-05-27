@@ -243,10 +243,11 @@ pub async fn api_set_terminal_watcher(
     if state.tunnel_public {
         return err_tunnel_public_locked();
     }
-    let drive_root = state.drive_root.clone();
+    let workspace_root = state.workspace_root.clone();
     let watcher_path = body.path;
     let result =
-        tokio::task::spawn_blocking(move || resolve_watcher_dir(&drive_root, &watcher_path)).await;
+        tokio::task::spawn_blocking(move || resolve_watcher_dir(&workspace_root, &watcher_path))
+            .await;
     let dir = match result {
         Ok(Ok(dir)) => dir,
         Ok(Err(message)) => return (StatusCode::BAD_REQUEST, message).into_response(),
@@ -1003,7 +1004,7 @@ fn resolve_terminal_cwd(
 /// creating it if missing.
 ///
 /// `fullstack-b-3` relaxed the previous "must live under
-/// `drive_root`" gate. Watcher event files are infrastructure
+/// `workspace_root`" gate. Watcher event files are infrastructure
 /// traffic (per the phase-7 event protocol they go straight through
 /// `tokio::fs` in the event-reply endpoint, bypassing
 /// `chan_workspace::Workspace::write_text`), so the workspace-sandbox guard
@@ -1018,7 +1019,7 @@ fn resolve_terminal_cwd(
 /// repro asked for "missing → create silently or with a single
 /// confirm"; the modal previews the create intent in the status
 /// row before submit, so the silent variant suffices.
-fn resolve_watcher_dir(drive_root: &Path, raw: &str) -> Result<PathBuf, String> {
+fn resolve_watcher_dir(workspace_root: &Path, raw: &str) -> Result<PathBuf, String> {
     let trimmed = raw.trim();
     if trimmed.is_empty() {
         return Err("watcher path is required".into());
@@ -1031,7 +1032,7 @@ fn resolve_watcher_dir(drive_root: &Path, raw: &str) -> Result<PathBuf, String> 
         // in-workspace watcher still benefits from the symlink-escape
         // check. A user who wants a watcher OUTSIDE the workspace
         // types an absolute path and lands on the branch above.
-        chan_workspace::fs_ops::resolve_safe_strict(drive_root, trimmed)
+        chan_workspace::fs_ops::resolve_safe_strict(workspace_root, trimmed)
             .map_err(|e| format!("invalid watcher path: {e}"))?
     };
     // Create the directory on demand. `create_dir_all` is a no-op
@@ -1083,7 +1084,7 @@ mod tests {
             mcp_env: bool,
         ) -> Self {
             let registry = Registry::new(RegistryConfig {
-                drive_root: cwd,
+                workspace_root: cwd,
                 mcp_socket_path,
                 control_socket_path: Some(std::path::PathBuf::from("/tmp/chan-control-test.sock")),
                 terminal: TerminalConfig::default(),
@@ -1165,7 +1166,7 @@ mod tests {
     /// backstop and should rarely be approached now.
     const PROBE_BUDGET: Duration = Duration::from_secs(30);
 
-    fn terminal_drive_fixture() -> (
+    fn terminal_workspace_fixture() -> (
         tempfile::TempDir,
         tempfile::TempDir,
         Arc<chan_workspace::Workspace>,
@@ -1179,8 +1180,8 @@ mod tests {
     }
 
     #[test]
-    fn resolve_terminal_cwd_allows_drive_relative_directory() {
-        let (_cfg, root, workspace) = terminal_drive_fixture();
+    fn resolve_terminal_cwd_allows_workspace_relative_directory() {
+        let (_cfg, root, workspace) = terminal_workspace_fixture();
         fs::create_dir_all(root.path().join("notes/work")).expect("create dir");
 
         let cwd = resolve_terminal_cwd(&workspace, Some("notes/work"))
@@ -1192,7 +1193,7 @@ mod tests {
 
     #[test]
     fn resolve_terminal_cwd_maps_drafts_namespace_to_metadata_dir() {
-        let (_cfg, _root, workspace) = terminal_drive_fixture();
+        let (_cfg, _root, workspace) = terminal_workspace_fixture();
         workspace.create_draft_dir("untitled-1").unwrap();
 
         let cwd = resolve_terminal_cwd(&workspace, Some("Drafts/untitled-1"))
@@ -1214,7 +1215,7 @@ mod tests {
 
     #[test]
     fn resolve_terminal_cwd_rejects_escape_and_files() {
-        let (_cfg, root, workspace) = terminal_drive_fixture();
+        let (_cfg, root, workspace) = terminal_workspace_fixture();
         fs::create_dir_all(root.path().join("notes")).expect("create dir");
         fs::write(root.path().join("notes/today.md"), "x").expect("create file");
 
@@ -1247,7 +1248,7 @@ mod tests {
     }
 
     #[test]
-    fn list_watcher_events_reads_outside_drive_dir() {
+    fn list_watcher_events_reads_outside_workspace_dir() {
         // systacean-9: pin the happy path for the outside-workspace
         // watcher read. The endpoint's whole point is that an
         // absolute outside-workspace `watcher_dir` (the case lane-B's
@@ -1305,7 +1306,7 @@ mod tests {
     }
 
     #[test]
-    fn resolve_watcher_dir_allows_absolute_and_drive_relative_directories() {
+    fn resolve_watcher_dir_allows_absolute_and_workspace_relative_directories() {
         let tmp = tempfile::tempdir().expect("temp workspace");
         fs::create_dir_all(tmp.path().join("events")).expect("create dir");
 
@@ -1327,7 +1328,7 @@ mod tests {
     /// accepted; the in-workspace sandbox via
     /// `resolve_safe_strict` still applies to relative inputs.
     #[test]
-    fn resolve_watcher_dir_allows_absolute_outside_drive_root() {
+    fn resolve_watcher_dir_allows_absolute_outside_workspace_root() {
         let tmp = tempfile::tempdir().expect("temp workspace");
         let outside = tempfile::tempdir().expect("outside workspace");
 

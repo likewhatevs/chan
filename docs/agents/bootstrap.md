@@ -143,7 +143,7 @@ Bootstrap in this order, then begin work.
   scope, append a "scope question" section to your current
   task file and fire a poke event; @@Architect decides whether
   it spawns a new task.
-- Adhere to project rules in `CLAUDE.md`: drive boundary
+- Adhere to project rules in `CLAUDE.md`: workspace boundary
   contract, single-binary discipline, MCP-only (no in-app
   agent), writing rules (no em dashes, ASCII tables, factual
   prose), pinned Rust toolchain.
@@ -414,7 +414,7 @@ Phase-8 standing permissions:
 
 | Agent         | Scope                                                                                              | Granted   | Recorded at |
 |---------------|----------------------------------------------------------------------------------------------------|-----------|-------------|
-| @@FullStackB  | chan-desktop runtime verification (`make run`, `npm run tauri dev`, `cargo build -p chan-desktop`, `Chan.app` launch + click cycles) against throwaway drives, for any -b-N task that needs empirical confirmation. Standard test-server-workflow tear-down required. | 2026-05-20 | [`../journals/phase-8/alex/event-fullstack-b-alex.md`](../journals/phase-8/alex/event-fullstack-b-alex.md) "STANDING approved" |
+| @@FullStackB  | chan-desktop runtime verification (`make run`, `npm run tauri dev`, `cargo build -p chan-desktop`, `Chan.app` launch + click cycles) against throwaway workspaces, for any -b-N task that needs empirical confirmation. Standard test-server-workflow tear-down required. | 2026-05-20 | [`../journals/phase-8/alex/event-fullstack-b-alex.md`](../journals/phase-8/alex/event-fullstack-b-alex.md) "STANDING approved" |
 | @@WebtestB    | chan-desktop runtime walkthroughs (Tauri launch + UI driving via available tooling). Standard test-server-workflow tear-down required. | 2026-05-20 | [`../journals/phase-8/alex/event-webtest-b-alex.md`](../journals/phase-8/alex/event-webtest-b-alex.md) "STANDING approved" |
 
 Boundaries that ALWAYS apply (not waived by any standing
@@ -426,8 +426,8 @@ grant):
 * Production-tag pushes (`git push --follow-tags` against
   versioned tags) are gated on @@Alex's explicit "cut it"
   signal, regardless of grants.
-* Persistent side effects outside the throwaway-drive set
-  (modifying registered drives, leaving background
+* Persistent side effects outside the throwaway-workspace set
+  (modifying registered workspaces, leaving background
   processes alive, mutating chan-desktop config files
   permanently) are NEVER covered; always tear down.
 * The grant covers IN-SCOPE actions only; out-of-scope

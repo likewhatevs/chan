@@ -1,13 +1,13 @@
 # Chan Manual
 
-Chan works with plain markdown drives. A drive is a folder on disk that
+Chan works with plain markdown workspaces. A workspace is a folder on disk that
 Chan opens through the desktop app or through the standalone `chan serve`
 command.
 
 Start here:
 
 - [Install choices](install.md)
-- [Creating or opening a drive](drives.md)
+- [Creating or opening a workspace](workspaces.md)
 - [Editing markdown](editing-markdown.md)
 - [Wiki-links](wiki-links.md)
 - [Search and graph basics](search-and-graph.md)
@@ -17,8 +17,8 @@ Start here:
 
 ## What stays on disk
 
-Your markdown files remain ordinary files under the drive root. Chan reads,
-writes, searches, and watches that tree through the drive layer. You can edit
+Your markdown files remain ordinary files under the workspace root. Chan reads,
+writes, searches, and watches that tree through the workspace layer. You can edit
 the same files with another editor, commit them to git, or sync them with a
 file sync tool.
 

@@ -103,7 +103,7 @@ alpha tints of the foreground hue at ~0.18 dark / ~0.12 light.
 chip, tree icon, and (eventually) inspector header glyph. Three
 families:
 
-- **FileKind**: things that exist as files in the drive.
+- **FileKind**: things that exist as files in the workspace.
   `document` | `contact` | `text` | `media` | `binary`.
 - **EntityKind**: graph-only entities (tokens extracted from markdown
   bodies, no file backing). `tag` | `mention` | `date`.
@@ -139,7 +139,7 @@ date        date        --text-secondary    Calendar
 folder      folder      --g-folder          Directory
 ```
 
-*Reserved. `classifyFile` does not emit `text` until chan-drive
+*Reserved. `classifyFile` does not emit `text` until chan-workspace
 exposes the wider editable-text class (phase 2 of the editor
 widening). Until then a non-markdown text file falls into `binary`.
 

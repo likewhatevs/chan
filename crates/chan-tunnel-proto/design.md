@@ -6,7 +6,7 @@ chan-tunnel is split into three crates that live together in
 `chan-writer/chan-core`:
 
 - `chan-tunnel-proto` (this crate): pure wire types and a sync
-  codec. Hello / HelloAck, the drive-name and username validators,
+  codec. Hello / HelloAck, the workspace-name and username validators,
   the `H2Duplex` adapter, and the `TUNNEL_PATH` /
   `MAX_CONTROL_FRAME_BYTES` constants. No I/O, no async runtime.
 - `chan-tunnel-client`: dials a tunnel terminator over h2/TLS,
@@ -15,7 +15,7 @@ chan-tunnel is split into three crates that live together in
   router. Embedded into `chan serve`.
 - `chan-tunnel-server`: terminates tunnel connections from clients,
   exposes a `Validator` trait the consumer implements, registers
-  live tunnels in a shared `Registry` keyed by `(user, drive)`,
+  live tunnels in a shared `Registry` keyed by `(user, workspace)`,
   and offers a `public_router` that opens fresh yamux substreams
   to forward public-facing HTTP requests.
 
@@ -32,7 +32,7 @@ for any byte-level detail.
 
 ## 1. Problem and scope
 
-A chan user wants their local drive reachable on a public URL
+A chan user wants their local workspace reachable on a public URL
 (`drive.chan.app/{user}/{drive}/...`) without opening a port,
 configuring DNS, or running a TURN/STUN stack. The constraint is
 "works through corporate NAT and HTTP-only egress." The shape that
@@ -43,7 +43,7 @@ This crate owns:
 - Control frames (`Hello`, `HelloAck`) and their JSON serde shape.
 - Length-prefixed framing (`[u32 BE len][json bytes]`) used only
   for the two control messages.
-- Drive-name and username validators applied identically by client
+- Workspace-name and username validators applied identically by client
   and server (defense-in-depth gate against URL-unsafe identifiers).
 - `H2Duplex`: an `AsyncRead + AsyncWrite + Unpin` over an h2
   `(SendStream<Bytes>, RecvStream)` pair, used by both ends to feed
@@ -101,7 +101,7 @@ crate is not used again on that connection.
 | `control.rs`      | `Hello`, `HelloAck`, `ProtocolVersion`     |
 | `frame.rs`        | sync codec (`encode_frame`, `decode_frame`)|
 | `io.rs`           | tokio helpers (`read_frame`, `write_frame`)|
-| `drive_name.rs`   | drive + username validators, sanitizer     |
+| `drive_name.rs`   | workspace + username validators, sanitizer     |
 | `h2_duplex.rs`    | `H2Duplex` adapter over h2 streams         |
 | `lib.rs`          | re-exports + `TUNNEL_PATH`, byte cap       |
 
@@ -125,7 +125,7 @@ impl ProtocolVersion { pub const V1: ProtocolVersion = ProtocolVersion(1); }
 pub struct Hello {
     pub protocol: ProtocolVersion,
     pub client_version: String,
-    pub drive: String,
+    pub workspace: String,
     pub public: bool, // additive; #[serde(default)]
 }
 
@@ -133,7 +133,7 @@ pub struct HelloAck {
     pub protocol: ProtocolVersion,
     pub prefix: String,
     pub user: String,
-    pub drive: String,
+    pub workspace: String,
 }
 
 // Sync codec
@@ -151,7 +151,7 @@ pub async fn write_frame<W, T>(w: &mut W, value: &T)
     where W: AsyncWrite + Unpin, T: Serialize;
 pub enum IoFrameError { Frame(FrameError), Io(std::io::Error) }
 
-// Drive + username rules
+// Workspace + username rules
 pub const MAX_DRIVE_NAME_LEN: usize = 32;
 pub const MAX_USERNAME_LEN: usize = 64;
 pub fn is_valid_drive_name(s: &str) -> bool;
@@ -176,7 +176,7 @@ without re-exporting `h2::Error` or `serde_json::Error`.
 ### Why a length-prefixed JSON envelope, not HTTP headers
 
 The handshake fields could in theory ride on the request line or
-custom headers (`X-Chan-Drive: notes`, etc.). They don't, for three
+custom headers (`X-Chan-Workspace: notes`, etc.). They don't, for three
 reasons:
 
 1. The terminator runs behind nginx with `grpc_pass`. nginx will
@@ -184,7 +184,7 @@ reasons:
    depending on configuration; the body is opaque to it. Putting the
    contract in the body is invariant under proxy churn.
 2. The reverse direction (`HelloAck`) needs to carry structured data
-   back to the client (`prefix`, `user`, `drive`). HTTP responses
+   back to the client (`prefix`, `user`, `workspace`). HTTP responses
    could use headers, but then the schemas are asymmetric and adding a
    field on the response side is a header-name fight rather than a
    serde additive change.
@@ -229,7 +229,7 @@ it before allocating. Both surfaces refuse frames over the cap with
 Additive field, `#[serde(default)]`. Older clients omit it; the
 server treats them as `public = false`. Newer servers reading older
 client frames also see `false`. The default mirrors the historical
-behaviour (private drives only) so the silent default is safe.
+behaviour (private workspaces only) so the silent default is safe.
 
 ### HelloAck.prefix
 
@@ -270,10 +270,10 @@ adapter doesn't care which.
 ## 6. Trust boundaries / validation
 
 This crate is the validator surface for two values that flow into a
-public URL: drive name (from the client's `Hello`) and username
+public URL: workspace name (from the client's `Hello`) and username
 (from the server's `Validated`).
 
-### Drive name (`is_valid_drive_name`)
+### Workspace name (`is_valid_drive_name`)
 
 Rules: 1..=32 ASCII bytes; characters `[a-z0-9-]`; first and last
 character alphanumeric (no leading/trailing hyphen). Both sides
@@ -284,14 +284,14 @@ that introduces a new path scheme that would let an old client
 still register a name the new server can't safely route.
 
 `sanitize_drive_name` is a best-effort transform from a free-form
-string (often the drive directory's basename) into a valid name:
+string (often the workspace directory's basename) into a valid name:
 lowercase ASCII, collapse non-alnum runs to single `-`, trim,
 truncate. Returns `None` when the result would be empty so the
 caller can prompt the user instead of inventing a name.
 
 ### Username (`is_valid_username`)
 
-Slightly looser than the drive validator because real identity
+Slightly looser than the workspace validator because real identity
 services emit mixed-case names with underscores: ASCII alphanumerics,
 `-`, `_`; first character alphanumeric (no leading punctuation);
 1..=64. Applied by chan-tunnel-server after the validator returns,
@@ -344,19 +344,19 @@ Transitively:
 - `chan-writer/chan/chan-server`: depends on chan-tunnel-client and
   re-exports `is_valid_drive_name`, `sanitize_drive_name`, and
   `MAX_DRIVE_NAME_LEN` for the `chan serve` CLI to validate the
-  user-typed drive name before dialing.
+  user-typed workspace name before dialing.
 - `chan-writer/chan-gateway/drive-proxy`: depends on chan-tunnel-
   server at runtime; chan-tunnel-client is a dev-dependency only,
-  used in `tests/api.rs` to drive a fake `chan serve` against a
+  used in `tests/api.rs` to workspace a fake `chan serve` against a
   real `serve_tunnel_listener` for end-to-end tests.
 
 ## 9. Open questions / future extensions
 
-- Multi-drive over a single tunnel. Today one h2 stream registers
-  one `(user, drive)`. A `Hello { drives: Vec<...> }` shape would
+- Multi-workspace over a single tunnel. Today one h2 stream registers
+  one `(user, workspace)`. A `Hello { workspaces: Vec<...> }` shape would
   amortise TLS/h2 setup for users running several `chan serve`
   instances. Requires a registry rework on the server to attribute
-  inbound substreams to the right drive.
+  inbound substreams to the right workspace.
 - Negotiated frame cap. Both sides currently hard-code 64 KiB; a
   larger cap negotiated inside `Hello` would let future versions
   carry richer initial metadata without a protocol bump.
