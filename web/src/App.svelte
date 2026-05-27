@@ -1130,6 +1130,15 @@
   // synchronous localStorage write is fine.
   function onUnloadFlushBuffers(): void {
     flushPendingBufferWrites();
+    // `lane-c addendum-2 item 1` facet C: window.location.reload()
+    // (Cmd+R / browser refresh / desktop reload IPC) does NOT run
+    // component cleanup, and the caret is only mirrored into the URL
+    // hash on layout changes - not on every selection move. Flush the
+    // layout (which serializes each tab's caret as the `c` field) here
+    // so a full reload restores the EXACT caret position. The editor's
+    // maybeRestoreCaret then re-asserts keyboard focus on that caret,
+    // so @@Alex lands back exactly where he was, focused + ready to type.
+    persistLayoutToHash();
   }
   onMount(() => {
     window.addEventListener("beforeunload", onUnloadFlushBuffers);
