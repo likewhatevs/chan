@@ -22,6 +22,9 @@ pub struct InspectorParams {
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum InspectorKind {
+    // chunk-1 wire preservation: variant renamed Drive -> Workspace, on-wire
+    // token stays "drive" until chunk 2 flips it with the frontend.
+    #[serde(rename = "drive")]
     Workspace,
     Directory,
     Markdown,
