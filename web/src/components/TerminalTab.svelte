@@ -178,6 +178,7 @@
   let richPromptWorkspaceStatusKey = "";
   const outputDecoder = new TextDecoder();
   let webglRendererActive = false;
+  let webglContextLossRetries = 0;
   let ptyOutputWriteDepth = 0;
   let hostResumeTimers: ReturnType<typeof setTimeout>[] = [];
   const keyboardProtocol = createTerminalKeyboardProtocolState();
@@ -475,6 +476,57 @@
     };
   }
 
+  // `webgl-context-loss`: the live WebGL context can be lost long
+  // after mount (GPU reset, display sleep, a DPR change when the
+  // window moves between Retina and non-Retina displays, tab
+  // backgrounding). WKWebView / WebKitGTK (chan-desktop) drop it far
+  // more readily than Chrome. The previous handler disposed the
+  // renderer and stayed on DOM for the rest of the session, so a
+  // single transient loss permanently re-introduced the box-drawing
+  // gap bug (`fullstack-b-29`) with no recovery. Recreate the
+  // renderer on loss instead, bounded by a small retry budget so a
+  // genuinely dead GPU settles on DOM rather than thrashing recreate.
+  const WEBGL_MAX_CONTEXT_LOSS_RETRIES = 3;
+
+  function enableWebglRenderer(): void {
+    if (!term) return;
+    try {
+      const webgl = new WebglAddon();
+      webgl.onContextLoss(() => {
+        webglRendererActive = false;
+        webgl.dispose();
+        if (term && webglContextLossRetries < WEBGL_MAX_CONTEXT_LOSS_RETRIES) {
+          webglContextLossRetries += 1;
+          // One [chan] line per budget slot consumed, so a tester
+          // watching the webview console (Cmd+Opt+I in chan-desktop)
+          // sees each loss + how many recreate attempts remain.
+          console.warn(
+            `[chan] xterm.js WebGL context lost; recreating renderer (attempt ${webglContextLossRetries}/${WEBGL_MAX_CONTEXT_LOSS_RETRIES}).`,
+          );
+          // The lost context is not usable synchronously inside the
+          // loss callback; recreate on the next frame.
+          requestAnimationFrame(() => enableWebglRenderer());
+        } else {
+          console.warn(
+            "[chan] xterm.js WebGL context lost; budget exhausted, staying on the DOM renderer.",
+          );
+        }
+      });
+      term.loadAddon(webgl);
+      webglRendererActive = true;
+      // Repaint so a recreated renderer redraws the visible rows and
+      // clears any garbled glyphs left behind by the lost context.
+      refreshTerminalRenderer();
+    } catch (err) {
+      // Tauri webviews effectively always have WebGL; surface the
+      // failure for the rare regression case but don't break mount.
+      console.warn(
+        "[chan] xterm.js WebGL renderer unavailable; falling back to DOM:",
+        err,
+      );
+    }
+  }
+
   function start(): void {
     if (!host || term) return;
     // `fullstack-b-11`: scrollback honors the Settings MB budget.
@@ -555,31 +607,14 @@
     // including the line-height padding, so ASCII tables +
     // pixel-art mascots render gap-free.
     //
-    // WebGL initialisation throws on contexts where the
-    // browser declined to allocate a WebGL context (rare on
-    // chan-desktop's WKWebView / WebView2, but possible inside
-    // headless test harnesses or odd Linux GPU setups). The
-    // try/catch + onContextLoss handler keep us safe: on
-    // failure we silently fall back to the DOM renderer the
-    // user already had (with the original rendering bug intact
-    // but no regression).
-    try {
-      const webgl = new WebglAddon();
-      webgl.onContextLoss(() => {
-        webglRendererActive = false;
-        webgl.dispose();
-      });
-      term.loadAddon(webgl);
-      webglRendererActive = true;
-    } catch (err) {
-      // Tauri webviews effectively always have WebGL; surface
-      // the failure to the console for the rare regression
-      // case but don't break terminal mount.
-      console.warn(
-        "[chan] xterm.js WebGL renderer unavailable; falling back to DOM:",
-        err,
-      );
-    }
+    // WebGL initialisation throws on contexts where the browser
+    // declined to allocate a WebGL context (rare on chan-desktop's
+    // WKWebView / WebView2, but possible inside headless test
+    // harnesses or odd Linux GPU setups), and the live context can
+    // later be LOST. enableWebglRenderer() handles both: try/catch on
+    // init, then recreate-on-loss (bounded) before settling on the
+    // DOM renderer. See the helper for the WKWebView rationale.
+    enableWebglRenderer();
     refreshTerminalRenderer();
     installHostResumeListeners();
     term.attachCustomKeyEventHandler(handleTerminalKeyEvent);
