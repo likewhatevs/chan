@@ -548,6 +548,12 @@ ROUND-CLOSE TODO done: docs(phase-11) snapshot (this commit). OPEN for @@Alex:
 push to origin (fires the new CI over the whole round), worktree cleanup
 (chan-lane-a/-c + stale /tmp ones), and the next-round backlog is ready.
 
+PHASE 11 CLOSED 2026-05-27 -> phase 12 opened at `docs/journals/phase-12/`
+(bootstrap + carryover backlog + lane plans + bus). Carryover: overlay/scope
+wipe (W1-W7), GI-10, loading-state, GI-11 locks, drive->workspace rename,
+frontend/shortcuts, release carryover (Tauri updater + manual copy), Linux
+desktop (phase-10 carry).
+
 ## Candidate bugs / future follow-ups
 - GPU/Metal embed hang: being defaulted-off now; proper fix (timeout + CPU
   fallback or correct Metal command-buffer usage) deferred to the
