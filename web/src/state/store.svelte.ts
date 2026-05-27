@@ -1061,17 +1061,19 @@ export function scheduleDriveRefresh(): void {
 
 const HASH_LAYOUT = "s";
 const HASH_SIDEBAR = "c"; // "1" if collapsed, absent if expanded
-const HASH_BROWSER = "files";
 const HASH_SEARCH = "search";
 const HASH_SEARCH_SCOPE = "search_scope";
-const HASH_GRAPH = "graph";
 const HASH_SETTINGS = "settings";
+// The legacy `files` (browser) and `graph` per-overlay keys are RETIRED by
+// the scope-concept wipe (W5): graph + browser surfaces are first-class tabs
+// and persist via the layout `s` key, so the per-overlay hash is redundant.
+// Old `files=` / `graph=` bookmarks degrade gracefully - they are not in
+// HASH_KEYS, so applyOverlaysFromHash ignores them and dropUnknownHashKeys
+// strips them the next time the app writes the URL.
 const HASH_KEYS = new Set([
   HASH_LAYOUT,
-  HASH_BROWSER,
   HASH_SEARCH,
   HASH_SEARCH_SCOPE,
-  HASH_GRAPH,
   HASH_SETTINGS,
 ]);
 
@@ -1112,50 +1114,6 @@ function readLayoutHash(): ReturnType<typeof serializeLayout> {
   }
 }
 
-/// Encode the graph filter chips as a 6-char string of `0`/`1`,
-/// order: link, tag, mention, language, img, folder. All-on (the
-/// default) returns the empty string so a fresh graph open
-/// doesn't bloat the URL. Legacy 5-char hashes (pre-folder)
-/// decode with `folder` treated as the default (on).
-function encodeGraphFilters(f: GraphFilters): string {
-  if (
-    f.link &&
-    f.tag &&
-    f.mention &&
-    f.language &&
-    f.img &&
-    f.folder &&
-    f.markdown &&
-    f.source
-  ) {
-    return "";
-  }
-  const bit = (v: boolean) => (v ? "1" : "0");
-  // `fullstack-a-57` extended from 6 to 8 bits (markdown + source).
-  // Legacy 6-char hashes decode cleanly with the new bits falling
-  // back to the default-on via `ch()`'s trailing-char rule.
-  return `${bit(f.link)}${bit(f.tag)}${bit(f.mention)}${bit(f.language)}${bit(f.img)}${bit(f.folder)}${bit(f.markdown)}${bit(f.source)}`;
-}
-
-function decodeGraphFilters(s: string): GraphFilters {
-  // Empty / missing string = defaults (all on).
-  if (!s) return { ...DEFAULT_GRAPH_FILTERS };
-  // Missing trailing chars (older hash format) fall back to "on"
-  // for the corresponding filter so legacy URLs land on the
-  // previous behaviour, not a silently hidden category.
-  const ch = (i: number) => (s[i] === "0" ? false : s[i] === "1" ? true : true);
-  return {
-    link: ch(0),
-    tag: ch(1),
-    mention: ch(2),
-    language: ch(3),
-    img: ch(4),
-    folder: ch(5),
-    markdown: ch(6),
-    source: ch(7),
-  };
-}
-
 /// Split `<flag>:<rest>` where flag is a single `0`/`1` for an
 /// inspector-open bit. Returns `[bit, rest]`; if no leading flag
 /// is present the bit comes back as null and the original string
@@ -1174,21 +1132,11 @@ function splitInspectorBit(raw: string): [boolean | null, string] {
 /// missing means "overlay stays closed".
 function applyOverlaysFromHash(): void {
   const params = hashParams();
-  if (params.has(HASH_BROWSER)) {
-    // Encoding: `<inspectorBit>:<path>`. Both fields optional.
-    const [ins, path] = splitInspectorBit(params.get(HASH_BROWSER) ?? "");
-    if (ins !== null) browserOverlay.inspectorOpen = ins;
-    // Just plant the selection — DO NOT auto-expand ancestors. The
-    // hash always carries the last-selected entry as the user moves
-    // around, so reusing `revealAndSelect` here would clobber the
-    // user's persisted collapse state on every reload (and re-save
-    // the auto-expansion via persistTreeExpanded). If the selected
-    // row isn't visible because an ancestor is collapsed, opening
-    // that ancestor reveals it — the saved collapse wins.
-    fbSelectSingle(path || null);
-    const tab = openBrowser();
-    if (ins !== null) tab.inspectorOpen = ins;
-  }
+  // W5: the legacy `files` (browser) and `graph` keys are retired - those
+  // surfaces are first-class tabs restored via the layout `s` key. Only the
+  // still-overlay surfaces (search, settings) read their hash key here; old
+  // `files=` / `graph=` bookmarks are simply ignored (and stripped on the
+  // next write by dropUnknownHashKeys).
   if (params.has(HASH_SEARCH)) {
     // Encoding: `<inspectorBit>:<query>`. Both fields optional.
     // Scope rides in a sibling `HASH_SEARCH_SCOPE` key so user
@@ -1200,33 +1148,6 @@ function applyOverlaysFromHash(): void {
     const scope = params.get(HASH_SEARCH_SCOPE);
     if (scope) searchPanel.scopeId = scope;
     searchPanel.open = true;
-  }
-  if (params.has(HASH_GRAPH)) {
-    // Encoding: `<scopeId>|<depth>|<chips>|<inspectorBit>|<mode>`. All
-    // trailing fields optional; an empty value falls back to
-    // defaults. `mode` is only emitted for filesystem graphs.
-    const raw = params.get(HASH_GRAPH) ?? "";
-    const [scope, depthStr, chips, ins, mode] = raw.split("|");
-    if (scope) graphOverlay.scopeId = scope;
-    const depth = Number(depthStr);
-    if (Number.isFinite(depth) && depth >= 1) graphOverlay.depth = depth;
-    // Mutate fields in place; reassigning `graphOverlay.filters`
-    // would orphan any consumer that captured the proxy reference
-    // at mount time (e.g. `const show = graphOverlay.filters` in
-    // GraphPanel.svelte).
-    const f = decodeGraphFilters(chips ?? "");
-    graphOverlay.filters.link = f.link;
-    graphOverlay.filters.tag = f.tag;
-    graphOverlay.filters.mention = f.mention;
-    graphOverlay.filters.language = f.language;
-    graphOverlay.filters.img = f.img;
-    graphOverlay.filters.folder = f.folder;
-    graphOverlay.filters.markdown = f.markdown;
-    graphOverlay.filters.source = f.source;
-    if (ins === "0" || ins === "1") graphOverlay.inspectorOpen = ins === "1";
-    graphOverlay.mode =
-      mode === "fs" ? "filesystem" : mode === "lang" ? "language" : "semantic";
-    graphOverlay.open = true;
   }
   if (params.has(HASH_SETTINGS) && !SETTINGS_DISABLED) {
     settingsOverlay.open = true;
@@ -1255,12 +1176,9 @@ export function persistStateToHash(): void {
   // saved URL hash so it doesn't sit there forever.
   params.delete(HASH_SIDEBAR);
   // ---- overlay keys: presence = open ------------------------
-  if (browserOverlay.open) {
-    const ins = browserOverlay.inspectorOpen ? "1" : "0";
-    params.set(HASH_BROWSER, `${ins}:${browserSelection.path ?? ""}`);
-  } else {
-    params.delete(HASH_BROWSER);
-  }
+  // Only search + settings remain overlay surfaces; the graph + browser
+  // `graph=` / `files=` keys are retired (W5) - those tabs persist via the
+  // layout `s` key above.
   if (searchPanel.open) {
     const ins = searchPanel.inspectorOpen ? "1" : "0";
     params.set(HASH_SEARCH, `${ins}:${searchPanel.query ?? ""}`);
@@ -1275,26 +1193,6 @@ export function persistStateToHash(): void {
   } else {
     params.delete(HASH_SEARCH);
     params.delete(HASH_SEARCH_SCOPE);
-  }
-  if (graphOverlay.open) {
-    const chips = encodeGraphFilters(graphOverlay.filters);
-    // Trim trailing separators when later fields are empty so
-    // URLs stay readable (`graph=drive` instead of `graph=drive|1|`).
-    const depth = String(graphOverlay.depth);
-    const ins = graphOverlay.inspectorOpen ? "1" : "0";
-    const modeTail =
-      graphOverlay.mode === "filesystem"
-        ? "|fs"
-        : graphOverlay.mode === "language"
-          ? "|lang"
-          : "";
-    const insTail = graphOverlay.inspectorOpen || modeTail ? `|${ins}${modeTail}` : "";
-    let val = graphOverlay.scopeId;
-    if (chips || insTail) val = `${val}|${depth}|${chips}${insTail}`;
-    else if (depth !== "1") val = `${val}|${depth}`;
-    params.set(HASH_GRAPH, val);
-  } else {
-    params.delete(HASH_GRAPH);
   }
   if (settingsOverlay.open) {
     params.set(HASH_SETTINGS, "1");

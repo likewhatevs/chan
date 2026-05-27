@@ -50,28 +50,10 @@ describe("fullstack-a-57: GraphFilters shape (both modules)", () => {
   });
 });
 
-describe("fullstack-a-57: URL-hash encoder extension (8 bits)", () => {
-  test("encoder defaults to empty when ALL 8 bits are ON", () => {
-    expect(store).toMatch(
-      /if \([\s\S]*?f\.link &&[\s\S]*?f\.markdown &&[\s\S]*?f\.source[\s\S]*?\) \{[\s\S]*?return "";/,
-    );
-  });
-
-  test("encoder emits 8 bits in order link/tag/mention/language/img/folder/markdown/source", () => {
-    expect(store).toMatch(
-      /\$\{bit\(f\.link\)\}\$\{bit\(f\.tag\)\}\$\{bit\(f\.mention\)\}\$\{bit\(f\.language\)\}\$\{bit\(f\.img\)\}\$\{bit\(f\.folder\)\}\$\{bit\(f\.markdown\)\}\$\{bit\(f\.source\)\}/,
-    );
-  });
-
-  test("decoder maps bits 6+7 to markdown+source with default-on fallback for missing trailing chars", () => {
-    expect(store).toMatch(/markdown: ch\(6\)/);
-    expect(store).toMatch(/source: ch\(7\)/);
-    // Default-on fallback: ch() returns true for missing chars.
-    expect(store).toMatch(
-      /const ch = \(i: number\) => \(s\[i\] === "0" \? false : s\[i\] === "1" \? true : true\)/,
-    );
-  });
-});
+// The old store.svelte.ts URL-hash filter codec (encodeGraphFilters /
+// decodeGraphFilters) was REMOVED by the scope-concept wipe (W5, lane-a A3):
+// the `graph=` overlay hash is retired. The live filter codec is the
+// layout-`s` graph-tab encoder in tabs.svelte.ts, locked by the block below.
 
 describe("fullstack-a-57: SerTab encoder version sentinel", () => {
   test("encoder prefixes payload with version sentinel '2'", () => {
