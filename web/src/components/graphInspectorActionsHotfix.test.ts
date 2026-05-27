@@ -63,20 +63,23 @@ describe("GI-1: Open routes to the editor, not a graph reload", () => {
 });
 
 describe("GI-2: Show File reveals in the File Browser, not a graph reload", () => {
-  test("revealSelectedFile reveals + selects the path in the browser", () => {
+  test("revealSelectedFile reveals + selects the path in a browser tab", () => {
+    // GI-8: reveal now routes through the tab-world revealPathInBrowserTab
+    // (opens a File Browser tab via openBrowserInActivePane), not the
+    // overlay-era revealPathInBrowser + close().
     expect(panel).toMatch(
-      /function revealSelectedFile\(\): void \{[\s\S]*?revealPathInBrowser\(selectedNode\.path, \{ inspectorOpen: true \}\)/,
+      /function revealSelectedFile\(\): void \{[\s\S]*?revealPathInBrowserTab\(selectedNode\.path, false\)/,
     );
   });
 
-  test("revealSelectedFsEntry reveals the fs-node path in the browser", () => {
-    // GI-5 refined this: directories now pass `enter: true` so the File
-    // Browser opens AT the directory (revealAndEnterDirectory) instead of
-    // a visual no-op; files keep select-in-place. The reveal-not-reload
-    // behaviour this test guards is unchanged. Detailed dir/file branch
-    // pins live in graphDirInspectorHotfix.test.ts.
+  test("revealSelectedFsEntry reveals the fs-node path in a browser tab", () => {
+    // GI-5 + GI-8: directories pass isDir=true so revealPathInBrowserTab
+    // expands the directory ITSELF and the File Browser tab opens AT it;
+    // files expand ancestors only. The reveal-not-reload behaviour this
+    // test guards is unchanged. Detailed dir/file branch pins live in
+    // graphDirInspectorHotfix.test.ts.
     expect(panel).toMatch(
-      /function revealSelectedFsEntry\(\): void \{[\s\S]*?revealPathInBrowser\(selectedFsNode\.path, \{\s*enter: isFsDirectory\(selectedFsNode\),\s*inspectorOpen: true,\s*\}\)/,
+      /function revealSelectedFsEntry\(\): void \{[\s\S]*?revealPathInBrowserTab\(selectedFsNode\.path, isFsDirectory\(selectedFsNode\)\)/,
     );
   });
 

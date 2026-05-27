@@ -25,19 +25,23 @@
   } from "../api/types";
   import {
     canReopenClosedTab,
+    openBrowserInActivePane,
     openInActivePane,
     reopenClosedTab,
     type GraphTab,
   } from "../state/tabs.svelte";
   import {
     availableGraphScopes,
+    browserSelection,
+    fbSelectSingle,
     graphReloadSignal,
     graphOverlay,
     paneWidths,
     persistPaneWidths,
-    revealPathInBrowser,
+    persistTreeExpanded,
     surfaceThemeOverride,
     tree,
+    treeExpanded,
   } from "../state/store.svelte";
   import { onDestroy, untrack } from "svelte";
   import {
@@ -1056,42 +1060,64 @@
       : null,
   );
 
-  /// "Show in file browser" handler for image nodes in the inspector.
+  /// Tab-world reveal: open a File Browser TAB at `path`, select it, and
+  /// expand its ancestor chain; for a directory expand the directory
+  /// ITSELF too so the browser opens AT it (GI-5 "enter the directory").
+  /// Mirrors FileTree's `openSelectionInFileBrowser`.
+  ///
+  /// GI-8: the graph is a TAB now, not an overlay, so the File Browser
+  /// opens as a sibling tab and the graph persists — there is no overlay
+  /// to dismiss. The previous handlers used the overlay-era
+  /// `revealPathInBrowser(...)` + `close()` chain; from a graph tab that
+  /// ran the directory fetch but opened no visible browser tab (the
+  /// `openBrowser`/`browserOverlay`/`close` machinery was built for the
+  /// pre-migration overlay), so Show Directory looked like a no-op /
+  /// graph re-layout. This routes through the same tab-world primitive
+  /// the File Browser's own "Open in File Browser" uses.
+  function revealPathInBrowserTab(path: string, isDir: boolean): void {
+    const parts = path.split("/").filter(Boolean);
+    // Directory: expand itself + ancestors. File: ancestors only (select
+    // the file inside its already-expanded parent).
+    const upto = isDir ? parts.length : parts.length - 1;
+    const expanded: string[] = [];
+    let acc = "";
+    for (let i = 0; i < upto; i++) {
+      acc = acc ? `${acc}/${parts[i]}` : parts[i];
+      if (acc) expanded.push(acc);
+    }
+    const isRoot = path === "";
+    const tab = openBrowserInActivePane(isRoot ? {} : { select: path });
+    tab.inspectorOpen = true;
+    tab.showDrive = isRoot;
+    tab.expanded = expanded.length > 0 ? expanded : undefined;
+    fbSelectSingle(isRoot ? null : path);
+    browserSelection.showDrive = isRoot;
+    const map = treeExpanded.map;
+    map[""] = true;
+    for (const e of expanded) map[e] = true;
+    persistTreeExpanded();
+  }
+
+  /// "Show in file browser" handler for image / semantic file nodes.
   /// FileInfoBody only renders the button when this is set + the
   /// selection is an image, so it's safe to bind for every file.
   function revealSelectedFile(): void {
     if (selectedNode && selectedNode.kind === "file" && !selectedNode.missing) {
-      revealPathInBrowser(selectedNode.path, { inspectorOpen: true });
-      close();
+      revealPathInBrowserTab(selectedNode.path, false);
     }
   }
 
-  /// "Show File" / "Show Directory" handler for fs-mode nodes. Same
-  /// pattern as revealSelectedFile but pulls the path off the
-  /// FsGraphNode so it works for directories (which have no semantic-
-  /// graph counterpart in selectedNode) and for files surfaced
-  /// only via the fs-graph. path === "" is the drive root;
-  /// revealAndSelect handles it by clearing the tree selection
-  /// and opening the browser at the drive level.
-  ///
-  /// GI-5: "Show Directory" was a visual no-op. revealPathInBrowser's
-  /// default (revealAndSelect) only expands the target's ANCESTOR chain
-  /// + selects its row — for a directory whose row was already visible
-  /// (e.g. a top-level dir) nothing observably changes. Directories pass
-  /// `enter: true` so revealAndEnterDirectory expands the directory
-  /// ITSELF and lazy-loads its children, so the File Browser visibly
-  /// opens AT that directory. Files keep the select-in-place behaviour.
+  /// "Show File" / "Show Directory" handler for fs-mode nodes. Pulls the
+  /// path off the FsGraphNode so it works for directories (which have no
+  /// semantic-graph counterpart in selectedNode) and for files surfaced
+  /// only via the fs-graph.
   function revealSelectedFsEntry(): void {
     if (
       selectedFsNode &&
       (isFsDirectory(selectedFsNode) || selectedFsNode.kind === "file") &&
       selectedFsNode.path !== undefined
     ) {
-      revealPathInBrowser(selectedFsNode.path, {
-        enter: isFsDirectory(selectedFsNode),
-        inspectorOpen: true,
-      });
-      close();
+      revealPathInBrowserTab(selectedFsNode.path, isFsDirectory(selectedFsNode));
     }
   }
 

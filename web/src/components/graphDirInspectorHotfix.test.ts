@@ -11,13 +11,18 @@ import panel from "./GraphPanel.svelte?raw";
 // were reactive wiring, not pure functions, so the pin is on the wiring).
 
 describe("GI-5: Show Directory reveals + ENTERS the directory in the File Browser", () => {
-  test("revealSelectedFsEntry passes enter:true for directories so the FB opens AT the dir", () => {
-    // The no-op was revealAndSelect only expanding the ANCESTOR chain.
-    // Directories now revealAndEnterDirectory (enter:true) which expands
-    // the directory itself and lazy-loads its children; files stay
-    // select-in-place (enter:false).
+  test("revealSelectedFsEntry opens a File Browser TAB, expanding the dir itself (GI-5 + GI-8)", () => {
+    // GI-5 was a visual no-op; GI-8 then showed the overlay-era reveal
+    // (revealPathInBrowser + close) opened no visible tab from a graph
+    // tab. Now revealSelectedFsEntry routes through revealPathInBrowserTab
+    // (tab-world): directories pass isDir=true so it expands the directory
+    // ITSELF (upto = parts.length) and the File Browser tab opens AT it;
+    // files expand ancestors only.
     expect(panel).toMatch(
-      /function revealSelectedFsEntry\(\): void \{[\s\S]*?revealPathInBrowser\(selectedFsNode\.path, \{\s*enter: isFsDirectory\(selectedFsNode\),\s*inspectorOpen: true,\s*\}\)/,
+      /function revealSelectedFsEntry\(\): void \{[\s\S]*?revealPathInBrowserTab\(selectedFsNode\.path, isFsDirectory\(selectedFsNode\)\)/,
+    );
+    expect(panel).toMatch(
+      /function revealPathInBrowserTab\(path: string, isDir: boolean\)[\s\S]*?const upto = isDir \? parts\.length : parts\.length - 1;/,
     );
   });
 
