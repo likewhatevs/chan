@@ -159,8 +159,25 @@ describe("fullstack-a-79: identityPrompt", () => {
         "Drafts/team-foo/docs/bootstrap.md",
       ),
     ).toBe(
-      "Hello, I am @@Alice and you are $CHAN_TAB_NAME. Our team lead is @@Lead. Identify yourself and read Drafts/team-foo/docs/bootstrap.md.",
+      "Hello, I am @@Alice and you are $CHAN_TAB_NAME. Our team lead is @@Lead. Identify yourself and read Drafts/team-foo/docs/bootstrap.md with the chan MCP read_file tool (a Drafts/ path is a chan workspace location, not a file under your working directory).",
     );
+  });
+
+  test("Drafts bootstrap paths are routed through the chan MCP read_file tool", () => {
+    const out = identityPrompt(
+      "@@Alice",
+      "@@Lead",
+      "Drafts/team-foo/docs/bootstrap.md",
+    );
+    expect(out).toContain("chan MCP read_file tool");
+  });
+
+  test("plain drive paths get no MCP hint (they resolve relative to cwd)", () => {
+    const out = identityPrompt("@@Alice", "@@Lead", "notes/bootstrap.md");
+    expect(out).toBe(
+      "Hello, I am @@Alice and you are $CHAN_TAB_NAME. Our team lead is @@Lead. Identify yourself and read notes/bootstrap.md.",
+    );
+    expect(out).not.toContain("read_file");
   });
 
   test("does NOT escape $CHAN_TAB_NAME (agents read it as a live env-var)", () => {
