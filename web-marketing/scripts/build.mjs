@@ -10,8 +10,16 @@ const srcRoot = path.join(siteRoot, "src");
 const distRoot = path.join(siteRoot, "dist");
 const manualRoot = path.join(repoRoot, "docs", "manual");
 const githubRepoUrl = "https://github.com/fiorix/chan";
-const latestDownloadBase = `${githubRepoUrl}/releases/latest/download`;
 const cliMetadataBase = "https://chan.app/dl/cli";
+const releasesMetadataPath = "/dl/releases.json";
+const requiredDownloadIds = [
+  "desktop-macos-dmg",
+  "desktop-linux-appimage",
+  "desktop-linux-deb",
+  "cli-linux-x64",
+  "cli-linux-arm64",
+  "cli-macos-arm64",
+];
 
 const requiredInputs = [
   path.join(srcRoot, "templates", "base.html"),
@@ -42,7 +50,9 @@ async function main() {
   await copyInstaller();
   await fs.writeFile(path.join(distRoot, "CNAME"), "chan.app\n");
 
-  const urls = releaseUrls(version);
+  const releaseTemplateValues = {
+    githubReleasesUrl: githubRepoUrl + "/releases",
+  };
   await writePage(
     "index.html",
     renderPage(baseTemplate, {
@@ -51,7 +61,7 @@ async function main() {
       title: "chan - local-first markdown editor",
       description:
         "Chan is a local-first markdown editor for plain-file drives, wiki-links, search, graph, terminal, and MCP workflows.",
-      content: fillTemplate(homeTemplate, { version, ...urls }),
+      content: fillTemplate(homeTemplate, { version, ...releaseTemplateValues }),
     }),
   );
 
@@ -62,7 +72,7 @@ async function main() {
       bodyClass: "install-page",
       title: "Install chan",
       description: "Install Chan Desktop or the standalone chan CLI.",
-      content: fillTemplate(installTemplate, { version, ...urls }),
+      content: fillTemplate(installTemplate, { version, ...releaseTemplateValues }),
     }),
   );
 
@@ -98,32 +108,6 @@ async function readWorkspaceVersion() {
   const match = cargoToml.match(/^\[workspace\.package\][\s\S]*?^version\s*=\s*"([^"]+)"/m);
   if (!match) throw new Error("workspace package version not found in Cargo.toml");
   return match[1];
-}
-
-function releaseUrls(version) {
-  return {
-    desktopDmgUrl: latestDownloadUrl(`Chan_${version}.dmg`),
-    desktopAppImageUrl: latestDownloadUrl(`Chan_${version}_amd64.AppImage`),
-    desktopDebUrl: latestDownloadUrl(`Chan_${version}_amd64.deb`),
-    cliLinuxX64Url: latestDownloadUrl("chan-x86_64-unknown-linux-gnu.tar.gz"),
-    cliLinuxArm64Url: latestDownloadUrl("chan-aarch64-unknown-linux-gnu.tar.gz"),
-    cliMacArm64Url: latestDownloadUrl("chan-aarch64-apple-darwin.tar.gz"),
-  };
-}
-
-function releaseAssets(version) {
-  return [
-    `Chan_${version}.dmg`,
-    `Chan_${version}_amd64.AppImage`,
-    `Chan_${version}_amd64.deb`,
-    "chan-x86_64-unknown-linux-gnu.tar.gz",
-    "chan-aarch64-unknown-linux-gnu.tar.gz",
-    "chan-aarch64-apple-darwin.tar.gz",
-  ];
-}
-
-function latestDownloadUrl(asset) {
-  return `${latestDownloadBase}/${asset}`;
 }
 
 async function copyStaticAssets() {
@@ -479,7 +463,7 @@ async function validateDist(version) {
     if (!allDistPaths.has(required)) throw new Error(`dist is missing ${required}`);
   }
 
-  validateReleaseDownloadContract(textByDistPath, version);
+  validateReleaseDownloadContract(textByDistPath);
 }
 
 async function collectFiles(dir) {
@@ -513,6 +497,7 @@ function validateLocalLinks(htmlFile, html, allDistPaths) {
 function validatePublicLink(htmlFile, raw) {
   const forbidden = [
     /(?:https?:\/\/chan\.app)?\/dl\/latest\//i,
+    /github\.com\/fiorix\/chan\/releases\/latest\/download/i,
     /github\.com\/chan-writer\/chan/i,
   ];
   for (const pattern of forbidden) {
@@ -585,17 +570,30 @@ function validateNoStalePublicCopy(file, text) {
   }
 }
 
-function validateReleaseDownloadContract(textByDistPath, version) {
+function validateReleaseDownloadContract(textByDistPath) {
   const html = [...textByDistPath.entries()]
     .filter(([file]) => file.endsWith(".html"))
     .map(([, text]) => text)
     .join("\n");
 
-  for (const asset of releaseAssets(version)) {
-    const url = latestDownloadUrl(asset);
-    if (!html.includes(url)) {
-      throw new Error(`generated pages are missing release URL: ${url}`);
+  if (/github\.com\/fiorix\/chan\/releases\/latest\/download/i.test(html)) {
+    throw new Error("generated pages must not use GitHub latest-download URLs");
+  }
+  if (/github\.com\/fiorix\/chan\/releases\/download\/v\d+\.\d+\.\d+\//i.test(html)) {
+    throw new Error("generated pages must not infer concrete release asset URLs");
+  }
+  for (const id of requiredDownloadIds) {
+    if (!html.includes(`data-release-download="${id}"`)) {
+      throw new Error(`generated pages are missing metadata download hook: ${id}`);
     }
+  }
+
+  const siteJs = textByDistPath.get("assets/site.js") ?? "";
+  if (!siteJs.includes(releasesMetadataPath)) {
+    throw new Error(`site.js must read release metadata from ${releasesMetadataPath}`);
+  }
+  if (!siteJs.includes(`${githubRepoUrl}/releases`)) {
+    throw new Error("site.js must keep GitHub Releases as the metadata failure fallback");
   }
 
   const installer = textByDistPath.get("install.sh") ?? "";
@@ -603,7 +601,7 @@ function validateReleaseDownloadContract(textByDistPath, version) {
   if (!installer.includes(expectedMetadataBase)) {
     throw new Error(`install.sh must default metadata base to ${cliMetadataBase}`);
   }
-  if (installer.includes(latestDownloadBase)) {
+  if (installer.includes("/releases/latest/download")) {
     throw new Error("install.sh must not depend on GitHub latest-download URLs");
   }
 }
