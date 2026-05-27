@@ -118,6 +118,14 @@ pub async fn api_post_attachment(
         Ok(drive) => drive,
         Err(e) => return err_state(&e),
     };
+    // Record the self-write inside the blocking task, before the
+    // bytes hit disk. The fs watcher runs on its own thread and can
+    // observe the write the instant it lands; noting after the
+    // spawn_blocking await (the old behavior) leaves a window where
+    // the watcher reaches should_suppress() before the path is
+    // recorded, so an image paste surfaces as a phantom "external
+    // edit". Cloning the Arc handle in lets us close that window.
+    let self_writes = Arc::clone(&state.self_writes);
     let result = tokio::task::spawn_blocking(move || {
         let join_filename = |name: &str| -> String {
             if dir.is_empty() {
@@ -158,6 +166,7 @@ pub async fn api_post_attachment(
             attempt += 1;
         }
 
+        self_writes.note(&rel);
         drive.write_bytes(&rel, &bytes)?;
         Ok::<_, chan_drive::ChanError>(rel)
     })
@@ -173,6 +182,5 @@ pub async fn api_post_attachment(
                 .into_response();
         }
     };
-    state.self_writes.note(&rel);
     Json(serde_json::json!({ "path": rel })).into_response()
 }

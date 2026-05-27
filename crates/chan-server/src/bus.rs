@@ -399,6 +399,35 @@ mod tests {
             .map(|s| serde_json::from_str(&s).expect("json frame"))
     }
 
+    // The suppression contract every write handler depends on: once a
+    // path is noted, the watcher's echo of that write is recognized as
+    // a self-echo (matching either the event path or a rename target)
+    // and dropped instead of surfacing as a phantom "external edit".
+    // The handlers note BEFORE/INSIDE the blocking write so the path is
+    // recorded before this check can run; this test locks the decision
+    // itself.
+    #[test]
+    fn self_echo_matches_noted_path_and_rename_target() {
+        let sw = SelfWrites::new();
+        // A path we never wrote passes through to the frontend.
+        assert!(!event_is_self_echo(&created("notes/a.md"), &sw));
+        // Once noted, the matching event is a self-echo.
+        sw.note("notes/a.md");
+        assert!(event_is_self_echo(&created("notes/a.md"), &sw));
+        // Renames carry path=from, to=dest; a write that notes the
+        // destination still suppresses the rename echo.
+        sw.note("notes/dest.md");
+        assert!(event_is_self_echo(
+            &renamed("notes/src.md", "notes/dest.md"),
+            &sw,
+        ));
+        // An unrelated rename is not suppressed.
+        assert!(!event_is_self_echo(
+            &renamed("notes/x.md", "notes/y.md"),
+            &sw,
+        ));
+    }
+
     #[test]
     fn parent_dir_is_first_degree() {
         assert_eq!(parent_dir("a.md"), "");

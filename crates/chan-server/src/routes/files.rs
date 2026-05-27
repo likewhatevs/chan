@@ -631,6 +631,16 @@ pub async fn api_write_file(
         Ok(drive) => drive,
         Err(e) => return err_state(&e),
     };
+    // Record the self-write BEFORE the blocking write runs. The fs
+    // watcher runs on its own thread and can deliver the resulting
+    // notify event the instant the write lands; noting after the
+    // spawn_blocking await left a window where that event reached
+    // should_suppress() before the path was recorded, so the editor's
+    // own autosave surfaced as a phantom "external edit" mid-typing.
+    // Recording up front closes the window. Noting a path whose write
+    // then fails (CAS conflict / IO error) is harmless and within the
+    // module's documented over-suppression trade-off.
+    state.self_writes.note(&path);
     let path_for_write = path.clone();
     let result = tokio::task::spawn_blocking(move || {
         write_file_sync(
@@ -660,7 +670,6 @@ pub async fn api_write_file(
         }
         Err(join) => return err(StatusCode::INTERNAL_SERVER_ERROR, join.to_string()),
     };
-    state.self_writes.note(&path);
     Json(WriteResponse {
         mtime,
         mtime_ns: mtime_ns.map(|ns| ns.to_string()),
@@ -728,12 +737,13 @@ pub async fn api_create_file(
         Err(e) => return err_state(&e),
     };
     let path = body.path.clone();
+    // Record the self-write before the blocking create so the
+    // watcher's echo is suppressed without racing the await; see
+    // api_write_file for the full rationale.
+    state.self_writes.note(&path);
     let result = tokio::task::spawn_blocking(move || create_file_sync(&drive, body)).await;
     match result {
-        Ok(Ok(())) => {
-            state.self_writes.note(&path);
-            StatusCode::CREATED.into_response()
-        }
+        Ok(Ok(())) => StatusCode::CREATED.into_response(),
         Ok(Err(e)) => err_from(&e),
         Err(join) => err(StatusCode::INTERNAL_SERVER_ERROR, join.to_string()),
     }
@@ -816,19 +826,25 @@ pub async fn api_upload_file(
         Ok(drive) => drive,
         Err(e) => return err_state(&e),
     };
+    // The destination path is computed inside the blocking task (the
+    // collision-avoidance loop picks a free name), so we can't note it
+    // before the spawn. Clone the suppression handle in and record the
+    // self-write inside the task, before it returns to the await, so
+    // the watcher's echo is suppressed without the race that surfaced
+    // server writes as phantom external edits. See api_write_file.
+    let self_writes = Arc::clone(&state.self_writes);
     let result = tokio::task::spawn_blocking(move || {
-        if let Some(path) = replace_path {
+        let upload = if let Some(path) = replace_path {
             replace_file_sync(&drive, &path, &bytes)
         } else {
             upload_file_sync(&drive, &dir, &filename, &bytes)
-        }
+        }?;
+        self_writes.note(&upload.path);
+        Ok::<_, chan_drive::ChanError>(upload)
     })
     .await;
     match result {
-        Ok(Ok(upload)) => {
-            state.self_writes.note(&upload.path);
-            Json(upload).into_response()
-        }
+        Ok(Ok(upload)) => Json(upload).into_response(),
         Ok(Err(e)) => err_from(&e),
         Err(e) => err(
             StatusCode::INTERNAL_SERVER_ERROR,
