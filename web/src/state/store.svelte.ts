@@ -1045,7 +1045,10 @@ export function scheduleDriveRefresh(): void {
   if (driveRefreshTimer) return;
   driveRefreshTimer = setTimeout(() => {
     driveRefreshTimer = null;
-    void refreshDrive();
+    // Best-effort background refresh fired from a watcher-event burst: swallow
+    // a transient failure (the next event reschedules) so a rejected
+    // api.drive() never escapes as an unhandled promise rejection.
+    refreshDrive().catch(() => {});
   }, 250);
 }
 
