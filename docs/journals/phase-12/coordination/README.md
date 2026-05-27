@@ -23,9 +23,16 @@ journal writes happen in the main checkout.
 | @@LaneA     | Graph + File Browser carryover. May spawn 2-3 subagents.    |
 | @@LaneB     | Scoping architect: drive -> workspace terminology/codemod.  |
 | @@LaneC     | @@Alex ad-hoc: frontend/cosmetics, keyboard shortcuts.      |
+| @@LaneD     | CI + release. Fix current CI, align the next patch release. |
+| @@LaneE     | Cross-platform keyboard shortcuts (addendum-2 policy).      |
 | @@Alex      | Human owner. Drives @@LaneC; rules on scope/infra calls.    |
 
-@@Alex will add more lanes later (a release/build lane is the likely next).
+@@LaneD (CI + release) added 2026-05-27 - the release/build lane reserved here.
+@@Alex may add more later.
+
+@@Lead operates the @@Architect orchestrator seat this round. Bus entries signed
+"@@Architect (@@Lead)" are from @@Lead; the channel names stay `event-architect-*`
+so launching lanes recover against one handle.
 
 ## Channel convention
 
@@ -45,6 +52,12 @@ One file per direction, `event-<from>-<to>.md`. APPEND to the file whose
 | event-lane-c-alex.md       | @@LaneC -> @@Alex (escalation)         |
 | event-alex-lane-c.md       | @@Alex -> @@LaneC (ad-hoc requests)    |
 | event-architect-alex.md    | @@Architect -> @@Alex                  |
+| event-architect-lane-d.md  | @@Architect -> @@LaneD                 |
+| event-lane-d-architect.md  | @@LaneD -> @@Architect (reports)       |
+| event-lane-d-alex.md       | @@LaneD -> @@Alex (release/infra gates)|
+| event-architect-lane-e.md  | @@Architect -> @@LaneE                 |
+| event-lane-e-architect.md  | @@LaneE -> @@Architect (reports)       |
+| event-lane-e-alex.md       | @@LaneE -> @@Alex (shortcut rulings)   |
 
 Cross-lane channels `event-lane-X-lane-Y.md` are created on first use (the
 codemod-vs-feature seams will need a-b/b-a, a-c/c-a, b-c/c-b).
