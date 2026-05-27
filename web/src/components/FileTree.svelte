@@ -63,9 +63,10 @@
     openFsGraphForFile,
     openSearchForDirectory,
     openSearchForFile,
-    persistTreeExpanded,
+    ensureFbTreeInstance,
+    fbTreeInstance,
+    persistFbTreeInstanceExpansion,
     tree,
-    treeExpanded,
   } from "../state/store.svelte";
   import { notify } from "../state/notify.svelte";
 
@@ -86,10 +87,16 @@
   // the tree anchors against whichever viewport edge it's pinned to.
   // Overlay and tab variants leave this undefined.
   let {
+    instanceId,
     dockSide,
     onClickRow,
     onFlip,
   }: {
+    /// Stable id of the owning File Browser surface (`fb-tab-<id>` /
+    /// `fb-dock-<side>` / `fb-overlay`). Keys this tree's expand/collapse
+    /// map in the per-instance `fbTreeInstances` registry so two visible
+    /// surfaces don't share expansion state.
+    instanceId: string;
     dockSide?: "left" | "right";
     /// `fullstack-80`: surface-owned hook fired when the user clicks
     /// a row. Lets the surface decide whether to auto-open the
@@ -327,9 +334,18 @@
   };
   type Node = Folder | File;
 
-  // Shared across all browser tabs and tab-switch unmounts. See the
-  // store module for the rationale.
-  const expanded = treeExpanded.map;
+  // Per-instance expand/collapse map. Each File Browser surface owns its
+  // own record in `fbTreeInstances` keyed by `instanceId`, so expanding a
+  // directory in one surface no longer fans out to every other visible
+  // surface. The instance is CREATED in an effect (ensureFbTreeInstance
+  // mutates $state, which is illegal inside a $derived - it throws
+  // state_unsafe_mutation); the $derived only READS it (reactively
+  // re-pointing once the effect registers the instance, and on remount
+  // under a different id). The drive root (`""`) is kept expanded.
+  $effect(() => {
+    ensureFbTreeInstance(instanceId);
+  });
+  const expanded = $derived(fbTreeInstance(instanceId)?.expanded ?? { "": true });
   let menu = $state<{ x: number; y: number; path: string; isDir: boolean } | null>(null);
   let uploadInput = $state<HTMLInputElement | null>(null);
   let uploadTarget = $state<{ path: string; isDir: boolean } | null>(null);
@@ -493,7 +509,11 @@
 
   function setExpanded(path: string, value: boolean): void {
     expanded[path] = value;
-    persistTreeExpanded();
+    // Persist this surface's expansion (tab variant writes through to the
+    // layout tab's `expanded` field for reload restore; dock/overlay is
+    // session-scoped). FileBrowserSurface's per-instance effects mirror
+    // the map into the tab record; this just drives the reload snapshot.
+    persistFbTreeInstanceExpansion(instanceId);
     if (value) void loadTreeDir(path);
   }
 
@@ -564,13 +584,12 @@
     const tab = openBrowserInActivePane({ select: path });
     tab.inspectorOpen = true;
     tab.showDrive = false;
+    // The new tab's surface seeds its own per-instance expansion from
+    // `tab.expanded` on mount, so there is no global singleton to prime
+    // here anymore.
     tab.expanded = ancestors.length > 0 ? ancestors : undefined;
     fbSelectSingle(path);
     browserSelection.showDrive = false;
-    const map = treeExpanded.map;
-    map[""] = true;
-    for (const ancestor of ancestors) map[ancestor] = true;
-    persistTreeExpanded();
     menu = null;
   }
   /// Settings (flip) — routes through the surface-supplied
@@ -981,11 +1000,11 @@
     const landed = await fbClipboardPaste(dest);
     if (landed.length > 0) {
       // Make sure the destination dir is expanded so the new entries
-      // are visible, then select them.
+      // are visible, then select them. Expansion is this surface's own
+      // per-instance state.
       if (dest) {
-        const map = treeExpanded.map;
-        map[dest] = true;
-        persistTreeExpanded();
+        expanded[dest] = true;
+        persistFbTreeInstanceExpansion(instanceId);
       }
       fbSelectSet(landed);
     }

@@ -24,6 +24,10 @@ import {
   fbTreeInstance,
   disposeFbTreeInstance,
   fbDirSubscriberCount,
+  expandAllFoldersForInstance,
+  collapseAllFoldersForInstance,
+  isFullyExpandedForInstance,
+  revealAndSelect,
 } from "./store.svelte";
 import {
   activePane,
@@ -752,5 +756,63 @@ describe("per-instance file browser tree registry", () => {
 
     disposeFbTreeInstance("pane-2");
     expect(fbDirSubscriberCount("")).toBe(1);
+  });
+});
+
+// Phase-12 Slice E: FileTree renders + toggles off the per-instance map, so
+// the expand-all / collapse-all / full-expansion helpers now target one
+// instance. A dock side and a tab (two instances) must not toggle each other;
+// a programmatic reveal, by contrast, fans out to every live surface.
+describe("per-instance expansion helpers (Slice E)", () => {
+  function seedTree(): void {
+    const dirs = ["docs", "docs/api", "notes"];
+    tree.entries = dirs.map(
+      (path): TreeEntry => ({
+        path,
+        is_dir: true,
+        size: 0,
+        mtime: null,
+      }),
+    );
+  }
+
+  test("expand-all / collapse-all target only the named instance", () => {
+    seedTree();
+    const dock = ensureFbTreeInstance("fb-dock-left");
+    const tab = ensureFbTreeInstance("fb-tab-1");
+
+    expandAllFoldersForInstance("fb-dock-left");
+    expect(dock.expanded).toEqual({
+      "": true,
+      docs: true,
+      "docs/api": true,
+      notes: true,
+    });
+    // The sibling instance is untouched: independence is the fix.
+    expect(tab.expanded).toEqual({ "": true });
+    expect(isFullyExpandedForInstance("fb-dock-left")).toBe(true);
+    expect(isFullyExpandedForInstance("fb-tab-1")).toBe(false);
+
+    collapseAllFoldersForInstance("fb-dock-left");
+    expect(dock.expanded).toEqual({ "": true });
+    expect(isFullyExpandedForInstance("fb-dock-left")).toBe(false);
+  });
+
+  test("isFullyExpandedForInstance is false for an unregistered instance", () => {
+    seedTree();
+    expect(isFullyExpandedForInstance("fb-overlay")).toBe(false);
+  });
+
+  test("revealAndSelect fans ancestor expansion across all live instances", () => {
+    const dock = ensureFbTreeInstance("fb-dock-left");
+    const tab = ensureFbTreeInstance("fb-tab-1");
+
+    revealAndSelect("docs/api/spec.md");
+
+    // Both surfaces reveal the new entry's ancestor chain (not the file),
+    // matching the pre-migration "all surfaces share a reveal" behavior.
+    expect(dock.expanded).toEqual({ "": true, docs: true, "docs/api": true });
+    expect(tab.expanded).toEqual({ "": true, docs: true, "docs/api": true });
+    expect(browserSelection.path).toBe("docs/api/spec.md");
   });
 });
