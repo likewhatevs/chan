@@ -313,51 +313,35 @@ describe("window commands", () => {
   });
 });
 
-describe("graph overlay hash persistence", () => {
-  test("filesystem graph mode is encoded only when needed", () => {
-    window.history.replaceState(null, "", "/");
-    graphOverlay.open = true;
-    graphOverlay.mode = "filesystem";
-    graphOverlay.scopeId = "dir:src";
-    graphOverlay.depth = 1;
-
-    persistStateToHash();
-
-    expect(decodeURIComponent(window.location.hash)).toBe("#graph=dir:src|1||0|fs");
-  });
-
-  test("filesystem graph mode restores from the optional hash token", () => {
-    window.history.replaceState(null, "", "/#graph=file:src/app.ts|2||0|fs");
-    graphOverlay.mode = "semantic";
-    graphOverlay.scopeId = "drive";
-    graphOverlay.depth = 1;
+describe("legacy overlay hash retirement (W5)", () => {
+  test("legacy graph= / files= bookmarks are ignored on restore", () => {
+    // The scope-concept wipe retired the per-overlay hash for the graph +
+    // browser surfaces; those are first-class tabs restored via the layout
+    // `s` key now. Old `graph=` / `files=` bookmarks must degrade
+    // gracefully - never reopen the (now-dead) overlays, never crash.
+    window.history.replaceState(
+      null,
+      "",
+      "/#graph=file:README.md|3|||fs&files=1:notes.md",
+    );
+    graphOverlay.open = false;
+    browserOverlay.open = false;
 
     __testApplyOverlaysFromHash();
 
-    expect(graphOverlay.open).toBe(true);
-    expect(graphOverlay.mode).toBe("filesystem");
-    expect(graphOverlay.scopeId).toBe("file:src/app.ts");
-    expect(graphOverlay.depth).toBe(2);
-    expect(graphOverlay.inspectorOpen).toBe(false);
+    expect(graphOverlay.open).toBe(false);
+    expect(browserOverlay.open).toBe(false);
   });
 
-  test("legacy graph hashes default back to semantic mode", () => {
-    window.history.replaceState(null, "", "/#graph=file:README.md|3");
-    graphOverlay.mode = "filesystem";
-
-    __testApplyOverlaysFromHash();
-
-    expect(graphOverlay.mode).toBe("semantic");
-    expect(graphOverlay.scopeId).toBe("file:README.md");
-    expect(graphOverlay.depth).toBe(3);
-  });
-
-  test("persistence strips unknown legacy hash keys and keeps live keys", () => {
+  test("persistence strips retired + unknown legacy hash keys, keeps live keys", () => {
+    // `assistant` (phase-5) + `scopes` are unknown; `graph` + `files` are
+    // now retired (W5). All fall out of HASH_KEYS, so dropUnknownHashKeys
+    // strips them while the live `settings` key survives.
     const removedOverlayKey = "assist" + "ant";
     window.history.replaceState(
       null,
       "",
-      `/#${removedOverlayKey}=open&scopes=2&settings=1`,
+      `/#${removedOverlayKey}=open&scopes=2&graph=drive&files=1:notes.md&settings=1`,
     );
     settingsOverlay.open = true;
 
