@@ -30,6 +30,7 @@ import {
 import {
   activePane,
   layout,
+  paneMode,
   type BrowserTab,
   type FileTab,
   type GraphTab,
@@ -246,7 +247,13 @@ describe("window commands", () => {
     expect(treeExpanded.map["notes"]).toBe(true);
   });
 
-  test("revealPathInBrowser focuses an existing browser tab instead of duplicating it", () => {
+  test("revealPathInBrowser always OPENS a File Browser tab (never focuses the dock / an existing tab)", () => {
+    // @@Alex: with a docked File Browser, reveal-in-browser must never
+    // focus the dock (or silently reuse another pane's browser tab) - it
+    // always OPENS a File Browser tab in the active pane. (Was: "focuses
+    // an existing browser tab instead of duplicating it"; that reuse is
+    // the behavior being overridden - it was the GI-8 root cause where a
+    // reveal from a graph tab produced no visible tab.)
     const leftBrowser: BrowserTab = {
       kind: "browser",
       id: "browser-left",
@@ -280,15 +287,29 @@ describe("window commands", () => {
       [left.id]: left,
       [right.id]: right,
     };
+    // openBrowserInActivePane resolves the active pane via activeLayout();
+    // ensure pane-mode isn't active so it reads this layout, not a draft.
+    paneMode.active = false;
 
     const tab = revealPathInBrowser("notes/today.md", { inspectorOpen: true });
 
-    expect(tab.id).toBe(leftBrowser.id);
-    expect(layout.activePaneId).toBe(left.id);
-    expect(left.tabs).toHaveLength(1);
-    expect(right.tabs).toHaveLength(1);
-    expect(browserSelection.path).toBe("notes/today.md");
+    // A NEW browser tab opens in the ACTIVE pane (right); the existing
+    // leftBrowser is left untouched (not reused/focused). Read panes back
+    // from `layout.nodes` (the $state proxy) - assigning `layout.nodes`
+    // deep-proxies the panes, so the push lands on the proxy, not the raw
+    // local consts.
+    const leftAfter = layout.nodes[left.id] as LeafNode;
+    const rightAfter = layout.nodes[right.id] as LeafNode;
+    expect(tab.kind).toBe("browser");
+    expect(tab.id).not.toBe(leftBrowser.id);
+    expect(layout.activePaneId).toBe(right.id);
+    expect(leftAfter.tabs).toHaveLength(1);
+    expect(rightAfter.tabs).toHaveLength(2);
+    expect(rightAfter.activeTabId).toBe(tab.id);
+    expect(tab.selected).toBe("notes/today.md");
+    expect(tab.expanded).toEqual(["notes"]);
     expect(tab.inspectorOpen).toBe(true);
+    expect(browserSelection.path).toBe("notes/today.md");
   });
 });
 
