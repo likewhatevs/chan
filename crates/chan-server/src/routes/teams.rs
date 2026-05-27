@@ -24,15 +24,15 @@ use axum::extract::{Path, State};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use axum::Json;
-use chan_drive::ChanError;
+use chan_workspace::ChanError;
 use serde::{Deserialize, Serialize};
 
 use crate::bus::make_watch_bridge;
 use crate::error::{err, err_from};
 use crate::state::AppState;
 
-/// systacean-41: map `chan_drive::ChanError` from
-/// `Drive::create_team` / `Drive::duplicate_team` to HTTP. The
+/// systacean-41: map `chan_workspace::ChanError` from
+/// `Workspace::create_team` / `Workspace::duplicate_team` to HTTP. The
 /// chan-drive layer returns `ChanError::Io` with descriptive
 /// messages for each validation failure; this matcher promotes
 /// the relevant variants to 400 per the task spec (`Invalid name
@@ -59,12 +59,12 @@ fn map_team_error(e: &ChanError) -> Response {
 /// systacean-41: `POST /api/teams` request body. The outer
 /// `name` is authoritative - if `config.team_name` disagrees,
 /// the server overwrites `config.team_name` with `name` before
-/// calling `Drive::create_team`. Avoids "which one wins?"
+/// calling `Workspace::create_team`. Avoids "which one wins?"
 /// ambiguity in `-a-79`'s SPA orchestrator.
 #[derive(Deserialize)]
 pub struct CreateTeamPayload {
     pub name: String,
-    pub config: chan_drive::TeamConfig,
+    pub config: chan_workspace::TeamConfig,
 }
 
 /// systacean-41: `POST /api/teams/{name}/duplicate` request body.
@@ -96,7 +96,7 @@ pub struct TeamLoadedListResponse {
 ///
 /// Idempotent: re-loading an already-loaded team replaces the
 /// existing handle (effectively a refresh). The team must already
-/// exist on disk (via `Drive::create_team` from `-30`); a
+/// exist on disk (via `Workspace::create_team` from `-30`); a
 /// non-existent team errors with 404.
 pub async fn api_team_load(
     State(state): State<Arc<AppState>>,
@@ -111,7 +111,7 @@ pub async fn api_team_load(
         &state.scope_registry,
     );
 
-    // `Drive::watch_team` wraps the WatchRoot construction +
+    // `Workspace::watch_team` wraps the WatchRoot construction +
     // path-prefix logic so chan-server doesn't construct
     // `WatchRoot` directly. Per-event paths emerge prefixed
     // `team-{name}/events/` so the SPA event stream routes
@@ -119,7 +119,7 @@ pub async fn api_team_load(
     let drive = state.drive().clone();
     let team_name_for_task = team_name.clone();
     let result = tokio::task::spawn_blocking(
-        move || -> Result<(std::path::PathBuf, chan_drive::WatchHandle), chan_drive::ChanError> {
+        move || -> Result<(std::path::PathBuf, chan_workspace::WatchHandle), chan_workspace::ChanError> {
             let events_dir = drive.team_events_dir(&team_name_for_task)?;
             let watch_handle = drive.watch_team(&team_name_for_task, bridge)?;
             Ok((events_dir, watch_handle))
@@ -191,7 +191,7 @@ pub async fn api_team_unload(
 ///
 /// The outer `name` is authoritative; if the inbound config's
 /// `team_name` differs, we overwrite it before calling
-/// `Drive::create_team`. Returns the created `TeamRef` so the
+/// `Workspace::create_team`. Returns the created `TeamRef` so the
 /// SPA orchestrator can plumb the path into the subsequent
 /// `load` call.
 ///
@@ -235,7 +235,7 @@ pub async fn api_team_create(
 /// existing team.
 ///
 /// The path `{name}` is the source; the request body's
-/// `new_name` is the duplicate's name. `Drive::duplicate_team`
+/// `new_name` is the duplicate's name. `Workspace::duplicate_team`
 /// byte-copies the team (config + events + docs) +
 /// rewrites the duplicated `config.toml`'s `team_name` to
 /// `new_name` so the team's identity matches its directory.
@@ -277,7 +277,7 @@ pub async fn api_team_duplicate(
 ///
 /// Errors:
 /// * Team directory missing -> 404 via `err_from`'s "not found"
-///   detector on the underlying `chan_drive::teams::load` error.
+///   detector on the underlying `chan_workspace::teams::load` error.
 /// * Malformed config.toml -> 500 via the generic `err_from`
 ///   fallback.
 pub async fn api_team_get_config(
@@ -318,13 +318,13 @@ mod tests {
 
     use axum::body::Body;
     use axum::http::{header, Request};
-    use chan_drive::SearchAggression;
+    use chan_workspace::SearchAggression;
     use tempfile::TempDir;
     use tokio::sync::{broadcast, watch};
     use tower::ServiceExt;
 
     use crate::self_writes::SelfWrites;
-    use crate::state::DriveCell;
+    use crate::state::WorkspaceCell;
     use crate::terminal_sessions::{Registry as TerminalRegistry, RegistryConfig};
     use crate::{EditorPrefs, ServerConfig};
 
@@ -337,18 +337,18 @@ mod tests {
     fn route_test_app() -> RouteTestApp {
         let cfg = TempDir::new().unwrap();
         let root = TempDir::new().unwrap();
-        let lib = chan_drive::Library::open_at(cfg.path().join("config.toml")).unwrap();
-        lib.register_drive(root.path()).unwrap();
-        let drive = lib.open_drive(root.path()).unwrap();
+        let lib = chan_workspace::Library::open_at(cfg.path().join("config.toml")).unwrap();
+        lib.register_workspace(root.path()).unwrap();
+        let drive = lib.open_workspace(root.path()).unwrap();
 
         let (events_tx, _) = broadcast::channel::<String>(1);
-        let (index_events_tx, _) = broadcast::channel::<chan_drive::WatchEvent>(1);
+        let (index_events_tx, _) = broadcast::channel::<chan_workspace::WatchEvent>(1);
         let indexer = Arc::new(crate::indexer::Indexer::spawn(
             drive.clone(),
             index_events_tx.subscribe(),
             false,
             SearchAggression::Conservative,
-            Arc::new(chan_drive::NoProgress),
+            Arc::new(chan_workspace::NoProgress),
         ));
         let (shutdown_tx, shutdown_rx) = watch::channel(false);
         std::mem::forget(shutdown_tx);
@@ -356,7 +356,7 @@ mod tests {
         let state = Arc::new(AppState {
             library: lib,
             drive_root: root.path().to_path_buf(),
-            drive_cell: Arc::new(RwLock::new(Some(DriveCell {
+            drive_cell: Arc::new(RwLock::new(Some(WorkspaceCell {
                 drive,
                 watch_handle: None,
                 indexer,

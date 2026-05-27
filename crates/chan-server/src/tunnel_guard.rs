@@ -38,7 +38,7 @@ pub async fn settings_guard(
 mod tests {
     //! These tests exercise the middleware against a stub router
     //! without spinning up a real `AppState` (which would require
-    //! a `chan-drive::Drive` on disk and a tokio runtime hot enough
+    //! a `chan_workspace::Workspace` on disk and a tokio runtime hot enough
     //! to run the watcher). The middleware only reads two bool
     //! fields on `AppState`, so a borrowed-bool variant would be a
     //! cleaner contract; for now we lean on the fact that the two

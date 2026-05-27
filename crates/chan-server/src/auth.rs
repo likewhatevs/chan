@@ -18,7 +18,7 @@ use axum::extract::State;
 use axum::http::{header, HeaderMap, Request, StatusCode};
 use axum::middleware::Next;
 use axum::response::{IntoResponse, Response};
-use chan_drive::paths::DrivePaths;
+use chan_workspace::paths::WorkspacePaths;
 use rand::RngCore;
 
 use crate::signal::now_unix_secs;
@@ -40,7 +40,7 @@ pub fn random_token() -> String {
 /// Lives at `<paths.tokens>/token` (mode 0600 on Unix). The token
 /// survives a binary rebuild so the browser's cached sessionStorage
 /// token stays valid across `cargo build && chan serve` cycles.
-pub fn load_or_create_token(paths: &DrivePaths) -> std::io::Result<String> {
+pub fn load_or_create_token(paths: &WorkspacePaths) -> std::io::Result<String> {
     ensure_tokens_dir(&paths.tokens)?;
     let token_path = paths.tokens.join("token");
     if let Ok(s) = std::fs::read_to_string(&token_path) {
@@ -82,7 +82,7 @@ fn ensure_tokens_dir(dir: &Path) -> std::io::Result<()> {
 /// fsync of file AND parent dir + rename). Sets 0600 permissions on
 /// Unix to keep the secret out of `ls -l` snooping.
 fn write_token_atomic(token_path: &Path, token: &str) -> std::io::Result<()> {
-    chan_drive::fs_ops::atomic_write(token_path, token.as_bytes())
+    chan_workspace::fs_ops::atomic_write(token_path, token.as_bytes())
         .map_err(|e| std::io::Error::other(e.to_string()))?;
     #[cfg(unix)]
     {

@@ -1,6 +1,6 @@
 //! Session blobs (`/api/session*`).
 //!
-//! chan-drive owns the I/O (Drive::{put,get,list,delete}_session).
+//! chan-drive owns the I/O (Workspace::{put,get,list,delete}_session).
 //! chan-server is a thin HTTP shell; the JSON schema of session blobs
 //! (window/pane layout) lives in the frontend, not here.
 

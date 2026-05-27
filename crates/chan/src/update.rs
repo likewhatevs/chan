@@ -68,7 +68,7 @@ const STATE_FILE: &str = "update-check.json";
 
 /// Where to keep the per-machine update state.
 fn state_path() -> PathBuf {
-    chan_drive::paths::config_dir().join(STATE_FILE)
+    chan_workspace::paths::config_dir().join(STATE_FILE)
 }
 
 /// State recorded after a probe.
@@ -104,7 +104,7 @@ fn write_state(path: &Path, state: &State) -> Result<()> {
         fs::create_dir_all(parent).with_context(|| format!("creating {}", parent.display()))?;
     }
     let body = serde_json::to_vec_pretty(state).context("serializing state")?;
-    chan_drive::fs_ops::atomic_write(path, &body).context("writing state file")
+    chan_workspace::fs_ops::atomic_write(path, &body).context("writing state file")
 }
 
 /// Match the standalone CLI tarballs published by release.yml and install.sh.

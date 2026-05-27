@@ -8,7 +8,7 @@
 use std::borrow::Cow;
 use std::path::{Component, Path, PathBuf};
 
-use chan_drive::{FileClass, Library, Registry};
+use chan_workspace::{FileClass, Library, Registry};
 use rust_embed::RustEmbed;
 use serde::Serialize;
 
@@ -17,24 +17,24 @@ use serde::Serialize;
 struct ManualAssets;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct CreatedDefaultDrive {
+pub struct CreatedDefaultWorkspace {
     pub root: PathBuf,
     pub seeded_files: usize,
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
-pub struct DefaultDriveCandidate {
+pub struct DefaultWorkspaceCandidate {
     pub path: String,
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
-pub struct DefaultDriveStatus {
+pub struct DefaultWorkspaceStatus {
     pub needs_prompt: bool,
     pub needs_factory_reset: bool,
     pub default_root: Option<String>,
     pub missing_default_root: Option<String>,
     pub suggested_root: String,
-    pub drives: Vec<DefaultDriveCandidate>,
+    pub drives: Vec<DefaultWorkspaceCandidate>,
 }
 
 #[derive(Debug, Clone)]
@@ -45,33 +45,33 @@ struct ManualSeedFile {
 
 /// Create and seed the default drive only when chan metadata has no
 /// registered drives and no configured default root.
-pub fn ensure_fresh_default_drive() -> Result<Option<CreatedDefaultDrive>, String> {
-    let config_path = chan_drive::paths::global_config_path();
+pub fn ensure_fresh_default_drive() -> Result<Option<CreatedDefaultWorkspace>, String> {
+    let config_path = chan_workspace::paths::global_config_path();
     let root = desktop_default_drive_root();
     let files = embedded_manual_files();
     ensure_fresh_default_drive_at(&config_path, &root, files)
 }
 
-pub fn status() -> Result<DefaultDriveStatus, String> {
-    let config_path = chan_drive::paths::global_config_path();
+pub fn status() -> Result<DefaultWorkspaceStatus, String> {
+    let config_path = chan_workspace::paths::global_config_path();
     status_at(&config_path, &desktop_default_drive_root())
 }
 
 pub fn choose_existing(path: &Path) -> Result<PathBuf, String> {
-    let config_path = chan_drive::paths::global_config_path();
+    let config_path = chan_workspace::paths::global_config_path();
     choose_existing_at(&config_path, path)
 }
 
-pub fn create_default_drive() -> Result<CreatedDefaultDrive, String> {
-    let config_path = chan_drive::paths::global_config_path();
+pub fn create_default_drive() -> Result<CreatedDefaultWorkspace, String> {
+    let config_path = chan_workspace::paths::global_config_path();
     let root = desktop_default_drive_root();
     let files = embedded_manual_files();
     create_default_drive_at(&config_path, &root, files)
 }
 
-pub fn factory_reset_default_drive() -> Result<CreatedDefaultDrive, String> {
-    let config_path = chan_drive::paths::global_config_path();
-    let metadata_dir = chan_drive::paths::config_dir();
+pub fn factory_reset_default_drive() -> Result<CreatedDefaultWorkspace, String> {
+    let config_path = chan_workspace::paths::global_config_path();
+    let metadata_dir = chan_workspace::paths::config_dir();
     let root = desktop_default_drive_root();
     let files = embedded_manual_files();
     factory_reset_default_drive_at(&config_path, &metadata_dir, &root, files)
@@ -81,7 +81,7 @@ fn ensure_fresh_default_drive_at(
     config_path: &Path,
     root: &Path,
     files: Vec<ManualSeedFile>,
-) -> Result<Option<CreatedDefaultDrive>, String> {
+) -> Result<Option<CreatedDefaultWorkspace>, String> {
     let registry = Registry::load_from(config_path)
         .map_err(|e| format!("loading chan registry {}: {e}", config_path.display()))?;
     if !is_fresh_registry(&registry) {
@@ -95,16 +95,16 @@ fn create_default_drive_at(
     config_path: &Path,
     root: &Path,
     files: Vec<ManualSeedFile>,
-) -> Result<CreatedDefaultDrive, String> {
+) -> Result<CreatedDefaultWorkspace, String> {
     std::fs::create_dir_all(root)
         .map_err(|e| format!("creating default drive root {}: {e}", root.display()))?;
     let lib = Library::open_at(config_path.to_path_buf())
         .map_err(|e| format!("opening chan library {}: {e}", config_path.display()))?;
     let entry = lib
-        .register_drive(root)
+        .register_workspace(root)
         .map_err(|e| format!("registering default drive {}: {e}", root.display()))?;
     let drive = lib
-        .open_drive(&entry.root_path)
+        .open_workspace(&entry.root_path)
         .map_err(|e| format!("opening default drive {}: {e}", entry.root_path.display()))?;
     let seeded_files = seed_manual_files(&drive, files)?;
     drop(drive);
@@ -116,17 +116,17 @@ fn create_default_drive_at(
             )
         })?;
 
-    Ok(CreatedDefaultDrive {
+    Ok(CreatedDefaultWorkspace {
         root: entry.root_path,
         seeded_files,
     })
 }
 
-fn status_at(config_path: &Path, suggested_root: &Path) -> Result<DefaultDriveStatus, String> {
+fn status_at(config_path: &Path, suggested_root: &Path) -> Result<DefaultWorkspaceStatus, String> {
     let registry = Registry::load_from(config_path)
         .map_err(|e| format!("loading chan registry {}: {e}", config_path.display()))?;
     let missing_default = registry
-        .default_drive_root
+        .default_workspace_root
         .as_ref()
         .filter(|root| !drive_root_available(root));
     let needs_factory_reset = missing_default
@@ -134,24 +134,24 @@ fn status_at(config_path: &Path, suggested_root: &Path) -> Result<DefaultDriveSt
         .unwrap_or(false);
     let needs_prompt = if needs_factory_reset {
         false
-    } else if registry.default_drive_root.is_none() {
+    } else if registry.default_workspace_root.is_none() {
         !registry.drives.is_empty()
     } else {
         missing_default.is_some()
     };
-    let drives: Vec<DefaultDriveCandidate> = registry
+    let drives: Vec<DefaultWorkspaceCandidate> = registry
         .drives
         .iter()
         .filter(|d| drive_root_available(&d.root_path))
-        .map(|d| DefaultDriveCandidate {
+        .map(|d| DefaultWorkspaceCandidate {
             path: d.root_path.display().to_string(),
         })
         .collect();
-    Ok(DefaultDriveStatus {
+    Ok(DefaultWorkspaceStatus {
         needs_prompt,
         needs_factory_reset,
         default_root: registry
-            .default_drive_root
+            .default_workspace_root
             .as_ref()
             .map(|p| p.display().to_string()),
         missing_default_root: missing_default.map(|p| p.display().to_string()),
@@ -165,10 +165,10 @@ fn factory_reset_default_drive_at(
     metadata_dir: &Path,
     root: &Path,
     files: Vec<ManualSeedFile>,
-) -> Result<CreatedDefaultDrive, String> {
+) -> Result<CreatedDefaultWorkspace, String> {
     let registry = Registry::load_from(config_path)
         .map_err(|e| format!("loading chan registry {}: {e}", config_path.display()))?;
-    let Some(default_root) = registry.default_drive_root else {
+    let Some(default_root) = registry.default_workspace_root else {
         return Err("factory reset requires a configured default drive".into());
     };
     if drive_root_available(&default_root) {
@@ -203,7 +203,7 @@ fn choose_existing_at(config_path: &Path, path: &Path) -> Result<PathBuf, String
 }
 
 fn is_fresh_registry(registry: &Registry) -> bool {
-    registry.drives.is_empty() && registry.default_drive_root.is_none()
+    registry.drives.is_empty() && registry.default_workspace_root.is_none()
 }
 
 fn drive_root_available(root: &Path) -> bool {
@@ -260,7 +260,7 @@ fn desktop_default_drive_root() -> PathBuf {
     if let Some(home) = dirs::home_dir() {
         return home.join("Documents").join("Chan");
     }
-    chan_drive::paths::default_drive_root()
+    chan_workspace::paths::default_workspace_root()
 }
 
 fn embedded_manual_files() -> Vec<ManualSeedFile> {
@@ -276,7 +276,7 @@ fn embedded_manual_files() -> Vec<ManualSeedFile> {
 }
 
 fn seed_manual_files(
-    drive: &chan_drive::Drive,
+    drive: &chan_workspace::Workspace,
     files: Vec<ManualSeedFile>,
 ) -> Result<usize, String> {
     let mut seeded = 0usize;
@@ -285,7 +285,7 @@ fn seed_manual_files(
         if drive.exists(rel) {
             continue;
         }
-        match chan_drive::classify(rel) {
+        match chan_workspace::classify(rel) {
             FileClass::EditableText | FileClass::Text => match std::str::from_utf8(&file.bytes) {
                 Ok(text) => drive
                     .write_text(rel, text)
@@ -323,7 +323,7 @@ mod tests {
     fn fresh_registry_requires_no_drives_and_no_default() {
         let mut registry = Registry::default();
         assert!(is_fresh_registry(&registry));
-        registry.default_drive_root = Some(PathBuf::from("/tmp/Chan"));
+        registry.default_workspace_root = Some(PathBuf::from("/tmp/Chan"));
         assert!(!is_fresh_registry(&registry));
     }
 
@@ -370,7 +370,7 @@ mod tests {
         let root = cfg.path().join("Documents").join("Chan");
         let config_path = cfg.path().join("config.toml");
         let mut registry = Registry {
-            default_drive_root: Some(root.clone()),
+            default_workspace_root: Some(root.clone()),
             ..Registry::default()
         };
         registry.touch(&root);
@@ -394,7 +394,7 @@ mod tests {
         let suggested = cfg.path().join("Documents").join("Chan");
         let config_path = cfg.path().join("config.toml");
         let mut registry = Registry {
-            default_drive_root: Some(root.clone()),
+            default_workspace_root: Some(root.clone()),
             ..Registry::default()
         };
         registry.touch(&root);
@@ -443,7 +443,7 @@ mod tests {
         let created = create_default_drive_at(&config_path, &root, files).unwrap();
         let registry = Registry::load_from(&config_path).unwrap();
         assert_eq!(registry.drives.len(), 2);
-        assert_eq!(registry.default_drive_root, Some(created.root));
+        assert_eq!(registry.default_workspace_root, Some(created.root));
     }
 
     #[test]
@@ -452,7 +452,7 @@ mod tests {
         let root = TempDir::new().unwrap();
         let config_path = cfg.path().join("config.toml");
         let mut registry = Registry {
-            default_drive_root: Some(root.path().to_path_buf()),
+            default_workspace_root: Some(root.path().to_path_buf()),
             ..Registry::default()
         };
         registry.touch(root.path());
@@ -470,7 +470,7 @@ mod tests {
         let suggested = cfg.path().join("Documents").join("Chan");
         let config_path = cfg.path().join("config.toml");
         let mut registry = Registry {
-            default_drive_root: Some(root.clone()),
+            default_workspace_root: Some(root.clone()),
             ..Registry::default()
         };
         registry.touch(&root);

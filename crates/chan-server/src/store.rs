@@ -2,7 +2,7 @@
 //! (`server.toml`, `preferences.toml`).
 //!
 //! Every load returns the type's `Default` if the file is missing.
-//! Saves go through `chan_drive::fs_ops::atomic_write`, so the parent
+//! Saves go through `chan_workspace::fs_ops::atomic_write`, so the parent
 //! directory is created and the rename is fsync'd consistently with
 //! the rest of the app.
 
@@ -32,7 +32,7 @@ where
         std::fs::create_dir_all(parent)?;
     }
     let body = toml::to_string_pretty(value).map_err(|e| Error::Config(e.to_string()))?;
-    chan_drive::fs_ops::atomic_write(path, body.as_bytes())
+    chan_workspace::fs_ops::atomic_write(path, body.as_bytes())
         .map_err(|e| Error::Config(e.to_string()))?;
     Ok(())
 }

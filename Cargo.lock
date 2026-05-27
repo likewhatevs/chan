@@ -933,9 +933,9 @@ name = "chan"
 version = "0.15.5"
 dependencies = [
  "anyhow",
- "chan-drive",
  "chan-llm",
  "chan-server",
+ "chan-workspace",
  "clap 4.6.1",
  "clap_complete",
  "flate2",
@@ -957,11 +957,11 @@ version = "0.15.5"
 dependencies = [
  "async-trait",
  "axum",
- "chan-drive",
  "chan-server",
  "chan-tunnel-client",
  "chan-tunnel-proto",
  "chan-tunnel-server",
+ "chan-workspace",
  "dirs 5.0.1",
  "gethostname",
  "getrandom 0.2.17",
@@ -996,50 +996,11 @@ dependencies = [
 ]
 
 [[package]]
-name = "chan-drive"
-version = "0.15.5"
-dependencies = [
- "base64 0.22.1",
- "bincode",
- "candle-core",
- "candle-nn",
- "candle-transformers",
- "cap-std",
- "cap-tempfile",
- "chan-report",
- "chrono",
- "csv",
- "dirs 5.0.1",
- "fs4 0.9.1",
- "gray_matter",
- "hf-hub",
- "notify",
- "pulldown-cmark",
- "r2d2",
- "r2d2_sqlite",
- "rusqlite",
- "rustix 1.1.4",
- "serde",
- "serde_json",
- "sha2",
- "tantivy",
- "tar",
- "tempfile",
- "thiserror 1.0.69",
- "tokenizers 0.21.4",
- "toml 0.8.2",
- "tracing",
- "walkdir",
- "xattr",
- "zstd",
-]
-
-[[package]]
 name = "chan-llm"
 version = "0.15.5"
 dependencies = [
  "base64 0.22.1",
- "chan-drive",
+ "chan-workspace",
  "rmcp",
  "schemars 1.2.1",
  "serde",
@@ -1069,10 +1030,10 @@ dependencies = [
  "anyhow",
  "axum",
  "base64 0.22.1",
- "chan-drive",
  "chan-llm",
  "chan-tunnel-client",
  "chan-tunnel-proto",
+ "chan-workspace",
  "chrono",
  "dirs 5.0.1",
  "futures",
@@ -1164,6 +1125,45 @@ dependencies = [
  "url",
  "uuid",
  "yamux",
+]
+
+[[package]]
+name = "chan-workspace"
+version = "0.15.5"
+dependencies = [
+ "base64 0.22.1",
+ "bincode",
+ "candle-core",
+ "candle-nn",
+ "candle-transformers",
+ "cap-std",
+ "cap-tempfile",
+ "chan-report",
+ "chrono",
+ "csv",
+ "dirs 5.0.1",
+ "fs4 0.9.1",
+ "gray_matter",
+ "hf-hub",
+ "notify",
+ "pulldown-cmark",
+ "r2d2",
+ "r2d2_sqlite",
+ "rusqlite",
+ "rustix 1.1.4",
+ "serde",
+ "serde_json",
+ "sha2",
+ "tantivy",
+ "tar",
+ "tempfile",
+ "thiserror 1.0.69",
+ "tokenizers 0.21.4",
+ "toml 0.8.2",
+ "tracing",
+ "walkdir",
+ "xattr",
+ "zstd",
 ]
 
 [[package]]
@@ -2228,7 +2228,7 @@ name = "fetch-models"
 version = "0.15.5"
 dependencies = [
  "anyhow",
- "chan-drive",
+ "chan-workspace",
  "tar",
  "zstd",
 ]

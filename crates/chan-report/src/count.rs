@@ -25,7 +25,7 @@ use crate::summary::{FileBucket, FileStats};
 ///
 /// Binary / Media / Other don't appear here because chan-report
 /// doesn't track those file kinds; the graph indexer composes
-/// chan-report's bucket with `chan_drive::classify()` (the
+/// chan-report's bucket with `chan_workspace::classify()` (the
 /// IO-contract axis) for those.
 fn classify_bucket(language: LanguageType) -> FileBucket {
     match language {

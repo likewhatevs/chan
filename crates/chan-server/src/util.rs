@@ -5,7 +5,7 @@ use axum::response::{IntoResponse, Response};
 
 /// Wrap an opaque blob in an `application/json` response. We don't
 /// re-parse + re-serialize because the blob may be large and we
-/// trust whoever wrote it (Drive::put_*) handed back exactly what
+/// trust whoever wrote it (Workspace::put_*) handed back exactly what
 /// they got. If the blob isn't JSON the client sees the raw bytes
 /// with the wrong content-type, which is acceptable for opaque
 /// storage that the frontend writes itself.

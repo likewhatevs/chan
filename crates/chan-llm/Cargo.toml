@@ -15,7 +15,7 @@ default = []
 mcp = ["dep:rmcp", "dep:schemars", "dep:base64"]
 
 [dependencies]
-chan-drive = { workspace = true }
+chan-workspace = { workspace = true }
 
 serde = { workspace = true }
 serde_json = { workspace = true }
@@ -41,7 +41,7 @@ crate-type = ["lib"]
 
 # Standalone MCP server binary. Any MCP client (Claude Desktop,
 # Claude Code, Cursor, ...) can spawn this process to get
-# chan-drive-sandboxed read/write/list/search access to a chan
+# chan-workspace-sandboxed read/write/list/search access to a chan
 # drive. `auto_apply_writes` defaults to false here; the MCP client
 # is expected to surface a confirmation UI before flipping the
 # `--auto-apply` flag on. Safer default than forcing it on, since a

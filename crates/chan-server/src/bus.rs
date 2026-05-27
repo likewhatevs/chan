@@ -11,14 +11,14 @@ use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
-use chan_drive::{ProgressCallback, ProgressEvent, WatchCallback, WatchEvent};
+use chan_workspace::{ProgressCallback, ProgressEvent, WatchCallback, WatchEvent};
 use tokio::sync::{broadcast, mpsc};
 
 use crate::self_writes::SelfWrites;
 
 /// Construct a watcher bridge. Extracted so /api/storage/reset can
 /// rebuild one cheaply when re-attaching the watcher to a fresh
-/// Drive instance.
+/// Workspace instance.
 ///
 /// The bridge fans out every event to two consumers:
 ///
@@ -363,7 +363,7 @@ mod tests {
         let (tx, mut rx) = broadcast::channel(8);
         let sink = make_progress_broadcast(&tx);
         sink.on_progress(ProgressEvent {
-            stage: chan_drive::ProgressStage::IndexFile,
+            stage: chan_workspace::ProgressStage::IndexFile,
             current: 1,
             total: 2,
             label: Some("a.md".into()),
@@ -375,7 +375,7 @@ mod tests {
         assert_eq!(frame["event"]["stage"], "IndexFile");
     }
 
-    use chan_drive::WatchKind;
+    use chan_workspace::WatchKind;
 
     fn created(path: &str) -> WatchEvent {
         WatchEvent {

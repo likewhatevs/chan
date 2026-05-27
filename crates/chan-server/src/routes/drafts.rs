@@ -13,7 +13,7 @@
 //! Drafts live in chan-drive metadata (`drafts_dir()`), OUTSIDE
 //! the drive root, but appear in the wire under the `Drafts/`
 //! prefix per the keyspace `systacean-25` + `-26` unified.
-//! `Drive::create_draft_dir`, `next_untitled_draft_name`,
+//! `Workspace::create_draft_dir`, `next_untitled_draft_name`,
 //! `write_text`, and `index_draft_file` (called via the unified
 //! `write_text` after `-26`) all route correctly.
 
@@ -41,7 +41,7 @@ pub struct DraftPathPayload {
 pub struct DraftPromotePayload {
     /// Any unified path inside the draft workspace.
     pub path: String,
-    /// Drive-relative destination. Single-file drafts save to this
+    /// Workspace-relative destination. Single-file drafts save to this
     /// file; workspace drafts save to this directory.
     pub target: String,
 }
@@ -118,7 +118,9 @@ pub async fn api_create_draft(State(state): State<Arc<AppState>>) -> Response {
     Json(DraftCreateResponse { path, name }).into_response()
 }
 
-fn create_draft_sync(drive: &chan_drive::Drive) -> Result<String, chan_drive::ChanError> {
+fn create_draft_sync(
+    drive: &chan_workspace::Workspace,
+) -> Result<String, chan_workspace::ChanError> {
     for _ in 0..2 {
         let name = drive.next_untitled_draft_name()?;
         match drive.create_draft_dir(&name) {
@@ -127,13 +129,13 @@ fn create_draft_sync(drive: &chan_drive::Drive) -> Result<String, chan_drive::Ch
                 drive.write_text(&unified, NEW_DRAFT_CONTENT)?;
                 return Ok(name);
             }
-            Err(chan_drive::ChanError::Io(msg)) if msg.contains("already exists") => {
+            Err(chan_workspace::ChanError::Io(msg)) if msg.contains("already exists") => {
                 continue;
             }
             Err(e) => return Err(e),
         }
     }
-    Err(chan_drive::ChanError::Io(
+    Err(chan_workspace::ChanError::Io(
         "race condition picking next untitled draft name (retried 2x)".to_string(),
     ))
 }
@@ -209,26 +211,27 @@ pub async fn api_create_rich_prompt(
 ) -> Response {
     let drive = state.drive().clone();
     let content = payload.content;
-    let result = tokio::task::spawn_blocking(move || -> Result<String, chan_drive::ChanError> {
-        for _ in 0..2 {
-            let name = next_rich_prompt_name(&drive)?;
-            match drive.create_draft_dir(&name) {
-                Ok(_) => {
-                    let unified = format!("Drafts/{name}/prompt.md");
-                    drive.write_text(&unified, &content)?;
-                    return Ok(name);
+    let result =
+        tokio::task::spawn_blocking(move || -> Result<String, chan_workspace::ChanError> {
+            for _ in 0..2 {
+                let name = next_rich_prompt_name(&drive)?;
+                match drive.create_draft_dir(&name) {
+                    Ok(_) => {
+                        let unified = format!("Drafts/{name}/prompt.md");
+                        drive.write_text(&unified, &content)?;
+                        return Ok(name);
+                    }
+                    Err(chan_workspace::ChanError::Io(msg)) if msg.contains("already exists") => {
+                        continue;
+                    }
+                    Err(e) => return Err(e),
                 }
-                Err(chan_drive::ChanError::Io(msg)) if msg.contains("already exists") => {
-                    continue;
-                }
-                Err(e) => return Err(e),
             }
-        }
-        Err(chan_drive::ChanError::Io(
-            "race condition picking next rich-prompt draft name (retried 2x)".to_string(),
-        ))
-    })
-    .await;
+            Err(chan_workspace::ChanError::Io(
+                "race condition picking next rich-prompt draft name (retried 2x)".to_string(),
+            ))
+        })
+        .await;
 
     let name = match result {
         Ok(Ok(name)) => name,
@@ -245,13 +248,15 @@ pub async fn api_create_rich_prompt(
 /// Lives in chan-server (not chan-drive) so the prefix-pickup
 /// loop stays where its consumer is + doesn't drag a
 /// `next_<prefix>_name` API surface into chan-drive. The
-/// existing `Drive::next_untitled_draft_name` stays untouched.
+/// existing `Workspace::next_untitled_draft_name` stays untouched.
 ///
 /// Naming: first slot is `rich-prompt`; subsequent are
 /// `rich-prompt-1`, `rich-prompt-2`, ... (matches the
 /// `untitled` / `untitled-1` shape `next_untitled_draft_name`
 /// uses).
-fn next_rich_prompt_name(drive: &chan_drive::Drive) -> Result<String, chan_drive::ChanError> {
+fn next_rich_prompt_name(
+    drive: &chan_workspace::Workspace,
+) -> Result<String, chan_workspace::ChanError> {
     let existing = drive.list_drafts()?;
     let names: std::collections::HashSet<String> = existing.into_iter().map(|d| d.name).collect();
     if !names.contains("rich-prompt") {
@@ -268,10 +273,10 @@ fn next_rich_prompt_name(drive: &chan_drive::Drive) -> Result<String, chan_drive
 }
 
 fn inspect_draft_sync(
-    drive: &chan_drive::Drive,
+    drive: &chan_workspace::Workspace,
     path: &str,
-) -> Result<DraftInspectResponse, chan_drive::ChanError> {
-    let name = chan_drive::drafts::name_from_unified_path(path)?;
+) -> Result<DraftInspectResponse, chan_workspace::ChanError> {
+    let name = chan_workspace::drafts::name_from_unified_path(path)?;
     let info = drive.inspect_draft(&name)?;
     Ok(DraftInspectResponse {
         path: format!("Drafts/{name}/draft.md"),
@@ -283,17 +288,20 @@ fn inspect_draft_sync(
     })
 }
 
-fn discard_draft_sync(drive: &chan_drive::Drive, path: &str) -> Result<(), chan_drive::ChanError> {
-    let name = chan_drive::drafts::name_from_unified_path(path)?;
+fn discard_draft_sync(
+    drive: &chan_workspace::Workspace,
+    path: &str,
+) -> Result<(), chan_workspace::ChanError> {
+    let name = chan_workspace::drafts::name_from_unified_path(path)?;
     drive.discard_draft(&name)
 }
 
 fn promote_draft_sync(
-    drive: &chan_drive::Drive,
+    drive: &chan_workspace::Workspace,
     path: &str,
     target: &str,
-) -> Result<DraftPromoteResponse, chan_drive::ChanError> {
-    let name = chan_drive::drafts::name_from_unified_path(path)?;
+) -> Result<DraftPromoteResponse, chan_workspace::ChanError> {
+    let name = chan_workspace::drafts::name_from_unified_path(path)?;
     let report = drive.promote_draft(&name, target)?;
     Ok(DraftPromoteResponse {
         path: report.target_path,
@@ -302,11 +310,11 @@ fn promote_draft_sync(
     })
 }
 
-fn promote_mode_label(mode: chan_drive::DraftPromoteMode) -> &'static str {
+fn promote_mode_label(mode: chan_workspace::DraftPromoteMode) -> &'static str {
     match mode {
-        chan_drive::DraftPromoteMode::File => "file",
-        chan_drive::DraftPromoteMode::DirectoryCreated => "directory_created",
-        chan_drive::DraftPromoteMode::DirectoryMerged => "directory_merged",
+        chan_workspace::DraftPromoteMode::File => "file",
+        chan_workspace::DraftPromoteMode::DirectoryCreated => "directory_created",
+        chan_workspace::DraftPromoteMode::DirectoryMerged => "directory_merged",
     }
 }
 
@@ -321,12 +329,12 @@ mod tests {
     // slot. Also test the gap-counting + the first-slot-without-
     // suffix shape.
 
-    fn make_drive() -> (TempDir, TempDir, std::sync::Arc<chan_drive::Drive>) {
+    fn make_drive() -> (TempDir, TempDir, std::sync::Arc<chan_workspace::Workspace>) {
         let cfg = TempDir::new().unwrap();
         let root = TempDir::new().unwrap();
-        let lib = chan_drive::Library::open_at(cfg.path().join("config.toml")).unwrap();
-        lib.register_drive(root.path()).unwrap();
-        let drive = lib.open_drive(root.path()).unwrap();
+        let lib = chan_workspace::Library::open_at(cfg.path().join("config.toml")).unwrap();
+        lib.register_workspace(root.path()).unwrap();
+        let drive = lib.open_workspace(root.path()).unwrap();
         (cfg, root, drive)
     }
 

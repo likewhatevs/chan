@@ -13,7 +13,7 @@
 //! `store::save_toml` lands. A dir-level "anything changed" trigger
 //! therefore fires `registry-changed` on routine editing (a pane
 //! drag re-saves `preferences.toml`), which storms the launcher's
-//! `list_drives` refresh for no reason. We filter the debounced
+//! `list_workspaces` refresh for no reason. We filter the debounced
 //! events down to the registry file's own name so only a real
 //! registry mutation forwards to the frontend.
 

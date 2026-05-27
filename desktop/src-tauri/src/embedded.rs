@@ -13,16 +13,16 @@ use tokio::sync::watch;
 use crate::serve;
 
 pub struct EmbeddedServer {
-    host: Arc<chan_server::DriveHost>,
+    host: Arc<chan_server::WorkspaceHost>,
     addr: SocketAddr,
     shutdown_tx: watch::Sender<bool>,
 }
 
 impl EmbeddedServer {
     pub async fn start() -> Result<Self, String> {
-        let library = chan_drive::Library::open()
+        let library = chan_workspace::Library::open()
             .map_err(|e| format!("opening chan drive registry for embedded server: {e}"))?;
-        let host = Arc::new(chan_server::DriveHost::new(library));
+        let host = Arc::new(chan_server::WorkspaceHost::new(library));
         let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0))
             .map_err(|e| format!("binding embedded chan server: {e}"))?;
         listener
@@ -51,7 +51,7 @@ impl EmbeddedServer {
         })
     }
 
-    pub async fn open_drive(&self, key: &str) -> Result<String, String> {
+    pub async fn open_workspace(&self, key: &str) -> Result<String, String> {
         let prefix = prefix_for_key(key);
         let hosted = self
             .host
@@ -65,16 +65,16 @@ impl EmbeddedServer {
     /// Every desktop registry mutation and feature toggle routes
     /// through this single `Library` so the in-memory registry the
     /// host opens drives against never goes stale relative to disk.
-    pub fn library(&self) -> &chan_drive::Library {
+    pub fn library(&self) -> &chan_workspace::Library {
         self.host.library()
     }
 
-    /// Live `Arc<Drive>` for a mounted drive, or `None` when the
+    /// Live `Arc<Workspace>` for a mounted drive, or `None` when the
     /// path isn't currently mounted. Feature toggles use this to
     /// reach the SAME handle the runtime holds instead of re-opening
-    /// (which would hit `DriveAlreadyOpen` against the lifetime
+    /// (which would hit `WorkspaceAlreadyOpen` against the lifetime
     /// flock).
-    pub fn live_drive(&self, root: &Path) -> Option<Arc<chan_drive::Drive>> {
+    pub fn live_drive(&self, root: &Path) -> Option<Arc<chan_workspace::Workspace>> {
         self.host.live_drive(root)
     }
 
@@ -95,14 +95,14 @@ impl Drop for EmbeddedServer {
 /// Map an embedded open error to a user-facing string. A drive
 /// already held by another chan process (typically a standalone
 /// `chan serve <drive>` started before the desktop tried to mount
-/// it) surfaces as `DriveLocked`; an in-process handle that hasn't
-/// dropped yet surfaces as `DriveAlreadyOpen`. Both reach the SPA
+/// it) surfaces as `WorkspaceLocked`; an in-process handle that hasn't
+/// dropped yet surfaces as `WorkspaceAlreadyOpen`. Both reach the SPA
 /// verbatim and revert the row's On toggle, so they must read as a
 /// clear, non-fatal instruction rather than a raw error chain.
 fn map_open_error(key: &str, e: chan_server::Error) -> String {
-    use chan_drive::ChanError;
+    use chan_workspace::ChanError;
     match e {
-        chan_server::Error::Core(ChanError::DriveLocked | ChanError::DriveAlreadyOpen) => {
+        chan_server::Error::Core(ChanError::WorkspaceLocked | ChanError::WorkspaceAlreadyOpen) => {
             "This drive is open in another chan process. Quit it and try again.".to_string()
         }
         other => format!("opening embedded drive {key}: {other}"),

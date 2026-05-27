@@ -30,7 +30,7 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 toml = { workspace = true }
 dirs = { workspace = true }
-chan-drive = { workspace = true, default-features = false }
+chan-workspace = { workspace = true, default-features = false }
 chan-server = { workspace = true, features = ["embeddings"] }
 notify = { workspace = true }
 notify-debouncer-mini = { workspace = true }

@@ -21,7 +21,7 @@ use axum::extract::{Path as AxumPath, Query, State};
 use axum::http::{header, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::Json;
-use chan_drive::{
+use chan_workspace::{
     EdgeKind, FileClass, PathClass, PathPermission, ReportFileBucket, ReportFileStats,
 };
 use futures::{stream, StreamExt};
@@ -132,7 +132,7 @@ pub async fn api_link_targets(
     blocking_response(move || api_link_targets_sync(drive, p), "link targets").await
 }
 
-fn api_link_targets_sync(drive: Arc<chan_drive::Drive>, p: LinkTargetsParams) -> Response {
+fn api_link_targets_sync(drive: Arc<chan_workspace::Workspace>, p: LinkTargetsParams) -> Response {
     match drive.link_targets(&p.q, p.limit) {
         Ok(targets) => Json(targets).into_response(),
         Err(e) => err_from(&e),
@@ -243,7 +243,7 @@ struct GraphViewResponse {
 
 #[derive(Debug)]
 enum GraphBuildError {
-    Drive(chan_drive::ChanError),
+    Workspace(chan_workspace::ChanError),
     Fs(super::fs_graph::FsGraphError),
     Cancelled,
 }
@@ -251,7 +251,7 @@ enum GraphBuildError {
 impl GraphBuildError {
     fn into_response(self) -> Response {
         match self {
-            GraphBuildError::Drive(e) => err_from(&e),
+            GraphBuildError::Workspace(e) => err_from(&e),
             GraphBuildError::Fs(e) => e.into_response(),
             GraphBuildError::Cancelled => {
                 (StatusCode::INTERNAL_SERVER_ERROR, "graph stream cancelled").into_response()
@@ -263,16 +263,16 @@ impl GraphBuildError {
 impl std::fmt::Display for GraphBuildError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            GraphBuildError::Drive(e) => write!(f, "{e}"),
+            GraphBuildError::Workspace(e) => write!(f, "{e}"),
             GraphBuildError::Fs(e) => write!(f, "{e}"),
             GraphBuildError::Cancelled => write!(f, "graph stream cancelled"),
         }
     }
 }
 
-impl From<chan_drive::ChanError> for GraphBuildError {
-    fn from(value: chan_drive::ChanError) -> Self {
-        GraphBuildError::Drive(value)
+impl From<chan_workspace::ChanError> for GraphBuildError {
+    fn from(value: chan_workspace::ChanError) -> Self {
+        GraphBuildError::Workspace(value)
     }
 }
 
@@ -429,13 +429,13 @@ impl GraphQuery {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "lowercase")]
 enum GraphScope {
-    Drive,
+    Workspace,
     Directory,
     File,
 }
 
 fn default_graph_scope() -> GraphScope {
-    GraphScope::Drive
+    GraphScope::Workspace
 }
 
 fn default_graph_depth() -> usize {
@@ -561,7 +561,7 @@ fn resolve_link_dst(src: &str, target: &str, files: &std::collections::BTreeSet<
     let decoded = percent_decode_str(target).decode_utf8_lossy().into_owned();
     let stripped = decoded.trim_start_matches('/');
 
-    // 1. Drive-root-relative first (the wiki-rooted + absolute-`/path`
+    // 1. Workspace-root-relative first (the wiki-rooted + absolute-`/path`
     //    convention). 2. The source's immediate parent. 3. Then each
     //    higher ancestor toward the drive root, so a partial-prefix
     //    wiki-link still lands on its real file. Most-specific bases
@@ -616,7 +616,7 @@ fn normalize_drive_rel(p: &std::path::Path) -> Option<String> {
 /// Returns an empty set on `list_tree` failure so callers degrade to
 /// the previous graph-files-only behaviour instead of failing the
 /// request.
-fn drive_disk_files(drive: &chan_drive::Drive) -> std::collections::BTreeSet<String> {
+fn drive_disk_files(drive: &chan_workspace::Workspace) -> std::collections::BTreeSet<String> {
     match drive.list_tree_filtered_unified() {
         Ok(entries) => entries
             .into_iter()
@@ -627,7 +627,7 @@ fn drive_disk_files(drive: &chan_drive::Drive) -> std::collections::BTreeSet<Str
     }
 }
 
-/// Drive-relative directory paths from the same walk
+/// Workspace-relative directory paths from the same walk
 /// `drive_disk_files` uses. Used to recognise markdown links whose
 /// target is a directory (doc-navigation links like
 /// `[notes](../alex/)`); those don't carry between-file graph
@@ -637,7 +637,7 @@ fn drive_disk_files(drive: &chan_drive::Drive) -> std::collections::BTreeSet<Str
 /// Returns an empty set on `list_tree` failure so callers degrade
 /// to "no directory filtering", i.e. the pre-fix behaviour, rather
 /// than failing the request.
-fn drive_disk_dirs(drive: &chan_drive::Drive) -> std::collections::BTreeSet<String> {
+fn drive_disk_dirs(drive: &chan_workspace::Workspace) -> std::collections::BTreeSet<String> {
     match drive.list_tree_filtered_unified() {
         Ok(entries) => entries
             .into_iter()
@@ -663,9 +663,9 @@ fn image_subset(
 }
 
 /// True only for regular files in chan's public namespace.
-/// Uses Drive so virtual Drafts paths share the same truth as
+/// Uses Workspace so virtual Drafts paths share the same truth as
 /// `/api/files` and MCP content tools.
-fn indexed_file_exists(drive: &chan_drive::Drive, rel: &str) -> bool {
+fn indexed_file_exists(drive: &chan_workspace::Workspace, rel: &str) -> bool {
     drive.exists(rel)
 }
 
@@ -805,13 +805,13 @@ fn build_language_graph(
 
 fn graph_scope_path(p: &GraphParams) -> &str {
     match p.scope {
-        GraphScope::Drive => "",
+        GraphScope::Workspace => "",
         GraphScope::Directory | GraphScope::File => p.path.trim_matches('/'),
     }
 }
 
-fn path_class_for_graph(drive: &chan_drive::Drive, path: &str) -> Option<PathClass> {
-    chan_drive::fs_ops::classify_path(drive.root(), path).ok()
+fn path_class_for_graph(drive: &chan_workspace::Workspace, path: &str) -> Option<PathClass> {
+    chan_workspace::fs_ops::classify_path(drive.root(), path).ok()
 }
 
 /// systacean-22: should a per-file emit at `path` survive the
@@ -876,7 +876,7 @@ fn should_emit_contact_file(
 
 fn is_media_graph_path(path: &str) -> bool {
     matches!(
-        chan_drive::fs_ops::classify(path),
+        chan_workspace::fs_ops::classify(path),
         FileClass::Image | FileClass::Pdf
     )
 }
@@ -950,7 +950,7 @@ fn push_contains_edge(
 }
 
 fn ensure_directory_path(
-    drive: &chan_drive::Drive,
+    drive: &chan_workspace::Workspace,
     nodes: &mut std::collections::BTreeMap<String, GraphNodeView>,
     edges: &mut Vec<GraphEdgeView>,
     edge_set: &mut std::collections::BTreeSet<(String, String, &'static str)>,
@@ -976,7 +976,7 @@ fn ensure_directory_path(
 }
 
 fn merge_tree_file_node(
-    drive: &chan_drive::Drive,
+    drive: &chan_workspace::Workspace,
     nodes: &mut std::collections::BTreeMap<String, GraphNodeView>,
     report_buckets: &std::collections::HashMap<String, ReportFileBucket>,
     path: &str,
@@ -1014,12 +1014,12 @@ fn merge_tree_file_node(
 }
 
 fn merge_tree_entry(
-    drive: &chan_drive::Drive,
+    drive: &chan_workspace::Workspace,
     nodes: &mut std::collections::BTreeMap<String, GraphNodeView>,
     edges: &mut Vec<GraphEdgeView>,
     edge_set: &mut std::collections::BTreeSet<(String, String, &'static str)>,
     report_buckets: &std::collections::HashMap<String, ReportFileBucket>,
-    entry: &chan_drive::TreeEntry,
+    entry: &chan_workspace::TreeEntry,
 ) {
     let path = entry.path.trim_matches('/');
     if path.is_empty() {
@@ -1042,7 +1042,7 @@ fn merge_tree_entry(
 }
 
 fn merge_unified_tree_layer(
-    drive: &chan_drive::Drive,
+    drive: &chan_workspace::Workspace,
     p: &GraphParams,
     nodes: &mut std::collections::BTreeMap<String, GraphNodeView>,
     edges: &mut Vec<GraphEdgeView>,
@@ -1055,7 +1055,7 @@ fn merge_unified_tree_layer(
     // comment below ("same file coverage as the File Browser") holds
     // because the File Browser spine is itself filtered (bootstrap).
     let entries = match p.scope {
-        GraphScope::Drive => drive.list_tree_filtered_unified(),
+        GraphScope::Workspace => drive.list_tree_filtered_unified(),
         GraphScope::Directory | GraphScope::File => drive.list_tree_prefix_filtered_unified(path),
     };
     let Ok(mut entries) = entries else {
@@ -1092,7 +1092,7 @@ fn merge_unified_tree_layer(
 
 #[cfg(test)]
 fn merge_filesystem_layer(
-    drive: &chan_drive::Drive,
+    drive: &chan_workspace::Workspace,
     p: &GraphParams,
     nodes: &mut std::collections::BTreeMap<String, GraphNodeView>,
     edges: &mut Vec<GraphEdgeView>,
@@ -1102,14 +1102,14 @@ fn merge_filesystem_layer(
 }
 
 fn merge_filesystem_layer_with_buckets(
-    drive: &chan_drive::Drive,
+    drive: &chan_workspace::Workspace,
     p: &GraphParams,
     nodes: &mut std::collections::BTreeMap<String, GraphNodeView>,
     edges: &mut Vec<GraphEdgeView>,
     report_buckets: &std::collections::HashMap<String, ReportFileBucket>,
 ) -> Result<(), super::fs_graph::FsGraphError> {
     let path = graph_scope_path(p);
-    if chan_drive::drafts::is_unified_drafts_path(path) {
+    if chan_workspace::drafts::is_unified_drafts_path(path) {
         // Drafts lives in chan metadata. build_fs_graph intentionally
         // walks the drive root, so virtual draft nodes come from the
         // graph/index layer rather than a metadata filesystem walk.
@@ -1118,7 +1118,7 @@ fn merge_filesystem_layer_with_buckets(
     }
     let scope = match p.scope {
         GraphScope::File => FsGraphScope::File,
-        GraphScope::Drive | GraphScope::Directory => FsGraphScope::Directory,
+        GraphScope::Workspace | GraphScope::Directory => FsGraphScope::Directory,
     };
     let fs_graph = build_fs_graph(drive, scope, path, p.depth)?;
     let mut id_map = std::collections::BTreeMap::new();
@@ -1189,12 +1189,12 @@ fn merge_filesystem_layer_with_buckets(
 }
 
 fn scoped_report_files(
-    drive: &chan_drive::Drive,
+    drive: &chan_workspace::Workspace,
     p: &GraphParams,
-) -> chan_drive::Result<Vec<ReportFileStats>> {
+) -> chan_workspace::Result<Vec<ReportFileStats>> {
     let path = graph_scope_path(p);
     let report = match p.scope {
-        GraphScope::Drive => drive.report()?,
+        GraphScope::Workspace => drive.report()?,
         GraphScope::Directory => drive.report_for_prefix(path)?,
         GraphScope::File => drive.report_for_files(&[path.to_string()])?,
     };
@@ -1202,7 +1202,7 @@ fn scoped_report_files(
 }
 
 fn report_buckets_for_graph(
-    drive: &chan_drive::Drive,
+    drive: &chan_workspace::Workspace,
 ) -> std::collections::HashMap<String, ReportFileBucket> {
     drive
         .report()
@@ -1227,11 +1227,11 @@ fn apply_report_buckets(
 }
 
 fn merge_language_layer(
-    drive: &chan_drive::Drive,
+    drive: &chan_workspace::Workspace,
     p: &GraphParams,
     nodes: &mut std::collections::BTreeMap<String, GraphNodeView>,
     edges: &mut Vec<GraphEdgeView>,
-) -> chan_drive::Result<()> {
+) -> chan_workspace::Result<()> {
     let files = scoped_report_files(drive, p)?;
     let language_graph =
         build_language_graph(&files, u32::try_from(p.depth).unwrap_or(u32::MAX), None);
@@ -1323,7 +1323,7 @@ pub async fn api_graph(
     blocking_response(move || api_graph_sync(drive, params), "graph").await
 }
 
-fn api_graph_sync(drive: Arc<chan_drive::Drive>, p: GraphParams) -> Response {
+fn api_graph_sync(drive: Arc<chan_workspace::Workspace>, p: GraphParams) -> Response {
     let mut emit = None;
     match build_graph_view(drive, p, &mut emit) {
         Ok(view) => Json(view).into_response(),
@@ -1332,7 +1332,7 @@ fn api_graph_sync(drive: Arc<chan_drive::Drive>, p: GraphParams) -> Response {
 }
 
 fn stream_graph_sync<F>(
-    drive: Arc<chan_drive::Drive>,
+    drive: Arc<chan_workspace::Workspace>,
     p: GraphParams,
     mut emit: F,
 ) -> Result<(), GraphBuildError>
@@ -1368,7 +1368,7 @@ where
     Ok(())
 }
 
-async fn stream_graph_response(drive: Arc<chan_drive::Drive>, p: GraphParams) -> Response {
+async fn stream_graph_response(drive: Arc<chan_workspace::Workspace>, p: GraphParams) -> Response {
     let (tx, mut rx) = mpsc::channel::<GraphStreamMessage>(8);
     tokio::task::spawn_blocking(move || {
         let result = stream_graph_sync(drive, p, |bytes| {
@@ -1408,7 +1408,7 @@ async fn stream_graph_response(drive: Arc<chan_drive::Drive>, p: GraphParams) ->
 }
 
 fn build_graph_view(
-    drive: Arc<chan_drive::Drive>,
+    drive: Arc<chan_workspace::Workspace>,
     p: GraphParams,
     emit: &mut Option<&mut dyn FnMut(GraphStreamEvent) -> bool>,
 ) -> Result<GraphViewResponse, GraphBuildError> {
@@ -1747,7 +1747,7 @@ fn build_graph_view(
         .map(|e| GraphEdgeView {
             source: e.src.clone(),
             // chan-drive stores the leading `#` / `@@` sigil on the
-            // tag/mention edge's dst already (Drive::build_edges
+            // tag/mention edge's dst already (Workspace::build_edges
             // does the formatting), and the matching tag node ids
             // we emit above use the same `#name` shape. So the
             // wire-shape target is the plain dst with no extra
@@ -1822,7 +1822,7 @@ enum BacklinksStreamEvent<'a> {
 
 enum BacklinksStreamMessage {
     Data(Bytes),
-    Error(chan_drive::ChanError),
+    Error(chan_workspace::ChanError),
 }
 
 pub async fn api_backlinks(
@@ -1837,7 +1837,7 @@ pub async fn api_backlinks(
     blocking_response(move || api_backlinks_sync(drive, path), "backlinks").await
 }
 
-fn api_backlinks_sync(drive: Arc<chan_drive::Drive>, path: String) -> Response {
+fn api_backlinks_sync(drive: Arc<chan_workspace::Workspace>, path: String) -> Response {
     match backlinks_for_path(&drive, &path, |_| true) {
         Ok(edges) => Json(edges).into_response(),
         Err(e) => err_from(&e),
@@ -1862,21 +1862,21 @@ fn backlinks_ndjson_error_bytes(error: String) -> Bytes {
 fn emit_backlinks_event<F>(
     emit: &mut F,
     event: BacklinksStreamEvent<'_>,
-) -> chan_drive::Result<bool>
+) -> chan_workspace::Result<bool>
 where
     F: FnMut(Bytes) -> bool,
 {
     let bytes = backlinks_ndjson_bytes(&event).map_err(|e| {
-        chan_drive::ChanError::Io(format!("failed to encode backlinks stream event: {e}"))
+        chan_workspace::ChanError::Io(format!("failed to encode backlinks stream event: {e}"))
     })?;
     Ok(emit(bytes))
 }
 
 fn stream_backlinks_sync<F>(
-    drive: &chan_drive::Drive,
+    drive: &chan_workspace::Workspace,
     path: &str,
     mut emit: F,
-) -> chan_drive::Result<()>
+) -> chan_workspace::Result<()>
 where
     F: FnMut(Bytes) -> bool,
 {
@@ -1903,7 +1903,10 @@ where
     Ok(())
 }
 
-async fn stream_backlinks_response(drive: Arc<chan_drive::Drive>, path: String) -> Response {
+async fn stream_backlinks_response(
+    drive: Arc<chan_workspace::Workspace>,
+    path: String,
+) -> Response {
     let (tx, mut rx) = mpsc::channel::<BacklinksStreamMessage>(8);
     tokio::task::spawn_blocking(move || {
         let result = stream_backlinks_sync(&drive, &path, |bytes| {
@@ -1911,7 +1914,7 @@ async fn stream_backlinks_response(drive: Arc<chan_drive::Drive>, path: String) 
                 .is_ok()
         });
         match result {
-            Ok(()) | Err(chan_drive::ChanError::Cancelled) => {}
+            Ok(()) | Err(chan_workspace::ChanError::Cancelled) => {}
             Err(e) => {
                 let _ = tx.blocking_send(BacklinksStreamMessage::Error(e));
             }
@@ -1944,10 +1947,10 @@ async fn stream_backlinks_response(drive: Arc<chan_drive::Drive>, path: String) 
 }
 
 fn backlinks_for_path<F>(
-    drive: &chan_drive::Drive,
+    drive: &chan_workspace::Workspace,
     path: &str,
     mut emit: F,
-) -> chan_drive::Result<Vec<ApiBacklinkEdge>>
+) -> chan_workspace::Result<Vec<ApiBacklinkEdge>>
 where
     F: FnMut(&ApiBacklinkEdge) -> bool,
 {
@@ -1988,7 +1991,7 @@ where
                     anchor: e.anchor,
                 };
                 if !emit(&edge) {
-                    return Err(chan_drive::ChanError::Cancelled);
+                    return Err(chan_workspace::ChanError::Cancelled);
                 }
                 out.push(edge);
             }
@@ -2016,16 +2019,16 @@ mod tests {
         }
     }
 
-    fn open_drive() -> (
+    fn open_workspace() -> (
         tempfile::TempDir,
         tempfile::TempDir,
-        std::sync::Arc<chan_drive::Drive>,
+        std::sync::Arc<chan_workspace::Workspace>,
     ) {
         let cfg = tempfile::TempDir::new().unwrap();
         let root = tempfile::TempDir::new().unwrap();
-        let lib = chan_drive::Library::open_at(cfg.path().join("config.toml")).unwrap();
-        lib.register_drive(root.path()).unwrap();
-        let drive = lib.open_drive(root.path()).unwrap();
+        let lib = chan_workspace::Library::open_at(cfg.path().join("config.toml")).unwrap();
+        lib.register_workspace(root.path()).unwrap();
+        let drive = lib.open_workspace(root.path()).unwrap();
         (cfg, root, drive)
     }
 
@@ -2070,7 +2073,7 @@ mod tests {
 
     #[test]
     fn graph_stream_emits_meta_batches_and_done() {
-        let (_cfg, root, drive) = open_drive();
+        let (_cfg, root, drive) = open_workspace();
         put(
             root.path(),
             "notes/a.md",
@@ -2081,7 +2084,7 @@ mod tests {
         drive.index_file("notes/b.md").unwrap();
 
         let params = GraphParams {
-            scope: GraphScope::Drive,
+            scope: GraphScope::Workspace,
             path: String::new(),
             depth: 2,
         };
@@ -2101,7 +2104,7 @@ mod tests {
 
     #[test]
     fn backlinks_stream_emits_meta_edges_and_done() {
-        let (_cfg, root, drive) = open_drive();
+        let (_cfg, root, drive) = open_workspace();
         put(root.path(), "notes/a.md", b"# A\n\n[[notes/b.md]]\n");
         put(root.path(), "notes/b.md", b"# B\n");
         drive.index_file("notes/a.md").unwrap();
@@ -2129,7 +2132,7 @@ mod tests {
         // through to the ghost path, even though both files are
         // sitting on disk. Pin the contract: every regular file the
         // user might link to has to show up here.
-        let (_cfg, root, drive) = open_drive();
+        let (_cfg, root, drive) = open_workspace();
         put(root.path(), "LICENSE", b"MIT\n");
         put(root.path(), "src/lib.rs", b"pub fn x() {}\n");
         put(root.path(), "scripts/build.sh", b"#!/bin/sh\n");
@@ -2152,7 +2155,7 @@ mod tests {
         // ghost_set stays empty for the LICENSE case, and the
         // referenced-disk-files set picks up a `File { missing: false }`
         // node instead.
-        let (_cfg, root, drive) = open_drive();
+        let (_cfg, root, drive) = open_workspace();
         // Use a wiki link so the dst lands on drive-rooted "LICENSE"
         // rather than the source-relative "notes/LICENSE" that bare
         // markdown semantics would produce.
@@ -2202,7 +2205,7 @@ mod tests {
         // recognise `[label](some/dir/)` targets and keep them out of
         // ghost emission. The companion `drive_disk_files` set is
         // unaffected (it filters `is_dir` out the other way).
-        let (_cfg, root, drive) = open_drive();
+        let (_cfg, root, drive) = open_workspace();
         put(root.path(), "docs/intro.md", b"# Intro\n");
         put(root.path(), "docs/agents/alice.md", b"# alice\n");
         put(root.path(), "notes/inner/deep.md", b"# deep\n");
@@ -2235,7 +2238,7 @@ mod tests {
         // directory target is skipped entirely; the corresponding
         // link edge is dropped by the edge filter so Cytoscape never
         // sees a dangling target.
-        let (_cfg, root, drive) = open_drive();
+        let (_cfg, root, drive) = open_workspace();
         // Source link: bare `some-dir` resolves drive-rooted under
         // the wiki convention. `some-dir/` exists as a real
         // directory on disk (created by `put` writing a file under
@@ -2322,7 +2325,7 @@ mod tests {
         // drops bob + charlie + keeps alice. Without this test,
         // a regression on the filter would only surface on a
         // live-serve smoke run.
-        let (_cfg, root, drive) = open_drive();
+        let (_cfg, root, drive) = open_workspace();
         put(
             root.path(),
             "contacts/alice.md",
@@ -2469,7 +2472,7 @@ mod tests {
 
     #[test]
     fn api_graph_file_scope_accepts_virtual_draft_paths() {
-        let (_cfg, _root, drive) = open_drive();
+        let (_cfg, _root, drive) = open_workspace();
         drive.create_draft_dir("untitled").unwrap();
         drive
             .write_text("Drafts/untitled/draft.md", "# Draft\n")
@@ -2487,7 +2490,7 @@ mod tests {
 
     #[tokio::test]
     async fn link_targets_endpoint_is_path_title_heading_picker_not_body_search() {
-        let (_cfg, _root, drive) = open_drive();
+        let (_cfg, _root, drive) = open_workspace();
         drive
             .write_text(
                 "notes/carbonara.md",
@@ -2511,7 +2514,8 @@ mod tests {
         let body_bytes = axum::body::to_bytes(body_response.into_body(), usize::MAX)
             .await
             .unwrap();
-        let body_hits: Vec<chan_drive::LinkTarget> = serde_json::from_slice(&body_bytes).unwrap();
+        let body_hits: Vec<chan_workspace::LinkTarget> =
+            serde_json::from_slice(&body_bytes).unwrap();
         assert!(
             body_hits.is_empty(),
             "link targets must not search body text: {body_hits:?}",
@@ -2528,10 +2532,10 @@ mod tests {
         let heading_bytes = axum::body::to_bytes(heading_response.into_body(), usize::MAX)
             .await
             .unwrap();
-        let heading_hits: Vec<chan_drive::LinkTarget> =
+        let heading_hits: Vec<chan_workspace::LinkTarget> =
             serde_json::from_slice(&heading_bytes).unwrap();
         assert!(heading_hits.iter().any(|hit| {
-            hit.kind == chan_drive::LinkTargetKind::Heading
+            hit.kind == chan_workspace::LinkTargetKind::Heading
                 && hit.path == "notes/carbonara.md"
                 && hit.heading.as_deref() == Some("Ingredients")
         }));
@@ -2588,7 +2592,7 @@ mod tests {
 
     #[test]
     fn merged_graph_layers_emit_filesystem_media_and_language_nodes() {
-        let (_cfg, root, drive) = open_drive();
+        let (_cfg, root, drive) = open_workspace();
         put(root.path(), "notes/a.md", b"# A\n\n[[notes/b.md]]\n#tag\n");
         put(root.path(), "notes/b.md", b"# B\n");
         put(root.path(), "src/lib.rs", b"pub fn answer() -> u8 { 42 }\n");
@@ -2597,7 +2601,7 @@ mod tests {
         drive.index_file("notes/b.md").unwrap();
 
         let params = GraphParams {
-            scope: GraphScope::Drive,
+            scope: GraphScope::Workspace,
             path: String::new(),
             depth: 6,
         };
@@ -2622,13 +2626,13 @@ mod tests {
 
     #[test]
     fn merged_graph_filesystem_layer_uses_full_tree_spine() {
-        let (_cfg, root, drive) = open_drive();
+        let (_cfg, root, drive) = open_workspace();
         put(root.path(), "notes/deep/a.md", b"# A\n");
         put(root.path(), "notes/deep/raw.bin", &[1, 2, 3]);
         put(root.path(), "top.md", b"# Top\n");
 
         let params = GraphParams {
-            scope: GraphScope::Drive,
+            scope: GraphScope::Workspace,
             path: String::new(),
             depth: 1,
         };
@@ -2664,7 +2668,7 @@ mod tests {
         // must not plot node_modules/target/venv/.git in the graph. The
         // default registry index_excluded_dirs is sane, so this holds
         // with no config. Drives the runaway-node-count fix.
-        let (_cfg, root, drive) = open_drive();
+        let (_cfg, root, drive) = open_workspace();
         put(root.path(), "top.md", b"# Top\n");
         put(root.path(), "notes/today.md", b"# Today\n");
         // Dependency / VCS noise at top level AND nested under a real dir.
@@ -2675,7 +2679,7 @@ mod tests {
         put(root.path(), "notes/node_modules/dep/a.js", b"x");
 
         let params = GraphParams {
-            scope: GraphScope::Drive,
+            scope: GraphScope::Workspace,
             path: String::new(),
             depth: 6,
         };
@@ -2710,7 +2714,7 @@ mod tests {
 
     #[test]
     fn merged_graph_file_scope_includes_ancestor_chain() {
-        let (_cfg, root, drive) = open_drive();
+        let (_cfg, root, drive) = open_workspace();
         put(root.path(), "notes/deep/a.md", b"# A\n");
 
         let params = GraphParams {
@@ -2746,7 +2750,7 @@ mod tests {
     fn merged_graph_keeps_read_only_directories_as_dead_ends() {
         use std::os::unix::fs::PermissionsExt;
 
-        let (_cfg, root, drive) = open_drive();
+        let (_cfg, root, drive) = open_workspace();
         put(root.path(), "locked/hidden.md", b"# Hidden\n");
         std::fs::set_permissions(
             root.path().join("locked"),
@@ -2755,7 +2759,7 @@ mod tests {
         .unwrap();
 
         let params = GraphParams {
-            scope: GraphScope::Drive,
+            scope: GraphScope::Workspace,
             path: String::new(),
             depth: 6,
         };
@@ -2916,7 +2920,7 @@ mod tests {
 
     #[test]
     fn indexed_file_exists_requires_regular_file() {
-        let (_cfg, root, drive) = open_drive();
+        let (_cfg, root, drive) = open_workspace();
         std::fs::create_dir_all(root.path().join("notes")).unwrap();
         std::fs::write(root.path().join("notes/live.md"), "# live\n").unwrap();
         std::fs::create_dir(root.path().join("notes/dir.md")).unwrap();
@@ -2931,7 +2935,7 @@ mod tests {
     fn indexed_file_exists_treats_symlink_as_missing() {
         use std::os::unix::fs::symlink;
 
-        let (_cfg, root, drive) = open_drive();
+        let (_cfg, root, drive) = open_workspace();
         std::fs::write(root.path().join("target.md"), "# target\n").unwrap();
         symlink("target.md", root.path().join("alias.md")).unwrap();
 

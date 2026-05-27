@@ -5,21 +5,21 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
-description = "HTTP + WebSocket surface for chan, wrapping chan-drive in axum routes."
+description = "HTTP + WebSocket surface for chan, wrapping chan-workspace in axum routes."
 
 [lib]
 name = "chan_server"
 
 [features]
 default = ["embeddings"]
-# Forwards to chan-drive's `embeddings` feature so the about-pane's
+# Forwards to chan-workspace's `embeddings` feature so the about-pane's
 # "embeddings on" badge reflects the actual build. Opt out via
 # `--no-default-features` along the rest of the stack.
-embeddings = ["chan-drive/embeddings"]
+embeddings = ["chan-workspace/embeddings"]
 # Bundle the default BGE-small model into the binary via
 # `include_bytes!`. Opt-in (default-off) so a plain `cargo build`
 # produces a ~26 MB binary instead of ~89 MB. With the feature off
-# the chan-drive runtime resolver looks for the model under
+# the chan-workspace runtime resolver looks for the model under
 # `<user-config>/chan/models/<model-name>/`; the CLI / API layer
 # (systacean-7) downloads it on demand. With the feature on
 # `make models` prefetches the tarball into
@@ -37,14 +37,14 @@ embed-model = ["embeddings", "dep:zstd"]
 # OFL.txt into that directory on enable (slice b follow-up).
 # Implies nothing; the bundle is purely additive.
 embed-font = []
-# Pass-throughs for chan-drive's GPU backends. The chan binary's
+# Pass-throughs for chan-workspace's GPU backends. The chan binary's
 # target-conditional dep wiring auto-flips `metal` on macOS; `cuda`
 # stays opt-in on Linux.
-metal = ["chan-drive/metal"]
-cuda = ["chan-drive/cuda"]
+metal = ["chan-workspace/metal"]
+cuda = ["chan-workspace/cuda"]
 
 [dependencies]
-chan-drive = { workspace = true, default-features = false }
+chan-workspace = { workspace = true, default-features = false }
 tar = { workspace = true }
 zstd = { workspace = true, optional = true }
 chan-llm = { workspace = true, features = ["mcp"] }

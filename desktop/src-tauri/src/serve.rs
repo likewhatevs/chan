@@ -1,7 +1,7 @@
 //! Local-drive runtime and drive-window helpers.
 //!
 //! chan-desktop opens local drives through the embedded chan-server
-//! `DriveHost`. Each running drive is tracked in `AppState.serves`
+//! `WorkspaceHost`. Each running drive is tracked in `AppState.serves`
 //! with its route prefix and token-bearing URL. chan-desktop links
 //! `chan-drive` and `chan-server` directly; there is no `chan`
 //! binary at runtime. Registry mutations and feature toggles run
@@ -58,7 +58,7 @@ pub async fn start(app: AppHandle, state: Arc<AppState>, key: String) -> Result<
     let Some(embedded) = state.embedded.get() else {
         return Err("embedded local server is unavailable".to_string());
     };
-    let url = embedded.open_drive(&key).await?;
+    let url = embedded.open_workspace(&key).await?;
     let prefix = url_prefix_from_local_url(&url)?;
     {
         let mut serves = state.serves.lock().unwrap();
@@ -468,7 +468,7 @@ fn ensure_window_capacity(app: &AppHandle, prefix: &str) -> Result<(), String> {
         .count();
     if count >= MAX_WINDOWS_PER_DRIVE {
         return Err(format!(
-            "Drive already has {MAX_WINDOWS_PER_DRIVE} open windows; close one before opening another."
+            "Workspace already has {MAX_WINDOWS_PER_DRIVE} open windows; close one before opening another."
         ));
     }
     Ok(())
@@ -819,9 +819,9 @@ mod tests {
     #[test]
     fn registry_and_feature_commands_run_in_process_not_via_chan_cli() {
         // The in-process registry refactor dropped the `chan`
-        // binary entirely: `add_drive`, `remove_drive`, and the
+        // binary entirely: `add_drive`, `remove_workspace`, and the
         // feature commands route through the embedded host's shared
-        // `Library` / live `Arc<Drive>` rather than spawning chan.
+        // `Library` / live `Arc<Workspace>` rather than spawning chan.
         // Pin the in-process call shape so a future change can't
         // silently reintroduce a subprocess dependency, and assert
         // the deleted subprocess argument shapes are gone.
@@ -831,8 +831,8 @@ mod tests {
             "registry commands must route through the embedded shared Library",
         );
         assert!(
-            MAIN_RS.contains("register_drive") && MAIN_RS.contains("unregister_drive"),
-            "add_drive/remove_drive must use Library register/unregister in-process",
+            MAIN_RS.contains("register_workspace") && MAIN_RS.contains("unregister_workspace"),
+            "add_drive/remove_workspace must use Library register/unregister in-process",
         );
         assert!(
             MAIN_RS.contains("set_semantic_enabled") && MAIN_RS.contains("set_reports_enabled"),
@@ -1150,7 +1150,7 @@ mod tests {
 
     #[test]
     fn drive_capability_covers_loopback_server_urls() {
-        // Drive windows load chan-server through loopback HTTP
+        // Workspace windows load chan-server through loopback HTTP
         // origins. Without a remote URL match, Tauri omits the IPC
         // bridge and drive-window app commands such as reload_window
         // or the zoom chords never reach Rust.

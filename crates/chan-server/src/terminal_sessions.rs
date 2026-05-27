@@ -147,7 +147,7 @@ impl std::fmt::Display for FdPressure {
 #[serde(rename_all = "lowercase")]
 pub enum CloseReason {
     Idle,
-    Drive,
+    Workspace,
     Shutdown,
     Explicit,
     Capped,
@@ -157,7 +157,7 @@ impl CloseReason {
     pub fn as_str(self) -> &'static str {
         match self {
             CloseReason::Idle => "idle",
-            CloseReason::Drive => "drive",
+            CloseReason::Workspace => "drive",
             CloseReason::Shutdown => "shutdown",
             CloseReason::Explicit => "explicit",
             CloseReason::Capped => "capped",
@@ -2662,7 +2662,7 @@ mod tests {
             })
             .unwrap();
         let id = handle.id().to_string();
-        registry.close_all(CloseReason::Drive);
+        registry.close_all(CloseReason::Workspace);
         assert_eq!(registry.len(), 0);
         assert!(registry.attach(&id, None).is_none());
     }

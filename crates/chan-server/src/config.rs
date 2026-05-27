@@ -6,7 +6,7 @@
 //! drive).
 //!
 //! Today: `attachments_dir`, a drive-relative POSIX path; the actual
-//! file I/O routes through `chan_drive::Drive::write_bytes` so the
+//! file I/O routes through `chan_workspace::Workspace::write_bytes` so the
 //! path sandbox + special-file refusal + atomic-write invariants
 //! apply.
 //!
@@ -16,18 +16,18 @@
 
 use std::path::{Path, PathBuf};
 
-use chan_drive::SearchAggression;
+use chan_workspace::SearchAggression;
 use serde::{Deserialize, Serialize};
 
 use crate::Error;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ServerConfig {
-    /// Drive-relative directory where /api/attachments uploads
+    /// Workspace-relative directory where /api/attachments uploads
     /// land. Default `"attachments"` (a sibling of the user's
     /// notes). The frontend renders the configured value;
     /// callers can pass a sub-path (`"media/2026"`) and it'll
-    /// be sandboxed under the drive root via Drive::write_bytes.
+    /// be sandboxed under the drive root via Workspace::write_bytes.
     #[serde(default = "default_attachments_dir")]
     pub attachments_dir: String,
     #[serde(default)]
@@ -177,9 +177,9 @@ impl ServerConfig {
 /// Default server config path: `~/.chan/server.toml` on desktop.
 /// iOS / Android callers pass an explicit path via `load_from` /
 /// `save_to` since their sandbox dir isn't
-/// `chan_drive::paths::config_dir`.
+/// `chan_workspace::paths::config_dir`.
 pub fn default_path() -> PathBuf {
-    chan_drive::paths::config_dir().join("server.toml")
+    chan_workspace::paths::config_dir().join("server.toml")
 }
 
 #[cfg(test)]

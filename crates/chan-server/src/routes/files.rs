@@ -22,7 +22,7 @@ enum ReadFileResult {
         mtime: Option<i64>,
         mtime_ns: Option<i64>,
         writable: bool,
-        path_class: Option<chan_drive::PathClass>,
+        path_class: Option<chan_workspace::PathClass>,
     },
     Binary(Vec<u8>),
 }
@@ -53,7 +53,7 @@ struct TreeEntryView {
     mtime: Option<i64>,
     size: u64,
     #[serde(skip_serializing_if = "Option::is_none")]
-    path_class: Option<chan_drive::PathClass>,
+    path_class: Option<chan_workspace::PathClass>,
     #[serde(skip_serializing_if = "Option::is_none")]
     kind: Option<&'static str>,
 }
@@ -68,11 +68,11 @@ fn project_kind(path: &str, is_dir: bool, is_contact: bool) -> Option<&'static s
     if is_contact {
         return Some("contact");
     }
-    Some(match chan_drive::fs_ops::classify(path) {
-        chan_drive::FileClass::EditableText => "document",
-        chan_drive::FileClass::Text => "text",
-        chan_drive::FileClass::Image | chan_drive::FileClass::Pdf => "media",
-        chan_drive::FileClass::Other => "binary",
+    Some(match chan_workspace::fs_ops::classify(path) {
+        chan_workspace::FileClass::EditableText => "document",
+        chan_workspace::FileClass::Text => "text",
+        chan_workspace::FileClass::Image | chan_workspace::FileClass::Pdf => "media",
+        chan_workspace::FileClass::Other => "binary",
     })
 }
 
@@ -103,9 +103,9 @@ pub async fn api_list_files(
 }
 
 fn list_files_sync(
-    drive: &chan_drive::Drive,
+    drive: &chan_workspace::Workspace,
     query: ListFilesQuery,
-) -> chan_drive::Result<Vec<TreeEntryView>> {
+) -> chan_workspace::Result<Vec<TreeEntryView>> {
     let tree = if let Some(dir) = query.dir.as_deref() {
         list_dir_entries(drive, dir)?
     } else {
@@ -115,7 +115,7 @@ fn list_files_sync(
         // `node_modules/`, ...). Repo roots can otherwise spend startup
         // walking hundreds of thousands of uninteresting files before the
         // user sees anything.
-        chan_drive::fs_ops::list_tree_filtered(drive.root(), drive.walk_filter())?
+        chan_workspace::fs_ops::list_tree_filtered(drive.root(), drive.walk_filter())?
     };
     // Pull the contact-kind set in one shot; a single SQL scan beats N
     // per-path node_kind lookups on big drives.
@@ -138,12 +138,12 @@ fn list_files_sync(
 }
 
 fn list_dir_entries(
-    drive: &chan_drive::Drive,
+    drive: &chan_workspace::Workspace,
     dir: &str,
-) -> chan_drive::Result<Vec<chan_drive::TreeEntry>> {
+) -> chan_workspace::Result<Vec<chan_workspace::TreeEntry>> {
     let rel = normalize_dir_query(dir)?;
-    if chan_drive::drafts::is_unified_drafts_path(&rel) {
-        return Err(chan_drive::ChanError::Io(
+    if chan_workspace::drafts::is_unified_drafts_path(&rel) {
+        return Err(chan_workspace::ChanError::Io(
             "not found: Drafts is hidden from File Browser".to_string(),
         ));
     }
@@ -161,7 +161,7 @@ fn list_dir_entries(
                 continue;
             }
         };
-        out.push(chan_drive::TreeEntry {
+        out.push(chan_workspace::TreeEntry {
             path,
             is_dir: stat.is_dir,
             mtime: stat.mtime,
@@ -171,12 +171,12 @@ fn list_dir_entries(
     Ok(out)
 }
 
-fn normalize_dir_query(dir: &str) -> chan_drive::Result<String> {
+fn normalize_dir_query(dir: &str) -> chan_workspace::Result<String> {
     let trimmed = dir.trim_matches('/');
     if trimmed.is_empty() || trimmed == "." {
         return Ok(String::new());
     }
-    chan_drive::fs_ops::validate_rel(trimmed)?;
+    chan_workspace::fs_ops::validate_rel(trimmed)?;
     Ok(trimmed.to_string())
 }
 
@@ -196,7 +196,7 @@ struct FileResponse {
     #[serde(skip_serializing_if = "Option::is_none")]
     mtime_ns: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    path_class: Option<chan_drive::PathClass>,
+    path_class: Option<chan_workspace::PathClass>,
     /// Filesystem-level writability. False when the path lacks the
     /// user-write bit (e.g. `chmod -w`); the editor uses this to
     /// lock the per-tab read mode regardless of user choice. Sourced
@@ -216,7 +216,7 @@ enum FileStreamEvent<'a> {
         #[serde(skip_serializing_if = "Option::is_none")]
         mtime_ns: Option<String>,
         #[serde(skip_serializing_if = "Option::is_none")]
-        path_class: Option<chan_drive::PathClass>,
+        path_class: Option<chan_workspace::PathClass>,
         writable: bool,
     },
     Chunk {
@@ -231,11 +231,14 @@ enum FileStreamEvent<'a> {
 
 enum FileStreamMessage {
     Data(Bytes),
-    Error(chan_drive::ChanError),
+    Error(chan_workspace::ChanError),
 }
 
-fn path_class_for_wire(drive: &chan_drive::Drive, rel: &str) -> Option<chan_drive::PathClass> {
-    match chan_drive::fs_ops::classify_path(drive.root(), rel) {
+fn path_class_for_wire(
+    drive: &chan_workspace::Workspace,
+    rel: &str,
+) -> Option<chan_workspace::PathClass> {
+    match chan_workspace::fs_ops::classify_path(drive.root(), rel) {
         Ok(class) => Some(class),
         Err(e) => {
             tracing::warn!(%rel, ?e, "path classification failed");
@@ -249,8 +252,8 @@ fn path_class_for_wire(drive: &chan_drive::Drive, rel: &str) -> Option<chan_driv
 /// of failing later) so we don't surface a misleading "locked" lamp on a
 /// path that's actually broken; callers get the real error from
 /// `read_text` instead.
-fn fs_writable(drive: &chan_drive::Drive, rel: &str) -> bool {
-    let abs = match chan_drive::fs_ops::resolve_safe_strict(drive.root(), rel) {
+fn fs_writable(drive: &chan_workspace::Workspace, rel: &str) -> bool {
+    let abs = match chan_workspace::fs_ops::resolve_safe_strict(drive.root(), rel) {
         Ok(p) => p,
         Err(_) => return true,
     };
@@ -260,8 +263,11 @@ fn fs_writable(drive: &chan_drive::Drive, rel: &str) -> bool {
     }
 }
 
-fn read_file_sync(drive: &chan_drive::Drive, path: &str) -> chan_drive::Result<ReadFileResult> {
-    if chan_drive::fs_ops::is_editable_text(path) {
+fn read_file_sync(
+    drive: &chan_workspace::Workspace,
+    path: &str,
+) -> chan_workspace::Result<ReadFileResult> {
+    if chan_workspace::fs_ops::is_editable_text(path) {
         let (content, stat) = drive.read_text_with_stat(path)?;
         let mtime = stat.mtime;
         let mtime_ns = stat.mtime_ns;
@@ -293,18 +299,18 @@ fn ndjson_error_bytes(error: String) -> Bytes {
 }
 
 fn stream_read_file_sync<F>(
-    drive: &chan_drive::Drive,
+    drive: &chan_workspace::Workspace,
     path: &str,
     mut emit: F,
-) -> chan_drive::Result<()>
+) -> chan_workspace::Result<()>
 where
     F: FnMut(Bytes) -> bool,
 {
     let mut encode_error = None;
     let result =
-        drive.read_text_with_stat_chunked(path, chan_drive::TEXT_READ_CHUNK_SIZE, |event| {
+        drive.read_text_with_stat_chunked(path, chan_workspace::TEXT_READ_CHUNK_SIZE, |event| {
             let event = match event {
-                chan_drive::TextReadEvent::Meta(stat) => FileStreamEvent::Meta {
+                chan_workspace::TextReadEvent::Meta(stat) => FileStreamEvent::Meta {
                     path,
                     size: stat.size,
                     mtime: stat.mtime,
@@ -312,16 +318,16 @@ where
                     path_class: path_class_for_wire(drive, path),
                     writable: fs_writable(drive, path),
                 },
-                chan_drive::TextReadEvent::Chunk(content) => FileStreamEvent::Chunk {
+                chan_workspace::TextReadEvent::Chunk(content) => FileStreamEvent::Chunk {
                     content,
                     bytes: content.len(),
                 },
-                chan_drive::TextReadEvent::Done => FileStreamEvent::Done,
+                chan_workspace::TextReadEvent::Done => FileStreamEvent::Done,
             };
             match ndjson_bytes(&event) {
                 Ok(bytes) => emit(bytes),
                 Err(e) => {
-                    encode_error = Some(chan_drive::ChanError::Io(format!(
+                    encode_error = Some(chan_workspace::ChanError::Io(format!(
                         "failed to encode file stream event: {e}"
                     )));
                     false
@@ -342,9 +348,9 @@ enum DownloadPayload {
 }
 
 fn download_path_sync(
-    drive: &chan_drive::Drive,
+    drive: &chan_workspace::Workspace,
     path: &str,
-) -> chan_drive::Result<DownloadPayload> {
+) -> chan_workspace::Result<DownloadPayload> {
     let stat = drive.stat(path)?;
     if stat.is_dir {
         let bytes = archive_directory_sync(drive, path)?;
@@ -394,7 +400,10 @@ fn content_disposition_archive(path: &str) -> String {
     )
 }
 
-fn archive_directory_sync(drive: &chan_drive::Drive, path: &str) -> chan_drive::Result<Vec<u8>> {
+fn archive_directory_sync(
+    drive: &chan_workspace::Workspace,
+    path: &str,
+) -> chan_workspace::Result<Vec<u8>> {
     let root_name = download_filename(path);
     let mut builder = tar::Builder::new(Vec::new());
     append_dir_to_archive(&mut builder, drive, path, &root_name)?;
@@ -404,10 +413,10 @@ fn archive_directory_sync(drive: &chan_drive::Drive, path: &str) -> chan_drive::
 
 fn append_dir_to_archive(
     builder: &mut tar::Builder<Vec<u8>>,
-    drive: &chan_drive::Drive,
+    drive: &chan_workspace::Workspace,
     source_rel: &str,
     archive_rel: &str,
-) -> chan_drive::Result<()> {
+) -> chan_workspace::Result<()> {
     append_archive_dir(builder, archive_rel)?;
     for child in drive.list(source_rel)? {
         let child_source = join_rel(source_rel.trim_matches('/'), &child.name);
@@ -425,7 +434,7 @@ fn append_dir_to_archive(
 fn append_archive_dir(
     builder: &mut tar::Builder<Vec<u8>>,
     archive_rel: &str,
-) -> chan_drive::Result<()> {
+) -> chan_workspace::Result<()> {
     let mut header = tar::Header::new_gnu();
     header.set_entry_type(tar::EntryType::Directory);
     header.set_size(0);
@@ -439,7 +448,7 @@ fn append_archive_file(
     builder: &mut tar::Builder<Vec<u8>>,
     archive_rel: &str,
     bytes: Vec<u8>,
-) -> chan_drive::Result<()> {
+) -> chan_workspace::Result<()> {
     let mut header = tar::Header::new_gnu();
     header.set_size(bytes.len() as u64);
     header.set_mode(0o644);
@@ -541,7 +550,10 @@ pub async fn api_read_file(
     }
 }
 
-async fn stream_read_file_response(drive: Arc<chan_drive::Drive>, path: String) -> Response {
+async fn stream_read_file_response(
+    drive: Arc<chan_workspace::Workspace>,
+    path: String,
+) -> Response {
     let (tx, mut rx) = mpsc::channel::<FileStreamMessage>(8);
     let path_for_read = path.clone();
     tokio::task::spawn_blocking(move || {
@@ -582,9 +594,9 @@ pub struct WriteBody {
     content: String,
     /// CAS token: the mtime the client thinks the file currently
     /// has on disk. When present, the server uses
-    /// Drive::write_text_if_unchanged and rejects with 409 if the
+    /// Workspace::write_text_if_unchanged and rejects with 409 if the
     /// disk-side mtime differs. When absent, the write is
-    /// last-write-wins (Drive::write_text), preserving the
+    /// last-write-wins (Workspace::write_text), preserving the
     /// pre-CAS contract for callers that don't care
     /// (bulk imports, scripts).
     #[serde(default)]
@@ -656,7 +668,7 @@ pub async fn api_write_file(
     let (mtime, mtime_ns) = match result {
         Ok(Ok(mtime)) => mtime,
         Ok(Err(e)) => {
-            if let chan_drive::ChanError::WriteConflict { current_mtime_ns } = e {
+            if let chan_workspace::ChanError::WriteConflict { current_mtime_ns } = e {
                 return (
                     StatusCode::CONFLICT,
                     Json(WriteConflictBody {
@@ -678,12 +690,12 @@ pub async fn api_write_file(
 }
 
 fn write_file_sync(
-    drive: &chan_drive::Drive,
+    drive: &chan_workspace::Workspace,
     path: &str,
     expected_mtime: Option<i64>,
     expected_mtime_ns: Option<i64>,
     content: &str,
-) -> chan_drive::Result<(Option<i64>, Option<i64>)> {
+) -> chan_workspace::Result<(Option<i64>, Option<i64>)> {
     if let Some(ns) = expected_mtime_ns {
         drive.write_text_if_unchanged(path, Some(ns), content)?;
     } else if expected_mtime.is_some() {
@@ -691,7 +703,7 @@ fn write_file_sync(
         let cur_secs = pre.as_ref().and_then(|s| s.mtime);
         let cur_ns = pre.as_ref().and_then(|s| s.mtime_ns);
         if expected_mtime != cur_secs {
-            return Err(chan_drive::ChanError::WriteConflict {
+            return Err(chan_workspace::ChanError::WriteConflict {
                 current_mtime_ns: cur_ns,
             });
         }
@@ -749,9 +761,12 @@ pub async fn api_create_file(
     }
 }
 
-fn create_file_sync(drive: &chan_drive::Drive, body: CreateBody) -> chan_drive::Result<()> {
+fn create_file_sync(
+    drive: &chan_workspace::Workspace,
+    body: CreateBody,
+) -> chan_workspace::Result<()> {
     if create_target_exists(drive, &body.path) {
-        return Err(chan_drive::ChanError::PathAlreadyExists(body.path));
+        return Err(chan_workspace::ChanError::PathAlreadyExists(body.path));
     }
     if body.is_dir {
         drive.create_dir(&body.path)
@@ -760,7 +775,7 @@ fn create_file_sync(drive: &chan_drive::Drive, body: CreateBody) -> chan_drive::
     }
 }
 
-fn create_target_exists(drive: &chan_drive::Drive, path: &str) -> bool {
+fn create_target_exists(drive: &chan_workspace::Workspace, path: &str) -> bool {
     drive.stat(path).is_ok()
 }
 
@@ -840,7 +855,7 @@ pub async fn api_upload_file(
             upload_file_sync(&drive, &dir, &filename, &bytes)
         }?;
         self_writes.note(&upload.path);
-        Ok::<_, chan_drive::ChanError>(upload)
+        Ok::<_, chan_workspace::ChanError>(upload)
     })
     .await;
     match result {
@@ -854,15 +869,17 @@ pub async fn api_upload_file(
 }
 
 fn replace_file_sync(
-    drive: &chan_drive::Drive,
+    drive: &chan_workspace::Workspace,
     path: &str,
     bytes: &[u8],
-) -> chan_drive::Result<UploadFileResponse> {
+) -> chan_workspace::Result<UploadFileResponse> {
     let trimmed = path.trim_matches('/');
-    chan_drive::fs_ops::validate_rel(trimmed)?;
+    chan_workspace::fs_ops::validate_rel(trimmed)?;
     let stat = drive.stat(trimmed)?;
     if stat.is_dir {
-        return Err(chan_drive::ChanError::Io(format!("not a file: {trimmed}")));
+        return Err(chan_workspace::ChanError::Io(format!(
+            "not a file: {trimmed}"
+        )));
     }
     drive.write_bytes(trimmed, bytes)?;
     Ok(UploadFileResponse {
@@ -872,22 +889,24 @@ fn replace_file_sync(
 }
 
 fn upload_file_sync(
-    drive: &chan_drive::Drive,
+    drive: &chan_workspace::Workspace,
     dir: &str,
     original_name: &str,
     bytes: &[u8],
-) -> chan_drive::Result<UploadFileResponse> {
+) -> chan_workspace::Result<UploadFileResponse> {
     let dir = normalize_dir_query(dir)?;
     if !dir.is_empty() {
         let stat = drive.stat(&dir)?;
         if !stat.is_dir {
-            return Err(chan_drive::ChanError::Io(format!("not a directory: {dir}")));
+            return Err(chan_workspace::ChanError::Io(format!(
+                "not a directory: {dir}"
+            )));
         }
     }
     let filename = upload_leaf_filename(original_name)?;
     let rel = join_rel(&dir, &filename);
     if create_target_exists(drive, &rel) {
-        return Err(chan_drive::ChanError::PathAlreadyExists(rel));
+        return Err(chan_workspace::ChanError::PathAlreadyExists(rel));
     }
     drive.write_bytes(&rel, bytes)?;
     Ok(UploadFileResponse {
@@ -896,7 +915,7 @@ fn upload_file_sync(
     })
 }
 
-fn upload_leaf_filename(original_name: &str) -> chan_drive::Result<String> {
+fn upload_leaf_filename(original_name: &str) -> chan_workspace::Result<String> {
     let leaf = original_name
         .trim()
         .rsplit(['/', '\\'])
@@ -904,12 +923,12 @@ fn upload_leaf_filename(original_name: &str) -> chan_drive::Result<String> {
         .unwrap_or("")
         .trim();
     if leaf.is_empty() {
-        return Err(chan_drive::ChanError::PathEmpty);
+        return Err(chan_workspace::ChanError::PathEmpty);
     }
     if leaf == "." || leaf == ".." || leaf.contains('\0') {
-        return Err(chan_drive::ChanError::PathEscape);
+        return Err(chan_workspace::ChanError::PathEscape);
     }
-    chan_drive::fs_ops::validate_rel(leaf)?;
+    chan_workspace::fs_ops::validate_rel(leaf)?;
     Ok(leaf.to_string())
 }
 
@@ -924,9 +943,9 @@ mod file_browser_listing_tests {
     fn list_files_sync_keeps_drafts_out_of_root_dir_query() {
         let cfg = tempfile::TempDir::new().unwrap();
         let root = tempfile::TempDir::new().unwrap();
-        let lib = chan_drive::Library::open_at(cfg.path().join("config.toml")).unwrap();
-        lib.register_drive(root.path()).unwrap();
-        let drive = lib.open_drive(root.path()).unwrap();
+        let lib = chan_workspace::Library::open_at(cfg.path().join("config.toml")).unwrap();
+        lib.register_workspace(root.path()).unwrap();
+        let drive = lib.open_workspace(root.path()).unwrap();
         std::fs::write(root.path().join("note.md"), "hi").unwrap();
         drive
             .write_text("Drafts/untitled-1/draft.md", "# draft\n")
@@ -948,9 +967,9 @@ mod file_browser_listing_tests {
     fn list_dir_entries_rejects_drafts_namespace_for_file_browser() {
         let cfg = tempfile::TempDir::new().unwrap();
         let root = tempfile::TempDir::new().unwrap();
-        let lib = chan_drive::Library::open_at(cfg.path().join("config.toml")).unwrap();
-        lib.register_drive(root.path()).unwrap();
-        let drive = lib.open_drive(root.path()).unwrap();
+        let lib = chan_workspace::Library::open_at(cfg.path().join("config.toml")).unwrap();
+        lib.register_workspace(root.path()).unwrap();
+        let drive = lib.open_workspace(root.path()).unwrap();
         drive
             .write_text("Drafts/untitled-1/draft.md", "# draft\n")
             .unwrap();
@@ -967,9 +986,9 @@ mod file_browser_listing_tests {
     fn create_target_exists_counts_directories_as_collisions() {
         let cfg = tempfile::TempDir::new().unwrap();
         let root = tempfile::TempDir::new().unwrap();
-        let lib = chan_drive::Library::open_at(cfg.path().join("config.toml")).unwrap();
-        lib.register_drive(root.path()).unwrap();
-        let drive = lib.open_drive(root.path()).unwrap();
+        let lib = chan_workspace::Library::open_at(cfg.path().join("config.toml")).unwrap();
+        lib.register_workspace(root.path()).unwrap();
+        let drive = lib.open_workspace(root.path()).unwrap();
         drive.create_dir("notes").unwrap();
 
         assert!(create_target_exists(&drive, "notes"));
@@ -980,9 +999,9 @@ mod file_browser_listing_tests {
     fn upload_file_sync_writes_binary_with_original_leaf_name() {
         let cfg = tempfile::TempDir::new().unwrap();
         let root = tempfile::TempDir::new().unwrap();
-        let lib = chan_drive::Library::open_at(cfg.path().join("config.toml")).unwrap();
-        lib.register_drive(root.path()).unwrap();
-        let drive = lib.open_drive(root.path()).unwrap();
+        let lib = chan_workspace::Library::open_at(cfg.path().join("config.toml")).unwrap();
+        lib.register_workspace(root.path()).unwrap();
+        let drive = lib.open_workspace(root.path()).unwrap();
         drive.create_dir("assets").unwrap();
 
         let uploaded = upload_file_sync(&drive, "assets", "photo 1.PNG", &[1, 2, 3]).unwrap();
@@ -996,14 +1015,14 @@ mod file_browser_listing_tests {
     fn upload_file_sync_rejects_existing_target() {
         let cfg = tempfile::TempDir::new().unwrap();
         let root = tempfile::TempDir::new().unwrap();
-        let lib = chan_drive::Library::open_at(cfg.path().join("config.toml")).unwrap();
-        lib.register_drive(root.path()).unwrap();
-        let drive = lib.open_drive(root.path()).unwrap();
+        let lib = chan_workspace::Library::open_at(cfg.path().join("config.toml")).unwrap();
+        lib.register_workspace(root.path()).unwrap();
+        let drive = lib.open_workspace(root.path()).unwrap();
         drive.write_bytes("same.bin", b"old").unwrap();
 
         let err = upload_file_sync(&drive, "", "same.bin", b"new").unwrap_err();
 
-        assert!(matches!(err, chan_drive::ChanError::PathAlreadyExists(p) if p == "same.bin"));
+        assert!(matches!(err, chan_workspace::ChanError::PathAlreadyExists(p) if p == "same.bin"));
         assert_eq!(drive.read("same.bin").unwrap(), b"old");
     }
 
@@ -1011,9 +1030,9 @@ mod file_browser_listing_tests {
     fn replace_file_sync_overwrites_existing_file() {
         let cfg = tempfile::TempDir::new().unwrap();
         let root = tempfile::TempDir::new().unwrap();
-        let lib = chan_drive::Library::open_at(cfg.path().join("config.toml")).unwrap();
-        lib.register_drive(root.path()).unwrap();
-        let drive = lib.open_drive(root.path()).unwrap();
+        let lib = chan_workspace::Library::open_at(cfg.path().join("config.toml")).unwrap();
+        lib.register_workspace(root.path()).unwrap();
+        let drive = lib.open_workspace(root.path()).unwrap();
         drive.write_text("same.md", "old").unwrap();
 
         let uploaded = replace_file_sync(&drive, "same.md", b"new").unwrap();
@@ -1027,9 +1046,9 @@ mod file_browser_listing_tests {
     fn replace_file_sync_rejects_non_utf8_for_text_file() {
         let cfg = tempfile::TempDir::new().unwrap();
         let root = tempfile::TempDir::new().unwrap();
-        let lib = chan_drive::Library::open_at(cfg.path().join("config.toml")).unwrap();
-        lib.register_drive(root.path()).unwrap();
-        let drive = lib.open_drive(root.path()).unwrap();
+        let lib = chan_workspace::Library::open_at(cfg.path().join("config.toml")).unwrap();
+        lib.register_workspace(root.path()).unwrap();
+        let drive = lib.open_workspace(root.path()).unwrap();
         drive.write_text("same.md", "old").unwrap();
 
         let err = replace_file_sync(&drive, "same.md", &[0xff, 0xfe]).unwrap_err();
@@ -1044,9 +1063,9 @@ mod file_browser_listing_tests {
     fn replace_file_sync_rejects_directory_target() {
         let cfg = tempfile::TempDir::new().unwrap();
         let root = tempfile::TempDir::new().unwrap();
-        let lib = chan_drive::Library::open_at(cfg.path().join("config.toml")).unwrap();
-        lib.register_drive(root.path()).unwrap();
-        let drive = lib.open_drive(root.path()).unwrap();
+        let lib = chan_workspace::Library::open_at(cfg.path().join("config.toml")).unwrap();
+        lib.register_workspace(root.path()).unwrap();
+        let drive = lib.open_workspace(root.path()).unwrap();
         drive.create_dir("notes").unwrap();
 
         let err = replace_file_sync(&drive, "notes", b"new").unwrap_err();
@@ -1062,11 +1081,11 @@ mod file_browser_listing_tests {
         );
         assert!(matches!(
             upload_leaf_filename(""),
-            Err(chan_drive::ChanError::PathEmpty)
+            Err(chan_workspace::ChanError::PathEmpty)
         ));
         assert!(matches!(
             upload_leaf_filename(".."),
-            Err(chan_drive::ChanError::PathEscape)
+            Err(chan_workspace::ChanError::PathEscape)
         ));
     }
 }
@@ -1079,9 +1098,9 @@ mod write_tests {
     fn read_file_sync_returns_editable_text_metadata() {
         let cfg = tempfile::TempDir::new().unwrap();
         let root = tempfile::TempDir::new().unwrap();
-        let lib = chan_drive::Library::open_at(cfg.path().join("config.toml")).unwrap();
-        lib.register_drive(root.path()).unwrap();
-        let drive = lib.open_drive(root.path()).unwrap();
+        let lib = chan_workspace::Library::open_at(cfg.path().join("config.toml")).unwrap();
+        lib.register_workspace(root.path()).unwrap();
+        let drive = lib.open_workspace(root.path()).unwrap();
         drive.write_text("note.md", "hello").unwrap();
 
         let result = read_file_sync(&drive, "note.md").unwrap();
@@ -1100,7 +1119,7 @@ mod write_tests {
                 assert!(writable);
                 assert_eq!(
                     path_class.map(|class| class.kind),
-                    Some(chan_drive::PathKind::RegularFile)
+                    Some(chan_workspace::PathKind::RegularFile)
                 );
             }
             ReadFileResult::Binary(_) => panic!("expected editable text result"),
@@ -1111,9 +1130,9 @@ mod write_tests {
     fn read_file_sync_returns_binary_bytes() {
         let cfg = tempfile::TempDir::new().unwrap();
         let root = tempfile::TempDir::new().unwrap();
-        let lib = chan_drive::Library::open_at(cfg.path().join("config.toml")).unwrap();
-        lib.register_drive(root.path()).unwrap();
-        let drive = lib.open_drive(root.path()).unwrap();
+        let lib = chan_workspace::Library::open_at(cfg.path().join("config.toml")).unwrap();
+        lib.register_workspace(root.path()).unwrap();
+        let drive = lib.open_workspace(root.path()).unwrap();
         std::fs::write(root.path().join("image.bin"), [0, 1, 2, 3]).unwrap();
 
         let result = read_file_sync(&drive, "image.bin").unwrap();
@@ -1128,9 +1147,9 @@ mod write_tests {
     fn stream_read_file_sync_emits_meta_chunks_done_in_order() {
         let cfg = tempfile::TempDir::new().unwrap();
         let root = tempfile::TempDir::new().unwrap();
-        let lib = chan_drive::Library::open_at(cfg.path().join("config.toml")).unwrap();
-        lib.register_drive(root.path()).unwrap();
-        let drive = lib.open_drive(root.path()).unwrap();
+        let lib = chan_workspace::Library::open_at(cfg.path().join("config.toml")).unwrap();
+        lib.register_workspace(root.path()).unwrap();
+        let drive = lib.open_workspace(root.path()).unwrap();
         drive.write_text("note.md", "hello").unwrap();
         let mut lines = Vec::new();
 
@@ -1156,9 +1175,9 @@ mod write_tests {
     fn stream_read_file_sync_stops_when_emit_returns_false() {
         let cfg = tempfile::TempDir::new().unwrap();
         let root = tempfile::TempDir::new().unwrap();
-        let lib = chan_drive::Library::open_at(cfg.path().join("config.toml")).unwrap();
-        lib.register_drive(root.path()).unwrap();
-        let drive = lib.open_drive(root.path()).unwrap();
+        let lib = chan_workspace::Library::open_at(cfg.path().join("config.toml")).unwrap();
+        lib.register_workspace(root.path()).unwrap();
+        let drive = lib.open_workspace(root.path()).unwrap();
         drive.write_text("note.md", "hello").unwrap();
         let mut lines = 0usize;
 
@@ -1183,9 +1202,9 @@ mod write_tests {
     fn download_path_sync_returns_editable_text_bytes() {
         let cfg = tempfile::TempDir::new().unwrap();
         let root = tempfile::TempDir::new().unwrap();
-        let lib = chan_drive::Library::open_at(cfg.path().join("config.toml")).unwrap();
-        lib.register_drive(root.path()).unwrap();
-        let drive = lib.open_drive(root.path()).unwrap();
+        let lib = chan_workspace::Library::open_at(cfg.path().join("config.toml")).unwrap();
+        lib.register_workspace(root.path()).unwrap();
+        let drive = lib.open_workspace(root.path()).unwrap();
         drive.write_text("notes/readme.md", "hello\n").unwrap();
 
         let payload = download_path_sync(&drive, "notes/readme.md").unwrap();
@@ -1203,9 +1222,9 @@ mod write_tests {
 
         let cfg = tempfile::TempDir::new().unwrap();
         let root = tempfile::TempDir::new().unwrap();
-        let lib = chan_drive::Library::open_at(cfg.path().join("config.toml")).unwrap();
-        lib.register_drive(root.path()).unwrap();
-        let drive = lib.open_drive(root.path()).unwrap();
+        let lib = chan_workspace::Library::open_at(cfg.path().join("config.toml")).unwrap();
+        lib.register_workspace(root.path()).unwrap();
+        let drive = lib.open_workspace(root.path()).unwrap();
         drive.create_dir("notes").unwrap();
         drive.create_dir("notes/deep").unwrap();
         drive.write_text("notes/readme.md", "hello\n").unwrap();
@@ -1292,9 +1311,9 @@ mod write_tests {
     fn create_file_sync_rejects_existing_directory_collision() {
         let cfg = tempfile::TempDir::new().unwrap();
         let root = tempfile::TempDir::new().unwrap();
-        let lib = chan_drive::Library::open_at(cfg.path().join("config.toml")).unwrap();
-        lib.register_drive(root.path()).unwrap();
-        let drive = lib.open_drive(root.path()).unwrap();
+        let lib = chan_workspace::Library::open_at(cfg.path().join("config.toml")).unwrap();
+        lib.register_workspace(root.path()).unwrap();
+        let drive = lib.open_workspace(root.path()).unwrap();
         drive.create_dir("notes").unwrap();
 
         let err = create_file_sync(
@@ -1307,23 +1326,26 @@ mod write_tests {
         )
         .unwrap_err();
 
-        assert!(matches!(err, chan_drive::ChanError::PathAlreadyExists(_)));
+        assert!(matches!(
+            err,
+            chan_workspace::ChanError::PathAlreadyExists(_)
+        ));
     }
 
     #[test]
     fn write_file_sync_reports_seconds_conflict() {
         let cfg = tempfile::TempDir::new().unwrap();
         let root = tempfile::TempDir::new().unwrap();
-        let lib = chan_drive::Library::open_at(cfg.path().join("config.toml")).unwrap();
-        lib.register_drive(root.path()).unwrap();
-        let drive = lib.open_drive(root.path()).unwrap();
+        let lib = chan_workspace::Library::open_at(cfg.path().join("config.toml")).unwrap();
+        lib.register_workspace(root.path()).unwrap();
+        let drive = lib.open_workspace(root.path()).unwrap();
         drive.write_text("note.md", "v1").unwrap();
 
         let err = write_file_sync(&drive, "note.md", Some(0), None, "v2").unwrap_err();
 
         assert!(matches!(
             err,
-            chan_drive::ChanError::WriteConflict {
+            chan_workspace::ChanError::WriteConflict {
                 current_mtime_ns: Some(_)
             }
         ));
@@ -1334,16 +1356,16 @@ mod write_tests {
     fn write_file_sync_reports_nanosecond_conflict() {
         let cfg = tempfile::TempDir::new().unwrap();
         let root = tempfile::TempDir::new().unwrap();
-        let lib = chan_drive::Library::open_at(cfg.path().join("config.toml")).unwrap();
-        lib.register_drive(root.path()).unwrap();
-        let drive = lib.open_drive(root.path()).unwrap();
+        let lib = chan_workspace::Library::open_at(cfg.path().join("config.toml")).unwrap();
+        lib.register_workspace(root.path()).unwrap();
+        let drive = lib.open_workspace(root.path()).unwrap();
         drive.write_text("note.md", "v1").unwrap();
 
         let err = write_file_sync(&drive, "note.md", None, Some(0), "v2").unwrap_err();
 
         assert!(matches!(
             err,
-            chan_drive::ChanError::WriteConflict {
+            chan_workspace::ChanError::WriteConflict {
                 current_mtime_ns: Some(_)
             }
         ));
@@ -1354,9 +1376,9 @@ mod write_tests {
     fn write_file_sync_returns_new_mtime() {
         let cfg = tempfile::TempDir::new().unwrap();
         let root = tempfile::TempDir::new().unwrap();
-        let lib = chan_drive::Library::open_at(cfg.path().join("config.toml")).unwrap();
-        lib.register_drive(root.path()).unwrap();
-        let drive = lib.open_drive(root.path()).unwrap();
+        let lib = chan_workspace::Library::open_at(cfg.path().join("config.toml")).unwrap();
+        lib.register_workspace(root.path()).unwrap();
+        let drive = lib.open_workspace(root.path()).unwrap();
 
         let (mtime, mtime_ns) = write_file_sync(&drive, "note.md", None, None, "v1").unwrap();
 
@@ -1369,9 +1391,9 @@ mod write_tests {
     fn write_file_sync_accepts_matching_nanosecond_token() {
         let cfg = tempfile::TempDir::new().unwrap();
         let root = tempfile::TempDir::new().unwrap();
-        let lib = chan_drive::Library::open_at(cfg.path().join("config.toml")).unwrap();
-        lib.register_drive(root.path()).unwrap();
-        let drive = lib.open_drive(root.path()).unwrap();
+        let lib = chan_workspace::Library::open_at(cfg.path().join("config.toml")).unwrap();
+        lib.register_workspace(root.path()).unwrap();
+        let drive = lib.open_workspace(root.path()).unwrap();
         drive.write_text("note.md", "v1").unwrap();
         let ns = drive.stat("note.md").unwrap().mtime_ns.unwrap();
 
@@ -1395,10 +1417,10 @@ pub async fn api_delete_file(
     State(state): State<Arc<AppState>>,
     AxumPath(path): AxumPath<String>,
 ) -> Response {
-    // chan-drive's Drive::remove handles files and EMPTY directories.
+    // chan-drive's Workspace::remove handles files and EMPTY directories.
     // Recursive deletion of a non-empty directory is a deliberate
     // foot-gun guard; supporting it here would require either a new
-    // chan-drive API (`Drive::remove_recursive`) or a server-side walk
+    // chan-drive API (`Workspace::remove_recursive`) or a server-side walk
     // that issues per-leaf removes. Tracked for a follow-up; current
     // behavior is "error out, frontend resolves the leaves itself".
     let drive = match state.try_drive() {
@@ -1569,7 +1591,7 @@ pub async fn api_fs_transfer(
                 to: dest,
             });
         }
-        Ok::<_, chan_drive::ChanError>((resp, self_writes))
+        Ok::<_, chan_workspace::ChanError>((resp, self_writes))
     })
     .await;
 
@@ -1599,9 +1621,9 @@ mod tests {
             content: "hello".to_string(),
             mtime: Some(1),
             mtime_ns: Some("1000000000".to_string()),
-            path_class: Some(chan_drive::PathClass {
-                kind: chan_drive::PathKind::RegularFile,
-                permission: chan_drive::PathPermission::ReadWrite,
+            path_class: Some(chan_workspace::PathClass {
+                kind: chan_workspace::PathKind::RegularFile,
+                permission: chan_workspace::PathPermission::ReadWrite,
                 link_count: 2,
                 target: None,
                 target_escapes_drive: false,
@@ -1622,9 +1644,9 @@ mod tests {
             is_dir: false,
             mtime: None,
             size: 0,
-            path_class: Some(chan_drive::PathClass {
-                kind: chan_drive::PathKind::Symlink,
-                permission: chan_drive::PathPermission::ReadWrite,
+            path_class: Some(chan_workspace::PathClass {
+                kind: chan_workspace::PathKind::Symlink,
+                permission: chan_workspace::PathPermission::ReadWrite,
                 link_count: 1,
                 target: Some(std::path::PathBuf::from("/etc/hosts")),
                 target_escapes_drive: true,
@@ -1676,15 +1698,15 @@ mod tests {
 
         let cfg = tempfile::TempDir::new().unwrap();
         let root = tempfile::TempDir::new().unwrap();
-        let lib = chan_drive::Library::open_at(cfg.path().join("config.toml")).unwrap();
-        lib.register_drive(root.path()).unwrap();
-        let drive = lib.open_drive(root.path()).unwrap();
+        let lib = chan_workspace::Library::open_at(cfg.path().join("config.toml")).unwrap();
+        lib.register_workspace(root.path()).unwrap();
+        let drive = lib.open_workspace(root.path()).unwrap();
         std::fs::write(root.path().join("note.md"), "hi").unwrap();
         symlink("note.md", root.path().join("alias.md")).unwrap();
 
         let entries = list_dir_entries(&drive, "").unwrap();
         assert!(entries.iter().any(|entry| entry.path == "alias.md"));
         let class = path_class_for_wire(&drive, "alias.md").expect("symlink path class");
-        assert_eq!(class.kind, chan_drive::PathKind::Symlink);
+        assert_eq!(class.kind, chan_workspace::PathKind::Symlink);
     }
 }

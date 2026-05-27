@@ -7,7 +7,7 @@ use axum::extract::{Query, State};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use axum::Json;
-use chan_drive::{FileClass, PathClass, ReportFileStats, ReportLanguageStats, ReportTotals};
+use chan_workspace::{FileClass, PathClass, ReportFileStats, ReportLanguageStats, ReportTotals};
 use serde::{Deserialize, Serialize};
 
 use crate::error::err_from;
@@ -22,7 +22,7 @@ pub struct InspectorParams {
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum InspectorKind {
-    Drive,
+    Workspace,
     Directory,
     Markdown,
     Text,
@@ -85,17 +85,17 @@ pub async fn api_inspector(
 }
 
 pub fn build_inspector_payload(
-    drive: &chan_drive::Drive,
+    drive: &chan_workspace::Workspace,
     requested_path: &str,
-) -> chan_drive::Result<InspectorPayload> {
+) -> chan_workspace::Result<InspectorPayload> {
     let path = normalize_path(requested_path)?;
-    let path_class = chan_drive::classify_path(drive.root(), &path)?;
+    let path_class = chan_workspace::classify_path(drive.root(), &path)?;
     let stat = if path.is_empty() {
         None
     } else {
         Some(drive.stat(&path)?)
     };
-    let is_dir = matches!(path_class.kind, chan_drive::PathKind::Directory);
+    let is_dir = matches!(path_class.kind, chan_workspace::PathKind::Directory);
     let kind = inspector_kind(&path, &path_class);
     let frontmatter_kind = frontmatter_kind(drive, &path, &kind)?;
     let report_file = if matches!(kind, InspectorKind::Markdown | InspectorKind::Text) {
@@ -136,53 +136,53 @@ pub fn build_inspector_payload(
     })
 }
 
-fn normalize_path(requested: &str) -> chan_drive::Result<String> {
+fn normalize_path(requested: &str) -> chan_workspace::Result<String> {
     let trimmed = requested.trim_matches('/');
     if trimmed.is_empty() || trimmed == "." {
         return Ok(String::new());
     }
-    chan_drive::fs_ops::validate_rel(trimmed)?;
+    chan_workspace::fs_ops::validate_rel(trimmed)?;
     Ok(trimmed.to_string())
 }
 
 fn inspector_kind(path: &str, class: &PathClass) -> InspectorKind {
     match class.kind {
-        chan_drive::PathKind::Directory if path.is_empty() => InspectorKind::Drive,
-        chan_drive::PathKind::Directory => InspectorKind::Directory,
-        chan_drive::PathKind::RegularFile => match chan_drive::fs_ops::classify(path) {
-            FileClass::EditableText if chan_drive::fs_ops::is_markdown_file(path) => {
+        chan_workspace::PathKind::Directory if path.is_empty() => InspectorKind::Workspace,
+        chan_workspace::PathKind::Directory => InspectorKind::Directory,
+        chan_workspace::PathKind::RegularFile => match chan_workspace::fs_ops::classify(path) {
+            FileClass::EditableText if chan_workspace::fs_ops::is_markdown_file(path) => {
                 InspectorKind::Markdown
             }
             FileClass::EditableText | FileClass::Text => InspectorKind::Text,
             FileClass::Image | FileClass::Pdf => InspectorKind::Media,
             FileClass::Other => InspectorKind::Binary,
         },
-        chan_drive::PathKind::Symlink
-        | chan_drive::PathKind::Fifo
-        | chan_drive::PathKind::Socket
-        | chan_drive::PathKind::BlockDevice
-        | chan_drive::PathKind::CharDevice
-        | chan_drive::PathKind::Other => InspectorKind::Special,
+        chan_workspace::PathKind::Symlink
+        | chan_workspace::PathKind::Fifo
+        | chan_workspace::PathKind::Socket
+        | chan_workspace::PathKind::BlockDevice
+        | chan_workspace::PathKind::CharDevice
+        | chan_workspace::PathKind::Other => InspectorKind::Special,
     }
 }
 
 fn frontmatter_kind(
-    drive: &chan_drive::Drive,
+    drive: &chan_workspace::Workspace,
     path: &str,
     kind: &InspectorKind,
-) -> chan_drive::Result<Option<String>> {
+) -> chan_workspace::Result<Option<String>> {
     if !matches!(kind, InspectorKind::Markdown) {
         return Ok(None);
     }
     let text = drive.read_text(path)?;
-    let fm = chan_drive::markdown::parse_frontmatter(&text);
-    Ok(chan_drive::markdown::chan_kind(&fm.data).map(|spec| spec.name.to_string()))
+    let fm = chan_workspace::markdown::parse_frontmatter(&text);
+    Ok(chan_workspace::markdown::chan_kind(&fm.data).map(|spec| spec.name.to_string()))
 }
 
 fn inspector_scope_data(
-    drive: &chan_drive::Drive,
+    drive: &chan_workspace::Workspace,
     path: &str,
-) -> chan_drive::Result<InspectorScopeData> {
+) -> chan_workspace::Result<InspectorScopeData> {
     let entries = if path.is_empty() {
         drive.list_tree()?
     } else {
@@ -203,7 +203,7 @@ fn inspector_scope_data(
             continue;
         }
 
-        let abs = chan_drive::fs_ops::resolve_safe(drive.root(), &entry.path)?;
+        let abs = chan_workspace::fs_ops::resolve_safe(drive.root(), &entry.path)?;
         let meta = std::fs::symlink_metadata(&abs).ok();
         if meta
             .as_ref()
@@ -243,7 +243,7 @@ fn file_kind_label(path: &str, is_contact: bool) -> &'static str {
     if is_contact {
         return "contact";
     }
-    match chan_drive::fs_ops::classify(path) {
+    match chan_workspace::fs_ops::classify(path) {
         FileClass::EditableText => "document",
         FileClass::Text => "text",
         FileClass::Image | FileClass::Pdf => "media",
@@ -264,18 +264,18 @@ mod tests {
         std::fs::write(path, body).unwrap();
     }
 
-    fn open_drive() -> (TempDir, TempDir, std::sync::Arc<chan_drive::Drive>) {
+    fn open_workspace() -> (TempDir, TempDir, std::sync::Arc<chan_workspace::Workspace>) {
         let cfg = TempDir::new().unwrap();
         let drive_root = TempDir::new().unwrap();
-        let lib = chan_drive::Library::open_at(cfg.path().join("config.toml")).unwrap();
-        lib.register_drive(drive_root.path()).unwrap();
-        let drive = lib.open_drive(drive_root.path()).unwrap();
+        let lib = chan_workspace::Library::open_at(cfg.path().join("config.toml")).unwrap();
+        lib.register_workspace(drive_root.path()).unwrap();
+        let drive = lib.open_workspace(drive_root.path()).unwrap();
         (cfg, drive_root, drive)
     }
 
     #[test]
     fn inspector_payload_covers_drive_directory_text_and_binary() {
-        let (_cfg, root, drive) = open_drive();
+        let (_cfg, root, drive) = open_workspace();
         put(root.path(), "src/lib.rs", b"fn main() {}\n");
         put(root.path(), "notes/today.md", b"# today\n\nbody\n");
         put(
@@ -287,7 +287,7 @@ mod tests {
         put(root.path(), "blob.bin", &[0, 1, 2, 3]);
 
         let drive_payload = build_inspector_payload(&drive, "").unwrap();
-        assert_eq!(drive_payload.kind, InspectorKind::Drive);
+        assert_eq!(drive_payload.kind, InspectorKind::Workspace);
         let subtree = drive_payload.subtree.expect("drive subtree");
         assert_eq!(subtree.files, 4);
         assert_eq!(subtree.directories, 3);
@@ -341,7 +341,7 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn inspector_scope_dedupes_hardlinked_files() {
-        let (_cfg, root, drive) = open_drive();
+        let (_cfg, root, drive) = open_workspace();
         let body = b"# same inode\n\nbody\n";
         put(root.path(), "hard/a.md", body);
         std::fs::hard_link(root.path().join("hard/a.md"), root.path().join("hard/b.md")).unwrap();
@@ -361,7 +361,7 @@ mod tests {
     fn inspector_payload_surfaces_read_only_directory_class() {
         use std::os::unix::fs::PermissionsExt;
 
-        let (_cfg, root, drive) = open_drive();
+        let (_cfg, root, drive) = open_workspace();
         std::fs::create_dir(root.path().join("locked")).unwrap();
         std::fs::set_permissions(
             root.path().join("locked"),
@@ -373,15 +373,15 @@ mod tests {
         assert_eq!(payload.kind, InspectorKind::Directory);
         assert_eq!(
             payload.path_class.permission,
-            chan_drive::PathPermission::ReadOnly
+            chan_workspace::PathPermission::ReadOnly
         );
     }
 
     #[test]
     fn inspector_rejects_path_escape() {
-        let (_cfg, _root, drive) = open_drive();
+        let (_cfg, _root, drive) = open_workspace();
         let err = build_inspector_payload(&drive, "../etc").unwrap_err();
-        assert!(matches!(err, chan_drive::ChanError::PathEscape));
+        assert!(matches!(err, chan_workspace::ChanError::PathEscape));
     }
 
     #[test]
@@ -394,8 +394,8 @@ mod tests {
 
     #[test]
     fn inspector_missing_path_is_not_found() {
-        let (_cfg, _root, drive) = open_drive();
+        let (_cfg, _root, drive) = open_workspace();
         let err = build_inspector_payload(&drive, "missing.md").unwrap_err();
-        assert!(matches!(err, chan_drive::ChanError::Io(_)));
+        assert!(matches!(err, chan_workspace::ChanError::Io(_)));
     }
 }

@@ -4,7 +4,7 @@
 //!
 //! * `GET /state` - `{ enabled, timeout_secs, theme, pin_set }`. The
 //!   PIN hash itself never appears on the wire - `pin_set` is a
-//!   `bool` derived from whether `Drive::screensaver_pin_hash()`
+//!   `bool` derived from whether `Workspace::screensaver_pin_hash()`
 //!   returns `Some(_)`.
 //! * `PATCH /state` body `{ enabled?, timeout_secs?, theme? }` - partial
 //!   update.
@@ -36,7 +36,7 @@ const MAX_TIMEOUT_SECS: u32 = 3600;
 pub struct ScreensaverState {
     pub enabled: bool,
     pub timeout_secs: u32,
-    pub theme: chan_drive::ScreensaverTheme,
+    pub theme: chan_workspace::ScreensaverTheme,
     pub pin_set: bool,
 }
 
@@ -47,7 +47,7 @@ pub struct PatchPayload {
     #[serde(default)]
     pub timeout_secs: Option<u32>,
     #[serde(default)]
-    pub theme: Option<chan_drive::ScreensaverTheme>,
+    pub theme: Option<chan_workspace::ScreensaverTheme>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -68,16 +68,18 @@ pub async fn api_screensaver_state(State(state): State<Arc<AppState>>) -> Respon
     screensaver_state_response(drive).await
 }
 
-async fn screensaver_state_response(drive: Arc<chan_drive::Drive>) -> Response {
+async fn screensaver_state_response(drive: Arc<chan_workspace::Workspace>) -> Response {
     let result = tokio::task::spawn_blocking(move || screensaver_state_sync(&drive)).await;
     match result {
         Ok(Ok(state)) => Json(state).into_response(),
         Ok(Err(e)) => err_from(&e),
-        Err(join) => err_from(&chan_drive::ChanError::Io(join.to_string())),
+        Err(join) => err_from(&chan_workspace::ChanError::Io(join.to_string())),
     }
 }
 
-fn screensaver_state_sync(drive: &chan_drive::Drive) -> chan_drive::Result<ScreensaverState> {
+fn screensaver_state_sync(
+    drive: &chan_workspace::Workspace,
+) -> chan_workspace::Result<ScreensaverState> {
     Ok(ScreensaverState {
         enabled: drive.screensaver_enabled()?,
         timeout_secs: drive.screensaver_timeout_secs()?,
@@ -103,8 +105,8 @@ pub async fn api_screensaver_patch(
         }
     }
     let drive = state.drive().clone();
-    let result =
-        tokio::task::spawn_blocking(move || -> Result<ScreensaverState, chan_drive::ChanError> {
+    let result = tokio::task::spawn_blocking(
+        move || -> Result<ScreensaverState, chan_workspace::ChanError> {
             if let Some(enabled) = payload.enabled {
                 drive.set_screensaver_enabled(enabled)?;
             }
@@ -115,12 +117,13 @@ pub async fn api_screensaver_patch(
                 drive.set_screensaver_theme(theme)?;
             }
             screensaver_state_sync(&drive)
-        })
-        .await;
+        },
+    )
+    .await;
     match result {
         Ok(Ok(state)) => Json(state).into_response(),
         Ok(Err(e)) => err_from(&e),
-        Err(join) => err_from(&chan_drive::ChanError::Io(join.to_string())),
+        Err(join) => err_from(&chan_workspace::ChanError::Io(join.to_string())),
     }
 }
 
@@ -146,7 +149,7 @@ pub async fn api_screensaver_set_pin(
     match result {
         Ok(Ok(state)) => Json(state).into_response(),
         Ok(Err(e)) => err_from(&e),
-        Err(join) => err_from(&chan_drive::ChanError::Io(join.to_string())),
+        Err(join) => err_from(&chan_workspace::ChanError::Io(join.to_string())),
     }
 }
 
@@ -161,7 +164,7 @@ pub async fn api_screensaver_clear_pin(State(state): State<Arc<AppState>>) -> Re
     match result {
         Ok(Ok(state)) => Json(state).into_response(),
         Ok(Err(e)) => err_from(&e),
-        Err(join) => err_from(&chan_drive::ChanError::Io(join.to_string())),
+        Err(join) => err_from(&chan_workspace::ChanError::Io(join.to_string())),
     }
 }
 
@@ -192,13 +195,13 @@ pub async fn api_screensaver_verify(
             Some(stored_bytes) => constant_time_eq(&candidate, &stored_bytes),
             None => false,
         };
-        Ok::<_, chan_drive::ChanError>(verified)
+        Ok::<_, chan_workspace::ChanError>(verified)
     })
     .await;
     match result {
         Ok(Ok(verified)) => Json(VerifyResult { verified }).into_response(),
         Ok(Err(e)) => err_from(&e),
-        Err(join) => err_from(&chan_drive::ChanError::Io(join.to_string())),
+        Err(join) => err_from(&chan_workspace::ChanError::Io(join.to_string())),
     }
 }
 
@@ -224,13 +227,13 @@ mod tests {
 
     use axum::body::Body;
     use axum::http::{header, Request, StatusCode};
-    use chan_drive::SearchAggression;
+    use chan_workspace::SearchAggression;
     use tempfile::TempDir;
     use tokio::sync::{broadcast, watch};
     use tower::ServiceExt;
 
     use crate::self_writes::SelfWrites;
-    use crate::state::DriveCell;
+    use crate::state::WorkspaceCell;
     use crate::terminal_sessions::{Registry as TerminalRegistry, RegistryConfig};
     use crate::{EditorPrefs, ServerConfig};
 
@@ -243,18 +246,18 @@ mod tests {
     fn route_test_app() -> RouteTestApp {
         let cfg = TempDir::new().unwrap();
         let root = TempDir::new().unwrap();
-        let lib = chan_drive::Library::open_at(cfg.path().join("config.toml")).unwrap();
-        lib.register_drive(root.path()).unwrap();
-        let drive = lib.open_drive(root.path()).unwrap();
+        let lib = chan_workspace::Library::open_at(cfg.path().join("config.toml")).unwrap();
+        lib.register_workspace(root.path()).unwrap();
+        let drive = lib.open_workspace(root.path()).unwrap();
 
         let (events_tx, _) = broadcast::channel::<String>(1);
-        let (index_events_tx, _) = broadcast::channel::<chan_drive::WatchEvent>(1);
+        let (index_events_tx, _) = broadcast::channel::<chan_workspace::WatchEvent>(1);
         let indexer = Arc::new(crate::indexer::Indexer::spawn(
             drive.clone(),
             index_events_tx.subscribe(),
             false,
             SearchAggression::Conservative,
-            Arc::new(chan_drive::NoProgress),
+            Arc::new(chan_workspace::NoProgress),
         ));
         let (shutdown_tx, shutdown_rx) = watch::channel(false);
         std::mem::forget(shutdown_tx);
@@ -262,7 +265,7 @@ mod tests {
         let state = Arc::new(AppState {
             library: lib,
             drive_root: root.path().to_path_buf(),
-            drive_cell: Arc::new(RwLock::new(Some(DriveCell {
+            drive_cell: Arc::new(RwLock::new(Some(WorkspaceCell {
                 drive,
                 watch_handle: None,
                 indexer,

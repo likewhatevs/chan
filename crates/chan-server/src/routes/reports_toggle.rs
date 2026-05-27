@@ -40,11 +40,11 @@ pub async fn api_reports_state(State(state): State<Arc<AppState>>) -> Response {
     match result {
         Ok(Ok(enabled)) => Json(ReportsState { enabled }).into_response(),
         Ok(Err(e)) => err_from(&e),
-        Err(join) => err_from(&chan_drive::ChanError::Io(join.to_string())),
+        Err(join) => err_from(&chan_workspace::ChanError::Io(join.to_string())),
     }
 }
 
-async fn reports_state_after_set(drive: Arc<chan_drive::Drive>, enabled: bool) -> Response {
+async fn reports_state_after_set(drive: Arc<chan_workspace::Workspace>, enabled: bool) -> Response {
     let result = tokio::task::spawn_blocking(move || {
         drive.set_reports_enabled(enabled)?;
         drive.reports_enabled()
@@ -53,12 +53,12 @@ async fn reports_state_after_set(drive: Arc<chan_drive::Drive>, enabled: bool) -
     match result {
         Ok(Ok(enabled)) => Json(ReportsState { enabled }).into_response(),
         Ok(Err(e)) => err_from(&e),
-        Err(join) => err_from(&chan_drive::ChanError::Io(join.to_string())),
+        Err(join) => err_from(&chan_workspace::ChanError::Io(join.to_string())),
     }
 }
 
 /// `POST /api/index/reports/enable`. Flip the per-drive reports
-/// toggle to true. Drive::set_reports_enabled triggers the
+/// toggle to true. Workspace::set_reports_enabled triggers the
 /// incremental indexing pass internally (per `-27`'s contract).
 pub async fn api_reports_enable(State(state): State<Arc<AppState>>) -> Response {
     set_reports(state, true).await
@@ -86,13 +86,13 @@ mod tests {
 
     use axum::body::Body;
     use axum::http::{header, Request, StatusCode};
-    use chan_drive::SearchAggression;
+    use chan_workspace::SearchAggression;
     use tempfile::TempDir;
     use tokio::sync::{broadcast, watch};
     use tower::ServiceExt;
 
     use crate::self_writes::SelfWrites;
-    use crate::state::DriveCell;
+    use crate::state::WorkspaceCell;
     use crate::terminal_sessions::{Registry as TerminalRegistry, RegistryConfig};
     use crate::{EditorPrefs, ServerConfig};
 
@@ -105,18 +105,18 @@ mod tests {
     fn route_test_app() -> RouteTestApp {
         let cfg = TempDir::new().unwrap();
         let root = TempDir::new().unwrap();
-        let lib = chan_drive::Library::open_at(cfg.path().join("config.toml")).unwrap();
-        lib.register_drive(root.path()).unwrap();
-        let drive = lib.open_drive(root.path()).unwrap();
+        let lib = chan_workspace::Library::open_at(cfg.path().join("config.toml")).unwrap();
+        lib.register_workspace(root.path()).unwrap();
+        let drive = lib.open_workspace(root.path()).unwrap();
 
         let (events_tx, _) = broadcast::channel::<String>(1);
-        let (index_events_tx, _) = broadcast::channel::<chan_drive::WatchEvent>(1);
+        let (index_events_tx, _) = broadcast::channel::<chan_workspace::WatchEvent>(1);
         let indexer = Arc::new(crate::indexer::Indexer::spawn(
             drive.clone(),
             index_events_tx.subscribe(),
             false,
             SearchAggression::Conservative,
-            Arc::new(chan_drive::NoProgress),
+            Arc::new(chan_workspace::NoProgress),
         ));
         let (shutdown_tx, shutdown_rx) = watch::channel(false);
         std::mem::forget(shutdown_tx);
@@ -124,7 +124,7 @@ mod tests {
         let state = Arc::new(AppState {
             library: lib,
             drive_root: root.path().to_path_buf(),
-            drive_cell: Arc::new(RwLock::new(Some(DriveCell {
+            drive_cell: Arc::new(RwLock::new(Some(WorkspaceCell {
                 drive,
                 watch_handle: None,
                 indexer,

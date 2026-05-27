@@ -1,7 +1,7 @@
 //! Read-only mirror of the chan drive registry.
 //!
 //! chan persists its registry of known drives at `~/.chan/config.toml`
-//! (see `chan_drive::registry`). chan-desktop treats that file as the
+//! (see `chan_workspace::registry`). chan-desktop treats that file as the
 //! source of truth for which drives exist on this machine. We only
 //! parse the subset we need; mutation goes through the `chan` binary.
 
@@ -10,7 +10,7 @@ use std::path::PathBuf;
 use serde::Deserialize;
 
 /// One entry in the chan registry. Mirrors the on-disk shape of
-/// `chan_drive::registry::KnownDrive`. We deliberately keep this
+/// `chan_workspace::registry::KnownWorkspace`. We deliberately keep this
 /// minimal: the desktop only needs the path for local drives.
 #[derive(Debug, Clone, Deserialize)]
 pub struct RegistryEntry {
@@ -24,7 +24,7 @@ struct RegistryFile {
 }
 
 /// Absolute path to the chan registry file. `~/.chan/config.toml` on
-/// every desktop target; see `chan_drive::paths::config_dir`.
+/// every desktop target; see `chan_workspace::paths::config_dir`.
 pub fn path() -> PathBuf {
     dirs::home_dir()
         .map(|p| p.join(".chan").join("config.toml"))

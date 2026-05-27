@@ -3,12 +3,12 @@
 //! External MCP agents want to launch the chan MCP server as a
 //! subprocess so writes round-trip through chan-drive's gates. The
 //! original wiring spawned `chan __mcp <drive_root>`, which then
-//! called `Library::open_drive` a second time. chan-drive holds a
+//! called `Library::open_workspace` a second time. chan-drive holds a
 //! per-drive flock for single-writer ownership, so the child failed
-//! with `DriveLocked`.
+//! with `WorkspaceLocked`.
 //!
 //! The bridge resolves that conflict: chan-server already owns an
-//! `Arc<Drive>` for the drive it serves, so the MCP service is run
+//! `Arc<Workspace>` for the drive it serves, so the MCP service is run
 //! in-process. Each external agent connects through `chan __mcp-proxy`
 //! to a Unix-domain socket the bridge listens on; the proxy just
 //! pipes stdin/stdout through the socket. No second drive open, no
@@ -84,7 +84,7 @@ impl Drop for BridgeHandle {
 #[cfg(unix)]
 pub fn start<DF>(socket_path: PathBuf, drive_for: DF) -> std::io::Result<BridgeHandle>
 where
-    DF: Fn() -> Option<Arc<chan_drive::Drive>> + Send + Sync + 'static,
+    DF: Fn() -> Option<Arc<chan_workspace::Workspace>> + Send + Sync + 'static,
 {
     // Stale socket from a previous run that didn't get to clean up
     // (kill -9, panic in Drop): unlink so bind doesn't EADDRINUSE.
@@ -127,7 +127,7 @@ where
 #[cfg(not(unix))]
 pub fn start<DF>(_socket_path: PathBuf, _drive_for: DF) -> std::io::Result<BridgeHandle>
 where
-    DF: Fn() -> Option<Arc<chan_drive::Drive>> + Send + Sync + 'static,
+    DF: Fn() -> Option<Arc<chan_workspace::Workspace>> + Send + Sync + 'static,
 {
     Err(std::io::Error::new(
         std::io::ErrorKind::Unsupported,

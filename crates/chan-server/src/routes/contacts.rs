@@ -13,7 +13,7 @@
 //! picker inserts is what re-resolves to the same Contact node on
 //! the next graph pass, so the round-trip stays consistent.
 //!
-//! Wraps `Drive::import_contacts`. The frontend wizard (and the
+//! Wraps `Workspace::import_contacts`. The frontend wizard (and the
 //! `chan contacts import csv` CLI for parity) sends:
 //!
 //!   file       multipart   the CSV bytes
@@ -48,7 +48,7 @@ use axum::response::{IntoResponse, Response};
 use axum::Json;
 use serde::Deserialize;
 
-use chan_drive::contacts::{
+use chan_workspace::contacts::{
     google::parse_google_csv, ImportOpts, ImportOutcome, ImportSummary, ProviderKind,
 };
 

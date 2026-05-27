@@ -13,7 +13,7 @@ use crate::error::err;
 use crate::state::AppState;
 
 #[derive(Serialize)]
-struct DriveInfo {
+struct WorkspaceInfo {
     /// Absolute drive root, POSIX-style on every platform so the
     /// JSON shape stays stable. Empty string on `--tunnel-public`
     /// runs: the absolute path of the owner's drive would otherwise
@@ -32,11 +32,11 @@ struct DriveInfo {
     /// and ServerConfig.
     preferences: PreferencesView,
     /// Non-fatal drive boot warnings. Empty on healthy drives.
-    warnings: Vec<DriveWarning>,
+    warnings: Vec<WorkspaceWarning>,
 }
 
 #[derive(Serialize)]
-struct DriveWarning {
+struct WorkspaceWarning {
     kind: &'static str,
     path: String,
     message: String,
@@ -115,7 +115,7 @@ pub async fn api_cloud_drives(State(state): State<Arc<AppState>>) -> Response {
         return Json(Vec::<CloudDriveJson>::new()).into_response();
     }
     match tokio::task::spawn_blocking(move || {
-        let out: Vec<CloudDriveJson> = chan_drive::paths::detected_cloud_drives()
+        let out: Vec<CloudDriveJson> = chan_workspace::paths::detected_cloud_drives()
             .into_iter()
             .map(|c| CloudDriveJson {
                 provider: c.provider,
@@ -136,15 +136,15 @@ pub async fn api_cloud_drives(State(state): State<Arc<AppState>>) -> Response {
     }
 }
 
-/// Build a `DriveInfo` from current registry state.
+/// Build a `WorkspaceInfo` from current registry state.
 ///
 /// `root` is blanked on `--tunnel-public` runs so the owner's
 /// absolute filesystem path does not leak to anonymous visitors.
 /// The SPA tolerates an empty `root`: it only uses the field for
-/// the Settings panel's "Drive root" line, which is unreachable
+/// the Settings panel's "Workspace root" line, which is unreachable
 /// in tunnel mode anyway.
-fn drive_info(state: &AppState) -> Result<DriveInfo, String> {
-    let drives = state.library.list_drives();
+fn drive_info(state: &AppState) -> Result<WorkspaceInfo, String> {
+    let drives = state.library.list_workspaces();
     // Snapshot the live drive once: each call to `state.drive()`
     // takes the `drive_cell` RwLock and clones the Arc. Two calls
     // worked fine; one call reads slightly cleaner and survives a
@@ -158,7 +158,7 @@ fn drive_info(state: &AppState) -> Result<DriveInfo, String> {
     } else {
         drive_root.to_string_lossy().into_owned()
     };
-    Ok(DriveInfo {
+    Ok(WorkspaceInfo {
         root,
         label: entry
             .and_then(|e| e.root_path.file_name())
@@ -170,29 +170,29 @@ fn drive_info(state: &AppState) -> Result<DriveInfo, String> {
     })
 }
 
-fn drive_warnings(drive: &chan_drive::Drive) -> Vec<DriveWarning> {
+fn drive_warnings(drive: &chan_workspace::Workspace) -> Vec<WorkspaceWarning> {
     let mut warnings = match drive.draft_preflight() {
         Ok(issues) => issues
             .into_iter()
-            .map(|issue| DriveWarning {
+            .map(|issue| WorkspaceWarning {
                 kind: "broken_draft",
                 path: format!("Drafts/{}", issue.name),
                 message: issue.message,
             })
             .collect(),
-        Err(e) => vec![DriveWarning {
+        Err(e) => vec![WorkspaceWarning {
             kind: "draft_preflight_failed",
             path: "Drafts".to_string(),
             message: e.to_string(),
         }],
     };
     match drive.rich_prompt_preflight() {
-        Ok(issues) => warnings.extend(issues.into_iter().map(|issue| DriveWarning {
+        Ok(issues) => warnings.extend(issues.into_iter().map(|issue| WorkspaceWarning {
             kind: "broken_rich_prompt",
             path: format!("Drafts/{}", issue.name),
             message: issue.message,
         })),
-        Err(e) => warnings.push(DriveWarning {
+        Err(e) => warnings.push(WorkspaceWarning {
             kind: "rich_prompt_preflight_failed",
             path: "Drafts".to_string(),
             message: e.to_string(),
@@ -209,9 +209,9 @@ mod tests {
     fn drive_warnings_report_broken_drafts() {
         let cfg = tempfile::TempDir::new().unwrap();
         let root = tempfile::TempDir::new().unwrap();
-        let lib = chan_drive::Library::open_at(cfg.path().join("config.toml")).unwrap();
-        lib.register_drive(root.path()).unwrap();
-        let drive = lib.open_drive(root.path()).unwrap();
+        let lib = chan_workspace::Library::open_at(cfg.path().join("config.toml")).unwrap();
+        lib.register_workspace(root.path()).unwrap();
+        let drive = lib.open_workspace(root.path()).unwrap();
         let draft = drive.create_draft_dir("untitled-1").unwrap();
         std::fs::write(draft.abs.join("note.md"), "not draft.md").unwrap();
 

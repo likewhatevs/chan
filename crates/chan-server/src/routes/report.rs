@@ -38,7 +38,7 @@ use axum::extract::{Query, State};
 use axum::http::{header, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::Json;
-use chan_drive::{CocomoSummary, ReportFileStats, ReportLanguageStats, ReportTotals};
+use chan_workspace::{CocomoSummary, ReportFileStats, ReportLanguageStats, ReportTotals};
 use futures::{stream, StreamExt};
 use serde::{Deserialize, Serialize};
 use tokio::sync::mpsc;
@@ -79,7 +79,7 @@ enum ReportFileStreamEvent<'a> {
 
 enum ReportFileStreamMessage {
     Data(Bytes),
-    Error(chan_drive::ChanError),
+    Error(chan_workspace::ChanError),
 }
 
 async fn blocking_response(
@@ -121,21 +121,21 @@ fn ndjson_error_bytes(error: String) -> Bytes {
 fn emit_report_file_event<F>(
     emit: &mut F,
     event: ReportFileStreamEvent<'_>,
-) -> chan_drive::Result<bool>
+) -> chan_workspace::Result<bool>
 where
     F: FnMut(Bytes) -> bool,
 {
     let bytes = ndjson_bytes(&event).map_err(|e| {
-        chan_drive::ChanError::Io(format!("failed to encode report stream event: {e}"))
+        chan_workspace::ChanError::Io(format!("failed to encode report stream event: {e}"))
     })?;
     Ok(emit(bytes))
 }
 
 fn stream_report_file_sync<F>(
-    drive: &chan_drive::Drive,
+    drive: &chan_workspace::Workspace,
     path: &str,
     mut emit: F,
-) -> chan_drive::Result<()>
+) -> chan_workspace::Result<()>
 where
     F: FnMut(Bytes) -> bool,
 {
@@ -193,7 +193,10 @@ pub async fn api_report_file(
     .await
 }
 
-async fn stream_report_file_response(drive: Arc<chan_drive::Drive>, path: String) -> Response {
+async fn stream_report_file_response(
+    drive: Arc<chan_workspace::Workspace>,
+    path: String,
+) -> Response {
     let (tx, mut rx) = mpsc::channel::<ReportFileStreamMessage>(8);
     tokio::task::spawn_blocking(move || {
         let result = stream_report_file_sync(&drive, &path, |bytes| {
@@ -293,16 +296,16 @@ pub async fn api_report_dir(
 mod tests {
     use super::*;
 
-    fn open_drive() -> (
+    fn open_workspace() -> (
         tempfile::TempDir,
         tempfile::TempDir,
-        std::sync::Arc<chan_drive::Drive>,
+        std::sync::Arc<chan_workspace::Workspace>,
     ) {
         let cfg = tempfile::TempDir::new().unwrap();
         let root = tempfile::TempDir::new().unwrap();
-        let lib = chan_drive::Library::open_at(cfg.path().join("config.toml")).unwrap();
-        lib.register_drive(root.path()).unwrap();
-        let drive = lib.open_drive(root.path()).unwrap();
+        let lib = chan_workspace::Library::open_at(cfg.path().join("config.toml")).unwrap();
+        lib.register_workspace(root.path()).unwrap();
+        let drive = lib.open_workspace(root.path()).unwrap();
         (cfg, root, drive)
     }
 
@@ -322,7 +325,7 @@ mod tests {
 
     #[test]
     fn report_file_stream_emits_meta_report_done() {
-        let (_cfg, _root, drive) = open_drive();
+        let (_cfg, _root, drive) = open_workspace();
         drive.write_text("CHANGELOG.md", "# Changes\n").unwrap();
 
         let mut lines = Vec::new();

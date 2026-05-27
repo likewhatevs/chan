@@ -1,7 +1,7 @@
 //! Server-wide state shared across handlers.
 //!
 //! `AppState` is the immutable boot bundle every route reaches into.
-//! `DriveCell` wraps the live `Arc<Drive>` plus its watcher and indexer
+//! `WorkspaceCell` wraps the live `Arc<Workspace>` plus its watcher and indexer
 //! so `/api/storage/reset` can swap them wholesale without restarting
 //! the process.
 
@@ -9,7 +9,7 @@ use std::path::PathBuf;
 use std::sync::atomic::AtomicU64;
 use std::sync::{Arc, Mutex, RwLock};
 
-use chan_drive::{Drive, Library, WatchEvent, WatchHandle};
+use chan_workspace::{Library, WatchEvent, WatchHandle, Workspace};
 use tokio::sync::{broadcast, watch};
 
 use crate::indexer;
@@ -20,16 +20,16 @@ use crate::{EditorPrefs, ServerConfig};
 /// Server state shared across all handlers.
 pub struct AppState {
     pub library: Library,
-    /// Drive root resolved at boot. Stays stable for the server's
+    /// Workspace root resolved at boot. Stays stable for the server's
     /// lifetime even when `drive_cell` is swapped during a reset
     /// (the swap reopens against the same root).
     pub drive_root: PathBuf,
     /// Live drive + its watcher, behind an RwLock so /api/storage/
     /// reset can drop and reopen them without restarting the
     /// process. Always `Some` outside the brief swap window inside
-    /// reset itself; handlers reach the inner Arc<Drive> via
+    /// reset itself; handlers reach the inner Arc<Workspace> via
     /// `state.drive()` which clones it under a read lock.
-    pub drive_cell: Arc<RwLock<Option<DriveCell>>>,
+    pub drive_cell: Arc<RwLock<Option<WorkspaceCell>>>,
     pub token: Option<String>,
     /// Canonical URL prefix the SPA prepends to fetch and WebSocket
     /// URLs, injected into the shell as `<meta name="chan-prefix">`.
@@ -73,7 +73,7 @@ pub struct AppState {
     /// One channel; the `type` field tells the frontend what to do.
     pub events_tx: broadcast::Sender<String>,
     /// Raw watcher events feeding the background indexer. Lives at
-    /// AppState scope (not just inside DriveCell) so the bridge
+    /// AppState scope (not just inside WorkspaceCell) so the bridge
     /// constructor at /api/storage/reset time can reuse the same
     /// channel without resubscribing the indexer to a fresh one.
     pub index_events_tx: broadcast::Sender<WatchEvent>,
@@ -120,27 +120,27 @@ pub struct AppState {
     pub scope_registry: Arc<crate::bus::ScopeRegistry>,
 }
 
-/// Drive + its notify watcher. Replaced wholesale by /api/storage/
-/// reset: drop the cell, run chan-drive's reset_drive, reopen, store
+/// Workspace + its notify watcher. Replaced wholesale by /api/storage/
+/// reset: drop the cell, run chan-drive's reset_workspace, reopen, store
 /// a fresh cell. The watch_handle is `Option` only because reset
-/// must take it out before dropping the inner Drive (the watcher
+/// must take it out before dropping the inner Workspace (the watcher
 /// holds a callback that references the same broadcast channel; we
 /// keep it tidy by dropping the handle first).
-pub struct DriveCell {
-    pub drive: Arc<Drive>,
+pub struct WorkspaceCell {
+    pub drive: Arc<Workspace>,
     pub watch_handle: Option<WatchHandle>,
     /// Background indexer for the live drive. Replaced wholesale
     /// on /api/storage/reset (the new drive needs a fresh indexer
-    /// pinned to its `Arc<Drive>`). Drop = abort = workers stop.
+    /// pinned to its `Arc<Workspace>`). Drop = abort = workers stop.
     pub indexer: Arc<indexer::Indexer>,
 }
 
 #[derive(Debug, thiserror::Error)]
 pub enum StateAccessError {
     #[error("drive cell lock poisoned")]
-    DriveCellPoisoned,
+    WorkspaceCellPoisoned,
     #[error("drive cell missing outside reset window")]
-    DriveCellMissing,
+    WorkspaceCellMissing,
 }
 
 impl AppState {
@@ -150,13 +150,13 @@ impl AppState {
     /// the cell out a moment later, so callers don't need to hold
     /// the lock through their I/O.
     ///
-    pub fn try_drive(&self) -> Result<Arc<Drive>, StateAccessError> {
+    pub fn try_drive(&self) -> Result<Arc<Workspace>, StateAccessError> {
         let cell = self
             .drive_cell
             .read()
-            .map_err(|_| StateAccessError::DriveCellPoisoned)?;
+            .map_err(|_| StateAccessError::WorkspaceCellPoisoned)?;
         let Some(cell) = cell.as_ref() else {
-            return Err(StateAccessError::DriveCellMissing);
+            return Err(StateAccessError::WorkspaceCellMissing);
         };
         Ok(cell.drive.clone())
     }
@@ -164,7 +164,7 @@ impl AppState {
     /// Legacy infallible accessor for call sites that have not yet
     /// been converted to explicit HTTP errors. New route code should
     /// prefer `try_drive`.
-    pub fn drive(&self) -> Arc<Drive> {
+    pub fn drive(&self) -> Arc<Workspace> {
         self.try_drive().expect("drive state unavailable")
     }
 
@@ -174,9 +174,9 @@ impl AppState {
         let cell = self
             .drive_cell
             .read()
-            .map_err(|_| StateAccessError::DriveCellPoisoned)?;
+            .map_err(|_| StateAccessError::WorkspaceCellPoisoned)?;
         let Some(cell) = cell.as_ref() else {
-            return Err(StateAccessError::DriveCellMissing);
+            return Err(StateAccessError::WorkspaceCellMissing);
         };
         Ok(cell.indexer.clone())
     }
@@ -192,14 +192,14 @@ pub(crate) mod test_support {
     //! (the test isn't supposed to touch the drive).
     //!
     //! The `Library` is opened against a tempfile so that
-    //! `list_drives` returns an empty Vec and registry writes don't
+    //! `list_workspaces` returns an empty Vec and registry writes don't
     //! pollute the developer's `~/.chan/config.toml`.
 
     use std::path::PathBuf;
     use std::sync::atomic::AtomicU64;
     use std::sync::{Arc, Mutex, RwLock};
 
-    use chan_drive::Library;
+    use chan_workspace::Library;
     use tokio::sync::{broadcast, watch};
 
     use super::AppState;
@@ -214,7 +214,7 @@ pub(crate) mod test_support {
     /// (by design).
     pub fn make_test_state(settings_disabled: bool, tunnel_public: bool) -> Arc<AppState> {
         // The TempDir's path is what Library::open_at uses for any
-        // later registry writes (register_drive, set_default_drive_root,
+        // later registry writes (register_workspace, set_default_drive_root,
         // ...). Letting it drop here would delete the directory and
         // make those writes fail with ENOENT, which is a subtle
         // footgun for any future test that uses make_test_state and
@@ -226,7 +226,7 @@ pub(crate) mod test_support {
         let lib = Library::open_at(tmp.path().join("config.toml")).expect("open library");
         std::mem::forget(tmp);
         let (events_tx, _) = broadcast::channel::<String>(1);
-        let (index_events_tx, _) = broadcast::channel::<chan_drive::WatchEvent>(1);
+        let (index_events_tx, _) = broadcast::channel::<chan_workspace::WatchEvent>(1);
         // A never-tripped shutdown channel: tests don't run the
         // signal watcher, so the receiver stays parked on the
         // initial `false` value for the lifetime of the AppState.
@@ -265,7 +265,7 @@ pub(crate) mod test_support {
 
         assert!(matches!(
             state.try_drive(),
-            Err(super::StateAccessError::DriveCellMissing)
+            Err(super::StateAccessError::WorkspaceCellMissing)
         ));
     }
 
@@ -281,7 +281,7 @@ pub(crate) mod test_support {
 
         assert!(matches!(
             state.try_indexer(),
-            Err(super::StateAccessError::DriveCellPoisoned)
+            Err(super::StateAccessError::WorkspaceCellPoisoned)
         ));
     }
 }

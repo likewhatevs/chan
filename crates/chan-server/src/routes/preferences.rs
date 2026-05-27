@@ -12,7 +12,7 @@ use axum::extract::State;
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use axum::Json;
-use chan_drive::SearchAggression;
+use chan_workspace::SearchAggression;
 use serde::{Deserialize, Serialize};
 
 use crate::config::{TerminalConfig, TERMINAL_SCROLLBACK_MB_MAX, TERMINAL_SCROLLBACK_MB_MIN};
@@ -93,7 +93,7 @@ pub async fn api_get_server_config(State(state): State<Arc<AppState>>) -> Respon
 
 #[derive(Deserialize)]
 pub struct PatchServerConfigBody {
-    /// Drive-relative POSIX path. Empty string is rejected because the
+    /// Workspace-relative POSIX path. Empty string is rejected because the
     /// path is used as a prefix; an empty prefix would land attachments
     /// in the drive root, surprising the user.
     #[serde(default)]
@@ -149,12 +149,12 @@ struct GlobalConfigView {
     preferences: PreferencesView,
     /// Empty string serializes as None (the resolver falls back to the
     /// platform default).
-    default_drive_root: Option<String>,
-    drives: Vec<KnownDriveView>,
+    default_workspace_root: Option<String>,
+    drives: Vec<KnownWorkspaceView>,
 }
 
 #[derive(Serialize)]
-struct KnownDriveView {
+struct KnownWorkspaceView {
     path: String,
     metadata_key: String,
     /// RFC3339 timestamp.
@@ -168,7 +168,7 @@ pub struct PatchConfigBody {
     #[serde(default)]
     preferences: Option<PreferencesView>,
     #[serde(default)]
-    default_drive_root: Option<Option<String>>,
+    default_workspace_root: Option<Option<String>>,
     /// Read-only on PATCH: drives are managed by path through the
     /// CLI (`chan add` / `remove`). Frontend sends the field for
     /// round-tripping; we just ignore it.
@@ -180,19 +180,19 @@ pub struct PatchConfigBody {
 fn global_config_view(state: &AppState) -> Result<GlobalConfigView, Error> {
     // On `--tunnel-public` runs we strip the whole "host machine"
     // dimension of the response: anonymous visitors must not see
-    // `default_drive_root` or the registry of other drives on the host.
+    // `default_workspace_root` or the registry of other drives on the host.
     if state.tunnel_public {
         return Ok(GlobalConfigView {
             preferences: preferences_view(state)?,
-            default_drive_root: None,
+            default_workspace_root: None,
             drives: Vec::new(),
         });
     }
     let drives = state
         .library
-        .list_drives()
+        .list_workspaces()
         .into_iter()
-        .map(|d| KnownDriveView {
+        .map(|d| KnownWorkspaceView {
             path: d.root_path.to_string_lossy().into_owned(),
             metadata_key: d.metadata_key,
             last_seen_at: d.last_seen_at.to_rfc3339(),
@@ -200,9 +200,9 @@ fn global_config_view(state: &AppState) -> Result<GlobalConfigView, Error> {
         .collect();
     Ok(GlobalConfigView {
         preferences: preferences_view(state)?,
-        default_drive_root: state
+        default_workspace_root: state
             .library
-            .default_drive_root()
+            .default_workspace_root()
             .map(|p| p.to_string_lossy().into_owned()),
         drives,
     })
@@ -238,7 +238,7 @@ fn patch_config(state: &AppState, body: PatchConfigBody) -> Result<GlobalConfigV
     if let Some(prefs) = body.preferences {
         apply_preferences(state, prefs)?;
     }
-    if let Some(opt) = body.default_drive_root {
+    if let Some(opt) = body.default_workspace_root {
         let trimmed = opt.as_ref().map(|s| s.trim().to_string());
         let value = match trimmed {
             Some(s) if s.is_empty() => None,
@@ -333,7 +333,7 @@ mod tests {
         let state = make_test_state(true, true);
         let view = global_config_view(&state).expect("global config view");
         let json = to_json(&view);
-        assert_eq!(json["default_drive_root"], serde_json::Value::Null);
+        assert_eq!(json["default_workspace_root"], serde_json::Value::Null);
         assert_eq!(json["drives"], serde_json::json!([]));
     }
 

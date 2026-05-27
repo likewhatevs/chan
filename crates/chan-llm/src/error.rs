@@ -46,32 +46,34 @@ impl From<std::io::Error> for LlmError {
     }
 }
 
-impl From<chan_drive::ChanError> for LlmError {
-    fn from(e: chan_drive::ChanError) -> Self {
+impl From<chan_workspace::ChanError> for LlmError {
+    fn from(e: chan_workspace::ChanError) -> Self {
         // Preserve the kind so hosts can branch on the cause.
         // Variants not enumerated here flatten into Core(_) - they
-        // are operational (DriveLocked, DriveAlreadyOpen, etc.) or
+        // are operational (WorkspaceLocked, WorkspaceAlreadyOpen, etc.) or
         // already string-shaped (Search, Graph, Watch).
         match e {
-            chan_drive::ChanError::WriteConflict { current_mtime_ns } => {
+            chan_workspace::ChanError::WriteConflict { current_mtime_ns } => {
                 LlmError::WriteConflict { current_mtime_ns }
             }
-            chan_drive::ChanError::WriteTooLarge { kind, size, limit } => LlmError::WriteTooLarge {
-                kind: kind.to_string(),
-                size,
-                limit,
-            },
-            chan_drive::ChanError::ListingTooLarge { observed, limit } => {
+            chan_workspace::ChanError::WriteTooLarge { kind, size, limit } => {
+                LlmError::WriteTooLarge {
+                    kind: kind.to_string(),
+                    size,
+                    limit,
+                }
+            }
+            chan_workspace::ChanError::ListingTooLarge { observed, limit } => {
                 LlmError::ListingTooLarge {
                     observed: observed as u64,
                     limit: limit as u64,
                 }
             }
-            chan_drive::ChanError::PathEmpty
-            | chan_drive::ChanError::PathEscape
-            | chan_drive::ChanError::NotEditableText(_)
-            | chan_drive::ChanError::SpecialFile { .. }
-            | chan_drive::ChanError::SymlinkEscape(_) => LlmError::PathRefused(e.to_string()),
+            chan_workspace::ChanError::PathEmpty
+            | chan_workspace::ChanError::PathEscape
+            | chan_workspace::ChanError::NotEditableText(_)
+            | chan_workspace::ChanError::SpecialFile { .. }
+            | chan_workspace::ChanError::SymlinkEscape(_) => LlmError::PathRefused(e.to_string()),
             other => LlmError::Core(other.to_string()),
         }
     }

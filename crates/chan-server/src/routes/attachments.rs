@@ -2,7 +2,7 @@
 //!
 //! The frontend sends one part named `file`; we slugify the original
 //! filename, prefix with the unix timestamp (collision resistance),
-//! and write via Drive::write_bytes (so the path sandbox + special-
+//! and write via Workspace::write_bytes (so the path sandbox + special-
 //! file refusal apply). Returns the drive-relative path the file
 //! landed at, matching the frontend's `uploadAttachment` contract.
 //!
@@ -10,7 +10,7 @@
 //! `attachments_dir` so the editor can land an upload in the same
 //! directory as the file being edited (markdown can then reference
 //! it with a `./name` src). An empty `dir` saves at drive root; an
-//! absent `dir` falls back to `attachments_dir`. Drive sandboxing
+//! absent `dir` falls back to `attachments_dir`. Workspace sandboxing
 //! rejects `..` escape attempts so we don't validate manually here.
 
 use std::sync::Arc;
@@ -168,7 +168,7 @@ pub async fn api_post_attachment(
 
         self_writes.note(&rel);
         drive.write_bytes(&rel, &bytes)?;
-        Ok::<_, chan_drive::ChanError>(rel)
+        Ok::<_, chan_workspace::ChanError>(rel)
     })
     .await;
     let rel = match result {

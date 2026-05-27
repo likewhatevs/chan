@@ -17,7 +17,7 @@ struct BuildFeatures {
     /// to BM25-only and the Settings "Search" section reflects that.
     /// chan-server itself doesn't gate on this feature; we forward
     /// chan-drive's compile-time flag as exposed through the
-    /// `chan_drive::has_embeddings` helper.
+    /// `chan_workspace::has_embeddings` helper.
     embeddings: bool,
 }
 

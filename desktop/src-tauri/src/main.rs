@@ -20,7 +20,7 @@ use serde::Serialize;
 use tauri::menu::{Menu, MenuItemBuilder, MenuItemKind, PredefinedMenuItem, WINDOW_SUBMENU_ID};
 use tauri::{Emitter, Manager, RunEvent, State, WebviewUrl, WebviewWindowBuilder, WindowEvent};
 
-use config::{Config, ConfigStore, DriveFeatures, OutboundDrive, WindowConfig};
+use config::{Config, ConfigStore, OutboundDrive, WindowConfig, WorkspaceFeatures};
 use serve::ServeHandle;
 use tunnel::TunnelState;
 
@@ -122,7 +122,7 @@ impl AppState {
 /// is a strict superset of the local row; the renderer reads `kind`
 /// once and chooses which optionals to surface.
 #[derive(Debug, Clone, Serialize)]
-struct Drive {
+struct Workspace {
     kind: &'static str,
     #[serde(skip_serializing_if = "Option::is_none")]
     id: Option<String>,
@@ -142,7 +142,7 @@ struct Drive {
 }
 
 #[tauri::command]
-fn list_drives(state: State<Arc<AppState>>) -> Result<Vec<Drive>, String> {
+fn list_workspaces(state: State<Arc<AppState>>) -> Result<Vec<Workspace>, String> {
     let serves = state.serves.lock().unwrap();
     let entries = registry::read().map_err(err)?;
 
@@ -151,7 +151,7 @@ fn list_drives(state: State<Arc<AppState>>) -> Result<Vec<Drive>, String> {
     // (matching reality: nothing is actually running yet) and
     // there is no chance of a stale on=true sticking around after
     // chan died unexpectedly.
-    let mut merged: Vec<Drive> = entries
+    let mut merged: Vec<Workspace> = entries
         .into_iter()
         .map(|e| {
             let key = canonical_key(&e.root_path);
@@ -159,7 +159,7 @@ fn list_drives(state: State<Arc<AppState>>) -> Result<Vec<Drive>, String> {
             let handle = serves.get(&key);
             let on = handle.is_some();
             let url = handle.and_then(|h| h.url.clone()).unwrap_or_default();
-            Drive {
+            Workspace {
                 kind: "local",
                 id: None,
                 path: display_path,
@@ -180,7 +180,7 @@ fn list_drives(state: State<Arc<AppState>>) -> Result<Vec<Drive>, String> {
     // empty URL means "just registered, the listener will follow
     // on the next 500ms tick".
     for t in state.tunnel.snapshot() {
-        merged.push(Drive {
+        merged.push(Workspace {
             kind: "tunneled",
             id: None,
             path: String::new(),
@@ -199,7 +199,7 @@ fn list_drives(state: State<Arc<AppState>>) -> Result<Vec<Drive>, String> {
         let label = outbound_label(&outbound);
         let id = outbound.id;
         let url = outbound.url;
-        merged.push(Drive {
+        merged.push(Workspace {
             kind: "outbound",
             id: Some(id),
             path: url.clone(),
@@ -233,7 +233,7 @@ async fn add_drive(
     app: tauri::AppHandle,
     state: State<'_, Arc<AppState>>,
     path: String,
-    features: Option<DriveFeatures>,
+    features: Option<WorkspaceFeatures>,
 ) -> Result<(), String> {
     let path = canonical_key(Path::new(&path));
     let features = features.unwrap_or_default();
@@ -249,7 +249,7 @@ async fn add_drive(
     let path_for_block = path.clone();
 
     emit_chan_busy(&app, true, "add", &path);
-    // register_drive + boot run off the async executor: boot can
+    // register_workspace + boot run off the async executor: boot can
     // walk a large drive on first reports activation.
     let result =
         tokio::task::spawn_blocking(move || register_and_boot(&library, &path_for_block, features))
@@ -264,7 +264,7 @@ async fn add_drive(
     // the desktop cache so `get_drive_features` returns the
     // authoritative state immediately, before the user toggles
     // anything in the launcher row.
-    if features != DriveFeatures::default() {
+    if features != WorkspaceFeatures::default() {
         let mut store = state.store.lock().unwrap();
         let mut cfg = store.get().map_err(err)?;
         cfg.drives.entry(path.clone()).or_default().features = features;
@@ -283,27 +283,27 @@ async fn add_drive(
 /// Register `path` with the shared embedded Library and, if any
 /// optional feature was requested, open the drive once to persist
 /// the flags and kick the BOOT scan. Mirrors `chan/src/main.rs`'s
-/// `cmd_add`. The transient `Arc<Drive>` is dropped before this
+/// `cmd_add`. The transient `Arc<Workspace>` is dropped before this
 /// returns so the immediately-following `serve::start` can mount
-/// the drive without tripping `DriveAlreadyOpen` against the
-/// lifetime flock. Blocking: `register_drive` writes the registry
+/// the drive without tripping `WorkspaceAlreadyOpen` against the
+/// lifetime flock. Blocking: `register_workspace` writes the registry
 /// and `boot()` can run a slow initial scan, so callers invoke it
 /// via `spawn_blocking`.
 fn register_and_boot(
-    library: &chan_drive::Library,
+    library: &chan_workspace::Library,
     path: &str,
-    features: DriveFeatures,
+    features: WorkspaceFeatures,
 ) -> Result<(), String> {
     let root = Path::new(path);
     if !root.exists() {
         std::fs::create_dir_all(root).map_err(|e| format!("creating drive root {path}: {e}"))?;
     }
     let entry = library
-        .register_drive(root)
+        .register_workspace(root)
         .map_err(|e| format!("registering drive {path}: {e}"))?;
     if features.bge || features.reports {
         let drive = library
-            .open_drive(&entry.root_path)
+            .open_workspace(&entry.root_path)
             .map_err(|e| format!("opening drive {}: {e}", entry.root_path.display()))?;
         if features.bge {
             drive
@@ -325,14 +325,14 @@ fn register_and_boot(
 }
 
 #[tauri::command]
-async fn remove_drive(
+async fn remove_workspace(
     app: tauri::AppHandle,
     state: State<'_, Arc<AppState>>,
     path: String,
 ) -> Result<(), String> {
     let key = canonical_key(Path::new(&path));
     // Stop the serve first: this removes the runtime synchronously
-    // and drops the host's Arc<Drive>, but background indexer /
+    // and drops the host's Arc<Workspace>, but background indexer /
     // request tasks may briefly keep their own clone, so the
     // unregister below tolerates a short contention window.
     serve::stop(Some(&app), &state, &key);
@@ -362,25 +362,25 @@ async fn remove_drive(
 /// Drop a drive from the shared registry after its serve has been
 /// stopped. `serve::stop` removes the runtime synchronously, but a
 /// background indexer rebuild or an in-flight HTTP/WS handler can
-/// still hold an `Arc<Drive>` for a moment. `unregister_drive`
+/// still hold an `Arc<Workspace>` for a moment. `unregister_workspace`
 /// wipes per-drive state and so needs exclusive access; until the
-/// last handle drops it returns `DriveAlreadyOpen` (this process)
-/// or `DriveLocked` (the flock). `reset_drive` takes the flock
+/// last handle drops it returns `WorkspaceAlreadyOpen` (this process)
+/// or `WorkspaceLocked` (the flock). `reset_workspace` takes the flock
 /// before any registry mutation, so a failed attempt leaves no
 /// half-state and a retry is safe. Any other error surfaces
 /// immediately. Blocking: sleeps between attempts, so callers
 /// invoke it via `spawn_blocking`.
-fn unregister_with_retry(library: &chan_drive::Library, key: &str) -> Result<(), String> {
-    use chan_drive::ChanError;
+fn unregister_with_retry(library: &chan_workspace::Library, key: &str) -> Result<(), String> {
+    use chan_workspace::ChanError;
     const MAX_ATTEMPTS: usize = 20;
     const BACKOFF: std::time::Duration = std::time::Duration::from_millis(150);
     let root = Path::new(key);
     for attempt in 1..=MAX_ATTEMPTS {
-        match library.unregister_drive(root) {
+        match library.unregister_workspace(root) {
             // Ok(false) means it was already absent; both forms are
             // success for a Forget action.
             Ok(_) => return Ok(()),
-            Err(e @ (ChanError::DriveAlreadyOpen | ChanError::DriveLocked)) => {
+            Err(e @ (ChanError::WorkspaceAlreadyOpen | ChanError::WorkspaceLocked)) => {
                 if attempt == MAX_ATTEMPTS {
                     return Err(format!(
                         "drive {key} is still shutting down ({e}); try Forget again in a moment"
@@ -423,8 +423,8 @@ fn get_config(state: State<Arc<AppState>>) -> Result<Config, String> {
 /// round-2-plan specifies.
 ///
 /// Reads chan-drive's authoritative state in-process: if the drive
-/// is mounted, off the live `Arc<Drive>` the host holds; else via a
-/// transient `open_drive` against the shared registry. On any read
+/// is mounted, off the live `Arc<Workspace>` the host holds; else via a
+/// transient `open_workspace` against the shared registry. On any read
 /// failure (drive not registered, drive busy, etc.) the IPC falls
 /// back to the desktop cache so the launcher row's expand panel
 /// still renders. On a successful read the desktop cache updates if
@@ -435,7 +435,7 @@ fn get_config(state: State<Arc<AppState>>) -> Result<Config, String> {
 async fn get_drive_features(
     state: State<'_, Arc<AppState>>,
     path: String,
-) -> Result<DriveFeatures, String> {
+) -> Result<WorkspaceFeatures, String> {
     let key = canonical_key(Path::new(&path));
     if let Some(embedded) = state.embedded.get() {
         let library = embedded.library().clone();
@@ -470,16 +470,16 @@ async fn get_drive_features(
 
 /// Read the authoritative feature flags for `key` from chan-drive.
 /// Prefers the live mounted handle (no re-open, so the lifetime
-/// flock isn't contended); falls back to a transient `open_drive`
+/// flock isn't contended); falls back to a transient `open_workspace`
 /// for a registered-but-stopped drive. Returns `Err` when the drive
 /// isn't registered or a read fails so the caller can fall back to
 /// the desktop cache. Blocking: a transient open initializes the
 /// index, so callers invoke it via `spawn_blocking`.
 fn read_drive_features_blocking(
-    library: &chan_drive::Library,
-    live: Option<Arc<chan_drive::Drive>>,
+    library: &chan_workspace::Library,
+    live: Option<Arc<chan_workspace::Workspace>>,
     key: &str,
-) -> Result<DriveFeatures, String> {
+) -> Result<WorkspaceFeatures, String> {
     let drive = resolve_drive_for_features(library, live, key)?;
     let bge = drive
         .semantic_enabled()
@@ -487,26 +487,26 @@ fn read_drive_features_blocking(
     let reports = drive
         .reports_enabled()
         .map_err(|e| format!("reading reports_enabled: {e}"))?;
-    Ok(DriveFeatures { bge, reports })
+    Ok(WorkspaceFeatures { bge, reports })
 }
 
-/// Resolve the `Arc<Drive>` a feature read/write should act on: the
+/// Resolve the `Arc<Workspace>` a feature read/write should act on: the
 /// live mounted handle when present, otherwise a transient open of
 /// a registered drive. Errors when the drive isn't registered.
 fn resolve_drive_for_features(
-    library: &chan_drive::Library,
-    live: Option<Arc<chan_drive::Drive>>,
+    library: &chan_workspace::Library,
+    live: Option<Arc<chan_workspace::Workspace>>,
     key: &str,
-) -> Result<Arc<chan_drive::Drive>, String> {
+) -> Result<Arc<chan_workspace::Workspace>, String> {
     if let Some(drive) = live {
         return Ok(drive);
     }
     let root = Path::new(key);
-    if library.drive_paths_for(root).is_none() {
+    if library.workspace_paths_for(root).is_none() {
         return Err(format!("drive {key} is not registered"));
     }
     library
-        .open_drive(root)
+        .open_workspace(root)
         .map_err(|e| format!("opening drive {key}: {e}"))
 }
 
@@ -579,11 +579,11 @@ const MAX_PREFLIGHT_SECS: u64 = 5;
 /// the modal communicates the cap to the user via the
 /// `truncated` flag.
 ///
-/// `chan_drive::indexer` uses the same excluded-dirs set. The
+/// `chan_workspace::indexer` uses the same excluded-dirs set. The
 /// extension-classification map is intentionally local to keep the
 /// pre-flight report cheap and independent from opening the drive
 /// through the embedded server.
-fn walk_drive_preflight(root: &Path, filter: &chan_drive::WalkFilter) -> WalkOutcome {
+fn walk_drive_preflight(root: &Path, filter: &chan_workspace::WalkFilter) -> WalkOutcome {
     use std::collections::VecDeque;
     use std::time::Instant;
     let start = Instant::now();
@@ -634,17 +634,19 @@ struct WalkOutcome {
     truncated: bool,
 }
 
-fn preflight_walk_filter() -> chan_drive::WalkFilter {
-    chan_drive::Registry::load()
-        .map(|registry| chan_drive::WalkFilter::new(registry.index_excluded_dirs))
+fn preflight_walk_filter() -> chan_workspace::WalkFilter {
+    chan_workspace::Registry::load()
+        .map(|registry| chan_workspace::WalkFilter::new(registry.index_excluded_dirs))
         .unwrap_or_else(|_| {
-            chan_drive::WalkFilter::new(chan_drive::DEFAULT_INDEX_EXCLUDED_DIRS.iter().copied())
+            chan_workspace::WalkFilter::new(
+                chan_workspace::DEFAULT_INDEX_EXCLUDED_DIRS.iter().copied(),
+            )
         })
 }
 
 /// Mirrors chan-drive's configured excludes so the pre-flight count
 /// and bytes line up with what chan-drive will actually index.
-fn should_skip_preflight_dir(name: &std::ffi::OsStr, filter: &chan_drive::WalkFilter) -> bool {
+fn should_skip_preflight_dir(name: &std::ffi::OsStr, filter: &chan_workspace::WalkFilter) -> bool {
     let Some(name) = name.to_str() else {
         return false;
     };
@@ -713,7 +715,7 @@ async fn compute_drive_preflight(
     let already_registered = state
         .embedded
         .get()
-        .map(|embedded| embedded.library().drive_paths_for(&root).is_some())
+        .map(|embedded| embedded.library().workspace_paths_for(&root).is_some())
         .unwrap_or(false);
     Ok(PreflightReport {
         path: key,
@@ -737,7 +739,7 @@ async fn compute_drive_preflight(
 ///
 /// `-b-28b-i` drove the real chan-drive state via the `chan` CLI;
 /// this routes in-process instead. Each changed flag is applied to
-/// the same `Arc<Drive>` the host holds when the drive is mounted
+/// the same `Arc<Workspace>` the host holds when the drive is mounted
 /// (so the lifetime flock isn't contended), or to a transient
 /// handle for a registered-but-stopped drive. Enabling reports
 /// also runs `boot()` to kick the initial scan, mirroring
@@ -752,7 +754,7 @@ async fn compute_drive_preflight(
 async fn set_drive_features(
     state: State<'_, Arc<AppState>>,
     path: String,
-    features: DriveFeatures,
+    features: WorkspaceFeatures,
 ) -> Result<(), String> {
     let key = canonical_key(Path::new(&path));
     let current = {
@@ -781,18 +783,18 @@ async fn set_drive_features(
     store.save(&cfg).map_err(err)
 }
 
-/// Apply the changed feature flags to the resolved `Arc<Drive>`.
+/// Apply the changed feature flags to the resolved `Arc<Workspace>`.
 /// Only flags that differ from `current` are touched, so a no-op
 /// re-set doesn't reinitialize anything. Enabling reports also
 /// boots the initial scan so the flag flip produces visible data
 /// immediately (mirrors `cmd_reports_set`). Blocking; run via
 /// `spawn_blocking`.
 fn apply_drive_features_blocking(
-    library: &chan_drive::Library,
-    live: Option<Arc<chan_drive::Drive>>,
+    library: &chan_workspace::Library,
+    live: Option<Arc<chan_workspace::Workspace>>,
     key: &str,
-    current: DriveFeatures,
-    desired: DriveFeatures,
+    current: WorkspaceFeatures,
+    desired: WorkspaceFeatures,
 ) -> Result<(), String> {
     if current == desired {
         return Ok(());
@@ -970,7 +972,7 @@ fn tunnel_stop(app: tauri::AppHandle, state: State<Arc<AppState>>) {
 }
 
 #[tauri::command]
-fn default_drive_status() -> Result<default_drive::DefaultDriveStatus, String> {
+fn default_drive_status() -> Result<default_drive::DefaultWorkspaceStatus, String> {
     default_drive::status()
 }
 
@@ -1006,7 +1008,7 @@ async fn factory_reset_default_drive(
 /// host's in-memory `Library` so the immediately-following
 /// `serve::start` opens against an up-to-date registry rather than
 /// the host's stale boot-time snapshot (the same staleness class as
-/// the "drive not registered" bug). `register_drive` is idempotent
+/// the "drive not registered" bug). `register_workspace` is idempotent
 /// (touch + persist), so re-registering the row default_drive just
 /// wrote is safe, and `set_default_drive_root` keeps the in-memory
 /// default aligned with what default_drive persisted.
@@ -1019,7 +1021,7 @@ fn reconcile_default_drive(state: &AppState, root: &Path) -> Result<(), String> 
     };
     let library = embedded.library();
     library
-        .register_drive(root)
+        .register_workspace(root)
         .map_err(|e| format!("reconciling default drive {}: {e}", root.display()))?;
     library
         .set_default_drive_root(Some(root.to_path_buf()))
@@ -1222,7 +1224,7 @@ fn open_local_drive(
 /// genuine mount failure the desktop emits a system notice (same as
 /// the first-launch default-drive path) rather than blocking the CLI.
 #[cfg(unix)]
-fn open_drive_from_handoff(
+fn open_workspace_from_handoff(
     app: tauri::AppHandle,
     state: Arc<AppState>,
     path: PathBuf,
@@ -1256,7 +1258,7 @@ fn open_drive_from_handoff(
             register_and_boot(
                 &library_for_register,
                 &key_for_register,
-                DriveFeatures::default(),
+                WorkspaceFeatures::default(),
             )
         })
         .await;
@@ -1332,7 +1334,7 @@ fn home_dir() -> String {
 /// Linux: default file manager, Windows: Explorer. Used by the
 /// Drives window's path cell so users can jump to the drive folder
 /// from the row. Trusts the caller to pass a path the user just saw
-/// in the list — paths come from `list_drives`, which sources from
+/// in the list — paths come from `list_workspaces`, which sources from
 /// the chan registry; no shell interpolation, args are passed as
 /// argv to the OS open command.
 #[tauri::command]
@@ -1662,7 +1664,7 @@ fn main() {
                 // to it and survive after this returns.
                 let listener = tauri::async_runtime::block_on(async {
                     chan_server::handoff::start_listener(sock, move |path| {
-                        open_drive_from_handoff(
+                        open_workspace_from_handoff(
                             app_for_handoff.clone(),
                             Arc::clone(&state_for_handoff),
                             path,
@@ -1707,9 +1709,9 @@ fn main() {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
-            list_drives,
+            list_workspaces,
             add_drive,
-            remove_drive,
+            remove_workspace,
             set_drive_on,
             get_drive_features,
             set_drive_features,
@@ -2007,12 +2009,13 @@ mod tests {
     }
 
     #[test]
-    fn should_skip_preflight_dir_matches_chan_drive_defaults() {
-        let filter =
-            chan_drive::WalkFilter::new(chan_drive::DEFAULT_INDEX_EXCLUDED_DIRS.iter().copied());
+    fn should_skip_preflight_dir_matches_chan_workspace_defaults() {
+        let filter = chan_workspace::WalkFilter::new(
+            chan_workspace::DEFAULT_INDEX_EXCLUDED_DIRS.iter().copied(),
+        );
         for skip in [".chan"]
             .into_iter()
-            .chain(chan_drive::DEFAULT_INDEX_EXCLUDED_DIRS.iter().copied())
+            .chain(chan_workspace::DEFAULT_INDEX_EXCLUDED_DIRS.iter().copied())
         {
             assert!(
                 should_skip_preflight_dir(std::ffi::OsStr::new(skip), &filter),
@@ -2023,7 +2026,7 @@ mod tests {
             std::ffi::OsStr::new("NODE_MODULES"),
             &filter
         ));
-        let empty = chan_drive::WalkFilter::default();
+        let empty = chan_workspace::WalkFilter::default();
         assert!(should_skip_preflight_dir(
             std::ffi::OsStr::new(".git"),
             &empty
@@ -2066,8 +2069,9 @@ mod tests {
         fs::create_dir_all(root.join("notes")).unwrap();
         fs::write(root.join("notes/deep.md"), b"deep").unwrap();
 
-        let filter =
-            chan_drive::WalkFilter::new(chan_drive::DEFAULT_INDEX_EXCLUDED_DIRS.iter().copied());
+        let filter = chan_workspace::WalkFilter::new(
+            chan_workspace::DEFAULT_INDEX_EXCLUDED_DIRS.iter().copied(),
+        );
         let out = walk_drive_preflight(root, &filter);
         assert_eq!(out.file_count, 3, "must skip node_modules + .git");
         assert_eq!(out.markdown_count, 2);
