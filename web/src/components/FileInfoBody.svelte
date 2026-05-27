@@ -28,8 +28,11 @@
     ReportPrefix,
     TreeEntry,
   } from "../api/types";
-  import { isEditableText, isImage, isPdf } from "../state/fileTypes";
+  import { isEditableText, isImage, isMarkdown, isPdf } from "../state/fileTypes";
   import { basename, formatMtime, formatSize } from "../state/format";
+  import { printMarkdownDocument } from "../editor/print";
+  import { pageWidth } from "../state/pageWidth.svelte";
+  import { notify } from "../state/notify.svelte";
   import {
     ensureGraphLoaded,
     graphData,
@@ -374,6 +377,27 @@
     uploadInput?.click();
   }
 
+  /// A3-iii: Export to PDF moved here from the editor's right-click menu.
+  /// Shown for markdown files. The selected file is not necessarily open
+  /// in an editor, so fetch its content from disk (the editor autosaves,
+  /// so disk == the live document) and route through the same print
+  /// helper. No editor element to source theme CSS from; the print frame
+  /// falls back to its embedded styles.
+  async function doExportPdf(): Promise<void> {
+    if (!entry || entry.is_dir) return;
+    try {
+      const file = await api.read(entry.path);
+      await printMarkdownDocument({
+        title: entry.path,
+        path: entry.path,
+        markdown: file.content,
+        pageWidthRatio: pageWidth.ratio,
+      });
+    } catch (err) {
+      notify(`export failed: ${(err as Error).message}`);
+    }
+  }
+
   async function onUploadPicked(e: Event): Promise<void> {
     const input = e.currentTarget as HTMLInputElement;
     const files = input.files;
@@ -609,6 +633,7 @@
     {@const image = !isDir && isImage(entry.path)}
     {@const pdf = !isDir && isPdf(entry.path)}
     {@const editable = !isDir && isEditableText(entry.path)}
+    {@const markdown = !isDir && isMarkdown(entry.path)}
     <div class="actions-section">
       {#if entry.path}
         <button
@@ -658,6 +683,11 @@
             title={downloadTitle}>Download</button
           >
         </div>
+        {#if markdown}
+          <button class="open" type="button" onclick={doExportPdf}
+            >Export to PDF</button
+          >
+        {/if}
         {#if onReveal}
           <button class="open" type="button" onclick={onReveal}>
             {isDir ? "Show Directory" : "Show File"}
