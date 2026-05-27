@@ -900,25 +900,45 @@ mod tests {
     use super::*;
     use chan_drive::{Library, SearchMode, SearchOpts};
     use std::fs;
-    use std::sync::OnceLock;
     use tempfile::TempDir;
 
-    /// Process-wide async lock serializing the real-FS boot-walk tests.
-    /// Each spins a fresh `Indexer` whose boot walk is a
-    /// `spawn_blocking` re-index + a Tantivy commit + a reader refresh,
-    /// then polls BM25 for the result. Under the FULL parallel
-    /// `cargo test` run (CI) every core is saturated by the rest of the
-    /// suite, so the boot walk's turn on the CPU and the commit/refresh
-    /// cycle slip past a tight poll deadline and the tests flake. Holding
-    /// this lock makes only ONE boot-walk test run at a time so it gets
-    /// the CPU it needs, while the rest of the suite still runs in
-    /// parallel around it. A `tokio::sync::Mutex` (not `std`) is used
-    /// because the guard is held across `.await` points; it is
-    /// `Send`-safe on the multi-thread runtime and not poisoned by a
-    /// panicking test, so one failure does not cascade.
-    fn boot_walk_test_lock() -> &'static tokio::sync::Mutex<()> {
-        static LOCK: OnceLock<tokio::sync::Mutex<()>> = OnceLock::new();
-        LOCK.get_or_init(|| tokio::sync::Mutex::new(()))
+    /// Well-known lock-file name (under the OS temp dir) for the
+    /// cross-process FS-timing test gate. MUST stay identical to
+    /// `chan_drive::test_gate::GATE_FILE` and the copy in the terminal
+    /// test module so every FS-timing test across both crates' separate
+    /// test binaries contends on the same OS advisory lock.
+    const FS_TIMING_GATE: &str = "chan-fs-timing-test.gate";
+
+    /// Cross-process serial gate for the real-FS boot-walk tests. Each
+    /// spins a fresh `Indexer` whose boot walk is a `spawn_blocking`
+    /// re-index + a Tantivy commit + a reader refresh, then polls BM25
+    /// for the result. Under the FULL parallel `cargo test` run (CI)
+    /// every core is saturated, so the boot walk's turn on the CPU and
+    /// the commit/refresh cycle slip past a tight poll deadline and the
+    /// tests flake.
+    ///
+    /// WHY a FILE lock and not a `static`/`tokio` Mutex: a `static` lock
+    /// serializes only tests WITHIN this test binary, but `cargo test`
+    /// runs each crate's test binary as a SEPARATE PROCESS concurrently,
+    /// so these boot-walk tests still race chan-drive's FS-watcher tests
+    /// and this crate's PTY tests for the CPU + the kernel FSEvent queue.
+    /// An OS advisory lock on a well-known temp path is the one primitive
+    /// that spans process boundaries; the SAME `FS_TIMING_GATE` path is
+    /// opened in chan-drive (`crate::test_gate`) + the terminal test
+    /// module, so a single named gate serializes the entire FS-timing
+    /// class workspace-wide. The `std::fs::File` guard is `Send` (held
+    /// across `.await` on the multi-thread runtime is fine) and releases
+    /// on drop / process exit.
+    fn boot_walk_test_lock() -> std::fs::File {
+        let path = std::env::temp_dir().join(FS_TIMING_GATE);
+        let file = std::fs::OpenOptions::new()
+            .create(true)
+            .write(true)
+            .truncate(false)
+            .open(&path)
+            .expect("open FS-timing test gate file");
+        file.lock().expect("acquire FS-timing test gate");
+        file
     }
 
     /// Poll budget for the real-FS boot-walk tests. On an idle host the
@@ -926,11 +946,9 @@ mod tests {
     /// so this ceiling is never approached; it only governs the worst
     /// case under the full parallel suite, where the `spawn_blocking`
     /// walk + commit + reader refresh can be delayed by seconds under
-    /// CPU contention. The old 5s budget was too tight for that worst
-    /// case (it flaked on macOS CI under 12-way contention); 30s absorbs
-    /// it without slowing the common path, since `poll_until` returns as
-    /// soon as the condition holds. The serialize lock keeps these tests
-    /// from stacking their own boot-walk load on top of each other.
+    /// CPU contention. The cross-process `boot_walk_test_lock` gate is
+    /// the primary fix (it removes the competing FS-timing load); this
+    /// budget is the backstop and should rarely be approached now.
     const BOOT_WALK_BUDGET: Duration = Duration::from_secs(30);
 
     /// Poll a closure until it returns true or `timeout` elapses, yielding
@@ -1321,7 +1339,7 @@ mod tests {
         // Serialize against the sibling boot-walk test so the two
         // do not stack their `spawn_blocking` re-index load on each
         // other under the full parallel `cargo test` run.
-        let _serial = boot_walk_test_lock().lock().await;
+        let _serial = boot_walk_test_lock();
         let (_cfg, drive_dir, drive) = setup_drive();
 
         // Seed drive root to force the ELSE IF branch on the
@@ -1403,7 +1421,7 @@ mod tests {
         // Serialize against the sibling boot-walk test so the two
         // do not stack their `spawn_blocking` re-index load on each
         // other under the full parallel `cargo test` run.
-        let _serial = boot_walk_test_lock().lock().await;
+        let _serial = boot_walk_test_lock();
         let (_cfg, drive_dir, drive) = setup_drive();
 
         // Seed drive root with content so `indexed_docs > 0`

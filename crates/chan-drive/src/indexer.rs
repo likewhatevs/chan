@@ -364,7 +364,6 @@ mod tests {
     use super::*;
     use crate::library::Library;
     use crate::SearchMode;
-    use std::sync::{Mutex, MutexGuard, OnceLock};
     use std::time::Duration;
     use tempfile::TempDir;
 
@@ -373,22 +372,11 @@ mod tests {
     /// requires.
     const DEBOUNCE_TEST_MS: u64 = 30;
 
-    /// Process-wide lock serializing the real-watcher / real-FSEvent
-    /// tests. These spin up a notify backend and an indexer worker
-    /// thread and assert delivery within a bounded poll window. Under
-    /// the FULL `cargo test` run (CI) the other ~530 chan-drive tests
-    /// saturate every core, so FSEvent delivery + the indexer thread's
-    /// scheduling can slip past the poll deadline and the test flakes.
-    /// Holding this lock makes only ONE such test run at a time, so it
-    /// gets the CPU it needs while the rest of the suite still runs in
-    /// parallel around it. We poison-recover the guard so one panicking
-    /// test does not cascade-fail the others.
-    fn fs_test_lock() -> MutexGuard<'static, ()> {
-        static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
-        LOCK.get_or_init(|| Mutex::new(()))
-            .lock()
-            .unwrap_or_else(|p| p.into_inner())
-    }
+    /// Cross-process serial gate for the whole FS-timing test class.
+    /// See `crate::test_gate` for the full rationale (one OS advisory
+    /// lock spanning both crates' separate test binaries). Held for the
+    /// test body, released on drop.
+    use crate::test_gate::fs_timing_gate as fs_test_lock;
 
     /// Poll budget for the real-FS tests. On an idle host the watcher
     /// delivers + the indexer fires in well under 100ms, so this
@@ -398,8 +386,9 @@ mod tests {
     /// old 5s budget was too tight for that worst case (it flaked on
     /// macOS CI under 12-way contention); 30s absorbs it without
     /// slowing the common path, since `wait_for` returns as soon as
-    /// the condition holds. The serialize lock keeps these tests from
-    /// stacking their own watcher + reindex load on top of each other.
+    /// the condition holds. The cross-process `fs_test_lock` gate is
+    /// the primary fix (it removes the competing FS-timing load); this
+    /// budget is the backstop and should rarely be approached now.
     const FS_DELIVERY_BUDGET: Duration = Duration::from_secs(30);
 
     /// Poll a closure until it returns true or `timeout` elapses.

@@ -6134,6 +6134,12 @@ mod tests {
         // watcher rooted at the team's events/ subdirectory.
         // Events emerge prefixed `team-{name}/events/<file>` so
         // chan-server's event stream routes per-team.
+        //
+        // Real-FSEvent timing test: hold the cross-process FS-timing
+        // gate for the body so it does not race the indexer + PTY
+        // timing tests for the CPU + the kernel FSEvent queue. See
+        // `crate::test_gate`.
+        let _gate = crate::test_gate::fs_timing_gate();
         use crate::watch::WatchCallback;
         use std::sync::Mutex;
         use std::sync::OnceLock;
