@@ -44,10 +44,10 @@ describe("GI-9: filesystem-mode graph renders the full containment spine", () =>
   test("the fs-mode null guard sits BEFORE the file-only seeding branch", () => {
     // Ordering is load-bearing: the guard must short-circuit before the
     // dir / file branches that seed only from `kind === "file"` nodes
-    // (the empty-seed bug). Anchor on the drive/global null, then the
-    // fs-mode null, then the dir-branch file-only seed.
+    // (the empty-seed bug). Anchor on the drive null (scopedNodeIds),
+    // then the fs-mode null, then the dir-branch file-only seed.
     const driveNull = graph.search(
-      /currentScope\.kind === "drive" \|\| currentScope\.kind === "global"/,
+      /currentScope\.kind === "drive"\) \{\s*return null;/,
     );
     const fsNull = graph.search(/if \(filesystemMode\) return null;/);
     const fileSeed = graph.search(

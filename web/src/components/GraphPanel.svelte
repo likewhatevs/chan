@@ -99,9 +99,13 @@
     synthesizeScope(graphState.scopeId),
   );
 
+  /// Graph tabs only ever carry drive / dir / file / tag scopeIds (set by
+  /// the openGraph* entry points). The wiped scope kinds (global, group,
+  /// git_repo) are never produced for a graph, so this resolver covers
+  /// only the live four; the dead kind-branches that used to handle the
+  /// others were removed with the scope-concept wipe.
   function synthesizeScope(scopeId: string): ScopeOption | null {
     if (scopeId === "drive") return { id: "drive", kind: "drive", label: "drive" };
-    if (scopeId === "global") return { id: "global", kind: "global", label: "global" };
     if (scopeId.startsWith("file:")) {
       const path = scopeId.slice("file:".length);
       if (!path) return null;
@@ -118,11 +122,6 @@
       // Strip the leading `#` for the label: the scope header renders it
       // as `#${label}`, so the raw `#search` nodeId would double-hash.
       return { id: scopeId, kind: "tag", label: nodeId.replace(/^#/, ""), nodeId };
-    }
-    if (scopeId.startsWith("git_repo:")) {
-      const root = scopeId.slice("git_repo:".length);
-      if (!root) return null;
-      return { id: scopeId, kind: "git_repo", label: root, root };
     }
     return null;
   }
@@ -141,7 +140,7 @@
   type Crumb = { label: string; scopeId: string; current: boolean };
   const scopeAncestors = $derived.by<Crumb[]>(() => {
     if (!currentScope) return [];
-    if (currentScope.kind === "drive" || currentScope.kind === "global") {
+    if (currentScope.kind === "drive") {
       return [{ label: "drive", scopeId: "drive", current: true }];
     }
     if (currentScope.kind !== "file" && currentScope.kind !== "dir") {
@@ -230,10 +229,13 @@
   // graph index has stopped emitting date edges (issue #17), but
   // older indexes may still contain them.
   /// `group` is a synthetic edge kind: cytoscape-only, never emitted
-  /// by chan-drive's graph index. We add `group` edges from a
-  /// synthetic hub node (id `SCOPE_HUB_ID`, kind `scope`) to every
-  /// file in a multi-file scope (`currentScope.kind === "group"`) so
-  /// the canvas shows which files the user has pinned together.
+  /// by chan-drive's graph index. It was used to fan `group` edges
+  /// from a synthetic hub node (id `SCOPE_HUB_ID`) to the files in a
+  /// multi-file `group` scope. The scope-concept wipe retired the
+  /// group scope kind for graphs, so that synthesis is now
+  /// unreachable; the edge-kind + hub machinery is dead and slated
+  /// for a follow-up cleanup (left in place to keep this slice scoped
+  /// to the scope-kind branches).
   type RenderedEdgeKind = "link" | "tag" | "mention" | "contains" | "language" | "group";
   /// Stable id for the synthetic scope hub node. Prefixed with `__`
   /// so it can't collide with a real file path.
@@ -358,8 +360,7 @@
     graphState.mode === "filesystem" &&
       (currentScope?.kind === "file" ||
         currentScope?.kind === "dir" ||
-        currentScope?.kind === "drive" ||
-        currentScope?.kind === "global"),
+        currentScope?.kind === "drive"),
   );
   const languageMode = $derived(graphState.mode === "language");
 
@@ -374,10 +375,7 @@
   /// enabled (depthDisabled is the drive/global guard).
   const depthShallow = $derived.by(() => {
     if (languageMode) return false;
-    const disabled =
-      !currentScope ||
-      currentScope.kind === "drive" ||
-      currentScope.kind === "global";
+    const disabled = !currentScope || currentScope.kind === "drive";
     if (disabled) return false;
     return depthCap <= 1;
   });
@@ -409,7 +407,7 @@
       nodes,
       fsGraph: filesystemMode
         ? { nodes: fsNodes, truncated: fsTruncated }
-        : currentScope?.kind === "drive" || currentScope?.kind === "global"
+        : currentScope?.kind === "drive"
           ? driveDepthProbe
           : null,
       hardMax: DEPTH_MAX,
@@ -499,7 +497,7 @@
   // longer one.
 
   async function reloadGraph(): Promise<void> {
-    if (currentScope?.kind === "drive" || currentScope?.kind === "global") {
+    if (currentScope?.kind === "drive") {
       driveDepthProbe = null;
       await loadDriveDepthProbe();
     }
@@ -592,7 +590,7 @@
   /// about one drive at a time).
   const scopedNodeIds = $derived.by<Set<string> | null>(() => {
     if (!currentScope) return null;
-    if (currentScope.kind === "drive" || currentScope.kind === "global") {
+    if (currentScope.kind === "drive") {
       return null;
     }
     // GI-9: in filesystem mode the fs-graph endpoint already returns
@@ -632,9 +630,8 @@
       return visited;
     }
     let seedPaths: string[];
-    if (currentScope.kind === "git_repo" || currentScope.kind === "dir") {
-      const root =
-        currentScope.kind === "git_repo" ? currentScope.root : currentScope.path;
+    if (currentScope.kind === "dir") {
+      const root = currentScope.path;
       const prefix = root + "/";
       seedPaths = nodes
         .filter(
@@ -645,10 +642,9 @@
         .map((n) => (n.kind === "file" ? n.path : ""))
         .filter((p) => p);
     } else {
-      seedPaths =
-        currentScope.kind === "file"
-          ? [currentScope.path]
-          : currentScope.paths;
+      // Only `file` scope remains here: drive + tag returned above, and
+      // the wiped group/global/git_repo kinds never reach a graph.
+      seedPaths = currentScope.kind === "file" ? [currentScope.path] : [];
     }
     const seedIds = new Set<string>();
     for (const n of nodes) {
@@ -1111,13 +1107,9 @@
   function openScopeHeaderInspector(): void {
     if (!currentScope) return;
     let nodeId: string | null = null;
-    if (currentScope.kind === "drive" || currentScope.kind === "global") {
-      // Drive root node carries id="" in the filesystem-merged
-      // layer. Global has no first-class node; fall through to
-      // no-op (the selection would highlight nothing useful).
-      if (currentScope.kind === "drive") {
-        nodeId = "";
-      }
+    if (currentScope.kind === "drive") {
+      // Drive root node carries id="" in the filesystem-merged layer.
+      nodeId = "";
     } else if (currentScope.kind === "tag") {
       nodeId = currentScope.nodeId;
     } else if (currentScope.kind === "file") {
@@ -1128,22 +1120,14 @@
         (n) => n.kind === "file" && n.path === currentScope.path,
       );
       if (found) nodeId = found.id;
-    } else if (currentScope.kind === "dir" || currentScope.kind === "git_repo" || currentScope.kind === "group") {
+    } else if (currentScope.kind === "dir") {
       // Directory nodes' ids carry a `directory:` prefix in the
       // merged layer; the SPA normalises `kind` to `folder` at
       // load. Match by path against folder-kind nodes.
-      const path =
-        currentScope.kind === "git_repo"
-          ? currentScope.root
-          : currentScope.kind === "group"
-            ? null
-            : currentScope.path;
-      if (path !== null) {
-        const found = nodes.find(
-          (n) => n.kind === "folder" && n.path === path,
-        );
-        if (found) nodeId = found.id;
-      }
+      const found = nodes.find(
+        (n) => n.kind === "folder" && n.path === currentScope.path,
+      );
+      if (found) nodeId = found.id;
     }
     if (nodeId === null) return;
     selectedId = nodeId;
@@ -1264,17 +1248,14 @@
   }
 
   /// Node ids the canvas should pin at the world origin while the
-  /// initial layout settles. Empty list = no anchor (drive / global
-  /// scope); the canvas falls back to a free force-directed layout.
+  /// initial layout settles. Empty list = no anchor (drive scope);
+  /// the canvas falls back to a free force-directed layout.
   const focalIds = $derived.by<string[]>(() => {
     if (!currentScope) return [];
-    if (currentScope.kind === "group") return [SCOPE_HUB_ID];
     if (currentScope.kind === "tag") return [currentScope.nodeId];
     let seedPaths: string[];
     if (currentScope.kind === "file") seedPaths = [currentScope.path];
     else if (currentScope.kind === "dir") seedPaths = filesUnder(currentScope.path);
-    else if (currentScope.kind === "git_repo")
-      seedPaths = filesUnder(currentScope.root);
     else return [];
     const ids: string[] = [];
     for (const n of nodes) {
@@ -1558,7 +1539,7 @@
 
   $effect(() => {
     if (!visible) return;
-    if (currentScope?.kind !== "drive" && currentScope?.kind !== "global") return;
+    if (currentScope?.kind !== "drive") return;
     if (driveDepthProbe || driveDepthProbeLoading) return;
     void loadDriveDepthProbe();
   });
@@ -1601,7 +1582,7 @@
     watchReloadTimer = setTimeout(() => {
       watchReloadTimer = null;
       if (visible) {
-        if (currentScope?.kind === "drive" || currentScope?.kind === "global") {
+        if (currentScope?.kind === "drive") {
           driveDepthProbe = null;
           void loadDriveDepthProbe();
         }
@@ -1670,10 +1651,7 @@
          render vertically, one row per kind, with the kind colour as
          a dot + on/off cue via the `.on` class. -->
     {@const depthDisabled =
-      !languageMode &&
-      (!currentScope ||
-        currentScope.kind === "drive" ||
-        currentScope.kind === "global")}
+      !languageMode && (!currentScope || currentScope.kind === "drive")}
     <div
       class="tab-menu-bubble"
       role="menu"
@@ -1693,19 +1671,13 @@
       {#if currentScope}
         {@const scopePath =
           currentScope.kind === "drive" ? ""
-          : currentScope.kind === "global" ? ""
           : currentScope.kind === "file" ? currentScope.path
           : currentScope.kind === "dir" ? currentScope.path
           : currentScope.kind === "tag" ? `#${currentScope.label}`
-          : currentScope.kind === "git_repo" ? currentScope.label
-          : currentScope.kind === "group" ? currentScope.label
           : ""}
         {@const scopeKindLabel =
           currentScope.kind === "drive" ? "Drive"
-          : currentScope.kind === "global" ? "Global"
           : currentScope.kind === "tag" ? "Hashtag"
-          : currentScope.kind === "git_repo" ? "Git repo"
-          : currentScope.kind === "group" ? "Group"
           : currentScope.kind === "file" ? "File"
           : currentScope.kind === "dir" ? "Directory"
           : "Scope"}
@@ -1718,16 +1690,12 @@
           onclick={openScopeHeaderInspector}
         >
           <span class="mbtn-icon" aria-hidden="true">
-            {#if currentScope.kind === "drive" || currentScope.kind === "global"}
+            {#if currentScope.kind === "drive"}
               <HardDrive size={16} strokeWidth={1.75} />
             {:else if currentScope.kind === "dir"}
               <Folder size={16} strokeWidth={1.75} />
             {:else if currentScope.kind === "tag"}
               <Hash size={16} strokeWidth={1.75} />
-            {:else if currentScope.kind === "git_repo"}
-              <Folder size={16} strokeWidth={1.75} />
-            {:else if currentScope.kind === "group"}
-              <Folder size={16} strokeWidth={1.75} />
             {:else}
               <FileText size={16} strokeWidth={1.75} />
             {/if}
@@ -1777,7 +1745,7 @@
       <div class="msep" role="separator"></div>
       {#each ["tag", "mention", "language", "img", "folder", "markdown", "source"] as const as kind (kind)}
         {@const driveLike =
-          currentScope?.kind === "drive" || currentScope?.kind === "global"}
+          currentScope?.kind === "drive"}
         {#if (!filesystemMode || (kind !== "img" && kind !== "language")) && (languageMode ? kind === "language" : kind !== "language" || driveLike) && (kind !== "folder" || filesystemMode || driveLike)}
           <button
             type="button"
