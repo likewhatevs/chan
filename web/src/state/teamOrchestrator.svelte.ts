@@ -187,10 +187,22 @@ export function identityPrompt(
   leadHandle: string,
   bootstrapDoc: string,
 ): string {
+  // `Drafts/...` is a path in chan's workspace namespace, NOT a file
+  // on the agent's filesystem: draft workspaces live in chan metadata
+  // OUTSIDE the drive root, so a plain read of `Drafts/...` relative to
+  // the agent's cwd (the drive root) finds nothing. Direct the agent to
+  // the chan MCP read_file tool, which resolves the Drafts/ namespace
+  // (see crates/chan-llm/src/prompts.rs). Plain drive paths are ordinary
+  // content and read as written, so only Drafts refs get the hint.
+  const readStep = bootstrapDoc.startsWith("Drafts/")
+    ? `read ${bootstrapDoc} with the chan MCP read_file tool ` +
+      `(a Drafts/ path is a chan workspace location, not a file ` +
+      `under your working directory)`
+    : `read ${bootstrapDoc}`;
   return (
     `Hello, I am ${hostHandle} and you are $CHAN_TAB_NAME. ` +
     `Our team lead is ${leadHandle}. ` +
-    `Identify yourself and read ${bootstrapDoc}.`
+    `Identify yourself and ${readStep}.`
   );
 }
 
