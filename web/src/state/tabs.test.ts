@@ -67,6 +67,7 @@ import {
   scheduleAutosave,
   serializeLayout,
   setTerminalActivity,
+  setTerminalActivityPulsing,
   setTerminalBroadcastEnabled,
   setTerminalBroadcastTarget,
   setWindowFocusColor,
@@ -3108,5 +3109,25 @@ describe("graphTabLabel (fullstack-81)", () => {
       tabLabel(graphTab({ title: "workspace", selectedNodeLabel: "Miguel" })),
     ).toBe("Miguel");
     expect(tabLabel(graphTab({ title: "foo.md" }))).toBe("foo.md");
+  });
+});
+
+describe("lane-c addendum-3: terminal unseen-output dot pulse", () => {
+  test("pulse tracks active output; output stop holds the dot solid; seeing clears both", () => {
+    const tab = terminalTab();
+    // Output arriving at an unfocused terminal: dot shows + pulses.
+    setTerminalActivity(tab, true);
+    setTerminalActivityPulsing(tab, true);
+    expect(tab.terminalActivity).toBe(true);
+    expect(tab.terminalActivityPulsing).toBe(true);
+    // Output stops but is still unseen: pulse off, dot stays solid.
+    setTerminalActivityPulsing(tab, false);
+    expect(tab.terminalActivity).toBe(true);
+    expect(tab.terminalActivityPulsing).toBeUndefined();
+    // Seeing the terminal clears BOTH (the dot is gone, not left mid-pulse).
+    setTerminalActivityPulsing(tab, true);
+    setTerminalActivity(tab, false);
+    expect(tab.terminalActivity).toBeUndefined();
+    expect(tab.terminalActivityPulsing).toBeUndefined();
   });
 });

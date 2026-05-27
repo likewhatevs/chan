@@ -47,6 +47,7 @@
     setTerminalBroadcastEnabled,
     setTerminalBroadcastTarget,
     setTerminalActivity,
+    setTerminalActivityPulsing,
     setTerminalMcpEnv,
     setTerminalSession,
     tabFocusPulse,
@@ -191,6 +192,11 @@
   // froze - the machine slept - and the probe is firing late on wake.
   const WAKE_PROBE_MS = 2000;
   const WAKE_GAP_MS = 6000;
+  // `lane-c addendum-3`: while output arrives at an unfocused terminal the
+  // unseen-output dot pulses; this timer flips it solid once output has
+  // been quiet for ACTIVITY_PULSE_QUIET_MS.
+  let activityPulseTimer: ReturnType<typeof setTimeout> | null = null;
+  const ACTIVITY_PULSE_QUIET_MS = 700;
   let lastSessionSave = 0;
   let sessionSaveTimer: ReturnType<typeof setTimeout> | null = null;
   const menuOpen = $derived(tabMenu.openForTabId === tab.id);
@@ -818,6 +824,21 @@
   function recordOutputBytes(bytes: number): void {
     advanceTerminalSeq(tab, bytes);
     scheduleTerminalSessionSave();
+    // `lane-c addendum-3`: output arriving at an UNFOCUSED terminal is
+    // unseen - show the dot and PULSE it while chunks keep coming. A
+    // focused terminal is being watched, so no dot / pulse. Re-arm a
+    // quiet-timer on every chunk; when output stops (no chunk within the
+    // quiet window) the dot stops pulsing and goes SOLID, still unseen,
+    // until the user focuses the tab (setTerminalActivity(false) clears
+    // both).
+    if (focused) return;
+    setTerminalActivity(tab, true);
+    setTerminalActivityPulsing(tab, true);
+    if (activityPulseTimer) clearTimeout(activityPulseTimer);
+    activityPulseTimer = setTimeout(() => {
+      activityPulseTimer = null;
+      setTerminalActivityPulsing(tab, false);
+    }, ACTIVITY_PULSE_QUIET_MS);
   }
 
   function sendFocusState(): void {
@@ -984,6 +1005,10 @@
     }
     clearHostResumeTimers();
     hostResumeListenerCleanup?.();
+    if (activityPulseTimer) {
+      clearTimeout(activityPulseTimer);
+      activityPulseTimer = null;
+    }
     closeSocket();
     resizeObserver?.disconnect();
     resizeObserver = null;

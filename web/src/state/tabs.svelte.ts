@@ -265,6 +265,11 @@ export type TerminalTab = {
   lastSeq?: number;
   lastAgentEchoSeq?: number;
   terminalActivity?: boolean;
+  /// `lane-c addendum-3`: refines terminalActivity. True while output is
+  /// actively ARRIVING at this unfocused terminal (the unseen-output dot
+  /// PULSES); flips false once output stops but is still unseen (the dot
+  /// goes SOLID). Cleared with terminalActivity when the user sees it.
+  terminalActivityPulsing?: boolean;
   cwd?: string;
   seedInput?: string;
   richPrompt?: TerminalRichPromptState;
@@ -1355,6 +1360,16 @@ export function advanceTerminalSeq(tab: TerminalTab, bytes: number): void {
 
 export function setTerminalActivity(tab: TerminalTab, active: boolean): void {
   tab.terminalActivity = active || undefined;
+  // Seeing the terminal (active=false) clears the pulse too: the dot is
+  // gone entirely, not left mid-pulse.
+  if (!active) tab.terminalActivityPulsing = undefined;
+}
+
+/// `lane-c addendum-3`: drive the unseen-output dot's pulse. True while
+/// output is actively arriving; false once it stops (the dot goes solid
+/// while the output stays unseen).
+export function setTerminalActivityPulsing(tab: TerminalTab, pulsing: boolean): void {
+  tab.terminalActivityPulsing = pulsing || undefined;
 }
 
 export function clearTerminalSession(tab: TerminalTab): void {
@@ -1362,6 +1377,7 @@ export function clearTerminalSession(tab: TerminalTab): void {
   tab.lastSeq = undefined;
   tab.lastAgentEchoSeq = undefined;
   tab.terminalActivity = undefined;
+  tab.terminalActivityPulsing = undefined;
   tab.sessionMcpEnv = undefined;
   tab.terminalEnvTabName = undefined;
   tab.terminalEnvNamePromptDismissed = false;
