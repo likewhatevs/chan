@@ -2,7 +2,6 @@ import { beforeEach, describe, expect, test, vi } from "vitest";
 import {
   activeFbScopes,
   browserSidePanes,
-  browserOverlay,
   browserSelection,
   handleDraftPromoted,
   pathInAnyScope,
@@ -31,7 +30,6 @@ function resetLayout() {
 beforeEach(() => {
   browserSidePanes.left = false;
   browserSidePanes.right = false;
-  browserOverlay.open = false;
   browserSelection.path = null;
   tree.entries = [];
   tree.loadedDirs = {};
@@ -68,28 +66,19 @@ describe("fullstack-b-6: activeFbScopes", () => {
     expect(activeFbScopes()).toEqual([]);
   });
 
-  test("overlay open with no selection → drive-root scope", () => {
-    browserOverlay.open = true;
+  test("docked browser with no selection → drive-root scope", () => {
+    browserSidePanes.left = true;
     browserSelection.path = null;
     expect(activeFbScopes()).toEqual([""]);
   });
 
-  test("overlay open with file selection → parent-dir scope", () => {
+  test("docked browser with file selection → parent-dir scope", () => {
     tree.entries = [
       { path: "tasks", is_dir: true, is_editable_text: false, missing: false } as never,
       { path: "tasks/foo.md", is_dir: false, is_editable_text: true, missing: false } as never,
     ];
-    browserOverlay.open = true;
+    browserSidePanes.left = true;
     browserSelection.path = "tasks/foo.md";
-    expect(activeFbScopes()).toEqual(["tasks"]);
-  });
-
-  test("overlay open with dir selection → that dir as scope", () => {
-    tree.entries = [
-      { path: "tasks", is_dir: true, is_editable_text: false, missing: false } as never,
-    ];
-    browserOverlay.open = true;
-    browserSelection.path = "tasks";
     expect(activeFbScopes()).toEqual(["tasks"]);
   });
 

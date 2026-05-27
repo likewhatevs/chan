@@ -5,9 +5,7 @@ import {
   __testApplyTreeExpandedReloadSnapshot,
   __testSetBootstrapHydrated,
   __testApplyOverlaysFromHash,
-  browserOverlay,
   browserSelection,
-  graphOverlay,
   graphReloadSignal,
   onWatchEvent,
   openFsGraphForDirectory,
@@ -71,21 +69,8 @@ afterEach(() => {
   layout.rootId = pane.id;
   layout.activePaneId = pane.id;
   layout.nodes = { [pane.id]: pane };
-  graphOverlay.open = false;
-  graphOverlay.mode = "semantic";
-  graphOverlay.scopeId = "drive";
-  graphOverlay.depth = 1;
-  graphOverlay.filters.link = true;
-  graphOverlay.filters.tag = true;
-  graphOverlay.filters.mention = true;
-  graphOverlay.filters.language = true;
-  graphOverlay.filters.img = true;
-  graphOverlay.filters.folder = true;
-  graphOverlay.inspectorOpen = false;
-  graphOverlay.pendingSelectId = null;
   settingsOverlay.open = false;
   graphReloadSignal.nonce = 0;
-  browserOverlay.open = false;
   browserSelection.path = null;
   browserSelection.showDrive = false;
   tree.loadedDirs = {};
@@ -177,7 +162,7 @@ function activeTerminal(): TerminalTab {
 }
 
 describe("graph watcher reload signal", () => {
-  test("increments only while the graph overlay is open", async () => {
+  test("increments only while a graph tab is open", async () => {
     vi.useFakeTimers();
     const fetchSpy = vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
       const url = input instanceof Request ? input.url : String(input);
@@ -192,12 +177,19 @@ describe("graph watcher reload signal", () => {
       });
     });
 
-    graphOverlay.open = false;
+    // No graph tab open: the watcher signal stays put. (After the
+    // scope-concept wipe the reload gate is `hasGraphTab()`, not a
+    // graphOverlay flag.)
+    const empty: LeafNode = { kind: "leaf", id: "p", tabs: [], activeTabId: null };
+    layout.rootId = "p";
+    layout.activePaneId = "p";
+    layout.nodes = { p: empty };
     onWatchEvent({ kind: "modified", event: { path: "notes/a.md" } });
     await Promise.resolve();
     expect(graphReloadSignal.nonce).toBe(0);
 
-    graphOverlay.open = true;
+    // Open a graph tab: now watcher events bump the reload signal.
+    openFsGraphForDirectory("");
     onWatchEvent({ kind: "modified", event: { path: "notes/a.md" } });
     await Promise.resolve();
     expect(graphReloadSignal.nonce).toBe(1);
@@ -221,7 +213,6 @@ describe("window commands", () => {
       enter: true,
     });
 
-    expect(browserOverlay.open).toBe(false);
     expect(browserSelection.path).toBe("notes/sub");
     expect(activePane().tabs.some((tab) => tab.kind === "browser")).toBe(true);
     expect(treeExpanded.map[""]).toBe(true);
@@ -240,7 +231,6 @@ describe("window commands", () => {
       select: "notes/photo.png",
     });
 
-    expect(browserOverlay.open).toBe(false);
     expect(browserSelection.path).toBe("notes/photo.png");
     expect(activePane().tabs.some((tab) => tab.kind === "browser")).toBe(true);
     expect(treeExpanded.map[""]).toBe(true);
@@ -324,13 +314,13 @@ describe("legacy overlay hash retirement (W5)", () => {
       "",
       "/#graph=file:README.md|3|||fs&files=1:notes.md",
     );
-    graphOverlay.open = false;
-    browserOverlay.open = false;
-
-    __testApplyOverlaysFromHash();
-
-    expect(graphOverlay.open).toBe(false);
-    expect(browserOverlay.open).toBe(false);
+    // Must not throw and must not open any graph/browser surface: the
+    // legacy keys are no longer in HASH_KEYS, so they're ignored (and
+    // the overlay state they used to drive is gone entirely).
+    expect(() => __testApplyOverlaysFromHash()).not.toThrow();
+    expect(
+      activePane().tabs.some((t) => t.kind === "graph" || t.kind === "browser"),
+    ).toBe(false);
   });
 
   test("persistence strips retired + unknown legacy hash keys, keeps live keys", () => {
@@ -362,7 +352,6 @@ describe("filesystem graph entrypoints", () => {
     openFsGraphForFile("notes/a.md");
 
     let graph = activeGraphTab();
-    expect(graphOverlay.open).toBe(false);
     expect(graph.mode).toBe("filesystem");
     // File trigger scopes to the parent directory, with the
     // originating file auto-selected so its inspector pops.
@@ -372,7 +361,6 @@ describe("filesystem graph entrypoints", () => {
     openFsGraphForDirectory("notes");
 
     graph = activeGraphTab();
-    expect(graphOverlay.open).toBe(false);
     expect(graph.mode).toBe("filesystem");
     // Directory trigger scopes to that subtree directly.
     expect(graph.scopeId).toBe("dir:notes");
@@ -400,7 +388,6 @@ describe("filesystem graph entrypoints", () => {
     scopeFsGraphFromHere("notes", true);
 
     let graph = activeGraphTab();
-    expect(graphOverlay.open).toBe(false);
     expect(graph.mode).toBe("filesystem");
     expect(graph.scopeId).toBe("dir:notes");
     expect(graph.depth).toBe(1);

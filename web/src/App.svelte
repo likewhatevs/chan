@@ -22,13 +22,11 @@
     applyInitialTheme,
     bootstrap,
     installSessionFlushHook,
-    browserOverlay,
     browserSelection,
     browserSidePanes,
     closeOverlay,
     drive,
     fileOps,
-    graphOverlay,
     openGraph,
     openGraphWithContext,
     openSettings,
@@ -213,25 +211,12 @@
     // narrows the search to a directory / file / repo.
     void searchPanel.scopeId;
     void searchPanel.inspectorOpen;
-    void browserOverlay.open;
-    void browserOverlay.inspectorOpen;
     void browserSidePanes.left;
     void browserSidePanes.right;
     void browserSelection.path;
-    void graphOverlay.open;
-    void graphOverlay.scopeId;
-    void graphOverlay.mode;
-    void graphOverlay.depth;
-    void graphOverlay.filters.link;
-    void graphOverlay.filters.tag;
-    void graphOverlay.filters.mention;
-    void graphOverlay.filters.img;
-    // `folder` lives alongside the other graph filter slots; the
-    // overlay shows the chip only in filesystem mode, but the URL
-    // hash round-trips its state regardless so closing/reopening
-    // the overlay restores the user's choice.
-    void graphOverlay.filters.folder;
-    void graphOverlay.inspectorOpen;
+    // The graph + browser surfaces are tabs; their per-tab state
+    // (scope/depth/filters/inspector) is tracked by the layout-walking
+    // effect above, so this effect no longer mirrors overlay state.
     persistLayoutToHash();
     scheduleSessionSave();
   });
@@ -264,9 +249,7 @@
   // ties the effect to their reactivity; the helper doesn't read them
   // back through reactive paths.
   $effect(() => {
-    void browserOverlay.open;
     void searchPanel.open;
-    void graphOverlay.open;
     void settingsOverlay.open;
     void searchStatusOverlay.open;
     syncOverlayStack();
