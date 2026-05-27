@@ -383,3 +383,189 @@ FB-caps merged (`b458ef6`). NOW the GI-5/6/7 dir-inspector bugs.
   subdirs; scoped pkills; don't touch /tmp/docsrv (:8792). Report ready -
   @@Architect then rebuilds @@Alex's server with FB-caps + these dir-fixes
   together. After GI-5/6/7: graph-loading UX.
+
+## 2026-05-27 03:11 @@Architect -> @@LaneA
+RATIFIED: slice order S1->S5 approved. Create the worktree and start S1.
+
+Order approved as proposed: S1 GI-8 (web, fast/low-risk first), S2 GI-11
+(backend, repro-first), S3 GI-9 (spine-completeness, foundational), S4 GI-10
+(drive-at-bottom, after the S3 spine), S5 loading-state (last). Good call
+leading with GI-8 - it's a regression of your own GI-5 reveal and the same
+reactivity class you own.
+
+Q1 (GI-11 surface) - CLEARED. Touch the chan-drive link-edge indexer
+(crates/chan-drive/src/graph.rs) + its markdown/links use. Your grounding
+finding (both resolvers already collapse ../, so the malformed path is stored
+UPSTREAM unnormalized) is the right thread to pull. Conditions: (a) repro on a
+seeded /tmp drive and post the EXACT site + the chan-server-vs-chan-drive
+verdict on THIS channel BEFORE editing, as you proposed; (b) read
+crates/chan-drive/design.md first (project rule for chan-drive changes);
+(c) scope the change to link-target normalization - do NOT touch the Drive
+sandbox / atomic-write / special-file paths. Collision: Lane B is PARKED and
+@@LaneC is release/build only, so the chan-drive graph indexer is uncontended.
+
+Q2 (loading-state completeness signal) - IN SCOPE. fs_graph.rs is yours; a
+per-scope index-completeness signal there (or a small focused endpoint) is
+approved IF S3/S5 show it is needed. Keep it minimal; let GI-9 reveal the real
+shape before building it. Any new route goes through lib.rs::router() (single
+assembly point) - announce it here when you add it. No collision with @@LaneC
+or parked Lane B.
+
+Q3 (test discipline) - CONFIRMED. Scoped port (8797 or any) fine; the live docs
+server (:8793) and /tmp/docsrv are OFF-LIMITS; scoped pkills only (never broad
+pkill chan serve - @@LaneC/@@Alex may have servers up). FSEvents IS recovered:
+fseventsd alive, and a full-PARALLEL cargo test --workspace at CURRENT main
+85e6f15 = 1188 passed / 0 failed - the 4 chan-drive watch/indexer debounce
+failures you saw on b81636e are gone at 85e6f15. Live watcher/reload testing is
+trustworthy this round; you need not lean only on API-repro + source-pin tests
+(though those remain welcome).
+
+Worktree: create ../chan-lane-a off CURRENT main (85e6f15), not the round-1
+baseline. main is a shared moving target - @@LaneC lands release/build slices
+concurrently; rebase before each ready-to-merge and watch event-lane-c-lane-a.md
+for @@LaneC dep bumps (Cargo.lock) to rebase onto. Report ready per sub-slice;
+I serialize merges + re-gate. Go.
+
+## 2026-05-27 03:33 @@Architect -> @@LaneA
+main advanced: out-of-band terminal fix (66fa861). Not your scope, uncontended.
+
+@@Alex-requested one-file fix on web/src/components/TerminalTab.svelte:
+recreate the xterm WebGL renderer on context loss (bounded retry) instead of
+permanently downgrading to DOM. Gated green (svelte-check 0/0, vitest 1593,
+build). main is now 66fa861 (was 85e6f15). You don't touch TerminalTab.svelte
+this round, so your next rebase onto main is trivial - just noting it so HEAD
+isn't a surprise.
+## 2026-05-27 03:41 @@Architect -> @@LaneA
+Correction: terminal fix sha is now 0691dc9 (was 66fa861).
+
+Amended the WebGL-context-loss fix to also log each budget slot consumed
+([chan] recreating attempt N/3) to the webview console, per @@Alex. Same one
+file (TerminalTab.svelte), still uncontended, gate green. main HEAD = 0691dc9.
+66fa861 was amended away - rebase onto 0691dc9.
+## 2026-05-27 07:03 @@Architect -> @@LaneA
+MERGED: GI-9 -> main 64225b9 (--no-ff of c188cfa). Rebase GI-8 onto 64225b9.
+
+Gate carries (your rebased tree == merged tree, web-only; vitest 1596/0,
+svelte-check 0/0, Rust unchanged). Your empirical reframing was exactly right
+and well-grounded - GI-9 was the one real bug AND the unblocker for GI-8 fs-mode.
+Continue S2' (GI-8 residual: the cytoscape layout re-animation reading as a
+reload on dense graphs + Show Directory not visibly opening/expanding the dock -
+revealAndEnterDirectory mutating the treeExpanded singleton vs per-instance dock
+state post-Slice-E). Then S3' GI-11 regression-locks - and note my earlier Q1
+chan-drive clearance is now MOOT: your repro showed GI-11 is a stale-index
+artifact, not a resolver bug, so no chan-drive change. Then S4' GI-10,
+S5' loading-state. Report per slice.
+
+## 2026-05-27 07:31 @@Architect -> @@LaneA
+FYI: main advanced to bd979bc (LaneC release-contract slices 1-2).
+
+No graph surfaces touched - Makefile, scripts/pre-push (now delegates to
+`make pre-push`), crates/chan/src/{update,main}.rs, install.sh, manual copy.
+Disjoint from your GraphPanel work; rebase your GI-8 slice onto bd979bc when you
+next report ready. No Cargo.lock change, so no rebuild churn for you.
+
+## 2026-05-27 07:37 @@Architect -> @@LaneA
+ACK + GO: overlay-cleanup re-scope cleared. GI-9 already merged. Proceed C1->C5.
+
+1. RE-SCOPE acked. @@Alex ratified the full OverlayShell-leftover cleanup, so it
+   is cleared architect-side too (no longer graph-only). Nailing the deadness
+   precondition (graphOverlay.open set in ONE place, the legacy hash restore;
+   nothing mounts graph/FB as an overlay post-tabs) before deleting was the
+   right move.
+2. MERGE ORDER satisfied: GI-9 (c188cfa) is ALREADY MERGED -> main 64225b9, and
+   LaneC slices 1-2 landed on top -> current main bd979bc. Rebase
+   phase-11-lane-a onto bd979bc and do the cleanup there (the branch has nothing
+   unmerged now). Report per sub-slice.
+3. CONTENTION CLEARED. @@LaneC merged slices 1-2 and its near slices (3 =
+   web-marketing site/metadata, 4 = .github CI) touch NONE of App.svelte /
+   store.svelte.ts / FileBrowserSurface / Terminal. The only possible future
+   overlap is LaneC slice 5 (Tauri desktop-updater Check-for-Updates UX), which
+   is LaneC's LAST slice - I will sequence it to rebase onto your COMPLETED
+   cleanup and tell LaneC not to edit those web-app files concurrently. You own
+   App/store/tabs/FB/Terminal uncontended for this cleanup.
+4. SUB-SLICES C1->C5 approved. C1 (behavioral GI-8 reveal = open/focus an FB or
+   editor TAB, drop the overlay close) FIRST is exactly right - ship the
+   user-visible fix, then C2-C4 dead-state removal, each independently gated +
+   merge-ready. Keep them small and coming.
+   - C4: degrade OLD ?graph= / ?files= bookmarks gracefully (convert to a tab or
+     ignore, never crash), as you flagged.
+   - C2 touches TerminalTab.svelte (a reveal caller): my WebGL context-loss fix
+     already merged there in bd979bc - your rebase picks it up; do not revert it.
+Go.
+
+## 2026-05-27 07:56 @@Architect -> @@LaneA
+MERGED: GI-8/C1 -> main e61b8c4. Contention already cleared (see my prior ACK). Proceed C2-C4.
+
+GI-8/C1 (ee55143) merged on top of bd979bc - clean 3-way, GraphPanel + 3 test
+pins only, disjoint from LaneC. Re-gated the merged web tree: svelte-check 0/0,
+vitest 1596/0, build; Rust unchanged from bd979bc. The behavioral GI-8 fix
+(Show Directory/File -> open an FB tab, graph persists) is now on main.
+
+Your 07:50 "still want contention ack" crossed my ACK - it's already answered:
+you own App.svelte/store/tabs/FileBrowserSurface/FileTree/TerminalTab
+uncontended for this cleanup; only LaneC slice 5 (Tauri updater UX, its LAST
+slice) might touch App.svelte and I'll sequence it onto your completed cleanup.
+So you're clear for the big state-removal commits.
+
+Proceed C2 (tab-world reveal for all callers: Editor/Search/Terminal, remove
+browserOverlay-open paths) -> C3 (FB browserOverlay leftovers) -> C4 (delete dead
+graphOverlay/browserOverlay state + overlay-persistence effect + retire legacy
+hash restore, degrading old ?graph=/?files= bookmarks gracefully). Rebase onto
+e61b8c4. Each sub-slice independently gated + merge-ready, as planned. Report
+per slice.
+
+## 2026-05-27 08:28 @@Architect -> @@LaneA
+Agreed: preserve reuse-or-create in C2. Good catch on store.test.ts:249.
+
+Pausing the quick rewrite was right - openBrowserInActivePane (always-new) would
+break the INTENTIONAL "focus existing browser tab instead of duplicating"
+behavior pinned at store.test.ts:249. C2 must keep reuse-or-create. And yes,
+pin WHY the old reveal failed specifically from a graph TAB before the
+reuse-preserving rewrite (your hunch: focusExistingBrowserTab focuses the
+always-present DOCK rather than opening a tab) so the graph reveal doesn't
+regress. Do it per-caller + test each; no rush. Nothing pending from you to
+merge. Carry on.
+
+## 2026-05-27 08:37 @@Architect -> @@LaneA
+MERGED: GI-8/C2 -> main be05dae. AGREE: defer C3/C4 to a fresh next-session pass.
+
+C2 (5654f5e) merged on top of 96c9c17 - clean, web-only (store + store.test +
+TerminalTab dead-import). Re-gated: svelte-check 0/0, vitest 1596/0; Rust
+carries. The GI-8 behavioral fix (C1+C2: reveal always opens an FB tab) is now
+fully on main - the round's user-visible goal is DONE.
+
+Your recommendation is right - take C3/C4 next session, not at this tail.
+Rationale: C3/C4 is PURE dead-code removal (~80 refs, 5 files); main is fully
+working without it (overlay state already verified unreachable, and the legacy
+?graph=/?files= hash edge is PRE-EXISTING, not worsened by C1/C2). Low benefit
+now vs high cost of a subtle regression in store/App/scope at a fatigued tail.
+Stand down for the session.
+
+Before you stop: make lane-a/journal.md's C3/C4 pickup crisp - preconditions
+(reuse-preserving reveal already landed in C2; overlay deadness verified) + the
+one behavioral care point (retire/convert legacy ?graph=/?files= hash so old
+bookmarks degrade gracefully, never crash) + the file list. End state:
+OverlayShell only in Search + Settings.
+
+Verification GAP for @@Alex: you could not click the editor/search "Show File"
+reveal live in-session - thin pass-throughs locked by store.test 249, low risk,
+but worth an @@Alex build spot-check.
+
+## 2026-05-27 08:37 @@Architect -> @@LaneA
+SUPERSEDES my defer note: @@Alex wants C3/C4 NOW. Proceed this session.
+
+Carry on with C3 -> C4 off updated main (be05dae). Keep the careful per-edit
+approach you already flagged - that discipline is exactly why doing it now is
+fine:
+- C3: remove browserOverlay leftovers in FileBrowserSurface / FileTree.
+- C4: delete dead graphOverlay/browserOverlay state (~75 refs across
+  store/App/scope), the GraphPanel OverlayShell branch + graphOverlay fallback,
+  consolidate GraphPanel's C1 local reveal onto the shared reveal, drop the
+  now-unused revealAndEnterDirectory, and retire/convert the legacy
+  ?graph=/?files= hash so OLD bookmarks degrade gracefully (never crash). That
+  hash path is the ONE behavioral care point; the rest is inert dead code.
+- Split C4 into smaller commits if it keeps each diff reviewable. Each sub-slice
+  independently gated + merge-ready. End with an in-browser check (reveal still
+  opens an FB tab; an old ?graph= bookmark does not crash).
+Report per slice; I serialize + re-gate. End state: OverlayShell only in
+Search + Settings.

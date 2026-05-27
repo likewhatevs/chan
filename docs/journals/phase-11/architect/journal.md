@@ -424,6 +424,53 @@ headers. I watch the channels and act on reports.
 - Round 11 fully sealed: code on main `88ea5c3`; all docs + the
   de-flake-closeout committed. Next session: next-round-backlog.md.
 
+## 2026-05-27: CONTINUATION SESSION (from next-round-backlog)
+
+Re-opened the round from `next-round-backlog.md`. @@Alex ratified the lane
+shape: ONE graph lane (@@LaneA: GI-8/9/10/11 + loading-state) + a release/CI
+lane (@@LaneC: Makefiles, docs/manual, chan upgrade, Tauri workflows); @@LaneB
+parked. @@Alex carries release/build IN-TREE alongside, so @@LaneC owns that
+vertical. Created the @@LaneC channels + README continuation addendum; FSEvents
+confirmed recovered (full-parallel cargo test 1188/0 at 85e6f15).
+
+OUT-OF-BAND (Alex-requested): terminal WebGL context-loss fix on
+TerminalTab.svelte - onContextLoss was one-way (dispose -> DOM forever),
+re-introducing the box-drawing gap on any transient WKWebView/WebKitGTK context
+loss. Now recreates the renderer (bounded 3-try) + logs each budget slot to the
+webview console. Merged 0691dc9 (amended in the logging).
+
+@@LaneA arc (web-only graph cluster):
+- Empirical reframing before coding: GI-9 was the one real bug; GI-8 + GI-11
+  were largely already-fixed / a stale-index artifact. @@Alex re-ratified the
+  order (GI-9 first; GI-11 = regression-locks only).
+- GI-9 merged 64225b9: scopedNodeIds seeded the scope BFS only from file nodes,
+  so fs-mode dir graphs rendered 0/N; return null in fs-mode so the backend's
+  complete containment spine renders.
+- GI-8 root-caused (by @@Alex, live) to OverlayShell-era leftovers from the
+  tabs migration; @@Alex ratified a FULL cleanup (C1-C5: OverlayShell only in
+  Search + Settings). C1 merged e61b8c4 (Show Directory/File open an FB tab);
+  C2 merged be05dae (reveal always opens a tab, drop overlay reveal coupling -
+  intended behavior change). I recommended deferring C3/C4 (dead-code removal)
+  to next session; @@Alex OVERRODE - complete C3/C4 this session. In flight.
+- Verification gap for @@Alex: editor/search "Show File" reveal not clicked
+  live (thin pass-throughs, low risk).
+
+@@LaneC arc (release contract per release-plan.md - greenfield reset, vX.Y.Z +
+/dl/** metadata, intentional release-history reset, no pre-release migration):
+- Slices 1-2 merged bd979bc: chan upgrade + install.sh on /dl/cli metadata +
+  SHA256-from-metadata; root Makefile as the public command surface +
+  scripts/pre-push -> make pre-push.
+- Slice 3 merged 96c9c17: deterministic /dl/** metadata generator + verifier
+  (fixture/dry-run only), site consumes /dl/releases.json with GitHub fallback.
+- Slice 4 (.github CI) IN FLIGHT - shared infra; release-cut gate goes live
+  (publish/Pages must be tag/dispatch-gated behind @@Alex). Slice 5 (Tauri +
+  Cargo.lock + updater UX) last - the Cargo.lock + App.svelte seams sequenced
+  to the end after @@LaneA's overlay cleanup.
+
+Contention: none active. Merge order: I serialize all lane merges + re-gate the
+combined tree. This docs commit is a MID-ROUND snapshot per @@Alex (normally
+round-close); ongoing bus appends stay uncommitted until the next snapshot.
+
 ## Candidate bugs / future follow-ups
 - GPU/Metal embed hang: being defaulted-off now; proper fix (timeout + CPU
   fallback or correct Metal command-buffer usage) deferred to the

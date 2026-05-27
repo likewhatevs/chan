@@ -698,3 +698,273 @@ READY TO MERGE: GI-5/6/7 graph dir-inspector + depth hotfix.
   reactive UI behaviors are locked by the source-pin tests; a live in-
   browser walk would need the browser-selection round-trip (you're away),
   so I leaned on the test + backend proof. After GI-5/6/7: graph-loading UX.
+
+## 2026-05-27 03:05 @@LaneA -> @@Architect
+Phase-11 continuation: GRAPH LANE bootstrap + slice plan (NOT coding; awaiting ratification)
+
+Fresh @@LaneA session. Bootstrapped: next-round-backlog, graph-inspector-bugs,
+graph-loading-state-spec, my full journal (GI-1..7 arc), your journal (round
+sealed at 88ea5c3), the bus. HEAD = 85e6f15, branch main, clean tree
+(only the untracked lane-a-kickoff.md doc). NOT starting slice 1 until you
+ratify (relayed via @@Alex).
+
+SCOPE READ (one line each):
+- GI-8: Show Directory on a dir node now RELOADS the graph (regression of my
+  GI-5 enter:true reveal -> layout change -> currentScope recompute -> reload
+  $effect). Same reactive-overtracking class as GI-1/2. Fix: route the dir
+  reveal so it cannot re-fire the loadKey/untrack-anchored reload. WEB-only
+  (GraphPanel.svelte).
+- GI-9: fs-graph drops containment-only subdirs at depth. Status bar "27/47"
+  = ~20 nodes IN DATA but NOT RENDERED -> frontend render/kind filter, not the
+  10k backend cap (fs_graph MAX_NODES=10_000, MAX_DEPTH=6). Fix per FRAMING:
+  spine reuses the FB's COMPLETE containment walk (every ignore-filtered child
+  hangs off its parent via a grey dir->dir contains edge to depth), semantic
+  edges layered on top. Spans graphData.svelte.ts + GraphPanel.svelte, maybe
+  fs_graph.rs.
+- GI-10: pin the drive node to the BOTTOM, spine grows upward. Cytoscape
+  layout change (hierarchical/directed rooted at drive-bottom, or low-pin +
+  upward repulsion). WEB-only (GraphCanvas.svelte + GraphPanel layout config).
+- GI-11: false broken-links from `../` markdown links. GROUNDING FINDING:
+  BOTH resolvers ALREADY collapse `../`/`./` correctly -- chan-server
+  graph.rs::normalize_drive_rel (pops on ParentDir) AND chan-drive
+  markdown/links.rs::normalize_href (`".." => stack.pop()`). The malformed
+  `journals/phase-8/phase-7/...` (the `..` DROPPED, not collapsed) can't be
+  produced by either, so it originates UPSTREAM in the chan-drive link-edge
+  indexer (markdown `../` target stored without normalize_href). The real fix
+  likely lands in crates/chan-drive/src/graph.rs, NOT chan-server graph.rs.
+  See BOUNDARY Q1. Needs a fresh-binary repro to pin the exact site.
+- Loading-state UX: parent-dir pulsing/loading state while a scope's index is
+  in flight (mirror FB expand spinner) vs rendering an incomplete graph as
+  fact; genuinely-broken links shown distinctly once a scope's index is
+  complete. May need a per-scope index-completeness signal from the backend
+  (see BOUNDARY Q2).
+
+PROPOSED SLICE ORDER:
+- S1 = GI-8 (WEB-only). Smallest, same reactivity class I already own; fast
+  low-risk first land.
+- S2 = GI-11 (BACKEND). Repro FIRST on a seeded /tmp drive to pin chan-server
+  vs chan-drive; report the exact file + boundary on this channel BEFORE
+  editing; then fix + tests (`../`, `./`, multi-`../`) + confirm the inspector
+  existence-check uses the normalized path. Self-contained, disjoint from the
+  web slices.
+- S3 = GI-9 (graphData/GraphPanel +/- fs_graph.rs). The spine-completeness
+  fix; foundational graph-shape change the layout + loading-state build on.
+- S4 = GI-10 (WEB-only GraphCanvas). Drive-at-bottom layout; tuned against the
+  now-complete S3 spine (no hard dep, but better ordered after S3).
+- S5 = loading-state UX. Builds on S3 (complete spine) + S11 (broken-vs-loading
+  distinction); may add a per-scope completeness signal (Q2). Lands last.
+  Batching: GI-8 solo (S1); GI-11 solo backend (S2); GI-9/GI-10/loading-state
+  are the graph-shape cluster (S3/S4/S5), GI-9 first.
+
+BOUNDARY / CONTENTION QUESTIONS:
+Q1 (GI-11 surface). My listed surfaces are chan-server graph.rs + fs_graph.rs,
+   but the grounded fix likely lands in crates/chan-drive/src/graph.rs (the
+   link-edge indexer) -- chan-drive, historically near the index/watcher area.
+   Clear me to touch chan-drive's graph indexer + its markdown/links use, OR
+   I repro first and report the exact file before editing. Is light Lane B
+   touching chan-drive at all this round (collision risk)?
+Q2 (loading-state). Does any backend per-scope index-completeness signal exist
+   today, or do I add one (fs_graph.rs / a small endpoint)? If I add it,
+   confirm it's in scope and not colliding with @@Alex's release/build or
+   Lane B.
+Q3 (test discipline). Confirm my dedicated port (8797) + that the live docs
+   server (last on :8793 per your journal) and /tmp/docsrv are off-limits;
+   scoped pkills only. FSEvents was noted recovered on this box -- confirm, so
+   I know whether live watcher/reload testing is trustworthy or I lean on
+   API-driven repro + source-pin tests like last round.
+
+I'll create the worktree (`../chan-lane-a` off main@85e6f15) on ratification,
+then start S1. Detail lands in lane-a/journal.md as I go.
+
+## 2026-05-27 03:35 @@LaneA -> @@Architect
+EMPIRICAL REFRAMING after fresh-binary repro - proposing GI-9 FIRST (re-order)
+
+Built a fresh worktree binary (provenance verified) + seeded a /tmp drive
+matching all three backlog scenarios; served on 8797 (your :8793 untouched),
+walked it in-browser + via API. The backlog's premises diverge from current
+main - full detail in lane-a/journal.md. Curated:
+
+HIGHLIGHT - GI-9 root cause FOUND, and it's exactly the FRAMING note:
+- Backend is correct: /api/fs-graph?scope=directory&path=agents&depth=1 returns
+  the full spine (7 nodes: drive root + agents + 5 subdirs, 6 `contains` edges,
+  not truncated). depth=2 adds the 5 files.
+- Frontend renders 0/7 (empty). Cause: `scopedNodeIds` (GraphPanel.svelte
+  617-668) seeds the scope BFS ONLY from kind==="file" nodes under the dir. In
+  filesystem mode a dir's shallow children are DIRECTORIES, so seedPaths=[],
+  seedIds=empty, line 668 returns a non-null EMPTY set -> every node+edge
+  filtered out. The general "27/47, only link-related branches" case is the
+  same bug: only branches reaching a file get seeded. Fix = seed/include the
+  containment spine (folder nodes + contains edges) in fs-mode, exactly "reuse
+  the FB containment walk." Web-only (GraphPanel.svelte).
+
+LOWLIGHT - two backlog items appear ALREADY-FIXED (need confirm + locks, not fixes):
+- GI-11 (../ false broken-links): does NOT reproduce. notes/phase-8/{request,
+  process}.md -> ../phase-7/... both resolve broken=False. build_edges already
+  runs normalize_href before storing (drive.rs:4189), resolve_link_dst collapses
+  again. The backlog's malformed path (`..` dropped, not collapsed) can't come
+  from either path -> almost certainly STALE INDEX at your test time. => S2 =
+  regression-lock tests + report, not a code change. (Open Q: stale-edge reindex?)
+- GI-8 (Show Directory "reloads the graph"): not reproduced. The reload $effect
+  is correctly anchored on loadKey+visible (my GI-1 fix). In semantic mode the
+  folder "Show Directory" is a NO-OP (revealSelectedFile guards kind==="file"),
+  not a reload. The fs-mode handler (revealSelectedFsEntry) I CANNOT test
+  because the fs-mode dir graph is EMPTY (GI-9). => GI-8 is BLOCKED on GI-9;
+  likely already-fixed-reload + a residual semantic-folder-reveal no-op.
+
+CONTENTION / DECISION NEEDED:
+The ratified order was S1 GI-8 -> S2 GI-11 -> S3 GI-9. Empirically that's
+inverted: GI-9 is the one clear grounded bug AND it blocks GI-8 fs-mode repro;
+GI-8+GI-11 are largely already-fixed. Requesting re-ratification to do
+**GI-9 FIRST**, then revisit GI-8 (test in a now-populated fs graph; fix the
+semantic no-op if it stands) and GI-11 (regression locks). Surfacing to @@Alex
+in parallel. Holding code until I hear back; server + browser tab stay up.
+
+## 2026-05-27 03:40 @@LaneA -> @@Architect
+@@Alex ratified: GI-9 FIRST. Starting it.
+
+@@Alex decision (via AskUserQuestion): (1) GI-9 first, then re-test GI-8 in a
+populated fs graph + fix the residual semantic-folder reveal no-op if it stands,
++ GI-11 regression-lock tests; then GI-10 + loading-state. (2) GI-11 = regression
+locks only (assume normal reindex clears stale pre-fix edges; no migration work).
+
+New order: S1'=GI-9 -> S2'=GI-8 re-test/residual -> S3'=GI-11 locks -> S4'=GI-10
+-> S5'=loading-state. Beginning GI-9 fix now (GraphPanel.svelte scopedNodeIds:
+fs-mode returns null so the backend's already-scoped+depth-limited containment
+spine renders in full; chip filters still apply via hidden*Ids). Web-only.
+
+## 2026-05-27 06:58 @@LaneA -> @@Architect
+READY TO MERGE: phase-11-lane-a@c188cfa  (S1' GI-9, web-only)
+
+GI-9 fix landed + rebased onto current main (0691dc9, the terminal WebGL fix -
+disjoint from my GraphPanel scope, clean rebase, no Cargo.lock change).
+
+WHAT: GraphPanel.svelte `scopedNodeIds` returns null in filesystem mode (one
+guard + WHY comment). Root cause: the scope BFS seeded ONLY from kind==="file"
+nodes, so a filesystem-mode directory graph (shallow children are DIRECTORIES)
+seeded empty and the whole containment spine was filtered out - a dir-scope fs
+graph rendered 0/N, and the general case dropped sibling subdirs (the "27/47,
+only link-related branches" symptom). The fs-graph endpoint already returns the
+in-scope, depth-limited spine (depth slider re-fetches), so fs-mode joins
+drive/global in returning null; the file-centric BFS stays for SEMANTIC modes;
+per-kind chip filters still apply via hidden*Ids. + new
+graphFsSpineCompleteness.test.ts (3 ?raw pins, matches graphParentEdgeInvariant).
+
+GATE (full, green): Rust fmt --check / clippy --all-targets -D warnings /
+build --no-default-features / cargo test (exit 0) - all on the pre-rebase tree;
+both my change and the rebased terminal fix are web-only so Rust sources are
+identical and the result carries. Web (on the rebased tree): svelte-check 0/0,
+npm build, vitest 1596 passed / 11 skip / 0 fail (+3 from my new test).
+
+VERIFIED IN-BROWSER (fresh binary, port 8797, scoped, :8793 untouched): a
+New Graph on agents/ (true fs-mode) went 0/7 -> 7/7 nodes (all 5 subdirs +
+drive root via contains edges). 2 files, +81/-0 (diff in journal).
+
+NEXT (S2' GI-8): while the fs graph was populated I confirmed GI-8's "reload"
+does NOT re-fetch data (correctly anchored); the residual is (a) a cytoscape
+layout RE-ANIMATION on the reveal that reads as a reload on dense graphs, and
+(b) Show Directory not visibly opening an FB tab / expanding the dock
+(revealAndEnterDirectory mutates the treeExpanded SINGLETON; dock uses
+per-instance state post-Slice-E). Investigating next as a separate slice.
+Server + browser tab stay up.
+
+## 2026-05-27 07:20 @@LaneA -> @@Architect
+SCOPE EXPANSION (ratified by @@Alex): full OverlayShell-leftover cleanup
+
+@@Alex root-caused GI-8 live: the graph (and File Browser) still carry overlay-
+era leftovers from before they were migrated to tabs. OverlayShell should ONLY
+remain in Search + Settings. @@Alex chose (via AskUserQuestion) the FULL cleanup:
+remove all OverlayShell/graphOverlay/browserOverlay leftovers across Graph +
+File Browser + Terminal + Editor + App + store. GI-8 is a direct symptom (the
+graph's Show Directory uses the overlay-era revealPathInBrowser->openBrowser->
+close chain; in tab-world the dir fetch fires but no FB tab opens + the graph
+isn't dismissed).
+
+SIZE (grounded): graphOverlay = store.svelte.ts 61, App.svelte 12, GraphPanel 4,
+scope 1; browserOverlay = store 14, App 4, FileBrowserSurface 3, FileTree 3,
+scope 3. OverlayShell rendered only by SearchPanel/SearchStatusOverlay (Search)
++ SettingsPanel (Settings) + GraphPanel:1653 (the leftover). ~90+ refs, 8 files.
+
+This is well beyond the ratified graph-only slice + touches File Browser /
+Terminal / Editor / App / store. FLAGS for you:
+- CONTENTION: please confirm @@LaneC isn't touching App.svelte / store.svelte.ts
+  / FileBrowserSurface / Terminal this round (their release/build scope looks
+  disjoint - Makefiles/docs/update.rs/Tauri workflows - but you serialize).
+- MERGE ORDER: GI-9 (phase-11-lane-a@c188cfa) is READY and small - please merge
+  it FIRST; I'll do the overlay cleanup as a SEPARATE branch off the merged main
+  so the big refactor doesn't bundle with the GI-9 fix.
+- I'm verifying the precondition now (are graphOverlay/browserOverlay truly DEAD,
+  i.e. nothing mounts the graph/FB as an overlay anymore) before deleting; will
+  post a sub-slice plan. Holding the refactor's first commit for your ack on the
+  re-scope + contention.
+
+## 2026-05-27 07:50 @@LaneA -> @@Architect
+GI-8 FIX (C1) committed + verified; branch phase-11-lane-a now c188cfa(GI-9)->ee55143(GI-8)
+
+Per @@Alex's "carry on", started the overlay-leftover cleanup with the
+user-visible GI-8 fix (C1, web-only). GraphPanel's Show Directory/Show File now
+open a File Browser TAB at the path via the tab-world openBrowserInActivePane
+(same primitive as the FB's "Open in File Browser"), dir expands itself (GI-5),
+graph persists; the overlay-era revealPathInBrowser->openBrowser->close chain is
+gone from the reveal path. Verified in-browser (Show Directory -> FB tab opens
+at agents/, expanded, graph intact). 4 files +90/-45; 3 ?raw pins updated same
+commit. Web gate green (svelte-check 0/0, vitest 1596/0, build); Rust carries.
+
+BRANCH STATE: c188cfa (GI-9, ready) -> ee55143 (GI-8/C1, ready). Both small +
+web-only + independently sensible. Please merge GI-9 then GI-8/C1 (in order).
+C2-C4 (the rest of the OverlayShell-leftover removal: other reveal callers,
+browserOverlay state, dead OverlayShell branch + graphOverlay state + legacy
+hash restore) are the larger follow-on - I'll do them as separate gated slices,
+ideally off the merged main. Still want your contention ack re @@LaneC vs
+App.svelte/store/FileBrowser before the big state-removal commits.
+
+## 2026-05-27 08:15 @@LaneA -> @@Architect
+C2 paused on a behavior nuance (reverted WIP, branch clean at e61b8c4)
+
+Rebased onto e61b8c4 (GI-9 + GI-8/C1 merged; picked up LaneC release work + the
+WebGL TerminalTab fix - keeping it). Started C2 (migrate other reveal callers:
+Editor/Search/window-command; TerminalTab has an unused revealPathInBrowser
+import). Tried the clean approach - rewrite store revealPathInBrowser to
+tab-world keeping its signature - but REVERTED before commit:
+- store.test.ts:249 enshrines INTENTIONAL reuse ("focuses an existing browser
+  tab instead of duplicating it"). My openBrowserInActivePane rewrite = always-
+  new, which breaks that on purpose. C2 must PRESERVE reuse-or-create.
+- I haven't pinned WHY the OLD reveal failed specifically from a graph tab (C1
+  fixed it empirically). Need to confirm whether focusExistingBrowserTab
+  "focuses" the always-present DOCK instead of opening a tab, before a
+  reuse-preserving rewrite - else the graph reveal could regress.
+So C2 is a careful per-caller change, not a quick rewrite. Doing it properly
+(instrument the failure, reuse-preserving rewrite, test each caller) as the next
+focused pass rather than rush it. C1 (the user-visible GI-8 fix) is merged + on
+main; nothing pending for you to merge right now from me. Will report C2 when
+it's gated + verified.
+
+## 2026-05-27 08:34 @@LaneA -> @@Architect
+READY TO MERGE: phase-11-lane-a@5654f5e (GI-8/C2, web-only) — reveal always opens an FB tab
+
+On top of e61b8c4. @@Alex confirmed the root cause: reveal-in-browser was
+focusing the docked File Browser / reusing an existing tab instead of opening
+one. C2 rewrites store revealPathInBrowser to the tab-world primitive
+(openBrowserInActivePane + per-instance tab.expanded, drop the overlay-era
+openBrowser/focusExistingBrowserTab + browserOverlay coupling). Fixes the
+remaining callers with NO call-site change: FileEditorTab "Reveal in browser",
+SearchPanel "Show File", handleWindowCommand open_browser. Removed TerminalTab's
+unused revealPathInBrowser import.
+
+BEHAVIOR CHANGE (intended, per @@Alex): reveal no longer reuses/focuses an
+existing browser - it always OPENS a File Browser tab. Updated store.test.ts
+(the old "focuses an existing browser tab instead of duplicating it" test now
+asserts "always OPENS a File Browser tab"; reads panes back from layout.nodes
+for the $state proxy).
+
+GATE: web svelte-check 0/0, vitest 1596/0; Rust unchanged (web-only, carries
+from e61b8c4). VERIFICATION NOTE: C1 already proved the openBrowserInActivePane
+primitive in-browser (graph Show Directory -> FB tab); C2's callers are thin
+pass-throughs locked by the new unit test 249. I could not reach the editor's
+inspector "Show File" button in-session to click it live - flagging for @@Alex
+to spot-check editor/search reveal after merge (low risk; thin wrapper).
+
+3 files +64/-17. Please merge. NEXT: C3 (FileBrowserSurface/FileTree
+browserOverlay leftovers) -> C4 (delete dead graphOverlay/browserOverlay state +
+GraphPanel OverlayShell branch + retire legacy ?graph=/?files= hash; consolidate
+GraphPanel's C1 local reveal onto the shared one; remove now-unused
+revealAndEnterDirectory).

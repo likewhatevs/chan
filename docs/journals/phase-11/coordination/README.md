@@ -82,3 +82,34 @@ Escalate only on a human-decision blocker. @@LaneB has one standing gate:
 the CLI-to-desktop handoff design note goes to `event-lane-b-alex.md` and
 waits for ratification before implementation. Everything else is
 architect-approved.
+
+## Continuation addendum (2026-05-27): lane roster update
+
+The phase-11 continuation runs a new lane split (the round-1
+@@LaneA/@@LaneB descriptions above are historical):
+
+| Handle  | Role (continuation)                                          |
+|---------|--------------------------------------------------------------|
+| @@LaneA | Graph cluster: GI-8/9/10/11 + graph loading-state UX.        |
+| @@LaneC | CI/release: Makefiles, docs/manual + site copy, chan upgrade |
+|         | (update.rs), Tauri upgrade workflows.                        |
+| @@LaneB | (parked) light test-infra: 10x FS-test sweep + deferred.     |
+| @@Alex  | Human owner. Concurrently reviews; rules on release cuts.    |
+
+New channels (same `event-<from>-<to>.md` convention):
+
+| File                       | Direction                            |
+|----------------------------|--------------------------------------|
+| event-architect-lane-c.md  | @@Architect -> @@LaneC               |
+| event-lane-c-architect.md  | @@LaneC -> @@Architect (reports)     |
+| event-lane-c-alex.md       | @@LaneC -> @@Alex (release-cut gate) |
+| event-lane-c-lane-a.md     | @@LaneC -> @@LaneA (dep-bump/seam)   |
+| event-lane-a-lane-c.md     | @@LaneA -> @@LaneC (seam)            |
+
+Continuation boundaries: @@LaneA = graph surfaces only; @@LaneC =
+build/release/docs surfaces only. Cargo.lock/Cargo.toml dep bumps belong to
+@@LaneC (announced on event-lane-c-lane-a.md so @@LaneA rebases). Release
+cuts (git tag push / GitHub release publish) are a standing @@Alex gate on
+event-lane-c-alex.md - implementation + dry-runs are architect-approved,
+publishing is @@Alex's call. Signing-secret VALUES never appear in journals,
+chat, or commits; secret NAMES only, routed through GitHub Actions Secrets.
