@@ -54,7 +54,7 @@ use auth::{auth_middleware, load_or_create_token};
 use bus::{make_progress_broadcast, make_watch_bridge};
 use routes::{
     api_backlinks, api_build_info, api_close_rich_prompt, api_cloud_drives, api_create_draft,
-    api_create_file, api_create_rich_prompt, api_create_rich_prompt_workspace, api_create_terminal,
+    api_create_file, api_create_rich_prompt, api_create_rich_prompt_session, api_create_terminal,
     api_delete_file, api_delete_session, api_delete_terminal, api_discard_draft,
     api_drive_bootstrap, api_fonts_source_code_pro_download, api_fs_graph, api_fs_transfer,
     api_get_config, api_get_contacts, api_get_drive, api_get_mentions, api_get_rich_prompt_status,
@@ -888,7 +888,7 @@ fn router(state: Arc<AppState>) -> Router {
         .route("/api/drafts/inspect", post(api_inspect_draft))
         .route("/api/drafts/discard", post(api_discard_draft))
         .route("/api/drafts/promote", post(api_promote_draft))
-        .route("/api/rich-prompts", post(api_create_rich_prompt_workspace))
+        .route("/api/rich-prompts", post(api_create_rich_prompt_session))
         .route(
             "/api/rich-prompts/:name/status",
             get(api_get_rich_prompt_status),
@@ -900,7 +900,7 @@ fn router(state: Arc<AppState>) -> Router {
         .route("/api/rich-prompts/:name/close", post(api_close_rich_prompt))
         // systacean-31: per-team watcher lifecycle. Load spins up
         // a `Drive::watch_team` handle; unload drops it
-        // (non-destructive; workspace persists on disk).
+        // (non-destructive; team persists on disk).
         // `/loaded` is read-only for the SPA to know which teams
         // are active.
         // systacean-41 follow-up: axum 0.7 path-param syntax is

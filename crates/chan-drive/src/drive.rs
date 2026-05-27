@@ -1421,25 +1421,25 @@ impl Drive {
         drafts::list(&self.paths.drafts)
     }
 
-    /// Inspect metadata draft workspaces and report non-fatal
+    /// Inspect metadata drafts and report non-fatal
     /// problems that should be surfaced on drive boot.
     pub fn draft_preflight(&self) -> Result<Vec<drafts::DraftIssue>> {
         drafts::preflight(&self.paths.drafts)
     }
 
-    /// Inspect a draft workspace before save or discard.
+    /// Inspect a draft before save or discard.
     pub fn inspect_draft(&self, name: &str) -> Result<drafts::DraftInspection> {
         drafts::inspect(&self.paths.drafts, name)
     }
 
-    /// Move a draft workspace to metadata trash.
+    /// Move a draft to metadata trash.
     pub fn discard_draft(&self, name: &str) -> Result<()> {
         drafts::discard(&self.paths.drafts, &self.paths.trash.join("drafts"), name)
     }
 
     /// Promote a draft into the drive root with no-clobber
     /// semantics. Single-file drafts move `draft.md` to
-    /// `target_rel`; workspaces move or merge the whole draft
+    /// `target_rel`; directory drafts move or merge the whole draft
     /// directory into the target directory.
     pub fn promote_draft(
         &self,
@@ -1455,13 +1455,13 @@ impl Drive {
         )
     }
 
-    /// Create an active Rich Prompt workspace under Drafts metadata.
+    /// Create an active Rich Prompt session under Drafts metadata.
     /// The active marker is written last so reload/preflight never
     /// treats a partially-created directory as an active prompt.
-    pub fn create_rich_prompt_workspace(
+    pub fn create_rich_prompt_session(
         &self,
         requested_name: Option<&str>,
-    ) -> Result<crate::rich_prompts::RichPromptWorkspace> {
+    ) -> Result<crate::rich_prompts::RichPromptSession> {
         crate::rich_prompts::create(
             &self.paths.drafts,
             requested_name,
@@ -1469,15 +1469,15 @@ impl Drive {
         )
     }
 
-    /// Inspect one active Rich Prompt workspace.
-    pub fn inspect_rich_prompt_workspace(
+    /// Inspect one active Rich Prompt session.
+    pub fn inspect_rich_prompt_session(
         &self,
         name: &str,
-    ) -> Result<crate::rich_prompts::RichPromptWorkspace> {
+    ) -> Result<crate::rich_prompts::RichPromptSession> {
         crate::rich_prompts::inspect(&self.paths.drafts, name)
     }
 
-    /// Inspect active Rich Prompt workspaces and report non-fatal
+    /// Inspect active Rich Prompt sessions and report non-fatal
     /// problems that should be surfaced on drive boot.
     pub fn rich_prompt_preflight(&self) -> Result<Vec<crate::rich_prompts::RichPromptIssue>> {
         crate::rich_prompts::preflight(&self.paths.drafts)
@@ -1485,7 +1485,7 @@ impl Drive {
 
     /// Archive a submitted prompt buffer into `prompt-N.md` and
     /// reset `draft.md` to a fresh blank buffer.
-    pub fn submit_rich_prompt_workspace(
+    pub fn submit_rich_prompt_session(
         &self,
         name: &str,
         content: &str,
@@ -1501,20 +1501,20 @@ impl Drive {
         )
     }
 
-    /// Move an active Rich Prompt workspace to metadata trash.
-    pub fn discard_rich_prompt_workspace(&self, name: &str) -> Result<()> {
+    /// Move an active Rich Prompt session to metadata trash.
+    pub fn discard_rich_prompt_session(&self, name: &str) -> Result<()> {
         crate::rich_prompts::discard(&self.paths.drafts, &self.paths.trash.join("drafts"), name)
     }
 
     // ---- teams (systacean-30) ----
     //
-    // Team workspaces live inside the per-drive Drafts metadata
+    // Teams live inside the per-drive Drafts metadata
     // dir as `team-{name}/` directories. Parallels the drafts
     // primitive layer: filesystem ops here, schema in
     // `crate::teams`. Consumed by `systacean-31` (multi-team
     // watcher) + the SPA's Team bootstrap flow.
 
-    /// Create a new team workspace under this drive's drafts dir.
+    /// Create a new team under this drive's drafts dir.
     /// Creates `team-{config.team_name}/` with `config.toml`,
     /// empty `events/`, and empty `docs/`. Errors when the team
     /// name is invalid or the dir already exists.
@@ -1535,7 +1535,7 @@ impl Drive {
         crate::teams::load(&self.paths.drafts, team_name)
     }
 
-    /// Verbatim-copy a team workspace under a new name. All
+    /// Verbatim-copy a team under a new name. All
     /// files + subdirectories copy byte-for-byte; the new team's
     /// `config.toml` then has its `team_name` rewritten to
     /// `new_name`. Per addendum-b clarification #10.
@@ -1547,10 +1547,10 @@ impl Drive {
         crate::teams::duplicate(&self.paths.drafts, source_name, new_name)
     }
 
-    /// Absolute path to a team's workspace directory. Errors
+    /// Absolute path to a team's directory. Errors
     /// when the team isn't registered (`load_team` validates).
     /// Useful for consumers that need to spawn processes with
-    /// CWD set to the team workspace.
+    /// CWD set to the team.
     pub fn team_dir(&self, team_name: &str) -> Result<std::path::PathBuf> {
         // load_team validates existence + name shape.
         self.load_team(team_name)?;
@@ -1571,7 +1571,7 @@ impl Drive {
     /// isn't registered (the events_dir resolution validates).
     /// Caller drops the returned handle to stop watching;
     /// chan-server's `team_unload` route uses this for non-
-    /// destructive tear-down (workspace persists on disk).
+    /// destructive tear-down (team persists on disk).
     pub fn watch_team(
         self: &Arc<Self>,
         team_name: &str,
@@ -6093,7 +6093,7 @@ mod tests {
         assert!(b.abs.is_dir());
 
         // Seed a draft.md plus companion content so promotion treats
-        // this as a workspace directory.
+        // this as a directory draft.
         std::fs::write(a.abs.join("draft.md"), b"# hello\n").unwrap();
         std::fs::write(a.abs.join("pasted.png"), [1, 2, 3]).unwrap();
 
@@ -6256,7 +6256,7 @@ mod tests {
 
     #[test]
     fn teams_dont_appear_in_list_drafts_under_team_prefix() {
-        // systacean-30: although team workspaces live in the same
+        // systacean-30: although teams live in the same
         // metadata dir as drafts, `list_drafts` reports them too
         // (since they're directories there). `list_teams`
         // filters to only `team-*` dirs. This pin documents the

@@ -1,4 +1,4 @@
-//! Rich Prompt workspace lifecycle routes.
+//! Rich Prompt session lifecycle routes.
 
 use std::path::Path as FsPath;
 use std::sync::Arc;
@@ -95,7 +95,7 @@ pub struct RichPromptCloseResponse {
     pub error: Option<String>,
 }
 
-pub async fn api_create_rich_prompt_workspace(
+pub async fn api_create_rich_prompt_session(
     State(state): State<Arc<AppState>>,
     Json(body): Json<RichPromptCreateBody>,
 ) -> Response {
@@ -114,10 +114,9 @@ pub async fn api_create_rich_prompt_workspace(
     }
     let drive = state.drive().clone();
     let requested = body.name.clone();
-    let result = tokio::task::spawn_blocking(move || {
-        drive.create_rich_prompt_workspace(requested.as_deref())
-    })
-    .await;
+    let result =
+        tokio::task::spawn_blocking(move || drive.create_rich_prompt_session(requested.as_deref()))
+            .await;
     let workspace = match result {
         Ok(Ok(workspace)) => workspace,
         Ok(Err(e)) => return rich_prompt_err(&e),
@@ -143,7 +142,7 @@ pub async fn api_create_rich_prompt_workspace(
             Some(format!("failed to start terminal watcher: {e}")),
         ),
     };
-    Json(workspace_response(workspace, watcher, phase, error)).into_response()
+    Json(rich_prompt_response(workspace, watcher, phase, error)).into_response()
 }
 
 pub async fn api_get_rich_prompt_status(
@@ -157,8 +156,7 @@ pub async fn api_get_rich_prompt_status(
     let drive = state.drive().clone();
     let inspect_name = name.clone();
     let result =
-        tokio::task::spawn_blocking(move || drive.inspect_rich_prompt_workspace(&inspect_name))
-            .await;
+        tokio::task::spawn_blocking(move || drive.inspect_rich_prompt_session(&inspect_name)).await;
     let workspace = match result {
         Ok(Ok(workspace)) => workspace,
         Ok(Err(chan_drive::ChanError::DraftBroken { message, .. })) => {
@@ -170,8 +168,8 @@ pub async fn api_get_rich_prompt_status(
     };
 
     let (watcher, phase, error) =
-        session_status_for_workspace(query.session, &state, &workspace.events_abs);
-    Json(workspace_response(workspace, watcher, phase, error)).into_response()
+        session_status_for_rich_prompt(query.session, &state, &workspace.events_abs);
+    Json(rich_prompt_response(workspace, watcher, phase, error)).into_response()
 }
 
 pub async fn api_submit_rich_prompt(
@@ -184,7 +182,7 @@ pub async fn api_submit_rich_prompt(
     }
     let drive = state.drive().clone();
     let result = tokio::task::spawn_blocking(move || {
-        drive.submit_rich_prompt_workspace(
+        drive.submit_rich_prompt_session(
             &name,
             &body.content,
             body.expected_sequence,
@@ -225,8 +223,7 @@ pub async fn api_close_rich_prompt(
     let drive = state.drive().clone();
     let discard_name = name.clone();
     let result =
-        tokio::task::spawn_blocking(move || drive.discard_rich_prompt_workspace(&discard_name))
-            .await;
+        tokio::task::spawn_blocking(move || drive.discard_rich_prompt_session(&discard_name)).await;
     match result {
         Ok(Ok(())) => {
             state.self_writes.note(&format!("Drafts/{name}"));
@@ -280,7 +277,7 @@ fn session_status(
     watcher_view(state.terminal_sessions.watcher_status(&session))
 }
 
-fn session_status_for_workspace(
+fn session_status_for_rich_prompt(
     session: Option<String>,
     state: &Arc<AppState>,
     events_abs: &FsPath,
@@ -348,8 +345,8 @@ fn watcher_view(
     }
 }
 
-fn workspace_response(
-    workspace: chan_drive::RichPromptWorkspace,
+fn rich_prompt_response(
+    workspace: chan_drive::RichPromptSession,
     watcher: RichPromptWatcherView,
     phase: RichPromptPhase,
     error: Option<String>,
@@ -422,7 +419,7 @@ mod tests {
     }
 
     #[test]
-    fn status_refresh_reattaches_detached_workspace_watcher() {
+    fn status_refresh_reattaches_detached_rich_prompt_watcher() {
         let state = crate::state::test_support::make_test_state(false, false);
         let handle = state
             .terminal_sessions
@@ -446,7 +443,7 @@ mod tests {
         let events = tempfile::tempdir().expect("events dir");
 
         let (watcher, phase, error) =
-            session_status_for_workspace(Some(id.clone()), &state, events.path());
+            session_status_for_rich_prompt(Some(id.clone()), &state, events.path());
 
         assert!(matches!(watcher, RichPromptWatcherView::Attached { .. }));
         assert_eq!(phase, RichPromptPhase::Active);

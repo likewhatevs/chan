@@ -1,6 +1,6 @@
-//! Rich Prompt metadata workspaces.
+//! Rich Prompt metadata sessions.
 //!
-//! Rich Prompts are terminal-owned draft workspaces. They live under
+//! Rich Prompts are terminal-owned draft-backed sessions. They live under
 //! the per-drive drafts metadata root as `rich-prompt-N/`, but an
 //! active marker distinguishes them from old history-only
 //! `rich-prompt-N/prompt.md` directories and ordinary drafts.
@@ -24,7 +24,7 @@ const TASKS_DIR: &str = "tasks";
 pub const DEFAULT_PROCESS_TEXT: &str = "\
 # Rich Prompt Process\n\
 \n\
-This workspace is terminal-owned and draft-backed.\n\
+This session is terminal-owned and draft-backed.\n\
 \n\
 - `draft.md` is the active prompt buffer.\n\
 - `prompt-N.md` files are submitted prompt archives.\n\
@@ -36,7 +36,7 @@ Use `Drafts/...` paths through chan tools. They resolve to uncommitted metadata\
 outside the drive root until the host saves or promotes content intentionally.\n";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct RichPromptWorkspace {
+pub struct RichPromptSession {
     pub name: String,
     pub draft_path: String,
     pub workspace_path: String,
@@ -65,7 +65,7 @@ pub fn create(
     drafts_dir: &Path,
     requested_name: Option<&str>,
     process_text: &str,
-) -> Result<RichPromptWorkspace> {
+) -> Result<RichPromptSession> {
     fs::create_dir_all(drafts_dir).map_err(|e| {
         ChanError::Io(format!(
             "failed to create drafts directory {}: {e}",
@@ -88,13 +88,13 @@ pub fn create(
                 }
             }
             Err(ChanError::Io(
-                "failed to allocate rich prompt workspace name".into(),
+                "failed to allocate rich prompt session name".into(),
             ))
         }
     }
 }
 
-pub fn inspect(drafts_dir: &Path, name: &str) -> Result<RichPromptWorkspace> {
+pub fn inspect(drafts_dir: &Path, name: &str) -> Result<RichPromptSession> {
     validate_name(name)?;
     let root = drafts_dir.join(name);
     inspect_root(name, &root)
@@ -222,7 +222,7 @@ fn create_named(
     name: &str,
     process_text: &str,
     auto_name: bool,
-) -> Result<RichPromptWorkspace> {
+) -> Result<RichPromptSession> {
     validate_name(name)?;
     let root = drafts_dir.join(name);
     match fs::create_dir(&root) {
@@ -235,23 +235,23 @@ fn create_named(
         }
         Err(e) => {
             return Err(ChanError::Io(format!(
-                "failed to create rich prompt workspace {}: {e}",
+                "failed to create rich prompt session {}: {e}",
                 root.display()
             )));
         }
     }
-    let result = create_workspace_contents(name, &root, process_text);
+    let result = create_session_contents(name, &root, process_text);
     if result.is_err() {
         let _ = fs::remove_dir_all(&root);
     }
     result
 }
 
-fn create_workspace_contents(
+fn create_session_contents(
     name: &str,
     root: &Path,
     process_text: &str,
-) -> Result<RichPromptWorkspace> {
+) -> Result<RichPromptSession> {
     let spool = root.join(SPOOL_DIR);
     fs::create_dir(&spool)
         .map_err(|e| ChanError::Io(format!("failed to create rich prompt spool dir: {e}")))?;
@@ -265,7 +265,7 @@ fn create_workspace_contents(
     inspect_root(name, root)
 }
 
-fn inspect_root(name: &str, root: &Path) -> Result<RichPromptWorkspace> {
+fn inspect_root(name: &str, root: &Path) -> Result<RichPromptSession> {
     validate_name(name)?;
     let meta = fs::symlink_metadata(root).map_err(|e| {
         if e.kind() == std::io::ErrorKind::NotFound {
@@ -293,7 +293,7 @@ fn inspect_root(name: &str, root: &Path) -> Result<RichPromptWorkspace> {
         ensure_dir(name, &spool.join(leaf), &format!("{SPOOL_DIR}/{leaf}"))?;
     }
     scan_for_unsafe_entries(name, root, Path::new(""))?;
-    Ok(RichPromptWorkspace {
+    Ok(RichPromptSession {
         name: name.to_string(),
         draft_path: format!("{}/{name}/{DRAFT_FILE}", drafts::UNIFIED_DRAFTS_ROOT),
         workspace_path: format!("{}/{name}", drafts::UNIFIED_DRAFTS_ROOT),
@@ -434,7 +434,7 @@ mod tests {
     use tempfile::TempDir;
 
     #[test]
-    fn create_builds_active_workspace() {
+    fn create_builds_active_session() {
         let td = TempDir::new().unwrap();
         let workspace = create(td.path(), None, DEFAULT_PROCESS_TEXT).unwrap();
 
