@@ -80,6 +80,7 @@ import {
   TAB_TITLE_MAX_LENGTH,
   terminalBroadcastMemberIds,
   terminalEnvTabNameStale,
+  toggleActiveTerminalBroadcastSelectAll,
   truncateTabTitle,
   type BrowserTab,
   type FileTab,
@@ -2736,6 +2737,30 @@ describe("terminal broadcast groups", () => {
       "term-c",
     ]);
     expect(tab("term-c").broadcastEnabled).toBe(true);
+  });
+
+  test("addendum-3: select-all toggle flips the whole group on the active terminal", () => {
+    const a = terminalTab({ id: "term-a", title: "A" });
+    const b = terminalTab({ id: "term-b", title: "B" });
+    const c = terminalTab({ id: "term-c", title: "C" });
+    resetLayout([a, b, c]); // term-a is the active terminal
+    const tab = (id: string) =>
+      activePane().tabs.find((candidate) => candidate.id === id) as TerminalTab;
+
+    // Nothing selected -> first toggle SELECTS ALL (self + every peer).
+    toggleActiveTerminalBroadcastSelectAll();
+    expect(tab("term-a").broadcastEnabled).toBe(true);
+    expect(terminalBroadcastMemberIds(tab("term-a")).sort()).toEqual([
+      "term-a",
+      "term-b",
+      "term-c",
+    ]);
+
+    // All selected -> second toggle DESELECTS ALL.
+    toggleActiveTerminalBroadcastSelectAll();
+    expect(tab("term-a").broadcastEnabled).toBe(false);
+    expect(terminalBroadcastMemberIds(tab("term-a"))).not.toContain("term-b");
+    expect(terminalBroadcastMemberIds(tab("term-a"))).not.toContain("term-c");
   });
 
   test("peer removal updates the group", () => {

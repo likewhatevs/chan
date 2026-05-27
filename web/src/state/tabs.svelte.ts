@@ -989,6 +989,31 @@ export function activeTerminalTab(): TerminalTab | null {
   return t;
 }
 
+/// `lane-c addendum-3`: toggle broadcast SELECT-ALL <-> DESELECT-ALL for
+/// the active terminal, the chord-driven equivalent of the per-tab
+/// "Select All" / "Deselect All" button (TerminalTab.toggleAllBroadcast-
+/// Targets). Walks every terminal tab INCLUDING self (self via
+/// broadcastEnabled, others via broadcast targets), so the bulk action
+/// matches the per-row UI. No-op when the active tab isn't a terminal.
+export function toggleActiveTerminalBroadcastSelectAll(): void {
+  const tab = activeTerminalTab();
+  if (!tab) return;
+  const targets = allTerminalTabs();
+  if (targets.length === 0) return;
+  const selected = new Set(terminalBroadcastMemberIds(tab));
+  const allSelected = targets.every((t) =>
+    t.id === tab.id ? tab.broadcastEnabled : selected.has(t.id),
+  );
+  const select = !allSelected;
+  for (const target of targets) {
+    if (target.id === tab.id) {
+      setTerminalBroadcastEnabled(tab, select);
+    } else {
+      setTerminalBroadcastTarget(tab, target.id, select);
+    }
+  }
+}
+
 export function openActiveTerminalRichPrompt(): void {
   const tab = activeTerminalTab();
   if (!tab) return;
