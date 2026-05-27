@@ -31,24 +31,25 @@
   import {
     browserSelection,
     browserSidePanes,
-    collapseAllFolders,
-    expandAllFolders,
+    collapseAllFoldersForInstance,
+    expandAllFoldersForInstance,
+    ensureFbTreeInstance,
+    fbTreeInstance,
     fbSelectSet,
     fbSelectSingle,
     fileOps,
-    isFullyExpanded,
+    isFullyExpandedForInstance,
     openFsGraphForDirectory,
     openFsGraphForFile,
     paneWidths,
     persistPaneWidths,
     persistLayoutToHash,
-    persistTreeExpanded,
+    persistFbTreeInstanceExpansion,
     refreshTree,
-    restoreTreeExpandedMap,
+    seedFbTreeInstanceFromReloadSnapshot,
     surfaceThemeOverride,
     toggleBrowserSidePane,
     tree,
-    treeExpanded,
     drive,
   } from "../state/store.svelte";
   import {
@@ -103,7 +104,12 @@
   const browserState = $derived(tab ?? dockBrowserState);
   const fullyExpanded = $derived.by(() => {
     void tree.entries;
-    return isFullyExpanded();
+    // READ the per-instance map so a dirty re-eval picks up THIS surface's
+    // expansion, not a sibling's. Must NOT call ensureFbTreeInstance here
+    // (it mutates $state -> state_unsafe_mutation inside a $derived); the
+    // instance is created by the subscription-reconcile effect below.
+    void fbTreeInstance(instanceId)?.expanded;
+    return isFullyExpandedForInstance(instanceId);
   });
 
   // ---- per-instance scoped /ws subscriptions (phase-11 Slice E) ----------
@@ -115,10 +121,10 @@
   // (so root-level fs changes broadcast to it); as directories expand /
   // collapse it subscribes / unsubscribes the matching dir scopes, with
   // the LAST instance to drop a dir tearing the server watcher down. The
-  // expanded-dir set is read from the rendered `treeExpanded.map` the
-  // tree walks today; per-instance independence is in the subscription
-  // bookkeeping, not a per-instance render (that stays shared, matching
-  // the existing model).
+  // expanded-dir set is read from the instance's OWN per-instance
+  // `expanded` map (Slice E), which is now also the render source: the
+  // tree and the subscription bookkeeping share one per-instance map, so
+  // expanding a dir in one surface no longer fans out to the others.
   const instanceId = $derived(
     isTab && tab ? `fb-tab-${tab.id}` : isDock ? `fb-dock-${side ?? "left"}` : "fb-overlay",
   );
@@ -126,16 +132,21 @@
   $effect(() => {
     const id = instanceId;
     untrack(() => fbWatchRegister(id));
+    // The dock / overlay surfaces have no layout home for their expansion,
+    // so seed from the per-instance reload snapshot on register. The tab
+    // variant seeds from `tab.expanded` in `restoreFromTab` instead
+    // (authoritative across app restart, not just reload).
+    if (!isTab) untrack(() => seedFbTreeInstanceFromReloadSnapshot(id));
     return () => untrack(() => fbWatchDispose(id));
   });
 
   // Reconcile this instance's dir subscriptions against the directories
-  // currently expanded in the tree it renders. `treeExpanded.map` is the
-  // reactive source; recompute the expanded-dir list (root excluded) and
-  // let the manager diff it against what this instance already holds.
+  // currently expanded in the tree it renders. The per-instance `expanded`
+  // map is the reactive source; recompute the expanded-dir list (root
+  // excluded) and let the manager diff it against what this instance holds.
   $effect(() => {
     const id = instanceId;
-    const map = treeExpanded.map;
+    const map = ensureFbTreeInstance(id).expanded;
     const dirs = Object.keys(map).filter((p) => p.length > 0 && map[p]);
     untrack(() => fbWatchReconcile(id, dirs));
   });
@@ -159,12 +170,14 @@
 
   /// `fullstack-58`: per-tab File Browser view state.
   /// When this surface renders for a tab (variant === "tab"), the
-  /// active tab "owns" the module-level singletons (browserSelection,
-  /// treeExpanded, treeWrap scroll). On tab swap, we snapshot the
-  /// current singletons onto the deactivating tab record and restore
-  /// the activating tab's saved state. The dock + overlay variants
-  /// keep their existing shared-state behaviour (drive-wide selection
-  /// + expansion is the intent there).
+  /// active tab "owns" the module-level `browserSelection` singleton +
+  /// the treeWrap scroll, and (Slice E) its OWN per-instance expansion
+  /// map keyed by `fb-tab-<id>`. On tab swap the surface unmounts, which
+  /// disposes the tab's instance; on (re)activation we snapshot the live
+  /// state onto the tab record and restore it back, so the activating
+  /// tab's expansion is reseeded from `tab.expanded` into a fresh
+  /// instance. The dock + overlay variants own their own instance maps
+  /// independently.
   function snapshotIntoTab(target: BrowserTab): void {
     target.selected = browserSelection.path ?? undefined;
     // The multi-selection travels with the tab too (FB capabilities).
@@ -173,7 +186,7 @@
     const multi = browserSelection.paths;
     target.selectedPaths = multi.length > 1 ? [...multi] : undefined;
     target.showDrive = browserSelection.showDrive ? true : undefined;
-    const map = treeExpanded.map;
+    const map = ensureFbTreeInstance(`fb-tab-${target.id}`).expanded;
     const expanded = Object.keys(map).filter((p) => p.length > 0 && map[p]);
     target.expanded = expanded.length > 0 ? expanded : undefined;
     const scroll = treeWrapEl?.scrollTop ?? 0;
@@ -190,9 +203,14 @@
       fbSelectSingle(active);
     }
     browserSelection.showDrive = source.showDrive ?? false;
-    const map: Record<string, boolean> = { "": true };
-    for (const p of source.expanded ?? []) map[p] = true;
-    restoreTreeExpandedMap(map);
+    // Seed THIS tab's per-instance expansion from its persisted
+    // `tab.expanded` (round-tripped through the layout hash + session.json).
+    const inst = ensureFbTreeInstance(`fb-tab-${source.id}`);
+    for (const k of Object.keys(inst.expanded)) {
+      if (k !== "") delete inst.expanded[k];
+    }
+    inst.expanded[""] = true;
+    for (const p of source.expanded ?? []) inst.expanded[p] = true;
     const target = source.scroll ?? 0;
     queueMicrotask(() => {
       if (treeWrapEl) treeWrapEl.scrollTop = target;
@@ -223,7 +241,7 @@
   $effect(() => {
     if (!isTab || !tab) return;
     const captured = tab;
-    const map = treeExpanded.map;
+    const map = ensureFbTreeInstance(`fb-tab-${captured.id}`).expanded;
     const expanded = Object.keys(map).filter((p) => p.length > 0 && map[p]);
     untrack(() => {
       captured.expanded = expanded.length > 0 ? expanded : undefined;
@@ -307,8 +325,11 @@
   }
 
   function toggleAll(): void {
-    if (fullyExpanded) collapseAllFolders();
-    else expandAllFolders();
+    // Expand / collapse all targets THIS surface's instance only, so the
+    // dock and a tab don't toggle each other.
+    if (fullyExpanded) collapseAllFoldersForInstance(instanceId);
+    else expandAllFoldersForInstance(instanceId);
+    persistFbTreeInstanceExpansion(instanceId);
     menu?.close();
   }
 
@@ -401,15 +422,13 @@
     const tab = openBrowserInActivePane(path ? { select: path } : {});
     tab.inspectorOpen = true;
     if (path) {
+      // The new tab's surface seeds its own per-instance expansion from
+      // `tab.expanded` on mount, so no global singleton to prime here.
       const ancestors = expandedAncestors(path);
       tab.showDrive = false;
       tab.expanded = ancestors.length > 0 ? ancestors : undefined;
       browserSelection.path = path;
       browserSelection.showDrive = false;
-      const map: Record<string, boolean> = { "": true };
-      for (const ancestor of ancestors) map[ancestor] = true;
-      restoreTreeExpandedMap(map);
-      persistTreeExpanded();
       return;
     }
     tab.showDrive = true;
@@ -565,6 +584,7 @@
       {/if}
       <FileTree
         bind:this={treeRef}
+        {instanceId}
         dockSide={variant === "dock" ? side : undefined}
         onClickRow={onRowClicked}
         onFlip={isTab ? onFlip : undefined}

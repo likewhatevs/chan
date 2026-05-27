@@ -2487,6 +2487,84 @@ export function persistTreeExpanded(): void {
   scheduleSessionSave();
 }
 
+// ---- per-instance reload persistence (phase-12 Slice E) -----------------
+//
+// FileTree.svelte renders off the per-instance `expanded` map, so the
+// global reload snapshot above no longer feeds it. Each surface gets its
+// own sessionStorage snapshot keyed by drive + instance id so a full
+// browser reload restores that surface's expansion. The TAB variant's
+// authoritative store is the layout tab's `expanded` field (round-tripped
+// through the hash + session.json and re-seeded by FileBrowserSurface on
+// mount); the DOCK / overlay variants have no layout home, so this
+// snapshot is what survives their reload.
+
+const FB_INSTANCE_RELOAD_KEY = "chan.fileBrowser.instanceExpanded";
+
+function fbInstanceReloadKey(id: string): string {
+  const driveKey = drive.info?.root ?? window.location.pathname;
+  return `${FB_INSTANCE_RELOAD_KEY}:${sessionWindowId()}:${driveKey}:${id}`;
+}
+
+function fbInstanceExpandedPayload(id: string): Record<string, boolean> {
+  const inst = fbTreeInstance(id);
+  const map: Record<string, boolean> = { "": true };
+  if (inst) {
+    for (const [k, v] of Object.entries(inst.expanded)) {
+      if (v) map[k] = true;
+    }
+  }
+  return map;
+}
+
+/// Persist one File Browser surface's expansion: write its reload
+/// snapshot and schedule a session save. Called from FileTree on every
+/// toggle. The tab variant additionally mirrors the map into its layout
+/// tab via FileBrowserSurface's effects.
+export function persistFbTreeInstanceExpansion(id: string): void {
+  if (typeof window !== "undefined") {
+    try {
+      window.sessionStorage.setItem(
+        fbInstanceReloadKey(id),
+        JSON.stringify({ map: fbInstanceExpandedPayload(id) }),
+      );
+    } catch {
+      // Best-effort only; the tab variant still restores from its layout.
+    }
+  }
+  scheduleSessionSave();
+}
+
+/// Seed an instance's expansion from its reload snapshot if one exists.
+/// Returns true when a snapshot was applied. The dock / overlay surfaces
+/// call this on mount; the tab variant seeds from `tab.expanded` instead
+/// (that path is authoritative and survives app restart, not just reload).
+export function seedFbTreeInstanceFromReloadSnapshot(id: string): boolean {
+  if (typeof window === "undefined") return false;
+  let raw: string | null = null;
+  try {
+    raw = window.sessionStorage.getItem(fbInstanceReloadKey(id));
+  } catch {
+    return false;
+  }
+  if (!raw) return false;
+  try {
+    const parsed = JSON.parse(raw) as { map?: Record<string, boolean> };
+    if (!parsed.map || typeof parsed.map !== "object") return false;
+    const inst = ensureFbTreeInstance(id);
+    for (const k of Object.keys(inst.expanded)) {
+      if (k !== "") delete inst.expanded[k];
+    }
+    inst.expanded[""] = true;
+    for (const [k, v] of Object.entries(parsed.map)) {
+      if (v) inst.expanded[k] = true;
+    }
+    inst.expanded[""] = true;
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 /// True once we've established the initial tree-expansion state for
 /// this session (either from session.json or from the fresh-session
 /// auto-expand seed). Skips the auto-expand on subsequent
@@ -2553,6 +2631,11 @@ export function revealAndSelect(path: string): void {
     treeExpanded.map[acc] = true;
   }
   treeExpanded.map[""] = true;
+  // FileTree renders off per-instance maps now, so a reveal must reach
+  // every live surface (the dock + the active tab) rather than only the
+  // global singleton; the entry should appear wherever the user is
+  // looking. Expand ancestors only (not the file itself).
+  expandAncestorsInAllInstances(path, false);
   // Programmatic reveal is a single-select: reset the multi-set + anchor
   // so a later shift+click ranges from the revealed entry.
   fbSelectSingle(path);
@@ -2573,6 +2656,9 @@ export function revealAndEnterDirectory(path: string): void {
     acc = acc ? `${acc}/${part}` : part;
     treeExpanded.map[acc] = true;
   }
+  // Reach every live surface (see revealAndSelect). Entering a directory
+  // expands the directory ITSELF plus its ancestors.
+  expandAncestorsInAllInstances(path, true);
   fbSelectSingle(path || null);
   browserSelection.showDrive = false;
   if (path) void loadTreeDir(path);
@@ -2586,6 +2672,63 @@ export function isFullyExpanded(): boolean {
     if (e.is_dir && !treeExpanded.map[e.path]) return false;
   }
   return true;
+}
+
+// ---- per-instance expansion helpers (phase-12 Slice E) ------------------
+//
+// FileTree.svelte renders + toggles off the per-instance `expanded` map in
+// `fbTreeInstances` so two visible File Browser surfaces (a dock side + a
+// tab, or two split panes) keep independent expand/collapse state. These
+// mirror the global `expandAllFolders` / `collapseAllFolders` /
+// `isFullyExpanded` above but target one instance's map. The FB header
+// menu drives them with the surface's own instance id.
+
+/// Expand every directory in the current tree for one instance.
+export function expandAllFoldersForInstance(id: string): void {
+  const inst = ensureFbTreeInstance(id);
+  inst.expanded[""] = true;
+  for (const e of tree.entries) {
+    if (e.is_dir) inst.expanded[e.path] = true;
+  }
+}
+
+/// Collapse every directory for one instance (root stays expanded so
+/// the pre-order walk in FileTree stays consistent).
+export function collapseAllFoldersForInstance(id: string): void {
+  const inst = ensureFbTreeInstance(id);
+  for (const k of Object.keys(inst.expanded)) {
+    if (k !== "") delete inst.expanded[k];
+  }
+  inst.expanded[""] = true;
+}
+
+/// True when every directory in the current tree is expanded for one
+/// instance. Drives the header toggle's glyph for that surface.
+export function isFullyExpandedForInstance(id: string): boolean {
+  const inst = fbTreeInstance(id);
+  if (!inst) return false;
+  for (const e of tree.entries) {
+    if (e.is_dir && !inst.expanded[e.path]) return false;
+  }
+  return true;
+}
+
+/// Expand the ancestor chain of `path` across EVERY live File Browser
+/// instance. Programmatic reveals (after create / move / upload, or an
+/// external open-browser command) must surface the new entry in whatever
+/// surface is on screen; unlike a user toggle, a reveal is not scoped to
+/// one instance. Always keeps each instance's root expanded.
+function expandAncestorsInAllInstances(path: string, includeSelf: boolean): void {
+  const parts = (includeSelf ? path.split("/").filter(Boolean) : path.split("/"));
+  const upto = includeSelf ? parts.length : parts.length - 1;
+  for (const inst of Object.values(fbTreeInstances.byId)) {
+    inst.expanded[""] = true;
+    let acc = "";
+    for (let i = 0; i < upto; i++) {
+      acc = acc ? `${acc}/${parts[i]}` : parts[i];
+      if (acc) inst.expanded[acc] = true;
+    }
+  }
 }
 
 /// Poll cadence: fast while the indexer is doing work or has errored,
