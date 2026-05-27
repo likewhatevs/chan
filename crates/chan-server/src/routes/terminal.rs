@@ -1115,34 +1115,53 @@ mod tests {
             .unwrap_or(false)
     }
 
-    /// Process-wide async lock serializing the real-PTY shell-probe
-    /// tests. Each spawns a real shell on a PTY, sends commands, and
-    /// asserts on the shell's output within a bounded window. Under the
-    /// FULL parallel `cargo test` run (CI) every core is saturated by
-    /// the rest of the workspace, so the shell's startup, `stty -echo`
-    /// settling, and command output all slip past a tight window; the
-    /// probe then returns only the echoed command line (which itself
-    /// contains tokens like `CHAN_MCP_`), tripping the assertions.
-    /// Holding this lock makes only ONE real-PTY test drive a shell at a
-    /// time so it gets the CPU it needs, while the rest of the suite
-    /// still runs in parallel around it. A `tokio::sync::Mutex` (not
-    /// `std`) is used because the guard is held across `.await`; it is
-    /// `Send`-safe and not poisoned by a panicking test, so one failure
-    /// does not cascade.
-    fn pty_test_lock() -> &'static tokio::sync::Mutex<()> {
-        static LOCK: std::sync::OnceLock<tokio::sync::Mutex<()>> = std::sync::OnceLock::new();
-        LOCK.get_or_init(|| tokio::sync::Mutex::new(()))
+    /// Well-known lock-file name (under the OS temp dir) for the
+    /// cross-process FS-timing test gate. MUST stay identical to
+    /// `chan_drive::test_gate::GATE_FILE` and the copy in the indexer
+    /// test module so every FS-timing test across both crates' separate
+    /// test binaries contends on the same OS advisory lock.
+    const FS_TIMING_GATE: &str = "chan-fs-timing-test.gate";
+
+    /// Cross-process serial gate for the real-PTY shell-probe tests.
+    /// Each spawns a real shell on a PTY, sends commands, and asserts on
+    /// the shell's output within a bounded window. Under the FULL
+    /// parallel `cargo test` run (CI) every core is saturated, so the
+    /// shell's startup, `stty -echo` settling, and command output all
+    /// slip past a tight window; the probe then returns only the echoed
+    /// command line (which itself contains tokens like `CHAN_MCP_`),
+    /// tripping the assertions.
+    ///
+    /// WHY a FILE lock and not a `static`/`tokio` Mutex: a `static` lock
+    /// serializes only tests WITHIN this test binary, but `cargo test`
+    /// runs each crate's test binary as a SEPARATE PROCESS concurrently,
+    /// so these PTY tests still race chan-drive's FS-watcher tests and
+    /// this crate's indexer boot-walk tests for the CPU. An OS advisory
+    /// lock on a well-known temp path spans process boundaries; opening
+    /// the SAME `FS_TIMING_GATE` path here, in the indexer test module,
+    /// and in chan-drive (`crate::test_gate`) makes one named gate
+    /// serialize the entire FS-timing class workspace-wide. The
+    /// `std::fs::File` guard is `Send` (held across `.await` on the
+    /// multi-thread runtime is fine) and releases on drop / process
+    /// exit.
+    fn pty_test_lock() -> std::fs::File {
+        let path = std::env::temp_dir().join(FS_TIMING_GATE);
+        let file = std::fs::OpenOptions::new()
+            .create(true)
+            .write(true)
+            .truncate(false)
+            .open(&path)
+            .expect("open FS-timing test gate file");
+        file.lock().expect("acquire FS-timing test gate");
+        file
     }
 
     /// Wait budget for a real-PTY shell probe to emit its end marker. On
     /// an idle host the shell echoes the marker in well under a second,
     /// so this ceiling is never approached; it only governs the worst
     /// case under the full parallel suite, where shell scheduling slips
-    /// by seconds. The old 5s window was too tight for that worst case
-    /// (it flaked on macOS CI under heavy contention); 30s absorbs it
-    /// without slowing the common path, since `collect_until` returns as
-    /// soon as the marker arrives. The serialize lock keeps these probes
-    /// from stacking real-shell load on top of each other.
+    /// by seconds. The cross-process `pty_test_lock` gate is the primary
+    /// fix (it removes the competing FS-timing load); this budget is the
+    /// backstop and should rarely be approached now.
     const PROBE_BUDGET: Duration = Duration::from_secs(30);
 
     fn terminal_drive_fixture() -> (tempfile::TempDir, tempfile::TempDir, Arc<chan_drive::Drive>) {
@@ -1834,7 +1853,7 @@ mod tests {
     async fn terminal_session_reports_live_cwd() {
         // Serialize against the sibling real-PTY tests so they do not
         // stack real-shell load on each other under the full parallel run.
-        let _serial = pty_test_lock().lock().await;
+        let _serial = pty_test_lock();
         let tmp = tempfile::tempdir().expect("temp drive");
         let subdir = tmp.path().join("work");
         fs::create_dir_all(&subdir).expect("create subdir");
@@ -1878,7 +1897,7 @@ mod tests {
     async fn conditional_pty_programs_validate_real_terminal() {
         // Serialize against the sibling real-PTY tests so they do not
         // stack real-shell load on each other under the full parallel run.
-        let _serial = pty_test_lock().lock().await;
+        let _serial = pty_test_lock();
         let mut ran = 0usize;
         let mut passed = 0usize;
 
@@ -2062,7 +2081,7 @@ mod tests {
         }
         // Serialize against the sibling real-PTY tests so they do not
         // stack real-shell load on each other under the full parallel run.
-        let _serial = pty_test_lock().lock().await;
+        let _serial = pty_test_lock();
         let tmp = tempfile::tempdir().expect("temp drive");
         let mut terminal = TestTerminal::spawn_with_mcp_env(
             tmp.path().to_path_buf(),

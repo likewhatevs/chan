@@ -42,6 +42,8 @@ pub mod registry;
 mod report;
 pub mod rich_prompts;
 pub mod teams;
+#[cfg(test)]
+mod test_gate;
 pub mod trash;
 pub mod vcs;
 pub mod watch;
