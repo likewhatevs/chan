@@ -619,6 +619,19 @@
     if (currentScope.kind === "drive" || currentScope.kind === "global") {
       return null;
     }
+    // GI-9: in filesystem mode the fs-graph endpoint already returns
+    // exactly the in-scope, depth-limited containment spine (the depth
+    // slider re-fetches at the new depth via load()), so there is no
+    // larger graph to narrow here. The scope BFS below is a SEMANTIC
+    // concept: /api/graph returns the drive's relevant subgraph and the
+    // frontend trims it to the scope + depth. Applying it to fs-mode was
+    // the bug: it seeds ONLY from `kind === "file"` nodes (see the dir
+    // branch), but a directory's shallow children are DIRECTORIES, so a
+    // dir-scope fs-graph seeded empty and every node + edge was filtered
+    // out (rendered 0/N). Returning null renders the full backend spine
+    // for ALL branches to depth; the per-kind chip filters still apply
+    // via the `hidden*Ids` sets in visibleNodeIds / visibleEdges.
+    if (filesystemMode) return null;
     // Tag scope: seed with the tag node itself; BFS expands across
     // every doc that references it (depth 1) and further along
     // those docs' edges (depth 2+). No path resolution needed —
