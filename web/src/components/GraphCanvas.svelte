@@ -688,14 +688,15 @@
         forceCollide<DNode>().radius((d) => d.radius + FORCE.collidePad),
       )
       .force("x", forceX<DNode>(0).strength(FORCE.centerStrength))
-      // `fullstack-a-49` (G2) filesystem-hierarchy spine:
+      // `fullstack-a-49` (G2) filesystem-hierarchy spine + GI-10:
       //   * Hierarchical nodes (file / folder / media) get a
       //     depth-anchored forceY pulling each toward
-      //     `depth * hierarchyYSpacing` so the layout reads
-      //     top-to-bottom as drive-root → top-level dirs → nested
-      //     dirs → files. Non-hierarchical nodes (tag / mention /
-      //     language; depth = -1) keep the existing weak center
-      //     force.
+      //     `-depth * hierarchyYSpacing` so the layout reads
+      //     bottom-to-top as drive-root → top-level dirs → nested
+      //     dirs → files. GI-10: the drive root (depth 0) settles at
+      //     the BOTTOM and the containment spine grows UPWARD from it.
+      //     Non-hierarchical nodes (tag / mention / language;
+      //     depth = -1) keep the existing weak center force.
       //   * A custom parent-anchored forceX pulls each
       //     hierarchical node toward its parent directory's X
       //     position, so siblings under the same parent cluster
@@ -707,7 +708,9 @@
         "y",
         forceY<DNode>((d) => {
           if (d.depth < 0) return 0;
-          return d.depth * FORCE.hierarchyYSpacing;
+          // GI-10: negative pull so deeper nodes rise ABOVE their
+          // ancestors; the drive root (depth 0) anchors the bottom.
+          return -d.depth * FORCE.hierarchyYSpacing;
         }).strength((d) =>
           d.depth < 0 ? FORCE.centerStrength : FORCE.hierarchyYStrength,
         ),
