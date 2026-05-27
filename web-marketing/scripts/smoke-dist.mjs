@@ -17,7 +17,7 @@ const checks = [
   {
     path: "/install.sh",
     status: 200,
-    includes: 'BASE="${BASE:-https://github.com/fiorix/chan/releases/latest/download}"',
+    includes: 'DEFAULT_METADATA_BASE="https://chan.app/dl/cli"',
   },
   { path: "/install.ps1", status: 404 },
 ];

@@ -1,0 +1,19 @@
+pkgname=chan
+pkgver=${CHAN_PKG_VERSION:?}
+pkgrel=1
+pkgdesc='Notes app with embedded web editor'
+arch=("${CHAN_ARCH:?}")
+url='https://chan.app'
+license=('Apache-2.0')
+depends=('gcc-libs' 'glibc')
+source=()
+sha256sums=()
+
+package() {
+  install -Dm755 "${CHAN_REPO:?}/target/${ARCHPKG_TARGET:?}/release/chan" \
+    "${pkgdir}/usr/bin/chan"
+  install -Dm644 "${CHAN_REPO}/LICENSE" \
+    "${pkgdir}/usr/share/licenses/chan/LICENSE"
+  install -Dm644 "${CHAN_REPO}/README.md" \
+    "${pkgdir}/usr/share/doc/chan/README.md"
+}

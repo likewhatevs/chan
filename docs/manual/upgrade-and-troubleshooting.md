@@ -5,17 +5,19 @@ for the standalone `chan` binary.
 
 ## Upgrade the CLI
 
-The standalone binary checks the latest GitHub Release at
-`github.com/fiorix/chan` and verifies downloads against the published
-`SHA256SUMS` file.
+The standalone binary reads CLI release metadata from
+`https://chan.app/dl/cli/latest.json`, selects the asset for the current
+OS and architecture, and verifies the download against the SHA256 value in
+that metadata.
 
 ```sh
 chan upgrade
 chan upgrade --version 0.14.0
 ```
 
-`--version` takes a bare version. Release tags are named `chan-v<version>` by
-the release workflow.
+`--version` takes a bare version and reads
+`https://chan.app/dl/cli/v<version>.json`. Public release tags use
+`v<version>`.
 
 ## Server URL has expired
 

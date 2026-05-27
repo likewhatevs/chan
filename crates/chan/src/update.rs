@@ -5,25 +5,28 @@
 //      newer release is known. No network access; the probe is what
 //      populates the cache.
 //   2. Probe. [`run_probe`] is spawned as a tokio task at the start
-//      of `chan serve`. It hits GitHub's latest-release JSON with a
-//      short timeout, writes the result to the state file,
+//      of `chan serve`. It reads complete-release CLI metadata with
+//      a short timeout, writes the result to the state file,
 //      and prints the banner inline if the just-fetched version is
 //      newer than the running binary's. Throttled to once per
 //      [`PROBE_INTERVAL_HOURS`] across `chan serve` restarts.
 //   3. `chan upgrade`. [`run_upgrade`] resolves the running binary
-//      via [`std::env::current_exe`], downloads the release archive
-//      for the current target into a sibling temp file, verifies
-//      SHA-256 against the release's `SHA256SUMS`,
+//      via [`std::env::current_exe`], reads complete-release CLI
+//      metadata, downloads the archive for the current target into a
+//      sibling temp file, verifies SHA-256 against the metadata,
 //      extracts the `chan` binary out of the archive into a second
 //      temp file, and atomically renames it over the running
 //      executable.
 //
-// URLs are hardcoded to GitHub Releases. Self-hosted /
-// mirrored deployments are not supported. Offline / proxy hosts:
+// Metadata URLs are hardcoded to chan.app. Release assets may live on
+// GitHub Releases or another HTTPS origin chosen by the metadata.
+// Self-hosted / mirrored deployments are not supported for the CLI
+// upgrade path. Offline / proxy hosts:
 // reqwest honors HTTP_PROXY / HTTPS_PROXY / ALL_PROXY / NO_PROXY
 // from the environment, and probe failures are swallowed (verbose
 // only) so an air-gapped `chan serve` keeps working.
 
+use std::collections::BTreeSet;
 use std::env;
 use std::fs;
 use std::io::Write;
@@ -34,8 +37,8 @@ use anyhow::{bail, Context, Result};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
-const LATEST_RELEASE_URL: &str = "https://api.github.com/repos/fiorix/chan/releases/latest";
-const RELEASE_DOWNLOAD_BASE: &str = "https://github.com/fiorix/chan/releases/download";
+const CLI_METADATA_BASE: &str = "https://chan.app/dl/cli";
+const CLI_LATEST_METADATA_URL: &str = "https://chan.app/dl/cli/latest.json";
 
 /// Disable the probe (banner still prints from cached state).
 const ENV_DISABLE: &str = "CHAN_UPDATE_CHECK";
@@ -58,7 +61,7 @@ const UPGRADE_TOTAL_TIMEOUT: Duration = Duration::from_secs(15 * 60);
 /// bundled).
 const MAX_ARCHIVE_SIZE: u64 = 256 * 1024 * 1024;
 
-/// Safety cap on JSON / SHA256SUMS responses (1 MiB).
+/// Safety cap on metadata JSON responses (1 MiB).
 const MAX_METADATA_SIZE: u64 = 1024 * 1024;
 
 const STATE_FILE: &str = "update-check.json";
@@ -125,15 +128,27 @@ fn release_target_for(os: &str, arch: &str) -> Result<(&'static str, &'static st
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct ReleaseVersion {
-    /// GitHub Release tag, matching release.yml's `chan-v*` trigger.
+    /// Public release tag, matching the `vX.Y.Z` contract.
     tag: String,
     /// Bare semver used for comparisons and user-facing messages.
     version: String,
 }
 
 #[derive(Debug, Deserialize)]
-struct GithubRelease {
-    tag_name: String,
+struct CliReleaseMetadata {
+    version: String,
+    tag: String,
+    #[serde(default)]
+    published_at: Option<String>,
+    targets: Vec<CliTargetAsset>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+struct CliTargetAsset {
+    target: String,
+    asset: String,
+    url: String,
+    sha256: String,
 }
 
 fn release_from_tag(tag: &str) -> Result<ReleaseVersion> {
@@ -142,8 +157,8 @@ fn release_from_tag(tag: &str) -> Result<ReleaseVersion> {
         bail!("release tag cannot be empty");
     }
     let version = tag
-        .strip_prefix("chan-v")
-        .context("GitHub release tag must use the chan-v<version> form")?
+        .strip_prefix('v')
+        .context("release tag must use the vX.Y.Z form")?
         .to_string();
     validate_version(&version)?;
     Ok(ReleaseVersion {
@@ -157,37 +172,36 @@ fn release_from_version_override(version: &str) -> Result<ReleaseVersion> {
     if version.is_empty() {
         bail!("--version cannot be empty");
     }
-    // Keep the CLI surface clean: users type versions, release.yml
-    // owns the `chan-v` tag convention.
-    if version.starts_with("chan-v") || version.starts_with('v') {
+    // Keep the CLI surface clean: users type versions, the release
+    // pipeline owns the `v` tag convention.
+    if version.starts_with('v') {
         bail!("--version expects a bare version such as 0.14.0");
     }
     validate_version(version)?;
     Ok(ReleaseVersion {
-        tag: format!("chan-v{version}"),
+        tag: format!("v{version}"),
         version: version.to_string(),
     })
 }
 
 fn validate_version(version: &str) -> Result<()> {
-    if version.is_empty() {
-        bail!("release version cannot be empty");
+    let mut parts = version.split('.');
+    for name in ["major", "minor", "patch"] {
+        let Some(part) = parts.next() else {
+            bail!("release version must use X.Y.Z: {version:?}");
+        };
+        if part.is_empty() || !part.chars().all(|c| c.is_ascii_digit()) {
+            bail!("release version {name} component must be numeric: {version:?}");
+        }
     }
-    if !version
-        .chars()
-        .all(|c| c.is_ascii_alphanumeric() || c == '.' || c == '-' || c == '+')
-    {
-        bail!("release version contains suspicious characters: {version:?}");
+    if parts.next().is_some() {
+        bail!("release version must use X.Y.Z: {version:?}");
     }
     Ok(())
 }
 
-fn archive_url(tag: &str, target: &str, ext: &str) -> String {
-    format!("{RELEASE_DOWNLOAD_BASE}/{tag}/chan-{target}.{ext}")
-}
-
-fn checksums_url(tag: &str) -> String {
-    format!("{RELEASE_DOWNLOAD_BASE}/{tag}/SHA256SUMS")
+fn metadata_url_for_version(version: &str) -> String {
+    format!("{CLI_METADATA_BASE}/v{version}.json")
 }
 
 fn ensure_https_url(url: &str) -> Result<()> {
@@ -198,20 +212,15 @@ fn ensure_https_url(url: &str) -> Result<()> {
 }
 
 fn parse_semver(s: &str) -> Option<(u32, u32, u32)> {
-    let s = s
-        .trim()
-        .strip_prefix("chan-v")
-        .unwrap_or(s.trim())
-        .trim_start_matches('v');
+    let s = s.trim().strip_prefix('v').unwrap_or(s.trim());
     let mut parts = s.split('.');
     let major: u32 = parts.next()?.parse().ok()?;
     let minor: u32 = parts.next()?.parse().ok()?;
-    let patch_raw = parts.next().unwrap_or("0");
-    let patch_digits: String = patch_raw
-        .chars()
-        .take_while(|c| c.is_ascii_digit())
-        .collect();
-    let patch: u32 = patch_digits.parse().ok()?;
+    let patch_raw = parts.next()?;
+    if parts.next().is_some() || !patch_raw.chars().all(|c| c.is_ascii_digit()) {
+        return None;
+    }
+    let patch: u32 = patch_raw.parse().ok()?;
     Some((major, minor, patch))
 }
 
@@ -224,34 +233,13 @@ pub fn semver_newer(latest: &str, current: &str) -> bool {
     }
 }
 
-/// Extract the SHA-256 hex for `name` from a GNU-style SHA256SUMS
-/// body. Matches both `<hash>  path/to/name` and `<hash> *name`.
-pub fn parse_sha256sums(body: &str, name: &str) -> Result<String> {
-    for line in body.lines() {
-        let line = line.trim();
-        if line.is_empty() || line.starts_with('#') {
-            continue;
-        }
-        let mut parts = line.splitn(2, char::is_whitespace);
-        let hash = match parts.next() {
-            Some(h) => h,
-            None => continue,
-        };
-        let rest = match parts.next() {
-            Some(r) => r.trim_start(),
-            None => continue,
-        };
-        let path = rest.strip_prefix('*').unwrap_or(rest);
-        let file = Path::new(path).file_name().and_then(|s| s.to_str());
-        let matches = file.map(|f| f == name).unwrap_or(false) || path == name;
-        if matches {
-            if hash.len() != 64 || !hash.chars().all(|c| c.is_ascii_hexdigit()) {
-                bail!("malformed SHA256 entry for {name}: {hash}");
-            }
-            return Ok(hash.to_ascii_lowercase());
-        }
+/// Normalize and validate a SHA-256 hex digest from release metadata.
+fn normalize_sha256(hash: &str, name: &str) -> Result<String> {
+    let hash = hash.trim();
+    if hash.len() != 64 || !hash.chars().all(|c| c.is_ascii_hexdigit()) {
+        bail!("malformed SHA256 value for {name}: {hash}");
     }
-    bail!("no SHA256 entry found for {name}")
+    Ok(hash.to_ascii_lowercase())
 }
 
 fn http_client(connect: Duration, total: Duration) -> Result<reqwest::Client> {
@@ -282,19 +270,87 @@ async fn fetch_text(client: &reqwest::Client, url: &str) -> Result<String> {
     String::from_utf8(bytes.to_vec()).with_context(|| format!("decoding utf-8 body of {url}"))
 }
 
-fn parse_latest_release(body: &str) -> Result<ReleaseVersion> {
-    let release: GithubRelease =
-        serde_json::from_str(body).context("latest release response is not JSON")?;
-    // This is intentionally strict. Phase 10 is pre-release work, so
-    // the new public contract starts with `chan-v*` and no legacy
-    // tag spelling needs to survive.
-    release_from_tag(&release.tag_name).context("latest release JSON has invalid tag_name")
+fn parse_cli_metadata(body: &str) -> Result<CliReleaseMetadata> {
+    let metadata: CliReleaseMetadata =
+        serde_json::from_str(body).context("CLI release metadata is not JSON")?;
+    validate_cli_metadata(metadata)
 }
 
-/// Fetch and normalize the latest version from GitHub Releases.
-async fn fetch_latest_release(client: &reqwest::Client) -> Result<ReleaseVersion> {
-    let body = fetch_text(client, LATEST_RELEASE_URL).await?;
-    parse_latest_release(&body)
+fn validate_cli_metadata(metadata: CliReleaseMetadata) -> Result<CliReleaseMetadata> {
+    validate_version(&metadata.version).context("CLI metadata has invalid version")?;
+    let tag = release_from_tag(&metadata.tag).context("CLI metadata has invalid tag")?;
+    if tag.version != metadata.version {
+        bail!(
+            "CLI metadata tag/version mismatch: tag {} is {}, version is {}",
+            metadata.tag,
+            tag.version,
+            metadata.version
+        );
+    }
+    if metadata
+        .published_at
+        .as_deref()
+        .unwrap_or("")
+        .trim()
+        .is_empty()
+    {
+        bail!("CLI metadata missing published_at");
+    }
+    if metadata.targets.is_empty() {
+        bail!("CLI metadata has no targets");
+    }
+    let mut seen = BTreeSet::new();
+    for target in &metadata.targets {
+        if target.target.trim().is_empty() {
+            bail!("CLI metadata contains an empty target");
+        }
+        if !seen.insert(target.target.as_str()) {
+            bail!("CLI metadata contains duplicate target {}", target.target);
+        }
+        if target.asset.trim().is_empty() {
+            bail!("CLI metadata target {} has no asset name", target.target);
+        }
+        ensure_https_url(&target.url)
+            .with_context(|| format!("CLI metadata target {} has invalid URL", target.target))?;
+        normalize_sha256(&target.sha256, &target.asset)
+            .with_context(|| format!("CLI metadata target {} has invalid SHA256", target.target))?;
+    }
+    Ok(metadata)
+}
+
+fn target_asset_for(
+    metadata: &CliReleaseMetadata,
+    target: &str,
+    ext: &str,
+) -> Result<CliTargetAsset> {
+    let asset = metadata
+        .targets
+        .iter()
+        .find(|asset| asset.target == target)
+        .with_context(|| {
+            format!(
+                "release {} does not include a standalone chan CLI asset for {target}",
+                metadata.version
+            )
+        })?;
+    let expected = format!("chan-{target}.{ext}");
+    if asset.asset != expected {
+        bail!(
+            "CLI metadata target {target} points at asset {}, expected {expected}",
+            asset.asset
+        );
+    }
+    Ok(asset.clone())
+}
+
+/// Fetch and validate complete-release CLI metadata.
+async fn fetch_cli_metadata(client: &reqwest::Client, url: &str) -> Result<CliReleaseMetadata> {
+    let body = fetch_text(client, url).await?;
+    parse_cli_metadata(&body).with_context(|| format!("invalid CLI release metadata at {url}"))
+}
+
+async fn fetch_latest_cli_metadata(client: &reqwest::Client) -> Result<CliReleaseMetadata> {
+    fetch_cli_metadata(client, CLI_LATEST_METADATA_URL).await
 }
 
 /// Print the banner if a newer release is cached. Stderr-only,
@@ -349,7 +405,7 @@ pub async fn run_probe() {
     };
     let checked_version = env!("CARGO_PKG_VERSION").to_string();
     let now = now_unix();
-    let state = match fetch_latest_release(&client).await {
+    let state = match fetch_latest_cli_metadata(&client).await {
         Ok(latest) => {
             // Print the banner inline so the user sees it on the
             // session that triggered the probe, not just the next
@@ -443,21 +499,40 @@ pub async fn run_upgrade(opts: UpgradeOptions) -> Result<()> {
 
     let client = http_client(UPGRADE_CONNECT_TIMEOUT, UPGRADE_TOTAL_TIMEOUT)?;
 
-    let target_release = match opts.version_override.as_deref() {
-        Some(v) => release_from_version_override(v)?,
+    let metadata = match opts.version_override.as_deref() {
+        Some(v) => {
+            let requested = release_from_version_override(v)?;
+            let url = metadata_url_for_version(&requested.version);
+            if opts.verbose {
+                eprintln!("chan: checking release metadata at {url}");
+            }
+            let metadata = fetch_cli_metadata(&client, &url).await?;
+            if metadata.version != requested.version || metadata.tag != requested.tag {
+                bail!(
+                    "metadata at {url} describes {} ({}) instead of {} ({})",
+                    metadata.version,
+                    metadata.tag,
+                    requested.version,
+                    requested.tag
+                );
+            }
+            metadata
+        }
         None => {
             if opts.verbose {
-                eprintln!("chan: checking latest release at {LATEST_RELEASE_URL}");
+                eprintln!("chan: checking latest release metadata at {CLI_LATEST_METADATA_URL}");
             }
-            fetch_latest_release(&client).await?
+            fetch_latest_cli_metadata(&client).await?
         }
     };
-    let target_version = target_release.version.clone();
+    let target_version = metadata.version.clone();
 
     if target_version == current {
         println!("chan: already at version {current}");
         return Ok(());
     }
+
+    let asset = target_asset_for(&metadata, target, ext)?;
 
     if opts.check_only {
         if semver_newer(&target_version, &current) {
@@ -475,9 +550,8 @@ pub async fn run_upgrade(opts: UpgradeOptions) -> Result<()> {
         .context("current executable has no parent directory")?
         .to_path_buf();
 
-    let archive_name = format!("chan-{target}.{ext}");
-    let archive_url = archive_url(&target_release.tag, target, ext);
-    let checksums_url = checksums_url(&target_release.tag);
+    let archive_name = asset.asset.clone();
+    let archive_url = asset.url.clone();
 
     let (gerund, participle) = action_words(&target_version, &current);
     println!(
@@ -556,10 +630,9 @@ pub async fn run_upgrade(opts: UpgradeOptions) -> Result<()> {
     }
 
     if opts.verbose {
-        eprintln!("chan: fetching {checksums_url}");
+        eprintln!("chan: verifying {archive_name} against release metadata");
     }
-    let sums_body = fetch_text(&client, &checksums_url).await?;
-    let expected_hash = parse_sha256sums(&sums_body, &archive_name)?;
+    let expected_hash = normalize_sha256(&asset.sha256, &archive_name)?;
     if actual_hash != expected_hash {
         bail!("SHA256 mismatch for {archive_name}: expected {expected_hash}, got {actual_hash}");
     }
@@ -670,6 +743,28 @@ fn confirm(prompt: &str, default_yes: bool) -> Result<bool> {
 mod tests {
     use super::*;
 
+    fn sample_cli_metadata() -> &'static str {
+        r#"{
+  "version":"0.14.0",
+  "tag":"v0.14.0",
+  "published_at":"2026-05-27T00:00:00Z",
+  "targets":[
+    {
+      "target":"x86_64-unknown-linux-gnu",
+      "asset":"chan-x86_64-unknown-linux-gnu.tar.gz",
+      "url":"https://github.com/fiorix/chan/releases/download/v0.14.0/chan-x86_64-unknown-linux-gnu.tar.gz",
+      "sha256":"DEADBEEFDEADBEEFDEADBEEFDEADBEEFDEADBEEFDEADBEEFDEADBEEFDEADBEEF"
+    },
+    {
+      "target":"aarch64-apple-darwin",
+      "asset":"chan-aarch64-apple-darwin.tar.gz",
+      "url":"https://github.com/fiorix/chan/releases/download/v0.14.0/chan-aarch64-apple-darwin.tar.gz",
+      "sha256":"cafebabecafebabecafebabecafebabecafebabecafebabecafebabecafebabe"
+    }
+  ]
+}"#
+    }
+
     #[test]
     fn test_semver_newer() {
         assert!(semver_newer("0.7.0", "0.6.11"));
@@ -684,54 +779,39 @@ mod tests {
     }
 
     #[test]
-    fn test_parse_sha256sums_matches_filename() {
-        let body = "\
-deadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef  dist/chan-x86_64-unknown-linux-gnu.tar.gz
-cafebabecafebabecafebabecafebabecafebabecafebabecafebabecafebabe *chan-aarch64-apple-darwin.tar.gz
-feedface00feedface00feedface00feedface00feedface00feedface00feed  unrelated.deb
-";
+    fn test_normalize_sha256() {
         assert_eq!(
-            parse_sha256sums(body, "chan-x86_64-unknown-linux-gnu.tar.gz").unwrap(),
+            normalize_sha256(
+                "DEADBEEFDEADBEEFDEADBEEFDEADBEEFDEADBEEFDEADBEEFDEADBEEFDEADBEEF",
+                "chan-x86_64-unknown-linux-gnu.tar.gz"
+            )
+            .unwrap(),
             "deadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef"
         );
-        assert_eq!(
-            parse_sha256sums(body, "chan-aarch64-apple-darwin.tar.gz").unwrap(),
-            "cafebabecafebabecafebabecafebabecafebabecafebabecafebabecafebabe"
-        );
-        assert!(parse_sha256sums(body, "chan-missing.tar.gz").is_err());
+        assert!(normalize_sha256("NOT_HEX", "chan-x86_64-unknown-linux-gnu.tar.gz").is_err());
     }
 
     #[test]
-    fn test_parse_sha256sums_rejects_malformed_hash() {
-        let body = "NOT_HEX  chan-x86_64-unknown-linux-gnu.tar.gz\n";
-        assert!(parse_sha256sums(body, "chan-x86_64-unknown-linux-gnu.tar.gz").is_err());
-    }
-
-    #[test]
-    fn test_archive_url_shape() {
-        let url = archive_url("chan-v0.14.0", "x86_64-unknown-linux-gnu", "tar.gz");
+    fn test_metadata_url_shape() {
         assert_eq!(
-            url,
-            "https://github.com/fiorix/chan/releases/download/chan-v0.14.0/chan-x86_64-unknown-linux-gnu.tar.gz"
-        );
-        assert_eq!(
-            checksums_url("chan-v0.14.0"),
-            "https://github.com/fiorix/chan/releases/download/chan-v0.14.0/SHA256SUMS"
+            metadata_url_for_version("0.14.0"),
+            "https://chan.app/dl/cli/v0.14.0.json"
         );
     }
 
     #[test]
-    fn test_parse_latest_release_requires_chan_tag() {
-        let release = parse_latest_release(r#"{"tag_name":"chan-v0.14.0"}"#).unwrap();
+    fn test_release_tag_requires_public_v_shape() {
+        let release = release_from_tag("v0.14.0").unwrap();
         assert_eq!(
             release,
             ReleaseVersion {
-                tag: "chan-v0.14.0".into(),
+                tag: "v0.14.0".into(),
                 version: "0.14.0".into(),
             }
         );
-        assert!(parse_latest_release(r#"{"tag_name":"v0.14.0"}"#).is_err());
-        assert!(parse_latest_release(r#"{"name":"chan-v0.14.0"}"#).is_err());
+        assert!(release_from_tag("0.14.0").is_err());
+        assert!(release_from_tag("v0.14").is_err());
+        assert!(release_from_tag("v0.14.0-alpha").is_err());
     }
 
     #[test]
@@ -740,19 +820,63 @@ feedface00feedface00feedface00feedface00feedface00feedface00feed  unrelated.deb
         assert_eq!(
             release,
             ReleaseVersion {
-                tag: "chan-v0.14.0".into(),
+                tag: "v0.14.0".into(),
                 version: "0.14.0".into(),
             }
         );
-        assert!(release_from_version_override("chan-v0.14.0").is_err());
+        assert!(release_from_version_override("v0.14.0").is_err());
+        assert!(release_from_version_override("0.14").is_err());
+        assert!(release_from_version_override("0.14.0-alpha").is_err());
+    }
+
+    #[test]
+    fn test_parse_cli_metadata_selects_target_asset() {
+        let metadata = parse_cli_metadata(sample_cli_metadata()).unwrap();
+        assert_eq!(metadata.version, "0.14.0");
+        assert_eq!(metadata.tag, "v0.14.0");
+
+        let asset = target_asset_for(&metadata, "x86_64-unknown-linux-gnu", "tar.gz").unwrap();
+        assert_eq!(
+            asset,
+            CliTargetAsset {
+                target: "x86_64-unknown-linux-gnu".into(),
+                asset: "chan-x86_64-unknown-linux-gnu.tar.gz".into(),
+                url: "https://github.com/fiorix/chan/releases/download/v0.14.0/chan-x86_64-unknown-linux-gnu.tar.gz".into(),
+                sha256: "DEADBEEFDEADBEEFDEADBEEFDEADBEEFDEADBEEFDEADBEEFDEADBEEFDEADBEEF".into(),
+            }
+        );
+    }
+
+    #[test]
+    fn test_parse_cli_metadata_rejects_bad_contracts() {
+        let tag_mismatch =
+            sample_cli_metadata().replace(r#""tag":"v0.14.0""#, r#""tag":"v0.15.0""#);
+        assert!(parse_cli_metadata(&tag_mismatch).is_err());
+
+        let malformed_tag =
+            sample_cli_metadata().replace(r#""tag":"v0.14.0""#, r#""tag":"release-0.14.0""#);
+        assert!(parse_cli_metadata(&malformed_tag).is_err());
+
+        let bad_hash = sample_cli_metadata().replace(
+            "DEADBEEFDEADBEEFDEADBEEFDEADBEEFDEADBEEFDEADBEEFDEADBEEFDEADBEEF",
+            "NOT_HEX",
+        );
+        assert!(parse_cli_metadata(&bad_hash).is_err());
+    }
+
+    #[test]
+    fn test_target_asset_for_rejects_unsupported_target() {
+        let metadata = parse_cli_metadata(sample_cli_metadata()).unwrap();
+        let err = target_asset_for(&metadata, "x86_64-pc-windows-msvc", "zip")
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("does not include a standalone chan CLI asset"));
     }
 
     #[test]
     fn test_ensure_https_url_rejects_plain_http() {
-        assert!(ensure_https_url(LATEST_RELEASE_URL).is_ok());
-        assert!(
-            ensure_https_url("http://api.github.com/repos/fiorix/chan/releases/latest").is_err()
-        );
+        assert!(ensure_https_url(CLI_LATEST_METADATA_URL).is_ok());
+        assert!(ensure_https_url("http://chan.app/dl/cli/latest.json").is_err());
     }
 
     #[test]

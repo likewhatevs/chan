@@ -1,0 +1,95 @@
+# Linux package build details. Invoke through the root Makefile.
+
+CHAN_REPO ?= ../..
+CARGO ?= cargo
+NPM ?= npm
+TAR ?= tar
+LINUX_TARGET ?= x86_64-unknown-linux-gnu
+DEB_TARGET ?= $(LINUX_TARGET)
+RPM_TARGET ?= $(LINUX_TARGET)
+ARCHPKG_TARGET ?= $(LINUX_TARGET)
+
+CHAN_VERSION := $(shell sed -n 's/^version = "\(.*\)"/\1/p' "$(CHAN_REPO)/Cargo.toml" | head -1)
+TARBALL_NAME ?= chan-$(LINUX_TARGET).tar.gz
+TARBALL_STAGE := $(CHAN_REPO)/target/package/chan-$(LINUX_TARGET)
+TARBALL_PATH := $(CHAN_REPO)/target/release/$(TARBALL_NAME)
+ARCHPKG_DIR := $(CHAN_REPO)/target/archpkg/chan
+
+ifneq ($(filter x86_64-%,$(ARCHPKG_TARGET)),)
+ARCHPKG_ARCH := x86_64
+else ifneq ($(filter aarch64-%,$(ARCHPKG_TARGET)),)
+ARCHPKG_ARCH := aarch64
+else
+ARCHPKG_ARCH := unsupported
+endif
+
+.PHONY: chan-tarball
+chan-tarball:
+	@case "$(LINUX_TARGET)" in *-unknown-linux-gnu) ;; \
+		*) echo "error: LINUX_TARGET must be a gnu Linux target, got $(LINUX_TARGET)"; exit 1;; \
+	esac
+	$(MAKE) -C "$(CHAN_REPO)" web
+	cd "$(CHAN_REPO)" && $(CARGO) build --release --target "$(LINUX_TARGET)" -p chan
+	rm -rf "$(TARBALL_STAGE)"
+	mkdir -p "$(TARBALL_STAGE)" "$(CHAN_REPO)/target/release"
+	cp "$(CHAN_REPO)/target/$(LINUX_TARGET)/release/chan" "$(TARBALL_STAGE)/chan"
+	cp "$(CHAN_REPO)/LICENSE" "$(TARBALL_STAGE)/LICENSE"
+	cp "$(CHAN_REPO)/README.md" "$(TARBALL_STAGE)/README.md"
+	$(TAR) -czf "$(TARBALL_PATH)" -C "$(TARBALL_STAGE)" .
+	@echo "built $(TARBALL_PATH)"
+
+.PHONY: deb
+deb:
+	@case "$(DEB_TARGET)" in *-unknown-linux-gnu) ;; \
+		*) echo "error: DEB_TARGET must be a gnu Linux target, got $(DEB_TARGET)"; exit 1;; \
+	esac
+	$(MAKE) -C "$(CHAN_REPO)" web
+	cd "$(CHAN_REPO)" && $(CARGO) build --release --target "$(DEB_TARGET)" -p chan
+	cd "$(CHAN_REPO)" && $(CARGO) deb --no-build --no-strip --target "$(DEB_TARGET)" -p chan
+	@ls -1 "$(CHAN_REPO)/target/$(DEB_TARGET)/debian/"*.deb
+
+.PHONY: rpm
+rpm:
+	@case "$(RPM_TARGET)" in *-unknown-linux-gnu) ;; \
+		*) echo "error: RPM_TARGET must be a gnu Linux target, got $(RPM_TARGET)"; exit 1;; \
+	esac
+	$(MAKE) -C "$(CHAN_REPO)" web
+	cd "$(CHAN_REPO)" && $(CARGO) build --release --target "$(RPM_TARGET)" -p chan
+	mkdir -p "$(CHAN_REPO)/target/release"
+	cp "$(CHAN_REPO)/target/$(RPM_TARGET)/release/chan" "$(CHAN_REPO)/target/release/chan"
+	cd "$(CHAN_REPO)/crates/chan" && $(CARGO) generate-rpm --target "$(RPM_TARGET)"
+	@file=$$(find "$(CHAN_REPO)" -path '*/generate-rpm/*.rpm' -type f | head -1); \
+		if [ -z "$$file" ]; then \
+			echo "error: no .rpm produced under $(CHAN_REPO)"; \
+			exit 1; \
+		fi; \
+		echo "built $$file"
+
+.PHONY: archpkg
+archpkg:
+	@case "$(ARCHPKG_TARGET)" in x86_64-unknown-linux-gnu|aarch64-unknown-linux-gnu) ;; \
+		*) echo "error: ARCHPKG_TARGET must be x86_64-unknown-linux-gnu or aarch64-unknown-linux-gnu, got $(ARCHPKG_TARGET)"; exit 1;; \
+	esac
+	@if [ "$(ARCHPKG_ARCH)" = "unsupported" ]; then \
+		echo "error: ARCHPKG_TARGET must start with x86_64- or aarch64-, got $(ARCHPKG_TARGET)"; \
+		exit 1; \
+	fi
+	@command -v makepkg >/dev/null 2>&1 || { \
+		echo "error: makepkg not found; run linux-archpkg inside an Arch sdme rootfs"; \
+		exit 1; \
+	}
+	$(MAKE) -C "$(CHAN_REPO)" web
+	cd "$(CHAN_REPO)" && $(CARGO) build --release --target "$(ARCHPKG_TARGET)" -p chan
+	rm -rf "$(ARCHPKG_DIR)"
+	mkdir -p "$(ARCHPKG_DIR)"
+	cp "$(CURDIR)/arch/PKGBUILD" "$(ARCHPKG_DIR)/PKGBUILD"
+	cd "$(ARCHPKG_DIR)" && \
+		CHAN_REPO="$(CHAN_REPO)" \
+		ARCHPKG_TARGET="$(ARCHPKG_TARGET)" \
+		CHAN_PKG_VERSION="$(CHAN_VERSION)" \
+		CHAN_ARCH="$(ARCHPKG_ARCH)" \
+		makepkg --force --nodeps --clean
+	@ls -1 "$(ARCHPKG_DIR)/"*.pkg.tar.*
+
+.PHONY: packages
+packages: deb rpm archpkg
