@@ -55,6 +55,19 @@ Investigate: frontend render cap / kind-filter (graphData / GraphPanel)
 vs the fs-graph endpoint node cap. Files: `web/src/state/graphData.svelte.ts`,
 `GraphPanel.svelte`, `crates/chan-server/src/routes/fs_graph.rs`.
 
+FRAMING (@@Alex is right): for the filesystem SPINE this should be the
+SAME logic as File Browser expand/collapse - round-1 explicitly said "plot
+their depth, similarly to expand/collapse of the File Browser, reusing the
+same pub/sub mechanism". The bug is a DIVERGENCE: the graph has a separate
+fs walk (fs_graph.rs) that anchors on linked/semantic nodes and/or hits a
+render cap, dropping containment-only subdirs - while the FB shows them
+all. FIX DIRECTION: make the graph's spine expansion reuse the SAME
+containment walk the File Browser uses (all ignore-filtered children to
+depth), then layer the semantic edges (links/tags/contacts/language) on
+top of that complete spine. The semantic overlay + node dedup + spatial
+layout + global caps are the only legitimate extra concerns vs the FB
+tree; none justify dropping subdirs.
+
 ### GI-10: graph layout - drive at the bottom, spine grows upward
 @@Alex wants the DRIVE node pinned to the BOTTOM of the graph, pushing
 other nodes upward, so the filesystem spine (dirs + their files) grows
@@ -63,6 +76,22 @@ at the drive at the bottom, or a constraint pinning the drive node low +
 repelling others upward. WEB-only, `web/src/components/GraphCanvas.svelte`
 (+ GraphPanel layout config).
 
+### GI-11: false broken-links from `../` parent-relative markdown links
+GI-3 (Lane A `d35b852`) fixed wiki-link ancestor-walk resolution but NOT
+markdown links with `../` parent-relative paths. @@Alex hit it in the
+inspector: a node `journals/phase-8/phase-7/next-phase-backlog.md` shown as
+"file does not exist (broken-link target)". CONFIRMED FALSE - the real
+target `docs/journals/phase-7/next-phase-backlog.md` EXISTS, and
+`docs/journals/phase-8/{request,process}.md` link it as
+`[...](../phase-7/next-phase-backlog.md)`. The resolver joins the relative
+path onto the SOURCE dir (`journals/phase-8/`) WITHOUT canonicalizing the
+`../`, yielding the malformed `journals/phase-8/phase-7/...`. Fix: normalize
+`../` and `./` segments in link-target resolution relative to the source
+doc's directory (clamped to the drive root). Same area as GI-3:
+`crates/chan-server/src/routes/graph.rs` link resolution (and confirm the
+inspector existence-check uses the normalized path). Add tests for `../`,
+`./`, and multi-`../` cases.
+
 ### Graph dead-ends / loading-state UX (graph-loading-state-spec.md)
 Was held this round. Show a parent-dir loading/pulsing state while a scope
 is still loading (mirror the File Browser expand spinner) instead of
@@ -70,13 +99,26 @@ rendering an incomplete graph as fact; genuinely-broken links shown
 distinctly once a scope's index is complete. May need a per-scope
 index-completeness signal from the backend (coordinate ownership).
 
-### Systemic FS-test de-flake (OWNER: Lane B / test infra)
-Status at wrap: IN PROGRESS on `phase-11-lane-b` (a shared `test_gate.rs`
-serial-gate approach across chan-drive + chan-server). The FSEvents /
-watcher / debounce / PTY timing tests flake under full parallel
-`cargo test`; per-test serialization did not converge. If merged at close,
-done; else carry forward. The bar: full default-parallel `cargo test`
-deterministic over >=10 runs. This is the round-close-push CI gate.
+### Systemic FS-test de-flake (OWNER: Lane B / test infra) - MERGED
+MERGED at close: `88e196f` -> main `88ea5c3`. One CROSS-PROCESS OS
+file-lock gate (`crates/chan-drive/src/test_gate.rs`) serializes the whole
+FSEvents/indexer/debounce/PTY test class across BOTH crates' separate test
+binaries (per-binary in-process mutexes can't serialize across binaries -
+that's why the earlier attempts didn't converge). fmt/clippy/build green;
+gate mechanism proven (815ms cross-process contention experiment).
+OUTSTANDING: the full 10x parallel sweep was UNMEASURABLE locally because
+macOS FSEvents is WEDGED machine-wide on this box (standalone notify probe
+delivers 0 events -> the 4 real-watcher tests fail deterministically,
+independent of this gate). Next round: confirm the 10x parallel sweep is
+green either on CI (Linux/inotify, no FSEvents) or locally after fseventsd
+recovers (`sudo killall fseventsd`; launchd restarts it).
+
+### macOS FSEvents wedged on this machine (transient, environmental)
+A standalone `notify` probe delivers ZERO events; any chan watcher / live
+reload / file-change detection is dead until fseventsd is restarted
+(`sudo killall fseventsd`). Likely induced by the heavy watcher/serve churn
+this round (incl. the repo-root 60K-node indexing run). NOT a code bug -
+flagged so local manual testing accounts for it.
 
 ### Deferred (unchanged)
 - Manual/site streaming copy (docs/manual + web-marketing) - was deferred

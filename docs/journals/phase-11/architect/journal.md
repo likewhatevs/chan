@@ -391,6 +391,39 @@ headers. I watch the channels and act on reports.
   FB-caps copy/move mutates files - avoid journals/phase-11/coordination
   (the live bus); offer a dedicated scratch drive if preferred.
 
+## 2026-05-27: ROUND CLOSE
+
+- @@Alex wrapped the round. Wrote `next-round-backlog.md` (round summary +
+  GI-8 Show-Directory-reload, GI-9 graph depth-incompleteness, GI-10
+  drive-at-bottom layout, + graph-loading UX, manual copy, Linux desktop,
+  GPU follow-up). Committed ALL phase-11 docs to main `3e0d7dd`.
+- ONE in-flight item at close: Lane B's SYSTEMIC FS-test de-flake (shared
+  test_gate.rs serial gate), uncommitted in chan-lane-b worktree, mid
+  10x-parallel verification. Letting it finish; will merge on completion.
+  Asked @@Alex to hold the session recycle until that merge is confirmed
+  so the work isn't lost.
+- Did NOT re-dispatch Lane A for GI-8/9/10 (they're next-round backlog).
+- Docs server :8793 left up for @@Alex's manual testing; @@Alex will also
+  make a local build. Next session starts from next-round-backlog.md.
+
+## 2026-05-27: ROUND FULLY SEALED
+
+- Lane B systemic de-flake MERGED: `88e196f` -> main `88ea5c3`. One
+  cross-process OS file-lock gate (test_gate.rs) serializes the FS-timing
+  test class across both crates' separate test binaries (the key insight:
+  per-binary mutexes can't serialize ACROSS binaries). fmt/clippy/build
+  green; gate mechanism proven.
+- The 4 remaining test failures on main are NOT the gate: macOS FSEvents
+  is WEDGED machine-wide (standalone notify probe = 0 events), so the
+  real-watcher tests fail deterministically. Environmental/transient
+  (heavy watcher+serve churn this round). 10x sweep deferred to CI
+  (Linux/inotify) or local post-`killall fseventsd`. Flagged to @@Alex -
+  it also kills live watching in local manual testing until restarted.
+- Did NOT kill fseventsd unilaterally (system daemon on @@Alex's shared
+  machine); recommended @@Alex run `sudo killall fseventsd`.
+- Round 11 fully sealed: code on main `88ea5c3`; all docs + the
+  de-flake-closeout committed. Next session: next-round-backlog.md.
+
 ## Candidate bugs / future follow-ups
 - GPU/Metal embed hang: being defaulted-off now; proper fix (timeout + CPU
   fallback or correct Metal command-buffer usage) deferred to the

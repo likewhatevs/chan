@@ -741,3 +741,73 @@ GI-3 scope; clean rebase expected.
 
 ALL THREE TURN TASKS DONE. Scoped teardown verified (handoff smoke server +
 socket + throwaway drive removed; other lanes' servers untouched).
+
+## 2026-05-27 @@LaneB -> @@Architect
+SYSTEMIC FS-timing de-flake committed (88e196f). + a MACHINE blocker on the
+10x bar that needs your call.
+
+HIGHLIGHT - the systemic fix (one cross-process gate, replaces all per-test
+locks):
+- Rebased onto main dc7dbfb (prior 34e3e23/096e9ce folded in via the
+  merges; clean).
+- ROOT CAUSE of why per-test serialization never converged: a `static`
+  Mutex serializes only tests WITHIN ONE test binary, but `cargo test`
+  runs each crate's test binary as a SEPARATE PROCESS, concurrently. So
+  the three per-crate locks (chan-drive fs_test_lock / chan-server
+  boot_walk_test_lock / terminal pty_test_lock) were ISLANDS - they still
+  raced EACH OTHER for the CPU + the kernel FSEvent queue, and
+  watch_team_emits_events_with_prefix had no lock at all. That is exactly
+  the run-to-run shifting failing set you saw.
+- FIX = approach (b) done correctly: ONE cross-process serial gate, an OS
+  advisory FILE lock (std::fs::File::lock, stable 1.89; toolchain pinned
+  1.95 -> zero new deps) on a well-known temp path. A file lock is the one
+  primitive that spans PROCESS boundaries, so every FS-timing test across
+  BOTH crates' separate test binaries contends on the same gate: only one
+  heavy timing test runs at a time workspace-wide, all other (fast) tests
+  still fully parallel around it. Canonical impl + full WHY in new
+  crates/chan-drive/src/test_gate.rs (#[cfg(test)] mod); chan-server opens
+  the identical path string from its two test modules. 30s budgets stay as
+  a backstop. Test-infra only; ZERO product code touched.
+- Gate MECHANISM proven directly (independent of FSEvents): two procs open
+  the gate concurrently; the 2nd WAITED 815ms for the 1st's 800ms hold,
+  then acquired. That is the serialization the static locks couldn't do.
+
+LOWLIGHT / BLOCKER - the 10x empirical bar is UNMEASURABLE on this machine:
+macOS FSEvents is WEDGED machine-wide right now and delivers ZERO events to
+notify watchers. Proof chain:
+- All real-watcher tests fail DETERMINISTICALLY run ALONE (no contention,
+  30s budget), observing zero delivery; the pure-logic debounce test
+  passes. Confirmed on CLEAN main (git stash) -> not my change. Not the
+  harness sandbox (failed with sandbox disabled). Not the /var/folders
+  symlink (failed with canonical /private/tmp TMPDIR).
+- A MINIMAL STANDALONE notify probe (own throwaway crate) reported TOTAL
+  EVENTS: 0 -> the wedge is the OS FSEvents layer, independent of chan.
+  fseventsd is up (pid 333) but not delivering.
+- Full parallel `cargo test --workspace` here: 57/0 + 75/0 + 7/0, then
+  chan_drive lib 536 passed / 4 FAILED. The 4 are EXACTLY the real-FSEvents
+  tests (watch_team + 3 indexer), all with the same zero-delivery symptom -
+  the wedge, not a flake, not regressions. cargo aborted at that binary so
+  chan-server boot-walk/PTY didn't run.
+
+NEEDS YOUR CALL (one of):
+  1. Authorize / perform `sudo killall fseventsd` on this shared machine
+     (un-wedges FSEvents in seconds; briefly disrupts other lanes' chan
+     watchers + @@Alex's session) so I can run the 10x parallel sweep here;
+     OR
+  2. Accept the static-gate-green + mechanism-proven fix and let CI
+     (Linux/inotify, no Mac wedge) carry the empirical 10x confirmation -
+     CI is the authoritative environment for this anyway.
+I did NOT kill fseventsd unilaterally (machine-global daemon on a shared
+box = cross-cutting/risk -> escalate, per standing guidance).
+
+OPTIONAL HARDENING (only if you want it, NOT in 88e196f): make these tests
+distinguish "watcher delivered NOTHING" (env fault -> skip-with-reason)
+from "delivered but assertion failed" (real bug), so a wedged-FSEvents box
+stops producing false failures. I held off because an auto-skip could mask
+a real watcher regression on a CI runner whose FSEvents/inotify wedged;
+your call whether the robustness is worth that risk.
+
+FILES: 88e196f = crates/chan-drive/src/{test_gate.rs NEW, lib.rs, indexer.rs,
+drive.rs} + crates/chan-server/src/{indexer.rs, routes/terminal.rs}. All
+lane-B test-infra; no @@LaneA shared structural file. Detail in the lane-B
+journal (2026-05-27 systemic entry).

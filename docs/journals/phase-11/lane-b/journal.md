@@ -1255,3 +1255,93 @@ drive `chan remove`'d + rm -rf'd, registry clean, no leftover chan-desktop;
 ALL THREE TASKS DONE this turn: Task 1 (flaky tests, 34e3e23), Task 3
 (handoff crash fix, fba85d8), Task 2 (benchmark + embeddings finding, about
 to commit). Ready-notes to @@Architect.
+
+### 2026-05-27 SYSTEMIC FS-timing de-flake + machine FSEvents-wedge discovery
+Fresh session. Recovered from journal + the @@Architect channel (latest =
+STOP whack-a-mole, go SYSTEMIC; the failing set shifts run-to-run across the
+WHOLE class of FSEvents/watcher/debounce/PTY timing tests in chan-drive +
+chan-server). Rebased phase-11-lane-b onto main @ dc7dbfb; my prior 34e3e23
++ 096e9ce folded in via the merges, branch is the dc7dbfb tip, clean.
+
+APPROACH CHOSEN: (b) done CORRECTLY -- a SINGLE cross-process serial gate
+for the whole class, consolidating the three per-binary locks
+(chan-drive fs_test_lock / chan-server boot_walk_test_lock / terminal
+pty_test_lock) + adding the previously-UNLOCKED
+drive::tests::watch_team_emits_events_with_prefix.
+
+WHY NOT (a) virtual clock: the dominant flake source is REAL OS FSEvents
+delivery latency + real Tantivy commit/reader-refresh + real PTY shell
+scheduling under CPU saturation. None of that is a tokio::time sleep we can
+advance; a virtual clock would only control the debounce WINDOW, leaving
+the real root cause untouched. Partial fix -> rejected.
+
+WHY the prior per-test locks did NOT converge (the key insight): a `static`
+Mutex serializes only tests WITHIN ONE test binary, but `cargo test` runs
+each crate's test binary as a SEPARATE PROCESS, concurrently. So the three
+per-crate `static` locks were ISLANDS -- chan-drive's FS tests still raced
+chan-server's boot-walk + PTY tests for the CPU + the kernel FSEvent queue.
+That is exactly why the failing set shifted run-to-run.
+
+THE FIX: one OS ADVISORY FILE LOCK (`std::fs::File::lock`, stable since
+1.89; toolchain pinned 1.95 -> zero new deps) on a well-known temp path
+`chan-fs-timing-test.gate`. A file lock is the one primitive that spans
+PROCESS boundaries, so every FS-timing test across BOTH crates' separate
+test binaries contends on the same gate -> only one heavy timing test runs
+at a time anywhere in the workspace run, while every other (fast) test
+still runs fully parallel around it. Canonical impl + full rationale in a
+new `crates/chan-drive/src/test_gate.rs` (#[cfg(test)] mod); chan-drive's
+indexer + drive tests call it directly; chan-server (separate crate, no
+cross-crate test-support feature) opens the identical path string in its
+indexer + terminal test modules. The generous 30s poll budgets stay as a
+backstop. Replaced the tokio::Mutex call sites (`.lock().await`) with the
+sync File guard (Send, fine to hold across .await on the multi-thread
+runtime; documented).
+
+STATIC GATE GREEN: cargo fmt --check clean; cargo clippy --all-targets -D
+warnings clean (whole workspace incl chan-desktop); cargo build
+--no-default-features green. Diff is test-infra only (test modules + the
+new #[cfg(test)] module); zero product code touched.
+
+BLOCKER FOUND -- machine-wide FSEvents WEDGE (independent of my code): I
+cannot run the 10x-parallel empirical bar on THIS machine because the macOS
+`notify` FSEvents backend is delivering ZERO events right now. Evidence:
+- EVERY real-watcher test fails DETERMINISTICALLY when run ALONE (no
+  contention), observing zero delivery even at a 30s budget:
+  writes_to_disk_get_indexed_after_debounce, delete_from_disk_drops_file,
+  writes_to_drafts_subtree..., watch_team_emits_events_with_prefix. The
+  pure-logic debounce test (debounce_coalesces..., no real watcher) PASSES.
+- Confirmed on CLEAN main (git stash) too -> NOT my change.
+- Not the harness sandbox (failed with dangerouslyDisableSandbox too).
+- Not the /var/folders symlink (failed with a canonical /private/tmp
+  TMPDIR too).
+- A MINIMAL STANDALONE notify probe (own throwaway crate, notify 8, watch a
+  temp dir + write a file) reported TOTAL EVENTS: 0 -> the wedge is at the
+  OS FSEvents layer, independent of chan entirely. fseventsd is running
+  (pid 333) but not delivering. Standard fix is a machine-level
+  `sudo killall fseventsd` / reboot, which I will NOT do unilaterally on
+  this shared machine (other agents' servers + @@Alex's session).
+So the 10x bar is unmeasurable HERE; CI (Linux/inotify) does not have this
+Mac-specific wedge, so the gate is the correct + sufficient systemic fix
+for the documented parallel-flake. Escalating the verification blocker to
+@@Architect: either un-wedge fseventsd (killall) so I can run the 10x
+sweep, or accept the static-gate-green + mechanism-correct fix and have CI
+(which CAN deliver FSEvents) carry the empirical confirmation.
+
+EVIDENCE the gate is correct (independent of the FSEvents wedge):
+- Direct cross-process proof: two processes opening the gate file
+  concurrently; PID-A acquired immediately + held 800ms, PID-B WAITED
+  815ms for the release then acquired. This is the workspace-wide
+  serialization the per-binary static Mutexes could not give.
+- Full parallel `cargo test --workspace` (1 run, all I can do here):
+  three binaries 57/0, 75/0, 7/0; chan_drive lib 536 passed / 4 FAILED.
+  The 4 failures are EXACTLY the real-FSEvents tests, ALL with the
+  identical zero-delivery symptom (`observed: none: []` / "did not pick
+  up the file/delete/drafts write") -- the machine wedge, not a flake,
+  not regressions. cargo aborted at the first failing binary so
+  chan-server's boot-walk/PTY didn't get to run (2 ignored).
+- Static gate green: fmt --check, clippy --all-targets -D warnings (whole
+  workspace incl chan-desktop), build --no-default-features.
+
+COMMITTED 88e196f (test-infra only: new crates/chan-drive/src/test_gate.rs
++ #[cfg(test)] mod line in lib.rs + the three test modules; ZERO product
+code). Ready-note + the FSEvents-wedge escalation posted to @@Architect.
