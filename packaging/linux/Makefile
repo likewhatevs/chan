@@ -57,10 +57,15 @@ rpm:
 	cd "$(CHAN_REPO)" && $(CARGO) build --release --target "$(RPM_TARGET)" -p chan
 	mkdir -p "$(CHAN_REPO)/target/release"
 	cp "$(CHAN_REPO)/target/$(RPM_TARGET)/release/chan" "$(CHAN_REPO)/target/release/chan"
-	cd "$(CHAN_REPO)/crates/chan" && $(CARGO) generate-rpm --target "$(RPM_TARGET)"
-	@file=$$(find "$(CHAN_REPO)" -path '*/generate-rpm/*.rpm' -type f | head -1); \
+	# cargo-generate-rpm writes output under the CWD's target dir, which here is
+	# crates/chan/ (we cd there because rpm asset `source` paths resolve relative
+	# to the package dir, unlike cargo-deb). --target-dir forces output into the
+	# workspace target/ so it lands beside the .deb, where the release workflow's
+	# `find target` staging step looks. Asset resolution is unaffected.
+	cd "$(CHAN_REPO)/crates/chan" && $(CARGO) generate-rpm --target "$(RPM_TARGET)" --target-dir "$(CHAN_REPO)/target"
+	@file=$$(find "$(CHAN_REPO)/target" -path '*/generate-rpm/*.rpm' -type f | head -1); \
 		if [ -z "$$file" ]; then \
-			echo "error: no .rpm produced under $(CHAN_REPO)"; \
+			echo "error: no .rpm under $(CHAN_REPO)/target"; \
 			exit 1; \
 		fi; \
 		echo "built $$file"
