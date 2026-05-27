@@ -114,14 +114,12 @@ describe("fullstack-a-67f: Find / Copy paths", () => {
     );
   });
 
-  test("Export to PDF entry routes through the print helper", () => {
-    expect(editor).toMatch(/import \{ printMarkdownDocument \} from "\.\.\/editor\/print";/);
-    expect(editor).toMatch(
-      /async function doExportPdf\(\): Promise<void> \{[\s\S]{1,500}printMarkdownDocument\(\{[\s\S]{1,400}markdown: tab\.content/,
-    );
-    expect(editor).toMatch(
-      /onclick=\{doExportPdf\}[\s\S]{1,400}<span class="mbtn-label">Export to PDF<\/span>/,
-    );
+  test("Export to PDF is NOT in the editor menu (moved to the Inspector, A3-iii)", () => {
+    // A3-iii moved Export to PDF out of the editor right-click menu and into
+    // the file Inspector (FileInfoBody), shown for markdown files. The editor
+    // no longer references the print helper.
+    expect(editor).not.toContain("Export to PDF");
+    expect(editor).not.toContain("printMarkdownDocument");
   });
 
   test("Copy path to file (renamed) + Copy path to $CWD (new) entries", () => {

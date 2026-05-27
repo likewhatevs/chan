@@ -52,6 +52,17 @@ describe("I2: shared actions section under the filename", () => {
     );
   });
 
+  test("A3-iii: Export to PDF shows for markdown files + routes through the print helper", () => {
+    // Moved from the editor right-click menu (A3-iii). Gated on markdown
+    // files; the selection isn't necessarily open in an editor, so the
+    // handler fetches the file content and prints it.
+    expect(fileInfo).toMatch(/\{@const markdown = !isDir && isMarkdown\(entry\.path\)\}/);
+    expect(fileInfo).toMatch(/\{#if markdown\}[\s\S]*?onclick=\{doExportPdf\}[\s\S]*?Export to PDF/);
+    expect(fileInfo).toMatch(
+      /async function doExportPdf\(\): Promise<void> \{[\s\S]*?printMarkdownDocument\(\{[\s\S]*?markdown: file\.content/,
+    );
+  });
+
   test("dir branch renders actions BEFORE the dir stats meta-grid", () => {
     // The dir branch order is: ... badges -> {@render actionsSection()}
     // -> {#if dirStats} meta-grid. The actions must precede the stats.

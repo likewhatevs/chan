@@ -52,7 +52,7 @@
   import ResizeHandle from "./ResizeHandle.svelte";
   import { clampMenu } from "./menuClamp";
   import { portal } from "./portal";
-  import { tabMenu, closeTabMenu } from "../state/tabMenu.svelte";
+  import { tabMenu, openTabMenu, closeTabMenu } from "../state/tabMenu.svelte";
   import {
     FileText,
     Folder,
@@ -573,11 +573,20 @@
 
   function onGraphContextMenu(e: MouseEvent): void {
     const t = e.target as HTMLElement | null;
-    // Let the browser's native UI fire on real form controls; swallow
-    // right-click everywhere else on the canvas. The graph tab menu is
-    // reached via the tab-strip right-click bubble, not a canvas menu.
+    // Let the browser's native UI fire on real form controls.
     if (t?.closest("select, input")) return;
     e.preventDefault();
+    // A3-i: right-click ANYWHERE on the graph canvas / background opens the
+    // graph tab menu at the cursor, mirroring the editor's right-click-
+    // anywhere. The tab-strip trigger anchors to its button rect; here we
+    // anchor a zero-size rect at the pointer so tabMenuPos drops the bubble
+    // under the cursor.
+    openTabMenu(tab.id, {
+      left: e.clientX,
+      top: e.clientY,
+      right: e.clientX,
+      bottom: e.clientY,
+    });
   }
 
   // ---- derived: scope-filtered render set --------------------------------
