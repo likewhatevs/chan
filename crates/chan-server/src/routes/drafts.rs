@@ -105,7 +105,16 @@ pub struct RichPromptCreateResponse {
 /// the retry keeps the contract clean.
 pub async fn api_create_draft(State(state): State<Arc<AppState>>) -> Response {
     let drive = state.drive().clone();
-    let result = tokio::task::spawn_blocking(move || create_draft_sync(&drive)).await;
+    // Note the draft path inside the blocking task, before it returns to
+    // the await, so the watcher's Created event for our own draft is
+    // suppressed without the post-await race (see files.rs::api_write_file).
+    let self_writes = Arc::clone(&state.self_writes);
+    let result = tokio::task::spawn_blocking(move || {
+        let name = create_draft_sync(&drive)?;
+        self_writes.note(&format!("Drafts/{name}/draft.md"));
+        Ok::<_, chan_workspace::ChanError>(name)
+    })
+    .await;
 
     let name = match result {
         Ok(Ok(name)) => name,
@@ -114,7 +123,6 @@ pub async fn api_create_draft(State(state): State<Arc<AppState>>) -> Response {
     };
 
     let path = format!("Drafts/{name}/draft.md");
-    state.self_writes.note(&path);
     Json(DraftCreateResponse { path, name }).into_response()
 }
 
@@ -161,14 +169,14 @@ pub async fn api_discard_draft(
 ) -> Response {
     let drive = state.drive().clone();
     let path = payload.path.clone();
+    // Suppress the watcher's Removed event before the blocking discard
+    // (see files.rs::api_write_file).
+    state.self_writes.note(&path);
     let result =
         tokio::task::spawn_blocking(move || discard_draft_sync(&drive, &payload.path)).await;
 
     match result {
-        Ok(Ok(())) => {
-            state.self_writes.note(&path);
-            StatusCode::NO_CONTENT.into_response()
-        }
+        Ok(Ok(())) => StatusCode::NO_CONTENT.into_response(),
         Ok(Err(e)) => err_from(&e),
         Err(join) => err(StatusCode::INTERNAL_SERVER_ERROR, join.to_string()),
     }
@@ -181,17 +189,17 @@ pub async fn api_promote_draft(
     let drive = state.drive().clone();
     let source_path = payload.path.clone();
     let target_path = payload.target.clone();
+    // Suppress the discard-at-source + create-at-target events before
+    // the blocking promote (see files.rs::api_write_file).
+    state.self_writes.note(&source_path);
+    state.self_writes.note(&target_path);
     let result = tokio::task::spawn_blocking(move || {
         promote_draft_sync(&drive, &payload.path, &payload.target)
     })
     .await;
 
     match result {
-        Ok(Ok(out)) => {
-            state.self_writes.note(&source_path);
-            state.self_writes.note(&target_path);
-            Json(out).into_response()
-        }
+        Ok(Ok(out)) => Json(out).into_response(),
         Ok(Err(e)) => err_from(&e),
         Err(join) => err(StatusCode::INTERNAL_SERVER_ERROR, join.to_string()),
     }
@@ -211,6 +219,10 @@ pub async fn api_create_rich_prompt(
 ) -> Response {
     let drive = state.drive().clone();
     let content = payload.content;
+    // Note the prompt path right before the write, inside the blocking
+    // task, so the watcher's Created event is suppressed without the
+    // post-await race (see files.rs::api_write_file).
+    let self_writes = Arc::clone(&state.self_writes);
     let result =
         tokio::task::spawn_blocking(move || -> Result<String, chan_workspace::ChanError> {
             for _ in 0..2 {
@@ -218,6 +230,7 @@ pub async fn api_create_rich_prompt(
                 match drive.create_draft_dir(&name) {
                     Ok(_) => {
                         let unified = format!("Drafts/{name}/prompt.md");
+                        self_writes.note(&unified);
                         drive.write_text(&unified, &content)?;
                         return Ok(name);
                     }
@@ -240,7 +253,6 @@ pub async fn api_create_rich_prompt(
     };
 
     let path = format!("Drafts/{name}/prompt.md");
-    state.self_writes.note(&path);
     Json(RichPromptCreateResponse { path, name }).into_response()
 }
 

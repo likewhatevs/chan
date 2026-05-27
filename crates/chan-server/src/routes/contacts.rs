@@ -231,6 +231,7 @@ pub async fn api_post_contacts_import(
     }
 
     let drive = state.drive();
+    let self_writes = Arc::clone(&state.self_writes);
     let summary =
         match tokio::task::spawn_blocking(move || -> Result<ImportSummary, Box<Response>> {
             let contacts = match parse_google_csv(bytes.as_slice()) {
@@ -242,9 +243,18 @@ pub async fn api_post_contacts_import(
                     )))
                 }
             };
-            drive
+            let summary = drive
                 .import_contacts(&dest_dir, contacts, ImportOpts { overwrite })
-                .map_err(|e| Box::new(err_from(&e)))
+                .map_err(|e| Box::new(err_from(&e)))?;
+            // Note our own writes inside the task, before the await
+            // returns, so the import flood is suppressed without the
+            // post-await race (see files.rs::api_write_file).
+            for o in &summary.outcomes {
+                if let ImportOutcome::Wrote { path } | ImportOutcome::Overwrote { path } = o {
+                    self_writes.note(path);
+                }
+            }
+            Ok(summary)
         })
         .await
         {
@@ -259,19 +269,14 @@ pub async fn api_post_contacts_import(
             }
         };
 
-    // Tell the watcher these paths were our own writes so the editor
-    // doesn't see a flood of "external edit" events, and collect them
-    // for an immediate index pass. Without the inline index call, the
-    // watcher's 1 s debounce leaves a visible lag between import and
-    // the contact showing up in the @ picker.
+    // Collect imported paths for an immediate index pass; without the
+    // inline index call the watcher's 1 s debounce leaves a visible lag
+    // between import and the contact showing up in the @ picker. Self-
+    // write suppression already happened inside the import task above.
     let mut to_index: Vec<String> = Vec::new();
     for o in &summary.outcomes {
-        match o {
-            ImportOutcome::Wrote { path } | ImportOutcome::Overwrote { path } => {
-                state.self_writes.note(path);
-                to_index.push(path.clone());
-            }
-            _ => {}
+        if let ImportOutcome::Wrote { path } | ImportOutcome::Overwrote { path } = o {
+            to_index.push(path.clone());
         }
     }
     if !to_index.is_empty() {

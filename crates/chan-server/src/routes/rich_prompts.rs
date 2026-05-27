@@ -181,28 +181,32 @@ pub async fn api_submit_rich_prompt(
         return err_tunnel_public_locked();
     }
     let drive = state.drive().clone();
+    // Note the archived + draft paths inside the blocking task, once the
+    // submit reports them and before the await returns, so the watcher's
+    // events are suppressed without the post-await race (see
+    // files.rs::api_write_file).
+    let self_writes = Arc::clone(&state.self_writes);
     let result = tokio::task::spawn_blocking(move || {
-        drive.submit_rich_prompt_session(
+        let report = drive.submit_rich_prompt_session(
             &name,
             &body.content,
             body.expected_sequence,
             body.expected_mtime_ns,
-        )
+        )?;
+        self_writes.note(&report.archived_path);
+        self_writes.note(&report.draft_path);
+        Ok::<_, chan_workspace::ChanError>(report)
     })
     .await;
     match result {
-        Ok(Ok(report)) => {
-            state.self_writes.note(&report.archived_path);
-            state.self_writes.note(&report.draft_path);
-            Json(RichPromptSubmitResponse {
-                phase: RichPromptPhase::Submitted,
-                name: report.name,
-                archived_path: report.archived_path,
-                draft_path: report.draft_path,
-                submission_sequence: report.submission_sequence,
-            })
-            .into_response()
-        }
+        Ok(Ok(report)) => Json(RichPromptSubmitResponse {
+            phase: RichPromptPhase::Submitted,
+            name: report.name,
+            archived_path: report.archived_path,
+            draft_path: report.draft_path,
+            submission_sequence: report.submission_sequence,
+        })
+        .into_response(),
         Ok(Err(e)) => rich_prompt_err(&e),
         Err(join) => err(StatusCode::INTERNAL_SERVER_ERROR, join.to_string()),
     }
@@ -222,11 +226,13 @@ pub async fn api_close_rich_prompt(
     }
     let drive = state.drive().clone();
     let discard_name = name.clone();
+    // Suppress the watcher's Removed event before the blocking discard
+    // (see files.rs::api_write_file).
+    state.self_writes.note(&format!("Drafts/{name}"));
     let result =
         tokio::task::spawn_blocking(move || drive.discard_rich_prompt_session(&discard_name)).await;
     match result {
         Ok(Ok(())) => {
-            state.self_writes.note(&format!("Drafts/{name}"));
             if !session.is_empty() {
                 state
                     .terminal_sessions

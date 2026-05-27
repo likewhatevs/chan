@@ -248,10 +248,12 @@ fn open_path(
             }
         }
     } else if rel.ends_with(".md") {
+        // Note before the write so the watcher's Created event is in the
+        // suppression set before it can fire (see files.rs::api_write_file).
+        self_writes.note(&rel);
         drive
             .write_text(&rel, "")
             .map_err(|e| format!("create {rel}: {e}"))?;
-        self_writes.note(&rel);
         WindowCommand::OpenFile { path: rel.clone() }
     } else {
         return Err("file does not exist; chan open creates `.md` files only".into());

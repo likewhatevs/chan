@@ -1427,12 +1427,14 @@ pub async fn api_delete_file(
         Ok(drive) => drive,
         Err(e) => return err_state(&e),
     };
+    // Register the self-write before the blocking remove so the
+    // watcher's Removed event is suppressed without racing the await
+    // (see api_write_file - noting after the await leaks a phantom
+    // external-edit/removal event).
+    state.self_writes.note(&path);
     let path_for_remove = path.clone();
     match tokio::task::spawn_blocking(move || drive.remove(&path_for_remove)).await {
-        Ok(Ok(())) => {
-            state.self_writes.note(&path);
-            StatusCode::NO_CONTENT.into_response()
-        }
+        Ok(Ok(())) => StatusCode::NO_CONTENT.into_response(),
         Ok(Err(e)) => err_from(&e),
         Err(join) => err(StatusCode::INTERNAL_SERVER_ERROR, join.to_string()),
     }
@@ -1455,22 +1457,30 @@ pub async fn api_move(State(state): State<Arc<AppState>>, Json(body): Json<MoveB
     };
     let from = body.from.clone();
     let to = body.to.clone();
-    let outcome =
-        match tokio::task::spawn_blocking(move || drive.rename_with_link_rewrite(&from, &to)).await
-        {
-            Ok(Ok(o)) => o,
-            Ok(Err(e)) => return err_from(&e),
-            Err(join) => return err(StatusCode::INTERNAL_SERVER_ERROR, join.to_string()),
-        };
     // Rename emits two notify events on most kernels (a Removed at
     // `from` and a Created at `to`); the rewrite pass also touches
-    // every rewritten source. Note them all so neither half of any
-    // pair fires an external-edit prompt.
+    // every rewritten source. Note the endpoints before the blocking
+    // rename (paths known up front) and the rewritten sources inside
+    // the task as the rewrite reports them - all BEFORE the await
+    // returns, so neither half of any pair fires a phantom external-
+    // edit prompt (noting after the await raced the watcher; see
+    // api_write_file).
     state.self_writes.note(&body.from);
     state.self_writes.note(&body.to);
-    for path in &outcome.rewritten {
-        state.self_writes.note(path);
-    }
+    let self_writes = Arc::clone(&state.self_writes);
+    let outcome = match tokio::task::spawn_blocking(move || {
+        let outcome = drive.rename_with_link_rewrite(&from, &to)?;
+        for path in &outcome.rewritten {
+            self_writes.note(path);
+        }
+        Ok::<_, chan_workspace::ChanError>(outcome)
+    })
+    .await
+    {
+        Ok(Ok(o)) => o,
+        Ok(Err(e)) => return err_from(&e),
+        Err(join) => return err(StatusCode::INTERNAL_SERVER_ERROR, join.to_string()),
+    };
     Json(MoveResponse {
         renamed: outcome.renamed,
         rewritten: outcome.rewritten,
@@ -1551,9 +1561,16 @@ pub async fn api_fs_transfer(
     // synchronous link-rewrite walk and each copy reads + writes N
     // files, both off the tokio worker pool.
     let dest_for_task = dest_dir.clone();
+    // Note every created/moved/rewritten path INSIDE the blocking task,
+    // as each drive op reports it, so the watcher's Created/Removed
+    // events are suppressed before the await returns. Noting after the
+    // await (the old behavior) raced the watcher into firing phantom
+    // external-edit prompts on files the user may have open. The
+    // watcher still emits the events; the scoped `fs` registry routes
+    // them to subscribed File Browser instances + the Graph.
+    let self_writes = Arc::clone(&state.self_writes);
     let result = tokio::task::spawn_blocking(move || {
         let mut resp = TransferResponse::default();
-        let mut self_writes: Vec<String> = Vec::new();
         for src in &sources {
             let name = basename(src);
             // A move into the source's own current parent is a no-op
@@ -1573,40 +1590,37 @@ pub async fn api_fs_transfer(
                 TransferOp::Move => {
                     let outcome = drive.rename_with_link_rewrite(src, &dest)?;
                     for (from, to) in &outcome.renamed {
-                        self_writes.push(from.clone());
-                        self_writes.push(to.clone());
+                        self_writes.note(from);
+                        self_writes.note(to);
                     }
-                    self_writes.extend(outcome.rewritten.iter().cloned());
+                    for path in &outcome.rewritten {
+                        self_writes.note(path);
+                    }
                     resp.conflicts.extend(outcome.conflicts);
                 }
                 TransferOp::Copy => {
                     let outcome = drive.copy(src, &dest)?;
-                    self_writes.extend(outcome.created);
+                    for path in &outcome.created {
+                        self_writes.note(path);
+                    }
                 }
             }
-            self_writes.push(src.clone());
-            self_writes.push(dest.clone());
+            self_writes.note(src);
+            self_writes.note(&dest);
             resp.moved.push(TransferItem {
                 from: src.clone(),
                 to: dest,
             });
         }
-        Ok::<_, chan_workspace::ChanError>((resp, self_writes))
+        Ok::<_, chan_workspace::ChanError>(resp)
     })
     .await;
 
-    let (resp, self_writes) = match result {
+    let resp = match result {
         Ok(Ok(v)) => v,
         Ok(Err(e)) => return err_from(&e),
         Err(join) => return err(StatusCode::INTERNAL_SERVER_ERROR, join.to_string()),
     };
-    // Note every created/moved/rewritten path so neither half of any
-    // notify pair fires an external-edit prompt. The watcher still
-    // emits the Created/Removed events, which the scoped `fs` registry
-    // routes to every subscribed File Browser instance + the Graph.
-    for path in &self_writes {
-        state.self_writes.note(path);
-    }
     Json(resp).into_response()
 }
 
