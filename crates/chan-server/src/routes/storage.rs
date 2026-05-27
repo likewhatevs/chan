@@ -35,6 +35,8 @@ pub struct ResetBody {
 #[serde(rename_all = "lowercase")]
 enum ResetModeView {
     /// Map -> chan-drive ResetMode::State (keep the registry entry).
+    // chunk-1 wire preservation: on-wire token stays "drive" until chunk 2.
+    #[serde(rename = "drive")]
     Workspace,
     /// Map -> chan-drive ResetMode::Everything.
     Everything,

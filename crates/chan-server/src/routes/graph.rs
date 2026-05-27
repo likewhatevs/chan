@@ -429,6 +429,11 @@ impl GraphQuery {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "lowercase")]
 enum GraphScope {
+    // chunk-1 wire preservation: the variant is renamed Drive -> Workspace but
+    // the on-wire scope token stays "drive" until chunk 2 flips it with the
+    // frontend client. Without this, the frontend's scope:"drive" fails to
+    // deserialize ("unknown variant `drive`"). Runtime class, gate-invisible.
+    #[serde(rename = "drive")]
     Workspace,
     Directory,
     File,

@@ -147,6 +147,9 @@ impl std::fmt::Display for FdPressure {
 #[serde(rename_all = "lowercase")]
 pub enum CloseReason {
     Idle,
+    // chunk-1 wire preservation: variant renamed Drive -> Workspace, on-wire
+    // token stays "drive" until chunk 2 flips it with the frontend.
+    #[serde(rename = "drive")]
     Workspace,
     Shutdown,
     Explicit,
