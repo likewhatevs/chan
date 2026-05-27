@@ -144,6 +144,20 @@ export const SHORTCUTS: readonly Shortcut[] = [
     note: "macOS web + native everywhere; all platforms via Mod+. p (Hybrid Nav)",
     escapeTerminal: true,
   },
+  // `lane-c addendum-3`: toggle broadcast-input select-all/deselect-all
+  // for the active terminal (mirrors iTerm's broadcast-input shortcut).
+  // macOS-native ONLY: on the web cmd+shift+i is the browser DevTools
+  // chord, so there is no `web` binding. The native binding is enforced
+  // in chan-desktop's KEY_BRIDGE_JS gated on metaKey (= Cmd), so Linux
+  // ctrl+shift+i stays DevTools.
+  {
+    id: "app.terminal.broadcastToggle",
+    label: "Toggle broadcast to all terminals",
+    native: "Cmd+Shift+I",
+    group: "App",
+    note: "macOS native only (cmd+shift+i is DevTools on web / Linux)",
+    escapeTerminal: true,
+  },
   // `fullstack-a-32`: file-browser top-level chord. Same shape as
   // `app.terminal.toggle` — native uses Cmd+O; web fallback is
   // Cmd+Alt+O (browser owns Cmd+O for Open File on Mac). Universal

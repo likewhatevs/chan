@@ -647,6 +647,12 @@ const KEY_BRIDGE_JS: &str = r#"
         case 'KeyG':         fire(e, 'app.find.prev');     return;
         case 'KeyT':         fire(e, 'app.tab.reopenClosed'); return;
         case 'KeyM':         fire(e, 'app.graph.toggle');  return;
+        // `lane-c addendum-3`: Cmd+Shift+I toggles broadcast-input
+        // select-all/deselect-all for the active terminal (mirrors
+        // iTerm). macOS ONLY: gate on metaKey so Linux Ctrl+Shift+I
+        // stays the webview DevTools chord (web has no binding at all -
+        // cmd+shift+i is the browser DevTools there too).
+        case 'KeyI': if (e.metaKey) fire(e, 'app.terminal.broadcastToggle'); return;
         case 'BracketLeft':  fire(e, 'app.tab.prev');      return;
         case 'BracketRight': fire(e, 'app.tab.next');      return;
       }
@@ -695,6 +701,15 @@ mod tests {
         assert!(KEY_BRIDGE_JS.contains("case 'NumpadAdd':"));
         assert!(KEY_BRIDGE_JS.contains("case 'NumpadSubtract':"));
         assert!(KEY_BRIDGE_JS.contains("case 'Numpad0':"));
+    }
+
+    #[test]
+    fn key_bridge_wires_cmd_shift_i_to_broadcast_toggle() {
+        // `lane-c addendum-3`: Cmd+Shift+I toggles broadcast-input
+        // select-all/deselect-all for the active terminal. macOS ONLY:
+        // gated on metaKey so Linux Ctrl+Shift+I stays the DevTools chord
+        // (and web has no binding - cmd+shift+i is DevTools there too).
+        assert!(KEY_BRIDGE_JS.contains("if (e.metaKey) fire(e, 'app.terminal.broadcastToggle')"));
     }
 
     #[test]

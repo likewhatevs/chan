@@ -65,6 +65,7 @@
     layout,
     openActiveTerminalRichPrompt,
     openBrowserInActivePane,
+    toggleActiveTerminalBroadcastSelectAll,
     openFind,
     openInActivePane,
     openInfographicsInActivePane,
@@ -988,6 +989,9 @@
         return;
       case "app.terminal.richPrompt":
         spawnRichPromptFromContext();
+        return;
+      case "app.terminal.broadcastToggle":
+        toggleActiveTerminalBroadcastSelectAll();
         return;
       // `fullstack-a-67` slice 2: New Draft is now a hamburger
       // menu entry too. Route the command through

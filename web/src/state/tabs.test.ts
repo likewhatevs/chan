@@ -67,6 +67,7 @@ import {
   scheduleAutosave,
   serializeLayout,
   setTerminalActivity,
+  setTerminalActivityPulsing,
   setTerminalBroadcastEnabled,
   setTerminalBroadcastTarget,
   setWindowFocusColor,
@@ -79,6 +80,7 @@ import {
   TAB_TITLE_MAX_LENGTH,
   terminalBroadcastMemberIds,
   terminalEnvTabNameStale,
+  toggleActiveTerminalBroadcastSelectAll,
   truncateTabTitle,
   type BrowserTab,
   type FileTab,
@@ -2737,6 +2739,30 @@ describe("terminal broadcast groups", () => {
     expect(tab("term-c").broadcastEnabled).toBe(true);
   });
 
+  test("addendum-3: select-all toggle flips the whole group on the active terminal", () => {
+    const a = terminalTab({ id: "term-a", title: "A" });
+    const b = terminalTab({ id: "term-b", title: "B" });
+    const c = terminalTab({ id: "term-c", title: "C" });
+    resetLayout([a, b, c]); // term-a is the active terminal
+    const tab = (id: string) =>
+      activePane().tabs.find((candidate) => candidate.id === id) as TerminalTab;
+
+    // Nothing selected -> first toggle SELECTS ALL (self + every peer).
+    toggleActiveTerminalBroadcastSelectAll();
+    expect(tab("term-a").broadcastEnabled).toBe(true);
+    expect(terminalBroadcastMemberIds(tab("term-a")).sort()).toEqual([
+      "term-a",
+      "term-b",
+      "term-c",
+    ]);
+
+    // All selected -> second toggle DESELECTS ALL.
+    toggleActiveTerminalBroadcastSelectAll();
+    expect(tab("term-a").broadcastEnabled).toBe(false);
+    expect(terminalBroadcastMemberIds(tab("term-a"))).not.toContain("term-b");
+    expect(terminalBroadcastMemberIds(tab("term-a"))).not.toContain("term-c");
+  });
+
   test("peer removal updates the group", () => {
     const a = terminalTab({ id: "term-a", title: "A" });
     const b = terminalTab({ id: "term-b", title: "B" });
@@ -3108,5 +3134,25 @@ describe("graphTabLabel (fullstack-81)", () => {
       tabLabel(graphTab({ title: "workspace", selectedNodeLabel: "Miguel" })),
     ).toBe("Miguel");
     expect(tabLabel(graphTab({ title: "foo.md" }))).toBe("foo.md");
+  });
+});
+
+describe("lane-c addendum-3: terminal unseen-output dot pulse", () => {
+  test("pulse tracks active output; output stop holds the dot solid; seeing clears both", () => {
+    const tab = terminalTab();
+    // Output arriving at an unfocused terminal: dot shows + pulses.
+    setTerminalActivity(tab, true);
+    setTerminalActivityPulsing(tab, true);
+    expect(tab.terminalActivity).toBe(true);
+    expect(tab.terminalActivityPulsing).toBe(true);
+    // Output stops but is still unseen: pulse off, dot stays solid.
+    setTerminalActivityPulsing(tab, false);
+    expect(tab.terminalActivity).toBe(true);
+    expect(tab.terminalActivityPulsing).toBeUndefined();
+    // Seeing the terminal clears BOTH (the dot is gone, not left mid-pulse).
+    setTerminalActivityPulsing(tab, true);
+    setTerminalActivity(tab, false);
+    expect(tab.terminalActivity).toBeUndefined();
+    expect(tab.terminalActivityPulsing).toBeUndefined();
   });
 });

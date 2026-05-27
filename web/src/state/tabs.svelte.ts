@@ -265,6 +265,11 @@ export type TerminalTab = {
   lastSeq?: number;
   lastAgentEchoSeq?: number;
   terminalActivity?: boolean;
+  /// `lane-c addendum-3`: refines terminalActivity. True while output is
+  /// actively ARRIVING at this unfocused terminal (the unseen-output dot
+  /// PULSES); flips false once output stops but is still unseen (the dot
+  /// goes SOLID). Cleared with terminalActivity when the user sees it.
+  terminalActivityPulsing?: boolean;
   cwd?: string;
   seedInput?: string;
   richPrompt?: TerminalRichPromptState;
@@ -984,6 +989,31 @@ export function activeTerminalTab(): TerminalTab | null {
   return t;
 }
 
+/// `lane-c addendum-3`: toggle broadcast SELECT-ALL <-> DESELECT-ALL for
+/// the active terminal, the chord-driven equivalent of the per-tab
+/// "Select All" / "Deselect All" button (TerminalTab.toggleAllBroadcast-
+/// Targets). Walks every terminal tab INCLUDING self (self via
+/// broadcastEnabled, others via broadcast targets), so the bulk action
+/// matches the per-row UI. No-op when the active tab isn't a terminal.
+export function toggleActiveTerminalBroadcastSelectAll(): void {
+  const tab = activeTerminalTab();
+  if (!tab) return;
+  const targets = allTerminalTabs();
+  if (targets.length === 0) return;
+  const selected = new Set(terminalBroadcastMemberIds(tab));
+  const allSelected = targets.every((t) =>
+    t.id === tab.id ? tab.broadcastEnabled : selected.has(t.id),
+  );
+  const select = !allSelected;
+  for (const target of targets) {
+    if (target.id === tab.id) {
+      setTerminalBroadcastEnabled(tab, select);
+    } else {
+      setTerminalBroadcastTarget(tab, target.id, select);
+    }
+  }
+}
+
 export function openActiveTerminalRichPrompt(): void {
   const tab = activeTerminalTab();
   if (!tab) return;
@@ -1355,6 +1385,16 @@ export function advanceTerminalSeq(tab: TerminalTab, bytes: number): void {
 
 export function setTerminalActivity(tab: TerminalTab, active: boolean): void {
   tab.terminalActivity = active || undefined;
+  // Seeing the terminal (active=false) clears the pulse too: the dot is
+  // gone entirely, not left mid-pulse.
+  if (!active) tab.terminalActivityPulsing = undefined;
+}
+
+/// `lane-c addendum-3`: drive the unseen-output dot's pulse. True while
+/// output is actively arriving; false once it stops (the dot goes solid
+/// while the output stays unseen).
+export function setTerminalActivityPulsing(tab: TerminalTab, pulsing: boolean): void {
+  tab.terminalActivityPulsing = pulsing || undefined;
 }
 
 export function clearTerminalSession(tab: TerminalTab): void {
@@ -1362,6 +1402,7 @@ export function clearTerminalSession(tab: TerminalTab): void {
   tab.lastSeq = undefined;
   tab.lastAgentEchoSeq = undefined;
   tab.terminalActivity = undefined;
+  tab.terminalActivityPulsing = undefined;
   tab.sessionMcpEnv = undefined;
   tab.terminalEnvTabName = undefined;
   tab.terminalEnvNamePromptDismissed = false;

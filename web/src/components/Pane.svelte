@@ -1117,6 +1117,7 @@
         {#if t.kind === "terminal" && t.terminalActivity}
           <span
             class="dirty activity"
+            class:pulsing={t.terminalActivityPulsing}
             title="terminal output since last focus"
             aria-label="terminal output since last focus"
           >●</span>
@@ -1700,6 +1701,21 @@
   }
   .dirty.activity {
     color: var(--warn-text, #d29922);
+  }
+  /* `lane-c addendum-3`: the unseen-output dot PULSES while output is
+     actively arriving, then holds SOLID once it stops (still unseen). A
+     smooth opacity breathe, distinct from the steppy watcher blink. */
+  .dirty.activity.pulsing {
+    animation: terminal-activity-pulse 1100ms ease-in-out infinite;
+  }
+  @keyframes terminal-activity-pulse {
+    0%,
+    100% {
+      opacity: 1;
+    }
+    50% {
+      opacity: 0.35;
+    }
   }
   .dirty.watcher.blink {
     animation: watcher-blink 850ms steps(2, start) infinite;
