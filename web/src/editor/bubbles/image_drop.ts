@@ -154,40 +154,44 @@ export function moveImageSource(
   if (dropPos >= range.from && dropPos <= range.to) return;
 
   const markdown = doc.sliceString(range.from, range.to);
-
-  // Land the image at the START of the drop row so it reads as "moved
-  // to this line". On a list line, mirror the paste/drop convention
-  // (trailing space, no newline) so the image flows inline with the
-  // bullet; otherwise give it its own line with a trailing newline.
-  const targetLine = doc.lineAt(dropPos);
-  const onListLine = listLineAt(view.state, dropPos) !== null;
-  const insertText = onListLine ? `${markdown} ` : `${markdown}\n`;
-
-  // Insert at the start of the target line, but compute that line's
-  // start relative to the post-deletion document. CM6 applies all
-  // changes in a single transaction against the ORIGINAL positions,
-  // so we express both the deletion and the insertion in original
-  // coordinates and let CM6 reconcile. To avoid leaving a blank line
-  // where the image used to be, also swallow one trailing newline
-  // that belonged to the image's own line when the image was the only
-  // content there.
   const srcLine = doc.lineAt(range.from);
-  const imageWasStandalone =
-    doc.sliceString(srcLine.from, srcLine.to).trim() === markdown.trim();
-  let delFrom = range.from;
-  let delTo = range.to;
+  const lineText = doc.sliceString(srcLine.from, srcLine.to);
+  // Whether the image is the ONLY content on its source line.
+  const imageWasStandalone = lineText.trim() === markdown.trim();
+  const targetLine = doc.lineAt(dropPos);
+
+  // CM6 applies the whole transaction against ORIGINAL positions, so we
+  // express the deletion + insertion in original coordinates and let it
+  // reconcile. Both branches swallow the source line's trailing break so
+  // no blank row is stranded where the content used to be.
+  let delFrom: number;
+  let delTo: number;
+  let insertText: string;
   if (imageWasStandalone) {
-    // Remove the whole source line including its line break so we
-    // don't strand an empty row.
+    // Bare image on its own line: move just the `![](..)` atom and land
+    // it at the START of the drop row - inline with the bullet (trailing
+    // space, no newline) on a list target, else on its own line.
+    const onListLine = listLineAt(view.state, dropPos) !== null;
+    insertText = onListLine ? `${markdown} ` : `${markdown}\n`;
+    delFrom = srcLine.from;
+    delTo = Math.min(srcLine.to + 1, doc.length);
+  } else {
+    // `lane-c addendum-2 item 3`: the image is embedded in a row with
+    // other text (`text ![](..) text`) or inside a bullet item. Move the
+    // ENTIRE row - the surrounding text + image + any list marker - as
+    // its own line so they travel together, instead of stranding the
+    // text and relocating only the atom. Exactly one source line:
+    // multi-line prose paragraphs are out of scope. Dropping anywhere on
+    // the source line itself is a no-op (a row can't move onto itself).
+    if (dropPos >= srcLine.from && dropPos <= srcLine.to) return;
+    insertText = `${lineText}\n`;
     delFrom = srcLine.from;
     delTo = Math.min(srcLine.to + 1, doc.length);
   }
 
   const insertAt = targetLine.from;
-  // If the insertion point sits inside the deletion span (can't here
-  // because we no-op when dropPos is within the source range, but the
-  // standalone-line widening could pull delFrom/delTo around the
-  // insert), guard it.
+  // Guard against the insertion point sitting inside the deletion span
+  // (the whole-line widening above can pull delFrom/delTo around it).
   if (insertAt >= delFrom && insertAt < delTo) return;
 
   view.dispatch({
@@ -195,7 +199,7 @@ export function moveImageSource(
       { from: delFrom, to: delTo, insert: "" },
       { from: insertAt, to: insertAt, insert: insertText },
     ],
-    // Place the caret just after the moved markdown at its new home.
+    // Place the caret just after the moved text at its new home.
     selection: {
       anchor:
         insertAt < delFrom

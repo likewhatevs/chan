@@ -132,6 +132,52 @@ describe("moveImageSource (image drag across rows)", () => {
     view.destroy();
   });
 
+  test("image embedded in a text row moves the ENTIRE row (lane-c addendum-2 item 3)", () => {
+    // `text ![](..) text`: the surrounding text must travel with the
+    // image, not be stranded while only the atom relocates.
+    const md = "before ![](x.png#w=250) after\n\nlast line\n";
+    const view = plainView(md);
+    const imgFrom = md.indexOf("![](");
+    const imgTo = imgFrom + "![](x.png#w=250)".length;
+    const dropPos = md.indexOf("last");
+    moveImageSource(view, JSON.stringify({ from: imgFrom, to: imgTo }), dropPos);
+    const out = view.state.doc.toString();
+    expect(out).toBe("\nbefore ![](x.png#w=250) after\nlast line\n");
+    // Surrounding text moved with the image; nothing stranded / dropped.
+    expect(out.match(/before .* after/)?.length).toBe(1);
+    view.destroy();
+  });
+
+  test("image in a bullet item moves the entire bullet line (lane-c addendum-2 item 3)", () => {
+    const md = "- task ![](y.png) done\n\nlast\n";
+    const view = plainView(md);
+    const imgFrom = md.indexOf("![](");
+    const imgTo = imgFrom + "![](y.png)".length;
+    const dropPos = md.indexOf("last");
+    moveImageSource(view, JSON.stringify({ from: imgFrom, to: imgTo }), dropPos);
+    const out = view.state.doc.toString();
+    // The `- ` marker travels too, so it stays a bullet at the new row.
+    expect(out).toBe("\n- task ![](y.png) done\nlast\n");
+    expect(out.match(/- task/g)?.length).toBe(1);
+    view.destroy();
+  });
+
+  test("dropping a mixed-row image elsewhere on its own row is a no-op", () => {
+    const md = "before ![](z.png) after\nother\n";
+    const view = plainView(md);
+    const imgFrom = md.indexOf("![](");
+    const imgTo = imgFrom + "![](z.png)".length;
+    const before = view.state.doc.toString();
+    // Drop at "after" - same row as the image, outside the image range.
+    moveImageSource(
+      view,
+      JSON.stringify({ from: imgFrom, to: imgTo }),
+      md.indexOf("after"),
+    );
+    expect(view.state.doc.toString()).toBe(before);
+    view.destroy();
+  });
+
   test("malformed move payload is ignored", () => {
     const md = "![](e.png)\nbody\n";
     const view = plainView(md);
