@@ -70,6 +70,21 @@ export async function reloadWindow(): Promise<void> {
   window.location.reload();
 }
 
+/// `phase-12 lane-e` (addendum-2 Q6): close-cascade tail. Close the
+/// current drive window and return focus to the launcher (the
+/// native-desktop workspace list). Called when the last tab and then
+/// the last empty pane are closed. No-op off-desktop - the browser
+/// owns its own window/tab lifecycle. Best-effort: a failed IPC logs
+/// and leaves the window as-is rather than throwing into the keymap.
+export async function requestCloseWindow(): Promise<void> {
+  if (!isTauriDesktop()) return;
+  try {
+    await tauriInvoke("request_close_window");
+  } catch (err) {
+    console.warn("requestCloseWindow: request_close_window IPC failed", err);
+  }
+}
+
 /// Open the platform's web inspector. On chan-desktop calls the
 /// `open_devtools` IPC (see `fullstack-b-17`). On web returns
 /// false so the caller can surface a hint pointing the user at

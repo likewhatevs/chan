@@ -1392,6 +1392,20 @@ fn open_devtools(window: tauri::WebviewWindow) {
     window.open_devtools();
 }
 
+/// `phase-12 lane-e` (addendum-2 Q6): close-cascade tail. The SPA
+/// invokes this when the last tab and then the last empty pane of a
+/// drive window are closed: close the window and bring the launcher
+/// (the native-desktop workspace list) back to the foreground. The
+/// launcher's CloseRequested handler hides rather than destroys it
+/// (see the setup hook), so re-showing is instant. Show the launcher
+/// first so focus lands there without a flash of no-window focus,
+/// then close the calling drive window.
+#[tauri::command]
+fn request_close_window(app: tauri::AppHandle, window: tauri::WebviewWindow) -> Result<(), String> {
+    let _ = show_window(&app, "main");
+    window.close().map_err(err)
+}
+
 /// `fullstack-b-19`: browser-style zoom controls. Step size is
 /// 10 % per Cmd++/Cmd+- press; the clamp range matches Tauri's own
 /// `zoom_hotkeys_enabled` polyfill semantics (0.25-5.0).
@@ -1721,6 +1735,7 @@ fn main() {
             reveal_in_finder,
             reload_window,
             open_devtools,
+            request_close_window,
             download::save_file_to_downloads,
             zoom_in,
             zoom_out,

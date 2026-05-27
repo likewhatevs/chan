@@ -41,6 +41,7 @@ description = "Allows per-drive windows to call their app commands."
 permissions = [
   "allow-reload-window",
   "allow-open-devtools",
+  "allow-request-close-window",
   "allow-save-file-to-downloads",
   "allow-zoom-in",
   "allow-zoom-out",
@@ -106,6 +107,11 @@ commands.allow = ["reload_window"]
 identifier = "allow-open-devtools"
 description = "Enables the open_devtools command."
 commands.allow = ["open_devtools"]
+
+[[permission]]
+identifier = "allow-request-close-window"
+description = "Enables the request_close_window command."
+commands.allow = ["request_close_window"]
 
 [[permission]]
 identifier = "allow-save-file-to-downloads"

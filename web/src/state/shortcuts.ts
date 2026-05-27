@@ -255,10 +255,16 @@ export const SHORTCUTS: readonly Shortcut[] = [
     native: "Mod+. Tab",
     group: "Panes",
   },
+  // `phase-12 lane-e` (addendum-2 Q5): pane nav splits per platform.
+  // Desktop-native keeps Cmd+[/] (no browser chrome to fight). The web
+  // build moves to Alt+[/] because Cmd+[/] is browser back/forward
+  // there. Tab nav already follows the same split (web Alt+Shift+[/],
+  // native Cmd+Shift+[/]). The web handler matches by `e.code` and
+  // preventDefaults the Option-mangled glyph, same as the tab handler.
   {
     id: "app.pane.prev",
     label: "Previous pane",
-    web: "Mod+[",
+    web: "Alt+[",
     native: "Mod+[",
     group: "Panes",
     escapeTerminal: true,
@@ -266,10 +272,27 @@ export const SHORTCUTS: readonly Shortcut[] = [
   {
     id: "app.pane.next",
     label: "Next pane",
-    web: "Mod+]",
+    web: "Alt+]",
     native: "Mod+]",
     group: "Panes",
     escapeTerminal: true,
+  },
+  // `phase-12 lane-e` (addendum-2): split the active pane. Listed
+  // under desktop-native in the policy, so native-only chords; web
+  // reaches the same action via Hybrid Nav `/` and `\`. row = split
+  // right, column = split bottom (matches `splitActive` + the Hybrid
+  // hamburger's right/down constraint).
+  {
+    id: "app.pane.splitRight",
+    label: "Split right",
+    native: "Mod+/",
+    group: "Panes",
+  },
+  {
+    id: "app.pane.splitDown",
+    label: "Split bottom",
+    native: "Mod+\\",
+    group: "Panes",
   },
   {
     id: "app.pane.closeTabs",
@@ -292,11 +315,34 @@ export const SHORTCUTS: readonly Shortcut[] = [
     native: "Esc",
     group: "App",
   },
-  // `fullstack-56`: dropped `app.save` (Cmd+S) — autosave is the
+  // `fullstack-56` dropped `app.save` (Cmd+S) because autosave is the
   // canonical write path (debounced on idle + tab-close + visibility
-  // hooks). No File→Save menu item existed, so dropping the keystroke
-  // collapses the surface entirely. Cmd+Shift+S strikethrough is
-  // owned by the editor and unaffected.
+  // hooks); there was never a File->Save menu item. `phase-12 lane-e`
+  // (addendum-2) reclaims Cmd+S for DRIVE-WIDE SEARCH (the action
+  // previously reachable only via Hybrid Nav). @@Alex Q5 authorizes
+  // preventDefault on web to suppress the browser save-page dialog.
+  // Distinct from Cmd+Shift+S strikethrough (owned by the editor).
+  {
+    id: "app.search.toggle",
+    label: "Search",
+    web: "Mod+S",
+    native: "Mod+S",
+    group: "App",
+    escapeTerminal: true,
+  },
+  // `phase-12 lane-e` (addendum-2 Q8): Infographics tab. The tab type
+  // already existed; this is the direct chord (@@Alex approved cmd+i
+  // in addition to Hybrid Nav `i`). Both open the tab in the active
+  // pane.
+  {
+    id: "app.infographics.open",
+    label: "Infographics",
+    web: "Mod+I",
+    native: "Mod+I",
+    group: "App",
+    note: "or Mod+. i (Hybrid Nav)",
+    escapeTerminal: true,
+  },
   // Tab navigation
   {
     id: "app.tab.close",

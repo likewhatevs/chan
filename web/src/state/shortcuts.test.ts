@@ -52,13 +52,42 @@ describe("shortcut table", () => {
     expect(native).toMatch(/^Close tab\s+Ctrl\+D/m);
   });
 
-  test("advertises direct previous and next pane chords", () => {
+  // `phase-12 lane-e` (addendum-2 Q5): pane nav splits per platform.
+  // The web build uses Alt+[/] (Cmd+[/] is browser back/forward there);
+  // desktop-native keeps Cmd+[/].
+  test("advertises pane nav: web Alt+[/], native Cmd+[/]", () => {
     const web = renderTable("web", "mac");
     const native = renderTable("native", "mac");
-    expect(web).toMatch(/^Previous pane\s+Cmd\+\[/m);
-    expect(web).toMatch(/^Next pane\s+Cmd\+\]/m);
+    expect(web).toMatch(/^Previous pane\s+Alt\+\[/m);
+    expect(web).toMatch(/^Next pane\s+Alt\+\]/m);
     expect(native).toMatch(/^Previous pane\s+Cmd\+\[/m);
     expect(native).toMatch(/^Next pane\s+Cmd\+\]/m);
+  });
+
+  // `phase-12 lane-e` (addendum-2): Cmd+S = drive-wide search,
+  // reclaimed after fullstack-56 dropped it.
+  test("advertises Cmd+S search on both platforms", () => {
+    expect(renderTable("web", "mac")).toMatch(/^Search\s+Cmd\+S/m);
+    expect(renderTable("native", "mac")).toMatch(/^Search\s+Cmd\+S/m);
+  });
+
+  // `phase-12 lane-e` (addendum-2 Q8): direct Cmd+I infographics chord
+  // (in addition to Hybrid Nav `i`).
+  test("advertises Cmd+I infographics on both platforms", () => {
+    expect(renderTable("web", "mac")).toMatch(/^Infographics\s+Cmd\+I/m);
+    expect(renderTable("native", "mac")).toMatch(/^Infographics\s+Cmd\+I/m);
+  });
+
+  // `phase-12 lane-e` (addendum-2): splits are desktop-native only
+  // (web reaches them via Hybrid Nav `/` `\`), so they render in the
+  // native table but not the web one.
+  test("advertises splits on native only", () => {
+    const web = renderTable("web", "mac");
+    const native = renderTable("native", "mac");
+    expect(native).toMatch(/^Split right\s+Cmd\+\//m);
+    expect(native).toMatch(/^Split bottom\s+Cmd\+\\/m);
+    expect(web).not.toMatch(/^Split right/m);
+    expect(web).not.toMatch(/^Split bottom/m);
   });
 
   test("advertises Hybrid Nav close-all and kill-pane chords", () => {

@@ -206,12 +206,16 @@ describe("Cmd+K Backspace kill-pane (fullstack-77)", () => {
 });
 
 describe("Track C pane shortcut wiring", () => {
-  test("Mod+[ and Mod+] dispatch previous/next pane directly", () => {
+  // `phase-12 lane-e` (addendum-2 Q5): WEB pane nav moved to Alt+[/]
+  // (Cmd+[/] is browser back/forward on web). Desktop-native keeps
+  // Cmd+[/] via KEY_BRIDGE_JS, which stops propagation before this
+  // web-only handler runs.
+  test("Alt+[ and Alt+] dispatch previous/next pane on web", () => {
     expect(app).toMatch(
-      /meta && !e\.altKey && !e\.shiftKey && e\.code === "BracketLeft"[\s\S]*?selectPrevPane\(\);/,
+      /e\.altKey && !e\.shiftKey && !meta && e\.code === "BracketLeft"[\s\S]*?selectPrevPane\(\);/,
     );
     expect(app).toMatch(
-      /meta && !e\.altKey && !e\.shiftKey && e\.code === "BracketRight"[\s\S]*?selectNextPane\(\);/,
+      /e\.altKey && !e\.shiftKey && !meta && e\.code === "BracketRight"[\s\S]*?selectNextPane\(\);/,
     );
   });
 
