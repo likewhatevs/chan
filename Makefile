@@ -111,8 +111,12 @@ web: ## Build the embedded web bundle.
 	@date -u '+%Y-%m-%dT%H:%M:%SZ' > "$(WEB_BUILD_STAMP)"
 
 .PHONY: web-check
-web-check: ## Run frontend check and production build.
-	cd web && $(NPM) install && $(NPM) run check && $(NPM) run build
+web-check: ## Run frontend check, vitest, and production build.
+	# vitest (npm test == `vitest run`) gates here so the pre-push / ci-linux
+	# path covers the frontend unit tests. The Make gate previously ran only
+	# svelte-check + build, leaving vitest ungated after CI was simplified to
+	# the make ci-* targets.
+	cd web && $(NPM) install && $(NPM) run check && $(NPM) test && $(NPM) run build
 	@date -u '+%Y-%m-%dT%H:%M:%SZ' > "$(WEB_BUILD_STAMP)"
 
 .PHONY: web-marketing-check
