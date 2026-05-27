@@ -34,6 +34,7 @@
     browserSelection,
     fbSelectSingle,
     graphReloadSignal,
+    indexStatus,
     paneWidths,
     persistPaneWidths,
     persistTreeExpanded,
@@ -363,6 +364,18 @@
         currentScope?.kind === "drive"),
   );
   const languageMode = $derived(graphState.mode === "language");
+
+  /// `indexStatus` is the drive-global indexer state. While the index is
+  /// still building/reindexing, the semantic graph may be INCOMPLETE -
+  /// link targets that simply aren't indexed yet surface as dead-end
+  /// ("missing") nodes. Surface an "indexing" cue so an in-flight graph
+  /// isn't trusted as complete; once the index is idle, any remaining
+  /// dead-end is a real broken link. (graph-loading-state-spec slice 1;
+  /// the per-scope ghost pull-back + parent-dir pulse is the follow-up.)
+  const indexBuilding = $derived(
+    indexStatus.value?.state === "building" ||
+      indexStatus.value?.state === "reindexing",
+  );
 
   /// `fullstack-a-56` shallow-scope cue: when the scope's
   /// `depthCap` is 1 (single-file graph with no further forward
@@ -2010,6 +2023,9 @@
     <span class="stat">
       {visibleNodeIds.size}/{nodes.length} nodes · {visibleEdges.length}/{edges.length} edges
       {#if filesystemMode && fsTruncated} · truncated{/if}
+      {#if indexBuilding}
+        · <span class="indexing" title="The index is still building; dead-end nodes may resolve once it completes.">indexing…</span>
+      {/if}
     </span>
     <span class="hint">
       {filesystemMode ? "filesystem graph" : languageMode ? "language graph" : "semantic graph"} · drag to pan · scroll to zoom · click to inspect
@@ -2076,6 +2092,27 @@
   .stat {
     font-variant-numeric: tabular-nums;
     color: var(--text);
+  }
+  /* graph-loading-state slice 1: a soft pulse on the "indexing" cue,
+     mirroring the File Browser loader's "still working" feel so an
+     in-flight index reads as not-yet-complete rather than final. */
+  .indexing {
+    color: var(--link);
+    animation: graph-indexing-pulse 1.4s ease-in-out infinite;
+  }
+  @keyframes graph-indexing-pulse {
+    0%,
+    100% {
+      opacity: 1;
+    }
+    50% {
+      opacity: 0.4;
+    }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .indexing {
+      animation: none;
+    }
   }
   .hint {
     margin-left: auto;
