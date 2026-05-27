@@ -6,6 +6,50 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [v0.16.0] - 2026-05-27
+
+Phase 12 release. The headline is a breaking terminology rename from
+"drive" to "workspace", plus graph and File Browser carryover,
+cross-platform keyboard shortcuts, terminal robustness fixes, and editor
+changes. Supersedes the 0.15.x line: `chan upgrade` only offers 0.16.0+.
+
+### Changed
+
+- BREAKING: renamed the "drive" concept to "workspace" across the crate
+  (`chan-drive` -> `chan-workspace`), the on-disk registry, the HTTP
+  routes, the CLI subcommands, config, and error text. Clean break with
+  no migration: existing registries and bookmarks stop resolving. Delete
+  the prior state directory and re-register your workspaces. The
+  `drive.chan.app` tunnel domain is the one preserved "drive" string.
+- Editor: stopped auto-reloading a file while you are typing; an external
+  change now shows a "changed on disk" banner instead of replacing the
+  buffer.
+- Moved "Export to PDF" from the editor menu into the Inspector.
+
+### Added
+
+- Graph: workspace root pinned at the bottom with the spine growing
+  upward (GI-10); an in-flight-index loading state that pulls back
+  dead-ends while the index builds; right-click opens the tab menu
+  anywhere on the canvas.
+- File Browser: per-instance tree expansion state.
+- Cross-platform keyboard policy across web, Linux desktop, and macOS
+  native, plus Cmd+Shift+I to toggle broadcast to all terminals on macOS.
+- Terminal: pulse the unseen-output dot while output arrives.
+- Editor: drag an image embedded in a row to move the whole row.
+
+### Fixed
+
+- Terminal: recover the renderer after macOS sleep/wake; harden blur
+  repaint for the WKWebView pane focus-switch.
+- Editor: flush the caret to the URL hash on reload so Cmd+R restores the
+  cursor position.
+- Server: close the self-write suppression race that surfaced phantom
+  external edits.
+- Release/CI: emit the Linux .rpm into the workspace target dir so the
+  release workflow stages it, gate vitest in the CI build, and fix a
+  flaky unhandled rejection from the debounced workspace-info refresh.
+
 ## [v0.14.0] - 2026-05-24
 
 Phase 9 release. Rich Prompt workspaces, metadata archive import/export,
