@@ -13,13 +13,13 @@ attributes on `<html>` and both can change at runtime via the
 settings panel.
 
 1. **Color scheme** (`data-theme="light"` or `data-theme="dark"`).
-   Drives the entire CSS-variable palette: backgrounds, text,
+   Workspaces the entire CSS-variable palette: backgrounds, text,
    accents, pill hues, graph node hues, etc. Defined in
    `App.svelte` as a `:root` block (dark, the default) plus a
    `[data-theme="light"]` override block.
 
 2. **Editor theme** (`data-editor-theme="github"`, `"google_docs"`,
-   or `"word"`). Drives the editor surface only: body font,
+   or `"word"`). Workspaces the editor surface only: body font,
    heading scale, code font, link color, code-block slab bg,
    table borders, blockquote rule. Defined in
    `web/src/editor/themes/{base,github,google_docs,word}.css` as

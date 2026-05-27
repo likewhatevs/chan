@@ -165,7 +165,7 @@ routes/
 ```
 
 Async HTTP handlers treat chan-workspace as a synchronous filesystem
-boundary. Routes snapshot the live `Arc<Workspace>` with `try_drive()`,
+boundary. Routes snapshot the live `Arc<Workspace>` with `try_workspace()`,
 return a retryable workspace-busy response while metadata import has
 temporarily removed the workspace cell, and run filesystem, graph,
 report, search, archive, and upload/download work on blocking
@@ -195,7 +195,7 @@ chan-server hosts the MCP server in-process behind a Unix-domain
 socket (`crates/chan-server/src/mcp_bridge.rs`). External
 subprocesses connect via `chan __mcp-proxy <socket>`, which is a
 stdio<->socket pipe. This sidesteps chan-workspace's per-workspace flock
-that would otherwise reject a child's `Library::open_drive`.
+that would otherwise reject a child's `Library::open_workspace`.
 
 ## Frontend embed: build, serve, prefix
 
@@ -224,7 +224,7 @@ matters for two paths:
   reads that meta tag at boot and prepends the prefix to every
   fetch and WebSocket URL.
 - Tunnel mode: chan-server runs at root inside the tunnel
-  (`{user}.drive.chan.app/{drive}` is stripped by the gateway
+  (`{user}.drive.chan.app/{workspace}` is stripped by the gateway
   before forwarding into the tunnel substream; the upstream sees
   `/`, `/assets/...`), but the SPA still needs to know the public
   path so its API URLs resolve from the browser's origin. On
@@ -252,10 +252,10 @@ when they expected JSON.
   `drive.chan.app/v1/tunnel`, runs a Hello/HelloAck handshake
   that names the workspace, and serves yamux substreams with the
   router. The bearer token is forced off in tunnel mode:
-  `{user}.drive.chan.app/{drive}/` is the trust boundary (default
+  `{user}.drive.chan.app/{workspace}/` is the trust boundary (default
   behavior 404s anonymous visitors; the workspace owner opens the
   workspace from id.chan.app's dashboard via a short-lived workspace-gate
-  token, drive-proxy validates and issues a host-only session
+  token, workspace-proxy validates and issues a host-only session
   cookie scoped to that workspace; `--tunnel-public` opts out of that
   gate).
 

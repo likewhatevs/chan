@@ -6,8 +6,8 @@ each `(user, workspace)` in a shared `Registry`, and exposes a
 public-facing axum `Router` that opens fresh yamux substreams to
 forward requests (including WebSocket upgrades) into the registered
 peer. Designed to be embedded into a host process (e.g. the gateway's
-`drive-proxy`) which provides the `Validator` impl, mounts the
-public router at `/{user}/{drive}/...`, and lets nginx terminate
+`workspace-proxy`) which provides the `Validator` impl, mounts the
+public router at `/{user}/{workspace}/...`, and lets nginx terminate
 TLS in front.
 
 ```toml
@@ -29,7 +29,7 @@ handshake_validated(...)      same, with already-validated identity
 
 serve_tunnel_listener(
     listener, validator,
-    registry, max_drives_per_user)
+    registry, max_workspaces_per_user)
                               accept loop on a TCP listener; runs h2
                               server, validates, registers, workspaces
 

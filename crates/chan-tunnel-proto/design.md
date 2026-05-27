@@ -22,7 +22,7 @@ chan-tunnel is split into three crates that live together in
 End-to-end shape: `chan serve` (running on the user's laptop)
 embeds chan-tunnel-client and dials the public terminator at
 `POST {tunnel-host}/v1/tunnel`. The terminator is chan-tunnel-server
-hosted inside `chan-gateway/drive-proxy`. After Hello / HelloAck the
+hosted inside `chan-gateway/workspace-proxy`. After Hello / HelloAck the
 single h2 stream becomes a yamux session; the public router opens
 one substream per public request and runs hyper h1 over it.
 
@@ -33,7 +33,7 @@ for any byte-level detail.
 ## 1. Problem and scope
 
 A chan user wants their local workspace reachable on a public URL
-(`drive.chan.app/{user}/{drive}/...`) without opening a port,
+(`drive.chan.app/{user}/{workspace}/...`) without opening a port,
 configuring DNS, or running a TURN/STUN stack. The constraint is
 "works through corporate NAT and HTTP-only egress." The shape that
 fits both is one long-lived HTTPS request.
@@ -101,7 +101,7 @@ crate is not used again on that connection.
 | `control.rs`      | `Hello`, `HelloAck`, `ProtocolVersion`     |
 | `frame.rs`        | sync codec (`encode_frame`, `decode_frame`)|
 | `io.rs`           | tokio helpers (`read_frame`, `write_frame`)|
-| `drive_name.rs`   | workspace + username validators, sanitizer     |
+| `workspace_name.rs`   | workspace + username validators, sanitizer     |
 | `h2_duplex.rs`    | `H2Duplex` adapter over h2 streams         |
 | `lib.rs`          | re-exports + `TUNNEL_PATH`, byte cap       |
 
@@ -152,11 +152,11 @@ pub async fn write_frame<W, T>(w: &mut W, value: &T)
 pub enum IoFrameError { Frame(FrameError), Io(std::io::Error) }
 
 // Workspace + username rules
-pub const MAX_DRIVE_NAME_LEN: usize = 32;
+pub const MAX_WORKSPACE_NAME_LEN: usize = 32;
 pub const MAX_USERNAME_LEN: usize = 64;
-pub fn is_valid_drive_name(s: &str) -> bool;
+pub fn is_valid_workspace_name(s: &str) -> bool;
 pub fn is_valid_username(s: &str) -> bool;
-pub fn sanitize_drive_name(input: &str) -> Option<String>;
+pub fn sanitize_workspace_name(input: &str) -> Option<String>;
 
 // h2 duplex adapter
 pub struct H2Duplex { /* ... */ }
@@ -273,7 +273,7 @@ This crate is the validator surface for two values that flow into a
 public URL: workspace name (from the client's `Hello`) and username
 (from the server's `Validated`).
 
-### Workspace name (`is_valid_drive_name`)
+### Workspace name (`is_valid_workspace_name`)
 
 Rules: 1..=32 ASCII bytes; characters `[a-z0-9-]`; first and last
 character alphanumeric (no leading/trailing hyphen). Both sides
@@ -283,7 +283,7 @@ buggy clients without trusting them, and catches a future server
 that introduces a new path scheme that would let an old client
 still register a name the new server can't safely route.
 
-`sanitize_drive_name` is a best-effort transform from a free-form
+`sanitize_workspace_name` is a best-effort transform from a free-form
 string (often the workspace directory's basename) into a valid name:
 lowercase ASCII, collapse non-alnum runs to single `-`, trim,
 truncate. Returns `None` when the result would be empty so the
@@ -334,7 +334,7 @@ enums via `From`, flattening through `Display` so `h2::Error` and
 
 - `chan-tunnel-client` (this workspace): runtime dep. Imports
   `Hello`, `HelloAck`, `ProtocolVersion`, `read_frame`,
-  `write_frame`, `is_valid_drive_name`, `MAX_DRIVE_NAME_LEN`, and
+  `write_frame`, `is_valid_workspace_name`, `MAX_WORKSPACE_NAME_LEN`, and
   `H2Duplex`.
 - `chan-tunnel-server` (this workspace): runtime dep. Imports the
   same control types plus `is_valid_username`.
@@ -342,10 +342,10 @@ enums via `From`, flattening through `Display` so `h2::Error` and
 Transitively:
 
 - `chan-writer/chan/chan-server`: depends on chan-tunnel-client and
-  re-exports `is_valid_drive_name`, `sanitize_drive_name`, and
-  `MAX_DRIVE_NAME_LEN` for the `chan serve` CLI to validate the
+  re-exports `is_valid_workspace_name`, `sanitize_workspace_name`, and
+  `MAX_WORKSPACE_NAME_LEN` for the `chan serve` CLI to validate the
   user-typed workspace name before dialing.
-- `chan-writer/chan-gateway/drive-proxy`: depends on chan-tunnel-
+- `chan-writer/chan-gateway/workspace-proxy`: depends on chan-tunnel-
   server at runtime; chan-tunnel-client is a dev-dependency only,
   used in `tests/api.rs` to workspace a fake `chan serve` against a
   real `serve_tunnel_listener` for end-to-end tests.

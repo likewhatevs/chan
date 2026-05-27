@@ -21,7 +21,7 @@ platform.
 
 - Check keyboard reachability, focus behavior, menu placement,
   context-menu parity, command dispatch, and Escape behavior.
-- Use throwaway drives and separate dev builds for runtime
+- Use throwaway workspaces and separate dev builds for runtime
   walks.
 - Do not touch @@Alex's running chan.app session.
 - For shell changes, explicitly check overlay stacking, native

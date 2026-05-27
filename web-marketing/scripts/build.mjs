@@ -60,7 +60,7 @@ async function main() {
       bodyClass: "home-page",
       title: "chan - local-first markdown editor",
       description:
-        "Chan is a local-first markdown editor for plain-file drives, wiki-links, search, graph, terminal, and MCP workflows.",
+        "Chan is a local-first markdown editor for plain-file workspaces, wiki-links, search, graph, terminal, and MCP workflows.",
       content: fillTemplate(homeTemplate, { version, ...releaseTemplateValues }),
     }),
   );
@@ -293,8 +293,8 @@ function manualUrlFor(rel) {
   return `/manual/${withoutExt}/`;
 }
 
-// Maps a drive-relative `.md` link (as authored in docs/manual) to the
-// clean published URL. Returns null for hrefs that are not drive-relative
+// Maps a workspace-relative `.md` link (as authored in docs/manual) to the
+// clean published URL. Returns null for hrefs that are not workspace-relative
 // .md targets (external, root-absolute, anchor-only) so callers leave
 // them untouched. Manual pages are flat siblings today, but this resolves
 // against the source page's dir so nested pages would work too.

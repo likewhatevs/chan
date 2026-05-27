@@ -121,7 +121,7 @@ Source: `desktop/src-tauri/src/config.rs`.
 | `outbound[].added_at` | `u64` | current millis | Attach URL panel | diagnostics and future sorting |
 | `tunnel.preferred_port` | `u16` | `0` (OS-assigned) | Tunnel listener UI | tunnel listen-bind hint |
 | `tunnel.preferred_label` | `String` | `""` | Tunnel listener UI | bearer/label default |
-| `tunnel.preferred_drive` | `String` | `""` | Tunnel listener UI | workspace name default |
+| `tunnel.preferred_workspace` | `String` | `""` | Tunnel listener UI | workspace name default |
 | `window_configs[]` | `Vec<WindowConfig>` | empty | (auto on window close) | LRU pop on window open; preserves panes/tabs + URL hash + zoom level |
 
 `WindowConfig`: `key: String`, `window_label: String`, `url_hash: String`, `zoom_level: f64`, `saved_at: u64`.

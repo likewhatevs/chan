@@ -7,7 +7,7 @@ Date: 2026-05-18
 ## Profile
 
 Second web-test lane. Same profile as @@WebtestA; runs in
-parallel for broader scenario coverage (different drives,
+parallel for broader scenario coverage (different workspaces,
 different feature flags, different browser tabs).
 
 ## Skills

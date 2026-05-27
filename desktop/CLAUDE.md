@@ -18,10 +18,10 @@ keeps a freshly-added workspace openable immediately: a subprocess
 host's boot-time in-memory snapshot stale, which surfaced as a
 spurious "workspace not registered" error on first open.
 
-Blocking chan-workspace calls (`register_drive`, `unregister_drive`,
-`open_drive`, `boot`, the feature setters) run via
+Blocking chan-workspace calls (`register_workspace`, `unregister_workspace`,
+`open_workspace`, `boot`, the feature setters) run via
 `tokio::task::spawn_blocking` so a slow initial scan never blocks
-the async executor. `remove_drive` runs `unregister_drive` in a
+the async executor. `remove_workspace` runs `unregister_workspace` in a
 bounded retry loop: `serve::stop` drops the host's handle
 synchronously, but a background indexer or in-flight request may
 hold the workspace's flock for a moment, surfacing as

@@ -24,7 +24,7 @@ concrete remediations.
   `chan-tunnel-server` + per-tenant axum listeners.
 - `src-tauri/src/{config,registry,watcher,auth}.rs`: sidecar JSON,
   chan TOML mirror, notify watcher, id.chan.app OAuth.
-- `src/main.js`: vanilla-JS Drives window driving the IPC surface.
+- `src/main.js`: vanilla-JS Workspaces window driving the IPC surface.
 
 Three concurrency models are mixed: `std::sync::Mutex` +
 `std::thread` for serve supervision, `tokio` async for the tunnel
@@ -117,9 +117,9 @@ entry in the `serves` map. The reader thread is the sole place
 that removes the entry, after EOF on stderr. If the user toggles
 Off then On within ~50ms:
 
-1. `set_drive_on(on: false)` -> `serve::stop` sends SIGKILL,
+1. `set_workspace_on(on: false)` -> `serve::stop` sends SIGKILL,
    returns.
-2. `set_drive_on(on: true)` -> `serve::start` checks
+2. `set_workspace_on(on: true)` -> `serve::start` checks
    `if state.serves.lock().unwrap().contains_key(&key) { return Ok(()); }`,
    returns Ok silently.
 3. Reader thread eventually wakes, removes entry, emits
@@ -164,16 +164,16 @@ fix, the watchdog thread is fine.
 
 Suggested deadline: 15s.
 
-### P0.7 `remove_drive` skips the translocation guard
+### P0.7 `remove_workspace` skips the translocation guard
 
-`main.rs:229-250`: `remove_drive` calls `chan_bin()?` directly but
+`main.rs:229-250`: `remove_workspace` calls `chan_bin()?` directly but
 never `require_bin(&state.bin_status)?`. In a translocated bundle,
 `chan_bin()` succeeds (file exists) but `bin_status.ok == false`.
 The frontend disables the toggle, and the Forget button has
 `disabledAttr` applied in render (main.js:298), but the IPC
 command itself is unguarded.
 
-Add `require_bin(&state.bin_status)?;` at the top of `remove_drive`
+Add `require_bin(&state.bin_status)?;` at the top of `remove_workspace`
 for defense in depth.
 
 ---
@@ -224,8 +224,8 @@ let exit_status = {
 
 After EOF the child usually exited already, so wait returns fast.
 If it has not (rare: child closed stderr but did not exit), every
-thread that calls `list_drives` / `set_drive_on` / `add_drive` /
-`remove_drive` blocks on the same Mutex until wait returns.
+thread that calls `list_workspaces` / `set_workspace_on` / `add_workspace` /
+`remove_workspace` blocks on the same Mutex until wait returns.
 
 Fix:
 
@@ -334,13 +334,13 @@ not take 5s * N workspaces.
 
 ### P1.10 Window count is unbounded
 
-`open_local_drive` (main.rs:434) and `open_tunneled_drive`
+`open_local_workspace` (main.rs:434) and `open_tunneled_workspace`
 (main.rs:457) open a new webview per click. Cap at 10 per workspace;
 show an inline notice when at cap.
 
 ### P1.11 `chan add`/`remove` blocks the IPC thread
 
-`add_drive` / `remove_drive` are sync `#[tauri::command]` that
+`add_workspace` / `remove_workspace` are sync `#[tauri::command]` that
 shell out and `.output()`. Several seconds on a large folder. UI
 shows no feedback.
 
@@ -558,7 +558,7 @@ fn stop_listening_inner(state: &Arc<TunnelState>) {
 
 pub fn stop_listening(app: &AppHandle, state: &Arc<TunnelState>) {
     stop_listening_inner(state);
-    crate::serve::close_all_tunneled_drive_windows(app);
+    crate::serve::close_all_tunneled_workspace_windows(app);
     let _ = app.emit(
         TUNNEL_STATE_CHANGED,
         serde_json::json!({"listening": false, "port": null}),
@@ -676,7 +676,7 @@ other.
   Touches `.github/workflows/ci.yml` only.
 - P0.3 install `tracing-subscriber` in `main()`. Touches `main.rs`
   + `Cargo.toml`. Unblocks observability for everything else.
-- P0.7 add `require_bin` to `remove_drive`. Touches `main.rs:229`.
+- P0.7 add `require_bin` to `remove_workspace`. Touches `main.rs:229`.
   Five-line patch.
 - P1.4 lock-across-wait fix in `serve.rs:180-183`. Self-contained.
 - P1.6 `new_state` getrandom error propagation. `auth.rs:128-143`
@@ -718,7 +718,7 @@ benefit from tracing being present and from the `chan_cmd` helper.
   `tauri_plugin_opener::OpenerExt::reveal_item_in_dir` if
   available, else `.status()`).
 - P1.10 cap per-workspace window count.
-- P1.11 convert `add_drive`/`remove_drive` to async (or
+- P1.11 convert `add_workspace`/`remove_workspace` to async (or
   spawn_blocking with a `chan-busy` event). Independent of P0.5.
 
 ### Group C: structural, do after B stabilizes

@@ -12,7 +12,7 @@ walks for @@Desktacean's patches. Can ship small patches when
 peers are informed and the scope is clear.
 
 Runtime walks must not touch @@Alex's running chan.app session.
-Use throwaway drives, separate dev builds, and explicit
+Use throwaway workspaces, separate dev builds, and explicit
 permission where launches or GUI automation are required.
 
 ## Skills

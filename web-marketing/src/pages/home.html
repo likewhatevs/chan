@@ -1,9 +1,9 @@
 <section class="hero">
   <div class="hero-copy">
-    <p class="eyebrow">local-first markdown drives</p>
+    <p class="eyebrow">local-first markdown workspaces</p>
     <h1>chan</h1>
     <p class="lede">
-      A desktop and CLI editor for plain markdown folders. Open a drive,
+      A desktop and CLI editor for plain markdown folders. Open a workspace,
       write in tabs and panes, link files by path, and keep the source of
       truth on disk.
     </p>
@@ -14,7 +14,7 @@
   </div>
   <figure class="hero-shot">
     <img src="/assets/editor-recipes.png" alt="Chan editor with markdown files open in several tabs" />
-    <figcaption>Chan running against a local notes drive.</figcaption>
+    <figcaption>Chan running against a local notes workspace.</figcaption>
   </figure>
 </section>
 
@@ -22,14 +22,14 @@
   <article>
     <h2>Plain files</h2>
     <p>
-      Markdown files stay under the drive folder. Edits from other tools are
+      Markdown files stay under the workspace folder. Edits from other tools are
       picked up by the running app.
     </p>
   </article>
   <article>
     <h2>Path links</h2>
     <p>
-      Type <code>[[</code> to pick a file path from the drive. Wiki-links
+      Type <code>[[</code> to pick a file path from the workspace. Wiki-links
       resolve relative paths instead of hiding data in an app database.
     </p>
   </article>
@@ -37,13 +37,13 @@
     <h2>Search and graph</h2>
     <p>
       Search, backlinks, tags, mentions, and graph views are built from the
-      files in the drive.
+      files in the workspace.
     </p>
   </article>
   <article>
     <h2>Terminal and MCP</h2>
     <p>
-      Embedded terminals start at the drive root and export
+      Embedded terminals start at the workspace root and export
       <code>CHAN_MCP_*</code> discovery variables for external agent CLIs.
     </p>
   </article>
@@ -72,7 +72,7 @@
     <h2>Local by default, tunnel by choice</h2>
     <p>
       Local use needs no account. The HTTP server binds to loopback by
-      default. Tunnel mode is opt-in and publishes the drive through
+      default. Tunnel mode is opt-in and publishes the workspace through
       <code>drive.chan.app</code> only when you configure it.
     </p>
   </div>

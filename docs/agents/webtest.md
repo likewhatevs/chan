@@ -19,7 +19,7 @@ manual-walkthrough findings against the running app.
 
 The split happened because phase 6 grew enough surface area
 that two parallel test sessions paid for themselves
-(different drives, different feature flags, different
+(different workspaces, different feature flags, different
 browser tabs).
 
 ## Where their work lives
