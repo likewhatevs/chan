@@ -9,7 +9,7 @@
 //! Lifecycle is non-destructive per the
 //! [`addendum-b clarification`](../../alex/addendum-b.md)
 //! tear-down semantic: `team_unload` drops the watcher but the
-//! on-disk workspace (config + events + docs) PERSISTS, and any
+//! on-disk team (config + events + docs) PERSISTS, and any
 //! open terminals stay attached (user-managed). Re-load via the
 //! normal Load Team flow at any time.
 //!
@@ -154,7 +154,7 @@ pub async fn api_team_load(
 }
 
 /// `POST /api/teams/{name}/unload` - tear down the per-team
-/// watcher. Non-destructive: workspace + terminals persist.
+/// watcher. Non-destructive: team + terminals persist.
 /// Returns 404 if the team isn't currently loaded.
 pub async fn api_team_unload(
     State(state): State<Arc<AppState>>,
@@ -187,7 +187,7 @@ pub async fn api_team_unload(
     }
 }
 
-/// systacean-41: `POST /api/teams` - create a new team workspace.
+/// systacean-41: `POST /api/teams` - create a new team.
 ///
 /// The outer `name` is authoritative; if the inbound config's
 /// `team_name` differs, we overwrite it before calling
@@ -232,11 +232,11 @@ pub async fn api_team_create(
 }
 
 /// systacean-41: `POST /api/teams/{name}/duplicate` - copy an
-/// existing team workspace.
+/// existing team.
 ///
 /// The path `{name}` is the source; the request body's
 /// `new_name` is the duplicate's name. `Drive::duplicate_team`
-/// byte-copies the workspace (config + events + docs) +
+/// byte-copies the team (config + events + docs) +
 /// rewrites the duplicated `config.toml`'s `team_name` to
 /// `new_name` so the team's identity matches its directory.
 ///
@@ -431,7 +431,7 @@ mod tests {
 
     #[tokio::test]
     async fn create_team_round_trip_then_load_succeeds() {
-        // systacean-41: POST /api/teams creates the workspace +
+        // systacean-41: POST /api/teams creates the team +
         // returns the TeamRef. A subsequent POST
         // /api/teams/:name/load watcher attach must succeed on
         // the newly-created team.
@@ -464,7 +464,7 @@ mod tests {
     #[tokio::test]
     async fn duplicate_team_creates_distinct_copy() {
         // systacean-41: duplicating an existing team produces a
-        // distinct workspace under the new name. The duplicate's
+        // distinct team under the new name. The duplicate's
         // config.team_name is rewritten by chan-drive to match
         // the new directory name.
         let app = route_test_app();

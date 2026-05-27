@@ -107,7 +107,7 @@ pub(crate) fn ensure_root(drafts_dir: &Path) -> Result<()> {
     })
 }
 
-/// Inspect every draft workspace and return non-fatal problems.
+/// Inspect every draft and return non-fatal problems.
 ///
 /// This is intentionally a report, not a hard failure: a single
 /// broken draft should warn the user on drive boot without blocking
@@ -250,12 +250,12 @@ pub fn name_from_unified_path(path: &str) -> Result<String> {
 }
 
 /// Inspect a draft directory and classify whether it is still a
-/// single-file draft or has workspace attachments.
+/// single-file draft or has directory attachments.
 pub fn inspect(drafts_dir: &Path, name: &str) -> Result<DraftInspection> {
     Ok(scan_draft(drafts_dir, name)?.inspection)
 }
 
-/// Move a draft workspace into metadata trash.
+/// Move a draft into metadata trash.
 pub fn discard(drafts_dir: &Path, draft_trash_dir: &Path, name: &str) -> Result<()> {
     validate_name(name)?;
     let src = drafts_dir.join(name);
@@ -296,7 +296,7 @@ pub fn promote(
     }
 
     if scan.inspection.has_attachments {
-        promote_workspace(scan, &target_abs, &target_rel_str)
+        promote_draft(scan, &target_abs, &target_rel_str)
     } else {
         promote_single_file(scan, &target_abs, &target_rel_str)
     }
@@ -426,7 +426,7 @@ fn promote_single_file(
     fs::remove_dir_all(&scan.src).map_err(|e| {
         broken(
             &scan.inspection.name,
-            format!("saved to {target_rel} but failed to remove draft workspace: {e}"),
+            format!("saved to {target_rel} but failed to remove draft: {e}"),
         )
     })?;
     Ok(DraftPromoteReport {
@@ -436,21 +436,21 @@ fn promote_single_file(
     })
 }
 
-fn promote_workspace(
+fn promote_draft(
     scan: DraftScan,
     target_abs: &Path,
     target_rel: &str,
 ) -> Result<DraftPromoteReport> {
     match fs::symlink_metadata(target_abs) {
         Ok(meta) if meta.is_dir() && !meta.file_type().is_symlink() => {
-            preflight_workspace_merge(&scan, target_abs, target_rel)?;
-            copy_workspace_into_existing_dir(scan, target_abs, target_rel)
+            preflight_draft_merge(&scan, target_abs, target_rel)?;
+            copy_draft_into_existing_dir(scan, target_abs, target_rel)
         }
         Ok(_) => Err(ChanError::PathAlreadyExists(target_rel.to_string())),
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
             let parent = target_abs.parent().ok_or(ChanError::PathEmpty)?;
             ensure_existing_dir(parent, "target parent")?;
-            copy_workspace_to_new_dir(scan, target_abs, target_rel)
+            copy_draft_to_new_dir(scan, target_abs, target_rel)
         }
         Err(e) => Err(ChanError::Io(format!(
             "failed to inspect target {target_rel}: {e}"
@@ -458,7 +458,7 @@ fn promote_workspace(
     }
 }
 
-fn preflight_workspace_merge(scan: &DraftScan, target_abs: &Path, target_rel: &str) -> Result<()> {
+fn preflight_draft_merge(scan: &DraftScan, target_abs: &Path, target_rel: &str) -> Result<()> {
     for entry in &scan.entries {
         let dest = target_abs.join(&entry.rel);
         if dest.exists() || fs::symlink_metadata(&dest).is_ok() {
@@ -469,7 +469,7 @@ fn preflight_workspace_merge(scan: &DraftScan, target_abs: &Path, target_rel: &s
     Ok(())
 }
 
-fn copy_workspace_to_new_dir(
+fn copy_draft_to_new_dir(
     scan: DraftScan,
     target_abs: &Path,
     target_rel: &str,
@@ -484,7 +484,7 @@ fn copy_workspace_to_new_dir(
     if let Err(e) = fs::rename(&stage, target_abs) {
         let _ = fs::remove_dir_all(&stage);
         return Err(ChanError::Io(format!(
-            "failed to install draft workspace at {target_rel}: {e}"
+            "failed to install draft at {target_rel}: {e}"
         )));
     }
     remove_promoted_source(&scan, target_rel)?;
@@ -495,7 +495,7 @@ fn copy_workspace_to_new_dir(
     })
 }
 
-fn copy_workspace_into_existing_dir(
+fn copy_draft_into_existing_dir(
     scan: DraftScan,
     target_abs: &Path,
     target_rel: &str,
@@ -584,7 +584,7 @@ fn remove_promoted_source(scan: &DraftScan, target_rel: &str) -> Result<()> {
     fs::remove_dir_all(&scan.src).map_err(|e| {
         broken(
             &scan.inspection.name,
-            format!("saved to {target_rel} but failed to remove draft workspace: {e}"),
+            format!("saved to {target_rel} but failed to remove draft: {e}"),
         )
     })
 }
@@ -767,7 +767,7 @@ mod tests {
     }
 
     #[test]
-    fn preflight_skips_team_workspaces() {
+    fn preflight_skips_teams() {
         let td = TempDir::new().unwrap();
         let root = td.path().join("drafts");
         ensure_root(&root).unwrap();
@@ -808,7 +808,7 @@ mod tests {
     }
 
     #[test]
-    fn name_from_unified_path_returns_workspace_name() {
+    fn name_from_unified_path_returns_draft_name() {
         assert_eq!(
             name_from_unified_path("Drafts/untitled-1/draft.md").unwrap(),
             "untitled-1"
@@ -830,7 +830,7 @@ mod tests {
     }
 
     #[test]
-    fn inspect_classifies_single_file_and_workspace_drafts() {
+    fn inspect_classifies_single_file_and_dir_drafts() {
         let td = TempDir::new().unwrap();
         let root = td.path().join("drafts");
         ensure_root(&root).unwrap();
@@ -921,7 +921,7 @@ mod tests {
     }
 
     #[test]
-    fn promote_workspace_merges_into_existing_dir_without_clobber() {
+    fn promote_draft_merges_into_existing_dir_without_clobber() {
         let td = TempDir::new().unwrap();
         let drafts_root = td.path().join("drafts");
         let drive_root = td.path().join("drive");
@@ -948,7 +948,7 @@ mod tests {
     }
 
     #[test]
-    fn promote_workspace_rejects_nested_collision() {
+    fn promote_draft_rejects_nested_collision() {
         let td = TempDir::new().unwrap();
         let drafts_root = td.path().join("drafts");
         let drive_root = td.path().join("drive");

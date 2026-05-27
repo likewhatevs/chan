@@ -1,4 +1,4 @@
-//! systacean-30: Team workspace primitive. Teams live inside the
+//! systacean-30: Team primitive. Teams live inside the
 //! Drafts metadata subtree as `team-{name}/` directories carrying
 //! `config.toml` (team config: members, host, prefix policy),
 //! an `events/` subdirectory (per-team event channels watched by
@@ -6,7 +6,7 @@
 //! (generalised process docs per `-a-81`).
 //!
 //! Naming convention: directories prefixed `team-` distinguish
-//! team workspaces from regular drafts (`untitled-N` /
+//! teams from regular drafts (`untitled-N` /
 //! `rich-prompt-N`). The prefix is enforced by `create_team` and
 //! consumed by `list_teams` to filter the drafts subtree.
 //!
@@ -21,12 +21,12 @@ use serde::{Deserialize, Serialize};
 
 use crate::error::{ChanError, Result};
 
-/// Team workspace directory prefix. Used both to compose new
+/// Team directory prefix. Used both to compose new
 /// team dir names (`team-{name}`) and to filter the drafts
 /// listing in `list_teams`.
 pub const TEAM_DIR_PREFIX: &str = "team-";
 
-/// Handle to a team workspace directory. `name` is the bare team
+/// Handle to a team directory. `name` is the bare team
 /// name (e.g. `"marketing"`); `abs` is the absolute path on disk
 /// (`<drafts_dir>/team-{name}/`). Use `config_path()` for the
 /// config.toml location + `events_dir()` / `docs_dir()` for the
@@ -52,7 +52,7 @@ impl TeamRef {
 }
 
 /// Per-team config persisted to `config.toml` at the team
-/// workspace root. Schema per the addendum-b spec.
+/// directory root. Schema per the addendum-b spec.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct TeamConfig {
     pub team_name: String,
@@ -92,7 +92,7 @@ pub struct Position {
     pub col: u32,
 }
 
-/// Create a new team workspace under `drafts_dir`. Creates the
+/// Create a new team under `drafts_dir`. Creates the
 /// `team-{name}/` directory with `config.toml` and empty
 /// `events/` / `docs/`. Errors when `team_name` is invalid
 /// (empty, contains a path separator) or the directory already
@@ -209,7 +209,7 @@ pub fn owns_preflight(name: &str, path: &Path) -> bool {
         .unwrap_or(false)
 }
 
-/// Verbatim-copy a team workspace under a new name. All files +
+/// Verbatim-copy a team under a new name. All files +
 /// subdirectories are copied byte-for-byte (per addendum-b
 /// clarification #10); the new team's `config.toml` then has its
 /// `team_name` field overwritten to `new_name`. Internal paths

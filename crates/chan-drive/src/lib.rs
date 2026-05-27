@@ -89,7 +89,7 @@ pub use progress::{
     eta_secs_from, progress_fn, NoProgress, ProgressCallback, ProgressEvent, ProgressStage,
 };
 pub use registry::{KnownDrive, Registry, DEFAULT_INDEX_EXCLUDED_DIRS};
-pub use rich_prompts::{RichPromptSubmitReport, RichPromptWorkspace};
+pub use rich_prompts::{RichPromptSession, RichPromptSubmitReport};
 pub use teams::{Member, Position, TeamConfig, TeamRef};
 pub use trash::{TrashEntry, TRASH_RETENTION_SECS};
 pub use vcs::{detect_drive_vcs, detect_parent_vcs, is_vcs_control_path, VcsKind, VcsParent};
