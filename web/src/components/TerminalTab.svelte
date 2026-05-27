@@ -182,6 +182,15 @@
   let hostResumeTimers: ReturnType<typeof setTimeout>[] = [];
   const keyboardProtocol = createTerminalKeyboardProtocolState();
   let hostResumeListenerCleanup: (() => void) | null = null;
+  // `lane-c addendum-2 item 2`: wall-clock-gap sleep/wake detector. See
+  // installHostResumeListeners for why focus/pageshow/visibilitychange
+  // miss a macOS display/system sleep in WKWebView.
+  let wakeProbeTimer: ReturnType<typeof setInterval> | null = null;
+  let lastWakeProbe = 0;
+  // Probe every 2s; a gap past 6s (several missed ticks) means JS timers
+  // froze - the machine slept - and the probe is firing late on wake.
+  const WAKE_PROBE_MS = 2000;
+  const WAKE_GAP_MS = 6000;
   let lastSessionSave = 0;
   let sessionSaveTimer: ReturnType<typeof setTimeout> | null = null;
   const menuOpen = $derived(tabMenu.openForTabId === tab.id);
@@ -478,10 +487,34 @@
     window.addEventListener("focus", onHostResume);
     window.addEventListener("pageshow", onHostResume);
     document.addEventListener("visibilitychange", onVisibility);
+    // `lane-c addendum-2 item 2`: macOS screensaver / display + system
+    // sleep does NOT fire focus / pageshow / visibilitychange in the
+    // desktop app's WKWebView (the window stays "visible" + focused
+    // through the sleep), so the listeners above never fire on wake -
+    // the WebGL renderer stays glitchy until the user RESIZES a window
+    // (ResizeObserver -> queueFit -> recovery; @@Alex's clue). Detect
+    // the wake directly: a coarse interval whose callback fires far
+    // later than scheduled means the wall clock jumped while JS timers
+    // were frozen (the machine slept), so run the same recovery the
+    // resize path proves works. One interval per terminal so EVERY pane
+    // recovers at once, matching "resize any window clears ALL
+    // terminals". (Pure display-only sleep that does not freeze timers
+    // is not caught here; verify in chan-desktop - WebKit-only.)
+    lastWakeProbe = Date.now();
+    wakeProbeTimer = setInterval(() => {
+      const now = Date.now();
+      const gap = now - lastWakeProbe;
+      lastWakeProbe = now;
+      if (gap > WAKE_GAP_MS) recoverTerminalRendererAfterHostResume();
+    }, WAKE_PROBE_MS);
     hostResumeListenerCleanup = () => {
       window.removeEventListener("focus", onHostResume);
       window.removeEventListener("pageshow", onHostResume);
       document.removeEventListener("visibilitychange", onVisibility);
+      if (wakeProbeTimer) {
+        clearInterval(wakeProbeTimer);
+        wakeProbeTimer = null;
+      }
       hostResumeListenerCleanup = null;
     };
   }

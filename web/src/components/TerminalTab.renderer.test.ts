@@ -104,6 +104,18 @@ describe("fullstack-b-29: TerminalTab WebGL renderer", () => {
     expect(tab).toMatch(/hostResumeListenerCleanup\?\.\(\)/);
   });
 
+  test("a wall-clock-gap wake probe fires recovery on sleep/wake (lane-c addendum-2 item 2)", () => {
+    // macOS sleep doesn't fire focus/pageshow/visibilitychange in
+    // WKWebView, so a coarse interval detects the wake (timers froze ->
+    // the callback fires far later than scheduled) and runs the same
+    // recovery. Source-pinned (the timer-gap is not deterministically
+    // unit-testable without mounting xterm + faking sleep).
+    expect(tab).toMatch(/wakeProbeTimer = setInterval\(/);
+    expect(tab).toMatch(/if \(gap > WAKE_GAP_MS\) recoverTerminalRendererAfterHostResume\(\);/);
+    // Torn down with the host-resume listeners.
+    expect(tab).toMatch(/clearInterval\(wakeProbeTimer\)/);
+  });
+
   test("prefers server-provided virtual cwd when present", () => {
     expect(tab).toMatch(/cwd_rel\?: string \| null/);
     expect(tab).toMatch(/terminalCwdVirtual = frame\.cwd_rel \?\? null/);
