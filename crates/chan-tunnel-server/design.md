@@ -11,7 +11,7 @@ chan-tunnel is split across three crates in `chan-writer/chan-core`:
   for byte-level details.
 - `chan-tunnel-client`: dial side, embedded into `chan serve`.
 - `chan-tunnel-server` (this crate): library form of the
-  terminator. Consumed in-process by `chan-gateway/drive-proxy`,
+  terminator. Consumed in-process by `chan-gateway/workspace-proxy`,
   which supplies the `Validator`, mounts the listener and the
   public router, and runs behind nginx for TLS.
 
@@ -38,11 +38,11 @@ The terminator side of chan-tunnel needs to:
   bad-token failures return 401 / 403 distinctly (not as a
   generic handshake error after a 200).
 - Run the Hello / HelloAck round-trip and bind the registration to
-  `(validated_user, requested_drive)`.
+  `(validated_user, requested_workspace)`.
 - Multiplex per-public-request substreams over the resulting yamux
   session.
 - Expose live tunnels to a public-facing axum router so the gateway
-  can route `drive.chan.app/{user}/{drive}/...` at the registered
+  can route `drive.chan.app/{user}/{workspace}/...` at the registered
   peer.
 - Tolerate flap (a `chan serve` restart should reclaim its workspace
   without waiting for a TCP timeout).
@@ -79,7 +79,7 @@ Out of scope:
                                |
                                v
                  +---------------------------+
-                 | drive_tunnel (per-tunnel) |
+                 | workspace_tunnel (per-tunnel) |
                  |  - owns yamux conn        |
                  |  - serves OpenRequest     |
                  |    -> outbound substream  |
@@ -109,7 +109,7 @@ Out of scope:
 |                | `tunnel_yamux_config`, `HELLO_READ_TIMEOUT`     |
 | `tunnel.rs`    | `serve_tunnel_listener`, `handle_tunnel_conn`,  |
 |                | `extract_bearer`                                |
-| `driver.rs`    | `drive_tunnel`: per-tunnel task that owns the   |
+| `driver.rs`    | `workspace_tunnel`: per-tunnel task that owns the   |
 |                | yamux connection                                |
 | `registry.rs`  | `Registry`, `TunnelHandle`, `WorkspaceInfo`,        |
 |                | `TunnelInfo`, `OpenError`, eviction policy      |
@@ -120,7 +120,7 @@ Out of scope:
 ### Listener flow (`tunnel.rs`)
 
 `serve_tunnel_listener(listener, validator, registry,
-max_drives_per_user)`:
+max_workspaces_per_user)`:
 
 1. `TcpListener::accept`. Try to acquire one permit from a
    per-listener `Semaphore::new(MAX_INFLIGHT_HANDSHAKES)` (1024).
@@ -163,7 +163,7 @@ max_drives_per_user)`:
      `chan_tunnel_proto::error_code`) and emit
      `HelloAck::Refused` before returning.
    - On success, build and write
-     `HelloAck::Ok(HelloAckOk { prefix: "/{drive}", ... })`.
+     `HelloAck::Ok(HelloAckOk { prefix: "/{workspace}", ... })`.
    - Wrap the duplex in yamux server mode with
      `tunnel_yamux_config()` (max 256 concurrent substreams).
 11. `registry.register(user, workspace, public, peer_addr)` returns
@@ -171,7 +171,7 @@ max_drives_per_user)`:
     eviction `oneshot::Receiver`. The in-flight semaphore permit
     is dropped here: the per-tunnel driver runs without holding
     one so a long-lived tunnel does not consume an accept slot.
-12. `drive_tunnel(...)` runs until close or eviction. On exit,
+12. `workspace_tunnel(...)` runs until close or eviction. On exit,
     `registry.deregister_if_owner(&handle)`.
 
 ### Driver loop (`driver.rs`)
@@ -209,14 +209,14 @@ that borrow conflicts.
 - `deregister_if_owner` removes the entry only if it still points
   at the same handle, so a driver shutting down after eviction
   can't accidentally remove its successor.
-- Admin views: `list_drives_for(user)`, `list_all()` for the
-  drive-proxy dashboard and `tunnel ps`-style admin tooling.
+- Admin views: `list_workspaces_for(user)`, `list_all()` for the
+  workspace-proxy dashboard and `tunnel ps`-style admin tooling.
 
 ### Public router (`public.rs`)
 
 `public_router(registry)` builds an `axum::Router` with three
-routes (`/{user}/{drive}`, `/{user}/{drive}/`,
-`/{user}/{drive}/*rest`) mounted on `any` method. All three call
+routes (`/{user}/{workspace}`, `/{user}/{workspace}/`,
+`/{user}/{workspace}/*rest`) mounted on `any` method. All three call
 `proxy(...)`:
 
 1. `registry.get(user, workspace)` returns a `TunnelHandle`, else 502
@@ -227,7 +227,7 @@ routes (`/{user}/{drive}`, `/{user}/{drive}/`,
    spawn the conn driver with `with_upgrades()`.
 4. Pre-extract `OnUpgrade` from the public request *before*
    forwarding so it isn't lost when the body is moved.
-5. `build_forwarded`: rewrite path (drop `/{user}/{drive}` prefix),
+5. `build_forwarded`: rewrite path (drop `/{user}/{workspace}` prefix),
    strip URI scheme/authority (h1 over a substream doesn't use
    them), append `X-Forwarded-For` (chained, not clobbered), set
    `X-Forwarded-Proto` (honour upstream value, default `https`),
@@ -282,7 +282,7 @@ pub enum ServerError {
     Identity(String),
     Io(std::io::Error),
     Handshake(String),
-    TooManyDrives { user: String, max: usize },
+    TooManyWorkspaces { user: String, max: usize },
 }
 
 pub const TUNNEL_SCOPE: &str = "tunnel";
@@ -306,7 +306,7 @@ pub async fn serve_tunnel_listener(
     listener: TcpListener,
     validator: Arc<dyn Validator>,
     registry: Arc<Registry>,
-    max_drives_per_user: usize,
+    max_workspaces_per_user: usize,
 ) -> std::io::Result<()>;
 
 // Public router
@@ -334,7 +334,7 @@ pub struct Registry { /* ... */ }
 impl Registry {
     pub fn new() -> Arc<Self>;
     pub fn get(&self, user: &str, workspace: &str) -> Option<TunnelHandle>;
-    pub fn list_drives_for(&self, user: &str) -> Vec<WorkspaceInfo>;
+    pub fn list_workspaces_for(&self, user: &str) -> Vec<WorkspaceInfo>;
     pub fn list_all(&self) -> Vec<TunnelInfo>;
     pub fn evict(&self, user: &str, workspace: &str) -> bool;
 }
@@ -392,9 +392,9 @@ Server-specific notes:
   visitor opening many slow requests is bounded.
 - `pre_ack(&hello, &validated)` runs after the Hello is read and
   validated and before the `HelloAck` is written. The listener
-  uses it to enforce `max_drives_per_user`: if registering this
+  uses it to enforce `max_workspaces_per_user`: if registering this
   workspace would exceed the cap and the user doesn't already have it
-  registered, return `ServerError::TooManyDrives`. Reconnect of an
+  registered, return `ServerError::TooManyWorkspaces`. Reconnect of an
   existing workspace always passes (the eviction step removes the old
   entry first).
 
@@ -420,11 +420,11 @@ Server-specific notes:
   (false) both work on the same token, so one user can host both
   a public docs workspace and a private notes workspace.
 - **Username validation** (`is_valid_username`): defense-in-depth.
-  The username flows into the public path `/{user}/{drive}`; if
+  The username flows into the public path `/{user}/{workspace}`; if
   the upstream identity service ever emits `..`, slashes, or
   whitespace, the public router would mis-route. The handshake
   refuses any username that wouldn't be URL-safe.
-- **Workspace name validation** (`is_valid_drive_name`): every Hello's
+- **Workspace name validation** (`is_valid_workspace_name`): every Hello's
   `workspace` field is checked; clients pre-check too but we don't
   trust them.
 - **Method / path gate**: 404 for anything other than `POST
@@ -512,31 +512,31 @@ Public-side callers map both into 502.
 
 ## 8. Consumers
 
-- `chan-writer/chan-gateway/drive-proxy`: runtime dep. Wires this
+- `chan-writer/chan-gateway/workspace-proxy`: runtime dep. Wires this
   crate end-to-end:
   - `serve_tunnel_listener` on the h2c listener that nginx
     `grpc_pass`-es into.
   - An `IdentityValidator` that calls the gateway's identity
     service to validate bearer tokens.
-  - A wrapping `registry::Registry` (drive-proxy's own struct)
+  - A wrapping `registry::Registry` (workspace-proxy's own struct)
     over `chan_tunnel_server::Registry`, used by the proxy and
     admin handlers to look up tunnels and render the dashboard.
-  - `public_router`-style proxying inside `proxy.rs` (drive-proxy
+  - `public_router`-style proxying inside `proxy.rs` (workspace-proxy
     has its own forward-proxy layer that calls `TunnelHandle::open`
     directly rather than mounting `public_router`; the latter is
     a turn-key alternative for hosts that don't need custom
     middleware).
-- `chan-writer/chan-gateway/drive-proxy` (dev only): pulls
+- `chan-writer/chan-gateway/workspace-proxy` (dev only): pulls
   `chan-tunnel-client` as a dev-dependency so its end-to-end
   test can workspace a fake `chan serve` against a real listener.
 
 ## 9. Open questions / future extensions
 
-- Persistent registry. Today a drive-proxy restart drops every
+- Persistent registry. Today a workspace-proxy restart drops every
   tunnel and clients reconnect. A small on-disk index would let
   the public router serve `tunnel offline since X` errors with
   context instead of a bare 502 during a restart.
-- Per-tunnel quotas. `max_drives_per_user` caps workspace count; it
+- Per-tunnel quotas. `max_workspaces_per_user` caps workspace count; it
   doesn't cap concurrent in-flight requests, total bandwidth, or
   request rate. `tower-http`'s `RateLimitLayer` would slot in on
   the public router but needs a key strategy (per-tunnel? per-

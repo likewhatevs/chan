@@ -13,13 +13,13 @@ chan-tunnel is split across three crates in `chan-writer/chan-core`:
   the Hello round-trip, multiplexes yamux substreams onto an axum
   router. Embedded into `chan serve`.
 - `chan-tunnel-server`: terminator library, consumed by
-  `chan-gateway/drive-proxy`. Owns `Validator`, `Registry`, and
+  `chan-gateway/workspace-proxy`. Owns `Validator`, `Registry`, and
   the public-facing router.
 
 End-to-end shape: `chan serve` calls `chan_tunnel_client::run(cfg,
 router)`. `run` POSTs to `{tunnel-host}/v1/tunnel` over h2/TLS,
 exchanges Hello / HelloAck through the resulting bidirectional
-stream, then yamux-multiplexes per-request substreams. drive-proxy
+stream, then yamux-multiplexes per-request substreams. workspace-proxy
 on the public side accepts the connection in
 `serve_tunnel_listener`, registers the workspace in its `Registry`, and
 opens fresh substreams to forward public requests.
@@ -30,7 +30,7 @@ itself lives in chan-tunnel-proto's design.md.
 ## 1. Problem and scope
 
 A user running `chan serve` on a laptop wants their workspace at
-`drive.chan.app/{user}/{drive}` without opening a port or
+`drive.chan.app/{user}/{workspace}` without opening a port or
 configuring DNS. The constraint is "dial out only, HTTPS only."
 The shape that fits is one long-lived `POST /v1/tunnel` carrying
 yamux frames after a short handshake.
@@ -111,7 +111,7 @@ Connection lifecycle:
 
 `handshake` and `serve_substreams` are free functions over a
 generic `S: AsyncRead + AsyncWrite + Unpin + Send + 'static` so
-the wire test (in chan-gateway/drive-proxy/tests/api.rs) can pass
+the wire test (in chan-gateway/workspace-proxy/tests/api.rs) can pass
 a `tokio::io::duplex` half and exercise the Hello round-trip
 without standing up TLS. The same generic lets `dial` pass an
 `H2Duplex` produced from a real h2 stream.
@@ -271,7 +271,7 @@ Client-specific notes:
   `http://` against a non-loopback host logs a warning (bearer
   token in cleartext); we don't refuse outright because legitimate
   cases exist (private VPN, Tailscale, in-cluster service).
-- **Workspace name** (`is_valid_drive_name` from chan-tunnel-proto):
+- **Workspace name** (`is_valid_workspace_name` from chan-tunnel-proto):
   checked before sending `Hello`. The server checks again, but
   catching it locally avoids a needless round-trip and surfaces a
   config error to the user.
@@ -298,8 +298,8 @@ non-recoverable misconfiguration; transient failures (TLS, h2,
   inner axum app on a public URL. Consumes `ClientConfig`,
   `TunnelEvent`, and `Registration` to wire the prefix and to
   surface "connected / retrying" status to the operator.
-- `chan-writer/chan-gateway/drive-proxy`: dev-dependency only. The
-  end-to-end test in `drive-proxy/tests/api.rs` uses
+- `chan-writer/chan-gateway/workspace-proxy`: dev-dependency only. The
+  end-to-end test in `workspace-proxy/tests/api.rs` uses
   `handshake` + `serve_substreams` to workspace a fake `chan serve`
   against a real `chan_tunnel_server::serve_tunnel_listener`,
   validating the full wire path without needing a separate process.

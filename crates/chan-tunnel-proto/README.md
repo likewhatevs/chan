@@ -17,9 +17,9 @@ chan-tunnel-proto = "0.11"
 
 ```
 control::    Hello, HelloAck, ProtocolVersion
-drive_name:: is_valid_drive_name, is_valid_username,
-             sanitize_drive_name,
-             MAX_DRIVE_NAME_LEN, MAX_USERNAME_LEN
+workspace_name:: is_valid_workspace_name, is_valid_username,
+             sanitize_workspace_name,
+             MAX_WORKSPACE_NAME_LEN, MAX_USERNAME_LEN
 frame::      encode_frame, decode_frame, FrameError
 io::         read_frame, write_frame, IoFrameError
 h2_duplex::  H2Duplex

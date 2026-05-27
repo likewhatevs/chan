@@ -97,7 +97,7 @@ stale on=true sticking after a crash.
 A filesystem watcher (`notify` + 150ms debounce) runs over
 `~/.chan/` for the lifetime of the process and emits a
 `registry-changed` Tauri event whenever the registry file moves.
-The frontend reacts by re-fetching `list_drives` and re-rendering.
+The frontend reacts by re-fetching `list_workspaces` and re-rendering.
 Concrete consequence: if the user runs `chan add ~/notes` from a
 terminal, the row appears in the desktop window without any
 explicit refresh.
@@ -130,7 +130,7 @@ embedded `docs/manual/` tree into it, registers it through
 When an existing registry has workspaces but no default workspace, the
 launcher prompts once per process to choose an existing registered
 workspace or create `Documents/Chan`. Choosing an existing workspace only
-sets `default_drive_root`; it does not start, stop, move, or delete
+sets `default_workspace_root`; it does not start, stop, move, or delete
 anything. Creating `Documents/Chan` registers and opens that new
 workspace.
 
@@ -242,7 +242,7 @@ app accepts is also accepted by every other chan surface.
 
 - **Workspace name**: not validated by the desktop at all. Names are
   read-only in the UI, so the only writer is `chan rename`, which
-  enforces `chan_tunnel_proto::is_valid_drive_name` itself. If a
+  enforces `chan_tunnel_proto::is_valid_workspace_name` itself. If a
   pre-existing registry entry has a name that no longer validates,
   the desktop displays it as-is rather than rewriting it.
 - **Path**: canonicalised via `std::fs::canonicalize` before being
@@ -419,7 +419,7 @@ ssh -R 7777:localhost:7777 remote-host
 chan serve PATH \
   --tunnel-url=http://127.0.0.1:7777 \
   --tunnel-token=<label> \
-  --tunnel-drive=<workspace>
+  --tunnel-workspace-name=<workspace>
 ```
 
 `<label>` is opaque to the protocol; chan-desktop returns it

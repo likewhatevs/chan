@@ -53,7 +53,7 @@ Out of scope:
                  |   Mutex<Registry>      |
                  +-----------+------------+
                              |
-                  open_drive |
+                  open_workspace |
                              v
               +-----------------------------+
               |     Workspace (per directory)   |
@@ -86,7 +86,7 @@ Out of scope:
 
 Per-machine singleton-in-practice. Owns the `Registry`
 (`Mutex<Registry>` intra-process), the config-file path, and the
-default workspace root. `open_drive` looks up the registry row for the
+default workspace root. `open_workspace` looks up the registry row for the
 caller's path and constructs a `Workspace` keyed by the row's
 `metadata_key`,
 holding the cross-process writer lock for its lifetime.
@@ -94,16 +94,16 @@ holding the cross-process writer lock for its lifetime.
 Each registry row carries the canonical `root_path`, a stable
 `metadata_key`, and timestamps. The key is derived from the first
 registered path as a readable path slug plus a short hash suffix,
-and is preserved across `Library::move_drive`. All per-workspace
+and is preserved across `Library::move_workspace`. All per-workspace
 sidecar paths (graph DB, search index, sessions, tokens, trash,
 report) live under `~/.chan/workspaces/<metadata_key>/`. Consequences:
 
-  - Moving the workspace directory (recorded via `move_drive`) is a
+  - Moving the workspace directory (recorded via `move_workspace`) is a
     registry-only change, zero file motion on the sidecars.
   - Registering the same canonical path is idempotent and preserves
     the metadata key.
   - Deleting then re-creating a workspace at the same path uses the
-    same deterministic key. `unregister_drive` wipes chan-managed
+    same deterministic key. `unregister_workspace` wipes chan-managed
     state so stale sidecars do not reappear by accident.
   - There is no user-managed workspace name in the registry. UIs derive
     labels from the path and show the full path where identity
@@ -113,40 +113,40 @@ report) live under `~/.chan/workspaces/<metadata_key>/`. Consequences:
 against the registry: any subdirectory under `~/.chan/workspaces/`
 whose name is not in the current metadata-key set is reclaimed.
 Used to clean up after unregisters that left state behind, or after
-a `move_drive`-then-deleted-at-new-location workflow.
+a `move_workspace`-then-deleted-at-new-location workflow.
 
-`reset_drive` wipes per-workspace chan-managed state (search index,
+`reset_workspace` wipes per-workspace chan-managed state (search index,
 graph DB, session blobs, app tokens). It never
 touches the user's notes tree. The trash is preserved (it holds
 user-deleted files, recoverable user data, not chan-managed
 cache). The lock dir is preserved (cross-process coordination, no
 data). `ResetMode::Everything` additionally drops the registry
-entry so the next `open_drive` against the path treats it as a
+entry so the next `open_workspace` against the path treats it as a
 fresh, never-seen workspace.
 
 Precondition: caller must drop any open `Arc<Workspace>` for the
-target root first. `reset_drive` acquires the writer lock to
+target root first. `reset_workspace` acquires the writer lock to
 verify exclusive access; if any process (including the caller)
 holds it, the call fails with `WorkspaceLocked`. On Unix this is
 defense-in-depth (open files survive unlink); on Windows it is
 load-bearing because removing files-in-use fails. Skeleton
-recreation happens lazily on the next `open_drive` plus first
+recreation happens lazily on the next `open_workspace` plus first
 `index()` / `graph()` access; no explicit init step.
 
 Registration is idempotent: re-registering an existing workspace only
 updates `last_seen_at` and preserves the metadata key.
 
-`unregister_drive` is `reset_drive(Everything)` plus a `false`
+`unregister_workspace` is `reset_workspace(Everything)` plus a `false`
 return when the workspace wasn't in the registry. It drops the
 registry row AND wipes per-workspace state in one call so a re-register
 at the same path starts from a clean sidecar even when the row's
 metadata key is deterministic. The trash is preserved (recoverable
 user data, owned by the user even after the workspace is forgotten).
-Preconditions match `reset_drive`: any open `Arc<Workspace>` for the
+Preconditions match `reset_workspace`: any open `Arc<Workspace>` for the
 root must be dropped first, otherwise the call fails with
 `WorkspaceAlreadyOpen`.
 
-`move_drive(old, new)` records a moved workspace directory: it rewrites
+`move_workspace(old, new)` records a moved workspace directory: it rewrites
 the registry row's `root_path` while preserving the metadata key,
 so every sidecar follows the move with zero file motion. Refuses
 when the source is unregistered, when `new` doesn't exist, when
@@ -323,7 +323,7 @@ pub struct TrashEntry {
     workspace stores zero state inside the workspace. Trade-off: the
     trash does not sync via iCloud / Dropbox / git. Acceptable;
     trash is per-machine recovery, not collaboration. A recorded
-    `Library::move_drive` preserves `metadata_key`, so trash follows
+    `Library::move_workspace` preserves `metadata_key`, so trash follows
     the moved workspace without moving files.
   - **Atomicity**: same-fs path is one atomic `rename` from
     workspace root into the trash payload. Cross-fs path falls back
@@ -434,12 +434,12 @@ persisted to `~/.chan/config.toml` so CLI and desktop use the same
 policy (`node_modules`, `target`, `__pycache__`, ...). `Library`
 loads that list on open, propagates it to every workspace opened
 against that Library, and forwards it into `Index` for the search
-side. `.git` and `.chan` stay hardcoded in `walk_drive`: those are
+side. `.git` and `.chan` stay hardcoded in `walk_workspace`: those are
 invariants of the on-disk layout, not policy.
 
 The filter is honored by the indexing pipeline only:
 `rebuild_graph` and `Index::build_all` use `list_tree_filtered`
-and `walk_drive_filtered`. The editor-visible APIs
+and `walk_workspace_filtered`. The editor-visible APIs
 (`Workspace::list_tree`, `Workspace::list`, trash sweeps, restore) stay
 unfiltered so the user can still see and open files inside a
 blocked directory on demand.
@@ -678,21 +678,21 @@ primitives to traverse.
 Library::open() -> Result<Self>
 Library::open_at(config_path: PathBuf) -> Result<Self>
 
-Library::list_drives() -> Vec<KnownWorkspace>
-Library::default_drive_root() -> Option<PathBuf>
-Library::set_default_drive_root(root: Option<PathBuf>) -> Result<()>
-Library::effective_default_drive_root() -> PathBuf
+Library::list_workspaces() -> Vec<KnownWorkspace>
+Library::default_workspace_root() -> Option<PathBuf>
+Library::set_default_workspace_root(root: Option<PathBuf>) -> Result<()>
+Library::effective_default_workspace_root() -> PathBuf
 
-Library::register_drive(root: &Path) -> Result<KnownWorkspace>
-Library::unregister_drive(root: &Path) -> Result<bool>
-Library::move_drive(old: &Path, new: &Path) -> Result<bool>
+Library::register_workspace(root: &Path) -> Result<KnownWorkspace>
+Library::unregister_workspace(root: &Path) -> Result<bool>
+Library::move_workspace(old: &Path, new: &Path) -> Result<bool>
 
-Library::open_drive(root: &Path) -> Result<Arc<Workspace>>
+Library::open_workspace(root: &Path) -> Result<Arc<Workspace>>
 
-Library::reset_drive(root: &Path, mode: ResetMode) -> Result<ResetReport>
+Library::reset_workspace(root: &Path, mode: ResetMode) -> Result<ResetReport>
 Library::sweep_orphans() -> Result<SweepReport>
 
-Library::drive_paths_for(root: &Path) -> Option<WorkspacePaths>
+Library::workspace_paths_for(root: &Path) -> Option<WorkspacePaths>
 
 Library::set_walk_filter(filter: WalkFilter)
 Library::walk_filter() -> Arc<WalkFilter>
@@ -1076,7 +1076,7 @@ previous version.
 ```
 register / open               read                          write
 -----------------             -----------                   ------
-Library::register_drive       Workspace::read*                  Workspace::write_*
+Library::register_workspace       Workspace::read*                  Workspace::write_*
   Mutex<Registry> lock          fs_ops::resolve_safe          fs_ops::atomic_write
   atomic_write registry         (no lock)                     (no lock)
 
@@ -1111,7 +1111,7 @@ The workspace is purely user content (markdown, attachments). This
 makes it safe to drop a workspace inside an existing git repo, an
 iCloud / Google Drive / Dropbox directory, or anywhere else. A stray
 `.chan/` left over from an older install or created by a third-
-party tool is filtered out by `walk_drive` and `watch::dispatch`;
+party tool is filtered out by `walk_workspace` and `watch::dispatch`;
 chan-workspace never emits events for it or includes it in
 `list_tree`.
 
@@ -1142,7 +1142,7 @@ chan-workspace never emits events for it or includes it in
 ```
 
 `<metadata_key>` is the path slug plus an 8-hex hash of the
-canonical path at first registration. `Library::move_drive`
+canonical path at first registration. `Library::move_workspace`
 preserves it when the local path moves, so metadata follows without
 moving files on disk.
 
@@ -1267,12 +1267,12 @@ the in-process MCP server.
 Usage shape:
 
   - `Library::open()` once at startup.
-  - `library.list_drives()`, `register_drive`, `unregister_drive`
+  - `library.list_workspaces()`, `register_workspace`, `unregister_workspace`
     for the registry subcommands.
-  - `library.open_drive(root)` to get an `Arc<Workspace>`, then
+  - `library.open_workspace(root)` to get an `Arc<Workspace>`, then
     `workspace.search(...)`, `workspace.reindex(...)`, `workspace.list_tree()`
     for `index` / `search` / direct CLI access.
-  - `Library::reset_drive` for `chan reset`.
+  - `Library::reset_workspace` for `chan reset`.
 
 ### `chan-writer/chan` :: `chan-server` (HTTP + WebSocket)
 

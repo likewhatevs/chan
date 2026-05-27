@@ -20,7 +20,7 @@ Sister lane to @@Systacean. Boundary heuristic:
 * If it lives in `crates/` or `web/` → @@Systacean / @@FullStack.
 
 Shared edits (e.g. signing-key rotation that touches
-`desktop/src-tauri/tauri.conf.json`) are coordinated; @@CI drives
+`desktop/src-tauri/tauri.conf.json`) are coordinated; @@CI workspaces
 the rotation, @@Systacean reviews the in-tree config change.
 
 ## Skills
