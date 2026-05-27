@@ -46,10 +46,10 @@ const LOW_LIMIT: u64 = 512;
 const EFFECTIVE_NOFILE_CEILING: u64 = 4096;
 const TIGHT_HEADROOM: u64 = 96;
 const MODEST_HEADROOM: u64 = 192;
-const MAX_ACTIVE_DRIVES: usize = 64;
-const LOW_LIMIT_ACTIVE_DRIVES: usize = 8;
-const TIGHT_HEADROOM_ACTIVE_DRIVES: usize = 4;
-const MODEST_HEADROOM_ACTIVE_DRIVES: usize = 8;
+const MAX_ACTIVE_WORKSPACES: usize = 64;
+const LOW_LIMIT_ACTIVE_WORKSPACES: usize = 8;
+const TIGHT_HEADROOM_ACTIVE_WORKSPACES: usize = 4;
+const MODEST_HEADROOM_ACTIVE_WORKSPACES: usize = 8;
 
 /// Descriptors a reindex pass keeps in reserve for interactive work
 /// (editor reads/writes, terminal PTYs + their pipes, watcher handles).
@@ -107,7 +107,7 @@ pub(crate) fn acquire_drive_permit() -> WorkspacePermit {
     loop {
         let capacity = match snapshot() {
             Some(snap) => active_drive_capacity_for(snap),
-            None => MAX_ACTIVE_DRIVES,
+            None => MAX_ACTIVE_WORKSPACES,
         };
         if state.active < capacity {
             state.active += 1;
@@ -201,13 +201,13 @@ fn tantivy_writer_budget_for(
 
 fn active_drive_capacity_for(snap: FdSnapshot) -> usize {
     if snap.limit <= LOW_LIMIT {
-        LOW_LIMIT_ACTIVE_DRIVES
+        LOW_LIMIT_ACTIVE_WORKSPACES
     } else if snap.remaining() < TIGHT_HEADROOM {
-        TIGHT_HEADROOM_ACTIVE_DRIVES
+        TIGHT_HEADROOM_ACTIVE_WORKSPACES
     } else if snap.remaining() < MODEST_HEADROOM {
-        MODEST_HEADROOM_ACTIVE_DRIVES
+        MODEST_HEADROOM_ACTIVE_WORKSPACES
     } else {
-        MAX_ACTIVE_DRIVES
+        MAX_ACTIVE_WORKSPACES
     }
 }
 
@@ -317,7 +317,7 @@ mod tests {
             open: 20,
             limit: 256,
         };
-        assert_eq!(active_drive_capacity_for(snap), LOW_LIMIT_ACTIVE_DRIVES);
+        assert_eq!(active_drive_capacity_for(snap), LOW_LIMIT_ACTIVE_WORKSPACES);
     }
 
     #[test]
@@ -326,7 +326,7 @@ mod tests {
             open: 20,
             limit: 4096,
         };
-        assert_eq!(active_drive_capacity_for(snap), MAX_ACTIVE_DRIVES);
+        assert_eq!(active_drive_capacity_for(snap), MAX_ACTIVE_WORKSPACES);
     }
 
     #[test]

@@ -32,7 +32,7 @@ use crate::AppState;
 /// frontend reacts by re-fetching the drive list.
 pub const SERVES_CHANGED: &str = "serves-changed";
 
-const MAX_WINDOWS_PER_DRIVE: usize = 10;
+const MAX_WINDOWS_PER_WORKSPACE: usize = 10;
 
 /// Live state for one running serve. Held in `AppState.serves`
 /// keyed by canonical drive path.
@@ -466,9 +466,9 @@ fn ensure_window_capacity(app: &AppHandle, prefix: &str) -> Result<(), String> {
         .keys()
         .filter(|label| label.starts_with(prefix))
         .count();
-    if count >= MAX_WINDOWS_PER_DRIVE {
+    if count >= MAX_WINDOWS_PER_WORKSPACE {
         return Err(format!(
-            "Workspace already has {MAX_WINDOWS_PER_DRIVE} open windows; close one before opening another."
+            "Workspace already has {MAX_WINDOWS_PER_WORKSPACE} open windows; close one before opening another."
         ));
     }
     Ok(())
