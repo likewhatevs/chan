@@ -789,6 +789,24 @@
     return ids;
   });
 
+  /// graph-loading-state slice 2: while the index is still building, a
+  /// `missing` (dead-end / not-on-filesystem) node may simply be a link
+  /// target that has not been indexed YET, not a genuinely broken link.
+  /// Pull those nodes back (and the edges touching them) until the index
+  /// settles, so the graph never presents not-yet-known data as a broken
+  /// link. Once `indexBuilding` clears, the `missing` survivors are real
+  /// broken links and render with the established dashed-ghost styling.
+  /// (The status bar's slice-1 "indexing" cue is the loading signal; a
+  /// per-parent-dir pulse is a deferred refinement.)
+  const hiddenMissingIds = $derived.by(() => {
+    const ids = new Set<string>();
+    if (!indexBuilding) return ids;
+    for (const n of nodes) {
+      if (n.kind === "file" && n.missing) ids.add(n.id);
+    }
+    return ids;
+  });
+
   function edgeVisibleByChip(kind: RenderedEdgeKind): boolean {
     if (kind === "contains") return show.folder;
     if (kind === "group") return true;
@@ -819,6 +837,9 @@
         !hiddenMarkdownIds.has(e.target) &&
         !hiddenSourceIds.has(e.source) &&
         !hiddenSourceIds.has(e.target) &&
+        // slice 2: drop edges to dead-end nodes pulled back while indexing.
+        !hiddenMissingIds.has(e.source) &&
+        !hiddenMissingIds.has(e.target) &&
         (scopedNodeIds === null ||
           (scopedNodeIds.has(e.source) && scopedNodeIds.has(e.target))),
     ),
@@ -835,7 +856,9 @@
         !hiddenImageIds.has(n.id) &&
         !hiddenContactIds.has(n.id) &&
         !hiddenMarkdownIds.has(n.id) &&
-        !hiddenSourceIds.has(n.id)
+        !hiddenSourceIds.has(n.id) &&
+        // slice 2: pull back dead-end nodes while the index is building.
+        !hiddenMissingIds.has(n.id)
       ) {
         ids.add(n.id);
       } else if (n.kind === "folder") {

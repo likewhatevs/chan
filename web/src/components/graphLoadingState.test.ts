@@ -28,3 +28,24 @@ describe("graph loading-state slice 1: indexing cue", () => {
     expect(graph).toMatch(/@media \(prefers-reduced-motion: reduce\)[\s\S]*?\.indexing \{[\s\S]*?animation: none/);
   });
 });
+
+// graph-loading-state slice 2: while the index is building, dead-end
+// ("missing") nodes may just be not-yet-indexed link targets, so they are
+// pulled back (with their edges) until the index settles; once idle they
+// render as real broken links (the established dashed-ghost styling).
+describe("graph loading-state slice 2: pull back dead-ends while indexing", () => {
+  test("hiddenMissingIds collects missing file nodes only while indexBuilding", () => {
+    expect(graph).toMatch(
+      /const hiddenMissingIds = \$derived\.by\(\(\) => \{[\s\S]*?if \(!indexBuilding\) return ids;[\s\S]*?n\.kind === "file" && n\.missing/,
+    );
+  });
+
+  test("visibleNodeIds excludes pulled-back dead-end nodes", () => {
+    expect(graph).toMatch(/!hiddenMissingIds\.has\(n\.id\)/);
+  });
+
+  test("visibleEdges drops edges touching pulled-back dead-end nodes", () => {
+    expect(graph).toMatch(/!hiddenMissingIds\.has\(e\.source\)/);
+    expect(graph).toMatch(/!hiddenMissingIds\.has\(e\.target\)/);
+  });
+});
