@@ -107,7 +107,7 @@ async function refresh() {
   if (!homeDir) {
     try { homeDir = await invoke('home_dir'); } catch { homeDir = ''; }
   }
-  const drives = await invoke('list_drives');
+  const drives = await invoke('list_workspaces');
   const json = JSON.stringify(drives);
   if (json !== lastDrivesJson) {
     lastDrivesJson = json;
@@ -955,7 +955,7 @@ function bindRowEvents() {
       forget.addEventListener('click', async () => {
         closeAllSplitMenus();
         try {
-          await invoke('remove_drive', { path });
+          await invoke('remove_workspace', { path });
         } catch (err) {
           showError(err);
         }

@@ -2,9 +2,9 @@
 identifier = "main-window"
 description = "Allows the launcher window to call Chan Desktop app commands."
 permissions = [
-  "allow-list-drives",
+  "allow-list-workspaces",
   "allow-add-drive",
-  "allow-remove-drive",
+  "allow-remove-workspace",
   "allow-set-drive-on",
   "allow-get-drive-features",
   "allow-set-drive-features",
@@ -49,9 +49,9 @@ permissions = [
 ]
 
 [[permission]]
-identifier = "allow-list-drives"
-description = "Enables the list_drives command."
-commands.allow = ["list_drives"]
+identifier = "allow-list-workspaces"
+description = "Enables the list_workspaces command."
+commands.allow = ["list_workspaces"]
 
 [[permission]]
 identifier = "allow-add-drive"
@@ -59,9 +59,9 @@ description = "Enables the add_drive command."
 commands.allow = ["add_drive"]
 
 [[permission]]
-identifier = "allow-remove-drive"
-description = "Enables the remove_drive command."
-commands.allow = ["remove_drive"]
+identifier = "allow-remove-workspace"
+description = "Enables the remove_workspace command."
+commands.allow = ["remove_workspace"]
 
 [[permission]]
 identifier = "allow-set-drive-on"
