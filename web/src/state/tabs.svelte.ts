@@ -189,6 +189,13 @@ export type FileTab = {
   /// toggle so the user can't try to write a file the OS won't
   /// accept. The watcher refreshes this when permissions change.
   fsWritable: boolean;
+  /// `lane-c addendum-2 item 1`: an external (non-self) write to this
+  /// file's path landed on disk while the tab is open. The editor shows
+  /// a dismissable "changed on disk" banner and does NOT auto-reload, so
+  /// the caret never jumps to 1:1 mid-edit. Set by `flagExternalChange`
+  /// from the watcher; cleared on reload (loadTabContent) or dismiss.
+  /// Ephemeral - not serialized into the URL hash / session.json.
+  externalChange?: boolean;
   /// Whether the floating style toolbar (top-left of the editor
   /// canvas) is mounted for this tab. The user's explicit show /
   /// hide preference from the tab menu (a layer above the hover-
@@ -1714,6 +1721,10 @@ async function loadTabContent(
       // Older servers omit `writable`; treat absent as writable so
       // the lamp behaves the way it did before this field existed.
       t.fsWritable = r.writable ?? true;
+      // The buffer now matches disk; clear any pending external-change
+      // banner (this load IS the reload the user opted into, or a
+      // user-initiated replace).
+      t.externalChange = false;
     }
   } catch (e) {
     if (controller.signal.aborted && tabLoadVersions.get(tabId) !== loadVersion) {
@@ -4403,15 +4414,35 @@ export function beginMissingFileReopen(tabId: string): void {
   layout.activePaneId = found.paneId;
 }
 
-/// Refresh a non-dirty tab's content from disk. Called when the
-/// watcher fires an event for an open file's path. If the buffer
-/// is dirty we leave it alone; the user's next save will hit a 409
-/// and the conflict dialog will surface the situation.
+/// Refresh a non-dirty tab's content from disk. Used by USER-INITIATED
+/// flows that intend to adopt the new disk content (e.g. file replace).
+/// If the buffer is dirty we leave it alone. NOT used for watcher events
+/// anymore - see `flagExternalChange` (watcher events must not silently
+/// reload the open doc; `lane-c addendum-2 item 1`).
 export async function refreshTabFromDisk(tabId: string): Promise<void> {
   const found = findFileTabById(tabId);
   if (!found) return;
   if (found.tab.content !== found.tab.saved) return;
   await loadTabContent(found.paneId, found.tab.id, found.tab.path);
+}
+
+/// `lane-c addendum-2 item 1`: a watcher event reported an external
+/// (non-self) write to this open file's path. Do NOT reload - replacing
+/// the doc snapped the caret to line 1, col 1 while the user was typing.
+/// Raise the dismissable "changed on disk" banner instead; the user opts
+/// into the reload, or their next save hits the 409 conflict modal.
+/// Applies to clean AND dirty buffers (server-side self-write dedupe
+/// already drops echoes of our own writes, so anything here is external).
+export function flagExternalChange(tabId: string): void {
+  const found = findFileTabById(tabId);
+  if (found) found.tab.externalChange = true;
+}
+
+/// Dismiss the "changed on disk" banner without reloading (the user
+/// chose to keep editing). It re-raises on the next external write.
+export function dismissExternalChange(tabId: string): void {
+  const found = findFileTabById(tabId);
+  if (found) found.tab.externalChange = false;
 }
 
 export async function reloadTabFromDisk(tabId: string): Promise<void> {

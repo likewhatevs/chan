@@ -52,6 +52,7 @@ import {
 } from "./scope.svelte";
 import {
   clearTabError,
+  flagExternalChange,
   refreshTabFromDisk,
   rekeyTabsForRename,
   tabsForPath,
@@ -626,10 +627,13 @@ export function onWatchEvent(e: unknown): void {
         continue;
       }
       // A Created / Modified frame after a missing-check was
-      // scheduled means the file is back; cancel the pending
-      // check + refresh content directly.
+      // scheduled means the file is back; cancel the pending check.
+      // Do NOT silently reload the open doc - that replaced the buffer
+      // and snapped the caret to line 1, col 1 mid-edit. Flag the
+      // external change so the editor shows the dismissable "changed on
+      // disk" banner instead (`lane-c addendum-2 item 1`).
       cancelMissingFileCheck(tabId);
-      void refreshTabFromDisk(tabId);
+      flagExternalChange(tabId);
     }
   }
 }

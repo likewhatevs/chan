@@ -64,6 +64,7 @@
     beginMissingFileReopen,
     canReopenClosedTab,
     closeTab,
+    dismissExternalChange,
     flipHybrid,
     openFind,
     reopenClosedTab,
@@ -760,6 +761,34 @@
         onclick={discardBuffer}
       >
         Discard
+      </button>
+    </div>
+  {/if}
+  {#if tab.externalChange}
+    <!-- `lane-c addendum-2 item 1`: an external (non-self) write to this
+         file landed on disk while the tab is open. We never auto-reload
+         (that replaced the buffer and snapped the caret to 1:1 mid-edit);
+         the user opts into the reload here or keeps typing (their next
+         save hits the 409 conflict modal). Reuses the recovery-banner
+         palette + layout. -->
+    <div class="recovery-banner" role="alert">
+      <span class="recovery-banner-text">
+        This file changed on disk.
+      </span>
+      <button
+        type="button"
+        class="recovery-banner-btn recovery-banner-restore"
+        onclick={() => void reloadTabFromDisk(tab.id)}
+      >
+        Reload
+      </button>
+      <button
+        type="button"
+        class="recovery-banner-btn"
+        aria-label="Dismiss changed-on-disk notice"
+        onclick={() => dismissExternalChange(tab.id)}
+      >
+        ✕
       </button>
     </div>
   {/if}

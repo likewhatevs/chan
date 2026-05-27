@@ -403,6 +403,72 @@ describe("filesystem graph entrypoints", () => {
   });
 });
 
+describe("external-change banner (lane-c addendum-2 item 1)", () => {
+  function placeFileTab(path: string, content: string): FileTab {
+    const tab: FileTab = {
+      kind: "file",
+      fileKind: "document",
+      id: `file-${path}`,
+      path,
+      content,
+      saved: content,
+      savedMtime: 1,
+      mode: "wysiwyg",
+      loading: false,
+      error: null,
+      fileMissing: null,
+      inspectorOpen: false,
+      outlineOpen: false,
+      repoRoot: null,
+      readMode: false,
+      fsWritable: true,
+      styleToolbarOpen: false,
+      syntaxHighlight: true,
+      highlightTrailingWhitespace: false,
+      codeBlocksCollapsed: false,
+    };
+    const pane: LeafNode = {
+      kind: "leaf",
+      id: "pane-ext",
+      tabs: [tab],
+      activeTabId: tab.id,
+    };
+    layout.rootId = pane.id;
+    layout.activePaneId = pane.id;
+    layout.nodes = { [pane.id]: pane };
+    // Return the LIVE (proxied) tab from the layout $state, not the raw
+    // literal - flagExternalChange mutates through the proxy.
+    return (layout.nodes[pane.id] as LeafNode).tabs[0] as FileTab;
+  }
+
+  test("a watch event flags the open tab but never reloads or clears its content", () => {
+    // Regression: the watcher used to silently reload a clean buffer,
+    // which replaced the doc and snapped the caret to line 1, col 1 while
+    // @@Alex was typing. The watch path now only raises the dismissable
+    // banner (externalChange) and leaves the buffer untouched.
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
+      const url = input instanceof Request ? input.url : String(input);
+      const body = url.includes("/api/drive")
+        ? { name: "test", root: "/tmp/test", preferences: {} }
+        : [];
+      return new Response(JSON.stringify(body), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    });
+    const tab = placeFileTab("notes/a.md", "hello, still typing");
+
+    onWatchEvent({ kind: "modified", event: { path: "notes/a.md" } });
+
+    // flagExternalChange runs synchronously in the watch loop.
+    expect(tab.externalChange).toBe(true);
+    // The buffer is untouched: no silent reload, the caret stays put.
+    expect(tab.content).toBe("hello, still typing");
+
+    fetchSpy.mockRestore();
+  });
+});
+
 describe("resolveSpawnContext (fullstack-43)", () => {
   function placeTabs(tabs: Array<FileTab | TerminalTab | GraphTab | BrowserTab>): void {
     const pane: LeafNode = {
