@@ -70,8 +70,13 @@ describe("GI-2: Show File reveals in the File Browser, not a graph reload", () =
   });
 
   test("revealSelectedFsEntry reveals the fs-node path in the browser", () => {
+    // GI-5 refined this: directories now pass `enter: true` so the File
+    // Browser opens AT the directory (revealAndEnterDirectory) instead of
+    // a visual no-op; files keep select-in-place. The reveal-not-reload
+    // behaviour this test guards is unchanged. Detailed dir/file branch
+    // pins live in graphDirInspectorHotfix.test.ts.
     expect(panel).toMatch(
-      /function revealSelectedFsEntry\(\): void \{[\s\S]*?revealPathInBrowser\(selectedFsNode\.path, \{ inspectorOpen: true \}\)/,
+      /function revealSelectedFsEntry\(\): void \{[\s\S]*?revealPathInBrowser\(selectedFsNode\.path, \{\s*enter: isFsDirectory\(selectedFsNode\),\s*inspectorOpen: true,\s*\}\)/,
     );
   });
 

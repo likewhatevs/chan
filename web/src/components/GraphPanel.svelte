@@ -185,23 +185,39 @@
     selectedId = null;
   }
 
-  /// "Graph from here" on a selected file or folder node. Per
-  /// inspector-spec.md the re-rooted graph always shows the node's
-  /// PARENT folder (or the drive root when the node is top-level), with
-  /// the node itself pinned + re-selected so the inspector stays on it.
-  /// Re-scopes IN PLACE (the graph tab the user is in) rather than
-  /// spawning a new tab; the filesystem scope keeps the folder cohort
-  /// in view. Mirrors openFsGraphForFile's parent-folder rule but for
-  /// the in-graph re-root affordance the spec wants back on the
-  /// inspector body.
-  function graphFromHere(path: string): void {
-    const slash = path.lastIndexOf("/");
-    const parent = slash > 0 ? path.slice(0, slash) : "";
-    const scopeId = parent ? `dir:${parent}` : "drive";
+  /// "Graph from here" on a selected file or folder node. Re-scopes IN
+  /// PLACE (the graph tab/overlay the user is in) rather than spawning a
+  /// new tab, with the node itself pinned + re-selected so the inspector
+  /// stays on it.
+  ///
+  /// The re-root target differs by kind, matching the canonical
+  /// `openFsGraphFor{File,Directory}` helpers:
+  ///   - FILE: a file cannot be an fs-graph scope root, so re-root to its
+  ///     PARENT folder (drive root when the file is top-level) and select
+  ///     the file inside that cohort.
+  ///   - DIRECTORY (GI-6): re-root to the DIRECTORY ITSELF (drive root for
+  ///     the empty/root path) so its subtree comes into view and the
+  ///     directory node stays selected. The previous code applied the
+  ///     file (parent) rule to directories too; when the clicked folder's
+  ///     parent already WAS the current scope that made re-rooting a
+  ///     no-op (scopeId unchanged -> no reload), and the unconsumed
+  ///     pendingSelectId left the inspector blank.
+  function graphFromHere(path: string, isDir: boolean): void {
+    let scopeId: string;
+    if (isDir) {
+      scopeId = path ? `dir:${path}` : "drive";
+    } else {
+      const slash = path.lastIndexOf("/");
+      const parent = slash > 0 ? path.slice(0, slash) : "";
+      scopeId = parent ? `dir:${parent}` : "drive";
+    }
     graphState.scopeId = scopeId;
     graphState.depth = 1;
     // Pin + select the node so the re-rooted graph lands on it. Setting
-    // pendingSelectId routes through the canvas's post-load selection.
+    // pendingSelectId routes through load()'s post-fetch selection so the
+    // inspector re-populates on the clicked node once the new scope
+    // loads; selectedId is set eagerly so the inspector doesn't flash
+    // empty in the reload window.
     graphState.pendingSelectId = path;
     selectedId = path;
   }
@@ -268,6 +284,18 @@
   let fsTruncated = $state(false);
   let driveDepthProbe: FsGraphResponse | null = $state(null);
   let driveDepthProbeLoading = $state(false);
+  /// GI-7: directory-scope depth probe. The depth slider's cap is the
+  /// max relative depth REACHABLE under the scope, which we can only
+  /// learn by walking deeper than the currently-loaded slice. At depth
+  /// 1 the loaded fs-graph only contains depth-1 nodes, so a cap derived
+  /// from it collapses to 1 and the clamp effect snaps the slider back
+  /// the moment the user drags it. The drive scope already solves this
+  /// with `driveDepthProbe` (a full-depth walk of the root); this is the
+  /// same probe for an arbitrary directory scope, keyed by the scope
+  /// path so it re-probes when the scope changes.
+  let dirDepthProbe: FsGraphResponse | null = $state(null);
+  let dirDepthProbeLoading = $state(false);
+  let dirDepthProbePath: string | null = $state(null);
   let languageMaxDepth = $state(0);
   let loading = $state(true);
   let error: string | null = $state(null);
@@ -363,6 +391,23 @@
     if (languageMode) return Math.max(1, languageMaxDepth);
     if (loading && currentScope?.kind === "dir" && nodes.length === 0) {
       return DEPTH_MAX;
+    }
+    // GI-7: for a directory scope the loaded fs-graph only reaches the
+    // current depth, so deriving the cap from it pins the slider at the
+    // loaded depth (it cannot grow to reveal a deeper layer). Prefer the
+    // full-depth `dirDepthProbe` (mirrors what the drive scope already
+    // does) so the cap is the directory's REACHABLE depth. Until the
+    // probe lands, keep DEPTH at least at the loaded slice's depth so
+    // the slider never snaps below what's already on screen.
+    if (filesystemMode && currentScope?.kind === "dir") {
+      const probeCap = graphDepthCap({
+        scope: currentScope,
+        nodes,
+        fsGraph: dirDepthProbe ?? { nodes: fsNodes, truncated: fsTruncated },
+        hardMax: DEPTH_MAX,
+        fsMax: FS_GRAPH_DEPTH_MAX,
+      });
+      return Math.max(probeCap, graphState.depth);
     }
     return graphDepthCap({
       scope: currentScope,
@@ -511,6 +556,29 @@
       driveDepthProbe = null;
     } finally {
       driveDepthProbeLoading = false;
+    }
+  }
+
+  /// GI-7: probe a directory scope at the full fs-graph depth so the
+  /// slider cap reflects the deepest layer the user could reveal, not
+  /// just the layer currently loaded. Keyed by `path`; a stale probe
+  /// for a different directory is discarded by the caller's guard.
+  async function loadDirDepthProbe(path: string): Promise<void> {
+    if (dirDepthProbeLoading) return;
+    dirDepthProbeLoading = true;
+    dirDepthProbePath = path;
+    try {
+      const probe = await api.fsGraph({
+        scope: "directory",
+        path,
+        depth: FS_GRAPH_DEPTH_MAX,
+      });
+      // Drop the result if the scope moved on while we were fetching.
+      if (dirDepthProbePath === path) dirDepthProbe = probe;
+    } catch {
+      if (dirDepthProbePath === path) dirDepthProbe = null;
+    } finally {
+      dirDepthProbeLoading = false;
     }
   }
 
@@ -992,13 +1060,24 @@
   /// only via the fs-graph. path === "" is the drive root;
   /// revealAndSelect handles it by clearing the tree selection
   /// and opening the browser at the drive level.
+  ///
+  /// GI-5: "Show Directory" was a visual no-op. revealPathInBrowser's
+  /// default (revealAndSelect) only expands the target's ANCESTOR chain
+  /// + selects its row — for a directory whose row was already visible
+  /// (e.g. a top-level dir) nothing observably changes. Directories pass
+  /// `enter: true` so revealAndEnterDirectory expands the directory
+  /// ITSELF and lazy-loads its children, so the File Browser visibly
+  /// opens AT that directory. Files keep the select-in-place behaviour.
   function revealSelectedFsEntry(): void {
     if (
       selectedFsNode &&
       (isFsDirectory(selectedFsNode) || selectedFsNode.kind === "file") &&
       selectedFsNode.path !== undefined
     ) {
-      revealPathInBrowser(selectedFsNode.path, { inspectorOpen: true });
+      revealPathInBrowser(selectedFsNode.path, {
+        enter: isFsDirectory(selectedFsNode),
+        inspectorOpen: true,
+      });
       close();
     }
   }
@@ -1473,6 +1552,22 @@
     void loadDriveDepthProbe();
   });
 
+  /// GI-7: keep the directory depth probe in sync with the dir scope.
+  /// Reset when the panel hides or the scope is not a directory; (re)run
+  /// it whenever the scope path changes so the slider cap tracks the new
+  /// directory's reachable depth.
+  $effect(() => {
+    if (!visible || currentScope?.kind !== "dir") {
+      dirDepthProbe = null;
+      dirDepthProbePath = null;
+      return;
+    }
+    const path = currentScope.path;
+    if (dirDepthProbeLoading) return;
+    if (dirDepthProbePath === path && dirDepthProbe) return;
+    untrack(() => void loadDirDepthProbe(path));
+  });
+
   $effect(() => {
     if (languageMode) return;
     const max = depthCap;
@@ -1848,6 +1943,7 @@
              wired in `fullstack-a-32`). -->
         {@const fsPath = selectedFsNode.path}
         {@const fsKind = selectedFsNode.kind}
+        {@const fsIsDir = isFsDirectory(selectedFsNode)}
         <InspectorBody
           selection={{ kind: "file", path: fsPath }}
           showRefs
@@ -1862,7 +1958,7 @@
               graphState.inspectorOpen = true;
             }
           }}
-          onSetAsScope={() => graphFromHere(fsPath)}
+          onSetAsScope={() => graphFromHere(fsPath, fsIsDir)}
         />
       {:else if selectedFsNode}
         <div class="ghost-body">
@@ -1944,7 +2040,11 @@
           onSetAsScope={
             inspectorSelection?.kind === "file" ||
             inspectorSelection?.kind === "directory"
-              ? () => graphFromHere(inspectorSelection.path)
+              ? () =>
+                  graphFromHere(
+                    inspectorSelection.path,
+                    inspectorSelection.kind === "directory",
+                  )
               : undefined
           }
           documentsOverride={selectionDocumentsInScope}

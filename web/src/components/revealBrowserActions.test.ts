@@ -19,7 +19,11 @@ describe("file-browser reveal actions", () => {
     expect(graph).toContain("function revealSelectedFile()");
     expect(graph).toContain("revealPathInBrowser(selectedNode.path, { inspectorOpen: true });");
     expect(graph).toContain("function revealSelectedFsEntry()");
-    expect(graph).toContain("revealPathInBrowser(selectedFsNode.path, { inspectorOpen: true });");
+    // GI-5: directories pass enter:true (revealAndEnterDirectory) so the
+    // File Browser opens AT the directory; files stay select-in-place.
+    expect(graph).toMatch(
+      /revealPathInBrowser\(selectedFsNode\.path, \{\s*enter: isFsDirectory\(selectedFsNode\),\s*inspectorOpen: true,\s*\}\)/,
+    );
     expect(graph).not.toContain("openBrowser().inspectorOpen");
   });
 });
@@ -100,25 +104,26 @@ describe("no inline close affordance on first-class surfaces", () => {
 
   test("GraphPanel wires 'Graph from here' for file + directory selections (I4)", () => {
     // inspector-spec.md I4 re-adds the explicit "Graph from here"
-    // action to the graph inspector for BOTH file and folder nodes
-    // (fullstack-a-33 had dropped it for files; a-50 only re-added the
-    // directory case). Re-rooting goes through `graphFromHere(path)`,
-    // which always shows the node's PARENT folder (or the drive root
-    // when the node is top-level). The semantic-mode branch binds it
-    // for file + directory selections; the fs-mode branch binds it for
-    // the selected fs path.
+    // action to the graph inspector for BOTH file and folder nodes.
+    // GI-6 made the handler kind-aware: it now takes an `isDir` flag so
+    // a directory re-roots to itself (not its parent). The semantic
+    // branch passes isDir from the selection kind; the fs branch passes
+    // the precomputed `fsIsDir`.
     expect(graph).toMatch(
-      /onSetAsScope=\{[\s\S]*?inspectorSelection\?\.kind === "file" \|\|[\s\S]*?=== "directory"[\s\S]*?graphFromHere\(inspectorSelection\.path\)/,
+      /onSetAsScope=\{[\s\S]*?inspectorSelection\?\.kind === "file" \|\|[\s\S]*?=== "directory"[\s\S]*?graphFromHere\(\s*inspectorSelection\.path,\s*inspectorSelection\.kind === "directory",\s*\)/,
     );
-    expect(graph).toMatch(/onSetAsScope=\{\(\) => graphFromHere\(fsPath\)\}/);
+    expect(graph).toMatch(/onSetAsScope=\{\(\) => graphFromHere\(fsPath, fsIsDir\)\}/);
   });
 
-  test("graphFromHere re-roots in place to the node's parent folder (I4)", () => {
-    // The helper computes the parent dir (drive root when top-level),
-    // re-scopes the CURRENT tab (no new spawn), and pins the node.
-    expect(graph).toContain("function graphFromHere(path: string)");
+  test("graphFromHere re-roots in place: dir to itself, file to its parent (I4/GI-6)", () => {
+    // GI-6: a directory re-roots to `dir:<path>` (the dir itself, drive
+    // root for the empty path); a file re-roots to its parent dir. The
+    // old always-parent rule made re-rooting a child folder onto its
+    // already-current parent a no-op + left the inspector blank.
+    expect(graph).toContain("function graphFromHere(path: string, isDir: boolean)");
+    expect(graph).toMatch(/if \(isDir\) \{\s*scopeId = path \? `dir:\$\{path\}` : "drive";/);
     expect(graph).toMatch(/const parent = slash > 0 \? path\.slice\(0, slash\) : ""/);
-    expect(graph).toMatch(/const scopeId = parent \? `dir:\$\{parent\}` : "drive"/);
+    expect(graph).toMatch(/scopeId = parent \? `dir:\$\{parent\}` : "drive"/);
     expect(graph).toMatch(/graphState\.pendingSelectId = path/);
   });
 
