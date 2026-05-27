@@ -61,7 +61,6 @@
     effectiveHybridSurfaceTheme,
     fileOps,
     openFsGraphForDirectory,
-    revealPathInBrowser,
     scheduleSessionSave,
     setTransientStatus,
     surfaceThemeOverride,

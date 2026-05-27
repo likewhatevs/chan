@@ -2094,20 +2094,47 @@ function focusExistingBrowserTab(): BrowserTab | null {
   return null;
 }
 
+/// Reveal a path by OPENING a File Browser TAB: a tab in the active
+/// pane, with the path selected and its ancestor chain expanded;
+/// `enter` (a directory) also expands the directory ITSELF so the
+/// browser opens AT it. The per-instance `tab.expanded` is what the new
+/// tab renders; the `treeExpanded` singleton is also primed so a dock
+/// instance landing on the same scope agrees.
+///
+/// Always opens a TAB - it never focuses/targets the docked File Browser
+/// (@@Alex: "when we have a docked file browser, never focus from other
+/// tabs to it; always open a file browser tab"). The previous body went
+/// through the overlay-era `openBrowser()`, which prefers
+/// `focusExistingBrowserTab()` and was coupled to `browserOverlay`; from
+/// a graph tab that reveal opened no visible tab (GI-8). This uses the
+/// same `openBrowserInActivePane` primitive the File Browser's own "Open
+/// in File Browser" uses.
 export function revealPathInBrowser(
   path: string,
   opts: { enter?: boolean; inspectorOpen?: boolean } = {},
 ): BrowserTab {
-  if (opts.enter) {
-    revealAndEnterDirectory(path);
-  } else {
-    revealAndSelect(path);
+  const parts = path.split("/").filter(Boolean);
+  // Directory (`enter`): expand itself + ancestors. File: ancestors only
+  // (select the file inside its already-expanded parent).
+  const upto = opts.enter ? parts.length : parts.length - 1;
+  const expanded: string[] = [];
+  let acc = "";
+  for (let i = 0; i < upto; i++) {
+    acc = acc ? `${acc}/${parts[i]}` : parts[i];
+    if (acc) expanded.push(acc);
   }
-  const tab = openBrowser();
-  if (opts.inspectorOpen ?? true) {
-    tab.inspectorOpen = true;
-    browserOverlay.inspectorOpen = true;
-  }
+  const isRoot = path === "";
+  const tab = openBrowserInActivePane(isRoot ? {} : { select: path });
+  tab.inspectorOpen = opts.inspectorOpen ?? true;
+  tab.showDrive = isRoot;
+  tab.expanded = expanded.length > 0 ? expanded : undefined;
+  fbSelectSingle(isRoot ? null : path);
+  browserSelection.showDrive = isRoot;
+  const map = treeExpanded.map;
+  map[""] = true;
+  for (const e of expanded) map[e] = true;
+  persistTreeExpanded();
+  scheduleSessionSave();
   return tab;
 }
 
