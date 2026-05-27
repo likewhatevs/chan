@@ -66,7 +66,6 @@
   } from "lucide-svelte";
   import DriveInfoBody from "./DriveInfoBody.svelte";
   import Inspector from "./Inspector.svelte";
-  import OverlayShell from "./OverlayShell.svelte";
   import InspectorBody, { type InspectorSelection } from "./InspectorBody.svelte";
   import GraphCanvas from "./GraphCanvas.svelte";
   import KindChip from "./KindChip.svelte";
@@ -1673,18 +1672,14 @@
 
 <svelte:window onkeydown={onTabMenuKeydown} onpointerdown={onTabMenuPointerDown} />
 
-{#if tab}
-  {@render graphContent()}
-{:else}
-  <OverlayShell
-    id="graph"
-    open={visible}
-    onClose={close}
-    onBackdropContextMenu={onGraphContextMenu}
-  >
-    {@render graphContent()}
-  </OverlayShell>
-{/if}
+<!-- The graph is always a first-class TAB (mounted only by Pane.svelte
+     with a `tab`). The pre-migration OverlayShell variant is gone -
+     OverlayShell now lives only in Search + Settings. The remaining
+     `graphState = tab ?? graphOverlay` / `visible` fallbacks + the dead
+     `{#if !tab}` bar are inert (tab is always set); the graphOverlay
+     STATE itself is load-bearing (availableGraphScopes mirror) and is
+     removed in the scope-concept wipe (see lane-a journal R-plan). -->
+{@render graphContent()}
 
 {#snippet graphContent()}
   <div
