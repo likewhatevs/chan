@@ -37,7 +37,7 @@ const TERMINAL_SESSION_FD_ESTIMATE: u64 = 8;
 
 pub const ALT_SCREEN_ATTACH_PRELUDE: &[u8] = b"\x1b[?1049h\x1b[2J\x1b[H";
 
-/// `fullstack-b-13`: per-session submit-mode toggle. Drives the
+/// `fullstack-b-13`: per-session submit-mode toggle. Workspaces the
 /// trailing-byte choice when `dispatch_agent_event` writes a
 /// reply-notification "poke" into the receiving session's PTY.
 ///
@@ -147,9 +147,6 @@ impl std::fmt::Display for FdPressure {
 #[serde(rename_all = "lowercase")]
 pub enum CloseReason {
     Idle,
-    // chunk-1 wire preservation: variant renamed Drive -> Workspace, on-wire
-    // token stays "drive" until chunk 2 flips it with the frontend.
-    #[serde(rename = "drive")]
     Workspace,
     Shutdown,
     Explicit,
@@ -160,7 +157,7 @@ impl CloseReason {
     pub fn as_str(self) -> &'static str {
         match self {
             CloseReason::Idle => "idle",
-            CloseReason::Workspace => "drive",
+            CloseReason::Workspace => "workspace",
             CloseReason::Shutdown => "shutdown",
             CloseReason::Explicit => "explicit",
             CloseReason::Capped => "capped",

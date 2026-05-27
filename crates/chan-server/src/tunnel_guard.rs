@@ -3,7 +3,7 @@
 //!
 //!   - `settings_guard` returns 403 when `AppState::settings_disabled`
 //!     is true (any tunnel run, hosted or public). Applied to the
-//!     settings-write routes (drive rename, prefs / server-config
+//!     settings-write routes (workspace rename, prefs / server-config
 //!     PATCH, storage reset, index rebuild).
 //!
 //! Both run as middleware on a sub-router rather than as per-handler

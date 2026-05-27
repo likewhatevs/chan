@@ -7,15 +7,15 @@
 //! scheduling. Under 12-way CPU saturation any of those slip past a poll
 //! deadline and the test flakes, with the failing set shifting run to
 //! run. The affected tests:
-//!   - chan-drive  `indexer::tests::*` (real-FSEvent indexer delivery)
-//!   - chan-drive  `drive::tests::watch_team_emits_events_with_prefix`
+//!   - chan-workspace  `indexer::tests::*` (real-FSEvent indexer delivery)
+//!   - chan-workspace  `workspace::tests::watch_team_emits_events_with_prefix`
 //!   - chan-server `indexer::tests::*` boot-walk tests
 //!   - chan-server `routes::terminal::tests::*` real-PTY shell probes
 //!
 //! WHY a FILE lock and not a `static` Mutex: a `static` lock serializes
 //! only tests WITHIN one test binary, but `cargo test` runs each crate's
 //! test binary as a SEPARATE PROCESS, concurrently. Per-crate `static`
-//! locks are therefore islands - chan-drive's FS tests still race
+//! locks are therefore islands - chan-workspace's FS tests still race
 //! chan-server's boot-walk + PTY tests for the CPU and the kernel
 //! FSEvent queue. An OS advisory lock on a well-known temp path is the
 //! one primitive that spans process boundaries, so a single named gate

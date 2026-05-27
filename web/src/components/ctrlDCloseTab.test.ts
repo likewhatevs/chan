@@ -93,7 +93,7 @@ describe("Ctrl+D close-tab behaviour", () => {
 
   test("closes a Graph tab from the active pane", async () => {
     const pane = resetLayout([]);
-    const graph = openGraphInActivePane({ mode: "semantic", scopeId: "drive" });
+    const graph = openGraphInActivePane({ mode: "semantic", scopeId: "workspace" });
     pane.activeTabId = graph.id;
 
     await closeTab(pane.id, graph.id);

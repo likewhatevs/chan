@@ -4,7 +4,7 @@
   //
   //   1. Provider     pick the source format
   //   2. File         show export instructions + accept the .csv
-  //   3. Directory    drive-relative directory picker (or root)
+  //   3. Directory    workspace-relative directory picker (or root)
   //   4. Confirm      kick off the multipart POST + show outcome
   //
   // The actual import call lives in api.importContacts; this
@@ -74,7 +74,7 @@
   const folderPaths = $derived.by(() => {
     void tree.entries;
     const set = new Set<string>();
-    set.add(""); // drive root
+    set.add(""); // workspace root
     for (const e of tree.entries) {
       if (e.is_dir) set.add(e.path);
       // A file deep in a/b/c.md implies a, a/b are directories even if
@@ -155,7 +155,7 @@
 
   // Pretty-print a directory path for the picker. Empty path = root.
   function fmtFolder(p: string): string {
-    return p === "" ? "/ (drive root)" : p;
+    return p === "" ? "/ (workspace root)" : p;
   }
 
   // Indent depth for the flat directory list. v1: one ridiculously
@@ -214,7 +214,7 @@
           <div class="hint">
             Where should the contact notes land? Type a directory
             name (it will be created if missing) or pick from
-            below. Empty = drive root.
+            below. Empty = workspace root.
           </div>
           <input
             class="folder-input"

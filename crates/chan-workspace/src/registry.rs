@@ -1,8 +1,8 @@
 // Workspace registry: the per-machine list of directories the user has
-// registered as chan drives. Persisted to ~/.chan/config.toml.
+// registered as chan workspaces. Persisted to ~/.chan/config.toml.
 //
-// This file holds ONLY chan-drive's own state: the registry and
-// default-drive setting. Editor preferences (fonts, theme, API
+// This file holds ONLY chan-workspace's own state: the registry and
+// default-workspace setting. Editor preferences (fonts, theme, API
 // keys) are an app-level concern and live in a separate file
 // owned by the consuming app.
 
@@ -19,7 +19,7 @@ use crate::paths;
 ///
 /// Stored in `~/.chan/config.toml` as `index_excluded_dirs` so users can
 /// add or remove names without rebuilding chan. `.git` and `.chan` are still
-/// hard-skipped by the drive walker as internal invariants.
+/// hard-skipped by the workspace walker as internal invariants.
 pub const DEFAULT_INDEX_EXCLUDED_DIRS: &[&str] = &[
     ".git",
     ".hg",
@@ -38,27 +38,21 @@ pub const DEFAULT_INDEX_EXCLUDED_DIRS: &[&str] = &[
     "build",
 ];
 
-/// On-disk shape of the chan-drive config TOML.
+/// On-disk shape of the chan-workspace config TOML.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Registry {
-    /// Default drive root for the no-arg launch. When None, the
+    /// Default workspace root for the no-arg launch. When None, the
     /// resolver falls back to `paths::default_workspace_root()`.
-    // chunk-1 wire preservation: Rust field renamed, but the on-disk TOML key
-    // stays `default_drive_root` until chunk 2 flips the format (clean break).
-    #[serde(
-        rename = "default_drive_root",
-        default,
-        skip_serializing_if = "Option::is_none"
-    )]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub default_workspace_root: Option<PathBuf>,
     /// Directory basenames skipped by index and graph rebuild walks.
     /// Matched at any depth by exact basename, case-insensitive.
     #[serde(default = "default_index_excluded_dirs")]
     pub index_excluded_dirs: Vec<String>,
-    /// Known drives the user has opened on this machine. Sorted
+    /// Known workspaces the user has opened on this machine. Sorted
     /// most-recent first by `last_seen_at`.
     #[serde(default)]
-    pub drives: Vec<KnownWorkspace>,
+    pub workspaces: Vec<KnownWorkspace>,
 }
 
 impl Default for Registry {
@@ -66,7 +60,7 @@ impl Default for Registry {
         Self {
             default_workspace_root: None,
             index_excluded_dirs: default_index_excluded_dirs(),
-            drives: Vec::new(),
+            workspaces: Vec::new(),
         }
     }
 }
@@ -80,10 +74,10 @@ fn default_index_excluded_dirs() -> Vec<String> {
 
 /// One entry in the registry.
 ///
-/// `root_path` is the current canonical local drive path. It is the
+/// `root_path` is the current canonical local workspace path. It is the
 /// user-content boundary. `metadata_key` is the stable storage key
-/// under `~/.chan/drives/`, allocated from the canonical path when
-/// the drive is first registered and preserved across
+/// under `~/.chan/workspaces/`, allocated from the canonical path when
+/// the workspace is first registered and preserved across
 /// `Library::move_workspace`.
 ///
 /// The registry intentionally carries no user-editable display name.
@@ -91,7 +85,7 @@ fn default_index_excluded_dirs() -> Vec<String> {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct KnownWorkspace {
     pub root_path: PathBuf,
-    /// Stable per-drive metadata storage key under `~/.chan/drives/`.
+    /// Stable per-workspace metadata storage key under `~/.chan/workspaces/`.
     pub metadata_key: String,
     pub created_at: DateTime<Utc>,
     pub last_seen_at: DateTime<Utc>,
@@ -132,9 +126,9 @@ impl Registry {
         })?;
         // Prime the canonical-path cache once at load. Comparisons
         // are then pure and don't re-canonicalize per call. Failure
-        // here is non-fatal: an entry whose drive root is missing or
+        // here is non-fatal: an entry whose workspace root is missing or
         // asleep stays comparable lexically.
-        for d in &mut reg.drives {
+        for d in &mut reg.workspaces {
             d.canonical_path = Some(
                 d.root_path
                     .canonicalize()
@@ -153,18 +147,21 @@ impl Registry {
         fs_ops::atomic_write(path, body.as_bytes())
     }
 
-    /// Find a known drive by absolute path, canonicalized when
+    /// Find a known workspace by absolute path, canonicalized when
     /// possible. Matches by canonical path so symlink wiggles don't
     /// create duplicate registry entries.
     pub fn find(&self, root: &Path) -> Option<&KnownWorkspace> {
         let target = canonicalize_or_keep(root);
-        match self.drives.iter().position(|d| d.canonical() == target) {
-            Some(i) => Some(&self.drives[i]),
-            None => self.drives.iter().find(|d| fresh_canonical(d) == target),
+        match self.workspaces.iter().position(|d| d.canonical() == target) {
+            Some(i) => Some(&self.workspaces[i]),
+            None => self
+                .workspaces
+                .iter()
+                .find(|d| fresh_canonical(d) == target),
         }
     }
 
-    /// Touch-or-append the drive entry, then sort most-recent first.
+    /// Touch-or-append the workspace entry, then sort most-recent first.
     /// Returns the entry's index after the operation.
     ///
     /// Re-touching an existing row preserves `metadata_key`, so
@@ -173,15 +170,15 @@ impl Registry {
     pub fn touch(&mut self, root: &Path) -> usize {
         let canonical = canonicalize_or_keep(root);
         let now = Utc::now();
-        let idx = position_match(&self.drives, &canonical);
+        let idx = position_match(&self.workspaces, &canonical);
         if let Some(i) = idx {
-            self.drives[i].last_seen_at = now;
-            // Refresh the cache: a relinked drive would otherwise
+            self.workspaces[i].last_seen_at = now;
+            // Refresh the cache: a relinked workspace would otherwise
             // keep the stale canonical, then the next touch wouldn't
             // find it on the fast path.
-            self.drives[i].canonical_path = Some(canonical.clone());
+            self.workspaces[i].canonical_path = Some(canonical.clone());
         } else {
-            self.drives.push(KnownWorkspace {
+            self.workspaces.push(KnownWorkspace {
                 root_path: canonical.clone(),
                 metadata_key: paths::metadata_key_for_root(&canonical),
                 created_at: now,
@@ -189,36 +186,36 @@ impl Registry {
                 canonical_path: Some(canonical.clone()),
             });
         }
-        self.drives
+        self.workspaces
             .sort_by_key(|d| std::cmp::Reverse(d.last_seen_at));
-        position_match(&self.drives, &canonical).unwrap_or(0)
+        position_match(&self.workspaces, &canonical).unwrap_or(0)
     }
 
     /// Update the `root_path` of an existing registry row,
     /// preserving the metadata key and therefore every metadata
     /// directory. Used by `Library::move_workspace` to record an `mv` of
-    /// the drive directory without moving chan-managed state.
+    /// the workspace directory without moving chan-managed state.
     pub fn set_path(&mut self, old: &Path, new: &Path) -> bool {
         let old_canon = canonicalize_or_keep(old);
-        let Some(i) = position_match(&self.drives, &old_canon) else {
+        let Some(i) = position_match(&self.workspaces, &old_canon) else {
             return false;
         };
         let new_canon = canonicalize_or_keep(new);
-        self.drives[i].root_path = new_canon.clone();
-        self.drives[i].last_seen_at = Utc::now();
-        self.drives[i].canonical_path = Some(new_canon);
+        self.workspaces[i].root_path = new_canon.clone();
+        self.workspaces[i].last_seen_at = Utc::now();
+        self.workspaces[i].canonical_path = Some(new_canon);
         true
     }
 
     /// Remove a registry entry. Does not delete the directory or the
-    /// per-drive metadata on disk; the caller decides whether to
+    /// per-workspace metadata on disk; the caller decides whether to
     /// purge that separately.
     pub fn remove(&mut self, root: &Path) -> bool {
         let canonical = canonicalize_or_keep(root);
-        let before = self.drives.len();
-        self.drives
+        let before = self.workspaces.len();
+        self.workspaces
             .retain(|d| d.canonical() != canonical && fresh_canonical(d) != canonical);
-        self.drives.len() != before
+        self.workspaces.len() != before
     }
 }
 
@@ -237,20 +234,22 @@ fn fresh_canonical(d: &KnownWorkspace) -> PathBuf {
         .unwrap_or_else(|_| d.root_path.clone())
 }
 
-/// Index of the drive whose canonical, cached then fresh, matches
+/// Index of the workspace whose canonical, cached then fresh, matches
 /// `canonical`. Centralises lookup so touch / find / remove behave
 /// consistently.
-fn position_match(drives: &[KnownWorkspace], canonical: &Path) -> Option<usize> {
-    if let Some(i) = drives.iter().position(|d| d.canonical() == *canonical) {
+fn position_match(workspaces: &[KnownWorkspace], canonical: &Path) -> Option<usize> {
+    if let Some(i) = workspaces.iter().position(|d| d.canonical() == *canonical) {
         return Some(i);
     }
-    drives.iter().position(|d| fresh_canonical(d) == *canonical)
+    workspaces
+        .iter()
+        .position(|d| fresh_canonical(d) == *canonical)
 }
 
-/// Effective default drive root: registry override wins, otherwise
+/// Effective default workspace root: registry override wins, otherwise
 /// the platform default. Best-effort: a malformed registry falls
 /// back to the platform default so a user can still launch.
-pub fn effective_default_drive_root() -> PathBuf {
+pub fn effective_default_workspace_root() -> PathBuf {
     Registry::load()
         .ok()
         .and_then(|r| r.default_workspace_root)
@@ -278,16 +277,16 @@ mod tests {
         let mut reg = Registry::default();
         let idx1 = reg.touch(tmp.path());
         assert_eq!(idx1, 0);
-        assert_eq!(reg.drives.len(), 1);
-        let key = reg.drives[0].metadata_key.clone();
-        let first_seen = reg.drives[0].last_seen_at;
+        assert_eq!(reg.workspaces.len(), 1);
+        let key = reg.workspaces[0].metadata_key.clone();
+        let first_seen = reg.workspaces[0].last_seen_at;
 
         std::thread::sleep(std::time::Duration::from_millis(10));
         let idx2 = reg.touch(tmp.path());
         assert_eq!(idx2, 0);
-        assert_eq!(reg.drives.len(), 1);
-        assert_eq!(reg.drives[0].metadata_key, key);
-        assert!(reg.drives[0].last_seen_at > first_seen);
+        assert_eq!(reg.workspaces.len(), 1);
+        assert_eq!(reg.workspaces[0].metadata_key, key);
+        assert!(reg.workspaces[0].last_seen_at > first_seen);
     }
 
     #[test]
@@ -296,7 +295,7 @@ mod tests {
         let mut reg = Registry::default();
         reg.touch(tmp.path());
         assert!(reg.remove(tmp.path()));
-        assert!(reg.drives.is_empty());
+        assert!(reg.workspaces.is_empty());
         assert!(!reg.remove(tmp.path()));
     }
 
@@ -306,7 +305,7 @@ mod tests {
         let cfg_path = tmp.path().join("config.toml");
         let mut reg = Registry::default();
         reg.touch(tmp.path());
-        let key = reg.drives[0].metadata_key.clone();
+        let key = reg.workspaces[0].metadata_key.clone();
         reg.save_to(&cfg_path).unwrap();
         let raw = std::fs::read_to_string(&cfg_path).unwrap();
         assert!(raw.contains("index_excluded_dirs"));
@@ -320,15 +319,15 @@ mod tests {
             .index_excluded_dirs
             .iter()
             .any(|name| name == "node_modules"));
-        assert_eq!(loaded.drives.len(), 1);
-        assert_eq!(loaded.drives[0].metadata_key, key);
+        assert_eq!(loaded.workspaces.len(), 1);
+        assert_eq!(loaded.workspaces[0].metadata_key, key);
     }
 
     #[test]
     fn load_missing_index_excluded_dirs_uses_default() {
         let tmp = TempDir::new().unwrap();
         let cfg_path = tmp.path().join("config.toml");
-        std::fs::write(&cfg_path, "drives = []\n").unwrap();
+        std::fs::write(&cfg_path, "workspaces = []\n").unwrap();
         let loaded = Registry::load_from(&cfg_path).unwrap();
         assert!(loaded
             .index_excluded_dirs
@@ -353,7 +352,10 @@ mod tests {
         reg.touch(a.path());
         std::thread::sleep(std::time::Duration::from_millis(10));
         reg.touch(b.path());
-        assert_eq!(reg.drives[0].root_path, b.path().canonicalize().unwrap());
+        assert_eq!(
+            reg.workspaces[0].root_path,
+            b.path().canonicalize().unwrap()
+        );
     }
 
     #[test]
@@ -361,12 +363,12 @@ mod tests {
         let tmp = TempDir::new().unwrap();
         let mut reg = Registry::default();
         reg.touch(tmp.path());
-        let key = reg.drives[0].metadata_key.clone();
+        let key = reg.workspaces[0].metadata_key.clone();
         assert_eq!(key, paths::metadata_key_for_root(tmp.path()));
 
         assert!(reg.remove(tmp.path()));
         reg.touch(tmp.path());
-        assert_eq!(reg.drives[0].metadata_key, key);
+        assert_eq!(reg.workspaces[0].metadata_key, key);
     }
 
     #[test]
@@ -374,12 +376,12 @@ mod tests {
         let tmp = TempDir::new().unwrap();
         let mut reg = Registry::default();
         reg.touch(tmp.path());
-        let key = reg.drives[0].metadata_key.clone();
+        let key = reg.workspaces[0].metadata_key.clone();
         let with_slash = tmp.path().join("");
         reg.touch(&with_slash);
 
-        assert_eq!(reg.drives.len(), 1);
-        assert_eq!(reg.drives[0].metadata_key, key);
+        assert_eq!(reg.workspaces.len(), 1);
+        assert_eq!(reg.workspaces[0].metadata_key, key);
     }
 
     #[cfg(unix)]
@@ -389,16 +391,16 @@ mod tests {
 
         let tmp = TempDir::new().unwrap();
         let link_parent = TempDir::new().unwrap();
-        let link = link_parent.path().join("drive-link");
+        let link = link_parent.path().join("workspace-link");
         symlink(tmp.path(), &link).unwrap();
 
         let mut reg = Registry::default();
         reg.touch(tmp.path());
-        let key = reg.drives[0].metadata_key.clone();
+        let key = reg.workspaces[0].metadata_key.clone();
         reg.touch(&link);
 
-        assert_eq!(reg.drives.len(), 1);
-        assert_eq!(reg.drives[0].metadata_key, key);
+        assert_eq!(reg.workspaces.len(), 1);
+        assert_eq!(reg.workspaces[0].metadata_key, key);
     }
 
     #[test]
@@ -407,11 +409,11 @@ mod tests {
         let new = TempDir::new().unwrap();
         let mut reg = Registry::default();
         reg.touch(old.path());
-        let key_before = reg.drives[0].metadata_key.clone();
+        let key_before = reg.workspaces[0].metadata_key.clone();
 
         assert!(reg.set_path(old.path(), new.path()));
         assert_eq!(
-            reg.drives[0].metadata_key, key_before,
+            reg.workspaces[0].metadata_key, key_before,
             "metadata key must survive a path move so metadata stays reachable",
         );
         assert!(reg.find(new.path()).is_some());

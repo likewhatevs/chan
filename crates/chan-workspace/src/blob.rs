@@ -1,5 +1,5 @@
-// Per-drive session blob storage. The schema of the stored bytes is
-// the host's concern; chan-drive treats every blob as opaque and just
+// Per-workspace session blob storage. The schema of the stored bytes is
+// the host's concern; chan-workspace treats every blob as opaque and just
 // guarantees:
 //
 //   - atomic writes (tmpfile + fsync + rename);
@@ -12,8 +12,8 @@
 // blob is opaque. Hosts that want a `.json` suffix include it in
 // the key.
 //
-// Why blobs in chan-drive: native shells (iOS / Android, future)
-// link chan-drive via uniffi and use these methods directly to
+// Why blobs in chan-workspace: native shells (iOS / Android, future)
+// link chan-workspace via uniffi and use these methods directly to
 // persist editor state. Pushing the I/O up to host code would force
 // every shell to reimplement the safety story (atomic writes, path
 // sandbox); centralising here keeps that story in one place.
@@ -37,7 +37,7 @@ const MAX_KEY_LEN: usize = 255;
 /// (defense against accidentally writing a hidden file when a
 /// caller hands us an unsanitized name), and must not start with
 /// `-` (defense against future shell-out paths that would treat
-/// the key as a CLI flag; chan-drive doesn't shell out today, but
+/// the key as a CLI flag; chan-workspace doesn't shell out today, but
 /// the cost of forbidding it is zero and the cost of revisiting
 /// after a CVE is real).
 ///

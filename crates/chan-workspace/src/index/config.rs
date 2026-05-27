@@ -1,5 +1,5 @@
 // Persisted config for the search index. Lives at
-// `<index_dir>/config.toml` (per-drive global cache; see
+// `<index_dir>/config.toml` (per-workspace global cache; see
 // `crate::paths::drive_paths`) and stores the embedding model id,
 // the chunking strategy, and a schema version that triggers a full
 // rebuild when bumped.
@@ -57,7 +57,7 @@ const EMBEDDING_MODELS: &[EmbeddingModelInfo] = &[
         label: "BGE M3",
         dim: 1024,
         size_label: "~2.3 GB",
-        note: "Multilingual BGE model for mixed-language drives.",
+        note: "Multilingual BGE model for mixed-language workspaces.",
         is_default: false,
     },
 ];
@@ -144,27 +144,27 @@ pub struct IndexConfig {
     /// embedder's `dim()` before writing more shards.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub vectors_dim: Option<u32>,
-    /// systacean-7: per-drive Hybrid-search opt-in. Default-false so
-    /// drives stay BM25-only after the systacean-6 model split unless
+    /// systacean-7: per-workspace Hybrid-search opt-in. Default-false so
+    /// workspaces stay BM25-only after the systacean-6 model split unless
     /// the user explicitly flips it on via
     /// `chan index enable-semantic` (CLI) or the Settings UI
     /// (`fullstack-a-21`). The query path reads this flag to decide
-    /// whether Hybrid is the default mode for the drive; explicit
+    /// whether Hybrid is the default mode for the workspace; explicit
     /// `Mode::Hybrid` overrides on `search` still work regardless.
     #[serde(default)]
     pub semantic_enabled: bool,
-    /// systacean-27: per-drive chan-report opt-in (Round-2 pre-flight
-    /// feature toggle). Default-false so drives stay lean (no
+    /// systacean-27: per-workspace chan-report opt-in (Round-2 pre-flight
+    /// feature toggle). Default-false so workspaces stay lean (no
     /// language-detection scan, no SLOC roll-up, no COCOMO). When
-    /// true, `Workspace::report()` initializes the per-drive
+    /// true, `Workspace::report()` initializes the per-workspace
     /// `ReportState` + the watcher fanout keeps it current. Lives
     /// alongside `semantic_enabled` for symmetry; both toggles
-    /// persist in the per-drive `IndexConfig` (Round-3 may refactor
+    /// persist in the per-workspace `IndexConfig` (Round-3 may refactor
     /// to a separate `features.toml` if/when more flags accumulate).
     #[serde(default)]
     pub reports_enabled: bool,
     /// systacean-40: screensaver overlay opt-in. Default-false so
-    /// drives without the feature configured stay unchanged. SPA
+    /// workspaces without the feature configured stay unchanged. SPA
     /// reads `Workspace::screensaver_enabled()` via the
     /// `/api/screensaver/state` endpoint + arms the overlay
     /// state machine when true.
@@ -181,7 +181,7 @@ pub struct IndexConfig {
     /// into an animated scene.
     #[serde(default)]
     pub screensaver_theme: ScreensaverTheme,
-    /// systacean-40: per-drive PIN hash. `None` when no PIN is
+    /// systacean-40: per-workspace PIN hash. `None` when no PIN is
     /// set (overlay still arms but auto-dismisses on any input).
     /// The bytes are whatever the SPA POSTs — chan-server stores
     /// without interpretation; the verify path is a byte-equality
@@ -347,9 +347,9 @@ mod tests {
 
     #[test]
     fn semantic_enabled_defaults_false_and_round_trips_true() {
-        // systacean-7: pin the per-drive Hybrid opt-in field. Default
+        // systacean-7: pin the per-workspace Hybrid opt-in field. Default
         // matches post-systacean-6 behaviour (BM25-only) so an existing
-        // drive whose config.toml predates this field stays BM25 on
+        // workspace whose config.toml predates this field stays BM25 on
         // upgrade. Round-tripping with the field set to true
         // verifies the toml shape is preserved across save/load.
         let tmp = TempDir::new().unwrap();
@@ -368,7 +368,7 @@ mod tests {
     #[test]
     fn reports_enabled_defaults_false_and_round_trips_true() {
         // systacean-27: pin the chan-reports opt-in field. Default
-        // matches Round-2's lean-drive baseline (off). Round-
+        // matches Round-2's lean-workspace baseline (off). Round-
         // tripping with the field set to true verifies the toml
         // shape is preserved across save/load. Backward-compat:
         // a pre-`-27` config.toml without the field loads with
@@ -461,11 +461,11 @@ mod tests {
     fn load_works_while_drive_lock_is_held() {
         // systacean-8: chan index status reads IndexConfig without
         // opening a Workspace (so no writer lock acquired), which means
-        // a running `chan serve` against the drive no longer blocks
+        // a running `chan serve` against the workspace no longer blocks
         // the CLI. Pin the invariant: `config::load` doesn't touch
         // any lock file and returns successfully even while another
         // holder (simulating the chan serve process) has acquired
-        // the per-drive writer flock.
+        // the per-workspace writer flock.
         use crate::lock::WorkspaceLock;
         let tmp = TempDir::new().unwrap();
         let index_dir = tmp.path().join("index");
@@ -485,7 +485,7 @@ mod tests {
 
     #[test]
     fn semantic_enabled_absent_in_old_file_loads_as_false() {
-        // Existing drives whose config.toml predates systacean-7 don't
+        // Existing workspaces whose config.toml predates systacean-7 don't
         // have the field at all. Pin that they load cleanly with the
         // default (false) rather than failing with a missing-field
         // error.

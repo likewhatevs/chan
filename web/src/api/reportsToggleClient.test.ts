@@ -2,7 +2,7 @@ import { describe, expect, test } from "vitest";
 import client from "./client.ts?raw";
 
 // `fullstack-a-76` SPA wiring slice 1: client methods for the
-// `systacean-39` per-drive reports endpoints. Track A removed
+// `systacean-39` per-workspace reports endpoints. Track A removed
 // the stale global `Preferences.reports` field, so the Hybrid File
 // Browser config consumes these endpoints directly.
 

@@ -4,7 +4,7 @@ import editor from "./FileEditorTab.svelte?raw";
 // `fullstack-a-67f`: FileEditorTab right-click menu revamp per
 // addendum-a's verbatim Editor spec. Slice 1 covers:
 //
-// * Menu-top editable Name input (mirror of Drive name in FB +
+// * Menu-top editable Name input (mirror of Workspace name in FB +
 //   Terminal name).
 // * Show Source Code + Collapse Code Blocks band.
 // * View-toggles + cleanup utilities (Outline / Details / Style
@@ -36,12 +36,12 @@ describe("fullstack-a-67f: menu-top Name input", () => {
     );
   });
 
-  test("Draft tabs replace the Name row with Save to Drive", () => {
+  test("Draft tabs replace the Name row with Save to Workspace", () => {
     expect(editor).toMatch(/const isDraftEditorTab = \$derived/);
     expect(editor).toMatch(
-      /\{#if isDraftEditorTab\}[\s\S]{1,500}onclick=\{doSaveDraftToDrive\}[\s\S]{1,300}<span class="mbtn-label">Save to Drive<\/span>/,
+      /\{#if isDraftEditorTab\}[\s\S]{1,500}onclick=\{doSaveDraftToWorkspace\}[\s\S]{1,300}<span class="mbtn-label">Save to Workspace<\/span>/,
     );
-    expect(editor).toMatch(/saveDraftTabToDrive\(tab\)/);
+    expect(editor).toMatch(/saveDraftTabToWorkspace\(tab\)/);
   });
 });
 

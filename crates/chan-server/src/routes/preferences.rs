@@ -2,7 +2,7 @@
 //! the unified GlobalConfig view (`/api/config`).
 //!
 //! The unified surface joins EditorPrefs, ServerConfig, and the
-//! chan-drive registry. Agent/assistant preferences were removed with
+//! chan-workspace registry. Agent/assistant preferences were removed with
 //! the assistant overlay; MCP access is configured through the server
 //! runtime, not through global user preferences.
 
@@ -24,7 +24,7 @@ use crate::{
     ThemeChoice,
 };
 
-/// Unified preferences shape returned over /api/drive and /api/config.
+/// Unified preferences shape returned over /api/workspace and /api/config.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PreferencesView {
     pub editor_theme: EditorTheme,
@@ -95,7 +95,7 @@ pub async fn api_get_server_config(State(state): State<Arc<AppState>>) -> Respon
 pub struct PatchServerConfigBody {
     /// Workspace-relative POSIX path. Empty string is rejected because the
     /// path is used as a prefix; an empty prefix would land attachments
-    /// in the drive root, surprising the user.
+    /// in the workspace root, surprising the user.
     #[serde(default)]
     attachments_dir: Option<String>,
     #[serde(default)]
@@ -150,7 +150,7 @@ struct GlobalConfigView {
     /// Empty string serializes as None (the resolver falls back to the
     /// platform default).
     default_workspace_root: Option<String>,
-    drives: Vec<KnownWorkspaceView>,
+    workspaces: Vec<KnownWorkspaceView>,
 }
 
 #[derive(Serialize)]
@@ -169,26 +169,26 @@ pub struct PatchConfigBody {
     preferences: Option<PreferencesView>,
     #[serde(default)]
     default_workspace_root: Option<Option<String>>,
-    /// Read-only on PATCH: drives are managed by path through the
+    /// Read-only on PATCH: workspaces are managed by path through the
     /// CLI (`chan add` / `remove`). Frontend sends the field for
     /// round-tripping; we just ignore it.
     #[serde(default)]
     #[allow(dead_code)]
-    drives: Option<serde_json::Value>,
+    workspaces: Option<serde_json::Value>,
 }
 
 fn global_config_view(state: &AppState) -> Result<GlobalConfigView, Error> {
     // On `--tunnel-public` runs we strip the whole "host machine"
     // dimension of the response: anonymous visitors must not see
-    // `default_workspace_root` or the registry of other drives on the host.
+    // `default_workspace_root` or the registry of other workspaces on the host.
     if state.tunnel_public {
         return Ok(GlobalConfigView {
             preferences: preferences_view(state)?,
             default_workspace_root: None,
-            drives: Vec::new(),
+            workspaces: Vec::new(),
         });
     }
-    let drives = state
+    let workspaces = state
         .library
         .list_workspaces()
         .into_iter()
@@ -204,7 +204,7 @@ fn global_config_view(state: &AppState) -> Result<GlobalConfigView, Error> {
             .library
             .default_workspace_root()
             .map(|p| p.to_string_lossy().into_owned()),
-        drives,
+        workspaces,
     })
 }
 
@@ -246,7 +246,7 @@ fn patch_config(state: &AppState, body: PatchConfigBody) -> Result<GlobalConfigV
         };
         state
             .library
-            .set_default_drive_root(value.map(std::path::PathBuf::from))?;
+            .set_default_workspace_root(value.map(std::path::PathBuf::from))?;
     }
     global_config_view(state)
 }
@@ -334,7 +334,7 @@ mod tests {
         let view = global_config_view(&state).expect("global config view");
         let json = to_json(&view);
         assert_eq!(json["default_workspace_root"], serde_json::Value::Null);
-        assert_eq!(json["drives"], serde_json::json!([]));
+        assert_eq!(json["workspaces"], serde_json::json!([]));
     }
 
     #[test]
@@ -385,6 +385,6 @@ mod tests {
         let state = make_test_state(false, false);
         let view = global_config_view(&state).expect("global config view");
         let json = to_json(&view);
-        assert!(json["drives"].is_array());
+        assert!(json["workspaces"].is_array());
     }
 }

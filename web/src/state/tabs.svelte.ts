@@ -28,7 +28,7 @@ import { notify } from "./notify.svelte";
 // module-eval (whenever a file imports tabs first), and store's eager
 // sink registration would touch `draftPromotionSinks` before it is
 // initialised -> a fatal init-order crash in every tabs-first test.
-// So we import it LAZILY inside `saveDraftTabToDrive` (a dynamic
+// So we import it LAZILY inside `saveDraftTabToWorkspace` (a dynamic
 // import resolved at user-action time, long after both modules have
 // finished initialising). This is the correct way to consume a
 // cyclic dependency whose other side has an eager side effect.
@@ -63,7 +63,7 @@ function defaultModeForPath(path: string, fileKind: FileKind): Mode {
 }
 
 /// Whether `mode` is a valid pair for the given path + file kind.
-/// Drives the session-restore guard: a stale URL hash that pairs an
+/// Workspaces the session-restore guard: a stale URL hash that pairs an
 /// incompatible (path, mode) falls back to the default for that path.
 function isModeValidForPath(
   mode: Mode,
@@ -172,11 +172,11 @@ export type FileTab = {
   /// Whether the left-side outline pane is shown alongside the
   /// editor. Toggleable per tab; persisted in the URL hash.
   outlineOpen: boolean;
-  /// Enclosing git repo, relative to the drive root, for files that
+  /// Enclosing git repo, relative to the workspace root, for files that
   /// live inside one. Set on first load from FileResponse.repo_root;
-  /// drives the per-file "git repo: <name>" scope option in the
+  /// workspaces the per-file "git repo: <name>" scope option in the
   /// overlay picker. `null` for files outside any repo (or files
-  /// whose repo coincides with the drive itself).
+  /// whose repo coincides with the workspace itself).
   repoRoot: string | null;
   /// User-toggled "read mode" for this tab (the lamp in
   /// WikiStatusBar). Per-tab so multi-pane layouts can mix
@@ -328,7 +328,7 @@ export type BrowserTab = {
   /// cursor) so selecting in one File Browser tab does not leak into
   /// another. Unset / empty means a single-entry (or no) selection.
   selectedPaths?: string[];
-  showDrive?: boolean;
+  showWorkspace?: boolean;
   expanded?: string[];
   scroll?: number;
   /// `fullstack-84`: per-tab inspector width so two FB tabs can
@@ -444,7 +444,7 @@ export type TerminalRichPromptState = {
   /// modifyOtherKeys Cmd+Enter chord (`\x1b[27;9;13~`) so the
   /// buffer submits inside an agent (Claude Code / codex /
   /// gemini) running in the terminal. Persisted on `SerTab.rpsm`;
-  /// the same toggle drives the server-side `dispatch_agent_event`
+  /// the same toggle workspaces the server-side `dispatch_agent_event`
   /// path via `PUT /api/terminal/:session/submit-mode` so survey-
   /// reply echoes ("poke" notifications) also pick the right
   /// trailing bytes.
@@ -517,15 +517,15 @@ export function graphTabLabel(t: GraphTab): string {
   return t.title;
 }
 
-/// Optional context for `browserTabLabel`. `driveName` is the
-/// display name to render when the tab points at the drive root
+/// Optional context for `browserTabLabel`. `workspaceName` is the
+/// display name to render when the tab points at the workspace root
 /// (no selection, or a file directly under root). `selectedIsDir`
 /// disambiguates "the user clicked a directory row" vs "the user
 /// clicked a file row" when the path string alone is ambiguous;
 /// when omitted, a trailing slash on `selected` is the fallback
 /// signal.
 export type BrowserLabelCtx = {
-  driveName?: string;
+  workspaceName?: string;
   selectedIsDir?: boolean;
 };
 
@@ -545,15 +545,15 @@ export function tabLabel(t: Tab, ctx?: BrowserLabelCtx): string {
 
 /// `fullstack-a-1`: Files tab title is always a directory. File
 /// selection → parent dir; directory selection → that dir; no
-/// selection or selection at drive root → drive's display name.
+/// selection or selection at workspace root → workspace's display name.
 /// Trailing slash is always rendered so the tab strip reads as a
-/// directory unambiguously. `ctx.driveName` is the display name
-/// for the drive root case; when absent, falls back to the tab's
+/// directory unambiguously. `ctx.workspaceName` is the display name
+/// for the workspace root case; when absent, falls back to the tab's
 /// own `title` (default `Files`) for backwards compat in unit
-/// tests where the drive context isn't wired.
+/// tests where the workspace context isn't wired.
 export function browserTabLabel(t: BrowserTab, ctx?: BrowserLabelCtx): string {
-  const driveName = ctx?.driveName?.trim();
-  const rootName = driveName || t.title;
+  const workspaceName = ctx?.workspaceName?.trim();
+  const rootName = workspaceName || t.title;
   const selected = t.selected?.trim();
   if (!selected) return `${rootName}/`;
   const trailing = selected.endsWith("/");
@@ -1119,7 +1119,7 @@ export function openGraphInActivePane(opts: OpenGraphOptions = {}): GraphTab {
 export function openGraphInPane(paneId: string, opts: OpenGraphOptions = {}): GraphTab {
   const p = pane(paneId);
   const mode = opts.mode ?? "semantic";
-  const scopeId = opts.scopeId ?? "drive";
+  const scopeId = opts.scopeId ?? "workspace";
   // `fullstack-47`: no dedup on spawn. Each invocation creates a
   // fresh graph tab with its own scope, filters, and pending
   // selection so the user can compare two views of the same
@@ -1166,7 +1166,7 @@ export function openBrowserInActivePane(
 /// Mirrors `nextTerminalTitle`: walk every existing browser tab,
 /// find the highest "Files" / "Files N" number, return next. The
 /// title is what `browserTabLabel`'s fallback path uses when the
-/// drive context isn't wired (unit tests, edge surfaces) AND it
+/// workspace context isn't wired (unit tests, edge surfaces) AND it
 /// also matters when two unselected FB tabs sit side-by-side —
 /// numbering disambiguates them in the tab strip.
 function nextBrowserTitle(): string {
@@ -1203,18 +1203,18 @@ function defaultBrowserInspectorOpen(): boolean {
 /// icon already conveys "this is a graph", so no extra suffix.
 ///
 /// `mode === "language"` is a top-level lens (not a per-scope
-/// view) and keeps its dedicated `Languages` label. Drive / global
-/// scope read as `drive`; the underlying `scopeId` is unchanged —
+/// view) and keeps its dedicated `Languages` label. Workspace / global
+/// scope read as `workspace`; the underlying `scopeId` is unchanged —
 /// only the rendered title shape moves.
 export function graphTitle(mode: GraphTab["mode"], scopeId: string): string {
   if (mode === "language") return "Languages";
-  if (scopeId === "drive" || scopeId === "global") return "drive";
+  if (scopeId === "workspace" || scopeId === "global") return "workspace";
   if (scopeId.startsWith("file:")) {
-    return graphScopeBasename(scopeId.slice("file:".length)) || "drive";
+    return graphScopeBasename(scopeId.slice("file:".length)) || "workspace";
   }
   if (scopeId.startsWith("dir:")) {
     const name = graphScopeBasename(scopeId.slice("dir:".length));
-    return name ? `${name}/` : "drive";
+    return name ? `${name}/` : "workspace";
   }
   if (scopeId.startsWith("tag:")) {
     const tag = scopeId.slice("tag:".length);
@@ -1502,9 +1502,9 @@ function notifyDraftPromoted(path: string): void {
 }
 
 // The draft-CLOSE modal (close a draft tab: name a destination + Save,
-// or Discard). The explicit "Save to Drive" action moved to
+// or Discard). The explicit "Save to Workspace" action moved to
 // PathPromptModal (`new-file-and-draft-spec.md` item 3,
-// `saveDraftTabToDrive` below), so this modal is now the close path
+// `saveDraftTabToWorkspace` below), so this modal is now the close path
 // only and always renders the close copy + the Discard button.
 export const draftCloseState = $state<{
   open: boolean;
@@ -2043,7 +2043,7 @@ async function handleDraftTabClose(tab: FileTab): Promise<boolean> {
   }
 }
 
-export async function saveDraftTabToDrive(tab: FileTab): Promise<boolean> {
+export async function saveDraftTabToWorkspace(tab: FileTab): Promise<boolean> {
   if (!isDraftTab(tab)) return false;
   try {
     // Lazy import to break the eager cyclic dependency with
@@ -2070,7 +2070,7 @@ export async function saveDraftTabToDrive(tab: FileTab): Promise<boolean> {
     //     workspace moves here".
     const target = info.has_attachments
       ? await uiPathPrompt({
-          title: "save draft to drive (directory)",
+          title: "save draft to workspace (directory)",
           defaultValue: info.name ? `${info.name}/` : "",
           kind: "folder",
           mode: "create",
@@ -2079,7 +2079,7 @@ export async function saveDraftTabToDrive(tab: FileTab): Promise<boolean> {
             "is saved as a directory at the path below.",
         })
       : await uiPathPrompt({
-          title: "save draft to drive (.md added if no extension)",
+          title: "save draft to workspace (.md added if no extension)",
           defaultValue: draftDefaultTarget(info),
           kind: "file",
           mode: "create",
@@ -2115,7 +2115,7 @@ export async function saveDraftTabToDrive(tab: FileTab): Promise<boolean> {
 
 /// Drop every tab in every pane. Used by the M4-D mobile reset
 /// flow so the editor doesn't keep showing a now-deleted file
-/// after the user wipes the drive. Pane structure is left
+/// after the user wipes the workspace. Pane structure is left
 /// alone (the workspace's split tree survives), only the tabs go.
 export async function closeAllTabs(opts?: CloseTabsOptions): Promise<void> {
   const entries = Object.values(layout.nodes).flatMap((node) =>
@@ -2377,7 +2377,7 @@ export function paneModeSetGrab(paneId: string | null): void {
 }
 
 /// `fullstack-a-44`: track the pane currently under the cursor while
-/// a grab is held. Drives the drop-target highlight. No-op outside
+/// a grab is held. Workspaces the drop-target highlight. No-op outside
 /// transaction mode.
 export function paneModeSetHover(paneId: string | null): void {
   if (!paneMode.transactionMode) return;
@@ -2639,7 +2639,7 @@ export function paneModeSplit(direction: "row" | "column"): void {
 ///
 /// `dir` is the directory the spawn should anchor to (terminal cwd,
 /// new-file parent, graph dir-scope, file-browser fallback). `""`
-/// means drive root.
+/// means workspace root.
 ///
 /// `file` is the file the source tab is currently pointing at, when
 /// applicable. File-Browser and Graph spawns prefer this for the
@@ -2713,7 +2713,7 @@ export function paneModeOpenGraph(ctx?: SpawnContext): void {
   const p = draft.nodes[draft.activePaneId];
   if (!p || p.kind !== "leaf") return;
   const mode: GraphTab["mode"] = "semantic";
-  let scopeId = "drive";
+  let scopeId = "workspace";
   let pendingSelectId: string | null = null;
   if (ctx?.file) {
     scopeId = `file:${ctx.file}`;
@@ -3252,7 +3252,7 @@ export async function overwriteConflictedTab(): Promise<void> {
 /// Single source of truth for "send this tab's content to the
 /// server". Both autosave and explicit saveTab funnel through here.
 /// On 409, opens the conflict dialog and returns; the dialog's
-/// Reload / Overwrite buttons drive the recovery.
+/// Reload / Overwrite buttons workspace the recovery.
 ///
 /// Format-specific pre-checks live here so the gate is uniform
 /// across autosave and Cmd+S. Today only JSON is validated:
@@ -3534,9 +3534,9 @@ type SerTab = {
   /// Browser tab state.
   bi?: 1;
   /// `fullstack-58`: per-tab File Browser view state. Selection (`bs`),
-  /// drive-info-showing flag (`bd`), expanded directory paths (`be`),
+  /// workspace-info-showing flag (`bd`), expanded directory paths (`be`),
   /// and scroll offset (`bsc`). All optional; absence means "default
-  /// (no selection, drive info hidden, only the implicit root
+  /// (no selection, workspace info hidden, only the implicit root
   /// expanded, scroll at top)".
   bs?: string;
   bd?: 1;
@@ -3751,7 +3751,7 @@ function serializeTab(
       k: "b",
       ...(t.inspectorOpen ? { bi: 1 as const } : {}),
       ...(t.selected ? { bs: t.selected } : {}),
-      ...(t.showDrive ? { bd: 1 as const } : {}),
+      ...(t.showWorkspace ? { bd: 1 as const } : {}),
       ...(expanded.length > 0 ? { be: expanded } : {}),
       ...(t.scroll && t.scroll > 0 ? { bsc: Math.round(t.scroll) } : {}),
       ...(t.inspectorWidth && t.inspectorWidth > 0
@@ -3890,7 +3890,7 @@ export async function restoreLayout(
         const kind = sertab.k ?? "f";
         if (kind === "g") {
           const mode = restoreGraphMode(sertab.gm);
-          const scopeId = sertab.gs || "drive";
+          const scopeId = sertab.gs || "workspace";
           // `fullstack-81`: prefer `gn` (the persisted live
           // selection) as the post-restore selection seed so the
           // user lands back on the same focal node. The graph
@@ -3928,7 +3928,7 @@ export async function restoreLayout(
             title: "Files",
             inspectorOpen: sertab.bi === 1,
             ...(typeof sertab.bs === "string" ? { selected: sertab.bs } : {}),
-            ...(sertab.bd === 1 ? { showDrive: true } : {}),
+            ...(sertab.bd === 1 ? { showWorkspace: true } : {}),
             ...(Array.isArray(sertab.be) && sertab.be.length > 0
               ? { expanded: sertab.be.filter((p) => typeof p === "string") }
               : {}),
@@ -4358,7 +4358,7 @@ async function resolveMissingFileCheck(
 }
 
 /// Best-effort "did the file just move?" lookup. Runs after a
-/// genuine missing-file detection. Searches the drive by
+/// genuine missing-file detection. Searches the workspace by
 /// basename + filters to exact basename matches at a path
 /// different from the original; only surfaces a suggestion
 /// when there's a unique candidate. Ambiguous results leave

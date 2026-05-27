@@ -1,9 +1,9 @@
-//! Local-drive runtime and drive-window helpers.
+//! Local-workspace runtime and workspace-window helpers.
 //!
-//! chan-desktop opens local drives through the embedded chan-server
-//! `WorkspaceHost`. Each running drive is tracked in `AppState.serves`
+//! chan-desktop opens local workspaces through the embedded chan-server
+//! `WorkspaceHost`. Each running workspace is tracked in `AppState.serves`
 //! with its route prefix and token-bearing URL. chan-desktop links
-//! `chan-drive` and `chan-server` directly; there is no `chan`
+//! `chan-workspace` and `chan-server` directly; there is no `chan`
 //! binary at runtime. Registry mutations and feature toggles run
 //! in-process against the embedded host's shared `Library`, and
 //! local serving never spawns `chan serve`.
@@ -12,10 +12,10 @@ use std::hash::{DefaultHasher, Hash, Hasher};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 
-/// Per-process monotonic counter appended to every drive-window
+/// Per-process monotonic counter appended to every workspace-window
 /// label so the user can open more than one window for the same
-/// drive (local or tunneled). Tauri requires unique window labels
-/// per process; the prefix encodes the drive identity and the seq
+/// workspace (local or tunneled). Tauri requires unique window labels
+/// per process; the prefix encodes the workspace identity and the seq
 /// disambiguates instances.
 static WINDOW_SEQ: AtomicU64 = AtomicU64::new(0);
 
@@ -29,13 +29,13 @@ use crate::config::{self, WindowConfig};
 use crate::AppState;
 
 /// Tauri event emitted when any local runtime starts or stops. The
-/// frontend reacts by re-fetching the drive list.
+/// frontend reacts by re-fetching the workspace list.
 pub const SERVES_CHANGED: &str = "serves-changed";
 
 const MAX_WINDOWS_PER_WORKSPACE: usize = 10;
 
 /// Live state for one running serve. Held in `AppState.serves`
-/// keyed by canonical drive path.
+/// keyed by canonical workspace path.
 pub struct ServeHandle {
     prefix: String,
     pub url: Option<String>,
@@ -50,7 +50,7 @@ impl ServeHandle {
     }
 }
 
-/// Open a local drive through the embedded chan-server host.
+/// Open a local workspace through the embedded chan-server host.
 pub async fn start(app: AppHandle, state: Arc<AppState>, key: String) -> Result<(), String> {
     if state.serves.lock().unwrap().contains_key(&key) {
         return Ok(());
@@ -65,7 +65,7 @@ pub async fn start(app: AppHandle, state: Arc<AppState>, key: String) -> Result<
         if serves.contains_key(&key) {
             drop(serves);
             if let Err(e) = embedded.close_prefix(&prefix) {
-                tracing::warn!(key = %key, error = %e, "closing duplicate embedded drive failed");
+                tracing::warn!(key = %key, error = %e, "closing duplicate embedded workspace failed");
             }
             return Ok(());
         }
@@ -85,7 +85,7 @@ pub async fn start(app: AppHandle, state: Arc<AppState>, key: String) -> Result<
 fn url_prefix_from_local_url(url: &str) -> Result<String, String> {
     let parsed = url
         .parse::<url::Url>()
-        .map_err(|e| format!("parsing embedded drive URL: {e}"))?;
+        .map_err(|e| format!("parsing embedded workspace URL: {e}"))?;
     let path = parsed.path().trim_end_matches('/');
     let path = path.strip_suffix("/index.html").unwrap_or(path);
     if path.is_empty() {
@@ -95,7 +95,7 @@ fn url_prefix_from_local_url(url: &str) -> Result<String, String> {
     }
 }
 
-/// Stop a running serve. No-op if the drive isn't running. Removes
+/// Stop a running serve. No-op if the workspace isn't running. Removes
 /// the live entry before waiting so an immediate stop -> start can
 /// mount a fresh runtime instead of observing stale map state.
 pub fn stop(app: Option<&AppHandle>, state: &AppState, key: &str) {
@@ -106,7 +106,7 @@ pub fn stop(app: Option<&AppHandle>, state: &AppState, key: &str) {
 }
 
 /// Stop every running serve. Called from the Tauri Exit hook so
-/// embedded drive state shuts down before the desktop exits.
+/// embedded workspace state shuts down before the desktop exits.
 pub fn stop_all(state: &AppState) {
     let handles: Vec<(String, ServeHandle)> = state.serves.lock().unwrap().drain().collect();
     for (key, h) in handles {
@@ -117,7 +117,7 @@ pub fn stop_all(state: &AppState) {
 fn stop_handle(app: Option<&AppHandle>, state: &AppState, key: &str, handle: ServeHandle) {
     if let Some(embedded) = state.embedded.get() {
         if let Err(e) = embedded.close_prefix(&handle.prefix) {
-            tracing::warn!(key = %key, error = %e, "closing embedded drive failed");
+            tracing::warn!(key = %key, error = %e, "closing embedded workspace failed");
         }
     }
     if let Some(app) = app {
@@ -126,27 +126,27 @@ fn stop_handle(app: Option<&AppHandle>, state: &AppState, key: &str, handle: Ser
     }
 }
 
-/// Stable Tauri window-label prefix for a local drive. Used to
-/// recognise every window that belongs to the drive when the user
+/// Stable Tauri window-label prefix for a local workspace. Used to
+/// recognise every window that belongs to the workspace when the user
 /// has opened more than one (close-all on serve exit, capability
-/// matching). Tauri labels must match `[a-zA-Z0-9_-]+`, and drive
+/// matching). Tauri labels must match `[a-zA-Z0-9_-]+`, and workspace
 /// keys are filesystem paths, so we hash the key.
 pub fn drive_window_prefix(key: &str) -> String {
     let mut h = DefaultHasher::new();
     key.hash(&mut h);
-    format!("drive-{:016x}", h.finish())
+    format!("workspace-{:016x}", h.finish())
 }
 
-/// Fresh, unique window label for a new local-drive webview.
+/// Fresh, unique window label for a new local-workspace webview.
 /// Every call yields a distinct label so multi-window works; the
 /// prefix is still identifiable for cleanup. Format:
-/// `drive-<hash>-<seq>` where `seq` is a per-process atomic.
+/// `workspace-<hash>-<seq>` where `seq` is a per-process atomic.
 pub fn new_drive_window_label(key: &str) -> String {
     format!("{}-{}", drive_window_prefix(key), next_window_seq())
 }
 
-/// Window title for a local-drive webview: the drive path verbatim.
-/// `fullstack-b-14` swapped the earlier "chan drive: <basename>"
+/// Window title for a local-workspace webview: the workspace path verbatim.
+/// `fullstack-b-14` swapped the earlier "chan workspace: <basename>"
 /// shape after @@Alex flagged that the path is the more useful
 /// signal in the OS window switcher than the prefix + basename.
 fn drive_title(key: &str) -> String {
@@ -154,21 +154,21 @@ fn drive_title(key: &str) -> String {
 }
 
 /// Stable window-label prefix for a tunneled drive, namespaced
-/// separately from `drive-*` so a local drive path and a tunneled
-/// drive slug don't collide.
-pub fn tunnel_window_prefix(tenant_label: &str, drive: &str) -> String {
+/// separately from `workspace-*` so a local workspace path and a tunneled
+/// workspace slug don't collide.
+pub fn tunnel_window_prefix(tenant_label: &str, workspace: &str) -> String {
     let mut h = DefaultHasher::new();
     tenant_label.hash(&mut h);
-    drive.hash(&mut h);
+    workspace.hash(&mut h);
     format!("tunnel-{:016x}", h.finish())
 }
 
 /// Fresh, unique window label for a tunneled drive webview. Same
 /// shape as `new_drive_window_label`.
-pub fn new_tunnel_window_label(tenant_label: &str, drive: &str) -> String {
+pub fn new_tunnel_window_label(tenant_label: &str, workspace: &str) -> String {
     format!(
         "{}-{}",
-        tunnel_window_prefix(tenant_label, drive),
+        tunnel_window_prefix(tenant_label, workspace),
         next_window_seq()
     )
 }
@@ -185,14 +185,16 @@ pub fn new_outbound_window_label(id: &str) -> String {
     format!("{}-{}", outbound_window_prefix(id), next_window_seq())
 }
 
-/// True when a Tauri label belongs to a per-drive webview.
+/// True when a Tauri label belongs to a per-workspace webview.
 pub fn is_drive_webview_label(label: &str) -> bool {
-    label.starts_with("drive-") || label.starts_with("tunnel-") || label.starts_with("outbound-")
+    label.starts_with("workspace-")
+        || label.starts_with("tunnel-")
+        || label.starts_with("outbound-")
 }
 
-/// Spawn a new local-drive webview window pointing at `url`. Each
-/// call opens an independent window; multiple windows per drive are
-/// supported. Pops the most-recent WindowConfig for this drive (if
+/// Spawn a new local-workspace webview window pointing at `url`. Each
+/// call opens an independent window; multiple windows per workspace are
+/// supported. Pops the most-recent WindowConfig for this workspace (if
 /// any) so the new window reuses the previous `?w=<label>` and URL
 /// hash, restoring panes / tabs (via `session.json`) and overlay
 /// state across the close/reopen cycle. A user-initiated close
@@ -200,7 +202,7 @@ pub fn is_drive_webview_label(label: &str) -> bool {
 /// open repeats the restore. The Tauri close handler does NOT stop
 /// the underlying local runtime; the On toggle (plus
 /// `close_local_drive_windows` on runtime teardown) remains the single
-/// authority on drive lifecycle.
+/// authority on workspace lifecycle.
 pub fn spawn_local_drive_window(app: &AppHandle, key: &str, url: &str) -> Result<(), String> {
     ensure_window_capacity(app, &drive_window_prefix(key))?;
     let config_key = config::local_window_key(key);
@@ -218,31 +220,31 @@ pub fn spawn_local_drive_window(app: &AppHandle, key: &str, url: &str) -> Result
     build_drive_window(app, &label, &title, url, &url_hash, config_key, zoom_level)
 }
 
-/// Spawn a new tunneled-drive webview window. Same multi-window
+/// Spawn a new tunneled-workspace webview window. Same multi-window
 /// semantics and config-stack restore as the local variant.
 pub fn spawn_tunneled_drive_window(
     app: &AppHandle,
     tenant_label: &str,
-    drive: &str,
+    workspace: &str,
     url: &str,
 ) -> Result<(), String> {
-    ensure_window_capacity(app, &tunnel_window_prefix(tenant_label, drive))?;
-    let config_key = config::tunnel_window_key(tenant_label, drive);
-    let prefix = tunnel_window_prefix(tenant_label, drive);
+    ensure_window_capacity(app, &tunnel_window_prefix(tenant_label, workspace))?;
+    let config_key = config::tunnel_window_key(tenant_label, workspace);
+    let prefix = tunnel_window_prefix(tenant_label, workspace);
     let restore = pop_compatible_config(app, &config_key, &prefix);
     let label = match restore.as_ref() {
         Some(c) => c.window_label.clone(),
-        None => new_tunnel_window_label(tenant_label, drive),
+        None => new_tunnel_window_label(tenant_label, workspace),
     };
     let url_hash = restore
         .as_ref()
         .map(|c| c.url_hash.clone())
         .unwrap_or_default();
     let zoom_level = restore.as_ref().map(|c| c.zoom_level).unwrap_or(1.0);
-    // `fullstack-b-14`: matches the local-drive title shape; the
+    // `fullstack-b-14`: matches the local-workspace title shape; the
     // tunneled drive has no local filesystem path, so we use the
-    // closest analog ("<tenant>·<drive>") with no prefix.
-    let title = format!("{tenant_label} \u{00b7} {drive}");
+    // closest analog ("<tenant>·<workspace>") with no prefix.
+    let title = format!("{tenant_label} \u{00b7} {workspace}");
     build_drive_window(app, &label, &title, url, &url_hash, config_key, zoom_level)
 }
 
@@ -273,7 +275,7 @@ pub fn spawn_outbound_drive_window(
 
 /// Pop the top-of-stack window config for `config_key` only if the
 /// stored label is safe to reuse. The label must still match the
-/// drive's current hash prefix (defends against the drive key
+/// workspace's current hash prefix (defends against the workspace key
 /// changing canonicalisation under us) and must not already be
 /// live in this process (Tauri requires unique labels per
 /// process). When the popped entry fails either check, it gets
@@ -305,12 +307,12 @@ fn pop_compatible_config(
     Some(entry)
 }
 
-/// Build and show a chan-style drive webview window on the main
+/// Build and show a chan-style workspace webview window on the main
 /// thread. Internal: call `spawn_local_drive_window` /
 /// `spawn_tunneled_drive_window` / `spawn_outbound_drive_window`
 /// from outside. Centralising the
 /// key-bridge JS, the size defaults, the zoom-hotkey polyfill, and
-/// the drag-drop handler off in one place means drive UX changes
+/// the drag-drop handler off in one place means workspace UX changes
 /// don't fork between the local and tunneled paths.
 ///
 /// `url_hash_seed` carries any popped URL hash from the
@@ -364,8 +366,8 @@ fn build_drive_window(
             // phase listener calls preventDefault before the
             // polyfill's bubble-phase listener sees the keydown).
             // Requires `core:webview:allow-set-webview-zoom` on
-            // drive-* / tunnel-* / outbound-* windows per
-            // capabilities/drive.json.
+            // workspace-* / tunnel-* / outbound-* windows per
+            // capabilities/workspace.json.
             .zoom_hotkeys_enabled(true)
             // Hand HTML5 drag-and-drop to the page. Tauri's OS-level
             // drag handler swallows dragover events otherwise, so
@@ -411,11 +413,11 @@ fn build_drive_window(
                 });
             }
             Err(e) => {
-                tracing::warn!(label = %label_owned, error = %e, "opening drive window failed")
+                tracing::warn!(label = %label_owned, error = %e, "opening workspace window failed")
             }
         }
     });
-    res.map_err(|e| format!("scheduling drive window for {window_label}: {e}"))
+    res.map_err(|e| format!("scheduling workspace window for {window_label}: {e}"))
 }
 
 /// Snapshot the closing window's URL hash and push the resulting
@@ -428,7 +430,7 @@ fn build_drive_window(
 ///
 /// `fullstack-b-19`: also drains the live zoom level for this
 /// window into `WindowConfig.zoom_level` so the next open of the
-/// same drive restores the zoom.
+/// same workspace restores the zoom.
 fn capture_window_config_on_close(app: &AppHandle, window_label: &str, config_key: &str) {
     let Some(window) = app.get_webview_window(window_label) else {
         return;
@@ -474,21 +476,21 @@ fn ensure_window_capacity(app: &AppHandle, prefix: &str) -> Result<(), String> {
     Ok(())
 }
 
-/// Destroy every webview window opened for this local drive when
+/// Destroy every webview window opened for this local workspace when
 /// the local runtime is closed. Walks `webview_windows()` and
 /// matches by prefix because the user may have opened several
-/// windows for the same drive.
+/// windows for the same workspace.
 pub fn close_local_drive_windows(app: &AppHandle, key: &str) {
     close_windows_with_prefix(app, &drive_window_prefix(key))
 }
 
 /// Destroy every webview window opened for this tunneled drive.
-/// Used by the tunnel supervisor when a (label, drive) pair drops
+/// Used by the tunnel supervisor when a (label, workspace) pair drops
 /// out of the registry; the remote has gone away, so the per-tenant
 /// listener no longer routes for it and any open window now points
 /// at nothing useful.
-pub fn close_tunneled_drive_windows(app: &AppHandle, tenant_label: &str, drive: &str) {
-    close_windows_with_prefix(app, &tunnel_window_prefix(tenant_label, drive))
+pub fn close_tunneled_drive_windows(app: &AppHandle, tenant_label: &str, workspace: &str) {
+    close_windows_with_prefix(app, &tunnel_window_prefix(tenant_label, workspace))
 }
 
 /// Destroy every webview window opened for this outbound URL
@@ -497,8 +499,8 @@ pub fn close_outbound_drive_windows(app: &AppHandle, id: &str) {
     close_windows_with_prefix(app, &outbound_window_prefix(id))
 }
 
-/// Destroy every tunneled-drive webview window in the process,
-/// regardless of which (label, drive) it belongs to. Used by the
+/// Destroy every tunneled-workspace webview window in the process,
+/// regardless of which (label, workspace) it belongs to. Used by the
 /// tunnel module on `stop_listening`: the tunnel listener and
 /// every per-tenant listener are about to be cancelled, so the
 /// open windows would all error on their next request anyway.
@@ -526,7 +528,7 @@ fn close_windows_with_prefix(app: &AppHandle, prefix: &str) {
     });
 }
 
-/// Native keyboard shortcuts for drive webviews. Translates chords
+/// Native keyboard shortcuts for workspace webviews. Translates chords
 /// into the host-agnostic `chan:command` window event that chan's
 /// App.svelte listens for. Runs before any page script, in capture
 /// phase with stopImmediatePropagation, so this script is the sole
@@ -710,14 +712,14 @@ mod tests {
     #[test]
     fn invoke_handler_registers_drive_features_ipcs() {
         // `fullstack-b-28a`: the launcher's expand panel calls
-        // `get_drive_features` on first open + `set_drive_features`
+        // `get_workspace_features` on first open + `set_workspace_features`
         // on every checkbox flip. Pin both sides so a future rename
         // gets caught.
         const MAIN_RS: &str = include_str!("main.rs");
-        assert!(MAIN_RS.contains("get_drive_features,"));
-        assert!(MAIN_RS.contains("set_drive_features,"));
-        assert!(MAIN_RS.contains("fn get_drive_features("));
-        assert!(MAIN_RS.contains("fn set_drive_features("));
+        assert!(MAIN_RS.contains("get_workspace_features,"));
+        assert!(MAIN_RS.contains("set_workspace_features,"));
+        assert!(MAIN_RS.contains("fn get_workspace_features("));
+        assert!(MAIN_RS.contains("fn set_workspace_features("));
     }
 
     #[test]
@@ -734,22 +736,22 @@ mod tests {
     #[test]
     fn invoke_handler_registers_default_drive_ipcs() {
         const MAIN_RS: &str = include_str!("main.rs");
-        assert!(MAIN_RS.contains("default_drive_status,"));
-        assert!(MAIN_RS.contains("choose_default_drive,"));
-        assert!(MAIN_RS.contains("create_default_drive,"));
-        assert!(MAIN_RS.contains("factory_reset_default_drive,"));
-        assert!(MAIN_RS.contains("fn default_drive_status("));
-        assert!(MAIN_RS.contains("fn choose_default_drive("));
-        assert!(MAIN_RS.contains("fn create_default_drive("));
-        assert!(MAIN_RS.contains("fn factory_reset_default_drive("));
+        assert!(MAIN_RS.contains("default_workspace_status,"));
+        assert!(MAIN_RS.contains("choose_default_workspace,"));
+        assert!(MAIN_RS.contains("create_default_workspace,"));
+        assert!(MAIN_RS.contains("factory_reset_default_workspace,"));
+        assert!(MAIN_RS.contains("fn default_workspace_status("));
+        assert!(MAIN_RS.contains("fn choose_default_workspace("));
+        assert!(MAIN_RS.contains("fn create_default_workspace("));
+        assert!(MAIN_RS.contains("fn factory_reset_default_workspace("));
     }
 
     #[test]
     fn pick_and_add_shows_preflight_dialog_before_add_drive() {
         // `fullstack-b-28b` slice iii: pickAndAdd MUST gate the
-        // add_drive invocation behind the pre-flight modal so the
+        // add_workspace invocation behind the pre-flight modal so the
         // user always sees the round-2-plan explanatory copy +
-        // the feature toggles BEFORE chan-drive's BOOT runs.
+        // the feature toggles BEFORE chan-workspace's BOOT runs.
         const MAIN_JS: &str = include_str!("../../src/main.js");
         assert!(
             MAIN_JS.contains("showPreflightDialog("),
@@ -757,7 +759,7 @@ mod tests {
         );
         assert!(
             MAIN_JS.contains("features: choice.features"),
-            "main.js must thread the pre-flight choice through to add_drive",
+            "main.js must thread the pre-flight choice through to add_workspace",
         );
     }
 
@@ -794,26 +796,26 @@ mod tests {
     #[test]
     fn invoke_handler_registers_compute_drive_preflight() {
         // `fullstack-b-28b` slice iv: the pre-flight modal calls
-        // `compute_drive_preflight` after mount to populate the
+        // `compute_workspace_preflight` after mount to populate the
         // report rows. Mirrors the other IPC registration pins
         // so a rename catches deliberately.
         const MAIN_RS: &str = include_str!("main.rs");
-        assert!(MAIN_RS.contains("compute_drive_preflight,"));
-        assert!(MAIN_RS.contains("fn compute_drive_preflight("));
+        assert!(MAIN_RS.contains("compute_workspace_preflight,"));
+        assert!(MAIN_RS.contains("fn compute_workspace_preflight("));
     }
 
     #[test]
     fn preflight_modal_renders_report_rows_after_b28b_iv() {
         // `fullstack-b-28b` slice iv: the modal kicks off
-        // `compute_drive_preflight` after mount and renders the
+        // `compute_workspace_preflight` after mount and renders the
         // returned facts via `renderPreflightReport`. Pin both
         // the invoke + the renderer + the load-bearing report
         // labels so a future refactor can't silently revert to
         // the slice-iii "toggles only" shape.
         const MAIN_JS: &str = include_str!("../../src/main.js");
         assert!(
-            MAIN_JS.contains("invoke('compute_drive_preflight'"),
-            "main.js must invoke compute_drive_preflight from showPreflightDialog",
+            MAIN_JS.contains("invoke('compute_workspace_preflight'"),
+            "main.js must invoke compute_workspace_preflight from showPreflightDialog",
         );
         assert!(
             MAIN_JS.contains("renderPreflightReport(reportEl, report)"),
@@ -836,7 +838,7 @@ mod tests {
     #[test]
     fn registry_and_feature_commands_run_in_process_not_via_chan_cli() {
         // The in-process registry refactor dropped the `chan`
-        // binary entirely: `add_drive`, `remove_workspace`, and the
+        // binary entirely: `add_workspace`, `remove_workspace`, and the
         // feature commands route through the embedded host's shared
         // `Library` / live `Arc<Workspace>` rather than spawning chan.
         // Pin the in-process call shape so a future change can't
@@ -849,11 +851,11 @@ mod tests {
         );
         assert!(
             MAIN_RS.contains("register_workspace") && MAIN_RS.contains("unregister_workspace"),
-            "add_drive/remove_workspace must use Library register/unregister in-process",
+            "add_workspace/remove_workspace must use Library register/unregister in-process",
         );
         assert!(
             MAIN_RS.contains("set_semantic_enabled") && MAIN_RS.contains("set_reports_enabled"),
-            "feature toggles must call chan-drive set_* in-process",
+            "feature toggles must call chan-workspace set_* in-process",
         );
         assert!(
             !MAIN_RS.contains("read_features_via_chan_index_status"),
@@ -902,12 +904,12 @@ mod tests {
         // Rust registration above.
         const MAIN_JS: &str = include_str!("../../src/main.js");
         assert!(
-            MAIN_JS.contains("invoke('get_drive_features'"),
-            "main.js must invoke get_drive_features on panel open"
+            MAIN_JS.contains("invoke('get_workspace_features'"),
+            "main.js must invoke get_workspace_features on panel open"
         );
         assert!(
-            MAIN_JS.contains("invoke('set_drive_features'"),
-            "main.js must invoke set_drive_features on checkbox change"
+            MAIN_JS.contains("invoke('set_workspace_features'"),
+            "main.js must invoke set_workspace_features on checkbox change"
         );
     }
 
@@ -915,27 +917,27 @@ mod tests {
     fn launcher_prompts_for_existing_user_default_drive() {
         const MAIN_JS: &str = include_str!("../../src/main.js");
         assert!(
-            MAIN_JS.contains("invoke('default_drive_status'"),
-            "launcher must query default-drive migration status",
+            MAIN_JS.contains("invoke('default_workspace_status'"),
+            "launcher must query default-workspace migration status",
         );
         assert!(
             MAIN_JS.contains("showDefaultDriveDialog"),
-            "launcher must prompt when a default drive choice is needed",
+            "launcher must prompt when a default workspace choice is needed",
         );
         assert!(
-            MAIN_JS.contains("invoke('choose_default_drive'"),
-            "launcher must let users choose an existing default drive",
+            MAIN_JS.contains("invoke('choose_default_workspace'"),
+            "launcher must let users choose an existing default workspace",
         );
         assert!(
-            MAIN_JS.contains("invoke('create_default_drive'"),
+            MAIN_JS.contains("invoke('create_default_workspace'"),
             "launcher must let users create Documents/Chan as default",
         );
         assert!(
             MAIN_JS.contains("showMissingDefaultDriveDialog"),
-            "launcher must confirm before factory-resetting missing default drive metadata",
+            "launcher must confirm before factory-resetting missing default workspace metadata",
         );
         assert!(
-            MAIN_JS.contains("invoke('factory_reset_default_drive'"),
+            MAIN_JS.contains("invoke('factory_reset_default_workspace'"),
             "launcher must route confirmed missing-default reset to Rust",
         );
     }
@@ -1000,17 +1002,17 @@ mod tests {
 
     #[test]
     fn embedded_url_prefix_parser_strips_query_and_trailing_slash() {
-        let prefix =
-            url_prefix_from_local_url("http://127.0.0.1:1234/drive-abcd/?t=token").expect("prefix");
-        assert_eq!(prefix, "/drive-abcd");
+        let prefix = url_prefix_from_local_url("http://127.0.0.1:1234/workspace-abcd/?t=token")
+            .expect("prefix");
+        assert_eq!(prefix, "/workspace-abcd");
     }
 
     #[test]
     fn embedded_url_prefix_parser_strips_index_html() {
         let prefix =
-            url_prefix_from_local_url("http://127.0.0.1:1234/drive-abcd/index.html?t=token")
+            url_prefix_from_local_url("http://127.0.0.1:1234/workspace-abcd/index.html?t=token")
                 .expect("prefix");
-        assert_eq!(prefix, "/drive-abcd");
+        assert_eq!(prefix, "/workspace-abcd");
     }
 
     #[test]
@@ -1035,7 +1037,7 @@ mod tests {
         // (Cmd+Shift+M), and `app.terminal.richPrompt` (Cmd+P) as
         // direct chords with context-aware semantics. `phase-12
         // lane-e` (addendum-2) brings `app.search.toggle` back as a
-        // direct chord too (Cmd+S = drive-wide search), so it moves to
+        // direct chord too (Cmd+S = workspace-wide search), so it moves to
         // the keeps-list below. The remaining absences catch
         // accidental reverts of chords that should still go through
         // Pane Mode only.
@@ -1072,10 +1074,10 @@ mod tests {
 
     #[test]
     fn drive_title_is_the_path_verbatim() {
-        // `fullstack-b-14`: titles are the drive path so the OS
+        // `fullstack-b-14`: titles are the workspace path so the OS
         // window switcher surfaces the disambiguating signal.
-        // Earlier shape "chan drive: <basename>" lost the path
-        // detail and collided when two drives shared a basename.
+        // Earlier shape "chan workspace: <basename>" lost the path
+        // detail and collided when two workspaces shared a basename.
         assert_eq!(
             drive_title("/Users/alex/dev/github.com/fiorix/chan"),
             "/Users/alex/dev/github.com/fiorix/chan",
@@ -1086,7 +1088,7 @@ mod tests {
         assert_eq!(drive_title(""), "");
     }
 
-    // `fullstack-b-7`: drive and tunnel webviews host the SPA, which
+    // `fullstack-b-7`: workspace and tunnel webviews host the SPA, which
     // routes external http(s) link clicks through tauri-plugin-opener
     // via the `plugin:opener|open_url` IPC. Without these permissions
     // the IPC denies, the SPA falls back to the clipboard-copy notify
@@ -1094,7 +1096,7 @@ mod tests {
     // user (the bug Alex reported on 2026-05-20). Pin the capability
     // shape here so a future capability-file edit can't silently drop
     // the permissions without the test catching it.
-    const DRIVE_CAPABILITY_JSON: &str = include_str!("../capabilities/drive.json");
+    const DRIVE_CAPABILITY_JSON: &str = include_str!("../capabilities/workspace.json");
     const DEFAULT_CAPABILITY_JSON: &str = include_str!("../capabilities/default.json");
     const APP_PERMISSIONS_TOML: &str = include_str!("../permissions/app.toml");
 
@@ -1151,25 +1153,25 @@ mod tests {
     fn drive_capability_grants_opener_to_drive_tunnel_and_outbound_windows() {
         let windows = capability_windows(DRIVE_CAPABILITY_JSON);
         assert!(
-            windows.iter().any(|w| w == "drive-*"),
-            "drive capability must target drive-* windows: {windows:?}",
+            windows.iter().any(|w| w == "workspace-*"),
+            "workspace capability must target workspace-* windows: {windows:?}",
         );
         assert!(
             windows.iter().any(|w| w == "tunnel-*"),
-            "drive capability must target tunnel-* windows: {windows:?}",
+            "workspace capability must target tunnel-* windows: {windows:?}",
         );
         assert!(
             windows.iter().any(|w| w == "outbound-*"),
-            "drive capability must target outbound-* windows: {windows:?}",
+            "workspace capability must target outbound-* windows: {windows:?}",
         );
         let perms = capability_permissions(DRIVE_CAPABILITY_JSON);
         assert!(
-            perms.iter().any(|p| p == "drive-window"),
-            "drive capability must include drive-window app commands: {perms:?}",
+            perms.iter().any(|p| p == "workspace-window"),
+            "workspace capability must include workspace-window app commands: {perms:?}",
         );
         assert!(
             perms.iter().any(|p| p == "opener:allow-open-url"),
-            "drive capability must include opener:allow-open-url: {perms:?}",
+            "workspace capability must include opener:allow-open-url: {perms:?}",
         );
     }
 
@@ -1177,22 +1179,22 @@ mod tests {
     fn drive_capability_covers_loopback_server_urls() {
         // Workspace windows load chan-server through loopback HTTP
         // origins. Without a remote URL match, Tauri omits the IPC
-        // bridge and drive-window app commands such as reload_window
+        // bridge and workspace-window app commands such as reload_window
         // or the zoom chords never reach Rust.
         let remote_urls = capability_remote_urls(DRIVE_CAPABILITY_JSON);
         assert!(
             remote_urls.iter().any(|u| u == "http://127.0.0.1:*"),
-            "drive capability must include 127.0.0.1 loopback: {remote_urls:?}",
+            "workspace capability must include 127.0.0.1 loopback: {remote_urls:?}",
         );
         assert!(
             remote_urls.iter().any(|u| u == "http://localhost:*"),
-            "drive capability must include localhost loopback: {remote_urls:?}",
+            "workspace capability must include localhost loopback: {remote_urls:?}",
         );
     }
 
     #[test]
     fn app_acl_allows_drive_window_commands() {
-        let drive_set = app_permission_set("drive-window");
+        let drive_set = app_permission_set("workspace-window");
         for expected in [
             "allow-reload-window",
             "allow-open-devtools",
@@ -1203,7 +1205,7 @@ mod tests {
         ] {
             assert!(
                 drive_set.iter().any(|p| p == expected),
-                "drive-window app permission set must include {expected}: {drive_set:?}",
+                "workspace-window app permission set must include {expected}: {drive_set:?}",
             );
         }
     }

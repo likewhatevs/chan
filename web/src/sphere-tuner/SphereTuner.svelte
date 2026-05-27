@@ -5,7 +5,7 @@
   // The tuner exposes every shading knob the production graph uses
   // (gradient stops, hotspot position + size, optional specular dot,
   // icon scale, border treatment) as live sliders against a graph
-  // sized like the user's real drive (~90 nodes). Pick values here,
+  // sized like the user's real workspace (~90 nodes). Pick values here,
   // copy them back into `svgSphereIcon` in
   // `components/GraphPanel.svelte` when satisfied. The "copy values"
   // button at the bottom emits a ready-to-paste TS fragment with
@@ -374,7 +374,7 @@
       } else if (n.kind === "mention") {
         // Treat mention-shaped fake nodes as contacts so the
         // tuner shows the person icon (closer to what the user
-        // sees in their real drive than the bare @ glyph).
+        // sees in their real workspace than the bare @ glyph).
         data.kind = "contact";
       } else {
         data.kind = "tag";

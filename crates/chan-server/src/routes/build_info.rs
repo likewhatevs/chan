@@ -16,7 +16,7 @@ struct BuildFeatures {
     /// feature being on at build time. When false, search falls back
     /// to BM25-only and the Settings "Search" section reflects that.
     /// chan-server itself doesn't gate on this feature; we forward
-    /// chan-drive's compile-time flag as exposed through the
+    /// chan-workspace's compile-time flag as exposed through the
     /// `chan_workspace::has_embeddings` helper.
     embeddings: bool,
 }
@@ -25,7 +25,7 @@ pub async fn api_build_info() -> Response {
     Json(BuildInfo {
         version: env!("CARGO_PKG_VERSION"),
         features: BuildFeatures {
-            // Mirrors chan-drive's `embeddings` cargo feature. ON in
+            // Mirrors chan-workspace's `embeddings` cargo feature. ON in
             // default builds; OFF on platforms where candle won't
             // build (currently iOS), which use `--no-default-features`.
             embeddings: cfg!(feature = "embeddings"),

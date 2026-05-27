@@ -288,8 +288,8 @@ fn import_metadata_archive(
             replace_subtree(&drive_paths, &payload, subtree)?;
         }
         if opts.rescan {
-            let drive = lib.open_workspace(root)?;
-            drive.reindex(None)?;
+            let workspace = lib.open_workspace(root)?;
+            workspace.reindex(None)?;
         }
         Ok(MetadataImportReport {
             manifest,
@@ -629,21 +629,21 @@ fn guard_scm_identity(manifest: &MetadataManifest, target: Option<&ScmIdentity>)
     };
     let Some(target) = target else {
         return Err(ChanError::Io(
-            "metadata archive was exported from an SCM-backed drive, but target has no SCM identity"
+            "metadata archive was exported from an SCM-backed workspace, but target has no SCM identity"
                 .into(),
         ));
     };
     if !source.remotes.is_empty() || !target.remotes.is_empty() {
         if source.remotes != target.remotes {
             return Err(ChanError::Io(
-                "metadata archive SCM remotes do not match target drive".into(),
+                "metadata archive SCM remotes do not match target workspace".into(),
             ));
         }
         return Ok(());
     }
     if source.head.is_some() && target.head.is_some() && source.head != target.head {
         return Err(ChanError::Io(
-            "metadata archive SCM head does not match target drive".into(),
+            "metadata archive SCM head does not match target workspace".into(),
         ));
     }
     Ok(())
@@ -785,8 +785,8 @@ mod tests {
             archive_format_version: 1,
             chan_version: "0.13.0-test".into(),
             created_at: "2026-05-24T00:00:00Z".into(),
-            source_root: "/tmp/drive".into(),
-            source_metadata_key: "-tmp-drive-deadbeef".into(),
+            source_root: "/tmp/workspace".into(),
+            source_metadata_key: "-tmp-workspace-deadbeef".into(),
             metadata_schema: MetadataSchema {
                 path_key_scheme: PATH_KEY_SCHEME.into(),
                 index_schema_version: 3,

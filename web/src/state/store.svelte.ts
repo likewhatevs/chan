@@ -2,8 +2,8 @@
 // One module-level singleton per concern; components import them directly.
 
 import type {
-  DriveInfo,
-  DriveWarning,
+  WorkspaceInfo,
+  WorkspaceWarning,
   HybridSurfaceKind,
   HybridSurfaceThemes,
   IndexStatus,
@@ -62,12 +62,12 @@ import { SETTINGS_DISABLED, withTokenQuery } from "../api/transport";
 import { uiConfirm } from "./confirm.svelte";
 import { applyEditorToolPreferences } from "./editorTools.svelte";
 import { fbWatchResyncAll } from "./fbWatch.svelte";
-export const drive = $state<{ info: DriveInfo | null }>({ info: null });
+export const workspace = $state<{ info: WorkspaceInfo | null }>({ info: null });
 
-/// Display name for the active drive. The server computes this from
+/// Display name for the active workspace. The server computes this from
 /// the path; it is not user-managed registry metadata.
-export function driveDisplayName(): string {
-  const info = drive.info;
+export function workspaceDisplayName(): string {
+  const info = workspace.info;
   if (!info) return "";
   const label = info.label?.trim();
   if (label) return label;
@@ -126,7 +126,7 @@ function effectiveTheme(choice: ThemeChoice): "light" | "dark" {
 
 export const ui = $state<{
   status: string | null;
-  /// Notification kind drives the auto-dismiss policy. Transient
+  /// Notification kind workspaces the auto-dismiss policy. Transient
   /// statuses (action confirmations: "Copied path", "Saved", short
   /// notify() pings) clear themselves after a short window;
   /// persistent statuses (in-flight ops: "Moving…", errors) stay
@@ -135,7 +135,7 @@ export const ui = $state<{
   /// writes go through `setTransientStatus` (or `notify()` which
   /// routes through that helper).
   statusKind: "transient" | "persistent" | null;
-  statusAction: { kind: "drive-warnings"; label: string } | null;
+  statusAction: { kind: "workspace-warnings"; label: string } | null;
   /// Used to nudge tabs to reload on external changes.
   lastWatch: number;
   ws: WsStatus;
@@ -146,7 +146,7 @@ export const ui = $state<{
   theme: "light" | "dark";
   /// Set when the SPA shell loaded but bootstrap's first API call
   /// returned 401 and there was no token in the URL or sessionStorage.
-  /// Drives `MissingTokenOverlay`. Users land here when they copy the
+  /// Workspaces `MissingTokenOverlay`. Users land here when they copy the
   /// loopback URL out of the address bar but lose the `?t=...` token
   /// the server prints at launch.
   authMissing: boolean;
@@ -169,9 +169,9 @@ export const HYBRID_SURFACE_KINDS: readonly HybridSurfaceKind[] = [
   "infographics",
 ];
 
-export const driveWarningsDialog = $state<{
+export const workspaceWarningsDialog = $state<{
   open: boolean;
-  warnings: DriveWarning[];
+  warnings: WorkspaceWarning[];
   busyKey: string | null;
   error: string | null;
   notice: string | null;
@@ -284,100 +284,100 @@ setNotifyHandler((msg) => {
   setTransientStatus(msg);
 });
 
-const dismissedDriveWarningKeys = new Set<string>();
+const dismissedWorkspaceWarningKeys = new Set<string>();
 
-function driveWarningKey(warning: DriveWarning): string {
+function workspaceWarningKey(warning: WorkspaceWarning): string {
   return `${warning.kind}\u0000${warning.path}\u0000${warning.message}`;
 }
 
-function activeDriveWarnings(info: DriveInfo): DriveWarning[] {
+function activeWorkspaceWarnings(info: WorkspaceInfo): WorkspaceWarning[] {
   return (info.warnings ?? []).filter(
-    (warning) => !dismissedDriveWarningKeys.has(driveWarningKey(warning)),
+    (warning) => !dismissedWorkspaceWarningKeys.has(workspaceWarningKey(warning)),
   );
 }
 
-function driveWarningStatusLabel(warnings: DriveWarning[]): string {
-  if (warnings.length === 1) return driveWarningLabel(warnings[0]!);
-  return `${warnings.length} drive warnings found`;
+function workspaceWarningStatusLabel(warnings: WorkspaceWarning[]): string {
+  if (warnings.length === 1) return workspaceWarningLabel(warnings[0]!);
+  return `${warnings.length} workspace warnings found`;
 }
 
-export function driveWarningLabel(warning: DriveWarning): string {
+export function workspaceWarningLabel(warning: WorkspaceWarning): string {
   const prefix =
     warning.kind === "broken_draft"
       ? "Broken draft"
       : warning.kind === "broken_rich_prompt"
         ? "Broken Rich Prompt"
-        : "Drive warning";
+        : "Workspace warning";
   return `${prefix} ${warning.path}: ${warning.message}`;
 }
 
-export function canDiscardDriveWarning(warning: DriveWarning): boolean {
+export function canDiscardWorkspaceWarning(warning: WorkspaceWarning): boolean {
   if (warning.kind !== "broken_draft" && warning.kind !== "broken_rich_prompt") {
     return false;
   }
   return /^Drafts\/[^/]+$/.test(warning.path);
 }
 
-function surfaceDriveWarnings(info: DriveInfo): void {
-  const warnings = activeDriveWarnings(info);
-  driveWarningsDialog.warnings = warnings;
+function surfaceWorkspaceWarnings(info: WorkspaceInfo): void {
+  const warnings = activeWorkspaceWarnings(info);
+  workspaceWarningsDialog.warnings = warnings;
   if (warnings.length === 0) {
     if (
-      ui.statusAction?.kind === "drive-warnings" &&
+      ui.statusAction?.kind === "workspace-warnings" &&
       ui.statusAction.label === ui.status
     ) {
       ui.status = null;
       ui.statusKind = null;
     }
     ui.statusAction = null;
-    if (driveWarningsDialog.open) {
-      driveWarningsDialog.open = false;
+    if (workspaceWarningsDialog.open) {
+      workspaceWarningsDialog.open = false;
     }
     return;
   }
-  const label = driveWarningStatusLabel(warnings);
+  const label = workspaceWarningStatusLabel(warnings);
   ui.status = label;
   ui.statusKind = "persistent";
-  ui.statusAction = { kind: "drive-warnings", label };
+  ui.statusAction = { kind: "workspace-warnings", label };
 }
 
-export function openDriveWarningsDialog(): void {
-  driveWarningsDialog.error = null;
-  driveWarningsDialog.notice = null;
-  driveWarningsDialog.open = true;
+export function openWorkspaceWarningsDialog(): void {
+  workspaceWarningsDialog.error = null;
+  workspaceWarningsDialog.notice = null;
+  workspaceWarningsDialog.open = true;
 }
 
-export function closeDriveWarningsDialog(): void {
-  if (driveWarningsDialog.busyKey !== null) return;
-  driveWarningsDialog.open = false;
+export function closeWorkspaceWarningsDialog(): void {
+  if (workspaceWarningsDialog.busyKey !== null) return;
+  workspaceWarningsDialog.open = false;
 }
 
-export async function copyDriveWarningPath(warning: DriveWarning): Promise<void> {
+export async function copyWorkspaceWarningPath(warning: WorkspaceWarning): Promise<void> {
   try {
     if (!navigator.clipboard) {
       throw new Error("Clipboard unavailable");
     }
     await navigator.clipboard.writeText(warning.path);
-    driveWarningsDialog.error = null;
-    driveWarningsDialog.notice = "Copied path";
+    workspaceWarningsDialog.error = null;
+    workspaceWarningsDialog.notice = "Copied path";
   } catch (e) {
-    driveWarningsDialog.notice = null;
-    driveWarningsDialog.error =
+    workspaceWarningsDialog.notice = null;
+    workspaceWarningsDialog.error =
       e instanceof Error ? e.message : "Failed to copy warning path";
   }
 }
 
-export function dismissDriveWarning(warning: DriveWarning): void {
-  dismissedDriveWarningKeys.add(driveWarningKey(warning));
-  driveWarningsDialog.error = null;
-  driveWarningsDialog.notice = "Dismissed for this session";
-  if (drive.info) {
-    surfaceDriveWarnings(drive.info);
+export function dismissWorkspaceWarning(warning: WorkspaceWarning): void {
+  dismissedWorkspaceWarningKeys.add(workspaceWarningKey(warning));
+  workspaceWarningsDialog.error = null;
+  workspaceWarningsDialog.notice = "Dismissed for this session";
+  if (workspace.info) {
+    surfaceWorkspaceWarnings(workspace.info);
   }
 }
 
-export async function discardDriveWarning(warning: DriveWarning): Promise<void> {
-  if (!canDiscardDriveWarning(warning)) return;
+export async function discardWorkspaceWarning(warning: WorkspaceWarning): Promise<void> {
+  if (!canDiscardWorkspaceWarning(warning)) return;
   const confirmed = await uiConfirm({
     title: "Discard broken Draft metadata?",
     message: `Move ${warning.path} to metadata trash?`,
@@ -386,26 +386,26 @@ export async function discardDriveWarning(warning: DriveWarning): Promise<void> 
   });
   if (!confirmed) return;
 
-  const key = driveWarningKey(warning);
-  driveWarningsDialog.busyKey = key;
-  driveWarningsDialog.error = null;
-  driveWarningsDialog.notice = null;
+  const key = workspaceWarningKey(warning);
+  workspaceWarningsDialog.busyKey = key;
+  workspaceWarningsDialog.error = null;
+  workspaceWarningsDialog.notice = null;
   try {
     await api.discardDraft(warning.path);
-    const info = await api.drive();
-    drive.info = info;
+    const info = await api.workspace();
+    workspace.info = info;
     applyServerPreferences();
-    surfaceDriveWarnings(info);
-    if (driveWarningsDialog.warnings.length === 0) {
+    surfaceWorkspaceWarnings(info);
+    if (workspaceWarningsDialog.warnings.length === 0) {
       setTransientStatus(`Discarded ${warning.path}`);
     } else {
-      driveWarningsDialog.notice = `Discarded ${warning.path}`;
+      workspaceWarningsDialog.notice = `Discarded ${warning.path}`;
     }
   } catch (e) {
-    driveWarningsDialog.error =
+    workspaceWarningsDialog.error =
       e instanceof Error ? e.message : `Failed to discard ${warning.path}`;
   } finally {
-    driveWarningsDialog.busyKey = null;
+    workspaceWarningsDialog.busyKey = null;
   }
 }
 
@@ -448,16 +448,16 @@ function persistThemeChoice(choice: ThemeChoice): Promise<void> {
 }
 
 /** First-paint DOM sync, before any component mounts. The actual
- *  theme value comes in via the bootstrap `/api/drive` fetch. */
+ *  theme value comes in via the bootstrap `/api/workspace` fetch. */
 export function applyInitialTheme(): void {
   applyResolvedTheme();
 }
 
 /** Mirror server preferences (theme, pane widths) into local state.
- *  Called on boot once `drive.info` is set, and again on every
+ *  Called on boot once `workspace.info` is set, and again on every
  *  `config_changed` WS event. */
 export function applyServerPreferences(): void {
-  const prefs = drive.info?.preferences;
+  const prefs = workspace.info?.preferences;
   if (!prefs) return;
   if (prefs.theme && prefs.theme !== ui.themeChoice) {
     setThemeLocal(prefs.theme);
@@ -501,7 +501,7 @@ export function watchSystemTheme(): () => void {
 /// existing reconnect/teardown call sites use `unwatch()`); the
 /// `subscribeDir` / `unsubscribeDir` methods are the per-directory
 /// scope-subscription path that Slice E (File Browser) and Slice F
-/// (Graph) drive. `watchSubscription()` exposes it to those surfaces
+/// (Graph) workspace. `watchSubscription()` exposes it to those surfaces
 /// without re-opening a second socket.
 let unwatch: WatchSubscription | null = null;
 
@@ -534,7 +534,7 @@ export function onWatchEvent(e: unknown): void {
   // `type` discriminators (see chan-server/src/bus.rs). Watch
   // events fall through to the legacy path below; progress events
   // route to the indexer-status sink so the bottom-left status pill
-  // animates live as `Drive::reindex_with` walks the drive.
+  // animates live as `Workspace::reindex_with` walks the workspace.
   const frameType = (e as { type?: string } | null)?.type;
   if (frameType === "window_command") {
     void handleWindowCommand(e);
@@ -549,8 +549,8 @@ export function onWatchEvent(e: unknown): void {
   const kind = (e as { kind?: string } | null)?.kind;
   if (kind === "config_changed") {
     // A sibling window flipped a setting (theme, fonts,
-    // pane widths, default-drive root). Re-fetch and reflect.
-    scheduleDriveRefresh();
+    // pane widths, default-workspace root). Re-fetch and reflect.
+    scheduleWorkspaceRefresh();
     return;
   }
   if (kind === "session_changed") {
@@ -563,7 +563,7 @@ export function onWatchEvent(e: unknown): void {
   // so anything that lands here is an actual external edit.
   //
   // Two reactions:
-  //   1. Refresh the tree + drive payload (file set / preferences
+  //   1. Refresh the tree + workspace payload (file set / preferences
   //      may have changed).
   //   2. Refresh the buffer of any open tab pointing at the changed
   //      path so the editor view doesn't drift behind disk. Dirty
@@ -572,7 +572,7 @@ export function onWatchEvent(e: unknown): void {
   // `fullstack-b-6`: scope the FB tree refresh to the path that
   // changed instead of re-fetching the root listing on every
   // event. The previous unconditional `refreshTree()` reassigned
-  // `tree.entries` for activity anywhere on the drive, which
+  // `tree.entries` for activity anywhere on the workspace, which
   // re-rendered every open File Browser even when the user's
   // selection was in an unrelated subtree. Each FB instance now
   // contributes a scope (from its selection); we touch the tree
@@ -590,7 +590,7 @@ export function onWatchEvent(e: unknown): void {
       void refreshTreeForPath(p);
     }
   }
-  scheduleDriveRefresh();
+  scheduleWorkspaceRefresh();
   // Tags / wiki-links / mentions may have changed. Invalidate the
   // cached graph so the next inspector view sees fresh data, and if
   // an overlay is currently open re-fetch eagerly so the user sees
@@ -704,9 +704,9 @@ export function reconnectWatcher(): void {
 /// `TypeError` (not an `ApiError`); our transport maps a timeout to
 /// `ApiError(0)`; a server still spinning up its routes can answer
 /// 502/503/504. A 401 (missing token) or any other 4xx is NOT
-/// transient and must surface immediately (the 401 path drives the
+/// transient and must surface immediately (the 401 path workspaces the
 /// missing-token overlay). This matters on chan-desktop: WKWebView
-/// can recycle a drive window's web-content process under memory or
+/// can recycle a workspace window's web-content process under memory or
 /// file-descriptor pressure, which reloads the SPA; if that reload
 /// races the embedded server recovering, a single-shot bootstrap
 /// sticks on "loading..." forever. A short bounded retry lets the
@@ -720,17 +720,17 @@ function isTransientBootstrapError(e: unknown): boolean {
   return e instanceof Error;
 }
 
-/// Initial `api.drive()` with a short bounded retry on transient
+/// Initial `api.workspace()` with a short bounded retry on transient
 /// loopback failures. Caps at 5 attempts with linear backoff (250ms
 /// step, ~3.75s total) so a wedged-but-recovering server heals the
 /// window without an indefinite spinner, while a genuine error
-/// (401, 404, malformed drive) still throws out to the bootstrap
+/// (401, 404, malformed workspace) still throws out to the bootstrap
 /// catch on the first non-transient response.
-async function driveWithRetry(): ReturnType<typeof api.drive> {
+async function workspaceWithRetry(): ReturnType<typeof api.workspace> {
   const maxAttempts = 5;
   for (let attempt = 1; ; attempt += 1) {
     try {
-      return await api.drive();
+      return await api.workspace();
     } catch (e) {
       if (attempt >= maxAttempts || !isTransientBootstrapError(e)) throw e;
       await new Promise((r) => setTimeout(r, 250 * attempt));
@@ -740,10 +740,10 @@ async function driveWithRetry(): ReturnType<typeof api.drive> {
 
 export async function bootstrap(): Promise<void> {
   try {
-    const info = await driveWithRetry();
-    drive.info = info;
+    const info = await workspaceWithRetry();
+    workspace.info = info;
     applyServerPreferences();
-    surfaceDriveWarnings(info);
+    surfaceWorkspaceWarnings(info);
     await refreshTree();
     // Restore prior layout, in priority order:
     //   1. URL hash: explicit ad-hoc state (copy-paste a URL).
@@ -886,14 +886,14 @@ function mergeDirEntries(
 // ---- FB watcher scope (fullstack-b-6) -----------------------------------
 //
 // The chan-server WS stream is single-channel and unscoped (every
-// fs event for the drive arrives at every connected SPA). Per the
+// fs event for the workspace arrives at every connected SPA). Per the
 // phase-8 spec we narrow the FB's reaction to events that land
-// inside its current scope so unrelated drive activity (e.g. an
+// inside its current scope so unrelated workspace activity (e.g. an
 // indexer pass over `crates/`) stops shaking the tree when the
 // user is only looking at `tasks/`.
 //
 // "Scope" is derived from the FB instance's selection:
-//   * no selection (drive root)   → "" (watch everything)
+//   * no selection (workspace root)   → "" (watch everything)
 //   * selection is a directory    → that directory
 //   * selection is a file         → its parent directory
 //
@@ -981,7 +981,7 @@ export async function handleDraftPromoted(path: string): Promise<void> {
   }
   await refreshTreeForPath(path);
   revealAndSelect(path);
-  scheduleDriveRefresh();
+  scheduleWorkspaceRefresh();
   invalidateGraph();
   if (hasBrowserTab() || hasGraphTab()) {
     void ensureGraphLoaded();
@@ -1020,7 +1020,7 @@ function nearestLoadedParentDir(path: string): string | null {
 
 export async function noteDraftCreated(path: string): Promise<void> {
   await refreshTreeForPath(path);
-  scheduleDriveRefresh();
+  scheduleWorkspaceRefresh();
   invalidateGraph();
   if (hasBrowserTab() || hasGraphTab()) {
     void ensureGraphLoaded();
@@ -1030,25 +1030,25 @@ export async function noteDraftCreated(path: string): Promise<void> {
   }
 }
 
-export async function refreshDrive(): Promise<void> {
-  const info = await api.drive();
-  drive.info = info;
+export async function refreshWorkspace(): Promise<void> {
+  const info = await api.workspace();
+  workspace.info = info;
   applyServerPreferences();
-  surfaceDriveWarnings(info);
+  surfaceWorkspaceWarnings(info);
 }
 
-/// Debounced refresh of the drive payload (preferences + name).
+/// Debounced refresh of the workspace payload (preferences + name).
 /// The watcher fires a burst of events on file save; we don't want
-/// to hammer the server with one /api/drive call per event.
-let driveRefreshTimer: ReturnType<typeof setTimeout> | null = null;
-export function scheduleDriveRefresh(): void {
-  if (driveRefreshTimer) return;
-  driveRefreshTimer = setTimeout(() => {
-    driveRefreshTimer = null;
+/// to hammer the server with one /api/workspace call per event.
+let workspaceRefreshTimer: ReturnType<typeof setTimeout> | null = null;
+export function scheduleWorkspaceRefresh(): void {
+  if (workspaceRefreshTimer) return;
+  workspaceRefreshTimer = setTimeout(() => {
+    workspaceRefreshTimer = null;
     // Best-effort background refresh fired from a watcher-event burst: swallow
     // a transient failure (the next event reschedules) so a rejected
-    // api.drive() never escapes as an unhandled promise rejection.
-    refreshDrive().catch(() => {});
+    // api.workspace() never escapes as an unhandled promise rejection.
+    refreshWorkspace().catch(() => {});
   }, 250);
 }
 
@@ -1093,7 +1093,7 @@ function dropUnknownHashKeys(params: URLSearchParams): void {
 
 /// Read the `?fresh=1` URL marker (set by the desktop app's New
 /// Window menu) and strip it from the address bar so a subsequent
-/// reload behaves like a normal drive load. Returns true when
+/// reload behaves like a normal workspace load. Returns true when
 /// the flag was present.
 function readAndConsumeFreshFlag(): boolean {
   const url = new URL(window.location.href);
@@ -1185,10 +1185,10 @@ export function persistStateToHash(): void {
   if (searchPanel.open) {
     const ins = searchPanel.inspectorOpen ? "1" : "0";
     params.set(HASH_SEARCH, `${ins}:${searchPanel.query ?? ""}`);
-    // Sibling scope key. Omit on the drive default so common URLs
+    // Sibling scope key. Omit on the workspace default so common URLs
     // stay short; presence overrides the default on restore.
     const scope = searchPanel.scopeId;
-    if (scope && scope !== "drive") {
+    if (scope && scope !== "workspace") {
       params.set(HASH_SEARCH_SCOPE, scope);
     } else {
       params.delete(HASH_SEARCH_SCOPE);
@@ -1218,7 +1218,7 @@ export const __testApplyOverlaysFromHash = applyOverlaysFromHash;
 
 // ---- session persistence (per-window, server-side) ---------------------
 //
-// PUT/GET hit `<state>/sessions/<drive-key>/<window-id>.json`. The
+// PUT/GET hit `<state>/sessions/<workspace-key>/<window-id>.json`. The
 // payload is the layout shape from `serializeLayout()` plus a
 // `treeExpanded` map (file browser directory state) and an `overlays`
 // block (legacy settings/search plus graph scope). Debounced more
@@ -1393,7 +1393,7 @@ export const indexStatus = $state<{ value: IndexStatus | null }>({
   value: null,
 });
 
-/// Wire shape of a chan-drive `ProgressEvent`, mirrored from
+/// Wire shape of a chan-workspace `ProgressEvent`, mirrored from
 /// chan-core's `progress::ProgressEvent`. Pinned here because the
 /// frontend doesn't import a generated type; the chan-server WS
 /// bus.rs renders the same shape and we read it verbatim.
@@ -1413,7 +1413,7 @@ type ProgressFrame = {
 };
 
 /// Apply a single progress event to the live indexer status pill.
-/// Two stages drive the Building animation:
+/// Two stages workspace the Building animation:
 ///   - GraphRebuild: per-file walk during the graph pass.
 ///   - IndexFile: per-file step of the BM25 + dense build.
 /// Other stages (EmbedBatch, Reset, ModelLoad, Heartbeat, Import,
@@ -1468,17 +1468,17 @@ export const searchPanel = $state<{
   /// a chan URL with `search=foo` lands on the same query.
   query: string;
   /// Selected scope id (file:<path> / dir:<path> / git_repo:<root> /
-  /// group:<key> / drive / global). Matches the same scope picker
+  /// group:<key> / workspace / global). Matches the same scope picker
   /// shape Graph uses, fed by availableScopeOptions().
   /// Today the server-side /api/search/content has no scope param,
   /// so the SearchPanel filters hits client-side against this id;
-  /// `drive` and `global` mean "no filter".
+  /// `workspace` and `global` mean "no filter".
   scopeId: string;
 }>({
   open: false,
   inspectorOpen: false,
   query: "",
-  scopeId: "drive",
+  scopeId: "workspace",
 });
 
 // ---- graph overlay -----------------------------------------------------
@@ -1487,14 +1487,14 @@ export const searchPanel = $state<{
 // file/group scopes expand into their neighbors in the link graph.
 
 /** Build the dropdown options for the search overlay. Server-side
- *  content search is still drive-wide, so SearchPanel applies these
+ *  content search is still workspace-wide, so SearchPanel applies these
  *  scopes as a client-side result filter. File Browser "Search this"
  *  can inject direct file/directory scopes even when the item is not
  *  open in a pane. */
 export function availableSearchScopes(): ScopeOption[] {
   const out = availableScopeOptions({
-    driveLabel: "Whole drive",
-    global: { label: "All drives (cross-drive, coming soon)", enabled: false },
+    workspaceLabel: "Whole workspace",
+    global: { label: "All workspaces (cross-workspace, coming soon)", enabled: false },
   });
 
   function addDirScope(path: string, labelPrefix = "directory"): void {
@@ -1553,7 +1553,7 @@ export type GraphFilters = {
   /// directory nodes are emitted by the backend. Frontend-only toggle
   /// — hides directory nodes (and edges touching them) without
   /// changing the backend request. Per request.md, directories as
-  /// nodes often crowd a whole-drive graph; the toggle lets the
+  /// nodes often crowd a whole-workspace graph; the toggle lets the
   /// user collapse them for a cleaner view.
   folder: boolean;
   /// `fullstack-a-57` G6/G7 FileBucket toggles. Markdown chip hides
@@ -1604,13 +1604,13 @@ export function openGraph(): void {
  *  the new graph already scoped + the breadcrumb above the
  *  inspector body renders the ancestor chain.
  *
- *  Falls back to drive scope when no context is available. */
+ *  Falls back to workspace scope when no context is available. */
 export function openGraphWithContext(ctx: SpawnContext): void {
   const scopeId = ctx.file
     ? `file:${ctx.file}`
     : ctx.dir
       ? `dir:${ctx.dir}`
-      : "drive";
+      : "workspace";
   const pendingSelectId = ctx.file ?? (ctx.dir || null);
   const tab = openGraphInActivePane({
     mode: "semantic",
@@ -1621,22 +1621,22 @@ export function openGraphWithContext(ctx: SpawnContext): void {
   scheduleSessionSave();
 }
 
-/** Open the semantic graph for the whole drive. Drive scope renders
+/** Open the semantic graph for the whole workspace. Workspace scope renders
  *  the full graph, so the depth knob is reset to its neutral value. */
-export function openGraphForDrive(): void {
+export function openGraphForWorkspace(): void {
   const tab = openGraphInActivePane({
     mode: "semantic",
-    scopeId: "drive",
+    scopeId: "workspace",
     depth: 1,
     pendingSelectId: null,
   });
   scheduleSessionSave();
 }
 
-export function openLanguageGraphForDrive(): void {
+export function openLanguageGraphForWorkspace(): void {
   const tab = openGraphInActivePane({
     mode: "language",
-    scopeId: "drive",
+    scopeId: "workspace",
     depth: 0,
     pendingSelectId: null,
     title: "Languages",
@@ -1645,16 +1645,16 @@ export function openLanguageGraphForDrive(): void {
   scheduleSessionSave();
 }
 
-/** Open the graph overlay at drive scope and pre-select the given
+/** Open the graph overlay at workspace scope and pre-select the given
  *  node so its connections render in the inspector immediately.
  *  Used by tag/mention/date chips outside the graph (file browser
- *  inspector today; conceivably the editor margin later). Drive
+ *  inspector today; conceivably the editor margin later). Workspace
  *  scope guarantees the node is in the rendered set regardless of
  *  the previously-saved scope. */
 export function openGraphAtNode(nodeId: string): void {
   const tab = openGraphInActivePane({
     mode: "semantic",
-    scopeId: "drive",
+    scopeId: "workspace",
     depth: 1,
     pendingSelectId: nodeId,
   });
@@ -1669,7 +1669,7 @@ export function openGraphAtNode(nodeId: string): void {
 /** Open the graph overlay scoped to a specific file and pre-select
  *  that file's node. The file tab menu's "Show in Graph" routes
  *  here so the resulting subgraph is the file's neighbourhood, not
- *  the entire drive — matching the user's mental model that
+ *  the entire workspace — matching the user's mental model that
  *  invoking the graph FROM a file means "show me what's around
  *  THIS file". */
 export function openGraphForFile(path: string): void {
@@ -1685,13 +1685,13 @@ export function openGraphForFile(path: string): void {
 export function openFsGraphForFile(path: string): void {
   // "Graph from here" on a file opens the parent directory's tree so
   // the focal file lives in a meaningful neighbourhood (its cohort)
-  // rather than getting lost in the whole-drive view. Files at the
-  // drive root fall back to drive scope.
+  // rather than getting lost in the whole-workspace view. Files at the
+  // workspace root fall back to workspace scope.
   const slash = path.lastIndexOf("/");
   const parent = slash > 0 ? path.slice(0, slash) : "";
   const tab = openGraphInActivePane({
     mode: "filesystem",
-    scopeId: parent ? `dir:${parent}` : "drive",
+    scopeId: parent ? `dir:${parent}` : "workspace",
     depth: 1,
     pendingSelectId: path,
   });
@@ -1715,11 +1715,11 @@ export function openGraphForDirectory(path: string): void {
 
 export function openFsGraphForDirectory(path: string): void {
   // "Graph from here" on a directory scopes to that subtree directly.
-  // Empty path is the drive root, so use the "drive" alias instead of
+  // Empty path is the workspace root, so use the "workspace" alias instead of
   // a sentinel `dir:` scope.
   const tab = openGraphInActivePane({
     mode: "filesystem",
-    scopeId: path ? `dir:${path}` : "drive",
+    scopeId: path ? `dir:${path}` : "workspace",
     depth: 1,
     pendingSelectId: path || null,
   });
@@ -1843,10 +1843,10 @@ export function revealPathInBrowser(
   const isRoot = path === "";
   const tab = openBrowserInActivePane(isRoot ? {} : { select: path });
   tab.inspectorOpen = opts.inspectorOpen ?? true;
-  tab.showDrive = isRoot;
+  tab.showWorkspace = isRoot;
   tab.expanded = expanded.length > 0 ? expanded : undefined;
   fbSelectSingle(isRoot ? null : path);
-  browserSelection.showDrive = isRoot;
+  browserSelection.showWorkspace = isRoot;
   const map = treeExpanded.map;
   map[""] = true;
   for (const e of expanded) map[e] = true;
@@ -1864,7 +1864,7 @@ export function revealPathInBrowser(
 /// Reads from `activeLayout()` so it sees the draft mid-Pane Mode,
 /// not the committed layout — once the user moves focus to a
 /// freshly-split empty pane inside the same transaction, that
-/// empty pane has no context and the fallback (drive root) kicks
+/// empty pane has no context and the fallback (workspace root) kicks
 /// in.
 ///
 /// The browser branch consults the module-level `browserSelection`
@@ -1888,7 +1888,7 @@ export function resolveSpawnContext(): SpawnContext {
       return resolveGraphSpawnContext(tab.scopeId);
     case "infographics":
       // `fullstack-a-75`: read-only tab carries no path context.
-      // Spawn from here lands at drive root.
+      // Spawn from here lands at workspace root.
       return { dir: "" };
   }
 }
@@ -1918,8 +1918,8 @@ function resolveGraphSpawnContext(scopeId: string): SpawnContext {
   if (scopeId.startsWith("dir:")) {
     return { dir: scopeId.slice("dir:".length) };
   }
-  // "drive", "tag:...", and any future scope shapes have no useful
-  // path anchor — fall back to drive root.
+  // "workspace", "tag:...", and any future scope shapes have no useful
+  // path anchor — fall back to workspace root.
   return { dir: "" };
 }
 
@@ -2060,17 +2060,17 @@ export const browserSidePanes = $state<{
 ///     plain/cmd click (the "from" of a future shift+click range).
 /// A plain click sets `paths=[path]`, `anchor=path`. Selection is
 /// per-FB-instance via the snapshot/restore seam (FileBrowserSurface);
-/// dock + overlay intentionally share this singleton (drive-wide intent).
+/// dock + overlay intentionally share this singleton (workspace-wide intent).
 export const browserSelection = $state<{
   path: string | null;
   paths: string[];
   anchor: string | null;
-  showDrive: boolean;
+  showWorkspace: boolean;
 }>({
   path: null,
   paths: [],
   anchor: null,
-  showDrive: false,
+  showWorkspace: false,
 });
 
 /// Set the selection to a single entry (a plain click / programmatic
@@ -2148,7 +2148,7 @@ export function fbClearSelection(): void {
 
 /// File Browser clipboard (FB2). Module-level (NOT per-instance) so a
 /// copy/cut in one File Browser can be pasted into another - the spec
-/// explicitly allows cross-instance paste on the same drive. `mode`
+/// explicitly allows cross-instance paste on the same workspace. `mode`
 /// distinguishes copy (duplicate) from cut (move on paste). `paths` is
 /// the snapshot of the selection at copy/cut time, so a later selection
 /// change does not retarget a pending paste. A cut's source rows render
@@ -2173,7 +2173,7 @@ export function fbClipboardClear(): void {
   fbClipboard.paths = [];
 }
 
-/// Paste the clipboard into `destDir` (drive-rooted POSIX, "" = root).
+/// Paste the clipboard into `destDir` (workspace-rooted POSIX, "" = root).
 /// copy duplicates; cut moves (and clears the clipboard on success so a
 /// second paste does not move-from-a-now-empty source). Routes through
 /// POST /api/fs/transfer, which resolves name collisions to a " copy"
@@ -2254,14 +2254,14 @@ export function persistDateFormat(formatId: string): void {
         ...cfg,
         preferences: { ...cfg.preferences, date_format: formatId },
       });
-      // Mirror the response into drive.info so the next macro
-      // expansion reads the new default without a fresh /api/drive
+      // Mirror the response into workspace.info so the next macro
+      // expansion reads the new default without a fresh /api/workspace
       // round-trip.
-      if (drive.info) {
-        drive.info = {
-          ...drive.info,
+      if (workspace.info) {
+        workspace.info = {
+          ...workspace.info,
           preferences: {
-            ...drive.info.preferences,
+            ...workspace.info.preferences,
             date_format: next.preferences.date_format,
           },
         };
@@ -2303,11 +2303,11 @@ function persistBrowserSidePanes(): void {
 /// `FileTree.svelte` so the state survives tab switches (the
 /// component unmounts every time the active tab changes). Shared
 /// across all browser tabs in the window; per-window because two
-/// windows on the same drive may be navigating different directories.
+/// windows on the same workspace may be navigating different directories.
 ///
 /// Lives inside the per-window `session.json` payload (round-tripped
 /// through `serializeLayout` / `restoreLayout`) so it survives
-/// chan-app close + reopen without bloating the user's drive
+/// chan-app close + reopen without bloating the user's workspace
 /// directory.
 export const treeExpanded = $state<{ map: Record<string, boolean> }>({
   map: { "": true },
@@ -2328,7 +2328,7 @@ export const treeExpanded = $state<{ map: Record<string, boolean> }>({
 // instance owns its expand/collapse map, selection, scroll, and the set of
 // directory scopes it has subscribed to over `/ws`. Slice E (File Browser)
 // migrates `FileTree.svelte` / `FileBrowserSurface.svelte` off the singleton
-// onto these instances and drives the scope subscriptions; Slice F (Graph)
+// onto these instances and workspaces the scope subscriptions; Slice F (Graph)
 // reuses the same instance + subscription mechanism. The legacy
 // `treeExpanded` singleton stays as the back-compat default until that
 // migration lands, so this addition is structural only and changes no
@@ -2342,15 +2342,15 @@ export const treeExpanded = $state<{ map: Record<string, boolean> }>({
 // refcount in the `ScopeRegistry` (Slice C). See `fbDirSubscriberCount`.
 
 /// Per-instance File Browser / Graph tree metadata. Owned by exactly one
-/// instance id; never shared. The drive root (`""`) is always conceptually
+/// instance id; never shared. The workspace root (`""`) is always conceptually
 /// expanded, so `expanded[""]` is kept true.
 export interface FbTreeInstance {
-  /// Drive-relative dir path -> expanded. `""` (root) stays true.
+  /// Workspace-relative dir path -> expanded. `""` (root) stays true.
   expanded: Record<string, boolean>;
-  /// The instance's current selection (drive-relative path) or null.
+  /// The instance's current selection (workspace-relative path) or null.
   selected: string | null;
-  /// Whether the synthetic "drive" row is selected (vs a real entry).
-  showDrive: boolean;
+  /// Whether the synthetic "workspace" row is selected (vs a real entry).
+  showWorkspace: boolean;
   /// Last known scroll offset of the instance's tree viewport, in px.
   scrollTop: number;
   /// Directory scopes this instance has an active `/ws` subscription on.
@@ -2377,7 +2377,7 @@ export function ensureFbTreeInstance(id: string): FbTreeInstance {
   const created: FbTreeInstance = {
     expanded: { "": true },
     selected: null,
-    showDrive: false,
+    showWorkspace: false,
     scrollTop: 0,
     subscribedDirs: { "": true },
   };
@@ -2436,8 +2436,8 @@ type TreeExpandedReloadSnapshot = {
 const TREE_EXPANDED_RELOAD_KEY = "chan.fileBrowser.treeExpanded";
 
 function treeExpandedReloadKey(): string {
-  const driveKey = drive.info?.root ?? window.location.pathname;
-  return `${TREE_EXPANDED_RELOAD_KEY}:${sessionWindowId()}:${driveKey}`;
+  const workspaceKey = workspace.info?.root ?? window.location.pathname;
+  return `${TREE_EXPANDED_RELOAD_KEY}:${sessionWindowId()}:${workspaceKey}`;
 }
 
 function treeExpandedPayload(): Record<string, boolean> {
@@ -2491,7 +2491,7 @@ export function persistTreeExpanded(): void {
 //
 // FileTree.svelte renders off the per-instance `expanded` map, so the
 // global reload snapshot above no longer feeds it. Each surface gets its
-// own sessionStorage snapshot keyed by drive + instance id so a full
+// own sessionStorage snapshot keyed by workspace + instance id so a full
 // browser reload restores that surface's expansion. The TAB variant's
 // authoritative store is the layout tab's `expanded` field (round-tripped
 // through the hash + session.json and re-seeded by FileBrowserSurface on
@@ -2501,8 +2501,8 @@ export function persistTreeExpanded(): void {
 const FB_INSTANCE_RELOAD_KEY = "chan.fileBrowser.instanceExpanded";
 
 function fbInstanceReloadKey(id: string): string {
-  const driveKey = drive.info?.root ?? window.location.pathname;
-  return `${FB_INSTANCE_RELOAD_KEY}:${sessionWindowId()}:${driveKey}:${id}`;
+  const workspaceKey = workspace.info?.root ?? window.location.pathname;
+  return `${FB_INSTANCE_RELOAD_KEY}:${sessionWindowId()}:${workspaceKey}:${id}`;
 }
 
 function fbInstanceExpandedPayload(id: string): Record<string, boolean> {
@@ -2580,7 +2580,7 @@ export function markTreeExpansionRestored(): void {
   treeExpansionSeeded = true;
 }
 
-/// First-paint default: keep only the drive root expanded. A restored
+/// First-paint default: keep only the workspace root expanded. A restored
 /// session still wins through `markTreeExpansionRestored`; fresh
 /// browser opens should not explode the whole tree.
 function seedTreeExpansionIfFresh(): void {
@@ -2639,7 +2639,7 @@ export function revealAndSelect(path: string): void {
   // Programmatic reveal is a single-select: reset the multi-set + anchor
   // so a later shift+click ranges from the revealed entry.
   fbSelectSingle(path);
-  browserSelection.showDrive = false;
+  browserSelection.showWorkspace = false;
   // The expansion change counts as a user action — persist it so
   // the next launch keeps the new entry in view.
   persistTreeExpanded();
@@ -2660,13 +2660,13 @@ export function revealAndEnterDirectory(path: string): void {
   // expands the directory ITSELF plus its ancestors.
   expandAncestorsInAllInstances(path, true);
   fbSelectSingle(path || null);
-  browserSelection.showDrive = false;
+  browserSelection.showWorkspace = false;
   if (path) void loadTreeDir(path);
   persistTreeExpanded();
 }
 
 /// True when every directory in the current tree is expanded.
-/// Drives the header toggle's glyph + title.
+/// Workspaces the header toggle's glyph + title.
 export function isFullyExpanded(): boolean {
   for (const e of tree.entries) {
     if (e.is_dir && !treeExpanded.map[e.path]) return false;
@@ -2681,7 +2681,7 @@ export function isFullyExpanded(): boolean {
 // tab, or two split panes) keep independent expand/collapse state. These
 // mirror the global `expandAllFolders` / `collapseAllFolders` /
 // `isFullyExpanded` above but target one instance's map. The FB header
-// menu drives them with the surface's own instance id.
+// menu workspaces them with the surface's own instance id.
 
 /// Expand every directory in the current tree for one instance.
 export function expandAllFoldersForInstance(id: string): void {
@@ -2703,7 +2703,7 @@ export function collapseAllFoldersForInstance(id: string): void {
 }
 
 /// True when every directory in the current tree is expanded for one
-/// instance. Drives the header toggle's glyph for that surface.
+/// instance. Workspaces the header toggle's glyph for that surface.
 export function isFullyExpandedForInstance(id: string): boolean {
   const inst = fbTreeInstance(id);
   if (!inst) return false;
@@ -2848,8 +2848,8 @@ export type PathPromptKind = "file" | "folder" | "either";
 /// modal status row treats an existing directory as a normal
 /// attach (no overwrite warning) and a missing path as "create
 /// + attach" (silent backend create). Absolute paths outside the
-/// drive root are first-class — watcher event files are infra
-/// traffic, not user content, so the drive sandbox doesn't apply.
+/// workspace root are first-class — watcher event files are infra
+/// traffic, not user content, so the workspace sandbox doesn't apply.
 export type PathPromptMode = "create" | "move" | "attach";
 
 type PathPromptState = {
@@ -2950,7 +2950,7 @@ export function resolvePathPrompt(value: string | null): void {
 /// Perform a move from `path` -> `target`. Shared by rename (CLI-style
 /// prompt) and drag-and-drop. No-ops if source == target. Prompts for
 /// overwrite confirmation when the target is a file; existing
-/// directories are rejected because chan-drive will not replace them.
+/// directories are rejected because chan-workspace will not replace them.
 /// Refreshes the tree and re-keys open tabs so in-memory state follows
 /// the rename without a refetch round-trip.
 ///
@@ -3366,7 +3366,7 @@ export const fileOps = {
   ///
   /// If the resolved target collides with an existing file, we
   /// stop for a uiConfirm before issuing the move. Existing directory
-  /// targets are refused because chan-drive will not replace them.
+  /// targets are refused because chan-workspace will not replace them.
   /// The PathPrompt modal already shows a warning row, but the user
   /// might commit past it on Enter, so the confirm dialog is the
   /// second gate before any destructive overwrite.
@@ -3392,7 +3392,7 @@ export const fileOps = {
   /// FileEditorTab's header-band UX. Same `performMove` machinery
   /// (overwrite confirm, link rewrite, tab rekey, watcher
   /// suppression) as `rename` above; just bypasses the modal so the
-  /// header band can drive the input directly. Preserves the source
+  /// header band can workspace the input directly. Preserves the source
   /// extension when `next` lacks one — matches `fileOps.rename`.
   async renameInPlace(path: string, next: string, isDir = false): Promise<void> {
     const trimmed = next.trim();
@@ -3400,7 +3400,7 @@ export const fileOps = {
     const target = isDir ? trimmed : preserveExtension(path, trimmed);
     await performMove(path, target);
   },
-  /// Delete a file (or directory) from the drive.
+  /// Delete a file (or directory) from the workspace.
   ///
   /// Closes any open tabs pointing at the deleted path (or paths
   /// under it, for directory deletes).
@@ -3432,7 +3432,7 @@ export const fileOps = {
     if (!ok) return;
     try {
       await api.remove(path);
-      await Promise.all([refreshTree(), refreshDrive()]);
+      await Promise.all([refreshTree(), refreshWorkspace()]);
       const underDeleted = (p: string) =>
         p === path || p.startsWith(`${path}/`);
       // Snapshot (paneId, tabId) pairs to close BEFORE mutating

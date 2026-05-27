@@ -1,4 +1,4 @@
-// Per-drive Trash. Soft-delete model: `Workspace::remove` moves the
+// Per-workspace Trash. Soft-delete model: `Workspace::remove` moves the
 // entry here instead of unlinking it. Apps can list, restore, purge,
 // or empty. Expired entries are GC'd lazily on `Workspace::open` and on
 // every `trash_*` call (no background thread; matches the codebase's
@@ -11,14 +11,14 @@
 //       payload | payload/   the moved file or directory
 //       meta.json            written LAST so a half-written entry
 //                            (e.g. crash mid-copy on a cross-fs
-//                            drive) has no meta and the next sweep
+//                            workspace) has no meta and the next sweep
 //                            treats it as junk.
 //
 // `<id>` is `unix_nanos`, with a `-N` suffix retry on the rare
 // same-nanosecond collision. Opaque to callers.
 //
-// Cross-filesystem note: state_dir and the drive root may be on
-// different mounts (external disk, network drive). We try
+// Cross-filesystem note: state_dir and the workspace root may be on
+// different mounts (external disk, network workspace). We try
 // `fs::rename` first (atomic on the same fs); on failure we fall
 // back to copy-then-remove. The fallback writes meta.json BEFORE
 // removing the source, so a remove failure leaves a complete trash
@@ -40,7 +40,7 @@ pub const TRASH_RETENTION_SECS: i64 = 30 * 24 * 60 * 60;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct Meta {
-    /// POSIX-style relative path from the drive root the entry came
+    /// POSIX-style relative path from the workspace root the entry came
     /// from. Used as the restore destination.
     original_path: String,
     /// Unix seconds at the time of soft-delete.
@@ -62,7 +62,7 @@ pub struct TrashEntry {
     pub size: u64,
 }
 
-/// Move `src_abs` (an absolute path inside the drive) into the trash
+/// Move `src_abs` (an absolute path inside the workspace) into the trash
 /// at `trash_dir`, recording `original_rel` as the restore target.
 ///
 /// Same-fs path: one atomic `rename`. Cross-fs path: copy, write
@@ -142,7 +142,7 @@ pub fn list(trash_dir: &Path) -> Result<Vec<TrashEntry>> {
 
 /// Summary of a successful `restore`: what came out of the trash
 /// and where it now lives. The caller (`Workspace::trash_restore`) uses
-/// this to drive a graph + search re-index of the restored subtree
+/// this to workspace a graph + search re-index of the restored subtree
 /// without re-reading meta.json or re-walking from the trash side.
 #[derive(Debug, Clone)]
 pub struct RestoredEntry {
@@ -182,7 +182,7 @@ pub fn restore(
 
     // The leaf doesn't exist yet (we're restoring), so the strict
     // resolve canonicalizes the deepest existing ancestor. That's
-    // enough to catch mid-path symlinks pointing outside the drive.
+    // enough to catch mid-path symlinks pointing outside the workspace.
     // The Workspace caller passes its cached canonical root so we don't
     // re-canonicalize on every restore.
     let dest =
@@ -353,7 +353,7 @@ fn copy_dir(src: &Path, dst: &Path) -> Result<()> {
             fs::copy(&src_path, &dst_path)?;
         }
         // Symlinks / FIFOs / sockets / devices inside a trashed
-        // directory are dropped on the cross-fs path. chan-drive
+        // directory are dropped on the cross-fs path. chan-workspace
         // never creates them, and the same-fs rename path preserves
         // them anyway.
     }
@@ -366,8 +366,8 @@ fn dir_size(path: &Path) -> Result<u64> {
         let entry = entry?;
         // lstat (symlink_metadata), not metadata: the latter follows
         // symlinks. A user dir containing `link -> /` would otherwise
-        // recurse outside the drive and double-count the host fs.
-        // chan-drive never creates symlinks itself, but a third-party
+        // recurse outside the workspace and double-count the host fs.
+        // chan-workspace never creates symlinks itself, but a third-party
         // tool inside the user's notes tree might.
         let meta = match entry.path().symlink_metadata() {
             Ok(m) => m,
@@ -399,8 +399,8 @@ mod tests {
 
     #[test]
     fn move_into_then_list_round_trips() {
-        let drive = TempDir::new().unwrap();
-        let src = drive.path().join("a.md");
+        let workspace = TempDir::new().unwrap();
+        let src = workspace.path().join("a.md");
         std::fs::write(&src, b"hi").unwrap();
         let (_t, trash) = ts();
         move_into(&trash, &src, "a.md", false).unwrap();
@@ -414,8 +414,8 @@ mod tests {
 
     #[test]
     fn restore_brings_file_back() {
-        let drive = TempDir::new().unwrap();
-        let src = drive.path().join("notes/a.md");
+        let workspace = TempDir::new().unwrap();
+        let src = workspace.path().join("notes/a.md");
         std::fs::create_dir_all(src.parent().unwrap()).unwrap();
         std::fs::write(&src, b"hello").unwrap();
         let (_t, trash) = ts();
@@ -423,8 +423,8 @@ mod tests {
         let id = list(&trash).unwrap()[0].id.clone();
         restore(
             &trash,
-            drive.path(),
-            &drive.path().canonicalize().unwrap(),
+            workspace.path(),
+            &workspace.path().canonicalize().unwrap(),
             &id,
         )
         .unwrap();
@@ -434,8 +434,8 @@ mod tests {
 
     #[test]
     fn restore_refuses_when_dest_exists() {
-        let drive = TempDir::new().unwrap();
-        let src = drive.path().join("a.md");
+        let workspace = TempDir::new().unwrap();
+        let src = workspace.path().join("a.md");
         std::fs::write(&src, b"v1").unwrap();
         let (_t, trash) = ts();
         move_into(&trash, &src, "a.md", false).unwrap();
@@ -443,8 +443,8 @@ mod tests {
         let id = list(&trash).unwrap()[0].id.clone();
         let err = restore(
             &trash,
-            drive.path(),
-            &drive.path().canonicalize().unwrap(),
+            workspace.path(),
+            &workspace.path().canonicalize().unwrap(),
             &id,
         )
         .unwrap_err();
@@ -456,8 +456,8 @@ mod tests {
 
     #[test]
     fn move_into_recursive_directory() {
-        let drive = TempDir::new().unwrap();
-        let dir = drive.path().join("notes");
+        let workspace = TempDir::new().unwrap();
+        let dir = workspace.path().join("notes");
         std::fs::create_dir_all(dir.join("sub")).unwrap();
         std::fs::write(dir.join("a.md"), b"a").unwrap();
         std::fs::write(dir.join("sub/b.md"), b"bb").unwrap();
@@ -471,8 +471,8 @@ mod tests {
         let id = entries[0].id.clone();
         restore(
             &trash,
-            drive.path(),
-            &drive.path().canonicalize().unwrap(),
+            workspace.path(),
+            &workspace.path().canonicalize().unwrap(),
             &id,
         )
         .unwrap();
@@ -482,8 +482,8 @@ mod tests {
 
     #[test]
     fn purge_one_removes_entry() {
-        let drive = TempDir::new().unwrap();
-        let src = drive.path().join("a.md");
+        let workspace = TempDir::new().unwrap();
+        let src = workspace.path().join("a.md");
         std::fs::write(&src, b"x").unwrap();
         let (_t, trash) = ts();
         move_into(&trash, &src, "a.md", false).unwrap();
@@ -498,10 +498,10 @@ mod tests {
 
     #[test]
     fn purge_all_clears_everything() {
-        let drive = TempDir::new().unwrap();
+        let workspace = TempDir::new().unwrap();
         let (_t, trash) = ts();
         for i in 0..3 {
-            let src = drive.path().join(format!("f{i}.md"));
+            let src = workspace.path().join(format!("f{i}.md"));
             std::fs::write(&src, b"x").unwrap();
             move_into(&trash, &src, &format!("f{i}.md"), false).unwrap();
         }
@@ -512,8 +512,8 @@ mod tests {
 
     #[test]
     fn sweep_drops_expired_entries() {
-        let drive = TempDir::new().unwrap();
-        let src = drive.path().join("old.md");
+        let workspace = TempDir::new().unwrap();
+        let src = workspace.path().join("old.md");
         std::fs::write(&src, b"x").unwrap();
         let (_t, trash) = ts();
         move_into(&trash, &src, "old.md", false).unwrap();
@@ -538,13 +538,13 @@ mod tests {
 
     #[test]
     fn restore_unknown_id_errors() {
-        let drive = TempDir::new().unwrap();
+        let workspace = TempDir::new().unwrap();
         let (_t, trash) = ts();
         std::fs::create_dir_all(&trash).unwrap();
         let err = restore(
             &trash,
-            drive.path(),
-            &drive.path().canonicalize().unwrap(),
+            workspace.path(),
+            &workspace.path().canonicalize().unwrap(),
             "missing",
         )
         .unwrap_err();

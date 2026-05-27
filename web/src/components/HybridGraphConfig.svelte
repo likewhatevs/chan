@@ -65,7 +65,7 @@
         {
           label: "Directory",
           cssVar: "--g-folder",
-          description: "filesystem dir + drive root",
+          description: "filesystem dir + workspace root",
         },
       ],
     },

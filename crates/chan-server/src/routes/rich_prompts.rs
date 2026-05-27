@@ -112,11 +112,12 @@ pub async fn api_create_rich_prompt_session(
     if state.terminal_sessions.watcher_status(&session).is_none() {
         return err(StatusCode::NOT_FOUND, "terminal session not found".into());
     }
-    let drive = state.drive().clone();
+    let workspace = state.workspace().clone();
     let requested = body.name.clone();
-    let result =
-        tokio::task::spawn_blocking(move || drive.create_rich_prompt_session(requested.as_deref()))
-            .await;
+    let result = tokio::task::spawn_blocking(move || {
+        workspace.create_rich_prompt_session(requested.as_deref())
+    })
+    .await;
     let workspace = match result {
         Ok(Ok(workspace)) => workspace,
         Ok(Err(e)) => return rich_prompt_err(&e),
@@ -153,10 +154,11 @@ pub async fn api_get_rich_prompt_status(
     if state.tunnel_public {
         return err_tunnel_public_locked();
     }
-    let drive = state.drive().clone();
+    let workspace = state.workspace().clone();
     let inspect_name = name.clone();
     let result =
-        tokio::task::spawn_blocking(move || drive.inspect_rich_prompt_session(&inspect_name)).await;
+        tokio::task::spawn_blocking(move || workspace.inspect_rich_prompt_session(&inspect_name))
+            .await;
     let workspace = match result {
         Ok(Ok(workspace)) => workspace,
         Ok(Err(chan_workspace::ChanError::DraftBroken { message, .. })) => {
@@ -180,14 +182,14 @@ pub async fn api_submit_rich_prompt(
     if state.tunnel_public {
         return err_tunnel_public_locked();
     }
-    let drive = state.drive().clone();
+    let workspace = state.workspace().clone();
     // Note the archived + draft paths inside the blocking task, once the
     // submit reports them and before the await returns, so the watcher's
     // events are suppressed without the post-await race (see
     // files.rs::api_write_file).
     let self_writes = Arc::clone(&state.self_writes);
     let result = tokio::task::spawn_blocking(move || {
-        let report = drive.submit_rich_prompt_session(
+        let report = workspace.submit_rich_prompt_session(
             &name,
             &body.content,
             body.expected_sequence,
@@ -224,13 +226,14 @@ pub async fn api_close_rich_prompt(
     if !session.is_empty() {
         state.terminal_sessions.clear_watcher(&session);
     }
-    let drive = state.drive().clone();
+    let workspace = state.workspace().clone();
     let discard_name = name.clone();
     // Suppress the watcher's Removed event before the blocking discard
     // (see files.rs::api_write_file).
     state.self_writes.note(&format!("Drafts/{name}"));
     let result =
-        tokio::task::spawn_blocking(move || drive.discard_rich_prompt_session(&discard_name)).await;
+        tokio::task::spawn_blocking(move || workspace.discard_rich_prompt_session(&discard_name))
+            .await;
     match result {
         Ok(Ok(())) => {
             if !session.is_empty() {

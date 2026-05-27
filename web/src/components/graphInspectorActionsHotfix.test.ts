@@ -92,7 +92,7 @@ describe("GI-2: Show File reveals in the File Browser, not a graph reload", () =
 });
 
 describe("GI-4: directory nodes are slightly bigger than leaf nodes", () => {
-  test("RADIUS_DIR sits between the leaf base and the doc/drive hub size", () => {
+  test("RADIUS_DIR sits between the leaf base and the doc/workspace hub size", () => {
     expect(canvas).toMatch(/const RADIUS_BASE = 5;/);
     expect(canvas).toMatch(/const RADIUS_DIR = 6;/);
     expect(canvas).toMatch(/const RADIUS_DOC = 7;/);
@@ -100,7 +100,7 @@ describe("GI-4: directory nodes are slightly bigger than leaf nodes", () => {
 
   test("renderRadius gives folder nodes the RADIUS_DIR base", () => {
     expect(canvas).toMatch(
-      /kind === "doc" \|\| kind === "drive"\s*\?\s*RADIUS_DOC\s*:\s*kind === "folder"\s*\?\s*RADIUS_DIR\s*:\s*RADIUS_BASE/,
+      /kind === "doc" \|\| kind === "workspace"\s*\?\s*RADIUS_DOC\s*:\s*kind === "folder"\s*\?\s*RADIUS_DIR\s*:\s*RADIUS_BASE/,
     );
   });
 });

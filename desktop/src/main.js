@@ -6,7 +6,7 @@ const { relaunch } = window.__TAURI__.process;
 const { openUrl } = window.__TAURI__.opener;
 
 const main = document.getElementById('main');
-const openBtn = document.getElementById('open-drive');
+const openBtn = document.getElementById('open-workspace');
 const themeToggle = document.getElementById('theme-toggle');
 const authBtn = document.getElementById('auth-btn');
 const tunnelBtn = document.getElementById('tunnel-btn');
@@ -92,11 +92,11 @@ let homeDir = '';
 /// True while a registry add/remove is running in the embedded
 /// host. Add/remove and feature toggles run in-process now (no
 /// `chan` binary), but `boot()` can still take a moment on a large
-/// drive, so the launcher disables the relevant controls and shows
+/// workspace, so the launcher disables the relevant controls and shows
 /// a progress banner while busy.
 let chanBusy = false;
 let defaultDrivePromptDismissed = false;
-// Last rendered drives payload as a JSON string. The backend fires
+// Last rendered workspaces payload as a JSON string. The backend fires
 // `serves-changed` / `registry-changed` whenever the chan registry
 // is touched, which a running serve does often (timestamps, etc.).
 // Re-running `main.innerHTML = ...` on every event causes the row
@@ -107,16 +107,16 @@ async function refresh() {
   if (!homeDir) {
     try { homeDir = await invoke('home_dir'); } catch { homeDir = ''; }
   }
-  const drives = await invoke('list_workspaces');
-  const json = JSON.stringify(drives);
+  const workspaces = await invoke('list_workspaces');
+  const json = JSON.stringify(workspaces);
   if (json !== lastDrivesJson) {
     lastDrivesJson = json;
-    render(drives);
+    render(workspaces);
   }
-  return drives;
+  return workspaces;
 }
 
-/// Render a drive's filesystem path with the user's home folder
+/// Render a workspace's filesystem path with the user's home folder
 /// collapsed to a house glyph. Paths outside the home dir render
 /// with a sibling computer glyph in front so the user has a visual
 /// cue that this is somewhere on the machine but outside `$HOME`.
@@ -141,10 +141,10 @@ function renderPath(full) {
 }
 
 async function boot() {
-  let drives = await refresh();
+  let workspaces = await refresh();
   await maybePromptDefaultDrive();
-  drives = await refresh();
-  if (!booted && drives.length === 0) {
+  workspaces = await refresh();
+  if (!booted && workspaces.length === 0) {
     booted = true;
     await pickAndAdd();
   } else {
@@ -156,7 +156,7 @@ async function maybePromptDefaultDrive() {
   if (defaultDrivePromptDismissed) return;
   let status;
   try {
-    status = await invoke('default_drive_status');
+    status = await invoke('default_workspace_status');
   } catch (e) {
     showError(e);
     return;
@@ -169,7 +169,7 @@ async function maybePromptDefaultDrive() {
       return;
     }
     try {
-      await invoke('factory_reset_default_drive');
+      await invoke('factory_reset_default_workspace');
     } catch (e) {
       showError(e);
       return;
@@ -185,9 +185,9 @@ async function maybePromptDefaultDrive() {
   }
   try {
     if (choice.mode === 'create') {
-      await invoke('create_default_drive');
+      await invoke('create_default_workspace');
     } else {
-      await invoke('choose_default_drive', { path: choice.path });
+      await invoke('choose_default_workspace', { path: choice.path });
     }
   } catch (e) {
     showError(e);
@@ -205,17 +205,17 @@ function showMissingDefaultDriveDialog(status) {
     overlay.setAttribute('aria-labelledby', 'missing-default-title');
 
     const dialog = document.createElement('div');
-    dialog.className = 'preflight-dialog default-drive-dialog';
+    dialog.className = 'preflight-dialog default-workspace-dialog';
 
     const title = document.createElement('h2');
     title.id = 'missing-default-title';
-    title.textContent = 'Default Chan drive missing';
+    title.textContent = 'Default Chan workspace missing';
     dialog.appendChild(title);
 
     const intro = document.createElement('p');
     intro.className = 'preflight-intro';
     intro.textContent =
-      'The default Chan drive path no longer exists. To continue with a fresh default drive, confirm a factory reset of chan metadata on this machine.';
+      'The default Chan workspace path no longer exists. To continue with a fresh default workspace, confirm a factory reset of chan metadata on this machine.';
     dialog.appendChild(intro);
 
     const pathEl = document.createElement('p');
@@ -227,7 +227,7 @@ function showMissingDefaultDriveDialog(status) {
     const detail = document.createElement('p');
     detail.className = 'preflight-intro';
     detail.textContent =
-      'Factory reset clears the chan registry, indexes, sessions, tokens, drafts, and generated reports. It does not delete note folders outside chan metadata. A new Documents/Chan drive will be created and seeded with the manual.';
+      'Factory reset clears the chan registry, indexes, sessions, tokens, drafts, and generated reports. It does not delete note folders outside chan metadata. A new Documents/Chan workspace will be created and seeded with the manual.';
     dialog.appendChild(detail);
 
     const buttons = document.createElement('div');
@@ -274,53 +274,53 @@ function showDefaultDriveDialog(status) {
     overlay.className = 'preflight-overlay';
     overlay.setAttribute('role', 'dialog');
     overlay.setAttribute('aria-modal', 'true');
-    overlay.setAttribute('aria-labelledby', 'default-drive-title');
+    overlay.setAttribute('aria-labelledby', 'default-workspace-title');
 
     const dialog = document.createElement('div');
-    dialog.className = 'preflight-dialog default-drive-dialog';
+    dialog.className = 'preflight-dialog default-workspace-dialog';
 
     const title = document.createElement('h2');
-    title.id = 'default-drive-title';
-    title.textContent = 'Choose default drive';
+    title.id = 'default-workspace-title';
+    title.textContent = 'Choose default workspace';
     dialog.appendChild(title);
 
     const intro = document.createElement('p');
     intro.className = 'preflight-intro';
     intro.textContent =
-      'Pick the drive Chan should open by default, or create a new Chan drive under Documents.';
+      'Pick the workspace Chan should open by default, or create a new Chan workspace under Documents.';
     dialog.appendChild(intro);
 
     const form = document.createElement('div');
-    form.className = 'default-drive-options';
+    form.className = 'default-workspace-options';
 
-    const drives = Array.isArray(status.drives) ? status.drives : [];
-    drives.forEach((drive, index) => {
+    const workspaces = Array.isArray(status.workspaces) ? status.workspaces : [];
+    workspaces.forEach((workspace, index) => {
       const label = document.createElement('label');
-      label.className = 'default-drive-option';
+      label.className = 'default-workspace-option';
       const input = document.createElement('input');
       input.type = 'radio';
-      input.name = 'default-drive-choice';
-      input.value = drive.path || '';
+      input.name = 'default-workspace-choice';
+      input.value = workspace.path || '';
       input.dataset.mode = 'existing';
       input.checked = index === 0;
       const span = document.createElement('span');
-      span.className = 'default-drive-path';
-      span.textContent = drive.path || '';
+      span.className = 'default-workspace-path';
+      span.textContent = workspace.path || '';
       label.appendChild(input);
       label.appendChild(span);
       form.appendChild(label);
     });
 
     const createLabel = document.createElement('label');
-    createLabel.className = 'default-drive-option';
+    createLabel.className = 'default-workspace-option';
     const createInput = document.createElement('input');
     createInput.type = 'radio';
-    createInput.name = 'default-drive-choice';
+    createInput.name = 'default-workspace-choice';
     createInput.value = status.suggested_root || '';
     createInput.dataset.mode = 'create';
-    createInput.checked = drives.length === 0;
+    createInput.checked = workspaces.length === 0;
     const createText = document.createElement('span');
-    createText.className = 'default-drive-path';
+    createText.className = 'default-workspace-path';
     createText.textContent = `Create ${status.suggested_root || 'Documents/Chan'}`;
     createLabel.appendChild(createInput);
     createLabel.appendChild(createText);
@@ -351,7 +351,7 @@ function showDefaultDriveDialog(status) {
       resolve(result);
     }
     function selectedChoice() {
-      const selected = dialog.querySelector('input[name="default-drive-choice"]:checked');
+      const selected = dialog.querySelector('input[name="default-workspace-choice"]:checked');
       if (!selected) return { accepted: false };
       return {
         accepted: true,
@@ -395,7 +395,7 @@ function applyChanBusyState(payload) {
     banner.className = 'status-banner persistent';
     document.body.insertBefore(banner, document.body.firstChild);
   }
-  const op = payload && payload.op === 'remove' ? 'Removing drive' : 'Adding drive';
+  const op = payload && payload.op === 'remove' ? 'Removing workspace' : 'Adding workspace';
   banner.textContent = `${op}...`;
 }
 
@@ -407,15 +407,15 @@ async function pickAndAdd() {
   });
   if (typeof selected !== 'string' || !selected.length) return;
   // `fullstack-b-28b` slice iii: interpose the pre-flight modal
-  // between the directory picker and add_drive so the user
-  // chooses BGE + reports BEFORE chan-drive's BOOT process runs.
+  // between the directory picker and add_workspace so the user
+  // chooses BGE + reports BEFORE chan-workspace's BOOT process runs.
   // Cancel exits without any chan-side side effect — the folder
   // wasn't registered yet, so closing the modal is a clean
   // back-out.
   const choice = await showPreflightDialog(selected);
   if (!choice.accepted) return;
   try {
-    await invoke('add_drive', {
+    await invoke('add_workspace', {
       path: selected,
       features: choice.features,
     });
@@ -430,9 +430,9 @@ async function pickAndAdd() {
 /// §"UI surface" requires a load-bearing explanatory paragraph
 /// above the toggles so users understand the baseline before
 /// they choose what to layer on. The two toggles default OFF;
-/// Open passes the chosen state through to `add_drive` which
+/// Open passes the chosen state through to `add_workspace` which
 /// forwards `--semantic-search` / `--reports` to `chan add`,
-/// so chan-drive's BOOT process picks up the choice on the
+/// so chan-workspace's BOOT process picks up the choice on the
 /// first open.
 ///
 /// Backdrop click + Escape cancel; Open button gets initial
@@ -450,12 +450,12 @@ function showPreflightDialog(path) {
 
     const title = document.createElement('h2');
     title.id = 'preflight-title';
-    title.textContent = 'Open drive';
+    title.textContent = 'Open workspace';
     dialog.appendChild(title);
 
     const intro = document.createElement('p');
     intro.className = 'preflight-intro';
-    intro.textContent = `This folder will be registered as a chan drive:`;
+    intro.textContent = `This folder will be registered as a chan workspace:`;
     dialog.appendChild(intro);
 
     const pathEl = document.createElement('p');
@@ -464,26 +464,26 @@ function showPreflightDialog(path) {
     dialog.appendChild(pathEl);
 
     // `fullstack-b-28b` slice iv: report rows populated by
-    // `compute_drive_preflight` IPC. Renders a "Scanning..."
+    // `compute_workspace_preflight` IPC. Renders a "Scanning..."
     // placeholder while the walk runs so the modal opens fast
-    // even on a large drive; resolved facts replace the row
+    // even on a large workspace; resolved facts replace the row
     // contents in-place.
     const reportEl = document.createElement('div');
     reportEl.className = 'preflight-report';
     reportEl.setAttribute('aria-busy', 'true');
-    reportEl.textContent = 'Scanning drive…';
+    reportEl.textContent = 'Scanning workspace…';
     dialog.appendChild(reportEl);
 
     const baseline = document.createElement('p');
     baseline.className = 'preflight-baseline';
     baseline.textContent =
-      "Chan will walk this drive, read every markdown file, and build a documentation graph from the wiki-links between them. This graph plus BM25 keyword search is the minimum needed to operate — it can't be disabled.";
+      "Chan will walk this workspace, read every markdown file, and build a documentation graph from the wiki-links between them. This graph plus BM25 keyword search is the minimum needed to operate — it can't be disabled.";
     dialog.appendChild(baseline);
 
     const layered = document.createElement('p');
     layered.className = 'preflight-layered';
     layered.textContent =
-      'Two optional layers can be enabled on top. Both default off and drop their per-drive data when disabled (the shared model file stays).';
+      'Two optional layers can be enabled on top. Both default off and drop their per-workspace data when disabled (the shared model file stays).';
     dialog.appendChild(layered);
 
     const togglesWrap = document.createElement('div');
@@ -499,7 +499,7 @@ function showPreflightDialog(path) {
     bgeLabel.className = 'preflight-toggle-label';
     bgeLabel.innerHTML =
       '<strong>Semantic search</strong>' +
-      '<span class="preflight-toggle-hint">Adds dense-vector embeddings for find-by-meaning queries. Needs the BGE-small model (~63 MB, downloaded once + shared across drives) and produces per-drive vector data.</span>';
+      '<span class="preflight-toggle-hint">Adds dense-vector embeddings for find-by-meaning queries. Needs the BGE-small model (~63 MB, downloaded once + shared across workspaces) and produces per-workspace vector data.</span>';
     bgeRow.appendChild(bgeLabel);
     togglesWrap.appendChild(bgeRow);
 
@@ -513,7 +513,7 @@ function showPreflightDialog(path) {
     reportsLabel.className = 'preflight-toggle-label';
     reportsLabel.innerHTML =
       '<strong>Reports</strong>' +
-      '<span class="preflight-toggle-hint">Runs code analysis on every file — language detection (tokei), source-lines-of-code counts per file + per-language roll-ups, and a Basic COCOMO estimate on top. Maintained incrementally from filesystem events. Per-drive.</span>';
+      '<span class="preflight-toggle-hint">Runs code analysis on every file — language detection (tokei), source-lines-of-code counts per file + per-language roll-ups, and a Basic COCOMO estimate on top. Maintained incrementally from filesystem events. Per-workspace.</span>';
     reportsRow.appendChild(reportsLabel);
     togglesWrap.appendChild(reportsRow);
 
@@ -522,7 +522,7 @@ function showPreflightDialog(path) {
     const footer = document.createElement('p');
     footer.className = 'preflight-footer';
     footer.textContent =
-      'Both layers can be enabled later from the drive row or Settings.';
+      'Both layers can be enabled later from the workspace row or Settings.';
     dialog.appendChild(footer);
 
     const buttons = document.createElement('div');
@@ -583,12 +583,12 @@ function showPreflightDialog(path) {
     // the explanatory copy while the report is filling in. The
     // dialog stays usable (Open/Cancel still respond) even if
     // the IPC takes the full cap (5s).
-    invoke('compute_drive_preflight', { path })
+    invoke('compute_workspace_preflight', { path })
       .then((report) => renderPreflightReport(reportEl, report))
       .catch((err) => {
         reportEl.removeAttribute('aria-busy');
         reportEl.classList.add('preflight-report-error');
-        reportEl.textContent = `Couldn't scan drive: ${(err && err.message) || String(err)}`;
+        reportEl.textContent = `Couldn't scan workspace: ${(err && err.message) || String(err)}`;
       });
   });
 }
@@ -596,7 +596,7 @@ function showPreflightDialog(path) {
 /// `fullstack-b-28b` slice iv: replace the "Scanning…" placeholder
 /// with the resolved report rows. Each row carries one fact the
 /// user needs to confirm "this is the folder I meant" + "I know
-/// what I'm committing to" before chan-drive's BOOT runs.
+/// what I'm committing to" before chan-workspace's BOOT runs.
 function renderPreflightReport(host, report) {
   host.removeAttribute('aria-busy');
   host.textContent = '';
@@ -605,14 +605,14 @@ function renderPreflightReport(host, report) {
     const warn = document.createElement('p');
     warn.className = 'preflight-warn';
     warn.textContent =
-      'This folder is already a registered chan drive. Opening it from the launcher row is the safer path.';
+      'This folder is already a registered chan workspace. Opening it from the launcher row is the safer path.';
     host.appendChild(warn);
   }
   if (!report.writable) {
     const warn = document.createElement('p');
     warn.className = 'preflight-warn';
     warn.textContent =
-      'Read-only mount: chan can still index this drive but you will not be able to create or edit notes from chan.';
+      'Read-only mount: chan can still index this workspace but you will not be able to create or edit notes from chan.';
     host.appendChild(warn);
   }
 
@@ -670,23 +670,23 @@ function formatPreflightBytes(bytes) {
   return `${formatted} ${units[unit]}`;
 }
 
-function render(drives) {
+function render(workspaces) {
   const chanCommandDisabledAttr = chanBusy ? 'disabled' : '';
   const localRuntimeDisabledAttr = chanBusy ? 'disabled' : '';
 
-  if (!drives.length) {
+  if (!workspaces.length) {
     main.innerHTML = `
       <div class="empty">
-        <h2>No drives yet</h2>
-        <p>A <em>drive</em> is a local folder with your markdown files.
+        <h2>No workspaces yet</h2>
+        <p>A <em>workspace</em> is a local folder with your markdown files.
            Pick one to get started.</p>
-        <button class="btn primary" id="empty-pick" ${chanCommandDisabledAttr}>Open drive</button>
+        <button class="btn primary" id="empty-pick" ${chanCommandDisabledAttr}>Open workspace</button>
       </div>`;
     document.getElementById('empty-pick').onclick = pickAndAdd;
     return;
   }
 
-  const rows = drives.map((d) => {
+  const rows = workspaces.map((d) => {
     const hasUrl = !!d.url;
     const urlAttr = escapeAttr(d.url || '');
     if (d.kind === 'tunneled') {
@@ -706,7 +706,7 @@ function render(drives) {
       return `
       <tr data-kind="tunneled"
           data-tunnel-label="${escapeAttr(d.label || '')}"
-          data-tunnel-drive="${escapeAttr(d.drive || '')}"
+          data-tunnel-workspace="${escapeAttr(d.workspace || '')}"
           data-url="${urlAttr}">
         <td><span class="tag tag-tunnel" title="${escapeAttr(tip)}">tunnel</span></td>
         <td class="path-cell muted">${escapeHtml(d.label || '')}</td>
@@ -718,7 +718,7 @@ function render(drives) {
       </tr>`;
     }
     if (d.kind === 'outbound') {
-      const display = d.label || d.url || 'Remote drive';
+      const display = d.label || d.url || 'Remote workspace';
       return `
       <tr data-kind="outbound"
           data-outbound-id="${escapeAttr(d.id || '')}"
@@ -757,7 +757,7 @@ function render(drives) {
   }).join('');
 
   main.innerHTML = `
-    <table class="drives">
+    <table class="workspaces">
       <thead>
         <tr>
           <th style="width:60px">On</th>
@@ -771,11 +771,11 @@ function render(drives) {
   bindRowEvents();
 }
 
-/// `fullstack-b-28a`: per-drive features toggle. Renders the
+/// `fullstack-b-28a`: per-workspace features toggle. Renders the
 /// "⚙" expand button shown alongside the Open split. Clicking
 /// expands the sibling feature-panel row showing the BGE +
 /// reports checkboxes. Stub-persisted via chan-desktop's
-/// desktop config until `systacean-27` lands the chan-drive
+/// desktop config until `systacean-27` lands the chan-workspace
 /// config API + `-b-28b` swaps the IPC body.
 function renderFeaturesToggle(path, disabledAttr = '') {
   return `
@@ -784,7 +784,7 @@ function renderFeaturesToggle(path, disabledAttr = '') {
             aria-expanded="false"
             aria-controls="features-${escapeAttr(path)}"
             ${disabledAttr}
-            title="Per-drive feature toggles">
+            title="Per-workspace feature toggles">
       <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor"
            stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
         <circle cx="12" cy="12" r="3"/>
@@ -796,7 +796,7 @@ function renderFeaturesToggle(path, disabledAttr = '') {
 /// `fullstack-b-28a`: sibling row holding the BGE + reports
 /// checkboxes + brief explanatory copy. Hidden by default; the
 /// features-toggle button flips the `hidden` attribute on click
-/// and lazy-loads the persisted state via `get_drive_features`.
+/// and lazy-loads the persisted state via `get_workspace_features`.
 /// Round-2-plan's full explanatory paragraph + per-toggle hint
 /// copy will land in `-b-28b`'s full pre-flight screen.
 function renderFeaturesPanel(path) {
@@ -806,9 +806,9 @@ function renderFeaturesPanel(path) {
       <td colspan="3">
         <div class="features-content">
           <p class="features-copy">
-            Chan walks this drive and indexes the wiki-link graph plus
+            Chan walks this workspace and indexes the wiki-link graph plus
             BM25 keyword search by default. Two optional layers can be
-            enabled per-drive; both default off and drop their data when
+            enabled per-workspace; both default off and drop their data when
             disabled.
           </p>
           <label class="features-row">
@@ -817,7 +817,7 @@ function renderFeaturesPanel(path) {
               <strong>Semantic search</strong>
               <span class="features-hint">
                 Dense embeddings via BGE-small (~63 MB shared model;
-                per-drive vector index).
+                per-workspace vector index).
               </span>
             </span>
           </label>
@@ -836,13 +836,13 @@ function renderFeaturesPanel(path) {
     </tr>`;
 }
 
-/// Per-row "Open" split button: primary action opens the drive in
+/// Per-row "Open" split button: primary action opens the workspace in
 /// an in-app webview; caret reveals a menu with "Open in Browser"
-/// and (for local drives only) "Forget Drive". The primary + caret
-/// are both gated by `hasUrl` so a drive that isn't running can't
+/// and (for local workspaces only) "Forget Workspace". The primary + caret
+/// are both gated by `hasUrl` so a workspace that isn't running can't
 /// be opened; Forget stays enabled regardless of URL state since
 /// it just removes the registry entry.
-function renderOpenSplit({ hasUrl, includeForget, forgetDisabledAttr, forgetLabel = 'Forget Drive' }) {
+function renderOpenSplit({ hasUrl, includeForget, forgetDisabledAttr, forgetLabel = 'Forget Workspace' }) {
   const openDisabled = hasUrl ? '' : 'disabled';
   const forgetDisabled = forgetDisabledAttr || '';
   const caretDisabled = hasUrl || (includeForget && !forgetDisabled) ? '' : 'disabled';
@@ -875,10 +875,10 @@ function bindRowEvents() {
         // opens on first registration. Going to the system browser
         // is reachable through the dropdown's "Open in Browser".
         const label = tr.dataset.tunnelLabel || '';
-        const drive = tr.dataset.tunnelDrive || '';
-        if (!label || !drive) return;
+        const workspace = tr.dataset.tunnelDrive || '';
+        if (!label || !workspace) return;
         try {
-          await invoke('open_tunneled_drive', { label, drive });
+          await invoke('open_tunneled_drive', { label, workspace });
         } catch (e) {
           showError(e);
         }
@@ -921,7 +921,7 @@ function bindRowEvents() {
 
     tr.querySelector('[data-act="toggle-on"]').addEventListener('change', async (e) => {
       try {
-        await invoke('set_drive_on', { path, on: e.target.checked });
+        await invoke('set_workspace_on', { path, on: e.target.checked });
       } catch (err) {
         showError(err);
       }
@@ -930,9 +930,9 @@ function bindRowEvents() {
 
     tr.querySelector('[data-act="launch"]').addEventListener('click', async () => {
       // In-app Tauri webview; each click adds another window so
-      // multi-window per drive is the default.
+      // multi-window per workspace is the default.
       try {
-        await invoke('open_local_drive', { path });
+        await invoke('open_local_workspace', { path });
       } catch (e) {
         showError(e);
       }
@@ -948,9 +948,9 @@ function bindRowEvents() {
 
     const forget = tr.querySelector('[data-act="remove"]');
     if (forget) {
-      // "Forget Drive" removes the drive entry from the chan
+      // "Forget Workspace" removes the workspace entry from the chan
       // registry. Files on disk are untouched; the user can re-add
-      // the folder later via Open drive. Tunneled drives have no
+      // the folder later via Open workspace. Tunneled workspaces have no
       // Forget — the remote `chan serve` owns that lifecycle.
       forget.addEventListener('click', async () => {
         closeAllSplitMenus();
@@ -968,12 +968,12 @@ function bindRowEvents() {
   });
 }
 
-/// `fullstack-b-28a`: wire the ⚙ features toggle on a drive row.
+/// `fullstack-b-28a`: wire the ⚙ features toggle on a workspace row.
 /// Click flips the sibling `features-panel` row's `hidden`
 /// attribute. First open lazy-loads the persisted state via
-/// `get_drive_features` (so a fresh render only pays the IPC cost
-/// on drives the user actually inspects). Subsequent
-/// checkbox changes call `set_drive_features` with the current
+/// `get_workspace_features` (so a fresh render only pays the IPC cost
+/// on workspaces the user actually inspects). Subsequent
+/// checkbox changes call `set_workspace_features` with the current
 /// pair value; optimistic update + revert on failure.
 function bindFeaturesToggle(tr) {
   const path = tr.dataset.path;
@@ -1004,7 +1004,7 @@ function bindFeaturesToggle(tr) {
       const checked = target.checked;
       const features = collectFeaturesFromPanel(panel);
       try {
-        await invoke('set_drive_features', { path, features });
+        await invoke('set_workspace_features', { path, features });
       } catch (err) {
         // Revert the toggle on failure so the UI matches persisted state.
         target.checked = !checked;
@@ -1016,11 +1016,11 @@ function bindFeaturesToggle(tr) {
 
 /// Read the persisted feature pair via IPC and reflect it on the
 /// panel's checkboxes. Boxes are `disabled` while the IPC is in
-/// flight so a fast double-click can't fire a `set_drive_features`
+/// flight so a fast double-click can't fire a `set_workspace_features`
 /// before the load resolves.
 async function loadFeaturesInto(panel, path) {
   try {
-    const features = await invoke('get_drive_features', { path });
+    const features = await invoke('get_workspace_features', { path });
     for (const box of panel.querySelectorAll('input[type="checkbox"][data-feat]')) {
       const feat = box.dataset.feat;
       box.checked = Boolean(features && features[feat]);
@@ -1047,7 +1047,7 @@ function collectFeaturesFromPanel(panel) {
 /// WebView2 both ship `CSS.escape` today, but the launcher's
 /// minimum-supported runtime predates that guarantee; the
 /// fallback hand-escapes the ASCII characters that matter for
-/// drive paths (`/`, `.`, ` `, `:`).
+/// workspace paths (`/`, `.`, ` `, `:`).
 function cssEscape(s) {
   if (typeof CSS !== 'undefined' && typeof CSS.escape === 'function') {
     return CSS.escape(s);
@@ -1171,12 +1171,12 @@ listen('chan-busy', (e) => {
 });
 
 /// Tunnel panel. Hidden until the user clicks "Attach", then
-/// rendered inline above the drives table. Two states:
+/// rendered inline above the workspaces table. Two states:
 ///
 ///   1. Setup: port input (placeholder "auto") + Start button.
 ///   2. Listening: bound port + `chan serve` snippet + Stop button.
 ///
-/// A remote drive that registers while the panel is in state 2 is
+/// A remote workspace that registers while the panel is in state 2 is
 /// auto-launched via `openUrl`; the panel stays visible so the user
 /// can connect more remotes from the same listening session.
 let tunnelPanelOpen = false;
@@ -1249,13 +1249,13 @@ function renderTunnelPanelHtml(status) {
         </header>
         ${sshBlock}
         <pre class="snippet" data-copy="${escapeAttr(cmd)}" title="click to copy">${escapeHtml(cmd)}</pre>
-        <p class="muted">Connected drives appear in the list below and open automatically.</p>
+        <p class="muted">Connected workspaces appear in the list below and open automatically.</p>
       </section>`;
   }
   return `
     ${renderOutboundAttachForm()}
     <section class="tunnel-panel">
-      <header><strong>Receive a remote drive</strong></header>
+      <header><strong>Receive a remote workspace</strong></header>
       <p class="muted">Bind a loopback port to accept incoming <code>chan serve --tunnel-url</code> from another machine over an SSH reverse forward.</p>
       <div class="tunnel-row">
         <label>Port
@@ -1266,13 +1266,13 @@ function renderTunnelPanelHtml(status) {
           <input id="tunnel-label-input" type="text" maxlength="64"
                  value="${escapeAttr(status.preferred_label || '')}"/>
         </label>
-        <label>Drive
-          <input id="tunnel-drive-input" type="text" maxlength="32"
+        <label>Workspace
+          <input id="tunnel-workspace-input" type="text" maxlength="32"
                  value="${escapeAttr(status.preferred_drive || '')}"/>
         </label>
         <button class="btn primary" data-act="tunnel-start">Start listening</button>
       </div>
-      <p class="muted">Port 0 / empty lets the OS pick. Label appears as the first URL segment. Drive name is lowercase ASCII + hyphens.</p>
+      <p class="muted">Port 0 / empty lets the OS pick. Label appears as the first URL segment. Workspace name is lowercase ASCII + hyphens.</p>
     </section>`;
 }
 
@@ -1311,9 +1311,9 @@ function bindTunnelPanelEvents(_status) {
       const rawPort = (portInp && portInp.value || '').trim();
       const preferred = rawPort === '' ? 0 : Math.max(0, Math.min(65535, Number(rawPort) | 0));
       const label = (document.getElementById('tunnel-label-input').value || '').trim();
-      const drive = (document.getElementById('tunnel-drive-input').value || '').trim();
+      const workspace = (document.getElementById('tunnel-workspace-input').value || '').trim();
       try {
-        await invoke('tunnel_start', { preferredPort: preferred, label, drive });
+        await invoke('tunnel_start', { preferredPort: preferred, label, workspace });
       } catch (e) {
         showError(e);
         return;
@@ -1387,11 +1387,11 @@ async function attachOutboundUrl() {
 
 tunnelBtn.addEventListener('click', toggleTunnelPanel);
 
-// `tunneled-drive-ready` is informational on this side: the Rust
+// `tunneled-workspace-ready` is informational on this side: the Rust
 // supervisor already opened the in-app webview window the moment
-// the per-tenant listener bound. We just refresh the drive table
+// the per-tenant listener bound. We just refresh the workspace table
 // so the new row shows up alongside its URL.
-listen('tunneled-drive-ready', () => { refresh().catch(showError); });
+listen('tunneled-workspace-ready', () => { refresh().catch(showError); });
 
 listen('tunnel-state-changed', () => { renderTunnelPanel().catch(showError); });
 

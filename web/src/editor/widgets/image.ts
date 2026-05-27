@@ -6,7 +6,7 @@
 //
 // Behaviors:
 //   - Renders `<img>` with `src` resolved against the editing file's
-//     path (drive-relative paths route through /api/files/{...} with
+//     path (workspace-relative paths route through /api/files/{...} with
 //     the auth token).
 //   - Width fragment `#w=N` and alignment `#left` / `#right` parsed
 //     from the src and applied as inline style + dataset.
@@ -211,9 +211,9 @@ interface ImageActionPayload {
 }
 
 export interface ImageOptions {
-  /// Read the editing file's drive-rooted path. Used to resolve
+  /// Read the editing file's workspace-rooted path. Used to resolve
   /// relative img sources against the right directory. `null` keeps
-  /// sources drive-rooted (no relativization).
+  /// sources workspace-rooted (no relativization).
   getCurrentPath: () => string | null;
   /// Optional click handler for the image action overlay (step 8).
   onImageClick?: (args: ImageClickArgs) => void;

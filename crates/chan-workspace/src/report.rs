@@ -1,6 +1,6 @@
-// Per-drive SLOC / language / COCOMO report, backed by chan-report.
+// Per-workspace SLOC / language / COCOMO report, backed by chan-report.
 //
-// chan-drive owns the persisted JSONL (WorkspacePaths::report), debounces
+// chan-workspace owns the persisted JSONL (WorkspacePaths::report), debounces
 // writes through a dedicated worker thread, and fans filesystem-watch
 // events into the in-memory Index so chan-report stays current
 // without a full rescan on every change. Public access goes through
@@ -27,7 +27,7 @@ use crate::watch::{WatchCallback, WatchEvent, WatchKind};
 /// without causing thrash on a five-second branch switch.
 const FLUSH_DEBOUNCE: Duration = Duration::from_millis(500);
 
-/// Per-drive report state. Owned by `Workspace` through a `OnceLock`
+/// Per-workspace report state. Owned by `Workspace` through a `OnceLock`
 /// so we pay the initial scan only when the report is actually
 /// used (call `Workspace::report()` or `Workspace::watch()` to warm).
 ///
@@ -37,7 +37,7 @@ const FLUSH_DEBOUNCE: Duration = Duration::from_millis(500);
 ///   - `flush_tx`: signals the writer thread that the index
 ///     changed and the on-disk JSONL needs rewriting.
 ///   - `writer`: the join handle for the writer thread, taken
-///     during Drop so chan-drive doesn't outlive its own thread.
+///     during Drop so chan-workspace doesn't outlive its own thread.
 pub(crate) struct ReportState {
     index: Arc<RwLock<Index>>,
     jsonl_path: PathBuf,
@@ -59,7 +59,7 @@ impl ReportState {
         let mut opts = ReportOptions::new(drive_root);
         // Mirror the index/graph WalkFilter: the report's language
         // analysis must not walk `node_modules/` / `target/` / `venv/`
-        // etc., so a source-tree drive doesn't roll up its dependency
+        // etc., so a source-tree workspace doesn't roll up its dependency
         // trees. chan-report's exclude_globs are gitignore-style ignore
         // patterns applied to the walk AND to incremental updates; a
         // bare dir basename with a trailing slash excludes that dir at
@@ -198,7 +198,7 @@ impl ReportState {
 impl Drop for ReportState {
     fn drop(&mut self) {
         // Closing the channel signals the writer to exit. Joining
-        // ensures any in-flight flush finishes before chan-drive
+        // ensures any in-flight flush finishes before chan-workspace
         // tears down state the writer might be reading.
         self.flush_tx.take();
         if let Some(w) = self.writer.take() {

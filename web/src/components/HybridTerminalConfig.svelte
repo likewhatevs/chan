@@ -6,7 +6,7 @@
 
   import { api } from "../api/client";
   import type { GlobalConfig, Preferences } from "../api/types";
-  import { drive } from "../state/store.svelte";
+  import { workspace } from "../state/store.svelte";
   import {
     clampScrollbackMb,
     SCROLLBACK_MB_DEFAULT,
@@ -35,11 +35,11 @@
   type SaveStatus = "idle" | "saving" | "saved" | { error: string };
 
   /// Local edit buffer for the terminal slice. We mirror
-  /// `drive.info.preferences` into a private snapshot so the form
+  /// `workspace.info.preferences` into a private snapshot so the form
   /// can debounce a burst of changes into one PATCH without
   /// clobbering external edits (e.g. SettingsPanel saving theme
   /// changes in parallel). Re-syncs from the server on every
-  /// drive.info refresh when no local edit is in flight.
+  /// workspace.info refresh when no local edit is in flight.
   let editing = $state<Preferences | null>(null);
   let saveStatus = $state<SaveStatus>("idle");
 
@@ -68,13 +68,13 @@
     return JSON.stringify(editing?.terminal ?? null);
   }
 
-  /// Sync from drive.info into the local edit buffer when there is
+  /// Sync from workspace.info into the local edit buffer when there is
   /// no pending edit. The guard avoids overwriting a user's typing
-  /// while a background drive refresh races. After a successful
+  /// while a background workspace refresh races. After a successful
   /// save we deliberately re-sync so the form reflects the
   /// server's authoritative state.
   $effect(() => {
-    const info = drive.info;
+    const info = workspace.info;
     if (!info) return;
     if (editing && terminalSnapshot() !== lastSentSnapshot) {
       // User has unsaved local edits; do not clobber.
@@ -110,7 +110,7 @@
   /// Initialise `customMode` from the persisted shape exactly
   /// once, after the first server load. Re-syncs are gated to
   /// avoid clobbering the user's in-progress dropdown choice on
-  /// every drive.info refresh.
+  /// every workspace.info refresh.
   $effect(() => {
     if (customModeInited) return;
     if (!editing) return;
@@ -198,12 +198,12 @@
   }
 
   /// Compare the local terminal slice against the server's most
-  /// recent drive.info.preferences. The dirty check is scoped to
+  /// recent workspace.info.preferences. The dirty check is scoped to
   /// the terminal subtree so we never trigger a PATCH for theme /
   /// editor / date changes (those belong to SettingsPanel).
   function terminalDirty(): boolean {
     if (!editing) return false;
-    const server = drive.info?.preferences?.terminal;
+    const server = workspace.info?.preferences?.terminal;
     return (
       JSON.stringify(editing.terminal ?? null) !==
       JSON.stringify(server ?? null)
@@ -223,7 +223,7 @@
   /// etc.) merge correctly: the new GlobalConfig payload starts
   /// from the server's latest state and overlays only this form's
   /// terminal subtree. Mirrors SettingsPanel's two-fetch
-  /// re-sync pattern after the PATCH so drive.info stays
+  /// re-sync pattern after the PATCH so workspace.info stays
   /// authoritative.
   async function save(): Promise<void> {
     if (!editing || inflight) return;
@@ -240,12 +240,12 @@
       const current = await api.config();
       const cfgBody: GlobalConfig = {
         preferences: { ...current.preferences, terminal: editing.terminal },
-        default_drive_root: current.default_drive_root,
-        drives: current.drives,
+        default_workspace_root: current.default_workspace_root,
+        workspaces: current.workspaces,
       };
       await api.updateConfig(cfgBody);
-      const info = await api.drive();
-      drive.info = info;
+      const info = await api.workspace();
+      workspace.info = info;
       // Re-sync the local buffer to the server's authoritative
       // value (cheap; the only field that differs is the one we
       // just persisted, but normalize the result).
@@ -290,7 +290,7 @@
     <!-- `fullstack-a-45`: warning copy carried over from the
          round-2-plan Hybrid back-side scope note. These settings
          are device-wide, not per-pane; every terminal in the
-         drive picks them up on next spawn. The top-bar body theme
+         workspace picks them up on next spawn. The top-bar body theme
          applies to every terminal body on this device. -->
     <p class="hint warning">
       Scrollback, TERM, and font apply to ALL terminals on this

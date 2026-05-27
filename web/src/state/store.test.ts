@@ -76,7 +76,7 @@ afterEach(() => {
   settingsOverlay.open = false;
   graphReloadSignal.nonce = 0;
   browserSelection.path = null;
-  browserSelection.showDrive = false;
+  browserSelection.showWorkspace = false;
   tree.loadedDirs = {};
   tree.loadingDirs = {};
   tree.dirErrors = {};
@@ -172,7 +172,7 @@ describe("graph watcher reload signal", () => {
       const url = input instanceof Request ? input.url : String(input);
       const body = url.includes("/api/graph")
         ? { nodes: [], edges: [] }
-        : url.includes("/api/drive")
+        : url.includes("/api/workspace")
           ? { name: "test", root: "/tmp/test", preferences: {} }
           : [];
       return new Response(JSON.stringify(body), {
@@ -320,7 +320,7 @@ describe("legacy overlay hash retirement (W5)", () => {
     );
     // Must not throw and must not open any graph/browser surface: the
     // legacy keys are no longer in HASH_KEYS, so they're ignored (and
-    // the overlay state they used to drive is gone entirely).
+    // the overlay state they used to workspace is gone entirely).
     expect(() => __testApplyOverlaysFromHash()).not.toThrow();
     expect(
       activePane().tabs.some((t) => t.kind === "graph" || t.kind === "browser"),
@@ -335,7 +335,7 @@ describe("legacy overlay hash retirement (W5)", () => {
     window.history.replaceState(
       null,
       "",
-      `/#${removedOverlayKey}=open&scopes=2&graph=drive&files=1:notes.md&settings=1`,
+      `/#${removedOverlayKey}=open&scopes=2&graph=workspace&files=1:notes.md&settings=1`,
     );
     settingsOverlay.open = true;
 
@@ -371,21 +371,21 @@ describe("filesystem graph entrypoints", () => {
     expect(graph.pendingSelectId).toBe("notes");
   });
 
-  test("file at drive root falls back to drive scope; drive root directory likewise", () => {
+  test("file at workspace root falls back to workspace scope; workspace root directory likewise", () => {
     openFsGraphForFile("README.md");
 
     let graph = activeGraphTab();
     expect(graph.mode).toBe("filesystem");
-    // No parent directory above a root-level file: drive scope is
+    // No parent directory above a root-level file: workspace scope is
     // the meaningful neighbourhood.
-    expect(graph.scopeId).toBe("drive");
+    expect(graph.scopeId).toBe("workspace");
     expect(graph.pendingSelectId).toBe("README.md");
 
     openFsGraphForDirectory("");
 
     graph = activeGraphTab();
     expect(graph.mode).toBe("filesystem");
-    expect(graph.scopeId).toBe("drive");
+    expect(graph.scopeId).toBe("workspace");
   });
 
   test("filesystem graph scope action pivots to files and directories", () => {
@@ -452,7 +452,7 @@ describe("external-change banner (lane-c addendum-2 item 1)", () => {
     // banner (externalChange) and leaves the buffer untouched.
     const fetchSpy = vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
       const url = input instanceof Request ? input.url : String(input);
-      const body = url.includes("/api/drive")
+      const body = url.includes("/api/workspace")
         ? { name: "test", root: "/tmp/test", preferences: {} }
         : [];
       return new Response(JSON.stringify(body), {
@@ -511,7 +511,7 @@ describe("resolveSpawnContext (fullstack-43)", () => {
     };
   }
 
-  test("empty pane falls back to drive root", () => {
+  test("empty pane falls back to workspace root", () => {
     placeTabs([]);
     expect(resolveSpawnContext()).toEqual({ dir: "" });
   });
@@ -524,7 +524,7 @@ describe("resolveSpawnContext (fullstack-43)", () => {
     });
   });
 
-  test("root-level file -> drive root + file", () => {
+  test("root-level file -> workspace root + file", () => {
     placeTabs([makeFileTab("README.md")]);
     expect(resolveSpawnContext()).toEqual({ dir: "", file: "README.md" });
   });
@@ -543,7 +543,7 @@ describe("resolveSpawnContext (fullstack-43)", () => {
     expect(resolveSpawnContext()).toEqual({ dir: "notes/sub" });
   });
 
-  test("terminal without cwd -> drive root", () => {
+  test("terminal without cwd -> workspace root", () => {
     const terminal: TerminalTab = {
       kind: "terminal",
       id: "term-1",
@@ -581,7 +581,7 @@ describe("resolveSpawnContext (fullstack-43)", () => {
     expect(resolveSpawnContext()).toEqual({ dir: "notes" });
   });
 
-  test("browser with no selection -> drive root", () => {
+  test("browser with no selection -> workspace root", () => {
     placeTabs([
       { kind: "browser", id: "br-1", title: "Files", inspectorOpen: false },
     ]);
@@ -644,14 +644,14 @@ describe("resolveSpawnContext (fullstack-43)", () => {
     expect(resolveSpawnContext()).toEqual({ dir: "notes/sub" });
   });
 
-  test("graph drive scope -> drive root", () => {
+  test("graph workspace scope -> workspace root", () => {
     placeTabs([
       {
         kind: "graph",
         id: "g-1",
         title: "Graph",
         mode: "semantic",
-        scopeId: "drive",
+        scopeId: "workspace",
         depth: 1,
         filters: {
           link: true,
@@ -670,7 +670,7 @@ describe("resolveSpawnContext (fullstack-43)", () => {
     expect(resolveSpawnContext()).toEqual({ dir: "" });
   });
 
-  test("graph tag: scope -> drive root (no useful path anchor)", () => {
+  test("graph tag: scope -> workspace root (no useful path anchor)", () => {
     placeTabs([
       {
         kind: "graph",

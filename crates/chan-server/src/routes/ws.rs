@@ -31,7 +31,7 @@ pub async fn ws_upgrade(State(state): State<Arc<AppState>>, ws: WebSocketUpgrade
 }
 
 /// Client -> server frame: subscribe / unsubscribe this socket to a
-/// directory scope. `dir: ""` is the drive root. Unknown frame types are
+/// directory scope. `dir: ""` is the workspace root. Unknown frame types are
 /// ignored (the client may send other shapes we don't model here).
 #[derive(Debug, Deserialize)]
 #[serde(tag = "type", rename_all = "lowercase")]
@@ -172,7 +172,7 @@ mod tests {
         apply_client_frame(&reg, id, r#"{"type":"unsub","dir":"notes/recipes"}"#);
         assert!(!reg.scope_exists("notes/recipes"));
 
-        // The drive root scope rides the same path.
+        // The workspace root scope rides the same path.
         apply_client_frame(&reg, id, r#"{"type":"sub","dir":""}"#);
         assert!(reg.scope_exists(""));
     }

@@ -2,7 +2,7 @@
 //
 // Used by the CSV table renderer (#29) to turn a `.csv` / `.tsv`
 // buffer into a 2D array of strings, edit individual cells, and
-// re-emit the result back to text for `Drive::write_text`. The
+// re-emit the result back to text for `Workspace::write_text`. The
 // parser is intentionally small and dependency-free; we don't need
 // streaming or RFC-4180 strict mode for the editor's use case.
 //

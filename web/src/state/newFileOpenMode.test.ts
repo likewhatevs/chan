@@ -11,7 +11,7 @@ import store from "./store.svelte.ts?raw";
 // open-mode split or drop the open/select at the create-resolution
 // layer.
 //
-// Empirically verified on a fresh binary (scoped test drive,
+// Empirically verified on a fresh binary (scoped test workspace,
 // 2026-05-26): `.md` opens wysiwyg, `.txt` opens wysiwyg (it is
 // markdown-class app-wide), `build.sh` opens source mode, and a
 // `subdir/` create reveals + selects the dir while staying in the

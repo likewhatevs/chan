@@ -58,7 +58,7 @@ pub struct Link {
 }
 
 impl Link {
-    /// True for links that point inside the drive (relative paths,
+    /// True for links that point inside the workspace (relative paths,
     /// fragments, query strings). Filters `http://`, `mailto:`, etc.
     pub fn is_internal(&self) -> bool {
         let bytes = self.target.as_bytes();
@@ -81,17 +81,17 @@ pub fn extract_links(markdown: &str) -> Vec<Link> {
     out
 }
 
-/// Resolve a link href to a clean drive-relative POSIX path.
+/// Resolve a link href to a clean workspace-relative POSIX path.
 ///
 /// `href` is the literal target as written in the markdown (or the
 /// inner text of a wiki link). `source_dir` is the directory of the
-/// file the href appears in, expressed as a drive-relative POSIX
-/// path with no leading slash (use `""` for files at the drive
+/// file the href appears in, expressed as a workspace-relative POSIX
+/// path with no leading slash (use `""` for files at the workspace
 /// root).
 ///
 /// Returns `None` for hrefs that don't address a graph-targetable
 /// file: external schemes, intra-document fragments, empty hrefs,
-/// and relative paths that escape the drive root.
+/// and relative paths that escape the workspace root.
 ///
 /// The graph builder and the editor's click handler both call this
 /// (the editor side via a hand-port in TS) so the on-disk edges and
@@ -117,7 +117,7 @@ pub fn normalize_href(href: &str, source_dir: &str) -> Option<String> {
     }
     // Strip the trailing `?query` and `#anchor` portions; the graph
     // already records anchor on its own column, so the path-only
-    // view is what's resolved against the drive.
+    // view is what's resolved against the workspace.
     let path_only = {
         let q = href.find('?').unwrap_or(href.len());
         let h = href.find('#').unwrap_or(href.len());
@@ -133,8 +133,8 @@ pub fn normalize_href(href: &str, source_dir: &str) -> Option<String> {
     } else {
         format!("{}/{}", source_dir.trim_end_matches('/'), path_only)
     };
-    // Lexical `.` / `..` collapse. A `..` that pops past the drive
-    // root is rejected; lexical-only matches chan-drive's no-symlink
+    // Lexical `.` / `..` collapse. A `..` that pops past the workspace
+    // root is rejected; lexical-only matches chan-workspace's no-symlink
     // sandbox philosophy.
     let mut stack: Vec<&str> = Vec::new();
     for part in combined.split('/') {
@@ -154,7 +154,7 @@ pub fn normalize_href(href: &str, source_dir: &str) -> Option<String> {
 
 /// Kind of link visited by `rewrite_link_targets`. The caller may
 /// want to distinguish wiki targets (which have no `./` flavor and
-/// are always drive-rooted by convention) from standard markdown
+/// are always workspace-rooted by convention) from standard markdown
 /// hrefs (which can carry `./`, `../`, or a leading `/`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LinkRefKind {
@@ -592,7 +592,7 @@ mod tests {
     }
 
     #[test]
-    fn normalize_drive_rooted_strips_leading_slash() {
+    fn normalize_workspace_rooted_strips_leading_slash() {
         assert_eq!(normalize_href("/x.md", "notes").as_deref(), Some("x.md"));
         assert_eq!(
             normalize_href("/images/x.png", "deep/nested").as_deref(),

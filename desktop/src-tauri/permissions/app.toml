@@ -3,12 +3,12 @@ identifier = "main-window"
 description = "Allows the launcher window to call Chan Desktop app commands."
 permissions = [
   "allow-list-workspaces",
-  "allow-add-drive",
+  "allow-add-workspace",
   "allow-remove-workspace",
-  "allow-set-drive-on",
-  "allow-get-drive-features",
-  "allow-set-drive-features",
-  "allow-compute-drive-preflight",
+  "allow-set-workspace-on",
+  "allow-get-workspace-features",
+  "allow-set-workspace-features",
+  "allow-compute-workspace-preflight",
   "allow-get-config",
   "allow-home-dir",
   "allow-reveal-in-finder",
@@ -20,15 +20,15 @@ permissions = [
   "allow-tunnel-status",
   "allow-tunnel-start",
   "allow-tunnel-stop",
-  "allow-default-drive-status",
-  "allow-choose-default-drive",
-  "allow-create-default-drive",
-  "allow-factory-reset-default-drive",
-  "allow-open-local-drive",
-  "allow-open-tunneled-drive",
-  "allow-add-outbound-drive",
-  "allow-open-outbound-drive",
-  "allow-remove-outbound-drive",
+  "allow-default-workspace-status",
+  "allow-choose-default-workspace",
+  "allow-create-default-workspace",
+  "allow-factory-reset-default-workspace",
+  "allow-open-local-workspace",
+  "allow-open-tunneled-workspace",
+  "allow-add-outbound-workspace",
+  "allow-open-outbound-workspace",
+  "allow-remove-outbound-workspace",
   "allow-chan-bin-status",
   "allow-auth-status",
   "allow-open-signin",
@@ -36,8 +36,8 @@ permissions = [
 ]
 
 [[set]]
-identifier = "drive-window"
-description = "Allows per-drive windows to call their app commands."
+identifier = "workspace-window"
+description = "Allows per-workspace windows to call their app commands."
 permissions = [
   "allow-reload-window",
   "allow-open-devtools",
@@ -54,9 +54,9 @@ description = "Enables the list_workspaces command."
 commands.allow = ["list_workspaces"]
 
 [[permission]]
-identifier = "allow-add-drive"
-description = "Enables the add_drive command."
-commands.allow = ["add_drive"]
+identifier = "allow-add-workspace"
+description = "Enables the add_workspace command."
+commands.allow = ["add_workspace"]
 
 [[permission]]
 identifier = "allow-remove-workspace"
@@ -64,24 +64,24 @@ description = "Enables the remove_workspace command."
 commands.allow = ["remove_workspace"]
 
 [[permission]]
-identifier = "allow-set-drive-on"
-description = "Enables the set_drive_on command."
-commands.allow = ["set_drive_on"]
+identifier = "allow-set-workspace-on"
+description = "Enables the set_workspace_on command."
+commands.allow = ["set_workspace_on"]
 
 [[permission]]
-identifier = "allow-get-drive-features"
-description = "Enables the get_drive_features command."
-commands.allow = ["get_drive_features"]
+identifier = "allow-get-workspace-features"
+description = "Enables the get_workspace_features command."
+commands.allow = ["get_workspace_features"]
 
 [[permission]]
-identifier = "allow-set-drive-features"
-description = "Enables the set_drive_features command."
-commands.allow = ["set_drive_features"]
+identifier = "allow-set-workspace-features"
+description = "Enables the set_workspace_features command."
+commands.allow = ["set_workspace_features"]
 
 [[permission]]
-identifier = "allow-compute-drive-preflight"
-description = "Enables the compute_drive_preflight command."
-commands.allow = ["compute_drive_preflight"]
+identifier = "allow-compute-workspace-preflight"
+description = "Enables the compute_workspace_preflight command."
+commands.allow = ["compute_workspace_preflight"]
 
 [[permission]]
 identifier = "allow-get-config"
@@ -149,47 +149,47 @@ description = "Enables the tunnel_stop command."
 commands.allow = ["tunnel_stop"]
 
 [[permission]]
-identifier = "allow-default-drive-status"
-description = "Enables the default_drive_status command."
-commands.allow = ["default_drive_status"]
+identifier = "allow-default-workspace-status"
+description = "Enables the default_workspace_status command."
+commands.allow = ["default_workspace_status"]
 
 [[permission]]
-identifier = "allow-choose-default-drive"
-description = "Enables the choose_default_drive command."
-commands.allow = ["choose_default_drive"]
+identifier = "allow-choose-default-workspace"
+description = "Enables the choose_default_workspace command."
+commands.allow = ["choose_default_workspace"]
 
 [[permission]]
-identifier = "allow-create-default-drive"
-description = "Enables the create_default_drive command."
-commands.allow = ["create_default_drive"]
+identifier = "allow-create-default-workspace"
+description = "Enables the create_default_workspace command."
+commands.allow = ["create_default_workspace"]
 
 [[permission]]
-identifier = "allow-factory-reset-default-drive"
-description = "Enables the factory_reset_default_drive command."
-commands.allow = ["factory_reset_default_drive"]
+identifier = "allow-factory-reset-default-workspace"
+description = "Enables the factory_reset_default_workspace command."
+commands.allow = ["factory_reset_default_workspace"]
 
 [[permission]]
-identifier = "allow-open-local-drive"
-description = "Enables the open_local_drive command."
-commands.allow = ["open_local_drive"]
+identifier = "allow-open-local-workspace"
+description = "Enables the open_local_workspace command."
+commands.allow = ["open_local_workspace"]
 
 [[permission]]
-identifier = "allow-open-tunneled-drive"
+identifier = "allow-open-tunneled-workspace"
 description = "Enables the open_tunneled_drive command."
 commands.allow = ["open_tunneled_drive"]
 
 [[permission]]
-identifier = "allow-add-outbound-drive"
+identifier = "allow-add-outbound-workspace"
 description = "Enables the add_outbound_drive command."
 commands.allow = ["add_outbound_drive"]
 
 [[permission]]
-identifier = "allow-open-outbound-drive"
+identifier = "allow-open-outbound-workspace"
 description = "Enables the open_outbound_drive command."
 commands.allow = ["open_outbound_drive"]
 
 [[permission]]
-identifier = "allow-remove-outbound-drive"
+identifier = "allow-remove-outbound-workspace"
 description = "Enables the remove_outbound_drive command."
 commands.allow = ["remove_outbound_drive"]
 

@@ -64,14 +64,14 @@ export function parseWatcherEvent(path: string, content: string): WatcherEvent |
 
 /// systacean-9: list watcher event files for `sessionId`. The
 /// chan-server endpoint reads from the session's attached
-/// `watcher_dir` directly, bypassing the drive sandbox. Outside-
-/// drive absolute paths (the lane-B repro case) now succeed; the
-/// in-drive case continues to work since the server simply reads
+/// `watcher_dir` directly, bypassing the workspace sandbox. Outside-
+/// workspace absolute paths (the lane-B repro case) now succeed; the
+/// in-workspace case continues to work since the server simply reads
 /// whatever `Registry::watcher_dir` returns.
 ///
 /// Replaces the prior `api.list(dir) + api.read(path)` composition,
 /// which routed both calls through `/api/files` and ENOENT-ed on
-/// any path outside the drive's `validate_rel` boundary. Server
+/// any path outside the workspace's `validate_rel` boundary. Server
 /// pre-filters event filenames and sorts deterministically.
 export async function readWatcherEvents(sessionId: string): Promise<WatcherEvent[]> {
   const entries = await api.terminalWatcherEvents(sessionId);

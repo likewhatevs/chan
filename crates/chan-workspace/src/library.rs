@@ -10,22 +10,22 @@ use std::sync::{Arc, Mutex, Weak};
 
 use serde::{Deserialize, Serialize};
 
-use crate::drive::Workspace;
 use crate::error::{ChanError, Result};
 use crate::fs_ops::WalkFilter;
 use crate::lock::WorkspaceLock;
 use crate::paths;
 use crate::registry::{config_declares_index_excluded_dirs, KnownWorkspace, Registry};
+use crate::workspace::Workspace;
 
 /// Selects how aggressive `Library::reset_workspace` is.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ResetMode {
-    /// Wipe per-drive chan-managed state (search index, graph DB,
+    /// Wipe per-workspace chan-managed state (search index, graph DB,
     /// session blobs, app tokens). Keep the registry entry, the
     /// user's notes tree, and the trash.
     State,
     /// `State` plus drop the registry entry. The next `open_workspace`
-    /// against this path treats it as a fresh, never-seen drive.
+    /// against this path treats it as a fresh, never-seen workspace.
     Everything,
 }
 
@@ -47,7 +47,7 @@ pub struct SweepReport {
     pub removed_entries: usize,
 }
 
-/// Per-machine handle to the chan-drive registry + paths.
+/// Per-machine handle to the chan-workspace registry + paths.
 #[derive(Clone)]
 pub struct Library {
     inner: Arc<LibraryInner>,
@@ -67,8 +67,8 @@ struct LibraryInner {
     walk_filter: Mutex<Arc<WalkFilter>>,
     /// In-process map of currently-open Drives, keyed by canonical
     /// path. Each entry is a `Weak<Workspace>` so the map doesn't
-    /// keep drives alive past the caller's last `Arc`. The
-    /// per-drive flock already prevents two processes (or two
+    /// keep workspaces alive past the caller's last `Arc`. The
+    /// per-workspace flock already prevents two processes (or two
     /// concurrent opens in this process) from racing on disk; the
     /// map adds two things on top:
     ///
@@ -119,7 +119,7 @@ impl Library {
     }
 
     /// Replace the directory-name blocklist applied to reindex
-    /// walks for drives opened against this Library. This is mainly
+    /// walks for workspaces opened against this Library. This is mainly
     /// for tests and future config reloads; ordinary callers get
     /// the value loaded from `~/.chan/config.toml`.
     pub fn set_walk_filter(&self, filter: WalkFilter) {
@@ -131,12 +131,12 @@ impl Library {
         Arc::clone(&self.inner.walk_filter.lock().unwrap())
     }
 
-    /// Snapshot of all registered drives, most-recent first.
+    /// Snapshot of all registered workspaces, most-recent first.
     pub fn list_workspaces(&self) -> Vec<KnownWorkspace> {
-        self.inner.registry.lock().unwrap().drives.clone()
+        self.inner.registry.lock().unwrap().workspaces.clone()
     }
 
-    /// Configured default drive root, if any.
+    /// Configured default workspace root, if any.
     pub fn default_workspace_root(&self) -> Option<PathBuf> {
         self.inner
             .registry
@@ -146,22 +146,22 @@ impl Library {
             .clone()
     }
 
-    /// Set or clear the configured default drive root. Persists.
-    pub fn set_default_drive_root(&self, root: Option<PathBuf>) -> Result<()> {
+    /// Set or clear the configured default workspace root. Persists.
+    pub fn set_default_workspace_root(&self, root: Option<PathBuf>) -> Result<()> {
         let mut reg = self.inner.registry.lock().unwrap();
         reg.default_workspace_root = root;
         reg.save_to(&self.inner.config_path)
     }
 
-    /// Effective default drive root: explicit override wins,
+    /// Effective default workspace root: explicit override wins,
     /// otherwise the platform convention.
-    pub fn effective_default_drive_root(&self) -> PathBuf {
+    pub fn effective_default_workspace_root(&self) -> PathBuf {
         self.default_workspace_root()
             .unwrap_or_else(paths::default_workspace_root)
     }
 
-    /// Add a drive to the registry. Idempotent: re-registering an
-    /// existing drive only updates `last_seen_at`, preserving its
+    /// Add a workspace to the registry. Idempotent: re-registering an
+    /// existing workspace only updates `last_seen_at`, preserving its
     /// metadata key. The directory itself is NOT created here; pass
     /// a path that already exists.
     pub fn register_workspace(&self, root: &Path) -> Result<KnownWorkspace> {
@@ -170,25 +170,25 @@ impl Library {
         }
         let mut reg = self.inner.registry.lock().unwrap();
         let idx = reg.touch(root);
-        let entry = reg.drives[idx].clone();
+        let entry = reg.workspaces[idx].clone();
         paths::ensure_drive_metadata_dirs(&entry.metadata_key)?;
         reg.save_to(&self.inner.config_path)?;
         Ok(entry)
     }
 
-    /// Drop a drive from the registry AND wipe its per-drive
+    /// Drop a workspace from the registry AND wipe its per-workspace
     /// chan-managed state (search index, graph DB, session blobs,
     /// app tokens). Equivalent to
     /// `reset_workspace(root, ResetMode::Everything)` plus a `false`
-    /// return when the drive wasn't registered.
+    /// return when the workspace wasn't registered.
     ///
-    /// The user's notes tree is never touched; chan-drive never
+    /// The user's notes tree is never touched; chan-workspace never
     /// writes inside it. The trash is preserved (it holds
     /// recoverable user data, semantically owned by the user even
-    /// after the drive is forgotten).
+    /// after the workspace is forgotten).
     ///
     /// Why state is wiped here: the metadata key is deterministic
-    /// for a canonical path. Without this wipe, deleting the drive
+    /// for a canonical path. Without this wipe, deleting the workspace
     /// directory and re-creating it at the same path would reuse the
     /// old metadata root.
     ///
@@ -201,7 +201,7 @@ impl Library {
     pub fn unregister_workspace(&self, root: &Path) -> Result<bool> {
         // Peek before delegating so we can preserve the previous
         // bool semantic. reset_workspace itself is idempotent on a
-        // never-opened drive (returns removed_entries = 0), but we
+        // never-opened workspace (returns removed_entries = 0), but we
         // don't want to wipe state for a path the user never
         // registered with this Library, just in case it collides
         // with an unrelated cached entry from an earlier install.
@@ -213,7 +213,7 @@ impl Library {
         Ok(true)
     }
 
-    /// Open a drive handle. The drive must already be registered;
+    /// Open a workspace handle. The workspace must already be registered;
     /// callers do `register_workspace` first if needed (CLI does both
     /// in one shot for the "point at a directory and go" path).
     pub fn open_workspace(&self, root: &Path) -> Result<Arc<Workspace>> {
@@ -225,12 +225,12 @@ impl Library {
         drop(reg);
         let key = canonical_key(&entry.root_path);
         // In-process pre-check: if we still hold an open handle to
-        // this drive, return WorkspaceAlreadyOpen rather than letting
+        // this workspace, return WorkspaceAlreadyOpen rather than letting
         // the cross-process flock surface as WorkspaceLocked. The lock
         // on `live_drives` is held only across the upgrade probe;
         // we drop it before calling Workspace::open so a slow open
         // (canonicalize on a cloud root, lazy index init) never
-        // blocks unrelated drives from registering / listing.
+        // blocks unrelated workspaces from registering / listing.
         {
             let mut map = self.inner.live_drives.lock().unwrap();
             gc_dead_entries(&mut map);
@@ -241,23 +241,23 @@ impl Library {
             }
         }
         let filter = Arc::clone(&self.inner.walk_filter.lock().unwrap());
-        let drive = Workspace::open(entry, filter)?;
+        let workspace = Workspace::open(entry, filter)?;
         self.inner
             .live_drives
             .lock()
             .unwrap()
-            .insert(key, Arc::downgrade(&drive));
-        Ok(drive)
+            .insert(key, Arc::downgrade(&workspace));
+        Ok(workspace)
     }
 
-    /// Wipe per-drive chan-managed state for `root`. The user's
-    /// notes tree is never touched (chan-drive never writes inside
+    /// Wipe per-workspace chan-managed state for `root`. The user's
+    /// notes tree is never touched (chan-workspace never writes inside
     /// it). The trash is preserved (it holds user-deleted files,
     /// recoverable user data). The lock dir is preserved (it holds
     /// no data, only cross-process coordination).
     ///
     /// Wipe set:
-    ///   - search index (`~/.chan/drives/<metadata_key>/index/`)
+    ///   - search index (`~/.chan/workspaces/<metadata_key>/index/`)
     ///   - graph DB and sqlite sidecars (`.../graph/`)
     ///   - session blobs (`.../sessions/`)
     ///   - app tokens (`.../tokens/`)
@@ -275,7 +275,7 @@ impl Library {
     ///     survive unlink). On Windows the lock check is load-
     ///     bearing because removing files-in-use fails.
     ///
-    /// Idempotent: calling on a never-opened drive (no state dirs
+    /// Idempotent: calling on a never-opened workspace (no state dirs
     /// on disk) returns `removed_entries = 0` without erroring.
     /// Re-creation of the skeleton happens lazily on the next
     /// `open_workspace` + first `index()` / `graph()` access.
@@ -368,8 +368,8 @@ impl Library {
         })
     }
 
-    /// Record an `mv` of a registered drive's directory. Preserves
-    /// the drive's `metadata_key` and therefore all metadata state,
+    /// Record an `mv` of a registered workspace's directory. Preserves
+    /// the workspace's `metadata_key` and therefore all metadata state,
     /// only rewriting the `root_path` field on the registry row.
     ///
     /// Refuses if:
@@ -377,10 +377,10 @@ impl Library {
     ///   - `new` does not exist on disk (`WorkspaceRootMissing`),
     ///   - `new` is already registered to a different metadata key
     ///     (`WorkspaceAlreadyRegistered`), since collapsing two
-    ///     registry rows onto one path would orphan one drive's
+    ///     registry rows onto one path would orphan one workspace's
     ///     metadata under a key the registry no longer references.
     ///   - any `Arc<Workspace>` for `old` is still alive
-    ///     (`WorkspaceAlreadyOpen`), since the live drive is caching
+    ///     (`WorkspaceAlreadyOpen`), since the live workspace is caching
     ///     `entry.root_path` and would silently disagree with the
     ///     registry after the move.
     ///
@@ -411,7 +411,7 @@ impl Library {
                 return Err(ChanError::WorkspaceAlreadyRegistered(new.to_path_buf()));
             }
             // Same metadata key means `new` is already an alias for
-            // this drive, e.g. an idempotent retry after a partial
+            // this workspace, e.g. an idempotent retry after a partial
             // move. Drop through to set_path.
         }
         let ok = reg.set_path(old, new);
@@ -421,8 +421,8 @@ impl Library {
         Ok(ok)
     }
 
-    /// Per-drive paths for a registered root. `None` when the
-    /// drive isn't registered, so no metadata identity can resolve.
+    /// Per-workspace paths for a registered root. `None` when the
+    /// workspace isn't registered, so no metadata identity can resolve.
     /// Use this rather than `paths::workspace_paths_for_metadata_key`
     /// directly so the registry stays the only source of truth for
     /// "which metadata key is this path."
@@ -438,7 +438,7 @@ impl Library {
     /// subdirectory whose name isn't a current metadata key.
     ///
     /// Use cases:
-    ///   - A previous chan version `unregister`'d a drive without
+    ///   - A previous chan version `unregister`'d a workspace without
     ///     wiping the metadata root.
     ///   - A registry was hand-edited and the matching metadata
     ///     roots stayed behind.
@@ -449,7 +449,7 @@ impl Library {
     /// process can race: it creates a metadata root and saves the
     /// registry; our sweep, working from the snapshot, then deletes
     /// the just-created root. The worst case is "the next index
-    /// access on the new drive rebuilds from scratch". We accept the
+    /// access on the new workspace rebuilds from scratch". We accept the
     /// race rather than introduce a cross-process registry lock for
     /// what is fundamentally a garbage-collection pass.
     pub fn sweep_orphans(&self) -> Result<SweepReport> {
@@ -458,7 +458,7 @@ impl Library {
             .registry
             .lock()
             .unwrap()
-            .drives
+            .workspaces
             .iter()
             .map(|d| d.metadata_key.clone())
             .collect();
@@ -468,7 +468,7 @@ impl Library {
 
 /// Inner workhorse for `Library::sweep_orphans`: walk each metadata
 /// parent in `parents` and remove any immediate subdirectory whose
-/// name is not in `known`. Pure in its arguments so tests can drive
+/// name is not in `known`. Pure in its arguments so tests can workspace
 /// it against a TempDir tree without mutating the host's real
 /// metadata root.
 ///
@@ -513,18 +513,18 @@ fn sweep_orphans_in(
     })
 }
 
-/// Canonical-form key for the live-drives map. Falls back to the
-/// input path when the filesystem can't canonicalize (drive root
+/// Canonical-form key for the live-workspaces map. Falls back to the
+/// input path when the filesystem can't canonicalize (workspace root
 /// missing or asleep), so the map still tracks "this exact request
 /// path" through the rest of the operation.
 fn canonical_key(root: &Path) -> PathBuf {
     root.canonicalize().unwrap_or_else(|_| root.to_path_buf())
 }
 
-/// Drop dead entries from the live-drives map. A `Weak<Workspace>`
+/// Drop dead entries from the live-workspaces map. A `Weak<Workspace>`
 /// whose Arc has been dropped will fail to upgrade; we remove it
 /// so the map's footprint stays bounded by the actually-open
-/// drives, not by every drive ever opened in the process.
+/// workspaces, not by every workspace ever opened in the process.
 fn gc_dead_entries(map: &mut HashMap<PathBuf, Weak<Workspace>>) {
     map.retain(|_, w| w.strong_count() > 0);
 }
@@ -533,7 +533,7 @@ fn gc_dead_entries(map: &mut HashMap<PathBuf, Weak<Workspace>>) {
 /// (files + subdirectories, not counting `dir` itself) that were
 /// inside it. Missing dir contributes 0. Tolerates a race where
 /// the directory disappears between the walk and the remove (a
-/// second sweep, a concurrent drive teardown, an external tool)
+/// second sweep, a concurrent workspace teardown, an external tool)
 /// by treating NotFound on remove as zero-impact rather than an
 /// error.
 fn wipe_dir(dir: &Path) -> Result<usize> {
@@ -559,23 +559,30 @@ mod tests {
 
     fn lib() -> (Library, TempDir, TempDir) {
         let cfg = TempDir::new().unwrap();
-        let drive = TempDir::new().unwrap();
+        let workspace = TempDir::new().unwrap();
         let lib = Library::open_at(cfg.path().join("config.toml")).unwrap();
-        (lib, cfg, drive)
+        (lib, cfg, workspace)
     }
 
     #[test]
     fn register_then_list() {
-        let (lib, _cfg, drive) = lib();
-        lib.register_workspace(drive.path()).unwrap();
-        let drives = lib.list_workspaces();
-        assert_eq!(drives.len(), 1);
-        assert_eq!(drives[0].root_path, drive.path().canonicalize().unwrap());
+        let (lib, _cfg, workspace) = lib();
+        lib.register_workspace(workspace.path()).unwrap();
+        let workspaces = lib.list_workspaces();
+        assert_eq!(workspaces.len(), 1);
         assert_eq!(
-            drives[0].metadata_key,
-            paths::metadata_key_for_root(drive.path())
+            workspaces[0].root_path,
+            workspace.path().canonicalize().unwrap()
         );
-        assert!(lib.workspace_paths_for(drive.path()).unwrap().root.is_dir());
+        assert_eq!(
+            workspaces[0].metadata_key,
+            paths::metadata_key_for_root(workspace.path())
+        );
+        assert!(lib
+            .workspace_paths_for(workspace.path())
+            .unwrap()
+            .root
+            .is_dir());
     }
 
     #[test]
@@ -588,20 +595,20 @@ mod tests {
 
     #[test]
     fn unregister_returns_false_when_absent() {
-        let (lib, _cfg, drive) = lib();
-        assert!(!lib.unregister_workspace(drive.path()).unwrap());
+        let (lib, _cfg, workspace) = lib();
+        assert!(!lib.unregister_workspace(workspace.path()).unwrap());
     }
 
     #[test]
-    fn default_drive_root_round_trip() {
-        let (lib, _cfg, drive) = lib();
-        lib.set_default_drive_root(Some(drive.path().to_path_buf()))
+    fn default_workspace_root_round_trip() {
+        let (lib, _cfg, workspace) = lib();
+        lib.set_default_workspace_root(Some(workspace.path().to_path_buf()))
             .unwrap();
         assert_eq!(
             lib.default_workspace_root(),
-            Some(drive.path().to_path_buf())
+            Some(workspace.path().to_path_buf())
         );
-        lib.set_default_drive_root(None).unwrap();
+        lib.set_default_workspace_root(None).unwrap();
         assert!(lib.default_workspace_root().is_none());
     }
 
@@ -630,7 +637,7 @@ mod tests {
     fn open_persists_default_index_excluded_dirs_into_existing_config() {
         let cfg = TempDir::new().unwrap();
         let config_path = cfg.path().join("config.toml");
-        std::fs::write(&config_path, "drives = []\n").unwrap();
+        std::fs::write(&config_path, "workspaces = []\n").unwrap();
 
         let lib = Library::open_at(config_path.clone()).unwrap();
         assert!(lib.walk_filter().is_excluded("node_modules"));
@@ -642,29 +649,29 @@ mod tests {
     #[test]
     fn walk_filter_excludes_dir_from_reindex() {
         // Library-set filter must reach the indexer: a `node_modules`
-        // directory under the drive should not show up in the search
+        // directory under the workspace should not show up in the search
         // index even when it contains markdown. The editor's file
         // tree still sees it (list_tree is unfiltered) so the user
         // can open files there on demand.
         use crate::SearchMode;
-        let (lib, _cfg, drive) = lib();
+        let (lib, _cfg, workspace) = lib();
         lib.set_walk_filter(WalkFilter::new(["node_modules"]));
-        lib.register_workspace(drive.path()).unwrap();
-        std::fs::create_dir_all(drive.path().join("notes")).unwrap();
+        lib.register_workspace(workspace.path()).unwrap();
+        std::fs::create_dir_all(workspace.path().join("notes")).unwrap();
         std::fs::write(
-            drive.path().join("notes/a.md"),
+            workspace.path().join("notes/a.md"),
             "# alpha\nfoo unique-keep-token bar\n",
         )
         .unwrap();
-        std::fs::create_dir_all(drive.path().join("node_modules/pkg")).unwrap();
+        std::fs::create_dir_all(workspace.path().join("node_modules/pkg")).unwrap();
         std::fs::write(
-            drive.path().join("node_modules/pkg/README.md"),
+            workspace.path().join("node_modules/pkg/README.md"),
             "# junk\nbaz unique-skip-token qux\n",
         )
         .unwrap();
-        let d = lib.open_workspace(drive.path()).unwrap();
+        let d = lib.open_workspace(workspace.path()).unwrap();
         d.reindex(None).unwrap();
-        let opts = crate::drive::SearchOpts {
+        let opts = crate::workspace::SearchOpts {
             mode: SearchMode::Bm25,
             limit: 10,
             scope: None,
@@ -685,39 +692,39 @@ mod tests {
 
     #[test]
     fn open_unregistered_errors() {
-        let (lib, _cfg, drive) = lib();
-        let err = lib.open_workspace(drive.path()).unwrap_err();
+        let (lib, _cfg, workspace) = lib();
+        let err = lib.open_workspace(workspace.path()).unwrap_err();
         assert!(matches!(err, ChanError::WorkspaceNotRegistered(_)));
     }
 
-    /// Populate per-drive state so we have something to wipe:
+    /// Populate per-workspace state so we have something to wipe:
     /// reindex (creates index segments + graph DB), put a session
     /// blob, drop a fake token. Also writes a markdown file inside
-    /// the drive so the test can verify reset doesn't touch the
+    /// the workspace so the test can verify reset doesn't touch the
     /// user's notes.
     fn populate_state(lib: &Library, root: &Path) {
-        let drive = lib.open_workspace(root).unwrap();
-        drive
+        let workspace = lib.open_workspace(root).unwrap();
+        workspace
             .write_text("notes/keep.md", "kept across reset")
             .unwrap();
-        drive.reindex(None).unwrap();
-        drive.put_session("win-1", b"layout").unwrap();
-        let p = drive.paths();
+        workspace.reindex(None).unwrap();
+        workspace.put_session("win-1", b"layout").unwrap();
+        let p = workspace.paths();
         std::fs::create_dir_all(&p.tokens).unwrap();
         std::fs::write(p.tokens.join("server.token"), b"deadbeef").unwrap();
     }
 
     fn paths_of(lib: &Library, root: &Path) -> paths::WorkspacePaths {
         lib.workspace_paths_for(root)
-            .expect("test helper expects a registered drive")
+            .expect("test helper expects a registered workspace")
     }
 
     #[test]
     fn workspace_paths_for_returns_none_for_unregistered_root() {
-        let (lib, _cfg, drive) = lib();
-        assert!(lib.workspace_paths_for(drive.path()).is_none());
-        lib.register_workspace(drive.path()).unwrap();
-        assert!(lib.workspace_paths_for(drive.path()).is_some());
+        let (lib, _cfg, workspace) = lib();
+        assert!(lib.workspace_paths_for(workspace.path()).is_none());
+        lib.register_workspace(workspace.path()).unwrap();
+        assert!(lib.workspace_paths_for(workspace.path()).is_some());
     }
 
     #[test]
@@ -731,7 +738,7 @@ mod tests {
         let pa = paths_of(&lib, drive_a.path());
         assert!(pa.graph_db.exists());
 
-        // Move the drive's registry entry. The user is responsible
+        // Move the workspace's registry entry. The user is responsible
         // for the actual directory move; we simulate that by writing
         // notes into drive_b after the registry update.
         assert!(lib.move_workspace(drive_a.path(), drive_b.path()).unwrap());
@@ -808,7 +815,7 @@ mod tests {
     fn sweep_orphans_in_reclaims_unknown_metadata_keys() {
         use std::collections::HashSet;
         let root = TempDir::new().unwrap();
-        let parents = vec![root.path().join("drives")];
+        let parents = vec![root.path().join("workspaces")];
         let known_key = "-tmp-known-feedface";
         let orphan_key = "-tmp-orphan-01234567";
         let mut known = HashSet::new();
@@ -842,7 +849,7 @@ mod tests {
 
     #[test]
     fn sweep_orphans_in_handles_missing_parent_dirs() {
-        // Parents that don't exist (fresh install, no drives ever
+        // Parents that don't exist (fresh install, no workspaces ever
         // opened) must not error: the sweep simply skips them.
         use std::collections::HashSet;
         let root = TempDir::new().unwrap();
@@ -858,18 +865,20 @@ mod tests {
 
     #[test]
     fn reset_state_wipes_chan_state_and_keeps_user_notes_and_registry() {
-        let (lib, _cfg, drive) = lib();
-        lib.register_workspace(drive.path()).unwrap();
-        populate_state(&lib, drive.path());
+        let (lib, _cfg, workspace) = lib();
+        lib.register_workspace(workspace.path()).unwrap();
+        populate_state(&lib, workspace.path());
 
-        let p = paths_of(&lib, drive.path());
+        let p = paths_of(&lib, workspace.path());
         // Sanity: state dirs populated.
         assert!(p.index.exists());
         assert!(p.graph_db.exists());
         assert!(p.sessions.exists());
         assert!(p.tokens.exists());
 
-        let report = lib.reset_workspace(drive.path(), ResetMode::State).unwrap();
+        let report = lib
+            .reset_workspace(workspace.path(), ResetMode::State)
+            .unwrap();
         assert!(report.removed_entries > 0);
 
         // State dirs gone.
@@ -879,36 +888,39 @@ mod tests {
         assert!(!p.tokens.exists());
 
         // User's notes and the registry survive.
-        assert!(drive.path().join("notes/keep.md").exists());
-        let drives = lib.list_workspaces();
-        assert_eq!(drives.len(), 1);
-        assert_eq!(drives[0].root_path, drive.path().canonicalize().unwrap());
+        assert!(workspace.path().join("notes/keep.md").exists());
+        let workspaces = lib.list_workspaces();
+        assert_eq!(workspaces.len(), 1);
+        assert_eq!(
+            workspaces[0].root_path,
+            workspace.path().canonicalize().unwrap()
+        );
     }
 
     #[test]
     fn reset_everything_also_drops_registry_entry() {
-        let (lib, _cfg, drive) = lib();
-        lib.register_workspace(drive.path()).unwrap();
-        populate_state(&lib, drive.path());
+        let (lib, _cfg, workspace) = lib();
+        lib.register_workspace(workspace.path()).unwrap();
+        populate_state(&lib, workspace.path());
 
-        lib.reset_workspace(drive.path(), ResetMode::Everything)
+        lib.reset_workspace(workspace.path(), ResetMode::Everything)
             .unwrap();
 
         assert!(lib.list_workspaces().is_empty());
-        // User's notes still survive (chan-drive never owns them).
-        assert!(drive.path().join("notes/keep.md").exists());
+        // User's notes still survive (chan-workspace never owns them).
+        assert!(workspace.path().join("notes/keep.md").exists());
     }
 
     #[test]
     fn reset_workspace_rejects_when_drive_is_open_in_process() {
-        let (lib, _cfg, drive) = lib();
-        lib.register_workspace(drive.path()).unwrap();
-        let _open = lib.open_workspace(drive.path()).unwrap();
+        let (lib, _cfg, workspace) = lib();
+        lib.register_workspace(workspace.path()).unwrap();
+        let _open = lib.open_workspace(workspace.path()).unwrap();
         // In-process pre-check fires first: clearer error than the
         // cross-process flock would surface, since we know we're
         // racing ourselves rather than another process.
         let err = lib
-            .reset_workspace(drive.path(), ResetMode::State)
+            .reset_workspace(workspace.path(), ResetMode::State)
             .unwrap_err();
         assert!(matches!(err, ChanError::WorkspaceAlreadyOpen));
     }
@@ -925,33 +937,35 @@ mod tests {
         // simulate another process: each Library has its own
         // live_drives map, so the in-process check on `lib2`
         // doesn't fire, and we hit the flock instead.
-        let (lib, cfg, drive) = lib();
-        lib.register_workspace(drive.path()).unwrap();
-        let _open = lib.open_workspace(drive.path()).unwrap();
+        let (lib, cfg, workspace) = lib();
+        lib.register_workspace(workspace.path()).unwrap();
+        let _open = lib.open_workspace(workspace.path()).unwrap();
         let lib2 = Library::open_at(cfg.path().join("config.toml")).unwrap();
         let err = lib2
-            .reset_workspace(drive.path(), ResetMode::State)
+            .reset_workspace(workspace.path(), ResetMode::State)
             .unwrap_err();
         assert!(matches!(err, ChanError::WorkspaceLocked));
     }
 
     #[test]
     fn second_open_in_same_process_returns_already_open() {
-        let (lib, _cfg, drive) = lib();
-        lib.register_workspace(drive.path()).unwrap();
-        let first = lib.open_workspace(drive.path()).unwrap();
-        let err = lib.open_workspace(drive.path()).unwrap_err();
+        let (lib, _cfg, workspace) = lib();
+        lib.register_workspace(workspace.path()).unwrap();
+        let first = lib.open_workspace(workspace.path()).unwrap();
+        let err = lib.open_workspace(workspace.path()).unwrap_err();
         assert!(matches!(err, ChanError::WorkspaceAlreadyOpen));
         // Once the first handle is dropped, the second open succeeds.
         drop(first);
-        let _second = lib.open_workspace(drive.path()).unwrap();
+        let _second = lib.open_workspace(workspace.path()).unwrap();
     }
 
     #[test]
     fn reset_is_idempotent_on_never_opened_drive() {
-        let (lib, _cfg, drive) = lib();
-        lib.register_workspace(drive.path()).unwrap();
-        let report = lib.reset_workspace(drive.path(), ResetMode::State).unwrap();
+        let (lib, _cfg, workspace) = lib();
+        lib.register_workspace(workspace.path()).unwrap();
+        let report = lib
+            .reset_workspace(workspace.path(), ResetMode::State)
+            .unwrap();
         assert_eq!(report.removed_entries, 0);
         // Registry still has it.
         assert_eq!(lib.list_workspaces().len(), 1);
@@ -985,27 +999,27 @@ mod tests {
 
     /// Regression for the "delete-and-recreate at the same path
     /// surfaces stale graph data" bug. Before PR1, `unregister_workspace`
-    /// only dropped the registry row; the per-drive metadata root
+    /// only dropped the registry row; the per-workspace metadata root
     /// lived on. Re-registering the same path reuses the
     /// deterministic metadata key, so unregister must wipe state.
     #[test]
     fn unregister_wipes_state_so_recreate_at_same_path_starts_fresh() {
-        let (lib, _cfg, drive) = lib();
-        lib.register_workspace(drive.path()).unwrap();
-        populate_state(&lib, drive.path());
+        let (lib, _cfg, workspace) = lib();
+        lib.register_workspace(workspace.path()).unwrap();
+        populate_state(&lib, workspace.path());
 
-        let p = paths_of(&lib, drive.path());
+        let p = paths_of(&lib, workspace.path());
         assert!(p.graph_db.exists(), "graph DB should exist after populate");
         // Sanity: the graph actually has the file we wrote.
         {
-            let d = lib.open_workspace(drive.path()).unwrap();
+            let d = lib.open_workspace(workspace.path()).unwrap();
             let entries = d.list_tree().unwrap();
             assert!(entries.iter().any(|e| e.path == "notes/keep.md"));
         }
 
-        assert!(lib.unregister_workspace(drive.path()).unwrap());
+        assert!(lib.unregister_workspace(workspace.path()).unwrap());
 
-        // Per-drive state is gone.
+        // Per-workspace state is gone.
         assert!(!p.index.exists());
         assert!(!p.graph_db.parent().unwrap().exists());
         assert!(!p.sessions.exists());
@@ -1013,14 +1027,14 @@ mod tests {
         assert!(lib.list_workspaces().is_empty());
 
         // Re-register at the same path. Sidecar dirs must be absent
-        // until the new drive lazily creates them, and the new
-        // drive's graph must not surface anything until the user
+        // until the new workspace lazily creates them, and the new
+        // workspace's graph must not surface anything until the user
         // reindexes (here: nothing on disk, so nothing to surface).
-        std::fs::remove_dir_all(drive.path().join("notes")).ok();
-        lib.register_workspace(drive.path()).unwrap();
-        let d = lib.open_workspace(drive.path()).unwrap();
+        std::fs::remove_dir_all(workspace.path().join("notes")).ok();
+        lib.register_workspace(workspace.path()).unwrap();
+        let d = lib.open_workspace(workspace.path()).unwrap();
         d.reindex(None).unwrap();
-        let opts = crate::drive::SearchOpts {
+        let opts = crate::workspace::SearchOpts {
             mode: crate::SearchMode::Bm25,
             limit: 10,
             scope: None,
@@ -1043,10 +1057,10 @@ mod tests {
         // access. Holding an open handle must produce a clear error
         // rather than silently leaving the registry row gone and
         // metadata half-wiped.
-        let (lib, _cfg, drive) = lib();
-        lib.register_workspace(drive.path()).unwrap();
-        let _open = lib.open_workspace(drive.path()).unwrap();
-        let err = lib.unregister_workspace(drive.path()).unwrap_err();
+        let (lib, _cfg, workspace) = lib();
+        lib.register_workspace(workspace.path()).unwrap();
+        let _open = lib.open_workspace(workspace.path()).unwrap();
+        let err = lib.unregister_workspace(workspace.path()).unwrap_err();
         assert!(matches!(err, ChanError::WorkspaceAlreadyOpen));
         // Registry row survives, because we bailed before touching it.
         assert_eq!(lib.list_workspaces().len(), 1);
@@ -1054,22 +1068,23 @@ mod tests {
 
     #[test]
     fn reset_state_preserves_trash() {
-        let (lib, _cfg, drive) = lib();
-        lib.register_workspace(drive.path()).unwrap();
+        let (lib, _cfg, workspace) = lib();
+        lib.register_workspace(workspace.path()).unwrap();
         {
-            let d = lib.open_workspace(drive.path()).unwrap();
+            let d = lib.open_workspace(workspace.path()).unwrap();
             d.write_text("doomed.md", "bye").unwrap();
             d.remove("doomed.md").unwrap();
             assert_eq!(d.trash_list().unwrap().len(), 1);
         }
-        let p = paths_of(&lib, drive.path());
+        let p = paths_of(&lib, workspace.path());
         assert!(p.trash.exists());
 
-        lib.reset_workspace(drive.path(), ResetMode::State).unwrap();
+        lib.reset_workspace(workspace.path(), ResetMode::State)
+            .unwrap();
 
         // Trash survives a State-mode reset.
         assert!(p.trash.exists());
-        let d = lib.open_workspace(drive.path()).unwrap();
+        let d = lib.open_workspace(workspace.path()).unwrap();
         assert_eq!(d.trash_list().unwrap().len(), 1);
     }
 }

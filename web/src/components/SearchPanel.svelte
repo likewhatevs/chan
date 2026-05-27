@@ -1,6 +1,6 @@
 <script lang="ts">
   // Search palette. Open with Cmd/Ctrl+K (or the toolbar button),
-  // type, see ranked hits across the drive: chunks (BM25 + dense
+  // type, see ranked hits across the workspace: chunks (BM25 + dense
   // from /api/search/content) plus client-side tag and image hits
   // computed off the loaded graph and tree. Click to open the
   // inspector on the right; double-click / Enter routes to the
@@ -190,21 +190,21 @@
   );
 
   /// If a saved/direct scope no longer resolves, snap back to the
-  /// whole drive. Direct file/directory scopes opened from the File
+  /// whole workspace. Direct file/directory scopes opened from the File
   /// Browser are injected by `availableSearchScopes()` so they remain
   /// valid even when the item is not open in a pane.
   $effect(() => {
     if (!searchPanel.open) return;
     if (currentScope) return;
     untrack(() => {
-      searchPanel.scopeId = "drive";
+      searchPanel.scopeId = "workspace";
     });
   });
 
   /// Changing the scope changes both the client-side row filter and
   /// the server query limit. Re-run the async search path when the
   /// panel is already open so direct File Browser "Search this"
-  /// actions do not inherit stale whole-drive results.
+  /// actions do not inherit stale whole-workspace results.
   $effect(() => {
     const scopeId = searchPanel.scopeId;
     const open = searchPanel.open;
@@ -227,13 +227,13 @@
   });
 
   /// Predicate: does `path` belong to the active scope? Content
-  /// search still asks the server drive-wide and filters returned
+  /// search still asks the server workspace-wide and filters returned
   /// rows here; filename/report/tag rows are filtered locally from
   /// the same predicate.
   function pathInScope(path: string): boolean {
     const s = currentScope;
     if (!s) return true;
-    if (s.kind === "drive" || s.kind === "global") return true;
+    if (s.kind === "workspace" || s.kind === "global") return true;
     if (s.kind === "file") return path === s.path;
     if (s.kind === "dir") {
       if (!s.path) return true;
@@ -258,7 +258,7 @@
       loading = false;
       return;
     }
-    const scoped = currentScope?.kind !== "drive" && currentScope?.kind !== "global";
+    const scoped = currentScope?.kind !== "workspace" && currentScope?.kind !== "global";
     const limit = scoped ? 100 : 25;
     queryToken += 1;
     const myToken = queryToken;
@@ -345,7 +345,7 @@
 
   async function loadSearchTree(): Promise<void> {
     // The file tree is normally loaded on demand as directories open.
-    // `language:<name>` is a drive-wide query, so hydrate directory
+    // `language:<name>` is a workspace-wide query, so hydrate directory
     // listings before scanning per-file report rows.
     for (let i = 0; i < 1000; i += 1) {
       const pending = tree.entries
@@ -439,7 +439,7 @@
   /// Tag hits: tag-kind nodes whose label contains the typed query.
   /// Doc counts are SCOPE-aware: when the scope narrows to a file /
   /// dir / repo / group, we count only edges whose source doc is in
-  /// scope, and a tag with zero in-scope refs is dropped. Drive /
+  /// scope, and a tag with zero in-scope refs is dropped. Workspace /
   /// global scopes count everything. Surfacing the count lets the
   /// user pick the more active tag when several near-matches share
   /// a prefix.
@@ -467,7 +467,7 @@
       if (n.kind !== "tag") continue;
       if (!n.label.toLowerCase().includes(q)) continue;
       const refs = docCounts.get(n.id) ?? 0;
-      // Drop tags that don't touch the current scope. drive / global
+      // Drop tags that don't touch the current scope. workspace / global
       // scopes leave every tag with a positive count so nothing is
       // hidden there.
       if (refs === 0) continue;
@@ -610,7 +610,7 @@
       // further action is needed here.
     } else {
       // Tag hits route to a tag-scoped graph (depth-hop
-      // neighbourhood around the tag) rather than drive scope.
+      // neighbourhood around the tag) rather than workspace scope.
       close();
       openGraphForTag(r.nodeId, r.label);
     }
@@ -818,7 +818,7 @@
               {:else if r.kind === "contact"}
                 <!-- Contact-name match. Displays the contact's name
                      (basename with the .md/.txt suffix stripped) and
-                     the underlying drive path below it. Same row
+                     the underlying workspace path below it. Same row
                      shape as image / file so the bubbles read alike
                      once preview content fills the body. -->
                 <div class="row1">

@@ -35,7 +35,7 @@
 //            ord      INTEGER NOT NULL,
 //            PRIMARY KEY (rel_path, ord))
 //
-// `Workspace::graph()` constructs a `GraphView` against the per-drive
+// `Workspace::graph()` constructs a `GraphView` against the per-workspace
 // sqlite handle. Reads (neighbors / backlinks / tags / files_with_tag
 // / headings_of / files) and writes (replace_file / forget_file /
 // clear) are both wired; `Workspace::reindex` calls `clear` then
@@ -65,7 +65,7 @@ const READER_POOL_SIZE: u32 = 4;
 
 /// Node kind. Distinguishes a regular markdown file from one that
 /// the contacts importer dropped (frontmatter `chan.kind: contact`).
-/// The graph stores both as `nodes` rows; the kind drives downstream
+/// The graph stores both as `nodes` rows; the kind workspaces downstream
 /// filtering (the editor's `@` picker reads only contacts; backlinks
 /// and link-autocomplete read both). Aliasing a contact onto its
 /// file row keeps the graph free of double-counted edges.
@@ -226,7 +226,7 @@ pub struct Mention {
 ///   * `writer`: single Connection behind a Mutex. Carries every
 ///     write transaction. SQLite's contract is one writer at a
 ///     time; the Mutex enforces it inside the process and the
-///     per-drive flock enforces it cross-process.
+///     per-workspace flock enforces it cross-process.
 ///   * `readers`: r2d2 pool of read-only connections (each opened
 ///     with `query_only = ON` as belt-and-braces). Editor
 ///     typeahead, backlinks, and status reads draw from the pool
@@ -241,7 +241,7 @@ pub struct GraphView {
 }
 
 impl GraphView {
-    /// Open or create the graph DB for this drive.
+    /// Open or create the graph DB for this workspace.
     pub fn open(graph_db_path: &Path) -> Result<Self> {
         if let Some(parent) = graph_db_path.parent() {
             std::fs::create_dir_all(parent)?;
@@ -298,7 +298,7 @@ impl GraphView {
     ///
     ///   journal_mode = WAL       readers don't block writers, single
     ///                            writer at a time (we already gate
-    ///                            that with the per-drive flock); WAL
+    ///                            that with the per-workspace flock); WAL
     ///                            also crash-recovers cleanly because
     ///                            the WAL file is the durable record
     ///                            of in-flight commits.
@@ -625,7 +625,7 @@ impl GraphView {
         Ok(out)
     }
 
-    /// All tags in the drive with their reference counts. Tag dst
+    /// All tags in the workspace with their reference counts. Tag dst
     /// nodes are stored as `#name`; we strip the prefix in the result.
     pub fn tags(&self) -> Result<Vec<Tag>> {
         tracing::debug!("graph::tags");
@@ -699,7 +699,7 @@ impl GraphView {
     /// (h1 or frontmatter `title`) and is stored on the node for
     /// the link-autocomplete query (`link_targets`). `node_kind`
     /// tags the file as a regular note or as an imported contact;
-    /// the contact tag drives the editor `@` picker and lets graph
+    /// the contact tag workspaces the editor `@` picker and lets graph
     /// consumers filter without re-parsing frontmatter. `emails` is
     /// the pre-joined, space-separated lowercased address list for
     /// contact-kind files (`None` for File-kind, and `None` for
@@ -830,7 +830,7 @@ impl GraphView {
     }
 
     /// Reindex staging support: clear every staging table. Use
-    /// before starting a reindex on a clean drive; resume paths
+    /// before starting a reindex on a clean workspace; resume paths
     /// skip this so partial parse state from a prior crash is
     /// preserved.
     pub fn clear_staging(&self) -> Result<()> {
@@ -1113,7 +1113,7 @@ impl GraphView {
         tracing::debug!("graph::files");
         let conn = self.reader()?;
         // Contacts are markdown files with a more specific kind tag;
-        // include them so callers iterating the drive's notes see
+        // include them so callers iterating the workspace's notes see
         // them too.
         let mut stmt = conn.prepare_cached(
             "SELECT rel_path FROM nodes WHERE kind IN ('file', 'contact') ORDER BY rel_path",
@@ -1130,7 +1130,7 @@ impl GraphView {
     /// `(mtime, size)` tuple. Either component is `None` when the
     /// indexer couldn't stat the file or the row predates the v5
     /// migration (size column NULL). Sorted by path. Used by
-    /// `Workspace::reconcile` to drive a strictly tighter diff than
+    /// `Workspace::reconcile` to workspace a strictly tighter diff than
     /// mtime alone: a same-mtime-different-content rewrite no
     /// longer slips past the reconcile.
     pub fn files_with_stat(&self) -> Result<Vec<FileStatRow>> {
@@ -1179,7 +1179,7 @@ impl GraphView {
         self.contacts_filtered(None, usize::MAX)
     }
 
-    /// Contact-kind nodes filtered + capped at the SQL layer. Drives
+    /// Contact-kind nodes filtered + capped at the SQL layer. Workspaces
     /// the editor's `@` picker and `GET /api/contacts`.
     ///
     /// `query`: case-insensitive substring matched against `title`
@@ -1249,7 +1249,7 @@ impl GraphView {
         }
     }
 
-    /// Link-autocomplete lookup. Drives the `[[` typeahead in the
+    /// Link-autocomplete lookup. Workspaces the `[[` typeahead in the
     /// editor: the user types a fragment and gets back files and
     /// headings to link to.
     ///

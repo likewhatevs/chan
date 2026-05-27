@@ -1,6 +1,6 @@
 // Workspace bootstrap / pre-flight snapshot.
 //
-// The drive exposes, immediately on open, a lightweight structural
+// The workspace exposes, immediately on open, a lightweight structural
 // snapshot (directory tree shape, file counts, byte sizes) that the
 // UI renders before any index or report job runs. This is the "spine"
 // the round-11 partial-load rework hangs File Browser, Graph, and the
@@ -17,11 +17,11 @@
 //     hardcoded `.git/` / `.chan/` invariants. The editor-visible
 //     on-demand APIs (`Workspace::list`, `Workspace::list_tree`) stay
 //     unfiltered so a user can still open a file inside an ignored
-//     directory on purpose; the bootstrap spine drives the DEFAULT
+//     directory on purpose; the bootstrap spine workspaces the DEFAULT
 //     rendered tree and the paced jobs, so it honors the filter.
 //   * The root response is the first level fully (root's immediate
 //     files + dirs, each dir carrying its recursive subtree stats),
-//     and aggregate subtree stats for the whole drive. Deeper levels
+//     and aggregate subtree stats for the whole workspace. Deeper levels
 //     load lazily on File Browser expand / Graph depth-increase via
 //     the existing per-directory listing path; this module computes
 //     the eager root level in one pass.
@@ -37,11 +37,11 @@ use crate::fs_ops::{self, FileClass, WalkFilter};
 
 /// Structural snapshot of one directory level, produced by the
 /// bootstrap walk. Counts and sizes only; no content, no graph edges.
-/// Serializable for the `/api/drive/bootstrap` response and for the
+/// Serializable for the `/api/workspace/bootstrap` response and for the
 /// FFI bridge.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct BootstrapTree {
-    /// Workspace-relative POSIX dir path of this node ("" for the drive
+    /// Workspace-relative POSIX dir path of this node ("" for the workspace
     /// root).
     pub path: String,
     /// Immediate child directories at this level, sorted by name.
@@ -60,7 +60,7 @@ pub struct BootstrapDir {
     /// Basename (not a path).
     pub name: String,
     /// Recursive counts/sizes for everything under this directory
-    /// (filtered). Drives the collapsed-directory affordance.
+    /// (filtered). Workspaces the collapsed-directory affordance.
     pub subtree: SubtreeStats,
     /// Immediate-child directory count, so the UI can render
     /// "12 files, 3 folders" without expanding.
@@ -123,22 +123,22 @@ impl From<FileClass> for FileClassWire {
 }
 
 /// Walk `root` once (filtered) and build the eager root-level
-/// `BootstrapTree`: every immediate file + directory of the drive
+/// `BootstrapTree`: every immediate file + directory of the workspace
 /// root, each directory carrying its recursive subtree stats, plus
-/// the whole-drive aggregate.
+/// the whole-workspace aggregate.
 ///
 /// One pass: for every file we bump the subtree stats of its
-/// top-level ancestor directory (and the whole-drive total). Immediate
+/// top-level ancestor directory (and the whole-workspace total). Immediate
 /// children of the root are recorded directly. The walk reuses the
 /// same `.git/` / `.chan/` + `WalkFilter` rules as the indexer's
 /// `walk_drive_filtered`, so the spine and the index agree on what is
-/// part of the drive.
+/// part of the workspace.
 pub fn bootstrap_root(root: &Path, filter: &WalkFilter) -> Result<BootstrapTree> {
     bootstrap_dir(root, "", filter)
 }
 
-/// Build a `BootstrapTree` for the directory at drive-relative `rel`
-/// ("" for the drive root). Used by the root bootstrap and, for
+/// Build a `BootstrapTree` for the directory at workspace-relative `rel`
+/// ("" for the workspace root). Used by the root bootstrap and, for
 /// symmetry, by any caller that wants the same eager-level shape for a
 /// nested directory (File Browser expand can reuse this rather than
 /// the plain per-file listing when it wants subtree stats).
@@ -342,7 +342,7 @@ mod tests {
         assert_eq!(notes.child_files, 1);
         assert_eq!(notes.child_dirs, 1);
 
-        // Whole-drive aggregate: 5 files total.
+        // Whole-workspace aggregate: 5 files total.
         assert_eq!(tree.subtree.files, 5);
         // Byte total is the sum of all five file lengths.
         let expected_bytes: u64 = [

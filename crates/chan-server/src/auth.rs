@@ -3,7 +3,7 @@
 //! Token persistence lives at `<paths.tokens>/token` (mode 0600 on Unix)
 //! so a `cargo build && chan serve` cycle does not invalidate the
 //! browser's cached sessionStorage token. Atomic write goes through
-//! chan-drive's `fs_ops::atomic_write` so the parent-dir fsync invariant
+//! chan-workspace's `fs_ops::atomic_write` so the parent-dir fsync invariant
 //! matches the rest of the app.
 //!
 //! Tunnel mode forces the gate off (`AppState::token == None`); the
@@ -54,7 +54,7 @@ pub fn load_or_create_token(paths: &WorkspacePaths) -> std::io::Result<String> {
     Ok(token)
 }
 
-/// Make sure `<state>/tokens/<drive-key>/` is a directory we can write
+/// Make sure `<state>/tokens/<workspace-key>/` is a directory we can write
 /// inside. Self-heals one specific corruption case: a regular file
 /// sitting at that path (typically left by manual fiddling) makes
 /// `create_dir_all` fail with `AlreadyExists` and would otherwise
@@ -78,7 +78,7 @@ fn ensure_tokens_dir(dir: &Path) -> std::io::Result<()> {
     }
 }
 
-/// Write the token via chan-drive's atomic_write helper (tmpfile +
+/// Write the token via chan-workspace's atomic_write helper (tmpfile +
 /// fsync of file AND parent dir + rename). Sets 0600 permissions on
 /// Unix to keep the secret out of `ls -l` snooping.
 fn write_token_atomic(token_path: &Path, token: &str) -> std::io::Result<()> {

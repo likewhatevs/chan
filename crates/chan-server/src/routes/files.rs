@@ -28,7 +28,7 @@ enum ReadFileResult {
 }
 
 /// Tree entry shape on the wire. Adds a `kind` discriminator on top
-/// of chan-drive's `TreeEntry` so the file browser, search overlay,
+/// of chan-workspace's `TreeEntry` so the file browser, search overlay,
 /// and graph inspector can render the right glyph + chip without a
 /// per-file resolve round-trip. Five kinds (`document`, `contact`,
 /// `text`, `media`, `binary`) for regular files; absent on directory
@@ -42,7 +42,7 @@ enum ReadFileResult {
 ///   - `FileClass::Other`                              -> `binary`
 ///
 /// PDFs are media: the frontend's fullscreen viewer (state/pdfViewer.ts)
-/// handles them via `<embed type="application/pdf">`. chan-drive keeps
+/// handles them via `<embed type="application/pdf">`. chan-workspace keeps
 /// `FileClass::Pdf` as a distinct variant so a future iteration that
 /// renders PDFs differently from images (per-page extract, OCR, ...)
 /// can re-distinguish without revisiting the wire shape.
@@ -80,7 +80,7 @@ fn project_kind(path: &str, is_dir: bool, is_contact: bool) -> Option<&'static s
 pub struct ListFilesQuery {
     /// Optional directory to list non-recursively. Missing preserves
     /// the legacy recursive listing for callers that still need a
-    /// whole-drive snapshot.
+    /// whole-workspace snapshot.
     #[serde(default)]
     dir: Option<String>,
 }
@@ -89,11 +89,11 @@ pub async fn api_list_files(
     State(state): State<Arc<AppState>>,
     Query(query): Query<ListFilesQuery>,
 ) -> Response {
-    let drive = match state.try_drive() {
-        Ok(drive) => drive,
+    let workspace = match state.try_drive() {
+        Ok(workspace) => workspace,
         Err(e) => return err_state(&e),
     };
-    let result = tokio::task::spawn_blocking(move || list_files_sync(&drive, query)).await;
+    let result = tokio::task::spawn_blocking(move || list_files_sync(&workspace, query)).await;
 
     match result {
         Ok(Ok(out)) => Json(out).into_response(),
@@ -103,23 +103,23 @@ pub async fn api_list_files(
 }
 
 fn list_files_sync(
-    drive: &chan_workspace::Workspace,
+    workspace: &chan_workspace::Workspace,
     query: ListFilesQuery,
 ) -> chan_workspace::Result<Vec<TreeEntryView>> {
     let tree = if let Some(dir) = query.dir.as_deref() {
-        list_dir_entries(drive, dir)?
+        list_dir_entries(workspace, dir)?
     } else {
         // The browser still reflects live disk, but it should not
-        // recursively enumerate build/dependency trees that the drive's
+        // recursively enumerate build/dependency trees that the workspace's
         // own indexing policy already treats as noise (`target/`,
         // `node_modules/`, ...). Repo roots can otherwise spend startup
         // walking hundreds of thousands of uninteresting files before the
         // user sees anything.
-        chan_workspace::fs_ops::list_tree_filtered(drive.root(), drive.walk_filter())?
+        chan_workspace::fs_ops::list_tree_filtered(workspace.root(), workspace.walk_filter())?
     };
     // Pull the contact-kind set in one shot; a single SQL scan beats N
-    // per-path node_kind lookups on big drives.
-    let contact_paths: std::collections::HashSet<String> = match drive.contacts() {
+    // per-path node_kind lookups on big workspaces.
+    let contact_paths: std::collections::HashSet<String> = match workspace.contacts() {
         Ok(rows) => rows.into_iter().map(|c| c.rel_path).collect(),
         Err(_) => std::collections::HashSet::new(),
     };
@@ -127,7 +127,7 @@ fn list_files_sync(
         .into_iter()
         .map(|e| TreeEntryView {
             kind: project_kind(&e.path, e.is_dir, contact_paths.contains(&e.path)),
-            path_class: path_class_for_wire(drive, &e.path),
+            path_class: path_class_for_wire(workspace, &e.path),
             path: e.path,
             is_dir: e.is_dir,
             mtime: e.mtime,
@@ -138,7 +138,7 @@ fn list_files_sync(
 }
 
 fn list_dir_entries(
-    drive: &chan_workspace::Workspace,
+    workspace: &chan_workspace::Workspace,
     dir: &str,
 ) -> chan_workspace::Result<Vec<chan_workspace::TreeEntry>> {
     let rel = normalize_dir_query(dir)?;
@@ -147,14 +147,14 @@ fn list_dir_entries(
             "not found: Drafts is hidden from File Browser".to_string(),
         ));
     }
-    let children = drive.list(&rel)?;
+    let children = workspace.list(&rel)?;
     let mut out = Vec::with_capacity(children.len());
     for child in children {
-        if child.is_dir && drive.walk_filter().is_excluded(&child.name) {
+        if child.is_dir && workspace.walk_filter().is_excluded(&child.name) {
             continue;
         }
         let path = join_rel(&rel, &child.name);
-        let stat = match drive.stat(&path) {
+        let stat = match workspace.stat(&path) {
             Ok(s) => s,
             Err(e) => {
                 tracing::warn!(%path, ?e, "list_dir_entries: stat failed; skipping");
@@ -201,8 +201,8 @@ struct FileResponse {
     /// user-write bit (e.g. `chmod -w`); the editor uses this to
     /// lock the per-tab read mode regardless of user choice. Sourced
     /// from `metadata().permissions().readonly()` on the resolved
-    /// drive-internal path so symlink escapes are still refused
-    /// upstream by chan-drive.
+    /// workspace-internal path so symlink escapes are still refused
+    /// upstream by chan-workspace.
     writable: bool,
 }
 
@@ -235,10 +235,10 @@ enum FileStreamMessage {
 }
 
 fn path_class_for_wire(
-    drive: &chan_workspace::Workspace,
+    workspace: &chan_workspace::Workspace,
     rel: &str,
 ) -> Option<chan_workspace::PathClass> {
-    match chan_workspace::fs_ops::classify_path(drive.root(), rel) {
+    match chan_workspace::fs_ops::classify_path(workspace.root(), rel) {
         Ok(class) => Some(class),
         Err(e) => {
             tracing::warn!(%rel, ?e, "path classification failed");
@@ -247,13 +247,13 @@ fn path_class_for_wire(
     }
 }
 
-/// Check the user-write bit on a drive-relative path. Returns true when
+/// Check the user-write bit on a workspace-relative path. Returns true when
 /// the path can't be safely resolved (matches read_text's own behavior
 /// of failing later) so we don't surface a misleading "locked" lamp on a
 /// path that's actually broken; callers get the real error from
 /// `read_text` instead.
-fn fs_writable(drive: &chan_workspace::Workspace, rel: &str) -> bool {
-    let abs = match chan_workspace::fs_ops::resolve_safe_strict(drive.root(), rel) {
+fn fs_writable(workspace: &chan_workspace::Workspace, rel: &str) -> bool {
+    let abs = match chan_workspace::fs_ops::resolve_safe_strict(workspace.root(), rel) {
         Ok(p) => p,
         Err(_) => return true,
     };
@@ -264,23 +264,23 @@ fn fs_writable(drive: &chan_workspace::Workspace, rel: &str) -> bool {
 }
 
 fn read_file_sync(
-    drive: &chan_workspace::Workspace,
+    workspace: &chan_workspace::Workspace,
     path: &str,
 ) -> chan_workspace::Result<ReadFileResult> {
     if chan_workspace::fs_ops::is_editable_text(path) {
-        let (content, stat) = drive.read_text_with_stat(path)?;
+        let (content, stat) = workspace.read_text_with_stat(path)?;
         let mtime = stat.mtime;
         let mtime_ns = stat.mtime_ns;
-        let writable = fs_writable(drive, path);
+        let writable = fs_writable(workspace, path);
         return Ok(ReadFileResult::Text {
             content,
             mtime,
             mtime_ns,
             writable,
-            path_class: path_class_for_wire(drive, path),
+            path_class: path_class_for_wire(workspace, path),
         });
     }
-    drive.read(path).map(ReadFileResult::Binary)
+    workspace.read(path).map(ReadFileResult::Binary)
 }
 
 fn ndjson_bytes(event: &FileStreamEvent<'_>) -> Result<Bytes, serde_json::Error> {
@@ -299,7 +299,7 @@ fn ndjson_error_bytes(error: String) -> Bytes {
 }
 
 fn stream_read_file_sync<F>(
-    drive: &chan_workspace::Workspace,
+    workspace: &chan_workspace::Workspace,
     path: &str,
     mut emit: F,
 ) -> chan_workspace::Result<()>
@@ -307,16 +307,18 @@ where
     F: FnMut(Bytes) -> bool,
 {
     let mut encode_error = None;
-    let result =
-        drive.read_text_with_stat_chunked(path, chan_workspace::TEXT_READ_CHUNK_SIZE, |event| {
+    let result = workspace.read_text_with_stat_chunked(
+        path,
+        chan_workspace::TEXT_READ_CHUNK_SIZE,
+        |event| {
             let event = match event {
                 chan_workspace::TextReadEvent::Meta(stat) => FileStreamEvent::Meta {
                     path,
                     size: stat.size,
                     mtime: stat.mtime,
                     mtime_ns: stat.mtime_ns.map(|ns| ns.to_string()),
-                    path_class: path_class_for_wire(drive, path),
-                    writable: fs_writable(drive, path),
+                    path_class: path_class_for_wire(workspace, path),
+                    writable: fs_writable(workspace, path),
                 },
                 chan_workspace::TextReadEvent::Chunk(content) => FileStreamEvent::Chunk {
                     content,
@@ -333,7 +335,8 @@ where
                     false
                 }
             }
-        });
+        },
+    );
     result?;
     if let Some(e) = encode_error {
         Err(e)
@@ -348,15 +351,15 @@ enum DownloadPayload {
 }
 
 fn download_path_sync(
-    drive: &chan_workspace::Workspace,
+    workspace: &chan_workspace::Workspace,
     path: &str,
 ) -> chan_workspace::Result<DownloadPayload> {
-    let stat = drive.stat(path)?;
+    let stat = workspace.stat(path)?;
     if stat.is_dir {
-        let bytes = archive_directory_sync(drive, path)?;
+        let bytes = archive_directory_sync(workspace, path)?;
         Ok(DownloadPayload::DirectoryTar(bytes))
     } else {
-        drive.read(path).map(DownloadPayload::File)
+        workspace.read(path).map(DownloadPayload::File)
     }
 }
 
@@ -401,30 +404,30 @@ fn content_disposition_archive(path: &str) -> String {
 }
 
 fn archive_directory_sync(
-    drive: &chan_workspace::Workspace,
+    workspace: &chan_workspace::Workspace,
     path: &str,
 ) -> chan_workspace::Result<Vec<u8>> {
     let root_name = download_filename(path);
     let mut builder = tar::Builder::new(Vec::new());
-    append_dir_to_archive(&mut builder, drive, path, &root_name)?;
+    append_dir_to_archive(&mut builder, workspace, path, &root_name)?;
     builder.finish()?;
     Ok(builder.into_inner()?)
 }
 
 fn append_dir_to_archive(
     builder: &mut tar::Builder<Vec<u8>>,
-    drive: &chan_workspace::Workspace,
+    workspace: &chan_workspace::Workspace,
     source_rel: &str,
     archive_rel: &str,
 ) -> chan_workspace::Result<()> {
     append_archive_dir(builder, archive_rel)?;
-    for child in drive.list(source_rel)? {
+    for child in workspace.list(source_rel)? {
         let child_source = join_rel(source_rel.trim_matches('/'), &child.name);
         let child_archive = join_rel(archive_rel, &child.name);
         if child.is_dir {
-            append_dir_to_archive(builder, drive, &child_source, &child_archive)?;
+            append_dir_to_archive(builder, workspace, &child_source, &child_archive)?;
         } else {
-            let bytes = drive.read(&child_source)?;
+            let bytes = workspace.read(&child_source)?;
             append_archive_file(builder, &child_archive, bytes)?;
         }
     }
@@ -482,14 +485,14 @@ pub async fn api_read_file(
     // string. Anything else (images, attachments) comes back as
     // raw bytes with a sniffed Content-Type so `<img src=...>`
     // pointing at /api/files/<path> resolves correctly.
-    let drive = match state.try_drive() {
-        Ok(drive) => drive,
+    let workspace = match state.try_drive() {
+        Ok(workspace) => workspace,
         Err(e) => return err_state(&e),
     };
     if query_flag(&query.download) {
         let path_for_download = path.clone();
         let result =
-            tokio::task::spawn_blocking(move || download_path_sync(&drive, &path_for_download))
+            tokio::task::spawn_blocking(move || download_path_sync(&workspace, &path_for_download))
                 .await;
         return match result {
             Ok(Ok(DownloadPayload::File(bytes))) => (
@@ -520,11 +523,12 @@ pub async fn api_read_file(
     }
 
     if query_flag(&query.stream) {
-        return stream_read_file_response(drive, path).await;
+        return stream_read_file_response(workspace, path).await;
     }
 
     let path_for_read = path.clone();
-    let result = tokio::task::spawn_blocking(move || read_file_sync(&drive, &path_for_read)).await;
+    let result =
+        tokio::task::spawn_blocking(move || read_file_sync(&workspace, &path_for_read)).await;
 
     match result {
         Ok(Ok(ReadFileResult::Text {
@@ -551,13 +555,13 @@ pub async fn api_read_file(
 }
 
 async fn stream_read_file_response(
-    drive: Arc<chan_workspace::Workspace>,
+    workspace: Arc<chan_workspace::Workspace>,
     path: String,
 ) -> Response {
     let (tx, mut rx) = mpsc::channel::<FileStreamMessage>(8);
     let path_for_read = path.clone();
     tokio::task::spawn_blocking(move || {
-        let result = stream_read_file_sync(&drive, &path_for_read, |bytes| {
+        let result = stream_read_file_sync(&workspace, &path_for_read, |bytes| {
             tx.blocking_send(FileStreamMessage::Data(bytes)).is_ok()
         });
         if let Err(e) = result {
@@ -639,8 +643,8 @@ pub async fn api_write_file(
         Ok(mtime_ns) => mtime_ns,
         Err(message) => return err(StatusCode::BAD_REQUEST, message),
     };
-    let drive = match state.try_drive() {
-        Ok(drive) => drive,
+    let workspace = match state.try_drive() {
+        Ok(workspace) => workspace,
         Err(e) => return err_state(&e),
     };
     // Record the self-write BEFORE the blocking write runs. The fs
@@ -656,7 +660,7 @@ pub async fn api_write_file(
     let path_for_write = path.clone();
     let result = tokio::task::spawn_blocking(move || {
         write_file_sync(
-            &drive,
+            &workspace,
             &path_for_write,
             body.expected_mtime,
             expected_mtime_ns,
@@ -690,16 +694,16 @@ pub async fn api_write_file(
 }
 
 fn write_file_sync(
-    drive: &chan_workspace::Workspace,
+    workspace: &chan_workspace::Workspace,
     path: &str,
     expected_mtime: Option<i64>,
     expected_mtime_ns: Option<i64>,
     content: &str,
 ) -> chan_workspace::Result<(Option<i64>, Option<i64>)> {
     if let Some(ns) = expected_mtime_ns {
-        drive.write_text_if_unchanged(path, Some(ns), content)?;
+        workspace.write_text_if_unchanged(path, Some(ns), content)?;
     } else if expected_mtime.is_some() {
-        let pre = drive.stat(path).ok();
+        let pre = workspace.stat(path).ok();
         let cur_secs = pre.as_ref().and_then(|s| s.mtime);
         let cur_ns = pre.as_ref().and_then(|s| s.mtime_ns);
         if expected_mtime != cur_secs {
@@ -707,11 +711,11 @@ fn write_file_sync(
                 current_mtime_ns: cur_ns,
             });
         }
-        drive.write_text_if_unchanged(path, cur_ns, content)?;
+        workspace.write_text_if_unchanged(path, cur_ns, content)?;
     } else {
-        drive.write_text(path, content)?;
+        workspace.write_text(path, content)?;
     }
-    let stat = drive.stat(path).ok();
+    let stat = workspace.stat(path).ok();
     Ok((
         stat.as_ref().and_then(|s| s.mtime),
         stat.as_ref().and_then(|s| s.mtime_ns),
@@ -744,8 +748,8 @@ pub async fn api_create_file(
     State(state): State<Arc<AppState>>,
     Json(body): Json<CreateBody>,
 ) -> Response {
-    let drive = match state.try_drive() {
-        Ok(drive) => drive,
+    let workspace = match state.try_drive() {
+        Ok(workspace) => workspace,
         Err(e) => return err_state(&e),
     };
     let path = body.path.clone();
@@ -753,7 +757,7 @@ pub async fn api_create_file(
     // watcher's echo is suppressed without racing the await; see
     // api_write_file for the full rationale.
     state.self_writes.note(&path);
-    let result = tokio::task::spawn_blocking(move || create_file_sync(&drive, body)).await;
+    let result = tokio::task::spawn_blocking(move || create_file_sync(&workspace, body)).await;
     match result {
         Ok(Ok(())) => StatusCode::CREATED.into_response(),
         Ok(Err(e)) => err_from(&e),
@@ -762,21 +766,21 @@ pub async fn api_create_file(
 }
 
 fn create_file_sync(
-    drive: &chan_workspace::Workspace,
+    workspace: &chan_workspace::Workspace,
     body: CreateBody,
 ) -> chan_workspace::Result<()> {
-    if create_target_exists(drive, &body.path) {
+    if create_target_exists(workspace, &body.path) {
         return Err(chan_workspace::ChanError::PathAlreadyExists(body.path));
     }
     if body.is_dir {
-        drive.create_dir(&body.path)
+        workspace.create_dir(&body.path)
     } else {
-        drive.write_text(&body.path, &body.content.unwrap_or_default())
+        workspace.write_text(&body.path, &body.content.unwrap_or_default())
     }
 }
 
-fn create_target_exists(drive: &chan_workspace::Workspace, path: &str) -> bool {
-    drive.stat(path).is_ok()
+fn create_target_exists(workspace: &chan_workspace::Workspace, path: &str) -> bool {
+    workspace.stat(path).is_ok()
 }
 
 #[derive(Debug, Serialize)]
@@ -837,8 +841,8 @@ pub async fn api_upload_file(
         );
     };
 
-    let drive = match state.try_drive() {
-        Ok(drive) => drive,
+    let workspace = match state.try_drive() {
+        Ok(workspace) => workspace,
         Err(e) => return err_state(&e),
     };
     // The destination path is computed inside the blocking task (the
@@ -850,9 +854,9 @@ pub async fn api_upload_file(
     let self_writes = Arc::clone(&state.self_writes);
     let result = tokio::task::spawn_blocking(move || {
         let upload = if let Some(path) = replace_path {
-            replace_file_sync(&drive, &path, &bytes)
+            replace_file_sync(&workspace, &path, &bytes)
         } else {
-            upload_file_sync(&drive, &dir, &filename, &bytes)
+            upload_file_sync(&workspace, &dir, &filename, &bytes)
         }?;
         self_writes.note(&upload.path);
         Ok::<_, chan_workspace::ChanError>(upload)
@@ -869,19 +873,19 @@ pub async fn api_upload_file(
 }
 
 fn replace_file_sync(
-    drive: &chan_workspace::Workspace,
+    workspace: &chan_workspace::Workspace,
     path: &str,
     bytes: &[u8],
 ) -> chan_workspace::Result<UploadFileResponse> {
     let trimmed = path.trim_matches('/');
     chan_workspace::fs_ops::validate_rel(trimmed)?;
-    let stat = drive.stat(trimmed)?;
+    let stat = workspace.stat(trimmed)?;
     if stat.is_dir {
         return Err(chan_workspace::ChanError::Io(format!(
             "not a file: {trimmed}"
         )));
     }
-    drive.write_bytes(trimmed, bytes)?;
+    workspace.write_bytes(trimmed, bytes)?;
     Ok(UploadFileResponse {
         path: trimmed.to_string(),
         size: bytes.len() as u64,
@@ -889,14 +893,14 @@ fn replace_file_sync(
 }
 
 fn upload_file_sync(
-    drive: &chan_workspace::Workspace,
+    workspace: &chan_workspace::Workspace,
     dir: &str,
     original_name: &str,
     bytes: &[u8],
 ) -> chan_workspace::Result<UploadFileResponse> {
     let dir = normalize_dir_query(dir)?;
     if !dir.is_empty() {
-        let stat = drive.stat(&dir)?;
+        let stat = workspace.stat(&dir)?;
         if !stat.is_dir {
             return Err(chan_workspace::ChanError::Io(format!(
                 "not a directory: {dir}"
@@ -905,10 +909,10 @@ fn upload_file_sync(
     }
     let filename = upload_leaf_filename(original_name)?;
     let rel = join_rel(&dir, &filename);
-    if create_target_exists(drive, &rel) {
+    if create_target_exists(workspace, &rel) {
         return Err(chan_workspace::ChanError::PathAlreadyExists(rel));
     }
-    drive.write_bytes(&rel, bytes)?;
+    workspace.write_bytes(&rel, bytes)?;
     Ok(UploadFileResponse {
         path: rel,
         size: bytes.len() as u64,
@@ -945,14 +949,14 @@ mod file_browser_listing_tests {
         let root = tempfile::TempDir::new().unwrap();
         let lib = chan_workspace::Library::open_at(cfg.path().join("config.toml")).unwrap();
         lib.register_workspace(root.path()).unwrap();
-        let drive = lib.open_workspace(root.path()).unwrap();
+        let workspace = lib.open_workspace(root.path()).unwrap();
         std::fs::write(root.path().join("note.md"), "hi").unwrap();
-        drive
+        workspace
             .write_text("Drafts/untitled-1/draft.md", "# draft\n")
             .unwrap();
 
         let entries = list_files_sync(
-            &drive,
+            &workspace,
             ListFilesQuery {
                 dir: Some(String::new()),
             },
@@ -969,12 +973,12 @@ mod file_browser_listing_tests {
         let root = tempfile::TempDir::new().unwrap();
         let lib = chan_workspace::Library::open_at(cfg.path().join("config.toml")).unwrap();
         lib.register_workspace(root.path()).unwrap();
-        let drive = lib.open_workspace(root.path()).unwrap();
-        drive
+        let workspace = lib.open_workspace(root.path()).unwrap();
+        workspace
             .write_text("Drafts/untitled-1/draft.md", "# draft\n")
             .unwrap();
 
-        let err = list_dir_entries(&drive, "Drafts").unwrap_err();
+        let err = list_dir_entries(&workspace, "Drafts").unwrap_err();
 
         assert!(
             err.to_string().contains("hidden from File Browser"),
@@ -988,11 +992,11 @@ mod file_browser_listing_tests {
         let root = tempfile::TempDir::new().unwrap();
         let lib = chan_workspace::Library::open_at(cfg.path().join("config.toml")).unwrap();
         lib.register_workspace(root.path()).unwrap();
-        let drive = lib.open_workspace(root.path()).unwrap();
-        drive.create_dir("notes").unwrap();
+        let workspace = lib.open_workspace(root.path()).unwrap();
+        workspace.create_dir("notes").unwrap();
 
-        assert!(create_target_exists(&drive, "notes"));
-        assert!(!create_target_exists(&drive, "missing"));
+        assert!(create_target_exists(&workspace, "notes"));
+        assert!(!create_target_exists(&workspace, "missing"));
     }
 
     #[test]
@@ -1001,14 +1005,14 @@ mod file_browser_listing_tests {
         let root = tempfile::TempDir::new().unwrap();
         let lib = chan_workspace::Library::open_at(cfg.path().join("config.toml")).unwrap();
         lib.register_workspace(root.path()).unwrap();
-        let drive = lib.open_workspace(root.path()).unwrap();
-        drive.create_dir("assets").unwrap();
+        let workspace = lib.open_workspace(root.path()).unwrap();
+        workspace.create_dir("assets").unwrap();
 
-        let uploaded = upload_file_sync(&drive, "assets", "photo 1.PNG", &[1, 2, 3]).unwrap();
+        let uploaded = upload_file_sync(&workspace, "assets", "photo 1.PNG", &[1, 2, 3]).unwrap();
 
         assert_eq!(uploaded.path, "assets/photo 1.PNG");
         assert_eq!(uploaded.size, 3);
-        assert_eq!(drive.read("assets/photo 1.PNG").unwrap(), vec![1, 2, 3]);
+        assert_eq!(workspace.read("assets/photo 1.PNG").unwrap(), vec![1, 2, 3]);
     }
 
     #[test]
@@ -1017,13 +1021,13 @@ mod file_browser_listing_tests {
         let root = tempfile::TempDir::new().unwrap();
         let lib = chan_workspace::Library::open_at(cfg.path().join("config.toml")).unwrap();
         lib.register_workspace(root.path()).unwrap();
-        let drive = lib.open_workspace(root.path()).unwrap();
-        drive.write_bytes("same.bin", b"old").unwrap();
+        let workspace = lib.open_workspace(root.path()).unwrap();
+        workspace.write_bytes("same.bin", b"old").unwrap();
 
-        let err = upload_file_sync(&drive, "", "same.bin", b"new").unwrap_err();
+        let err = upload_file_sync(&workspace, "", "same.bin", b"new").unwrap_err();
 
         assert!(matches!(err, chan_workspace::ChanError::PathAlreadyExists(p) if p == "same.bin"));
-        assert_eq!(drive.read("same.bin").unwrap(), b"old");
+        assert_eq!(workspace.read("same.bin").unwrap(), b"old");
     }
 
     #[test]
@@ -1032,14 +1036,14 @@ mod file_browser_listing_tests {
         let root = tempfile::TempDir::new().unwrap();
         let lib = chan_workspace::Library::open_at(cfg.path().join("config.toml")).unwrap();
         lib.register_workspace(root.path()).unwrap();
-        let drive = lib.open_workspace(root.path()).unwrap();
-        drive.write_text("same.md", "old").unwrap();
+        let workspace = lib.open_workspace(root.path()).unwrap();
+        workspace.write_text("same.md", "old").unwrap();
 
-        let uploaded = replace_file_sync(&drive, "same.md", b"new").unwrap();
+        let uploaded = replace_file_sync(&workspace, "same.md", b"new").unwrap();
 
         assert_eq!(uploaded.path, "same.md");
         assert_eq!(uploaded.size, 3);
-        assert_eq!(drive.read_text("same.md").unwrap(), "new");
+        assert_eq!(workspace.read_text("same.md").unwrap(), "new");
     }
 
     #[test]
@@ -1048,15 +1052,15 @@ mod file_browser_listing_tests {
         let root = tempfile::TempDir::new().unwrap();
         let lib = chan_workspace::Library::open_at(cfg.path().join("config.toml")).unwrap();
         lib.register_workspace(root.path()).unwrap();
-        let drive = lib.open_workspace(root.path()).unwrap();
-        drive.write_text("same.md", "old").unwrap();
+        let workspace = lib.open_workspace(root.path()).unwrap();
+        workspace.write_text("same.md", "old").unwrap();
 
-        let err = replace_file_sync(&drive, "same.md", &[0xff, 0xfe]).unwrap_err();
+        let err = replace_file_sync(&workspace, "same.md", &[0xff, 0xfe]).unwrap_err();
 
         assert!(err
             .to_string()
             .contains("non-UTF-8 bytes to editable text file"));
-        assert_eq!(drive.read_text("same.md").unwrap(), "old");
+        assert_eq!(workspace.read_text("same.md").unwrap(), "old");
     }
 
     #[test]
@@ -1065,10 +1069,10 @@ mod file_browser_listing_tests {
         let root = tempfile::TempDir::new().unwrap();
         let lib = chan_workspace::Library::open_at(cfg.path().join("config.toml")).unwrap();
         lib.register_workspace(root.path()).unwrap();
-        let drive = lib.open_workspace(root.path()).unwrap();
-        drive.create_dir("notes").unwrap();
+        let workspace = lib.open_workspace(root.path()).unwrap();
+        workspace.create_dir("notes").unwrap();
 
-        let err = replace_file_sync(&drive, "notes", b"new").unwrap_err();
+        let err = replace_file_sync(&workspace, "notes", b"new").unwrap_err();
 
         assert!(err.to_string().contains("not a file: notes"));
     }
@@ -1100,10 +1104,10 @@ mod write_tests {
         let root = tempfile::TempDir::new().unwrap();
         let lib = chan_workspace::Library::open_at(cfg.path().join("config.toml")).unwrap();
         lib.register_workspace(root.path()).unwrap();
-        let drive = lib.open_workspace(root.path()).unwrap();
-        drive.write_text("note.md", "hello").unwrap();
+        let workspace = lib.open_workspace(root.path()).unwrap();
+        workspace.write_text("note.md", "hello").unwrap();
 
-        let result = read_file_sync(&drive, "note.md").unwrap();
+        let result = read_file_sync(&workspace, "note.md").unwrap();
 
         match result {
             ReadFileResult::Text {
@@ -1132,10 +1136,10 @@ mod write_tests {
         let root = tempfile::TempDir::new().unwrap();
         let lib = chan_workspace::Library::open_at(cfg.path().join("config.toml")).unwrap();
         lib.register_workspace(root.path()).unwrap();
-        let drive = lib.open_workspace(root.path()).unwrap();
+        let workspace = lib.open_workspace(root.path()).unwrap();
         std::fs::write(root.path().join("image.bin"), [0, 1, 2, 3]).unwrap();
 
-        let result = read_file_sync(&drive, "image.bin").unwrap();
+        let result = read_file_sync(&workspace, "image.bin").unwrap();
 
         match result {
             ReadFileResult::Binary(bytes) => assert_eq!(bytes, vec![0, 1, 2, 3]),
@@ -1149,11 +1153,11 @@ mod write_tests {
         let root = tempfile::TempDir::new().unwrap();
         let lib = chan_workspace::Library::open_at(cfg.path().join("config.toml")).unwrap();
         lib.register_workspace(root.path()).unwrap();
-        let drive = lib.open_workspace(root.path()).unwrap();
-        drive.write_text("note.md", "hello").unwrap();
+        let workspace = lib.open_workspace(root.path()).unwrap();
+        workspace.write_text("note.md", "hello").unwrap();
         let mut lines = Vec::new();
 
-        stream_read_file_sync(&drive, "note.md", |bytes| {
+        stream_read_file_sync(&workspace, "note.md", |bytes| {
             lines.push(String::from_utf8(bytes.to_vec()).unwrap());
             true
         })
@@ -1177,11 +1181,11 @@ mod write_tests {
         let root = tempfile::TempDir::new().unwrap();
         let lib = chan_workspace::Library::open_at(cfg.path().join("config.toml")).unwrap();
         lib.register_workspace(root.path()).unwrap();
-        let drive = lib.open_workspace(root.path()).unwrap();
-        drive.write_text("note.md", "hello").unwrap();
+        let workspace = lib.open_workspace(root.path()).unwrap();
+        workspace.write_text("note.md", "hello").unwrap();
         let mut lines = 0usize;
 
-        stream_read_file_sync(&drive, "note.md", |_| {
+        stream_read_file_sync(&workspace, "note.md", |_| {
             lines += 1;
             false
         })
@@ -1204,10 +1208,10 @@ mod write_tests {
         let root = tempfile::TempDir::new().unwrap();
         let lib = chan_workspace::Library::open_at(cfg.path().join("config.toml")).unwrap();
         lib.register_workspace(root.path()).unwrap();
-        let drive = lib.open_workspace(root.path()).unwrap();
-        drive.write_text("notes/readme.md", "hello\n").unwrap();
+        let workspace = lib.open_workspace(root.path()).unwrap();
+        workspace.write_text("notes/readme.md", "hello\n").unwrap();
 
-        let payload = download_path_sync(&drive, "notes/readme.md").unwrap();
+        let payload = download_path_sync(&workspace, "notes/readme.md").unwrap();
 
         match payload {
             DownloadPayload::File(bytes) => assert_eq!(bytes, b"hello\n"),
@@ -1224,13 +1228,15 @@ mod write_tests {
         let root = tempfile::TempDir::new().unwrap();
         let lib = chan_workspace::Library::open_at(cfg.path().join("config.toml")).unwrap();
         lib.register_workspace(root.path()).unwrap();
-        let drive = lib.open_workspace(root.path()).unwrap();
-        drive.create_dir("notes").unwrap();
-        drive.create_dir("notes/deep").unwrap();
-        drive.write_text("notes/readme.md", "hello\n").unwrap();
-        drive.write_text("notes/deep/todo.txt", "todo\n").unwrap();
+        let workspace = lib.open_workspace(root.path()).unwrap();
+        workspace.create_dir("notes").unwrap();
+        workspace.create_dir("notes/deep").unwrap();
+        workspace.write_text("notes/readme.md", "hello\n").unwrap();
+        workspace
+            .write_text("notes/deep/todo.txt", "todo\n")
+            .unwrap();
 
-        let payload = download_path_sync(&drive, "notes").unwrap();
+        let payload = download_path_sync(&workspace, "notes").unwrap();
 
         let DownloadPayload::DirectoryTar(bytes) = payload else {
             panic!("expected directory archive");
@@ -1279,10 +1285,10 @@ mod write_tests {
         let source = include_str!("files.rs");
 
         assert!(source.contains(
-            "tokio::task::spawn_blocking(move || read_file_sync(&drive, &path_for_read))"
+            "tokio::task::spawn_blocking(move || read_file_sync(&workspace, &path_for_read))"
         ));
         assert!(source.contains(
-            "tokio::task::spawn_blocking(move || download_path_sync(&drive, &path_for_download))"
+            "tokio::task::spawn_blocking(move || download_path_sync(&workspace, &path_for_download))"
         ));
     }
 
@@ -1290,21 +1296,18 @@ mod write_tests {
     fn api_list_files_wraps_sync_drive_walk_in_spawn_blocking() {
         let source = include_str!("files.rs");
 
-        assert!(
-            source.contains("tokio::task::spawn_blocking(move || list_files_sync(&drive, query))")
-        );
+        assert!(source
+            .contains("tokio::task::spawn_blocking(move || list_files_sync(&workspace, query))"));
     }
 
     #[test]
     fn api_create_and_delete_wrap_sync_drive_io_in_spawn_blocking() {
         let source = include_str!("files.rs");
 
-        assert!(
-            source.contains("tokio::task::spawn_blocking(move || create_file_sync(&drive, body))")
-        );
-        assert!(
-            source.contains("tokio::task::spawn_blocking(move || drive.remove(&path_for_remove))")
-        );
+        assert!(source
+            .contains("tokio::task::spawn_blocking(move || create_file_sync(&workspace, body))"));
+        assert!(source
+            .contains("tokio::task::spawn_blocking(move || workspace.remove(&path_for_remove))"));
     }
 
     #[test]
@@ -1313,11 +1316,11 @@ mod write_tests {
         let root = tempfile::TempDir::new().unwrap();
         let lib = chan_workspace::Library::open_at(cfg.path().join("config.toml")).unwrap();
         lib.register_workspace(root.path()).unwrap();
-        let drive = lib.open_workspace(root.path()).unwrap();
-        drive.create_dir("notes").unwrap();
+        let workspace = lib.open_workspace(root.path()).unwrap();
+        workspace.create_dir("notes").unwrap();
 
         let err = create_file_sync(
-            &drive,
+            &workspace,
             CreateBody {
                 path: "notes".to_string(),
                 is_dir: false,
@@ -1338,10 +1341,10 @@ mod write_tests {
         let root = tempfile::TempDir::new().unwrap();
         let lib = chan_workspace::Library::open_at(cfg.path().join("config.toml")).unwrap();
         lib.register_workspace(root.path()).unwrap();
-        let drive = lib.open_workspace(root.path()).unwrap();
-        drive.write_text("note.md", "v1").unwrap();
+        let workspace = lib.open_workspace(root.path()).unwrap();
+        workspace.write_text("note.md", "v1").unwrap();
 
-        let err = write_file_sync(&drive, "note.md", Some(0), None, "v2").unwrap_err();
+        let err = write_file_sync(&workspace, "note.md", Some(0), None, "v2").unwrap_err();
 
         assert!(matches!(
             err,
@@ -1349,7 +1352,7 @@ mod write_tests {
                 current_mtime_ns: Some(_)
             }
         ));
-        assert_eq!(drive.read_text("note.md").unwrap(), "v1");
+        assert_eq!(workspace.read_text("note.md").unwrap(), "v1");
     }
 
     #[test]
@@ -1358,10 +1361,10 @@ mod write_tests {
         let root = tempfile::TempDir::new().unwrap();
         let lib = chan_workspace::Library::open_at(cfg.path().join("config.toml")).unwrap();
         lib.register_workspace(root.path()).unwrap();
-        let drive = lib.open_workspace(root.path()).unwrap();
-        drive.write_text("note.md", "v1").unwrap();
+        let workspace = lib.open_workspace(root.path()).unwrap();
+        workspace.write_text("note.md", "v1").unwrap();
 
-        let err = write_file_sync(&drive, "note.md", None, Some(0), "v2").unwrap_err();
+        let err = write_file_sync(&workspace, "note.md", None, Some(0), "v2").unwrap_err();
 
         assert!(matches!(
             err,
@@ -1369,7 +1372,7 @@ mod write_tests {
                 current_mtime_ns: Some(_)
             }
         ));
-        assert_eq!(drive.read_text("note.md").unwrap(), "v1");
+        assert_eq!(workspace.read_text("note.md").unwrap(), "v1");
     }
 
     #[test]
@@ -1378,13 +1381,13 @@ mod write_tests {
         let root = tempfile::TempDir::new().unwrap();
         let lib = chan_workspace::Library::open_at(cfg.path().join("config.toml")).unwrap();
         lib.register_workspace(root.path()).unwrap();
-        let drive = lib.open_workspace(root.path()).unwrap();
+        let workspace = lib.open_workspace(root.path()).unwrap();
 
-        let (mtime, mtime_ns) = write_file_sync(&drive, "note.md", None, None, "v1").unwrap();
+        let (mtime, mtime_ns) = write_file_sync(&workspace, "note.md", None, None, "v1").unwrap();
 
         assert!(mtime.is_some());
         assert!(mtime_ns.is_some());
-        assert_eq!(drive.read_text("note.md").unwrap(), "v1");
+        assert_eq!(workspace.read_text("note.md").unwrap(), "v1");
     }
 
     #[test]
@@ -1393,15 +1396,15 @@ mod write_tests {
         let root = tempfile::TempDir::new().unwrap();
         let lib = chan_workspace::Library::open_at(cfg.path().join("config.toml")).unwrap();
         lib.register_workspace(root.path()).unwrap();
-        let drive = lib.open_workspace(root.path()).unwrap();
-        drive.write_text("note.md", "v1").unwrap();
-        let ns = drive.stat("note.md").unwrap().mtime_ns.unwrap();
+        let workspace = lib.open_workspace(root.path()).unwrap();
+        workspace.write_text("note.md", "v1").unwrap();
+        let ns = workspace.stat("note.md").unwrap().mtime_ns.unwrap();
 
         let (_mtime, mtime_ns) =
-            write_file_sync(&drive, "note.md", Some(0), Some(ns), "v2").unwrap();
+            write_file_sync(&workspace, "note.md", Some(0), Some(ns), "v2").unwrap();
 
         assert!(mtime_ns.is_some());
-        assert_eq!(drive.read_text("note.md").unwrap(), "v2");
+        assert_eq!(workspace.read_text("note.md").unwrap(), "v2");
     }
 
     #[test]
@@ -1417,14 +1420,14 @@ pub async fn api_delete_file(
     State(state): State<Arc<AppState>>,
     AxumPath(path): AxumPath<String>,
 ) -> Response {
-    // chan-drive's Workspace::remove handles files and EMPTY directories.
+    // chan-workspace's Workspace::remove handles files and EMPTY directories.
     // Recursive deletion of a non-empty directory is a deliberate
     // foot-gun guard; supporting it here would require either a new
-    // chan-drive API (`Workspace::remove_recursive`) or a server-side walk
+    // chan-workspace API (`Workspace::remove_recursive`) or a server-side walk
     // that issues per-leaf removes. Tracked for a follow-up; current
     // behavior is "error out, frontend resolves the leaves itself".
-    let drive = match state.try_drive() {
-        Ok(drive) => drive,
+    let workspace = match state.try_drive() {
+        Ok(workspace) => workspace,
         Err(e) => return err_state(&e),
     };
     // Register the self-write before the blocking remove so the
@@ -1433,7 +1436,7 @@ pub async fn api_delete_file(
     // external-edit/removal event).
     state.self_writes.note(&path);
     let path_for_remove = path.clone();
-    match tokio::task::spawn_blocking(move || drive.remove(&path_for_remove)).await {
+    match tokio::task::spawn_blocking(move || workspace.remove(&path_for_remove)).await {
         Ok(Ok(())) => StatusCode::NO_CONTENT.into_response(),
         Ok(Err(e)) => err_from(&e),
         Err(join) => err(StatusCode::INTERNAL_SERVER_ERROR, join.to_string()),
@@ -1451,8 +1454,8 @@ pub async fn api_move(State(state): State<Arc<AppState>>, Json(body): Json<MoveB
     // rewrite walks N source files synchronously and can take a few
     // hundred ms on big directory moves. Keeping it off the tokio
     // worker pool avoids blocking other requests during the walk.
-    let drive = match state.try_drive() {
-        Ok(drive) => drive,
+    let workspace = match state.try_drive() {
+        Ok(workspace) => workspace,
         Err(e) => return err_state(&e),
     };
     let from = body.from.clone();
@@ -1469,7 +1472,7 @@ pub async fn api_move(State(state): State<Arc<AppState>>, Json(body): Json<MoveB
     state.self_writes.note(&body.to);
     let self_writes = Arc::clone(&state.self_writes);
     let outcome = match tokio::task::spawn_blocking(move || {
-        let outcome = drive.rename_with_link_rewrite(&from, &to)?;
+        let outcome = workspace.rename_with_link_rewrite(&from, &to)?;
         for path in &outcome.rewritten {
             self_writes.note(path);
         }
@@ -1498,8 +1501,8 @@ struct MoveResponse {
 
 /// Multi-entry move/copy for the File Browser clipboard + multi-drag
 /// (FB capabilities). `op` selects move (cut/paste, drag) vs copy
-/// (copy/paste); `sources` are the drive-rooted POSIX paths of the
-/// selection; `dest_dir` is the target directory ("" = drive root).
+/// (copy/paste); `sources` are the workspace-rooted POSIX paths of the
+/// selection; `dest_dir` is the target directory ("" = workspace root).
 #[derive(Deserialize)]
 pub struct TransferBody {
     op: TransferOp,
@@ -1520,7 +1523,7 @@ struct TransferResponse {
     /// each source landed at (after collision suffixing) plus the op.
     moved: Vec<TransferItem>,
     /// Sources skipped because the destination equals the source's
-    /// current parent (a no-op move) or the source escaped the drive.
+    /// current parent (a no-op move) or the source escaped the workspace.
     skipped: Vec<String>,
     /// Link-rewrite CAS conflicts accumulated across all moved entries.
     conflicts: Vec<String>,
@@ -1532,12 +1535,12 @@ struct TransferItem {
     to: String,
 }
 
-/// Basename of a drive-rooted POSIX path.
+/// Basename of a workspace-rooted POSIX path.
 fn basename(path: &str) -> &str {
     path.rsplit('/').next().unwrap_or(path)
 }
 
-/// Parent dir of a drive-rooted POSIX path ("" for a top-level entry).
+/// Parent dir of a workspace-rooted POSIX path ("" for a top-level entry).
 fn parent_dir(path: &str) -> &str {
     match path.rfind('/') {
         Some(i) => &path[..i],
@@ -1549,8 +1552,8 @@ pub async fn api_fs_transfer(
     State(state): State<Arc<AppState>>,
     Json(body): Json<TransferBody>,
 ) -> Response {
-    let drive = match state.try_drive() {
-        Ok(drive) => drive,
+    let workspace = match state.try_drive() {
+        Ok(workspace) => workspace,
         Err(e) => return err_state(&e),
     };
     let dest_dir = body.dest_dir.trim_end_matches('/').to_string();
@@ -1562,7 +1565,7 @@ pub async fn api_fs_transfer(
     // files, both off the tokio worker pool.
     let dest_for_task = dest_dir.clone();
     // Note every created/moved/rewritten path INSIDE the blocking task,
-    // as each drive op reports it, so the watcher's Created/Removed
+    // as each workspace op reports it, so the watcher's Created/Removed
     // events are suppressed before the await returns. Noting after the
     // await (the old behavior) raced the watcher into firing phantom
     // external-edit prompts on files the user may have open. The
@@ -1582,13 +1585,13 @@ pub async fn api_fs_transfer(
             // Resolve a non-colliding destination name; both copy and a
             // cut-into-a-collision get a Finder-style " copy" suffix so
             // we never overwrite.
-            let dest = match drive.resolve_free_name(&dest_for_task, name) {
+            let dest = match workspace.resolve_free_name(&dest_for_task, name) {
                 Ok(d) => d,
                 Err(e) => return Err(e),
             };
             match op {
                 TransferOp::Move => {
-                    let outcome = drive.rename_with_link_rewrite(src, &dest)?;
+                    let outcome = workspace.rename_with_link_rewrite(src, &dest)?;
                     for (from, to) in &outcome.renamed {
                         self_writes.note(from);
                         self_writes.note(to);
@@ -1599,7 +1602,7 @@ pub async fn api_fs_transfer(
                     resp.conflicts.extend(outcome.conflicts);
                 }
                 TransferOp::Copy => {
-                    let outcome = drive.copy(src, &dest)?;
+                    let outcome = workspace.copy(src, &dest)?;
                     for path in &outcome.created {
                         self_writes.note(path);
                     }
@@ -1640,7 +1643,7 @@ mod tests {
                 permission: chan_workspace::PathPermission::ReadWrite,
                 link_count: 2,
                 target: None,
-                target_escapes_drive: false,
+                target_escapes_workspace: false,
             }),
             writable: true,
         };
@@ -1663,7 +1666,7 @@ mod tests {
                 permission: chan_workspace::PathPermission::ReadWrite,
                 link_count: 1,
                 target: Some(std::path::PathBuf::from("/etc/hosts")),
-                target_escapes_drive: true,
+                target_escapes_workspace: true,
             }),
             kind: Some("binary"),
         };
@@ -1671,7 +1674,7 @@ mod tests {
         let value = serde_json::to_value(entry).unwrap();
         assert_eq!(value["path_class"]["kind"], "symlink");
         assert_eq!(value["path_class"]["target"], "/etc/hosts");
-        assert_eq!(value["path_class"]["target_escapes_drive"], true);
+        assert_eq!(value["path_class"]["target_escapes_workspace"], true);
     }
 
     #[test]
@@ -1698,7 +1701,7 @@ mod tests {
     }
 
     #[test]
-    fn basename_and_parent_dir_split_drive_rooted_paths() {
+    fn basename_and_parent_dir_split_workspace_rooted_paths() {
         assert_eq!(basename("notes/sub/a.md"), "a.md");
         assert_eq!(basename("top.md"), "top.md");
         assert_eq!(parent_dir("notes/sub/a.md"), "notes/sub");
@@ -1714,13 +1717,13 @@ mod tests {
         let root = tempfile::TempDir::new().unwrap();
         let lib = chan_workspace::Library::open_at(cfg.path().join("config.toml")).unwrap();
         lib.register_workspace(root.path()).unwrap();
-        let drive = lib.open_workspace(root.path()).unwrap();
+        let workspace = lib.open_workspace(root.path()).unwrap();
         std::fs::write(root.path().join("note.md"), "hi").unwrap();
         symlink("note.md", root.path().join("alias.md")).unwrap();
 
-        let entries = list_dir_entries(&drive, "").unwrap();
+        let entries = list_dir_entries(&workspace, "").unwrap();
         assert!(entries.iter().any(|entry| entry.path == "alias.md"));
-        let class = path_class_for_wire(&drive, "alias.md").expect("symlink path class");
+        let class = path_class_for_wire(&workspace, "alias.md").expect("symlink path class");
         assert_eq!(class.kind, chan_workspace::PathKind::Symlink);
     }
 }

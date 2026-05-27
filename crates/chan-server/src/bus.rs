@@ -1,4 +1,4 @@
-//! Bridges chan-drive watcher/progress callbacks into the shared
+//! Bridges chan-workspace watcher/progress callbacks into the shared
 //! `events_tx` JSON broadcast channel.
 //!
 //! Both producers fan into one channel; each frame carries a `type`
@@ -101,7 +101,7 @@ pub struct SubId(u64);
 /// Per-directory scoped watcher pub/sub registry (phase-11 Slice C,
 /// Decision D1(b)).
 ///
-/// There is one recursive OS watcher on the drive (it feeds the
+/// There is one recursive OS watcher on the workspace (it feeds the
 /// indexer); this registry does NOT attach per-directory OS watchers.
 /// Instead it derives per-directory `fs` frames from that single feed
 /// by first-degree directory match and delivers each frame only to the
@@ -111,8 +111,8 @@ pub struct SubId(u64);
 /// sub1/sub2/unsub1/unsub2 refcount are identical to the real-OS-watcher
 /// design, just without the inotify-watch-count pressure on big trees.
 ///
-/// Refcount model: each scope is keyed by a drive-relative directory
-/// path (POSIX, `""` is the drive root). A scope's refcount is the size
+/// Refcount model: each scope is keyed by a workspace-relative directory
+/// path (POSIX, `""` is the workspace root). A scope's refcount is the size
 /// of its subscriber set; the scope entry exists exactly while it has
 /// at least one subscriber, so the last `unsub` (or socket close)
 /// removes the entry. The scope is NOT tied to its creating
@@ -126,7 +126,7 @@ pub struct ScopeRegistry {
 
 #[derive(Default)]
 struct ScopeInner {
-    /// dir (drive-relative) -> the set of subscribers watching it.
+    /// dir (workspace-relative) -> the set of subscribers watching it.
     /// Entry present iff at least one subscriber. The set size is the
     /// refcount.
     scopes: HashMap<String, HashSet<SubId>>,
@@ -299,15 +299,15 @@ impl ScopeRegistry {
     }
 }
 
-/// Normalize a drive-relative directory key: trim leading/trailing
+/// Normalize a workspace-relative directory key: trim leading/trailing
 /// slashes so `"notes/"`, `"/notes"`, and `"notes"` map to the same
-/// scope, and the drive root is always `""`.
+/// scope, and the workspace root is always `""`.
 fn normalize_dir(dir: &str) -> String {
     dir.trim_matches('/').to_string()
 }
 
-/// The immediate parent directory of a drive-relative POSIX path. A
-/// top-level entry (`"a.md"`) has parent `""` (the drive root). Used to
+/// The immediate parent directory of a workspace-relative POSIX path. A
+/// top-level entry (`"a.md"`) has parent `""` (the workspace root). Used to
 /// route an event to its first-degree scope.
 fn parent_dir(path: &str) -> &str {
     let trimmed = path.trim_end_matches('/');
@@ -317,7 +317,7 @@ fn parent_dir(path: &str) -> &str {
     }
 }
 
-/// Bridge from chan-drive's `ProgressCallback` into the shared
+/// Bridge from chan-workspace's `ProgressCallback` into the shared
 /// JSON-envelope broadcast channel. Every progress tick (per-file
 /// during reindex, per-batch during embedding, etc.) lands on the
 /// same `/ws` stream every other producer uses, with `type` set to
@@ -560,7 +560,7 @@ mod tests {
     fn emit_fs_root_scope_sees_top_level_entries() {
         let reg = ScopeRegistry::new();
         let (s1, mut rx1) = reg.register();
-        reg.subscribe(s1, ""); // drive root
+        reg.subscribe(s1, ""); // workspace root
         reg.emit_fs(&created("README.md"));
         let frame = try_recv(&mut rx1).expect("root scope sees top-level files");
         assert_eq!(frame["dir"], "");

@@ -47,7 +47,7 @@
     | "contains"
     | "language"
     | "group"
-    /// `fullstack-a-66` slice e: drive-root → Drafts-root edge.
+    /// `fullstack-a-66` slice e: workspace-root → Drafts-root edge.
     /// Styled distinctly in the canvas to read as a "different
     /// category" connector with the shared Drafts tint.
     | "drafts_link";
@@ -94,7 +94,7 @@
     | "mention"
     | "language"
     | "folder"
-    | "drive";
+    | "workspace";
   type DNode = {
     id: string;
     label: string;
@@ -103,14 +103,14 @@
     isFocal: boolean;
     radius: number;
     /// `fullstack-a-49` (G2): filesystem-hierarchy spine. `depth`
-    /// is the path-segment count from the drive root (drive root
+    /// is the path-segment count from the workspace root (workspace root
     /// = 0, top-level dirs / root files = 1, nested = 2+). Non-
     /// hierarchical nodes (tag / mention / language) get depth =
     /// -1 and are exempt from the depth-based forceY anchor —
     /// they continue to float on the existing center force.
     /// `parentId` is the id of the parent directory node (the
-    /// drive-root marker is "" per chan-server's
-    /// `directory_node_id("")`); `null` for the drive root or
+    /// workspace-root marker is "" per chan-server's
+    /// `directory_node_id("")`); `null` for the workspace root or
     /// for non-hierarchical nodes.
     depth: number;
     parentId: string | null;
@@ -136,7 +136,7 @@
   const RADIUS_BASE = 5;
   const RADIUS_DOC = 7;
   /// GI-4: directory nodes sit a notch above the leaf base (but below
-  /// the doc/drive hub size) so they read as clearly clickable folder
+  /// the doc/workspace hub size) so they read as clearly clickable folder
   /// targets without dominating the graph. Slightly bigger, not much.
   const RADIUS_DIR = 6;
   const RADIUS_HUB_SCALE = 1.4;
@@ -241,7 +241,7 @@
     `<polyline points='20 16 15 11 5 19'/>`;
   const PATH_FOLDER =
     `<path d='M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z'/>`;
-  /// Lucide HardDrive — used as the drive-root glyph so the node
+  /// Lucide HardDrive — used as the workspace-root glyph so the node
   /// reads as the storage anchor, distinct from any other directory.
   const PATH_DRIVE =
     `<line x1='22' y1='12' x2='2' y2='12'/>` +
@@ -302,10 +302,10 @@
     // editable" via colour alone.
     loadIcon(iconImages, "source", svgStrokeIcon(PATH_DOC, bg));
     loadIcon(iconImages, "binary", svgStrokeIcon(PATH_DOC, bg));
-    // Drive root: stroke against the dark fill so the glyph still
+    // Workspace root: stroke against the dark fill so the glyph still
     // reads; uses text-secondary (lifted off the bgCard fill that
     // matches the panel background).
-    loadIcon(iconImages, "drive", svgStrokeIcon(PATH_DRIVE, ghostStroke));
+    loadIcon(iconImages, "workspace", svgStrokeIcon(PATH_DRIVE, ghostStroke));
     // Ghost variants — stroked in text-secondary so the icon
     // reads against the empty bgCard fill the ghost ring sits
     // over. Same paths as the regular set; only the stroke
@@ -319,7 +319,7 @@
     loadIcon(ghostIconImages, "folder", svgStrokeIcon(PATH_FOLDER, ghostStroke));
     loadIcon(ghostIconImages, "source", svgStrokeIcon(PATH_DOC, ghostStroke));
     loadIcon(ghostIconImages, "binary", svgStrokeIcon(PATH_DOC, ghostStroke));
-    loadIcon(ghostIconImages, "drive", svgStrokeIcon(PATH_DRIVE, ghostStroke));
+    loadIcon(ghostIconImages, "workspace", svgStrokeIcon(PATH_DRIVE, ghostStroke));
   }
 
   // ---- theme ------------------------------------------------------------
@@ -404,7 +404,7 @@
   /// node-fill mapping in the paint pass so `link` edges (Slice F)
   /// can be stroked in the SOURCE document's hue: a markdown link is
   /// orange (--g-doc), a source-file link royalblue (--g-source), and
-  /// so on. Non-file kinds (tag / mention / language / folder / drive)
+  /// so on. Non-file kinds (tag / mention / language / folder / workspace)
   /// fall back to the doc colour, since a `link` edge should originate
   /// from a document; the fallback keeps a stray edge visible rather
   /// than invisible.
@@ -431,7 +431,7 @@
   /// binary / media split per @@Alex's palette correction; client-
   /// side classification via extension regex while `systacean-16`
   /// (server-side bucket field) is queued. Conceptually mirrors
-  /// `chan_drive::FileClass` (EditableText / Text / Image / Pdf /
+  /// `chan_workspace::FileClass` (EditableText / Text / Image / Pdf /
   /// Other) but routes Pdf into media + Other into binary so the
   /// SPA's bucket set matches the G6 framing.
   ///
@@ -481,11 +481,11 @@
   }
 
   function renderRadius(kind: DKind, id: string): number {
-    // Drive root is the structural anchor of the whole graph — size
+    // Workspace root is the structural anchor of the whole graph — size
     // it like the doc nodes so it reads as a primary hub instead of
     // a leaf directory.
     const base =
-      kind === "doc" || kind === "drive"
+      kind === "doc" || kind === "workspace"
         ? RADIUS_DOC
         : kind === "folder"
           ? RADIUS_DIR
@@ -504,7 +504,7 @@
   /// scope/depth tick); creates fresh ones for newly-visible ids and
   /// drops any whose id left the visible set.
   /// `fullstack-a-49` (G2): derive a node's filesystem depth +
-  /// parent-directory id from its kind + path. Drive root (folder
+  /// parent-directory id from its kind + path. Workspace root (folder
   /// id "") sits at depth 0; top-level files / directories at
   /// depth 1; nested at depth = parent depth + 1. Non-hierarchical
   /// node kinds (tag / mention / language) return `depth: -1` so
@@ -518,7 +518,7 @@
       return { depth: -1, parentId: null };
     }
     if (n.kind === "folder") {
-      // Drive root marker emitted by chan-server as
+      // Workspace root marker emitted by chan-server as
       // `directory_node_id("")` → id "". Sits at depth 0 with no
       // parent.
       if (n.id === "" || n.path === "") {
@@ -558,7 +558,7 @@
         : n.kind === "tag" ? "tag"
           : n.kind === "mention" ? "mention"
             : n.kind === "folder" && n.id === ""
-              ? "drive"
+              ? "workspace"
               : n.kind;
       const existing = nodeById.get(n.id);
       const missing = n.kind === "file" && Boolean(n.missing);
@@ -692,8 +692,8 @@
       //   * Hierarchical nodes (file / folder / media) get a
       //     depth-anchored forceY pulling each toward
       //     `-depth * hierarchyYSpacing` so the layout reads
-      //     bottom-to-top as drive-root → top-level dirs → nested
-      //     dirs → files. GI-10: the drive root (depth 0) settles at
+      //     bottom-to-top as workspace-root → top-level dirs → nested
+      //     dirs → files. GI-10: the workspace root (depth 0) settles at
       //     the BOTTOM and the containment spine grows UPWARD from it.
       //     Non-hierarchical nodes (tag / mention / language;
       //     depth = -1) keep the existing weak center force.
@@ -709,7 +709,7 @@
         forceY<DNode>((d) => {
           if (d.depth < 0) return 0;
           // GI-10: negative pull so deeper nodes rise ABOVE their
-          // ancestors; the drive root (depth 0) anchors the bottom.
+          // ancestors; the workspace root (depth 0) anchors the bottom.
           return -d.depth * FORCE.hierarchyYSpacing;
         }).strength((d) =>
           d.depth < 0 ? FORCE.centerStrength : FORCE.hierarchyYStrength,
@@ -719,7 +719,7 @@
       .velocityDecay(FORCE.velocityDecay)
       .alpha(1)
       .alphaTarget(0)
-      // The animation loop drives painting independently; the sim
+      // The animation loop workspaces painting independently; the sim
       // just needs to mutate positions. No-op on tick keeps us from
       // doing per-tick work twice (rAF + tick callback).
       .on("tick", () => {});
@@ -939,7 +939,7 @@
 
     for (const kind of ["tag", "mention", "contains", "language", "group", "drafts_link"] as const) {
       // `drafts_link` renders at a higher base alpha so the
-      // drive-root → Drafts edge reads as a category boundary crossing.
+      // workspace-root → Drafts edge reads as a category boundary crossing.
       strokePass(edgesByKind[kind], strokeForKind(kind), kind === "drafts_link" ? 0.4 : 0.18);
     }
 
@@ -994,7 +994,7 @@
         : n.kind === "contact" ? theme.mention
         : n.kind === "mention" ? theme.mention
         : n.kind === "language" ? theme.language
-        : n.kind === "drive" ? theme.bgCard
+        : n.kind === "workspace" ? theme.bgCard
         : n.kind === "folder" ? theme.folder
         : n.kind === "source" ? theme.source
         : n.kind === "binary" ? theme.binary
@@ -1228,7 +1228,7 @@
   /// the user's anchor stays put across scope / filter / depth
   /// changes; the zoom is then chosen so the farthest node still
   /// fits inside the padded viewport. Falls back to bbox-center
-  /// framing for views without a focal pin (e.g. whole-drive).
+  /// framing for views without a focal pin (e.g. whole-workspace).
   function computeFit(pad: number): { x: number; y: number; k: number } | null {
     if (!canvas || dNodes.length === 0) return null;
     const cw = canvas.clientWidth;

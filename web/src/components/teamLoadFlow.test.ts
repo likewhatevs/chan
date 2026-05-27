@@ -5,7 +5,7 @@ import tree from "./FileTree.svelte?raw";
 // right-click entry + Duplicate flow on the already-loaded
 // branch. Tests pin the architectural shape; behavioral
 // coverage of the load/duplicate round-trips lands when
-// @@WebtestA walks against a populated drive.
+// @@WebtestA walks against a populated workspace.
 
 describe("fullstack-a-80 slice 1: team-dir detection", () => {
   test("TEAM_DIR_RE matches Drafts/team-{name}", () => {

@@ -38,9 +38,9 @@ describe("GI-6: Graph from here on a directory re-roots at the dir itself + keep
     // current parent a no-op (scopeId unchanged -> no reload) which left
     // the inspector blank. File: keep the parent-folder rule.
     expect(panel).toMatch(/function graphFromHere\(path: string, isDir: boolean\): void \{/);
-    expect(panel).toMatch(/if \(isDir\) \{\s*scopeId = path \? `dir:\$\{path\}` : "drive";/);
+    expect(panel).toMatch(/if \(isDir\) \{\s*scopeId = path \? `dir:\$\{path\}` : "workspace";/);
     expect(panel).toMatch(
-      /\} else \{\s*const slash = path\.lastIndexOf\("\/"\);\s*const parent = slash > 0 \? path\.slice\(0, slash\) : "";\s*scopeId = parent \? `dir:\$\{parent\}` : "drive";/,
+      /\} else \{\s*const slash = path\.lastIndexOf\("\/"\);\s*const parent = slash > 0 \? path\.slice\(0, slash\) : "";\s*scopeId = parent \? `dir:\$\{parent\}` : "workspace";/,
     );
   });
 
@@ -63,7 +63,7 @@ describe("GI-6: Graph from here on a directory re-roots at the dir itself + keep
 });
 
 describe("GI-7: depth slider holds its dragged value via a full-depth dir probe", () => {
-  test("a dirDepthProbe state mirrors the driveDepthProbe pattern", () => {
+  test("a dirDepthProbe state mirrors the workspaceDepthProbe pattern", () => {
     expect(panel).toMatch(/let dirDepthProbe: FsGraphResponse \| null = \$state\(null\);/);
     expect(panel).toMatch(/let dirDepthProbeLoading = \$state\(false\);/);
     expect(panel).toMatch(/let dirDepthProbePath: string \| null = \$state\(null\);/);

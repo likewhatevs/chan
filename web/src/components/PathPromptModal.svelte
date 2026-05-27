@@ -3,7 +3,7 @@
   // autocomplete (from the loaded tree), live status row showing
   // what the typed path will do (move to existing directory, create a
   // new directory, overwrite, etc.), and pre-flight validation that
-  // mirrors what chan-drive will accept. Driven by pathPromptState
+  // mirrors what chan-workspace will accept. Driven by pathPromptState
   // in the store; resolves the same Promise<string|null> shape as
   // uiPrompt.
 
@@ -136,7 +136,7 @@
   /// Effective value without a trailing slash. The submitted value
   /// (`effectiveValue`) keeps the slash for a directory because the
   /// store dispatches on `endsWith("/")` (the `either` flow) and the
-  /// folder API takes the path verbatim. But every drive-relative
+  /// folder API takes the path verbatim. But every workspace-relative
   /// computation here (existing-entry lookup, missing-ancestor walk,
   /// per-segment render) needs the bare path: tree entries carry no
   /// trailing slash, and a trailing `/` would otherwise split into a
@@ -197,7 +197,7 @@
     return s;
   });
 
-  /// Map of every entry by exact path. Drives the overwrite check
+  /// Map of every entry by exact path. Workspaces the overwrite check
   /// (existing file at the target) and the kind-mismatch check
   /// (typed `foo/` but `foo` is a file, not a directory).
   const entryByPath = $derived(new Map(tree.entries.map((e) => [e.path, e])));
@@ -214,7 +214,7 @@
   /// Suggestions: directories whose path starts with whatever the
   /// user has typed, minus the source path of an in-flight rename
   /// (no point suggesting "move into yourself"). Capped so we
-  /// never paint a thousand-row dropdown on a fresh drive that
+  /// never paint a thousand-row dropdown on a fresh workspace that
   /// has only directories yet. The placeholder filename suggestion
   /// (`new-file` kind) is appended at the end so it always sits
   /// below the directory list and isn't subject to the cap.
@@ -233,7 +233,7 @@
     }
     out.sort((a, b) => a.path.localeCompare(b.path));
     // New-file create mode: once the user has completed a directory
-    // (value ends in `/`) or is at the drive root (value === ""
+    // (value ends in `/`) or is at the workspace root (value === ""
     // doesn't trigger because the suggestions list is empty there),
     // surface a placeholder so Tab/Enter lands them on
     // `<dir>/untitled.md` with the stem pre-selected.
@@ -253,7 +253,7 @@
   });
   /// Subset of `suggestions` that participates in LCP-extension.
   /// The placeholder filename is excluded because its path is a
-  /// proposed name, not a fact about the drive — folding it into
+  /// proposed name, not a fact about the workspace — folding it into
   /// the LCP would push the user's typed value past the directory
   /// boundary on the first Tab.
   const dirSuggestions = $derived(
@@ -301,7 +301,7 @@
       };
 
   const status = $derived.by<Status>(() => {
-    // Use the bare (no trailing slash) path for all drive-relative
+    // Use the bare (no trailing slash) path for all workspace-relative
     // reasoning; the submit value with the slash lives in
     // `effectiveValue` and is what `ok()` sends.
     const path = normalizedPath;
@@ -310,7 +310,7 @@
 
     // Existing entry at the exact typed path: file overwrite (move)
     // or kind-mismatch. Directory overwrite is also a mismatch because
-    // chan-drive refuses to replace directory targets.
+    // chan-workspace refuses to replace directory targets.
     const targetEntry = entryByPath.get(path);
     const wantDir = effectiveKind === "folder";
     if (targetEntry) {
@@ -358,12 +358,12 @@
       };
     }
 
-    // `fullstack-b-3`: absolute paths bypass the drive-side tree
-    // view entirely (tree.entries only carries drive-relative
+    // `fullstack-b-3`: absolute paths bypass the workspace-side tree
+    // view entirely (tree.entries only carries workspace-relative
     // paths), so we can't tell from the SPA whether the path
     // exists on disk. Show the attach intent without manufacturing
     // a "creates ancestors a/, b/, c/" preamble that wouldn't
-    // match anything chan-drive ever sees. The backend creates
+    // match anything chan-workspace ever sees. The backend creates
     // the watcher dir silently if missing.
     const newAncestors =
       pathPromptState.mode === "attach" && path.startsWith("/")
@@ -494,7 +494,7 @@
       //   3. Otherwise extend the input to the longest common
       //      prefix of the directory suggestions (the placeholder
       //      filename is excluded from LCP — it's a proposal, not
-      //      a fact about the drive). Shift+Tab cycles backwards
+      //      a fact about the workspace). Shift+Tab cycles backwards
       //      from the bottom.
       e.preventDefault();
       if (

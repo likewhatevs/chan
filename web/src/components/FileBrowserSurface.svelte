@@ -22,7 +22,7 @@
   import FileTree from "./FileTree.svelte";
   import Inspector from "./Inspector.svelte";
   import FileInfoBody from "./FileInfoBody.svelte";
-  import DriveInfoBody from "./DriveInfoBody.svelte";
+  import WorkspaceInfoBody from "./WorkspaceInfoBody.svelte";
   import HamburgerMenu from "./HamburgerMenu.svelte";
   import ImportContactsModal from "./ImportContactsModal.svelte";
   import { tabMenu } from "../state/tabMenu.svelte";
@@ -50,7 +50,7 @@
     surfaceThemeOverride,
     toggleBrowserSidePane,
     tree,
-    drive,
+    workspace,
   } from "../state/store.svelte";
   import {
     canReopenClosedTab,
@@ -117,7 +117,7 @@
   // Each File Browser surface is one watcher-scope instance. A stable id
   // keys its subscription bookkeeping in the `fbTreeInstances` registry:
   // the tab variant uses its tab id; the overlay and the two dock sides
-  // are singletons. On mount the instance subscribes to the drive root
+  // are singletons. On mount the instance subscribes to the workspace root
   // (so root-level fs changes broadcast to it); as directories expand /
   // collapse it subscribes / unsubscribes the matching dir scopes, with
   // the LAST instance to drop a dir tearing the server watcher down. The
@@ -185,7 +185,7 @@
     // selection is fully described by `selected` and restores from it.
     const multi = browserSelection.paths;
     target.selectedPaths = multi.length > 1 ? [...multi] : undefined;
-    target.showDrive = browserSelection.showDrive ? true : undefined;
+    target.showWorkspace = browserSelection.showWorkspace ? true : undefined;
     const map = ensureFbTreeInstance(`fb-tab-${target.id}`).expanded;
     const expanded = Object.keys(map).filter((p) => p.length > 0 && map[p]);
     target.expanded = expanded.length > 0 ? expanded : undefined;
@@ -202,7 +202,7 @@
     } else {
       fbSelectSingle(active);
     }
-    browserSelection.showDrive = source.showDrive ?? false;
+    browserSelection.showWorkspace = source.showWorkspace ?? false;
     // Seed THIS tab's per-instance expansion from its persisted
     // `tab.expanded` (round-tripped through the layout hash + session.json).
     const inst = ensureFbTreeInstance(`fb-tab-${source.id}`);
@@ -229,12 +229,12 @@
     if (!isTab || !tab) return;
     const captured = tab;
     const path = browserSelection.path;
-    const showDrive = browserSelection.showDrive;
+    const showWorkspace = browserSelection.showWorkspace;
     const multi = browserSelection.paths;
     untrack(() => {
       captured.selected = path ?? undefined;
       captured.selectedPaths = multi.length > 1 ? [...multi] : undefined;
-      captured.showDrive = showDrive ? true : undefined;
+      captured.showWorkspace = showWorkspace ? true : undefined;
     });
   });
 
@@ -387,21 +387,21 @@
   }
 
   /// `fullstack-a-67e`: dropped `newFileHere` / `newDirHere` /
-  /// `graphDrive` / `renameDrive` (modal) — the addendum-a spec
+  /// `graphWorkspace` / `renameWorkspace` (modal) — the addendum-a spec
   /// moves New File / New Dir to the selection menu (where they
   /// can root under the selected directory) and replaces the
-  /// modal "Rename drive..." entry with a path row in the menu
-  /// header. `openGraphForDrive` is still
+  /// modal "Rename workspace..." entry with a path row in the menu
+  /// header. `openGraphForWorkspace` is still
   /// reachable via the empty-pane spawn grid + Cmd+Shift+M.
 
-  function showDriveInfo(): void {
+  function showWorkspaceInfo(): void {
     if (isDock) {
       openCurrentInFileBrowser();
       return;
     }
     menu?.close();
     browserSelection.path = null;
-    browserSelection.showDrive = true;
+    browserSelection.showWorkspace = true;
     browserState.inspectorOpen = true;
   }
 
@@ -425,15 +425,15 @@
       // The new tab's surface seeds its own per-instance expansion from
       // `tab.expanded` on mount, so no global singleton to prime here.
       const ancestors = expandedAncestors(path);
-      tab.showDrive = false;
+      tab.showWorkspace = false;
       tab.expanded = ancestors.length > 0 ? ancestors : undefined;
       browserSelection.path = path;
-      browserSelection.showDrive = false;
+      browserSelection.showWorkspace = false;
       return;
     }
-    tab.showDrive = true;
+    tab.showWorkspace = true;
     browserSelection.path = null;
-    browserSelection.showDrive = true;
+    browserSelection.showWorkspace = true;
   }
 
   /// `fullstack-a-67e`: flip to back-side config view. Routes
@@ -600,14 +600,14 @@
         onResize={persistPaneWidths}
         onClose={() => (browserState.inspectorOpen = false)}
       >
-        {#if browserSelection.showDrive && !browserSelection.path}
+        {#if browserSelection.showWorkspace && !browserSelection.path}
           <!-- `fullstack-73`: parity with the file/dir inspector
                surfaces. Click spawns a new Graph tab scoped to
-               drive root via `openFsGraphForDirectory("")` (matches
-               the convention `graphSelection()` uses for non-drive
+               workspace root via `openFsGraphForDirectory("")` (matches
+               the convention `graphSelection()` uses for non-workspace
                selections — `openFsGraphForDirectory` / `openFsGraphForFile`
                both spawn a fresh tab, never re-scope). -->
-          <DriveInfoBody onSetAsScope={() => openFsGraphForDirectory("")} />
+          <WorkspaceInfoBody onSetAsScope={() => openFsGraphForDirectory("")} />
         {:else}
           <FileInfoBody
             path={browserSelection.path}
@@ -628,8 +628,8 @@
 
 {#snippet menuItems()}
   <!-- File Browser menu.
-       Header: path-derived drive label + full-path row (drive icon,
-       grey, fade-on-overflow, click -> drive inspector). Body:
+       Header: path-derived workspace label + full-path row (workspace icon,
+       grey, fade-on-overflow, click -> workspace inspector). Body:
        dock toggles, expand/collapse +
        reload, import contacts. Foot: Settings (flipHybrid)
        + Reopen Closed Tab + Close.
@@ -637,20 +637,20 @@
        row right-click; this menu is the FB tab right-click +
        hamburger. New file / New directory entries moved to the
        selection menu where they're CWD-aware. -->
-  <li class="drive-label-row" role="none" title={drive.info?.root}>
+  <li class="workspace-label-row" role="none" title={workspace.info?.root}>
     <HardDrive size={16} strokeWidth={1.75} aria-hidden="true" />
-    <span class="drive-label-text">{drive.info?.label ?? ""}</span>
+    <span class="workspace-label-text">{workspace.info?.label ?? ""}</span>
   </li>
   <li>
     <button
       role="menuitem"
-      class="drive-path-row"
-      onclick={showDriveInfo}
-      title={drive.info?.root}
-      disabled={!drive.info?.root}
+      class="workspace-path-row"
+      onclick={showWorkspaceInfo}
+      title={workspace.info?.root}
+      disabled={!workspace.info?.root}
     >
       <HardDrive size={16} strokeWidth={1.75} aria-hidden="true" />
-      <span class="drive-path-text">{drive.info?.root ?? ""}</span>
+      <span class="workspace-path-text">{workspace.info?.root ?? ""}</span>
     </button>
   </li>
   {#if isDock}
@@ -793,11 +793,11 @@
     color: var(--text);
     border-color: var(--btn-hover);
   }
-  /* Drive label + path row at the head of the FB tab right-click
+  /* Workspace label + path row at the head of the FB tab right-click
      menu.
      The :global wrapper drops the `<li>` selectors through to
      the portal'd menu, which renders into <body>. */
-  :global(.hamburger-menu li.drive-label-row) {
+  :global(.hamburger-menu li.workspace-label-row) {
     display: flex;
     align-items: center;
     gap: 8px;
@@ -805,14 +805,14 @@
     color: var(--text-secondary);
     font-size: 13px;
   }
-  :global(.hamburger-menu .drive-label-text) {
+  :global(.hamburger-menu .workspace-label-text) {
     min-width: 0;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
     color: var(--text);
   }
-  :global(.hamburger-menu .drive-path-row) {
+  :global(.hamburger-menu .workspace-path-row) {
     display: flex;
     align-items: center;
     gap: 8px;
@@ -824,13 +824,13 @@
     padding: 6px 8px;
     text-align: left;
   }
-  :global(.hamburger-menu .drive-path-row:hover) {
+  :global(.hamburger-menu .workspace-path-row:hover) {
     color: var(--text);
   }
-  :global(.hamburger-menu .drive-path-row:disabled) {
+  :global(.hamburger-menu .workspace-path-row:disabled) {
     cursor: default;
   }
-  :global(.hamburger-menu .drive-path-text) {
+  :global(.hamburger-menu .workspace-path-text) {
     flex: 1;
     min-width: 0;
     white-space: nowrap;
@@ -842,8 +842,8 @@
   }
   /* `fullstack-a-67e`: `.folder-text` / `.folder-label` /
      `.folder-path` / `.mono` selectors dropped along with the
-     "Rename drive..." + "Directory" rows they styled. The current
-     drive label + path rows have their own selectors above. */
+     "Rename workspace..." + "Directory" rows they styled. The current
+     workspace label + path rows have their own selectors above. */
   .body {
     flex: 1;
     display: flex;

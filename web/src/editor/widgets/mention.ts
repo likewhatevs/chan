@@ -1,6 +1,6 @@
 // @@mention pill rendering.
 //
-// `@@name` mirrors chan-drive's mention extractor: prev char must
+// `@@name` mirrors chan-workspace's mention extractor: prev char must
 // not be a word char (so emails like `foo@@bar.com` don't trip it),
 // `name` is `[A-Za-z0-9_-]+`, no slash. Inside code spans / fenced
 // blocks the source is literal — skip those ranges.
@@ -48,8 +48,8 @@ const SKIP_INSIDE = new Set<string>([
 export interface MentionClickArgs {
   /// Mention text without the `@@` prefix.
   name: string;
-  /// Resolved drive-relative path of the contact file, or null
-  /// when the name didn't match any contact in the drive.
+  /// Resolved workspace-relative path of the contact file, or null
+  /// when the name didn't match any contact in the workspace.
   path: string | null;
   /// True when the user held Cmd/Ctrl to ask for a new pane.
   openInNewPane: boolean;

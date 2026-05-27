@@ -22,9 +22,6 @@ pub struct InspectorParams {
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum InspectorKind {
-    // chunk-1 wire preservation: variant renamed Drive -> Workspace, on-wire
-    // token stays "drive" until chunk 2 flips it with the frontend.
-    #[serde(rename = "drive")]
     Workspace,
     Directory,
     Markdown,
@@ -75,8 +72,10 @@ pub async fn api_inspector(
     State(state): State<Arc<AppState>>,
     Query(params): Query<InspectorParams>,
 ) -> Response {
-    let drive = state.drive();
-    match tokio::task::spawn_blocking(move || build_inspector_payload(&drive, &params.path)).await {
+    let workspace = state.workspace();
+    match tokio::task::spawn_blocking(move || build_inspector_payload(&workspace, &params.path))
+        .await
+    {
         Ok(Ok(payload)) => Json(payload).into_response(),
         Ok(Err(e)) => err_from(&e),
         Err(e) => (
@@ -88,21 +87,21 @@ pub async fn api_inspector(
 }
 
 pub fn build_inspector_payload(
-    drive: &chan_workspace::Workspace,
+    workspace: &chan_workspace::Workspace,
     requested_path: &str,
 ) -> chan_workspace::Result<InspectorPayload> {
     let path = normalize_path(requested_path)?;
-    let path_class = chan_workspace::classify_path(drive.root(), &path)?;
+    let path_class = chan_workspace::classify_path(workspace.root(), &path)?;
     let stat = if path.is_empty() {
         None
     } else {
-        Some(drive.stat(&path)?)
+        Some(workspace.stat(&path)?)
     };
     let is_dir = matches!(path_class.kind, chan_workspace::PathKind::Directory);
     let kind = inspector_kind(&path, &path_class);
-    let frontmatter_kind = frontmatter_kind(drive, &path, &kind)?;
+    let frontmatter_kind = frontmatter_kind(workspace, &path, &kind)?;
     let report_file = if matches!(kind, InspectorKind::Markdown | InspectorKind::Text) {
-        drive
+        workspace
             .report_for_files(std::slice::from_ref(&path))?
             .files
             .into_iter()
@@ -111,12 +110,12 @@ pub fn build_inspector_payload(
         None
     };
     let scope_data = if path.is_empty() || is_dir {
-        Some(inspector_scope_data(drive, &path)?)
+        Some(inspector_scope_data(workspace, &path)?)
     } else {
         None
     };
     let report_summary = if let Some(scope_data) = scope_data.as_ref() {
-        let report = drive.report_for_files(&scope_data.report_paths)?;
+        let report = workspace.report_for_files(&scope_data.report_paths)?;
         Some(InspectorReportSummary {
             totals: report.totals,
             by_language: report.by_language,
@@ -170,28 +169,28 @@ fn inspector_kind(path: &str, class: &PathClass) -> InspectorKind {
 }
 
 fn frontmatter_kind(
-    drive: &chan_workspace::Workspace,
+    workspace: &chan_workspace::Workspace,
     path: &str,
     kind: &InspectorKind,
 ) -> chan_workspace::Result<Option<String>> {
     if !matches!(kind, InspectorKind::Markdown) {
         return Ok(None);
     }
-    let text = drive.read_text(path)?;
+    let text = workspace.read_text(path)?;
     let fm = chan_workspace::markdown::parse_frontmatter(&text);
     Ok(chan_workspace::markdown::chan_kind(&fm.data).map(|spec| spec.name.to_string()))
 }
 
 fn inspector_scope_data(
-    drive: &chan_workspace::Workspace,
+    workspace: &chan_workspace::Workspace,
     path: &str,
 ) -> chan_workspace::Result<InspectorScopeData> {
     let entries = if path.is_empty() {
-        drive.list_tree()?
+        workspace.list_tree()?
     } else {
-        drive.list_tree_prefix(path)?
+        workspace.list_tree_prefix(path)?
     };
-    let contact_paths: std::collections::HashSet<String> = drive
+    let contact_paths: std::collections::HashSet<String> = workspace
         .contacts()
         .map(|rows| rows.into_iter().map(|c| c.rel_path).collect())
         .unwrap_or_default();
@@ -206,7 +205,7 @@ fn inspector_scope_data(
             continue;
         }
 
-        let abs = chan_workspace::fs_ops::resolve_safe(drive.root(), &entry.path)?;
+        let abs = chan_workspace::fs_ops::resolve_safe(workspace.root(), &entry.path)?;
         let meta = std::fs::symlink_metadata(&abs).ok();
         if meta
             .as_ref()
@@ -272,13 +271,13 @@ mod tests {
         let drive_root = TempDir::new().unwrap();
         let lib = chan_workspace::Library::open_at(cfg.path().join("config.toml")).unwrap();
         lib.register_workspace(drive_root.path()).unwrap();
-        let drive = lib.open_workspace(drive_root.path()).unwrap();
-        (cfg, drive_root, drive)
+        let workspace = lib.open_workspace(drive_root.path()).unwrap();
+        (cfg, drive_root, workspace)
     }
 
     #[test]
     fn inspector_payload_covers_drive_directory_text_and_binary() {
-        let (_cfg, root, drive) = open_workspace();
+        let (_cfg, root, workspace) = open_workspace();
         put(root.path(), "src/lib.rs", b"fn main() {}\n");
         put(root.path(), "notes/today.md", b"# today\n\nbody\n");
         put(
@@ -286,12 +285,12 @@ mod tests {
             "contacts/alex.md",
             b"---\nchan:\n  kind: contact\n---\n# Alex\n",
         );
-        drive.index_file("contacts/alex.md").unwrap();
+        workspace.index_file("contacts/alex.md").unwrap();
         put(root.path(), "blob.bin", &[0, 1, 2, 3]);
 
-        let drive_payload = build_inspector_payload(&drive, "").unwrap();
+        let drive_payload = build_inspector_payload(&workspace, "").unwrap();
         assert_eq!(drive_payload.kind, InspectorKind::Workspace);
-        let subtree = drive_payload.subtree.expect("drive subtree");
+        let subtree = drive_payload.subtree.expect("workspace subtree");
         assert_eq!(subtree.files, 4);
         assert_eq!(subtree.directories, 3);
         assert_eq!(subtree.file_kinds.get("document"), Some(&1));
@@ -302,13 +301,13 @@ mod tests {
             drive_payload
                 .report_summary
                 .as_ref()
-                .expect("drive report")
+                .expect("workspace report")
                 .totals
                 .bytes
                 > 0
         );
 
-        let dir_payload = build_inspector_payload(&drive, "src").unwrap();
+        let dir_payload = build_inspector_payload(&workspace, "src").unwrap();
         assert_eq!(dir_payload.kind, InspectorKind::Directory);
         assert_eq!(dir_payload.subtree.as_ref().unwrap().files, 1);
         assert_eq!(
@@ -322,20 +321,20 @@ mod tests {
             Some("Rust")
         );
 
-        let markdown = build_inspector_payload(&drive, "notes/today.md").unwrap();
+        let markdown = build_inspector_payload(&workspace, "notes/today.md").unwrap();
         assert_eq!(markdown.kind, InspectorKind::Markdown);
         assert_eq!(markdown.frontmatter_kind, None);
         assert!(markdown.report_file.is_some());
 
-        let contact = build_inspector_payload(&drive, "contacts/alex.md").unwrap();
+        let contact = build_inspector_payload(&workspace, "contacts/alex.md").unwrap();
         assert_eq!(contact.kind, InspectorKind::Markdown);
         assert_eq!(contact.frontmatter_kind.as_deref(), Some("contact"));
 
-        let text = build_inspector_payload(&drive, "src/lib.rs").unwrap();
+        let text = build_inspector_payload(&workspace, "src/lib.rs").unwrap();
         assert_eq!(text.kind, InspectorKind::Text);
         assert_eq!(text.report_file.as_ref().unwrap().language, "Rust");
 
-        let binary = build_inspector_payload(&drive, "blob.bin").unwrap();
+        let binary = build_inspector_payload(&workspace, "blob.bin").unwrap();
         assert_eq!(binary.kind, InspectorKind::Binary);
         assert!(binary.report_file.is_none());
         assert!(binary.report_summary.is_none());
@@ -344,12 +343,12 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn inspector_scope_dedupes_hardlinked_files() {
-        let (_cfg, root, drive) = open_workspace();
+        let (_cfg, root, workspace) = open_workspace();
         let body = b"# same inode\n\nbody\n";
         put(root.path(), "hard/a.md", body);
         std::fs::hard_link(root.path().join("hard/a.md"), root.path().join("hard/b.md")).unwrap();
 
-        let payload = build_inspector_payload(&drive, "hard").unwrap();
+        let payload = build_inspector_payload(&workspace, "hard").unwrap();
         let subtree = payload.subtree.expect("hard subtree");
         assert_eq!(subtree.files, 1);
         assert_eq!(subtree.bytes, body.len() as u64);
@@ -364,7 +363,7 @@ mod tests {
     fn inspector_payload_surfaces_read_only_directory_class() {
         use std::os::unix::fs::PermissionsExt;
 
-        let (_cfg, root, drive) = open_workspace();
+        let (_cfg, root, workspace) = open_workspace();
         std::fs::create_dir(root.path().join("locked")).unwrap();
         std::fs::set_permissions(
             root.path().join("locked"),
@@ -372,7 +371,7 @@ mod tests {
         )
         .unwrap();
 
-        let payload = build_inspector_payload(&drive, "locked").unwrap();
+        let payload = build_inspector_payload(&workspace, "locked").unwrap();
         assert_eq!(payload.kind, InspectorKind::Directory);
         assert_eq!(
             payload.path_class.permission,
@@ -382,8 +381,8 @@ mod tests {
 
     #[test]
     fn inspector_rejects_path_escape() {
-        let (_cfg, _root, drive) = open_workspace();
-        let err = build_inspector_payload(&drive, "../etc").unwrap_err();
+        let (_cfg, _root, workspace) = open_workspace();
+        let err = build_inspector_payload(&workspace, "../etc").unwrap_err();
         assert!(matches!(err, chan_workspace::ChanError::PathEscape));
     }
 
@@ -397,8 +396,8 @@ mod tests {
 
     #[test]
     fn inspector_missing_path_is_not_found() {
-        let (_cfg, _root, drive) = open_workspace();
-        let err = build_inspector_payload(&drive, "missing.md").unwrap_err();
+        let (_cfg, _root, workspace) = open_workspace();
+        let err = build_inspector_payload(&workspace, "missing.md").unwrap_err();
         assert!(matches!(err, chan_workspace::ChanError::Io(_)));
     }
 }

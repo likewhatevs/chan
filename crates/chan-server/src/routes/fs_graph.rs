@@ -1,12 +1,12 @@
 //! Filesystem graph: directories, files, symlinks, hardlinks, and
-//! ghost nodes (broken or outside-drive symlink targets, plus
+//! ghost nodes (broken or outside-workspace symlink targets, plus
 //! special files like FIFOs and sockets that the content index
 //! deliberately drops).
 //!
 //! Distinct from `/api/graph`, which describes the *semantic* graph
 //! built from markdown content (file/tag/mention nodes, link/tag/
 //! mention edges). This route walks the actual filesystem under the
-//! drive root and reports its shape. Same drive sandbox invariants
+//! workspace root and reports its shape. Same workspace sandbox invariants
 //! apply: requests are lexically resolved through
 //! `chan_workspace::fs_ops::resolve_safe` so `..` traversal is rejected
 //! before any I/O.
@@ -14,7 +14,7 @@
 //! The walker uses `symlink_metadata` everywhere (lstat semantics) so
 //! a symlink is never confused with the file it points at. Symlink
 //! targets are classified but never traversed: their existence and
-//! whether they land inside the drive root drives the node kind, and
+//! whether they land inside the workspace root workspaces the node kind, and
 //! traversal only follows `contains` edges (parent -> child) under
 //! real directories.
 //!
@@ -37,8 +37,8 @@ use crate::error::err;
 use crate::state::AppState;
 
 /// Hard cap on `depth` for scope=directory. Six is enough for a project-
-/// style drive (a few levels of grouping) without letting a single
-/// request walk a deep dependency tree disguised as a notes drive.
+/// style workspace (a few levels of grouping) without letting a single
+/// request walk a deep dependency tree disguised as a notes workspace.
 const MAX_DEPTH: usize = 6;
 
 /// Hard cap on emitted nodes. Past this the response is truncated and
@@ -49,11 +49,11 @@ const MAX_NODES: usize = 10_000;
 #[derive(Deserialize)]
 pub struct FsGraphParams {
     /// `file` or `directory`. Default `directory` so a bare
-    /// `/api/fs-graph?path=...` is the common case (drive overview /
+    /// `/api/fs-graph?path=...` is the common case (workspace overview /
     /// directory snapshot).
     #[serde(default = "default_scope")]
     scope: FsGraphScope,
-    /// Workspace-relative target. Empty / missing / `/` means the drive
+    /// Workspace-relative target. Empty / missing / `/` means the workspace
     /// root. Path is lexical: leading slash is trimmed,
     /// `..`-traversal is rejected before any I/O.
     #[serde(default)]
@@ -92,13 +92,13 @@ impl FsGraphScope {
 
 #[derive(Debug, Serialize)]
 pub struct FsGraphResponse {
-    /// Workspace root absolute path, identical to what `/api/drive`
+    /// Workspace root absolute path, identical to what `/api/workspace`
     /// reports. Included so the frontend can render breadcrumbs
     /// without a follow-up call.
     pub root: String,
     pub scope: &'static str,
     /// The request's `path` after lexical normalization (empty means
-    /// drive root).
+    /// workspace root).
     pub path: String,
     /// The effective directory depth used. For scope=file this is always
     /// 0 (the file plus its parent / target are the response).
@@ -112,14 +112,14 @@ pub struct FsGraphResponse {
 
 /// Node identifier shape:
 ///
-///   - In-drive entries: drive-relative POSIX path. Workspace root is
+///   - In-workspace entries: workspace-relative POSIX path. Workspace root is
 ///     the empty string.
-///   - Outside-drive symlink targets: `outside:<symlink-src>` where
-///     `<symlink-src>` is the drive-relative source path. Stable
+///   - Outside-workspace symlink targets: `outside:<symlink-src>` where
+///     `<symlink-src>` is the workspace-relative source path. Stable
 ///     within a response so the frontend can hang labels off it; not
 ///     suitable as a long-term identifier across responses since the
 ///     symlink's target may change.
-///   - In-drive missing targets: drive-relative POSIX path of the
+///   - In-workspace missing targets: workspace-relative POSIX path of the
 ///     would-be file. Marked `broken: true`.
 #[derive(Debug, Clone, Serialize)]
 pub struct NodeView {
@@ -129,8 +129,8 @@ pub struct NodeView {
     /// this is the literal `readlink` target so the frontend can
     /// show something meaningful.
     pub name: String,
-    /// Workspace-relative path (POSIX). Same as `id` for in-drive nodes;
-    /// empty for outside-drive ghosts.
+    /// Workspace-relative path (POSIX). Same as `id` for in-workspace nodes;
+    /// empty for outside-workspace ghosts.
     pub path: String,
     /// File size in bytes (regular files only; 0 for everything
     /// else).
@@ -147,17 +147,17 @@ pub struct NodeView {
     /// Raw `readlink` target for symlink nodes. None for other kinds.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub target: Option<String>,
-    /// True for symlink targets that point outside the drive root.
+    /// True for symlink targets that point outside the workspace root.
     /// Never traversed.
     #[serde(skip_serializing_if = "is_false")]
     pub outside: bool,
-    /// True for ghost nodes that represent missing in-drive targets
+    /// True for ghost nodes that represent missing in-workspace targets
     /// (broken `readlink`) or unreadable entries.
     #[serde(skip_serializing_if = "is_false")]
     pub broken: bool,
-    /// True for symlink nodes whose target resolves outside the drive.
+    /// True for symlink nodes whose target resolves outside the workspace.
     #[serde(skip_serializing_if = "is_false")]
-    pub target_escapes_drive: bool,
+    pub target_escapes_workspace: bool,
 }
 
 fn is_false(b: &bool) -> bool {
@@ -206,9 +206,9 @@ pub async fn api_fs_graph(
     State(state): State<Arc<AppState>>,
     Query(p): Query<FsGraphParams>,
 ) -> Response {
-    let drive = state.drive();
+    let workspace = state.workspace();
     let result =
-        tokio::task::spawn_blocking(move || build_fs_graph(&drive, p.scope, &p.path, p.depth))
+        tokio::task::spawn_blocking(move || build_fs_graph(&workspace, p.scope, &p.path, p.depth))
             .await;
     match result {
         Ok(Ok(response)) => Json(response).into_response(),
@@ -222,12 +222,12 @@ pub async fn api_fs_graph(
 }
 
 pub fn build_fs_graph(
-    drive: &chan_workspace::Workspace,
+    workspace: &chan_workspace::Workspace,
     scope: FsGraphScope,
     path: &str,
     requested_depth: usize,
 ) -> Result<FsGraphResponse, FsGraphError> {
-    let root: PathBuf = drive.root().to_path_buf();
+    let root: PathBuf = workspace.root().to_path_buf();
     let rel = normalize_rel(path);
     let abs = if rel.is_empty() {
         root.clone()
@@ -239,15 +239,15 @@ pub fn build_fs_graph(
     };
 
     // Mid-path symlink escape guard. `resolve_safe` is LEXICAL only:
-    // if the request path traverses through an in-drive symlink that
-    // points outside the drive (`escape-link -> /etc`), the join
-    // gives `<drive>/escape-link/hosts`, which `symlink_metadata`
+    // if the request path traverses through an in-workspace symlink that
+    // points outside the workspace (`escape-link -> /etc`), the join
+    // gives `<workspace>/escape-link/hosts`, which `symlink_metadata`
     // happily resolves to `/etc/hosts` because intermediate components
     // are followed during path resolution (lstat only spares the
     // leaf). Canonicalize the parent and verify it stays under the
-    // drive's canonical root. The leaf itself can still be a symlink;
+    // workspace's canonical root. The leaf itself can still be a symlink;
     // the walker classifies symlink leaves via readlink without
-    // following them, so an in-drive symlink to an outside file
+    // following them, so an in-workspace symlink to an outside file
     // surfaces correctly as a ghost node.
     ensure_parent_inside_drive(&root, &abs, &rel)?;
 
@@ -279,7 +279,7 @@ pub fn build_fs_graph(
         ));
     }
 
-    let mut walker = FsGraphWalker::new(root.clone(), drive.walk_filter().clone());
+    let mut walker = FsGraphWalker::new(root.clone(), workspace.walk_filter().clone());
     match scope {
         FsGraphScope::File => walker.walk_file(&rel, &abs, &meta),
         FsGraphScope::Directory => walker.walk_directory(&rel, &abs, &meta, depth),
@@ -301,12 +301,12 @@ pub fn build_fs_graph(
 }
 
 /// Verify that the parent of the joined request path resolves
-/// inside the drive root. Catches `path=alias-to-outside/x.md`
-/// where `alias-to-outside` is an in-drive symlink whose target
-/// escapes the drive — `resolve_safe` is lexical and lets that
+/// inside the workspace root. Catches `path=alias-to-outside/x.md`
+/// where `alias-to-outside` is an in-workspace symlink whose target
+/// escapes the workspace — `resolve_safe` is lexical and lets that
 /// through, but the kernel will follow the intermediate symlink on
 /// `symlink_metadata` / `read_dir`. Workspace root requests skip the
-/// check (the request resolves to the drive root itself; no parent
+/// check (the request resolves to the workspace root itself; no parent
 /// to verify).
 fn ensure_parent_inside_drive(root: &Path, abs: &Path, rel: &str) -> Result<(), FsGraphError> {
     if rel.is_empty() {
@@ -316,23 +316,23 @@ fn ensure_parent_inside_drive(root: &Path, abs: &Path, rel: &str) -> Result<(), 
         Some(p) if !p.as_os_str().is_empty() => p,
         _ => return Ok(()),
     };
-    // Canonicalize the drive root once per request. Cheap on local
+    // Canonicalize the workspace root once per request. Cheap on local
     // filesystems; pricier on cloud-synced mounts (iCloud / Dropbox)
     // but still bounded by a single FS-provider round trip.
     let root_canon = match root.canonicalize() {
         Ok(c) => c,
-        // The drive root must canonicalize. If it doesn't (deleted
+        // The workspace root must canonicalize. If it doesn't (deleted
         // out from under us, broken mount) we cannot serve the
         // request safely — surface as 500 rather than silently
         // allowing the lexical check.
         Err(e) => {
             return Err(FsGraphError::new(
                 StatusCode::INTERNAL_SERVER_ERROR,
-                format!("canonicalize drive root: {e}"),
+                format!("canonicalize workspace root: {e}"),
             ));
         }
     };
-    // Parent equal to drive root is the common case (top-level file
+    // Parent equal to workspace root is the common case (top-level file
     // request); skip the canonicalize round trip.
     if parent == root || parent == root_canon {
         return Ok(());
@@ -347,7 +347,7 @@ fn ensure_parent_inside_drive(root: &Path, abs: &Path, rel: &str) -> Result<(), 
     if !parent_canon.starts_with(&root_canon) {
         return Err(FsGraphError::new(
             StatusCode::BAD_REQUEST,
-            format!("path escapes drive root via mid-path symlink: {rel}"),
+            format!("path escapes workspace root via mid-path symlink: {rel}"),
         ));
     }
     Ok(())
@@ -440,7 +440,7 @@ fn node_kind_from_class(
 struct FsGraphWalker {
     root: PathBuf,
     root_canon: Option<PathBuf>,
-    /// Directory-name blocklist (the per-drive `WalkFilter`). The
+    /// Directory-name blocklist (the per-workspace `WalkFilter`). The
     /// child walk skips any directory whose basename is excluded, at
     /// any depth, so the filesystem graph never plots `node_modules/`
     /// / `target/` / `venv/` dependency trees. Matches the index and
@@ -509,7 +509,7 @@ impl FsGraphWalker {
     }
 
     /// File-scope walk: emit the requested path, its ancestor
-    /// directory chain up to the drive root, and, if the path is a
+    /// directory chain up to the workspace root, and, if the path is a
     /// symlink, classify its target. Directory targets are NOT walked
     /// here; we stay shallow so `scope=file` is cheap.
     fn walk_file(&mut self, rel: &str, abs: &Path, meta: &Metadata) {
@@ -550,7 +550,7 @@ impl FsGraphWalker {
     /// directory before walking its local neighbourhood. The normal
     /// depth walk expands downward from the scope; this pass supplies
     /// the upstream filesystem spine so callers can always show how a
-    /// scoped node attaches back to the drive root.
+    /// scoped node attaches back to the workspace root.
     fn emit_ancestor_chain(&mut self, rel: &str) {
         let root_abs = self.root.clone();
         if let Ok(root_meta) = std::fs::symlink_metadata(&root_abs) {
@@ -597,13 +597,13 @@ impl FsGraphWalker {
 
         for (name, child_abs) in entries {
             let name_str = name.to_string_lossy();
-            // Skip drive-internal state and the per-drive blocklist
-            // dirs at ANY depth. Mirrors chan-drive's `walk_drive`
+            // Skip workspace-internal state and the per-workspace blocklist
+            // dirs at ANY depth. Mirrors chan-workspace's `walk_drive`
             // (`.chan`/`.git` invariants) plus the `WalkFilter`
             // (`node_modules`, `target`, `venv`, ...) so the
             // filesystem graph excludes the same set the index, the
             // File Browser spine, and the watcher feed exclude. A
-            // repo-root drive otherwise plots its whole dependency
+            // repo-root workspace otherwise plots its whole dependency
             // tree (60K-131K nodes). The skip applies regardless of
             // the entry's file type so a `.git` symlink can't slip a
             // dependency tree back in.
@@ -631,7 +631,7 @@ impl FsGraphWalker {
                         target: None,
                         outside: false,
                         broken: true,
-                        target_escapes_drive: false,
+                        target_escapes_workspace: false,
                     };
                     self.insert_node(ghost);
                     self.push_edge(parent_rel.to_owned(), child_rel, "contains");
@@ -678,9 +678,9 @@ impl FsGraphWalker {
             target: None,
             outside: false,
             broken: false,
-            target_escapes_drive: class
+            target_escapes_workspace: class
                 .as_ref()
-                .map(|c| c.target_escapes_drive)
+                .map(|c| c.target_escapes_workspace)
                 .unwrap_or(false),
         };
 
@@ -740,7 +740,7 @@ impl FsGraphWalker {
                 target: Some(target.to_string_lossy().into_owned()),
                 outside: true,
                 broken: false,
-                target_escapes_drive: false,
+                target_escapes_workspace: false,
             };
             self.insert_node(ghost);
             self.push_edge(src_rel.to_owned(), ghost_id, "symlink");
@@ -751,7 +751,7 @@ impl FsGraphWalker {
             Some(s) => s,
             None => {
                 // Could not pin the relative form. Treat as broken
-                // rather than outside-drive: the lexical check above
+                // rather than outside-workspace: the lexical check above
                 // already ruled out escape, so the most useful signal
                 // is "we can't find it".
                 let ghost_id = format!("broken:{src_rel}");
@@ -768,7 +768,7 @@ impl FsGraphWalker {
                     target: Some(target.to_string_lossy().into_owned()),
                     outside: false,
                     broken: true,
-                    target_escapes_drive: false,
+                    target_escapes_workspace: false,
                 };
                 self.insert_node(ghost);
                 self.push_edge(src_rel.to_owned(), ghost_id, "symlink");
@@ -808,7 +808,7 @@ impl FsGraphWalker {
                     target: Some(target.to_string_lossy().into_owned()),
                     outside: false,
                     broken: true,
-                    target_escapes_drive: false,
+                    target_escapes_workspace: false,
                 };
                 self.insert_node(ghost);
                 self.push_edge(src_rel.to_owned(), target_rel, "symlink");
@@ -849,9 +849,9 @@ impl FsGraphWalker {
             target: target_readlink,
             outside: false,
             broken: false,
-            target_escapes_drive: class
+            target_escapes_workspace: class
                 .as_ref()
-                .map(|c| c.target_escapes_drive)
+                .map(|c| c.target_escapes_workspace)
                 .unwrap_or(false),
         };
         self.insert_node(node);
@@ -876,7 +876,7 @@ impl FsGraphWalker {
         match (&self.root_canon, canon_target) {
             (Some(root_canon), Some(t)) => t.starts_with(root_canon),
             // Fall back to a conservative lexical check. This keeps
-            // missing in-drive targets visible as ghosts when the root
+            // missing in-workspace targets visible as ghosts when the root
             // cannot be canonicalized, while refusing paths that only
             // appear under the root because they contain `..`.
             _ => lexical_path_inside_root(target_abs, &self.root),
@@ -1146,7 +1146,7 @@ mod tests {
         assert_eq!(node_kind(&resp, "top.md"), Some("file"));
         assert!(
             has_edge(&resp, "alias.md", "top.md", "symlink"),
-            "missing in-drive symlink edge: {:?}",
+            "missing in-workspace symlink edge: {:?}",
             resp.edges
                 .iter()
                 .map(|e| (&e.source, &e.target, e.kind))
@@ -1339,15 +1339,15 @@ mod tests {
         let drive_root = TempDir::new().unwrap();
         let lib = chan_workspace::Library::open_at(cfg.path().join("config.toml")).unwrap();
         lib.register_workspace(drive_root.path()).unwrap();
-        let drive = lib.open_workspace(drive_root.path()).unwrap();
-        drive.write_text("notes/a.md", "# a\n").unwrap();
-        (cfg, drive_root, drive)
+        let workspace = lib.open_workspace(drive_root.path()).unwrap();
+        workspace.write_text("notes/a.md", "# a\n").unwrap();
+        (cfg, drive_root, workspace)
     }
 
     #[test]
     fn build_fs_graph_rejects_escape_path() {
-        let (_cfg, _root, drive) = open_workspace();
-        let err = build_fs_graph(&drive, FsGraphScope::Directory, "../etc", 1).unwrap_err();
+        let (_cfg, _root, workspace) = open_workspace();
+        let err = build_fs_graph(&workspace, FsGraphScope::Directory, "../etc", 1).unwrap_err();
         assert_eq!(err.status, StatusCode::BAD_REQUEST);
         assert!(
             err.message.contains("escape"),
@@ -1358,9 +1358,9 @@ mod tests {
 
     #[test]
     fn build_fs_graph_rejects_missing_path() {
-        let (_cfg, _root, drive) = open_workspace();
+        let (_cfg, _root, workspace) = open_workspace();
         let err =
-            build_fs_graph(&drive, FsGraphScope::File, "notes/no-such-file.md", 1).unwrap_err();
+            build_fs_graph(&workspace, FsGraphScope::File, "notes/no-such-file.md", 1).unwrap_err();
         assert_eq!(err.status, StatusCode::NOT_FOUND);
         assert!(
             err.message.contains("no such path"),
@@ -1371,8 +1371,8 @@ mod tests {
 
     #[test]
     fn build_fs_graph_rejects_directory_scope_on_file() {
-        let (_cfg, _root, drive) = open_workspace();
-        let err = build_fs_graph(&drive, FsGraphScope::Directory, "notes/a.md", 1).unwrap_err();
+        let (_cfg, _root, workspace) = open_workspace();
+        let err = build_fs_graph(&workspace, FsGraphScope::Directory, "notes/a.md", 1).unwrap_err();
         assert_eq!(err.status, StatusCode::BAD_REQUEST);
         assert!(
             err.message.contains("requires a directory"),
@@ -1384,15 +1384,15 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn build_fs_graph_rejects_mid_path_symlink_escape() {
-        // syseng's design-snapshot flagged this: an in-drive symlink
-        // pointing OUTSIDE the drive root used to be silently
+        // syseng's design-snapshot flagged this: an in-workspace symlink
+        // pointing OUTSIDE the workspace root used to be silently
         // followed when it appeared as a mid-path component, because
         // `resolve_safe` is lexical only. A request like
         // `path=alias/inside.md` (alias -> /etc) leaked /etc/inside.md
-        // metadata under a drive-relative id. ensure_parent_inside_drive
+        // metadata under a workspace-relative id. ensure_parent_inside_drive
         // closes that.
-        let (_cfg, root, drive) = open_workspace();
-        // Build a symlink whose target is OUTSIDE the drive root,
+        let (_cfg, root, workspace) = open_workspace();
+        // Build a symlink whose target is OUTSIDE the workspace root,
         // pointing at a directory that definitely exists on every
         // posix system.
         symlink("/etc", root.path().join("escape-link")).unwrap();
@@ -1401,20 +1401,21 @@ mod tests {
         // macOS, hosts dir on Linux. Pick a path that's almost
         // certainly present.
         let err =
-            build_fs_graph(&drive, FsGraphScope::Directory, "escape-link/ssl", 1).unwrap_err();
+            build_fs_graph(&workspace, FsGraphScope::Directory, "escape-link/ssl", 1).unwrap_err();
         assert_eq!(err.status, StatusCode::BAD_REQUEST);
         assert!(
-            err.message.contains("escapes drive root"),
+            err.message.contains("escapes workspace root"),
             "expected mid-path escape rejection, got: {}",
             err.message
         );
 
         // File scope through the escape link: any single file under
         // /etc. `hosts` is the canonical pick.
-        let err = build_fs_graph(&drive, FsGraphScope::File, "escape-link/hosts", 1).unwrap_err();
+        let err =
+            build_fs_graph(&workspace, FsGraphScope::File, "escape-link/hosts", 1).unwrap_err();
         assert_eq!(err.status, StatusCode::BAD_REQUEST);
         assert!(
-            err.message.contains("escapes drive root"),
+            err.message.contains("escapes workspace root"),
             "expected mid-path escape rejection, got: {}",
             err.message
         );
@@ -1424,16 +1425,16 @@ mod tests {
     #[test]
     fn build_fs_graph_allows_in_drive_symlink_leaf_to_outside() {
         // The mid-path guard must NOT reject when the LEAF itself is
-        // an in-drive symlink pointing outside the drive. The walker
+        // an in-workspace symlink pointing outside the workspace. The walker
         // classifies that leaf via readlink and emits an outside-
         // ghost node — that's the documented behavior, and it's the
         // whole point of having a graph route over filesystems with
         // symlinks.
-        let (_cfg, root, drive) = open_workspace();
+        let (_cfg, root, workspace) = open_workspace();
         symlink("/etc/hosts", root.path().join("alias-outside.md")).unwrap();
 
-        let resp = build_fs_graph(&drive, FsGraphScope::File, "alias-outside.md", 0)
-            .expect("in-drive symlink leaf must be accepted");
+        let resp = build_fs_graph(&workspace, FsGraphScope::File, "alias-outside.md", 0)
+            .expect("in-workspace symlink leaf must be accepted");
         // Expect the symlink node + an outside ghost target.
         assert!(
             resp.nodes
@@ -1446,15 +1447,15 @@ mod tests {
             resp.nodes
                 .iter()
                 .any(|n| n.id == "outside:alias-outside.md" && n.outside),
-            "missing outside-drive ghost node: {:?}",
+            "missing outside-workspace ghost node: {:?}",
             resp.nodes.iter().map(|n| &n.id).collect::<Vec<_>>()
         );
     }
 
     #[test]
     fn build_fs_graph_root_scope_returns_drive_root() {
-        let (_cfg, _root, drive) = open_workspace();
-        let resp = build_fs_graph(&drive, FsGraphScope::Directory, "", 1).unwrap();
+        let (_cfg, _root, workspace) = open_workspace();
+        let resp = build_fs_graph(&workspace, FsGraphScope::Directory, "", 1).unwrap();
         assert_eq!(resp.scope, "directory");
         assert_eq!(resp.path, "");
         // Workspace root is keyed by the empty string; depth 1 lists the
@@ -1463,7 +1464,7 @@ mod tests {
             resp.nodes
                 .iter()
                 .any(|n| n.id.is_empty() && n.kind == "directory"),
-            "drive root node missing from response"
+            "workspace root node missing from response"
         );
         assert!(
             resp.nodes

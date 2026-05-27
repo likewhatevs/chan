@@ -2,7 +2,7 @@
 // `[label](path)` markdown links.
 //
 // Per design.md spec #5, both forms are atomic widgets when the path
-// is internal (drive-relative or drive-rooted). External markdown
+// is internal (workspace-relative or workspace-rooted). External markdown
 // links (http://, https://, mailto:, etc.) stay handled by
 // decorations/marks.ts handleLink.
 //
@@ -87,7 +87,7 @@ export interface WikiLinkClickArgs extends ParsedWikiLink {
 
 export interface WikiLinkOptions {
   onWikiClick: (args: WikiLinkClickArgs) => void;
-  /// Read the editing file's drive-rooted path. Used to canonicalize
+  /// Read the editing file's workspace-rooted path. Used to canonicalize
   /// internal `[label](path)` URLs so the kind cache key is stable
   /// across files that reference the same target via different
   /// relative paths.
@@ -122,8 +122,8 @@ export function parseWikiBody(body: string): ParsedWikiLink {
   return { target, label: displayLabel, anchor, wasAbs };
 }
 
-/// Detect whether a markdown link URL is internal (drive-relative or
-/// drive-rooted, no scheme prefix). Returns the parsed parts on
+/// Detect whether a markdown link URL is internal (workspace-relative or
+/// workspace-rooted, no scheme prefix). Returns the parsed parts on
 /// success, null otherwise.
 export function parseInternalLink(
   url: string,

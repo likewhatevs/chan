@@ -1,11 +1,11 @@
 // Built-in graph indexer. Owns a watcher subscription, debounces
-// per-path events, and drives `Workspace::index_file` / `forget_file`
+// per-path events, and workspaces `Workspace::index_file` / `forget_file`
 // / `reconcile` so consumers (the CLI, chan-server, and the future
 // Swift / Kotlin shells) do not each reinvent the same queue.
 //
 // Threading model:
 //
-//   * One worker thread per indexer, named "chan-drive::indexer".
+//   * One worker thread per indexer, named "chan-workspace::indexer".
 //   * The watcher's notify thread is the producer. It hands events
 //     to the indexer through an mpsc channel via an internal
 //     `WatchCallback` so the indexer thread is the only one
@@ -43,9 +43,9 @@ use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
-use crate::drive::Workspace;
 use crate::error::{ChanError, Result};
 use crate::watch::{WatchCallback, WatchEvent, WatchHandle, WatchKind};
+use crate::workspace::Workspace;
 
 /// Default debounce window for production. 150 ms covers the burst
 /// of events a typical editor emits per save (Modify/Modify or
@@ -83,12 +83,12 @@ struct GraphIndexerInner {
 }
 
 impl GraphIndexer {
-    /// Start an indexer attached to `drive`. The first call to
+    /// Start an indexer attached to `workspace`. The first call to
     /// `start_on` opens the watcher; subsequent calls on the same
-    /// drive are supported (each indexer owns its own watcher
+    /// workspace are supported (each indexer owns its own watcher
     /// handle and worker), though pairing two indexers against the
-    /// same drive in production would only burn CPU.
-    pub fn start_on(drive: Arc<Workspace>, debounce_ms: u64) -> Result<Self> {
+    /// same workspace in production would only burn CPU.
+    pub fn start_on(workspace: Arc<Workspace>, debounce_ms: u64) -> Result<Self> {
         let inner = Arc::new(GraphIndexerInner {
             stop: AtomicBool::new(false),
             pending: AtomicUsize::new(0),
@@ -101,13 +101,13 @@ impl GraphIndexer {
 
         let (tx, rx) = mpsc::channel::<WatchEvent>();
         let cb: Arc<dyn WatchCallback> = Arc::new(EventForwarder { tx });
-        let watch = drive.watch(cb)?;
+        let watch = workspace.watch(cb)?;
 
-        let drive_w = Arc::clone(&drive);
+        let drive_w = Arc::clone(&workspace);
         let inner_w = Arc::clone(&inner);
         let debounce = Duration::from_millis(debounce_ms);
         let thread = std::thread::Builder::new()
-            .name("chan-drive::indexer".into())
+            .name("chan-workspace::indexer".into())
             .spawn(move || run_loop(drive_w, rx, inner_w, debounce))
             .map_err(|e| ChanError::Io(format!("spawn indexer thread: {e}")))?;
 
@@ -189,7 +189,7 @@ impl WatchCallback for EventForwarder {
 }
 
 fn run_loop(
-    drive: Arc<Workspace>,
+    workspace: Arc<Workspace>,
     rx: mpsc::Receiver<WatchEvent>,
     state: Arc<GraphIndexerInner>,
     debounce: Duration,
@@ -212,7 +212,7 @@ fn run_loop(
             Ok(event) => apply_event(
                 event,
                 &mut pending,
-                &drive,
+                &workspace,
                 &state,
                 debounce,
                 Instant::now(),
@@ -235,13 +235,13 @@ fn run_loop(
             // systacean-25: route drafts events (paths under the
             // `Drafts/` unified-keyspace prefix) to the parallel
             // draft-indexer entrypoint, which reads from the
-            // drafts subtree instead of the sandboxed drive root.
-            // Non-prefixed paths go to the drive-root indexer as
+            // drafts subtree instead of the sandboxed workspace root.
+            // Non-prefixed paths go to the workspace-root indexer as
             // before.
             let result = if path.starts_with("Drafts/") {
-                drive.index_draft_file(path)
+                workspace.index_draft_file(path)
             } else {
-                drive.index_file(path)
+                workspace.index_file(path)
             };
             match result {
                 Ok(()) => {
@@ -288,7 +288,7 @@ fn collect_matured(pending: &HashMap<String, Instant>, now: Instant) -> Vec<Stri
 fn apply_event(
     event: WatchEvent,
     pending: &mut HashMap<String, Instant>,
-    drive: &Arc<Workspace>,
+    workspace: &Arc<Workspace>,
     state: &GraphIndexerInner,
     debounce: Duration,
     now: Instant,
@@ -298,7 +298,7 @@ fn apply_event(
             // Stream untrusted: pending entries may be wrong, drop
             // them and run reconcile against the live tree.
             pending.clear();
-            run_reconcile(drive, state, "ProviderError");
+            run_reconcile(workspace, state, "ProviderError");
         }
         WatchKind::Modified | WatchKind::Created => match event.path {
             Some(p) => {
@@ -306,13 +306,13 @@ fn apply_event(
             }
             None => {
                 pending.clear();
-                run_reconcile(drive, state, "path-less event");
+                run_reconcile(workspace, state, "path-less event");
             }
         },
         WatchKind::Removed => {
             if let Some(p) = event.path {
                 pending.remove(&p);
-                match drive.forget_file(&p) {
+                match workspace.forget_file(&p) {
                     Ok(()) => {
                         state.forgotten_total.fetch_add(1, Ordering::Relaxed);
                     }
@@ -325,7 +325,7 @@ fn apply_event(
         WatchKind::Renamed => {
             if let Some(from) = event.path {
                 pending.remove(&from);
-                match drive.forget_file(&from) {
+                match workspace.forget_file(&from) {
                     Ok(()) => {
                         state.forgotten_total.fetch_add(1, Ordering::Relaxed);
                     }
@@ -341,9 +341,9 @@ fn apply_event(
     }
 }
 
-fn run_reconcile(drive: &Arc<Workspace>, state: &GraphIndexerInner, reason: &'static str) {
+fn run_reconcile(workspace: &Arc<Workspace>, state: &GraphIndexerInner, reason: &'static str) {
     tracing::info!(reason, "indexer: reconciling against live tree");
-    match drive.reconcile() {
+    match workspace.reconcile() {
         Ok(report) => {
             state
                 .indexed_total
@@ -412,18 +412,18 @@ mod tests {
         let drive_dir = TempDir::new().unwrap();
         let lib = Library::open_at(cfg.path().join("config.toml")).unwrap();
         lib.register_workspace(drive_dir.path()).unwrap();
-        let drive = lib.open_workspace(drive_dir.path()).unwrap();
-        (cfg, drive_dir, drive)
+        let workspace = lib.open_workspace(drive_dir.path()).unwrap();
+        (cfg, drive_dir, workspace)
     }
 
     #[test]
     fn writes_to_disk_get_indexed_after_debounce() {
         let _serial = fs_test_lock();
-        let (_cfg, drive_dir, drive) = setup_drive();
-        let indexer = GraphIndexer::start_on(Arc::clone(&drive), DEBOUNCE_TEST_MS).unwrap();
+        let (_cfg, drive_dir, workspace) = setup_drive();
+        let indexer = GraphIndexer::start_on(Arc::clone(&workspace), DEBOUNCE_TEST_MS).unwrap();
 
         // Write directly to disk so the watcher's notify backend
-        // (not the drive's API) is the trigger. write_text would
+        // (not the workspace's API) is the trigger. write_text would
         // also work, but bypassing it confirms the watcher path
         // end-to-end.
         std::fs::write(
@@ -450,15 +450,15 @@ mod tests {
         // (search reflects the file) instead of the proxy
         // (indexed_total counter) absorbs that race
         // cross-platform. Same shape as the systacean-20
-        // smoke fixup that polled drive.report() for
-        // chan-drive/tests/report.rs.
-        let opts = crate::drive::SearchOpts {
+        // smoke fixup that polled workspace.report() for
+        // chan-workspace/tests/report.rs.
+        let opts = crate::workspace::SearchOpts {
             mode: SearchMode::Bm25,
             limit: 10,
             scope: None,
         };
         let visible = wait_for(FS_DELIVERY_BUDGET, || {
-            drive
+            workspace
                 .search("watcher-token", &opts)
                 .map(|hits| hits.hits.iter().any(|h| h.path == "watched.md"))
                 .unwrap_or(false)
@@ -475,15 +475,15 @@ mod tests {
 
     #[test]
     fn writes_to_drafts_subtree_get_indexed_under_drafts_prefix() {
-        // systacean-25: the multi-root watcher walks the per-drive
-        // drafts dir alongside the drive root. Writing a file under
+        // systacean-25: the multi-root watcher walks the per-workspace
+        // drafts dir alongside the workspace root. Writing a file under
         // a draft directory fires a FSEvent + the indexer routes
         // through Workspace::index_draft_file, which stores the BM25
         // entry under `Drafts/<name>/...` so the unified keyspace
-        // returns drafts hits from regular drive search.
+        // returns drafts hits from regular workspace search.
         let _serial = fs_test_lock();
-        let (_cfg, _drive_dir, drive) = setup_drive();
-        let indexer = GraphIndexer::start_on(Arc::clone(&drive), DEBOUNCE_TEST_MS).unwrap();
+        let (_cfg, _drive_dir, workspace) = setup_drive();
+        let indexer = GraphIndexer::start_on(Arc::clone(&workspace), DEBOUNCE_TEST_MS).unwrap();
 
         // Create the draft dir via the public API (parallels what
         // the SPA's Cmd+N flow will do via the chan-server route)
@@ -493,7 +493,7 @@ mod tests {
         // FSEvents doesn't coalesce them into a single Created
         // event for the parent dir — without the separation,
         // ~3/5 local runs miss the file-write delivery.
-        let draft = drive.create_draft_dir("untitled-1").unwrap();
+        let draft = workspace.create_draft_dir("untitled-1").unwrap();
         std::thread::sleep(Duration::from_millis(200));
         std::fs::write(
             draft.abs.join("draft.md"),
@@ -508,14 +508,14 @@ mod tests {
         assert!(saw, "indexer did not pick up the drafts file write");
 
         // Poll BM25 outcome per the systacean-23 pattern.
-        let opts = crate::drive::SearchOpts {
+        let opts = crate::workspace::SearchOpts {
             mode: SearchMode::Bm25,
             limit: 10,
             scope: None,
         };
         let expected_path = "Drafts/untitled-1/draft.md";
         let visible = wait_for(FS_DELIVERY_BUDGET, || {
-            drive
+            workspace
                 .search("draft-marker-systacean-25", &opts)
                 .map(|hits| hits.hits.iter().any(|h| h.path == expected_path))
                 .unwrap_or(false)
@@ -533,25 +533,25 @@ mod tests {
     #[test]
     fn delete_from_disk_drops_file_from_index() {
         let _serial = fs_test_lock();
-        let (_cfg, drive_dir, drive) = setup_drive();
+        let (_cfg, drive_dir, workspace) = setup_drive();
         // Pre-populate via the API + reindex; the indexer starts
         // up afterwards and only needs to handle the delete.
-        drive
+        workspace
             .write_text("doomed.md", "# doomed\nbye-token here\n")
             .unwrap();
-        drive.reindex(None).unwrap();
-        let indexer = GraphIndexer::start_on(Arc::clone(&drive), DEBOUNCE_TEST_MS).unwrap();
+        workspace.reindex(None).unwrap();
+        let indexer = GraphIndexer::start_on(Arc::clone(&workspace), DEBOUNCE_TEST_MS).unwrap();
 
         std::fs::remove_file(drive_dir.path().join("doomed.md")).unwrap();
         let saw = wait_for(FS_DELIVERY_BUDGET, || indexer.forgotten_total() >= 1);
         assert!(saw, "indexer did not pick up the delete");
 
-        let opts = crate::drive::SearchOpts {
+        let opts = crate::workspace::SearchOpts {
             mode: SearchMode::Bm25,
             limit: 10,
             scope: None,
         };
-        let hits = drive.search("bye-token", &opts).unwrap();
+        let hits = workspace.search("bye-token", &opts).unwrap();
         assert!(
             hits.hits.is_empty(),
             "deleted file should not appear in search; got {:?}",
@@ -569,7 +569,7 @@ mod tests {
         // re-index, which is exactly the kind of churn the debounce
         // exists to prevent.
         //
-        // This drives the debounce decision logic directly with an
+        // This workspaces the debounce decision logic directly with an
         // INJECTED clock instead of a real watcher + wall-clock
         // sleeps. The earlier version wrote the file five times with
         // `sleep(DEBOUNCE_TEST_MS/3)` between writes and asserted
@@ -645,8 +645,8 @@ mod tests {
 
     #[test]
     fn stop_is_idempotent_and_releases_resources() {
-        let (_cfg, _drive_dir, drive) = setup_drive();
-        let indexer = GraphIndexer::start_on(Arc::clone(&drive), DEBOUNCE_TEST_MS).unwrap();
+        let (_cfg, _drive_dir, workspace) = setup_drive();
+        let indexer = GraphIndexer::start_on(Arc::clone(&workspace), DEBOUNCE_TEST_MS).unwrap();
         indexer.stop();
         indexer.stop();
         // After stop, indexer is a husk: counters still readable

@@ -1,8 +1,8 @@
-//! Multi-drive host runtime.
+//! Multi-workspace host runtime.
 //!
 //! `WorkspaceHost` is the in-process owner that chan-desktop can embed
-//! instead of spawning one `chan serve` child per local drive. Each
-//! mounted drive still gets its own `AppState`, watcher, indexer,
+//! instead of spawning one `chan serve` child per local workspace. Each
+//! mounted workspace still gets its own `AppState`, watcher, indexer,
 //! MCP bridge, control socket, terminal registry, and route prefix.
 
 use std::collections::HashMap;
@@ -20,26 +20,26 @@ use tower::ServiceExt;
 use crate::state::WorkspaceCell;
 use crate::{build_app, sanitize_prefix, AppArtifacts, Error, ServeConfig, ServeHandle};
 
-/// One drive mounted into a [`WorkspaceHost`].
+/// One workspace mounted into a [`WorkspaceHost`].
 #[derive(Debug, Clone)]
 pub struct HostedWorkspace {
     /// Workspace root for diagnostics and desktop state correlation.
     pub root: PathBuf,
-    /// Canonical route prefix where the drive is mounted.
+    /// Canonical route prefix where the workspace is mounted.
     pub prefix: String,
     /// Launch handle for browser/webview clients.
     pub handle: ServeHandle,
 }
 
-/// In-process multi-drive host.
+/// In-process multi-workspace host.
 ///
-/// This is intentionally a thin owner around the existing per-drive
-/// server runtime. It does not share route state across drives:
-/// mounting two drives builds two independent `AppState` instances
+/// This is intentionally a thin owner around the existing per-workspace
+/// server runtime. It does not share route state across workspaces:
+/// mounting two workspaces builds two independent `AppState` instances
 /// and dispatches by URL prefix.
 pub struct WorkspaceHost {
     library: Library,
-    drives: RwLock<HashMap<String, HostedWorkspaceRuntime>>,
+    workspaces: RwLock<HashMap<String, HostedWorkspaceRuntime>>,
 }
 
 struct HostedWorkspaceRuntime {
@@ -69,61 +69,61 @@ impl WorkspaceHost {
     pub fn new(library: Library) -> Self {
         Self {
             library,
-            drives: RwLock::new(HashMap::new()),
+            workspaces: RwLock::new(HashMap::new()),
         }
     }
 
-    /// Return the shared drive registry handle.
+    /// Return the shared workspace registry handle.
     pub fn library(&self) -> &Library {
         &self.library
     }
 
-    /// Open a registered drive path and mount it under
+    /// Open a registered workspace path and mount it under
     /// `config.prefix`.
     ///
     /// The path must already be registered with this host's
     /// `Library`. Desktop first-launch code can create/register the
-    /// drive before calling this method; the CLI compatibility path
+    /// workspace before calling this method; the CLI compatibility path
     /// keeps its existing auto-create behavior outside the host.
     pub async fn open_registered_drive(
         &self,
         root: impl AsRef<Path>,
         config: ServeConfig,
     ) -> Result<HostedWorkspace, Error> {
-        let drive = self.library.open_workspace(root.as_ref())?;
-        self.open_workspace(drive, config).await
+        let workspace = self.library.open_workspace(root.as_ref())?;
+        self.open_workspace(workspace, config).await
     }
 
-    /// Mount an already-open drive under `config.prefix`.
+    /// Mount an already-open workspace under `config.prefix`.
     pub async fn open_workspace(
         &self,
-        drive: Arc<Workspace>,
+        workspace: Arc<Workspace>,
         mut config: ServeConfig,
     ) -> Result<HostedWorkspace, Error> {
         config.prefix = sanitize_prefix(&config.prefix).map_err(Error::Config)?;
         let prefix = config.prefix.clone();
-        let root = drive.root().to_path_buf();
+        let root = workspace.root().to_path_buf();
 
         {
-            let drives = self
-                .drives
+            let workspaces = self
+                .workspaces
                 .read()
-                .map_err(|_| Error::Config("drive host lock poisoned".into()))?;
-            if drives.contains_key(&prefix) {
+                .map_err(|_| Error::Config("workspace host lock poisoned".into()))?;
+            if workspaces.contains_key(&prefix) {
                 return Err(Error::Config(format!(
-                    "drive prefix already mounted: {}",
+                    "workspace prefix already mounted: {}",
                     display_prefix(&prefix)
                 )));
             }
-            if drives.values().any(|runtime| runtime.root == root) {
+            if workspaces.values().any(|runtime| runtime.root == root) {
                 return Err(Error::Config(format!(
-                    "drive already mounted: {}",
+                    "workspace already mounted: {}",
                     root.display()
                 )));
             }
         }
 
-        let artifacts = build_app(self.library.clone(), drive, &config).await?;
+        let artifacts = build_app(self.library.clone(), workspace, &config).await?;
         let handle = ServeHandle {
             addr: config.addr,
             prefix: prefix.clone(),
@@ -136,50 +136,50 @@ impl WorkspaceHost {
         };
         let runtime = HostedWorkspaceRuntime { root, artifacts };
 
-        let mut drives = self
-            .drives
+        let mut workspaces = self
+            .workspaces
             .write()
-            .map_err(|_| Error::Config("drive host lock poisoned".into()))?;
-        if drives.contains_key(&prefix) {
+            .map_err(|_| Error::Config("workspace host lock poisoned".into()))?;
+        if workspaces.contains_key(&prefix) {
             return Err(Error::Config(format!(
-                "drive prefix already mounted: {}",
+                "workspace prefix already mounted: {}",
                 display_prefix(&prefix)
             )));
         }
-        drives.insert(prefix, runtime);
+        workspaces.insert(prefix, runtime);
         Ok(hosted)
     }
 
-    /// Close the drive mounted at `prefix`.
+    /// Close the workspace mounted at `prefix`.
     ///
-    /// Returns `Ok(false)` when no drive is mounted there. Closing
+    /// Returns `Ok(false)` when no workspace is mounted there. Closing
     /// sends the shared shutdown signal before dropping the runtime,
     /// so active WebSockets and terminal sessions get a clean exit
     /// path.
     pub fn close_drive(&self, prefix: &str) -> Result<bool, Error> {
         let prefix = sanitize_prefix(prefix).map_err(Error::Config)?;
         let runtime = {
-            let mut drives = self
-                .drives
+            let mut workspaces = self
+                .workspaces
                 .write()
-                .map_err(|_| Error::Config("drive host lock poisoned".into()))?;
-            drives.remove(&prefix)
+                .map_err(|_| Error::Config("workspace host lock poisoned".into()))?;
+            workspaces.remove(&prefix)
         };
         Ok(runtime.is_some())
     }
 
     /// Snapshot the mounted prefixes.
     pub fn mounted_prefixes(&self) -> Result<Vec<String>, Error> {
-        let drives = self
-            .drives
+        let workspaces = self
+            .workspaces
             .read()
-            .map_err(|_| Error::Config("drive host lock poisoned".into()))?;
-        let mut prefixes: Vec<String> = drives.keys().cloned().collect();
+            .map_err(|_| Error::Config("workspace host lock poisoned".into()))?;
+        let mut prefixes: Vec<String> = workspaces.keys().cloned().collect();
         prefixes.sort();
         Ok(prefixes)
     }
 
-    /// Build a dynamic router for all mounted drives.
+    /// Build a dynamic router for all mounted workspaces.
     ///
     /// The returned router consults the host map on every request, so
     /// later `open_*` and `close_drive` calls are visible without
@@ -188,7 +188,7 @@ impl WorkspaceHost {
         Router::new().fallback(host_dispatch).with_state(self)
     }
 
-    /// Return the live `Arc<Workspace>` for a mounted drive whose root
+    /// Return the live `Arc<Workspace>` for a mounted workspace whose root
     /// matches `root`, or `None` when no mounted runtime owns that
     /// path.
     ///
@@ -198,25 +198,25 @@ impl WorkspaceHost {
     /// lifetime flock. Comparison is by canonical form so a
     /// symlinked or non-normalized caller path still matches the
     /// canonical root the runtime stored at mount time. Lock
-    /// poisoning and a drained drive cell both read as "not live"
+    /// poisoning and a drained workspace cell both read as "not live"
     /// (mirrors `AppState::try_drive`); the caller then falls back
     /// to a transient open against the registry.
     pub fn live_drive(&self, root: &Path) -> Option<Arc<Workspace>> {
         let target = canonical_key(root);
-        let drives = self.drives.read().ok()?;
-        let runtime = drives
+        let workspaces = self.workspaces.read().ok()?;
+        let runtime = workspaces
             .values()
             .find(|runtime| canonical_key(&runtime.root) == target)?;
         let cell = runtime.artifacts.drive_cell.read().ok()?;
-        Some(cell.as_ref()?.drive.clone())
+        Some(cell.as_ref()?.workspace.clone())
     }
 
     fn router_for_path(&self, path: &str) -> Result<Option<Router>, Error> {
-        let drives = self
-            .drives
+        let workspaces = self
+            .workspaces
             .read()
-            .map_err(|_| Error::Config("drive host lock poisoned".into()))?;
-        Ok(drives
+            .map_err(|_| Error::Config("workspace host lock poisoned".into()))?;
+        Ok(workspaces
             .iter()
             .filter(|(prefix, _)| path_matches_prefix(path, prefix))
             .max_by_key(|(prefix, _)| prefix.len())
@@ -250,7 +250,7 @@ fn path_matches_prefix(path: &str, prefix: &str) -> bool {
 
 /// Canonical-form key for matching a caller path against a mounted
 /// runtime's root. Falls back to the input path when the filesystem
-/// can't canonicalize (drive root missing or asleep), so the match
+/// can't canonicalize (workspace root missing or asleep), so the match
 /// still works on the exact request path. Mirrors the private
 /// `canonical_key` in `chan_workspace::library`.
 fn canonical_key(root: &Path) -> PathBuf {
@@ -274,16 +274,16 @@ fn clear_drive_cell(drive_cell: &Arc<RwLock<Option<WorkspaceCell>>>) {
         return;
     };
     let WorkspaceCell {
-        drive,
+        workspace,
         watch_handle,
         indexer,
     } = cell;
     // Clear the shared cell before socket accept loops finish aborting;
-    // otherwise their stale Arc can keep the drive marked open.
+    // otherwise their stale Arc can keep the workspace marked open.
     indexer.cancel();
     drop(watch_handle);
     drop(indexer);
-    drop(drive);
+    drop(workspace);
 }
 
 #[cfg(test)]
@@ -314,8 +314,8 @@ mod tests {
     #[tokio::test]
     async fn host_routes_requests_to_the_matching_drive_prefix() {
         let cfg = tempfile::tempdir().expect("config dir");
-        let root_a = tempfile::tempdir().expect("drive a");
-        let root_b = tempfile::tempdir().expect("drive b");
+        let root_a = tempfile::tempdir().expect("workspace a");
+        let root_b = tempfile::tempdir().expect("workspace b");
         std::fs::write(root_a.path().join("a.md"), "# A\n").expect("write a");
         std::fs::write(root_b.path().join("b.md"), "# B\n").expect("write b");
         let lib = Library::open_at(cfg.path().join("config.toml")).expect("library");
@@ -335,7 +335,7 @@ mod tests {
             app.clone()
                 .oneshot(
                     Request::builder()
-                        .uri("/a/api/drive")
+                        .uri("/a/api/workspace")
                         .body(Body::empty())
                         .unwrap(),
                 )
@@ -346,7 +346,7 @@ mod tests {
         let b = response_json(
             app.oneshot(
                 Request::builder()
-                    .uri("/b/api/drive")
+                    .uri("/b/api/workspace")
                     .body(Body::empty())
                     .unwrap(),
             )
@@ -364,20 +364,20 @@ mod tests {
     #[tokio::test]
     async fn host_close_drive_removes_the_route() {
         let cfg = tempfile::tempdir().expect("config dir");
-        let root = tempfile::tempdir().expect("drive");
+        let root = tempfile::tempdir().expect("workspace");
         let lib = Library::open_at(cfg.path().join("config.toml")).expect("library");
         lib.register_workspace(root.path()).expect("register");
         let host = Arc::new(WorkspaceHost::new(lib.clone()));
-        host.open_registered_drive(root.path(), serve_config("/drive"))
+        host.open_registered_drive(root.path(), serve_config("/workspace"))
             .await
             .expect("open");
         let app = host.clone().router();
 
-        assert!(host.close_drive("/drive").expect("close"));
+        assert!(host.close_drive("/workspace").expect("close"));
         let response = app
             .oneshot(
                 Request::builder()
-                    .uri("/drive/api/drive")
+                    .uri("/workspace/api/workspace")
                     .body(Body::empty())
                     .unwrap(),
             )
@@ -390,7 +390,7 @@ mod tests {
     #[tokio::test]
     async fn host_close_drive_releases_handle_for_immediate_reopen() {
         let cfg = tempfile::tempdir().expect("config dir");
-        let root = tempfile::tempdir().expect("drive");
+        let root = tempfile::tempdir().expect("workspace");
         let lib = Library::open_at(cfg.path().join("config.toml")).expect("library");
         lib.register_workspace(root.path()).expect("register");
         let host = Arc::new(WorkspaceHost::new(lib.clone()));
@@ -408,18 +408,20 @@ mod tests {
     #[tokio::test]
     async fn live_drive_returns_the_mounted_runtime_handle() {
         let cfg = tempfile::tempdir().expect("config dir");
-        let root = tempfile::tempdir().expect("drive");
+        let root = tempfile::tempdir().expect("workspace");
         let lib = Library::open_at(cfg.path().join("config.toml")).expect("library");
         lib.register_workspace(root.path()).expect("register");
         let host = Arc::new(WorkspaceHost::new(lib.clone()));
-        host.open_registered_drive(root.path(), serve_config("/drive"))
+        host.open_registered_drive(root.path(), serve_config("/workspace"))
             .await
             .expect("open");
 
         // The live handle must be the SAME Arc the runtime holds, so a
-        // feature toggle off it reaches the flock-holding drive rather
+        // feature toggle off it reaches the flock-holding workspace rather
         // than tripping WorkspaceAlreadyOpen on a re-open.
-        let live = host.live_drive(root.path()).expect("live drive present");
+        let live = host
+            .live_drive(root.path())
+            .expect("live workspace present");
         let canonical = root.path().canonicalize().expect("canonical root");
         assert_eq!(live.root(), canonical.as_path());
 
@@ -428,13 +430,13 @@ mod tests {
         assert!(host.live_drive(other.path()).is_none());
 
         // After close, the handle is no longer live.
-        assert!(host.close_drive("/drive").expect("close"));
+        assert!(host.close_drive("/workspace").expect("close"));
         assert!(host.live_drive(root.path()).is_none());
     }
 
     #[tokio::test]
     async fn fresh_in_process_register_opens_without_drive_not_registered() {
-        // Regression guard for the desktop "drive not registered" bug:
+        // Regression guard for the desktop "workspace not registered" bug:
         // chan-desktop used to register a brand-new directory by
         // spawning `chan add` in a SEPARATE process, which mutated only
         // the on-disk registry. The embedded host's `Library` snapshot
@@ -444,7 +446,7 @@ mod tests {
         // test registers a never-before-seen dir, then opens it on the
         // same handle with no intervening reload.
         let cfg = tempfile::tempdir().expect("config dir");
-        let fresh = tempfile::tempdir().expect("fresh drive dir");
+        let fresh = tempfile::tempdir().expect("fresh workspace dir");
         let lib = Library::open_at(cfg.path().join("config.toml")).expect("library");
         lib.register_workspace(fresh.path())
             .expect("register fresh dir");
@@ -460,9 +462,15 @@ mod tests {
 
     #[test]
     fn path_prefix_matching_uses_segment_boundaries() {
-        assert!(path_matches_prefix("/drive", "/drive"));
-        assert!(path_matches_prefix("/drive/api/drive", "/drive"));
-        assert!(!path_matches_prefix("/driveway/api/drive", "/drive"));
+        assert!(path_matches_prefix("/workspace", "/workspace"));
+        assert!(path_matches_prefix(
+            "/workspace/api/workspace",
+            "/workspace"
+        ));
+        assert!(!path_matches_prefix(
+            "/driveway/api/workspace",
+            "/workspace"
+        ));
         assert!(path_matches_prefix("/anything", ""));
     }
 }

@@ -1,4 +1,4 @@
-// Progress events for long-running drive operations.
+// Progress events for long-running workspace operations.
 //
 // One umbrella shape used by `Workspace::reindex_with`, the rename +
 // link-rewrite path, `import_contacts_with`, `Library::reset_workspace_with`,
@@ -67,8 +67,8 @@ pub fn eta_secs_from(started: Instant, current: u64, total: u64) -> Option<u64> 
 /// `label` string.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ProgressStage {
-    /// Walking the drive and rebuilding the graph in memory before
-    /// the single-tx commit. Long on large drives but rarely the
+    /// Walking the workspace and rebuilding the graph in memory before
+    /// the single-tx commit. Long on large workspaces but rarely the
     /// bottleneck; surfaced so the UI knows the reindex has started.
     GraphRebuild,
     /// Per-file step of the search-index build: read + chunk + BM25

@@ -32,10 +32,10 @@ describe("terminalWsPath", () => {
         cols: 80,
         rows: 24,
         tabName: "shell",
-        windowId: "drive-notes-7",
+        windowId: "workspace-notes-7",
       }),
     ).toBe(
-      "/api/terminal/ws?cols=80&rows=24&tab_name=shell&window_id=drive-notes-7",
+      "/api/terminal/ws?cols=80&rows=24&tab_name=shell&window_id=workspace-notes-7",
     );
   });
 

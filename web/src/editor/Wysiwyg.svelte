@@ -21,7 +21,7 @@
   import { EditorView, drawSelection, keymap, placeholder } from "@codemirror/view";
   import { syntaxTree } from "@codemirror/language";
   import { defaultKeymap, history, historyKeymap } from "@codemirror/commands";
-  import { drive, effectiveHybridSurfaceTheme } from "../state/store.svelte";
+  import { workspace, effectiveHybridSurfaceTheme } from "../state/store.svelte";
   import {
     createValueSync,
     findField,
@@ -150,7 +150,7 @@
     return "standard";
   }
 
-  const density = $derived(editorDensity(drive.info?.preferences?.line_spacing));
+  const density = $derived(editorDensity(workspace.info?.preferences?.line_spacing));
 
   let host: HTMLDivElement | undefined;
   let view: EditorView | undefined;

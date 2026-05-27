@@ -164,7 +164,8 @@ fn err_from_metadata_import(e: &MetadataImportError) -> Response {
     match e {
         MetadataImportError::Busy => err(
             StatusCode::CONFLICT,
-            "drive busy: in-flight requests still hold the writer lock; retry in a moment".into(),
+            "workspace busy: in-flight requests still hold the writer lock; retry in a moment"
+                .into(),
         ),
         MetadataImportError::Core(c) => err_from(c),
         MetadataImportError::Poisoned(what) => err(
@@ -202,7 +203,7 @@ fn perform_metadata_import(
         .clear();
     cell.indexer.cancel();
     cell.watch_handle.take();
-    let drive_strong = cell.drive.clone();
+    let drive_strong = cell.workspace.clone();
     drop(cell);
 
     let deadline = Instant::now() + IMPORT_DRAIN_DEADLINE;
@@ -227,7 +228,7 @@ fn perform_metadata_import(
         .library
         .open_workspace(&state.drive_root)
         .map_err(MetadataImportError::Core)
-        .and_then(|drive| install_drive_cell(state, drive));
+        .and_then(|workspace| install_drive_cell(state, workspace));
 
     restore_result?;
     import_result
@@ -237,23 +238,26 @@ fn take_drive_cell(state: &AppState) -> Result<WorkspaceCell, MetadataImportErro
     let mut cell_guard = state
         .drive_cell
         .write()
-        .map_err(|_| MetadataImportError::Poisoned("drive cell lock"))?;
+        .map_err(|_| MetadataImportError::Poisoned("workspace cell lock"))?;
     cell_guard.take().ok_or(MetadataImportError::Busy)
 }
 
-fn install_drive_cell(state: &AppState, drive: Arc<Workspace>) -> Result<(), MetadataImportError> {
-    let cell = build_drive_cell(state, drive)?;
+fn install_drive_cell(
+    state: &AppState,
+    workspace: Arc<Workspace>,
+) -> Result<(), MetadataImportError> {
+    let cell = build_drive_cell(state, workspace)?;
     let mut cell_guard = state
         .drive_cell
         .write()
-        .map_err(|_| MetadataImportError::Poisoned("drive cell lock"))?;
+        .map_err(|_| MetadataImportError::Poisoned("workspace cell lock"))?;
     *cell_guard = Some(cell);
     Ok(())
 }
 
 fn build_drive_cell(
     state: &AppState,
-    drive: Arc<Workspace>,
+    workspace: Arc<Workspace>,
 ) -> Result<WorkspaceCell, MetadataImportError> {
     let bridge = make_watch_bridge(
         &state.events_tx,
@@ -261,7 +265,7 @@ fn build_drive_cell(
         &state.self_writes,
         &state.scope_registry,
     );
-    let watch_handle = drive.watch(bridge).map_err(MetadataImportError::Core)?;
+    let watch_handle = workspace.watch(bridge).map_err(MetadataImportError::Core)?;
     let search_aggression = state
         .server_config
         .lock()
@@ -269,14 +273,14 @@ fn build_drive_cell(
         .search
         .aggression;
     let indexer = Arc::new(Indexer::spawn(
-        drive.clone(),
+        workspace.clone(),
         state.index_events_tx.subscribe(),
         true,
         search_aggression,
         make_progress_broadcast(&state.events_tx),
     ));
     Ok(WorkspaceCell {
-        drive,
+        workspace,
         watch_handle: Some(watch_handle),
         indexer,
     })
@@ -295,7 +299,7 @@ fn safe_filename_fragment(value: &str) -> String {
         .collect();
     let trimmed = out.trim_matches('-');
     if trimmed.is_empty() {
-        "drive".to_string()
+        "workspace".to_string()
     } else {
         trimmed.to_string()
     }
@@ -307,8 +311,11 @@ mod tests {
 
     #[test]
     fn safe_filename_fragment_strips_path_characters() {
-        assert_eq!(safe_filename_fragment("/tmp/drive root"), "tmp-drive-root");
-        assert_eq!(safe_filename_fragment(""), "drive");
+        assert_eq!(
+            safe_filename_fragment("/tmp/workspace root"),
+            "tmp-workspace-root"
+        );
+        assert_eq!(safe_filename_fragment(""), "workspace");
     }
 
     #[test]
@@ -317,9 +324,9 @@ mod tests {
         let root = tempfile::TempDir::new().unwrap();
         let lib = chan_workspace::Library::open_at(cfg.path().join("config.toml")).unwrap();
         lib.register_workspace(root.path()).unwrap();
-        let drive = lib.open_workspace(root.path()).unwrap();
-        drive.write_text("note.md", "hello").unwrap();
-        drop(drive);
+        let workspace = lib.open_workspace(root.path()).unwrap();
+        workspace.write_text("note.md", "hello").unwrap();
+        drop(workspace);
 
         let download = export_metadata_download(&lib, root.path()).unwrap();
 

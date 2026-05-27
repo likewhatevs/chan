@@ -1,6 +1,6 @@
 //! systacean-35: `GET /api/mentions?q=<prefix>&limit=<int>`.
 //!
-//! Returns prefix-matched mention handles from the per-drive
+//! Returns prefix-matched mention handles from the per-workspace
 //! graph DB. Unblocks `-a-70`'s editor mention completion gap
 //! (the editor previously queried only the contact list; this
 //! exposes the broader corpus of `@@<Name>` references across
@@ -51,12 +51,12 @@ pub async fn api_get_mentions(
     State(state): State<Arc<AppState>>,
     Query(params): Query<MentionsQuery>,
 ) -> Response {
-    let drive = state.drive().clone();
+    let workspace = state.workspace().clone();
     let q = params.q.clone();
     let limit = params.limit.unwrap_or(DEFAULT_LIMIT).clamp(1, MAX_LIMIT) as usize;
     let result = tokio::task::spawn_blocking(
         move || -> Result<Vec<MentionItem>, chan_workspace::ChanError> {
-            let graph = drive.graph()?;
+            let graph = workspace.graph()?;
             let mentions = graph.mentions()?;
             let prefix = q.to_lowercase();
             let filtered: Vec<MentionItem> = mentions

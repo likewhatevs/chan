@@ -26,7 +26,7 @@ describe("Phase 9 Cmd+P fresh Rich Prompt terminal", () => {
 
 describe("fullstack-a-56 depth-slider shallow-scope cue", () => {
   test("derived depthShallow gate: only for non-language non-disabled scopes where depthCap <= 1", () => {
-    // Hoisted as a top-level `$derived.by` so it can drive both
+    // Hoisted as a top-level `$derived.by` so it can workspace both
     // the `disabled` attribute on the slider AND the markup
     // cue without invoking `{@const}` outside an allowed
     // parent block.

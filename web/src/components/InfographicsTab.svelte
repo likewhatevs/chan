@@ -4,7 +4,7 @@
   // moves OUT of the welcome surface (which becomes a static
   // spawn grid via EmptyPaneWelcome.svelte) and lives only
   // INSIDE this tab. The full carousel widget (rotation +
-  // play/pause + pagination + 3 slides: Shortcuts / Drive
+  // play/pause + pagination + 3 slides: Shortcuts / Workspace
   // metadata / Indexing graph) renders here.
   //
   // Earlier slice (-a-75 slice 1) shipped this tab as a static

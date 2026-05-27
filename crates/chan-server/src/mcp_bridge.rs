@@ -1,17 +1,17 @@
 //! In-process MCP server exposed over a Unix-domain socket.
 //!
 //! External MCP agents want to launch the chan MCP server as a
-//! subprocess so writes round-trip through chan-drive's gates. The
+//! subprocess so writes round-trip through chan-workspace's gates. The
 //! original wiring spawned `chan __mcp <drive_root>`, which then
-//! called `Library::open_workspace` a second time. chan-drive holds a
-//! per-drive flock for single-writer ownership, so the child failed
+//! called `Library::open_workspace` a second time. chan-workspace holds a
+//! per-workspace flock for single-writer ownership, so the child failed
 //! with `WorkspaceLocked`.
 //!
 //! The bridge resolves that conflict: chan-server already owns an
-//! `Arc<Workspace>` for the drive it serves, so the MCP service is run
+//! `Arc<Workspace>` for the workspace it serves, so the MCP service is run
 //! in-process. Each external agent connects through `chan __mcp-proxy`
 //! to a Unix-domain socket the bridge listens on; the proxy just
-//! pipes stdin/stdout through the socket. No second drive open, no
+//! pipes stdin/stdout through the socket. No second workspace open, no
 //! flock contention.
 //!
 //! Lifetime: the bridge spawns at boot inside `build_app`. The
@@ -80,7 +80,7 @@ impl Drop for BridgeHandle {
 
 /// Bind the socket and spawn an accept loop. Each accepted connection
 /// gets a fresh `chan_llm::mcp::Server` constructed against the
-/// current drive Arc.
+/// current workspace Arc.
 #[cfg(unix)]
 pub fn start<DF>(socket_path: PathBuf, drive_for: DF) -> std::io::Result<BridgeHandle>
 where
@@ -104,13 +104,13 @@ where
                     continue;
                 }
             };
-            let Some(drive) = drive_for() else {
-                tracing::warn!("mcp bridge session refused: drive state unavailable");
+            let Some(workspace) = drive_for() else {
+                tracing::warn!("mcp bridge session refused: workspace state unavailable");
                 continue;
             };
             tokio::spawn(async move {
                 let (read, write) = stream.into_split();
-                let server = chan_llm::mcp::Server::new(drive);
+                let server = chan_llm::mcp::Server::new(workspace);
                 if let Err(e) = server.serve_io(read, write).await {
                     tracing::debug!("mcp bridge session: {e}");
                 }

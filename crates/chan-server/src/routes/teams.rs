@@ -33,7 +33,7 @@ use crate::state::AppState;
 
 /// systacean-41: map `chan_workspace::ChanError` from
 /// `Workspace::create_team` / `Workspace::duplicate_team` to HTTP. The
-/// chan-drive layer returns `ChanError::Io` with descriptive
+/// chan-workspace layer returns `ChanError::Io` with descriptive
 /// messages for each validation failure; this matcher promotes
 /// the relevant variants to 400 per the task spec (`Invalid name
 /// (empty, traversal, collision) -> 400`). Falls through to the
@@ -103,7 +103,7 @@ pub async fn api_team_load(
     Path(team_name): Path<String>,
 ) -> Response {
     // Build the watch bridge (re-uses the same events_tx /
-    // index_events_tx fan-out as the drive-root watcher).
+    // index_events_tx fan-out as the workspace-root watcher).
     let bridge = make_watch_bridge(
         &state.events_tx,
         &state.index_events_tx,
@@ -116,12 +116,12 @@ pub async fn api_team_load(
     // `WatchRoot` directly. Per-event paths emerge prefixed
     // `team-{name}/events/` so the SPA event stream routes
     // per-team.
-    let drive = state.drive().clone();
+    let workspace = state.workspace().clone();
     let team_name_for_task = team_name.clone();
     let result = tokio::task::spawn_blocking(
         move || -> Result<(std::path::PathBuf, chan_workspace::WatchHandle), chan_workspace::ChanError> {
-            let events_dir = drive.team_events_dir(&team_name_for_task)?;
-            let watch_handle = drive.watch_team(&team_name_for_task, bridge)?;
+            let events_dir = workspace.team_events_dir(&team_name_for_task)?;
+            let watch_handle = workspace.watch_team(&team_name_for_task, bridge)?;
             Ok((events_dir, watch_handle))
         },
     )
@@ -218,8 +218,8 @@ pub async fn api_team_create(
     let CreateTeamPayload { name, mut config } = payload;
     // Outer `name` is authoritative.
     config.team_name = name;
-    let drive = state.drive().clone();
-    let result = tokio::task::spawn_blocking(move || drive.create_team(&config)).await;
+    let workspace = state.workspace().clone();
+    let result = tokio::task::spawn_blocking(move || workspace.create_team(&config)).await;
     match result {
         Ok(Ok(team_ref)) => Json(TeamRefView {
             name: team_ref.name,
@@ -251,9 +251,9 @@ pub async fn api_team_duplicate(
     Json(payload): Json<DuplicateTeamPayload>,
 ) -> Response {
     let DuplicateTeamPayload { new_name } = payload;
-    let drive = state.drive().clone();
+    let workspace = state.workspace().clone();
     let result =
-        tokio::task::spawn_blocking(move || drive.duplicate_team(&team_name, &new_name)).await;
+        tokio::task::spawn_blocking(move || workspace.duplicate_team(&team_name, &new_name)).await;
     match result {
         Ok(Ok(team_ref)) => Json(TeamRefView {
             name: team_ref.name,
@@ -284,8 +284,8 @@ pub async fn api_team_get_config(
     State(state): State<Arc<AppState>>,
     Path(team_name): Path<String>,
 ) -> Response {
-    let drive = state.drive().clone();
-    let result = tokio::task::spawn_blocking(move || drive.load_team(&team_name)).await;
+    let workspace = state.workspace().clone();
+    let result = tokio::task::spawn_blocking(move || workspace.load_team(&team_name)).await;
     match result {
         Ok(Ok(config)) => Json(config).into_response(),
         Ok(Err(e)) => map_team_error(&e),
@@ -339,12 +339,12 @@ mod tests {
         let root = TempDir::new().unwrap();
         let lib = chan_workspace::Library::open_at(cfg.path().join("config.toml")).unwrap();
         lib.register_workspace(root.path()).unwrap();
-        let drive = lib.open_workspace(root.path()).unwrap();
+        let workspace = lib.open_workspace(root.path()).unwrap();
 
         let (events_tx, _) = broadcast::channel::<String>(1);
         let (index_events_tx, _) = broadcast::channel::<chan_workspace::WatchEvent>(1);
         let indexer = Arc::new(crate::indexer::Indexer::spawn(
-            drive.clone(),
+            workspace.clone(),
             index_events_tx.subscribe(),
             false,
             SearchAggression::Conservative,
@@ -357,7 +357,7 @@ mod tests {
             library: lib,
             drive_root: root.path().to_path_buf(),
             drive_cell: Arc::new(RwLock::new(Some(WorkspaceCell {
-                drive,
+                workspace,
                 watch_handle: None,
                 indexer,
             }))),
@@ -465,7 +465,7 @@ mod tests {
     async fn duplicate_team_creates_distinct_copy() {
         // systacean-41: duplicating an existing team produces a
         // distinct team under the new name. The duplicate's
-        // config.team_name is rewritten by chan-drive to match
+        // config.team_name is rewritten by chan-workspace to match
         // the new directory name.
         let app = route_test_app();
         let router = crate::router(app.state);
@@ -574,7 +574,7 @@ mod tests {
 
     #[tokio::test]
     async fn duplicate_team_rejects_identical_source_and_new_name() {
-        // systacean-41: chan-drive refuses
+        // systacean-41: chan-workspace refuses
         // duplicate(source, source) as a guardrail. Route maps
         // to 400.
         let app = route_test_app();

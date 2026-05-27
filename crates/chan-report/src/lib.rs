@@ -4,7 +4,7 @@
 // per-language roll-ups and a COCOMO summary, and maintains the
 // state incrementally so a single file change does not require a
 // full rescan. The crate is I/O-free for state: callers
-// (chan-drive) own persistence and call write_jsonl / load_jsonl
+// (chan-workspace) own persistence and call write_jsonl / load_jsonl
 // when they decide to materialize a snapshot to disk.
 
 #![forbid(unsafe_code)]
@@ -84,11 +84,11 @@ pub enum UpdateOutcome {
 }
 
 /// In-memory per-file state plus the cached accept-filter. Single
-/// owner per drive; chan-drive wraps this in its own lock.
+/// owner per workspace; chan-workspace wraps this in its own lock.
 ///
 /// `dirs` is a maintained per-directory aggregation index: every
 /// file's stats contribute to each of its ancestor directories all
-/// the way to the drive root (key `""`). Entries are dropped when
+/// the way to the workspace root (key `""`). Entries are dropped when
 /// the last file under them is removed so the map matches "dirs
 /// that currently contain tracked files". Reads are O(1) via
 /// `Index::dir_report`; writes pay an O(depth) ancestor walk per
@@ -145,7 +145,7 @@ impl Index {
     }
 
     /// Re-count `rel` from disk and reconcile against the index.
-    /// `rel` is drive-relative POSIX. Returns:
+    /// `rel` is workspace-relative POSIX. Returns:
     ///
     ///   - `Inserted` when the file is new and the filter accepts it.
     ///   - `Updated` when stats changed.
@@ -315,9 +315,9 @@ impl Index {
     }
 
     /// Read-side O(1) lookup of the maintained per-directory
-    /// aggregation. `dir` is a drive-relative POSIX directory path
+    /// aggregation. `dir` is a workspace-relative POSIX directory path
     /// with no leading slash; trailing slashes are stripped. The
-    /// empty string maps to the drive root (every tracked file
+    /// empty string maps to the workspace root (every tracked file
     /// contributes to it).
     ///
     /// Returns `None` when no tracked file lives at or under the
@@ -367,7 +367,7 @@ impl Index {
     }
 
     /// Add `stats` to every ancestor directory of `rel`,
-    /// including the drive root (key `""`). Per-language
+    /// including the workspace root (key `""`). Per-language
     /// sub-rollup is created on first touch.
     fn apply_file_to_dirs(&mut self, rel: &str, stats: &FileStats) {
         for anc in ancestor_dirs(rel) {
@@ -454,8 +454,8 @@ impl Index {
     }
 }
 
-/// Yield every ancestor directory of a drive-relative POSIX path,
-/// from the drive root (`""`) down to the immediate parent. The
+/// Yield every ancestor directory of a workspace-relative POSIX path,
+/// from the workspace root (`""`) down to the immediate parent. The
 /// file's own path is NOT included; aggregation is about what
 /// directories *contain* the file.
 ///
@@ -485,7 +485,7 @@ fn ancestor_dirs(rel: &str) -> Vec<String> {
 
 /// Normalize a caller-supplied directory query string into the
 /// cache key. Strips trailing slashes; `""` and `"/"` both mean
-/// the drive root. Leading slashes are stripped too so callers
+/// the workspace root. Leading slashes are stripped too so callers
 /// can pass either `"src"` or `"/src"`.
 fn normalize_dir(dir: &str) -> String {
     dir.trim_matches('/').to_string()

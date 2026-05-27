@@ -1,6 +1,6 @@
-// Cross-process advisory locks for per-drive state.
+// Cross-process advisory locks for per-workspace state.
 //
-// Two processes (e.g. `chan serve` running on a drive that the
+// Two processes (e.g. `chan serve` running on a workspace that the
 // native desktop app then opens) must not both try to write the
 // search index or graph DB at once. We use file-based advisory
 // locks via fs4 (Unix flock + Windows LockFileEx).
@@ -16,7 +16,7 @@ use fs4::fs_std::FileExt;
 
 use crate::error::{ChanError, Result};
 
-/// Process-wide advisory lock on a per-drive lockfile. Drop to
+/// Process-wide advisory lock on a per-workspace lockfile. Drop to
 /// release. Cross-platform via fs4 (flock on Unix, LockFileEx on
 /// Windows).
 pub struct WorkspaceLock {
@@ -25,7 +25,7 @@ pub struct WorkspaceLock {
 }
 
 impl WorkspaceLock {
-    /// Try to acquire the writer lock for this drive. Fails fast
+    /// Try to acquire the writer lock for this workspace. Fails fast
     /// with `ChanError::WorkspaceLocked` if another process holds it.
     pub fn acquire(lock_dir: &Path) -> Result<Self> {
         std::fs::create_dir_all(lock_dir)?;

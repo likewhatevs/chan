@@ -15,14 +15,14 @@ describe("fullstack-a-67 (Graph slice): scope-header row", () => {
   });
 
   test("header row renders the scope path + kind-appropriate icon", () => {
-    // Drive scope shows "Drive" label; file/dir scopes show their path;
+    // Workspace scope shows "Workspace" label; file/dir scopes show their path;
     // tag scope prefixes `#`; etc.
     expect(graph).toMatch(/class="mbtn graph-scope-row"/);
     expect(graph).toMatch(/class="mbtn-label graph-scope-path"/);
   });
 
-  test("icon dispatch covers drive / dir / tag / file at minimum", () => {
-    expect(graph).toMatch(/currentScope\.kind === "drive"[\s\S]*?<HardDrive/);
+  test("icon dispatch covers workspace / dir / tag / file at minimum", () => {
+    expect(graph).toMatch(/currentScope\.kind === "workspace"[\s\S]*?<HardDrive/);
     expect(graph).toMatch(/currentScope\.kind === "dir"[\s\S]*?<Folder/);
     expect(graph).toMatch(/currentScope\.kind === "tag"[\s\S]*?<Hash/);
     // The remaining live scope kind (file) falls through to FileText.
@@ -50,9 +50,9 @@ describe("fullstack-a-67 (slice 1b): scope-header click → inspector", () => {
     );
   });
 
-  test("openScopeHeaderInspector maps drive → empty-string id (drive-root node)", () => {
+  test("openScopeHeaderInspector maps workspace → empty-string id (workspace-root node)", () => {
     expect(graph).toMatch(
-      /openScopeHeaderInspector[\s\S]*?currentScope\.kind === "drive"[\s\S]*?nodeId = "";/,
+      /openScopeHeaderInspector[\s\S]*?currentScope\.kind === "workspace"[\s\S]*?nodeId = "";/,
     );
   });
 

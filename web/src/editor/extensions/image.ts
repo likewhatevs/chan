@@ -1,7 +1,7 @@
 // Image src utilities used by the editor's image atom widget and the
 // image bubble. Pure functions; no editor framework dependency.
 //
-// Drive-relative srcs (`foo.png`, `./foo.png`, `../foo.png`,
+// Workspace-relative srcs (`foo.png`, `./foo.png`, `../foo.png`,
 // `/abs.png`) are resolved against `/api/files/<path>` so the browser
 // can fetch the bytes via the chan-server token; absolute URLs
 // (http/data/blob) pass through unchanged.
@@ -25,7 +25,7 @@ export type ImageAlign = "left" | "right";
 /// `#w=N`; alignment as bare `#left` / `#right` (absent fragment =
 /// the default, centered). The fragment stays in the markdown so
 /// other renderers see a plain `file.png` (path-only after the
-/// hash is stripped); chan-drive's link parser strips `#...` before
+/// hash is stripped); chan-workspace's link parser strips `#...` before
 /// indexing, so fragments never leak into the graph.
 ///
 /// Multiple fragment params are joined with `&` (e.g. `#w=200&left`).
@@ -80,10 +80,10 @@ function buildImageSrc(
 }
 
 /// Resolve a markdown image src to a URL the browser can load.
-/// Local drive paths route through `/api/files/` with the launch
-/// token; absolute URLs (http/data/blob) pass through. Drive-rooted
+/// Local workspace paths route through `/api/files/` with the launch
+/// token; absolute URLs (http/data/blob) pass through. Workspace-rooted
 /// and parent-relative sources go through `normalizeHref` against
-/// `fromPath`'s directory so the resolver chan-drive uses for graph
+/// `fromPath`'s directory so the resolver chan-workspace uses for graph
 /// edges produces the same canonical path that reaches `/api/files/`.
 /// `#w=N` width fragments are stripped before the URL is built (the
 /// width is applied as inline style on the `<img>` instead).
@@ -96,8 +96,8 @@ export function resolveImageSrc(src: string, fromPath?: string | null): string {
   const sourceDir = fromPath
     ? fromPath.split("/").slice(0, -1).join("/")
     : "";
-  const driveRooted = normalizeHref(base, sourceDir) ?? base;
-  const encoded = driveRooted
+  const workspaceRooted = normalizeHref(base, sourceDir) ?? base;
+  const encoded = workspaceRooted
     .split("/")
     .map((s) => encodeURIComponent(s))
     .join("/");

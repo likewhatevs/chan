@@ -2,19 +2,19 @@
 // editor. The wikiLink TipTap extension serializes atoms back to
 // markdown via `wikiLinkToMarkdown`; Wysiwyg resolves clicks on
 // relative-path links via `resolveRelativePath` (legacy, ./../-only)
-// and `normalizeHref` (full mirror of chan-drive's `normalize_href`).
+// and `normalizeHref` (full mirror of chan-workspace's `normalize_href`).
 
 /// Serialize a wikiLink atom's attrs back to markdown.
 ///
 /// `fromPath` is the path of the file whose markdown is being
-/// produced (drive-rooted POSIX, no leading slash). When provided,
+/// produced (workspace-rooted POSIX, no leading slash). When provided,
 /// the URL portion is rewritten to a file-relative path with an
 /// explicit `./` or `../` prefix so the discriminator at parse
-/// time can tell relative URLs from legacy drive-rooted ones.
-/// When omitted (no source file), the URL stays drive-rooted.
+/// time can tell relative URLs from legacy workspace-rooted ones.
+/// When omitted (no source file), the URL stays workspace-rooted.
 ///
 /// `wasAbs` overrides the relativization: if true, the URL is
-/// emitted in drive-rooted form with a leading slash, preserving
+/// emitted in workspace-rooted form with a leading slash, preserving
 /// the shape `decorateWikiLinks` saw in the source markdown.
 export function wikiLinkToMarkdown(
   target: string,
@@ -24,11 +24,11 @@ export function wikiLinkToMarkdown(
   wasAbs?: boolean,
 ): string {
   const stem = (label ?? target.split("/").pop() ?? target).replace(/\.md$/, "");
-  // Build the URL portion. With `wasAbs`, emit drive-rooted form
+  // Build the URL portion. With `wasAbs`, emit workspace-rooted form
   // (`/path`) regardless of `fromPath`. Otherwise, with `fromPath`
   // set, the URL is rewritten to a file-relative path so notes
   // stay portable across project layouts. Without `fromPath`, fall
-  // back to the legacy drive-rooted form (no slash) so no-source-file
+  // back to the legacy workspace-rooted form (no slash) so no-source-file
   // callers keep their existing semantics.
   const path = wasAbs
     ? `/${target}`
@@ -48,9 +48,9 @@ export function wikiLinkToMarkdown(
 }
 
 /// Compute a file-relative path from `fromPath`'s directory to
-/// `target`, both drive-rooted POSIX paths. Always emits a
+/// `target`, both workspace-rooted POSIX paths. Always emits a
 /// `./` or `../` prefix so the parser can distinguish a relative
-/// URL from a legacy drive-rooted one.
+/// URL from a legacy workspace-rooted one.
 ///
 /// Examples (fromPath -> target -> result):
 ///   `Recipes/Pasta.md`    -> `Recipes/Brazilian Rice.md` -> `./Brazilian Rice.md`
@@ -76,8 +76,8 @@ export function relativizePath(target: string, fromPath: string): string {
 }
 
 /// Resolve a relative href against `fromPath`'s directory, returning
-/// the canonical drive-rooted target. Hrefs that don't start with
-/// `./` or `../` are treated as already-drive-rooted (legacy /
+/// the canonical workspace-rooted target. Hrefs that don't start with
+/// `./` or `../` are treated as already-workspace-rooted (legacy /
 /// power-user form) and returned unchanged.
 export function resolveRelativePath(href: string, fromPath: string): string {
   if (!href.startsWith("./") && !href.startsWith("../")) {
@@ -96,23 +96,23 @@ export function resolveRelativePath(href: string, fromPath: string): string {
   return fromDir.join("/");
 }
 
-/// Resolve a markdown link href to a clean drive-relative POSIX path.
+/// Resolve a markdown link href to a clean workspace-relative POSIX path.
 ///
-/// Hand-port of `chan_drive::markdown::normalize_href`; both must
+/// Hand-port of `chan_workspace::markdown::normalize_href`; both must
 /// produce the same string for the same input so the on-disk graph
 /// edges and the in-editor click navigation agree on the resolved
 /// target. Update both files together.
 ///
 /// `href` is the literal target as written in the markdown (or the
 /// inner text of a wiki link). `sourceDir` is the directory of the
-/// file the href appears in: drive-relative POSIX, no leading slash;
-/// pass "" for files at the drive root.
+/// file the href appears in: workspace-relative POSIX, no leading slash;
+/// pass "" for files at the workspace root.
 ///
-/// Returns `null` for hrefs that don't address a drive file:
+/// Returns `null` for hrefs that don't address a workspace file:
 ///   - external schemes (`https:`, `mailto:`, `tel:`, ...)
 ///   - intra-document fragments (`#section`)
 ///   - empty hrefs and `/` alone
-///   - lexical escapes past the drive root (`../` from the root)
+///   - lexical escapes past the workspace root (`../` from the root)
 /// Strips trailing `?query` and `#anchor`; callers that need the
 /// anchor for navigation must capture it separately before calling.
 ///
@@ -153,8 +153,8 @@ export function normalizeHref(href: string, sourceDir: string): string | null {
   } else {
     combined = `${sourceDir.replace(/\/+$/, "")}/${pathOnly}`;
   }
-  // Lexical `.` / `..` collapse. A `..` past the drive root rejects
-  // the whole href; matches chan-drive's no-symlink-chasing rule.
+  // Lexical `.` / `..` collapse. A `..` past the workspace root rejects
+  // the whole href; matches chan-workspace's no-symlink-chasing rule.
   const stack: string[] = [];
   for (const part of combined.split("/")) {
     if (part === "" || part === ".") continue;

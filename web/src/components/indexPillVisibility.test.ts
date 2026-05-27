@@ -8,7 +8,7 @@
 // change can't silently re-strand the pill).
 //
 // AppStatusBar derives `indexVisible` from the shared `indexStatus`
-// store; we drive the store directly and assert the same predicate, plus
+// store; we workspace the store directly and assert the same predicate, plus
 // pin the source so the derivation and the template branch stay in
 // lockstep.
 

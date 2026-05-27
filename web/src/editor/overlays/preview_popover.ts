@@ -35,7 +35,7 @@ const TEXT_EXTS = new Set([".md", ".txt", ".markdown"]);
 export interface PreviewPopoverOpts {
   /// DOM element to anchor the popover under (the clicked widget).
   anchor: HTMLElement;
-  /// Drive-rooted POSIX path of the file to preview.
+  /// Workspace-rooted POSIX path of the file to preview.
   path: string;
   /// Path of the file the popover was opened FROM, when known. Used
   /// to resolve relative image refs inside the preview (mirrors the
@@ -103,7 +103,7 @@ export function openPreviewPopover(
   if (IMAGE_EXTS.has(ext)) {
     renderImage();
   } else if (TEXT_EXTS.has(ext) || ext === "") {
-    // Treat extensionless paths as text too — chan-drive permits .md
+    // Treat extensionless paths as text too — chan-workspace permits .md
     // / .txt only for writes, but the editor often references files
     // by stem (wiki autocomplete strips extensions on suggest); reads
     // succeed regardless.

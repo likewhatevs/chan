@@ -8,7 +8,7 @@ import desktop from "./desktop.ts?raw";
 describe("desktop download capability", () => {
   test("runDesktopDownload fetches with XHR progress and saves via Tauri", () => {
     expect(desktop).toContain("export async function runDesktopDownload(");
-    // XHR download (not upload) progress drives the indicator.
+    // XHR download (not upload) progress workspaces the indicator.
     expect(desktop).toContain("xhr.responseType = \"arraybuffer\"");
     expect(desktop).toContain("xhr.onprogress");
     expect(desktop).toContain("event.loaded / event.total");
@@ -17,7 +17,7 @@ describe("desktop download capability", () => {
     expect(desktop).toContain("Array.from(bytes)");
   });
 
-  test("it gates on isTauriDesktop and drives the transfer store", () => {
+  test("it gates on isTauriDesktop and workspaces the transfer store", () => {
     expect(desktop).toContain('runDesktopDownload called outside chan-desktop');
     expect(desktop).toContain("beginDownloadTransfer(filename");
     expect(desktop).toContain("finishDownloadTransfer(saved.path)");

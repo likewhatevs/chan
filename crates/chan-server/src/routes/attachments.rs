@@ -3,13 +3,13 @@
 //! The frontend sends one part named `file`; we slugify the original
 //! filename, prefix with the unix timestamp (collision resistance),
 //! and write via Workspace::write_bytes (so the path sandbox + special-
-//! file refusal apply). Returns the drive-relative path the file
+//! file refusal apply). Returns the workspace-relative path the file
 //! landed at, matching the frontend's `uploadAttachment` contract.
 //!
 //! Optional `dir` form field overrides the configured
 //! `attachments_dir` so the editor can land an upload in the same
 //! directory as the file being edited (markdown can then reference
-//! it with a `./name` src). An empty `dir` saves at drive root; an
+//! it with a `./name` src). An empty `dir` saves at workspace root; an
 //! absent `dir` falls back to `attachments_dir`. Workspace sandboxing
 //! rejects `..` escape attempts so we don't validate manually here.
 
@@ -83,7 +83,7 @@ pub async fn api_post_attachment(
     }
 
     // Resolve the target dir: caller-supplied `dir` (incl. empty
-    // string for drive root) wins; missing falls back to the
+    // string for workspace root) wins; missing falls back to the
     // configured attachments_dir.
     let dir = match dir_override {
         Some(d) => d,
@@ -114,8 +114,8 @@ pub async fn api_post_attachment(
     };
     let ext = ext.map(|e| e.to_ascii_lowercase()).unwrap_or_default();
 
-    let drive = match state.try_drive() {
-        Ok(drive) => drive,
+    let workspace = match state.try_drive() {
+        Ok(workspace) => workspace,
         Err(e) => return err_state(&e),
     };
     // Record the self-write inside the blocking task, before the
@@ -150,7 +150,7 @@ pub async fn api_post_attachment(
         // Hard cap on retries: if a thousand suffixes are taken the
         // user has bigger problems than this loop; bail to a unique
         // timestamp fallback rather than spinning forever.
-        while drive.exists(&rel) {
+        while workspace.exists(&rel) {
             if attempt > 1000 {
                 let ts = now_unix_secs();
                 let base = format!("{stem_or_default}-{ts}");
@@ -167,7 +167,7 @@ pub async fn api_post_attachment(
         }
 
         self_writes.note(&rel);
-        drive.write_bytes(&rel, &bytes)?;
+        workspace.write_bytes(&rel, &bytes)?;
         Ok::<_, chan_workspace::ChanError>(rel)
     })
     .await;

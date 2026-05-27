@@ -2,7 +2,7 @@
   import { ChevronDown, ChevronUp, Loader2, RefreshCw, X } from "lucide-svelte";
   import type { BubbleOverlayMode } from "../api/types";
   import { openExternalUrl } from "../editor/external_links";
-  import { drive } from "../state/store.svelte";
+  import { workspace } from "../state/store.svelte";
   import type { SurveyOption, TerminalWatcherState, WatcherEvent } from "../state/tabs.svelte";
   import { normalizeStandingOptions, writeSurveyReply } from "../state/watcherEvents";
 
@@ -31,7 +31,7 @@
   type NumberedOption = SurveyOption & { n: number };
 
   const mode = $derived<BubbleOverlayMode>(
-    drive.info?.preferences.bubble_overlay_mode === "tray" ? "tray" : "stack",
+    workspace.info?.preferences.bubble_overlay_mode === "tray" ? "tray" : "stack",
   );
   // `fullstack-a-5` + `fullstack-a-28`: hide any source event with
   // a sibling `survey-reply` (same id, audit tombstone) so a

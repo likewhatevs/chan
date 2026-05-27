@@ -2,7 +2,7 @@
 //!
 //! `Error` is the crate-wide error returned by `serve()`/`serve_via_tunnel()`.
 //! The `err_*` helpers shape uniform `{"error": "..."}` JSON bodies and map
-//! chan-drive errors onto the right HTTP status. Routes call into these instead
+//! chan-workspace errors onto the right HTTP status. Routes call into these instead
 //! of building responses by hand so the wire shape stays consistent across
 //! handlers.
 
@@ -14,7 +14,7 @@ use crate::state::StateAccessError;
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
-    #[error("chan-drive: {0}")]
+    #[error("chan-workspace: {0}")]
     Core(#[from] chan_workspace::ChanError),
     #[error("io: {0}")]
     Io(#[from] std::io::Error),
@@ -38,7 +38,7 @@ pub fn err(status: StatusCode, msg: String) -> Response {
 pub fn err_settings_locked() -> Response {
     err(
         StatusCode::FORBIDDEN,
-        "settings are disabled while this drive is shared publicly; \
+        "settings are disabled while this workspace is shared publicly; \
          configuration changes are only allowed on a local (loopback) \
          serve or an OAuth-gated tunnel"
             .into(),
@@ -49,7 +49,7 @@ pub fn err_state(e: &StateAccessError) -> Response {
     match e {
         StateAccessError::WorkspaceCellMissing => err(
             StatusCode::SERVICE_UNAVAILABLE,
-            "drive busy: drive state is temporarily unavailable; retry in a moment".into(),
+            "workspace busy: workspace state is temporarily unavailable; retry in a moment".into(),
         ),
         StateAccessError::WorkspaceCellPoisoned => {
             err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string())
@@ -71,7 +71,7 @@ pub fn err_tunnel_public_locked() -> Response {
     )
 }
 
-/// Map chan-drive errors to HTTP statuses. The shape of the JSON
+/// Map chan-workspace errors to HTTP statuses. The shape of the JSON
 /// matches the old server so frontend error handling stays unchanged.
 pub fn err_from(e: &chan_workspace::ChanError) -> Response {
     use chan_workspace::ChanError as C;
@@ -177,7 +177,7 @@ mod tests {
             status_and_error(err_state(&StateAccessError::WorkspaceCellMissing)).await;
 
         assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
-        assert!(msg.contains("drive busy"));
+        assert!(msg.contains("workspace busy"));
     }
 
     #[tokio::test]

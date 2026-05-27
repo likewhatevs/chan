@@ -1,6 +1,6 @@
 // Synthetic GraphView for the standalone graph-force playground.
 //
-// Mirrors what `chan-drive` produces in production: file nodes
+// Mirrors what `chan-workspace` produces in production: file nodes
 // (documents + images), tag nodes, mention nodes, date nodes; edges
 // are link / tag / mention / date.
 //

@@ -3,7 +3,7 @@
 // I1 (inspector consistency + layout): the inspector Download button
 // routes through fileOps.downloadPathWithProgress, which must branch on
 // isTauriDesktop():
-//   - desktop  -> @@LaneB's runDesktopDownload (progress-tracked, drives
+//   - desktop  -> @@LaneB's runDesktopDownload (progress-tracked, workspaces
 //                 the downloadTransfer store the indicator binds to),
 //   - browser  -> the existing <a download> hand-off to the native
 //                 download manager.

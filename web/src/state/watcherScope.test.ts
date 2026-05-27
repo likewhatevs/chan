@@ -12,9 +12,9 @@ import { layout, openBrowserInActivePane } from "./tabs.svelte";
 import { api } from "../api/client";
 
 // `fullstack-b-6`: the File Browser used to react to every fs
-// event on the drive (the chan-server WS stream is unscoped). We
+// event on the workspace (the chan-server WS stream is unscoped). We
 // narrow each FB's reaction to events whose path falls inside its
-// own scope so unrelated drive activity stops re-rendering the
+// own scope so unrelated workspace activity stops re-rendering the
 // tree.
 
 function resetLayout() {
@@ -39,7 +39,7 @@ beforeEach(() => {
 });
 
 describe("fullstack-b-6: pathInAnyScope", () => {
-  test("empty scope matches every path (drive root scope)", () => {
+  test("empty scope matches every path (workspace root scope)", () => {
     expect(pathInAnyScope("crates/lib.rs", [""])).toBe(true);
     expect(pathInAnyScope("", [""])).toBe(true);
   });
@@ -66,7 +66,7 @@ describe("fullstack-b-6: activeFbScopes", () => {
     expect(activeFbScopes()).toEqual([]);
   });
 
-  test("docked browser with no selection → drive-root scope", () => {
+  test("docked browser with no selection → workspace-root scope", () => {
     browserSidePanes.left = true;
     browserSelection.path = null;
     expect(activeFbScopes()).toEqual([""]);

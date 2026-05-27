@@ -26,7 +26,7 @@ use notify_debouncer_mini::{new_debouncer, DebounceEventResult, Debouncer};
 use tauri::{AppHandle, Emitter};
 
 /// Event name pushed to all webviews when the registry changes.
-/// Frontends should re-fetch the merged drive list in response.
+/// Frontends should re-fetch the merged workspace list in response.
 pub const REGISTRY_CHANGED: &str = "registry-changed";
 
 /// Spawn a debounced watcher over the chan config directory and emit

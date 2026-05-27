@@ -8,7 +8,7 @@
 //! Whole module gated on `embed-model` (systacean-6 split):
 //! `embeddings` controls the candle stack; `embed-model` controls
 //! whether the bundle ships in the binary. With `embeddings` on but
-//! `embed-model` off, `chan-drive::index::embeddings::resolve_model`
+//! `embed-model` off, `chan-workspace::index::embeddings::resolve_model`
 //! looks for an already-downloaded model under
 //! `<user-config>/chan/models/<model-name>/` and the CLI / API layer
 //! (systacean-7) handles on-demand download.
@@ -24,7 +24,7 @@ use std::path::Path;
 static MODEL_BUNDLE: &[u8] = include_bytes!("../resources/models.tar.zst");
 
 /// Extract the compressed default-model bundle into the per-machine
-/// model cache (resolved by chan-drive's `global_models_dir`) the
+/// model cache (resolved by chan-workspace's `global_models_dir`) the
 /// first time the server boots on this machine. Skipped on every
 /// subsequent boot if the default model is already laid out under
 /// the cache; the check is keyed on the actual snapshot files the

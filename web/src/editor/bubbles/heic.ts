@@ -4,7 +4,7 @@
 // Chrome and Firefox can't decode HEIC for inline preview, so an
 // untouched HEIC dropped into the editor uploads fine but never
 // renders. We convert to WebP in the browser before the upload so
-// `Drive::write_bytes` sees a browser-decodable image.
+// `Workspace::write_bytes` sees a browser-decodable image.
 //
 // Server-side conversion was considered and rejected: production-
 // ready HEIC decoders are C libraries (`libheif`) and chan's

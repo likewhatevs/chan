@@ -1,6 +1,6 @@
 //! systacean-24: Drafts metadata folder. Parallel to the existing
 //! `trash` subsystem: in-progress drafts live in
-//! `state_dir/drafts/<uuid>/` so the drive root stays free of
+//! `state_dir/drafts/<uuid>/` so the workspace root stays free of
 //! uncommitted scratch work.
 //!
 //! Each draft is a DIRECTORY (e.g. `untitled-1/draft.md`) so the
@@ -25,7 +25,7 @@ pub const UNIFIED_DRAFTS_ROOT: &str = "Drafts";
 
 /// True when `rel` is inside the public `Drafts/` namespace.
 ///
-/// Draft files live in chan metadata, outside the user's drive root,
+/// Draft files live in chan metadata, outside the user's workspace root,
 /// but the rest of chan addresses them as `Drafts/<name>/...`.
 /// Centralizing the test keeps callers from inventing inconsistent
 /// metadata escape hatches.
@@ -95,7 +95,7 @@ struct DraftEntry {
     is_dir: bool,
 }
 
-/// Ensure the per-drive drafts directory exists. Caller decides
+/// Ensure the per-workspace drafts directory exists. Caller decides
 /// when to invoke; `Workspace::open` does it eagerly so
 /// `create_draft_dir` etc. don't need to re-check.
 pub(crate) fn ensure_root(drafts_dir: &Path) -> Result<()> {
@@ -110,8 +110,8 @@ pub(crate) fn ensure_root(drafts_dir: &Path) -> Result<()> {
 /// Inspect every draft and return non-fatal problems.
 ///
 /// This is intentionally a report, not a hard failure: a single
-/// broken draft should warn the user on drive boot without blocking
-/// access to the rest of the drive.
+/// broken draft should warn the user on workspace boot without blocking
+/// access to the rest of the workspace.
 pub fn preflight(drafts_dir: &Path) -> Result<Vec<DraftIssue>> {
     let rd = match fs::read_dir(drafts_dir) {
         Ok(rd) => rd,
@@ -277,7 +277,7 @@ pub fn discard(drafts_dir: &Path, draft_trash_dir: &Path, name: &str) -> Result<
     )
 }
 
-/// Promote a draft into the drive root with explicit no-clobber
+/// Promote a draft into the workspace root with explicit no-clobber
 /// semantics.
 pub fn promote(
     drafts_dir: &Path,
@@ -866,7 +866,7 @@ mod tests {
     fn promote_moves_directory_atomically() {
         let td = TempDir::new().unwrap();
         let drafts_root = td.path().join("drafts");
-        let drive_root = td.path().join("drive");
+        let drive_root = td.path().join("workspace");
         ensure_root(&drafts_root).unwrap();
         fs::create_dir_all(&drive_root).unwrap();
         let draft = create_dir(&drafts_root, "untitled-1").unwrap();
@@ -896,7 +896,7 @@ mod tests {
     fn promote_single_file_moves_draft_md_to_target_file() {
         let td = TempDir::new().unwrap();
         let drafts_root = td.path().join("drafts");
-        let drive_root = td.path().join("drive");
+        let drive_root = td.path().join("workspace");
         ensure_root(&drafts_root).unwrap();
         fs::create_dir_all(drive_root.join("notes")).unwrap();
         let draft = create_dir(&drafts_root, "untitled-1").unwrap();
@@ -924,7 +924,7 @@ mod tests {
     fn promote_draft_merges_into_existing_dir_without_clobber() {
         let td = TempDir::new().unwrap();
         let drafts_root = td.path().join("drafts");
-        let drive_root = td.path().join("drive");
+        let drive_root = td.path().join("workspace");
         ensure_root(&drafts_root).unwrap();
         fs::create_dir_all(drive_root.join("notes")).unwrap();
         let draft = create_dir(&drafts_root, "untitled-1").unwrap();
@@ -951,7 +951,7 @@ mod tests {
     fn promote_draft_rejects_nested_collision() {
         let td = TempDir::new().unwrap();
         let drafts_root = td.path().join("drafts");
-        let drive_root = td.path().join("drive");
+        let drive_root = td.path().join("workspace");
         ensure_root(&drafts_root).unwrap();
         fs::create_dir_all(drive_root.join("notes")).unwrap();
         fs::write(drive_root.join("notes/draft.md"), b"existing").unwrap();
@@ -977,7 +977,7 @@ mod tests {
     fn promote_rejects_target_escape() {
         let td = TempDir::new().unwrap();
         let drafts_root = td.path().join("drafts");
-        let drive_root = td.path().join("drive");
+        let drive_root = td.path().join("workspace");
         ensure_root(&drafts_root).unwrap();
         fs::create_dir_all(&drive_root).unwrap();
         let draft = create_dir(&drafts_root, "untitled-1").unwrap();
@@ -1018,7 +1018,7 @@ mod tests {
     fn promote_rejects_when_target_exists() {
         let td = TempDir::new().unwrap();
         let drafts_root = td.path().join("drafts");
-        let drive_root = td.path().join("drive");
+        let drive_root = td.path().join("workspace");
         ensure_root(&drafts_root).unwrap();
         fs::create_dir_all(&drive_root).unwrap();
         create_dir(&drafts_root, "untitled-1").unwrap();
@@ -1040,7 +1040,7 @@ mod tests {
     fn promote_rejects_missing_draft() {
         let td = TempDir::new().unwrap();
         let drafts_root = td.path().join("drafts");
-        let drive_root = td.path().join("drive");
+        let drive_root = td.path().join("workspace");
         ensure_root(&drafts_root).unwrap();
         fs::create_dir_all(&drive_root).unwrap();
         let drive_root_canon = drive_root.canonicalize().unwrap();

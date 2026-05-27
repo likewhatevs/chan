@@ -2,7 +2,7 @@
   // Settings overlay. Per-device-global preferences form (editor
   // theme, editor density, date format, and theme).
   //
-  // The drive display name is edited from the file-browser
+  // The workspace display name is edited from the file-browser
   // hamburger, not here, so the settings overlay is purely
   // about device-wide preferences.
   //
@@ -29,12 +29,12 @@
   } from "../api/types";
   import { Maximize2, Minimize2, X } from "lucide-svelte";
   import {
-    refreshDrive,
+    refreshWorkspace,
     settingsOverlay,
     setThemeChoice,
     type ThemeChoice,
     ui,
-    drive,
+    workspace,
   } from "../state/store.svelte";
   import {
     overlayMaximized,
@@ -73,7 +73,7 @@
   let editing = $state<Preferences | null>(null);
   /// Cached global config. Populated on mount and after every
   /// global save. Settings are always per-device-global now (no
-  /// per-drive override); we keep the cached payload here so
+  /// per-workspace override); we keep the cached payload here so
   /// dirty() can compare the form against the source of truth
   /// without re-fetching on every keystroke.
   let globalConfig = $state<GlobalConfig | null>(null);
@@ -87,13 +87,13 @@
   /// version + embeddings feature flag are static for the running
   /// binary so a single fetch is enough.
   let buildInfo = $state<BuildInfo | null>(null);
-  // When the upstream drive info changes (initial load, external
+  // When the upstream workspace info changes (initial load, external
   // edit, server restart), reset the form to the server state.
   // We intentionally only sync into the form when there's no local
   // edit pending, otherwise the user's typing would get clobbered
   // by background polls.
   $effect(() => {
-    const info = drive.info;
+    const info = workspace.info;
     if (!info) return;
     if (!editing) {
       editing = normalizePrefs(clone(info.preferences));
@@ -121,12 +121,12 @@
     return JSON.stringify({ editing });
   }
 
-  /// True when the form differs from the last server payload. Drives
+  /// True when the form differs from the last server payload. Workspaces
   /// the auto-save effect: identical-to-server means nothing to do.
   /// Compares against the global config (settings are always
   /// per-device-global now).
   function dirty(): boolean {
-    if (!editing || !drive.info) return false;
+    if (!editing || !workspace.info) return false;
     if (!globalConfig) return false;
     if (JSON.stringify(editing) !== JSON.stringify(globalConfig.preferences)) {
       return true;
@@ -157,23 +157,23 @@
     }
     const sent = snapshot();
     try {
-      // Prefs (global config) -> PATCH /api/config. Drive name lives
+      // Prefs (global config) -> PATCH /api/config. Workspace name lives
       // in the file-browser hamburger now and the default-root +
-      // recent-drives list moved to the drive inspector; this overlay
+      // recent-workspaces list moved to the workspace inspector; this overlay
       // only writes preferences. We round-trip the existing
-      // default_drive_root + drives values so we don't clobber
-      // anything the drive inspector wrote in parallel.
+      // default_workspace_root + workspaces values so we don't clobber
+      // anything the workspace inspector wrote in parallel.
       const cfgBody: GlobalConfig = {
         preferences: editing,
-        default_drive_root: globalConfig?.default_drive_root ?? null,
-        drives: globalConfig?.drives,
+        default_workspace_root: globalConfig?.default_workspace_root ?? null,
+        workspaces: globalConfig?.workspaces,
       };
       await api.updateConfig(cfgBody);
-      // Re-fetch authoritative state. Two reads (drive + global)
-      // because the prefs save can echo back into drive.info via
+      // Re-fetch authoritative state. Two reads (workspace + global)
+      // because the prefs save can echo back into workspace.info via
       // the indexer / config bridge.
-      const [info, cfg] = await Promise.all([api.drive(), api.config()]);
-      drive.info = info;
+      const [info, cfg] = await Promise.all([api.workspace(), api.config()]);
+      workspace.info = info;
       globalConfig = cfg;
       if (snapshot() === sent) {
         editing = normalizePrefs(clone(info.preferences));
@@ -361,7 +361,7 @@
     screensaverBusy = true;
     screensaverError = null;
     try {
-      const salt = drive.info?.root ?? "";
+      const salt = workspace.info?.root ?? "";
       const hash = await hashPin(pin1, salt);
       const s = await api.screensaverSetPin(hash);
       screensaverEnabled = s.enabled;
@@ -434,7 +434,7 @@
 
   onMount(() => {
     // Make sure we have the latest server state when the tab opens.
-    void refreshDrive();
+    void refreshWorkspace();
     void loadGlobalConfig();
     void loadBuildInfo();
     void loadScreenLockState();
@@ -483,7 +483,7 @@
   </div>
 
   <div class="body">
-{#if !editing || !drive.info}
+{#if !editing || !workspace.info}
   <div class="placeholder">loading settings…</div>
 {:else}
   <div class="settings">
@@ -542,7 +542,7 @@
       <div class="screen-lock-row">
         <div class="screen-lock-meta">
           <div class="screen-lock-sub">
-            Auto-lock the drive view after inactivity.
+            Auto-lock the workspace view after inactivity.
             Local-only PIN protection (Mod+L locks now).
           </div>
           {#if screensaverError}

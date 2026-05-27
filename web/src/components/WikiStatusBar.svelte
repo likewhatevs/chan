@@ -23,7 +23,7 @@
     fsWritable = true,
     readMode = $bindable(false),
   }: {
-    /// Drive-relative file path. Used as the backlinks query key.
+    /// Workspace-relative file path. Used as the backlinks query key.
     path: string;
     /// Live editor markdown buffer. Word / character counts derive
     /// from this; recompute is debounced so typing stays cheap.

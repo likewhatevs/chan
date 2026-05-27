@@ -21,7 +21,7 @@
     LineSpacing,
     Preferences,
   } from "../api/types";
-  import { drive } from "../state/store.svelte";
+  import { workspace } from "../state/store.svelte";
   import { DATE_FORMATS } from "../editor/dateFormats";
   import { editorToolsPrefs } from "../state/editorTools.svelte";
   import HybridSurfaceConfigShell from "./HybridSurfaceConfigShell.svelte";
@@ -30,9 +30,9 @@
   type SaveStatus = "idle" | "saving" | "saved" | { error: string };
 
   /// Local edit buffer for the editor-related preference slice.
-  /// Mirrors `drive.info.preferences` so the form can debounce
+  /// Mirrors `workspace.info.preferences` so the form can debounce
   /// edits into a single PATCH; a $effect re-syncs from the
-  /// server whenever drive.info changes and no local edit is
+  /// server whenever workspace.info changes and no local edit is
   /// in flight.
   let editing = $state<Preferences | null>(null);
   let saveStatus = $state<SaveStatus>("idle");
@@ -79,7 +79,7 @@
   }
 
   $effect(() => {
-    const info = drive.info;
+    const info = workspace.info;
     if (!info) return;
     if (editing && editorSnapshot() !== lastSentSnapshot) {
       if (lastSentSnapshot === null) return;
@@ -114,8 +114,8 @@
   /// SettingsPanel-owned edits (terminal moved to its own back,
   /// semantic-search, etc.) and fire spurious PATCHes.
   function editorDirty(): boolean {
-    if (!editing || !drive.info) return false;
-    const server = drive.info.preferences;
+    if (!editing || !workspace.info) return false;
+    const server = workspace.info.preferences;
     return (
       editing.editor_theme !== server.editor_theme ||
       editing.line_spacing !== server.line_spacing ||
@@ -160,12 +160,12 @@
           strip_trailing_whitespace_on_save:
             editing.strip_trailing_whitespace_on_save,
         },
-        default_drive_root: current.default_drive_root,
-        drives: current.drives,
+        default_workspace_root: current.default_workspace_root,
+        workspaces: current.workspaces,
       };
       await api.updateConfig(cfgBody);
-      const info = await api.drive();
-      drive.info = info;
+      const info = await api.workspace();
+      workspace.info = info;
       editing = normalizeEditor(clone(info.preferences));
       lastSentSnapshot = editorSnapshot();
       failedSaveSnap = null;

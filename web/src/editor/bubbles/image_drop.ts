@@ -26,7 +26,7 @@ export interface ImageDropOptions {
   /// known, otherwise the server's configured attachments_dir. Read
   /// lazily so swapping tabs picks up the new path.
   getUploadDir: () => string | null;
-  /// Editing file's drive-rooted path. The uploaded `path` is
+  /// Editing file's workspace-rooted path. The uploaded `path` is
   /// relativized against this so the inserted `![](src)` resolves
   /// correctly through resolveImageSrc.
   getCurrentPath: () => string | null;

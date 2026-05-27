@@ -36,7 +36,7 @@ describe("setTransientStatus", () => {
   });
 
   test("clears any previous typed action", () => {
-    ui.statusAction = { kind: "drive-warnings", label: "Broken draft x" };
+    ui.statusAction = { kind: "workspace-warnings", label: "Broken draft x" };
     setTransientStatus("Copied path");
     expect(ui.statusAction).toBeNull();
   });

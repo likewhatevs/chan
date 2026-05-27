@@ -101,7 +101,7 @@ describe("fullstack-a-79 slice 1: api client team endpoints", () => {
     );
   });
 
-  test("TeamConfigWire mirrors chan-drive's snake_case shape", () => {
+  test("TeamConfigWire mirrors chan-workspace's snake_case shape", () => {
     expect(client).toMatch(
       /export interface TeamConfigWire \{[\s\S]{1,400}team_name: string;[\s\S]{1,80}host_name: string;[\s\S]{1,80}host_handle: string;[\s\S]{1,80}auto_prefix_at: boolean;[\s\S]{1,80}created_at: string;[\s\S]{1,200}members: TeamMemberWire\[\];/,
     );

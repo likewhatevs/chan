@@ -2,7 +2,7 @@
 // and FileInfoBody (browser inspector references). One network call
 // per session-or-watch-event; both consumers read the same payload.
 //
-// The graph is small per chan (a single drive's wiki/tag/mention
+// The graph is small per chan (a single workspace's wiki/tag/mention
 // edges), so caching the whole thing is cheaper than per-file
 // metadata round-trips. Watcher events invalidate the cache so a
 // freshly-saved tag shows up in the inspector without a manual

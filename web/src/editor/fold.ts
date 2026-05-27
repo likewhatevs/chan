@@ -11,7 +11,7 @@
 // non-null, so every paragraph in a doc got its own chevron.
 // Filtering to "headings only" via foldGutter config isn't possible
 // (no per-line callback), so we render the gutter ourselves and
-// drive fold / unfold via the existing foldEffect / unfoldEffect.
+// workspace fold / unfold via the existing foldEffect / unfoldEffect.
 
 import {
   codeFolding,

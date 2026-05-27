@@ -1,4 +1,4 @@
-//! systacean-40: per-drive screensaver overlay state.
+//! systacean-40: per-workspace screensaver overlay state.
 //!
 //! Five endpoints under `/api/screensaver/`:
 //!
@@ -64,12 +64,12 @@ pub struct VerifyResult {
 
 /// `GET /api/screensaver/state`.
 pub async fn api_screensaver_state(State(state): State<Arc<AppState>>) -> Response {
-    let drive = state.drive().clone();
-    screensaver_state_response(drive).await
+    let workspace = state.workspace().clone();
+    screensaver_state_response(workspace).await
 }
 
-async fn screensaver_state_response(drive: Arc<chan_workspace::Workspace>) -> Response {
-    let result = tokio::task::spawn_blocking(move || screensaver_state_sync(&drive)).await;
+async fn screensaver_state_response(workspace: Arc<chan_workspace::Workspace>) -> Response {
+    let result = tokio::task::spawn_blocking(move || screensaver_state_sync(&workspace)).await;
     match result {
         Ok(Ok(state)) => Json(state).into_response(),
         Ok(Err(e)) => err_from(&e),
@@ -78,13 +78,13 @@ async fn screensaver_state_response(drive: Arc<chan_workspace::Workspace>) -> Re
 }
 
 fn screensaver_state_sync(
-    drive: &chan_workspace::Workspace,
+    workspace: &chan_workspace::Workspace,
 ) -> chan_workspace::Result<ScreensaverState> {
     Ok(ScreensaverState {
-        enabled: drive.screensaver_enabled()?,
-        timeout_secs: drive.screensaver_timeout_secs()?,
-        theme: drive.screensaver_theme()?,
-        pin_set: drive.screensaver_pin_hash()?.is_some(),
+        enabled: workspace.screensaver_enabled()?,
+        timeout_secs: workspace.screensaver_timeout_secs()?,
+        theme: workspace.screensaver_theme()?,
+        pin_set: workspace.screensaver_pin_hash()?.is_some(),
     })
 }
 
@@ -104,19 +104,19 @@ pub async fn api_screensaver_patch(
             );
         }
     }
-    let drive = state.drive().clone();
+    let workspace = state.workspace().clone();
     let result = tokio::task::spawn_blocking(
         move || -> Result<ScreensaverState, chan_workspace::ChanError> {
             if let Some(enabled) = payload.enabled {
-                drive.set_screensaver_enabled(enabled)?;
+                workspace.set_screensaver_enabled(enabled)?;
             }
             if let Some(timeout) = payload.timeout_secs {
-                drive.set_screensaver_timeout_secs(timeout)?;
+                workspace.set_screensaver_timeout_secs(timeout)?;
             }
             if let Some(theme) = payload.theme {
-                drive.set_screensaver_theme(theme)?;
+                workspace.set_screensaver_theme(theme)?;
             }
-            screensaver_state_sync(&drive)
+            screensaver_state_sync(&workspace)
         },
     )
     .await;
@@ -140,10 +140,10 @@ pub async fn api_screensaver_set_pin(
     if bytes.is_empty() {
         return err(StatusCode::BAD_REQUEST, "empty hash".to_string());
     }
-    let drive = state.drive().clone();
+    let workspace = state.workspace().clone();
     let result = tokio::task::spawn_blocking(move || {
-        drive.set_screensaver_pin_hash(Some(bytes))?;
-        screensaver_state_sync(&drive)
+        workspace.set_screensaver_pin_hash(Some(bytes))?;
+        screensaver_state_sync(&workspace)
     })
     .await;
     match result {
@@ -155,10 +155,10 @@ pub async fn api_screensaver_set_pin(
 
 /// `DELETE /api/screensaver/pin`. Clear the PIN.
 pub async fn api_screensaver_clear_pin(State(state): State<Arc<AppState>>) -> Response {
-    let drive = state.drive().clone();
+    let workspace = state.workspace().clone();
     let result = tokio::task::spawn_blocking(move || {
-        drive.set_screensaver_pin_hash(None)?;
-        screensaver_state_sync(&drive)
+        workspace.set_screensaver_pin_hash(None)?;
+        screensaver_state_sync(&workspace)
     })
     .await;
     match result {
@@ -181,9 +181,9 @@ pub async fn api_screensaver_verify(
         Ok(b) => b,
         Err(e) => return err(StatusCode::BAD_REQUEST, format!("invalid base64: {e}")),
     };
-    let drive = state.drive().clone();
+    let workspace = state.workspace().clone();
     let result = tokio::task::spawn_blocking(move || {
-        let stored = drive.screensaver_pin_hash()?;
+        let stored = workspace.screensaver_pin_hash()?;
         let verified = match stored {
             // Constant-time compare to avoid leaking PIN length /
             // prefix matches through response-timing. `subtle` is a
@@ -248,12 +248,12 @@ mod tests {
         let root = TempDir::new().unwrap();
         let lib = chan_workspace::Library::open_at(cfg.path().join("config.toml")).unwrap();
         lib.register_workspace(root.path()).unwrap();
-        let drive = lib.open_workspace(root.path()).unwrap();
+        let workspace = lib.open_workspace(root.path()).unwrap();
 
         let (events_tx, _) = broadcast::channel::<String>(1);
         let (index_events_tx, _) = broadcast::channel::<chan_workspace::WatchEvent>(1);
         let indexer = Arc::new(crate::indexer::Indexer::spawn(
-            drive.clone(),
+            workspace.clone(),
             index_events_tx.subscribe(),
             false,
             SearchAggression::Conservative,
@@ -266,7 +266,7 @@ mod tests {
             library: lib,
             drive_root: root.path().to_path_buf(),
             drive_cell: Arc::new(RwLock::new(Some(WorkspaceCell {
-                drive,
+                workspace,
                 watch_handle: None,
                 indexer,
             }))),
@@ -329,7 +329,7 @@ mod tests {
 
     #[tokio::test]
     async fn screensaver_state_default_is_off_300s_no_pin() {
-        // systacean-40: a fresh drive reports the documented
+        // systacean-40: a fresh workspace reports the documented
         // defaults: enabled=false, timeout=300, pin_set=false.
         let app = route_test_app();
         let router = crate::router(app.state);

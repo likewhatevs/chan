@@ -1,10 +1,10 @@
-//! macOS CLI-to-desktop drive handoff over a well-known per-user
+//! macOS CLI-to-desktop workspace handoff over a well-known per-user
 //! Unix-domain socket.
 //!
 //! When chan-desktop is running and the user types `chan serve
-//! ~/notes` in a terminal, the natural intent is "show me this drive
+//! ~/notes` in a terminal, the natural intent is "show me this workspace
 //! in the app," not "fail because the desktop already holds the
-//! per-drive flock." This module is the same-user IPC channel that
+//! per-workspace flock." This module is the same-user IPC channel that
 //! makes that handoff possible.
 //!
 //! Discovery is a WELL-KNOWN per-user socket path (not the per-pid
@@ -13,10 +13,10 @@
 //! socket living in a per-user runtime dir with 0600 perms and owned
 //! by the user; cross-user attach is simply not discoverable.
 //!
-//! INVARIANT: exactly one process owns a drive's writes (the
-//! chan-drive per-drive flock). In a successful handoff the DESKTOP
-//! owns the drive; the CLI is a launcher that exits WITHOUT opening
-//! the drive. The CLI must therefore consult this module BEFORE it
+//! INVARIANT: exactly one process owns a workspace's writes (the
+//! chan-workspace per-workspace flock). In a successful handoff the DESKTOP
+//! owns the workspace; the CLI is a launcher that exits WITHOUT opening
+//! the workspace. The CLI must therefore consult this module BEFORE it
 //! calls `open_workspace`, so it never double-opens.
 //!
 //! The bearer token never travels over argv/env/logs: in Option B
@@ -55,11 +55,11 @@ pub const CHAN_VERSION: &str = env!("CARGO_PKG_VERSION");
 /// Capabilities the desktop advertises. Reserved for forward
 /// compatibility: a request the desktop can't satisfy falls back to
 /// standalone rather than erroring. Today the only capability is
-/// opening a LOCAL drive window; tunneled-drive handoff is out of
+/// opening a LOCAL workspace window; tunneled-workspace handoff is out of
 /// scope (the CLI's `--tunnel-*` path already forces standalone).
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct Capabilities {
-    /// The desktop can open a local registry drive in a native
+    /// The desktop can open a local registry workspace in a native
     /// window. Always true for a desktop that speaks this protocol;
     /// the field exists so a future desktop can advertise FALSE (e.g.
     /// a headless build) and the CLI falls back cleanly.
@@ -71,16 +71,16 @@ pub struct Capabilities {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum Request {
-    /// Ask the desktop to open the given drive path in a native
+    /// Ask the desktop to open the given workspace path in a native
     /// window. `protocol` and `cli_version` are the handshake fields;
     /// the desktop checks `protocol` against its own PROTOCOL_VERSION
     /// before acting.
     OpenWorkspace {
         protocol: u32,
         cli_version: String,
-        /// The drive root the CLI was asked to serve. The desktop
+        /// The workspace root the CLI was asked to serve. The desktop
         /// canonicalizes + registers it the same way its own
-        /// open-local-drive path does. Sent as a string for stable
+        /// open-local-workspace path does. Sent as a string for stable
         /// JSON across platforms.
         drive_path: String,
     },
@@ -92,8 +92,8 @@ pub enum Request {
 #[serde(tag = "status", rename_all = "snake_case")]
 pub enum Response {
     /// The desktop accepted the request and is opening (or has
-    /// raised) the drive window. The CLI prints a short note and
-    /// exits; the desktop owns the drive lifecycle from here.
+    /// raised) the workspace window. The CLI prints a short note and
+    /// exits; the desktop owns the workspace lifecycle from here.
     Opened {
         desktop_version: String,
         capabilities: Capabilities,
@@ -104,7 +104,7 @@ pub enum Response {
         desktop_version: String,
         desktop_protocol: u32,
     },
-    /// The desktop could not open the drive (e.g. a runtime error
+    /// The desktop could not open the workspace (e.g. a runtime error
     /// mounting it). The CLI logs the reason and falls back to
     /// standalone rather than leaving the user with nothing.
     Error { message: String },
@@ -144,14 +144,14 @@ fn current_uid() -> u32 {
 }
 
 /// True when a GUI session is present, i.e. it makes sense to hand a
-/// drive to a desktop the user can actually see. On macOS the desktop
+/// workspace to a desktop the user can actually see. On macOS the desktop
 /// session is always present for an interactive login; the headless
 /// signal we guard against is an SSH session with no display. On
 /// Linux we additionally require DISPLAY or WAYLAND_DISPLAY.
 ///
 /// Conservative by design: when unsure we return false so the CLI
 /// keeps the load-bearing standalone behavior rather than handing a
-/// drive to a desktop nobody can see.
+/// workspace to a desktop nobody can see.
 pub fn gui_session_present() -> bool {
     #[cfg(target_os = "macos")]
     {
@@ -229,7 +229,7 @@ impl Drop for ListenerHandle {
 /// Bind the well-known socket and spawn an accept loop. Each
 /// connection carries one `Request`; the desktop responds with a
 /// `Response` and closes. `open_workspace` is the desktop callback that
-/// spawns/raises the native window for the requested drive path; it
+/// spawns/raises the native window for the requested workspace path; it
 /// returns `Ok(())` on success or `Err(message)` which the CLI sees
 /// as `Response::Error` and falls back to standalone.
 ///
@@ -313,7 +313,7 @@ where
 }
 
 /// Apply the protocol-version gate, then dispatch to the desktop's
-/// open-drive callback. Kept synchronous: the callback itself queues
+/// open-workspace callback. Kept synchronous: the callback itself queues
 /// the window spawn onto the desktop's app handle.
 #[cfg(unix)]
 fn handle_request<F>(req: Request, open_workspace: &F) -> Response
@@ -344,7 +344,7 @@ where
             tracing::info!(
                 cli_version = %cli_version,
                 drive_path = %drive_path,
-                "handoff: opening drive from CLI request",
+                "handoff: opening workspace from CLI request",
             );
             match open_workspace(PathBuf::from(drive_path)) {
                 Ok(()) => Response::Opened {
@@ -371,8 +371,8 @@ where
 /// distinct variants exist so the CLI can print the right note.
 #[derive(Debug)]
 pub enum Outcome {
-    /// The desktop opened the drive window. The CLI exits 0 without
-    /// opening the drive (the desktop owns the flock).
+    /// The desktop opened the workspace window. The CLI exits 0 without
+    /// opening the workspace (the desktop owns the flock).
     HandedOff,
     /// No desktop discovered: no socket, connect refused, stale
     /// socket, or any I/O error before a valid response. The
@@ -385,7 +385,7 @@ pub enum Outcome {
         desktop_protocol: u32,
     },
     /// The desktop answered but refused/failed (e.g. could not mount
-    /// the drive). Falls back to standalone after logging.
+    /// the workspace). Falls back to standalone after logging.
     DesktopError { message: String },
 }
 
@@ -605,10 +605,10 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let sock = dir.path().join("hand.sock");
         let _handle =
-            start_listener(sock.clone(), move |_p| Err("no such drive".to_string())).unwrap();
+            start_listener(sock.clone(), move |_p| Err("no such workspace".to_string())).unwrap();
         let resp = request_over(&sock, "/tmp/x").await;
         match resp {
-            Response::Error { message } => assert_eq!(message, "no such drive"),
+            Response::Error { message } => assert_eq!(message, "no such workspace"),
             other => panic!("expected Error, got {other:?}"),
         }
     }
@@ -617,7 +617,7 @@ mod tests {
     /// try_handoff's wire framing but targets an explicit socket so the
     /// test doesn't depend on the well-known path.
     #[cfg(unix)]
-    async fn request_over(sock: &std::path::Path, drive: &str) -> Response {
+    async fn request_over(sock: &std::path::Path, workspace: &str) -> Response {
         use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
         use tokio::net::UnixStream;
 
@@ -625,7 +625,7 @@ mod tests {
         let req = Request::OpenWorkspace {
             protocol: PROTOCOL_VERSION,
             cli_version: CHAN_VERSION.into(),
-            drive_path: drive.into(),
+            drive_path: workspace.into(),
         };
         let mut payload = serde_json::to_vec(&req).unwrap();
         payload.push(b'\n');

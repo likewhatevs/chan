@@ -1,9 +1,9 @@
-// Path-based file-class predicates. Mirrors chan-drive's
+// Path-based file-class predicates. Mirrors chan-workspace's
 // `fs_ops::classify_ext` + basename fallback so the editor's "can I
-// open this as text?" gate matches the server's `Drive::read_text`
-// gate. Keep the lists in lockstep with `chan-drive/src/fs_ops.rs`;
-// each phase that widens chan-drive should also widen these sets so
-// the editor and the drive agree on what counts as text.
+// open this as text?" gate matches the server's `Workspace::read_text`
+// gate. Keep the lists in lockstep with `chan-workspace/src/fs_ops.rs`;
+// each phase that widens chan-workspace should also widen these sets so
+// the editor and the workspace agree on what counts as text.
 //
 // Most surfaces in the app should rely on the server-provided wire
 // `kind` (via `classifyEntry` in `./kinds.ts`); these path helpers
@@ -13,7 +13,7 @@
 //
 // Three sets:
 //   - MARKDOWN_EXTENSIONS: .md / .txt. Markdown-class. Indexed by
-//     chan-drive, parsed for graph edges + tokens. Maps to
+//     chan-workspace, parsed for graph edges + tokens. Maps to
 //     `FileClass::EditableText`.
 //   - TEXT_EXTENSIONS: source code, configs, shell, markup, data.
 //     Maps to `FileClass::Text`. Editable through the UTF-8 gate
@@ -34,12 +34,12 @@ const IMAGE_EXTENSIONS = new Set([
   "webp",
   "svg",
   "avif",
-  // bmp is treated as image by the inspector but chan-drive folds it
+  // bmp is treated as image by the inspector but chan-workspace folds it
   // into Other; harmless drift since image preview is frontend-only.
   "bmp",
 ]);
 
-// Mirrors chan-drive `fs_ops::classify_ext`'s `FileClass::Text` arm.
+// Mirrors chan-workspace `fs_ops::classify_ext`'s `FileClass::Text` arm.
 // Add to both files together when widening.
 const TEXT_EXTENSIONS = new Set([
   // Source code.
@@ -178,7 +178,7 @@ const TEXT_EXTENSIONS = new Set([
 ]);
 
 // Well-known no-extension or all-caps filenames the editor should
-// treat as text. Mirrors chan-drive's `classify_basename`.
+// treat as text. Mirrors chan-workspace's `classify_basename`.
 const TEXT_BASENAMES = new Set([
   "Makefile",
   "GNUmakefile",
@@ -240,7 +240,7 @@ export function classifyPath(
 }
 
 /// True for any path the editor can round-trip through a UTF-8
-/// buffer. Mirrors `chan_drive::fs_ops::is_editable_text` after the
+/// buffer. Mirrors `chan_workspace::fs_ops::is_editable_text` after the
 /// phase 1 widening: markdown-class + source / config / shell text +
 /// well-known basenames. Returns false for images, PDFs, archives,
 /// audio, video, and unknown extensions.
@@ -288,7 +288,7 @@ export function isCsv(path: string): boolean {
   return ext === "csv" || ext === "tsv";
 }
 
-/// Field delimiter for a tabular file. Drives both the parser and
+/// Field delimiter for a tabular file. Workspaces both the parser and
 /// the on-save serializer so a round-trip preserves the source
 /// shape. `.tsv` uses tab; `.csv` defaults to comma. Per-tab
 /// override for files with a non-standard delimiter is tracked as

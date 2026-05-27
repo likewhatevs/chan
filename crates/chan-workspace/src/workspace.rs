@@ -1,8 +1,8 @@
 // Workspace: a registered directory exposed as a sandboxed filesystem
 // plus search and graph. All I/O routes through `resolve_safe` and
-// the editable-text gate. Per-drive metadata (index, graph,
+// the editable-text gate. Per-workspace metadata (index, graph,
 // sessions, tokens, trash, report) lives outside the user's notes
-// tree under ~/.chan/drives/<metadata_key>/.
+// tree under ~/.chan/workspaces/<metadata_key>/.
 
 use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -32,7 +32,7 @@ use crate::{Report, ReportScope};
 /// far past any realistic note. Anything larger is almost certainly
 /// either a bug, a binary file mislabelled with `.md`, or an LLM tool
 /// running away. We stop it at the boundary so a misbehaving caller
-/// cannot fill the user's drive without an explicit code change.
+/// cannot fill the user's workspace without an explicit code change.
 pub const TEXT_WRITE_LIMIT: u64 = 2 * 1024 * 1024;
 
 /// Hard cap on `write_bytes` (binary attachments / media). 50 MiB
@@ -57,7 +57,7 @@ const REBUILD_MARKER: &str = "rebuild.inprogress";
 
 /// Persisted form of the in-process rename log, kept under
 /// `paths.graph_dir`. Carries every `(old_path -> current_path)`
-/// pair the drive has accumulated since the last `reindex`. The
+/// pair the workspace has accumulated since the last `reindex`. The
 /// editor batches link rewrites across multiple renames using this
 /// table, so losing it on a crash silently breaks the chain: a
 /// rename A->B followed by B->C would, on restart, not know that
@@ -76,7 +76,7 @@ const RENAME_LOG_FILE: &str = "rename_log.json";
 /// vectors), and a crash between them leaves graph and index
 /// disagreeing about the file. On the next `Workspace::open` any
 /// entries still in the journal flag `needs_replay_writes()`; the
-/// consumer calls `replay_pending_writes()` to drive both
+/// consumer calls `replay_pending_writes()` to workspace both
 /// backends back to the on-disk truth.
 const PENDING_WRITES_FILE: &str = "pending_writes.json";
 
@@ -103,9 +103,9 @@ pub struct SearchOpts {
     pub mode: SearchMode,
     /// Hard cap on results returned. Defaults to 50 when 0.
     pub limit: u32,
-    /// Optional subdir scope (relative to drive root). When set,
+    /// Optional subdir scope (relative to workspace root). When set,
     /// only paths under this prefix are returned. None = whole
-    /// drive. Filtering is post-rank: the index doesn't track
+    /// workspace. Filtering is post-rank: the index doesn't track
     /// scope, the Workspace does.
     pub scope: Option<String>,
 }
@@ -148,7 +148,7 @@ pub enum TextReadEvent<'a> {
     Done,
 }
 
-/// A wiki-link resolved to an actual drive file. `path` is the
+/// A wiki-link resolved to an actual workspace file. `path` is the
 /// POSIX rel path of the file that exists today; `anchor` is the
 /// `#section` fragment from the original target, passed through
 /// unchanged. `kind` is the graph-recorded node kind (file vs
@@ -192,7 +192,7 @@ pub struct RenameOutcome {
 /// Result of `Workspace::copy`.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct CopyOutcome {
-    /// Every destination path created by the copy (drive-rooted POSIX),
+    /// Every destination path created by the copy (workspace-rooted POSIX),
     /// sorted lexicographically. One entry for a file copy; one per
     /// copied regular-file descendant for a subtree copy.
     pub created: Vec<String>,
@@ -209,12 +209,12 @@ pub struct ReconcileReport {
     /// exist on disk. Sorted by path.
     pub forgotten: Vec<String>,
     /// Files that matched the graph and were skipped. Cardinality
-    /// only; the path list would dwarf the diff on large drives.
+    /// only; the path list would dwarf the diff on large workspaces.
     pub unchanged: usize,
 }
 
-/// One open drive. Holds the writer lock for as long as it lives,
-/// so two processes can't both write the same drive's index/graph.
+/// One open workspace. Holds the writer lock for as long as it lives,
+/// so two processes can't both write the same workspace's index/graph.
 /// Cheap reads are unlocked; writes go through the locked handle.
 pub struct Workspace {
     entry: KnownWorkspace,
@@ -222,7 +222,7 @@ pub struct Workspace {
     /// Used where we need an absolute path and as the slow-path
     /// baseline for trash::restore.
     root_canon: std::path::PathBuf,
-    /// Capability-based handle to the drive root. All filesystem
+    /// Capability-based handle to the workspace root. All filesystem
     /// ops on user-controllable paths go through this so a mid-path
     /// symlink swap between path-resolution and the actual op
     /// cannot escape the sandbox: cap-std opens each path component
@@ -244,7 +244,7 @@ pub struct Workspace {
     _lock: WorkspaceLock,
     /// Keeps live Workspace count bounded under descriptor pressure.
     /// This leaves room for editor reads, writes, PTYs, and watchers
-    /// even when tests or callers try to open many drives at once.
+    /// even when tests or callers try to open many workspaces at once.
     _fd_permit: crate::fd_budget::WorkspacePermit,
     /// Lazily constructed; held in an Option so the field can be
     /// observed via `index()` / `graph()` accessors that initialize
@@ -252,7 +252,7 @@ pub struct Workspace {
     index: std::sync::OnceLock<Index>,
     graph: std::sync::OnceLock<GraphView>,
     /// Cumulative rename log accumulated since the last `reindex`.
-    /// Maps any path the drive has ever known a file by to its
+    /// Maps any path the workspace has ever known a file by to its
     /// current on-disk location, transitively closed: after `a -> b`
     /// is appended and then `b -> c`, the log holds both `a -> c`
     /// and `b -> c` so a lookup against either intermediate name
@@ -309,7 +309,7 @@ pub struct Workspace {
     /// touch (`report()` or `watch()`) does a full scan; further
     /// access reads the cached state, and the watcher fanout
     /// keeps it current incrementally. Kept behind `OnceLock` so
-    /// drives that never query the report skip the scan entirely.
+    /// workspaces that never query the report skip the scan entirely.
     report: std::sync::OnceLock<Arc<ReportState>>,
     /// Directory-name blocklist applied to reindex walks (graph
     /// rebuild + index facade). Captured at `Workspace::open` time
@@ -335,9 +335,9 @@ impl Workspace {
     ) -> Result<Arc<Self>> {
         // Defensive check: the registered path must still resolve to
         // a directory. A user (or another tool) could have replaced
-        // the drive directory with a symlink, file, or socket since
+        // the workspace directory with a symlink, file, or socket since
         // the registry entry was written, in which case our path
-        // sandbox and per-op gates would still apply but the drive
+        // sandbox and per-op gates would still apply but the workspace
         // shape itself is no longer what the user signed up for.
         // `exists()` follows symlinks, so we use lstat here to catch
         // a "directory turned into a symlink" replacement.
@@ -358,32 +358,32 @@ impl Workspace {
         let root_canon = entry
             .root_path
             .canonicalize()
-            .map_err(|e| ChanError::Io(format!("canonicalize drive root: {e}")))?;
+            .map_err(|e| ChanError::Io(format!("canonicalize workspace root: {e}")))?;
         let fd_permit = crate::fd_budget::acquire_drive_permit();
         let dir =
             cap_std::fs::Dir::open_ambient_dir(&entry.root_path, cap_std::ambient_authority())
-                .map_err(|e| ChanError::Io(format!("open drive root: {e}")))?;
+                .map_err(|e| ChanError::Io(format!("open workspace root: {e}")))?;
         if entry.metadata_key.is_empty() {
             return Err(ChanError::Io(format!(
-                "registry entry for {:?} has empty metadata key; open the drive via Library::open_workspace",
+                "registry entry for {:?} has empty metadata key; open the workspace via Library::open_workspace",
                 entry.root_path,
             )));
         }
         let paths = ensure_drive_metadata_dirs(&entry.metadata_key)
-            .map_err(|e| ChanError::Io(format!("ensure drive metadata dirs: {e}")))?;
+            .map_err(|e| ChanError::Io(format!("ensure workspace metadata dirs: {e}")))?;
         let lock = WorkspaceLock::acquire(&paths.lock)?;
         // Lazy GC: reclaim expired trash entries on every open. No
         // background thread, matches the codebase's sync-only rule.
         // Errors are swallowed: a corrupt trash dir must never block
-        // a legitimate drive open.
+        // a legitimate workspace open.
         let _ = trash::sweep_expired(&paths.trash, TRASH_RETENTION_SECS);
-        // systacean-24: eagerly ensure the per-drive drafts
+        // systacean-24: eagerly ensure the per-workspace drafts
         // subtree exists so `create_draft_dir` / `list_drafts`
         // calls don't need to re-check + so the watcher
         // attachment in a future task lands on a path that
         // already exists. Errors logged + ignored: the drafts
         // dir is recoverable (next call re-tries) and shouldn't
-        // block a legitimate drive open.
+        // block a legitimate workspace open.
         if let Err(e) = drafts::ensure_root(&paths.drafts) {
             tracing::warn!(
                 error = %e,
@@ -395,7 +395,7 @@ impl Workspace {
         // unified-path read/write helpers (read_text /
         // write_text / write_text_if_unchanged for `Drafts/`-
         // prefixed rels) get the same sandbox + atomic-write
-        // semantics as drive-root files. The drafts dir was just
+        // semantics as workspace-root files. The drafts dir was just
         // ensured above so `open_ambient_dir` lands on an
         // existing path. A failure here is unusual (permissions
         // on the metadata root) but recoverable on the next open; we
@@ -408,12 +408,12 @@ impl Workspace {
         // reindex did not finish atomically. Promote it to an
         // in-process flag the consumer can observe via
         // `Workspace::needs_rebuild()`. We don't auto-reindex here so
-        // `open` stays fast on large drives; the consumer schedules
+        // `open` stays fast on large workspaces; the consumer schedules
         // the rebuild on its own thread when it sees the flag set.
         let needs_rebuild = paths.graph_dir.join(REBUILD_MARKER).exists();
         if needs_rebuild {
             tracing::warn!(
-                drive = %entry.root_path.display(),
+                workspace = %entry.root_path.display(),
                 "rebuild.inprogress marker found at open; full reindex required",
             );
         }
@@ -434,7 +434,7 @@ impl Workspace {
         let needs_replay_writes = !pending_writes.is_empty();
         if needs_replay_writes {
             tracing::warn!(
-                drive = %entry.root_path.display(),
+                workspace = %entry.root_path.display(),
                 count = pending_writes.len(),
                 "pending_writes journal non-empty at open; replay required",
             );
@@ -496,7 +496,7 @@ impl Workspace {
     /// IO helpers operate against. Drafts/-prefixed rels route
     /// through `drafts_dir_handle` (rooted at `paths.drafts`)
     /// with the prefix stripped; everything else routes through
-    /// `dir` (rooted at the drive root) unchanged. The cap-std
+    /// `dir` (rooted at the workspace root) unchanged. The cap-std
     /// sandbox prevents traversal escape in either case.
     ///
     /// Returns the validated PathBuf (no leading `Drafts/`)
@@ -524,7 +524,7 @@ impl Workspace {
     /// Resolve a public chan path to the real host filesystem path.
     ///
     /// Most paths map under `Workspace::root()`. The `Drafts/` namespace
-    /// is virtual: it maps into this drive's metadata drafts dir so
+    /// is virtual: it maps into this workspace's metadata drafts dir so
     /// callers that truly need a real cwd (terminal, external shell
     /// agents) can opt into that physical location without pretending
     /// Drafts lives in the user's notes tree.
@@ -558,7 +558,7 @@ impl Workspace {
     }
 
     /// Convert a real filesystem path back to chan's public path
-    /// namespace when it is inside the drive root or Drafts metadata.
+    /// namespace when it is inside the workspace root or Drafts metadata.
     pub fn physical_path_to_virtual(&self, path: &std::path::Path) -> Option<String> {
         let path = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
         if path == self.root_canon {
@@ -589,9 +589,9 @@ impl Workspace {
         &self.entry.root_path
     }
 
-    /// Per-drive paths (sessions, index dir, graph DB, lock).
+    /// Per-workspace paths (sessions, index dir, graph DB, lock).
     /// Exposed for apps that want to put their own state alongside
-    /// chan-drive's.
+    /// chan-workspace's.
     pub fn paths(&self) -> &WorkspacePaths {
         &self.paths
     }
@@ -604,10 +604,10 @@ impl Workspace {
         &self.walk_filter
     }
 
-    /// Structural bootstrap snapshot of the drive root: the immediate
+    /// Structural bootstrap snapshot of the workspace root: the immediate
     /// files + directories, each directory carrying its recursive
     /// (filtered) subtree file count and byte total, plus the
-    /// whole-drive aggregate. Stat-only (no content read), filtered by
+    /// whole-workspace aggregate. Stat-only (no content read), filtered by
     /// the same `WalkFilter` the indexer uses. This is the spine the
     /// UI renders before the paced index / report jobs run; deeper
     /// levels load lazily on File Browser expand / Graph depth.
@@ -615,7 +615,7 @@ impl Workspace {
         crate::bootstrap::bootstrap_root(self.root(), &self.walk_filter)
     }
 
-    /// Bootstrap snapshot for a nested directory at drive-relative
+    /// Bootstrap snapshot for a nested directory at workspace-relative
     /// `rel` ("" is the root, equivalent to `bootstrap()`). Same
     /// eager-level shape as `bootstrap`; used when a caller wants the
     /// subtree-stats shape for an expanded directory rather than the
@@ -630,24 +630,24 @@ impl Workspace {
     // opened at `Workspace::open`. cap-std uses openat-per-component
     // with O_NOFOLLOW (or RESOLVE_BENEATH on Linux openat2), so a
     // mid-path symlink swap between path validation and the actual
-    // op cannot escape the drive root. Reads additionally call
+    // op cannot escape the workspace root. Reads additionally call
     // `ensure_regular_file_in` (lstat) so we never block on a FIFO,
-    // drain a device, or follow a symlink off the drive. Writes
+    // drain a device, or follow a symlink off the workspace. Writes
     // that target an existing path do the same check via
     // `ensure_writable_in`; writes to a fresh path skip it because
     // there's nothing to inspect yet (cap-std guarded the parent
     // walk on the way in).
 
-    /// Read raw bytes from a file relative to the drive root. No
+    /// Read raw bytes from a file relative to the workspace root. No
     /// editable-text gate: callers like image previews need binary
     /// reads. The path must resolve to a regular file under the
-    /// drive root; symlinks, FIFOs, sockets, and devices are
+    /// workspace root; symlinks, FIFOs, sockets, and devices are
     /// rejected.
     pub fn read(&self, rel: &str) -> Result<Vec<u8>> {
         // systacean-32: prefix-aware for Drafts/<...> paths,
         // parallel to read_text + stat. Without this, reading a
         // pasted image (or any non-text file) under
-        // `Drafts/untitled-N/...` would route to the drive-root
+        // `Drafts/untitled-N/...` would route to the workspace-root
         // capfs + NotFound.
         let (dir, rel_path) = self.resolve_io(rel)?;
         ensure_regular_file_in(dir, &rel_path)?;
@@ -775,7 +775,7 @@ impl Workspace {
         // systacean-26: same Drafts routing as read_text. The
         // editable-text gate + size gate + atomic-write semantics
         // (tmp + fsync + rename + parent fsync) all apply
-        // uniformly whether the destination is drive-root or
+        // uniformly whether the destination is workspace-root or
         // drafts. Chan-server's `SelfWrites` tracker keys on the
         // full unified rel so watcher self-write suppression
         // works for drafts writes too.
@@ -834,7 +834,7 @@ impl Workspace {
         // Optimistic-concurrency mtime check uses the same dir
         // handle for the prev stat + the atomic-write so the
         // small TOCTOU window between mtime check + rename is no
-        // worse than the drive-root path.
+        // worse than the workspace-root path.
         let (dir, rel_path) = self.resolve_io(rel)?;
         let prev = ensure_writable_in(dir, &rel_path)?;
         let (current, exists, prev_size) = match prev.as_ref() {
@@ -876,7 +876,7 @@ impl Workspace {
         fs_ops::atomic_write_in(dir, &rel_path, content)
     }
 
-    /// True iff the path resolves under the drive and refers to a
+    /// True iff the path resolves under the workspace and refers to a
     /// regular file. Matches the gate `read` / `read_text` apply,
     /// so a `true` return is a strong signal that a read will
     /// succeed.
@@ -896,12 +896,12 @@ impl Workspace {
 
     /// Stat the path using `lstat` semantics (so a symlink reports
     /// as such, not as its target). Refuses paths that escape the
-    /// drive root through a mid-path symlink.
+    /// workspace root through a mid-path symlink.
     ///
     /// systacean-32: prefix-aware for `Drafts/<...>` paths, same
     /// routing as `read_text` / `write_text` / `list` post-`-26` +
     /// `-29`. Without this, `Workspace::stat("Drafts/<name>")` returned
-    /// NotFound (drive-root capfs has no `Drafts` entry), which
+    /// NotFound (workspace-root capfs has no `Drafts` entry), which
     /// silently dropped Drafts subdirectories from
     /// `list_dir_entries` enumeration — the recurring `-a-66 b/c/d`
     /// data-flow gap @@WebtestA caught.
@@ -931,7 +931,7 @@ impl Workspace {
     }
 
     /// One-level directory listing. Use `list_tree` for the
-    /// recursive variant. Skips drive-internal noise (`.chan/`,
+    /// recursive variant. Skips workspace-internal noise (`.chan/`,
     /// `.git/`) at the top level and drops special entries (FIFOs,
     /// sockets, devices) at every level. Symlinks stay visible to
     /// the browser and are classified by the server-side wire view.
@@ -953,7 +953,7 @@ impl Workspace {
         //     (returns each `untitled-N` / `rich-prompt-N`).
         //   * "Drafts/<name>" or "Drafts/<name>/<sub>" → list
         //     inside the drafts subtree.
-        //   * anything else → drive-root path (unchanged).
+        //   * anything else → workspace-root path (unchanged).
         let read = if rel == "Drafts" || rel == "Drafts/" {
             self.drafts_dir_handle
                 .read_dir(".")
@@ -1034,7 +1034,7 @@ impl Workspace {
     }
 
     /// Recursive listing in chan's public namespace, including the
-    /// virtual `Drafts` root backed by this drive's metadata dir.
+    /// virtual `Drafts` root backed by this workspace's metadata dir.
     pub fn list_tree_unified(&self) -> Result<Vec<TreeEntry>> {
         let mut entries = self.list_tree()?;
         entries.extend(self.list_tree_drafts_prefix(drafts::UNIFIED_DRAFTS_ROOT)?);
@@ -1048,22 +1048,22 @@ impl Workspace {
     }
 
     /// Subtree variant of `list_tree`: walk only the descendants of
-    /// `prefix` instead of the entire drive. Returned `TreeEntry.path`
-    /// values stay relative to the drive root, so the caller sees the
+    /// `prefix` instead of the entire workspace. Returned `TreeEntry.path`
+    /// values stay relative to the workspace root, so the caller sees the
     /// same shape as `list_tree`. The prefix entry itself is included
     /// (file: one entry; directory: that directory plus its descendants).
     ///
     /// Same gates as the rest of the Workspace API: `resolve_safe_strict`
     /// rejects `..` traversal and mid-path symlinks pointing outside
-    /// the drive. A non-existent prefix returns `Ok(vec![])` rather
+    /// the workspace. A non-existent prefix returns `Ok(vec![])` rather
     /// than an error, so model-driven `list_files(prefix=...)` calls
     /// gracefully report an empty listing for typos instead of
     /// surfacing a hard failure.
     ///
-    /// Performance: walks only the requested subtree, so on a drive
+    /// Performance: walks only the requested subtree, so on a workspace
     /// with hundreds of thousands of files a narrow prefix returns
     /// promptly. Use `list_tree` when the caller actually wants the
-    /// whole drive.
+    /// whole workspace.
     pub fn list_tree_prefix(&self, prefix: &str) -> Result<Vec<TreeEntry>> {
         let resolved = fs_ops::resolve_safe_strict(self.root(), prefix)?;
         fs_ops::list_tree_prefix(self.root(), &resolved)
@@ -1072,7 +1072,7 @@ impl Workspace {
     /// Subtree variant of `list_tree_unified`. `Drafts` prefixes
     /// walk the metadata-backed draft tree and return public
     /// `Drafts/...` paths; every other prefix stays rooted at the
-    /// drive.
+    /// workspace.
     pub fn list_tree_prefix_unified(&self, prefix: &str) -> Result<Vec<TreeEntry>> {
         let trimmed = prefix.trim_matches('/');
         if drafts::is_unified_drafts_path(trimmed) {
@@ -1083,7 +1083,7 @@ impl Workspace {
     }
 
     /// Filtered counterpart of `list_tree_unified`. Applies the
-    /// per-drive `WalkFilter` so blocklisted dirs (`node_modules/`,
+    /// per-workspace `WalkFilter` so blocklisted dirs (`node_modules/`,
     /// `target/`, `venv/`, ...) are excluded, matching the index and
     /// the File Browser spine. The graph layer uses this so the
     /// semantic graph does not surface dependency trees as nodes. The
@@ -1103,7 +1103,7 @@ impl Workspace {
 
     /// Filtered counterpart of `list_tree_prefix_unified`. Drafts
     /// prefixes are unaffected (chan metadata, no blocklist); every
-    /// other prefix prunes the per-drive `WalkFilter` dirs.
+    /// other prefix prunes the per-workspace `WalkFilter` dirs.
     pub fn list_tree_prefix_filtered_unified(&self, prefix: &str) -> Result<Vec<TreeEntry>> {
         let trimmed = prefix.trim_matches('/');
         if drafts::is_unified_drafts_path(trimmed) {
@@ -1190,7 +1190,7 @@ impl Workspace {
         Ok(())
     }
 
-    /// Soft-delete a file or directory: move it into the per-drive
+    /// Soft-delete a file or directory: move it into the per-workspace
     /// trash. `trash_list` / `trash_restore` / `trash_purge` /
     /// `trash_empty` operate on the trash. Expired entries are
     /// GC'd lazily on `Workspace::open` and on every `trash_*` call;
@@ -1284,7 +1284,7 @@ impl Workspace {
 
     /// Drop graph rows and search-index entries for a path that
     /// `remove` just trashed. Best-effort: `graph()` / `index()` may
-    /// not be initialized yet (a remove on a never-opened drive), or
+    /// not be initialized yet (a remove on a never-opened workspace), or
     /// the underlying store may transiently fail. We log and move on;
     /// the next reindex is the safety net.
     fn cleanup_after_remove(&self, rel: &str, indexed_paths: &[String]) {
@@ -1318,7 +1318,7 @@ impl Workspace {
         }
     }
 
-    /// List trashed entries for this drive, most-recent-first.
+    /// List trashed entries for this workspace, most-recent-first.
     pub fn trash_list(&self) -> Result<Vec<TrashEntry>> {
         let _ = trash::sweep_expired(&self.paths.trash, TRASH_RETENTION_SECS);
         trash::list(&self.paths.trash)
@@ -1387,19 +1387,19 @@ impl Workspace {
         trash::purge_one(&self.paths.trash, id)
     }
 
-    /// Permanently delete every trash entry for this drive.
+    /// Permanently delete every trash entry for this workspace.
     pub fn trash_empty(&self) -> Result<()> {
         trash::purge_all(&self.paths.trash)
     }
 
     // ---- drafts (systacean-24) ----
     //
-    // Per-drive Drafts metadata folder. Parallels trash: lives in
-    // `~/.chan/drives/<metadata_key>/drafts/`, holds in-progress
+    // Per-workspace Drafts metadata folder. Parallels trash: lives in
+    // `~/.chan/workspaces/<metadata_key>/drafts/`, holds in-progress
     // drafts as directories so users can paste images / drop config
     // files alongside `draft.md`.
 
-    /// Per-drive drafts root path. Always present on disk after
+    /// Per-workspace drafts root path. Always present on disk after
     /// `Workspace::open` (eagerly created via `drafts::ensure_root`).
     pub fn drafts_dir(&self) -> &std::path::Path {
         &self.paths.drafts
@@ -1422,7 +1422,7 @@ impl Workspace {
     }
 
     /// Inspect metadata drafts and report non-fatal
-    /// problems that should be surfaced on drive boot.
+    /// problems that should be surfaced on workspace boot.
     pub fn draft_preflight(&self) -> Result<Vec<drafts::DraftIssue>> {
         drafts::preflight(&self.paths.drafts)
     }
@@ -1437,7 +1437,7 @@ impl Workspace {
         drafts::discard(&self.paths.drafts, &self.paths.trash.join("drafts"), name)
     }
 
-    /// Promote a draft into the drive root with no-clobber
+    /// Promote a draft into the workspace root with no-clobber
     /// semantics. Single-file drafts move `draft.md` to
     /// `target_rel`; directory drafts move or merge the whole draft
     /// directory into the target directory.
@@ -1478,7 +1478,7 @@ impl Workspace {
     }
 
     /// Inspect active Rich Prompt sessions and report non-fatal
-    /// problems that should be surfaced on drive boot.
+    /// problems that should be surfaced on workspace boot.
     pub fn rich_prompt_preflight(&self) -> Result<Vec<crate::rich_prompts::RichPromptIssue>> {
         crate::rich_prompts::preflight(&self.paths.drafts)
     }
@@ -1508,13 +1508,13 @@ impl Workspace {
 
     // ---- teams (systacean-30) ----
     //
-    // Teams live inside the per-drive Drafts metadata
+    // Teams live inside the per-workspace Drafts metadata
     // dir as `team-{name}/` directories. Parallels the drafts
     // primitive layer: filesystem ops here, schema in
     // `crate::teams`. Consumed by `systacean-31` (multi-team
     // watcher) + the SPA's Team bootstrap flow.
 
-    /// Create a new team under this drive's drafts dir.
+    /// Create a new team under this workspace's drafts dir.
     /// Creates `team-{config.team_name}/` with `config.toml`,
     /// empty `events/`, and empty `docs/`. Errors when the team
     /// name is invalid or the dir already exists.
@@ -1522,7 +1522,7 @@ impl Workspace {
         crate::teams::create(&self.paths.drafts, config)
     }
 
-    /// Enumerate teams under this drive's drafts dir. Returns
+    /// Enumerate teams under this workspace's drafts dir. Returns
     /// only directories whose name starts with `team-` (regular
     /// drafts are excluded). Sorted by team name.
     pub fn list_teams(&self) -> Result<Vec<crate::teams::TeamRef>> {
@@ -1616,7 +1616,7 @@ impl Workspace {
     // ---- session blobs ----
     //
     // Per-window opaque JSON owned by the host (window/pane
-    // layout, active tabs, scroll positions). chan-drive stores
+    // layout, active tabs, scroll positions). chan-workspace stores
     // bytes; the host decides the schema. Native shells link these
     // via uniffi and avoid reimplementing the atomic-write story
     // per platform.
@@ -1632,7 +1632,7 @@ impl Workspace {
         crate::blob::get(&self.paths.sessions, key)
     }
 
-    /// Sorted flat session keys for this drive.
+    /// Sorted flat session keys for this workspace.
     pub fn list_sessions(&self) -> Result<Vec<String>> {
         crate::blob::list(&self.paths.sessions)
     }
@@ -1642,7 +1642,7 @@ impl Workspace {
         crate::blob::delete(&self.paths.sessions, key)
     }
 
-    /// Write one markdown note per `Contact` into `dir` (drive-
+    /// Write one markdown note per `Contact` into `dir` (workspace-
     /// relative; created if missing). Each note carries nested
     /// `chan: { kind: contact }` frontmatter so downstream consumers
     /// (graph builder, editor `@` picker) can classify it without a
@@ -1714,7 +1714,7 @@ impl Workspace {
     }
 
     /// Copy a regular file or a directory subtree from `from` to `to`,
-    /// both drive-rooted POSIX paths. Unlike `rename` this DUPLICATES:
+    /// both workspace-rooted POSIX paths. Unlike `rename` this DUPLICATES:
     /// the source is left untouched and no inbound links are rewritten
     /// (a copy creates new files with their own future identity; the
     /// next reindex picks up whatever links the copies carry).
@@ -1724,7 +1724,7 @@ impl Workspace {
     ///     other special file is refused (`SpecialFile`). Inside a
     ///     subtree copy, any special-file descendant is refused too, so
     ///     a copy can never materialize a symlink/device under the
-    ///     drive.
+    ///     workspace.
     ///   * `.chan/`, `.git/`, `.hg/` are skipped inside a subtree copy
     ///     (the same control dirs the walk filter and rename never
     ///     touch); copying them would duplicate VCS / app metadata.
@@ -1735,7 +1735,7 @@ impl Workspace {
     /// `to` must NOT already exist (the caller resolves a free name
     /// first via `resolve_free_name` for paste-collision handling).
     ///
-    /// Returns the list of created destination paths (drive-rooted
+    /// Returns the list of created destination paths (workspace-rooted
     /// POSIX), so the server can note them as self-writes and the UI /
     /// graph can react. Sorted for stable diffs.
     pub fn copy(&self, from: &str, to: &str) -> Result<CopyOutcome> {
@@ -1776,7 +1776,7 @@ impl Workspace {
     }
 
     /// Copy one regular file from `src_rel` to `dst_rel` (both relative
-    /// to `self.dir`), recording the destination's drive-rooted POSIX
+    /// to `self.dir`), recording the destination's workspace-rooted POSIX
     /// path in `created`.
     fn copy_one_file(
         &self,
@@ -1862,7 +1862,7 @@ impl Workspace {
     }
 
     /// Resolve a non-colliding destination path for pasting `name` into
-    /// directory `dest_dir` (drive-rooted POSIX). If `dest_dir/name` is
+    /// directory `dest_dir` (workspace-rooted POSIX). If `dest_dir/name` is
     /// free it is returned as-is; otherwise a Finder-style " copy" /
     /// " copy 2" suffix is inserted before the extension until a free
     /// name is found. Used by the server's paste handler so copy AND
@@ -2135,7 +2135,7 @@ impl Workspace {
     /// Append a single pair to the cumulative rename log. Used for
     /// renames that don't go through the directory-snapshot path (e.g.
     /// a file `from` that doesn't exist on disk; rename still fired
-    /// and chan-drive can't know what was on the other side without
+    /// and chan-workspace can't know what was on the other side without
     /// re-reading the disk).
     fn rename_log_append(&self, old: &str, new: &str) {
         let mut log = self.rename_log.lock().unwrap();
@@ -2179,8 +2179,8 @@ impl Workspace {
         if !meta.is_dir() {
             return Ok(HashMap::new());
         }
-        // Directory walk. list_tree returns drive-rooted POSIX paths
-        // for every regular file + dir under the drive; we filter to
+        // Directory walk. list_tree returns workspace-rooted POSIX paths
+        // for every regular file + dir under the workspace; we filter to
         // descendants of `from/` and pair them with their new home
         // under `to/`.
         let entries = self.list_tree()?;
@@ -2212,7 +2212,7 @@ impl Workspace {
 
     // ---- search ----
 
-    /// Run a search query against this drive. Routes through the
+    /// Run a search query against this workspace. Routes through the
     /// hybrid index facade; opens the index lazily on first call.
     /// Scope filtering is applied post-rank: the index doesn't
     /// track scope, so a buffered top-N is fetched and pruned to
@@ -2232,7 +2232,7 @@ impl Workspace {
         Ok(res)
     }
 
-    /// Re-index the whole drive from scratch: walks the tree,
+    /// Re-index the whole workspace from scratch: walks the tree,
     /// parses every editable-text file, and rebuilds both the
     /// search index and the graph DB. Synchronous and blocking;
     /// the caller decides whether to spawn a worker. Returns the
@@ -2327,7 +2327,7 @@ impl Workspace {
         self.clear_rebuild_marker();
         self.needs_rebuild
             .store(false, std::sync::atomic::Ordering::Release);
-        // systacean-34: walk the per-drive Drafts subtree + index
+        // systacean-34: walk the per-workspace Drafts subtree + index
         // each indexable text file through `index_draft_file`.
         // The watcher (`-25`) catches ongoing changes; this closes
         // the boot-time gap where the initial corpus walk missed
@@ -2365,7 +2365,7 @@ impl Workspace {
         Ok(summary)
     }
 
-    /// systacean-34 + systacean-37: walk the per-drive Drafts
+    /// systacean-34 + systacean-37: walk the per-workspace Drafts
     /// subtree + invoke `index_draft_file` on each indexable
     /// text file so the boot corpus includes drafts content.
     ///
@@ -2373,7 +2373,7 @@ impl Workspace {
     /// `Workspace::reindex_with_aggression` (`-34`) AND exposed
     /// public for chan-server's `Indexer::spawn` boot path to
     /// invoke unconditionally (`-37`). The latter closes the
-    /// gap where reindex doesn't fire (drive non-empty at
+    /// gap where reindex doesn't fire (workspace non-empty at
     /// startup, so the indexer's "indexed_docs == 0 ||
     /// graph_empty" trigger stays false) but pre-existing
     /// drafts still need a boot walk to land in BM25 + graph.
@@ -2383,8 +2383,8 @@ impl Workspace {
     /// boot is cheap when nothing changed and costs O(N) per
     /// draft when something did.
     ///
-    /// Walks the per-drive drafts metadata dir directly via
-    /// `std::fs` (drafts are chan-drive's own metadata; the cap-std
+    /// Walks the per-workspace drafts metadata dir directly via
+    /// `std::fs` (drafts are chan-workspace's own metadata; the cap-std
     /// sandbox isn't a security concern here, same as
     /// `index_draft_file`).
     /// Emits paths in the unified `Drafts/<name>/<file>` keyspace
@@ -2405,7 +2405,7 @@ impl Workspace {
     /// crash during marker creation never leaves a half-written file
     /// that would confuse the next open. The file body carries the
     /// unix timestamp so a stuck marker can be diagnosed against the
-    /// drive's modification history; we don't read the contents on
+    /// workspace's modification history; we don't read the contents on
     /// open (existence is the signal).
     fn write_rebuild_marker(&self) -> Result<()> {
         std::fs::create_dir_all(&self.paths.graph_dir)?;
@@ -2572,22 +2572,22 @@ impl Workspace {
         Ok(self.index()?.stats())
     }
 
-    /// Sorted drive-relative file paths currently known to the
+    /// Sorted workspace-relative file paths currently known to the
     /// persisted full-text index.
     pub fn indexed_paths(&self) -> Result<Vec<String>> {
         Ok(self.index()?.known_paths()?)
     }
 
-    /// systacean-7: read the per-drive Hybrid-search preference.
+    /// systacean-7: read the per-workspace Hybrid-search preference.
     /// Mirrors `IndexConfig::semantic_enabled`; default-false on a
-    /// drive that has never been touched by systacean-7's CLI / API.
+    /// workspace that has never been touched by systacean-7's CLI / API.
     /// Query-path callers consult this when no explicit `Mode` is
     /// passed.
     pub fn semantic_enabled(&self) -> Result<bool> {
         Ok(self.index()?.config().semantic_enabled)
     }
 
-    /// systacean-7: flip the per-drive Hybrid-search preference.
+    /// systacean-7: flip the per-workspace Hybrid-search preference.
     /// Idempotent — re-setting the current value is a no-op. The
     /// `chan index enable-semantic` / `disable-semantic` CLI and the
     /// `/api/index/semantic/{enable,disable}` endpoints both route
@@ -2599,13 +2599,13 @@ impl Workspace {
     }
 
     /// systacean-7: read the configured embedding model id from the
-    /// per-drive index config. Used by the resolver so the model
+    /// per-workspace index config. Used by the resolver so the model
     /// name flows through the same source as `set_model`.
     pub fn semantic_model(&self) -> Result<String> {
         Ok(self.index()?.config().model)
     }
 
-    /// Phase 9 carry-over: persist the per-drive embedding model.
+    /// Phase 9 carry-over: persist the per-workspace embedding model.
     /// The index layer validates the curated model id, clears stale
     /// vector metadata, and preserves BM25.
     pub fn set_semantic_model(&self, model: &str) -> Result<()> {
@@ -2613,16 +2613,16 @@ impl Workspace {
         Ok(())
     }
 
-    /// systacean-27: read the per-drive chan-report opt-in flag.
+    /// systacean-27: read the per-workspace chan-report opt-in flag.
     /// Mirrors `IndexConfig::reports_enabled`; default-false on a
-    /// drive that has never been touched by the pre-flight UI / CLI
+    /// workspace that has never been touched by the pre-flight UI / CLI
     /// / Settings. Consumers gate `Workspace::report()` initialization
-    /// + the per-drive language-graph layer on this flag.
+    /// + the per-workspace language-graph layer on this flag.
     pub fn reports_enabled(&self) -> Result<bool> {
         Ok(self.index()?.config().reports_enabled)
     }
 
-    /// systacean-27: flip the per-drive chan-report opt-in.
+    /// systacean-27: flip the per-workspace chan-report opt-in.
     /// Idempotent on re-set. Enabling triggers a lazy
     /// initialization the next time `Workspace::report()` is called
     /// (no eager scan here so a flip from CLI returns fast);
@@ -2650,14 +2650,14 @@ impl Workspace {
         Ok(())
     }
 
-    /// systacean-40: read the per-drive screensaver-enabled flag.
-    /// Default-false on drives that pre-date the field; SPA arms
+    /// systacean-40: read the per-workspace screensaver-enabled flag.
+    /// Default-false on workspaces that pre-date the field; SPA arms
     /// the overlay state machine when true.
     pub fn screensaver_enabled(&self) -> Result<bool> {
         Ok(self.index()?.config().screensaver_enabled)
     }
 
-    /// systacean-40: flip the per-drive screensaver-enabled flag.
+    /// systacean-40: flip the per-workspace screensaver-enabled flag.
     /// Idempotent. No filesystem side effects (unlike
     /// `set_reports_enabled`'s jsonl drop) — the overlay state
     /// lives entirely client-side; this just persists the toggle.
@@ -2673,7 +2673,7 @@ impl Workspace {
     }
 
     /// systacean-40: persist the idle window. SPA enforces a
-    /// minimum + maximum client-side; chan-drive stores whatever
+    /// minimum + maximum client-side; chan-workspace stores whatever
     /// value lands.
     pub fn set_screensaver_timeout_secs(&self, secs: u32) -> Result<()> {
         self.index()?.set_screensaver_timeout_secs(secs)?;
@@ -2681,7 +2681,7 @@ impl Workspace {
     }
 
     /// fullstack-a-99: read the persisted visual theme. Default
-    /// plain on drives that pre-date the field.
+    /// plain on workspaces that pre-date the field.
     pub fn screensaver_theme(&self) -> Result<ScreensaverTheme> {
         Ok(self.index()?.config().screensaver_theme)
     }
@@ -2817,7 +2817,7 @@ impl Workspace {
         self.graph()?.link_targets(q, limit)
     }
 
-    /// Resolve a wiki-link target string to an existing drive
+    /// Resolve a wiki-link target string to an existing workspace
     /// file. The graph stores link dst nodes verbatim from
     /// markdown (e.g. `[[recipes/pasta]]` -> `dst="recipes/pasta"`),
     /// so backlinks queries match the stored form. Consumers that
@@ -2833,7 +2833,7 @@ impl Workspace {
     ///      name). Return the first hit as a regular file.
     ///   3. None when no candidate exists.
     ///
-    /// Anchor strings are passed through unchanged; chan-drive
+    /// Anchor strings are passed through unchanged; chan-workspace
     /// doesn't validate them against the file's headings (callers
     /// can do that via `GraphView::headings_of`).
     pub fn resolve_link(&self, target: &str) -> Option<ResolvedLink> {
@@ -2901,7 +2901,7 @@ impl Workspace {
     /// path (e.g. `"Drafts/untitled-1/draft.md"`). Reads the file
     /// from `drafts_dir`, parses it for graph emit, and stores in
     /// BM25 + graph DB under the `Drafts/...` key so search +
-    /// graph reflect Drafts content alongside drive content.
+    /// graph reflect Drafts content alongside workspace content.
     ///
     /// Skipped silently for non-indexable text (mirrors
     /// `index_file`); errors propagate when the file is unreadable
@@ -3117,7 +3117,7 @@ impl Workspace {
             .map(|(rel, mtime, size)| (rel, (mtime, size)))
             .collect();
 
-        // Walk the drive applying the same filter the reindex uses
+        // Walk the workspace applying the same filter the reindex uses
         // (.git, .chan, plus the per-Library WalkFilter blocklist).
         // Only editable-text files participate; binaries / images
         // are not indexed by either backend and so do not need
@@ -3237,7 +3237,7 @@ impl Workspace {
 
     // ---- graph ----
 
-    /// View into the drive's graph DB.
+    /// View into the workspace's graph DB.
     pub fn graph(&self) -> Result<&GraphView> {
         if let Some(g) = self.graph.get() {
             return Ok(g);
@@ -3247,7 +3247,7 @@ impl Workspace {
         Ok(self.graph.get().unwrap())
     }
 
-    /// All contact-kind notes in the drive, sorted by display name.
+    /// All contact-kind notes in the workspace, sorted by display name.
     /// Pass-through to `GraphView::contacts`. Convenience for callers
     /// (CLI, tests) that want the full list; the editor `@` picker
     /// and `GET /api/contacts` should call `contacts_filtered`
@@ -3261,7 +3261,7 @@ impl Workspace {
     /// insensitively against title, basename, and the joined email
     /// column inside SQLite, and `limit` caps the row count so
     /// picker keystrokes stay O(limit) regardless of how many
-    /// contacts the drive holds. `query` of `None` or empty returns
+    /// contacts the workspace holds. `query` of `None` or empty returns
     /// up to `limit` contacts in display-name order.
     pub fn contacts_filtered(
         &self,
@@ -3273,27 +3273,27 @@ impl Workspace {
 
     // ---- watch ----
 
-    /// Start a recursive filesystem watcher on the drive. Drop
+    /// Start a recursive filesystem watcher on the workspace. Drop
     /// the returned `WatchHandle` to stop. Events for `.chan/`
     /// and `.git/` are filtered out.
     ///
     /// Also warms the SLOC / language / COCOMO report so the
     /// watcher can keep it current incrementally. The first
-    /// `watch()` call on a fresh drive pays the initial-scan
-    /// cost; subsequent calls reuse the cached state. Drives
+    /// `watch()` call on a fresh workspace pays the initial-scan
+    /// cost; subsequent calls reuse the cached state. Workspaces
     /// that never need the report can skip watching, or call
     /// `report()` on demand instead.
     pub fn watch(self: &Arc<Self>, cb: Arc<dyn WatchCallback>) -> Result<WatchHandle> {
         let report = self.report_state()?;
         let fan: Arc<dyn WatchCallback> = ReportFanOut::new(cb, report.clone());
-        // systacean-25: also watch the per-drive drafts subtree
+        // systacean-25: also watch the per-workspace drafts subtree
         // so drafts content participates in the unified
         // search + graph keyspace (paths emerge as
         // `Drafts/<name>/...` to the indexer). The drafts dir is
         // eagerly created in Workspace::open so the watch attaches
-        // cleanly even on a fresh drive.
+        // cleanly even on a fresh workspace.
         let roots = [
-            crate::watch::WatchRoot::drive(self.root()),
+            crate::watch::WatchRoot::workspace(self.root()),
             crate::watch::WatchRoot::drafts(self.drafts_dir()),
         ];
         // Same unified ignore set the bootstrap/index walk uses, so a
@@ -3302,10 +3302,10 @@ impl Workspace {
         WatchHandle::start(&roots, Arc::clone(&self.walk_filter), fan)
     }
 
-    /// Start the built-in graph indexer on this drive. Returns a
+    /// Start the built-in graph indexer on this workspace. Returns a
     /// handle; drop or `stop()` to tear down. The indexer attaches
     /// its own watcher, debounces per-path with `debounce_ms`, and
-    /// drives `index_file` / `forget_file` / `reconcile` so the
+    /// workspaces `index_file` / `forget_file` / `reconcile` so the
     /// consumer (CLI, chan-server, FFI shells) doesn't need to
     /// write its own indexing loop.
     pub fn start_graph_indexer(
@@ -3317,7 +3317,7 @@ impl Workspace {
 
     // ---- report ----
 
-    /// Snapshot of the drive's code/SLOC report covering every
+    /// Snapshot of the workspace's code/SLOC report covering every
     /// indexed file. Lazy on first call (full scan). Returned
     /// `Report` is a plain serde value; clone-and-shape is the
     /// caller's job.
@@ -3325,7 +3325,7 @@ impl Workspace {
         Ok(self.report_state()?.snapshot(&ReportScope::All))
     }
 
-    /// Snapshot of the report restricted to a drive-relative
+    /// Snapshot of the report restricted to a workspace-relative
     /// POSIX prefix. Empty `prefix` is equivalent to `report()`.
     /// Missing files in the prefix produce empty roll-ups.
     pub fn report_for_prefix(&self, prefix: &str) -> Result<Report> {
@@ -3335,7 +3335,7 @@ impl Workspace {
     }
 
     /// Snapshot of the report restricted to an explicit list of
-    /// drive-relative paths. Paths absent from the index are
+    /// workspace-relative paths. Paths absent from the index are
     /// silently ignored.
     pub fn report_for_files(&self, paths: &[String]) -> Result<Report> {
         Ok(self
@@ -3344,9 +3344,9 @@ impl Workspace {
     }
 
     /// O(1) lookup of the maintained per-directory aggregation
-    /// cache. `dir` is drive-relative POSIX with no leading
+    /// cache. `dir` is workspace-relative POSIX with no leading
     /// slash; trailing slashes are stripped. Empty string maps
-    /// to the drive root.
+    /// to the workspace root.
     ///
     /// Returns `Ok(None)` when no tracked file lives at or under
     /// the requested directory (so callers can serve a clean 404
@@ -3362,7 +3362,7 @@ impl Workspace {
     }
 
     /// Path to the persisted JSONL form of the report on disk.
-    /// chan-drive's writer thread keeps this file in sync with
+    /// chan-workspace's writer thread keeps this file in sync with
     /// the in-memory index via debounced atomic writes.
     pub fn report_jsonl_path(&self) -> Result<std::path::PathBuf> {
         Ok(self.report_state()?.jsonl_path().to_path_buf())
@@ -3372,7 +3372,7 @@ impl Workspace {
         if let Some(s) = self.report.get() {
             return Ok(s);
         }
-        // Bug 7: the report's initial `Index::scan` walks the drive and
+        // Bug 7: the report's initial `Index::scan` walks the workspace and
         // reads every file (one descriptor at a time, but a full pass).
         // When it warms concurrently with a cold-boot search reindex it
         // adds to the descriptor pressure. Gate the scan start behind
@@ -3412,7 +3412,7 @@ impl Workspace {
 /// keeps `dir` as a `&Path` parameter; the only `Workspace` capability
 /// used is the public `index_draft_file` entry.
 ///
-/// `drafts_root` is the per-drive drafts metadata dir; `dir` is the
+/// `drafts_root` is the per-workspace drafts metadata dir; `dir` is the
 /// current subtree being walked. The path passed to
 /// `index_draft_file` is the unified
 /// `Drafts/<rel_under_drafts_root>` shape per the `-25`/`-26`
@@ -3420,7 +3420,7 @@ impl Workspace {
 fn walk_drafts_recursive(
     drafts_root: &std::path::Path,
     dir: &std::path::Path,
-    drive: &Workspace,
+    workspace: &Workspace,
 ) -> Result<()> {
     let rd = match std::fs::read_dir(dir) {
         Ok(rd) => rd,
@@ -3431,13 +3431,13 @@ fn walk_drafts_recursive(
         let path = entry.path();
         let Ok(ft) = entry.file_type() else { continue };
         if ft.is_dir() {
-            walk_drafts_recursive(drafts_root, &path, drive)?;
+            walk_drafts_recursive(drafts_root, &path, workspace)?;
             continue;
         }
         if !ft.is_file() {
             // Symlinks / FIFOs / sockets / devices: skip silently
             // (mirrors the special-file refusal pattern elsewhere
-            // in chan-drive).
+            // in chan-workspace).
             continue;
         }
         let Ok(sub_rel) = path.strip_prefix(drafts_root) else {
@@ -3451,7 +3451,7 @@ fn walk_drafts_recursive(
         if !fs_ops::is_indexable_text(&unified) {
             continue;
         }
-        match drive.index_draft_file(&unified) {
+        match workspace.index_draft_file(&unified) {
             Ok(()) => {}
             Err(e) => tracing::warn!(
                 path = %unified,
@@ -3803,9 +3803,9 @@ fn path_under(path: &str, prefix: &str) -> bool {
     path_b[..pb.len()].eq_ignore_ascii_case(pb) && path_b[pb.len()] == b'/'
 }
 
-/// Canonicalize a drive-relative POSIX path for use as a mapping key.
+/// Canonicalize a workspace-relative POSIX path for use as a mapping key.
 /// Strips a leading `./` and a trailing `/`; leaves an empty string
-/// for the drive root. We intentionally do NOT collapse `..` here;
+/// for the workspace root. We intentionally do NOT collapse `..` here;
 /// the rename API rejects those upstream via the cap-std sandbox.
 fn canonical_posix(p: &str) -> String {
     let s = p.strip_prefix("./").unwrap_or(p);
@@ -3833,7 +3833,7 @@ fn posix_path(path: &std::path::Path) -> String {
 }
 
 /// Read the persisted rename log from `graph_dir/rename_log.json`.
-/// Best-effort: a missing file returns an empty map (fresh drive,
+/// Best-effort: a missing file returns an empty map (fresh workspace,
 /// or a clean reindex landed since the last process exit), and a
 /// malformed file is logged and discarded rather than blocking
 /// `Workspace::open`. The downside of "drop on parse error" is a one-
@@ -3881,7 +3881,7 @@ fn persist_rename_log(graph_dir: &std::path::Path, log: &HashMap<String, String>
 /// the rename log: missing file -> empty map; malformed -> warn +
 /// empty map. A dropped journal under malformed-JSON is worse than
 /// for the rename log (the consumer never replays the journaled
-/// op), but the cost of refusing to open the drive is higher; the
+/// op), but the cost of refusing to open the workspace is higher; the
 /// next per-file write or full reindex still converges. The next
 /// per-file write or `reindex_with` repopulates a consistent
 /// state.
@@ -3934,7 +3934,7 @@ fn persist_pending_writes(
     fs_ops::atomic_write(&path, &body)
 }
 
-/// Parent directory of a drive-rooted POSIX path. Returns the empty
+/// Parent directory of a workspace-rooted POSIX path. Returns the empty
 /// string for files at the root (`"foo.md"` -> `""`). Used to seed
 /// `normalize_href` so relative link resolution matches the rules in
 /// `chan_workspace::markdown::links::normalize_href`.
@@ -3946,7 +3946,7 @@ fn parent_dir(rel: &str) -> String {
 }
 
 /// Compute a POSIX relative path from `source_dir` to `target`. Both
-/// inputs are drive-rooted (no leading slash). Walks up the source's
+/// inputs are workspace-rooted (no leading slash). Walks up the source's
 /// path until a common prefix with the target is reached, then
 /// descends into the target. Returns `"."` if the two are equal.
 fn relative_from(source_dir: &str, target: &str) -> String {
@@ -3988,7 +3988,7 @@ fn relative_from(source_dir: &str, target: &str) -> String {
 /// directory (so a self-referential link inside a moved file still
 /// resolves to the right target), maps the resolved target through
 /// the rename, and reconstructs the href preserving its flavor
-/// (drive-rooted vs. `./` explicit vs. bare vs. `../`-rooted) and
+/// (workspace-rooted vs. `./` explicit vs. bare vs. `../`-rooted) and
 /// the `?query` / `#anchor` suffix.
 fn rewrite_href_for_move(
     link: markdown::links::LinkRef<'_>,
@@ -4003,7 +4003,7 @@ fn rewrite_href_for_move(
         return None;
     }
     // Wiki convention (mirrors `build_edges`): a bare or `/`-prefixed
-    // wiki target is drive-rooted, NOT source-relative. Only `./` or
+    // wiki target is workspace-rooted, NOT source-relative. Only `./` or
     // `../` prefixes flip it to source-relative. Standard markdown
     // hrefs follow ordinary relative-path semantics.
     let normalized_target = if matches!(link.kind, markdown::links::LinkRefKind::Wiki)
@@ -4029,7 +4029,7 @@ fn rewrite_href_for_move(
     // rooted to anything that isn't chan's own renderer (browsers,
     // GitHub, Obsidian on export), so every rewrite pass migrates
     // them to the round-trippable relative form. Wiki bare `[[name]]`
-    // resolves to drive root by chan's pre-existing convention, so
+    // resolves to workspace root by chan's pre-existing convention, so
     // wiki rewrites MUST use an explicit `./` or `../` prefix to be
     // unambiguous as relative.
     let rel = relative_from(src_new_dir, &resolved_new);
@@ -4045,7 +4045,7 @@ fn rewrite_href_for_move(
             // Same shape as wiki except the bare form is meaningful
             // for standard markdown links (it's a sibling-relative
             // path), so we only emit the `./` prefix when the original
-            // had it OR when the original was drive-rooted.
+            // had it OR when the original was workspace-rooted.
             let dot_explicit = path_part.starts_with('/') || path_part.starts_with("./");
             if dot_explicit && !rel.starts_with("../") && rel != "." {
                 format!("./{rel}")
@@ -4157,13 +4157,13 @@ mod path_under_tests {
 /// internal markdown links produce `Link` edges; tokens produce
 /// `Tag` / `Mention` edges. External links (http://, mailto:) are
 /// dropped because they don't connect to anything else in the
-/// drive's graph.
+/// workspace's graph.
 ///
 /// Markdown link hrefs (`[label](href)`) and image embeds
 /// (`![alt](src)`) are run through `markdown::normalize_href` so
-/// `/abs` and `../rel` write the same drive-relative dst as the
+/// `/abs` and `../rel` write the same workspace-relative dst as the
 /// equivalent bare path. Wiki-link targets (`[[name]]`) keep the
-/// existing drive-rooted-by-default convention; an explicit `./`
+/// existing workspace-rooted-by-default convention; an explicit `./`
 /// or `..` prefix opts into source-relative resolution.
 fn build_edges(
     src: &str,
@@ -4178,7 +4178,7 @@ fn build_edges(
     let mut out = Vec::new();
     for l in links {
         // Wiki-link convention: bare `[[name]]` and `[[a/b]]` are
-        // drive-rooted (the picker has always inserted them this
+        // workspace-rooted (the picker has always inserted them this
         // way). An explicit `./` / `..` prefix flips to source-
         // relative. Markdown links use standard relative semantics.
         let normalize_target = if l.wiki && !is_relative_marker(&l.target) {
@@ -4227,7 +4227,7 @@ fn build_edges(
 
 /// True when a wiki-link target opts into source-relative resolution
 /// via a leading `./` or `..` segment. Plain `[[name]]` and `[[a/b]]`
-/// stay drive-rooted (the picker's existing convention).
+/// stay workspace-rooted (the picker's existing convention).
 fn is_relative_marker(target: &str) -> bool {
     target == "." || target == ".." || target.starts_with("./") || target.starts_with("../")
 }
@@ -4253,21 +4253,21 @@ mod tests {
         let drive_dir = TempDir::new().unwrap();
         let lib = Library::open_at(cfg.path().join("config.toml")).unwrap();
         lib.register_workspace(drive_dir.path()).unwrap();
-        let drive = lib.open_workspace(drive_dir.path()).unwrap();
-        (cfg, drive_dir, drive)
+        let workspace = lib.open_workspace(drive_dir.path()).unwrap();
+        (cfg, drive_dir, workspace)
     }
 
     #[test]
     fn write_then_read_text_round_trips() {
-        let (_cfg, _root, drive) = fixture();
-        drive.write_text("notes/a.md", "hello").unwrap();
-        assert_eq!(drive.read_text("notes/a.md").unwrap(), "hello");
+        let (_cfg, _root, workspace) = fixture();
+        workspace.write_text("notes/a.md", "hello").unwrap();
+        assert_eq!(workspace.read_text("notes/a.md").unwrap(), "hello");
     }
 
     #[test]
     fn rename_log_persists_across_drive_reopen() {
         // Simulate "process kill after a rename, restart": rename
-        // A.md -> B.md once, drop the drive (and so the in-memory
+        // A.md -> B.md once, drop the workspace (and so the in-memory
         // log), then re-open. The persisted sidecar must hydrate
         // the new in-memory log so a subsequent rename B.md -> C.md
         // still knows that A.md once mapped to B.md.
@@ -4280,9 +4280,9 @@ mod tests {
         // registry-assigned metadata key rather than guessing from
         // the path.
         let paths = lib.workspace_paths_for(drive_dir.path()).unwrap();
-        let drive = lib.open_workspace(drive_dir.path()).unwrap();
-        drive.write_text("A.md", "# A\n").unwrap();
-        drive.rename_with_link_rewrite("A.md", "B.md").unwrap();
+        let workspace = lib.open_workspace(drive_dir.path()).unwrap();
+        workspace.write_text("A.md", "# A\n").unwrap();
+        workspace.rename_with_link_rewrite("A.md", "B.md").unwrap();
 
         // Sidecar must exist with the (A -> B) entry.
         let log_path = paths.graph_dir.join(RENAME_LOG_FILE);
@@ -4297,7 +4297,7 @@ mod tests {
 
         // Drop and re-open: in-memory log starts empty, hydrates
         // from the sidecar.
-        drop(drive);
+        drop(workspace);
         let drive2 = lib.open_workspace(drive_dir.path()).unwrap();
         {
             let mem = drive2.rename_log.lock().unwrap();
@@ -4344,7 +4344,7 @@ mod tests {
         let lib = Library::open_at(cfg.path().join("config.toml")).unwrap();
         lib.register_workspace(drive_dir.path()).unwrap();
         // Stamp the marker AFTER register so the metadata key is
-        // known. Open then drop the drive once to let the metadata
+        // known. Open then drop the workspace once to let the metadata
         // skeleton (graph_dir) come into existence before we plant
         // the marker; otherwise create_dir_all does the same work
         // but explicit-open is the production code path.
@@ -4353,16 +4353,16 @@ mod tests {
         let marker = paths.graph_dir.join(REBUILD_MARKER);
         std::fs::write(&marker, b"started_at = 1\n").unwrap();
 
-        let drive = lib.open_workspace(drive_dir.path()).unwrap();
+        let workspace = lib.open_workspace(drive_dir.path()).unwrap();
         assert!(
-            drive.needs_rebuild(),
+            workspace.needs_rebuild(),
             "marker on disk should set needs_rebuild()",
         );
 
         // A successful reindex removes the marker and clears the flag.
-        drive.reindex(None).unwrap();
+        workspace.reindex(None).unwrap();
         assert!(
-            !drive.needs_rebuild(),
+            !workspace.needs_rebuild(),
             "needs_rebuild() should clear after a clean reindex",
         );
         assert!(
@@ -4370,17 +4370,17 @@ mod tests {
             "marker file should be gone after a clean reindex",
         );
 
-        // Sanity: a fresh drive without a marker reports false from
+        // Sanity: a fresh workspace without a marker reports false from
         // the start so consumers don't reindex every time they open
-        // a known-clean drive.
+        // a known-clean workspace.
         let drive2_dir = TempDir::new().unwrap();
         lib.register_workspace(drive2_dir.path()).unwrap();
         let drive2 = lib.open_workspace(drive2_dir.path()).unwrap();
         assert!(!drive2.needs_rebuild());
     }
 
-    /// Snapshot of the queryable end state of a drive. Two drives
-    /// (or two states of the same drive) are "converged" when these
+    /// Snapshot of the queryable end state of a workspace. Two workspaces
+    /// (or two states of the same workspace) are "converged" when these
     /// fields match: same graph node set, same search results for a
     /// known token. Used by the crash-recovery tests below as a
     /// convergence oracle.
@@ -4390,15 +4390,15 @@ mod tests {
         hit_paths: Vec<String>,
     }
 
-    fn capture_recovery_state(drive: &Workspace, probe_token: &str) -> RecoveryState {
-        let mut graph_files = drive.graph().unwrap().files().unwrap();
+    fn capture_recovery_state(workspace: &Workspace, probe_token: &str) -> RecoveryState {
+        let mut graph_files = workspace.graph().unwrap().files().unwrap();
         graph_files.sort();
-        let opts = crate::drive::SearchOpts {
+        let opts = crate::workspace::SearchOpts {
             mode: crate::SearchMode::Bm25,
             limit: 100,
             scope: None,
         };
-        let mut hit_paths: Vec<String> = drive
+        let mut hit_paths: Vec<String> = workspace
             .search(probe_token, &opts)
             .unwrap()
             .hits
@@ -4413,18 +4413,18 @@ mod tests {
         }
     }
 
-    /// Stand up a drive with a fixed content set so the
+    /// Stand up a workspace with a fixed content set so the
     /// crash-recovery tests can compare "what a clean reindex
     /// produces" against "what a post-crash reindex produces."
     fn populate_recoverable_drive(lib: &Library, root: &std::path::Path) -> &'static str {
-        let drive = lib.open_workspace(root).unwrap();
-        drive
+        let workspace = lib.open_workspace(root).unwrap();
+        workspace
             .write_text("alpha.md", "# alpha\n[[beta]] crash-probe-token in alpha\n")
             .unwrap();
-        drive
+        workspace
             .write_text("beta.md", "# beta\nback to [[alpha]]\n")
             .unwrap();
-        drive
+        workspace
             .write_text("notes/sub.md", "# sub\ncrash-probe-token here too\n")
             .unwrap();
         "crash-probe-token"
@@ -4443,10 +4443,10 @@ mod tests {
         let lib = Library::open_at(cfg.path().join("config.toml")).unwrap();
         lib.register_workspace(drive_dir.path()).unwrap();
         let probe = populate_recoverable_drive(&lib, drive_dir.path());
-        let drive = lib.open_workspace(drive_dir.path()).unwrap();
-        drive.reindex(None).unwrap();
-        let baseline = capture_recovery_state(&drive, probe);
-        drop(drive);
+        let workspace = lib.open_workspace(drive_dir.path()).unwrap();
+        workspace.reindex(None).unwrap();
+        let baseline = capture_recovery_state(&workspace, probe);
+        drop(workspace);
 
         // Plant the marker as if the previous reindex had not
         // managed to clear it. Don't touch any other state; we want
@@ -4455,11 +4455,11 @@ mod tests {
         let marker = paths.graph_dir.join(REBUILD_MARKER);
         std::fs::write(&marker, b"started_at = simulated\n").unwrap();
 
-        let drive = lib.open_workspace(drive_dir.path()).unwrap();
-        assert!(drive.needs_rebuild(), "marker must promote to flag");
-        drive.reindex(None).unwrap();
-        assert!(!drive.needs_rebuild(), "reindex must clear the flag");
-        let recovered = capture_recovery_state(&drive, probe);
+        let workspace = lib.open_workspace(drive_dir.path()).unwrap();
+        assert!(workspace.needs_rebuild(), "marker must promote to flag");
+        workspace.reindex(None).unwrap();
+        assert!(!workspace.needs_rebuild(), "reindex must clear the flag");
+        let recovered = capture_recovery_state(&workspace, probe);
         assert_eq!(
             recovered, baseline,
             "post-crash reindex must converge to the clean-build state",
@@ -4479,10 +4479,10 @@ mod tests {
         let lib = Library::open_at(cfg.path().join("config.toml")).unwrap();
         lib.register_workspace(drive_dir.path()).unwrap();
         let probe = populate_recoverable_drive(&lib, drive_dir.path());
-        let drive = lib.open_workspace(drive_dir.path()).unwrap();
-        drive.reindex(None).unwrap();
-        let baseline = capture_recovery_state(&drive, probe);
-        drop(drive);
+        let workspace = lib.open_workspace(drive_dir.path()).unwrap();
+        workspace.reindex(None).unwrap();
+        let baseline = capture_recovery_state(&workspace, probe);
+        drop(workspace);
 
         // Simulate the crash: nuke the on-disk BM25 dir + plant
         // the marker. The graph DB stays (graph rebuild ran first
@@ -4499,29 +4499,29 @@ mod tests {
         )
         .unwrap();
 
-        let drive = lib.open_workspace(drive_dir.path()).unwrap();
-        assert!(drive.needs_rebuild());
+        let workspace = lib.open_workspace(drive_dir.path()).unwrap();
+        assert!(workspace.needs_rebuild());
         // Before the recovery reindex, search should return zero
         // hits (BM25 store is empty). Confirm that the test setup
         // actually broke the index, otherwise the recovery
         // assertion below would pass for the wrong reason.
-        let opts = crate::drive::SearchOpts {
+        let opts = crate::workspace::SearchOpts {
             mode: crate::SearchMode::Bm25,
             limit: 100,
             scope: None,
         };
         assert!(
-            drive.search(probe, &opts).unwrap().hits.is_empty(),
+            workspace.search(probe, &opts).unwrap().hits.is_empty(),
             "test precondition: corrupted BM25 should produce zero hits",
         );
 
-        drive.reindex(None).unwrap();
-        let recovered = capture_recovery_state(&drive, probe);
+        workspace.reindex(None).unwrap();
+        let recovered = capture_recovery_state(&workspace, probe);
         assert_eq!(
             recovered, baseline,
             "post-crash reindex must rebuild BM25 to the same shape",
         );
-        assert!(!drive.needs_rebuild());
+        assert!(!workspace.needs_rebuild());
     }
 
     #[test]
@@ -4537,10 +4537,10 @@ mod tests {
         let lib = Library::open_at(cfg.path().join("config.toml")).unwrap();
         lib.register_workspace(drive_dir.path()).unwrap();
         {
-            let drive = lib.open_workspace(drive_dir.path()).unwrap();
-            drive.write_text("a.md", "alpha\n").unwrap();
-            drive.reindex(None).unwrap();
-            drive.put_session("win-1", b"layout").unwrap();
+            let workspace = lib.open_workspace(drive_dir.path()).unwrap();
+            workspace.write_text("a.md", "alpha\n").unwrap();
+            workspace.reindex(None).unwrap();
+            workspace.put_session("win-1", b"layout").unwrap();
         }
 
         let paths = lib.workspace_paths_for(drive_dir.path()).unwrap();
@@ -4567,11 +4567,11 @@ mod tests {
         assert!(!paths.sessions.exists());
 
         // Registry row survives a State-mode reset (Everything would
-        // drop it). The drive is reopenable and reindexes from
+        // drop it). The workspace is reopenable and reindexes from
         // scratch with no leaked state.
-        let drive = lib.open_workspace(drive_dir.path()).unwrap();
-        drive.reindex(None).unwrap();
-        assert!(!drive.needs_rebuild());
+        let workspace = lib.open_workspace(drive_dir.path()).unwrap();
+        workspace.reindex(None).unwrap();
+        assert!(!workspace.needs_rebuild());
     }
 
     #[test]
@@ -4587,12 +4587,12 @@ mod tests {
         lib.register_workspace(drive_dir.path()).unwrap();
         let probe = "rename-recovery-token";
         {
-            let drive = lib.open_workspace(drive_dir.path()).unwrap();
-            drive
+            let workspace = lib.open_workspace(drive_dir.path()).unwrap();
+            workspace
                 .write_text("orig.md", &format!("# orig\n{probe} body\n"))
                 .unwrap();
-            drive.reindex(None).unwrap();
-            drive
+            workspace.reindex(None).unwrap();
+            workspace
                 .rename_with_link_rewrite("orig.md", "renamed.md")
                 .unwrap();
         }
@@ -4607,9 +4607,9 @@ mod tests {
         // Reopen + reindex; the recovered state must show the
         // renamed file and only the renamed file, with no trace of
         // the original.
-        let drive = lib.open_workspace(drive_dir.path()).unwrap();
-        drive.reindex(None).unwrap();
-        let recovered = capture_recovery_state(&drive, probe);
+        let workspace = lib.open_workspace(drive_dir.path()).unwrap();
+        workspace.reindex(None).unwrap();
+        let recovered = capture_recovery_state(&workspace, probe);
         assert!(
             recovered.graph_files.iter().any(|f| f == "renamed.md"),
             "graph must reflect the renamed path: {:?}",
@@ -4641,11 +4641,11 @@ mod tests {
         let drive_dir = TempDir::new().unwrap();
         let lib = Library::open_at(cfg.path().join("config.toml")).unwrap();
         lib.register_workspace(drive_dir.path()).unwrap();
-        let drive = lib.open_workspace(drive_dir.path()).unwrap();
-        drive.write_text("a.md", "# a\nbody\n").unwrap();
-        drive.index_file("a.md").unwrap();
-        assert!(drive.pending_writes().is_empty());
-        assert!(!drive.needs_replay_writes());
+        let workspace = lib.open_workspace(drive_dir.path()).unwrap();
+        workspace.write_text("a.md", "# a\nbody\n").unwrap();
+        workspace.index_file("a.md").unwrap();
+        assert!(workspace.pending_writes().is_empty());
+        assert!(!workspace.needs_replay_writes());
 
         // Persisted form: the JSON file should be gone (empty map
         // is serialized as "no file" so the journal dir stays
@@ -4660,10 +4660,10 @@ mod tests {
         let drive_dir = TempDir::new().unwrap();
         let lib = Library::open_at(cfg.path().join("config.toml")).unwrap();
         lib.register_workspace(drive_dir.path()).unwrap();
-        let drive = lib.open_workspace(drive_dir.path()).unwrap();
+        let workspace = lib.open_workspace(drive_dir.path()).unwrap();
 
-        let guard = drive.write_serial.lock().unwrap();
-        let drive_for_write = drive.clone();
+        let guard = workspace.write_serial.lock().unwrap();
+        let drive_for_write = workspace.clone();
         let start = std::time::Instant::now();
         let (tx, rx) = std::sync::mpsc::channel();
         let writer = std::thread::spawn(move || {
@@ -4682,7 +4682,7 @@ mod tests {
                 start.elapsed()
             )
         });
-        assert_eq!(drive.read_text("fast.md").unwrap(), "# fast\nbody\n");
+        assert_eq!(workspace.read_text("fast.md").unwrap(), "# fast\nbody\n");
     }
 
     #[test]
@@ -4697,8 +4697,8 @@ mod tests {
         lib.register_workspace(drive_dir.path()).unwrap();
         let probe = "pending-recovery-token";
         {
-            let drive = lib.open_workspace(drive_dir.path()).unwrap();
-            drive
+            let workspace = lib.open_workspace(drive_dir.path()).unwrap();
+            workspace
                 .write_text("a.md", &format!("# a\n{probe} body\n"))
                 .unwrap();
             // Stamp a journal entry as if index_file had crashed
@@ -4707,33 +4707,33 @@ mod tests {
             // index have seen it yet.
             let mut map = HashMap::new();
             map.insert("a.md".to_string(), PendingOp::Index);
-            persist_pending_writes(&drive.paths.graph_dir, &map).unwrap();
+            persist_pending_writes(&workspace.paths.graph_dir, &map).unwrap();
         }
 
         // Reopen: the flag must surface, the in-memory map must
         // mirror the on-disk journal.
-        let drive = lib.open_workspace(drive_dir.path()).unwrap();
-        assert!(drive.needs_replay_writes());
-        let pending = drive.pending_writes();
+        let workspace = lib.open_workspace(drive_dir.path()).unwrap();
+        assert!(workspace.needs_replay_writes());
+        let pending = workspace.pending_writes();
         assert_eq!(pending.len(), 1);
         assert_eq!(pending[0].0, "a.md");
         assert_eq!(pending[0].1, "index");
 
-        // Replay must drive both backends to the on-disk truth.
-        let replayed = drive.replay_pending_writes().unwrap();
+        // Replay must workspace both backends to the on-disk truth.
+        let replayed = workspace.replay_pending_writes().unwrap();
         assert_eq!(replayed, 1);
-        assert!(!drive.needs_replay_writes());
-        assert!(drive.pending_writes().is_empty());
+        assert!(!workspace.needs_replay_writes());
+        assert!(workspace.pending_writes().is_empty());
 
-        let opts = crate::drive::SearchOpts {
+        let opts = crate::workspace::SearchOpts {
             mode: crate::SearchMode::Bm25,
             limit: 10,
             scope: None,
         };
-        let hits = drive.search(probe, &opts).unwrap();
+        let hits = workspace.search(probe, &opts).unwrap();
         assert_eq!(hits.hits.len(), 1);
         assert_eq!(hits.hits[0].path, "a.md");
-        assert!(drive
+        assert!(workspace
             .graph()
             .unwrap()
             .files()
@@ -4753,10 +4753,10 @@ mod tests {
         let lib = Library::open_at(cfg.path().join("config.toml")).unwrap();
         lib.register_workspace(drive_dir.path()).unwrap();
         {
-            let drive = lib.open_workspace(drive_dir.path()).unwrap();
-            drive.write_text("ghost.md", "# ghost\nbody\n").unwrap();
+            let workspace = lib.open_workspace(drive_dir.path()).unwrap();
+            workspace.write_text("ghost.md", "# ghost\nbody\n").unwrap();
             // Index the file so graph + BM25 see it...
-            drive.index_file("ghost.md").unwrap();
+            workspace.index_file("ghost.md").unwrap();
             // ...then plant a journal entry as if a follow-up
             // index_file had crashed, and remove the file from
             // disk to simulate "user also deleted it before
@@ -4764,22 +4764,22 @@ mod tests {
             std::fs::remove_file(drive_dir.path().join("ghost.md")).unwrap();
             let mut map = HashMap::new();
             map.insert("ghost.md".to_string(), PendingOp::Index);
-            persist_pending_writes(&drive.paths.graph_dir, &map).unwrap();
+            persist_pending_writes(&workspace.paths.graph_dir, &map).unwrap();
         }
 
-        let drive = lib.open_workspace(drive_dir.path()).unwrap();
-        assert!(drive.needs_replay_writes());
-        drive.replay_pending_writes().unwrap();
-        assert!(!drive.needs_replay_writes());
+        let workspace = lib.open_workspace(drive_dir.path()).unwrap();
+        assert!(workspace.needs_replay_writes());
+        workspace.replay_pending_writes().unwrap();
+        assert!(!workspace.needs_replay_writes());
 
         // After replay the entry should be gone from both backends.
-        let opts = crate::drive::SearchOpts {
+        let opts = crate::workspace::SearchOpts {
             mode: crate::SearchMode::Bm25,
             limit: 10,
             scope: None,
         };
-        assert!(drive.search("ghost", &opts).unwrap().hits.is_empty());
-        assert!(!drive
+        assert!(workspace.search("ghost", &opts).unwrap().hits.is_empty());
+        assert!(!workspace
             .graph()
             .unwrap()
             .files()
@@ -4798,28 +4798,30 @@ mod tests {
         let lib = Library::open_at(cfg.path().join("config.toml")).unwrap();
         lib.register_workspace(drive_dir.path()).unwrap();
         {
-            let drive = lib.open_workspace(drive_dir.path()).unwrap();
-            drive.write_text("doomed.md", "# doomed\nbody\n").unwrap();
-            drive.index_file("doomed.md").unwrap();
+            let workspace = lib.open_workspace(drive_dir.path()).unwrap();
+            workspace
+                .write_text("doomed.md", "# doomed\nbody\n")
+                .unwrap();
+            workspace.index_file("doomed.md").unwrap();
             // Simulate: forget_file was about to run but crashed
             // after journaling. File is still on disk; journal
             // says "forget."
             let mut map = HashMap::new();
             map.insert("doomed.md".to_string(), PendingOp::Forget);
-            persist_pending_writes(&drive.paths.graph_dir, &map).unwrap();
+            persist_pending_writes(&workspace.paths.graph_dir, &map).unwrap();
         }
 
-        let drive = lib.open_workspace(drive_dir.path()).unwrap();
-        assert!(drive.needs_replay_writes());
-        drive.replay_pending_writes().unwrap();
+        let workspace = lib.open_workspace(drive_dir.path()).unwrap();
+        assert!(workspace.needs_replay_writes());
+        workspace.replay_pending_writes().unwrap();
 
-        let opts = crate::drive::SearchOpts {
+        let opts = crate::workspace::SearchOpts {
             mode: crate::SearchMode::Bm25,
             limit: 10,
             scope: None,
         };
-        assert!(drive.search("doomed", &opts).unwrap().hits.is_empty());
-        assert!(!drive
+        assert!(workspace.search("doomed", &opts).unwrap().hits.is_empty());
+        assert!(!workspace
             .graph()
             .unwrap()
             .files()
@@ -4837,12 +4839,12 @@ mod tests {
         let drive_dir = TempDir::new().unwrap();
         let lib = Library::open_at(cfg.path().join("config.toml")).unwrap();
         lib.register_workspace(drive_dir.path()).unwrap();
-        let drive = lib.open_workspace(drive_dir.path()).unwrap();
-        drive.write_text("a.md", "# a\nalpha\n").unwrap();
-        drive.write_text("b.md", "# b\nbeta\n").unwrap();
-        drive.reindex(None).unwrap();
+        let workspace = lib.open_workspace(drive_dir.path()).unwrap();
+        workspace.write_text("a.md", "# a\nalpha\n").unwrap();
+        workspace.write_text("b.md", "# b\nbeta\n").unwrap();
+        workspace.reindex(None).unwrap();
 
-        let report = drive.reconcile().unwrap();
+        let report = workspace.reconcile().unwrap();
         assert!(report.upserted.is_empty());
         assert!(report.forgotten.is_empty());
         assert_eq!(report.unchanged, 2);
@@ -4858,27 +4860,27 @@ mod tests {
         let drive_dir = TempDir::new().unwrap();
         let lib = Library::open_at(cfg.path().join("config.toml")).unwrap();
         lib.register_workspace(drive_dir.path()).unwrap();
-        let drive = lib.open_workspace(drive_dir.path()).unwrap();
-        drive.write_text("a.md", "# a\nalpha\n").unwrap();
-        drive.reindex(None).unwrap();
+        let workspace = lib.open_workspace(drive_dir.path()).unwrap();
+        workspace.write_text("a.md", "# a\nalpha\n").unwrap();
+        workspace.reindex(None).unwrap();
         // Add a file directly through write_text (skip index_file
         // to mimic "watcher missed it").
-        drive
+        workspace
             .write_text("c.md", "# c\nreconcile-token gamma\n")
             .unwrap();
 
-        let report = drive.reconcile().unwrap();
+        let report = workspace.reconcile().unwrap();
         assert_eq!(report.upserted, vec!["c.md".to_string()]);
         assert!(report.forgotten.is_empty());
         assert_eq!(report.unchanged, 1);
 
         // End state matches a clean reindex: search hits c.md.
-        let opts = crate::drive::SearchOpts {
+        let opts = crate::workspace::SearchOpts {
             mode: crate::SearchMode::Bm25,
             limit: 10,
             scope: None,
         };
-        let hits = drive.search("reconcile-token", &opts).unwrap();
+        let hits = workspace.search("reconcile-token", &opts).unwrap();
         assert_eq!(hits.hits.len(), 1);
         assert_eq!(hits.hits[0].path, "c.md");
     }
@@ -4891,28 +4893,34 @@ mod tests {
         let drive_dir = TempDir::new().unwrap();
         let lib = Library::open_at(cfg.path().join("config.toml")).unwrap();
         lib.register_workspace(drive_dir.path()).unwrap();
-        let drive = lib.open_workspace(drive_dir.path()).unwrap();
-        drive
+        let workspace = lib.open_workspace(drive_dir.path()).unwrap();
+        workspace
             .write_text("doomed.md", "# doomed\nbye-token\n")
             .unwrap();
-        drive.write_text("kept.md", "# kept\nkeep-token\n").unwrap();
-        drive.reindex(None).unwrap();
+        workspace
+            .write_text("kept.md", "# kept\nkeep-token\n")
+            .unwrap();
+        workspace.reindex(None).unwrap();
 
         // Remove the file directly (mimic watcher miss / external rm).
         std::fs::remove_file(drive_dir.path().join("doomed.md")).unwrap();
 
-        let report = drive.reconcile().unwrap();
+        let report = workspace.reconcile().unwrap();
         assert!(report.upserted.is_empty());
         assert_eq!(report.forgotten, vec!["doomed.md".to_string()]);
         assert_eq!(report.unchanged, 1);
 
-        let opts = crate::drive::SearchOpts {
+        let opts = crate::workspace::SearchOpts {
             mode: crate::SearchMode::Bm25,
             limit: 10,
             scope: None,
         };
-        assert!(drive.search("bye-token", &opts).unwrap().hits.is_empty());
-        assert!(!drive
+        assert!(workspace
+            .search("bye-token", &opts)
+            .unwrap()
+            .hits
+            .is_empty());
+        assert!(!workspace
             .graph()
             .unwrap()
             .files()
@@ -4931,16 +4939,16 @@ mod tests {
         let drive_dir = TempDir::new().unwrap();
         let lib = Library::open_at(cfg.path().join("config.toml")).unwrap();
         lib.register_workspace(drive_dir.path()).unwrap();
-        let drive = lib.open_workspace(drive_dir.path()).unwrap();
-        drive
+        let workspace = lib.open_workspace(drive_dir.path()).unwrap();
+        workspace
             .write_text("a.md", "# a\noriginal-content-token\n")
             .unwrap();
-        drive.reindex(None).unwrap();
+        workspace.reindex(None).unwrap();
 
         // Sleep past the 1-second mtime granularity floor of HFS+
         // / older ext4 so the modify is observable via stat. APFS
         // and modern ext4 are nanosecond, but the lowest common
-        // denominator drives the test sleep.
+        // denominator workspaces the test sleep.
         std::thread::sleep(std::time::Duration::from_millis(1100));
         std::fs::write(
             drive_dir.path().join("a.md"),
@@ -4948,22 +4956,22 @@ mod tests {
         )
         .unwrap();
 
-        let report = drive.reconcile().unwrap();
+        let report = workspace.reconcile().unwrap();
         assert_eq!(report.upserted, vec!["a.md".to_string()]);
         assert!(report.forgotten.is_empty());
 
-        let opts = crate::drive::SearchOpts {
+        let opts = crate::workspace::SearchOpts {
             mode: crate::SearchMode::Bm25,
             limit: 10,
             scope: None,
         };
-        assert!(drive
+        assert!(workspace
             .search("replaced-content-token", &opts)
             .unwrap()
             .hits
             .iter()
             .any(|h| h.path == "a.md"));
-        assert!(drive
+        assert!(workspace
             .search("original-content-token", &opts)
             .unwrap()
             .hits
@@ -4982,11 +4990,11 @@ mod tests {
         let drive_dir = TempDir::new().unwrap();
         let lib = Library::open_at(cfg.path().join("config.toml")).unwrap();
         lib.register_workspace(drive_dir.path()).unwrap();
-        let drive = lib.open_workspace(drive_dir.path()).unwrap();
-        drive
+        let workspace = lib.open_workspace(drive_dir.path()).unwrap();
+        workspace
             .write_text("twin.md", "# twin\noriginal-token short\n")
             .unwrap();
-        drive.reindex(None).unwrap();
+        workspace.reindex(None).unwrap();
 
         let file_path = drive_dir.path().join("twin.md");
         let original_modified = fs::metadata(&file_path).unwrap().modified().unwrap();
@@ -5013,18 +5021,18 @@ mod tests {
             "File::set_modified must round-trip exactly; without it the size \
              column is unobservable via this test",
         );
-        let report = drive.reconcile().unwrap();
+        let report = workspace.reconcile().unwrap();
         assert!(
             report.upserted.iter().any(|p| p == "twin.md"),
             "size check should detect content rewrite with restored mtime; got {:?}",
             report,
         );
-        let opts = crate::drive::SearchOpts {
+        let opts = crate::workspace::SearchOpts {
             mode: crate::SearchMode::Bm25,
             limit: 10,
             scope: None,
         };
-        assert!(drive
+        assert!(workspace
             .search("replaced-token", &opts)
             .unwrap()
             .hits
@@ -5057,12 +5065,14 @@ mod tests {
         let drive_dir = TempDir::new().unwrap();
         let lib = Library::open_at(cfg.path().join("config.toml")).unwrap();
         lib.register_workspace(drive_dir.path()).unwrap();
-        let drive = lib.open_workspace(drive_dir.path()).unwrap();
+        let workspace = lib.open_workspace(drive_dir.path()).unwrap();
 
-        drive.write_text("race.md", "# race\nv1 small\n").unwrap();
-        drive.index_file("race.md").unwrap();
+        workspace
+            .write_text("race.md", "# race\nv1 small\n")
+            .unwrap();
+        workspace.index_file("race.md").unwrap();
 
-        let pre_stat = drive.stat("race.md").unwrap();
+        let pre_stat = workspace.stat("race.md").unwrap();
         let pre_size = pre_stat.size;
 
         // Arm the one-shot hook: between stat and read inside the
@@ -5077,7 +5087,7 @@ mod tests {
             fs::write(&file_path, new_body).unwrap();
         }));
 
-        drive.index_file("race.md").unwrap();
+        workspace.index_file("race.md").unwrap();
 
         // Post-conditions: the file on disk is the new body, and the
         // graph row carries the pre-write size. The size delta is
@@ -5086,7 +5096,7 @@ mod tests {
             .unwrap()
             .len();
         assert_eq!(disk_size, new_body_len, "writer hook must have run");
-        let graph_rows = drive.graph().unwrap().files_with_stat().unwrap();
+        let graph_rows = workspace.graph().unwrap().files_with_stat().unwrap();
         let (_, _graph_mtime, graph_size) = graph_rows
             .into_iter()
             .find(|(rel, _, _)| rel == "race.md")
@@ -5100,7 +5110,7 @@ mod tests {
 
         // Reconcile must catch the drift (graph size != disk size)
         // and reindex the file on its next pass.
-        let report = drive.reconcile().unwrap();
+        let report = workspace.reconcile().unwrap();
         assert!(
             report.upserted.iter().any(|p| p == "race.md"),
             "reconcile should detect the stat/content drift; got {:?}",
@@ -5110,7 +5120,7 @@ mod tests {
 
     #[test]
     fn reconcile_on_empty_graph_indexes_everything_like_a_fresh_reindex() {
-        // Edge case: graph is empty (fresh drive, or after a
+        // Edge case: graph is empty (fresh workspace, or after a
         // reset_workspace). Reconcile sees every disk file as "new"
         // and indexes them all. End state must match what a
         // direct reindex would produce.
@@ -5118,12 +5128,12 @@ mod tests {
         let drive_dir = TempDir::new().unwrap();
         let lib = Library::open_at(cfg.path().join("config.toml")).unwrap();
         lib.register_workspace(drive_dir.path()).unwrap();
-        let drive = lib.open_workspace(drive_dir.path()).unwrap();
-        drive.write_text("a.md", "# a\nshared-token\n").unwrap();
-        drive.write_text("b.md", "# b\nshared-token\n").unwrap();
+        let workspace = lib.open_workspace(drive_dir.path()).unwrap();
+        workspace.write_text("a.md", "# a\nshared-token\n").unwrap();
+        workspace.write_text("b.md", "# b\nshared-token\n").unwrap();
         // Skip the initial reindex so the graph stays empty.
 
-        let report = drive.reconcile().unwrap();
+        let report = workspace.reconcile().unwrap();
         assert_eq!(
             report.upserted,
             vec!["a.md".to_string(), "b.md".to_string()]
@@ -5131,12 +5141,12 @@ mod tests {
         assert!(report.forgotten.is_empty());
         assert_eq!(report.unchanged, 0);
 
-        let opts = crate::drive::SearchOpts {
+        let opts = crate::workspace::SearchOpts {
             mode: crate::SearchMode::Bm25,
             limit: 10,
             scope: None,
         };
-        let mut hit_paths: Vec<String> = drive
+        let mut hit_paths: Vec<String> = workspace
             .search("shared-token", &opts)
             .unwrap()
             .hits
@@ -5159,13 +5169,13 @@ mod tests {
         let drive_dir = TempDir::new().unwrap();
         let lib = Library::open_at(cfg.path().join("config.toml")).unwrap();
         lib.register_workspace(drive_dir.path()).unwrap();
-        let drive = lib.open_workspace(drive_dir.path()).unwrap();
-        drive.write_text("a.md", "# a\n").unwrap();
-        drive.write_text("b.md", "# b\n").unwrap();
-        drive.write_text("c.md", "# c\n").unwrap();
+        let workspace = lib.open_workspace(drive_dir.path()).unwrap();
+        workspace.write_text("a.md", "# a\n").unwrap();
+        workspace.write_text("b.md", "# b\n").unwrap();
+        workspace.write_text("c.md", "# c\n").unwrap();
         // Stage a.md and b.md as if a prior reindex got that far
         // and crashed before reaching c.md.
-        let graph = drive.graph().unwrap();
+        let graph = workspace.graph().unwrap();
         for rel in ["a.md", "b.md"] {
             let meta = std::fs::metadata(drive_dir.path().join(rel)).unwrap();
             let mtime = meta
@@ -5190,13 +5200,18 @@ mod tests {
 
         // Reindex: should skip a.md + b.md (already staged) and
         // parse c.md only. Swap then promotes the staged set.
-        drive.reindex(None).unwrap();
+        workspace.reindex(None).unwrap();
         // Live graph contains all three.
-        let mut files = drive.graph().unwrap().files().unwrap();
+        let mut files = workspace.graph().unwrap().files().unwrap();
         files.sort();
         assert_eq!(files, vec!["a.md", "b.md", "c.md"]);
         // Staging is empty after the swap.
-        assert!(drive.graph().unwrap().staging_cursor().unwrap().is_none());
+        assert!(workspace
+            .graph()
+            .unwrap()
+            .staging_cursor()
+            .unwrap()
+            .is_none());
     }
 
     #[test]
@@ -5211,13 +5226,13 @@ mod tests {
         let drive_dir = TempDir::new().unwrap();
         let lib = Library::open_at(cfg.path().join("config.toml")).unwrap();
         lib.register_workspace(drive_dir.path()).unwrap();
-        let drive = lib.open_workspace(drive_dir.path()).unwrap();
-        drive
+        let workspace = lib.open_workspace(drive_dir.path()).unwrap();
+        workspace
             .write_text("a.md", "# old\nold-checkout-token\n")
             .unwrap();
-        drive.write_text("b.md", "# b\n").unwrap();
+        workspace.write_text("b.md", "# b\n").unwrap();
 
-        let graph = drive.graph().unwrap();
+        let graph = workspace.graph().unwrap();
         let fg = crate::graph::FileGraph {
             rel: "a.md",
             title: Some("old"),
@@ -5237,22 +5252,22 @@ mod tests {
             "# new\nnew-checkout-token after checkout\n",
         )
         .unwrap();
-        drive.reindex(None).unwrap();
+        workspace.reindex(None).unwrap();
 
-        let opts = crate::drive::SearchOpts {
+        let opts = crate::workspace::SearchOpts {
             mode: crate::SearchMode::Bm25,
             limit: 10,
             scope: None,
         };
         assert!(
-            drive
+            workspace
                 .search("old-checkout-token", &opts)
                 .unwrap()
                 .hits
                 .is_empty(),
             "stale staged content must not survive resume",
         );
-        let hits = drive.search("new-checkout-token", &opts).unwrap().hits;
+        let hits = workspace.search("new-checkout-token", &opts).unwrap().hits;
         assert_eq!(hits.first().map(|h| h.path.as_str()), Some("a.md"));
     }
 
@@ -5261,7 +5276,7 @@ mod tests {
         // Simulate a checkout by replacing a tracked set of files
         // through atomic renames outside Workspace's write APIs. Once the
         // full rebuild settles, graph + search must match a fresh
-        // drive built directly from the post-checkout tree.
+        // workspace built directly from the post-checkout tree.
         let cfg = TempDir::new().unwrap();
         let drive_dir = TempDir::new().unwrap();
         let fresh_dir = TempDir::new().unwrap();
@@ -5269,15 +5284,17 @@ mod tests {
         lib.register_workspace(drive_dir.path()).unwrap();
         lib.register_workspace(fresh_dir.path()).unwrap();
 
-        let drive = lib.open_workspace(drive_dir.path()).unwrap();
-        drive
+        let workspace = lib.open_workspace(drive_dir.path()).unwrap();
+        workspace
             .write_text("keep.md", "# keep\nshared-token\n")
             .unwrap();
-        drive.write_text("swap.md", "# old\nold-token\n").unwrap();
-        drive
+        workspace
+            .write_text("swap.md", "# old\nold-token\n")
+            .unwrap();
+        workspace
             .write_text("delete.md", "# delete\nold-token\n")
             .unwrap();
-        drive.reindex(None).unwrap();
+        workspace.reindex(None).unwrap();
 
         std::fs::write(
             drive_dir.path().join("swap.tmp"),
@@ -5291,7 +5308,7 @@ mod tests {
         .unwrap();
         std::fs::remove_file(drive_dir.path().join("delete.md")).unwrap();
         std::fs::write(drive_dir.path().join("add.md"), "# add\ncheckout-token\n").unwrap();
-        drive.reindex(None).unwrap();
+        workspace.reindex(None).unwrap();
 
         std::fs::write(fresh_dir.path().join("keep.md"), "# keep\nshared-token\n").unwrap();
         std::fs::write(
@@ -5304,7 +5321,7 @@ mod tests {
         fresh.reindex(None).unwrap();
 
         assert_eq!(
-            capture_recovery_state(&drive, "checkout-token"),
+            capture_recovery_state(&workspace, "checkout-token"),
             capture_recovery_state(&fresh, "checkout-token"),
         );
     }
@@ -5316,9 +5333,9 @@ mod tests {
         let drive_dir = TempDir::new().unwrap();
         let lib = Library::open_at(cfg.path().join("config.toml")).unwrap();
         lib.register_workspace(drive_dir.path()).unwrap();
-        let drive = lib.open_workspace(drive_dir.path()).unwrap();
+        let workspace = lib.open_workspace(drive_dir.path()).unwrap();
         for i in 0..80 {
-            drive
+            workspace
                 .write_text(
                     &format!("notes/note-{i:03}.md"),
                     &format!("# note {i}\n\nseed-token {i}\n"),
@@ -5327,7 +5344,7 @@ mod tests {
         }
 
         let started = std::time::Instant::now();
-        drive.reindex(None).unwrap();
+        workspace.reindex(None).unwrap();
         let initial = started.elapsed();
 
         let started = std::time::Instant::now();
@@ -5337,10 +5354,10 @@ mod tests {
             std::fs::write(&tmp, format!("# note {i}\n\ncheckout-token {i}\n")).unwrap();
             std::fs::rename(tmp, drive_dir.path().join(&rel)).unwrap();
         }
-        drive.reindex(None).unwrap();
+        workspace.reindex(None).unwrap();
         let checkout = started.elapsed();
 
-        let graph = drive.graph().unwrap();
+        let graph = workspace.graph().unwrap();
         for i in 0..20 {
             let rel = format!("notes/note-{i:03}.md");
             let meta = std::fs::metadata(drive_dir.path().join(&rel)).unwrap();
@@ -5363,7 +5380,7 @@ mod tests {
             graph.stage_file(&fg).unwrap();
         }
         let started = std::time::Instant::now();
-        drive.reindex(None).unwrap();
+        workspace.reindex(None).unwrap();
         let resume = started.elapsed();
 
         println!(
@@ -5383,8 +5400,8 @@ mod tests {
         let drive_dir = TempDir::new().unwrap();
         let lib = Library::open_at(cfg.path().join("config.toml")).unwrap();
         lib.register_workspace(drive_dir.path()).unwrap();
-        let drive = lib.open_workspace(drive_dir.path()).unwrap();
-        drive.write_text("alive.md", "# alive\n").unwrap();
+        let workspace = lib.open_workspace(drive_dir.path()).unwrap();
+        workspace.write_text("alive.md", "# alive\n").unwrap();
         // Stage a row for a file that does not exist on disk.
         let fg = crate::graph::FileGraph {
             rel: "ghost.md",
@@ -5397,14 +5414,19 @@ mod tests {
             emails: None,
             aliases: None,
         };
-        drive.graph().unwrap().stage_file(&fg).unwrap();
+        workspace.graph().unwrap().stage_file(&fg).unwrap();
         assert_eq!(
-            drive.graph().unwrap().staging_cursor().unwrap().as_deref(),
+            workspace
+                .graph()
+                .unwrap()
+                .staging_cursor()
+                .unwrap()
+                .as_deref(),
             Some("ghost.md"),
         );
 
-        drive.reindex(None).unwrap();
-        let files = drive.graph().unwrap().files().unwrap();
+        workspace.reindex(None).unwrap();
+        let files = workspace.graph().unwrap().files().unwrap();
         assert!(files.iter().any(|f| f == "alive.md"));
         assert!(
             !files.iter().any(|f| f == "ghost.md"),
@@ -5414,16 +5436,16 @@ mod tests {
 
     #[test]
     fn write_text_rejects_non_text_extensions() {
-        let (_cfg, _root, drive) = fixture();
-        let err = drive.write_text("img.png", "x").unwrap_err();
+        let (_cfg, _root, workspace) = fixture();
+        let err = workspace.write_text("img.png", "x").unwrap_err();
         assert!(matches!(err, ChanError::NotEditableText(_)));
     }
 
     #[test]
     fn read_text_with_stat_returns_content_and_mtime() {
-        let (_cfg, _root, drive) = fixture();
-        drive.write_text("a.md", "hello").unwrap();
-        let (content, stat) = drive.read_text_with_stat("a.md").unwrap();
+        let (_cfg, _root, workspace) = fixture();
+        workspace.write_text("a.md", "hello").unwrap();
+        let (content, stat) = workspace.read_text_with_stat("a.md").unwrap();
         assert_eq!(content, "hello");
         assert_eq!(stat.size, 5);
         assert!(stat.mtime.is_some());
@@ -5433,13 +5455,13 @@ mod tests {
 
     #[test]
     fn read_text_with_stat_chunked_preserves_utf8_boundaries() {
-        let (_cfg, _root, drive) = fixture();
-        drive.write_text("a.md", "aé€𐍈z").unwrap();
+        let (_cfg, _root, workspace) = fixture();
+        workspace.write_text("a.md", "aé€𐍈z").unwrap();
         let mut saw_meta = false;
         let mut saw_done = false;
         let mut chunks = Vec::new();
 
-        drive
+        workspace
             .read_text_with_stat_chunked("a.md", 1, |event| {
                 match event {
                     TextReadEvent::Meta(stat) => {
@@ -5461,10 +5483,10 @@ mod tests {
 
     #[test]
     fn read_text_with_stat_chunked_rejects_invalid_utf8() {
-        let (_cfg, root, drive) = fixture();
+        let (_cfg, root, workspace) = fixture();
         std::fs::write(root.path().join("bad.md"), [b'a', 0xff]).unwrap();
 
-        let err = drive
+        let err = workspace
             .read_text_with_stat_chunked("bad.md", 1, |_| true)
             .unwrap_err();
 
@@ -5473,10 +5495,10 @@ mod tests {
 
     #[test]
     fn read_text_with_stat_chunked_rejects_non_editable_paths() {
-        let (_cfg, root, drive) = fixture();
+        let (_cfg, root, workspace) = fixture();
         std::fs::write(root.path().join("image.bin"), [0, 1, 2, 3]).unwrap();
 
-        let err = drive
+        let err = workspace
             .read_text_with_stat_chunked("image.bin", TEXT_READ_CHUNK_SIZE, |_| true)
             .unwrap_err();
 
@@ -5487,11 +5509,11 @@ mod tests {
     #[test]
     fn read_text_with_stat_chunked_rejects_symlink_target() {
         use std::os::unix::fs::symlink;
-        let (_cfg, root, drive) = fixture();
+        let (_cfg, root, workspace) = fixture();
         std::fs::write(root.path().join("real.md"), "hi").unwrap();
         symlink("real.md", root.path().join("alias.md")).unwrap();
 
-        let err = drive
+        let err = workspace
             .read_text_with_stat_chunked("alias.md", TEXT_READ_CHUNK_SIZE, |_| true)
             .unwrap_err();
 
@@ -5500,11 +5522,11 @@ mod tests {
 
     #[test]
     fn read_text_with_stat_chunked_stops_when_callback_returns_false() {
-        let (_cfg, _root, drive) = fixture();
-        drive.write_text("a.md", "abcdef").unwrap();
+        let (_cfg, _root, workspace) = fixture();
+        workspace.write_text("a.md", "abcdef").unwrap();
         let mut chunks = 0usize;
 
-        drive
+        workspace
             .read_text_with_stat_chunked("a.md", 1, |event| match event {
                 TextReadEvent::Meta(_) => true,
                 TextReadEvent::Chunk(_) => {
@@ -5520,16 +5542,18 @@ mod tests {
 
     #[test]
     fn write_text_if_unchanged_creates_when_missing_with_none() {
-        let (_cfg, _root, drive) = fixture();
-        drive.write_text_if_unchanged("a.md", None, "v1").unwrap();
-        assert_eq!(drive.read_text("a.md").unwrap(), "v1");
+        let (_cfg, _root, workspace) = fixture();
+        workspace
+            .write_text_if_unchanged("a.md", None, "v1")
+            .unwrap();
+        assert_eq!(workspace.read_text("a.md").unwrap(), "v1");
     }
 
     #[test]
     fn write_text_if_unchanged_conflicts_when_none_but_file_exists() {
-        let (_cfg, _root, drive) = fixture();
-        drive.write_text("a.md", "v1").unwrap();
-        let err = drive
+        let (_cfg, _root, workspace) = fixture();
+        workspace.write_text("a.md", "v1").unwrap();
+        let err = workspace
             .write_text_if_unchanged("a.md", None, "v2")
             .unwrap_err();
         assert!(matches!(
@@ -5538,13 +5562,13 @@ mod tests {
                 current_mtime_ns: Some(_)
             }
         ));
-        assert_eq!(drive.read_text("a.md").unwrap(), "v1");
+        assert_eq!(workspace.read_text("a.md").unwrap(), "v1");
     }
 
     #[test]
     fn write_text_if_unchanged_conflicts_when_expected_but_missing() {
-        let (_cfg, _root, drive) = fixture();
-        let err = drive
+        let (_cfg, _root, workspace) = fixture();
+        let err = workspace
             .write_text_if_unchanged("a.md", Some(0), "v1")
             .unwrap_err();
         assert!(matches!(
@@ -5553,26 +5577,26 @@ mod tests {
                 current_mtime_ns: None
             }
         ));
-        assert!(!drive.exists("a.md"));
+        assert!(!workspace.exists("a.md"));
     }
 
     #[test]
     fn write_text_if_unchanged_succeeds_with_matching_mtime() {
-        let (_cfg, _root, drive) = fixture();
-        drive.write_text("a.md", "v1").unwrap();
-        let (_, stat) = drive.read_text_with_stat("a.md").unwrap();
-        drive
+        let (_cfg, _root, workspace) = fixture();
+        workspace.write_text("a.md", "v1").unwrap();
+        let (_, stat) = workspace.read_text_with_stat("a.md").unwrap();
+        workspace
             .write_text_if_unchanged("a.md", stat.mtime_ns, "v2")
             .unwrap();
-        assert_eq!(drive.read_text("a.md").unwrap(), "v2");
+        assert_eq!(workspace.read_text("a.md").unwrap(), "v2");
     }
 
     #[test]
     fn write_text_if_unchanged_conflicts_with_stale_mtime() {
-        let (_cfg, _root, drive) = fixture();
-        drive.write_text("a.md", "v1").unwrap();
+        let (_cfg, _root, workspace) = fixture();
+        workspace.write_text("a.md", "v1").unwrap();
         let stale = Some(0i64);
-        let err = drive
+        let err = workspace
             .write_text_if_unchanged("a.md", stale, "v2")
             .unwrap_err();
         match err {
@@ -5582,7 +5606,7 @@ mod tests {
             }
             other => panic!("expected WriteConflict, got {other:?}"),
         }
-        assert_eq!(drive.read_text("a.md").unwrap(), "v1");
+        assert_eq!(workspace.read_text("a.md").unwrap(), "v1");
     }
 
     /// Two saves landing within the same wall-clock second on a
@@ -5594,16 +5618,16 @@ mod tests {
     /// writes.
     #[test]
     fn write_text_if_unchanged_detects_subsecond_conflict() {
-        let (_cfg, _root, drive) = fixture();
-        drive.write_text("a.md", "v1").unwrap();
-        let stale_ns = drive.stat("a.md").unwrap().mtime_ns;
+        let (_cfg, _root, workspace) = fixture();
+        workspace.write_text("a.md", "v1").unwrap();
+        let stale_ns = workspace.stat("a.md").unwrap().mtime_ns;
         // Tight loop until mtime_ns advances. On filesystems with
         // only seconds resolution this would spin until the next
         // second boundary; cap at 200ms.
         let start = std::time::Instant::now();
         loop {
-            drive.write_text("a.md", "v2").unwrap();
-            let now_ns = drive.stat("a.md").unwrap().mtime_ns;
+            workspace.write_text("a.md", "v2").unwrap();
+            let now_ns = workspace.stat("a.md").unwrap().mtime_ns;
             if now_ns != stale_ns {
                 break;
             }
@@ -5616,55 +5640,60 @@ mod tests {
         // Now an attempt to write back with the original (pre-v2)
         // stat must conflict. Without ns precision, two same-second
         // writes would collide and let this through.
-        let err = drive
+        let err = workspace
             .write_text_if_unchanged("a.md", stale_ns, "v3")
             .unwrap_err();
         assert!(matches!(err, ChanError::WriteConflict { .. }));
-        assert_eq!(drive.read_text("a.md").unwrap(), "v2");
+        assert_eq!(workspace.read_text("a.md").unwrap(), "v2");
     }
 
     #[test]
     fn write_bytes_allows_binary() {
-        let (_cfg, _root, drive) = fixture();
-        drive.write_bytes("img.png", &[0xff, 0xd8, 0xff]).unwrap();
-        assert_eq!(drive.read("img.png").unwrap(), vec![0xff, 0xd8, 0xff]);
+        let (_cfg, _root, workspace) = fixture();
+        workspace
+            .write_bytes("img.png", &[0xff, 0xd8, 0xff])
+            .unwrap();
+        assert_eq!(workspace.read("img.png").unwrap(), vec![0xff, 0xd8, 0xff]);
     }
 
     #[test]
     fn write_bytes_rejects_binary_for_editable_text_path() {
-        let (_cfg, _root, drive) = fixture();
+        let (_cfg, _root, workspace) = fixture();
 
-        let err = drive.write_bytes("note.md", &[0xff, 0xfe]).unwrap_err();
+        let err = workspace.write_bytes("note.md", &[0xff, 0xfe]).unwrap_err();
 
         assert!(err
             .to_string()
             .contains("non-UTF-8 bytes to editable text file"));
-        assert!(!drive.exists("note.md"));
+        assert!(!workspace.exists("note.md"));
     }
 
     #[test]
     fn write_bytes_routes_drafts_binary_to_metadata_dir() {
-        let (_cfg, root, drive) = fixture();
-        drive.create_draft_dir("untitled-1").unwrap();
-        drive
+        let (_cfg, root, workspace) = fixture();
+        workspace.create_draft_dir("untitled-1").unwrap();
+        workspace
             .write_bytes("Drafts/untitled-1/pasted.png", &[0x89, b'P', b'N', b'G'])
             .unwrap();
 
         assert_eq!(
-            drive.read("Drafts/untitled-1/pasted.png").unwrap(),
+            workspace.read("Drafts/untitled-1/pasted.png").unwrap(),
             vec![0x89, b'P', b'N', b'G']
         );
-        assert!(drive.drafts_dir().join("untitled-1/pasted.png").is_file());
+        assert!(workspace
+            .drafts_dir()
+            .join("untitled-1/pasted.png")
+            .is_file());
         assert!(!root.path().join("Drafts/untitled-1/pasted.png").exists());
     }
 
     #[test]
     fn write_text_rejects_oversize_content_for_new_file() {
-        let (_cfg, _root, drive) = fixture();
+        let (_cfg, _root, workspace) = fixture();
         // One byte over the cap. Allocating 2 MiB+1 is fine; the
         // guard rejects before any I/O.
         let big = "x".repeat(TEXT_WRITE_LIMIT as usize + 1);
-        let err = drive.write_text("a.md", &big).unwrap_err();
+        let err = workspace.write_text("a.md", &big).unwrap_err();
         match err {
             ChanError::WriteTooLarge { kind, size, limit } => {
                 assert_eq!(kind, "text");
@@ -5673,20 +5702,20 @@ mod tests {
             }
             other => panic!("unexpected error: {other:?}"),
         }
-        assert!(!drive.exists("a.md"));
+        assert!(!workspace.exists("a.md"));
     }
 
     #[test]
     fn write_bytes_rejects_oversize_content_for_new_file() {
-        let (_cfg, _root, drive) = fixture();
+        let (_cfg, _root, workspace) = fixture();
         // 50 MiB+1 byte. Heap-alloc once; cheap.
         let big = vec![0u8; BYTES_WRITE_LIMIT as usize + 1];
-        let err = drive.write_bytes("blob.bin", &big).unwrap_err();
+        let err = workspace.write_bytes("blob.bin", &big).unwrap_err();
         assert!(matches!(
             err,
             ChanError::WriteTooLarge { kind: "bytes", .. }
         ));
-        assert!(!drive.exists("blob.bin"));
+        assert!(!workspace.exists("blob.bin"));
     }
 
     /// A pre-cap file (or a binary mistakenly named `.md`) larger
@@ -5696,18 +5725,18 @@ mod tests {
     /// turn every legacy big file read-only on next save.
     #[test]
     fn write_text_allows_edits_to_legacy_oversize_file() {
-        let (_cfg, root, drive) = fixture();
+        let (_cfg, root, workspace) = fixture();
         // Plant a 3 MiB file directly via std (bypasses the cap).
         let path = root.path().join("legacy.md");
         let big = "y".repeat(TEXT_WRITE_LIMIT as usize + 1024 * 1024);
         std::fs::write(&path, &big).unwrap();
         // Editing the file at the same size succeeds.
         let same_size = "z".repeat(big.len());
-        drive.write_text("legacy.md", &same_size).unwrap();
+        workspace.write_text("legacy.md", &same_size).unwrap();
         assert_eq!(std::fs::metadata(&path).unwrap().len() as usize, big.len());
         // Shrinking succeeds (well within max(prev, limit)).
-        drive.write_text("legacy.md", "shrunk").unwrap();
-        assert_eq!(drive.read_text("legacy.md").unwrap(), "shrunk");
+        workspace.write_text("legacy.md", "shrunk").unwrap();
+        assert_eq!(workspace.read_text("legacy.md").unwrap(), "shrunk");
     }
 
     /// Growing a legacy oversize file past its current size IS
@@ -5715,13 +5744,13 @@ mod tests {
     /// limit), so a 3 MiB file caps at 3 MiB on the next write.
     #[test]
     fn write_text_rejects_growth_past_legacy_size() {
-        let (_cfg, root, drive) = fixture();
+        let (_cfg, root, workspace) = fixture();
         let path = root.path().join("legacy.md");
         let prev = "y".repeat(TEXT_WRITE_LIMIT as usize + 1024);
         std::fs::write(&path, &prev).unwrap();
         // One byte over the existing size, well above the configured cap.
         let grown = "z".repeat(prev.len() + 1);
-        let err = drive.write_text("legacy.md", &grown).unwrap_err();
+        let err = workspace.write_text("legacy.md", &grown).unwrap_err();
         match err {
             ChanError::WriteTooLarge { limit, size, .. } => {
                 assert_eq!(limit, prev.len() as u64, "effective limit = prev size");
@@ -5735,11 +5764,11 @@ mod tests {
 
     #[test]
     fn list_skips_chan_and_git_at_top_level() {
-        let (_cfg, root, drive) = fixture();
+        let (_cfg, root, workspace) = fixture();
         std::fs::create_dir_all(root.path().join(".chan")).unwrap();
         std::fs::create_dir_all(root.path().join(".git")).unwrap();
         std::fs::write(root.path().join("note.md"), "hi").unwrap();
-        let entries = drive.list("").unwrap();
+        let entries = workspace.list("").unwrap();
         let names: Vec<_> = entries.iter().map(|e| e.name.as_str()).collect();
         assert!(names.contains(&"note.md"));
         assert!(!names.contains(&".chan"));
@@ -5748,11 +5777,11 @@ mod tests {
 
     #[test]
     fn rename_moves_file() {
-        let (_cfg, _root, drive) = fixture();
-        drive.write_text("a.md", "x").unwrap();
-        drive.rename("a.md", "b/c.md").unwrap();
-        assert!(!drive.exists("a.md"));
-        assert!(drive.exists("b/c.md"));
+        let (_cfg, _root, workspace) = fixture();
+        workspace.write_text("a.md", "x").unwrap();
+        workspace.rename("a.md", "b/c.md").unwrap();
+        assert!(!workspace.exists("a.md"));
+        assert!(workspace.exists("b/c.md"));
     }
 
     // systacean-20: gated on Unix because Windows lock primitive
@@ -5769,7 +5798,7 @@ mod tests {
         assert!(matches!(err, ChanError::WorkspaceLocked));
     }
 
-    /// Defensive: if the registered drive path has been replaced by
+    /// Defensive: if the registered workspace path has been replaced by
     /// a symlink (or a regular file) between registration and the
     /// next open, refuse rather than carry on as if it were still a
     /// real directory.
@@ -5781,7 +5810,7 @@ mod tests {
         let real = TempDir::new().unwrap();
         let staging = TempDir::new().unwrap();
         // Register a real directory ...
-        let registered_path = staging.path().join("drive");
+        let registered_path = staging.path().join("workspace");
         std::fs::create_dir(&registered_path).unwrap();
         let lib = Library::open_at(cfg.path().join("config.toml")).unwrap();
         lib.register_workspace(&registered_path).unwrap();
@@ -5796,13 +5825,13 @@ mod tests {
     fn open_refuses_when_root_is_regular_file() {
         let cfg = TempDir::new().unwrap();
         let staging = TempDir::new().unwrap();
-        let registered_path = staging.path().join("drive");
+        let registered_path = staging.path().join("workspace");
         std::fs::create_dir(&registered_path).unwrap();
         let lib = Library::open_at(cfg.path().join("config.toml")).unwrap();
         lib.register_workspace(&registered_path).unwrap();
         // Replace the directory with a regular file.
         std::fs::remove_dir(&registered_path).unwrap();
-        std::fs::write(&registered_path, b"not a drive").unwrap();
+        std::fs::write(&registered_path, b"not a workspace").unwrap();
         let err = lib.open_workspace(&registered_path).unwrap_err();
         assert!(matches!(err, ChanError::SpecialFile { .. }));
     }
@@ -5811,10 +5840,10 @@ mod tests {
     #[test]
     fn read_text_rejects_symlink_target() {
         use std::os::unix::fs::symlink;
-        let (_cfg, root, drive) = fixture();
+        let (_cfg, root, workspace) = fixture();
         std::fs::write(root.path().join("real.md"), "hi").unwrap();
         symlink("real.md", root.path().join("alias.md")).unwrap();
-        let err = drive.read_text("alias.md").unwrap_err();
+        let err = workspace.read_text("alias.md").unwrap_err();
         assert!(matches!(err, ChanError::SpecialFile { .. }));
     }
 
@@ -5822,9 +5851,9 @@ mod tests {
     #[test]
     fn read_rejects_unix_socket() {
         use std::os::unix::net::UnixListener;
-        let (_cfg, root, drive) = fixture();
+        let (_cfg, root, workspace) = fixture();
         let _l = UnixListener::bind(root.path().join("s")).unwrap();
-        let err = drive.read("s").unwrap_err();
+        let err = workspace.read("s").unwrap_err();
         assert!(matches!(err, ChanError::SpecialFile { .. }));
     }
 
@@ -5832,10 +5861,10 @@ mod tests {
     #[test]
     fn write_text_refuses_to_clobber_symlink() {
         use std::os::unix::fs::symlink;
-        let (_cfg, root, drive) = fixture();
+        let (_cfg, root, workspace) = fixture();
         std::fs::write(root.path().join("target.md"), "v1").unwrap();
         symlink("target.md", root.path().join("today.md")).unwrap();
-        let err = drive.write_text("today.md", "v2").unwrap_err();
+        let err = workspace.write_text("today.md", "v2").unwrap_err();
         assert!(matches!(err, ChanError::SpecialFile { .. }));
         // Both the symlink and its target are intact.
         assert_eq!(
@@ -5849,9 +5878,9 @@ mod tests {
     fn write_refuses_through_midpath_symlink_to_outside() {
         use std::os::unix::fs::symlink;
         let outside = TempDir::new().unwrap();
-        let (_cfg, root, drive) = fixture();
+        let (_cfg, root, workspace) = fixture();
         symlink(outside.path(), root.path().join("Backup")).unwrap();
-        let err = drive.write_text("Backup/today.md", "x").unwrap_err();
+        let err = workspace.write_text("Backup/today.md", "x").unwrap_err();
         assert!(matches!(err, ChanError::SymlinkEscape(_)));
         // The escape path was never written.
         assert!(!outside.path().join("today.md").exists());
@@ -5862,11 +5891,11 @@ mod tests {
     fn list_tree_drops_symlinks_and_sockets() {
         use std::os::unix::fs::symlink;
         use std::os::unix::net::UnixListener;
-        let (_cfg, root, drive) = fixture();
+        let (_cfg, root, workspace) = fixture();
         std::fs::write(root.path().join("note.md"), "hi").unwrap();
         symlink("note.md", root.path().join("alias.md")).unwrap();
         let _l = UnixListener::bind(root.path().join("sock")).unwrap();
-        let entries = drive.list_tree().unwrap();
+        let entries = workspace.list_tree().unwrap();
         let paths: Vec<_> = entries.iter().map(|e| e.path.clone()).collect();
         assert!(paths.contains(&"note.md".to_string()));
         assert!(!paths.iter().any(|p| p == "alias.md"));
@@ -5878,12 +5907,12 @@ mod tests {
     fn list_keeps_symlink_entries_visible() {
         use std::os::unix::fs::symlink;
         use std::os::unix::net::UnixListener;
-        let (_cfg, root, drive) = fixture();
+        let (_cfg, root, workspace) = fixture();
         std::fs::write(root.path().join("note.md"), "hi").unwrap();
         symlink("note.md", root.path().join("alias.md")).unwrap();
         let _l = UnixListener::bind(root.path().join("sock")).unwrap();
 
-        let entries = drive.list("").unwrap();
+        let entries = workspace.list("").unwrap();
         let names: Vec<_> = entries.iter().map(|e| e.name.as_str()).collect();
         assert!(names.contains(&"note.md"));
         assert!(names.contains(&"alias.md"));
@@ -5892,13 +5921,13 @@ mod tests {
 
     #[test]
     fn list_tree_prefix_scopes_walk_and_keeps_root_relative_paths() {
-        let (_cfg, _root, drive) = fixture();
-        drive.write_text("notes/a.md", "a").unwrap();
-        drive.write_text("notes/deep/b.md", "b").unwrap();
-        drive.write_text("other/c.md", "c").unwrap();
-        drive.write_text("top.md", "t").unwrap();
+        let (_cfg, _root, workspace) = fixture();
+        workspace.write_text("notes/a.md", "a").unwrap();
+        workspace.write_text("notes/deep/b.md", "b").unwrap();
+        workspace.write_text("other/c.md", "c").unwrap();
+        workspace.write_text("top.md", "t").unwrap();
 
-        let entries = drive.list_tree_prefix("notes").unwrap();
+        let entries = workspace.list_tree_prefix("notes").unwrap();
         let paths: Vec<_> = entries.iter().map(|e| e.path.as_str()).collect();
         // Prefix entry plus everything under it; nothing outside.
         assert!(paths.contains(&"notes"));
@@ -5912,12 +5941,12 @@ mod tests {
     #[test]
     fn list_tree_prefix_with_trailing_slash_normalizes() {
         // The list_files tool trims a trailing slash before calling
-        // us; verify the drive method itself accepts both shapes so
+        // us; verify the workspace method itself accepts both shapes so
         // host-direct callers don't trip on the slash.
-        let (_cfg, _root, drive) = fixture();
-        drive.write_text("notes/a.md", "a").unwrap();
-        let with_slash = drive.list_tree_prefix("notes/").unwrap();
-        let without = drive.list_tree_prefix("notes").unwrap();
+        let (_cfg, _root, workspace) = fixture();
+        workspace.write_text("notes/a.md", "a").unwrap();
+        let with_slash = workspace.list_tree_prefix("notes/").unwrap();
+        let without = workspace.list_tree_prefix("notes").unwrap();
         assert_eq!(
             with_slash.iter().map(|e| &e.path).collect::<Vec<_>>(),
             without.iter().map(|e| &e.path).collect::<Vec<_>>(),
@@ -5928,40 +5957,40 @@ mod tests {
     #[test]
     fn list_tree_prefix_rejects_midpath_symlink_outside_drive() {
         use std::os::unix::fs::symlink;
-        let (_cfg, root, drive) = fixture();
+        let (_cfg, root, workspace) = fixture();
         let outside = TempDir::new().unwrap();
         std::fs::create_dir_all(outside.path().join("victim")).unwrap();
         std::fs::write(outside.path().join("victim/leak.md"), "secret").unwrap();
-        // Create a symlink inside the drive that points outside it.
+        // Create a symlink inside the workspace that points outside it.
         // resolve_safe_strict canonicalizes the deepest existing
-        // ancestor and rejects anything that lands above the drive
+        // ancestor and rejects anything that lands above the workspace
         // root, so list_tree_prefix must error rather than walk into
         // the foreign tree.
         symlink(outside.path(), root.path().join("escape")).unwrap();
-        let err = drive.list_tree_prefix("escape/victim").unwrap_err();
+        let err = workspace.list_tree_prefix("escape/victim").unwrap_err();
         assert!(matches!(err, ChanError::SymlinkEscape(_)), "got {err:?}");
     }
 
     #[test]
     fn list_tree_prefix_rejects_dotdot() {
-        let (_cfg, _root, drive) = fixture();
-        let err = drive.list_tree_prefix("../escape").unwrap_err();
+        let (_cfg, _root, workspace) = fixture();
+        let err = workspace.list_tree_prefix("../escape").unwrap_err();
         assert!(matches!(err, ChanError::PathEscape), "got {err:?}");
     }
 
     #[test]
     fn list_tree_unified_includes_drafts_metadata_namespace() {
-        let (_cfg, _root, drive) = fixture();
-        drive.write_text("notes/intro.md", "# intro\n").unwrap();
-        drive.create_draft_dir("untitled-1").unwrap();
-        drive
+        let (_cfg, _root, workspace) = fixture();
+        workspace.write_text("notes/intro.md", "# intro\n").unwrap();
+        workspace.create_draft_dir("untitled-1").unwrap();
+        workspace
             .write_text("Drafts/untitled-1/draft.md", "# draft\n")
             .unwrap();
-        drive
+        workspace
             .write_bytes("Drafts/untitled-1/pasted.png", &[1, 2, 3])
             .unwrap();
 
-        let entries = drive.list_tree_unified().unwrap();
+        let entries = workspace.list_tree_unified().unwrap();
         let paths: Vec<_> = entries.iter().map(|entry| entry.path.as_str()).collect();
         assert!(paths.contains(&"notes/intro.md"));
         assert!(paths.contains(&"Drafts"));
@@ -5972,17 +6001,19 @@ mod tests {
 
     #[test]
     fn list_tree_prefix_unified_scopes_drafts_metadata_namespace() {
-        let (_cfg, _root, drive) = fixture();
-        drive.create_draft_dir("untitled-1").unwrap();
-        drive.create_draft_dir("untitled-2").unwrap();
-        drive
+        let (_cfg, _root, workspace) = fixture();
+        workspace.create_draft_dir("untitled-1").unwrap();
+        workspace.create_draft_dir("untitled-2").unwrap();
+        workspace
             .write_text("Drafts/untitled-1/draft.md", "# draft\n")
             .unwrap();
-        drive
+        workspace
             .write_text("Drafts/untitled-2/draft.md", "# other\n")
             .unwrap();
 
-        let entries = drive.list_tree_prefix_unified("Drafts/untitled-1").unwrap();
+        let entries = workspace
+            .list_tree_prefix_unified("Drafts/untitled-1")
+            .unwrap();
         let paths: Vec<_> = entries.iter().map(|entry| entry.path.as_str()).collect();
         assert!(paths.contains(&"Drafts/untitled-1"));
         assert!(paths.contains(&"Drafts/untitled-1/draft.md"));
@@ -5995,14 +6026,14 @@ mod tests {
     #[test]
     fn remove_rejects_symlink_with_special_file_error() {
         use std::os::unix::fs::symlink;
-        let (_cfg, root, drive) = fixture();
+        let (_cfg, root, workspace) = fixture();
         std::fs::write(root.path().join("real.md"), "hi").unwrap();
         symlink("real.md", root.path().join("alias.md")).unwrap();
         // Trash refuses to swallow non-regular non-directory entries:
         // restoring a symlink across a cross-fs trash is fragile, and
-        // chan-drive never creates them on its own. Users delete them
+        // chan-workspace never creates them on its own. Users delete them
         // out-of-band if they really want them gone.
-        let err = drive.remove("alias.md").unwrap_err();
+        let err = workspace.remove("alias.md").unwrap_err();
         assert!(matches!(err, ChanError::SpecialFile { .. }));
         // Both the symlink and its target are intact.
         assert!(root.path().join("alias.md").symlink_metadata().is_ok());
@@ -6011,59 +6042,59 @@ mod tests {
 
     #[test]
     fn remove_then_restore_round_trips() {
-        let (_cfg, _root, drive) = fixture();
-        drive.write_text("notes/a.md", "hello").unwrap();
-        drive.remove("notes/a.md").unwrap();
-        assert!(!drive.exists("notes/a.md"));
-        let entries = drive.trash_list().unwrap();
+        let (_cfg, _root, workspace) = fixture();
+        workspace.write_text("notes/a.md", "hello").unwrap();
+        workspace.remove("notes/a.md").unwrap();
+        assert!(!workspace.exists("notes/a.md"));
+        let entries = workspace.trash_list().unwrap();
         assert_eq!(entries.len(), 1);
         assert_eq!(entries[0].original_path, "notes/a.md");
-        drive.trash_restore(&entries[0].id).unwrap();
-        assert_eq!(drive.read_text("notes/a.md").unwrap(), "hello");
-        assert!(drive.trash_list().unwrap().is_empty());
+        workspace.trash_restore(&entries[0].id).unwrap();
+        assert_eq!(workspace.read_text("notes/a.md").unwrap(), "hello");
+        assert!(workspace.trash_list().unwrap().is_empty());
     }
 
     #[test]
     fn remove_recursive_directory() {
-        let (_cfg, _root, drive) = fixture();
-        drive.write_text("notes/a.md", "a").unwrap();
-        drive.write_text("notes/sub/b.md", "bb").unwrap();
-        drive.remove("notes").unwrap();
-        assert!(!drive.exists("notes/a.md"));
-        let entries = drive.trash_list().unwrap();
+        let (_cfg, _root, workspace) = fixture();
+        workspace.write_text("notes/a.md", "a").unwrap();
+        workspace.write_text("notes/sub/b.md", "bb").unwrap();
+        workspace.remove("notes").unwrap();
+        assert!(!workspace.exists("notes/a.md"));
+        let entries = workspace.trash_list().unwrap();
         assert_eq!(entries.len(), 1);
         assert!(entries[0].is_dir);
-        drive.trash_restore(&entries[0].id).unwrap();
-        assert_eq!(drive.read_text("notes/a.md").unwrap(), "a");
-        assert_eq!(drive.read_text("notes/sub/b.md").unwrap(), "bb");
+        workspace.trash_restore(&entries[0].id).unwrap();
+        assert_eq!(workspace.read_text("notes/a.md").unwrap(), "a");
+        assert_eq!(workspace.read_text("notes/sub/b.md").unwrap(), "bb");
     }
 
     #[test]
     fn trash_restore_refuses_when_dest_exists() {
-        let (_cfg, _root, drive) = fixture();
-        drive.write_text("a.md", "v1").unwrap();
-        drive.remove("a.md").unwrap();
-        drive.write_text("a.md", "v2").unwrap();
-        let id = drive.trash_list().unwrap()[0].id.clone();
-        let err = drive.trash_restore(&id).unwrap_err();
+        let (_cfg, _root, workspace) = fixture();
+        workspace.write_text("a.md", "v1").unwrap();
+        workspace.remove("a.md").unwrap();
+        workspace.write_text("a.md", "v2").unwrap();
+        let id = workspace.trash_list().unwrap()[0].id.clone();
+        let err = workspace.trash_restore(&id).unwrap_err();
         assert!(matches!(err, ChanError::TrashOccupied(_)));
-        assert_eq!(drive.read_text("a.md").unwrap(), "v2");
-        assert_eq!(drive.trash_list().unwrap().len(), 1);
+        assert_eq!(workspace.read_text("a.md").unwrap(), "v2");
+        assert_eq!(workspace.trash_list().unwrap().len(), 1);
     }
 
     #[test]
     fn trash_purge_and_empty() {
-        let (_cfg, _root, drive) = fixture();
-        drive.write_text("a.md", "x").unwrap();
-        drive.write_text("b.md", "y").unwrap();
-        drive.remove("a.md").unwrap();
-        drive.remove("b.md").unwrap();
-        let entries = drive.trash_list().unwrap();
+        let (_cfg, _root, workspace) = fixture();
+        workspace.write_text("a.md", "x").unwrap();
+        workspace.write_text("b.md", "y").unwrap();
+        workspace.remove("a.md").unwrap();
+        workspace.remove("b.md").unwrap();
+        let entries = workspace.trash_list().unwrap();
         assert_eq!(entries.len(), 2);
-        drive.trash_purge(&entries[0].id).unwrap();
-        assert_eq!(drive.trash_list().unwrap().len(), 1);
-        drive.trash_empty().unwrap();
-        assert!(drive.trash_list().unwrap().is_empty());
+        workspace.trash_purge(&entries[0].id).unwrap();
+        assert_eq!(workspace.trash_list().unwrap().len(), 1);
+        workspace.trash_empty().unwrap();
+        assert!(workspace.trash_list().unwrap().is_empty());
     }
 
     // ---- drafts (systacean-24) ----
@@ -6072,23 +6103,23 @@ mod tests {
     fn drafts_dir_exists_after_drive_open() {
         // systacean-24: Workspace::open eagerly ensures the drafts
         // subtree exists so callers don't need to re-check.
-        let (_cfg, _root, drive) = fixture();
+        let (_cfg, _root, workspace) = fixture();
         assert!(
-            drive.drafts_dir().is_dir(),
+            workspace.drafts_dir().is_dir(),
             "drafts dir should be ready after Workspace::open: {}",
-            drive.drafts_dir().display()
+            workspace.drafts_dir().display()
         );
-        assert!(drive.list_drafts().unwrap().is_empty());
+        assert!(workspace.list_drafts().unwrap().is_empty());
     }
 
     #[test]
     fn drafts_create_list_and_promote_roundtrip() {
         // systacean-24 round-trip: create two drafts, list them,
-        // promote one into the drive root + verify the directory
+        // promote one into the workspace root + verify the directory
         // moved + the draft is no longer listed.
-        let (_cfg, root, drive) = fixture();
-        let a = drive.create_draft_dir("untitled-1").unwrap();
-        let b = drive.create_draft_dir("rich-prompt-2").unwrap();
+        let (_cfg, root, workspace) = fixture();
+        let a = workspace.create_draft_dir("untitled-1").unwrap();
+        let b = workspace.create_draft_dir("rich-prompt-2").unwrap();
         assert!(a.abs.is_dir());
         assert!(b.abs.is_dir());
 
@@ -6097,21 +6128,21 @@ mod tests {
         std::fs::write(a.abs.join("draft.md"), b"# hello\n").unwrap();
         std::fs::write(a.abs.join("pasted.png"), [1, 2, 3]).unwrap();
 
-        let listed = drive.list_drafts().unwrap();
+        let listed = workspace.list_drafts().unwrap();
         assert_eq!(listed.len(), 2);
         // Sorted by name.
         assert_eq!(listed[0].name, "rich-prompt-2");
         assert_eq!(listed[1].name, "untitled-1");
 
-        // Promote untitled-1 into the drive root.
-        drive.promote_draft("untitled-1", "untitled-1").unwrap();
+        // Promote untitled-1 into the workspace root.
+        workspace.promote_draft("untitled-1", "untitled-1").unwrap();
         assert!(root.path().join("untitled-1").is_dir());
         assert!(root.path().join("untitled-1").join("draft.md").is_file());
         assert!(root.path().join("untitled-1").join("pasted.png").is_file());
-        assert!(!drive.drafts_dir().join("untitled-1").exists());
+        assert!(!workspace.drafts_dir().join("untitled-1").exists());
 
         // rich-prompt-2 still listed; untitled-1 gone.
-        let after = drive.list_drafts().unwrap();
+        let after = workspace.list_drafts().unwrap();
         assert_eq!(after.len(), 1);
         assert_eq!(after[0].name, "rich-prompt-2");
     }
@@ -6119,13 +6150,13 @@ mod tests {
     #[test]
     fn drafts_reject_traversal_and_existing() {
         // systacean-24: name validation + collision detection.
-        let (_cfg, _root, drive) = fixture();
-        assert!(drive.create_draft_dir("").is_err());
-        assert!(drive.create_draft_dir("..").is_err());
-        assert!(drive.create_draft_dir("a/b").is_err());
+        let (_cfg, _root, workspace) = fixture();
+        assert!(workspace.create_draft_dir("").is_err());
+        assert!(workspace.create_draft_dir("..").is_err());
+        assert!(workspace.create_draft_dir("a/b").is_err());
 
-        drive.create_draft_dir("untitled-1").unwrap();
-        assert!(drive.create_draft_dir("untitled-1").is_err());
+        workspace.create_draft_dir("untitled-1").unwrap();
+        assert!(workspace.create_draft_dir("untitled-1").is_err());
     }
 
     #[test]
@@ -6160,8 +6191,8 @@ mod tests {
             }
         }
 
-        let (_cfg, _root, drive) = fixture();
-        drive
+        let (_cfg, _root, workspace) = fixture();
+        workspace
             .create_team(&crate::teams::TeamConfig {
                 team_name: "alpha".to_string(),
                 host_name: "Alex".to_string(),
@@ -6174,13 +6205,13 @@ mod tests {
 
         let collector = std::sync::Arc::new(Collector::new());
         let cb: std::sync::Arc<dyn WatchCallback> = collector.clone();
-        let _handle = drive.watch_team("alpha", cb).unwrap();
+        let _handle = workspace.watch_team("alpha", cb).unwrap();
 
         // Tiny sleep to let the watcher attach to the events dir
         // before we land the write (mirrors -25's pattern for
         // macOS FSEvents coalescing safety).
         std::thread::sleep(std::time::Duration::from_millis(200));
-        let events_dir = drive.team_events_dir("alpha").unwrap();
+        let events_dir = workspace.team_events_dir("alpha").unwrap();
         std::fs::write(events_dir.join("event-1.json"), b"{\"poke\":true}").unwrap();
 
         // Poll for the prefixed event up to 5s.
@@ -6217,7 +6248,7 @@ mod tests {
         // Workspace method, verify list_teams + load_team round-trip,
         // verify team_dir + team_events_dir resolve correctly,
         // duplicate produces a verbatim copy with rewritten name.
-        let (_cfg, _root, drive) = fixture();
+        let (_cfg, _root, workspace) = fixture();
         let cfg = crate::teams::TeamConfig {
             team_name: "marketing".to_string(),
             host_name: "Alex".to_string(),
@@ -6226,30 +6257,32 @@ mod tests {
             created_at: "2026-05-22T13:57:00Z".to_string(),
             members: vec![],
         };
-        let team = drive.create_team(&cfg).unwrap();
+        let team = workspace.create_team(&cfg).unwrap();
         assert_eq!(team.name, "marketing");
         assert!(team.abs.is_dir());
 
-        let teams = drive.list_teams().unwrap();
+        let teams = workspace.list_teams().unwrap();
         assert_eq!(teams.len(), 1);
         assert_eq!(teams[0].name, "marketing");
 
-        let loaded = drive.load_team("marketing").unwrap();
+        let loaded = workspace.load_team("marketing").unwrap();
         assert_eq!(loaded.team_name, "marketing");
 
-        let team_dir = drive.team_dir("marketing").unwrap();
-        assert_eq!(team_dir, drive.drafts_dir().join("team-marketing"));
-        let events_dir = drive.team_events_dir("marketing").unwrap();
+        let team_dir = workspace.team_dir("marketing").unwrap();
+        assert_eq!(team_dir, workspace.drafts_dir().join("team-marketing"));
+        let events_dir = workspace.team_events_dir("marketing").unwrap();
         assert_eq!(events_dir, team_dir.join("events"));
 
-        let dup = drive.duplicate_team("marketing", "marketing-2025").unwrap();
+        let dup = workspace
+            .duplicate_team("marketing", "marketing-2025")
+            .unwrap();
         assert_eq!(dup.name, "marketing-2025");
-        let dup_cfg = drive.load_team("marketing-2025").unwrap();
+        let dup_cfg = workspace.load_team("marketing-2025").unwrap();
         assert_eq!(dup_cfg.team_name, "marketing-2025");
         // The duplicate's host_handle was preserved verbatim.
         assert_eq!(dup_cfg.host_handle, "@@Alex");
 
-        let after_dup = drive.list_teams().unwrap();
+        let after_dup = workspace.list_teams().unwrap();
         let names: Vec<String> = after_dup.iter().map(|t| t.name.clone()).collect();
         assert_eq!(names, ["marketing", "marketing-2025"]);
     }
@@ -6263,9 +6296,9 @@ mod tests {
         // current behavior: drafts vs teams share the metadata
         // dir; the filter is on the listing side, not the
         // storage side.
-        let (_cfg, _root, drive) = fixture();
-        drive.create_draft_dir("untitled-1").unwrap();
-        drive
+        let (_cfg, _root, workspace) = fixture();
+        workspace.create_draft_dir("untitled-1").unwrap();
+        workspace
             .create_team(&crate::teams::TeamConfig {
                 team_name: "alpha".to_string(),
                 host_name: "Alex".to_string(),
@@ -6276,14 +6309,14 @@ mod tests {
             })
             .unwrap();
 
-        let teams = drive.list_teams().unwrap();
+        let teams = workspace.list_teams().unwrap();
         assert_eq!(teams.len(), 1);
         assert_eq!(teams[0].name, "alpha");
 
         // list_drafts sees both (since `team-alpha` is a dir
         // under drafts_dir). Callers that want only true drafts
         // can filter post-hoc by checking name.starts_with("team-").
-        let drafts = drive.list_drafts().unwrap();
+        let drafts = workspace.list_drafts().unwrap();
         let names: Vec<String> = drafts.iter().map(|d| d.name.clone()).collect();
         assert!(names.contains(&"untitled-1".to_string()));
         assert!(names.contains(&"team-alpha".to_string()));
@@ -6295,25 +6328,25 @@ mod tests {
         // `@@<Name>` mention edges, sorted by count desc + label
         // asc (mirrors tags() shape). Consumed by chan-server's
         // /api/mentions for editor mention-completion.
-        let (_cfg, root, drive) = fixture();
+        let (_cfg, root, workspace) = fixture();
         // 3 files: 2 mention @@Architect, 1 mentions @@Alex
         // + @@Architect, so @@Architect count = 3, @@Alex = 1.
-        drive
+        workspace
             .write_text("notes/a.md", "Met @@Architect today.\n")
             .unwrap();
-        drive
+        workspace
             .write_text("notes/b.md", "Discussed with @@Architect.\n")
             .unwrap();
-        drive
+        workspace
             .write_text(
                 "notes/c.md",
                 "@@Alex and @@Architect synced on the design.\n",
             )
             .unwrap();
-        drive.reindex(None).unwrap();
+        workspace.reindex(None).unwrap();
         assert!(root.path().join("notes/a.md").is_file());
 
-        let graph = drive.graph().unwrap();
+        let graph = workspace.graph().unwrap();
         let mentions = graph.mentions().unwrap();
         // The bare names (no `@@` sigil) come back in count-desc
         // + label-asc order. Architect = 3 > Alex = 1.
@@ -6328,33 +6361,33 @@ mod tests {
     fn reindex_walks_drafts_subtree_into_graph_and_bm25() {
         // systacean-34: closes the boot-walk gap. `-25` extended
         // the watcher to multi-root but `Workspace::reindex` only
-        // walked drive-root — so the initial corpus was empty
+        // walked workspace-root — so the initial corpus was empty
         // under the `Drafts/` prefix even when draft files
         // existed on disk. After this PR, reindex_with_aggression
         // additionally walks drafts and pumps each file through
         // index_draft_file.
-        let (_cfg, _root, drive) = fixture();
-        drive.create_draft_dir("untitled-1").unwrap();
+        let (_cfg, _root, workspace) = fixture();
+        workspace.create_draft_dir("untitled-1").unwrap();
         // Write the file directly (bypass write_text so the
         // watcher doesn't catch it; we want to verify the BOOT
         // walk picks it up).
         std::fs::write(
-            drive.drafts_dir().join("untitled-1").join("draft.md"),
+            workspace.drafts_dir().join("untitled-1").join("draft.md"),
             "# hello\nboot-walk-marker-systacean-34 here\n",
         )
         .unwrap();
 
         // Reindex (boot-equivalent path).
-        drive.reindex(None).unwrap();
+        workspace.reindex(None).unwrap();
 
         // BM25 should now know about the draft under the unified
         // `Drafts/untitled-1/draft.md` key.
-        let opts = crate::drive::SearchOpts {
+        let opts = crate::workspace::SearchOpts {
             mode: SearchMode::Bm25,
             limit: 10,
             scope: None,
         };
-        let hits = drive
+        let hits = workspace
             .search("boot-walk-marker-systacean-34", &opts)
             .unwrap();
         assert!(
@@ -6368,7 +6401,7 @@ mod tests {
         // Graph DB should also have the file as a node — verified
         // via the public files() listing (which the chan-server
         // graph route consumes).
-        let graph = drive.graph().unwrap();
+        let graph = workspace.graph().unwrap();
         let files = graph.files().unwrap();
         assert!(
             files.iter().any(|p| p == "Drafts/untitled-1/draft.md"),
@@ -6382,65 +6415,65 @@ mod tests {
         // recurring `-a-66 b/c/d` data-flow gap where
         // `list_dir_entries` called `stat("Drafts/untitled-N")`
         // on each child returned by `Workspace::list("Drafts/")` +
-        // got NotFound from the drive-root cap-std handle, then
+        // got NotFound from the workspace-root cap-std handle, then
         // skipped the entry → empty wire listing.
-        let (_cfg, _root, drive) = fixture();
-        drive.create_draft_dir("untitled-1").unwrap();
-        drive
+        let (_cfg, _root, workspace) = fixture();
+        workspace.create_draft_dir("untitled-1").unwrap();
+        workspace
             .write_text("Drafts/untitled-1/draft.md", "# hello\n")
             .unwrap();
 
         // Stat the draft directory.
-        let root_stat = drive.stat("Drafts").unwrap();
+        let root_stat = workspace.stat("Drafts").unwrap();
         assert!(root_stat.is_dir, "drafts root should stat as is_dir");
 
-        let dir_stat = drive.stat("Drafts/untitled-1").unwrap();
+        let dir_stat = workspace.stat("Drafts/untitled-1").unwrap();
         assert!(dir_stat.is_dir, "draft directory should stat as is_dir");
 
         // Stat a file inside the draft directory.
-        let file_stat = drive.stat("Drafts/untitled-1/draft.md").unwrap();
+        let file_stat = workspace.stat("Drafts/untitled-1/draft.md").unwrap();
         assert!(!file_stat.is_dir);
         // "# hello\n" is 8 bytes.
         assert_eq!(file_stat.size, 8);
 
-        // Workspace-root path continues to route through the drive
+        // Workspace-root path continues to route through the workspace
         // handle (regression check).
-        drive.write_text("notes/intro.md", "drive\n").unwrap();
-        let drive_stat = drive.stat("notes/intro.md").unwrap();
+        workspace.write_text("notes/intro.md", "hello\n").unwrap();
+        let drive_stat = workspace.stat("notes/intro.md").unwrap();
         assert!(!drive_stat.is_dir);
         assert_eq!(drive_stat.size, 6);
     }
 
     #[test]
     fn physical_path_resolution_maps_drafts_namespace() {
-        let (_cfg, _root, drive) = fixture();
-        drive.create_draft_dir("untitled-1").unwrap();
-        drive
+        let (_cfg, _root, workspace) = fixture();
+        workspace.create_draft_dir("untitled-1").unwrap();
+        workspace
             .write_text("Drafts/untitled-1/draft.md", "# hello\n")
             .unwrap();
-        drive.write_text("notes/intro.md", "# intro\n").unwrap();
+        workspace.write_text("notes/intro.md", "# intro\n").unwrap();
 
         assert_eq!(
-            drive.resolve_physical_path("").unwrap(),
-            drive.root().canonicalize().unwrap()
+            workspace.resolve_physical_path("").unwrap(),
+            workspace.root().canonicalize().unwrap()
         );
         assert_eq!(
-            drive.resolve_physical_path("Drafts").unwrap(),
-            drive.drafts_dir().to_path_buf()
+            workspace.resolve_physical_path("Drafts").unwrap(),
+            workspace.drafts_dir().to_path_buf()
         );
         assert_eq!(
-            drive.resolve_physical_dir("Drafts/untitled-1").unwrap(),
-            drive.drafts_dir().join("untitled-1")
+            workspace.resolve_physical_dir("Drafts/untitled-1").unwrap(),
+            workspace.drafts_dir().join("untitled-1")
         );
         assert_eq!(
-            drive
-                .physical_path_to_virtual(&drive.drafts_dir().join("untitled-1"))
+            workspace
+                .physical_path_to_virtual(&workspace.drafts_dir().join("untitled-1"))
                 .unwrap(),
             "Drafts/untitled-1"
         );
         assert_eq!(
-            drive
-                .physical_path_to_virtual(&drive.root().join("notes"))
+            workspace
+                .physical_path_to_virtual(&workspace.root().join("notes"))
                 .unwrap(),
             "notes"
         );
@@ -6452,39 +6485,39 @@ mod tests {
         //   * "Drafts" or "Drafts/" lists the drafts root (each
         //     entry is one `DraftRef::name`).
         //   * "Drafts/<name>" lists inside that draft directory.
-        //   * "notes/" continues to list the drive root (no
+        //   * "notes/" continues to list the workspace root (no
         //     regression for existing callers).
-        let (_cfg, root, drive) = fixture();
-        drive.create_draft_dir("untitled-1").unwrap();
-        drive.create_draft_dir("untitled-2").unwrap();
-        drive
+        let (_cfg, root, workspace) = fixture();
+        workspace.create_draft_dir("untitled-1").unwrap();
+        workspace.create_draft_dir("untitled-2").unwrap();
+        workspace
             .write_text("Drafts/untitled-1/draft.md", "# hello\n")
             .unwrap();
         std::fs::write(
-            drive.drafts_dir().join("untitled-1").join("pasted.png"),
+            workspace.drafts_dir().join("untitled-1").join("pasted.png"),
             b"\x89PNG\r\n",
         )
         .unwrap();
 
         // List the drafts root via "Drafts/".
-        let drafts_root_listing = drive.list("Drafts/").unwrap();
+        let drafts_root_listing = workspace.list("Drafts/").unwrap();
         let mut names: Vec<String> = drafts_root_listing.iter().map(|e| e.name.clone()).collect();
         names.sort();
         assert_eq!(names, ["untitled-1", "untitled-2"]);
 
         // Same via bare "Drafts" (no trailing slash).
-        let bare = drive.list("Drafts").unwrap();
+        let bare = workspace.list("Drafts").unwrap();
         assert_eq!(bare.len(), 2);
 
         // List inside a draft directory.
-        let inside = drive.list("Drafts/untitled-1").unwrap();
+        let inside = workspace.list("Drafts/untitled-1").unwrap();
         let mut leaves: Vec<String> = inside.iter().map(|e| e.name.clone()).collect();
         leaves.sort();
         assert_eq!(leaves, ["draft.md", "pasted.png"]);
 
         // Workspace-root list: backward-compat regression check.
-        drive.write_text("notes/intro.md", "# intro\n").unwrap();
-        let drive_root_listing = drive.list("notes").unwrap();
+        workspace.write_text("notes/intro.md", "# intro\n").unwrap();
+        let drive_root_listing = workspace.list("notes").unwrap();
         let drive_leaves: Vec<&str> = drive_root_listing.iter().map(|e| e.name.as_str()).collect();
         assert_eq!(drive_leaves, ["intro.md"]);
         assert!(root.path().join("notes/intro.md").is_file());
@@ -6492,12 +6525,12 @@ mod tests {
 
     #[test]
     fn list_drafts_root_empty_when_no_drafts() {
-        // systacean-29: Workspace::list("Drafts/") on a fresh drive
+        // systacean-29: Workspace::list("Drafts/") on a fresh workspace
         // returns an empty Vec (drafts root exists but contains
         // nothing). Pins the absent-drafts case so the FB
         // renders the Drafts row without spurious children.
-        let (_cfg, _root, drive) = fixture();
-        let listing = drive.list("Drafts/").unwrap();
+        let (_cfg, _root, workspace) = fixture();
+        let listing = workspace.list("Drafts/").unwrap();
         assert!(listing.is_empty());
     }
 
@@ -6508,14 +6541,14 @@ mod tests {
         // routes through the drafts-rooted cap-std handle so the
         // editor's autosave path can target drafts without API
         // branching.
-        let (_cfg, _root, drive) = fixture();
-        drive.create_draft_dir("untitled-1").unwrap();
+        let (_cfg, _root, workspace) = fixture();
+        workspace.create_draft_dir("untitled-1").unwrap();
 
         let rel = "Drafts/untitled-1/draft.md";
-        drive
+        workspace
             .write_text(rel, "# hello from a draft\n")
             .expect("write_text should route to drafts dir");
-        let content = drive
+        let content = workspace
             .read_text(rel)
             .expect("read_text should route to drafts dir");
         assert_eq!(content, "# hello from a draft\n");
@@ -6526,13 +6559,13 @@ mod tests {
         // systacean-26: atomic-write parity. Overwriting an
         // existing draft file via write_text replaces atomically
         // (no zero-length window observable) — same semantics as
-        // drive-root files via the shared `atomic_write_in`.
-        let (_cfg, _root, drive) = fixture();
-        drive.create_draft_dir("untitled-1").unwrap();
+        // workspace-root files via the shared `atomic_write_in`.
+        let (_cfg, _root, workspace) = fixture();
+        workspace.create_draft_dir("untitled-1").unwrap();
         let rel = "Drafts/untitled-1/draft.md";
-        drive.write_text(rel, "v1").unwrap();
-        drive.write_text(rel, "v2").unwrap();
-        let content = drive.read_text(rel).unwrap();
+        workspace.write_text(rel, "v1").unwrap();
+        workspace.write_text(rel, "v2").unwrap();
+        let content = workspace.read_text(rel).unwrap();
         assert_eq!(content, "v2");
     }
 
@@ -6543,23 +6576,23 @@ mod tests {
         // root itself. The helper surfaces this as an Io error
         // rather than dispatching into the cap-std handle with an
         // empty path.
-        let (_cfg, _root, drive) = fixture();
-        assert!(drive.read_text("Drafts/").is_err());
-        assert!(drive.write_text("Drafts/", "anything").is_err());
+        let (_cfg, _root, workspace) = fixture();
+        assert!(workspace.read_text("Drafts/").is_err());
+        assert!(workspace.write_text("Drafts/", "anything").is_err());
     }
 
     #[test]
     fn unified_path_drive_root_paths_unchanged() {
         // systacean-26: backward-compat regression check. Paths
         // without the `Drafts/` prefix continue to route through
-        // the drive-root cap-std handle exactly as before.
-        let (_cfg, root, drive) = fixture();
-        drive.write_text("notes/intro.md", "# intro\n").unwrap();
-        assert_eq!(drive.read_text("notes/intro.md").unwrap(), "# intro\n");
-        // File landed on disk under the drive root, NOT the
+        // the workspace-root cap-std handle exactly as before.
+        let (_cfg, root, workspace) = fixture();
+        workspace.write_text("notes/intro.md", "# intro\n").unwrap();
+        assert_eq!(workspace.read_text("notes/intro.md").unwrap(), "# intro\n");
+        // File landed on disk under the workspace root, NOT the
         // drafts root.
         assert!(root.path().join("notes/intro.md").is_file());
-        assert!(!drive.drafts_dir().join("notes").exists());
+        assert!(!workspace.drafts_dir().join("notes").exists());
     }
 
     #[test]
@@ -6567,115 +6600,126 @@ mod tests {
         // systacean-40: 6 Workspace::screensaver_* methods round-trip
         // through IndexConfig + atomic write. Defaults: enabled
         // false, timeout 300, pin_hash None.
-        let (_cfg, _root, drive) = fixture();
+        let (_cfg, _root, workspace) = fixture();
 
         // Defaults.
-        assert!(!drive.screensaver_enabled().unwrap());
-        assert_eq!(drive.screensaver_timeout_secs().unwrap(), 300);
-        assert_eq!(drive.screensaver_theme().unwrap(), ScreensaverTheme::Plain);
-        assert!(drive.screensaver_pin_hash().unwrap().is_none());
+        assert!(!workspace.screensaver_enabled().unwrap());
+        assert_eq!(workspace.screensaver_timeout_secs().unwrap(), 300);
+        assert_eq!(
+            workspace.screensaver_theme().unwrap(),
+            ScreensaverTheme::Plain
+        );
+        assert!(workspace.screensaver_pin_hash().unwrap().is_none());
 
         // Flip enabled.
-        drive.set_screensaver_enabled(true).unwrap();
-        assert!(drive.screensaver_enabled().unwrap());
+        workspace.set_screensaver_enabled(true).unwrap();
+        assert!(workspace.screensaver_enabled().unwrap());
 
         // Update timeout.
-        drive.set_screensaver_timeout_secs(60).unwrap();
-        assert_eq!(drive.screensaver_timeout_secs().unwrap(), 60);
+        workspace.set_screensaver_timeout_secs(60).unwrap();
+        assert_eq!(workspace.screensaver_timeout_secs().unwrap(), 60);
 
         // Update theme.
-        drive
+        workspace
             .set_screensaver_theme(ScreensaverTheme::Matrix)
             .unwrap();
-        assert_eq!(drive.screensaver_theme().unwrap(), ScreensaverTheme::Matrix);
+        assert_eq!(
+            workspace.screensaver_theme().unwrap(),
+            ScreensaverTheme::Matrix
+        );
 
         // Set PIN.
         let pin_bytes = vec![0xDE, 0xAD, 0xBE, 0xEF, 0x42];
-        drive
+        workspace
             .set_screensaver_pin_hash(Some(pin_bytes.clone()))
             .unwrap();
-        assert_eq!(drive.screensaver_pin_hash().unwrap(), Some(pin_bytes));
+        assert_eq!(workspace.screensaver_pin_hash().unwrap(), Some(pin_bytes));
 
         // Clear PIN (None).
-        drive.set_screensaver_pin_hash(None).unwrap();
-        assert!(drive.screensaver_pin_hash().unwrap().is_none());
+        workspace.set_screensaver_pin_hash(None).unwrap();
+        assert!(workspace.screensaver_pin_hash().unwrap().is_none());
 
         // Idempotent re-set (same value).
-        drive.set_screensaver_enabled(true).unwrap();
-        drive.set_screensaver_timeout_secs(60).unwrap();
-        drive
+        workspace.set_screensaver_enabled(true).unwrap();
+        workspace.set_screensaver_timeout_secs(60).unwrap();
+        workspace
             .set_screensaver_theme(ScreensaverTheme::Matrix)
             .unwrap();
-        drive.set_screensaver_pin_hash(None).unwrap();
+        workspace.set_screensaver_pin_hash(None).unwrap();
     }
 
     #[test]
     fn semantic_model_setter_rejects_unknown_and_preserves_bm25() {
-        let (_cfg, _root, drive) = fixture();
-        drive.write_text("note.md", "alpha beta\n").unwrap();
-        drive.reindex(None).unwrap();
+        let (_cfg, _root, workspace) = fixture();
+        workspace.write_text("note.md", "alpha beta\n").unwrap();
+        workspace.reindex(None).unwrap();
         let opts = SearchOpts {
             mode: SearchMode::Bm25,
             limit: 10,
             scope: None,
         };
-        assert_eq!(drive.search("alpha", &opts).unwrap().hits.len(), 1);
+        assert_eq!(workspace.search("alpha", &opts).unwrap().hits.len(), 1);
 
-        let embeddings_dir = drive.paths.index.join("embeddings");
+        let embeddings_dir = workspace.paths.index.join("embeddings");
         std::fs::create_dir_all(&embeddings_dir).unwrap();
         std::fs::write(embeddings_dir.join("stale.bin"), b"stale").unwrap();
 
-        let before = drive.semantic_model().unwrap();
-        let err = drive.set_semantic_model("not-a-model").unwrap_err();
+        let before = workspace.semantic_model().unwrap();
+        let err = workspace.set_semantic_model("not-a-model").unwrap_err();
         assert!(
             err.to_string().contains("unknown embedding model"),
             "unexpected error: {err}",
         );
-        assert_eq!(drive.semantic_model().unwrap(), before);
+        assert_eq!(workspace.semantic_model().unwrap(), before);
 
-        drive.set_semantic_model("BAAI/bge-base-en-v1.5").unwrap();
-        assert_eq!(drive.semantic_model().unwrap(), "BAAI/bge-base-en-v1.5");
+        workspace
+            .set_semantic_model("BAAI/bge-base-en-v1.5")
+            .unwrap();
+        assert_eq!(workspace.semantic_model().unwrap(), "BAAI/bge-base-en-v1.5");
         assert!(
             !embeddings_dir.join("stale.bin").exists(),
             "switching models must clear stale embeddings",
         );
-        assert_eq!(drive.search("alpha", &opts).unwrap().hits.len(), 1);
+        assert_eq!(workspace.search("alpha", &opts).unwrap().hits.len(), 1);
     }
 
     #[test]
     fn reports_enabled_round_trips_through_drive_and_boot_kicks_off_initial_scan() {
         // systacean-27: Workspace::reports_enabled defaults false on a
-        // never-touched drive; Workspace::set_reports_enabled persists
+        // never-touched workspace; Workspace::set_reports_enabled persists
         // the flag; Workspace::boot kicks off the initial scan when the
         // flag is on so the first `Workspace::report()` consumer sees
         // populated data.
-        let (_cfg, _root, drive) = fixture();
-        assert!(!drive.reports_enabled().unwrap(), "default must be false");
+        let (_cfg, _root, workspace) = fixture();
+        assert!(
+            !workspace.reports_enabled().unwrap(),
+            "default must be false"
+        );
 
-        drive.set_reports_enabled(true).unwrap();
-        assert!(drive.reports_enabled().unwrap());
+        workspace.set_reports_enabled(true).unwrap();
+        assert!(workspace.reports_enabled().unwrap());
 
         // boot() is idempotent + safe to call after enabling.
-        drive.boot().unwrap();
-        drive.boot().unwrap(); // re-call no-op
-                               // Confirm the report state was initialized (the persisted
-                               // jsonl now exists after boot's initial scan + flush).
-                               // Best-effort assert: the writer thread flushes async so
-                               // give it a small window. The flag persistence + boot
-                               // call returning Ok are the load-bearing invariants;
-                               // visible jsonl is the operational consequence.
+        workspace.boot().unwrap();
+        workspace.boot().unwrap(); // re-call no-op
+                                   // Confirm the report state was initialized (the persisted
+                                   // jsonl now exists after boot's initial scan + flush).
+                                   // Best-effort assert: the writer thread flushes async so
+                                   // give it a small window. The flag persistence + boot
+                                   // call returning Ok are the load-bearing invariants;
+                                   // visible jsonl is the operational consequence.
         for _ in 0..50 {
-            if drive.paths().report.exists() {
+            if workspace.paths().report.exists() {
                 break;
             }
             std::thread::sleep(std::time::Duration::from_millis(50));
         }
 
         // Disable drops the persisted jsonl.
-        drive.set_reports_enabled(false).unwrap();
-        assert!(!drive.reports_enabled().unwrap());
+        workspace.set_reports_enabled(false).unwrap();
+        assert!(!workspace.reports_enabled().unwrap());
         assert!(
-            !drive.paths().report.exists(),
+            !workspace.paths().report.exists(),
             "disable should drop the persisted report.jsonl"
         );
     }
@@ -6685,14 +6729,14 @@ mod tests {
         // systacean-27: boot() with both feature flags off is a
         // pure no-op. No report scan kicked off; no eager
         // initialization that would slow down chan-server startup
-        // on a lean drive.
-        let (_cfg, _root, drive) = fixture();
-        assert!(!drive.semantic_enabled().unwrap());
-        assert!(!drive.reports_enabled().unwrap());
-        drive.boot().unwrap();
+        // on a lean workspace.
+        let (_cfg, _root, workspace) = fixture();
+        assert!(!workspace.semantic_enabled().unwrap());
+        assert!(!workspace.reports_enabled().unwrap());
+        workspace.boot().unwrap();
         // No-op: report jsonl never created since reports_enabled
         // stayed false.
-        assert!(!drive.paths().report.exists());
+        assert!(!workspace.paths().report.exists());
     }
 
     #[test]
@@ -6703,14 +6747,14 @@ mod tests {
         // Gaps in the existing-set ARE filled (smallest unused,
         // not always last+1) — the caller of create_draft_dir is
         // free to skip-number names by hand.
-        let (_cfg, _root, drive) = fixture();
-        assert_eq!(drive.next_untitled_draft_name().unwrap(), "untitled");
-        drive.create_draft_dir("untitled").unwrap();
-        assert_eq!(drive.next_untitled_draft_name().unwrap(), "untitled-1");
-        drive.create_draft_dir("untitled-1").unwrap();
-        drive.create_draft_dir("untitled-3").unwrap();
+        let (_cfg, _root, workspace) = fixture();
+        assert_eq!(workspace.next_untitled_draft_name().unwrap(), "untitled");
+        workspace.create_draft_dir("untitled").unwrap();
+        assert_eq!(workspace.next_untitled_draft_name().unwrap(), "untitled-1");
+        workspace.create_draft_dir("untitled-1").unwrap();
+        workspace.create_draft_dir("untitled-3").unwrap();
         // Gap: untitled-2 free → that's the next pick.
-        assert_eq!(drive.next_untitled_draft_name().unwrap(), "untitled-2");
+        assert_eq!(workspace.next_untitled_draft_name().unwrap(), "untitled-2");
     }
 
     #[test]
@@ -6718,46 +6762,48 @@ mod tests {
         // systacean-26: optimistic-concurrency parity. The mtime
         // check uses the same dir handle for stat + atomic write
         // so drafts edits get the same WriteConflict semantics as
-        // drive-root edits.
-        let (_cfg, _root, drive) = fixture();
-        drive.create_draft_dir("untitled-1").unwrap();
+        // workspace-root edits.
+        let (_cfg, _root, workspace) = fixture();
+        workspace.create_draft_dir("untitled-1").unwrap();
         let rel = "Drafts/untitled-1/draft.md";
         // First write: file doesn't exist; expected_mtime=None
         // succeeds.
-        drive.write_text_if_unchanged(rel, None, "v1").unwrap();
-        let (_, stat) = drive.read_text_with_stat(rel).unwrap();
+        workspace.write_text_if_unchanged(rel, None, "v1").unwrap();
+        let (_, stat) = workspace.read_text_with_stat(rel).unwrap();
         // Stale-mtime write: rejected.
-        let err = drive
+        let err = workspace
             .write_text_if_unchanged(rel, Some(stat.mtime_ns.unwrap_or(0) + 1), "v2")
             .unwrap_err();
         assert!(matches!(err, ChanError::WriteConflict { .. }));
         // Current-mtime write: accepted.
-        drive
+        workspace
             .write_text_if_unchanged(rel, stat.mtime_ns, "v2")
             .unwrap();
-        assert_eq!(drive.read_text(rel).unwrap(), "v2");
+        assert_eq!(workspace.read_text(rel).unwrap(), "v2");
     }
 
     #[test]
     fn drafts_promote_rejects_when_target_exists() {
         // systacean-24: promote_draft refuses to clobber an
-        // existing drive-root file/directory. The draft remains
+        // existing workspace-root file/directory. The draft remains
         // in place for the caller to retry under a different
         // target.
-        let (_cfg, root, drive) = fixture();
-        drive.create_draft_dir("untitled-1").unwrap();
-        drive
+        let (_cfg, root, workspace) = fixture();
+        workspace.create_draft_dir("untitled-1").unwrap();
+        workspace
             .write_text("Drafts/untitled-1/draft.md", "# draft\n")
             .unwrap();
-        drive
+        workspace
             .write_bytes("Drafts/untitled-1/pasted.png", &[1, 2, 3])
             .unwrap();
-        drive.write_text("untitled-1/sentinel.md", "x").unwrap();
-        drive.write_text("untitled-1/draft.md", "existing").unwrap();
-        assert!(drive.promote_draft("untitled-1", "untitled-1").is_err());
-        // Draft still exists; nothing in the drive's untitled-1
+        workspace.write_text("untitled-1/sentinel.md", "x").unwrap();
+        workspace
+            .write_text("untitled-1/draft.md", "existing")
+            .unwrap();
+        assert!(workspace.promote_draft("untitled-1", "untitled-1").is_err());
+        // Draft still exists; nothing in the workspace's untitled-1
         // dir was disturbed.
-        assert!(drive.drafts_dir().join("untitled-1").is_dir());
+        assert!(workspace.drafts_dir().join("untitled-1").is_dir());
         assert!(root.path().join("untitled-1").join("sentinel.md").is_file());
     }
 
@@ -6765,9 +6811,9 @@ mod tests {
     #[test]
     fn remove_rejects_unix_socket() {
         use std::os::unix::net::UnixListener;
-        let (_cfg, root, drive) = fixture();
+        let (_cfg, root, workspace) = fixture();
         let _l = UnixListener::bind(root.path().join("s")).unwrap();
-        let err = drive.remove("s").unwrap_err();
+        let err = workspace.remove("s").unwrap_err();
         assert!(matches!(err, ChanError::SpecialFile { .. }));
         // Socket survives the rejected remove.
         assert!(root.path().join("s").symlink_metadata().is_ok());
@@ -6777,30 +6823,30 @@ mod tests {
     #[test]
     fn stat_uses_lstat_for_symlinks() {
         use std::os::unix::fs::symlink;
-        let (_cfg, root, drive) = fixture();
+        let (_cfg, root, workspace) = fixture();
         std::fs::create_dir(root.path().join("d")).unwrap();
         symlink("d", root.path().join("link_to_dir")).unwrap();
         // lstat reports the symlink itself, which is a symlink (not
         // a directory). is_dir is false because symlink_metadata
         // does not follow.
-        let st = drive.stat("link_to_dir").unwrap();
+        let st = workspace.stat("link_to_dir").unwrap();
         assert!(!st.is_dir);
     }
 
     #[test]
     fn link_targets_finds_file_after_index() {
-        let (_cfg, _root, drive) = fixture();
-        drive
+        let (_cfg, _root, workspace) = fixture();
+        workspace
             .write_text("recipes/carbonara.md", "# Carbonara\n\n## Ingredients\n")
             .unwrap();
-        drive.index_file("recipes/carbonara.md").unwrap();
-        let hits = drive.link_targets("carb", 10).unwrap();
+        workspace.index_file("recipes/carbonara.md").unwrap();
+        let hits = workspace.link_targets("carb", 10).unwrap();
         assert!(hits
             .iter()
             .any(|h| h.path == "recipes/carbonara.md"
                 && h.kind == crate::graph::LinkTargetKind::File));
         // Heading is also searchable by the same surface.
-        let hits = drive.link_targets("ingred", 10).unwrap();
+        let hits = workspace.link_targets("ingred", 10).unwrap();
         assert!(hits
             .iter()
             .any(|h| h.kind == crate::graph::LinkTargetKind::Heading
@@ -6809,139 +6855,142 @@ mod tests {
 
     #[test]
     fn graph_opens_lazily() {
-        let (_cfg, _root, drive) = fixture();
+        let (_cfg, _root, workspace) = fixture();
         // Calling graph() twice returns the same handle; this is
         // the contract the editor relies on for incremental
         // updates from the watcher.
-        let _g1 = drive.graph().unwrap();
-        let _g2 = drive.graph().unwrap();
+        let _g1 = workspace.graph().unwrap();
+        let _g2 = workspace.graph().unwrap();
     }
 
     #[test]
     fn session_blob_round_trip() {
-        let (_cfg, _root, drive) = fixture();
-        drive.put_session("win-1", b"layout-v1").unwrap();
-        assert_eq!(drive.get_session("win-1").unwrap().unwrap(), b"layout-v1");
-        drive.put_session("win-1", b"layout-v2").unwrap();
-        drive.put_session("win-2", b"other").unwrap();
-        let mut keys = drive.list_sessions().unwrap();
+        let (_cfg, _root, workspace) = fixture();
+        workspace.put_session("win-1", b"layout-v1").unwrap();
+        assert_eq!(
+            workspace.get_session("win-1").unwrap().unwrap(),
+            b"layout-v1"
+        );
+        workspace.put_session("win-1", b"layout-v2").unwrap();
+        workspace.put_session("win-2", b"other").unwrap();
+        let mut keys = workspace.list_sessions().unwrap();
         keys.sort();
         assert_eq!(keys, vec!["win-1", "win-2"]);
-        drive.delete_session("win-1").unwrap();
-        assert!(drive.get_session("win-1").unwrap().is_none());
+        workspace.delete_session("win-1").unwrap();
+        assert!(workspace.get_session("win-1").unwrap().is_none());
         // Idempotent.
-        drive.delete_session("win-1").unwrap();
+        workspace.delete_session("win-1").unwrap();
     }
 
     #[test]
     fn blob_key_validation_blocks_traversal() {
-        let (_cfg, _root, drive) = fixture();
-        let err = drive.put_session("../escape", b"x").unwrap_err();
+        let (_cfg, _root, workspace) = fixture();
+        let err = workspace.put_session("../escape", b"x").unwrap_err();
         assert!(matches!(err, ChanError::InvalidKey(_)));
     }
 
     // ---- resolve_link ----
 
     fn link_fixture() -> (TempDir, TempDir, Arc<Workspace>) {
-        let (cfg, root, drive) = fixture();
+        let (cfg, root, workspace) = fixture();
         std::fs::create_dir_all(root.path().join("recipes")).unwrap();
         std::fs::write(root.path().join("recipes").join("pasta.md"), "# Pasta\n").unwrap();
         std::fs::write(root.path().join("intro.md"), "# Intro\n").unwrap();
         std::fs::write(root.path().join("note.txt"), "plain\n").unwrap();
         std::fs::write(root.path().join("README"), "no ext\n").unwrap();
-        (cfg, root, drive)
+        (cfg, root, workspace)
     }
 
     #[test]
     fn resolve_link_md_extension() {
-        let (_cfg, _root, drive) = link_fixture();
-        let r = drive.resolve_link("recipes/pasta").unwrap();
+        let (_cfg, _root, workspace) = link_fixture();
+        let r = workspace.resolve_link("recipes/pasta").unwrap();
         assert_eq!(r.path, "recipes/pasta.md");
         assert_eq!(r.anchor, None);
     }
 
     #[test]
     fn resolve_link_with_anchor() {
-        let (_cfg, _root, drive) = link_fixture();
-        let r = drive.resolve_link("recipes/pasta#ingredients").unwrap();
+        let (_cfg, _root, workspace) = link_fixture();
+        let r = workspace.resolve_link("recipes/pasta#ingredients").unwrap();
         assert_eq!(r.path, "recipes/pasta.md");
         assert_eq!(r.anchor.as_deref(), Some("ingredients"));
     }
 
     #[test]
     fn resolve_link_txt_fallback() {
-        let (_cfg, _root, drive) = link_fixture();
-        let r = drive.resolve_link("note").unwrap();
+        let (_cfg, _root, workspace) = link_fixture();
+        let r = workspace.resolve_link("note").unwrap();
         assert_eq!(r.path, "note.txt");
     }
 
     #[test]
     fn resolve_link_exact_match_no_extension() {
-        let (_cfg, _root, drive) = link_fixture();
-        let r = drive.resolve_link("README").unwrap();
+        let (_cfg, _root, workspace) = link_fixture();
+        let r = workspace.resolve_link("README").unwrap();
         assert_eq!(r.path, "README");
     }
 
     #[test]
     fn resolve_link_prefers_md_over_txt() {
-        let (_cfg, root, drive) = link_fixture();
+        let (_cfg, root, workspace) = link_fixture();
         // both intro.md AND intro.txt exist -> .md wins
         std::fs::write(root.path().join("intro.txt"), "plain\n").unwrap();
-        let r = drive.resolve_link("intro").unwrap();
+        let r = workspace.resolve_link("intro").unwrap();
         assert_eq!(r.path, "intro.md");
     }
 
     #[test]
     fn resolve_link_nonexistent_returns_none() {
-        let (_cfg, _root, drive) = link_fixture();
-        assert!(drive.resolve_link("does/not/exist").is_none());
+        let (_cfg, _root, workspace) = link_fixture();
+        assert!(workspace.resolve_link("does/not/exist").is_none());
     }
 
     #[test]
     fn resolve_link_empty_target_returns_none() {
-        let (_cfg, _root, drive) = link_fixture();
-        assert!(drive.resolve_link("").is_none());
+        let (_cfg, _root, workspace) = link_fixture();
+        assert!(workspace.resolve_link("").is_none());
     }
 
     #[test]
     fn resolve_link_trailing_hash_drops_anchor() {
-        let (_cfg, _root, drive) = link_fixture();
+        let (_cfg, _root, workspace) = link_fixture();
         // `target#` (empty anchor) resolves the path with anchor None.
-        let r = drive.resolve_link("recipes/pasta#").unwrap();
+        let r = workspace.resolve_link("recipes/pasta#").unwrap();
         assert_eq!(r.path, "recipes/pasta.md");
         assert_eq!(r.anchor, None);
     }
 
     #[test]
     fn resolve_link_path_escape_rejected() {
-        let (_cfg, _root, drive) = link_fixture();
+        let (_cfg, _root, workspace) = link_fixture();
         // resolve_link goes through Workspace::exists which rejects
         // path traversal. Should return None, not panic.
-        assert!(drive.resolve_link("../etc/passwd").is_none());
+        assert!(workspace.resolve_link("../etc/passwd").is_none());
     }
 
-    /// The graph row drives the kind. An unindexed file still
+    /// The graph row workspaces the kind. An unindexed file still
     /// resolves (we found it on disk) but the kind defaults to
     /// `File` so the editor can render a generic doc pill while the
     /// indexer catches up.
     #[test]
     fn resolve_link_kind_defaults_to_file_when_unindexed() {
-        let (_cfg, _root, drive) = link_fixture();
-        let r = drive.resolve_link("recipes/pasta").unwrap();
+        let (_cfg, _root, workspace) = link_fixture();
+        let r = workspace.resolve_link("recipes/pasta").unwrap();
         assert_eq!(r.kind, crate::graph::NodeKind::File);
     }
 
     /// After indexing a contact-frontmatter file, resolve_link's kind
     /// matches what the picker put in the graph. This is the path
-    /// that drives the editor's kind-aware pill rendering.
+    /// that workspaces the editor's kind-aware pill rendering.
     #[test]
     fn resolve_link_returns_contact_kind_for_contact_node() {
-        let (_cfg, root, drive) = link_fixture();
+        let (_cfg, root, workspace) = link_fixture();
         std::fs::create_dir_all(root.path().join("Contacts")).unwrap();
         let contact = "---\nchan:\n  kind: contact\n---\n\n# Alice Anderson\n\n- **Email**: alice@example.com\n";
         std::fs::write(root.path().join("Contacts").join("Alice.md"), contact).unwrap();
-        drive.index_file("Contacts/Alice.md").unwrap();
-        let r = drive.resolve_link("Contacts/Alice").unwrap();
+        workspace.index_file("Contacts/Alice.md").unwrap();
+        let r = workspace.resolve_link("Contacts/Alice").unwrap();
         assert_eq!(r.path, "Contacts/Alice.md");
         assert_eq!(r.kind, crate::graph::NodeKind::Contact);
     }
@@ -6951,20 +7000,20 @@ mod tests {
     /// (not a constant default).
     #[test]
     fn resolve_link_returns_file_kind_for_plain_note() {
-        let (_cfg, _root, drive) = link_fixture();
-        drive.index_file("recipes/pasta.md").unwrap();
-        let r = drive.resolve_link("recipes/pasta").unwrap();
+        let (_cfg, _root, workspace) = link_fixture();
+        workspace.index_file("recipes/pasta.md").unwrap();
+        let r = workspace.resolve_link("recipes/pasta").unwrap();
         assert_eq!(r.kind, crate::graph::NodeKind::File);
     }
 
     #[test]
     fn resolve_link_path_with_md_extension_unchanged() {
-        let (_cfg, _root, drive) = link_fixture();
+        let (_cfg, _root, workspace) = link_fixture();
         // If the user already wrote `[[recipes/pasta.md]]`, our
         // first probe is `recipes/pasta.md.md` which doesn't
         // exist; second is `.txt`; third is the exact path which
         // does. Resolves to the original verbatim.
-        let r = drive.resolve_link("recipes/pasta.md").unwrap();
+        let r = workspace.resolve_link("recipes/pasta.md").unwrap();
         assert_eq!(r.path, "recipes/pasta.md");
     }
 
@@ -6991,7 +7040,7 @@ mod tests {
     }
 
     #[test]
-    fn build_edges_normalizes_drive_rooted_markdown_link() {
+    fn build_edges_normalizes_workspace_rooted_markdown_link() {
         // `[link](/images/foo.png)` from notes/post.md should land
         // at dst=images/foo.png, not /images/foo.png.
         let edges = build_edges("notes/post.md", &[md_link("/images/foo.png")], &[]);
@@ -7020,7 +7069,7 @@ mod tests {
 
     #[test]
     fn build_edges_skips_drive_escape() {
-        // `../../x.md` from a depth-1 file pops past the drive root.
+        // `../../x.md` from a depth-1 file pops past the workspace root.
         let edges = build_edges("notes/post.md", &[md_link("../../x.md")], &[]);
         assert!(edges.is_empty());
     }
@@ -7047,9 +7096,9 @@ mod tests {
     }
 
     #[test]
-    fn build_edges_wiki_default_drive_rooted() {
+    fn build_edges_wiki_default_workspace_rooted() {
         // Plain `[[Contacts/Jane Doe]]` from any source dir resolves
-        // to the drive root. Matches the picker's existing insertion
+        // to the workspace root. Matches the picker's existing insertion
         // form and keeps the smoke-test invariant.
         let edges = build_edges("notes/post.md", &[wiki_link("Contacts/Jane Doe")], &[]);
         assert_eq!(dsts(&edges), vec!["Contacts/Jane Doe"]);
@@ -7063,7 +7112,7 @@ mod tests {
 
     #[test]
     fn build_edges_wiki_relative_walks_up() {
-        // `[[../foo]]` from notes/post.md walks up to drive root.
+        // `[[../foo]]` from notes/post.md walks up to workspace root.
         let edges = build_edges("notes/post.md", &[wiki_link("../foo")], &[]);
         assert_eq!(dsts(&edges), vec!["foo"]);
     }
@@ -7085,7 +7134,7 @@ mod tests {
         dst_rel: &str,
         dst_body: &str,
     ) -> (TempDir, TempDir, Arc<Workspace>) {
-        let (cfg, root, drive) = fixture();
+        let (cfg, root, workspace) = fixture();
         // Create parent directories as needed (write_text only creates
         // the immediate parent at the cap-std layer).
         for p in [src_rel, dst_rel] {
@@ -7093,86 +7142,90 @@ mod tests {
                 std::fs::create_dir_all(root.path().join(&p[..slash])).unwrap();
             }
         }
-        drive.write_text(dst_rel, dst_body).unwrap();
-        drive.write_text(src_rel, src_body).unwrap();
+        workspace.write_text(dst_rel, dst_body).unwrap();
+        workspace.write_text(src_rel, src_body).unwrap();
         // Build the graph so `backlinks` returns the right edge.
-        drive.reindex(None).unwrap();
-        (cfg, root, drive)
+        workspace.reindex(None).unwrap();
+        (cfg, root, workspace)
     }
 
     #[test]
     fn rename_with_link_rewrite_updates_inbound_markdown_link() {
-        let (_cfg, _root, drive) = rename_fixture(
+        let (_cfg, _root, workspace) = rename_fixture(
             "src.md",
             "see [target](./old.md) for context\n",
             "old.md",
             "# Old\n",
         );
-        let outcome = drive.rename_with_link_rewrite("old.md", "new.md").unwrap();
+        let outcome = workspace
+            .rename_with_link_rewrite("old.md", "new.md")
+            .unwrap();
         assert_eq!(outcome.renamed, vec![("old.md".into(), "new.md".into())]);
         assert_eq!(outcome.rewritten, vec!["src.md".to_string()]);
         assert!(outcome.conflicts.is_empty());
         assert_eq!(
-            drive.read_text("src.md").unwrap(),
+            workspace.read_text("src.md").unwrap(),
             "see [target](./new.md) for context\n",
         );
     }
 
     #[test]
     fn rename_with_link_rewrite_preserves_anchor() {
-        let (_cfg, _root, drive) = rename_fixture(
+        let (_cfg, _root, workspace) = rename_fixture(
             "src.md",
             "see [target](./old.md#section-2) for context\n",
             "old.md",
             "# Old\n\n## Section 2\n",
         );
-        drive.rename_with_link_rewrite("old.md", "new.md").unwrap();
+        workspace
+            .rename_with_link_rewrite("old.md", "new.md")
+            .unwrap();
         assert_eq!(
-            drive.read_text("src.md").unwrap(),
+            workspace.read_text("src.md").unwrap(),
             "see [target](./new.md#section-2) for context\n",
         );
     }
 
     #[test]
-    fn rename_with_link_rewrite_demotes_drive_rooted_markdown_to_relative() {
+    fn rename_with_link_rewrite_demotes_workspace_rooted_markdown_to_relative() {
         // Workspace-rooted markdown links (`/foo.md`) read as filesystem-
         // rooted in any renderer that isn't chan's own (browsers,
         // GitHub, Obsidian on export). We use every rewrite pass as
         // an opportunity to migrate them to the relative form so the
         // markdown round-trips outside chan.
-        let (_cfg, _root, drive) = rename_fixture(
+        let (_cfg, _root, workspace) = rename_fixture(
             "notes/src.md",
             "see [target](/old.md) for context\n",
             "old.md",
             "# Old\n",
         );
-        drive
+        workspace
             .rename_with_link_rewrite("old.md", "deep/new.md")
             .unwrap();
         assert_eq!(
-            drive.read_text("notes/src.md").unwrap(),
+            workspace.read_text("notes/src.md").unwrap(),
             "see [target](../deep/new.md) for context\n",
         );
     }
 
     #[test]
-    fn rename_with_link_rewrite_demotes_drive_rooted_when_source_moves() {
+    fn rename_with_link_rewrite_demotes_workspace_rooted_when_source_moves() {
         // Demotion also kicks in when the source file itself moves
         // and the target hadn't: the link is now relative-eligible
         // because the source's directory changed even if the target
         // didn't.
-        let (_cfg, root, drive) = fixture();
+        let (_cfg, root, workspace) = fixture();
         std::fs::create_dir_all(root.path().join("notes")).unwrap();
-        drive.write_text("home.md", "# Home\n").unwrap();
-        drive
+        workspace.write_text("home.md", "# Home\n").unwrap();
+        workspace
             .write_text("notes/src.md", "see [home](/home.md) tail\n")
             .unwrap();
-        drive.reindex(None).unwrap();
-        drive
+        workspace.reindex(None).unwrap();
+        workspace
             .rename_with_link_rewrite("notes/src.md", "archive/src.md")
             .unwrap();
         assert_eq!(
-            drive.read_text("archive/src.md").unwrap(),
+            workspace.read_text("archive/src.md").unwrap(),
             "see [home](../home.md) tail\n",
         );
     }
@@ -7180,69 +7233,71 @@ mod tests {
     #[test]
     fn rename_with_link_rewrite_handles_wiki_link() {
         // Wiki rewrites emit an explicit `./` or `../` prefix because
-        // the bare `[[name]]` form means drive-rooted by chan
+        // the bare `[[name]]` form means workspace-rooted by chan
         // convention; relativization needs the prefix to disambiguate.
-        let (_cfg, _root, drive) =
+        let (_cfg, _root, workspace) =
             rename_fixture("src.md", "see [[old]] for context\n", "old.md", "# Old\n");
-        drive
+        workspace
             .rename_with_link_rewrite("old.md", "archive/old.md")
             .unwrap();
         assert_eq!(
-            drive.read_text("src.md").unwrap(),
+            workspace.read_text("src.md").unwrap(),
             "see [[./archive/old]] for context\n",
         );
     }
 
     #[test]
     fn rename_with_link_rewrite_handles_image_ref() {
-        let (_cfg, _root, drive) = fixture();
+        let (_cfg, _root, workspace) = fixture();
         std::fs::create_dir_all(_root.path().join("images")).unwrap();
         std::fs::write(
             _root.path().join("images").join("cat.png"),
             b"\x89PNG\r\n\x1a\n",
         )
         .unwrap();
-        drive
+        workspace
             .write_text("src.md", "![cat](images/cat.png) ok\n")
             .unwrap();
-        drive.reindex(None).unwrap();
-        drive
+        workspace.reindex(None).unwrap();
+        workspace
             .rename_with_link_rewrite("images/cat.png", "img/cat.png")
             .unwrap();
         assert_eq!(
-            drive.read_text("src.md").unwrap(),
+            workspace.read_text("src.md").unwrap(),
             "![cat](img/cat.png) ok\n",
         );
     }
 
     #[test]
     fn rename_with_link_rewrite_directory_rewrites_all_inbound() {
-        let (_cfg, root, drive) = fixture();
+        let (_cfg, root, workspace) = fixture();
         std::fs::create_dir_all(root.path().join("A")).unwrap();
-        drive.write_text("A/x.md", "# X\n").unwrap();
-        drive.write_text("A/y.md", "# Y\n").unwrap();
-        drive
+        workspace.write_text("A/x.md", "# X\n").unwrap();
+        workspace.write_text("A/y.md", "# Y\n").unwrap();
+        workspace
             .write_text("src.md", "links: [x](A/x.md) and [y](A/y.md) end\n")
             .unwrap();
-        drive.reindex(None).unwrap();
-        drive.rename_with_link_rewrite("A", "B").unwrap();
+        workspace.reindex(None).unwrap();
+        workspace.rename_with_link_rewrite("A", "B").unwrap();
         assert_eq!(
-            drive.read_text("src.md").unwrap(),
+            workspace.read_text("src.md").unwrap(),
             "links: [x](B/x.md) and [y](B/y.md) end\n",
         );
     }
 
     #[test]
     fn rename_with_link_rewrite_does_not_touch_external_links() {
-        let (_cfg, _root, drive) = rename_fixture(
+        let (_cfg, _root, workspace) = rename_fixture(
             "src.md",
             "ext [a](https://example.com/old.md) and [b](./old.md)\n",
             "old.md",
             "# Old\n",
         );
-        drive.rename_with_link_rewrite("old.md", "new.md").unwrap();
+        workspace
+            .rename_with_link_rewrite("old.md", "new.md")
+            .unwrap();
         assert_eq!(
-            drive.read_text("src.md").unwrap(),
+            workspace.read_text("src.md").unwrap(),
             "ext [a](https://example.com/old.md) and [b](./new.md)\n",
         );
     }
@@ -7253,79 +7308,88 @@ mod tests {
         // pointing at a sibling that ALSO moves with the rename should
         // stay valid (./sib.md still resolves correctly post-rename),
         // so no rewrite is required.
-        let (_cfg, root, drive) = fixture();
+        let (_cfg, root, workspace) = fixture();
         std::fs::create_dir_all(root.path().join("A")).unwrap();
-        drive.write_text("A/x.md", "see [sib](./sib.md)\n").unwrap();
-        drive.write_text("A/sib.md", "# Sib\n").unwrap();
-        drive.reindex(None).unwrap();
-        drive.rename_with_link_rewrite("A", "B").unwrap();
-        assert_eq!(drive.read_text("B/x.md").unwrap(), "see [sib](./sib.md)\n",);
+        workspace
+            .write_text("A/x.md", "see [sib](./sib.md)\n")
+            .unwrap();
+        workspace.write_text("A/sib.md", "# Sib\n").unwrap();
+        workspace.reindex(None).unwrap();
+        workspace.rename_with_link_rewrite("A", "B").unwrap();
+        assert_eq!(
+            workspace.read_text("B/x.md").unwrap(),
+            "see [sib](./sib.md)\n",
+        );
     }
 
     #[test]
     fn rename_with_link_rewrite_self_to_external_target() {
         // src moves but a link inside it points at a file OUTSIDE the
         // moved subtree. The relative reference must be re-relativized.
-        let (_cfg, root, drive) = fixture();
+        let (_cfg, root, workspace) = fixture();
         std::fs::create_dir_all(root.path().join("A")).unwrap();
         std::fs::create_dir_all(root.path().join("shared")).unwrap();
-        drive
+        workspace
             .write_text("A/x.md", "see [s](../shared/note.md)\n")
             .unwrap();
-        drive.write_text("shared/note.md", "# Shared\n").unwrap();
-        drive.reindex(None).unwrap();
-        drive.rename_with_link_rewrite("A", "deep/B").unwrap();
+        workspace
+            .write_text("shared/note.md", "# Shared\n")
+            .unwrap();
+        workspace.reindex(None).unwrap();
+        workspace.rename_with_link_rewrite("A", "deep/B").unwrap();
         // Source is now at deep/B/x.md. Relative to that, the target
         // is at ../../shared/note.md.
         assert_eq!(
-            drive.read_text("deep/B/x.md").unwrap(),
+            workspace.read_text("deep/B/x.md").unwrap(),
             "see [s](../../shared/note.md)\n",
         );
     }
 
     #[test]
-    fn rename_with_link_rewrite_wiki_drive_rooted_from_subdir() {
+    fn rename_with_link_rewrite_wiki_workspace_rooted_from_subdir() {
         // Regression: a wiki link `[[friends/alice]]` from a source
         // file that LIVES in `friends/` must still resolve to the
-        // drive-rooted `friends/alice`, not to `friends/friends/alice`
+        // workspace-rooted `friends/alice`, not to `friends/friends/alice`
         // as plain `normalize_href` would do for a bare relative path.
         // build_edges applies this rule on the index side; the rewrite
         // callback mirrors it. After resolution, we emit the new path
         // as an up-relative wiki target.
-        let (_cfg, root, drive) = fixture();
+        let (_cfg, root, workspace) = fixture();
         std::fs::create_dir_all(root.path().join("friends")).unwrap();
-        drive.write_text("friends/alice.md", "# Alice\n").unwrap();
-        drive
+        workspace
+            .write_text("friends/alice.md", "# Alice\n")
+            .unwrap();
+        workspace
             .write_text("friends/bob.md", "see [[friends/alice]] end\n")
             .unwrap();
-        drive.reindex(None).unwrap();
-        drive
+        workspace.reindex(None).unwrap();
+        workspace
             .rename_with_link_rewrite("friends/alice.md", "archive/alice.md")
             .unwrap();
         assert_eq!(
-            drive.read_text("friends/bob.md").unwrap(),
+            workspace.read_text("friends/bob.md").unwrap(),
             "see [[../archive/alice]] end\n",
         );
     }
 
     #[test]
-    fn rename_with_link_rewrite_wiki_drive_rooted_in_moved_source() {
+    fn rename_with_link_rewrite_wiki_workspace_rooted_in_moved_source() {
         // When the source moves, its outgoing wiki links re-anchor
         // against the new source dir: `[[index]]` from a file moved
         // to `friends/` becomes `[[../index]]` so it still points at
         // the same file outside chan's renderer too.
-        let (_cfg, root, drive) = fixture();
+        let (_cfg, root, workspace) = fixture();
         std::fs::create_dir_all(root.path().join("friends")).unwrap();
-        drive.write_text("index.md", "# Index\n").unwrap();
-        drive
+        workspace.write_text("index.md", "# Index\n").unwrap();
+        workspace
             .write_text("alice.md", "ref [[index]] tail\n")
             .unwrap();
-        drive.reindex(None).unwrap();
-        drive
+        workspace.reindex(None).unwrap();
+        workspace
             .rename_with_link_rewrite("alice.md", "friends/alice.md")
             .unwrap();
         assert_eq!(
-            drive.read_text("friends/alice.md").unwrap(),
+            workspace.read_text("friends/alice.md").unwrap(),
             "ref [[../index]] tail\n",
         );
     }
@@ -7335,17 +7399,23 @@ mod tests {
         // Rename the same file twice between reindexes. The second
         // rename must still find the inbound backlink even though the
         // graph's src column was indexed against the original path.
-        let (_cfg, _root, drive) =
+        let (_cfg, _root, workspace) =
             rename_fixture("src.md", "see [a](./a.md) end\n", "a.md", "# A\n");
-        drive.rename_with_link_rewrite("a.md", "b.md").unwrap();
+        workspace.rename_with_link_rewrite("a.md", "b.md").unwrap();
         // After the first rename, src.md points at ./b.md.
-        assert_eq!(drive.read_text("src.md").unwrap(), "see [a](./b.md) end\n",);
+        assert_eq!(
+            workspace.read_text("src.md").unwrap(),
+            "see [a](./b.md) end\n",
+        );
         // Now rename b.md to c.md WITHOUT reindexing. The graph still
         // records the inbound edge against the original "a.md" path,
         // so the second rename must use the cumulative log to find
         // src.md as a backlink source via the original name.
-        drive.rename_with_link_rewrite("b.md", "c.md").unwrap();
-        assert_eq!(drive.read_text("src.md").unwrap(), "see [a](./c.md) end\n",);
+        workspace.rename_with_link_rewrite("b.md", "c.md").unwrap();
+        assert_eq!(
+            workspace.read_text("src.md").unwrap(),
+            "see [a](./c.md) end\n",
+        );
     }
 
     #[test]
@@ -7357,29 +7427,29 @@ mod tests {
         // source's ORIGINAL path; without the log we'd read at that
         // stale path, fail, and skip the rewrite. With the log we
         // translate to the source's current path and update the link.
-        let (_cfg, root, drive) = fixture();
+        let (_cfg, root, workspace) = fixture();
         std::fs::create_dir_all(root.path().join("notes")).unwrap();
         std::fs::create_dir_all(root.path().join("friends")).unwrap();
-        drive.write_text("notes/beta.md", "# Beta\n").unwrap();
-        drive
+        workspace.write_text("notes/beta.md", "# Beta\n").unwrap();
+        workspace
             .write_text("friends/alice.md", "ref [beta](../notes/beta.md)\n")
             .unwrap();
-        drive.reindex(None).unwrap();
+        workspace.reindex(None).unwrap();
         // Move 1: source moves.
-        drive
+        workspace
             .rename_with_link_rewrite("friends/alice.md", "archive/alice-2.md")
             .unwrap();
         // Move 2: target moves. Bug 2 was here: alice-2.md kept the
         // stale `../notes/beta.md` because the graph still had alice's
         // pre-move src path and the lookup failed silently.
-        drive
+        workspace
             .rename_with_link_rewrite("notes/beta.md", "archive/beta.md")
             .unwrap();
         // Original href was `../notes/beta.md` (up-relative, no `./`),
         // so the rewritten bare-relative form is `beta.md`; the
         // dot-explicit prefix is only added when the original used it.
         assert_eq!(
-            drive.read_text("archive/alice-2.md").unwrap(),
+            workspace.read_text("archive/alice-2.md").unwrap(),
             "ref [beta](beta.md)\n",
         );
     }
@@ -7389,31 +7459,36 @@ mod tests {
         // After a reindex the graph is fresh and the cumulative log
         // becomes a liability (it could redirect a path the user has
         // re-created with new content). Reindex must clear it.
-        let (_cfg, _root, drive) =
+        let (_cfg, _root, workspace) =
             rename_fixture("src.md", "see [a](./a.md) end\n", "a.md", "# A\n");
-        drive.rename_with_link_rewrite("a.md", "b.md").unwrap();
+        workspace.rename_with_link_rewrite("a.md", "b.md").unwrap();
         // Reindex now sees the fresh tree.
-        drive.reindex(None).unwrap();
+        workspace.reindex(None).unwrap();
         // Recreate a fresh file at the original name `a.md`. Without
         // the clear, the log would translate "a.md" to "b.md" and a
         // future rename of the FRESH a.md would behave wrongly.
-        drive.write_text("a.md", "# fresh A\n").unwrap();
-        drive
+        workspace.write_text("a.md", "# fresh A\n").unwrap();
+        workspace
             .write_text("src2.md", "see [a](./a.md) end\n")
             .unwrap();
-        drive.reindex(None).unwrap();
+        workspace.reindex(None).unwrap();
         // Renaming the fresh a.md to z.md should rewrite src2.md
         // without confusion from the prior log entry.
-        drive.rename_with_link_rewrite("a.md", "z.md").unwrap();
-        assert_eq!(drive.read_text("src2.md").unwrap(), "see [a](./z.md) end\n",);
+        workspace.rename_with_link_rewrite("a.md", "z.md").unwrap();
+        assert_eq!(
+            workspace.read_text("src2.md").unwrap(),
+            "see [a](./z.md) end\n",
+        );
     }
 
     #[test]
     fn rename_with_link_rewrite_returns_empty_outcome_for_no_backlinks() {
-        let (_cfg, _root, drive) = fixture();
-        drive.write_text("old.md", "# Old\n").unwrap();
-        drive.reindex(None).unwrap();
-        let outcome = drive.rename_with_link_rewrite("old.md", "new.md").unwrap();
+        let (_cfg, _root, workspace) = fixture();
+        workspace.write_text("old.md", "# Old\n").unwrap();
+        workspace.reindex(None).unwrap();
+        let outcome = workspace
+            .rename_with_link_rewrite("old.md", "new.md")
+            .unwrap();
         assert_eq!(outcome.renamed, vec![("old.md".into(), "new.md".into())]);
         assert!(outcome.rewritten.is_empty());
         assert!(outcome.conflicts.is_empty());
@@ -7423,27 +7498,27 @@ mod tests {
 
     #[test]
     fn copy_duplicates_a_file_and_leaves_the_source() {
-        let (_cfg, _root, drive) = fixture();
-        drive.write_text("notes/a.md", "hello").unwrap();
-        let out = drive.copy("notes/a.md", "notes/b.md").unwrap();
+        let (_cfg, _root, workspace) = fixture();
+        workspace.write_text("notes/a.md", "hello").unwrap();
+        let out = workspace.copy("notes/a.md", "notes/b.md").unwrap();
         assert_eq!(out.created, vec!["notes/b.md".to_string()]);
         // Source untouched, destination a faithful duplicate.
-        assert_eq!(drive.read_text("notes/a.md").unwrap(), "hello");
-        assert_eq!(drive.read_text("notes/b.md").unwrap(), "hello");
+        assert_eq!(workspace.read_text("notes/a.md").unwrap(), "hello");
+        assert_eq!(workspace.read_text("notes/b.md").unwrap(), "hello");
     }
 
     #[test]
     fn copy_duplicates_a_directory_subtree_skipping_control_dirs() {
-        let (_cfg, root, drive) = fixture();
-        drive.write_text("proj/a.md", "a").unwrap();
-        drive.write_text("proj/sub/b.md", "b").unwrap();
+        let (_cfg, root, workspace) = fixture();
+        workspace.write_text("proj/a.md", "a").unwrap();
+        workspace.write_text("proj/sub/b.md", "b").unwrap();
         // A .git control dir inside the source must NOT be duplicated.
         // Seed it directly on disk (write_text refuses control-dir
         // paths, which is exactly the gate we are NOT testing here).
         let git_dir = root.path().join("proj/.git");
         std::fs::create_dir_all(&git_dir).unwrap();
         std::fs::write(git_dir.join("HEAD"), "ref: x").unwrap();
-        let out = drive.copy("proj", "proj-copy").unwrap();
+        let out = workspace.copy("proj", "proj-copy").unwrap();
         assert_eq!(
             out.created,
             vec![
@@ -7451,51 +7526,51 @@ mod tests {
                 "proj-copy/sub/b.md".to_string()
             ],
         );
-        assert_eq!(drive.read_text("proj-copy/a.md").unwrap(), "a");
-        assert_eq!(drive.read_text("proj-copy/sub/b.md").unwrap(), "b");
+        assert_eq!(workspace.read_text("proj-copy/a.md").unwrap(), "a");
+        assert_eq!(workspace.read_text("proj-copy/sub/b.md").unwrap(), "b");
         // The control dir was skipped: its file does not exist in the copy.
-        assert!(!drive.exists("proj-copy/.git/HEAD"));
+        assert!(!workspace.exists("proj-copy/.git/HEAD"));
         // Source subtree is intact.
-        assert_eq!(drive.read_text("proj/a.md").unwrap(), "a");
+        assert_eq!(workspace.read_text("proj/a.md").unwrap(), "a");
     }
 
     #[test]
     fn copy_refuses_an_existing_destination() {
-        let (_cfg, _root, drive) = fixture();
-        drive.write_text("a.md", "x").unwrap();
-        drive.write_text("b.md", "y").unwrap();
-        let err = drive.copy("a.md", "b.md").unwrap_err();
+        let (_cfg, _root, workspace) = fixture();
+        workspace.write_text("a.md", "x").unwrap();
+        workspace.write_text("b.md", "y").unwrap();
+        let err = workspace.copy("a.md", "b.md").unwrap_err();
         assert!(matches!(err, ChanError::Io(_)));
         // b.md was not clobbered.
-        assert_eq!(drive.read_text("b.md").unwrap(), "y");
+        assert_eq!(workspace.read_text("b.md").unwrap(), "y");
     }
 
     #[test]
     fn resolve_free_name_suffixes_on_collision_before_extension() {
-        let (_cfg, _root, drive) = fixture();
-        drive.write_text("notes/a.md", "x").unwrap();
+        let (_cfg, _root, workspace) = fixture();
+        workspace.write_text("notes/a.md", "x").unwrap();
         // No collision: returns the bare path.
         assert_eq!(
-            drive.resolve_free_name("notes", "new.md").unwrap(),
+            workspace.resolve_free_name("notes", "new.md").unwrap(),
             "notes/new.md"
         );
         // First collision -> " copy" before the extension.
         assert_eq!(
-            drive.resolve_free_name("notes", "a.md").unwrap(),
+            workspace.resolve_free_name("notes", "a.md").unwrap(),
             "notes/a copy.md"
         );
         // Second collision -> " copy 2".
-        drive.write_text("notes/a copy.md", "x").unwrap();
+        workspace.write_text("notes/a copy.md", "x").unwrap();
         assert_eq!(
-            drive.resolve_free_name("notes", "a.md").unwrap(),
+            workspace.resolve_free_name("notes", "a.md").unwrap(),
             "notes/a copy 2.md"
         );
     }
 
     #[test]
     fn resolve_free_name_at_drive_root_has_no_prefix() {
-        let (_cfg, _root, drive) = fixture();
-        assert_eq!(drive.resolve_free_name("", "top.md").unwrap(), "top.md");
+        let (_cfg, _root, workspace) = fixture();
+        assert_eq!(workspace.resolve_free_name("", "top.md").unwrap(), "top.md");
     }
 
     #[test]

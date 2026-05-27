@@ -4,7 +4,7 @@ import graph from "./GraphPanel.svelte?raw";
 // graph-loading-state-spec slice 1: the graph must signal an in-flight
 // index so a not-yet-complete semantic graph (dead-end "missing" nodes
 // that may simply be unindexed) is not read as final. Slice 1 wires the
-// drive-global `indexStatus` into the graph + shows an "indexing" cue in
+// workspace-global `indexStatus` into the graph + shows an "indexing" cue in
 // the status bar; the per-scope ghost pull-back + parent-dir pulse is the
 // follow-up slice.
 

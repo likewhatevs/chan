@@ -67,7 +67,7 @@ describe("watcher socket scope subscription", () => {
 
     sub.subscribeDir("notes/recipes");
     sub.unsubscribeDir("notes/recipes");
-    sub.subscribeDir(""); // drive root scope
+    sub.subscribeDir(""); // workspace root scope
 
     expect(parseSent(ws)).toEqual([
       { type: "sub", dir: "notes/recipes" },

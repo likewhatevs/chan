@@ -2,7 +2,7 @@
 //
 // Coverage for the list-guide auto-hide plugin. The plugin watches
 // selection updates and toggles `data-list-guides` on the editor
-// DOM to drive the CSS fade. These tests mount a real EditorView
+// DOM to workspace the CSS fade. These tests mount a real EditorView
 // in jsdom so we can poke the selection and observe the attribute
 // transitions on the same surface the runtime uses.
 

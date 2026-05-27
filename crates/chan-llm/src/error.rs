@@ -10,28 +10,28 @@ pub type Result<T> = std::result::Result<T, LlmError>;
 pub enum LlmError {
     #[error("tool error: {0}")]
     Tool(String),
-    /// Catch-all for chan-drive errors that don't have a typed
+    /// Catch-all for chan-workspace errors that don't have a typed
     /// variant here. Prefer the narrow variants below when matching;
     /// they preserve the kind so hosts can branch (e.g. "show
     /// reload prompt" for `WriteConflict`, "show too-large dialog"
     /// for `WriteTooLarge`). The narrow variants used to flatten
     /// into this string and broke host UX.
-    #[error("chan-drive: {0}")]
+    #[error("chan-workspace: {0}")]
     Core(String),
-    /// chan-drive's `WriteConflict` passthrough. The write was a
+    /// chan-workspace's `WriteConflict` passthrough. The write was a
     /// CAS against `current_mtime_ns` and the file
     /// changed under it; the host should re-read and retry.
     #[error("write conflict: file changed on disk (current mtime ns: {current_mtime_ns:?})")]
     WriteConflict { current_mtime_ns: Option<i64> },
-    /// chan-drive's `WriteTooLarge` passthrough.
+    /// chan-workspace's `WriteTooLarge` passthrough.
     #[error("write too large: {size} bytes exceeds {limit} byte cap for {kind}")]
     WriteTooLarge { kind: String, size: u64, limit: u64 },
-    /// chan-drive's `ListingTooLarge` passthrough.
+    /// chan-workspace's `ListingTooLarge` passthrough.
     #[error("listing too large: {observed} entries (cap {limit})")]
     ListingTooLarge { observed: u64, limit: u64 },
-    /// chan-drive refused a path: sandbox escape, special file,
+    /// chan-workspace refused a path: sandbox escape, special file,
     /// non-editable extension, or empty rel. The string carries the
-    /// chan-drive Display so the host can show it directly.
+    /// chan-workspace Display so the host can show it directly.
     #[error("path refused: {0}")]
     PathRefused(String),
     #[error("io: {0}")]

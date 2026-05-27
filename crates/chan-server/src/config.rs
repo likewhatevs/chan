@@ -3,16 +3,16 @@
 //! Persisted at `<config>/chan/server.toml` (sibling of
 //! `<config>/chan/preferences.toml`). Holds chan-server-specific
 //! paths and toggles that aren't user content (those live in the
-//! drive).
+//! workspace).
 //!
-//! Today: `attachments_dir`, a drive-relative POSIX path; the actual
+//! Today: `attachments_dir`, a workspace-relative POSIX path; the actual
 //! file I/O routes through `chan_workspace::Workspace::write_bytes` so the
 //! path sandbox + special-file refusal + atomic-write invariants
 //! apply.
 //!
 //! New fields land here when a route surfaces a server-shaped
 //! setting (e.g. a future "open-in-browser on launch" toggle).
-//! Anything filesystem-shaped on the drive itself stays in chan-drive.
+//! Anything filesystem-shaped on the workspace itself stays in chan-workspace.
 
 use std::path::{Path, PathBuf};
 
@@ -27,7 +27,7 @@ pub struct ServerConfig {
     /// land. Default `"attachments"` (a sibling of the user's
     /// notes). The frontend renders the configured value;
     /// callers can pass a sub-path (`"media/2026"`) and it'll
-    /// be sandboxed under the drive root via Workspace::write_bytes.
+    /// be sandboxed under the workspace root via Workspace::write_bytes.
     #[serde(default = "default_attachments_dir")]
     pub attachments_dir: String,
     #[serde(default)]

@@ -3,8 +3,8 @@ import source from "./GraphCanvas.svelte?raw";
 
 // `fullstack-a-49` (G2): filesystem-hierarchy as graph spine.
 // Layout transform added to GraphCanvas's d3-force simulation so
-// every plotted node sits ABOVE its ancestor-chain to the drive
-// root (GI-10: drive root anchors the bottom, the spine grows up).
+// every plotted node sits ABOVE its ancestor-chain to the workspace
+// root (GI-10: workspace root anchors the bottom, the spine grows up).
 // Three load-bearing pieces:
 //
 // 1. `DNode` extended with `depth` + `parentId`.
@@ -39,7 +39,7 @@ describe("fullstack-a-49: filesystem-hierarchy layout shape", () => {
     expect(source).toMatch(/return \{ depth: -1, parentId: null \}/);
   });
 
-  test("nodeHierarchy: drive root (folder id \"\") sits at depth 0, no parent", () => {
+  test("nodeHierarchy: workspace root (folder id \"\") sits at depth 0, no parent", () => {
     expect(source).toMatch(/if \(n\.id === "" \|\| n\.path === ""\)/);
     expect(source).toMatch(/return \{ depth: 0, parentId: null \}/);
   });
@@ -56,7 +56,7 @@ describe("fullstack-a-49: filesystem-hierarchy layout shape", () => {
 
   test("nodeHierarchy: file depth = path segment count; parent is parent dir node id", () => {
     // File at "docs/foo.md" → depth 2, parent "directory:docs".
-    // File at "README.md" → depth 1, parent "" (drive root).
+    // File at "README.md" → depth 1, parent "" (workspace root).
     // Pin the same derivation block for file/media kinds (no
     // separate branch needed because the helper falls through to
     // the path-based shape after the folder + non-hierarchical
@@ -79,7 +79,7 @@ describe("fullstack-a-49: filesystem-hierarchy layout shape", () => {
   test("buildSim wires depth-aware forceY for hierarchical nodes", () => {
     // The original `forceY<DNode>(0)` is replaced. Hierarchical
     // nodes (depth >= 0) target `-depth * hierarchyYSpacing` (GI-10:
-    // negative so the spine grows UP from the drive root at the
+    // negative so the spine grows UP from the workspace root at the
     // bottom); non-hierarchical (depth < 0) fall back to centerStrength.
     expect(source).toMatch(
       /forceY<DNode>\(\(d\) => \{[\s\S]*?return -d\.depth \* FORCE\.hierarchyYSpacing/,

@@ -5,7 +5,7 @@ import { __testIsTransientBootstrapError } from "./store.svelte";
 import { ApiError } from "../api/errors";
 
 // bug 8 (desktop auto-reload + hang on loading): when WKWebView
-// recycles a drive window's web-content process and the SPA reloads
+// recycles a workspace window's web-content process and the SPA reloads
 // while the embedded loopback server is briefly unreachable, bootstrap
 // must retry transient failures instead of sticking on "loading...".
 // These pin which failures count as transient (retry) vs terminal

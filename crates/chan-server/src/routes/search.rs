@@ -1,8 +1,8 @@
 //! Filename + content search and indexer status/rebuild.
 //!
 //! `/api/search/files` is a server-side substring scan of `list_tree`
-//! (chan-drive has no built-in filename index; the cost is linear and
-//! the drive size budget is small). `/api/search/content` defers to
+//! (chan-workspace has no built-in filename index; the cost is linear and
+//! the workspace size budget is small). `/api/search/content` defers to
 //! `Workspace::search` (BM25 today, hybrid when the `embeddings` feature
 //! is on). `/api/index/status` and `/api/index/rebuild` surface the
 //! background indexer's state machine.
@@ -50,18 +50,18 @@ fn default_search_limit() -> usize {
 }
 
 /// Server-side filename match: walk the tree, keep regular files
-/// whose basename contains `q` (case-insensitive). chan-drive has
+/// whose basename contains `q` (case-insensitive). chan-workspace has
 /// no built-in filename index since the cost (scan list_tree) is
-/// linear and the drive size budget is small. Revisit if profiles
+/// linear and the workspace size budget is small. Revisit if profiles
 /// show this hot.
 pub async fn api_search_files(
     State(state): State<Arc<AppState>>,
     Query(p): Query<FileSearchParams>,
 ) -> Response {
-    let drive = state.drive();
+    let workspace = state.workspace();
     blocking_response(
         move || {
-            let tree = match drive.list_tree() {
+            let tree = match workspace.list_tree() {
                 Ok(t) => t,
                 Err(e) => return err_from(&e),
             };
@@ -70,7 +70,7 @@ pub async fn api_search_files(
             // very early in the lifecycle (index not yet open); in that case
             // we fall back to returning all matches rather than blocking the
             // search.
-            let graph = drive.graph().ok();
+            let graph = workspace.graph().ok();
             let needle = p.q.to_lowercase();
             let mut hits = Vec::new();
             // Two-pass collection so editable-text notes (.md / .txt) sort
@@ -127,8 +127,8 @@ pub struct ContentSearchParams {
     q: String,
     #[serde(default = "default_content_limit")]
     limit: u32,
-    /// Optional subdir scope (POSIX rel path under the drive root).
-    /// Mirrors chan-drive's `SearchOpts::scope`.
+    /// Optional subdir scope (POSIX rel path under the workspace root).
+    /// Mirrors chan-workspace's `SearchOpts::scope`.
     #[serde(default)]
     scope: Option<String>,
 }
@@ -142,12 +142,12 @@ fn default_content_limit() -> u32 {
 /// carrying the best-ranked heading/snippet for that path.
 #[derive(Serialize)]
 struct ContentSearchResponse {
-    /// True when the index is ready to serve queries. chan-drive
-    /// opens the index lazily and is always ready once a drive is
+    /// True when the index is ready to serve queries. chan-workspace
+    /// opens the index lazily and is always ready once a workspace is
     /// open; kept as an explicit field so a future "rebuilding"
     /// state can land without a contract break.
     ready: bool,
-    /// Mode actually used. "bm25" today (chan-drive's tantivy
+    /// Mode actually used. "bm25" today (chan-workspace's tantivy
     /// search); "hybrid" / "semantic" reserved for the dense
     /// retrieval that lands with the embeddings feature.
     mode: &'static str,
@@ -185,11 +185,11 @@ pub async fn api_search_content(
         // without `embeddings`.
         ..Default::default()
     };
-    let drive = state.drive();
+    let workspace = state.workspace();
     let query = p.q;
     blocking_response(
         move || {
-            let results = match drive.search(&query, &opts) {
+            let results = match workspace.search(&query, &opts) {
                 Ok(r) => r,
                 Err(e) => return err_from(&e),
             };
@@ -301,8 +301,8 @@ struct DirectoryStateAccum {
 /// plus the persisted BM25 path snapshot, avoiding any parse/embed
 /// work on the request path.
 pub async fn api_indexing_state(State(state): State<Arc<AppState>>) -> Response {
-    let drive = match state.try_drive() {
-        Ok(drive) => drive,
+    let workspace = match state.try_drive() {
+        Ok(workspace) => workspace,
         Err(e) => return err_state(&e),
     };
     let indexer = match state.try_indexer() {
@@ -312,11 +312,12 @@ pub async fn api_indexing_state(State(state): State<Arc<AppState>>) -> Response 
     let current_file = current_index_file(indexer.snapshot());
     blocking_response(
         move || {
-            let entries = match fs_ops::list_tree_filtered(drive.root(), drive.walk_filter()) {
-                Ok(entries) => entries,
-                Err(e) => return err_from(&e),
-            };
-            let indexed_paths = match drive.indexed_paths() {
+            let entries =
+                match fs_ops::list_tree_filtered(workspace.root(), workspace.walk_filter()) {
+                    Ok(entries) => entries,
+                    Err(e) => return err_from(&e),
+                };
+            let indexed_paths = match workspace.indexed_paths() {
                 Ok(paths) => paths.into_iter().collect::<BTreeSet<_>>(),
                 Err(e) => {
                     tracing::warn!(error = %e, "indexing-state: failed to snapshot indexed paths");
@@ -411,7 +412,7 @@ fn parent_dir(path: &str) -> &str {
     path.rsplit_once('/').map_or("", |(parent, _name)| parent)
 }
 
-/// Trigger a full reindex of the drive (search + graph). Routed
+/// Trigger a full reindex of the workspace (search + graph). Routed
 /// through the background indexer's coordinator so the request
 /// coalesces with anything already queued and the status
 /// snapshot transitions cleanly through Building -> Idle.
@@ -586,15 +587,15 @@ mod tests {
         let root = TempDir::new().unwrap();
         let lib = chan_workspace::Library::open_at(cfg.path().join("config.toml")).unwrap();
         lib.register_workspace(root.path()).unwrap();
-        let drive = lib.open_workspace(root.path()).unwrap();
-        drive.write_text("notes/done.md", "# done\n").unwrap();
-        drive.write_text("notes/todo.md", "# todo\n").unwrap();
-        drive.index_file("notes/done.md").unwrap();
+        let workspace = lib.open_workspace(root.path()).unwrap();
+        workspace.write_text("notes/done.md", "# done\n").unwrap();
+        workspace.write_text("notes/todo.md", "# todo\n").unwrap();
+        workspace.index_file("notes/done.md").unwrap();
 
         let (events_tx, _) = broadcast::channel::<String>(1);
         let (index_events_tx, _) = broadcast::channel::<chan_workspace::WatchEvent>(1);
         let indexer = Arc::new(crate::indexer::Indexer::spawn(
-            drive.clone(),
+            workspace.clone(),
             index_events_tx.subscribe(),
             false,
             SearchAggression::Conservative,
@@ -607,7 +608,7 @@ mod tests {
             library: lib,
             drive_root: root.path().to_path_buf(),
             drive_cell: Arc::new(RwLock::new(Some(WorkspaceCell {
-                drive,
+                workspace,
                 watch_handle: None,
                 indexer,
             }))),

@@ -2,7 +2,7 @@
 //
 // Wraps the `ignore` crate so consumers get gitignore-aware,
 // hidden-file-aware traversal with the chan-report defaults
-// applied. Emits drive-relative POSIX paths the counter can
+// applied. Emits workspace-relative POSIX paths the counter can
 // consume directly.
 //
 // `Filter` caches the gitignore + override matchers so
@@ -69,7 +69,7 @@ impl Filter {
         })
     }
 
-    /// Returns true when `rel` (POSIX, drive-relative, no leading
+    /// Returns true when `rel` (POSIX, workspace-relative, no leading
     /// slash) should be tracked. Ancestors are checked as
     /// directories so gitignore rules like `target/` reject the
     /// whole subtree the way the walker would during descent.
@@ -118,7 +118,7 @@ pub(crate) fn walk_root(opts: &ReportOptions) -> Result<Vec<String>, ChanReportE
     if opts.respect_gitignore {
         // The ignore crate only honors .gitignore files inside a
         // git repo (i.e. when a `.git/` directory is present).
-        // chan-report's drives are not always git repos, so treat
+        // chan-report's workspaces are not always git repos, so treat
         // any .gitignore we find as a regular ignore file too.
         // This is read in addition to (not instead of) git_ignore,
         // so nested .gitignore files inside a real repo continue
