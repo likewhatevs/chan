@@ -72,12 +72,14 @@ describe("no inline close affordance on first-class surfaces", () => {
     expect(graph).toContain("synthesizeScope(graphState.scopeId)");
   });
 
-  // fullstack-68: kill the Graph tab's chrome bar; filter chips +
-  // hamburger items relocate to the tab right-click bubble.
-  test("GraphPanel hides the chrome bar when rendered as a tab", () => {
-    // The `<div class="bar">` block is now gated on `!tab` so the
-    // overlay variant keeps it; the tab variant body is canvas-only.
-    expect(graph).toMatch(/\{#if !tab\}[\s\S]*?<div class="bar">/);
+  // fullstack-68 + scope-concept wipe (lane-a A1): the Graph tab's
+  // chrome bar is removed ENTIRELY. Filter chips + hamburger items
+  // live in the tab right-click bubble; the overlay-only `{#if !tab}`
+  // bar (and its `<div class="bar">`) went away with the overlay
+  // variant - GraphPanel is now tab-only.
+  test("GraphPanel has no chrome bar (overlay variant removed)", () => {
+    expect(graph).not.toContain('<div class="bar">');
+    expect(graph).not.toContain("{#if !tab}");
   });
 
   // fullstack-73: "Graph from here" affordance on DriveInfoBody so

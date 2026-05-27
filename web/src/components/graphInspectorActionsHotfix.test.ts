@@ -10,9 +10,11 @@ import canvas from "./GraphCanvas.svelte?raw";
 // would NOT reload as a side effect of invoking them. The root cause
 // was reactive, not a mis-bound onclick: the graph reload $effect read
 // the `currentScope` $derived (through load()'s synchronous prelude),
-// and `currentScope` is recomputed from `availableGraphScopes()`, which
-// reads the workspace layout. So "Open" (opens an editor tab) and "Show
-// File" (reveals in the File Browser) both shifted the layout, churned
+// and `currentScope` was recomputed from the pane-derived scope list
+// (`availableGraphScopes`, removed in the phase-12 scope-concept wipe;
+// currentScope now derives from the tab's own scopeId via
+// `synthesizeScope`). So "Open" (opens an editor tab) and "Show File"
+// (reveals in the File Browser) both shifted the layout, churned
 // `currentScope` to an equal-but-new object, and re-fired the reload.
 // The fix anchors the reload effect on a stable value key.
 

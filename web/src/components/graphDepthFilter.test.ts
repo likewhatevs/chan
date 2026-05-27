@@ -79,15 +79,16 @@ describe("fullstack-a-52 G10: link filter dropped", () => {
     expect(graph).toMatch(/if \(kind === "link"\) return true/);
   });
 
-  test("chip iterations no longer ship a 'link' entry", () => {
-    // Both iteration sites (tab-menu + filterChips snippet) drop
-    // the "link" element. `-a-57` extended the arrays with
-    // additional bucket kinds; pin the load-bearing absence
-    // (link) + the leading-kind shape (starts with tag) so the
-    // guard tolerates future-extension additions.
+  test("chip iteration no longer ships a 'link' entry", () => {
+    // The scope-concept wipe (lane-a A1) removed the overlay-bar
+    // `filterChips` snippet, so the tab-menu bubble is now the SINGLE
+    // chip-iteration site. `-a-57` extended the array with additional
+    // bucket kinds; pin the load-bearing absence (link) + the leading-
+    // kind shape (starts with tag) so the guard tolerates future-
+    // extension additions.
     const matches = graph.match(/\["tag", "mention"[^\]]*\] as const/g);
     expect(matches).not.toBeNull();
-    expect(matches!.length).toBeGreaterThanOrEqual(2);
+    expect(matches!.length).toBe(1);
     expect(graph).not.toMatch(/\["link",\s*"tag"/);
   });
 

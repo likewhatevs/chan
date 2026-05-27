@@ -31,11 +31,9 @@
     type GraphTab,
   } from "../state/tabs.svelte";
   import {
-    availableGraphScopes,
     browserSelection,
     fbSelectSingle,
     graphReloadSignal,
-    graphOverlay,
     paneWidths,
     persistPaneWidths,
     persistTreeExpanded,
@@ -51,7 +49,6 @@
   } from "../state/fbWatch.svelte";
   import { type ScopeOption } from "../state/scope.svelte";
   import ResizeHandle from "./ResizeHandle.svelte";
-  import HamburgerMenu from "./HamburgerMenu.svelte";
   import { clampMenu } from "./menuClamp";
   import { portal } from "./portal";
   import { tabMenu, closeTabMenu } from "../state/tabMenu.svelte";
@@ -78,34 +75,28 @@
     onClose,
     onFlip,
   }: {
-    tab?: GraphTab;
+    tab: GraphTab;
     onClose?: () => void;
     onFlip?: () => void;
   } = $props();
 
-  const graphState = $derived(tab ?? graphOverlay);
-  const visible = $derived(tab ? true : graphOverlay.open);
+  // The graph is always a first-class TAB (Pane mounts GraphPanel only
+  // with a `graph`-kind tab). The pre-migration overlay variant is gone,
+  // so the scope/state come straight from the tab and the panel is always
+  // visible. `visible` is kept (typed boolean) because the load + depth-
+  // probe effects gate on it; it is simply constant now.
+  const graphState = $derived(tab);
+  const visible: boolean = true;
 
-  /// `fullstack-64`: the scope-selector dropdown is gone (Cmd+K 3
-  /// + "Graph from here" + inspector reveal are the canonical
-  /// scope-setting paths). The `scopeOptions` listing is still
-  /// useful here for its rich labels when the active scope is one
-  /// the layout knows about, but a context-aware spawn can land
-  /// the user on a `file:`/`dir:` scope that isn't in any tab.
-  /// Synthesize a matching ScopeOption from `scopeId` in that
-  /// case so the rest of the panel (`filesystemMode`,
-  /// `seedIds`, BFS shape, etc.) still has a `currentScope.kind`
-  /// to branch on.
-  ///
-  /// The synthesis also removes the `fullstack-57` snap-back bug —
-  /// the old effect resetted `scopeId` to `defaultScopeId()`
-  /// whenever the lookup missed, clobbering the spawn's
-  /// `file:` scope before the user saw it.
-  const scopeOptions = $derived<ScopeOption[]>(availableGraphScopes());
-
+  /// The scope-selector dropdown is gone; "Graph from here", inspector
+  /// reveal, and file-browser navigation are the canonical scope-setting
+  /// paths. The graph tab carries its own `scopeId`, so `currentScope`
+  /// resolves straight from it via `synthesizeScope` - no global,
+  /// pane-derived option list (the retired `availableGraphScopes`). The
+  /// rest of the panel branches on `currentScope.kind` (filesystemMode,
+  /// seedIds, BFS shape, etc.).
   const currentScope = $derived<ScopeOption | null>(
-    scopeOptions.find((o) => o.id === graphState.scopeId)
-      ?? synthesizeScope(graphState.scopeId),
+    synthesizeScope(graphState.scopeId),
   );
 
   function synthesizeScope(scopeId: string): ScopeOption | null {
@@ -124,7 +115,9 @@
     if (scopeId.startsWith("tag:")) {
       const nodeId = scopeId.slice("tag:".length);
       if (!nodeId) return null;
-      return { id: scopeId, kind: "tag", label: nodeId, nodeId };
+      // Strip the leading `#` for the label: the scope header renders it
+      // as `#${label}`, so the raw `#search` nodeId would double-hash.
+      return { id: scopeId, kind: "tag", label: nodeId.replace(/^#/, ""), nodeId };
     }
     if (scopeId.startsWith("git_repo:")) {
       const root = scopeId.slice("git_repo:".length);
@@ -226,8 +219,7 @@
   }
 
   function close(): void {
-    if (onClose) onClose();
-    else graphOverlay.open = false;
+    onClose?.();
   }
 
   // ---- types -------------------------------------------------------------
@@ -431,19 +423,6 @@
   // opening a file from here.
   let selectedId = $state<string | null>(null);
 
-  /// Hamburger menu used by the overlay variant's bar + by the
-  /// in-canvas right-click context menu. The depth slider, reload,
-  /// and details toggle all live inside it. The tab variant drops
-  /// the bar entirely per `fullstack-68`; the right-click bubble
-  /// re-uses the same `menuItems` snippet so the items stay one
-  /// source of truth.
-  let menu: HamburgerMenu | undefined = $state();
-  let menuOpen = $state(false);
-  /// Bigger than the other overlays because the menu carries the
-  /// scope-conditional depth slider, filters, and tab footer rows.
-  const POPOVER_HEIGHT = 340;
-  const POPOVER_WIDTH = 260;
-
   /// `fullstack-68`: tab right-click bubble state. Open when the
   /// shared tab-menu state addresses THIS tab; positioned via the
   /// stored anchor through `clampMenu` so the bubble stays on-
@@ -520,7 +499,6 @@
   // longer one.
 
   async function reloadGraph(): Promise<void> {
-    menu?.close();
     if (currentScope?.kind === "drive" || currentScope?.kind === "global") {
       driveDepthProbe = null;
       await loadDriveDepthProbe();
@@ -529,19 +507,16 @@
   }
 
   function flipToSettings(): void {
-    menu?.close();
     closeTabMenu();
     onFlip?.();
   }
 
   function doReopenClosedTab(): void {
-    menu?.close();
     closeTabMenu();
     reopenClosedTab();
   }
 
   function closeFromMenu(): void {
-    menu?.close();
     closeTabMenu();
     close();
   }
@@ -587,13 +562,11 @@
 
   function onGraphContextMenu(e: MouseEvent): void {
     const t = e.target as HTMLElement | null;
-    // Don't hijack right-click on inputs / native select / filter
-    // chips so the browser's native UI fires there. The scope-select
-    // is gone (`fullstack-64`); `select, input` covers any other
-    // native control that lands in the bar later.
-    if (t?.closest("select, input, .filters")) return;
+    // Let the browser's native UI fire on real form controls; swallow
+    // right-click everywhere else on the canvas. The graph tab menu is
+    // reached via the tab-strip right-click bubble, not a canvas menu.
+    if (t?.closest("select, input")) return;
     e.preventDefault();
-    menu?.openAtCursor(e.clientX, e.clientY);
   }
 
   // ---- derived: scope-filtered render set --------------------------------
@@ -1674,11 +1647,10 @@
 
 <!-- The graph is always a first-class TAB (mounted only by Pane.svelte
      with a `tab`). The pre-migration OverlayShell variant is gone -
-     OverlayShell now lives only in Search + Settings. The remaining
-     `graphState = tab ?? graphOverlay` / `visible` fallbacks + the dead
-     `{#if !tab}` bar are inert (tab is always set); the graphOverlay
-     STATE itself is load-bearing (availableGraphScopes mirror) and is
-     removed in the scope-concept wipe (see lane-a journal R-plan). -->
+     OverlayShell now lives only in Search + Settings. `graphState` is the
+     tab, `visible` is constant, and the overlay-only bar has been removed.
+     The graphOverlay/browserOverlay STATE in store is being retired by the
+     scope-concept wipe (lane-a A5); GraphPanel no longer reads it. -->
 {@render graphContent()}
 
 {#snippet graphContent()}
@@ -1688,27 +1660,6 @@
     oncontextmenu={onGraphContextMenu}
     role="presentation"
   >
-  {#if !tab}
-    <!-- Overlay variant keeps the bar — there's no tab-strip
-         right-click affordance available in the overlay shell.
-         `fullstack-68` removes it from the tab variant; chips +
-         hamburger items relocate to the tab right-click bubble
-         below. -->
-    <div class="bar">
-      {@render filterChips()}
-      <span class="bar-menu">
-        <HamburgerMenu
-          bind:this={menu}
-          bind:open={menuOpen}
-          width={POPOVER_WIDTH}
-          height={POPOVER_HEIGHT}
-        >
-          {@render menuItems()}
-        </HamburgerMenu>
-      </span>
-    </div>
-  {/if}
-
   {#if tab && tabMenuOpen}
     <!-- `fullstack-68`: Graph-tab right-click bubble. Anchored to
          the tab-strip click position via clampMenu.
@@ -2099,94 +2050,6 @@
   </div>
 {/snippet}
 
-{#snippet filterChips()}
-  <div class="filters">
-    {#each ["tag", "mention", "language", "img", "folder", "markdown", "source"] as const as kind (kind)}
-      {@const driveLike =
-        currentScope?.kind === "drive" || currentScope?.kind === "global"}
-      {#if (!filesystemMode || (kind !== "img" && kind !== "language")) && (languageMode ? kind === "language" : kind !== "language" || driveLike) && (kind !== "folder" || filesystemMode || driveLike)}
-        <label class="chip" class:on={show[kind]}>
-          <input type="checkbox" bind:checked={show[kind]} />
-          <span class="dot" style="background:{FILTER_COLORS[kind]}"></span>
-          {#if filesystemMode}
-            {kind === "tag"
-              ? "symlink"
-              : kind === "mention"
-                ? "hardlink"
-                : "directory"}
-          {:else}
-            {kind === "mention" ? "contact" : kind === "img" ? "media" : kind}
-          {/if}
-          <span class="count">{counts[kind]}</span>
-        </label>
-      {/if}
-    {/each}
-  </div>
-{/snippet}
-
-{#snippet menuItems()}
-  <!-- Depth slider is always in the menu so it doesn't disappear
-       under the user when the scope toggles. Disabled on
-       drive / global scopes (those always render everything
-       regardless of hop count) so the affordance stays visible. -->
-  {@const depthDisabled =
-    !languageMode &&
-    (!currentScope ||
-      currentScope.kind === "drive" ||
-      currentScope.kind === "global")}
-  <li>
-    <div class="menu-slider-row" class:disabled={depthDisabled}>
-      <span class="menu-slider-label">Depth</span>
-      <input
-        type="range"
-        min={languageMode ? "0" : "1"}
-        max={depthCap}
-        step="1"
-        bind:value={graphState.depth}
-        disabled={depthDisabled}
-        onmousedown={(e) => e.stopPropagation()}
-        aria-label="depth"
-      />
-      <span class="menu-slider-value">{languageMode && graphState.depth === 0 ? "max" : graphState.depth}</span>
-    </div>
-  </li>
-  <li class="sep" role="separator"></li>
-  <li>
-    <button role="menuitem" onclick={reloadGraph}>
-      <span class="glyph" aria-hidden="true">↻</span>
-      <span class="menu-row-label">Reload</span>
-      <span class="menu-row-chord"></span>
-    </button>
-  </li>
-  <li class="sep" role="separator"></li>
-  <li>
-    <button role="menuitem" onclick={flipToSettings} disabled={!onFlip}>
-      <Settings2 size={16} strokeWidth={1.75} aria-hidden="true" />
-      <span class="menu-row-label">Settings</span>
-      <span class="menu-row-chord"></span>
-    </button>
-  </li>
-  <li class="sep" role="separator"></li>
-  <li>
-    <button
-      role="menuitem"
-      disabled={!canReopenClosedTab()}
-      onclick={doReopenClosedTab}
-    >
-      <History size={16} strokeWidth={1.75} aria-hidden="true" />
-      <span class="menu-row-label">Reopen Closed Tab</span>
-      <span class="menu-row-chord">{chordFor("app.tab.reopenClosed") ?? ""}</span>
-    </button>
-  </li>
-  <li>
-    <button role="menuitem" onclick={closeFromMenu}>
-      <X size={16} strokeWidth={1.75} aria-hidden="true" />
-      <span class="menu-row-label">Close</span>
-      <span class="menu-row-chord">{chordFor("app.tab.close") ?? ""}</span>
-    </button>
-  </li>
-{/snippet}
-
 <style>
   .graph-tab {
     display: flex;
@@ -2196,23 +2059,8 @@
     min-width: 0;
     background: var(--bg);
   }
-  .bar {
-    display: flex;
-    align-items: center;
-    gap: 0.5rem;
-    padding: 0.25rem 0.5rem;
-    background: var(--bg-card);
-    border-bottom: 1px solid var(--border);
-    font-size: 14px;
-    color: var(--text-secondary);
-    flex-shrink: 0;
-  }
-  /* `fullstack-64`: `.scope-label`, `.scope-select`, and the
-     `.chrome-btn` rules dropped alongside the scope-selector +
-     maximize-button DOM elements. The bar's hamburger menu lives
-     inside `<HamburgerMenu>` so it brings its own chrome. */
-  /* Slider row used inside the hamburger menu. Mirrors the file
-     tab menu's page-width row so all in-menu sliders read alike. */
+  /* Slider row used inside the graph tab-menu bubble. Mirrors the
+     file tab menu's page-width row so all in-menu sliders read alike. */
   :global(.menu-slider-row) {
     display: flex;
     align-items: center;
@@ -2267,45 +2115,6 @@
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
-  }
-  .filters {
-    display: flex;
-    gap: 0.35rem;
-    align-items: center;
-    flex-wrap: wrap;
-  }
-  .bar-menu {
-    margin-left: auto;
-    display: flex;
-    align-items: center;
-  }
-  .chip {
-    display: inline-flex;
-    align-items: center;
-    gap: 0.25rem;
-    padding: 1px 6px;
-    border: 1px solid var(--btn-border);
-    border-radius: 12px;
-    cursor: pointer;
-    user-select: none;
-    color: var(--text-secondary);
-    background: var(--btn-bg);
-  }
-  .chip.on {
-    color: var(--text);
-    border-color: var(--btn-hover);
-  }
-  .chip input {
-    display: none;
-  }
-  .chip .dot {
-    width: 8px;
-    height: 8px;
-    border-radius: 50%;
-  }
-  .chip .count {
-    font-variant-numeric: tabular-nums;
-    opacity: 0.75;
   }
   .body {
     flex: 1;
