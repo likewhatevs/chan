@@ -10,7 +10,7 @@ assignees: ''
 
 What user-facing problem are you trying to solve? Concrete use case is more valuable than abstract framing.
 
-## Proposed shape
+## Proposed solution (optional)
 
 A short description of the change you have in mind. Sketches, mockups, or pseudo-code welcome but optional.
 
@@ -26,4 +26,4 @@ chan keeps a tight feature surface. Quick sanity check before opening:
 * Does it preserve the chan-drive boundary (no direct filesystem ops outside the drive contract)?
 * Does it stay local-first by default (no required network calls)?
 
-If unsure, that's fine — open the issue and we'll discuss.
+If unsure, that's fine. Open the issue and we'll discuss.

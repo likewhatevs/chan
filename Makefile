@@ -12,6 +12,7 @@ LINUX_TARGET ?= x86_64-unknown-linux-gnu
 DEB_TARGET ?= $(LINUX_TARGET)
 RPM_TARGET ?= $(LINUX_TARGET)
 ARCHPKG_TARGET ?= $(LINUX_TARGET)
+CHAN_TARGET ?=
 
 BIN := target/release/chan
 WEB_BUILD_STAMP := web/.chan-build-stamp
@@ -24,7 +25,11 @@ help: ## Show this help.
 
 .PHONY: chan
 chan: web ## Build the release CLI binary.
-	$(CARGO) build --release -p chan
+	@if [ -n "$(CHAN_TARGET)" ]; then \
+		$(CARGO) build --release --target "$(CHAN_TARGET)" -p chan; \
+	else \
+		$(CARGO) build --release -p chan; \
+	fi
 
 .PHONY: chan-desktop
 chan-desktop: ## Build the desktop app through desktop/Makefile.
@@ -93,7 +98,9 @@ pre-push: ## Run the local pre-push gate.
 ci-linux: pre-push ## Run the Linux CI validation target.
 
 .PHONY: ci-macos
-ci-macos: pre-push ## Run the macOS CI validation target.
+ci-macos: ## Run the focused macOS CI validation target.
+	RUSTFLAGS="-D warnings" $(CARGO) clippy --all-targets -- -D warnings
+	RUSTFLAGS="-D warnings" $(CARGO) test --all-targets
 
 .PHONY: ci-release
 ci-release: pre-push ## Run the local release validation target.

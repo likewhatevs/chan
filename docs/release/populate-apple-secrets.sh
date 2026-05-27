@@ -3,10 +3,9 @@
 # repo's GitHub Actions Secrets, sourcing values from the local
 # macOS Keychain.
 #
-# Per the ci-3 brief (docs/release/macos-signing.md), the workflow at
-# .github/workflows/release-desktop.yml consumes these six secrets to
-# build + sign + notarize the chan-desktop DMG on each chan-v* tag
-# push.
+# Per the ci-3 brief (docs/release/macos-signing.md), release CI consumes
+# these six secrets to build + sign + notarize the chan-desktop DMG on an
+# approved vX.Y.Z release cut.
 #
 # This script is the one-shot setup helper @@Alex runs ONCE after
 # their local Keychain has:
@@ -83,8 +82,8 @@ echo "==> 6/6 APPLE_CERTIFICATE_BASE64"
 base64 -i "$P12_PATH" | tr -d '\n' | gh secret set APPLE_CERTIFICATE_BASE64
 
 echo ""
-echo "==> Verify (NAMES only — values never logged)"
+echo "==> Verify (NAMES only, values never logged)"
 gh secret list
 
 echo ""
-echo "==> Done. ci-8 (DMG-on-tag dry-run) is now unblocked."
+echo "==> Done. Release CI macOS signing is now unblocked."

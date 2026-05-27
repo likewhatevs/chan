@@ -53,6 +53,7 @@ The build/check gate:
 - fails if removed installer references reappear in generated public files
 - fails if stale public copy claims reappear in generated output
 - dry-runs `/dl/**` release metadata generation from a local fixture
+- dry-runs collection of uploaded release assets into the metadata manifest
 - serves `dist/` on loopback and smokes `/`, `/install/`, `/manual/`,
   `/manual/install/`, `/install.sh`, and `/install.ps1` absence
 
@@ -83,6 +84,9 @@ downloads and updates.
 Generate release metadata from an already verified asset manifest:
 
 ```sh
+npm run collect:release -- \
+  --tag vX.Y.Z \
+  --out /tmp/chan-release-assets.json
 npm run generate:metadata -- \
   --manifest /tmp/chan-release-assets.json \
   --out dist/dl
@@ -97,7 +101,13 @@ The generator writes:
 - `dist/dl/desktop/vX.Y.Z.json`
 
 The manifest must list concrete GitHub Release asset URLs and SHA256 values.
-It must not use GitHub `releases/latest/download` URLs.
+It must not use GitHub `releases/latest/download` URLs. The collector builds
+that manifest from uploaded GitHub Release assets and detached updater
+signature assets.
+
+Normal Pages deploys from `main` preserve already published `/dl/**` metadata
+instead of generating new metadata. The release workflow is the only CI path
+that generates and publishes fresh `/dl/**` metadata.
 
 Build the release manual bundle locally:
 

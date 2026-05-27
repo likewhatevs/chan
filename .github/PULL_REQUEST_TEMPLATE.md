@@ -8,15 +8,9 @@ Link to a tracking issue or design discussion if applicable. PRs that ship witho
 
 ## Pre-push gate
 
-The repo ships a pre-push hook (`./scripts/install-hooks` to install) that runs the same checks CI enforces. Tick what's been verified locally:
+Run the local gate before review:
 
-- [ ] `cargo fmt --check`
-- [ ] `cargo clippy --all-targets -- -D warnings`
-- [ ] `cargo test`
-- [ ] `cargo build --no-default-features`
-- [ ] `cd web && npm run check`
-- [ ] `cd web && npm test -- --run`
-- [ ] `cd web && npm run build`
+- [ ] `make pre-push`
 
 ## Notes for reviewers
 
