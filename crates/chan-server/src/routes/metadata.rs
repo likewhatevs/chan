@@ -12,14 +12,14 @@ use axum::extract::{Multipart, State};
 use axum::http::{header, HeaderValue, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::Json;
-use chan_drive::{
-    Drive, Library, MetadataExportOptions, MetadataImportOptions, MetadataImportReport,
+use chan_workspace::{
+    Library, MetadataExportOptions, MetadataImportOptions, MetadataImportReport, Workspace,
 };
 
 use crate::bus::{make_progress_broadcast, make_watch_bridge};
 use crate::error::{err, err_from};
 use crate::indexer::Indexer;
-use crate::state::{AppState, DriveCell};
+use crate::state::{AppState, WorkspaceCell};
 use crate::terminal_sessions::CloseReason;
 
 struct MetadataExportDownload {
@@ -108,7 +108,7 @@ pub async fn api_metadata_import(
 fn export_metadata_download(
     library: &Library,
     drive_root: &Path,
-) -> chan_drive::Result<MetadataExportDownload> {
+) -> chan_workspace::Result<MetadataExportDownload> {
     let tmp = tempfile::tempdir()?;
     let archive = tmp.path().join("chan-metadata.tar.zst");
     let report = library.export_metadata_archive(
@@ -156,7 +156,7 @@ const IMPORT_DRAIN_DEADLINE: Duration = Duration::from_secs(5);
 #[derive(Debug)]
 enum MetadataImportError {
     Busy,
-    Core(chan_drive::ChanError),
+    Core(chan_workspace::ChanError),
     Poisoned(&'static str),
 }
 
@@ -194,7 +194,7 @@ fn perform_metadata_import(
         .map_err(|e| MetadataImportError::Core(e.into()))?;
 
     let mut cell = take_drive_cell(state)?;
-    state.terminal_sessions.close_all(CloseReason::Drive);
+    state.terminal_sessions.close_all(CloseReason::Workspace);
     state
         .loaded_teams
         .lock()
@@ -225,7 +225,7 @@ fn perform_metadata_import(
         .map_err(MetadataImportError::Core);
     let restore_result = state
         .library
-        .open_drive(&state.drive_root)
+        .open_workspace(&state.drive_root)
         .map_err(MetadataImportError::Core)
         .and_then(|drive| install_drive_cell(state, drive));
 
@@ -233,7 +233,7 @@ fn perform_metadata_import(
     import_result
 }
 
-fn take_drive_cell(state: &AppState) -> Result<DriveCell, MetadataImportError> {
+fn take_drive_cell(state: &AppState) -> Result<WorkspaceCell, MetadataImportError> {
     let mut cell_guard = state
         .drive_cell
         .write()
@@ -241,7 +241,7 @@ fn take_drive_cell(state: &AppState) -> Result<DriveCell, MetadataImportError> {
     cell_guard.take().ok_or(MetadataImportError::Busy)
 }
 
-fn install_drive_cell(state: &AppState, drive: Arc<Drive>) -> Result<(), MetadataImportError> {
+fn install_drive_cell(state: &AppState, drive: Arc<Workspace>) -> Result<(), MetadataImportError> {
     let cell = build_drive_cell(state, drive)?;
     let mut cell_guard = state
         .drive_cell
@@ -251,7 +251,10 @@ fn install_drive_cell(state: &AppState, drive: Arc<Drive>) -> Result<(), Metadat
     Ok(())
 }
 
-fn build_drive_cell(state: &AppState, drive: Arc<Drive>) -> Result<DriveCell, MetadataImportError> {
+fn build_drive_cell(
+    state: &AppState,
+    drive: Arc<Workspace>,
+) -> Result<WorkspaceCell, MetadataImportError> {
     let bridge = make_watch_bridge(
         &state.events_tx,
         &state.index_events_tx,
@@ -272,7 +275,7 @@ fn build_drive_cell(state: &AppState, drive: Arc<Drive>) -> Result<DriveCell, Me
         search_aggression,
         make_progress_broadcast(&state.events_tx),
     ));
-    Ok(DriveCell {
+    Ok(WorkspaceCell {
         drive,
         watch_handle: Some(watch_handle),
         indexer,
@@ -312,9 +315,9 @@ mod tests {
     fn export_metadata_download_returns_archive_bytes() {
         let cfg = tempfile::TempDir::new().unwrap();
         let root = tempfile::TempDir::new().unwrap();
-        let lib = chan_drive::Library::open_at(cfg.path().join("config.toml")).unwrap();
-        lib.register_drive(root.path()).unwrap();
-        let drive = lib.open_drive(root.path()).unwrap();
+        let lib = chan_workspace::Library::open_at(cfg.path().join("config.toml")).unwrap();
+        lib.register_workspace(root.path()).unwrap();
+        let drive = lib.open_workspace(root.path()).unwrap();
         drive.write_text("note.md", "hello").unwrap();
         drop(drive);
 

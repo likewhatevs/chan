@@ -8,7 +8,7 @@
 //   resolve_path(path)    -> physical path metadata
 //   search_content(query) -> hits
 //
-// Content tools route through `chan_drive::Drive` so the filesystem
+// Content tools route through `chan_workspace::Workspace` so the filesystem
 // invariants (path sandbox, special-file refusal, atomic writes)
 // apply automatically. `resolve_path` is metadata only: it reveals
 // the real path behind a public chan path when a shell tool needs a
@@ -18,7 +18,7 @@
 
 use std::sync::Arc;
 
-use chan_drive::Drive;
+use chan_workspace::Workspace;
 use serde::{Deserialize, Serialize};
 use serde_json::Value as Json;
 
@@ -58,7 +58,7 @@ pub const SEARCH_CONTENT_DEFAULT_LIMIT: u32 = 20;
 pub const REPO_REPORT_FILES_CAP: usize = 200;
 
 /// Hard cap on the `content` arg of `write_file`. Mirrors
-/// `chan_drive::TEXT_WRITE_LIMIT` (2 MiB) so a runaway model emitting
+/// `chan_workspace::TEXT_WRITE_LIMIT` (2 MiB) so a runaway model emitting
 /// a multi-GB string fails fast inside chan-llm rather than reaching
 /// chan-drive (which would have rejected it anyway, but only after
 /// the full string had been deserialized, cloned, and handed across
@@ -66,15 +66,15 @@ pub const REPO_REPORT_FILES_CAP: usize = 200;
 /// check before crossing into chan-llm.
 pub const WRITE_FILE_CONTENT_CAP_BYTES: usize = 2 * 1024 * 1024;
 
-/// Context the tools see. Owns an `Arc<Drive>` so tool calls cross
+/// Context the tools see. Owns an `Arc<Workspace>` so tool calls cross
 /// thread boundaries cheaply.
 #[derive(Clone)]
 pub struct ToolContext {
-    pub drive: Arc<Drive>,
+    pub drive: Arc<Workspace>,
 }
 
 impl ToolContext {
-    pub fn new(drive: Arc<Drive>) -> Self {
+    pub fn new(drive: Arc<Workspace>) -> Self {
         Self { drive }
     }
 }
@@ -160,11 +160,11 @@ pub fn execute(name: &str, args: &Json, ctx: &ToolContext) -> Result<Json> {
 /// `EdgeKind::as_str` helper inside chan-drive is private, so we
 /// mirror the mapping here to keep this crate from reaching into
 /// chan-drive's internals.
-fn edge_kind_tag(k: chan_drive::EdgeKind) -> &'static str {
+fn edge_kind_tag(k: chan_workspace::EdgeKind) -> &'static str {
     match k {
-        chan_drive::EdgeKind::Link => "link",
-        chan_drive::EdgeKind::Mention => "mention",
-        chan_drive::EdgeKind::Tag => "tag",
+        chan_workspace::EdgeKind::Link => "link",
+        chan_workspace::EdgeKind::Mention => "mention",
+        chan_workspace::EdgeKind::Tag => "tag",
     }
 }
 
@@ -347,11 +347,11 @@ fn exec_resolve_path(args: &Json, ctx: &ToolContext) -> Result<Json> {
     let mut out = serde_json::json!({
         "path": path,
         "physical_path": physical.to_string_lossy(),
-        "virtual": chan_drive::drafts::is_unified_drafts_path(path),
+        "virtual": chan_workspace::drafts::is_unified_drafts_path(path),
         "exists": meta.is_some(),
         "is_dir": meta.as_ref().is_some_and(|m| m.is_dir()),
     });
-    if chan_drive::drafts::is_unified_drafts_path(path) {
+    if chan_workspace::drafts::is_unified_drafts_path(path) {
         out["note"] = serde_json::json!(
             "Drafts paths resolve to uncommitted chan metadata outside the drive root."
         );
@@ -370,7 +370,7 @@ fn exec_search_content(args: &Json, ctx: &ToolContext) -> Result<Json> {
     let limit = raw_limit.min(SEARCH_CONTENT_MAX_LIMIT as u64) as u32;
     let res = ctx.drive.search(
         query,
-        &chan_drive::SearchOpts {
+        &chan_workspace::SearchOpts {
             limit,
             ..Default::default()
         },
@@ -650,15 +650,15 @@ pub fn standard_tool_schemas() -> Vec<ToolSchema> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use chan_drive::Library;
+    use chan_workspace::Library;
     use tempfile::TempDir;
 
     fn fixture() -> (TempDir, TempDir, ToolContext) {
         let cfg = TempDir::new().unwrap();
         let drive_dir = TempDir::new().unwrap();
         let lib = Library::open_at(cfg.path().join("config.toml")).unwrap();
-        lib.register_drive(drive_dir.path()).unwrap();
-        let drive = lib.open_drive(drive_dir.path()).unwrap();
+        lib.register_workspace(drive_dir.path()).unwrap();
+        let drive = lib.open_workspace(drive_dir.path()).unwrap();
         let ctx = ToolContext::new(drive);
         (cfg, drive_dir, ctx)
     }
@@ -937,7 +937,7 @@ mod tests {
     }
 
     #[test]
-    fn write_file_rejects_non_text_via_chan_drive() {
+    fn write_file_rejects_non_text_via_chan_workspace() {
         let (_cfg, _root, ctx) = fixture();
         let err = execute(
             "write_file",

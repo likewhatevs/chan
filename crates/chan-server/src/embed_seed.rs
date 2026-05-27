@@ -44,8 +44,8 @@ pub fn seed_models_from_bundle() {
         );
         return;
     }
-    let target = chan_drive::index::embeddings::global_models_dir();
-    let repo_dir = target.join(repo_dir_name(chan_drive::DEFAULT_MODEL));
+    let target = chan_workspace::index::embeddings::global_models_dir();
+    let repo_dir = target.join(repo_dir_name(chan_workspace::DEFAULT_MODEL));
     if default_model_present(&repo_dir) {
         eprintln!(
             "seed-models: cache already populated at {}; skipping",

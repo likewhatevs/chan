@@ -947,7 +947,7 @@ fn path_to_wire(path: PathBuf) -> String {
 }
 
 fn terminal_cwd_payload(
-    drive: &chan_drive::Drive,
+    drive: &chan_workspace::Workspace,
     cwd: Option<PathBuf>,
 ) -> (Option<String>, Option<String>) {
     match cwd {
@@ -985,7 +985,7 @@ fn normalize_window_id(id: &str) -> Option<String> {
 }
 
 fn resolve_terminal_cwd(
-    drive: &chan_drive::Drive,
+    drive: &chan_workspace::Workspace,
     cwd: Option<&str>,
 ) -> Result<Option<PathBuf>, String> {
     let Some(raw) = cwd else {
@@ -1005,10 +1005,10 @@ fn resolve_terminal_cwd(
 /// `drive_root`" gate. Watcher event files are infrastructure
 /// traffic (per the phase-7 event protocol they go straight through
 /// `tokio::fs` in the event-reply endpoint, bypassing
-/// `chan_drive::Drive::write_text`), so the drive-sandbox guard
+/// `chan_workspace::Workspace::write_text`), so the drive-sandbox guard
 /// that exists for user content does not apply here. The watcher
 /// dialog now accepts arbitrary filesystem paths subject to OS
-/// permissions. Drive-relative inputs still resolve through
+/// permissions. Workspace-relative inputs still resolve through
 /// `resolve_safe_strict` so the common in-drive case keeps its
 /// symlink-escape protection; absolute inputs go straight to the
 /// filesystem.
@@ -1026,11 +1026,11 @@ fn resolve_watcher_dir(drive_root: &Path, raw: &str) -> Result<PathBuf, String> 
     let abs = if path.is_absolute() {
         path.to_path_buf()
     } else {
-        // Drive-relative input: keep the strict resolver so an
+        // Workspace-relative input: keep the strict resolver so an
         // in-drive watcher still benefits from the symlink-escape
         // check. A user who wants a watcher OUTSIDE the drive
         // types an absolute path and lands on the branch above.
-        chan_drive::fs_ops::resolve_safe_strict(drive_root, trimmed)
+        chan_workspace::fs_ops::resolve_safe_strict(drive_root, trimmed)
             .map_err(|e| format!("invalid watcher path: {e}"))?
     };
     // Create the directory on demand. `create_dir_all` is a no-op
@@ -1117,7 +1117,7 @@ mod tests {
 
     /// Well-known lock-file name (under the OS temp dir) for the
     /// cross-process FS-timing test gate. MUST stay identical to
-    /// `chan_drive::test_gate::GATE_FILE` and the copy in the indexer
+    /// `chan_workspace::test_gate::GATE_FILE` and the copy in the indexer
     /// test module so every FS-timing test across both crates' separate
     /// test binaries contends on the same OS advisory lock.
     const FS_TIMING_GATE: &str = "chan-fs-timing-test.gate";
@@ -1164,12 +1164,16 @@ mod tests {
     /// backstop and should rarely be approached now.
     const PROBE_BUDGET: Duration = Duration::from_secs(30);
 
-    fn terminal_drive_fixture() -> (tempfile::TempDir, tempfile::TempDir, Arc<chan_drive::Drive>) {
+    fn terminal_drive_fixture() -> (
+        tempfile::TempDir,
+        tempfile::TempDir,
+        Arc<chan_workspace::Workspace>,
+    ) {
         let cfg = tempfile::TempDir::new().expect("temp config");
         let root = tempfile::TempDir::new().expect("temp drive");
-        let lib = chan_drive::Library::open_at(cfg.path().join("config.toml")).unwrap();
-        lib.register_drive(root.path()).unwrap();
-        let drive = lib.open_drive(root.path()).unwrap();
+        let lib = chan_workspace::Library::open_at(cfg.path().join("config.toml")).unwrap();
+        lib.register_workspace(root.path()).unwrap();
+        let drive = lib.open_workspace(root.path()).unwrap();
         (cfg, root, drive)
     }
 
@@ -1337,7 +1341,7 @@ mod tests {
     #[test]
     fn resolve_watcher_dir_creates_missing_path() {
         let tmp = tempfile::tempdir().expect("temp drive");
-        // Drive-relative path that doesn't exist yet.
+        // Workspace-relative path that doesn't exist yet.
         let relative = "events/inbound";
         let resolved = resolve_watcher_dir(tmp.path(), relative).expect("relative dir created");
         assert!(resolved.is_dir(), "watcher dir should now exist on disk");
@@ -1362,7 +1366,7 @@ mod tests {
 
         // Empty path is still required.
         assert!(resolve_watcher_dir(tmp.path(), "").is_err());
-        // Drive-relative `..` escape still bounces through the
+        // Workspace-relative `..` escape still bounces through the
         // strict resolver, which rejects it; the relaxation only
         // applies to absolute inputs.
         assert!(resolve_watcher_dir(tmp.path(), "../outside").is_err());
@@ -1969,7 +1973,7 @@ mod tests {
             )
             .await;
             terminal.handle.send_input(
-                b"printf '\\n__CWD_HOME_BEGIN__\\n'; pwd; printf '<HOME=%s>\\n' \"$HOME\"; printf '<CHAN_TAB_NAME=%s>\\n' \"$CHAN_TAB_NAME\"; printf '<CHAN_WINDOW_ID=%s>\\n' \"$CHAN_WINDOW_ID\"; printf '<CHAN_CONTROL_SOCKET=%s>\\n' \"$CHAN_CONTROL_SOCKET\"; env | grep -E '^(CHAN|CLAUDE|CODEX|GEMINI)_MCP_' | sort; printf '\\n__CWD_HOME_END__\\n'\r",
+                b"printf '\\n__CWD_HOME_BEGIN__\\n'; pwd; printf '<HOME=%s>\\n' \"$HOME\"; printf '<CHAN_TAB_NAME=%s>\\n' \"$CHAN_TAB_NAME\"; printf '<CHAN_WINDOW_ID=%s>\\n' \"$CHAN_WINDOW_ID\"; printf '<CHAN_CONTROL_SOCKET=%s>\\n' \"$CHAN_CONTROL_SOCKET\"; printf '<CHAN_WORKSPACE_NAME=%s>\\n' \"$CHAN_WORKSPACE_NAME\"; printf '<CHAN_WORKSPACE_PATH=%s>\\n' \"$CHAN_WORKSPACE_PATH\"; env | grep -E '^(CHAN|CLAUDE|CODEX|GEMINI)_MCP_' | sort; printf '\\n__CWD_HOME_END__\\n'\r",
             );
             let out = collect_until(&mut terminal.handle, "__CWD_HOME_END__", PROBE_BUDGET).await;
             assert!(
@@ -1991,6 +1995,18 @@ mod tests {
             assert!(
                 out.contains("<CHAN_CONTROL_SOCKET=/tmp/chan-control-test.sock>"),
                 "terminal should expose the control socket env var, got {out:?}"
+            );
+            assert!(
+                out.contains(&format!("<CHAN_WORKSPACE_PATH={}>", cwd.display())),
+                "terminal should expose the workspace path env var, got {out:?}"
+            );
+            let ws_name = cwd
+                .file_name()
+                .expect("temp drive has a basename")
+                .to_string_lossy();
+            assert!(
+                out.contains(&format!("<CHAN_WORKSPACE_NAME={ws_name}>")),
+                "terminal should expose the workspace name env var, got {out:?}"
             );
             assert!(
                 out.contains("CHAN_MCP_SOCKET=/tmp/chan-test.sock"),

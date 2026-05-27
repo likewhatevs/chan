@@ -6,7 +6,7 @@
 //! exposes the broader corpus of `@@<Name>` references across
 //! all indexed markdown).
 //!
-//! Source: `chan_drive::GraphView::mentions()` — runs a single
+//! Source: `chan_workspace::GraphView::mentions()` — runs a single
 //! SQL aggregation over the graph's mention edges (parallel to
 //! `tags()`). Returns names sorted by count desc + label asc;
 //! this route filters by case-insensitive prefix + caps at the
@@ -54,8 +54,8 @@ pub async fn api_get_mentions(
     let drive = state.drive().clone();
     let q = params.q.clone();
     let limit = params.limit.unwrap_or(DEFAULT_LIMIT).clamp(1, MAX_LIMIT) as usize;
-    let result =
-        tokio::task::spawn_blocking(move || -> Result<Vec<MentionItem>, chan_drive::ChanError> {
+    let result = tokio::task::spawn_blocking(
+        move || -> Result<Vec<MentionItem>, chan_workspace::ChanError> {
             let graph = drive.graph()?;
             let mentions = graph.mentions()?;
             let prefix = q.to_lowercase();
@@ -78,12 +78,13 @@ pub async fn api_get_mentions(
                 })
                 .collect();
             Ok(filtered)
-        })
-        .await;
+        },
+    )
+    .await;
     match result {
         Ok(Ok(items)) => Json(items).into_response(),
         Ok(Err(e)) => err_from(&e),
-        Err(join) => err_from(&chan_drive::ChanError::Io(join.to_string())),
+        Err(join) => err_from(&chan_workspace::ChanError::Io(join.to_string())),
     }
 }
 

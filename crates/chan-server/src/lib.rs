@@ -1,6 +1,6 @@
 //! HTTP + WebSocket surface for chan.
 //!
-//! Wraps `chan-drive`'s Library / Drive handles in axum routes,
+//! Wraps `chan-drive`'s Library / Workspace handles in axum routes,
 //! gates every `/api/*` route behind a per-launch bearer token,
 //! exposes a watcher WebSocket, and serves the embedded
 //! frontend.
@@ -43,7 +43,7 @@ mod util;
 
 pub use config::ServerConfig;
 pub use error::Error;
-pub use host::{DriveHost, HostedDrive};
+pub use host::{HostedWorkspace, WorkspaceHost};
 pub use preferences::{
     BrowserSidePanes, EditorPrefs, EditorTheme, HybridSurfaceThemes, LineSpacing, PaneWidths,
     SurfaceThemeChoice, ThemeChoice,
@@ -79,7 +79,7 @@ use routes::{
     api_semantic_models, api_semantic_state,
 };
 use signal::{now_unix_secs, print_qr_if_tty, spawn_idle_watcher, spawn_signal_watcher};
-use state::{AppState, DriveCell};
+use state::{AppState, WorkspaceCell};
 use static_assets::{serve_font, serve_static};
 use terminal_sessions::{Registry as TerminalRegistry, RegistryConfig as TerminalRegistryConfig};
 
@@ -101,7 +101,7 @@ use axum::extract::DefaultBodyLimit;
 use axum::middleware;
 use axum::routing::{delete, get, patch, post, put};
 use axum::Router;
-use chan_drive::{Drive, Library, SearchAggression, WatchEvent};
+use chan_workspace::{Library, SearchAggression, WatchEvent, Workspace};
 use tokio::net::TcpListener;
 use tokio::sync::{broadcast, watch};
 use tower_http::trace::TraceLayer;
@@ -262,7 +262,7 @@ struct AppArtifacts {
     /// Live drive cell so the serve loop can cancel the current
     /// indexer on shutdown without keeping stale indexer handles
     /// alive across storage reset or metadata import swaps.
-    drive_cell: Arc<RwLock<Option<DriveCell>>>,
+    drive_cell: Arc<RwLock<Option<WorkspaceCell>>>,
     /// Background idle-prune/shutdown task for long-lived terminal
     /// sessions. Held so dropping AppArtifacts aborts it if serve()
     /// exits without the shutdown channel firing.
@@ -295,7 +295,7 @@ struct AppArtifacts {
 /// so the two paths serve byte-identical request handling.
 async fn build_app(
     library: Library,
-    drive: Arc<Drive>,
+    drive: Arc<Workspace>,
     config: &ServeConfig,
 ) -> Result<AppArtifacts, Error> {
     let token = if config.no_token {
@@ -352,7 +352,7 @@ async fn build_app(
     // Background indexer: subscribes to index_events_tx, runs the
     // initial build if the index is empty, debounces incremental
     // reindexes 1s per path. Lives for the server's lifetime.
-    // Progress fan-out: every `Drive::reindex_with` tick (per-file
+    // Progress fan-out: every `Workspace::reindex_with` tick (per-file
     // index, graph rebuild, embed batch) lands on the same /ws
     // stream as watch + LLM frames, with `type: "progress"`. The
     // status bar in the web app subscribes to drive the live
@@ -386,11 +386,12 @@ async fn build_app(
     // AppState, so the resolved socket path (or `None` on failure)
     // is part of the immutable state every handler observes.
     let socket_path = mcp_bridge::pick_socket_path();
-    let state_for_bridge: Arc<RwLock<Option<DriveCell>>> = Arc::new(RwLock::new(Some(DriveCell {
-        drive,
-        watch_handle: Some(watch_handle),
-        indexer,
-    })));
+    let state_for_bridge: Arc<RwLock<Option<WorkspaceCell>>> =
+        Arc::new(RwLock::new(Some(WorkspaceCell {
+            drive,
+            watch_handle: Some(watch_handle),
+            indexer,
+        })));
     let bridge_drive_cell = state_for_bridge.clone();
     let bridge = mcp_bridge::start(socket_path.clone(), move || {
         let cell = match bridge_drive_cell.read() {
@@ -487,7 +488,11 @@ async fn build_app(
 /// `library` is held alongside `drive` so handlers that mutate
 /// the registry (rename, etc.) operate against the same state the
 /// CLI sees. Both are `Arc`-able and cheap to clone.
-pub async fn serve(library: Library, drive: Arc<Drive>, config: ServeConfig) -> Result<(), Error> {
+pub async fn serve(
+    library: Library,
+    drive: Arc<Workspace>,
+    config: ServeConfig,
+) -> Result<(), Error> {
     let listener = TcpListener::bind(config.addr).await?;
     let addr = listener.local_addr()?;
     let artifacts = build_app(library, drive, &config).await?;
@@ -532,7 +537,7 @@ pub async fn serve(library: Library, drive: Arc<Drive>, config: ServeConfig) -> 
 
     // Side task: when the shutdown signal fires, cancel any in-flight
     // reindex. The flag is checked at per-file boundaries inside
-    // `Drive::reindex`, so the blocking task lands within at most one
+    // `Workspace::reindex`, so the blocking task lands within at most one
     // file's worth of work and the runtime drop can return cleanly.
     let cancel_drive_cell = drive_cell.clone();
     let mut cancel_rx = signal_rx.clone();
@@ -603,7 +608,7 @@ pub struct TunnelServeConfig<'a> {
 
 pub async fn serve_via_tunnel(
     library: Library,
-    drive: Arc<Drive>,
+    drive: Arc<Workspace>,
     config: TunnelServeConfig<'_>,
 ) -> Result<(), Error> {
     let TunnelServeConfig {
@@ -899,7 +904,7 @@ fn router(state: Arc<AppState>) -> Router {
         )
         .route("/api/rich-prompts/:name/close", post(api_close_rich_prompt))
         // systacean-31: per-team watcher lifecycle. Load spins up
-        // a `Drive::watch_team` handle; unload drops it
+        // a `Workspace::watch_team` handle; unload drops it
         // (non-destructive; team persists on disk).
         // `/loaded` is read-only for the SPA to know which teams
         // are active.

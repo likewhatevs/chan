@@ -20,8 +20,8 @@
 use std::path::PathBuf;
 use std::process::ExitCode;
 
-use chan_drive::Library;
 use chan_llm::mcp::Server;
+use chan_workspace::Library;
 
 fn main() -> ExitCode {
     // Note: rmcp uses `tracing` for protocol logging but we don't
@@ -64,7 +64,7 @@ fn main() -> ExitCode {
         }
     };
 
-    let drive = match lib.open_drive(&drive_root) {
+    let drive = match lib.open_workspace(&drive_root) {
         Ok(d) => d,
         Err(e) => {
             eprintln!("chan-llm-mcp: open drive {}: {e}", drive_root.display());

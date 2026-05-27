@@ -17,7 +17,7 @@ use crate::cocomo::CocomoSummary;
 /// Only the buckets chan-report can populate from `tokei`'s
 /// language detection live here. Binary / Media / Other are NOT
 /// in this enum because chan-report doesn't track those files; the
-/// graph indexer reads `chan_drive::classify()` for those.
+/// graph indexer reads `chan_workspace::classify()` for those.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum FileBucket {

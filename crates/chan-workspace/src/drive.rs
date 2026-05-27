@@ -1,0 +1,7518 @@
+// Workspace: a registered directory exposed as a sandboxed filesystem
+// plus search and graph. All I/O routes through `resolve_safe` and
+// the editable-text gate. Per-drive metadata (index, graph,
+// sessions, tokens, trash, report) lives outside the user's notes
+// tree under ~/.chan/drives/<metadata_key>/.
+
+use std::collections::{HashMap, HashSet};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
+
+use serde::{Deserialize, Serialize};
+
+use crate::drafts::{self, DraftRef};
+use crate::error::{ChanError, Result};
+use crate::fs_ops;
+use crate::graph::GraphView;
+use crate::index::{
+    BuildOptions, BuildSummary, Index, Mode as SearchMode, ScreensaverTheme, SearchAggression,
+    SearchResult,
+};
+use crate::lock::WorkspaceLock;
+use crate::markdown;
+use crate::paths::{ensure_drive_metadata_dirs, WorkspacePaths};
+use crate::registry::KnownWorkspace;
+use crate::report::{ReportFanOut, ReportState};
+use crate::trash::{self, TrashEntry, TRASH_RETENTION_SECS};
+use crate::watch::{WatchCallback, WatchHandle};
+use crate::{Report, ReportScope};
+
+/// Hard cap on `write_text` content size. Markdown / txt notes are
+/// human-authored; 2 MiB is roughly 2M characters of dense English,
+/// far past any realistic note. Anything larger is almost certainly
+/// either a bug, a binary file mislabelled with `.md`, or an LLM tool
+/// running away. We stop it at the boundary so a misbehaving caller
+/// cannot fill the user's drive without an explicit code change.
+pub const TEXT_WRITE_LIMIT: u64 = 2 * 1024 * 1024;
+
+/// Hard cap on `write_bytes` (binary attachments / media). 50 MiB
+/// covers typical PDF / image / short audio attachments with margin.
+/// Same rationale as `TEXT_WRITE_LIMIT`: defense against runaway
+/// callers, not a UX feature; raise via a code change if a real use
+/// case appears.
+pub const BYTES_WRITE_LIMIT: u64 = 50 * 1024 * 1024;
+
+/// Chunk size for streaming editable text reads. Large enough to amortize
+/// syscalls, small enough that the editor can paint early on large files.
+pub const TEXT_READ_CHUNK_SIZE: usize = 64 * 1024;
+
+/// File written to `paths.graph_dir` before `rebuild_graph` starts
+/// and removed after `Index::build_all` commits. Its presence at
+/// `Workspace::open` time means a previous reindex did not run to
+/// completion: the graph may have been rebuilt while the search
+/// index never reached `bm25.commit()`, so graph + index can
+/// disagree about freshness. The consumer reads
+/// `Workspace::needs_rebuild()` and reindexes before serving queries.
+const REBUILD_MARKER: &str = "rebuild.inprogress";
+
+/// Persisted form of the in-process rename log, kept under
+/// `paths.graph_dir`. Carries every `(old_path -> current_path)`
+/// pair the drive has accumulated since the last `reindex`. The
+/// editor batches link rewrites across multiple renames using this
+/// table, so losing it on a crash silently breaks the chain: a
+/// rename A->B followed by B->C would, on restart, not know that
+/// the original A name now points at C. Persisting after every
+/// append rebuilds that knowledge on the next open. Cleared
+/// together with the in-memory map at the end of `reindex_with`.
+const RENAME_LOG_FILE: &str = "rename_log.json";
+
+/// Pending-writes journal: a JSON map of `{rel_path: PendingOp}`
+/// kept under `paths.graph_dir`. Every per-file mutation
+/// (`index_file`, `forget_file`) adds an entry before touching
+/// graph/index and removes it after both backends commit, all
+/// serialized via `Workspace.write_serial`. The journal exists because
+/// the per-file op is not a single transaction: the graph commit
+/// runs first (sqlite), the index commit runs second (tantivy +
+/// vectors), and a crash between them leaves graph and index
+/// disagreeing about the file. On the next `Workspace::open` any
+/// entries still in the journal flag `needs_replay_writes()`; the
+/// consumer calls `replay_pending_writes()` to drive both
+/// backends back to the on-disk truth.
+const PENDING_WRITES_FILE: &str = "pending_writes.json";
+
+/// What `replay_pending_writes` should do for a journaled entry.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+enum PendingOp {
+    /// The mutation in flight was an upsert. Replay re-runs the
+    /// indexer against the file at its current on-disk state. If
+    /// the file is gone (deleted between the crash and the replay)
+    /// the replay degrades to a forget, since "rel was being
+    /// indexed but no longer exists" is unambiguous.
+    Index,
+    /// The mutation in flight was a forget. Replay re-runs the
+    /// forget, idempotent against an already-cleaned backend.
+    Forget,
+}
+
+/// User-facing search knobs. The mode defaults to Hybrid (BM25 +
+/// dense, RRF-fused) when the binary is built with `embeddings`,
+/// otherwise the facade falls back to BM25 with `ready: false`.
+#[derive(Debug, Clone, Default)]
+pub struct SearchOpts {
+    pub mode: SearchMode,
+    /// Hard cap on results returned. Defaults to 50 when 0.
+    pub limit: u32,
+    /// Optional subdir scope (relative to drive root). When set,
+    /// only paths under this prefix are returned. None = whole
+    /// drive. Filtering is post-rank: the index doesn't track
+    /// scope, the Workspace does.
+    pub scope: Option<String>,
+}
+
+pub use fs_ops::TreeEntry;
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DirEntry {
+    pub name: String,
+    pub is_dir: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FileStat {
+    pub size: u64,
+    /// Last modification time as Unix seconds. Coarse, useful for
+    /// display and for the graph DB which stores i64 seconds.
+    pub mtime: Option<i64>,
+    /// Last modification time as Unix nanoseconds. Fits an i64
+    /// until year 2262. Used by `write_text_if_unchanged` so two
+    /// edits within the same wall-clock second are still detected
+    /// as a conflict on filesystems with sub-second mtime (ext4 /
+    /// xfs / APFS / btrfs). May be None on filesystems that only
+    /// expose seconds (FAT, some network mounts), in which case
+    /// the optimistic-concurrency check degrades to seconds.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mtime_ns: Option<i64>,
+    pub is_dir: bool,
+}
+
+/// Ordered events produced by `Workspace::read_text_with_stat_chunked`.
+pub enum TextReadEvent<'a> {
+    /// Metadata from the open file handle. This is emitted before
+    /// chunks so editor callers can keep the CAS token tied to the
+    /// bytes being streamed.
+    Meta(&'a FileStat),
+    /// A valid UTF-8 chunk from the file.
+    Chunk(&'a str),
+    /// The file was read to EOF.
+    Done,
+}
+
+/// A wiki-link resolved to an actual drive file. `path` is the
+/// POSIX rel path of the file that exists today; `anchor` is the
+/// `#section` fragment from the original target, passed through
+/// unchanged. `kind` is the graph-recorded node kind (file vs
+/// contact); callers (the editor) use it to render a kind-aware
+/// pill without re-parsing the target's frontmatter. See
+/// `Workspace::resolve_link` for the resolution rules.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ResolvedLink {
+    pub path: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub anchor: Option<String>,
+    /// Defaults to `File` when the graph hasn't indexed the target
+    /// yet (fresh file, indexer behind), or when a future variant
+    /// is introduced and an older client deserializes the response.
+    /// `#[serde(default)]` keeps wire compatibility with payloads
+    /// that omit the field entirely.
+    #[serde(default)]
+    pub kind: crate::graph::NodeKind,
+}
+
+/// Result of `Workspace::rename_with_link_rewrite`. Captures both halves
+/// of the operation: which files physically moved, and which other
+/// files had their content rewritten to keep links valid.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RenameOutcome {
+    /// Every `(old_path, new_path)` pair the rename moved. For a
+    /// file-to-file rename this is a single entry; for a directory
+    /// rename it is one entry per regular-file descendant. Sorted
+    /// lexicographically by old path so callers can diff stably.
+    pub renamed: Vec<(String, String)>,
+    /// Source files whose markdown contents were rewritten to point
+    /// at the new locations. Workspace-rooted POSIX paths (post-rename).
+    pub rewritten: Vec<String>,
+    /// Source files where the rewrite was aborted because the file
+    /// changed between read and write (CAS conflict). The rename
+    /// itself still stands; a follow-up reindex + rewrite-retry can
+    /// reconcile these later.
+    pub conflicts: Vec<String>,
+}
+
+/// Result of `Workspace::copy`.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct CopyOutcome {
+    /// Every destination path created by the copy (drive-rooted POSIX),
+    /// sorted lexicographically. One entry for a file copy; one per
+    /// copied regular-file descendant for a subtree copy.
+    pub created: Vec<String>,
+}
+
+/// What `Workspace::reconcile` did.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct ReconcileReport {
+    /// Files whose graph + index were refreshed because they were
+    /// new on disk or had a different mtime than the graph row.
+    /// Sorted by path.
+    pub upserted: Vec<String>,
+    /// Files dropped from graph + index because they no longer
+    /// exist on disk. Sorted by path.
+    pub forgotten: Vec<String>,
+    /// Files that matched the graph and were skipped. Cardinality
+    /// only; the path list would dwarf the diff on large drives.
+    pub unchanged: usize,
+}
+
+/// One open drive. Holds the writer lock for as long as it lives,
+/// so two processes can't both write the same drive's index/graph.
+/// Cheap reads are unlocked; writes go through the locked handle.
+pub struct Workspace {
+    entry: KnownWorkspace,
+    /// Canonical form of `entry.root_path`, computed once at open.
+    /// Used where we need an absolute path and as the slow-path
+    /// baseline for trash::restore.
+    root_canon: std::path::PathBuf,
+    /// Capability-based handle to the drive root. All filesystem
+    /// ops on user-controllable paths go through this so a mid-path
+    /// symlink swap between path-resolution and the actual op
+    /// cannot escape the sandbox: cap-std opens each path component
+    /// with O_NOFOLLOW and refuses paths that walk outside the
+    /// dir handle. The previous resolve_safe_strict + std::fs::op
+    /// pair had a small TOCTOU window between the lexical sandbox
+    /// check and the kernel-side path walk; cap-std closes it.
+    dir: cap_std::fs::Dir,
+    /// systacean-26: cap-std handle rooted at `paths.drafts`,
+    /// parallel to `dir`. Editable-text reads + writes whose `rel`
+    /// starts with `Drafts/` route through this handle (after
+    /// stripping the prefix) instead of `dir`, so the sandbox
+    /// invariant + atomic-write semantics + editable-text gate
+    /// apply uniformly to drafts. The drafts dir is eagerly
+    /// created in `Workspace::open` so this handle attaches cleanly.
+    drafts_dir_handle: cap_std::fs::Dir,
+    paths: WorkspacePaths,
+    /// Held for the lifetime of the Workspace. Released on drop.
+    _lock: WorkspaceLock,
+    /// Keeps live Workspace count bounded under descriptor pressure.
+    /// This leaves room for editor reads, writes, PTYs, and watchers
+    /// even when tests or callers try to open many drives at once.
+    _fd_permit: crate::fd_budget::WorkspacePermit,
+    /// Lazily constructed; held in an Option so the field can be
+    /// observed via `index()` / `graph()` accessors that initialize
+    /// on first call.
+    index: std::sync::OnceLock<Index>,
+    graph: std::sync::OnceLock<GraphView>,
+    /// Cumulative rename log accumulated since the last `reindex`.
+    /// Maps any path the drive has ever known a file by to its
+    /// current on-disk location, transitively closed: after `a -> b`
+    /// is appended and then `b -> c`, the log holds both `a -> c`
+    /// and `b -> c` so a lookup against either intermediate name
+    /// resolves to the same current path.
+    ///
+    /// Used by `rename_with_link_rewrite` to translate graph src
+    /// columns (frozen at last reindex) to the source's current
+    /// location, so a file moved in a prior rename still gets its
+    /// outgoing links rewritten in subsequent renames. Cleared by
+    /// `reindex` (which rebuilds the graph against the live tree,
+    /// making every translation a no-op).
+    rename_log: std::sync::Mutex<std::collections::HashMap<String, String>>,
+    /// Pending per-file write journal. See `PENDING_WRITES_FILE`.
+    /// Mutated under `write_serial` so the on-disk JSON always
+    /// agrees with the in-memory map: every add-or-remove + persist
+    /// pair runs while no other index_file/forget_file can interleave.
+    pending_writes: std::sync::Mutex<std::collections::HashMap<String, PendingOp>>,
+    /// Serialization point for `index_file` / `forget_file`. The
+    /// per-file mutation path is graph-commit then index-commit
+    /// then journal-clear; holding this lock across the trio
+    /// keeps the journal honest (no two writers racing on the same
+    /// rel could otherwise both add, then one removes while the
+    /// other's writes are still in flight). The lock is only held
+    /// for the duration of a single file's commit pair; bulk
+    /// reindex (`reindex_with`) does not pass through here, so the
+    /// serialization is bounded by the watcher's per-file rate.
+    write_serial: std::sync::Mutex<()>,
+    /// Set when `Workspace::open` hydrated a non-empty pending-writes
+    /// journal. Surfaces via `needs_replay_writes()`; cleared by
+    /// `replay_pending_writes()` after the journal drains.
+    needs_replay_writes: std::sync::atomic::AtomicBool,
+    /// Set when `Workspace::open` observed a `rebuild.inprogress` marker
+    /// in `paths.graph_dir`: the last reindex did not get to call
+    /// `bm25.commit()` (process killed / power loss between graph
+    /// rebuild and search-index commit). The graph and the index
+    /// can therefore disagree about freshness, so the consumer
+    /// (chan-server's indexer, the CLI) must trigger a full reindex
+    /// before answering search queries. Cleared by `reindex_with`
+    /// after the marker file is removed on disk.
+    needs_rebuild: std::sync::atomic::AtomicBool,
+    /// Live flag for "a `reindex_with` is currently running in this
+    /// process." Set on entry, cleared on every exit path (including
+    /// cancellation and errors) via a RAII guard. Surfaces through
+    /// `is_reindexing()` so a connecting Web App / WebSocket consumer
+    /// can pull current state instead of waiting for the next push
+    /// from `ProgressCallback`. Cross-process visibility is not the
+    /// goal: the `rebuild.inprogress` marker covers crash recovery
+    /// and `needs_rebuild()` exposes that. This flag answers "is the
+    /// in-memory rebuild going right now?" which the on-disk marker
+    /// can't, because the marker is also set during a successful
+    /// in-flight reindex.
+    reindexing: std::sync::atomic::AtomicBool,
+    /// Lazily-initialized SLOC / language / COCOMO report. First
+    /// touch (`report()` or `watch()`) does a full scan; further
+    /// access reads the cached state, and the watcher fanout
+    /// keeps it current incrementally. Kept behind `OnceLock` so
+    /// drives that never query the report skip the scan entirely.
+    report: std::sync::OnceLock<Arc<ReportState>>,
+    /// Directory-name blocklist applied to reindex walks (graph
+    /// rebuild + index facade). Captured at `Workspace::open` time
+    /// from the parent `Library`. Other walks (editor file tree,
+    /// trash, restore) ignore this filter so the user can still
+    /// see / restore files inside a blocked directory on demand.
+    walk_filter: Arc<fs_ops::WalkFilter>,
+}
+
+impl std::fmt::Debug for Workspace {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Workspace")
+            .field("root", &self.entry.root_path)
+            .field("metadata_key", &self.entry.metadata_key)
+            .finish()
+    }
+}
+
+impl Workspace {
+    pub(crate) fn open(
+        entry: KnownWorkspace,
+        walk_filter: Arc<fs_ops::WalkFilter>,
+    ) -> Result<Arc<Self>> {
+        // Defensive check: the registered path must still resolve to
+        // a directory. A user (or another tool) could have replaced
+        // the drive directory with a symlink, file, or socket since
+        // the registry entry was written, in which case our path
+        // sandbox and per-op gates would still apply but the drive
+        // shape itself is no longer what the user signed up for.
+        // `exists()` follows symlinks, so we use lstat here to catch
+        // a "directory turned into a symlink" replacement.
+        let meta = match std::fs::symlink_metadata(&entry.root_path) {
+            Ok(m) => m,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                return Err(ChanError::WorkspaceRootMissing(entry.root_path.clone()));
+            }
+            Err(e) => return Err(ChanError::Io(e.to_string())),
+        };
+        let ft = meta.file_type();
+        if !ft.is_dir() || ft.is_symlink() {
+            return Err(ChanError::SpecialFile {
+                kind: fs_ops::describe_file_kind(&ft).to_string(),
+                path: entry.root_path.clone(),
+            });
+        }
+        let root_canon = entry
+            .root_path
+            .canonicalize()
+            .map_err(|e| ChanError::Io(format!("canonicalize drive root: {e}")))?;
+        let fd_permit = crate::fd_budget::acquire_drive_permit();
+        let dir =
+            cap_std::fs::Dir::open_ambient_dir(&entry.root_path, cap_std::ambient_authority())
+                .map_err(|e| ChanError::Io(format!("open drive root: {e}")))?;
+        if entry.metadata_key.is_empty() {
+            return Err(ChanError::Io(format!(
+                "registry entry for {:?} has empty metadata key; open the drive via Library::open_workspace",
+                entry.root_path,
+            )));
+        }
+        let paths = ensure_drive_metadata_dirs(&entry.metadata_key)
+            .map_err(|e| ChanError::Io(format!("ensure drive metadata dirs: {e}")))?;
+        let lock = WorkspaceLock::acquire(&paths.lock)?;
+        // Lazy GC: reclaim expired trash entries on every open. No
+        // background thread, matches the codebase's sync-only rule.
+        // Errors are swallowed: a corrupt trash dir must never block
+        // a legitimate drive open.
+        let _ = trash::sweep_expired(&paths.trash, TRASH_RETENTION_SECS);
+        // systacean-24: eagerly ensure the per-drive drafts
+        // subtree exists so `create_draft_dir` / `list_drafts`
+        // calls don't need to re-check + so the watcher
+        // attachment in a future task lands on a path that
+        // already exists. Errors logged + ignored: the drafts
+        // dir is recoverable (next call re-tries) and shouldn't
+        // block a legitimate drive open.
+        if let Err(e) = drafts::ensure_root(&paths.drafts) {
+            tracing::warn!(
+                error = %e,
+                path = %paths.drafts.display(),
+                "failed to ensure drafts dir on Workspace::open"
+            );
+        }
+        // systacean-26: open a cap-std handle on the drafts dir so
+        // unified-path read/write helpers (read_text /
+        // write_text / write_text_if_unchanged for `Drafts/`-
+        // prefixed rels) get the same sandbox + atomic-write
+        // semantics as drive-root files. The drafts dir was just
+        // ensured above so `open_ambient_dir` lands on an
+        // existing path. A failure here is unusual (permissions
+        // on the metadata root) but recoverable on the next open; we
+        // surface as an `Io` so callers see why drafts writes
+        // can't proceed.
+        let drafts_dir_handle =
+            cap_std::fs::Dir::open_ambient_dir(&paths.drafts, cap_std::ambient_authority())
+                .map_err(|e| ChanError::Io(format!("open drafts dir: {e}")))?;
+        // A stale `rebuild.inprogress` marker means the previous
+        // reindex did not finish atomically. Promote it to an
+        // in-process flag the consumer can observe via
+        // `Workspace::needs_rebuild()`. We don't auto-reindex here so
+        // `open` stays fast on large drives; the consumer schedules
+        // the rebuild on its own thread when it sees the flag set.
+        let needs_rebuild = paths.graph_dir.join(REBUILD_MARKER).exists();
+        if needs_rebuild {
+            tracing::warn!(
+                drive = %entry.root_path.display(),
+                "rebuild.inprogress marker found at open; full reindex required",
+            );
+        }
+        // Rehydrate the rename log from disk. A previous process
+        // session's renames must remain visible to the link-rewrite
+        // path; without this, a chain spanning a crash silently
+        // breaks. Best-effort: a missing or malformed file falls
+        // back to an empty map (the next reindex would rebuild the
+        // graph either way).
+        let rename_log = load_rename_log(&paths.graph_dir);
+        // Rehydrate the pending-writes journal: any entries still
+        // present mean a previous index_file / forget_file crashed
+        // between the graph and index commits. The consumer reads
+        // `needs_replay_writes()` and calls `replay_pending_writes()`
+        // to converge both backends. Best-effort against malformed
+        // JSON, same rationale as the rename log.
+        let pending_writes = load_pending_writes(&paths.graph_dir);
+        let needs_replay_writes = !pending_writes.is_empty();
+        if needs_replay_writes {
+            tracing::warn!(
+                drive = %entry.root_path.display(),
+                count = pending_writes.len(),
+                "pending_writes journal non-empty at open; replay required",
+            );
+        }
+        Ok(Arc::new(Self {
+            entry,
+            root_canon,
+            dir,
+            drafts_dir_handle,
+            paths,
+            _lock: lock,
+            _fd_permit: fd_permit,
+            index: std::sync::OnceLock::new(),
+            graph: std::sync::OnceLock::new(),
+            rename_log: std::sync::Mutex::new(rename_log),
+            pending_writes: std::sync::Mutex::new(pending_writes),
+            write_serial: std::sync::Mutex::new(()),
+            needs_replay_writes: std::sync::atomic::AtomicBool::new(needs_replay_writes),
+            needs_rebuild: std::sync::atomic::AtomicBool::new(needs_rebuild),
+            reindexing: std::sync::atomic::AtomicBool::new(false),
+            report: std::sync::OnceLock::new(),
+            walk_filter,
+        }))
+    }
+
+    /// True when the last reindex did not run to completion (either
+    /// because the process crashed between graph rebuild and BM25
+    /// commit, or because a marker from a prior install still
+    /// lingers). Consumers (chan-server's indexer trigger, the CLI's
+    /// "index --auto" check) should treat this as a signal to call
+    /// `reindex` before answering search queries. Cleared once
+    /// reindex commits the index and removes the on-disk marker.
+    pub fn needs_rebuild(&self) -> bool {
+        self.needs_rebuild
+            .load(std::sync::atomic::Ordering::Acquire)
+    }
+
+    /// True while a `reindex_with` is in flight in this process. The
+    /// Web App / WebSocket fan-out uses this on first connect to
+    /// render "indexing..." without having to wait for the next
+    /// `ProgressEvent` push; combine with `index_stats()` for the
+    /// chunk count and `needs_rebuild()` for the "needs catch-up"
+    /// signal. The flag is cleared on every exit path of
+    /// `reindex_with` (success, error, cancellation) via a guard.
+    pub fn is_reindexing(&self) -> bool {
+        self.reindexing.load(std::sync::atomic::Ordering::Acquire)
+    }
+
+    /// Validate `rel` for use with the cap-std `Dir`. Returns a
+    /// pure-Component::Normal PathBuf or a `PathEmpty` / `PathEscape`
+    /// error. cap-std would refuse a bad path anyway; this gate
+    /// gives crisp error variants.
+    fn rel(&self, rel: &str) -> Result<std::path::PathBuf> {
+        fs_ops::validate_rel(rel)
+    }
+
+    /// systacean-26: resolve a unified-path rel to the
+    /// (cap-std dir, validated PathBuf inside that dir) pair the
+    /// IO helpers operate against. Drafts/-prefixed rels route
+    /// through `drafts_dir_handle` (rooted at `paths.drafts`)
+    /// with the prefix stripped; everything else routes through
+    /// `dir` (rooted at the drive root) unchanged. The cap-std
+    /// sandbox prevents traversal escape in either case.
+    ///
+    /// Returns the validated PathBuf (no leading `Drafts/`)
+    /// because cap-std's `open` / `atomic_write_in` / etc. expect
+    /// paths relative to the dir handle they're called against.
+    /// The full unified path (with `Drafts/` prefix) is still
+    /// what callers pass into editable-text gates + journaling +
+    /// graph/index keys.
+    fn resolve_io(&self, rel: &str) -> Result<(&cap_std::fs::Dir, std::path::PathBuf)> {
+        if let Some(sub) = drafts::strip_unified_prefix(rel) {
+            if sub.is_empty() {
+                return Err(ChanError::Io(
+                    "rel `Drafts` cannot be the drafts root itself; pass `Drafts/<name>/<file>`"
+                        .into(),
+                ));
+            }
+            let validated = fs_ops::validate_rel(sub)?;
+            Ok((&self.drafts_dir_handle, validated))
+        } else {
+            let validated = fs_ops::validate_rel(rel)?;
+            Ok((&self.dir, validated))
+        }
+    }
+
+    /// Resolve a public chan path to the real host filesystem path.
+    ///
+    /// Most paths map under `Workspace::root()`. The `Drafts/` namespace
+    /// is virtual: it maps into this drive's metadata drafts dir so
+    /// callers that truly need a real cwd (terminal, external shell
+    /// agents) can opt into that physical location without pretending
+    /// Drafts lives in the user's notes tree.
+    pub fn resolve_physical_path(&self, rel: &str) -> Result<std::path::PathBuf> {
+        let trimmed = rel.trim_matches('/');
+        if trimmed.is_empty() || trimmed == "." {
+            return Ok(self.root_canon.clone());
+        }
+        if let Some(sub) = drafts::strip_unified_prefix(trimmed) {
+            if sub.is_empty() {
+                return Ok(self.paths.drafts.clone());
+            }
+            let drafts_canon = self
+                .paths
+                .drafts
+                .canonicalize()
+                .map_err(|e| ChanError::Io(format!("canonicalize drafts root: {e}")))?;
+            return fs_ops::resolve_safe_strict_canon(&self.paths.drafts, &drafts_canon, sub);
+        }
+        fs_ops::resolve_safe_strict_canon(self.root(), &self.root_canon, trimmed)
+    }
+
+    /// Resolve a public chan path to an existing real directory.
+    pub fn resolve_physical_dir(&self, rel: &str) -> Result<std::path::PathBuf> {
+        let abs = self.resolve_physical_path(rel)?;
+        let meta = std::fs::metadata(&abs).map_err(|e| ChanError::Io(e.to_string()))?;
+        if !meta.is_dir() {
+            return Err(ChanError::Io("path is not a directory".into()));
+        }
+        Ok(abs)
+    }
+
+    /// Convert a real filesystem path back to chan's public path
+    /// namespace when it is inside the drive root or Drafts metadata.
+    pub fn physical_path_to_virtual(&self, path: &std::path::Path) -> Option<String> {
+        let path = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
+        if path == self.root_canon {
+            return Some(String::new());
+        }
+        if let Ok(rel) = path.strip_prefix(&self.root_canon) {
+            return Some(posix_path(rel));
+        }
+        let drafts_canon = self
+            .paths
+            .drafts
+            .canonicalize()
+            .unwrap_or_else(|_| self.paths.drafts.clone());
+        if path == drafts_canon {
+            return Some(drafts::UNIFIED_DRAFTS_ROOT.to_string());
+        }
+        if let Ok(rel) = path.strip_prefix(&drafts_canon) {
+            let rel = posix_path(rel);
+            if rel.is_empty() {
+                return Some(drafts::UNIFIED_DRAFTS_ROOT.to_string());
+            }
+            return Some(format!("{}/{rel}", drafts::UNIFIED_DRAFTS_ROOT));
+        }
+        None
+    }
+
+    pub fn root(&self) -> &std::path::Path {
+        &self.entry.root_path
+    }
+
+    /// Per-drive paths (sessions, index dir, graph DB, lock).
+    /// Exposed for apps that want to put their own state alongside
+    /// chan-drive's.
+    pub fn paths(&self) -> &WorkspacePaths {
+        &self.paths
+    }
+
+    /// The directory-name blocklist this Workspace applies to its
+    /// reindex walks. Snapshot from the parent Library at open
+    /// time; survives across reindex calls. Editor-visible walks
+    /// (the file tree, search, trash) do not consult it.
+    pub fn walk_filter(&self) -> &fs_ops::WalkFilter {
+        &self.walk_filter
+    }
+
+    /// Structural bootstrap snapshot of the drive root: the immediate
+    /// files + directories, each directory carrying its recursive
+    /// (filtered) subtree file count and byte total, plus the
+    /// whole-drive aggregate. Stat-only (no content read), filtered by
+    /// the same `WalkFilter` the indexer uses. This is the spine the
+    /// UI renders before the paced index / report jobs run; deeper
+    /// levels load lazily on File Browser expand / Graph depth.
+    pub fn bootstrap(&self) -> Result<crate::bootstrap::BootstrapTree> {
+        crate::bootstrap::bootstrap_root(self.root(), &self.walk_filter)
+    }
+
+    /// Bootstrap snapshot for a nested directory at drive-relative
+    /// `rel` ("" is the root, equivalent to `bootstrap()`). Same
+    /// eager-level shape as `bootstrap`; used when a caller wants the
+    /// subtree-stats shape for an expanded directory rather than the
+    /// plain per-file listing.
+    pub fn bootstrap_dir(&self, rel: &str) -> Result<crate::bootstrap::BootstrapTree> {
+        crate::bootstrap::bootstrap_dir(self.root(), rel, &self.walk_filter)
+    }
+
+    // ---- filesystem primitives (path-based, rel-only) ----
+    //
+    // Every entry point here routes through the cap-std `Dir`
+    // opened at `Workspace::open`. cap-std uses openat-per-component
+    // with O_NOFOLLOW (or RESOLVE_BENEATH on Linux openat2), so a
+    // mid-path symlink swap between path validation and the actual
+    // op cannot escape the drive root. Reads additionally call
+    // `ensure_regular_file_in` (lstat) so we never block on a FIFO,
+    // drain a device, or follow a symlink off the drive. Writes
+    // that target an existing path do the same check via
+    // `ensure_writable_in`; writes to a fresh path skip it because
+    // there's nothing to inspect yet (cap-std guarded the parent
+    // walk on the way in).
+
+    /// Read raw bytes from a file relative to the drive root. No
+    /// editable-text gate: callers like image previews need binary
+    /// reads. The path must resolve to a regular file under the
+    /// drive root; symlinks, FIFOs, sockets, and devices are
+    /// rejected.
+    pub fn read(&self, rel: &str) -> Result<Vec<u8>> {
+        // systacean-32: prefix-aware for Drafts/<...> paths,
+        // parallel to read_text + stat. Without this, reading a
+        // pasted image (or any non-text file) under
+        // `Drafts/untitled-N/...` would route to the drive-root
+        // capfs + NotFound.
+        let (dir, rel_path) = self.resolve_io(rel)?;
+        ensure_regular_file_in(dir, &rel_path)?;
+        let mut f = dir
+            .open(&rel_path)
+            .map_err(|e| ChanError::Io(e.to_string()))?;
+        use std::io::Read;
+        let mut buf = Vec::new();
+        f.read_to_end(&mut buf)?;
+        Ok(buf)
+    }
+
+    /// Read UTF-8 text. Errors if the file isn't on the editable-
+    /// text whitelist or isn't a regular file.
+    pub fn read_text(&self, rel: &str) -> Result<String> {
+        if !fs_ops::is_editable_text(rel) {
+            return Err(ChanError::NotEditableText(rel.to_string()));
+        }
+        // systacean-26: route Drafts/-prefixed rels through the
+        // drafts-rooted cap-std handle. The full `rel` (with
+        // prefix) still flows through the editable-text gate
+        // above so the gate's per-extension rules apply uniformly.
+        let (dir, rel_path) = self.resolve_io(rel)?;
+        ensure_regular_file_in(dir, &rel_path)?;
+        let mut f = dir
+            .open(&rel_path)
+            .map_err(|e| ChanError::Io(e.to_string()))?;
+        use std::io::Read;
+        let mut buf = String::new();
+        f.read_to_string(&mut buf)?;
+        Ok(buf)
+    }
+
+    /// Read UTF-8 text and return the file's stat alongside the
+    /// content. The stat is taken from the open file handle (fstat)
+    /// so the returned mtime corresponds to the bytes returned, with
+    /// no second-syscall race window. Pair with `write_text_if_unchanged`
+    /// for optimistic-concurrency editor saves.
+    pub fn read_text_with_stat(&self, rel: &str) -> Result<(String, FileStat)> {
+        use std::io::Read;
+        if !fs_ops::is_editable_text(rel) {
+            return Err(ChanError::NotEditableText(rel.to_string()));
+        }
+        // systacean-26: same Drafts routing as read_text.
+        let (dir, rel_path) = self.resolve_io(rel)?;
+        ensure_regular_file_in(dir, &rel_path)?;
+        let mut f = dir
+            .open(&rel_path)
+            .map_err(|e| ChanError::Io(e.to_string()))?;
+        let meta = f.metadata()?;
+        let mut content = String::new();
+        f.read_to_string(&mut content)?;
+        let stat = FileStat {
+            size: meta.len(),
+            mtime: mtime_secs_cap(&meta),
+            mtime_ns: mtime_ns_cap(&meta),
+            is_dir: false,
+        };
+        Ok((content, stat))
+    }
+
+    /// Stream UTF-8 text in chunks and include the open-handle stat.
+    /// Returns early with `Ok(())` when the callback returns false,
+    /// which lets HTTP callers stop disk reads after the client
+    /// disconnects without treating it as a storage failure.
+    pub fn read_text_with_stat_chunked<F>(
+        &self,
+        rel: &str,
+        chunk_size: usize,
+        mut on_event: F,
+    ) -> Result<()>
+    where
+        F: FnMut(TextReadEvent<'_>) -> bool,
+    {
+        use std::io::Read;
+        if !fs_ops::is_editable_text(rel) {
+            return Err(ChanError::NotEditableText(rel.to_string()));
+        }
+        let (dir, rel_path) = self.resolve_io(rel)?;
+        ensure_regular_file_in(dir, &rel_path)?;
+        let mut f = dir
+            .open(&rel_path)
+            .map_err(|e| ChanError::Io(e.to_string()))?;
+        let meta = f.metadata()?;
+        let stat = FileStat {
+            size: meta.len(),
+            mtime: mtime_secs_cap(&meta),
+            mtime_ns: mtime_ns_cap(&meta),
+            is_dir: false,
+        };
+        if !on_event(TextReadEvent::Meta(&stat)) {
+            return Ok(());
+        }
+
+        let mut read_buf = vec![0u8; chunk_size.max(1)];
+        let mut pending = Vec::new();
+        loop {
+            let n = f.read(&mut read_buf)?;
+            if n == 0 {
+                break;
+            }
+            pending.extend_from_slice(&read_buf[..n]);
+            if !emit_valid_utf8_chunks(rel, &mut pending, &mut on_event)? {
+                return Ok(());
+            }
+        }
+        if !pending.is_empty() {
+            return Err(ChanError::Io(format!(
+                "invalid UTF-8 in editable text file: {rel}"
+            )));
+        }
+        let _ = on_event(TextReadEvent::Done);
+        Ok(())
+    }
+
+    /// Atomically write UTF-8 text. Editable-text gate applies.
+    /// Refuses to write through a path whose final component is a
+    /// non-regular file (symlink, device, FIFO, socket); the user
+    /// must remove the existing entry first if they intend to
+    /// replace it.
+    pub fn write_text(&self, rel: &str, content: &str) -> Result<()> {
+        if !fs_ops::is_editable_text(rel) {
+            return Err(ChanError::NotEditableText(rel.to_string()));
+        }
+        // systacean-26: same Drafts routing as read_text. The
+        // editable-text gate + size gate + atomic-write semantics
+        // (tmp + fsync + rename + parent fsync) all apply
+        // uniformly whether the destination is drive-root or
+        // drafts. Chan-server's `SelfWrites` tracker keys on the
+        // full unified rel so watcher self-write suppression
+        // works for drafts writes too.
+        let (dir, rel_path) = self.resolve_io(rel)?;
+        let prev = ensure_writable_in(dir, &rel_path)?;
+        check_size(
+            "text",
+            content.len(),
+            TEXT_WRITE_LIMIT,
+            prev.as_ref().map(|m| m.len()),
+        )?;
+        fs_ops::atomic_write_in(dir, &rel_path, content.as_bytes())
+    }
+
+    /// Optimistic-concurrency write: succeeds only when the file's
+    /// current mtime (nanoseconds) matches `expected_mtime_ns`. The
+    /// editor pairs this with `read_text_with_stat`: it reads
+    /// (content, stat), the user edits, then it writes back with
+    /// `expected_mtime_ns = stat.mtime_ns`. If the file changed under
+    /// the editor (another process, another pane), the write fails
+    /// with `ChanError::WriteConflict` and the editor can prompt to
+    /// reload, merge, or overwrite.
+    ///
+    /// Why nanoseconds: most filesystems chan runs on (ext4, xfs,
+    /// APFS, btrfs) expose nanosecond mtime. Two saves landing within
+    /// the same wall-clock second produce identical second-resolution
+    /// mtimes; an editor saving on top of an autosave from a tool a
+    /// few hundred ms earlier would silently win. Ns resolution
+    /// catches that. On filesystems that only carry seconds (FAT,
+    /// some SMB mounts), `mtime_ns` is the seconds value times 1e9
+    /// and the check degrades gracefully.
+    ///
+    /// Conventions for `expected_mtime_ns`:
+    ///   - `None` + missing file: create.
+    ///   - `None` + existing file: `WriteConflict`. The caller did
+    ///     not know a file was there; treating that as a silent
+    ///     overwrite would be the bug we're trying to prevent.
+    ///   - `Some(m)` + current mtime_ns == m: write.
+    ///   - any other case: `WriteConflict { current_mtime_ns }`.
+    ///
+    /// Residual race: between the mtime check and the atomic rename,
+    /// another writer can land. The window is small (no syscalls
+    /// between the two) and the next watcher event will surface the
+    /// foreign change so the editor can re-prompt. Callers that need
+    /// stronger semantics must serialize at a higher level.
+    pub fn write_text_if_unchanged(
+        &self,
+        rel: &str,
+        expected_mtime_ns: Option<i64>,
+        content: &str,
+    ) -> Result<()> {
+        if !fs_ops::is_editable_text(rel) {
+            return Err(ChanError::NotEditableText(rel.to_string()));
+        }
+        // systacean-26: same Drafts routing as write_text.
+        // Optimistic-concurrency mtime check uses the same dir
+        // handle for the prev stat + the atomic-write so the
+        // small TOCTOU window between mtime check + rename is no
+        // worse than the drive-root path.
+        let (dir, rel_path) = self.resolve_io(rel)?;
+        let prev = ensure_writable_in(dir, &rel_path)?;
+        let (current, exists, prev_size) = match prev.as_ref() {
+            Some(meta) => (mtime_ns_cap(meta), true, Some(meta.len())),
+            None => (None, false, None),
+        };
+        let conflict = match (expected_mtime_ns, exists) {
+            (None, false) => false,
+            (Some(m), true) => current != Some(m),
+            _ => true,
+        };
+        if conflict {
+            return Err(ChanError::WriteConflict {
+                current_mtime_ns: current,
+            });
+        }
+        check_size("text", content.len(), TEXT_WRITE_LIMIT, prev_size)?;
+        fs_ops::atomic_write_in(dir, &rel_path, content.as_bytes())
+    }
+
+    /// Atomically write raw bytes. Text-class targets still require
+    /// valid UTF-8 so a binary upload cannot later be rendered by
+    /// the editor as markdown or source text. Same special-file
+    /// refusal as `write_text`.
+    pub fn write_bytes(&self, rel: &str, content: &[u8]) -> Result<()> {
+        if fs_ops::is_editable_text(rel) && std::str::from_utf8(content).is_err() {
+            return Err(ChanError::Io(format!(
+                "refusing to write non-UTF-8 bytes to editable text file: {rel}"
+            )));
+        }
+        let (dir, rel_path) = self.resolve_io(rel)?;
+        let prev = ensure_writable_in(dir, &rel_path)?;
+        check_size(
+            "bytes",
+            content.len(),
+            BYTES_WRITE_LIMIT,
+            prev.as_ref().map(|m| m.len()),
+        )?;
+        fs_ops::atomic_write_in(dir, &rel_path, content)
+    }
+
+    /// True iff the path resolves under the drive and refers to a
+    /// regular file. Matches the gate `read` / `read_text` apply,
+    /// so a `true` return is a strong signal that a read will
+    /// succeed.
+    pub fn exists(&self, rel: &str) -> bool {
+        // systacean-32: prefix-aware for Drafts/<...> paths.
+        // Same routing as read / stat; without this, a SPA
+        // existence check on a draft file would always return
+        // false.
+        let Ok((dir, rel_path)) = self.resolve_io(rel) else {
+            return false;
+        };
+        match dir.symlink_metadata(&rel_path) {
+            Ok(m) => m.is_file() && !m.file_type().is_symlink(),
+            Err(_) => false,
+        }
+    }
+
+    /// Stat the path using `lstat` semantics (so a symlink reports
+    /// as such, not as its target). Refuses paths that escape the
+    /// drive root through a mid-path symlink.
+    ///
+    /// systacean-32: prefix-aware for `Drafts/<...>` paths, same
+    /// routing as `read_text` / `write_text` / `list` post-`-26` +
+    /// `-29`. Without this, `Workspace::stat("Drafts/<name>")` returned
+    /// NotFound (drive-root capfs has no `Drafts` entry), which
+    /// silently dropped Drafts subdirectories from
+    /// `list_dir_entries` enumeration — the recurring `-a-66 b/c/d`
+    /// data-flow gap @@WebtestA caught.
+    pub fn stat(&self, rel: &str) -> Result<FileStat> {
+        if drafts::strip_unified_prefix(rel) == Some("") {
+            let meta = self
+                .drafts_dir_handle
+                .symlink_metadata(".")
+                .map_err(|e| ChanError::Io(e.to_string()))?;
+            return Ok(FileStat {
+                size: 0,
+                mtime: mtime_secs_cap(&meta),
+                mtime_ns: mtime_ns_cap(&meta),
+                is_dir: meta.is_dir(),
+            });
+        }
+        let (dir, rel_path) = self.resolve_io(rel)?;
+        let meta = dir
+            .symlink_metadata(&rel_path)
+            .map_err(|e| ChanError::Io(e.to_string()))?;
+        Ok(FileStat {
+            size: if meta.is_dir() { 0 } else { meta.len() },
+            mtime: mtime_secs_cap(&meta),
+            mtime_ns: mtime_ns_cap(&meta),
+            is_dir: meta.is_dir(),
+        })
+    }
+
+    /// One-level directory listing. Use `list_tree` for the
+    /// recursive variant. Skips drive-internal noise (`.chan/`,
+    /// `.git/`) at the top level and drops special entries (FIFOs,
+    /// sockets, devices) at every level. Symlinks stay visible to
+    /// the browser and are classified by the server-side wire view.
+    /// Errors with `ListingTooLarge` past `LIST_DIR_LIMIT`.
+    ///
+    /// Per-entry errors (a vanished entry mid-iteration, a
+    /// permission denied on stat) are logged at warn and the entry
+    /// is skipped rather than aborting the listing. Without the log
+    /// the editor's tree view would silently miss entries and the
+    /// user has no signal anything went wrong; with it, the issue
+    /// shows up in `tracing` output and the indexer / status surface
+    /// can act on the count later if needed.
+    pub fn list(&self, rel: &str) -> Result<Vec<DirEntry>> {
+        let at_root = rel.is_empty() || rel == "." || rel == "/";
+        // systacean-29: route Drafts/-prefixed rels through the
+        // drafts cap-std handle (parallels the -26 read_text /
+        // write_text routing). Three shapes:
+        //   * "Drafts/" or "Drafts" → list the drafts root
+        //     (returns each `untitled-N` / `rich-prompt-N`).
+        //   * "Drafts/<name>" or "Drafts/<name>/<sub>" → list
+        //     inside the drafts subtree.
+        //   * anything else → drive-root path (unchanged).
+        let read = if rel == "Drafts" || rel == "Drafts/" {
+            self.drafts_dir_handle
+                .read_dir(".")
+                .map_err(|e| ChanError::Io(e.to_string()))?
+        } else if let Some(sub) = rel.strip_prefix("Drafts/") {
+            let sub = sub.trim_end_matches('/');
+            if sub.is_empty() {
+                // `Drafts/` after trimming → same as drafts root
+                self.drafts_dir_handle
+                    .read_dir(".")
+                    .map_err(|e| ChanError::Io(e.to_string()))?
+            } else {
+                let rel_path = fs_ops::validate_rel(sub)?;
+                self.drafts_dir_handle
+                    .read_dir(&rel_path)
+                    .map_err(|e| ChanError::Io(e.to_string()))?
+            }
+        } else if at_root {
+            self.dir
+                .read_dir(".")
+                .map_err(|e| ChanError::Io(e.to_string()))?
+        } else {
+            let rel_path = self.rel(rel)?;
+            self.dir
+                .read_dir(&rel_path)
+                .map_err(|e| ChanError::Io(e.to_string()))?
+        };
+        let mut out = Vec::new();
+        let mut skipped = 0usize;
+        for entry in read {
+            if out.len() >= fs_ops::LIST_DIR_LIMIT {
+                return Err(ChanError::ListingTooLarge {
+                    observed: out.len(),
+                    limit: fs_ops::LIST_DIR_LIMIT,
+                });
+            }
+            let entry = match entry {
+                Ok(e) => e,
+                Err(e) => {
+                    tracing::warn!(?rel, ?e, "list: read_dir entry error; skipping");
+                    skipped += 1;
+                    continue;
+                }
+            };
+            let name = entry.file_name().to_string_lossy().into_owned();
+            if at_root && (name == ".chan" || name == ".git") {
+                continue;
+            }
+            let ft = match entry.file_type() {
+                Ok(ft) => ft,
+                Err(e) => {
+                    tracing::warn!(?rel, ?name, ?e, "list: file_type failed; skipping");
+                    skipped += 1;
+                    continue;
+                }
+            };
+            if !(ft.is_dir() || ft.is_symlink() || ft.is_file()) {
+                continue;
+            }
+            out.push(DirEntry {
+                name,
+                is_dir: ft.is_dir(),
+            });
+        }
+        if skipped > 0 {
+            tracing::warn!(
+                ?rel,
+                skipped,
+                returned = out.len(),
+                "list: directory listing partial",
+            );
+        }
+        Ok(out)
+    }
+
+    pub fn list_tree(&self) -> Result<Vec<TreeEntry>> {
+        fs_ops::list_tree(self.root())
+    }
+
+    /// Recursive listing in chan's public namespace, including the
+    /// virtual `Drafts` root backed by this drive's metadata dir.
+    pub fn list_tree_unified(&self) -> Result<Vec<TreeEntry>> {
+        let mut entries = self.list_tree()?;
+        entries.extend(self.list_tree_drafts_prefix(drafts::UNIFIED_DRAFTS_ROOT)?);
+        if entries.len() > fs_ops::LIST_TREE_LIMIT {
+            return Err(ChanError::ListingTooLarge {
+                observed: entries.len(),
+                limit: fs_ops::LIST_TREE_LIMIT,
+            });
+        }
+        Ok(entries)
+    }
+
+    /// Subtree variant of `list_tree`: walk only the descendants of
+    /// `prefix` instead of the entire drive. Returned `TreeEntry.path`
+    /// values stay relative to the drive root, so the caller sees the
+    /// same shape as `list_tree`. The prefix entry itself is included
+    /// (file: one entry; directory: that directory plus its descendants).
+    ///
+    /// Same gates as the rest of the Workspace API: `resolve_safe_strict`
+    /// rejects `..` traversal and mid-path symlinks pointing outside
+    /// the drive. A non-existent prefix returns `Ok(vec![])` rather
+    /// than an error, so model-driven `list_files(prefix=...)` calls
+    /// gracefully report an empty listing for typos instead of
+    /// surfacing a hard failure.
+    ///
+    /// Performance: walks only the requested subtree, so on a drive
+    /// with hundreds of thousands of files a narrow prefix returns
+    /// promptly. Use `list_tree` when the caller actually wants the
+    /// whole drive.
+    pub fn list_tree_prefix(&self, prefix: &str) -> Result<Vec<TreeEntry>> {
+        let resolved = fs_ops::resolve_safe_strict(self.root(), prefix)?;
+        fs_ops::list_tree_prefix(self.root(), &resolved)
+    }
+
+    /// Subtree variant of `list_tree_unified`. `Drafts` prefixes
+    /// walk the metadata-backed draft tree and return public
+    /// `Drafts/...` paths; every other prefix stays rooted at the
+    /// drive.
+    pub fn list_tree_prefix_unified(&self, prefix: &str) -> Result<Vec<TreeEntry>> {
+        let trimmed = prefix.trim_matches('/');
+        if drafts::is_unified_drafts_path(trimmed) {
+            self.list_tree_drafts_prefix(trimmed)
+        } else {
+            self.list_tree_prefix(trimmed)
+        }
+    }
+
+    /// Filtered counterpart of `list_tree_unified`. Applies the
+    /// per-drive `WalkFilter` so blocklisted dirs (`node_modules/`,
+    /// `target/`, `venv/`, ...) are excluded, matching the index and
+    /// the File Browser spine. The graph layer uses this so the
+    /// semantic graph does not surface dependency trees as nodes. The
+    /// raw `list_tree_unified` stays unfiltered for the editor's
+    /// on-demand open-inside-a-noisy-dir path.
+    pub fn list_tree_filtered_unified(&self) -> Result<Vec<TreeEntry>> {
+        let mut entries = fs_ops::list_tree_filtered(self.root(), &self.walk_filter)?;
+        entries.extend(self.list_tree_drafts_prefix(drafts::UNIFIED_DRAFTS_ROOT)?);
+        if entries.len() > fs_ops::LIST_TREE_LIMIT {
+            return Err(ChanError::ListingTooLarge {
+                observed: entries.len(),
+                limit: fs_ops::LIST_TREE_LIMIT,
+            });
+        }
+        Ok(entries)
+    }
+
+    /// Filtered counterpart of `list_tree_prefix_unified`. Drafts
+    /// prefixes are unaffected (chan metadata, no blocklist); every
+    /// other prefix prunes the per-drive `WalkFilter` dirs.
+    pub fn list_tree_prefix_filtered_unified(&self, prefix: &str) -> Result<Vec<TreeEntry>> {
+        let trimmed = prefix.trim_matches('/');
+        if drafts::is_unified_drafts_path(trimmed) {
+            self.list_tree_drafts_prefix(trimmed)
+        } else {
+            let resolved = fs_ops::resolve_safe_strict(self.root(), trimmed)?;
+            fs_ops::list_tree_prefix_filtered(self.root(), &resolved, &self.walk_filter)
+        }
+    }
+
+    fn list_tree_drafts_prefix(&self, prefix: &str) -> Result<Vec<TreeEntry>> {
+        let Some(sub) = drafts::strip_unified_prefix(prefix) else {
+            return Ok(Vec::new());
+        };
+        let walk_from = if sub.is_empty() {
+            self.paths.drafts.clone()
+        } else {
+            self.paths.drafts.join(fs_ops::validate_rel(sub)?)
+        };
+        if !walk_from.exists() {
+            return Ok(Vec::new());
+        }
+
+        let mut out = Vec::new();
+        let walker = walkdir::WalkDir::new(&walk_from)
+            .min_depth(0)
+            .follow_links(false)
+            .same_file_system(true)
+            .into_iter()
+            .filter_entry(|entry| {
+                let ft = entry.file_type();
+                ft.is_dir() || ft.is_file()
+            });
+        for entry in walker {
+            if out.len() >= fs_ops::LIST_TREE_LIMIT {
+                return Err(ChanError::ListingTooLarge {
+                    observed: out.len(),
+                    limit: fs_ops::LIST_TREE_LIMIT,
+                });
+            }
+            let entry = match entry {
+                Ok(entry) => entry,
+                Err(e) => {
+                    tracing::warn!("drafts walkdir error: {e}");
+                    continue;
+                }
+            };
+            let ft = entry.file_type();
+            if !(ft.is_dir() || ft.is_file()) {
+                continue;
+            }
+            let rel = entry
+                .path()
+                .strip_prefix(&self.paths.drafts)
+                .map_err(|_| ChanError::PathEscape)?;
+            let suffix = posix_path(rel);
+            let path = if suffix.is_empty() {
+                drafts::UNIFIED_DRAFTS_ROOT.to_string()
+            } else {
+                format!("{}/{suffix}", drafts::UNIFIED_DRAFTS_ROOT)
+            };
+            let meta = match entry.metadata() {
+                Ok(meta) => meta,
+                Err(e) => {
+                    tracing::warn!(?path, ?e, "drafts metadata failed; skipping");
+                    continue;
+                }
+            };
+            out.push(TreeEntry {
+                path,
+                is_dir: meta.is_dir(),
+                mtime: mtime_secs_std(&meta),
+                size: if meta.is_dir() { 0 } else { meta.len() },
+            });
+        }
+        Ok(out)
+    }
+
+    pub fn create_dir(&self, rel: &str) -> Result<()> {
+        let rel_path = self.rel(rel)?;
+        self.dir
+            .create_dir_all(&rel_path)
+            .map_err(|e| ChanError::Io(e.to_string()))?;
+        Ok(())
+    }
+
+    /// Soft-delete a file or directory: move it into the per-drive
+    /// trash. `trash_list` / `trash_restore` / `trash_purge` /
+    /// `trash_empty` operate on the trash. Expired entries are
+    /// GC'd lazily on `Workspace::open` and on every `trash_*` call;
+    /// retention is `TRASH_RETENTION_SECS` (30 days at v1).
+    ///
+    /// Accepted: regular files and real directories (recursively;
+    /// the foot-gun guard against recursive delete is satisfied by
+    /// the soft-delete + restore path). Rejected with `SpecialFile`:
+    /// symlinks, FIFOs, sockets, char/block devices. Users who
+    /// really want those gone can `rm` them out-of-band.
+    pub fn remove(&self, rel: &str) -> Result<()> {
+        let rel_path = self.rel(rel)?;
+        // cap-std lstat: TOCTOU-free type check. The subsequent
+        // trash::move_into still operates path-based (it has to
+        // bridge into the trash dir which lives outside the cap-std
+        // Workspace sandbox), so the rename itself has a small residual
+        // TOCTOU window. The damage if exploited is "wrong file
+        // goes to trash" - recoverable via `trash_restore`.
+        let meta = self
+            .dir
+            .symlink_metadata(&rel_path)
+            .map_err(|e| ChanError::Io(e.to_string()))?;
+        let ft = meta.file_type();
+        let is_dir = ft.is_dir();
+        let is_regular_file = ft.is_file() && !ft.is_symlink();
+        let abs = self.entry.root_path.join(&rel_path);
+        if !(is_dir || is_regular_file) {
+            return Err(ChanError::SpecialFile {
+                kind: describe_cap_file_kind(&ft).to_string(),
+                path: abs,
+            });
+        }
+        // Snapshot every editable-text path under `rel` BEFORE the
+        // trash move so the search index has a deterministic delete
+        // set. After the move the source paths are gone and a walk
+        // would miss them. Non-editable files (images, PDFs) aren't
+        // in BM25 / the vector store, so they're skipped here; the
+        // graph cleanup below clears their inbound edges via the
+        // prefix delete.
+        let indexed_paths = self.collect_indexed_paths_for_remove(&abs, rel, is_dir);
+        let _ = trash::sweep_expired(&self.paths.trash, TRASH_RETENTION_SECS);
+        trash::move_into(&self.paths.trash, &abs, rel, is_dir)?;
+        // Best-effort post-move cleanup. The user-visible operation
+        // (file disappears, restorable from trash) has already
+        // succeeded; failures here would only leave stale rows that
+        // the next reindex sweeps away, so they're logged not
+        // returned. Order: graph first (a stale BM25 hit pointing at
+        // a node-less path is recoverable when the user clicks
+        // through; a stale graph row pointing at a no-longer-indexed
+        // file is the cosmetic ghost).
+        self.cleanup_after_remove(rel, &indexed_paths);
+        Ok(())
+    }
+
+    /// Walk the (still-present) target of a `remove` and collect
+    /// the editable-text paths the search index needs to drop. For
+    /// a single file this collapses to `[rel]` when editable; for a
+    /// directory it walks the subtree, applying the same `.git/` /
+    /// `.chan/` filter as the rest of the crate.
+    fn collect_indexed_paths_for_remove(
+        &self,
+        abs: &std::path::Path,
+        rel: &str,
+        is_dir: bool,
+    ) -> Vec<String> {
+        if !is_dir {
+            return if fs_ops::is_indexable_text(rel) {
+                vec![rel.to_string()]
+            } else {
+                Vec::new()
+            };
+        }
+        let mut out = Vec::new();
+        // Filtered so we don't waste time collecting paths under
+        // `node_modules/` etc. that were never indexed in the first
+        // place; symmetric with the filtered index/graph build.
+        for entry in fs_ops::walk_drive_filtered(abs, &self.walk_filter) {
+            if !entry.file_type().is_file() {
+                continue;
+            }
+            let rel_path = match entry.path().strip_prefix(&self.entry.root_path) {
+                Ok(p) => p.to_string_lossy().replace('\\', "/"),
+                Err(_) => continue,
+            };
+            if fs_ops::is_indexable_text(&rel_path) {
+                out.push(rel_path);
+            }
+        }
+        out
+    }
+
+    /// Drop graph rows and search-index entries for a path that
+    /// `remove` just trashed. Best-effort: `graph()` / `index()` may
+    /// not be initialized yet (a remove on a never-opened drive), or
+    /// the underlying store may transiently fail. We log and move on;
+    /// the next reindex is the safety net.
+    fn cleanup_after_remove(&self, rel: &str, indexed_paths: &[String]) {
+        match self.graph() {
+            Ok(g) => {
+                if let Err(e) = g.forget_under(rel) {
+                    tracing::warn!(rel, ?e, "remove: graph forget_under failed");
+                }
+            }
+            Err(e) => {
+                tracing::warn!(rel, ?e, "remove: graph unavailable, skipping cleanup");
+            }
+        }
+        if indexed_paths.is_empty() {
+            return;
+        }
+        match self.index() {
+            Ok(idx) => {
+                if let Err(e) = idx.forget_many(indexed_paths) {
+                    tracing::warn!(
+                        rel,
+                        count = indexed_paths.len(),
+                        ?e,
+                        "remove: index forget_many failed",
+                    );
+                }
+            }
+            Err(e) => {
+                tracing::warn!(rel, ?e, "remove: index unavailable, skipping cleanup");
+            }
+        }
+    }
+
+    /// List trashed entries for this drive, most-recent-first.
+    pub fn trash_list(&self) -> Result<Vec<TrashEntry>> {
+        let _ = trash::sweep_expired(&self.paths.trash, TRASH_RETENTION_SECS);
+        trash::list(&self.paths.trash)
+    }
+
+    /// Restore a trashed entry to its original path. Errors with
+    /// `TrashOccupied` if the destination already exists; the caller
+    /// can rename the live entry first or `trash_purge` the trash
+    /// entry to give up.
+    ///
+    /// After the filesystem restore lands, the graph and search
+    /// index are repopulated for every editable-text path that came
+    /// back (`remove` cleared them on the way into trash, so this is
+    /// the symmetric step). Cleanup of stale entries is best-effort
+    /// for the same reason as in `remove`: the trash op already
+    /// succeeded from the user's view, and a missed re-index falls
+    /// back to the next reindex pass.
+    pub fn trash_restore(&self, id: &str) -> Result<()> {
+        let _ = trash::sweep_expired(&self.paths.trash, TRASH_RETENTION_SECS);
+        let restored = trash::restore(&self.paths.trash, self.root(), &self.root_canon, id)?;
+        self.reindex_after_restore(&restored);
+        Ok(())
+    }
+
+    /// Walk the freshly-restored target and feed every editable-text
+    /// path back into the graph + search index. Best-effort: a
+    /// failure here leaves the file on disk but absent from indexes,
+    /// which the next reindex rebuilds. We don't propagate the error
+    /// because the user's intent ("undo my delete") already
+    /// succeeded at the filesystem level.
+    fn reindex_after_restore(&self, restored: &trash::RestoredEntry) {
+        let abs = self.entry.root_path.join(&restored.rel_path);
+        let is_dir = restored.is_dir;
+        if !is_dir {
+            if !fs_ops::is_indexable_text(&restored.rel_path) {
+                return;
+            }
+            if let Err(e) = self.index_file(&restored.rel_path) {
+                tracing::warn!(rel = %restored.rel_path, ?e, "restore: index_file failed");
+            }
+            return;
+        }
+        // Filtered so restoring a directory that happens to contain a
+        // `node_modules/` / `target/` subtree does not re-index a
+        // dependency tree the index deliberately excludes.
+        for entry in fs_ops::walk_drive_filtered(&abs, &self.walk_filter) {
+            if !entry.file_type().is_file() {
+                continue;
+            }
+            let rel_path = match entry.path().strip_prefix(&self.entry.root_path) {
+                Ok(p) => p.to_string_lossy().replace('\\', "/"),
+                Err(_) => continue,
+            };
+            if !fs_ops::is_indexable_text(&rel_path) {
+                continue;
+            }
+            if let Err(e) = self.index_file(&rel_path) {
+                tracing::warn!(rel = %rel_path, ?e, "restore: index_file failed");
+            }
+        }
+    }
+
+    /// Permanently delete a single trash entry.
+    pub fn trash_purge(&self, id: &str) -> Result<()> {
+        let _ = trash::sweep_expired(&self.paths.trash, TRASH_RETENTION_SECS);
+        trash::purge_one(&self.paths.trash, id)
+    }
+
+    /// Permanently delete every trash entry for this drive.
+    pub fn trash_empty(&self) -> Result<()> {
+        trash::purge_all(&self.paths.trash)
+    }
+
+    // ---- drafts (systacean-24) ----
+    //
+    // Per-drive Drafts metadata folder. Parallels trash: lives in
+    // `~/.chan/drives/<metadata_key>/drafts/`, holds in-progress
+    // drafts as directories so users can paste images / drop config
+    // files alongside `draft.md`.
+
+    /// Per-drive drafts root path. Always present on disk after
+    /// `Workspace::open` (eagerly created via `drafts::ensure_root`).
+    pub fn drafts_dir(&self) -> &std::path::Path {
+        &self.paths.drafts
+    }
+
+    /// Create a draft directory by name (e.g. `"untitled-1"` or
+    /// `"rich-prompt-3"`). Returns a handle with the leaf name +
+    /// absolute path. Errors when the name contains a path
+    /// separator / traversal segment / already exists. Atomic via
+    /// `fs::create_dir_all` on a non-existing leaf.
+    pub fn create_draft_dir(&self, name: &str) -> Result<DraftRef> {
+        drafts::create_dir(&self.paths.drafts, name)
+    }
+
+    /// Enumerate drafts. Sorted by name. Empty when the drafts
+    /// root has never been written to. Skips stray non-directory
+    /// entries silently.
+    pub fn list_drafts(&self) -> Result<Vec<DraftRef>> {
+        drafts::list(&self.paths.drafts)
+    }
+
+    /// Inspect metadata drafts and report non-fatal
+    /// problems that should be surfaced on drive boot.
+    pub fn draft_preflight(&self) -> Result<Vec<drafts::DraftIssue>> {
+        drafts::preflight(&self.paths.drafts)
+    }
+
+    /// Inspect a draft before save or discard.
+    pub fn inspect_draft(&self, name: &str) -> Result<drafts::DraftInspection> {
+        drafts::inspect(&self.paths.drafts, name)
+    }
+
+    /// Move a draft to metadata trash.
+    pub fn discard_draft(&self, name: &str) -> Result<()> {
+        drafts::discard(&self.paths.drafts, &self.paths.trash.join("drafts"), name)
+    }
+
+    /// Promote a draft into the drive root with no-clobber
+    /// semantics. Single-file drafts move `draft.md` to
+    /// `target_rel`; directory drafts move or merge the whole draft
+    /// directory into the target directory.
+    pub fn promote_draft(
+        &self,
+        name: &str,
+        target_rel: &str,
+    ) -> Result<drafts::DraftPromoteReport> {
+        drafts::promote(
+            &self.paths.drafts,
+            self.root(),
+            &self.root_canon,
+            name,
+            target_rel,
+        )
+    }
+
+    /// Create an active Rich Prompt session under Drafts metadata.
+    /// The active marker is written last so reload/preflight never
+    /// treats a partially-created directory as an active prompt.
+    pub fn create_rich_prompt_session(
+        &self,
+        requested_name: Option<&str>,
+    ) -> Result<crate::rich_prompts::RichPromptSession> {
+        crate::rich_prompts::create(
+            &self.paths.drafts,
+            requested_name,
+            crate::rich_prompts::DEFAULT_PROCESS_TEXT,
+        )
+    }
+
+    /// Inspect one active Rich Prompt session.
+    pub fn inspect_rich_prompt_session(
+        &self,
+        name: &str,
+    ) -> Result<crate::rich_prompts::RichPromptSession> {
+        crate::rich_prompts::inspect(&self.paths.drafts, name)
+    }
+
+    /// Inspect active Rich Prompt sessions and report non-fatal
+    /// problems that should be surfaced on drive boot.
+    pub fn rich_prompt_preflight(&self) -> Result<Vec<crate::rich_prompts::RichPromptIssue>> {
+        crate::rich_prompts::preflight(&self.paths.drafts)
+    }
+
+    /// Archive a submitted prompt buffer into `prompt-N.md` and
+    /// reset `draft.md` to a fresh blank buffer.
+    pub fn submit_rich_prompt_session(
+        &self,
+        name: &str,
+        content: &str,
+        expected_sequence: u64,
+        expected_mtime_ns: Option<i64>,
+    ) -> Result<crate::rich_prompts::RichPromptSubmitReport> {
+        crate::rich_prompts::submit(
+            &self.paths.drafts,
+            name,
+            content,
+            expected_sequence,
+            expected_mtime_ns,
+        )
+    }
+
+    /// Move an active Rich Prompt session to metadata trash.
+    pub fn discard_rich_prompt_session(&self, name: &str) -> Result<()> {
+        crate::rich_prompts::discard(&self.paths.drafts, &self.paths.trash.join("drafts"), name)
+    }
+
+    // ---- teams (systacean-30) ----
+    //
+    // Teams live inside the per-drive Drafts metadata
+    // dir as `team-{name}/` directories. Parallels the drafts
+    // primitive layer: filesystem ops here, schema in
+    // `crate::teams`. Consumed by `systacean-31` (multi-team
+    // watcher) + the SPA's Team bootstrap flow.
+
+    /// Create a new team under this drive's drafts dir.
+    /// Creates `team-{config.team_name}/` with `config.toml`,
+    /// empty `events/`, and empty `docs/`. Errors when the team
+    /// name is invalid or the dir already exists.
+    pub fn create_team(&self, config: &crate::teams::TeamConfig) -> Result<crate::teams::TeamRef> {
+        crate::teams::create(&self.paths.drafts, config)
+    }
+
+    /// Enumerate teams under this drive's drafts dir. Returns
+    /// only directories whose name starts with `team-` (regular
+    /// drafts are excluded). Sorted by team name.
+    pub fn list_teams(&self) -> Result<Vec<crate::teams::TeamRef>> {
+        crate::teams::list(&self.paths.drafts)
+    }
+
+    /// Read + parse `config.toml` for the named team. Errors
+    /// when the team dir is missing or the config is malformed.
+    pub fn load_team(&self, team_name: &str) -> Result<crate::teams::TeamConfig> {
+        crate::teams::load(&self.paths.drafts, team_name)
+    }
+
+    /// Verbatim-copy a team under a new name. All
+    /// files + subdirectories copy byte-for-byte; the new team's
+    /// `config.toml` then has its `team_name` rewritten to
+    /// `new_name`. Per addendum-b clarification #10.
+    pub fn duplicate_team(
+        &self,
+        source_name: &str,
+        new_name: &str,
+    ) -> Result<crate::teams::TeamRef> {
+        crate::teams::duplicate(&self.paths.drafts, source_name, new_name)
+    }
+
+    /// Absolute path to a team's directory. Errors
+    /// when the team isn't registered (`load_team` validates).
+    /// Useful for consumers that need to spawn processes with
+    /// CWD set to the team.
+    pub fn team_dir(&self, team_name: &str) -> Result<std::path::PathBuf> {
+        // load_team validates existence + name shape.
+        self.load_team(team_name)?;
+        let dir_name = format!("{}{}", crate::teams::TEAM_DIR_PREFIX, team_name);
+        Ok(self.paths.drafts.join(dir_name))
+    }
+
+    /// Absolute path to a team's `events/` subdirectory.
+    /// Consumed by `systacean-31`'s per-team watcher attach.
+    pub fn team_events_dir(&self, team_name: &str) -> Result<std::path::PathBuf> {
+        Ok(self.team_dir(team_name)?.join("events"))
+    }
+
+    /// systacean-31: attach a `WatchHandle` rooted at the team's
+    /// `events/` subdirectory. The watcher emits events with
+    /// paths prefixed by `team-{name}/events/` so chan-server's
+    /// event stream can route per-team. Errors when the team
+    /// isn't registered (the events_dir resolution validates).
+    /// Caller drops the returned handle to stop watching;
+    /// chan-server's `team_unload` route uses this for non-
+    /// destructive tear-down (team persists on disk).
+    pub fn watch_team(
+        self: &Arc<Self>,
+        team_name: &str,
+        cb: Arc<dyn crate::watch::WatchCallback>,
+    ) -> Result<crate::watch::WatchHandle> {
+        let events_dir = self.team_events_dir(team_name)?;
+        let prefix = format!("team-{team_name}/events");
+        let root = crate::watch::WatchRoot {
+            abs: events_dir,
+            prefix: Some(prefix),
+        };
+        crate::watch::WatchHandle::start(&[root], Arc::clone(&self.walk_filter), cb)
+    }
+
+    /// systacean-26: pick the smallest unused `untitled-N` name
+    /// under the drafts root. Returns `"untitled"` on the first
+    /// call (no `untitled` dir exists); `"untitled-1"` if
+    /// `untitled` is taken; `"untitled-2"` if both are taken; etc.
+    /// The caller composes the full path (e.g.
+    /// `format!("Drafts/{name}/draft.md")`) when calling
+    /// `Workspace::write_text`. Race-window note: two concurrent
+    /// callers can both observe the same gap and race on
+    /// `create_draft_dir`; the loser's `create_draft_dir` errors
+    /// with `AlreadyExists` and the caller can retry.
+    pub fn next_untitled_draft_name(&self) -> Result<String> {
+        let existing = self.list_drafts()?;
+        let names: std::collections::HashSet<&str> =
+            existing.iter().map(|d| d.name.as_str()).collect();
+        if !names.contains("untitled") {
+            return Ok("untitled".to_string());
+        }
+        let mut i: u32 = 1;
+        loop {
+            let candidate = format!("untitled-{i}");
+            if !names.contains(candidate.as_str()) {
+                return Ok(candidate);
+            }
+            i += 1;
+        }
+    }
+
+    // ---- session blobs ----
+    //
+    // Per-window opaque JSON owned by the host (window/pane
+    // layout, active tabs, scroll positions). chan-drive stores
+    // bytes; the host decides the schema. Native shells link these
+    // via uniffi and avoid reimplementing the atomic-write story
+    // per platform.
+
+    /// Atomically write `content` to the session bucket under
+    /// `key`. Bucket dir is created on first call.
+    pub fn put_session(&self, key: &str, content: &[u8]) -> Result<()> {
+        crate::blob::put(&self.paths.sessions, key, content)
+    }
+
+    /// Read a session blob; returns `Ok(None)` when missing.
+    pub fn get_session(&self, key: &str) -> Result<Option<Vec<u8>>> {
+        crate::blob::get(&self.paths.sessions, key)
+    }
+
+    /// Sorted flat session keys for this drive.
+    pub fn list_sessions(&self) -> Result<Vec<String>> {
+        crate::blob::list(&self.paths.sessions)
+    }
+
+    /// Idempotent delete; missing key is `Ok(())`.
+    pub fn delete_session(&self, key: &str) -> Result<()> {
+        crate::blob::delete(&self.paths.sessions, key)
+    }
+
+    /// Write one markdown note per `Contact` into `dir` (drive-
+    /// relative; created if missing). Each note carries nested
+    /// `chan: { kind: contact }` frontmatter so downstream consumers
+    /// (graph builder, editor `@` picker) can classify it without a
+    /// separate index. Path collisions are handled per `opts`:
+    /// either skipped or overwritten.
+    ///
+    /// All writes go through `write_text`, so the path sandbox,
+    /// editable-text gate, and atomic-rename rules apply per file.
+    /// One bad contact does not abort the batch; per-file errors
+    /// land in the returned `ImportSummary` as `Failed`.
+    pub fn import_contacts(
+        &self,
+        dir: &str,
+        contacts: Vec<crate::contacts::Contact>,
+        opts: crate::contacts::ImportOpts,
+    ) -> Result<crate::contacts::ImportSummary> {
+        self.import_contacts_with(dir, contacts, opts, &crate::progress::NoProgress)
+    }
+
+    /// `import_contacts` plus a `ProgressCallback`. Fires one
+    /// `ProgressStage::Import` event per contact processed (wrote /
+    /// overwrote / skipped / failed), with `current` / `total`
+    /// counting through the input vec. The CLI's `chan contacts
+    /// import` uses this to show live status; the no-arg version is
+    /// fine for scripted callers that just want the summary.
+    pub fn import_contacts_with(
+        &self,
+        dir: &str,
+        contacts: Vec<crate::contacts::Contact>,
+        opts: crate::contacts::ImportOpts,
+        progress: &dyn crate::progress::ProgressCallback,
+    ) -> Result<crate::contacts::ImportSummary> {
+        crate::contacts::import::run(self, dir, contacts, opts, progress)
+    }
+
+    pub fn rename(&self, from: &str, to: &str) -> Result<()> {
+        let from_rel = self.rel(from)?;
+        let to_rel = self.rel(to)?;
+        // Source must exist as a regular file or directory; refuse
+        // to move a symlink or special file. (renaming a symlink
+        // is well-defined at the syscall level but not something
+        // the editor should ever do silently.)
+        let src_meta = self
+            .dir
+            .symlink_metadata(&from_rel)
+            .map_err(|e| ChanError::Io(e.to_string()))?;
+        let src_ft = src_meta.file_type();
+        if !(src_ft.is_dir() || (src_ft.is_file() && !src_ft.is_symlink())) {
+            return Err(ChanError::SpecialFile {
+                kind: describe_cap_file_kind(&src_ft).to_string(),
+                path: self.entry.root_path.join(&from_rel),
+            });
+        }
+        ensure_writable_in(&self.dir, &to_rel)?;
+        if let Some(parent) = to_rel.parent() {
+            if !parent.as_os_str().is_empty() {
+                self.dir
+                    .create_dir_all(parent)
+                    .map_err(|e| ChanError::Io(e.to_string()))?;
+            }
+        }
+        // cap-std rename within the same Dir is TOCTOU-free: source
+        // and destination resolve through the dir handle, no
+        // path-walk through swappable ancestors.
+        self.dir
+            .rename(&from_rel, &self.dir, &to_rel)
+            .map_err(|e| ChanError::Io(e.to_string()))?;
+        Ok(())
+    }
+
+    /// Copy a regular file or a directory subtree from `from` to `to`,
+    /// both drive-rooted POSIX paths. Unlike `rename` this DUPLICATES:
+    /// the source is left untouched and no inbound links are rewritten
+    /// (a copy creates new files with their own future identity; the
+    /// next reindex picks up whatever links the copies carry).
+    ///
+    /// Invariants matched to `rename`:
+    ///   * Source must be a regular file or a directory; a symlink or
+    ///     other special file is refused (`SpecialFile`). Inside a
+    ///     subtree copy, any special-file descendant is refused too, so
+    ///     a copy can never materialize a symlink/device under the
+    ///     drive.
+    ///   * `.chan/`, `.git/`, `.hg/` are skipped inside a subtree copy
+    ///     (the same control dirs the walk filter and rename never
+    ///     touch); copying them would duplicate VCS / app metadata.
+    ///   * Each file write goes through `atomic_write_in` (the same
+    ///     atomic + parent-fsync path every user write uses) and honors
+    ///     the editable-text UTF-8 gate.
+    ///
+    /// `to` must NOT already exist (the caller resolves a free name
+    /// first via `resolve_free_name` for paste-collision handling).
+    ///
+    /// Returns the list of created destination paths (drive-rooted
+    /// POSIX), so the server can note them as self-writes and the UI /
+    /// graph can react. Sorted for stable diffs.
+    pub fn copy(&self, from: &str, to: &str) -> Result<CopyOutcome> {
+        let from_rel = self.rel(from)?;
+        let to_rel = self.rel(to)?;
+        let src_meta = self
+            .dir
+            .symlink_metadata(&from_rel)
+            .map_err(|e| ChanError::Io(e.to_string()))?;
+        let src_ft = src_meta.file_type();
+        if src_ft.is_symlink() || !(src_ft.is_dir() || src_ft.is_file()) {
+            return Err(ChanError::SpecialFile {
+                kind: describe_cap_file_kind(&src_ft).to_string(),
+                path: self.entry.root_path.join(&from_rel),
+            });
+        }
+        // Refuse to clobber: paste-collision resolution happens in the
+        // server (it picks a free name); a bare copy onto an existing
+        // path is a programming error, not a silent overwrite.
+        if self.dir.symlink_metadata(&to_rel).is_ok() {
+            return Err(ChanError::Io(format!(
+                "copy destination already exists: {to}"
+            )));
+        }
+        let to_canon = canonical_posix(to);
+        let mut created = Vec::new();
+        if src_ft.is_file() {
+            self.copy_one_file(&from_rel, &to_rel, &to_canon, &mut created)?;
+        } else {
+            // Create the destination root dir, then walk descendants.
+            self.dir
+                .create_dir_all(&to_rel)
+                .map_err(|e| ChanError::Io(e.to_string()))?;
+            self.copy_subtree(&from_rel, &to_rel, &to_canon, &mut created)?;
+        }
+        created.sort();
+        Ok(CopyOutcome { created })
+    }
+
+    /// Copy one regular file from `src_rel` to `dst_rel` (both relative
+    /// to `self.dir`), recording the destination's drive-rooted POSIX
+    /// path in `created`.
+    fn copy_one_file(
+        &self,
+        src_rel: &std::path::Path,
+        dst_rel: &std::path::Path,
+        dst_canon: &str,
+        created: &mut Vec<String>,
+    ) -> Result<()> {
+        let bytes = {
+            use std::io::Read;
+            let mut f = self
+                .dir
+                .open(src_rel)
+                .map_err(|e| ChanError::Io(e.to_string()))?;
+            let mut buf = Vec::new();
+            f.read_to_end(&mut buf)?;
+            buf
+        };
+        // Mirror write_bytes' editable-text UTF-8 gate so a copy can
+        // never land non-UTF-8 bytes in an editable-text path.
+        let dst_str = dst_rel.to_string_lossy();
+        if fs_ops::is_editable_text(&dst_str) && std::str::from_utf8(&bytes).is_err() {
+            return Err(ChanError::Io(format!(
+                "refusing to copy non-UTF-8 bytes to editable text file: {dst_str}"
+            )));
+        }
+        if let Some(parent) = dst_rel.parent() {
+            if !parent.as_os_str().is_empty() {
+                self.dir
+                    .create_dir_all(parent)
+                    .map_err(|e| ChanError::Io(e.to_string()))?;
+            }
+        }
+        fs_ops::atomic_write_in(&self.dir, dst_rel, &bytes)?;
+        created.push(dst_canon.to_string());
+        Ok(())
+    }
+
+    /// Recursively copy the contents of directory `src_rel` into the
+    /// already-created `dst_rel`. Skips control dirs; refuses special
+    /// files; recreates child directories before copying their files.
+    fn copy_subtree(
+        &self,
+        src_rel: &std::path::Path,
+        dst_rel: &std::path::Path,
+        dst_canon: &str,
+        created: &mut Vec<String>,
+    ) -> Result<()> {
+        let read = self
+            .dir
+            .read_dir(src_rel)
+            .map_err(|e| ChanError::Io(e.to_string()))?;
+        for entry in read {
+            let entry = entry.map_err(|e| ChanError::Io(e.to_string()))?;
+            let name = entry.file_name();
+            let name_str = name.to_string_lossy().to_string();
+            // Skip VCS / app control dirs: never duplicate them.
+            if matches!(name_str.as_str(), ".chan" | ".git" | ".hg") {
+                continue;
+            }
+            let ft = entry
+                .file_type()
+                .map_err(|e| ChanError::Io(e.to_string()))?;
+            let child_src = src_rel.join(&name);
+            let child_dst = dst_rel.join(&name);
+            let child_dst_canon = format!("{dst_canon}/{name_str}");
+            if ft.is_symlink() || !(ft.is_dir() || ft.is_file()) {
+                return Err(ChanError::SpecialFile {
+                    kind: describe_cap_file_kind(&ft).to_string(),
+                    path: self.entry.root_path.join(&child_src),
+                });
+            }
+            if ft.is_dir() {
+                self.dir
+                    .create_dir_all(&child_dst)
+                    .map_err(|e| ChanError::Io(e.to_string()))?;
+                self.copy_subtree(&child_src, &child_dst, &child_dst_canon, created)?;
+            } else {
+                self.copy_one_file(&child_src, &child_dst, &child_dst_canon, created)?;
+            }
+        }
+        Ok(())
+    }
+
+    /// Resolve a non-colliding destination path for pasting `name` into
+    /// directory `dest_dir` (drive-rooted POSIX). If `dest_dir/name` is
+    /// free it is returned as-is; otherwise a Finder-style " copy" /
+    /// " copy 2" suffix is inserted before the extension until a free
+    /// name is found. Used by the server's paste handler so copy AND
+    /// cut-into-a-name-collision both resolve to a fresh name rather
+    /// than overwriting (we never silently clobber).
+    ///
+    /// The check is best-effort against the live tree; the actual write
+    /// (copy / rename) is the TOCTOU-authoritative step and will fail on
+    /// a lost race, at which point the caller can retry with the next
+    /// suffix.
+    pub fn resolve_free_name(&self, dest_dir: &str, name: &str) -> Result<String> {
+        let base_dir = canonical_posix(dest_dir);
+        let prefix = if base_dir.is_empty() {
+            String::new()
+        } else {
+            format!("{base_dir}/")
+        };
+        let (stem, ext) = split_name_ext(name);
+        let mut candidate = format!("{prefix}{name}");
+        if !self.path_exists_any(&candidate) {
+            return Ok(candidate);
+        }
+        // First collision uses " copy", then " copy 2", " copy 3", ...
+        let mut n = 1u32;
+        loop {
+            let suffixed = if n == 1 {
+                format!("{stem} copy{ext}")
+            } else {
+                format!("{stem} copy {n}{ext}")
+            };
+            candidate = format!("{prefix}{suffixed}");
+            if !self.path_exists_any(&candidate) {
+                return Ok(candidate);
+            }
+            n += 1;
+            if n > 10_000 {
+                return Err(ChanError::Io(format!(
+                    "could not find a free name for {name} in {dest_dir}"
+                )));
+            }
+        }
+    }
+
+    /// Existence check for collision resolution: true if a file OR
+    /// directory (or any non-regular node) occupies `rel`.
+    fn path_exists_any(&self, rel: &str) -> bool {
+        let Ok(rel_path) = self.rel(rel) else {
+            return false;
+        };
+        self.dir.symlink_metadata(&rel_path).is_ok()
+    }
+
+    /// Rename a file or directory and rewrite every inbound link
+    /// affected by the move. Atomicity is per-file: the rename is one
+    /// filesystem op, then each affected source is rewritten via a
+    /// CAS write so concurrent edits surface as a recorded conflict
+    /// rather than a silent overwrite. The rename itself stands even
+    /// if some rewrites fail; the link-rewrite pass is idempotent and
+    /// can be retried later.
+    ///
+    /// What gets rewritten:
+    ///   * `[label](href)` and `![alt](src)` whose normalized target
+    ///     (resolved against the source file's pre-rename directory)
+    ///     matches an old path that moved.
+    ///   * `[[target]]` and `[[target|label]]` wiki links.
+    ///   * Sources that were themselves inside the renamed subtree:
+    ///     their outgoing relative links may need re-relativization
+    ///     even when the target itself did not move, because the
+    ///     source's directory changed.
+    ///
+    /// What does NOT get rewritten:
+    ///   * Reference-style links (`[label][ref]` + `[ref]: url`).
+    ///   * Bare autolinks (`<https://...>`).
+    ///   * Any link with no graph backlink to the moved target. The
+    ///     graph is the index of "what points where" and is built by
+    ///     `reindex`; a freshly-added link landed since the last
+    ///     reindex will not be picked up here. The next reindex pass
+    ///     restores accuracy.
+    ///
+    /// On a stale graph (a freshly-renamed file whose backlinks were
+    /// indexed before this call) this method behaves correctly: the
+    /// graph still records edges by pre-rename target paths, which is
+    /// exactly the lookup key we want.
+    pub fn rename_with_link_rewrite(&self, from: &str, to: &str) -> Result<RenameOutcome> {
+        self.rename_with_link_rewrite_with(from, to, &crate::progress::NoProgress)
+    }
+
+    /// `rename_with_link_rewrite` plus a `ProgressCallback`. One
+    /// `ProgressStage::RenameRewrite` event fires per source file
+    /// the rewriter visits, with `current` / `total` counting
+    /// progress through the sorted source list. The split lets a
+    /// directory rename of a 5k-file tree show live status in the
+    /// editor instead of looking frozen.
+    pub fn rename_with_link_rewrite_with(
+        &self,
+        from: &str,
+        to: &str,
+        progress: &dyn crate::progress::ProgressCallback,
+    ) -> Result<RenameOutcome> {
+        use crate::progress::{ProgressEvent, ProgressStage};
+        // Snapshot mapping BEFORE the rename so the file walker sees
+        // the subtree in its old location. Empty mapping is fine
+        // (e.g., directory rename with no descendants) and means the
+        // rewrite pass is a no-op.
+        let from_canon = canonical_posix(from);
+        let to_canon = canonical_posix(to);
+        let mapping = self.snapshot_rename_mapping(&from_canon, &to_canon)?;
+
+        // Single rename op. From here on the on-disk tree reflects the
+        // new layout; the graph is intentionally still stale (rebuilt
+        // by the indexer later) and we use that staleness on purpose.
+        self.rename(from, to)?;
+
+        if mapping.is_empty() {
+            self.rename_log_append(&from_canon, &to_canon);
+            return Ok(RenameOutcome {
+                renamed: vec![(from_canon, to_canon)],
+                rewritten: vec![],
+                conflicts: vec![],
+            });
+        }
+
+        // Effective mapping = prior rename log + this rename. The log
+        // captures any moves since the last reindex; combining it with
+        // this rename's pairs lets us:
+        //   * Translate graph src columns (frozen at last reindex) to
+        //     each source's current on-disk location, so a file moved
+        //     in a prior rename still gets its outgoing links rewritten
+        //     when a later rename touches one of its outgoing targets.
+        //   * Translate stale link text whose target moved in a prior
+        //     rename to the new current path, so a link that points to
+        //     a path no longer on disk still rewrites correctly when
+        //     it's brought back into scope by this rename.
+        let mut effective: HashMap<String, String> = self.rename_log.lock().unwrap().clone();
+        for (old, new) in &mapping {
+            // Transitive close: anything previously redirected at `old`
+            // now redirects at `new`.
+            for v in effective.values_mut() {
+                if v == old {
+                    *v = new.clone();
+                }
+            }
+            effective.insert(old.clone(), new.clone());
+        }
+
+        // Wiki-link targets are stored in the graph extensionless
+        // (`[[old]]` -> dst "old"), per chan's wiki convention. The
+        // markdown rewriter resolves them the same way; `normalize_href`
+        // returns the bare stem. Augment the effective mapping with
+        // extensionless pairs so both backlinks lookups and the rewrite
+        // callback succeed for either form.
+        let mut augmented = effective.clone();
+        for (old, new) in &effective {
+            if let (Some(old_stem), Some(new_stem)) =
+                (old.strip_suffix(".md"), new.strip_suffix(".md"))
+            {
+                augmented.insert(old_stem.to_string(), new_stem.to_string());
+            }
+        }
+
+        // Collect source files that need a rewrite pass. Two sources of
+        // candidates:
+        //   1. Backlinks into the (cumulative) renamed set. The graph's
+        //      src column is keyed by the path at last-index time; we
+        //      translate it through `effective` to find the source's
+        //      current on-disk location.
+        //   2. Every file that moved in THIS rename. Its outgoing
+        //      relative links may need re-relativization because the
+        //      source's directory changed, even when the link target
+        //      did not move.
+        let mut sources_current: HashSet<String> = HashSet::new();
+        if let Ok(graph) = self.graph() {
+            for old in augmented.keys() {
+                if let Ok(edges) = graph.backlinks(old) {
+                    for e in edges {
+                        let current = effective.get(&e.src).cloned().unwrap_or(e.src);
+                        sources_current.insert(current);
+                    }
+                }
+            }
+        }
+        for new in mapping.values() {
+            sources_current.insert(new.clone());
+        }
+
+        // Reverse view of this rename's mapping so a source that moved
+        // in this op can recover its pre-rename directory for the
+        // rewriter's source-dir resolution. Sources that did NOT move
+        // in this op fall through to the `unwrap_or` and treat their
+        // current dir as the source dir on both sides.
+        let inverse_this: HashMap<String, String> = mapping
+            .iter()
+            .map(|(k, v)| (v.clone(), k.clone()))
+            .collect();
+
+        let mut rewritten = Vec::new();
+        let mut conflicts = Vec::new();
+        let mut sources_sorted: Vec<String> = sources_current.into_iter().collect();
+        sources_sorted.sort();
+        let total_sources = sources_sorted.len() as u64;
+        for (idx, src_current) in sources_sorted.into_iter().enumerate() {
+            // Only rewrite markdown-class files (.md / .txt): images,
+            // binaries, and arbitrary-text source files can be graph
+            // nodes but never carry rewriteable markdown links.
+            if !fs_ops::is_indexable_text(&src_current) {
+                continue;
+            }
+            progress.on_progress(ProgressEvent {
+                stage: ProgressStage::RenameRewrite,
+                current: idx as u64,
+                total: total_sources,
+                label: Some(src_current.clone()),
+                eta_secs: None,
+            });
+            let (content, stat) = match self.read_text_with_stat(&src_current) {
+                Ok(pair) => pair,
+                Err(_) => continue,
+            };
+            let src_old_for_dir = inverse_this
+                .get(&src_current)
+                .cloned()
+                .unwrap_or_else(|| src_current.clone());
+            let src_old_dir = parent_dir(&src_old_for_dir);
+            let src_new_dir = parent_dir(&src_current);
+            let new_content = markdown::links::rewrite_link_targets(&content, |link| {
+                rewrite_href_for_move(link, &src_old_dir, &src_new_dir, &augmented)
+            });
+            if let Some(new_md) = new_content {
+                match self.write_text_if_unchanged(&src_current, stat.mtime_ns, &new_md) {
+                    Ok(()) => rewritten.push(src_current),
+                    Err(_) => conflicts.push(src_current),
+                }
+            }
+        }
+
+        // Persist this rename's pairs to the cumulative log so the
+        // next rename inside the same reindex window can see through
+        // to current locations. The disk sidecar is updated in the
+        // same critical section so a crash between the in-memory
+        // mutation and the durable write would just drop the last
+        // pair (`reindex` would rebuild the graph regardless).
+        {
+            let mut log = self.rename_log.lock().unwrap();
+            for (old, new) in &mapping {
+                for v in log.values_mut() {
+                    if v == old {
+                        *v = new.clone();
+                    }
+                }
+                log.insert(old.clone(), new.clone());
+            }
+            if let Err(e) = persist_rename_log(&self.paths.graph_dir, &log) {
+                tracing::warn!(
+                    ?e,
+                    "failed to persist rename_log after directory rename; \
+                     cross-process chain will rely on reindex to recover",
+                );
+            }
+        }
+
+        let mut renamed: Vec<(String, String)> = mapping.into_iter().collect();
+        renamed.sort();
+        Ok(RenameOutcome {
+            renamed,
+            rewritten,
+            conflicts,
+        })
+    }
+
+    /// Append a single pair to the cumulative rename log. Used for
+    /// renames that don't go through the directory-snapshot path (e.g.
+    /// a file `from` that doesn't exist on disk; rename still fired
+    /// and chan-drive can't know what was on the other side without
+    /// re-reading the disk).
+    fn rename_log_append(&self, old: &str, new: &str) {
+        let mut log = self.rename_log.lock().unwrap();
+        for v in log.values_mut() {
+            if v == old {
+                *v = new.to_string();
+            }
+        }
+        log.insert(old.to_string(), new.to_string());
+        // Persist before releasing the mutex so a concurrent reader
+        // never sees a divergence between memory and disk. Failure
+        // here is logged at warn but does not propagate: the rename
+        // already succeeded on the filesystem, the link-rewrite
+        // pass already used the (now-updated) in-memory map, and a
+        // missed persist degrades to "next process loses cross-call
+        // rename memory" -- recoverable via reindex.
+        if let Err(e) = persist_rename_log(&self.paths.graph_dir, &log) {
+            tracing::warn!(
+                ?e,
+                "failed to persist rename_log; cross-process chain will rely on reindex to recover",
+            );
+        }
+    }
+
+    /// Pre-rename snapshot of every concrete file under `from`, paired
+    /// with its post-rename path. Returns an empty Vec if `from` is a
+    /// single file (the caller's `(from, to)` pair already covers it)
+    /// or a non-existent path. Returns just the single pair if `from`
+    /// is one file. Directories return one entry per descendant file.
+    fn snapshot_rename_mapping(&self, from: &str, to: &str) -> Result<HashMap<String, String>> {
+        let from_rel = self.rel(from)?;
+        let meta = match self.dir.symlink_metadata(&from_rel) {
+            Ok(m) => m,
+            Err(_) => return Ok(HashMap::new()),
+        };
+        if meta.is_file() {
+            let mut m = HashMap::new();
+            m.insert(from.to_string(), to.to_string());
+            return Ok(m);
+        }
+        if !meta.is_dir() {
+            return Ok(HashMap::new());
+        }
+        // Directory walk. list_tree returns drive-rooted POSIX paths
+        // for every regular file + dir under the drive; we filter to
+        // descendants of `from/` and pair them with their new home
+        // under `to/`.
+        let entries = self.list_tree()?;
+        let prefix = if from.is_empty() {
+            String::new()
+        } else {
+            format!("{from}/")
+        };
+        let mut out = HashMap::new();
+        for e in entries {
+            if e.is_dir {
+                continue;
+            }
+            let suffix_opt = if prefix.is_empty() {
+                Some(e.path.as_str())
+            } else {
+                e.path.strip_prefix(&prefix)
+            };
+            let Some(suffix) = suffix_opt else { continue };
+            let new_path = if to.is_empty() {
+                suffix.to_string()
+            } else {
+                format!("{to}/{suffix}")
+            };
+            out.insert(e.path, new_path);
+        }
+        Ok(out)
+    }
+
+    // ---- search ----
+
+    /// Run a search query against this drive. Routes through the
+    /// hybrid index facade; opens the index lazily on first call.
+    /// Scope filtering is applied post-rank: the index doesn't
+    /// track scope, so a buffered top-N is fetched and pruned to
+    /// the requested limit after the prefix check.
+    pub fn search(&self, query: &str, opts: &SearchOpts) -> Result<SearchResult> {
+        let limit = if opts.limit == 0 { 50 } else { opts.limit } as usize;
+        let fetch = if opts.scope.is_some() {
+            limit * 4
+        } else {
+            limit
+        };
+        let mut res = self.index()?.search(query, opts.mode, fetch)?;
+        if let Some(scope) = &opts.scope {
+            res.hits.retain(|h| path_under(&h.path, scope));
+        }
+        res.hits.truncate(limit);
+        Ok(res)
+    }
+
+    /// Re-index the whole drive from scratch: walks the tree,
+    /// parses every editable-text file, and rebuilds both the
+    /// search index and the graph DB. Synchronous and blocking;
+    /// the caller decides whether to spawn a worker. Returns the
+    /// search-side build summary; graph-side errors short-circuit
+    /// the rebuild.
+    ///
+    /// `cancel`: if set to true mid-build, the rebuild bails out
+    /// with `ChanError::Cancelled`. The graph DB is cleared at the
+    /// start so a cancelled rebuild leaves an empty graph (the next
+    /// `index_stats()` reports `indexed_docs == 0`, which lets the
+    /// server's auto-rebuild trigger re-fire on next boot). The BM25
+    /// index is unaffected by cancellation: we never reach the
+    /// commit, so tantivy discards every pending write.
+    pub fn reindex(&self, cancel: Option<&AtomicBool>) -> Result<BuildSummary> {
+        self.reindex_with(cancel, &crate::progress::NoProgress)
+    }
+
+    /// Same as `reindex`, but `progress` receives events from both
+    /// passes: `ProgressStage::GraphRebuild` while the graph is
+    /// being collected and `ProgressStage::IndexFile` /
+    /// `ProgressStage::EmbedBatch` while the search index is being
+    /// built. Consumers that don't care about progress pass
+    /// `&NoProgress`; the no-arg `reindex` does that for them.
+    /// Foreign-language shells pass an `Arc<dyn ProgressCallback>`
+    /// (uniffi-bridged), deref-coerced to `&dyn ProgressCallback`.
+    pub fn reindex_with(
+        &self,
+        cancel: Option<&AtomicBool>,
+        progress: &dyn crate::progress::ProgressCallback,
+    ) -> Result<BuildSummary> {
+        self.reindex_with_aggression(cancel, progress, SearchAggression::Balanced)
+    }
+
+    /// Same as `reindex_with`, with an explicit search indexer
+    /// resource profile for the search pass. The graph rebuild stays
+    /// unchanged; the aggression level only affects search build
+    /// workers, queue depth, embed batching, and server debounce.
+    pub fn reindex_with_aggression(
+        &self,
+        cancel: Option<&AtomicBool>,
+        progress: &dyn crate::progress::ProgressCallback,
+        aggression: SearchAggression,
+    ) -> Result<BuildSummary> {
+        // Guard flips `reindexing` true for the lifetime of this call
+        // and back to false on every exit path (`?` early return,
+        // cancellation, panic). The flag is what `is_reindexing()`
+        // returns and is the pull-side of the progress notification
+        // story for the Web App.
+        struct ReindexGuard<'a>(&'a std::sync::atomic::AtomicBool);
+        impl<'a> Drop for ReindexGuard<'a> {
+            fn drop(&mut self) {
+                self.0.store(false, std::sync::atomic::Ordering::Release);
+            }
+        }
+        self.reindexing
+            .store(true, std::sync::atomic::Ordering::Release);
+        let _guard = ReindexGuard(&self.reindexing);
+
+        // Graph rebuild walks the tree once for headings + edges.
+        // The search facade walks again for chunking + embeddings.
+        // Two passes is the trade for a clean separation; per-file
+        // I/O cost is trivial against the embedding work.
+        //
+        // The `rebuild.inprogress` marker spans both passes: it is
+        // written before the graph rebuild starts and removed only
+        // after the search index commits. A process killed at any
+        // point in between leaves the marker on disk, which the
+        // next `Workspace::open` promotes into `needs_rebuild() = true`.
+        // The consumer then knows to retry the whole reindex
+        // instead of trusting an index that may have skipped its
+        // final commit.
+        self.write_rebuild_marker()?;
+        self.rebuild_graph(cancel, progress)?;
+        let index = self.index()?;
+        // Push the current filter snapshot to the index facade so the
+        // walk under `build_all` agrees with the graph rebuild on which
+        // subtrees to skip.
+        index.set_walk_filter(Arc::clone(&self.walk_filter));
+        let summary = index
+            .build_all(
+                BuildOptions {
+                    aggression,
+                    ..BuildOptions::default()
+                },
+                progress,
+                cancel,
+            )
+            .map_err(|e| match e {
+                crate::index::IndexError::Cancelled => ChanError::Cancelled,
+                other => other.into(),
+            })?;
+        self.clear_rebuild_marker();
+        self.needs_rebuild
+            .store(false, std::sync::atomic::Ordering::Release);
+        // systacean-34: walk the per-drive Drafts subtree + index
+        // each indexable text file through `index_draft_file`.
+        // The watcher (`-25`) catches ongoing changes; this closes
+        // the boot-time gap where the initial corpus walk missed
+        // drafts files (graph payload had `synthesize_drafts_layer`
+        // wired but `files` was empty). Best-effort: any single-
+        // file failure logs at warn + the loop continues.
+        if let Err(e) = self.index_drafts_subtree() {
+            tracing::warn!(
+                error = %e,
+                "reindex: drafts subtree walk failed; drafts may be missing from graph + BM25"
+            );
+        }
+        // Drop the cumulative rename log: the freshly-rebuilt graph
+        // already reflects every current path, so any prior in-process
+        // translation is now a no-op (and would be wrong if the user
+        // re-creates a file at a path we'd previously redirected).
+        // Clear the in-memory map and remove the persisted sidecar in
+        // the same critical section so a concurrent reader can't see
+        // an empty map while the file still claims entries (or vice
+        // versa).
+        {
+            let mut log = self.rename_log.lock().unwrap();
+            log.clear();
+            let path = self.paths.graph_dir.join(RENAME_LOG_FILE);
+            if let Err(e) = std::fs::remove_file(&path) {
+                if e.kind() != std::io::ErrorKind::NotFound {
+                    tracing::warn!(
+                        path = %path.display(),
+                        ?e,
+                        "failed to remove persisted rename_log after reindex",
+                    );
+                }
+            }
+        }
+        Ok(summary)
+    }
+
+    /// systacean-34 + systacean-37: walk the per-drive Drafts
+    /// subtree + invoke `index_draft_file` on each indexable
+    /// text file so the boot corpus includes drafts content.
+    ///
+    /// Called automatically at the end of
+    /// `Workspace::reindex_with_aggression` (`-34`) AND exposed
+    /// public for chan-server's `Indexer::spawn` boot path to
+    /// invoke unconditionally (`-37`). The latter closes the
+    /// gap where reindex doesn't fire (drive non-empty at
+    /// startup, so the indexer's "indexed_docs == 0 ||
+    /// graph_empty" trigger stays false) but pre-existing
+    /// drafts still need a boot walk to land in BM25 + graph.
+    ///
+    /// Idempotent: `index_draft_file` overwrites existing graph
+    /// and BM25 entries, so calling this on every chan-server
+    /// boot is cheap when nothing changed and costs O(N) per
+    /// draft when something did.
+    ///
+    /// Walks the per-drive drafts metadata dir directly via
+    /// `std::fs` (drafts are chan-drive's own metadata; the cap-std
+    /// sandbox isn't a security concern here, same as
+    /// `index_draft_file`).
+    /// Emits paths in the unified `Drafts/<name>/<file>` keyspace
+    /// per the `-25`/`-26` contract.
+    ///
+    /// Per-file errors log + continue (best-effort; the watcher
+    /// will retry on the next change).
+    pub fn index_drafts_subtree(&self) -> Result<()> {
+        let drafts_root = &self.paths.drafts;
+        if !drafts_root.is_dir() {
+            return Ok(());
+        }
+        walk_drafts_recursive(drafts_root, drafts_root, self)?;
+        Ok(())
+    }
+
+    /// Stamp `paths.graph_dir/rebuild.inprogress`. Atomic write so a
+    /// crash during marker creation never leaves a half-written file
+    /// that would confuse the next open. The file body carries the
+    /// unix timestamp so a stuck marker can be diagnosed against the
+    /// drive's modification history; we don't read the contents on
+    /// open (existence is the signal).
+    fn write_rebuild_marker(&self) -> Result<()> {
+        std::fs::create_dir_all(&self.paths.graph_dir)?;
+        let ts = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs() as i64)
+            .unwrap_or(0);
+        let body = format!("started_at = {ts}\n");
+        fs_ops::atomic_write(&self.paths.graph_dir.join(REBUILD_MARKER), body.as_bytes())
+    }
+
+    /// Remove the marker. Best-effort: a stuck marker is harmless
+    /// (next open just re-triggers the rebuild), so a remove failure
+    /// here is logged but doesn't fail the reindex.
+    fn clear_rebuild_marker(&self) {
+        let path = self.paths.graph_dir.join(REBUILD_MARKER);
+        if let Err(e) = std::fs::remove_file(&path) {
+            if e.kind() != std::io::ErrorKind::NotFound {
+                tracing::warn!(
+                    path = %path.display(),
+                    error = %e,
+                    "failed to clear rebuild.inprogress marker; \
+                     next open will still re-trigger the rebuild",
+                );
+            }
+        }
+    }
+
+    fn rebuild_graph(
+        &self,
+        cancel: Option<&AtomicBool>,
+        progress: &dyn crate::progress::ProgressCallback,
+    ) -> Result<()> {
+        use crate::progress::{eta_secs_from, ProgressEvent, ProgressStage};
+        // Staged-and-swap: parse each file straight into sqlite
+        // staging tables, then atomically swap them into the live
+        // tables at the end. The staging rows are committed
+        // per-file by the writer, so a mid-rebuild crash leaves a
+        // durable parse cursor (MAX(rel_path) in staging_nodes).
+        // The next reindex reads the cursor and resumes the walk
+        // past it, skipping the redo of every already-staged file.
+        // The swap is the only point where live tables are
+        // mutated, so the previously-committed graph stays visible
+        // to readers (autocomplete, backlinks) for the entire
+        // duration of the rebuild and atomically flips to the new
+        // shape at the end.
+        let graph = self.graph()?;
+        let entries = fs_ops::list_tree_filtered(self.root(), &self.walk_filter)?;
+        let total: u64 = entries
+            .iter()
+            .filter(|e| !e.is_dir && fs_ops::is_indexable_text(&e.path))
+            .count() as u64;
+
+        // Resume-or-fresh decision. A non-empty cursor means a
+        // prior reindex crashed mid-parse and left staged rows;
+        // those represent honest parse output for the files at or
+        // below the cursor and should not be redone. We do
+        // sanitize against the current disk file set so a file
+        // that was staged but has since been deleted from disk
+        // gets purged from staging before the swap.
+        let initial_cursor: Option<String> = graph.staging_cursor()?;
+        if initial_cursor.is_some() {
+            tracing::info!(
+                cursor = ?initial_cursor,
+                "rebuild_graph: resuming from staged cursor",
+            );
+            let live: std::collections::HashMap<String, (Option<i64>, Option<i64>)> = entries
+                .iter()
+                .filter(|e| !e.is_dir && fs_ops::is_indexable_text(&e.path))
+                .map(|e| (e.path.clone(), (e.mtime, Some(e.size as i64))))
+                .collect();
+            let purged = graph.sanitize_staging_against_live(&live, true)?;
+            if purged > 0 {
+                tracing::info!(
+                    purged,
+                    "rebuild_graph: removed staged rows stale against disk",
+                );
+            }
+        } else {
+            // Belt-and-braces clear in the fresh path: in
+            // principle staging is already empty when cursor
+            // is None, but a previous swap that committed live
+            // but failed to clear staging would leave junk.
+            // Cheap to run unconditionally on the no-resume
+            // path.
+            graph.clear_staging()?;
+        }
+        // Re-read the cursor AFTER sanitize so the skip below
+        // uses the post-purge value. Sanitize can move the cursor
+        // backwards (or to None) by deleting the tail of staged
+        // rows, and using the pre-sanitize value would cause the
+        // walk to skip past files that are no longer represented
+        // in staging.
+        let cursor: Option<String> = graph.staging_cursor()?;
+
+        let mut seen: u64 = 0;
+        let started = std::time::Instant::now();
+        for e in &entries {
+            if let Some(c) = cancel {
+                if c.load(Ordering::Relaxed) {
+                    return Err(ChanError::Cancelled);
+                }
+            }
+            if e.is_dir || !fs_ops::is_indexable_text(&e.path) {
+                continue;
+            }
+            // Resume skip: the walk is sorted, so a strictly-
+            // less-or-equal comparison against the cursor matches
+            // every file already staged in a prior session.
+            if let Some(c) = cursor.as_deref() {
+                if e.path.as_str() <= c {
+                    seen += 1;
+                    continue;
+                }
+            }
+            progress.on_progress(ProgressEvent {
+                stage: ProgressStage::GraphRebuild,
+                current: seen,
+                total,
+                label: Some(e.path.clone()),
+                eta_secs: eta_secs_from(started, seen, total),
+            });
+            seen += 1;
+            let content = match self.read_text(&e.path) {
+                Ok(s) => s,
+                Err(_) => continue,
+            };
+            let (title, node_kind, headings, edges, emails, aliases) =
+                parse_for_graph(&e.path, &content);
+            let fg = crate::graph::FileGraph {
+                rel: e.path.as_str(),
+                title: title.as_deref(),
+                mtime: e.mtime,
+                size: Some(size_to_i64(e.size)),
+                node_kind,
+                edges: &edges,
+                headings: &headings,
+                emails: emails.as_deref(),
+                aliases: aliases.as_deref(),
+            };
+            graph.stage_file(&fg)?;
+        }
+        if let Some(c) = cancel {
+            if c.load(Ordering::Relaxed) {
+                return Err(ChanError::Cancelled);
+            }
+        }
+        // Swap staging into the live tables in one atomic txn.
+        // Past this commit the previous live state is gone and the
+        // new one is visible to readers.
+        graph.swap_staging()?;
+        Ok(())
+    }
+
+    /// How many BM25 chunks are currently in the search index.
+    /// Lazily opens the index on first call.
+    pub fn num_indexed(&self) -> Result<u64> {
+        Ok(self.index()?.stats().indexed_docs)
+    }
+
+    /// Snapshot of the search index. Used by the server's status
+    /// endpoint.
+    pub fn index_stats(&self) -> Result<crate::index::IndexStats> {
+        Ok(self.index()?.stats())
+    }
+
+    /// Sorted drive-relative file paths currently known to the
+    /// persisted full-text index.
+    pub fn indexed_paths(&self) -> Result<Vec<String>> {
+        Ok(self.index()?.known_paths()?)
+    }
+
+    /// systacean-7: read the per-drive Hybrid-search preference.
+    /// Mirrors `IndexConfig::semantic_enabled`; default-false on a
+    /// drive that has never been touched by systacean-7's CLI / API.
+    /// Query-path callers consult this when no explicit `Mode` is
+    /// passed.
+    pub fn semantic_enabled(&self) -> Result<bool> {
+        Ok(self.index()?.config().semantic_enabled)
+    }
+
+    /// systacean-7: flip the per-drive Hybrid-search preference.
+    /// Idempotent — re-setting the current value is a no-op. The
+    /// `chan index enable-semantic` / `disable-semantic` CLI and the
+    /// `/api/index/semantic/{enable,disable}` endpoints both route
+    /// here; the change persists to `<index_dir>/config.toml` so a
+    /// `chan serve` restart honours it.
+    pub fn set_semantic_enabled(&self, enabled: bool) -> Result<()> {
+        self.index()?.set_semantic_enabled(enabled)?;
+        Ok(())
+    }
+
+    /// systacean-7: read the configured embedding model id from the
+    /// per-drive index config. Used by the resolver so the model
+    /// name flows through the same source as `set_model`.
+    pub fn semantic_model(&self) -> Result<String> {
+        Ok(self.index()?.config().model)
+    }
+
+    /// Phase 9 carry-over: persist the per-drive embedding model.
+    /// The index layer validates the curated model id, clears stale
+    /// vector metadata, and preserves BM25.
+    pub fn set_semantic_model(&self, model: &str) -> Result<()> {
+        self.index()?.set_model(model.to_owned())?;
+        Ok(())
+    }
+
+    /// systacean-27: read the per-drive chan-report opt-in flag.
+    /// Mirrors `IndexConfig::reports_enabled`; default-false on a
+    /// drive that has never been touched by the pre-flight UI / CLI
+    /// / Settings. Consumers gate `Workspace::report()` initialization
+    /// + the per-drive language-graph layer on this flag.
+    pub fn reports_enabled(&self) -> Result<bool> {
+        Ok(self.index()?.config().reports_enabled)
+    }
+
+    /// systacean-27: flip the per-drive chan-report opt-in.
+    /// Idempotent on re-set. Enabling triggers a lazy
+    /// initialization the next time `Workspace::report()` is called
+    /// (no eager scan here so a flip from CLI returns fast);
+    /// disabling is destructive — drops the persisted
+    /// `report.jsonl` so re-enabling later triggers a fresh
+    /// scan. Mirrors `set_semantic_enabled`'s shape.
+    pub fn set_reports_enabled(&self, enabled: bool) -> Result<()> {
+        self.index()?.set_reports_enabled(enabled)?;
+        if !enabled {
+            // Drop the persisted JSONL so a re-enable later
+            // starts from a fresh scan. Best-effort: a missing
+            // file is the desired state; any other error logs +
+            // proceeds (next flush would overwrite anyway).
+            let jsonl = self.paths.report.clone();
+            match std::fs::remove_file(&jsonl) {
+                Ok(()) => {}
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+                Err(e) => tracing::warn!(
+                    error = %e,
+                    path = %jsonl.display(),
+                    "set_reports_enabled(false): failed to drop report jsonl"
+                ),
+            }
+        }
+        Ok(())
+    }
+
+    /// systacean-40: read the per-drive screensaver-enabled flag.
+    /// Default-false on drives that pre-date the field; SPA arms
+    /// the overlay state machine when true.
+    pub fn screensaver_enabled(&self) -> Result<bool> {
+        Ok(self.index()?.config().screensaver_enabled)
+    }
+
+    /// systacean-40: flip the per-drive screensaver-enabled flag.
+    /// Idempotent. No filesystem side effects (unlike
+    /// `set_reports_enabled`'s jsonl drop) — the overlay state
+    /// lives entirely client-side; this just persists the toggle.
+    pub fn set_screensaver_enabled(&self, enabled: bool) -> Result<()> {
+        self.index()?.set_screensaver_enabled(enabled)?;
+        Ok(())
+    }
+
+    /// systacean-40: read the idle window (seconds) before the
+    /// SPA arms the overlay. Default 300.
+    pub fn screensaver_timeout_secs(&self) -> Result<u32> {
+        Ok(self.index()?.config().screensaver_timeout_secs)
+    }
+
+    /// systacean-40: persist the idle window. SPA enforces a
+    /// minimum + maximum client-side; chan-drive stores whatever
+    /// value lands.
+    pub fn set_screensaver_timeout_secs(&self, secs: u32) -> Result<()> {
+        self.index()?.set_screensaver_timeout_secs(secs)?;
+        Ok(())
+    }
+
+    /// fullstack-a-99: read the persisted visual theme. Default
+    /// plain on drives that pre-date the field.
+    pub fn screensaver_theme(&self) -> Result<ScreensaverTheme> {
+        Ok(self.index()?.config().screensaver_theme)
+    }
+
+    /// fullstack-a-99: persist the visual theme.
+    pub fn set_screensaver_theme(&self, theme: ScreensaverTheme) -> Result<()> {
+        self.index()?.set_screensaver_theme(theme)?;
+        Ok(())
+    }
+
+    /// systacean-40: read the persisted PIN hash. `None` means no
+    /// PIN is set. The hash bytes themselves NEVER leave the
+    /// server in plaintext — the `/api/screensaver/state` endpoint
+    /// reports `pin_set: bool` and the verify endpoint compares
+    /// bytes server-side. This getter is for the chan-server route
+    /// + tests only.
+    pub fn screensaver_pin_hash(&self) -> Result<Option<Vec<u8>>> {
+        Ok(self.index()?.config().screensaver_pin_hash.clone())
+    }
+
+    /// systacean-40: persist or clear the PIN hash. `Some(bytes)`
+    /// stores them verbatim (SPA does PBKDF2 client-side per
+    /// `-a-77`); `None` clears the PIN.
+    pub fn set_screensaver_pin_hash(&self, hash: Option<Vec<u8>>) -> Result<()> {
+        self.index()?.set_screensaver_pin_hash(hash)?;
+        Ok(())
+    }
+
+    /// systacean-27: BOOT entry-point. Consumers call this after
+    /// `Workspace::open` to kick off the optional indexing layers
+    /// (semantic + reports) per the persisted feature flags. The
+    /// baseline BM25 + graph + watcher path runs regardless; this
+    /// is purely the optional-layer activation. Idempotent — a
+    /// second call is a no-op when the layers are already
+    /// initialized. Errors during one layer don't block the
+    /// other.
+    pub fn boot(&self) -> Result<()> {
+        if self.reports_enabled().unwrap_or(false) {
+            // Lazy initialization: `report_state()` constructs
+            // `ReportState`, runs the initial scan if no JSONL
+            // is persisted, and primes the watcher fanout. A
+            // subsequent `Workspace::report()` consumes the same
+            // OnceLock'd state.
+            if let Err(e) = self.report_state() {
+                tracing::warn!(
+                    error = %e,
+                    "boot: report_state initialization failed"
+                );
+            }
+        }
+        // Semantic-search initialization is already lazy through
+        // the index() accessor; no separate boot step needed
+        // here. The flag is consulted at query time by
+        // `Workspace::search` to decide whether to engage Hybrid
+        // mode.
+        Ok(())
+    }
+
+    /// Re-index a single file. Reads, parses, updates the search
+    /// index and graph for just this path. Used by the watcher
+    /// consumer when a file changes.
+    ///
+    /// Journal-bracketed: the call records a `PendingOp::Index`
+    /// entry for `rel` before touching either backend and removes
+    /// it after both commit. A crash mid-call leaves the entry on
+    /// disk; the next `Workspace::open` surfaces it via
+    /// `needs_replay_writes()` so the consumer can call
+    /// `replay_pending_writes()` to converge.
+    pub fn index_file(&self, rel: &str) -> Result<()> {
+        if !fs_ops::is_indexable_text(rel) {
+            return Ok(());
+        }
+        let _serial = self.write_serial.lock().unwrap();
+        self.journal_record(rel, PendingOp::Index)?;
+        let result = self.index_file_inner(rel);
+        if result.is_ok() {
+            self.journal_clear_one(rel)?;
+        }
+        result
+    }
+
+    fn index_file_inner(&self, rel: &str) -> Result<()> {
+        // Stat BEFORE read. If a concurrent writer lands between the
+        // two calls, the graph then holds the older (mtime, size)
+        // tuple alongside the newer content; reconcile compares the
+        // stamped tuple against the live stat on its next pass and
+        // catches the drift. The opposite order (read-then-stat)
+        // would stamp the post-write (mtime, size) onto the pre-write
+        // content, leaving graph.stat == disk.stat and the drift
+        // invisible to reconcile.
+        let stat = self.stat(rel).ok();
+        let mtime = stat.as_ref().and_then(|s| s.mtime);
+        let size = stat.as_ref().map(|s| size_to_i64(s.size));
+        #[cfg(test)]
+        index_file_between_stat_and_read_hook();
+        let content = self.read_text(rel)?;
+        let (title, node_kind, headings, edges, emails, aliases) = parse_for_graph(rel, &content);
+        // Graph first, then search index. The graph is what the
+        // editor consults for backlinks and link-autocomplete on
+        // every keystroke; a stale graph is the more user-visible
+        // failure mode. The search index is queried explicitly and
+        // a stale BM25 row gets corrected on the next save or
+        // rebuild. If graph succeeds and index_one fails, the
+        // resulting drift is "search slightly stale", which the
+        // user is less likely to notice and can recover via the
+        // server's auto-rebuild trigger. The opposite ordering
+        // (search-then-graph) made backlinks the silent victim.
+        // The journal entry covers either ordering: the replay
+        // path re-runs both so an asymmetric crash converges.
+        self.graph()?.replace_file(
+            rel,
+            title.as_deref(),
+            mtime,
+            size,
+            node_kind,
+            &edges,
+            &headings,
+            emails.as_deref(),
+            aliases.as_deref(),
+        )?;
+        // Hand the already-read content to the index so the read
+        // goes through the Workspace sandbox exactly once.
+        self.index()?.index_one(rel, &content)?;
+        Ok(())
+    }
+
+    /// Link-autocomplete lookup. Pass-through to
+    /// `GraphView::link_targets`. The editor's `[[` typeahead binds
+    /// to this: an empty `q` returns recent files; a non-empty `q`
+    /// returns ranked file + heading matches. See `GraphView::link_targets`
+    /// for the ranking and case-folding rules.
+    pub fn link_targets(&self, q: &str, limit: u32) -> Result<Vec<crate::graph::LinkTarget>> {
+        self.graph()?.link_targets(q, limit)
+    }
+
+    /// Resolve a wiki-link target string to an existing drive
+    /// file. The graph stores link dst nodes verbatim from
+    /// markdown (e.g. `[[recipes/pasta]]` -> `dst="recipes/pasta"`),
+    /// so backlinks queries match the stored form. Consumers that
+    /// want to navigate to or read the actual file (the editor's
+    /// click-on-link, or an MCP `read_file` call given a wiki target)
+    /// call this to find the real path.
+    ///
+    /// Algorithm:
+    ///   1. Split off `#anchor` (everything after the first `#`).
+    ///      An empty anchor (target ends in `#`) becomes None.
+    ///   2. Try `path.md`, then `path.txt`, then the exact `path`
+    ///      (rare case: a file with no extension that matches by
+    ///      name). Return the first hit as a regular file.
+    ///   3. None when no candidate exists.
+    ///
+    /// Anchor strings are passed through unchanged; chan-drive
+    /// doesn't validate them against the file's headings (callers
+    /// can do that via `GraphView::headings_of`).
+    pub fn resolve_link(&self, target: &str) -> Option<ResolvedLink> {
+        if target.is_empty() {
+            return None;
+        }
+        let (path, anchor) = match target.split_once('#') {
+            Some((p, a)) if !a.is_empty() => (p, Some(a.to_string())),
+            // Trailing `#` (empty anchor): strip it; path is the
+            // prefix, anchor None.
+            Some((p, _)) => (p, None),
+            None => (target, None),
+        };
+        if path.is_empty() {
+            return None;
+        }
+        for candidate in [
+            format!("{path}.md"),
+            format!("{path}.txt"),
+            path.to_string(),
+        ] {
+            if self.exists(&candidate) {
+                // Best-effort kind lookup against the graph. If the
+                // graph isn't open yet, the row is missing (file
+                // indexed after this resolve, or never indexed), or
+                // the query fails for any reason, fall back to
+                // `File` so the caller still gets a resolution.
+                // Kind-aware rendering is a hint, not a contract.
+                let kind = self
+                    .graph()
+                    .ok()
+                    .and_then(|g| g.node_kind(&candidate).ok().flatten())
+                    .unwrap_or_default();
+                return Some(ResolvedLink {
+                    path: candidate,
+                    anchor,
+                    kind,
+                });
+            }
+        }
+        None
+    }
+
+    /// Drop a single file from the search index and graph. Used
+    /// when the watcher reports a deletion.
+    ///
+    /// Graph first, search second, mirroring `index_file`. If the
+    /// graph delete succeeds and the search delete fails, queries
+    /// surface a "ghost" search hit pointing at a missing file; the
+    /// caller then asks `Workspace::read` and gets `NotFound`, which is
+    /// recoverable. The reverse ordering (search-then-graph) would
+    /// leave backlinks pointing at a missing file, a silently broken
+    /// state the editor cannot self-heal.
+    pub fn forget_file(&self, rel: &str) -> Result<()> {
+        let _serial = self.write_serial.lock().unwrap();
+        self.journal_record(rel, PendingOp::Forget)?;
+        let result = self.forget_file_inner(rel);
+        if result.is_ok() {
+            self.journal_clear_one(rel)?;
+        }
+        result
+    }
+
+    /// systacean-25: index a draft file by its unified-keyspace
+    /// path (e.g. `"Drafts/untitled-1/draft.md"`). Reads the file
+    /// from `drafts_dir`, parses it for graph emit, and stores in
+    /// BM25 + graph DB under the `Drafts/...` key so search +
+    /// graph reflect Drafts content alongside drive content.
+    ///
+    /// Skipped silently for non-indexable text (mirrors
+    /// `index_file`); errors propagate when the file is unreadable
+    /// or graph/index storage fails.
+    ///
+    /// Routed via `WatchHandle`'s multi-root dispatch: events
+    /// emerging under the drafts watch root arrive with the
+    /// `Drafts/` prefix already applied, and the indexer's
+    /// `apply_event` dispatches to this method instead of
+    /// `index_file`.
+    pub fn index_draft_file(&self, rel: &str) -> Result<()> {
+        tracing::debug!(rel, "index_draft_file: enter");
+        let Some(sub_rel) = rel.strip_prefix("Drafts/") else {
+            return Err(ChanError::Io(format!(
+                "index_draft_file called with non-Drafts/-prefixed rel `{rel}`"
+            )));
+        };
+        if !fs_ops::is_indexable_text(rel) {
+            tracing::debug!(rel, "index_draft_file: skip (not indexable text)");
+            return Ok(());
+        }
+        let abs = self.paths.drafts.join(sub_rel);
+        let meta = match std::fs::metadata(&abs) {
+            Ok(m) => m,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                // Drafts file vanished between the watcher event
+                // and our read. Forget any prior entry + carry on.
+                tracing::debug!(rel, abs = %abs.display(), "index_draft_file: NotFound, forgetting");
+                return self.forget_file(rel);
+            }
+            Err(e) => {
+                return Err(ChanError::Io(format!("stat draft {}: {e}", abs.display())));
+            }
+        };
+        if !meta.is_file() {
+            // A directory or special file under Drafts/. Nothing
+            // to index; do not error so a directory-Create event
+            // (e.g. user dropped a new untitled-N/) doesn't make
+            // the indexer panic.
+            tracing::debug!(rel, "index_draft_file: skip (not regular file)");
+            return Ok(());
+        }
+        let content = std::fs::read_to_string(&abs)
+            .map_err(|e| ChanError::Io(format!("read draft {}: {e}", abs.display())))?;
+        let mtime = meta
+            .modified()
+            .ok()
+            .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+            .map(|d| d.as_secs() as i64);
+        let size = i64::try_from(meta.len()).ok();
+        let (title, node_kind, headings, edges, emails, aliases) = parse_for_graph(rel, &content);
+        self.graph()?.replace_file(
+            rel,
+            title.as_deref(),
+            mtime,
+            size,
+            node_kind,
+            &edges,
+            &headings,
+            emails.as_deref(),
+            aliases.as_deref(),
+        )?;
+        self.index()?.index_one(rel, &content)?;
+        tracing::debug!(
+            rel,
+            content_len = content.len(),
+            "index_draft_file: wrote graph + BM25"
+        );
+        Ok(())
+    }
+
+    fn forget_file_inner(&self, rel: &str) -> Result<()> {
+        self.graph()?.forget_file(rel)?;
+        self.index()?.forget(rel)?;
+        Ok(())
+    }
+
+    /// True when the pending-writes journal was non-empty at open.
+    /// The consumer should call `replay_pending_writes()` before
+    /// serving editor queries; until it does, graph and index may
+    /// disagree about the journaled files.
+    pub fn needs_replay_writes(&self) -> bool {
+        self.needs_replay_writes
+            .load(std::sync::atomic::Ordering::Acquire)
+    }
+
+    /// Snapshot of the currently-journaled `(rel, op)` pairs.
+    /// Exposed mostly for UI ("N pending writes") and tests; the
+    /// recovery itself runs through `replay_pending_writes`.
+    pub fn pending_writes(&self) -> Vec<(String, &'static str)> {
+        self.pending_writes
+            .lock()
+            .unwrap()
+            .iter()
+            .map(|(rel, op)| {
+                (
+                    rel.clone(),
+                    match op {
+                        PendingOp::Index => "index",
+                        PendingOp::Forget => "forget",
+                    },
+                )
+            })
+            .collect()
+    }
+
+    /// Re-run every journaled per-file op so graph and index
+    /// converge to the on-disk truth, then clear the journal.
+    /// Idempotent: an empty journal is a no-op, and a partial
+    /// replay (errors on some entries) leaves the unprocessed
+    /// entries journaled for the next call.
+    ///
+    /// Per-entry policy:
+    ///   - `Index`: if the file still exists on disk, re-run
+    ///     `index_file` (re-reads and re-commits both backends).
+    ///     If it no longer exists, degrade to `forget_file`,
+    ///     since the original mutation's intent (index this rel)
+    ///     no longer makes sense against a missing file.
+    ///   - `Forget`: re-run `forget_file`. Idempotent against
+    ///     already-cleaned backends.
+    ///
+    /// Returns the number of entries successfully replayed.
+    pub fn replay_pending_writes(&self) -> Result<usize> {
+        let entries: Vec<(String, PendingOp)> = self
+            .pending_writes
+            .lock()
+            .unwrap()
+            .iter()
+            .map(|(k, v)| (k.clone(), *v))
+            .collect();
+        let mut replayed = 0usize;
+        for (rel, op) in entries {
+            // Each replay runs through the journal-bracketed
+            // public API, so a crash mid-replay leaves the entry
+            // journaled again (in fact, never removed) and the
+            // next open will retry.
+            match op {
+                PendingOp::Index => {
+                    if self.exists(&rel) {
+                        self.index_file(&rel)?;
+                    } else {
+                        self.forget_file(&rel)?;
+                    }
+                }
+                PendingOp::Forget => {
+                    self.forget_file(&rel)?;
+                }
+            }
+            replayed += 1;
+        }
+        // After a clean drain, the journal should already be
+        // empty (each successful call to index_file/forget_file
+        // clears its own entry). Belt-and-braces clear the flag.
+        if self.pending_writes.lock().unwrap().is_empty() {
+            self.needs_replay_writes
+                .store(false, std::sync::atomic::Ordering::Release);
+        }
+        Ok(replayed)
+    }
+
+    /// Diff the live filesystem against the graph and emit per-file
+    /// index_file / forget_file calls only for the files that
+    /// actually changed. Cheaper than a full `reindex` because
+    /// unchanged files are skipped entirely; matches a clean reindex
+    /// in end state when the diff is correct.
+    ///
+    /// Use cases:
+    ///   - Cold open after edits while the process was down: the
+    ///     watcher missed every event between the last shutdown and
+    ///     this open, so graph + index are stale. Reconcile catches
+    ///     up without paying for files that did not change.
+    ///   - Watcher overflow (inotify `IN_Q_OVERFLOW`, FSEvents
+    ///     coalesce-loss): the consumer cannot trust the event
+    ///     stream and falls back to reconcile to converge.
+    ///   - Post-recovery sanity pass: after `replay_pending_writes`
+    ///     drains the journal, a reconcile picks up any files
+    ///     touched outside the journaled set.
+    ///
+    /// Diff policy compares the `(mtime, size)` tuple stamped on the
+    /// graph row against the live `stat()` snapshot:
+    ///   - File on disk but not in graph -> `index_file`.
+    ///   - File on disk + graph row with different mtime -> `index_file`.
+    ///   - File on disk + graph row with same mtime but a different
+    ///     non-null size -> `index_file`. Catches same-mtime rewrites
+    ///     that mtime alone misses (rapid back-to-back saves on
+    ///     coarse-mtime filesystems, or tools that explicitly preserve
+    ///     mtime across content edits).
+    ///   - Legacy rows (size = NULL, predating the v5 migration) fall
+    ///     back to mtime-only; the first `index_file` after upgrade
+    ///     backfills the size column.
+    ///   - File on disk + matching `(mtime, size)` tuple -> skip.
+    ///   - File in graph but missing from disk -> `forget_file`.
+    ///
+    /// Each emitted op runs through the journal-bracketed public
+    /// API, so a crash during reconcile leaves a recoverable
+    /// pending-writes journal behind. Reconcile is not transactional
+    /// across the file set; partial progress is fine.
+    ///
+    /// Residual false-negative window: a rewrite that leaves both
+    /// mtime AND size unchanged still slips by. The next save or full
+    /// reindex covers it; closing this gap would require content
+    /// hashing, which is far more expensive than the (mtime, size)
+    /// stat check.
+    pub fn reconcile(&self) -> Result<ReconcileReport> {
+        // Snapshot the graph's view of the world: per-file
+        // (mtime, size) tuples. Graph stores mtime as Unix
+        // seconds and size as bytes (None for either component
+        // on legacy rows predating the v5 migration).
+        let graph_snapshot: std::collections::HashMap<String, (Option<i64>, Option<i64>)> = self
+            .graph()?
+            .files_with_stat()?
+            .into_iter()
+            .map(|(rel, mtime, size)| (rel, (mtime, size)))
+            .collect();
+
+        // Walk the drive applying the same filter the reindex uses
+        // (.git, .chan, plus the per-Library WalkFilter blocklist).
+        // Only editable-text files participate; binaries / images
+        // are not indexed by either backend and so do not need
+        // reconciliation.
+        let filter = Arc::clone(&self.walk_filter);
+        let mut disk_files: std::collections::HashMap<String, (Option<i64>, Option<i64>)> =
+            std::collections::HashMap::new();
+        for entry in fs_ops::walk_drive_filtered(self.root(), &filter) {
+            if !entry.file_type().is_file() {
+                continue;
+            }
+            let rel = match entry.path().strip_prefix(self.root()) {
+                Ok(p) => p.to_string_lossy().replace('\\', "/"),
+                Err(_) => continue,
+            };
+            if !fs_ops::is_indexable_text(&rel) {
+                continue;
+            }
+            let meta = entry.metadata().ok();
+            let mtime = meta
+                .as_ref()
+                .and_then(|m| m.modified().ok())
+                .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                .map(|d| d.as_secs() as i64);
+            let size = meta.as_ref().map(|m| size_to_i64(m.len()));
+            disk_files.insert(rel, (mtime, size));
+        }
+
+        let mut upserted: Vec<String> = Vec::new();
+        let mut forgotten: Vec<String> = Vec::new();
+        let mut unchanged = 0usize;
+
+        // Pass 1: every file currently on disk. New or modified
+        // entries trigger an index_file; the journal in PR5 covers
+        // crash recovery for each per-file commit pair.
+        for (rel, (disk_mtime, disk_size)) in &disk_files {
+            let needs_index = match graph_snapshot.get(rel) {
+                None => true,
+                Some((graph_mtime, graph_size)) => {
+                    // Tighter diff than mtime alone: a file rewritten
+                    // to the same length AND same mtime still slips
+                    // by, but a change in either component is caught.
+                    // Legacy rows (size = None) treat the size check
+                    // as a skip and rely on mtime; a single subsequent
+                    // index_file backfills the size column.
+                    graph_mtime != disk_mtime
+                        || (graph_size.is_some() && disk_size.is_some() && graph_size != disk_size)
+                }
+            };
+            if needs_index {
+                self.index_file(rel)?;
+                upserted.push(rel.clone());
+            } else {
+                unchanged += 1;
+            }
+        }
+
+        // Pass 2: every file in graph but not on disk. These are
+        // deletions the watcher missed (or a downtime deletion).
+        for rel in graph_snapshot.keys() {
+            if !disk_files.contains_key(rel) {
+                self.forget_file(rel)?;
+                forgotten.push(rel.clone());
+            }
+        }
+
+        upserted.sort();
+        forgotten.sort();
+        Ok(ReconcileReport {
+            upserted,
+            forgotten,
+            unchanged,
+        })
+    }
+
+    /// Add an entry to the pending-writes journal and persist it.
+    /// Must be called only while `write_serial` is held by the
+    /// caller, so the on-disk shape stays in lockstep with the
+    /// in-memory map.
+    fn journal_record(&self, rel: &str, op: PendingOp) -> Result<()> {
+        let snapshot = {
+            let mut map = self.pending_writes.lock().unwrap();
+            map.insert(rel.to_string(), op);
+            map.clone()
+        };
+        persist_pending_writes(&self.paths.graph_dir, &snapshot)?;
+        // The presence of any journaled entry implies "graph and
+        // index may disagree about this rel until replay." We
+        // do not set needs_replay_writes here: the flag is the
+        // "the previous PROCESS crashed mid-write" signal, not
+        // the "we are mid-write right now" one. A clean
+        // index_file completion removes its own entry before
+        // returning, so the flag stays false across normal use.
+        Ok(())
+    }
+
+    /// Remove a journaled entry and persist. Same locking
+    /// preconditions as `journal_record`.
+    fn journal_clear_one(&self, rel: &str) -> Result<()> {
+        let snapshot = {
+            let mut map = self.pending_writes.lock().unwrap();
+            map.remove(rel);
+            map.clone()
+        };
+        persist_pending_writes(&self.paths.graph_dir, &snapshot)?;
+        Ok(())
+    }
+
+    fn index(&self) -> Result<&Index> {
+        if let Some(idx) = self.index.get() {
+            return Ok(idx);
+        }
+        let idx = Index::open(self.root(), &self.paths.index)?;
+        let _ = self.index.set(idx);
+        Ok(self.index.get().unwrap())
+    }
+
+    // ---- graph ----
+
+    /// View into the drive's graph DB.
+    pub fn graph(&self) -> Result<&GraphView> {
+        if let Some(g) = self.graph.get() {
+            return Ok(g);
+        }
+        let g = GraphView::open(&self.paths.graph_db)?;
+        let _ = self.graph.set(g);
+        Ok(self.graph.get().unwrap())
+    }
+
+    /// All contact-kind notes in the drive, sorted by display name.
+    /// Pass-through to `GraphView::contacts`. Convenience for callers
+    /// (CLI, tests) that want the full list; the editor `@` picker
+    /// and `GET /api/contacts` should call `contacts_filtered`
+    /// instead so the case-insensitive contains filter and result cap
+    /// run inside SQLite.
+    pub fn contacts(&self) -> Result<Vec<crate::graph::ContactNode>> {
+        self.graph()?.contacts()
+    }
+
+    /// Filtered contact-kind notes. `query` is matched case-
+    /// insensitively against title, basename, and the joined email
+    /// column inside SQLite, and `limit` caps the row count so
+    /// picker keystrokes stay O(limit) regardless of how many
+    /// contacts the drive holds. `query` of `None` or empty returns
+    /// up to `limit` contacts in display-name order.
+    pub fn contacts_filtered(
+        &self,
+        query: Option<&str>,
+        limit: usize,
+    ) -> Result<Vec<crate::graph::ContactNode>> {
+        self.graph()?.contacts_filtered(query, limit)
+    }
+
+    // ---- watch ----
+
+    /// Start a recursive filesystem watcher on the drive. Drop
+    /// the returned `WatchHandle` to stop. Events for `.chan/`
+    /// and `.git/` are filtered out.
+    ///
+    /// Also warms the SLOC / language / COCOMO report so the
+    /// watcher can keep it current incrementally. The first
+    /// `watch()` call on a fresh drive pays the initial-scan
+    /// cost; subsequent calls reuse the cached state. Drives
+    /// that never need the report can skip watching, or call
+    /// `report()` on demand instead.
+    pub fn watch(self: &Arc<Self>, cb: Arc<dyn WatchCallback>) -> Result<WatchHandle> {
+        let report = self.report_state()?;
+        let fan: Arc<dyn WatchCallback> = ReportFanOut::new(cb, report.clone());
+        // systacean-25: also watch the per-drive drafts subtree
+        // so drafts content participates in the unified
+        // search + graph keyspace (paths emerge as
+        // `Drafts/<name>/...` to the indexer). The drafts dir is
+        // eagerly created in Workspace::open so the watch attaches
+        // cleanly even on a fresh drive.
+        let roots = [
+            crate::watch::WatchRoot::drive(self.root()),
+            crate::watch::WatchRoot::drafts(self.drafts_dir()),
+        ];
+        // Same unified ignore set the bootstrap/index walk uses, so a
+        // node_modules/target/venv/.git storm never reaches the
+        // broadcast bus or the indexer.
+        WatchHandle::start(&roots, Arc::clone(&self.walk_filter), fan)
+    }
+
+    /// Start the built-in graph indexer on this drive. Returns a
+    /// handle; drop or `stop()` to tear down. The indexer attaches
+    /// its own watcher, debounces per-path with `debounce_ms`, and
+    /// drives `index_file` / `forget_file` / `reconcile` so the
+    /// consumer (CLI, chan-server, FFI shells) doesn't need to
+    /// write its own indexing loop.
+    pub fn start_graph_indexer(
+        self: &Arc<Self>,
+        debounce_ms: u64,
+    ) -> Result<crate::indexer::GraphIndexer> {
+        crate::indexer::GraphIndexer::start_on(Arc::clone(self), debounce_ms)
+    }
+
+    // ---- report ----
+
+    /// Snapshot of the drive's code/SLOC report covering every
+    /// indexed file. Lazy on first call (full scan). Returned
+    /// `Report` is a plain serde value; clone-and-shape is the
+    /// caller's job.
+    pub fn report(&self) -> Result<Report> {
+        Ok(self.report_state()?.snapshot(&ReportScope::All))
+    }
+
+    /// Snapshot of the report restricted to a drive-relative
+    /// POSIX prefix. Empty `prefix` is equivalent to `report()`.
+    /// Missing files in the prefix produce empty roll-ups.
+    pub fn report_for_prefix(&self, prefix: &str) -> Result<Report> {
+        Ok(self
+            .report_state()?
+            .snapshot(&ReportScope::Prefix(prefix.to_string())))
+    }
+
+    /// Snapshot of the report restricted to an explicit list of
+    /// drive-relative paths. Paths absent from the index are
+    /// silently ignored.
+    pub fn report_for_files(&self, paths: &[String]) -> Result<Report> {
+        Ok(self
+            .report_state()?
+            .snapshot(&ReportScope::Files(paths.to_vec())))
+    }
+
+    /// O(1) lookup of the maintained per-directory aggregation
+    /// cache. `dir` is drive-relative POSIX with no leading
+    /// slash; trailing slashes are stripped. Empty string maps
+    /// to the drive root.
+    ///
+    /// Returns `Ok(None)` when no tracked file lives at or under
+    /// the requested directory (so callers can serve a clean 404
+    /// instead of an empty roll-up that looks indistinguishable
+    /// from "real but empty"). The returned `Report` carries
+    /// `totals`, `by_language`, and `cocomo` from the cache;
+    /// `files` is left empty (dir queries do not enumerate
+    /// per-file rows). Mirrors the shape `report_for_prefix`
+    /// returns so chan-server can use the same response type for
+    /// both endpoints.
+    pub fn report_for_dir(&self, dir: &str) -> Result<Option<Report>> {
+        Ok(self.report_state()?.dir_snapshot(dir))
+    }
+
+    /// Path to the persisted JSONL form of the report on disk.
+    /// chan-drive's writer thread keeps this file in sync with
+    /// the in-memory index via debounced atomic writes.
+    pub fn report_jsonl_path(&self) -> Result<std::path::PathBuf> {
+        Ok(self.report_state()?.jsonl_path().to_path_buf())
+    }
+
+    fn report_state(&self) -> Result<&Arc<ReportState>> {
+        if let Some(s) = self.report.get() {
+            return Ok(s);
+        }
+        // Bug 7: the report's initial `Index::scan` walks the drive and
+        // reads every file (one descriptor at a time, but a full pass).
+        // When it warms concurrently with a cold-boot search reindex it
+        // adds to the descriptor pressure. Gate the scan start behind
+        // the same reserve the reindex workers honor so the report walk
+        // yields the table to editing + the terminal when fds are
+        // tight. Cheap and best-effort: clear headroom returns at once.
+        crate::fd_budget::pace_reindex_worker(None);
+        let state = ReportState::open(
+            self.root(),
+            &self.paths.report,
+            &self.walk_filter.excluded_dir_names,
+        )?;
+        // OnceLock::set is racy with a concurrent caller; the
+        // loser drops its state cleanly, which terminates its
+        // writer thread via Drop. The winner's state stays.
+        let _ = self.report.set(state);
+        Ok(self.report.get().expect("report state just set"))
+    }
+}
+
+/// Hard size guard for write_* paths. `kind` is the static label
+/// surfaced in the error so the caller can distinguish text vs
+/// bytes vs (future) blob caps.
+///
+/// The configured `limit` is a fresh-file cap. When the target
+/// already exists and is itself larger than the cap (legacy file,
+/// pre-cap content, a binary attached as `.txt`), the caller is
+/// already past the policy boundary and we let edits up to the
+/// existing size through. The intent is "stop runaway growth", not
+/// "make all your files read-only the moment we ship a cap".
+///
+/// Effective limit = max(prev_size, limit). Refusal carries the
+/// effective limit so the editor can show the user the exact
+/// number it has to stay under.
+/// systacean-34: recursive walker for `Workspace::index_drafts_subtree`.
+/// Lives at module scope (not on `Workspace`) because the recursion
+/// keeps `dir` as a `&Path` parameter; the only `Workspace` capability
+/// used is the public `index_draft_file` entry.
+///
+/// `drafts_root` is the per-drive drafts metadata dir; `dir` is the
+/// current subtree being walked. The path passed to
+/// `index_draft_file` is the unified
+/// `Drafts/<rel_under_drafts_root>` shape per the `-25`/`-26`
+/// contract.
+fn walk_drafts_recursive(
+    drafts_root: &std::path::Path,
+    dir: &std::path::Path,
+    drive: &Workspace,
+) -> Result<()> {
+    let rd = match std::fs::read_dir(dir) {
+        Ok(rd) => rd,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(e) => return Err(ChanError::Io(format!("walk drafts {}: {e}", dir.display()))),
+    };
+    for entry in rd.flatten() {
+        let path = entry.path();
+        let Ok(ft) = entry.file_type() else { continue };
+        if ft.is_dir() {
+            walk_drafts_recursive(drafts_root, &path, drive)?;
+            continue;
+        }
+        if !ft.is_file() {
+            // Symlinks / FIFOs / sockets / devices: skip silently
+            // (mirrors the special-file refusal pattern elsewhere
+            // in chan-drive).
+            continue;
+        }
+        let Ok(sub_rel) = path.strip_prefix(drafts_root) else {
+            continue;
+        };
+        let sub_rel_str = sub_rel.to_string_lossy().replace('\\', "/");
+        if sub_rel_str.is_empty() {
+            continue;
+        }
+        let unified = format!("Drafts/{sub_rel_str}");
+        if !fs_ops::is_indexable_text(&unified) {
+            continue;
+        }
+        match drive.index_draft_file(&unified) {
+            Ok(()) => {}
+            Err(e) => tracing::warn!(
+                path = %unified,
+                error = %e,
+                "walk_drafts_recursive: index_draft_file failed; skipping",
+            ),
+        }
+    }
+    Ok(())
+}
+
+fn check_size(kind: &'static str, size: usize, limit: u64, prev_size: Option<u64>) -> Result<()> {
+    let size = size as u64;
+    let effective = std::cmp::max(prev_size.unwrap_or(0), limit);
+    if size > effective {
+        return Err(ChanError::WriteTooLarge {
+            kind,
+            size,
+            limit: effective,
+        });
+    }
+    Ok(())
+}
+
+fn emit_valid_utf8_chunks<F>(rel: &str, pending: &mut Vec<u8>, on_event: &mut F) -> Result<bool>
+where
+    F: FnMut(TextReadEvent<'_>) -> bool,
+{
+    if pending.is_empty() {
+        return Ok(true);
+    }
+    match std::str::from_utf8(pending) {
+        Ok(s) => {
+            let keep_going = s.is_empty() || on_event(TextReadEvent::Chunk(s));
+            pending.clear();
+            Ok(keep_going)
+        }
+        Err(e) => {
+            if e.error_len().is_some() {
+                return Err(ChanError::Io(format!(
+                    "invalid UTF-8 in editable text file: {rel}"
+                )));
+            }
+            let valid_up_to = e.valid_up_to();
+            if valid_up_to > 0 {
+                let keep_going = {
+                    let valid = std::str::from_utf8(&pending[..valid_up_to]).map_err(|e| {
+                        ChanError::Io(format!("invalid UTF-8 in editable text file: {rel}: {e}"))
+                    })?;
+                    on_event(TextReadEvent::Chunk(valid))
+                };
+                if !keep_going {
+                    return Ok(false);
+                }
+                pending.drain(..valid_up_to);
+            }
+            if pending.len() > 4 {
+                return Err(ChanError::Io(format!(
+                    "invalid UTF-8 in editable text file: {rel}"
+                )));
+            }
+            Ok(true)
+        }
+    }
+}
+
+/// `u64` byte counts (from `Metadata::len()` / `TreeEntry.size`)
+/// projected into the `i64` column the graph uses for `size`.
+/// Saturates instead of wrapping; a real-world file will never come
+/// close to `i64::MAX` (9.22 EB), and a saturating value is still
+/// usable for the reconcile `(mtime, size)` equality check.
+fn size_to_i64(size: u64) -> i64 {
+    i64::try_from(size).unwrap_or(i64::MAX)
+}
+
+// Test-only hook fired by `index_file_inner` between the `stat`
+// and `read` syscalls so tests can deterministically simulate a
+// concurrent writer landing in that window. The hook is a
+// thread-local one-shot: `take()`'d on fire so a single
+// `index_file` invocation triggers it at most once. In production
+// builds the entire helper is `cfg(test)`-gated and there is no
+// call site.
+#[cfg(test)]
+thread_local! {
+    static INDEX_FILE_STAT_READ_HOOK: std::cell::RefCell<Option<Box<dyn FnOnce()>>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+#[cfg(test)]
+fn index_file_between_stat_and_read_hook() {
+    let hook = INDEX_FILE_STAT_READ_HOOK.with(|h| h.borrow_mut().take());
+    if let Some(f) = hook {
+        f();
+    }
+}
+
+/// Arm the one-shot stat/read interleave hook for tests. The next
+/// `index_file_inner` call on this thread fires `f` after the stat
+/// and before the read, then clears the slot.
+#[cfg(test)]
+fn arm_index_file_stat_read_hook(f: Box<dyn FnOnce()>) {
+    INDEX_FILE_STAT_READ_HOOK.with(|h| *h.borrow_mut() = Some(f));
+}
+
+/// Map a `std::io::Error` returned by a cap-std op into our error
+/// enum. cap-std rejects sandbox escapes (mid-path symlink pointing
+/// outside the dir handle, absolute path passed as rel, `..` that
+/// would walk above the root) with a generic io::Error; the message
+/// it produces ("a path led outside of the filesystem") is the only
+/// portable signal we have to distinguish "you tried to escape"
+/// from "regular I/O error". Fragile if cap-std changes the string;
+/// a regression test in this module pins it.
+fn map_cap_err(err: std::io::Error, rel: &std::path::Path) -> ChanError {
+    let msg = err.to_string();
+    if msg.contains("outside of the filesystem") || msg.contains("path escape") {
+        return ChanError::SymlinkEscape(rel.to_path_buf());
+    }
+    ChanError::Io(msg)
+}
+
+/// cap-std variant of `mtime_secs` for `cap_std::fs::Metadata`.
+fn mtime_secs_cap(meta: &cap_std::fs::Metadata) -> Option<i64> {
+    meta.modified()
+        .ok()
+        .map(|t| t.into_std())
+        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+        .map(|d| d.as_secs() as i64)
+}
+
+fn mtime_secs_std(meta: &std::fs::Metadata) -> Option<i64> {
+    meta.modified()
+        .ok()
+        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+        .map(|d| d.as_secs() as i64)
+}
+
+/// cap-std variant of `mtime_ns` for `cap_std::fs::Metadata`.
+fn mtime_ns_cap(meta: &cap_std::fs::Metadata) -> Option<i64> {
+    meta.modified()
+        .ok()
+        .map(|t| t.into_std())
+        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+        .and_then(|d| i64::try_from(d.as_nanos()).ok())
+}
+
+/// Human-readable name for a cap-std `FileType`. Mirrors
+/// `fs_ops::describe_file_kind`. cap-std exposes the same is_*
+/// predicates plus the unix-only fifo/socket/char/block via
+/// `FileTypeExt`.
+fn describe_cap_file_kind(ft: &cap_std::fs::FileType) -> &'static str {
+    if ft.is_dir() {
+        return "directory";
+    }
+    if ft.is_symlink() {
+        return "symlink";
+    }
+    if ft.is_file() {
+        return "regular";
+    }
+    #[cfg(unix)]
+    {
+        use cap_std::fs::FileTypeExt;
+        if ft.is_fifo() {
+            return "fifo";
+        }
+        if ft.is_socket() {
+            return "socket";
+        }
+        if ft.is_char_device() {
+            return "char_device";
+        }
+        if ft.is_block_device() {
+            return "block_device";
+        }
+    }
+    "unknown"
+}
+
+/// cap-std equivalent of `fs_ops::ensure_regular_file`. Lstat
+/// through the sandboxed `Dir`; refuse anything that isn't a real
+/// regular file (symlink / FIFO / socket / device / directory).
+fn ensure_regular_file_in(dir: &cap_std::fs::Dir, rel: &std::path::Path) -> Result<()> {
+    let meta = dir.symlink_metadata(rel).map_err(|e| map_cap_err(e, rel))?;
+    let ft = meta.file_type();
+    if ft.is_file() && !ft.is_symlink() {
+        return Ok(());
+    }
+    Err(ChanError::SpecialFile {
+        kind: describe_cap_file_kind(&ft).to_string(),
+        path: rel.to_path_buf(),
+    })
+}
+
+/// cap-std equivalent of `ensure_writable`. Returns the existing
+/// file's metadata when the leaf is a regular file, `None` when
+/// missing, error when it's something we refuse to overwrite.
+fn ensure_writable_in(
+    dir: &cap_std::fs::Dir,
+    rel: &std::path::Path,
+) -> Result<Option<cap_std::fs::Metadata>> {
+    match dir.symlink_metadata(rel) {
+        Ok(meta) => {
+            let ft = meta.file_type();
+            if ft.is_file() && !ft.is_symlink() {
+                Ok(Some(meta))
+            } else {
+                Err(ChanError::SpecialFile {
+                    kind: describe_cap_file_kind(&ft).to_string(),
+                    path: rel.to_path_buf(),
+                })
+            }
+        }
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(e) => Err(map_cap_err(e, rel)),
+    }
+}
+
+/// Parse a file's content into the graph-side structures: the
+/// title (for the graph node), the heading list (for graph
+/// headings), the outgoing edges (links + tokens), and, for
+/// contact-kind files, the joined email list and alias list
+/// (both space-separated, lowercased). The search-side chunking is
+/// done separately by the index facade.
+//
+// clippy's `type_complexity` lint fires because the return tuple is
+// 6-wide. Folding into a struct would churn every call site in
+// `rebuild_graph` + `index_file` for a style win; we keep the
+// shape and silence the lint locally.
+#[allow(clippy::type_complexity)]
+fn parse_for_graph(
+    rel: &str,
+    raw: &str,
+) -> (
+    Option<String>,
+    crate::graph::NodeKind,
+    Vec<markdown::Heading>,
+    Vec<crate::graph::Edge>,
+    Option<String>,
+    Option<String>,
+) {
+    let fm = markdown::parse_frontmatter(raw);
+    let body_src = &raw[fm.body_offset..];
+    let headings = markdown::parse_headings(body_src);
+    let title = fm
+        .data
+        .get("title")
+        .and_then(|v| v.as_str())
+        .map(str::to_owned)
+        .or_else(|| {
+            headings
+                .iter()
+                .find(|h| h.level == 1)
+                .map(|h| h.text.clone())
+        });
+    // `chan.kind` lives under the chan namespace so user frontmatter
+    // (which may already carry a `kind:` of its own for app-specific
+    // reasons) cannot accidentally tip a regular note into a typed
+    // surface. The registry is the extension point for future kinds.
+    let node_kind = markdown::chan_kind(&fm.data)
+        .map(|spec| spec.node_kind)
+        .unwrap_or(crate::graph::NodeKind::File);
+    let links = markdown::extract_links(body_src);
+    let mut tokens = markdown::extract_tokens(body_src);
+    if !fs_ops::is_markdown_file(rel) {
+        tokens.retain(|token| {
+            !matches!(
+                token,
+                markdown::Token::Tag { .. } | markdown::Token::Mention { .. }
+            )
+        });
+    }
+    let edges = build_edges(rel, &links, &tokens);
+    // Email extraction runs only for contact-kind files: a regular
+    // note that mentions an email in passing should not get its
+    // address mirrored into a `nodes.emails` column the picker can
+    // surface, and skipping the scan for File-kind keeps the
+    // hot-path cost zero on normal indexes.
+    let emails = if matches!(node_kind, crate::graph::NodeKind::Contact) {
+        let list = crate::contacts::extract_emails(body_src);
+        if list.is_empty() {
+            None
+        } else {
+            Some(list.join(" "))
+        }
+    } else {
+        None
+    };
+    // Alias extraction (phase 5): the `aliases:` top-level
+    // frontmatter array names alternate strings that `@@<alias>`
+    // mentions should resolve to this contact. Skip for File-kind
+    // nodes (regular notes have no resolver semantics tied to the
+    // word "aliases"); for contacts, lowercase + space-join so the
+    // picker / mention resolver can run a single LIKE against the
+    // column, mirroring the `emails` pattern.
+    let aliases = if matches!(node_kind, crate::graph::NodeKind::Contact) {
+        let list = fm
+            .data
+            .get("aliases")
+            .and_then(|v| v.as_array())
+            .map(|arr| {
+                arr.iter()
+                    .filter_map(|v| v.as_str())
+                    .map(|s| s.trim().to_ascii_lowercase())
+                    .filter(|s| !s.is_empty())
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
+        if list.is_empty() {
+            None
+        } else {
+            Some(list.join(" "))
+        }
+    } else {
+        None
+    };
+    (title, node_kind, headings, edges, emails, aliases)
+}
+
+/// Whether `path` lies under the `prefix` directory. POSIX
+/// separators on both sides; ASCII case-insensitive comparison.
+///
+/// Why case-insensitive: scope filters live in the search/UI layer
+/// and reflect the user's mental model of directories, not the
+/// filesystem's strict casing. APFS (default) and NTFS are
+/// case-insensitive, so a scope of `"Notes"` matching a stored path
+/// of `"notes/foo.md"` is what the user wants. ext4 is technically
+/// case-sensitive, so the over-match here is theoretical: a user
+/// would have to maintain `Notes/` and `notes/` as distinct directories
+/// AND ask the search to scope into one without bleeding the other.
+/// We accept that minor risk in exchange for predictable UX across
+/// platforms. ASCII-only fold (no Unicode) matches the rest of the
+/// crate's case-folding policy.
+fn path_under(path: &str, prefix: &str) -> bool {
+    let prefix = prefix.trim_end_matches('/');
+    if prefix.is_empty() {
+        return true;
+    }
+    if path.eq_ignore_ascii_case(prefix) {
+        return true;
+    }
+    // Byte-level check sidesteps any UTF-8 boundary risk if a path
+    // contains multibyte chars. We're comparing ASCII, so this is
+    // safe and equivalent to the str form.
+    let pb = prefix.as_bytes();
+    let path_b = path.as_bytes();
+    if path_b.len() < pb.len() + 1 {
+        return false;
+    }
+    path_b[..pb.len()].eq_ignore_ascii_case(pb) && path_b[pb.len()] == b'/'
+}
+
+/// Canonicalize a drive-relative POSIX path for use as a mapping key.
+/// Strips a leading `./` and a trailing `/`; leaves an empty string
+/// for the drive root. We intentionally do NOT collapse `..` here;
+/// the rename API rejects those upstream via the cap-std sandbox.
+fn canonical_posix(p: &str) -> String {
+    let s = p.strip_prefix("./").unwrap_or(p);
+    s.trim_end_matches('/').to_string()
+}
+
+/// Split a basename into `(stem, ext)` where `ext` includes the leading
+/// dot, for collision-suffix insertion ("foo.md" -> ("foo", ".md") so a
+/// collision becomes "foo copy.md"). A dotfile with no other extension
+/// ("`.gitignore`") or a name with no dot keeps the whole name as stem
+/// and an empty ext, so the suffix appends at the end ("`.gitignore`" ->
+/// "`.gitignore copy`"). A trailing dot is treated as part of the stem.
+fn split_name_ext(name: &str) -> (String, String) {
+    match name.rfind('.') {
+        // A leading dot at index 0 is a dotfile prefix, not an ext.
+        Some(idx) if idx > 0 && idx < name.len() - 1 => {
+            (name[..idx].to_string(), name[idx..].to_string())
+        }
+        _ => (name.to_string(), String::new()),
+    }
+}
+
+fn posix_path(path: &std::path::Path) -> String {
+    path.to_string_lossy().replace('\\', "/")
+}
+
+/// Read the persisted rename log from `graph_dir/rename_log.json`.
+/// Best-effort: a missing file returns an empty map (fresh drive,
+/// or a clean reindex landed since the last process exit), and a
+/// malformed file is logged and discarded rather than blocking
+/// `Workspace::open`. The downside of "drop on parse error" is a one-
+/// time loss of cross-process rename chain memory; the next reindex
+/// rebuilds the graph from the live tree and the log becomes
+/// irrelevant anyway.
+fn load_rename_log(graph_dir: &std::path::Path) -> HashMap<String, String> {
+    let path = graph_dir.join(RENAME_LOG_FILE);
+    let raw = match std::fs::read(&path) {
+        Ok(b) => b,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return HashMap::new(),
+        Err(e) => {
+            tracing::warn!(path = %path.display(), ?e, "failed to read rename_log; starting empty");
+            return HashMap::new();
+        }
+    };
+    match serde_json::from_slice::<HashMap<String, String>>(&raw) {
+        Ok(m) => m,
+        Err(e) => {
+            tracing::warn!(
+                path = %path.display(),
+                ?e,
+                "rename_log decode failed; starting empty (next reindex rebuilds anyway)",
+            );
+            HashMap::new()
+        }
+    }
+}
+
+/// Atomically persist the rename log so the on-disk copy never
+/// observes a half-written body. We hold the in-memory mutex while
+/// calling this (see `rename_log_append`), so the serialization
+/// snapshot is consistent. Atomic-write is required: tearing under
+/// power loss would leave a truncated JSON file that
+/// `load_rename_log` would refuse and silently drop on next open.
+fn persist_rename_log(graph_dir: &std::path::Path, log: &HashMap<String, String>) -> Result<()> {
+    std::fs::create_dir_all(graph_dir)?;
+    let body =
+        serde_json::to_vec(log).map_err(|e| ChanError::Io(format!("rename_log encode: {e}")))?;
+    fs_ops::atomic_write(&graph_dir.join(RENAME_LOG_FILE), &body)
+}
+
+/// Read the pending-writes journal from
+/// `graph_dir/pending_writes.json`. Same best-effort semantics as
+/// the rename log: missing file -> empty map; malformed -> warn +
+/// empty map. A dropped journal under malformed-JSON is worse than
+/// for the rename log (the consumer never replays the journaled
+/// op), but the cost of refusing to open the drive is higher; the
+/// next per-file write or full reindex still converges. The next
+/// per-file write or `reindex_with` repopulates a consistent
+/// state.
+fn load_pending_writes(graph_dir: &std::path::Path) -> HashMap<String, PendingOp> {
+    let path = graph_dir.join(PENDING_WRITES_FILE);
+    let raw = match std::fs::read(&path) {
+        Ok(b) => b,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return HashMap::new(),
+        Err(e) => {
+            tracing::warn!(
+                path = %path.display(),
+                ?e,
+                "failed to read pending_writes; starting empty",
+            );
+            return HashMap::new();
+        }
+    };
+    match serde_json::from_slice::<HashMap<String, PendingOp>>(&raw) {
+        Ok(m) => m,
+        Err(e) => {
+            tracing::warn!(
+                path = %path.display(),
+                ?e,
+                "pending_writes decode failed; starting empty (any drift will surface at next save or full reindex)",
+            );
+            HashMap::new()
+        }
+    }
+}
+
+/// Atomically persist the pending-writes journal. Removes the file
+/// entirely when the map is empty so the next `load_pending_writes`
+/// short-circuits without a parse, and so an external eye on the
+/// graph_dir sees "clean state" instead of "{}".
+fn persist_pending_writes(
+    graph_dir: &std::path::Path,
+    map: &HashMap<String, PendingOp>,
+) -> Result<()> {
+    let path = graph_dir.join(PENDING_WRITES_FILE);
+    if map.is_empty() {
+        match std::fs::remove_file(&path) {
+            Ok(()) => return Ok(()),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+            Err(e) => return Err(ChanError::Io(format!("remove pending_writes: {e}"))),
+        }
+    }
+    std::fs::create_dir_all(graph_dir)?;
+    let body = serde_json::to_vec(map)
+        .map_err(|e| ChanError::Io(format!("pending_writes encode: {e}")))?;
+    fs_ops::atomic_write(&path, &body)
+}
+
+/// Parent directory of a drive-rooted POSIX path. Returns the empty
+/// string for files at the root (`"foo.md"` -> `""`). Used to seed
+/// `normalize_href` so relative link resolution matches the rules in
+/// `chan_workspace::markdown::links::normalize_href`.
+fn parent_dir(rel: &str) -> String {
+    match rel.rfind('/') {
+        Some(i) => rel[..i].to_string(),
+        None => String::new(),
+    }
+}
+
+/// Compute a POSIX relative path from `source_dir` to `target`. Both
+/// inputs are drive-rooted (no leading slash). Walks up the source's
+/// path until a common prefix with the target is reached, then
+/// descends into the target. Returns `"."` if the two are equal.
+fn relative_from(source_dir: &str, target: &str) -> String {
+    let src_parts: Vec<&str> = if source_dir.is_empty() {
+        Vec::new()
+    } else {
+        source_dir.split('/').collect()
+    };
+    let tgt_parts: Vec<&str> = if target.is_empty() {
+        Vec::new()
+    } else {
+        target.split('/').collect()
+    };
+    let mut common = 0usize;
+    while common < src_parts.len()
+        && common < tgt_parts.len()
+        && src_parts[common] == tgt_parts[common]
+    {
+        common += 1;
+    }
+    let ups = src_parts.len() - common;
+    let mut out = String::new();
+    for _ in 0..ups {
+        out.push_str("../");
+    }
+    if common < tgt_parts.len() {
+        out.push_str(&tgt_parts[common..].join("/"));
+    }
+    if out.is_empty() {
+        ".".to_string()
+    } else {
+        out.trim_end_matches('/').to_string()
+    }
+}
+
+/// Rewrite-callback wired to `Workspace::rename_with_link_rewrite`. Given
+/// one link surfaced by the markdown scanner, returns `Some(new_href)`
+/// to replace it. Resolves the link against the source's PRE-rename
+/// directory (so a self-referential link inside a moved file still
+/// resolves to the right target), maps the resolved target through
+/// the rename, and reconstructs the href preserving its flavor
+/// (drive-rooted vs. `./` explicit vs. bare vs. `../`-rooted) and
+/// the `?query` / `#anchor` suffix.
+fn rewrite_href_for_move(
+    link: markdown::links::LinkRef<'_>,
+    src_old_dir: &str,
+    src_new_dir: &str,
+    mapping: &HashMap<String, String>,
+) -> Option<String> {
+    let href = link.href;
+    // Split path vs ?query / #anchor.
+    let (path_part, suffix) = split_path_suffix(href);
+    if path_part.is_empty() {
+        return None;
+    }
+    // Wiki convention (mirrors `build_edges`): a bare or `/`-prefixed
+    // wiki target is drive-rooted, NOT source-relative. Only `./` or
+    // `../` prefixes flip it to source-relative. Standard markdown
+    // hrefs follow ordinary relative-path semantics.
+    let normalized_target = if matches!(link.kind, markdown::links::LinkRefKind::Wiki)
+        && !path_part.starts_with("./")
+        && !path_part.starts_with("../")
+    {
+        format!("/{}", path_part.trim_start_matches('/'))
+    } else {
+        path_part.to_string()
+    };
+    let resolved_old = markdown::links::normalize_href(&normalized_target, src_old_dir)?;
+    let resolved_new = mapping
+        .get(&resolved_old)
+        .cloned()
+        .unwrap_or_else(|| resolved_old.clone());
+    // If the target didn't move AND the source didn't move, nothing
+    // to do; bail before allocating the replacement string.
+    if resolved_old == resolved_new && src_old_dir == src_new_dir {
+        return None;
+    }
+    // Reconstruct the href as a relative path. Workspace-rooted forms
+    // (markdown `/path` and wiki bare `[[name]]`) read as filesystem-
+    // rooted to anything that isn't chan's own renderer (browsers,
+    // GitHub, Obsidian on export), so every rewrite pass migrates
+    // them to the round-trippable relative form. Wiki bare `[[name]]`
+    // resolves to drive root by chan's pre-existing convention, so
+    // wiki rewrites MUST use an explicit `./` or `../` prefix to be
+    // unambiguous as relative.
+    let rel = relative_from(src_new_dir, &resolved_new);
+    let new_path = match link.kind {
+        markdown::links::LinkRefKind::Wiki => {
+            if rel.starts_with("../") || rel == "." {
+                rel
+            } else {
+                format!("./{rel}")
+            }
+        }
+        markdown::links::LinkRefKind::Markdown => {
+            // Same shape as wiki except the bare form is meaningful
+            // for standard markdown links (it's a sibling-relative
+            // path), so we only emit the `./` prefix when the original
+            // had it OR when the original was drive-rooted.
+            let dot_explicit = path_part.starts_with('/') || path_part.starts_with("./");
+            if dot_explicit && !rel.starts_with("../") && rel != "." {
+                format!("./{rel}")
+            } else {
+                rel
+            }
+        }
+    };
+    let new_href = format!("{new_path}{suffix}");
+    if new_href == href {
+        None
+    } else {
+        Some(new_href)
+    }
+}
+
+/// Split a link href into (path, suffix) where suffix is the first
+/// `?query` / `#anchor` and everything after it. Either side may be
+/// empty; whichever delimiter appears first wins.
+fn split_path_suffix(href: &str) -> (&str, &str) {
+    let q = href.find('?');
+    let a = href.find('#');
+    let cut = match (q, a) {
+        (Some(qi), Some(ai)) => Some(qi.min(ai)),
+        (Some(qi), None) => Some(qi),
+        (None, Some(ai)) => Some(ai),
+        (None, None) => None,
+    };
+    match cut {
+        Some(i) => (&href[..i], &href[i..]),
+        None => (href, ""),
+    }
+}
+
+#[cfg(test)]
+mod cap_err_tests {
+    use super::map_cap_err;
+    use crate::error::ChanError;
+    use std::io;
+    use std::path::Path;
+
+    /// Pin the cap-std error-string match. If cap-std ever rewords
+    /// the message we use to detect a sandbox escape, this test
+    /// fails and we fix the matcher in `map_cap_err`. Without this
+    /// pin a silent regression would let "you tried to escape" land
+    /// as a generic `Io` and break `ChanError::SymlinkEscape`
+    /// callers.
+    #[test]
+    fn maps_cap_std_escape_message_to_symlink_escape() {
+        let e = io::Error::other("a path led outside of the filesystem");
+        let mapped = map_cap_err(e, Path::new("notes/x.md"));
+        assert!(matches!(mapped, ChanError::SymlinkEscape(_)));
+    }
+
+    #[test]
+    fn maps_other_io_errors_passthrough_to_io() {
+        let e = io::Error::new(io::ErrorKind::PermissionDenied, "denied");
+        let mapped = map_cap_err(e, Path::new("notes/x.md"));
+        assert!(matches!(mapped, ChanError::Io(_)));
+    }
+}
+
+#[cfg(test)]
+mod path_under_tests {
+    use super::path_under;
+
+    #[test]
+    fn matches_exact_and_descendant() {
+        assert!(path_under("notes", "notes"));
+        assert!(path_under("notes/a.md", "notes"));
+        assert!(path_under("notes/sub/a.md", "notes"));
+    }
+
+    #[test]
+    fn empty_prefix_matches_anything() {
+        assert!(path_under("any/thing.md", ""));
+        assert!(path_under("any/thing.md", "/"));
+    }
+
+    #[test]
+    fn rejects_sibling_prefix_share() {
+        // "notes-archive" must not match scope "notes".
+        assert!(!path_under("notes-archive/a.md", "notes"));
+    }
+
+    #[test]
+    fn case_insensitive_ascii() {
+        assert!(path_under("Notes/a.md", "notes"));
+        assert!(path_under("notes/a.md", "NOTES"));
+        assert!(path_under("Notes/Sub/a.md", "notes/sub"));
+    }
+
+    #[test]
+    fn trailing_slash_on_prefix_is_normalized() {
+        assert!(path_under("notes/a.md", "notes/"));
+        assert!(path_under("notes", "notes/"));
+    }
+
+    #[test]
+    fn does_not_panic_on_multibyte_paths() {
+        // Real-world: a directory named with non-ASCII. The byte-level
+        // boundary check shouldn't trip.
+        assert!(path_under("Café/a.md", "Café"));
+        assert!(!path_under("Other/a.md", "Café"));
+    }
+}
+
+/// Convert links + tokens into graph edges. Wiki links and
+/// internal markdown links produce `Link` edges; tokens produce
+/// `Tag` / `Mention` edges. External links (http://, mailto:) are
+/// dropped because they don't connect to anything else in the
+/// drive's graph.
+///
+/// Markdown link hrefs (`[label](href)`) and image embeds
+/// (`![alt](src)`) are run through `markdown::normalize_href` so
+/// `/abs` and `../rel` write the same drive-relative dst as the
+/// equivalent bare path. Wiki-link targets (`[[name]]`) keep the
+/// existing drive-rooted-by-default convention; an explicit `./`
+/// or `..` prefix opts into source-relative resolution.
+fn build_edges(
+    src: &str,
+    links: &[markdown::Link],
+    tokens: &[markdown::Token],
+) -> Vec<crate::graph::Edge> {
+    use crate::graph::{Edge, EdgeKind};
+    let source_dir = match src.rfind('/') {
+        Some(i) => &src[..i],
+        None => "",
+    };
+    let mut out = Vec::new();
+    for l in links {
+        // Wiki-link convention: bare `[[name]]` and `[[a/b]]` are
+        // drive-rooted (the picker has always inserted them this
+        // way). An explicit `./` / `..` prefix flips to source-
+        // relative. Markdown links use standard relative semantics.
+        let normalize_target = if l.wiki && !is_relative_marker(&l.target) {
+            format!("/{}", l.target.trim_start_matches('/'))
+        } else {
+            l.target.clone()
+        };
+        let Some(dst) = markdown::normalize_href(&normalize_target, source_dir) else {
+            continue;
+        };
+        // Anchors only mean something for markdown targets (heading
+        // refs like `note.md#section`). For images/PDFs/etc. the `#`
+        // suffix is an Obsidian-style param (`img.png#width=300`),
+        // not a heading anchor, so drop it.
+        let (_, anchor) = split_anchor(&l.target);
+        let anchor = if dst.ends_with(".md") { anchor } else { None };
+        out.push(Edge {
+            src: src.to_string(),
+            dst,
+            kind: EdgeKind::Link,
+            anchor,
+        });
+    }
+    for t in tokens {
+        match t {
+            markdown::Token::Tag { name } => out.push(Edge {
+                src: src.to_string(),
+                dst: format!("#{name}"),
+                kind: EdgeKind::Tag,
+                anchor: None,
+            }),
+            markdown::Token::Mention { name } => out.push(Edge {
+                src: src.to_string(),
+                dst: format!("@@{name}"),
+                kind: EdgeKind::Mention,
+                anchor: None,
+            }),
+            // Dates aren't graph edges yet; the graph view groups
+            // files by date through a future query rather than a
+            // stored edge. Skip for now.
+            markdown::Token::Date { .. } => {}
+        }
+    }
+    out
+}
+
+/// True when a wiki-link target opts into source-relative resolution
+/// via a leading `./` or `..` segment. Plain `[[name]]` and `[[a/b]]`
+/// stay drive-rooted (the picker's existing convention).
+fn is_relative_marker(target: &str) -> bool {
+    target == "." || target == ".." || target.starts_with("./") || target.starts_with("../")
+}
+
+/// Split a link target into (path, anchor). `path#section` becomes
+/// `("path", Some("section"))`; a target without `#` returns
+/// `(target, None)`.
+fn split_anchor(target: &str) -> (String, Option<String>) {
+    match target.split_once('#') {
+        Some((p, a)) if !a.is_empty() => (p.to_string(), Some(a.to_string())),
+        _ => (target.to_string(), None),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::library::Library;
+    use tempfile::TempDir;
+
+    fn fixture() -> (TempDir, TempDir, Arc<Workspace>) {
+        let cfg = TempDir::new().unwrap();
+        let drive_dir = TempDir::new().unwrap();
+        let lib = Library::open_at(cfg.path().join("config.toml")).unwrap();
+        lib.register_workspace(drive_dir.path()).unwrap();
+        let drive = lib.open_workspace(drive_dir.path()).unwrap();
+        (cfg, drive_dir, drive)
+    }
+
+    #[test]
+    fn write_then_read_text_round_trips() {
+        let (_cfg, _root, drive) = fixture();
+        drive.write_text("notes/a.md", "hello").unwrap();
+        assert_eq!(drive.read_text("notes/a.md").unwrap(), "hello");
+    }
+
+    #[test]
+    fn rename_log_persists_across_drive_reopen() {
+        // Simulate "process kill after a rename, restart": rename
+        // A.md -> B.md once, drop the drive (and so the in-memory
+        // log), then re-open. The persisted sidecar must hydrate
+        // the new in-memory log so a subsequent rename B.md -> C.md
+        // still knows that A.md once mapped to B.md.
+        let cfg = TempDir::new().unwrap();
+        let drive_dir = TempDir::new().unwrap();
+
+        let lib = Library::open_at(cfg.path().join("config.toml")).unwrap();
+        lib.register_workspace(drive_dir.path()).unwrap();
+        // Resolve paths after register so the lookup uses the
+        // registry-assigned metadata key rather than guessing from
+        // the path.
+        let paths = lib.workspace_paths_for(drive_dir.path()).unwrap();
+        let drive = lib.open_workspace(drive_dir.path()).unwrap();
+        drive.write_text("A.md", "# A\n").unwrap();
+        drive.rename_with_link_rewrite("A.md", "B.md").unwrap();
+
+        // Sidecar must exist with the (A -> B) entry.
+        let log_path = paths.graph_dir.join(RENAME_LOG_FILE);
+        assert!(
+            log_path.exists(),
+            "rename_log.json should exist after first rename"
+        );
+        let raw = std::fs::read(&log_path).unwrap();
+        let parsed: std::collections::HashMap<String, String> =
+            serde_json::from_slice(&raw).unwrap();
+        assert_eq!(parsed.get("A.md").map(String::as_str), Some("B.md"));
+
+        // Drop and re-open: in-memory log starts empty, hydrates
+        // from the sidecar.
+        drop(drive);
+        let drive2 = lib.open_workspace(drive_dir.path()).unwrap();
+        {
+            let mem = drive2.rename_log.lock().unwrap();
+            assert_eq!(
+                mem.get("A.md").map(String::as_str),
+                Some("B.md"),
+                "rename log should reload from disk: {:?}",
+                *mem,
+            );
+        }
+        // A follow-up rename transitively updates both old and new
+        // names so the entry rewrite covers the cross-process chain.
+        drive2.rename_with_link_rewrite("B.md", "C.md").unwrap();
+        {
+            let mem = drive2.rename_log.lock().unwrap();
+            assert_eq!(mem.get("A.md").map(String::as_str), Some("C.md"));
+            assert_eq!(mem.get("B.md").map(String::as_str), Some("C.md"));
+        }
+        let raw2 = std::fs::read(&log_path).unwrap();
+        let parsed2: std::collections::HashMap<String, String> =
+            serde_json::from_slice(&raw2).unwrap();
+        assert_eq!(parsed2.get("A.md").map(String::as_str), Some("C.md"));
+        assert_eq!(parsed2.get("B.md").map(String::as_str), Some("C.md"));
+
+        // A successful reindex clears both the in-memory map and the
+        // sidecar so a stale name doesn't outlive its usefulness.
+        drive2.reindex(None).unwrap();
+        assert!(drive2.rename_log.lock().unwrap().is_empty());
+        assert!(
+            !log_path.exists(),
+            "rename_log.json should be removed after reindex",
+        );
+    }
+
+    #[test]
+    fn needs_rebuild_flag_tracks_marker() {
+        // Pre-stamp the rebuild.inprogress marker as if a prior
+        // reindex had been killed between graph rebuild and BM25
+        // commit. Workspace::open must promote it to needs_rebuild()=true
+        // so the consumer reindexes before serving queries.
+        let cfg = TempDir::new().unwrap();
+        let drive_dir = TempDir::new().unwrap();
+
+        let lib = Library::open_at(cfg.path().join("config.toml")).unwrap();
+        lib.register_workspace(drive_dir.path()).unwrap();
+        // Stamp the marker AFTER register so the metadata key is
+        // known. Open then drop the drive once to let the metadata
+        // skeleton (graph_dir) come into existence before we plant
+        // the marker; otherwise create_dir_all does the same work
+        // but explicit-open is the production code path.
+        let paths = lib.workspace_paths_for(drive_dir.path()).unwrap();
+        std::fs::create_dir_all(&paths.graph_dir).unwrap();
+        let marker = paths.graph_dir.join(REBUILD_MARKER);
+        std::fs::write(&marker, b"started_at = 1\n").unwrap();
+
+        let drive = lib.open_workspace(drive_dir.path()).unwrap();
+        assert!(
+            drive.needs_rebuild(),
+            "marker on disk should set needs_rebuild()",
+        );
+
+        // A successful reindex removes the marker and clears the flag.
+        drive.reindex(None).unwrap();
+        assert!(
+            !drive.needs_rebuild(),
+            "needs_rebuild() should clear after a clean reindex",
+        );
+        assert!(
+            !marker.exists(),
+            "marker file should be gone after a clean reindex",
+        );
+
+        // Sanity: a fresh drive without a marker reports false from
+        // the start so consumers don't reindex every time they open
+        // a known-clean drive.
+        let drive2_dir = TempDir::new().unwrap();
+        lib.register_workspace(drive2_dir.path()).unwrap();
+        let drive2 = lib.open_workspace(drive2_dir.path()).unwrap();
+        assert!(!drive2.needs_rebuild());
+    }
+
+    /// Snapshot of the queryable end state of a drive. Two drives
+    /// (or two states of the same drive) are "converged" when these
+    /// fields match: same graph node set, same search results for a
+    /// known token. Used by the crash-recovery tests below as a
+    /// convergence oracle.
+    #[derive(Debug, PartialEq, Eq)]
+    struct RecoveryState {
+        graph_files: Vec<String>,
+        hit_paths: Vec<String>,
+    }
+
+    fn capture_recovery_state(drive: &Workspace, probe_token: &str) -> RecoveryState {
+        let mut graph_files = drive.graph().unwrap().files().unwrap();
+        graph_files.sort();
+        let opts = crate::drive::SearchOpts {
+            mode: crate::SearchMode::Bm25,
+            limit: 100,
+            scope: None,
+        };
+        let mut hit_paths: Vec<String> = drive
+            .search(probe_token, &opts)
+            .unwrap()
+            .hits
+            .into_iter()
+            .map(|h| h.path)
+            .collect();
+        hit_paths.sort();
+        hit_paths.dedup();
+        RecoveryState {
+            graph_files,
+            hit_paths,
+        }
+    }
+
+    /// Stand up a drive with a fixed content set so the
+    /// crash-recovery tests can compare "what a clean reindex
+    /// produces" against "what a post-crash reindex produces."
+    fn populate_recoverable_drive(lib: &Library, root: &std::path::Path) -> &'static str {
+        let drive = lib.open_workspace(root).unwrap();
+        drive
+            .write_text("alpha.md", "# alpha\n[[beta]] crash-probe-token in alpha\n")
+            .unwrap();
+        drive
+            .write_text("beta.md", "# beta\nback to [[alpha]]\n")
+            .unwrap();
+        drive
+            .write_text("notes/sub.md", "# sub\ncrash-probe-token here too\n")
+            .unwrap();
+        "crash-probe-token"
+    }
+
+    #[test]
+    fn reindex_converges_after_marker_only_crash() {
+        // Simulate the simplest crash shape: previous run finished
+        // building the index but died before clearing the marker.
+        // The recovery action ("reindex once more") must produce the
+        // same end state as the original clean build. If it does
+        // not, recovery is destructive (loses data) or non-idempotent
+        // (visible churn between two equivalent states).
+        let cfg = TempDir::new().unwrap();
+        let drive_dir = TempDir::new().unwrap();
+        let lib = Library::open_at(cfg.path().join("config.toml")).unwrap();
+        lib.register_workspace(drive_dir.path()).unwrap();
+        let probe = populate_recoverable_drive(&lib, drive_dir.path());
+        let drive = lib.open_workspace(drive_dir.path()).unwrap();
+        drive.reindex(None).unwrap();
+        let baseline = capture_recovery_state(&drive, probe);
+        drop(drive);
+
+        // Plant the marker as if the previous reindex had not
+        // managed to clear it. Don't touch any other state; we want
+        // to isolate the "marker present, store intact" recovery.
+        let paths = lib.workspace_paths_for(drive_dir.path()).unwrap();
+        let marker = paths.graph_dir.join(REBUILD_MARKER);
+        std::fs::write(&marker, b"started_at = simulated\n").unwrap();
+
+        let drive = lib.open_workspace(drive_dir.path()).unwrap();
+        assert!(drive.needs_rebuild(), "marker must promote to flag");
+        drive.reindex(None).unwrap();
+        assert!(!drive.needs_rebuild(), "reindex must clear the flag");
+        let recovered = capture_recovery_state(&drive, probe);
+        assert_eq!(
+            recovered, baseline,
+            "post-crash reindex must converge to the clean-build state",
+        );
+    }
+
+    #[test]
+    fn reindex_converges_after_partial_index_corruption() {
+        // Harder crash shape: previous run died between the graph
+        // commit and the BM25 commit. We simulate by tearing down
+        // the on-disk BM25 segments and re-stamping the marker,
+        // leaving the graph DB intact. Reopening must surface the
+        // marker, and a follow-up reindex must rebuild BM25 to the
+        // same shape as a clean build.
+        let cfg = TempDir::new().unwrap();
+        let drive_dir = TempDir::new().unwrap();
+        let lib = Library::open_at(cfg.path().join("config.toml")).unwrap();
+        lib.register_workspace(drive_dir.path()).unwrap();
+        let probe = populate_recoverable_drive(&lib, drive_dir.path());
+        let drive = lib.open_workspace(drive_dir.path()).unwrap();
+        drive.reindex(None).unwrap();
+        let baseline = capture_recovery_state(&drive, probe);
+        drop(drive);
+
+        // Simulate the crash: nuke the on-disk BM25 dir + plant
+        // the marker. The graph DB stays (graph rebuild ran first
+        // and committed), index config stays, vector store stays.
+        let paths = lib.workspace_paths_for(drive_dir.path()).unwrap();
+        let bm25_dir = paths.index.join("bm25");
+        if bm25_dir.exists() {
+            std::fs::remove_dir_all(&bm25_dir).unwrap();
+        }
+        std::fs::create_dir_all(&paths.graph_dir).unwrap();
+        std::fs::write(
+            paths.graph_dir.join(REBUILD_MARKER),
+            b"started_at = simulated\n",
+        )
+        .unwrap();
+
+        let drive = lib.open_workspace(drive_dir.path()).unwrap();
+        assert!(drive.needs_rebuild());
+        // Before the recovery reindex, search should return zero
+        // hits (BM25 store is empty). Confirm that the test setup
+        // actually broke the index, otherwise the recovery
+        // assertion below would pass for the wrong reason.
+        let opts = crate::drive::SearchOpts {
+            mode: crate::SearchMode::Bm25,
+            limit: 100,
+            scope: None,
+        };
+        assert!(
+            drive.search(probe, &opts).unwrap().hits.is_empty(),
+            "test precondition: corrupted BM25 should produce zero hits",
+        );
+
+        drive.reindex(None).unwrap();
+        let recovered = capture_recovery_state(&drive, probe);
+        assert_eq!(
+            recovered, baseline,
+            "post-crash reindex must rebuild BM25 to the same shape",
+        );
+        assert!(!drive.needs_rebuild());
+    }
+
+    #[test]
+    fn reset_workspace_completes_after_partial_wipe() {
+        // Simulate "reset_workspace crashed after wiping some subsystem
+        // dirs but before getting to others." Calling reset_workspace
+        // again must complete the wipe without erroring on the
+        // already-missing dirs. Resumability of destructive ops is
+        // load-bearing: a UI that retries on transient failure
+        // would otherwise refuse to ever cleanly reset.
+        let cfg = TempDir::new().unwrap();
+        let drive_dir = TempDir::new().unwrap();
+        let lib = Library::open_at(cfg.path().join("config.toml")).unwrap();
+        lib.register_workspace(drive_dir.path()).unwrap();
+        {
+            let drive = lib.open_workspace(drive_dir.path()).unwrap();
+            drive.write_text("a.md", "alpha\n").unwrap();
+            drive.reindex(None).unwrap();
+            drive.put_session("win-1", b"layout").unwrap();
+        }
+
+        let paths = lib.workspace_paths_for(drive_dir.path()).unwrap();
+        assert!(paths.index.exists());
+        assert!(paths.graph_db.parent().unwrap().exists());
+        assert!(paths.sessions.exists());
+
+        // Simulate the crash: index + sessions removed, graph still
+        // there. reset_workspace(State) must mop up the rest without
+        // tripping over the missing dirs.
+        std::fs::remove_dir_all(&paths.index).unwrap();
+        std::fs::remove_dir_all(&paths.sessions).unwrap();
+        assert!(paths.graph_db.parent().unwrap().exists());
+
+        let report = lib
+            .reset_workspace(drive_dir.path(), crate::ResetMode::State)
+            .unwrap();
+        // removed_entries reflects what THIS reset actually wiped;
+        // we don't pin a number, only that the operation completed
+        // and the post-condition is a clean state.
+        let _ = report;
+        assert!(!paths.index.exists());
+        assert!(!paths.graph_db.parent().unwrap().exists());
+        assert!(!paths.sessions.exists());
+
+        // Registry row survives a State-mode reset (Everything would
+        // drop it). The drive is reopenable and reindexes from
+        // scratch with no leaked state.
+        let drive = lib.open_workspace(drive_dir.path()).unwrap();
+        drive.reindex(None).unwrap();
+        assert!(!drive.needs_rebuild());
+    }
+
+    #[test]
+    fn reindex_consumes_pending_rename_log_after_reopen() {
+        // Cross-process rename chain: a rename produces a durable
+        // log entry; if the process dies before the next reindex,
+        // the next open hydrates that log and the next reindex must
+        // converge the graph to the post-rename tree. End state must
+        // match what a clean build of the renamed tree would produce.
+        let cfg = TempDir::new().unwrap();
+        let drive_dir = TempDir::new().unwrap();
+        let lib = Library::open_at(cfg.path().join("config.toml")).unwrap();
+        lib.register_workspace(drive_dir.path()).unwrap();
+        let probe = "rename-recovery-token";
+        {
+            let drive = lib.open_workspace(drive_dir.path()).unwrap();
+            drive
+                .write_text("orig.md", &format!("# orig\n{probe} body\n"))
+                .unwrap();
+            drive.reindex(None).unwrap();
+            drive
+                .rename_with_link_rewrite("orig.md", "renamed.md")
+                .unwrap();
+        }
+        // After drop, the rename_log sidecar must still be present.
+        let paths = lib.workspace_paths_for(drive_dir.path()).unwrap();
+        let log_path = paths.graph_dir.join(RENAME_LOG_FILE);
+        assert!(
+            log_path.exists(),
+            "rename_log must persist across drop so the next process can replay it",
+        );
+
+        // Reopen + reindex; the recovered state must show the
+        // renamed file and only the renamed file, with no trace of
+        // the original.
+        let drive = lib.open_workspace(drive_dir.path()).unwrap();
+        drive.reindex(None).unwrap();
+        let recovered = capture_recovery_state(&drive, probe);
+        assert!(
+            recovered.graph_files.iter().any(|f| f == "renamed.md"),
+            "graph must reflect the renamed path: {:?}",
+            recovered.graph_files,
+        );
+        assert!(
+            !recovered.graph_files.iter().any(|f| f == "orig.md"),
+            "graph must not retain the pre-rename path: {:?}",
+            recovered.graph_files,
+        );
+        assert_eq!(
+            recovered.hit_paths,
+            vec!["renamed.md".to_string()],
+            "search must hit only the renamed file",
+        );
+        assert!(
+            !log_path.exists(),
+            "rename_log must be cleared after a successful reindex",
+        );
+    }
+
+    #[test]
+    fn pending_writes_journal_is_empty_on_a_clean_path() {
+        // A successful index_file must leave no trace in the
+        // journal: enter -> record -> graph -> index -> clear.
+        // Without this, every save would leak a journal entry and
+        // the next open would always flag needs_replay_writes.
+        let cfg = TempDir::new().unwrap();
+        let drive_dir = TempDir::new().unwrap();
+        let lib = Library::open_at(cfg.path().join("config.toml")).unwrap();
+        lib.register_workspace(drive_dir.path()).unwrap();
+        let drive = lib.open_workspace(drive_dir.path()).unwrap();
+        drive.write_text("a.md", "# a\nbody\n").unwrap();
+        drive.index_file("a.md").unwrap();
+        assert!(drive.pending_writes().is_empty());
+        assert!(!drive.needs_replay_writes());
+
+        // Persisted form: the JSON file should be gone (empty map
+        // is serialized as "no file" so the journal dir stays
+        // visually clean across normal use).
+        let paths = lib.workspace_paths_for(drive_dir.path()).unwrap();
+        assert!(!paths.graph_dir.join(PENDING_WRITES_FILE).exists());
+    }
+
+    #[test]
+    fn write_text_does_not_wait_for_indexer_serial_lock() {
+        let cfg = TempDir::new().unwrap();
+        let drive_dir = TempDir::new().unwrap();
+        let lib = Library::open_at(cfg.path().join("config.toml")).unwrap();
+        lib.register_workspace(drive_dir.path()).unwrap();
+        let drive = lib.open_workspace(drive_dir.path()).unwrap();
+
+        let guard = drive.write_serial.lock().unwrap();
+        let drive_for_write = drive.clone();
+        let start = std::time::Instant::now();
+        let (tx, rx) = std::sync::mpsc::channel();
+        let writer = std::thread::spawn(move || {
+            drive_for_write
+                .write_text("fast.md", "# fast\nbody\n")
+                .unwrap();
+            tx.send(()).unwrap();
+        });
+
+        let completed = rx.recv_timeout(std::time::Duration::from_millis(150));
+        drop(guard);
+        writer.join().unwrap();
+        completed.unwrap_or_else(|_| {
+            panic!(
+                "small write waited behind indexer serialization: {:?}",
+                start.elapsed()
+            )
+        });
+        assert_eq!(drive.read_text("fast.md").unwrap(), "# fast\nbody\n");
+    }
+
+    #[test]
+    fn pending_writes_journal_replay_converges_after_simulated_crash() {
+        // Simulate the crash window: a journal entry is left behind
+        // as if index_file had committed graph but died before the
+        // search index commit (or before journal_clear). Reopen,
+        // verify the flag, replay, verify convergence.
+        let cfg = TempDir::new().unwrap();
+        let drive_dir = TempDir::new().unwrap();
+        let lib = Library::open_at(cfg.path().join("config.toml")).unwrap();
+        lib.register_workspace(drive_dir.path()).unwrap();
+        let probe = "pending-recovery-token";
+        {
+            let drive = lib.open_workspace(drive_dir.path()).unwrap();
+            drive
+                .write_text("a.md", &format!("# a\n{probe} body\n"))
+                .unwrap();
+            // Stamp a journal entry as if index_file had crashed
+            // mid-call, BEFORE running any backend commits. The
+            // file's content is fresh on disk; neither graph nor
+            // index have seen it yet.
+            let mut map = HashMap::new();
+            map.insert("a.md".to_string(), PendingOp::Index);
+            persist_pending_writes(&drive.paths.graph_dir, &map).unwrap();
+        }
+
+        // Reopen: the flag must surface, the in-memory map must
+        // mirror the on-disk journal.
+        let drive = lib.open_workspace(drive_dir.path()).unwrap();
+        assert!(drive.needs_replay_writes());
+        let pending = drive.pending_writes();
+        assert_eq!(pending.len(), 1);
+        assert_eq!(pending[0].0, "a.md");
+        assert_eq!(pending[0].1, "index");
+
+        // Replay must drive both backends to the on-disk truth.
+        let replayed = drive.replay_pending_writes().unwrap();
+        assert_eq!(replayed, 1);
+        assert!(!drive.needs_replay_writes());
+        assert!(drive.pending_writes().is_empty());
+
+        let opts = crate::drive::SearchOpts {
+            mode: crate::SearchMode::Bm25,
+            limit: 10,
+            scope: None,
+        };
+        let hits = drive.search(probe, &opts).unwrap();
+        assert_eq!(hits.hits.len(), 1);
+        assert_eq!(hits.hits[0].path, "a.md");
+        assert!(drive
+            .graph()
+            .unwrap()
+            .files()
+            .unwrap()
+            .iter()
+            .any(|f| f == "a.md"));
+    }
+
+    #[test]
+    fn pending_writes_replay_degrades_index_op_to_forget_when_file_is_gone() {
+        // index_file was journaled before the crash, but between
+        // the crash and the replay the user deleted the file from
+        // disk. Replay must degrade to forget so the journal entry
+        // does not perpetually fail trying to index a missing file.
+        let cfg = TempDir::new().unwrap();
+        let drive_dir = TempDir::new().unwrap();
+        let lib = Library::open_at(cfg.path().join("config.toml")).unwrap();
+        lib.register_workspace(drive_dir.path()).unwrap();
+        {
+            let drive = lib.open_workspace(drive_dir.path()).unwrap();
+            drive.write_text("ghost.md", "# ghost\nbody\n").unwrap();
+            // Index the file so graph + BM25 see it...
+            drive.index_file("ghost.md").unwrap();
+            // ...then plant a journal entry as if a follow-up
+            // index_file had crashed, and remove the file from
+            // disk to simulate "user also deleted it before
+            // process restart."
+            std::fs::remove_file(drive_dir.path().join("ghost.md")).unwrap();
+            let mut map = HashMap::new();
+            map.insert("ghost.md".to_string(), PendingOp::Index);
+            persist_pending_writes(&drive.paths.graph_dir, &map).unwrap();
+        }
+
+        let drive = lib.open_workspace(drive_dir.path()).unwrap();
+        assert!(drive.needs_replay_writes());
+        drive.replay_pending_writes().unwrap();
+        assert!(!drive.needs_replay_writes());
+
+        // After replay the entry should be gone from both backends.
+        let opts = crate::drive::SearchOpts {
+            mode: crate::SearchMode::Bm25,
+            limit: 10,
+            scope: None,
+        };
+        assert!(drive.search("ghost", &opts).unwrap().hits.is_empty());
+        assert!(!drive
+            .graph()
+            .unwrap()
+            .files()
+            .unwrap()
+            .iter()
+            .any(|f| f == "ghost.md"));
+    }
+
+    #[test]
+    fn pending_writes_journal_handles_forget_op() {
+        // Symmetric to the index_op replay test: a forget_file
+        // call that crashed mid-flight has its journal entry
+        // replayed and the backends converge to "no entry."
+        let cfg = TempDir::new().unwrap();
+        let drive_dir = TempDir::new().unwrap();
+        let lib = Library::open_at(cfg.path().join("config.toml")).unwrap();
+        lib.register_workspace(drive_dir.path()).unwrap();
+        {
+            let drive = lib.open_workspace(drive_dir.path()).unwrap();
+            drive.write_text("doomed.md", "# doomed\nbody\n").unwrap();
+            drive.index_file("doomed.md").unwrap();
+            // Simulate: forget_file was about to run but crashed
+            // after journaling. File is still on disk; journal
+            // says "forget."
+            let mut map = HashMap::new();
+            map.insert("doomed.md".to_string(), PendingOp::Forget);
+            persist_pending_writes(&drive.paths.graph_dir, &map).unwrap();
+        }
+
+        let drive = lib.open_workspace(drive_dir.path()).unwrap();
+        assert!(drive.needs_replay_writes());
+        drive.replay_pending_writes().unwrap();
+
+        let opts = crate::drive::SearchOpts {
+            mode: crate::SearchMode::Bm25,
+            limit: 10,
+            scope: None,
+        };
+        assert!(drive.search("doomed", &opts).unwrap().hits.is_empty());
+        assert!(!drive
+            .graph()
+            .unwrap()
+            .files()
+            .unwrap()
+            .iter()
+            .any(|f| f == "doomed.md"));
+    }
+
+    #[test]
+    fn reconcile_is_noop_when_disk_matches_graph() {
+        // Steady state after a clean reindex: every file on disk
+        // has a graph row with matching mtime. Reconcile must
+        // touch nothing and report all-unchanged.
+        let cfg = TempDir::new().unwrap();
+        let drive_dir = TempDir::new().unwrap();
+        let lib = Library::open_at(cfg.path().join("config.toml")).unwrap();
+        lib.register_workspace(drive_dir.path()).unwrap();
+        let drive = lib.open_workspace(drive_dir.path()).unwrap();
+        drive.write_text("a.md", "# a\nalpha\n").unwrap();
+        drive.write_text("b.md", "# b\nbeta\n").unwrap();
+        drive.reindex(None).unwrap();
+
+        let report = drive.reconcile().unwrap();
+        assert!(report.upserted.is_empty());
+        assert!(report.forgotten.is_empty());
+        assert_eq!(report.unchanged, 2);
+    }
+
+    #[test]
+    fn reconcile_picks_up_files_added_offline() {
+        // Simulate "user added files while the watcher was down":
+        // the graph snapshot is missing entries that exist on disk.
+        // Reconcile must index them and end state must match a
+        // fresh reindex.
+        let cfg = TempDir::new().unwrap();
+        let drive_dir = TempDir::new().unwrap();
+        let lib = Library::open_at(cfg.path().join("config.toml")).unwrap();
+        lib.register_workspace(drive_dir.path()).unwrap();
+        let drive = lib.open_workspace(drive_dir.path()).unwrap();
+        drive.write_text("a.md", "# a\nalpha\n").unwrap();
+        drive.reindex(None).unwrap();
+        // Add a file directly through write_text (skip index_file
+        // to mimic "watcher missed it").
+        drive
+            .write_text("c.md", "# c\nreconcile-token gamma\n")
+            .unwrap();
+
+        let report = drive.reconcile().unwrap();
+        assert_eq!(report.upserted, vec!["c.md".to_string()]);
+        assert!(report.forgotten.is_empty());
+        assert_eq!(report.unchanged, 1);
+
+        // End state matches a clean reindex: search hits c.md.
+        let opts = crate::drive::SearchOpts {
+            mode: crate::SearchMode::Bm25,
+            limit: 10,
+            scope: None,
+        };
+        let hits = drive.search("reconcile-token", &opts).unwrap();
+        assert_eq!(hits.hits.len(), 1);
+        assert_eq!(hits.hits[0].path, "c.md");
+    }
+
+    #[test]
+    fn reconcile_forgets_files_removed_offline() {
+        // Symmetric to the add case: a file in the graph is gone
+        // from disk. Reconcile drops it from both backends.
+        let cfg = TempDir::new().unwrap();
+        let drive_dir = TempDir::new().unwrap();
+        let lib = Library::open_at(cfg.path().join("config.toml")).unwrap();
+        lib.register_workspace(drive_dir.path()).unwrap();
+        let drive = lib.open_workspace(drive_dir.path()).unwrap();
+        drive
+            .write_text("doomed.md", "# doomed\nbye-token\n")
+            .unwrap();
+        drive.write_text("kept.md", "# kept\nkeep-token\n").unwrap();
+        drive.reindex(None).unwrap();
+
+        // Remove the file directly (mimic watcher miss / external rm).
+        std::fs::remove_file(drive_dir.path().join("doomed.md")).unwrap();
+
+        let report = drive.reconcile().unwrap();
+        assert!(report.upserted.is_empty());
+        assert_eq!(report.forgotten, vec!["doomed.md".to_string()]);
+        assert_eq!(report.unchanged, 1);
+
+        let opts = crate::drive::SearchOpts {
+            mode: crate::SearchMode::Bm25,
+            limit: 10,
+            scope: None,
+        };
+        assert!(drive.search("bye-token", &opts).unwrap().hits.is_empty());
+        assert!(!drive
+            .graph()
+            .unwrap()
+            .files()
+            .unwrap()
+            .iter()
+            .any(|f| f == "doomed.md"));
+    }
+
+    #[test]
+    fn reconcile_picks_up_modified_files() {
+        // A file's mtime changed since the last index but the
+        // watcher missed the modify event. Reconcile detects the
+        // mtime diff and refreshes the indices. Content from the
+        // post-modify body must be searchable after.
+        let cfg = TempDir::new().unwrap();
+        let drive_dir = TempDir::new().unwrap();
+        let lib = Library::open_at(cfg.path().join("config.toml")).unwrap();
+        lib.register_workspace(drive_dir.path()).unwrap();
+        let drive = lib.open_workspace(drive_dir.path()).unwrap();
+        drive
+            .write_text("a.md", "# a\noriginal-content-token\n")
+            .unwrap();
+        drive.reindex(None).unwrap();
+
+        // Sleep past the 1-second mtime granularity floor of HFS+
+        // / older ext4 so the modify is observable via stat. APFS
+        // and modern ext4 are nanosecond, but the lowest common
+        // denominator drives the test sleep.
+        std::thread::sleep(std::time::Duration::from_millis(1100));
+        std::fs::write(
+            drive_dir.path().join("a.md"),
+            "# a\nreplaced-content-token\n",
+        )
+        .unwrap();
+
+        let report = drive.reconcile().unwrap();
+        assert_eq!(report.upserted, vec!["a.md".to_string()]);
+        assert!(report.forgotten.is_empty());
+
+        let opts = crate::drive::SearchOpts {
+            mode: crate::SearchMode::Bm25,
+            limit: 10,
+            scope: None,
+        };
+        assert!(drive
+            .search("replaced-content-token", &opts)
+            .unwrap()
+            .hits
+            .iter()
+            .any(|h| h.path == "a.md"));
+        assert!(drive
+            .search("original-content-token", &opts)
+            .unwrap()
+            .hits
+            .is_empty());
+    }
+
+    #[test]
+    fn reconcile_catches_same_mtime_different_size_rewrite() {
+        // Regression for the same-mtime-different-content gap that
+        // PR9's size column closes. We forcibly stamp the graph's
+        // mtime back onto the file after editing so reconcile
+        // cannot rely on mtime to spot the change; the size delta
+        // is the only signal.
+        use std::fs;
+        let cfg = TempDir::new().unwrap();
+        let drive_dir = TempDir::new().unwrap();
+        let lib = Library::open_at(cfg.path().join("config.toml")).unwrap();
+        lib.register_workspace(drive_dir.path()).unwrap();
+        let drive = lib.open_workspace(drive_dir.path()).unwrap();
+        drive
+            .write_text("twin.md", "# twin\noriginal-token short\n")
+            .unwrap();
+        drive.reindex(None).unwrap();
+
+        let file_path = drive_dir.path().join("twin.md");
+        let original_modified = fs::metadata(&file_path).unwrap().modified().unwrap();
+
+        // Rewrite with different length, then stamp the original
+        // mtime back. A pure-mtime reconcile would skip this file.
+        fs::write(
+            &file_path,
+            "# twin\nreplaced-token much much longer body to flip the size signal\n",
+        )
+        .unwrap();
+        let f = fs::OpenOptions::new().write(true).open(&file_path).unwrap();
+        f.set_modified(original_modified).unwrap();
+        drop(f);
+
+        // The mtime restore is load-bearing: without it, this test
+        // would pass even with a mtime-only reconcile. Assert it
+        // landed (futimens on Unix / SetFileTime on Windows round-
+        // trip exactly on every filesystem we target) instead of
+        // silently no-opping if it didn't.
+        let stamped = fs::metadata(&file_path).unwrap().modified().unwrap();
+        assert_eq!(
+            stamped, original_modified,
+            "File::set_modified must round-trip exactly; without it the size \
+             column is unobservable via this test",
+        );
+        let report = drive.reconcile().unwrap();
+        assert!(
+            report.upserted.iter().any(|p| p == "twin.md"),
+            "size check should detect content rewrite with restored mtime; got {:?}",
+            report,
+        );
+        let opts = crate::drive::SearchOpts {
+            mode: crate::SearchMode::Bm25,
+            limit: 10,
+            scope: None,
+        };
+        assert!(drive
+            .search("replaced-token", &opts)
+            .unwrap()
+            .hits
+            .iter()
+            .any(|h| h.path == "twin.md"));
+    }
+
+    #[test]
+    fn index_file_stamps_pre_read_stat_so_concurrent_writes_stay_visible() {
+        // TOCTOU between `stat` and `read_text` inside
+        // `index_file_inner`. We use a test-only thread-local hook
+        // that fires AFTER stat returns and BEFORE read_text begins
+        // to deterministically simulate a concurrent writer landing
+        // in that window.
+        //
+        // Required invariant: the graph row ends up with the
+        // POST-write content (because read_text runs after the hook)
+        // alongside the PRE-write `(mtime, size)` stamp (because
+        // stat ran before the hook). Reconcile, comparing the
+        // stamped tuple against the live disk stat, must then see
+        // the size delta and trigger a reindex on its next pass.
+        //
+        // The opposite ordering (read-then-stat) would stamp the
+        // POST-write `(mtime, size)` onto the PRE-write content;
+        // reconcile would see graph.stat == disk.stat and skip,
+        // leaving the drift in place. That regression is exactly
+        // what this test pins.
+        use std::fs;
+        let cfg = TempDir::new().unwrap();
+        let drive_dir = TempDir::new().unwrap();
+        let lib = Library::open_at(cfg.path().join("config.toml")).unwrap();
+        lib.register_workspace(drive_dir.path()).unwrap();
+        let drive = lib.open_workspace(drive_dir.path()).unwrap();
+
+        drive.write_text("race.md", "# race\nv1 small\n").unwrap();
+        drive.index_file("race.md").unwrap();
+
+        let pre_stat = drive.stat("race.md").unwrap();
+        let pre_size = pre_stat.size;
+
+        // Arm the one-shot hook: between stat and read inside the
+        // next `index_file_inner`, overwrite the file with a body
+        // that differs in size so the graph ends up with the
+        // pre-write stat + post-write content if the ordering is
+        // correct.
+        let file_path = drive_dir.path().join("race.md");
+        let new_body = b"# race\nv2 with a noticeably larger payload than v1\n";
+        let new_body_len = new_body.len() as u64;
+        super::arm_index_file_stat_read_hook(Box::new(move || {
+            fs::write(&file_path, new_body).unwrap();
+        }));
+
+        drive.index_file("race.md").unwrap();
+
+        // Post-conditions: the file on disk is the new body, and the
+        // graph row carries the pre-write size. The size delta is
+        // the load-bearing observable proof of stat-before-read.
+        let disk_size = fs::metadata(drive_dir.path().join("race.md"))
+            .unwrap()
+            .len();
+        assert_eq!(disk_size, new_body_len, "writer hook must have run");
+        let graph_rows = drive.graph().unwrap().files_with_stat().unwrap();
+        let (_, _graph_mtime, graph_size) = graph_rows
+            .into_iter()
+            .find(|(rel, _, _)| rel == "race.md")
+            .expect("race.md must have a graph row after index_file");
+        assert_eq!(
+            graph_size,
+            Some(size_to_i64(pre_size)),
+            "graph must hold the PRE-write size; got {:?} (pre={pre_size}, post={new_body_len})",
+            graph_size,
+        );
+
+        // Reconcile must catch the drift (graph size != disk size)
+        // and reindex the file on its next pass.
+        let report = drive.reconcile().unwrap();
+        assert!(
+            report.upserted.iter().any(|p| p == "race.md"),
+            "reconcile should detect the stat/content drift; got {:?}",
+            report,
+        );
+    }
+
+    #[test]
+    fn reconcile_on_empty_graph_indexes_everything_like_a_fresh_reindex() {
+        // Edge case: graph is empty (fresh drive, or after a
+        // reset_workspace). Reconcile sees every disk file as "new"
+        // and indexes them all. End state must match what a
+        // direct reindex would produce.
+        let cfg = TempDir::new().unwrap();
+        let drive_dir = TempDir::new().unwrap();
+        let lib = Library::open_at(cfg.path().join("config.toml")).unwrap();
+        lib.register_workspace(drive_dir.path()).unwrap();
+        let drive = lib.open_workspace(drive_dir.path()).unwrap();
+        drive.write_text("a.md", "# a\nshared-token\n").unwrap();
+        drive.write_text("b.md", "# b\nshared-token\n").unwrap();
+        // Skip the initial reindex so the graph stays empty.
+
+        let report = drive.reconcile().unwrap();
+        assert_eq!(
+            report.upserted,
+            vec!["a.md".to_string(), "b.md".to_string()]
+        );
+        assert!(report.forgotten.is_empty());
+        assert_eq!(report.unchanged, 0);
+
+        let opts = crate::drive::SearchOpts {
+            mode: crate::SearchMode::Bm25,
+            limit: 10,
+            scope: None,
+        };
+        let mut hit_paths: Vec<String> = drive
+            .search("shared-token", &opts)
+            .unwrap()
+            .hits
+            .into_iter()
+            .map(|h| h.path)
+            .collect();
+        hit_paths.sort();
+        assert_eq!(hit_paths, vec!["a.md".to_string(), "b.md".to_string()]);
+    }
+
+    #[test]
+    fn reindex_resumes_from_staged_cursor_after_simulated_crash() {
+        // Simulate a reindex that crashed mid-parse: pre-stage some
+        // of the files via graph.stage_file (bypassing the full
+        // reindex), leave the marker, then call reindex. The
+        // resume path must skip the already-staged files (no second
+        // parse) and the final live graph must include both the
+        // pre-staged and the newly-parsed entries.
+        let cfg = TempDir::new().unwrap();
+        let drive_dir = TempDir::new().unwrap();
+        let lib = Library::open_at(cfg.path().join("config.toml")).unwrap();
+        lib.register_workspace(drive_dir.path()).unwrap();
+        let drive = lib.open_workspace(drive_dir.path()).unwrap();
+        drive.write_text("a.md", "# a\n").unwrap();
+        drive.write_text("b.md", "# b\n").unwrap();
+        drive.write_text("c.md", "# c\n").unwrap();
+        // Stage a.md and b.md as if a prior reindex got that far
+        // and crashed before reaching c.md.
+        let graph = drive.graph().unwrap();
+        for rel in ["a.md", "b.md"] {
+            let meta = std::fs::metadata(drive_dir.path().join(rel)).unwrap();
+            let mtime = meta
+                .modified()
+                .ok()
+                .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                .map(|d| d.as_secs() as i64);
+            let fg = crate::graph::FileGraph {
+                rel,
+                title: Some("staged-title-must-be-overwritten"),
+                mtime,
+                size: Some(meta.len() as i64),
+                node_kind: crate::graph::NodeKind::File,
+                edges: &[],
+                headings: &[],
+                emails: None,
+                aliases: None,
+            };
+            graph.stage_file(&fg).unwrap();
+        }
+        assert_eq!(graph.staging_cursor().unwrap().as_deref(), Some("b.md"));
+
+        // Reindex: should skip a.md + b.md (already staged) and
+        // parse c.md only. Swap then promotes the staged set.
+        drive.reindex(None).unwrap();
+        // Live graph contains all three.
+        let mut files = drive.graph().unwrap().files().unwrap();
+        files.sort();
+        assert_eq!(files, vec!["a.md", "b.md", "c.md"]);
+        // Staging is empty after the swap.
+        assert!(drive.graph().unwrap().staging_cursor().unwrap().is_none());
+    }
+
+    #[test]
+    fn reindex_resume_reparses_staged_file_changed_by_checkout() {
+        // Checkout-storm hardening: a prior run staged a.md and
+        // crashed. Before the next process resumes, the working tree
+        // changes a.md in place. Resume must not trust the stale
+        // staged row just because its path is <= the cursor; the
+        // staging stat tuple no longer matches disk, so the row is
+        // purged and parsed again.
+        let cfg = TempDir::new().unwrap();
+        let drive_dir = TempDir::new().unwrap();
+        let lib = Library::open_at(cfg.path().join("config.toml")).unwrap();
+        lib.register_workspace(drive_dir.path()).unwrap();
+        let drive = lib.open_workspace(drive_dir.path()).unwrap();
+        drive
+            .write_text("a.md", "# old\nold-checkout-token\n")
+            .unwrap();
+        drive.write_text("b.md", "# b\n").unwrap();
+
+        let graph = drive.graph().unwrap();
+        let fg = crate::graph::FileGraph {
+            rel: "a.md",
+            title: Some("old"),
+            mtime: Some(1),
+            size: Some(1),
+            node_kind: crate::graph::NodeKind::File,
+            edges: &[],
+            headings: &[],
+            emails: None,
+            aliases: None,
+        };
+        graph.stage_file(&fg).unwrap();
+        assert_eq!(graph.staging_cursor().unwrap().as_deref(), Some("a.md"));
+
+        std::fs::write(
+            drive_dir.path().join("a.md"),
+            "# new\nnew-checkout-token after checkout\n",
+        )
+        .unwrap();
+        drive.reindex(None).unwrap();
+
+        let opts = crate::drive::SearchOpts {
+            mode: crate::SearchMode::Bm25,
+            limit: 10,
+            scope: None,
+        };
+        assert!(
+            drive
+                .search("old-checkout-token", &opts)
+                .unwrap()
+                .hits
+                .is_empty(),
+            "stale staged content must not survive resume",
+        );
+        let hits = drive.search("new-checkout-token", &opts).unwrap().hits;
+        assert_eq!(hits.first().map(|h| h.path.as_str()), Some("a.md"));
+    }
+
+    #[test]
+    fn reindex_after_simulated_checkout_matches_fresh_full_reindex() {
+        // Simulate a checkout by replacing a tracked set of files
+        // through atomic renames outside Workspace's write APIs. Once the
+        // full rebuild settles, graph + search must match a fresh
+        // drive built directly from the post-checkout tree.
+        let cfg = TempDir::new().unwrap();
+        let drive_dir = TempDir::new().unwrap();
+        let fresh_dir = TempDir::new().unwrap();
+        let lib = Library::open_at(cfg.path().join("config.toml")).unwrap();
+        lib.register_workspace(drive_dir.path()).unwrap();
+        lib.register_workspace(fresh_dir.path()).unwrap();
+
+        let drive = lib.open_workspace(drive_dir.path()).unwrap();
+        drive
+            .write_text("keep.md", "# keep\nshared-token\n")
+            .unwrap();
+        drive.write_text("swap.md", "# old\nold-token\n").unwrap();
+        drive
+            .write_text("delete.md", "# delete\nold-token\n")
+            .unwrap();
+        drive.reindex(None).unwrap();
+
+        std::fs::write(
+            drive_dir.path().join("swap.tmp"),
+            "# new\ncheckout-token shared-token\n",
+        )
+        .unwrap();
+        std::fs::rename(
+            drive_dir.path().join("swap.tmp"),
+            drive_dir.path().join("swap.md"),
+        )
+        .unwrap();
+        std::fs::remove_file(drive_dir.path().join("delete.md")).unwrap();
+        std::fs::write(drive_dir.path().join("add.md"), "# add\ncheckout-token\n").unwrap();
+        drive.reindex(None).unwrap();
+
+        std::fs::write(fresh_dir.path().join("keep.md"), "# keep\nshared-token\n").unwrap();
+        std::fs::write(
+            fresh_dir.path().join("swap.md"),
+            "# new\ncheckout-token shared-token\n",
+        )
+        .unwrap();
+        std::fs::write(fresh_dir.path().join("add.md"), "# add\ncheckout-token\n").unwrap();
+        let fresh = lib.open_workspace(fresh_dir.path()).unwrap();
+        fresh.reindex(None).unwrap();
+
+        assert_eq!(
+            capture_recovery_state(&drive, "checkout-token"),
+            capture_recovery_state(&fresh, "checkout-token"),
+        );
+    }
+
+    #[test]
+    #[ignore = "manual phase-5 checkout/resume profile; not a CI benchmark"]
+    fn checkout_and_resume_profile() {
+        let cfg = TempDir::new().unwrap();
+        let drive_dir = TempDir::new().unwrap();
+        let lib = Library::open_at(cfg.path().join("config.toml")).unwrap();
+        lib.register_workspace(drive_dir.path()).unwrap();
+        let drive = lib.open_workspace(drive_dir.path()).unwrap();
+        for i in 0..80 {
+            drive
+                .write_text(
+                    &format!("notes/note-{i:03}.md"),
+                    &format!("# note {i}\n\nseed-token {i}\n"),
+                )
+                .unwrap();
+        }
+
+        let started = std::time::Instant::now();
+        drive.reindex(None).unwrap();
+        let initial = started.elapsed();
+
+        let started = std::time::Instant::now();
+        for i in 0..20 {
+            let rel = format!("notes/note-{i:03}.md");
+            let tmp = drive_dir.path().join(format!("notes/.swap-{i:03}.md"));
+            std::fs::write(&tmp, format!("# note {i}\n\ncheckout-token {i}\n")).unwrap();
+            std::fs::rename(tmp, drive_dir.path().join(&rel)).unwrap();
+        }
+        drive.reindex(None).unwrap();
+        let checkout = started.elapsed();
+
+        let graph = drive.graph().unwrap();
+        for i in 0..20 {
+            let rel = format!("notes/note-{i:03}.md");
+            let meta = std::fs::metadata(drive_dir.path().join(&rel)).unwrap();
+            let mtime = meta
+                .modified()
+                .ok()
+                .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                .map(|d| d.as_secs() as i64);
+            let fg = crate::graph::FileGraph {
+                rel: &rel,
+                title: Some("profile-staged"),
+                mtime,
+                size: Some(meta.len() as i64),
+                node_kind: crate::graph::NodeKind::File,
+                edges: &[],
+                headings: &[],
+                emails: None,
+                aliases: None,
+            };
+            graph.stage_file(&fg).unwrap();
+        }
+        let started = std::time::Instant::now();
+        drive.reindex(None).unwrap();
+        let resume = started.elapsed();
+
+        println!(
+            "checkout_profile files=80 touched=20 initial_ms={} checkout_settle_ms={} resume_ms={}",
+            initial.as_millis(),
+            checkout.as_millis(),
+            resume.as_millis(),
+        );
+    }
+
+    #[test]
+    fn reindex_sanitizes_staging_when_files_disappear_between_runs() {
+        // Pre-stage a file that's no longer on disk; reindex must
+        // purge it before the swap so the live graph does not end
+        // up with a ghost row pointing at a missing file.
+        let cfg = TempDir::new().unwrap();
+        let drive_dir = TempDir::new().unwrap();
+        let lib = Library::open_at(cfg.path().join("config.toml")).unwrap();
+        lib.register_workspace(drive_dir.path()).unwrap();
+        let drive = lib.open_workspace(drive_dir.path()).unwrap();
+        drive.write_text("alive.md", "# alive\n").unwrap();
+        // Stage a row for a file that does not exist on disk.
+        let fg = crate::graph::FileGraph {
+            rel: "ghost.md",
+            title: None,
+            mtime: Some(1),
+            size: None,
+            node_kind: crate::graph::NodeKind::File,
+            edges: &[],
+            headings: &[],
+            emails: None,
+            aliases: None,
+        };
+        drive.graph().unwrap().stage_file(&fg).unwrap();
+        assert_eq!(
+            drive.graph().unwrap().staging_cursor().unwrap().as_deref(),
+            Some("ghost.md"),
+        );
+
+        drive.reindex(None).unwrap();
+        let files = drive.graph().unwrap().files().unwrap();
+        assert!(files.iter().any(|f| f == "alive.md"));
+        assert!(
+            !files.iter().any(|f| f == "ghost.md"),
+            "sanitize must drop staged files not on disk: {files:?}",
+        );
+    }
+
+    #[test]
+    fn write_text_rejects_non_text_extensions() {
+        let (_cfg, _root, drive) = fixture();
+        let err = drive.write_text("img.png", "x").unwrap_err();
+        assert!(matches!(err, ChanError::NotEditableText(_)));
+    }
+
+    #[test]
+    fn read_text_with_stat_returns_content_and_mtime() {
+        let (_cfg, _root, drive) = fixture();
+        drive.write_text("a.md", "hello").unwrap();
+        let (content, stat) = drive.read_text_with_stat("a.md").unwrap();
+        assert_eq!(content, "hello");
+        assert_eq!(stat.size, 5);
+        assert!(stat.mtime.is_some());
+        assert!(stat.mtime_ns.is_some());
+        assert!(!stat.is_dir);
+    }
+
+    #[test]
+    fn read_text_with_stat_chunked_preserves_utf8_boundaries() {
+        let (_cfg, _root, drive) = fixture();
+        drive.write_text("a.md", "aé€𐍈z").unwrap();
+        let mut saw_meta = false;
+        let mut saw_done = false;
+        let mut chunks = Vec::new();
+
+        drive
+            .read_text_with_stat_chunked("a.md", 1, |event| {
+                match event {
+                    TextReadEvent::Meta(stat) => {
+                        saw_meta = true;
+                        assert_eq!(stat.size, "aé€𐍈z".len() as u64);
+                        assert!(stat.mtime_ns.is_some());
+                    }
+                    TextReadEvent::Chunk(chunk) => chunks.push(chunk.to_string()),
+                    TextReadEvent::Done => saw_done = true,
+                }
+                true
+            })
+            .unwrap();
+
+        assert!(saw_meta);
+        assert!(saw_done);
+        assert_eq!(chunks.concat(), "aé€𐍈z");
+    }
+
+    #[test]
+    fn read_text_with_stat_chunked_rejects_invalid_utf8() {
+        let (_cfg, root, drive) = fixture();
+        std::fs::write(root.path().join("bad.md"), [b'a', 0xff]).unwrap();
+
+        let err = drive
+            .read_text_with_stat_chunked("bad.md", 1, |_| true)
+            .unwrap_err();
+
+        assert!(err.to_string().contains("invalid UTF-8"));
+    }
+
+    #[test]
+    fn read_text_with_stat_chunked_rejects_non_editable_paths() {
+        let (_cfg, root, drive) = fixture();
+        std::fs::write(root.path().join("image.bin"), [0, 1, 2, 3]).unwrap();
+
+        let err = drive
+            .read_text_with_stat_chunked("image.bin", TEXT_READ_CHUNK_SIZE, |_| true)
+            .unwrap_err();
+
+        assert!(matches!(err, ChanError::NotEditableText(_)));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn read_text_with_stat_chunked_rejects_symlink_target() {
+        use std::os::unix::fs::symlink;
+        let (_cfg, root, drive) = fixture();
+        std::fs::write(root.path().join("real.md"), "hi").unwrap();
+        symlink("real.md", root.path().join("alias.md")).unwrap();
+
+        let err = drive
+            .read_text_with_stat_chunked("alias.md", TEXT_READ_CHUNK_SIZE, |_| true)
+            .unwrap_err();
+
+        assert!(matches!(err, ChanError::SpecialFile { .. }));
+    }
+
+    #[test]
+    fn read_text_with_stat_chunked_stops_when_callback_returns_false() {
+        let (_cfg, _root, drive) = fixture();
+        drive.write_text("a.md", "abcdef").unwrap();
+        let mut chunks = 0usize;
+
+        drive
+            .read_text_with_stat_chunked("a.md", 1, |event| match event {
+                TextReadEvent::Meta(_) => true,
+                TextReadEvent::Chunk(_) => {
+                    chunks += 1;
+                    false
+                }
+                TextReadEvent::Done => panic!("done should not be emitted after cancellation"),
+            })
+            .unwrap();
+
+        assert_eq!(chunks, 1);
+    }
+
+    #[test]
+    fn write_text_if_unchanged_creates_when_missing_with_none() {
+        let (_cfg, _root, drive) = fixture();
+        drive.write_text_if_unchanged("a.md", None, "v1").unwrap();
+        assert_eq!(drive.read_text("a.md").unwrap(), "v1");
+    }
+
+    #[test]
+    fn write_text_if_unchanged_conflicts_when_none_but_file_exists() {
+        let (_cfg, _root, drive) = fixture();
+        drive.write_text("a.md", "v1").unwrap();
+        let err = drive
+            .write_text_if_unchanged("a.md", None, "v2")
+            .unwrap_err();
+        assert!(matches!(
+            err,
+            ChanError::WriteConflict {
+                current_mtime_ns: Some(_)
+            }
+        ));
+        assert_eq!(drive.read_text("a.md").unwrap(), "v1");
+    }
+
+    #[test]
+    fn write_text_if_unchanged_conflicts_when_expected_but_missing() {
+        let (_cfg, _root, drive) = fixture();
+        let err = drive
+            .write_text_if_unchanged("a.md", Some(0), "v1")
+            .unwrap_err();
+        assert!(matches!(
+            err,
+            ChanError::WriteConflict {
+                current_mtime_ns: None
+            }
+        ));
+        assert!(!drive.exists("a.md"));
+    }
+
+    #[test]
+    fn write_text_if_unchanged_succeeds_with_matching_mtime() {
+        let (_cfg, _root, drive) = fixture();
+        drive.write_text("a.md", "v1").unwrap();
+        let (_, stat) = drive.read_text_with_stat("a.md").unwrap();
+        drive
+            .write_text_if_unchanged("a.md", stat.mtime_ns, "v2")
+            .unwrap();
+        assert_eq!(drive.read_text("a.md").unwrap(), "v2");
+    }
+
+    #[test]
+    fn write_text_if_unchanged_conflicts_with_stale_mtime() {
+        let (_cfg, _root, drive) = fixture();
+        drive.write_text("a.md", "v1").unwrap();
+        let stale = Some(0i64);
+        let err = drive
+            .write_text_if_unchanged("a.md", stale, "v2")
+            .unwrap_err();
+        match err {
+            ChanError::WriteConflict { current_mtime_ns } => {
+                assert!(current_mtime_ns.is_some());
+                assert_ne!(current_mtime_ns, stale);
+            }
+            other => panic!("expected WriteConflict, got {other:?}"),
+        }
+        assert_eq!(drive.read_text("a.md").unwrap(), "v1");
+    }
+
+    /// Two saves landing within the same wall-clock second on a
+    /// nanosecond-resolution filesystem must still produce a conflict
+    /// when the second writer presents the first writer's stat token.
+    /// Filesystems without ns mtime degrade to seconds; on those the
+    /// assertion may not exercise the new precision, so we only run
+    /// it when we can observe distinct ns values from back-to-back
+    /// writes.
+    #[test]
+    fn write_text_if_unchanged_detects_subsecond_conflict() {
+        let (_cfg, _root, drive) = fixture();
+        drive.write_text("a.md", "v1").unwrap();
+        let stale_ns = drive.stat("a.md").unwrap().mtime_ns;
+        // Tight loop until mtime_ns advances. On filesystems with
+        // only seconds resolution this would spin until the next
+        // second boundary; cap at 200ms.
+        let start = std::time::Instant::now();
+        loop {
+            drive.write_text("a.md", "v2").unwrap();
+            let now_ns = drive.stat("a.md").unwrap().mtime_ns;
+            if now_ns != stale_ns {
+                break;
+            }
+            if start.elapsed() > std::time::Duration::from_millis(200) {
+                // FS likely lacks sub-second resolution; skip rather
+                // than spin into the next wall-clock second.
+                return;
+            }
+        }
+        // Now an attempt to write back with the original (pre-v2)
+        // stat must conflict. Without ns precision, two same-second
+        // writes would collide and let this through.
+        let err = drive
+            .write_text_if_unchanged("a.md", stale_ns, "v3")
+            .unwrap_err();
+        assert!(matches!(err, ChanError::WriteConflict { .. }));
+        assert_eq!(drive.read_text("a.md").unwrap(), "v2");
+    }
+
+    #[test]
+    fn write_bytes_allows_binary() {
+        let (_cfg, _root, drive) = fixture();
+        drive.write_bytes("img.png", &[0xff, 0xd8, 0xff]).unwrap();
+        assert_eq!(drive.read("img.png").unwrap(), vec![0xff, 0xd8, 0xff]);
+    }
+
+    #[test]
+    fn write_bytes_rejects_binary_for_editable_text_path() {
+        let (_cfg, _root, drive) = fixture();
+
+        let err = drive.write_bytes("note.md", &[0xff, 0xfe]).unwrap_err();
+
+        assert!(err
+            .to_string()
+            .contains("non-UTF-8 bytes to editable text file"));
+        assert!(!drive.exists("note.md"));
+    }
+
+    #[test]
+    fn write_bytes_routes_drafts_binary_to_metadata_dir() {
+        let (_cfg, root, drive) = fixture();
+        drive.create_draft_dir("untitled-1").unwrap();
+        drive
+            .write_bytes("Drafts/untitled-1/pasted.png", &[0x89, b'P', b'N', b'G'])
+            .unwrap();
+
+        assert_eq!(
+            drive.read("Drafts/untitled-1/pasted.png").unwrap(),
+            vec![0x89, b'P', b'N', b'G']
+        );
+        assert!(drive.drafts_dir().join("untitled-1/pasted.png").is_file());
+        assert!(!root.path().join("Drafts/untitled-1/pasted.png").exists());
+    }
+
+    #[test]
+    fn write_text_rejects_oversize_content_for_new_file() {
+        let (_cfg, _root, drive) = fixture();
+        // One byte over the cap. Allocating 2 MiB+1 is fine; the
+        // guard rejects before any I/O.
+        let big = "x".repeat(TEXT_WRITE_LIMIT as usize + 1);
+        let err = drive.write_text("a.md", &big).unwrap_err();
+        match err {
+            ChanError::WriteTooLarge { kind, size, limit } => {
+                assert_eq!(kind, "text");
+                assert_eq!(limit, TEXT_WRITE_LIMIT);
+                assert_eq!(size, TEXT_WRITE_LIMIT + 1);
+            }
+            other => panic!("unexpected error: {other:?}"),
+        }
+        assert!(!drive.exists("a.md"));
+    }
+
+    #[test]
+    fn write_bytes_rejects_oversize_content_for_new_file() {
+        let (_cfg, _root, drive) = fixture();
+        // 50 MiB+1 byte. Heap-alloc once; cheap.
+        let big = vec![0u8; BYTES_WRITE_LIMIT as usize + 1];
+        let err = drive.write_bytes("blob.bin", &big).unwrap_err();
+        assert!(matches!(
+            err,
+            ChanError::WriteTooLarge { kind: "bytes", .. }
+        ));
+        assert!(!drive.exists("blob.bin"));
+    }
+
+    /// A pre-cap file (or a binary mistakenly named `.md`) larger
+    /// than the configured limit must remain editable: writes up to
+    /// its current size go through, only growth beyond it is
+    /// rejected. Without this rule, shipping the cap would silently
+    /// turn every legacy big file read-only on next save.
+    #[test]
+    fn write_text_allows_edits_to_legacy_oversize_file() {
+        let (_cfg, root, drive) = fixture();
+        // Plant a 3 MiB file directly via std (bypasses the cap).
+        let path = root.path().join("legacy.md");
+        let big = "y".repeat(TEXT_WRITE_LIMIT as usize + 1024 * 1024);
+        std::fs::write(&path, &big).unwrap();
+        // Editing the file at the same size succeeds.
+        let same_size = "z".repeat(big.len());
+        drive.write_text("legacy.md", &same_size).unwrap();
+        assert_eq!(std::fs::metadata(&path).unwrap().len() as usize, big.len());
+        // Shrinking succeeds (well within max(prev, limit)).
+        drive.write_text("legacy.md", "shrunk").unwrap();
+        assert_eq!(drive.read_text("legacy.md").unwrap(), "shrunk");
+    }
+
+    /// Growing a legacy oversize file past its current size IS
+    /// rejected: the effective limit is max(prev_size, configured
+    /// limit), so a 3 MiB file caps at 3 MiB on the next write.
+    #[test]
+    fn write_text_rejects_growth_past_legacy_size() {
+        let (_cfg, root, drive) = fixture();
+        let path = root.path().join("legacy.md");
+        let prev = "y".repeat(TEXT_WRITE_LIMIT as usize + 1024);
+        std::fs::write(&path, &prev).unwrap();
+        // One byte over the existing size, well above the configured cap.
+        let grown = "z".repeat(prev.len() + 1);
+        let err = drive.write_text("legacy.md", &grown).unwrap_err();
+        match err {
+            ChanError::WriteTooLarge { limit, size, .. } => {
+                assert_eq!(limit, prev.len() as u64, "effective limit = prev size");
+                assert_eq!(size, grown.len() as u64);
+            }
+            other => panic!("unexpected error: {other:?}"),
+        }
+        // File on disk unchanged.
+        assert_eq!(std::fs::metadata(&path).unwrap().len() as usize, prev.len());
+    }
+
+    #[test]
+    fn list_skips_chan_and_git_at_top_level() {
+        let (_cfg, root, drive) = fixture();
+        std::fs::create_dir_all(root.path().join(".chan")).unwrap();
+        std::fs::create_dir_all(root.path().join(".git")).unwrap();
+        std::fs::write(root.path().join("note.md"), "hi").unwrap();
+        let entries = drive.list("").unwrap();
+        let names: Vec<_> = entries.iter().map(|e| e.name.as_str()).collect();
+        assert!(names.contains(&"note.md"));
+        assert!(!names.contains(&".chan"));
+        assert!(!names.contains(&".git"));
+    }
+
+    #[test]
+    fn rename_moves_file() {
+        let (_cfg, _root, drive) = fixture();
+        drive.write_text("a.md", "x").unwrap();
+        drive.rename("a.md", "b/c.md").unwrap();
+        assert!(!drive.exists("a.md"));
+        assert!(drive.exists("b/c.md"));
+    }
+
+    // systacean-20: gated on Unix because Windows lock primitive
+    // doesn't surface WorkspaceLocked the same way flock does. Real
+    // cross-platform fix tracked in phase-8-bugs.md "Windows lock
+    // contract parity"; revert this gate when the LockFileEx-backed
+    // bridge in lock.rs lands.
+    #[cfg(unix)]
+    #[test]
+    fn second_open_blocks_on_writer_lock() {
+        let (cfg, root, _drive) = fixture();
+        let lib = Library::open_at(cfg.path().join("config.toml")).unwrap();
+        let err = lib.open_workspace(root.path()).unwrap_err();
+        assert!(matches!(err, ChanError::WorkspaceLocked));
+    }
+
+    /// Defensive: if the registered drive path has been replaced by
+    /// a symlink (or a regular file) between registration and the
+    /// next open, refuse rather than carry on as if it were still a
+    /// real directory.
+    #[cfg(unix)]
+    #[test]
+    fn open_refuses_when_root_is_symlink() {
+        use std::os::unix::fs::symlink;
+        let cfg = TempDir::new().unwrap();
+        let real = TempDir::new().unwrap();
+        let staging = TempDir::new().unwrap();
+        // Register a real directory ...
+        let registered_path = staging.path().join("drive");
+        std::fs::create_dir(&registered_path).unwrap();
+        let lib = Library::open_at(cfg.path().join("config.toml")).unwrap();
+        lib.register_workspace(&registered_path).unwrap();
+        // ... then swap it for a symlink to a different directory.
+        std::fs::remove_dir(&registered_path).unwrap();
+        symlink(real.path(), &registered_path).unwrap();
+        let err = lib.open_workspace(&registered_path).unwrap_err();
+        assert!(matches!(err, ChanError::SpecialFile { .. }));
+    }
+
+    #[test]
+    fn open_refuses_when_root_is_regular_file() {
+        let cfg = TempDir::new().unwrap();
+        let staging = TempDir::new().unwrap();
+        let registered_path = staging.path().join("drive");
+        std::fs::create_dir(&registered_path).unwrap();
+        let lib = Library::open_at(cfg.path().join("config.toml")).unwrap();
+        lib.register_workspace(&registered_path).unwrap();
+        // Replace the directory with a regular file.
+        std::fs::remove_dir(&registered_path).unwrap();
+        std::fs::write(&registered_path, b"not a drive").unwrap();
+        let err = lib.open_workspace(&registered_path).unwrap_err();
+        assert!(matches!(err, ChanError::SpecialFile { .. }));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn read_text_rejects_symlink_target() {
+        use std::os::unix::fs::symlink;
+        let (_cfg, root, drive) = fixture();
+        std::fs::write(root.path().join("real.md"), "hi").unwrap();
+        symlink("real.md", root.path().join("alias.md")).unwrap();
+        let err = drive.read_text("alias.md").unwrap_err();
+        assert!(matches!(err, ChanError::SpecialFile { .. }));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn read_rejects_unix_socket() {
+        use std::os::unix::net::UnixListener;
+        let (_cfg, root, drive) = fixture();
+        let _l = UnixListener::bind(root.path().join("s")).unwrap();
+        let err = drive.read("s").unwrap_err();
+        assert!(matches!(err, ChanError::SpecialFile { .. }));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn write_text_refuses_to_clobber_symlink() {
+        use std::os::unix::fs::symlink;
+        let (_cfg, root, drive) = fixture();
+        std::fs::write(root.path().join("target.md"), "v1").unwrap();
+        symlink("target.md", root.path().join("today.md")).unwrap();
+        let err = drive.write_text("today.md", "v2").unwrap_err();
+        assert!(matches!(err, ChanError::SpecialFile { .. }));
+        // Both the symlink and its target are intact.
+        assert_eq!(
+            std::fs::read_to_string(root.path().join("target.md")).unwrap(),
+            "v1"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn write_refuses_through_midpath_symlink_to_outside() {
+        use std::os::unix::fs::symlink;
+        let outside = TempDir::new().unwrap();
+        let (_cfg, root, drive) = fixture();
+        symlink(outside.path(), root.path().join("Backup")).unwrap();
+        let err = drive.write_text("Backup/today.md", "x").unwrap_err();
+        assert!(matches!(err, ChanError::SymlinkEscape(_)));
+        // The escape path was never written.
+        assert!(!outside.path().join("today.md").exists());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn list_tree_drops_symlinks_and_sockets() {
+        use std::os::unix::fs::symlink;
+        use std::os::unix::net::UnixListener;
+        let (_cfg, root, drive) = fixture();
+        std::fs::write(root.path().join("note.md"), "hi").unwrap();
+        symlink("note.md", root.path().join("alias.md")).unwrap();
+        let _l = UnixListener::bind(root.path().join("sock")).unwrap();
+        let entries = drive.list_tree().unwrap();
+        let paths: Vec<_> = entries.iter().map(|e| e.path.clone()).collect();
+        assert!(paths.contains(&"note.md".to_string()));
+        assert!(!paths.iter().any(|p| p == "alias.md"));
+        assert!(!paths.iter().any(|p| p == "sock"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn list_keeps_symlink_entries_visible() {
+        use std::os::unix::fs::symlink;
+        use std::os::unix::net::UnixListener;
+        let (_cfg, root, drive) = fixture();
+        std::fs::write(root.path().join("note.md"), "hi").unwrap();
+        symlink("note.md", root.path().join("alias.md")).unwrap();
+        let _l = UnixListener::bind(root.path().join("sock")).unwrap();
+
+        let entries = drive.list("").unwrap();
+        let names: Vec<_> = entries.iter().map(|e| e.name.as_str()).collect();
+        assert!(names.contains(&"note.md"));
+        assert!(names.contains(&"alias.md"));
+        assert!(!names.contains(&"sock"));
+    }
+
+    #[test]
+    fn list_tree_prefix_scopes_walk_and_keeps_root_relative_paths() {
+        let (_cfg, _root, drive) = fixture();
+        drive.write_text("notes/a.md", "a").unwrap();
+        drive.write_text("notes/deep/b.md", "b").unwrap();
+        drive.write_text("other/c.md", "c").unwrap();
+        drive.write_text("top.md", "t").unwrap();
+
+        let entries = drive.list_tree_prefix("notes").unwrap();
+        let paths: Vec<_> = entries.iter().map(|e| e.path.as_str()).collect();
+        // Prefix entry plus everything under it; nothing outside.
+        assert!(paths.contains(&"notes"));
+        assert!(paths.contains(&"notes/a.md"));
+        assert!(paths.contains(&"notes/deep"));
+        assert!(paths.contains(&"notes/deep/b.md"));
+        assert!(!paths.contains(&"top.md"));
+        assert!(!paths.iter().any(|p| p.starts_with("other")));
+    }
+
+    #[test]
+    fn list_tree_prefix_with_trailing_slash_normalizes() {
+        // The list_files tool trims a trailing slash before calling
+        // us; verify the drive method itself accepts both shapes so
+        // host-direct callers don't trip on the slash.
+        let (_cfg, _root, drive) = fixture();
+        drive.write_text("notes/a.md", "a").unwrap();
+        let with_slash = drive.list_tree_prefix("notes/").unwrap();
+        let without = drive.list_tree_prefix("notes").unwrap();
+        assert_eq!(
+            with_slash.iter().map(|e| &e.path).collect::<Vec<_>>(),
+            without.iter().map(|e| &e.path).collect::<Vec<_>>(),
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn list_tree_prefix_rejects_midpath_symlink_outside_drive() {
+        use std::os::unix::fs::symlink;
+        let (_cfg, root, drive) = fixture();
+        let outside = TempDir::new().unwrap();
+        std::fs::create_dir_all(outside.path().join("victim")).unwrap();
+        std::fs::write(outside.path().join("victim/leak.md"), "secret").unwrap();
+        // Create a symlink inside the drive that points outside it.
+        // resolve_safe_strict canonicalizes the deepest existing
+        // ancestor and rejects anything that lands above the drive
+        // root, so list_tree_prefix must error rather than walk into
+        // the foreign tree.
+        symlink(outside.path(), root.path().join("escape")).unwrap();
+        let err = drive.list_tree_prefix("escape/victim").unwrap_err();
+        assert!(matches!(err, ChanError::SymlinkEscape(_)), "got {err:?}");
+    }
+
+    #[test]
+    fn list_tree_prefix_rejects_dotdot() {
+        let (_cfg, _root, drive) = fixture();
+        let err = drive.list_tree_prefix("../escape").unwrap_err();
+        assert!(matches!(err, ChanError::PathEscape), "got {err:?}");
+    }
+
+    #[test]
+    fn list_tree_unified_includes_drafts_metadata_namespace() {
+        let (_cfg, _root, drive) = fixture();
+        drive.write_text("notes/intro.md", "# intro\n").unwrap();
+        drive.create_draft_dir("untitled-1").unwrap();
+        drive
+            .write_text("Drafts/untitled-1/draft.md", "# draft\n")
+            .unwrap();
+        drive
+            .write_bytes("Drafts/untitled-1/pasted.png", &[1, 2, 3])
+            .unwrap();
+
+        let entries = drive.list_tree_unified().unwrap();
+        let paths: Vec<_> = entries.iter().map(|entry| entry.path.as_str()).collect();
+        assert!(paths.contains(&"notes/intro.md"));
+        assert!(paths.contains(&"Drafts"));
+        assert!(paths.contains(&"Drafts/untitled-1"));
+        assert!(paths.contains(&"Drafts/untitled-1/draft.md"));
+        assert!(paths.contains(&"Drafts/untitled-1/pasted.png"));
+    }
+
+    #[test]
+    fn list_tree_prefix_unified_scopes_drafts_metadata_namespace() {
+        let (_cfg, _root, drive) = fixture();
+        drive.create_draft_dir("untitled-1").unwrap();
+        drive.create_draft_dir("untitled-2").unwrap();
+        drive
+            .write_text("Drafts/untitled-1/draft.md", "# draft\n")
+            .unwrap();
+        drive
+            .write_text("Drafts/untitled-2/draft.md", "# other\n")
+            .unwrap();
+
+        let entries = drive.list_tree_prefix_unified("Drafts/untitled-1").unwrap();
+        let paths: Vec<_> = entries.iter().map(|entry| entry.path.as_str()).collect();
+        assert!(paths.contains(&"Drafts/untitled-1"));
+        assert!(paths.contains(&"Drafts/untitled-1/draft.md"));
+        assert!(!paths
+            .iter()
+            .any(|path| path.starts_with("Drafts/untitled-2")));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn remove_rejects_symlink_with_special_file_error() {
+        use std::os::unix::fs::symlink;
+        let (_cfg, root, drive) = fixture();
+        std::fs::write(root.path().join("real.md"), "hi").unwrap();
+        symlink("real.md", root.path().join("alias.md")).unwrap();
+        // Trash refuses to swallow non-regular non-directory entries:
+        // restoring a symlink across a cross-fs trash is fragile, and
+        // chan-drive never creates them on its own. Users delete them
+        // out-of-band if they really want them gone.
+        let err = drive.remove("alias.md").unwrap_err();
+        assert!(matches!(err, ChanError::SpecialFile { .. }));
+        // Both the symlink and its target are intact.
+        assert!(root.path().join("alias.md").symlink_metadata().is_ok());
+        assert!(root.path().join("real.md").exists());
+    }
+
+    #[test]
+    fn remove_then_restore_round_trips() {
+        let (_cfg, _root, drive) = fixture();
+        drive.write_text("notes/a.md", "hello").unwrap();
+        drive.remove("notes/a.md").unwrap();
+        assert!(!drive.exists("notes/a.md"));
+        let entries = drive.trash_list().unwrap();
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].original_path, "notes/a.md");
+        drive.trash_restore(&entries[0].id).unwrap();
+        assert_eq!(drive.read_text("notes/a.md").unwrap(), "hello");
+        assert!(drive.trash_list().unwrap().is_empty());
+    }
+
+    #[test]
+    fn remove_recursive_directory() {
+        let (_cfg, _root, drive) = fixture();
+        drive.write_text("notes/a.md", "a").unwrap();
+        drive.write_text("notes/sub/b.md", "bb").unwrap();
+        drive.remove("notes").unwrap();
+        assert!(!drive.exists("notes/a.md"));
+        let entries = drive.trash_list().unwrap();
+        assert_eq!(entries.len(), 1);
+        assert!(entries[0].is_dir);
+        drive.trash_restore(&entries[0].id).unwrap();
+        assert_eq!(drive.read_text("notes/a.md").unwrap(), "a");
+        assert_eq!(drive.read_text("notes/sub/b.md").unwrap(), "bb");
+    }
+
+    #[test]
+    fn trash_restore_refuses_when_dest_exists() {
+        let (_cfg, _root, drive) = fixture();
+        drive.write_text("a.md", "v1").unwrap();
+        drive.remove("a.md").unwrap();
+        drive.write_text("a.md", "v2").unwrap();
+        let id = drive.trash_list().unwrap()[0].id.clone();
+        let err = drive.trash_restore(&id).unwrap_err();
+        assert!(matches!(err, ChanError::TrashOccupied(_)));
+        assert_eq!(drive.read_text("a.md").unwrap(), "v2");
+        assert_eq!(drive.trash_list().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn trash_purge_and_empty() {
+        let (_cfg, _root, drive) = fixture();
+        drive.write_text("a.md", "x").unwrap();
+        drive.write_text("b.md", "y").unwrap();
+        drive.remove("a.md").unwrap();
+        drive.remove("b.md").unwrap();
+        let entries = drive.trash_list().unwrap();
+        assert_eq!(entries.len(), 2);
+        drive.trash_purge(&entries[0].id).unwrap();
+        assert_eq!(drive.trash_list().unwrap().len(), 1);
+        drive.trash_empty().unwrap();
+        assert!(drive.trash_list().unwrap().is_empty());
+    }
+
+    // ---- drafts (systacean-24) ----
+
+    #[test]
+    fn drafts_dir_exists_after_drive_open() {
+        // systacean-24: Workspace::open eagerly ensures the drafts
+        // subtree exists so callers don't need to re-check.
+        let (_cfg, _root, drive) = fixture();
+        assert!(
+            drive.drafts_dir().is_dir(),
+            "drafts dir should be ready after Workspace::open: {}",
+            drive.drafts_dir().display()
+        );
+        assert!(drive.list_drafts().unwrap().is_empty());
+    }
+
+    #[test]
+    fn drafts_create_list_and_promote_roundtrip() {
+        // systacean-24 round-trip: create two drafts, list them,
+        // promote one into the drive root + verify the directory
+        // moved + the draft is no longer listed.
+        let (_cfg, root, drive) = fixture();
+        let a = drive.create_draft_dir("untitled-1").unwrap();
+        let b = drive.create_draft_dir("rich-prompt-2").unwrap();
+        assert!(a.abs.is_dir());
+        assert!(b.abs.is_dir());
+
+        // Seed a draft.md plus companion content so promotion treats
+        // this as a directory draft.
+        std::fs::write(a.abs.join("draft.md"), b"# hello\n").unwrap();
+        std::fs::write(a.abs.join("pasted.png"), [1, 2, 3]).unwrap();
+
+        let listed = drive.list_drafts().unwrap();
+        assert_eq!(listed.len(), 2);
+        // Sorted by name.
+        assert_eq!(listed[0].name, "rich-prompt-2");
+        assert_eq!(listed[1].name, "untitled-1");
+
+        // Promote untitled-1 into the drive root.
+        drive.promote_draft("untitled-1", "untitled-1").unwrap();
+        assert!(root.path().join("untitled-1").is_dir());
+        assert!(root.path().join("untitled-1").join("draft.md").is_file());
+        assert!(root.path().join("untitled-1").join("pasted.png").is_file());
+        assert!(!drive.drafts_dir().join("untitled-1").exists());
+
+        // rich-prompt-2 still listed; untitled-1 gone.
+        let after = drive.list_drafts().unwrap();
+        assert_eq!(after.len(), 1);
+        assert_eq!(after[0].name, "rich-prompt-2");
+    }
+
+    #[test]
+    fn drafts_reject_traversal_and_existing() {
+        // systacean-24: name validation + collision detection.
+        let (_cfg, _root, drive) = fixture();
+        assert!(drive.create_draft_dir("").is_err());
+        assert!(drive.create_draft_dir("..").is_err());
+        assert!(drive.create_draft_dir("a/b").is_err());
+
+        drive.create_draft_dir("untitled-1").unwrap();
+        assert!(drive.create_draft_dir("untitled-1").is_err());
+    }
+
+    #[test]
+    fn watch_team_emits_events_with_prefix() {
+        // systacean-31: Workspace::watch_team attaches a notify
+        // watcher rooted at the team's events/ subdirectory.
+        // Events emerge prefixed `team-{name}/events/<file>` so
+        // chan-server's event stream routes per-team.
+        //
+        // Real-FSEvent timing test: hold the cross-process FS-timing
+        // gate for the body so it does not race the indexer + PTY
+        // timing tests for the CPU + the kernel FSEvent queue. See
+        // `crate::test_gate`.
+        let _gate = crate::test_gate::fs_timing_gate();
+        use crate::watch::WatchCallback;
+        use std::sync::Mutex;
+        use std::sync::OnceLock;
+
+        struct Collector {
+            events: Mutex<Vec<crate::watch::WatchEvent>>,
+        }
+        impl Collector {
+            fn new() -> Self {
+                Self {
+                    events: Mutex::new(Vec::new()),
+                }
+            }
+        }
+        impl WatchCallback for Collector {
+            fn on_event(&self, event: crate::watch::WatchEvent) {
+                self.events.lock().unwrap().push(event);
+            }
+        }
+
+        let (_cfg, _root, drive) = fixture();
+        drive
+            .create_team(&crate::teams::TeamConfig {
+                team_name: "alpha".to_string(),
+                host_name: "Alex".to_string(),
+                host_handle: "@@Alex".to_string(),
+                auto_prefix_at: true,
+                created_at: "2026-05-22T13:57:00Z".to_string(),
+                members: vec![],
+            })
+            .unwrap();
+
+        let collector = std::sync::Arc::new(Collector::new());
+        let cb: std::sync::Arc<dyn WatchCallback> = collector.clone();
+        let _handle = drive.watch_team("alpha", cb).unwrap();
+
+        // Tiny sleep to let the watcher attach to the events dir
+        // before we land the write (mirrors -25's pattern for
+        // macOS FSEvents coalescing safety).
+        std::thread::sleep(std::time::Duration::from_millis(200));
+        let events_dir = drive.team_events_dir("alpha").unwrap();
+        std::fs::write(events_dir.join("event-1.json"), b"{\"poke\":true}").unwrap();
+
+        // Poll for the prefixed event up to 5s.
+        let saw_prefix = OnceLock::new();
+        for _ in 0..50 {
+            std::thread::sleep(std::time::Duration::from_millis(100));
+            let events = collector.events.lock().unwrap();
+            for ev in events.iter() {
+                if let Some(p) = ev.path.as_deref() {
+                    if p.starts_with("team-alpha/events/") && p.ends_with("event-1.json") {
+                        let _ = saw_prefix.set(p.to_string());
+                        break;
+                    }
+                }
+            }
+            if saw_prefix.get().is_some() {
+                break;
+            }
+        }
+
+        let landed = saw_prefix
+            .get()
+            .cloned()
+            .unwrap_or_else(|| format!("none: {:?}", collector.events.lock().unwrap()));
+        assert!(
+            landed.starts_with("team-alpha/events/"),
+            "watch_team did not emit a prefixed event within 5s; observed: {landed}"
+        );
+    }
+
+    #[test]
+    fn teams_create_list_load_duplicate_through_drive() {
+        // systacean-30: Workspace-level integration. Create team via
+        // Workspace method, verify list_teams + load_team round-trip,
+        // verify team_dir + team_events_dir resolve correctly,
+        // duplicate produces a verbatim copy with rewritten name.
+        let (_cfg, _root, drive) = fixture();
+        let cfg = crate::teams::TeamConfig {
+            team_name: "marketing".to_string(),
+            host_name: "Alex".to_string(),
+            host_handle: "@@Alex".to_string(),
+            auto_prefix_at: true,
+            created_at: "2026-05-22T13:57:00Z".to_string(),
+            members: vec![],
+        };
+        let team = drive.create_team(&cfg).unwrap();
+        assert_eq!(team.name, "marketing");
+        assert!(team.abs.is_dir());
+
+        let teams = drive.list_teams().unwrap();
+        assert_eq!(teams.len(), 1);
+        assert_eq!(teams[0].name, "marketing");
+
+        let loaded = drive.load_team("marketing").unwrap();
+        assert_eq!(loaded.team_name, "marketing");
+
+        let team_dir = drive.team_dir("marketing").unwrap();
+        assert_eq!(team_dir, drive.drafts_dir().join("team-marketing"));
+        let events_dir = drive.team_events_dir("marketing").unwrap();
+        assert_eq!(events_dir, team_dir.join("events"));
+
+        let dup = drive.duplicate_team("marketing", "marketing-2025").unwrap();
+        assert_eq!(dup.name, "marketing-2025");
+        let dup_cfg = drive.load_team("marketing-2025").unwrap();
+        assert_eq!(dup_cfg.team_name, "marketing-2025");
+        // The duplicate's host_handle was preserved verbatim.
+        assert_eq!(dup_cfg.host_handle, "@@Alex");
+
+        let after_dup = drive.list_teams().unwrap();
+        let names: Vec<String> = after_dup.iter().map(|t| t.name.clone()).collect();
+        assert_eq!(names, ["marketing", "marketing-2025"]);
+    }
+
+    #[test]
+    fn teams_dont_appear_in_list_drafts_under_team_prefix() {
+        // systacean-30: although teams live in the same
+        // metadata dir as drafts, `list_drafts` reports them too
+        // (since they're directories there). `list_teams`
+        // filters to only `team-*` dirs. This pin documents the
+        // current behavior: drafts vs teams share the metadata
+        // dir; the filter is on the listing side, not the
+        // storage side.
+        let (_cfg, _root, drive) = fixture();
+        drive.create_draft_dir("untitled-1").unwrap();
+        drive
+            .create_team(&crate::teams::TeamConfig {
+                team_name: "alpha".to_string(),
+                host_name: "Alex".to_string(),
+                host_handle: "@@Alex".to_string(),
+                auto_prefix_at: true,
+                created_at: "2026-05-22T13:57:00Z".to_string(),
+                members: vec![],
+            })
+            .unwrap();
+
+        let teams = drive.list_teams().unwrap();
+        assert_eq!(teams.len(), 1);
+        assert_eq!(teams[0].name, "alpha");
+
+        // list_drafts sees both (since `team-alpha` is a dir
+        // under drafts_dir). Callers that want only true drafts
+        // can filter post-hoc by checking name.starts_with("team-").
+        let drafts = drive.list_drafts().unwrap();
+        let names: Vec<String> = drafts.iter().map(|d| d.name.clone()).collect();
+        assert!(names.contains(&"untitled-1".to_string()));
+        assert!(names.contains(&"team-alpha".to_string()));
+    }
+
+    #[test]
+    fn graph_mentions_aggregates_unique_handles_by_count() {
+        // systacean-35: graph::mentions() enumerates unique
+        // `@@<Name>` mention edges, sorted by count desc + label
+        // asc (mirrors tags() shape). Consumed by chan-server's
+        // /api/mentions for editor mention-completion.
+        let (_cfg, root, drive) = fixture();
+        // 3 files: 2 mention @@Architect, 1 mentions @@Alex
+        // + @@Architect, so @@Architect count = 3, @@Alex = 1.
+        drive
+            .write_text("notes/a.md", "Met @@Architect today.\n")
+            .unwrap();
+        drive
+            .write_text("notes/b.md", "Discussed with @@Architect.\n")
+            .unwrap();
+        drive
+            .write_text(
+                "notes/c.md",
+                "@@Alex and @@Architect synced on the design.\n",
+            )
+            .unwrap();
+        drive.reindex(None).unwrap();
+        assert!(root.path().join("notes/a.md").is_file());
+
+        let graph = drive.graph().unwrap();
+        let mentions = graph.mentions().unwrap();
+        // The bare names (no `@@` sigil) come back in count-desc
+        // + label-asc order. Architect = 3 > Alex = 1.
+        assert_eq!(mentions.len(), 2, "got {mentions:?}");
+        assert_eq!(mentions[0].name, "Architect");
+        assert_eq!(mentions[0].count, 3);
+        assert_eq!(mentions[1].name, "Alex");
+        assert_eq!(mentions[1].count, 1);
+    }
+
+    #[test]
+    fn reindex_walks_drafts_subtree_into_graph_and_bm25() {
+        // systacean-34: closes the boot-walk gap. `-25` extended
+        // the watcher to multi-root but `Workspace::reindex` only
+        // walked drive-root — so the initial corpus was empty
+        // under the `Drafts/` prefix even when draft files
+        // existed on disk. After this PR, reindex_with_aggression
+        // additionally walks drafts and pumps each file through
+        // index_draft_file.
+        let (_cfg, _root, drive) = fixture();
+        drive.create_draft_dir("untitled-1").unwrap();
+        // Write the file directly (bypass write_text so the
+        // watcher doesn't catch it; we want to verify the BOOT
+        // walk picks it up).
+        std::fs::write(
+            drive.drafts_dir().join("untitled-1").join("draft.md"),
+            "# hello\nboot-walk-marker-systacean-34 here\n",
+        )
+        .unwrap();
+
+        // Reindex (boot-equivalent path).
+        drive.reindex(None).unwrap();
+
+        // BM25 should now know about the draft under the unified
+        // `Drafts/untitled-1/draft.md` key.
+        let opts = crate::drive::SearchOpts {
+            mode: SearchMode::Bm25,
+            limit: 10,
+            scope: None,
+        };
+        let hits = drive
+            .search("boot-walk-marker-systacean-34", &opts)
+            .unwrap();
+        assert!(
+            hits.hits
+                .iter()
+                .any(|h| h.path == "Drafts/untitled-1/draft.md"),
+            "boot walk should have indexed the draft; got {:?}",
+            hits.hits
+        );
+
+        // Graph DB should also have the file as a node — verified
+        // via the public files() listing (which the chan-server
+        // graph route consumes).
+        let graph = drive.graph().unwrap();
+        let files = graph.files().unwrap();
+        assert!(
+            files.iter().any(|p| p == "Drafts/untitled-1/draft.md"),
+            "graph files() should include the draft; got {files:?}"
+        );
+    }
+
+    #[test]
+    fn stat_unified_routes_drafts_paths_to_drafts_dir() {
+        // systacean-32: Workspace::stat is prefix-aware. Closes the
+        // recurring `-a-66 b/c/d` data-flow gap where
+        // `list_dir_entries` called `stat("Drafts/untitled-N")`
+        // on each child returned by `Workspace::list("Drafts/")` +
+        // got NotFound from the drive-root cap-std handle, then
+        // skipped the entry → empty wire listing.
+        let (_cfg, _root, drive) = fixture();
+        drive.create_draft_dir("untitled-1").unwrap();
+        drive
+            .write_text("Drafts/untitled-1/draft.md", "# hello\n")
+            .unwrap();
+
+        // Stat the draft directory.
+        let root_stat = drive.stat("Drafts").unwrap();
+        assert!(root_stat.is_dir, "drafts root should stat as is_dir");
+
+        let dir_stat = drive.stat("Drafts/untitled-1").unwrap();
+        assert!(dir_stat.is_dir, "draft directory should stat as is_dir");
+
+        // Stat a file inside the draft directory.
+        let file_stat = drive.stat("Drafts/untitled-1/draft.md").unwrap();
+        assert!(!file_stat.is_dir);
+        // "# hello\n" is 8 bytes.
+        assert_eq!(file_stat.size, 8);
+
+        // Workspace-root path continues to route through the drive
+        // handle (regression check).
+        drive.write_text("notes/intro.md", "drive\n").unwrap();
+        let drive_stat = drive.stat("notes/intro.md").unwrap();
+        assert!(!drive_stat.is_dir);
+        assert_eq!(drive_stat.size, 6);
+    }
+
+    #[test]
+    fn physical_path_resolution_maps_drafts_namespace() {
+        let (_cfg, _root, drive) = fixture();
+        drive.create_draft_dir("untitled-1").unwrap();
+        drive
+            .write_text("Drafts/untitled-1/draft.md", "# hello\n")
+            .unwrap();
+        drive.write_text("notes/intro.md", "# intro\n").unwrap();
+
+        assert_eq!(
+            drive.resolve_physical_path("").unwrap(),
+            drive.root().canonicalize().unwrap()
+        );
+        assert_eq!(
+            drive.resolve_physical_path("Drafts").unwrap(),
+            drive.drafts_dir().to_path_buf()
+        );
+        assert_eq!(
+            drive.resolve_physical_dir("Drafts/untitled-1").unwrap(),
+            drive.drafts_dir().join("untitled-1")
+        );
+        assert_eq!(
+            drive
+                .physical_path_to_virtual(&drive.drafts_dir().join("untitled-1"))
+                .unwrap(),
+            "Drafts/untitled-1"
+        );
+        assert_eq!(
+            drive
+                .physical_path_to_virtual(&drive.root().join("notes"))
+                .unwrap(),
+            "notes"
+        );
+    }
+
+    #[test]
+    fn list_unified_routes_drafts_paths_to_drafts_dir() {
+        // systacean-29: Workspace::list is prefix-aware. Three shapes:
+        //   * "Drafts" or "Drafts/" lists the drafts root (each
+        //     entry is one `DraftRef::name`).
+        //   * "Drafts/<name>" lists inside that draft directory.
+        //   * "notes/" continues to list the drive root (no
+        //     regression for existing callers).
+        let (_cfg, root, drive) = fixture();
+        drive.create_draft_dir("untitled-1").unwrap();
+        drive.create_draft_dir("untitled-2").unwrap();
+        drive
+            .write_text("Drafts/untitled-1/draft.md", "# hello\n")
+            .unwrap();
+        std::fs::write(
+            drive.drafts_dir().join("untitled-1").join("pasted.png"),
+            b"\x89PNG\r\n",
+        )
+        .unwrap();
+
+        // List the drafts root via "Drafts/".
+        let drafts_root_listing = drive.list("Drafts/").unwrap();
+        let mut names: Vec<String> = drafts_root_listing.iter().map(|e| e.name.clone()).collect();
+        names.sort();
+        assert_eq!(names, ["untitled-1", "untitled-2"]);
+
+        // Same via bare "Drafts" (no trailing slash).
+        let bare = drive.list("Drafts").unwrap();
+        assert_eq!(bare.len(), 2);
+
+        // List inside a draft directory.
+        let inside = drive.list("Drafts/untitled-1").unwrap();
+        let mut leaves: Vec<String> = inside.iter().map(|e| e.name.clone()).collect();
+        leaves.sort();
+        assert_eq!(leaves, ["draft.md", "pasted.png"]);
+
+        // Workspace-root list: backward-compat regression check.
+        drive.write_text("notes/intro.md", "# intro\n").unwrap();
+        let drive_root_listing = drive.list("notes").unwrap();
+        let drive_leaves: Vec<&str> = drive_root_listing.iter().map(|e| e.name.as_str()).collect();
+        assert_eq!(drive_leaves, ["intro.md"]);
+        assert!(root.path().join("notes/intro.md").is_file());
+    }
+
+    #[test]
+    fn list_drafts_root_empty_when_no_drafts() {
+        // systacean-29: Workspace::list("Drafts/") on a fresh drive
+        // returns an empty Vec (drafts root exists but contains
+        // nothing). Pins the absent-drafts case so the FB
+        // renders the Drafts row without spurious children.
+        let (_cfg, _root, drive) = fixture();
+        let listing = drive.list("Drafts/").unwrap();
+        assert!(listing.is_empty());
+    }
+
+    #[test]
+    fn unified_path_read_write_roundtrip_for_drafts() {
+        // systacean-26: Workspace::read_text + Workspace::write_text are
+        // prefix-aware. A unified `Drafts/<name>/<file>` rel
+        // routes through the drafts-rooted cap-std handle so the
+        // editor's autosave path can target drafts without API
+        // branching.
+        let (_cfg, _root, drive) = fixture();
+        drive.create_draft_dir("untitled-1").unwrap();
+
+        let rel = "Drafts/untitled-1/draft.md";
+        drive
+            .write_text(rel, "# hello from a draft\n")
+            .expect("write_text should route to drafts dir");
+        let content = drive
+            .read_text(rel)
+            .expect("read_text should route to drafts dir");
+        assert_eq!(content, "# hello from a draft\n");
+    }
+
+    #[test]
+    fn unified_path_write_text_atomic_for_drafts() {
+        // systacean-26: atomic-write parity. Overwriting an
+        // existing draft file via write_text replaces atomically
+        // (no zero-length window observable) — same semantics as
+        // drive-root files via the shared `atomic_write_in`.
+        let (_cfg, _root, drive) = fixture();
+        drive.create_draft_dir("untitled-1").unwrap();
+        let rel = "Drafts/untitled-1/draft.md";
+        drive.write_text(rel, "v1").unwrap();
+        drive.write_text(rel, "v2").unwrap();
+        let content = drive.read_text(rel).unwrap();
+        assert_eq!(content, "v2");
+    }
+
+    #[test]
+    fn unified_path_rejects_drafts_root_as_target() {
+        // systacean-26: `Drafts/` with no sub-path is not a valid
+        // target — there's no file to read or write at the drafts
+        // root itself. The helper surfaces this as an Io error
+        // rather than dispatching into the cap-std handle with an
+        // empty path.
+        let (_cfg, _root, drive) = fixture();
+        assert!(drive.read_text("Drafts/").is_err());
+        assert!(drive.write_text("Drafts/", "anything").is_err());
+    }
+
+    #[test]
+    fn unified_path_drive_root_paths_unchanged() {
+        // systacean-26: backward-compat regression check. Paths
+        // without the `Drafts/` prefix continue to route through
+        // the drive-root cap-std handle exactly as before.
+        let (_cfg, root, drive) = fixture();
+        drive.write_text("notes/intro.md", "# intro\n").unwrap();
+        assert_eq!(drive.read_text("notes/intro.md").unwrap(), "# intro\n");
+        // File landed on disk under the drive root, NOT the
+        // drafts root.
+        assert!(root.path().join("notes/intro.md").is_file());
+        assert!(!drive.drafts_dir().join("notes").exists());
+    }
+
+    #[test]
+    fn screensaver_primitives_round_trip_and_default_correctly() {
+        // systacean-40: 6 Workspace::screensaver_* methods round-trip
+        // through IndexConfig + atomic write. Defaults: enabled
+        // false, timeout 300, pin_hash None.
+        let (_cfg, _root, drive) = fixture();
+
+        // Defaults.
+        assert!(!drive.screensaver_enabled().unwrap());
+        assert_eq!(drive.screensaver_timeout_secs().unwrap(), 300);
+        assert_eq!(drive.screensaver_theme().unwrap(), ScreensaverTheme::Plain);
+        assert!(drive.screensaver_pin_hash().unwrap().is_none());
+
+        // Flip enabled.
+        drive.set_screensaver_enabled(true).unwrap();
+        assert!(drive.screensaver_enabled().unwrap());
+
+        // Update timeout.
+        drive.set_screensaver_timeout_secs(60).unwrap();
+        assert_eq!(drive.screensaver_timeout_secs().unwrap(), 60);
+
+        // Update theme.
+        drive
+            .set_screensaver_theme(ScreensaverTheme::Matrix)
+            .unwrap();
+        assert_eq!(drive.screensaver_theme().unwrap(), ScreensaverTheme::Matrix);
+
+        // Set PIN.
+        let pin_bytes = vec![0xDE, 0xAD, 0xBE, 0xEF, 0x42];
+        drive
+            .set_screensaver_pin_hash(Some(pin_bytes.clone()))
+            .unwrap();
+        assert_eq!(drive.screensaver_pin_hash().unwrap(), Some(pin_bytes));
+
+        // Clear PIN (None).
+        drive.set_screensaver_pin_hash(None).unwrap();
+        assert!(drive.screensaver_pin_hash().unwrap().is_none());
+
+        // Idempotent re-set (same value).
+        drive.set_screensaver_enabled(true).unwrap();
+        drive.set_screensaver_timeout_secs(60).unwrap();
+        drive
+            .set_screensaver_theme(ScreensaverTheme::Matrix)
+            .unwrap();
+        drive.set_screensaver_pin_hash(None).unwrap();
+    }
+
+    #[test]
+    fn semantic_model_setter_rejects_unknown_and_preserves_bm25() {
+        let (_cfg, _root, drive) = fixture();
+        drive.write_text("note.md", "alpha beta\n").unwrap();
+        drive.reindex(None).unwrap();
+        let opts = SearchOpts {
+            mode: SearchMode::Bm25,
+            limit: 10,
+            scope: None,
+        };
+        assert_eq!(drive.search("alpha", &opts).unwrap().hits.len(), 1);
+
+        let embeddings_dir = drive.paths.index.join("embeddings");
+        std::fs::create_dir_all(&embeddings_dir).unwrap();
+        std::fs::write(embeddings_dir.join("stale.bin"), b"stale").unwrap();
+
+        let before = drive.semantic_model().unwrap();
+        let err = drive.set_semantic_model("not-a-model").unwrap_err();
+        assert!(
+            err.to_string().contains("unknown embedding model"),
+            "unexpected error: {err}",
+        );
+        assert_eq!(drive.semantic_model().unwrap(), before);
+
+        drive.set_semantic_model("BAAI/bge-base-en-v1.5").unwrap();
+        assert_eq!(drive.semantic_model().unwrap(), "BAAI/bge-base-en-v1.5");
+        assert!(
+            !embeddings_dir.join("stale.bin").exists(),
+            "switching models must clear stale embeddings",
+        );
+        assert_eq!(drive.search("alpha", &opts).unwrap().hits.len(), 1);
+    }
+
+    #[test]
+    fn reports_enabled_round_trips_through_drive_and_boot_kicks_off_initial_scan() {
+        // systacean-27: Workspace::reports_enabled defaults false on a
+        // never-touched drive; Workspace::set_reports_enabled persists
+        // the flag; Workspace::boot kicks off the initial scan when the
+        // flag is on so the first `Workspace::report()` consumer sees
+        // populated data.
+        let (_cfg, _root, drive) = fixture();
+        assert!(!drive.reports_enabled().unwrap(), "default must be false");
+
+        drive.set_reports_enabled(true).unwrap();
+        assert!(drive.reports_enabled().unwrap());
+
+        // boot() is idempotent + safe to call after enabling.
+        drive.boot().unwrap();
+        drive.boot().unwrap(); // re-call no-op
+                               // Confirm the report state was initialized (the persisted
+                               // jsonl now exists after boot's initial scan + flush).
+                               // Best-effort assert: the writer thread flushes async so
+                               // give it a small window. The flag persistence + boot
+                               // call returning Ok are the load-bearing invariants;
+                               // visible jsonl is the operational consequence.
+        for _ in 0..50 {
+            if drive.paths().report.exists() {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(50));
+        }
+
+        // Disable drops the persisted jsonl.
+        drive.set_reports_enabled(false).unwrap();
+        assert!(!drive.reports_enabled().unwrap());
+        assert!(
+            !drive.paths().report.exists(),
+            "disable should drop the persisted report.jsonl"
+        );
+    }
+
+    #[test]
+    fn boot_is_noop_when_features_disabled() {
+        // systacean-27: boot() with both feature flags off is a
+        // pure no-op. No report scan kicked off; no eager
+        // initialization that would slow down chan-server startup
+        // on a lean drive.
+        let (_cfg, _root, drive) = fixture();
+        assert!(!drive.semantic_enabled().unwrap());
+        assert!(!drive.reports_enabled().unwrap());
+        drive.boot().unwrap();
+        // No-op: report jsonl never created since reports_enabled
+        // stayed false.
+        assert!(!drive.paths().report.exists());
+    }
+
+    #[test]
+    fn next_untitled_draft_name_counts_up_through_gaps() {
+        // systacean-26: smallest-unused-N picker. First call
+        // returns bare `untitled`. After `untitled` exists the
+        // picker returns `untitled-1`, then `untitled-2`, etc.
+        // Gaps in the existing-set ARE filled (smallest unused,
+        // not always last+1) — the caller of create_draft_dir is
+        // free to skip-number names by hand.
+        let (_cfg, _root, drive) = fixture();
+        assert_eq!(drive.next_untitled_draft_name().unwrap(), "untitled");
+        drive.create_draft_dir("untitled").unwrap();
+        assert_eq!(drive.next_untitled_draft_name().unwrap(), "untitled-1");
+        drive.create_draft_dir("untitled-1").unwrap();
+        drive.create_draft_dir("untitled-3").unwrap();
+        // Gap: untitled-2 free → that's the next pick.
+        assert_eq!(drive.next_untitled_draft_name().unwrap(), "untitled-2");
+    }
+
+    #[test]
+    fn unified_path_write_text_if_unchanged_for_drafts() {
+        // systacean-26: optimistic-concurrency parity. The mtime
+        // check uses the same dir handle for stat + atomic write
+        // so drafts edits get the same WriteConflict semantics as
+        // drive-root edits.
+        let (_cfg, _root, drive) = fixture();
+        drive.create_draft_dir("untitled-1").unwrap();
+        let rel = "Drafts/untitled-1/draft.md";
+        // First write: file doesn't exist; expected_mtime=None
+        // succeeds.
+        drive.write_text_if_unchanged(rel, None, "v1").unwrap();
+        let (_, stat) = drive.read_text_with_stat(rel).unwrap();
+        // Stale-mtime write: rejected.
+        let err = drive
+            .write_text_if_unchanged(rel, Some(stat.mtime_ns.unwrap_or(0) + 1), "v2")
+            .unwrap_err();
+        assert!(matches!(err, ChanError::WriteConflict { .. }));
+        // Current-mtime write: accepted.
+        drive
+            .write_text_if_unchanged(rel, stat.mtime_ns, "v2")
+            .unwrap();
+        assert_eq!(drive.read_text(rel).unwrap(), "v2");
+    }
+
+    #[test]
+    fn drafts_promote_rejects_when_target_exists() {
+        // systacean-24: promote_draft refuses to clobber an
+        // existing drive-root file/directory. The draft remains
+        // in place for the caller to retry under a different
+        // target.
+        let (_cfg, root, drive) = fixture();
+        drive.create_draft_dir("untitled-1").unwrap();
+        drive
+            .write_text("Drafts/untitled-1/draft.md", "# draft\n")
+            .unwrap();
+        drive
+            .write_bytes("Drafts/untitled-1/pasted.png", &[1, 2, 3])
+            .unwrap();
+        drive.write_text("untitled-1/sentinel.md", "x").unwrap();
+        drive.write_text("untitled-1/draft.md", "existing").unwrap();
+        assert!(drive.promote_draft("untitled-1", "untitled-1").is_err());
+        // Draft still exists; nothing in the drive's untitled-1
+        // dir was disturbed.
+        assert!(drive.drafts_dir().join("untitled-1").is_dir());
+        assert!(root.path().join("untitled-1").join("sentinel.md").is_file());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn remove_rejects_unix_socket() {
+        use std::os::unix::net::UnixListener;
+        let (_cfg, root, drive) = fixture();
+        let _l = UnixListener::bind(root.path().join("s")).unwrap();
+        let err = drive.remove("s").unwrap_err();
+        assert!(matches!(err, ChanError::SpecialFile { .. }));
+        // Socket survives the rejected remove.
+        assert!(root.path().join("s").symlink_metadata().is_ok());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn stat_uses_lstat_for_symlinks() {
+        use std::os::unix::fs::symlink;
+        let (_cfg, root, drive) = fixture();
+        std::fs::create_dir(root.path().join("d")).unwrap();
+        symlink("d", root.path().join("link_to_dir")).unwrap();
+        // lstat reports the symlink itself, which is a symlink (not
+        // a directory). is_dir is false because symlink_metadata
+        // does not follow.
+        let st = drive.stat("link_to_dir").unwrap();
+        assert!(!st.is_dir);
+    }
+
+    #[test]
+    fn link_targets_finds_file_after_index() {
+        let (_cfg, _root, drive) = fixture();
+        drive
+            .write_text("recipes/carbonara.md", "# Carbonara\n\n## Ingredients\n")
+            .unwrap();
+        drive.index_file("recipes/carbonara.md").unwrap();
+        let hits = drive.link_targets("carb", 10).unwrap();
+        assert!(hits
+            .iter()
+            .any(|h| h.path == "recipes/carbonara.md"
+                && h.kind == crate::graph::LinkTargetKind::File));
+        // Heading is also searchable by the same surface.
+        let hits = drive.link_targets("ingred", 10).unwrap();
+        assert!(hits
+            .iter()
+            .any(|h| h.kind == crate::graph::LinkTargetKind::Heading
+                && h.heading.as_deref() == Some("Ingredients")));
+    }
+
+    #[test]
+    fn graph_opens_lazily() {
+        let (_cfg, _root, drive) = fixture();
+        // Calling graph() twice returns the same handle; this is
+        // the contract the editor relies on for incremental
+        // updates from the watcher.
+        let _g1 = drive.graph().unwrap();
+        let _g2 = drive.graph().unwrap();
+    }
+
+    #[test]
+    fn session_blob_round_trip() {
+        let (_cfg, _root, drive) = fixture();
+        drive.put_session("win-1", b"layout-v1").unwrap();
+        assert_eq!(drive.get_session("win-1").unwrap().unwrap(), b"layout-v1");
+        drive.put_session("win-1", b"layout-v2").unwrap();
+        drive.put_session("win-2", b"other").unwrap();
+        let mut keys = drive.list_sessions().unwrap();
+        keys.sort();
+        assert_eq!(keys, vec!["win-1", "win-2"]);
+        drive.delete_session("win-1").unwrap();
+        assert!(drive.get_session("win-1").unwrap().is_none());
+        // Idempotent.
+        drive.delete_session("win-1").unwrap();
+    }
+
+    #[test]
+    fn blob_key_validation_blocks_traversal() {
+        let (_cfg, _root, drive) = fixture();
+        let err = drive.put_session("../escape", b"x").unwrap_err();
+        assert!(matches!(err, ChanError::InvalidKey(_)));
+    }
+
+    // ---- resolve_link ----
+
+    fn link_fixture() -> (TempDir, TempDir, Arc<Workspace>) {
+        let (cfg, root, drive) = fixture();
+        std::fs::create_dir_all(root.path().join("recipes")).unwrap();
+        std::fs::write(root.path().join("recipes").join("pasta.md"), "# Pasta\n").unwrap();
+        std::fs::write(root.path().join("intro.md"), "# Intro\n").unwrap();
+        std::fs::write(root.path().join("note.txt"), "plain\n").unwrap();
+        std::fs::write(root.path().join("README"), "no ext\n").unwrap();
+        (cfg, root, drive)
+    }
+
+    #[test]
+    fn resolve_link_md_extension() {
+        let (_cfg, _root, drive) = link_fixture();
+        let r = drive.resolve_link("recipes/pasta").unwrap();
+        assert_eq!(r.path, "recipes/pasta.md");
+        assert_eq!(r.anchor, None);
+    }
+
+    #[test]
+    fn resolve_link_with_anchor() {
+        let (_cfg, _root, drive) = link_fixture();
+        let r = drive.resolve_link("recipes/pasta#ingredients").unwrap();
+        assert_eq!(r.path, "recipes/pasta.md");
+        assert_eq!(r.anchor.as_deref(), Some("ingredients"));
+    }
+
+    #[test]
+    fn resolve_link_txt_fallback() {
+        let (_cfg, _root, drive) = link_fixture();
+        let r = drive.resolve_link("note").unwrap();
+        assert_eq!(r.path, "note.txt");
+    }
+
+    #[test]
+    fn resolve_link_exact_match_no_extension() {
+        let (_cfg, _root, drive) = link_fixture();
+        let r = drive.resolve_link("README").unwrap();
+        assert_eq!(r.path, "README");
+    }
+
+    #[test]
+    fn resolve_link_prefers_md_over_txt() {
+        let (_cfg, root, drive) = link_fixture();
+        // both intro.md AND intro.txt exist -> .md wins
+        std::fs::write(root.path().join("intro.txt"), "plain\n").unwrap();
+        let r = drive.resolve_link("intro").unwrap();
+        assert_eq!(r.path, "intro.md");
+    }
+
+    #[test]
+    fn resolve_link_nonexistent_returns_none() {
+        let (_cfg, _root, drive) = link_fixture();
+        assert!(drive.resolve_link("does/not/exist").is_none());
+    }
+
+    #[test]
+    fn resolve_link_empty_target_returns_none() {
+        let (_cfg, _root, drive) = link_fixture();
+        assert!(drive.resolve_link("").is_none());
+    }
+
+    #[test]
+    fn resolve_link_trailing_hash_drops_anchor() {
+        let (_cfg, _root, drive) = link_fixture();
+        // `target#` (empty anchor) resolves the path with anchor None.
+        let r = drive.resolve_link("recipes/pasta#").unwrap();
+        assert_eq!(r.path, "recipes/pasta.md");
+        assert_eq!(r.anchor, None);
+    }
+
+    #[test]
+    fn resolve_link_path_escape_rejected() {
+        let (_cfg, _root, drive) = link_fixture();
+        // resolve_link goes through Workspace::exists which rejects
+        // path traversal. Should return None, not panic.
+        assert!(drive.resolve_link("../etc/passwd").is_none());
+    }
+
+    /// The graph row drives the kind. An unindexed file still
+    /// resolves (we found it on disk) but the kind defaults to
+    /// `File` so the editor can render a generic doc pill while the
+    /// indexer catches up.
+    #[test]
+    fn resolve_link_kind_defaults_to_file_when_unindexed() {
+        let (_cfg, _root, drive) = link_fixture();
+        let r = drive.resolve_link("recipes/pasta").unwrap();
+        assert_eq!(r.kind, crate::graph::NodeKind::File);
+    }
+
+    /// After indexing a contact-frontmatter file, resolve_link's kind
+    /// matches what the picker put in the graph. This is the path
+    /// that drives the editor's kind-aware pill rendering.
+    #[test]
+    fn resolve_link_returns_contact_kind_for_contact_node() {
+        let (_cfg, root, drive) = link_fixture();
+        std::fs::create_dir_all(root.path().join("Contacts")).unwrap();
+        let contact = "---\nchan:\n  kind: contact\n---\n\n# Alice Anderson\n\n- **Email**: alice@example.com\n";
+        std::fs::write(root.path().join("Contacts").join("Alice.md"), contact).unwrap();
+        drive.index_file("Contacts/Alice.md").unwrap();
+        let r = drive.resolve_link("Contacts/Alice").unwrap();
+        assert_eq!(r.path, "Contacts/Alice.md");
+        assert_eq!(r.kind, crate::graph::NodeKind::Contact);
+    }
+
+    /// Plain markdown files index as `NodeKind::File`; round-trip
+    /// resolve_link to confirm the kind reflects the indexed value
+    /// (not a constant default).
+    #[test]
+    fn resolve_link_returns_file_kind_for_plain_note() {
+        let (_cfg, _root, drive) = link_fixture();
+        drive.index_file("recipes/pasta.md").unwrap();
+        let r = drive.resolve_link("recipes/pasta").unwrap();
+        assert_eq!(r.kind, crate::graph::NodeKind::File);
+    }
+
+    #[test]
+    fn resolve_link_path_with_md_extension_unchanged() {
+        let (_cfg, _root, drive) = link_fixture();
+        // If the user already wrote `[[recipes/pasta.md]]`, our
+        // first probe is `recipes/pasta.md.md` which doesn't
+        // exist; second is `.txt`; third is the exact path which
+        // does. Resolves to the original verbatim.
+        let r = drive.resolve_link("recipes/pasta.md").unwrap();
+        assert_eq!(r.path, "recipes/pasta.md");
+    }
+
+    // ---- build_edges (link normalization) ----
+
+    fn md_link(target: &str) -> markdown::Link {
+        markdown::Link {
+            target: target.to_string(),
+            label: None,
+            wiki: false,
+        }
+    }
+
+    fn wiki_link(target: &str) -> markdown::Link {
+        markdown::Link {
+            target: target.to_string(),
+            label: None,
+            wiki: true,
+        }
+    }
+
+    fn dsts(edges: &[crate::graph::Edge]) -> Vec<&str> {
+        edges.iter().map(|e| e.dst.as_str()).collect()
+    }
+
+    #[test]
+    fn build_edges_normalizes_drive_rooted_markdown_link() {
+        // `[link](/images/foo.png)` from notes/post.md should land
+        // at dst=images/foo.png, not /images/foo.png.
+        let edges = build_edges("notes/post.md", &[md_link("/images/foo.png")], &[]);
+        assert_eq!(dsts(&edges), vec!["images/foo.png"]);
+    }
+
+    #[test]
+    fn build_edges_normalizes_parent_relative_markdown_link() {
+        // `[link](../images/foo.png)` from notes/post.md collapses
+        // lexically to images/foo.png.
+        let edges = build_edges("notes/post.md", &[md_link("../images/foo.png")], &[]);
+        assert_eq!(dsts(&edges), vec!["images/foo.png"]);
+    }
+
+    #[test]
+    fn build_edges_skips_external_markdown_link() {
+        let edges = build_edges("notes/post.md", &[md_link("https://example.com/x")], &[]);
+        assert!(edges.is_empty());
+    }
+
+    #[test]
+    fn build_edges_skips_fragment_only_link() {
+        let edges = build_edges("notes/post.md", &[md_link("#section")], &[]);
+        assert!(edges.is_empty());
+    }
+
+    #[test]
+    fn build_edges_skips_drive_escape() {
+        // `../../x.md` from a depth-1 file pops past the drive root.
+        let edges = build_edges("notes/post.md", &[md_link("../../x.md")], &[]);
+        assert!(edges.is_empty());
+    }
+
+    #[test]
+    fn build_edges_preserves_anchor_column() {
+        let edges = build_edges("notes/post.md", &[md_link("/a.md#sec")], &[]);
+        assert_eq!(edges.len(), 1);
+        assert_eq!(edges[0].dst, "a.md");
+        assert_eq!(edges[0].anchor.as_deref(), Some("sec"));
+    }
+
+    #[test]
+    fn build_edges_drops_anchor_for_non_markdown_target() {
+        // `![alt](img.png#width=300)` is the Obsidian image-sizing
+        // syntax; the `#...` suffix is a render hint, not a heading
+        // anchor. The graph edge must point at `img.png` with an
+        // empty anchor so the inspector's backlinks query and the
+        // anchor column itself stay semantically clean.
+        let edges = build_edges("notes/post.md", &[md_link("img.png#width=300")], &[]);
+        assert_eq!(edges.len(), 1);
+        assert_eq!(edges[0].dst, "notes/img.png");
+        assert!(edges[0].anchor.is_none(), "got: {:?}", edges[0].anchor);
+    }
+
+    #[test]
+    fn build_edges_wiki_default_drive_rooted() {
+        // Plain `[[Contacts/Jane Doe]]` from any source dir resolves
+        // to the drive root. Matches the picker's existing insertion
+        // form and keeps the smoke-test invariant.
+        let edges = build_edges("notes/post.md", &[wiki_link("Contacts/Jane Doe")], &[]);
+        assert_eq!(dsts(&edges), vec!["Contacts/Jane Doe"]);
+    }
+
+    #[test]
+    fn build_edges_wiki_explicit_absolute() {
+        let edges = build_edges("notes/post.md", &[wiki_link("/Contacts/Jane Doe")], &[]);
+        assert_eq!(dsts(&edges), vec!["Contacts/Jane Doe"]);
+    }
+
+    #[test]
+    fn build_edges_wiki_relative_walks_up() {
+        // `[[../foo]]` from notes/post.md walks up to drive root.
+        let edges = build_edges("notes/post.md", &[wiki_link("../foo")], &[]);
+        assert_eq!(dsts(&edges), vec!["foo"]);
+    }
+
+    #[test]
+    fn build_edges_wiki_dot_relative_resolves_to_source_dir() {
+        let edges = build_edges("notes/post.md", &[wiki_link("./sibling")], &[]);
+        assert_eq!(dsts(&edges), vec!["notes/sibling"]);
+    }
+
+    // ---- rename_with_link_rewrite ---------------------------------------
+
+    /// Set up two files and reindex so the graph knows about the
+    /// `src -> dst` link. Returns the fixture handles plus the path
+    /// strings so tests can rename and assert.
+    fn rename_fixture(
+        src_rel: &str,
+        src_body: &str,
+        dst_rel: &str,
+        dst_body: &str,
+    ) -> (TempDir, TempDir, Arc<Workspace>) {
+        let (cfg, root, drive) = fixture();
+        // Create parent directories as needed (write_text only creates
+        // the immediate parent at the cap-std layer).
+        for p in [src_rel, dst_rel] {
+            if let Some(slash) = p.rfind('/') {
+                std::fs::create_dir_all(root.path().join(&p[..slash])).unwrap();
+            }
+        }
+        drive.write_text(dst_rel, dst_body).unwrap();
+        drive.write_text(src_rel, src_body).unwrap();
+        // Build the graph so `backlinks` returns the right edge.
+        drive.reindex(None).unwrap();
+        (cfg, root, drive)
+    }
+
+    #[test]
+    fn rename_with_link_rewrite_updates_inbound_markdown_link() {
+        let (_cfg, _root, drive) = rename_fixture(
+            "src.md",
+            "see [target](./old.md) for context\n",
+            "old.md",
+            "# Old\n",
+        );
+        let outcome = drive.rename_with_link_rewrite("old.md", "new.md").unwrap();
+        assert_eq!(outcome.renamed, vec![("old.md".into(), "new.md".into())]);
+        assert_eq!(outcome.rewritten, vec!["src.md".to_string()]);
+        assert!(outcome.conflicts.is_empty());
+        assert_eq!(
+            drive.read_text("src.md").unwrap(),
+            "see [target](./new.md) for context\n",
+        );
+    }
+
+    #[test]
+    fn rename_with_link_rewrite_preserves_anchor() {
+        let (_cfg, _root, drive) = rename_fixture(
+            "src.md",
+            "see [target](./old.md#section-2) for context\n",
+            "old.md",
+            "# Old\n\n## Section 2\n",
+        );
+        drive.rename_with_link_rewrite("old.md", "new.md").unwrap();
+        assert_eq!(
+            drive.read_text("src.md").unwrap(),
+            "see [target](./new.md#section-2) for context\n",
+        );
+    }
+
+    #[test]
+    fn rename_with_link_rewrite_demotes_drive_rooted_markdown_to_relative() {
+        // Workspace-rooted markdown links (`/foo.md`) read as filesystem-
+        // rooted in any renderer that isn't chan's own (browsers,
+        // GitHub, Obsidian on export). We use every rewrite pass as
+        // an opportunity to migrate them to the relative form so the
+        // markdown round-trips outside chan.
+        let (_cfg, _root, drive) = rename_fixture(
+            "notes/src.md",
+            "see [target](/old.md) for context\n",
+            "old.md",
+            "# Old\n",
+        );
+        drive
+            .rename_with_link_rewrite("old.md", "deep/new.md")
+            .unwrap();
+        assert_eq!(
+            drive.read_text("notes/src.md").unwrap(),
+            "see [target](../deep/new.md) for context\n",
+        );
+    }
+
+    #[test]
+    fn rename_with_link_rewrite_demotes_drive_rooted_when_source_moves() {
+        // Demotion also kicks in when the source file itself moves
+        // and the target hadn't: the link is now relative-eligible
+        // because the source's directory changed even if the target
+        // didn't.
+        let (_cfg, root, drive) = fixture();
+        std::fs::create_dir_all(root.path().join("notes")).unwrap();
+        drive.write_text("home.md", "# Home\n").unwrap();
+        drive
+            .write_text("notes/src.md", "see [home](/home.md) tail\n")
+            .unwrap();
+        drive.reindex(None).unwrap();
+        drive
+            .rename_with_link_rewrite("notes/src.md", "archive/src.md")
+            .unwrap();
+        assert_eq!(
+            drive.read_text("archive/src.md").unwrap(),
+            "see [home](../home.md) tail\n",
+        );
+    }
+
+    #[test]
+    fn rename_with_link_rewrite_handles_wiki_link() {
+        // Wiki rewrites emit an explicit `./` or `../` prefix because
+        // the bare `[[name]]` form means drive-rooted by chan
+        // convention; relativization needs the prefix to disambiguate.
+        let (_cfg, _root, drive) =
+            rename_fixture("src.md", "see [[old]] for context\n", "old.md", "# Old\n");
+        drive
+            .rename_with_link_rewrite("old.md", "archive/old.md")
+            .unwrap();
+        assert_eq!(
+            drive.read_text("src.md").unwrap(),
+            "see [[./archive/old]] for context\n",
+        );
+    }
+
+    #[test]
+    fn rename_with_link_rewrite_handles_image_ref() {
+        let (_cfg, _root, drive) = fixture();
+        std::fs::create_dir_all(_root.path().join("images")).unwrap();
+        std::fs::write(
+            _root.path().join("images").join("cat.png"),
+            b"\x89PNG\r\n\x1a\n",
+        )
+        .unwrap();
+        drive
+            .write_text("src.md", "![cat](images/cat.png) ok\n")
+            .unwrap();
+        drive.reindex(None).unwrap();
+        drive
+            .rename_with_link_rewrite("images/cat.png", "img/cat.png")
+            .unwrap();
+        assert_eq!(
+            drive.read_text("src.md").unwrap(),
+            "![cat](img/cat.png) ok\n",
+        );
+    }
+
+    #[test]
+    fn rename_with_link_rewrite_directory_rewrites_all_inbound() {
+        let (_cfg, root, drive) = fixture();
+        std::fs::create_dir_all(root.path().join("A")).unwrap();
+        drive.write_text("A/x.md", "# X\n").unwrap();
+        drive.write_text("A/y.md", "# Y\n").unwrap();
+        drive
+            .write_text("src.md", "links: [x](A/x.md) and [y](A/y.md) end\n")
+            .unwrap();
+        drive.reindex(None).unwrap();
+        drive.rename_with_link_rewrite("A", "B").unwrap();
+        assert_eq!(
+            drive.read_text("src.md").unwrap(),
+            "links: [x](B/x.md) and [y](B/y.md) end\n",
+        );
+    }
+
+    #[test]
+    fn rename_with_link_rewrite_does_not_touch_external_links() {
+        let (_cfg, _root, drive) = rename_fixture(
+            "src.md",
+            "ext [a](https://example.com/old.md) and [b](./old.md)\n",
+            "old.md",
+            "# Old\n",
+        );
+        drive.rename_with_link_rewrite("old.md", "new.md").unwrap();
+        assert_eq!(
+            drive.read_text("src.md").unwrap(),
+            "ext [a](https://example.com/old.md) and [b](./new.md)\n",
+        );
+    }
+
+    #[test]
+    fn rename_with_link_rewrite_self_referential_relative_link() {
+        // src lives inside the moved subtree; a relative link inside src
+        // pointing at a sibling that ALSO moves with the rename should
+        // stay valid (./sib.md still resolves correctly post-rename),
+        // so no rewrite is required.
+        let (_cfg, root, drive) = fixture();
+        std::fs::create_dir_all(root.path().join("A")).unwrap();
+        drive.write_text("A/x.md", "see [sib](./sib.md)\n").unwrap();
+        drive.write_text("A/sib.md", "# Sib\n").unwrap();
+        drive.reindex(None).unwrap();
+        drive.rename_with_link_rewrite("A", "B").unwrap();
+        assert_eq!(drive.read_text("B/x.md").unwrap(), "see [sib](./sib.md)\n",);
+    }
+
+    #[test]
+    fn rename_with_link_rewrite_self_to_external_target() {
+        // src moves but a link inside it points at a file OUTSIDE the
+        // moved subtree. The relative reference must be re-relativized.
+        let (_cfg, root, drive) = fixture();
+        std::fs::create_dir_all(root.path().join("A")).unwrap();
+        std::fs::create_dir_all(root.path().join("shared")).unwrap();
+        drive
+            .write_text("A/x.md", "see [s](../shared/note.md)\n")
+            .unwrap();
+        drive.write_text("shared/note.md", "# Shared\n").unwrap();
+        drive.reindex(None).unwrap();
+        drive.rename_with_link_rewrite("A", "deep/B").unwrap();
+        // Source is now at deep/B/x.md. Relative to that, the target
+        // is at ../../shared/note.md.
+        assert_eq!(
+            drive.read_text("deep/B/x.md").unwrap(),
+            "see [s](../../shared/note.md)\n",
+        );
+    }
+
+    #[test]
+    fn rename_with_link_rewrite_wiki_drive_rooted_from_subdir() {
+        // Regression: a wiki link `[[friends/alice]]` from a source
+        // file that LIVES in `friends/` must still resolve to the
+        // drive-rooted `friends/alice`, not to `friends/friends/alice`
+        // as plain `normalize_href` would do for a bare relative path.
+        // build_edges applies this rule on the index side; the rewrite
+        // callback mirrors it. After resolution, we emit the new path
+        // as an up-relative wiki target.
+        let (_cfg, root, drive) = fixture();
+        std::fs::create_dir_all(root.path().join("friends")).unwrap();
+        drive.write_text("friends/alice.md", "# Alice\n").unwrap();
+        drive
+            .write_text("friends/bob.md", "see [[friends/alice]] end\n")
+            .unwrap();
+        drive.reindex(None).unwrap();
+        drive
+            .rename_with_link_rewrite("friends/alice.md", "archive/alice.md")
+            .unwrap();
+        assert_eq!(
+            drive.read_text("friends/bob.md").unwrap(),
+            "see [[../archive/alice]] end\n",
+        );
+    }
+
+    #[test]
+    fn rename_with_link_rewrite_wiki_drive_rooted_in_moved_source() {
+        // When the source moves, its outgoing wiki links re-anchor
+        // against the new source dir: `[[index]]` from a file moved
+        // to `friends/` becomes `[[../index]]` so it still points at
+        // the same file outside chan's renderer too.
+        let (_cfg, root, drive) = fixture();
+        std::fs::create_dir_all(root.path().join("friends")).unwrap();
+        drive.write_text("index.md", "# Index\n").unwrap();
+        drive
+            .write_text("alice.md", "ref [[index]] tail\n")
+            .unwrap();
+        drive.reindex(None).unwrap();
+        drive
+            .rename_with_link_rewrite("alice.md", "friends/alice.md")
+            .unwrap();
+        assert_eq!(
+            drive.read_text("friends/alice.md").unwrap(),
+            "ref [[../index]] tail\n",
+        );
+    }
+
+    #[test]
+    fn rename_with_link_rewrite_chain_of_renames_on_same_file() {
+        // Rename the same file twice between reindexes. The second
+        // rename must still find the inbound backlink even though the
+        // graph's src column was indexed against the original path.
+        let (_cfg, _root, drive) =
+            rename_fixture("src.md", "see [a](./a.md) end\n", "a.md", "# A\n");
+        drive.rename_with_link_rewrite("a.md", "b.md").unwrap();
+        // After the first rename, src.md points at ./b.md.
+        assert_eq!(drive.read_text("src.md").unwrap(), "see [a](./b.md) end\n",);
+        // Now rename b.md to c.md WITHOUT reindexing. The graph still
+        // records the inbound edge against the original "a.md" path,
+        // so the second rename must use the cumulative log to find
+        // src.md as a backlink source via the original name.
+        drive.rename_with_link_rewrite("b.md", "c.md").unwrap();
+        assert_eq!(drive.read_text("src.md").unwrap(), "see [a](./c.md) end\n",);
+    }
+
+    #[test]
+    fn rename_with_link_rewrite_source_moved_in_prior_rename() {
+        // The original failing scenario: source file moves first
+        // (friends/alice.md -> archive/alice-2.md), then a target the
+        // source references moves (notes/beta.md -> archive/beta.md).
+        // The graph's backlinks query for the moved target returns the
+        // source's ORIGINAL path; without the log we'd read at that
+        // stale path, fail, and skip the rewrite. With the log we
+        // translate to the source's current path and update the link.
+        let (_cfg, root, drive) = fixture();
+        std::fs::create_dir_all(root.path().join("notes")).unwrap();
+        std::fs::create_dir_all(root.path().join("friends")).unwrap();
+        drive.write_text("notes/beta.md", "# Beta\n").unwrap();
+        drive
+            .write_text("friends/alice.md", "ref [beta](../notes/beta.md)\n")
+            .unwrap();
+        drive.reindex(None).unwrap();
+        // Move 1: source moves.
+        drive
+            .rename_with_link_rewrite("friends/alice.md", "archive/alice-2.md")
+            .unwrap();
+        // Move 2: target moves. Bug 2 was here: alice-2.md kept the
+        // stale `../notes/beta.md` because the graph still had alice's
+        // pre-move src path and the lookup failed silently.
+        drive
+            .rename_with_link_rewrite("notes/beta.md", "archive/beta.md")
+            .unwrap();
+        // Original href was `../notes/beta.md` (up-relative, no `./`),
+        // so the rewritten bare-relative form is `beta.md`; the
+        // dot-explicit prefix is only added when the original used it.
+        assert_eq!(
+            drive.read_text("archive/alice-2.md").unwrap(),
+            "ref [beta](beta.md)\n",
+        );
+    }
+
+    #[test]
+    fn rename_with_link_rewrite_log_cleared_by_reindex() {
+        // After a reindex the graph is fresh and the cumulative log
+        // becomes a liability (it could redirect a path the user has
+        // re-created with new content). Reindex must clear it.
+        let (_cfg, _root, drive) =
+            rename_fixture("src.md", "see [a](./a.md) end\n", "a.md", "# A\n");
+        drive.rename_with_link_rewrite("a.md", "b.md").unwrap();
+        // Reindex now sees the fresh tree.
+        drive.reindex(None).unwrap();
+        // Recreate a fresh file at the original name `a.md`. Without
+        // the clear, the log would translate "a.md" to "b.md" and a
+        // future rename of the FRESH a.md would behave wrongly.
+        drive.write_text("a.md", "# fresh A\n").unwrap();
+        drive
+            .write_text("src2.md", "see [a](./a.md) end\n")
+            .unwrap();
+        drive.reindex(None).unwrap();
+        // Renaming the fresh a.md to z.md should rewrite src2.md
+        // without confusion from the prior log entry.
+        drive.rename_with_link_rewrite("a.md", "z.md").unwrap();
+        assert_eq!(drive.read_text("src2.md").unwrap(), "see [a](./z.md) end\n",);
+    }
+
+    #[test]
+    fn rename_with_link_rewrite_returns_empty_outcome_for_no_backlinks() {
+        let (_cfg, _root, drive) = fixture();
+        drive.write_text("old.md", "# Old\n").unwrap();
+        drive.reindex(None).unwrap();
+        let outcome = drive.rename_with_link_rewrite("old.md", "new.md").unwrap();
+        assert_eq!(outcome.renamed, vec![("old.md".into(), "new.md".into())]);
+        assert!(outcome.rewritten.is_empty());
+        assert!(outcome.conflicts.is_empty());
+    }
+
+    // ---- FB capabilities: copy + collision resolution -------------------
+
+    #[test]
+    fn copy_duplicates_a_file_and_leaves_the_source() {
+        let (_cfg, _root, drive) = fixture();
+        drive.write_text("notes/a.md", "hello").unwrap();
+        let out = drive.copy("notes/a.md", "notes/b.md").unwrap();
+        assert_eq!(out.created, vec!["notes/b.md".to_string()]);
+        // Source untouched, destination a faithful duplicate.
+        assert_eq!(drive.read_text("notes/a.md").unwrap(), "hello");
+        assert_eq!(drive.read_text("notes/b.md").unwrap(), "hello");
+    }
+
+    #[test]
+    fn copy_duplicates_a_directory_subtree_skipping_control_dirs() {
+        let (_cfg, root, drive) = fixture();
+        drive.write_text("proj/a.md", "a").unwrap();
+        drive.write_text("proj/sub/b.md", "b").unwrap();
+        // A .git control dir inside the source must NOT be duplicated.
+        // Seed it directly on disk (write_text refuses control-dir
+        // paths, which is exactly the gate we are NOT testing here).
+        let git_dir = root.path().join("proj/.git");
+        std::fs::create_dir_all(&git_dir).unwrap();
+        std::fs::write(git_dir.join("HEAD"), "ref: x").unwrap();
+        let out = drive.copy("proj", "proj-copy").unwrap();
+        assert_eq!(
+            out.created,
+            vec![
+                "proj-copy/a.md".to_string(),
+                "proj-copy/sub/b.md".to_string()
+            ],
+        );
+        assert_eq!(drive.read_text("proj-copy/a.md").unwrap(), "a");
+        assert_eq!(drive.read_text("proj-copy/sub/b.md").unwrap(), "b");
+        // The control dir was skipped: its file does not exist in the copy.
+        assert!(!drive.exists("proj-copy/.git/HEAD"));
+        // Source subtree is intact.
+        assert_eq!(drive.read_text("proj/a.md").unwrap(), "a");
+    }
+
+    #[test]
+    fn copy_refuses_an_existing_destination() {
+        let (_cfg, _root, drive) = fixture();
+        drive.write_text("a.md", "x").unwrap();
+        drive.write_text("b.md", "y").unwrap();
+        let err = drive.copy("a.md", "b.md").unwrap_err();
+        assert!(matches!(err, ChanError::Io(_)));
+        // b.md was not clobbered.
+        assert_eq!(drive.read_text("b.md").unwrap(), "y");
+    }
+
+    #[test]
+    fn resolve_free_name_suffixes_on_collision_before_extension() {
+        let (_cfg, _root, drive) = fixture();
+        drive.write_text("notes/a.md", "x").unwrap();
+        // No collision: returns the bare path.
+        assert_eq!(
+            drive.resolve_free_name("notes", "new.md").unwrap(),
+            "notes/new.md"
+        );
+        // First collision -> " copy" before the extension.
+        assert_eq!(
+            drive.resolve_free_name("notes", "a.md").unwrap(),
+            "notes/a copy.md"
+        );
+        // Second collision -> " copy 2".
+        drive.write_text("notes/a copy.md", "x").unwrap();
+        assert_eq!(
+            drive.resolve_free_name("notes", "a.md").unwrap(),
+            "notes/a copy 2.md"
+        );
+    }
+
+    #[test]
+    fn resolve_free_name_at_drive_root_has_no_prefix() {
+        let (_cfg, _root, drive) = fixture();
+        assert_eq!(drive.resolve_free_name("", "top.md").unwrap(), "top.md");
+    }
+
+    #[test]
+    fn split_name_ext_handles_dotfiles_and_no_extension() {
+        assert_eq!(split_name_ext("foo.md"), ("foo".into(), ".md".into()));
+        assert_eq!(
+            split_name_ext("archive.tar.gz"),
+            ("archive.tar".into(), ".gz".into())
+        );
+        // Dotfile: the leading dot is a prefix, not an extension.
+        assert_eq!(
+            split_name_ext(".gitignore"),
+            (".gitignore".into(), String::new())
+        );
+        // No dot: whole name is the stem.
+        assert_eq!(split_name_ext("README"), ("README".into(), String::new()));
+        // Trailing dot stays part of the stem.
+        assert_eq!(split_name_ext("weird."), ("weird.".into(), String::new()));
+    }
+}

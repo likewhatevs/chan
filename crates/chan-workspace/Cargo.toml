@@ -1,0 +1,124 @@
+[package]
+name = "chan-workspace"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Filesystem, search, and graph primitives for chan-writer drives"
+
+[dependencies]
+chan-report = { workspace = true }
+bincode = { version = "2", features = ["serde"] }
+chrono = { version = "0.4", features = ["serde"] }
+csv = "1"
+base64 = { workspace = true }
+dirs = "5"
+fs4 = { version = "0.9", features = ["sync"] }
+gray_matter = { version = "0.2", default-features = false, features = ["yaml"] }
+notify = { version = "6", default-features = false, features = ["macos_fsevent"] }
+pulldown-cmark = { version = "0.12", default-features = false }
+rusqlite = { version = "0.32", features = ["bundled"] }
+rustix = { version = "1.1", features = ["process"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha2 = "0.10"
+tar = { workspace = true }
+tantivy = "0.24"
+tempfile = "3"
+thiserror = "1"
+toml = "0.8"
+tracing = "0.1"
+walkdir = "2"
+zstd = { workspace = true }
+
+# Capability-based filesystem sandbox. We use it on every Drive
+# operation that touches user-controllable paths so a mid-path
+# symlink swap between resolve and op cannot escape the drive
+# root: cap-std opens each component with O_NOFOLLOW and refuses
+# paths that walk outside the Dir handle. cap-tempfile gives us a
+# Dir-relative atomic-write primitive (TempFile + replace) so we
+# don't have to reimplement the create-tmp/fsync/rename dance.
+cap-std = "3"
+cap-tempfile = "3"
+
+# Connection pool for the graph DB's read path. SQLite in WAL mode
+# allows multiple readers to run concurrently against one writer; we
+# keep the writer behind a Mutex (single-writer is the SQLite
+# contract) and use the pool for reads so editor link-autocomplete
+# queries don't queue behind a reindex write or another typeahead.
+# The pool's per-connection init runs the same PRAGMA tuning as the
+# writer so all handles agree on WAL / busy_timeout / synchronous.
+r2d2 = "0.8"
+r2d2_sqlite = "0.25"
+
+# Pure-Rust embedding stack. candle handles tensor math + transformer
+# kernels, tokenizers does HF WordPiece/BPE, hf-hub fetches the
+# config.json + tokenizer.json + model.safetensors trio on first use.
+# All optional + gated by the `embeddings` feature so iOS / minimal
+# builds can opt out via `--no-default-features` and still get BM25.
+# Keep these inside the unconditional [dependencies] block above any
+# `[target.cfg(...)]` section: the target-cfg table stays open until
+# the next header, so misplacing them would silently drop the deps
+# on excluded platforms and break `embeddings.rs`.
+candle-core = { version = "0.10", default-features = false, optional = true }
+candle-nn = { version = "0.10", default-features = false, optional = true }
+candle-transformers = { version = "0.10", default-features = false, optional = true }
+# default-features off drops the `onig`/`esaxx_fast` C++ deps; BERT
+# WordPiece doesn't need them. unstable_wasm pulls fancy-regex in
+# pure Rust for the few normalizers that want a regex engine.
+tokenizers = { version = "0.21", default-features = false, optional = true, features = ["unstable_wasm"] }
+# `ureq` selects hf-hub's blocking sync API (`hf_hub::api::sync`).
+# rustls-tls keeps the TLS stack pure Rust; default-tls would pull
+# native-tls + reqwest.
+hf-hub = { version = "0.4", default-features = false, optional = true, features = ["ureq", "rustls-tls"] }
+
+# Pure-Rust extended-attribute access. Used by atomic_write to
+# preserve user xattrs (Finder tags on macOS, SELinux labels and
+# capabilities on Linux) across the tmpfile + rename dance.
+# Linux + macOS only; no-op shim on other platforms.
+[target.'cfg(any(target_os = "linux", target_os = "macos", target_os = "freebsd", target_os = "netbsd"))'.dependencies]
+xattr = "1"
+
+[dev-dependencies]
+tempfile = "3"
+
+[features]
+default = ["embeddings"]
+# Hybrid search (BM25 + dense). Pulls candle + tokenizers + hf-hub.
+# Opt out (`--no-default-features`) on platforms without a usable
+# build (currently iOS); the resulting binary still has BM25 search
+# via tantivy.
+embeddings = [
+    "dep:candle-core",
+    "dep:candle-nn",
+    "dep:candle-transformers",
+    "dep:tokenizers",
+    "dep:hf-hub",
+]
+# macOS-only: link candle's Metal backend so bge-small runs on the
+# Apple GPU. The chan binary forwards this automatically on macOS
+# targets via target-conditional feature wiring; you almost never
+# need to set it directly. Enabling it on Linux/Windows fails at
+# build time (objc2-metal is Apple-only). `CHAN_DISABLE_GPU=1` at
+# runtime falls back to CPU without rebuilding.
+metal = [
+    "embeddings",
+    "candle-core/metal",
+    "candle-nn/metal",
+    "candle-transformers/metal",
+]
+# Linux-only opt-in: `--features cuda` wires candle's CUDA backend.
+# Needs libcuda + libcublas at runtime so default Linux builds stay
+# hermetic. Enabling on macOS fails to compile (cudarc requires the
+# CUDA toolkit). `CHAN_DISABLE_GPU=1` at runtime falls back to CPU.
+cuda = [
+    "embeddings",
+    "candle-core/cuda",
+    "candle-nn/cuda",
+    "candle-transformers/cuda",
+]
+
+[lib]
+name = "chan_workspace"
+crate-type = ["lib"]

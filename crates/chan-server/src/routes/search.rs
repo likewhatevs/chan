@@ -3,7 +3,7 @@
 //! `/api/search/files` is a server-side substring scan of `list_tree`
 //! (chan-drive has no built-in filename index; the cost is linear and
 //! the drive size budget is small). `/api/search/content` defers to
-//! `Drive::search` (BM25 today, hybrid when the `embeddings` feature
+//! `Workspace::search` (BM25 today, hybrid when the `embeddings` feature
 //! is on). `/api/index/status` and `/api/index/rebuild` surface the
 //! background indexer's state machine.
 
@@ -14,7 +14,7 @@ use axum::extract::{Query, State};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use axum::Json;
-use chan_drive::{classify, fs_ops, FileClass, NodeKind, SearchOpts, TreeEntry};
+use chan_workspace::{classify, fs_ops, FileClass, NodeKind, SearchOpts, TreeEntry};
 use serde::{Deserialize, Serialize};
 
 use crate::error::{err_from, err_state};
@@ -209,8 +209,8 @@ pub async fn api_search_content(
     .await
 }
 
-impl From<chan_drive::Hit> for ContentHit {
-    fn from(h: chan_drive::Hit) -> Self {
+impl From<chan_workspace::Hit> for ContentHit {
+    fn from(h: chan_workspace::Hit) -> Self {
         Self {
             path: h.path,
             chunk_id: h.chunk_id,
@@ -439,13 +439,13 @@ mod tests {
 
     use axum::body::Body;
     use axum::http::{header, Request, StatusCode};
-    use chan_drive::{NoProgress, SearchAggression};
+    use chan_workspace::{NoProgress, SearchAggression};
     use tempfile::TempDir;
     use tokio::sync::{broadcast, watch};
     use tower::ServiceExt;
 
     use crate::self_writes::SelfWrites;
-    use crate::state::{AppState, DriveCell};
+    use crate::state::{AppState, WorkspaceCell};
     use crate::terminal_sessions::{Registry as TerminalRegistry, RegistryConfig};
     use crate::{EditorPrefs, ServerConfig};
 
@@ -584,15 +584,15 @@ mod tests {
     fn route_test_app() -> RouteTestApp {
         let cfg = TempDir::new().unwrap();
         let root = TempDir::new().unwrap();
-        let lib = chan_drive::Library::open_at(cfg.path().join("config.toml")).unwrap();
-        lib.register_drive(root.path()).unwrap();
-        let drive = lib.open_drive(root.path()).unwrap();
+        let lib = chan_workspace::Library::open_at(cfg.path().join("config.toml")).unwrap();
+        lib.register_workspace(root.path()).unwrap();
+        let drive = lib.open_workspace(root.path()).unwrap();
         drive.write_text("notes/done.md", "# done\n").unwrap();
         drive.write_text("notes/todo.md", "# todo\n").unwrap();
         drive.index_file("notes/done.md").unwrap();
 
         let (events_tx, _) = broadcast::channel::<String>(1);
-        let (index_events_tx, _) = broadcast::channel::<chan_drive::WatchEvent>(1);
+        let (index_events_tx, _) = broadcast::channel::<chan_workspace::WatchEvent>(1);
         let indexer = Arc::new(crate::indexer::Indexer::spawn(
             drive.clone(),
             index_events_tx.subscribe(),
@@ -606,7 +606,7 @@ mod tests {
         let state = Arc::new(AppState {
             library: lib,
             drive_root: root.path().to_path_buf(),
-            drive_cell: Arc::new(RwLock::new(Some(DriveCell {
+            drive_cell: Arc::new(RwLock::new(Some(WorkspaceCell {
                 drive,
                 watch_handle: None,
                 indexer,

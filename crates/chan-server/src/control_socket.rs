@@ -9,7 +9,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, RwLock};
 
 #[cfg(unix)]
-use chan_drive::Drive;
+use chan_workspace::Workspace;
 #[cfg(unix)]
 use serde::{Deserialize, Serialize};
 #[cfg(unix)]
@@ -20,7 +20,7 @@ use tokio::sync::broadcast;
 #[cfg(unix)]
 use tokio::task::JoinHandle;
 
-use crate::state::DriveCell;
+use crate::state::WorkspaceCell;
 
 #[cfg(unix)]
 #[derive(Debug, Deserialize)]
@@ -102,7 +102,7 @@ pub fn pick_socket_path() -> PathBuf {
 #[cfg(unix)]
 pub fn start(
     socket_path: PathBuf,
-    drive_cell: Arc<RwLock<Option<DriveCell>>>,
+    drive_cell: Arc<RwLock<Option<WorkspaceCell>>>,
     events_tx: broadcast::Sender<String>,
     self_writes: Arc<crate::self_writes::SelfWrites>,
 ) -> std::io::Result<ControlHandle> {
@@ -157,7 +157,7 @@ pub fn start(
 #[cfg(not(unix))]
 pub fn start(
     _socket_path: PathBuf,
-    _drive_cell: Arc<RwLock<Option<DriveCell>>>,
+    _drive_cell: Arc<RwLock<Option<WorkspaceCell>>>,
     _events_tx: broadcast::Sender<String>,
     _self_writes: Arc<crate::self_writes::SelfWrites>,
 ) -> std::io::Result<ControlHandle> {
@@ -170,7 +170,7 @@ pub fn start(
 #[cfg(unix)]
 fn handle_request(
     req: ControlRequest,
-    drive_cell: &Arc<RwLock<Option<DriveCell>>>,
+    drive_cell: &Arc<RwLock<Option<WorkspaceCell>>>,
     events_tx: &broadcast::Sender<String>,
     self_writes: &crate::self_writes::SelfWrites,
 ) -> ControlResponse {
@@ -207,7 +207,7 @@ fn handle_request(
 
 #[cfg(unix)]
 fn open_path(
-    drive: &Drive,
+    drive: &Workspace,
     self_writes: &crate::self_writes::SelfWrites,
     window_id: &str,
     requested: &Path,
@@ -334,7 +334,7 @@ mod tests {
 
     #[test]
     fn handle_request_reports_poisoned_drive_cell() {
-        let drive_cell: Arc<RwLock<Option<DriveCell>>> = Arc::new(RwLock::new(None));
+        let drive_cell: Arc<RwLock<Option<WorkspaceCell>>> = Arc::new(RwLock::new(None));
         let poisoned = drive_cell.clone();
         let _ = std::thread::spawn(move || {
             let _guard = poisoned.write().expect("poison setup");
@@ -367,9 +367,10 @@ mod tests {
         let cfg = tempfile::tempdir().expect("config dir");
         let root = tempfile::tempdir().expect("drive root");
         std::fs::create_dir_all(root.path().join("notes")).expect("notes dir");
-        let lib = chan_drive::Library::open_at(cfg.path().join("config.toml")).expect("library");
-        lib.register_drive(root.path()).expect("register drive");
-        let drive = lib.open_drive(root.path()).expect("open drive");
+        let lib =
+            chan_workspace::Library::open_at(cfg.path().join("config.toml")).expect("library");
+        lib.register_workspace(root.path()).expect("register drive");
+        let drive = lib.open_workspace(root.path()).expect("open drive");
         let self_writes = crate::self_writes::SelfWrites::new();
         let (tx, mut rx) = broadcast::channel(4);
 
@@ -397,9 +398,10 @@ mod tests {
         let cfg = tempfile::tempdir().expect("config dir");
         let root = tempfile::tempdir().expect("drive root");
         std::fs::create_dir_all(root.path().join("notes/sub")).expect("sub dir");
-        let lib = chan_drive::Library::open_at(cfg.path().join("config.toml")).expect("library");
-        lib.register_drive(root.path()).expect("register drive");
-        let drive = lib.open_drive(root.path()).expect("open drive");
+        let lib =
+            chan_workspace::Library::open_at(cfg.path().join("config.toml")).expect("library");
+        lib.register_workspace(root.path()).expect("register drive");
+        let drive = lib.open_workspace(root.path()).expect("open drive");
         let self_writes = crate::self_writes::SelfWrites::new();
         let (tx, mut rx) = broadcast::channel(4);
 

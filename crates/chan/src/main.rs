@@ -36,7 +36,7 @@
 //                                   picker classification.
 //
 // Anything that touches the registry / drive contents goes through
-// `chan_drive::Library` and `chan_drive::Drive` so the library's
+// `chan_workspace::Library` and `chan_workspace::Workspace` so the library's
 // invariants (atomic writes, path sandbox, special-file refusal,
 // cross-process writer lock) apply uniformly.
 
@@ -45,13 +45,13 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use anyhow::{Context, Result};
-use chan_drive::{
-    EdgeKind, KnownDrive, Library, MetadataExportOptions, MetadataImportOptions, SearchAggression,
-    SearchOpts,
-};
 use chan_server::{
     build_fs_graph, EditorPrefs, EditorTheme, FsGraphResponse, FsGraphScope as ServerFsGraphScope,
     LineSpacing, ServeConfig, ServerConfig, ThemeChoice, TunnelServeConfig,
+};
+use chan_workspace::{
+    EdgeKind, KnownWorkspace, Library, MetadataExportOptions, MetadataImportOptions,
+    SearchAggression, SearchOpts,
 };
 use clap::{CommandFactory, Parser, Subcommand, ValueEnum};
 use clap_complete::Shell;
@@ -312,7 +312,7 @@ enum Command {
         /// Scope the graph query to the whole drive, one file, or a directory subtree.
         #[arg(long, value_enum, default_value_t = GraphScope::All)]
         scope: GraphScope,
-        /// Drive-relative file or directory path for --scope file/directory.
+        /// Workspace-relative file or directory path for --scope file/directory.
         #[arg(long)]
         target: Option<String>,
         /// Directory depth for --scope directory. 1 means direct children only.
@@ -327,7 +327,7 @@ enum Command {
     },
     /// Report drive, index, graph, and code-report status.
     Status {
-        /// Drive root. Defaults to the registered default drive.
+        /// Workspace root. Defaults to the registered default drive.
         path: Option<PathBuf>,
         /// Emit machine-readable JSON.
         #[arg(long)]
@@ -368,7 +368,7 @@ enum Command {
     /// Not for end-user invocation.
     #[command(name = "__mcp", hide = true)]
     Mcp {
-        /// Drive root to expose. Must already be registered.
+        /// Workspace root to expose. Must already be registered.
         path: PathBuf,
     },
     /// Internal: stdio bridge to the MCP server hosted in-process
@@ -414,7 +414,7 @@ enum ImportSource {
     Csv {
         /// Path to the CSV file.
         file: PathBuf,
-        /// Drive-relative directory where notes will land. Created
+        /// Workspace-relative directory where notes will land. Created
         /// if it does not exist. Use `""` to write at the drive
         /// root.
         #[arg(long)]
@@ -431,7 +431,7 @@ enum ImportSource {
         /// OVERWROTE so it's clear which files moved.
         #[arg(long)]
         overwrite: bool,
-        /// Drive root. Defaults to the registered default drive.
+        /// Workspace root. Defaults to the registered default drive.
         /// Auto-registers the path if not already known, so
         /// `chan contacts import csv ... --drive /some/dir`
         /// works without a prior `chan add`.
@@ -472,14 +472,14 @@ enum ConfigAction {
 enum MetadataAction {
     /// Export metadata for a registered drive to a .tar.zst archive.
     Export {
-        /// Drive root.
+        /// Workspace root.
         path: PathBuf,
         /// Output archive path. Must end in .tar.zst and not exist.
         archive: PathBuf,
     },
     /// Import metadata into a registered drive from a .tar.zst archive.
     Import {
-        /// Drive root.
+        /// Workspace root.
         path: PathBuf,
         /// Archive path created by `chan metadata export`.
         archive: PathBuf,
@@ -519,9 +519,9 @@ enum IndexAction {
     /// pass `--path` to all of them; systacean-8). At least one
     /// must be supplied.
     Rebuild {
-        /// Drive root, positional form.
+        /// Workspace root, positional form.
         path: Option<PathBuf>,
-        /// Drive root, flag form (synonym for the positional).
+        /// Workspace root, flag form (synonym for the positional).
         #[arg(long = "path", value_name = "PATH")]
         path_flag: Option<PathBuf>,
     },
@@ -544,7 +544,7 @@ enum IndexAction {
     },
     /// Set the embedding model configured for a drive.
     SetModel {
-        /// Drive root. Defaults to the registered default drive.
+        /// Workspace root. Defaults to the registered default drive.
         #[arg(long)]
         path: Option<PathBuf>,
         /// Curated HuggingFace model id.
@@ -557,20 +557,20 @@ enum IndexAction {
     /// `<index_dir>/config.toml` so it survives `chan serve`
     /// restarts.
     EnableSemantic {
-        /// Drive root. Defaults to the registered default drive.
+        /// Workspace root. Defaults to the registered default drive.
         #[arg(long)]
         path: Option<PathBuf>,
     },
     /// Flip the drive back to BM25-only.
     DisableSemantic {
-        /// Drive root. Defaults to the registered default drive.
+        /// Workspace root. Defaults to the registered default drive.
         #[arg(long)]
         path: Option<PathBuf>,
     },
     /// Print the semantic-search state: current mode, model
     /// presence, model path + size, opt-in flag.
     Status {
-        /// Drive root. Defaults to the registered default drive.
+        /// Workspace root. Defaults to the registered default drive.
         #[arg(long)]
         path: Option<PathBuf>,
         /// Emit machine-readable JSON.
@@ -595,7 +595,7 @@ enum ReportsAction {
     /// no persisted report exists. Idempotent: re-enable is a
     /// no-op.
     Enable {
-        /// Drive root. Defaults to the registry's current drive
+        /// Workspace root. Defaults to the registry's current drive
         /// when omitted.
         #[arg(long, value_name = "PATH")]
         path: Option<PathBuf>,
@@ -604,7 +604,7 @@ enum ReportsAction {
     /// persisted `report.jsonl` so re-enabling later triggers a
     /// fresh scan. Pass `-y` to skip the confirmation prompt.
     Disable {
-        /// Drive root.
+        /// Workspace root.
         #[arg(long, value_name = "PATH")]
         path: Option<PathBuf>,
         /// Skip the destructive-action confirmation prompt.
@@ -826,8 +826,8 @@ fn resolve_tunnel_drive_name(flag: Option<String>, root: &Path) -> Result<String
     }
 }
 
-fn ensure_drive_registered(lib: &Library, root: &Path) -> Result<chan_drive::KnownDrive> {
-    lib.register_drive(root)
+fn ensure_drive_registered(lib: &Library, root: &Path) -> Result<chan_workspace::KnownWorkspace> {
+    lib.register_workspace(root)
         .with_context(|| format!("registering {}", root.display()))
 }
 
@@ -848,7 +848,7 @@ fn cmd_add(path: PathBuf, semantic_search: bool, reports: bool) -> Result<()> {
     // flag immediately + the kickoff scan runs once.
     if semantic_search || reports {
         let drive = lib
-            .open_drive(&entry.root_path)
+            .open_workspace(&entry.root_path)
             .with_context(|| format!("opening drive at {}", entry.root_path.display()))?;
         if semantic_search {
             drive
@@ -875,10 +875,10 @@ fn cmd_add(path: PathBuf, semantic_search: bool, reports: bool) -> Result<()> {
 }
 
 fn cmd_list(json: bool) -> Result<()> {
-    let drives = library()?.list_drives();
+    let drives = library()?.list_workspaces();
     if json {
-        let out = DriveListOutput {
-            drives: drives.iter().map(DriveListEntry::from).collect(),
+        let out = WorkspaceListOutput {
+            drives: drives.iter().map(WorkspaceListEntry::from).collect(),
         };
         println!("{}", serde_json::to_string_pretty(&out)?);
         return Ok(());
@@ -908,7 +908,7 @@ fn cmd_completions(shell: Shell) -> Result<()> {
 fn cmd_remove(path: PathBuf) -> Result<()> {
     let lib = library()?;
     let removed = lib
-        .unregister_drive(&path)
+        .unregister_workspace(&path)
         .with_context(|| format!("unregistering {}", path.display()))?;
     if removed {
         println!("unregistered: {}", path.display());
@@ -993,7 +993,7 @@ fn resolve_listen_addr(
 /// Documented in the desktop hand-off; do NOT reshape without
 /// bumping the marker prefix (e.g. `chan-error-v2: ...`) so old
 /// shells fail closed instead of silently misparsing.
-fn print_vcs_parent_error(root: &Path, parent: &chan_drive::VcsParent) {
+fn print_vcs_parent_error(root: &Path, parent: &chan_workspace::VcsParent) {
     // Canonicalize both paths for the marker so wrappers get
     // absolute, symlink-resolved forms. Fall back to the input
     // when canonicalize fails (root may not yet exist on disk).
@@ -1001,9 +1001,9 @@ fn print_vcs_parent_error(root: &Path, parent: &chan_drive::VcsParent) {
     let repo_abs =
         std::fs::canonicalize(&parent.repo_root).unwrap_or_else(|_| parent.repo_root.clone());
     let kind_human = match parent.kind {
-        chan_drive::VcsKind::Git => "Git",
-        chan_drive::VcsKind::Mercurial => "Mercurial",
-        chan_drive::VcsKind::Subversion => "Subversion",
+        chan_workspace::VcsKind::Git => "Git",
+        chan_workspace::VcsKind::Mercurial => "Mercurial",
+        chan_workspace::VcsKind::Subversion => "Subversion",
     };
     eprintln!(
         "error: drive '{}' is inside a {} repository at '{}'.",
@@ -1051,7 +1051,7 @@ async fn cmd_serve(
     // default, then the platform default. Auto-register so users
     // can `chan serve /some/dir` without a prior `chan add`.
     let root = path
-        .or_else(|| lib.default_drive_root())
+        .or_else(|| lib.default_workspace_root())
         .unwrap_or_else(|| lib.effective_default_drive_root());
     // VCS-parent gate. If `root` is inside a Git / Mercurial /
     // Subversion working tree, refuse with a structured error so a
@@ -1061,7 +1061,7 @@ async fn cmd_serve(
     // registry write. `--here` opts the caller out for the case
     // where serving the subdir is the genuine intent.
     if !here {
-        if let Some(parent) = chan_drive::detect_parent_vcs(&root) {
+        if let Some(parent) = chan_workspace::detect_parent_vcs(&root) {
             print_vcs_parent_error(&root, &parent);
             std::process::exit(70);
         }
@@ -1076,7 +1076,7 @@ async fn cmd_serve(
     // standalone/tunnel flag is set, ask it to open this drive in a
     // native window and EXIT. The desktop then owns the drive's flock;
     // the CLI must NOT also open the drive (the single-writer
-    // invariant). This runs BEFORE `open_drive` so a successful
+    // invariant). This runs BEFORE `open_workspace` so a successful
     // handoff never double-opens. Every fallback (no desktop, refused,
     // stale socket, bad handshake, version skew, GUI-absent, opted
     // out, tunnel) drops through to the unchanged standalone path
@@ -1088,7 +1088,7 @@ async fn cmd_serve(
     }
 
     ensure_drive_registered(&lib, &root)?;
-    let drive = lib.open_drive(&root)?;
+    let drive = lib.open_workspace(&root)?;
 
     // Best-effort update notice. The banner reads cached state
     // (no network) so an air-gapped host pays zero startup cost.
@@ -1260,10 +1260,10 @@ fn cmd_reports(action: ReportsAction) -> Result<()> {
 fn cmd_reports_set(path: Option<PathBuf>, enabled: bool, skip_confirm: bool) -> Result<()> {
     let lib = library()?;
     let root = path
-        .or_else(|| lib.default_drive_root())
+        .or_else(|| lib.default_workspace_root())
         .unwrap_or_else(|| lib.effective_default_drive_root());
     let drive = lib
-        .open_drive(&root)
+        .open_workspace(&root)
         .with_context(|| format!("opening drive at {}", root.display()))?;
     // Destructive-action confirmation for disable. The non-
     // interactive `-y` flag skips the prompt; an interactive TTY
@@ -1294,7 +1294,7 @@ fn cmd_reports_set(path: Option<PathBuf>, enabled: bool, skip_confirm: bool) -> 
     if enabled {
         // Kick off the initial scan via `boot` so the flag flip
         // produces visible data without waiting for the next
-        // `Drive::report()` consumer.
+        // `Workspace::report()` consumer.
         drive.boot().context("BOOT after enabling reports")?;
     }
     let verb = if enabled { "enabled" } else { "disabled" };
@@ -1334,7 +1334,7 @@ fn cmd_index_rebuild(path: PathBuf) -> Result<()> {
     // last_seen_at. CLI users expect `chan index rebuild /some/path`
     // to work without a prior `chan add`.
     ensure_drive_registered(&lib, &path)?;
-    let drive = lib.open_drive(&path)?;
+    let drive = lib.open_workspace(&path)?;
 
     // Live progress on stderr so the user can see the embed pass
     // is making progress; on a big drive it can run for tens of
@@ -1349,15 +1349,15 @@ fn cmd_index_rebuild(path: PathBuf) -> Result<()> {
     // two stages the reindex CLI cared about; everything else folds
     // into a generic "still working" line so nothing escapes the user
     // silently on large drives.
-    let callback = chan_drive::progress::progress_fn(move |p| {
+    let callback = chan_workspace::progress::progress_fn(move |p| {
         let line = match p.stage {
-            chan_drive::progress::ProgressStage::IndexFile => format!(
+            chan_workspace::progress::ProgressStage::IndexFile => format!(
                 "[{}/{}] {}",
                 p.current.saturating_add(1),
                 p.total,
                 p.label.as_deref().unwrap_or("")
             ),
-            chan_drive::progress::ProgressStage::EmbedBatch => format!(
+            chan_workspace::progress::ProgressStage::EmbedBatch => format!(
                 "[{}/{}] embedding {} chunks...",
                 p.current.saturating_add(1),
                 p.total,
@@ -1403,7 +1403,7 @@ fn cmd_index_rebuild(path: PathBuf) -> Result<()> {
 }
 
 fn cmd_index_list_models(json: bool) -> Result<()> {
-    let models = chan_drive::index::config::embedding_models();
+    let models = chan_workspace::index::config::embedding_models();
     if json {
         println!("{}", serde_json::to_string_pretty(models)?);
     } else {
@@ -1448,10 +1448,10 @@ fn cmd_index_status(_path: Option<PathBuf>, _json: bool) -> Result<()> {
 /// already laid out in the cache the call returns immediately.
 #[cfg(feature = "embeddings")]
 fn cmd_index_download_model(model: &str) -> Result<()> {
-    use chan_drive::index::embeddings::{
+    use chan_workspace::index::embeddings::{
         global_models_dir, repo_dir_name, resolve_model, Embedder,
     };
-    if chan_drive::index::config::embedding_model(model).is_none() {
+    if chan_workspace::index::config::embedding_model(model).is_none() {
         anyhow::bail!(
             "unknown embedding model: {model} (run `chan index list-models` to list supported models)"
         );
@@ -1480,18 +1480,18 @@ fn cmd_index_download_model(model: &str) -> Result<()> {
 
 #[cfg(feature = "embeddings")]
 fn cmd_index_set_model(path: Option<PathBuf>, model: &str) -> Result<()> {
-    if chan_drive::index::config::embedding_model(model).is_none() {
+    if chan_workspace::index::config::embedding_model(model).is_none() {
         anyhow::bail!(
             "unknown embedding model: {model} (run `chan index list-models` to list supported models)"
         );
     }
     let lib = library()?;
     let root = path
-        .or_else(|| lib.default_drive_root())
+        .or_else(|| lib.default_workspace_root())
         .unwrap_or_else(|| lib.effective_default_drive_root());
     let drive = lib
-        .open_drive(&root)
-        .with_context(|| not_a_chan_drive_hint(&root))?;
+        .open_workspace(&root)
+        .with_context(|| not_a_chan_workspace_hint(&root))?;
     drive
         .set_semantic_model(model)
         .context("persisting semantic model")?;
@@ -1513,14 +1513,14 @@ fn cmd_index_set_model(path: Option<PathBuf>, model: &str) -> Result<()> {
 /// implementation detail.
 #[cfg(feature = "embeddings")]
 fn cmd_index_set_semantic(path: Option<PathBuf>, enabled: bool) -> Result<()> {
-    use chan_drive::index::embeddings::resolve_model;
+    use chan_workspace::index::embeddings::resolve_model;
     let lib = library()?;
     let root = path
-        .or_else(|| lib.default_drive_root())
+        .or_else(|| lib.default_workspace_root())
         .unwrap_or_else(|| lib.effective_default_drive_root());
     let drive = lib
-        .open_drive(&root)
-        .with_context(|| not_a_chan_drive_hint(&root))?;
+        .open_workspace(&root)
+        .with_context(|| not_a_chan_workspace_hint(&root))?;
     if enabled {
         let model = drive.semantic_model().context("reading drive's model id")?;
         if let Err(err) = resolve_model(&model) {
@@ -1546,35 +1546,35 @@ fn cmd_index_set_semantic(path: Option<PathBuf>, enabled: bool) -> Result<()> {
 /// a future multi-drive variant lands as a pure extension).
 ///
 /// systacean-8 fix: read-only access, lock-free + no auto-register.
-/// The pre-fix path took the writer lock via `Drive::open` and
+/// The pre-fix path took the writer lock via `Workspace::open` and
 /// auto-registered missing paths; against a live-served drive that
 /// surfaced as "drive is locked by another process", and against an
 /// unregistered path it leaked "Error: registering <path>". Now the
 /// helper looks up the registered drive's index dir directly and
-/// loads `IndexConfig` from disk — no Drive handle, no flock, no
+/// loads `IndexConfig` from disk — no Workspace handle, no flock, no
 /// side-effects. Missing-from-registry → clean
 /// "not a chan drive at <path>".
 #[cfg(feature = "embeddings")]
 fn cmd_index_status(path: Option<PathBuf>, json: bool) -> Result<()> {
-    use chan_drive::index::embeddings::{global_models_dir, repo_dir_name, resolve_model};
+    use chan_workspace::index::embeddings::{global_models_dir, repo_dir_name, resolve_model};
     let lib = library()?;
     let root = path
-        .or_else(|| lib.default_drive_root())
+        .or_else(|| lib.default_workspace_root())
         .unwrap_or_else(|| lib.effective_default_drive_root());
     let drive_paths = lib
-        .drive_paths_for(&root)
-        .ok_or_else(|| anyhow::anyhow!(not_a_chan_drive_hint(&root)))?;
+        .workspace_paths_for(&root)
+        .ok_or_else(|| anyhow::anyhow!(not_a_chan_workspace_hint(&root)))?;
     // Canonical path comes back from the registry entry; falls back
     // to the user-supplied root if the registry lookup somehow
     // races (impossible while we hold a Library handle, but the
     // ladder keeps the display correct without panicking).
     let canonical_root = lib
-        .list_drives()
+        .list_workspaces()
         .into_iter()
         .find(|d| same_path(&d.root_path, &root))
         .map(|d| d.root_path)
         .unwrap_or(root);
-    let cfg = chan_drive::index::config::load(&drive_paths.index)
+    let cfg = chan_workspace::index::config::load(&drive_paths.index)
         .with_context(|| format!("reading index config at {}", drive_paths.index.display()))?;
     let model = cfg.model;
     let semantic_enabled = cfg.semantic_enabled;
@@ -1594,7 +1594,7 @@ fn cmd_index_status(path: Option<PathBuf>, json: bool) -> Result<()> {
         // `fullstack-b-28b` slice ii: emit `reports_enabled`
         // alongside `semantic_enabled` so chan-desktop's
         // `get_drive_features` IPC can read both flags from one
-        // CLI round-trip. `chan_drive::index::config::load`
+        // CLI round-trip. `chan_workspace::index::config::load`
         // already populated both fields; this is a strict
         // additive extension (existing JSON consumers ignore
         // unknown fields).
@@ -1637,14 +1637,14 @@ fn cmd_index_status(path: Option<PathBuf>, json: bool) -> Result<()> {
 /// pointed at a path the registry doesn't know. Surfaces a clear
 /// "not a chan drive at <path>" hint with a `chan add` next-step
 /// instead of leaking the implementation detail (auto-register
-/// side-effect, `DriveNotRegistered(<path>)`, etc.).
+/// side-effect, `WorkspaceNotRegistered(<path>)`, etc.).
 ///
 /// systacean-8 follow-up: gated on `embeddings` to match both
 /// call sites (`cmd_index_set_semantic`, `cmd_index_status`).
 /// Without the gate `--no-default-features` builds with
 /// `RUSTFLAGS=-D warnings` fail on dead_code.
 #[cfg(feature = "embeddings")]
-fn not_a_chan_drive_hint(root: &std::path::Path) -> String {
+fn not_a_chan_workspace_hint(root: &std::path::Path) -> String {
     format!(
         "not a chan drive at {}; run `chan add {}` first",
         root.display(),
@@ -1704,7 +1704,7 @@ fn humanize_bytes(bytes: u64) -> String {
 /// surfacing rather than silently fixing.
 async fn cmd_mcp(path: PathBuf) -> Result<()> {
     let drive = library()?
-        .open_drive(&path)
+        .open_workspace(&path)
         .with_context(|| format!("opening drive {}", path.display()))?;
     chan_llm::mcp::Server::new(drive)
         .serve_stdio()
@@ -1922,7 +1922,7 @@ async fn cmd_mcp_proxy(_socket: PathBuf) -> Result<()> {
 fn cmd_search(path: PathBuf, query: String, limit: u32) -> Result<()> {
     let lib = library()?;
     ensure_drive_registered(&lib, &path)?;
-    let drive = lib.open_drive(&path)?;
+    let drive = lib.open_workspace(&path)?;
     let opts = SearchOpts {
         limit,
         ..Default::default()
@@ -1948,12 +1948,12 @@ fn cmd_search(path: PathBuf, query: String, limit: u32) -> Result<()> {
 }
 
 #[derive(Serialize)]
-struct DriveListOutput {
-    drives: Vec<DriveListEntry>,
+struct WorkspaceListOutput {
+    drives: Vec<WorkspaceListEntry>,
 }
 
 #[derive(Serialize)]
-struct DriveListEntry {
+struct WorkspaceListEntry {
     path: String,
     /// Stable per-drive metadata storage key under ~/.chan/drives/.
     metadata_key: String,
@@ -1961,8 +1961,8 @@ struct DriveListEntry {
     last_seen_at: String,
 }
 
-impl From<&KnownDrive> for DriveListEntry {
-    fn from(d: &KnownDrive) -> Self {
+impl From<&KnownWorkspace> for WorkspaceListEntry {
+    fn from(d: &KnownWorkspace) -> Self {
         Self {
             path: d.root_path.display().to_string(),
             metadata_key: d.metadata_key.clone(),
@@ -2047,7 +2047,7 @@ fn cmd_graph(
 ) -> Result<()> {
     let lib = library()?;
     ensure_drive_registered(&lib, &path)?;
-    let drive = lib.open_drive(&path)?;
+    let drive = lib.open_workspace(&path)?;
     if scope != GraphScope::All {
         return cmd_filesystem_graph(&drive, scope, target, depth, limit, json);
     }
@@ -2105,7 +2105,7 @@ fn cmd_graph(
 }
 
 fn cmd_filesystem_graph(
-    drive: &chan_drive::Drive,
+    drive: &chan_workspace::Workspace,
     scope: GraphScope,
     target: Option<String>,
     depth: usize,
@@ -2151,12 +2151,12 @@ fn print_filesystem_graph(out: &FsGraphResponse, limit: usize) {
 fn cmd_status(path: Option<PathBuf>, json: bool) -> Result<()> {
     let lib = library()?;
     let root = path
-        .or_else(|| lib.default_drive_root())
+        .or_else(|| lib.default_workspace_root())
         .unwrap_or_else(|| lib.effective_default_drive_root());
     ensure_drive_registered(&lib, &root)?;
-    let drive = lib.open_drive(&root)?;
+    let drive = lib.open_workspace(&root)?;
     let known = lib
-        .list_drives()
+        .list_workspaces()
         .into_iter()
         .find(|d| same_path(&d.root_path, drive.root()));
     let index = drive.index_stats().context("reading index stats")?;
@@ -2245,8 +2245,8 @@ fn cmd_status(path: Option<PathBuf>, json: bool) -> Result<()> {
 }
 
 fn graph_scope_nodes(
-    drive: &chan_drive::Drive,
-    graph: &chan_drive::GraphView,
+    drive: &chan_workspace::Workspace,
+    graph: &chan_workspace::GraphView,
     scope: GraphScope,
     target: Option<&str>,
     depth: usize,
@@ -2669,7 +2669,7 @@ fn cmd_contacts_import_csv(
     overwrite: bool,
     drive: Option<PathBuf>,
 ) -> Result<()> {
-    use chan_drive::contacts::{
+    use chan_workspace::contacts::{
         google::parse_google_csv, slug::slug_for, ImportOpts, ProviderKind,
     };
     use std::collections::HashSet;
@@ -2695,14 +2695,14 @@ fn cmd_contacts_import_csv(
 
     let lib = library()?;
     let root = drive
-        .or_else(|| lib.default_drive_root())
+        .or_else(|| lib.default_workspace_root())
         .unwrap_or_else(|| lib.effective_default_drive_root());
     if !root.exists() {
         std::fs::create_dir_all(&root)
             .with_context(|| format!("creating drive root {}", root.display()))?;
     }
     ensure_drive_registered(&lib, &root)?;
-    let drive = lib.open_drive(&root)?;
+    let drive = lib.open_workspace(&root)?;
 
     if dry_run {
         // Mirror the orchestrator's slug + existence check loop
@@ -2744,8 +2744,8 @@ fn cmd_contacts_import_csv(
     Ok(())
 }
 
-fn print_import_summary(summary: &chan_drive::ImportSummary) {
-    use chan_drive::ImportOutcome;
+fn print_import_summary(summary: &chan_workspace::ImportSummary) {
+    use chan_workspace::ImportOutcome;
     for o in &summary.outcomes {
         match o {
             ImportOutcome::Wrote { path } => println!("WROTE     {path}"),
@@ -2982,7 +2982,7 @@ mod tests {
 
     #[test]
     fn embedding_model_registry_json_uses_default_key() {
-        let body = serde_json::to_value(chan_drive::index::config::embedding_models()).unwrap();
+        let body = serde_json::to_value(chan_workspace::index::config::embedding_models()).unwrap();
         let first = &body.as_array().unwrap()[0];
         assert_eq!(first["id"], "BAAI/bge-small-en-v1.5");
         assert_eq!(first["default"], true);
@@ -3213,13 +3213,13 @@ mod tests {
     fn open_graph_test_drive() -> (
         tempfile::TempDir,
         tempfile::TempDir,
-        std::sync::Arc<chan_drive::Drive>,
+        std::sync::Arc<chan_workspace::Workspace>,
     ) {
         let cfg = tempfile::TempDir::new().unwrap();
         let drive_root = tempfile::TempDir::new().unwrap();
-        let lib = chan_drive::Library::open_at(cfg.path().join("config.toml")).unwrap();
-        lib.register_drive(drive_root.path()).unwrap();
-        let drive = lib.open_drive(drive_root.path()).unwrap();
+        let lib = chan_workspace::Library::open_at(cfg.path().join("config.toml")).unwrap();
+        lib.register_workspace(drive_root.path()).unwrap();
+        let drive = lib.open_workspace(drive_root.path()).unwrap();
         // Lay down a couple of files so the graph view has something
         // to read.
         drive.write_text("notes/a.md", "# A\n").unwrap();

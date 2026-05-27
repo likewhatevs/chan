@@ -4,7 +4,7 @@
 //! existing config files:
 //!
 //! - `attachments_dir`: ServerConfig
-//! - `default_drive_root`: chan-drive's Registry (config.toml)
+//! - `default_workspace_root`: chan-drive's Registry (config.toml)
 //! - `drives`: chan-drive's Registry
 //!
 //! What's left lives here, persisted to
@@ -239,9 +239,9 @@ impl EditorPrefs {
 
 /// `~/.chan/preferences.toml` on desktop. iOS / Android pass an
 /// explicit path via `load_from` / `save_to` since their sandbox
-/// dir isn't `chan_drive::paths::config_dir`.
+/// dir isn't `chan_workspace::paths::config_dir`.
 pub fn default_path() -> PathBuf {
-    chan_drive::paths::config_dir().join("preferences.toml")
+    chan_workspace::paths::config_dir().join("preferences.toml")
 }
 
 #[cfg(test)]

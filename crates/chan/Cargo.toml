@@ -13,11 +13,11 @@ path = "src/main.rs"
 
 [features]
 default = ["embeddings"]
-# Forwards to chan-server / chan-drive's `embeddings` feature so a
+# Forwards to chan-server / chan-workspace's `embeddings` feature so a
 # top-level `--no-default-features` build disables the candle stack
 # all the way down. Default-on; opt out (`--no-default-features`)
 # only for platforms where candle-core won't build (currently iOS).
-embeddings = ["chan-server/embeddings", "chan-drive/embeddings"]
+embeddings = ["chan-server/embeddings", "chan-workspace/embeddings"]
 # Bundle the default BGE-small model into the binary. Default-off
 # so plain `cargo build --release` produces a ~26 MB artifact. Build
 # with `cargo build --release --features embed-model` to get the
@@ -32,10 +32,10 @@ embed-model = ["embeddings", "chan-server/embed-model"]
 # DT_NEEDED entries land in the ELF and the binary won't launch
 # without those .so files in the loader path. CHAN_DISABLE_GPU=1
 # still forces CPU at runtime once the binary is loaded.
-cuda = ["chan-drive/cuda", "chan-server/cuda"]
+cuda = ["chan-workspace/cuda", "chan-server/cuda"]
 
 [dependencies]
-chan-drive = { workspace = true, default-features = false }
+chan-workspace = { workspace = true, default-features = false }
 chan-server = { workspace = true, default-features = false }
 # Pulled in directly (not just transitively through chan-server) so
 # the `__mcp` subcommand can run chan-llm's MCP server in-process.
@@ -74,11 +74,11 @@ tempfile = { workspace = true }
 
 # macOS auto-wires candle's Metal backend so the default release
 # binary uses the GPU for embeddings without a feature flag. The
-# `metal` feature is target-gated on chan-drive (objc2-metal is
+# `metal` feature is target-gated on chan-workspace (objc2-metal is
 # Apple-only); declaring it here keeps Linux/Windows builds clean
 # while macOS gets it transparently.
 [target.'cfg(target_os = "macos")'.dependencies]
-chan-drive = { workspace = true, default-features = false, features = ["metal"] }
+chan-workspace = { workspace = true, default-features = false, features = ["metal"] }
 chan-server = { workspace = true, default-features = false, features = ["metal"] }
 
 # ----- packaging metadata --------------------------------------

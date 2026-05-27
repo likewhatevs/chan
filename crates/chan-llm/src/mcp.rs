@@ -14,7 +14,7 @@
 //! `resolve_path`, `search_content`, graph/report tools, and
 //! `read_media`. The JSON tools route through `tools::execute`;
 //! `read_media` is the binary media read path: it pulls bytes
-//! through `Drive::read` (path sandbox, regular-file gate, lstat)
+//! through `Workspace::read` (path sandbox, regular-file gate, lstat)
 //! and returns base64-encoded MCP image content or PDF blob
 //! resources, capped at `max_media_bytes` (default 10 MiB,
 //! configurable by the server builder or `--max-media-bytes`).
@@ -23,7 +23,7 @@ use std::io::Cursor;
 use std::sync::Arc;
 
 use base64::engine::Engine as _;
-use chan_drive::Drive;
+use chan_workspace::Workspace;
 use rmcp::{
     handler::server::wrapper::Parameters,
     model::{Content, ErrorData, ResourceContents},
@@ -85,9 +85,9 @@ pub fn supported_image_mime(rel: &str) -> Option<&'static str> {
 }
 
 fn media_kind_for_path(rel: &str) -> Option<MediaKind> {
-    match chan_drive::fs_ops::classify(rel) {
-        chan_drive::FileClass::Image => supported_image_mime(rel).map(MediaKind::Image),
-        chan_drive::FileClass::Pdf => Some(MediaKind::Pdf),
+    match chan_workspace::fs_ops::classify(rel) {
+        chan_workspace::FileClass::Image => supported_image_mime(rel).map(MediaKind::Image),
+        chan_workspace::FileClass::Pdf => Some(MediaKind::Pdf),
         _ => None,
     }
 }
@@ -103,7 +103,7 @@ fn media_kind_for_path(rel: &str) -> Option<MediaKind> {
 /// path sandbox, special-file refusal, and editable-text gate apply
 /// to MCP-driven calls.
 ///
-/// Cloning is cheap: `ToolContext` is just an `Arc<Drive>`. The
+/// Cloning is cheap: `ToolContext` is just an `Arc<Workspace>`. The
 /// rmcp tool macros expand into code that requires `Clone` on the
 /// host type.
 #[derive(Clone)]
@@ -113,13 +113,13 @@ pub struct Server {
     /// `with_max_media_bytes`; defaults to
     /// `DEFAULT_MCP_MEDIA_MAX_BYTES`. Lives on the server (not the
     /// `ToolContext`) because it's an MCP-surface policy, not a
-    /// chan-drive invariant: the same `Drive` can host a server with
+    /// chan-drive invariant: the same `Workspace` can host a server with
     /// a different cap.
     max_media_bytes: u64,
 }
 
 impl Server {
-    pub fn new(drive: Arc<Drive>) -> Self {
+    pub fn new(drive: Arc<Workspace>) -> Self {
         Self {
             ctx: ToolContext::new(drive),
             max_media_bytes: DEFAULT_MCP_MEDIA_MAX_BYTES,
@@ -764,7 +764,7 @@ fn mcp_safe_message(err: &LlmError) -> String {
         }
         LlmError::Core(_) => {
             // chan-drive errors that didn't get a typed passthrough
-            // (DriveLocked, DriveAlreadyOpen, Trash*, Search, Graph,
+            // (WorkspaceLocked, WorkspaceAlreadyOpen, Trash*, Search, Graph,
             // Watch, ConfigDecode, Io). Several include paths or
             // host-specific detail; surface the category only.
             "drive operation failed".to_string()
@@ -778,7 +778,7 @@ fn mcp_safe_message(err: &LlmError) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use chan_drive::Library;
+    use chan_workspace::Library;
     use tempfile::TempDir;
 
     /// Pin the inlined `#[tool(description = ...)]` literals to the
@@ -844,8 +844,8 @@ mod tests {
         let cfg = TempDir::new().unwrap();
         let drive_dir = TempDir::new().unwrap();
         let lib = Library::open_at(cfg.path().join("config.toml")).unwrap();
-        lib.register_drive(drive_dir.path()).unwrap();
-        let drive = lib.open_drive(drive_dir.path()).unwrap();
+        lib.register_workspace(drive_dir.path()).unwrap();
+        let drive = lib.open_workspace(drive_dir.path()).unwrap();
         let server = Server::new(drive);
         (cfg, drive_dir, server)
     }
@@ -954,7 +954,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn write_file_rejects_non_text_via_chan_drive() {
+    async fn write_file_rejects_non_text_via_chan_workspace() {
         let (_cfg, _root, server) = fixture();
         let err = server
             .write_file(Parameters(WriteFileParams {

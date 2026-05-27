@@ -5,7 +5,7 @@
 resolver = "2"
 members = [
     "crates/chan",
-    "crates/chan-drive",
+    "crates/chan-workspace",
     "crates/chan-llm",
     "crates/chan-report",
     "crates/chan-server",
@@ -27,12 +27,12 @@ license = "Apache-2.0"
 repository = "https://github.com/fiorix/chan"
 
 [workspace.dependencies]
-# default-features off so each consumer crate can forward chan-drive's
+# default-features off so each consumer crate can forward chan-workspace's
 # `embeddings` feature through its own gate (chan-server / chan
 # declare their own `embeddings` feature that enables this one).
 # Without `default-features = false` here, per-crate overrides are
 # silently ignored by Cargo.
-chan-drive = { version = "0.15.4", path = "crates/chan-drive", default-features = false }
+chan-workspace = { version = "0.15.4", path = "crates/chan-workspace", default-features = false }
 chan-llm = { version = "0.15.4", path = "crates/chan-llm" }
 chan-report = { version = "0.15.4", path = "crates/chan-report" }
 chan-server = { version = "0.15.4", path = "crates/chan-server", default-features = false }

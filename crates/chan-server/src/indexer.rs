@@ -2,13 +2,13 @@
 //
 // Two responsibilities:
 //
-//   1. On server start, kick off a full `Drive::reindex` if the
+//   1. On server start, kick off a full `Workspace::reindex` if the
 //      drive's index is empty (cold drive / fresh schema bump).
 //      Runs on the tokio blocking pool so the rest of `chan serve`
 //      keeps responding.
 //   2. Subscribe to the watcher's `WatchEvent` broadcast and
 //      debounce per-path file changes into incremental
-//      `Drive::index_file` / `Drive::forget_file` calls.
+//      `Workspace::index_file` / `Workspace::forget_file` calls.
 //
 // Status is exposed through a `Mutex<IndexStatus>` snapshot the
 // `/api/index/status` endpoint reads. We deliberately don't push
@@ -21,9 +21,9 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, Weak};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-use chan_drive::{
-    Drive, ProgressCallback, ProgressEvent, ProgressStage, SearchAggression, VcsKind, WatchEvent,
-    WatchKind,
+use chan_workspace::{
+    ProgressCallback, ProgressEvent, ProgressStage, SearchAggression, VcsKind, WatchEvent,
+    WatchKind, Workspace,
 };
 use serde::Serialize;
 use tokio::sync::{broadcast, mpsc};
@@ -45,7 +45,7 @@ pub enum IndexStatus {
     },
     /// One incremental re-index after a watcher event.
     Reindexing { file: String },
-    /// Steady state. Counters mirror `Drive::index_stats`.
+    /// Steady state. Counters mirror `Workspace::index_stats`.
     Idle {
         indexed_docs: u64,
         indexed_vectors: u64,
@@ -94,7 +94,7 @@ pub struct Indexer {
     status: Arc<Mutex<IndexStatus>>,
     telemetry: Arc<Mutex<IndexerTelemetry>>,
     rebuild_tx: mpsc::UnboundedSender<()>,
-    /// Set to true on shutdown so the in-flight `Drive::reindex`
+    /// Set to true on shutdown so the in-flight `Workspace::reindex`
     /// blocking task bails at its next per-file check. Without this
     /// the runtime drop after `serve()` returns would have to wait
     /// for the rebuild to finish naturally; on a large drive that's
@@ -130,7 +130,7 @@ impl Indexer {
     /// progress events forward there in addition to updating the
     /// local `IndexStatus` mutex behind `/api/index/status`.
     pub fn spawn(
-        drive: Arc<Drive>,
+        drive: Arc<Workspace>,
         watch_events: broadcast::Receiver<WatchEvent>,
         initial_build: bool,
         search_aggression: SearchAggression,
@@ -138,11 +138,11 @@ impl Indexer {
     ) -> Self {
         let stats = drive.index_stats().unwrap_or_else(|e| {
             tracing::warn!("indexer: initial stats failed: {e}");
-            chan_drive::IndexStats {
+            chan_workspace::IndexStats {
                 ready: false,
                 indexed_docs: 0,
                 indexed_vectors: 0,
-                model: chan_drive::DEFAULT_MODEL.to_owned(),
+                model: chan_workspace::DEFAULT_MODEL.to_owned(),
             }
         });
         let status = Arc::new(Mutex::new(IndexStatus::Idle {
@@ -157,7 +157,7 @@ impl Indexer {
             coalesced_rebuild: false,
         }));
         let watch_context = WatchContext {
-            vcs_kind: chan_drive::detect_drive_vcs(drive.root()),
+            vcs_kind: chan_workspace::detect_drive_vcs(drive.root()),
         };
 
         // Coordinator task: serializes "rebuild now" requests so
@@ -181,7 +181,7 @@ impl Indexer {
         // Trigger a full rebuild when either side of the index is
         // empty. Checking BM25 alone misses the case where a prior
         // rebuild was killed mid-graph-pass: the graph DB stays
-        // empty (cancellation leaves it cleared, see Drive::reindex
+        // empty (cancellation leaves it cleared, see Workspace::reindex
         // doc) while BM25 still carries data from a much earlier
         // run, so without the graph check the server would never
         // notice and `/api/graph` would keep returning 0 nodes.
@@ -200,7 +200,7 @@ impl Indexer {
         } else if initial_build {
             // systacean-37: when the full reindex DOESN'T fire
             // (drive root is non-empty + graph is non-empty),
-            // the `-34` drafts walker inside `Drive::reindex`
+            // the `-34` drafts walker inside `Workspace::reindex`
             // never runs at boot. Drafts content authored
             // pre-`-36` (when watcher events were silently
             // dropped) stays absent from BM25 + graph. Walk
@@ -277,14 +277,14 @@ impl Indexer {
 }
 
 /// Coordinator task: blocks on the rebuild channel and runs one
-/// full reindex per request. Drives `Drive::reindex_with` with a
+/// full reindex per request. Drives `Workspace::reindex_with` with a
 /// callback that updates the local status mutex AND forwards each
 /// tick to the WS fan-out so the frontend's status pill animates
 /// in real time. Without the WS forward we'd be polling
 /// `/api/index/status` at a coarse cadence; with it we get every
 /// per-file event.
 fn spawn_coordinator(
-    drive: Weak<Drive>,
+    drive: Weak<Workspace>,
     status: Arc<Mutex<IndexStatus>>,
     telemetry: Arc<Mutex<IndexerTelemetry>>,
     mut rx: mpsc::UnboundedReceiver<()>,
@@ -333,7 +333,7 @@ fn spawn_coordinator(
                 Ok(Ok(_summary)) => {
                     reconcile_idle(&drive, &status, &telemetry);
                 }
-                Ok(Err(chan_drive::ChanError::Cancelled)) => {
+                Ok(Err(chan_workspace::ChanError::Cancelled)) => {
                     // Shutdown / reset path: don't surface a
                     // user-visible error; the next boot picks up the
                     // (possibly empty) index and rebuilds. Still clear
@@ -361,7 +361,7 @@ fn spawn_coordinator(
 /// Multiple events for the same path inside the window collapse
 /// into one re-index.
 fn spawn_watcher_loop(
-    drive: Weak<Drive>,
+    drive: Weak<Workspace>,
     shared: IndexerShared,
     mut rx: broadcast::Receiver<WatchEvent>,
     rebuild_tx: mpsc::UnboundedSender<()>,
@@ -540,9 +540,9 @@ enum WatchAction {
 /// forever (see syseng-1 hardening pass).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ApplyOutcome {
-    /// `Drive::index_file` succeeded.
+    /// `Workspace::index_file` succeeded.
     Indexed,
-    /// `Drive::forget_file` succeeded (delete event, or cleanup for
+    /// `Workspace::forget_file` succeeded (delete event, or cleanup for
     /// a vanished / replaced-by-symlink path).
     Forgotten,
     /// Path exists but is not a regular file (symlink, FIFO, socket,
@@ -561,23 +561,23 @@ enum ApplyOutcome {
 /// Per-file watch apply. Performs an explicit `std::fs::symlink_metadata`
 /// check on the drive-relative path and dispatches accordingly.
 ///
-/// Symmetric with `chan_drive::fs_ops::walk_drive_with`; the cold-
+/// Symmetric with `chan_workspace::fs_ops::walk_drive_with`; the cold-
 /// boot walker drops symlinks/specials, and this helper does the
 /// same for the watch path. Without this gate a single user-created
-/// symlink would surface `Drive::index_file`'s `SpecialFile` error
+/// symlink would surface `Workspace::index_file`'s `SpecialFile` error
 /// and stick `IndexStatus::Error` until something else indexed
 /// successfully.
 fn apply_watch_change(
-    drive: &Drive,
+    drive: &Workspace,
     path: &str,
     deleted: bool,
-) -> chan_drive::Result<ApplyOutcome> {
+) -> chan_workspace::Result<ApplyOutcome> {
     if deleted {
         drive.forget_file(path)?;
         return Ok(ApplyOutcome::Forgotten);
     }
     // systacean-36: route `Drafts/`-prefixed paths through the
-    // drafts cap-std handle via `Drive::index_draft_file`. The
+    // drafts cap-std handle via `Workspace::index_draft_file`. The
     // chan-drive watcher (`-25`) emits drafts events with the
     // `Drafts/` prefix already applied; without this branch the
     // `resolve_safe(drive.root(), ...)` below would error
@@ -608,7 +608,7 @@ fn apply_watch_change(
             }
         }
     }
-    let abs = match chan_drive::fs_ops::resolve_safe(drive.root(), path) {
+    let abs = match chan_workspace::fs_ops::resolve_safe(drive.root(), path) {
         Ok(abs) => abs,
         Err(_) => return Ok(ApplyOutcome::SkippedMissing),
     };
@@ -632,10 +632,10 @@ fn apply_watch_change(
     }
 }
 
-/// Translate a watcher event into indexer work. `Drive::watch` has
+/// Translate a watcher event into indexer work. `Workspace::watch` has
 /// already warmed chan-report and runs its report fan-out before the
 /// event reaches this scheduler; full rebuilds run graph-first inside
-/// `Drive::reindex_with`, so provider-loss recovery preserves the
+/// `Workspace::reindex_with`, so provider-loss recovery preserves the
 /// graph/report-before-search priority boundary.
 fn classify_watch_event(event: &WatchEvent, context: WatchContext) -> WatchAction {
     if context.vcs_kind.is_some() && watch_event_touches_vcs_control(event) {
@@ -657,7 +657,7 @@ fn classify_watch_event(event: &WatchEvent, context: WatchContext) -> WatchActio
                 // Rich Prompt workspace activity look broken.
                 return WatchAction::Ignore;
             };
-            if !chan_drive::fs_ops::is_indexable_text(path) {
+            if !chan_workspace::fs_ops::is_indexable_text(path) {
                 return WatchAction::Ignore;
             }
             WatchAction::Changes(vec![PendingChange {
@@ -669,7 +669,7 @@ fn classify_watch_event(event: &WatchEvent, context: WatchContext) -> WatchActio
         WatchKind::Renamed => {
             let mut changes = Vec::with_capacity(2);
             if let Some(from) = event.path.as_deref() {
-                if chan_drive::fs_ops::is_indexable_text(from) {
+                if chan_workspace::fs_ops::is_indexable_text(from) {
                     changes.push(PendingChange {
                         path: from.to_owned(),
                         deleted: true,
@@ -678,7 +678,7 @@ fn classify_watch_event(event: &WatchEvent, context: WatchContext) -> WatchActio
                 }
             }
             if let Some(to) = event.to.as_deref() {
-                if chan_drive::fs_ops::is_indexable_text(to) {
+                if chan_workspace::fs_ops::is_indexable_text(to) {
                     changes.push(PendingChange {
                         path: to.to_owned(),
                         deleted: false,
@@ -699,11 +699,11 @@ fn watch_event_touches_vcs_control(event: &WatchEvent) -> bool {
     event
         .path
         .as_deref()
-        .is_some_and(chan_drive::is_vcs_control_path)
+        .is_some_and(chan_workspace::is_vcs_control_path)
         || event
             .to
             .as_deref()
-            .is_some_and(chan_drive::is_vcs_control_path)
+            .is_some_and(chan_workspace::is_vcs_control_path)
 }
 
 fn should_rebuild_for_vcs_burst(context: WatchContext, pending_len: usize) -> bool {
@@ -857,7 +857,7 @@ impl ProgressCallback for StatusUpdater {
 /// itself is dropped, so we stamp a zeroed idle. Either way the pill
 /// hides (it is visible only on non-idle states).
 fn reconcile_idle(
-    drive: &Weak<Drive>,
+    drive: &Weak<Workspace>,
     status: &Mutex<IndexStatus>,
     telemetry: &Mutex<IndexerTelemetry>,
 ) {
@@ -868,14 +868,14 @@ fn reconcile_idle(
                 *s = IndexStatus::Idle {
                     indexed_docs: 0,
                     indexed_vectors: 0,
-                    model: chan_drive::DEFAULT_MODEL.to_owned(),
+                    model: chan_workspace::DEFAULT_MODEL.to_owned(),
                 };
             }
         }
     }
 }
 
-fn set_idle(drive: &Drive, status: &Mutex<IndexStatus>, telemetry: &Mutex<IndexerTelemetry>) {
+fn set_idle(drive: &Workspace, status: &Mutex<IndexStatus>, telemetry: &Mutex<IndexerTelemetry>) {
     match drive.index_stats() {
         Ok(s) => {
             *status.lock().unwrap() = IndexStatus::Idle {
@@ -898,13 +898,13 @@ fn set_idle(drive: &Drive, status: &Mutex<IndexStatus>, telemetry: &Mutex<Indexe
 #[cfg(test)]
 mod tests {
     use super::*;
-    use chan_drive::{Library, SearchMode, SearchOpts};
+    use chan_workspace::{Library, SearchMode, SearchOpts};
     use std::fs;
     use tempfile::TempDir;
 
     /// Well-known lock-file name (under the OS temp dir) for the
     /// cross-process FS-timing test gate. MUST stay identical to
-    /// `chan_drive::test_gate::GATE_FILE` and the copy in the terminal
+    /// `chan_workspace::test_gate::GATE_FILE` and the copy in the terminal
     /// test module so every FS-timing test across both crates' separate
     /// test binaries contends on the same OS advisory lock.
     const FS_TIMING_GATE: &str = "chan-fs-timing-test.gate";
@@ -967,12 +967,12 @@ mod tests {
         check()
     }
 
-    fn setup_drive() -> (TempDir, TempDir, Arc<Drive>) {
+    fn setup_drive() -> (TempDir, TempDir, Arc<Workspace>) {
         let cfg = TempDir::new().unwrap();
         let drive_dir = TempDir::new().unwrap();
         let lib = Library::open_at(cfg.path().join("config.toml")).unwrap();
-        lib.register_drive(drive_dir.path()).unwrap();
-        let drive = lib.open_drive(drive_dir.path()).unwrap();
+        lib.register_workspace(drive_dir.path()).unwrap();
+        let drive = lib.open_workspace(drive_dir.path()).unwrap();
         (cfg, drive_dir, drive)
     }
 
@@ -998,7 +998,7 @@ mod tests {
     }
 
     #[test]
-    fn classify_watch_event_uses_chan_drive_indexable_gate() {
+    fn classify_watch_event_uses_chan_workspace_indexable_gate() {
         match classify(&ev(WatchKind::Modified, Some("notes/a.txt"), None)) {
             WatchAction::Changes(changes) => {
                 assert_eq!(changes.len(), 1);
@@ -1206,7 +1206,7 @@ mod tests {
         }));
         let updater = StatusUpdater {
             status: status.clone(),
-            forward: Arc::new(chan_drive::NoProgress),
+            forward: Arc::new(chan_workspace::NoProgress),
         };
         updater.on_progress(progress_event(
             ProgressStage::EmbedBatch,
@@ -1240,7 +1240,7 @@ mod tests {
         }));
         let updater = StatusUpdater {
             status: status.clone(),
-            forward: Arc::new(chan_drive::NoProgress),
+            forward: Arc::new(chan_workspace::NoProgress),
         };
         updater.on_progress(progress_event(ProgressStage::ModelLoad, 1, 3, "resolve"));
         assert!(matches!(
@@ -1271,7 +1271,7 @@ mod tests {
         }));
         // A Weak that never upgrades: nothing to query, but the status
         // must not stay Building.
-        let dead: Weak<Drive> = Weak::new();
+        let dead: Weak<Workspace> = Weak::new();
         reconcile_idle(&dead, &status, &telemetry);
         assert!(matches!(&*status.lock().unwrap(), IndexStatus::Idle { .. }));
     }
@@ -1311,8 +1311,8 @@ mod tests {
             drive.clone(),
             events_rx,
             false,
-            chan_drive::SearchAggression::Conservative,
-            Arc::new(chan_drive::NoProgress),
+            chan_workspace::SearchAggression::Conservative,
+            Arc::new(chan_workspace::NoProgress),
         );
         assert_eq!(Arc::strong_count(&drive), 1);
 
@@ -1323,7 +1323,7 @@ mod tests {
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn webtest_a_repro_drafts_via_write_text_then_boot_walk() {
         // systacean-38: empirical reproduction of @@WebtestA's
-        // 5th-round PARTIAL. Uses `Drive::write_text` (the actual
+        // 5th-round PARTIAL. Uses `Workspace::write_text` (the actual
         // path Cmd+N's `api_create_draft` takes, post-`-26`) +
         // simulates the chan-server boot flow via Indexer::spawn.
         //
@@ -1363,13 +1363,13 @@ mod tests {
         // against the same drive. The boot walk should re-index
         // existing drafts content under the unified key.
         let (_events_tx, events_rx) = tokio::sync::broadcast::channel(64);
-        let progress: std::sync::Arc<dyn chan_drive::ProgressCallback> =
-            std::sync::Arc::new(chan_drive::NoProgress);
+        let progress: std::sync::Arc<dyn chan_workspace::ProgressCallback> =
+            std::sync::Arc::new(chan_workspace::NoProgress);
         let _indexer = super::Indexer::spawn(
             drive.clone(),
             events_rx,
             true,
-            chan_drive::SearchAggression::Balanced,
+            chan_workspace::SearchAggression::Balanced,
             progress,
         );
 
@@ -1377,8 +1377,8 @@ mod tests {
         // refresh cycle to complete. Bounded by BOOT_WALK_BUDGET;
         // returns as soon as the hit lands, so the common path is
         // fast and only the worst case under parallel load waits.
-        let opts = chan_drive::SearchOpts {
-            mode: chan_drive::SearchMode::Bm25,
+        let opts = chan_workspace::SearchOpts {
+            mode: chan_workspace::SearchMode::Bm25,
             limit: 10,
             scope: None,
         };
@@ -1445,21 +1445,21 @@ mod tests {
         // Spawn the indexer (mirrors chan-server `serve` flow).
         // initial_build=true triggers the boot-time `-37` walk.
         let (_events_tx, events_rx) = tokio::sync::broadcast::channel(64);
-        let progress: std::sync::Arc<dyn chan_drive::ProgressCallback> =
-            std::sync::Arc::new(chan_drive::NoProgress);
+        let progress: std::sync::Arc<dyn chan_workspace::ProgressCallback> =
+            std::sync::Arc::new(chan_workspace::NoProgress);
         let _indexer = super::Indexer::spawn(
             drive.clone(),
             events_rx,
             true,
-            chan_drive::SearchAggression::Balanced,
+            chan_workspace::SearchAggression::Balanced,
             progress,
         );
 
         // Boot walk is `tokio::task::spawn_blocking`'d; poll for it
         // to complete + BM25 to commit + reader to refresh. Bounded
         // by BOOT_WALK_BUDGET; returns as soon as the hit lands.
-        let opts = chan_drive::SearchOpts {
-            mode: chan_drive::SearchMode::Bm25,
+        let opts = chan_workspace::SearchOpts {
+            mode: chan_workspace::SearchMode::Bm25,
             limit: 10,
             scope: None,
         };
@@ -1490,7 +1490,7 @@ mod tests {
         // despite the watcher being correctly attached.
         //
         // After `-36`, prefixed paths route through
-        // `index_draft_file` (parallel to the `Drive::stat` /
+        // `index_draft_file` (parallel to the `Workspace::stat` /
         // `read_text` / `list` unified-path API from
         // `-26`/`-29`/`-32`).
         let (_cfg, _dir, drive) = setup_drive();
@@ -1513,8 +1513,8 @@ mod tests {
             "graph should know the prefixed draft path; got {files:?}"
         );
 
-        let opts = chan_drive::SearchOpts {
-            mode: chan_drive::SearchMode::Bm25,
+        let opts = chan_workspace::SearchOpts {
+            mode: chan_workspace::SearchMode::Bm25,
             limit: 10,
             scope: None,
         };

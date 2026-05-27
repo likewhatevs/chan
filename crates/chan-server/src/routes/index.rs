@@ -29,8 +29,8 @@ use axum::extract::State;
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use axum::Json;
-use chan_drive::index::config::{self, EmbeddingModelInfo};
-use chan_drive::index::embeddings::{
+use chan_workspace::index::config::{self, EmbeddingModelInfo};
+use chan_workspace::index::embeddings::{
     global_models_dir, model_downloaded, repo_dir_name, resolve_model, Embedder,
 };
 use serde::{Deserialize, Serialize};
@@ -51,7 +51,7 @@ pub struct SemanticState {
     /// expected path (refs/main + complete snapshot trio). False
     /// when the model hasn't been downloaded.
     pub model_present: bool,
-    /// Drive-configured model id (`IndexConfig::model`).
+    /// Workspace-configured model id (`IndexConfig::model`).
     pub model_name: String,
     /// Resolver's expected path under `global_models_dir()`. Stable
     /// regardless of presence — useful for diagnostics ("look at X
@@ -135,7 +135,9 @@ fn dir_total_size(dir: &std::path::Path) -> u64 {
     total
 }
 
-fn build_state(drive: &chan_drive::Drive) -> Result<SemanticState, chan_drive::ChanError> {
+fn build_state(
+    drive: &chan_workspace::Workspace,
+) -> Result<SemanticState, chan_workspace::ChanError> {
     let model_name = drive.semantic_model()?;
     let semantic_enabled = drive.semantic_enabled()?;
     let expected_dir = global_models_dir().join(repo_dir_name(&model_name));
@@ -265,7 +267,7 @@ pub async fn api_semantic_enable(State(state): State<Arc<AppState>>) -> Response
         };
         if let Err(e) = resolve_model(&model_name) {
             let expected_dir = match &e {
-                chan_drive::index::embeddings::EmbedError::ModelNotDownloaded {
+                chan_workspace::index::embeddings::EmbedError::ModelNotDownloaded {
                     expected_dir,
                     ..
                 } => expected_dir.to_string_lossy().into_owned(),
@@ -359,7 +361,8 @@ pub async fn api_semantic_download(State(state): State<Arc<AppState>>) -> Respon
             // checksum, candle load) through the same error
             // rendering as the rest of the search surface. The
             // bridge is feature-gated alongside this whole module.
-            let chan_err: chan_drive::ChanError = chan_drive::index::IndexError::Embed(e).into();
+            let chan_err: chan_workspace::ChanError =
+                chan_workspace::index::IndexError::Embed(e).into();
             return err_from(&chan_err);
         }
         match build_state(&drive) {
@@ -386,13 +389,13 @@ mod tests {
 
     use axum::body::Body;
     use axum::http::{header, Request, StatusCode};
-    use chan_drive::SearchAggression;
+    use chan_workspace::SearchAggression;
     use tempfile::TempDir;
     use tokio::sync::{broadcast, watch};
     use tower::ServiceExt;
 
     use crate::self_writes::SelfWrites;
-    use crate::state::DriveCell;
+    use crate::state::WorkspaceCell;
     use crate::terminal_sessions::{Registry as TerminalRegistry, RegistryConfig};
     use crate::{EditorPrefs, ServerConfig};
 
@@ -405,18 +408,18 @@ mod tests {
     fn route_test_app() -> RouteTestApp {
         let cfg = TempDir::new().unwrap();
         let root = TempDir::new().unwrap();
-        let lib = chan_drive::Library::open_at(cfg.path().join("config.toml")).unwrap();
-        lib.register_drive(root.path()).unwrap();
-        let drive = lib.open_drive(root.path()).unwrap();
+        let lib = chan_workspace::Library::open_at(cfg.path().join("config.toml")).unwrap();
+        lib.register_workspace(root.path()).unwrap();
+        let drive = lib.open_workspace(root.path()).unwrap();
 
         let (events_tx, _) = broadcast::channel::<String>(1);
-        let (index_events_tx, _) = broadcast::channel::<chan_drive::WatchEvent>(1);
+        let (index_events_tx, _) = broadcast::channel::<chan_workspace::WatchEvent>(1);
         let indexer = Arc::new(crate::indexer::Indexer::spawn(
             drive.clone(),
             index_events_tx.subscribe(),
             false,
             SearchAggression::Conservative,
-            Arc::new(chan_drive::NoProgress),
+            Arc::new(chan_workspace::NoProgress),
         ));
         let (shutdown_tx, shutdown_rx) = watch::channel(false);
         std::mem::forget(shutdown_tx);
@@ -424,7 +427,7 @@ mod tests {
         let state = Arc::new(AppState {
             library: lib,
             drive_root: root.path().to_path_buf(),
-            drive_cell: Arc::new(RwLock::new(Some(DriveCell {
+            drive_cell: Arc::new(RwLock::new(Some(WorkspaceCell {
                 drive,
                 watch_handle: None,
                 indexer,

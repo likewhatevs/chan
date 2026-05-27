@@ -37,7 +37,7 @@ fn main() {
     // cargo feature is on (systacean-6): the `include_bytes!` in
     // `src/embed_seed.rs` is `#![cfg(feature = "embed-model")]`, so
     // default builds drop the file entirely and the runtime path
-    // goes through `chan_drive::index::embeddings::resolve_model`
+    // goes through `chan_workspace::index::embeddings::resolve_model`
     // plus the systacean-7 download flow instead. Real bundle is
     // written by `cargo run -p fetch-models` (a.k.a. `make
     // models`); empty stub is enough for a `--features

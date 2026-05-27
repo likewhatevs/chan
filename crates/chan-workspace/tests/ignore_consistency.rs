@@ -1,0 +1,146 @@
+// End-to-end ignore-set consistency (ignore-consistency-spec.md).
+//
+// A drive pointed at a source tree must never index or graph the
+// dependency-tree noise (`node_modules/`, `target/`, `venv/`, `.git/`).
+// The default registry `index_excluded_dirs` is sane out of the box, so
+// a freshly-registered drive excludes them WITHOUT any config. This test
+// seeds a small drive with real `.md` notes plus fake ignored dirs (junk
+// reachable on disk but written outside chan's API, the way a real repo
+// tree would be) and asserts:
+//   - the filtered listing (the File Browser spine / graph presence set)
+//     excludes the ignored dirs;
+//   - the search index does not surface their contents;
+//   - the semantic graph holds only the real note files;
+//   - the RAW unfiltered listing still SEES them, so a user can open a
+//     file inside an ignored dir on demand (requirement 3).
+
+use chan_workspace::{Library, SearchOpts};
+use std::fs;
+use tempfile::TempDir;
+
+fn seed_junk(root: &std::path::Path, rel: &str, body: &str) {
+    let abs = root.join(rel);
+    fs::create_dir_all(abs.parent().unwrap()).unwrap();
+    fs::write(abs, body).unwrap();
+}
+
+#[test]
+fn ignored_dirs_absent_from_index_and_graph_by_default() {
+    let cfg = TempDir::new().unwrap();
+    let drive_root = TempDir::new().unwrap();
+    let root = drive_root.path();
+
+    let lib = Library::open_at(cfg.path().join("config.toml")).unwrap();
+    lib.register_workspace(root).unwrap();
+    let drive = lib.open_workspace(root).unwrap();
+
+    // Real notes (through chan's API).
+    drive
+        .write_text("intro.md", "# Welcome\n\nReal #notes content.\n")
+        .unwrap();
+    drive
+        .write_text("notes/today.md", "# Today\n\nMore #notes.\n")
+        .unwrap();
+
+    // Fake dependency / VCS trees seeded directly on disk, each holding
+    // editable-text junk that WOULD be indexed if the walk descended
+    // into it. node_modules nested under a real dir too (any depth).
+    seed_junk(root, "node_modules/pkg/index.js", "console.log('dep')\n");
+    seed_junk(root, "node_modules/pkg/readme.md", "# dep #notes\n");
+    seed_junk(root, "target/debug/build.rs", "fn main() {}\n");
+    seed_junk(root, ".venv/lib/site.py", "import os\n");
+    seed_junk(root, ".git/HEAD", "ref: refs/heads/main\n");
+    seed_junk(root, "notes/node_modules/dep/a.md", "# nested dep #notes\n");
+
+    // --- Filtered listing (File Browser spine + graph presence set) ---
+    let filtered: Vec<String> = drive
+        .list_tree_filtered_unified()
+        .unwrap()
+        .into_iter()
+        .map(|e| e.path)
+        .collect();
+    assert!(filtered.iter().any(|p| p == "intro.md"));
+    assert!(filtered.iter().any(|p| p == "notes/today.md"));
+    for ignored in [
+        "node_modules",
+        "node_modules/pkg/index.js",
+        "node_modules/pkg/readme.md",
+        "target",
+        "target/debug/build.rs",
+        ".venv",
+        ".venv/lib/site.py",
+        "notes/node_modules",
+        "notes/node_modules/dep/a.md",
+    ] {
+        assert!(
+            !filtered.iter().any(|p| p == ignored),
+            "ignored path leaked into filtered listing: {ignored}; got {filtered:?}"
+        );
+    }
+
+    // --- Raw unfiltered listing still sees them (open-on-demand) ---
+    let raw: Vec<String> = drive
+        .list_tree_unified()
+        .unwrap()
+        .into_iter()
+        .map(|e| e.path)
+        .collect();
+    assert!(
+        raw.iter().any(|p| p == "node_modules/pkg/index.js"),
+        "raw listing must still see ignored-dir files for on-demand open"
+    );
+
+    // --- Index + graph build (the reindex path) ---
+    let summary = drive.reindex(None).unwrap();
+    // Only the two real notes are indexed; the dependency-tree junk
+    // (incl. node_modules/pkg/readme.md and the nested .md) is excluded.
+    assert_eq!(summary.files, 2, "reindex must only see the real notes");
+    assert_eq!(summary.indexed, 2);
+
+    // Search index excludes ignored-dir content. "dep" appears only in
+    // node_modules; it must not be searchable.
+    let dep = drive.search("dep", &SearchOpts::default()).unwrap();
+    assert!(
+        dep.hits.is_empty(),
+        "node_modules content leaked into the search index: {:?}",
+        dep.hits.iter().map(|h| &h.path).collect::<Vec<_>>()
+    );
+
+    // Graph holds only the real note files; no node_modules/target nodes.
+    let g = drive.graph().unwrap();
+    let graph_files = g.files().unwrap();
+    let mut expected = vec!["intro.md".to_string(), "notes/today.md".to_string()];
+    expected.sort();
+    let mut got = graph_files.clone();
+    got.sort();
+    assert_eq!(
+        got, expected,
+        "graph must hold only the real notes, got {graph_files:?}"
+    );
+    for ignored_prefix in ["node_modules", "target", ".venv", ".git"] {
+        assert!(
+            !graph_files
+                .iter()
+                .any(|p| p == ignored_prefix || p.starts_with(&format!("{ignored_prefix}/"))),
+            "ignored dir surfaced in the graph: {ignored_prefix}; got {graph_files:?}"
+        );
+    }
+
+    // --- chan-report language analysis excludes ignored dirs ---
+    // The report engine does its own filesystem walk; it must honor the
+    // same blocklist or the graph's language layer re-surfaces the
+    // dependency trees (target/*.rs as Rust, node_modules/*.js as JS).
+    let report = drive.report().unwrap();
+    let report_paths: Vec<&str> = report.files.iter().map(|f| f.path.as_str()).collect();
+    for ignored_prefix in ["node_modules", "target", ".venv", ".git"] {
+        assert!(
+            !report_paths
+                .iter()
+                .any(|p| *p == ignored_prefix || p.starts_with(&format!("{ignored_prefix}/"))),
+            "ignored dir surfaced in the chan-report scan: {ignored_prefix}; got {report_paths:?}"
+        );
+    }
+    // The real Markdown notes ARE in the report.
+    assert!(report_paths.contains(&"intro.md"));
+    assert!(report_paths.contains(&"notes/today.md"));
+}

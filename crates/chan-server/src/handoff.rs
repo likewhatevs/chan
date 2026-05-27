@@ -17,7 +17,7 @@
 //! chan-drive per-drive flock). In a successful handoff the DESKTOP
 //! owns the drive; the CLI is a launcher that exits WITHOUT opening
 //! the drive. The CLI must therefore consult this module BEFORE it
-//! calls `open_drive`, so it never double-opens.
+//! calls `open_workspace`, so it never double-opens.
 //!
 //! The bearer token never travels over argv/env/logs: in Option B
 //! (the ratified design) the desktop spawns its OWN native window
@@ -67,7 +67,7 @@ pub struct Capabilities {
 }
 
 /// CLI -> desktop request. `tag = "type"` mirrors control_socket so
-/// the on-wire shape is `{"type":"open_drive", ...}`.
+/// the on-wire shape is `{"type":"open_workspace", ...}`.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum Request {
@@ -75,7 +75,7 @@ pub enum Request {
     /// window. `protocol` and `cli_version` are the handshake fields;
     /// the desktop checks `protocol` against its own PROTOCOL_VERSION
     /// before acting.
-    OpenDrive {
+    OpenWorkspace {
         protocol: u32,
         cli_version: String,
         /// The drive root the CLI was asked to serve. The desktop
@@ -228,7 +228,7 @@ impl Drop for ListenerHandle {
 
 /// Bind the well-known socket and spawn an accept loop. Each
 /// connection carries one `Request`; the desktop responds with a
-/// `Response` and closes. `open_drive` is the desktop callback that
+/// `Response` and closes. `open_workspace` is the desktop callback that
 /// spawns/raises the native window for the requested drive path; it
 /// returns `Ok(())` on success or `Err(message)` which the CLI sees
 /// as `Response::Error` and falls back to standalone.
@@ -237,7 +237,7 @@ impl Drop for ListenerHandle {
 /// owning user can connect (defense in depth on top of the per-user
 /// directory). Must be called from within a tokio runtime.
 #[cfg(unix)]
-pub fn start_listener<F>(socket_path: PathBuf, open_drive: F) -> std::io::Result<ListenerHandle>
+pub fn start_listener<F>(socket_path: PathBuf, open_workspace: F) -> std::io::Result<ListenerHandle>
 where
     F: Fn(PathBuf) -> Result<(), String> + Send + Sync + 'static,
 {
@@ -254,7 +254,7 @@ where
     // directory placement is the primary boundary anyway.
     let _ = std::fs::set_permissions(&socket_path, std::fs::Permissions::from_mode(0o600));
 
-    let open_drive = std::sync::Arc::new(open_drive);
+    let open_workspace = std::sync::Arc::new(open_workspace);
     let accept_loop = tokio::spawn(async move {
         loop {
             let (stream, _) = match listener.accept().await {
@@ -265,7 +265,7 @@ where
                     continue;
                 }
             };
-            let open_drive = open_drive.clone();
+            let open_workspace = open_workspace.clone();
             tokio::spawn(async move {
                 let (read, mut write) = stream.into_split();
                 let mut reader = BufReader::new(read);
@@ -275,7 +275,7 @@ where
                         message: "empty handoff request".into(),
                     },
                     Ok(_) => match serde_json::from_str::<Request>(&line) {
-                        Ok(req) => handle_request(req, open_drive.as_ref()),
+                        Ok(req) => handle_request(req, open_workspace.as_ref()),
                         Err(e) => Response::Error {
                             message: format!("invalid handoff request: {e}"),
                         },
@@ -299,7 +299,10 @@ where
 }
 
 #[cfg(not(unix))]
-pub fn start_listener<F>(_socket_path: PathBuf, _open_drive: F) -> std::io::Result<ListenerHandle>
+pub fn start_listener<F>(
+    _socket_path: PathBuf,
+    _open_workspace: F,
+) -> std::io::Result<ListenerHandle>
 where
     F: Fn(PathBuf) -> Result<(), String> + Send + Sync + 'static,
 {
@@ -313,12 +316,12 @@ where
 /// open-drive callback. Kept synchronous: the callback itself queues
 /// the window spawn onto the desktop's app handle.
 #[cfg(unix)]
-fn handle_request<F>(req: Request, open_drive: &F) -> Response
+fn handle_request<F>(req: Request, open_workspace: &F) -> Response
 where
     F: Fn(PathBuf) -> Result<(), String>,
 {
     match req {
-        Request::OpenDrive {
+        Request::OpenWorkspace {
             protocol,
             cli_version,
             drive_path,
@@ -343,7 +346,7 @@ where
                 drive_path = %drive_path,
                 "handoff: opening drive from CLI request",
             );
-            match open_drive(PathBuf::from(drive_path)) {
+            match open_workspace(PathBuf::from(drive_path)) {
                 Ok(()) => Response::Opened {
                     desktop_version: CHAN_VERSION.into(),
                     capabilities: Capabilities {
@@ -351,7 +354,7 @@ where
                     },
                 },
                 Err(message) => {
-                    tracing::warn!(%message, "handoff: open_drive callback failed");
+                    tracing::warn!(%message, "handoff: open_workspace callback failed");
                     Response::Error { message }
                 }
             }
@@ -387,7 +390,7 @@ pub enum Outcome {
 }
 
 /// Try to hand `drive_path` to a running same-user desktop. Connects
-/// the well-known socket, sends an `OpenDrive` request, and parses
+/// the well-known socket, sends an `OpenWorkspace` request, and parses
 /// the response. Any connect failure / stale socket / read error /
 /// malformed reply maps to `Outcome::NoDesktop` so the CLI behaves
 /// exactly like today when the desktop is absent.
@@ -416,7 +419,7 @@ pub async fn try_handoff(drive_path: &Path) -> Outcome {
         Ok(Err(_)) | Err(_) => return Outcome::NoDesktop,
     };
 
-    let req = Request::OpenDrive {
+    let req = Request::OpenWorkspace {
         protocol: PROTOCOL_VERSION,
         cli_version: CHAN_VERSION.into(),
         drive_path: drive_path.display().to_string(),
@@ -470,13 +473,13 @@ mod tests {
 
     #[test]
     fn request_round_trips() {
-        let req = Request::OpenDrive {
+        let req = Request::OpenWorkspace {
             protocol: PROTOCOL_VERSION,
             cli_version: "9.9.9".into(),
             drive_path: "/tmp/notes".into(),
         };
         let json = serde_json::to_string(&req).unwrap();
-        assert!(json.contains("\"type\":\"open_drive\""));
+        assert!(json.contains("\"type\":\"open_workspace\""));
         let back: Request = serde_json::from_str(&json).unwrap();
         assert_eq!(req, back);
     }
@@ -534,14 +537,14 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn handle_request_rejects_protocol_skew() {
-        let req = Request::OpenDrive {
+        let req = Request::OpenWorkspace {
             protocol: PROTOCOL_VERSION + 1,
             cli_version: "9.9.9".into(),
             drive_path: "/tmp/notes".into(),
         };
         // The callback must NOT run on skew: the closure asserts.
         let resp = handle_request(req, &|_p| {
-            panic!("open_drive must not run on protocol skew");
+            panic!("open_workspace must not run on protocol skew");
         });
         match resp {
             Response::VersionSkew {
@@ -554,7 +557,7 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn handle_request_surfaces_callback_error() {
-        let req = Request::OpenDrive {
+        let req = Request::OpenWorkspace {
             protocol: PROTOCOL_VERSION,
             cli_version: CHAN_VERSION.into(),
             drive_path: "/tmp/notes".into(),
@@ -610,7 +613,7 @@ mod tests {
         }
     }
 
-    /// Connect directly to `sock` and round-trip one OpenDrive. Mirrors
+    /// Connect directly to `sock` and round-trip one OpenWorkspace. Mirrors
     /// try_handoff's wire framing but targets an explicit socket so the
     /// test doesn't depend on the well-known path.
     #[cfg(unix)]
@@ -619,7 +622,7 @@ mod tests {
         use tokio::net::UnixStream;
 
         let stream = UnixStream::connect(sock).await.unwrap();
-        let req = Request::OpenDrive {
+        let req = Request::OpenWorkspace {
             protocol: PROTOCOL_VERSION,
             cli_version: CHAN_VERSION.into(),
             drive_path: drive.into(),

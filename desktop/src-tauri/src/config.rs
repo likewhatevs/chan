@@ -37,7 +37,7 @@ use serde::{Deserialize, Serialize};
 pub const MAX_WINDOW_CONFIGS: usize = 20;
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
-pub struct DriveSettings {
+pub struct WorkspaceSettings {
     /// `fullstack-b-28a`: per-drive feature toggle stub. Persisted
     /// in chan-desktop's config until `systacean-27` lands
     /// the chan-drive-side config API; `-b-28b` will swap this stub
@@ -48,7 +48,7 @@ pub struct DriveSettings {
     /// launcher row's expandable feature panel; `-a-76` will mirror
     /// the same toggles into Settings.
     #[serde(default)]
-    pub features: DriveFeatures,
+    pub features: WorkspaceFeatures,
 }
 
 /// `fullstack-b-28a`: per-drive feature toggles. Surfaced via the
@@ -56,7 +56,7 @@ pub struct DriveSettings {
 /// future toggles (chan-report variants, alternate embedding
 /// models, etc.) without re-shaping the IPC contract.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, Default, PartialEq, Eq)]
-pub struct DriveFeatures {
+pub struct WorkspaceFeatures {
     /// Semantic search via BGE-small embeddings. Default OFF.
     /// Round-2-plan §"Pre-flight feature toggles": enabling
     /// triggers a download of the shared model file (~63 MB) +
@@ -129,7 +129,7 @@ pub struct OutboundDrive {
 /// `session.json` so shareable URLs stay shareable.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WindowConfig {
-    /// Drive identity:
+    /// Workspace identity:
     ///   * local drives: canonical filesystem path (matches the
     ///     `AppState.serves` key).
     ///   * tunneled drives: `"tunnel:<label>/<drive>"`, namespaced
@@ -171,7 +171,7 @@ fn default_zoom() -> f64 {
 pub struct Config {
     /// Per-drive UI state, keyed by canonical drive path.
     #[serde(default)]
-    pub drives: HashMap<String, DriveSettings>,
+    pub drives: HashMap<String, WorkspaceSettings>,
     /// Explicit outbound URL attachments. These are non-owned
     /// remote drives that desktop opens by URL.
     #[serde(default)]
@@ -434,7 +434,7 @@ mod tests {
         // `fullstack-b-28a`: per-drive feature toggles default OFF
         // so a lean drive opens BM25-only. The user opts into BGE +
         // reports explicitly via the launcher's expand panel.
-        let f = DriveFeatures::default();
+        let f = WorkspaceFeatures::default();
         assert!(!f.bge);
         assert!(!f.reports);
     }
@@ -446,7 +446,7 @@ mod tests {
         // loadable as `{bge: false, reports: false}` instead of
         // failing the load and dropping the entire per-drive map.
         let pre_b28 = r#"{}"#;
-        let cfg: DriveSettings = serde_json::from_str(pre_b28).expect("legacy load");
+        let cfg: WorkspaceSettings = serde_json::from_str(pre_b28).expect("legacy load");
         assert!(!cfg.features.bge);
         assert!(!cfg.features.reports);
     }
@@ -455,14 +455,14 @@ mod tests {
     fn drive_settings_features_round_trip() {
         // The toggle pair survives a save+load cycle so a flip in
         // the launcher panel sticks across desktop restarts.
-        let settings = DriveSettings {
-            features: DriveFeatures {
+        let settings = WorkspaceSettings {
+            features: WorkspaceFeatures {
                 bge: true,
                 reports: false,
             },
         };
         let json = serde_json::to_string(&settings).expect("serialize");
-        let back: DriveSettings = serde_json::from_str(&json).expect("deserialize");
+        let back: WorkspaceSettings = serde_json::from_str(&json).expect("deserialize");
         assert!(back.features.bge);
         assert!(!back.features.reports);
     }
@@ -475,7 +475,7 @@ mod tests {
         let partial = r#"{
             "features": { "bge": true }
         }"#;
-        let cfg: DriveSettings = serde_json::from_str(partial).expect("partial load");
+        let cfg: WorkspaceSettings = serde_json::from_str(partial).expect("partial load");
         assert!(cfg.features.bge);
         assert!(!cfg.features.reports);
     }

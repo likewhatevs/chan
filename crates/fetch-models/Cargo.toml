@@ -20,7 +20,7 @@ name = "fetch-models"
 path = "src/main.rs"
 
 [dependencies]
-chan-drive = { workspace = true, features = ["embeddings"] }
+chan-workspace = { workspace = true, features = ["embeddings"] }
 anyhow = { workspace = true }
 tar = { workspace = true }
 zstd = { workspace = true }

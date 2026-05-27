@@ -159,7 +159,7 @@ pub async fn api_get_rich_prompt_status(
         tokio::task::spawn_blocking(move || drive.inspect_rich_prompt_session(&inspect_name)).await;
     let workspace = match result {
         Ok(Ok(workspace)) => workspace,
-        Ok(Err(chan_drive::ChanError::DraftBroken { message, .. })) => {
+        Ok(Err(chan_workspace::ChanError::DraftBroken { message, .. })) => {
             return Json(broken_status_response(name, query.session, message, &state))
                 .into_response();
         }
@@ -249,8 +249,8 @@ pub async fn api_close_rich_prompt(
     }
 }
 
-fn rich_prompt_err(e: &chan_drive::ChanError) -> Response {
-    if let chan_drive::ChanError::Io(msg) = e {
+fn rich_prompt_err(e: &chan_workspace::ChanError) -> Response {
+    if let chan_workspace::ChanError::Io(msg) = e {
         let lower = msg.to_lowercase();
         if lower.contains("rich prompt name")
             || lower.contains("must use the rich-prompt prefix")
@@ -346,7 +346,7 @@ fn watcher_view(
 }
 
 fn rich_prompt_response(
-    workspace: chan_drive::RichPromptSession,
+    workspace: chan_workspace::RichPromptSession,
     watcher: RichPromptWatcherView,
     phase: RichPromptPhase,
     error: Option<String>,

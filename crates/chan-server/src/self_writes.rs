@@ -62,7 +62,7 @@ impl SelfWrites {
     }
 
     /// Record a server-side write. The path is the drive-relative
-    /// POSIX form returned by Drive's accessors; the dedupe queue
+    /// POSIX form returned by Workspace's accessors; the dedupe queue
     /// lives in that same coordinate system since the watcher's
     /// `WatchEvent.path` is also drive-relative.
     pub fn note(&self, rel: &str) {

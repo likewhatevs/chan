@@ -15,7 +15,7 @@ use crate::state::StateAccessError;
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
     #[error("chan-drive: {0}")]
-    Core(#[from] chan_drive::ChanError),
+    Core(#[from] chan_workspace::ChanError),
     #[error("io: {0}")]
     Io(#[from] std::io::Error),
     #[error("config: {0}")]
@@ -47,11 +47,11 @@ pub fn err_settings_locked() -> Response {
 
 pub fn err_state(e: &StateAccessError) -> Response {
     match e {
-        StateAccessError::DriveCellMissing => err(
+        StateAccessError::WorkspaceCellMissing => err(
             StatusCode::SERVICE_UNAVAILABLE,
             "drive busy: drive state is temporarily unavailable; retry in a moment".into(),
         ),
-        StateAccessError::DriveCellPoisoned => {
+        StateAccessError::WorkspaceCellPoisoned => {
             err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string())
         }
     }
@@ -73,16 +73,18 @@ pub fn err_tunnel_public_locked() -> Response {
 
 /// Map chan-drive errors to HTTP statuses. The shape of the JSON
 /// matches the old server so frontend error handling stays unchanged.
-pub fn err_from(e: &chan_drive::ChanError) -> Response {
-    use chan_drive::ChanError as C;
+pub fn err_from(e: &chan_workspace::ChanError) -> Response {
+    use chan_workspace::ChanError as C;
     let (status, msg) = match e {
         C::PathEmpty | C::PathEscape | C::SymlinkEscape(_) => {
             (StatusCode::BAD_REQUEST, e.to_string())
         }
         C::NotEditableText(_) => (StatusCode::UNSUPPORTED_MEDIA_TYPE, e.to_string()),
         C::SpecialFile { .. } => (StatusCode::UNSUPPORTED_MEDIA_TYPE, e.to_string()),
-        C::DriveNotRegistered(_) | C::DriveRootMissing(_) => (StatusCode::NOT_FOUND, e.to_string()),
-        C::DriveLocked | C::PathAlreadyExists(_) => (StatusCode::CONFLICT, e.to_string()),
+        C::WorkspaceNotRegistered(_) | C::WorkspaceRootMissing(_) => {
+            (StatusCode::NOT_FOUND, e.to_string())
+        }
+        C::WorkspaceLocked | C::PathAlreadyExists(_) => (StatusCode::CONFLICT, e.to_string()),
         C::DraftBroken { .. } => (StatusCode::BAD_REQUEST, e.to_string()),
         C::Io(s) if s.contains("No such file") || s.contains("not found") => {
             (StatusCode::NOT_FOUND, e.to_string())
@@ -149,9 +151,9 @@ mod tests {
 
     #[tokio::test]
     async fn err_from_maps_path_already_exists_to_conflict() {
-        let (status, msg) = status_and_error(err_from(&chan_drive::ChanError::PathAlreadyExists(
-            "notes/draft.md".to_string(),
-        )))
+        let (status, msg) = status_and_error(err_from(
+            &chan_workspace::ChanError::PathAlreadyExists("notes/draft.md".to_string()),
+        ))
         .await;
         assert_eq!(status, StatusCode::CONFLICT);
         assert!(msg.contains("notes/draft.md"));
@@ -159,7 +161,7 @@ mod tests {
 
     #[tokio::test]
     async fn err_from_maps_broken_draft_to_bad_request() {
-        let (status, msg) = status_and_error(err_from(&chan_drive::ChanError::DraftBroken {
+        let (status, msg) = status_and_error(err_from(&chan_workspace::ChanError::DraftBroken {
             name: "untitled-1".to_string(),
             message: "missing draft.md".to_string(),
         }))
@@ -171,7 +173,8 @@ mod tests {
 
     #[tokio::test]
     async fn err_state_maps_missing_drive_to_retryable_busy() {
-        let (status, msg) = status_and_error(err_state(&StateAccessError::DriveCellMissing)).await;
+        let (status, msg) =
+            status_and_error(err_state(&StateAccessError::WorkspaceCellMissing)).await;
 
         assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
         assert!(msg.contains("drive busy"));
@@ -179,7 +182,7 @@ mod tests {
 
     #[tokio::test]
     async fn err_from_maps_non_utf8_editable_upload_to_415() {
-        let (status, msg) = status_and_error(err_from(&chan_drive::ChanError::Io(
+        let (status, msg) = status_and_error(err_from(&chan_workspace::ChanError::Io(
             "refusing to write non-UTF-8 bytes to editable text file: note.md".to_string(),
         )))
         .await;

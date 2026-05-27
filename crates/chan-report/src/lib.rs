@@ -65,7 +65,7 @@ impl ReportOptions {
 pub enum Scope {
     /// Whole indexed root.
     All,
-    /// Drive-relative POSIX prefix; matches the directory and
+    /// Workspace-relative POSIX prefix; matches the directory and
     /// everything under it. Empty string is equivalent to `All`.
     Prefix(String),
     /// Exact relative paths. Missing entries are silently ignored.
