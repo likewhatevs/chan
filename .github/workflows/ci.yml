@@ -1,18 +1,8 @@
 name: CI
 
-# Toolchain version is pinned in rust-toolchain.toml; CI uses
-# actions-rust-lang/setup-rust-toolchain to read it.
-#
-# Rust cargo jobs build with an empty web/dist/ (rust-embed +
-# build.rs handle the missing-bundle case). The `web` job runs the
-# real svelte-check + vitest + vite build so frontend regressions
-# fail per-PR rather than per-tag.
-#
-# Layout note: every cargo job checks the repo into a subdir. That
-# moves rust-toolchain.toml off the workspace root, where
-# setup-rust-toolchain looks. We `cp` the toolchain file to the
-# workspace root before the action runs so the pinned components
-# (rustfmt, clippy) get installed.
+# Phase 11 CI calls the same Make targets developers use locally.
+# Linux runs the full gate first; macOS runs only after Linux passes
+# and stays focused on Rust clippy/tests for OS-specific coverage.
 
 on:
   push:
@@ -25,91 +15,26 @@ env:
   RUSTFLAGS: -D warnings
 
 jobs:
-  fmt:
-    name: rustfmt
+  linux:
+    name: make ci-linux
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
         with:
           path: chan
-      - run: cp chan/rust-toolchain.toml ./rust-toolchain.toml
-      - uses: actions-rust-lang/setup-rust-toolchain@v1
-      - run: cargo fmt --check
-        working-directory: chan
 
-  # Matrix: ubuntu-latest + macos-latest.
-  #
-  # macOS added 2026-05-21 per @@Architect's ci-13 clearance
-  # (macOS billing is 10x Linux but worth it for the macOS-specific
-  # coverage — PTY semantics, native shell, etc. chan-desktop's
-  # release target is macOS, so per-PR macOS gate is load-bearing).
-  #
-  # Windows deferred 2026-05-21 per ci-13 / @@Alex scope decision.
-  # The smoke cascade from ci-12 unmasked a deep Windows-specific
-  # debt surface (lock-primitive divergence, terminal_sessions
-  # POSIX assumptions, notify-crate timing, etc.) not worth
-  # iterating on now. To re-enable: add `windows-latest` back to
-  # the matrix below + restore the conditional `cargo build
-  # --release` smoke step. See `phase-8-bugs.md` "Windows support
-  # — full re-enable" for the Round-3 follow-up.
-  test:
-    name: clippy + test (${{ matrix.os }})
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [ubuntu-latest, macos-latest]
-    runs-on: ${{ matrix.os }}
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          path: chan
       - run: cp chan/rust-toolchain.toml ./rust-toolchain.toml
       - uses: actions-rust-lang/setup-rust-toolchain@v1
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: chan
 
-      # chan-desktop joined the workspace 2026-05-19; its Linux Tauri
-      # deps pull `webkit2gtk-sys` + `glib-sys`, which need pkg-config
-      # against the GTK system libs at build time. `cargo clippy
-      # --all-targets` walks every workspace member, so the install is
-      # needed even though chan-desktop itself isn't an ubuntu-test
-      # target. Mirror `release-desktop.yml` lines 114-123 so the two
-      # workflows stay symmetric. Skip on Windows + macOS: Tauri's
-      # Cargo gates the gtk crates to Linux, so the build tree there
-      # doesn't compile glib-sys at all.
-      - if: matrix.os == 'ubuntu-latest'
-        name: Install Linux Tauri build deps
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y \
-            libwebkit2gtk-4.1-dev \
-            libayatana-appindicator3-dev \
-            librsvg2-dev \
-            libsoup-3.0-dev \
-            patchelf
-
-      - run: cargo clippy --all-targets -- -D warnings
-        working-directory: chan
-      - run: cargo test --all-targets
-        working-directory: chan
-
-  no-default-features:
-    name: build (no default features)
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
         with:
-          path: chan
-      - run: cp chan/rust-toolchain.toml ./rust-toolchain.toml
-      - uses: actions-rust-lang/setup-rust-toolchain@v1
-      - uses: Swatinem/rust-cache@v2
-        with:
-          workspaces: chan
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: chan/web/package-lock.json
 
-      # See the GTK-install rationale in the `test` job above. Even
-      # `--no-default-features` walks every workspace member; the
-      # chan-desktop Linux build still pulls glib-sys.
       - name: Install Linux Tauri build deps
         run: |
           sudo apt-get update
@@ -120,44 +45,23 @@ jobs:
             libsoup-3.0-dev \
             patchelf
 
-      - run: cargo build --no-default-features
+      - run: make ci-linux
         working-directory: chan
 
-  # Frontend gate. release.yml already builds web/ at tag time so the
-  # bundle bakes into the release binary; this job catches svelte-check
-  # + vitest regressions per-PR instead of per-tag. Linux-only (npm
-  # toolchain is portable; OS-specific frontend bugs are vanishingly
-  # rare and not worth the matrix cost).
-  web:
-    name: web (check + test + build)
-    runs-on: ubuntu-latest
+  macos:
+    name: make ci-macos
+    needs: linux
+    runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
         with:
           path: chan
-      - uses: actions/setup-node@v4
-        with:
-          node-version: '20'
-          cache: 'npm'
-          cache-dependency-path: chan/web/package-lock.json
-      - run: npm ci
-        working-directory: chan/web
-      - run: npm run check
-        working-directory: chan/web
-      - run: npm run test
-        working-directory: chan/web
-      - run: npm run build
-        working-directory: chan/web
 
-  site:
-    name: web-marketing (build)
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
+      - run: cp chan/rust-toolchain.toml ./rust-toolchain.toml
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+      - uses: Swatinem/rust-cache@v2
         with:
-          path: chan
-      - uses: actions/setup-node@v4
-        with:
-          node-version: '20'
-      - run: npm run check
-        working-directory: chan/web-marketing
+          workspaces: chan
+
+      - run: make ci-macos
+        working-directory: chan

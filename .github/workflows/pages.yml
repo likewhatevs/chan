@@ -32,6 +32,9 @@ jobs:
           node-version: '20'
       - run: npm run check
         working-directory: chan/web-marketing
+      - name: Preserve existing release metadata
+        run: npm run preserve:metadata
+        working-directory: chan/web-marketing
       - uses: actions/upload-pages-artifact@v3
         with:
           path: chan/web-marketing/dist

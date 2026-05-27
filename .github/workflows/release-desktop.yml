@@ -1,104 +1,35 @@
-name: Release (chan-desktop)
+name: Desktop Package Dry Run
 
-# Triggered on `chan-v*` tag pushes. Builds the chan-desktop
-# (Tauri) installers; on macOS the .app + .dmg are signed with
-# the Apple Developer ID and notarized via notarytool (ticket
-# stapled). On tag push, the signed macOS .dmg + the unsigned
-# Linux .deb + .AppImage are uploaded to a GitHub Release (the
-# Linux unsigned upload was added 2026-05-22 per ci-14; Linux
-# signing is a Round-3 polish item). Trigger pattern matches
-# release.yml's `chan-v*` tags, but desktop packaging stays in
-# this separate workflow.
-#
-# Build path (Linux) mirrors `desktop/Makefile`'s `build`:
-#   1. `npm ci` + `npm run build` (web bundle), implicit via
-#      `make build` -> `chan-bin`.
-#   2. `cargo build --release --bin chan` (helper), implicit via
-#      `make build` -> `chan-bin`.
-#   3. `cargo tauri build` (chan-desktop + installers), implicit
-#      via `make build`.
-#
-# Build path (macOS) mirrors `desktop/Makefile`'s `app-notarized`:
-# same chan-bin staging, then `cargo tauri build --bundles app,dmg`
-# under the four APPLE_* env vars; Tauri's CLI handles the codesign
-# + notarytool roundtrip + ticket staple in one pass. Linux apt
-# install + tauri-cli install are still shared across both OSes;
-# the macOS-only steps (secret verification, cert import, signed
-# build, signature verification, GH Release upload) gate on
-# `matrix.os == 'macos-latest'`.
-#
-# macOS signing consumes six GitHub Actions secrets per the
-# `ci-3` brief at docs/release/macos-signing.md:
-#
-#   APPLE_CERTIFICATE_BASE64     Developer ID .p12 (base64-encoded)
-#   APPLE_CERTIFICATE_PASSWORD   .p12 export password
-#   APPLE_SIGNING_IDENTITY       "Developer ID Application: ..."
-#   APPLE_TEAM_ID                10-char team id
-#   APPLE_ID                     developer account email
-#   APPLE_PASSWORD               app-specific password
-#
-# Missing secrets make the verify-secrets step fail fast on macOS
-# with a named message pointing at the ci-3 brief; values never
-# echo (GitHub masks secret values + we check via `[ -n "$VAR" ]`
-# only). On notarization rejection, the build log captures
-# notarytool's diagnostics + a `failure()` step uploads the
-# bundle dir + log as a diagnostic artifact for triage.
-#
-# Out of scope (separate briefs / future tasks):
-#
-#   Tauri updater bundle signing (per desktop/CLAUDE.md):
-#     TAURI_SIGNING_PRIVATE_KEY    NEW production minisign key
-#     TAURI_SIGNING_PRIVATE_KEY_PASSWORD
-#     Gated on the bridge release that ships the new pubkey;
-#     orthogonal to Apple Developer ID notarization.
-#
-#   Windows Authenticode:
-#     WINDOWS_PFX_BASE64           cert blob, base64-encoded
-#     WINDOWS_PFX_PASSWORD         cert password
-#     signtool.exe step after `cargo tauri build`. Brief:
-#     docs/release/windows-signing.md (TBD).
-#
-#   Linux package signing:
-#     GPG_PRIVATE_KEY              GPG key for .deb / .rpm signing
-#     GPG_PASSPHRASE
-#
-#   Windows GitHub Release upload: bundles stay as workflow
-#   artifacts until the Authenticode signing lane opens.
-#   (Linux .deb + .AppImage moved to GH Release 2026-05-22 per
-#   ci-14, unsigned; Linux signing is Round-3 polish.)
+# Manual package smoke for chan-desktop. The tag-triggered release path lives
+# in release.yml so one ordered workflow owns release assets, verification,
+# /dl metadata generation, and Pages publication.
 
 on:
-  push:
-    tags:
-      - 'chan-v*'
   workflow_dispatch:
+
+permissions:
+  contents: read
 
 env:
   CARGO_TERM_COLOR: always
 
 jobs:
   build:
-    name: build (${{ matrix.os }})
+    name: desktop package (${{ matrix.os }})
     strategy:
       fail-fast: false
       matrix:
         include:
           - os: ubuntu-latest
             artifact_name: linux-x86_64
-            artifact_suffix: unsigned
           - os: macos-latest
             artifact_name: macos-aarch64
-            artifact_suffix: signed
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
         with:
           path: chan
 
-      # rust-toolchain.toml lives at the repo root. CI runs from
-      # the parent of `chan/`, so copy the pin to the workspace
-      # root before setup-rust-toolchain looks for it. Mirrors the
-      # pattern in ci.yml + release.yml.
       - run: cp chan/rust-toolchain.toml ./rust-toolchain.toml
       - uses: actions-rust-lang/setup-rust-toolchain@v1
       - uses: Swatinem/rust-cache@v2
@@ -111,9 +42,6 @@ jobs:
           cache: 'npm'
           cache-dependency-path: chan/web/package-lock.json
 
-      # Tauri Linux build needs webkit2gtk + GTK glue. Apt names
-      # follow Tauri 2's documented Ubuntu 22.04 list. Skip on
-      # macOS (system frameworks).
       - if: matrix.os == 'ubuntu-latest'
         name: Install Linux Tauri build deps
         run: |
@@ -125,72 +53,11 @@ jobs:
             libsoup-3.0-dev \
             patchelf
 
-      # `cargo tauri build` requires tauri-cli as a cargo subcommand.
-      # Pin to v2.x to match the workspace `tauri = "2"` deps.
-      # Pulls a prebuilt binary instead of compiling from source;
-      # `cargo install tauri-cli` was ~3-5 min per matrix entry.
-      # taiki-e/install-action's `tool` input does NOT accept
-      # cargo's semver-range operators (`^`, `~`, `>=`). Only
-      # exact versions, `latest`, major-only (`@2`), or
-      # major.minor (`@2.8`) pins are valid. `^2` was a latent
-      # ci-4 bug surfaced by the first real workflow run on
-      # chan-v0.11.99-dryrun.1 (2026-05-21).
       - name: Install tauri-cli
         uses: taiki-e/install-action@v2
         with:
           tool: tauri-cli@2
 
-      # The Makefile's `chan-bin` target runs `npm run build` but
-      # not `npm ci`. Install the deps explicitly so a clean runner
-      # has node_modules before the make target reaches in.
-      - name: npm ci (web)
-        working-directory: chan/web
-        run: npm ci
-
-      # Cache the encoded BGE-small bundle (63 MB) so the fetch-
-      # models step below skips on warm cache. Same shape as
-      # release.yml; key is content-derived from the fetcher
-      # source + DEFAULT_MODEL constant site.
-      #
-      # Gated on `--features embed-model` (systacean-6 made the
-      # model embed opt-in). The chan-desktop helper binary builds
-      # default-feature today, so this step + the fetcher
-      # invocation below are hardcoded-skipped. When the desktop
-      # bundle starts shipping the embedded model (offline-install
-      # variant, etc.), flip `if: false` to the appropriate
-      # matrix-input or workflow-input expression.
-      - if: false
-        name: Cache BGE-small bundle
-        id: cache-bge-bundle
-        uses: actions/cache@v4
-        with:
-          path: chan/crates/chan-server/resources/models.tar.zst
-          key: bge-bundle-${{ hashFiles('chan/crates/fetch-models/**', 'chan/crates/chan-drive/src/index/config.rs') }}
-
-      # Pre-fetch the BGE-small embedding model so chan-server's
-      # rust-embed bakes it into the helper chan binary. Adds
-      # ~140 MB to the artifact but matches release.yml's chan
-      # CLI behaviour: end users get hybrid search with no
-      # network round-trip on first launch.
-      #
-      # Same `--features embed-model` gate as the cache step
-      # above. When the gate flips, restore the composite
-      # `if: steps.cache-bge-bundle.outputs.cache-hit != 'true'`
-      # condition so the ci-5 warm-cache short-circuit returns.
-      - if: false
-        name: Pre-fetch embedded model
-        working-directory: chan
-        run: cargo run --release -p fetch-models
-
-      # ----- macOS signing prep -----
-      # Verify all six Apple secrets are present before the runner
-      # spends 10+ minutes on a build that would fail at notarize
-      # time anyway. Checks are length-only (`[ -n "$VAR" ]`), so
-      # no secret value enters the script's logic; GitHub Actions
-      # additionally masks secret values in log output. Missing
-      # secrets emit a `::error::` annotation naming exactly which
-      # secrets are absent + a pointer to the ci-3 brief, then
-      # exit 1.
       - if: matrix.os == 'macos-latest'
         name: Verify Apple signing secrets present
         env:
@@ -201,28 +68,20 @@ jobs:
           APPLE_ID: ${{ secrets.APPLE_ID }}
           APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
         run: |
+          set -e
           missing=()
-          [ -n "$APPLE_CERTIFICATE_BASE64" ]   || missing+=("APPLE_CERTIFICATE_BASE64")
+          [ -n "$APPLE_CERTIFICATE_BASE64" ] || missing+=("APPLE_CERTIFICATE_BASE64")
           [ -n "$APPLE_CERTIFICATE_PASSWORD" ] || missing+=("APPLE_CERTIFICATE_PASSWORD")
-          [ -n "$APPLE_SIGNING_IDENTITY" ]     || missing+=("APPLE_SIGNING_IDENTITY")
-          [ -n "$APPLE_TEAM_ID" ]              || missing+=("APPLE_TEAM_ID")
-          [ -n "$APPLE_ID" ]                   || missing+=("APPLE_ID")
-          [ -n "$APPLE_PASSWORD" ]             || missing+=("APPLE_PASSWORD")
+          [ -n "$APPLE_SIGNING_IDENTITY" ] || missing+=("APPLE_SIGNING_IDENTITY")
+          [ -n "$APPLE_TEAM_ID" ] || missing+=("APPLE_TEAM_ID")
+          [ -n "$APPLE_ID" ] || missing+=("APPLE_ID")
+          [ -n "$APPLE_PASSWORD" ] || missing+=("APPLE_PASSWORD")
           if [ ${#missing[@]} -gt 0 ]; then
             echo "::error::Missing Apple signing secrets: ${missing[*]}"
-            echo "::error::Populate per docs/release/macos-signing.md (the ci-3 brief)."
+            echo "::error::Populate per docs/release/macos-signing.md."
             exit 1
           fi
-          echo "All six Apple signing secrets present."
 
-      # Import the Developer ID .p12 into a temporary keychain.
-      # `apple-actions/import-codesign-certs@v3` handles temp-
-      # keychain creation, unlock, cert import, and the partition-
-      # list ACL that lets codesign reach the key without an
-      # interactive prompt. Brief recommends this action over a
-      # hand-rolled `security` block (see ci-3 brief for the
-      # fallback shape if the action is ever rate-limited /
-      # abandoned).
       - if: matrix.os == 'macos-latest'
         name: Import Developer ID certificate
         uses: apple-actions/import-codesign-certs@v3
@@ -230,221 +89,23 @@ jobs:
           p12-file-base64: ${{ secrets.APPLE_CERTIFICATE_BASE64 }}
           p12-password: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
 
-      # ----- build -----
-      # Linux: `make build` (unsigned bundle).
-      # macOS: `make app-notarized` (sign + notarytool roundtrip
-      # + ticket staple + .dmg packaging). Both paths invoke the
-      # same chan-bin to cargo tauri build chain; differ only in
-      # the `--bundles` flag + the post-sign notary steps that
-      # the Tauri CLI runs when APPLE_* env vars are present.
-      #
-      # On macOS, the build output (stdout+stderr) is teed to
-      # /tmp/chan-desktop-build.log so the failure() diagnostic
-      # step below has the full notarytool trace to upload even
-      # when the GitHub Actions log gets truncated.
       - if: matrix.os == 'ubuntu-latest'
-        name: Build chan-desktop installers (unsigned)
-        working-directory: chan/desktop
-        run: make build
+        name: Build Linux desktop package
+        working-directory: chan
+        run: make chan-desktop
 
       - if: matrix.os == 'macos-latest'
-        name: Build + sign + notarize chan-desktop
-        working-directory: chan/desktop
+        name: Build signed and notarized macOS desktop package
+        working-directory: chan
         env:
           APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
           APPLE_ID: ${{ secrets.APPLE_ID }}
           APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
-        run: |
-          set -o pipefail
-          make app-notarized 2>&1 | tee /tmp/chan-desktop-build.log
+        run: make macos-chan-dmg-notarised
 
-      # Confirm the signing identity landed on the .app and the
-      # notarization ticket is stapled to the DMG.
-      #
-      # systacean-13 split the Makefile's app-notarized recipe:
-      # tauri-bundler 2.x doesn't consume notarytool Keychain
-      # profiles, so the new shape unsets APPLE_* env vars during
-      # `cargo tauri build` (Tauri skips its own notarize step)
-      # and runs `xcrun notarytool submit` + `xcrun stapler staple`
-      # against the DMG ONLY. That matches Apple's canonical DMG
-      # distribution shape: stapling the DMG wrapper is sufficient
-      # since Gatekeeper verifies it when the user mounts the
-      # image; the .app inside inherits trust at install time.
-      # `stapler validate Chan.app` would fail on the unstapled
-      # .app (it's signed but carries no notary ticket of its own).
-      - if: matrix.os == 'macos-latest'
-        name: Verify signature + stapled notarization
-        run: |
-          set -e
-          APP="chan/target/release/bundle/macos/Chan.app"
-          DMG=$(ls chan/target/release/bundle/dmg/*.dmg | head -1)
-          echo "=== codesign -dv on Chan.app (no staple required) ==="
-          codesign -dv --verbose=2 "$APP" 2>&1 | head -30
-          echo "=== stapler validate $DMG ==="
-          stapler validate "$DMG"
-          echo "=== spctl assessment on $DMG (install context) ==="
-          spctl -a -t install -v "$DMG"
-
-      # Tauri-bundler 2.x hardcodes the macOS DMG filename as
-      # `<ProductName>_<version>_x64.dmg` regardless of the target
-      # arch (aarch64-apple-darwin still produces `_x64`). The
-      # suffix is misleading today (the binary is aarch64) and will
-      # stay misleading once universal2 lands per the post-v0.11.2
-      # ci-N follow-up. Drop the suffix here so the GH Release
-      # artifact is `Chan_<version>.dmg`, arch-agnostic, matches
-      # the universal2 future state. Done as a workflow-side rename
-      # because tauri-bundler 2.x does not expose a filename
-      # template knob; revisit if tauri-bundler grows one.
-      - if: matrix.os == 'macos-latest'
-        name: Drop _x64 suffix from DMG filename
-        run: |
-          set -e
-          DMG_DIR="chan/target/release/bundle/dmg"
-          OLD=$(ls "$DMG_DIR"/*.dmg | head -1)
-          NEW=$(echo "$OLD" | sed 's/_x64\.dmg$/.dmg/')
-          if [ "$OLD" != "$NEW" ]; then
-            mv "$OLD" "$NEW"
-            echo "renamed $(basename "$OLD") -> $(basename "$NEW")"
-          else
-            echo "no _x64 suffix in $(basename "$OLD"); skipping"
-          fi
-
-      # On any failure in the macOS build/sign/notarize/verify
-      # chain, capture the diagnostic surface: Tauri's full build
-      # log (notarytool output, codesign exit codes), the partial
-      # bundle dir (so we can see what state the .app reached),
-      # Apple's transporter logs (~/Library/Logs/...), and Apple's
-      # notary log JSON for the failed submission. The notary log
-      # is the load-bearing artifact for triaging "why did Apple
-      # reject"; without it, the human round-trip is @@Alex
-      # running `xcrun notarytool log` against the local Keychain
-      # profile. Capturing it in CI removes that round-trip.
-      - if: matrix.os == 'macos-latest' && failure()
-        name: Fetch Apple notary log
-        env:
-          APPLE_ID: ${{ secrets.APPLE_ID }}
-          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
-          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
-        # Best-effort: never propagate failures from this diagnostic
-        # step. The upload step that follows still needs to run so
-        # the rest of the diagnostic surface (build log, bundle dir,
-        # transporter logs) lands in the artifact. notarytool's
-        # submission id appears in the build log as `id: <uuid>` on
-        # every `xcrun notarytool submit` invocation; `tail -1` picks
-        # the most recent one in case multiple submits ran.
-        run: |
-          set +e
-          SUBMISSION_ID=$(grep -oE 'id: [a-f0-9-]{36}' /tmp/chan-desktop-build.log 2>/dev/null \
-              | tail -1 \
-              | awk '{print $2}')
-          if [ -z "$SUBMISSION_ID" ]; then
-            echo "::warning::No notarytool submission id found in build log; skipping notary log fetch."
-            exit 0
-          fi
-          echo "Fetching notary log for submission $SUBMISSION_ID"
-          xcrun notarytool log "$SUBMISSION_ID" \
-              --apple-id "$APPLE_ID" \
-              --password "$APPLE_PASSWORD" \
-              --team-id "$APPLE_TEAM_ID" \
-              /tmp/notary-log.json
-          if [ -f /tmp/notary-log.json ]; then
-            echo "=== notary log (saved to /tmp/notary-log.json) ==="
-            cat /tmp/notary-log.json
-          else
-            echo "::warning::notarytool log call produced no output file."
-          fi
-
-      - if: matrix.os == 'macos-latest' && failure()
-        name: Upload notarization diagnostics
-        uses: actions/upload-artifact@v4
-        with:
-          name: notarization-diagnostics-${{ matrix.artifact_name }}
-          path: |
-            /tmp/chan-desktop-build.log
-            /tmp/notary-log.json
-            chan/target/release/bundle/
-            ~/Library/Logs/com.apple.amp.itmstransporter/
-          if-no-files-found: ignore
-          retention-days: 14
-
-      # ----- artifact upload -----
-      # desktop/src-tauri is a workspace member of the chan Cargo
-      # workspace, so `cargo tauri build` writes the bundle under
-      # the workspace target dir at chan/target/, NOT under
-      # chan/desktop/src-tauri/target/. (The Makefile's `app-*`
-      # echo lines reference the pre-merge layout and are stale.)
       - uses: actions/upload-artifact@v4
         with:
-          name: chan-desktop-${{ matrix.artifact_name }}-${{ matrix.artifact_suffix }}
-          path: |
-            chan/target/release/bundle/**/*
+          name: chan-desktop-${{ matrix.artifact_name }}
+          path: chan/target/release/bundle/**/*
           if-no-files-found: error
-
-  # Tag-pushed runs upload chan-desktop installers to a GitHub
-  # Release. workflow_dispatch runs skip this so manual / dry-run
-  # invocations don't cut releases.
-  #
-  # Artifacts shipped (per ci-14, 2026-05-22):
-  #   macOS  .dmg           signed + notarized (Apple Developer ID)
-  #   Linux  .deb           unsigned
-  #   Linux  .AppImage      unsigned
-  #
-  # Linux signing (dpkg-sig for .deb, AppImage embedded key) is a
-  # Round-3 polish task; Linux ships unsigned for the v0.12.0+
-  # dogfood window. Windows installers stay as workflow artifacts
-  # until the Authenticode lane opens (`ci-13` deferred Windows
-  # entirely; restoration is a Round-3+ scope decision).
-  release:
-    name: github release (chan-desktop)
-    if: startsWith(github.ref, 'refs/tags/chan-v')
-    needs: build
-    runs-on: ubuntu-latest
-    permissions:
-      contents: write
-    steps:
-      # Broader pattern than the pre-ci-14 `chan-desktop-macos-*-signed`
-      # so the Linux artifact (chan-desktop-linux-x86_64-unsigned)
-      # downloads too. `notarization-diagnostics-*` artifacts (uploaded
-      # only on macOS failure) don't match this prefix; build-success
-      # is implied by `needs: build` anyway.
-      - uses: actions/download-artifact@v4
-        with:
-          path: artifacts
-          pattern: chan-desktop-*
-      - name: List artifacts
-        run: find artifacts -type f
-
-      - name: Verify public desktop asset names
-        run: |
-          set -e
-          version=${GITHUB_REF#refs/tags/chan-v}
-          for name in \
-            "Chan_${version}.dmg" \
-            "Chan_${version}_amd64.AppImage" \
-            "Chan_${version}_amd64.deb"
-          do
-            match=$(find artifacts -type f -name "$name" -print -quit)
-            if [ -z "$match" ]; then
-              echo "::error::missing public desktop asset: $name"
-              find artifacts -type f
-              exit 1
-            fi
-            echo "found $name at $match"
-          done
-
-      # Ships .dmg + .deb + .AppImage to the release. The .app
-      # inside the macOS bundle dir is a build intermediate; users
-      # install via the .dmg. fail_on_unmatched_files: true catches
-      # the case where the build job succeeded but didn't actually
-      # produce one of the expected artifact shapes (workflow
-      # regression. Every successful tag run should produce all
-      # three on the active matrix).
-      - uses: softprops/action-gh-release@v2
-        with:
-          files: |
-            artifacts/**/*.dmg
-            artifacts/**/*.deb
-            artifacts/**/*.AppImage
-          fail_on_unmatched_files: true
-          generate_release_notes: true

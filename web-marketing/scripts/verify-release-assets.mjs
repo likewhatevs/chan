@@ -23,9 +23,13 @@ async function main() {
     "chan-aarch64-unknown-linux-gnu.tar.gz",
     "chan-aarch64-apple-darwin.tar.gz",
   ];
+  const updaterAssets = [
+    `Chan_${version}_aarch64.app.tar.gz`,
+    `Chan_${version}_aarch64.app.tar.gz.sig`,
+  ];
   const cliAssets = publicAssets.filter((name) => name.startsWith("chan-") && name.endsWith(".tar.gz"));
   const manualAsset = `chan-manual-${version}.tar.gz`;
-  const requiredAssets = [...publicAssets];
+  const requiredAssets = [...publicAssets, ...updaterAssets];
   if (!options.allowMissingManual) {
     requiredAssets.push(manualAsset);
   }
@@ -62,8 +66,15 @@ async function main() {
     warnings.push("SHA256SUMS asset absent; /dl metadata carries SHA256 values");
   }
 
+  if (assets.has(updaterAssets[1])) {
+    const signature = (await fetchAssetText(assets.get(updaterAssets[1]))).trim();
+    if (!signature) {
+      errors.push(`${updaterAssets[1]} is empty`);
+    }
+  }
+
   if (!options.skipAssetUrlHeads) {
-    for (const name of publicAssets) {
+    for (const name of [...publicAssets, ...updaterAssets]) {
       await verifyAssetUrl(name, assets.get(name), errors);
     }
     if (!options.allowMissingManual) {
@@ -114,8 +125,9 @@ function printHelp() {
   console.log(`usage: node scripts/verify-release-assets.mjs [--tag vX.Y.Z] [--allow-missing-manual] [--skip-asset-url-heads]
 
 Without --tag, verifies the GitHub latest release and each asset URL exposed by
-the GitHub API. VERSION and SHA256SUMS are checked when present, but /dl
-metadata is the release source of truth.
+the GitHub API. Desktop updater payloads must include detached signature
+assets. VERSION and SHA256SUMS are checked when present, but /dl metadata is
+the release source of truth.
 `);
 }
 

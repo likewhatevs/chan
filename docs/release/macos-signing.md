@@ -38,14 +38,14 @@ Out of scope (separate briefs):
 ## Background
 
 The unsigned tag-triggered workflow shipped in `ci-2`
-(`97b82df`, `.github/workflows/release-desktop.yml`) builds
-chan-desktop on `chan-v*` push, runs `make build` (which calls
-`cargo tauri build`), and uploads the bundle as a workflow
-artifact. End users cannot install that artifact on a default-
-configured macOS without right-click -> Open or `xattr` shell
-incantations; Gatekeeper rejects it because the bundle is not
-signed by a trusted Developer ID and has not been notarized by
-Apple.
+(`97b82df`, `.github/workflows/release-desktop.yml`) built
+chan-desktop on the old private `chan-v*` tag shape, ran
+`make build` (which calls `cargo tauri build`), and uploaded
+the bundle as a workflow artifact. End users could not install
+that artifact on a default-configured macOS without right-click
+-> Open or `xattr` shell incantations; Gatekeeper rejected it
+because the bundle was not signed by a trusted Developer ID and
+had not been notarized by Apple.
 
 `desktop/Makefile` already implements the local signed +
 notarized path via the `app-notarized` target. It expects four
@@ -319,9 +319,12 @@ items 4-6 are one-time per repository.
    before CI ever touches them.
 
 Once step 6 is complete, fire a poke event to @@Architect.
-Round-2 `ci-4` then lands the workflow changes that consume
-the secrets, and the next `chan-v*` tag produces a notarized
-`.dmg` ready for GitHub Release upload.
+The release workflow consumes the secrets by name, and the next
+approved `vX.Y.Z` release cut produces a notarized `.dmg` ready
+for GitHub Release upload. The same release workflow also checks
+for the Tauri updater signing secret names documented in
+`desktop/CLAUDE.md`; those keys are separate from Apple
+Developer ID signing.
 
 ## Parallel Windows signing path (pointer only)
 
