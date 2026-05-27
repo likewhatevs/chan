@@ -24,10 +24,10 @@ chan upgrade --version 0.14.0
 Each standalone server launch prints a fresh bearer-token URL. Restart the
 server or copy the latest URL from the terminal that launched it.
 
-## Drive does not update
+## Workspace does not update
 
-Check that the file is inside the drive root and is a regular file. Chan
-refuses special files and keeps drive access sandboxed under the drive root.
+Check that the file is inside the workspace root and is a regular file. Chan
+refuses special files and keeps workspace access sandboxed under the workspace root.
 
 ## Install script fails
 

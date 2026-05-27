@@ -1,7 +1,7 @@
 # chan: design
 
 `chan` is the user-facing notes app: a CLI plus an HTTP server that
-serves a Svelte WYSIWYG editor for plain markdown drives. This
+serves a Svelte WYSIWYG editor for plain markdown workspaces. This
 document is the canonical design reference for the workspace.
 Update it in the same commit as any change that affects crate
 boundaries, the module layout under `chan-server`, the on-disk
@@ -14,16 +14,16 @@ crates/
   chan                  binary. CLI + dispatch into subcommands;
                         embeds the frontend via chan-server's
                         rust-embed bundle.
-  chan-server           HTTP + WebSocket surface. Wraps chan-drive
+  chan-server           HTTP + WebSocket surface. Wraps chan-workspace
                         in axum routes; hosts the in-process MCP
                         server over a Unix-domain socket.
-  chan-drive            filesystem boundary, drive registry, search
+  chan-workspace            filesystem boundary, workspace registry, search
                         + graph indexer, watch, report engine.
   chan-llm              MCP-only library: chan MCP server, tool
                         schemas, embedded prompts, key resolution.
-  chan-report           report engine shared with chan-drive.
+  chan-report           report engine shared with chan-workspace.
   chan-tunnel-{proto,
-    client, server}     h2/yamux drive tunnel: wire protocol, the
+    client, server}     h2/yamux workspace tunnel: wire protocol, the
                         client chan-server dials, and the
                         standalone server hosted near the gateway.
   fetch-models          build helper. Pre-fetches the default
@@ -35,24 +35,24 @@ web/                    Svelte frontend, embedded into the binary
                         at build time via rust-embed.
 
 desktop/                Tauri shell (`chan-desktop`). Embeds
-                        chan-server for normal local drives and
+                        chan-server for normal local workspaces and
                         renders the editor in a webview window.
-                        Remote drives are explicit attach modes,
+                        Remote workspaces are explicit attach modes,
                         not local fallback behavior. Per-window
                         state is keyed by `w=<window-label>`.
                         Desktop-only native bridges, such as File
                         Browser drag-out export, call existing
                         chan-server HTTP routes and stage temporary
-                        OS payloads instead of reading drive content
+                        OS payloads instead of reading workspace content
                         directly from Tauri filesystem code.
 ```
 
 Phase 5 collapsed the historical `chan-writer/chan-core` sibling
-workspace into this repo: chan-drive, chan-llm, chan-report, and
+workspace into this repo: chan-workspace, chan-llm, chan-report, and
 the three chan-tunnel-* crates are workspace members here, not
-path deps. The drive split still keeps app-level HTTP / frontend
-concerns out of chan-drive / chan-llm so native shells (iOS /
-Android, future) can link `chan-drive` via uniffi without
+path deps. The workspace split still keeps app-level HTTP / frontend
+concerns out of chan-workspace / chan-llm so native shells (iOS /
+Android, future) can link `chan-workspace` via uniffi without
 dragging in this repo's axum / tower / reqwest stack.
 
 ## Crate responsibilities
@@ -60,15 +60,15 @@ dragging in this repo's axum / tower / reqwest stack.
 ### chan (binary)
 
 Owns: argument parsing (clap), tracing init, dispatch into
-subcommands. Calls `chan_drive::Library` for registry mutations
-and `chan_drive::Drive` for per-drive operations. Calls
+subcommands. Calls `chan_workspace::Library` for registry mutations
+and `chan_workspace::Workspace` for per-workspace operations. Calls
 `chan_server::serve` (or `serve_via_tunnel`) for `chan serve`.
 Self-upgrade flow lives in `crates/chan/src/update.rs`. No HTTP
-routes, no LLM code, no filesystem access outside chan-drive.
+routes, no LLM code, no filesystem access outside chan-workspace.
 
 The binary also exposes two hidden MCP subcommands that external
 agent CLIs invoke through environment variables exported by the
-embedded terminal: `chan __mcp <drive-root>` runs chan-llm's MCP
+embedded terminal: `chan __mcp <workspace-root>` runs chan-llm's MCP
 server on stdio (used when no running `chan serve` is reachable);
 `chan __mcp-proxy <socket>` is a stdio bridge into the in-process
 MCP server hosted by a running `chan serve`. The embedded terminal
@@ -91,15 +91,15 @@ chan search PATH QUERY [--limit N]
 chan upgrade [-y] [--check] [--version V]
 chan contacts import csv FILE --into DIR
                               [--provider google] [--dry-run]
-                              [--overwrite] [--drive PATH]
+                              [--overwrite] [--workspace PATH]
 ```
 
 `chan contacts import csv` parses a Google Contacts CSV and
-writes one markdown note per contact under `--into` (drive-
+writes one markdown note per contact under `--into` (workspace-
 relative). Notes carry `chan.kind: contact` frontmatter so the
 graph builder and editor `@` picker can classify them without a
-separate index. The orchestrator lives on `chan-drive`
-(`Drive::import_contacts`); this binary just plumbs flags and
+separate index. The orchestrator lives on `chan-workspace`
+(`Workspace::import_contacts`); this binary just plumbs flags and
 prints a per-row summary table. Re-running either skips
 existing files (default) or overwrites (`--overwrite`).
 
@@ -109,7 +109,7 @@ Owns: HTTP + WebSocket routes, per-launch token auth middleware,
 embedded-frontend serving (rust-embed), background indexer +
 watcher subscription, in-process MCP bridge over a Unix-domain
 socket, embedded terminal PTY (with MCP env exposure), model-
-bundle seeding. Depends on `chan-drive` for filesystem + search
+bundle seeding. Depends on `chan-workspace` for filesystem + search
 + graph + watch primitives, on `chan-llm` for the MCP server,
 and on `chan-tunnel-client` for tunnel transport.
 
@@ -121,14 +121,14 @@ bus.rs           watcher event bridge into the WS broadcast
 config.rs        ServerConfig (server.toml)
 embed_seed.rs    extract the baked-in model bundle on first launch
 error.rs         Error + err_*() response builders
-host.rs          in-process multi-drive host runtime
+host.rs          in-process multi-workspace host runtime
 indexer.rs       background search/graph indexer (boot + per-event)
 mcp_bridge.rs    Unix-socket MCP server for external agent CLIs
 preferences.rs   EditorPrefs (preferences.toml)
 qr.rs            terminal QR for the launch banner
 self_writes.rs   suppress watcher events that echo our own writes
 signal.rs        SIGINT/SIGTERM + idle-timeout watchers; clock
-state.rs         AppState, DriveCell
+state.rs         AppState, WorkspaceCell
 static_assets.rs WebAssets (rust-embed) + SPA fallback
 store.rs         shared atomic load/save for TOML configs
 tunnel_guard.rs  middleware refusing settings writes in --tunnel-public
@@ -140,7 +140,7 @@ routes/
   attachments.rs   POST /api/attachments (multipart upload)
   build_info.rs    GET /api/build-info
   contacts.rs      POST /api/contacts/import (multipart CSV)
-  drive.rs         GET/PATCH /api/drive, GET /api/cloud-drives
+  workspace.rs         GET/PATCH /api/workspace, GET /api/cloud-workspaces
   files.rs         /api/files, /api/files/*path, /api/move.
                    Editable file opens support JSON reads and
                    NDJSON streaming reads through
@@ -164,10 +164,10 @@ routes/
   ws.rs            GET /ws (watcher side channel)
 ```
 
-Async HTTP handlers treat chan-drive as a synchronous filesystem
-boundary. Routes snapshot the live `Arc<Drive>` with `try_drive()`,
-return a retryable drive-busy response while metadata import has
-temporarily removed the drive cell, and run filesystem, graph,
+Async HTTP handlers treat chan-workspace as a synchronous filesystem
+boundary. Routes snapshot the live `Arc<Workspace>` with `try_drive()`,
+return a retryable workspace-busy response while metadata import has
+temporarily removed the workspace cell, and run filesystem, graph,
 report, search, archive, and upload/download work on blocking
 threads.
 
@@ -175,11 +175,11 @@ threads.
 
 Owns: the chan MCP server (`chan_llm::mcp::Server`), tool schemas
 exposed over MCP, embedded prompt text, and MCP key resolution.
-Tool reads / writes always go through `chan_drive::Drive` so the
+Tool reads / writes always go through `chan_workspace::Workspace` so the
 filesystem gates apply. MCP handlers also move synchronous
-chan-drive work onto blocking threads. `read_file` and `write_file`
+chan-workspace work onto blocking threads. `read_file` and `write_file`
 cover editable UTF-8 text, including source and config files.
-`read_media` covers chan-drive Image and Pdf classes: images return
+`read_media` covers chan-workspace Image and Pdf classes: images return
 MCP image content, PDFs return MCP blob resources.
 
 Phase 5 narrowed chan-llm to this MCP-only surface. The in-app
@@ -194,7 +194,7 @@ configuration.
 chan-server hosts the MCP server in-process behind a Unix-domain
 socket (`crates/chan-server/src/mcp_bridge.rs`). External
 subprocesses connect via `chan __mcp-proxy <socket>`, which is a
-stdio<->socket pipe. This sidesteps chan-drive's per-drive flock
+stdio<->socket pipe. This sidesteps chan-workspace's per-workspace flock
 that would otherwise reject a child's `Library::open_drive`.
 
 ## Frontend embed: build, serve, prefix
@@ -217,7 +217,7 @@ matters for two paths:
 
 - `--prefix /seg`: a reverse proxy can mount many `chan serve`
   instances under one host, e.g.
-  `drive.example.com/{user}/`. The router is `Router::new().nest(prefix, inner)`,
+  `workspace.example.com/{user}/`. The router is `Router::new().nest(prefix, inner)`,
   and every `index.html` response gets a
   `<meta name="chan-prefix" content="/seg">` injected after the
   `<head>` tag (`static_assets::inject_chan_prefix`). The frontend
@@ -250,13 +250,13 @@ when they expected JSON.
   transport is `chan_tunnel_client::run` instead of a TCP
   listener. The tunnel client dials
   `drive.chan.app/v1/tunnel`, runs a Hello/HelloAck handshake
-  that names the drive, and serves yamux substreams with the
+  that names the workspace, and serves yamux substreams with the
   router. The bearer token is forced off in tunnel mode:
   `{user}.drive.chan.app/{drive}/` is the trust boundary (default
-  behavior 404s anonymous visitors; the drive owner opens the
-  drive from id.chan.app's dashboard via a short-lived drive-gate
+  behavior 404s anonymous visitors; the workspace owner opens the
+  workspace from id.chan.app's dashboard via a short-lived workspace-gate
   token, drive-proxy validates and issues a host-only session
-  cookie scoped to that drive; `--tunnel-public` opts out of that
+  cookie scoped to that workspace; `--tunnel-public` opts out of that
   gate).
 
 `build_app` produces the byte-identical axum app for both paths.
@@ -274,14 +274,14 @@ exit on grace expiry.
 
 ## On-disk layout
 
-`chan-drive` owns the per-drive state and registry; this repo
+`chan-workspace` owns the per-workspace state and registry; this repo
 inherits that layout unchanged. See
-`../chan-core/crates/chan-drive/design.md`.
+`../chan-core/crates/chan-workspace/design.md`.
 
-App-level state that lives outside chan-drive:
+App-level state that lives outside chan-workspace:
 
 - Per-launch server token: `<state>/tokens/token` (mode 0600 on
-  Unix). Atomic write through `chan_drive::fs_ops::atomic_write`.
+  Unix). Atomic write through `chan_workspace::fs_ops::atomic_write`.
 - API keys (when stored on disk): `<config>/chan/api-keys.toml`,
   mode 0600. Env var and OS keychain take precedence.
 - Editor preferences (fonts, theme, pane widths, line spacing,
@@ -297,26 +297,26 @@ App-level state that lives outside chan-drive:
   unlinked when `serve()` returns.
 
 Both TOML config files round-trip through `crate::store::{load_toml,
-save_toml}`, which write atomically through chan-drive's `fs_ops`
+save_toml}`, which write atomically through chan-workspace's `fs_ops`
 helper so the file + parent-dir fsync invariant matches user-content
 writes.
 
-## App-level vs chan-drive
+## App-level vs chan-workspace
 
 | Concern                            | Lives in    |
 |------------------------------------|-------------|
-| Filesystem ops (read/write/list)   | chan-drive  |
-| Path sandbox + special-file gates  | chan-drive  |
-| Drive registry (`<config>/chan/`)  | chan-drive  |
-| Search (tantivy BM25 + embeddings) | chan-drive  |
-| Graph (sqlite)                     | chan-drive  |
-| Filesystem watcher                 | chan-drive  |
+| Filesystem ops (read/write/list)   | chan-workspace  |
+| Path sandbox + special-file gates  | chan-workspace  |
+| Workspace registry (`<config>/chan/`)  | chan-workspace  |
+| Search (tantivy BM25 + embeddings) | chan-workspace  |
+| Graph (sqlite)                     | chan-workspace  |
+| Filesystem watcher                 | chan-workspace  |
 | HTTP / WebSocket / SPA fallback    | chan-server |
 | Per-launch auth token              | chan-server |
 | Embedded frontend bundle           | chan-server |
 | Editor preferences                 | chan-server |
 | Server preferences                 | chan-server |
-| Sessions / window layouts          | chan-drive (storage), chan-server (HTTP) |
+| Sessions / window layouts          | chan-workspace (storage), chan-server (HTTP) |
 | Attachments dir                    | chan-server |
 | Embedded terminal PTY              | chan-server |
 | MCP server (in-proc + bridge)      | chan-llm + chan-server |
@@ -324,11 +324,11 @@ writes.
 | Self-upgrade flow                  | chan binary |
 
 The split keeps app-level concerns (HTTP, WebSocket, frontend
-bundle, editor preferences, terminal PTY) out of chan-drive so
-native shells can link the drive layer via uniffi without
+bundle, editor preferences, terminal PTY) out of chan-workspace so
+native shells can link the workspace layer via uniffi without
 dragging in axum / reqwest / the rest of the HTTP stack.
 
 The Tauri desktop / mobile shells are parked. They get
 `chan-writer/chan-desktop` (or similar) when the time comes and
-link `chan-drive` via uniffi instead of going through the HTTP
+link `chan-workspace` via uniffi instead of going through the HTTP
 server.

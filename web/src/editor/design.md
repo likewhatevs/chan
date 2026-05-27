@@ -1,7 +1,7 @@
 # chan editor (CM6) — design
 
 Load-bearing reference for the new chan editor. Mirrors the role of
-`chan-core/crates/chan-drive/design.md` for the editor surface.
+`chan-core/crates/chan-workspace/design.md` for the editor surface.
 
 ## Why this exists
 

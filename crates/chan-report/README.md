@@ -5,7 +5,7 @@ per-language roll-ups and a Basic COCOMO summary on top. Maintains
 state incrementally so a single filesystem event re-counts one
 file instead of the whole tree.
 
-Built to be embedded in `chan-drive`. The crate is I/O-free for
+Built to be embedded in `chan-workspace`. The crate is I/O-free for
 state: it walks, counts, and computes; persistence (atomic write
 of `.chan/report.jsonl`) is the consumer's responsibility.
 
@@ -15,7 +15,7 @@ of `.chan/report.jsonl`) is the consumer's responsibility.
 use chan_report::{Index, ReportOptions, Scope, CocomoParams};
 
 // Initial scan.
-let opts = ReportOptions::new("/path/to/drive");
+let opts = ReportOptions::new("/path/to/workspace");
 let mut idx = Index::scan(&opts)?;
 
 // Incremental updates from a watcher.

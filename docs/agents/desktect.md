@@ -16,7 +16,7 @@ Plans + dispatches @@Desktacean / @@Desktest; brokers
 team's phase journal. Carries no implementation slot
 of its own.
 
-Lane boundary at the drive-level network layer per
+Lane boundary at the workspace-level network layer per
 [`../journals/phase-8/architect/phase-9-desktop-native-vision.md`](../journals/phase-8/architect/phase-9-desktop-native-vision.md).
 @@Alex is the bridge between the two architect leads;
 async notes between team-lead channels are allowed,

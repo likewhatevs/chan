@@ -3,9 +3,9 @@
 Desktop edition of the [chan](https://chan.app) markdown editor.
 
 chan-desktop is a Tauri shell that embeds `chan-server` for normal
-local drives. Non-CLI users get a familiar app icon, a window for
-managing drives, and a one-click "open drive" flow without a separate
-per-drive `chan serve` process.
+local workspaces. Non-CLI users get a familiar app icon, a window for
+managing workspaces, and a one-click "open workspace" flow without a separate
+per-workspace `chan serve` process.
 
 The web editor itself is the same Svelte app shipped in the standalone
 `chan` binary. Desktop opens it in Tauri webview windows backed by the
@@ -38,11 +38,11 @@ The desktop app stores its config at:
 - Linux: `~/.config/chan-desktop/config.json`
 - Windows: `%APPDATA%/Chan Desktop/config.json`
 
-"Forget all drives" in Settings deletes that file.
+"Forget all workspaces" in Settings deletes that file.
 
-## Drive modes
+## Workspace modes
 
-- Local embedded: desktop owns the local drive runtime through its
+- Local embedded: desktop owns the local workspace runtime through its
   embedded `chan-server` host.
 - Remote outbound: desktop opens an already-running `chan serve` URL
   pasted by the user. The remote server owns its own lifecycle.
@@ -54,7 +54,7 @@ is still supported, but desktop treats it as a remote attachment.
 
 ## File Browser Drag-out
 
-Drive webviews keep the browser drag payloads used by normal web and
+Workspace webviews keep the browser drag payloads used by normal web and
 in-app drops. In chan-desktop, File Browser drag start also invokes the
 `start_file_browser_drag_out` Tauri command. That command downloads the
 existing token-bearing `/api/files/<path>?download=1` URL from the
@@ -63,7 +63,7 @@ OS temp directory, and starts a native file drag from that staged export on
 macOS.
 
 File exports preserve the server-provided basename. Directory exports
-stage the server-provided `.tar` archive. Tauri code does not read drive
+stage the server-provided `.tar` archive. Tauri code does not read workspace
 content directly. Failed or cancelled drags remove their staging
 directory immediately; accepted drags use bounded cleanup and later drag
 starts sweep stale export directories.

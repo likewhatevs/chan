@@ -2,7 +2,7 @@
 
 Server-side library for chan-tunnel: terminates the long-lived h2c
 POSTs from `chan serve` clients, runs Hello / HelloAck, registers
-each `(user, drive)` in a shared `Registry`, and exposes a
+each `(user, workspace)` in a shared `Registry`, and exposes a
 public-facing axum `Router` that opens fresh yamux substreams to
 forward requests (including WebSocket upgrades) into the registered
 peer. Designed to be embedded into a host process (e.g. the gateway's
@@ -31,7 +31,7 @@ serve_tunnel_listener(
     listener, validator,
     registry, max_drives_per_user)
                               accept loop on a TCP listener; runs h2
-                              server, validates, registers, drives
+                              server, validates, registers, workspaces
 
 public_router(registry)       axum router for the public side
 public_router_with(registry,  same, with PublicConfig knobs
@@ -39,9 +39,9 @@ public_router_with(registry,  same, with PublicConfig knobs
 PublicConfig                  body cap, ...
 DEFAULT_REQUEST_BODY_CAP      10 MiB
 
-Registry                      live (user, drive) -> TunnelHandle
+Registry                      live (user, workspace) -> TunnelHandle
 TunnelHandle                  open() -> yamux::Stream
-DriveInfo / TunnelInfo        admin snapshots
+WorkspaceInfo / TunnelInfo        admin snapshots
 OpenError                     Disconnected
 ```
 

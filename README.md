@@ -1,13 +1,13 @@
 # chan
 
-Notes app for plain markdown drives. `chan` is a single static binary
+Notes app for plain markdown workspaces. `chan` is a single static binary
 that bundles a CLI and a local HTTP server; the server serves a
 Svelte WYSIWYG editor that the user edits notes in. Cross-file
 `[[wiki-link]]` autocomplete, BM25 + embedding hybrid search, link
 graphs, reports, and embedded terminal tabs are built in.
 
 Single-user, single-machine. Loopback HTTP by default; an opt-in
-tunnel mode publishes the same drive at
+tunnel mode publishes the same workspace at
 `https://{user}.drive.chan.app/{drive}/*` for cross-device access.
 
 ## Layout
@@ -15,8 +15,8 @@ tunnel mode publishes the same drive at
 ```
 crates/
   chan           binary. CLI + dispatch.
-  chan-drive     filesystem, search, and graph primitives.
-  chan-llm       MCP server/tool sandbox used to expose a drive to
+  chan-workspace     filesystem, search, and graph primitives.
+  chan-llm       MCP server/tool sandbox used to expose a workspace to
                  terminal-launched agent CLIs.
   chan-report    language/SLOC/COCOMO report support.
   chan-server    HTTP + WebSocket surface; embeds the web bundle.
@@ -67,7 +67,7 @@ runtime the seeder downloads from HuggingFace as a fallback.
 `HTTPS_PROXY` / `HTTP_PROXY` are honored everywhere chan reaches
 out (model fetch, self-upgrade probe).
 
-Embedded terminal tabs start at the drive root and export Chan MCP
+Embedded terminal tabs start at the workspace root and export Chan MCP
 discovery variables when the server's MCP bridge is available:
 `CHAN_MCP_SERVER_NAME=chan`, `CHAN_MCP_SOCKET`,
 `CHAN_MCP_COMMAND`, `CHAN_MCP_COMMAND_JSON`, and
@@ -78,7 +78,7 @@ CLI-specific MCP configuration.
 ## Run
 
 ```bash
-chan add ~/Notes              # register the drive
+chan add ~/Notes              # register the workspace
 chan serve ~/Notes            # bind 127.0.0.1:8787 and open browser
 ```
 
@@ -110,7 +110,7 @@ index`, `chan search`. `chan --help` documents every flag.
 
 ## Publish via tunnel
 
-Instead of binding a local port, `chan serve` can publish a drive
+Instead of binding a local port, `chan serve` can publish a workspace
 at `https://{user}.drive.chan.app/{drive}/*` over an outbound
 tunnel. No inbound ports, no router config.
 
@@ -120,16 +120,16 @@ chan serve ~/Notes
 ```
 
 `chan` dials `drive.chan.app/v1/tunnel`, runs a Hello/HelloAck
-handshake that names the drive, and serves every inbound request
+handshake that names the workspace, and serves every inbound request
 through the same axum router the local listener uses. The flag form
 `--tunnel-token <TOKEN>` works too but exposes the token in `ps`;
 prefer the env var. Override the endpoint with `--tunnel-url`,
 publish under a different name with `--tunnel-drive <name>`. The
-drive name must be lowercase `[a-z0-9-]`, 1-32 chars.
+workspace name must be lowercase `[a-z0-9-]`, 1-32 chars.
 
 By default `{user}.drive.chan.app/{drive}/` returns a 404 to anyone
 without a fresh handoff from id.chan.app's dashboard; only the
-drive owner can open the drive from there. `--tunnel-public` makes
+workspace owner can open the workspace from there. `--tunnel-public` makes
 the URL world-readable (no auth gate at the gateway).
 
 ## Contributing

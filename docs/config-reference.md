@@ -29,7 +29,7 @@ Source: `crates/chan-server/src/config.rs`.
 | `terminal.default_term` | `String` | `"xterm-256color"` | `PATCH /api/server/config` | PTY spawn `TERM` env |
 
 Legacy `[reports] enabled = ...` blocks in `server.toml` are ignored
-on load and omitted on the next save. Per-drive
+on load and omitted on the next save. Per-workspace
 `IndexConfig.reports_enabled` is the only reports toggle source.
 
 ### `~/.chan/preferences.toml` — `EditorPrefs`
@@ -53,25 +53,25 @@ Source: `crates/chan-server/src/preferences.rs`.
 | `bubble_overlay_mode` | `BubbleOverlayMode` | Bubble menu | overlay rendering |
 | `empty_pane_carousel_cycling` | `bool` | Settings | empty-pane behavior |
 
-## chan-drive
+## chan-workspace
 
-### `~/.chan/config.toml` — `Registry` (`KnownDrive[]`)
+### `~/.chan/config.toml` — `Registry` (`KnownWorkspace[]`)
 
-Source: `crates/chan-drive/src/registry.rs`.
+Source: `crates/chan-workspace/src/registry.rs`.
 
-Per-drive entry persisted at registration time:
+Per-workspace entry persisted at registration time:
 
 | Field | Type | Default | Reachability | Consumers |
 |-------|------|---------|--------------|-----------|
-| `path` | `PathBuf` | required | `chan add <path>` | drive enumeration / open |
-| `uuid` | `String` (16 hex) | minted on add | (internal identity) | per-drive sidecar keying |
+| `path` | `PathBuf` | required | `chan add <path>` | workspace enumeration / open |
+| `uuid` | `String` (16 hex) | minted on add | (internal identity) | per-workspace sidecar keying |
 | `name` | `Option<String>` | basename | `chan add --name` / `chan rename` | window title + UI |
 | `last_opened` | `DateTime<Utc>` | now() | `chan list` | recency sort |
 | `canonical_path` | transient (`#[serde(skip)]`) | n/a | (internal cache) | symlink-stable comparison |
 
 ### `<state_dir>/index/<uuid>/config.toml` — `IndexConfig`
 
-Source: `crates/chan-drive/src/index/config.rs`.
+Source: `crates/chan-workspace/src/index/config.rs`.
 
 | Field | Type | Default | Reachability | Consumers |
 |-------|------|---------|--------------|-----------|
@@ -80,12 +80,12 @@ Source: `crates/chan-drive/src/index/config.rs`.
 | `chunking` | `Chunking` enum | `Headings` | (internal; no user surface yet) | indexer chunking strategy |
 | `vectors_model` | `Option<String>` | `None` | (internal stamp) | mismatch-wipe trigger on `Index::open` |
 | `vectors_dim` | `Option<u32>` | `None` | (internal stamp) | build-time defensive cross-check |
-| `semantic_enabled` | `bool` | `false` | `chan index enable-semantic/disable-semantic --path <drive>` + Settings (`fullstack-a-21`) | `Drive::search` Hybrid default mode |
-| `reports_enabled` | `bool` | `false` | `chan reports enable/disable --path <drive> [-y]` + `chan add --reports` | `Drive::report()` lazy init + `Drive::boot()` |
+| `semantic_enabled` | `bool` | `false` | `chan index enable-semantic/disable-semantic --path <workspace>` + Settings (`fullstack-a-21`) | `Workspace::search` Hybrid default mode |
+| `reports_enabled` | `bool` | `false` | `chan reports enable/disable --path <workspace> [-y]` + `chan add --reports` | `Workspace::report()` lazy init + `Workspace::boot()` |
 
 ### `Drafts/team-{name}/config.toml` — `TeamConfig`
 
-Source: `crates/chan-drive/src/teams.rs` (post-`systacean-30`).
+Source: `crates/chan-workspace/src/teams.rs` (post-`systacean-30`).
 
 | Field | Type | Default | Reachability | Consumers |
 |-------|------|---------|--------------|-----------|
@@ -111,17 +111,17 @@ Source: `desktop/src-tauri/src/config.rs`.
 
 | Field | Type | Default | Reachability | Consumers |
 |-------|------|---------|--------------|-----------|
-| `drives` | `HashMap<String, DriveSettings>` | empty | launcher feature panel cache | per-local-drive desktop cache keyed by canonical path |
-| `drives.{path}.features.bge` | `bool` | `false` | Launcher row expand panel | Mirror of chan-drive's `IndexConfig.semantic_enabled`; refreshed on read through CLI when available |
-| `drives.{path}.features.reports` | `bool` | `false` | Launcher row expand panel | Mirror of chan-drive's `IndexConfig.reports_enabled`; refreshed on read through CLI when available |
-| `outbound[]` | `Vec<OutboundDrive>` | empty | Attach URL panel | explicit non-owned remote URL attachments |
+| `workspaces` | `HashMap<String, WorkspaceSettings>` | empty | launcher feature panel cache | per-local-workspace desktop cache keyed by canonical path |
+| `workspaces.{path}.features.bge` | `bool` | `false` | Launcher row expand panel | Mirror of chan-workspace's `IndexConfig.semantic_enabled`; refreshed on read through CLI when available |
+| `workspaces.{path}.features.reports` | `bool` | `false` | Launcher row expand panel | Mirror of chan-workspace's `IndexConfig.reports_enabled`; refreshed on read through CLI when available |
+| `outbound[]` | `Vec<OutboundWorkspace>` | empty | Attach URL panel | explicit non-owned remote URL attachments |
 | `outbound[].id` | `String` | generated UUID | Attach URL panel | row actions + outbound window restore key |
 | `outbound[].url` | `String` | required | Attach URL panel | token-bearing HTTP(S) URL opened by desktop |
 | `outbound[].label` | `String` | `""` | Attach URL panel | optional launcher/window label |
 | `outbound[].added_at` | `u64` | current millis | Attach URL panel | diagnostics and future sorting |
 | `tunnel.preferred_port` | `u16` | `0` (OS-assigned) | Tunnel listener UI | tunnel listen-bind hint |
 | `tunnel.preferred_label` | `String` | `""` | Tunnel listener UI | bearer/label default |
-| `tunnel.preferred_drive` | `String` | `""` | Tunnel listener UI | drive name default |
+| `tunnel.preferred_drive` | `String` | `""` | Tunnel listener UI | workspace name default |
 | `window_configs[]` | `Vec<WindowConfig>` | empty | (auto on window close) | LRU pop on window open; preserves panes/tabs + URL hash + zoom level |
 
 `WindowConfig`: `key: String`, `window_label: String`, `url_hash: String`, `zoom_level: f64`, `saved_at: u64`.
@@ -130,7 +130,7 @@ Source: `desktop/src-tauri/src/config.rs`.
 
 | # | Finding | Recommended action | Owner | Priority |
 |---|---------|---------------------|-------|----------|
-| 1 | `DriveFeatures` mirror in chan-desktop config can drift when users bypass chan-desktop's UI for feature toggles (e.g. `chan index enable-semantic` from terminal). | Keep the current refresh-on-read path or replace the mirror with a direct chan-drive config API. | chan-desktop + chan-drive | Low (corner case for power users) |
+| 1 | `WorkspaceFeatures` mirror in chan-desktop config can drift when users bypass chan-desktop's UI for feature toggles (e.g. `chan index enable-semantic` from terminal). | Keep the current refresh-on-read path or replace the mirror with a direct chan-workspace config API. | chan-desktop + chan-workspace | Low (corner case for power users) |
 
 The removed `ServerConfig.reports.enabled` finding is closed in
 Track A. The SPA reports toggle now uses
@@ -142,15 +142,15 @@ Track A. The SPA reports toggle now uses
 * Per-user state dir: `XDG_DATA_HOME/chan/` (Linux) / `~/Library/Application Support/chan/` (macOS).
 * Per-user cache dir: `XDG_CACHE_HOME/chan/` / `~/Library/Caches/chan/`.
 
-Per-drive subpaths key by `KnownDrive.uuid` (16 hex chars), assigned at registration:
+Per-workspace subpaths key by `KnownWorkspace.uuid` (16 hex chars), assigned at registration:
 
 * `state_dir/sessions/<uuid>/` — session blobs (window/pane layout).
 * `state_dir/graph/<uuid>/` — graph DB + sidecar markers.
-* `state_dir/locks/<uuid>/` — per-drive index-writer lockfile.
+* `state_dir/locks/<uuid>/` — per-workspace index-writer lockfile.
 * `state_dir/tokens/<uuid>/` — chan-server bearer token (mode 0600).
 * `state_dir/trash/<uuid>/` — soft-deleted files (lazy GC).
 * `state_dir/report/<uuid>/report.jsonl` — chan-report state (lazy on opt-in post-`systacean-27`).
 * `state_dir/drafts/<uuid>/` — Drafts metadata (post-`systacean-24`). Contains regular drafts (`untitled-N/`) + team workspaces (`team-{name}/`).
 * `cache_dir/index/<uuid>/` — tantivy search-index segments + `config.toml`.
 
-See `crates/chan-drive/src/paths.rs::DrivePaths` for the canonical computation.
+See `crates/chan-workspace/src/paths.rs::WorkspacePaths` for the canonical computation.

@@ -1,7 +1,7 @@
-# chan-drive
+# chan-workspace
 
 Sandboxed filesystem, full-text search, and link-graph primitives
-for the chan markdown editor. One handle per drive (a directory of
+for the chan markdown editor. One handle per workspace (a directory of
 notes); reads and writes go through a strict path sandbox, every
 write is atomic, and a tantivy index plus a sqlite link graph
 sit alongside the file tree without writing anything inside it.
@@ -10,7 +10,7 @@ sit alongside the file tree without writing anything inside it.
 
 ```toml
 [dependencies]
-chan-drive = "0.11"
+chan-workspace = "0.11"
 ```
 
 Hybrid (BM25 + dense) search is on by default via the `embeddings`
@@ -19,10 +19,10 @@ build (iOS, minimal targets).
 
 ## Public API at a glance
 
-  - `Library`: per-machine handle. Owns the drive registry at
+  - `Library`: per-machine handle. Owns the workspace registry at
     `~/.chan/config.toml` (or the platform sandbox equivalent),
-    resolves OS state and cache paths, opens drives.
-  - `Drive`: per-directory handle. Holds a cross-process writer
+    resolves OS state and cache paths, opens workspaces.
+  - `Workspace`: per-directory handle. Holds a cross-process writer
     lock for its lifetime.
     - Filesystem: `read`, `read_text`, `write_text`, `write_bytes`,
       `read_text_with_stat` + `write_text_if_unchanged` (mtime
@@ -49,8 +49,8 @@ exists at all.
 
 Two path forms coexist on purpose:
 
-  - **API surface** (every `Drive` method, MCP tool `path` args,
-    graph row keys) takes one canonical form: a drive-rooted POSIX
+  - **API surface** (every `Workspace` method, MCP tool `path` args,
+    graph row keys) takes one canonical form: a workspace-rooted POSIX
     rel path with no leading slash and no `..`. The path sandbox
     rejects anything else.
   - **Inside markdown bodies**, hrefs stay in whatever form the
@@ -61,7 +61,7 @@ Two path forms coexist on purpose:
 
 `markdown::normalize_href(href, source_dir)` bridges the two: it
 accepts `./foo`, `../bar`, `/baz`, or bare `foo` and resolves
-each to the same drive-rooted destination for the graph. The
+each to the same workspace-rooted destination for the graph. The
 on-disk text is never rewritten. The same normalizer ships as a
 hand-port to TypeScript so the editor's click handler agrees with
 the indexer on what each link resolves to. See `design.md` for the

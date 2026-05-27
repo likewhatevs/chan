@@ -40,7 +40,7 @@ soon as the user needs to edit them.
 ### Tags `#tag`
 
 - Same flow as wiki links: typing `#` opens a search popup over the
-  drive's existing tags, ranked by frequency (top tags surface first).
+  workspace's existing tags, ranked by frequency (top tags surface first).
 - WYSIWYG: rendered as a styled pill.
 - Cursor on the pill: reveals the `#` and lets the label edit.
 - Click on a `#tag` pill: opens the graph view filtered to that tag.
@@ -57,10 +57,10 @@ soon as the user needs to edit them.
 ### Images `![alt](src)`
 
 - Typing `![` opens a bubble similar to `[[`, but image-specific:
-  a search over drive images with a thumbnail preview for the
+  a search over workspace images with a thumbnail preview for the
   highlighted result, plus an "upload image" button.
 - Upload writes the file to the directory of the markdown being
-  edited (drive-relative `./name.png`). On filename collision, the
+  edited (workspace-relative `./name.png`). On filename collision, the
   server appends `-1`, `-2`, ... until unique.
 - Pasting an image from the clipboard: same upload-to-current-dir
   path; inserts `![](./name.png)` at the caret.
@@ -155,14 +155,14 @@ There is residual date-extraction code in chan-core that should be
 removed once the principle above lands. Inventory at the time of
 writing:
 
-- `crates/chan-drive/src/markdown/tokens.rs:1-12` — header doc
+- `crates/chan-workspace/src/markdown/tokens.rs:1-12` — header doc
   about date tokens
-- `crates/chan-drive/src/markdown/tokens.rs:22` — `Token::Date`
+- `crates/chan-workspace/src/markdown/tokens.rs:22` — `Token::Date`
   enum variant
-- `crates/chan-drive/src/markdown/tokens.rs:65-79` — date pattern
+- `crates/chan-workspace/src/markdown/tokens.rs:65-79` — date pattern
   match + token emission
-- `crates/chan-drive/src/markdown/tokens.rs:182-248` — date tests
-- `crates/chan-drive/src/drive.rs:1306-1309` — explicit
+- `crates/chan-workspace/src/markdown/tokens.rs:182-248` — date tests
+- `crates/chan-workspace/src/workspace.rs:1306-1309` — explicit
   `Token::Date` skip in `build_edges`
 
 The skip already prevents date tokens from polluting the graph, so

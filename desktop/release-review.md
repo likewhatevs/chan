@@ -18,7 +18,7 @@ concrete remediations.
 
 - `src-tauri/src/main.rs`: IPC commands, AppState, window menu,
   BinStatus preflight.
-- `src-tauri/src/serve.rs`: per-drive `chan serve` supervisor,
+- `src-tauri/src/serve.rs`: per-workspace `chan serve` supervisor,
   stderr reader thread.
 - `src-tauri/src/tunnel/{mod,public,validator}.rs`: embedded
   `chan-tunnel-server` + per-tenant axum listeners.
@@ -88,7 +88,7 @@ Scenarios this hits:
   exits, toggle flips off with zero feedback.
 - macOS memory pressure killer SIGKILLs `chan serve`, same silent
   flip.
-- User unmounts the drive's volume, chan exits, same.
+- User unmounts the workspace's volume, chan exits, same.
 
 Fix in `serve.rs` after the EOF block:
 
@@ -107,10 +107,10 @@ if !saw_url {
 ```
 
 Add a frontend listener on `SERVE_CRASHED` that calls
-`showError(...)` with drive name and last 5 stderr lines. Inline
-banner, not modal, since the drive was working previously.
+`showError(...)` with workspace name and last 5 stderr lines. Inline
+banner, not modal, since the workspace was working previously.
 
-### P0.5 Stop-then-start race: fast toggling leaves the drive off
+### P0.5 Stop-then-start race: fast toggling leaves the workspace off
 
 `serve.rs:233` `stop` only calls `child.kill()` and leaves the
 entry in the `serves` map. The reader thread is the sole place
@@ -152,14 +152,14 @@ Launch stays disabled, no recovery.
 
 Add a deadline. `reader.lines()` blocks, so options:
 
-- Move per-drive supervision to `tokio::process::Command` +
+- Move per-workspace supervision to `tokio::process::Command` +
   `select!` on `tokio::time::sleep` and the line reader. Cleaner,
   matches tunnel side.
-- Stay sync; spawn a watchdog thread per drive that sleeps for the
+- Stay sync; spawn a watchdog thread per workspace that sleeps for the
   deadline, checks `saw_url`, kills the child if not.
 
 Tokio is the right answer long-term (same model as tunnel
-supervisor, no per-drive OS thread, easy deadlines). For a quick
+supervisor, no per-workspace OS thread, easy deadlines). For a quick
 fix, the watchdog thread is fine.
 
 Suggested deadline: 15s.
@@ -330,12 +330,12 @@ pub fn stop(state: &AppState, key: &str) {
 
 Deps: `nix = { version = "0.29", default-features = false, features = ["signal"] }`
 on Unix. Make `stop_all` share a deadline budget so app-exit does
-not take 5s * N drives.
+not take 5s * N workspaces.
 
 ### P1.10 Window count is unbounded
 
 `open_local_drive` (main.rs:434) and `open_tunneled_drive`
-(main.rs:457) open a new webview per click. Cap at 10 per drive;
+(main.rs:457) open a new webview per click. Cap at 10 per workspace;
 show an inline notice when at cap.
 
 ### P1.11 `chan add`/`remove` blocks the IPC thread
@@ -357,7 +357,7 @@ runs two `chan add` in parallel).
 
 ## P2: subprocess management lifecycle audit
 
-Per-drive child lifecycle:
+Per-workspace child lifecycle:
 
 ```
 stage           | current behavior                      | gap
@@ -372,7 +372,7 @@ mid-flight      | reader EOF -> reap -> serves-changed  | P0.4 silent
 app exit clean  | stop_all -> kill, no wait             | races readers, OK
 app exit crash  | nothing                               | children orphan
 reader panic    | thread dies, child orphan, map stale  | unlikely, defend
-port persist    | last_port saved per drive             | silent fallback on bind fail
+port persist    | last_port saved per workspace             | silent fallback on bind fail
 ```
 
 Bigger recommendations:
@@ -380,8 +380,8 @@ Bigger recommendations:
 ### P2.1 Migrate the supervisor to tokio
 
 Same model as `tunnel/mod.rs`. One `tokio::process::Child` per
-drive, one task per drive (`select!` on `child.wait()` + stderr
-line reader + cancel token + startup deadline). Drops per-drive
+workspace, one task per workspace (`select!` on `child.wait()` + stderr
+line reader + cancel token + startup deadline). Drops per-workspace
 OS thread, gives free deadlines, cleaner shutdown.
 
 Add `process` and `io-util` to tokio features:
@@ -405,7 +405,7 @@ equivalent (kqueue watching the parent PID is the pattern, but
 that lives in chan-serve). Defer to chan-side; leave a TODO with
 the path.
 
-### P2.3 PID file per drive
+### P2.3 PID file per workspace
 
 Write `~/.chan/desktop/runtime/serve-<hash>.pid` on spawn. On
 boot, look for stale pid files, send SIGTERM to whatever is
@@ -421,7 +421,7 @@ previous run's children orphaned.
 `canonical_key` (main.rs:524) returns `path.display().to_string()`.
 On Windows, `Path::display` may emit `\\?\C:\...` for some inputs
 and `C:\...` for others depending on canonicalize's verbatim
-flag. Two routes to the same drive produce two map entries.
+flag. Two routes to the same workspace produce two map entries.
 
 Practical impact today: Linux/macOS only, deferred. Add a TODO.
 
@@ -464,7 +464,7 @@ pub struct StoredPat {
 `config.rs:45`, `main.rs:283`: `0` means "OS-assigned." Use
 `Option<u16>`, serialize as `null`.
 
-### P3.6 `Drive` struct: tagged enum
+### P3.6 `Workspace` struct: tagged enum
 
 `main.rs:122-138`: every tunneled-row field is `Option`, renderer
 reads `kind`. Cleaner:
@@ -472,8 +472,8 @@ reads `kind`. Cleaner:
 ```rust
 #[derive(Debug, Clone, Serialize)]
 #[serde(tag = "kind", rename_all = "lowercase")]
-enum Drive {
-    Local(LocalDrive),
+enum Workspace {
+    Local(LocalWorkspace),
     Tunneled(TunneledRow),
 }
 ```
@@ -499,9 +499,9 @@ pub fn new(label: &str) -> Result<Self, &'static str> {
 
 ## P4: efficiency and concurrency
 
-### P4.1 Per-drive OS thread for stderr tailing
+### P4.1 Per-workspace OS thread for stderr tailing
 
-`serve.rs:147`. Fine for <50 drives, bad taste. Evaporates with
+`serve.rs:147`. Fine for <50 workspaces, bad taste. Evaporates with
 the tokio migration (P2.1).
 
 ### P4.2 `is_listening` can avoid the Mutex
@@ -704,7 +704,7 @@ benefit from tracing being present and from the `chan_cmd` helper.
   `SERVE_CRASHED` event + frontend handler in `src/main.js`. Share
   the exit-info classification helper with P0.5's test.
 - P0.6 startup timeout. Two implementations possible:
-  - Quick: watchdog `std::thread` per drive sleeping for 15s
+  - Quick: watchdog `std::thread` per workspace sleeping for 15s
     then checking `saw_url`. Lands as a small diff in `serve.rs`.
   - Right: migrate the supervisor to tokio (P2.1). Larger diff,
     blocks Group C cleanly.
@@ -717,20 +717,20 @@ benefit from tracing being present and from the `chan_cmd` helper.
 - P1.5 zombie reap in `reveal_in_finder` (use
   `tauri_plugin_opener::OpenerExt::reveal_item_in_dir` if
   available, else `.status()`).
-- P1.10 cap per-drive window count.
+- P1.10 cap per-workspace window count.
 - P1.11 convert `add_drive`/`remove_drive` to async (or
   spawn_blocking with a `chan-busy` event). Independent of P0.5.
 
 ### Group C: structural, do after B stabilizes
 
-- P2.1 tokio supervisor migration. Replaces the per-drive
-  `std::thread` model with one tokio task per drive. Subsumes the
+- P2.1 tokio supervisor migration. Replaces the per-workspace
+  `std::thread` model with one tokio task per workspace. Subsumes the
   P0.6 quick fix. Single biggest refactor; one person owning it
   end-to-end is cleaner than parallelizing.
 - P1.9 SIGTERM-with-grace stop. Only worth doing if chan-serve
   writes in-place (confirm with the chan team). Lands well on top
   of P2.1.
-- P2.3 PID-file-per-drive on-boot reaper. Catches the
+- P2.3 PID-file-per-workspace on-boot reaper. Catches the
   app-crashed-children-orphaned case.
 
 ### Group D: pre-flight before the public DMG
@@ -791,7 +791,7 @@ merge conflicts in `serve.rs` are likely.
   the process-level failure, which P0.4 fixes.
 - "App hanging because more threads could have been used": the
   IPC commands themselves are sync (P1.11) and block one Tauri
-  worker each. Per-drive OS threads (P4.1) are fine at scale. The
+  worker each. Per-workspace OS threads (P4.1) are fine at scale. The
   one place a Mutex is held across a syscall is P1.4. Overall
   threading is healthy; the main efficiency win is moving the
   supervisor to tokio (P2.1).

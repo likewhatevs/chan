@@ -1,6 +1,6 @@
 # Terminal And MCP Discovery
 
-Terminal tabs start at the drive root. They are intended for shell work that
+Terminal tabs start at the workspace root. They are intended for shell work that
 belongs next to the files you are editing.
 
 ## MCP environment
@@ -21,5 +21,5 @@ descriptor into their own MCP configuration shape.
 
 ## External agents only
 
-Chan exposes its drive tools through MCP for external agents. It does not
+Chan exposes its workspace tools through MCP for external agents. It does not
 ship in-app chat or assistant HTTP APIs.

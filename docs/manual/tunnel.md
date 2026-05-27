@@ -10,7 +10,7 @@ with a per-launch bearer token.
 ## Tunnel mode
 
 With a tunnel token, the server dials the Chan tunnel service and publishes
-the drive under `drive.chan.app`. The local bearer-token gate is disabled in
+the workspace under `drive.chan.app`. The local bearer-token gate is disabled in
 tunnel mode because the gateway in front of the public route becomes the
 trust boundary.
 

@@ -9,7 +9,7 @@ mid-phase-7.
 
 Owned the user-facing surface of chan end-to-end (axum HTTP
 routes, Svelte frontend, embedded editor, embedded terminal,
-filesystem-facing seams via `chan_drive::Drive`) during the
+filesystem-facing seams via `chan_workspace::Workspace`) during the
 single-FullStack-lane portion of phase 7.
 
 ## Active successors

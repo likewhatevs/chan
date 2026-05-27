@@ -23,14 +23,14 @@ We will keep you informed of the progress toward a fix and the disclosure timeli
 
 ## Scope
 
-The primary security boundary in chan is the `chan-drive` crate, which sandboxes every user-content filesystem operation under the registered drive root:
+The primary security boundary in chan is the `chan-workspace` crate, which sandboxes every user-content filesystem operation under the registered workspace root:
 
 * Path traversal is rejected.
-* Symbolic links pointing outside the drive root are rejected.
+* Symbolic links pointing outside the workspace root are rejected.
 * Non-regular files (FIFOs, sockets, devices, etc.) are refused.
 * Writes are atomic via tempfile + rename.
 
-Bugs that bypass this contract — letting a caller read, write, or otherwise access files outside the registered drive root — are treated as high severity.
+Bugs that bypass this contract — letting a caller read, write, or otherwise access files outside the registered workspace root — are treated as high severity.
 
 Other in-scope areas:
 
@@ -42,7 +42,7 @@ Other in-scope areas:
 ## Out of Scope
 
 * Vulnerabilities in third-party dependencies should be reported upstream; we'll coordinate with the upstream maintainers when applicable.
-* Issues that require local privileged access already equivalent to "the user can read and write the drive themselves" are out of scope.
+* Issues that require local privileged access already equivalent to "the user can read and write the workspace themselves" are out of scope.
 * Denial-of-service against a process the reporter already controls is out of scope.
 
 ## Supported Versions

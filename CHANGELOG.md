@@ -30,7 +30,7 @@ server hot-path and file-watcher fixes landed.
 
 ### Changed
 
-- Drive metadata is keyed by canonical drive path and local drive-name surfaces
+- Workspace metadata is keyed by canonical workspace path and local workspace-name surfaces
   were removed from the registry/API flow.
 - Terminals and MCP now resolve Drafts paths consistently.
 - File Browser hides inactive Drafts internals while preserving Drafts-aware
@@ -38,7 +38,7 @@ server hot-path and file-watcher fixes landed.
 - Server state, file routes, sessions, storage reset, and tunnel prefix paths
   now return explicit errors on lock poisoning instead of panicking.
 - File and session hot paths were moved off async workers where needed.
-- Indexers release old drive handles during metadata import.
+- Indexers release old workspace handles during metadata import.
 - Semantic model size copy checks avoid oversize copies.
 - Rich Prompt process guidance now lives in static spool/process.md.
 
@@ -63,14 +63,14 @@ Phase-8 closing release. Public-flip pre-flight docs landed, screensaver themes 
 ### Added
 
 - Apache 2.0 `LICENSE` at the repo root.
-- `CONTRIBUTING.md` with build/test/PR submission instructions plus the architectural ground rules (drive boundary, single binary, local-first, MCP-only, pinned toolchain).
+- `CONTRIBUTING.md` with build/test/PR submission instructions plus the architectural ground rules (workspace boundary, single binary, local-first, MCP-only, pinned toolchain).
 - `CODE_OF_CONDUCT.md` adapted from Contributor Covenant 2.1.
-- `SECURITY.md` with private disclosure policy, 90-day window, and chan-drive sandbox identified as the primary security boundary.
+- `SECURITY.md` with private disclosure policy, 90-day window, and chan-workspace sandbox identified as the primary security boundary.
 - `.github/ISSUE_TEMPLATE/bug_report.md` and `feature_request.md`, plus `PULL_REQUEST_TEMPLATE.md` with the pre-push gate checklist.
 - `docs/coordination.md` explaining the multi-agent development pattern visible in the journals to outside readers.
 - `CHANGELOG.md` (this file) seeded with v0.6.23 through v0.13.0 entries.
 - Screensaver visual themes: Matrix rain (default) and code-drawn Castaway pixel-art scene with eight animation states (idle / wave / sit / sleep / drink / walk / fish / ship).
-- Settings theme picker for screensaver (Matrix or Castaway), persisted per drive.
+- Settings theme picker for screensaver (Matrix or Castaway), persisted per workspace.
 - Screensaver `prefers-reduced-motion` handling: Matrix rain drops to once-per-second refresh instead of full animation.
 - Right-click menu footer rows across Terminal, File Browser, Graph, and Editor: Settings (toggle), Reopen Closed Tab, and Close.
 
@@ -89,7 +89,7 @@ Phase-8 closing release. Public-flip pre-flight docs landed, screensaver themes 
 - Terminal WebGL renderer glyph atlas corruption under animated SGR sequences (per-character substitution when colored text and animations hit the renderer simultaneously). Detects styled output, coalesces a texture-atlas refresh on the next animation frame, keeps WebGL enabled.
 - File Browser: Drafts subtree refreshes correctly after `Cmd+N` creates a new draft. `refreshTreeForPath` now climbs to the nearest loaded ancestor instead of no-oping when the immediate parent of the new file is not yet loaded. Fixes the symptom where Drafts looked empty after creating a draft, Graph tabs stalled, and `Cmd+N` appeared to do nothing.
 - chan-server: GET `/api/files` and `/api/files/<path>` no longer block the async runtime. Sync filesystem work moved behind `tokio::task::spawn_blocking`. Resolves the 10s timeouts on small-file reads observed under indexer / watcher contention.
-- chan-server: twelve additional route handlers (`fs_graph`, `terminal`, `fonts`, `index`, `graph`, `report`, `search`, `inspector`, `attachments`, `contacts`, `drive`) plus `static_assets` audited and moved to `spawn_blocking` or `tokio::fs` so request-path filesystem and graph work no longer starves Tokio workers.
+- chan-server: twelve additional route handlers (`fs_graph`, `terminal`, `fonts`, `index`, `graph`, `report`, `search`, `inspector`, `attachments`, `contacts`, `workspace`) plus `static_assets` audited and moved to `spawn_blocking` or `tokio::fs` so request-path filesystem and graph work no longer starves Tokio workers.
 - chan-server: terminal watcher event listing now caps individual event files at 1 MiB before reading them, preventing memory pressure on stray large files in attached watcher directories.
 - chan serve: bind-port errors now name the requested listen address (e.g. `127.0.0.1:8787`) instead of returning a generic message.
 - chan-tunnel-client and chan-tunnel-server: removed twelve confirmed-unused dependency edges; `cargo machete` clean.
@@ -105,16 +105,16 @@ Phase-8 closing release. Public-flip pre-flight docs landed, screensaver themes 
 ### Added
 
 - Drafts metadata workspace: New Draft creates `Drafts/<name>/draft.md`
-  inside chan metadata, outside the drive root.
+  inside chan metadata, outside the workspace root.
 - Drafts now appear in the file browser, inspector, graph, rich prompt
-  history, drive read/write/list/stat primitives, BM25 indexer, and watcher
+  history, workspace read/write/list/stat primitives, BM25 indexer, and watcher
   flow.
 - Team workspace bootstrap: team config, watcher load, per-cell pane
   assignment, worker spawn, identity prompt staging, lead PTY rename, and
   restart.
 - Team APIs for create, duplicate, load, unload, loaded state, and config.
 - Split-pane real-estate grid with per-cell team member assignment.
-- Screensaver with per-drive enable state, timeout, PIN storage, and manual
+- Screensaver with per-workspace enable state, timeout, PIN storage, and manual
   lock chord.
 - Settings Features section for chan-reports and BGE semantic-search toggles.
 - Mention completion merges contacts and the mention corpus.
@@ -187,7 +187,7 @@ Phase-8 closing release. Public-flip pre-flight docs landed, screensaver themes 
 
 - Rich Prompt bubble overlay, collapse/expand spacing, terminal broadcast
   selector, chord surface, and graph-from-here defaults were polished.
-- chan-desktop window title now shows the drive path.
+- chan-desktop window title now shows the workspace path.
 
 ### Fixed
 
@@ -242,7 +242,7 @@ Phase-8 closing release. Public-flip pre-flight docs landed, screensaver themes 
 ### Removed
 
 - In-app Agent overlay.
-- chan-drive assistant blob API.
+- chan-workspace assistant blob API.
 
 ## [v0.8.1] - 2026-05-14
 
