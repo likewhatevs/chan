@@ -83,7 +83,14 @@ describe("fullstack-b-29: TerminalTab WebGL renderer", () => {
     expect(tab).toMatch(
       /if \(!focused\) return;[\s\S]*?queueFit\(\);[\s\S]*?refreshTerminalRenderer\(\);/,
     );
-    expect(tab).toMatch(/if \(focused\) return;[\s\S]*?refreshTerminalRenderer\(\);[\s\S]*?sendFocusState\(\);/);
+    // `lane-c addendum-1 bug 1`: the blur effect runs the full
+    // host-resume recovery (fit + atlas clear + delayed re-fits), not a
+    // bare refreshTerminalRenderer, so the pane LOSING focus repaints
+    // clean in WKWebView (the desktop app) where a single refresh
+    // leaves it stale.
+    expect(tab).toMatch(
+      /if \(focused\) return;[\s\S]*?recoverTerminalRendererAfterHostResume\(\);[\s\S]*?sendFocusState\(\);/,
+    );
   });
 
   test("refreshes renderer after native host resume", () => {

@@ -294,9 +294,20 @@
     });
   });
 
+  // `lane-c addendum-1 bug 1`: when focus moves AWAY from this terminal
+  // to another pane, the pane losing focus can paint stale in the
+  // desktop app's WKWebView - its WebGL renderer leaves the canvas
+  // half-updated and a single clear+refresh does not fully correct it.
+  // A plain refreshTerminalRenderer() is enough on Blink (web) but not
+  // on WebKit, so run the SAME recovery the host-resume / active-flip
+  // (Bug 6) paths use - fit + texture-atlas clear + delayed re-fits -
+  // on blur too. The size is unchanged on a focus switch, so the fit is
+  // a dimensional no-op; the value is the deferred repaint pass WebKit
+  // needs. No-op regression on Blink (verified in Chrome); the
+  // WKWebView fix is verified by @@Alex in chan-desktop.
   $effect(() => {
     if (focused) return;
-    refreshTerminalRenderer();
+    recoverTerminalRendererAfterHostResume();
     sendFocusState();
   });
 
