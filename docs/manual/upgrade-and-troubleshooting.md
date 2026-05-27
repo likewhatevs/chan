@@ -33,4 +33,5 @@ refuses special files and keeps drive access sandboxed under the drive root.
 
 The shell installer supports only the active standalone CLI release targets.
 For desktop installs, use the DMG, AppImage, or deb links on the install
-page.
+page. If release metadata cannot be fetched, the install page links to GitHub
+Releases instead of guessing asset URLs.

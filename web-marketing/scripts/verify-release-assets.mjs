@@ -3,9 +3,7 @@
 import { execFileSync } from "node:child_process";
 
 const repo = "fiorix/chan";
-const githubRepoUrl = `https://github.com/${repo}`;
 const apiBase = `https://api.github.com/repos/${repo}`;
-const latestDownloadBase = `${githubRepoUrl}/releases/latest/download`;
 const githubToken = readGithubToken();
 
 async function main() {
@@ -27,7 +25,7 @@ async function main() {
   ];
   const cliAssets = publicAssets.filter((name) => name.startsWith("chan-") && name.endsWith(".tar.gz"));
   const manualAsset = `chan-manual-${version}.tar.gz`;
-  const requiredAssets = [...publicAssets, "VERSION", "SHA256SUMS"];
+  const requiredAssets = [...publicAssets];
   if (!options.allowMissingManual) {
     requiredAssets.push(manualAsset);
   }
@@ -49,6 +47,8 @@ async function main() {
     if (body !== version) {
       errors.push(`VERSION contains ${JSON.stringify(body)}, expected ${JSON.stringify(version)}`);
     }
+  } else {
+    warnings.push("VERSION asset absent; release metadata is authoritative");
   }
 
   if (assets.has("SHA256SUMS")) {
@@ -58,17 +58,19 @@ async function main() {
         errors.push(`SHA256SUMS is missing ${name}`);
       }
     }
+  } else {
+    warnings.push("SHA256SUMS asset absent; /dl metadata carries SHA256 values");
   }
 
-  if (!options.tag && !options.skipLatestDownloadHeads) {
+  if (!options.skipAssetUrlHeads) {
     for (const name of publicAssets) {
-      await verifyLatestDownload(name, errors);
+      await verifyAssetUrl(name, assets.get(name), errors);
     }
     if (!options.allowMissingManual) {
-      await verifyLatestDownload(manualAsset, errors);
+      await verifyAssetUrl(manualAsset, assets.get(manualAsset), errors);
     }
-  } else if (!options.tag && options.skipLatestDownloadHeads) {
-    warnings.push("latest-download HEAD checks skipped");
+  } else {
+    warnings.push("asset URL HEAD checks skipped");
   }
 
   for (const warning of warnings) {
@@ -87,7 +89,7 @@ async function main() {
 }
 
 function parseArgs(args) {
-  const options = { tag: null, allowMissingManual: false, skipLatestDownloadHeads: false };
+  const options = { tag: null, allowMissingManual: false, skipAssetUrlHeads: false };
   for (let i = 0; i < args.length; i += 1) {
     const arg = args[i];
     if (arg === "--tag") {
@@ -95,8 +97,8 @@ function parseArgs(args) {
       i += 1;
     } else if (arg === "--allow-missing-manual") {
       options.allowMissingManual = true;
-    } else if (arg === "--skip-latest-download-heads") {
-      options.skipLatestDownloadHeads = true;
+    } else if (arg === "--skip-asset-url-heads" || arg === "--skip-latest-download-heads") {
+      options.skipAssetUrlHeads = true;
     } else if (arg === "--help" || arg === "-h") {
       printHelp();
       process.exit(0);
@@ -109,17 +111,19 @@ function parseArgs(args) {
 }
 
 function printHelp() {
-  console.log(`usage: node scripts/verify-release-assets.mjs [--tag chan-vX.Y.Z] [--allow-missing-manual] [--skip-latest-download-heads]
+  console.log(`usage: node scripts/verify-release-assets.mjs [--tag vX.Y.Z] [--allow-missing-manual] [--skip-asset-url-heads]
 
-Without --tag, verifies the GitHub latest release and its latest-download URLs.
+Without --tag, verifies the GitHub latest release and each asset URL exposed by
+the GitHub API. VERSION and SHA256SUMS are checked when present, but /dl
+metadata is the release source of truth.
 `);
 }
 
 function versionFromTag(tag) {
-  if (!tag?.startsWith("chan-v")) {
-    throw new Error(`release tag must use chan-v<version>: ${tag}`);
+  if (!/^v\d+\.\d+\.\d+$/.test(tag ?? "")) {
+    throw new Error(`release tag must use vX.Y.Z: ${tag}`);
   }
-  return tag.slice("chan-v".length);
+  return tag.slice(1);
 }
 
 function checksumContains(body, name) {
@@ -131,11 +135,16 @@ function checksumContains(body, name) {
   });
 }
 
-async function verifyLatestDownload(name, errors) {
-  const url = `${latestDownloadBase}/${name}`;
+async function verifyAssetUrl(name, asset, errors) {
+  if (!asset?.browser_download_url) return;
+  const url = asset.browser_download_url;
+  if (url.includes("/releases/latest/download/")) {
+    errors.push(`asset URL uses latest-download route: ${url}`);
+    return;
+  }
   const response = await request(url, { method: "HEAD", redirect: "manual" });
   if (response.status < 200 || response.status >= 400) {
-    errors.push(`latest-download URL returned HTTP ${response.status}: ${url}`);
+    errors.push(`asset URL returned HTTP ${response.status}: ${url}`);
   }
 }
 

@@ -14,15 +14,15 @@
     <p>Desktop packages are built by the desktop release workflow.</p>
   </div>
   <div class="download-cards">
-    <a class="download-card" href="{{desktopDmgUrl}}">
+    <a class="download-card" href="{{githubReleasesUrl}}" data-release-download="desktop-macos-dmg">
       <strong>macOS</strong>
       <span>DMG</span>
     </a>
-    <a class="download-card" href="{{desktopAppImageUrl}}">
+    <a class="download-card" href="{{githubReleasesUrl}}" data-release-download="desktop-linux-appimage">
       <strong>Linux</strong>
       <span>AppImage</span>
     </a>
-    <a class="download-card" href="{{desktopDebUrl}}">
+    <a class="download-card" href="{{githubReleasesUrl}}" data-release-download="desktop-linux-deb">
       <strong>Linux</strong>
       <span>deb</span>
     </a>
@@ -45,12 +45,13 @@
   <p class="minor">
     Set <code>PREFIX</code> to change the install directory. Set
     <code>METADATA_URL</code> to test another release metadata source.
+    Direct download links use release metadata and fall back to GitHub Releases.
   </p>
 
   <div class="download-list">
-    <a href="{{cliLinuxX64Url}}">Linux x86_64 tarball</a>
-    <a href="{{cliLinuxArm64Url}}">Linux aarch64 tarball</a>
-    <a href="{{cliMacArm64Url}}">macOS aarch64 tarball</a>
+    <a href="{{githubReleasesUrl}}" data-release-download="cli-linux-x64">Linux x86_64 tarball</a>
+    <a href="{{githubReleasesUrl}}" data-release-download="cli-linux-arm64">Linux aarch64 tarball</a>
+    <a href="{{githubReleasesUrl}}" data-release-download="cli-macos-arm64">macOS aarch64 tarball</a>
     <a href="/install.sh">Read install.sh</a>
   </div>
 </section>

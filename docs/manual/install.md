@@ -6,14 +6,16 @@ control.
 
 ## Desktop
 
-The public install page links the active desktop artifacts:
+The public install page reads release metadata from `chan.app/dl/` and links
+the active desktop artifacts from that metadata:
 
 - macOS DMG
 - Linux AppImage
 - Linux deb
 
 Desktop packages are built by the desktop release workflow. The shell
-installer does not install desktop packages.
+installer does not install desktop packages. If metadata is unavailable, the
+install page falls back to the GitHub Releases page.
 
 ## Standalone CLI
 
@@ -51,3 +53,17 @@ BASE=https://mirror.example/dl/cli VERSION=0.14.0 sh install.sh
 ```
 
 Unsupported OS and architecture pairs fail explicitly.
+
+## Release Metadata
+
+The static metadata files published under `chan.app/dl/` describe complete
+releases after all GitHub Release assets exist.
+
+- `/dl/releases.json` feeds the install page download links.
+- `/dl/cli/latest.json` and `/dl/cli/vX.Y.Z.json` feed the shell installer
+  and `chan upgrade`.
+- `/dl/desktop/latest.json` and `/dl/desktop/vX.Y.Z.json` feed the desktop
+  updater.
+
+Metadata points at concrete GitHub Release asset URLs. The site and installer
+do not guess URLs from tags or Cargo versions.

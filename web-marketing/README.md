@@ -48,10 +48,11 @@ The build/check gate:
 - copies static assets into `dist/`
 - fails on missing required inputs
 - fails on broken local links
-- fails if generated release links drift away from GitHub latest-download
-  URLs
+- fails if generated pages infer GitHub release asset URLs instead of using
+  runtime release metadata hooks
 - fails if removed installer references reappear in generated public files
 - fails if stale public copy claims reappear in generated output
+- dry-runs `/dl/**` release metadata generation from a local fixture
 - serves `dist/` on loopback and smokes `/`, `/install/`, `/manual/`,
   `/manual/install/`, `/install.sh`, and `/install.ps1` absence
 
@@ -68,15 +69,35 @@ Then open `http://localhost:8080/`.
 
 ## Release verification
 
-After a `chan-v*` tag release completes, verify the public release assets:
+After a `v*` tag release completes, verify the public release assets:
 
 ```sh
 npm run verify:release
 ```
 
 The verifier checks the latest GitHub Release for the desktop downloads,
-standalone CLI tarballs, `VERSION`, `SHA256SUMS`, the manual bundle, and the
-GitHub latest-download URLs used by the public site.
+standalone CLI tarballs, and manual bundle. `VERSION` and `SHA256SUMS` are
+checked when present, but `/dl/**` metadata is the source of truth for
+downloads and updates.
+
+Generate release metadata from an already verified asset manifest:
+
+```sh
+npm run generate:metadata -- \
+  --manifest /tmp/chan-release-assets.json \
+  --out dist/dl
+```
+
+The generator writes:
+
+- `dist/dl/releases.json`
+- `dist/dl/cli/latest.json`
+- `dist/dl/cli/vX.Y.Z.json`
+- `dist/dl/desktop/latest.json`
+- `dist/dl/desktop/vX.Y.Z.json`
+
+The manifest must list concrete GitHub Release asset URLs and SHA256 values.
+It must not use GitHub `releases/latest/download` URLs.
 
 Build the release manual bundle locally:
 
@@ -102,10 +123,9 @@ only the active standalone CLI release targets:
 Desktop packages are downloaded directly as release artifacts. They are not
 installed by `install.sh`.
 
-`install.sh` defaults to GitHub's real latest-release asset URLs under
-`https://github.com/fiorix/chan/releases/latest/download/`. GitHub Pages does
-not proxy release artifacts, so the public site must not depend on a
-`chan.app/dl/latest/` route unless a static mirror is deliberately added later.
+`install.sh` defaults to `https://chan.app/dl/cli/latest.json`. Download links
+on the site read `/dl/releases.json` at runtime and fall back to the GitHub
+Releases page if metadata is unavailable.
 
 ## Workspace boundary
 
