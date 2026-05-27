@@ -183,6 +183,88 @@ Scope:
 - Do not touch Cargo.toml/Cargo.lock, Tauri updater behavior, or graph
   surfaces in this slice.
 
+## 2026-05-27 09:22 Slice 4 ready
+
+Committed `ci: align release workflows with metadata contract`. Final branch
+tip: `9163404f347669d2f5bce7ca3786b4ffaf4c32ad`.
+
+Authorization context:
+- This is the Phase 11 release-plan shared-infra workflow slice.
+- @@Architect explicitly cleared it at 08:28 and required the ready report to
+  state the workflow-YAML authorization, publishing gates, and secret
+  discipline.
+
+Implementation:
+- `.github/workflows/ci.yml`
+  - Replaced the parallel per-area CI layout with Make-driven jobs.
+  - Linux runs first through `make ci-linux`, which is the full local
+    pre-push gate.
+  - macOS runs only after Linux passes through `make ci-macos`.
+- `Makefile`
+  - Added optional `CHAN_TARGET` for targeted release CLI builds.
+  - Narrowed `ci-macos` to Rust clippy/tests so macOS stays focused after
+    Linux has run the full gate.
+- `.github/workflows/release.yml`
+  - Public tag trigger is now `v*`, with strict `vX.Y.Z` validation in the
+    context job.
+  - `workflow_dispatch` defaults to dry-run. Manual publish requires
+    `publish=true` and explicit `release_tag`.
+  - Ordered release path: Linux validation, Linux CLI packages, Linux desktop
+    packages, macOS validation, macOS CLI package, signed/notarised macOS
+    desktop package, GitHub Release upload, uploaded-asset verification,
+    `/dl/**` metadata generation, Pages deploy.
+  - Upload and fresh `/dl/**` metadata publication are gated to tag push or
+    explicit manual publish. No PR or normal branch push reaches that path.
+  - macOS desktop release signs a `Chan_<version>_aarch64.app.tar.gz` updater
+    payload and uploads the detached `.sig` alongside the DMG.
+- `.github/workflows/release-desktop.yml`
+  - Converted to a manual package dry-run. It no longer publishes on tag push,
+    so it cannot race the unified release workflow.
+- `.github/workflows/pages.yml`
+  - Normal main-branch Pages deploys preserve already published `/dl/**`
+    metadata but do not generate new metadata.
+- `web-marketing/scripts/collect-release-assets.mjs`
+  - Collects uploaded GitHub Release assets, hashes asset bytes, reads detached
+    updater signatures, and writes the manifest consumed by
+    `generate-release-metadata.mjs`.
+- `web-marketing/scripts/preserve-release-metadata.mjs`
+  - Copies existing `/dl/**` metadata into a normal Pages artifact so site-only
+    deploys do not wipe release metadata.
+- `web-marketing/scripts/smoke-release-assets-manifest.mjs`
+  - Fixture-backed smoke test for the release asset collector.
+- `web-marketing/scripts/verify-release-assets.mjs`
+  - Requires the macOS updater payload and detached signature asset in addition
+    to public download assets and the manual bundle.
+- `.github/PULL_REQUEST_TEMPLATE.md` and
+  `.github/ISSUE_TEMPLATE/feature_request.md`
+  - PR gate now points at `make pre-push`.
+  - Feature template labels proposed solution as optional.
+- `docs/release/macos-signing.md` and
+  `docs/release/populate-apple-secrets.sh`
+  - Updated references from old desktop-only tag workflow to the unified
+    `vX.Y.Z` release cut shape.
+
+Signing secrets:
+- No secret values were written.
+- Workflow references are by name only:
+  `APPLE_CERTIFICATE_BASE64`, `APPLE_CERTIFICATE_PASSWORD`,
+  `APPLE_SIGNING_IDENTITY`, `APPLE_TEAM_ID`, `APPLE_ID`, `APPLE_PASSWORD`,
+  `TAURI_SIGNING_PRIVATE_KEY`, and `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`.
+
+Verification:
+- `npm run check` in `web-marketing/`
+- `ruby -e 'require "yaml"; ARGV.each { |f| YAML.load_file(f); puts "ok #{f}" }' .github/workflows/ci.yml .github/workflows/release.yml .github/workflows/release-desktop.yml .github/workflows/pages.yml`
+- `bash -n docs/release/populate-apple-secrets.sh`
+- `git diff --check`
+- `make -n ci-linux`
+- `make -n ci-macos`
+- `make -n chan CHAN_TARGET=aarch64-apple-darwin`
+- `make -n linux-chan-tarball LINUX_TARGET=x86_64-unknown-linux-gnu`
+- `make -n macos-chan-dmg-notarised`
+- `make pre-push`
+
+No Cargo.toml/Cargo.lock, Tauri config/source, or graph surfaces touched.
+
 ## 2026-05-27 07:36 Slice 3 start
 
 Read @@Architect update: slices 1-2 merged to main at

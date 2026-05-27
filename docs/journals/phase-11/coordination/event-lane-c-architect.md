@@ -181,3 +181,62 @@ macOS, retarget release tags to `vX.Y.Z`, wire release asset verification and
 metadata generation, and ensure all publish paths are gated on tag or explicit
 manual release-cut inputs. No secret values will be written; signing secrets
 are referenced by existing GitHub Actions secret names only.
+
+## 2026-05-27 09:22 @@LaneC -> @@Architect
+ready to merge: phase-11-lane-c@9163404f347669d2f5bce7ca3786b4ffaf4c32ad
+
+Slice 4 is complete on current main `96c9c17`.
+
+Shared-infra authorization: this workflow-YAML change is the Phase 11
+release-plan CI slice, explicitly cleared by @@Architect at 08:28.
+
+Gate-definition change, flagged clearly:
+- PR CI now calls `make ci-linux` first. That target is the full local
+  pre-push gate.
+- PR CI then calls `make ci-macos` only after Linux passes. `make ci-macos`
+  is now focused on Rust clippy/tests for macOS-specific coverage.
+
+Release publish structure:
+- Public release tags are `vX.Y.Z`.
+- `workflow_dispatch` defaults to dry-run. It publishes only with
+  `publish=true` plus an explicit `release_tag`.
+- GitHub Release asset upload, asset verification, fresh `/dl/**` metadata
+  generation, and Pages deploy are all behind tag push or explicit manual
+  publish. No PR path or normal branch push path generates or publishes fresh
+  `/dl/**` metadata.
+- Normal `pages.yml` deploys preserve already published `/dl/**` metadata
+  only; they do not generate new release metadata.
+
+Signing-secret discipline:
+- No secret values are in YAML, docs, journals, or commit text.
+- Workflows reference secret NAMES only:
+  `APPLE_CERTIFICATE_BASE64`, `APPLE_CERTIFICATE_PASSWORD`,
+  `APPLE_SIGNING_IDENTITY`, `APPLE_TEAM_ID`, `APPLE_ID`, `APPLE_PASSWORD`,
+  `TAURI_SIGNING_PRIVATE_KEY`, and `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`.
+
+What changed:
+- `release.yml` now owns ordered release CI: Linux validation, Linux CLI and
+  desktop artifacts, macOS validation, macOS CLI and signed/notarised desktop
+  artifacts, upload, verify, metadata generation, Pages deploy.
+- `release-desktop.yml` is manual package dry-run only, so it cannot race the
+  unified release publisher on tag pushes.
+- Added release asset collection tooling that hashes uploaded GitHub Release
+  assets and carries detached desktop updater signatures into the metadata
+  manifest.
+- `verify-release-assets` now requires the macOS updater payload and detached
+  signature asset.
+- PR/issue templates now match the release plan: `make pre-push` is the PR
+  gate and feature issues lead with the problem, with the proposed solution
+  explicitly optional.
+
+Verification:
+- `make pre-push` passed.
+- `npm run check` passed in `web-marketing/`.
+- Ruby parsed all workflow YAML files.
+- `bash -n docs/release/populate-apple-secrets.sh` passed.
+- `git diff --check` passed.
+- `make -n` dry-runs passed for `ci-linux`, `ci-macos`,
+  `chan CHAN_TARGET=aarch64-apple-darwin`, `linux-chan-tarball`, and
+  `macos-chan-dmg-notarised`.
+
+Touched no Cargo.toml/Cargo.lock, Tauri config/source, or graph surfaces.

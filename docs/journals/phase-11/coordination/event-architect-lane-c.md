@@ -167,3 +167,19 @@ Slice 4 is .github/ CI = SHARED INFRA, handle with the extra discipline:
   merges without flagging - CI YAML changes the gate definition, so flag it
   CLEARLY and I'll re-gate knowing that. I'll also surface the release-publish
   structure to @@Alex when you report.
+
+## 2026-05-27 09:43 @@Architect -> @@LaneC
+MERGED: slice 4 (release CI) -> main 3ce94f0. Release-cut gate verified. Slices 5-6 -> next round.
+
+Reviewed the workflow YAML directly: release.yml publishes ONLY on a v* tag push
+or workflow_dispatch publish=true+release_tag (publish defaults false; publish/
+metadata/Pages jobs gated if publish==true + an environment gate); ci.yml is the
+PR gate (make ci-linux then ci-macos, no publish); pages.yml preserves published
+/dl metadata on normal deploys; release-desktop.yml is manual dry-run. Secret
+NAMES only, no values. Re-gated: web-marketing check green (release asset
+manifest + metadata smokes), all 4 workflow YAMLs parse.
+
+Slices 5 (Tauri updater UX + Cargo.lock bump) + 6 (graph manual copy, waits on
+LaneA GI-10/loading-state) correctly deferred to next round. NOTE: nothing this
+round is PUSHED to origin yet, so the new ci.yml has not run on CI - the first
+push fires make ci-linux/ci-macos over the whole round. Good wrap.

@@ -1780,3 +1780,66 @@ proxy-aware layout.nodes reads + paneMode reset). svelte-check 0/0, vitest
 revealAndEnterDirectory is now unused (C4 removes it). C3/C4 remain: FB
 browserOverlay leftovers; delete graphOverlay/browserOverlay state + GraphPanel
 OverlayShell branch + legacy hash + consolidate GraphPanel's C1 local reveail.
+
+#### C3/C4 BLOCKER FINDING: graphOverlay/browserOverlay are LOAD-BEARING, not inert (2026-05-27)
+
+C1 + C2 merged (main eba22a5). Rebased lane-a onto it. Began C3/C4 (delete the
+"dead" graphOverlay/browserOverlay state) and found the premise is WRONG - these
+are NOT inert dead code:
+
+1. graphOverlay is a live MIRROR of the active graph tab's scope, READ by
+   availableGraphScopes (store 1644-1684, injects the active tag/file/dir scope
+   as an option) which GraphPanel calls to resolve currentScope (GraphPanel:101).
+   It's synced via mirrorGraphTabToOverlay (store:2005). graphOverlay.scopeId is
+   also read by the scope-synthesis path (1644/1665/1683). 61 store refs incl.
+   the HASH persistence (encodeGraphFilters, HASH_GRAPH read/write) + the state
+   def. (Possibly partly redundant with GraphPanel's synthesizeScope fallback,
+   but needs per-use analysis + testing to confirm before removal.)
+2. browserOverlay backs the DOCK's state: `browserState = tab ?? browserOverlay`
+   (FBSurface:95); the dock (no tab) falls back to browserOverlay. Written at
+   FBSurface:376. (The dock doesn't render the inspector - isWideSurface gates
+   it to overlay/tab - so the dependency is thin, but it's there.)
+3. graphOverlay.open / browserOverlay.open are still SET by the legacy ?graph= /
+   ?files= hash restore (store:1229 graphOverlay.open=true) - so the `if(.open)`
+   branches are NOT dead until the legacy hash is retired first.
+
+The FB/Graph OVERLAY VARIANTS are genuinely dead (never mounted: FB only dock+
+tab, graph only tab; .open never set except the legacy hash). But the STATE
+objects are repurposed (graphOverlay = active-tab scope mirror; browserOverlay =
+dock state). Deleting them outright breaks availableGraphScopes (graph scope
+resolution) + the dock.
+
+REAL cleanup = a re-architecture, not deletion:
+  R1. availableGraphScopes derives the active scope from the active graph TAB
+      (activeLayout) instead of the graphOverlay mirror; drop mirrorGraphTabToOverlay.
+  R2. the dock gets its own browserState (a local/dedicated $state), not browserOverlay.
+  R3. retire/convert the legacy ?graph=/?files= hash (degrade old bookmarks: open
+      a tab or ignore) so .open is never set - THEN the .open branches are dead.
+  R4. THEN graphOverlay/browserOverlay are truly dead -> delete (state def, hash
+      persistence, App overlay-persistence $effect, scope.svelte reads).
+SAFE subset achievable without R1-R4: remove the dead `<OverlayShell>` RENDER
+branch from GraphPanel (graph is always a tab; only Pane.svelte mounts it) so
+OverlayShell is used ONLY by Search + Settings - which is @@Alex's literal ask.
+graphOverlay/browserOverlay STATE (load-bearing) is a SEPARATE concern from the
+OverlayShell COMPONENT. Surfacing to @@Alex/@@Architect for the path call.
+
+#### Safe OverlayShell removal SHIPPED + scope-wipe spec'd (2026-05-27 09:00)
+@@Alex chose "safe removal + plan the rest", then clarified: wipe the SCOPE
+concept entirely (pre-release), "panes form scope" (availableGraphScopes) gone,
+scope == a filesystem-spine directory.
+- SHIPPED: 1d64380 - removed GraphPanel's dead <OverlayShell> render branch +
+  import (graph always a tab; {:else} never rendered; runtime identical).
+  OverlayShell now only in Search + Settings. svelte-check 0/0, vitest 1596/0.
+- PLANNED: docs/journals/phase-11/overlay-scope-wipe-spec.md (W1-W7) - the
+  scope-concept wipe + graphOverlay/browserOverlay deletion, with the
+  load-bearing coupling documented so the next pass doesn't re-discover it.
+  OPEN Q for @@Alex: fate of tag/file/group/global scope kinds under
+  scope==directory (spec leans: collapse to dir + semantic edges; file -> parent
+  dir; drop tag/group/global as rootable).
+Branch: eba22a5 -> 1d64380 (safe removal, ready to merge).
+
+#### Scope-kinds RESOLVED (2026-05-27 09:08)
+@@Alex: base = directory (spine walk). TAG stays rootable (depth ALWAYS 1 ->
+docs using it; markdown-layer). LANGUAGE stays rootable (-> dirs by majority
+language; depth walks forward like FB expand). FILE -> parent dir (GI-6). Drop
+group/global/git_repo. Folded into overlay-scope-wipe-spec.md W2. Spec complete.

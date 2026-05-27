@@ -2,6 +2,52 @@
 
 Round wrapped 2026-05-27. Next round starts fresh from this backlog.
 
+## CONTINUATION close (2026-05-27): what landed + updated carryover
+
+A continuation round ran from this backlog (lanes: @@LaneA graph, @@LaneC
+release/CI). main advanced 85e6f15 -> 3ce94f0, ALL LOCAL (not pushed - the first
+push fires the new `make ci-linux`/`ci-macos` CI over the whole round). Final
+gate green: fmt/clippy/test (31 suites), web svelte-check 0/0 + vitest 1596/0,
+web-marketing check.
+
+LANDED:
+- Terminal (0691dc9): WebGL renderer recreates on context loss (bounded retry) +
+  per-retry [chan] console logging - was a one-way DOM downgrade.
+- GI-9 (64225b9): fs-mode directory graphs render the full containment spine
+  (scopedNodeIds null in fs-mode); fixed 0/N + dropped sibling subdirs.
+- GI-8 (e61b8c4 C1, be05dae C2, a89f171): reveal (graph Show Directory/File,
+  editor Reveal, search Show File, window-command) always opens a File Browser
+  tab; dead GraphPanel OverlayShell branch removed -> OverlayShell now
+  Search+Settings only.
+- LaneC release contract (bd979bc, 96c9c17, 3ce94f0): chan upgrade + install.sh
+  on /dl/cli metadata (vX.Y.Z + SHA256-from-metadata); root Makefile public
+  surface + scripts/pre-push -> make pre-push; /dl metadata generator + verifier
+  + site-consumes-/dl/releases.json (GitHub fallback); release CI with the
+  release-cut gate (publish only on v* tag or workflow_dispatch publish=true;
+  secret NAMES only).
+
+NEXT-ROUND carryover (NEW + still-open; the GI-8/GI-9 sections below are DONE):
+- OVERLAY/SCOPE-CONCEPT WIPE (the big graph item): `overlay-scope-wipe-spec.md`
+  (W1-W7, design-resolved). Kill availableGraphScopes / "panes form scope";
+  scope == filesystem directory (tag rootable depth-1, language rootable,
+  file->parent, drop group/global/git_repo); GraphPanel graphState=tab; dock
+  owns browserState; retire legacy ?graph=/?files= hash; delete the LOAD-BEARING
+  graphOverlay/browserOverlay state (coupling documented in the spec).
+- GI-10 (drive-at-bottom layout, GraphCanvas) - not started (detail below).
+- Graph loading-state UX - not started (detail below + graph-loading-state-spec).
+- GI-11 - confirmed a STALE-INDEX non-bug (both resolvers already normalize ../).
+  Optional ../ / ./ link-target regression-locks, else drop.
+- LaneC slice 5: Tauri updater UX (Check-for-Updates menu, prompt, signed
+  payloads) -> /dl/desktop/latest.json + the Tauri dep bump (Cargo.lock - the one
+  cross-lane seam, sequence vs graph work).
+- LaneC slice 6: graph manual/site copy - waits on GI-10 + loading-state.
+
+VERIFICATION GAPS for @@Alex in a real build:
+- Editor "Reveal in browser" + search "Show File" -> FB tab (LaneA could not
+  click live; thin wrappers, low risk).
+- Terminal WebGL self-heal: background/foreground, display sleep, monitor switch;
+  watch console for [chan] context-loss lines.
+
 ## What landed this round (on `main`)
 
 Round-1 bugs (all done): list-input regression (1), desktop drag-removal +

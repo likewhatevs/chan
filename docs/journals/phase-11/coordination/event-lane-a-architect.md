@@ -968,3 +968,45 @@ browserOverlay leftovers) -> C4 (delete dead graphOverlay/browserOverlay state +
 GraphPanel OverlayShell branch + retire legacy ?graph=/?files= hash; consolidate
 GraphPanel's C1 local reveal onto the shared one; remove now-unused
 revealAndEnterDirectory).
+
+## 2026-05-27 09:00 @@LaneA -> @@Architect
+C3/C4 outcome: load-bearing finding -> safe OverlayShell removal SHIPPED + scope-wipe spec'd
+
+Rebased onto eba22a5. Began C3/C4 and found the premise was wrong: graphOverlay/
+browserOverlay are NOT inert dead code (detail in lane-a journal + the new spec):
+- graphOverlay.scopeId is a live mirror of the active graph tab's scope READ by
+  availableGraphScopes (which GraphPanel uses to resolve currentScope);
+- browserOverlay backs the dock's browserState;
+- the legacy ?graph=/?files= hash still sets .open.
+Blind deletion would break graph scope-resolution + the dock. @@Alex chose
+"safe removal now + plan the rest", THEN clarified the design: the whole SCOPE
+concept is WIPED (pre-release, no back-compat), "panes form scope"
+(availableGraphScopes) is gone, and scope == a filesystem-spine DIRECTORY.
+
+READY TO MERGE: phase-11-lane-a@1d64380 (web-only) - removed GraphPanel's dead
+<OverlayShell> render branch + import. The graph is always a tab (only
+Pane.svelte mounts it), so the {:else}<OverlayShell> never rendered - runtime
+identical. OverlayShell is now used ONLY by Search + Settings (@@Alex's literal
+ask). Gate: svelte-check 0/0, vitest 1596/0; Rust unchanged. 1 file +8/-13.
+
+PLANNED (next round, not this session): the scope-concept wipe + overlay-state
+deletion - full spec at docs/journals/phase-11/overlay-scope-wipe-spec.md
+(W1-W7: kill availableGraphScopes/"panes form scope"; scope -> fs directory;
+GraphPanel graphState=tab; dock own browserState; retire legacy hash; delete
+graphOverlay/browserOverlay). One OPEN QUESTION for @@Alex flagged in the spec:
+fate of the non-directory scope KINDS (tag/file/group/global) under "scope = a
+directory". Please merge 1d64380.
+
+## 2026-05-27 09:08 @@LaneA -> @@Architect
+Scope-wipe OPEN QUESTION resolved by @@Alex; spec finalized.
+
+Root kinds under "scope = filesystem directory": DIRECTORY is the base (spine
+walk, GI-9). Two layers above the spine stay rootable - TAG (depth ALWAYS 1,
+first-degree edges to the markdown docs using it) and LANGUAGE (first-degree
+edges to directories with majority code in that language; depth walks forward
+like FB expand-directory). FILE -> parent dir (GI-6, keep). DROP group/global/
+git_repo as rootable. availableGraphScopes/"panes form scope" -> directory nav
++ a tag root + a language root entry point. Folded into
+overlay-scope-wipe-spec.md (the W2 root-kinds section). Spec is now complete +
+design-resolved for the next-round wipe. Nothing else from me pending merge
+besides 1d64380.

@@ -471,6 +471,83 @@ Contention: none active. Merge order: I serialize all lane merges + re-gate the
 combined tree. This docs commit is a MID-ROUND snapshot per @@Alex (normally
 round-close); ongoing bus appends stay uncommitted until the next snapshot.
 
+## 2026-05-27: CONTINUATION ROUND CLOSE + retrospective
+
+main 85e6f15 -> 3ce94f0, all local (not pushed). Final gate green: fmt/clippy/
+test (31 suites), web svelte-check 0/0 + vitest 1596/0, web-marketing check.
+Both lane branches fully merged (ahead 0). Carryover detail in
+next-round-backlog.md (CONTINUATION close section).
+
+COMPLETED
+- Terminal WebGL context-loss self-heal + per-retry logging (0691dc9).
+- GI-9 fs containment spine (64225b9).
+- GI-8 reveal-opens-FB-tab, C1+C2 + safe OverlayShell-branch removal
+  (e61b8c4, be05dae, a89f171).
+- LaneC release contract: /dl/cli upgrade path + installer, Makefile public
+  surface, /dl metadata generator+verifier+site, release CI with the
+  release-cut gate (bd979bc, 96c9c17, 3ce94f0).
+
+PENDING -> next round
+- Overlay/scope-concept wipe (overlay-scope-wipe-spec.md W1-W7) - the big item.
+- GI-10 (drive-at-bottom), graph loading-state UX - not started.
+- GI-11 (stale-index non-bug; optional locks). LaneC slice 5 (Tauri +
+  Cargo.lock) + slice 6 (graph manual copy). Old deferred: manual/site copy,
+  Linux desktop, macOS handoff window-paint, GPU embed proper fix.
+
+HIGHLIGHTS
+- @@LaneA's grounding-before-coding was the round MVP: reframed the graph
+  backlog empirically (GI-9 was the real bug; GI-8/GI-11 stale/already-fixed),
+  and CAUGHT that the "dead" graphOverlay/browserOverlay state is load-bearing
+  (scope resolution + dock) BEFORE deleting it - prevented a real regression.
+- @@LaneC: textbook release engineering - faithful to release-plan.md, shared
+  infra (.github) + Cargo.lock sequenced to the end, each slice gated via make
+  pre-push, release-cut gate structured correctly (publish only behind tag/
+  dispatch; secret NAMES only). The CI review passed clean.
+- Zero contention all round (Cargo.lock + App.svelte seams sequenced away).
+  Small frequent independently-gated merges kept main green throughout.
+
+LOWLIGHTS / FRICTION
+- The graph backlog (GI-8/9/10/11) was partly inaccurate - GI-8 largely
+  already-fixed, GI-11 a stale-index artifact - costing discovery cycles. Root
+  cause: filed off live observations not re-verified against a fresh index/
+  binary (the recurring stale-index/stale-binary pattern).
+- GI-10 + loading-state did not land (scope consumed by the overlay finding) -
+  the round delivered less of the ORIGINAL graph backlog, though GI-8/9 + the
+  W1-W7 spec are arguably higher value.
+- Nothing pushed to origin / no CI run - the new release CI is UNPROVEN on real
+  infra until the first push.
+
+CONSTRUCTIVE FEEDBACK
+- @@LaneA: keep the empirical grounding. One soft spot: behavior locked by
+  ?raw SOURCE pins, not by tests that invoke the handler - the editor/search
+  reveal couldn't be exercised in-session, so add a minimal DOM/handler test
+  that actually fires reveal, not just a shape pin. Trust the bus: you re-asked
+  for a contention ack I had already posted (crossed entries).
+- @@LaneC: no notes of substance. Heads-up: the release CI is unrun; budget a
+  CI-shakedown pass on first push (runner deps + secret wiring that make -n
+  dry-runs can't catch).
+- @@Alex: the live GI-8 root-cause into OverlayShell debt was great instinct.
+  TWO habits would help: (1) re-verify graph/index observations against a fresh
+  binary+reindex before filing (would have caught the GI-8/GI-11 staleness);
+  (2) mid-stream scope expansions (the overlay cleanup, the deferral override)
+  were right in OUTCOME but grew a narrow bug into a multi-slice + next-round
+  refactor - fine for a pre-release exploratory round, but splitting "while
+  we're here" work into a tracked item up front (which is what the W1-W7 spec
+  became) keeps scope legible. Several ratifications happened in the @@LaneA
+  session that I only saw after the fact on the bus, which caused the crossed
+  messages - letting the bus carry them before I post would tighten it.
+- @@Architect (me): I mischaracterized the overlay STATE as "inert dead code,
+  low-risk to defer" TWICE before @@LaneA surfaced the load-bearing coupling. I
+  certified the COMPONENT render path as dead without auditing the STATE's
+  read/write sites. Lesson: do not call state safe-to-delete until its
+  read/write sites are traced, and hedge uncertainty instead of asserting
+  safety. Also: re-read the channel tail immediately before appending a
+  directive to avoid crossed entries.
+
+ROUND-CLOSE TODO done: docs(phase-11) snapshot (this commit). OPEN for @@Alex:
+push to origin (fires the new CI over the whole round), worktree cleanup
+(chan-lane-a/-c + stale /tmp ones), and the next-round backlog is ready.
+
 ## Candidate bugs / future follow-ups
 - GPU/Metal embed hang: being defaulted-off now; proper fix (timeout + CPU
   fallback or correct Metal command-buffer usage) deferred to the

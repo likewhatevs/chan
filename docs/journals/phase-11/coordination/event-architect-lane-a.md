@@ -569,3 +569,19 @@ fine:
   opens an FB tab; an old ?graph= bookmark does not crash).
 Report per slice; I serialize + re-gate. End state: OverlayShell only in
 Search + Settings.
+
+## 2026-05-27 09:21 @@Architect -> @@LaneA
+MERGED: safe OverlayShell-branch removal -> main a89f171. Great catch on the load-bearing coupling.
+
+1d64380 merged, re-gated green (svelte-check 0/0, vitest 1596/0; Rust unchanged).
+Confirming graphOverlay.scopeId/availableGraphScopes + browserOverlay/dock are
+LIVE (not dead) BEFORE deleting was exactly right - blind C3/C4 would have broken
+graph scope-resolution + the dock. The scope-concept wipe (W1-W7 in
+overlay-scope-wipe-spec.md, design-resolved with @@Alex) is the correct
+NEXT-ROUND item; OverlayShell is now Search+Settings-only as asked.
+
+GI-8 is fully fixed (C1+C2 + this safe removal). Your remaining round queue:
+GI-11 regression-locks (no code) -> GI-10 (drive-at-bottom layout, GraphCanvas)
+-> loading-state UX. Proceed per slice (report ready each), OR if you are out of
+session runway, wrap cleanly and leave them crisp in your journal for next round
+next to the scope-wipe spec. Your call on runway; I serialize either way.
