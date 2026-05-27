@@ -1973,7 +1973,7 @@ mod tests {
             )
             .await;
             terminal.handle.send_input(
-                b"printf '\\n__CWD_HOME_BEGIN__\\n'; pwd; printf '<HOME=%s>\\n' \"$HOME\"; printf '<CHAN_TAB_NAME=%s>\\n' \"$CHAN_TAB_NAME\"; printf '<CHAN_WINDOW_ID=%s>\\n' \"$CHAN_WINDOW_ID\"; printf '<CHAN_CONTROL_SOCKET=%s>\\n' \"$CHAN_CONTROL_SOCKET\"; env | grep -E '^(CHAN|CLAUDE|CODEX|GEMINI)_MCP_' | sort; printf '\\n__CWD_HOME_END__\\n'\r",
+                b"printf '\\n__CWD_HOME_BEGIN__\\n'; pwd; printf '<HOME=%s>\\n' \"$HOME\"; printf '<CHAN_TAB_NAME=%s>\\n' \"$CHAN_TAB_NAME\"; printf '<CHAN_WINDOW_ID=%s>\\n' \"$CHAN_WINDOW_ID\"; printf '<CHAN_CONTROL_SOCKET=%s>\\n' \"$CHAN_CONTROL_SOCKET\"; printf '<CHAN_WORKSPACE_NAME=%s>\\n' \"$CHAN_WORKSPACE_NAME\"; printf '<CHAN_WORKSPACE_PATH=%s>\\n' \"$CHAN_WORKSPACE_PATH\"; env | grep -E '^(CHAN|CLAUDE|CODEX|GEMINI)_MCP_' | sort; printf '\\n__CWD_HOME_END__\\n'\r",
             );
             let out = collect_until(&mut terminal.handle, "__CWD_HOME_END__", PROBE_BUDGET).await;
             assert!(
@@ -1995,6 +1995,18 @@ mod tests {
             assert!(
                 out.contains("<CHAN_CONTROL_SOCKET=/tmp/chan-control-test.sock>"),
                 "terminal should expose the control socket env var, got {out:?}"
+            );
+            assert!(
+                out.contains(&format!("<CHAN_WORKSPACE_PATH={}>", cwd.display())),
+                "terminal should expose the workspace path env var, got {out:?}"
+            );
+            let ws_name = cwd
+                .file_name()
+                .expect("temp drive has a basename")
+                .to_string_lossy();
+            assert!(
+                out.contains(&format!("<CHAN_WORKSPACE_NAME={ws_name}>")),
+                "terminal should expose the workspace name env var, got {out:?}"
             );
             assert!(
                 out.contains("CHAN_MCP_SOCKET=/tmp/chan-test.sock"),

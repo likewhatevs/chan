@@ -828,6 +828,17 @@ impl Session {
                 cmd.env("CHAN_CONTROL_SOCKET", socket);
             }
         }
+        // Served-workspace identity for the terminal and any agents it spawns.
+        // No user-managed workspace name exists; the label derives from the root
+        // path basename, matching how the UI labels a workspace.
+        let workspace_path = config.drive_root.to_string_lossy();
+        cmd.env("CHAN_WORKSPACE_PATH", workspace_path.as_ref());
+        let workspace_name = config
+            .drive_root
+            .file_name()
+            .map(|s| s.to_string_lossy().into_owned())
+            .unwrap_or_else(|| workspace_path.into_owned());
+        cmd.env("CHAN_WORKSPACE_NAME", &workspace_name);
         cmd.env_remove("NO_COLOR");
         cmd.env_remove("CI");
         cmd.env_remove("CODEX_CI");
@@ -1564,6 +1575,8 @@ fn clear_mcp_env(cmd: &mut CommandBuilder) {
         "CHAN_MCP_SERVER_JSON",
         "CHAN_WINDOW_ID",
         "CHAN_CONTROL_SOCKET",
+        "CHAN_WORKSPACE_NAME",
+        "CHAN_WORKSPACE_PATH",
     ] {
         cmd.env_remove(key);
     }
