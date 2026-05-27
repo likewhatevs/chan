@@ -92,11 +92,12 @@
     paneModeStageDraftEditor,
     paneModeSwap,
     showOrSpawnRichPromptInFocusedPane,
+    splitActive,
     toggleActiveFileTabMode,
   } from "./state/tabs.svelte";
   import { applyEditorTheme, DEFAULT_EDITOR_THEME } from "./state/editorTheme";
   import { flushPendingBufferWrites, pruneEditorBuffers } from "./state/editorBuffer";
-  import { reloadWindow } from "./api/desktop";
+  import { isTauriDesktop, reloadWindow, requestCloseWindow } from "./api/desktop";
   import { api } from "./api/client";
   import {
     applyInitialPageWidth,
@@ -591,6 +592,17 @@
         paneModeHelpVisible = false;
         lockNow();
         return;
+      // `phase-12 lane-e` (addendum-2 Q8): `i` opens an Infographics
+      // tab in the active pane. Same commit-then-act shape as Search /
+      // Lock so layout edits the user already made aren't dropped.
+      // Pairs with the top-level Cmd+I chord (both open the tab).
+      case "i":
+      case "I":
+        commitPaneMode();
+        scheduleSessionSave();
+        paneModeHelpVisible = false;
+        openInfographicsInActivePane();
+        return;
       // `fullstack-a-68 slice 2`: `P` now stages a fresh smart-
       // prompt terminal (a terminal tab with the rich-prompt
       // overlay armed open) instead of toggling the overlay on
@@ -720,14 +732,33 @@
       spawnGraphFromContext();
       return;
     }
-    if (meta && !e.altKey && !e.shiftKey && e.code === "BracketLeft") {
+    // `phase-12 lane-e` (addendum-2 Q5): WEB pane nav is Alt+[/].
+    // Cmd+[/] is browser back/forward on web, so the web build moves
+    // pane nav onto Alt (desktop keeps Cmd+[/] via KEY_BRIDGE_JS,
+    // which stopImmediatePropagation's before this handler ever runs,
+    // so this branch is web-only). Match by `e.code` and preventDefault
+    // the Option-mangled glyph, exactly like the Alt+Shift+[/] tab
+    // handler below. `!e.shiftKey` keeps Alt+Shift+[/] (tab nav) out.
+    if (e.altKey && !e.shiftKey && !meta && e.code === "BracketLeft") {
       e.preventDefault();
       selectPrevPane();
       return;
     }
-    if (meta && !e.altKey && !e.shiftKey && e.code === "BracketRight") {
+    if (e.altKey && !e.shiftKey && !meta && e.code === "BracketRight") {
       e.preventDefault();
       selectNextPane();
+      return;
+    }
+    // `phase-12 lane-e` (addendum-2): Cmd+S (Ctrl+S non-Mac) opens
+    // drive-wide search. Reclaims the chord dropped in fullstack-56
+    // (save went autosave-only). @@Alex Q5 explicitly authorizes
+    // preventDefault here to suppress the browser save-page dialog.
+    // On chan-desktop KEY_BRIDGE_JS replays Cmd+S as app.search.toggle
+    // (and stops propagation), so this branch is web-only. Excludes
+    // Shift (Cmd+Shift+S strikethrough is the editor's).
+    if (meta && !e.altKey && !e.shiftKey && e.code === "KeyS") {
+      e.preventDefault();
+      searchPanel.open = !searchPanel.open;
       return;
     }
     if (meta && !e.altKey && !e.shiftKey && e.code === "KeyW") {
@@ -809,6 +840,17 @@
       toggleActiveFileTabMode();
       return;
     }
+    // `phase-12 lane-e` (addendum-2 Q8): Cmd+I opens an Infographics
+    // tab in the active pane (also reachable via Hybrid Nav `i`). The
+    // tab type already exists; this just adds the direct chord @@Alex
+    // approved. On chan-desktop KEY_BRIDGE_JS replays Cmd+I as
+    // app.infographics.open (and stops propagation), so this branch is
+    // web-only. Cmd+I is not browser-reserved; preventDefault is safe.
+    if (meta && !e.altKey && !e.shiftKey && !e.ctrlKey && e.code === "KeyI") {
+      e.preventDefault();
+      openInfographicsInActivePane();
+      return;
+    }
   }
 
   async function createDraftAndOpen(): Promise<void> {
@@ -868,7 +910,21 @@
   function closeActiveEmptyPane(): boolean {
     const p = activePane();
     if (p.tabs.length !== 0) return false;
-    if (leafPaneCount() <= 1) return false;
+    // `phase-12 lane-e` (addendum-2 Q6): close-cascade tail. The last
+    // empty pane has nothing left to close, so the window itself
+    // closes and focus returns to the native-desktop workspace list.
+    // Desktop only - the browser owns its own window/tab lifecycle on
+    // web, where this stays a no-op (Cmd+W falls through to the
+    // browser). request_close_window shows the launcher, then closes
+    // this drive window (the launcher's CloseRequested hides rather
+    // than destroys it, so re-showing is instant).
+    if (leafPaneCount() <= 1) {
+      if (isTauriDesktop()) {
+        void requestCloseWindow();
+        return true;
+      }
+      return false;
+    }
     killActivePane({ force: true });
     return true;
   }
@@ -993,6 +1049,16 @@
         return;
       case "app.pane.kill":
         killActivePane();
+        return;
+      // `phase-12 lane-e` (addendum-2): top-level split chords
+      // (desktop Cmd+/ right, Cmd+\ bottom via KEY_BRIDGE_JS). row =
+      // split right, column = split bottom - same direction mapping
+      // as Hybrid Nav `/` and `\`.
+      case "app.pane.splitRight":
+        splitActive("row");
+        return;
+      case "app.pane.splitDown":
+        splitActive("column");
         return;
       case "app.tab.next":
         selectNextTabInActivePane();

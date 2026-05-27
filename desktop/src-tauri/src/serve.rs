@@ -612,11 +612,28 @@ const KEY_BRIDGE_JS: &str = r#"
         case 'KeyT': fire(e, 'app.terminal.toggle'); return;
         case 'KeyO': fire(e, 'app.files.toggle');    return;
         case 'KeyP': fire(e, 'app.terminal.richPrompt'); return;
-        case 'KeyW': fire(e, 'app.tab.close');        return;
+        // `phase-12 lane-e` (addendum-2 Q6/Q7): Cmd+W closes the tab
+        // on macOS. On Linux the platform mod is Ctrl and Ctrl+W is
+        // readline delete-word inside a focused terminal, so DON'T
+        // claim it - let it reach xterm. Linux closes tabs with Ctrl+D
+        // (context-aware via the SPA's onCtrlDCapture, which leaves a
+        // focused terminal to its EOF). Gating on metaKey (Cmd) leaves
+        // Linux Ctrl+W untouched (no preventDefault -> reaches xterm).
+        case 'KeyW': if (e.metaKey) fire(e, 'app.tab.close'); return;
+        case 'KeyS': fire(e, 'app.search.toggle');    return;
         case 'KeyF': fire(e, 'app.find.open');        return;
         case 'KeyG': fire(e, 'app.find.next');        return;
+        // `phase-12 lane-e` (addendum-2 Q8): Cmd+I opens an
+        // Infographics tab in the active pane (also Hybrid Nav `i`).
+        // Distinct from Cmd+Opt+I (DevTools) - that has Alt and is
+        // handled in the alt branch above.
+        case 'KeyI': fire(e, 'app.infographics.open'); return;
         case 'BracketLeft':  fire(e, 'app.pane.prev'); return;
         case 'BracketRight': fire(e, 'app.pane.next'); return;
+        // `phase-12 lane-e` (addendum-2): Cmd+/ split right, Cmd+\
+        // split bottom. Web reaches splits via Hybrid Nav `/` / `\`.
+        case 'Slash':        fire(e, 'app.pane.splitRight'); return;
+        case 'Backslash':    fire(e, 'app.pane.splitDown');  return;
       }
       const m = code.match(/^Digit([1-9])$/);
       if (m) {
@@ -1016,10 +1033,12 @@ mod tests {
         // `app.terminal.toggle` back (Cmd+T). `fullstack-a-32`
         // brings back `app.files.toggle` (Cmd+O), `app.graph.toggle`
         // (Cmd+Shift+M), and `app.terminal.richPrompt` (Cmd+P) as
-        // direct chords with context-aware semantics. The
-        // remaining absences below catch accidental reverts of
-        // chords that should still go through Pane Mode only.
-        assert!(!KEY_BRIDGE_JS.contains("app.search.toggle"));
+        // direct chords with context-aware semantics. `phase-12
+        // lane-e` (addendum-2) brings `app.search.toggle` back as a
+        // direct chord too (Cmd+S = drive-wide search), so it moves to
+        // the keeps-list below. The remaining absences catch
+        // accidental reverts of chords that should still go through
+        // Pane Mode only.
         assert!(!KEY_BRIDGE_JS.contains("app.file.new"));
         assert!(!KEY_BRIDGE_JS.contains("Backquote"));
     }
@@ -1043,6 +1062,12 @@ mod tests {
         assert!(KEY_BRIDGE_JS.contains("app.tab.jump"));
         assert!(KEY_BRIDGE_JS.contains("app.tab.next"));
         assert!(KEY_BRIDGE_JS.contains("app.tab.prev"));
+        // `phase-12 lane-e` (addendum-2): Cmd+S search + Cmd+/ Cmd+\
+        // splits route through the native bridge too.
+        assert!(KEY_BRIDGE_JS.contains("app.search.toggle"));
+        assert!(KEY_BRIDGE_JS.contains("app.pane.splitRight"));
+        assert!(KEY_BRIDGE_JS.contains("app.pane.splitDown"));
+        assert!(KEY_BRIDGE_JS.contains("app.infographics.open"));
     }
 
     #[test]

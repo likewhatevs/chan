@@ -17,7 +17,13 @@ describe("fullstack-a-73: chord registry entry", () => {
 
 describe("fullstack-a-73: App.svelte keymap binding", () => {
   test("reloadWindow imported from api/desktop", () => {
-    expect(app).toMatch(/import \{ reloadWindow \} from "\.\/api\/desktop";/);
+    // `phase-12 lane-e` widened this import (isTauriDesktop +
+    // requestCloseWindow for the close-cascade tail); match
+    // reloadWindow within the named-import list rather than the exact
+    // single-name form.
+    expect(app).toMatch(
+      /import \{[^}]*\breloadWindow\b[^}]*\} from "\.\/api\/desktop";/,
+    );
   });
 
   test("Cmd+R handler dispatches reloadWindow() and preventDefault", () => {

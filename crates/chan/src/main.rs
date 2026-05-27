@@ -84,13 +84,15 @@ In-app keybindings (Cmd = Ctrl on Linux / Windows):
   New draft                                    Cmd+N
   Lock screen                                  Cmd+. L
   Dismiss overlay                              Esc
+  Search                                       Cmd+S
+  Infographics                                 Cmd+I   (or Mod+. i (Hybrid Nav))
   
   Panes
   -----
   Enter Hybrid Nav                             Cmd+.
   Flip Hybrid                                  Cmd+. Tab
-  Previous pane                                Cmd+[
-  Next pane                                    Cmd+]
+  Previous pane                                Alt+[
+  Next pane                                    Alt+]
   Close all tabs in pane                       Cmd+. x
   Kill pane                                    Cmd+. Backspace
   
