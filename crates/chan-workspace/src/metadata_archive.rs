@@ -200,8 +200,8 @@ fn export_metadata_archive(
         )));
     }
 
-    let (entry, drive_paths) = registered_drive(lib, root)?;
-    let manifest = build_manifest(&entry, &drive_paths, opts)?;
+    let (entry, workspace_paths) = registered_workspace(lib, root)?;
+    let manifest = build_manifest(&entry, &workspace_paths, opts)?;
     let tmp = temp_sibling(output);
     if tmp.exists() {
         return Err(ChanError::Io(format!(
@@ -210,7 +210,7 @@ fn export_metadata_archive(
         )));
     }
 
-    let result = write_archive(&drive_paths, &manifest, &tmp).and_then(|(files, bytes)| {
+    let result = write_archive(&workspace_paths, &manifest, &tmp).and_then(|(files, bytes)| {
         std::fs::rename(&tmp, output)?;
         Ok(MetadataExportReport {
             archive_path: output.to_path_buf(),
@@ -266,12 +266,12 @@ fn import_metadata_archive(
         )));
     }
 
-    let (entry, drive_paths) = registered_drive(lib, root)?;
+    let (entry, workspace_paths) = registered_workspace(lib, root)?;
     if !opts.force_scm {
         guard_scm_identity(&manifest, detect_scm_identity(&entry.root_path).as_ref())?;
     }
 
-    let staging = drive_paths
+    let staging = workspace_paths
         .root
         .join("staging")
         .join(format!("metadata-import-{}", std::process::id()));
@@ -285,7 +285,7 @@ fn import_metadata_archive(
     std::fs::create_dir_all(&payload)?;
     let result = extract_payload(archive, &payload).and_then(|(files, bytes)| {
         for subtree in INCLUDED_SUBTREES {
-            replace_subtree(&drive_paths, &payload, subtree)?;
+            replace_subtree(&workspace_paths, &payload, subtree)?;
         }
         if opts.rescan {
             let workspace = lib.open_workspace(root)?;
@@ -303,7 +303,7 @@ fn import_metadata_archive(
     result
 }
 
-fn registered_drive(lib: &Library, root: &Path) -> Result<(KnownWorkspace, WorkspacePaths)> {
+fn registered_workspace(lib: &Library, root: &Path) -> Result<(KnownWorkspace, WorkspacePaths)> {
     let paths = lib
         .workspace_paths_for(root)
         .ok_or_else(|| ChanError::WorkspaceNotRegistered(root.to_path_buf()))?;
@@ -318,7 +318,7 @@ fn registered_drive(lib: &Library, root: &Path) -> Result<(KnownWorkspace, Works
 
 fn build_manifest(
     entry: &KnownWorkspace,
-    drive_paths: &WorkspacePaths,
+    workspace_paths: &WorkspacePaths,
     opts: MetadataExportOptions,
 ) -> Result<MetadataManifest> {
     Ok(MetadataManifest {
@@ -330,7 +330,7 @@ fn build_manifest(
         metadata_schema: MetadataSchema {
             path_key_scheme: PATH_KEY_SCHEME.to_string(),
             index_schema_version: config::SCHEMA_VERSION,
-            graph_user_version: graph_user_version(&drive_paths.graph_db)?,
+            graph_user_version: graph_user_version(&workspace_paths.graph_db)?,
             vector_shard_format_version: None,
             report_schema_version: Some(chan_report::SCHEMA_VERSION),
         },
@@ -355,7 +355,7 @@ fn graph_user_version(graph_db: &Path) -> Result<Option<u32>> {
 }
 
 fn write_archive(
-    drive_paths: &WorkspacePaths,
+    workspace_paths: &WorkspacePaths,
     manifest: &MetadataManifest,
     tmp: &Path,
 ) -> Result<(usize, u64)> {
@@ -377,7 +377,7 @@ fn write_archive(
 
     append_dir(&mut builder, Path::new(PAYLOAD_ROOT), &mut stats)?;
     for subtree in INCLUDED_SUBTREES {
-        let source = source_subtree(drive_paths, subtree);
+        let source = source_subtree(workspace_paths, subtree);
         let archive_dir = PathBuf::from(PAYLOAD_ROOT).join(subtree);
         append_dir(&mut builder, &archive_dir, &mut stats)?;
         if source.exists() {

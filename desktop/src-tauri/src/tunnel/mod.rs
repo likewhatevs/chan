@@ -1,6 +1,6 @@
 //! Embedded chan-tunnel-server for chan-desktop.
 //!
-//! Lifecycle: explicit. The user clicks "Attach" in the Drives window,
+//! Lifecycle: explicit. The user clicks "Attach" in the Workspaces window,
 //! optionally specifies a port, and the backend binds the tunnel
 //! listener at that point. Stays bound until the user clicks Stop
 //! or the desktop exits. There is no auto-start at boot — the user
@@ -19,11 +19,11 @@
 //! shared Arc<Registry>
 //!    │
 //!    ├─ supervisor task: poll list_all(), spin per-tenant listeners,
-//!    │                   emit `tunneled-drive-ready` on new registrations
+//!    │                   emit `tunneled-workspace-ready` on new registrations
 //!    │
 //!    └─ per-tenant axum listener  127.0.0.1:<port>
-//!         GET /<drive>/...  → PrependPathLayer → public_router
-//!                              (sees /<label>/<drive>/...)
+//!         GET /<workspace>/...  → PrependPathLayer → public_router
+//!                              (sees /<label>/<workspace>/...)
 //! ```
 //!
 //! `<DPORT>` is whatever the user supplied (0 = OS-assigned). The
@@ -33,7 +33,7 @@
 //! Security boundary: both listeners bind 127.0.0.1 only. The
 //! tunnel listener speaks h2c (cleartext); the SSH `-R` forward
 //! provides confidentiality. Any local process that can connect to
-//! the desktop's tunnel port can register a drive under any label
+//! the desktop's tunnel port can register a workspace under any label
 //! (the token IS the label), matching the OS process-trust boundary
 //! of a single-user desktop app.
 
@@ -61,15 +61,15 @@ pub const TUNNEL_STATE_CHANGED: &str = "tunnel-state-changed";
 
 /// Tauri event emitted when a remote `chan serve` finishes its
 /// handshake and the per-tenant listener has bound a port for it.
-/// Payload is `{ label, drive, url }`. Frontend uses this to auto-
-/// launch the editor for the freshly-registered drive.
-pub const TUNNELED_DRIVE_READY: &str = "tunneled-drive-ready";
+/// Payload is `{ label, workspace, url }`. Frontend uses this to auto-
+/// launch the editor for the freshly-registered workspace.
+pub const TUNNELED_WORKSPACE_READY: &str = "tunneled-workspace-ready";
 const SYSTEM_NOTICE: &str = "system-notice";
 
 /// Supervisor poll interval. The registry has no change-notify
 /// channel, so we diff `list_all()` on each tick. The set is tiny
 /// (one row per running remote `chan serve`) and 500 ms is well
-/// below any perceptual threshold for "the drive appeared". Promote
+/// below any perceptual threshold for "the workspace appeared". Promote
 /// to a notify channel only if this shows up in a profile.
 const POLL_INTERVAL: Duration = Duration::from_millis(500);
 
@@ -126,33 +126,33 @@ impl TunnelState {
     /// listener's URL. A row with empty `url` is a tunnel that has
     /// just registered but whose per-tenant listener hasn't bound
     /// yet; the next supervisor tick fills it.
-    pub fn snapshot(&self) -> Vec<TunneledDrive> {
+    pub fn snapshot(&self) -> Vec<TunneledWorkspace> {
         let listeners = self.listeners.lock().unwrap();
-        let mut rows: Vec<TunneledDrive> = self
+        let mut rows: Vec<TunneledWorkspace> = self
             .registry
             .list_all()
             .into_iter()
-            .map(|t| TunneledDrive {
+            .map(|t| TunneledWorkspace {
                 label: t.user.to_string(),
-                drive: t.drive.to_string(),
+                workspace: t.workspace.to_string(),
                 public: t.public,
                 peer_addr: t.peer_addr.map(|p| p.to_string()),
                 connected_at: t.connected_at.to_rfc3339(),
                 url: listeners
                     .get(t.user.as_ref())
-                    .map(|l| format!("http://127.0.0.1:{}/{}/", l.port, t.drive))
+                    .map(|l| format!("http://127.0.0.1:{}/{}/", l.port, t.workspace))
                     .unwrap_or_default(),
             })
             .collect();
-        rows.sort_by(|a, b| (&a.label, &a.drive).cmp(&(&b.label, &b.drive)));
+        rows.sort_by(|a, b| (&a.label, &a.workspace).cmp(&(&b.label, &b.workspace)));
         rows
     }
 }
 
 #[derive(Debug, Clone, Serialize)]
-pub struct TunneledDrive {
+pub struct TunneledWorkspace {
     pub label: String,
-    pub drive: String,
+    pub workspace: String,
     pub public: bool,
     pub peer_addr: Option<String>,
     pub connected_at: String,
@@ -204,7 +204,7 @@ pub async fn start_listening(
                 listener,
                 validator,
                 registry_for_listener,
-                /* max_drives_per_user = unlimited */ 0,
+                /* max_workspaces_per_user = unlimited */ 0,
             ) => {
                 if let Err(e) = res {
                     tracing::warn!(error = %e, "tunnel listener accept loop exited");
@@ -248,12 +248,12 @@ pub fn stop_listening(app: &AppHandle, state: &Arc<TunnelState>) {
         }
     }
     state.bound_port.store(0, Ordering::Release);
-    // Tear down every tunneled drive webview. The per-tenant
+    // Tear down every tunneled workspace webview. The per-tenant
     // listeners are already cancelled above, so any open window
     // would either show a connection error on its next request or
     // sit on a cached page; neither is useful, and Stop is the
     // user explicitly retiring all tunneled state.
-    crate::serve::close_all_tunneled_drive_windows(app);
+    crate::serve::close_all_tunneled_workspace_windows(app);
     let _ = app.emit(
         TUNNEL_STATE_CHANGED,
         serde_json::json!({ "listening": false, "port": serde_json::Value::Null }),
@@ -278,7 +278,7 @@ async fn supervisor(app: AppHandle, state: Arc<TunnelState>, cancel: Cancellatio
     let mut interval = tokio::time::interval(POLL_INTERVAL);
     interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     // Tracked separately from `listeners` so we also emit
-    // `serves-changed` when new drives appear under an existing
+    // `serves-changed` when new workspaces appear under an existing
     // label (no listener change, but the snapshot did).
     let mut last_pairs: HashSet<(String, String)> = HashSet::new();
     loop {
@@ -291,7 +291,7 @@ async fn supervisor(app: AppHandle, state: Arc<TunnelState>, cancel: Cancellatio
         let live_labels: HashSet<String> = all.iter().map(|t| t.user.to_string()).collect();
         let live_pairs: HashSet<(String, String)> = all
             .iter()
-            .map(|t| (t.user.to_string(), t.drive.to_string()))
+            .map(|t| (t.user.to_string(), t.workspace.to_string()))
             .collect();
 
         let mut changed = false;
@@ -321,7 +321,7 @@ async fn supervisor(app: AppHandle, state: Arc<TunnelState>, cancel: Cancellatio
                         SYSTEM_NOTICE,
                         serde_json::json!({
                             "level": "warning",
-                            "message": format!("Tunnel drive {label} could not bind a local listener: {e}"),
+                            "message": format!("Tunnel workspace {label} could not bind a local listener: {e}"),
                         }),
                     );
                 }
@@ -348,7 +348,7 @@ async fn supervisor(app: AppHandle, state: Arc<TunnelState>, cancel: Cancellatio
         }
 
         if live_pairs != last_pairs {
-            // Auto-launch every drive that wasn't present last
+            // Auto-launch every workspace that wasn't present last
             // tick: the user already opted in by clicking Attach,
             // and the supervisor doesn't see the registration until
             // the per-tenant listener has bound a port (so the URL
@@ -363,30 +363,32 @@ async fn supervisor(app: AppHandle, state: Arc<TunnelState>, cancel: Cancellatio
                     let listeners = state.listeners.lock().unwrap();
                     newly_added
                         .into_iter()
-                        .filter_map(|(label, drive)| {
+                        .filter_map(|(label, workspace)| {
                             let port = listeners.get(label.as_str())?.port;
-                            let url = format!("http://127.0.0.1:{port}/{drive}/");
-                            Some((label, drive, url))
+                            let url = format!("http://127.0.0.1:{port}/{workspace}/");
+                            Some((label, workspace, url))
                         })
                         .collect()
                 };
-                for (label, drive, url) in urls {
+                for (label, workspace, url) in urls {
                     // Open the same kind of Tauri webview window
-                    // we give local drives — same key-bridge JS,
+                    // we give local workspaces — same key-bridge JS,
                     // same zoom polyfill, same drag-drop handling.
                     // Each Launch click also spawns a fresh window;
                     // this first-registration open is just one of
                     // them. Closing a window never affects the
                     // remote chan-serve lifecycle.
-                    let _ = crate::serve::spawn_tunneled_drive_window(&app, &label, &drive, &url);
-                    // Still emit the event so the drive table /
+                    let _ = crate::serve::spawn_tunneled_workspace_window(
+                        &app, &label, &workspace, &url,
+                    );
+                    // Still emit the event so the workspace table /
                     // header chip can react (refresh, badge, etc.)
                     // without parsing logs.
                     let _ = app.emit(
-                        TUNNELED_DRIVE_READY,
+                        TUNNELED_WORKSPACE_READY,
                         serde_json::json!({
                             "label": label,
-                            "drive": drive,
+                            "workspace": workspace,
                             "url": url,
                         }),
                     );
@@ -395,13 +397,13 @@ async fn supervisor(app: AppHandle, state: Arc<TunnelState>, cancel: Cancellatio
             // Pairs that disappeared between ticks: the remote
             // disconnected (yamux close, registry eviction, etc.).
             // Close every webview window the user had open for that
-            // drive — keeping a stale window around would just show
+            // workspace — keeping a stale window around would just show
             // a "tunnel disconnected" error once the per-tenant
             // listener tears down too.
             let removed: Vec<(String, String)> =
                 last_pairs.difference(&live_pairs).cloned().collect();
-            for (label, drive) in removed {
-                crate::serve::close_tunneled_drive_windows(&app, &label, &drive);
+            for (label, workspace) in removed {
+                crate::serve::close_tunneled_workspace_windows(&app, &label, &workspace);
             }
             last_pairs = live_pairs;
             changed = true;

@@ -20,7 +20,7 @@ use crate::index::{
 };
 use crate::lock::WorkspaceLock;
 use crate::markdown;
-use crate::paths::{ensure_drive_metadata_dirs, WorkspacePaths};
+use crate::paths::{ensure_workspace_metadata_dirs, WorkspacePaths};
 use crate::registry::KnownWorkspace;
 use crate::report::{ReportFanOut, ReportState};
 use crate::trash::{self, TrashEntry, TRASH_RETENTION_SECS};
@@ -359,7 +359,7 @@ impl Workspace {
             .root_path
             .canonicalize()
             .map_err(|e| ChanError::Io(format!("canonicalize workspace root: {e}")))?;
-        let fd_permit = crate::fd_budget::acquire_drive_permit();
+        let fd_permit = crate::fd_budget::acquire_workspace_permit();
         let dir =
             cap_std::fs::Dir::open_ambient_dir(&entry.root_path, cap_std::ambient_authority())
                 .map_err(|e| ChanError::Io(format!("open workspace root: {e}")))?;
@@ -369,7 +369,7 @@ impl Workspace {
                 entry.root_path,
             )));
         }
-        let paths = ensure_drive_metadata_dirs(&entry.metadata_key)
+        let paths = ensure_workspace_metadata_dirs(&entry.metadata_key)
             .map_err(|e| ChanError::Io(format!("ensure workspace metadata dirs: {e}")))?;
         let lock = WorkspaceLock::acquire(&paths.lock)?;
         // Lazy GC: reclaim expired trash entries on every open. No
@@ -1267,7 +1267,7 @@ impl Workspace {
         // Filtered so we don't waste time collecting paths under
         // `node_modules/` etc. that were never indexed in the first
         // place; symmetric with the filtered index/graph build.
-        for entry in fs_ops::walk_drive_filtered(abs, &self.walk_filter) {
+        for entry in fs_ops::walk_workspace_filtered(abs, &self.walk_filter) {
             if !entry.file_type().is_file() {
                 continue;
             }
@@ -1364,7 +1364,7 @@ impl Workspace {
         // Filtered so restoring a directory that happens to contain a
         // `node_modules/` / `target/` subtree does not re-index a
         // dependency tree the index deliberately excludes.
-        for entry in fs_ops::walk_drive_filtered(&abs, &self.walk_filter) {
+        for entry in fs_ops::walk_workspace_filtered(&abs, &self.walk_filter) {
             if !entry.file_type().is_file() {
                 continue;
             }
@@ -3125,7 +3125,7 @@ impl Workspace {
         let filter = Arc::clone(&self.walk_filter);
         let mut disk_files: std::collections::HashMap<String, (Option<i64>, Option<i64>)> =
             std::collections::HashMap::new();
-        for entry in fs_ops::walk_drive_filtered(self.root(), &filter) {
+        for entry in fs_ops::walk_workspace_filtered(self.root(), &filter) {
             if !entry.file_type().is_file() {
                 continue;
             }
@@ -4250,11 +4250,11 @@ mod tests {
 
     fn fixture() -> (TempDir, TempDir, Arc<Workspace>) {
         let cfg = TempDir::new().unwrap();
-        let drive_dir = TempDir::new().unwrap();
+        let workspace_dir = TempDir::new().unwrap();
         let lib = Library::open_at(cfg.path().join("config.toml")).unwrap();
-        lib.register_workspace(drive_dir.path()).unwrap();
-        let workspace = lib.open_workspace(drive_dir.path()).unwrap();
-        (cfg, drive_dir, workspace)
+        lib.register_workspace(workspace_dir.path()).unwrap();
+        let workspace = lib.open_workspace(workspace_dir.path()).unwrap();
+        (cfg, workspace_dir, workspace)
     }
 
     #[test]
@@ -4265,22 +4265,22 @@ mod tests {
     }
 
     #[test]
-    fn rename_log_persists_across_drive_reopen() {
+    fn rename_log_persists_across_workspace_reopen() {
         // Simulate "process kill after a rename, restart": rename
         // A.md -> B.md once, drop the workspace (and so the in-memory
         // log), then re-open. The persisted sidecar must hydrate
         // the new in-memory log so a subsequent rename B.md -> C.md
         // still knows that A.md once mapped to B.md.
         let cfg = TempDir::new().unwrap();
-        let drive_dir = TempDir::new().unwrap();
+        let workspace_dir = TempDir::new().unwrap();
 
         let lib = Library::open_at(cfg.path().join("config.toml")).unwrap();
-        lib.register_workspace(drive_dir.path()).unwrap();
+        lib.register_workspace(workspace_dir.path()).unwrap();
         // Resolve paths after register so the lookup uses the
         // registry-assigned metadata key rather than guessing from
         // the path.
-        let paths = lib.workspace_paths_for(drive_dir.path()).unwrap();
-        let workspace = lib.open_workspace(drive_dir.path()).unwrap();
+        let paths = lib.workspace_paths_for(workspace_dir.path()).unwrap();
+        let workspace = lib.open_workspace(workspace_dir.path()).unwrap();
         workspace.write_text("A.md", "# A\n").unwrap();
         workspace.rename_with_link_rewrite("A.md", "B.md").unwrap();
 
@@ -4298,9 +4298,9 @@ mod tests {
         // Drop and re-open: in-memory log starts empty, hydrates
         // from the sidecar.
         drop(workspace);
-        let drive2 = lib.open_workspace(drive_dir.path()).unwrap();
+        let workspace2 = lib.open_workspace(workspace_dir.path()).unwrap();
         {
-            let mem = drive2.rename_log.lock().unwrap();
+            let mem = workspace2.rename_log.lock().unwrap();
             assert_eq!(
                 mem.get("A.md").map(String::as_str),
                 Some("B.md"),
@@ -4310,9 +4310,9 @@ mod tests {
         }
         // A follow-up rename transitively updates both old and new
         // names so the entry rewrite covers the cross-process chain.
-        drive2.rename_with_link_rewrite("B.md", "C.md").unwrap();
+        workspace2.rename_with_link_rewrite("B.md", "C.md").unwrap();
         {
-            let mem = drive2.rename_log.lock().unwrap();
+            let mem = workspace2.rename_log.lock().unwrap();
             assert_eq!(mem.get("A.md").map(String::as_str), Some("C.md"));
             assert_eq!(mem.get("B.md").map(String::as_str), Some("C.md"));
         }
@@ -4324,8 +4324,8 @@ mod tests {
 
         // A successful reindex clears both the in-memory map and the
         // sidecar so a stale name doesn't outlive its usefulness.
-        drive2.reindex(None).unwrap();
-        assert!(drive2.rename_log.lock().unwrap().is_empty());
+        workspace2.reindex(None).unwrap();
+        assert!(workspace2.rename_log.lock().unwrap().is_empty());
         assert!(
             !log_path.exists(),
             "rename_log.json should be removed after reindex",
@@ -4339,21 +4339,21 @@ mod tests {
         // commit. Workspace::open must promote it to needs_rebuild()=true
         // so the consumer reindexes before serving queries.
         let cfg = TempDir::new().unwrap();
-        let drive_dir = TempDir::new().unwrap();
+        let workspace_dir = TempDir::new().unwrap();
 
         let lib = Library::open_at(cfg.path().join("config.toml")).unwrap();
-        lib.register_workspace(drive_dir.path()).unwrap();
+        lib.register_workspace(workspace_dir.path()).unwrap();
         // Stamp the marker AFTER register so the metadata key is
         // known. Open then drop the workspace once to let the metadata
         // skeleton (graph_dir) come into existence before we plant
         // the marker; otherwise create_dir_all does the same work
         // but explicit-open is the production code path.
-        let paths = lib.workspace_paths_for(drive_dir.path()).unwrap();
+        let paths = lib.workspace_paths_for(workspace_dir.path()).unwrap();
         std::fs::create_dir_all(&paths.graph_dir).unwrap();
         let marker = paths.graph_dir.join(REBUILD_MARKER);
         std::fs::write(&marker, b"started_at = 1\n").unwrap();
 
-        let workspace = lib.open_workspace(drive_dir.path()).unwrap();
+        let workspace = lib.open_workspace(workspace_dir.path()).unwrap();
         assert!(
             workspace.needs_rebuild(),
             "marker on disk should set needs_rebuild()",
@@ -4373,10 +4373,10 @@ mod tests {
         // Sanity: a fresh workspace without a marker reports false from
         // the start so consumers don't reindex every time they open
         // a known-clean workspace.
-        let drive2_dir = TempDir::new().unwrap();
-        lib.register_workspace(drive2_dir.path()).unwrap();
-        let drive2 = lib.open_workspace(drive2_dir.path()).unwrap();
-        assert!(!drive2.needs_rebuild());
+        let workspace2_dir = TempDir::new().unwrap();
+        lib.register_workspace(workspace2_dir.path()).unwrap();
+        let workspace2 = lib.open_workspace(workspace2_dir.path()).unwrap();
+        assert!(!workspace2.needs_rebuild());
     }
 
     /// Snapshot of the queryable end state of a workspace. Two workspaces
@@ -4416,7 +4416,7 @@ mod tests {
     /// Stand up a workspace with a fixed content set so the
     /// crash-recovery tests can compare "what a clean reindex
     /// produces" against "what a post-crash reindex produces."
-    fn populate_recoverable_drive(lib: &Library, root: &std::path::Path) -> &'static str {
+    fn populate_recoverable_workspace(lib: &Library, root: &std::path::Path) -> &'static str {
         let workspace = lib.open_workspace(root).unwrap();
         workspace
             .write_text("alpha.md", "# alpha\n[[beta]] crash-probe-token in alpha\n")
@@ -4439,11 +4439,11 @@ mod tests {
         // not, recovery is destructive (loses data) or non-idempotent
         // (visible churn between two equivalent states).
         let cfg = TempDir::new().unwrap();
-        let drive_dir = TempDir::new().unwrap();
+        let workspace_dir = TempDir::new().unwrap();
         let lib = Library::open_at(cfg.path().join("config.toml")).unwrap();
-        lib.register_workspace(drive_dir.path()).unwrap();
-        let probe = populate_recoverable_drive(&lib, drive_dir.path());
-        let workspace = lib.open_workspace(drive_dir.path()).unwrap();
+        lib.register_workspace(workspace_dir.path()).unwrap();
+        let probe = populate_recoverable_workspace(&lib, workspace_dir.path());
+        let workspace = lib.open_workspace(workspace_dir.path()).unwrap();
         workspace.reindex(None).unwrap();
         let baseline = capture_recovery_state(&workspace, probe);
         drop(workspace);
@@ -4451,11 +4451,11 @@ mod tests {
         // Plant the marker as if the previous reindex had not
         // managed to clear it. Don't touch any other state; we want
         // to isolate the "marker present, store intact" recovery.
-        let paths = lib.workspace_paths_for(drive_dir.path()).unwrap();
+        let paths = lib.workspace_paths_for(workspace_dir.path()).unwrap();
         let marker = paths.graph_dir.join(REBUILD_MARKER);
         std::fs::write(&marker, b"started_at = simulated\n").unwrap();
 
-        let workspace = lib.open_workspace(drive_dir.path()).unwrap();
+        let workspace = lib.open_workspace(workspace_dir.path()).unwrap();
         assert!(workspace.needs_rebuild(), "marker must promote to flag");
         workspace.reindex(None).unwrap();
         assert!(!workspace.needs_rebuild(), "reindex must clear the flag");
@@ -4475,11 +4475,11 @@ mod tests {
         // marker, and a follow-up reindex must rebuild BM25 to the
         // same shape as a clean build.
         let cfg = TempDir::new().unwrap();
-        let drive_dir = TempDir::new().unwrap();
+        let workspace_dir = TempDir::new().unwrap();
         let lib = Library::open_at(cfg.path().join("config.toml")).unwrap();
-        lib.register_workspace(drive_dir.path()).unwrap();
-        let probe = populate_recoverable_drive(&lib, drive_dir.path());
-        let workspace = lib.open_workspace(drive_dir.path()).unwrap();
+        lib.register_workspace(workspace_dir.path()).unwrap();
+        let probe = populate_recoverable_workspace(&lib, workspace_dir.path());
+        let workspace = lib.open_workspace(workspace_dir.path()).unwrap();
         workspace.reindex(None).unwrap();
         let baseline = capture_recovery_state(&workspace, probe);
         drop(workspace);
@@ -4487,7 +4487,7 @@ mod tests {
         // Simulate the crash: nuke the on-disk BM25 dir + plant
         // the marker. The graph DB stays (graph rebuild ran first
         // and committed), index config stays, vector store stays.
-        let paths = lib.workspace_paths_for(drive_dir.path()).unwrap();
+        let paths = lib.workspace_paths_for(workspace_dir.path()).unwrap();
         let bm25_dir = paths.index.join("bm25");
         if bm25_dir.exists() {
             std::fs::remove_dir_all(&bm25_dir).unwrap();
@@ -4499,7 +4499,7 @@ mod tests {
         )
         .unwrap();
 
-        let workspace = lib.open_workspace(drive_dir.path()).unwrap();
+        let workspace = lib.open_workspace(workspace_dir.path()).unwrap();
         assert!(workspace.needs_rebuild());
         // Before the recovery reindex, search should return zero
         // hits (BM25 store is empty). Confirm that the test setup
@@ -4533,17 +4533,17 @@ mod tests {
         // load-bearing: a UI that retries on transient failure
         // would otherwise refuse to ever cleanly reset.
         let cfg = TempDir::new().unwrap();
-        let drive_dir = TempDir::new().unwrap();
+        let workspace_dir = TempDir::new().unwrap();
         let lib = Library::open_at(cfg.path().join("config.toml")).unwrap();
-        lib.register_workspace(drive_dir.path()).unwrap();
+        lib.register_workspace(workspace_dir.path()).unwrap();
         {
-            let workspace = lib.open_workspace(drive_dir.path()).unwrap();
+            let workspace = lib.open_workspace(workspace_dir.path()).unwrap();
             workspace.write_text("a.md", "alpha\n").unwrap();
             workspace.reindex(None).unwrap();
             workspace.put_session("win-1", b"layout").unwrap();
         }
 
-        let paths = lib.workspace_paths_for(drive_dir.path()).unwrap();
+        let paths = lib.workspace_paths_for(workspace_dir.path()).unwrap();
         assert!(paths.index.exists());
         assert!(paths.graph_db.parent().unwrap().exists());
         assert!(paths.sessions.exists());
@@ -4556,7 +4556,7 @@ mod tests {
         assert!(paths.graph_db.parent().unwrap().exists());
 
         let report = lib
-            .reset_workspace(drive_dir.path(), crate::ResetMode::State)
+            .reset_workspace(workspace_dir.path(), crate::ResetMode::State)
             .unwrap();
         // removed_entries reflects what THIS reset actually wiped;
         // we don't pin a number, only that the operation completed
@@ -4569,7 +4569,7 @@ mod tests {
         // Registry row survives a State-mode reset (Everything would
         // drop it). The workspace is reopenable and reindexes from
         // scratch with no leaked state.
-        let workspace = lib.open_workspace(drive_dir.path()).unwrap();
+        let workspace = lib.open_workspace(workspace_dir.path()).unwrap();
         workspace.reindex(None).unwrap();
         assert!(!workspace.needs_rebuild());
     }
@@ -4582,12 +4582,12 @@ mod tests {
         // converge the graph to the post-rename tree. End state must
         // match what a clean build of the renamed tree would produce.
         let cfg = TempDir::new().unwrap();
-        let drive_dir = TempDir::new().unwrap();
+        let workspace_dir = TempDir::new().unwrap();
         let lib = Library::open_at(cfg.path().join("config.toml")).unwrap();
-        lib.register_workspace(drive_dir.path()).unwrap();
+        lib.register_workspace(workspace_dir.path()).unwrap();
         let probe = "rename-recovery-token";
         {
-            let workspace = lib.open_workspace(drive_dir.path()).unwrap();
+            let workspace = lib.open_workspace(workspace_dir.path()).unwrap();
             workspace
                 .write_text("orig.md", &format!("# orig\n{probe} body\n"))
                 .unwrap();
@@ -4597,7 +4597,7 @@ mod tests {
                 .unwrap();
         }
         // After drop, the rename_log sidecar must still be present.
-        let paths = lib.workspace_paths_for(drive_dir.path()).unwrap();
+        let paths = lib.workspace_paths_for(workspace_dir.path()).unwrap();
         let log_path = paths.graph_dir.join(RENAME_LOG_FILE);
         assert!(
             log_path.exists(),
@@ -4607,7 +4607,7 @@ mod tests {
         // Reopen + reindex; the recovered state must show the
         // renamed file and only the renamed file, with no trace of
         // the original.
-        let workspace = lib.open_workspace(drive_dir.path()).unwrap();
+        let workspace = lib.open_workspace(workspace_dir.path()).unwrap();
         workspace.reindex(None).unwrap();
         let recovered = capture_recovery_state(&workspace, probe);
         assert!(
@@ -4638,10 +4638,10 @@ mod tests {
         // Without this, every save would leak a journal entry and
         // the next open would always flag needs_replay_writes.
         let cfg = TempDir::new().unwrap();
-        let drive_dir = TempDir::new().unwrap();
+        let workspace_dir = TempDir::new().unwrap();
         let lib = Library::open_at(cfg.path().join("config.toml")).unwrap();
-        lib.register_workspace(drive_dir.path()).unwrap();
-        let workspace = lib.open_workspace(drive_dir.path()).unwrap();
+        lib.register_workspace(workspace_dir.path()).unwrap();
+        let workspace = lib.open_workspace(workspace_dir.path()).unwrap();
         workspace.write_text("a.md", "# a\nbody\n").unwrap();
         workspace.index_file("a.md").unwrap();
         assert!(workspace.pending_writes().is_empty());
@@ -4650,24 +4650,24 @@ mod tests {
         // Persisted form: the JSON file should be gone (empty map
         // is serialized as "no file" so the journal dir stays
         // visually clean across normal use).
-        let paths = lib.workspace_paths_for(drive_dir.path()).unwrap();
+        let paths = lib.workspace_paths_for(workspace_dir.path()).unwrap();
         assert!(!paths.graph_dir.join(PENDING_WRITES_FILE).exists());
     }
 
     #[test]
     fn write_text_does_not_wait_for_indexer_serial_lock() {
         let cfg = TempDir::new().unwrap();
-        let drive_dir = TempDir::new().unwrap();
+        let workspace_dir = TempDir::new().unwrap();
         let lib = Library::open_at(cfg.path().join("config.toml")).unwrap();
-        lib.register_workspace(drive_dir.path()).unwrap();
-        let workspace = lib.open_workspace(drive_dir.path()).unwrap();
+        lib.register_workspace(workspace_dir.path()).unwrap();
+        let workspace = lib.open_workspace(workspace_dir.path()).unwrap();
 
         let guard = workspace.write_serial.lock().unwrap();
-        let drive_for_write = workspace.clone();
+        let workspace_for_write = workspace.clone();
         let start = std::time::Instant::now();
         let (tx, rx) = std::sync::mpsc::channel();
         let writer = std::thread::spawn(move || {
-            drive_for_write
+            workspace_for_write
                 .write_text("fast.md", "# fast\nbody\n")
                 .unwrap();
             tx.send(()).unwrap();
@@ -4692,12 +4692,12 @@ mod tests {
         // search index commit (or before journal_clear). Reopen,
         // verify the flag, replay, verify convergence.
         let cfg = TempDir::new().unwrap();
-        let drive_dir = TempDir::new().unwrap();
+        let workspace_dir = TempDir::new().unwrap();
         let lib = Library::open_at(cfg.path().join("config.toml")).unwrap();
-        lib.register_workspace(drive_dir.path()).unwrap();
+        lib.register_workspace(workspace_dir.path()).unwrap();
         let probe = "pending-recovery-token";
         {
-            let workspace = lib.open_workspace(drive_dir.path()).unwrap();
+            let workspace = lib.open_workspace(workspace_dir.path()).unwrap();
             workspace
                 .write_text("a.md", &format!("# a\n{probe} body\n"))
                 .unwrap();
@@ -4712,7 +4712,7 @@ mod tests {
 
         // Reopen: the flag must surface, the in-memory map must
         // mirror the on-disk journal.
-        let workspace = lib.open_workspace(drive_dir.path()).unwrap();
+        let workspace = lib.open_workspace(workspace_dir.path()).unwrap();
         assert!(workspace.needs_replay_writes());
         let pending = workspace.pending_writes();
         assert_eq!(pending.len(), 1);
@@ -4749,11 +4749,11 @@ mod tests {
         // disk. Replay must degrade to forget so the journal entry
         // does not perpetually fail trying to index a missing file.
         let cfg = TempDir::new().unwrap();
-        let drive_dir = TempDir::new().unwrap();
+        let workspace_dir = TempDir::new().unwrap();
         let lib = Library::open_at(cfg.path().join("config.toml")).unwrap();
-        lib.register_workspace(drive_dir.path()).unwrap();
+        lib.register_workspace(workspace_dir.path()).unwrap();
         {
-            let workspace = lib.open_workspace(drive_dir.path()).unwrap();
+            let workspace = lib.open_workspace(workspace_dir.path()).unwrap();
             workspace.write_text("ghost.md", "# ghost\nbody\n").unwrap();
             // Index the file so graph + BM25 see it...
             workspace.index_file("ghost.md").unwrap();
@@ -4761,13 +4761,13 @@ mod tests {
             // index_file had crashed, and remove the file from
             // disk to simulate "user also deleted it before
             // process restart."
-            std::fs::remove_file(drive_dir.path().join("ghost.md")).unwrap();
+            std::fs::remove_file(workspace_dir.path().join("ghost.md")).unwrap();
             let mut map = HashMap::new();
             map.insert("ghost.md".to_string(), PendingOp::Index);
             persist_pending_writes(&workspace.paths.graph_dir, &map).unwrap();
         }
 
-        let workspace = lib.open_workspace(drive_dir.path()).unwrap();
+        let workspace = lib.open_workspace(workspace_dir.path()).unwrap();
         assert!(workspace.needs_replay_writes());
         workspace.replay_pending_writes().unwrap();
         assert!(!workspace.needs_replay_writes());
@@ -4794,11 +4794,11 @@ mod tests {
         // call that crashed mid-flight has its journal entry
         // replayed and the backends converge to "no entry."
         let cfg = TempDir::new().unwrap();
-        let drive_dir = TempDir::new().unwrap();
+        let workspace_dir = TempDir::new().unwrap();
         let lib = Library::open_at(cfg.path().join("config.toml")).unwrap();
-        lib.register_workspace(drive_dir.path()).unwrap();
+        lib.register_workspace(workspace_dir.path()).unwrap();
         {
-            let workspace = lib.open_workspace(drive_dir.path()).unwrap();
+            let workspace = lib.open_workspace(workspace_dir.path()).unwrap();
             workspace
                 .write_text("doomed.md", "# doomed\nbody\n")
                 .unwrap();
@@ -4811,7 +4811,7 @@ mod tests {
             persist_pending_writes(&workspace.paths.graph_dir, &map).unwrap();
         }
 
-        let workspace = lib.open_workspace(drive_dir.path()).unwrap();
+        let workspace = lib.open_workspace(workspace_dir.path()).unwrap();
         assert!(workspace.needs_replay_writes());
         workspace.replay_pending_writes().unwrap();
 
@@ -4836,10 +4836,10 @@ mod tests {
         // has a graph row with matching mtime. Reconcile must
         // touch nothing and report all-unchanged.
         let cfg = TempDir::new().unwrap();
-        let drive_dir = TempDir::new().unwrap();
+        let workspace_dir = TempDir::new().unwrap();
         let lib = Library::open_at(cfg.path().join("config.toml")).unwrap();
-        lib.register_workspace(drive_dir.path()).unwrap();
-        let workspace = lib.open_workspace(drive_dir.path()).unwrap();
+        lib.register_workspace(workspace_dir.path()).unwrap();
+        let workspace = lib.open_workspace(workspace_dir.path()).unwrap();
         workspace.write_text("a.md", "# a\nalpha\n").unwrap();
         workspace.write_text("b.md", "# b\nbeta\n").unwrap();
         workspace.reindex(None).unwrap();
@@ -4857,10 +4857,10 @@ mod tests {
         // Reconcile must index them and end state must match a
         // fresh reindex.
         let cfg = TempDir::new().unwrap();
-        let drive_dir = TempDir::new().unwrap();
+        let workspace_dir = TempDir::new().unwrap();
         let lib = Library::open_at(cfg.path().join("config.toml")).unwrap();
-        lib.register_workspace(drive_dir.path()).unwrap();
-        let workspace = lib.open_workspace(drive_dir.path()).unwrap();
+        lib.register_workspace(workspace_dir.path()).unwrap();
+        let workspace = lib.open_workspace(workspace_dir.path()).unwrap();
         workspace.write_text("a.md", "# a\nalpha\n").unwrap();
         workspace.reindex(None).unwrap();
         // Add a file directly through write_text (skip index_file
@@ -4890,10 +4890,10 @@ mod tests {
         // Symmetric to the add case: a file in the graph is gone
         // from disk. Reconcile drops it from both backends.
         let cfg = TempDir::new().unwrap();
-        let drive_dir = TempDir::new().unwrap();
+        let workspace_dir = TempDir::new().unwrap();
         let lib = Library::open_at(cfg.path().join("config.toml")).unwrap();
-        lib.register_workspace(drive_dir.path()).unwrap();
-        let workspace = lib.open_workspace(drive_dir.path()).unwrap();
+        lib.register_workspace(workspace_dir.path()).unwrap();
+        let workspace = lib.open_workspace(workspace_dir.path()).unwrap();
         workspace
             .write_text("doomed.md", "# doomed\nbye-token\n")
             .unwrap();
@@ -4903,7 +4903,7 @@ mod tests {
         workspace.reindex(None).unwrap();
 
         // Remove the file directly (mimic watcher miss / external rm).
-        std::fs::remove_file(drive_dir.path().join("doomed.md")).unwrap();
+        std::fs::remove_file(workspace_dir.path().join("doomed.md")).unwrap();
 
         let report = workspace.reconcile().unwrap();
         assert!(report.upserted.is_empty());
@@ -4936,10 +4936,10 @@ mod tests {
         // mtime diff and refreshes the indices. Content from the
         // post-modify body must be searchable after.
         let cfg = TempDir::new().unwrap();
-        let drive_dir = TempDir::new().unwrap();
+        let workspace_dir = TempDir::new().unwrap();
         let lib = Library::open_at(cfg.path().join("config.toml")).unwrap();
-        lib.register_workspace(drive_dir.path()).unwrap();
-        let workspace = lib.open_workspace(drive_dir.path()).unwrap();
+        lib.register_workspace(workspace_dir.path()).unwrap();
+        let workspace = lib.open_workspace(workspace_dir.path()).unwrap();
         workspace
             .write_text("a.md", "# a\noriginal-content-token\n")
             .unwrap();
@@ -4951,7 +4951,7 @@ mod tests {
         // denominator workspaces the test sleep.
         std::thread::sleep(std::time::Duration::from_millis(1100));
         std::fs::write(
-            drive_dir.path().join("a.md"),
+            workspace_dir.path().join("a.md"),
             "# a\nreplaced-content-token\n",
         )
         .unwrap();
@@ -4987,16 +4987,16 @@ mod tests {
         // is the only signal.
         use std::fs;
         let cfg = TempDir::new().unwrap();
-        let drive_dir = TempDir::new().unwrap();
+        let workspace_dir = TempDir::new().unwrap();
         let lib = Library::open_at(cfg.path().join("config.toml")).unwrap();
-        lib.register_workspace(drive_dir.path()).unwrap();
-        let workspace = lib.open_workspace(drive_dir.path()).unwrap();
+        lib.register_workspace(workspace_dir.path()).unwrap();
+        let workspace = lib.open_workspace(workspace_dir.path()).unwrap();
         workspace
             .write_text("twin.md", "# twin\noriginal-token short\n")
             .unwrap();
         workspace.reindex(None).unwrap();
 
-        let file_path = drive_dir.path().join("twin.md");
+        let file_path = workspace_dir.path().join("twin.md");
         let original_modified = fs::metadata(&file_path).unwrap().modified().unwrap();
 
         // Rewrite with different length, then stamp the original
@@ -5062,10 +5062,10 @@ mod tests {
         // what this test pins.
         use std::fs;
         let cfg = TempDir::new().unwrap();
-        let drive_dir = TempDir::new().unwrap();
+        let workspace_dir = TempDir::new().unwrap();
         let lib = Library::open_at(cfg.path().join("config.toml")).unwrap();
-        lib.register_workspace(drive_dir.path()).unwrap();
-        let workspace = lib.open_workspace(drive_dir.path()).unwrap();
+        lib.register_workspace(workspace_dir.path()).unwrap();
+        let workspace = lib.open_workspace(workspace_dir.path()).unwrap();
 
         workspace
             .write_text("race.md", "# race\nv1 small\n")
@@ -5080,7 +5080,7 @@ mod tests {
         // that differs in size so the graph ends up with the
         // pre-write stat + post-write content if the ordering is
         // correct.
-        let file_path = drive_dir.path().join("race.md");
+        let file_path = workspace_dir.path().join("race.md");
         let new_body = b"# race\nv2 with a noticeably larger payload than v1\n";
         let new_body_len = new_body.len() as u64;
         super::arm_index_file_stat_read_hook(Box::new(move || {
@@ -5092,7 +5092,7 @@ mod tests {
         // Post-conditions: the file on disk is the new body, and the
         // graph row carries the pre-write size. The size delta is
         // the load-bearing observable proof of stat-before-read.
-        let disk_size = fs::metadata(drive_dir.path().join("race.md"))
+        let disk_size = fs::metadata(workspace_dir.path().join("race.md"))
             .unwrap()
             .len();
         assert_eq!(disk_size, new_body_len, "writer hook must have run");
@@ -5125,10 +5125,10 @@ mod tests {
         // and indexes them all. End state must match what a
         // direct reindex would produce.
         let cfg = TempDir::new().unwrap();
-        let drive_dir = TempDir::new().unwrap();
+        let workspace_dir = TempDir::new().unwrap();
         let lib = Library::open_at(cfg.path().join("config.toml")).unwrap();
-        lib.register_workspace(drive_dir.path()).unwrap();
-        let workspace = lib.open_workspace(drive_dir.path()).unwrap();
+        lib.register_workspace(workspace_dir.path()).unwrap();
+        let workspace = lib.open_workspace(workspace_dir.path()).unwrap();
         workspace.write_text("a.md", "# a\nshared-token\n").unwrap();
         workspace.write_text("b.md", "# b\nshared-token\n").unwrap();
         // Skip the initial reindex so the graph stays empty.
@@ -5166,10 +5166,10 @@ mod tests {
         // parse) and the final live graph must include both the
         // pre-staged and the newly-parsed entries.
         let cfg = TempDir::new().unwrap();
-        let drive_dir = TempDir::new().unwrap();
+        let workspace_dir = TempDir::new().unwrap();
         let lib = Library::open_at(cfg.path().join("config.toml")).unwrap();
-        lib.register_workspace(drive_dir.path()).unwrap();
-        let workspace = lib.open_workspace(drive_dir.path()).unwrap();
+        lib.register_workspace(workspace_dir.path()).unwrap();
+        let workspace = lib.open_workspace(workspace_dir.path()).unwrap();
         workspace.write_text("a.md", "# a\n").unwrap();
         workspace.write_text("b.md", "# b\n").unwrap();
         workspace.write_text("c.md", "# c\n").unwrap();
@@ -5177,7 +5177,7 @@ mod tests {
         // and crashed before reaching c.md.
         let graph = workspace.graph().unwrap();
         for rel in ["a.md", "b.md"] {
-            let meta = std::fs::metadata(drive_dir.path().join(rel)).unwrap();
+            let meta = std::fs::metadata(workspace_dir.path().join(rel)).unwrap();
             let mtime = meta
                 .modified()
                 .ok()
@@ -5223,10 +5223,10 @@ mod tests {
         // staging stat tuple no longer matches disk, so the row is
         // purged and parsed again.
         let cfg = TempDir::new().unwrap();
-        let drive_dir = TempDir::new().unwrap();
+        let workspace_dir = TempDir::new().unwrap();
         let lib = Library::open_at(cfg.path().join("config.toml")).unwrap();
-        lib.register_workspace(drive_dir.path()).unwrap();
-        let workspace = lib.open_workspace(drive_dir.path()).unwrap();
+        lib.register_workspace(workspace_dir.path()).unwrap();
+        let workspace = lib.open_workspace(workspace_dir.path()).unwrap();
         workspace
             .write_text("a.md", "# old\nold-checkout-token\n")
             .unwrap();
@@ -5248,7 +5248,7 @@ mod tests {
         assert_eq!(graph.staging_cursor().unwrap().as_deref(), Some("a.md"));
 
         std::fs::write(
-            drive_dir.path().join("a.md"),
+            workspace_dir.path().join("a.md"),
             "# new\nnew-checkout-token after checkout\n",
         )
         .unwrap();
@@ -5278,13 +5278,13 @@ mod tests {
         // full rebuild settles, graph + search must match a fresh
         // workspace built directly from the post-checkout tree.
         let cfg = TempDir::new().unwrap();
-        let drive_dir = TempDir::new().unwrap();
+        let workspace_dir = TempDir::new().unwrap();
         let fresh_dir = TempDir::new().unwrap();
         let lib = Library::open_at(cfg.path().join("config.toml")).unwrap();
-        lib.register_workspace(drive_dir.path()).unwrap();
+        lib.register_workspace(workspace_dir.path()).unwrap();
         lib.register_workspace(fresh_dir.path()).unwrap();
 
-        let workspace = lib.open_workspace(drive_dir.path()).unwrap();
+        let workspace = lib.open_workspace(workspace_dir.path()).unwrap();
         workspace
             .write_text("keep.md", "# keep\nshared-token\n")
             .unwrap();
@@ -5297,17 +5297,21 @@ mod tests {
         workspace.reindex(None).unwrap();
 
         std::fs::write(
-            drive_dir.path().join("swap.tmp"),
+            workspace_dir.path().join("swap.tmp"),
             "# new\ncheckout-token shared-token\n",
         )
         .unwrap();
         std::fs::rename(
-            drive_dir.path().join("swap.tmp"),
-            drive_dir.path().join("swap.md"),
+            workspace_dir.path().join("swap.tmp"),
+            workspace_dir.path().join("swap.md"),
         )
         .unwrap();
-        std::fs::remove_file(drive_dir.path().join("delete.md")).unwrap();
-        std::fs::write(drive_dir.path().join("add.md"), "# add\ncheckout-token\n").unwrap();
+        std::fs::remove_file(workspace_dir.path().join("delete.md")).unwrap();
+        std::fs::write(
+            workspace_dir.path().join("add.md"),
+            "# add\ncheckout-token\n",
+        )
+        .unwrap();
         workspace.reindex(None).unwrap();
 
         std::fs::write(fresh_dir.path().join("keep.md"), "# keep\nshared-token\n").unwrap();
@@ -5330,10 +5334,10 @@ mod tests {
     #[ignore = "manual phase-5 checkout/resume profile; not a CI benchmark"]
     fn checkout_and_resume_profile() {
         let cfg = TempDir::new().unwrap();
-        let drive_dir = TempDir::new().unwrap();
+        let workspace_dir = TempDir::new().unwrap();
         let lib = Library::open_at(cfg.path().join("config.toml")).unwrap();
-        lib.register_workspace(drive_dir.path()).unwrap();
-        let workspace = lib.open_workspace(drive_dir.path()).unwrap();
+        lib.register_workspace(workspace_dir.path()).unwrap();
+        let workspace = lib.open_workspace(workspace_dir.path()).unwrap();
         for i in 0..80 {
             workspace
                 .write_text(
@@ -5350,9 +5354,9 @@ mod tests {
         let started = std::time::Instant::now();
         for i in 0..20 {
             let rel = format!("notes/note-{i:03}.md");
-            let tmp = drive_dir.path().join(format!("notes/.swap-{i:03}.md"));
+            let tmp = workspace_dir.path().join(format!("notes/.swap-{i:03}.md"));
             std::fs::write(&tmp, format!("# note {i}\n\ncheckout-token {i}\n")).unwrap();
-            std::fs::rename(tmp, drive_dir.path().join(&rel)).unwrap();
+            std::fs::rename(tmp, workspace_dir.path().join(&rel)).unwrap();
         }
         workspace.reindex(None).unwrap();
         let checkout = started.elapsed();
@@ -5360,7 +5364,7 @@ mod tests {
         let graph = workspace.graph().unwrap();
         for i in 0..20 {
             let rel = format!("notes/note-{i:03}.md");
-            let meta = std::fs::metadata(drive_dir.path().join(&rel)).unwrap();
+            let meta = std::fs::metadata(workspace_dir.path().join(&rel)).unwrap();
             let mtime = meta
                 .modified()
                 .ok()
@@ -5397,10 +5401,10 @@ mod tests {
         // purge it before the swap so the live graph does not end
         // up with a ghost row pointing at a missing file.
         let cfg = TempDir::new().unwrap();
-        let drive_dir = TempDir::new().unwrap();
+        let workspace_dir = TempDir::new().unwrap();
         let lib = Library::open_at(cfg.path().join("config.toml")).unwrap();
-        lib.register_workspace(drive_dir.path()).unwrap();
-        let workspace = lib.open_workspace(drive_dir.path()).unwrap();
+        lib.register_workspace(workspace_dir.path()).unwrap();
+        let workspace = lib.open_workspace(workspace_dir.path()).unwrap();
         workspace.write_text("alive.md", "# alive\n").unwrap();
         // Stage a row for a file that does not exist on disk.
         let fg = crate::graph::FileGraph {
@@ -5792,7 +5796,7 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn second_open_blocks_on_writer_lock() {
-        let (cfg, root, _drive) = fixture();
+        let (cfg, root, _workspace) = fixture();
         let lib = Library::open_at(cfg.path().join("config.toml")).unwrap();
         let err = lib.open_workspace(root.path()).unwrap_err();
         assert!(matches!(err, ChanError::WorkspaceLocked));
@@ -5955,7 +5959,7 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
-    fn list_tree_prefix_rejects_midpath_symlink_outside_drive() {
+    fn list_tree_prefix_rejects_midpath_symlink_outside_workspace() {
         use std::os::unix::fs::symlink;
         let (_cfg, root, workspace) = fixture();
         let outside = TempDir::new().unwrap();
@@ -6100,7 +6104,7 @@ mod tests {
     // ---- drafts (systacean-24) ----
 
     #[test]
-    fn drafts_dir_exists_after_drive_open() {
+    fn drafts_dir_exists_after_workspace_open() {
         // systacean-24: Workspace::open eagerly ensures the drafts
         // subtree exists so callers don't need to re-check.
         let (_cfg, _root, workspace) = fixture();
@@ -6243,7 +6247,7 @@ mod tests {
     }
 
     #[test]
-    fn teams_create_list_load_duplicate_through_drive() {
+    fn teams_create_list_load_duplicate_through_workspace() {
         // systacean-30: Workspace-level integration. Create team via
         // Workspace method, verify list_teams + load_team round-trip,
         // verify team_dir + team_events_dir resolve correctly,
@@ -6439,9 +6443,9 @@ mod tests {
         // Workspace-root path continues to route through the workspace
         // handle (regression check).
         workspace.write_text("notes/intro.md", "hello\n").unwrap();
-        let drive_stat = workspace.stat("notes/intro.md").unwrap();
-        assert!(!drive_stat.is_dir);
-        assert_eq!(drive_stat.size, 6);
+        let workspace_stat = workspace.stat("notes/intro.md").unwrap();
+        assert!(!workspace_stat.is_dir);
+        assert_eq!(workspace_stat.size, 6);
     }
 
     #[test]
@@ -6517,9 +6521,12 @@ mod tests {
 
         // Workspace-root list: backward-compat regression check.
         workspace.write_text("notes/intro.md", "# intro\n").unwrap();
-        let drive_root_listing = workspace.list("notes").unwrap();
-        let drive_leaves: Vec<&str> = drive_root_listing.iter().map(|e| e.name.as_str()).collect();
-        assert_eq!(drive_leaves, ["intro.md"]);
+        let workspace_root_listing = workspace.list("notes").unwrap();
+        let workspace_leaves: Vec<&str> = workspace_root_listing
+            .iter()
+            .map(|e| e.name.as_str())
+            .collect();
+        assert_eq!(workspace_leaves, ["intro.md"]);
         assert!(root.path().join("notes/intro.md").is_file());
     }
 
@@ -6582,7 +6589,7 @@ mod tests {
     }
 
     #[test]
-    fn unified_path_drive_root_paths_unchanged() {
+    fn unified_path_workspace_root_paths_unchanged() {
         // systacean-26: backward-compat regression check. Paths
         // without the `Drafts/` prefix continue to route through
         // the workspace-root cap-std handle exactly as before.
@@ -6684,7 +6691,7 @@ mod tests {
     }
 
     #[test]
-    fn reports_enabled_round_trips_through_drive_and_boot_kicks_off_initial_scan() {
+    fn reports_enabled_round_trips_through_workspace_and_boot_kicks_off_initial_scan() {
         // systacean-27: Workspace::reports_enabled defaults false on a
         // never-touched workspace; Workspace::set_reports_enabled persists
         // the flag; Workspace::boot kicks off the initial scan when the
@@ -7068,7 +7075,7 @@ mod tests {
     }
 
     #[test]
-    fn build_edges_skips_drive_escape() {
+    fn build_edges_skips_workspace_escape() {
         // `../../x.md` from a depth-1 file pops past the workspace root.
         let edges = build_edges("notes/post.md", &[md_link("../../x.md")], &[]);
         assert!(edges.is_empty());
@@ -7568,7 +7575,7 @@ mod tests {
     }
 
     #[test]
-    fn resolve_free_name_at_drive_root_has_no_prefix() {
+    fn resolve_free_name_at_workspace_root_has_no_prefix() {
         let (_cfg, _root, workspace) = fixture();
         assert_eq!(workspace.resolve_free_name("", "top.md").unwrap(), "top.md");
     }

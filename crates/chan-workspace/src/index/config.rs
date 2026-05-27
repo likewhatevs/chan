@@ -1,6 +1,6 @@
 // Persisted config for the search index. Lives at
 // `<index_dir>/config.toml` (per-workspace global cache; see
-// `crate::paths::drive_paths`) and stores the embedding model id,
+// `crate::paths::workspace_paths`) and stores the embedding model id,
 // the chunking strategy, and a schema version that triggers a full
 // rebuild when bumped.
 
@@ -458,7 +458,7 @@ mod tests {
     }
 
     #[test]
-    fn load_works_while_drive_lock_is_held() {
+    fn load_works_while_workspace_lock_is_held() {
         // systacean-8: chan index status reads IndexConfig without
         // opening a Workspace (so no writer lock acquired), which means
         // a running `chan serve` against the workspace no longer blocks

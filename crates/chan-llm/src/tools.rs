@@ -655,12 +655,12 @@ mod tests {
 
     fn fixture() -> (TempDir, TempDir, ToolContext) {
         let cfg = TempDir::new().unwrap();
-        let drive_dir = TempDir::new().unwrap();
+        let workspace_dir = TempDir::new().unwrap();
         let lib = Library::open_at(cfg.path().join("config.toml")).unwrap();
-        lib.register_workspace(drive_dir.path()).unwrap();
-        let workspace = lib.open_workspace(drive_dir.path()).unwrap();
+        lib.register_workspace(workspace_dir.path()).unwrap();
+        let workspace = lib.open_workspace(workspace_dir.path()).unwrap();
         let ctx = ToolContext::new(workspace);
-        (cfg, drive_dir, ctx)
+        (cfg, workspace_dir, ctx)
     }
 
     #[test]
@@ -787,11 +787,11 @@ mod tests {
                 .into_owned()
         );
 
-        let drive_path =
+        let workspace_path =
             execute("resolve_path", &serde_json::json!({"path": "notes"}), &ctx).unwrap();
-        assert_eq!(drive_path["virtual"], false);
+        assert_eq!(workspace_path["virtual"], false);
         assert_eq!(
-            drive_path["physical_path"].as_str().unwrap(),
+            workspace_path["physical_path"].as_str().unwrap(),
             root.path()
                 .canonicalize()
                 .unwrap()

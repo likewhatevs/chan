@@ -43,11 +43,11 @@ struct WorkspaceWarning {
 }
 
 pub async fn api_get_workspace(State(state): State<Arc<AppState>>) -> Response {
-    drive_info_response(state, "workspace info").await
+    workspace_info_response(state, "workspace info").await
 }
 
-async fn drive_info_response(state: Arc<AppState>, label: &'static str) -> Response {
-    let result = tokio::task::spawn_blocking(move || drive_info(&state)).await;
+async fn workspace_info_response(state: Arc<AppState>, label: &'static str) -> Response {
+    let result = tokio::task::spawn_blocking(move || workspace_info(&state)).await;
     match result {
         Ok(Ok(info)) => Json(info).into_response(),
         Ok(Err(message)) => err(StatusCode::INTERNAL_SERVER_ERROR, message),
@@ -69,7 +69,7 @@ async fn drive_info_response(state: Arc<AppState>, label: &'static str) -> Respo
 /// and must not block the async runtime (a large workspace is a non-
 /// trivial stat sweep).
 pub async fn api_workspace_bootstrap(State(state): State<Arc<AppState>>) -> Response {
-    let workspace = match state.try_drive() {
+    let workspace = match state.try_workspace() {
         Ok(workspace) => workspace,
         Err(e) => return err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
     };
@@ -93,7 +93,7 @@ pub async fn api_patch_workspace(
     if body.get("name").is_some() {
         return (StatusCode::BAD_REQUEST, "workspace names are not supported").into_response();
     }
-    drive_info_response(state, "workspace patch").await
+    workspace_info_response(state, "workspace patch").await
 }
 
 #[derive(Serialize)]
@@ -143,22 +143,22 @@ pub async fn api_cloud_workspaces(State(state): State<Arc<AppState>>) -> Respons
 /// The SPA tolerates an empty `root`: it only uses the field for
 /// the Settings panel's "Workspace root" line, which is unreachable
 /// in tunnel mode anyway.
-fn drive_info(state: &AppState) -> Result<WorkspaceInfo, String> {
+fn workspace_info(state: &AppState) -> Result<WorkspaceInfo, String> {
     let workspaces = state.library.list_workspaces();
     // Snapshot the live workspace once: each call to `state.workspace()`
-    // takes the `drive_cell` RwLock and clones the Arc. Two calls
+    // takes the `workspace_cell` RwLock and clones the Arc. Two calls
     // worked fine; one call reads slightly cleaner and survives a
     // hypothetical reset-in-flight where the cell could swap
     // between the registry lookup and the path serialization.
     let workspace = state.workspace();
-    let drive_root = workspace.root();
+    let workspace_root = workspace.root();
     let entry = workspaces
         .iter()
-        .find(|d| d.root_path.as_path() == drive_root);
+        .find(|d| d.root_path.as_path() == workspace_root);
     let root = if state.tunnel_public {
         String::new()
     } else {
-        drive_root.to_string_lossy().into_owned()
+        workspace_root.to_string_lossy().into_owned()
     };
     Ok(WorkspaceInfo {
         root,
@@ -168,11 +168,11 @@ fn drive_info(state: &AppState) -> Result<WorkspaceInfo, String> {
             .map(str::to_string),
         metadata_key: entry.map(|e| e.metadata_key.clone()),
         preferences: preferences_view(state).map_err(|e| e.to_string())?,
-        warnings: drive_warnings(&workspace),
+        warnings: workspace_warnings(&workspace),
     })
 }
 
-fn drive_warnings(workspace: &chan_workspace::Workspace) -> Vec<WorkspaceWarning> {
+fn workspace_warnings(workspace: &chan_workspace::Workspace) -> Vec<WorkspaceWarning> {
     let mut warnings = match workspace.draft_preflight() {
         Ok(issues) => issues
             .into_iter()
@@ -205,10 +205,10 @@ fn drive_warnings(workspace: &chan_workspace::Workspace) -> Vec<WorkspaceWarning
 
 #[cfg(test)]
 mod tests {
-    use super::drive_warnings;
+    use super::workspace_warnings;
 
     #[test]
-    fn drive_warnings_report_broken_drafts() {
+    fn workspace_warnings_report_broken_drafts() {
         let cfg = tempfile::TempDir::new().unwrap();
         let root = tempfile::TempDir::new().unwrap();
         let lib = chan_workspace::Library::open_at(cfg.path().join("config.toml")).unwrap();
@@ -217,7 +217,7 @@ mod tests {
         let draft = workspace.create_draft_dir("untitled-1").unwrap();
         std::fs::write(draft.abs.join("note.md"), "not draft.md").unwrap();
 
-        let warnings = drive_warnings(&workspace);
+        let warnings = workspace_warnings(&workspace);
 
         assert_eq!(warnings.len(), 1);
         assert_eq!(warnings[0].kind, "broken_draft");

@@ -114,7 +114,7 @@ pub async fn api_post_attachment(
     };
     let ext = ext.map(|e| e.to_ascii_lowercase()).unwrap_or_default();
 
-    let workspace = match state.try_drive() {
+    let workspace = match state.try_workspace() {
         Ok(workspace) => workspace,
         Err(e) => return err_state(&e),
     };

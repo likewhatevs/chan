@@ -607,7 +607,7 @@ mod tests {
     }
 
     #[test]
-    fn normalize_parent_relative_escapes_drive() {
+    fn normalize_parent_relative_escapes_workspace() {
         assert!(normalize_href("../../../x.md", "a/b").is_none());
         assert!(normalize_href("../x.md", "").is_none());
     }

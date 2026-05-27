@@ -1,10 +1,10 @@
 // End-to-end ignore-set consistency (ignore-consistency-spec.md).
 //
-// A drive pointed at a source tree must never index or graph the
+// A workspace pointed at a source tree must never index or graph the
 // dependency-tree noise (`node_modules/`, `target/`, `venv/`, `.git/`).
 // The default registry `index_excluded_dirs` is sane out of the box, so
-// a freshly-registered drive excludes them WITHOUT any config. This test
-// seeds a small drive with real `.md` notes plus fake ignored dirs (junk
+// a freshly-registered workspace excludes them WITHOUT any config. This test
+// seeds a small workspace with real `.md` notes plus fake ignored dirs (junk
 // reachable on disk but written outside chan's API, the way a real repo
 // tree would be) and asserts:
 //   - the filtered listing (the File Browser spine / graph presence set)
@@ -27,18 +27,18 @@ fn seed_junk(root: &std::path::Path, rel: &str, body: &str) {
 #[test]
 fn ignored_dirs_absent_from_index_and_graph_by_default() {
     let cfg = TempDir::new().unwrap();
-    let drive_root = TempDir::new().unwrap();
-    let root = drive_root.path();
+    let workspace_root = TempDir::new().unwrap();
+    let root = workspace_root.path();
 
     let lib = Library::open_at(cfg.path().join("config.toml")).unwrap();
     lib.register_workspace(root).unwrap();
-    let drive = lib.open_workspace(root).unwrap();
+    let workspace = lib.open_workspace(root).unwrap();
 
     // Real notes (through chan's API).
-    drive
+    workspace
         .write_text("intro.md", "# Welcome\n\nReal #notes content.\n")
         .unwrap();
-    drive
+    workspace
         .write_text("notes/today.md", "# Today\n\nMore #notes.\n")
         .unwrap();
 
@@ -53,7 +53,7 @@ fn ignored_dirs_absent_from_index_and_graph_by_default() {
     seed_junk(root, "notes/node_modules/dep/a.md", "# nested dep #notes\n");
 
     // --- Filtered listing (File Browser spine + graph presence set) ---
-    let filtered: Vec<String> = drive
+    let filtered: Vec<String> = workspace
         .list_tree_filtered_unified()
         .unwrap()
         .into_iter()
@@ -79,7 +79,7 @@ fn ignored_dirs_absent_from_index_and_graph_by_default() {
     }
 
     // --- Raw unfiltered listing still sees them (open-on-demand) ---
-    let raw: Vec<String> = drive
+    let raw: Vec<String> = workspace
         .list_tree_unified()
         .unwrap()
         .into_iter()
@@ -91,7 +91,7 @@ fn ignored_dirs_absent_from_index_and_graph_by_default() {
     );
 
     // --- Index + graph build (the reindex path) ---
-    let summary = drive.reindex(None).unwrap();
+    let summary = workspace.reindex(None).unwrap();
     // Only the two real notes are indexed; the dependency-tree junk
     // (incl. node_modules/pkg/readme.md and the nested .md) is excluded.
     assert_eq!(summary.files, 2, "reindex must only see the real notes");
@@ -99,7 +99,7 @@ fn ignored_dirs_absent_from_index_and_graph_by_default() {
 
     // Search index excludes ignored-dir content. "dep" appears only in
     // node_modules; it must not be searchable.
-    let dep = drive.search("dep", &SearchOpts::default()).unwrap();
+    let dep = workspace.search("dep", &SearchOpts::default()).unwrap();
     assert!(
         dep.hits.is_empty(),
         "node_modules content leaked into the search index: {:?}",
@@ -107,7 +107,7 @@ fn ignored_dirs_absent_from_index_and_graph_by_default() {
     );
 
     // Graph holds only the real note files; no node_modules/target nodes.
-    let g = drive.graph().unwrap();
+    let g = workspace.graph().unwrap();
     let graph_files = g.files().unwrap();
     let mut expected = vec!["intro.md".to_string(), "notes/today.md".to_string()];
     expected.sort();
@@ -130,7 +130,7 @@ fn ignored_dirs_absent_from_index_and_graph_by_default() {
     // The report engine does its own filesystem walk; it must honor the
     // same blocklist or the graph's language layer re-surfaces the
     // dependency trees (target/*.rs as Rust, node_modules/*.js as JS).
-    let report = drive.report().unwrap();
+    let report = workspace.report().unwrap();
     let report_paths: Vec<&str> = report.files.iter().map(|f| f.path.as_str()).collect();
     for ignored_prefix in ["node_modules", "target", ".venv", ".git"] {
         assert!(

@@ -8,21 +8,21 @@ use tempfile::TempDir;
 #[test]
 fn file_type_policy_end_to_end() {
     let cfg = TempDir::new().unwrap();
-    let drive_root = TempDir::new().unwrap();
+    let workspace_root = TempDir::new().unwrap();
 
     let lib = Library::open_at(cfg.path().join("config.toml")).unwrap();
-    lib.register_workspace(drive_root.path()).unwrap();
-    let drive = lib.open_workspace(drive_root.path()).unwrap();
+    lib.register_workspace(workspace_root.path()).unwrap();
+    let workspace = lib.open_workspace(workspace_root.path()).unwrap();
 
     // Editable-text: .md and .txt go through write_text.
-    drive
+    workspace
         .write_text(
             "notes/intro.md",
             "# Intro\n\nSee ![diagram](../media/diagram.png) and \
              [whitepaper](../docs/spec.pdf).\n\nMore in notes/notes.txt.\n\n#phase2 @@teammate\n",
         )
         .unwrap();
-    drive
+    workspace
         .write_text(
             "notes/notes.txt",
             "shopping list: bread, milk, walnuts, sourdough #plain-text @@ignored\n",
@@ -35,40 +35,46 @@ fn file_type_policy_end_to_end() {
     // "Text-class not searchable" assertion below has something
     // grep-shaped to look for without colliding with markdown
     // chunk content.
-    drive
+    workspace
         .write_text(
             "src/main.py",
             "#include <stdio.h>\ndef main():\n    return 'xyzzysentinel'\n",
         )
         .unwrap();
-    drive
+    workspace
         .write_text("Cargo.toml", "[package]\nname = \"x\"\n")
         .unwrap();
-    drive.write_text("Makefile", "all:\n\techo hi\n").unwrap();
+    workspace
+        .write_text("Makefile", "all:\n\techo hi\n")
+        .unwrap();
 
     // Media classes: png + pdf are written as opaque bytes.
-    drive
+    workspace
         .write_bytes("media/diagram.png", &[0x89, 0x50, 0x4e, 0x47])
         .unwrap();
-    drive
+    workspace
         .write_bytes("docs/spec.pdf", b"%PDF-1.7\n%fake\n")
         .unwrap();
     // Other: a binary that doesn't fit any category.
-    drive
+    workspace
         .write_bytes("downloads/song.mp3", &[0xff, 0xfb, 0x90])
         .unwrap();
 
     // write_text is rejected for non-textual (Image/Pdf/Other) extensions.
-    let err = drive.write_text("media/diagram.png", "nope").unwrap_err();
+    let err = workspace
+        .write_text("media/diagram.png", "nope")
+        .unwrap_err();
     assert!(
         matches!(err, ChanError::NotEditableText(_)),
         "expected NotEditableText, got {err:?}",
     );
-    let err = drive.write_text("downloads/song.mp3", "nope").unwrap_err();
+    let err = workspace
+        .write_text("downloads/song.mp3", "nope")
+        .unwrap_err();
     assert!(matches!(err, ChanError::NotEditableText(_)));
 
     // list_tree returns every regular file regardless of class.
-    let tree = drive.list_tree().unwrap();
+    let tree = workspace.list_tree().unwrap();
     let paths: Vec<&str> = tree.iter().map(|e| e.path.as_str()).collect();
     for expected in [
         "notes/intro.md",
@@ -97,15 +103,17 @@ fn file_type_policy_end_to_end() {
     // Text-class files (.py / Cargo.toml / Makefile) are walked
     // but stay out of the index by design. The image / pdf / mp3
     // are likewise excluded.
-    let summary = drive.reindex(None).unwrap();
+    let summary = workspace.reindex(None).unwrap();
     assert_eq!(summary.files, 2, "indexer should ingest .md + .txt only");
     assert_eq!(summary.indexed, 2);
     assert!(summary.errors.is_empty());
 
     // Full-text search finds tokens from both editable kinds.
-    let md_hits = drive.search("Intro", &SearchOpts::default()).unwrap();
+    let md_hits = workspace.search("Intro", &SearchOpts::default()).unwrap();
     assert!(md_hits.hits.iter().any(|h| h.path == "notes/intro.md"));
-    let txt_hits = drive.search("sourdough", &SearchOpts::default()).unwrap();
+    let txt_hits = workspace
+        .search("sourdough", &SearchOpts::default())
+        .unwrap();
     assert!(
         txt_hits.hits.iter().any(|h| h.path == "notes/notes.txt"),
         ".txt content should be searchable: hits = {:?}",
@@ -114,7 +122,7 @@ fn file_type_policy_end_to_end() {
 
     // Text-class content is editable but **not** searchable: the
     // unique sentinel from main.py must not surface anywhere.
-    let py_hits = drive
+    let py_hits = workspace
         .search("xyzzysentinel", &SearchOpts::default())
         .unwrap();
     assert!(
@@ -125,7 +133,7 @@ fn file_type_policy_end_to_end() {
 
     // Search never returns a non-editable-text path.
     for needle in ["spec", "diagram", "song", "mp3"] {
-        let res = drive.search(needle, &SearchOpts::default()).unwrap();
+        let res = workspace.search(needle, &SearchOpts::default()).unwrap();
         for hit in &res.hits {
             let c = classify(&hit.path);
             assert_eq!(
@@ -142,7 +150,7 @@ fn file_type_policy_end_to_end() {
     // node row. The graph DOES carry edges that point at them
     // (e.g. an `![]()` embed), so the backlink-from-media query
     // still works.
-    let g = drive.graph().unwrap();
+    let g = workspace.graph().unwrap();
     let files = g.files().unwrap();
     assert!(files.iter().any(|p| p == "notes/intro.md"));
     assert!(files.iter().any(|p| p == "notes/notes.txt"));
@@ -170,7 +178,7 @@ fn file_type_policy_end_to_end() {
     );
 
     // Edges to the image / pdf are stored (relative href collapsed
-    // to drive-rooted form by `normalize_href`).
+    // to workspace-rooted form by `normalize_href`).
     let neighbors = g.neighbors("notes/intro.md").unwrap();
     let dsts: Vec<&str> = neighbors.iter().map(|e| e.dst.as_str()).collect();
     assert!(
@@ -221,17 +229,17 @@ fn file_type_policy_end_to_end() {
     assert_eq!(src_paths, vec!["notes/intro.md"]);
 
     // Read back: every class is byte-readable.
-    assert!(!drive.read("media/diagram.png").unwrap().is_empty());
-    assert!(!drive.read("docs/spec.pdf").unwrap().is_empty());
-    assert!(!drive.read("downloads/song.mp3").unwrap().is_empty());
+    assert!(!workspace.read("media/diagram.png").unwrap().is_empty());
+    assert!(!workspace.read("docs/spec.pdf").unwrap().is_empty());
+    assert!(!workspace.read("downloads/song.mp3").unwrap().is_empty());
 
     // Rename of an image: filesystem moves, no link rewrite expected
     // for the binary itself (only editable-text source bodies get
     // rewritten). The renamed file is still walkable.
-    drive
+    workspace
         .rename("media/diagram.png", "media/diagram-v2.png")
         .unwrap();
-    let tree2 = drive.list_tree().unwrap();
+    let tree2 = workspace.list_tree().unwrap();
     let paths2: Vec<&str> = tree2.iter().map(|e| e.path.as_str()).collect();
     assert!(paths2.contains(&"media/diagram-v2.png"));
     assert!(!paths2.contains(&"media/diagram.png"));

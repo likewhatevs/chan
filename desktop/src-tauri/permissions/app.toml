@@ -175,23 +175,23 @@ commands.allow = ["open_local_workspace"]
 
 [[permission]]
 identifier = "allow-open-tunneled-workspace"
-description = "Enables the open_tunneled_drive command."
-commands.allow = ["open_tunneled_drive"]
+description = "Enables the open_tunneled_workspace command."
+commands.allow = ["open_tunneled_workspace"]
 
 [[permission]]
 identifier = "allow-add-outbound-workspace"
-description = "Enables the add_outbound_drive command."
-commands.allow = ["add_outbound_drive"]
+description = "Enables the add_outbound_workspace command."
+commands.allow = ["add_outbound_workspace"]
 
 [[permission]]
 identifier = "allow-open-outbound-workspace"
-description = "Enables the open_outbound_drive command."
-commands.allow = ["open_outbound_drive"]
+description = "Enables the open_outbound_workspace command."
+commands.allow = ["open_outbound_workspace"]
 
 [[permission]]
 identifier = "allow-remove-outbound-workspace"
-description = "Enables the remove_outbound_drive command."
-commands.allow = ["remove_outbound_drive"]
+description = "Enables the remove_outbound_workspace command."
+commands.allow = ["remove_outbound_workspace"]
 
 [[permission]]
 identifier = "allow-chan-bin-status"

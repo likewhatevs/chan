@@ -172,7 +172,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn err_state_maps_missing_drive_to_retryable_busy() {
+    async fn err_state_maps_missing_workspace_to_retryable_busy() {
         let (status, msg) =
             status_and_error(err_state(&StateAccessError::WorkspaceCellMissing)).await;
 

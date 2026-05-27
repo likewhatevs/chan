@@ -154,8 +154,8 @@ pub struct RestoredEntry {
 
 pub fn restore(
     trash_dir: &Path,
-    drive_root: &Path,
-    drive_root_canon: &Path,
+    workspace_root: &Path,
+    workspace_root_canon: &Path,
     id: &str,
 ) -> Result<RestoredEntry> {
     let entry_dir = trash_dir.join(id);
@@ -185,8 +185,11 @@ pub fn restore(
     // enough to catch mid-path symlinks pointing outside the workspace.
     // The Workspace caller passes its cached canonical root so we don't
     // re-canonicalize on every restore.
-    let dest =
-        fs_ops::resolve_safe_strict_canon(drive_root, drive_root_canon, &meta.original_path)?;
+    let dest = fs_ops::resolve_safe_strict_canon(
+        workspace_root,
+        workspace_root_canon,
+        &meta.original_path,
+    )?;
     if fs::symlink_metadata(&dest).is_ok() {
         return Err(ChanError::TrashOccupied(meta.original_path.clone()));
     }

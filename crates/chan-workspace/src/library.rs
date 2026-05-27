@@ -2,7 +2,7 @@
 // ~/.chan/config.toml and resolves OS state/cache paths.
 //
 // In practice apps create one Library at startup and keep it
-// alive. Drives are opened against it. Cheap to clone (Arc inside).
+// alive. Workspaces are opened against it. Cheap to clone (Arc inside).
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -63,9 +63,9 @@ struct LibraryInner {
     /// the registry config so CLI and desktop share the same noise
     /// policy (`node_modules`, `target`, ...). The Mutex lets the
     /// consumer swap the filter at runtime after config changes.
-    /// Drives capture a snapshot at `open_workspace` time.
+    /// Workspaces capture a snapshot at `open_workspace` time.
     walk_filter: Mutex<Arc<WalkFilter>>,
-    /// In-process map of currently-open Drives, keyed by canonical
+    /// In-process map of currently-open Workspaces, keyed by canonical
     /// path. Each entry is a `Weak<Workspace>` so the map doesn't
     /// keep workspaces alive past the caller's last `Arc`. The
     /// per-workspace flock already prevents two processes (or two
@@ -84,7 +84,7 @@ struct LibraryInner {
     ///
     /// Dead entries (Weak that no longer upgrades) are GC'd lazily
     /// on every map access; no background thread.
-    live_drives: Mutex<HashMap<PathBuf, Weak<Workspace>>>,
+    live_workspaces: Mutex<HashMap<PathBuf, Weak<Workspace>>>,
 }
 
 impl Library {
@@ -112,7 +112,7 @@ impl Library {
             inner: Arc::new(LibraryInner {
                 config_path,
                 registry: Mutex::new(registry),
-                live_drives: Mutex::new(HashMap::new()),
+                live_workspaces: Mutex::new(HashMap::new()),
                 walk_filter: Mutex::new(walk_filter),
             }),
         })
@@ -171,7 +171,7 @@ impl Library {
         let mut reg = self.inner.registry.lock().unwrap();
         let idx = reg.touch(root);
         let entry = reg.workspaces[idx].clone();
-        paths::ensure_drive_metadata_dirs(&entry.metadata_key)?;
+        paths::ensure_workspace_metadata_dirs(&entry.metadata_key)?;
         reg.save_to(&self.inner.config_path)?;
         Ok(entry)
     }
@@ -227,12 +227,12 @@ impl Library {
         // In-process pre-check: if we still hold an open handle to
         // this workspace, return WorkspaceAlreadyOpen rather than letting
         // the cross-process flock surface as WorkspaceLocked. The lock
-        // on `live_drives` is held only across the upgrade probe;
+        // on `live_workspaces` is held only across the upgrade probe;
         // we drop it before calling Workspace::open so a slow open
         // (canonicalize on a cloud root, lazy index init) never
         // blocks unrelated workspaces from registering / listing.
         {
-            let mut map = self.inner.live_drives.lock().unwrap();
+            let mut map = self.inner.live_workspaces.lock().unwrap();
             gc_dead_entries(&mut map);
             if let Some(weak) = map.get(&key) {
                 if weak.upgrade().is_some() {
@@ -243,7 +243,7 @@ impl Library {
         let filter = Arc::clone(&self.inner.walk_filter.lock().unwrap());
         let workspace = Workspace::open(entry, filter)?;
         self.inner
-            .live_drives
+            .live_workspaces
             .lock()
             .unwrap()
             .insert(key, Arc::downgrade(&workspace));
@@ -305,7 +305,7 @@ impl Library {
         // on the flock.
         let key = canonical_key(root);
         {
-            let mut map = self.inner.live_drives.lock().unwrap();
+            let mut map = self.inner.live_workspaces.lock().unwrap();
             gc_dead_entries(&mut map);
             if let Some(weak) = map.get(&key) {
                 if weak.upgrade().is_some() {
@@ -327,15 +327,18 @@ impl Library {
         else {
             return Ok(ResetReport { removed_entries: 0 });
         };
-        let drive_paths = paths::workspace_paths_for_metadata_key(&metadata_key);
-        let _lock = WorkspaceLock::acquire(&drive_paths.lock)?;
+        let workspace_paths = paths::workspace_paths_for_metadata_key(&metadata_key);
+        let _lock = WorkspaceLock::acquire(&workspace_paths.lock)?;
         let mut removed = 0;
-        let report_dir = drive_paths.report.parent().expect("report path has parent");
+        let report_dir = workspace_paths
+            .report
+            .parent()
+            .expect("report path has parent");
         let subsystems: [(&str, &Path); 5] = [
-            ("index", &drive_paths.index),
-            ("graph", &drive_paths.graph_dir),
-            ("sessions", &drive_paths.sessions),
-            ("tokens", &drive_paths.tokens),
+            ("index", &workspace_paths.index),
+            ("graph", &workspace_paths.graph_dir),
+            ("sessions", &workspace_paths.sessions),
+            ("tokens", &workspace_paths.tokens),
             ("report", report_dir),
         ];
         let total = subsystems.len() as u64;
@@ -393,7 +396,7 @@ impl Library {
         }
         let key = canonical_key(old);
         {
-            let mut map = self.inner.live_drives.lock().unwrap();
+            let mut map = self.inner.live_workspaces.lock().unwrap();
             gc_dead_entries(&mut map);
             if let Some(weak) = map.get(&key) {
                 if weak.upgrade().is_some() {
@@ -434,7 +437,7 @@ impl Library {
 
     /// Reclaim metadata directories whose key no longer appears in
     /// the registry. Walks the metadata parent from
-    /// `paths::drive_subsystem_dirs` and deletes any immediate
+    /// `paths::workspace_subsystem_dirs` and deletes any immediate
     /// subdirectory whose name isn't a current metadata key.
     ///
     /// Use cases:
@@ -462,7 +465,7 @@ impl Library {
             .iter()
             .map(|d| d.metadata_key.clone())
             .collect();
-        sweep_orphans_in(&paths::drive_subsystem_dirs(), &known)
+        sweep_orphans_in(&paths::workspace_subsystem_dirs(), &known)
     }
 }
 
@@ -587,7 +590,7 @@ mod tests {
 
     #[test]
     fn register_missing_path_errors() {
-        let (lib, _cfg, _drive) = lib();
+        let (lib, _cfg, _workspace) = lib();
         let bogus = std::path::PathBuf::from("/nonexistent/path/to/nowhere/12345");
         let err = lib.register_workspace(&bogus).unwrap_err();
         assert!(matches!(err, ChanError::WorkspaceRootMissing(_)));
@@ -614,7 +617,7 @@ mod tests {
 
     #[test]
     fn open_uses_default_index_excluded_dirs() {
-        let (lib, _cfg, _drive) = lib();
+        let (lib, _cfg, _workspace) = lib();
         let filter = lib.walk_filter();
         assert!(filter.is_excluded("node_modules"));
         assert!(filter.is_excluded("NODE_MODULES"));
@@ -626,7 +629,7 @@ mod tests {
     fn open_preserves_user_empty_index_excluded_dirs() {
         let cfg = TempDir::new().unwrap();
         let config_path = cfg.path().join("config.toml");
-        std::fs::write(&config_path, "index_excluded_dirs = []\ndrives = []\n").unwrap();
+        std::fs::write(&config_path, "index_excluded_dirs = []\nworkspaces = []\n").unwrap();
 
         let lib = Library::open_at(config_path).unwrap();
         let filter = lib.walk_filter();
@@ -729,21 +732,23 @@ mod tests {
 
     #[test]
     fn move_workspace_preserves_metadata_key_and_metadata_dirs() {
-        let (lib, _cfg, drive_a) = lib();
-        let drive_b = TempDir::new().unwrap();
-        lib.register_workspace(drive_a.path()).unwrap();
-        populate_state(&lib, drive_a.path());
+        let (lib, _cfg, workspace_a) = lib();
+        let workspace_b = TempDir::new().unwrap();
+        lib.register_workspace(workspace_a.path()).unwrap();
+        populate_state(&lib, workspace_a.path());
 
         let key_before = lib.list_workspaces()[0].metadata_key.clone();
-        let pa = paths_of(&lib, drive_a.path());
+        let pa = paths_of(&lib, workspace_a.path());
         assert!(pa.graph_db.exists());
 
         // Move the workspace's registry entry. The user is responsible
         // for the actual directory move; we simulate that by writing
-        // notes into drive_b after the registry update.
-        assert!(lib.move_workspace(drive_a.path(), drive_b.path()).unwrap());
+        // notes into workspace_b after the registry update.
+        assert!(lib
+            .move_workspace(workspace_a.path(), workspace_b.path())
+            .unwrap());
 
-        // Registry now points at drive_b with the same metadata key.
+        // Registry now points at workspace_b with the same metadata key.
         // The metadata root on disk is untouched.
         let after = lib.list_workspaces();
         assert_eq!(after.len(), 1);
@@ -751,9 +756,12 @@ mod tests {
             after[0].metadata_key, key_before,
             "metadata key must survive a move"
         );
-        assert_eq!(after[0].root_path, drive_b.path().canonicalize().unwrap());
+        assert_eq!(
+            after[0].root_path,
+            workspace_b.path().canonicalize().unwrap()
+        );
 
-        let pb = paths_of(&lib, drive_b.path());
+        let pb = paths_of(&lib, workspace_b.path());
         assert_eq!(
             pb.graph_db, pa.graph_db,
             "metadata paths follow the metadata key"
@@ -763,21 +771,23 @@ mod tests {
 
     #[test]
     fn move_workspace_refuses_when_target_missing() {
-        let (lib, _cfg, drive_a) = lib();
-        lib.register_workspace(drive_a.path()).unwrap();
+        let (lib, _cfg, workspace_a) = lib();
+        lib.register_workspace(workspace_a.path()).unwrap();
         let missing = std::path::PathBuf::from("/nonexistent/destination/12345");
-        let err = lib.move_workspace(drive_a.path(), &missing).unwrap_err();
+        let err = lib
+            .move_workspace(workspace_a.path(), &missing)
+            .unwrap_err();
         assert!(matches!(err, ChanError::WorkspaceRootMissing(_)));
     }
 
     #[test]
-    fn move_workspace_refuses_when_target_is_another_registered_drive() {
-        let (lib, _cfg, drive_a) = lib();
-        let drive_b = TempDir::new().unwrap();
-        lib.register_workspace(drive_a.path()).unwrap();
-        lib.register_workspace(drive_b.path()).unwrap();
+    fn move_workspace_refuses_when_target_is_another_registered_workspace() {
+        let (lib, _cfg, workspace_a) = lib();
+        let workspace_b = TempDir::new().unwrap();
+        lib.register_workspace(workspace_a.path()).unwrap();
+        lib.register_workspace(workspace_b.path()).unwrap();
         let err = lib
-            .move_workspace(drive_a.path(), drive_b.path())
+            .move_workspace(workspace_a.path(), workspace_b.path())
             .unwrap_err();
         assert!(matches!(err, ChanError::WorkspaceAlreadyRegistered(_)));
         // Both registry rows survive untouched.
@@ -786,29 +796,31 @@ mod tests {
 
     #[test]
     fn move_workspace_refuses_when_source_is_open() {
-        let (lib, _cfg, drive_a) = lib();
-        let drive_b = TempDir::new().unwrap();
-        lib.register_workspace(drive_a.path()).unwrap();
-        let _open = lib.open_workspace(drive_a.path()).unwrap();
+        let (lib, _cfg, workspace_a) = lib();
+        let workspace_b = TempDir::new().unwrap();
+        lib.register_workspace(workspace_a.path()).unwrap();
+        let _open = lib.open_workspace(workspace_a.path()).unwrap();
         let err = lib
-            .move_workspace(drive_a.path(), drive_b.path())
+            .move_workspace(workspace_a.path(), workspace_b.path())
             .unwrap_err();
         assert!(matches!(err, ChanError::WorkspaceAlreadyOpen));
     }
 
     #[test]
     fn move_workspace_returns_false_when_source_unregistered() {
-        let (lib, _cfg, _drive_a) = lib();
-        let drive_b = TempDir::new().unwrap();
+        let (lib, _cfg, _workspace_a) = lib();
+        let workspace_b = TempDir::new().unwrap();
         let missing = TempDir::new().unwrap();
         // Source is never registered; destination exists but is irrelevant.
-        assert!(!lib.move_workspace(missing.path(), drive_b.path()).unwrap());
+        assert!(!lib
+            .move_workspace(missing.path(), workspace_b.path())
+            .unwrap());
     }
 
-    /// Drives `sweep_orphans_in` against an isolated TempDir tree
+    /// Workspaces `sweep_orphans_in` against an isolated TempDir tree
     /// so the test never touches the host's real XDG_STATE_HOME /
     /// XDG_CACHE_HOME. The public `Library::sweep_orphans` is a
-    /// thin wrapper that supplies `paths::drive_subsystem_dirs()`
+    /// thin wrapper that supplies `paths::workspace_subsystem_dirs()`
     /// and the registry's metadata-key set; the structural behavior
     /// we care about lives in the inner fn.
     #[test]
@@ -912,7 +924,7 @@ mod tests {
     }
 
     #[test]
-    fn reset_workspace_rejects_when_drive_is_open_in_process() {
+    fn reset_workspace_rejects_when_workspace_is_open_in_process() {
         let (lib, _cfg, workspace) = lib();
         lib.register_workspace(workspace.path()).unwrap();
         let _open = lib.open_workspace(workspace.path()).unwrap();
@@ -935,7 +947,7 @@ mod tests {
     fn reset_workspace_returns_locked_when_other_process_holds_lock() {
         // Hand-crafted second Library handle on the same config to
         // simulate another process: each Library has its own
-        // live_drives map, so the in-process check on `lib2`
+        // live_workspaces map, so the in-process check on `lib2`
         // doesn't fire, and we hit the flock instead.
         let (lib, cfg, workspace) = lib();
         lib.register_workspace(workspace.path()).unwrap();
@@ -960,7 +972,7 @@ mod tests {
     }
 
     #[test]
-    fn reset_is_idempotent_on_never_opened_drive() {
+    fn reset_is_idempotent_on_never_opened_workspace() {
         let (lib, _cfg, workspace) = lib();
         lib.register_workspace(workspace.path()).unwrap();
         let report = lib
@@ -972,18 +984,18 @@ mod tests {
     }
 
     #[test]
-    fn reset_does_not_touch_other_drives_state() {
-        let (lib, _cfg, drive_a) = lib();
-        let drive_b = TempDir::new().unwrap();
-        lib.register_workspace(drive_a.path()).unwrap();
-        lib.register_workspace(drive_b.path()).unwrap();
-        populate_state(&lib, drive_a.path());
-        populate_state(&lib, drive_b.path());
+    fn reset_does_not_touch_other_workspaces_state() {
+        let (lib, _cfg, workspace_a) = lib();
+        let workspace_b = TempDir::new().unwrap();
+        lib.register_workspace(workspace_a.path()).unwrap();
+        lib.register_workspace(workspace_b.path()).unwrap();
+        populate_state(&lib, workspace_a.path());
+        populate_state(&lib, workspace_b.path());
 
-        let pa = paths_of(&lib, drive_a.path());
-        let pb = paths_of(&lib, drive_b.path());
+        let pa = paths_of(&lib, workspace_a.path());
+        let pb = paths_of(&lib, workspace_b.path());
 
-        lib.reset_workspace(drive_a.path(), ResetMode::State)
+        lib.reset_workspace(workspace_a.path(), ResetMode::State)
             .unwrap();
 
         // A wiped.
@@ -994,7 +1006,7 @@ mod tests {
         assert!(pb.sessions.exists());
 
         // Cleanup B so we don't leak state for the next run.
-        let _ = lib.reset_workspace(drive_b.path(), ResetMode::State);
+        let _ = lib.reset_workspace(workspace_b.path(), ResetMode::State);
     }
 
     /// Regression for the "delete-and-recreate at the same path
@@ -1052,7 +1064,7 @@ mod tests {
     }
 
     #[test]
-    fn unregister_returns_drive_already_open_when_handle_is_live() {
+    fn unregister_returns_workspace_already_open_when_handle_is_live() {
         // unregister_workspace now wipes state, which requires exclusive
         // access. Holding an open handle must produce a clear error
         // rather than silently leaving the registry row gone and

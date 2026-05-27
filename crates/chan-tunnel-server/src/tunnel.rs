@@ -25,7 +25,7 @@ use tokio::sync::Semaphore;
 
 use chan_tunnel_proto::Hello;
 
-use crate::driver::drive_tunnel;
+use crate::driver::workspace_tunnel;
 use crate::registry::Registry;
 use crate::{
     handshake_validated, ServerError, Validated, Validator, FIRST_STREAM_TIMEOUT,
@@ -44,20 +44,20 @@ const MAX_DRAINER_REJECTIONS: u32 = 16;
 /// Returns only when the listener errors; per-connection failures
 /// are logged and never bubble up.
 ///
-/// `max_drives_per_user` caps the number of distinct drives a
+/// `max_workspaces_per_user` caps the number of distinct workspaces a
 /// single user may have registered concurrently. `0` disables the
-/// limit. A reconnect of a drive the user already has registered is
+/// limit. A reconnect of a workspace the user already has registered is
 /// always allowed; the registry's last-writer-wins policy evicts
 /// the stale entry before the count is checked again.
 pub async fn serve_tunnel_listener(
     listener: TcpListener,
     validator: Arc<dyn Validator>,
     registry: Arc<Registry>,
-    max_drives_per_user: usize,
+    max_workspaces_per_user: usize,
 ) -> std::io::Result<()> {
     // Cap concurrent in-flight handshakes. The permit is held only
     // through the authenticate-and-handshake stages; once the
-    // per-tunnel driver takes over (drive_tunnel), the permit is
+    // per-tunnel driver takes over (workspace_tunnel), the permit is
     // dropped and the slot frees up for the next dial. This bounds
     // memory / task count against floods of half-open or slow peers.
     let inflight = Arc::new(Semaphore::new(MAX_INFLIGHT_HANDSHAKES));
@@ -78,9 +78,15 @@ pub async fn serve_tunnel_listener(
         let validator = validator.clone();
         let registry = registry.clone();
         tokio::spawn(async move {
-            if let Err(e) =
-                handle_tunnel_conn(tcp, peer, validator, registry, max_drives_per_user, permit)
-                    .await
+            if let Err(e) = handle_tunnel_conn(
+                tcp,
+                peer,
+                validator,
+                registry,
+                max_workspaces_per_user,
+                permit,
+            )
+            .await
             {
                 tracing::warn!(%peer, error = %e, "tunnel connection ended with error");
             } else {
@@ -90,14 +96,14 @@ pub async fn serve_tunnel_listener(
     }
 }
 
-/// Drive a single client's h2 connection through accept,
+/// Workspace a single client's h2 connection through accept,
 /// validate, handshake, register, and tunnel-driver lifecycle.
 async fn handle_tunnel_conn(
     tcp: TcpStream,
     peer: SocketAddr,
     validator: Arc<dyn Validator>,
     registry: Arc<Registry>,
-    max_drives_per_user: usize,
+    max_workspaces_per_user: usize,
     inflight_permit: tokio::sync::OwnedSemaphorePermit,
 ) -> Result<(), ServerError> {
     let _ = tcp.set_nodelay(true);
@@ -246,17 +252,17 @@ async fn handle_tunnel_conn(
     let registry_for_check = registry.clone();
     let (hello, validated, yconn) = handshake_validated(duplex, validated, |hello, validated| {
         check_public_scope(hello, validated)?;
-        if max_drives_per_user == 0 {
+        if max_workspaces_per_user == 0 {
             return Ok(());
         }
-        let drives = registry_for_check.list_drives_for(&validated.username);
-        let already_present = drives
+        let workspaces = registry_for_check.list_workspaces_for(&validated.username);
+        let already_present = workspaces
             .iter()
-            .any(|d| d.drive.as_ref() == hello.drive.as_str());
-        if !already_present && drives.len() >= max_drives_per_user {
-            return Err(ServerError::TooManyDrives {
+            .any(|d| d.workspace.as_ref() == hello.workspace.as_str());
+        if !already_present && workspaces.len() >= max_workspaces_per_user {
+            return Err(ServerError::TooManyWorkspaces {
                 user: validated.username.clone(),
-                max: max_drives_per_user,
+                max: max_workspaces_per_user,
             });
         }
         Ok(())
@@ -264,7 +270,7 @@ async fn handle_tunnel_conn(
     .await?;
 
     let user: Arc<str> = Arc::from(validated.username.as_str());
-    let drive: Arc<str> = Arc::from(hello.drive.as_str());
+    let workspace: Arc<str> = Arc::from(hello.workspace.as_str());
     let public = hello.public;
     // Authoritative cap enforcement: `pre_ack` above ran a
     // best-effort check before HelloAck so a non-racing dial fails
@@ -276,10 +282,10 @@ async fn handle_tunnel_conn(
     // transport disconnect.
     let (handle, open_rx, shutdown_rx) = match registry.register_with_cap(
         user.clone(),
-        drive.clone(),
+        workspace.clone(),
         public,
         Some(peer),
-        max_drives_per_user,
+        max_workspaces_per_user,
     ) {
         Ok(triple) => triple,
         Err(capped) => {
@@ -289,34 +295,34 @@ async fn handle_tunnel_conn(
                 "tunnel registration raced past pre_ack and hit the cap",
             );
             drop(yconn);
-            return Err(ServerError::TooManyDrives {
+            return Err(ServerError::TooManyWorkspaces {
                 user: capped.user,
                 max: capped.max,
             });
         }
     };
-    tracing::info!(%user, %drive, public, "tunnel registered");
+    tracing::info!(%user, %workspace, public, "tunnel registered");
 
     // Handshake is done; the in-flight slot belongs to the next
     // dialer. The per-tunnel driver runs without holding a permit.
     drop(inflight_permit);
 
-    drive_tunnel(yconn, open_rx, shutdown_rx, registry.clone(), handle).await;
-    tracing::info!(%user, %drive, "tunnel driver exited");
+    workspace_tunnel(yconn, open_rx, shutdown_rx, registry.clone(), handle).await;
+    tracing::info!(%user, %workspace, "tunnel driver exited");
     Ok(())
 }
 
 /// Enforce the `tunnel.public` scope when the client's Hello asks
-/// for a publicly-readable drive. `Hello.public` is a privilege
+/// for a publicly-readable workspace. `Hello.public` is a privilege
 /// escalation request (the public router skips the OAuth gate),
 /// so a token that does not carry `TUNNEL_PUBLIC_SCOPE` must not
 /// be able to grant it to itself at runtime.
 ///
 /// Returns `Err(ServerError::MissingPublicScope)` when the token
 /// is missing the scope; otherwise `Ok(())`. The check is a no-op
-/// when `Hello.public == false`, so per-drive choice within an
+/// when `Hello.public == false`, so per-workspace choice within an
 /// already-scoped token still works (one user, two `chan serve`
-/// instances: a public docs drive and a private notes drive).
+/// instances: a public docs workspace and a private notes workspace).
 fn check_public_scope(hello: &Hello, validated: &Validated) -> Result<(), ServerError> {
     if hello.public && !validated.scopes.iter().any(|s| s == TUNNEL_PUBLIC_SCOPE) {
         return Err(ServerError::MissingPublicScope);
@@ -376,7 +382,7 @@ mod tests {
         Hello {
             protocol: ProtocolVersion::V1,
             client_version: "chan/test".into(),
-            drive: "notes".into(),
+            workspace: "notes".into(),
             public,
         }
     }
@@ -410,8 +416,8 @@ mod tests {
 
     #[test]
     fn public_scope_check_allows_private_hello_with_extra_scope() {
-        // Token can host public, but this drive is private. The
-        // user retains per-drive choice (a public scope is "may
+        // Token can host public, but this workspace is private. The
+        // user retains per-workspace choice (a public scope is "may
         // host public", not "must host public").
         let v = validated_with(&[TUNNEL_SCOPE, TUNNEL_PUBLIC_SCOPE]);
         assert!(check_public_scope(&hello(false), &v).is_ok());

@@ -1,4 +1,4 @@
-//! Public router: serves `/{user}/{drive}/*rest` on
+//! Public router: serves `/{user}/{workspace}/*rest` on
 //! `drive.chan.app`.
 //!
 //! For each request, looks up the corresponding `TunnelHandle`,
@@ -37,7 +37,7 @@ use tower_http::limit::RequestBodyLimitLayer;
 use crate::registry::Registry;
 
 /// Public-side router knobs the host can override. Keep this
-/// permissive: the consumer is the drive-proxy host process, which
+/// permissive: the consumer is the workspace-proxy host process, which
 /// already runs behind nginx; tighter caps are operator-driven.
 #[derive(Debug, Clone)]
 pub struct PublicConfig {
@@ -132,7 +132,7 @@ const UPGRADE_IDLE_TIMEOUT: Duration = Duration::from_secs(300);
 
 /// Default cap on a forwarded request body. 10 MiB covers normal
 /// editor saves and small attachments; raise via `PublicConfig` for
-/// drives that handle larger media uploads. Uncapped would let the
+/// workspaces that handle larger media uploads. Uncapped would let the
 /// public side stream gigabytes through to chan-serve, paid for in
 /// the tunnel server's egress and chan-serve's memory.
 pub const DEFAULT_REQUEST_BODY_CAP: usize = 10 * 1024 * 1024;
@@ -140,7 +140,7 @@ pub const DEFAULT_REQUEST_BODY_CAP: usize = 10 * 1024 * 1024;
 /// Default cap on a response body streamed back to a public client.
 /// 100 MiB covers most media downloads (full-resolution images,
 /// short audio / video clips) without blocking large reads outright;
-/// drives that serve big files (e.g. dataset snapshots) bump it
+/// workspaces that serve big files (e.g. dataset snapshots) bump it
 /// explicitly. Uncapped would let a compromised chan-serve burn the
 /// tunnel server's egress bandwidth on a single request.
 pub const DEFAULT_RESPONSE_BODY_CAP: usize = 100 * 1024 * 1024;
@@ -161,7 +161,7 @@ pub fn public_router(registry: Arc<Registry>) -> Router {
 }
 
 /// Build the public router with explicit knobs. Use this when the
-/// host wants a non-default body cap (media-heavy drives) or to
+/// host wants a non-default body cap (media-heavy workspaces) or to
 /// chain in additional middleware.
 pub fn public_router_with(registry: Arc<Registry>, cfg: PublicConfig) -> Router {
     let allowed_host_suffixes: Arc<[String]> = cfg
@@ -178,9 +178,9 @@ pub fn public_router_with(registry: Arc<Registry>, cfg: PublicConfig) -> Router 
         response_body_cap: cfg.response_body_cap as u64,
     };
     let mut router = Router::new()
-        .route("/:user/:drive", any(handle_root))
-        .route("/:user/:drive/", any(handle_root))
-        .route("/:user/:drive/*rest", any(handle_rest))
+        .route("/:user/:workspace", any(handle_root))
+        .route("/:user/:workspace/", any(handle_root))
+        .route("/:user/:workspace/*rest", any(handle_rest))
         .layer(RequestBodyLimitLayer::new(cfg.request_body_cap))
         .with_state(state);
     if cfg.rate_limit_per_second > 0 {
@@ -224,27 +224,27 @@ fn host_allowed(host: Option<&str>, allowed: &[String]) -> bool {
 }
 
 async fn handle_root(
-    Path((user, drive)): Path<(String, String)>,
+    Path((user, workspace)): Path<(String, String)>,
     State(state): State<PublicState>,
     connect_info: Option<ConnectInfo<SocketAddr>>,
     request: Request<Body>,
 ) -> Response<Body> {
-    proxy(state, user, drive, String::new(), connect_info, request).await
+    proxy(state, user, workspace, String::new(), connect_info, request).await
 }
 
 async fn handle_rest(
-    Path((user, drive, rest)): Path<(String, String, String)>,
+    Path((user, workspace, rest)): Path<(String, String, String)>,
     State(state): State<PublicState>,
     connect_info: Option<ConnectInfo<SocketAddr>>,
     request: Request<Body>,
 ) -> Response<Body> {
-    proxy(state, user, drive, rest, connect_info, request).await
+    proxy(state, user, workspace, rest, connect_info, request).await
 }
 
 async fn proxy(
     state: PublicState,
     user: String,
-    drive: String,
+    workspace: String,
     rest: String,
     connect_info: Option<ConnectInfo<SocketAddr>>,
     mut request: Request<Body>,
@@ -266,7 +266,7 @@ async fn proxy(
         }
     }
 
-    let handle = match state.registry.get(&user, &drive) {
+    let handle = match state.registry.get(&user, &workspace) {
         Some(h) => h,
         None => return error(StatusCode::BAD_GATEWAY, "tunnel not connected"),
     };
@@ -424,7 +424,7 @@ async fn proxy(
 
 /// Build the request that goes into the tunnel: same method,
 /// headers, and body as the public request, with the path rewritten
-/// to drop the `/{user}/{drive}` prefix and the URI scheme/authority
+/// to drop the `/{user}/{workspace}` prefix and the URI scheme/authority
 /// dropped (h1 over a substream doesn't use them).
 ///
 /// Header policy (defense-in-depth against header spoofing from the
@@ -439,7 +439,7 @@ async fn proxy(
 ///   chan-serve).
 /// - `Authorization`, `Cookie`, and `Set-Cookie` request headers
 ///   are stripped. Public-router authentication, when present, is
-///   handled by the fronting drive-proxy layer; public visitors must
+///   handled by the fronting workspace-proxy layer; public visitors must
 ///   not be able to inject bearer tokens or cookie state into the
 ///   local chan-serve process.
 /// - `X-Forwarded-For`: if `trust_forwarded_for` is `false`

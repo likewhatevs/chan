@@ -54,7 +54,7 @@ impl HostedWorkspaceRuntime {
 
     fn shutdown(&self) {
         let _ = self.artifacts.shutdown_tx.send(true);
-        clear_drive_cell(&self.artifacts.drive_cell);
+        clear_workspace_cell(&self.artifacts.workspace_cell);
     }
 }
 
@@ -85,7 +85,7 @@ impl WorkspaceHost {
     /// `Library`. Desktop first-launch code can create/register the
     /// workspace before calling this method; the CLI compatibility path
     /// keeps its existing auto-create behavior outside the host.
-    pub async fn open_registered_drive(
+    pub async fn open_registered_workspace(
         &self,
         root: impl AsRef<Path>,
         config: ServeConfig,
@@ -156,7 +156,7 @@ impl WorkspaceHost {
     /// sends the shared shutdown signal before dropping the runtime,
     /// so active WebSockets and terminal sessions get a clean exit
     /// path.
-    pub fn close_drive(&self, prefix: &str) -> Result<bool, Error> {
+    pub fn close_workspace(&self, prefix: &str) -> Result<bool, Error> {
         let prefix = sanitize_prefix(prefix).map_err(Error::Config)?;
         let runtime = {
             let mut workspaces = self
@@ -182,7 +182,7 @@ impl WorkspaceHost {
     /// Build a dynamic router for all mounted workspaces.
     ///
     /// The returned router consults the host map on every request, so
-    /// later `open_*` and `close_drive` calls are visible without
+    /// later `open_*` and `close_workspace` calls are visible without
     /// rebuilding the outer axum app.
     pub fn router(self: Arc<Self>) -> Router {
         Router::new().fallback(host_dispatch).with_state(self)
@@ -199,15 +199,15 @@ impl WorkspaceHost {
     /// symlinked or non-normalized caller path still matches the
     /// canonical root the runtime stored at mount time. Lock
     /// poisoning and a drained workspace cell both read as "not live"
-    /// (mirrors `AppState::try_drive`); the caller then falls back
+    /// (mirrors `AppState::try_workspace`); the caller then falls back
     /// to a transient open against the registry.
-    pub fn live_drive(&self, root: &Path) -> Option<Arc<Workspace>> {
+    pub fn live_workspace(&self, root: &Path) -> Option<Arc<Workspace>> {
         let target = canonical_key(root);
         let workspaces = self.workspaces.read().ok()?;
         let runtime = workspaces
             .values()
             .find(|runtime| canonical_key(&runtime.root) == target)?;
-        let cell = runtime.artifacts.drive_cell.read().ok()?;
+        let cell = runtime.artifacts.workspace_cell.read().ok()?;
         Some(cell.as_ref()?.workspace.clone())
     }
 
@@ -265,8 +265,8 @@ fn display_prefix(prefix: &str) -> &str {
     }
 }
 
-fn clear_drive_cell(drive_cell: &Arc<RwLock<Option<WorkspaceCell>>>) {
-    let cell = match drive_cell.write() {
+fn clear_workspace_cell(workspace_cell: &Arc<RwLock<Option<WorkspaceCell>>>) {
+    let cell = match workspace_cell.write() {
         Ok(mut cell) => cell.take(),
         Err(_) => return,
     };
@@ -312,7 +312,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn host_routes_requests_to_the_matching_drive_prefix() {
+    async fn host_routes_requests_to_the_matching_workspace_prefix() {
         let cfg = tempfile::tempdir().expect("config dir");
         let root_a = tempfile::tempdir().expect("workspace a");
         let root_b = tempfile::tempdir().expect("workspace b");
@@ -323,10 +323,10 @@ mod tests {
         lib.register_workspace(root_b.path()).expect("register b");
         let host = Arc::new(WorkspaceHost::new(lib.clone()));
 
-        host.open_registered_drive(root_a.path(), serve_config("/a"))
+        host.open_registered_workspace(root_a.path(), serve_config("/a"))
             .await
             .expect("open a");
-        host.open_registered_drive(root_b.path(), serve_config("/b"))
+        host.open_registered_workspace(root_b.path(), serve_config("/b"))
             .await
             .expect("open b");
 
@@ -362,18 +362,18 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn host_close_drive_removes_the_route() {
+    async fn host_close_workspace_removes_the_route() {
         let cfg = tempfile::tempdir().expect("config dir");
         let root = tempfile::tempdir().expect("workspace");
         let lib = Library::open_at(cfg.path().join("config.toml")).expect("library");
         lib.register_workspace(root.path()).expect("register");
         let host = Arc::new(WorkspaceHost::new(lib.clone()));
-        host.open_registered_drive(root.path(), serve_config("/workspace"))
+        host.open_registered_workspace(root.path(), serve_config("/workspace"))
             .await
             .expect("open");
         let app = host.clone().router();
 
-        assert!(host.close_drive("/workspace").expect("close"));
+        assert!(host.close_workspace("/workspace").expect("close"));
         let response = app
             .oneshot(
                 Request::builder()
@@ -388,31 +388,31 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn host_close_drive_releases_handle_for_immediate_reopen() {
+    async fn host_close_workspace_releases_handle_for_immediate_reopen() {
         let cfg = tempfile::tempdir().expect("config dir");
         let root = tempfile::tempdir().expect("workspace");
         let lib = Library::open_at(cfg.path().join("config.toml")).expect("library");
         lib.register_workspace(root.path()).expect("register");
         let host = Arc::new(WorkspaceHost::new(lib.clone()));
 
-        host.open_registered_drive(root.path(), serve_config("/first"))
+        host.open_registered_workspace(root.path(), serve_config("/first"))
             .await
             .expect("open first");
-        assert!(host.close_drive("/first").expect("close first"));
+        assert!(host.close_workspace("/first").expect("close first"));
 
-        host.open_registered_drive(root.path(), serve_config("/second"))
+        host.open_registered_workspace(root.path(), serve_config("/second"))
             .await
             .expect("reopen after close");
     }
 
     #[tokio::test]
-    async fn live_drive_returns_the_mounted_runtime_handle() {
+    async fn live_workspace_returns_the_mounted_runtime_handle() {
         let cfg = tempfile::tempdir().expect("config dir");
         let root = tempfile::tempdir().expect("workspace");
         let lib = Library::open_at(cfg.path().join("config.toml")).expect("library");
         lib.register_workspace(root.path()).expect("register");
         let host = Arc::new(WorkspaceHost::new(lib.clone()));
-        host.open_registered_drive(root.path(), serve_config("/workspace"))
+        host.open_registered_workspace(root.path(), serve_config("/workspace"))
             .await
             .expect("open");
 
@@ -420,22 +420,22 @@ mod tests {
         // feature toggle off it reaches the flock-holding workspace rather
         // than tripping WorkspaceAlreadyOpen on a re-open.
         let live = host
-            .live_drive(root.path())
+            .live_workspace(root.path())
             .expect("live workspace present");
         let canonical = root.path().canonicalize().expect("canonical root");
         assert_eq!(live.root(), canonical.as_path());
 
         // A path that no runtime mounts reads as not live.
         let other = tempfile::tempdir().expect("other dir");
-        assert!(host.live_drive(other.path()).is_none());
+        assert!(host.live_workspace(other.path()).is_none());
 
         // After close, the handle is no longer live.
-        assert!(host.close_drive("/workspace").expect("close"));
-        assert!(host.live_drive(root.path()).is_none());
+        assert!(host.close_workspace("/workspace").expect("close"));
+        assert!(host.live_workspace(root.path()).is_none());
     }
 
     #[tokio::test]
-    async fn fresh_in_process_register_opens_without_drive_not_registered() {
+    async fn fresh_in_process_register_opens_without_workspace_not_registered() {
         // Regression guard for the desktop "workspace not registered" bug:
         // chan-desktop used to register a brand-new directory by
         // spawning `chan add` in a SEPARATE process, which mutated only
@@ -453,7 +453,7 @@ mod tests {
         let host = Arc::new(WorkspaceHost::new(lib));
 
         let hosted = host
-            .open_registered_drive(fresh.path(), serve_config("/fresh"))
+            .open_registered_workspace(fresh.path(), serve_config("/fresh"))
             .await
             .expect("fresh dir opens immediately after in-process register");
         let canonical = fresh.path().canonicalize().expect("canonical root");

@@ -191,7 +191,7 @@ fn dir_report_root_matches_all_scope() {
 fn dir_report_subdir_matches_prefix_scope() {
     // A subdirectory's cached aggregate must equal Scope::Prefix
     // for the same path. Tests the typical inspector use case:
-    // "what's in crates/chan-drive/?".
+    // "what's in crates/chan-workspace/?".
     let d = tempdir().unwrap();
     write(d.path(), "src/main.rs", "fn main() {}\n");
     write(d.path(), "src/lib.rs", "pub fn x() {}\n");
@@ -510,7 +510,7 @@ fn file_bucket_absent_in_old_jsonl_loads_as_none() {
     // Backward-compat invariant: a JSONL file written BEFORE
     // systacean-16 doesn't have the bucket field. The loader must
     // accept it cleanly + default the missing field to None, so
-    // older drives don't trip schema-mismatch on first open.
+    // older workspaces don't trip schema-mismatch on first open.
     let d = tempdir().unwrap();
     // Hand-write a JSONL stream with the pre-systacean-16 file row
     // shape (no `bucket` field). One meta + one file row.

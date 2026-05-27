@@ -105,7 +105,7 @@ pub async fn api_list_sessions(State(state): State<Arc<AppState>>) -> Response {
 #[cfg(test)]
 mod tests {
     #[test]
-    fn session_routes_wrap_sync_drive_io_in_spawn_blocking() {
+    fn session_routes_wrap_sync_workspace_io_in_spawn_blocking() {
         let source = include_str!("sessions.rs");
 
         assert!(source.contains("tokio::task::spawn_blocking(f)"));

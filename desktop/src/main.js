@@ -95,13 +95,13 @@ let homeDir = '';
 /// workspace, so the launcher disables the relevant controls and shows
 /// a progress banner while busy.
 let chanBusy = false;
-let defaultDrivePromptDismissed = false;
+let defaultWorkspacePromptDismissed = false;
 // Last rendered workspaces payload as a JSON string. The backend fires
 // `serves-changed` / `registry-changed` whenever the chan registry
 // is touched, which a running serve does often (timestamps, etc.).
 // Re-running `main.innerHTML = ...` on every event causes the row
 // to flicker. Skip the render when the payload hasn't changed.
-let lastDrivesJson = '';
+let lastWorkspacesJson = '';
 
 async function refresh() {
   if (!homeDir) {
@@ -109,8 +109,8 @@ async function refresh() {
   }
   const workspaces = await invoke('list_workspaces');
   const json = JSON.stringify(workspaces);
-  if (json !== lastDrivesJson) {
-    lastDrivesJson = json;
+  if (json !== lastWorkspacesJson) {
+    lastWorkspacesJson = json;
     render(workspaces);
   }
   return workspaces;
@@ -142,7 +142,7 @@ function renderPath(full) {
 
 async function boot() {
   let workspaces = await refresh();
-  await maybePromptDefaultDrive();
+  await maybePromptDefaultWorkspace();
   workspaces = await refresh();
   if (!booted && workspaces.length === 0) {
     booted = true;
@@ -152,8 +152,8 @@ async function boot() {
   }
 }
 
-async function maybePromptDefaultDrive() {
-  if (defaultDrivePromptDismissed) return;
+async function maybePromptDefaultWorkspace() {
+  if (defaultWorkspacePromptDismissed) return;
   let status;
   try {
     status = await invoke('default_workspace_status');
@@ -163,9 +163,9 @@ async function maybePromptDefaultDrive() {
   }
   if (!status) return;
   if (status.needs_factory_reset) {
-    const confirmed = await showMissingDefaultDriveDialog(status);
+    const confirmed = await showMissingDefaultWorkspaceDialog(status);
     if (!confirmed) {
-      defaultDrivePromptDismissed = true;
+      defaultWorkspacePromptDismissed = true;
       return;
     }
     try {
@@ -178,9 +178,9 @@ async function maybePromptDefaultDrive() {
     return;
   }
   if (!status.needs_prompt) return;
-  const choice = await showDefaultDriveDialog(status);
+  const choice = await showDefaultWorkspaceDialog(status);
   if (!choice.accepted) {
-    defaultDrivePromptDismissed = true;
+    defaultWorkspacePromptDismissed = true;
     return;
   }
   try {
@@ -196,7 +196,7 @@ async function maybePromptDefaultDrive() {
   await refresh();
 }
 
-function showMissingDefaultDriveDialog(status) {
+function showMissingDefaultWorkspaceDialog(status) {
   return new Promise((resolve) => {
     const overlay = document.createElement('div');
     overlay.className = 'preflight-overlay';
@@ -268,7 +268,7 @@ function showMissingDefaultDriveDialog(status) {
   });
 }
 
-function showDefaultDriveDialog(status) {
+function showDefaultWorkspaceDialog(status) {
   return new Promise((resolve) => {
     const overlay = document.createElement('div');
     overlay.className = 'preflight-overlay';
@@ -875,10 +875,10 @@ function bindRowEvents() {
         // opens on first registration. Going to the system browser
         // is reachable through the dropdown's "Open in Browser".
         const label = tr.dataset.tunnelLabel || '';
-        const workspace = tr.dataset.tunnelDrive || '';
+        const workspace = tr.dataset.tunnelWorkspace || '';
         if (!label || !workspace) return;
         try {
-          await invoke('open_tunneled_drive', { label, workspace });
+          await invoke('open_tunneled_workspace', { label, workspace });
         } catch (e) {
           showError(e);
         }
@@ -894,7 +894,7 @@ function bindRowEvents() {
       launch.addEventListener('click', async () => {
         if (!id) return;
         try {
-          await invoke('open_outbound_drive', { id });
+          await invoke('open_outbound_workspace', { id });
         } catch (e) {
           showError(e);
         }
@@ -906,7 +906,7 @@ function bindRowEvents() {
         if (!id) return;
         closeAllSplitMenus();
         try {
-          await invoke('remove_outbound_drive', { id });
+          await invoke('remove_outbound_workspace', { id });
         } catch (err) {
           showError(err);
         }
@@ -1166,7 +1166,7 @@ listen('system-notice', (e) => {
 });
 listen('chan-busy', (e) => {
   applyChanBusyState(e.payload || {});
-  lastDrivesJson = '';
+  lastWorkspacesJson = '';
   refresh().catch(showError);
 });
 
@@ -1268,7 +1268,7 @@ function renderTunnelPanelHtml(status) {
         </label>
         <label>Workspace
           <input id="tunnel-workspace-input" type="text" maxlength="32"
-                 value="${escapeAttr(status.preferred_drive || '')}"/>
+                 value="${escapeAttr(status.preferred_workspace || '')}"/>
         </label>
         <button class="btn primary" data-act="tunnel-start">Start listening</button>
       </div>
@@ -1375,7 +1375,7 @@ async function attachOutboundUrl() {
     return;
   }
   try {
-    await invoke('add_outbound_drive', { url, label });
+    await invoke('add_outbound_workspace', { url, label });
   } catch (e) {
     showError(e);
     return;

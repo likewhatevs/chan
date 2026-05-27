@@ -1,5 +1,5 @@
 // End-to-end import: parse a Google CSV blob, write per-contact
-// markdown files into a chosen drive directory, verify the on-disk
+// markdown files into a chosen workspace directory, verify the on-disk
 // shape, then re-run with overwrite vs. skip semantics.
 //
 // Mirrors the smoke.rs pattern: isolated config dir via Library::open_at
@@ -20,17 +20,17 @@ Organization 1 - Name,Organization 1 - Title
 ";
 
 #[test]
-fn end_to_end_import_into_drive() {
+fn end_to_end_import_into_workspace() {
     let cfg = TempDir::new().unwrap();
-    let drive_root = TempDir::new().unwrap();
+    let workspace_root = TempDir::new().unwrap();
     let lib = Library::open_at(cfg.path().join("config.toml")).unwrap();
-    lib.register_workspace(drive_root.path()).unwrap();
-    let drive = lib.open_workspace(drive_root.path()).unwrap();
+    lib.register_workspace(workspace_root.path()).unwrap();
+    let workspace = lib.open_workspace(workspace_root.path()).unwrap();
 
     // Parse + import.
     let contacts = parse_google_csv(CSV.as_bytes()).unwrap();
     assert_eq!(contacts.len(), 2, "blank row should be skipped");
-    let summary = drive
+    let summary = workspace
         .import_contacts("Contacts", contacts, ImportOpts::default())
         .unwrap();
     let counts = summary.counts();
@@ -39,11 +39,11 @@ fn end_to_end_import_into_drive() {
     assert_eq!(counts.failed, 0);
 
     // Files exist under the chosen dir.
-    assert!(drive.exists("Contacts/Jane Doe.md"));
-    assert!(drive.exists("Contacts/Bob Smith.md"));
+    assert!(workspace.exists("Contacts/Jane Doe.md"));
+    assert!(workspace.exists("Contacts/Bob Smith.md"));
 
     // Slim chan-block frontmatter + readable body bullets.
-    let jane = drive.read_text("Contacts/Jane Doe.md").unwrap();
+    let jane = workspace.read_text("Contacts/Jane Doe.md").unwrap();
     assert!(jane.starts_with("---\n"));
     assert!(jane.contains("kind: contact"));
     assert!(jane.contains("provider: google"));
@@ -66,24 +66,24 @@ fn end_to_end_import_into_drive() {
 #[test]
 fn re_import_default_skips_existing() {
     let cfg = TempDir::new().unwrap();
-    let drive_root = TempDir::new().unwrap();
+    let workspace_root = TempDir::new().unwrap();
     let lib = Library::open_at(cfg.path().join("config.toml")).unwrap();
-    lib.register_workspace(drive_root.path()).unwrap();
-    let drive = lib.open_workspace(drive_root.path()).unwrap();
+    lib.register_workspace(workspace_root.path()).unwrap();
+    let workspace = lib.open_workspace(workspace_root.path()).unwrap();
 
     let first = parse_google_csv(CSV.as_bytes()).unwrap();
-    let _ = drive
+    let _ = workspace
         .import_contacts("Contacts", first, ImportOpts::default())
         .unwrap();
 
     // Mutate Jane's file so we can detect whether the second run
     // touched it (default: no).
-    drive
+    workspace
         .write_text("Contacts/Jane Doe.md", "user-edited body\n")
         .unwrap();
 
     let second = parse_google_csv(CSV.as_bytes()).unwrap();
-    let summary = drive
+    let summary = workspace
         .import_contacts("Contacts", second, ImportOpts::default())
         .unwrap();
     let counts = summary.counts();
@@ -91,29 +91,29 @@ fn re_import_default_skips_existing() {
     assert_eq!(counts.wrote, 0);
     assert_eq!(counts.overwrote, 0);
 
-    let jane = drive.read_text("Contacts/Jane Doe.md").unwrap();
+    let jane = workspace.read_text("Contacts/Jane Doe.md").unwrap();
     assert_eq!(jane, "user-edited body\n", "skip must not touch the file");
 }
 
 #[test]
 fn re_import_with_overwrite_replaces() {
     let cfg = TempDir::new().unwrap();
-    let drive_root = TempDir::new().unwrap();
+    let workspace_root = TempDir::new().unwrap();
     let lib = Library::open_at(cfg.path().join("config.toml")).unwrap();
-    lib.register_workspace(drive_root.path()).unwrap();
-    let drive = lib.open_workspace(drive_root.path()).unwrap();
+    lib.register_workspace(workspace_root.path()).unwrap();
+    let workspace = lib.open_workspace(workspace_root.path()).unwrap();
 
     let first = parse_google_csv(CSV.as_bytes()).unwrap();
-    let _ = drive
+    let _ = workspace
         .import_contacts("Contacts", first, ImportOpts::default())
         .unwrap();
 
-    drive
+    workspace
         .write_text("Contacts/Jane Doe.md", "user-edited body\n")
         .unwrap();
 
     let second = parse_google_csv(CSV.as_bytes()).unwrap();
-    let summary = drive
+    let summary = workspace
         .import_contacts("Contacts", second, ImportOpts { overwrite: true })
         .unwrap();
     let counts = summary.counts();
@@ -121,26 +121,26 @@ fn re_import_with_overwrite_replaces() {
     assert_eq!(counts.skipped, 0);
     assert_eq!(counts.wrote, 0);
 
-    let jane = drive.read_text("Contacts/Jane Doe.md").unwrap();
+    let jane = workspace.read_text("Contacts/Jane Doe.md").unwrap();
     assert!(jane.contains("# Jane Doe"));
     assert!(!jane.contains("user-edited body"));
 }
 
 #[test]
-fn import_into_drive_root() {
+fn import_into_workspace_root() {
     let cfg = TempDir::new().unwrap();
-    let drive_root = TempDir::new().unwrap();
+    let workspace_root = TempDir::new().unwrap();
     let lib = Library::open_at(cfg.path().join("config.toml")).unwrap();
-    lib.register_workspace(drive_root.path()).unwrap();
-    let drive = lib.open_workspace(drive_root.path()).unwrap();
+    lib.register_workspace(workspace_root.path()).unwrap();
+    let workspace = lib.open_workspace(workspace_root.path()).unwrap();
 
     let contacts = parse_google_csv(CSV.as_bytes()).unwrap();
-    let summary = drive
+    let summary = workspace
         .import_contacts("", contacts, ImportOpts::default())
         .unwrap();
     assert_eq!(summary.counts().wrote, 2);
-    assert!(drive.exists("Jane Doe.md"));
-    assert!(drive.exists("Bob Smith.md"));
+    assert!(workspace.exists("Jane Doe.md"));
+    assert!(workspace.exists("Bob Smith.md"));
 }
 
 #[test]
@@ -149,25 +149,25 @@ fn imported_contacts_classified_as_contact_nodes_after_index() {
     // their frontmatter, and the indexer should pick that up so
     // Workspace::contacts returns them and a regular .md does not.
     let cfg = TempDir::new().unwrap();
-    let drive_root = TempDir::new().unwrap();
+    let workspace_root = TempDir::new().unwrap();
     let lib = Library::open_at(cfg.path().join("config.toml")).unwrap();
-    lib.register_workspace(drive_root.path()).unwrap();
-    let drive = lib.open_workspace(drive_root.path()).unwrap();
+    lib.register_workspace(workspace_root.path()).unwrap();
+    let workspace = lib.open_workspace(workspace_root.path()).unwrap();
 
     // One contact import + one plain note. Indexing both should
     // surface the contact only via Workspace::contacts while both
     // appear in Workspace::list_tree.
     let contacts = parse_google_csv(CSV.as_bytes()).unwrap();
-    drive
+    workspace
         .import_contacts("Contacts", contacts, ImportOpts::default())
         .unwrap();
-    drive
+    workspace
         .write_text("notes/journal.md", "# Journal\n\nUnrelated.\n")
         .unwrap();
 
-    drive.reindex(None).unwrap();
+    workspace.reindex(None).unwrap();
 
-    let contacts = drive.contacts().unwrap();
+    let contacts = workspace.contacts().unwrap();
     let paths: Vec<_> = contacts.iter().map(|c| c.rel_path.clone()).collect();
     assert!(paths.contains(&"Contacts/Jane Doe.md".to_string()));
     assert!(paths.contains(&"Contacts/Bob Smith.md".to_string()));
@@ -188,13 +188,13 @@ fn intra_batch_duplicate_name_skips_unrelated_existing_suffixed_file() {
     // second contact must NOT clobber that file under overwrite, nor
     // get a misleading "skipped" outcome attached to it under skip.
     let cfg = TempDir::new().unwrap();
-    let drive_root = TempDir::new().unwrap();
+    let workspace_root = TempDir::new().unwrap();
     let lib = Library::open_at(cfg.path().join("config.toml")).unwrap();
-    lib.register_workspace(drive_root.path()).unwrap();
-    let drive = lib.open_workspace(drive_root.path()).unwrap();
+    lib.register_workspace(workspace_root.path()).unwrap();
+    let workspace = lib.open_workspace(workspace_root.path()).unwrap();
 
-    drive.create_dir("Contacts").unwrap();
-    drive
+    workspace.create_dir("Contacts").unwrap();
+    workspace
         .write_text(
             "Contacts/Jane Smith (2).md",
             "user-owned, unrelated to the import\n",
@@ -209,7 +209,7 @@ E-mail 1 - Type,E-mail 1 - Value
 ";
     let contacts = parse_google_csv(dup.as_bytes()).unwrap();
     assert_eq!(contacts.len(), 2);
-    let summary = drive
+    let summary = workspace
         .import_contacts("Contacts", contacts, ImportOpts { overwrite: true })
         .unwrap();
     let counts = summary.counts();
@@ -217,12 +217,12 @@ E-mail 1 - Type,E-mail 1 - Value
     assert_eq!(counts.overwrote, 0);
 
     // The pre-existing user file is untouched.
-    let preserved = drive.read_text("Contacts/Jane Smith (2).md").unwrap();
+    let preserved = workspace.read_text("Contacts/Jane Smith (2).md").unwrap();
     assert_eq!(preserved, "user-owned, unrelated to the import\n");
 
     // The two import targets are "Jane Smith.md" and "Jane Smith (3).md".
-    assert!(drive.exists("Contacts/Jane Smith.md"));
-    assert!(drive.exists("Contacts/Jane Smith (3).md"));
+    assert!(workspace.exists("Contacts/Jane Smith.md"));
+    assert!(workspace.exists("Contacts/Jane Smith (3).md"));
 }
 
 #[test]
@@ -231,30 +231,30 @@ fn imported_contacts_are_reachable_by_email_substring_via_picker_filter() {
     // typed email fragment surfaces the matching contact through
     // the same code path the @ picker uses.
     let cfg = TempDir::new().unwrap();
-    let drive_root = TempDir::new().unwrap();
+    let workspace_root = TempDir::new().unwrap();
     let lib = Library::open_at(cfg.path().join("config.toml")).unwrap();
-    lib.register_workspace(drive_root.path()).unwrap();
-    let drive = lib.open_workspace(drive_root.path()).unwrap();
+    lib.register_workspace(workspace_root.path()).unwrap();
+    let workspace = lib.open_workspace(workspace_root.path()).unwrap();
 
     let contacts = parse_google_csv(CSV.as_bytes()).unwrap();
-    drive
+    workspace
         .import_contacts("Contacts", contacts, ImportOpts::default())
         .unwrap();
-    drive.reindex(None).unwrap();
+    workspace.reindex(None).unwrap();
 
     // Local-part match.
-    let hits = drive.contacts_filtered(Some("jane@x"), 10).unwrap();
+    let hits = workspace.contacts_filtered(Some("jane@x"), 10).unwrap();
     assert_eq!(hits.len(), 1);
     assert_eq!(hits[0].rel_path, "Contacts/Jane Doe.md");
     assert!(hits[0].emails.iter().any(|e| e == "jane@x.com"));
 
     // Domain match.
-    let hits = drive.contacts_filtered(Some("y.com"), 10).unwrap();
+    let hits = workspace.contacts_filtered(Some("y.com"), 10).unwrap();
     assert_eq!(hits.len(), 1);
     assert_eq!(hits[0].rel_path, "Contacts/Bob Smith.md");
 
     // Case insensitivity.
-    let hits = drive.contacts_filtered(Some("JANE@X.COM"), 10).unwrap();
+    let hits = workspace.contacts_filtered(Some("JANE@X.COM"), 10).unwrap();
     assert_eq!(hits.len(), 1);
     assert_eq!(hits[0].rel_path, "Contacts/Jane Doe.md");
 
@@ -270,21 +270,21 @@ fn removing_contact_frontmatter_demotes_node_back_to_file() {
     // Workspace::contacts. We can't change the importer's output to
     // simulate this cleanly, so synthesize a file directly.
     let cfg = TempDir::new().unwrap();
-    let drive_root = TempDir::new().unwrap();
+    let workspace_root = TempDir::new().unwrap();
     let lib = Library::open_at(cfg.path().join("config.toml")).unwrap();
-    lib.register_workspace(drive_root.path()).unwrap();
-    let drive = lib.open_workspace(drive_root.path()).unwrap();
+    lib.register_workspace(workspace_root.path()).unwrap();
+    let workspace = lib.open_workspace(workspace_root.path()).unwrap();
 
-    drive
+    workspace
         .write_text("people/x.md", "---\nchan:\n  kind: contact\n---\n# X\n")
         .unwrap();
-    drive.reindex(None).unwrap();
-    assert_eq!(drive.contacts().unwrap().len(), 1);
+    workspace.reindex(None).unwrap();
+    assert_eq!(workspace.contacts().unwrap().len(), 1);
 
     // Strip the contact tag.
-    drive
+    workspace
         .write_text("people/x.md", "# X\n\nJust a note now.\n")
         .unwrap();
-    drive.index_file("people/x.md").unwrap();
-    assert_eq!(drive.contacts().unwrap().len(), 0);
+    workspace.index_file("people/x.md").unwrap();
+    assert_eq!(workspace.contacts().unwrap().len(), 0);
 }

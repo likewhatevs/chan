@@ -573,7 +573,7 @@ fn resolve_link_dst(src: &str, target: &str, files: &std::collections::BTreeSet<
     let mut base = Path::new(src).parent();
     while let Some(dir) = base {
         if !dir.as_os_str().is_empty() {
-            if let Some(norm) = normalize_drive_rel(&dir.join(stripped)) {
+            if let Some(norm) = normalize_workspace_rel(&dir.join(stripped)) {
                 candidates.push(norm);
             }
         }
@@ -595,7 +595,7 @@ fn resolve_link_dst(src: &str, target: &str, files: &std::collections::BTreeSet<
 /// path includes an absolute prefix. Always emits `/` separators so
 /// the result matches workspace-relative file-set keys on Windows too,
 /// where `PathBuf::to_string_lossy` would otherwise yield `\`.
-fn normalize_drive_rel(p: &std::path::Path) -> Option<String> {
+fn normalize_workspace_rel(p: &std::path::Path) -> Option<String> {
     use std::path::Component;
     let mut parts: Vec<String> = Vec::new();
     for c in p.components() {
@@ -619,7 +619,9 @@ fn normalize_drive_rel(p: &std::path::Path) -> Option<String> {
 /// Returns an empty set on `list_tree` failure so callers degrade to
 /// the previous graph-files-only behaviour instead of failing the
 /// request.
-fn drive_disk_files(workspace: &chan_workspace::Workspace) -> std::collections::BTreeSet<String> {
+fn workspace_disk_files(
+    workspace: &chan_workspace::Workspace,
+) -> std::collections::BTreeSet<String> {
     match workspace.list_tree_filtered_unified() {
         Ok(entries) => entries
             .into_iter()
@@ -631,7 +633,7 @@ fn drive_disk_files(workspace: &chan_workspace::Workspace) -> std::collections::
 }
 
 /// Workspace-relative directory paths from the same walk
-/// `drive_disk_files` uses. Used to recognise markdown links whose
+/// `workspace_disk_files` uses. Used to recognise markdown links whose
 /// target is a directory (doc-navigation links like
 /// `[notes](../alex/)`); those don't carry between-file graph
 /// semantics and would otherwise fall through to ghost emission as
@@ -640,7 +642,9 @@ fn drive_disk_files(workspace: &chan_workspace::Workspace) -> std::collections::
 /// Returns an empty set on `list_tree` failure so callers degrade
 /// to "no directory filtering", i.e. the pre-fix behaviour, rather
 /// than failing the request.
-fn drive_disk_dirs(workspace: &chan_workspace::Workspace) -> std::collections::BTreeSet<String> {
+fn workspace_disk_dirs(
+    workspace: &chan_workspace::Workspace,
+) -> std::collections::BTreeSet<String> {
     match workspace.list_tree_filtered_unified() {
         Ok(entries) => entries
             .into_iter()
@@ -651,7 +655,7 @@ fn drive_disk_dirs(workspace: &chan_workspace::Workspace) -> std::collections::B
     }
 }
 
-/// Image subset of `drive_disk_files`. Kept as its own predicate so
+/// Image subset of `workspace_disk_files`. Kept as its own predicate so
 /// images stay distinguishable from other non-graph files (they get
 /// the Media node kind; other on-disk files become regular File
 /// nodes).
@@ -1444,7 +1448,7 @@ fn build_graph_view(
     // link resolver's universe; images are the image subset of that
     // walk (Media node kind) while everything else gets the regular
     // File treatment further down.
-    let disk_files = drive_disk_files(&workspace);
+    let disk_files = workspace_disk_files(&workspace);
     let image_files = image_subset(&disk_files);
     // Directory entries from the same walk. Markdown links whose
     // target is a directory (e.g. `[notes](../alex/)` from a phase
@@ -1452,7 +1456,7 @@ fn build_graph_view(
     // fall through to ghost emission as `kind: file` missing nodes;
     // we filter them out of the ghost path and drop the corresponding
     // edges below. See systacean-4.
-    let disk_dirs = drive_disk_dirs(&workspace);
+    let disk_dirs = workspace_disk_dirs(&workspace);
     let present_files: std::collections::BTreeSet<&str> = files
         .iter()
         .filter(|path| indexed_file_exists(&workspace, path))
@@ -1984,7 +1988,7 @@ where
     // regular on-disk file. Without this, `[link](LICENSE)` from a
     // README would not show up in LICENSE's backlinks because the
     // resolver couldn't tell that "LICENSE" was a real file.
-    let disk_files = drive_disk_files(workspace);
+    let disk_files = workspace_disk_files(workspace);
     let mut file_set: std::collections::BTreeSet<&str> = files.iter().map(String::as_str).collect();
     for f in &disk_files {
         file_set.insert(f.as_str());
@@ -2139,9 +2143,9 @@ mod tests {
     }
 
     #[test]
-    fn drive_disk_files_includes_non_markdown_targets() {
+    fn workspace_disk_files_includes_non_markdown_targets() {
         // The link resolver in `api_graph` walks the workspace once via
-        // `drive_disk_files` and uses the result as the universe of
+        // `workspace_disk_files` and uses the result as the universe of
         // valid link targets. Without this, a `[mit](LICENSE)` or
         // `[code](src/lib.rs)` link from a markdown file would fall
         // through to the ghost path, even though both files are
@@ -2153,7 +2157,7 @@ mod tests {
         put(root.path(), "scripts/build.sh", b"#!/bin/sh\n");
         put(root.path(), "notes/a.md", b"# A\n");
 
-        let disk = drive_disk_files(&workspace);
+        let disk = workspace_disk_files(&workspace);
         assert!(disk.contains("LICENSE"), "got {disk:?}");
         assert!(disk.contains("src/lib.rs"));
         assert!(disk.contains("scripts/build.sh"));
@@ -2187,7 +2191,7 @@ mod tests {
         // chan-workspace stores the verbatim authored target on the edge.
         assert_eq!(link.dst, "LICENSE");
 
-        let disk = drive_disk_files(&workspace);
+        let disk = workspace_disk_files(&workspace);
         assert!(disk.contains("LICENSE"), "got {disk:?}");
 
         let graph_files = graph.files().unwrap();
@@ -2214,18 +2218,18 @@ mod tests {
     }
 
     #[test]
-    fn drive_disk_dirs_includes_directory_entries() {
+    fn workspace_disk_dirs_includes_directory_entries() {
         // Pin the systacean-4 helper contract: every regular directory
         // the user might link to has to show up here so api_graph can
         // recognise `[label](some/dir/)` targets and keep them out of
-        // ghost emission. The companion `drive_disk_files` set is
+        // ghost emission. The companion `workspace_disk_files` set is
         // unaffected (it filters `is_dir` out the other way).
         let (_cfg, root, workspace) = open_workspace();
         put(root.path(), "docs/intro.md", b"# Intro\n");
         put(root.path(), "docs/agents/alice.md", b"# alice\n");
         put(root.path(), "notes/inner/deep.md", b"# deep\n");
 
-        let dirs = drive_disk_dirs(&workspace);
+        let dirs = workspace_disk_dirs(&workspace);
         assert!(dirs.contains("docs"), "got {dirs:?}");
         assert!(dirs.contains("docs/agents"));
         assert!(dirs.contains("notes"));
@@ -2236,7 +2240,7 @@ mod tests {
 
         // Files set stays clean of directories. The two helpers split
         // the same walk; pin that the split is exclusive.
-        let files = drive_disk_files(&workspace);
+        let files = workspace_disk_files(&workspace);
         assert!(files.contains("docs/intro.md"));
         assert!(!files.contains("docs"));
         assert!(!files.contains("docs/agents"));
@@ -2273,8 +2277,8 @@ mod tests {
             .expect("indexed markdown link edge");
         assert_eq!(link.dst, "some-dir");
 
-        let disk_files = drive_disk_files(&workspace);
-        let disk_dirs = drive_disk_dirs(&workspace);
+        let disk_files = workspace_disk_files(&workspace);
+        let disk_dirs = workspace_disk_dirs(&workspace);
         assert!(disk_dirs.contains("some-dir"), "got {disk_dirs:?}");
         // The link target is NOT a file on disk (it's the directory)
         // Pinning this rules out the systacean-2 path accidentally
@@ -2802,7 +2806,7 @@ mod tests {
     }
 
     #[test]
-    fn resolve_link_dst_drive_relative_match_wins() {
+    fn resolve_link_dst_workspace_relative_match_wins() {
         // Wiki-style targets store no extension; resolver tries .md
         // and lands on the indexed file at workspace root.
         let files: std::collections::BTreeSet<&str> =
@@ -2841,11 +2845,11 @@ mod tests {
     }
 
     #[test]
-    fn resolve_link_dst_ancestor_fallback_does_not_beat_drive_root() {
+    fn resolve_link_dst_ancestor_fallback_does_not_beat_workspace_root() {
         // The ancestor fallback must not shadow a genuine workspace-root
         // match: when both the workspace-root file and an ancestor-relative
         // file exist, workspace-root still wins (preserves the wiki-rooted
-        // convention asserted by resolve_link_dst_drive_relative_match_wins).
+        // convention asserted by resolve_link_dst_workspace_relative_match_wins).
         let files: std::collections::BTreeSet<&str> =
             ["x/y.md", "a/b/x/y.md", "a/b/c.md"].into_iter().collect();
         assert_eq!(resolve_link_dst("a/b/c.md", "x/y.md", &files), "x/y.md",);
@@ -2893,7 +2897,7 @@ mod tests {
     }
 
     #[test]
-    fn resolve_link_dst_image_attachments_drive_relative() {
+    fn resolve_link_dst_image_attachments_workspace_relative() {
         // `![](attachments/pic.png)` from any source resolves to the
         // image at the workspace root. Backlinks for the image now find
         // this edge instead of returning the stale "linked from: 0"
@@ -2923,7 +2927,7 @@ mod tests {
     #[test]
     fn resolve_link_dst_parent_escape_falls_back() {
         // `../../escape` from a one-level source escapes the workspace
-        // root: normalize_drive_rel returns None, so only the
+        // root: normalize_workspace_rel returns None, so only the
         // verbatim workspace-relative candidate is tried; both miss and
         // we surface the decoded original.
         let files: std::collections::BTreeSet<&str> = ["intro.md"].into_iter().collect();
@@ -3093,7 +3097,7 @@ mod tests {
     }
 
     #[test]
-    fn language_graph_empty_drive_returns_empty_payload() {
+    fn language_graph_empty_workspace_returns_empty_payload() {
         let graph = build_language_graph(&[], 0, None);
 
         assert_eq!(graph.max_depth, 0);

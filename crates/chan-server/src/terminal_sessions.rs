@@ -75,7 +75,7 @@ impl SubmitMode {
 
 #[derive(Debug, Clone)]
 pub struct RegistryConfig {
-    pub drive_root: PathBuf,
+    pub workspace_root: PathBuf,
     pub mcp_socket_path: Option<PathBuf>,
     pub control_socket_path: Option<PathBuf>,
     pub terminal: TerminalConfig,
@@ -754,7 +754,7 @@ struct Session {
     id: String,
     tab_name: Option<String>,
     window_id: Option<String>,
-    drive_root: PathBuf,
+    workspace_root: PathBuf,
     spawn_opts: CreateOptions,
     child_pid: Option<u32>,
     command_tx: std::sync::mpsc::Sender<PtyCommand>,
@@ -788,7 +788,7 @@ impl Session {
         let pty_system = native_pty_system();
         let pair = pty_system.openpty(opts.size)?;
         let mut cmd = command_builder(opts.command.as_deref());
-        let cwd = opts.cwd.unwrap_or_else(|| config.drive_root.clone());
+        let cwd = opts.cwd.unwrap_or_else(|| config.workspace_root.clone());
         cmd.cwd(&cwd);
         for (key, value) in &opts.env {
             cmd.env(key, value);
@@ -831,10 +831,10 @@ impl Session {
         // Served-workspace identity for the terminal and any agents it spawns.
         // No user-managed workspace name exists; the label derives from the root
         // path basename, matching how the UI labels a workspace.
-        let workspace_path = config.drive_root.to_string_lossy();
+        let workspace_path = config.workspace_root.to_string_lossy();
         cmd.env("CHAN_WORKSPACE_PATH", workspace_path.as_ref());
         let workspace_name = config
-            .drive_root
+            .workspace_root
             .file_name()
             .map(|s| s.to_string_lossy().into_owned())
             .unwrap_or_else(|| workspace_path.into_owned());
@@ -856,7 +856,7 @@ impl Session {
             id,
             tab_name,
             window_id,
-            drive_root: config.drive_root.clone(),
+            workspace_root: config.workspace_root.clone(),
             spawn_opts: CreateOptions {
                 size: opts.size,
                 tab_name: None,
@@ -1048,7 +1048,7 @@ impl Session {
 
     fn cwd(&self) -> Option<PathBuf> {
         let cwd = process_cwd(self.child_pid?)?;
-        path_inside_root(&cwd, &self.drive_root).then_some(cwd)
+        path_inside_root(&cwd, &self.workspace_root).then_some(cwd)
     }
 
     fn restart_options(&self) -> CreateOptions {
@@ -1642,10 +1642,10 @@ mod tests {
 
     fn test_config(ring_bytes: usize, cap: usize, idle: u64) -> RegistryConfig {
         let tmp = tempfile::tempdir().unwrap();
-        let drive_root = tmp.path().to_path_buf();
+        let workspace_root = tmp.path().to_path_buf();
         std::mem::forget(tmp);
         RegistryConfig {
-            drive_root,
+            workspace_root,
             mcp_socket_path: None,
             control_socket_path: None,
             terminal: TerminalConfig {
@@ -1673,7 +1673,7 @@ mod tests {
             id: "test-session".to_string(),
             tab_name: None,
             window_id: None,
-            drive_root: PathBuf::from("/"),
+            workspace_root: PathBuf::from("/"),
             spawn_opts: CreateOptions {
                 size: test_size(),
                 tab_name: None,
@@ -2660,7 +2660,7 @@ mod tests {
     }
 
     #[test]
-    fn drive_close_removes_sessions() {
+    fn workspace_close_removes_sessions() {
         let registry = Registry::new(test_config(1024, 4, 10));
         let handle = registry
             .create(CreateOptions {

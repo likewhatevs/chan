@@ -268,15 +268,15 @@ mod tests {
 
     fn open_workspace() -> (TempDir, TempDir, std::sync::Arc<chan_workspace::Workspace>) {
         let cfg = TempDir::new().unwrap();
-        let drive_root = TempDir::new().unwrap();
+        let workspace_root = TempDir::new().unwrap();
         let lib = chan_workspace::Library::open_at(cfg.path().join("config.toml")).unwrap();
-        lib.register_workspace(drive_root.path()).unwrap();
-        let workspace = lib.open_workspace(drive_root.path()).unwrap();
-        (cfg, drive_root, workspace)
+        lib.register_workspace(workspace_root.path()).unwrap();
+        let workspace = lib.open_workspace(workspace_root.path()).unwrap();
+        (cfg, workspace_root, workspace)
     }
 
     #[test]
-    fn inspector_payload_covers_drive_directory_text_and_binary() {
+    fn inspector_payload_covers_workspace_directory_text_and_binary() {
         let (_cfg, root, workspace) = open_workspace();
         put(root.path(), "src/lib.rs", b"fn main() {}\n");
         put(root.path(), "notes/today.md", b"# today\n\nbody\n");
@@ -288,9 +288,9 @@ mod tests {
         workspace.index_file("contacts/alex.md").unwrap();
         put(root.path(), "blob.bin", &[0, 1, 2, 3]);
 
-        let drive_payload = build_inspector_payload(&workspace, "").unwrap();
-        assert_eq!(drive_payload.kind, InspectorKind::Workspace);
-        let subtree = drive_payload.subtree.expect("workspace subtree");
+        let workspace_payload = build_inspector_payload(&workspace, "").unwrap();
+        assert_eq!(workspace_payload.kind, InspectorKind::Workspace);
+        let subtree = workspace_payload.subtree.expect("workspace subtree");
         assert_eq!(subtree.files, 4);
         assert_eq!(subtree.directories, 3);
         assert_eq!(subtree.file_kinds.get("document"), Some(&1));
@@ -298,7 +298,7 @@ mod tests {
         assert_eq!(subtree.file_kinds.get("text"), Some(&1));
         assert_eq!(subtree.file_kinds.get("binary"), Some(&1));
         assert!(
-            drive_payload
+            workspace_payload
                 .report_summary
                 .as_ref()
                 .expect("workspace report")
@@ -387,7 +387,7 @@ mod tests {
     }
 
     #[test]
-    fn empty_path_normalizes_to_drive_root() {
+    fn empty_path_normalizes_to_workspace_root() {
         assert_eq!(normalize_path("").unwrap(), "");
         assert_eq!(normalize_path("/").unwrap(), "");
         assert_eq!(normalize_path("./").unwrap(), "");

@@ -94,7 +94,7 @@ license-file = ["../../LICENSE", "0"]
 extended-description = """
 chan is a notes app with an embedded web editor: a CLI plus an
 HTTP server that serves a Svelte WYSIWYG editor for plain
-markdown drives. Cross-file [[wiki-link]] autocomplete and
+markdown workspaces. Cross-file [[wiki-link]] autocomplete and
 BM25 content search included."""
 section = "utility"
 priority = "optional"

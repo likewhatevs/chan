@@ -102,7 +102,7 @@ pub fn pick_socket_path() -> PathBuf {
 #[cfg(unix)]
 pub fn start(
     socket_path: PathBuf,
-    drive_cell: Arc<RwLock<Option<WorkspaceCell>>>,
+    workspace_cell: Arc<RwLock<Option<WorkspaceCell>>>,
     events_tx: broadcast::Sender<String>,
     self_writes: Arc<crate::self_writes::SelfWrites>,
 ) -> std::io::Result<ControlHandle> {
@@ -119,7 +119,7 @@ pub fn start(
                     continue;
                 }
             };
-            let drive_cell = drive_cell.clone();
+            let workspace_cell = workspace_cell.clone();
             let events_tx = events_tx.clone();
             let self_writes = self_writes.clone();
             tokio::spawn(async move {
@@ -131,7 +131,7 @@ pub fn start(
                         message: "empty control request".into(),
                     },
                     Ok(_) => match serde_json::from_str::<ControlRequest>(&line) {
-                        Ok(req) => handle_request(req, &drive_cell, &events_tx, &self_writes),
+                        Ok(req) => handle_request(req, &workspace_cell, &events_tx, &self_writes),
                         Err(e) => ControlResponse::Error {
                             message: format!("invalid control request: {e}"),
                         },
@@ -157,7 +157,7 @@ pub fn start(
 #[cfg(not(unix))]
 pub fn start(
     _socket_path: PathBuf,
-    _drive_cell: Arc<RwLock<Option<WorkspaceCell>>>,
+    _workspace_cell: Arc<RwLock<Option<WorkspaceCell>>>,
     _events_tx: broadcast::Sender<String>,
     _self_writes: Arc<crate::self_writes::SelfWrites>,
 ) -> std::io::Result<ControlHandle> {
@@ -170,7 +170,7 @@ pub fn start(
 #[cfg(unix)]
 fn handle_request(
     req: ControlRequest,
-    drive_cell: &Arc<RwLock<Option<WorkspaceCell>>>,
+    workspace_cell: &Arc<RwLock<Option<WorkspaceCell>>>,
     events_tx: &broadcast::Sender<String>,
     self_writes: &crate::self_writes::SelfWrites,
 ) -> ControlResponse {
@@ -182,7 +182,7 @@ fn handle_request(
                 };
             }
             let workspace = {
-                let cell = match drive_cell.read() {
+                let cell = match workspace_cell.read() {
                     Ok(cell) => cell,
                     Err(_) => {
                         return ControlResponse::Error {
@@ -213,7 +213,7 @@ fn open_path(
     requested: &Path,
     events_tx: &broadcast::Sender<String>,
 ) -> Result<String, String> {
-    let rel = abs_to_drive_rel(workspace.root(), requested)?;
+    let rel = abs_to_workspace_rel(workspace.root(), requested)?;
     if rel.is_empty() {
         let frame = WindowCommandFrame {
             frame_type: "window_command",
@@ -270,7 +270,7 @@ fn open_path(
 }
 
 #[cfg(unix)]
-fn abs_to_drive_rel(root: &Path, requested: &Path) -> Result<String, String> {
+fn abs_to_workspace_rel(root: &Path, requested: &Path) -> Result<String, String> {
     if !requested.is_absolute() {
         return Err("control path must be absolute".into());
     }
@@ -335,9 +335,9 @@ mod tests {
     }
 
     #[test]
-    fn handle_request_reports_poisoned_drive_cell() {
-        let drive_cell: Arc<RwLock<Option<WorkspaceCell>>> = Arc::new(RwLock::new(None));
-        let poisoned = drive_cell.clone();
+    fn handle_request_reports_poisoned_workspace_cell() {
+        let workspace_cell: Arc<RwLock<Option<WorkspaceCell>>> = Arc::new(RwLock::new(None));
+        let poisoned = workspace_cell.clone();
         let _ = std::thread::spawn(move || {
             let _guard = poisoned.write().expect("poison setup");
             panic!("poison workspace cell");
@@ -351,7 +351,7 @@ mod tests {
                 window_id: "window-a".to_string(),
                 path: PathBuf::from("/tmp/note.md"),
             },
-            &drive_cell,
+            &workspace_cell,
             &tx,
             &self_writes,
         );

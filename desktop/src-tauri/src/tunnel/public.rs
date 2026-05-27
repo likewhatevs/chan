@@ -3,11 +3,11 @@
 //! Each unique tenant label (= `Validated.username` returned by
 //! `LocalValidator`, which equals the bearer token verbatim) gets
 //! its own axum listener bound on `127.0.0.1:0`. Visitor URL is
-//! `http://127.0.0.1:<port>/<drive>/...`, matching chan-server's
-//! `chan-prefix=/<drive>` so the SPA's relative fetches resolve.
+//! `http://127.0.0.1:<port>/<workspace>/...`, matching chan-server's
+//! `chan-prefix=/<workspace>` so the SPA's relative fetches resolve.
 //!
 //! The audited `chan_tunnel_server::public_router` only registers
-//! two-segment routes (`/:user/:drive/...`). To present a
+//! two-segment routes (`/:user/:workspace/...`). To present a
 //! one-segment URL while reusing that router unchanged, we wrap it
 //! in a tower `Layer` that prepends `/<label>` to every incoming
 //! request URI before routing. The prepended segment is captured at
@@ -20,7 +20,7 @@
 //! would never affect which route was picked. To run BEFORE
 //! routing, the wrapped service is mounted as the fallback of an
 //! empty outer router. With no other routes, every request flows
-//! through the layer and into the inner router, whose `/:user/:drive`
+//! through the layer and into the inner router, whose `/:user/:workspace`
 //! match then sees the rewritten path.
 //!
 //! Per-tenant origins are also a security feature: the browser's
@@ -142,7 +142,7 @@ fn prepend_path(uri: &Uri, prefix: &str) -> Option<Uri> {
 /// shuts the server down.
 ///
 /// 127.0.0.1 is hard-coded. There is no config knob to change the
-/// bind host. Any external sharing of a tunneled drive goes through
+/// bind host. Any external sharing of a tunneled workspace goes through
 /// the SSH tunnel or a future gateway integration, never through
 /// rebinding this listener.
 pub async fn spawn_tenant_listener(
@@ -158,7 +158,7 @@ pub async fn spawn_tenant_listener(
     // path rewrite happens before routing. `Router::layer` would
     // attach the middleware to every Route post-match, which is too
     // late — we want the inner router to see the rewritten path
-    // when picking `/:user/:drive/*rest`. Hence: mount the inner
+    // when picking `/:user/:workspace/*rest`. Hence: mount the inner
     // router as the fallback service of an empty outer router, with
     // the PrependPath layer wrapped around it. The outer router has
     // no routes of its own, so every request flows through the

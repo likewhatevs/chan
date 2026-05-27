@@ -71,7 +71,7 @@ const REINDEX_RESERVE: u64 = 64;
 /// the cadence modest.
 const REINDEX_BACKOFF_STEP: std::time::Duration = std::time::Duration::from_millis(25);
 
-static DRIVE_GATE: OnceLock<WorkspaceGate> = OnceLock::new();
+static WORKSPACE_GATE: OnceLock<WorkspaceGate> = OnceLock::new();
 
 pub(crate) fn snapshot() -> Option<FdSnapshot> {
     fd_snapshot()
@@ -101,12 +101,12 @@ pub(crate) fn tantivy_writer_budget(default_worker_threads: usize) -> TantivyWri
     }
 }
 
-pub(crate) fn acquire_drive_permit() -> WorkspacePermit {
-    let gate = drive_gate();
+pub(crate) fn acquire_workspace_permit() -> WorkspacePermit {
+    let gate = workspace_gate();
     let mut state = gate.state.lock().unwrap_or_else(|e| e.into_inner());
     loop {
         let capacity = match snapshot() {
-            Some(snap) => active_drive_capacity_for(snap),
+            Some(snap) => active_workspace_capacity_for(snap),
             None => MAX_ACTIVE_WORKSPACES,
         };
         if state.active < capacity {
@@ -199,7 +199,7 @@ fn tantivy_writer_budget_for(
     }
 }
 
-fn active_drive_capacity_for(snap: FdSnapshot) -> usize {
+fn active_workspace_capacity_for(snap: FdSnapshot) -> usize {
     if snap.limit <= LOW_LIMIT {
         LOW_LIMIT_ACTIVE_WORKSPACES
     } else if snap.remaining() < TIGHT_HEADROOM {
@@ -211,8 +211,8 @@ fn active_drive_capacity_for(snap: FdSnapshot) -> usize {
     }
 }
 
-fn drive_gate() -> &'static WorkspaceGate {
-    DRIVE_GATE.get_or_init(|| WorkspaceGate {
+fn workspace_gate() -> &'static WorkspaceGate {
+    WORKSPACE_GATE.get_or_init(|| WorkspaceGate {
         state: Mutex::new(WorkspaceGateState::default()),
         ready: Condvar::new(),
     })
@@ -220,7 +220,7 @@ fn drive_gate() -> &'static WorkspaceGate {
 
 impl Drop for WorkspacePermit {
     fn drop(&mut self) {
-        let gate = drive_gate();
+        let gate = workspace_gate();
         let mut state = gate.state.lock().unwrap_or_else(|e| e.into_inner());
         state.active = state.active.saturating_sub(1);
         gate.ready.notify_one();
@@ -312,21 +312,24 @@ mod tests {
     }
 
     #[test]
-    fn active_drive_capacity_is_bounded_on_low_soft_limit() {
+    fn active_workspace_capacity_is_bounded_on_low_soft_limit() {
         let snap = FdSnapshot {
             open: 20,
             limit: 256,
         };
-        assert_eq!(active_drive_capacity_for(snap), LOW_LIMIT_ACTIVE_WORKSPACES);
+        assert_eq!(
+            active_workspace_capacity_for(snap),
+            LOW_LIMIT_ACTIVE_WORKSPACES
+        );
     }
 
     #[test]
-    fn active_drive_capacity_uses_internal_ceiling_with_clear_headroom() {
+    fn active_workspace_capacity_uses_internal_ceiling_with_clear_headroom() {
         let snap = FdSnapshot {
             open: 20,
             limit: 4096,
         };
-        assert_eq!(active_drive_capacity_for(snap), MAX_ACTIVE_WORKSPACES);
+        assert_eq!(active_workspace_capacity_for(snap), MAX_ACTIVE_WORKSPACES);
     }
 
     #[test]

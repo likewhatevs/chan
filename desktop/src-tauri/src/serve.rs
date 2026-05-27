@@ -72,7 +72,7 @@ pub async fn start(app: AppHandle, state: Arc<AppState>, key: String) -> Result<
         serves.insert(key.clone(), ServeHandle::embedded(prefix, url.clone()));
     }
     let _ = app.emit(SERVES_CHANGED, ());
-    if let Err(e) = spawn_local_drive_window(&app, &key, &url) {
+    if let Err(e) = spawn_local_workspace_window(&app, &key, &url) {
         if let Some(handle) = state.serves.lock().unwrap().remove(&key) {
             stop_handle(None, &state, &key, handle);
         }
@@ -121,7 +121,7 @@ fn stop_handle(app: Option<&AppHandle>, state: &AppState, key: &str, handle: Ser
         }
     }
     if let Some(app) = app {
-        close_local_drive_windows(app, key);
+        close_local_workspace_windows(app, key);
         let _ = app.emit(SERVES_CHANGED, ());
     }
 }
@@ -131,7 +131,7 @@ fn stop_handle(app: Option<&AppHandle>, state: &AppState, key: &str, handle: Ser
 /// has opened more than one (close-all on serve exit, capability
 /// matching). Tauri labels must match `[a-zA-Z0-9_-]+`, and workspace
 /// keys are filesystem paths, so we hash the key.
-pub fn drive_window_prefix(key: &str) -> String {
+pub fn workspace_window_prefix(key: &str) -> String {
     let mut h = DefaultHasher::new();
     key.hash(&mut h);
     format!("workspace-{:016x}", h.finish())
@@ -141,19 +141,19 @@ pub fn drive_window_prefix(key: &str) -> String {
 /// Every call yields a distinct label so multi-window works; the
 /// prefix is still identifiable for cleanup. Format:
 /// `workspace-<hash>-<seq>` where `seq` is a per-process atomic.
-pub fn new_drive_window_label(key: &str) -> String {
-    format!("{}-{}", drive_window_prefix(key), next_window_seq())
+pub fn new_workspace_window_label(key: &str) -> String {
+    format!("{}-{}", workspace_window_prefix(key), next_window_seq())
 }
 
 /// Window title for a local-workspace webview: the workspace path verbatim.
 /// `fullstack-b-14` swapped the earlier "chan workspace: <basename>"
 /// shape after @@Alex flagged that the path is the more useful
 /// signal in the OS window switcher than the prefix + basename.
-fn drive_title(key: &str) -> String {
+fn workspace_title(key: &str) -> String {
     key.to_string()
 }
 
-/// Stable window-label prefix for a tunneled drive, namespaced
+/// Stable window-label prefix for a tunneled workspace, namespaced
 /// separately from `workspace-*` so a local workspace path and a tunneled
 /// workspace slug don't collide.
 pub fn tunnel_window_prefix(tenant_label: &str, workspace: &str) -> String {
@@ -163,8 +163,8 @@ pub fn tunnel_window_prefix(tenant_label: &str, workspace: &str) -> String {
     format!("tunnel-{:016x}", h.finish())
 }
 
-/// Fresh, unique window label for a tunneled drive webview. Same
-/// shape as `new_drive_window_label`.
+/// Fresh, unique window label for a tunneled workspace webview. Same
+/// shape as `new_workspace_window_label`.
 pub fn new_tunnel_window_label(tenant_label: &str, workspace: &str) -> String {
     format!(
         "{}-{}",
@@ -186,7 +186,7 @@ pub fn new_outbound_window_label(id: &str) -> String {
 }
 
 /// True when a Tauri label belongs to a per-workspace webview.
-pub fn is_drive_webview_label(label: &str) -> bool {
+pub fn is_workspace_webview_label(label: &str) -> bool {
     label.starts_with("workspace-")
         || label.starts_with("tunnel-")
         || label.starts_with("outbound-")
@@ -201,28 +201,28 @@ pub fn is_drive_webview_label(label: &str) -> bool {
 /// pushes the closing window's state back to the stack so the next
 /// open repeats the restore. The Tauri close handler does NOT stop
 /// the underlying local runtime; the On toggle (plus
-/// `close_local_drive_windows` on runtime teardown) remains the single
+/// `close_local_workspace_windows` on runtime teardown) remains the single
 /// authority on workspace lifecycle.
-pub fn spawn_local_drive_window(app: &AppHandle, key: &str, url: &str) -> Result<(), String> {
-    ensure_window_capacity(app, &drive_window_prefix(key))?;
+pub fn spawn_local_workspace_window(app: &AppHandle, key: &str, url: &str) -> Result<(), String> {
+    ensure_window_capacity(app, &workspace_window_prefix(key))?;
     let config_key = config::local_window_key(key);
-    let restore = pop_compatible_config(app, &config_key, &drive_window_prefix(key));
+    let restore = pop_compatible_config(app, &config_key, &workspace_window_prefix(key));
     let label = match restore.as_ref() {
         Some(c) => c.window_label.clone(),
-        None => new_drive_window_label(key),
+        None => new_workspace_window_label(key),
     };
     let url_hash = restore
         .as_ref()
         .map(|c| c.url_hash.clone())
         .unwrap_or_default();
     let zoom_level = restore.as_ref().map(|c| c.zoom_level).unwrap_or(1.0);
-    let title = drive_title(key);
-    build_drive_window(app, &label, &title, url, &url_hash, config_key, zoom_level)
+    let title = workspace_title(key);
+    build_workspace_window(app, &label, &title, url, &url_hash, config_key, zoom_level)
 }
 
 /// Spawn a new tunneled-workspace webview window. Same multi-window
 /// semantics and config-stack restore as the local variant.
-pub fn spawn_tunneled_drive_window(
+pub fn spawn_tunneled_workspace_window(
     app: &AppHandle,
     tenant_label: &str,
     workspace: &str,
@@ -242,16 +242,16 @@ pub fn spawn_tunneled_drive_window(
         .unwrap_or_default();
     let zoom_level = restore.as_ref().map(|c| c.zoom_level).unwrap_or(1.0);
     // `fullstack-b-14`: matches the local-workspace title shape; the
-    // tunneled drive has no local filesystem path, so we use the
+    // tunneled workspace has no local filesystem path, so we use the
     // closest analog ("<tenant>·<workspace>") with no prefix.
     let title = format!("{tenant_label} \u{00b7} {workspace}");
-    build_drive_window(app, &label, &title, url, &url_hash, config_key, zoom_level)
+    build_workspace_window(app, &label, &title, url, &url_hash, config_key, zoom_level)
 }
 
 /// Spawn a new outbound URL webview window. The desktop does not own
 /// the remote process; this only creates another webview pointed at
 /// the persisted URL.
-pub fn spawn_outbound_drive_window(
+pub fn spawn_outbound_workspace_window(
     app: &AppHandle,
     id: &str,
     title: &str,
@@ -270,7 +270,7 @@ pub fn spawn_outbound_drive_window(
         .map(|c| c.url_hash.clone())
         .unwrap_or_default();
     let zoom_level = restore.as_ref().map(|c| c.zoom_level).unwrap_or(1.0);
-    build_drive_window(app, &label, title, url, &url_hash, config_key, zoom_level)
+    build_workspace_window(app, &label, title, url, &url_hash, config_key, zoom_level)
 }
 
 /// Pop the top-of-stack window config for `config_key` only if the
@@ -308,8 +308,8 @@ fn pop_compatible_config(
 }
 
 /// Build and show a chan-style workspace webview window on the main
-/// thread. Internal: call `spawn_local_drive_window` /
-/// `spawn_tunneled_drive_window` / `spawn_outbound_drive_window`
+/// thread. Internal: call `spawn_local_workspace_window` /
+/// `spawn_tunneled_workspace_window` / `spawn_outbound_workspace_window`
 /// from outside. Centralising the
 /// key-bridge JS, the size defaults, the zoom-hotkey polyfill, and
 /// the drag-drop handler off in one place means workspace UX changes
@@ -325,7 +325,7 @@ fn pop_compatible_config(
 /// or `tunnel_window_key`). Stamped onto the close handler so a
 /// user-initiated close pushes the window's final URL hash back
 /// into the LRU stack.
-fn build_drive_window(
+fn build_workspace_window(
     app: &AppHandle,
     window_label: &str,
     title: &str,
@@ -480,22 +480,22 @@ fn ensure_window_capacity(app: &AppHandle, prefix: &str) -> Result<(), String> {
 /// the local runtime is closed. Walks `webview_windows()` and
 /// matches by prefix because the user may have opened several
 /// windows for the same workspace.
-pub fn close_local_drive_windows(app: &AppHandle, key: &str) {
-    close_windows_with_prefix(app, &drive_window_prefix(key))
+pub fn close_local_workspace_windows(app: &AppHandle, key: &str) {
+    close_windows_with_prefix(app, &workspace_window_prefix(key))
 }
 
-/// Destroy every webview window opened for this tunneled drive.
+/// Destroy every webview window opened for this tunneled workspace.
 /// Used by the tunnel supervisor when a (label, workspace) pair drops
 /// out of the registry; the remote has gone away, so the per-tenant
 /// listener no longer routes for it and any open window now points
 /// at nothing useful.
-pub fn close_tunneled_drive_windows(app: &AppHandle, tenant_label: &str, workspace: &str) {
+pub fn close_tunneled_workspace_windows(app: &AppHandle, tenant_label: &str, workspace: &str) {
     close_windows_with_prefix(app, &tunnel_window_prefix(tenant_label, workspace))
 }
 
 /// Destroy every webview window opened for this outbound URL
 /// attachment. Used when the user forgets the attachment row.
-pub fn close_outbound_drive_windows(app: &AppHandle, id: &str) {
+pub fn close_outbound_workspace_windows(app: &AppHandle, id: &str) {
     close_windows_with_prefix(app, &outbound_window_prefix(id))
 }
 
@@ -504,7 +504,7 @@ pub fn close_outbound_drive_windows(app: &AppHandle, id: &str) {
 /// tunnel module on `stop_listening`: the tunnel listener and
 /// every per-tenant listener are about to be cancelled, so the
 /// open windows would all error on their next request anyway.
-pub fn close_all_tunneled_drive_windows(app: &AppHandle) {
+pub fn close_all_tunneled_workspace_windows(app: &AppHandle) {
     close_windows_with_prefix(app, "tunnel-")
 }
 
@@ -710,7 +710,7 @@ mod tests {
     }
 
     #[test]
-    fn invoke_handler_registers_drive_features_ipcs() {
+    fn invoke_handler_registers_workspace_features_ipcs() {
         // `fullstack-b-28a`: the launcher's expand panel calls
         // `get_workspace_features` on first open + `set_workspace_features`
         // on every checkbox flip. Pin both sides so a future rename
@@ -725,16 +725,16 @@ mod tests {
     #[test]
     fn invoke_handler_registers_outbound_attach_ipcs() {
         const MAIN_RS: &str = include_str!("main.rs");
-        assert!(MAIN_RS.contains("add_outbound_drive,"));
-        assert!(MAIN_RS.contains("open_outbound_drive,"));
-        assert!(MAIN_RS.contains("remove_outbound_drive,"));
-        assert!(MAIN_RS.contains("fn add_outbound_drive("));
-        assert!(MAIN_RS.contains("fn open_outbound_drive("));
-        assert!(MAIN_RS.contains("fn remove_outbound_drive("));
+        assert!(MAIN_RS.contains("add_outbound_workspace,"));
+        assert!(MAIN_RS.contains("open_outbound_workspace,"));
+        assert!(MAIN_RS.contains("remove_outbound_workspace,"));
+        assert!(MAIN_RS.contains("fn add_outbound_workspace("));
+        assert!(MAIN_RS.contains("fn open_outbound_workspace("));
+        assert!(MAIN_RS.contains("fn remove_outbound_workspace("));
     }
 
     #[test]
-    fn invoke_handler_registers_default_drive_ipcs() {
+    fn invoke_handler_registers_default_workspace_ipcs() {
         const MAIN_RS: &str = include_str!("main.rs");
         assert!(MAIN_RS.contains("default_workspace_status,"));
         assert!(MAIN_RS.contains("choose_default_workspace,"));
@@ -747,7 +747,7 @@ mod tests {
     }
 
     #[test]
-    fn pick_and_add_shows_preflight_dialog_before_add_drive() {
+    fn pick_and_add_shows_preflight_dialog_before_add_workspace() {
         // `fullstack-b-28b` slice iii: pickAndAdd MUST gate the
         // add_workspace invocation behind the pre-flight modal so the
         // user always sees the round-2-plan explanatory copy +
@@ -794,7 +794,7 @@ mod tests {
     }
 
     #[test]
-    fn invoke_handler_registers_compute_drive_preflight() {
+    fn invoke_handler_registers_compute_workspace_preflight() {
         // `fullstack-b-28b` slice iv: the pre-flight modal calls
         // `compute_workspace_preflight` after mount to populate the
         // report rows. Mirrors the other IPC registration pins
@@ -897,7 +897,7 @@ mod tests {
     }
 
     #[test]
-    fn launcher_calls_drive_features_ipcs() {
+    fn launcher_calls_workspace_features_ipcs() {
         // `fullstack-b-28a`: the SPA-side launcher MUST invoke
         // both IPCs so the expand panel reflects + persists
         // toggle state. Pin the invoke names alongside the
@@ -914,14 +914,14 @@ mod tests {
     }
 
     #[test]
-    fn launcher_prompts_for_existing_user_default_drive() {
+    fn launcher_prompts_for_existing_user_default_workspace() {
         const MAIN_JS: &str = include_str!("../../src/main.js");
         assert!(
             MAIN_JS.contains("invoke('default_workspace_status'"),
             "launcher must query default-workspace migration status",
         );
         assert!(
-            MAIN_JS.contains("showDefaultDriveDialog"),
+            MAIN_JS.contains("showDefaultWorkspaceDialog"),
             "launcher must prompt when a default workspace choice is needed",
         );
         assert!(
@@ -933,7 +933,7 @@ mod tests {
             "launcher must let users create Documents/Chan as default",
         );
         assert!(
-            MAIN_JS.contains("showMissingDefaultDriveDialog"),
+            MAIN_JS.contains("showMissingDefaultWorkspaceDialog"),
             "launcher must confirm before factory-resetting missing default workspace metadata",
         );
         assert!(
@@ -1073,19 +1073,19 @@ mod tests {
     }
 
     #[test]
-    fn drive_title_is_the_path_verbatim() {
+    fn workspace_title_is_the_path_verbatim() {
         // `fullstack-b-14`: titles are the workspace path so the OS
         // window switcher surfaces the disambiguating signal.
         // Earlier shape "chan workspace: <basename>" lost the path
         // detail and collided when two workspaces shared a basename.
         assert_eq!(
-            drive_title("/Users/alex/dev/github.com/fiorix/chan"),
+            workspace_title("/Users/alex/dev/github.com/fiorix/chan"),
             "/Users/alex/dev/github.com/fiorix/chan",
         );
         // Trailing slash, edge case, etc. are passed through; we
         // don't sanitize; the caller's path is the source of truth.
-        assert_eq!(drive_title("/tmp/scratch/"), "/tmp/scratch/");
-        assert_eq!(drive_title(""), "");
+        assert_eq!(workspace_title("/tmp/scratch/"), "/tmp/scratch/");
+        assert_eq!(workspace_title(""), "");
     }
 
     // `fullstack-b-7`: workspace and tunnel webviews host the SPA, which
@@ -1096,7 +1096,7 @@ mod tests {
     // user (the bug Alex reported on 2026-05-20). Pin the capability
     // shape here so a future capability-file edit can't silently drop
     // the permissions without the test catching it.
-    const DRIVE_CAPABILITY_JSON: &str = include_str!("../capabilities/workspace.json");
+    const WORKSPACE_CAPABILITY_JSON: &str = include_str!("../capabilities/workspace.json");
     const DEFAULT_CAPABILITY_JSON: &str = include_str!("../capabilities/default.json");
     const APP_PERMISSIONS_TOML: &str = include_str!("../permissions/app.toml");
 
@@ -1150,8 +1150,8 @@ mod tests {
     }
 
     #[test]
-    fn drive_capability_grants_opener_to_drive_tunnel_and_outbound_windows() {
-        let windows = capability_windows(DRIVE_CAPABILITY_JSON);
+    fn workspace_capability_grants_opener_to_workspace_tunnel_and_outbound_windows() {
+        let windows = capability_windows(WORKSPACE_CAPABILITY_JSON);
         assert!(
             windows.iter().any(|w| w == "workspace-*"),
             "workspace capability must target workspace-* windows: {windows:?}",
@@ -1164,7 +1164,7 @@ mod tests {
             windows.iter().any(|w| w == "outbound-*"),
             "workspace capability must target outbound-* windows: {windows:?}",
         );
-        let perms = capability_permissions(DRIVE_CAPABILITY_JSON);
+        let perms = capability_permissions(WORKSPACE_CAPABILITY_JSON);
         assert!(
             perms.iter().any(|p| p == "workspace-window"),
             "workspace capability must include workspace-window app commands: {perms:?}",
@@ -1176,12 +1176,12 @@ mod tests {
     }
 
     #[test]
-    fn drive_capability_covers_loopback_server_urls() {
+    fn workspace_capability_covers_loopback_server_urls() {
         // Workspace windows load chan-server through loopback HTTP
         // origins. Without a remote URL match, Tauri omits the IPC
         // bridge and workspace-window app commands such as reload_window
         // or the zoom chords never reach Rust.
-        let remote_urls = capability_remote_urls(DRIVE_CAPABILITY_JSON);
+        let remote_urls = capability_remote_urls(WORKSPACE_CAPABILITY_JSON);
         assert!(
             remote_urls.iter().any(|u| u == "http://127.0.0.1:*"),
             "workspace capability must include 127.0.0.1 loopback: {remote_urls:?}",
@@ -1193,8 +1193,8 @@ mod tests {
     }
 
     #[test]
-    fn app_acl_allows_drive_window_commands() {
-        let drive_set = app_permission_set("workspace-window");
+    fn app_acl_allows_workspace_window_commands() {
+        let workspace_set = app_permission_set("workspace-window");
         for expected in [
             "allow-reload-window",
             "allow-open-devtools",
@@ -1204,8 +1204,8 @@ mod tests {
             "allow-zoom-reset",
         ] {
             assert!(
-                drive_set.iter().any(|p| p == expected),
-                "workspace-window app permission set must include {expected}: {drive_set:?}",
+                workspace_set.iter().any(|p| p == expected),
+                "workspace-window app permission set must include {expected}: {workspace_set:?}",
             );
         }
     }

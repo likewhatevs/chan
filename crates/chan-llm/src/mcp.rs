@@ -842,16 +842,16 @@ mod tests {
 
     fn fixture() -> (TempDir, TempDir, Server) {
         let cfg = TempDir::new().unwrap();
-        let drive_dir = TempDir::new().unwrap();
+        let workspace_dir = TempDir::new().unwrap();
         let lib = Library::open_at(cfg.path().join("config.toml")).unwrap();
-        lib.register_workspace(drive_dir.path()).unwrap();
-        let workspace = lib.open_workspace(drive_dir.path()).unwrap();
+        lib.register_workspace(workspace_dir.path()).unwrap();
+        let workspace = lib.open_workspace(workspace_dir.path()).unwrap();
         let server = Server::new(workspace);
-        (cfg, drive_dir, server)
+        (cfg, workspace_dir, server)
     }
 
     #[tokio::test]
-    async fn read_file_dispatches_to_drive() {
+    async fn read_file_dispatches_to_workspace() {
         let (_cfg, root, server) = fixture();
         std::fs::write(root.path().join("a.md"), "hello").unwrap();
         let out = server

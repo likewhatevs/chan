@@ -45,7 +45,7 @@ fn main() -> ExitCode {
         return ExitCode::SUCCESS;
     }
 
-    let Some(drive_root) = args.workspace else {
+    let Some(workspace_root) = args.workspace else {
         eprintln!("chan-llm-mcp: --workspace is required");
         eprintln!();
         eprintln!("{USAGE}");
@@ -64,13 +64,16 @@ fn main() -> ExitCode {
         }
     };
 
-    let workspace = match lib.open_workspace(&drive_root) {
+    let workspace = match lib.open_workspace(&workspace_root) {
         Ok(d) => d,
         Err(e) => {
-            eprintln!("chan-llm-mcp: open workspace {}: {e}", drive_root.display());
+            eprintln!(
+                "chan-llm-mcp: open workspace {}: {e}",
+                workspace_root.display()
+            );
             eprintln!(
                 "(if the path isn't registered yet, run `chan workspace add {}` first.)",
-                drive_root.display()
+                workspace_root.display()
             );
             return ExitCode::FAILURE;
         }

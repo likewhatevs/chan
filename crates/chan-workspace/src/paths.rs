@@ -6,21 +6,21 @@
 //                ----------------
 //   all          ~/.chan
 //
-// `~/.chan/config.toml` holds the registry of known drives and the
-// default-drive setting (chan-drive's responsibility). Editor / UI
+// `~/.chan/config.toml` holds the registry of known workspaces and the
+// default-workspace setting (chan-workspace's responsibility). Editor / UI
 // preferences (fonts, theme, API keys) live elsewhere and are an
-// app-level concern; chan-drive does not read or write them.
+// app-level concern; chan-workspace does not read or write them.
 //
 // Per-workspace metadata lives under `~/.chan/workspaces/<metadata_key>/`.
-// The key is derived from the canonical drive root at registration
+// The key is derived from the canonical workspace root at registration
 // time and preserved across `Library::move_workspace`, so moving the
-// drive directory updates only the registry row.
+// workspace directory updates only the registry row.
 
 use std::path::{Path, PathBuf};
 
 use sha2::{Digest, Sha256};
 
-/// Default drive root for first-run / no-arg launches. The directory
+/// Default workspace root for first-run / no-arg launches. The directory
 /// is NOT created here; callers decide whether to auto-create.
 ///
 /// Falls back to the platform-specific data dir when the canonical
@@ -35,8 +35,8 @@ pub fn default_workspace_root() -> PathBuf {
     PathBuf::from("chan")
 }
 
-/// Per-user config dir. Holds the global `config.toml` (drive
-/// registry + default-drive). `~/.chan/` on desktop targets;
+/// Per-user config dir. Holds the global `config.toml` (workspace
+/// registry + default-workspace). `~/.chan/` on desktop targets;
 /// co-located under the data dir on iOS / Android where the home
 /// dir isn't user-writable.
 pub fn config_dir() -> PathBuf {
@@ -53,13 +53,13 @@ pub fn config_dir() -> PathBuf {
 }
 
 /// Per-user state dir. Kept as `~/.chan` for callers that still ask
-/// chan-drive for a global state root.
+/// chan-workspace for a global state root.
 pub fn state_dir() -> PathBuf {
     config_dir()
 }
 
 /// Per-user cache dir. Kept as `~/.chan` for callers that still ask
-/// chan-drive for a global cache root.
+/// chan-workspace for a global cache root.
 pub fn cache_dir() -> PathBuf {
     config_dir()
 }
@@ -70,20 +70,20 @@ pub fn global_config_path() -> PathBuf {
 }
 
 /// Per-workspace metadata parent.
-pub fn drives_dir() -> PathBuf {
+pub fn workspaces_dir() -> PathBuf {
     config_dir().join("workspaces")
 }
 
-/// Stable metadata key for a drive root.
+/// Stable metadata key for a workspace root.
 ///
 /// The readable prefix is the canonical absolute path with path
 /// separators and filename-awkward characters replaced by `-`. The
 /// 8-hex suffix is a deterministic hash of the same canonical path
 /// string, preventing collisions between similar slugs.
-pub fn metadata_key_for_root(drive_root: &Path) -> String {
-    let canonical = drive_root
+pub fn metadata_key_for_root(workspace_root: &Path) -> String {
+    let canonical = workspace_root
         .canonicalize()
-        .unwrap_or_else(|_| drive_root.to_path_buf());
+        .unwrap_or_else(|_| workspace_root.to_path_buf());
     let canonical_s = canonical.as_os_str().to_string_lossy();
     let slug = metadata_slug(&canonical_s);
     let mut h = Sha256::new();
@@ -102,64 +102,64 @@ fn metadata_slug(path: &str) -> String {
         .collect()
 }
 
-/// Per-drive global paths. Computed once per Workspace open.
+/// Per-workspace global paths. Computed once per Workspace open.
 #[derive(Debug, Clone)]
 pub struct WorkspacePaths {
     /// Metadata root for this workspace, `~/.chan/workspaces/<metadata_key>/`.
     pub root: PathBuf,
-    /// Per-drive sessions directory. Opaque JSON; chan-drive does
+    /// Per-workspace sessions directory. Opaque JSON; chan-workspace does
     /// not interpret. Apps put window/pane layout files here.
     pub sessions: PathBuf,
-    /// Per-drive search-index directory (tantivy segments + config).
+    /// Per-workspace search-index directory (tantivy segments + config).
     pub index: PathBuf,
-    /// Per-drive graph database (sqlite). Regenerable from the
+    /// Per-workspace graph database (sqlite). Regenerable from the
     /// source-of-truth markdown, but a rebuild is more expensive
     /// than a search reindex.
     pub graph_db: PathBuf,
-    /// Per-drive directory carrying graph-related sidecar state:
+    /// Per-workspace directory carrying graph-related sidecar state:
     /// the `rebuild.inprogress` marker (written before a graph
     /// rebuild starts, removed after the search index commits;
-    /// presence on `Workspace::open` flags the drive as needing a full
+    /// presence on `Workspace::open` flags the workspace as needing a full
     /// reindex) and the persisted `rename_log.json`. Sibling of
     /// `graph_db` (same parent), so wiping this directory reclaims
     /// both the DB and the sidecars in one step.
     pub graph_dir: PathBuf,
-    /// Per-drive lock dir. Holds the index-writer lockfile that
-    /// prevents two processes from writing the same drive's index.
+    /// Per-workspace lock dir. Holds the index-writer lockfile that
+    /// prevents two processes from writing the same workspace's index.
     pub lock: PathBuf,
-    /// Per-drive tokens dir. App-level surface (chan-server stores
-    /// its bearer token here, mode 0600). chan-drive only allocates
+    /// Per-workspace tokens dir. App-level surface (chan-server stores
+    /// its bearer token here, mode 0600). chan-workspace only allocates
     /// the directory; it does not read or write inside.
     pub tokens: PathBuf,
-    /// Per-drive trash dir. Holds soft-deleted files / dirs as
+    /// Per-workspace trash dir. Holds soft-deleted files / dirs as
     /// `<id>/{meta.json, payload[/]}`. Lazily GC'd on Workspace::open
     /// and on every trash_* call.
     pub trash: PathBuf,
-    /// Per-drive code/SLOC report. JSONL serialized by
-    /// `chan-report`, persisted atomically by chan-drive's
+    /// Per-workspace code/SLOC report. JSONL serialized by
+    /// `chan-report`, persisted atomically by chan-workspace's
     /// ReportState writer thread. The report is regenerable from a
     /// full rescan if missing or corrupt.
     pub report: PathBuf,
-    /// systacean-24: per-drive Drafts dir. Holds in-progress
+    /// systacean-24: per-workspace Drafts dir. Holds in-progress
     /// drafts as `<name>/draft.md + companions` (e.g.
     /// `untitled-1/draft.md` plus pasted images). The Drafts
     /// subtree sits in `~/.chan/workspaces/<metadata_key>/drafts/` so
-    /// the user's drive root stays clean of uncommitted scratch
+    /// the user's workspace root stays clean of uncommitted scratch
     /// work (SCM-friendly per the addendum-a spec). Rich Prompt
     /// history (`rich-prompt-N/`) lives here too. The watcher +
-    /// indexer walk this subtree alongside the drive root so drafts
+    /// indexer walk this subtree alongside the workspace root so drafts
     /// participate in search + graph.
     pub drafts: PathBuf,
 }
 
-/// Resolve the per-drive global paths for a metadata key. The key is
-/// the drive's `KnownWorkspace.metadata_key`, assigned at registration
+/// Resolve the per-workspace global paths for a metadata key. The key is
+/// the workspace's `KnownWorkspace.metadata_key`, assigned at registration
 /// time and preserved across `Library::move_workspace`. Callers that
 /// hold a `&Path` should look the key up through
 /// `Library::workspace_paths_for` rather than recomputing it from the
 /// path, so the registry stays the source of truth after moves.
 pub fn workspace_paths_for_metadata_key(metadata_key: &str) -> WorkspacePaths {
-    let root = drives_dir().join(metadata_key);
+    let root = workspaces_dir().join(metadata_key);
     let graph_dir = root.join("graph");
     WorkspacePaths {
         root: root.clone(),
@@ -175,8 +175,8 @@ pub fn workspace_paths_for_metadata_key(metadata_key: &str) -> WorkspacePaths {
     }
 }
 
-/// Create the standard per-drive metadata directory skeleton.
-pub fn ensure_drive_metadata_dirs(metadata_key: &str) -> std::io::Result<WorkspacePaths> {
+/// Create the standard per-workspace metadata directory skeleton.
+pub fn ensure_workspace_metadata_dirs(metadata_key: &str) -> std::io::Result<WorkspacePaths> {
     let paths = workspace_paths_for_metadata_key(metadata_key);
     std::fs::create_dir_all(&paths.sessions)?;
     std::fs::create_dir_all(&paths.trash)?;
@@ -193,13 +193,13 @@ pub fn ensure_drive_metadata_dirs(metadata_key: &str) -> std::io::Result<Workspa
 /// path to walk metadata roots and reconcile against the registry's
 /// metadata-key set. Returns absolute paths; it may not exist on a
 /// fresh install, callers must handle that.
-pub fn drive_subsystem_dirs() -> Vec<PathBuf> {
-    vec![drives_dir()]
+pub fn workspace_subsystem_dirs() -> Vec<PathBuf> {
+    vec![workspaces_dir()]
 }
 
 /// One cloud-storage provider's root the first-launch picker can
-/// suggest as a chan drive location. The `suggested_root` is the
-/// concrete directory chan would land its drive in (provider root
+/// suggest as a chan workspace location. The `suggested_root` is the
+/// concrete directory chan would land its workspace in (provider root
 /// joined with "Chan" by convention so iOS / Android Files-app
 /// users see a recognizable directory name across devices).
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -209,15 +209,15 @@ pub struct DetectedCloud {
     pub provider: String,
     /// Absolute path to the provider's mount point on this OS.
     pub provider_root: PathBuf,
-    /// Recommended drive location: provider_root joined with
+    /// Recommended workspace location: provider_root joined with
     /// "Chan". Not created here; the picker decides whether to
     /// auto-init or prompt.
     pub suggested_root: PathBuf,
 }
 
 /// Probe the OS for known cloud-storage mount points and return
-/// the ones that exist. Used by the first-launch drive picker so
-/// users on iCloud / Google Drive / Dropbox can land their drive
+/// the ones that exist. Used by the first-launch workspace picker so
+/// users on iCloud / Google Drive / Dropbox can land their workspace
 /// somewhere syncing across devices instead of in a local-only
 /// `~/Documents/Chan`.
 ///
@@ -229,7 +229,7 @@ pub struct DetectedCloud {
 ///     (`~/Library/CloudStorage/GoogleDrive-*/My Drive`, one
 ///     entry per signed-in account), Dropbox (`~/Dropbox`).
 ///   - Windows: iCloud Drive (`%USERPROFILE%\iCloudDrive`),
-///     Google Drive (`G:\My Drive`, the default mapped drive),
+///     Google Drive (`G:\My Drive`, the default mapped workspace),
 ///     Dropbox (`%USERPROFILE%\Dropbox`).
 ///   - Linux: Dropbox (`~/Dropbox`); iCloud isn't available and
 ///     Google Drive on Linux ships through third-party tools
@@ -237,7 +237,7 @@ pub struct DetectedCloud {
 ///   - iOS / Android: empty list. The platform's own document
 ///     picker handles cloud-storage discovery.
 ///
-/// Empty list = no cloud drives detected; the picker should fall
+/// Empty list = no cloud workspaces detected; the picker should fall
 /// back to "Local only" with `default_workspace_root()`.
 pub fn detected_cloud_drives() -> Vec<DetectedCloud> {
     let mut out = Vec::new();
@@ -349,8 +349,8 @@ mod tests {
     }
 
     #[test]
-    fn drive_paths_share_the_same_metadata_root() {
-        let key = "-tmp-drive-deadbeef";
+    fn workspace_paths_share_the_same_metadata_root() {
+        let key = "-tmp-workspace-deadbeef";
         let p = workspace_paths_for_metadata_key(key);
         for path in [
             &p.sessions,
@@ -367,18 +367,18 @@ mod tests {
     }
 
     #[test]
-    fn drive_subsystem_dirs_covers_each_sidecar_root() {
-        let key = "-tmp-drive-deadbeef";
+    fn workspace_subsystem_dirs_covers_each_sidecar_root() {
+        let key = "-tmp-workspace-deadbeef";
         let p = workspace_paths_for_metadata_key(key);
-        let dirs = drive_subsystem_dirs();
-        assert_eq!(dirs, vec![drives_dir()]);
-        assert_eq!(p.root.parent(), Some(drives_dir().as_path()));
+        let dirs = workspace_subsystem_dirs();
+        assert_eq!(dirs, vec![workspaces_dir()]);
+        assert_eq!(p.root.parent(), Some(workspaces_dir().as_path()));
     }
 
     #[test]
-    fn ensure_drive_metadata_dirs_creates_expected_subdirs() {
+    fn ensure_workspace_metadata_dirs_creates_expected_subdirs() {
         let key = format!("test-{}", chrono::Utc::now().timestamp_nanos_opt().unwrap());
-        let paths = ensure_drive_metadata_dirs(&key).unwrap();
+        let paths = ensure_workspace_metadata_dirs(&key).unwrap();
         for dir in [
             &paths.sessions,
             &paths.trash,
@@ -401,8 +401,8 @@ mod tests {
         // assert structural invariants (each entry has a non-empty
         // provider and a suggested_root that ends in "Chan" sitting
         // directly under provider_root).
-        let drives = detected_cloud_drives();
-        for d in &drives {
+        let workspaces = detected_cloud_drives();
+        for d in &workspaces {
             assert!(!d.provider.is_empty());
             assert_eq!(
                 d.suggested_root.file_name().and_then(|s| s.to_str()),

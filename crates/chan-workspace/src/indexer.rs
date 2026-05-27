@@ -103,12 +103,12 @@ impl GraphIndexer {
         let cb: Arc<dyn WatchCallback> = Arc::new(EventForwarder { tx });
         let watch = workspace.watch(cb)?;
 
-        let drive_w = Arc::clone(&workspace);
+        let workspace_w = Arc::clone(&workspace);
         let inner_w = Arc::clone(&inner);
         let debounce = Duration::from_millis(debounce_ms);
         let thread = std::thread::Builder::new()
             .name("chan-workspace::indexer".into())
-            .spawn(move || run_loop(drive_w, rx, inner_w, debounce))
+            .spawn(move || run_loop(workspace_w, rx, inner_w, debounce))
             .map_err(|e| ChanError::Io(format!("spawn indexer thread: {e}")))?;
 
         *inner.thread.lock().unwrap() = Some(thread);
@@ -407,19 +407,19 @@ mod tests {
         check()
     }
 
-    fn setup_drive() -> (TempDir, TempDir, Arc<Workspace>) {
+    fn setup_workspace() -> (TempDir, TempDir, Arc<Workspace>) {
         let cfg = TempDir::new().unwrap();
-        let drive_dir = TempDir::new().unwrap();
+        let workspace_dir = TempDir::new().unwrap();
         let lib = Library::open_at(cfg.path().join("config.toml")).unwrap();
-        lib.register_workspace(drive_dir.path()).unwrap();
-        let workspace = lib.open_workspace(drive_dir.path()).unwrap();
-        (cfg, drive_dir, workspace)
+        lib.register_workspace(workspace_dir.path()).unwrap();
+        let workspace = lib.open_workspace(workspace_dir.path()).unwrap();
+        (cfg, workspace_dir, workspace)
     }
 
     #[test]
     fn writes_to_disk_get_indexed_after_debounce() {
         let _serial = fs_test_lock();
-        let (_cfg, drive_dir, workspace) = setup_drive();
+        let (_cfg, workspace_dir, workspace) = setup_workspace();
         let indexer = GraphIndexer::start_on(Arc::clone(&workspace), DEBOUNCE_TEST_MS).unwrap();
 
         // Write directly to disk so the watcher's notify backend
@@ -427,7 +427,7 @@ mod tests {
         // also work, but bypassing it confirms the watcher path
         // end-to-end.
         std::fs::write(
-            drive_dir.path().join("watched.md"),
+            workspace_dir.path().join("watched.md"),
             "# watched\nwatcher-token here\n",
         )
         .unwrap();
@@ -482,7 +482,7 @@ mod tests {
         // entry under `Drafts/<name>/...` so the unified keyspace
         // returns drafts hits from regular workspace search.
         let _serial = fs_test_lock();
-        let (_cfg, _drive_dir, workspace) = setup_drive();
+        let (_cfg, _workspace_dir, workspace) = setup_workspace();
         let indexer = GraphIndexer::start_on(Arc::clone(&workspace), DEBOUNCE_TEST_MS).unwrap();
 
         // Create the draft dir via the public API (parallels what
@@ -533,7 +533,7 @@ mod tests {
     #[test]
     fn delete_from_disk_drops_file_from_index() {
         let _serial = fs_test_lock();
-        let (_cfg, drive_dir, workspace) = setup_drive();
+        let (_cfg, workspace_dir, workspace) = setup_workspace();
         // Pre-populate via the API + reindex; the indexer starts
         // up afterwards and only needs to handle the delete.
         workspace
@@ -542,7 +542,7 @@ mod tests {
         workspace.reindex(None).unwrap();
         let indexer = GraphIndexer::start_on(Arc::clone(&workspace), DEBOUNCE_TEST_MS).unwrap();
 
-        std::fs::remove_file(drive_dir.path().join("doomed.md")).unwrap();
+        std::fs::remove_file(workspace_dir.path().join("doomed.md")).unwrap();
         let saw = wait_for(FS_DELIVERY_BUDGET, || indexer.forgotten_total() >= 1);
         assert!(saw, "indexer did not pick up the delete");
 
@@ -645,7 +645,7 @@ mod tests {
 
     #[test]
     fn stop_is_idempotent_and_releases_resources() {
-        let (_cfg, _drive_dir, workspace) = setup_drive();
+        let (_cfg, _workspace_dir, workspace) = setup_workspace();
         let indexer = GraphIndexer::start_on(Arc::clone(&workspace), DEBOUNCE_TEST_MS).unwrap();
         indexer.stop();
         indexer.stop();

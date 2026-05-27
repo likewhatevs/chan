@@ -1,7 +1,7 @@
 //! Async helpers for the two control frames that precede yamux.
 //!
 //! The wire codec in `frame.rs` is sync and operates on a
-//! `BytesMut` so callers can drive it from any I/O loop. In
+//! `BytesMut` so callers can workspace it from any I/O loop. In
 //! practice both sides of the tunnel run on tokio, so a pair of
 //! tiny `read_frame` / `write_frame` helpers is enough; nothing in
 //! the protocol needs streaming control frames.
@@ -68,12 +68,12 @@ mod tests {
         let h = Hello {
             protocol: ProtocolVersion::V1,
             client_version: "chan/test".into(),
-            drive: "notes".into(),
+            workspace: "notes".into(),
             public: false,
         };
         write_frame(&mut a, &h).await.unwrap();
         let got: Hello = read_frame(&mut b).await.unwrap();
         assert_eq!(got.client_version, "chan/test");
-        assert_eq!(got.drive, "notes");
+        assert_eq!(got.workspace, "notes");
     }
 }

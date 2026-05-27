@@ -149,7 +149,7 @@ pub struct SearchResult {
 
 /// The big handle. One per workspace per process.
 pub struct Index {
-    drive_root: PathBuf,
+    workspace_root: PathBuf,
     index_dir: PathBuf,
     /// Persisted index config. Behind a Mutex because `build_all`
     /// (which only holds `&self` through Workspace's `Arc<Index>`) needs
@@ -181,7 +181,7 @@ impl std::fmt::Debug for Index {
             .lock()
             .map(|c| c.model.clone())
             .unwrap_or_default();
-        d.field("drive_root", &self.drive_root)
+        d.field("workspace_root", &self.workspace_root)
             .field("index_dir", &self.index_dir)
             .field("model", &model);
         #[cfg(feature = "embeddings")]
@@ -194,13 +194,13 @@ impl std::fmt::Debug for Index {
 }
 
 impl Index {
-    /// Open (or create) the index for `drive_root`, with storage
+    /// Open (or create) the index for `workspace_root`, with storage
     /// rooted at `index_dir`. The two directories are decoupled:
-    /// `drive_root` is where the markdown lives (read-only for
+    /// `workspace_root` is where the markdown lives (read-only for
     /// the indexer), `index_dir` is where tantivy + vectors live
     /// (per-workspace, in the global cache; resolved by
-    /// `crate::paths::drive_paths`). Tests pass a tempdir for both.
-    pub fn open(drive_root: &Path, index_dir: &Path) -> Result<Self, IndexError> {
+    /// `crate::paths::workspace_paths`). Tests pass a tempdir for both.
+    pub fn open(workspace_root: &Path, index_dir: &Path) -> Result<Self, IndexError> {
         std::fs::create_dir_all(index_dir)?;
         let mut config = config::load(index_dir)?;
         if !config::config_path(index_dir).exists() {
@@ -239,7 +239,7 @@ impl Index {
         let bm25 = Bm25Index::open(index_dir)?;
         let vectors = VectorStore::open(index_dir)?;
         Ok(Self {
-            drive_root: drive_root.to_path_buf(),
+            workspace_root: workspace_root.to_path_buf(),
             index_dir: index_dir.to_path_buf(),
             config: Mutex::new(config),
             bm25,
@@ -260,9 +260,9 @@ impl Index {
     }
 
     /// Re-open after wiping `index_dir`. Intended for `--rebuild`.
-    pub fn rebuild(drive_root: &Path, index_dir: &Path) -> Result<Self, IndexError> {
+    pub fn rebuild(workspace_root: &Path, index_dir: &Path) -> Result<Self, IndexError> {
         wipe_index_dir(index_dir)?;
-        Self::open(drive_root, index_dir)
+        Self::open(workspace_root, index_dir)
     }
 
     /// Snapshot of the persisted config. Callers get a clone so the
@@ -481,7 +481,7 @@ impl Index {
         #[cfg(feature = "embeddings")]
         let model_at_start = cfg_at_start.model.clone();
         let filter = Arc::clone(&self.walk_filter.lock().unwrap());
-        let files = list_indexable(&self.drive_root, &filter)?;
+        let files = list_indexable(&self.workspace_root, &filter)?;
         let total = files.len();
         let mut indexed = 0usize;
         let mut chunks_total = 0usize;
@@ -527,7 +527,7 @@ impl Index {
         let next = AtomicUsize::new(0);
         let (tx, rx) = std::sync::mpsc::sync_channel::<WorkerOut>(budget.queue_bound);
         let chunking_cfg = cfg_at_start.chunking.clone();
-        let drive_root = &self.drive_root;
+        let workspace_root = &self.workspace_root;
         let files_ref = &files;
 
         let started = std::time::Instant::now();
@@ -555,7 +555,7 @@ impl Index {
                         }
                     }
                     let rel = files_ref[i].clone();
-                    let abs = drive_root.join(&rel);
+                    let abs = workspace_root.join(&rel);
                     let item = match std::fs::read_to_string(&abs) {
                         Ok(text) => WorkerOut {
                             rel,
@@ -1281,7 +1281,7 @@ fn wipe_vectors_dir(index_dir: &Path) -> Result<(), IndexError> {
 /// editor gate (which also covers `.py`, `.json`, Makefile, ...)
 /// must not pull arbitrary source/config text into the index.
 fn list_indexable(root: &Path, filter: &WalkFilter) -> Result<Vec<String>, IndexError> {
-    let mut out: Vec<String> = fs_ops::walk_drive_filtered(root, filter)
+    let mut out: Vec<String> = fs_ops::walk_workspace_filtered(root, filter)
         .filter(|e| e.file_type().is_file())
         .filter_map(|e| {
             e.path()
@@ -1300,7 +1300,7 @@ mod tests {
     use super::*;
     use tempfile::TempDir;
 
-    fn make_drive() -> TempDir {
+    fn make_workspace() -> TempDir {
         TempDir::new().unwrap()
     }
 
@@ -1368,7 +1368,7 @@ mod tests {
     #[test]
     #[ignore = "manual profile for phase task notes; not a CI benchmark"]
     fn search_aggression_fixture_profile() {
-        let tmp = make_drive();
+        let tmp = make_workspace();
         for i in 0..240 {
             std::fs::write(
                 tmp.path().join(format!("note-{i:03}.md")),
@@ -1416,7 +1416,7 @@ mod tests {
 
     #[test]
     fn build_then_search_end_to_end() {
-        let tmp = make_drive();
+        let tmp = make_workspace();
         std::fs::write(tmp.path().join("a.md"), "# alpha\nfoo apples\n").unwrap();
         std::fs::write(tmp.path().join("b.md"), "# beta\nbar bananas\n").unwrap();
         let idx = Index::open(tmp.path(), &idx_dir(&tmp)).unwrap();
@@ -1440,7 +1440,7 @@ mod tests {
         // file (`seen` is monotonic even when results land out of
         // order). 200 files is enough to make N>1 workers race.
         use std::sync::Mutex;
-        let tmp = make_drive();
+        let tmp = make_workspace();
         for i in 0..200 {
             let path = tmp.path().join(format!("note-{i:03}.md"));
             std::fs::write(&path, format!("# note {i}\nbody-token-{i:03}\n")).unwrap();
@@ -1486,7 +1486,7 @@ mod tests {
 
     #[test]
     fn forget_drops_chunks() {
-        let tmp = make_drive();
+        let tmp = make_workspace();
         std::fs::write(tmp.path().join("a.md"), "unique-token here\n").unwrap();
         let idx = Index::open(tmp.path(), &idx_dir(&tmp)).unwrap();
         idx.build_all(no_vectors(), &crate::progress::NoProgress, None)
@@ -1506,7 +1506,7 @@ mod tests {
 
     #[test]
     fn rebuild_clears_old_data() {
-        let tmp = make_drive();
+        let tmp = make_workspace();
         std::fs::write(tmp.path().join("a.md"), "first content\n").unwrap();
         let dir = idx_dir(&tmp);
         let idx = Index::open(tmp.path(), &dir).unwrap();
@@ -1523,7 +1523,7 @@ mod tests {
         // Simulate the upgrade-path: a previous build stamped a
         // different model into the config. On open, the divergence
         // must trigger an embeddings-only wipe; BM25 must survive.
-        let tmp = make_drive();
+        let tmp = make_workspace();
         std::fs::write(tmp.path().join("a.md"), "alpha unique-token\n").unwrap();
         let dir = idx_dir(&tmp);
         let idx = Index::open(tmp.path(), &dir).unwrap();
@@ -1576,7 +1576,7 @@ mod tests {
     fn open_leaves_everything_alone_when_disk_stamp_matches() {
         // Symmetric case: the stamp matches the configured model.
         // No wipe, no churn, no spurious config save.
-        let tmp = make_drive();
+        let tmp = make_workspace();
         std::fs::write(tmp.path().join("a.md"), "alpha\n").unwrap();
         let dir = idx_dir(&tmp);
         let model = "BAAI/bge-small-en-v1.5".to_owned();
@@ -1615,7 +1615,7 @@ mod tests {
         // A schema bump wipes everything, including the tracking
         // fields. Otherwise the post-wipe open would think the
         // vectors are still valid for the old model.
-        let tmp = make_drive();
+        let tmp = make_workspace();
         let dir = idx_dir(&tmp);
         std::fs::create_dir_all(&dir).unwrap();
         let cfg_on_disk = config::IndexConfig {
@@ -1643,7 +1643,7 @@ mod tests {
     fn build_all_honors_cancel_and_skips_commit() {
         // Pre-flagged cancel should bail before any file is written
         // and before commit. The on-disk index must still be empty.
-        let tmp = make_drive();
+        let tmp = make_workspace();
         std::fs::write(tmp.path().join("a.md"), "alpha unique-token\n").unwrap();
         std::fs::write(tmp.path().join("b.md"), "beta\n").unwrap();
         let idx = Index::open(tmp.path(), &idx_dir(&tmp)).unwrap();
@@ -1672,7 +1672,7 @@ mod tests {
     #[test]
     fn build_all_skips_embed_when_shard_signature_matches() {
         use super::super::vectors::{self, EmbeddedChunk, VectorStore};
-        let tmp = make_drive();
+        let tmp = make_workspace();
         let source = "# alpha\nbody-token-skipme line\n";
         std::fs::write(tmp.path().join("a.md"), source).unwrap();
         let dir = idx_dir(&tmp);
@@ -1757,7 +1757,7 @@ mod tests {
     #[test]
     fn build_all_does_not_skip_when_shard_body_hash_is_stale() {
         use super::super::vectors::{EmbeddedChunk, VectorStore};
-        let tmp = make_drive();
+        let tmp = make_workspace();
         let original = "# alpha\nold body line\n";
         std::fs::write(tmp.path().join("a.md"), original).unwrap();
         let dir = idx_dir(&tmp);

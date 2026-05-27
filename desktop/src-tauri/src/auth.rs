@@ -1,7 +1,7 @@
 //! id.chan.app sign-in flow + keychain-backed PAT storage.
 //!
 //! Flow:
-//!   1. The Drives window calls `open_signin`. We generate a random
+//!   1. The Workspaces window calls `open_signin`. We generate a random
 //!      state nonce, remember it in-process, and shell out to the
 //!      user's default browser pointing at
 //!      `https://id.chan.app/desktop/authorize?...&redirect_uri=chan://auth/callback&state=<nonce>`.
@@ -34,7 +34,7 @@ use tauri::{AppHandle, Emitter, Url};
 use tauri_plugin_opener::OpenerExt;
 
 /// Event emitted whenever the local sign-in state changes (after a
-/// successful callback or a sign-out). The Drives window listens
+/// successful callback or a sign-out). The Workspaces window listens
 /// and re-renders the toolbar button.
 pub const AUTH_CHANGED: &str = "auth-changed";
 

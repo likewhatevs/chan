@@ -1,6 +1,6 @@
 // BM25 side of the search index, backed by tantivy. Owns the
 // `bm25/` subdirectory under the per-workspace index dir (resolved
-// by `crate::paths::drive_paths`).
+// by `crate::paths::workspace_paths`).
 //
 // Each indexed unit is one chunk (see `index::chunking`). We delete
 // by `path` so re-indexing a file is "remove all its chunks, then

@@ -249,7 +249,7 @@ pub fn build_fs_graph(
     // the walker classifies symlink leaves via readlink without
     // following them, so an in-workspace symlink to an outside file
     // surfaces correctly as a ghost node.
-    ensure_parent_inside_drive(&root, &abs, &rel)?;
+    ensure_parent_inside_workspace(&root, &abs, &rel)?;
 
     let meta = match std::fs::symlink_metadata(&abs) {
         Ok(m) => m,
@@ -308,7 +308,7 @@ pub fn build_fs_graph(
 /// `symlink_metadata` / `read_dir`. Workspace root requests skip the
 /// check (the request resolves to the workspace root itself; no parent
 /// to verify).
-fn ensure_parent_inside_drive(root: &Path, abs: &Path, rel: &str) -> Result<(), FsGraphError> {
+fn ensure_parent_inside_workspace(root: &Path, abs: &Path, rel: &str) -> Result<(), FsGraphError> {
     if rel.is_empty() {
         return Ok(());
     }
@@ -598,7 +598,7 @@ impl FsGraphWalker {
         for (name, child_abs) in entries {
             let name_str = name.to_string_lossy();
             // Skip workspace-internal state and the per-workspace blocklist
-            // dirs at ANY depth. Mirrors chan-workspace's `walk_drive`
+            // dirs at ANY depth. Mirrors chan-workspace's `walk_workspace`
             // (`.chan`/`.git` invariants) plus the `WalkFilter`
             // (`node_modules`, `target`, `venv`, ...) so the
             // filesystem graph excludes the same set the index, the
@@ -725,7 +725,7 @@ impl FsGraphWalker {
             parent.join(target)
         };
 
-        if !self.target_is_inside_drive(&target_abs) {
+        if !self.target_is_inside_workspace(&target_abs) {
             let ghost_id = format!("outside:{src_rel}");
             let ghost = NodeView {
                 id: ghost_id.clone(),
@@ -747,7 +747,7 @@ impl FsGraphWalker {
             return;
         }
 
-        let target_rel = match self.drive_relative_target(&target_abs) {
+        let target_rel = match self.workspace_relative_target(&target_abs) {
             Some(s) => s,
             None => {
                 // Could not pin the relative form. Treat as broken
@@ -857,7 +857,7 @@ impl FsGraphWalker {
         self.insert_node(node);
     }
 
-    fn target_is_inside_drive(&self, target_abs: &Path) -> bool {
+    fn target_is_inside_workspace(&self, target_abs: &Path) -> bool {
         // Canonicalize the deepest existing ancestor of `target_abs`
         // (`canonicalize` fails on missing leaves; we mirror what the
         // kernel will do on `open`). Compare against the canonical
@@ -883,7 +883,7 @@ impl FsGraphWalker {
         }
     }
 
-    fn drive_relative_target(&self, target_abs: &Path) -> Option<String> {
+    fn workspace_relative_target(&self, target_abs: &Path) -> Option<String> {
         if let Some(root_canon) = &self.root_canon {
             if let Ok(canon_target) = target_abs.canonicalize() {
                 if let Ok(stripped) = canon_target.strip_prefix(root_canon) {
@@ -1118,7 +1118,7 @@ mod tests {
     }
 
     #[test]
-    fn drive_internal_dirs_are_hidden() {
+    fn workspace_internal_dirs_are_hidden() {
         let tmp = TempDir::new().unwrap();
         write(&tmp.path().join("top.md"), "# t");
         write(&tmp.path().join(".chan/lock"), "x");
@@ -1132,7 +1132,7 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
-    fn symlink_in_drive_target_existing() {
+    fn symlink_in_workspace_target_existing() {
         let tmp = TempDir::new().unwrap();
         write(&tmp.path().join("top.md"), "# t");
         symlink("top.md", tmp.path().join("alias.md")).unwrap();
@@ -1174,7 +1174,7 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
-    fn symlink_outside_drive_emits_outside_ghost() {
+    fn symlink_outside_workspace_emits_outside_ghost() {
         let tmp = TempDir::new().unwrap();
         symlink("/etc/hosts", tmp.path().join("escape.md")).unwrap();
 
@@ -1336,12 +1336,12 @@ mod tests {
     /// coverage in addition to the walker-only tests above.
     fn open_workspace() -> (TempDir, TempDir, std::sync::Arc<chan_workspace::Workspace>) {
         let cfg = TempDir::new().unwrap();
-        let drive_root = TempDir::new().unwrap();
+        let workspace_root = TempDir::new().unwrap();
         let lib = chan_workspace::Library::open_at(cfg.path().join("config.toml")).unwrap();
-        lib.register_workspace(drive_root.path()).unwrap();
-        let workspace = lib.open_workspace(drive_root.path()).unwrap();
+        lib.register_workspace(workspace_root.path()).unwrap();
+        let workspace = lib.open_workspace(workspace_root.path()).unwrap();
         workspace.write_text("notes/a.md", "# a\n").unwrap();
-        (cfg, drive_root, workspace)
+        (cfg, workspace_root, workspace)
     }
 
     #[test]
@@ -1389,7 +1389,7 @@ mod tests {
         // followed when it appeared as a mid-path component, because
         // `resolve_safe` is lexical only. A request like
         // `path=alias/inside.md` (alias -> /etc) leaked /etc/inside.md
-        // metadata under a workspace-relative id. ensure_parent_inside_drive
+        // metadata under a workspace-relative id. ensure_parent_inside_workspace
         // closes that.
         let (_cfg, root, workspace) = open_workspace();
         // Build a symlink whose target is OUTSIDE the workspace root,
@@ -1423,7 +1423,7 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
-    fn build_fs_graph_allows_in_drive_symlink_leaf_to_outside() {
+    fn build_fs_graph_allows_in_workspace_symlink_leaf_to_outside() {
         // The mid-path guard must NOT reject when the LEAF itself is
         // an in-workspace symlink pointing outside the workspace. The walker
         // classifies that leaf via readlink and emits an outside-
@@ -1453,7 +1453,7 @@ mod tests {
     }
 
     #[test]
-    fn build_fs_graph_root_scope_returns_drive_root() {
+    fn build_fs_graph_root_scope_returns_workspace_root() {
         let (_cfg, _root, workspace) = open_workspace();
         let resp = build_fs_graph(&workspace, FsGraphScope::Directory, "", 1).unwrap();
         assert_eq!(resp.scope, "directory");

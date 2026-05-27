@@ -10,10 +10,10 @@ use tempfile::TempDir;
 #[test]
 fn remove_single_file_drops_graph_and_index() {
     let cfg = TempDir::new().unwrap();
-    let drive_root = TempDir::new().unwrap();
+    let workspace_root = TempDir::new().unwrap();
     let lib = Library::open_at(cfg.path().join("config.toml")).unwrap();
-    lib.register_workspace(drive_root.path()).unwrap();
-    let drive = lib.open_workspace(drive_root.path()).unwrap();
+    lib.register_workspace(workspace_root.path()).unwrap();
+    let workspace = lib.open_workspace(workspace_root.path()).unwrap();
 
     // Markdown link with explicit `.md` so the stored edge `dst`
     // matches the path we'll later pass to `remove`. Wiki links
@@ -21,33 +21,33 @@ fn remove_single_file_drops_graph_and_index() {
     // (resolved through `Workspace::resolve_link` at query time), so
     // they wouldn't be cleaned up by a path-prefix delete; that's
     // a separate concern from this test.
-    drive
+    workspace
         .write_text(
             "intro.md",
             "# Intro\n\nLinks to [x](notes/x.md). unique-intro-token\n",
         )
         .unwrap();
-    drive
+    workspace
         .write_text("notes/x.md", "# X\n\n#tagged Body of x. unique-x-token\n")
         .unwrap();
-    drive.reindex(None).unwrap();
+    workspace.reindex(None).unwrap();
 
     // Sanity: both files indexed + linked.
-    let g = drive.graph().unwrap();
+    let g = workspace.graph().unwrap();
     assert!(g.files().unwrap().iter().any(|p| p == "notes/x.md"));
     assert_eq!(
         g.backlinks("notes/x.md").unwrap().len(),
         1,
         "intro -> notes/x.md markdown link should be a backlink",
     );
-    assert!(!drive
+    assert!(!workspace
         .search("unique-x-token", &SearchOpts::default())
         .unwrap()
         .hits
         .is_empty());
 
     // Remove the target. Graph + index must reflect it immediately.
-    drive.remove("notes/x.md").unwrap();
+    workspace.remove("notes/x.md").unwrap();
 
     let files = g.files().unwrap();
     assert!(
@@ -64,7 +64,7 @@ fn remove_single_file_drops_graph_and_index() {
         1,
         "inbound edge from intro.md should survive (it reflects intro.md's body)",
     );
-    let hits = drive
+    let hits = workspace
         .search("unique-x-token", &SearchOpts::default())
         .unwrap()
         .hits;
@@ -74,23 +74,23 @@ fn remove_single_file_drops_graph_and_index() {
     );
 
     // Restoring brings everything back, no manual reindex.
-    let id = drive.trash_list().unwrap()[0].id.clone();
-    drive.trash_restore(&id).unwrap();
+    let id = workspace.trash_list().unwrap()[0].id.clone();
+    workspace.trash_restore(&id).unwrap();
 
-    assert!(drive
+    assert!(workspace
         .graph()
         .unwrap()
         .files()
         .unwrap()
         .iter()
         .any(|p| p == "notes/x.md"));
-    assert!(!drive
+    assert!(!workspace
         .search("unique-x-token", &SearchOpts::default())
         .unwrap()
         .hits
         .is_empty());
     assert_eq!(
-        drive
+        workspace
             .graph()
             .unwrap()
             .backlinks("notes/x.md")
@@ -104,38 +104,38 @@ fn remove_single_file_drops_graph_and_index() {
 #[test]
 fn remove_directory_cascades_through_graph_and_index() {
     let cfg = TempDir::new().unwrap();
-    let drive_root = TempDir::new().unwrap();
+    let workspace_root = TempDir::new().unwrap();
     let lib = Library::open_at(cfg.path().join("config.toml")).unwrap();
-    lib.register_workspace(drive_root.path()).unwrap();
-    let drive = lib.open_workspace(drive_root.path()).unwrap();
+    lib.register_workspace(workspace_root.path()).unwrap();
+    let workspace = lib.open_workspace(workspace_root.path()).unwrap();
 
     // A subtree mixing editable text, an image, and a PDF. An outside
     // file links into the subtree to verify backlinks clear too.
-    drive
+    workspace
         .write_text(
             "outside.md",
             "# Outside\n\n![diag](notes/media/diagram.png) and [[notes/inner]]\n",
         )
         .unwrap();
-    drive
+    workspace
         .write_text(
             "notes/inner.md",
             "# Inner\n\nUnique-inner-token. See ./other.txt\n",
         )
         .unwrap();
-    drive
+    workspace
         .write_text("notes/other.txt", "plain text body with sourdough\n")
         .unwrap();
-    drive
+    workspace
         .write_bytes("notes/media/diagram.png", &[0x89, 0x50, 0x4e, 0x47])
         .unwrap();
-    drive
+    workspace
         .write_bytes("notes/media/spec.pdf", b"%PDF-1.7\n")
         .unwrap();
-    drive.reindex(None).unwrap();
+    workspace.reindex(None).unwrap();
 
     // Sanity: every editable-text node present, backlink to image exists.
-    let g = drive.graph().unwrap();
+    let g = workspace.graph().unwrap();
     let files0 = g.files().unwrap();
     assert!(files0.iter().any(|p| p == "outside.md"));
     assert!(files0.iter().any(|p| p == "notes/inner.md"));
@@ -144,7 +144,7 @@ fn remove_directory_cascades_through_graph_and_index() {
     assert_eq!(img_back.len(), 1, "outside.md should backlink the image");
 
     // Remove the entire `notes` directory.
-    drive.remove("notes").unwrap();
+    workspace.remove("notes").unwrap();
 
     let files1 = g.files().unwrap();
     for gone in ["notes/inner.md", "notes/other.txt"] {
@@ -168,40 +168,42 @@ fn remove_directory_cascades_through_graph_and_index() {
     );
 
     // Search: nothing under notes/ should hit, outside.md still does.
-    let inner_hits = drive
+    let inner_hits = workspace
         .search("Unique-inner-token", &SearchOpts::default())
         .unwrap();
     assert!(
         inner_hits.hits.is_empty(),
         "stale BM25 row for notes/inner.md"
     );
-    let txt_hits = drive.search("sourdough", &SearchOpts::default()).unwrap();
+    let txt_hits = workspace
+        .search("sourdough", &SearchOpts::default())
+        .unwrap();
     assert!(
         txt_hits.hits.is_empty(),
         "stale BM25 row for notes/other.txt"
     );
-    let outside_hits = drive.search("Outside", &SearchOpts::default()).unwrap();
+    let outside_hits = workspace.search("Outside", &SearchOpts::default()).unwrap();
     assert!(
         outside_hits.hits.iter().any(|h| h.path == "outside.md"),
         "outside file should still be searchable after sibling-dir remove",
     );
 
     // Restore brings the subtree back with graph + index repopulated.
-    let id = drive.trash_list().unwrap()[0].id.clone();
-    drive.trash_restore(&id).unwrap();
-    let files2 = drive.graph().unwrap().files().unwrap();
+    let id = workspace.trash_list().unwrap()[0].id.clone();
+    workspace.trash_restore(&id).unwrap();
+    let files2 = workspace.graph().unwrap().files().unwrap();
     for back in ["notes/inner.md", "notes/other.txt"] {
         assert!(
             files2.iter().any(|p| p == back),
             "{back} did not return to graph after restore: {files2:?}",
         );
     }
-    assert!(!drive
+    assert!(!workspace
         .search("Unique-inner-token", &SearchOpts::default())
         .unwrap()
         .hits
         .is_empty());
-    assert!(!drive
+    assert!(!workspace
         .search("sourdough", &SearchOpts::default())
         .unwrap()
         .hits
@@ -215,23 +217,23 @@ fn remove_non_editable_file_keeps_inbound_edges() {
     // image has no node row anyway (only editable-text files do),
     // so there's nothing to drop on the graph node side.
     let cfg = TempDir::new().unwrap();
-    let drive_root = TempDir::new().unwrap();
+    let workspace_root = TempDir::new().unwrap();
     let lib = Library::open_at(cfg.path().join("config.toml")).unwrap();
-    lib.register_workspace(drive_root.path()).unwrap();
-    let drive = lib.open_workspace(drive_root.path()).unwrap();
+    lib.register_workspace(workspace_root.path()).unwrap();
+    let workspace = lib.open_workspace(workspace_root.path()).unwrap();
 
-    drive
+    workspace
         .write_text("post.md", "# Post\n\n![diag](media/diagram.png)\n")
         .unwrap();
-    drive
+    workspace
         .write_bytes("media/diagram.png", &[0x89, 0x50, 0x4e, 0x47])
         .unwrap();
-    drive.reindex(None).unwrap();
+    workspace.reindex(None).unwrap();
 
-    let g = drive.graph().unwrap();
+    let g = workspace.graph().unwrap();
     assert_eq!(g.backlinks("media/diagram.png").unwrap().len(), 1);
 
-    drive.remove("media/diagram.png").unwrap();
+    workspace.remove("media/diagram.png").unwrap();
     // The inbound edge survives the remove; it describes post.md's
     // body, which still says ![](media/diagram.png).
     assert_eq!(

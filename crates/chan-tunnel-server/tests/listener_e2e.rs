@@ -1,6 +1,6 @@
 //! End-to-end tests for the tunnel listener.
 //!
-//! Drives a real `chan-tunnel-client` against `serve_tunnel_listener`
+//! Workspaces a real `chan-tunnel-client` against `serve_tunnel_listener`
 //! over a localhost socket, exercising the auth gates (base scope,
 //! public scope, cap) that unit tests can only exercise in pieces.
 //! The client dials h2c (`http://...`); no TLS plumbing on this
@@ -50,14 +50,19 @@ struct Harness {
     _task: tokio::task::JoinHandle<()>,
 }
 
-async fn spawn_listener(validator: Arc<dyn Validator>, max_drives_per_user: usize) -> Harness {
+async fn spawn_listener(validator: Arc<dyn Validator>, max_workspaces_per_user: usize) -> Harness {
     let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind 0");
     let port = listener.local_addr().unwrap().port();
     let registry = Registry::new();
     let registry_for_task = registry.clone();
     let _task = tokio::spawn(async move {
-        let _ = serve_tunnel_listener(listener, validator, registry_for_task, max_drives_per_user)
-            .await;
+        let _ = serve_tunnel_listener(
+            listener,
+            validator,
+            registry_for_task,
+            max_workspaces_per_user,
+        )
+        .await;
     });
     Harness {
         port,
@@ -66,12 +71,12 @@ async fn spawn_listener(validator: Arc<dyn Validator>, max_drives_per_user: usiz
     }
 }
 
-fn cfg(port: u16, token: &str, drive: &str, public: bool) -> ClientConfig {
+fn cfg(port: u16, token: &str, workspace: &str, public: bool) -> ClientConfig {
     ClientConfig {
         tunnel_url: Url::parse(&format!("http://127.0.0.1:{port}/v1/tunnel"))
             .expect("hard-coded url is valid"),
         token: token.into(),
-        drive: drive.into(),
+        workspace: workspace.into(),
         client_version: "chan/test".into(),
         public,
         initial_backoff: Duration::from_millis(50),
@@ -87,9 +92,9 @@ fn cfg(port: u16, token: &str, drive: &str, public: bool) -> ClientConfig {
 /// The client's `dial` returns the moment it reads HelloAck, but
 /// the server side does `register_with_cap` a few statements later;
 /// without a wait, tests querying the registry can race that gap.
-async fn wait_registered(reg: &Registry, user: &str, drive: &str) -> bool {
+async fn wait_registered(reg: &Registry, user: &str, workspace: &str) -> bool {
     for _ in 0..100 {
-        if reg.get(user, drive).is_some() {
+        if reg.get(user, workspace).is_some() {
             return true;
         }
         tokio::time::sleep(Duration::from_millis(10)).await;
@@ -98,7 +103,7 @@ async fn wait_registered(reg: &Registry, user: &str, drive: &str) -> bool {
 }
 
 #[tokio::test]
-async fn happy_path_private_drive() {
+async fn happy_path_private_workspace() {
     let validator = Arc::new(StubValidator {
         expected_token: "good".into(),
         username: "alice".into(),
@@ -109,12 +114,12 @@ async fn happy_path_private_drive() {
         .await
         .expect("dial ok");
     assert_eq!(reg.user, "alice");
-    assert_eq!(reg.drive, "notes");
+    assert_eq!(reg.workspace, "notes");
     assert_eq!(reg.prefix, "/notes");
     assert!(wait_registered(&h.registry, "alice", "notes").await);
-    let drives = h.registry.list_drives_for("alice");
-    assert_eq!(drives.len(), 1);
-    assert!(!drives[0].public);
+    let workspaces = h.registry.list_workspaces_for("alice");
+    assert_eq!(workspaces.len(), 1);
+    assert!(!workspaces[0].public);
 }
 
 #[tokio::test]
@@ -133,7 +138,7 @@ async fn invalid_token_returns_401() {
     // Client's dial layer translates 401 into "unauthorized (bad
     // token)" before the substream handshake even starts.
     assert!(msg.to_lowercase().contains("unauthorized"), "got: {msg}");
-    assert!(h.registry.list_drives_for("alice").is_empty());
+    assert!(h.registry.list_workspaces_for("alice").is_empty());
 }
 
 #[tokio::test]
@@ -151,7 +156,7 @@ async fn missing_base_scope_returns_403() {
         .expect_err("missing tunnel scope should fail");
     let msg = err.to_string();
     assert!(msg.to_lowercase().contains("forbidden"), "got: {msg}");
-    assert!(h.registry.list_drives_for("alice").is_empty());
+    assert!(h.registry.list_workspaces_for("alice").is_empty());
 }
 
 #[tokio::test]
@@ -181,13 +186,13 @@ async fn missing_public_scope_refused_after_200() {
         }
         other => panic!("expected RemoteRefusal, got {other:?}"),
     }
-    // Drive must not appear in the registry.
-    let drives = h.registry.list_drives_for("alice");
-    assert!(drives.is_empty(), "got drives: {drives:?}");
+    // Workspace must not appear in the registry.
+    let workspaces = h.registry.list_workspaces_for("alice");
+    assert!(workspaces.is_empty(), "got workspaces: {workspaces:?}");
 }
 
 #[tokio::test]
-async fn public_scope_allows_public_drive() {
+async fn public_scope_allows_public_workspace() {
     let validator = Arc::new(StubValidator {
         expected_token: "good".into(),
         username: "alice".into(),
@@ -197,17 +202,17 @@ async fn public_scope_allows_public_drive() {
     let (reg, _yconn) = dial(&cfg(h.port, "good", "docs", true))
         .await
         .expect("dial ok");
-    assert_eq!(reg.drive, "docs");
+    assert_eq!(reg.workspace, "docs");
     assert!(wait_registered(&h.registry, "alice", "docs").await);
-    let drives = h.registry.list_drives_for("alice");
-    assert_eq!(drives.len(), 1);
-    assert!(drives[0].public, "expected public bit set");
+    let workspaces = h.registry.list_workspaces_for("alice");
+    assert_eq!(workspaces.len(), 1);
+    assert!(workspaces[0].public, "expected public bit set");
 }
 
 #[tokio::test]
 async fn public_scope_holder_can_still_choose_private() {
     // Token can host public, but this dial chooses private. Per-
-    // drive choice survives once the scope is granted.
+    // workspace choice survives once the scope is granted.
     let validator = Arc::new(StubValidator {
         expected_token: "good".into(),
         username: "alice".into(),
@@ -218,12 +223,12 @@ async fn public_scope_holder_can_still_choose_private() {
         .await
         .expect("dial ok");
     assert!(wait_registered(&h.registry, "alice", "notes").await);
-    let drives = h.registry.list_drives_for("alice");
-    assert!(!drives[0].public);
+    let workspaces = h.registry.list_workspaces_for("alice");
+    assert!(!workspaces[0].public);
 }
 
 #[tokio::test]
-async fn per_user_cap_blocks_third_drive() {
+async fn per_user_cap_blocks_third_workspace() {
     let validator = Arc::new(StubValidator {
         expected_token: "good".into(),
         username: "alice".into(),
@@ -249,23 +254,23 @@ async fn per_user_cap_blocks_third_drive() {
             ref code,
             ref message,
         } => {
-            assert_eq!(code, error_code::TOO_MANY_DRIVES);
+            assert_eq!(code, error_code::TOO_MANY_WORKSPACES);
             assert!(message.contains("alice"), "got: {message}");
         }
         other => panic!("expected RemoteRefusal, got {other:?}"),
     }
-    let drives: Vec<_> = h
+    let workspaces: Vec<_> = h
         .registry
-        .list_drives_for("alice")
+        .list_workspaces_for("alice")
         .into_iter()
-        .map(|d| d.drive.as_ref().to_string())
+        .map(|d| d.workspace.as_ref().to_string())
         .collect();
-    assert_eq!(drives, vec!["d1".to_string(), "d2".to_string()]);
+    assert_eq!(workspaces, vec!["d1".to_string(), "d2".to_string()]);
 }
 
 #[tokio::test]
 async fn reconnect_evicts_previous_registration() {
-    // Same user + drive registers twice. The second dial succeeds
+    // Same user + workspace registers twice. The second dial succeeds
     // (chan serve restart reclaiming its slot) and the first
     // registration is replaced.
     let validator = Arc::new(StubValidator {

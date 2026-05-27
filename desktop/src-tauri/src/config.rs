@@ -94,9 +94,9 @@ pub struct TunnelConfig {
     pub preferred_label: String,
     /// Last workspace name the user typed. Empty means "no preference".
     /// Persisted with the same sanitisation contract as
-    /// `preferred_label` (`is_valid_drive_name`).
+    /// `preferred_label` (`is_valid_workspace_name`).
     #[serde(default)]
-    pub preferred_drive: String,
+    pub preferred_workspace: String,
 }
 
 /// An already-running chan server that chan-desktop opens by URL.
@@ -105,7 +105,7 @@ pub struct TunnelConfig {
 /// shutdown; desktop owns only the attachment row and webview
 /// window state.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct OutboundDrive {
+pub struct OutboundWorkspace {
     /// Stable desktop-local identifier used for row actions and
     /// window restore. Not sent to the remote server.
     pub id: String,
@@ -132,10 +132,10 @@ pub struct WindowConfig {
     /// Workspace identity:
     ///   * local workspaces: canonical filesystem path (matches the
     ///     `AppState.serves` key).
-    ///   * tunneled drives: `"tunnel:<label>/<workspace>"`, namespaced
+    ///   * tunneled workspaces: `"tunnel:<label>/<workspace>"`, namespaced
     ///     to keep local and remote workspaces with colliding names
     ///     distinct.
-    ///   * outbound drives: `"outbound:<id>"`, namespaced by the
+    ///   * outbound workspaces: `"outbound:<id>"`, namespaced by the
     ///     desktop-local attachment id because the URL can change.
     pub key: String,
     /// Tauri window label this config was last bound to. The label
@@ -175,7 +175,7 @@ pub struct Config {
     /// Explicit outbound URL attachments. These are non-owned
     /// remote workspaces that desktop opens by URL.
     #[serde(default)]
-    pub outbound: Vec<OutboundDrive>,
+    pub outbound: Vec<OutboundWorkspace>,
     /// Tunnel listener preferences. Defaults to `preferred_port = 0`
     /// (OS-assigned) until the user types a specific number.
     #[serde(default)]
@@ -225,12 +225,12 @@ impl ConfigStore {
 /// Identity key for a local-workspace WindowConfig. Matches the
 /// `AppState.serves` key so a window-config lookup uses the same
 /// canonical-path normalisation as the workspace registry.
-pub fn local_window_key(drive_key: &str) -> String {
-    drive_key.to_string()
+pub fn local_window_key(workspace_key: &str) -> String {
+    workspace_key.to_string()
 }
 
 /// Identity key for a tunneled-workspace WindowConfig. Namespaced so a
-/// local workspace at `/home/alex/notes` and a tunneled drive with
+/// local workspace at `/home/alex/notes` and a tunneled workspace with
 /// `(label, workspace) = (_, "notes")` don't share the same stack
 /// entry (they have different session.json files in different
 /// workspaces).
@@ -405,7 +405,7 @@ mod tests {
 
     #[test]
     fn tunnel_window_key_namespaced_apart_from_local() {
-        // A local workspace at /home/alex/notes and a tunneled drive
+        // A local workspace at /home/alex/notes and a tunneled workspace
         // exposing `(_, "notes")` must not collide in the stack.
         assert_ne!(
             local_window_key("/home/alex/notes"),
@@ -427,19 +427,19 @@ mod tests {
     }
 
     #[test]
-    fn outbound_drive_label_defaults_empty() {
+    fn outbound_workspace_label_defaults_empty() {
         let raw = r#"{
             "id": "remote-1",
             "url": "http://127.0.0.1:4000/?t=abc"
         }"#;
-        let workspace: OutboundDrive = serde_json::from_str(raw).expect("legacy load");
+        let workspace: OutboundWorkspace = serde_json::from_str(raw).expect("legacy load");
         assert_eq!(workspace.id, "remote-1");
         assert_eq!(workspace.label, "");
         assert_eq!(workspace.added_at, 0);
     }
 
     #[test]
-    fn drive_features_default_off() {
+    fn workspace_features_default_off() {
         // `fullstack-b-28a`: per-workspace feature toggles default OFF
         // so a lean workspace opens BM25-only. The user opts into BGE +
         // reports explicitly via the launcher's expand panel.
@@ -449,7 +449,7 @@ mod tests {
     }
 
     #[test]
-    fn drive_settings_features_missing_field_defaults_off() {
+    fn workspace_settings_features_missing_field_defaults_off() {
         // `fullstack-b-28a`: existing `config.json` predates the
         // `features` field. The serde-default keeps legacy entries
         // loadable as `{bge: false, reports: false}` instead of
@@ -461,7 +461,7 @@ mod tests {
     }
 
     #[test]
-    fn drive_settings_features_round_trip() {
+    fn workspace_settings_features_round_trip() {
         // The toggle pair survives a save+load cycle so a flip in
         // the launcher panel sticks across desktop restarts.
         let settings = WorkspaceSettings {
@@ -477,7 +477,7 @@ mod tests {
     }
 
     #[test]
-    fn drive_settings_features_missing_partial_field_defaults() {
+    fn workspace_settings_features_missing_partial_field_defaults() {
         // Partial migration: a future config might carry `bge: true`
         // but not `reports`. The serde-default on each field keeps
         // the missing one as false rather than failing the load.

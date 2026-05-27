@@ -5,7 +5,7 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
-description = "Filesystem, search, and graph primitives for chan-writer drives"
+description = "Filesystem, search, and graph primitives for chan-writer workspaces"
 
 [dependencies]
 chan-report = { workspace = true }
@@ -32,9 +32,9 @@ tracing = "0.1"
 walkdir = "2"
 zstd = { workspace = true }
 
-# Capability-based filesystem sandbox. We use it on every Drive
+# Capability-based filesystem sandbox. We use it on every Workspace
 # operation that touches user-controllable paths so a mid-path
-# symlink swap between resolve and op cannot escape the drive
+# symlink swap between resolve and op cannot escape the workspace
 # root: cap-std opens each component with O_NOFOLLOW and refuses
 # paths that walk outside the Dir handle. cap-tempfile gives us a
 # Dir-relative atomic-write primitive (TempFile + replace) so we

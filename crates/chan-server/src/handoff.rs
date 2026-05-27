@@ -63,7 +63,7 @@ pub struct Capabilities {
     /// window. Always true for a desktop that speaks this protocol;
     /// the field exists so a future desktop can advertise FALSE (e.g.
     /// a headless build) and the CLI falls back cleanly.
-    pub open_local_drive: bool,
+    pub open_local_workspace: bool,
 }
 
 /// CLI -> desktop request. `tag = "type"` mirrors control_socket so
@@ -82,7 +82,7 @@ pub enum Request {
         /// canonicalizes + registers it the same way its own
         /// open-local-workspace path does. Sent as a string for stable
         /// JSON across platforms.
-        drive_path: String,
+        workspace_path: String,
     },
 }
 
@@ -324,7 +324,7 @@ where
         Request::OpenWorkspace {
             protocol,
             cli_version,
-            drive_path,
+            workspace_path,
         } => {
             if protocol != PROTOCOL_VERSION {
                 tracing::info!(
@@ -343,14 +343,14 @@ where
             // line; this is the matching desktop-side breadcrumb).
             tracing::info!(
                 cli_version = %cli_version,
-                drive_path = %drive_path,
+                workspace_path = %workspace_path,
                 "handoff: opening workspace from CLI request",
             );
-            match open_workspace(PathBuf::from(drive_path)) {
+            match open_workspace(PathBuf::from(workspace_path)) {
                 Ok(()) => Response::Opened {
                     desktop_version: CHAN_VERSION.into(),
                     capabilities: Capabilities {
-                        open_local_drive: true,
+                        open_local_workspace: true,
                     },
                 },
                 Err(message) => {
@@ -389,7 +389,7 @@ pub enum Outcome {
     DesktopError { message: String },
 }
 
-/// Try to hand `drive_path` to a running same-user desktop. Connects
+/// Try to hand `workspace_path` to a running same-user desktop. Connects
 /// the well-known socket, sends an `OpenWorkspace` request, and parses
 /// the response. Any connect failure / stale socket / read error /
 /// malformed reply maps to `Outcome::NoDesktop` so the CLI behaves
@@ -399,7 +399,7 @@ pub enum Outcome {
 /// file exists but nothing is accepting; the CLI must not hang on a
 /// dead desktop.
 #[cfg(unix)]
-pub async fn try_handoff(drive_path: &Path) -> Outcome {
+pub async fn try_handoff(workspace_path: &Path) -> Outcome {
     use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
     use tokio::net::UnixStream;
 
@@ -422,7 +422,7 @@ pub async fn try_handoff(drive_path: &Path) -> Outcome {
     let req = Request::OpenWorkspace {
         protocol: PROTOCOL_VERSION,
         cli_version: CHAN_VERSION.into(),
-        drive_path: drive_path.display().to_string(),
+        workspace_path: workspace_path.display().to_string(),
     };
     let mut payload = match serde_json::to_vec(&req) {
         Ok(v) => v,
@@ -463,7 +463,7 @@ pub async fn try_handoff(drive_path: &Path) -> Outcome {
 }
 
 #[cfg(not(unix))]
-pub async fn try_handoff(_drive_path: &std::path::Path) -> Outcome {
+pub async fn try_handoff(_workspace_path: &std::path::Path) -> Outcome {
     Outcome::NoDesktop
 }
 
@@ -476,7 +476,7 @@ mod tests {
         let req = Request::OpenWorkspace {
             protocol: PROTOCOL_VERSION,
             cli_version: "9.9.9".into(),
-            drive_path: "/tmp/notes".into(),
+            workspace_path: "/tmp/notes".into(),
         };
         let json = serde_json::to_string(&req).unwrap();
         assert!(json.contains("\"type\":\"open_workspace\""));
@@ -489,7 +489,7 @@ mod tests {
         let resp = Response::Opened {
             desktop_version: CHAN_VERSION.into(),
             capabilities: Capabilities {
-                open_local_drive: true,
+                open_local_workspace: true,
             },
         };
         let json = serde_json::to_string(&resp).unwrap();
@@ -540,7 +540,7 @@ mod tests {
         let req = Request::OpenWorkspace {
             protocol: PROTOCOL_VERSION + 1,
             cli_version: "9.9.9".into(),
-            drive_path: "/tmp/notes".into(),
+            workspace_path: "/tmp/notes".into(),
         };
         // The callback must NOT run on skew: the closure asserts.
         let resp = handle_request(req, &|_p| {
@@ -560,7 +560,7 @@ mod tests {
         let req = Request::OpenWorkspace {
             protocol: PROTOCOL_VERSION,
             cli_version: CHAN_VERSION.into(),
-            drive_path: "/tmp/notes".into(),
+            workspace_path: "/tmp/notes".into(),
         };
         let resp = handle_request(req, &|_p| Err("mount failed".to_string()));
         match resp {
@@ -625,7 +625,7 @@ mod tests {
         let req = Request::OpenWorkspace {
             protocol: PROTOCOL_VERSION,
             cli_version: CHAN_VERSION.into(),
-            drive_path: workspace.into(),
+            workspace_path: workspace.into(),
         };
         let mut payload = serde_json::to_vec(&req).unwrap();
         payload.push(b'\n');
