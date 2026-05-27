@@ -1604,91 +1604,6 @@ export const searchPanel = $state<{
 // Open + scope picker state, plus a `depth` knob for how far the
 // file/group scopes expand into their neighbors in the link graph.
 
-/** Build the dropdown options for the graph overlay. The "drive"
- *  entry is labelled differently (the graph isn't doing Q&A; it's
- *  showing the whole network), but everything else matches the
- *  file / group entry shape from the shared scope helper. The global
- *  entry surfaces the eventual cross-drive graph but is disabled
- *  until backend cross-drive indexing exists. */
-export function availableGraphScopes(): ScopeOption[] {
-  const out = availableScopeOptions({
-    driveLabel: "Whole drive",
-    global: {
-      label: "All drives (cross-drive, coming soon)",
-      enabled: false,
-    },
-  });
-
-  function addDirScope(path: string, labelPrefix = "directory"): void {
-    if (!path || out.some((o) => o.id === `dir:${path}`)) return;
-    const slash = path.lastIndexOf("/");
-    const name = slash >= 0 ? path.slice(slash + 1) : path;
-    out.unshift({
-      id: `dir:${path}`,
-      kind: "dir",
-      label: `${labelPrefix}: ${name}/`,
-      path,
-    });
-  }
-
-  function parentDir(path: string): string | null {
-    const slash = path.lastIndexOf("/");
-    return slash > 0 ? path.slice(0, slash) : null;
-  }
-
-  // Inject the currently-active tag scope as an option so the
-  // dropdown can both display the selection and let the user pick
-  // back to it after switching away. Tag scopes are entered via
-  // openGraphForTag(nodeId, label) from the editor / inspectors and
-  // don't appear in the layout-derived option list otherwise.
-  if (graphOverlay.scopeId.startsWith("tag:")) {
-    const nodeId = graphOverlay.scopeId.slice("tag:".length);
-    if (nodeId) {
-      const view = graphData.view;
-      const node = view?.nodes.find((n) => n.kind === "tag" && n.id === nodeId);
-      const label = node?.label ?? nodeId.replace(/^#/, "");
-      out.unshift({
-        id: graphOverlay.scopeId,
-        kind: "tag",
-        label: `tag: ${label}`,
-        nodeId,
-      });
-    }
-  }
-  // Same trick for file scopes entered via openGraphForFile or the
-  // inspector's "Graph from here" button on a file/image/contact node.
-  // The file may not be open in any pane (so availableScopeOptions
-  // didn't include it), but the user just asked for it to be the
-  // scope — surfacing it in the dropdown lets them switch away and
-  // back without losing the selection, and prevents the snap-back
-  // effect in GraphPanel from clobbering scopeId on the next tick.
-  if (graphOverlay.scopeId.startsWith("file:")) {
-    const path = graphOverlay.scopeId.slice("file:".length);
-    if (path && !out.some((o) => o.id === graphOverlay.scopeId)) {
-      out.unshift({
-        id: graphOverlay.scopeId,
-        kind: "file",
-        label: path,
-        path,
-        readOnly: false,
-      });
-    }
-    const parent = parentDir(path);
-    if (parent) addDirScope(parent, "directory");
-  }
-  // Directory scopes can be entered directly from the file browser
-  // context menu, so preserve the exact `dir:<path>` selection even
-  // when the browser overlay is closed. Also offer the parent directory
-  // as a one-hop broadening shortcut for deep directories.
-  if (graphOverlay.scopeId.startsWith("dir:")) {
-    const path = graphOverlay.scopeId.slice("dir:".length);
-    addDirScope(path, "directory");
-    const parent = parentDir(path);
-    if (parent) addDirScope(parent, "parent directory");
-  }
-  return out;
-}
-
 /** Build the dropdown options for the search overlay. Server-side
  *  content search is still drive-wide, so SearchPanel applies these
  *  scopes as a client-side result filter. File Browser "Search this"
@@ -1944,8 +1859,9 @@ export function openFsGraphForFile(path: string): void {
 
 /** Open the graph overlay scoped to a directory. Depth starts at 1:
  *  all files under the directory plus their immediate graph neighbours.
- *  The dropdown keeps this directory, and its parent when available, as
- *  explicit options through availableGraphScopes(). */
+ *  GraphPanel resolves the rooted directory straight from the tab's
+ *  `dir:<path>` scopeId (synthesizeScope); re-rooting is "graph from
+ *  here" / file-browser navigation, not a pane-derived option list. */
 export function openGraphForDirectory(path: string): void {
   const tab = openGraphInActivePane({
     mode: "semantic",

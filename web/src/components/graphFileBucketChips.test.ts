@@ -139,12 +139,15 @@ describe("fullstack-a-57: hidden-id derived sets + visibility", () => {
 });
 
 describe("fullstack-a-57: chip iteration sites + counts", () => {
-  test("BOTH chip iteration sites include markdown + source", () => {
+  test("the chip iteration site includes markdown + source", () => {
+    // Scope-concept wipe (lane-a A1) removed the overlay-bar
+    // `filterChips` snippet, leaving the tab-menu bubble as the SINGLE
+    // chip-iteration site; it must still carry markdown + source.
     const matches = graph.match(
       /\["tag", "mention", "language", "img", "folder", "markdown", "source"\] as const/g,
     );
     expect(matches).not.toBeNull();
-    expect(matches!.length).toBe(2);
+    expect(matches!.length).toBe(1);
   });
 
   test("counts dispatch increments markdown + source on file-class match", () => {
