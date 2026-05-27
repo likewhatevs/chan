@@ -11,6 +11,7 @@ const distRoot = path.join(siteRoot, "dist");
 const manualRoot = path.join(repoRoot, "docs", "manual");
 const githubRepoUrl = "https://github.com/fiorix/chan";
 const latestDownloadBase = `${githubRepoUrl}/releases/latest/download`;
+const cliMetadataBase = "https://chan.app/dl/cli";
 
 const requiredInputs = [
   path.join(srcRoot, "templates", "base.html"),
@@ -598,12 +599,12 @@ function validateReleaseDownloadContract(textByDistPath, version) {
   }
 
   const installer = textByDistPath.get("install.sh") ?? "";
-  const expectedBase = `BASE="\${BASE:-${latestDownloadBase}}"`;
-  if (!installer.includes(expectedBase)) {
-    throw new Error(`install.sh must default BASE to ${latestDownloadBase}`);
+  const expectedMetadataBase = `DEFAULT_METADATA_BASE="${cliMetadataBase}"`;
+  if (!installer.includes(expectedMetadataBase)) {
+    throw new Error(`install.sh must default metadata base to ${cliMetadataBase}`);
   }
-  if (installer.includes("/dl/latest/")) {
-    throw new Error("install.sh must not depend on /dl/latest/");
+  if (installer.includes(latestDownloadBase)) {
+    throw new Error("install.sh must not depend on GitHub latest-download URLs");
   }
 }
 

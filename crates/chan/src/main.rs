@@ -345,12 +345,10 @@ enum Command {
         #[command(subcommand)]
         action: MetadataAction,
     },
-    /// Self-upgrade: download the latest GitHub Release,
-    /// verify SHA256, and atomically replace the running binary.
-    /// URLs are hardcoded; the only knobs are `-y` (skip prompt),
-    /// `--check` (report only), and `--version` (pin a release).
-    /// Set `CHAN_UPDATE_CHECK=0` to silence the banner that fires
-    /// on `chan serve` startup.
+    /// Self-upgrade: read release metadata from chan.app, download
+    /// the selected CLI asset, verify SHA256, and atomically replace
+    /// the running binary. Set `CHAN_UPDATE_CHECK=0` to silence the
+    /// banner that fires on `chan serve` startup.
     Upgrade {
         /// Skip the confirmation prompt.
         #[arg(short = 'y', long)]
@@ -359,7 +357,7 @@ enum Command {
         /// binary. Returns success in both directions.
         #[arg(long)]
         check: bool,
-        /// Pin a specific version instead of querying GitHub Releases.
+        /// Pin a specific version instead of querying latest metadata.
         /// Pass a bare version, for example `0.14.0`.
         #[arg(long)]
         version: Option<String>,
