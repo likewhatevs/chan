@@ -15,15 +15,26 @@ describe("file-browser reveal actions", () => {
     expect(terminal).not.toContain("function graphTerminalCwd()");
   });
 
-  test("graph inspector reveal buttons reveal in a browser tab", () => {
+  test("graph inspector reveal buttons reveal in a browser TAB (GI-8)", () => {
+    // GI-8: the graph is a tab now, so reveal opens a File Browser TAB
+    // (via the tab-world `openBrowserInActivePane` primitive, the same
+    // one the File Browser's own "Open in File Browser" uses) and the
+    // graph persists. The overlay-era `revealPathInBrowser(...)` +
+    // `close()` chain is gone (it opened no visible tab from a graph tab).
     expect(graph).toContain("function revealSelectedFile()");
-    expect(graph).toContain("revealPathInBrowser(selectedNode.path, { inspectorOpen: true });");
     expect(graph).toContain("function revealSelectedFsEntry()");
-    // GI-5: directories pass enter:true (revealAndEnterDirectory) so the
-    // File Browser opens AT the directory; files stay select-in-place.
-    expect(graph).toMatch(
-      /revealPathInBrowser\(selectedFsNode\.path, \{\s*enter: isFsDirectory\(selectedFsNode\),\s*inspectorOpen: true,\s*\}\)/,
+    expect(graph).toContain("function revealPathInBrowserTab(path: string, isDir: boolean)");
+    expect(graph).toContain("revealPathInBrowserTab(selectedNode.path, false)");
+    // GI-5 preserved: directories expand the directory ITSELF (upto =
+    // parts.length) so the File Browser opens AT the dir; files expand
+    // ancestors only.
+    expect(graph).toContain(
+      "revealPathInBrowserTab(selectedFsNode.path, isFsDirectory(selectedFsNode))",
     );
+    expect(graph).toContain("openBrowserInActivePane(isRoot ? {} : { select: path })");
+    // No overlay-era reveal/close leftovers in the reveal path.
+    expect(graph).not.toContain("revealPathInBrowser(selectedNode.path");
+    expect(graph).not.toContain("revealPathInBrowser(selectedFsNode.path");
     expect(graph).not.toContain("openBrowser().inspectorOpen");
   });
 });
