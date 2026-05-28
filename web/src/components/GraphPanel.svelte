@@ -54,6 +54,8 @@
   import { portal } from "./portal";
   import { tabMenu, openTabMenu, closeTabMenu } from "../state/tabMenu.svelte";
   import {
+    AtSign,
+    Code2,
     FileText,
     Folder,
     HardDrive,
@@ -100,18 +102,15 @@
     synthesizeScope(graphState.scopeId),
   );
 
-  /// Graph tabs carry workspace / dir / file / tag scopeIds today,
-  /// plus phase-13-round-1 KIND slice 2a's `contact:<rel_path>`
-  /// and `language:<lang>` prefixes (introduced by
-  /// `openGraphForContact` / `openGraphForLanguage`). The resolver
-  /// returns null for the two new prefixes; the panel falls back to
-  /// workspace-graph rendering for them until slice 2b lands the
-  /// lens semantics (a contact-centered or language-centered
-  /// subgraph filter and the matching ScopeOption kinds). The wiped
-  /// scope kinds (global, group, git_repo) are never produced for
-  /// a graph, so this resolver only covers the live entry points;
-  /// the dead kind-branches that used to handle the others were
-  /// removed with the scope-concept wipe.
+  /// Graph tabs carry six live scopeId prefixes today: workspace,
+  /// `file:` / `dir:` (path lens), `tag:` (tag lens, slice 2b's
+  /// pre-existing centering), `contact:` (slice 2b contact lens —
+  /// bidirectional BFS from the contact file picks up backlinks),
+  /// and `language:` (slice 2b language lens — 1-hop neighbours).
+  /// The wiped scope kinds (global, group, git_repo) are never
+  /// produced for a graph, so this resolver only covers the live
+  /// entry points; the dead kind-branches that used to handle the
+  /// others were removed with the scope-concept wipe.
   function synthesizeScope(scopeId: string): ScopeOption | null {
     if (scopeId === "workspace") return { id: "workspace", kind: "workspace", label: "workspace" };
     if (scopeId.startsWith("file:")) {
@@ -130,6 +129,21 @@
       // Strip the leading `#` for the label: the scope header renders it
       // as `#${label}`, so the raw `#search` nodeId would double-hash.
       return { id: scopeId, kind: "tag", label: nodeId.replace(/^#/, ""), nodeId };
+    }
+    if (scopeId.startsWith("contact:")) {
+      const relPath = scopeId.slice("contact:".length);
+      if (!relPath) return null;
+      // Label peels to the file basename so the scope header reads
+      // as the contact name; the full path stays on `relPath` for
+      // the BFS seed.
+      const slash = relPath.lastIndexOf("/");
+      const label = slash < 0 ? relPath : relPath.slice(slash + 1);
+      return { id: scopeId, kind: "contact", label, relPath };
+    }
+    if (scopeId.startsWith("language:")) {
+      const language = scopeId.slice("language:".length);
+      if (!language) return null;
+      return { id: scopeId, kind: "language", label: language, language };
     }
     return null;
   }
@@ -655,6 +669,54 @@
         }
         if (next.size === 0) break;
         frontier = next;
+      }
+      return visited;
+    }
+    // Phase-13 KIND slice 2b: contact lens. Seed is the contact
+    // file node (located by its rel_path); BFS expands
+    // BIDIRECTIONALLY so the resulting subgraph captures every
+    // doc that REFERENCES the contact (incoming mention/link
+    // edges = backlinks per the round-1 roadmap) plus everything
+    // the contact's own file links out to (outgoing edges).
+    // Forward-only BFS would lose the backlink half of the lens.
+    if (currentScope.kind === "contact") {
+      const relPath = currentScope.relPath;
+      const seedIds = new Set<string>();
+      for (const n of nodes) {
+        if (n.kind === "file" && n.path === relPath) seedIds.add(n.id);
+      }
+      if (seedIds.size === 0) return seedIds;
+      const visited = new Set(seedIds);
+      let frontier = new Set(seedIds);
+      for (let i = 0; i < graphState.depth; i++) {
+        const next = new Set<string>();
+        for (const e of edges) {
+          if (frontier.has(e.source) && !visited.has(e.target)) {
+            next.add(e.target);
+            visited.add(e.target);
+          }
+          if (frontier.has(e.target) && !visited.has(e.source)) {
+            next.add(e.source);
+            visited.add(e.source);
+          }
+        }
+        if (next.size === 0) break;
+        frontier = next;
+      }
+      return visited;
+    }
+    // Phase-13 KIND slice 2b: language lens. Seed is the language
+    // bubble (node id `language:<lang>`); the lens is always
+    // 1-hop (depth doesn't apply to language per the roadmap) so
+    // the visible set is the bubble plus every direct neighbour
+    // — which by construction is every file of that language
+    // since the language node carries an edge to each.
+    if (currentScope.kind === "language") {
+      const seedId = `language:${currentScope.language}`;
+      const visited = new Set<string>([seedId]);
+      for (const e of edges) {
+        if (e.source === seedId) visited.add(e.target);
+        if (e.target === seedId) visited.add(e.source);
       }
       return visited;
     }
@@ -1184,6 +1246,23 @@
         (n) => n.kind === "folder" && n.path === currentScope.path,
       );
       if (found) nodeId = found.id;
+    } else if (currentScope.kind === "contact") {
+      // Phase-13 KIND slice 2b: contact lens header opens the
+      // contact's underlying file-node inspector. Same shape as
+      // the file branch above — the seed for the contact lens IS
+      // a file node located by rel_path.
+      const found = nodes.find(
+        (n) => n.kind === "file" && n.path === currentScope.relPath,
+      );
+      if (found) nodeId = found.id;
+    } else if (currentScope.kind === "language") {
+      // Phase-13 KIND slice 2b: language lens header opens the
+      // language bubble inspector. Bubble node id is
+      // `language:<lang>` by indexer convention.
+      const found = nodes.find(
+        (n) => n.kind === "language" && n.id === `language:${currentScope.language}`,
+      );
+      if (found) nodeId = found.id;
     }
     if (nodeId === null) return;
     selectedId = nodeId;
@@ -1309,6 +1388,21 @@
   const focalIds = $derived.by<string[]>(() => {
     if (!currentScope) return [];
     if (currentScope.kind === "tag") return [currentScope.nodeId];
+    // Phase-13 KIND slice 2b: contact lens pins the contact's
+    // file node so the canvas centres on it like a regular
+    // file-scope graph would; the bidirectional BFS in
+    // computeScopedNodeSet pulls in the backlinks around it.
+    if (currentScope.kind === "contact") {
+      const ids: string[] = [];
+      for (const n of nodes) {
+        if (n.kind === "file" && n.path === currentScope.relPath) ids.push(n.id);
+      }
+      return ids;
+    }
+    // Phase-13 KIND slice 2b: language lens pins the language
+    // bubble itself; its 1-hop neighbours (every file of that
+    // language) splay around it.
+    if (currentScope.kind === "language") return [`language:${currentScope.language}`];
     let seedPaths: string[];
     if (currentScope.kind === "file") seedPaths = [currentScope.path];
     else if (currentScope.kind === "dir") seedPaths = filesUnder(currentScope.path);
@@ -1730,12 +1824,16 @@
           : currentScope.kind === "file" ? currentScope.path
           : currentScope.kind === "dir" ? currentScope.path
           : currentScope.kind === "tag" ? `#${currentScope.label}`
+          : currentScope.kind === "contact" ? `@@${currentScope.label}`
+          : currentScope.kind === "language" ? currentScope.label
           : ""}
         {@const scopeKindLabel =
           currentScope.kind === "workspace" ? "Workspace"
           : currentScope.kind === "tag" ? "Hashtag"
           : currentScope.kind === "file" ? "File"
           : currentScope.kind === "dir" ? "Directory"
+          : currentScope.kind === "contact" ? "Contact"
+          : currentScope.kind === "language" ? "Language"
           : "Scope"}
         <button
           type="button"
@@ -1752,6 +1850,10 @@
               <Folder size={16} strokeWidth={1.75} />
             {:else if currentScope.kind === "tag"}
               <Hash size={16} strokeWidth={1.75} />
+            {:else if currentScope.kind === "contact"}
+              <AtSign size={16} strokeWidth={1.75} />
+            {:else if currentScope.kind === "language"}
+              <Code2 size={16} strokeWidth={1.75} />
             {:else}
               <FileText size={16} strokeWidth={1.75} />
             {/if}

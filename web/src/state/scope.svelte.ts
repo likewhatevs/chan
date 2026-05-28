@@ -86,6 +86,34 @@ export type ScopeOption =
       nodeId: string;
       enabled?: boolean;
     }
+  | {
+      /// Phase-13 round-1 KIND slice 2b: contact lens. The seed is
+      /// a file node (contact-kind .md frontmatter or a workspace
+      /// file referenced via `@@mention`); the graph lens centers
+      /// on this file and expands BIDIRECTIONALLY so the resulting
+      /// subgraph contains every doc that references the contact
+      /// (backlinks) plus everything the contact's own file links
+      /// out to. Slice 2a's `openGraphForContact(relPath)` sets
+      /// scopeId = `contact:<rel_path>`; the GraphPanel maps that
+      /// to this option.
+      id: string;
+      kind: "contact";
+      label: string;
+      relPath: string;
+      enabled?: boolean;
+    }
+  | {
+      /// Phase-13 round-1 KIND slice 2b: language lens. The seed
+      /// is the language bubble node (id = `language:<lang>`); the
+      /// graph lens shows the bubble plus its direct neighbours
+      /// (every file of that language). Depth doesn't apply per
+      /// the roadmap — the lens is always 1-hop.
+      id: string;
+      kind: "language";
+      label: string;
+      language: string;
+      enabled?: boolean;
+    }
   | { id: "workspace"; kind: "workspace"; label: string; enabled?: boolean }
   | { id: "global"; kind: "global"; label: string; enabled?: boolean };
 
