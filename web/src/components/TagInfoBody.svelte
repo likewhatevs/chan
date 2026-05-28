@@ -14,6 +14,7 @@
     graphData,
     type GraphViewNode,
   } from "../state/graphData.svelte";
+  import { openGraphForTag } from "../state/store.svelte";
   import KindChip from "./KindChip.svelte";
 
   let {
@@ -83,7 +84,13 @@
 
 <div class="info">
   <header class="head">
-    <KindChip {kind} block />
+    <KindChip
+      {kind}
+      block
+      onClick={kind === "tag" || kind === "mention"
+        ? () => openGraphForTag(nodeId, label)
+        : undefined}
+    />
   </header>
   <h3 class="title">{kind === "mention" ? label.replace(/^@@/, "") : label}</h3>
   <div class="meta-grid">

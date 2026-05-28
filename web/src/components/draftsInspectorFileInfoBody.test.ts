@@ -15,7 +15,7 @@ describe("fullstack-a-66 slice c follow-up: FileInfoBody Drafts header", () => {
 
   test("non-Drafts dir branch still uses KindChip kind='folder'", () => {
     expect(fileInfo).toMatch(
-      /\{:else\}[\s\S]*?<KindChip kind="folder" block \/>/,
+      /\{:else\}[\s\S]*?<KindChip kind="folder" block onClick=\{onSetAsScope\} \/>/,
     );
   });
 

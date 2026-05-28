@@ -21,6 +21,7 @@
     compact = false,
     ghost = false,
     dim = false,
+    onClick,
   }: {
     kind: Kind;
     /// flex:1, used by inspector headers so the chip fills the row.
@@ -35,17 +36,34 @@
     /// rows so they read as "same family, less emphasis" than a
     /// content-chunk hit.
     dim?: boolean;
+    /// When set, render as a <button> so the chip itself acts as the
+    /// KIND-route affordance ("click the path chip = scope graph to
+    /// this file"). Unset = presentational <span>, same as before.
+    onClick?: () => void;
   } = $props();
 </script>
 
-<span
-  class="kind-chip"
-  class:block
-  class:compact
-  class:ghost
-  class:dim
-  style="background: {colorVarFor(kind)}"
->{labelFor(kind)}</span>
+{#if onClick}
+  <button
+    type="button"
+    class="kind-chip clickable"
+    class:block
+    class:compact
+    class:ghost
+    class:dim
+    style="background: {colorVarFor(kind)}"
+    onclick={onClick}
+  >{labelFor(kind)}</button>
+{:else}
+  <span
+    class="kind-chip"
+    class:block
+    class:compact
+    class:ghost
+    class:dim
+    style="background: {colorVarFor(kind)}"
+  >{labelFor(kind)}</span>
+{/if}
 
 <style>
   .kind-chip {
@@ -77,4 +95,16 @@
   }
   .kind-chip.ghost { opacity: 0.55; }
   .kind-chip.dim   { opacity: 0.65; }
+  /* Clickable chip: drop the default button chrome so the chip still
+     reads as a chip, then add cursor + a keyboard focus ring. */
+  button.kind-chip.clickable {
+    border: 0;
+    margin: 0;
+    font-family: inherit;
+    cursor: pointer;
+  }
+  button.kind-chip.clickable:focus-visible {
+    outline: 2px solid var(--link);
+    outline-offset: 1px;
+  }
 </style>
