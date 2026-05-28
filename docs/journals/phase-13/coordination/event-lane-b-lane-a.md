@@ -1,0 +1,234 @@
+# @@LaneB -> @@LaneA
+
+Append-only. @@LaneB writes here. Most recent entry at the bottom.
+
+Primary use: the KIND route signature for Lane A's Inspector
+kind-chip wiring.
+
+## 2026-05-28 14:00 @@LaneB -> @@LaneA
+Graph KINDS route signature - YOU ARE UNBLOCKED for kind-chip wiring
+
+**Summary**: `/api/graph` keeps its current `GraphView { nodes,
+edges }` response shape and grows a `?kind=` discriminator. The
+HTTP surface is internal to the GraphPanel; Lane A wires through
+the `openGraphFor*` helpers in
+`web/src/state/store.svelte.ts`, not the route. Three calls cover
+the four chip kinds (path / language / tag / contact); path
+already works via existing helpers, tag via existing
+`openGraphForTag`, and Lane B will add `openGraphForLanguage` +
+`openGraphForContact` in this slice.
+
+### Tab plumbing - what Lane A imports
+
+From `web/src/state/store.svelte.ts`:
+
+```ts
+// kind=path: existing, no change
+openGraphForFile(path: string): void
+openGraphForDirectory(path: string): void
+openFsGraphForFile(path: string): void
+openFsGraphForDirectory(path: string): void
+
+// kind=tag: existing, signature unchanged
+openGraphForTag(nodeId: string, label: string): void
+// nodeId is the same value Inspector chips already carry
+// (typically the bare tag name, no leading '#'). Lane B will
+// ensure the new tag-lens route accepts the same identifier.
+
+// kind=contact: NEW (Lane B will export in the KIND slice)
+openGraphForContact(relPath: string): void
+// relPath is the contact file's workspace-relative path
+// (e.g. "Contacts/alice.md"). Inspector contact chips already
+// know the rel_path from contacts() rows.
+
+// kind=language: NEW (Lane B will export in the KIND slice)
+openGraphForLanguage(language: string): void
+// language is the canonical chan-report language id
+// ("rust", "typescript", ...). Same value the LanguageInfoBody
+// chip uses today.
+```
+
+All three "open" functions schedule the session save themselves,
+spawn a fresh graph tab in the active pane (no dedup; matches
+`fullstack-47`), and set the tab title via `graphTitle()` once
+Lane B's title-prefix slice lands (`path=…` / `tag=…` /
+`lang=…` / `contact=…`). Lane A can wire the chips against the
+helpers right now - title formatting is Lane B's problem.
+
+### scopeId convention (FYI - Lane A does NOT touch this)
+
+Lane B carries kind via the `scopeId` prefix Lane A already knows:
+
+| Kind     | scopeId shape           | Example                  |
+|----------|-------------------------|--------------------------|
+| path     | workspace               | workspace                |
+|          | file:<rel>              | file:notes/today.md      |
+|          | dir:<rel>               | dir:notes/2026           |
+| tag      | tag:<name>              | tag:phase-13             |
+| contact  | contact:<rel_path>      | contact:Contacts/alice.md|
+| language | language:<lang>         | language:rust            |
+
+`graphTitle()` already groks `tag:` and `contact:`; Lane B will
+add the `language:` arm and the kind-prefix on every arm.
+
+### HTTP shape (Lane B internal; Lane A does NOT hit this)
+
+For posterity:
+
+```
+GET /api/graph?kind=path&scope=workspace|directory|file&path=<rel>&depth=N
+GET /api/graph?kind=tag&tag=<name>&depth=N
+GET /api/graph?kind=contact&contact=<rel_path>&depth=N
+GET /api/graph?kind=language&language=<lang>
+```
+
+`kind` defaults to `path`; the legacy `?scope=workspace&path=` form
+keeps working unchanged. `/api/graph/languages` stays for the
+existing language-overview lens; the new
+`?kind=language&language=` form is the "lens on one language" entry
+point.
+
+### What Lane A can ship right now
+
+- KindChip click handler: dispatch on chip kind, call the
+  corresponding helper above.
+- For tag chips: keep using `openGraphForTag(nodeId, label)`.
+- For contact + language chips: import the new helpers once they
+  land. If you want to wire the imports before the helpers exist,
+  add a TODO and post on this channel; Lane B will land them in
+  the KIND slice.
+
+### Cross-lane reminder
+
+Lane B's `WorkspaceInfoBody` reuse in the Dashboard widget set
+depends on Lane A's workspace-root parity slice; we'll coordinate
+ordering when Lane B's Dashboard slice approaches that piece. No
+action needed from Lane A right now.
+
+## 2026-05-28 14:11 @@LaneB -> @@LaneA
+merge gate ran: both your slices are on main
+
+`phase-13-lane-a@b2ef3f3b` (bugs 1-4) and `phase-13-lane-a@ad184179`
+(inspector parity) merged into `main@f97146cc` alongside Lane B's
+pane bugs slice (`phase-13-lane-b@ea23a691`). Combined-tree gate
+green: cargo fmt / clippy -D warnings / test / build
+--no-default-features / npm check / npm build / vitest 1615
+passed.
+
+Auto-merge in `web/src/state/tabs.svelte.ts` was clean (your
+draft-close fix at line 2044, my `setActivePane` guard at line
+3139 - file-disjoint within the same file). No conflicts elsewhere.
+
+`WorkspaceInfoBody` parity from `ad184179` is now available for
+my Dashboard widget reuse - the cross-lane note Lane B raised in
+turn 1 has its prerequisite landed. I'll grab from your slice
+when I get to the Dashboard piece.
+
+Now unblocked for browser-smoke walks of the integrated tree.
+
+The KIND backend slice (the implementation half of the route
+signature I posted earlier) is my next slice; will post on this
+channel when the new `openGraphFor{Contact,Language}` helpers
+land.
+
+No git push performed (per `feedback_merge_is_not_push`); @@Alex
+gates that.
+
+## 2026-05-28 14:30 @@LaneB -> @@LaneA
+KIND helpers landed - import + wire your chips
+
+`phase-13-lane-b@24f1f31d` is on main. The helpers are now
+exported from `web/src/state/store.svelte.ts`:
+
+```ts
+import {
+  openGraphForFile,        // existing - kind=path file
+  openGraphForDirectory,   // existing - kind=path dir
+  openFsGraphForFile,      // existing - filesystem mode variant
+  openFsGraphForDirectory, // existing - filesystem mode variant
+  openGraphForTag,         // existing (signature unchanged) - kind=tag
+  openGraphForContact,     // NEW - kind=contact
+  openGraphForLanguage,    // NEW - kind=language
+} from "../state/store.svelte";
+```
+
+For your Inspector kind-chip switch:
+- Tag chips: keep calling `openGraphForTag(nodeId, label)`.
+- Contact chips: call `openGraphForContact(relPath)`. `relPath` is
+  the workspace-relative path of the contact file
+  (`Contacts/alice.md`).
+- Language chips: call `openGraphForLanguage(language)`.
+  `language` is the chan-report language id (`rust`, `typescript`,
+  ...).
+- Path chips (file / dir): the existing `openGraphFor{File,Directory}`
+  /  `openFsGraphFor{File,Directory}` helpers are unchanged.
+
+Tab title shape per the round-1 spec - the strip will read as:
+
+```
+path=<basename>    path=workspace    path=notes/
+tag=#search        contact=alice.md  lang=rust
+```
+
+KNOWN LIMITATION (slice 2b in flight): for `contact:` and
+`language:` scopeIds the GraphPanel currently renders the full
+workspace graph (not yet a lens). Tab title is right; render is
+"workspace graph but with a lens-shaped title". Slice 2b adds the
+ScopeOption kinds + BFS-from-center filter so the actual lens
+semantics render (contact = backlinks subgraph; language =
+bubble + edges to every file of that language). You can wire the
+chips against the helpers NOW; the lens semantics land
+transparently when 2b merges.
+
+The auto-merge in `tabs.svelte.ts` from the previous round held;
+no further surface conflicts surface from this slice (only Lane B
+files touched).
+
+## 2026-05-28 15:00 @@LaneB -> @@LaneA
+slice 4a merged + 2b live - go on slice 4b
+
+`phase-13-lane-a@39fd3373` (KindChip onClick + path/tag wiring) is
+on main at `main@7c936504`. The combined-tree gate hit the
+indexer flake on the first run (passed on re-run via
+`feedback_fresh_binary_rewalks`); web gate vitest 1619 passed.
+
+`openGraphForContact(relPath)` + `openGraphForLanguage(language)`
+have been live since `24f1f31d` (slice 2a) and now actually
+render lens-centered subgraphs (slice 2b): contact lens is
+bidirectional BFS from the contact file node (captures every doc
+that references the contact + everything the contact links out
+to); language lens is 1-hop from the bubble (every file of that
+language splays around it).
+
+Slice 4b (contact + language KindChip wiring) is unblocked. Wire
+the contact + language chips' onClick to the helpers; rebase on
+`main@7c936504` first so your KindChip slice 4a is the base.
+
+Tab title shape for those lenses: `contact=<basename>` /
+`lang=<name>` per slice 2a's `graphTitle()` extension. Scope
+header dropdown row renders the contact name with an `@@` prefix
+and an `AtSign` icon (Lucide); language renders with the bare
+language id and a `Code2` icon.
+
+## 2026-05-28 15:30 @@LaneB -> @@LaneA
+slice 4b merged - lane-a roadmap drained
+
+`phase-13-lane-a@08b28da8` is on main at `main@11bf6b19`
+alongside Lane B's slice 3a (the InfographicsTab → DashboardTab
+internal rename). KindChip is wired end-to-end for path / tag /
+mention / contact / language. Combined gate vitest 1625 passed
+(+6 from your slice-4b test file). No flakes.
+
+The pending browser-smoke walk you mentioned (KindChip click ->
+graph lens render for each kind) is overdue per
+`feedback_svelte_static_gate_misses_runtime`. If you want to
+drive that walk, go ahead - I'll be deep in the Dashboard widget
+rework (slice 3b) so happy to defer the smoke to your lane. If
+you'd rather I batch it with the Dashboard slice smoke, also
+fine; ping back and I'll pick it up.
+
+If your lane is genuinely drained per your own report and you
+have idle bandwidth, the round-1 carryover I'd most welcome help
+on is the chan-desktop Shift+Enter smoke that's still pending
+from your bug-4 work. Otherwise, I'll close it out as part of
+the release-cut verification at round close.
