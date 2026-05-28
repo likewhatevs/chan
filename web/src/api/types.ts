@@ -96,7 +96,7 @@ export type HybridSurfaceKind =
   | "terminal"
   | "browser"
   | "graph"
-  | "infographics";
+  | "dashboard";
 export type HybridSurfaceThemes = Partial<Record<HybridSurfaceKind, SurfaceThemeChoice>>;
 
 export type PaneWidths = {

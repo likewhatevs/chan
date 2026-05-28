@@ -351,12 +351,12 @@ export const SHORTCUTS: readonly Shortcut[] = [
     group: "App",
     escapeTerminal: true,
   },
-  // `phase-12 lane-e` (addendum-2 Q8): Infographics tab. The tab type
+  // `phase-12 lane-e` (addendum-2 Q8): Dashboard tab. The tab type
   // already existed; this is the direct chord (@@Alex approved cmd+i
   // in addition to Hybrid Nav `i`). Both open the tab in the active
   // pane.
   {
-    id: "app.infographics.open",
+    id: "app.dashboard.open",
     label: "Infographics",
     web: "Mod+I",
     native: "Mod+I",

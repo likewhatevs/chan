@@ -1,5 +1,5 @@
 <script lang="ts">
-  // `fullstack-a-75b`: Infographics tab body. Per @@Alex's
+  // `fullstack-a-75b`: Dashboard tab body. Per @@Alex's
   // `d4a3fc8` route on the slice-1 walk, the rotating carousel
   // moves OUT of the welcome surface (which becomes a static
   // spawn grid via EmptyPaneWelcome.svelte) and lives only
@@ -122,9 +122,9 @@
 </script>
 
 <div
-  class="infographics"
+  class="dashboard"
   aria-label="Infographics"
-  data-theme={surfaceThemeOverride("infographics")}
+  data-theme={surfaceThemeOverride("dashboard")}
   oncontextmenu={onContextMenu}
   role="region"
 >
@@ -147,7 +147,7 @@
   {#if settingsOpen}
     <HybridSurfaceConfigShell
       title="Infographics"
-      surface="infographics"
+      surface="dashboard"
       ariaLabel="Infographics settings"
       onDone={closeSettings}
     >
@@ -237,7 +237,7 @@
 </div>
 
 <style>
-  .infographics {
+  .dashboard {
     flex: 1;
     min-height: 0;
     min-width: 0;

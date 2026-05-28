@@ -9,7 +9,7 @@ import carousel from "./EmptyPaneCarousel.svelte?raw";
 // affordance.
 //
 // These checks pin the source so a future refactor (notably the
-// Round-2 backlog item that splits the carousel into Infographics
+// Round-2 backlog item that splits the carousel into Dashboard
 // tabs) can't accidentally drop the pan/zoom wiring at the chart
 // level. The gestures sit on the chart's `<svg>` element, not on
 // the slide container, so they carry forward through the

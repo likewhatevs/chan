@@ -460,14 +460,14 @@ export type TerminalRichPromptState = {
   agentTarget?: "none" | "claude" | "codex" | "gemini";
 };
 
-/// `fullstack-a-75`: Infographics tab — read-only surface that
+/// `fullstack-a-75`: Dashboard tab — read-only surface that
 /// hosts the ASCII shortcut table (lifted out of the empty-pane
 /// carousel slide 1) + future info panels. No per-tab state today;
 /// the placeholder fields keep the discriminated union symmetric
 /// with the other tab kinds and let later slices add view state
 /// without re-walking the persistence layer.
-export type InfographicsTab = {
-  kind: "infographics";
+export type DashboardTab = {
+  kind: "dashboard";
   id: string;
   title: string;
 };
@@ -477,7 +477,7 @@ export type Tab =
   | TerminalTab
   | GraphTab
   | BrowserTab
-  | InfographicsTab;
+  | DashboardTab;
 
 type ClosedTab = {
   paneId: string;
@@ -541,7 +541,7 @@ export function tabLabel(t: Tab, ctx?: BrowserLabelCtx): string {
   if (t.kind === "terminal") return terminalTabName(t);
   if (t.kind === "graph") return graphTabLabel(t);
   if (t.kind === "browser") return browserTabLabel(t, ctx);
-  if (t.kind === "infographics") return t.title;
+  if (t.kind === "dashboard") return t.title;
   const p = t.path;
   if (!p) return p;
   const slash = p.lastIndexOf("/");
@@ -654,7 +654,7 @@ export function tabTooltip(t: Tab): string {
     // the generic label.
     return t.selected ? `File Browser: ${t.selected}` : "File Browser";
   }
-  if (t.kind === "infographics") return t.title;
+  if (t.kind === "dashboard") return t.title;
   return t.path;
 }
 
@@ -2330,9 +2330,9 @@ function cloneTab(src: Tab): Tab {
       inspectorOpen: src.inspectorOpen,
     };
   }
-  if (src.kind === "infographics") {
+  if (src.kind === "dashboard") {
     return {
-      kind: "infographics",
+      kind: "dashboard",
       id: src.id,
       title: src.title,
     };
@@ -2800,24 +2800,24 @@ export function paneModeOpenGraph(ctx?: SpawnContext): void {
   p.activeTabId = tab.id;
 }
 
-/// `fullstack-a-75`: spawn an Infographics tab inside the named
+/// `fullstack-a-75`: spawn a Dashboard tab inside the named
 /// pane (live layout). Mirrors the shape of `openTerminalInPane`
 /// + `openBrowserInActivePane` — append the new tab + flip it
 /// active. No-op if the pane id doesn't resolve to a leaf.
-export function openInfographicsInPane(paneId: string): void {
+export function openDashboardInPane(paneId: string): void {
   const node = layout.nodes[paneId];
   if (!node || node.kind !== "leaf") return;
-  const tab: InfographicsTab = {
-    kind: "infographics",
-    id: id("infographics"),
+  const tab: DashboardTab = {
+    kind: "dashboard",
+    id: id("dashboard"),
     title: "Infographics",
   };
   node.tabs.push(tab);
   node.activeTabId = tab.id;
 }
 
-export function openInfographicsInActivePane(): void {
-  openInfographicsInPane(layout.activePaneId);
+export function openDashboardInActivePane(): void {
+  openDashboardInPane(layout.activePaneId);
 }
 
 /// `fullstack-a-68 slice 2`: Hybrid Nav transactional staging.
@@ -3508,7 +3508,7 @@ export function dirtyPaths(): Set<string> {
 //   a: active tab in this pane (one per pane)
 //   f: focused pane (one per layout)
 type SerTab = {
-  k?: "f" | "b" | "s" | "g" | "h" | "t" | "i";
+  k?: "f" | "b" | "s" | "g" | "h" | "t" | "d";
   p?: string;
   n?: string;
   m?: Mode;
@@ -3831,9 +3831,9 @@ function serializeTab(
       ...active,
     };
   }
-  if (t.kind === "infographics") {
+  if (t.kind === "dashboard") {
     return {
-      k: "i",
+      k: "d",
       ...active,
     };
   }

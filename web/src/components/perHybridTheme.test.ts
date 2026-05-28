@@ -8,7 +8,7 @@ import fileEditor from "./FileEditorTab.svelte?raw";
 import terminal from "./TerminalTab.svelte?raw";
 import browser from "./FileBrowserSurface.svelte?raw";
 import graph from "./GraphPanel.svelte?raw";
-import infographics from "./InfographicsTab.svelte?raw";
+import dashboard from "./DashboardTab.svelte?raw";
 
 describe("Track C: Hybrid surface body themes", () => {
   test("Pane no longer themes the whole Hybrid chrome", () => {
@@ -33,8 +33,8 @@ describe("Track C: Hybrid surface body themes", () => {
     expect(graph).toContain(
       'data-theme={tab ? surfaceThemeOverride("graph") : undefined}',
     );
-    expect(infographics).toContain(
-      'data-theme={surfaceThemeOverride("infographics")}',
+    expect(dashboard).toContain(
+      'data-theme={surfaceThemeOverride("dashboard")}',
     );
   });
 

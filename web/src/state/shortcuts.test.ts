@@ -71,9 +71,9 @@ describe("shortcut table", () => {
     expect(renderTable("native", "mac")).toMatch(/^Search\s+Cmd\+S/m);
   });
 
-  // `phase-12 lane-e` (addendum-2 Q8): direct Cmd+I infographics chord
+  // `phase-12 lane-e` (addendum-2 Q8): direct Cmd+I dashboard chord
   // (in addition to Hybrid Nav `i`).
-  test("advertises Cmd+I infographics on both platforms", () => {
+  test("advertises Cmd+I dashboard on both platforms", () => {
     expect(renderTable("web", "mac")).toMatch(/^Infographics\s+Cmd\+I/m);
     expect(renderTable("native", "mac")).toMatch(/^Infographics\s+Cmd\+I/m);
   });
