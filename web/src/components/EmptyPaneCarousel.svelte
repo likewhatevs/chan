@@ -1,39 +1,38 @@
 <script lang="ts">
   // Empty-pane visual-experimentation surface (fullstack-35).
   //
-  // The carousel sits in place of the old placeholder block on a
-  // single-pane lone-pane empty workspace. It auto-rotates every
-  // 5 s starting on slide 1 (Welcome). Pointer hover and focus-
-  // within pause auto-rotate so the user can read whichever slide
-  // they happen to be looking at; the timer resumes when both
-  // signals clear. Left / right arrow keys nudge manually when the
-  // carousel container has focus.
+  // The carousel sits inside the Dashboard tab. It auto-rotates
+  // every 5 s. Pointer hover and focus-within pause auto-rotate so
+  // the user can read whichever slide they happen to be looking at;
+  // the timer resumes when both signals clear. Left / right arrow
+  // keys nudge manually when the carousel container has focus.
   //
   // The container forwards `oncontextmenu` straight through to the
   // pane's empty-menu handler so right-click still opens the pane
-  // hamburger menu (per the spec).
+  // hamburger menu.
   //
-  // Slide 1 (Welcome) is the pre-fullstack-35 placeholder content
-  // verbatim: chan-mark, workspace dashboard header, "scope-for-graph"
-  // hint, and the shortcut table. Slide 2 surfaces workspace metadata
-  // (file kind breakdown + total bytes on disk) from the existing
-  // tree listing. Slide 3 (Indexing graph) is a directory-only
-  // radial layout fed by `GET /api/indexing/state` — colors track
-  // per-dir state (green = indexed, orange = indexing with a slow
-  // pulse, grey = pending).
+  // Phase-13 slice 3b-1: slides 0 + 1 retooled into the new
+  // Dashboard widget set. Slide 0 is an About widget (version,
+  // attributions, donation QR, project links). Slide 1 mounts
+  // `WorkspaceInfoBody` so the workspace-root inspector lives
+  // alongside the file-browser inspector surface. Slide 2 (search-
+  // index graph) stays UNCHANGED here; it gets a read-only graph
+  // rework in slice 3b-2.
 
-  import { onDestroy } from "svelte";
+  import { onDestroy, onMount } from "svelte";
   import { api } from "../api/client";
-  import type { IndexingStateNode, IndexingStateResponse } from "../api/types";
-  import { workspace, indexStatus, tree, ui } from "../state/store.svelte";
-  import {
-    currentOS,
-    currentPlatform,
-    renderTable,
-  } from "../state/shortcuts";
+  import type {
+    BuildInfo,
+    IndexingStateNode,
+    IndexingStateResponse,
+  } from "../api/types";
+  import { workspace, indexStatus, ui } from "../state/store.svelte";
+  import WorkspaceInfoBody from "./WorkspaceInfoBody.svelte";
   import {
     ChevronLeft,
     ChevronRight,
+    Code2,
+    Globe,
     Locate,
     Pause,
     Play,
@@ -50,20 +49,28 @@
   };
   let { oncontextmenu }: Props = $props();
 
-  /// `fullstack-a-75b`: ASCII shortcut table now renders as
-  /// slide 1 inside the carousel itself (carousel relocated to
-  /// the Dashboard tab). Pin at module init since platform +
-  /// chord set don't change at runtime.
-  const platform = currentPlatform();
-  const os = currentOS();
-  const shortcutTable = renderTable(platform, os);
-
-  // ---- workspace summary -----------------------------------------------------
+  // ---- About slide (slice 3b-1) ------------------------------------------
   //
-  // `fullstack-55` dropped the stats row under the brand mark on
-  // slide 1, taking the `workspaceSummary` derived with it. Slide 2's
-  // `metadata` derived keeps its own per-kind tallies for the bar
-  // chart, so there's no other consumer to feed from here.
+  // Mirrors the `<section class="about">` block in SettingsPanel.svelte
+  // so the version / embeddings flag / attributions read the same in
+  // both places. The SettingsPanel copy stays put for now; the dual
+  // render is intentional until slice 3c retires the panel.
+
+  let buildInfo = $state<BuildInfo | null>(null);
+
+  async function loadBuildInfo(): Promise<void> {
+    try {
+      buildInfo = await api.buildInfo();
+    } catch {
+      buildInfo = null;
+    }
+  }
+
+  onMount(() => {
+    void loadBuildInfo();
+  });
+
+  // ---- shared index status label (slide 2 stub copy) -------------------------
 
   const indexLabel = $derived.by<string | null>(() => {
     const s = indexStatus.value;
@@ -76,92 +83,6 @@
     if (s.state === "error") return "index error";
     return null;
   });
-
-  /// Per-kind breakdown for the metadata slide. Re-derives on every
-  /// tree refresh. Total bytes counts file sizes only (directories
-  /// have no inherent size in the listing).
-  type Metadata = {
-    docs: number;
-    contacts: number;
-    text: number;
-    media: number;
-    binary: number;
-    folders: number;
-    totalBytes: number;
-  };
-  const metadata = $derived.by<Metadata>(() => {
-    let docs = 0;
-    let contacts = 0;
-    let text = 0;
-    let media = 0;
-    let binary = 0;
-    let folders = 0;
-    let totalBytes = 0;
-    for (const e of tree.entries) {
-      if (e.is_dir) {
-        folders++;
-        continue;
-      }
-      totalBytes += e.size;
-      switch (e.kind) {
-        case "document":
-          docs++;
-          break;
-        case "contact":
-          contacts++;
-          break;
-        case "media":
-          media++;
-          break;
-        case "binary":
-          binary++;
-          break;
-        case "text":
-        default:
-          text++;
-          break;
-      }
-    }
-    return { docs, contacts, text, media, binary, folders, totalBytes };
-  });
-
-  /// Single-bar stacked breakdown for the metadata slide. Returns
-  /// the file-kind segments only (directories aren't sized so they
-  /// don't fit a "how much space is what" view). Empty workspaces
-  /// render as a 100% --bg-elev segment so the bar still draws.
-  type Segment = { key: string; label: string; count: number; color: string };
-  const fileSegments = $derived.by<Segment[]>(() => {
-    const m = metadata;
-    const segs: Segment[] = [
-      { key: "docs", label: "documents", count: m.docs, color: "var(--g-doc)" },
-      { key: "contacts", label: "contacts", count: m.contacts, color: "var(--pill-contact-fg, var(--warn-text))" },
-      { key: "text", label: "other text", count: m.text, color: "var(--text-secondary)" },
-      { key: "media", label: "media", count: m.media, color: "var(--g-img)" },
-      { key: "binary", label: "binary", count: m.binary, color: "var(--g-binary)" },
-    ];
-    return segs.filter((s) => s.count > 0);
-  });
-
-  const totalFiles = $derived(
-    fileSegments.reduce((acc, s) => acc + s.count, 0),
-  );
-
-  function pctOf(seg: Segment): number {
-    if (totalFiles === 0) return 0;
-    return (seg.count / totalFiles) * 100;
-  }
-
-  function humanBytes(bytes: number): string {
-    if (bytes < 1024) return `${bytes} B`;
-    const units = ["KB", "MB", "GB", "TB"];
-    let n = bytes / 1024;
-    let u = 0;
-    while (n >= 1024 && u < units.length - 1) {
-      n /= 1024;
-      u++;
-    }
-    return `${n.toFixed(n >= 10 ? 0 : 1)} ${units[u]}`;
-  }
 
   // ---- slide 3 — indexing graph ------------------------------------------
 
@@ -548,52 +469,103 @@
 >
   <div class="slide-stage">
     {#if slideIndex === 0}
-      <!-- `fullstack-a-75b`: Slide 1 — Shortcuts. Carousel
-           relocated to the Dashboard tab per @@Alex's route
-           on the slice-1 walk. Welcome with spawn buttons moved
-           to the dedicated EmptyPaneWelcome.svelte surface (now
-           the empty-pane placeholder); slide 1 becomes the
-           ASCII shortcut table that used to live as a static
-           panel inside DashboardTab.svelte. Same renderTable
-           output; just hosted inside the carousel now so
-           rotation surfaces it alongside metadata + indexing. -->
-      <div class="slide slide-shortcuts" aria-label="Shortcuts">
-        <div class="slide-title">Shortcuts</div>
-        <pre class="shortcuts-table">{shortcutTable}</pre>
+      <!-- Phase-13 slice 3b-1: slide 0 is the About widget. It
+           mirrors the SettingsPanel about section verbatim and adds
+           a "Fund the work" CTA with the donation QR + the website
+           / source links so the user has one self-contained surface
+           to learn what chan is and how to support it. The
+           SettingsPanel copy is kept until slice 3c retires the
+           panel. -->
+      <div class="slide slide-about" aria-label="About">
+        <div class="slide-title">About</div>
+        <div class="about-grid">
+          <span class="k">chan version</span>
+          <span class="v mono">{buildInfo?.version ?? "n/a"}</span>
+          <span class="k">embeddings</span>
+          <span class="v">
+            {#if buildInfo === null}
+              n/a
+            {:else if buildInfo.features.embeddings}
+              <span class="ok">on</span>
+              <span class="muted">(hybrid search available)</span>
+            {:else}
+              <span class="muted">off (BM25 only)</span>
+            {/if}
+          </span>
+          <!-- Source Code Pro attribution. Ships with chan under
+               the SIL Open Font License 1.1; the OFL notice is at
+               /static/fonts/OFL.txt next to the .woff2. -->
+          <span class="k">terminal font</span>
+          <span class="v">
+            Source Code Pro Regular
+            <span class="muted">
+              (<a href="/static/fonts/OFL.txt" target="_blank" rel="noopener">SIL OFL 1.1</a>)
+            </span>
+          </span>
+          <!-- Matrix screen-lock attribution. The renderer and
+               font assets are adapted from the MIT-licensed
+               dcragusa/MatrixScreensaver project; the license
+               notice ships in the embedded app bundle. -->
+          <span class="k">matrix screen lock</span>
+          <span class="v">
+            <a href="https://github.com/dcragusa/MatrixScreensaver" target="_blank" rel="noopener">dcragusa/MatrixScreensaver</a>
+            <span class="muted">
+              (<a href="/static/matrix/LICENSE-MatrixScreensaver.txt" target="_blank" rel="noopener">MIT</a>)
+            </span>
+          </span>
+        </div>
+
+        <div class="about-links">
+          <a
+            class="about-link"
+            href="https://chan.app"
+            target="_blank"
+            rel="noopener"
+            title="chan.app"
+          >
+            <Globe size={14} strokeWidth={1.75} aria-hidden="true" />
+            <span>chan.app</span>
+          </a>
+          <a
+            class="about-link"
+            href="https://github.com/fiorix/chan"
+            target="_blank"
+            rel="noopener"
+            title="github.com/fiorix/chan"
+          >
+            <Code2 size={14} strokeWidth={1.75} aria-hidden="true" />
+            <span>github.com/fiorix/chan</span>
+          </a>
+        </div>
+
+        <div class="about-fund">
+          <div class="fund-copy">
+            <div class="fund-title">Fund the work</div>
+            <p class="fund-text">
+              Chan is independent software. Small tips help cover time
+              spent on releases, packaging, and documentation.
+            </p>
+          </div>
+          <img
+            class="fund-qr"
+            src="/qr-donate.png"
+            alt="Donation QR code"
+            width="160"
+            height="160"
+          />
+        </div>
       </div>
     {:else if slideIndex === 1}
-      <!-- Slide 2 — Metadata. Stacked bar of file kinds across
-           the workspace plus a small stats footer. Approximate is
-           fine per the task spec; this is a UX-experimentation
-           surface, not a billing dashboard. -->
-      <div class="slide slide-metadata" aria-label="Workspace metadata">
-        <div class="slide-title">Workspace metadata</div>
-        <div class="metadata-bar" role="img" aria-label="file kind breakdown">
-          {#if totalFiles === 0}
-            <div class="bar-empty">empty workspace</div>
-          {:else}
-            {#each fileSegments as seg (seg.key)}
-              <div
-                class="bar-seg"
-                style="flex-basis: {pctOf(seg)}%; background: {seg.color};"
-                title={`${seg.label}: ${seg.count} (${pctOf(seg).toFixed(0)}%)`}
-              ></div>
-            {/each}
-          {/if}
-        </div>
-        <ul class="metadata-legend">
-          {#each fileSegments as seg (seg.key)}
-            <li>
-              <span class="dot" style="background: {seg.color};"></span>
-              <span class="legend-label">{seg.label}</span>
-              <span class="legend-count">{seg.count}</span>
-            </li>
-          {/each}
-        </ul>
-        <div class="metadata-footer">
-          <span>{metadata.folders} directories</span>
-          <span class="sep" aria-hidden="true">·</span>
-          <span>{humanBytes(metadata.totalBytes)} on disk</span>
+      <!-- Phase-13 slice 3b-1: slide 1 hosts `WorkspaceInfoBody`,
+           the same inspector body the file browser shows when the
+           workspace-root row is selected. Folder-mode parity plus
+           the Notes directories config. `WorkspaceInfoBody` owns
+           its own scroll affordance via the slide's `overflow:
+           auto`. -->
+      <div class="slide slide-workspace" aria-label="Workspace info">
+        <div class="slide-title">Workspace</div>
+        <div class="workspace-info-host">
+          <WorkspaceInfoBody />
         </div>
       </div>
     {:else}
@@ -602,7 +574,12 @@
            state (green = indexed, orange = indexing with a slow
            pulse, grey = pending). Labels render for the selected
            node plus its immediate parent + children (same rule
-           as the main graph). -->
+           as the main graph).
+
+           TODO (phase-13 slice 3b-2): replace this slide with a
+           read-only, spine-only render of the new GraphPanel
+           (requires extracting a read-only graph rendering mode
+           from GraphPanel.svelte). -->
       <div class="slide slide-indexing" aria-label="Indexing graph">
         <div class="slide-title">Indexing</div>
         {#if indexingError}
@@ -777,29 +754,34 @@
 
 <style>
   .carousel {
+    /* `phase-13 slice 3b-1`: the carousel must size to its tab
+       host. `flex: 1` + `min-height: 0` lets it fill the Dashboard
+       tab's flex column without trapping overflow at the carousel
+       root. Slide-level scroll handles content that overflows the
+       current size; resizing the host tab reflows naturally because
+       the slide-stage uses the parent's box. */
     flex: 1;
+    min-height: 0;
+    min-width: 0;
     display: flex;
     flex-direction: column;
     align-items: center;
-    justify-content: center;
     padding: 2rem 1rem 1rem;
-    overflow: auto;
     outline: none;
     gap: 1rem;
   }
   /* Slides themselves keep the old placeholder rhythm (centered
-     stack, soft type, secondary color) so the welcome content
-     reads identically. Width cap keeps long-line content like the
-     shortcut table from sprawling. */
+     stack, soft type, secondary color). The stage fills the
+     remaining vertical space inside the carousel; each slide
+     scrolls independently when its content exceeds the stage. */
   .slide-stage {
     display: flex;
     flex-direction: column;
-    align-items: center;
-    justify-content: center;
+    align-items: stretch;
     flex: 1;
     min-height: 0;
     width: 100%;
-    max-width: 520px;
+    max-width: 720px;
   }
   .slide {
     display: flex;
@@ -807,7 +789,15 @@
     align-items: center;
     gap: 1.25rem;
     color: var(--text-secondary);
-    opacity: 0.6;
+    flex: 1;
+    min-height: 0;
+    width: 100%;
+    /* Carousel resize spec (phase-13 slice 3b-1): slide owns the
+       vertical overflow so the inspector / about content stays
+       scrollable when the tab shrinks. Horizontal stays hidden so
+       the dot/nav row below the stage never wraps. */
+    overflow-y: auto;
+    overflow-x: hidden;
   }
   .slide-title {
     font-size: 14px;
@@ -816,86 +806,109 @@
     color: var(--text-secondary);
     opacity: 0.7;
   }
-  /* --- Slide 1 (Welcome) bits, ported from Pane.svelte --- */
-  /* `fullstack-a-75b`: dropped `.spawn-row` / `.spawn-btn` /
-     `.spawn-label` / `.spawn-chord` / `.placeholder-mark` /
-     `.spawn-sep` / `.spawn-row-secondary` / `.placeholder-hint`
-     / `.dashboard-header` / `.dashboard-name` selectors along
-     with the welcome slide they styled. The static welcome
-     surface lives in EmptyPaneWelcome.svelte now; the carousel
-     only renders Shortcuts / Workspace metadata / Indexing graph. */
-  .slide-shortcuts {
-    align-items: center;
-  }
-  .shortcuts-table {
-    margin: 0;
-    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-    font-size: 12px;
+  /* --- Slide 0 (About) --- */
+  .slide-about {
+    align-items: stretch;
+    gap: 0.9rem;
     color: var(--text);
-    white-space: pre;
-    line-height: 1.45;
-    overflow: auto;
-    max-height: 100%;
+    opacity: 1;
+    padding: 0 0.25rem;
   }
-  /* --- Slide 2 (Metadata) --- */
-  .metadata-bar {
-    display: flex;
-    width: 100%;
-    height: 12px;
-    border-radius: 6px;
-    overflow: hidden;
-    background: var(--bg-elev);
+  .slide-about .slide-title {
+    align-self: center;
   }
-  .bar-seg {
-    height: 100%;
-    flex-grow: 0;
-  }
-  .bar-empty {
-    flex: 1;
-    text-align: center;
-    font-size: 11px;
-    color: var(--text-secondary);
-    line-height: 12px;
-    opacity: 0.7;
-  }
-  .metadata-legend {
-    list-style: none;
-    padding: 0;
-    margin: 0;
+  .about-grid {
     display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
-    gap: 4px 12px;
+    grid-template-columns: max-content 1fr;
+    gap: 6px 14px;
+    font-size: 13px;
     width: 100%;
-    font-size: 12px;
   }
-  .metadata-legend li {
+  .about-grid .k {
+    color: var(--text-secondary);
+  }
+  .about-grid .v {
+    color: var(--text);
+  }
+  .about-grid .v.mono {
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  }
+  .about-grid .muted {
+    color: var(--text-secondary);
+    opacity: 0.85;
+  }
+  .about-grid .ok {
+    color: var(--accent, var(--text));
+  }
+  .about-grid a {
+    color: var(--link, var(--text));
+    text-decoration: underline;
+  }
+  .about-links {
     display: flex;
+    flex-wrap: wrap;
+    gap: 0.5rem 1rem;
+    font-size: 13px;
+  }
+  .about-link {
+    display: inline-flex;
     align-items: center;
     gap: 6px;
+    color: var(--link, var(--text));
+    text-decoration: none;
   }
-  .metadata-legend .dot {
-    width: 8px;
-    height: 8px;
-    border-radius: 50%;
+  .about-link:hover,
+  .about-link:focus-visible {
+    text-decoration: underline;
+  }
+  .about-fund {
+    display: flex;
+    gap: 1rem;
+    align-items: center;
+    padding-top: 0.5rem;
+    border-top: 1px dashed var(--border);
+    flex-wrap: wrap;
+  }
+  .fund-copy {
+    flex: 1;
+    min-width: 200px;
+  }
+  .fund-title {
+    font-size: 14px;
+    font-weight: 600;
+    color: var(--text);
+    margin-bottom: 4px;
+  }
+  .fund-text {
+    margin: 0;
+    color: var(--text-secondary);
+    font-size: 13px;
+    line-height: 1.4;
+  }
+  .fund-qr {
+    width: 160px;
+    height: 160px;
+    image-rendering: pixelated;
+    border-radius: 6px;
+    background: #fff;
+    padding: 6px;
     flex-shrink: 0;
   }
-  .legend-label {
-    flex: 1;
-    color: var(--text-secondary);
-  }
-  .legend-count {
+  /* --- Slide 1 (Workspace info) --- */
+  .slide-workspace {
+    align-items: stretch;
+    padding: 0;
+    gap: 0.5rem;
     color: var(--text);
-    opacity: 0.85;
-    font-variant-numeric: tabular-nums;
+    opacity: 1;
   }
-  .metadata-footer {
-    display: flex;
-    gap: 0.4rem;
-    color: var(--text-secondary);
-    font-size: 12px;
+  .slide-workspace .slide-title {
+    align-self: center;
   }
-  .metadata-footer .sep {
-    opacity: 0.5;
+  .workspace-info-host {
+    flex: 1;
+    min-height: 0;
+    width: 100%;
   }
   /* --- Slide 3 (Indexing graph) --- */
   .indexing-stub {

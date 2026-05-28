@@ -91,7 +91,7 @@ describe("fullstack-a-75: carousel slide 1 redesign", () => {
   // `fullstack-a-75b`: spawn entries + secondary band moved
   // OUT of the carousel and into EmptyPaneWelcome.svelte. The
   // carousel is now a pure rotating widget hosted inside the
-  // Dashboard tab; slide 1 carries the ASCII shortcut table.
+  // Dashboard tab.
   test("spawn entries no longer surface in the carousel", () => {
     expect(carousel).not.toMatch(/const spawnEntries: SpawnRow\[\]/);
     expect(carousel).not.toMatch(/const secondaryEntries: SpawnRow\[\]/);
@@ -103,17 +103,79 @@ describe("fullstack-a-75: carousel slide 1 redesign", () => {
     expect(carousel).not.toMatch(/class="dashboard-header"/);
     expect(carousel).not.toMatch(/<div class="spawn-row"/);
   });
+});
 
-  test("slide 1 is now the Shortcuts ASCII table (renderTable back inside carousel)", () => {
+describe("phase-13 slice 3b-1: carousel slide rework", () => {
+  // Slide 0 is now the About widget (version + embeddings flag +
+  // attributions + donation QR + chan.app/source links). The
+  // SettingsPanel about copy stays put until slice 3c retires the
+  // panel; both copies coexist for now.
+  test("slide 0 is the About widget", () => {
     expect(carousel).toMatch(
-      /import \{[\s\S]{1,400}renderTable,[\s\S]{1,200}\} from "\.\.\/state\/shortcuts";/,
+      /<div class="slide slide-about" aria-label="About">/,
+    );
+    expect(carousel).toMatch(/chan version/);
+    expect(carousel).toMatch(/embeddings/);
+    expect(carousel).toMatch(/Source Code Pro Regular/);
+    expect(carousel).toMatch(/dcragusa\/MatrixScreensaver/);
+    expect(carousel).toMatch(
+      /href="\/static\/fonts\/OFL\.txt"/,
     );
     expect(carousel).toMatch(
-      /const shortcutTable = renderTable\(platform, os\);/,
+      /href="\/static\/matrix\/LICENSE-MatrixScreensaver\.txt"/,
+    );
+  });
+
+  test("About widget loads buildInfo from the typed API", () => {
+    expect(carousel).toMatch(
+      /let buildInfo = \$state<BuildInfo \| null>\(null\)/,
+    );
+    expect(carousel).toMatch(/buildInfo = await api\.buildInfo\(\)/);
+  });
+
+  test("About widget embeds the donation QR + Fund-the-work copy", () => {
+    expect(carousel).toMatch(/src="\/qr-donate\.png"/);
+    expect(carousel).toMatch(/Fund the work/);
+    expect(carousel).toMatch(
+      /Chan is independent software\. Small tips help cover time[\s\S]{1,40}spent on releases, packaging, and documentation\./,
+    );
+  });
+
+  test("About widget renders icon-linked website + source links", () => {
+    expect(carousel).toMatch(/href="https:\/\/chan\.app"/);
+    expect(carousel).toMatch(
+      /href="https:\/\/github\.com\/fiorix\/chan"/,
     );
     expect(carousel).toMatch(
-      /<div class="slide slide-shortcuts" aria-label="Shortcuts">[\s\S]{1,800}<pre class="shortcuts-table">\{shortcutTable\}<\/pre>/,
+      /import \{[\s\S]{1,300}Code2,[\s\S]{1,300}Globe,[\s\S]{1,200}\} from "lucide-svelte"/,
     );
+  });
+
+  test("slide 1 mounts WorkspaceInfoBody", () => {
+    expect(carousel).toMatch(
+      /import WorkspaceInfoBody from "\.\/WorkspaceInfoBody\.svelte";/,
+    );
+    expect(carousel).toMatch(
+      /<div class="slide slide-workspace" aria-label="Workspace info">[\s\S]{1,400}<WorkspaceInfoBody \/>/,
+    );
+  });
+
+  test("Shortcuts slide + workspace-metadata slide are retired", () => {
+    expect(carousel).not.toMatch(/class="slide slide-shortcuts"/);
+    expect(carousel).not.toMatch(/class="slide slide-metadata"/);
+    expect(carousel).not.toMatch(/<pre class="shortcuts-table">/);
+    expect(carousel).not.toMatch(/renderTable\(platform, os\)/);
+    expect(carousel).not.toMatch(/from "\.\.\/state\/shortcuts"/);
+  });
+
+  test("slide 2 stays the indexing graph and flags the slice 3b-2 deferral", () => {
+    expect(carousel).toMatch(/class="slide slide-indexing"/);
+    expect(carousel).toMatch(/slice 3b-2/);
+  });
+
+  test("slide-stage scroll lives at the slide level for carousel resize", () => {
+    expect(carousel).toMatch(/\.slide\s*\{[\s\S]{1,500}overflow-y: auto/);
+    expect(carousel).toMatch(/\.carousel\s*\{[\s\S]{1,400}min-height: 0/);
   });
 });
 

@@ -34,17 +34,21 @@ async function renderCarousel(props: { oncontextmenu?: (e: MouseEvent) => void }
 }
 
 describe("EmptyPaneCarousel", () => {
-  test("renders the Shortcuts slide by default with three dots", async () => {
-    // `fullstack-a-75b`: slide 1 is now Shortcuts (the ASCII
-    // table). The welcome slide moved to
-    // EmptyPaneWelcome.svelte as the new placeholder surface.
+  test("renders the About slide by default with three dots", async () => {
+    // Phase-13 slice 3b-1: slide 0 is the new About widget
+    // (version + attributions + donation QR + project links).
+    // Slide 1 hosts WorkspaceInfoBody; slide 2 is still the
+    // indexing graph (deferred to slice 3b-2).
     const target = await renderCarousel();
 
     expect(target.querySelectorAll(".dot-btn").length).toBe(3);
-    expect(target.querySelector(".slide-shortcuts")).not.toBeNull();
-    expect(target.querySelector(".shortcuts-table")).not.toBeNull();
-    expect(target.querySelector(".slide-metadata")).toBeNull();
+    expect(target.querySelector(".slide-about")).not.toBeNull();
+    expect(target.querySelector(".slide-workspace")).toBeNull();
     expect(target.querySelector(".slide-indexing")).toBeNull();
+    // Old slide bodies must not coexist with the new ones.
+    expect(target.querySelector(".slide-shortcuts")).toBeNull();
+    expect(target.querySelector(".slide-metadata")).toBeNull();
+    expect(target.querySelector(".shortcuts-table")).toBeNull();
     // Welcome chrome (logo + dashboard stats + spawn buttons)
     // no longer renders inside the carousel.
     expect(target.querySelector(".placeholder-mark")).toBeNull();
@@ -60,8 +64,8 @@ describe("EmptyPaneCarousel", () => {
 
     dots[1]?.click();
     await tick();
-    expect(target.querySelector(".slide-metadata")).not.toBeNull();
-    expect(target.querySelector(".slide-shortcuts")).toBeNull();
+    expect(target.querySelector(".slide-workspace")).not.toBeNull();
+    expect(target.querySelector(".slide-about")).toBeNull();
 
     dots[2]?.click();
     await tick();
@@ -69,7 +73,7 @@ describe("EmptyPaneCarousel", () => {
 
     dots[0]?.click();
     await tick();
-    expect(target.querySelector(".slide-shortcuts")).not.toBeNull();
+    expect(target.querySelector(".slide-about")).not.toBeNull();
   });
 
   test("forwards right-click to the parent contextmenu handler", async () => {
@@ -104,13 +108,13 @@ describe("EmptyPaneCarousel", () => {
       new KeyboardEvent("keydown", { key: "ArrowRight", bubbles: true }),
     );
     await tick();
-    expect(target.querySelector(".slide-metadata")).not.toBeNull();
+    expect(target.querySelector(".slide-workspace")).not.toBeNull();
 
     carousel?.dispatchEvent(
       new KeyboardEvent("keydown", { key: "ArrowLeft", bubbles: true }),
     );
     await tick();
-    expect(target.querySelector(".slide-shortcuts")).not.toBeNull();
+    expect(target.querySelector(".slide-about")).not.toBeNull();
   });
 
   // `fullstack-85`: the carousel's own `:focus-visible` inset ring
