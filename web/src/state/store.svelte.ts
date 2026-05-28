@@ -166,7 +166,7 @@ export const HYBRID_SURFACE_KINDS: readonly HybridSurfaceKind[] = [
   "terminal",
   "browser",
   "graph",
-  "infographics",
+  "dashboard",
 ];
 
 export const workspaceWarningsDialog = $state<{
@@ -1943,7 +1943,7 @@ export function resolveSpawnContext(): SpawnContext {
       return resolveBrowserSpawnContext();
     case "graph":
       return resolveGraphSpawnContext(tab.scopeId);
-    case "infographics":
+    case "dashboard":
       // `fullstack-a-75`: read-only tab carries no path context.
       // Spawn from here lands at workspace root.
       return { dir: "" };

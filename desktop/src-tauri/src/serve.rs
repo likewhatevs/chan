@@ -625,11 +625,13 @@ const KEY_BRIDGE_JS: &str = r#"
         case 'KeyS': fire(e, 'app.search.toggle');    return;
         case 'KeyF': fire(e, 'app.find.open');        return;
         case 'KeyG': fire(e, 'app.find.next');        return;
-        // `phase-12 lane-e` (addendum-2 Q8): Cmd+I opens an
-        // Infographics tab in the active pane (also Hybrid Nav `i`).
-        // Distinct from Cmd+Opt+I (DevTools) - that has Alt and is
-        // handled in the alt branch above.
-        case 'KeyI': fire(e, 'app.infographics.open'); return;
+        // `phase-12 lane-e` (addendum-2 Q8): Cmd+I opens a Dashboard
+        // tab in the active pane (also Hybrid Nav `i`). The user-
+        // visible label still reads "Infographics" until the
+        // dashboard widget rework lands. Distinct from Cmd+Opt+I
+        // (DevTools) - that has Alt and is handled in the alt
+        // branch above.
+        case 'KeyI': fire(e, 'app.dashboard.open'); return;
         case 'BracketLeft':  fire(e, 'app.pane.prev'); return;
         case 'BracketRight': fire(e, 'app.pane.next'); return;
         // `phase-12 lane-e` (addendum-2): Cmd+/ split right. Split
@@ -1092,7 +1094,7 @@ mod tests {
         assert!(KEY_BRIDGE_JS.contains("app.search.toggle"));
         assert!(KEY_BRIDGE_JS.contains("app.pane.splitRight"));
         assert!(KEY_BRIDGE_JS.contains("app.pane.splitDown"));
-        assert!(KEY_BRIDGE_JS.contains("app.infographics.open"));
+        assert!(KEY_BRIDGE_JS.contains("app.dashboard.open"));
     }
 
     #[test]

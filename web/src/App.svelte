@@ -68,7 +68,7 @@
     toggleActiveTerminalBroadcastSelectAll,
     openFind,
     openInActivePane,
-    openInfographicsInActivePane,
+    openDashboardInActivePane,
     openInPane,
     scheduleAutosave,
     flipHybrid,
@@ -165,7 +165,7 @@
           } else if (t.kind === "browser") {
             void t.inspectorOpen;
           } else {
-            // `fullstack-a-75`: infographics tab carries no
+            // `fullstack-a-75`: dashboard tab carries no
             // reactivity-relevant state today (title is
             // immutable + id is stable). Touch the id so the
             // effect still observes tab-list mutations cleanly.
@@ -576,7 +576,7 @@
         paneModeHelpVisible = false;
         lockNow();
         return;
-      // `phase-12 lane-e` (addendum-2 Q8): `i` opens an Infographics
+      // `phase-12 lane-e` (addendum-2 Q8): `i` opens a Dashboard
       // tab in the active pane. Same commit-then-act shape as Search /
       // Lock so layout edits the user already made aren't dropped.
       // Pairs with the top-level Cmd+I chord (both open the tab).
@@ -585,7 +585,7 @@
         commitPaneMode();
         scheduleSessionSave();
         paneModeHelpVisible = false;
-        openInfographicsInActivePane();
+        openDashboardInActivePane();
         return;
       // `fullstack-a-68 slice 2`: `P` now stages a fresh smart-
       // prompt terminal (a terminal tab with the rich-prompt
@@ -827,15 +827,15 @@
       toggleActiveFileTabMode();
       return;
     }
-    // `phase-12 lane-e` (addendum-2 Q8): Cmd+I opens an Infographics
+    // `phase-12 lane-e` (addendum-2 Q8): Cmd+I opens a Dashboard
     // tab in the active pane (also reachable via Hybrid Nav `i`). The
     // tab type already exists; this just adds the direct chord @@Alex
     // approved. On chan-desktop KEY_BRIDGE_JS replays Cmd+I as
-    // app.infographics.open (and stops propagation), so this branch is
+    // app.dashboard.open (and stops propagation), so this branch is
     // web-only. Cmd+I is not browser-reserved; preventDefault is safe.
     if (meta && !e.altKey && !e.shiftKey && !e.ctrlKey && e.code === "KeyI") {
       e.preventDefault();
-      openInfographicsInActivePane();
+      openDashboardInActivePane();
       return;
     }
   }
@@ -1011,12 +1011,12 @@
       case "app.screensaver.lock":
         lockNow();
         return;
-      // `fullstack-a-75`: open the new Infographics tab in the
+      // `fullstack-a-75`: open the new Dashboard tab in the
       // active pane. Surface unification: same command from the
       // pane hamburger, the empty-pane right-click menu, and
       // the empty-pane carousel slide-1 button.
-      case "app.infographics.open":
-        openInfographicsInActivePane();
+      case "app.dashboard.open":
+        openDashboardInActivePane();
         return;
       // `fullstack-a-67f` slice 2: Obsidian-style Mod+E "Show
       // Source Code" toggle. The chord fires

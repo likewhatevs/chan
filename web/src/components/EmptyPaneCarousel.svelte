@@ -41,9 +41,9 @@
 
   type Props = {
     /// Right-click forwarder. Carousel is now hosted inside the
-    /// Infographics tab (per `fullstack-a-75b`); the forwarder
+    /// Dashboard tab (per `fullstack-a-75b`); the forwarder
     /// stays in the prop list for symmetry with the prior mount
-    /// site but Infographics tab doesn't wire it (right-click
+    /// site but Dashboard tab doesn't wire it (right-click
     /// over the tab body falls through to the tab strip's own
     /// context menu).
     oncontextmenu?: (e: MouseEvent) => void;
@@ -52,7 +52,7 @@
 
   /// `fullstack-a-75b`: ASCII shortcut table now renders as
   /// slide 1 inside the carousel itself (carousel relocated to
-  /// the Infographics tab). Pin at module init since platform +
+  /// the Dashboard tab). Pin at module init since platform +
   /// chord set don't change at runtime.
   const platform = currentPlatform();
   const os = currentOS();
@@ -549,12 +549,12 @@
   <div class="slide-stage">
     {#if slideIndex === 0}
       <!-- `fullstack-a-75b`: Slide 1 — Shortcuts. Carousel
-           relocated to the Infographics tab per @@Alex's route
+           relocated to the Dashboard tab per @@Alex's route
            on the slice-1 walk. Welcome with spawn buttons moved
            to the dedicated EmptyPaneWelcome.svelte surface (now
            the empty-pane placeholder); slide 1 becomes the
            ASCII shortcut table that used to live as a static
-           panel inside InfographicsTab.svelte. Same renderTable
+           panel inside DashboardTab.svelte. Same renderTable
            output; just hosted inside the carousel now so
            rotation surfaces it alongside metadata + indexing. -->
       <div class="slide slide-shortcuts" aria-label="Shortcuts">

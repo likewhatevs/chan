@@ -2,82 +2,87 @@ import { describe, expect, test } from "vitest";
 import tabs from "../state/tabs.svelte.ts?raw";
 import pane from "./Pane.svelte?raw";
 import carousel from "./EmptyPaneCarousel.svelte?raw";
-import infographics from "./InfographicsTab.svelte?raw";
+import dashboard from "./DashboardTab.svelte?raw";
 import app from "../App.svelte?raw";
 import shell from "./HybridSurfaceConfigShell.svelte?raw";
 
-// `fullstack-a-75`: Infographics tab kind + carousel redesign.
+// `fullstack-a-75`: Dashboard tab kind + carousel redesign.
 // Tests pin: new tab type + helpers, the Pane.svelte render
 // branch, the carousel's spawn band changes (New Draft slot 0,
 // shortcut table dropped, Infographics secondary band), and the
 // surface unification across the three menus (pane hamburger,
 // empty-pane right-click, carousel).
+//
+// `phase-13 lane-b`: Infographics -> Dashboard rename. The string
+// discriminator + helper names + component file all moved to
+// "dashboard"; the user-visible label still reads "Infographics"
+// until the dashboard widget rework lands in a later slice.
 
-describe("fullstack-a-75: InfographicsTab type + helpers", () => {
-  test("Tab union includes InfographicsTab", () => {
+describe("fullstack-a-75: DashboardTab type + helpers", () => {
+  test("Tab union includes DashboardTab", () => {
     expect(tabs).toMatch(
-      /export type InfographicsTab = \{[\s\S]{1,400}kind: "infographics";[\s\S]{1,200}id: string;[\s\S]{1,200}title: string;/,
+      /export type DashboardTab = \{[\s\S]{1,400}kind: "dashboard";[\s\S]{1,200}id: string;[\s\S]{1,200}title: string;/,
     );
     expect(tabs).toMatch(
-      /export type Tab =\s*\n\s*\| FileTab[\s\S]{1,400}\| InfographicsTab;/,
-    );
-  });
-
-  test("openInfographicsInPane appends a Infographics tab + activates it", () => {
-    expect(tabs).toMatch(
-      /export function openInfographicsInPane\(paneId: string\): void \{[\s\S]{1,800}kind: "infographics",[\s\S]{1,400}node\.tabs\.push\(tab\);[\s\S]{1,200}node\.activeTabId = tab\.id;/,
-    );
-  });
-
-  test("openInfographicsInActivePane delegates to openInfographicsInPane(layout.activePaneId)", () => {
-    expect(tabs).toMatch(
-      /export function openInfographicsInActivePane\(\): void \{[\s\S]{1,200}openInfographicsInPane\(layout\.activePaneId\);/,
+      /export type Tab =\s*\n\s*\| FileTab[\s\S]{1,400}\| DashboardTab;/,
     );
   });
 
-  test("tabLabel handles infographics kind", () => {
+  test("openDashboardInPane appends a Dashboard tab + activates it", () => {
     expect(tabs).toMatch(
-      /export function tabLabel\(t: Tab, ctx\?: BrowserLabelCtx\): string \{[\s\S]{1,800}if \(t\.kind === "infographics"\) return t\.title;/,
+      /export function openDashboardInPane\(paneId: string\): void \{[\s\S]{1,800}kind: "dashboard",[\s\S]{1,400}node\.tabs\.push\(tab\);[\s\S]{1,200}node\.activeTabId = tab\.id;/,
     );
   });
 
-  test("serializer emits k:\"i\" for infographics tabs", () => {
+  test("openDashboardInActivePane delegates to openDashboardInPane(layout.activePaneId)", () => {
     expect(tabs).toMatch(
-      /if \(t\.kind === "infographics"\) \{[\s\S]{1,200}k: "i",/,
+      /export function openDashboardInActivePane\(\): void \{[\s\S]{1,200}openDashboardInPane\(layout\.activePaneId\);/,
     );
   });
 
-  test("SerTab kind discriminator includes \"i\"", () => {
+  test("tabLabel handles dashboard kind", () => {
     expect(tabs).toMatch(
-      /k\?: "f" \| "b" \| "s" \| "g" \| "h" \| "t" \| "i";/,
+      /export function tabLabel\(t: Tab, ctx\?: BrowserLabelCtx\): string \{[\s\S]{1,800}if \(t\.kind === "dashboard"\) return t\.title;/,
+    );
+  });
+
+  test("serializer emits k:\"d\" for dashboard tabs", () => {
+    expect(tabs).toMatch(
+      /if \(t\.kind === "dashboard"\) \{[\s\S]{1,200}k: "d",/,
+    );
+  });
+
+  test("SerTab kind discriminator includes \"d\"", () => {
+    expect(tabs).toMatch(
+      /k\?: "f" \| "b" \| "s" \| "g" \| "h" \| "t" \| "d";/,
     );
   });
 });
 
 describe("fullstack-a-75: Pane.svelte render branch + import", () => {
-  test("InfographicsTab imported", () => {
+  test("DashboardTab imported", () => {
     expect(pane).toMatch(
-      /import InfographicsTab from "\.\/InfographicsTab\.svelte";/,
+      /import DashboardTab from "\.\/DashboardTab\.svelte";/,
     );
   });
 
-  test("render branch matches active?.kind === \"infographics\"", () => {
+  test("render branch matches active?.kind === \"dashboard\"", () => {
     expect(pane).toMatch(
-      /\{:else if active\?\.kind === "infographics"\}[\s\S]{1,200}<InfographicsTab \/>/,
+      /\{:else if active\?\.kind === "dashboard"\}[\s\S]{1,200}<DashboardTab \/>/,
     );
   });
 });
 
-describe("fullstack-a-75: Infographics command + emptyPaneExtraActions wiring", () => {
-  test("app.infographics.open command routed to openInfographicsInActivePane", () => {
+describe("fullstack-a-75: Dashboard command + emptyPaneExtraActions wiring", () => {
+  test("app.dashboard.open command routed to openDashboardInActivePane", () => {
     expect(app).toMatch(
-      /case "app\.infographics\.open":[\s\S]{1,400}openInfographicsInActivePane\(\);/,
+      /case "app\.dashboard\.open":[\s\S]{1,400}openDashboardInActivePane\(\);/,
     );
   });
 
   test("emptyPaneExtraActions carries the Infographics entry", () => {
     expect(pane).toMatch(
-      /const emptyPaneExtraActions:[\s\S]{1,800}label: "Infographics",[\s\S]{1,400}command: "app\.infographics\.open",/,
+      /const emptyPaneExtraActions:[\s\S]{1,800}label: "Infographics",[\s\S]{1,400}command: "app\.dashboard\.open",/,
     );
   });
 });
@@ -86,7 +91,7 @@ describe("fullstack-a-75: carousel slide 1 redesign", () => {
   // `fullstack-a-75b`: spawn entries + secondary band moved
   // OUT of the carousel and into EmptyPaneWelcome.svelte. The
   // carousel is now a pure rotating widget hosted inside the
-  // Infographics tab; slide 1 carries the ASCII shortcut table.
+  // Dashboard tab; slide 1 carries the ASCII shortcut table.
   test("spawn entries no longer surface in the carousel", () => {
     expect(carousel).not.toMatch(/const spawnEntries: SpawnRow\[\]/);
     expect(carousel).not.toMatch(/const secondaryEntries: SpawnRow\[\]/);
@@ -112,63 +117,63 @@ describe("fullstack-a-75: carousel slide 1 redesign", () => {
   });
 });
 
-describe("fullstack-a-75b: InfographicsTab mounts the carousel", () => {
-  test("InfographicsTab imports + mounts EmptyPaneCarousel", () => {
-    expect(infographics).toMatch(
+describe("fullstack-a-75b: DashboardTab mounts the carousel", () => {
+  test("DashboardTab imports + mounts EmptyPaneCarousel", () => {
+    expect(dashboard).toMatch(
       /import EmptyPaneCarousel from "\.\/EmptyPaneCarousel\.svelte";/,
     );
-    expect(infographics).toMatch(/<EmptyPaneCarousel \/>/);
+    expect(dashboard).toMatch(/<EmptyPaneCarousel \/>/);
   });
 
   test("static ASCII pre + Shortcuts header dropped (carousel owns the shortcut surface now)", () => {
-    expect(infographics).not.toMatch(/<pre class="info-shortcuts">/);
-    expect(infographics).not.toMatch(/renderTable\(platform, os\)/);
+    expect(dashboard).not.toMatch(/<pre class="info-shortcuts">/);
+    expect(dashboard).not.toMatch(/renderTable\(platform, os\)/);
   });
 
   test("body wraps the carousel in a labeled region", () => {
-    expect(infographics).toMatch(
-      /class="infographics"[\s\S]{1,120}aria-label="Infographics"[\s\S]{1,120}role="region"/,
+    expect(dashboard).toMatch(
+      /class="dashboard"[\s\S]{1,120}aria-label="Infographics"[\s\S]{1,120}role="region"/,
     );
   });
 });
 
-describe("Wave 4: Infographics settings", () => {
+describe("Wave 4: Dashboard settings", () => {
   test("right-click Settings menu uses the shared HamburgerMenu primitive", () => {
-    expect(infographics).toMatch(/import HamburgerMenu from "\.\/HamburgerMenu\.svelte";/);
-    expect(infographics).toMatch(/function onContextMenu\(e: MouseEvent\): void/);
-    expect(infographics).toMatch(/menu\?\.openAtCursor\(e\.clientX, e\.clientY\)/);
-    expect(infographics).toMatch(/<Settings2 size=\{16\}/);
-    expect(infographics).toMatch(/<span class="menu-row-label">Settings<\/span>/);
+    expect(dashboard).toMatch(/import HamburgerMenu from "\.\/HamburgerMenu\.svelte";/);
+    expect(dashboard).toMatch(/function onContextMenu\(e: MouseEvent\): void/);
+    expect(dashboard).toMatch(/menu\?\.openAtCursor\(e\.clientX, e\.clientY\)/);
+    expect(dashboard).toMatch(/<Settings2 size=\{16\}/);
+    expect(dashboard).toMatch(/<span class="menu-row-label">Settings<\/span>/);
   });
 
   test("settings view uses the shared surface theme shell and OK button", () => {
-    expect(infographics).toMatch(
+    expect(dashboard).toMatch(
       /import \{ surfaceThemeOverride \} from "\.\.\/state\/store\.svelte";/,
     );
-    expect(infographics).toMatch(/data-theme=\{surfaceThemeOverride\("infographics"\)\}/);
-    expect(infographics).toMatch(/ariaLabel="Infographics settings"/);
-    expect(infographics).toMatch(
-      /<HybridSurfaceConfigShell[\s\S]{1,220}title="Infographics"[\s\S]{1,120}surface="infographics"[\s\S]{1,160}onDone=\{closeSettings\}/,
+    expect(dashboard).toMatch(/data-theme=\{surfaceThemeOverride\("dashboard"\)\}/);
+    expect(dashboard).toMatch(/ariaLabel="Infographics settings"/);
+    expect(dashboard).toMatch(
+      /<HybridSurfaceConfigShell[\s\S]{1,220}title="Infographics"[\s\S]{1,120}surface="dashboard"[\s\S]{1,160}onDone=\{closeSettings\}/,
     );
-    expect(infographics).not.toMatch(/type InfographicsAppearance/);
-    expect(infographics).not.toMatch(/name="infographics-appearance"/);
+    expect(dashboard).not.toMatch(/type DashboardAppearance/);
+    expect(dashboard).not.toMatch(/name="dashboard-appearance"/);
     expect(shell).toMatch(
       /<button type="button" class="config-ok" onclick=\{\(\) => onDone\?\.\(\)\}>OK<\/button>/,
     );
   });
 
   test("settings view exposes metadata archive export through the typed API", () => {
-    expect(infographics).toMatch(/import \{ api \} from "\.\.\/api\/client";/);
-    expect(infographics).toMatch(/import \{ formatSize \} from "\.\.\/state\/format";/);
-    expect(infographics).toMatch(/async function exportMetadataArchive\(\): Promise<void>/);
-    expect(infographics).toMatch(/await api\.metadataExport\(\)/);
-    expect(infographics).toMatch(/await api\.metadataImport\(metadataImportFile/);
-    expect(infographics).toMatch(/URL\.createObjectURL\(download\.blob\)/);
-    expect(infographics).toContain("Metadata archive");
-    expect(infographics).toContain("Export metadata archive");
-    expect(infographics).toContain("Import metadata archive");
-    expect(infographics).toContain("Force SCM mismatch");
-    expect(infographics).toContain("Rescan after import");
+    expect(dashboard).toMatch(/import \{ api \} from "\.\.\/api\/client";/);
+    expect(dashboard).toMatch(/import \{ formatSize \} from "\.\.\/state\/format";/);
+    expect(dashboard).toMatch(/async function exportMetadataArchive\(\): Promise<void>/);
+    expect(dashboard).toMatch(/await api\.metadataExport\(\)/);
+    expect(dashboard).toMatch(/await api\.metadataImport\(metadataImportFile/);
+    expect(dashboard).toMatch(/URL\.createObjectURL\(download\.blob\)/);
+    expect(dashboard).toContain("Metadata archive");
+    expect(dashboard).toContain("Export metadata archive");
+    expect(dashboard).toContain("Import metadata archive");
+    expect(dashboard).toContain("Force SCM mismatch");
+    expect(dashboard).toContain("Rescan after import");
   });
 });
 
@@ -180,7 +185,7 @@ describe("fullstack-a-75b: EmptyPaneWelcome static spawn surface", () => {
       /const spawnEntries: SpawnRow\[\] = \[[\s\S]{1,200}label: "New Draft",[\s\S]{1,1000}label: "Terminal",[\s\S]{1,800}label: "File Browser",[\s\S]{1,800}label: "Rich Prompt",[\s\S]{1,800}label: "Graph",/,
     );
     expect(welcome).toMatch(
-      /const secondaryEntries: SpawnRow\[\] = \[[\s\S]{1,400}label: "Infographics",[\s\S]{1,200}command: "app\.infographics\.open",/,
+      /const secondaryEntries: SpawnRow\[\] = \[[\s\S]{1,400}label: "Infographics",[\s\S]{1,200}command: "app\.dashboard\.open",/,
     );
     // `fullstack-a-95`: stale per-tab "scope for Graph" hint
     // dropped. @@Alex flagged the concept as retired after the
@@ -203,7 +208,7 @@ describe("fullstack-a-75b: EmptyPaneWelcome static spawn surface", () => {
       /\{#if !multiPane\}[\s\S]{1,800}<EmptyPaneWelcome oncontextmenu=\{onEmptyPaneContextMenu\} \/>/,
     );
     // Pane.svelte no longer imports EmptyPaneCarousel directly
-    // (it's owned by InfographicsTab.svelte now).
+    // (it's owned by DashboardTab.svelte now).
     expect(pane).not.toMatch(
       /import EmptyPaneCarousel from "\.\/EmptyPaneCarousel\.svelte";/,
     );

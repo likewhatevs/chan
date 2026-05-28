@@ -244,8 +244,10 @@ describe("Pane right-click menus", () => {
     // Draft / Terminal / File Browser / Rich Prompt / Graph),
     // separator, then extras (Search + Infographics), then
     // Settings. Same set + ordering as the pane hamburger and
-    // the carousel slide 1. Infographics added by -a-75 (read-
-    // only shortcut sheet + future info panels).
+    // the carousel slide 1. Dashboard tab added by -a-75 (read-
+    // only shortcut sheet + future info panels); the user-
+    // visible label is still "Infographics" until widget work
+    // ships.
     expect(menuLabels()).toEqual([
       "New Draft",
       "Terminal",

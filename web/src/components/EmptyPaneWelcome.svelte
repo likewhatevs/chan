@@ -1,7 +1,7 @@
 <script lang="ts">
   // `fullstack-a-75b`: static welcome surface for empty single-
   // pane lone-pane layouts. Carousel widget moved to the
-  // Infographics tab (per @@Alex's `d4a3fc8` route); this
+  // Dashboard tab (per @@Alex's `d4a3fc8` route); this
   // surface now renders a fixed spawn grid + Infographics tile
   // + footer hint — no rotation, no slides, no play/pause.
   //
@@ -90,8 +90,8 @@
     {
       label: "Infographics",
       icon: BarChart2,
-      command: "app.infographics.open",
-      chordId: "app.infographics.open",
+      command: "app.dashboard.open",
+      chordId: "app.dashboard.open",
     },
   ];
 
@@ -193,7 +193,7 @@
   /* `fullstack-a-32` + `-a-67 slice 2`: 5-up grid (New Draft +
      Terminal / FB / RP / Graph). Width caps + tile shape mirror
      the carousel's old spawn-row so the visual reads identically
-     across the welcome + the (now Infographics-tab-hosted)
+     across the welcome + the (now Dashboard-tab-hosted)
      carousel slide 1's prior look. */
   .spawn-row {
     display: grid;

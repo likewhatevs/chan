@@ -65,7 +65,7 @@
   import HybridFileBrowserConfig from "./HybridFileBrowserConfig.svelte";
   import EmptyPaneWelcome from "./EmptyPaneWelcome.svelte";
   import FileEditorTab from "./FileEditorTab.svelte";
-  import InfographicsTab from "./InfographicsTab.svelte";
+  import DashboardTab from "./DashboardTab.svelte";
   import FileBrowserSurface from "./FileBrowserSurface.svelte";
   import GraphPanel from "./GraphPanel.svelte";
   import HamburgerMenu from "./HamburgerMenu.svelte";
@@ -217,14 +217,14 @@
       chordId: "app.search.toggle",
     },
     // `fullstack-a-75`: discoverable spawn entry for the new
-    // Infographics tab — hosts the ASCII shortcut table that
+    // Dashboard tab — hosts the ASCII shortcut table that
     // used to live on the empty-pane carousel slide 1, plus
     // future info panels.
     {
       label: "Infographics",
       icon: BarChart2,
-      command: "app.infographics.open",
-      chordId: "app.infographics.open",
+      command: "app.dashboard.open",
+      chordId: "app.dashboard.open",
     },
   ];
   function chordLabel(id: string | undefined): string {
@@ -1341,8 +1341,8 @@
         }}
         onFlip={() => flipHybrid(pane.id)}
       />
-    {:else if active?.kind === "infographics"}
-      <InfographicsTab />
+    {:else if active?.kind === "dashboard"}
+      <DashboardTab />
     {:else if !active}
       <div
         class="placeholder"
@@ -1354,7 +1354,7 @@
              the static welcome surface — 5-tile spawn grid +
              Infographics tile + footer hint. The rotating
              carousel widget (Shortcuts / Workspace metadata /
-             Indexing graph) lives inside the Infographics tab
+             Indexing graph) lives inside the Dashboard tab
              now per @@Alex's route on the `-a-75` walk.
              Multi-pane empty panes keep the minimal chrome
              (just the chan mark). -->
