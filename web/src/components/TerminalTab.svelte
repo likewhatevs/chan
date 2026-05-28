@@ -285,8 +285,14 @@
     // focus reliably — the editor's contenteditable retains the
     // DOM focus and the next keystroke damages the doc.
     tabFocusPulse.value;
-    queueFit();
-    refreshTerminalRenderer();
+    // `desktop-fixes`: the pane gaining focus runs the same fit + repaint
+    // recovery the blur / active-flip paths use so WKWebView redraws any
+    // rows left stale by the visibility flip. Crucially this no longer
+    // CLEARS the shared texture atlas (see refreshTerminalRenderer): the
+    // old per-focus atlas clear is what garbled the sibling panes when the
+    // user moved focus around the grid. recoverTerminalRendererAfterHost-
+    // Resume() subsumes the queueFit() this used to call.
+    recoverTerminalRendererAfterHostResume();
     setTerminalActivity(tab, false);
     sendFocusState();
     queueMicrotask(() => {
@@ -312,14 +318,13 @@
   // `lane-c addendum-1 bug 1`: when focus moves AWAY from this terminal
   // to another pane, the pane losing focus can paint stale in the
   // desktop app's WKWebView - its WebGL renderer leaves the canvas
-  // half-updated and a single clear+refresh does not fully correct it.
-  // A plain refreshTerminalRenderer() is enough on Blink (web) but not
-  // on WebKit, so run the SAME recovery the host-resume / active-flip
-  // (Bug 6) paths use - fit + texture-atlas clear + delayed re-fits -
-  // on blur too. The size is unchanged on a focus switch, so the fit is
-  // a dimensional no-op; the value is the deferred repaint pass WebKit
-  // needs. No-op regression on Blink (verified in Chrome); the
-  // WKWebView fix is verified by @@Alex in chan-desktop.
+  // half-updated and a single refresh does not always correct it. So run
+  // the SAME recovery the host-resume / active-flip (Bug 6) paths use -
+  // fit + repaint + delayed re-fits - on blur too. The size is unchanged
+  // on a focus switch, so the fit is a dimensional no-op; the value is
+  // the deferred repaint pass WebKit needs. `desktop-fixes`: that
+  // recovery no longer clears the shared texture atlas (the per-focus
+  // clear corrupted sibling panes); it only repaints.
   $effect(() => {
     if (focused) return;
     recoverTerminalRendererAfterHostResume();
@@ -337,9 +342,9 @@
   // and the ResizeObserver covers size changes, but a pure
   // visibility flip on a tab switch hits neither. React to `active`
   // here: when it flips true and the terminal is live, run the same
-  // fit + texture-atlas-clear + delayed re-fit recovery used for a
-  // host resume, so the terminal converges on its real dimensions and
-  // repaints clean. `active` is read first so the effect tracks it;
+  // fit + repaint + delayed re-fit recovery used for a host resume, so
+  // the terminal converges on its real dimensions and repaints clean.
+  // `active` is read first so the effect tracks it;
   // the `term` gate skips the initial mount (start() already fits).
   $effect(() => {
     if (!active) return;
@@ -433,13 +438,6 @@
     term.options.theme = terminalTheme();
   }
 
-  function clearTextureAtlas(): void {
-    if (!term || !webglRendererActive) return;
-    const maybeClear = (term as Terminal & { clearTextureAtlas?: () => void })
-      .clearTextureAtlas;
-    maybeClear?.call(term);
-  }
-
   function refreshTerminalRows(): void {
     if (!term) return;
     const maybeRefresh = (term as Terminal & {
@@ -448,16 +446,27 @@
     maybeRefresh?.call(term, 0, Math.max(0, term.rows - 1));
   }
 
+  // `desktop-fixes`: repaint the visible rows; do NOT clear the texture
+  // atlas. xterm.js's WebGL renderer shares ONE process-global
+  // TextureAtlas across every terminal pane (`fullstack-a-97` already
+  // named that share "the source of the cross-pane glyph glitches" when
+  // it removed the per-PTY-chunk clear). The focus / blur / active-flip /
+  // wake recovery used to clear that shared atlas via xterm's clear API;
+  // clearing it from the pane the user just moved to rebuilt the atlas
+  // out from under the SIBLING panes still on screen, which is what
+  // produced the garbled glyphs when moving focus between panes. The
+  // addon-webgl 0.19 renderer rebuilds the atlas itself for color / DPR /
+  // font / options changes, so these events only need a row repaint -
+  // term.refresh() redraws from the existing good atlas with no
+  // cross-pane fallout.
   function refreshTerminalRenderer(): void {
     if (!term) return;
     requestAnimationFrame(() => {
       if (!term) return;
-      clearTextureAtlas();
       refreshTerminalRows();
     });
     void document.fonts?.ready.then(() => {
       if (!term) return;
-      clearTextureAtlas();
       refreshTerminalRows();
     });
   }

@@ -40,15 +40,23 @@ describe("fullstack-b-29: TerminalTab WebGL renderer", () => {
     expect(tab).toMatch(/falling back to DOM/);
   });
 
-  test("keeps event-driven atlas refresh helpers wired", () => {
-    // `clearTextureAtlas` + `refreshTerminalRows` survive as the
-    // event-driven renderer-refresh primitives (mount / focus / blur
-    // / host-resume). Their per-data-chunk caller was removed; see
-    // the negative pin below.
-    expect(tab).toMatch(/function clearTextureAtlas\(\): void/);
-    expect(tab).toMatch(/maybeClear\?\.call\(term\)/);
+  test("keeps the event-driven row-repaint helper wired", () => {
+    // `refreshTerminalRows` is the event-driven renderer-refresh
+    // primitive (mount / focus / blur / host-resume). `desktop-fixes`
+    // dropped the companion `clearTextureAtlas` helper - see the
+    // negative pin in the next test.
     expect(tab).toMatch(/function refreshTerminalRows\(\): void/);
     expect(tab).toMatch(/maybeRefresh\?\.call\(term, 0, Math\.max\(0, term\.rows - 1\)\)/);
+  });
+
+  test("never clears the shared WebGL texture atlas on a per-pane event", () => {
+    // `desktop-fixes`: clearing xterm.js's process-global TextureAtlas
+    // from one pane's focus / blur / active / wake recovery rebuilt the
+    // atlas out from under the sibling panes still on screen, garbling
+    // their glyphs when the user moved focus around the grid. The
+    // addon-webgl 0.19 renderer rebuilds the atlas itself for
+    // color / DPR / font changes, so we never call it manually anymore.
+    expect(tab).not.toMatch(/clearTextureAtlas/);
   });
 
   test("does not clear the texture atlas per PTY data chunk", () => {
@@ -78,13 +86,22 @@ describe("fullstack-b-29: TerminalTab WebGL renderer", () => {
 
   test("refreshes renderer on focus and after font readiness", () => {
     expect(tab).toMatch(/function refreshTerminalRenderer\(\): void/);
-    expect(tab).toMatch(/clearTextureAtlas\(\);[\s\S]*?refreshTerminalRows\(\);/);
-    expect(tab).toMatch(/document\.fonts\?\.ready\.then/);
+    // `desktop-fixes`: repaint-only - rAF and fonts.ready each call
+    // refreshTerminalRows(); no texture-atlas clear (see the negative
+    // pin above).
     expect(tab).toMatch(
-      /if \(!focused\) return;[\s\S]*?queueFit\(\);[\s\S]*?refreshTerminalRenderer\(\);/,
+      /requestAnimationFrame\([\s\S]*?refreshTerminalRows\(\);[\s\S]*?\}\);/,
+    );
+    expect(tab).toMatch(/document\.fonts\?\.ready\.then/);
+    // `desktop-fixes`: the focus-GAIN path runs the full host-resume
+    // recovery (not a bare queueFit + refreshTerminalRenderer) so the
+    // pane focused after another was active repaints clean in WKWebView
+    // instead of showing stale glyphs.
+    expect(tab).toMatch(
+      /if \(!focused\) return;[\s\S]*?recoverTerminalRendererAfterHostResume\(\);[\s\S]*?setTerminalActivity\(tab, false\);/,
     );
     // `lane-c addendum-1 bug 1`: the blur effect runs the full
-    // host-resume recovery (fit + atlas clear + delayed re-fits), not a
+    // host-resume recovery (fit + repaint + delayed re-fits), not a
     // bare refreshTerminalRenderer, so the pane LOSING focus repaints
     // clean in WKWebView (the desktop app) where a single refresh
     // leaves it stale.
