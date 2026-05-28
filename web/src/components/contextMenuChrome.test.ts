@@ -40,14 +40,20 @@ describe("context menu chrome", () => {
     }
   });
 
-  test("pane hover and focus use the same in-out motion channel", () => {
+  test("pane focus wobble shares the right-click menu motion curve", () => {
+    // Wobble on a newly focused pane uses the same easeOutBack curve
+    // as the tab-pill / right-click menu pops above, so the motion
+    // language stays consistent across surfaces. The animation lives
+    // on `.pane.focused.wobble` (not on `::before`) so the chrome
+    // halo can pulse out via box-shadow.
     expect(pane).toMatch(
-      /\.pane::before \{[\s\S]*?transform 260ms cubic-bezier\(0\.34, 1\.56, 0\.64, 1\)/,
+      /\.pane\.focused\.wobble \{[\s\S]*?animation: pane-wobble-once 360ms cubic-bezier\(0\.34, 1\.56, 0\.64, 1\)/,
     );
-    expect(pane).toMatch(
-      /\.pane:hover::before,\s*\.pane\.focused::before \{[\s\S]*?transform: scale\(1\.006\)/,
-    );
-    expect(pane).not.toMatch(/\.pane:hover,\s*\.pane\.focused \{[\s\S]*?transform: scale/);
+    // xterm's WebGL glyph atlas can corrupt if an ancestor pane is
+    // scaled during focus changes. Guard against any future
+    // refactor re-introducing transform: scale on the pane element
+    // itself (hover, focused, or wobble).
+    expect(pane).not.toMatch(/\.pane(:hover|\.focused|\.wobble)?\s*\{[\s\S]*?transform: scale/);
   });
 
   test("Hybrid Nav focus chrome does not composite pane bodies", () => {
