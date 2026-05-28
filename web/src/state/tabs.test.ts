@@ -1761,6 +1761,25 @@ describe("Hybrid flip (fullstack-48 phase A; revisited by fullstack-a-43 + fulls
     expect(live.back).toBeUndefined();
   });
 
+  test("flipHybrid is a no-op on an empty pane (B4)", async () => {
+    // Round-1 smoke: Cmd+, on an empty pane animated the whole
+    // pane even though there's no surface to flip. Guard reads
+    // `tabs.length === 0` before mutating state or bumping the
+    // flip bus.
+    const seed = resetLayout([]);
+    const { paneFlip } = await import("./tabs.svelte");
+    const beforeFlip = paneFlip.versions[seed.id] ?? 0;
+
+    flipHybrid(seed.id);
+
+    const live = layout.nodes[seed.id];
+    if (live?.kind !== "leaf") throw new Error("expected leaf");
+    expect(live.tabs).toHaveLength(0);
+    expect(live.showingBack).toBeFalsy();
+    expect(live.back).toBeUndefined();
+    expect(paneFlip.versions[seed.id] ?? 0).toBe(beforeFlip);
+  });
+
   test("serialize / restore round-trips theme + showingBack + back marker (fullstack-a-47)", async () => {
     const front = fileTab({ id: "front", path: "front.md" });
     const seed = resetLayout([front]);
@@ -3119,6 +3138,8 @@ describe("graphTabLabel (fullstack-81)", () => {
   });
 
   test("selection label wins over the scope title", () => {
+    // Titles without an `=` (legacy bare-string shape used in this
+    // unit test) fall back to the raw selectedNodeLabel.
     expect(
       graphTabLabel(
         graphTab({
@@ -3139,11 +3160,68 @@ describe("graphTabLabel (fullstack-81)", () => {
     ).toBe("#search");
   });
 
+  test("kind= prefix from graphTitle survives node selection (B1)", () => {
+    // Phase-13 round-1 closing B1: tab strip must keep showing
+    // path= / tag= / contact= / lang= even after the user has
+    // tapped a node. graphTitle() seeds tab.title with that
+    // prefix; graphTabLabel preserves it.
+    expect(
+      graphTabLabel(
+        graphTab({
+          title: "path=workspace",
+          selectedNodeId: "notes/foo.md",
+          selectedNodeLabel: "foo.md",
+        }),
+      ),
+    ).toBe("path=foo.md");
+    expect(
+      graphTabLabel(
+        graphTab({
+          title: "tag=#search",
+          selectedNodeId: "notes/a.md",
+          selectedNodeLabel: "a.md",
+        }),
+      ),
+    ).toBe("tag=a.md");
+    expect(
+      graphTabLabel(
+        graphTab({
+          title: "contact=alice.md",
+          selectedNodeId: "notes/b.md",
+          selectedNodeLabel: "b.md",
+        }),
+      ),
+    ).toBe("contact=b.md");
+    expect(
+      graphTabLabel(
+        graphTab({
+          title: "lang=Rust",
+          selectedNodeId: "crates/foo/src/lib.rs",
+          selectedNodeLabel: "lib.rs",
+        }),
+      ),
+    ).toBe("lang=lib.rs");
+    // `Languages` top-level overview (mode === "language") has no
+    // `=`; selection still renders the bare label.
+    expect(
+      graphTabLabel(
+        graphTab({
+          title: "Languages",
+          mode: "language",
+          selectedNodeLabel: "Rust",
+        }),
+      ),
+    ).toBe("Rust");
+  });
+
   test("tabLabel routes graph tabs through graphTabLabel", () => {
     expect(
       tabLabel(graphTab({ title: "workspace", selectedNodeLabel: "Miguel" })),
     ).toBe("Miguel");
     expect(tabLabel(graphTab({ title: "foo.md" }))).toBe("foo.md");
+    expect(
+      tabLabel(graphTab({ title: "path=workspace", selectedNodeLabel: "Miguel" })),
+    ).toBe("path=Miguel");
   });
 });
 

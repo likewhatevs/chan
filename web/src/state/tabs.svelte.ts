@@ -516,10 +516,18 @@ export function truncateTabTitle(label: string): string {
 /// reads as the node's label (basename for files / dirs, `#tag`
 /// for tags, contact name, etc.). No selection → fall back to
 /// the scope-derived title from `-64` cached on `tab.title`.
+///
+/// Phase-13 round-1 closing (B1): even with a selection, keep
+/// the kind= prefix produced by `graphTitle()` so the tab strip
+/// keeps identifying the lens shape (path= / tag= / contact= /
+/// lang=). Titles without an `=` (top-level Languages overview,
+/// legacy / test-only bare strings) still render the bare label.
 export function graphTabLabel(t: GraphTab): string {
   const label = t.selectedNodeLabel?.trim();
-  if (label) return label;
-  return t.title;
+  if (!label) return t.title;
+  const equalsAt = t.title.indexOf("=");
+  if (equalsAt <= 0) return label;
+  return `${t.title.slice(0, equalsAt)}=${label}`;
 }
 
 /// Optional context for `browserTabLabel`. `workspaceName` is the
@@ -2810,7 +2818,7 @@ export function openDashboardInPane(paneId: string): void {
   const tab: DashboardTab = {
     kind: "dashboard",
     id: id("dashboard"),
-    title: "Infographics",
+    title: "Dashboard",
   };
   node.tabs.push(tab);
   node.activeTabId = tab.id;
@@ -3173,6 +3181,10 @@ export function setActivePane(paneId: string): void {
 export function flipHybrid(paneId: string): void {
   const node = activeLayout().nodes[paneId];
   if (!node || node.kind !== "leaf") return;
+  // Empty pane has no surface to flip; the chrome animation
+  // would still fire without this guard (B4 smoke regression:
+  // "Cmd+, on empty pane flips the whole pane visually").
+  if (node.tabs.length === 0) return;
   if (!node.back) {
     // Lazy init: materialise an empty back marker so subsequent
     // `pane.back !== undefined` checks read this pane as a
