@@ -86,6 +86,7 @@
   import { stripTrailingWhitespaceText } from "../editor/tools";
 
   import {
+    copyTextToClipboard,
     fileOps,
     openFsGraphForFile,
     openGraphForFile,
@@ -414,14 +415,12 @@
 
   async function doCopyPath(): Promise<void> {
     closeTabMenu();
-    try {
-      await navigator.clipboard?.writeText(tab.path);
+    await copyTextToClipboard(tab.path, {
       // `fullstack-a-86`: success toast auto-dismisses (3s)
       // — same shape as `-a-85`'s move-success fix.
-      setTransientStatus("Copied file path");
-    } catch (err) {
-      ui.status = `copy failed: ${(err as Error).message}`;
-    }
+      onSuccess: () => setTransientStatus("Copied file path"),
+      onError: (msg) => (ui.status = `copy failed: ${msg}`),
+    });
   }
 
   function doDuplicate(): void {
@@ -616,11 +615,9 @@
     closeTabMenu();
     const slash = tab.path.lastIndexOf("/");
     const cwd = slash > 0 ? tab.path.slice(0, slash) : "";
-    try {
-      await navigator.clipboard?.writeText(cwd);
-    } catch (err) {
-      ui.status = `copy failed: ${(err as Error).message ?? err}`;
-    }
+    await copyTextToClipboard(cwd, {
+      onError: (msg) => (ui.status = `copy failed: ${msg}`),
+    });
   }
 
   /// `fullstack-a-67f`: Find — opens the per-tab find bar via the

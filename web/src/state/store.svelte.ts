@@ -352,19 +352,43 @@ export function closeWorkspaceWarningsDialog(): void {
   workspaceWarningsDialog.open = false;
 }
 
-export async function copyWorkspaceWarningPath(warning: WorkspaceWarning): Promise<void> {
+/// Shared clipboard helper. Writes `text` via the Clipboard API and
+/// reports the result through the standard callbacks; callers wire it
+/// to either the workspace-warnings dialog state (legacy caller) or
+/// the global transient status pill (everyone else). Keeping the
+/// Clipboard-API plumbing in one place means the editor's right-click
+/// "Copy path", the warnings dialog, and the inspector's COPY button
+/// all share the same fallback + error shape.
+export async function copyTextToClipboard(
+  text: string,
+  opts: {
+    onSuccess?: () => void;
+    onError?: (msg: string) => void;
+  } = {},
+): Promise<void> {
   try {
     if (!navigator.clipboard) {
       throw new Error("Clipboard unavailable");
     }
-    await navigator.clipboard.writeText(warning.path);
-    workspaceWarningsDialog.error = null;
-    workspaceWarningsDialog.notice = "Copied path";
+    await navigator.clipboard.writeText(text);
+    opts.onSuccess?.();
   } catch (e) {
-    workspaceWarningsDialog.notice = null;
-    workspaceWarningsDialog.error =
-      e instanceof Error ? e.message : "Failed to copy warning path";
+    const msg = e instanceof Error ? e.message : "Failed to copy to clipboard";
+    opts.onError?.(msg);
   }
+}
+
+export async function copyWorkspaceWarningPath(warning: WorkspaceWarning): Promise<void> {
+  await copyTextToClipboard(warning.path, {
+    onSuccess: () => {
+      workspaceWarningsDialog.error = null;
+      workspaceWarningsDialog.notice = "Copied path";
+    },
+    onError: (msg) => {
+      workspaceWarningsDialog.notice = null;
+      workspaceWarningsDialog.error = msg;
+    },
+  });
 }
 
 export function dismissWorkspaceWarning(warning: WorkspaceWarning): void {

@@ -1,13 +1,26 @@
 <script lang="ts">
   // Workspace inspector body. Shown in the file browser's Inspector pane
-  // when the user clicks the Directory row in the hamburger menu. Houses
+  // when the user clicks the Directory row in the hamburger menu, and in
+  // the graph when the workspace-root node is selected. Houses
   // the global Notes Directories config (default root + recent workspaces list).
   // Search index status lives in the Search Status overlay.
+  //
+  // Parity with FileInfoBody's directory mode: this body renders the same
+  // aggregate stats (files, subdirs, size, last change), file-kind
+  // counts, and code report a regular folder inspector shows. The
+  // workspace chip + title up top stay distinct (workspace-rooted, not a
+  // generic folder), and the global Notes-directory config section sits
+  // below the parity content.
 
   import { onMount } from "svelte";
   import { api } from "../api/client";
-  import type { GlobalConfig } from "../api/types";
-  import { workspace } from "../state/store.svelte";
+  import type {
+    GlobalConfig,
+    InspectorPayload,
+    ReportPrefix,
+  } from "../api/types";
+  import { formatMtime, formatSize } from "../state/format";
+  import { tree, workspace } from "../state/store.svelte";
 
   /// `fullstack-73`: optional "Graph from here" callback. Consumers
   /// that host this body alongside an existing inspector convention
@@ -110,6 +123,117 @@
     }
   }
 
+  /// Aggregate stats walked from the loaded file tree. Mirrors
+  /// FileInfoBody's `dirStats` derivation for the workspace root: every
+  /// loaded entry contributes since the root has no prefix. The walk is
+  /// O(N) in tree size and re-runs only when tree.entries changes
+  /// ($derived dependency tracking). `latest` falls back to null when
+  /// the tree is empty.
+  const dirStats = $derived.by(() => {
+    let files = 0;
+    let dirs = 0;
+    let bytes = 0;
+    let latest: number | null = null;
+    for (const e of tree.entries) {
+      if (e.is_dir) dirs += 1;
+      else {
+        files += 1;
+        bytes += e.size;
+      }
+      if (e.mtime !== null && (latest === null || e.mtime > latest)) {
+        latest = e.mtime;
+      }
+    }
+    return { files, dirs, bytes, latest };
+  });
+
+  /// Server-side subtree summary for the workspace root. Authoritative
+  /// over the tree walk because the tree only contains loaded children;
+  /// `subtree.files` / `subtree.directories` / `subtree.bytes` count the
+  /// whole workspace. Falls back to the dirStats walk while the request
+  /// is in flight so the panel is never blank.
+  let inspectorPayload = $state<InspectorPayload | null>(null);
+  let inspectorReq = 0;
+  $effect(() => {
+    inspectorPayload = null;
+    const req = ++inspectorReq;
+    void api.inspector("")
+      .then((payload) => {
+        if (req === inspectorReq) inspectorPayload = payload;
+      })
+      .catch(() => {
+        if (req === inspectorReq) inspectorPayload = null;
+      });
+  });
+  const subtree = $derived(inspectorPayload?.subtree ?? null);
+  const fileKindCounts = $derived.by(() => {
+    if (!subtree) return [];
+    return Object.entries(subtree.file_kinds)
+      .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
+      .slice(0, 6);
+  });
+
+  /// Whole-workspace code report. Same `/api/report/dir` cache with the
+  /// `/api/report/prefix` walking fallback that FileInfoBody's dir branch
+  /// uses, so the workspace inspector and a regular folder inspector both
+  /// share the cheap path.
+  let prefixReport = $state<ReportPrefix | null>(null);
+  let reportLoading = $state(false);
+  let reportError = $state<string | null>(null);
+  let reportReq = 0;
+  let langExpanded = $state(false);
+  const LANG_PREVIEW = 5;
+
+  $effect(() => {
+    prefixReport = null;
+    reportError = null;
+    langExpanded = false;
+    const req = ++reportReq;
+    reportLoading = true;
+    void api
+      .reportDir("")
+      .catch((e) => {
+        const msg = (e as Error)?.message ?? "";
+        if (/404/.test(msg) || /not found/i.test(msg)) {
+          return api.reportPrefix("");
+        }
+        throw e;
+      })
+      .then((res) => {
+        if (req !== reportReq) return;
+        prefixReport = (res as ReportPrefix | null) ?? null;
+        reportLoading = false;
+      })
+      .catch((err: unknown) => {
+        if (req !== reportReq) return;
+        reportError = (err as Error).message;
+        reportLoading = false;
+      });
+  });
+
+  const visibleLanguages = $derived.by(() => {
+    if (!prefixReport) return [];
+    const all = prefixReport.by_language;
+    if (langExpanded || all.length <= LANG_PREVIEW) return all;
+    return all.slice(0, LANG_PREVIEW);
+  });
+  const hiddenLanguageCount = $derived(
+    prefixReport
+      ? Math.max(0, prefixReport.by_language.length - visibleLanguages.length)
+      : 0,
+  );
+
+  /// COCOMO formatting helpers; identical shape to FileInfoBody so the
+  /// dir-mode and workspace-root inspectors format the same way.
+  function fmtMonths(n: number): string {
+    if (!Number.isFinite(n)) return "—";
+    return n >= 10 ? `${Math.round(n)} mo` : `${n.toFixed(1)} mo`;
+  }
+  function fmtDevs(n: number): string {
+    if (!Number.isFinite(n)) return "—";
+    return n >= 10 ? `${Math.round(n)}` : n.toFixed(1);
+  }
+
   onMount(() => {
     void loadGlobalConfig();
   });
@@ -134,6 +258,88 @@
          Graph tab (file browser) or re-scopes the current one
          (Graph inspector). -->
     <button class="open" onclick={onSetAsScope}>Graph from here</button>
+  {/if}
+
+  <!-- Folder-mode parity with FileInfoBody: same aggregate stats grid,
+       file-kind counts, and code report a regular folder inspector
+       renders. Subtree counts prefer the server-side InspectorPayload
+       (authoritative for the whole workspace) and fall back to the
+       loaded tree walk while the request is in flight. -->
+  <div class="meta-grid">
+    <span class="k">files</span>
+    <span class="v">{subtree?.files ?? dirStats.files}</span>
+    <span class="k">subdirectories</span>
+    <span class="v">{subtree?.directories ?? dirStats.dirs}</span>
+    <span class="k">size</span>
+    <span class="v">{formatSize(subtree?.bytes ?? dirStats.bytes)}</span>
+    <span class="k">last change</span>
+    <span class="v">{formatMtime(dirStats.latest)}</span>
+  </div>
+  {#if fileKindCounts.length > 0}
+    <section class="refs compact-section">
+      <h4>File Kinds</h4>
+      <div class="kind-counts">
+        {#each fileKindCounts as [kind, count]}
+          <span class="kind-count"><span>{kind}</span><strong>{count}</strong></span>
+        {/each}
+      </div>
+    </section>
+  {/if}
+  {#if prefixReport && prefixReport.totals.files > 0}
+    <section class="refs">
+      <h4>Code</h4>
+      <div class="meta-grid">
+        <span class="k">indexed</span>
+        <span class="v">{prefixReport.totals.files}</span>
+        <span class="k">SLOC</span>
+        <span class="v">{prefixReport.totals.code.toLocaleString()}</span>
+        <span class="k">comments</span>
+        <span class="v">{prefixReport.totals.comments.toLocaleString()}</span>
+        <span class="k">blanks</span>
+        <span class="v">{prefixReport.totals.blanks.toLocaleString()}</span>
+        <span class="k">complexity</span>
+        <span class="v">{prefixReport.totals.complexity.toLocaleString()}</span>
+      </div>
+      {#if prefixReport.by_language.length > 0}
+        <ul class="lang-list">
+          {#each visibleLanguages as lang (lang.name)}
+            <li class="lang-row">
+              <span class="lang-name" title={lang.name}>{lang.name}</span>
+              <span class="lang-files">{lang.files} file{lang.files === 1 ? "" : "s"}</span>
+              <span class="lang-sloc">{lang.code.toLocaleString()} SLOC</span>
+            </li>
+          {/each}
+        </ul>
+        {#if hiddenLanguageCount > 0}
+          <button
+            type="button"
+            class="see-more"
+            onclick={() => (langExpanded = true)}
+          >+{hiddenLanguageCount} more</button>
+        {:else if langExpanded && prefixReport.by_language.length > LANG_PREVIEW}
+          <button
+            type="button"
+            class="see-more"
+            onclick={() => (langExpanded = false)}
+          >show fewer</button>
+        {/if}
+      {/if}
+      <div class="cocomo">
+        <div class="cocomo-title">COCOMO ({prefixReport.cocomo.model})</div>
+        <div class="meta-grid">
+          <span class="k">effort</span>
+          <span class="v">{fmtMonths(prefixReport.cocomo.effort_person_months)}</span>
+          <span class="k">schedule</span>
+          <span class="v">{fmtMonths(prefixReport.cocomo.schedule_months)}</span>
+          <span class="k">developers</span>
+          <span class="v">{fmtDevs(prefixReport.cocomo.developers)}</span>
+        </div>
+      </div>
+    </section>
+  {:else if reportLoading}
+    <div class="refs-loading">loading report…</div>
+  {:else if reportError}
+    <div class="refs-error">report unavailable: {reportError}</div>
   {/if}
 
   <section class="refs">
@@ -328,4 +534,88 @@
     text-overflow: ellipsis;
     white-space: nowrap;
   }
+  /* Folder-parity sections (file kinds + code report). Visual style
+     mirrors FileInfoBody so the workspace inspector and a regular
+     folder inspector read as one feature. */
+  .compact-section { margin-top: 0.35rem; }
+  .kind-counts {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px;
+  }
+  .kind-count {
+    display: inline-flex;
+    gap: 5px;
+    align-items: center;
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    padding: 2px 5px;
+    color: var(--text-secondary);
+    font-size: 12px;
+  }
+  .kind-count strong {
+    color: var(--text);
+    font-weight: 600;
+  }
+  .lang-list {
+    list-style: none;
+    padding: 0;
+    margin: 0.4rem 0 0 0;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+  }
+  .lang-row {
+    display: grid;
+    grid-template-columns: 1fr auto auto;
+    gap: 0.5rem;
+    font-size: 13px;
+    align-items: baseline;
+  }
+  .lang-name {
+    color: var(--text);
+    word-break: break-word;
+  }
+  .lang-files,
+  .lang-sloc {
+    color: var(--text-secondary);
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap;
+  }
+  .see-more {
+    display: block;
+    margin: 0.3rem 0 0 0;
+    background: none;
+    border: none;
+    color: var(--link);
+    cursor: pointer;
+    font: inherit;
+    font-size: 13px;
+    padding: 0;
+  }
+  .see-more:hover { text-decoration: underline; }
+  .cocomo {
+    margin-top: 0.5rem;
+    padding-top: 0.4rem;
+    border-top: 1px dashed var(--border);
+  }
+  .cocomo-title {
+    font-size: 12px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: var(--text-secondary);
+    margin-bottom: 0.2rem;
+  }
+  .cocomo .meta-grid {
+    margin: 0;
+  }
+  .refs-loading,
+  .refs-error {
+    color: var(--text-secondary);
+    font-size: 13px;
+    margin-top: 0.6rem;
+    font-style: italic;
+  }
+  .refs-error { color: var(--warn-text); font-style: normal; }
 </style>

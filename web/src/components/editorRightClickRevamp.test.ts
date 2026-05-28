@@ -132,8 +132,12 @@ describe("fullstack-a-67f: Find / Copy paths", () => {
   });
 
   test("doCopyCwdPath helper writes the parent-dir path to clipboard", () => {
+    // Phase-13 slice 3: routes the Clipboard API call through the
+    // shared copyTextToClipboard helper (state/store.svelte.ts) so the
+    // editor menu's copy buttons, the inspector's COPY button, and the
+    // warnings dialog all share one writeText + fallback path.
     expect(editor).toMatch(
-      /async function doCopyCwdPath\(\): Promise<void> \{[\s\S]{1,400}lastIndexOf\("\/"\)[\s\S]{1,400}navigator\.clipboard\?\.writeText\(cwd\)/,
+      /async function doCopyCwdPath\(\): Promise<void> \{[\s\S]{1,400}lastIndexOf\("\/"\)[\s\S]{1,400}copyTextToClipboard\(cwd/,
     );
   });
 });

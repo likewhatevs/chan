@@ -44,8 +44,14 @@ describe("fullstack-a-86: error paths stay persistent", () => {
   });
 
   test("FileEditorTab copy-failed stays persistent", () => {
+    // Phase-13 slice 3: copy errors now route through the shared
+    // copyTextToClipboard helper's onError callback, which still
+    // assigns ui.status (= persistent), preserving the contract this
+    // test pins. The `msg` shape changed from `(err as Error).message`
+    // (raw throw) to the already-resolved string the helper passes
+    // back.
     expect(fileEditor).toMatch(
-      /ui\.status = `copy failed: \$\{\(err as Error\)\.message\}`;/,
+      /onError: \(msg\) => \(ui\.status = `copy failed: \$\{msg\}`\),?/,
     );
   });
 

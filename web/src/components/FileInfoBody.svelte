@@ -46,6 +46,9 @@
     clearDownloadTransfer,
   } from "../state/downloadTransfer.svelte";
   import {
+    copyTextToClipboard,
+    setTransientStatus,
+    ui,
     workspace,
     fileOps,
     loadTreeDir,
@@ -426,14 +429,38 @@
   const downloadBusy = $derived(downloadTransferActive());
 
   /// Full-path toggle for the actions section. The header shows the
-  /// basename; this reveals the workspace-relative path. Resets to hidden
-  /// whenever the selection changes so a new entry doesn't inherit the
-  /// previous one's expand state. Workspace root ("") has no path to show.
+  /// basename; this reveals the ABSOLUTE filesystem path (workspace root
+  /// joined with the relative path) so the user can paste it into a
+  /// terminal or external tool. Resets to hidden whenever the selection
+  /// changes so a new entry doesn't inherit the previous one's expand
+  /// state. Workspace root ("") has no path to show.
   let showFullPath = $state(false);
   $effect(() => {
     void path;
     showFullPath = false;
   });
+
+  /// Absolute filesystem path for the selected entry. Joins
+  /// `workspace.info.root` (the on-disk root chan-server reports) with
+  /// the entry's workspace-relative path, normalizing trailing slashes so
+  /// `root` + `/` + relative produces a single separator. Empty root
+  /// (boot edge case) falls back to the relative path so the COPY button
+  /// still copies something meaningful.
+  const absolutePath = $derived.by(() => {
+    if (!entry?.path) return "";
+    const root = workspace.info?.root ?? "";
+    if (!root) return entry.path;
+    const trimmed = root.replace(/[/\\]+$/, "");
+    return `${trimmed}/${entry.path}`;
+  });
+
+  async function doCopyAbsolutePath(): Promise<void> {
+    if (!absolutePath) return;
+    await copyTextToClipboard(absolutePath, {
+      onSuccess: () => setTransientStatus("Copied file path"),
+      onError: (msg) => (ui.status = `copy failed: ${msg}`),
+    });
+  }
 
   const uploadTitle = $derived(
     entry?.is_dir
@@ -646,7 +673,15 @@
           {showFullPath ? "Hide path" : "Show path"}
         </button>
         {#if showFullPath}
-          <div class="path-row mono" title={entry.path}>{entry.path}</div>
+          <div class="path-row-group">
+            <div class="path-row mono" title={absolutePath}>{absolutePath}</div>
+            <button
+              type="button"
+              class="copy-btn"
+              onclick={doCopyAbsolutePath}
+              title="Copy absolute path to clipboard"
+            >COPY</button>
+          </div>
         {/if}
       {/if}
       <div class="action-buttons">
@@ -1235,6 +1270,34 @@
     margin: 0 0 0.45rem 0;
     word-break: break-all;
   }
+  /* Path row + COPY button live on one row when the toggle reveals the
+     absolute path. The path text takes the remaining width; the button
+     sits flush right so the affordance is visible without scrolling. */
+  .path-row-group {
+    display: flex;
+    align-items: flex-start;
+    gap: 0.4rem;
+    margin: 0 0 0.45rem 0;
+  }
+  .path-row-group .path-row {
+    flex: 1;
+    margin: 0;
+  }
+  .copy-btn {
+    flex-shrink: 0;
+    background: transparent;
+    border: 1px solid var(--btn-border);
+    border-radius: 3px;
+    color: var(--text);
+    cursor: pointer;
+    font: inherit;
+    font-size: 10.5px;
+    font-weight: 600;
+    letter-spacing: 0.05em;
+    padding: 1px 6px;
+    line-height: 1.4;
+  }
+  .copy-btn:hover { border-color: var(--btn-hover); }
   .open {
     width: 100%;
     background: var(--btn-bg);
