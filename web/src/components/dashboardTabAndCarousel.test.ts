@@ -81,10 +81,18 @@ describe("fullstack-a-75: Dashboard command + emptyPaneExtraActions wiring", () 
     );
   });
 
-  test("emptyPaneExtraActions carries the Dashboard entry between Graph and Search (B5)", () => {
+  test("spawnActions carries the Dashboard entry after Graph + Search (B5 + B8)", () => {
+    // Round-1 closing-2 (B8) folded the separate
+    // `emptyPaneExtraActions` list into `spawnActions` so the
+    // pane top-bar hamburger and the empty-pane right-click
+    // menu both render the same 7-entry spawn set in the same
+    // order: ..., Graph, Search, Dashboard. The user's quoted
+    // ask required Search + Dashboard to surface in the
+    // hamburger menu too, which the prior split list blocked.
     expect(pane).toMatch(
-      /const emptyPaneExtraActions:[\s\S]{1,800}label: "Dashboard",[\s\S]{1,400}command: "app\.dashboard\.open",[\s\S]{1,400}label: "Search",/,
+      /const spawnActions:[\s\S]{1,2000}label: "Graph",[\s\S]{1,400}command: "app\.graph\.toggle",[\s\S]{1,400}label: "Search",[\s\S]{1,400}command: "app\.search\.toggle",[\s\S]{1,400}label: "Dashboard",[\s\S]{1,400}command: "app\.dashboard\.open",/,
     );
+    expect(pane).not.toMatch(/const emptyPaneExtraActions:/);
   });
 });
 
@@ -135,7 +143,16 @@ describe("phase-13 slice 3b-1: carousel slide rework", () => {
   });
 
   test("About widget embeds the donation QR + Fund-the-work copy", () => {
-    expect(carousel).toMatch(/src="\/qr-donate\.png"/);
+    // B4c: src is now wrapped in `withTokenQuery("/qr-donate.png")`
+    // so the prefix rewrite + per-launch bearer token apply under
+    // chan-desktop's non-root mount and the tunnel-mode prefix.
+    // A raw `<img src="/qr-donate.png">` bypasses both and renders
+    // a broken-image square. Match the helper wrapper, not the raw
+    // path.
+    expect(carousel).toMatch(/src=\{withTokenQuery\("\/qr-donate\.png"\)\}/);
+    expect(carousel).toMatch(
+      /import \{[\s\S]{1,200}withTokenQuery[\s\S]{1,200}\} from "\.\.\/api\/transport"/,
+    );
     expect(carousel).toMatch(/Fund the work/);
     expect(carousel).toMatch(
       /Chan is independent software\. Small tips help cover time[\s\S]{1,40}spent on releases, packaging, and documentation\./,
@@ -262,11 +279,14 @@ describe("phase-13 round-1 closing B3: Dashboard back-of-card lives in HybridDas
     expect(cfg).toMatch(
       /let \{ onDone \}: \{ onDone\?: \(\) => void \} = \$props\(\);/,
     );
-    // Four sections: Appearance / Screen lock / Screensaver /
-    // Metadata archive.
+    // Three sections after B3c: Appearance / Screen lock /
+    // Metadata archive. The Screensaver section was collapsed
+    // INTO the Screen lock enable gate, so its theme picker
+    // shares the lifecycle of the Screen lock toggle and no
+    // longer carries a standalone `<h3>Screensaver</h3>`.
     expect(cfg).toMatch(/<h3>Appearance<\/h3>/);
     expect(cfg).toMatch(/<h3>Screen lock<\/h3>/);
-    expect(cfg).toMatch(/<h3>Screensaver<\/h3>/);
+    expect(cfg).not.toMatch(/<h3>Screensaver<\/h3>/);
     expect(cfg).toMatch(/<h3>Metadata archive<\/h3>/);
     // App-wide appearance radio group keeps the `app-appearance`
     // name so the rejected per-tab DashboardAppearance enum
@@ -312,8 +332,26 @@ describe("fullstack-a-75b: EmptyPaneWelcome static spawn surface", () => {
     expect(welcome).toMatch(
       /const spawnEntries: SpawnRow\[\] = \[[\s\S]{1,200}label: "New Draft",[\s\S]{1,1000}label: "Terminal",[\s\S]{1,800}label: "File Browser",[\s\S]{1,800}label: "Rich Prompt",[\s\S]{1,800}label: "Graph",/,
     );
+    // B9: secondary tile row now carries Search + Dashboard
+    // (Search first), and both render their chord hints via
+    // `chordLabel(row.chordId)` rather than a hardcoded empty
+    // `<span class="spawn-chord"></span>`. The row CSS expands
+    // to a 2-column grid.
     expect(welcome).toMatch(
-      /const secondaryEntries: SpawnRow\[\] = \[[\s\S]{1,400}label: "Dashboard",[\s\S]{1,200}command: "app\.dashboard\.open",/,
+      /const secondaryEntries: SpawnRow\[\] = \[[\s\S]{1,800}label: "Search",[\s\S]{1,200}command: "app\.search\.toggle",[\s\S]{1,800}label: "Dashboard",[\s\S]{1,200}command: "app\.dashboard\.open",/,
+    );
+    expect(welcome).toMatch(
+      /import \{[\s\S]{1,200}\bSearch\b[\s\S]{1,200}\} from "lucide-svelte"/,
+    );
+    // Secondary tile chord render mirrors the primary row.
+    expect(welcome).toMatch(
+      /spawn-row spawn-row-secondary[\s\S]{1,1000}<span class="spawn-chord">\{chordLabel\(row\.chordId\)\}<\/span>/,
+    );
+    // The retired hardcoded empty chord span is gone.
+    expect(welcome).not.toMatch(/<span class="spawn-chord"><\/span>/);
+    // 2-column grid for the secondary row.
+    expect(welcome).toMatch(
+      /\.spawn-row-secondary \{[\s\S]{1,400}grid-template-columns: repeat\(2,/,
     );
     // `fullstack-a-95`: stale per-tab "scope for Graph" hint
     // dropped. @@Alex flagged the concept as retired after the
@@ -332,9 +370,15 @@ describe("fullstack-a-75b: EmptyPaneWelcome static spawn surface", () => {
     expect(pane).toMatch(
       /import EmptyPaneWelcome from "\.\/EmptyPaneWelcome\.svelte";/,
     );
+    // Round-1 closing-2 (lane-b-empty-pane-menu): the
+    // EmptyPaneWelcome mount no longer forwards
+    // `oncontextmenu` — the empty-pane right-click menu was
+    // retired, so the welcome surface has no parent handler to
+    // forward to.
     expect(pane).toMatch(
-      /\{#if !multiPane\}[\s\S]{1,800}<EmptyPaneWelcome oncontextmenu=\{onEmptyPaneContextMenu\} \/>/,
+      /\{#if !multiPane\}[\s\S]{1,800}<EmptyPaneWelcome \/>/,
     );
+    expect(pane).not.toMatch(/<EmptyPaneWelcome oncontextmenu=/);
     // Pane.svelte no longer imports EmptyPaneCarousel directly
     // (it's owned by DashboardTab.svelte now).
     expect(pane).not.toMatch(

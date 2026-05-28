@@ -181,6 +181,14 @@
     // Shared across the empty-pane right-click + the pane
     // hamburger + the empty-pane carousel slide 1 so all three
     // surfaces gain the same affordance.
+    //
+    // Round-1 closing-2 (B8): Search + Dashboard were previously
+    // gated to the empty-pane right-click menu via a separate
+    // `emptyPaneExtraActions` list. @@Alex's smoke wanted them
+    // in the pane top-bar hamburger too (after Graph). Folding
+    // the two lists into a single `spawnActions` keeps both menu
+    // surfaces in lockstep — the right-click and the hamburger
+    // now offer the same 7 entries in the same order.
     {
       label: "New Draft",
       icon: FilePlus,
@@ -211,24 +219,17 @@
       command: "app.graph.toggle",
       chordId: "app.graph.toggle",
     },
-  ];
-  const emptyPaneActions: EmptyMenuRow[] = spawnActions;
-  const emptyPaneExtraActions: EmptyMenuRow[] = [
-    // `fullstack-a-75`: discoverable spawn entry for the
-    // Dashboard tab. Phase-13 round-1 closing (B5): renamed
-    // from "Infographics" to "Dashboard" + reordered so it
-    // sits between Graph (last of spawnActions) and Search.
-    {
-      label: "Dashboard",
-      icon: BarChart2,
-      command: "app.dashboard.open",
-      chordId: "app.dashboard.open",
-    },
     {
       label: "Search",
       icon: Search,
       command: "app.search.toggle",
       chordId: "app.search.toggle",
+    },
+    {
+      label: "Dashboard",
+      icon: BarChart2,
+      command: "app.dashboard.open",
+      chordId: "app.dashboard.open",
     },
   ];
   function chordLabel(id: string | undefined): string {
@@ -244,22 +245,17 @@
     return base ? `${base} ${key}` : key;
   }
 
-  /// Right-click menu state. The HamburgerMenu component owns the
-  /// bubble chrome and outside-click dismiss; we just hold the
-  /// handle so the contextmenu handler can open it at the cursor.
-  let emptyPaneMenu: HamburgerMenu | undefined = $state();
-  let emptyPaneMenuOpen = $state(false);
-
-  function openEmptyPaneMenuAt(e: MouseEvent): void {
-    e.preventDefault();
-    setActivePane(pane.id);
-    closePaneHamburgerMenu();
-    emptyPaneMenu?.openAtCursor(e.clientX, e.clientY);
-  }
-
-  function onEmptyPaneContextMenu(e: MouseEvent): void {
-    openEmptyPaneMenuAt(e);
-  }
+  /// Round-1 closing-2 (lane-b-empty-pane-menu): the empty-pane
+  /// right-click context menu was retired. The pane hamburger (⋮)
+  /// already lists every entry the right-click menu used to render
+  /// (B8 folded Search + Dashboard into `spawnActions`), so the
+  /// duplicate right-click affordance was a redundant surface that
+  /// also diverged from the hamburger ordering. The empty-pane
+  /// HamburgerMenu component, its handle/open state, the
+  /// `openEmptyPaneMenuAt` helper, and the `onEmptyPaneContextMenu`
+  /// dispatcher are all gone; right-clicking an empty pane is a
+  /// no-op (the browser default action is suppressed by parent
+  /// surfaces, not by the pane).
 
   /// Pane chrome menu: the ⋮ in the tab strip that replaces the
   /// per-button split / close controls.
@@ -458,12 +454,10 @@
   function closePaneMenus(): void {
     paneMenu?.close();
     paneContextMenu?.close();
-    emptyPaneMenu?.close();
   }
 
   function closePaneContextMenus(): void {
     paneContextMenu?.close();
-    emptyPaneMenu?.close();
   }
 
   function closePaneHamburgerMenu(): void {
@@ -507,7 +501,6 @@
   /// every shortcut row routes through the existing dispatcher in
   /// App.svelte. Avoids re-implementing the actions here.
   function dispatchCommand(id: string): void {
-    emptyPaneMenu?.close();
     window.dispatchEvent(
       new CustomEvent("chan:command", { detail: { name: id } }),
     );
@@ -604,7 +597,7 @@
   // plain-S gate is gone.
 
   function onKeyDown(e: KeyboardEvent): void {
-    if (e.key === "Escape" && (paneMenuOpen || paneContextMenuOpen || emptyPaneMenuOpen)) {
+    if (e.key === "Escape" && (paneMenuOpen || paneContextMenuOpen)) {
       e.preventDefault();
       closePaneMenus();
       return;
@@ -1005,8 +998,11 @@
     ondrop={onDrop}
     oncontextmenu={(e) => {
       if ((e.target as Element | null)?.closest(".tab, .actions")) return;
-      if (pane.tabs.length === 0) openEmptyPaneMenuAt(e);
-      else openPaneContextAt(e);
+      // Round-1 closing-2 (lane-b-empty-pane-menu): empty panes
+      // no longer surface a right-click menu; only non-empty
+      // panes get the Reload / Open Inspector context menu.
+      if (pane.tabs.length === 0) return;
+      openPaneContextAt(e);
     }}
   >
     {#each pane.tabs as t, i (t.id)}
@@ -1362,7 +1358,6 @@
       <div
         class="placeholder"
         aria-label="no tab open"
-        oncontextmenu={onEmptyPaneContextMenu}
         role="presentation"
       >
         <!-- `fullstack-a-75b`: single-pane lone-pane case renders
@@ -1372,47 +1367,20 @@
              Indexing graph) lives inside the Dashboard tab
              now per @@Alex's route on the `-a-75` walk.
              Multi-pane empty panes keep the minimal chrome
-             (just the chan mark). -->
+             (just the chan mark).
+             Round-1 closing-2 (lane-b-empty-pane-menu): the
+             empty-pane right-click menu was retired; the pane
+             hamburger (⋮) now carries every spawn entry the
+             right-click menu used to render, so the duplicate
+             surface was removed. Right-clicking an empty pane
+             is a no-op. -->
         {#if !multiPane}
-          <EmptyPaneWelcome oncontextmenu={onEmptyPaneContextMenu} />
+          <EmptyPaneWelcome />
         {:else}
           <div class="placeholder-stack">
             <div class="placeholder-mark"></div>
           </div>
         {/if}
-        <!-- Right-click menu. Triggerless: opens only via the
-             contextmenu handler above. Same `chan:command` ids as
-             the keymap layer so actions stay unified. -->
-        <HamburgerMenu
-          bind:this={emptyPaneMenu}
-          bind:open={emptyPaneMenuOpen}
-          showTrigger={false}
-          width={280}
-          height={260}
-          onBeforeOpen={closePaneHamburgerMenu}
-        >
-          {#each emptyPaneActions as row (row.command)}
-            {@const Icon = row.icon}
-            <li>
-              <button role="menuitem" onclick={() => dispatchCommand(row.command)}>
-                <Icon size={16} strokeWidth={1.75} aria-hidden="true" />
-                <span class="menu-row-label">{row.label}</span>
-                <span class="menu-row-chord">{chordLabel(row.chordId)}</span>
-              </button>
-            </li>
-          {/each}
-          <li class="sep" role="separator"></li>
-          {#each emptyPaneExtraActions as row (row.command)}
-            {@const Icon = row.icon}
-            <li>
-              <button role="menuitem" onclick={() => dispatchCommand(row.command)}>
-                <Icon size={16} strokeWidth={1.75} aria-hidden="true" />
-                <span class="menu-row-label">{row.label}</span>
-                <span class="menu-row-chord">{chordLabel(row.chordId)}</span>
-              </button>
-            </li>
-          {/each}
-        </HamburgerMenu>
       </div>
     {/if}
     <!--

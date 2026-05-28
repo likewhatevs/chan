@@ -31,6 +31,7 @@ import {
   isMissingFileError,
   layout,
   openBrowserInActivePane,
+  openDashboardInActivePane,
   openGraphInActivePane,
   openInPane,
   openFind,
@@ -66,6 +67,7 @@ import {
   saveTab,
   scheduleAutosave,
   serializeLayout,
+  setActivePane,
   setTerminalActivity,
   setTerminalActivityPulsing,
   setTerminalBroadcastEnabled,
@@ -877,6 +879,24 @@ describe("pane state", () => {
     expect(tabs[1].selected).toBe("b.md");
     expect(tabs[1].expanded).toEqual(["dir-b"]);
     expect(tabs[1].scroll).toBe(100);
+  });
+
+  test("hash round-trips a Dashboard tab (B1c)", async () => {
+    resetLayout([]);
+    openDashboardInActivePane();
+    expect(activePane().tabs.map((t) => t.kind)).toEqual(["dashboard"]);
+    const originalActiveId = activePane().activeTabId;
+    expect(originalActiveId).not.toBeNull();
+
+    const snapshot = serializeLayout();
+    await restoreLayout(snapshot!);
+
+    const restored = activePane().tabs;
+    expect(restored.map((t) => t.kind)).toEqual(["dashboard"]);
+    const first = restored[0];
+    if (first?.kind !== "dashboard") throw new Error("expected dashboard tab");
+    expect(first.title).toBe("Dashboard");
+    expect(activePane().activeTabId).toBe(first.id);
   });
 
   test("two BrowserTab records carry independent inspectorWidth (fullstack-84)", () => {
@@ -1849,6 +1869,55 @@ describe("Hybrid flip (fullstack-48 phase A; revisited by fullstack-a-43 + fulls
     // Materialised back marker (hb's presence is a strong
     // signal the pane is a Hybrid).
     expect(restored.back).toEqual({});
+  });
+
+  test("setActivePane clears the previous pane's showingBack on focus move (B2c)", () => {
+    // Round-1 closing-2 (B2c): the user-reported drift was that a
+    // flipped pane left in the background "kept flipping" when
+    // focus returned. flipHybrid toggles showingBack on the
+    // focused pane only, so a pane that was flipped while losing
+    // focus needs its back state cleared on focus-move; otherwise
+    // the keymap intent on the returning pane (and any sibling
+    // pane that was already flipped) compounds with stale state.
+    const left = fileTab({ id: "left", path: "notes/left.md" });
+    const right = fileTab({ id: "right", path: "notes/right.md" });
+    const leftPane = resetLayout([left]);
+    splitPane(leftPane.id, "row", "after");
+    const root = layout.nodes[layout.rootId];
+    if (root?.kind !== "split") throw new Error("expected split");
+    const rightPaneId = root.b;
+    const rightPane = layout.nodes[rightPaneId];
+    if (rightPane?.kind !== "leaf") throw new Error("expected leaf");
+    rightPane.tabs.push(right);
+    rightPane.activeTabId = right.id;
+
+    // Focus the left pane and flip it to its back.
+    setActivePane(leftPane.id);
+    flipHybrid(leftPane.id);
+    let leftLive = layout.nodes[leftPane.id];
+    if (leftLive?.kind !== "leaf") throw new Error("expected leaf");
+    expect(leftLive.showingBack).toBe(true);
+
+    // Focus moves to the right pane; the left pane's back-side
+    // state resets so the next return shows the front first.
+    setActivePane(rightPaneId);
+
+    leftLive = layout.nodes[leftPane.id];
+    if (leftLive?.kind !== "leaf") throw new Error("expected leaf");
+    expect(leftLive.showingBack).toBe(false);
+    // back marker persists (the pane is still a Hybrid surface);
+    // only the orientation resets.
+    expect(leftLive.back).toEqual({});
+
+    // Re-focusing the same pane is a no-op for showingBack.
+    flipHybrid(rightPaneId);
+    const rightLive = layout.nodes[rightPaneId];
+    if (rightLive?.kind !== "leaf") throw new Error("expected leaf");
+    expect(rightLive.showingBack).toBe(true);
+    setActivePane(rightPaneId);
+    const rightLiveAfter = layout.nodes[rightPaneId];
+    if (rightLiveAfter?.kind !== "leaf") throw new Error("expected leaf");
+    expect(rightLiveAfter.showingBack).toBe(true);
   });
 });
 

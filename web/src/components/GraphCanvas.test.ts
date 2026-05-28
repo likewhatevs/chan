@@ -111,3 +111,27 @@ describe("fullstack-a-49: filesystem-hierarchy layout shape", () => {
     expect(source).toMatch(/force\.initialize = \(n: DNode\[\]\) => \{[\s\S]*?initialized = n/);
   });
 });
+
+describe("round-1 closing-2 (B7a): dblclick = graph from here", () => {
+  test("Props expose an optional onSetAsScope callback", () => {
+    expect(source).toMatch(
+      /type Props = \{[\s\S]{1,2000}onSetAsScope\?: \(\) => void;/,
+    );
+    expect(source).toMatch(
+      /let \{[\s\S]{1,800}onSetAsScope,\s*\}: Props = \$props\(\);/,
+    );
+  });
+
+  test("canvas element binds ondblclick to onDoubleClick", () => {
+    expect(source).toMatch(/ondblclick=\{onDoubleClick\}/);
+  });
+
+  test("onDoubleClick picks at click-slack + invokes onSetAsScope when a node sits under the cursor", () => {
+    // The handler shape mirrors onMouseUp's tap path: localCoords +
+    // pickNode at the wider click slack. Empty-space dblclicks must
+    // NOT rescope (the guard reads the picked node before firing).
+    expect(source).toMatch(
+      /function onDoubleClick\(e: MouseEvent\): void \{[\s\S]{1,200}const p = localCoords\(e\);[\s\S]{1,200}const n = pickNode\(p\.x, p\.y, PICK_SLACK_CLICK_PX\);[\s\S]{1,200}if \(n && onSetAsScope\) onSetAsScope\(\);/,
+    );
+  });
+});

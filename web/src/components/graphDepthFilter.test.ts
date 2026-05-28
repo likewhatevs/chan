@@ -113,3 +113,29 @@ describe("fullstack-a-52 G10: link filter dropped", () => {
     );
   });
 });
+
+describe("round-1 closing-2 (B7b): depth slider works in workspace path-scope", () => {
+  test("depthDisabled no longer pins workspace path-scope to disabled", () => {
+    // Pre-fix shape was:
+    //   `!languageMode && (!currentScope || currentScope.kind === "workspace")`
+    // The workspace branch made the default landing graph's slider
+    // unmovable. Post-fix drops the workspace guard so the slider
+    // tracks `workspaceDepthProbe`-driven `depthCap` the same way
+    // the dir scope does.
+    expect(graph).toMatch(
+      /\{@const depthDisabled = !languageMode && !currentScope\}/,
+    );
+    expect(graph).not.toMatch(
+      /depthDisabled =\s*\n?\s*!languageMode && \(!currentScope \|\| currentScope\.kind === "workspace"\)/,
+    );
+  });
+
+  test("depthShallow falls through to depthCap <= 1 for workspace scope too", () => {
+    expect(graph).toMatch(
+      /const depthShallow = \$derived\.by\(\(\) => \{[\s\S]{1,1200}if \(!currentScope\) return false;[\s\S]{1,200}return depthCap <= 1;/,
+    );
+    expect(graph).not.toMatch(
+      /const disabled = !currentScope \|\| currentScope\.kind === "workspace";\s*\n\s*if \(disabled\) return false;/,
+    );
+  });
+});

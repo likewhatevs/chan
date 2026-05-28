@@ -24,10 +24,10 @@ afterEach(() => {
   document.body.innerHTML = "";
 });
 
-async function renderCarousel(props: { oncontextmenu?: (e: MouseEvent) => void } = {}) {
+async function renderCarousel() {
   const target = document.createElement("div");
   document.body.append(target);
-  const component = mount(EmptyPaneCarousel, { target, props });
+  const component = mount(EmptyPaneCarousel, { target, props: {} });
   mounted.push(component);
   await tick();
   return target;
@@ -76,26 +76,17 @@ describe("EmptyPaneCarousel", () => {
     expect(target.querySelector(".slide-about")).not.toBeNull();
   });
 
-  test("forwards right-click to the parent contextmenu handler", async () => {
-    let received: MouseEvent | null = null;
-    const target = await renderCarousel({
-      oncontextmenu: (e) => {
-        received = e;
-        e.preventDefault();
-      },
-    });
-
-    target.querySelector(".carousel")?.dispatchEvent(
-      new MouseEvent("contextmenu", {
-        bubbles: true,
-        cancelable: true,
-        clientX: 30,
-        clientY: 30,
-      }),
-    );
-    await tick();
-
-    expect(received).not.toBeNull();
+  test("no longer carries an oncontextmenu forwarder prop (lane-b-empty-pane-menu)", async () => {
+    // Round-1 closing-2 (lane-b-empty-pane-menu): the empty-pane
+    // right-click menu was retired; the carousel's
+    // `oncontextmenu` forwarder was a vestige from the prior
+    // mount site (Pane.svelte's placeholder body) and is gone.
+    // The carousel is now hosted inside DashboardTab; right-
+    // clicks fall through to the tab strip's own context menu.
+    const raw = (await import("./EmptyPaneCarousel.svelte?raw"))
+      .default as string;
+    expect(raw).not.toMatch(/oncontextmenu\?:/);
+    expect(raw).not.toMatch(/\{oncontextmenu\}/);
   });
 
   test("right and left arrow keys nudge the active slide", async () => {

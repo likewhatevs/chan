@@ -7,9 +7,11 @@
   // the timer resumes when both signals clear. Left / right arrow
   // keys nudge manually when the carousel container has focus.
   //
-  // The container forwards `oncontextmenu` straight through to the
-  // pane's empty-menu handler so right-click still opens the pane
-  // hamburger menu.
+  // Round-1 closing-2 (lane-b-empty-pane-menu): the legacy
+  // `oncontextmenu` forwarder prop was removed. The carousel is
+  // hosted inside the Dashboard tab (per `fullstack-a-75b`) and
+  // DashboardTab does NOT wire a right-click handler through it;
+  // right-clicks fall through to the tab strip's own context menu.
   //
   // Phase-13 slice 3b-1: slides 0 + 1 retooled into the new
   // Dashboard widget set. Slide 0 is an About widget (version,
@@ -27,6 +29,7 @@
 
   import { onDestroy, onMount } from "svelte";
   import { api } from "../api/client";
+  import { withTokenQuery } from "../api/transport";
   import type {
     BuildInfo,
     GraphViewEdge,
@@ -69,16 +72,6 @@
     | "drafts_link";
   type CanvasEdge = GraphViewEdge & { kind: CanvasEdgeKind };
 
-  type Props = {
-    /// Right-click forwarder. Carousel is now hosted inside the
-    /// Dashboard tab (per `fullstack-a-75b`); the forwarder
-    /// stays in the prop list for symmetry with the prior mount
-    /// site but Dashboard tab doesn't wire it (right-click
-    /// over the tab body falls through to the tab strip's own
-    /// context menu).
-    oncontextmenu?: (e: MouseEvent) => void;
-  };
-  let { oncontextmenu }: Props = $props();
 
   // ---- About slide (slice 3b-1) ------------------------------------------
   //
@@ -331,7 +324,6 @@
   onfocusin={() => (focused = true)}
   onfocusout={() => (focused = false)}
   onkeydown={onKeyDown}
-  {oncontextmenu}
 >
   <div class="slide-stage">
     {#if slideIndex === 0}
@@ -414,7 +406,7 @@
           </div>
           <img
             class="fund-qr"
-            src="/qr-donate.png"
+            src={withTokenQuery("/qr-donate.png")}
             alt="Donation QR code"
             width="160"
             height="160"
