@@ -499,6 +499,10 @@ jobs:
           path: artifacts
           pattern: release-*
 
+      - name: Build site
+        working-directory: chan/web-marketing
+        run: npm run build
+
       - name: Stage manual bundle
         working-directory: chan/web-marketing
         env:
