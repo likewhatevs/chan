@@ -766,7 +766,7 @@
              metadata-backed Drafts root through this component. -->
         <span class="kind-chip drafts-chip">DRAFTS</span>
       {:else}
-        <KindChip kind="folder" block />
+        <KindChip kind="folder" block onClick={onSetAsScope} />
       {/if}
     </header>
     <h3 class="title" title={entry.path || "/"}>
@@ -886,7 +886,7 @@
   {@const fileKind = classifyEntry(entry)}
   <div class="info">
     <header class="head">
-      <KindChip kind={fileKind} block />
+      <KindChip kind={fileKind} block onClick={onSetAsScope} />
     </header>
     <h3 class="title" title={entry.path}>{basename(entry.path)}</h3>
     {#if specialBadges.length > 0}
