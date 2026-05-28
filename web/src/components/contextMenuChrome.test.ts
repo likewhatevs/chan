@@ -52,8 +52,13 @@ describe("context menu chrome", () => {
     // xterm's WebGL glyph atlas can corrupt if an ancestor pane is
     // scaled during focus changes. Guard against any future
     // refactor re-introducing transform: scale on the pane element
-    // itself (hover, focused, or wobble).
-    expect(pane).not.toMatch(/\.pane(:hover|\.focused|\.wobble)?\s*\{[\s\S]*?transform: scale/);
+    // itself (base, hover, focused, or wobble). Rule-bounded
+    // matchers ([^}]*) so the assertion doesn't bleed across CSS
+    // blocks into unrelated selectors like `.tab:hover`.
+    expect(pane).not.toMatch(/\.pane\s*\{[^}]*transform:\s*scale/);
+    expect(pane).not.toMatch(/\.pane:hover\s*\{[^}]*transform:\s*scale/);
+    expect(pane).not.toMatch(/\.pane\.focused\s*\{[^}]*transform:\s*scale/);
+    expect(pane).not.toMatch(/\.pane\.focused\.wobble\s*\{[^}]*transform:\s*scale/);
   });
 
   test("Hybrid Nav focus chrome does not composite pane bodies", () => {
