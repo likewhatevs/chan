@@ -53,7 +53,9 @@
     fileOps,
     loadTreeDir,
     openGraphAtNode,
+    openGraphForContact,
     openGraphForFile,
+    openGraphForLanguage,
     openGraphForTag,
     tree,
   } from "../state/store.svelte";
@@ -269,12 +271,13 @@
     // Resolved contacts route through the host's `onContactNavigate`
     // when present (graph overlay: select the contact's node on the
     // canvas, matching how documents behave there). When absent, fall
-    // back to opening a graph scoped to the contact — the original
-    // "contacts are network anchors" behavior the file browser and
-    // search overlays still rely on.
+    // back to opening a contact-scoped graph (bidirectional BFS lens
+    // around the contact). Slice 4b promoted this from the
+    // workspace-graph-with-pin fallback to the dedicated contact lens
+    // now that openGraphForContact exists.
     const navigateContact = onContactNavigate
       ? (p: string) => onContactNavigate(p)
-      : (p: string) => openGraphForFile(p);
+      : (p: string) => openGraphForContact(p);
     for (const m of refs.mentions) {
       if (m.kind === "file" && !m.missing) {
         push({
@@ -838,7 +841,12 @@
           <ul class="lang-list">
             {#each visibleLanguages as lang (lang.name)}
               <li class="lang-row">
-                <span class="lang-name" title={lang.name}>{lang.name}</span>
+                <button
+                  type="button"
+                  class="lang-name"
+                  title="open in graph (scoped to this language)"
+                  onclick={() => openGraphForLanguage(lang.name)}
+                >{lang.name}</button>
                 <span class="lang-files">{lang.files} file{lang.files === 1 ? "" : "s"}</span>
                 <span class="lang-sloc">{lang.code.toLocaleString()} SLOC</span>
               </li>
@@ -949,11 +957,19 @@
       {/if}
     </div>
     {#if fileReport}
+      {@const fileLang = fileReport.language}
       <section class="refs">
         <h4>Code</h4>
         <div class="meta-grid">
           <span class="k">language</span>
-          <span class="v">{fileReport.language}</span>
+          <span class="v">
+            <button
+              type="button"
+              class="lang-link"
+              title="open in graph (scoped to this language)"
+              onclick={() => openGraphForLanguage(fileLang)}
+            >{fileLang}</button>
+          </span>
           <span class="k">SLOC</span>
           <span class="v">{fileReport.code.toLocaleString()}</span>
           <span class="k">comments</span>
@@ -1550,9 +1566,44 @@
     font-size: 13px;
     align-items: baseline;
   }
+  /* Promoted to a <button> in slice 4b so the language name routes
+     to the Graph (scoped to this language). Strip default button
+     chrome, left-align, and add hover + focus affordance. Stays a
+     grid cell at column 1; no layout shift vs. the prior <span>. */
   .lang-name {
     color: var(--text);
     word-break: break-word;
+    background: none;
+    border: none;
+    padding: 0;
+    margin: 0;
+    font: inherit;
+    font-size: inherit;
+    text-align: left;
+    cursor: pointer;
+  }
+  .lang-name:hover { text-decoration: underline; }
+  .lang-name:focus-visible {
+    outline: 2px solid var(--link);
+    outline-offset: 1px;
+    border-radius: 2px;
+  }
+  .lang-link {
+    color: var(--text);
+    background: none;
+    border: none;
+    padding: 0;
+    margin: 0;
+    font: inherit;
+    font-size: inherit;
+    text-align: left;
+    cursor: pointer;
+  }
+  .lang-link:hover { text-decoration: underline; }
+  .lang-link:focus-visible {
+    outline: 2px solid var(--link);
+    outline-offset: 1px;
+    border-radius: 2px;
   }
   .lang-files,
   .lang-sloc {
