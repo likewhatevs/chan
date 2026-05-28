@@ -653,18 +653,29 @@
     // every doc that references it (depth 1) and further along
     // those docs' edges (depth 2+). No path resolution needed —
     // the node id IS the seed.
+    //
+    // Phase-13 round-1 closing (B8): the backend emits tag edges
+    // as `source: <file>, target: <tagId>` (file -> tag). A
+    // forward-only BFS from the tag id would never traverse the
+    // incoming file->tag edges and the lens renders empty. The
+    // BFS is now BIDIRECTIONAL (same shape as the contact arm
+    // below) so depth=1 captures every doc that references the
+    // tag (the backlinks the round-1 smoke expected to see) and
+    // deeper depths walk those docs' outgoing edges further out.
     if (currentScope.kind === "tag") {
       const seedIds = new Set<string>([currentScope.nodeId]);
       const visited = new Set(seedIds);
       let frontier = new Set(seedIds);
-      // `fullstack-a-52` G9: forward-only BFS (outgoing edges
-      // only). See the second BFS site below for the rationale.
       for (let i = 0; i < graphState.depth; i++) {
         const next = new Set<string>();
         for (const e of edges) {
           if (frontier.has(e.source) && !visited.has(e.target)) {
             next.add(e.target);
             visited.add(e.target);
+          }
+          if (frontier.has(e.target) && !visited.has(e.source)) {
+            next.add(e.source);
+            visited.add(e.source);
           }
         }
         if (next.size === 0) break;
