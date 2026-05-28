@@ -17,6 +17,7 @@
     Folder,
     MessageSquare,
     Network,
+    Search,
     Terminal,
   } from "lucide-svelte";
   import {
@@ -27,13 +28,11 @@
   } from "../state/shortcuts";
   import { workspace } from "../state/store.svelte";
 
-  type Props = {
-    /// Right-click forwarder. Pane.svelte wires this to the
-    /// empty-pane menu handler so right-click still opens the
-    /// welcome menu over the static surface.
-    oncontextmenu?: (e: MouseEvent) => void;
-  };
-  let { oncontextmenu }: Props = $props();
+  // Round-1 closing-2 (lane-b-empty-pane-menu): the empty-pane
+  // right-click menu was retired. EmptyPaneWelcome no longer
+  // forwards `oncontextmenu` to a parent handler; the welcome
+  // surface is purely the click-driven spawn grid + the pane
+  // hamburger (⋮) covers menu-style access.
 
   const platform = currentPlatform();
   const os = currentOS();
@@ -90,6 +89,17 @@
     // Phase-13 round-1 closing (B5): renamed from "Infographics"
     // to "Dashboard" so the welcome surface matches the right-
     // click menu + the canonical Dashboard tab title.
+    //
+    // Round-1 closing-2 (B9): Search joins the secondary row so
+    // the welcome surface carries every chord-bound spawn entry
+    // a pane offers; Dashboard's chord hint is no longer
+    // suppressed.
+    {
+      label: "Search",
+      icon: Search,
+      command: "app.search.toggle",
+      chordId: "app.search.toggle",
+    },
     {
       label: "Dashboard",
       icon: BarChart2,
@@ -112,7 +122,6 @@
   role="region"
   aria-label="welcome"
   tabindex="0"
-  {oncontextmenu}
 >
   <div class="welcome-mark"></div>
   {#if workspace.info}
@@ -143,11 +152,11 @@
         type="button"
         class="spawn-btn"
         onclick={() => dispatchSpawn(row.command)}
-        title={row.label}
+        title="{row.label} ({chordLabel(row.chordId)})"
       >
         <Icon size={18} strokeWidth={1.75} aria-hidden="true" />
         <span class="spawn-label">{row.label}</span>
-        <span class="spawn-chord"></span>
+        <span class="spawn-chord">{chordLabel(row.chordId)}</span>
       </button>
     {/each}
   </div>
@@ -250,10 +259,14 @@
     opacity: 0.6;
   }
   .spawn-row-secondary {
+    /* B9: two secondary tiles (Search + Dashboard) sit side by
+       side. Width budget mirrors the carousel's old centered
+       single-tile row so the overall surface still feels
+       balanced under the 5-up primary grid. */
     opacity: 0.85;
-    grid-template-columns: minmax(120px, 240px);
+    grid-template-columns: repeat(2, minmax(96px, 1fr));
     justify-content: center;
-    width: auto;
+    width: min(320px, 80%);
   }
   /* `fullstack-a-95`: `.welcome-hint` styles dropped along
      with the stale "scope for Graph" paragraph. */

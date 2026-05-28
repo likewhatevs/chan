@@ -391,6 +391,21 @@
                 </button>
               {/if}
             </div>
+            <label class="screensaver-theme">
+              <span>Theme:</span>
+              <select
+                bind:value={screensaverTheme}
+                onchange={commitScreensaverTheme}
+                disabled={screensaverBusy}
+              >
+                <option value="plain">Plain</option>
+                <option value="matrix">Matrix</option>
+              </select>
+            </label>
+            <p class="hint">
+              Theme rendered behind the lock cover when the
+              workspace view auto-locks.
+            </p>
           </div>
         {/if}
       </div>
@@ -414,25 +429,6 @@
         </span>
       </label>
     </div>
-  </section>
-
-  <section class="screensaver">
-    <h3>Screensaver</h3>
-    <p class="hint">
-      Theme rendered behind the lock cover when the workspace
-      view auto-locks.
-    </p>
-    <label class="screensaver-theme">
-      <span>Theme:</span>
-      <select
-        bind:value={screensaverTheme}
-        onchange={commitScreensaverTheme}
-        disabled={screensaverBusy || screensaverEnabled !== true}
-      >
-        <option value="plain">Plain</option>
-        <option value="matrix">Matrix</option>
-      </select>
-    </label>
   </section>
 
   <section>

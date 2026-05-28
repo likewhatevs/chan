@@ -3166,6 +3166,20 @@ export function setActivePane(paneId: string): void {
   // pane (already-focused) stay quiet; otherwise the wobble would
   // re-trigger on every mousedown that lands on the focused pane.
   const previousActive = current.activePaneId;
+  // Round-1 closing-2 (B2c): clear the previous pane's
+  // `showingBack` when focus moves to a different pane. The
+  // flipHybrid keymap path toggles showingBack on the FOCUSED
+  // pane only, so leaving a flipped pane behind and coming back
+  // via focus would visually skip the flip-front animation and
+  // desync the chord intent. Resetting on focus-move keeps each
+  // pane's "is this the back surface?" state local to the time
+  // it had focus.
+  if (previousActive && previousActive !== paneId) {
+    const prev = current.nodes[previousActive];
+    if (prev && prev.kind === "leaf" && prev.showingBack) {
+      prev.showingBack = false;
+    }
+  }
   current.activePaneId = paneId;
   if (previousActive !== paneId) requestPaneWobble(paneId);
 }
@@ -4095,6 +4109,16 @@ export async function restoreLayout(
                     : {}),
                 }
               : undefined,
+          };
+          p.tabs.push(tab);
+          if (sertab.a) p.activeTabId = tab.id;
+          continue;
+        }
+        if (kind === "d") {
+          const tab: DashboardTab = {
+            kind: "dashboard",
+            id: id("dashboard"),
+            title: "Dashboard",
           };
           p.tabs.push(tab);
           if (sertab.a) p.activeTabId = tab.id;

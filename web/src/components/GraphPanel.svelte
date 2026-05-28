@@ -219,6 +219,34 @@
   ///     parent already WAS the current scope that made re-rooting a
   ///     no-op (scopeId unchanged -> no reload), and the unconsumed
   ///     pendingSelectId left the inspector blank.
+  /// Round-1 closing-2 (B7a): dblclick on a graph node re-roots the
+  /// graph at that node, matching the right-click "Graph from here"
+  /// + the chord. The preceding tap (mouseup → onSelect) already
+  /// populated `selectedId`, so this reads the current selection
+  /// and routes through `graphFromHere` for path-scopable nodes
+  /// (workspace, folder, file). Non-path nodes (tag / mention /
+  /// language / contact) ignore the dblclick — switching kind needs
+  /// a different action (openGraphFor{Tag,Contact,Language}) than a
+  /// path rescope, and the user's quoted ask is path-shape:
+  /// "double click a node in the graph to 'graph from here'".
+  function dblclickRescope(): void {
+    if (
+      filesystemMode &&
+      selectedFsNode &&
+      selectedFsNode.path !== undefined &&
+      (isFsDirectory(selectedFsNode) || selectedFsNode.kind === "file")
+    ) {
+      graphFromHere(selectedFsNode.path, isFsDirectory(selectedFsNode));
+      return;
+    }
+    if (
+      selectedNode &&
+      (selectedNode.kind === "folder" || selectedNode.kind === "file")
+    ) {
+      graphFromHere(selectedNode.id, selectedNode.kind === "folder");
+    }
+  }
+
   function graphFromHere(path: string, isDir: boolean): void {
     let scopeId: string;
     if (isDir) {
@@ -409,8 +437,12 @@
   /// enabled (depthDisabled is the workspace/global guard).
   const depthShallow = $derived.by(() => {
     if (languageMode) return false;
-    const disabled = !currentScope || currentScope.kind === "workspace";
-    if (disabled) return false;
+    // Round-1 closing-2 (B7b): workspace scope no longer skips
+    // the shallow check. With the workspace depth probe feeding
+    // a meaningful `depthCap`, a workspace whose deepest dir
+    // sits at depth 1 reads as legitimately shallow and the
+    // `[max]` cue + disabled state mirrors the dir-scope shape.
+    if (!currentScope) return false;
     return depthCap <= 1;
   });
 
@@ -1823,8 +1855,22 @@
          rows with optional icon + label + chord on the right; filters
          render vertically, one row per kind, with the kind colour as
          a dot + on/off cue via the `.on` class. -->
-    {@const depthDisabled =
-      !languageMode && (!currentScope || currentScope.kind === "workspace")}
+    <!-- Round-1 closing-2 (B7b): the workspace path-scope no
+         longer pins the depth slider in the disabled state. The
+         user's reported failure was "depth slider does nothing"
+         — confirmed: dragging the slider on the default workspace
+         graph re-fired loadKey + load() correctly with the new
+         depth, but the slider's `disabled` attribute (driven by
+         `currentScope.kind === "workspace"`) blocked any input
+         from landing. Workspace scope has a valid `depthCap`
+         derived from `workspaceDepthProbe`; with that probe
+         feeding the cap the slider behaves like the dir scope's
+         depth control. Language mode keeps its own pinned-to-1
+         behaviour via the early-return in the clamp `$effect`
+         + depthCap. The remaining check `!currentScope` guards
+         the brief boot window where the scope hasn't resolved
+         yet. -->
+    {@const depthDisabled = !languageMode && !currentScope}
     <div
       class="tab-menu-bubble"
       role="menu"
@@ -2012,6 +2058,7 @@
         {selectedId}
         onSelect={setSelected}
         onContextMenu={onGraphContextMenu}
+        onSetAsScope={dblclickRescope}
       />
     </div>
   </div>

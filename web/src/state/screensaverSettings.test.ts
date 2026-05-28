@@ -150,10 +150,18 @@ describe("phase-13 lane-b slice 3c: Screen lock + Screensaver UI on Dashboard ba
     expect(dashboard).toMatch(/onclick=\{clearPin\}/);
   });
 
-  test("Screensaver section renders the theme picker", () => {
+  test("Theme picker renders INSIDE the screen lock enabled gate (B3c)", () => {
+    // B3c: screensaver theme picker must live inside the
+    // `{#if screensaverEnabled === true}` block within
+    // `<section class="screen-lock">`, NOT as a standalone
+    // `<section class="screensaver">` sibling. Toggling Screen
+    // lock OFF hides the theme picker (and the timeout/PIN
+    // controls) together.
     expect(dashboard).toMatch(
-      /<section class="screensaver">[\s\S]{1,1000}<h3>Screensaver<\/h3>[\s\S]{1,1500}bind:value=\{screensaverTheme\}/,
+      /<section class="screen-lock">[\s\S]{1,4000}\{#if screensaverEnabled === true\}[\s\S]{1,4000}bind:value=\{screensaverTheme\}[\s\S]{1,4000}\{\/if\}[\s\S]{1,200}<\/section>/,
     );
+    expect(dashboard).not.toMatch(/<section class="screensaver">/);
+    expect(dashboard).not.toMatch(/<h3>Screensaver<\/h3>/);
   });
 
   test("inline PIN dialog binds pin1/pin2 + wires save+cancel", () => {

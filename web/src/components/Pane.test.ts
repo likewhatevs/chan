@@ -149,12 +149,17 @@ describe("Pane right-click menus", () => {
     expect(document.body.querySelector(".menu-label span")?.textContent?.trim()).toBe(
       "Focus border colour",
     );
+    // Round-1 closing-2 (B8): Search + Dashboard joined the pane
+    // top-bar hamburger after Graph, so the surface offers the
+    // same 7-entry spawn set as the empty-pane right-click menu.
     expect(menuLabels()).toEqual([
       "New Draft",
       "Terminal",
       "File Browser",
       "Rich Prompt",
       "Graph",
+      "Search",
+      "Dashboard",
       "Enter Hybrid Nav",
       "Split right",
       "Split bottom",
@@ -220,7 +225,13 @@ describe("Pane right-click menus", () => {
     );
   });
 
-  test("empty pane right-click shows the welcome menu", async () => {
+  test("empty pane right-click opens NO menu (lane-b-empty-pane-menu)", async () => {
+    // Round-1 closing-2 (lane-b-empty-pane-menu): the empty-pane
+    // right-click context menu was retired. The pane hamburger
+    // (⋮) now carries every spawn entry the right-click menu
+    // used to render (B8 folded Search + Dashboard into
+    // `spawnActions`), so the duplicate surface was removed.
+    // Right-clicking an empty pane is a no-op; no popover opens.
     const pane: LeafNode = {
       kind: "leaf",
       id: "pane-empty",
@@ -239,28 +250,10 @@ describe("Pane right-click menus", () => {
     );
     await tick();
 
-    // `fullstack-a-32` + `fullstack-a-67` slice 2 +
-    // `fullstack-a-75`: spawn set unified across 5 entries (New
-    // Draft / Terminal / File Browser / Rich Prompt / Graph),
-    // separator, then extras. The Settings footer entry retired
-    // with the SettingsPanel OverlayShell in phase-13 slice 3c —
-    // Cmd+, now flips the focused Hybrid surface so Settings is
-    // reachable via the Dashboard back-of-card, not as an empty-
-    // pane menu row.
-    //
-    // Phase-13 round-1 closing (B5): "Infographics" renamed to
-    // "Dashboard" and moved between Graph and Search so the
-    // discoverable entry sits next to the other surface spawn
-    // commands.
-    expect(menuLabels()).toEqual([
-      "New Draft",
-      "Terminal",
-      "File Browser",
-      "Rich Prompt",
-      "Graph",
-      "Dashboard",
-      "Search",
-    ]);
+    // No popover anywhere in the DOM after the right-click; the
+    // hamburger trigger button stays put but its menu does not
+    // pop open.
+    expect(document.body.querySelector(".hamburger-menu")).toBeNull();
   });
 
   test("empty pane left-click leaves the welcome menu closed", async () => {

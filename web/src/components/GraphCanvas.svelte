@@ -69,6 +69,11 @@
     selectedId: string | null;
     onSelect: (id: string | null) => void;
     onContextMenu?: (e: MouseEvent) => void;
+    /// Round-1 closing-2 (B7a): double-clicking a node fires the
+    /// "graph from here" action. The canvas only signals intent;
+    /// the parent owns the rescope (it has access to the current
+    /// selection's `path` / `isDir` and to `graphFromHere`).
+    onSetAsScope?: () => void;
   };
   let {
     open,
@@ -80,6 +85,7 @@
     selectedId,
     onSelect,
     onContextMenu,
+    onSetAsScope,
   }: Props = $props();
 
   // ---- types: d3-shaped working copies ---------------------------------
@@ -1241,6 +1247,22 @@
     downAt = null;
   }
 
+  /// Round-1 closing-2 (B7a): a double-click on a node calls
+  /// `onSetAsScope` so the parent re-roots the graph at that node
+  /// (`graphFromHere`). The preceding two single-clicks already
+  /// fired onSelect for the parent, so the parent's selectedId
+  /// reflects the dblclicked node when this handler runs; the
+  /// parent reads its own selection to derive (path, isDir).
+  /// Skipping when no node sits under the cursor keeps double-
+  /// clicking empty space a no-op (no rescope to workspace from
+  /// a stray double-tap).
+  function onDoubleClick(e: MouseEvent): void {
+    if (!canvas) return;
+    const p = localCoords(e);
+    const n = pickNode(p.x, p.y, PICK_SLACK_CLICK_PX);
+    if (n && onSetAsScope) onSetAsScope();
+  }
+
   function onWheel(e: WheelEvent): void {
     if (!canvas) return;
     e.preventDefault();
@@ -1504,6 +1526,7 @@
     onmousemove={onMouseMove}
     onmouseup={onMouseUp}
     onmouseleave={onMouseUp}
+    ondblclick={onDoubleClick}
     onwheel={onWheel}
   ></canvas>
 </div>
