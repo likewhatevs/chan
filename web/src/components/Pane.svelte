@@ -24,7 +24,6 @@
     paneModeStagedTabIds,
     paneModeSwapWith,
     paneWobble,
-    requestPaneWobble,
     reorderTab,
     reopenClosedTab,
     setActivePane,
@@ -361,16 +360,6 @@
   }
 
   function onPaneBodyMouseEnter(): void {
-    // Single-shot wobble cue on hover-enter, same effect as tab pills
-    // / right-click menus / split-close-move. Fires on every enter
-    // because the existing `paneWobble` bus increments a per-pane
-    // counter and the consumer's `$effect` re-toggles the `.wobble`
-    // class via rAF (see lines ~421-429), so consecutive enters all
-    // re-fire the animation cleanly. Kept JS-driven (rather than
-    // pure CSS `:hover`) so it reuses the existing single-shot
-    // re-fire plumbing and stays consistent with the keyboard
-    // pane-switch trigger fired from `setActivePane`.
-    requestPaneWobble(pane.id);
     if (!paneMode.transactionMode) return;
     if (!paneMode.grabPaneId) return;
     paneModeSetHover(pane.id);
@@ -1470,67 +1459,44 @@
       border-color 100ms ease,
       box-shadow 120ms ease;
   }
-  /* Pane focus motion must not transform the pane itself. xterm's
-     WebGL renderer paints terminal glyphs into canvases, and scaling
-     the ancestor pane during focus changes can corrupt the inactive
-     terminal's glyph atlas. Keep the motion on a pointer-transparent
-     chrome layer so the terminal pixels stay in device space. */
-  .pane::before {
-    content: "";
-    position: absolute;
-    inset: 0;
-    z-index: 3;
-    pointer-events: none;
-    border-radius: inherit;
-    box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--pane-active-focus) 34%, transparent);
-    opacity: 0;
-    transform: scale(0.994);
-    transform-origin: center center;
-    transition:
-      opacity 120ms ease,
-      transform 260ms cubic-bezier(0.34, 1.56, 0.64, 1);
-  }
   .pane[data-focus-color="blue"] { --pane-active-focus: var(--pane-focus); }
   .pane[data-focus-color="orange"] { --pane-active-focus: #f97316; }
   .pane[data-focus-color="green"] { --pane-active-focus: #22c55e; }
   .pane[data-focus-color="pink"] { --pane-active-focus: #ff5fb7; }
-  /* Inset glow rather than just a border-color swap: the inset
-     stays inside the pane's own box so the surrounding layout
-     doesn't shift when focus moves between panes. The transparent
-     border on `.pane` keeps the box dimensions stable; this shadow
-     paints over the inside edge. Composes with the chrome shadow
-     so the focused pane keeps both its floating shadow and its
-     focus ring. Thickness matches the active tab pill's
-     `0 0 0 1px var(--border)` ring above so the chrome reads as a
-     single 1px outline around the whole pane (tab strip + body),
-     not a thicker body ring stacked on a thinner top bar. */
+  /* Focus ring is the pane's own border swapping to the focus
+     colour. The transparent 1px border on `.pane` reserves the
+     space at the outer edge so swapping the colour never shifts
+     layout. Single source: no inset shadow, no chrome pseudo
+     layer — child elements (tab strip, terminal, editor) can't
+     cover the border the way they cover inset shadows, so the
+     ring reads uniformly 1px around all four sides instead of
+     thicker at the body than at the top bar. */
   .pane.focused {
     border-color: var(--pane-active-focus);
-    box-shadow:
-      inset 0 0 0 1px var(--pane-active-focus),
-      var(--pane-shadow);
   }
-  .pane:hover::before,
-  .pane.focused::before {
-    opacity: 1;
-    transform: scale(1.006);
-  }
-  /* Single-fire structural wobble. Triggered by tabs.svelte's
-     paneWobble bus on split / close / pane-move; the .wobble
-     class is toggled off in onanimationend so subsequent events
-     can re-fire. Same easeOutBack curve as the tab/style-toolbar
-     hover wobble so the motion language stays consistent — just
-     a one-shot bounce instead of a hover transition. The 1.012
-     scale is deliberately gentler than the tab's 1.04 because
-     the pane is several hundred px across. */
-  .pane.wobble::before {
-    opacity: 1;
+  /* Single-shot wobble fires on the newly focused pane when the
+     active pane CHANGES (keyboard/click pane-switch via
+     setActivePane, plus split / close / pane-move which all land
+     on a focused pane). Outer halo pulse via box-shadow only — no
+     transform on `.pane` so xterm's WebGL glyph atlas is
+     unaffected during focus changes. Same easeOutBack curve as the
+     tab-pill / right-click-menu pop. The halo expands to ~6px
+     into the inter-pane margin then dissipates back to no halo;
+     the steady-state focus ring (the border) stays put underneath
+     throughout, so the visual reads as "the focus ring just
+     popped". */
+  .pane.focused.wobble {
     animation: pane-wobble-once 360ms cubic-bezier(0.34, 1.56, 0.64, 1);
   }
   @keyframes pane-wobble-once {
-    0%   { transform: scale(0.994); }
-    40%  { transform: scale(1.012); }
-    100% { transform: scale(1); }
+    0%, 100% {
+      box-shadow: 0 0 0 0 transparent, var(--pane-shadow);
+    }
+    40% {
+      box-shadow:
+        0 0 0 6px color-mix(in srgb, var(--pane-active-focus) 55%, transparent),
+        var(--pane-shadow);
+    }
   }
   /* `fullstack-a-22`: Hybrid flip animation. The Hybrid model
      swaps content on flipHybrid (front + back state are already
@@ -1981,15 +1947,7 @@
     .pane {
       transition: border-color 100ms ease, box-shadow 120ms ease;
     }
-    .pane::before {
-      transition: opacity 120ms linear;
-      transform: none;
-    }
-    .pane:hover::before,
-    .pane.focused::before {
-      transform: none;
-    }
-    .pane.wobble::before {
+    .pane.focused.wobble {
       animation: none;
     }
     .tab,
