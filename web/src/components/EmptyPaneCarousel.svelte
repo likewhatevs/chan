@@ -425,7 +425,7 @@
       <div class="slide slide-workspace" aria-label="Workspace info">
         <div class="slide-title">Workspace</div>
         <div class="workspace-info-host">
-          <WorkspaceInfoBody />
+          <WorkspaceInfoBody variant="dashboard" />
         </div>
       </div>
     {:else}

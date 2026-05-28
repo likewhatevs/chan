@@ -1324,7 +1324,19 @@
                 path: selectedNode.path,
                 label: selectedNode.label,
               }
-            : null,
+            : selectedNode.kind === "language"
+              ? {
+                  // Phase-13 A3: language bubble inspector. Carries
+                  // the canonical language id plus the file / code
+                  // counts the bubble already holds so the body can
+                  // render stats without a second fetch.
+                  kind: "language",
+                  language: selectedNode.language,
+                  label: selectedNode.label,
+                  files: selectedNode.files,
+                  code: selectedNode.code,
+                }
+              : null,
   );
 
   // ---- presentation ------------------------------------------------------
@@ -2046,12 +2058,15 @@
              Differentiated visually by GraphCanvas painting the
              "workspace" sub-kind in a darker fill with the HardDrive
              glyph.
-             `fullstack-a-33`: stop passing `onSetAsScope` from
-             the graph. The breadcrumb above is the in-graph path
-             to workspace-root scope; the button on WorkspaceInfoBody is
-             still used by FileBrowserSurface (which spawns a new
-             graph instead of re-scoping). -->
-        <WorkspaceInfoBody />
+             A1 (phase-13): the workspace root is now a regular
+             directory inspector. Wire both the directory actions:
+             "Show in File Browser" (revealPathInBrowserTab) and
+             "Graph from here" (graphFromHere re-scopes the current
+             tab to workspace root). variant defaults to inspector. -->
+        <WorkspaceInfoBody
+          onReveal={() => revealPathInBrowserTab("", true)}
+          onSetAsScope={() => graphFromHere("", true)}
+        />
       {:else if selectedFsNode && (isFsDirectory(selectedFsNode) || selectedFsNode.kind === "file") && selectedFsNode.path !== undefined && !selectedFsNode.broken}
         <!-- Real fs-mode file or directory: render the same body as the
              file browser / editor inspector (counts, size, code
@@ -2168,7 +2183,13 @@
                     inspectorSelection.path,
                     inspectorSelection.kind === "directory",
                   )
-              : undefined
+              : inspectorSelection?.kind === "language"
+                ? // Phase-13 A3: "Graph from here" on a language
+                  // bubble re-scopes the current graph to that
+                  // language's lens (mirrors the breadcrumb /
+                  // dir re-scope path, stays in semantic mode).
+                  () => rescopeFromHere(`language:${inspectorSelection.language}`)
+                : undefined
           }
           documentsOverride={selectionDocumentsInScope}
         />

@@ -29,9 +29,13 @@ describe("fullstack-a-70: contact bubble merges mention corpus", () => {
     );
   });
 
-  test("includeMentions gated to mention mode only", () => {
+  test("phase-13 A4: mention corpus surfaced under BOTH triggers", () => {
+    // The single-`@` (wiki) trigger now also fetches the mention
+    // corpus so `@name` surfaces `@@<Name>` handles, not just
+    // contact files. Insertion shape still follows the picked
+    // row's kind, not the trigger.
     expect(contact).toMatch(
-      /const includeMentions = mode === "mention";/,
+      /const includeMentions = true;/,
     );
   });
 

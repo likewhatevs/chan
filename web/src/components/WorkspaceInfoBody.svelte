@@ -20,7 +20,12 @@
     ReportPrefix,
   } from "../api/types";
   import { formatMtime, formatSize } from "../state/format";
-  import { tree, workspace } from "../state/store.svelte";
+  import { fileOps, tree, workspace } from "../state/store.svelte";
+  import {
+    downloadTransfer,
+    downloadTransferActive,
+    clearDownloadTransfer,
+  } from "../state/downloadTransfer.svelte";
 
   /// `fullstack-73`: optional "Graph from here" callback. Consumers
   /// that host this body alongside an existing inspector convention
@@ -29,9 +34,60 @@
   /// per consumer — FileBrowserSurface SPAWNS a new Graph tab while
   /// GraphPanel's own inspector RE-SCOPES the current tab — so the
   /// consumer wires the function and this body is callback-agnostic.
+  ///
+  /// A1 (phase-13): the workspace root now behaves like any other
+  /// directory inspector. `variant` selects between the two surfaces:
+  ///   - "inspector" (default): render the standard directory ACTION
+  ///     ROW (Upload / Download / Show in File Browser / Graph from
+  ///     here). The Notes-directories config does NOT render here.
+  ///   - "dashboard": render the Notes-directories config exactly as
+  ///     before. The action row does NOT render.
+  /// The aggregate stats grid, File Kinds, and Code/COCOMO sections
+  /// render in both variants. `onReveal` wires the "Show in File
+  /// Browser" button (inspector variant only).
   let {
+    variant = "inspector",
+    onReveal,
     onSetAsScope,
-  }: { onSetAsScope?: () => void } = $props();
+  }: {
+    variant?: "inspector" | "dashboard";
+    onReveal?: () => void;
+    onSetAsScope?: () => void;
+  } = $props();
+
+  /// Action-row plumbing (inspector variant). Mirrors FileInfoBody's
+  /// directory branch but pinned to the workspace ROOT, i.e. the
+  /// relative path is the empty string "".
+  let uploadInput = $state<HTMLInputElement | null>(null);
+
+  function triggerUpload(): void {
+    uploadInput?.click();
+  }
+
+  async function onUploadPicked(e: Event): Promise<void> {
+    const input = e.currentTarget as HTMLInputElement;
+    const files = input.files;
+    if (!files || files.length === 0) return;
+    await fileOps.uploadFilesTo("", files);
+    input.value = "";
+  }
+
+  function downloadSelection(): void {
+    // Desktop routes through the progress-tracked capability (the
+    // downloadTransfer store drives the indicator below); the browser
+    // hands off to its native download manager. true = is_dir.
+    fileOps.downloadPathWithProgress("", true);
+  }
+
+  /// Live desktop-download indicator (browser path leaves this null --
+  /// the browser's own download manager owns the progress UI).
+  const transfer = $derived(downloadTransfer.value);
+  const downloadBusy = $derived(downloadTransferActive());
+
+  const uploadTitle =
+    "Upload adds the selected file to this directory. You can also drop files onto File Browser rows.";
+  const downloadTitle =
+    "Download this directory as a tar archive. You can also drag rows out of the File Browser where supported.";
 
   let globalConfig = $state<GlobalConfig | null>(null);
   let editedDefaultRoot = $state<string>("");
@@ -251,13 +307,99 @@
     <span class="v mono path" title={workspace.info?.root}>{workspace.info?.root ?? ""}</span>
   </div>
 
-  {#if onSetAsScope}
-    <!-- `fullstack-73`: parity with FileInfoBody so every inspector
-         surface offers the same "Graph from here" affordance. The
-         hosting surface decides whether the click spawns a new
-         Graph tab (file browser) or re-scopes the current one
-         (Graph inspector). -->
-    <button class="open" onclick={onSetAsScope}>Graph from here</button>
+  {#if variant === "inspector"}
+    <!-- A1 (phase-13): the workspace root gets the standard directory
+         action row, mirroring FileInfoBody's is_dir branch. The row
+         operates on the workspace ROOT (relative path ""). Upload +
+         Download are self-contained; "Show in File Browser" and "Graph
+         from here" are gated on their host callbacks. The "Graph from
+         here" button (formerly standalone above) now lives in this row. -->
+    <div class="action-buttons">
+      <div class="transfer-actions">
+        <button
+          class="open"
+          type="button"
+          onclick={triggerUpload}
+          title={uploadTitle}>Upload</button
+        >
+        <button
+          class="open"
+          type="button"
+          onclick={downloadSelection}
+          disabled={downloadBusy}
+          title={downloadTitle}>Download</button
+        >
+      </div>
+      {#if onReveal}
+        <button class="open" type="button" onclick={onReveal}
+          >Show in File Browser</button
+        >
+      {/if}
+      {#if onSetAsScope}
+        <button class="open" type="button" onclick={onSetAsScope}
+          >Graph from here</button
+        >
+      {/if}
+    </div>
+    {#if transfer}
+      <div
+        class="dl-indicator"
+        class:err={!!transfer.error}
+        role="status"
+        aria-live="polite"
+      >
+        {#if transfer.error}
+          <div class="dl-line">Download failed: {transfer.error}</div>
+          <button
+            class="dl-dismiss"
+            type="button"
+            onclick={clearDownloadTransfer}>Dismiss</button
+          >
+        {:else if transfer.savedPath}
+          <div class="dl-line" title={transfer.savedPath}>
+            Saved to {transfer.savedPath}
+          </div>
+          <button
+            class="dl-dismiss"
+            type="button"
+            onclick={clearDownloadTransfer}>Dismiss</button
+          >
+        {:else}
+          <div class="dl-progress" aria-hidden="true">
+            <div
+              class="dl-bar"
+              class:indeterminate={transfer.progress === null}
+              style={transfer.progress !== null
+                ? `width: ${Math.round(transfer.progress * 100)}%`
+                : ""}
+            ></div>
+          </div>
+          <div class="dl-row">
+            <span class="dl-line"
+              >Downloading {transfer.filename}{transfer.progress !== null
+                ? ` (${Math.round(transfer.progress * 100)}%)`
+                : "…"}</span
+            >
+            {#if transfer.cancel}
+              <button
+                class="dl-dismiss"
+                type="button"
+                onclick={() => transfer.cancel?.()}>Cancel</button
+              >
+            {/if}
+          </div>
+        {/if}
+      </div>
+    {/if}
+    <input
+      bind:this={uploadInput}
+      class="file-picker"
+      type="file"
+      multiple
+      onchange={onUploadPicked}
+      aria-hidden="true"
+      tabindex="-1"
+    />
   {/if}
 
   <!-- Folder-mode parity with FileInfoBody: same aggregate stats grid,
@@ -342,6 +484,11 @@
     <div class="refs-error">report unavailable: {reportError}</div>
   {/if}
 
+  {#if variant === "dashboard"}
+  <!-- A1 (phase-13): the Notes-directories config is Dashboard-only.
+       The inspector variant drops it (the workspace root reads as a
+       plain directory there); the Dashboard keeps the full
+       globalConfig/save/autosave plumbing unchanged. -->
   <section class="refs">
     <h4>Notes directories</h4>
     <p class="hint">
@@ -381,6 +528,7 @@
       </p>
     {/if}
   </section>
+  {/if}
 </div>
 
 <style>
@@ -454,6 +602,104 @@
     margin-top: 0.6rem;
   }
   .open:hover { border-color: var(--btn-hover); }
+  .open:disabled {
+    opacity: 0.55;
+    cursor: default;
+  }
+  .open:disabled:hover { border-color: var(--btn-border); }
+  /* A1 (phase-13): directory action row, copied from FileInfoBody so
+     the workspace-root inspector reads identically to a regular folder
+     inspector. The flex `gap` owns vertical spacing between buttons. */
+  .action-buttons {
+    display: flex;
+    flex-direction: column;
+    gap: 0.35rem;
+    margin: 0.6rem 0 0 0;
+  }
+  .action-buttons .open,
+  .action-buttons .open + .open {
+    margin-top: 0;
+  }
+  .transfer-actions {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+    gap: 0.35rem;
+  }
+  .transfer-actions .open,
+  .transfer-actions .open + .open {
+    margin-top: 0;
+  }
+  .file-picker {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    opacity: 0;
+    pointer-events: none;
+  }
+  /* Desktop-download indicator (browser path stays null -> not
+     rendered). Mirrors FileInfoBody's `.dl-*` chrome inside the
+     inspector so the desktop webview, which has no native download
+     manager, still shows progress + the saved path. */
+  .dl-indicator {
+    margin-top: 0.5rem;
+    padding: 0.4rem 0.5rem;
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    background: var(--bg-elev);
+    font-size: 12px;
+    display: flex;
+    flex-direction: column;
+    gap: 0.3rem;
+  }
+  .dl-indicator.err {
+    border-color: var(--warn-text);
+    color: var(--warn-text);
+  }
+  .dl-line {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    color: var(--text);
+  }
+  .dl-indicator.err .dl-line { color: var(--warn-text); }
+  .dl-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.4rem;
+  }
+  .dl-progress {
+    height: 4px;
+    border-radius: 2px;
+    background: var(--border);
+    overflow: hidden;
+  }
+  .dl-bar {
+    height: 100%;
+    background: var(--accent);
+    transition: width 0.15s linear;
+  }
+  .dl-bar.indeterminate {
+    width: 40%;
+    animation: dl-slide 1.1s ease-in-out infinite;
+  }
+  @keyframes dl-slide {
+    0% { margin-left: -40%; }
+    100% { margin-left: 100%; }
+  }
+  .dl-dismiss {
+    flex-shrink: 0;
+    background: transparent;
+    border: 1px solid var(--btn-border);
+    border-radius: 3px;
+    color: var(--text);
+    cursor: pointer;
+    font: inherit;
+    font-size: 12px;
+    padding: 1px 8px;
+    align-self: flex-start;
+  }
+  .dl-dismiss:hover { border-color: var(--btn-hover); }
   .refs { margin: 0.8rem 0 0 0; }
   .refs h4 {
     font-size: 12px;
