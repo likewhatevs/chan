@@ -2,6 +2,7 @@ import { describe, expect, test } from "vitest";
 import workspaceInfo from "./WorkspaceInfoBody.svelte?raw";
 import carousel from "./EmptyPaneCarousel.svelte?raw";
 import graphPanel from "./GraphPanel.svelte?raw";
+import fbSurface from "./FileBrowserSurface.svelte?raw";
 
 // A1 (phase-13 round-1 closing item): the workspace-root inspector now
 // behaves "like any other directory". It gains the standard directory
@@ -72,12 +73,81 @@ describe("A1: WorkspaceInfoBody variant split + directory action row", () => {
   });
 
   test("EmptyPaneCarousel passes variant=\"dashboard\"", () => {
-    expect(carousel).toMatch(/<WorkspaceInfoBody variant="dashboard" \/>/);
+    expect(carousel).toMatch(/<WorkspaceInfoBody[\s\S]*?variant="dashboard"/);
   });
 
   test("GraphPanel passes onReveal + onSetAsScope for the workspace root", () => {
     expect(graphPanel).toMatch(
       /<WorkspaceInfoBody[\s\S]*?onReveal=\{\(\) => revealPathInBrowserTab\("", true\)\}[\s\S]*?onSetAsScope=\{\(\) => graphFromHere\("", true\)\}/,
     );
+  });
+});
+
+// A5 + A6 (phase-13 round-1 closing-2): the workspace inspector reaches
+// parity with FileInfoBody's clickable Languages + Contacts. A5 swaps
+// the plain language <span> for a graph-opening <button>; A6 adds a
+// Contacts section derived from the shared semantic graph snapshot.
+// These ?raw pins lock the button swap, the contactPills derivation,
+// the Contacts render, and the prop wiring at all three mount sites.
+
+describe("A5: clickable Languages in the workspace inspector", () => {
+  test("an onLanguageClick prop is declared, defaulting to the store helper", () => {
+    expect(workspaceInfo).toMatch(
+      /onLanguageClick\?\: \(language: string\) => void;/,
+    );
+    expect(workspaceInfo).toMatch(/onLanguageClick = openGraphForLanguage/);
+  });
+
+  test("each language row renders a <button> that fires onLanguageClick", () => {
+    // The lang-name is a <button> (not a <span>) wired to onLanguageClick
+    // with the language name, mirroring FileInfoBody's language rows.
+    expect(workspaceInfo).toMatch(
+      /<button[\s\S]*?class="lang-name"[\s\S]*?title="open in graph \(scoped to this language\)"[\s\S]*?onclick=\{\(\) => onLanguageClick\(lang\.name\)\}/,
+    );
+    // The old plain-span form is gone.
+    expect(workspaceInfo).not.toMatch(
+      /<span class="lang-name" title=\{lang\.name\}>/,
+    );
+  });
+
+  test("all three mount sites pass onLanguageClick={openGraphForLanguage}", () => {
+    for (const src of [carousel, graphPanel, fbSurface]) {
+      expect(src).toMatch(/onLanguageClick=\{openGraphForLanguage\}/);
+    }
+  });
+});
+
+describe("A6: Contacts section in the workspace inspector", () => {
+  test("an onContactNavigate prop is declared", () => {
+    expect(workspaceInfo).toMatch(
+      /onContactNavigate\?\: \(path: string\) => void;/,
+    );
+  });
+
+  test("contactPills derive from the shared graph snapshot", () => {
+    // Source: graphData.view.nodes, filtered to resolved contact files
+    // (node_kind === "contact") + unresolved @@name mention nodes.
+    expect(workspaceInfo).toMatch(/const contactPills = \$derived\.by/);
+    expect(workspaceInfo).toContain("graphData.view");
+    expect(workspaceInfo).toMatch(/n\.node_kind === "contact"/);
+    expect(workspaceInfo).toMatch(/n\.kind === "mention"/);
+    // Resolved contacts route through onContactNavigate (with the store
+    // helper as fallback); unresolved mentions open the node in-graph.
+    expect(workspaceInfo).toContain("openGraphForContact");
+    expect(workspaceInfo).toContain("openGraphAtNode");
+    // The graph is loaded so the section can populate.
+    expect(workspaceInfo).toContain("ensureGraphLoaded");
+  });
+
+  test("a Contacts section renders the contact pills as clickable refs", () => {
+    expect(workspaceInfo).toMatch(
+      /<h4>Contacts<\/h4>[\s\S]*?contactPills as c \(c\.key\)[\s\S]*?class="ref contact"[\s\S]*?onclick=\{c\.onClick\}/,
+    );
+  });
+
+  test("all three mount sites pass onContactNavigate={openGraphForContact}", () => {
+    for (const src of [carousel, graphPanel, fbSurface]) {
+      expect(src).toMatch(/onContactNavigate=\{openGraphForContact\}/);
+    }
   });
 });

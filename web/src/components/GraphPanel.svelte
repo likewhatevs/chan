@@ -35,6 +35,8 @@
     fbSelectSingle,
     graphReloadSignal,
     indexStatus,
+    openGraphForContact,
+    openGraphForLanguage,
     paneWidths,
     persistPaneWidths,
     persistTreeExpanded,
@@ -2066,6 +2068,8 @@
         <WorkspaceInfoBody
           onReveal={() => revealPathInBrowserTab("", true)}
           onSetAsScope={() => graphFromHere("", true)}
+          onLanguageClick={openGraphForLanguage}
+          onContactNavigate={openGraphForContact}
         />
       {:else if selectedFsNode && (isFsDirectory(selectedFsNode) || selectedFsNode.kind === "file") && selectedFsNode.path !== undefined && !selectedFsNode.broken}
         <!-- Real fs-mode file or directory: render the same body as the
