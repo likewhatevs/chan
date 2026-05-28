@@ -11,6 +11,7 @@
 
   import FileInfoBody from "./FileInfoBody.svelte";
   import TagInfoBody from "./TagInfoBody.svelte";
+  import LanguageInfoBody from "./LanguageInfoBody.svelte";
   import type { GraphViewNode } from "../state/graphData.svelte";
 
   export type InspectorSelection =
@@ -20,6 +21,16 @@
         kind: "tag" | "mention" | "date";
         nodeId: string;
         label: string;
+      }
+    // Phase-13 A3: language bubbles get a dedicated body (name +
+    // file/code stats + "Graph from here"). Previously a language
+    // node had no arm and rendered the empty placeholder.
+    | {
+        kind: "language";
+        language: string;
+        label: string;
+        files?: number;
+        code?: number;
       }
     | null;
 
@@ -95,6 +106,17 @@
     {onSetAsScope}
     {onClose}
     {onNavigate}
+  />
+{:else if selection.kind === "language"}
+  <!-- Phase-13 A3: language bubble inspector. `onSetAsScope` is the
+       "Graph from here" affordance (graph host re-scopes to the
+       language lens). -->
+  <LanguageInfoBody
+    language={selection.language}
+    label={selection.label}
+    files={selection.files}
+    code={selection.code}
+    {onSetAsScope}
   />
 {:else}
   <TagInfoBody

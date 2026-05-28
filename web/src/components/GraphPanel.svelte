@@ -1313,7 +1313,19 @@
                 path: selectedNode.path,
                 label: selectedNode.label,
               }
-            : null,
+            : selectedNode.kind === "language"
+              ? {
+                  // Phase-13 A3: language bubble inspector. Carries
+                  // the canonical language id plus the file / code
+                  // counts the bubble already holds so the body can
+                  // render stats without a second fetch.
+                  kind: "language",
+                  language: selectedNode.language,
+                  label: selectedNode.label,
+                  files: selectedNode.files,
+                  code: selectedNode.code,
+                }
+              : null,
   );
 
   // ---- presentation ------------------------------------------------------
@@ -2157,7 +2169,13 @@
                     inspectorSelection.path,
                     inspectorSelection.kind === "directory",
                   )
-              : undefined
+              : inspectorSelection?.kind === "language"
+                ? // Phase-13 A3: "Graph from here" on a language
+                  // bubble re-scopes the current graph to that
+                  // language's lens (mirrors the breadcrumb /
+                  // dir re-scope path, stays in semantic mode).
+                  () => rescopeFromHere(`language:${inspectorSelection.language}`)
+                : undefined
           }
           documentsOverride={selectionDocumentsInScope}
         />
