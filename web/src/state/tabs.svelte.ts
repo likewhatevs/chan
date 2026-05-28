@@ -2044,15 +2044,25 @@ async function closeTabAsync(
   // `closePane` action to dismiss the pane.
 }
 
+/// Server-side seed for a brand-new draft (see
+/// `crates/chan-server/src/routes/drafts.rs::NEW_DRAFT_CONTENT`).
+/// A draft whose buffer matches this string and is clean against
+/// disk has not been edited since creation — treat it as empty so
+/// the close path skips the "Close Draft" modal that would
+/// otherwise prompt the user to save / discard a pristine draft
+/// (bug 2 in phase-13 round 1).
+const NEW_DRAFT_SEED = "# Draft\n";
+
 async function handleDraftTabClose(tab: FileTab): Promise<boolean> {
   try {
     const contentIsEmpty = tab.content.trim().length === 0;
+    const isPristineSeed = !isDirty(tab) && tab.content === NEW_DRAFT_SEED;
     if (!contentIsEmpty && isDirty(tab)) {
       await performSave(tab);
       if (isDirty(tab)) return false;
     }
     const info = await api.inspectDraft(tab.path);
-    if (contentIsEmpty && !info.has_attachments) {
+    if ((contentIsEmpty || isPristineSeed) && !info.has_attachments) {
       await api.discardDraft(tab.path);
       notify("Draft discarded");
       return true;

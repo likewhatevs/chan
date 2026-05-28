@@ -3,12 +3,7 @@
 import { EditorState } from "@codemirror/state";
 import { EditorView } from "@codemirror/view";
 import { describe, expect, test } from "vitest";
-import {
-  listDepth,
-  listDepthClass,
-  listLineClass,
-  orderedMarkerLabel,
-} from "./blocks";
+import { listDepth, listDepthClass, listLineClass } from "./blocks";
 import { chanMarkdown } from "../markdown/grammar";
 import { chanDecorations } from ".";
 import blocksSource from "./blocks.ts?raw";
@@ -85,35 +80,20 @@ describe("listLineClass", () => {
   });
 });
 
-describe("orderedMarkerLabel (fullstack-a-40 outline-style)", () => {
-  test("top-level items render as single-segment markers", () => {
-    expect(orderedMarkerLabel([], 1)).toBe("1.");
-    expect(orderedMarkerLabel([], 5)).toBe("5.");
-  });
-
-  test("nested items concatenate the ancestor chain", () => {
-    expect(orderedMarkerLabel([1], 1)).toBe("1.1.");
-    expect(orderedMarkerLabel([1], 2)).toBe("1.2.");
-    expect(orderedMarkerLabel([2], 3)).toBe("2.3.");
-  });
-
-  test("deep nesting carries every ancestor segment", () => {
-    expect(orderedMarkerLabel([1, 2], 3)).toBe("1.2.3.");
-    expect(orderedMarkerLabel([1, 1, 1], 4)).toBe("1.1.1.4.");
-  });
-});
-
-describe("bullet marker rendering", () => {
-  test("renders bullet source markers as consistent glyphs in WYSIWYG", () => {
-    expect(blocksSource).toContain("class BulletMarkerWidget");
-    expect(blocksSource).toContain(
-      "Decoration.replace({ widget: new BulletMarkerWidget() })",
-    );
+describe("list marker rendering (phase-13 bug 3: source-faithful)", () => {
+  test("classes the source marker without replacing the character", () => {
     expect(blocksSource).toContain("cm-md-ul-marker");
+    expect(blocksSource).toContain("cm-md-ol-marker");
     expect(wysiwygSource).toContain(".cm-md-ul-marker");
+    expect(wysiwygSource).toContain(".cm-md-ol-marker");
+    // The old replace-widgets are gone: list markers render as the
+    // authored character (-, *, +, 1., 2)) instead of being swapped
+    // for a glyph (•) or a dotted-outline chain (1.1.1.).
+    expect(blocksSource).not.toContain("BulletMarkerWidget");
+    expect(blocksSource).not.toContain("OrderedMarkerWidget");
   });
 
-  test("replaces dash markers in the rendered editor DOM only", () => {
+  test("renders a dash bullet as a dash, not a glyph", () => {
     const parent = document.createElement("div");
     document.body.appendChild(parent);
 
@@ -125,10 +105,53 @@ describe("bullet marker rendering", () => {
       }),
     });
 
-    expect(parent.querySelector(".cm-md-ul-marker")?.textContent).toBe("•");
-    expect(parent.textContent).toContain("• item");
-    expect(parent.textContent).not.toContain("- item");
+    expect(parent.querySelector(".cm-md-ul-marker")?.textContent).toBe("-");
+    expect(parent.textContent).toContain("- item");
+    expect(parent.textContent).not.toContain("• item");
     expect(view.state.doc.toString()).toBe("- item");
+
+    view.destroy();
+    parent.remove();
+  });
+
+  test("renders an asterisk bullet as an asterisk", () => {
+    const parent = document.createElement("div");
+    document.body.appendChild(parent);
+
+    const view = new EditorView({
+      parent,
+      state: EditorState.create({
+        doc: "* item",
+        extensions: [chanMarkdown(), chanDecorations()],
+      }),
+    });
+
+    expect(parent.querySelector(".cm-md-ul-marker")?.textContent).toBe("*");
+    expect(parent.textContent).toContain("* item");
+
+    view.destroy();
+    parent.remove();
+  });
+
+  test("renders ordered markers as the source `1.` / `2.`", () => {
+    const parent = document.createElement("div");
+    document.body.appendChild(parent);
+
+    const view = new EditorView({
+      parent,
+      state: EditorState.create({
+        doc: "1. one\n2. two",
+        extensions: [chanMarkdown(), chanDecorations()],
+      }),
+    });
+
+    const markers = Array.from(
+      parent.querySelectorAll(".cm-md-ol-marker"),
+    ).map((el) => el.textContent);
+    expect(markers).toEqual(["1.", "2."]);
+    expect(parent.textContent).toContain("1. one");
+    expect(parent.textContent).toContain("2. two");
+    expect(view.state.doc.toString()).toBe("1. one\n2. two");
 
     view.destroy();
     parent.remove();

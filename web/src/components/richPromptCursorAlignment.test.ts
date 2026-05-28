@@ -22,8 +22,11 @@ import richPrompt from "./TerminalRichPrompt.svelte?raw";
 
 describe("fullstack-a-89b: leading space in PROMPT_PLACEHOLDER_TEXT", () => {
   test("constant starts with a single space character", () => {
+    // Phase-13 bug 4: copy updated to advertise the chat-style
+    // Enter / Shift+Enter chord split. Leading single space is
+    // still load-bearing per `{cursor}{space}{default-text}`.
     expect(richPrompt).toMatch(
-      /const PROMPT_PLACEHOLDER_TEXT = " Write a multi-line command and Cmd\+Enter";/,
+      /const PROMPT_PLACEHOLDER_TEXT = " Write your prompt; Enter to send, Shift\+Enter for a new line";/,
     );
   });
 

@@ -501,6 +501,21 @@
             // the list. Returns false on non-list lines so the
             // default Enter (newline) still fires.
             { key: "Enter", run: (view) => continueListOnEnter(view) },
+            // Chat-style send chord. Only active when the host wires
+            // an `onSubmit` (terminal rich prompt today); plain file
+            // editors leave `onSubmit` unset so this entry returns
+            // false and Enter falls through to CM6 default newline.
+            // Shift+Enter is registered separately by CM6 as
+            // `"Shift-Enter"` (defaultKeymap `shift:` alt), so the
+            // newline chord is unaffected.
+            {
+              key: "Enter",
+              run: () => {
+                if (!onSubmit) return false;
+                onSubmit();
+                return true;
+              },
+            },
             // Tab inside a fenced code block inserts a literal tab.
             // Without this the keymap falls through to the browser's
             // default Tab (focus move), which makes it impossible to
@@ -527,6 +542,21 @@
     // pass re-runs.
     view.requestMeasure();
     maybeRestoreCaret();
+    // `bug 1` (phase-13): mirror of the `bug 10` deferred focus, but
+    // unconditional on caretPending so brand-new docs (no persisted
+    // caret to restore) also re-claim focus once content has streamed
+    // in. The mount-time `view.focus()` above runs while the doc is
+    // still empty, and on the New Draft path the Cmd+N chord handler
+    // parks focus on <body> by the time content arrives, so without
+    // this rAF the editor mounts un-focused and the user has to click
+    // to type. Gated on autoFocus so hosts that own their focus policy
+    // (rich prompt) stay unfocused.
+    if (autoFocus) {
+      requestAnimationFrame(() => {
+        if (!view) return;
+        view.focus();
+      });
+    }
   });
 
   /// Apply `initialCaret` once we have a doc to land it in. Idempotent;

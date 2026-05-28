@@ -58,7 +58,7 @@
   // the cursor reads as a starting position rather than overlapping
   // the first glyph. Paired with the `.cm-placeholder` CSS rule
   // in TerminalRichPrompt's style block below.
-  const PROMPT_PLACEHOLDER_TEXT = " Write a multi-line command and Cmd+Enter";
+  const PROMPT_PLACEHOLDER_TEXT = " Write your prompt; Enter to send, Shift+Enter for a new line";
   let rootEl: HTMLDivElement | undefined = $state();
   let wysiwygRef: Wysiwyg | undefined = $state();
   let sourceRef: Source | undefined = $state();
@@ -267,7 +267,25 @@
       menu = null;
       return;
     }
-    if (e.key === "Enter" && (e.metaKey || e.ctrlKey) && !e.altKey && !e.shiftKey) {
+    // Shift+Enter is the chat-style newline chord: never submit on
+    // it, regardless of which child consumed (or did not consume)
+    // the event. Bailing here keeps Source mode's CM6 default
+    // (`insertNewlineAndIndent` registered via the `shift:` alt
+    // on `defaultKeymap`'s Enter binding) intact while making sure
+    // a stray Shift+Enter event that escapes both editors cannot
+    // reach the submit path below.
+    if (e.key === "Enter" && e.shiftKey && !e.metaKey && !e.ctrlKey && !e.altKey) {
+      return;
+    }
+    // Submit chords. Plain Enter (no modifiers) is the chat-style
+    // send shortcut; Cmd/Ctrl+Enter mirrors the editor binding.
+    // Both paths share the same `!e.shiftKey` guard so a stray
+    // Shift+Cmd+Enter does not submit either.
+    const isPlainEnter =
+      e.key === "Enter" && !e.metaKey && !e.ctrlKey && !e.altKey && !e.shiftKey;
+    const isModEnter =
+      e.key === "Enter" && (e.metaKey || e.ctrlKey) && !e.altKey && !e.shiftKey;
+    if (isPlainEnter || isModEnter) {
       e.preventDefault();
       e.stopPropagation();
       submit();
@@ -492,6 +510,7 @@
           syntaxHighlight
           autoFocus={bubbleCount === 0}
           placeholderText={PROMPT_PLACEHOLDER_TEXT}
+          onSubmit={submit}
         />
       {/if}
     {/key}

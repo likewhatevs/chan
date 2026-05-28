@@ -21,14 +21,15 @@
 //   - Task (GFM task-list item): TaskMarker `[ ]` / `[x]` is replaced
 //     by the CheckboxWidget from widgets/checkbox.ts. The replace is
 //     boundary-inclusive — clicking the box edits the source.
-//   - BulletList: source markers (`-` / `*` / `+`) render as a
-//     consistent bullet glyph. Source-mode view + external markdown
-//     tools see the unmodified marker.
-//   - OrderedList: source markers stay as typed for portability;
-//     a Widget overlay replaces each rendered ListMark with the
-//     outline-style dotted chain (`1.`, `1.1.`, `1.1.1.`, ...) so
-//     nested numbering reads as an outline. Source-mode view +
-//     external markdown tools see the unmodified `1. / 1. / 1.`.
+//   - BulletList: source markers (`-` / `*` / `+`) render as
+//     themselves; a `cm-md-ul-marker` mark applies the styling
+//     class so CSS can color/space the marker without replacing
+//     the source character.
+//   - OrderedList: source markers (`1.` / `2)` / etc.) render as
+//     themselves; a `cm-md-ol-marker` mark applies the styling
+//     class. The rendered editor reflects whatever the author
+//     typed, both for portability and so a dash-typed list still
+//     reads as a dash on screen.
 //   - All three list kinds emit a `cm-md-list-line` line decoration
 //     on every line within their range so CSS can add the small
 //     left indent that signals "this is a list".
@@ -433,22 +434,14 @@ const handleBulletList: TokenHandler = (ctx) => {
   decorateBulletList(ctx, ctx.node.node);
 };
 
-class BulletMarkerWidget extends WidgetType {
-  eq(_other: BulletMarkerWidget): boolean {
-    return true;
-  }
-
-  toDOM(): HTMLElement {
-    const el = document.createElement("span");
-    el.className = "cm-md-ul-marker";
-    el.textContent = "•";
-    return el;
-  }
-
-  ignoreEvent(): boolean {
-    return true;
-  }
-}
+/// `cm-md-ul-marker` styles the bullet marker (`-` / `*` / `+`) in
+/// the source. We attach the class via `Decoration.mark` instead of
+/// replacing the source text with a fixed glyph so the rendered
+/// editor reflects whatever character the author typed (bug 3 in
+/// phase-13 round 1: "even if I start a list with a dash, it
+/// changes to bullet; i know this is just rendering, but i want
+/// the rendering to reflect what's in the source code").
+const BULLET_MARK = Decoration.mark({ class: "cm-md-ul-marker" });
 
 function decorateBulletList(
   ctx: TokenContext,
@@ -474,39 +467,54 @@ function decorateBulletList(
       } while (sub.nextSibling());
     }
     if (!hasTask && markFrom !== -1 && markTo !== -1) {
-      ctx.push(
-        Decoration.replace({ widget: new BulletMarkerWidget() }),
-        markFrom,
-        markTo,
-      );
+      ctx.push(BULLET_MARK, markFrom, markTo);
     }
   } while (cursor.nextSibling());
 }
 
-/// Outline-style dotted marker for nested ordered lists. The source
-/// markdown stays standard (each line typed by the user keeps its
-/// own `1.` / `2.` marker); only the displayed text is recomputed
-/// into a dotted chain (`1.`, `1.1.`, `1.1.1.`, ...). Source-mode
-/// view + GitHub / Obsidian export are unaffected.
-class OrderedMarkerWidget extends WidgetType {
-  constructor(private label: string) {
-    super();
-  }
+/// `cm-md-ol-marker` styles the ordered-list marker (`1.` / `2)` /
+/// etc.) in the source. We attach the class via `Decoration.mark`
+/// instead of replacing the source text with a generated label so
+/// the rendered editor reflects whatever the author typed (bug 3 in
+/// phase-13 round 1). The old outline-style dotted chain
+/// (`1.1.1.`) is gone: it diverged from the source bytes and
+/// surprised users who expected the rendered numbers to match what
+/// they typed.
+const ORDERED_MARK = Decoration.mark({ class: "cm-md-ol-marker" });
 
-  eq(other: OrderedMarkerWidget): boolean {
-    return this.label === other.label;
-  }
-
-  toDOM(): HTMLElement {
-    const el = document.createElement("span");
-    el.className = "cm-md-ol-marker";
-    el.textContent = this.label;
-    return el;
-  }
-
-  ignoreEvent(): boolean {
-    return true;
-  }
+/// Walk an OrderedList's direct ListItem children, mark each
+/// ListMark with the styling class, and recurse into nested
+/// OrderedLists so deeper levels pick up the same class. The
+/// recursion is local so an outer OL handler still drives the
+/// inner OLs without depending on the per-node handler firing
+/// again for nested OLs.
+function decorateOrderedList(
+  ctx: TokenContext,
+  ol: import("@lezer/common").SyntaxNode,
+): void {
+  const cursor = ol.cursor();
+  if (!cursor.firstChild()) return;
+  do {
+    if (cursor.name !== "ListItem") continue;
+    const item = cursor.node;
+    const sub = item.cursor();
+    if (sub.firstChild()) {
+      do {
+        if (sub.name === "ListMark") {
+          ctx.push(ORDERED_MARK, sub.from, sub.to);
+          break;
+        }
+      } while (sub.nextSibling());
+    }
+    const childCursor = item.cursor();
+    if (childCursor.firstChild()) {
+      do {
+        if (childCursor.name === "OrderedList") {
+          decorateOrderedList(ctx, childCursor.node);
+        }
+      } while (childCursor.nextSibling());
+    }
+  } while (cursor.nextSibling());
 }
 
 function ancestorOrderedList(
@@ -520,61 +528,6 @@ function ancestorOrderedList(
   return false;
 }
 
-/// Compose the dotted outline marker for an ordered-list item at
-/// `index` within the given ancestor `prefix` chain. Exposed so
-/// the format stays test-pinnable independent of the CM6 widget
-/// wiring.
-export function orderedMarkerLabel(
-  prefix: readonly number[],
-  index: number,
-): string {
-  return `${[...prefix, index].join(".")}.`;
-}
-
-/// Walk an OrderedList's direct ListItem children, decorate each
-/// ListMark with the dotted prefix, and recurse into nested
-/// OrderedLists. The recursion lives in this single walk (instead
-/// of relying on the per-node handler firing again for nested OLs)
-/// so the prefix chain stays accurate; we early-return from
-/// `handleOrderedList` for any OL nested inside another OL.
-function decorateOrderedList(
-  ctx: TokenContext,
-  ol: import("@lezer/common").SyntaxNode,
-  prefix: number[],
-): void {
-  const cursor = ol.cursor();
-  if (!cursor.firstChild()) return;
-  let index = 0;
-  do {
-    if (cursor.name !== "ListItem") continue;
-    index += 1;
-    const chain = [...prefix, index];
-    const label = orderedMarkerLabel(prefix, index);
-    const item = cursor.node;
-    const sub = item.cursor();
-    if (sub.firstChild()) {
-      do {
-        if (sub.name === "ListMark") {
-          ctx.push(
-            Decoration.replace({ widget: new OrderedMarkerWidget(label) }),
-            sub.from,
-            sub.to,
-          );
-          break;
-        }
-      } while (sub.nextSibling());
-    }
-    const childCursor = item.cursor();
-    if (childCursor.firstChild()) {
-      do {
-        if (childCursor.name === "OrderedList") {
-          decorateOrderedList(ctx, childCursor.node, chain);
-        }
-      } while (childCursor.nextSibling());
-    }
-  } while (cursor.nextSibling());
-}
-
 const handleOrderedList: TokenHandler = (ctx) => {
   const startLine = ctx.state.doc.lineAt(ctx.node.from).number;
   const endLine = ctx.state.doc.lineAt(
@@ -584,10 +537,10 @@ const handleOrderedList: TokenHandler = (ctx) => {
     const line = ctx.state.doc.line(n);
     ctx.push(listLineDecoration(line.text), line.from, line.from);
   }
-  // Skip the dotted-marker pass when this OrderedList is nested
-  // inside another OrderedList — the outer pass owns the chain.
+  // Skip the inner walk when this OrderedList is nested inside
+  // another OrderedList — the outer pass already drove this subtree.
   if (ancestorOrderedList(ctx.node.node)) return;
-  decorateOrderedList(ctx, ctx.node.node, []);
+  decorateOrderedList(ctx, ctx.node.node);
 };
 
 const handleFrontmatter: TokenHandler = (ctx) => {

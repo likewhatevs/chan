@@ -9,7 +9,7 @@
   //   - language: syntax-highlight toggle + per-tab path change.
 
   import { onDestroy, onMount } from "svelte";
-  import { Compartment, EditorState, type Extension } from "@codemirror/state";
+  import { Compartment, EditorState, type Extension, Prec } from "@codemirror/state";
   import { EditorView, keymap, lineNumbers, placeholder } from "@codemirror/view";
   import {
     defaultKeymap,
@@ -55,6 +55,7 @@
     autoFocus = true,
     placeholderText,
     onCaretChange,
+    onSubmit,
   }: {
     value: string;
     /// Workspace-relative file path. Workspaces the language pack picked for
@@ -78,6 +79,12 @@
     /// view doesn't want one).
     placeholderText?: string;
     onCaretChange?: (from: number, to: number) => void;
+    /// Chat-style send chord. When wired, plain Enter calls this
+    /// (Shift+Enter still inserts a newline via CM6 default). Only
+    /// the terminal rich prompt threads it today; the file editor's
+    /// source view leaves it unset so Enter keeps inserting a
+    /// newline.
+    onSubmit?: () => void;
   } = $props();
 
   /// True once we've placed the caret at `initialCaret` after the
@@ -187,6 +194,24 @@
         // in source mode (raw-text editing — no list / fence
         // detection like the WYSIWYG side). Shift-Tab outdents.
         keymap.of([indentWithTab, ...defaultKeymap, ...historyKeymap]),
+        // Chat-style send chord. High-prec so it beats defaultKeymap's
+        // Enter -> insertNewlineAndIndent. Shift+Enter is registered
+        // separately by CM6 as `"Shift-Enter"` (defaultKeymap `shift:`
+        // alt), so the newline chord is unaffected. Falls through with
+        // false when no host wired `onSubmit`, leaving the editor's
+        // Enter behaviour as plain newline for file-editor callers.
+        Prec.high(
+          keymap.of([
+            {
+              key: "Enter",
+              run: () => {
+                if (!onSubmit) return false;
+                onSubmit();
+                return true;
+              },
+            },
+          ]),
+        ),
         language.of(initialLang),
         trailingWhitespace.of(highlightTrailingWhitespace ? trailingWhitespaceHighlight() : []),
         editableCompartment.of(EditorView.editable.of(!readonly)),
@@ -218,6 +243,20 @@
     view.dispatch({ selection: { anchor: 0 } });
     if (autoFocus) view.focus();
     maybeRestoreCaret();
+    // `bug 1` (phase-13): mirror of the `bug 10` deferred focus in
+    // maybeRestoreCaret, but unconditional on caretPending so brand-
+    // new docs (no persisted caret) also re-claim focus once content
+    // has streamed in. The mount-time view.focus() above runs while
+    // the doc is still empty, and on the New Draft path the chord
+    // handler parks focus on <body> before content arrives, so the
+    // editor would otherwise mount un-focused. Gated on autoFocus so
+    // hosts that own their focus policy stay unfocused.
+    if (autoFocus) {
+      requestAnimationFrame(() => {
+        if (!view) return;
+        view.focus();
+      });
+    }
     // Kick off the async resolve for text-class langs. No-op for
     // markdown (already seeded) and for "no extension" / unknown
     // extensions (the initial empty stays).

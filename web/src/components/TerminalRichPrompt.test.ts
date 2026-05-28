@@ -159,6 +159,57 @@ describe("TerminalRichPrompt", () => {
     expect(prompt.buffer).toBe("one **two**\n![alt](attachments/a.png)");
   });
 
+  test("Shift+Enter never submits (chat-style newline chord)", async () => {
+    // Phase-13 bug 4: Shift+Enter must insert a newline in the
+    // editor, never submit the prompt. The wrapper short-circuits
+    // before the submit guard so a stray Shift+Enter that bubbles
+    // up (e.g. editor not focused) cannot reach `submit()`.
+    const prompt: TerminalRichPromptState = {
+      buffer: "draft",
+      heightPx: 320,
+      open: true,
+      mode: "source",
+    };
+    const { root, onSubmit } = await renderPrompt(prompt);
+
+    root.dispatchEvent(
+      new KeyboardEvent("keydown", {
+        key: "Enter",
+        shiftKey: true,
+        bubbles: true,
+        cancelable: true,
+      }),
+    );
+    await tick();
+
+    expect(onSubmit).not.toHaveBeenCalled();
+  });
+
+  test("plain Enter submits the prompt at the wrapper fallback path", async () => {
+    // Phase-13 bug 4: chat-style send chord. The CM6-level handler
+    // in Wysiwyg / Source claims the keystroke first when the editor
+    // has focus; this test exercises the wrapper fallback that fires
+    // when the keydown bubbles up unhandled (defaultPrevented=false).
+    const prompt: TerminalRichPromptState = {
+      buffer: "hi",
+      heightPx: 320,
+      open: true,
+      mode: "source",
+    };
+    const { root, onSubmit } = await renderPrompt(prompt);
+
+    root.dispatchEvent(
+      new KeyboardEvent("keydown", {
+        key: "Enter",
+        bubbles: true,
+        cancelable: true,
+      }),
+    );
+    await tick();
+
+    expect(onSubmit).toHaveBeenCalledWith("hi");
+  });
+
   test("Cmd+Enter with defaultPrevented does NOT re-submit (fullstack-a-20)", async () => {
     // `fullstack-a-18` threaded `onSubmit={submit}` to the Wysiwyg
     // child. Wysiwyg's CM6 keymap has its own Mod-Enter binding that
