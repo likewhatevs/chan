@@ -2,7 +2,7 @@
   // `fullstack-a-75b`: static welcome surface for empty single-
   // pane lone-pane layouts. Carousel widget moved to the
   // Dashboard tab (per @@Alex's `d4a3fc8` route); this
-  // surface now renders a fixed spawn grid + Infographics tile
+  // surface now renders a fixed spawn grid + Dashboard tile
   // + footer hint — no rotation, no slides, no play/pause.
   //
   // Spawn rows mirror `Pane.svelte::spawnActions` so the user
@@ -87,8 +87,11 @@
     },
   ];
   const secondaryEntries: SpawnRow[] = [
+    // Phase-13 round-1 closing (B5): renamed from "Infographics"
+    // to "Dashboard" so the welcome surface matches the right-
+    // click menu + the canonical Dashboard tab title.
     {
-      label: "Infographics",
+      label: "Dashboard",
       icon: BarChart2,
       command: "app.dashboard.open",
       chordId: "app.dashboard.open",

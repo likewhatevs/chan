@@ -213,21 +213,21 @@
   ];
   const emptyPaneActions: EmptyMenuRow[] = spawnActions;
   const emptyPaneExtraActions: EmptyMenuRow[] = [
+    // `fullstack-a-75`: discoverable spawn entry for the
+    // Dashboard tab. Phase-13 round-1 closing (B5): renamed
+    // from "Infographics" to "Dashboard" + reordered so it
+    // sits between Graph (last of spawnActions) and Search.
+    {
+      label: "Dashboard",
+      icon: BarChart2,
+      command: "app.dashboard.open",
+      chordId: "app.dashboard.open",
+    },
     {
       label: "Search",
       icon: Search,
       command: "app.search.toggle",
       chordId: "app.search.toggle",
-    },
-    // `fullstack-a-75`: discoverable spawn entry for the new
-    // Dashboard tab — hosts the ASCII shortcut table that
-    // used to live on the empty-pane carousel slide 1, plus
-    // future info panels.
-    {
-      label: "Infographics",
-      icon: BarChart2,
-      command: "app.dashboard.open",
-      chordId: "app.dashboard.open",
     },
   ];
   function chordLabel(id: string | undefined): string {
@@ -1355,8 +1355,8 @@
       >
         <!-- `fullstack-a-75b`: single-pane lone-pane case renders
              the static welcome surface — 5-tile spawn grid +
-             Infographics tile + footer hint. The rotating
-             carousel widget (Shortcuts / Workspace metadata /
+             Dashboard tile + footer hint. The rotating
+             carousel widget (About / Workspace metadata /
              Indexing graph) lives inside the Dashboard tab
              now per @@Alex's route on the `-a-75` walk.
              Multi-pane empty panes keep the minimal chrome

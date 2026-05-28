@@ -72,10 +72,11 @@ describe("shortcut table", () => {
   });
 
   // `phase-12 lane-e` (addendum-2 Q8): direct Cmd+I dashboard chord
-  // (in addition to Hybrid Nav `i`).
+  // (in addition to Hybrid Nav `i`). Phase-13 round-1 closing
+  // (B5): label renamed from "Infographics" to "Dashboard".
   test("advertises Cmd+I dashboard on both platforms", () => {
-    expect(renderTable("web", "mac")).toMatch(/^Infographics\s+Cmd\+I/m);
-    expect(renderTable("native", "mac")).toMatch(/^Infographics\s+Cmd\+I/m);
+    expect(renderTable("web", "mac")).toMatch(/^Dashboard\s+Cmd\+I/m);
+    expect(renderTable("native", "mac")).toMatch(/^Dashboard\s+Cmd\+I/m);
   });
 
   // `phase-12 lane-e` (addendum-2): splits are desktop-native only

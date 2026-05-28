@@ -361,10 +361,11 @@ export const SHORTCUTS: readonly Shortcut[] = [
   // `phase-12 lane-e` (addendum-2 Q8): Dashboard tab. The tab type
   // already existed; this is the direct chord (@@Alex approved cmd+i
   // in addition to Hybrid Nav `i`). Both open the tab in the active
-  // pane.
+  // pane. Phase-13 round-1 closing (B5): label renamed from
+  // "Infographics" to "Dashboard" to match the surface name.
   {
     id: "app.dashboard.open",
-    label: "Infographics",
+    label: "Dashboard",
     web: "Mod+I",
     native: "Mod+I",
     group: "App",

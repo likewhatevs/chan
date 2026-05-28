@@ -321,7 +321,7 @@
 
 <div
   class="dashboard"
-  aria-label="Infographics"
+  aria-label="Dashboard"
   data-theme={surfaceThemeOverride("dashboard")}
   oncontextmenu={onContextMenu}
   role="region"
@@ -344,9 +344,9 @@
 
   {#if settingsOpen}
     <HybridSurfaceConfigShell
-      title="Infographics"
+      title="Dashboard"
       surface="dashboard"
-      ariaLabel="Infographics settings"
+      ariaLabel="Dashboard settings"
       onDone={closeSettings}
     >
         <!-- Appearance: device-wide chrome + editor body theme.

@@ -9,14 +9,15 @@ import shell from "./HybridSurfaceConfigShell.svelte?raw";
 // `fullstack-a-75`: Dashboard tab kind + carousel redesign.
 // Tests pin: new tab type + helpers, the Pane.svelte render
 // branch, the carousel's spawn band changes (New Draft slot 0,
-// shortcut table dropped, Infographics secondary band), and the
+// shortcut table dropped, Dashboard secondary band), and the
 // surface unification across the three menus (pane hamburger,
 // empty-pane right-click, carousel).
 //
 // `phase-13 lane-b`: Infographics -> Dashboard rename. The string
 // discriminator + helper names + component file all moved to
-// "dashboard"; the user-visible label still reads "Infographics"
-// until the dashboard widget rework lands in a later slice.
+// "dashboard"; round-1 closing slice flipped the user-visible
+// labels too (B5/B6: menu entry, shortcut label, tab title,
+// aria-label, settings shell title).
 
 describe("fullstack-a-75: DashboardTab type + helpers", () => {
   test("Tab union includes DashboardTab", () => {
@@ -80,9 +81,9 @@ describe("fullstack-a-75: Dashboard command + emptyPaneExtraActions wiring", () 
     );
   });
 
-  test("emptyPaneExtraActions carries the Infographics entry", () => {
+  test("emptyPaneExtraActions carries the Dashboard entry between Graph and Search (B5)", () => {
     expect(pane).toMatch(
-      /const emptyPaneExtraActions:[\s\S]{1,800}label: "Infographics",[\s\S]{1,400}command: "app\.dashboard\.open",/,
+      /const emptyPaneExtraActions:[\s\S]{1,800}label: "Dashboard",[\s\S]{1,400}command: "app\.dashboard\.open",[\s\S]{1,400}label: "Search",/,
     );
   });
 });
@@ -194,7 +195,7 @@ describe("fullstack-a-75b: DashboardTab mounts the carousel", () => {
 
   test("body wraps the carousel in a labeled region", () => {
     expect(dashboard).toMatch(
-      /class="dashboard"[\s\S]{1,120}aria-label="Infographics"[\s\S]{1,120}role="region"/,
+      /class="dashboard"[\s\S]{1,120}aria-label="Dashboard"[\s\S]{1,120}role="region"/,
     );
   });
 });
@@ -218,9 +219,9 @@ describe("Wave 4: Dashboard settings", () => {
       /import \{[\s\S]{1,400}surfaceThemeOverride,?[\s\S]{0,400}\} from "\.\.\/state\/store\.svelte";/,
     );
     expect(dashboard).toMatch(/data-theme=\{surfaceThemeOverride\("dashboard"\)\}/);
-    expect(dashboard).toMatch(/ariaLabel="Infographics settings"/);
+    expect(dashboard).toMatch(/ariaLabel="Dashboard settings"/);
     expect(dashboard).toMatch(
-      /<HybridSurfaceConfigShell[\s\S]{1,220}title="Infographics"[\s\S]{1,120}surface="dashboard"[\s\S]{1,160}onDone=\{closeSettings\}/,
+      /<HybridSurfaceConfigShell[\s\S]{1,220}title="Dashboard"[\s\S]{1,120}surface="dashboard"[\s\S]{1,160}onDone=\{closeSettings\}/,
     );
     expect(dashboard).not.toMatch(/type DashboardAppearance/);
     // Slice 3c added a GLOBAL Appearance radio group to this
@@ -250,14 +251,14 @@ describe("Wave 4: Dashboard settings", () => {
 });
 
 describe("fullstack-a-75b: EmptyPaneWelcome static spawn surface", () => {
-  test("EmptyPaneWelcome.svelte renders the 5-tile spawn grid + Infographics tile (per -a-95: welcome-hint dropped)", async () => {
+  test("EmptyPaneWelcome.svelte renders the 5-tile spawn grid + Dashboard tile (per -a-95: welcome-hint dropped)", async () => {
     const welcome = (await import("./EmptyPaneWelcome.svelte?raw"))
       .default as string;
     expect(welcome).toMatch(
       /const spawnEntries: SpawnRow\[\] = \[[\s\S]{1,200}label: "New Draft",[\s\S]{1,1000}label: "Terminal",[\s\S]{1,800}label: "File Browser",[\s\S]{1,800}label: "Rich Prompt",[\s\S]{1,800}label: "Graph",/,
     );
     expect(welcome).toMatch(
-      /const secondaryEntries: SpawnRow\[\] = \[[\s\S]{1,400}label: "Infographics",[\s\S]{1,200}command: "app\.dashboard\.open",/,
+      /const secondaryEntries: SpawnRow\[\] = \[[\s\S]{1,400}label: "Dashboard",[\s\S]{1,200}command: "app\.dashboard\.open",/,
     );
     // `fullstack-a-95`: stale per-tab "scope for Graph" hint
     // dropped. @@Alex flagged the concept as retired after the

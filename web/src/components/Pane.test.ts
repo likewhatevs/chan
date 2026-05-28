@@ -242,19 +242,24 @@ describe("Pane right-click menus", () => {
     // `fullstack-a-32` + `fullstack-a-67` slice 2 +
     // `fullstack-a-75`: spawn set unified across 5 entries (New
     // Draft / Terminal / File Browser / Rich Prompt / Graph),
-    // separator, then extras (Search + Infographics). The
-    // Settings footer entry retired with the SettingsPanel
-    // OverlayShell in phase-13 slice 3c — Cmd+, now flips the
-    // focused Hybrid surface so Settings is reachable via the
-    // Dashboard back-of-card, not as an empty-pane menu row.
+    // separator, then extras. The Settings footer entry retired
+    // with the SettingsPanel OverlayShell in phase-13 slice 3c —
+    // Cmd+, now flips the focused Hybrid surface so Settings is
+    // reachable via the Dashboard back-of-card, not as an empty-
+    // pane menu row.
+    //
+    // Phase-13 round-1 closing (B5): "Infographics" renamed to
+    // "Dashboard" and moved between Graph and Search so the
+    // discoverable entry sits next to the other surface spawn
+    // commands.
     expect(menuLabels()).toEqual([
       "New Draft",
       "Terminal",
       "File Browser",
       "Rich Prompt",
       "Graph",
+      "Dashboard",
       "Search",
-      "Infographics",
     ]);
   });
 
