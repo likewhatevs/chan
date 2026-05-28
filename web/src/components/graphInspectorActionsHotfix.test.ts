@@ -58,9 +58,14 @@ describe("GI-1: Open routes to the editor, not a graph reload", () => {
   });
 
   test("the fs-mode inspector binds onOpen to openInActivePane for file nodes", () => {
+    // No close() after openInActivePane: the graph is a tab now, so
+    // close() -> onClose closes the pane's active tab, which by then is
+    // the just-opened file tab. Open leaves the graph tab in place
+    // (File Browser inspector "Open" parity).
     expect(panel).toMatch(
-      /onOpen=\{fsKind === "file"\s*\?\s*\(\) => \{ void openInActivePane\(fsPath\); close\(\); \}/,
+      /onOpen=\{fsKind === "file"\s*\?\s*\(\) => \{ void openInActivePane\(fsPath\); \}/,
     );
+    expect(panel).not.toMatch(/void openInActivePane\(fsPath\); close\(\);/);
   });
 });
 

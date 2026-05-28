@@ -1040,8 +1040,12 @@
 
   function openSelectedFile(): void {
     if (selectedNode && selectedNode.kind === "file" && !selectedNode.missing) {
+      // Open the file in the active pane and leave the graph tab in
+      // place (File Browser inspector "Open" parity). Do NOT call
+      // close() here: openInActivePane has already made the new file
+      // tab this pane's active tab, so onClose's reactive `active.id`
+      // would resolve to that just-opened tab and close it.
       void openInActivePane(selectedNode.path);
-      close();
     }
   }
 
@@ -1946,7 +1950,7 @@
           selection={{ kind: "file", path: fsPath }}
           showRefs
           onOpen={fsKind === "file"
-            ? () => { void openInActivePane(fsPath); close(); }
+            ? () => { void openInActivePane(fsPath); }
             : undefined}
           onReveal={revealSelectedFsEntry}
           onNavigate={(p) => {
@@ -1980,7 +1984,7 @@
             <div class="missing">missing or unreadable target</div>
           {/if}
           {#if selectedFsNode.kind === "file" && selectedFsNode.path}
-            <button class="open-fs" onclick={() => { void openInActivePane(selectedFsNode!.path); close(); }}>
+            <button class="open-fs" onclick={() => { void openInActivePane(selectedFsNode!.path); }}>
               Open
             </button>
           {/if}
@@ -2026,9 +2030,10 @@
                     // Mention/contact "Open": route the
                     // resolved contact file (looked up via
                     // tree.kind === "contact") through the active
-                    // pane and close the graph.
+                    // pane. Leave the graph tab open (File Browser
+                    // parity); see openSelectedFile for why close()
+                    // would close the just-opened file tab.
                     void openInActivePane(selectedContactPath!);
-                    close();
                   }
                 : undefined
           }
