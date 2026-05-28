@@ -670,8 +670,22 @@
     // (retired) global Settings overlay; it flips the focused
     // Hybrid (Terminal / Editor / Graph / FB / Dashboard) to its
     // back-of-card. Cmd+, again flips back.
-    if (meta && !e.shiftKey && !e.altKey && e.key === ",") {
+    //
+    // Phase-13 round-1 closing (B2): match on `e.code === "Comma"`
+    // (layout-independent) ahead of `e.key === ","` so AZERTY /
+    // QWERTZ users who get a different `e.key` for Cmd+Comma
+    // still hit this handler. preventDefault + stopImmediate-
+    // Propagation defends against duplicate handlers ever
+    // toggling `showingBack` twice in a row, which previously
+    // surfaced as a "second press is a no-op" regression.
+    if (
+      meta &&
+      !e.shiftKey &&
+      !e.altKey &&
+      (e.code === "Comma" || e.key === ",")
+    ) {
       e.preventDefault();
+      e.stopImmediatePropagation();
       flipHybrid(layout.activePaneId);
       return;
     }
