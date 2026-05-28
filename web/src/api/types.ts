@@ -441,6 +441,11 @@ export type GraphViewNode =
       path_class?: PathClass | null;
       files: number;
       code: number;
+      /// Phase-13 slice 3b-2: per-directory indexing status used by
+      /// the Dashboard indexing slide to colour the spine read-only.
+      /// Undefined for the normal graph view; the main graph leaves
+      /// folder fills on the standard `--g-folder` palette.
+      indexState?: "pending" | "indexed" | "indexing";
     }
   | {
       kind: "directory";

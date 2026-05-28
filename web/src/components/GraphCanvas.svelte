@@ -114,6 +114,12 @@
     /// for non-hierarchical nodes.
     depth: number;
     parentId: string | null;
+    /// Phase-13 slice 3b-2: per-directory indexing status surfaced by
+    /// the Dashboard indexing slide. When set on a `folder` node the
+    /// paint pass overrides the standard folder fill with the
+    /// indexing palette (green/grey/pulsing-orange). Undefined for
+    /// normal Graph-tab views.
+    indexState?: "pending" | "indexed" | "indexing";
     // d3-force mutates these in-place; declared optional so the
     // first tick can initialise them.
     index?: number;
@@ -391,6 +397,12 @@
     source: "#4169e1", binary: "#5e5e62", drafts: "#e3b341",
   });
 
+  /// Phase-13 slice 3b-2: track `prefers-reduced-motion` so the
+  /// indexing-state pulse can fall back to a flat mid-strength
+  /// alpha for users who opt out of motion. Initialised in
+  /// `onMount` so SSR-style first paint stays neutral.
+  let reduceMotion = $state(false);
+
   function refreshTheme(): void {
     if (!containerEl) return;
     const next = readTheme(containerEl);
@@ -565,6 +577,10 @@
       const isFocal = focalSet.has(n.id);
       const radius = renderRadius(kind, n.id);
       const { depth, parentId } = nodeHierarchy(n);
+      // Phase-13 slice 3b-2: only folder nodes carry an
+      // indexState; everything else gets undefined and the paint
+      // pass falls back to the standard kind-fill.
+      const indexState = n.kind === "folder" ? n.indexState : undefined;
       if (existing) {
         existing.label = n.label;
         existing.kind = kind;
@@ -573,11 +589,12 @@
         existing.radius = radius;
         existing.depth = depth;
         existing.parentId = parentId;
+        existing.indexState = indexState;
         newById.set(n.id, existing);
       } else {
         const fresh: DNode = {
           id: n.id, label: n.label, kind, missing,
-          isFocal, radius, depth, parentId,
+          isFocal, radius, depth, parentId, indexState,
         };
         newById.set(n.id, fresh);
         added.push(fresh);
@@ -986,20 +1003,55 @@
       // DNode doesn't carry the raw path (the canvas only needs
       // id + label + kind), so we key on the id literal instead.
       const isDraftsRoot = n.kind === "folder" && n.id === "directory:Drafts";
+      // Phase-13 slice 3b-2: indexing palette override. When a
+      // folder/workspace node carries `indexState` (the Dashboard
+      // indexing slide feeds this; the main graph leaves it
+      // undefined), paint the disc in the indexing colour and let
+      // the pulse below modulate alpha for the in-flight state.
+      // The override takes precedence over isDraftsRoot so the
+      // Drafts directory still reads green/grey/orange in the
+      // indexing slide.
+      const indexFill = n.indexState === "indexed"
+        ? theme.accent
+        : n.indexState === "indexing"
+          ? theme.doc
+          : n.indexState === "pending"
+            ? theme.textSec
+            : null;
       const fill = isGhost
         ? theme.bgCard
-        : isDraftsRoot ? theme.drafts
-        : n.kind === "doc" ? theme.doc
-        : n.kind === "img" ? theme.img
-        : n.kind === "contact" ? theme.mention
-        : n.kind === "mention" ? theme.mention
-        : n.kind === "language" ? theme.language
-        : n.kind === "workspace" ? theme.bgCard
-        : n.kind === "folder" ? theme.folder
-        : n.kind === "source" ? theme.source
-        : n.kind === "binary" ? theme.binary
-        : theme.tag;
-      const baseAlpha = isSiblingDim ? 0.45 : 1;
+        : indexFill ?? (
+          isDraftsRoot ? theme.drafts
+          : n.kind === "doc" ? theme.doc
+          : n.kind === "img" ? theme.img
+          : n.kind === "contact" ? theme.mention
+          : n.kind === "mention" ? theme.mention
+          : n.kind === "language" ? theme.language
+          : n.kind === "workspace" ? theme.bgCard
+          : n.kind === "folder" ? theme.folder
+          : n.kind === "source" ? theme.source
+          : n.kind === "binary" ? theme.binary
+          : theme.tag
+        );
+      // Pulse the "indexing" state via alpha modulation on the
+      // disc fill so the in-flight directories breathe against
+      // their static neighbours. 1100ms cycle matches the
+      // terminal-activity-pulse keyframe; pure sine so the motion
+      // is calm and never snaps. Static (pending/indexed/standard)
+      // nodes keep the existing isSiblingDim alpha behaviour.
+      // `prefers-reduced-motion: reduce` users get a flat
+      // mid-strength alpha (no pulse) so the indexing colour still
+      // reads as distinct from pending/indexed without animating.
+      let baseAlpha = isSiblingDim ? 0.45 : 1;
+      if (n.indexState === "indexing") {
+        if (reduceMotion) {
+          baseAlpha = 0.78;
+        } else {
+          const t = (performance.now() % 1100) / 1100;
+          const pulse = 0.5 + 0.5 * Math.sin(t * Math.PI * 2);
+          baseAlpha = 0.55 + 0.45 * pulse;
+        }
+      }
       ctx.globalAlpha = baseAlpha;
       ctx.beginPath();
       ctx.arc(n.x, n.y, n.radius, 0, Math.PI * 2);
@@ -1326,9 +1378,22 @@
         attributes: true, attributeFilter: ["data-theme"],
       });
     }
+    // Phase-13 slice 3b-2: track reduced-motion for the indexing
+    // pulse. Listener stays subscribed while the canvas is mounted
+    // so the user toggling the OS preference takes effect on the
+    // next paint without a reload.
+    const reduceMotionQuery = window.matchMedia(
+      "(prefers-reduced-motion: reduce)",
+    );
+    reduceMotion = reduceMotionQuery.matches;
+    const onReduceMotionChange = (e: MediaQueryListEvent): void => {
+      reduceMotion = e.matches;
+    };
+    reduceMotionQuery.addEventListener("change", onReduceMotionChange);
     if (open) start();
     return () => {
       themeObs.disconnect();
+      reduceMotionQuery.removeEventListener("change", onReduceMotionChange);
     };
   });
 

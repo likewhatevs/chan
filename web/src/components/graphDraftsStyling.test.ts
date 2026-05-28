@@ -78,8 +78,15 @@ describe("fullstack-a-66 slice e: Drafts directory node tinted", () => {
   });
 
   test("fill branch routes isDraftsRoot to theme.drafts before the regular folder fallback", () => {
+    // Phase-13 slice 3b-2 slipped an `indexFill ?? (...)` between
+    // the ghost guard and the regular-fill cascade so the
+    // Dashboard indexing slide can override folder colours with
+    // the indexing palette. The Drafts tint still wins over the
+    // standard folder fall-back inside the parenthesised cascade;
+    // pin both halves so a future refactor can't accidentally
+    // re-order them.
     expect(canvas).toMatch(
-      /isGhost\s*\?\s*theme\.bgCard\s*:\s*isDraftsRoot \? theme\.drafts/,
+      /isGhost\s*\?\s*theme\.bgCard\s*:\s*indexFill \?\? \(\s*isDraftsRoot \? theme\.drafts/,
     );
   });
 
