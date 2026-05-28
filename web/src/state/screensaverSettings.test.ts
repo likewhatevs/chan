@@ -1,7 +1,7 @@
 import { describe, expect, test } from "vitest";
 import shortcuts from "./shortcuts.ts?raw";
 import app from "../App.svelte?raw";
-import dashboard from "../components/DashboardTab.svelte?raw";
+import dashboard from "../components/HybridDashboardConfig.svelte?raw";
 
 // `fullstack-a-77` slice 3: Settings UI + Hybrid Nav lock chord.
 // Tests pin the architectural shape; behavioral testing of
@@ -10,8 +10,13 @@ import dashboard from "../components/DashboardTab.svelte?raw";
 //
 // `phase-13 lane-b` slice 3c: the global Settings overlay was
 // retired; the Screen Lock + Screensaver controls moved into
-// DashboardTab.svelte's back-of-card (flipHybrid). Assertions
-// rebased against DashboardTab.svelte.
+// the Dashboard's back-of-card (flipHybrid).
+//
+// Phase-13 round-1 closing (B3): the back-of-card body was
+// extracted out of DashboardTab.svelte into a dedicated
+// HybridDashboardConfig.svelte component so Pane.svelte mounts
+// it via the canonical `active?.kind === "dashboard"` arm.
+// Assertions rebased against HybridDashboardConfig.svelte.
 
 describe("fullstack-a-77 slice 3: Hybrid Nav lock chord", () => {
   test("shortcut registry advertises only Cmd+. L for screen lock", () => {

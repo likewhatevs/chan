@@ -217,21 +217,17 @@ describe("fullstack-a-75b: DashboardTab mounts the carousel", () => {
   });
 });
 
-describe("Wave 4: Dashboard settings", () => {
-  test("right-click Settings menu uses the shared HamburgerMenu primitive", () => {
+describe("phase-13 round-1 closing B3: Dashboard back-of-card lives in HybridDashboardConfig", () => {
+  test("DashboardTab right-click menu carries only Reload (Settings entry retired)", () => {
+    // After B3 the redundant local `settingsOpen` path is gone;
+    // Pane.svelte's back-side switch mounts HybridDashboardConfig
+    // directly via the `active?.kind === "dashboard"` arm, and
+    // Cmd+, is the canonical flip. The right-click menu keeps a
+    // Reload row so the affordance is still discoverable from
+    // the body.
     expect(dashboard).toMatch(/import HamburgerMenu from "\.\/HamburgerMenu\.svelte";/);
     expect(dashboard).toMatch(/function onContextMenu\(e: MouseEvent\): void/);
     expect(dashboard).toMatch(/menu\?\.openAtCursor\(e\.clientX, e\.clientY\)/);
-    expect(dashboard).toMatch(/<Settings2 size=\{16\}/);
-    expect(dashboard).toMatch(/<span class="menu-row-label">Settings<\/span>/);
-  });
-
-  test("right-click menu carries Reload with the Cmd+R chord (B11)", () => {
-    // Phase-13 round-1 closing: the Dashboard body right-click
-    // menu must expose Reload alongside Settings so the widget
-    // refresh affordance matches the pane top-bar paneContextMenu
-    // (Pane.svelte already ships a Reload row; the Dashboard
-    // surface was the gap @@Alex flagged in the round-1 smoke).
     expect(dashboard).toMatch(
       /import \{[^}]*\bRefreshCw\b[^}]*\} from "lucide-svelte"/,
     );
@@ -243,51 +239,66 @@ describe("Wave 4: Dashboard settings", () => {
     expect(dashboard).toMatch(
       /onclick=\{doReload\}[\s\S]{1,200}<RefreshCw[\s\S]{1,200}<span class="menu-row-label">Reload<\/span>[\s\S]{1,160}<span class="menu-row-chord">\{chordLabel\("app\.window\.reload"\)\}<\/span>/,
     );
-    // The Settings row also renders its Cmd+, chord now (was
-    // an empty span before).
-    expect(dashboard).toMatch(
-      /<span class="menu-row-label">Settings<\/span>[\s\S]{1,160}<span class="menu-row-chord">\{chordLabel\("app\.settings\.toggle"\)\}<\/span>/,
-    );
+    // Settings entry + its supporting state retired in B3.
+    expect(dashboard).not.toMatch(/<span class="menu-row-label">Settings<\/span>/);
+    expect(dashboard).not.toMatch(/let settingsOpen = \$state/);
+    expect(dashboard).not.toMatch(/function openSettings\b/);
+    expect(dashboard).not.toMatch(/function closeSettings\b/);
+    expect(dashboard).not.toMatch(/import HybridSurfaceConfigShell/);
   });
 
-  test("settings view uses the shared surface theme shell and OK button", () => {
-    // `phase-13 lane-b` slice 3c: surfaceThemeOverride is now
-    // imported alongside the global Appearance helpers
-    // (setThemeChoice + ThemeChoice + ui) from store.svelte, so
-    // the assertion matches the import inside a multi-import
-    // block rather than requiring a dedicated import line.
-    expect(dashboard).toMatch(
-      /import \{[\s\S]{1,400}surfaceThemeOverride,?[\s\S]{0,400}\} from "\.\.\/state\/store\.svelte";/,
+  test("HybridDashboardConfig mirrors the other Hybrid configs and lives at its own file", async () => {
+    const cfg = (await import("./HybridDashboardConfig.svelte?raw"))
+      .default as string;
+    // Shell wrapper carries the Dashboard title + onDone prop
+    // wiring + the surface=\"dashboard\" tag (same shape as the
+    // Terminal / Editor / Graph / FB configs).
+    expect(cfg).toMatch(
+      /<HybridSurfaceConfigShell[\s\S]{1,400}title="Dashboard"[\s\S]{1,200}surface="dashboard"[\s\S]{1,400}ariaLabel="Dashboard settings"[\s\S]{1,200}\{onDone\}/,
     );
-    expect(dashboard).toMatch(/data-theme=\{surfaceThemeOverride\("dashboard"\)\}/);
-    expect(dashboard).toMatch(/ariaLabel="Dashboard settings"/);
-    expect(dashboard).toMatch(
-      /<HybridSurfaceConfigShell[\s\S]{1,220}title="Dashboard"[\s\S]{1,120}surface="dashboard"[\s\S]{1,160}onDone=\{closeSettings\}/,
+    expect(cfg).toMatch(
+      /let \{ onDone \}: \{ onDone\?: \(\) => void \} = \$props\(\);/,
     );
-    expect(dashboard).not.toMatch(/type DashboardAppearance/);
-    // Slice 3c added a GLOBAL Appearance radio group to this
-    // back-of-card; the radio `name` deliberately uses
-    // `app-appearance` (not `dashboard-appearance`) so the
-    // earlier rejected per-tab DashboardAppearance enum can't
-    // sneak back via the same name.
-    expect(dashboard).not.toMatch(/name="dashboard-appearance"/);
+    // Four sections: Appearance / Screen lock / Screensaver /
+    // Metadata archive.
+    expect(cfg).toMatch(/<h3>Appearance<\/h3>/);
+    expect(cfg).toMatch(/<h3>Screen lock<\/h3>/);
+    expect(cfg).toMatch(/<h3>Screensaver<\/h3>/);
+    expect(cfg).toMatch(/<h3>Metadata archive<\/h3>/);
+    // App-wide appearance radio group keeps the `app-appearance`
+    // name so the rejected per-tab DashboardAppearance enum
+    // can't sneak back in via the same name.
+    expect(cfg).toMatch(/name="app-appearance"/);
+    expect(cfg).not.toMatch(/name="dashboard-appearance"/);
+    // Metadata archive surfaces the typed API + the same
+    // labels + the rescan / force-SCM checkboxes the retired
+    // Settings overlay used to ship.
+    expect(cfg).toMatch(/await api\.metadataExport\(\)/);
+    expect(cfg).toMatch(/await api\.metadataImport\(metadataImportFile/);
+    expect(cfg).toMatch(/URL\.createObjectURL\(download\.blob\)/);
+    expect(cfg).toContain("Export metadata archive");
+    expect(cfg).toContain("Import metadata archive");
+    expect(cfg).toContain("Force SCM mismatch");
+    expect(cfg).toContain("Rescan after import");
+    // Screen-lock state hydration runs on mount so the back
+    // surface reads the server's current screensaver config
+    // each time the user flips into it.
+    expect(cfg).toMatch(
+      /onMount\(\(\) => \{[\s\S]{1,200}void loadScreenLockState\(\);/,
+    );
+    // The shared shell still owns the OK button.
     expect(shell).toMatch(
       /<button type="button" class="config-ok" onclick=\{\(\) => onDone\?\.\(\)\}>OK<\/button>/,
     );
   });
 
-  test("settings view exposes metadata archive export through the typed API", () => {
-    expect(dashboard).toMatch(/import \{ api \} from "\.\.\/api\/client";/);
-    expect(dashboard).toMatch(/import \{ formatSize \} from "\.\.\/state\/format";/);
-    expect(dashboard).toMatch(/async function exportMetadataArchive\(\): Promise<void>/);
-    expect(dashboard).toMatch(/await api\.metadataExport\(\)/);
-    expect(dashboard).toMatch(/await api\.metadataImport\(metadataImportFile/);
-    expect(dashboard).toMatch(/URL\.createObjectURL\(download\.blob\)/);
-    expect(dashboard).toContain("Metadata archive");
-    expect(dashboard).toContain("Export metadata archive");
-    expect(dashboard).toContain("Import metadata archive");
-    expect(dashboard).toContain("Force SCM mismatch");
-    expect(dashboard).toContain("Rescan after import");
+  test("Pane.svelte back-side switch mounts HybridDashboardConfig on the dashboard arm", () => {
+    expect(pane).toMatch(
+      /import HybridDashboardConfig from "\.\/HybridDashboardConfig\.svelte";/,
+    );
+    expect(pane).toMatch(
+      /\{:else if active\?\.kind === "dashboard"\}[\s\S]{1,600}<HybridDashboardConfig onDone=\{\(\) => flipHybrid\(pane\.id\)\} \/>/,
+    );
   });
 });
 

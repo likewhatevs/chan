@@ -62,6 +62,7 @@
   import HybridEditorConfig from "./HybridEditorConfig.svelte";
   import HybridGraphConfig from "./HybridGraphConfig.svelte";
   import HybridFileBrowserConfig from "./HybridFileBrowserConfig.svelte";
+  import HybridDashboardConfig from "./HybridDashboardConfig.svelte";
   import EmptyPaneWelcome from "./EmptyPaneWelcome.svelte";
   import FileEditorTab from "./FileEditorTab.svelte";
   import DashboardTab from "./DashboardTab.svelte";
@@ -1299,6 +1300,15 @@
           <HybridGraphConfig onDone={() => flipHybrid(pane.id)} />
         {:else if active?.kind === "browser"}
           <HybridFileBrowserConfig onDone={() => flipHybrid(pane.id)} />
+        {:else if active?.kind === "dashboard"}
+          <!-- Phase-13 round-1 closing (B3): dashboard arm so
+               Cmd+, on a focused Dashboard pane lands on the
+               Appearance / Screen Lock / Screensaver / Metadata
+               flip-back instead of the "Empty pane" fallback.
+               The body was extracted out of DashboardTab.svelte
+               into HybridDashboardConfig.svelte so the mounting
+               point matches the other Hybrid surfaces. -->
+          <HybridDashboardConfig onDone={() => flipHybrid(pane.id)} />
         {:else}
           <!-- Empty pane (no active front tab). Open a front tab
                and flip again to see its configuration surface. -->
@@ -1322,7 +1332,9 @@
                 ? active.scopeId
                 : active?.kind === "browser"
                   ? "file browser"
-                  : "no active tab"}
+                  : active?.kind === "dashboard"
+                    ? "dashboard"
+                    : "no active tab"}
         </div>
       </div>
     {:else if active?.kind === "file"}
