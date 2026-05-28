@@ -205,6 +205,15 @@
   /// for transform; null = no easing in flight.
   let refitUntil = 0;
   let fitTarget: { x: number; y: number; k: number } | null = null;
+  /// B12: when `start()` runs before the host has been measured
+  /// (carousel mounts GraphCanvas before slide 2 is visible, so
+  /// the first `resize()` clamps the canvas to 0x0), the initial
+  /// `fitToContent` returns null and the view stays at the
+  /// origin-zoom-1 placeholder. `resize()` flips this flag back
+  /// off the moment the container reports nonzero dimensions and
+  /// re-runs the fit so the spine ends up framed in the viewport
+  /// without requiring a manual zoom.
+  let pendingInitialFit = false;
 
   /// Pointer interaction state. dragId: id of the node currently
   /// being pulled by the cursor (fixes its fx/fy); panStart: mouse
@@ -799,6 +808,18 @@
     canvas.style.height = `${r.height}px`;
     // setTransform inside paint() applies the DPR scaling along
     // with the user's pan/zoom, so we don't bake it here.
+    // B12: the carousel hosts GraphCanvas inside a slide that is
+    // hidden when slide 2 isn't active; the first resize() runs
+    // against a 0x0 rect so the initial fit at the end of
+    // start() returned null. Replay the fit + schedule a refit
+    // window now that the host has a real size, so the spine
+    // ends up framed in the viewport without a manual zoom.
+    if (pendingInitialFit && r.width > 0 && r.height > 0) {
+      pendingInitialFit = false;
+      transform = { x: r.width / 2, y: r.height / 2, k: 1 };
+      fitToContent(24);
+      scheduleRefit(900);
+    }
   }
 
   /// Translate a viewport-space pixel into model/world space using
@@ -1270,7 +1291,17 @@
     // firing the rAF loop, so the first painted frame already shows
     // a fitted cluster instead of nodes flying out from the origin.
     if (sim) sim.tick(300);
-    fitToContent(24);
+    // B12: defer the initial fit when the host hasn't been measured
+    // yet (carousel mounts GraphCanvas before slide 2 is visible,
+    // so the first `resize()` clamps the canvas to 0x0). `resize()`
+    // re-runs the fit the moment the host reports nonzero dims.
+    const cw = canvas?.clientWidth ?? 0;
+    const ch = canvas?.clientHeight ?? 0;
+    if (cw > 0 && ch > 0) {
+      fitToContent(24);
+    } else {
+      pendingInitialFit = true;
+    }
     if (rafId === null) rafId = requestAnimationFrame(loop);
   }
 

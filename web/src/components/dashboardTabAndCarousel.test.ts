@@ -174,6 +174,23 @@ describe("phase-13 slice 3b-1: carousel slide rework", () => {
     expect(carousel).toMatch(/slice 3b-2/);
   });
 
+  test("indexing slide tracks a selectedIndexId so GraphCanvas labels selection + 1-hop (B12)", () => {
+    // Phase-13 round-1 closing: clicks on the indexing graph
+    // now update a `selectedIndexId` $state and feed it into
+    // GraphCanvas.selectedId. GraphCanvas already labels the
+    // selected node + 1-hop neighbours, so this is the wiring
+    // change that surfaces the labels on the read-only spine.
+    expect(carousel).toMatch(
+      /let selectedIndexId = \$state<string \| null>\(null\);/,
+    );
+    expect(carousel).toMatch(
+      /function onIndexingSelect\(id: string \| null\): void \{[\s\S]{1,200}selectedIndexId = id;/,
+    );
+    expect(carousel).toMatch(
+      /<GraphCanvas[\s\S]{1,800}selectedId=\{selectedIndexId\}[\s\S]{1,200}onSelect=\{onIndexingSelect\}/,
+    );
+  });
+
   test("slide-stage scroll lives at the slide level for carousel resize", () => {
     expect(carousel).toMatch(/\.slide\s*\{[\s\S]{1,500}overflow-y: auto/);
     expect(carousel).toMatch(/\.carousel\s*\{[\s\S]{1,400}min-height: 0/);
@@ -207,6 +224,30 @@ describe("Wave 4: Dashboard settings", () => {
     expect(dashboard).toMatch(/menu\?\.openAtCursor\(e\.clientX, e\.clientY\)/);
     expect(dashboard).toMatch(/<Settings2 size=\{16\}/);
     expect(dashboard).toMatch(/<span class="menu-row-label">Settings<\/span>/);
+  });
+
+  test("right-click menu carries Reload with the Cmd+R chord (B11)", () => {
+    // Phase-13 round-1 closing: the Dashboard body right-click
+    // menu must expose Reload alongside Settings so the widget
+    // refresh affordance matches the pane top-bar paneContextMenu
+    // (Pane.svelte already ships a Reload row; the Dashboard
+    // surface was the gap @@Alex flagged in the round-1 smoke).
+    expect(dashboard).toMatch(
+      /import \{[^}]*\bRefreshCw\b[^}]*\} from "lucide-svelte"/,
+    );
+    expect(dashboard).toMatch(
+      /import \{\s*reloadWindow\s*\} from "\.\.\/api\/desktop";/,
+    );
+    expect(dashboard).toMatch(/async function doReload\(\): Promise<void>/);
+    expect(dashboard).toMatch(/await reloadWindow\(\)/);
+    expect(dashboard).toMatch(
+      /onclick=\{doReload\}[\s\S]{1,200}<RefreshCw[\s\S]{1,200}<span class="menu-row-label">Reload<\/span>[\s\S]{1,160}<span class="menu-row-chord">\{chordLabel\("app\.window\.reload"\)\}<\/span>/,
+    );
+    // The Settings row also renders its Cmd+, chord now (was
+    // an empty span before).
+    expect(dashboard).toMatch(
+      /<span class="menu-row-label">Settings<\/span>[\s\S]{1,160}<span class="menu-row-chord">\{chordLabel\("app\.settings\.toggle"\)\}<\/span>/,
+    );
   });
 
   test("settings view uses the shared surface theme shell and OK button", () => {

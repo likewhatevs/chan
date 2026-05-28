@@ -21,9 +21,16 @@
   // OK button (-> closeSettings).
 
   import { onMount } from "svelte";
-  import { Download, Settings2, Upload } from "lucide-svelte";
+  import { Download, RefreshCw, Settings2, Upload } from "lucide-svelte";
   import { api } from "../api/client";
+  import { reloadWindow } from "../api/desktop";
   import { formatSize } from "../state/format";
+  import {
+    SHORTCUTS,
+    currentOS,
+    currentPlatform,
+    formatChord,
+  } from "../state/shortcuts";
   import {
     setThemeChoice,
     surfaceThemeOverride,
@@ -75,6 +82,20 @@
   /// otherwise carries the pin1/pin2 confirm pair.
   let pinDialog = $state<{ pin1: string; pin2: string } | null>(null);
 
+  // Phase-13 round-1 closing (B11): chord lookup so the Reload
+  // row in the right-click menu renders its Cmd+R hint
+  // alongside the row label, matching the pane top-bar pattern
+  // in Pane.svelte. The Settings entry shows Cmd+, the same way.
+  const platform = currentPlatform();
+  const os = currentOS();
+  function chordLabel(id: string): string {
+    const s = SHORTCUTS.find((x) => x.id === id);
+    if (!s) return "";
+    const chord = s[platform];
+    if (!chord) return "";
+    return formatChord(chord, os);
+  }
+
   function onContextMenu(e: MouseEvent): void {
     e.preventDefault();
     menu?.openAtCursor(e.clientX, e.clientY);
@@ -83,6 +104,11 @@
   function openSettings(): void {
     menu?.close();
     settingsOpen = true;
+  }
+
+  async function doReload(): Promise<void> {
+    menu?.close();
+    await reloadWindow();
   }
 
   function closeSettings(): void {
@@ -331,13 +357,26 @@
     bind:open={menuOpen}
     showTrigger={false}
     width={220}
-    height={58}
+    height={88}
   >
+    <!-- Phase-13 round-1 closing (B11): Reload row mirrors the
+         pane-top-bar paneContextMenu in Pane.svelte so the
+         widget refresh affordance is reachable from the
+         Dashboard body's own context menu, not just the tab
+         strip. Both entry points route through `reloadWindow()`
+         the same way Cmd+R does. -->
+    <li>
+      <button role="menuitem" onclick={doReload}>
+        <RefreshCw size={16} strokeWidth={1.75} aria-hidden="true" />
+        <span class="menu-row-label">Reload</span>
+        <span class="menu-row-chord">{chordLabel("app.window.reload")}</span>
+      </button>
+    </li>
     <li>
       <button role="menuitem" onclick={openSettings}>
         <Settings2 size={16} strokeWidth={1.75} aria-hidden="true" />
         <span class="menu-row-label">Settings</span>
-        <span class="menu-row-chord"></span>
+        <span class="menu-row-chord">{chordLabel("app.settings.toggle")}</span>
       </button>
     </li>
   </HamburgerMenu>

@@ -210,12 +210,14 @@
   /// at origin).
   const indexingFocal = ["" as string];
 
-  /// No-op select callback: clicks on nodes are inert in
-  /// read-only mode (no inspector, no selection state to flip).
-  /// Pan and zoom still work via GraphCanvas's existing
-  /// background-drag / wheel handlers.
-  function onIndexingSelect(_: string | null): void {
-    // intentionally empty
+  /// B12: clicks toggle the selected node so GraphCanvas surfaces
+  /// the clicked node's label plus its 1-hop neighbours (siblings
+  /// + parent + children), matching the main Graph tab's
+  /// selection-labeling rule. The dashboard surface still has no
+  /// inspector — selection is purely a labeling cue.
+  let selectedIndexId = $state<string | null>(null);
+  function onIndexingSelect(id: string | null): void {
+    selectedIndexId = id;
   }
 
   // ---- carousel state ----------------------------------------------------
@@ -466,7 +468,7 @@
               visibleNodeIds={indexingNodeIds}
               visibleEdges={indexingGraph.edges}
               focalIds={indexingFocal}
-              selectedId={null}
+              selectedId={selectedIndexId}
               onSelect={onIndexingSelect}
             />
           </div>
