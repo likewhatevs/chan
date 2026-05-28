@@ -1,6 +1,6 @@
-/* Drives window styling. Tokens mirror chan-web's :root in
+/* Workspaces launcher styling. Tokens mirror chan-web's :root in
    App.svelte so the native chrome reads as the same product as the
-   in-drive UI. Dark by default; light kicks in when the OS theme
+   in-workspace UI. Dark by default; light kicks in when the OS theme
    is light (no manual toggle). */
 
 :root {
@@ -100,8 +100,7 @@ header.bar {
   font-size: 14px;
 }
 /* `fullstack-53`: subtle italic tagline next to the brand title.
-   Muted to keep the brand title primary; DRIVE stays uppercase
-   via the markup (no text-transform). */
+   Muted to keep the brand title primary. */
 .brand .brand-tagline {
   color: var(--text-secondary);
   font-size: 12px;
@@ -149,18 +148,18 @@ button.btn[disabled] { opacity: .4; cursor: not-allowed; pointer-events: none; }
 
 main { padding: 0; }
 
-table.drives {
+table.workspaces {
   width: 100%;
   border-collapse: collapse;
   font-size: 14px;
 }
-table.drives th, table.drives td {
+table.workspaces th, table.workspaces td {
   text-align: left;
   padding: 10px 14px;
   border-bottom: 1px solid var(--border);
   vertical-align: middle;
 }
-table.drives th {
+table.workspaces th {
   font-weight: 500;
   color: var(--text-secondary);
   font-size: 11px;
@@ -170,8 +169,8 @@ table.drives th {
   position: sticky;
   top: 53px;
 }
-table.drives tbody tr:nth-child(even) { background: var(--zebra-bg); }
-table.drives tbody tr:hover { background: var(--hover-bg); }
+table.workspaces tbody tr:nth-child(even) { background: var(--zebra-bg); }
+table.workspaces tbody tr:hover { background: var(--hover-bg); }
 
 .path-cell {
   color: var(--text-secondary);
@@ -274,7 +273,7 @@ table.drives tbody tr:hover { background: var(--hover-bg); }
   pointer-events: none;
 }
 
-/* Tunnel panel — inline above the drives table while the user is
+/* Tunnel panel — inline above the workspaces table while the user is
    configuring or actively running the loopback tunnel listener. */
 .tunnel-panel {
   margin: 14px 14px 0;
@@ -366,7 +365,7 @@ table.drives tbody tr:hover { background: var(--hover-bg); }
 /* Persistent variant for the add/remove progress banner. Lives at
    the top of <body> (above the sticky header) so it does not
    disappear with the next list re-render while the embedded host
-   registers or forgets a drive. */
+   registers or forgets a workspace. */
 .status-banner.persistent {
   position: sticky;
   top: 0;
@@ -430,13 +429,13 @@ button.btn.icon {
 .is-dark #theme-toggle .ic-sun { display: inline-block; }
 .is-light #theme-toggle .ic-moon { display: inline-block; }
 
-/* fullstack-b-28a: per-drive features expand button + sibling
+/* fullstack-b-28a: per-workspace features expand button + sibling
    panel. The ⚙ button lives in the row-actions area; clicking it
    flips the sibling `features-panel` row's hidden attribute. The
    panel spans all three columns and holds the BGE + reports
    checkboxes plus the brief explanatory copy. -b-28b will move
    this to a full pre-flight screen + swap the stub persistence
-   for the chan-drive config API from systacean-27. */
+   for the chan-workspace config API from systacean-27. */
 button.btn.features-toggle {
   width: 30px;
   height: 30px;
@@ -493,7 +492,7 @@ tr.features-panel > td {
 }
 
 /* fullstack-b-28b slice iii: pre-flight modal shown between
-   the directory picker and add_drive. The toggle rows are wider than the
+   the directory picker and add_workspace. The toggle rows are wider than the
    per-row expand panel from -b-28a because the pre-flight
    carries the full round-2-plan explanatory copy. */
 .preflight-overlay {
@@ -589,14 +588,14 @@ tr.features-panel > td {
   justify-content: flex-end;
   gap: 8px;
 }
-.default-drive-options {
+.default-workspace-options {
   display: flex;
   flex-direction: column;
   gap: 8px;
   max-height: 260px;
   overflow: auto;
 }
-.default-drive-option {
+.default-workspace-option {
   display: flex;
   align-items: flex-start;
   gap: 10px;
@@ -606,10 +605,10 @@ tr.features-panel > td {
   border-radius: 6px;
   cursor: pointer;
 }
-.default-drive-option input {
+.default-workspace-option input {
   margin-top: 3px;
 }
-.default-drive-path {
+.default-workspace-path {
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   font-size: 12px;
   color: var(--text);
@@ -617,9 +616,9 @@ tr.features-panel > td {
 }
 
 /* fullstack-b-28b slice iv: pre-flight report rows shown
-   between the drive path + the explanatory paragraph. The
+   between the workspace path + the explanatory paragraph. The
    "Scanning…" placeholder lives in `.preflight-report` until
-   `compute_drive_preflight` resolves; resolved facts replace
+   `compute_workspace_preflight` resolves; resolved facts replace
    the placeholder via the dl/dt/dd grid below. */
 .preflight-report[aria-busy="true"] {
   font-size: 12px;
