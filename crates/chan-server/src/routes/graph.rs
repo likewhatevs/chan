@@ -1249,56 +1249,66 @@ fn merge_language_layer(
     edges: &mut Vec<GraphEdgeView>,
 ) -> chan_workspace::Result<()> {
     let files = scoped_report_files(workspace, p)?;
-    let language_graph =
-        build_language_graph(&files, u32::try_from(p.depth).unwrap_or(u32::MAX), None);
 
-    for node in language_graph.nodes {
-        match node {
-            LanguageGraphNode::Language {
-                id,
-                label,
-                language,
-                files,
-                code,
-            } => {
-                nodes.insert(
-                    id.clone(),
-                    GraphNodeView::Language {
-                        id,
-                        label,
-                        language,
-                        files,
-                        code,
-                    },
-                );
-            }
-            LanguageGraphNode::Directory {
-                id,
-                label,
-                path,
-                files,
-                code,
-            } => merge_directory_node(
-                nodes,
-                id,
-                label,
-                path.clone(),
-                path_class_for_graph(workspace, &path),
-                files,
-                code,
-            ),
+    // Phase-13 round-1 closing (B9): the workspace-graph language
+    // layer now emits Language -> File edges directly so the
+    // language lens (1-hop BFS in GraphPanel) splays out to
+    // EVERY file of that language. The prior shape went through
+    // `build_language_graph`, which aggregates files into per-
+    // directory edges with a depth-bounded top-N rank — fine for
+    // the /api/graph/languages overview surface but it had the
+    // workspace lens showing only the top dir per language
+    // (regression @@Alex flagged: "clicked on Markdown, it is
+    // only showing 1 directory out of MANY"). The Workspace
+    // filesystem layer already emits each file as a node + the
+    // contains-edges that anchor it to the spine, so per-file
+    // language edges plug straight into the rendered graph.
+    //
+    // /api/graph/languages keeps using `build_language_graph`
+    // for the overview's directory rollup (with `?depth=N`
+    // ranking); only the workspace lens path moves.
+
+    let mut by_language: std::collections::BTreeMap<String, (u64, u64)> =
+        std::collections::BTreeMap::new();
+    for file in &files {
+        let language = file.language.trim();
+        if language.is_empty() {
+            continue;
         }
+        let entry = by_language.entry(language.to_string()).or_default();
+        entry.0 += 1;
+        entry.1 += file.code;
     }
 
-    edges.extend(language_graph.edges.into_iter().map(|edge| GraphEdgeView {
-        source: edge.source,
-        target: edge.target,
-        kind: edge.kind,
-        broken: None,
-        rank: Some(edge.rank),
-        files: Some(edge.files),
-        code: Some(edge.code),
-    }));
+    for (language, (files_count, code_count)) in &by_language {
+        let id = language_node_id(language);
+        nodes.insert(
+            id.clone(),
+            GraphNodeView::Language {
+                id,
+                label: language.clone(),
+                language: language.clone(),
+                files: *files_count,
+                code: *code_count,
+            },
+        );
+    }
+
+    for file in &files {
+        let language = file.language.trim();
+        if language.is_empty() {
+            continue;
+        }
+        edges.push(GraphEdgeView {
+            source: language_node_id(language),
+            target: file.path.clone(),
+            kind: "language",
+            broken: None,
+            rank: None,
+            files: None,
+            code: None,
+        });
+    }
 
     Ok(())
 }
@@ -2641,6 +2651,65 @@ mod tests {
         assert!(nodes.values().any(
             |node| matches!(node, GraphNodeView::Language { language, .. } if language == "Rust")
         ));
+    }
+
+    #[test]
+    fn merged_graph_language_layer_emits_language_to_file_edges_for_workspace_lens() {
+        // Phase-13 round-1 closing (B9): the workspace-graph
+        // language layer must emit one Language -> File edge per
+        // file of the language so the GraphPanel lens (1-hop BFS
+        // seeded on `language:<lang>`) renders the bubble plus
+        // every file. The prior shape went via
+        // `build_language_graph` which collapsed files into
+        // top-N per-directory edges - that's what reproduced as
+        // "Markdown lens shows only 1 directory" in @@Alex's
+        // smoke.
+        let (_cfg, root, workspace) = open_workspace();
+        put(root.path(), "notes/intro.md", b"# Intro\n");
+        put(root.path(), "notes/deep/sub.md", b"# Sub\n");
+        put(root.path(), "docs/readme.md", b"# Readme\n");
+        put(root.path(), "src/lib.rs", b"fn x() {}\n");
+        workspace.index_file("notes/intro.md").unwrap();
+        workspace.index_file("notes/deep/sub.md").unwrap();
+        workspace.index_file("docs/readme.md").unwrap();
+
+        let params = GraphParams {
+            scope: GraphScope::Workspace,
+            path: String::new(),
+            depth: 1,
+        };
+        let mut nodes = std::collections::BTreeMap::new();
+        let mut edges = Vec::new();
+        merge_filesystem_layer(&workspace, &params, &mut nodes, &mut edges).unwrap();
+        merge_language_layer(&workspace, &params, &mut nodes, &mut edges).unwrap();
+
+        let markdown_id = language_node_id("Markdown");
+        let markdown_targets: std::collections::BTreeSet<&str> = edges
+            .iter()
+            .filter(|e| e.kind == "language" && e.source == markdown_id)
+            .map(|e| e.target.as_str())
+            .collect();
+
+        // Every markdown file appears as a 1-hop neighbour of the
+        // Markdown language bubble, regardless of which directory
+        // it lives in. The prior implementation kept only the
+        // top-N directory edges per the `depth` parameter; the
+        // workspace lens is now decoupled from that ranking.
+        assert!(markdown_targets.contains("notes/intro.md"));
+        assert!(markdown_targets.contains("notes/deep/sub.md"));
+        assert!(markdown_targets.contains("docs/readme.md"));
+        // Rust file gets its own language node + edge, separate
+        // from Markdown.
+        let rust_id = language_node_id("Rust");
+        assert!(edges
+            .iter()
+            .any(|e| e.kind == "language" && e.source == rust_id && e.target == "src/lib.rs"));
+        // No `directory:<path>` targets emitted by the language
+        // layer (those came from the retired directory-rollup
+        // path inside `build_language_graph`).
+        assert!(!edges
+            .iter()
+            .any(|e| e.kind == "language" && e.target.starts_with("directory:")));
     }
 
     #[test]
